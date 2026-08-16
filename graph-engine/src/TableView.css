@@ -1,0 +1,319 @@
+/* Part of the public GraphViewer API surface (see src/index.ts) — keep this
+   file self-contained; it must render correctly for a consumer who imports
+   only TableView, without App.css. Colors below are pulled from Osmosis's
+   own design language (see web/src/index.css) — same warm surface/ink/muted/
+   line/accent tokens as the rest of the app, and the same ink-framed card
+   treatment as GraphViewer.css's .graph-viewer, so switching "@mode: table"
+   swaps the content without the surrounding card jarring.
+
+   Layout model: .table-view is an open, pannable/zoomable canvas (drag to
+   pan, scroll to zoom — mirrors GraphViewer's own 2D camera, just driving a
+   CSS transform instead of a WebGL one). .table-view-content is the thing
+   that transform is applied to; each table renders as an independent
+   .table-view-card positioned in that space, so multiple tables sit side by
+   side in open space rather than being stacked into one static image. */
+:root {
+  --tv-bg-light: #fdf6ea;
+  --tv-bg-dark: #201e15;
+  --tv-text-light: #17170f;
+  --tv-text-dark: #f2efe2;
+
+  --tv-text-muted-light: #6b6b5f;
+  --tv-text-muted-dark: #a19d8c;
+
+  --tv-border-light: #e4e2d4;
+  --tv-border-strong-light: #c9c6b3;
+  --tv-border-dark: #34311e;
+  --tv-border-strong-dark: #4a4530;
+
+  --tv-frame-light: #17170f;
+  --tv-frame-dark: #4a4530;
+
+  --tv-surface-light: #ffffff;
+  --tv-surface-dark: #17150d;
+
+  --tv-header-bg-light: #faf1e9;
+  --tv-header-bg-dark: #2c2113;
+  --tv-zebra-light: #f7f1e2;
+  --tv-zebra-dark: #262319;
+
+  /* Table structural lines use the same green the graph's own segments/rays
+     use (--good, matching SceneRenderer.ts's LIGHT/DARK_PALETTE.segment) —
+     orange already means "curve" everywhere else in this engine, so reusing
+     it for the table's own frame read as arbitrary rather than meaningful.
+     Derived via color-mix (a "formula") rather than two independently-
+     chosen hex values, so both themes get the same *treatment* — darkened
+     for contrast against the light paper background, darkened less but
+     saturated for the dark background, where the base green is already
+     light enough to read — instead of needing to hand-tune two unrelated
+     colors that happen to look okay separately. */
+  --tv-good-light: #4c7a4a;
+  --tv-good-dark: #6fa06c;
+  --tv-accent-light: color-mix(in srgb, var(--tv-good-light) 100%, black 22%);
+  --tv-accent-dark: color-mix(in srgb, var(--tv-good-dark) 100%, black 10%);
+
+  --tv-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --tv-font-display: 'Space Grotesk', sans-serif;
+  --tv-font-sans: 'Inter', system-ui, sans-serif;
+
+  --tv-radius: 16px;
+  --tv-card-radius: 20px;
+}
+
+.table-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  border-radius: var(--tv-radius);
+  overflow: hidden;
+  box-sizing: border-box;
+  font-family: var(--tv-font-mono);
+  font-size: 13px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.table-view:active {
+  cursor: grabbing;
+}
+
+.table-view-light {
+  background-color: var(--tv-bg-light);
+  color: var(--tv-text-light);
+  border: 2px solid var(--tv-frame-light);
+  background-image: radial-gradient(var(--tv-border-strong-light) 1.5px, transparent 1.5px);
+  background-size: 28px 28px;
+}
+
+.table-view-dark {
+  background-color: var(--tv-bg-dark);
+  color: var(--tv-text-dark);
+  border: 2px solid var(--tv-frame-dark);
+  background-image: radial-gradient(var(--tv-border-dark) 1.5px, transparent 1.5px);
+  background-size: 28px 28px;
+}
+
+.table-view-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.table-view-card {
+  position: absolute;
+  border-radius: var(--tv-card-radius);
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(23, 23, 15, 0.1);
+}
+
+/* Experimental: thicker, accent-colored structural lines (outer frame,
+   header underline, column dividers) — row dividers stay thin/neutral so
+   dense tables don't turn into a grid of color. Only up here to preview
+   live; fold back to the plain 2px ink border if it doesn't earn its keep. */
+.table-view-light .table-view-card {
+  background: var(--tv-surface-light);
+  border: 3px solid var(--tv-accent-light);
+}
+
+.table-view-dark .table-view-card {
+  background: var(--tv-surface-dark);
+  border: 3px solid var(--tv-accent-dark);
+}
+
+.table-view-card-name {
+  font-family: var(--tv-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 12px 16px 0;
+}
+
+.table-view-light .table-view-card-name {
+  color: var(--tv-text-muted-light);
+}
+
+.table-view-dark .table-view-card-name {
+  color: var(--tv-text-muted-dark);
+}
+
+/* A footer note rather than a header line — keeps the top of the card free
+   for the table's own name/label, and reads as an aside ("here's where
+   these numbers came from") rather than competing with it for top billing. */
+.table-view-card-formula {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--tv-font-mono);
+  font-size: 12px;
+  padding: 9px 16px;
+}
+
+.table-view-card-formula-mark {
+  font-family: var(--tv-font-display);
+  font-weight: 700;
+  font-style: italic;
+  font-size: 13px;
+  flex: none;
+}
+
+.table-view-light .table-view-card-formula {
+  background: var(--tv-header-bg-light);
+  border-top: 1px solid var(--tv-border-strong-light);
+  color: var(--tv-text-muted-light);
+}
+
+.table-view-dark .table-view-card-formula {
+  background: var(--tv-header-bg-dark);
+  border-top: 1px solid var(--tv-border-strong-dark);
+  color: var(--tv-text-muted-dark);
+}
+
+.table-view-light .table-view-card-formula-mark {
+  color: var(--tv-accent-light);
+}
+
+.table-view-dark .table-view-card-formula-mark {
+  color: var(--tv-accent-dark);
+}
+
+.table-view-card table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.table-view-card th,
+.table-view-card td {
+  padding: 10px 16px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-view-card th.table-view-numeric,
+.table-view-card td.table-view-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-view-card th {
+  font-family: var(--tv-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* Thick borders between columns (an "artist ruled sheet" feel matching the
+   rest of this table's structural cues) — every column but the last, so the
+   card's outer frame stays a single clean line. */
+.table-view-light .table-view-card th:not(:last-child),
+.table-view-light .table-view-card td:not(:last-child) {
+  border-right: 3px solid var(--tv-accent-light);
+}
+
+.table-view-dark .table-view-card th:not(:last-child),
+.table-view-dark .table-view-card td:not(:last-child) {
+  border-right: 3px solid var(--tv-accent-dark);
+}
+
+.table-view-light .table-view-card th {
+  background: var(--tv-header-bg-light);
+  border-bottom: 3px solid var(--tv-accent-light);
+}
+
+.table-view-dark .table-view-card th {
+  background: var(--tv-header-bg-dark);
+  border-bottom: 3px solid var(--tv-accent-dark);
+}
+
+.table-view-light .table-view-card td {
+  border-bottom: 1px solid var(--tv-border-light);
+}
+
+.table-view-dark .table-view-card td {
+  border-bottom: 1px solid var(--tv-border-dark);
+}
+
+.table-view-card tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-view-light .table-view-card tbody tr:nth-child(even) {
+  background: var(--tv-zebra-light);
+}
+
+.table-view-dark .table-view-card tbody tr:nth-child(even) {
+  background: var(--tv-zebra-dark);
+}
+
+.table-view-hint {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  font-family: var(--tv-font-sans);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 5px 12px;
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.table-view-light .table-view-hint {
+  background: var(--tv-surface-light);
+  border: 1px solid var(--tv-border-strong-light);
+  color: var(--tv-text-muted-light);
+}
+
+.table-view-dark .table-view-hint {
+  background: var(--tv-surface-dark);
+  border: 1px solid var(--tv-border-strong-dark);
+  color: var(--tv-text-muted-dark);
+}
+
+.table-view-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+}
+
+.table-view-empty-title {
+  font-family: var(--tv-font-display);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.table-view-empty-hint {
+  font-family: var(--tv-font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 360px;
+}
+
+.table-view-light .table-view-empty-title {
+  color: var(--tv-text-light);
+}
+
+.table-view-dark .table-view-empty-title {
+  color: var(--tv-text-dark);
+}
+
+.table-view-light .table-view-empty-hint {
+  color: var(--tv-text-muted-light);
+}
+
+.table-view-dark .table-view-empty-hint {
+  color: var(--tv-text-muted-dark);
+}

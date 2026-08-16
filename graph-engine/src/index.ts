@@ -1,0 +1,18 @@
+// Package entry point for future consumers (e.g. QuestionDetail.tsx importing
+// GraphViewer directly once the question schema grows a `graph` field).
+export { default as GraphViewer } from './GraphViewer'
+export type { GraphViewerProps } from './GraphViewer'
+export { default as TableView } from './TableView'
+export type { TableViewProps } from './TableView'
+export { parseSpec } from './parser/parseSpec'
+export type { Statement, Condition, ParseError, ParseResult } from './parser/types'
+export { defaultConfig } from './parser/config'
+export type { GraphConfig, GraphBounds, HoverMode, FeaturePointKind } from './parser/config'
+export { buildScene } from './scene/buildScene'
+export type { Scene, SceneObject, Regression } from './scene/types'
+export { buildScene3d } from './scene/buildScene3d'
+export type { Scene3D, SceneObject3D } from './scene/types3d'
+export { buildTable } from './scene/buildTable'
+export type { NamedTableData } from './scene/buildTable'
+export { detectFeaturePoints } from './scene/detectFeaturePoints'
+export { isThreeD } from './scene/mode'

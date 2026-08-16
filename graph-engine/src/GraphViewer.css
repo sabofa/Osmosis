@@ -1,0 +1,100 @@
+/* Part of the public GraphViewer API surface (see src/index.ts) — keep this
+   file self-contained; it must render correctly for a consumer who imports
+   only GraphViewer, without App.css. Colors/treatment below match the
+   "Ink-Framed Ruled Grid" reference: a warm paper canvas, a bold ink frame,
+   and a dark ink hover tooltip — so a plotted graph feels like it belongs to
+   the same family as the rest of the app, not a generic dev-tool canvas.
+
+   Note: the stats/hover-label colors are deliberately fixed regardless of
+   @theme — both are small overlay UI, not plotted geometry, and are meant to
+   stay legible against either a light or dark canvas rather than following
+   it. Don't fold those into the light/dark split below. */
+:root {
+  --gv-bg-light: #fdf6ea;
+  --gv-bg-dark: #201e15;
+
+  --gv-border-light: #17170f;
+  --gv-border-dark: #4a4530;
+
+  --gv-stats-bg: rgba(23, 22, 15, 0.85);
+  --gv-stats-text: #f2efe2;
+
+  --gv-hover-bg: #17170f;
+  --gv-hover-text: #f2efe2;
+
+  --gv-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --gv-radius: 16px;
+  --gv-radius-sm: 10px;
+}
+
+.graph-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  border-radius: var(--gv-radius);
+  overflow: hidden;
+}
+
+.graph-viewer-light {
+  background: var(--gv-bg-light);
+  border: 2px solid var(--gv-border-light);
+}
+
+.graph-viewer-dark {
+  background: var(--gv-bg-dark);
+  border: 2px solid var(--gv-border-dark);
+}
+
+.graph-viewer-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.graph-viewer-canvas:active {
+  cursor: grabbing;
+}
+
+.graph-viewer-stats {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--gv-stats-bg);
+  color: var(--gv-stats-text);
+  border-radius: var(--gv-radius-sm);
+  padding: 6px 10px;
+  font-family: var(--gv-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.graph-viewer-context-lost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: inherit;
+}
+
+.graph-viewer-hover-label {
+  position: absolute;
+  background: var(--gv-hover-bg);
+  color: var(--gv-hover-text);
+  border-radius: var(--gv-radius-sm);
+  padding: 5px 11px;
+  font-family: var(--gv-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -140%);
+}

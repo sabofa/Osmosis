@@ -1,0 +1,121 @@
+.rail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: transparent;
+  transition: width 0.18s ease;
+  z-index: 20;
+  animation: rail-in 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail,
+  .rail-item {
+    animation: none !important;
+  }
+}
+
+.rail:hover {
+  width: 190px;
+  align-items: flex-end;
+  padding-right: 16px;
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--bg);
+  border: 2px solid var(--line-strong);
+  color: var(--muted);
+  border-radius: 999px;
+  height: 40px;
+  width: 40px;
+  overflow: hidden;
+  justify-content: center;
+  cursor: pointer;
+  transition: width 0.18s ease, border-color 0.15s, color 0.15s, background 0.15s;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  animation: rail-item-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@keyframes rail-item-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.rail-item:nth-child(1) {
+  animation-delay: 0.02s;
+}
+.rail-item:nth-child(2) {
+  animation-delay: 0.06s;
+}
+.rail-item:nth-child(3) {
+  animation-delay: 0.1s;
+}
+.rail-item:nth-child(4) {
+  animation-delay: 0.14s;
+}
+
+.rail:hover .rail-item {
+  width: 100%;
+  padding: 0 12px;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.rail-item.active {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rail-item .rail-icon {
+  flex-shrink: 0;
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rail-item .rail-label {
+  opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  transition: opacity 0.12s ease, max-width 0.18s ease;
+}
+
+.rail:hover .rail-item .rail-label {
+  opacity: 1;
+  max-width: 140px;
+}

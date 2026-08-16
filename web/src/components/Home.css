@@ -1,0 +1,686 @@
+.home {
+  height: 100vh;
+  padding: 24px 88px 24px 24px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 20px;
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+
+.panel {
+  border: 2px solid var(--ink);
+  border-radius: 24px;
+  background: var(--surface);
+}
+
+.templates-panel {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.templates-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.templates-header h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  margin: 0;
+}
+
+.templates-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+  scrollbar-width: none;
+  /* Breathing room so a hover-lifted top row's shadow has room before
+     reaching the scroll container's own clip edge. */
+  padding-top: 6px;
+  margin-top: -6px;
+}
+
+.templates-list::-webkit-scrollbar {
+  display: none;
+}
+
+.template-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 16px;
+  /* Opaque at rest, not "none" — a row with a transparent background lets
+     whatever's behind it show through wherever it overlaps a neighbor (a
+     hover lift, a hover scale, mid-animation), reading as ghosted/double
+     text. Same color as the panel it sits on, so it's visually identical
+     at rest and just properly occludes on any overlap. */
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s ease;
+}
+
+.template-row:hover {
+  border-color: var(--line-strong);
+  background: var(--line);
+}
+
+.template-row:active {
+  transform: scale(0.99);
+}
+
+.template-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.template-row.selected {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.template-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.template-row.selected .template-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.template-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.template-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.quick-access {
+  margin-bottom: 16px;
+  /* A hovering/dragged row directly below can visually extend upward via
+     its lift transform and shadow. Its own scroll container clips its
+     layout box, but not always its shadow in every rendering scenario —
+     giving this its own opaque stacking layer above the list guarantees it
+     can never be drawn over. */
+  position: relative;
+  z-index: 2;
+  background: var(--surface);
+}
+
+.quick-access-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.quick-access-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.quick-access-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 6px 14px;
+  /* Opaque at rest — same reasoning as .template-row. */
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s ease;
+}
+
+.quick-access-chip:hover {
+  border-color: var(--accent);
+}
+
+.quick-access-chip:active {
+  transform: scale(0.96);
+}
+
+.quick-access-chip.selected {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.quick-access-chip.fixed {
+  cursor: pointer;
+}
+
+.quick-access-chip:not(.fixed) {
+  cursor: grab;
+}
+
+.quick-access-chip.dragging {
+  opacity: 0.5;
+  transform: scale(0.94) rotate(-2deg);
+}
+
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.quick-access-chip:not(.fixed) {
+  animation: chip-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.drop-gap {
+  height: 16px;
+  margin: -8px 0;
+  border-radius: 3px;
+  position: relative;
+  z-index: 1;
+  /* margin never changes between rest/active/expanded — only height does.
+     That keeps the box's top edge permanently fixed (margin-top anchors
+     it), so growth only ever extends downward and the box never overlaps
+     further into the row above than it already does at rest. */
+  transition: height 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drop-gap.expanded:not(.grow) {
+  height: 34px;
+}
+
+.drop-gap.vertical {
+  height: 30px;
+  align-self: center;
+  width: 10px;
+  margin: 0;
+  display: inline-block;
+  transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The leading gap before the first pin is just a drop target, not visual
+   inter-chip spacing — keep it slim at rest so the first pin roughly lines
+   up with the rows below, but let it still grow like any other gap while
+   something is being dragged over it. */
+.drop-gap.vertical.leading {
+  width: 6px;
+}
+
+.drop-gap.vertical.expanded:not(.grow) {
+  width: 34px;
+}
+
+.drop-gap.grow {
+  flex: 1;
+  min-height: 40px;
+}
+
+/* The fill IS the signifier, in both stages — no outer box background/
+   border, just this one pseudo-element animating continuously from a thin
+   solid line (stage 1, instant) into a full rounded tinted box (stage 2,
+   once the hover has held for a beat). Same element, same transition, so
+   it reads as the line growing into the box rather than two disconnected
+   effects. Anchored with a fixed `top`/`left` at stage 1 (not centered
+   dynamically) so it never drifts as the outer box's own height/width
+   changes underneath it. */
+.drop-gap.active:not(.grow)::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 7px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  border: 0px solid var(--accent);
+  box-sizing: border-box;
+  transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1), right 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.22s cubic-bezier(0.4, 0, 0.2, 1), height 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    border-radius 0.22s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.16s ease, background-color 0.16s ease;
+}
+
+.drop-gap.expanded:not(.grow)::after {
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 8px;
+  background: var(--accent-wash);
+  border-width: 1.5px;
+}
+
+.drop-gap.vertical.active:not(.grow)::after {
+  left: 6px;
+  right: auto;
+  top: 5px;
+  bottom: 5px;
+  height: auto;
+  width: 2px;
+  transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1), top 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    bottom 0.22s cubic-bezier(0.4, 0, 0.2, 1), width 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    border-radius 0.22s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.16s ease, background-color 0.16s ease;
+}
+
+.drop-gap.vertical.expanded:not(.grow)::after {
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  height: auto;
+}
+
+.org-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.org-list.root {
+  flex: 1;
+  min-height: 0;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.template-row-wrap {
+  border-radius: 16px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  animation: row-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.template-row-wrap.dragging {
+  opacity: 0.5;
+  transform: scale(0.97) rotate(-1deg);
+}
+
+/* Stage 1 (.drag-over alone) is invisible — just tracks which row is
+   targeted. No line, no outline. Stage 2 (.expanded, once the hover has
+   held for a beat) is the only visible cue, and it needs to read clearly
+   on its own: a solid fill, a real border, and a noticeable scale pop. */
+.template-row-wrap.drag-over.expanded {
+  background: var(--accent-wash);
+  transform: scale(1.05);
+  transition: background 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.template-row-wrap.drag-over.expanded .template-row {
+  border-color: var(--accent);
+}
+
+.template-row-wrap .template-row {
+  width: 100%;
+  cursor: grab;
+}
+
+.template-row-wrap .template-row:active {
+  cursor: grabbing;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .template-row-wrap,
+  .quick-access-chip:not(.fixed),
+  .template-group {
+    animation: none !important;
+  }
+}
+
+.template-group {
+  display: flex;
+  flex-direction: column;
+  animation: group-in 0.32s cubic-bezier(0.3, 1.2, 0.5, 1) backwards;
+}
+
+@keyframes group-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(-6px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.template-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  border-radius: 10px;
+  border-left: 3px solid transparent;
+  /* See .template-row — opaque at rest so it can't ghost through a
+     neighboring row on overlap. */
+  background: var(--surface);
+  color: var(--muted);
+  cursor: grab;
+  transition: background 0.15s, transform 0.12s ease;
+}
+
+.template-group-header:hover {
+  background: var(--line);
+}
+
+.template-group-header:active {
+  cursor: grabbing;
+  transform: scale(0.995);
+}
+
+.template-group-header.dragging {
+  opacity: 0.5;
+  transform: scale(0.97) rotate(-1deg);
+}
+
+/* Same two-stage rule as rows above: stage 1 is invisible, stage 2 is the
+   only visible cue — a solid fill and a noticeable scale pop. */
+.template-group-header.drag-over.expanded {
+  background: var(--accent-wash);
+  transform: scale(1.03);
+  transition: background 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.folder-children-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.folder-children-wrap.collapsed {
+  grid-template-rows: 0fr;
+}
+
+.folder-children-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.template-group-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.template-group-chevron.collapsed {
+  transform: rotate(0deg);
+}
+
+.folder-icon-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.folder-icon-trigger:hover {
+  color: var(--accent);
+}
+
+.template-group-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+}
+
+.template-group-count {
+  font-size: 11px;
+}
+
+.right-col {
+  display: grid;
+  grid-template-rows: 0.62fr 1fr;
+  gap: 20px;
+  min-height: 0;
+}
+
+.detail-panel {
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.detail-spacer {
+  flex: 1;
+  min-height: 0;
+}
+
+.detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-chip {
+  font-size: 11px;
+  color: var(--ink);
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.detail-panel.prompt .detail-chip {
+  border-color: var(--accent);
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.detail-tag.whole-bank {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.detail-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.detail-more {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.detail-more:hover {
+  color: var(--accent);
+}
+
+.detail-panel.prompt {
+  background: var(--accent-wash);
+}
+
+.detail-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.detail-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.detail-kicker {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.detail-panel.prompt .detail-kicker {
+  color: var(--accent);
+}
+
+.detail-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 20px;
+}
+
+.detail-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.start-btn {
+  align-self: flex-start;
+  margin-top: 10px;
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 10px 22px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+.start-btn:hover {
+  opacity: 0.85;
+}
+
+.start-btn:active {
+  transform: scale(0.96);
+}
+
+.start-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.heatmap-panel {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+
+.heatmap-title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.heatmap-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+}
+
+.sync-pill {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  background: var(--accent-wash);
+  border-radius: 999px;
+  padding: 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}

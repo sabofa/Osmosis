@@ -1,0 +1,317 @@
+/* Part of the public DocumentViewer API surface (see src/index.ts) — keep
+   this file self-contained, mirroring graph-engine/src/GraphViewer.css's
+   "Ink-Framed Ruled Grid" treatment so a rendered document feels like it
+   belongs to the same family as a plotted graph. */
+:root {
+  --de-bg-light: #fdf6ea;
+  --de-bg-dark: #201e15;
+
+  --de-border-light: #17170f;
+  --de-border-dark: #4a4530;
+
+  --de-text-light: #17170f;
+  --de-text-dark: #f2efe2;
+
+  --de-marker-bg: rgba(23, 22, 15, 0.12);
+  --de-marker-bg-dark: rgba(242, 239, 226, 0.16);
+  --de-marker-border: #17170f;
+  --de-marker-border-dark: #f2efe2;
+
+  --de-panel-bg: rgba(23, 22, 15, 0.85);
+  --de-panel-text: #f2efe2;
+
+  --de-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --de-radius: 16px;
+  --de-radius-sm: 10px;
+}
+
+.document-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  border-radius: var(--de-radius);
+  overflow: hidden;
+  font-family: var(--de-font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.document-viewer-light {
+  background: var(--de-bg-light);
+  border: 2px solid var(--de-border-light);
+  color: var(--de-text-light);
+}
+
+.document-viewer-dark {
+  background: var(--de-bg-dark);
+  border: 2px solid var(--de-border-dark);
+  color: var(--de-text-dark);
+}
+
+.document-viewer-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.document-viewer-content {
+  min-height: 100%;
+}
+
+.document-viewer-content-split {
+  display: flex;
+  align-items: flex-start;
+}
+
+.document-viewer-side-panel {
+  flex: 1;
+  min-width: 220px;
+  border-left: 1px dashed var(--de-border-light);
+}
+
+.document-viewer-dark .document-viewer-side-panel {
+  border-left-color: var(--de-border-dark);
+}
+
+.document-viewer-placeholder {
+  padding: 20px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+/* Plain text rendering. Anchor/highlight ranges are painted by the CSS
+   Custom Highlight API (see highlightPainter.ts + the per-instance
+   <style> block DocumentViewer renders), not by wrapping matching text in
+   elements — that's what keeps a boundary landing mid-word from rendering
+   as a visible gap between fragments. */
+
+.document-viewer-text {
+  margin: 0;
+  padding: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.document-viewer-marker {
+  cursor: pointer;
+  background: var(--de-marker-bg);
+  border-bottom: 2px solid var(--de-marker-border);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.document-viewer-dark .document-viewer-marker {
+  background: var(--de-marker-bg-dark);
+  border-bottom-color: var(--de-marker-border-dark);
+}
+
+.document-viewer-marker:hover,
+.document-viewer-marker:focus-visible {
+  outline: none;
+  filter: brightness(0.92);
+}
+
+/* PDF rendering */
+
+.document-viewer-pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+}
+
+.document-viewer-pdf-page {
+  position: relative;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+
+/* pdfjs's own TextLayer builder positions/sizes these divs (percentage
+   left/top, --font-height, --total-scale-factor etc, all set by pdfjs
+   itself) — this is the same rule set pdfjs-dist ships for its own viewer
+   (web/pdf_viewer.css's `.textLayer`), reproduced here so the real font
+   metrics line up instead of the approximate hand-computed positioning
+   this used to do. */
+.document-viewer-pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  text-align: initial;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor, 1) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.document-viewer-pdf-text-layer span,
+.document-viewer-pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.document-viewer-pdf-text-layer > :not(.markedContent),
+.document-viewer-pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.document-viewer-pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.document-viewer-pdf-marker {
+  cursor: pointer;
+  background: var(--de-marker-bg);
+  border-bottom: 2px solid var(--de-marker-border);
+}
+
+.document-viewer-dark .document-viewer-pdf-marker {
+  background: var(--de-marker-bg-dark);
+  border-bottom-color: var(--de-marker-border-dark);
+}
+
+.document-viewer-pdf-marker:hover,
+.document-viewer-pdf-marker:focus-visible {
+  outline: none;
+  filter: brightness(0.85);
+}
+
+/* Image rendering */
+
+.document-viewer-image {
+  max-width: 100%;
+  display: block;
+}
+
+/* Toolbar: always-present zoom control, plus the full-mode-only settings
+   menu next to it. Pinned to a corner rather than inline so it never
+   disturbs document layout/scroll position. */
+
+.document-viewer-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+
+.document-viewer-zoom-control,
+.document-viewer-settings {
+  display: flex;
+  align-items: center;
+  background: var(--de-panel-bg);
+  color: var(--de-panel-text);
+  border-radius: var(--de-radius-sm);
+}
+
+.document-viewer-zoom-control button,
+.document-viewer-settings > button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--de-font-mono);
+}
+
+.document-viewer-zoom-control button:hover,
+.document-viewer-settings > button:hover {
+  opacity: 0.8;
+}
+
+.document-viewer-zoom-pct {
+  font-size: 11px;
+  min-width: 38px;
+}
+
+.document-viewer-settings {
+  position: relative;
+}
+
+.document-viewer-settings-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  background: var(--de-panel-bg);
+  border-radius: var(--de-radius-sm);
+  padding: 4px;
+  gap: 2px;
+}
+
+.document-viewer-settings-menu button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  color: var(--de-panel-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+
+.document-viewer-settings-menu button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Selection-to-highlight color picker — fixed positioning since it's
+   anchored to a viewport-relative selection rect, independent of the
+   content's own scroll/zoom transform. */
+
+.document-viewer-highlight-action {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--de-panel-bg);
+  border-radius: 999px;
+  padding: 6px;
+  z-index: 3;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.document-viewer-highlight-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  padding: 0;
+}
+
+.document-viewer-highlight-swatch:hover,
+.document-viewer-highlight-swatch:focus-visible {
+  border-color: #fff;
+  outline: none;
+  transform: scale(1.1);
+}

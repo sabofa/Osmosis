@@ -1,0 +1,30 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace=web"],
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:local", "--workspace=server"],
+      "port": 8081
+    },
+    {
+      "name": "graph-engine",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace=graph-engine", "--", "--port", "5174"],
+      "port": 5174
+    },
+    {
+      "name": "document-engine",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace=document-engine", "--", "--port", "5176"],
+      "port": 5176
+    }
+  ]
+}

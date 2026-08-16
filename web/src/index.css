@@ -1,0 +1,139 @@
+:root {
+  --bg: #eef1e5;
+  --surface: #ffffff;
+  --ink: #17170f;
+  --muted: #6b6b5f;
+  --line: #e4e2d4;
+  --line-strong: #c9c6b3;
+  --accent: #c65d22;
+  --accent-wash: #faf1e9;
+
+  --heat-0: #e4e2d4;
+  --heat-1: #e9c9a6;
+  --heat-2: #e3a468;
+  --heat-3: #d97a35;
+  --heat-4: #c65d22;
+
+  --good: #4c7a4a;
+  --bad: #a34b3f;
+
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', sans-serif;
+}
+
+/* System preference, when the user hasn't picked explicitly (no data-theme set) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #17160f;
+    --surface: #201e15;
+    --ink: #f2efe2;
+    --muted: #a19d8c;
+    --line: #34311e;
+    --line-strong: #4a4530;
+    --accent: #e2803f;
+    --accent-wash: #2c2113;
+
+    --heat-0: #2a2819;
+    --heat-1: #4a3a20;
+    --heat-2: #7a4e24;
+    --heat-3: #a85f2a;
+    --heat-4: #e2803f;
+
+    --good: #6fa06c;
+    --bad: #c76a5c;
+  }
+}
+
+/* Explicit user choice always wins, in either direction */
+:root[data-theme='dark'] {
+  --bg: #17160f;
+  --surface: #201e15;
+  --ink: #f2efe2;
+  --muted: #a19d8c;
+  --line: #34311e;
+  --line-strong: #4a4530;
+  --accent: #e2803f;
+  --accent-wash: #2c2113;
+
+  --heat-0: #2a2819;
+  --heat-1: #4a3a20;
+  --heat-2: #7a4e24;
+  --heat-3: #a85f2a;
+  --heat-4: #e2803f;
+
+  --good: #6fa06c;
+  --bad: #c76a5c;
+}
+
+:root[data-theme='light'] {
+  --bg: #eef1e5;
+  --surface: #ffffff;
+  --ink: #17170f;
+  --muted: #6b6b5f;
+  --line: #e4e2d4;
+  --line-strong: #c9c6b3;
+  --accent: #c65d22;
+  --accent-wash: #faf1e9;
+
+  --heat-0: #e4e2d4;
+  --heat-1: #e9c9a6;
+  --heat-2: #e3a468;
+  --heat-3: #d97a35;
+  --heat-4: #c65d22;
+
+  --good: #4c7a4a;
+  --bad: #a34b3f;
+}
+
+:root {
+  color-scheme: light dark;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: page-in 0.36s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-transition {
+    animation: none;
+  }
+}

@@ -1,0 +1,221 @@
+/* Demo/review-harness styling only — not part of the public GraphViewer API
+   surface (see GraphViewer.css / TableView.css for that). Tokens and
+   treatment below are pulled straight from Osmosis's own design language
+   (see web/src/index.css and web/src/components/*.css) — same warm
+   paper-and-ink palette, same Space Grotesk/Inter pairing, same pill/chip
+   shapes and 2px borders — so this harness reads as part of the same family
+   rather than a generic dev-tool skin. Kept self-contained (own :root here,
+   not shared with GraphViewer.css/TableView.css) since those two are the
+   actual public API surface and must keep working without this file.
+
+   `data-theme` on <html> follows the spec's own "@theme: light/dark"
+   directive (see App.tsx) rather than a separate independent toggle — so the
+   whole review harness recolors along with whatever the graph is set to. */
+:root {
+  --app-bg: #eef1e5;
+  --app-surface: #ffffff;
+  --app-ink: #17170f;
+  --app-muted: #6b6b5f;
+  --app-line: #e4e2d4;
+  --app-line-strong: #c9c6b3;
+  --app-accent: #c65d22;
+  --app-accent-wash: #faf1e9;
+  --app-bad: #a34b3f;
+
+  --app-font-display: 'Space Grotesk', sans-serif;
+  --app-font-body: 'Inter', sans-serif;
+  --app-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --app-bg: #17160f;
+    --app-surface: #201e15;
+    --app-ink: #f2efe2;
+    --app-muted: #a19d8c;
+    --app-line: #34311e;
+    --app-line-strong: #4a4530;
+    --app-accent: #e2803f;
+    --app-accent-wash: #2c2113;
+    --app-bad: #c76a5c;
+  }
+}
+
+:root[data-theme='dark'] {
+  --app-bg: #17160f;
+  --app-surface: #201e15;
+  --app-ink: #f2efe2;
+  --app-muted: #a19d8c;
+  --app-line: #34311e;
+  --app-line-strong: #4a4530;
+  --app-accent: #e2803f;
+  --app-accent-wash: #2c2113;
+  --app-bad: #c76a5c;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
+  gap: 16px;
+  height: 100vh;
+  padding: 16px;
+  box-sizing: border-box;
+  background: var(--app-bg);
+  color: var(--app-ink);
+  font-family: var(--app-font-body);
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+@media (max-width: 700px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(320px, 1fr);
+    height: auto;
+    min-height: 100vh;
+  }
+}
+
+.app-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.app-editor h1 {
+  font-family: var(--app-font-display);
+  font-weight: 700;
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+
+.app-hint {
+  font-size: 12px;
+  color: var(--app-muted);
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
+.app-hint code {
+  background: var(--app-line);
+  color: var(--app-ink);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-family: var(--app-font-mono);
+}
+
+.app-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.app-toggle-label {
+  font-family: var(--app-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-muted);
+}
+
+.app-toggle-group {
+  display: flex;
+  gap: 4px;
+  border: 2px solid var(--app-line-strong);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.app-toggle-group button {
+  border: none;
+  background: none;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-family: var(--app-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--app-muted);
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.app-toggle-group button:active {
+  transform: scale(0.95);
+}
+
+.app-toggle-group button.active {
+  background: var(--app-ink);
+  color: var(--app-bg);
+}
+
+.app-toggle-group button:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+
+.app-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.app-examples button {
+  background: var(--app-surface);
+  color: var(--app-ink);
+  border: 1.5px solid var(--app-line-strong);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-family: var(--app-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.app-examples button:hover {
+  border-color: var(--app-accent);
+  background: var(--app-accent-wash);
+  color: var(--app-accent);
+}
+
+.app-examples button:active {
+  transform: scale(0.95);
+}
+
+.app-textarea {
+  flex: 1;
+  min-height: 200px;
+  resize: none;
+  background: var(--app-surface);
+  color: var(--app-ink);
+  border: 2px solid var(--app-ink);
+  border-radius: 18px;
+  padding: 14px 16px;
+  font-family: var(--app-font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.app-textarea:focus-visible {
+  border-color: var(--app-accent);
+}
+
+.app-errors {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--app-bad) 10%, var(--app-surface));
+  border: 2px solid var(--app-bad);
+  border-radius: 14px;
+  color: var(--app-bad);
+  font-size: 12px;
+  list-style: none;
+}
+
+.app-viewer {
+  min-height: 0;
+}

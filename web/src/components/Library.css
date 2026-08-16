@@ -1,0 +1,827 @@
+.library {
+  height: 100vh;
+  padding: 24px 88px 24px 24px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1.3fr 0.9fr;
+  gap: 20px;
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+
+/* Custom scrollbar for this page's two scroll areas (the test grid and the
+   questions list) — thin, theme-colored, and only visible where content
+   actually overflows, rather than the bare OS default. */
+.library-grid,
+.library-detail-questions {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.library-grid::-webkit-scrollbar,
+.library-detail-questions::-webkit-scrollbar {
+  width: 8px;
+}
+
+.library-grid::-webkit-scrollbar-track,
+.library-detail-questions::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.library-grid::-webkit-scrollbar-thumb,
+.library-detail-questions::-webkit-scrollbar-thumb {
+  background-color: var(--line-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+
+.library-grid::-webkit-scrollbar-thumb:hover,
+.library-detail-questions::-webkit-scrollbar-thumb:hover {
+  background-color: var(--accent);
+  background-clip: padding-box;
+}
+
+@keyframes library-panel-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes library-panel-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.library-grid-panel,
+.library-detail-panel {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.library-grid-panel {
+  animation: library-panel-in-left 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.library-detail-panel {
+  animation: library-panel-in-right 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.06s backwards;
+}
+
+.library-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.library-panel-header h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  margin: 0;
+}
+
+.library-count {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+@keyframes library-controls-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.library-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  animation: library-controls-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards;
+  /* A hovering/popped-out card sitting right below can visually extend
+     upward via its lift transform and shadow. Its own container clips its
+     layout box, but not always its shadow in every browser/zoom scenario —
+     giving this its own opaque stacking layer above the grid guarantees it
+     can never be drawn over, regardless of the exact transform math. */
+  position: relative;
+  z-index: 2;
+  background: var(--surface);
+}
+
+.library-search {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg);
+  outline: none;
+  transition: border-color 0.15s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.15s ease;
+}
+
+.library-search:focus-visible {
+  border-color: var(--accent);
+  transform: scale(1.015);
+  box-shadow: 0 0 0 4px var(--accent-wash);
+}
+
+.library-sort {
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--bg);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
+  flex-shrink: 0;
+  max-width: 45%;
+}
+
+.library-sort:hover {
+  border-color: var(--line-strong);
+}
+
+.library-sort:focus-visible {
+  border-color: var(--accent);
+  transform: scale(1.03);
+}
+
+.library-sort:active {
+  transform: scale(0.97);
+}
+
+@keyframes library-empty-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.library-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 20px 4px;
+  animation: library-empty-pulse 1.6s ease-in-out infinite;
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  /* min-content, not 1fr — with few cards, 1fr rows stretch to fill 100% of
+     the grid's height (which now properly fills the panel), making cards
+     huge regardless of how little content they hold. min-content sizes each
+     row to its own content and leaves any leftover space empty instead. */
+  grid-auto-rows: min-content;
+  gap: 14px;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  align-content: start;
+  /* Breathing room so a hover-lifted top-row card's shadow has room before
+     reaching the scroll container's own clip edge. */
+  padding-top: 6px;
+  margin-top: -6px;
+}
+
+@keyframes library-card-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.75) translateY(18px) rotate(-3deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.04) translateY(-2px) rotate(0.5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0) rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library-card,
+  .library-grid-panel,
+  .library-detail-panel,
+  .library-controls,
+  .library-detail-content,
+  .library-detail-badge,
+  .library-detail-tag,
+  .library-detail-question,
+  .library-card-downloaded.update-available,
+  .library-detail-start {
+    animation: none !important;
+  }
+}
+
+.library-card {
+  position: relative;
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  /* Opaque at rest, not "none" — same reasoning as Home's .template-row:
+     a transparent card lets whatever's behind it show through wherever it
+     overlaps a neighbor (e.g. mid hover-lift), reading as ghosted text. */
+  background: var(--surface);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 76px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.22s ease;
+  animation: library-card-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.library-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-4px) scale(1.015) rotate(-0.4deg);
+  box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--ink) 30%, transparent);
+}
+
+.library-card:active {
+  transform: scale(0.95) rotate(0.6deg);
+  transition-duration: 0.08s;
+}
+
+/* No separate "select" keyframe animation here — a CSS animation on
+   transform completely overrides any transition-driven transform (like the
+   hover lift above) for as long as it plays. Since this keyframe didn't
+   include the hover's translateY, selecting a card while still hovering it
+   made it visibly drop back down for the animation's duration and then pop
+   back up once it finished — an extra, unwanted bounce. Border/background
+   change alone is enough to signify selection. */
+.library-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+@keyframes library-badge-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-8deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.library-card-downloaded {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: library-badge-pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.library-card-downloaded.update-available {
+  background: var(--bad);
+  color: var(--bg);
+  animation: library-badge-pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), library-update-pulse 1.4s ease-in-out 0.35s infinite;
+}
+
+@keyframes library-update-pulse {
+  0%,
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+  35% {
+    transform: scale(1.18) rotate(-10deg);
+  }
+  65% {
+    transform: scale(1.18) rotate(10deg);
+  }
+}
+
+.library-card-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  padding-right: 20px;
+}
+
+.library-card-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.library-card-date {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: auto;
+}
+
+@keyframes library-detail-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.library-detail-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  animation: library-detail-content-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@keyframes library-detail-header-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.library-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+  animation: library-detail-header-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.library-detail-header h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  margin: 0;
+}
+
+.library-detail-id {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: 'Space Grotesk', monospace;
+}
+
+.library-detail-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin-bottom: 16px;
+  animation: library-detail-header-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) 0.05s backwards;
+}
+
+.library-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.library-detail-badge {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 3px 10px;
+  animation: library-badge-pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+
+.library-detail-badge.frozen {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.library-detail-section {
+  margin-bottom: 18px;
+}
+
+.library-detail-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.library-detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library-detail-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--ink);
+  background: none;
+  font-family: inherit;
+  animation: library-badge-pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+
+.library-detail-tag.whole-bank {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.library-detail-tag.clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.library-detail-tag.clickable:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  transform: scale(1.06) rotate(-1deg);
+}
+
+.library-detail-tag.clickable:active {
+  transform: scale(0.94);
+}
+
+@keyframes library-body-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes library-body-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.library-detail-body {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 16px;
+}
+
+.library-detail-label-hint {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 10px;
+  opacity: 0.8;
+  margin-left: 6px;
+}
+
+.library-detail-download-col {
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  animation: library-body-in-left 0.34s cubic-bezier(0.22, 1, 0.36, 1) 0.14s backwards;
+  transition: border-color 0.2s ease;
+}
+
+@keyframes library-size-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7) translateY(6px);
+  }
+  60% {
+    transform: scale(1.06);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.library-detail-size {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: var(--font-display);
+  margin-top: 6px;
+  animation: library-size-in 0.36s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s backwards;
+}
+
+.library-detail-downloaded-at {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 6px;
+  animation: library-detail-header-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.26s backwards;
+}
+
+.library-detail-download-spacer {
+  flex: 1;
+  min-height: 12px;
+}
+
+.library-detail-questions-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  animation: library-body-in-right 0.34s cubic-bezier(0.22, 1, 0.36, 1) 0.18s backwards;
+}
+
+.library-detail-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  flex: 1;
+}
+
+@keyframes library-question-in {
+  0% {
+    opacity: 0;
+    transform: translateX(10px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.library-detail-question {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
+  animation: library-question-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.library-detail-question:hover {
+  transform: translateX(2px);
+}
+
+.library-detail-question.new {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  animation: library-question-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards,
+    library-new-glow 1.8s ease-in-out 0.3s infinite;
+}
+
+@keyframes library-new-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+.library-detail-question-prompt {
+  flex: 1;
+}
+
+@keyframes library-new-badge-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-15deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.library-detail-question-new-badge {
+  flex-shrink: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 7px;
+  animation: library-new-badge-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.15s backwards;
+}
+
+.library-type-badge {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line-strong);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.library-type-badge.written {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.library-detail-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease;
+  flex-shrink: 0;
+}
+
+.library-detail-action:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+
+.library-detail-action:active:not(:disabled) {
+  transform: scale(0.94);
+  transition-duration: 0.08s;
+}
+
+.library-detail-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.library-detail-action.download {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.library-detail-action.download:hover:not(:disabled) {
+  opacity: 0.85;
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--ink) 50%, transparent);
+}
+
+.library-detail-action.delete {
+  background: none;
+  border: 2px solid var(--bad);
+  color: var(--bad);
+  padding: 6px 14px;
+}
+
+.library-detail-action.delete:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+
+.library-detail-action.update {
+  background: none;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  padding: 6px 14px;
+  margin-bottom: 8px;
+  animation: library-badge-pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.library-detail-action.update:hover:not(:disabled) {
+  background: var(--accent-wash);
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+@keyframes library-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.library-detail-action .spin {
+  display: inline-flex;
+  animation: library-spin 0.7s linear infinite;
+}
+
+.library-detail-spacer {
+  flex: 1;
+  min-height: 0;
+}
+
+@keyframes library-start-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes library-start-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ink) 18%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--ink) 0%, transparent);
+  }
+}
+
+.library-detail-start {
+  align-self: flex-start;
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 10px 22px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: library-start-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s backwards,
+    library-start-glow 2.4s ease-in-out 1s infinite;
+}
+
+.library-detail-start:hover {
+  opacity: 0.85;
+  transform: translateY(-2px) scale(1.03);
+}
+
+.library-detail-start:active {
+  transform: scale(0.95);
+}
+
+.library-detail-prompt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  animation: library-empty-pulse 2.4s ease-in-out infinite;
+}

@@ -1,0 +1,252 @@
+/* Demo/review-harness styling only — not part of the public DocumentViewer
+   API surface (see DocumentViewer.css for that). Same tokens/treatment as
+   graph-engine/src/App.css (itself pulled from Osmosis's own design
+   language) so this harness reads as part of the same family. Kept
+   self-contained — own :root here, not shared with DocumentViewer.css,
+   since that file is the actual public API surface and must keep working
+   without this one. */
+:root {
+  --app-bg: #eef1e5;
+  --app-surface: #ffffff;
+  --app-ink: #17170f;
+  --app-muted: #6b6b5f;
+  --app-line: #e4e2d4;
+  --app-line-strong: #c9c6b3;
+  --app-accent: #c65d22;
+  --app-accent-wash: #faf1e9;
+  --app-bad: #a34b3f;
+
+  --app-font-display: 'Space Grotesk', sans-serif;
+  --app-font-body: 'Inter', sans-serif;
+  --app-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --app-bg: #17160f;
+    --app-surface: #201e15;
+    --app-ink: #f2efe2;
+    --app-muted: #a19d8c;
+    --app-line: #34311e;
+    --app-line-strong: #4a4530;
+    --app-accent: #e2803f;
+    --app-accent-wash: #2c2113;
+    --app-bad: #c76a5c;
+  }
+}
+
+:root[data-theme='dark'] {
+  --app-bg: #17160f;
+  --app-surface: #201e15;
+  --app-ink: #f2efe2;
+  --app-muted: #a19d8c;
+  --app-line: #34311e;
+  --app-line-strong: #4a4530;
+  --app-accent: #e2803f;
+  --app-accent-wash: #2c2113;
+  --app-bad: #c76a5c;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
+  gap: 16px;
+  height: 100vh;
+  padding: 16px;
+  box-sizing: border-box;
+  background: var(--app-bg);
+  color: var(--app-ink);
+  font-family: var(--app-font-body);
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(320px, 1fr);
+    height: auto;
+    min-height: 100vh;
+  }
+}
+
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.app-title {
+  font-family: var(--app-font-display);
+  font-weight: 700;
+  font-size: 20px;
+  margin: 0 0 6px;
+}
+
+.app-subtitle {
+  font-size: 12px;
+  color: var(--app-muted);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.app-section {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--app-line);
+}
+
+.app-section-label {
+  font-family: var(--app-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-muted);
+  margin-bottom: 8px;
+}
+
+.app-hint {
+  font-size: 12px;
+  color: var(--app-muted);
+  line-height: 1.5;
+}
+
+.app-hint code {
+  background: var(--app-line);
+  color: var(--app-ink);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-family: var(--app-font-mono);
+}
+
+.app-error {
+  font-size: 12px;
+  color: var(--app-bad);
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+.app-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.app-toggle-row button {
+  background: var(--app-surface);
+  color: var(--app-ink);
+  border: 1.5px solid var(--app-line-strong);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-family: var(--app-font-display);
+  font-weight: 700;
+  font-size: 11px;
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.app-toggle-row button:hover {
+  border-color: var(--app-accent);
+  background: var(--app-accent-wash);
+  color: var(--app-accent);
+}
+
+.app-toggle-row button:active {
+  transform: scale(0.95);
+}
+
+.app-toggle-row button.active {
+  background: var(--app-ink);
+  color: var(--app-bg);
+  border-color: var(--app-ink);
+}
+
+.app-file-input {
+  display: block;
+  font-size: 12px;
+  color: var(--app-muted);
+  cursor: pointer;
+}
+
+.app-file-input input {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.app-textarea {
+  width: 100%;
+  resize: vertical;
+  background: var(--app-surface);
+  color: var(--app-ink);
+  border: 2px solid var(--app-ink);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-family: var(--app-font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.app-textarea:focus-visible {
+  border-color: var(--app-accent);
+}
+
+.app-marker-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-marker-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  background: var(--app-surface);
+  border: 1.5px solid var(--app-line);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+
+.app-marker-list code {
+  background: var(--app-line);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-family: var(--app-font-mono);
+}
+
+.app-marker-list button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--app-bad);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.app-jump-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--app-font-mono);
+  font-size: 11px;
+  color: var(--app-muted);
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.app-main {
+  min-height: 0;
+}
