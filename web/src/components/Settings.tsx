@@ -26,8 +26,13 @@ import {
   listAssets,
   uploadAsset,
   deleteAsset,
+  getSlices,
+  addSlice,
+  removeSlice,
+  triggerSync,
   type NodeStatus,
   type AssetSummary,
+  type LocalSlice,
 } from '../lib/api'
 import './Settings.css'
 
@@ -323,6 +328,16 @@ export default function Settings({
   const [statusError, setStatusError] = useState<string | null>(null)
   const [config, setConfigState] = useState<Record<string, unknown> | null>(null)
   const [showDead, setShowDead] = useState(false)
+  const [slices, setSlices] = useState<LocalSlice[] | null>(null)
+  const [addingSlice, setAddingSlice] = useState(false)
+  const [newSlice, setNewSlice] = useState('')
+  const [syncing, setSyncing] = useState(false)
+
+  function refreshSlices() {
+    getSlices()
+      .then((r) => setSlices(r.slices))
+      .catch(() => {})
+  }
 
   useEffect(() => {
     getStatus()
@@ -331,7 +346,32 @@ export default function Settings({
     getConfig()
       .then(setConfigState)
       .catch(() => {})
+    refreshSlices()
   }, [])
+
+  async function handleAddSlice() {
+    const slug = newSlice.trim()
+    if (!slug) return
+    await addSlice(slug)
+    setAddingSlice(false)
+    setNewSlice('')
+    refreshSlices()
+  }
+
+  async function handleRemoveSlice(slug: string) {
+    await removeSlice(slug)
+    refreshSlices()
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    try {
+      await triggerSync()
+      await getStatus().then(setStatus)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const protocolCurrent = status ? status.remote_protocol_version === null || status.remote_protocol_version === status.protocol_version : true
   const lastSync = status ? (status.last_push_at ?? status.last_pull_at) : null
@@ -352,6 +392,9 @@ export default function Settings({
               </div>
             </div>
           </div>
+          <span style={{ fontSize: 11, color: status?.online ? 'var(--good)' : 'var(--bad)' }}>
+            {status ? (status.online ? 'online' : 'offline') : '—'}
+          </span>
         </div>
         <div className="settings-row">
           <div className="settings-row-main">
@@ -359,12 +402,73 @@ export default function Settings({
             <div>
               <div className="settings-row-title">Slices</div>
               <div className="settings-row-sub">
-                {status ? (status.slices.length > 0 ? `${status.slices.join(', ')} · ${status.slices.length} held locally` : 'none held locally') : 'loading…'}
+                {slices ? (slices.length > 0 ? `${slices.length} held locally` : 'none held locally') : 'loading…'}
               </div>
             </div>
           </div>
-          <button className="settings-btn">+ Add</button>
+          {!addingSlice && (
+            <button className="settings-btn" onClick={() => setAddingSlice(true)}>
+              + Add
+            </button>
+          )}
         </div>
+
+        {addingSlice && (
+          <div className="theme-editor">
+            <input
+              className="theme-editor-name"
+              placeholder="tag slug…"
+              autoFocus
+              value={newSlice}
+              onChange={(e) => setNewSlice(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleAddSlice()
+                if (e.key === 'Escape') {
+                  setAddingSlice(false)
+                  setNewSlice('')
+                }
+              }}
+            />
+            <div className="theme-editor-actions">
+              <button
+                className="settings-btn"
+                onClick={() => {
+                  setAddingSlice(false)
+                  setNewSlice('')
+                }}
+              >
+                Cancel
+              </button>
+              <button className="settings-btn primary" disabled={!newSlice.trim()} onClick={handleAddSlice}>
+                Add
+              </button>
+            </div>
+          </div>
+        )}
+
+        {slices && slices.length > 0 && (
+          <div className="theme-list">
+            {slices.map((s) => (
+              <div className="theme-card" key={s.tag_slug}>
+                <div className="theme-card-main">
+                  <TagIcon size={13} />
+                  <span className="theme-card-name">{s.tag_slug}</span>
+                </div>
+                <span className="settings-row-sub" style={{ flexShrink: 0 }}>
+                  {s.question_count} questions
+                </span>
+                <button
+                  className="theme-card-icon-btn"
+                  onClick={() => handleRemoveSlice(s.tag_slug)}
+                  aria-label={`Remove slice ${s.tag_slug}`}
+                >
+                  <TrashIcon size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="settings-row">
           <div className="settings-row-main">
             <PlugIcon size={16} />
@@ -380,7 +484,9 @@ export default function Settings({
               {showDead ? 'Hide' : 'Review'}
             </button>
           ) : (
-            <button className="settings-btn primary">Sync now</button>
+            <button className="settings-btn primary" disabled={syncing} onClick={handleSync}>
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
           )}
         </div>
         {showDead && status && status.dead_outbox.length > 0 && (

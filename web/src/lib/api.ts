@@ -218,6 +218,40 @@ export async function deleteLocalTemplate(id: string): Promise<{ id: string }> {
   return res.json()
 }
 
+export interface LocalSlice {
+  tag_slug: string
+  pulled_at: string
+  question_count: number
+}
+
+export async function getSlices(): Promise<{ slices: LocalSlice[] }> {
+  const res = await fetch('/api/slices')
+  if (!res.ok) throw new Error(`GET /api/slices ${res.status}`)
+  return res.json()
+}
+
+export async function addSlice(tagSlug: string): Promise<{ tag_slug: string }> {
+  const res = await fetch('/api/slices', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_slug: tagSlug }),
+  })
+  if (!res.ok) throw new Error(`POST /api/slices ${res.status}`)
+  return res.json()
+}
+
+export async function removeSlice(tagSlug: string): Promise<{ pruned_questions: number }> {
+  const res = await fetch(`/api/slices/${encodeURIComponent(tagSlug)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`DELETE /api/slices/${tagSlug} ${res.status}`)
+  return res.json()
+}
+
+export async function triggerSync(): Promise<{ pushed: number; pulled: number; online: boolean }> {
+  const res = await fetch('/api/sync', { method: 'POST' })
+  if (!res.ok) throw new Error(`POST /api/sync ${res.status}`)
+  return res.json()
+}
+
 export async function getConfig(): Promise<Record<string, unknown>> {
   const res = await fetch('/api/config')
   if (!res.ok) throw new Error(`GET /api/config ${res.status}`)
