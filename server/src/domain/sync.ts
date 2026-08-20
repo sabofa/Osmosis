@@ -264,7 +264,6 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
         `SELECT slug, label, parent_slug, description, retired_at FROM tag WHERE ${tagMatch.sql} ORDER BY slug`
       )
       .all(...tagMatch.params) as unknown as PullResponse["tags"];
-    tags.push(...tagRows);
 
     const questionTagMatch = sliceMatchClause("qt.tag_slug", request.slices);
     // Comparison is inclusive (>=) rather than strict: SQLite's datetime('now')
@@ -294,14 +293,26 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
       "SELECT id, body, is_correct, ordinal FROM choice WHERE question_id = ? ORDER BY ordinal"
     );
 
+    const referencedSlugs = new Set<string>(tagRows.map((t) => t.slug));
     for (const q of questionRows) {
       const qTags = (tagsByQuestion.all(q.id) as { tag_slug: string }[]).map((t) => t.tag_slug);
+      for (const slug of qTags) referencedSlugs.add(slug);
       const choices =
         q.type === "mc"
           ? (choicesByQuestion.all(q.id) as { id: string; body: string; is_correct: number; ordinal: number }[])
           : [];
       questions.push({ ...q, tags: qTags, choices });
     }
+
+    // tagRows alone can omit two things applyPullResponse's tag/question_tag
+    // FKs require: (1) a requested slice's own ancestors, when the slice
+    // isn't a root tag (slug LIKE 'slug:%' only matches descendants, never
+    // ancestors); (2) a cross-cutting tag a pulled question carries outside
+    // the requested slice(s) entirely. fetchTagAncestorClosure — the same
+    // helper /sync/daily-draw already relies on — closes over every ancestor
+    // of every referenced slug and orders the result parent-before-child, so
+    // upsertBankContent's tag insert never FK-fails on either gap.
+    tags.push(...fetchTagAncestorClosure(db, [...referencedSlugs]));
   }
 
   const templates = db

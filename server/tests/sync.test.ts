@@ -34,6 +34,60 @@ describe("buildPullResponse", () => {
     expect(response.grades).toEqual([]);
     expect(typeof response.cursor).toBe("string");
   });
+
+  // Regression: buildPullResponse must include a requested slice's ancestor
+  // chain even when the slice itself is not a root tag, mirroring the fix
+  // already applied to /sync/daily-draw's fetchTagAncestorClosure. Without
+  // it, applyPullResponse's tag upsert violates tag.parent_slug's FK on a
+  // fresh local db that has never seen "math".
+  it("includes a requested non-root slice's full ancestor chain, not just the slice itself", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    insertTag(canonical, "math:algebra", "math");
+    insertQuestion(canonical, { tags: ["math:algebra"] });
+
+    const response = buildPullResponse(canonical, {
+      node_id: "local-1",
+      protocol_version: 1,
+      slices: ["math:algebra"],
+      since: null,
+      include_grades_for_node: false,
+    });
+
+    expect(response.tags.map((t) => t.slug).sort()).toEqual(["math", "math:algebra"]);
+
+    const local = openTestDb();
+    expect(() => applyPullResponse(local, response)).not.toThrow();
+    const row = local.prepare("SELECT slug FROM tag WHERE slug = 'math'").get();
+    expect(row).toBeTruthy();
+  });
+
+  // Regression: a question can carry a tag outside the requested slice (a
+  // cross-cutting tag). buildPullResponse must still ship that tag — and its
+  // ancestors — or applyPullResponse's question_tag insert FK-fails on a
+  // fresh local db that only pulled the "math" slice.
+  it("includes a cross-cutting tag (and its ancestors) referenced by a pulled question, even outside the requested slice", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    insertTag(canonical, "topics");
+    insertTag(canonical, "topics:calculus", "topics");
+    insertQuestion(canonical, { tags: ["math", "topics:calculus"] });
+
+    const response = buildPullResponse(canonical, {
+      node_id: "local-1",
+      protocol_version: 1,
+      slices: ["math"],
+      since: null,
+      include_grades_for_node: false,
+    });
+
+    expect(response.tags.map((t) => t.slug).sort()).toEqual(["math", "topics", "topics:calculus"]);
+
+    const local = openTestDb();
+    expect(() => applyPullResponse(local, response)).not.toThrow();
+    const row = local.prepare("SELECT slug FROM tag WHERE slug = 'topics:calculus'").get();
+    expect(row).toBeTruthy();
+  });
 });
 
 describe("applyPullResponse", () => {
