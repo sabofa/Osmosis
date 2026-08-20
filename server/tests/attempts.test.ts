@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createTemplate } from "../src/domain/templates.js";
 import {
   createAttempt,
+  createDailyAttempt,
   getAttemptDetail,
   answerResponse,
   submitAttempt,
@@ -283,5 +284,48 @@ describe("outbox population (local nodes only)", () => {
 
     const count = (db.prepare("SELECT COUNT(*) AS n FROM outbox").get() as { n: number }).n;
     expect(count).toBe(0);
+  });
+});
+
+describe("createDailyAttempt", () => {
+  it("creates an attempt with the exact given question set, in order, referencing daily_draw_id", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q1 = insertQuestion(db, { tags: ["a"] });
+    const q2 = insertQuestion(db, { tags: ["a"], type: "written" });
+    db.prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES ('dd1', '2026-08-20', 'quiz')").run();
+
+    const result = createDailyAttempt(db, {
+      node_id: "n1",
+      kind: "daily_quiz",
+      daily_draw_id: "dd1",
+      questions: [
+        { id: q1.id, lineage_id: q1.lineage_id, type: "mc" },
+        { id: q2.id, lineage_id: q2.lineage_id, type: "written" },
+      ],
+    });
+
+    const attempt = db.prepare("SELECT source, daily_draw_id, template_id FROM attempt WHERE id = ?").get(result.attempt_id) as any;
+    expect(attempt.source).toBe("daily_quiz");
+    expect(attempt.daily_draw_id).toBe("dd1");
+    expect(attempt.template_id).toBeNull();
+
+    const responses = db.prepare("SELECT question_id, ordinal FROM response WHERE attempt_id = ? ORDER BY ordinal").all(result.attempt_id) as any[];
+    expect(responses.map((r) => r.question_id)).toEqual([q1.id, q2.id]);
+  });
+
+  it("does not enqueue an outbox row itself (only submit does, per the existing attempt lifecycle)", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q1 = insertQuestion(db, { tags: ["a"] });
+    db.prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES ('dd2', '2026-08-20', 'question')").run();
+
+    createDailyAttempt(db, {
+      node_id: "n1", kind: "daily_question", daily_draw_id: "dd2",
+      questions: [{ id: q1.id, lineage_id: q1.lineage_id, type: "mc" }],
+    }, "local");
+
+    const outboxCount = (db.prepare("SELECT COUNT(*) AS n FROM outbox").get() as { n: number }).n;
+    expect(outboxCount).toBe(0);
   });
 });

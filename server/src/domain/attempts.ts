@@ -162,6 +162,46 @@ export function createAttempt(
 }
 
 // ----------------------------------------------------------------------------
+// Create Daily Attempt
+// ----------------------------------------------------------------------------
+
+export interface CreateDailyAttemptInput {
+  node_id: string;
+  kind: "daily_question" | "daily_quiz";
+  daily_draw_id: string;
+  questions: { id: string; lineage_id: string; type: "mc" | "written" }[];
+}
+
+export function createDailyAttempt(
+  db: DatabaseSync,
+  input: CreateDailyAttemptInput,
+  role: "canonical" | "local" = "canonical"
+): { attempt_id: string; questions: { id: string; lineage_id: string; type: "mc" | "written" }[] } {
+  sweepAbandonedAttempts(db);
+
+  const attemptId = uuidv4();
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `INSERT INTO attempt (id, node_id, source, daily_draw_id, started_at)
+       VALUES (?, ?, ?, ?, datetime('now'))`
+    ).run(attemptId, input.node_id, input.kind, input.daily_draw_id);
+
+    const insertResponse = db.prepare(
+      "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
+    );
+    input.questions.forEach((q, i) => insertResponse.run(uuidv4(), attemptId, q.id, i));
+
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  return { attempt_id: attemptId, questions: input.questions };
+}
+
+// ----------------------------------------------------------------------------
 // Read
 // ----------------------------------------------------------------------------
 
