@@ -232,4 +232,56 @@ describe("outbox population (local nodes only)", () => {
     const after = (db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE entity_type = 'grade'").get() as { n: number }).n;
     expect(after).toBe(before + 1);
   });
+
+  // Finding 7A — superseding a grade must enqueue the OLD row too, carrying
+  // its new superseded_at, or canonical never learns the score changed and the
+  // new grade dead-letters against grade_one_live_per_response.
+  it("superseding a grade enqueues both the superseded old grade and the new one", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    insertQuestion(db, { type: "written", tags: ["a"] });
+    const template = createTemplate(db, { name: "t", tag_query: { all: ["a"] }, question_count: 1 });
+    const created = createAttempt(db, { node_id: "n1", source: "template", template_id: template.id }, "local");
+    const detail = getAttemptDetail(db, created.attempt_id) as any;
+    submitAttempt(db, created.attempt_id, "local");
+    const responseId = detail.responses[0].id;
+
+    const first = gradeResponse(db, responseId, { grader: "self", score: 0 }, "local");
+    db.prepare("DELETE FROM outbox WHERE entity_type = 'grade'").run(); // simulate the first grade already pushed
+
+    const second = gradeResponse(db, responseId, { grader: "self", score: 1 }, "local");
+
+    const rows = db.prepare("SELECT entity_id, payload FROM outbox WHERE entity_type = 'grade'").all() as {
+      entity_id: string; payload: string;
+    }[];
+    const ids = rows.map((r) => r.entity_id).sort();
+    expect(ids).toEqual([(first as any).id, (second as any).id].sort());
+
+    // The old grade's payload carries the real superseded_at, not null.
+    const oldPayload = JSON.parse(rows.find((r) => r.entity_id === (first as any).id)!.payload);
+    expect(oldPayload.superseded_at).not.toBeNull();
+    expect(oldPayload.id).toBe((first as any).id);
+
+    // The new grade's payload is still live.
+    const newPayload = JSON.parse(rows.find((r) => r.entity_id === (second as any).id)!.payload);
+    expect(newPayload.superseded_at).toBeNull();
+    expect(newPayload.score).toBe(1);
+  });
+
+  it("a canonical-role supersede enqueues nothing", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    insertQuestion(db, { type: "written", tags: ["a"] });
+    const template = createTemplate(db, { name: "t", tag_query: { all: ["a"] }, question_count: 1 });
+    const created = createAttempt(db, { node_id: "n1", source: "template", template_id: template.id }, "canonical");
+    const detail = getAttemptDetail(db, created.attempt_id) as any;
+    submitAttempt(db, created.attempt_id, "canonical");
+    const responseId = detail.responses[0].id;
+
+    gradeResponse(db, responseId, { grader: "self", score: 0 }, "canonical");
+    gradeResponse(db, responseId, { grader: "self", score: 1 }, "canonical");
+
+    const count = (db.prepare("SELECT COUNT(*) AS n FROM outbox").get() as { n: number }).n;
+    expect(count).toBe(0);
+  });
 });

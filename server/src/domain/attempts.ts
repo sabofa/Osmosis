@@ -468,6 +468,15 @@ export function gradeResponse(
     ).run(id, responseId, input.score, input.feedback ?? null);
 
     if (role === "local") {
+      // The supersede is itself a change canonical needs: without it, the new
+      // grade collides with the still-live old one on canonical's
+      // grade_one_live_per_response index and dead-letters, leaving the stale
+      // score authoritative. Re-read after the UPDATE so the payload carries
+      // the real superseded_at.
+      if (live) {
+        const oldGradeRow = db.prepare("SELECT * FROM grade WHERE id = ?").get(live.id);
+        enqueueOutbox(db, "grade", live.id, oldGradeRow);
+      }
       const gradeRow = db.prepare("SELECT * FROM grade WHERE id = ?").get(id);
       enqueueOutbox(db, "grade", id, gradeRow);
     }
