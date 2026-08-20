@@ -7,6 +7,7 @@ import type { NodeRow } from "../node.js";
 import { PROTOCOL_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
+import { buildPullResponse, applyPushRequest, type PullRequest, type PushRequest } from "../domain/sync.js";
 
 export interface AppContext {
   db: DatabaseSync;
@@ -25,6 +26,14 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       protocol_version: PROTOCOL_VERSION,
       node_id: ctx.node.id,
     }));
+
+    app.post("/sync/pull", async (request) => {
+      return buildPullResponse(ctx.db, request.body as PullRequest);
+    });
+
+    app.post("/sync/push", async (request) => {
+      return applyPushRequest(ctx.db, request.body as PushRequest);
+    });
 
     mountMcp(app, ctx);
   }
