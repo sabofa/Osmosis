@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { v4 as uuidv4 } from "uuid";
 import { buildApp } from "../src/http/app.js";
 import { bootstrapNode } from "../src/node.js";
 import { createSyncRuntime } from "../src/sync/client.js";
@@ -258,5 +259,58 @@ describe("local-node sync-triggering routes", () => {
     expect(slice.pulled_at).toBe(NEVER_PULLED);
 
     await local.app.close();
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Task 4 — /api/status model grading fields.
+// ----------------------------------------------------------------------------
+
+describe("/api/status model grading fields", () => {
+  it("reports model_grades_today and model_grading_configured", async () => {
+    const db = openTestDb();
+    const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: "real-key" };
+    const node = bootstrapNode(db, env);
+    const app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+
+    const res = await app.inject({ method: "GET", url: "/api/status" });
+    const body = res.json();
+
+    expect(body.model_grading_configured).toBe(true);
+    expect(body.model_grades_today).toBe(0);
+
+    // grade.response_id carries an enforced FK to response(id) (ON DELETE
+    // CASCADE), and the test DB runs with foreign_keys = ON, so a bare
+    // literal insert would violate it — build the minimal
+    // tag/question/attempt/response chain first, matching the pattern
+    // used in modelGrading.test.ts.
+    insertTag(db, "a");
+    const q = insertQuestion(db, { type: "written", tags: ["a"] });
+    const attemptId = uuidv4();
+    const responseId = uuidv4();
+    db.prepare("INSERT INTO attempt (id, node_id, source, started_at) VALUES (?, 'n1', 'adhoc', datetime('now'))").run(
+      attemptId
+    );
+    db.prepare(
+      "INSERT INTO response (id, attempt_id, question_id, ordinal, response_text) VALUES (?, ?, ?, 0, 'my answer')"
+    ).run(responseId, attemptId, q.id);
+    db.prepare(
+      "INSERT INTO grade (id, response_id, grader, score, model_name, graded_at) VALUES (?, ?, 'model', 0.9, 'deepseek-v4-flash', datetime('now'))"
+    ).run(uuidv4(), responseId);
+
+    const res2 = await app.inject({ method: "GET", url: "/api/status" });
+    expect(res2.json().model_grades_today).toBe(1);
+  });
+
+  it("reports model_grading_configured false when DEEPSEEK_API_KEY is unset", async () => {
+    const db = openTestDb();
+    const env = { role: "canonical" as const, label: "c2", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db, env);
+    const app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+
+    const res = await app.inject({ method: "GET", url: "/api/status" });
+    expect(res.json().model_grading_configured).toBe(false);
   });
 });

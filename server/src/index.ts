@@ -4,6 +4,7 @@ import { migrate } from "./db/migrate.js";
 import { bootstrapNode } from "./node.js";
 import { buildApp } from "./http/app.js";
 import { createSyncRuntime, startSyncBackground } from "./sync/client.js";
+import { startModelGradingBackground } from "./grading/scheduler.js";
 
 const env = loadEnvConfig();
 const db = openDb(env.dbPath);
@@ -23,6 +24,7 @@ app
   .listen({ port: env.port, host: "0.0.0.0" })
   .then(() => {
     startSyncBackground({ db, env, node, runtime }, runtime); // no-op on canonical
+    startModelGradingBackground({ db, env, node, runtime }); // no-op on local, or if DEEPSEEK_API_KEY unset
   })
   .catch((err) => {
     app.log.error(err);

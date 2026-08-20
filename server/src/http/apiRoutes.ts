@@ -71,6 +71,11 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     const slices = (db.prepare("SELECT tag_slug FROM local_slice").all() as { tag_slug: string }[]).map(
       (r) => r.tag_slug
     );
+    const modelGradesToday = (
+      db.prepare("SELECT COUNT(*) AS n FROM grade WHERE grader = 'model' AND graded_at >= datetime('now', '-1 day')").get() as {
+        n: number;
+      }
+    ).n;
 
     return {
       online: ctx.env.role === "canonical" ? true : ctx.runtime.online,
@@ -84,6 +89,8 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       slices,
       protocol_version: PROTOCOL_VERSION,
       remote_protocol_version: syncState?.remote_protocol_version ?? null,
+      model_grades_today: modelGradesToday,
+      model_grading_configured: ctx.env.deepseekApiKey !== null,
     };
   });
 
