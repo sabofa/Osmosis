@@ -91,7 +91,7 @@ interface QuestionRow {
   document_marker_offset: number | null;
 }
 
-const QUESTION_COLUMNS = [
+export const QUESTION_COLUMNS = [
   "id",
   "lineage_id",
   "version",
@@ -116,6 +116,42 @@ const QUESTION_COLUMNS = [
   "document_anchor_end",
   "document_marker_offset",
 ] as const;
+
+// ----------------------------------------------------------------------------
+// buildQuestionPayloads: given an explicit list of question IDs (not a tag
+// slice), select those exact rows in the same QUESTION_COLUMNS shape and
+// attach tags/choices the same way buildPullResponse's per-question loop
+// does. Used directly by daily-draw sync, where the question set is fixed by
+// resolveDailyDraw rather than derived from a tag-scoped query.
+// ----------------------------------------------------------------------------
+
+export function buildQuestionPayloads(db: DatabaseSync, questionIds: string[]): Record<string, unknown>[] {
+  if (questionIds.length === 0) return [];
+
+  const questionStmt = db.prepare(
+    `SELECT ${QUESTION_COLUMNS.map((c) => `q.${c}`).join(", ")}
+     FROM question q
+     WHERE q.id IN (${questionIds.map(() => "?").join(",")})
+     ORDER BY q.id`
+  );
+  const questionRows = questionStmt.all(...questionIds) as unknown as QuestionRow[];
+
+  const tagsByQuestion = db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?");
+  const choicesByQuestion = db.prepare(
+    "SELECT id, body, is_correct, ordinal FROM choice WHERE question_id = ? ORDER BY ordinal"
+  );
+
+  const questions: Record<string, unknown>[] = [];
+  for (const q of questionRows) {
+    const qTags = (tagsByQuestion.all(q.id) as { tag_slug: string }[]).map((t) => t.tag_slug);
+    const choices =
+      q.type === "mc"
+        ? (choicesByQuestion.all(q.id) as { id: string; body: string; is_correct: number; ordinal: number }[])
+        : [];
+    questions.push({ ...q, tags: qTags, choices });
+  }
+  return questions;
+}
 
 // ----------------------------------------------------------------------------
 // buildPullResponse (canonical side)
@@ -222,14 +258,19 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
 }
 
 // ----------------------------------------------------------------------------
-// applyPullResponse (local side)
+// upsertBankContent: the tag-upsert and question-upsert (incl. question_tag/
+// choice delete-then-reinsert, and the document-asset-nulling guard) shared
+// by applyPullResponse and the daily-draw local mirroring path. Does NOT open
+// its own transaction — the caller owns transaction boundaries, since this
+// runs as one step inside a larger atomic apply (applyPullResponse's own
+// BEGIN/COMMIT, or fetchAndApplyDailyDraw's).
 // ----------------------------------------------------------------------------
 
-export function applyPullResponse(
+export function upsertBankContent(
   db: DatabaseSync,
-  response: PullResponse,
-  slices: string[] = []
-): ApplyPullResult {
+  tags: PullResponse["tags"],
+  questions: Record<string, unknown>[]
+): { tagsApplied: number; questionsApplied: number } {
   const upsertTag = db.prepare(
     `INSERT INTO tag (slug, label, parent_slug, description, retired_at)
      VALUES (@slug, @label, @parent_slug, @description, @retired_at)
@@ -256,6 +297,64 @@ export function applyPullResponse(
     "INSERT INTO choice (id, question_id, body, is_correct, ordinal) VALUES (?, ?, ?, ?, ?)"
   );
 
+  const findAsset = db.prepare("SELECT id FROM asset WHERE id = ?");
+
+  let tagsApplied = 0;
+  let questionsApplied = 0;
+
+  for (const tag of tags) {
+    upsertTag.run({
+      slug: tag.slug,
+      label: tag.label,
+      parent_slug: tag.parent_slug,
+      description: tag.description,
+      retired_at: tag.retired_at,
+    });
+    tagsApplied += 1;
+  }
+
+  for (const q of questions as unknown as (QuestionRow & {
+    tags: string[];
+    choices: { id: string; body: string; is_correct: number; ordinal: number }[];
+  })[]) {
+    const fields: Record<string, unknown> = {};
+    for (const c of QUESTION_COLUMNS) fields[c] = (q as unknown as Record<string, unknown>)[c] ?? null;
+
+    // question.document_id REFERENCES asset(id), but asset rows are not part
+    // of the sync protocol (asset sync is a separate future spec). Rather
+    // than let an FK violation roll back — and permanently jam — the whole
+    // pull, sync the question without its document-panel linkage.
+    if (fields.document_id != null && !findAsset.get(fields.document_id as string)) {
+      fields.document_id = null;
+      fields.document_anchor_label = null;
+      fields.document_anchor_start = null;
+      fields.document_anchor_end = null;
+      fields.document_marker_offset = null;
+    }
+
+    upsertQuestion.run(fields as Record<string, any>);
+
+    deleteQuestionTags.run(q.id);
+    for (const slug of q.tags ?? []) insertQuestionTag.run(q.id, slug);
+
+    deleteChoices.run(q.id);
+    for (const c of q.choices ?? []) insertChoice.run(c.id, q.id, c.body, c.is_correct, c.ordinal);
+
+    questionsApplied += 1;
+  }
+
+  return { tagsApplied, questionsApplied };
+}
+
+// ----------------------------------------------------------------------------
+// applyPullResponse (local side)
+// ----------------------------------------------------------------------------
+
+export function applyPullResponse(
+  db: DatabaseSync,
+  response: PullResponse,
+  slices: string[] = []
+): ApplyPullResult {
   const upsertTemplate = db.prepare(
     `INSERT INTO template (
        id, name, description, tag_query, question_count, mc_ratio,
@@ -301,8 +400,6 @@ export function applyPullResponse(
     "INSERT INTO template_frozen_question (template_id, question_id, ordinal) VALUES (?, ?, ?)"
   );
 
-  const findAsset = db.prepare("SELECT id FROM asset WHERE id = ?");
-
   let tagsApplied = 0;
   let questionsApplied = 0;
   let templatesApplied = 0;
@@ -310,46 +407,7 @@ export function applyPullResponse(
 
   db.exec("BEGIN");
   try {
-    for (const tag of response.tags) {
-      upsertTag.run({
-        slug: tag.slug,
-        label: tag.label,
-        parent_slug: tag.parent_slug,
-        description: tag.description,
-        retired_at: tag.retired_at,
-      });
-      tagsApplied += 1;
-    }
-
-    for (const q of response.questions as unknown as (QuestionRow & {
-      tags: string[];
-      choices: { id: string; body: string; is_correct: number; ordinal: number }[];
-    })[]) {
-      const fields: Record<string, unknown> = {};
-      for (const c of QUESTION_COLUMNS) fields[c] = (q as unknown as Record<string, unknown>)[c] ?? null;
-
-      // question.document_id REFERENCES asset(id), but asset rows are not part
-      // of the sync protocol (asset sync is a separate future spec). Rather
-      // than let an FK violation roll back — and permanently jam — the whole
-      // pull, sync the question without its document-panel linkage.
-      if (fields.document_id != null && !findAsset.get(fields.document_id as string)) {
-        fields.document_id = null;
-        fields.document_anchor_label = null;
-        fields.document_anchor_start = null;
-        fields.document_anchor_end = null;
-        fields.document_marker_offset = null;
-      }
-
-      upsertQuestion.run(fields as Record<string, any>);
-
-      deleteQuestionTags.run(q.id);
-      for (const slug of q.tags ?? []) insertQuestionTag.run(q.id, slug);
-
-      deleteChoices.run(q.id);
-      for (const c of q.choices ?? []) insertChoice.run(c.id, q.id, c.body, c.is_correct, c.ordinal);
-
-      questionsApplied += 1;
-    }
+    ({ tagsApplied, questionsApplied } = upsertBankContent(db, response.tags, response.questions));
 
     const frozenByTemplate = new Map<string, PullResponse["frozen_questions"]>();
     for (const f of response.frozen_questions ?? []) {
