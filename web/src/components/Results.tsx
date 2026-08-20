@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getResultsTags, listAttempts, timeAgo, type AttemptSummary, type TagResultStat } from '../lib/api'
+import { getResultsDaily, getResultsTags, listAttempts, timeAgo, type AttemptSummary, type DailyResultStat, type TagResultStat } from '../lib/api'
 import { attemptsHeatmap } from '../lib/activity'
 import Heatmap from './Heatmap'
 import './Results.css'
@@ -15,6 +15,7 @@ const HEAT_DAYS = 7
 export default function Results() {
   const [tags, setTags] = useState<TagResultStat[] | null>(null)
   const [attempts, setAttempts] = useState<AttemptSummary[]>([])
+  const [daily, setDaily] = useState<DailyResultStat[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [chartEl, setChartEl] = useState<HTMLDivElement | null>(null)
@@ -31,6 +32,11 @@ export default function Results() {
       .then((r) => setAttempts(r.attempts))
       .catch(() => {
         /* heatmap just shows all-zero activity if this fails; not fatal */
+      })
+    getResultsDaily(30)
+      .then((r) => setDaily(r.daily))
+      .catch(() => {
+        /* daily history panel just shows empty state if this fails; not fatal */
       })
   }, [])
 
@@ -147,6 +153,24 @@ export default function Results() {
               ))}
               {tags !== null && tags.length === 0 && (
                 <div style={{ fontSize: 12, color: 'var(--muted)', padding: '8px 4px' }}>No results yet.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="results-panel results-daily-panel">
+            <div className="results-kicker">Daily history</div>
+            <div className="results-daily-list no-scrollbar">
+              {(daily ?? []).map((d) => (
+                <div key={`${d.draw_date}-${d.kind}`} className="results-daily-row">
+                  <span className="results-daily-date">{timeAgo(d.draw_date)}</span>
+                  <span className={`results-daily-kind-badge ${d.kind}`}>{d.kind === 'quiz' ? 'quiz' : 'question'}</span>
+                  <span className={`results-daily-score${d.completed ? '' : ' incomplete'}`}>
+                    {d.completed && d.score !== null ? d.score.toFixed(2) : 'not completed'}
+                  </span>
+                </div>
+              ))}
+              {daily !== null && daily.length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', padding: '8px 4px' }}>No daily history yet.</div>
               )}
             </div>
           </div>
