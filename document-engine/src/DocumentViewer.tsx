@@ -3,8 +3,9 @@ import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
 import { ZoomControl, SettingsMenu } from './Toolbar'
+import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
-import { toggleHighlightRange } from './highlightOps'
+import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import type {
   DocumentViewerAsset,
@@ -45,6 +46,17 @@ export interface DocumentViewerProps {
 const ZOOM_MIN = 1
 const ZOOM_MAX = 4
 const ZOOM_STEP = 0.25
+
+// See the highlightCss comment below for why this can't be 1 (opaque).
+const HIGHLIGHT_ALPHA = 0.55
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '')
+  const r = parseInt(clean.slice(0, 2), 16)
+  const g = parseInt(clean.slice(2, 4), 16)
+  const b = parseInt(clean.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
 
 let highlightCounter = 0
 function makeHighlightId(): string {
@@ -96,16 +108,25 @@ export default function DocumentViewer({
   const contentRef = useRef<HTMLDivElement | null>(null)
 
   // ::highlight() rules for this instance's groups — one per palette color
-  // plus the anchor, re-generated when the theme changes. Literal hex
+  // plus the anchor, re-generated when the theme changes. Literal hex/rgba
   // values rather than var(...): custom-highlight pseudo-elements aren't
   // guaranteed to resolve custom properties from this stylesheet's own
   // cascade context across browsers, so this sidesteps that entirely.
+  //
+  // Alpha is not optional here, and not just cosmetic: a PDF's text-layer
+  // spans render with color:transparent (the visible glyphs are painted on
+  // the canvas underneath, not by these DOM text nodes — see PdfLayer). An
+  // opaque highlight background would sit *above* that transparent text and
+  // fully block the canvas glyphs below it, i.e. exactly the "solid block,
+  // no visible text underneath" bug. Translucent backgrounds let the canvas
+  // show through, same as how a native PDF viewer's own selection/highlight
+  // color is always translucent, never solid.
   const highlightCss = useMemo(() => {
     const rules = HIGHLIGHT_PALETTE.map(
-      (c) => `::highlight(${groupPrefix}-${c.id}) { background-color: ${internalTheme === 'dark' ? c.dark : c.light}; }`
+      (c) => `::highlight(${groupPrefix}-${c.id}) { background-color: ${hexToRgba(internalTheme === 'dark' ? c.dark : c.light, HIGHLIGHT_ALPHA)}; }`
     )
     rules.push(
-      `::highlight(${groupPrefix}-anchor) { background-color: ${internalTheme === 'dark' ? '#8a6d1a' : '#f4d35e'}; }`
+      `::highlight(${groupPrefix}-anchor) { background-color: ${hexToRgba(internalTheme === 'dark' ? '#8a6d1a' : '#f4d35e', HIGHLIGHT_ALPHA)}; }`
     )
     return rules.join('\n')
   }, [groupPrefix, internalTheme])
@@ -130,6 +151,19 @@ export default function DocumentViewer({
   function applyHighlight(colorId: string) {
     if (!pendingSelection) return
     const next = toggleHighlightRange(localHighlights, pendingSelection.start, pendingSelection.end, colorId, makeHighlightId)
+    setLocalHighlights(next)
+    onHighlightsChange?.(next)
+    setPendingSelection(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  // Strips whatever highlight coverage exists in the current selection,
+  // regardless of color — a one-click "dehighlight" alongside the color
+  // swatches, instead of having to reselect and pick the matching color to
+  // toggle it off.
+  function removeHighlight() {
+    if (!pendingSelection) return
+    const next = removeHighlightRange(localHighlights, pendingSelection.start, pendingSelection.end, makeHighlightId)
     setLocalHighlights(next)
     onHighlightsChange?.(next)
     setPendingSelection(null)
@@ -164,7 +198,13 @@ export default function DocumentViewer({
   if (mode === 'simple') {
     if (isPdf && asset.url) body = <SimplePdfPages url={asset.url} onErrors={onErrors} />
     else if (isImage && asset.url) body = <img className="document-viewer-image" src={asset.url} alt="" draggable={false} />
-    else if (isText) body = <pre className="document-viewer-text">{text}</pre>
+    else if (isText) {
+      // Reuses TextContent's markdown rendering (see markdown.ts) with
+      // every interactive feature switched off — 'simple' mode's whole
+      // point is no anchors/markers/highlighting/click-handling, but there
+      // is no reason its formatting should look worse than 'full' mode's.
+      body = <TextContent text={text} anchor={null} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} />
+    }
     else body = <div className="document-viewer-placeholder">Preview not available for this file type.</div>
   } else if (isPdf && asset.url) {
     body = (
@@ -255,6 +295,15 @@ export default function DocumentViewer({
               onClick={() => applyHighlight(c.id)}
             />
           ))}
+          <button
+            type="button"
+            className="document-viewer-highlight-dismiss"
+            title="Remove highlight"
+            aria-label="Remove highlight"
+            onClick={removeHighlight}
+          >
+            <RemoveHighlightIcon size={13} />
+          </button>
         </div>
       )}
     </div>

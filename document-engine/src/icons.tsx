@@ -57,3 +57,26 @@ export function EyeIcon({ size = 16, off = false }: IconProps & { off?: boolean 
     </svg>
   )
 }
+
+export function CloseIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M5 5l14 14M19 5 5 19" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export function RemoveHighlightIcon({ size = 16 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path
+        d="M14.5 3.5 20.5 9.5 10 20H4v-6L14.5 3.5Z"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+      />
+      <path d="M4 20h16" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+      <path d="M3 3l18 18" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+    </svg>
+  )
+}

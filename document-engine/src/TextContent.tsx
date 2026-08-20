@@ -1,11 +1,10 @@
-import { useRef } from 'react'
+import { useRef, type ElementType, type ReactNode } from 'react'
 import { findTokenSpan } from './core/findTokenSpan'
 import { usePaintHighlights } from './highlightPainter'
+import { parseBlocks, parseInline, BLOCK_TAG, BLOCK_CLASS, type InlineRun } from './markdown'
 import type { DocumentAnchor, DocumentHighlight, DocumentMarker } from './types'
 
-interface Segment {
-  start: number
-  end: number
+interface Leaf extends InlineRun {
   marker?: DocumentMarker
 }
 
@@ -26,57 +25,71 @@ export default function TextContent({
   groupPrefix: string
   onJumpToQuestion?: (id: string) => void
 }) {
-  const rootRef = useRef<HTMLPreElement | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   usePaintHighlights(rootRef, groupPrefix, anchor, highlights, showOverlays, text)
 
-  // Only marker boundaries split the DOM into separate elements — anchor
-  // and highlight ranges are painted via the CSS Custom Highlight API
+  // Anchor and highlight ranges are painted via the CSS Custom Highlight API
   // (see highlightPainter.ts) rather than wrapped in their own elements, so
   // they can never fragment a word into multiple padded/rounded pieces with
-  // visible gaps between them.
+  // visible gaps between them — only markdown formatting and marker
+  // boundaries split the DOM into separate elements here.
   const markerSpans = markers
     .map((marker) => ({ marker, span: findTokenSpan(text, marker.offset) }))
     .filter((m): m is { marker: DocumentMarker; span: { start: number; end: number } } => m.span !== null)
     .sort((a, b) => a.span.start - b.span.start)
 
-  const segments: Segment[] = []
-  let cursor = 0
-  for (const { marker, span } of markerSpans) {
-    if (span.start < cursor) continue // overlapping marker tokens — keep the first
-    if (span.start > cursor) segments.push({ start: cursor, end: span.start })
-    segments.push({ start: span.start, end: span.end, marker })
-    cursor = span.end
+  function leavesFor(runs: InlineRun[]): Leaf[] {
+    const leaves: Leaf[] = []
+    for (const run of runs) {
+      const overlapping = markerSpans.filter((m) => m.span.end > run.start && m.span.start < run.end)
+      let cursor = run.start
+      for (const { marker, span } of overlapping) {
+        const s = Math.max(span.start, run.start)
+        const e = Math.min(span.end, run.end)
+        if (s < cursor) continue // overlapping marker tokens — keep the first
+        if (s > cursor) leaves.push({ start: cursor, end: s, bold: run.bold, italic: run.italic, code: run.code })
+        leaves.push({ start: s, end: e, bold: run.bold, italic: run.italic, code: run.code, marker })
+        cursor = e
+      }
+      if (cursor < run.end) leaves.push({ start: cursor, end: run.end, bold: run.bold, italic: run.italic, code: run.code })
+    }
+    return leaves
   }
-  if (cursor < text.length) segments.push({ start: cursor, end: text.length })
+
+  function renderLeaf(leaf: Leaf): ReactNode {
+    const content = text.slice(leaf.start, leaf.end)
+    const marker = leaf.marker
+    const shared = marker
+      ? {
+          'data-start': leaf.start,
+          className: 'document-viewer-marker',
+          role: 'button' as const,
+          tabIndex: 0,
+          onClick: () => onJumpToQuestion?.(marker.id),
+          onKeyDown: (e: React.KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') onJumpToQuestion?.(marker.id)
+          },
+        }
+      : { 'data-start': leaf.start }
+    if (leaf.code) return <code key={leaf.start} {...shared}>{content}</code>
+    if (leaf.bold) return <strong key={leaf.start} {...shared}>{content}</strong>
+    if (leaf.italic) return <em key={leaf.start} {...shared}>{content}</em>
+    return <span key={leaf.start} {...shared}>{content}</span>
+  }
+
+  const blocks = parseBlocks(text)
 
   return (
-    <pre className="document-viewer-text" ref={rootRef}>
-      {segments.map((seg) => {
-        const content = text.slice(seg.start, seg.end)
-        if (seg.marker) {
-          const marker = seg.marker
-          return (
-            <span
-              key={seg.start}
-              data-start={seg.start}
-              className="document-viewer-marker"
-              role="button"
-              tabIndex={0}
-              onClick={() => onJumpToQuestion?.(marker.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') onJumpToQuestion?.(marker.id)
-              }}
-            >
-              {content}
-            </span>
-          )
-        }
+    <div className="document-viewer-text document-viewer-markdown" ref={rootRef}>
+      {blocks.map((block) => {
+        const Tag = BLOCK_TAG[block.type] as ElementType
+        const runs = parseInline(text.slice(block.start, block.end), block.start)
         return (
-          <span data-start={seg.start} key={seg.start}>
-            {content}
-          </span>
+          <Tag key={block.start} className={BLOCK_CLASS[block.type] || undefined}>
+            {leavesFor(runs).map(renderLeaf)}
+          </Tag>
         )
       })}
-    </pre>
+    </div>
   )
 }
