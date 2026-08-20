@@ -338,3 +338,190 @@ export function applyPullResponse(db: DatabaseSync, response: PullResponse): App
     cursor: response.cursor,
   };
 }
+
+// ----------------------------------------------------------------------------
+// Push protocol: a local node's attempts/responses/grades flow up to
+// canonical, idempotently — pushing the same payload twice is a no-op.
+// ----------------------------------------------------------------------------
+
+export interface PushRequest {
+  node_id: string;
+  protocol_version: number;
+  attempts: Record<string, unknown>[]; // shape matches the `attempt` table columns
+  responses: Record<string, unknown>[]; // shape matches the `response` table columns
+  grades: Record<string, unknown>[]; // shape matches the `grade` table columns
+}
+
+export interface PushResult {
+  protocol_version: number;
+  accepted: string[];
+  duplicate: string[];
+  rejected: { id: string; reason: string; detail?: string }[];
+  regrade_queued: string[];
+}
+
+const ATTEMPT_COLUMNS = [
+  "id",
+  "node_id",
+  "source",
+  "template_id",
+  "daily_draw_id",
+  "started_at",
+  "submitted_at",
+  "abandoned_at",
+  "offline",
+] as const;
+
+const RESPONSE_COLUMNS = [
+  "id",
+  "attempt_id",
+  "question_id",
+  "ordinal",
+  "selected_choice_id",
+  "response_text",
+  "skipped",
+  "answered_at",
+  "elapsed_ms",
+] as const;
+
+const GRADE_COLUMNS = [
+  "id",
+  "response_id",
+  "grader",
+  "score",
+  "feedback",
+  "rubric_version",
+  "model_name",
+  "graded_at",
+] as const;
+
+export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushResult {
+  const accepted: string[] = [];
+  const duplicate: string[] = [];
+  const rejected: { id: string; reason: string; detail?: string }[] = [];
+  const newlyAcceptedResponses = new Map<string, Record<string, unknown>>();
+
+  const findAttempt = db.prepare("SELECT id FROM attempt WHERE id = ?");
+  const insertAttempt = db.prepare(
+    `INSERT INTO attempt (${ATTEMPT_COLUMNS.join(", ")})
+     VALUES (${ATTEMPT_COLUMNS.map((c) => `@${c}`).join(", ")})`
+  );
+
+  const findQuestion = db.prepare("SELECT id FROM question WHERE id = ?");
+  const findResponse = db.prepare("SELECT id FROM response WHERE id = ?");
+  const insertResponse = db.prepare(
+    `INSERT INTO response (${RESPONSE_COLUMNS.join(", ")})
+     VALUES (${RESPONSE_COLUMNS.map((c) => `@${c}`).join(", ")})`
+  );
+
+  const findGrade = db.prepare("SELECT id FROM grade WHERE id = ?");
+  const insertGrade = db.prepare(
+    `INSERT INTO grade (${GRADE_COLUMNS.join(", ")})
+     VALUES (${GRADE_COLUMNS.map((c) => `@${c}`).join(", ")})`
+  );
+
+  db.exec("BEGIN");
+  try {
+    const requestAttemptIds = new Set(request.attempts.map((a) => a.id as string));
+    const requestResponseIds = new Set(request.responses.map((r) => r.id as string));
+
+    for (const attempt of request.attempts) {
+      const id = attempt.id as string;
+      if (findAttempt.get(id)) {
+        duplicate.push(id);
+        continue;
+      }
+      try {
+        const fields: Record<string, unknown> = {};
+        for (const c of ATTEMPT_COLUMNS) fields[c] = attempt[c] ?? null;
+        insertAttempt.run(fields as Record<string, any>);
+        accepted.push(id);
+      } catch (err) {
+        rejected.push({ id, reason: "insert_failed", detail: (err as Error).message });
+      }
+    }
+
+    for (const response of request.responses) {
+      const id = response.id as string;
+      if (findResponse.get(id)) {
+        duplicate.push(id);
+        continue;
+      }
+
+      const questionId = response.question_id as string;
+      if (!findQuestion.get(questionId)) {
+        rejected.push({ id, reason: "unknown_question_id" });
+        continue;
+      }
+
+      const attemptId = response.attempt_id as string;
+      if (!requestAttemptIds.has(attemptId) && !findAttempt.get(attemptId)) {
+        rejected.push({ id, reason: "unknown_attempt_id" });
+        continue;
+      }
+
+      try {
+        const fields: Record<string, unknown> = {};
+        for (const c of RESPONSE_COLUMNS) fields[c] = response[c] ?? null;
+        insertResponse.run(fields as Record<string, any>);
+        accepted.push(id);
+        newlyAcceptedResponses.set(id, response);
+      } catch (err) {
+        rejected.push({ id, reason: "insert_failed", detail: (err as Error).message });
+      }
+    }
+
+    for (const grade of request.grades) {
+      const id = grade.id as string;
+      if (findGrade.get(id)) {
+        duplicate.push(id);
+        continue;
+      }
+
+      const responseId = grade.response_id as string;
+      if (!requestResponseIds.has(responseId) && !findResponse.get(responseId)) {
+        rejected.push({ id, reason: "unknown_response_id" });
+        continue;
+      }
+
+      try {
+        const fields: Record<string, unknown> = {};
+        for (const c of GRADE_COLUMNS) fields[c] = grade[c] ?? null;
+        insertGrade.run(fields as Record<string, any>);
+        accepted.push(id);
+      } catch (err) {
+        rejected.push({ id, reason: "insert_failed", detail: (err as Error).message });
+      }
+    }
+
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  const regradeQueued: string[] = [];
+  const gradesByResponse = new Map<string, Record<string, unknown>[]>();
+  for (const grade of request.grades) {
+    const responseId = grade.response_id as string;
+    const list = gradesByResponse.get(responseId) ?? [];
+    list.push(grade);
+    gradesByResponse.set(responseId, list);
+  }
+  for (const [responseId, response] of newlyAcceptedResponses) {
+    if (response.response_text == null) continue;
+    const grades = gradesByResponse.get(responseId) ?? [];
+    const nonSelfGrades = grades.filter((g) => g.grader !== "self");
+    if (grades.length > 0 && nonSelfGrades.length === 0) {
+      regradeQueued.push(responseId);
+    }
+  }
+
+  return {
+    protocol_version: request.protocol_version,
+    accepted,
+    duplicate,
+    rejected,
+    regrade_queued: regradeQueued,
+  };
+}
