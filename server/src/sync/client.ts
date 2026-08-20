@@ -1,5 +1,5 @@
 import type { AppContext } from "../http/app.js";
-import { applyPullResponse, type PullRequest, type PullResponse, type PushRequest, type PushResult } from "../domain/sync.js";
+import { applyPullResponse, NEVER_PULLED, type PullRequest, type PullResponse, type PushRequest, type PushResult } from "../domain/sync.js";
 
 export interface SyncRuntime {
   online: boolean;
@@ -64,6 +64,32 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
       }
     }
 
+    // Backfill pull: slices recorded while offline still sit at the
+    // NEVER_PULLED sentinel and have no historical content. The regular pull
+    // below is incremental off the global last_pull_at, which would only ever
+    // bring them content created since the last successful sync — so those
+    // slices get their own full (since: null) pull first.
+    const sentinelSlices = (
+      db.prepare("SELECT tag_slug FROM local_slice WHERE pulled_at = ?").all(NEVER_PULLED) as {
+        tag_slug: string;
+      }[]
+    ).map((r) => r.tag_slug);
+    let backfilled = 0;
+    if (sentinelSlices.length > 0) {
+      const backfillBody: PullRequest = {
+        node_id: node.id, protocol_version: node.protocol_version, slices: sentinelSlices,
+        since: null, include_grades_for_node: false,
+      };
+      const backfillRes = await fetch(`${env.remoteUrl}/sync/pull`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(backfillBody),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (backfillRes.ok) {
+        const backfillResponse = (await backfillRes.json()) as PullResponse;
+        backfilled = applyPullResponse(db, backfillResponse, sentinelSlices).questions_applied;
+      }
+    }
+
     // Pull
     const state = db.prepare("SELECT last_pull_at FROM sync_state WHERE id = 1").get() as { last_pull_at: string | null };
     const slices = (db.prepare("SELECT tag_slug FROM local_slice").all() as { tag_slug: string }[]).map((r) => r.tag_slug);
@@ -78,7 +104,7 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
     let pulled = 0;
     if (pullRes.ok) {
       const response = (await pullRes.json()) as PullResponse;
-      const applied = applyPullResponse(db, response);
+      const applied = applyPullResponse(db, response, slices);
       pulled = applied.questions_applied;
       if (pushOk) {
         db.prepare(
@@ -96,7 +122,7 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
     }
 
     runtime.online = true;
-    return { pushed, pulled };
+    return { pushed, pulled: pulled + backfilled };
   } catch (err) {
     runtime.online = false;
     db.prepare("UPDATE sync_state SET last_error = ? WHERE id = 1").run(String(err));
@@ -120,7 +146,7 @@ export async function pullOneSlice(ctx: AppContext, tagSlug: string): Promise<vo
   });
   if (!res.ok) throw new Error(`pull failed: HTTP ${res.status}`);
   const response = (await res.json()) as PullResponse;
-  applyPullResponse(ctx.db, response);
+  applyPullResponse(ctx.db, response, [tagSlug]);
 }
 
 export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {

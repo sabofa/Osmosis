@@ -68,7 +68,6 @@ describe("sync durability (spec exit criteria)", () => {
 
     const localDb = openFileDb(dir, "l1.db");
     const ctx = localCtx(localDb, canonical.url, "l1.db");
-    insertTag(localDb, "phys"); // local_slice.tag_slug FKs to tag(slug); a real slice download would have pulled this too
     addSlice(localDb, "phys");
     await runSync(ctx, ctx.runtime);
 
@@ -92,7 +91,6 @@ describe("sync durability (spec exit criteria)", () => {
 
     const localDb = openFileDb(dir, "l2.db");
     const ctx = localCtx(localDb, canonical.url, "l2.db");
-    insertTag(localDb, "chem");
     addSlice(localDb, "chem");
     await runSync(ctx, ctx.runtime);
 
@@ -167,7 +165,6 @@ describe("sync durability (spec exit criteria)", () => {
 
     const localDb = openFileDb(dir, "l5.db");
     const ctx = localCtx(localDb, canonical.url, "l5.db");
-    insertTag(localDb, "geo");
     addSlice(localDb, "geo");
     await runSync(ctx, ctx.runtime);
     expect((localDb.prepare("SELECT retired_at FROM question WHERE id = ?").get(q.id) as any).retired_at).toBeNull();

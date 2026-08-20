@@ -35,8 +35,15 @@ export interface PullResponse {
     graded_at: string;
     superseded_at: string | null;
   }[];
+  frozen_questions: { template_id: string; question_id: string; ordinal: number }[];
   cursor: string;
 }
+
+// Sentinel pulled_at meaning "slice recorded, never successfully pulled".
+// addSlice stamps it on first insert; a real pull replaces it with the pull's
+// cursor (see applyPullResponse). runSync scans for it to issue a full
+// backfill pull for slices added while offline.
+export const NEVER_PULLED = "1970-01-01 00:00:00";
 
 export interface ApplyPullResult {
   tags_applied: number;
@@ -171,6 +178,20 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
     .prepare("SELECT * FROM template WHERE retired_at IS NULL ORDER BY id")
     .all() as unknown as Record<string, unknown>[];
 
+  // A frozen template's fixed question set is part of the template's meaning —
+  // without it a "frozen" template re-resolves a different draw locally.
+  const templateIds = templates.map((t) => t.id as string);
+  const frozenQuestions: PullResponse["frozen_questions"] =
+    templateIds.length > 0
+      ? (db
+          .prepare(
+            `SELECT template_id, question_id, ordinal FROM template_frozen_question
+             WHERE template_id IN (${templateIds.map(() => "?").join(",")})
+             ORDER BY template_id, ordinal`
+          )
+          .all(...templateIds) as unknown as PullResponse["frozen_questions"])
+      : [];
+
   const grades: PullResponse["grades"] = [];
   if (request.include_grades_for_node) {
     const gradeSinceClause = request.since !== null ? "AND g.graded_at >= ?" : "";
@@ -195,6 +216,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
     questions,
     templates,
     grades,
+    frozen_questions: frozenQuestions,
     cursor,
   };
 }
@@ -203,7 +225,11 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
 // applyPullResponse (local side)
 // ----------------------------------------------------------------------------
 
-export function applyPullResponse(db: DatabaseSync, response: PullResponse): ApplyPullResult {
+export function applyPullResponse(
+  db: DatabaseSync,
+  response: PullResponse,
+  slices: string[] = []
+): ApplyPullResult {
   const upsertTag = db.prepare(
     `INSERT INTO tag (slug, label, parent_slug, description, retired_at)
      VALUES (@slug, @label, @parent_slug, @description, @retired_at)
@@ -270,6 +296,13 @@ export function applyPullResponse(db: DatabaseSync, response: PullResponse): App
        superseded_at = excluded.superseded_at`
   );
 
+  const deleteFrozen = db.prepare("DELETE FROM template_frozen_question WHERE template_id = ?");
+  const insertFrozen = db.prepare(
+    "INSERT INTO template_frozen_question (template_id, question_id, ordinal) VALUES (?, ?, ?)"
+  );
+
+  const findAsset = db.prepare("SELECT id FROM asset WHERE id = ?");
+
   let tagsApplied = 0;
   let questionsApplied = 0;
   let templatesApplied = 0;
@@ -294,6 +327,19 @@ export function applyPullResponse(db: DatabaseSync, response: PullResponse): App
     })[]) {
       const fields: Record<string, unknown> = {};
       for (const c of QUESTION_COLUMNS) fields[c] = (q as unknown as Record<string, unknown>)[c] ?? null;
+
+      // question.document_id REFERENCES asset(id), but asset rows are not part
+      // of the sync protocol (asset sync is a separate future spec). Rather
+      // than let an FK violation roll back — and permanently jam — the whole
+      // pull, sync the question without its document-panel linkage.
+      if (fields.document_id != null && !findAsset.get(fields.document_id as string)) {
+        fields.document_id = null;
+        fields.document_anchor_label = null;
+        fields.document_anchor_start = null;
+        fields.document_anchor_end = null;
+        fields.document_marker_offset = null;
+      }
+
       upsertQuestion.run(fields as Record<string, any>);
 
       deleteQuestionTags.run(q.id);
@@ -305,9 +351,29 @@ export function applyPullResponse(db: DatabaseSync, response: PullResponse): App
       questionsApplied += 1;
     }
 
+    const frozenByTemplate = new Map<string, PullResponse["frozen_questions"]>();
+    for (const f of response.frozen_questions ?? []) {
+      const list = frozenByTemplate.get(f.template_id) ?? [];
+      list.push(f);
+      frozenByTemplate.set(f.template_id, list);
+    }
+
+    const findLocalQuestion = db.prepare("SELECT id FROM question WHERE id = ?");
+
     for (const t of response.templates as Record<string, unknown>[]) {
       upsertTemplate.run(t as Record<string, any>);
       templatesApplied += 1;
+
+      const frozen = frozenByTemplate.get(t.id as string);
+      if (frozen && frozen.length > 0) {
+        deleteFrozen.run(t.id as string);
+        for (const f of frozen) {
+          // A frozen question outside this node's slices was never pulled;
+          // skip it rather than FK-fail the whole pull.
+          if (!findLocalQuestion.get(f.question_id)) continue;
+          insertFrozen.run(f.template_id, f.question_id, f.ordinal);
+        }
+      }
     }
 
     for (const g of response.grades) {
@@ -322,6 +388,25 @@ export function applyPullResponse(db: DatabaseSync, response: PullResponse): App
         superseded_at: g.superseded_at,
       });
       gradesApplied += 1;
+    }
+
+    // Freshness bookkeeping for the slices this pull covered: a real pulled_at
+    // (replacing the NEVER_PULLED sentinel) and a live local question count,
+    // so Settings shows real numbers and runSync stops treating the slice as
+    // needing a backfill.
+    const findSlice = db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = ?");
+    const countQuestions = db.prepare(
+      `SELECT COUNT(DISTINCT q.id) AS n FROM question q
+       JOIN question_tag qt ON qt.question_id = q.id
+       WHERE (qt.tag_slug = ? OR qt.tag_slug LIKE ?) AND q.retired_at IS NULL`
+    );
+    const updateSlice = db.prepare(
+      "UPDATE local_slice SET pulled_at = ?, question_count = ? WHERE tag_slug = ?"
+    );
+    for (const slug of slices) {
+      if (!findSlice.get(slug)) continue;
+      const { n } = countQuestions.get(slug, `${slug}:%`) as { n: number };
+      updateSlice.run(response.cursor, n, slug);
     }
 
     db.exec("COMMIT");
@@ -393,6 +478,7 @@ const GRADE_COLUMNS = [
   "rubric_version",
   "model_name",
   "graded_at",
+  "superseded_at",
 ] as const;
 
 export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushResult {
@@ -415,7 +501,8 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
      VALUES (${RESPONSE_COLUMNS.map((c) => `@${c}`).join(", ")})`
   );
 
-  const findGrade = db.prepare("SELECT id FROM grade WHERE id = ?");
+  const findGrade = db.prepare("SELECT id, superseded_at FROM grade WHERE id = ?");
+  const supersedeGrade = db.prepare("UPDATE grade SET superseded_at = ? WHERE id = ?");
   const insertGrade = db.prepare(
     `INSERT INTO grade (${GRADE_COLUMNS.join(", ")})
      VALUES (${GRADE_COLUMNS.map((c) => `@${c}`).join(", ")})`
@@ -472,13 +559,39 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
       }
     }
 
+    // Grades go in two passes so a supersede-update always lands before a new
+    // live grade insert, regardless of array order — otherwise the incoming
+    // grade collides with the still-live old one on the
+    // grade_one_live_per_response partial unique index and gets rejected.
+    //
+    // Pass 1: grades already present locally. A non-null incoming
+    // superseded_at over a locally-live row is a real synced change (live ->
+    // superseded is monotonic, so this can never un-supersede anything).
+    const newGrades: Record<string, unknown>[] = [];
     for (const grade of request.grades) {
       const id = grade.id as string;
-      if (findGrade.get(id)) {
-        duplicate.push(id);
+      const existing = findGrade.get(id) as { id: string; superseded_at: string | null } | undefined;
+      if (!existing) {
+        newGrades.push(grade);
         continue;
       }
+      const incomingSuperseded = (grade.superseded_at as string | null) ?? null;
+      if (incomingSuperseded !== null && existing.superseded_at === null) {
+        try {
+          supersedeGrade.run(incomingSuperseded, id);
+          accepted.push(id);
+        } catch (err) {
+          rejected.push({ id, reason: "update_failed", detail: (err as Error).message });
+        }
+      } else {
+        duplicate.push(id);
+      }
+    }
 
+    // Pass 2: genuinely new grades, inserted after every supersede above has
+    // vacated its one-live-per-response slot.
+    for (const grade of newGrades) {
+      const id = grade.id as string;
       const responseId = grade.response_id as string;
       if (!requestResponseIds.has(responseId) && !findResponse.get(responseId)) {
         rejected.push({ id, reason: "unknown_response_id" });
@@ -537,10 +650,22 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
 // ----------------------------------------------------------------------------
 
 export function addSlice(db: DatabaseSync, tagSlug: string): void {
+  // local_slice.tag_slug FKs to tag(slug), but a fresh local node has no tag
+  // rows for a slice it doesn't hold yet. Insert a minimal stub so the FK is
+  // satisfied; the next pull's tag upsert (ON CONFLICT DO UPDATE, which
+  // overwrites every field) transparently replaces it with the real tag.
   db.prepare(
-    `INSERT INTO local_slice (tag_slug) VALUES (?)
-     ON CONFLICT (tag_slug) DO UPDATE SET pulled_at = datetime('now')`
-  ).run(tagSlug);
+    `INSERT INTO tag (slug, label, parent_slug, description) VALUES (?, ?, NULL, NULL)
+     ON CONFLICT (slug) DO NOTHING`
+  ).run(tagSlug, tagSlug);
+
+  // A brand new slice is "recorded but never pulled" — the sentinel, not
+  // datetime('now'). Only a successful pull (applyPullResponse) stamps a real
+  // pulled_at; until then runSync knows to issue a full backfill for it.
+  db.prepare(
+    `INSERT INTO local_slice (tag_slug, pulled_at) VALUES (?, ?)
+     ON CONFLICT (tag_slug) DO NOTHING`
+  ).run(tagSlug, NEVER_PULLED);
 }
 
 export function removeSlice(db: DatabaseSync, tagSlug: string): { pruned_questions: number } {
@@ -549,8 +674,20 @@ export function removeSlice(db: DatabaseSync, tagSlug: string): { pruned_questio
       `SELECT DISTINCT q.id FROM question q
        JOIN question_tag qt ON qt.question_id = q.id
        WHERE (qt.tag_slug = ? OR qt.tag_slug LIKE ?)
-         AND NOT EXISTS (SELECT 1 FROM response r WHERE r.question_id = q.id)`
-    ).all(tagSlug, `${tagSlug}:%`) as { id: string }[]
+         AND NOT EXISTS (SELECT 1 FROM response r WHERE r.question_id = q.id)
+         -- Both of these FK to question with ON DELETE RESTRICT; excluding
+         -- them up front beats letting the delete raise and roll back.
+         AND NOT EXISTS (SELECT 1 FROM template_frozen_question tfq WHERE tfq.question_id = q.id)
+         AND NOT EXISTS (SELECT 1 FROM daily_draw_question ddq WHERE ddq.question_id = q.id)
+         -- A question also covered by another held slice belongs to that
+         -- slice too; removing this one must not gut the other.
+         AND NOT EXISTS (
+           SELECT 1 FROM question_tag qt2
+           JOIN local_slice ls ON ls.tag_slug != ?
+             AND (qt2.tag_slug = ls.tag_slug OR qt2.tag_slug LIKE ls.tag_slug || ':%')
+           WHERE qt2.question_id = q.id
+         )`
+    ).all(tagSlug, `${tagSlug}:%`, tagSlug) as { id: string }[]
   ).map((r) => r.id);
 
   db.exec("BEGIN");

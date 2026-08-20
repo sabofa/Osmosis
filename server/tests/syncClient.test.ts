@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/http/app.js";
 import { bootstrapNode } from "../src/node.js";
 import { runSync, checkConnectivity, createSyncRuntime } from "../src/sync/client.js";
+import { addSlice, NEVER_PULLED } from "../src/domain/sync.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 describe("local sync engine", () => {
@@ -57,8 +58,7 @@ describe("local sync engine", () => {
     const env = { role: "local" as const, label: "l3", port: 0, dbPath: ":memory:",
                   remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null };
     const node = bootstrapNode(localDb, env);
-    insertTag(localDb, "sciX"); // local_slice.tag_slug FKs to tag(slug); a real slice download would have pulled this too
-    localDb.prepare("INSERT INTO local_slice (tag_slug) VALUES ('sciX')").run();
+    addSlice(localDb, "sciX");
     localDb.prepare(
       `INSERT INTO outbox (entity_type, entity_id, payload) VALUES ('attempt', 'sync-a1', ?)`
     ).run(JSON.stringify({ id: "sync-a1", node_id: node.id, source: "adhoc", template_id: null, daily_draw_id: null,
@@ -103,6 +103,68 @@ describe("local sync engine", () => {
 
     const count = (canonicalDb.prepare("SELECT COUNT(*) AS n FROM attempt WHERE id = 'sync-a2'").get() as { n: number }).n;
     expect(count).toBe(1);
+  });
+
+  // Finding 5 — a slice added while offline must backfill its *historical*
+  // content once the node comes back online, not just what's new since the
+  // last successful sync.
+  it("backfills a slice added while offline, including questions predating the node's last sync", async () => {
+    // Historical content: created on canonical BEFORE the local node ever
+    // syncs this slice, so an incremental (since: last_pull_at) pull would
+    // never return it.
+    insertTag(canonicalDb, "sciBackfill");
+    const historical = insertQuestion(canonicalDb, { tags: ["sciBackfill"] });
+    // Genuinely historical: created long before this node's last_pull_at, so
+    // the incremental pull's `created_at >= since` clause can never return it.
+    // (Without this backdating the whole test runs inside one wall-clock
+    // second and the incremental pull would pick it up regardless.)
+    canonicalDb.prepare("UPDATE question SET created_at = '2020-01-01 00:00:00' WHERE id = ?").run(historical.id);
+
+    const localDb = openTestDb();
+    const env = { role: "local" as const, label: "l6", port: 0, dbPath: ":memory:",
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null };
+    const node = bootstrapNode(localDb, env);
+    const runtime = createSyncRuntime();
+    const ctx = { db: localDb, env, node, runtime };
+
+    // An unrelated slice syncs successfully first, so sync_state.last_pull_at
+    // is set — this is what makes the regular pull incremental and would
+    // otherwise strand the offline-added slice's history.
+    insertTag(canonicalDb, "sciOther");
+    addSlice(localDb, "sciOther");
+    await runSync(ctx, runtime);
+    const stateAfterFirst = localDb.prepare("SELECT last_pull_at FROM sync_state WHERE id = 1").get() as {
+      last_pull_at: string | null;
+    };
+    expect(stateAfterFirst.last_pull_at).not.toBeNull();
+
+    // Now "go offline" and add a slice: POST /api/slices calls addSlice, then
+    // pullOneSlice which fails. Simulate by pointing at a dead remote.
+    const offlineCtx = { ...ctx, env: { ...env, remoteUrl: "http://127.0.0.1:1" } };
+    addSlice(localDb, "sciBackfill");
+    await expect(
+      (async () => {
+        const { pullOneSlice } = await import("../src/sync/client.js");
+        await pullOneSlice(offlineCtx, "sciBackfill");
+      })()
+    ).rejects.toThrow();
+
+    // Offline path leaves the slice at the sentinel.
+    const sliceOffline = localDb.prepare("SELECT pulled_at FROM local_slice WHERE tag_slug = 'sciBackfill'").get() as {
+      pulled_at: string;
+    };
+    expect(sliceOffline.pulled_at).toBe(NEVER_PULLED);
+    expect(localDb.prepare("SELECT id FROM question WHERE id = ?").get(historical.id)).toBeUndefined();
+
+    // Back online: runSync must issue a full backfill pull for the sentinel slice.
+    await runSync(ctx, runtime);
+
+    expect(localDb.prepare("SELECT id FROM question WHERE id = ?").get(historical.id)).toBeTruthy();
+    const sliceAfter = localDb.prepare(
+      "SELECT pulled_at, question_count FROM local_slice WHERE tag_slug = 'sciBackfill'"
+    ).get() as { pulled_at: string; question_count: number };
+    expect(sliceAfter.pulled_at).not.toBe(NEVER_PULLED);
+    expect(sliceAfter.question_count).toBe(1);
   });
 
   it("a push failure's last_error survives a subsequent successful pull in the same runSync call", async () => {
@@ -150,8 +212,7 @@ describe("local sync engine", () => {
       const env = { role: "local" as const, label: "l5", port: 0, dbPath: ":memory:",
                     remoteUrl: proxyUrl, uploadsDir: "/tmp", mcpAuthToken: null };
       const node = bootstrapNode(localDb, env);
-      insertTag(localDb, "sciZ");
-      localDb.prepare("INSERT INTO local_slice (tag_slug) VALUES ('sciZ')").run();
+      addSlice(localDb, "sciZ");
       // Seed an outbox row so the push half of runSync actually has something to send
       // (an empty outbox is treated as "nothing to push", which counts as push-ok).
       localDb.prepare(
