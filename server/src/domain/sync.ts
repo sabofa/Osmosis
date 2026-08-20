@@ -330,7 +330,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
        FROM grade g
        JOIN response r ON r.id = g.response_id
        JOIN attempt a ON a.id = r.attempt_id
-       WHERE a.node_id = ? AND g.grader = 'model'
+       WHERE a.node_id = ? AND (g.grader = 'model' OR g.superseded_at IS NOT NULL)
        ${gradeSinceClause}
        ORDER BY g.id`
     );
@@ -476,17 +476,11 @@ export function applyPullResponse(
        retired_at = excluded.retired_at`
   );
 
-  const upsertGrade = db.prepare(
+  const findGrade = db.prepare("SELECT id, superseded_at FROM grade WHERE id = ?");
+  const supersedeGrade = db.prepare("UPDATE grade SET superseded_at = ? WHERE id = ?");
+  const insertGrade = db.prepare(
     `INSERT INTO grade (id, response_id, grader, score, feedback, model_name, graded_at, superseded_at)
-     VALUES (@id, @response_id, @grader, @score, @feedback, @model_name, @graded_at, @superseded_at)
-     ON CONFLICT (id) DO UPDATE SET
-       response_id = excluded.response_id,
-       grader = excluded.grader,
-       score = excluded.score,
-       feedback = excluded.feedback,
-       model_name = excluded.model_name,
-       graded_at = excluded.graded_at,
-       superseded_at = excluded.superseded_at`
+     VALUES (@id, @response_id, @grader, @score, @feedback, @model_name, @graded_at, @superseded_at)`
   );
 
   const deleteFrozen = db.prepare("DELETE FROM template_frozen_question WHERE template_id = ?");
@@ -528,8 +522,34 @@ export function applyPullResponse(
       }
     }
 
+    // Two-pass apply, mirroring applyPushRequest's supersede-then-insert
+    // ordering: a supersede-update always lands before a new live grade
+    // insert, regardless of array order, so the new live row never collides
+    // with the still-live old one on the grade_one_live_per_response partial
+    // unique index.
+    //
+    // Pass 1: grades already present locally (matched by id). A non-null
+    // incoming superseded_at over a locally-live row is a real synced change
+    // (live -> superseded is monotonic, so this can never un-supersede
+    // anything). If nothing changed, it's the local's own copy pulled back or
+    // an earlier partial/retried pull — already applied, skip it.
+    const newGrades: PullResponse["grades"] = [];
     for (const g of response.grades) {
-      upsertGrade.run({
+      const existing = findGrade.get(g.id) as { id: string; superseded_at: string | null } | undefined;
+      if (!existing) {
+        newGrades.push(g);
+        continue;
+      }
+      if (g.superseded_at !== null && existing.superseded_at === null) {
+        supersedeGrade.run(g.superseded_at, g.id);
+        gradesApplied += 1;
+      }
+    }
+
+    // Pass 2: genuinely new grades, inserted after every supersede above has
+    // vacated its one-live-per-response slot.
+    for (const g of newGrades) {
+      insertGrade.run({
         id: g.id,
         response_id: g.response_id,
         grader: g.grader,
