@@ -348,6 +348,19 @@ export async function createAttempt(templateId: string): Promise<CreateAttemptRe
   return res.json()
 }
 
+export async function createDailyAttempt(kind: 'question' | 'quiz'): Promise<CreateAttemptResult> {
+  const res = await fetch('/api/attempts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ daily_kind: kind }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.reason || body.error || `POST /api/attempts ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function getAttempt(id: string): Promise<AttemptDetail> {
   const res = await fetch(`/api/attempts/${id}`)
   if (!res.ok) throw new Error(`GET /api/attempts/${id} ${res.status}`)

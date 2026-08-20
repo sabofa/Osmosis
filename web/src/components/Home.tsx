@@ -8,7 +8,7 @@ import { useTemplateOrg } from '../hooks/useTemplateOrg'
 import { useTagPopout } from '../hooks/useTagPopout'
 import { FOLDER_ICON_LIBRARY } from '../lib/folderIcons'
 import type { TemplateSummary } from '../data/templates'
-import { getTemplates, getStatus, listAttempts, timeAgo, type AttemptSummary } from '../lib/api'
+import { getTemplates, getStatus, listAttempts, timeAgo, type AttemptSummary, type NodeStatus } from '../lib/api'
 import { toViewTemplate } from '../lib/templateView'
 import { attemptsHeatmap } from '../lib/activity'
 import './Home.css'
@@ -31,10 +31,12 @@ function DropGap({ grow = false, active = false, expanded = false }: { grow?: bo
 
 export default function Home({
   onStart,
+  onStartDaily,
   startError,
   starting,
 }: {
   onStart: (templateId: string) => void
+  onStartDaily: (kind: 'question' | 'quiz') => void
   startError?: string | null
   starting?: boolean
 }) {
@@ -42,6 +44,7 @@ export default function Home({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempts, setAttempts] = useState<AttemptSummary[]>([])
   const [lastSync, setLastSync] = useState<string | null>(null)
+  const [status, setStatus] = useState<NodeStatus | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const tagPopout = useTagPopout()
@@ -79,11 +82,18 @@ export default function Home({
         /* heatmap just shows all-zero activity if this fails; not fatal */
       })
     getStatus()
-      .then((s) => setLastSync(s.last_pull_at))
+      .then((s) => {
+        setStatus(s)
+        setLastSync(s.last_pull_at)
+      })
       .catch(() => {
         /* sync pill just falls back to "never" if this fails; not fatal */
       })
   }, [])
+
+  // A canonical node is always "online" to itself — it never needs a remote
+  // to serve a daily draw, so it should never show the offline-greyed state.
+  const dailyAvailable = !!(status?.canonical || status?.online)
 
   const org = useTemplateOrg((templates ?? []).map((t) => t.id))
   const templatesById = new Map((templates ?? []).map((t) => [t.id, t]))
@@ -406,6 +416,41 @@ export default function Home({
         </div>
         {loadError && <div className="detail-desc" style={{ padding: '0 4px', color: 'var(--danger, #d33)' }}>Could not reach the local node: {loadError}</div>}
         {startError && <div className="detail-desc" style={{ padding: '0 4px', color: 'var(--danger, #d33)' }}>Couldn't start attempt: {startError}</div>}
+
+        <div className="daily-cards">
+          <button
+            className="template-row daily-card"
+            disabled={!dailyAvailable || !!starting}
+            onClick={() => onStartDaily('question')}
+            title={dailyAvailable ? 'Start today\'s daily question' : 'Unavailable offline'}
+          >
+            <span className="template-icon">
+              <SubjectIcon icon="bolt" />
+            </span>
+            <span>
+              <div className="template-name">Daily Question</div>
+              <div className="template-meta">
+                {!dailyAvailable ? 'Unavailable offline' : starting ? 'Starting…' : "Today's pick"}
+              </div>
+            </span>
+          </button>
+          <button
+            className="template-row daily-card"
+            disabled={!dailyAvailable || !!starting}
+            onClick={() => onStartDaily('quiz')}
+            title={dailyAvailable ? "Start today's daily quiz" : 'Unavailable offline'}
+          >
+            <span className="template-icon">
+              <SubjectIcon icon="bolt" />
+            </span>
+            <span>
+              <div className="template-name">Daily Quiz</div>
+              <div className="template-meta">
+                {!dailyAvailable ? 'Unavailable offline' : starting ? 'Starting…' : "Today's set"}
+              </div>
+            </span>
+          </button>
+        </div>
 
         <div className="quick-access">
           <div className="quick-access-label">Quick access</div>

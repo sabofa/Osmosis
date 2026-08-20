@@ -9,7 +9,7 @@ import Results from './components/Results'
 import Settings from './components/Settings'
 import { useTheme } from './hooks/useTheme'
 import { useThemePresets } from './hooks/useThemePresets'
-import { createAttempt, getAttempt, type AttemptDetail } from './lib/api'
+import { createAttempt, createDailyAttempt, getAttempt, type AttemptDetail } from './lib/api'
 
 function App() {
   const [page, setPage] = useState<Page>('home')
@@ -36,8 +36,23 @@ function App() {
     }
   }
 
+  async function startDaily(kind: 'question' | 'quiz') {
+    setStarting(true)
+    setStartError(null)
+    try {
+      const created = await createDailyAttempt(kind)
+      const detail = await getAttempt(created.attempt_id)
+      setAttempt(detail)
+      setPage('take')
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setStarting(false)
+    }
+  }
+
   let content
-  if (page === 'home') content = <Home onStart={startQuiz} startError={startError} starting={starting} />
+  if (page === 'home') content = <Home onStart={startQuiz} onStartDaily={startDaily} startError={startError} starting={starting} />
   else if (page === 'bank') content = <Bank />
   else if (page === 'library') content = <Library onStart={startQuiz} />
   else if (page === 'take' && attempt)
@@ -55,7 +70,7 @@ function App() {
   else if (page === 'take' || page === 'review') {
     // Reached take/review with no attempt in state (e.g. a hard refresh) —
     // there's nothing to resume, so bounce back to Home rather than crash.
-    content = <Home onStart={startQuiz} startError={startError} starting={starting} />
+    content = <Home onStart={startQuiz} onStartDaily={startDaily} startError={startError} starting={starting} />
   } else content = <Settings theme={theme} themePresets={themePresets} />
 
   const showRail = page !== 'take' && page !== 'review'

@@ -88,6 +88,27 @@
   outline-offset: 2px;
 }
 
+.template-row:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.template-row:disabled:hover {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.daily-cards {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.daily-cards .template-row {
+  flex: 1;
+  min-width: 0;
+}
+
 .template-row.selected {
   border-color: var(--accent);
   background: var(--accent-wash);
