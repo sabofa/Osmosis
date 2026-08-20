@@ -16,7 +16,13 @@ export interface PullRequest {
 export interface PullResponse {
   protocol_version: number;
   server_time: string;
-  tags: { slug: string; label: string; parent_slug: string | null; retired_at: string | null }[];
+  tags: {
+    slug: string;
+    label: string;
+    parent_slug: string | null;
+    description: string | null;
+    retired_at: string | null;
+  }[];
   questions: Record<string, unknown>[]; // full question row shape incl. graph/desmos/document_* + tags[] + choices[]
   templates: Record<string, unknown>[];
   grades: {
@@ -117,7 +123,9 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
   if (request.slices.length > 0) {
     const tagMatch = sliceMatchClause("slug", request.slices);
     const tagRows = db
-      .prepare(`SELECT slug, label, parent_slug, retired_at FROM tag WHERE ${tagMatch.sql} ORDER BY slug`)
+      .prepare(
+        `SELECT slug, label, parent_slug, description, retired_at FROM tag WHERE ${tagMatch.sql} ORDER BY slug`
+      )
       .all(...tagMatch.params) as unknown as PullResponse["tags"];
     tags.push(...tagRows);
 
@@ -197,11 +205,12 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
 
 export function applyPullResponse(db: DatabaseSync, response: PullResponse): ApplyPullResult {
   const upsertTag = db.prepare(
-    `INSERT INTO tag (slug, label, parent_slug, retired_at)
-     VALUES (@slug, @label, @parent_slug, @retired_at)
+    `INSERT INTO tag (slug, label, parent_slug, description, retired_at)
+     VALUES (@slug, @label, @parent_slug, @description, @retired_at)
      ON CONFLICT (slug) DO UPDATE SET
        label = excluded.label,
        parent_slug = excluded.parent_slug,
+       description = excluded.description,
        retired_at = excluded.retired_at`
   );
 
@@ -273,6 +282,7 @@ export function applyPullResponse(db: DatabaseSync, response: PullResponse): App
         slug: tag.slug,
         label: tag.label,
         parent_slug: tag.parent_slug,
+        description: tag.description,
         retired_at: tag.retired_at,
       });
       tagsApplied += 1;

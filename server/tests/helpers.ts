@@ -9,8 +9,18 @@ export function openTestDb(): DatabaseSync {
   return db;
 }
 
-export function insertTag(db: DatabaseSync, slug: string, parentSlug: string | null = null): void {
-  db.prepare("INSERT INTO tag (slug, label, parent_slug) VALUES (?, ?, ?)").run(slug, slug, parentSlug);
+export function insertTag(
+  db: DatabaseSync,
+  slug: string,
+  parentSlug: string | null = null,
+  description: string | null = null
+): void {
+  db.prepare("INSERT INTO tag (slug, label, parent_slug, description) VALUES (?, ?, ?, ?)").run(
+    slug,
+    slug,
+    parentSlug,
+    description
+  );
 }
 
 export interface SeedQuestionInput {

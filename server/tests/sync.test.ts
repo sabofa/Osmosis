@@ -61,6 +61,23 @@ describe("applyPullResponse", () => {
     expect(count).toBe(1);
   });
 
+  it("syncs a tag's description to the local node on first pull", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math", null, "The study of numbers, structure, and change.");
+    insertQuestion(canonical, { tags: ["math"] });
+    const response = buildPullResponse(canonical, {
+      node_id: "local-1", protocol_version: 1, slices: ["math"], since: null, include_grades_for_node: false,
+    });
+
+    const local = openTestDb();
+    applyPullResponse(local, response);
+
+    const row = local.prepare("SELECT description FROM tag WHERE slug = ?").get("math") as {
+      description: string | null;
+    };
+    expect(row.description).toBe("The study of numbers, structure, and change.");
+  });
+
   it("a retired question tombstone retires the local row without deleting it", () => {
     const canonical = openTestDb();
     insertTag(canonical, "math");
