@@ -12,6 +12,7 @@ import {
   getTemplateQuestions,
   downloadTemplate,
   deleteLocalTemplate,
+  referencedTagLiterals,
 } from "../domain/templates.js";
 import {
   createAttempt,
@@ -34,6 +35,22 @@ function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) =
     return;
   }
   throw err;
+}
+
+// Slices are a local-node concept: the canonical node *is* the bank, it does
+// not hold a slice of it. Without this guard, removeSlice's prune (reached via
+// DELETE /api/slices/:slug and DELETE /api/templates/:id/download) would
+// delete real bank questions on canonical.
+function rejectIfCanonical(
+  ctx: AppContext,
+  reply: { code: (n: number) => { send: (body: unknown) => void } }
+): boolean {
+  if (ctx.env.role !== "canonical") return false;
+  reply.code(400).send({
+    error: "canonical_node",
+    message: "Canonical nodes don't hold slices — this operation only applies to local nodes.",
+  });
+  return true;
 }
 
 export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -127,16 +144,36 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.post("/api/templates/:id/download", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (rejectIfCanonical(ctx, reply)) return;
+    let result: { id: string; downloaded_at: string };
     try {
-      return downloadTemplate(db, id);
+      result = downloadTemplate(db, id);
     } catch (err) {
       sendDomainError(reply, err);
       return;
     }
+    // Mirror POST /api/slices: record the slices, then best-effort pull their
+    // content right away rather than waiting for the next periodic sync. A
+    // failure here (offline) leaves the slice at the never-pulled sentinel,
+    // which runSync backfills once the node is online again.
+    try {
+      const detail = getTemplateDetail(db, id);
+      for (const tag of referencedTagLiterals(detail.tag_query)) {
+        try {
+          await pullOneSlice(ctx, tag);
+        } catch {
+          // best effort, per above
+        }
+      }
+    } catch {
+      // best effort, per above
+    }
+    return result;
   });
 
   app.delete("/api/templates/:id/download", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (rejectIfCanonical(ctx, reply)) return;
     try {
       return deleteLocalTemplate(db, id);
     } catch (err) {
@@ -196,7 +233,13 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/attempts/:id/submit", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      return submitAttempt(db, id, ctx.env.role);
+      const result = submitAttempt(db, id, ctx.env.role);
+      // 5th sync trigger (spec): on submit, if currently online. Deliberately
+      // not awaited — the submit response must not block on the network.
+      if (ctx.env.role === "local" && ctx.runtime.online) {
+        void runSync(ctx, ctx.runtime);
+      }
+      return result;
     } catch (err) {
       sendDomainError(reply, err);
       return;
@@ -344,8 +387,9 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     slices: db.prepare("SELECT tag_slug, pulled_at, question_count FROM local_slice ORDER BY tag_slug").all(),
   }));
 
-  app.post("/api/slices", async (request) => {
+  app.post("/api/slices", async (request, reply) => {
     const { tag_slug } = request.body as { tag_slug: string };
+    if (rejectIfCanonical(ctx, reply)) return;
     addSlice(db, tag_slug);
     try {
       await pullOneSlice(ctx, tag_slug);
@@ -357,9 +401,21 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { tag_slug };
   });
 
-  app.delete("/api/slices/:slug", async (request) => {
+  app.delete("/api/slices/:slug", async (request, reply) => {
     const { slug } = request.params as { slug: string };
-    return removeSlice(db, slug);
+    if (rejectIfCanonical(ctx, reply)) return;
+    try {
+      return removeSlice(db, slug);
+    } catch (err) {
+      if (err instanceof DomainError) {
+        sendDomainError(reply, err);
+        return;
+      }
+      // removeSlice can still raise a raw SQLite error (e.g. an FK we didn't
+      // anticipate); a 400 with the detail beats a bare unhandled 500.
+      reply.code(400).send({ error: "slice_remove_failed", message: String((err as Error).message ?? err) });
+      return;
+    }
   });
 
   app.get("/api/config", async () => getConfig(db));
