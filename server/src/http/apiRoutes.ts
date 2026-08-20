@@ -145,7 +145,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       return;
     }
     try {
-      return createAttempt(db, { node_id: ctx.node.id, source: body.source as "template" | "adhoc", template_id: body.template_id });
+      return createAttempt(db, { node_id: ctx.node.id, source: body.source as "template" | "adhoc", template_id: body.template_id }, ctx.env.role);
     } catch (err) {
       sendDomainError(reply, err);
       return;
@@ -189,7 +189,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/attempts/:id/submit", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      return submitAttempt(db, id);
+      return submitAttempt(db, id, ctx.env.role);
     } catch (err) {
       sendDomainError(reply, err);
       return;
@@ -200,7 +200,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     const { id } = request.params as { id: string };
     const body = request.body as { grader: "self"; score: number; feedback?: string | null; override?: boolean };
     try {
-      return gradeResponse(db, id, body);
+      return gradeResponse(db, id, body, ctx.env.role);
     } catch (err) {
       sendDomainError(reply, err);
       return;

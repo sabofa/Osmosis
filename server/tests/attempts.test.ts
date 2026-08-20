@@ -188,3 +188,48 @@ describe("abandonment sweep", () => {
     expect(row.abandoned_at).toBeNull();
   });
 });
+
+describe("outbox population (local nodes only)", () => {
+  it("submit enqueues attempt, response(s), and auto_mc grade(s) as one unit on a local node", () => {
+    const db = openTestDb();
+    const { template, q1 } = setUpMcTemplate(db);
+    const created = createAttempt(db, { node_id: "n1", source: "template", template_id: template.id }, "local");
+    submitAttempt(db, created.attempt_id, "local");
+
+    const rows = db.prepare("SELECT entity_type, entity_id FROM outbox ORDER BY entity_type").all() as
+      { entity_type: string; entity_id: string }[];
+    const types = rows.map((r) => r.entity_type).sort();
+    // setUpMcTemplate seeds exactly 1 mc question and 1 written question, so
+    // submitAttempt's existing (unmodified) auto_mc grading logic inserts
+    // exactly 1 grade (for the mc response) — the written response only gets
+    // graded via a later, separate gradeResponse("self", ...) call.
+    expect(types).toEqual(["attempt", "grade", "response", "response"]);
+    expect(rows.find((r) => r.entity_type === "attempt")?.entity_id).toBe(created.attempt_id);
+  });
+
+  it("submit does NOT enqueue anything on a canonical node", () => {
+    const db = openTestDb();
+    const { template } = setUpMcTemplate(db);
+    const created = createAttempt(db, { node_id: "n1", source: "template", template_id: template.id }, "canonical");
+    submitAttempt(db, created.attempt_id, "canonical");
+
+    const count = (db.prepare("SELECT COUNT(*) AS n FROM outbox").get() as { n: number }).n;
+    expect(count).toBe(0);
+  });
+
+  it("a self-grade write enqueues an outbox row on a local node", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const wq = insertQuestion(db, { type: "written", tags: ["a"] });
+    const template = createTemplate(db, { name: "t", tag_query: { all: ["a"] }, question_count: 1 });
+    const created = createAttempt(db, { node_id: "n1", source: "template", template_id: template.id }, "local");
+    const detail = getAttemptDetail(db, created.attempt_id) as any;
+    submitAttempt(db, created.attempt_id, "local");
+    const responseId = detail.responses[0].id;
+
+    const before = (db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE entity_type = 'grade'").get() as { n: number }).n;
+    gradeResponse(db, responseId, { grader: "self", score: 1 }, "local");
+    const after = (db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE entity_type = 'grade'").get() as { n: number }).n;
+    expect(after).toBe(before + 1);
+  });
+});

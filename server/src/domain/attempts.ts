@@ -101,6 +101,18 @@ function questionSnapshot(
 }
 
 // ----------------------------------------------------------------------------
+// Outbox (local nodes only) — populated on submit and grade write so the
+// sync engine (Task 5) has real rows to push. See spec §7.1, §8.3.
+// ----------------------------------------------------------------------------
+
+function enqueueOutbox(db: DatabaseSync, entityType: "attempt" | "response" | "grade", entityId: string, payload: unknown): void {
+  db.prepare(
+    `INSERT INTO outbox (entity_type, entity_id, payload) VALUES (?, ?, ?)
+     ON CONFLICT (entity_type, entity_id) DO UPDATE SET payload = excluded.payload`
+  ).run(entityType, entityId, JSON.stringify(payload));
+}
+
+// ----------------------------------------------------------------------------
 // Create
 // ----------------------------------------------------------------------------
 
@@ -110,7 +122,11 @@ export interface CreateAttemptInput {
   template_id?: string;
 }
 
-export function createAttempt(db: DatabaseSync, input: CreateAttemptInput): { attempt_id: string } & DrawResult {
+export function createAttempt(
+  db: DatabaseSync,
+  input: CreateAttemptInput,
+  role: "canonical" | "local" = "canonical"
+): { attempt_id: string } & DrawResult {
   sweepAbandonedAttempts(db);
 
   if (input.source === "template") {
@@ -338,7 +354,11 @@ export function answerResponse(
 // Submit — grades all mc responses immediately (auto_mc)
 // ----------------------------------------------------------------------------
 
-export function submitAttempt(db: DatabaseSync, attemptId: string): Record<string, unknown> {
+export function submitAttempt(
+  db: DatabaseSync,
+  attemptId: string,
+  role: "canonical" | "local" = "canonical"
+): Record<string, unknown> {
   const attempt = db.prepare("SELECT submitted_at, abandoned_at FROM attempt WHERE id = ?").get(attemptId) as
     | { submitted_at: string | null; abandoned_at: string | null }
     | undefined;
@@ -362,6 +382,7 @@ export function submitAttempt(db: DatabaseSync, attemptId: string): Record<strin
     const insertGrade = db.prepare(
       "INSERT INTO grade (id, response_id, grader, score, graded_at) VALUES (?, ?, 'auto_mc', ?, datetime('now'))"
     );
+    const insertedGradeIds: string[] = [];
     for (const r of mcResponses) {
       const isCorrect = r.selected_choice_id
         ? (db.prepare("SELECT is_correct FROM choice WHERE id = ?").get(r.selected_choice_id) as
@@ -369,7 +390,24 @@ export function submitAttempt(db: DatabaseSync, attemptId: string): Record<strin
             | undefined)
         : undefined;
       const score = isCorrect?.is_correct === 1 ? 1.0 : 0.0;
-      insertGrade.run(uuidv4(), r.response_id, score);
+      const gradeId = uuidv4();
+      insertGrade.run(gradeId, r.response_id, score);
+      insertedGradeIds.push(gradeId);
+    }
+
+    if (role === "local") {
+      const attemptRow = db.prepare("SELECT * FROM attempt WHERE id = ?").get(attemptId);
+      enqueueOutbox(db, "attempt", attemptId, attemptRow);
+
+      const responseRows = db.prepare("SELECT * FROM response WHERE attempt_id = ?").all(attemptId) as unknown as ResponseRow[];
+      for (const r of responseRows) {
+        enqueueOutbox(db, "response", r.id, r);
+      }
+
+      for (const gradeId of insertedGradeIds) {
+        const gradeRow = db.prepare("SELECT * FROM grade WHERE id = ?").get(gradeId);
+        enqueueOutbox(db, "grade", gradeId, gradeRow);
+      }
     }
 
     db.exec("COMMIT");
@@ -395,7 +433,8 @@ export interface GradeResponseInput {
 export function gradeResponse(
   db: DatabaseSync,
   responseId: string,
-  input: GradeResponseInput
+  input: GradeResponseInput,
+  role: "canonical" | "local" = "canonical"
 ): Record<string, unknown> {
   if (![0, 0.5, 1].includes(input.score)) {
     throw new DomainError("invalid_score", "Self-grade score must be 0, 0.5, or 1.");
@@ -427,6 +466,12 @@ export function gradeResponse(
     db.prepare(
       "INSERT INTO grade (id, response_id, grader, score, feedback, graded_at) VALUES (?, ?, 'self', ?, ?, datetime('now'))"
     ).run(id, responseId, input.score, input.feedback ?? null);
+
+    if (role === "local") {
+      const gradeRow = db.prepare("SELECT * FROM grade WHERE id = ?").get(id);
+      enqueueOutbox(db, "grade", id, gradeRow);
+    }
+
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

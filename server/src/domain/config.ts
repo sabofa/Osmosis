@@ -16,6 +16,7 @@ const ALLOWED_KEYS = new Set([
   "synced_attempt_retention_days",
   "duplicate_similarity_threshold",
   "abandon_after_hours",
+  "sync_interval_sec",
 ]);
 
 export function getConfig(db: DatabaseSync): Record<string, unknown> {
