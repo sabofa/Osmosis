@@ -376,10 +376,16 @@ export default function Settings({
     try {
       await triggerSync()
       await getStatus().then(setStatus)
+    } catch {
+      // silently ignore; error UI is future work
     } finally {
       setSyncing(false)
     }
   }
+
+  // A canonical node *is* the bank — it holds no slices, and the server
+  // rejects slice add/remove on it outright. Don't offer the controls.
+  const isCanonical = status?.canonical === true
 
   const protocolCurrent = status ? status.remote_protocol_version === null || status.remote_protocol_version === status.protocol_version : true
   const lastSync = status ? (status.last_push_at ?? status.last_pull_at) : null
@@ -410,18 +416,24 @@ export default function Settings({
             <div>
               <div className="settings-row-title">Slices</div>
               <div className="settings-row-sub">
-                {slices ? (slices.length > 0 ? `${slices.length} held locally` : 'none held locally') : 'loading…'}
+                {isCanonical
+                  ? 'canonical node — holds the whole bank, not a slice'
+                  : slices
+                    ? slices.length > 0
+                      ? `${slices.length} held locally`
+                      : 'none held locally'
+                    : 'loading…'}
               </div>
             </div>
           </div>
-          {!addingSlice && (
+          {!isCanonical && !addingSlice && (
             <button className="settings-btn" onClick={() => setAddingSlice(true)}>
               + Add
             </button>
           )}
         </div>
 
-        {addingSlice && (
+        {!isCanonical && addingSlice && (
           <div className="theme-editor">
             <input
               className="theme-editor-name"
@@ -454,7 +466,7 @@ export default function Settings({
           </div>
         )}
 
-        {slices && slices.length > 0 && (
+        {!isCanonical && slices && slices.length > 0 && (
           <div className="theme-list">
             {slices.map((s) => (
               <div className="theme-card" key={s.tag_slug}>

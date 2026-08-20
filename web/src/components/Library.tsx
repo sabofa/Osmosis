@@ -7,8 +7,10 @@ import {
   getTemplateQuestions,
   downloadTemplate,
   deleteLocalTemplate,
+  getStatus,
   type TemplateSummary,
   type TemplateQuestionPreview,
+  type NodeStatus,
 } from '../lib/api'
 import './Library.css'
 
@@ -94,12 +96,20 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
   const tagPopout = useTagPopout()
   const [search, setSearch] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('name-asc')
+  const [status, setStatus] = useState<NodeStatus | null>(null)
 
   useEffect(() => {
     getTemplates()
       .then((r) => setTemplates(r.templates))
       .catch((err) => setError(String(err)))
+    getStatus()
+      .then(setStatus)
+      .catch(() => {})
   }, [])
+
+  // A canonical node holds the whole bank; "downloading" a slice of it is
+  // meaningless there and the server rejects it, so hide the controls.
+  const isCanonical = status?.canonical === true
 
   useEffect(() => {
     if (!selectedId) return
@@ -296,7 +306,7 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
                     requires updating first, and once deleted there's nothing
                     local left to update, so the Update button disappears
                     along with the Delete button. */}
-                {selected.downloaded && selected.update_available && (
+                {!isCanonical && selected.downloaded && selected.update_available && (
                   <button
                     className="library-detail-action update"
                     onClick={() => handleDownload(selected.id)}
@@ -308,7 +318,9 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
                     Update
                   </button>
                 )}
-                {selected.downloaded ? (
+                {isCanonical ? (
+                  <div className="library-detail-downloaded-at">whole bank held on this node</div>
+                ) : selected.downloaded ? (
                   <button
                     className="library-detail-action delete"
                     onClick={() => handleDelete(selected.id)}
