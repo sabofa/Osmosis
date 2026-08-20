@@ -51,6 +51,7 @@ function NumberSetting({
   max = 3650,
   value,
   onSaved,
+  disabled = false,
 }: {
   configKey: string
   label: string
@@ -60,6 +61,7 @@ function NumberSetting({
   max?: number
   value: number | null
   onSaved: (key: string, value: number) => void
+  disabled?: boolean
 }) {
   const [draft, setDraft] = useState<string>('')
   const [saving, setSaving] = useState(false)
@@ -70,9 +72,10 @@ function NumberSetting({
 
   const numeric = Number(draft)
   const dirty = value !== null && draft !== '' && numeric !== value && !Number.isNaN(numeric)
+  const inputsDisabled = disabled || value === null
 
   async function save() {
-    if (!dirty) return
+    if (!dirty || disabled) return
     setSaving(true)
     try {
       await setConfig(configKey, numeric)
@@ -103,13 +106,13 @@ function NumberSetting({
             max={max}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            disabled={value === null}
+            disabled={inputsDisabled}
           />
           <div className="number-stepper-buttons">
             <button
               type="button"
               className="number-stepper-btn"
-              disabled={value === null}
+              disabled={inputsDisabled}
               onClick={() => step(1)}
               aria-label="Increase"
             >
@@ -118,7 +121,7 @@ function NumberSetting({
             <button
               type="button"
               className="number-stepper-btn"
-              disabled={value === null}
+              disabled={inputsDisabled}
               onClick={() => step(-1)}
               aria-label="Decrease"
             >
@@ -127,7 +130,7 @@ function NumberSetting({
           </div>
         </div>
         <span className="number-setting-suffix">{suffix}</span>
-        <button className="settings-btn" disabled={!dirty || saving} onClick={save}>
+        <button className="settings-btn" disabled={disabled || !dirty || saving} onClick={save}>
           {saving ? '…' : 'Save'}
         </button>
       </div>
@@ -647,11 +650,13 @@ export default function Settings({
             <div>
               <div className="settings-row-title">Written grading</div>
               <div className="settings-row-sub">
-                {config
-                  ? config.written_grader === 'model_when_online'
-                    ? 'model grades written answers when online'
-                    : 'self-graded only'
-                  : 'loading…'}
+                {isCanonical
+                  ? config
+                    ? config.written_grader === 'model_when_online'
+                      ? 'model grades written answers when online'
+                      : 'self-graded only'
+                    : 'loading…'
+                  : 'set on the canonical node'}
               </div>
             </div>
           </div>
@@ -660,7 +665,9 @@ export default function Settings({
               <button
                 key={mode}
                 className={`theme-toggle-btn${config?.written_grader === mode ? ' active' : ''}`}
+                disabled={!isCanonical}
                 onClick={async () => {
+                  if (!isCanonical) return
                   await setConfig('written_grader', mode)
                   setConfigState((c) => (c ? { ...c, written_grader: mode } : c))
                 }}
@@ -674,12 +681,13 @@ export default function Settings({
         <NumberSetting
           configKey="model_grader_daily_limit"
           label="Daily grading cap"
-          sub="max DeepSeek calls per rolling 24h"
+          sub={isCanonical ? 'max DeepSeek calls per rolling 24h' : 'set on the canonical node'}
           suffix="grades/day"
           min={0}
           max={1000}
           value={config ? (config.model_grader_daily_limit as number) : null}
           onSaved={(key, value) => setConfigState((c) => (c ? { ...c, [key]: value } : c))}
+          disabled={!isCanonical}
         />
 
         <div className="settings-row">
