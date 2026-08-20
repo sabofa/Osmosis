@@ -174,13 +174,12 @@ export function fetchTagAncestorClosure(
 
   const parentOf = db.prepare("SELECT slug, parent_slug FROM tag WHERE slug = ?");
 
+  // BFS discovers the full ancestor-inclusive closure set. This part is
+  // still correct and unchanged: allSlugs ends up containing every initially
+  // used slug plus every ancestor reachable by walking parent_slug upward,
+  // and the allSlugs.has() guard makes it cycle-safe.
   const allSlugs = new Set<string>(initialSlugs);
-  // levels[0] = the starting (leaf-most) slugs; each subsequent level is the
-  // set of not-yet-seen parents of the previous level. Reversing this array
-  // before flattening yields root-first order, satisfying the FK.
-  const levels: string[][] = [[...new Set(initialSlugs)]];
-
-  let frontier = levels[0];
+  let frontier = [...new Set(initialSlugs)];
   while (frontier.length > 0) {
     const nextParents = new Set<string>();
     for (const slug of frontier) {
@@ -193,22 +192,59 @@ export function fetchTagAncestorClosure(
     if (nextParents.size === 0) break;
     const nextLevel = [...nextParents];
     for (const s of nextLevel) allSlugs.add(s);
-    levels.push(nextLevel);
     frontier = nextLevel;
   }
 
-  const orderedSlugs = levels.slice().reverse().flat();
+  const allSlugsList = [...allSlugs];
   const rowsBySlug = new Map(
     (
       db
         .prepare(
-          `SELECT slug, label, parent_slug, description, retired_at FROM tag WHERE slug IN (${orderedSlugs.map(() => "?").join(",")})`
+          `SELECT slug, label, parent_slug, description, retired_at FROM tag WHERE slug IN (${allSlugsList.map(() => "?").join(",")})`
         )
-        .all(...orderedSlugs) as unknown as PullResponse["tags"]
+        .all(...allSlugsList) as unknown as PullResponse["tags"]
     ).map((row) => [row.slug, row])
   );
 
-  return orderedSlugs.map((slug) => rowsBySlug.get(slug)).filter((r): r is PullResponse["tags"][number] => !!r);
+  // Order by true tree depth (root-most first), not BFS-discovery level: two
+  // directly-used tags can themselves be in an ancestor/descendant
+  // relationship, or a draw's questions can use tags at different depths of
+  // the same hierarchy, in which case BFS-discovery level does not track
+  // tree depth and can ship a child before its parent, violating
+  // tag.parent_slug's FK in upsertBankContent. Depth is computed by walking
+  // parent_slug through rowsBySlug (the in-memory closure), not the DB, and
+  // memoized. The walk is bounded by rowsBySlug.size: a real parent_slug
+  // cycle can't touch more distinct nodes than that, so this can't loop
+  // forever even if the cycle-safety upstream were ever violated.
+  const depthCache = new Map<string, number>();
+  function depthOf(slug: string): number {
+    const cached = depthCache.get(slug);
+    if (cached !== undefined) return cached;
+
+    let depth = 0;
+    let current = slug;
+    const guard = rowsBySlug.size + 1;
+    for (let steps = 0; steps < guard; steps++) {
+      const row = rowsBySlug.get(current);
+      const parentSlug = row?.parent_slug ?? null;
+      if (parentSlug === null || !rowsBySlug.has(parentSlug)) break;
+      const parentCached = depthCache.get(parentSlug);
+      if (parentCached !== undefined) {
+        depth = parentCached + 1;
+        depthCache.set(slug, depth);
+        return depth;
+      }
+      depth += 1;
+      current = parentSlug;
+    }
+    depthCache.set(slug, depth);
+    return depth;
+  }
+
+  return allSlugsList
+    .map((slug) => rowsBySlug.get(slug))
+    .filter((r): r is PullResponse["tags"][number] => !!r)
+    .sort((a, b) => depthOf(a.slug) - depthOf(b.slug));
 }
 
 // ----------------------------------------------------------------------------

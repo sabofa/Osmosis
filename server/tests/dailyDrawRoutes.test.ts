@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { v4 as uuidv4 } from "uuid";
 import { buildApp } from "../src/http/app.js";
 import { bootstrapNode } from "../src/node.js";
 import { createSyncRuntime, fetchAndApplyDailyDraw } from "../src/sync/client.js";
+import { computeDrawDate } from "../src/domain/dailyDraw.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
@@ -171,6 +173,98 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     expect(mathTag).toBeTruthy();
     expect(mathFunctionsTag).toBeTruthy();
     expect(mathFunctionsTag?.parent_slug).toBe("math");
+
+    await hierApp.close();
+  });
+
+  // Residual-bug regression: fetchTagAncestorClosure used to order the
+  // shipped tags by BFS-discovery LEVEL, not true tree depth. That's only
+  // safe when every directly-used tag sits at the same depth. Here two
+  // DIRECTLY-used tags are themselves in an ancestor/descendant relationship
+  // (math:functions is the parent of math:functions:quadratic) and both are
+  // used by different questions pulled into the SAME daily quiz. The
+  // question ids are pinned so buildQuestionPayloads's `ORDER BY q.id` lists
+  // the leaf-tagged (quadratic) question before the mid-tagged (functions)
+  // question, which is exactly the ordering that made the old BFS-level sort
+  // place "math:functions:quadratic" ahead of its own parent
+  // "math:functions" in the shipped `tags` array, violating
+  // tag.parent_slug's FK in upsertBankContent.
+  it("local, online: daily quiz mixing tag depths in one draw mirrors ancestors in true depth order", async () => {
+    const hierDb = openTestDb();
+
+    // Decoy, unrelated to the math hierarchy, used only so the day's single
+    // "question" draw (which /sync/daily-draw's "quiz" kind always resolves
+    // first and excludes from the quiz pool) is pinned deterministically —
+    // otherwise a random pick could exclude one of our two target math
+    // questions from the quiz and this test would only exercise one depth.
+    insertTag(hierDb, "phys");
+    const decoy = insertQuestion(hierDb, { tags: ["phys"] });
+
+    insertTag(hierDb, "math");
+    insertTag(hierDb, "math:functions", "math");
+    insertTag(hierDb, "math:functions:quadratic", "math:functions");
+
+    const quadraticId = "00000000-0000-4000-8000-000000000001";
+    const functionsId = "00000000-0000-4000-8000-000000000002";
+    const insertQuestionWithId = (id: string, tags: string[]) => {
+      hierDb
+        .prepare(
+          `INSERT INTO question (id, lineage_id, version, type, prompt, model_answer, difficulty, calculator_policy)
+           VALUES (?, ?, 1, 'written', ?, 'model answer', 3, 'n_a')`
+        )
+        .run(id, id, `question ${id}`);
+      for (const tag of tags) {
+        hierDb.prepare("INSERT INTO question_tag (question_id, tag_slug) VALUES (?, ?)").run(id, tag);
+      }
+    };
+    // quadraticId < functionsId lexically, so it sorts first under
+    // buildQuestionPayloads's ORDER BY q.id, putting the child tag ahead of
+    // its parent in the BFS frontier that fetchTagAncestorClosure starts from.
+    insertQuestionWithId(quadraticId, ["math:functions:quadratic"]);
+    insertQuestionWithId(functionsId, ["math:functions"]);
+
+    // Pin today's "question" draw to the decoy so the quiz's own draw is left
+    // with exactly {quadraticId, functionsId} as its eligible pool.
+    const drawDate = computeDrawDate(hierDb);
+    const dailyDrawId = uuidv4();
+    hierDb
+      .prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES (?, ?, 'question')")
+      .run(dailyDrawId, drawDate);
+    hierDb
+      .prepare("INSERT INTO daily_draw_question (daily_draw_id, question_id, ordinal) VALUES (?, ?, 0)")
+      .run(dailyDrawId, decoy.id);
+
+    const hierEnv = { role: "canonical" as const, label: "hc2", port: 0, dbPath: ":memory:",
+                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t" };
+    const hierNode = bootstrapNode(hierDb, hierEnv);
+    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
+    const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
+
+    const localDb = openTestDb();
+    const env = { role: "local" as const, label: "hl2", port: 0, dbPath: ":memory:",
+                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null };
+    const node = bootstrapNode(localDb, env);
+    const runtime = createSyncRuntime();
+    runtime.online = true;
+    const ctx = { db: localDb, env, node, runtime };
+
+    const result = await fetchAndApplyDailyDraw(ctx, "quiz");
+    expect(result.questions.length).toBe(2);
+    expect(new Set(result.questions.map((q: any) => q.id))).toEqual(new Set([quadraticId, functionsId]));
+
+    const getTag = (slug: string) =>
+      localDb.prepare("SELECT slug, parent_slug FROM tag WHERE slug = ?").get(slug) as
+        | { slug: string; parent_slug: string | null }
+        | undefined;
+    const math = getTag("math");
+    const mathFunctions = getTag("math:functions");
+    const mathFunctionsQuadratic = getTag("math:functions:quadratic");
+    expect(math).toBeTruthy();
+    expect(mathFunctions).toBeTruthy();
+    expect(mathFunctionsQuadratic).toBeTruthy();
+    expect(math?.parent_slug).toBe(null);
+    expect(mathFunctions?.parent_slug).toBe("math");
+    expect(mathFunctionsQuadratic?.parent_slug).toBe("math:functions");
 
     await hierApp.close();
   });
