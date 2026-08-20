@@ -469,6 +469,12 @@ export function downloadTemplate(db: DatabaseSync, id: string): { id: string; do
   if (!row) throw new DomainError("not_found", `Template "${id}" does not exist.`);
 
   const literals = referencedTagLiterals(JSON.parse(row.tag_query) as TagQuery);
+  if (literals.length === 0) {
+    throw new DomainError(
+      "no_slices_to_download",
+      `Template "${id}" has no tags to download — nothing to sync.`
+    );
+  }
   for (const tag of literals) addSlice(db, tag);
 
   const sliceRows =

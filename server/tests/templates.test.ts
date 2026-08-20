@@ -129,6 +129,13 @@ describe("template download (slice-backed)", () => {
     expect(getTemplateDetail(db, template.id).downloaded).toBe(false);
     expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeUndefined();
   });
+
+  it("downloading a template with an empty tag_query throws instead of silently no-op'ing", () => {
+    const db = openTestDb();
+    const template = createTemplate(db, { name: "t", tag_query: {}, question_count: 1 });
+
+    expect(() => downloadTemplate(db, template.id)).toThrow(DomainError);
+  });
 });
 
 describe("retireTemplate", () => {
