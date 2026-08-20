@@ -26,6 +26,7 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
   if (!ctx.env.remoteUrl) return { pushed: 0, pulled: 0 };
   const { db, env, node } = ctx;
   let pushed = 0;
+  let pushOk = true; // true when push succeeded, or was skipped because outbox was empty
 
   try {
     // Push
@@ -58,6 +59,7 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
         pushed = result.accepted.length;
         db.prepare("UPDATE sync_state SET last_push_at = datetime('now'), last_error = NULL WHERE id = 1").run();
       } else {
+        pushOk = false;
         db.prepare("UPDATE sync_state SET last_error = ? WHERE id = 1").run(`push failed: HTTP ${pushRes.status}`);
       }
     }
@@ -78,9 +80,17 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
       const response = (await pullRes.json()) as PullResponse;
       const applied = applyPullResponse(db, response);
       pulled = applied.questions_applied;
-      db.prepare(
-        "UPDATE sync_state SET last_pull_at = ?, remote_protocol_version = ?, last_error = NULL WHERE id = 1"
-      ).run(applied.cursor, response.protocol_version);
+      if (pushOk) {
+        db.prepare(
+          "UPDATE sync_state SET last_pull_at = ?, remote_protocol_version = ?, last_error = NULL WHERE id = 1"
+        ).run(applied.cursor, response.protocol_version);
+      } else {
+        // A preceding push failure indicates a real durability problem (stuck outbox rows).
+        // Don't let a successful pull clobber that error signal.
+        db.prepare(
+          "UPDATE sync_state SET last_pull_at = ?, remote_protocol_version = ? WHERE id = 1"
+        ).run(applied.cursor, response.protocol_version);
+      }
     } else {
       db.prepare("UPDATE sync_state SET last_error = ? WHERE id = 1").run(`pull failed: HTTP ${pullRes.status}`);
     }
