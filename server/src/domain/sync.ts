@@ -230,7 +230,7 @@ export function fetchTagAncestorClosure(
       if (parentSlug === null || !rowsBySlug.has(parentSlug)) break;
       const parentCached = depthCache.get(parentSlug);
       if (parentCached !== undefined) {
-        depth = parentCached + 1;
+        depth = parentCached + depth + 1;
         depthCache.set(slug, depth);
         return depth;
       }

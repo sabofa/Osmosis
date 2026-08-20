@@ -268,4 +268,97 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
 
     await hierApp.close();
   });
+
+  // Residual-bug regression #2: fetchTagAncestorClosure's depthOf memoization
+  // had an arithmetic error — when the walk from a starting slug hit an
+  // already-memoized ancestor partway through, it set
+  // `depth = parentCached + 1` instead of `depth = parentCached + depth + 1`,
+  // discarding however many steps had already been walked before the
+  // memoized hit. The prior regression test (root=math, mid=math:functions,
+  // leaf=math:functions:quadratic; mid+leaf directly used) doesn't trigger
+  // this because the walk from the mid tag never hits a memoized node
+  // mid-walk. Directly using the ROOT and the LEAF of the same chain does:
+  // once math's depth (0) is memoized, the leaf's walk
+  // (quadratic -> functions -> math) hits that memoized entry after 1 step
+  // already taken, so the bug computes depth 1 instead of the correct 2,
+  // tying the leaf's depth with "math:functions"'s and — because sort() is
+  // stable — leaving discovery order (which can place the leaf before its
+  // own parent) to decide the tie, reproducing the FK violation.
+  it("local, online: daily quiz using a chain's root and leaf tags mirrors ancestors in true depth order", async () => {
+    const hierDb = openTestDb();
+
+    insertTag(hierDb, "phys");
+    const decoy = insertQuestion(hierDb, { tags: ["phys"] });
+
+    insertTag(hierDb, "math");
+    insertTag(hierDb, "math:functions", "math");
+    insertTag(hierDb, "math:functions:quadratic", "math:functions");
+
+    // leafId sorts before rootId (lexically smaller) so that
+    // buildQuestionPayloads's ORDER BY q.id lists the leaf-tagged question
+    // first, putting "math:functions:quadratic" ahead of "math" in
+    // fetchTagAncestorClosure's initialSlugs/allSlugs. That ordering is what
+    // makes the depth-memoization sort resolve depthOf("math") (root, cached
+    // as 0) before depthOf("math:functions:quadratic") walks up through the
+    // still-uncached "math:functions" and then hits the cached root two hops
+    // in — exactly the case the old `parentCached + 1` formula understated.
+    const leafId = "00000000-0000-4000-8000-000000000003";
+    const rootId = "00000000-0000-4000-8000-000000000004";
+    const insertQuestionWithId = (id: string, tags: string[]) => {
+      hierDb
+        .prepare(
+          `INSERT INTO question (id, lineage_id, version, type, prompt, model_answer, difficulty, calculator_policy)
+           VALUES (?, ?, 1, 'written', ?, 'model answer', 3, 'n_a')`
+        )
+        .run(id, id, `question ${id}`);
+      for (const tag of tags) {
+        hierDb.prepare("INSERT INTO question_tag (question_id, tag_slug) VALUES (?, ?)").run(id, tag);
+      }
+    };
+    insertQuestionWithId(rootId, ["math"]);
+    insertQuestionWithId(leafId, ["math:functions:quadratic"]);
+
+    const drawDate = computeDrawDate(hierDb);
+    const dailyDrawId = uuidv4();
+    hierDb
+      .prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES (?, ?, 'question')")
+      .run(dailyDrawId, drawDate);
+    hierDb
+      .prepare("INSERT INTO daily_draw_question (daily_draw_id, question_id, ordinal) VALUES (?, ?, 0)")
+      .run(dailyDrawId, decoy.id);
+
+    const hierEnv = { role: "canonical" as const, label: "hc3", port: 0, dbPath: ":memory:",
+                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t" };
+    const hierNode = bootstrapNode(hierDb, hierEnv);
+    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
+    const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
+
+    const localDb = openTestDb();
+    const env = { role: "local" as const, label: "hl3", port: 0, dbPath: ":memory:",
+                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null };
+    const node = bootstrapNode(localDb, env);
+    const runtime = createSyncRuntime();
+    runtime.online = true;
+    const ctx = { db: localDb, env, node, runtime };
+
+    const result = await fetchAndApplyDailyDraw(ctx, "quiz");
+    expect(result.questions.length).toBe(2);
+    expect(new Set(result.questions.map((q: any) => q.id))).toEqual(new Set([rootId, leafId]));
+
+    const getTag = (slug: string) =>
+      localDb.prepare("SELECT slug, parent_slug FROM tag WHERE slug = ?").get(slug) as
+        | { slug: string; parent_slug: string | null }
+        | undefined;
+    const math = getTag("math");
+    const mathFunctions = getTag("math:functions");
+    const mathFunctionsQuadratic = getTag("math:functions:quadratic");
+    expect(math).toBeTruthy();
+    expect(mathFunctions).toBeTruthy();
+    expect(mathFunctionsQuadratic).toBeTruthy();
+    expect(math?.parent_slug).toBe(null);
+    expect(mathFunctions?.parent_slug).toBe("math");
+    expect(mathFunctionsQuadratic?.parent_slug).toBe("math:functions");
+
+    await hierApp.close();
+  });
 });
