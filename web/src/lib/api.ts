@@ -10,6 +10,8 @@ export interface NodeStatus {
   slices: string[]
   protocol_version: number
   remote_protocol_version: number | null
+  model_grades_today: number
+  model_grading_configured: boolean
 }
 
 export async function getStatus(): Promise<NodeStatus> {
