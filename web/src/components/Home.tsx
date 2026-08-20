@@ -81,14 +81,23 @@ export default function Home({
       .catch(() => {
         /* heatmap just shows all-zero activity if this fails; not fatal */
       })
-    getStatus()
-      .then((s) => {
-        setStatus(s)
-        setLastSync(s.last_pull_at)
-      })
-      .catch(() => {
-        /* sync pill just falls back to "never" if this fails; not fatal */
-      })
+    function refreshStatus() {
+      getStatus()
+        .then((s) => {
+          setStatus(s)
+          setLastSync(s.last_pull_at)
+        })
+        .catch(() => {
+          /* sync pill just falls back to "never" if this fails; not fatal */
+        })
+    }
+    refreshStatus()
+    // Poll for connectivity changes while Home stays mounted (no navigation),
+    // e.g. a local node coming back online — matching the ~30s cadence the
+    // backend's own connectivity monitor already uses (see
+    // startSyncBackground's connectivityTimer in server/src/sync/client.ts).
+    const statusInterval = setInterval(refreshStatus, 30_000)
+    return () => clearInterval(statusInterval)
   }, [])
 
   // A canonical node is always "online" to itself — it never needs a remote
