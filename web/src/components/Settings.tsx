@@ -352,15 +352,23 @@ export default function Settings({
   async function handleAddSlice() {
     const slug = newSlice.trim()
     if (!slug) return
-    await addSlice(slug)
-    setAddingSlice(false)
-    setNewSlice('')
-    refreshSlices()
+    try {
+      await addSlice(slug)
+      setAddingSlice(false)
+      setNewSlice('')
+      refreshSlices()
+    } catch {
+      // silently ignore; error UI is future work
+    }
   }
 
   async function handleRemoveSlice(slug: string) {
-    await removeSlice(slug)
-    refreshSlices()
+    try {
+      await removeSlice(slug)
+      refreshSlices()
+    } catch {
+      // silently ignore; error UI is future work
+    }
   }
 
   async function handleSync() {
