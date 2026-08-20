@@ -1,5 +1,5 @@
 import type { AppContext } from "../http/app.js";
-import { applyPullResponse, NEVER_PULLED, type PullRequest, type PullResponse, type PushRequest, type PushResult } from "../domain/sync.js";
+import { applyPullResponse, upsertBankContent, NEVER_PULLED, type PullRequest, type PullResponse, type PushRequest, type PushResult } from "../domain/sync.js";
 
 export interface SyncRuntime {
   online: boolean;
@@ -147,6 +147,66 @@ export async function pullOneSlice(ctx: AppContext, tagSlug: string): Promise<vo
   if (!res.ok) throw new Error(`pull failed: HTTP ${res.status}`);
   const response = (await res.json()) as PullResponse;
   applyPullResponse(ctx.db, response, [tagSlug]);
+}
+
+// ----------------------------------------------------------------------------
+// Daily-draw proxy: a local node has no bank content of its own to draw a
+// daily question/quiz from, so it asks canonical to resolve today's draw and
+// mirrors the returned bank content (questions/tags) plus the daily_draw/
+// daily_draw_question rows locally, atomically, using canonical's exact IDs
+// so createDailyAttempt's later FK references resolve.
+// ----------------------------------------------------------------------------
+
+export interface DailyDrawSyncResponse {
+  protocol_version: number;
+  daily_draw_id: string;
+  draw_date: string;
+  kind: "question" | "quiz";
+  tags: PullResponse["tags"];
+  questions: Record<string, unknown>[];
+  question_order: string[]; // question ids, in draw order
+  exclusion_relaxed: number | null;
+  short_draw: boolean;
+  requested: number;
+  returned: number;
+}
+
+export async function fetchAndApplyDailyDraw(
+  ctx: AppContext,
+  kind: "question" | "quiz"
+): Promise<{ daily_draw_id: string; questions: { id: string; lineage_id: string; type: "mc" | "written" }[] }> {
+  if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
+  const res = await fetch(`${ctx.env.remoteUrl}/sync/daily-draw`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`daily-draw fetch failed: HTTP ${res.status}`);
+  const payload = (await res.json()) as DailyDrawSyncResponse;
+
+  const db = ctx.db;
+  db.exec("BEGIN");
+  try {
+    upsertBankContent(db, payload.tags, payload.questions);
+    db.prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING").run(
+      payload.daily_draw_id, payload.draw_date, payload.kind
+    );
+    db.prepare("DELETE FROM daily_draw_question WHERE daily_draw_id = ?").run(payload.daily_draw_id);
+    const insertQ = db.prepare("INSERT INTO daily_draw_question (daily_draw_id, question_id, ordinal) VALUES (?, ?, ?)");
+    payload.question_order.forEach((qid, i) => insertQ.run(payload.daily_draw_id, qid, i));
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  const questionById = new Map((payload.questions as { id: string; lineage_id: string; type: "mc" | "written" }[]).map((q) => [q.id, q]));
+  const questions = payload.question_order.map((qid) => {
+    const q = questionById.get(qid);
+    if (!q) throw new Error(`daily-draw response missing question ${qid} in its own questions array`);
+    return { id: q.id, lineage_id: q.lineage_id, type: q.type };
+  });
+
+  return { daily_draw_id: payload.daily_draw_id, questions };
 }
 
 export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {

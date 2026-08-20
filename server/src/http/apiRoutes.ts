@@ -16,16 +16,18 @@ import {
 } from "../domain/templates.js";
 import {
   createAttempt,
+  createDailyAttempt,
   getAttemptDetail,
   listAttempts,
   answerResponse,
   submitAttempt,
   gradeResponse,
 } from "../domain/attempts.js";
+import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
 import { addSlice, removeSlice } from "../domain/sync.js";
-import { runSync, pullOneSlice } from "../sync/client.js";
+import { runSync, pullOneSlice, fetchAndApplyDailyDraw } from "../sync/client.js";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
@@ -185,8 +187,39 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/attempts", async (request, reply) => {
     const body = request.body as { source: string; template_id?: string; daily_kind?: string };
     if (body.daily_kind) {
-      reply.code(503).send({ reason: "daily_requires_connection" });
-      return;
+      const kind = body.daily_kind as "question" | "quiz";
+      try {
+        if (ctx.env.role === "canonical") {
+          const resolved = resolveDailyDraw(db, kind);
+          const result = createDailyAttempt(
+            db,
+            { node_id: ctx.node.id, kind: kind === "question" ? "daily_question" : "daily_quiz",
+              daily_draw_id: resolved.daily_draw_id, questions: resolved.questions },
+            ctx.env.role
+          );
+          return { attempt_id: result.attempt_id, questions: result.questions,
+                    short_draw: resolved.short_draw, requested: resolved.requested, returned: resolved.returned };
+        }
+        if (!ctx.runtime.online) {
+          reply.code(503).send({ reason: "daily_requires_connection" });
+          return;
+        }
+        const fetched = await fetchAndApplyDailyDraw(ctx, kind);
+        const result = createDailyAttempt(
+          db,
+          { node_id: ctx.node.id, kind: kind === "question" ? "daily_question" : "daily_quiz",
+            daily_draw_id: fetched.daily_draw_id, questions: fetched.questions },
+          ctx.env.role
+        );
+        return { attempt_id: result.attempt_id, questions: result.questions };
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("daily-draw fetch failed")) {
+          reply.code(503).send({ reason: "daily_requires_connection" });
+          return;
+        }
+        sendDomainError(reply, err);
+        return;
+      }
     }
     try {
       return createAttempt(db, { node_id: ctx.node.id, source: body.source as "template" | "adhoc", template_id: body.template_id }, ctx.env.role);
