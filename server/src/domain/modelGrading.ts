@@ -95,3 +95,72 @@ export function writeModelGrade(db: DatabaseSync, responseId: string, result: Gr
     throw err;
   }
 }
+
+export interface SweepResult {
+  graded: number;
+  skipped: number;
+  errors: number;
+}
+
+export async function sweepModelGrading(
+  db: DatabaseSync,
+  apiKey: string,
+  dailyLimit: number,
+  fetchImpl: typeof fetch = fetch
+): Promise<SweepResult> {
+  const writtenGraderRow = db.prepare("SELECT value FROM config WHERE key = 'written_grader'").get() as
+    | { value: string }
+    | undefined;
+  const writtenGrader = writtenGraderRow ? (JSON.parse(writtenGraderRow.value) as string) : "self_only";
+  if (writtenGrader !== "model_when_online") {
+    return { graded: 0, skipped: 0, errors: 0 };
+  }
+
+  const gradedInWindow = (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM grade WHERE grader = 'model' AND graded_at >= datetime('now', '-1 day')")
+      .get() as { n: number }
+  ).n;
+  const remainingBudget = Math.max(0, dailyLimit - gradedInWindow);
+
+  // Eligible: written question, live grade is 'self'. The grade_one_live_per_response
+  // unique index guarantees at most one live grade per response, so "live grade is
+  // self" already implies "no live model grade" — no extra NOT EXISTS needed.
+  const eligible = db
+    .prepare(
+      `SELECT r.id AS response_id, q.prompt, q.model_answer, q.rubric, r.response_text
+       FROM response r
+       JOIN question q ON q.id = r.question_id
+       JOIN grade g ON g.response_id = r.id AND g.superseded_at IS NULL
+       WHERE q.type = 'written' AND g.grader = 'self'
+       ORDER BY r.answered_at ASC`
+    )
+    .all() as { response_id: string; prompt: string; model_answer: string; rubric: string | null; response_text: string | null }[];
+
+  let graded = 0;
+  let errors = 0;
+  const toProcess = eligible.slice(0, remainingBudget);
+  const skipped = eligible.length - toProcess.length;
+
+  for (const row of toProcess) {
+    try {
+      const result = await gradeWithDeepSeek(
+        apiKey,
+        {
+          prompt: row.prompt,
+          modelAnswer: row.model_answer,
+          rubric: row.rubric ? JSON.parse(row.rubric) : null,
+          responseText: row.response_text ?? "",
+        },
+        fetchImpl
+      );
+      writeModelGrade(db, row.response_id, result);
+      graded += 1;
+    } catch (err) {
+      errors += 1;
+      console.error(`model grading failed for response ${row.response_id}:`, err);
+    }
+  }
+
+  return { graded, skipped, errors };
+}

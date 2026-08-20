@@ -112,3 +112,106 @@ describe("writeModelGrade", () => {
     expect(live.score).toBe(0.7);
   });
 });
+
+import { sweepModelGrading } from "../src/domain/modelGrading.js";
+
+function seedWrittenResponse(db: ReturnType<typeof openTestDb>, tagSlug: string, answeredAt: string): string {
+  const q = insertQuestion(db, { type: "written", tags: [tagSlug] });
+  const attemptId = uuidv4();
+  const responseId = uuidv4();
+  db.prepare(
+    "INSERT INTO attempt (id, node_id, source, started_at, submitted_at) VALUES (?, 'n1', 'adhoc', ?, ?)"
+  ).run(attemptId, answeredAt, answeredAt);
+  db.prepare(
+    "INSERT INTO response (id, attempt_id, question_id, ordinal, response_text, answered_at) VALUES (?, ?, ?, 0, 'my answer', ?)"
+  ).run(responseId, attemptId, q.id, answeredAt);
+  db.prepare(
+    "INSERT INTO grade (id, response_id, grader, score, graded_at) VALUES (?, ?, 'self', 0.5, ?)"
+  ).run(uuidv4(), responseId, answeredAt);
+  return responseId;
+}
+
+describe("sweepModelGrading", () => {
+  it("makes zero calls when written_grader is self_only", async () => {
+    const db = openTestDb();
+    db.prepare("UPDATE config SET value = '\"self_only\"' WHERE key = 'written_grader'").run();
+    insertTag(db, "a");
+    seedWrittenResponse(db, "a", "2026-08-20 10:00:00");
+
+    const fetchImpl = mockFetch({ choices: [{ message: { content: JSON.stringify({ score: 1, feedback: "x" }) } }] });
+    const result = await sweepModelGrading(db, "key", 20, fetchImpl);
+
+    expect(result).toEqual({ graded: 0, skipped: 0, errors: 0 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("grades eligible written responses when written_grader is model_when_online", async () => {
+    const db = openTestDb();
+    db.prepare("UPDATE config SET value = '\"model_when_online\"' WHERE key = 'written_grader'").run();
+    insertTag(db, "a");
+    const r1 = seedWrittenResponse(db, "a", "2026-08-20 10:00:00");
+    const r2 = seedWrittenResponse(db, "a", "2026-08-20 11:00:00");
+
+    const fetchImpl = mockFetch({ choices: [{ message: { content: JSON.stringify({ score: 0.8, feedback: "good" }) } }] });
+    const result = await sweepModelGrading(db, "key", 20, fetchImpl);
+
+    expect(result).toEqual({ graded: 2, skipped: 0, errors: 0 });
+    for (const rid of [r1, r2]) {
+      const live = db.prepare("SELECT grader FROM grade WHERE response_id = ? AND superseded_at IS NULL").get(rid) as any;
+      expect(live.grader).toBe("model");
+    }
+  });
+
+  it("respects the daily limit — already-graded-in-window count reduces remaining budget", async () => {
+    const db = openTestDb();
+    db.prepare("UPDATE config SET value = '\"model_when_online\"' WHERE key = 'written_grader'").run();
+    insertTag(db, "a");
+    // Seed one already-model-graded response (counts against the rolling window)
+    const already = seedWrittenResponse(db, "a", "2026-08-20 09:00:00");
+    db.prepare("UPDATE grade SET superseded_at = datetime('now') WHERE response_id = ?").run(already);
+    db.prepare(
+      "INSERT INTO grade (id, response_id, grader, score, model_name, graded_at) VALUES (?, ?, 'model', 0.9, 'deepseek-v4-flash', datetime('now'))"
+    ).run(uuidv4(), already);
+    // Two more eligible responses
+    const r1 = seedWrittenResponse(db, "a", "2026-08-20 10:00:00");
+    const r2 = seedWrittenResponse(db, "a", "2026-08-20 11:00:00");
+
+    const fetchImpl = mockFetch({ choices: [{ message: { content: JSON.stringify({ score: 0.5, feedback: "ok" }) } }] });
+    // dailyLimit=1, but 1 already used this window -> 0 remaining budget -> both skipped
+    const result = await sweepModelGrading(db, "key", 1, fetchImpl);
+
+    expect(result.graded).toBe(0);
+    expect(result.skipped).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // untouched — still self-graded
+    for (const rid of [r1, r2]) {
+      const live = db.prepare("SELECT grader FROM grade WHERE response_id = ? AND superseded_at IS NULL").get(rid) as any;
+      expect(live.grader).toBe("self");
+    }
+  });
+
+  it("a per-response grading failure is caught, counted, and does not stop the rest of the sweep", async () => {
+    const db = openTestDb();
+    db.prepare("UPDATE config SET value = '\"model_when_online\"' WHERE key = 'written_grader'").run();
+    insertTag(db, "a");
+    const r1 = seedWrittenResponse(db, "a", "2026-08-20 10:00:00");
+    const r2 = seedWrittenResponse(db, "a", "2026-08-20 11:00:00");
+
+    let call = 0;
+    const fetchImpl = (async () => {
+      call += 1;
+      if (call === 1) return { ok: false, status: 500, json: async () => ({}) } as any;
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify({ score: 1, feedback: "x" }) } }] }) } as any;
+    }) as unknown as typeof fetch;
+
+    const result = await sweepModelGrading(db, "key", 20, fetchImpl);
+
+    expect(result.errors).toBe(1);
+    expect(result.graded).toBe(1);
+    // one of r1/r2 stayed self-graded (the failed one), the other became model-graded
+    const grades = [r1, r2].map(
+      (rid) => (db.prepare("SELECT grader FROM grade WHERE response_id = ? AND superseded_at IS NULL").get(rid) as any).grader
+    );
+    expect(grades.sort()).toEqual(["model", "self"]);
+  });
+});
