@@ -134,7 +134,7 @@ export default function Results() {
         <div className="results-side">
           <div className="results-panel results-subjects">
             <div className="results-kicker">All tags, worst first</div>
-            <div className="results-subject-list">
+            <div className="results-subject-list no-scrollbar">
               {(tags ?? []).map((t) => (
                 <button
                   key={t.tag_slug}

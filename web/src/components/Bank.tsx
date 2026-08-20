@@ -58,7 +58,7 @@ export default function Bank() {
           <h1>Bank</h1>
           <span className="bank-count">{tags ? `${tags.length} tags` : '…'}</span>
         </div>
-        <div className="bank-tags-list">
+        <div className="bank-tags-list no-scrollbar">
           <button
             className={`bank-tag-row${selectedTag === null ? ' selected' : ''}`}
             onClick={() => setSelectedTag(null)}
@@ -99,7 +99,7 @@ export default function Bank() {
           />
           <span className="bank-count">{questions ? `${total} question${total === 1 ? '' : 's'}` : '…'}</span>
         </div>
-        <div className="bank-questions-list" key={selectedTag ?? 'all'}>
+        <div className="bank-questions-list no-scrollbar" key={selectedTag ?? 'all'}>
           {error && <div className="bank-empty">Could not reach the local node: {error}</div>}
           {questions === null && !error && <div className="bank-empty">Loading…</div>}
           {questions?.map((q, i) => (

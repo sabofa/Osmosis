@@ -92,7 +92,7 @@ export default function Review({
 
   return (
     <div className="review">
-      <div className="review-index">
+      <div className="review-index no-scrollbar">
         {questions.map((r, i) => {
           const v = verdictFor(r)
           let cls = 'review-index-item'
@@ -108,7 +108,7 @@ export default function Review({
         className={`review-main${hasPanel ? ' with-panel' : ''}`}
         style={hasPanel ? { gridTemplateColumns: `1.3fr 0.9fr 14px ${panelWidth}px` } : undefined}
       >
-        <div className="panel review-detail">
+        <div className="panel review-detail no-scrollbar">
           <div className="review-slide" key={index}>
           <div className="review-detail-header">
             <span className="review-detail-icon">
@@ -203,7 +203,7 @@ export default function Review({
             <div className="review-score-sub">
               {correctCount} correct &middot; {incorrectCount} incorrect{partialCount > 0 ? ` · ${partialCount} partial` : ''}
             </div>
-            <div className="review-tags">
+            <div className="review-tags no-scrollbar">
               {[...tagCounts.entries()].map(([tag, count]) => (
                 <div className="review-tag-row" key={tag}>
                   <span>{tag}</span>
@@ -228,7 +228,7 @@ export default function Review({
         )}
 
         {hasPanel && (
-          <div className="review-panel">
+          <div className="review-panel no-scrollbar">
             <QuestionPanel
               graphSpec={question.graph_spec}
               desmosAllowed={question.desmos_allowed}

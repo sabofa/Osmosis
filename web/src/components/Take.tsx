@@ -191,7 +191,7 @@ export default function Take({
           </span>
         </div>
 
-        <div className="question-card">
+        <div className="question-card no-scrollbar">
           <div className="question-slide" key={index}>
             <div className="question-tag-row">
               <span className="question-icon">
@@ -243,7 +243,7 @@ export default function Take({
             aria-orientation="vertical"
             aria-label="Resize panel"
           />
-          <div className="take-panel" style={{ width: panelWidth }}>
+          <div className="take-panel no-scrollbar" style={{ width: panelWidth }}>
             <QuestionPanel
               graphSpec={question.graph_spec}
               desmosAllowed={question.desmos_allowed}

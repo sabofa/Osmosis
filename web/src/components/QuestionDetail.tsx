@@ -37,7 +37,7 @@ export default function QuestionDetail({
 
   return (
     <div className="question-detail-backdrop" onClick={onClose}>
-      <div className={`question-detail${hasPanel ? ' with-panel' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`question-detail no-scrollbar${hasPanel ? ' with-panel' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="question-detail-header">
           {question && <span className={`bank-type-badge ${question.type}`}>{question.type === 'mc' ? 'MC' : 'Written'}</span>}
           <div className="question-detail-spacer" />
@@ -112,7 +112,7 @@ export default function QuestionDetail({
                 aria-orientation="vertical"
                 aria-label="Resize panel"
               />
-              <div className="question-detail-aside" style={{ width: panelWidth }}>
+              <div className="question-detail-aside no-scrollbar" style={{ width: panelWidth }}>
                 <QuestionPanel
                   graphSpec={question.graph_spec}
                   desmosAllowed={question.desmos_allowed}

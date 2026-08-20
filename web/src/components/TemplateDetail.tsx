@@ -29,7 +29,7 @@ export default function TemplateDetail({
 
   return (
     <div className="template-detail-backdrop" onClick={onClose}>
-      <div className="template-detail" onClick={(e) => e.stopPropagation()}>
+      <div className="template-detail no-scrollbar" onClick={(e) => e.stopPropagation()}>
         <div className="template-detail-header">
           <span className="template-detail-icon">
             <SubjectIcon icon={template.icon} size={22} />

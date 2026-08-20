@@ -457,7 +457,7 @@ export default function Home({
           </div>
         </div>
 
-        <div className="templates-list">{renderContainer('root', 0)}</div>
+        <div className="templates-list no-scrollbar">{renderContainer('root', 0)}</div>
       </div>
 
       <div className="right-col">

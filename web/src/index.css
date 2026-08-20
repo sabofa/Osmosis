@@ -137,3 +137,15 @@ body {
     animation: none;
   }
 }
+
+/* Opt-in utility for scroll containers that should keep native wheel/touch
+   scrolling but hide the OS scrollbar chrome entirely. Use `Library.css`'s
+   thin-themed-scrollbar pattern instead when the scrollbar itself should
+   stay visible as a styled affordance. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

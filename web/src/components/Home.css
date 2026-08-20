@@ -48,15 +48,10 @@
   overflow-y: auto;
   min-height: 0;
   flex: 1;
-  scrollbar-width: none;
   /* Breathing room so a hover-lifted top row's shadow has room before
      reaching the scroll container's own clip edge. */
   padding-top: 6px;
   margin-top: -6px;
-}
-
-.templates-list::-webkit-scrollbar {
-  display: none;
 }
 
 .template-row {

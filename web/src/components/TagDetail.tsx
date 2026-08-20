@@ -59,7 +59,7 @@ export default function TagDetail({
         </div>
 
         <div className="tag-detail-body">
-          <div className="tag-detail-col">
+          <div className="tag-detail-col no-scrollbar">
             <div className="tag-detail-section">
               <div className="tag-detail-label">Description</div>
               <div className="tag-detail-text">{tag.description || 'No description yet.'}</div>
@@ -92,9 +92,9 @@ export default function TagDetail({
             </div>
           </div>
 
-          <div className="tag-detail-col">
+          <div className="tag-detail-col no-scrollbar">
             <div className="tag-detail-label">Used by</div>
-            <div className="tag-detail-questions">
+            <div className="tag-detail-questions no-scrollbar">
               {error && <div className="bank-empty">Could not reach the local node: {error}</div>}
               {questions === null && !error && <div className="bank-empty">Loading…</div>}
               {questions?.map((q) => (

@@ -59,7 +59,7 @@ export default function DocumentPanel({
 
   if (asset.type === 'url') {
     return (
-      <div className="document-panel">
+      <div className="document-panel no-scrollbar">
         <div className="document-panel-frame-wrap">
           <iframe className="document-panel-frame" src={asset.content ?? undefined} title={asset.title} />
           <a className="document-panel-fallback-link" href={asset.content ?? undefined} target="_blank" rel="noreferrer">
@@ -79,7 +79,7 @@ export default function DocumentPanel({
   }
 
   return (
-    <div className="document-panel">
+    <div className="document-panel no-scrollbar">
       <div className="document-panel-header">
         <span className="document-panel-title">{asset.title}</span>
         {asset.type === 'file' && (
