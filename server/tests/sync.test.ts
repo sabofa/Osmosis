@@ -184,4 +184,58 @@ describe("applyPushRequest", () => {
 
     expect(result.regrade_queued).toEqual(["r4"]);
   });
+
+  it("queues regrade when a self-grade commits but an accompanying model-grade fails to insert", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    const wq = insertQuestion(canonical, { type: "written", tags: ["math"] });
+
+    const result = applyPushRequest(canonical, {
+      node_id: "local-1", protocol_version: 1,
+      attempts: [{ id: "a5", node_id: "local-1", source: "adhoc", template_id: null, daily_draw_id: null,
+                   started_at: "2026-08-20 10:00:00", submitted_at: "2026-08-20 10:05:00", abandoned_at: null, offline: 1 }],
+      responses: [{ id: "r5", attempt_id: "a5", question_id: wq.id, ordinal: 0, selected_choice_id: null,
+                    response_text: "because reasons", skipped: 0, answered_at: "2026-08-20 10:04:00", elapsed_ms: 2000 }],
+      grades: [
+        { id: "g5a", response_id: "r5", grader: "self", score: 0.5, feedback: null, rubric_version: null,
+          model_name: null, graded_at: "2026-08-20 10:05:00" },
+        // score 5 violates the grade table's CHECK (score BETWEEN 0 AND 1) constraint and fails to insert.
+        { id: "g5b", response_id: "r5", grader: "model", score: 5, feedback: null, rubric_version: null,
+          model_name: "test-model", graded_at: "2026-08-20 10:05:01" },
+      ],
+    });
+
+    expect(result.accepted).toContain("g5a");
+    expect(result.rejected.map((r) => r.id)).toContain("g5b");
+    const gradeRows = canonical.prepare("SELECT grader FROM grade WHERE response_id = ?").all("r5") as { grader: string }[];
+    expect(gradeRows.map((r) => r.grader)).toEqual(["self"]);
+    // Canonical only has a self-grade for r5 (the model-grade never committed), so it should be queued.
+    expect(result.regrade_queued).toEqual(["r5"]);
+  });
+
+  it("does not queue regrade when a response's only grade fails to insert entirely", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    const wq = insertQuestion(canonical, { type: "written", tags: ["math"] });
+
+    const result = applyPushRequest(canonical, {
+      node_id: "local-1", protocol_version: 1,
+      attempts: [{ id: "a6", node_id: "local-1", source: "adhoc", template_id: null, daily_draw_id: null,
+                   started_at: "2026-08-20 10:00:00", submitted_at: "2026-08-20 10:05:00", abandoned_at: null, offline: 1 }],
+      responses: [{ id: "r6", attempt_id: "a6", question_id: wq.id, ordinal: 0, selected_choice_id: null,
+                    response_text: "because reasons", skipped: 0, answered_at: "2026-08-20 10:04:00", elapsed_ms: 2000 }],
+      grades: [
+        // score 5 violates the grade table's CHECK (score BETWEEN 0 AND 1) constraint and fails to insert.
+        { id: "g6", response_id: "r6", grader: "self", score: 5, feedback: null, rubric_version: null,
+          model_name: null, graded_at: "2026-08-20 10:05:00" },
+      ],
+    });
+
+    expect(result.accepted).toContain("r6");
+    expect(result.rejected.map((r) => r.id)).toContain("g6");
+    const gradeCount = (canonical.prepare("SELECT COUNT(*) AS n FROM grade WHERE response_id = ?").get("r6") as { n: number }).n;
+    expect(gradeCount).toBe(0);
+    // Canonical has zero grades for r6, so it should not be queued.
+    expect(result.regrade_queued).toEqual([]);
+  });
 });

@@ -400,6 +400,7 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
   const duplicate: string[] = [];
   const rejected: { id: string; reason: string; detail?: string }[] = [];
   const newlyAcceptedResponses = new Map<string, Record<string, unknown>>();
+  const newlyAcceptedGrades: Record<string, unknown>[] = [];
 
   const findAttempt = db.prepare("SELECT id FROM attempt WHERE id = ?");
   const insertAttempt = db.prepare(
@@ -489,6 +490,7 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
         for (const c of GRADE_COLUMNS) fields[c] = grade[c] ?? null;
         insertGrade.run(fields as Record<string, any>);
         accepted.push(id);
+        newlyAcceptedGrades.push(grade);
       } catch (err) {
         rejected.push({ id, reason: "insert_failed", detail: (err as Error).message });
       }
@@ -502,7 +504,7 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
 
   const regradeQueued: string[] = [];
   const gradesByResponse = new Map<string, Record<string, unknown>[]>();
-  for (const grade of request.grades) {
+  for (const grade of newlyAcceptedGrades) {
     const responseId = grade.response_id as string;
     const list = gradesByResponse.get(responseId) ?? [];
     list.push(grade);
