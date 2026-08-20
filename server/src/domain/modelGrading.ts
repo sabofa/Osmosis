@@ -45,6 +45,7 @@ export async function gradeWithDeepSeek(
       response_format: { type: "json_object" },
       temperature: 0.2,
     }),
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!res.ok) {
@@ -133,7 +134,8 @@ export async function sweepModelGrading(
        JOIN question q ON q.id = r.question_id
        JOIN grade g ON g.response_id = r.id AND g.superseded_at IS NULL
        WHERE q.type = 'written' AND g.grader = 'self'
-       ORDER BY r.answered_at ASC`
+         AND r.skipped = 0 AND TRIM(COALESCE(r.response_text, '')) <> ''
+       ORDER BY r.answered_at DESC`
     )
     .all() as { response_id: string; prompt: string; model_answer: string; rubric: string | null; response_text: string | null }[];
 
