@@ -39,6 +39,7 @@ describe("sync durability (spec exit criteria)", () => {
       remoteUrl: null,
       uploadsDir: dir,
       mcpAuthToken: "t",
+      deepseekApiKey: null,
     };
     const node = bootstrapNode(db, env);
     const app = buildApp({ db, env, node, runtime: createSyncRuntime() });
@@ -55,6 +56,7 @@ describe("sync durability (spec exit criteria)", () => {
       remoteUrl,
       uploadsDir: dir,
       mcpAuthToken: null,
+      deepseekApiKey: null,
     };
     const node = bootstrapNode(db, env);
     return { db, env, node, runtime: createSyncRuntime() };

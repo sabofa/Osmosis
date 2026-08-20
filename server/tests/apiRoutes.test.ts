@@ -21,7 +21,7 @@ describe("canonical-node guards on slice and template-download routes", () => {
   beforeAll(async () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t" };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();
@@ -88,7 +88,7 @@ describe("local-node sync-triggering routes", () => {
   beforeAll(async () => {
     canonicalDb = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t" };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
     const node = bootstrapNode(canonicalDb, env);
     canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime() });
     canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
@@ -99,7 +99,7 @@ describe("local-node sync-triggering routes", () => {
   function buildLocal(label: string, remoteUrl: string | null) {
     const db = openTestDb();
     const env = { role: "local" as const, label, port: 0, dbPath: ":memory:",
-                  remoteUrl, uploadsDir: "/tmp", mcpAuthToken: null };
+                  remoteUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
     const node = bootstrapNode(db, env);
     const runtime = createSyncRuntime();
     const app = buildApp({ db, env, node, runtime });

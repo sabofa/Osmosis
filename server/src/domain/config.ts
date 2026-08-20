@@ -13,6 +13,7 @@ const ALLOWED_KEYS = new Set([
   "daily_tag_filter",
   "daily_timezone",
   "written_grader",
+  "model_grader_daily_limit",
   "synced_attempt_retention_days",
   "duplicate_similarity_threshold",
   "abandon_after_hours",

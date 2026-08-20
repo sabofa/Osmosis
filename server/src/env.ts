@@ -8,6 +8,7 @@ export interface EnvConfig {
   remoteUrl: string | null;
   uploadsDir: string;
   mcpAuthToken: string | null;
+  deepseekApiKey: string | null;
 }
 
 function required(name: string): string {
@@ -48,5 +49,6 @@ export function loadEnvConfig(): EnvConfig {
     remoteUrl,
     uploadsDir,
     mcpAuthToken,
+    deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? null,
   };
 }

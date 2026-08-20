@@ -12,7 +12,7 @@ describe("/sync/pull and /sync/push HTTP routes", () => {
   beforeAll(async () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "test-canonical", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "test-token" };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "test-token", deepseekApiKey: null };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();
@@ -57,7 +57,7 @@ describe("/sync/pull and /sync/push HTTP routes", () => {
   it("a local-role app does not mount /sync/pull or /sync/push", async () => {
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "test-local", port: 0, dbPath: ":memory:",
-                  remoteUrl: "http://localhost:9999", uploadsDir: "/tmp", mcpAuthToken: null };
+                  remoteUrl: "http://localhost:9999", uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
     const node = bootstrapNode(localDb, env);
     const localApp = buildApp({ db: localDb, env, node, runtime: createSyncRuntime() });
     await localApp.ready();
