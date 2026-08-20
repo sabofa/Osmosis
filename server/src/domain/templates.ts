@@ -8,7 +8,7 @@ import { addSlice, removeSlice } from "./sync.js";
 // The deduplicated union of every tag literal a tag_query references —
 // `all`, `any`, and `none` alike — since a Library download needs the
 // content behind each one locally, regardless of which clause it's used in.
-function referencedTagLiterals(query: TagQuery): string[] {
+export function referencedTagLiterals(query: TagQuery): string[] {
   return [...new Set([...(query.all ?? []), ...(query.any ?? []), ...(query.none ?? [])])];
 }
 
@@ -518,7 +518,22 @@ export function deleteLocalTemplate(db: DatabaseSync, id: string): { id: string 
     throw new DomainError("not_found", `Template "${id}" is not downloaded.`);
   }
 
-  for (const tag of literals) removeSlice(db, tag);
+  // A literal still needed by another currently-downloaded template must not
+  // have its slice removed — that would silently gut the other template.
+  const otherTemplates = db
+    .prepare("SELECT * FROM template WHERE id != ? AND retired_at IS NULL")
+    .all(id) as unknown as TemplateRow[];
+  const stillNeeded = new Set<string>();
+  for (const other of otherTemplates) {
+    const summary = toSummary(db, other);
+    if (!summary.downloaded) continue;
+    for (const tag of referencedTagLiterals(summary.tag_query)) stillNeeded.add(tag);
+  }
+
+  for (const tag of literals) {
+    if (stillNeeded.has(tag)) continue;
+    removeSlice(db, tag);
+  }
   return { id };
 }
 

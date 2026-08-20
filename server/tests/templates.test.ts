@@ -130,6 +130,49 @@ describe("template download (slice-backed)", () => {
     expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeUndefined();
   });
 
+  // Finding 9b — deleting one template's download must not remove a slice
+  // another still-downloaded template needs.
+  it("deleteLocalTemplate keeps a shared literal's slice when another downloaded template still needs it", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+    const q = insertQuestion(db, { tags: ["math"] });
+    const a = createTemplate(db, { name: "a", tag_query: { all: ["math"] }, question_count: 1 });
+    const b = createTemplate(db, { name: "b", tag_query: { all: ["math"] }, question_count: 1 });
+    downloadTemplate(db, a.id);
+    downloadTemplate(db, b.id);
+
+    deleteLocalTemplate(db, a.id);
+
+    // The math slice survives — template b still needs it — and so do its questions.
+    expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeTruthy();
+    expect(db.prepare("SELECT id FROM question WHERE id = ?").get(q.id)).toBeTruthy();
+    expect(getTemplateDetail(db, b.id).downloaded).toBe(true);
+
+    // Known consequence of `downloaded` being derived purely from slice
+    // presence (there is no local_template marker table since migration 007):
+    // while two templates reference an identical literal set, neither's
+    // delete-download can free the shared slice, because the other always
+    // still reads as downloaded. Removing the slice directly (Settings ->
+    // remove slice) is the escape hatch.
+    deleteLocalTemplate(db, b.id);
+    expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeTruthy();
+  });
+
+  it("deleteLocalTemplate still removes literals no other downloaded template needs", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+    insertTag(db, "physics");
+    const a = createTemplate(db, { name: "a", tag_query: { all: ["math", "physics"] }, question_count: 1 });
+    const b = createTemplate(db, { name: "b", tag_query: { all: ["math"] }, question_count: 1 });
+    downloadTemplate(db, a.id);
+    downloadTemplate(db, b.id);
+
+    deleteLocalTemplate(db, a.id);
+
+    expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeTruthy();
+    expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'physics'").get()).toBeUndefined();
+  });
+
   it("downloading a template with an empty tag_query throws instead of silently no-op'ing", () => {
     const db = openTestDb();
     const template = createTemplate(db, { name: "t", tag_query: {}, question_count: 1 });
