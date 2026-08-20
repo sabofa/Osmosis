@@ -94,7 +94,6 @@
 
 .take-panel {
   flex-shrink: 0;
-  min-height: 0;
   padding: 22px 20px;
   display: flex;
   overflow-y: auto;
