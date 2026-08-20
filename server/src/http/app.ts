@@ -7,7 +7,7 @@ import type { NodeRow } from "../node.js";
 import { PROTOCOL_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
-import { buildPullResponse, applyPushRequest, buildQuestionPayloads, type PullRequest, type PushRequest } from "../domain/sync.js";
+import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, type PullRequest, type PushRequest } from "../domain/sync.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import type { SyncRuntime } from "../sync/client.js";
 
@@ -38,14 +38,16 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       return applyPushRequest(ctx.db, request.body as PushRequest);
     });
 
-    app.post("/sync/daily-draw", async (request) => {
-      const { kind } = request.body as { kind: "question" | "quiz" };
+    app.post("/sync/daily-draw", async (request, reply) => {
+      const { kind } = request.body as { kind: unknown };
+      if (kind !== "question" && kind !== "quiz") {
+        reply.code(400).send({ error: "invalid_kind", message: `kind must be "question" or "quiz", got ${JSON.stringify(kind)}` });
+        return;
+      }
       const resolved = resolveDailyDraw(ctx.db, kind);
       const questions = buildQuestionPayloads(ctx.db, resolved.questions.map((q) => q.id));
       const usedTagSlugs = [...new Set(questions.flatMap((q) => (q as { tags: string[] }).tags))];
-      const tagMatch = usedTagSlugs.length > 0
-        ? ctx.db.prepare(`SELECT slug, label, parent_slug, description, retired_at FROM tag WHERE slug IN (${usedTagSlugs.map(() => "?").join(",")})`).all(...usedTagSlugs)
-        : [];
+      const tagMatch = fetchTagAncestorClosure(ctx.db, usedTagSlugs);
       return {
         protocol_version: PROTOCOL_VERSION,
         daily_draw_id: resolved.daily_draw_id,

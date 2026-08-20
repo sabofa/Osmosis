@@ -174,7 +174,13 @@ export interface DailyDrawSyncResponse {
 export async function fetchAndApplyDailyDraw(
   ctx: AppContext,
   kind: "question" | "quiz"
-): Promise<{ daily_draw_id: string; questions: { id: string; lineage_id: string; type: "mc" | "written" }[] }> {
+): Promise<{
+  daily_draw_id: string;
+  questions: { id: string; lineage_id: string; type: "mc" | "written" }[];
+  short_draw: boolean;
+  requested: number;
+  returned: number;
+}> {
   if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
   const res = await fetch(`${ctx.env.remoteUrl}/sync/daily-draw`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }),
@@ -187,7 +193,7 @@ export async function fetchAndApplyDailyDraw(
   db.exec("BEGIN");
   try {
     upsertBankContent(db, payload.tags, payload.questions);
-    db.prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING").run(
+    db.prepare("INSERT INTO daily_draw (id, draw_date, kind) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").run(
       payload.daily_draw_id, payload.draw_date, payload.kind
     );
     db.prepare("DELETE FROM daily_draw_question WHERE daily_draw_id = ?").run(payload.daily_draw_id);
@@ -206,7 +212,13 @@ export async function fetchAndApplyDailyDraw(
     return { id: q.id, lineage_id: q.lineage_id, type: q.type };
   });
 
-  return { daily_draw_id: payload.daily_draw_id, questions };
+  return {
+    daily_draw_id: payload.daily_draw_id,
+    questions,
+    short_draw: payload.short_draw,
+    requested: payload.requested,
+    returned: payload.returned,
+  };
 }
 
 export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {

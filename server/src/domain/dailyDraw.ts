@@ -50,7 +50,11 @@ function drawWithRelaxation(
   // deduped and sorted descending, but never including a level above the
   // configured value (e.g. if daily_exclusion_days is itself 0, the level list
   // must be just [0], not [1, 0], which would relax "up" past the config).
-  const levels = [...new Set([maxExclusionDays, 1, 0].filter((d) => d <= maxExclusionDays))]
+  // Clamp a misconfigured negative value to 0 ("no exclusion") rather than
+  // letting it produce an empty levels list, which would hit the unreachable
+  // throw below.
+  const clampedMaxExclusionDays = Math.max(0, maxExclusionDays);
+  const levels = [...new Set([clampedMaxExclusionDays, 1, 0].filter((d) => d <= clampedMaxExclusionDays))]
     .filter((d) => d >= 0)
     .sort((a, b) => b - a);
 

@@ -186,8 +186,15 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.post("/api/attempts", async (request, reply) => {
     const body = request.body as { source: string; template_id?: string; daily_kind?: string };
-    if (body.daily_kind) {
-      const kind = body.daily_kind as "question" | "quiz";
+    if (body.daily_kind !== undefined) {
+      if (body.daily_kind !== "question" && body.daily_kind !== "quiz") {
+        reply.code(400).send({
+          error: "invalid_daily_kind",
+          message: `daily_kind must be "question" or "quiz", got ${JSON.stringify(body.daily_kind)}`,
+        });
+        return;
+      }
+      const kind = body.daily_kind;
       try {
         if (ctx.env.role === "canonical") {
           const resolved = resolveDailyDraw(db, kind);
@@ -211,7 +218,8 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
             daily_draw_id: fetched.daily_draw_id, questions: fetched.questions },
           ctx.env.role
         );
-        return { attempt_id: result.attempt_id, questions: result.questions };
+        return { attempt_id: result.attempt_id, questions: result.questions,
+                  short_draw: fetched.short_draw, requested: fetched.requested, returned: fetched.returned };
       } catch (err) {
         if (err instanceof Error && err.message.startsWith("daily-draw fetch failed")) {
           reply.code(503).send({ reason: "daily_requires_connection" });

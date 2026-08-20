@@ -154,6 +154,64 @@ export function buildQuestionPayloads(db: DatabaseSync, questionIds: string[]): 
 }
 
 // ----------------------------------------------------------------------------
+// fetchTagAncestorClosure: given a set of tag slugs, return the full set of
+// tag rows for those slugs PLUS every ancestor reachable by walking
+// parent_slug upward — ordered so a parent always appears before its
+// children. tag.parent_slug REFERENCES tag(slug), so upsertBankContent (used
+// by both applyPullResponse and fetchAndApplyDailyDraw) will FK-fail on any
+// row whose parent isn't present yet (or already local) unless the caller
+// supplies the full ancestor chain in a safe insertion order. Walks
+// parent_slug explicitly rather than splitting the slug string on ":", since
+// the FK — and therefore correctness here — is defined on parent_slug, not
+// on slug's textual shape.
+// ----------------------------------------------------------------------------
+
+export function fetchTagAncestorClosure(
+  db: DatabaseSync,
+  initialSlugs: string[]
+): PullResponse["tags"] {
+  if (initialSlugs.length === 0) return [];
+
+  const parentOf = db.prepare("SELECT slug, parent_slug FROM tag WHERE slug = ?");
+
+  const allSlugs = new Set<string>(initialSlugs);
+  // levels[0] = the starting (leaf-most) slugs; each subsequent level is the
+  // set of not-yet-seen parents of the previous level. Reversing this array
+  // before flattening yields root-first order, satisfying the FK.
+  const levels: string[][] = [[...new Set(initialSlugs)]];
+
+  let frontier = levels[0];
+  while (frontier.length > 0) {
+    const nextParents = new Set<string>();
+    for (const slug of frontier) {
+      const row = parentOf.get(slug) as { slug: string; parent_slug: string | null } | undefined;
+      const parentSlug = row?.parent_slug ?? null;
+      if (parentSlug !== null && !allSlugs.has(parentSlug)) {
+        nextParents.add(parentSlug);
+      }
+    }
+    if (nextParents.size === 0) break;
+    const nextLevel = [...nextParents];
+    for (const s of nextLevel) allSlugs.add(s);
+    levels.push(nextLevel);
+    frontier = nextLevel;
+  }
+
+  const orderedSlugs = levels.slice().reverse().flat();
+  const rowsBySlug = new Map(
+    (
+      db
+        .prepare(
+          `SELECT slug, label, parent_slug, description, retired_at FROM tag WHERE slug IN (${orderedSlugs.map(() => "?").join(",")})`
+        )
+        .all(...orderedSlugs) as unknown as PullResponse["tags"]
+    ).map((row) => [row.slug, row])
+  );
+
+  return orderedSlugs.map((slug) => rowsBySlug.get(slug)).filter((r): r is PullResponse["tags"][number] => !!r);
+}
+
+// ----------------------------------------------------------------------------
 // buildPullResponse (canonical side)
 // ----------------------------------------------------------------------------
 
