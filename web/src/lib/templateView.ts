@@ -15,16 +15,16 @@ const SUBJECT_ICONS: Record<string, IconKey> = {
   physics: 'physics',
 }
 
-export function subjectOf(tagQuery: ApiTemplateSummary['tag_query']): string | null {
+function subjectOf(tagQuery: ApiTemplateSummary['tag_query']): string | null {
   return tagQuery.all?.[0]?.split(':')[0] ?? tagQuery.any?.[0]?.split(':')[0] ?? null
 }
 
-export function iconForSubject(subject: string | null): IconKey {
+function iconForSubject(subject: string | null): IconKey {
   if (!subject) return 'bolt'
   return SUBJECT_ICONS[subject] ?? 'bolt'
 }
 
-export function tagsOf(tagQuery: ApiTemplateSummary['tag_query']): string[] {
+function tagsOf(tagQuery: ApiTemplateSummary['tag_query']): string[] {
   return [...(tagQuery.all ?? []), ...(tagQuery.any ?? [])]
 }
 

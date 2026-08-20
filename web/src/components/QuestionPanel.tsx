@@ -12,7 +12,7 @@ const PANEL_LABEL: Record<PanelMode, string> = {
   document: 'Document',
 }
 
-export interface QuestionPanelProps {
+interface QuestionPanelProps {
   graphSpec?: string | null
   desmosAllowed?: boolean
   documentId?: string | null

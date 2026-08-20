@@ -1,4 +1,4 @@
-export interface TokenField {
+interface TokenField {
   key: string
   label: string
   hint: string
