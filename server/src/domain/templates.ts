@@ -3,6 +3,14 @@ import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 import { countEligible, resolveDrawFromParams, type EligibilityParams } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
+import { addSlice, removeSlice } from "./sync.js";
+
+// The deduplicated union of every tag literal a tag_query references —
+// `all`, `any`, and `none` alike — since a Library download needs the
+// content behind each one locally, regardless of which clause it's used in.
+function referencedTagLiterals(query: TagQuery): string[] {
+  return [...new Set([...(query.all ?? []), ...(query.any ?? []), ...(query.none ?? [])])];
+}
 
 const CALCULATOR_POLICIES = new Set(["allowed", "forbidden", "any"]);
 const WEIGHTINGS = new Set(["random", "weak_weighted"]);
@@ -148,9 +156,17 @@ function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
     )
     .get(row.id) as { attempt_count: number; mean_score: number | null };
 
-  const local = db.prepare("SELECT downloaded_at FROM local_template WHERE template_id = ?").get(row.id) as
-    | { downloaded_at: string }
-    | undefined;
+  const literals = referencedTagLiterals(tagQuery);
+  const sliceRows =
+    literals.length > 0
+      ? (db
+          .prepare(
+            `SELECT tag_slug, pulled_at FROM local_slice WHERE tag_slug IN (${literals.map(() => "?").join(",")})`
+          )
+          .all(...literals) as { tag_slug: string; pulled_at: string }[])
+      : [];
+  const downloaded = literals.length > 0 && sliceRows.length === literals.length;
+  const downloadedAt = downloaded ? sliceRows.reduce((min, r) => (r.pulled_at < min ? r.pulled_at : min), sliceRows[0].pulled_at) : null;
 
   return {
     id: row.id,
@@ -171,9 +187,9 @@ function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
     retired_at: row.retired_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    downloaded: !!local,
-    downloaded_at: local?.downloaded_at ?? null,
-    update_available: !!local && local.downloaded_at < row.updated_at,
+    downloaded,
+    downloaded_at: downloadedAt,
+    update_available: downloaded && downloadedAt! < row.updated_at,
     estimated_bytes: row.question_count * ESTIMATED_BYTES_PER_QUESTION,
   };
 }
@@ -447,23 +463,56 @@ export function editTemplate(
 }
 
 export function downloadTemplate(db: DatabaseSync, id: string): { id: string; downloaded_at: string } {
-  const exists = db.prepare("SELECT id FROM template WHERE id = ?").get(id);
-  if (!exists) throw new DomainError("not_found", `Template "${id}" does not exist.`);
+  const row = db.prepare("SELECT tag_query FROM template WHERE id = ?").get(id) as
+    | { tag_query: string }
+    | undefined;
+  if (!row) throw new DomainError("not_found", `Template "${id}" does not exist.`);
 
-  db.prepare(
-    `INSERT INTO local_template (template_id) VALUES (?)
-     ON CONFLICT (template_id) DO UPDATE SET downloaded_at = datetime('now')`
-  ).run(id);
+  const literals = referencedTagLiterals(JSON.parse(row.tag_query) as TagQuery);
+  for (const tag of literals) addSlice(db, tag);
 
-  const row = db.prepare("SELECT downloaded_at FROM local_template WHERE template_id = ?").get(id) as {
-    downloaded_at: string;
-  };
-  return { id, downloaded_at: row.downloaded_at };
+  const sliceRows =
+    literals.length > 0
+      ? (db
+          .prepare(
+            `SELECT pulled_at FROM local_slice WHERE tag_slug IN (${literals.map(() => "?").join(",")})`
+          )
+          .all(...literals) as { pulled_at: string }[])
+      : [];
+  const downloadedAt = sliceRows.reduce(
+    (min, r) => (min === null || r.pulled_at < min ? r.pulled_at : min),
+    null as string | null
+  );
+
+  return { id, downloaded_at: downloadedAt as string };
 }
 
 export function deleteLocalTemplate(db: DatabaseSync, id: string): { id: string } {
-  const result = db.prepare("DELETE FROM local_template WHERE template_id = ?").run(id);
-  if (Number(result.changes) === 0) throw new DomainError("not_found", `Template "${id}" is not downloaded.`);
+  const row = db.prepare("SELECT tag_query FROM template WHERE id = ?").get(id) as
+    | { tag_query: string }
+    | undefined;
+  if (!row) throw new DomainError("not_found", `Template "${id}" does not exist.`);
+
+  const literals = referencedTagLiterals(JSON.parse(row.tag_query) as TagQuery);
+  const presentSlices =
+    literals.length > 0
+      ? (db
+          .prepare(
+            `SELECT tag_slug FROM local_slice WHERE tag_slug IN (${literals.map(() => "?").join(",")})`
+          )
+          .all(...literals) as { tag_slug: string }[])
+      : [];
+
+  // Partial-download states are now possible (a template can reference
+  // several tags, each downloaded/removed independently). Throw only if
+  // NONE of the referenced slices exist locally — "delete what's there" is
+  // the more useful behavior for a partial state than an all-or-nothing
+  // error.
+  if (presentSlices.length === 0) {
+    throw new DomainError("not_found", `Template "${id}" is not downloaded.`);
+  }
+
+  for (const tag of literals) removeSlice(db, tag);
   return { id };
 }
 

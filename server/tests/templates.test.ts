@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { createTemplate, editTemplate, listTemplates, retireTemplate } from "../src/domain/templates.js";
+import {
+  createTemplate,
+  editTemplate,
+  listTemplates,
+  retireTemplate,
+  getTemplateDetail,
+  downloadTemplate,
+  deleteLocalTemplate,
+} from "../src/domain/templates.js";
 import { DomainError } from "../src/domain/errors.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
@@ -82,6 +90,44 @@ describe("editTemplate", () => {
     });
 
     expect(() => editTemplate(db, created.id, { description: "updated" })).not.toThrow();
+  });
+});
+
+describe("template download (slice-backed)", () => {
+  it("downloading a template adds a local_slice row per referenced tag literal", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+    insertTag(db, "history");
+    insertQuestion(db, { tags: ["math"] });
+    const template = createTemplate(db, { name: "t", tag_query: { all: ["math"], none: ["history"] }, question_count: 1 });
+
+    downloadTemplate(db, template.id);
+
+    const slices = (db.prepare("SELECT tag_slug FROM local_slice ORDER BY tag_slug").all() as { tag_slug: string }[])
+      .map((r) => r.tag_slug);
+    expect(slices).toEqual(["history", "math"]); // both `all` and `none` literals get added — matches spec's "one slice per referenced tag literal"
+  });
+
+  it("a template is 'downloaded' once every referenced slice exists locally", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+    const template = createTemplate(db, { name: "t", tag_query: { all: ["math"] }, question_count: 1 });
+
+    expect(getTemplateDetail(db, template.id).downloaded).toBe(false);
+    downloadTemplate(db, template.id);
+    expect(getTemplateDetail(db, template.id).downloaded).toBe(true);
+  });
+
+  it("deleteLocalTemplate removes the referenced slices", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+    const template = createTemplate(db, { name: "t", tag_query: { all: ["math"] }, question_count: 1 });
+    downloadTemplate(db, template.id);
+
+    deleteLocalTemplate(db, template.id);
+
+    expect(getTemplateDetail(db, template.id).downloaded).toBe(false);
+    expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeUndefined();
   });
 });
 
