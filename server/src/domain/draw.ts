@@ -9,6 +9,7 @@ export interface EligibilityParams {
   difficulty_min?: number | null;
   difficulty_max?: number | null;
   calculator_policy?: CalculatorFilter;
+  exclude_lineage_ids?: string[];
 }
 
 export interface EligibleQuestion {
@@ -35,6 +36,11 @@ function buildEligibilityClause(params: EligibilityParams): { sql: string; args:
   if (params.calculator_policy && params.calculator_policy !== "any") {
     clauses.push("q.calculator_policy = ?");
     args.push(params.calculator_policy);
+  }
+
+  if (params.exclude_lineage_ids && params.exclude_lineage_ids.length > 0) {
+    clauses.push(`q.lineage_id NOT IN (${params.exclude_lineage_ids.map(() => "?").join(",")})`);
+    args.push(...params.exclude_lineage_ids);
   }
 
   const tagClause = params.tag_query ? buildTagQueryClause(params.tag_query) : { sql: "", params: [] };

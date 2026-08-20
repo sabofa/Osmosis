@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   getEligibleQuestions,
+  countEligible,
   computeWeakWeights,
   weightedSampleWithoutReplacement,
   resolveDrawFromParams,
@@ -180,5 +181,32 @@ describe("frozen templates", () => {
     const result = resolveFrozenDraw(db, templateId);
 
     expect(result.map((q) => q.id)).toEqual([q3.id, q1.id, q2.id]);
+  });
+});
+
+describe("exclude_lineage_ids", () => {
+  it("excludes questions by lineage, not by version id", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q1 = insertQuestion(db, { tags: ["a"] });
+    const q2 = insertQuestion(db, { tags: ["a"] });
+
+    const withoutExclusion = getEligibleQuestions(db, { tag_query: { all: ["a"] } });
+    expect(withoutExclusion.map((q) => q.id).sort()).toEqual([q1.id, q2.id].sort());
+
+    const withExclusion = getEligibleQuestions(db, {
+      tag_query: { all: ["a"] },
+      exclude_lineage_ids: [q1.lineage_id],
+    });
+    expect(withExclusion.map((q) => q.id)).toEqual([q2.id]);
+
+    expect(countEligible(db, { tag_query: { all: ["a"] }, exclude_lineage_ids: [q1.lineage_id] })).toBe(1);
+  });
+
+  it("an empty exclude_lineage_ids array excludes nothing", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    insertQuestion(db, { tags: ["a"] });
+    expect(countEligible(db, { tag_query: { all: ["a"] }, exclude_lineage_ids: [] })).toBe(1);
   });
 });
