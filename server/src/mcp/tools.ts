@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../domain/errors.js";
+import { readme } from "../domain/readme.js";
 import { bootstrap } from "../domain/bootstrap.js";
 import { listTags, createTag, mergeTags } from "../domain/tags.js";
 import { createQuestions, editQuestion, retireQuestion, searchQuestions, getQuestionDetail } from "../domain/questions.js";
@@ -33,13 +34,7 @@ const questionInputShape = z.object({
   rubric: z.unknown().optional(),
   graph_spec: z.string().nullable().optional(),
   desmos_allowed: z.boolean().optional().describe(
-    "True only if this specific question meaningfully benefits from a graphing " +
-      "calculator (e.g. graphing/algebra/pre-calc/calc/stats questions where plotting " +
-      "or exploring a function helps). Do NOT set true just because a calculator would " +
-      "be technically permitted in a real exam for this section — 'allowed' means " +
-      "'useful here', not 'not forbidden'. Leave false/omitted for subjects or question " +
-      "types where a graphing calculator adds nothing (English, reading, history, basic " +
-      "arithmetic, etc.), even under calculator-allowed testing conditions."
+    "Per-question: does a graphing calculator meaningfully help THIS question, independent of calculator_policy. See readme's calculator_conventions."
   ),
   document_id: z.string().nullable().optional(),
   document_anchor_label: z.string().nullable().optional(),
@@ -71,9 +66,28 @@ function fail(err: unknown) {
 
 export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: string): void {
   server.registerTool(
+    "readme",
+    {
+      description:
+        "Call once at the very start of a session, before bootstrap. Returns universal authoring conventions " +
+        "(prompt style, the calculator_policy/desmos_allowed distinction, document anchoring, duplicate-report " +
+        "workflow, batching guidance) that don't repeat per-subject the way bootstrap's taxonomy does.",
+    },
+    async () => {
+      try {
+        return ok(readme(db));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
     "bootstrap",
     {
-      description: "Call at the start of every session. Returns tag taxonomy, authoring conventions, and a pointer into results.",
+      description:
+        "Call once per subject touched this session (after readme). Returns that subject's tag taxonomy, " +
+        "results pointer, and — for math/science subjects — the graph_spec DSL reference.",
       inputSchema: { subject: z.string().nullable().optional() },
     },
     async ({ subject }) => {

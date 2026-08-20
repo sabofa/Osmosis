@@ -6,9 +6,8 @@ of its own). This supplements `SPEC-Osmosis.md` §9 — that document describes
 the bank/sync model; this one is specifically about the Claude-facing protocol
 surface and stays up to date as that surface grows past the original 13 tools.
 
-Status tags: **[DONE]** exists in `server/src/mcp/tools.ts` today. **[NEW]**
-proposed here, not built. Bottom section covers everything **[NEW]** with a
-concrete implementation sketch.
+Status: everything in this document is **[DONE]** as of this revision. Bottom
+section (§8) covers what's still open, each with a concrete next step.
 
 ---
 
@@ -20,8 +19,8 @@ surface available (e.g. claude.ai's "Add custom connector" dialog) accepts a
 URL and nothing else for a plain shared-secret setup — no custom header
 field, and OAuth is unnecessary machinery for a single trusted user. Wrong or
 missing token returns a bare 404, not 401, so the endpoint gives no signal to
-anyone probing it. **[DONE]** — `server/src/mcp/server.ts`, `MCP_AUTH_TOKEN`
-env var, canonical node refuses to boot without one set.
+anyone probing it. `server/src/mcp/server.ts`, `MCP_AUTH_TOKEN` env var,
+canonical node refuses to boot without one set.
 
 Revocation is "rotate `MCP_AUTH_TOKEN`, restart, re-paste the URL into the
 connector dialog." No live-revoke list is needed for a single-user tool.
@@ -32,195 +31,205 @@ connector dialog." No live-revoke list is needed for a single-user tool.
 
 A hosted claude.ai session has no access to this spec, the source code, or
 any prior session's context. Everything it knows about conventions has to
-arrive through tool calls. `bootstrap(subject)` currently carries all of it —
+arrive through tool calls. `bootstrap(subject)` used to carry all of it —
 conventions, tag taxonomy, calculator policy, results pointer — every time,
-for every subject. That means a session that does biology today and
-chemistry tomorrow re-reads the same universal authoring rules twice, and a
-session that never touches graphing still has no way to *learn* the graph DSL
-exists without stumbling into it via a rejected `graph_spec`.
+for every subject, which meant a session doing biology today and chemistry
+tomorrow re-read the same universal authoring rules twice, and a session that
+never touched graphing had no way to *learn* the graph DSL exists without
+stumbling into it via a rejected `graph_spec`.
 
-Split into two tools:
+Split into two tools, `domain/readme.ts` and `domain/bootstrap.ts`:
 
-### `readme` **[NEW]**
+### `readme()`
 
-Called once, at the very start of a session, before anything subject-specific
-is known. Fixed content, doesn't touch the database beyond a cheap read (bank
-size, protocol version). Covers everything true regardless of subject:
+Zero-argument, called once at the very start of a session, before anything
+subject-specific is known. Cheap — one COUNT query for `bank_size`, otherwise
+static content:
 
 ```
 readme() -> {
   node: { protocol_version, bank_size, last_write_at },
-  workflow: string,          // "call bootstrap(subject) next, once per subject you touch this session"
-  prompt_conventions: {...}, // prompt_style, explanation_style, difficulty_scale, mc_choice_count, written_length_target
-  calculator_conventions: string,   // calculator_policy AND desmos_allowed, the distinction between them
-  document_conventions: string,     // document_id / document_anchor_* / document_marker_offset, when to use which
-  duplicate_workflow: string,       // possible_duplicates is a report not a rejection; call retire_question on the loser
-  batching_guidance: string,        // prefer batches of ~25-30 questions per create_questions call, see §5
+  workflow: string,               // call bootstrap(subject) next, once per subject touched this session
+  prompt_conventions: {...},      // prompt_style, explanation_style, difficulty_scale, mc_choice_count, written_length_target
+  calculator_conventions: string, // calculator_policy vs desmos_allowed — two independent axes, not redundant
+  document_conventions: string,   // document_id / document_anchor_* / document_marker_offset, when to use which
+  duplicate_workflow: string,     // possible_duplicates is a report, not a rejection — retire_question the loser
+  batching_guidance: string,      // prefer ~25-30 questions per create_questions call
 }
 ```
 
-This is the "read once per session" tier. It never repeats itself within a
-session and a client is expected to call it exactly once, first.
+### `bootstrap(subject)`
 
-### `bootstrap(subject)` **[DONE, needs one addition]**
-
-Stays exactly what it is today — subject-scoped tag taxonomy, `results_pointer`,
-`skill_level` — called once *per subject* touched this session, cheap enough
-to call more than once (biology, then later chemistry, each gets its own
-call, neither repeats the universal stuff `readme` already covered).
-
-Addition: a `graph_dsl_reference` field, populated only when the resolved
-subject subtree plausibly uses it (math, physics, chem stoichiometry/graphing,
-stats — a config-driven allowlist of top-level tag slugs, not a hardcoded
-"math" check, so this generalizes as the tag vocabulary grows). Compact
-version of the grammar in `graph-engine/src/parser/types.ts` — statement
-forms one line each, config directives one line each, no implementation
-asides. See §6 of the "not implemented" section for the actual grammar
-content this pulls from.
+Stays subject-scoped — tag taxonomy, `results_pointer`, `skill_level` — called
+once *per subject* touched this session. `conventions` and
+`calculator_convention` moved out to `readme` (they no longer appear in
+`BootstrapResult`); `graph_dsl_reference` was added, populated only when the
+resolved subject's top-level slug is in a small allowlist
+(`math`/`physics`/`chemistry`/`statistics`/`engineering` in
+`domain/bootstrap.ts`, not a hardcoded `"math"` string check, so a new subject
+just gets added to the set). Content is condensed from
+`graph-engine/src/parser/types.ts`'s grammar comment and
+`parser/parseConfig.ts`'s directive switch — one line per statement form, one
+line per `@key:` directive, no implementation asides.
 
 **Why split instead of just growing bootstrap**: the alternative is
-`bootstrap` conditionally including the universal stuff only on the first
-call of a session — but MCP tool calls are stateless per the transport
-(`sessionIdGenerator: undefined`, see `mcp/server.ts`), so "first call this
-session" isn't something the server can detect without adding session state
-it currently has none of. Two tools with two different call cadences is
-simpler than adding session tracking to answer "have I told this client the
-universal stuff yet."
+`bootstrap` conditionally including the universal stuff only on the first call
+of a session — but MCP tool calls are stateless per the transport
+(`sessionIdGenerator: undefined`, `mcp/server.ts`), so "first call this
+session" isn't something the server can detect without adding session state it
+currently has none of. Two tools with two different call cadences is simpler
+than adding session tracking to answer "have I told this client the universal
+stuff yet."
 
 ---
 
-## 3. Full tool inventory (target state)
+## 3. Full tool inventory
 
-| Tool | Status | Purpose |
-|---|---|---|
-| `readme` | **[NEW]** | Universal conventions, called once per session |
-| `bootstrap` | **[DONE]**, +DSL field | Subject-scoped taxonomy + results pointer, called once per subject |
-| `list_tags` | [DONE] | Controlled vocabulary listing |
-| `create_tag` | [DONE] | One tag at a time, by design |
-| `merge_tags` | [DONE] | Vocabulary cleanup |
-| `search_questions` | [DONE] | Cheap summaries, omits explanation/rubric/graph_spec |
-| `get_question` | [DONE] | Full detail for one question — the missing read path before an edit |
-| `create_questions` | [DONE] | Batched, per-question rejection detail |
-| `edit_question` | [DONE] | Versions if attempted, in-place otherwise |
-| `retire_question` | [DONE] | Soft retire |
-| `list_templates` | [DONE] | Live eligible_count |
-| `create_template` / `edit_template` / `retire_template` | [DONE] | Draw specs |
-| `get_results` | [DONE] | Weak-area signal, `response_text` on wrong written answers |
-| `get_config` / `set_config` | [DONE] | Refuses unknown keys and secrets |
-| `create_asset` | [DONE], scope narrowed | `type: text`/`url` only — see §5 for why `type: file` should route elsewhere when a shell is available |
-| `list_assets` | [DONE] | Cheap listing, no query required — "what's uploaded and unlinked" via `unlinked_only` |
-| `read_asset` | [DONE] | Full `extracted_text` |
-| `search_assets` | [DONE] | FTS snippets |
+21 tools. Every schema is sent on every turn a connector is enabled for,
+regardless of whether it's called that turn — tool *count* isn't free, which
+is why `readme`/`bootstrap` were split by call cadence rather than just
+becoming one larger tool.
 
-20 tools today (`readme` and the `graph_dsl_reference` field on `bootstrap`
-are the two pieces still outstanding), 21 at target. Every tool schema is
-sent on every turn a connector is enabled for, regardless of whether it's
-called that turn — tool *count* isn't free, so nothing gets added here that
-doesn't close an actual gap.
+| Tool | Purpose |
+|---|---|
+| `readme` | Universal conventions, called once per session |
+| `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject |
+| `list_tags` | Controlled vocabulary listing |
+| `create_tag` | One tag at a time, by design |
+| `merge_tags` | Vocabulary cleanup |
+| `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec |
+| `get_question` | Full detail for one question — the read path before an edit |
+| `create_questions` | Batched, per-question rejection detail, capped duplicate reports |
+| `edit_question` | Versions if attempted, in-place otherwise |
+| `retire_question` | Soft retire |
+| `list_templates` | Live eligible_count |
+| `create_template` / `edit_template` / `retire_template` | Draw specs |
+| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers |
+| `get_config` / `set_config` | Refuses unknown keys and secrets |
+| `create_asset` | `type: text`/`url`/`file` (base64) — the file variant is the fallback path, see §5 |
+| `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets |
+| `read_asset` | Full `extracted_text` |
+| `search_assets` | FTS snippets |
+
+Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
+/mcp/:token/upload` — see §5.
 
 ---
 
-## 4. The missing read path: `get_question` — closed
+## 4. `get_question`
 
 `search_questions` deliberately strips `explanation`/`rubric`/`graph_spec` to
-stay cheap in listings (spec §9.4's `QuestionSummary`). That's correct for
-scanning, but it used to mean there was **no MCP tool that returns a full
-question**. `get_question(id)` now wraps the existing `getQuestionDetail`
-domain function (`mcp/tools.ts`) — Claude can read back exactly what it wrote
-before editing it, rather than guessing at `edit_question`'s current-value
-merge behavior blind.
+stay cheap in listings (spec §9.4's `QuestionSummary`). `get_question(id)`
+wraps the existing `getQuestionDetail` domain function so Claude can read back
+exactly what it wrote before editing it, rather than guessing at
+`edit_question`'s current-value merge behavior blind.
 
 ---
 
 ## 5. Document upload: three paths, pick per situation
 
-1. **Human uploads via the web UI.** `POST /api/assets` (multipart, already
-   built, `http/apiRoutes.ts`) — the right path for anything the user already
-   has as a file. Zero MCP involvement, zero token cost to Claude.
+1. **Human uploads via the web UI.** `POST /api/assets` (multipart,
+   `http/apiRoutes.ts`) — the right path for anything the user already has as
+   a file. Zero MCP involvement, zero token cost to Claude.
 2. **Claude authors text directly.** `create_asset(type: "text")` — Claude
-   writing its own source notes. Fine as-is, content is small by construction.
+   writing its own source notes. Content is small by construction.
 3. **Claude's own sandbox has the bytes** (Code Execution enabled alongside
-   the connector, or Claude Code). Base64-through-MCP is the wrong tool here —
-   a multi-MB PDF costs hundreds of thousands of tokens to transmit as base64
-   through a tool call. Needs a dedicated upload path — see §7.
+   the connector, or Claude Code). `POST /mcp/:token/upload` — same token
+   gate as `/mcp` itself, plain multipart, handled in `mcp/server.ts` next to
+   the JSON-RPC route. It calls the same `createAsset` domain function
+   `create_asset` and `/api/assets` both use, just fed from `request.file()`
+   instead of a base64 JSON field, and returns the same small shape
+   (`{id, title, type, extracted_text}`). This exists specifically because
+   `/api` is localhost-only per the deployment model and unreachable from a
+   remote sandbox, while `/mcp` is the one surface cloudflared exposes — a
+   `curl -F file=@doc.pdf` from Claude's shell never puts the file's bytes in
+   the model's context, only the small JSON result does. Covered end-to-end in
+   `tests/mcpUpload.test.ts` (correct token, wrong token → 404, missing file
+   → 400).
 
 `create_asset(type: "file", content: base64)` **stays** as the fallback for a
 plain connector session with no shell at all — the only remaining way such a
-session can get a file in. It just shouldn't be the *first* choice once §7 exists.
+session can get a file in. It just isn't the first choice when a shell is
+available; base64-through-a-tool-call costs roughly 4/3 of a file's byte size
+in characters, so a multi-MB PDF is hundreds of thousands of tokens through
+that path versus near-zero through §5.3.
 
 ---
 
-## 6. Invalid-entry feedback (already correct, documented here for completeness)
+## 6. Invalid-entry feedback
 
 `validateQuestionInput` in `domain/questions.ts` runs inside `create_questions`
 and `edit_question`, per-question, before any write commits. Graph/document
 fields specifically:
 
-- `graph_spec` → parsed with the actual `graph-engine` parser
-  (`parseSpec`), not a heuristic. Failure → `invalid_graph_spec`, `detail`
-  carries the parser's own line-numbered message.
+- `graph_spec` → parsed with the actual `graph-engine` parser (`parseSpec`),
+  not a heuristic. Failure → `invalid_graph_spec`, `detail` carries the
+  parser's own line-numbered message.
 - `document_anchor_start/end` → bounds-checked against the referenced asset's
-  real `extracted_text.length` (when known — see the open note below on
-  `type: "url"` assets, which have no extracted text and so skip this check
-  entirely today).
+  real `extracted_text.length`. Rejected outright (`invalid_document_anchor`)
+  against a `type: "url"` asset, which has no extracted text at all and so
+  can't be bounds-checked — see `tests/questions.test.ts`'s url-asset test.
 - `document_marker_offset` → range-checked and additionally required to land
-  on an actual token (`document-engine`'s `findTokenSpan`), not mid-whitespace.
+  on an actual token (`document-engine`'s `findTokenSpan`), not
+  mid-whitespace.
 
 Rejections are per-question in a batch; valid siblings still commit. This is
-the mechanism that makes a 100-question `create_questions` call self-correcting
-in one round trip instead of needing a retry loop — keep it exactly as-is.
+the mechanism that makes a large `create_questions` call self-correcting in
+one round trip instead of needing a retry loop.
 
 ---
 
-## 7. Not implemented — what's missing and how to build each one
+## 7. Response-size discipline
 
-Done since the last revision of this doc: `get_question` (§7.1), `list_assets`
-with `unlinked_only` (§7.2), the `possible_duplicates` cap + preview
-truncation (§7.6), `response_text` truncation (§7.7), the upload size cap
-(§7.8), and the url-asset anchor guard (§7.9) — all landed in
-`domain/questions.ts`, `domain/results.ts`, `domain/assets.ts`, and
-`mcp/tools.ts`, with test coverage in `tests/questions.test.ts`. What's left:
+Two places that reported unbounded results now cap them, both in
+`domain/questions.ts` / `domain/results.ts`:
 
-### 7.3 `readme` MCP tool
-New domain function `domain/readme.ts`, static content plus one cheap COUNT
-query for `bank_size`/`last_write_at` (reuse the same query `bootstrap`
-already runs). Registered as a zero-argument tool. The content itself is
-mostly copy-and-trim from `bootstrap.ts`'s current `conventions` block plus
-the `desmos_allowed` paragraph currently duplicated on every
-`create_questions`/`edit_question` call ([tools.ts:35-43] and
-[tools.ts:196-204]) — moving it here and shrinking the inline param
-description to one line is the same change, done once.
+- `possible_duplicates` — top 3 per new question (`MAX_DUPLICATES_PER_QUESTION`),
+  `existing_prompt` truncated to 120 chars. Measured need for this: a 100-
+  question batch against a seeded 500-question bank (see §8's timing test)
+  returned **294** duplicate reports uncapped, for a batch that only created
+  100 questions — the report was closer to 3x the size of the batch's own
+  content.
+- `response_text` in `get_results(scope: 'question')` — truncated at 500
+  chars (`RESPONSE_TEXT_PREVIEW_LENGTH`). Long enough to see *how* an answer
+  was wrong, short enough that one verbose written response doesn't dominate
+  a call spanning many lineages.
 
-### 7.4 `graph_dsl_reference` field on `bootstrap`
-Condense `graph-engine/src/parser/types.ts` lines 22-72 (the grammar comment)
-into ~30-40 lines: one line per statement form, one line per `@key:`
-directive, drop the implementation-detail asides (the "why 3-tuple vs 2-tuple"
-kind of commentary belongs in the source, not in what Claude reads). Gate
-inclusion on the resolved subject: a config table (`{top_level_slug: boolean}`
-or a simple prefix allowlist — `["math", "physics", ...]`) rather than a
-hardcoded string check, so it extends cleanly as tags grow. Lives in
-`domain/bootstrap.ts` next to `conventions`.
+`create_asset`/the upload route also cap file size at 25MB
+(`MAX_UPLOAD_BASE64_LENGTH` in `domain/assets.ts`) — protects the model's
+context on the base64 path and the disk on both paths.
 
-### 7.5 Direct-upload endpoint for a sandboxed Claude
-`POST /mcp/:token/upload` (same token gate, sibling to the MCP route, plain
-multipart — `@fastify/multipart` is already registered at the app level).
-Handler calls the same `createAsset(db, uploadsDir, {...})` domain function
-`create_asset` uses, just fed from `request.file()` instead of a base64
-JSON field — `createAsset` already enforces the 25MB cap added for the
-base64 path, so multipart uploads get it for free. Should return the same
-shape `create_asset` returns (`{id, title, type, extracted_text}`), small
-JSON, so the calling shell
-script has something to hand back to the model in one line. This is the
-piece that makes "Claude curls a file in directly" actually reachable, since
-`/api` is localhost-only per the deployment model and can't be hit from a
-remote sandbox.
+---
 
-### 7.10 Batch-size / timeout guidance for `create_questions`
-Not yet measured: how long a real 100-question `create_questions` call takes
-end-to-end (per-question FTS duplicate check + individual transaction each,
-`domain/questions.ts`), versus whatever timeout ceiling sits between a
-claude.ai connector and a `trycloudflare.com` quick tunnel. If it's tight,
-either the `readme` batching_guidance field caps recommended batch size
-(~25-30, matching the table in §2), or the duplicate-check query gets
-batched into one query across all incoming prompts instead of one FTS query
-per question. Needs a timing test before deciding which.
+## 8. What's left
+
+### 8.1 Batch-size guidance — informed by an actual measurement, not a guess
+
+Ran `createQuestions` with a 100-question batch against an in-memory DB
+pre-seeded with 500 existing questions (realistic duplicate-detection
+candidate pool): **276ms** end-to-end, including the per-question FTS
+duplicate check and individual transaction each question gets. That's not a
+database-speed problem at any batch size worth using in practice — the
+`readme` tool's "~25-30 questions per batch" guidance is a hedge against
+*response payload size* and *tunnel/connector round-trip timeout*, not
+against SQLite being slow. Worth revisiting only if a live batch through the
+actual cloudflared tunnel times out in practice; the fix at that point is
+almost certainly the tunnel/network hop, not the query.
+
+### 8.2 SSRF-avoidance tradeoff on `type: "url"` assets, unresolved by design
+
+`extractText` returns `null` for `type: "url"` unconditionally
+(`lib/extract/index.ts`) rather than fetching server-side, specifically to
+avoid building an SSRF surface. §6 makes sure that tradeoff can't silently
+produce an unvalidated anchor, but it also means a `url` asset is currently
+inert for anchoring purposes — Claude can register one as a citation but
+never point a question at a specific span of it. Revisit only if URL-sourced
+questions become common enough to justify designing a fetch allowlist; not
+worth it for the current single-user scope.
+
+### 8.3 No usage/abuse visibility beyond Fastify's request log
+
+`/mcp/:token` and `/mcp/:token/upload` both log via Fastify's built-in logger
+(`app.ts`), so a wrong-token flood is visible if someone goes looking, but
+nothing surfaces it proactively. Low priority for a single-user tool; would
+matter more if the tunnel URL ever leaks somewhere public.
