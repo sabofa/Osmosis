@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/http/app.js";
 import { openTestDb } from "./helpers.js";
 import { bootstrapNode } from "../src/node.js";
+import { createSyncRuntime } from "../src/sync/client.js";
 import type { EnvConfig } from "../src/env.js";
 
 describe("POST /mcp/:token/upload", () => {
@@ -25,7 +26,7 @@ describe("POST /mcp/:token/upload", () => {
       mcpAuthToken: "test-token-123",
     };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
   });
 

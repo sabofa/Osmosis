@@ -23,6 +23,7 @@ import {
 } from "../domain/attempts.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
+import { runSync } from "../sync/client.js";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
@@ -52,7 +53,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     );
 
     return {
-      online: true,
+      online: ctx.env.role === "canonical" ? true : ctx.runtime.online,
       canonical: ctx.node.canonical === 1,
       node: { id: ctx.node.id, label: ctx.node.label, canonical: ctx.node.canonical === 1 },
       last_pull_at: syncState?.last_pull_at ?? null,
@@ -64,6 +65,11 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       protocol_version: PROTOCOL_VERSION,
       remote_protocol_version: syncState?.remote_protocol_version ?? null,
     };
+  });
+
+  app.post("/api/sync", async () => {
+    const result = await runSync(ctx, ctx.runtime);
+    return { ...result, online: ctx.runtime.online };
   });
 
   app.get("/api/tags", async (request) => {

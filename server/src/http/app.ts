@@ -8,11 +8,13 @@ import { PROTOCOL_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
 import { buildPullResponse, applyPushRequest, type PullRequest, type PushRequest } from "../domain/sync.js";
+import type { SyncRuntime } from "../sync/client.js";
 
 export interface AppContext {
   db: DatabaseSync;
   env: EnvConfig;
   node: NodeRow;
+  runtime: SyncRuntime;
 }
 
 export function buildApp(ctx: AppContext): FastifyInstance {

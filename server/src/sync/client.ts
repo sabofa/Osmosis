@@ -1,0 +1,116 @@
+import type { AppContext } from "../http/app.js";
+import { applyPullResponse, type PullRequest, type PullResponse, type PushRequest, type PushResult } from "../domain/sync.js";
+
+export interface SyncRuntime {
+  online: boolean;
+  connectivityTimer: ReturnType<typeof setInterval> | null;
+  syncTimer: ReturnType<typeof setInterval> | null;
+}
+
+export function createSyncRuntime(): SyncRuntime {
+  return { online: false, connectivityTimer: null, syncTimer: null };
+}
+
+export async function checkConnectivity(ctx: AppContext, runtime: SyncRuntime): Promise<boolean> {
+  if (!ctx.env.remoteUrl) { runtime.online = false; return false; }
+  try {
+    const res = await fetch(`${ctx.env.remoteUrl}/sync/health`, { signal: AbortSignal.timeout(5000) });
+    runtime.online = res.ok;
+  } catch {
+    runtime.online = false;
+  }
+  return runtime.online;
+}
+
+export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ pushed: number; pulled: number }> {
+  if (!ctx.env.remoteUrl) return { pushed: 0, pulled: 0 };
+  const { db, env, node } = ctx;
+  let pushed = 0;
+
+  try {
+    // Push
+    const outboxRows = db.prepare("SELECT id, entity_type, entity_id, payload FROM outbox WHERE tries < 5")
+      .all() as { id: number; entity_type: string; entity_id: string; payload: string }[];
+    if (outboxRows.length > 0) {
+      const pushBody: PushRequest = { node_id: node.id, protocol_version: node.protocol_version, attempts: [], responses: [], grades: [] };
+      for (const row of outboxRows) {
+        const payload = JSON.parse(row.payload);
+        if (row.entity_type === "attempt") pushBody.attempts.push(payload);
+        else if (row.entity_type === "response") pushBody.responses.push(payload);
+        else pushBody.grades.push(payload);
+      }
+      const pushRes = await fetch(`${env.remoteUrl}/sync/push`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pushBody),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (pushRes.ok) {
+        const result = (await pushRes.json()) as PushResult;
+        const cleared = new Set([...result.accepted, ...result.duplicate]);
+        for (const row of outboxRows) {
+          if (cleared.has(row.entity_id)) {
+            db.prepare("DELETE FROM outbox WHERE id = ?").run(row.id);
+          } else {
+            const rejection = result.rejected.find((r) => r.id === row.entity_id);
+            db.prepare("UPDATE outbox SET tries = tries + 1, last_try_at = datetime('now'), last_error = ? WHERE id = ?")
+              .run(rejection?.detail ?? rejection?.reason ?? "not acknowledged", row.id);
+          }
+        }
+        pushed = result.accepted.length;
+        db.prepare("UPDATE sync_state SET last_push_at = datetime('now'), last_error = NULL WHERE id = 1").run();
+      } else {
+        db.prepare("UPDATE sync_state SET last_error = ? WHERE id = 1").run(`push failed: HTTP ${pushRes.status}`);
+      }
+    }
+
+    // Pull
+    const state = db.prepare("SELECT last_pull_at FROM sync_state WHERE id = 1").get() as { last_pull_at: string | null };
+    const slices = (db.prepare("SELECT tag_slug FROM local_slice").all() as { tag_slug: string }[]).map((r) => r.tag_slug);
+    const pullBody: PullRequest = {
+      node_id: node.id, protocol_version: node.protocol_version, slices,
+      since: state.last_pull_at, include_grades_for_node: true,
+    };
+    const pullRes = await fetch(`${env.remoteUrl}/sync/pull`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pullBody),
+      signal: AbortSignal.timeout(15000),
+    });
+    let pulled = 0;
+    if (pullRes.ok) {
+      const response = (await pullRes.json()) as PullResponse;
+      const applied = applyPullResponse(db, response);
+      pulled = applied.questions_applied;
+      db.prepare(
+        "UPDATE sync_state SET last_pull_at = ?, remote_protocol_version = ?, last_error = NULL WHERE id = 1"
+      ).run(applied.cursor, response.protocol_version);
+    } else {
+      db.prepare("UPDATE sync_state SET last_error = ? WHERE id = 1").run(`pull failed: HTTP ${pullRes.status}`);
+    }
+
+    runtime.online = true;
+    return { pushed, pulled };
+  } catch (err) {
+    runtime.online = false;
+    db.prepare("UPDATE sync_state SET last_error = ? WHERE id = 1").run(String(err));
+    return { pushed, pulled: 0 };
+  }
+}
+
+export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {
+  if (ctx.env.role !== "local") return;
+
+  runtime.connectivityTimer = setInterval(async () => {
+    const wasOnline = runtime.online;
+    const isOnline = await checkConnectivity(ctx, runtime);
+    if (!wasOnline && isOnline) await runSync(ctx, runtime); // offline -> online trigger
+  }, 30_000);
+
+  const row = ctx.db.prepare("SELECT value FROM config WHERE key = 'sync_interval_sec'").get() as { value: string } | undefined;
+  const intervalSec = row ? Number(JSON.parse(row.value)) : 300;
+  runtime.syncTimer = setInterval(() => { void runSync(ctx, runtime); }, intervalSec * 1000);
+
+  void runSync(ctx, runtime); // app-start trigger
+}
+
+export function stopSyncBackground(runtime: SyncRuntime): void {
+  if (runtime.connectivityTimer) clearInterval(runtime.connectivityTimer);
+  if (runtime.syncTimer) clearInterval(runtime.syncTimer);
+}

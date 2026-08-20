@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/http/app.js";
 import { bootstrapNode } from "../src/node.js";
+import { createSyncRuntime } from "../src/sync/client.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 describe("/sync/pull and /sync/push HTTP routes", () => {
@@ -13,7 +14,7 @@ describe("/sync/pull and /sync/push HTTP routes", () => {
     const env = { role: "canonical" as const, label: "test-canonical", port: 0, dbPath: ":memory:",
                   remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "test-token" };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();
   });
 
@@ -58,7 +59,7 @@ describe("/sync/pull and /sync/push HTTP routes", () => {
     const env = { role: "local" as const, label: "test-local", port: 0, dbPath: ":memory:",
                   remoteUrl: "http://localhost:9999", uploadsDir: "/tmp", mcpAuthToken: null };
     const node = bootstrapNode(localDb, env);
-    const localApp = buildApp({ db: localDb, env, node });
+    const localApp = buildApp({ db: localDb, env, node, runtime: createSyncRuntime() });
     await localApp.ready();
 
     const res = await localApp.inject({ method: "POST", url: "/sync/pull", payload: {} });
