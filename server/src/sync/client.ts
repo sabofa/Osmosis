@@ -104,6 +104,25 @@ export async function runSync(ctx: AppContext, runtime: SyncRuntime): Promise<{ 
   }
 }
 
+// Scoped, synchronous companion to addSlice: does a full (since: null) pull
+// of just this one tag slug and applies it immediately, so a newly added
+// slice's content shows up right away instead of waiting for the next
+// periodic runSync (which pulls all held slices, incrementally).
+export async function pullOneSlice(ctx: AppContext, tagSlug: string): Promise<void> {
+  if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
+  const pullBody: PullRequest = {
+    node_id: ctx.node.id, protocol_version: ctx.node.protocol_version,
+    slices: [tagSlug], since: null, include_grades_for_node: false,
+  };
+  const res = await fetch(`${ctx.env.remoteUrl}/sync/pull`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pullBody),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`pull failed: HTTP ${res.status}`);
+  const response = (await res.json()) as PullResponse;
+  applyPullResponse(ctx.db, response);
+}
+
 export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {
   if (ctx.env.role !== "local") return;
 

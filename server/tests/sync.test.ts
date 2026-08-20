@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPullResponse, applyPullResponse, applyPushRequest } from "../src/domain/sync.js";
+import { buildPullResponse, applyPullResponse, applyPushRequest, addSlice, removeSlice } from "../src/domain/sync.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 describe("buildPullResponse", () => {
@@ -237,5 +237,36 @@ describe("applyPushRequest", () => {
     expect(gradeCount).toBe(0);
     // Canonical has zero grades for r6, so it should not be queued.
     expect(result.regrade_queued).toEqual([]);
+  });
+});
+
+describe("slice management", () => {
+  it("addSlice inserts a local_slice row, refreshing pulled_at if it already exists", () => {
+    const db = openTestDb();
+    insertTag(db, "math"); // local_slice.tag_slug FKs to tag(slug)
+    addSlice(db, "math");
+    const first = db.prepare("SELECT pulled_at FROM local_slice WHERE tag_slug = 'math'").get() as { pulled_at: string };
+    expect(first).toBeTruthy();
+    addSlice(db, "math"); // idempotent re-add
+    const count = (db.prepare("SELECT COUNT(*) AS n FROM local_slice WHERE tag_slug = 'math'").get() as { n: number }).n;
+    expect(count).toBe(1);
+  });
+
+  it("removeSlice deletes the row and prunes questions no local response references", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+    const orphan = insertQuestion(db, { tags: ["math"] });
+    const referenced = insertQuestion(db, { tags: ["math"] });
+    addSlice(db, "math");
+    // simulate a local response referencing `referenced`
+    db.prepare("INSERT INTO attempt (id, node_id, source, started_at) VALUES ('a1','n1','adhoc',datetime('now'))").run();
+    db.prepare("INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES ('r1','a1',?,0)").run(referenced.id);
+
+    const result = removeSlice(db, "math");
+
+    expect(result.pruned_questions).toBe(1);
+    expect(db.prepare("SELECT id FROM question WHERE id = ?").get(orphan.id)).toBeUndefined();
+    expect(db.prepare("SELECT id FROM question WHERE id = ?").get(referenced.id)).toBeTruthy();
+    expect(db.prepare("SELECT tag_slug FROM local_slice WHERE tag_slug = 'math'").get()).toBeUndefined();
   });
 });

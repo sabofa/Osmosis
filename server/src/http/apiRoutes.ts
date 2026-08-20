@@ -23,7 +23,8 @@ import {
 } from "../domain/attempts.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
-import { runSync } from "../sync/client.js";
+import { addSlice, removeSlice } from "../domain/sync.js";
+import { runSync, pullOneSlice } from "../sync/client.js";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
@@ -337,6 +338,28 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       .header("Content-Disposition", `inline; filename="${asset.filename ?? asset.storage_path}"`)
       .header("Content-Type", asset.mime ?? "application/octet-stream")
       .send(createReadStream(filePath));
+  });
+
+  app.get("/api/slices", async () => ({
+    slices: db.prepare("SELECT tag_slug, pulled_at, question_count FROM local_slice ORDER BY tag_slug").all(),
+  }));
+
+  app.post("/api/slices", async (request) => {
+    const { tag_slug } = request.body as { tag_slug: string };
+    addSlice(db, tag_slug);
+    try {
+      await pullOneSlice(ctx, tag_slug);
+    } catch (err) {
+      // Slice is recorded even if the immediate pull fails (e.g. offline) —
+      // the next periodic/manual sync picks it up, matching "adding one
+      // triggers a full pull" as an intent, not a synchronous guarantee.
+    }
+    return { tag_slug };
+  });
+
+  app.delete("/api/slices/:slug", async (request) => {
+    const { slug } = request.params as { slug: string };
+    return removeSlice(db, slug);
   });
 
   app.get("/api/config", async () => getConfig(db));

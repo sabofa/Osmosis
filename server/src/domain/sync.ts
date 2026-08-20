@@ -527,3 +527,40 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
     regrade_queued: regradeQueued,
   };
 }
+
+// ----------------------------------------------------------------------------
+// Slice management: which tag slices this local node holds. Adding a slice
+// records intent immediately (the actual content pull is a separate step,
+// see sync/client.ts's pullOneSlice); removing a slice drops the local_slice
+// row and prunes any questions in that slice that no local response
+// references, so we don't accumulate content nobody on this node ever used.
+// ----------------------------------------------------------------------------
+
+export function addSlice(db: DatabaseSync, tagSlug: string): void {
+  db.prepare(
+    `INSERT INTO local_slice (tag_slug) VALUES (?)
+     ON CONFLICT (tag_slug) DO UPDATE SET pulled_at = datetime('now')`
+  ).run(tagSlug);
+}
+
+export function removeSlice(db: DatabaseSync, tagSlug: string): { pruned_questions: number } {
+  const questionIds = (
+    db.prepare(
+      `SELECT DISTINCT q.id FROM question q
+       JOIN question_tag qt ON qt.question_id = q.id
+       WHERE (qt.tag_slug = ? OR qt.tag_slug LIKE ?)
+         AND NOT EXISTS (SELECT 1 FROM response r WHERE r.question_id = q.id)`
+    ).all(tagSlug, `${tagSlug}:%`) as { id: string }[]
+  ).map((r) => r.id);
+
+  db.exec("BEGIN");
+  try {
+    for (const id of questionIds) db.prepare("DELETE FROM question WHERE id = ?").run(id);
+    db.prepare("DELETE FROM local_slice WHERE tag_slug = ?").run(tagSlug);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  return { pruned_questions: questionIds.length };
+}
