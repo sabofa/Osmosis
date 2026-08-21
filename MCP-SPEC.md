@@ -143,6 +143,35 @@ resend/history cost barely matters at that scale. Reach for the script once
 you're doing multiple sequential batches or authoring 50+ items in one
 sitting.
 
+**Usage.** Write a plain JSON array of `{name, arguments}` calls to a file,
+then run the script against the MCP endpoint's URL:
+
+```json
+[
+  { "name": "create_tag", "arguments": { "slug": "math:algebra", "label": "Algebra" } },
+  { "name": "create_questions", "arguments": { "questions": [ /* ... */ ] } }
+]
+```
+
+```
+OSMOSIS_MCP_URL="http://host:port/mcp/<token>" node scripts/mcp-batch/cli.mjs calls.json
+```
+
+Flags: `--url <url>` (overrides `OSMOSIS_MCP_URL`), `--raw` (print each
+call's full JSON response instead of the compact per-tool summary), and
+`--timeout <ms>` (overrides the default 30000ms per-call request timeout;
+also settable via `OSMOSIS_MCP_TIMEOUT_MS`).
+
+A wrong or expired token produces a plain HTTP 404 from this tool — matching
+the `/mcp` endpoint's own no-signal-on-wrong-token behavior — which reads
+like a bad URL/path rather than a bad token, so don't mistake a 404 here for
+a routing problem before checking the token.
+
+Because `create_questions` commits questions to the database one at a time
+rather than all-or-nothing, a client-side timeout leaves it ambiguous how
+many questions actually landed — resolve that with `search_questions` to
+check what's actually in the bank before blindly re-running the same batch.
+
 ---
 
 ## 4. `get_question`
