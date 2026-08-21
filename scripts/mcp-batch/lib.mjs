@@ -79,3 +79,28 @@ export function summarize(name, payload) {
   // remove the actual payload the caller asked for.
   return JSON.stringify(payload);
 }
+
+export async function runBatch(url, calls, opts = {}) {
+  const { raw = false, fetchImpl = fetch } = opts;
+  const results = [];
+  let anyFailed = false;
+
+  for (let i = 0; i < calls.length; i++) {
+    const { name, arguments: args } = calls[i];
+    try {
+      const { isError, payload } = await callTool(url, name, args, i + 1, fetchImpl);
+      if (isError) {
+        anyFailed = true;
+        results.push({ index: i, name, ok: false, message: JSON.stringify(payload) });
+      } else {
+        const message = raw ? JSON.stringify(payload) : summarize(name, payload);
+        results.push({ index: i, name, ok: true, message });
+      }
+    } catch (err) {
+      anyFailed = true;
+      results.push({ index: i, name, ok: false, message: err.message });
+    }
+  }
+
+  return { results, anyFailed };
+}

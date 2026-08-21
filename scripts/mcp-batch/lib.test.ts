@@ -131,3 +131,91 @@ describe("summarize", () => {
     expect(JSON.parse(summarize("some_future_tool", payload))).toEqual(payload);
   });
 });
+
+import { runBatch } from "./lib.mjs";
+
+function sseFrame(id, resultObj) {
+  return `event: message\ndata: ${JSON.stringify({ result: resultObj, jsonrpc: "2.0", id })}\n\n`;
+}
+
+function textContent(obj) {
+  return { content: [{ type: "text", text: JSON.stringify(obj) }] };
+}
+
+describe("runBatch", () => {
+  it("executes calls in order and returns a per-call summary", async () => {
+    const calls = [
+      { name: "create_tag", arguments: { slug: "math", label: "Math" } },
+      { name: "list_tags", arguments: {} },
+    ];
+    const seenUrls = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(init.body);
+      seenUrls.push(body.params.name);
+      const resultObj =
+        body.params.name === "create_tag"
+          ? textContent({ slug: "math", label: "Math", parent_slug: null, description: null, created_at: "now", retired_at: null })
+          : textContent({ tags: [] });
+      return { ok: true, status: 200, text: async () => sseFrame(body.id, resultObj) };
+    });
+
+    const { results, anyFailed } = await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl });
+
+    expect(seenUrls).toEqual(["create_tag", "list_tags"]);
+    expect(anyFailed).toBe(false);
+    expect(results).toHaveLength(2);
+    expect(results[0]).toEqual({ index: 0, name: "create_tag", ok: true, message: "created tag: math" });
+    expect(results[1].ok).toBe(true);
+    expect(JSON.parse(results[1].message)).toEqual({ tags: [] });
+  });
+
+  it("continues past a failed call (network error) and still executes the next one", async () => {
+    const calls = [
+      { name: "create_tag", arguments: { slug: "bad slug", label: "x" } },
+      { name: "list_tags", arguments: {} },
+    ];
+    let call = 0;
+    const fetchImpl = vi.fn(async (url, init) => {
+      call += 1;
+      if (call === 1) throw new Error("network unreachable");
+      const body = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => sseFrame(body.id, textContent({ tags: [] })) };
+    });
+
+    const { results, anyFailed } = await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl });
+
+    expect(anyFailed).toBe(true);
+    expect(results).toHaveLength(2);
+    expect(results[0].ok).toBe(false);
+    expect(results[0].message).toContain("network unreachable");
+    expect(results[1].ok).toBe(true);
+  });
+
+  it("continues past a call where the tool itself reports isError, and marks anyFailed", async () => {
+    const calls = [{ name: "create_tag", arguments: { slug: "bad slug!", label: "x" } }];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(init.body);
+      const resultObj = { isError: true, ...textContent({ error: "invalid_slug_format", message: "bad slug" }) };
+      return { ok: true, status: 200, text: async () => sseFrame(body.id, resultObj) };
+    });
+
+    const { results, anyFailed } = await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl });
+
+    expect(anyFailed).toBe(true);
+    expect(results[0].ok).toBe(false);
+    expect(results[0].message).toContain("invalid_slug_format");
+  });
+
+  it("raw: true forces full JSON passthrough even for a normally-summarized tool", async () => {
+    const calls = [{ name: "create_tag", arguments: { slug: "math", label: "Math" } }];
+    const fullRow = { slug: "math", label: "Math", parent_slug: null, description: null, created_at: "now", retired_at: null };
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => sseFrame(body.id, textContent(fullRow)) };
+    });
+
+    const { results } = await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl, raw: true });
+
+    expect(JSON.parse(results[0].message)).toEqual(fullRow);
+  });
+});
