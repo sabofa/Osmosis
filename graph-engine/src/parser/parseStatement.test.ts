@@ -35,6 +35,19 @@ describe('parseStatement', () => {
     expect(piecewise.kind).toBe('explicit')
   })
 
+  // Regression: 2026-08-21 MCP stress test v2 wrote "y > 0 if 0 <= x <= 3",
+  // mistakenly applying the y=/x= piecewise "if" clause to an inequality
+  // region (which doesn't support one). Previously this fell through to the
+  // expression tokenizer, which choked on the leftover "<=" inside the
+  // right-hand expression with an opaque "Unexpected character "<"" error —
+  // accurate but not actionable. Region statements now reject a trailing
+  // "if" explicitly, with a message naming the actual mistake and the fix.
+  it('rejects an "if" clause on an inequality region with an actionable error, not a raw tokenizer error', () => {
+    expect(() => parseStatement('y > 0 if 0 <= x <= 3')).toThrow(/inequality-region/i)
+    expect(() => parseStatement('y > 0 if 0 <= x <= 3')).toThrow(/y = x\^2 if 0 <= x <= 3/)
+    expect(() => parseStatement('y > 0 if 0 <= x <= 3')).not.toThrow(/Unexpected character/)
+  })
+
   it('parses a polar curve with default and explicit ranges', () => {
     const s1 = parseStatement('r = 1 + cos(theta)')
     expect(s1.kind).toBe('polar')

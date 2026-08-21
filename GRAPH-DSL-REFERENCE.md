@@ -99,7 +99,12 @@ x^2/9 + y^2/4 = 1
 ```
 <expr(x,y)> <|<=|>|>= <expr(x,y)>
 ```
-Shaded inequality region.
+Shaded inequality region. **No `if <condition>` clause here** — that's only
+valid on `y=`/`x=` explicit function statements (see above), not on a
+region. To shade a function over a bounded interval, restrict the function
+itself instead: `y = x^2 if 0 <= x <= 3`, not `y > 0 if 0 <= x <= 3`. Writing
+`if` on a region statement is rejected with an explicit error naming this
+mistake.
 ```
 y > x^2 - 1
 x^2 + y^2 <= 4
@@ -391,6 +396,10 @@ of discoverable only via a validator error:
 3. **Assuming the tag/taxonomy conventions apply here too.** They don't —
    `graph_spec` has its own grammar, entirely separate from tag slugs. See
    `readme()`'s `tag_conventions` for that one.
+4. **An `if <condition>` clause on an inequality region.** `y > 0 if 0 <= x
+   <= 3` is rejected with an explicit error — `if` only exists on `y=`/`x=`
+   explicit statements. Restrict the function itself instead: `y = x^2 if 0
+   <= x <= 3`. See "Shaded inequality region" above.
 
 ## Where the source of truth lives
 
