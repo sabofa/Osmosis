@@ -12,6 +12,22 @@ describe("readme", () => {
     expect(result.calculator_conventions).toContain("calculator_policy");
     expect(result.calculator_conventions).toContain("desmos_allowed");
   });
+
+  // Regression: a live authoring session (2026-08-20 MCP stress test)
+  // burned a full failed 22-call create_tag batch because the slug grammar
+  // (colon-separated hierarchy segments, underscore-separated words, no
+  // hyphens) was nowhere in readme/bootstrap — only discoverable by
+  // tripping create_tag's invalid_slug_format validator. tag_conventions
+  // states the grammar up front, with the same example the validator uses.
+  it("states the tag slug grammar up front, matching create_tag's own validation rule", () => {
+    const db = openTestDb();
+    const result = readme(db);
+    expect(result.tag_conventions).toContain(":");
+    expect(result.tag_conventions).toContain("_");
+    expect(result.tag_conventions.toLowerCase()).toContain("lowercase");
+    expect(result.tag_conventions).toContain("math:functions:quadratic");
+    expect(result.tag_conventions.toLowerCase()).toContain("hyphen");
+  });
 });
 
 describe("bootstrap graph_dsl_reference gating", () => {
@@ -43,5 +59,30 @@ describe("bootstrap graph_dsl_reference gating", () => {
     const result = bootstrap(db, null) as unknown as Record<string, unknown>;
     expect(result.conventions).toBeUndefined();
     expect(result.calculator_convention).toBeUndefined();
+  });
+
+  // Regression: the 2026-08-20 MCP stress test misread "may end with
+  // color:/name:" as a separate directive line (like the @key: value config
+  // directives below it) and hit a parse error. The reference must state
+  // explicitly that color:/name: are same-line trailing clauses, with an
+  // inline example.
+  it("states that color:/name: are same-line trailing clauses, with an inline example", () => {
+    const db = openTestDb();
+    const ref = bootstrap(db, "math").graph_dsl_reference as string;
+    expect(ref.toLowerCase()).toContain("same line");
+    expect(ref).toContain("y = x^2 color: blue name: parabola1");
+  });
+
+  // Regression: the same session wrote "2 = (2, 3)" for a point label and
+  // got a bare "Expected )" — the reference never states that a point
+  // label must be letters only (graph-engine's parser falls through to the
+  // named-constant grammar on a digit/underscore-containing lhs, which then
+  // fails elsewhere with a confusing error, per
+  // graph-engine/src/parser/parseStatement.ts's point-vs-named-constant
+  // branching).
+  it("states that a point statement's label must be letters only", () => {
+    const db = openTestDb();
+    const ref = bootstrap(db, "math").graph_dsl_reference as string;
+    expect(ref.toLowerCase()).toContain("letters only");
   });
 });

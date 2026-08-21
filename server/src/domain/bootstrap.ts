@@ -42,7 +42,9 @@ graph_spec is a small text DSL, one statement per line ("#" starts a comment). S
   <expr(x,y)> <|<=|>|>= <expr(x,y)>            shaded inequality region
   field: dy/dx = <expr(x,y)>                   slope/direction field
   scatter: (x1,y1), (x2,y2), ...               scatter points + auto linear regression
-  label = (x, y[, z])  |  (x, y[, z])          point, label optional; 3-tuple is a 3D point
+  label = (x, y[, z])  |  (x, y[, z])          point, label optional (letters only, no digits/underscore —
+                                                a digit-containing lhs is parsed as a named constant instead
+                                                and fails elsewhere); 3-tuple is a 3D point
   (x1,y1[,z1]) -- (x2,y2[,z2])                 segment
   (x1,y1[,z1]) -> (x2,y2[,z2])                 ray
   vector: (x1,y1[,z1]) -> (x2,y2[,z2])         like a ray, labeled with its magnitude
@@ -62,7 +64,10 @@ graph_spec is a small text DSL, one statement per line ("#" starts a comment). S
   [<name>.]row: cell | cell | ...               table data row
   [<name>.]table: y = <expr(x)> for x in [a, b] step s   auto-generated value table
 
-Any statement may end with "color: <name-or-#hex>" and/or "name: <id>" (for @hide/@show targeting below).
+Any statement may end, on the SAME LINE as the statement (not a separate line — unlike the @key: value
+config directives below, which do stand alone), with "color: <name-or-#hex>" and/or "name: <id>" (for
+@hide/@show targeting below), e.g. "y = x^2 color: blue name: parabola1". "name:"'s <id> must be a plain
+identifier: letters, digits, underscore, not starting with a digit.
 Named colors: red orange yellow green teal blue purple pink brown black gray cyan (or "#rrggbb").
 A "[<name>.]" prefix on header:/row:/table: targets one of several named tables in the same spec.
 

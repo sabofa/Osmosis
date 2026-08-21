@@ -12,6 +12,7 @@ export interface ReadmeResult {
     written_length_target: string;
   };
   calculator_conventions: string;
+  tag_conventions: string;
   document_conventions: string;
   duplicate_workflow: string;
   batching_guidance: string;
@@ -61,6 +62,12 @@ export function readme(db: DatabaseSync): ReadmeResult {
       "(graphing/algebra/precalc/calc/stats), not just because one would be technically permitted under " +
       "calculator_policy. A question can be calculator_policy:'allowed' and desmos_allowed:false at the same " +
       "time — e.g. an allowed-calculator arithmetic question a graphing tool adds nothing to.",
+    tag_conventions:
+      "Tag slugs follow a strict grammar, enforced by create_tag — lowercase ascii segments separated by " +
+      "\":\" (segment path mirrors the tag's ancestry — a child's slug is its parent's slug plus one more " +
+      "\":segment\"), with \"_\" separating words within a segment. No hyphens, no other punctuation, no " +
+      "uppercase. Example: \"math:functions:quadratic\". A root tag is a single segment with no colon, e.g. " +
+      "\"math\".",
     document_conventions:
       "document_id anchors a question to an uploaded asset — use list_assets/search_assets/read_asset to find " +
       "or inspect one. document_anchor_start/end highlights an excerpt range in the asset's extracted_text " +

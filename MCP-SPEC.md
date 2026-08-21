@@ -52,6 +52,7 @@ readme() -> {
   workflow: string,               // call bootstrap(subject) next, once per subject touched this session
   prompt_conventions: {...},      // prompt_style, explanation_style, difficulty_scale, mc_choice_count, written_length_target
   calculator_conventions: string, // calculator_policy vs desmos_allowed — two independent axes, not redundant
+  tag_conventions: string,        // slug grammar: lowercase, ":"-separated hierarchy, "_"-separated words, no hyphens
   document_conventions: string,   // document_id / document_anchor_* / document_marker_offset, when to use which
   duplicate_workflow: string,     // possible_duplicates is a report, not a rejection — retire_question the loser
   batching_guidance: string,      // prefer ~25-30 questions per create_questions call
