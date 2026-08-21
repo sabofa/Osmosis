@@ -6,6 +6,7 @@
     "server",
     "web",
     "graph-engine",
-    "document-engine"
+    "document-engine",
+    "scripts/mcp-batch"
   ]
 }
