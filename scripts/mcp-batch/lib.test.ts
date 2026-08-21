@@ -41,6 +41,28 @@ describe("parseMcpResponse", () => {
     expect(isError).toBe(true);
     expect(payload).toEqual({ code: -32602, message: 'Tool "bad_tool" not found' });
   });
+
+  // Regression: real MCP endpoint traffic, 2026-08-21. When a tool call's
+  // arguments fail zod schema validation, the MCP SDK itself (server/mcp.js's
+  // catch block, before our own tools.ts handler ever runs) wraps the error
+  // via createToolError(error.message) — content[0].text becomes the raw,
+  // human-readable error string ("MCP error -32602: Invalid arguments for
+  // tool create_questions: ..."), NOT JSON. Every other content[0].text this
+  // server ever sends (our own ok()/fail() handlers) IS JSON-encoded, since
+  // it's always produced by JSON.stringify(). Blindly JSON.parse()-ing this
+  // one non-JSON case crashed with an opaque "Unexpected token 'M', "MCP
+  // error "... is not valid JSON" — discarding the real, actionable
+  // validation error and forcing repeated blind guessing at the correct
+  // schema instead of reading one clear message.
+  it("falls back to the raw text as the message when content[0].text is a plain string, not JSON (the MCP SDK's own schema-validation error path)", () => {
+    const raw =
+      'event: message\ndata: {"result":{"isError":true,"content":[{"type":"text","text":"MCP error -32602: Input validation error: Invalid arguments for tool create_questions: Required at questions[0].choices[0].body"}]},"jsonrpc":"2.0","id":3}\n\n';
+    const { isError, payload } = parseMcpResponse(raw);
+    expect(isError).toBe(true);
+    expect(payload).toEqual({
+      message: "MCP error -32602: Input validation error: Invalid arguments for tool create_questions: Required at questions[0].choices[0].body",
+    });
+  });
 });
 
 function mockFetch(rawBody, ok = true, status = 200) {

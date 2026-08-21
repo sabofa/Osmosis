@@ -19,7 +19,10 @@ const tagQueryShape = z
   })
   .optional();
 
-const choiceShape = z.object({ body: z.string(), is_correct: z.boolean() });
+const choiceShape = z.object({
+  body: z.string().describe("The choice's text."),
+  is_correct: z.boolean().describe("True for exactly one choice, unless testing a multi-select concept."),
+});
 
 const questionInputShape = z.object({
   type: z.string(),
@@ -29,7 +32,9 @@ const questionInputShape = z.object({
   calculator_policy: z.string().optional(),
   explanation: z.string().nullable().optional(),
   source_note: z.string().nullable().optional(),
-  choices: z.array(choiceShape).optional(),
+  choices: z.array(choiceShape).optional().describe(
+    "Required when type: \"mc\" (2+ choices, at least one is_correct: true). Not used for type: \"written\"."
+  ),
   model_answer: z.string().nullable().optional(),
   rubric: z.unknown().optional(),
   graph_spec: z.string().nullable().optional(),

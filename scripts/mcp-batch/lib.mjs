@@ -14,7 +14,25 @@ export function parseMcpResponse(rawBody) {
     return { isError: true, payload: envelope.error };
   }
   const contentText = envelope.result?.content?.[0]?.text;
-  const payload = contentText !== undefined ? JSON.parse(contentText) : envelope.result;
+  let payload;
+  if (contentText === undefined) {
+    payload = envelope.result;
+  } else {
+    try {
+      payload = JSON.parse(contentText);
+    } catch {
+      // Not every content[0].text is JSON: our own ok()/fail() handlers
+      // (server/src/mcp/tools.ts) always JSON.stringify their payload, but
+      // the MCP SDK's own error path (server/mcp.js's catch block, hit when
+      // zod schema validation on the tool's arguments fails BEFORE our
+      // handler ever runs) sets text to a plain, human-readable error
+      // string instead — e.g. "MCP error -32602: Invalid arguments for
+      // tool create_questions: Required at questions[0].choices[0].body".
+      // Fall back to treating the raw text as the message rather than
+      // losing it to an opaque JSON.parse crash.
+      payload = { message: contentText };
+    }
+  }
   return { isError: Boolean(envelope.result?.isError), payload };
 }
 
