@@ -367,13 +367,18 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     const typeField = field("type");
     const type = typeField === "url" || typeField === "text" ? typeField : "file";
     try {
-      const asset = await createAsset(db, ctx.env.uploadsDir, {
-        title,
-        type,
-        content: type === "file" ? buffer.toString("base64") : buffer.toString("utf8"),
-        filename: type === "file" ? file.filename : null,
-        mime: type === "file" ? file.mimetype : null,
-      });
+      const asset = await createAsset(
+        db,
+        ctx.env.uploadsDir,
+        {
+          title,
+          type,
+          content: type === "file" ? buffer.toString("base64") : buffer.toString("utf8"),
+          filename: type === "file" ? file.filename : null,
+          mime: type === "file" ? file.mimetype : null,
+        },
+        "human"
+      );
       return asset;
     } catch (err) {
       sendDomainError(reply, err);

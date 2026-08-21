@@ -8,15 +8,20 @@ describe("document_marker_offset validation", () => {
     const db = openTestDb();
     insertTag(db, "english");
 
-    const asset = await createAsset(db, "/tmp/osmosis-test-uploads", {
-      title: "Passage",
-      type: "text",
-      // Two spaces between "revise" and "(A)" so offset 7 sits strictly
-      // inside the whitespace run — not adjacent to any token on either
-      // side (findTokenSpan's single-char fallback only reaches one space
-      // back, so this is the case that has to return null).
-      content: "revise  (A) as follows",
-    });
+    const asset = await createAsset(
+      db,
+      "/tmp/osmosis-test-uploads",
+      {
+        title: "Passage",
+        type: "text",
+        // Two spaces between "revise" and "(A)" so offset 7 sits strictly
+        // inside the whitespace run — not adjacent to any token on either
+        // side (findTokenSpan's single-char fallback only reaches one space
+        // back, so this is the case that has to return null).
+        content: "revise  (A) as follows",
+      },
+      "claude"
+    );
 
     // offset 7 is the second of the two spaces — genuinely mid-whitespace.
     const rejected = createQuestions(db, [
@@ -77,11 +82,16 @@ describe("document_marker_offset validation", () => {
     const db = openTestDb();
     insertTag(db, "history");
 
-    const asset = await createAsset(db, "/tmp/osmosis-test-uploads", {
-      title: "Source article",
-      type: "url",
-      content: "https://example.com/article",
-    });
+    const asset = await createAsset(
+      db,
+      "/tmp/osmosis-test-uploads",
+      {
+        title: "Source article",
+        type: "url",
+        content: "https://example.com/article",
+      },
+      "claude"
+    );
     expect(asset.extracted_text).toBeNull();
 
     const result = createQuestions(db, [

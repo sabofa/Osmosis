@@ -42,7 +42,8 @@ function sanitizeFilename(filename: string): string {
 export async function createAsset(
   db: DatabaseSync,
   uploadsDir: string,
-  input: CreateAssetInput
+  input: CreateAssetInput,
+  createdBy: "claude" | "human"
 ): Promise<AssetRow> {
   const id = uuidv4();
   let storagePath: string | null = null;
@@ -71,8 +72,8 @@ export async function createAsset(
   });
 
   db.prepare(
-    `INSERT INTO asset (id, title, type, content, filename, mime, storage_path, extracted_text)
-     VALUES (@id, @title, @type, @content, @filename, @mime, @storage_path, @extracted_text)`
+    `INSERT INTO asset (id, title, type, content, filename, mime, storage_path, extracted_text, created_by)
+     VALUES (@id, @title, @type, @content, @filename, @mime, @storage_path, @extracted_text, @created_by)`
   ).run({
     id,
     title: input.title,
@@ -82,6 +83,7 @@ export async function createAsset(
     mime: input.mime ?? null,
     storage_path: storagePath,
     extracted_text: extractedText,
+    created_by: createdBy,
   });
 
   return getAsset(db, id);

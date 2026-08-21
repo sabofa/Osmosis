@@ -417,7 +417,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     },
     async ({ title, type, content, filename, mime }) => {
       try {
-        const asset = await createAsset(db, uploadsDir, { title, type, content, filename, mime });
+        const asset = await createAsset(db, uploadsDir, { title, type, content, filename, mime }, "claude");
         return ok({ id: asset.id, title: asset.title, type: asset.type, extracted_text: asset.extracted_text });
       } catch (err) {
         return fail(err);

@@ -25,16 +25,13 @@ Every asset has:
   `null` for `file` (the bytes live on disk, see below).
 - `extracted_text` — what anchoring actually operates against (see next
   section). Can be `null`.
-- `created_by` — `"claude" | "human"`. **Currently always `"claude"`** —
-  the column defaults to `'claude'` at the schema level
-  (`server/migrations/004_question_graph_desmos_document.sql`), and
-  `createAsset` (`server/src/domain/assets.ts`) never overrides it, on any
-  of the three creation paths below, including the human web-upload one
-  (`POST /api/assets`). This looks like a latent gap rather than intended
-  behavior — the column and its type exist specifically to distinguish
-  origins, but nothing in the code currently sets `'human'`. Don't rely on
-  this field to tell human-uploaded assets apart from Claude-authored ones
-  until that's fixed.
+- `created_by` — `"claude" | "human"`, set explicitly by which path created
+  the asset (`createAsset`'s `createdBy` parameter, `server/src/domain/assets.ts`):
+  `POST /api/assets` (human web upload) passes `'human'`; `create_asset` and
+  `POST /mcp/:token/upload` (both Claude-facing) pass `'claude'`. The column
+  still defaults to `'claude'` at the schema level for any row that
+  predates this being threaded through, but every current write path sets
+  it explicitly now.
 
 ## Text extraction — what `extracted_text` actually contains, per type
 

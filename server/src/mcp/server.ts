@@ -79,13 +79,18 @@ export function mountMcp(app: FastifyInstance, ctx: AppContext): void {
     };
 
     try {
-      const asset = await createAsset(ctx.db, ctx.env.uploadsDir, {
-        title: field("title") ?? file.filename,
-        type: "file",
-        content: buffer.toString("base64"),
-        filename: file.filename,
-        mime: file.mimetype,
-      });
+      const asset = await createAsset(
+        ctx.db,
+        ctx.env.uploadsDir,
+        {
+          title: field("title") ?? file.filename,
+          type: "file",
+          content: buffer.toString("base64"),
+          filename: file.filename,
+          mime: file.mimetype,
+        },
+        "claude"
+      );
       reply.send({ id: asset.id, title: asset.title, type: asset.type, extracted_text: asset.extracted_text });
     } catch (err) {
       if (err instanceof DomainError) {
