@@ -117,6 +117,34 @@ Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 
 ---
 
+## 3a. Bulk authoring: `scripts/mcp-batch`
+
+Native tool-calling has a real, measured cost at scale: all 21 tool schemas
+resend on every turn a connector is enabled for regardless of whether that
+turn calls a tool, and a native chat session's conversation history — every
+prior batch's full call and response — accumulates and resends as input on
+every later turn. Two live stress tests (`docs/superpowers/specs/2026-08-20-mcp-stress-test-findings.md`,
+`-v2.md`) measured this directly: curl-driven authoring from an isolated
+context cost roughly 700 tokens/question (input+output combined); native
+tool-calling in a long-lived session cost roughly 900+ *input* tokens/question
+alone, before output.
+
+`scripts/mcp-batch/` is a small, zero-intelligence MCP JSON-RPC client that
+sidesteps both costs — it's a plain HTTP client, so it never triggers a
+schema resend, and it runs outside the conversation, so only its compact
+summary output (not the raw protocol exchange) enters context. See
+`docs/superpowers/specs/2026-08-21-mcp-batch-script-design.md` for the full
+design.
+
+**This is opt-in for large sessions, not a default authoring path.** For a
+small, one-off session — a handful of questions, one or two
+`create_questions` calls — native tool-calling is simpler and the schema-
+resend/history cost barely matters at that scale. Reach for the script once
+you're doing multiple sequential batches or authoring 50+ items in one
+sitting.
+
+---
+
 ## 4. `get_question`
 
 `search_questions` deliberately strips `explanation`/`rubric`/`graph_spec` to
