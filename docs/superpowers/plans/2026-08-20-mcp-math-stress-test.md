@@ -305,6 +305,52 @@ Summarize: content counts (from Task 5), a short pull-quote or two from the fric
 
 ---
 
+## Execution Deviation (recorded during Task 2)
+
+The `.mcp.json` "real MCP connection" approach (Tasks 2-3 as originally
+written) doesn't work in this harness: project-scoped MCP servers are
+loaded only at session start, and a mid-session `.mcp.json` edit is
+invisible both to the controller session and to any subagent it
+dispatches (confirmed via a probe dispatch — a fresh subagent saw no
+`mcp__osmosis-mathstress__*` tools either). Restarting the session was
+impractical for the user to trigger on demand, and `/api/*` turned out to
+have **no content-creation routes at all** (confirmed by reading
+`server/src/http/apiRoutes.ts` — it's read-only for the bank plus
+attempts/grading/asset-upload; creation is exclusively the MCP tools' job
+by design).
+
+**Resolution:** the same `/mcp/:token` endpoint, driven by raw JSON-RPC
+over `curl` instead of native tool-calling. Confirmed working directly:
+`tools/list` and `tools/call` both succeed statelessly with no prior
+`initialize` call needed (matches `StreamableHTTPServerTransport`'s
+`sessionIdGenerator: undefined` stateless mode). This still exercises the
+exact same schemas, descriptions, and validation — it just tests them via
+a hand-built HTTP client instead of Claude's native tool-picking UI, which
+is a real, acknowledged weakening of the friction-report signal (noted in
+the findings doc) but not a different tool surface.
+
+Task 3's agent definition is revised: `tools: Bash` only (no MCP tools to
+grant), instructed to use `curl` against `/mcp/:token` and explicitly told
+not to read repository source to learn tool behavior — `tools/list`'s
+returned schemas and each call's own responses/errors are its only
+allowed source of truth, preserving the cold-start intent as best this
+fallback allows. `.mcp.json`'s `osmosis-mathstress` entry and Task 2's
+steps are moot and skipped; Task 6 cleanup still removes the entry since
+it was written to disk.
+
+**Second deviation, discovered dispatching Task 4:** custom agent
+definitions under `.claude/agents/*.md` have the exact same "loaded at
+session start only" limitation as `.mcp.json` — the freshly written
+`osmosis-author.md` wasn't recognized (`Agent type 'osmosis-author' not
+found`). No hard tool-restriction mechanism is available mid-session at
+all. Final resolution: dispatch on the built-in `general-purpose` agent
+type (full tool access) with an explicit, emphatic prompt-level
+instruction not to use Read/Grep/Glob/Write except for the final report
+file — a soft, prompt-enforced restriction rather than a hard one. This
+is a real weakening of the exercise's "genuinely cold-start" guarantee
+(the subagent *could* cheat by reading source; it's trusted not to) and
+is called out explicitly in the findings doc rather than glossed over.
+
 ## Self-Review Notes
 
 - **Spec coverage:** §1 Environment → Task 1. §2 MCP registration → Task 2. §3 The subagent → Tasks 3-4. §4 Friction report → Task 4 (capture) + Task 5 (write/commit). §5 Execution flow → Tasks 1-5 in order, matching the spec's own numbered steps. §6 Cleanup → Task 6. All spec sections covered.
