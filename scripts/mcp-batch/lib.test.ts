@@ -21,6 +21,26 @@ describe("parseMcpResponse", () => {
   it("throws a clear error when there is no data: line", () => {
     expect(() => parseMcpResponse("not an SSE frame at all")).toThrow(/no "data:" line/i);
   });
+
+  it("truncates a large rawBody in the no-data:-line error message instead of embedding it whole", () => {
+    const hugeBody = "x".repeat(5000);
+    try {
+      parseMcpResponse(hugeBody);
+      throw new Error("expected parseMcpResponse to throw");
+    } catch (err) {
+      expect((err as Error).message.length).toBeLessThan(400);
+      expect((err as Error).message).toContain("...");
+      expect((err as Error).message).not.toContain(hugeBody);
+    }
+  });
+
+  it("treats a JSON-RPC protocol-level error envelope (no result key) as a failure with the error object as payload", () => {
+    const raw =
+      'event: message\ndata: {"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Tool \\"bad_tool\\" not found"}}\n\n';
+    const { isError, payload } = parseMcpResponse(raw);
+    expect(isError).toBe(true);
+    expect(payload).toEqual({ code: -32602, message: 'Tool "bad_tool" not found' });
+  });
 });
 
 function mockFetch(rawBody, ok = true, status = 200) {
@@ -55,6 +75,28 @@ describe("callTool", () => {
   it("throws a clear error on a non-ok HTTP response", async () => {
     const fetchImpl = mockFetch("", false, 500);
     await expect(callTool("http://localhost:9/mcp/tok", "list_tags", {}, 1, fetchImpl)).rejects.toThrow(/http 500/i);
+  });
+
+  it("honors a custom timeoutMs by passing it to AbortSignal.timeout", async () => {
+    const raw = 'event: message\ndata: {"result":{"content":[{"type":"text","text":"{}"}]},"jsonrpc":"2.0","id":1}\n\n';
+    const fetchImpl = mockFetch(raw);
+    const spy = vi.spyOn(AbortSignal, "timeout");
+
+    await callTool("http://localhost:9/mcp/tok", "list_tags", {}, 1, fetchImpl, 5000);
+
+    expect(spy).toHaveBeenCalledWith(5000);
+    spy.mockRestore();
+  });
+
+  it("defaults to a 30000ms timeout when none is given", async () => {
+    const raw = 'event: message\ndata: {"result":{"content":[{"type":"text","text":"{}"}]},"jsonrpc":"2.0","id":1}\n\n';
+    const fetchImpl = mockFetch(raw);
+    const spy = vi.spyOn(AbortSignal, "timeout");
+
+    await callTool("http://localhost:9/mcp/tok", "list_tags", {}, 1, fetchImpl);
+
+    expect(spy).toHaveBeenCalledWith(30000);
+    spy.mockRestore();
   });
 });
 
@@ -217,5 +259,76 @@ describe("runBatch", () => {
     const { results } = await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl, raw: true });
 
     expect(JSON.parse(results[0].message)).toEqual(fullRow);
+  });
+
+  it("a protocol-level JSON-RPC error envelope (bad tool name / schema violation) is reported as a failure with the real server message, not a generic TypeError", async () => {
+    const calls = [{ name: "create_questions", arguments: { bogus: true } }];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(init.body);
+      const raw = `event: message\ndata: ${JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        error: { code: -32602, message: "Input validation error: Invalid arguments for tool create_questions" },
+      })}\n\n`;
+      return { ok: true, status: 200, text: async () => raw };
+    });
+
+    const { results, anyFailed } = await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl });
+
+    expect(anyFailed).toBe(true);
+    expect(results[0].ok).toBe(false);
+    expect(results[0].message).toContain("Input validation error");
+    expect(results[0].message).not.toContain("TypeError");
+  });
+
+  it("threads opts.timeoutMs through to callTool's AbortSignal.timeout call", async () => {
+    const calls = [{ name: "list_tags", arguments: {} }];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => sseFrame(body.id, textContent({ tags: [] })) };
+    });
+    const spy = vi.spyOn(AbortSignal, "timeout");
+
+    await runBatch("http://localhost:9/mcp/tok", calls, { fetchImpl, timeoutMs: 1234 });
+
+    expect(spy).toHaveBeenCalledWith(1234);
+    spy.mockRestore();
+  });
+
+  it("redacts the MCP URL (and its embedded token) from a thrown error's message", async () => {
+    const calls = [{ name: "create_tag", arguments: { slug: "math" } }];
+    const url = "http://localhost:9/mcp/super-secret-token";
+    const fetchImpl = vi.fn(async () => {
+      throw new Error(`TypeError: Failed to parse URL from ${url}`);
+    });
+
+    const { results } = await runBatch(url, calls, { fetchImpl });
+
+    expect(results[0].message).not.toContain("super-secret-token");
+    expect(results[0].message).toContain("<mcp-url>");
+  });
+
+  it("invokes opts.onResult once per completed call, incrementally, without changing the final return shape", async () => {
+    const calls = [
+      { name: "create_tag", arguments: { slug: "math", label: "Math" } },
+      { name: "list_tags", arguments: {} },
+    ];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(init.body);
+      const resultObj =
+        body.params.name === "create_tag"
+          ? textContent({ slug: "math" })
+          : textContent({ tags: [] });
+      return { ok: true, status: 200, text: async () => sseFrame(body.id, resultObj) };
+    });
+    const seen: any[] = [];
+
+    const { results } = await runBatch("http://localhost:9/mcp/tok", calls, {
+      fetchImpl,
+      onResult: (r) => seen.push(r),
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen).toEqual(results);
   });
 });

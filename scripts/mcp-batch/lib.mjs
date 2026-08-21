@@ -1,15 +1,24 @@
+const RAW_BODY_TRUNCATE_LENGTH = 200;
+
 export function parseMcpResponse(rawBody) {
   const dataLine = rawBody.split("\n").find((line) => line.startsWith("data:"));
   if (!dataLine) {
-    throw new Error(`No "data:" line in MCP response body: ${rawBody}`);
+    const truncated =
+      rawBody.length > RAW_BODY_TRUNCATE_LENGTH
+        ? `${rawBody.slice(0, RAW_BODY_TRUNCATE_LENGTH)}...`
+        : rawBody;
+    throw new Error(`No "data:" line in MCP response body: ${truncated}`);
   }
   const envelope = JSON.parse(dataLine.slice("data:".length).trim());
+  if (envelope.error) {
+    return { isError: true, payload: envelope.error };
+  }
   const contentText = envelope.result?.content?.[0]?.text;
   const payload = contentText !== undefined ? JSON.parse(contentText) : envelope.result;
   return { isError: Boolean(envelope.result?.isError), payload };
 }
 
-export async function callTool(url, name, args, id, fetchImpl = fetch) {
+export async function callTool(url, name, args, id, fetchImpl = fetch, timeoutMs = 30000) {
   const res = await fetchImpl(url, {
     method: "POST",
     headers: {
@@ -22,7 +31,7 @@ export async function callTool(url, name, args, id, fetchImpl = fetch) {
       method: "tools/call",
       params: { name, arguments: args },
     }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
@@ -81,25 +90,29 @@ export function summarize(name, payload) {
 }
 
 export async function runBatch(url, calls, opts = {}) {
-  const { raw = false, fetchImpl = fetch } = opts;
+  const { raw = false, fetchImpl = fetch, timeoutMs = 30000, onResult } = opts;
   const results = [];
   let anyFailed = false;
 
   for (let i = 0; i < calls.length; i++) {
     const { name, arguments: args } = calls[i];
+    let result;
     try {
-      const { isError, payload } = await callTool(url, name, args, i + 1, fetchImpl);
+      const { isError, payload } = await callTool(url, name, args, i + 1, fetchImpl, timeoutMs);
       if (isError) {
         anyFailed = true;
-        results.push({ index: i, name, ok: false, message: JSON.stringify(payload) });
+        result = { index: i, name, ok: false, message: JSON.stringify(payload) };
       } else {
         const message = raw ? JSON.stringify(payload) : summarize(name, payload);
-        results.push({ index: i, name, ok: true, message });
+        result = { index: i, name, ok: true, message };
       }
     } catch (err) {
       anyFailed = true;
-      results.push({ index: i, name, ok: false, message: err.message });
+      const message = url ? err.message.split(url).join("<mcp-url>") : err.message;
+      result = { index: i, name, ok: false, message };
     }
+    results.push(result);
+    if (onResult) onResult(result);
   }
 
   return { results, anyFailed };
