@@ -85,11 +85,24 @@ export async function main(argv) {
 // required for this comparison to work on Windows, where process.argv[1]
 // is a backslash path ("C:\...") that doesn't turn into a valid file URL by
 // simply prepending "file://" to it.
+//
+// process.exitCode (not process.exit()) deliberately: each callTool()
+// creates its own AbortSignal.timeout() handle, and a batch with several
+// calls leaves several such handles pending cleanup. process.exit() forces
+// an immediate handle-closing pass that collides with libuv's own async
+// teardown of those handles on Windows (Node 24.14.0, reproduced with as
+// few as 3 sequential calls) — "Assertion failed: !(handle->flags &
+// UV_HANDLE_CLOSING)", a hard crash, even though every call succeeded.
+// process.exitCode lets Node's normal (non-forced) shutdown sequence close
+// them cleanly; AbortSignal.timeout()'s internal timer is already unref'd,
+// so this doesn't wait for it to fire — exit is still near-instant.
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2))
-    .then((code) => process.exit(code))
+    .then((code) => {
+      process.exitCode = code;
+    })
     .catch((err) => {
       console.error(err.message);
-      process.exit(1);
+      process.exitCode = 1;
     });
 }

@@ -66,6 +66,8 @@ import { createServer } from "node:http";
 import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { main } from "./cli.mjs";
 
 describe("main (end-to-end against a local HTTP server)", () => {
@@ -228,5 +230,70 @@ describe("main: calls file shape validation", () => {
 
     expect(exitCode).toBe(1);
     expect(errors.join("\n")).toMatch(/must be a json array/i);
+  });
+});
+
+// Regression: importing and calling main() directly (every other test in
+// this file) never exercises the real process.exit()/process.exitCode path
+// at all, since that only runs in the entry-point guard. A real spawned
+// `node cli.mjs` process with 3+ sequential calls each creating their own
+// AbortSignal.timeout() handle crashed with a native libuv assertion
+// ("Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)") on
+// process.exit() on Windows (Node 24.14.0) — reproduced against a real
+// live Osmosis server, not just in this synthetic fixture. Fixed by using
+// process.exitCode instead of process.exit(); this test spawns the actual
+// CLI as a child process (the only way to catch a regression here) against
+// a real local HTTP server with 3 calls, matching the original crash's
+// call count.
+describe("spawned CLI process (regression: no native crash on exit)", () => {
+  it("exits cleanly with no crash after 3+ sequential calls, each creating its own AbortSignal.timeout handle", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const parsed = JSON.parse(body);
+        const resultObj = { content: [{ type: "text", text: JSON.stringify({ tags: [] }) }] };
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`event: message\ndata: ${JSON.stringify({ result: resultObj, jsonrpc: "2.0", id: parsed.id })}\n\n`);
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+
+    const dir = mkdtempSync(join(tmpdir(), "mcp-batch-spawn-test-"));
+    const callsFile = join(dir, "calls.json");
+    writeFileSync(
+      callsFile,
+      JSON.stringify([
+        { name: "list_tags", arguments: {} },
+        { name: "list_tags", arguments: {} },
+        { name: "list_tags", arguments: {} },
+      ])
+    );
+
+    const cliPath = fileURLToPath(new URL("./cli.mjs", import.meta.url));
+    let status: number | null;
+    let stdout = "";
+    let stderr = "";
+    try {
+      // spawn(), not spawnSync() — spawnSync blocks this test's own event
+      // loop synchronously until the child exits, which would starve the
+      // in-process HTTP server above (its request handler can never run
+      // while the parent thread is frozen inside a sync child-process
+      // wait), causing every call to hang until AbortSignal.timeout fires.
+      // Confirmed this exact failure mode while writing this test.
+      const child = spawn(process.execPath, [cliPath, "--url", `http://127.0.0.1:${port}/mcp/tok`, callsFile]);
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      status = await new Promise((resolve) => child.on("close", resolve));
+    } finally {
+      unlinkSync(callsFile);
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    expect(stderr).not.toContain("Assertion failed");
+    expect(stderr).not.toContain("UV_HANDLE_CLOSING");
+    expect(stdout).toContain("[2] list_tags:");
   });
 });
