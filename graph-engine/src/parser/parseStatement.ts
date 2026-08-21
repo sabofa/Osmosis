@@ -441,6 +441,19 @@ function parseStatementCore(rawLine: string): StatementShape {
   if (relation?.type === 'comparator') {
     const left = line.slice(0, relation.idx).trim()
     const right = line.slice(relation.idx + relation.op.length).trim()
+    // The "if <condition>" piecewise clause only exists on y=/x= explicit
+    // statements (see the "equals" branch below) — an inequality region has
+    // no such clause in its grammar. Without this check, a stray "if" here
+    // falls through into parseExprString(right), where the tokenizer chokes
+    // on the leftover comparator inside the condition text (e.g. the "<=" in
+    // "0 <= x <= 3") with an opaque "Unexpected character" error that gives
+    // no hint the real mistake was applying "if" to the wrong statement form.
+    if (/\bif\b/.test(right)) {
+      throw new Error(
+        `"if" clauses are only valid on explicit y=/x= function statements, not on inequality-region statements. ` +
+          `To shade over a bounded interval, restrict the function itself instead, e.g. "y = x^2 if 0 <= x <= 3".`
+      )
+    }
     return { kind: 'region', left: parseExprString(left), op: relation.op, right: parseExprString(right) }
   }
 

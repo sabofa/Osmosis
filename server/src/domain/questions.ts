@@ -338,6 +338,7 @@ function replaceChoices(db: DatabaseSync, questionId: string, choices: ChoiceInp
 export interface CreateQuestionsResult {
   created: { id: string; lineage_id: string; prompt_preview: string }[];
   rejected: { index: number; reason: string; detail: string }[];
+  warnings: { index: number; message: string }[];
   possible_duplicates: {
     new_index: number;
     existing_id: string;
@@ -356,13 +357,26 @@ export function createQuestions(db: DatabaseSync, questions: QuestionInput[]): C
     )
   );
 
-  const result: CreateQuestionsResult = { created: [], rejected: [], possible_duplicates: [] };
+  const result: CreateQuestionsResult = { created: [], rejected: [], warnings: [], possible_duplicates: [] };
 
   questions.forEach((q, index) => {
     const invalid = validateQuestionInput(db, q);
     if (invalid) {
       result.rejected.push({ index, ...invalid });
       return;
+    }
+
+    // Non-blocking: readme()'s prompt_conventions documents "4 choices,
+    // exactly one correct unless testing a multi-select concept" as an
+    // authoring convention, not a schema constraint (mc_without_choices
+    // above only requires >= 2). A deviation is still allowed to commit —
+    // an author may have a real reason — but should get a signal instead of
+    // total silence, the same way possible_duplicates flags without rejecting.
+    if (q.type === "mc" && q.choices && q.choices.length !== 4) {
+      result.warnings.push({
+        index,
+        message: `mc question has ${q.choices.length} choices; readme()'s convention is 4 choices, unless intentionally testing a multi-select concept`,
+      });
     }
 
     const duplicates = findPossibleDuplicates(db, q.prompt, q.tags, threshold);

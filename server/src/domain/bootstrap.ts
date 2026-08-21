@@ -39,7 +39,9 @@ graph_spec is a small text DSL, one statement per line ("#" starts a comment). S
   z = <expr(x,y)>                             3D surface
   r = <expr(theta)> [for theta in [a, b]]      polar curve; theta defaults to [0, 2*pi]
   <expr(x,y)> = <expr(x,y)>                    implicit curve (conics, circles, etc.)
-  <expr(x,y)> <|<=|>|>= <expr(x,y)>            shaded inequality region
+  <expr(x,y)> <|<=|>|>= <expr(x,y)>            shaded inequality region — NO "if" clause here (that's y=/x= only);
+                                                to shade over a bounded interval restrict the function itself:
+                                                "y = x^2 if 0 <= x <= 3", not "y > 0 if 0 <= x <= 3"
   field: dy/dx = <expr(x,y)>                   slope/direction field
   scatter: (x1,y1), (x2,y2), ...               scatter points + auto linear regression
   label = (x, y[, z])  |  (x, y[, z])          point, label optional (letters only, no digits/underscore —

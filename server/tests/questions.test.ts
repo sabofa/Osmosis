@@ -149,3 +149,72 @@ describe("possible_duplicates", () => {
     }
   });
 });
+
+// Regression: the 2026-08-21 MCP stress test v2 accidentally wrote a 5-choice
+// mc question (readme()'s prompt_conventions says "4 choices, exactly one
+// correct unless testing a multi-select concept") and create_questions
+// accepted it silently — no signal back to the author that the convention
+// was violated. This is deliberately non-blocking (choice count isn't a hard
+// schema constraint, an author may have a real reason to deviate), but the
+// author should get a warning rather than total silence.
+describe("mc choice-count warning", () => {
+  it("warns, but still creates, an mc question with other than 4 choices", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+
+    const result = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "Which of these double an investment fastest?",
+        tags: ["math"],
+        choices: [
+          { body: "A", is_correct: true },
+          { body: "B", is_correct: false },
+          { body: "C", is_correct: false },
+          { body: "D", is_correct: false },
+          { body: "E", is_correct: false },
+        ],
+      },
+    ]);
+
+    expect(result.created).toHaveLength(1);
+    expect(result.rejected).toHaveLength(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].index).toBe(0);
+    expect(result.warnings[0].message.toLowerCase()).toContain("4 choices");
+  });
+
+  it("does not warn on a real 4-choice mc question", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+
+    const result = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "What is 2 + 2?",
+        tags: ["math"],
+        choices: [
+          { body: "3", is_correct: false },
+          { body: "4", is_correct: true },
+          { body: "5", is_correct: false },
+          { body: "6", is_correct: false },
+        ],
+      },
+    ]);
+
+    expect(result.created).toHaveLength(1);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it("does not warn on written questions (no choices field at all)", () => {
+    const db = openTestDb();
+    insertTag(db, "math");
+
+    const result = createQuestions(db, [
+      { type: "written", prompt: "Explain why.", tags: ["math"], model_answer: "Because." },
+    ]);
+
+    expect(result.created).toHaveLength(1);
+    expect(result.warnings).toHaveLength(0);
+  });
+});

@@ -194,7 +194,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "create_questions",
     {
-      description: "Batch-write questions into the bank. Rejections are per-question; valid siblings still commit. Flags possible duplicates without rejecting them.",
+      description: "Batch-write questions into the bank. Rejections are per-question; valid siblings still commit. Flags possible duplicates without rejecting them. Also flags (non-blocking) an mc question with other than 4 choices, per readme()'s prompt_conventions.",
       inputSchema: { questions: z.array(questionInputShape) },
     },
     async ({ questions }) => {

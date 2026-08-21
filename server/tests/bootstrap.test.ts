@@ -85,4 +85,15 @@ describe("bootstrap graph_dsl_reference gating", () => {
     const ref = bootstrap(db, "math").graph_dsl_reference as string;
     expect(ref.toLowerCase()).toContain("letters only");
   });
+
+  // Regression: the 2026-08-21 MCP stress test v2 wrote "y > 0 if 0 <= x <=
+  // 3", mistakenly applying the y=/x= piecewise "if" clause to an
+  // inequality region statement, which doesn't support one — the reference
+  // never said so explicitly. Must state the restriction and the fix.
+  it("states that inequality regions don't support an if clause, with the fix", () => {
+    const db = openTestDb();
+    const ref = bootstrap(db, "math").graph_dsl_reference as string;
+    expect(ref).toContain('NO "if" clause here');
+    expect(ref).toContain("y = x^2 if 0 <= x <= 3");
+  });
 });
