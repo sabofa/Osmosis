@@ -328,9 +328,17 @@ export interface AttemptDetail {
   responses: AttemptResponse[]
 }
 
+// Template/adhoc attempt creation (POST /api/attempts with source: 'template'
+// or 'adhoc') only ever returns attempt_id + questions — the draw-shape
+// fields below are daily-attempt-only, see CreateDailyAttemptResult.
 export interface CreateAttemptResult {
   attempt_id: string
   questions: { id: string; lineage_id: string; type: 'mc' | 'written' }[]
+}
+
+// Daily attempt creation (POST /api/attempts with daily_kind) additionally
+// reports how the draw was resolved.
+export interface CreateDailyAttemptResult extends CreateAttemptResult {
   short_draw: boolean
   requested: number
   returned: number
@@ -350,7 +358,7 @@ export async function createAttempt(templateId: string): Promise<CreateAttemptRe
   return res.json()
 }
 
-export async function createDailyAttempt(kind: 'question' | 'quiz'): Promise<CreateAttemptResult> {
+export async function createDailyAttempt(kind: 'question' | 'quiz'): Promise<CreateDailyAttemptResult> {
   const res = await fetch('/api/attempts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
