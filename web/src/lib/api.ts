@@ -465,6 +465,69 @@ export async function getResultsDaily(limit?: number): Promise<{ daily: DailyRes
   return res.json()
 }
 
+export interface SessionSummary {
+  id: string
+  name: string
+  tag_slug: string | null
+  created_at: string
+  ended_at: string | null
+}
+
+export async function getSessions(params: { limit?: number; offset?: number } = {}): Promise<{ total: number; sessions: SessionSummary[] }> {
+  const qs = new URLSearchParams()
+  if (params.limit) qs.set('limit', String(params.limit))
+  if (params.offset) qs.set('offset', String(params.offset))
+  const res = await fetch(`/api/sessions?${qs}`)
+  if (!res.ok) throw new Error(`GET /api/sessions ${res.status}`)
+  return res.json()
+}
+
+export interface SessionAttemptSummary {
+  id: string
+  source: 'template' | 'adhoc'
+  delivery_mode: string | null
+  template_id: string | null
+  template_name: string | null
+  started_at: string
+  submitted_at: string | null
+  abandoned_at: string | null
+  offline: boolean
+  question_count: number
+  mean_score: number | null
+}
+
+export interface SessionTemplateSummary {
+  id: string
+  name: string
+  description: string | null
+  question_count: number
+  frozen: boolean
+  time_limit_sec: number | null
+  created_at: string
+  retired_at: string | null
+}
+
+export interface SessionDetail extends SessionSummary {
+  attempts: SessionAttemptSummary[]
+  templates: SessionTemplateSummary[]
+}
+
+export async function getSessionDetail(id: string): Promise<SessionDetail> {
+  const res = await fetch(`/api/sessions/${id}`)
+  if (!res.ok) throw new Error(`GET /api/sessions/${id} ${res.status}`)
+  return res.json()
+}
+
+// A live item is an adhoc, app_live-delivered attempt still in progress —
+// the tutor creates one via MCP, and this is how the app finds it. `attempt`
+// is null when the tutor hasn't handed anything off yet (or Ben already
+// finished whatever was pending); the caller keeps polling either way.
+export async function getLivePendingAttempt(sessionId: string): Promise<{ attempt: AttemptDetail | null }> {
+  const res = await fetch(`/api/attempts/live-pending?session_id=${encodeURIComponent(sessionId)}`)
+  if (!res.ok) throw new Error(`GET /api/attempts/live-pending ${res.status}`)
+  return res.json()
+}
+
 export function timeAgo(iso: string | null): string {
   if (!iso) return 'never'
   const ms = Date.now() - new Date(iso.endsWith('Z') ? iso : `${iso}Z`).getTime()

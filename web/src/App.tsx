@@ -3,6 +3,7 @@ import Rail, { type Page } from './components/Rail'
 import Home from './components/Home'
 import Bank from './components/Bank'
 import Library from './components/Library'
+import SessionList from './components/SessionList'
 import Take from './components/Take'
 import Review from './components/Review'
 import Results from './components/Results'
@@ -16,6 +17,10 @@ function App() {
   const [attempt, setAttempt] = useState<AttemptDetail | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
+  // Set by SessionList while a live item is actually on screen (not just
+  // while browsing the session list) — used below to hide the rail, same as
+  // the Take/Review pages do.
+  const [liveActive, setLiveActive] = useState(false)
   // Applied here, not inside Settings, so the theme/preset stay in effect
   // on every screen — not just while Settings itself happens to be mounted.
   const theme = useTheme()
@@ -55,6 +60,7 @@ function App() {
   if (page === 'home') content = <Home onStart={startQuiz} onStartDaily={startDaily} startError={startError} starting={starting} />
   else if (page === 'bank') content = <Bank />
   else if (page === 'library') content = <Library onStart={startQuiz} />
+  else if (page === 'live') content = <SessionList onStart={startQuiz} onLiveActiveChange={setLiveActive} />
   else if (page === 'take' && attempt)
     content = (
       <Take
@@ -73,7 +79,7 @@ function App() {
     content = <Home onStart={startQuiz} onStartDaily={startDaily} startError={startError} starting={starting} />
   } else content = <Settings theme={theme} themePresets={themePresets} />
 
-  const showRail = page !== 'take' && page !== 'review'
+  const showRail = page !== 'take' && page !== 'review' && !(page === 'live' && liveActive)
 
   return (
     <>

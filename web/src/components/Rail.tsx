@@ -1,12 +1,13 @@
-import { HomeIcon, TagIcon, ChartIcon, GearIcon, LayersIcon } from './icons'
+import { HomeIcon, TagIcon, ChartIcon, GearIcon, LayersIcon, BoltIcon } from './icons'
 import './Rail.css'
 
-export type Page = 'home' | 'bank' | 'library' | 'take' | 'review' | 'results' | 'settings'
+export type Page = 'home' | 'bank' | 'library' | 'live' | 'take' | 'review' | 'results' | 'settings'
 
 const items: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'home', label: 'Home', icon: <HomeIcon size={16} /> },
   { page: 'bank', label: 'Bank', icon: <TagIcon size={16} /> },
   { page: 'library', label: 'Library', icon: <LayersIcon size={16} /> },
+  { page: 'live', label: 'Live', icon: <BoltIcon size={16} /> },
   { page: 'results', label: 'Results', icon: <ChartIcon size={16} /> },
   { page: 'settings', label: 'Settings', icon: <GearIcon size={16} /> },
 ]
