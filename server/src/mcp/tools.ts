@@ -11,6 +11,7 @@ import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemp
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
 import { presentItem, getItemOutcome } from "../domain/attempts.js";
+import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 
 const tagQueryShape = z
   .object({
@@ -337,6 +338,10 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
         weighting: z.enum(["random", "weak_weighted"]).nullable().optional(),
         frozen: z.boolean().optional(),
         time_limit_sec: z.number().nullable().optional(),
+        session_id: z.string().optional().describe(
+          "Attach this template to a tutoring session from create_session, so it shows up under that " +
+            "session in the app instead of the general template list. Omit for ordinary homework/bank templates."
+        ),
       },
     },
     async (params) => {
@@ -535,11 +540,15 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
       inputSchema: {
         question_id: z.string().optional(),
         tag_query: tagQueryShape,
+        session_id: z.string().optional().describe(
+          "The session id from create_session. Always call create_session first and pass its id here, so " +
+            "the app's live screen for that session surfaces this item and everything groups under one entry."
+        ),
       },
     },
-    async ({ question_id, tag_query }) => {
+    async ({ question_id, tag_query, session_id }) => {
       try {
-        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query }));
+        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id }));
       } catch (err) {
         return fail(err);
       }
@@ -564,6 +573,71 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
           await sleep(1_000);
         }
         return ok({ status: "pending" });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "create_session",
+    {
+      description:
+        "Start a new tutoring session. Everything you present live afterward, and any session-specific test you " +
+        "create, should be tagged with the returned session id so it groups together in the app under one 'Live' entry.",
+      inputSchema: { name: z.string(), tag_slug: z.string().optional() },
+    },
+    async ({ name, tag_slug }) => {
+      try {
+        return ok(createSession(db, { name, tag_slug }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "end_session",
+    {
+      description: "Mark a tutoring session finished. Its history stays readable via get_session afterward.",
+      inputSchema: { session_id: z.string() },
+    },
+    async ({ session_id }) => {
+      try {
+        return ok(endSession(db, session_id));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_session",
+    {
+      description:
+        "Read a past tutoring session — its name, tag, and attempt history — for calibration or review.",
+      inputSchema: { session_id: z.string() },
+    },
+    async ({ session_id }) => {
+      try {
+        return ok(getSessionDetail(db, session_id));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "list_sessions",
+    {
+      description:
+        "List past tutoring sessions, most recent first. Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
+      inputSchema: { limit: z.number().optional(), offset: z.number().optional() },
+    },
+    async ({ limit, offset }) => {
+      try {
+        const result = listSessions(db, { limit: limit ?? 50, offset: offset ?? 0 });
+        return ok({ ...result, has_more: (offset ?? 0) + result.sessions.length < result.total });
       } catch (err) {
         return fail(err);
       }
