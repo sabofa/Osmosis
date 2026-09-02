@@ -10,7 +10,7 @@ import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
-import { presentItem } from "../domain/attempts.js"; // awaitItemOutcome added in Task 1.3
+import { presentItem, getItemOutcome } from "../domain/attempts.js";
 
 const tagQueryShape = z
   .object({
@@ -54,6 +54,10 @@ const questionInputShape = z.object({
       "highlights a whole excerpt range rather than one inline marker."
   ),
 });
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function ok(result: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
@@ -536,6 +540,30 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     async ({ question_id, tag_query }) => {
       try {
         return ok(presentItem(db, { node_id: nodeId, question_id, tag_query }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "await_item_outcome",
+    {
+      description:
+        "Wait for the learner to answer the item from present_item, up to ~25 seconds. Returns the outcome once answered, or status: 'pending' if the learner hasn't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation.",
+      inputSchema: {
+        response_id: z.string(),
+      },
+    },
+    async ({ response_id }) => {
+      try {
+        const deadline = Date.now() + 25_000;
+        while (Date.now() < deadline) {
+          const outcome = getItemOutcome(db, response_id);
+          if (outcome.status === "answered") return ok(outcome);
+          await sleep(1_000);
+        }
+        return ok({ status: "pending" });
       } catch (err) {
         return fail(err);
       }

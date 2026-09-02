@@ -252,6 +252,59 @@ export function presentItem(
 }
 
 // ----------------------------------------------------------------------------
+// Await item outcome — non-blocking read of whether the app-side answer (via
+// the existing PATCH .../responses/:id + POST .../submit routes, which call
+// answerResponse/submitAttempt above) has landed yet. The MCP layer wraps
+// this in a bounded poll (Task 1.3 Step 5); this function itself never waits.
+// ----------------------------------------------------------------------------
+
+export type ItemOutcome =
+  | { status: "pending" }
+  | {
+      status: "answered";
+      correct: boolean | null;
+      explanation: string | null;
+      model_answer: string | null;
+      correct_choice_id: string | null;
+    };
+
+export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcome {
+  const row = db
+    .prepare(
+      `SELECT r.attempt_id, r.question_id, a.submitted_at
+       FROM response r JOIN attempt a ON a.id = r.attempt_id
+       WHERE r.id = ?`
+    )
+    .get(responseId) as { attempt_id: string; question_id: string; submitted_at: string | null } | undefined;
+  if (!row) throw new DomainError("not_found", `Response "${responseId}" does not exist.`);
+
+  if (!row.submitted_at) return { status: "pending" };
+
+  const question = db.prepare("SELECT type, explanation, model_answer FROM question WHERE id = ?").get(
+    row.question_id
+  ) as { type: "mc" | "written"; explanation: string | null; model_answer: string | null };
+
+  const liveGrade = db
+    .prepare("SELECT score FROM grade WHERE response_id = ? AND superseded_at IS NULL")
+    .get(responseId) as { score: number } | undefined;
+
+  const correctChoice =
+    question.type === "mc"
+      ? (db.prepare("SELECT id FROM choice WHERE question_id = ? AND is_correct = 1").get(row.question_id) as
+          | { id: string }
+          | undefined)
+      : undefined;
+
+  return {
+    status: "answered",
+    correct: question.type === "mc" ? liveGrade?.score === 1 : null,
+    explanation: question.explanation,
+    model_answer: question.model_answer,
+    correct_choice_id: correctChoice?.id ?? null,
+  };
+}
+
+// ----------------------------------------------------------------------------
 // Create Daily Attempt
 // ----------------------------------------------------------------------------
 
