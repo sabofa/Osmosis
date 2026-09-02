@@ -7,6 +7,7 @@ export interface GetResultsParams {
   tag_query?: TagQuery;
   since?: string;
   limit?: number;
+  offset?: number;
 }
 
 function tagScope(db: DatabaseSync, params: GetResultsParams) {
@@ -41,6 +42,7 @@ function tagScope(db: DatabaseSync, params: GetResultsParams) {
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
 
   const rows = db
     .prepare(
@@ -59,9 +61,9 @@ function tagScope(db: DatabaseSync, params: GetResultsParams) {
        FROM tag_performance tp
        ${where}
        ORDER BY tp.mean_score ASC
-       LIMIT ?`
+       LIMIT ? OFFSET ?`
     )
-    .all(...(args as any[]), limit) as {
+    .all(...(args as any[]), limit, offset) as {
     tag_slug: string;
     responses: number;
     mean_score: number;
@@ -91,6 +93,7 @@ function truncateResponseText(text: string | null): string | null {
 function questionScope(db: DatabaseSync, params: GetResultsParams) {
   const tagClause = params.tag_query ? buildTagQueryClause(params.tag_query) : { sql: "", params: [] };
   const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
 
   const lineages = db
     .prepare(
@@ -105,9 +108,9 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
        WHERE 1=1 ${tagClause.sql}
        GROUP BY q.lineage_id
        ORDER BY mean_score ASC
-       LIMIT ?`
+       LIMIT ? OFFSET ?`
     )
-    .all(...(tagClause.params as any[]), limit) as {
+    .all(...(tagClause.params as any[]), limit, offset) as {
     lineage_id: string;
     responses: number;
     mean_score: number;
@@ -174,6 +177,7 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
     args.push(params.since);
   }
   const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
 
   const rows = db
     .prepare(
@@ -184,9 +188,9 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
        LEFT JOIN template t ON t.id = a.template_id
        WHERE ${clauses.join(" AND ")}
        ORDER BY a.submitted_at DESC
-       LIMIT ?`
+       LIMIT ? OFFSET ?`
     )
-    .all(...(args as any[]), limit) as {
+    .all(...(args as any[]), limit, offset) as {
     id: string;
     source: string;
     template_name: string | null;
@@ -201,6 +205,7 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
 
 function dailyScope(db: DatabaseSync, params: GetResultsParams) {
   const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
   // Only the first submitted attempt per daily draw is authoritative (spec 5.6);
   // later retakes are visible in attempt history but excluded here.
   const rows = db
@@ -219,9 +224,9 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams) {
               ) AS completed
        FROM daily_draw d
        ORDER BY d.draw_date DESC
-       LIMIT ?`
+       LIMIT ? OFFSET ?`
     )
-    .all(limit) as {
+    .all(limit, offset) as {
     draw_date: string;
     kind: string;
     question_count: number;

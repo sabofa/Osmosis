@@ -306,27 +306,33 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.get("/api/results/tags", async (request) => {
-    const q = request.query as { tag?: string; since?: string; limit?: string };
+    const q = request.query as { tag?: string; since?: string; limit?: string; offset?: string };
     return getResults(db, {
       scope: "tag",
       tag_query: q.tag ? { all: [q.tag] } : undefined,
       since: q.since,
       limit: q.limit ? Number(q.limit) : undefined,
+      offset: q.offset ? Number(q.offset) : undefined,
     });
   });
 
   app.get("/api/results/questions", async (request) => {
-    const q = request.query as { tag?: string; limit?: string };
+    const q = request.query as { tag?: string; limit?: string; offset?: string };
     return getResults(db, {
       scope: "question",
       tag_query: q.tag ? { all: [q.tag] } : undefined,
       limit: q.limit ? Number(q.limit) : undefined,
+      offset: q.offset ? Number(q.offset) : undefined,
     });
   });
 
   app.get("/api/results/daily", async (request) => {
-    const q = request.query as { limit?: string };
-    return getResults(db, { scope: "daily", limit: q.limit ? Number(q.limit) : undefined });
+    const q = request.query as { limit?: string; offset?: string };
+    return getResults(db, {
+      scope: "daily",
+      limit: q.limit ? Number(q.limit) : undefined,
+      offset: q.offset ? Number(q.offset) : undefined,
+    });
   });
 
   app.get("/api/assets", async () => ({ assets: listAssets(db) }));

@@ -369,6 +369,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
         tag_query: tagQueryShape,
         since: z.string().optional(),
         limit: z.number().optional(),
+        offset: z.number().optional(),
       },
     },
     async (params) => {
