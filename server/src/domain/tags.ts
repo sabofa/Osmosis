@@ -23,7 +23,7 @@ export interface TagSummary extends TagRow {
 
 export function listTags(
   db: DatabaseSync,
-  opts: { prefix?: string; includeRetired?: boolean } = {}
+  opts: { prefix?: string; includeRetired?: boolean; limit?: number; offset?: number } = {}
 ): TagSummary[] {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -36,6 +36,20 @@ export function listTags(
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 
+  if (opts.limit === undefined) {
+    return db
+      .prepare(
+        `SELECT t.slug, t.label, t.parent_slug, t.description, t.created_at, t.retired_at,
+                (SELECT COUNT(*) FROM question_tag qt
+                 JOIN question q ON q.id = qt.question_id
+                 WHERE qt.tag_slug = t.slug AND q.retired_at IS NULL) AS question_count
+         FROM tag t
+         ${where}
+         ORDER BY t.slug`
+      )
+      .all(...(params as any[])) as unknown as TagSummary[];
+  }
+
   return db
     .prepare(
       `SELECT t.slug, t.label, t.parent_slug, t.description, t.created_at, t.retired_at,
@@ -44,9 +58,24 @@ export function listTags(
                WHERE qt.tag_slug = t.slug AND q.retired_at IS NULL) AS question_count
        FROM tag t
        ${where}
-       ORDER BY t.slug`
+       ORDER BY t.slug LIMIT ? OFFSET ?`
     )
-    .all(...(params as any[])) as unknown as TagSummary[];
+    .all(...([...params, opts.limit, opts.offset ?? 0] as any[])) as unknown as TagSummary[];
+}
+
+export function countTags(db: DatabaseSync, opts: { prefix?: string; includeRetired?: boolean } = {}): number {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (!opts.includeRetired) clauses.push("t.retired_at IS NULL");
+  if (opts.prefix) {
+    clauses.push("(t.slug = ? OR t.slug LIKE ?)");
+    params.push(opts.prefix, `${opts.prefix}:%`);
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM tag t ${where}`).get(...(params as any[])) as { n: number };
+  return row.n;
 }
 
 export function createTag(

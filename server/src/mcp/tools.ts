@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../domain/errors.js";
 import { readme } from "../domain/readme.js";
 import { bootstrap } from "../domain/bootstrap.js";
-import { listTags, createTag, mergeTags } from "../domain/tags.js";
+import { listTags, createTag, mergeTags, countTags } from "../domain/tags.js";
 import { createQuestions, editQuestion, retireQuestion, searchQuestions, getQuestionDetail } from "../domain/questions.js";
 import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
@@ -69,6 +69,17 @@ function fail(err: unknown) {
   return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "internal_error", message }) }] };
 }
 
+// MCP-layer-only trim: drops retired_at/description when null (frequently/always the
+// case in the non-include_retired listing), since the domain listTags() return shape
+// stays fully populated for other callers (e.g. the /api/tags HTTP route).
+export function trimListTagsForMcp(tags: ReturnType<typeof listTags>) {
+  return tags.map(({ retired_at, description, ...rest }) => ({
+    ...rest,
+    ...(retired_at != null ? { retired_at } : {}),
+    ...(description != null ? { description } : {}),
+  }));
+}
+
 export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: string): void {
   server.registerTool(
     "readme",
@@ -107,12 +118,20 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "list_tags",
     {
-      description: "List the controlled tag vocabulary.",
-      inputSchema: { prefix: z.string().optional(), include_retired: z.boolean().optional() },
+      description: "List tags in the controlled vocabulary. Paginated: pass limit/offset to page past the default 50.",
+      inputSchema: {
+        prefix: z.string().optional(),
+        include_retired: z.boolean().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      },
     },
-    async ({ prefix, include_retired }) => {
+    async ({ prefix, include_retired, limit, offset }) => {
       try {
-        return ok({ tags: listTags(db, { prefix, includeRetired: include_retired }) });
+        const opts = { prefix, includeRetired: include_retired, limit: limit ?? 50, offset: offset ?? 0 };
+        const total = countTags(db, { prefix, includeRetired: include_retired });
+        const tags = listTags(db, opts);
+        return ok({ total, tags: trimListTagsForMcp(tags), has_more: (offset ?? 0) + tags.length < total });
       } catch (err) {
         return fail(err);
       }
