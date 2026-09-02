@@ -157,6 +157,14 @@ export function createAttempt(
     throw new DomainError("empty_question_ids", "source 'adhoc' requires at least one question_id.");
   }
 
+  // Check for duplicate question_ids before querying the database.
+  const uniqueIds = new Set(input.question_ids);
+  if (uniqueIds.size !== input.question_ids.length) {
+    const duplicates = input.question_ids.filter((id, i) => input.question_ids.indexOf(id) !== i);
+    const uniqueDuplicates = [...new Set(duplicates)];
+    throw new DomainError("duplicate_question_ids", `Question IDs must be unique; found duplicate(s): ${uniqueDuplicates.join(", ")}`);
+  }
+
   const placeholders = input.question_ids.map(() => "?").join(",");
   const found = db
     .prepare(`SELECT id, lineage_id, type FROM question WHERE id IN (${placeholders}) AND retired_at IS NULL`)

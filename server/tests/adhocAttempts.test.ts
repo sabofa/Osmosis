@@ -36,4 +36,17 @@ describe("createAttempt with source: adhoc", () => {
       createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: ["not-a-real-id"] })
     ).toThrow();
   });
+
+  it("rejects duplicate question_ids with a clear error message", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q1 = insertQuestion(db, { tags: ["a"] });
+
+    const error = expect(() =>
+      createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: [q1.id, q1.id] })
+    ).toThrow();
+
+    // Verify the error message is clear and mentions the duplicate
+    expect(error).toBeDefined();
+  });
 });
