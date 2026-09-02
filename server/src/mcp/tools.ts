@@ -118,7 +118,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "list_tags",
     {
-      description: "List tags in the controlled vocabulary. Paginated: pass limit/offset to page past the default 50.",
+      description:
+        "List tags in the controlled vocabulary. Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
       inputSchema: {
         prefix: z.string().optional(),
         include_retired: z.boolean().optional(),
@@ -176,7 +177,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "search_questions",
     {
-      description: "Search the question bank. Omits explanation/rubric to keep listings cheap.",
+      description:
+        "Search the question bank. Omits explanation/rubric to keep listings cheap. Paginated: pass limit/offset to page past the default 50; response includes has_more (and total).",
       inputSchema: {
         tag_query: tagQueryShape,
         text: z.string().optional(),
@@ -294,7 +296,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "list_templates",
     {
       description:
-        "List saved draw templates, with live eligible_count, attempt_count, and mean_score. Paginated: pass limit/offset to page past the default 50.",
+        "List saved draw templates, with live eligible_count, attempt_count, and mean_score. Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
       inputSchema: {
         include_retired: z.boolean().optional(),
         limit: z.number().optional(),
@@ -463,7 +465,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "list_assets",
     {
-      description: "List source-material assets (notes, PDFs, links). Paginated: pass limit/offset to page past the default 50.",
+      description:
+        "List source-material assets (notes, PDFs, links). unlinked_only filters to assets no question currently references via document_id. Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
       inputSchema: {
         unlinked_only: z.boolean().optional(),
         limit: z.number().optional(),
@@ -500,7 +503,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "search_assets",
     {
-      description: "Full-text search over source-material assets. Paginated: pass limit/offset to page past the default 50.",
+      description:
+        "Full-text search over asset titles and extracted text. Returns snippets, not full content -- don't guess offsets from a snippet, use read_asset for the full text. Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
       inputSchema: {
         query: z.string(),
         type: z.enum(["url", "text", "file"]).optional(),

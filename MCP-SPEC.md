@@ -95,22 +95,22 @@ becoming one larger tool.
 |---|---|
 | `readme` | Universal conventions, called once per session |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject |
-| `list_tags` | Controlled vocabulary listing |
+| `list_tags` | Controlled vocabulary listing. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design |
 | `merge_tags` | Vocabulary cleanup |
-| `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec |
+| `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec. Paginated (`limit`/`offset`, default 50); response is `{ total, questions, has_more }` |
 | `get_question` | Full detail for one question — the read path before an edit |
 | `create_questions` | Batched, per-question rejection detail, capped duplicate reports |
 | `edit_question` | Versions if attempted, in-place otherwise |
 | `retire_question` | Soft retire |
-| `list_templates` | Live eligible_count |
+| `list_templates` | Live eligible_count. Paginated (`limit`/`offset`, default 50); response is `{ total, templates, has_more }` |
 | `create_template` / `edit_template` / `retire_template` | Draw specs |
-| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers |
+| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers. Accepts `offset` (all four scopes) to page through rows, but deliberately does *not* return `total`/`has_more` — offset-only, not the full pagination envelope used by the list/search tools above |
 | `get_config` / `set_config` | Refuses unknown keys and secrets |
 | `create_asset` | `type: text`/`url`/`file` (base64) — the file variant is the fallback path, see §5 |
-| `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets |
+| `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 | `read_asset` | Full `extracted_text` |
-| `search_assets` | FTS snippets |
+| `search_assets` | FTS snippets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 
 Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 /mcp/:token/upload` — see §5.

@@ -124,11 +124,15 @@ above); pointing either at a `url` asset is rejected outright.
 
 ## Finding an existing asset before citing it
 
-- **`list_assets(unlinked_only?)`** — cheap listing, no query needed.
-  `unlinked_only: true` filters to assets no question currently references.
-- **`search_assets(query, type?)`** — full-text search over titles and
-  extracted text, returns snippets (not full content) — cheap enough to call
-  speculatively before authoring a batch of anchored questions.
+- **`list_assets(unlinked_only?, limit?, offset?)`** — cheap listing, no
+  query needed. `unlinked_only: true` filters to assets no question
+  currently references. Paginated (default `limit` 50); response is
+  `{ total, assets, has_more }`.
+- **`search_assets(query, type?, limit?, offset?)`** — full-text search over
+  titles and extracted text, returns snippets (not full content) — cheap
+  enough to call speculatively before authoring a batch of anchored
+  questions. Paginated (default `limit` 50); response is
+  `{ total, assets, has_more }`.
 - **`read_asset(id)`** — the only call *in this trio* that returns an
   asset's full `extracted_text` (`create_asset`'s own response also includes
   it in full, at creation time). Call `read_asset` before computing anchor
