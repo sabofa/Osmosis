@@ -250,7 +250,11 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
           reply.code(400).send({ error: "question_ids_required", message: "source 'adhoc' requires non-empty question_ids array" });
           return;
         }
-        return createAttempt(db, { node_id: ctx.node.id, source: "adhoc", question_ids }, ctx.env.role);
+        return createAttempt(
+          db,
+          { node_id: ctx.node.id, source: "adhoc", question_ids, delivery_mode: "app_live" },
+          ctx.env.role
+        );
       } else {
         reply.code(400).send({ error: "unsupported_source", message: `source must be "template" or "adhoc", got ${JSON.stringify(source)}` });
         return;

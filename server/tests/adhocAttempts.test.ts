@@ -9,7 +9,12 @@ describe("createAttempt with source: adhoc", () => {
     const q1 = insertQuestion(db, { tags: ["a"] });
     const q2 = insertQuestion(db, { tags: ["a"] });
 
-    const result = createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: [q1.id, q2.id] });
+    const result = createAttempt(db, {
+      node_id: "test-node",
+      source: "adhoc",
+      question_ids: [q1.id, q2.id],
+      delivery_mode: "app_live",
+    });
 
     expect(result.attempt_id).toBeTruthy();
     const responseCount = (
@@ -27,13 +32,20 @@ describe("createAttempt with source: adhoc", () => {
 
   it("rejects an empty question_ids list", () => {
     const db = openTestDb();
-    expect(() => createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: [] })).toThrow();
+    expect(() =>
+      createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: [], delivery_mode: "app_live" })
+    ).toThrow();
   });
 
   it("rejects a question_id that doesn't exist", () => {
     const db = openTestDb();
     expect(() =>
-      createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: ["not-a-real-id"] })
+      createAttempt(db, {
+        node_id: "test-node",
+        source: "adhoc",
+        question_ids: ["not-a-real-id"],
+        delivery_mode: "app_live",
+      })
     ).toThrow();
   });
 
@@ -43,7 +55,12 @@ describe("createAttempt with source: adhoc", () => {
     const q1 = insertQuestion(db, { tags: ["a"] });
 
     const error = expect(() =>
-      createAttempt(db, { node_id: "test-node", source: "adhoc", question_ids: [q1.id, q1.id] })
+      createAttempt(db, {
+        node_id: "test-node",
+        source: "adhoc",
+        question_ids: [q1.id, q1.id],
+        delivery_mode: "app_live",
+      })
     ).toThrow();
 
     // Verify the error message is clear and mentions the duplicate

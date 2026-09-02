@@ -10,6 +10,7 @@ import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
+import { presentItem } from "../domain/attempts.js"; // awaitItemOutcome added in Task 1.3
 
 const tagQueryShape = z
   .object({
@@ -80,7 +81,7 @@ export function trimListTagsForMcp(tags: ReturnType<typeof listTags>) {
   }));
 }
 
-export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: string): void {
+export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: string, nodeId: string): void {
   server.registerTool(
     "readme",
     {
@@ -516,6 +517,25 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
       try {
         const result = searchAssets(db, query, { type, limit: limit ?? 50, offset: offset ?? 0 });
         return ok({ ...result, has_more: (offset ?? 0) + result.assets.length < result.total });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "present_item",
+    {
+      description:
+        "Create a live item for the learner to answer in the Osmosis app. Returns immediately with an attempt/response id — the item is NOT rendered in this conversation. Call await_item_outcome afterward to learn what happened once the learner answers in the app. Either pass question_id for a specific item you authored, or tag_query to let Osmosis pick an eligible one.",
+      inputSchema: {
+        question_id: z.string().optional(),
+        tag_query: tagQueryShape,
+      },
+    },
+    async ({ question_id, tag_query }) => {
+      try {
+        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query }));
       } catch (err) {
         return fail(err);
       }

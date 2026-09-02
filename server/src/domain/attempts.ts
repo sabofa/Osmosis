@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
-import { resolveTemplateDraw, type DrawResult } from "./draw.js";
+import { resolveTemplateDraw, getEligibleQuestions, type DrawResult } from "./draw.js";
+import type { TagQuery } from "./tagQuery.js";
 
 // Unsubmitted attempts older than this many hours are considered abandoned.
 // Swept lazily (no background timer) whenever attempts are read or created.
@@ -55,7 +56,7 @@ interface ChoiceRow {
   ordinal: number;
 }
 
-function questionSnapshot(
+export function questionSnapshot(
   db: DatabaseSync,
   questionId: string,
   revealAnswer: boolean
@@ -118,7 +119,12 @@ function enqueueOutbox(db: DatabaseSync, entityType: "attempt" | "response" | "g
 
 export type CreateAttemptInput =
   | { node_id: string; source: "template"; template_id: string }
-  | { node_id: string; source: "adhoc"; question_ids: string[] };
+  | {
+      node_id: string;
+      source: "adhoc";
+      question_ids: string[];
+      delivery_mode: "app_live" | "chat_quick_check";
+    };
 
 export function createAttempt(
   db: DatabaseSync,
@@ -182,8 +188,8 @@ export function createAttempt(
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO attempt (id, node_id, source, started_at) VALUES (?, ?, 'adhoc', datetime('now'))`
-    ).run(attemptId, input.node_id);
+      `INSERT INTO attempt (id, node_id, source, delivery_mode, started_at) VALUES (?, ?, 'adhoc', ?, datetime('now'))`
+    ).run(attemptId, input.node_id, input.delivery_mode);
 
     const insertResponse = db.prepare(
       "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
@@ -197,6 +203,52 @@ export function createAttempt(
   }
 
   return { attempt_id: attemptId, questions };
+}
+
+// ----------------------------------------------------------------------------
+// Present item (live, app-rendered) — creates an adhoc/app_live attempt for a
+// single question and returns a withheld snapshot for the tutor's own
+// bookkeeping. The app is what actually shows this to the learner.
+// ----------------------------------------------------------------------------
+
+export interface PresentItemInput {
+  node_id: string;
+  question_id?: string;
+  tag_query?: TagQuery;
+}
+
+export function presentItem(
+  db: DatabaseSync,
+  input: PresentItemInput
+): { attempt_id: string; response_id: string; question: Record<string, unknown> } {
+  let questionId: string;
+
+  if (input.question_id) {
+    questionId = input.question_id;
+  } else if (input.tag_query) {
+    const eligible = getEligibleQuestions(db, { tag_query: input.tag_query });
+    if (eligible.length === 0) {
+      throw new DomainError("no_eligible_questions", "No question matches the given tag_query.");
+    }
+    questionId = eligible[Math.floor(Math.random() * eligible.length)].id;
+  } else {
+    throw new DomainError("selection_required", "present_item requires either question_id or tag_query.");
+  }
+
+  const { attempt_id, questions } = createAttempt(db, {
+    node_id: input.node_id,
+    source: "adhoc",
+    question_ids: [questionId],
+    delivery_mode: "app_live",
+  });
+
+  const response = db.prepare("SELECT id FROM response WHERE attempt_id = ?").get(attempt_id) as { id: string };
+
+  return {
+    attempt_id,
+    response_id: response.id,
+    question: questionSnapshot(db, questions[0].id, false),
+  };
 }
 
 // ----------------------------------------------------------------------------

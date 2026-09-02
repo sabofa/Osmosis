@@ -9,7 +9,7 @@ import { DomainError } from "../domain/errors.js";
 
 export function buildMcpServer(ctx: AppContext): McpServer {
   const server = new McpServer({ name: "osmosis", version: "1.0.0" });
-  registerTools(server, ctx.db, ctx.env.uploadsDir);
+  registerTools(server, ctx.db, ctx.env.uploadsDir, ctx.node.id);
   return server;
 }
 

@@ -18,7 +18,7 @@ import { createAsset } from "../src/domain/assets.js";
 
 async function connectedClient(db: ReturnType<typeof openTestDb>): Promise<{ client: Client; server: McpServer }> {
   const server = new McpServer({ name: "osmosis-test", version: "1.0.0" });
-  registerTools(server, db, "/tmp/osmosis-test-uploads");
+  registerTools(server, db, "/tmp/osmosis-test-uploads", "test-node");
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });
