@@ -192,7 +192,9 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     },
     async (params) => {
       try {
-        return ok(searchQuestions(db, params));
+        const result = searchQuestions(db, params);
+        const offset = params.offset ?? 0;
+        return ok({ ...result, has_more: offset + result.questions.length < result.total });
       } catch (err) {
         return fail(err);
       }
