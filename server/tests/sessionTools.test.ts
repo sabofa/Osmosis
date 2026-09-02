@@ -92,6 +92,39 @@ describe("session MCP tools", () => {
     expect(row.session_id).toBeNull();
   });
 
+  it("quick_check threads session_id through to the attempt", async () => {
+    const q = insertQuestion(db, { tags: ["algebra"], type: "written" });
+    const { body: session } = await callTool(client, "create_session", { name: "s" });
+
+    const { body: presented, isError } = await callTool(client, "quick_check", {
+      question_id: q.id,
+      session_id: session.id,
+    });
+    expect(isError).toBe(false);
+
+    const row = db.prepare("SELECT session_id FROM attempt WHERE id = ?").get(presented.attempt_id) as {
+      session_id: string | null;
+    };
+    expect(row.session_id).toBe(session.id);
+  });
+
+  it("quick_check still works with no session_id (session_id IS NULL path)", async () => {
+    const q = insertQuestion(db, { tags: ["algebra"], type: "written" });
+    const { body: presented, isError } = await callTool(client, "quick_check", { question_id: q.id });
+    expect(isError).toBe(false);
+    const row = db.prepare("SELECT session_id FROM attempt WHERE id = ?").get(presented.attempt_id) as {
+      session_id: string | null;
+    };
+    expect(row.session_id).toBeNull();
+  });
+
+  it("quick_check rejects an mc question via the MCP tool", async () => {
+    const q = insertQuestion(db, { tags: ["algebra"], type: "mc" });
+    const { isError, body } = await callTool(client, "quick_check", { question_id: q.id });
+    expect(isError).toBe(true);
+    expect(body.error).toBe("mc_not_allowed");
+  });
+
   it("create_template threads session_id through", async () => {
     insertQuestion(db, { tags: ["algebra"] });
     const { body: session } = await callTool(client, "create_session", { name: "s" });

@@ -268,6 +268,84 @@ export function presentItem(
 }
 
 // ----------------------------------------------------------------------------
+// Quick check (chat-mediated, free-response only) — the narrow in-node
+// comprehension check that stays in the conversation instead of switching to
+// the app. Same shape as presentItem, but restricted to type "written" (a
+// real runtime check, not just convention — see Global Constraints) and
+// tagged delivery_mode: "chat_quick_check" so Task 1.4's app-polling route
+// never picks it up.
+// ----------------------------------------------------------------------------
+
+export interface QuickCheckInput {
+  node_id: string;
+  question_id?: string;
+  tag_query?: TagQuery;
+  // Optional, mirrors presentItem's session_id: quick_check still works
+  // standalone, but a tutor-driven call inside a session should pass it so
+  // this check's history groups under that session too.
+  session_id?: string;
+}
+
+export function quickCheck(
+  db: DatabaseSync,
+  input: QuickCheckInput
+): { attempt_id: string; response_id: string; question: Record<string, unknown> } {
+  let questionId: string;
+
+  if (input.question_id) {
+    questionId = input.question_id;
+  } else if (input.tag_query) {
+    const eligible = getEligibleQuestions(db, { tag_query: input.tag_query });
+    const written = eligible.filter((q) => q.type === "written");
+    if (written.length === 0) {
+      throw new DomainError("no_eligible_questions", "No written question matches the given tag_query.");
+    }
+    questionId = written[Math.floor(Math.random() * written.length)].id;
+  } else {
+    throw new DomainError("selection_required", "quick_check requires either question_id or tag_query.");
+  }
+
+  const question = db.prepare("SELECT type FROM question WHERE id = ?").get(questionId) as
+    | { type: string }
+    | undefined;
+  if (!question) throw new DomainError("not_found", `Question "${questionId}" does not exist.`);
+  if (question.type !== "written") {
+    throw new DomainError("mc_not_allowed", "quick_check is free-response only — use present_item for mc items.");
+  }
+
+  const { attempt_id, questions } = createAttempt(db, {
+    node_id: input.node_id,
+    source: "adhoc",
+    question_ids: [questionId],
+    delivery_mode: "chat_quick_check",
+    session_id: input.session_id,
+  });
+
+  const response = db.prepare("SELECT id FROM response WHERE attempt_id = ?").get(attempt_id) as { id: string };
+
+  return { attempt_id, response_id: response.id, question: questionSnapshot(db, questions[0].id, false) };
+}
+
+export function submitQuickCheck(
+  db: DatabaseSync,
+  input: { response_id: string; response_text: string }
+): { explanation: string | null; model_answer: string | null } {
+  const row = db.prepare("SELECT attempt_id, question_id FROM response WHERE id = ?").get(input.response_id) as
+    | { attempt_id: string; question_id: string }
+    | undefined;
+  if (!row) throw new DomainError("not_found", `Response "${input.response_id}" does not exist.`);
+
+  answerResponse(db, row.attempt_id, input.response_id, { response_text: input.response_text });
+  submitAttempt(db, row.attempt_id);
+
+  const question = db.prepare("SELECT explanation, model_answer FROM question WHERE id = ?").get(row.question_id) as {
+    explanation: string | null;
+    model_answer: string | null;
+  };
+  return { explanation: question.explanation, model_answer: question.model_answer };
+}
+
+// ----------------------------------------------------------------------------
 // Await item outcome — non-blocking read of whether the app-side answer (via
 // the existing PATCH .../responses/:id + POST .../submit routes, which call
 // answerResponse/submitAttempt above) has landed yet. The MCP layer wraps

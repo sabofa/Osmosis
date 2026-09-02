@@ -10,7 +10,7 @@ import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
-import { presentItem, getItemOutcome } from "../domain/attempts.js";
+import { presentItem, getItemOutcome, quickCheck, submitQuickCheck } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 
 const tagQueryShape = z
@@ -573,6 +573,48 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
           await sleep(1_000);
         }
         return ok({ status: "pending" });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "quick_check",
+    {
+      description:
+        "A single free-response check, presented inline in this conversation, for the in-node comprehension " +
+        "check immediately after teaching. Free-response only (rejects mc questions) — use present_item/" +
+        "await_item_outcome instead for multiple-choice or anything that benefits from the app's graph/Desmos " +
+        "rendering. Either pass question_id for a specific item you authored, or tag_query to let Osmosis pick " +
+        "an eligible written one.",
+      inputSchema: {
+        question_id: z.string().optional(),
+        tag_query: tagQueryShape,
+        session_id: z.string().optional().describe(
+          "The session id from create_session. Pass it so this check's history groups under that session, " +
+            "same as present_item."
+        ),
+      },
+    },
+    async ({ question_id, tag_query, session_id }) => {
+      try {
+        return ok(quickCheck(db, { node_id: nodeId, question_id, tag_query, session_id }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "submit_quick_check",
+    {
+      description: "Record the learner's free-response answer to a quick_check and get the model answer back.",
+      inputSchema: { response_id: z.string(), response_text: z.string() },
+    },
+    async ({ response_id, response_text }) => {
+      try {
+        return ok(submitQuickCheck(db, { response_id, response_text }));
       } catch (err) {
         return fail(err);
       }
