@@ -192,7 +192,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.post("/api/attempts", async (request, reply) => {
-    const body = request.body as { source: string; template_id?: string; daily_kind?: string };
+    const body = request.body as { source: string; template_id?: string; question_ids?: string[]; daily_kind?: string };
     if (body.daily_kind !== undefined) {
       if (body.daily_kind !== "question" && body.daily_kind !== "quiz") {
         reply.code(400).send({
@@ -237,7 +237,24 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
     }
     try {
-      return createAttempt(db, { node_id: ctx.node.id, source: body.source as "template" | "adhoc", template_id: body.template_id }, ctx.env.role);
+      const source = body.source as string;
+      if (source === "template") {
+        if (!body.template_id) {
+          reply.code(400).send({ error: "template_id_required", message: "source 'template' requires template_id" });
+          return;
+        }
+        return createAttempt(db, { node_id: ctx.node.id, source: "template", template_id: body.template_id }, ctx.env.role);
+      } else if (source === "adhoc") {
+        const question_ids = body.question_ids as string[] | undefined;
+        if (!question_ids || !Array.isArray(question_ids) || question_ids.length === 0) {
+          reply.code(400).send({ error: "question_ids_required", message: "source 'adhoc' requires non-empty question_ids array" });
+          return;
+        }
+        return createAttempt(db, { node_id: ctx.node.id, source: "adhoc", question_ids }, ctx.env.role);
+      } else {
+        reply.code(400).send({ error: "unsupported_source", message: `source must be "template" or "adhoc", got ${JSON.stringify(source)}` });
+        return;
+      }
     } catch (err) {
       sendDomainError(reply, err);
       return;

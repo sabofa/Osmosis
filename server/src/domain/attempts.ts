@@ -116,41 +116,71 @@ function enqueueOutbox(db: DatabaseSync, entityType: "attempt" | "response" | "g
 // Create
 // ----------------------------------------------------------------------------
 
-export interface CreateAttemptInput {
-  node_id: string;
-  source: "template" | "adhoc";
-  template_id?: string;
-}
+export type CreateAttemptInput =
+  | { node_id: string; source: "template"; template_id: string }
+  | { node_id: string; source: "adhoc"; question_ids: string[] };
 
 export function createAttempt(
   db: DatabaseSync,
   input: CreateAttemptInput,
   role: "canonical" | "local" = "canonical"
-): { attempt_id: string } & DrawResult {
+): { attempt_id: string; questions: { id: string; lineage_id: string; type: "mc" | "written" }[] } {
   sweepAbandonedAttempts(db);
 
   if (input.source === "template") {
-    if (!input.template_id) {
-      throw new DomainError("template_id_required", "source 'template' requires template_id.");
+    const draw = resolveTemplateDraw(db, input.template_id);
+    const attemptId = uuidv4();
+
+    db.exec("BEGIN");
+    try {
+      db.prepare(
+        `INSERT INTO attempt (id, node_id, source, template_id, started_at)
+         VALUES (?, ?, 'template', ?, datetime('now'))`
+      ).run(attemptId, input.node_id, input.template_id);
+
+      const insertResponse = db.prepare(
+        "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
+      );
+      draw.questions.forEach((q, i) => insertResponse.run(uuidv4(), attemptId, q.id, i));
+
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
     }
-  } else {
-    throw new DomainError("unsupported_source", `source "${input.source}" is not supported yet.`);
+
+    return { attempt_id: attemptId, questions: draw.questions };
   }
 
-  const draw = resolveTemplateDraw(db, input.template_id!);
-  const attemptId = uuidv4();
+  // source === "adhoc"
+  if (!input.question_ids || input.question_ids.length === 0) {
+    throw new DomainError("empty_question_ids", "source 'adhoc' requires at least one question_id.");
+  }
 
+  const placeholders = input.question_ids.map(() => "?").join(",");
+  const found = db
+    .prepare(`SELECT id, lineage_id, type FROM question WHERE id IN (${placeholders}) AND retired_at IS NULL`)
+    .all(...input.question_ids) as { id: string; lineage_id: string; type: "mc" | "written" }[];
+  if (found.length !== input.question_ids.length) {
+    const foundIds = new Set(found.map((q) => q.id));
+    const missing = input.question_ids.filter((id) => !foundIds.has(id));
+    throw new DomainError("question_not_found", `Question(s) not found or retired: ${missing.join(", ")}`);
+  }
+  // Preserve caller-specified order, not the SQL IN(...) result order.
+  const byId = new Map(found.map((q) => [q.id, q]));
+  const questions = input.question_ids.map((id) => byId.get(id)!);
+
+  const attemptId = uuidv4();
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO attempt (id, node_id, source, template_id, started_at)
-       VALUES (?, ?, 'template', ?, datetime('now'))`
-    ).run(attemptId, input.node_id, input.template_id);
+      `INSERT INTO attempt (id, node_id, source, started_at) VALUES (?, ?, 'adhoc', datetime('now'))`
+    ).run(attemptId, input.node_id);
 
     const insertResponse = db.prepare(
       "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
     );
-    draw.questions.forEach((q, i) => insertResponse.run(uuidv4(), attemptId, q.id, i));
+    questions.forEach((q, i) => insertResponse.run(uuidv4(), attemptId, q.id, i));
 
     db.exec("COMMIT");
   } catch (err) {
@@ -158,7 +188,7 @@ export function createAttempt(
     throw err;
   }
 
-  return { attempt_id: attemptId, ...draw };
+  return { attempt_id: attemptId, questions };
 }
 
 // ----------------------------------------------------------------------------
