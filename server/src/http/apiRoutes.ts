@@ -273,6 +273,20 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     });
   });
 
+  app.get("/api/attempts/live-pending", async () => {
+    const row = db
+      .prepare(
+        `SELECT id FROM attempt
+         WHERE source = 'adhoc' AND delivery_mode = 'app_live'
+           AND submitted_at IS NULL AND abandoned_at IS NULL
+         ORDER BY started_at DESC LIMIT 1`
+      )
+      .get() as { id: string } | undefined;
+
+    if (!row) return { attempt: null };
+    return { attempt: getAttemptDetail(db, row.id) };
+  });
+
   app.get("/api/attempts/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {

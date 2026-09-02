@@ -6,6 +6,7 @@ import { bootstrapNode } from "../src/node.js";
 import { createSyncRuntime } from "../src/sync/client.js";
 import { createTemplate } from "../src/domain/templates.js";
 import { addSlice, NEVER_PULLED } from "../src/domain/sync.js";
+import { presentItem, createAttempt } from "../src/domain/attempts.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 // ----------------------------------------------------------------------------
@@ -312,5 +313,74 @@ describe("/api/status model grading fields", () => {
 
     const res = await app.inject({ method: "GET", url: "/api/status" });
     expect(res.json().model_grading_configured).toBe(false);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Task 1.4 — GET /api/attempts/live-pending, so the app can discover a
+// tutor-created app_live attempt to render.
+// ----------------------------------------------------------------------------
+
+describe("GET /api/attempts/live-pending", () => {
+  let app: FastifyInstance;
+  let db: ReturnType<typeof openTestDb>;
+
+  beforeAll(async () => {
+    db = openTestDb();
+    const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db, env);
+    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    await app.ready();
+  });
+
+  afterAll(async () => { await app.close(); });
+
+  it("returns null when nothing is pending", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/attempts/live-pending" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().attempt).toBeNull();
+  });
+
+  it("returns the pending app_live attempt, not a chat_quick_check one", async () => {
+    insertTag(db, "live-pending");
+    const q1 = insertQuestion(db, { tags: ["live-pending"] });
+    const q2 = insertQuestion(db, { tags: ["live-pending"] });
+
+    // A chat_quick_check attempt should never surface here — it's for the
+    // tutor's own chat-side flow, not something the app should render.
+    createAttempt(
+      db,
+      { node_id: "n1", source: "adhoc", question_ids: [q1.id], delivery_mode: "chat_quick_check" },
+      "canonical"
+    );
+
+    const presented = presentItem(db, { node_id: "n1", question_id: q2.id });
+
+    const res = await app.inject({ method: "GET", url: "/api/attempts/live-pending" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.attempt).not.toBeNull();
+    expect(body.attempt.id).toBe(presented.attempt_id);
+    expect(body.attempt.source).toBe("adhoc");
+  });
+
+  it("does not return a submitted app_live attempt", async () => {
+    const db2 = openTestDb();
+    const env = { role: "canonical" as const, label: "c2", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db2, env);
+    const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
+    await app2.ready();
+
+    insertTag(db2, "live-submitted");
+    const q = insertQuestion(db2, { tags: ["live-submitted"] });
+    const presented = presentItem(db2, { node_id: "n1", question_id: q.id });
+    db2.prepare("UPDATE attempt SET submitted_at = datetime('now') WHERE id = ?").run(presented.attempt_id);
+
+    const res = await app2.inject({ method: "GET", url: "/api/attempts/live-pending" });
+    expect(res.json().attempt).toBeNull();
+
+    await app2.close();
   });
 });
