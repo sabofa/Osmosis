@@ -9,6 +9,7 @@ import {
   NEVER_PULLED,
 } from "../src/domain/sync.js";
 import { createTemplate } from "../src/domain/templates.js";
+import { createSession } from "../src/domain/sessions.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 describe("buildPullResponse", () => {
@@ -348,6 +349,42 @@ describe("applyPullResponse", () => {
       "SELECT COUNT(*) AS n FROM template_frozen_question WHERE template_id = ?"
     ).get(template.id) as { n: number }).n;
     expect(count).toBe(2);
+  });
+
+  // Reviewer finding on task 1.6: TEMPLATE_SYNC_COLUMNS deliberately excludes
+  // session_id (a node-local grouping that must never travel as a dangling
+  // FK), but nothing actually proved that exclusion happens end to end. This
+  // pulls a session-scoped template across the wire and asserts the landed
+  // row's session_id is genuinely NULL, not merely "sync doesn't crash".
+  it("strips session_id off a session-scoped template when it syncs to a local node", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    insertQuestion(canonical, { tags: ["math"] });
+    const session = createSession(canonical, { name: "session sync test" });
+    const template = createTemplate(canonical, {
+      name: "session-scoped t",
+      tag_query: { all: ["math"] },
+      question_count: 1,
+      session_id: session.id,
+    });
+
+    const canonicalRow = canonical
+      .prepare("SELECT session_id FROM template WHERE id = ?")
+      .get(template.id) as { session_id: string | null };
+    expect(canonicalRow.session_id).toBe(session.id);
+
+    const response = buildPullResponse(canonical, {
+      node_id: "local-1", protocol_version: 1, slices: ["math"], since: null, include_grades_for_node: false,
+    });
+
+    const local = openTestDb();
+    applyPullResponse(local, response, ["math"]);
+
+    const localRow = local
+      .prepare("SELECT session_id FROM template WHERE id = ?")
+      .get(template.id) as { session_id: string | null } | undefined;
+    expect(localRow).toBeTruthy();
+    expect(localRow!.session_id).toBeNull();
   });
 });
 
