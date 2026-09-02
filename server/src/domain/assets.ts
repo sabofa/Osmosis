@@ -140,15 +140,15 @@ export interface AssetSearchResult {
 export function searchAssets(
   db: DatabaseSync,
   query: string,
-  opts?: { type?: AssetType }
-): AssetSearchResult[] {
+  opts?: { type?: AssetType; limit?: number; offset?: number }
+): { total: number; assets: AssetSearchResult[] } {
   const tokens = query
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
     .filter((t) => t.length > 0)
     .slice(0, 32);
-  if (tokens.length === 0) return [];
+  if (tokens.length === 0) return { total: 0, assets: [] };
   const ftsQuery = tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(" OR ");
 
   const clauses = ["asset_fts MATCH ?"];
@@ -157,19 +157,30 @@ export function searchAssets(
     clauses.push("a.type = ?");
     args.push(opts.type);
   }
+  const where = clauses.join(" AND ");
 
-  const rows = db
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) AS n FROM asset_fts f JOIN asset a ON a.rowid = f.rowid WHERE ${where}`)
+      .get(...(args as any[])) as { n: number }
+  ).n;
+
+  const limit = opts?.limit ?? 50;
+  const offset = opts?.offset ?? 0;
+
+  const assets = db
     .prepare(
       `SELECT a.id, a.title, a.type,
               snippet(asset_fts, 1, '[', ']', '...', 10) AS snippet
        FROM asset_fts f
        JOIN asset a ON a.rowid = f.rowid
-       WHERE ${clauses.join(" AND ")}
-       ORDER BY rank`
+       WHERE ${where}
+       ORDER BY rank
+       LIMIT ? OFFSET ?`
     )
-    .all(...(args as any[])) as unknown as AssetSearchResult[];
+    .all(...([...args, limit, offset] as any[])) as unknown as AssetSearchResult[];
 
-  return rows;
+  return { total, assets };
 }
 
 export function deleteAsset(db: DatabaseSync, uploadsDir: string, id: string): { id: string } {

@@ -470,12 +470,18 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "search_assets",
     {
-      description: "Full-text search over asset titles and extracted text. Returns snippets, not full content.",
-      inputSchema: { query: z.string(), type: z.enum(["url", "text", "file"]).optional() },
+      description: "Full-text search over source-material assets. Paginated: pass limit/offset to page past the default 50.",
+      inputSchema: {
+        query: z.string(),
+        type: z.enum(["url", "text", "file"]).optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      },
     },
-    async ({ query, type }) => {
+    async ({ query, type, limit, offset }) => {
       try {
-        return ok({ assets: searchAssets(db, query, { type }) });
+        const result = searchAssets(db, query, { type, limit: limit ?? 50, offset: offset ?? 0 });
+        return ok({ ...result, has_more: (offset ?? 0) + result.assets.length < result.total });
       } catch (err) {
         return fail(err);
       }
