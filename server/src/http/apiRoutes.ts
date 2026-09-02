@@ -23,6 +23,7 @@ import {
   submitAttempt,
   gradeResponse,
 } from "../domain/attempts.js";
+import { listSessions, getSessionDetail } from "../domain/sessions.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
@@ -191,6 +192,27 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     }
   });
 
+  // Tutoring sessions — backs the app's "Live" nav: a list of sessions, each
+  // expandable into its templates plus attempt history (and the distinguished
+  // live-session row that polls /api/attempts/live-pending?session_id=...).
+  app.get("/api/sessions", async (request) => {
+    const q = request.query as { limit?: string; offset?: string };
+    return listSessions(db, {
+      limit: q.limit ? Number(q.limit) : undefined,
+      offset: q.offset ? Number(q.offset) : undefined,
+    });
+  });
+
+  app.get("/api/sessions/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return getSessionDetail(db, id);
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
   app.post("/api/attempts", async (request, reply) => {
     const body = request.body as { source: string; template_id?: string; question_ids?: string[]; daily_kind?: string };
     if (body.daily_kind !== undefined) {
@@ -273,15 +295,28 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     });
   });
 
-  app.get("/api/attempts/live-pending", async () => {
+  // session_id is required: the live screen is always reached *through* a
+  // session now, so without it this route could hand the app some other
+  // session's leftover pending item.
+  app.get("/api/attempts/live-pending", async (request, reply) => {
+    const q = request.query as { session_id?: string };
+    if (!q.session_id) {
+      reply.code(400).send({
+        error: "session_id_required",
+        message: "GET /api/attempts/live-pending requires a session_id query param.",
+      });
+      return;
+    }
+
     const row = db
       .prepare(
         `SELECT id FROM attempt
          WHERE source = 'adhoc' AND delivery_mode = 'app_live'
+           AND session_id = ?
            AND submitted_at IS NULL AND abandoned_at IS NULL
          ORDER BY started_at DESC LIMIT 1`
       )
-      .get() as { id: string } | undefined;
+      .get(q.session_id) as { id: string } | undefined;
 
     if (!row) return { attempt: null };
     return { attempt: getAttemptDetail(db, row.id) };

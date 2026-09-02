@@ -7,6 +7,7 @@ import { createSyncRuntime } from "../src/sync/client.js";
 import { createTemplate } from "../src/domain/templates.js";
 import { addSlice, NEVER_PULLED } from "../src/domain/sync.js";
 import { presentItem, createAttempt } from "../src/domain/attempts.js";
+import { createSession } from "../src/domain/sessions.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 // ----------------------------------------------------------------------------
@@ -336,8 +337,15 @@ describe("GET /api/attempts/live-pending", () => {
 
   afterAll(async () => { await app.close(); });
 
-  it("returns null when nothing is pending", async () => {
+  it("rejects a call with no session_id (Task 1.6: the param is required)", async () => {
     const res = await app.inject({ method: "GET", url: "/api/attempts/live-pending" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("session_id_required");
+  });
+
+  it("returns null when nothing is pending for that session", async () => {
+    const session = createSession(db, { name: "empty session" });
+    const res = await app.inject({ method: "GET", url: `/api/attempts/live-pending?session_id=${session.id}` });
     expect(res.statusCode).toBe(200);
     expect(res.json().attempt).toBeNull();
   });
@@ -346,23 +354,53 @@ describe("GET /api/attempts/live-pending", () => {
     insertTag(db, "live-pending");
     const q1 = insertQuestion(db, { tags: ["live-pending"] });
     const q2 = insertQuestion(db, { tags: ["live-pending"] });
+    const session = createSession(db, { name: "s1" });
 
     // A chat_quick_check attempt should never surface here — it's for the
     // tutor's own chat-side flow, not something the app should render.
     createAttempt(
       db,
-      { node_id: "n1", source: "adhoc", question_ids: [q1.id], delivery_mode: "chat_quick_check" },
+      { node_id: "n1", source: "adhoc", question_ids: [q1.id], delivery_mode: "chat_quick_check",
+        session_id: session.id },
       "canonical"
     );
 
-    const presented = presentItem(db, { node_id: "n1", question_id: q2.id });
+    const presented = presentItem(db, { node_id: "n1", question_id: q2.id, session_id: session.id });
 
-    const res = await app.inject({ method: "GET", url: "/api/attempts/live-pending" });
+    const res = await app.inject({ method: "GET", url: `/api/attempts/live-pending?session_id=${session.id}` });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.attempt).not.toBeNull();
     expect(body.attempt.id).toBe(presented.attempt_id);
     expect(body.attempt.source).toBe("adhoc");
+    expect(body.attempt.session_id).toBe(session.id);
+  });
+
+  it("never surfaces another session's pending item", async () => {
+    const db2 = openTestDb();
+    const env = { role: "canonical" as const, label: "c3", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db2, env);
+    const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
+    await app2.ready();
+
+    insertTag(db2, "cross-session");
+    const q = insertQuestion(db2, { tags: ["cross-session"] });
+    const mine = createSession(db2, { name: "mine" });
+    const theirs = createSession(db2, { name: "theirs" });
+    presentItem(db2, { node_id: "n1", question_id: q.id, session_id: theirs.id });
+
+    const res = await app2.inject({ method: "GET", url: `/api/attempts/live-pending?session_id=${mine.id}` });
+    expect(res.json().attempt).toBeNull();
+
+    // A sessionless present_item (still allowed, per the decision point) also
+    // stays invisible to any session-scoped poll.
+    const q2 = insertQuestion(db2, { tags: ["cross-session"] });
+    presentItem(db2, { node_id: "n1", question_id: q2.id });
+    const res2 = await app2.inject({ method: "GET", url: `/api/attempts/live-pending?session_id=${mine.id}` });
+    expect(res2.json().attempt).toBeNull();
+
+    await app2.close();
   });
 
   it("does not return a submitted app_live attempt", async () => {
@@ -375,12 +413,80 @@ describe("GET /api/attempts/live-pending", () => {
 
     insertTag(db2, "live-submitted");
     const q = insertQuestion(db2, { tags: ["live-submitted"] });
-    const presented = presentItem(db2, { node_id: "n1", question_id: q.id });
+    const session = createSession(db2, { name: "s" });
+    const presented = presentItem(db2, { node_id: "n1", question_id: q.id, session_id: session.id });
     db2.prepare("UPDATE attempt SET submitted_at = datetime('now') WHERE id = ?").run(presented.attempt_id);
 
-    const res = await app2.inject({ method: "GET", url: "/api/attempts/live-pending" });
+    const res = await app2.inject({ method: "GET", url: `/api/attempts/live-pending?session_id=${session.id}` });
     expect(res.json().attempt).toBeNull();
 
     await app2.close();
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Task 1.6 — GET /api/sessions and GET /api/sessions/:id, backing the app's
+// "Live" nav (a sessions list, each expandable into its tests + history).
+// ----------------------------------------------------------------------------
+
+describe("session routes", () => {
+  let app: FastifyInstance;
+  let db: ReturnType<typeof openTestDb>;
+
+  beforeAll(async () => {
+    db = openTestDb();
+    const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db, env);
+    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    await app.ready();
+    insertTag(db, "sessions-http");
+  });
+
+  afterAll(async () => { await app.close(); });
+
+  it("GET /api/sessions lists sessions with the total/limit/offset contract", async () => {
+    createSession(db, { name: "one" });
+    createSession(db, { name: "two" });
+    createSession(db, { name: "three" });
+
+    const all = await app.inject({ method: "GET", url: "/api/sessions" });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().total).toBe(3);
+    expect(all.json().sessions).toHaveLength(3);
+
+    const paged = await app.inject({ method: "GET", url: "/api/sessions?limit=2&offset=2" });
+    expect(paged.json().total).toBe(3);
+    expect(paged.json().sessions).toHaveLength(1);
+  });
+
+  it("GET /api/sessions/:id returns the session plus its templates and attempts", async () => {
+    const session = createSession(db, { name: "detail", tag_slug: "sessions-http" });
+    const q = insertQuestion(db, { tags: ["sessions-http"] });
+    presentItem(db, { node_id: "n1", question_id: q.id, session_id: session.id });
+    createTemplate(db, {
+      name: "session test",
+      tag_query: { all: ["sessions-http"] },
+      question_count: 1,
+      session_id: session.id,
+    });
+    // A template outside the session must not leak into its detail view.
+    createTemplate(db, { name: "homework", tag_query: { all: ["sessions-http"] }, question_count: 1 });
+
+    const res = await app.inject({ method: "GET", url: `/api/sessions/${session.id}` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.name).toBe("detail");
+    expect(body.tag_slug).toBe("sessions-http");
+    expect(body.attempts).toHaveLength(1);
+    expect(body.attempts[0].delivery_mode).toBe("app_live");
+    expect(body.templates).toHaveLength(1);
+    expect(body.templates[0].name).toBe("session test");
+  });
+
+  it("GET /api/sessions/:id 404s for an unknown session", async () => {
+    const res = await app.inject({ method: "GET", url: `/api/sessions/${uuidv4()}` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("not_found");
   });
 });
