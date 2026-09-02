@@ -766,7 +766,7 @@ git commit -m "test: end-to-end backend coverage for the app-mediated live loop"
 **No session concept exists in the schema today** — confirmed by this plan's research pass: `attempt.node_id` is physical-node identity (canonical vs. local), not a tutoring-session grouping, and there is no `session` table anywhere in the migrations.
 
 **Files:**
-- Create: `server/migrations/011_tutor_sessions.sql`
+- Create: `server/migrations/010_tutor_sessions.sql` (renumbered from the `011` shown below at execution time — Phase 2's `010_item_engine_ingestion_fields.sql` didn't exist yet when this task actually ran, so `010` was the real next-available number; confirmed via pre-flight ledger ruling. **If Phase 2 lands later, its migration must be renumbered to `012` or higher** — do not reuse `010`, it's taken.)
 - Create: `server/src/domain/sessions.ts` — new domain module
 - Modify: `server/src/domain/attempts.ts` — `CreateAttemptInput`'s adhoc variant gains optional `session_id`; `presentItem`/`quickCheck` (Tasks 1.2/1.8) accept and thread it through
 - Modify: `server/src/domain/templates.ts` — `template` gains optional `session_id`, for the "session-specific test" case
@@ -776,7 +776,7 @@ git commit -m "test: end-to-end backend coverage for the app-mediated live loop"
 **Schema:**
 
 ```sql
--- server/migrations/011_tutor_sessions.sql
+-- server/migrations/010_tutor_sessions.sql (see the renumbering note above)
 CREATE TABLE tutor_session (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -1077,7 +1077,7 @@ git commit -m "feat: add quick_check/submit_quick_check MCP tools (chat-mediated
 | Provenance (tutor-authored vs. textbook-sourced) | `question.created_by` exists today but is `CHECK (created_by IN ('claude', 'human'))` — a *who wrote the JSON*, not *where the content came from* axis | These are different questions. Add a new column `question.provenance TEXT CHECK (provenance IN ('tutor_authored', 'textbook_sourced'))`, nullable at first (backfill unknown as `NULL`, not a guess) rather than overloading `created_by` |
 
 **Files for this phase:**
-- Create: `server/migrations/010_item_engine_ingestion_fields.sql` — adds the three columns above (renumbered from `009` since Phase 1's Task 1.2 now claims that number for `delivery_mode`)
+- Create: `server/migrations/011_item_engine_ingestion_fields.sql` — adds the three columns above (renumbered again: `009` went to Task 1.2's `delivery_mode`, and `010` went to Task 1.6's `tutor_sessions` when Phase 1 actually shipped before this phase — re-check the real highest number in `server/migrations/` before assigning, as this document's own numbers have now drifted twice)
 - Modify: `server/src/domain/questions.ts` — extend `CreateQuestionInput`/`EditQuestionInput` (find exact type names via `grep "interface.*QuestionInput" server/src/domain/questions.ts`) to accept `claim_rung`, `tests_error`, `provenance`; extend `QuestionSummary`/`QuestionDetail` to return them
 - Modify: `server/src/mcp/tools.ts` — extend `questionInputShape` (currently `tools.ts:27-52`) with the three new optional fields, with Zod enums for `claim_rung` and `provenance` matching the CHECK constraints exactly (so a schema violation is caught by Zod before it hits SQLite's CHECK and produces a less legible error)
 
