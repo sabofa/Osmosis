@@ -194,13 +194,24 @@ function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
   };
 }
 
-export function listTemplates(db: DatabaseSync, opts: { includeRetired?: boolean } = {}): TemplateSummary[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM template ${opts.includeRetired ? "" : "WHERE retired_at IS NULL"} ORDER BY created_at DESC`
-    )
-    .all() as unknown as TemplateRow[];
+export function listTemplates(
+  db: DatabaseSync,
+  opts: { includeRetired?: boolean; limit?: number; offset?: number } = {}
+): TemplateSummary[] {
+  const where = opts.includeRetired ? "" : "WHERE retired_at IS NULL";
+  const rows =
+    opts.limit === undefined
+      ? (db.prepare(`SELECT * FROM template ${where} ORDER BY created_at DESC`).all() as unknown as TemplateRow[])
+      : (db
+          .prepare(`SELECT * FROM template ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+          .all(opts.limit, opts.offset ?? 0) as unknown as TemplateRow[]);
   return rows.map((r) => toSummary(db, r));
+}
+
+export function countTemplates(db: DatabaseSync, opts: { includeRetired?: boolean } = {}): number {
+  const where = opts.includeRetired ? "" : "WHERE retired_at IS NULL";
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM template ${where}`).get() as { n: number };
+  return row.n;
 }
 
 export function getTemplateDetail(db: DatabaseSync, id: string): TemplateSummary {

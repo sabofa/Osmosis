@@ -7,7 +7,7 @@ import { bootstrap } from "../domain/bootstrap.js";
 import { listTags, createTag, mergeTags, countTags } from "../domain/tags.js";
 import { createQuestions, editQuestion, retireQuestion, searchQuestions, getQuestionDetail } from "../domain/questions.js";
 import { getConfig, setConfig } from "../domain/config.js";
-import { listTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
+import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
 
@@ -293,12 +293,20 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "list_templates",
     {
-      description: "List saved draw templates, with live eligible_count, attempt_count, and mean_score.",
-      inputSchema: { include_retired: z.boolean().optional() },
+      description:
+        "List saved draw templates, with live eligible_count, attempt_count, and mean_score. Paginated: pass limit/offset to page past the default 50.",
+      inputSchema: {
+        include_retired: z.boolean().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      },
     },
-    async ({ include_retired }) => {
+    async ({ include_retired, limit, offset }) => {
       try {
-        return ok({ templates: listTemplates(db, { includeRetired: include_retired }) });
+        const opts = { includeRetired: include_retired, limit: limit ?? 50, offset: offset ?? 0 };
+        const total = countTemplates(db, { includeRetired: include_retired });
+        const templates = listTemplates(db, opts);
+        return ok({ total, templates, has_more: (offset ?? 0) + templates.length < total });
       } catch (err) {
         return fail(err);
       }
