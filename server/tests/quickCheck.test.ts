@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { openTestDb, insertTag, insertQuestion } from "./helpers.js";
 import { quickCheck, submitQuickCheck } from "../src/domain/attempts.js";
 import { createSession } from "../src/domain/sessions.js";
+import { DomainError } from "../src/domain/errors.js";
 
 describe("quickCheck", () => {
   it("presents a written question inline, withholding the model answer", () => {
@@ -50,6 +51,42 @@ describe("quickCheck", () => {
       session_id: string | null;
     };
     expect(attemptRow.session_id).toBeNull();
+  });
+
+  it("resolves a tag_query matching only written questions", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q = insertQuestion(db, { tags: ["a"], type: "written" });
+
+    const result = quickCheck(db, { node_id: "test-node", tag_query: { all: ["a"] } });
+
+    expect(result.question.id).toBe(q.id);
+  });
+
+  it("filters a mixed tag_query down to written questions only", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    insertQuestion(db, { tags: ["a"], type: "mc" });
+    const written = insertQuestion(db, { tags: ["a"], type: "written" });
+
+    const result = quickCheck(db, { node_id: "test-node", tag_query: { all: ["a"] } });
+
+    expect(result.question.id).toBe(written.id);
+  });
+
+  it("throws no_eligible_questions when tag_query matches only mc questions", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    insertQuestion(db, { tags: ["a"], type: "mc" });
+
+    expect(() => quickCheck(db, { node_id: "test-node", tag_query: { all: ["a"] } })).toThrow(DomainError);
+    try {
+      quickCheck(db, { node_id: "test-node", tag_query: { all: ["a"] } });
+      throw new Error("expected quickCheck to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DomainError);
+      expect((err as DomainError).code).toBe("no_eligible_questions");
+    }
   });
 });
 
