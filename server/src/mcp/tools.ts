@@ -9,7 +9,7 @@ import { createQuestions, editQuestion, retireQuestion, searchQuestions, getQues
 import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
-import { createAsset, getAsset, searchAssets, listAssets } from "../domain/assets.js";
+import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
 
 const tagQueryShape = z
   .object({
@@ -433,12 +433,19 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "list_assets",
     {
-      description: "List uploaded assets without needing a search query. unlinked_only filters to assets no question currently references via document_id.",
-      inputSchema: { unlinked_only: z.boolean().optional() },
+      description: "List source-material assets (notes, PDFs, links). Paginated: pass limit/offset to page past the default 50.",
+      inputSchema: {
+        unlinked_only: z.boolean().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      },
     },
-    async ({ unlinked_only }) => {
+    async ({ unlinked_only, limit, offset }) => {
       try {
-        return ok({ assets: listAssets(db, { unlinkedOnly: unlinked_only }) });
+        const opts = { unlinkedOnly: unlinked_only, limit: limit ?? 50, offset: offset ?? 0 };
+        const total = countAssets(db, { unlinkedOnly: unlinked_only });
+        const assets = listAssets(db, opts);
+        return ok({ total, assets, has_more: (offset ?? 0) + assets.length < total });
       } catch (err) {
         return fail(err);
       }

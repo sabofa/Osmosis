@@ -103,13 +103,31 @@ export interface AssetSummary {
   created_by: "claude" | "human";
 }
 
-export function listAssets(db: DatabaseSync, opts?: { unlinkedOnly?: boolean }): AssetSummary[] {
+export function listAssets(
+  db: DatabaseSync,
+  opts?: { unlinkedOnly?: boolean; limit?: number; offset?: number }
+): AssetSummary[] {
   const where = opts?.unlinkedOnly
     ? "WHERE id NOT IN (SELECT DISTINCT document_id FROM question WHERE document_id IS NOT NULL)"
     : "";
+  if (opts?.limit === undefined) {
+    return db
+      .prepare(`SELECT id, title, type, created_at, created_by FROM asset ${where} ORDER BY created_at DESC`)
+      .all() as unknown as AssetSummary[];
+  }
   return db
-    .prepare(`SELECT id, title, type, created_at, created_by FROM asset ${where} ORDER BY created_at DESC`)
-    .all() as unknown as AssetSummary[];
+    .prepare(
+      `SELECT id, title, type, created_at, created_by FROM asset ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    )
+    .all(opts.limit, opts.offset ?? 0) as unknown as AssetSummary[];
+}
+
+export function countAssets(db: DatabaseSync, opts?: { unlinkedOnly?: boolean }): number {
+  const where = opts?.unlinkedOnly
+    ? "WHERE id NOT IN (SELECT DISTINCT document_id FROM question WHERE document_id IS NOT NULL)"
+    : "";
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM asset ${where}`).get() as { n: number };
+  return row.n;
 }
 
 export interface AssetSearchResult {
