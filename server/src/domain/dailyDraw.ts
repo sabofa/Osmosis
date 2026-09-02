@@ -112,7 +112,7 @@ export function resolveDailyDraw(
          JOIN question q ON q.id = dq.question_id
          WHERE dq.daily_draw_id = ? ORDER BY dq.ordinal`
       )
-      .all(existing.id) as ResolvedDailyQuestion[];
+      .all(existing.id) as unknown as ResolvedDailyQuestion[];
     return {
       daily_draw_id: existing.id,
       draw_date: drawDate,
@@ -182,7 +182,7 @@ export function resolveDailyDraw(
          JOIN question q ON q.id = dq.question_id
          WHERE dq.daily_draw_id = ? ORDER BY dq.ordinal`
       )
-      .all(winner.id) as ResolvedDailyQuestion[];
+      .all(winner.id) as unknown as ResolvedDailyQuestion[];
 
     return {
       daily_draw_id: winner.id,
