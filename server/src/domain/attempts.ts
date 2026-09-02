@@ -124,6 +124,9 @@ export type CreateAttemptInput =
       source: "adhoc";
       question_ids: string[];
       delivery_mode: "app_live" | "chat_quick_check";
+      // Optional by design: an adhoc attempt with session_id IS NULL behaves
+      // exactly as it did before sessions existed. See migration 010.
+      session_id?: string;
     };
 
 export function createAttempt(
@@ -171,6 +174,13 @@ export function createAttempt(
     throw new DomainError("duplicate_question_ids", `Question IDs must be unique; found duplicate(s): ${uniqueDuplicates.join(", ")}`);
   }
 
+  // A bad session id would otherwise surface as a raw SQLite FK error (or, on a
+  // connection without foreign_keys ON, silently write a dangling reference).
+  if (input.session_id) {
+    const session = db.prepare("SELECT id FROM tutor_session WHERE id = ?").get(input.session_id);
+    if (!session) throw new DomainError("not_found", `Session "${input.session_id}" does not exist.`);
+  }
+
   const placeholders = input.question_ids.map(() => "?").join(",");
   const found = db
     .prepare(`SELECT id, lineage_id, type FROM question WHERE id IN (${placeholders}) AND retired_at IS NULL`)
@@ -188,8 +198,9 @@ export function createAttempt(
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO attempt (id, node_id, source, delivery_mode, started_at) VALUES (?, ?, 'adhoc', ?, datetime('now'))`
-    ).run(attemptId, input.node_id, input.delivery_mode);
+      `INSERT INTO attempt (id, node_id, source, delivery_mode, session_id, started_at)
+       VALUES (?, ?, 'adhoc', ?, ?, datetime('now'))`
+    ).run(attemptId, input.node_id, input.delivery_mode, input.session_id ?? null);
 
     const insertResponse = db.prepare(
       "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
@@ -215,6 +226,10 @@ export interface PresentItemInput {
   node_id: string;
   question_id?: string;
   tag_query?: TagQuery;
+  // Optional (see Task 1.6's decision point): present_item still works
+  // standalone, but every real tutor-driven call supplies the session it
+  // belongs to, so the app's live screen only ever surfaces this session's item.
+  session_id?: string;
 }
 
 export function presentItem(
@@ -240,6 +255,7 @@ export function presentItem(
     source: "adhoc",
     question_ids: [questionId],
     delivery_mode: "app_live",
+    session_id: input.session_id,
   });
 
   const response = db.prepare("SELECT id FROM response WHERE attempt_id = ?").get(attempt_id) as { id: string };
@@ -354,6 +370,7 @@ interface AttemptRow {
   source: string;
   template_id: string | null;
   daily_draw_id: string | null;
+  session_id: string | null;
   started_at: string;
   submitted_at: string | null;
   abandoned_at: string | null;
@@ -407,6 +424,7 @@ export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<st
     source: attempt.source,
     template_id: attempt.template_id,
     daily_draw_id: attempt.daily_draw_id,
+    session_id: attempt.session_id,
     started_at: attempt.started_at,
     submitted_at: attempt.submitted_at,
     abandoned_at: attempt.abandoned_at,

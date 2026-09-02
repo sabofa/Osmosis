@@ -5,6 +5,29 @@ import type { DatabaseSync } from "node:sqlite";
 // from the canonical node to a local node holding a tag-based slice of it.
 // ----------------------------------------------------------------------------
 
+// The template columns that actually travel between nodes. session_id is
+// deliberately absent: tutor_session is a node-local grouping (it is never
+// synced), so a template that crossed the wire carrying one would land as a
+// dangling FK on the other side. Same allowlist discipline as
+// ATTEMPT_COLUMNS on the push side.
+const TEMPLATE_SYNC_COLUMNS = [
+  "id",
+  "name",
+  "description",
+  "tag_query",
+  "question_count",
+  "mc_ratio",
+  "difficulty_min",
+  "difficulty_max",
+  "calculator_policy",
+  "weighting",
+  "frozen",
+  "time_limit_sec",
+  "created_at",
+  "updated_at",
+  "retired_at",
+] as const;
+
 export interface PullRequest {
   node_id: string;
   protocol_version: number;
@@ -316,7 +339,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
   }
 
   const templates = db
-    .prepare("SELECT * FROM template WHERE retired_at IS NULL ORDER BY id")
+    .prepare(`SELECT ${TEMPLATE_SYNC_COLUMNS.join(", ")} FROM template WHERE retired_at IS NULL ORDER BY id`)
     .all() as unknown as Record<string, unknown>[];
 
   // A frozen template's fixed question set is part of the template's meaning —
@@ -461,15 +484,8 @@ export function applyPullResponse(
   slices: string[] = []
 ): ApplyPullResult {
   const upsertTemplate = db.prepare(
-    `INSERT INTO template (
-       id, name, description, tag_query, question_count, mc_ratio,
-       difficulty_min, difficulty_max, calculator_policy, weighting,
-       frozen, time_limit_sec, created_at, updated_at, retired_at
-     ) VALUES (
-       @id, @name, @description, @tag_query, @question_count, @mc_ratio,
-       @difficulty_min, @difficulty_max, @calculator_policy, @weighting,
-       @frozen, @time_limit_sec, @created_at, @updated_at, @retired_at
-     )
+    `INSERT INTO template (${TEMPLATE_SYNC_COLUMNS.join(", ")})
+     VALUES (${TEMPLATE_SYNC_COLUMNS.map((c) => `@${c}`).join(", ")})
      ON CONFLICT (id) DO UPDATE SET
        name = excluded.name,
        description = excluded.description,
@@ -518,7 +534,12 @@ export function applyPullResponse(
     const findLocalQuestion = db.prepare("SELECT id FROM question WHERE id = ?");
 
     for (const t of response.templates as Record<string, unknown>[]) {
-      upsertTemplate.run(t as Record<string, any>);
+      // Column allowlist, mirroring applyPushRequest's ATTEMPT_COLUMNS: a peer
+      // on a different schema version (or a node-local-only column such as
+      // session_id) must not reach the prepared statement's named parameters.
+      const fields: Record<string, unknown> = {};
+      for (const c of TEMPLATE_SYNC_COLUMNS) fields[c] = t[c] ?? null;
+      upsertTemplate.run(fields as Record<string, any>);
       templatesApplied += 1;
 
       const frozen = frozenByTemplate.get(t.id as string);

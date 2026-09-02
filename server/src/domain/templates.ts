@@ -28,6 +28,7 @@ export interface TemplateRow {
   weighting: "random" | "weak_weighted" | null;
   frozen: 0 | 1;
   time_limit_sec: number | null;
+  session_id: string | null;
   created_at: string;
   updated_at: string;
   retired_at: string | null;
@@ -45,6 +46,10 @@ export interface TemplateInput {
   weighting?: string | null;
   frozen?: boolean;
   time_limit_sec?: number | null;
+  // Optional: a template with session_id IS NULL is an ordinary bank template
+  // (homework, the general list). A session-scoped one shows up under its
+  // session in the app instead. See migration 010.
+  session_id?: string | null;
 }
 
 function validateTemplateFields(input: {
@@ -127,6 +132,7 @@ export interface TemplateSummary {
   weighting: string | null;
   frozen: boolean;
   time_limit_sec: number | null;
+  session_id: string | null;
   eligible_count: number;
   attempt_count: number;
   mean_score: number | null;
@@ -181,6 +187,7 @@ function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
     weighting: row.weighting,
     frozen: row.frozen === 1,
     time_limit_sec: row.time_limit_sec,
+    session_id: row.session_id,
     eligible_count: eligibleCount,
     attempt_count: stats.attempt_count,
     mean_score: stats.mean_score,
@@ -288,6 +295,11 @@ export function createTemplate(
     })
   );
 
+  if (input.session_id) {
+    const session = db.prepare("SELECT id FROM tutor_session WHERE id = ?").get(input.session_id);
+    if (!session) throw new DomainError("not_found", `Session "${input.session_id}" does not exist.`);
+  }
+
   const id = uuidv4();
   const frozen = input.frozen ?? false;
 
@@ -296,10 +308,10 @@ export function createTemplate(
     db.prepare(
       `INSERT INTO template
          (id, name, description, tag_query, question_count, mc_ratio,
-          difficulty_min, difficulty_max, calculator_policy, weighting, frozen, time_limit_sec)
+          difficulty_min, difficulty_max, calculator_policy, weighting, frozen, time_limit_sec, session_id)
        VALUES
          (@id, @name, @description, @tag_query, @question_count, @mc_ratio,
-          @difficulty_min, @difficulty_max, @calculator_policy, @weighting, @frozen, @time_limit_sec)`
+          @difficulty_min, @difficulty_max, @calculator_policy, @weighting, @frozen, @time_limit_sec, @session_id)`
     ).run({
       id,
       name: input.name,
@@ -313,6 +325,7 @@ export function createTemplate(
       weighting,
       frozen: frozen ? 1 : 0,
       time_limit_sec: input.time_limit_sec ?? null,
+      session_id: input.session_id ?? null,
     });
 
     if (frozen) {
