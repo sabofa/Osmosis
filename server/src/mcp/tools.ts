@@ -559,7 +559,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "await_item_outcome",
     {
       description:
-        "Wait for the learner to answer the item from present_item, up to ~25 seconds. Returns the outcome once answered, or status: 'pending' if the learner hasn't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation.",
+        "Wait for the learner to answer the item from present_item, up to ~25 seconds. Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), or status: 'pending' if the learner hasn't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation.",
       inputSchema: {
         response_id: z.string(),
       },
@@ -569,7 +569,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
         const deadline = Date.now() + 25_000;
         while (Date.now() < deadline) {
           const outcome = getItemOutcome(db, response_id);
-          if (outcome.status === "answered") return ok(outcome);
+          if (outcome.status === "answered" || outcome.status === "abandoned") return ok(outcome);
           await sleep(1_000);
         }
         return ok({ status: "pending" });

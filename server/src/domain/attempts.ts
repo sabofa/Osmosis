@@ -354,6 +354,7 @@ export function submitQuickCheck(
 
 export type ItemOutcome =
   | { status: "pending" }
+  | { status: "abandoned" }
   | {
       status: "answered";
       correct: boolean | null;
@@ -363,15 +364,20 @@ export type ItemOutcome =
     };
 
 export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcome {
+  sweepAbandonedAttempts(db);
+
   const row = db
     .prepare(
-      `SELECT r.attempt_id, r.question_id, a.submitted_at
+      `SELECT r.attempt_id, r.question_id, a.submitted_at, a.abandoned_at
        FROM response r JOIN attempt a ON a.id = r.attempt_id
        WHERE r.id = ?`
     )
-    .get(responseId) as { attempt_id: string; question_id: string; submitted_at: string | null } | undefined;
+    .get(responseId) as
+    | { attempt_id: string; question_id: string; submitted_at: string | null; abandoned_at: string | null }
+    | undefined;
   if (!row) throw new DomainError("not_found", `Response "${responseId}" does not exist.`);
 
+  if (row.abandoned_at && !row.submitted_at) return { status: "abandoned" };
   if (!row.submitted_at) return { status: "pending" };
 
   const question = db.prepare("SELECT type, explanation, model_answer FROM question WHERE id = ?").get(

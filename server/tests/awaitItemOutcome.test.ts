@@ -41,4 +41,17 @@ describe("getItemOutcome", () => {
     const db = openTestDb();
     expect(() => getItemOutcome(db, "not-real")).toThrow();
   });
+
+  it("reports abandoned, not pending forever, once the item ages past the abandon window", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q = insertQuestion(db, { tags: ["a"] });
+    const presented = presentItem(db, { node_id: "test-node", question_id: q.id });
+
+    db.prepare("UPDATE attempt SET started_at = datetime('now', '-25 hours') WHERE id = ?").run(presented.attempt_id);
+
+    // getItemOutcome sweeps abandoned attempts itself — no separate call needed.
+    const outcome = getItemOutcome(db, presented.response_id);
+    expect(outcome.status).toBe("abandoned");
+  });
 });

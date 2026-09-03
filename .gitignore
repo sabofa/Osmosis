@@ -5,6 +5,8 @@ dist/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+server/data/
+server/seed-review.mts
 *.log
 .DS_Store
 .worktrees/
