@@ -314,7 +314,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
          WHERE source = 'adhoc' AND delivery_mode = 'app_live'
            AND session_id = ?
            AND submitted_at IS NULL AND abandoned_at IS NULL
-         ORDER BY started_at DESC LIMIT 1`
+         ORDER BY started_at DESC, id DESC LIMIT 1`
       )
       .get(q.session_id) as { id: string } | undefined;
 

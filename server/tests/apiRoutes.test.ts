@@ -403,6 +403,43 @@ describe("GET /api/attempts/live-pending", () => {
     await app2.close();
   });
 
+  it("breaks a started_at tie deterministically via id DESC (Fix 2)", async () => {
+    const db2 = openTestDb();
+    const env = { role: "canonical" as const, label: "c4", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db2, env);
+    const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
+    await app2.ready();
+
+    insertTag(db2, "live-tie");
+    const q1 = insertQuestion(db2, { tags: ["live-tie"] });
+    const q2 = insertQuestion(db2, { tags: ["live-tie"] });
+    const session = createSession(db2, { name: "tie session" });
+
+    const first = presentItem(db2, { node_id: "n1", question_id: q1.id, session_id: session.id });
+    const second = presentItem(db2, { node_id: "n1", question_id: q2.id, session_id: session.id });
+
+    // started_at is second-granularity (datetime('now')) — force both rows to
+    // an identical current timestamp to simulate two items queued within the
+    // same second, which the route's ORDER BY must still resolve
+    // deterministically. (Using "now" rather than an arbitrary past date
+    // keeps this clear of the abandon-sweep, which would otherwise mark a
+    // stale-looking attempt abandoned between requests.)
+    const now = (db2.prepare("SELECT datetime('now') AS now").get() as { now: string }).now;
+    db2.prepare("UPDATE attempt SET started_at = ? WHERE id IN (?, ?)")
+      .run(now, first.attempt_id, second.attempt_id);
+
+    const winner = [first.attempt_id, second.attempt_id].sort().reverse()[0];
+
+    for (let i = 0; i < 3; i++) {
+      const res = await app2.inject({ method: "GET", url: `/api/attempts/live-pending?session_id=${session.id}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().attempt.id).toBe(winner);
+    }
+
+    await app2.close();
+  });
+
   it("does not return a submitted app_live attempt", async () => {
     const db2 = openTestDb();
     const env = { role: "canonical" as const, label: "c2", port: 0, dbPath: ":memory:",
