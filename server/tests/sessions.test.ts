@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { openTestDb, insertTag, insertQuestion } from "./helpers.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../src/domain/sessions.js";
 import { createAttempt, presentItem, getAttemptDetail } from "../src/domain/attempts.js";
-import { createTemplate, listTemplates } from "../src/domain/templates.js";
+import { createTemplate, listTemplates, retireTemplate } from "../src/domain/templates.js";
 import { DomainError } from "../src/domain/errors.js";
 
 // ----------------------------------------------------------------------------
@@ -153,6 +153,32 @@ describe("getSessionDetail", () => {
     const detail = getSessionDetail(db, s.id);
     expect(detail.attempts).toEqual([]);
     expect(detail.templates).toEqual([]);
+  });
+
+  it("excludes retired templates — a retired session-scoped template is not startable from the session view", () => {
+    const db = openTestDb();
+    insertTag(db, "geo");
+    insertQuestion(db, { tags: ["geo"] });
+    const session = createSession(db, { name: "Geometry" });
+
+    const live = createTemplate(db, {
+      name: "still active",
+      tag_query: { all: ["geo"] },
+      question_count: 1,
+      session_id: session.id,
+    });
+    const dead = createTemplate(db, {
+      name: "retired",
+      tag_query: { all: ["geo"] },
+      question_count: 1,
+      session_id: session.id,
+    });
+    retireTemplate(db, dead.id);
+
+    const detail = getSessionDetail(db, session.id);
+    const templates = detail.templates as { id: string }[];
+    expect(templates).toHaveLength(1);
+    expect(templates[0].id).toBe(live.id);
   });
 });
 

@@ -115,7 +115,7 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
     .prepare(
       `SELECT id, name, description, question_count, frozen, time_limit_sec, created_at, retired_at
        FROM template
-       WHERE session_id = ?
+       WHERE session_id = ? AND retired_at IS NULL
        ORDER BY created_at DESC, id DESC`
     )
     .all(sessionId) as {
