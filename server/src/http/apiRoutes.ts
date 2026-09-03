@@ -266,19 +266,14 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
           return;
         }
         return createAttempt(db, { node_id: ctx.node.id, source: "template", template_id: body.template_id }, ctx.env.role);
-      } else if (source === "adhoc") {
-        const question_ids = body.question_ids as string[] | undefined;
-        if (!question_ids || !Array.isArray(question_ids) || question_ids.length === 0) {
-          reply.code(400).send({ error: "question_ids_required", message: "source 'adhoc' requires non-empty question_ids array" });
-          return;
-        }
-        return createAttempt(
-          db,
-          { node_id: ctx.node.id, source: "adhoc", question_ids, delivery_mode: "app_live" },
-          ctx.env.role
-        );
       } else {
-        reply.code(400).send({ error: "unsupported_source", message: `source must be "template" or "adhoc", got ${JSON.stringify(source)}` });
+        // "adhoc" over this REST endpoint was reverted: it produced attempts
+        // tagged app_live with no session_id, which GET /api/attempts/live-pending
+        // (now session-required) can never discover — unreachable state the app
+        // could create but never render. The tutor's real live-item path is MCP
+        // (present_item), not this route. If the app ever needs to self-serve
+        // adhoc attempts, this branch should accept session_id in the body first.
+        reply.code(400).send({ error: "unsupported_source", message: `source must be "template", got ${JSON.stringify(source)}` });
         return;
       }
     } catch (err) {

@@ -461,6 +461,30 @@ describe("GET /api/attempts/live-pending", () => {
   });
 });
 
+describe("POST /api/attempts — source: adhoc is rejected", () => {
+  it("400s rather than creating an unreachable app_live attempt with no session_id", async () => {
+    const db2 = openTestDb();
+    const env = { role: "canonical" as const, label: "c5", port: 0, dbPath: ":memory:",
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+    const node = bootstrapNode(db2, env);
+    const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
+    await app2.ready();
+
+    insertTag(db2, "reverted");
+    const q = insertQuestion(db2, { tags: ["reverted"] });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/api/attempts",
+      payload: { source: "adhoc", question_ids: [q.id] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("unsupported_source");
+
+    await app2.close();
+  });
+});
+
 // ----------------------------------------------------------------------------
 // Task 1.6 — GET /api/sessions and GET /api/sessions/:id, backing the app's
 // "Live" nav (a sessions list, each expandable into its tests + history).
