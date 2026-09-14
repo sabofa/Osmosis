@@ -12,6 +12,7 @@ import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
 import { presentItem, getItemOutcome, quickCheck, submitQuickCheck } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
+import { setRetentionTarget, getDueItems } from "../domain/retention.js";
 
 const tagQueryShape = z
   .object({
@@ -707,6 +708,46 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
       try {
         const result = listSessions(db, { limit: limit ?? 50, offset: offset ?? 0 });
         return ok({ ...result, has_more: (offset ?? 0) + result.sessions.length < result.total });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "set_retention_target",
+    {
+      description:
+        "Tell Osmosis how long a piece of content needs to be retained, and let Osmosis compute when to resurface it. You supply the target and reason; Osmosis owns scheduling — never call this expecting to control exact timing.",
+      inputSchema: {
+        identity_key: z.string().describe("A tag slug or node_key — whatever identity this retention target applies to."),
+        retention_target: z.string().describe("A label for this specific target, e.g. 'chapter-8-test' or 'final-exam'. One identity can have several open targets."),
+        target_source: z.enum(["engine", "tutor_direct"]).describe("'engine' if this came from a published assessment date; 'tutor_direct' if you set it yourself for a self-directed topic."),
+        needs_last_until: z.string().describe("ISO date/datetime the material needs to be retained until."),
+      },
+    },
+    async ({ identity_key, retention_target, target_source, needs_last_until }) => {
+      try {
+        return ok(setRetentionTarget(db, { identity_key, retention_target, target_source, needs_last_until }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_due_items",
+    {
+      description: "List identities whose retention schedule is due now (or before a given time), most-overdue first. Paginated.",
+      inputSchema: {
+        before: z.string().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      },
+    },
+    async ({ before, limit, offset }) => {
+      try {
+        return ok(getDueItems(db, { before, limit, offset }));
       } catch (err) {
         return fail(err);
       }
