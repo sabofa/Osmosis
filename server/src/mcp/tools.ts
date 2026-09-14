@@ -426,7 +426,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "get_results",
     {
       description:
-        "Read attempt results. scope 'question' is sorted worst-first and is the primary signal for what to write more of; written responses include response_text so you can see how an answer was wrong.",
+        "Read attempt results. scope 'question' is sorted worst-first and is the primary signal for what to write more of; it returns recent_responses for every item — mc and written alike — with the chosen option, response text, confidence, idk, misapplied_method and latency, plus graded/ungraded counts, so a null score (ungraded) is never averaged in as zero.",
       inputSchema: {
         scope: z.enum(["tag", "question", "attempt", "daily"]),
         tag_query: tagQueryShape,

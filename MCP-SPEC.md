@@ -105,13 +105,15 @@ becoming one larger tool.
 | `retire_question` | Soft retire |
 | `list_templates` | Live eligible_count. Paginated (`limit`/`offset`, default 50); response is `{ total, templates, has_more }` |
 | `create_template` / `edit_template` / `retire_template` | Draw specs |
-| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers. Accepts `offset` (all four scopes) to page through rows, but deliberately does *not* return `total`/`has_more` — offset-only, not the full pagination envelope used by the list/search tools above |
+| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers; a null `score` (ungraded) is never averaged as zero — tag/question rows carry `graded`, attempt/daily rows carry `ungraded`, so every mean's denominator is visible. Accepts `offset` (all four scopes) to page through rows, but deliberately does *not* return `total`/`has_more` — offset-only, not the full pagination envelope used by the list/search tools above |
 | `get_config` / `set_config` | Refuses unknown keys and secrets |
 | `create_asset` | `type: text`/`url`/`file` (base64) — the file variant is the fallback path, see §5 |
 | `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 | `read_asset` | Full `extracted_text` |
 | `search_assets` | FTS snippets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 | `get_attempt` | Full attempt read: per-response inputs + live grade |
+| `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `response_text`, `confidence`, `idk`, `misapplied_method`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer` |
+| `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
 
 Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 /mcp/:token/upload` — see §5.

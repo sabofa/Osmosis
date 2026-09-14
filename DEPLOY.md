@@ -105,4 +105,8 @@ paste the new URL into the connector dialog. The old URL 404s immediately.
 A laptop runs the same server with `NODE_ROLE=local` and
 `REMOTE_URL=http://<server-tailscale-ip>:8081`, pulls tag slices from the
 Library page, and pushes attempts back when online. Live tutor items only
-work against the canonical node's app, since they are created there.
+work against the canonical node's app, since they are created there. Drawing
+from a template the local node hasn't downloaded is a cloud test: it calls
+the canonical node's `POST /sync/template-draw` over Tailscale while online,
+and returns `503 template_requires_connection` when offline — a downloaded
+template always draws locally, online or off.
