@@ -145,6 +145,21 @@ export interface TemplateSummary {
   estimated_bytes: number;
 }
 
+// A template is "downloaded" on this node when every tag literal its
+// tag_query references is a held slice. Local draws are only meaningful then;
+// otherwise the template is a cloud test (see sync/client.ts
+// fetchAndApplyTemplateDraw). Canonical holds the whole bank and never asks.
+export function isTemplateDownloaded(db: DatabaseSync, templateId: string): boolean {
+  const row = db.prepare("SELECT tag_query FROM template WHERE id = ?").get(templateId) as { tag_query: string } | undefined;
+  if (!row) throw new DomainError("not_found", `Template "${templateId}" does not exist.`);
+  const literals = referencedTagLiterals(JSON.parse(row.tag_query) as TagQuery);
+  if (literals.length === 0) return false;
+  const held = (
+    db.prepare(`SELECT COUNT(*) AS n FROM local_slice WHERE tag_slug IN (${literals.map(() => "?").join(",")})`).get(...literals) as { n: number }
+  ).n;
+  return held === literals.length;
+}
+
 function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
   const tagQuery = JSON.parse(row.tag_query) as TagQuery;
   const eligibleCount = countEligible(db, eligibilityParamsFor({ ...row, tag_query: tagQuery }));

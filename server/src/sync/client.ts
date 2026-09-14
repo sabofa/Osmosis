@@ -1,5 +1,5 @@
 import type { AppContext } from "../http/app.js";
-import { applyPullResponse, upsertBankContent, NEVER_PULLED, type PullRequest, type PullResponse, type PushRequest, type PushResult } from "../domain/sync.js";
+import { applyPullResponse, upsertBankContent, NEVER_PULLED, type PullRequest, type PullResponse, type PushRequest, type PushResult, type TemplateDrawResponse } from "../domain/sync.js";
 
 export interface SyncRuntime {
   online: boolean;
@@ -219,6 +219,42 @@ export async function fetchAndApplyDailyDraw(
     requested: payload.requested,
     returned: payload.returned,
   };
+}
+
+// Cloud test: the local node holds the template row (templates always sync)
+// but not the slices behind it. Ask canonical to resolve the draw on the full
+// bank and mirror exactly the drawn questions (+ their tag closure) locally so
+// the attempt's responses have real question rows to reference and the
+// attempt pushes up like any other.
+export async function fetchAndApplyTemplateDraw(
+  ctx: AppContext,
+  templateId: string
+): Promise<{ questions: { id: string; lineage_id: string; type: "mc" | "written" }[]; short_draw: boolean; requested: number; returned: number; mix_adjusted: boolean }> {
+  if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
+  const res = await fetch(`${ctx.env.remoteUrl}/sync/template-draw`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ template_id: templateId }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`template-draw fetch failed: HTTP ${res.status}`);
+  const payload = (await res.json()) as TemplateDrawResponse;
+
+  const db = ctx.db;
+  db.exec("BEGIN");
+  try {
+    upsertBankContent(db, payload.tags, payload.questions);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  const byId = new Map((payload.questions as { id: string; lineage_id: string; type: "mc" | "written" }[]).map((q) => [q.id, q]));
+  const questions = payload.question_order.map((qid) => {
+    const q = byId.get(qid);
+    if (!q) throw new Error(`template-draw response missing question ${qid} in its own questions array`);
+    return { id: q.id, lineage_id: q.lineage_id, type: q.type };
+  });
+  return { questions, short_draw: payload.short_draw, requested: payload.requested, returned: payload.returned, mix_adjusted: payload.mix_adjusted };
 }
 
 export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {

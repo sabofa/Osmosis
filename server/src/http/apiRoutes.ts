@@ -13,6 +13,7 @@ import {
   downloadTemplate,
   deleteLocalTemplate,
   referencedTagLiterals,
+  isTemplateDownloaded,
 } from "../domain/templates.js";
 import {
   createAttempt,
@@ -29,7 +30,7 @@ import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
 import { addSlice, removeSlice } from "../domain/sync.js";
-import { runSync, pullOneSlice, fetchAndApplyDailyDraw } from "../sync/client.js";
+import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw } from "../sync/client.js";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
@@ -288,7 +289,33 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
           reply.code(400).send({ error: "template_id_required", message: "source 'template' requires template_id" });
           return;
         }
-        return createAttempt(db, { node_id: ctx.node.id, source: "template", template_id: body.template_id }, ctx.env.role);
+        // Canonical is the bank; a downloaded template has its slices here.
+        // Anything else is a cloud test: canonical resolves the draw while
+        // we're online, and offline it simply isn't available on this device.
+        if (ctx.env.role === "canonical" || isTemplateDownloaded(db, body.template_id)) {
+          return createAttempt(db, { node_id: ctx.node.id, source: "template", template_id: body.template_id }, ctx.env.role);
+        }
+        if (!ctx.runtime.online) {
+          reply.code(503).send({ reason: "template_requires_connection" });
+          return;
+        }
+        let drawn;
+        try {
+          drawn = await fetchAndApplyTemplateDraw(ctx, body.template_id);
+        } catch (err) {
+          if (err instanceof Error && err.message.startsWith("template-draw fetch failed")) {
+            reply.code(503).send({ reason: "template_requires_connection" });
+            return;
+          }
+          throw err;
+        }
+        const result = createAttempt(
+          db,
+          { node_id: ctx.node.id, source: "template", template_id: body.template_id, questions: drawn.questions },
+          ctx.env.role
+        );
+        return { attempt_id: result.attempt_id, questions: result.questions, short_draw: drawn.short_draw,
+                 requested: drawn.requested, returned: drawn.returned, mix_adjusted: drawn.mix_adjusted };
       } else {
         // "adhoc" over this REST endpoint was reverted: it produced attempts
         // tagged app_live with no session_id, which GET /api/attempts/live-pending
