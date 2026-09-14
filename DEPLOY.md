@@ -80,6 +80,10 @@ cd ~/Osmosis && git pull && bash deploy/install.sh
 Migrations run automatically on start. Re-running the script keeps the
 existing env file and token.
 
+Update canonical before any local node: local nodes call `/sync/*` routes
+(template-draw, daily-draw) that a not-yet-updated canonical won't have, and a
+local node ahead of canonical sees cloud tests fail as "needs a connection".
+
 ## Optional: model grading
 
 Add `DEEPSEEK_API_KEY=...` to `/etc/osmosis/canonical.env`, then

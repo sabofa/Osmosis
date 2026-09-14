@@ -243,6 +243,8 @@ export default function Take({
   }
 
   function handleExit() {
+    bankElapsed()
+    flushElapsed(response.id)
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (reduced) {
       onExit()
