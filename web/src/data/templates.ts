@@ -15,4 +15,5 @@ export interface TemplateSummary {
   difficultyMax: number | null
   frozen: boolean
   timeLimitSec: number | null
+  downloaded: boolean
 }

@@ -40,6 +40,7 @@ export function toViewTemplate(t: ApiTemplateSummary): ViewTemplateSummary {
     `${t.question_count} question${t.question_count === 1 ? '' : 's'}`,
     tags.length > 0 ? tags.join(', ') : 'whole bank',
     calc,
+    t.downloaded ? 'downloaded' : 'cloud',
   ]
   return {
     id: t.id,
@@ -56,5 +57,20 @@ export function toViewTemplate(t: ApiTemplateSummary): ViewTemplateSummary {
     difficultyMax: t.difficulty_max,
     frozen: t.frozen,
     timeLimitSec: t.time_limit_sec,
+    downloaded: t.downloaded,
   }
 }
+
+// Whether Start should be enabled for a template on this device right now.
+// Canonical holds the whole bank; a downloaded template draws locally; a
+// cloud template needs the node to be online. `status` null = unknown, so be
+// permissive and let the server say no.
+export function templateAvailable(
+  t: { downloaded: boolean },
+  status: { online: boolean; canonical: boolean } | null
+): boolean {
+  if (!status) return true
+  return status.canonical || t.downloaded || status.online
+}
+
+export const OFFLINE_CLOUD_HINT = 'Offline — download this test to use it offline'

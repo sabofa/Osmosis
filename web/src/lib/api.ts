@@ -357,7 +357,14 @@ export async function createAttempt(templateId: string): Promise<CreateAttemptRe
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.reason || body.error || `POST /api/attempts ${res.status}`)
+    const reason = body.reason || body.error
+    const message =
+      reason === 'template_requires_connection'
+        ? 'This test needs a connection, or download it first to use it offline.'
+        : reason === 'empty_draw'
+          ? 'No questions match this test on this device yet.'
+          : reason || `POST /api/attempts ${res.status}`
+    throw new Error(message)
   }
   return res.json()
 }

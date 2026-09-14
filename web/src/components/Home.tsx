@@ -9,7 +9,7 @@ import { useTagPopout } from '../hooks/useTagPopout'
 import { FOLDER_ICON_LIBRARY } from '../lib/folderIcons'
 import type { TemplateSummary } from '../data/templates'
 import { getTemplates, getStatus, listAttempts, timeAgo, type AttemptSummary, type NodeStatus } from '../lib/api'
-import { toViewTemplate } from '../lib/templateView'
+import { toViewTemplate, templateAvailable, OFFLINE_CLOUD_HINT } from '../lib/templateView'
 import { attemptsHeatmap } from '../lib/activity'
 import './Home.css'
 
@@ -552,7 +552,12 @@ export default function Home({
               <button className="detail-more" onClick={() => setOpenId(selected.id)}>
                 Full details
               </button>
-              <button className="start-btn" onClick={() => onStart(selected.id)} disabled={!!starting}>
+              <button
+                className="start-btn"
+                onClick={() => onStart(selected.id)}
+                disabled={!!starting || !templateAvailable(selected, status)}
+                title={templateAvailable(selected, status) ? undefined : OFFLINE_CLOUD_HINT}
+              >
                 {starting ? 'Starting…' : 'Start →'}
               </button>
             </div>
@@ -597,6 +602,8 @@ export default function Home({
           template={opened}
           pinned={org.isPinned(opened.id)}
           canUnpin={true}
+          canStart={templateAvailable(opened, status)}
+          startHint={OFFLINE_CLOUD_HINT}
           onTogglePin={() => (org.isPinned(opened.id) ? org.unpinTemplate(opened.id) : org.pinTemplate(opened.id))}
           onClose={() => setOpenId(null)}
           onStart={() => {

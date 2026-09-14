@@ -16,6 +16,8 @@ export default function TemplateDetail({
   pinned,
   canUnpin,
   onTogglePin,
+  canStart,
+  startHint,
 }: {
   template: TemplateSummary
   onClose: () => void
@@ -24,6 +26,8 @@ export default function TemplateDetail({
   pinned: boolean
   canUnpin: boolean
   onTogglePin: () => void
+  canStart?: boolean
+  startHint?: string
 }) {
   const timeLabel = formatTime(template.timeLimitSec)
 
@@ -93,7 +97,12 @@ export default function TemplateDetail({
           </div>
         </div>
 
-        <button className="template-detail-start" onClick={onStart}>
+        <button
+          className="template-detail-start"
+          onClick={onStart}
+          disabled={canStart === false}
+          title={canStart === false ? startHint : undefined}
+        >
           Start &rarr;
         </button>
       </div>

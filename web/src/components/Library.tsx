@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { DownloadIcon, TrashIcon, TagIcon, ClockIcon, RefreshIcon } from './icons'
+import { DownloadIcon, TrashIcon, TagIcon, ClockIcon, RefreshIcon, GlobeIcon } from './icons'
 import TagDetail from './TagDetail'
 import { useTagPopout } from '../hooks/useTagPopout'
 import {
@@ -12,6 +12,7 @@ import {
   type TemplateQuestionPreview,
   type NodeStatus,
 } from '../lib/api'
+import { templateAvailable, OFFLINE_CLOUD_HINT } from '../lib/templateView'
 import './Library.css'
 
 const TYPE_LABEL: Record<TemplateQuestionPreview['type'], string> = { mc: 'MC', written: 'Written' }
@@ -212,14 +213,12 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
               onClick={() => setSelectedId((cur) => (cur === t.id ? null : t.id))}
               title="Click for details"
             >
-              {t.downloaded && (
-                <span
-                  className={`library-card-downloaded${t.update_available ? ' update-available' : ''}`}
-                  title={t.update_available ? 'Update available' : 'Downloaded'}
-                >
-                  {t.update_available ? <RefreshIcon size={11} /> : <DownloadIcon size={11} />}
-                </span>
-              )}
+              <span
+                className={`library-card-downloaded${t.downloaded ? '' : ' cloud'}${t.update_available ? ' update-available' : ''}`}
+                title={t.downloaded ? (t.update_available ? 'Update available' : 'Downloaded — works offline') : 'Cloud — needs a connection'}
+              >
+                {t.downloaded ? (t.update_available ? <RefreshIcon size={11} /> : <DownloadIcon size={11} />) : <GlobeIcon size={11} />}
+              </span>
               <div className="library-card-name">{t.name}</div>
               <div className="library-card-meta">
                 {t.question_count} question{t.question_count === 1 ? '' : 's'} · {formatBytes(t.estimated_bytes)}
@@ -318,9 +317,10 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
                     Update
                   </button>
                 )}
-                {isCanonical ? (
-                  <div className="library-detail-downloaded-at">whole bank held on this node</div>
-                ) : selected.downloaded ? (
+                <div className="library-detail-downloaded-at">
+                  {isCanonical ? 'whole bank held on this node' : selected.downloaded ? 'downloaded · works offline' : 'cloud · needs a connection'}
+                </div>
+                {isCanonical ? null : selected.downloaded ? (
                   <button
                     className="library-detail-action delete"
                     onClick={() => handleDelete(selected.id)}
@@ -372,7 +372,12 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
               </div>
             </div>
 
-            <button className="library-detail-start" onClick={() => onStart(selected.id)}>
+            <button
+              className="library-detail-start"
+              onClick={() => onStart(selected.id)}
+              disabled={!templateAvailable(selected, status)}
+              title={templateAvailable(selected, status) ? undefined : OFFLINE_CLOUD_HINT}
+            >
               Start &rarr;
             </button>
           </div>
