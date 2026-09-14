@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
-import { resolveTemplateDraw, getEligibleQuestions, type DrawResult } from "./draw.js";
+import { resolveTemplateDraw, getEligibleQuestions, type DrawResult, type EligibleQuestion } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
 
 // Unsubmitted attempts older than this many hours are considered abandoned.
@@ -118,7 +118,14 @@ function enqueueOutbox(db: DatabaseSync, entityType: "attempt" | "response" | "g
 // ----------------------------------------------------------------------------
 
 export type CreateAttemptInput =
-  | { node_id: string; source: "template"; template_id: string }
+  | {
+      node_id: string;
+      source: "template";
+      template_id: string;
+      // A draw already resolved elsewhere (the canonical node, for a cloud
+      // test). When present the local pool is not consulted at all.
+      questions?: EligibleQuestion[];
+    }
   | {
       node_id: string;
       source: "adhoc";
@@ -137,7 +144,21 @@ export function createAttempt(
   sweepAbandonedAttempts(db);
 
   if (input.source === "template") {
-    const draw = resolveTemplateDraw(db, input.template_id);
+    let questions: EligibleQuestion[];
+    if (input.questions) {
+      const exists = db.prepare("SELECT retired_at FROM template WHERE id = ?").get(input.template_id) as { retired_at: string | null } | undefined;
+      if (!exists) throw new DomainError("not_found", `Template "${input.template_id}" does not exist.`);
+      if (exists.retired_at) throw new DomainError("template_retired", `Template "${input.template_id}" is retired.`);
+      questions = input.questions;
+    } else {
+      questions = resolveTemplateDraw(db, input.template_id).questions;
+    }
+    // An attempt with no responses can't be taken (the Take screen has nothing
+    // to show) and would sit in history as a phantom zero — refuse it.
+    if (questions.length === 0) {
+      throw new DomainError("empty_draw", "No eligible questions for this template on this node.");
+    }
+
     const attemptId = uuidv4();
 
     db.exec("BEGIN");
@@ -150,7 +171,7 @@ export function createAttempt(
       const insertResponse = db.prepare(
         "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
       );
-      draw.questions.forEach((q, i) => insertResponse.run(uuidv4(), attemptId, q.id, i));
+      questions.forEach((q, i) => insertResponse.run(uuidv4(), attemptId, q.id, i));
 
       db.exec("COMMIT");
     } catch (err) {
@@ -158,7 +179,7 @@ export function createAttempt(
       throw err;
     }
 
-    return { attempt_id: attemptId, questions: draw.questions };
+    return { attempt_id: attemptId, questions };
   }
 
   // source === "adhoc"

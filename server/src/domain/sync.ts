@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { resolveTemplateDraw } from "./draw.js";
+import { PROTOCOL_VERSION } from "../protocol.js";
 
 // ----------------------------------------------------------------------------
 // Pull protocol: bank content (tags/questions/templates/grades) flows down
@@ -190,6 +192,44 @@ export function buildQuestionPayloads(db: DatabaseSync, questionIds: string[]): 
     questions.push({ ...q, tags: qTags, choices });
   }
   return questions;
+}
+
+// ----------------------------------------------------------------------------
+// buildTemplateDrawResponse (canonical side of a "cloud test"): resolve a
+// template's draw here, on the full bank, and ship the drawn questions plus
+// the tag closure they need, so a local node that never downloaded the
+// template's slices can still run it while online. Same shape and mirroring
+// contract as /sync/daily-draw.
+// ----------------------------------------------------------------------------
+
+export interface TemplateDrawResponse {
+  protocol_version: number;
+  template_id: string;
+  tags: PullResponse["tags"];
+  questions: Record<string, unknown>[];
+  question_order: string[];
+  short_draw: boolean;
+  requested: number;
+  returned: number;
+  mix_adjusted: boolean;
+}
+
+export function buildTemplateDrawResponse(db: DatabaseSync, templateId: string): TemplateDrawResponse {
+  const draw = resolveTemplateDraw(db, templateId); // throws not_found / template_retired
+  const order = draw.questions.map((q) => q.id);
+  const questions = buildQuestionPayloads(db, order);
+  const usedTagSlugs = [...new Set(questions.flatMap((q) => (q as { tags: string[] }).tags))];
+  return {
+    protocol_version: PROTOCOL_VERSION,
+    template_id: templateId,
+    tags: fetchTagAncestorClosure(db, usedTagSlugs),
+    questions,
+    question_order: order,
+    short_draw: draw.short_draw,
+    requested: draw.requested,
+    returned: draw.returned,
+    mix_adjusted: draw.mix_adjusted ?? false,
+  };
 }
 
 // ----------------------------------------------------------------------------

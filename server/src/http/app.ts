@@ -10,8 +10,9 @@ import type { NodeRow } from "../node.js";
 import { PROTOCOL_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
-import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, type PullRequest, type PushRequest } from "../domain/sync.js";
+import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, buildTemplateDrawResponse, type PullRequest, type PushRequest } from "../domain/sync.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
+import { DomainError } from "../domain/errors.js";
 import type { SyncRuntime } from "../sync/client.js";
 
 export interface AppContext {
@@ -64,6 +65,23 @@ export function buildApp(ctx: AppContext): FastifyInstance {
         requested: resolved.requested,
         returned: resolved.returned,
       };
+    });
+
+    app.post("/sync/template-draw", async (request, reply) => {
+      const { template_id } = (request.body ?? {}) as { template_id?: unknown };
+      if (typeof template_id !== "string" || template_id.length === 0) {
+        reply.code(400).send({ error: "invalid_template_id", message: "template_id (string) is required" });
+        return;
+      }
+      try {
+        return buildTemplateDrawResponse(ctx.db, template_id);
+      } catch (err) {
+        if (err instanceof DomainError) {
+          reply.code(err.code === "not_found" ? 404 : 400).send({ error: err.code, message: err.message });
+          return;
+        }
+        throw err;
+      }
     });
 
     mountMcp(app, ctx);
