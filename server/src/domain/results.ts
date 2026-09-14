@@ -95,11 +95,15 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
   const limit = params.limit ?? 50;
   const offset = params.offset ?? 0;
 
+  // AVG ignores NULL: an ungraded written response contributes to `responses`
+  // and `ungraded` but never to the mean — a null score is "not yet graded",
+  // not zero.
   const lineages = db
     .prepare(
       `SELECT q.lineage_id,
               COUNT(*) AS responses,
-              AVG(COALESCE(rs.score, 0)) AS mean_score,
+              COUNT(rs.score) AS graded,
+              AVG(rs.score) AS mean_score,
               MAX(a.submitted_at) AS last_seen
        FROM response_score rs
        JOIN response r ON r.id = rs.response_id
@@ -107,13 +111,14 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
        JOIN question q ON q.id = rs.question_id
        WHERE 1=1 ${tagClause.sql}
        GROUP BY q.lineage_id
-       ORDER BY mean_score ASC
+       ORDER BY mean_score IS NULL, mean_score ASC
        LIMIT ? OFFSET ?`
     )
     .all(...(tagClause.params as any[]), limit, offset) as {
     lineage_id: string;
     responses: number;
-    mean_score: number;
+    graded: number;
+    mean_score: number | null;
     last_seen: string;
   }[];
 
@@ -128,14 +133,13 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
       .get(l.lineage_id) as { id: string; prompt: string; type: "mc" | "written" };
 
     const tags = (
-      db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?").all(current.id) as {
-        tag_slug: string;
-      }[]
+      db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?").all(current.id) as { tag_slug: string }[]
     ).map((t) => t.tag_slug);
 
     const recent = db
       .prepare(
-        `SELECT rs.score, r.response_text, r.answered_at
+        `SELECT rs.score, r.response_text, r.selected_choice_id, r.idk, r.confidence, r.misapplied_method,
+                r.elapsed_ms, r.answered_at
          FROM response_score rs
          JOIN response r ON r.id = rs.response_id
          JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
@@ -144,7 +148,10 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
          ORDER BY r.answered_at DESC
          LIMIT 3`
       )
-      .all(l.lineage_id) as { score: number; response_text: string | null; answered_at: string }[];
+      .all(l.lineage_id) as {
+      score: number | null; response_text: string | null; selected_choice_id: string | null; idk: number;
+      confidence: string | null; misapplied_method: string | null; elapsed_ms: number | null; answered_at: string;
+    }[];
 
     return {
       lineage_id: l.lineage_id,
@@ -152,19 +159,25 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
       prompt_preview: current.prompt.slice(0, 120),
       tags,
       responses: l.responses,
+      graded: l.graded,
+      ungraded: l.responses - l.graded,
       mean_score: l.mean_score,
       last_seen: l.last_seen,
       last_score: recent[0]?.score ?? null,
-      // Written responses carry their raw text alongside the score, so it's
-      // visible *how* an answer was wrong, not just that it was (spec 9.12).
-      recent_responses:
-        current.type === "written"
-          ? recent.map((r) => ({
-              response_text: truncateResponseText(r.response_text),
-              score: r.score,
-              answered_at: r.answered_at,
-            }))
-          : undefined,
+      // Every input field the response accepted comes back out, for mc and
+      // written alike: the chosen option is the diagnosis for mc, the text is
+      // for written (spec 9.12), and confidence/idk/misapplied_method are the
+      // tutor's own annotations.
+      recent_responses: recent.map((r) => ({
+        response_text: truncateResponseText(r.response_text),
+        selected_choice_id: r.selected_choice_id,
+        idk: r.idk === 1,
+        confidence: r.confidence,
+        misapplied_method: r.misapplied_method,
+        elapsed_ms: r.elapsed_ms,
+        score: r.score,
+        answered_at: r.answered_at,
+      })),
     };
   });
 }
