@@ -335,7 +335,7 @@ export function submitQuickCheck(
     idk?: boolean;
     misapplied_method?: string;
   }
-): { explanation: string | null; model_answer: string | null } {
+): AnsweredOutcome {
   const row = db.prepare("SELECT attempt_id, question_id FROM response WHERE id = ?").get(input.response_id) as
     | { attempt_id: string; question_id: string }
     | undefined;
@@ -349,11 +349,11 @@ export function submitQuickCheck(
   });
   submitAttempt(db, row.attempt_id);
 
-  const question = db.prepare("SELECT explanation, model_answer FROM question WHERE id = ?").get(row.question_id) as {
-    explanation: string | null;
-    model_answer: string | null;
-  };
-  return { explanation: question.explanation, model_answer: question.model_answer };
+  const outcome = getItemOutcome(db, input.response_id);
+  if (outcome.status !== "answered") {
+    throw new DomainError("internal_error", "quick check did not resolve to an answered outcome");
+  }
+  return outcome;
 }
 
 // ----------------------------------------------------------------------------
@@ -363,19 +363,39 @@ export function submitQuickCheck(
 // this in a bounded poll (Task 1.3 Step 5); this function itself never waits.
 // ----------------------------------------------------------------------------
 
-export type ItemOutcome =
-  | { status: "pending" }
-  | { status: "abandoned" }
-  | {
-      status: "answered";
-      correct: boolean | null;
-      explanation: string | null;
-      model_answer: string | null;
-      correct_choice_id: string | null;
-      confidence: "unsure" | "somewhat" | "confident" | null;
-      idk: boolean;
-      misapplied_method: string | null;
-    };
+export type OutcomeLabel = "correct" | "partial" | "incorrect" | "dont_know" | "ungraded";
+
+// The tutor's outcome ∈ {correct, incorrect, dont_know} plus the two states a
+// written item passes through before a grade exists / when a self-grade is
+// 0.5. "I don't know" wins over any score, since idk is a deliberate third
+// answer, not a wrong one.
+export function deriveOutcome(idk: boolean, score: number | null): OutcomeLabel {
+  if (idk) return "dont_know";
+  if (score === null) return "ungraded";
+  if (score >= 1) return "correct";
+  if (score <= 0) return "incorrect";
+  return "partial";
+}
+
+export type AnsweredOutcome = {
+  status: "answered";
+  outcome: OutcomeLabel;
+  score: number | null;
+  correct: boolean | null;
+  selected_choice_id: string | null;
+  chosen_misconception: string | null;
+  correct_choice_id: string | null;
+  response_text: string | null;
+  confidence: "unsure" | "somewhat" | "confident" | null;
+  idk: boolean;
+  misapplied_method: string | null;
+  elapsed_ms: number | null;
+  answered_at: string | null;
+  explanation: string | null;
+  model_answer: string | null;
+};
+
+export type ItemOutcome = { status: "pending" } | { status: "abandoned" } | AnsweredOutcome;
 
 export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcome {
   sweepAbandonedAttempts(db);
@@ -383,18 +403,16 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
   const row = db
     .prepare(
       `SELECT r.attempt_id, r.question_id, a.submitted_at, a.abandoned_at,
+              r.selected_choice_id, r.response_text, r.elapsed_ms, r.answered_at,
               r.confidence, r.idk, r.misapplied_method
        FROM response r JOIN attempt a ON a.id = r.attempt_id
        WHERE r.id = ?`
     )
     .get(responseId) as
     | {
-        attempt_id: string;
-        question_id: string;
-        submitted_at: string | null;
-        abandoned_at: string | null;
-        confidence: "unsure" | "somewhat" | "confident" | null;
-        idk: number;
+        attempt_id: string; question_id: string; submitted_at: string | null; abandoned_at: string | null;
+        selected_choice_id: string | null; response_text: string | null; elapsed_ms: number | null;
+        answered_at: string | null; confidence: "unsure" | "somewhat" | "confident" | null; idk: number;
         misapplied_method: string | null;
       }
     | undefined;
@@ -410,6 +428,7 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
   const liveGrade = db
     .prepare("SELECT score FROM grade WHERE response_id = ? AND superseded_at IS NULL")
     .get(responseId) as { score: number } | undefined;
+  const score = liveGrade ? liveGrade.score : null;
 
   const correctChoice =
     question.type === "mc"
@@ -417,16 +436,28 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
           | { id: string }
           | undefined)
       : undefined;
+  const chosen = row.selected_choice_id
+    ? (db.prepare("SELECT misconception FROM choice WHERE id = ?").get(row.selected_choice_id) as
+        | { misconception: string | null }
+        | undefined)
+    : undefined;
 
   return {
     status: "answered",
-    correct: question.type === "mc" ? liveGrade?.score === 1 : null,
-    explanation: question.explanation,
-    model_answer: question.model_answer,
+    outcome: deriveOutcome(row.idk === 1, score),
+    score,
+    correct: question.type === "mc" ? score === 1 : null,
+    selected_choice_id: row.selected_choice_id,
+    chosen_misconception: chosen?.misconception ?? null,
     correct_choice_id: correctChoice?.id ?? null,
+    response_text: row.response_text,
     confidence: row.confidence,
     idk: row.idk === 1,
     misapplied_method: row.misapplied_method,
+    elapsed_ms: row.elapsed_ms,
+    answered_at: row.answered_at,
+    explanation: question.explanation,
+    model_answer: question.model_answer,
   };
 }
 

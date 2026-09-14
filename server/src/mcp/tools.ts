@@ -581,7 +581,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "await_item_outcome",
     {
       description:
-        "Wait for the learner to answer the item from present_item, up to ~25 seconds. Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), or status: 'pending' if the learner hasn't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation.",
+        "Wait for the learner to answer the item from present_item, up to ~25 seconds. Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), or status: 'pending' if the learner hasn't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation. The answered record carries outcome (correct|partial|incorrect|dont_know|ungraded), score, selected_choice_id with its chosen_misconception, response_text, confidence, idk, misapplied_method, elapsed_ms and answered_at.",
       inputSchema: {
         response_id: z.string(),
       },
@@ -631,7 +631,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "submit_quick_check",
     {
-      description: "Record the learner's free-response answer to a quick_check and get the model answer back.",
+      description:
+        "Record the learner's free-response answer to a quick_check. Returns the full outcome record (response_text, outcome, model_answer, explanation, confidence, idk, misapplied_method).",
       inputSchema: {
         response_id: z.string(),
         response_text: z.string(),
