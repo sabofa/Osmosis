@@ -132,6 +132,14 @@ export function mergeTags(
 
   db.exec("BEGIN");
   try {
+    // Stamp every question whose tag set is about to change, so an
+    // incremental pull (buildPullResponse's since-clause) re-sends it with
+    // its new tags — the question row itself is otherwise untouched here.
+    db.prepare(
+      `UPDATE question SET updated_at = datetime('now')
+       WHERE id IN (SELECT question_id FROM question_tag WHERE tag_slug = ?)`
+    ).run(fromSlug);
+
     // Questions already carrying to_slug would collide on the (question_id, tag_slug) PK
     // if we blindly repointed from_slug -> to_slug, so drop those rows instead of updating them.
     db.prepare(

@@ -32,7 +32,7 @@ export function usePanelWidth(storageKey: string, defaultWidth: number, min: num
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
     },
-    [min, max]
+    [min, max, storageKey]
   )
 
   return { width, onPointerDown }

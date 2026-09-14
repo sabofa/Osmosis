@@ -64,12 +64,20 @@ export async function createAsset(
     storagePath = diskName;
   }
 
-  const extractedText = await extractText({
-    type: input.type,
-    content: input.content ?? undefined,
-    mime: input.mime ?? undefined,
-    filePath,
-  });
+  let extractedText: string | null;
+  try {
+    extractedText = await extractText({
+      type: input.type,
+      content: input.content ?? undefined,
+      mime: input.mime ?? undefined,
+      filePath,
+    });
+  } catch (err) {
+    // The file was written before extraction (extraction reads it back from
+    // disk). No asset row will exist for it, so don't leave it orphaned.
+    if (filePath && existsSync(filePath)) unlinkSync(filePath);
+    throw err;
+  }
 
   db.prepare(
     `INSERT INTO asset (id, title, type, content, filename, mime, storage_path, extracted_text, created_by)
@@ -185,10 +193,33 @@ export function searchAssets(
 
 export function deleteAsset(db: DatabaseSync, uploadsDir: string, id: string): { id: string } {
   const asset = getAsset(db, id);
+
+  // question.document_id is ON DELETE SET NULL, but the anchor/marker
+  // offsets that only make sense relative to that document would survive
+  // the delete — and validateQuestionInput rejects a marker without a
+  // document_id, so every later edit of such a question would bounce until
+  // someone manually cleared the offsets. Clear the whole linkage as one
+  // unit, in the same transaction as the delete.
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `UPDATE question
+       SET document_id = NULL, document_anchor_label = NULL, document_anchor_start = NULL,
+           document_anchor_end = NULL, document_marker_offset = NULL, updated_at = datetime('now')
+       WHERE document_id = ?`
+    ).run(id);
+    db.prepare("DELETE FROM asset WHERE id = ?").run(id);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  // Disk cleanup after the row is gone: a failed unlink leaves a stray file,
+  // which is recoverable; a stray DB row pointing at a deleted file is not.
   if (asset.type === "file" && asset.storage_path) {
     const filePath = join(uploadsDir, asset.storage_path);
     if (existsSync(filePath)) unlinkSync(filePath);
   }
-  db.prepare("DELETE FROM asset WHERE id = ?").run(id);
   return { id };
 }

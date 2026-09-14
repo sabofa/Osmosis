@@ -51,6 +51,16 @@ export default function Take({
   // Keyed by response id (not a single shared timer) — switching questions
   // mid-debounce must not cancel an earlier question's still-pending save.
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  // Every fire-and-forget PATCH still in flight. Finish must wait for these:
+  // a choice picked a beat before clicking Finish would otherwise race the
+  // submit, and the server grades whatever it has when submit lands.
+  const inFlightSaves = useRef<Set<Promise<unknown>>>(new Set())
+
+  function trackSave<T>(p: Promise<T>): Promise<T> {
+    inFlightSaves.current.add(p)
+    p.finally(() => inFlightSaves.current.delete(p)).catch(() => {})
+    return p
+  }
   const { width: panelWidth, onPointerDown: onPanelResizeStart } = usePanelWidth(
     'osmosis:panel-width:take',
     340,
@@ -111,6 +121,8 @@ export default function Take({
             return d ? answerResponse(attempt.id, responseId, { response_text: d.writtenText }) : Promise.resolve()
           })
         )
+        // ...and every choice/confidence/idk PATCH that hasn't resolved yet.
+        await Promise.allSettled([...inFlightSaves.current])
         const submitted = await submitAttempt(attempt.id)
         setAttempt(submitted)
         onFinish()
@@ -123,9 +135,13 @@ export default function Take({
     goTo(index + 1)
   }
 
+  // "I don't know" and a picked choice are mutually exclusive outcomes (idk
+  // is a distinct third signal, not a fourth confidence level) — choosing
+  // one clears the other on both the local draft and the server row, so a
+  // response can't be submitted as simultaneously skipped AND answered.
   function selectChoice(choiceId: string) {
-    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, selectedChoiceId: choiceId } : d)))
-    answerResponse(attempt.id, response.id, { selected_choice_id: choiceId }).then((updated) => {
+    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, selectedChoiceId: choiceId, idk: false } : d)))
+    trackSave(answerResponse(attempt.id, response.id, { selected_choice_id: choiceId, idk: false, skipped: false })).then((updated) => {
       setAttempt((prev) =>
         prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
       )
@@ -134,7 +150,7 @@ export default function Take({
 
   function setConfidence(level: 'unsure' | 'somewhat' | 'confident') {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, confidence: level } : d)))
-    answerResponse(attempt.id, response.id, { confidence: level }).then((updated) => {
+    trackSave(answerResponse(attempt.id, response.id, { confidence: level })).then((updated) => {
       setAttempt((prev) =>
         prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
       )
@@ -142,8 +158,8 @@ export default function Take({
   }
 
   function setIdk() {
-    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, idk: true } : d)))
-    answerResponse(attempt.id, response.id, { idk: true, skipped: true }).then((updated) => {
+    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, idk: true, selectedChoiceId: null } : d)))
+    trackSave(answerResponse(attempt.id, response.id, { idk: true, skipped: true, selected_choice_id: null })).then((updated) => {
       setAttempt((prev) =>
         prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
       )

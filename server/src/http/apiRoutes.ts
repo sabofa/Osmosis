@@ -22,6 +22,7 @@ import {
   answerResponse,
   submitAttempt,
   gradeResponse,
+  sweepAbandonedAttempts,
 } from "../domain/attempts.js";
 import { listSessions, getSessionDetail } from "../domain/sessions.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
@@ -214,7 +215,13 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.post("/api/attempts", async (request, reply) => {
-    const body = request.body as { source: string; template_id?: string; question_ids?: string[]; daily_kind?: string };
+    // No/empty body (or a non-object) must be a 400, not a TypeError 500
+    // from destructuring undefined below.
+    const body = (request.body ?? {}) as { source?: string; template_id?: string; question_ids?: string[]; daily_kind?: string };
+    if (typeof body !== "object" || Array.isArray(body)) {
+      reply.code(400).send({ error: "invalid_body", message: "POST /api/attempts expects a JSON object body." });
+      return;
+    }
     if (body.daily_kind !== undefined) {
       if (body.daily_kind !== "question" && body.daily_kind !== "quiz") {
         reply.code(400).send({
@@ -302,6 +309,13 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       });
       return;
     }
+
+    // The abandonment sweep is lazy (runs inside the attempt read/create
+    // paths, not on a timer). Run it here too, or an item older than
+    // abandon_after_hours that nothing has read since would still match
+    // `abandoned_at IS NULL` below and get handed to the app as live — where
+    // every answer PATCH then fails with attempt_abandoned.
+    sweepAbandonedAttempts(db);
 
     const row = db
       .prepare(
@@ -504,8 +518,12 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     // promise-based reply completion against the still-in-flight stream —
     // observed in practice as "stream closed prematurely" in the server log
     // and a 200 response with an empty body.
+    // A filename is user/tutor-supplied; a `"` would terminate the quoted
+    // header parameter and a CR/LF makes Node reject the header outright
+    // (ERR_INVALID_CHAR → 500). Strip both rather than trust the input.
+    const headerSafeName = (asset.filename ?? asset.storage_path).replace(/["\\\x00-\x1f\x7f]/g, "_");
     return reply
-      .header("Content-Disposition", `inline; filename="${asset.filename ?? asset.storage_path}"`)
+      .header("Content-Disposition", `inline; filename="${headerSafeName}"`)
       .header("Content-Type", asset.mime ?? "application/octet-stream")
       .send(createReadStream(filePath));
   });

@@ -144,13 +144,12 @@ function AssetTypeIcon({ type }: { type: AssetSummary['type'] }) {
   return <FolderIcon size={14} />
 }
 
-// The server's POST /api/assets route only accepts a multipart file part and
-// always stores the created asset as type "file" (it never reads a `type`
-// field) — see server/src/http/apiRoutes.ts. To still let url/text assets be
-// created from here, their typed content is packaged as a small text Blob
-// under the `file` field, matching what the route actually expects. This is
-// a known mismatch with the documented contract (type/content fields), out
-// of scope to fix here since it's server-side.
+// The server's POST /api/assets route is multipart-only: it reads the `type`
+// field (defaulting to "file") and takes the asset's content from the `file`
+// part — as raw bytes for a file, as utf-8 text for url/text (see
+// server/src/http/apiRoutes.ts). So a url/text asset ships its typed content
+// as a small text Blob under `file`; the `content` field below is redundant
+// for the server but harmless.
 function AssetUploadForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (asset: AssetSummary) => void }) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState<AssetSummary['type']>('url')

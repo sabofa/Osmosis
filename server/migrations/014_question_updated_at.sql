@@ -1,0 +1,11 @@
+-- Incremental sync needs a change marker for edits that touch neither
+-- created_at (a versioned edit inserts a new row, so that case was already
+-- covered) nor retired_at: an in-place edit of a never-attempted question,
+-- and merge_tags repointing question_tag rows. Nullable because ALTER TABLE
+-- can't add a non-constant default; the domain layer stamps it on every
+-- such write (editQuestion's in-place path, mergeTags), and
+-- buildPullResponse's since-clause reads it. NULL simply means "never
+-- edited in place since this column existed", which the >= comparison
+-- treats as not-changed — correct, since such rows are still caught by
+-- created_at.
+ALTER TABLE question ADD COLUMN updated_at TEXT;

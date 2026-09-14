@@ -71,6 +71,7 @@ export interface QuestionRow {
   tests_error: string | null;
   provenance: string | null;
   node_key: string | null;
+  updated_at: string | null;
 }
 
 const CALCULATOR_POLICIES = new Set(["allowed", "forbidden", "n_a"]);
@@ -612,7 +613,8 @@ export function editQuestion(
            document_id = @document_id, document_anchor_label = @document_anchor_label,
            document_anchor_start = @document_anchor_start, document_anchor_end = @document_anchor_end,
            document_marker_offset = @document_marker_offset,
-           claim_rung = @claim_rung, tests_error = @tests_error, provenance = @provenance, node_key = @node_key
+           claim_rung = @claim_rung, tests_error = @tests_error, provenance = @provenance, node_key = @node_key,
+           updated_at = datetime('now')
        WHERE id = @id`
     ).run({
       id,

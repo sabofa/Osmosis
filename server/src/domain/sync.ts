@@ -116,6 +116,7 @@ interface QuestionRow {
   tests_error: string | null;
   provenance: string | null;
   node_key: string | null;
+  updated_at: string | null;
 }
 
 export const QUESTION_COLUMNS = [
@@ -146,6 +147,7 @@ export const QUESTION_COLUMNS = [
   "tests_error",
   "provenance",
   "node_key",
+  "updated_at",
 ] as const;
 
 // ----------------------------------------------------------------------------
@@ -308,10 +310,16 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
     // same wall-clock second would otherwise compare equal and be dropped by a
     // strict '>'. applyPullResponse is idempotent (upsert, not insert-only), so
     // re-fetching a row already applied on a prior pull is harmless.
-    const sinceClause = request.since !== null ? "AND (q.created_at >= ? OR q.retired_at >= ?)" : "";
+    //
+    // Three change markers, because a question row can change in three
+    // ways that leave the others untouched: a new row (created_at — covers
+    // creation and versioned edits), a retirement (retired_at), and an
+    // in-place edit or merge_tags repoint (updated_at, migration 014).
+    const sinceClause =
+      request.since !== null ? "AND (q.created_at >= ? OR q.retired_at >= ? OR q.updated_at >= ?)" : "";
     const params: unknown[] =
       request.since !== null
-        ? [...questionTagMatch.params, request.since, request.since]
+        ? [...questionTagMatch.params, request.since, request.since, request.since]
         : [...questionTagMatch.params];
 
     const questionStmt = db.prepare(
@@ -358,8 +366,12 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
     tags.push(...fetchTagAncestorClosure(db, [...referencedSlugs]));
   }
 
+  // Retired templates travel too: retired_at is one of the synced columns
+  // and the local upsert writes it, so a retirement on canonical is a
+  // tombstone the local node must see — otherwise it keeps offering (and
+  // starting attempts on) a template canonical already took out of service.
   const templates = db
-    .prepare(`SELECT ${TEMPLATE_SYNC_COLUMNS.join(", ")} FROM template WHERE retired_at IS NULL ORDER BY id`)
+    .prepare(`SELECT ${TEMPLATE_SYNC_COLUMNS.join(", ")} FROM template ORDER BY id`)
     .all() as unknown as Record<string, unknown>[];
 
   // A frozen template's fixed question set is part of the template's meaning —
@@ -378,7 +390,13 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
 
   const grades: PullResponse["grades"] = [];
   if (request.include_grades_for_node) {
-    const gradeSinceClause = request.since !== null ? "AND g.graded_at >= ?" : "";
+    // A supersede is a change to an OLD row: the self-grade being superseded
+    // may have been graded (and pushed) long before this cursor. If only
+    // graded_at were checked, the local node would receive the new live model
+    // grade but not the supersede of its own still-live self-grade, collide
+    // on grade_one_live_per_response, roll the whole pull back, and stay
+    // jammed on every subsequent sync.
+    const gradeSinceClause = request.since !== null ? "AND (g.graded_at >= ? OR g.superseded_at >= ?)" : "";
     const gradeStmt = db.prepare(
       `SELECT g.id, g.response_id, g.grader, g.score, g.feedback, g.model_name, g.graded_at, g.superseded_at
        FROM grade g
@@ -389,7 +407,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
        ORDER BY g.id`
     );
     const gradeParams: unknown[] =
-      request.since !== null ? [request.node_id, request.since] : [request.node_id];
+      request.since !== null ? [request.node_id, request.since, request.since] : [request.node_id];
     grades.push(...(gradeStmt.all(...(gradeParams as any[])) as unknown as PullResponse["grades"]));
   }
 

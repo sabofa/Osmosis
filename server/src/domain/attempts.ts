@@ -617,6 +617,10 @@ export function listAttempts(
 // Update a response in progress
 // ----------------------------------------------------------------------------
 
+// Mirrors migration 012's CHECK on response.confidence, so a bad value is a
+// legible DomainError (400 over HTTP) rather than a raw SQLite constraint error.
+const CONFIDENCE_LEVELS = new Set(["unsure", "somewhat", "confident"]);
+
 export interface AnswerResponseChanges {
   selected_choice_id?: string | null;
   response_text?: string | null;
@@ -640,30 +644,54 @@ export function answerResponse(
   if (attempt.submitted_at) throw new DomainError("attempt_submitted", "Cannot edit responses after submit.");
   if (attempt.abandoned_at) throw new DomainError("attempt_abandoned", "This attempt was abandoned.");
 
-  const response = db.prepare("SELECT id FROM response WHERE id = ? AND attempt_id = ?").get(responseId, attemptId);
+  const response = db
+    .prepare("SELECT id, question_id FROM response WHERE id = ? AND attempt_id = ?")
+    .get(responseId, attemptId) as { id: string; question_id: string } | undefined;
   if (!response) throw new DomainError("not_found", `Response "${responseId}" does not exist on this attempt.`);
 
-  db.prepare(
-    `UPDATE response
-     SET selected_choice_id = COALESCE(@selected_choice_id, selected_choice_id),
-         response_text = COALESCE(@response_text, response_text),
-         skipped = COALESCE(@skipped, skipped),
-         elapsed_ms = COALESCE(@elapsed_ms, elapsed_ms),
-         confidence = COALESCE(@confidence, confidence),
-         idk = COALESCE(@idk, idk),
-         misapplied_method = COALESCE(@misapplied_method, misapplied_method),
-         answered_at = datetime('now')
-     WHERE id = @id`
-  ).run({
-    id: responseId,
-    selected_choice_id: changes.selected_choice_id ?? null,
-    response_text: changes.response_text ?? null,
-    skipped: changes.skipped === undefined ? null : changes.skipped ? 1 : 0,
-    elapsed_ms: changes.elapsed_ms ?? null,
-    confidence: changes.confidence ?? null,
-    idk: changes.idk === undefined ? null : changes.idk ? 1 : 0,
-    misapplied_method: changes.misapplied_method ?? null,
-  });
+  // submitAttempt grades an mc response by looking its choice up by id alone,
+  // so a choice id from any other question would be scored against that
+  // question's answer key. Pin the choice to this response's question here.
+  if (changes.selected_choice_id != null) {
+    const choice = db
+      .prepare("SELECT id FROM choice WHERE id = ? AND question_id = ?")
+      .get(changes.selected_choice_id, response.question_id);
+    if (!choice) {
+      throw new DomainError(
+        "invalid_choice",
+        `Choice "${changes.selected_choice_id}" does not belong to this response's question.`
+      );
+    }
+  }
+  if (changes.confidence != null && !CONFIDENCE_LEVELS.has(changes.confidence)) {
+    throw new DomainError(
+      "invalid_confidence",
+      `confidence must be one of ${[...CONFIDENCE_LEVELS].join(", ")}, got ${JSON.stringify(changes.confidence)}.`
+    );
+  }
+  if (changes.elapsed_ms != null && (!Number.isFinite(changes.elapsed_ms) || changes.elapsed_ms < 0)) {
+    throw new DomainError("invalid_elapsed_ms", "elapsed_ms must be a non-negative number.");
+  }
+
+  // PATCH semantics: a key that is absent leaves the column alone; a key
+  // that is present — including an explicit null — is written as given, so
+  // a caller can clear a choice/confidence/misapplied_method again (e.g.
+  // switching from a picked choice to "I don't know" and back).
+  const sets: string[] = ["answered_at = datetime('now')"];
+  const values: Record<string, unknown> = { id: responseId };
+  const assign = (column: string, value: unknown) => {
+    sets.push(`${column} = @${column}`);
+    values[column] = value;
+  };
+  if (changes.selected_choice_id !== undefined) assign("selected_choice_id", changes.selected_choice_id);
+  if (changes.response_text !== undefined) assign("response_text", changes.response_text);
+  if (changes.skipped !== undefined) assign("skipped", changes.skipped ? 1 : 0);
+  if (changes.elapsed_ms !== undefined) assign("elapsed_ms", changes.elapsed_ms);
+  if (changes.confidence !== undefined) assign("confidence", changes.confidence);
+  if (changes.idk !== undefined) assign("idk", changes.idk ? 1 : 0);
+  if (changes.misapplied_method !== undefined) assign("misapplied_method", changes.misapplied_method);
+
+  db.prepare(`UPDATE response SET ${sets.join(", ")} WHERE id = @id`).run(values as Record<string, any>);
 
   const updated = db.prepare("SELECT * FROM response WHERE id = ?").get(responseId) as unknown as ResponseRow;
   return {
