@@ -10,7 +10,7 @@ import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
-import { presentItem, getItemOutcome, quickCheck, submitQuickCheck } from "../domain/attempts.js";
+import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
 
@@ -692,6 +692,25 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     async ({ session_id }) => {
       try {
         return ok(getSessionDetail(db, session_id));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_attempt",
+    {
+      description:
+        "Read one attempt in full: every response with its question snapshot (answer key included once submitted), " +
+        "selected_choice_id, response_text, confidence, idk, misapplied_method, elapsed_ms, answered_at and the live " +
+        "grade. This is the attempt-scope read; get_results stays aggregate. attempt_id comes from present_item, " +
+        "quick_check, get_session, or get_results(scope: 'attempt').",
+      inputSchema: { attempt_id: z.string() },
+    },
+    async ({ attempt_id }) => {
+      try {
+        return ok(getAttemptDetail(db, attempt_id));
       } catch (err) {
         return fail(err);
       }

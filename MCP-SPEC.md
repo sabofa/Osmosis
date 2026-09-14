@@ -86,7 +86,7 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-21 tools. Every schema is sent on every turn a connector is enabled for,
+32 tools. Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
@@ -111,6 +111,7 @@ becoming one larger tool.
 | `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 | `read_asset` | Full `extracted_text` |
 | `search_assets` | FTS snippets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
+| `get_attempt` | Full attempt read: per-response inputs + live grade |
 
 Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 /mcp/:token/upload` — see §5.
