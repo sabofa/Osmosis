@@ -388,6 +388,99 @@ describe("applyPullResponse", () => {
   });
 });
 
+describe("sync round-trips ingestion/rich-outcome fields (final review fix)", () => {
+  // Whole-branch review finding: QUESTION_COLUMNS predates claim_rung/
+  // tests_error/provenance/node_key and never carried them across a sync
+  // boundary. Confirm a pull now round-trips all four.
+  it("pulls a question's claim_rung/tests_error/provenance/node_key intact", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    const q = insertQuestion(canonical, { tags: ["math"] });
+    canonical
+      .prepare(
+        `UPDATE question SET claim_rung = 'can_apply', tests_error = 'sign error',
+           provenance = 'tutor_authored', node_key = 'calc101:chain-rule' WHERE id = ?`
+      )
+      .run(q.id);
+
+    const response = buildPullResponse(canonical, {
+      node_id: "local-1", protocol_version: 1, slices: ["math"], since: null, include_grades_for_node: false,
+    });
+
+    const local = openTestDb();
+    applyPullResponse(local, response, ["math"]);
+
+    const row = local
+      .prepare("SELECT claim_rung, tests_error, provenance, node_key FROM question WHERE id = ?")
+      .get(q.id) as { claim_rung: string; tests_error: string; provenance: string; node_key: string };
+    expect(row.claim_rung).toBe("can_apply");
+    expect(row.tests_error).toBe("sign error");
+    expect(row.provenance).toBe("tutor_authored");
+    expect(row.node_key).toBe("calc101:chain-rule");
+  });
+
+  // CRITICAL regression: upsertBankContent used to delete-then-reinsert
+  // choices via a column list missing `misconception`, so re-pulling a
+  // question that already existed locally silently nulled out
+  // locally-authored distractor rationale. Confirm misconception survives
+  // both the first pull and a second (re-)apply of the same response.
+  it("does not destroy choice.misconception when a question already synced locally is pulled again", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    const q = insertQuestion(canonical, { type: "mc", tags: ["math"] });
+    canonical
+      .prepare("UPDATE choice SET misconception = ? WHERE question_id = ? AND is_correct = 0")
+      .run("thinks the sign flips", q.id);
+
+    const response = buildPullResponse(canonical, {
+      node_id: "local-1", protocol_version: 1, slices: ["math"], since: null, include_grades_for_node: false,
+    });
+
+    const local = openTestDb();
+    applyPullResponse(local, response, ["math"]);
+
+    const afterFirst = local
+      .prepare("SELECT misconception FROM choice WHERE question_id = ? AND is_correct = 0")
+      .get(q.id) as { misconception: string | null };
+    expect(afterFirst.misconception).toBe("thinks the sign flips");
+
+    // Re-apply the identical pull response, exercising the delete+reinsert
+    // path against a question that already exists locally.
+    applyPullResponse(local, response, ["math"]);
+
+    const afterSecond = local
+      .prepare("SELECT misconception FROM choice WHERE question_id = ? AND is_correct = 0")
+      .get(q.id) as { misconception: string | null };
+    expect(afterSecond.misconception).toBe("thinks the sign flips");
+  });
+
+  // RESPONSE_COLUMNS predates confidence/idk/misapplied_method. Confirm a
+  // pushed response (as an offline node would send) carries them through.
+  it("pushes a response's confidence/idk/misapplied_method intact", () => {
+    const canonical = openTestDb();
+    insertTag(canonical, "math");
+    const q = insertQuestion(canonical, { tags: ["math"] });
+
+    const result = applyPushRequest(canonical, {
+      node_id: "local-1", protocol_version: 1,
+      attempts: [{ id: "a-rich", node_id: "local-1", source: "adhoc", template_id: null, daily_draw_id: null,
+                   started_at: "2026-08-20 10:00:00", submitted_at: "2026-08-20 10:05:00", abandoned_at: null, offline: 1 }],
+      responses: [{ id: "r-rich", attempt_id: "a-rich", question_id: q.id, ordinal: 0, selected_choice_id: null,
+                    response_text: null, skipped: 0, answered_at: "2026-08-20 10:04:00", elapsed_ms: 500,
+                    confidence: "confident", idk: 1, misapplied_method: "applied the product rule instead of the chain rule" }],
+      grades: [],
+    });
+
+    expect(result.rejected).toEqual([]);
+    const row = canonical
+      .prepare("SELECT confidence, idk, misapplied_method FROM response WHERE id = ?")
+      .get("r-rich") as { confidence: string; idk: number; misapplied_method: string };
+    expect(row.confidence).toBe("confident");
+    expect(row.idk).toBe(1);
+    expect(row.misapplied_method).toBe("applied the product rule instead of the chain rule");
+  });
+});
+
 describe("applyPushRequest", () => {
   function seedTemplateAndQuestion(db: ReturnType<typeof openTestDb>) {
     insertTag(db, "math");

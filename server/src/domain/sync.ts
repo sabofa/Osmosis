@@ -112,6 +112,10 @@ interface QuestionRow {
   document_anchor_start: number | null;
   document_anchor_end: number | null;
   document_marker_offset: number | null;
+  claim_rung: string | null;
+  tests_error: string | null;
+  provenance: string | null;
+  node_key: string | null;
 }
 
 export const QUESTION_COLUMNS = [
@@ -138,6 +142,10 @@ export const QUESTION_COLUMNS = [
   "document_anchor_start",
   "document_anchor_end",
   "document_marker_offset",
+  "claim_rung",
+  "tests_error",
+  "provenance",
+  "node_key",
 ] as const;
 
 // ----------------------------------------------------------------------------
@@ -161,7 +169,7 @@ export function buildQuestionPayloads(db: DatabaseSync, questionIds: string[]): 
 
   const tagsByQuestion = db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?");
   const choicesByQuestion = db.prepare(
-    "SELECT id, body, is_correct, ordinal FROM choice WHERE question_id = ? ORDER BY ordinal"
+    "SELECT id, body, is_correct, ordinal, misconception FROM choice WHERE question_id = ? ORDER BY ordinal"
   );
 
   const questions: Record<string, unknown>[] = [];
@@ -169,7 +177,13 @@ export function buildQuestionPayloads(db: DatabaseSync, questionIds: string[]): 
     const qTags = (tagsByQuestion.all(q.id) as { tag_slug: string }[]).map((t) => t.tag_slug);
     const choices =
       q.type === "mc"
-        ? (choicesByQuestion.all(q.id) as { id: string; body: string; is_correct: number; ordinal: number }[])
+        ? (choicesByQuestion.all(q.id) as {
+            id: string;
+            body: string;
+            is_correct: number;
+            ordinal: number;
+            misconception: string | null;
+          }[])
         : [];
     questions.push({ ...q, tags: qTags, choices });
   }
@@ -313,7 +327,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
 
     const tagsByQuestion = db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?");
     const choicesByQuestion = db.prepare(
-      "SELECT id, body, is_correct, ordinal FROM choice WHERE question_id = ? ORDER BY ordinal"
+      "SELECT id, body, is_correct, ordinal, misconception FROM choice WHERE question_id = ? ORDER BY ordinal"
     );
 
     const referencedSlugs = new Set<string>(tagRows.map((t) => t.slug));
@@ -322,7 +336,13 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
       for (const slug of qTags) referencedSlugs.add(slug);
       const choices =
         q.type === "mc"
-          ? (choicesByQuestion.all(q.id) as { id: string; body: string; is_correct: number; ordinal: number }[])
+          ? (choicesByQuestion.all(q.id) as {
+              id: string;
+              body: string;
+              is_correct: number;
+              ordinal: number;
+              misconception: string | null;
+            }[])
           : [];
       questions.push({ ...q, tags: qTags, choices });
     }
@@ -422,7 +442,7 @@ export function upsertBankContent(
   const insertQuestionTag = db.prepare("INSERT INTO question_tag (question_id, tag_slug) VALUES (?, ?)");
   const deleteChoices = db.prepare("DELETE FROM choice WHERE question_id = ?");
   const insertChoice = db.prepare(
-    "INSERT INTO choice (id, question_id, body, is_correct, ordinal) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO choice (id, question_id, body, is_correct, ordinal, misconception) VALUES (?, ?, ?, ?, ?, ?)"
   );
 
   const findAsset = db.prepare("SELECT id FROM asset WHERE id = ?");
@@ -443,7 +463,7 @@ export function upsertBankContent(
 
   for (const q of questions as unknown as (QuestionRow & {
     tags: string[];
-    choices: { id: string; body: string; is_correct: number; ordinal: number }[];
+    choices: { id: string; body: string; is_correct: number; ordinal: number; misconception: string | null }[];
   })[]) {
     const fields: Record<string, unknown> = {};
     for (const c of QUESTION_COLUMNS) fields[c] = (q as unknown as Record<string, unknown>)[c] ?? null;
@@ -466,7 +486,8 @@ export function upsertBankContent(
     for (const slug of q.tags ?? []) insertQuestionTag.run(q.id, slug);
 
     deleteChoices.run(q.id);
-    for (const c of q.choices ?? []) insertChoice.run(c.id, q.id, c.body, c.is_correct, c.ordinal);
+    for (const c of q.choices ?? [])
+      insertChoice.run(c.id, q.id, c.body, c.is_correct, c.ordinal, c.misconception ?? null);
 
     questionsApplied += 1;
   }
@@ -671,6 +692,9 @@ const RESPONSE_COLUMNS = [
   "skipped",
   "answered_at",
   "elapsed_ms",
+  "confidence",
+  "idk",
+  "misapplied_method",
 ] as const;
 
 const GRADE_COLUMNS = [
@@ -754,7 +778,14 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
 
       try {
         const fields: Record<string, unknown> = {};
-        for (const c of RESPONSE_COLUMNS) fields[c] = response[c] ?? null;
+        for (const c of RESPONSE_COLUMNS) {
+          // response.idk is NOT NULL DEFAULT 0 (no CHECK allows NULL, unlike
+          // confidence/misapplied_method): an explicit column list in the
+          // INSERT bypasses the schema default, so an older/offline payload
+          // that predates this field (and omits it) must fall back to 0, not
+          // null, or the insert violates the NOT NULL constraint.
+          fields[c] = c === "idk" ? (response[c] ?? 0) : response[c] ?? null;
+        }
         insertResponse.run(fields as Record<string, any>);
         accepted.push(id);
         newlyAcceptedResponses.set(id, response);
