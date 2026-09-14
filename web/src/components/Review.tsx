@@ -48,7 +48,8 @@ export default function Review({
 
   const graded = questions.map((r) => verdictFor(r)).filter((v): v is Verdict => v !== null)
   const scoreSum = graded.reduce((sum, v) => sum + VERDICT_SCORE[v], 0)
-  const meanScore = questions.length > 0 ? scoreSum / questions.length : 0
+  const meanScore = graded.length > 0 ? scoreSum / graded.length : null
+  const ungradedCount = questions.length - graded.length
   const correctCount = graded.filter((v) => v === 'correct').length
   const incorrectCount = graded.filter((v) => v === 'incorrect').length
   const partialCount = graded.filter((v) => v === 'partial').length
@@ -199,9 +200,9 @@ export default function Review({
         <div className="review-side">
           <div className="panel review-summary">
             <div className="review-kicker">General results</div>
-            <div className="review-score">{meanScore.toFixed(2)}</div>
+            <div className="review-score">{meanScore === null ? '—' : meanScore.toFixed(2)}</div>
             <div className="review-score-sub">
-              {correctCount} correct &middot; {incorrectCount} incorrect{partialCount > 0 ? ` · ${partialCount} partial` : ''}
+              {correctCount} correct &middot; {incorrectCount} incorrect{partialCount > 0 ? ` · ${partialCount} partial` : ''}{ungradedCount > 0 ? ` · ${ungradedCount} ungraded` : ''}
             </div>
             <div className="review-tags no-scrollbar">
               {[...tagCounts.entries()].map(([tag, count]) => (

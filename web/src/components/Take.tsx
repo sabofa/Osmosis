@@ -61,6 +61,43 @@ export default function Take({
     p.finally(() => inFlightSaves.current.delete(p)).catch(() => {})
     return p
   }
+
+  // Time-on-question, per response id, in ms. Accumulates while a response
+  // is the visible one and pauses when you navigate away, so revisiting a
+  // question keeps adding to its total. Seeded from the server's stored
+  // elapsed_ms so a resumed attempt doesn't restart at zero.
+  const elapsed = useRef<Record<string, number>>(
+    Object.fromEntries(questions.map((r) => [r.id, r.elapsed_ms ?? 0]))
+  )
+  const shownAt = useRef<number>(Date.now())
+  const lastSent = useRef<Record<string, number>>({ ...elapsed.current })
+  // The currently-visible response id, read live. A debounced written-answer
+  // save (below) closes over the `response` from the render when typing
+  // happened; if the user has since navigated away, that closure's `response`
+  // is stale and would otherwise always compare equal to itself. Comparing
+  // against this ref instead lets currentElapsed correctly detect "the user
+  // moved on" even when called from an old closure.
+  const currentResponseId = useRef<string>(questions[index]?.id ?? '')
+
+  function currentElapsed(responseId: string): number {
+    const base = elapsed.current[responseId] ?? 0
+    return responseId === currentResponseId.current ? base + (Date.now() - shownAt.current) : base
+  }
+
+  // Fold the visible question's running time into its total and restart the clock.
+  function bankElapsed() {
+    elapsed.current[response.id] = currentElapsed(response.id)
+    shownAt.current = Date.now()
+  }
+
+  // Sends elapsed_ms for a response if it moved since the last send.
+  function flushElapsed(responseId: string) {
+    const ms = Math.round(elapsed.current[responseId] ?? 0)
+    if (ms === lastSent.current[responseId]) return
+    lastSent.current[responseId] = ms
+    trackSave(answerResponse(attempt.id, responseId, { elapsed_ms: ms })).catch((err) => console.error('Failed to save elapsed time:', err))
+  }
+
   const { width: panelWidth, onPointerDown: onPanelResizeStart } = usePanelWidth(
     'osmosis:panel-width:take',
     340,
@@ -90,7 +127,19 @@ export default function Take({
   const answered =
     question.type === 'mc' ? draft.selectedChoiceId !== null || draft.idk : draft.writtenText.trim().length > 0
 
+  // Restart the on-question clock whenever the visible question changes.
+  // Separate from goTo (which already banks/flushes) because index also
+  // changes via the dots' onClick going through goTo — this effect just
+  // keeps shownAt (and the live "current response" ref) honest for any path
+  // that changes index.
+  useEffect(() => {
+    shownAt.current = Date.now()
+    currentResponseId.current = response.id
+  }, [response.id])
+
   function goTo(i: number) {
+    bankElapsed()
+    flushElapsed(response.id)
     setIndex(i)
     setMaxReached((m) => Math.max(m, i))
   }
@@ -109,6 +158,8 @@ export default function Take({
     if (isLast) {
       setFinishing(true)
       try {
+        bankElapsed()
+        flushElapsed(response.id)
         // Flush every question's pending debounced written-answer save (not
         // just the current one) so a fast Finish click can't drop text on a
         // written question the user already navigated away from.
@@ -141,7 +192,10 @@ export default function Take({
   // response can't be submitted as simultaneously skipped AND answered.
   function selectChoice(choiceId: string) {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, selectedChoiceId: choiceId, idk: false } : d)))
-    trackSave(answerResponse(attempt.id, response.id, { selected_choice_id: choiceId, idk: false, skipped: false })).then((updated) => {
+    bankElapsed()
+    const ms = Math.round(elapsed.current[response.id] ?? 0)
+    lastSent.current[response.id] = ms
+    trackSave(answerResponse(attempt.id, response.id, { selected_choice_id: choiceId, idk: false, skipped: false, elapsed_ms: ms })).then((updated) => {
       setAttempt((prev) =>
         prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
       )
@@ -150,7 +204,10 @@ export default function Take({
 
   function setConfidence(level: 'unsure' | 'somewhat' | 'confident') {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, confidence: level } : d)))
-    trackSave(answerResponse(attempt.id, response.id, { confidence: level })).then((updated) => {
+    bankElapsed()
+    const ms = Math.round(elapsed.current[response.id] ?? 0)
+    lastSent.current[response.id] = ms
+    trackSave(answerResponse(attempt.id, response.id, { confidence: level, elapsed_ms: ms })).then((updated) => {
       setAttempt((prev) =>
         prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
       )
@@ -159,7 +216,10 @@ export default function Take({
 
   function setIdk() {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, idk: true, selectedChoiceId: null } : d)))
-    trackSave(answerResponse(attempt.id, response.id, { idk: true, skipped: true, selected_choice_id: null })).then((updated) => {
+    bankElapsed()
+    const ms = Math.round(elapsed.current[response.id] ?? 0)
+    lastSent.current[response.id] = ms
+    trackSave(answerResponse(attempt.id, response.id, { idk: true, skipped: true, selected_choice_id: null, elapsed_ms: ms })).then((updated) => {
       setAttempt((prev) =>
         prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
       )
@@ -172,7 +232,9 @@ export default function Take({
     if (saveTimers.current[responseId]) clearTimeout(saveTimers.current[responseId])
     saveTimers.current[responseId] = setTimeout(() => {
       delete saveTimers.current[responseId]
-      answerResponse(attempt.id, responseId, { response_text: text }).then((updated) => {
+      const ms = Math.round(currentElapsed(responseId))
+      lastSent.current[responseId] = ms
+      answerResponse(attempt.id, responseId, { response_text: text, elapsed_ms: ms }).then((updated) => {
         setAttempt((prev) =>
           prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
         )
