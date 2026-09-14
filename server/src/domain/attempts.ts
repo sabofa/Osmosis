@@ -610,7 +610,8 @@ export function listAttempts(
     .prepare(
       `SELECT a.id, a.source, a.template_id, t.name AS template_name, a.submitted_at, a.abandoned_at, a.offline,
               (SELECT COUNT(*) FROM response r WHERE r.attempt_id = a.id) AS question_count,
-              (SELECT AVG(COALESCE(rs.score, 0)) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score
+              (SELECT AVG(rs.score) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score,
+              (SELECT COUNT(*) FROM response_score rs WHERE rs.attempt_id = a.id AND rs.score IS NULL) AS ungraded
        FROM attempt a
        LEFT JOIN template t ON t.id = a.template_id
        ORDER BY a.started_at DESC
@@ -626,6 +627,7 @@ export function listAttempts(
     offline: number;
     question_count: number;
     mean_score: number | null;
+    ungraded: number;
   }[];
 
   return {
@@ -640,6 +642,7 @@ export function listAttempts(
       offline: r.offline === 1,
       question_count: r.question_count,
       mean_score: r.mean_score,
+      ungraded: r.ungraded,
     })),
   };
 }

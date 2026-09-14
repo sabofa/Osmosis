@@ -46,13 +46,13 @@ function tagScope(db: DatabaseSync, params: GetResultsParams) {
 
   const rows = db
     .prepare(
-      `SELECT tp.tag_slug, tp.responses, tp.mean_score, tp.misses, tp.last_seen,
-              (SELECT AVG(COALESCE(rs.score, 0)) FROM response_score rs
+      `SELECT tp.tag_slug, tp.responses, tp.graded, tp.mean_score, tp.misses, tp.last_seen,
+              (SELECT AVG(rs.score) FROM response_score rs
                  JOIN response r ON r.id = rs.response_id
                  JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at >= datetime('now', '-30 days')
                  JOIN question_tag qt ON qt.question_id = rs.question_id
                  WHERE qt.tag_slug = tp.tag_slug) AS recent_mean,
-              (SELECT AVG(COALESCE(rs.score, 0)) FROM response_score rs
+              (SELECT AVG(rs.score) FROM response_score rs
                  JOIN response r ON r.id = rs.response_id
                  JOIN attempt a ON a.id = r.attempt_id
                    AND a.submitted_at >= datetime('now', '-60 days') AND a.submitted_at < datetime('now', '-30 days')
@@ -60,13 +60,14 @@ function tagScope(db: DatabaseSync, params: GetResultsParams) {
                  WHERE qt.tag_slug = tp.tag_slug) AS prior_mean
        FROM tag_performance tp
        ${where}
-       ORDER BY tp.mean_score ASC
+       ORDER BY tp.mean_score IS NULL, tp.mean_score ASC
        LIMIT ? OFFSET ?`
     )
     .all(...(args as any[]), limit, offset) as {
     tag_slug: string;
     responses: number;
-    mean_score: number;
+    graded: number;
+    mean_score: number | null;
     misses: number;
     last_seen: string;
     recent_mean: number | null;
@@ -76,6 +77,7 @@ function tagScope(db: DatabaseSync, params: GetResultsParams) {
   return rows.map((r) => ({
     tag_slug: r.tag_slug,
     responses: r.responses,
+    graded: r.graded,
     mean_score: r.mean_score,
     misses: r.misses,
     last_seen: r.last_seen,
@@ -196,7 +198,8 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
     .prepare(
       `SELECT a.id, a.source, t.name AS template_name, a.submitted_at, a.offline,
               (SELECT COUNT(*) FROM response r WHERE r.attempt_id = a.id) AS question_count,
-              (SELECT AVG(COALESCE(rs.score, 0)) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score
+              (SELECT AVG(rs.score) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score,
+              (SELECT COUNT(*) FROM response_score rs WHERE rs.attempt_id = a.id AND rs.score IS NULL) AS ungraded
        FROM attempt a
        LEFT JOIN template t ON t.id = a.template_id
        WHERE ${clauses.join(" AND ")}
@@ -211,6 +214,7 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
     offline: number;
     question_count: number;
     mean_score: number | null;
+    ungraded: number;
   }[];
 
   return rows.map((r) => ({ ...r, offline: r.offline === 1 }));
@@ -225,12 +229,18 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams) {
     .prepare(
       `SELECT d.draw_date, d.kind,
               (SELECT COUNT(*) FROM daily_draw_question dq WHERE dq.daily_draw_id = d.id) AS question_count,
-              (SELECT AVG(COALESCE(rs.score, 0)) FROM response_score rs
+              (SELECT AVG(rs.score) FROM response_score rs
                  WHERE rs.attempt_id = (
                    SELECT a.id FROM attempt a
                    WHERE a.daily_draw_id = d.id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
                    ORDER BY a.submitted_at ASC LIMIT 1
                  )) AS score,
+              (SELECT COUNT(*) FROM response_score rs
+                 WHERE rs.attempt_id = (
+                   SELECT a.id FROM attempt a
+                   WHERE a.daily_draw_id = d.id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
+                   ORDER BY a.submitted_at ASC LIMIT 1
+                 ) AND rs.score IS NULL) AS ungraded,
               EXISTS (
                 SELECT 1 FROM attempt a
                 WHERE a.daily_draw_id = d.id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
@@ -244,6 +254,7 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams) {
     kind: string;
     question_count: number;
     score: number | null;
+    ungraded: number;
     completed: number;
   }[];
 
@@ -251,6 +262,7 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams) {
     draw_date: r.draw_date,
     kind: r.kind,
     score: r.score,
+    ungraded: r.ungraded,
     question_count: r.question_count,
     completed: r.completed === 1,
   }));

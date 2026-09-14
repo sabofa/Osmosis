@@ -8,7 +8,7 @@ export interface BootstrapResult {
   skill_level: { target_difficulty: number; notes: string };
   results_pointer: {
     total_attempts: number;
-    weakest_tags: { slug: string; mean_score: number; responses: number }[];
+    weakest_tags: { slug: string; mean_score: number | null; responses: number }[];
     stale_tags: { slug: string; last_seen: string | null }[];
   };
   graph_dsl_reference: string | null;
@@ -128,9 +128,9 @@ export function bootstrap(db: DatabaseSync, subject: string | null): BootstrapRe
   const weakestTags = db
     .prepare(
       `SELECT tag_slug AS slug, mean_score, responses FROM tag_performance
-       ORDER BY mean_score ASC LIMIT 4`
+       ORDER BY mean_score IS NULL, mean_score ASC LIMIT 4`
     )
-    .all() as { slug: string; mean_score: number; responses: number }[];
+    .all() as { slug: string; mean_score: number | null; responses: number }[];
 
   const staleTags = db
     .prepare(

@@ -84,7 +84,7 @@ export default function Results() {
             <>
               <div className="results-hero-top">
                 <h1>{subject.tag_slug}</h1>
-                <span className="results-hero-score">{subject.mean_score.toFixed(2)}</span>
+                <span className="results-hero-score">{subject.mean_score === null ? '—' : subject.mean_score.toFixed(2)}</span>
               </div>
               <div className="results-hero-stats">
                 <div className="results-stat">
@@ -130,14 +130,14 @@ export default function Results() {
                   <line x1={PAD_LEFT} x2={W - PAD_RIGHT} y1={barY} y2={barY} stroke="var(--line)" strokeWidth={1} />
                   <line
                     x1={barX(0)}
-                    x2={barX(subject.mean_score)}
+                    x2={barX(subject.mean_score ?? 0)}
                     y1={barY}
                     y2={barY}
                     stroke="var(--accent)"
                     strokeWidth={6}
                     strokeLinecap="round"
                   />
-                  <circle cx={barX(subject.mean_score)} cy={barY} r={5} fill="var(--accent)" />
+                  <circle cx={barX(subject.mean_score ?? 0)} cy={barY} r={5} fill="var(--accent)" />
                 </svg>
               </div>
             </>
@@ -155,11 +155,11 @@ export default function Results() {
               {(tags ?? []).map((t) => (
                 <button
                   key={t.tag_slug}
-                  className={`results-subject-row${t.tag_slug === selected ? ' selected' : ''}${t.mean_score < 0.5 ? ' weak' : ''}`}
+                  className={`results-subject-row${t.tag_slug === selected ? ' selected' : ''}${t.mean_score !== null && t.mean_score < 0.5 ? ' weak' : ''}`}
                   onClick={() => setSelected(t.tag_slug)}
                 >
                   <span className="results-subject-name">{t.tag_slug}</span>
-                  <span className="results-subject-score">{t.mean_score.toFixed(2)}</span>
+                  <span className="results-subject-score">{t.mean_score === null ? '—' : t.mean_score.toFixed(2)}</span>
                 </button>
               ))}
               {tags !== null && tags.length === 0 && (

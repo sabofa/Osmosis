@@ -433,6 +433,7 @@ export interface AttemptSummary {
   offline: boolean
   question_count: number
   mean_score: number | null
+  ungraded: number
 }
 
 export async function listAttempts(params: { limit?: number; offset?: number } = {}): Promise<{ total: number; attempts: AttemptSummary[] }> {
@@ -447,7 +448,8 @@ export async function listAttempts(params: { limit?: number; offset?: number } =
 export interface TagResultStat {
   tag_slug: string
   responses: number
-  mean_score: number
+  graded: number
+  mean_score: number | null
   misses: number
   last_seen: string
   trend_30d: number | null
@@ -467,6 +469,7 @@ export interface DailyResultStat {
   draw_date: string
   kind: string
   score: number | null
+  ungraded: number
   question_count: number
   completed: boolean
 }
@@ -508,6 +511,7 @@ export interface SessionAttemptSummary {
   offline: boolean
   question_count: number
   mean_score: number | null
+  ungraded: number
 }
 
 export interface SessionTemplateSummary {

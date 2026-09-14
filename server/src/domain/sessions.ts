@@ -91,7 +91,8 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
       `SELECT a.id, a.source, a.delivery_mode, a.template_id, t.name AS template_name,
               a.started_at, a.submitted_at, a.abandoned_at, a.offline,
               (SELECT COUNT(*) FROM response r WHERE r.attempt_id = a.id) AS question_count,
-              (SELECT AVG(COALESCE(rs.score, 0)) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score
+              (SELECT AVG(rs.score) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score,
+              (SELECT COUNT(*) FROM response_score rs WHERE rs.attempt_id = a.id AND rs.score IS NULL) AS ungraded
        FROM attempt a
        LEFT JOIN template t ON t.id = a.template_id
        WHERE a.session_id = ?
@@ -109,6 +110,7 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
     offline: number;
     question_count: number;
     mean_score: number | null;
+    ungraded: number;
   }[];
 
   const templates = db
@@ -147,6 +149,7 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
       offline: a.offline === 1,
       question_count: a.question_count,
       mean_score: a.mean_score,
+      ungraded: a.ungraded,
     })),
     templates: templates.map((t) => ({
       id: t.id,

@@ -153,7 +153,7 @@ function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
     .prepare(
       `SELECT COUNT(*) AS attempt_count, AVG(m.attempt_mean) AS mean_score
        FROM (
-         SELECT a.id, AVG(COALESCE(rs.score, 0)) AS attempt_mean
+         SELECT a.id, AVG(rs.score) AS attempt_mean
          FROM attempt a
          LEFT JOIN response_score rs ON rs.attempt_id = a.id
          WHERE a.template_id = ? AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
