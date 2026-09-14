@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { SubjectIcon, TagIcon, FolderIcon, ChevronRightIcon } from './icons'
 import Heatmap from './Heatmap'
 import TemplateDetail from './TemplateDetail'
@@ -8,7 +8,15 @@ import { useTemplateOrg } from '../hooks/useTemplateOrg'
 import { useTagPopout } from '../hooks/useTagPopout'
 import { FOLDER_ICON_LIBRARY } from '../lib/folderIcons'
 import type { TemplateSummary } from '../data/templates'
-import { getTemplates, getStatus, listAttempts, timeAgo, type AttemptSummary, type NodeStatus } from '../lib/api'
+import {
+  getTemplates,
+  getStatus,
+  listAttempts,
+  timeAgo,
+  type AttemptSummary,
+  type NodeStatus,
+  type TemplateSummary as ApiTemplateSummary,
+} from '../lib/api'
 import { toViewTemplate, templateAvailable, OFFLINE_CLOUD_HINT } from '../lib/templateView'
 import { attemptsHeatmap } from '../lib/activity'
 import './Home.css'
@@ -40,7 +48,7 @@ export default function Home({
   startError?: string | null
   starting?: boolean
 }) {
-  const [templates, setTemplates] = useState<TemplateSummary[] | null>(null)
+  const [apiTemplates, setApiTemplates] = useState<ApiTemplateSummary[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempts, setAttempts] = useState<AttemptSummary[]>([])
   const [lastSync, setLastSync] = useState<string | null>(null)
@@ -72,7 +80,7 @@ export default function Home({
 
   useEffect(() => {
     getTemplates()
-      .then((r) => setTemplates(r.templates.map(toViewTemplate)))
+      .then((r) => setApiTemplates(r.templates))
       .catch((err) => setLoadError(String(err)))
     // A generous limit — with the whole local bank still small, this is
     // cheap and gives the heatmap a real multi-month window to draw from.
@@ -103,6 +111,15 @@ export default function Home({
   // A canonical node is always "online" to itself — it never needs a remote
   // to serve a daily draw, so it should never show the offline-greyed state.
   const dailyAvailable = !!(status?.canonical || status?.online)
+
+  // Re-derived whenever status.canonical changes (status loads async, after
+  // the initial render) — a canonical node's templates are all local by
+  // definition, and toViewTemplate needs to know that to avoid mislabeling
+  // everything "cloud" from a false `downloaded`, which canonical never sets.
+  const templates = useMemo(
+    () => (apiTemplates ? apiTemplates.map((t) => toViewTemplate(t, { canonical: status?.canonical ?? false })) : null),
+    [apiTemplates, status?.canonical]
+  )
 
   const org = useTemplateOrg((templates ?? []).map((t) => t.id))
   const templatesById = new Map((templates ?? []).map((t) => [t.id, t]))

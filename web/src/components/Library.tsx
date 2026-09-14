@@ -213,12 +213,14 @@ export default function Library({ onStart }: { onStart: (templateId: string) => 
               onClick={() => setSelectedId((cur) => (cur === t.id ? null : t.id))}
               title="Click for details"
             >
-              <span
-                className={`library-card-downloaded${t.downloaded ? '' : ' cloud'}${t.update_available ? ' update-available' : ''}`}
-                title={t.downloaded ? (t.update_available ? 'Update available' : 'Downloaded — works offline') : 'Cloud — needs a connection'}
-              >
-                {t.downloaded ? (t.update_available ? <RefreshIcon size={11} /> : <DownloadIcon size={11} />) : <GlobeIcon size={11} />}
-              </span>
+              {!isCanonical && (
+                <span
+                  className={`library-card-downloaded${t.downloaded ? '' : ' cloud'}${t.update_available ? ' update-available' : ''}`}
+                  title={t.downloaded ? (t.update_available ? 'Update available' : 'Downloaded — works offline') : 'Cloud — needs a connection'}
+                >
+                  {t.downloaded ? (t.update_available ? <RefreshIcon size={11} /> : <DownloadIcon size={11} />) : <GlobeIcon size={11} />}
+                </span>
+              )}
               <div className="library-card-name">{t.name}</div>
               <div className="library-card-meta">
                 {t.question_count} question{t.question_count === 1 ? '' : 's'} · {formatBytes(t.estimated_bytes)}

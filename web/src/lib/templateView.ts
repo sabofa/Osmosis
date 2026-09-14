@@ -32,7 +32,7 @@ export function iconForTags(tags: string[]): IconKey {
   return iconForSubject(tags[0]?.split(':')[0] ?? null)
 }
 
-export function toViewTemplate(t: ApiTemplateSummary): ViewTemplateSummary {
+export function toViewTemplate(t: ApiTemplateSummary, opts?: { canonical?: boolean }): ViewTemplateSummary {
   const subject = subjectOf(t.tag_query)
   const tags = tagsOf(t.tag_query)
   const calc = t.calculator_policy === 'allowed' || t.calculator_policy === 'forbidden' ? t.calculator_policy : 'any'
@@ -40,8 +40,14 @@ export function toViewTemplate(t: ApiTemplateSummary): ViewTemplateSummary {
     `${t.question_count} question${t.question_count === 1 ? '' : 's'}`,
     tags.length > 0 ? tags.join(', ') : 'whole bank',
     calc,
-    t.downloaded ? 'downloaded' : 'cloud',
   ]
+  // A canonical node holds every template locally by definition — it never
+  // populates local_slice/downloaded, so appending downloaded/cloud here
+  // would mislabel every row "cloud" on canonical. Only meaningful on a
+  // local node, where t.downloaded actually reflects device state.
+  if (!opts?.canonical) {
+    metaParts.push(t.downloaded ? 'downloaded' : 'cloud')
+  }
   return {
     id: t.id,
     name: t.name,
