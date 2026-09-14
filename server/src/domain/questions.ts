@@ -36,6 +36,10 @@ export interface QuestionInput {
   document_anchor_start?: number | null;
   document_anchor_end?: number | null;
   document_marker_offset?: number | null;
+  claim_rung?: "can_state" | "can_apply" | "can_discriminate" | "can_explain_why" | "can_transfer" | null;
+  tests_error?: string | null;
+  provenance?: "tutor_authored" | "textbook_sourced" | null;
+  node_key?: string | null;
 }
 
 export interface QuestionRow {
@@ -62,6 +66,10 @@ export interface QuestionRow {
   document_anchor_start: number | null;
   document_anchor_end: number | null;
   document_marker_offset: number | null;
+  claim_rung: string | null;
+  tests_error: string | null;
+  provenance: string | null;
+  node_key: string | null;
 }
 
 const CALCULATOR_POLICIES = new Set(["allowed", "forbidden", "n_a"]);
@@ -186,6 +194,15 @@ function validateQuestionInput(
     };
   }
 
+  const CLAIM_RUNGS = new Set(["can_state", "can_apply", "can_discriminate", "can_explain_why", "can_transfer"]);
+  if (q.claim_rung != null && !CLAIM_RUNGS.has(q.claim_rung)) {
+    return { reason: "invalid_claim_rung", detail: `claim_rung must be one of ${[...CLAIM_RUNGS].join(", ")}` };
+  }
+  const PROVENANCE_VALUES = new Set(["tutor_authored", "textbook_sourced"]);
+  if (q.provenance != null && !PROVENANCE_VALUES.has(q.provenance)) {
+    return { reason: "invalid_provenance", detail: `provenance must be one of ${[...PROVENANCE_VALUES].join(", ")}` };
+  }
+
   if (q.type === "mc") {
     if (!q.choices || q.choices.length < 2) {
       return { reason: "mc_without_choices", detail: "mc questions need 2 or more choices" };
@@ -305,6 +322,10 @@ function insertQuestionRow(
     document_anchor_start: number | null;
     document_anchor_end: number | null;
     document_marker_offset: number | null;
+    claim_rung: string | null;
+    tests_error: string | null;
+    provenance: string | null;
+    node_key: string | null;
   }
 ): void {
   db.prepare(
@@ -312,12 +333,14 @@ function insertQuestionRow(
        (id, lineage_id, version, supersedes_id, type, prompt, explanation,
         model_answer, rubric, difficulty, calculator_policy, source_note,
         graph_spec, desmos_allowed, document_id, document_anchor_label,
-        document_anchor_start, document_anchor_end, document_marker_offset)
+        document_anchor_start, document_anchor_end, document_marker_offset,
+        claim_rung, tests_error, provenance, node_key)
      VALUES
        (@id, @lineage_id, @version, @supersedes_id, @type, @prompt, @explanation,
         @model_answer, @rubric, @difficulty, @calculator_policy, @source_note,
         @graph_spec, @desmos_allowed, @document_id, @document_anchor_label,
-        @document_anchor_start, @document_anchor_end, @document_marker_offset)`
+        @document_anchor_start, @document_anchor_end, @document_marker_offset,
+        @claim_rung, @tests_error, @provenance, @node_key)`
   ).run(fields);
 }
 
@@ -409,6 +432,10 @@ export function createQuestions(db: DatabaseSync, questions: QuestionInput[]): C
         document_anchor_start: q.document_anchor_start ?? null,
         document_anchor_end: q.document_anchor_end ?? null,
         document_marker_offset: q.document_marker_offset ?? null,
+        claim_rung: q.claim_rung ?? null,
+        tests_error: q.tests_error ?? null,
+        provenance: q.provenance ?? null,
+        node_key: q.node_key ?? null,
       });
       replaceTags(db, id, q.tags);
       if (q.type === "mc") replaceChoices(db, id, q.choices!);
@@ -441,6 +468,10 @@ export interface EditQuestionChanges {
   document_anchor_start?: number | null;
   document_anchor_end?: number | null;
   document_marker_offset?: number | null;
+  claim_rung?: "can_state" | "can_apply" | "can_discriminate" | "can_explain_why" | "can_transfer" | null;
+  tests_error?: string | null;
+  provenance?: "tutor_authored" | "textbook_sourced" | null;
+  node_key?: string | null;
 }
 
 export interface EditQuestionResult {
@@ -493,6 +524,10 @@ export function editQuestion(
       changes.document_anchor_end !== undefined ? changes.document_anchor_end : current.document_anchor_end,
     document_marker_offset:
       changes.document_marker_offset !== undefined ? changes.document_marker_offset : current.document_marker_offset,
+    claim_rung: changes.claim_rung !== undefined ? changes.claim_rung : (current.claim_rung as any),
+    tests_error: changes.tests_error !== undefined ? changes.tests_error : current.tests_error,
+    provenance: changes.provenance !== undefined ? changes.provenance : (current.provenance as any),
+    node_key: changes.node_key !== undefined ? changes.node_key : current.node_key,
   };
 
   const invalid = validateQuestionInput(db, merged);
@@ -526,6 +561,10 @@ export function editQuestion(
         document_anchor_start: merged.document_anchor_start ?? null,
         document_anchor_end: merged.document_anchor_end ?? null,
         document_marker_offset: merged.document_marker_offset ?? null,
+        claim_rung: merged.claim_rung ?? null,
+        tests_error: merged.tests_error ?? null,
+        provenance: merged.provenance ?? null,
+        node_key: merged.node_key ?? null,
       });
       replaceTags(db, newId, merged.tags);
       if (current.type === "mc") replaceChoices(db, newId, merged.choices!);
@@ -550,7 +589,8 @@ export function editQuestion(
            source_note = @source_note, graph_spec = @graph_spec, desmos_allowed = @desmos_allowed,
            document_id = @document_id, document_anchor_label = @document_anchor_label,
            document_anchor_start = @document_anchor_start, document_anchor_end = @document_anchor_end,
-           document_marker_offset = @document_marker_offset
+           document_marker_offset = @document_marker_offset,
+           claim_rung = @claim_rung, tests_error = @tests_error, provenance = @provenance, node_key = @node_key
        WHERE id = @id`
     ).run({
       id,
@@ -568,6 +608,10 @@ export function editQuestion(
       document_anchor_start: merged.document_anchor_start ?? null,
       document_anchor_end: merged.document_anchor_end ?? null,
       document_marker_offset: merged.document_marker_offset ?? null,
+      claim_rung: merged.claim_rung ?? null,
+      tests_error: merged.tests_error ?? null,
+      provenance: merged.provenance ?? null,
+      node_key: merged.node_key ?? null,
     });
     if (changes.tags) replaceTags(db, id, changes.tags);
     if (changes.choices && current.type === "mc") replaceChoices(db, id, changes.choices);
@@ -612,6 +656,10 @@ export interface QuestionSummary {
   has_graph: boolean;
   desmos_allowed: boolean;
   has_document: boolean;
+  claim_rung: string | null;
+  tests_error: string | null;
+  provenance: string | null;
+  node_key: string | null;
 }
 
 export interface SearchQuestionsParams {
@@ -686,7 +734,8 @@ export function searchQuestions(
               q.source_note, q.created_by, q.created_at, q.retired_at,
               (q.graph_spec IS NOT NULL) AS has_graph,
               q.desmos_allowed AS desmos_allowed,
-              (q.document_id IS NOT NULL) AS has_document
+              (q.document_id IS NOT NULL) AS has_document,
+              q.claim_rung, q.tests_error, q.provenance, q.node_key
        FROM question q ${joinFts}
        ${fullWhere}
        ORDER BY q.created_at DESC

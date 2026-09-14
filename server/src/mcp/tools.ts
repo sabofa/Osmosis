@@ -54,6 +54,14 @@ const questionInputShape = z.object({
       "the test-taker to this question. Distinct from document_anchor_start/end, which " +
       "highlights a whole excerpt range rather than one inline marker."
   ),
+  claim_rung: z.enum(["can_state", "can_apply", "can_discriminate", "can_explain_why", "can_transfer"]).nullable().optional()
+    .describe("The highest rung on the claim ladder this item can support evidence for. Leave unset if this item doesn't map to a specific rung."),
+  tests_error: z.string().nullable().optional()
+    .describe("Free-text description of the specific wrong model this item is designed to catch, if any."),
+  provenance: z.enum(["tutor_authored", "textbook_sourced"]).nullable().optional()
+    .describe("Where this item's content came from — distinct from created_by (who wrote the JSON)."),
+  node_key: z.string().nullable().optional()
+    .describe("A stable string identifying the specific teachable idea this item targets, finer-grained than a tag. You mint and own these — Osmosis stores them but doesn't interpret their structure."),
 });
 
 function sleep(ms: number): Promise<void> {
