@@ -524,9 +524,9 @@ export function editQuestion(
       changes.document_anchor_end !== undefined ? changes.document_anchor_end : current.document_anchor_end,
     document_marker_offset:
       changes.document_marker_offset !== undefined ? changes.document_marker_offset : current.document_marker_offset,
-    claim_rung: changes.claim_rung !== undefined ? changes.claim_rung : (current.claim_rung as any),
+    claim_rung: changes.claim_rung !== undefined ? changes.claim_rung : (current.claim_rung as QuestionInput["claim_rung"]),
     tests_error: changes.tests_error !== undefined ? changes.tests_error : current.tests_error,
-    provenance: changes.provenance !== undefined ? changes.provenance : (current.provenance as any),
+    provenance: changes.provenance !== undefined ? changes.provenance : (current.provenance as QuestionInput["provenance"]),
     node_key: changes.node_key !== undefined ? changes.node_key : current.node_key,
   };
 

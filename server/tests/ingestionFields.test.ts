@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { openTestDb, insertTag } from "./helpers.js";
-import { createQuestions, getQuestionDetail, searchQuestions } from "../src/domain/questions.js";
+import { createQuestions, getQuestionDetail, searchQuestions, editQuestion } from "../src/domain/questions.js";
 
 describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_key)", () => {
   it("accepts and round-trips all four fields through creation and detail read", () => {
@@ -69,5 +69,177 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
     ]);
     const row = db.prepare("SELECT prompt FROM question WHERE node_key = ?").get("calc101:chain-rule") as { prompt: string };
     expect(row.prompt).toBe("a");
+  });
+
+  it("editQuestion can update all four fields in-place (no attempts path)", () => {
+    const db = openTestDb();
+    insertTag(db, "algebra");
+
+    // Create a question with the four fields
+    const created = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "original",
+        tags: ["algebra"],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        claim_rung: "can_state",
+        tests_error: "first error",
+        provenance: "textbook_sourced",
+        node_key: "orig:key",
+      },
+    ]);
+    const id = created.created[0].id;
+
+    // Edit all four fields (no attempts yet, so in-place update)
+    const edited = editQuestion(db, id, {
+      prompt: "updated",
+      claim_rung: "can_explain_why",
+      tests_error: "second error",
+      provenance: "tutor_authored",
+      node_key: "new:key",
+    });
+
+    expect(edited.versioned).toBe(false); // in-place edit, not versioned
+    const detail = getQuestionDetail(db, id);
+    expect(detail.prompt).toBe("updated");
+    expect(detail.claim_rung).toBe("can_explain_why");
+    expect(detail.tests_error).toBe("second error");
+    expect(detail.provenance).toBe("tutor_authored");
+    expect(detail.node_key).toBe("new:key");
+  });
+
+  it("editQuestion preserves all four fields when not specified in changes (no attempts path)", () => {
+    const db = openTestDb();
+    insertTag(db, "algebra");
+
+    const created = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "original",
+        tags: ["algebra"],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        claim_rung: "can_discriminate",
+        tests_error: "original error",
+        provenance: "tutor_authored",
+        node_key: "stable:key",
+      },
+    ]);
+    const id = created.created[0].id;
+
+    // Edit only the prompt, leave the four fields untouched
+    editQuestion(db, id, {
+      prompt: "new prompt",
+    });
+
+    const detail = getQuestionDetail(db, id);
+    expect(detail.claim_rung).toBe("can_discriminate");
+    expect(detail.tests_error).toBe("original error");
+    expect(detail.provenance).toBe("tutor_authored");
+    expect(detail.node_key).toBe("stable:key");
+  });
+
+  it("editQuestion can update all four fields with versioning (has attempts path)", () => {
+    const db = openTestDb();
+    insertTag(db, "algebra");
+
+    // Create a question
+    const created = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "original",
+        tags: ["algebra"],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        claim_rung: "can_state",
+        tests_error: "first error",
+        provenance: "textbook_sourced",
+        node_key: "orig:key",
+      },
+    ]);
+    const originalId = created.created[0].id;
+
+    // Create an attempt to force versioning on edit
+    const attemptId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const responseId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
+    db.prepare(
+      `INSERT INTO attempt (id, node_id, source, started_at)
+       VALUES (?, ?, ?, datetime('now'))`
+    ).run(attemptId, "node-123", "adhoc");
+
+    db.prepare(
+      `INSERT INTO response (id, attempt_id, question_id, ordinal)
+       VALUES (?, ?, ?, 0)`
+    ).run(responseId, attemptId, originalId);
+
+    // Now edit the question — it should create a new version
+    const edited = editQuestion(db, originalId, {
+      prompt: "updated",
+      claim_rung: "can_explain_why",
+      tests_error: "second error",
+      provenance: "tutor_authored",
+      node_key: "new:key",
+    });
+
+    expect(edited.versioned).toBe(true);
+    expect(edited.version).toBe(2);
+    expect(edited.supersedes_id).toBe(originalId);
+
+    // New version should have updated fields
+    const newDetail = getQuestionDetail(db, edited.id);
+    expect(newDetail.version).toBe(2);
+    expect(newDetail.prompt).toBe("updated");
+    expect(newDetail.claim_rung).toBe("can_explain_why");
+    expect(newDetail.tests_error).toBe("second error");
+    expect(newDetail.provenance).toBe("tutor_authored");
+    expect(newDetail.node_key).toBe("new:key");
+
+    // Old version should be retired
+    const oldDetail = getQuestionDetail(db, originalId);
+    expect(oldDetail.retired_at).not.toBeNull();
+  });
+
+  it("editQuestion preserves all four fields when not specified in changes (has attempts path)", () => {
+    const db = openTestDb();
+    insertTag(db, "algebra");
+
+    const created = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "original",
+        tags: ["algebra"],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        claim_rung: "can_transfer",
+        tests_error: "original error",
+        provenance: "textbook_sourced",
+        node_key: "stable:key",
+      },
+    ]);
+    const originalId = created.created[0].id;
+
+    // Create an attempt to force versioning
+    const attemptId2 = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    const responseId2 = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+
+    db.prepare(
+      `INSERT INTO attempt (id, node_id, source, started_at)
+       VALUES (?, ?, ?, datetime('now'))`
+    ).run(attemptId2, "node-456", "adhoc");
+
+    db.prepare(
+      `INSERT INTO response (id, attempt_id, question_id, ordinal)
+       VALUES (?, ?, ?, 0)`
+    ).run(responseId2, attemptId2, originalId);
+
+    // Edit only the prompt
+    const edited = editQuestion(db, originalId, {
+      prompt: "new prompt",
+    });
+
+    // New version should preserve the four fields
+    const newDetail = getQuestionDetail(db, edited.id);
+    expect(newDetail.claim_rung).toBe("can_transfer");
+    expect(newDetail.tests_error).toBe("original error");
+    expect(newDetail.provenance).toBe("textbook_sourced");
+    expect(newDetail.node_key).toBe("stable:key");
   });
 });
