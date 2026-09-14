@@ -709,7 +709,9 @@ export default function Settings({
 
       <div className="settings-sync">
         <span className="dot" />
-        synced {timeAgo(lastSync)}
+        {status?.canonical
+          ? `up to date${status.last_write_at ? ` · ${timeAgo(status.last_write_at)}` : ''}`
+          : `synced ${timeAgo(lastSync)}`}
       </div>
     </div>
   )

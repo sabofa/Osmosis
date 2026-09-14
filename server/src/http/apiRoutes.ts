@@ -79,12 +79,28 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
     ).n;
 
+    // The canonical node never pulls, so last_pull_at is meaningless there;
+    // the app's "synced" pill shows the last time anything changed instead.
+    const lastWrite = (
+      db
+        .prepare(
+          `SELECT MAX(t) AS t FROM (
+             SELECT MAX(created_at) AS t FROM question
+             UNION ALL SELECT MAX(created_at) FROM tag
+             UNION ALL SELECT MAX(submitted_at) FROM attempt
+             UNION ALL SELECT MAX(created_at) FROM asset
+           )`
+        )
+        .get() as { t: string | null }
+    ).t;
+
     return {
       online: ctx.env.role === "canonical" ? true : ctx.runtime.online,
       canonical: ctx.node.canonical === 1,
       node: { id: ctx.node.id, label: ctx.node.label, canonical: ctx.node.canonical === 1 },
       last_pull_at: syncState?.last_pull_at ?? null,
       last_push_at: syncState?.last_push_at ?? null,
+      last_write_at: lastWrite,
       outbox_depth: outboxDepth,
       dead_outbox_depth: deadOutbox.length,
       dead_outbox: deadOutbox,

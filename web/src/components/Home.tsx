@@ -585,7 +585,9 @@ export default function Home({
           </div>
           <div className="sync-pill">
             <span className="sync-dot" />
-            synced {timeAgo(lastSync)}
+            {status?.canonical
+              ? `up to date${status.last_write_at ? ` · ${timeAgo(status.last_write_at)}` : ''}`
+              : `synced ${timeAgo(lastSync)}`}
           </div>
         </div>
       </div>

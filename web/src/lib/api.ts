@@ -4,6 +4,7 @@ export interface NodeStatus {
   node: { id: string; label: string; canonical: boolean }
   last_pull_at: string | null
   last_push_at: string | null
+  last_write_at: string | null
   outbox_depth: number
   dead_outbox_depth: number
   dead_outbox: { id: number; entity_type: string; entity_id: string; tries: number; last_try_at: string | null; last_error: string | null }[]
