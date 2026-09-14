@@ -16,7 +16,7 @@ describe("local sync engine", () => {
   beforeAll(async () => {
     canonicalDb = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(canonicalDb, env);
     canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime() });
     const address = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
@@ -28,7 +28,7 @@ describe("local sync engine", () => {
   it("checkConnectivity reports true when the remote is reachable", async () => {
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l", port: 0, dbPath: ":memory:",
-                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };
@@ -41,7 +41,7 @@ describe("local sync engine", () => {
   it("checkConnectivity reports false for an unreachable remote", async () => {
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l2", port: 0, dbPath: ":memory:",
-                  remoteUrl: "http://127.0.0.1:1", uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: "http://127.0.0.1:1", uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };
@@ -56,7 +56,7 @@ describe("local sync engine", () => {
 
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l3", port: 0, dbPath: ":memory:",
-                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     addSlice(localDb, "sciX");
     localDb.prepare(
@@ -83,7 +83,7 @@ describe("local sync engine", () => {
     insertTag(canonicalDb, "sciY");
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l4", port: 0, dbPath: ":memory:",
-                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     localDb.prepare(
       `INSERT INTO outbox (entity_type, entity_id, payload) VALUES ('attempt', 'sync-a2', ?)`
@@ -122,7 +122,7 @@ describe("local sync engine", () => {
 
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l6", port: 0, dbPath: ":memory:",
-                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };
@@ -210,7 +210,7 @@ describe("local sync engine", () => {
 
       const localDb = openTestDb();
       const env = { role: "local" as const, label: "l5", port: 0, dbPath: ":memory:",
-                    remoteUrl: proxyUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                    remoteUrl: proxyUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
       const node = bootstrapNode(localDb, env);
       addSlice(localDb, "sciZ");
       // Seed an outbox row so the push half of runSync actually has something to send

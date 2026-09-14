@@ -14,7 +14,7 @@ describe("GET /api/attempts/live-pending", () => {
   beforeAll(async () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();

@@ -24,7 +24,7 @@ describe("canonical-node guards on slice and template-download routes", () => {
   beforeAll(async () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();
@@ -91,7 +91,7 @@ describe("local-node sync-triggering routes", () => {
   beforeAll(async () => {
     canonicalDb = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(canonicalDb, env);
     canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime() });
     canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
@@ -102,7 +102,7 @@ describe("local-node sync-triggering routes", () => {
   function buildLocal(label: string, remoteUrl: string | null) {
     const db = openTestDb();
     const env = { role: "local" as const, label, port: 0, dbPath: ":memory:",
-                  remoteUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
     const runtime = createSyncRuntime();
     const app = buildApp({ db, env, node, runtime });
@@ -308,7 +308,7 @@ describe("/api/status model grading fields", () => {
   it("reports model_grading_configured false when DEEPSEEK_API_KEY is unset", async () => {
     const db = openTestDb();
     const env = { role: "canonical" as const, label: "c2", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
     const app = buildApp({ db, env, node, runtime: createSyncRuntime() });
 
@@ -329,7 +329,7 @@ describe("GET /api/attempts/live-pending", () => {
   beforeAll(async () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();
@@ -379,7 +379,7 @@ describe("GET /api/attempts/live-pending", () => {
   it("never surfaces another session's pending item", async () => {
     const db2 = openTestDb();
     const env = { role: "canonical" as const, label: "c3", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db2, env);
     const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
     await app2.ready();
@@ -406,7 +406,7 @@ describe("GET /api/attempts/live-pending", () => {
   it("breaks a started_at tie deterministically via id DESC (Fix 2)", async () => {
     const db2 = openTestDb();
     const env = { role: "canonical" as const, label: "c4", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db2, env);
     const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
     await app2.ready();
@@ -443,7 +443,7 @@ describe("GET /api/attempts/live-pending", () => {
   it("does not return a submitted app_live attempt", async () => {
     const db2 = openTestDb();
     const env = { role: "canonical" as const, label: "c2", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db2, env);
     const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
     await app2.ready();
@@ -465,7 +465,7 @@ describe("POST /api/attempts — source: adhoc is rejected", () => {
   it("400s rather than creating an unreachable app_live attempt with no session_id", async () => {
     const db2 = openTestDb();
     const env = { role: "canonical" as const, label: "c5", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db2, env);
     const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
     await app2.ready();
@@ -497,7 +497,7 @@ describe("session routes", () => {
   beforeAll(async () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });
     await app.ready();

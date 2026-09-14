@@ -1,6 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import multipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { EnvConfig } from "../env.js";
 import type { NodeRow } from "../node.js";
@@ -67,6 +70,17 @@ export function buildApp(ctx: AppContext): FastifyInstance {
   }
 
   registerApiRoutes(app, ctx);
+
+  // Production only: serve the built web app from the same process. The app
+  // keeps all navigation in React state (no client-side routes), so plain
+  // file serving with index.html at / is enough — no SPA fallback needed.
+  // Registered last so /api, /sync and /mcp routes above always win.
+  if (ctx.env.webDistDir) {
+    if (!existsSync(join(ctx.env.webDistDir, "index.html"))) {
+      throw new Error(`WEB_DIST_DIR is set but ${ctx.env.webDistDir} has no index.html — run the web build first`);
+    }
+    app.register(fastifyStatic, { root: ctx.env.webDistDir, prefix: "/" });
+  }
 
   return app;
 }

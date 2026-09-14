@@ -1,0 +1,27 @@
+[Unit]
+Description=Osmosis canonical node (API, MCP, web app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osmosis
+Group=osmosis
+WorkingDirectory=/opt/osmosis/server
+EnvironmentFile=/etc/osmosis/canonical.env
+# NODE_BIN is substituted by deploy/install.sh with the absolute path of node.
+ExecStart=__NODE_BIN__ dist/index.js
+Restart=always
+RestartSec=3
+# node:sqlite prints an ExperimentalWarning on every start; keep the journal quiet.
+Environment=NODE_OPTIONS=--no-warnings=ExperimentalWarning
+
+# Hardening: the process only ever writes under /var/lib/osmosis.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/osmosis
+
+[Install]
+WantedBy=multi-user.target

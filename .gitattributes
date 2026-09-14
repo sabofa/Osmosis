@@ -5,3 +5,9 @@
 # cli.mjs (LF in the worktree it was authored in) checked out as CRLF in a
 # different local checkout of the same commit.
 *.mjs text eol=lf
+
+# Deployment files are consumed by bash/systemd/cloudflared on Linux — a CRLF
+# shebang or unit file breaks them outright.
+*.sh text eol=lf
+deploy/** text eol=lf
+*.example text eol=lf

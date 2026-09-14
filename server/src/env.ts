@@ -9,6 +9,11 @@ export interface EnvConfig {
   uploadsDir: string;
   mcpAuthToken: string | null;
   deepseekApiKey: string | null;
+  // Absolute path of the built web app (web/dist). When set, the server
+  // serves it at / so a deployment is one process on one port and the app's
+  // /api calls are same-origin with no proxy in front. Unset in dev, where
+  // Vite serves the app and proxies /api itself.
+  webDistDir: string | null;
 }
 
 function required(name: string): string {
@@ -50,5 +55,6 @@ export function loadEnvConfig(): EnvConfig {
     uploadsDir,
     mcpAuthToken,
     deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? null,
+    webDistDir: process.env.WEB_DIST_DIR ? resolve(process.env.WEB_DIST_DIR) : null,
   };
 }

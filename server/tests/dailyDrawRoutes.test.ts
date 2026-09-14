@@ -17,7 +17,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     insertTag(canonicalDb, "phys");
     for (let i = 0; i < 3; i++) insertQuestion(canonicalDb, { tags: ["phys"] });
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                  remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(canonicalDb, env);
     canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime() });
     canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
@@ -65,7 +65,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
   it("local, online: POST /api/attempts rejects an invalid daily_kind with a 400, not the offline-503", async () => {
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l3", port: 0, dbPath: ":memory:",
-                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true;
@@ -83,7 +83,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
   it("local, online: POST /api/attempts with daily_kind proxies to canonical and materializes a local attempt", async () => {
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l", port: 0, dbPath: ":memory:",
-                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: canonicalUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true; // simulate an already-established online state
@@ -120,7 +120,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
   it("local, offline: POST /api/attempts with daily_kind 503s with daily_requires_connection", async () => {
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "l2", port: 0, dbPath: ":memory:",
-                  remoteUrl: "http://127.0.0.1:1", uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: "http://127.0.0.1:1", uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = false;
@@ -147,7 +147,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     insertTag(hierDb, "math:functions", "math");
     insertQuestion(hierDb, { tags: ["math:functions"] });
     const hierEnv = { role: "canonical" as const, label: "hc", port: 0, dbPath: ":memory:",
-                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const hierNode = bootstrapNode(hierDb, hierEnv);
     const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
     const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
@@ -155,7 +155,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     // A brand new local node holding no slices and no tags at all.
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "hl", port: 0, dbPath: ":memory:",
-                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true;
@@ -235,14 +235,14 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
       .run(dailyDrawId, decoy.id);
 
     const hierEnv = { role: "canonical" as const, label: "hc2", port: 0, dbPath: ":memory:",
-                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const hierNode = bootstrapNode(hierDb, hierEnv);
     const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
     const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "hl2", port: 0, dbPath: ":memory:",
-                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true;
@@ -328,14 +328,14 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
       .run(dailyDrawId, decoy.id);
 
     const hierEnv = { role: "canonical" as const, label: "hc3", port: 0, dbPath: ":memory:",
-                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null };
+                       remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const hierNode = bootstrapNode(hierDb, hierEnv);
     const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
     const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openTestDb();
     const env = { role: "local" as const, label: "hl3", port: 0, dbPath: ":memory:",
-                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null };
+                  remoteUrl: hierUrl, uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true;

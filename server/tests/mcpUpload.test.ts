@@ -24,7 +24,7 @@ describe("POST /mcp/:token/upload", () => {
       remoteUrl: null,
       uploadsDir,
       mcpAuthToken: "test-token-123",
-      deepseekApiKey: null,
+      deepseekApiKey: null, webDistDir: null,
     };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime() });

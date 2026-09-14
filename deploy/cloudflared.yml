@@ -1,0 +1,17 @@
+# /etc/cloudflared/config.yml — installed by deploy/install.sh after you run
+# `cloudflared tunnel login` and `cloudflared tunnel create osmosis` once.
+#
+# Only /mcp/... is exposed to the public internet. /api and /sync never leave
+# the machine (and Tailscale); anything else on the hostname gets a bare 404,
+# the same answer a wrong token gets, so the tunnel gives a scanner no signal.
+tunnel: __TUNNEL_ID__
+credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
+
+ingress:
+  - hostname: __MCP_HOSTNAME__
+    path: ^/mcp/
+    service: http://localhost:8081
+    originRequest:
+      # await_item_outcome holds a request open for up to ~25s; leave headroom.
+      connectTimeout: 30s
+  - service: http_status:404

@@ -54,7 +54,7 @@ describe("startModelGradingBackground", () => {
     const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchSpy);
 
-    const ctx = buildCtx({ deepseekApiKey: null });
+    const ctx = buildCtx({ deepseekApiKey: null, webDistDir: null });
     const { stop } = startModelGradingBackground(ctx);
 
     await vi.advanceTimersByTimeAsync(6 * 60_000);

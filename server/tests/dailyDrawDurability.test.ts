@@ -39,7 +39,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
       remoteUrl: null,
       uploadsDir: dir,
       mcpAuthToken: "t",
-      deepseekApiKey: null,
+      deepseekApiKey: null, webDistDir: null,
     };
     const cNode = bootstrapNode(canonicalDb, cEnv);
     const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: cNode, runtime: createSyncRuntime() });
@@ -55,7 +55,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
         remoteUrl: canonicalUrl,
         uploadsDir: dir,
         mcpAuthToken: null,
-        deepseekApiKey: null,
+        deepseekApiKey: null, webDistDir: null,
       };
       const node = bootstrapNode(localDb, env);
       const runtime = createSyncRuntime();
@@ -87,7 +87,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
       remoteUrl: null,
       uploadsDir: dir,
       mcpAuthToken: "t",
-      deepseekApiKey: null,
+      deepseekApiKey: null, webDistDir: null,
     };
     const cNode = bootstrapNode(canonicalDb, cEnv);
     const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: cNode, runtime: createSyncRuntime() });
@@ -102,7 +102,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
       remoteUrl: canonicalUrl,
       uploadsDir: dir,
       mcpAuthToken: null,
-      deepseekApiKey: null,
+      deepseekApiKey: null, webDistDir: null,
     };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
