@@ -334,6 +334,9 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       response_text?: string | null;
       skipped?: boolean;
       elapsed_ms?: number;
+      confidence?: "unsure" | "somewhat" | "confident" | null;
+      idk?: boolean;
+      misapplied_method?: string | null;
     };
     try {
       return answerResponse(db, id, response_id, body);

@@ -35,7 +35,7 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
     const db = openTestDb();
     insertTag(db, "algebra");
     const result = createQuestions(db, [
-      { type: "mc", prompt: "2+2?", tags: ["algebra"], choices: [{ body: "4", is_correct: true }, { body: "5", is_correct: false }] },
+      { type: "mc", prompt: "2+2?", tags: ["algebra"], choices: [{ body: "4", is_correct: true }, { body: "5", is_correct: false, misconception: "off by one" }] },
     ]);
     const detail = getQuestionDetail(db, result.created[0].id);
     expect(detail.claim_rung).toBeNull();
@@ -52,7 +52,7 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
         type: "mc",
         prompt: "x",
         tags: ["algebra"],
-        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false, misconception: "m" }],
         claim_rung: "can_vibe" as any,
       },
     ]);
@@ -64,8 +64,8 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
     const db = openTestDb();
     insertTag(db, "algebra");
     createQuestions(db, [
-      { type: "mc", prompt: "a", tags: ["algebra"], node_key: "calc101:chain-rule", choices: [{ body: "x", is_correct: true }, { body: "y", is_correct: false }] },
-      { type: "mc", prompt: "b", tags: ["algebra"], node_key: "calc101:product-rule", choices: [{ body: "x", is_correct: true }, { body: "y", is_correct: false }] },
+      { type: "mc", prompt: "a", tags: ["algebra"], node_key: "calc101:chain-rule", choices: [{ body: "x", is_correct: true }, { body: "y", is_correct: false, misconception: "m" }] },
+      { type: "mc", prompt: "b", tags: ["algebra"], node_key: "calc101:product-rule", choices: [{ body: "x", is_correct: true }, { body: "y", is_correct: false, misconception: "m" }] },
     ]);
     const row = db.prepare("SELECT prompt FROM question WHERE node_key = ?").get("calc101:chain-rule") as { prompt: string };
     expect(row.prompt).toBe("a");
@@ -81,7 +81,7 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
         type: "mc",
         prompt: "original",
         tags: ["algebra"],
-        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false, misconception: "m" }],
         claim_rung: "can_state",
         tests_error: "first error",
         provenance: "textbook_sourced",
@@ -117,7 +117,7 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
         type: "mc",
         prompt: "original",
         tags: ["algebra"],
-        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false, misconception: "m" }],
         claim_rung: "can_discriminate",
         tests_error: "original error",
         provenance: "tutor_authored",
@@ -148,7 +148,7 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
         type: "mc",
         prompt: "original",
         tags: ["algebra"],
-        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false, misconception: "m" }],
         claim_rung: "can_state",
         tests_error: "first error",
         provenance: "textbook_sourced",
@@ -207,7 +207,7 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
         type: "mc",
         prompt: "original",
         tags: ["algebra"],
-        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false }],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false, misconception: "m" }],
         claim_rung: "can_transfer",
         tests_error: "original error",
         provenance: "textbook_sourced",

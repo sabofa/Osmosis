@@ -18,6 +18,8 @@ const WRITTEN_SAVE_DEBOUNCE_MS = 700
 interface DraftResponse {
   selectedChoiceId: string | null
   writtenText: string
+  confidence: 'unsure' | 'somewhat' | 'confident' | null
+  idk: boolean
 }
 
 export default function Take({
@@ -39,7 +41,12 @@ export default function Take({
   const [exiting, setExiting] = useState(false)
   const [finishing, setFinishing] = useState(false)
   const [drafts, setDrafts] = useState<DraftResponse[]>(() =>
-    questions.map((r) => ({ selectedChoiceId: r.selected_choice_id, writtenText: r.response_text ?? '' }))
+    questions.map((r) => ({
+      selectedChoiceId: r.selected_choice_id,
+      writtenText: r.response_text ?? '',
+      confidence: r.confidence ?? null,
+      idk: r.idk ?? false,
+    }))
   )
   // Keyed by response id (not a single shared timer) — switching questions
   // mid-debounce must not cancel an earlier question's still-pending save.
@@ -70,7 +77,8 @@ export default function Take({
   const question = response.question
   const icon = useMemo(() => iconForTags(question.tags), [question.tags])
   const hasPanel = !!question.graph_spec || !!question.desmos_allowed || !!question.document_id
-  const answered = question.type === 'mc' ? draft.selectedChoiceId !== null : draft.writtenText.trim().length > 0
+  const answered =
+    question.type === 'mc' ? draft.selectedChoiceId !== null || draft.idk : draft.writtenText.trim().length > 0
 
   function goTo(i: number) {
     setIndex(i)
@@ -124,6 +132,24 @@ export default function Take({
     }).catch((err) => console.error('Failed to save answer:', err))
   }
 
+  function setConfidence(level: 'unsure' | 'somewhat' | 'confident') {
+    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, confidence: level } : d)))
+    answerResponse(attempt.id, response.id, { confidence: level }).then((updated) => {
+      setAttempt((prev) =>
+        prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
+      )
+    }).catch((err) => console.error('Failed to save confidence:', err))
+  }
+
+  function setIdk() {
+    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, idk: true } : d)))
+    answerResponse(attempt.id, response.id, { idk: true, skipped: true }).then((updated) => {
+      setAttempt((prev) =>
+        prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
+      )
+    }).catch((err) => console.error('Failed to save idk:', err))
+  }
+
   function setWrittenText(text: string) {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, writtenText: text } : d)))
     const responseId = response.id
@@ -156,7 +182,8 @@ export default function Take({
       <div className="take-dots">
         {questions.map((r, i) => {
           const d = drafts[i]
-          const wasAnswered = r.question.type === 'mc' ? d.selectedChoiceId !== null : d.writtenText.trim().length > 0
+          const wasAnswered =
+            r.question.type === 'mc' ? d.selectedChoiceId !== null || d.idk : d.writtenText.trim().length > 0
           let cls = 'take-dot'
           if (i === index) cls += ' current'
           else if (wasAnswered) cls += ' answered'
@@ -204,17 +231,37 @@ export default function Take({
             <div className="question-prompt">{question.prompt}</div>
 
             {question.type === 'mc' ? (
-              <div className="choices">
-                {question.choices.map((c, i) => {
-                  const cls = `choice-btn${draft.selectedChoiceId === c.id ? ' selected' : ''}`
-                  return (
-                    <button key={c.id} className={cls} onClick={() => selectChoice(c.id)}>
-                      <span className="choice-letter">{LETTERS[i]}</span>
-                      {c.body}
+              <>
+                <div className="choices">
+                  {question.choices.map((c, i) => {
+                    const cls = `choice-btn${draft.selectedChoiceId === c.id ? ' selected' : ''}`
+                    return (
+                      <button key={c.id} className={cls} onClick={() => selectChoice(c.id)}>
+                        <span className="choice-letter">{LETTERS[i]}</span>
+                        {c.body}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="confidence-row">
+                  <span className="confidence-label">How sure are you?</span>
+                  <div className="confidence-buttons">
+                    {(['unsure', 'somewhat', 'confident'] as const).map((level) => (
+                      <button
+                        key={level}
+                        className={`confidence-btn${draft.confidence === level ? ' selected' : ''}`}
+                        onClick={() => setConfidence(level)}
+                      >
+                        {level === 'unsure' ? 'Unsure' : level === 'somewhat' ? 'Somewhat' : 'Confident'}
+                      </button>
+                    ))}
+                    <button className={`confidence-btn idk-btn${draft.idk ? ' selected' : ''}`} onClick={setIdk}>
+                      I don't know
                     </button>
-                  )
-                })}
-              </div>
+                  </div>
+                </div>
+              </>
             ) : (
               <textarea
                 className="written-answer"

@@ -31,7 +31,7 @@ describe("document_marker_offset validation", () => {
         tags: ["english"],
         choices: [
           { body: "Leave as is", is_correct: true },
-          { body: "Something else", is_correct: false },
+          { body: "Something else", is_correct: false, misconception: "m" },
         ],
         document_id: asset.id,
         document_marker_offset: 7,
@@ -48,7 +48,7 @@ describe("document_marker_offset validation", () => {
         tags: ["english"],
         choices: [
           { body: "Leave as is", is_correct: true },
-          { body: "Something else", is_correct: false },
+          { body: "Something else", is_correct: false, misconception: "m" },
         ],
         document_id: asset.id,
         document_marker_offset: 9,
@@ -69,7 +69,7 @@ describe("document_marker_offset validation", () => {
         tags: ["english"],
         choices: [
           { body: "Leave as is", is_correct: true },
-          { body: "Something else", is_correct: false },
+          { body: "Something else", is_correct: false, misconception: "m" },
         ],
         document_marker_offset: 3,
       },
@@ -101,7 +101,7 @@ describe("document_marker_offset validation", () => {
         tags: ["history"],
         choices: [
           { body: "1776", is_correct: true },
-          { body: "1812", is_correct: false },
+          { body: "1812", is_correct: false, misconception: "m" },
         ],
         document_id: asset.id,
         document_anchor_start: 0,
@@ -136,7 +136,7 @@ describe("possible_duplicates", () => {
         tags: ["biology"],
         choices: [
           { body: "the powerhouse of the cell", is_correct: true },
-          { body: "the nucleus", is_correct: false },
+          { body: "the nucleus", is_correct: false, misconception: "m" },
         ],
       },
     ]);
@@ -169,10 +169,10 @@ describe("mc choice-count warning", () => {
         tags: ["math"],
         choices: [
           { body: "A", is_correct: true },
-          { body: "B", is_correct: false },
-          { body: "C", is_correct: false },
-          { body: "D", is_correct: false },
-          { body: "E", is_correct: false },
+          { body: "B", is_correct: false, misconception: "m" },
+          { body: "C", is_correct: false, misconception: "m" },
+          { body: "D", is_correct: false, misconception: "m" },
+          { body: "E", is_correct: false, misconception: "m" },
         ],
       },
     ]);
@@ -194,10 +194,10 @@ describe("mc choice-count warning", () => {
         prompt: "What is 2 + 2?",
         tags: ["math"],
         choices: [
-          { body: "3", is_correct: false },
+          { body: "3", is_correct: false, misconception: "m" },
           { body: "4", is_correct: true },
-          { body: "5", is_correct: false },
-          { body: "6", is_correct: false },
+          { body: "5", is_correct: false, misconception: "m" },
+          { body: "6", is_correct: false, misconception: "m" },
         ],
       },
     ]);

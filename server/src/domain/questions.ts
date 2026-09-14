@@ -16,6 +16,7 @@ export type CalculatorPolicy = "allowed" | "forbidden" | "n_a";
 export interface ChoiceInput {
   body: string;
   is_correct: boolean;
+  misconception?: string | null;
 }
 
 export interface QuestionInput {
@@ -210,6 +211,13 @@ function validateQuestionInput(
     if (!q.choices.some((c) => c.is_correct)) {
       return { reason: "mc_without_correct", detail: "mc questions need at least one correct choice" };
     }
+    const missingMisconception = q.choices.filter((c) => !c.is_correct && !c.misconception);
+    if (missingMisconception.length > 0) {
+      return {
+        reason: "missing_misconception",
+        detail: "every non-correct mc choice needs a misconception describing which wrong model picking it represents",
+      };
+    }
   }
 
   if (q.type === "written" && !q.model_answer) {
@@ -353,9 +361,9 @@ function replaceTags(db: DatabaseSync, questionId: string, tags: string[]): void
 function replaceChoices(db: DatabaseSync, questionId: string, choices: ChoiceInput[]): void {
   db.prepare("DELETE FROM choice WHERE question_id = ?").run(questionId);
   const insert = db.prepare(
-    "INSERT INTO choice (id, question_id, body, is_correct, ordinal) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO choice (id, question_id, body, is_correct, ordinal, misconception) VALUES (?, ?, ?, ?, ?, ?)"
   );
-  choices.forEach((c, i) => insert.run(uuidv4(), questionId, c.body, c.is_correct ? 1 : 0, i));
+  choices.forEach((c, i) => insert.run(uuidv4(), questionId, c.body, c.is_correct ? 1 : 0, i, c.misconception ?? null));
 }
 
 export interface CreateQuestionsResult {
@@ -495,9 +503,9 @@ export function editQuestion(
   ).map((r) => r.tag_slug);
   const currentChoices =
     current.type === "mc"
-      ? (db.prepare("SELECT body, is_correct FROM choice WHERE question_id = ? ORDER BY ordinal").all(
-          id
-        ) as { body: string; is_correct: number }[])
+      ? (db
+          .prepare("SELECT body, is_correct, misconception FROM choice WHERE question_id = ? ORDER BY ordinal")
+          .all(id) as { body: string; is_correct: number; misconception: string | null }[])
       : [];
 
   const merged: QuestionInput = {
@@ -510,7 +518,7 @@ export function editQuestion(
     source_note: changes.source_note !== undefined ? changes.source_note : current.source_note,
     choices:
       changes.choices ??
-      currentChoices.map((c) => ({ body: c.body, is_correct: c.is_correct === 1 })),
+      currentChoices.map((c) => ({ body: c.body, is_correct: c.is_correct === 1, misconception: c.misconception })),
     model_answer: changes.model_answer !== undefined ? changes.model_answer : current.model_answer,
     rubric: changes.rubric !== undefined ? changes.rubric : current.rubric ? JSON.parse(current.rubric) : undefined,
     graph_spec: changes.graph_spec !== undefined ? changes.graph_spec : current.graph_spec,

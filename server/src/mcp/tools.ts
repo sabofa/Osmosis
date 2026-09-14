@@ -24,6 +24,11 @@ const tagQueryShape = z
 const choiceShape = z.object({
   body: z.string().describe("The choice's text."),
   is_correct: z.boolean().describe("True for exactly one choice, unless testing a multi-select concept."),
+  misconception: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Required for every non-correct choice: which wrong model picking it represents."),
 });
 
 const questionInputShape = z.object({
@@ -626,11 +631,17 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "submit_quick_check",
     {
       description: "Record the learner's free-response answer to a quick_check and get the model answer back.",
-      inputSchema: { response_id: z.string(), response_text: z.string() },
+      inputSchema: {
+        response_id: z.string(),
+        response_text: z.string(),
+        confidence: z.enum(["unsure", "somewhat", "confident"]).optional(),
+        idk: z.boolean().optional(),
+        misapplied_method: z.string().optional(),
+      },
     },
-    async ({ response_id, response_text }) => {
+    async ({ response_id, response_text, confidence, idk, misapplied_method }) => {
       try {
-        return ok(submitQuickCheck(db, { response_id, response_text }));
+        return ok(submitQuickCheck(db, { response_id, response_text, confidence, idk, misapplied_method }));
       } catch (err) {
         return fail(err);
       }

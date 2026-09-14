@@ -328,14 +328,25 @@ export function quickCheck(
 
 export function submitQuickCheck(
   db: DatabaseSync,
-  input: { response_id: string; response_text: string }
+  input: {
+    response_id: string;
+    response_text: string;
+    confidence?: "unsure" | "somewhat" | "confident";
+    idk?: boolean;
+    misapplied_method?: string;
+  }
 ): { explanation: string | null; model_answer: string | null } {
   const row = db.prepare("SELECT attempt_id, question_id FROM response WHERE id = ?").get(input.response_id) as
     | { attempt_id: string; question_id: string }
     | undefined;
   if (!row) throw new DomainError("not_found", `Response "${input.response_id}" does not exist.`);
 
-  answerResponse(db, row.attempt_id, input.response_id, { response_text: input.response_text });
+  answerResponse(db, row.attempt_id, input.response_id, {
+    response_text: input.response_text,
+    confidence: input.confidence,
+    idk: input.idk,
+    misapplied_method: input.misapplied_method,
+  });
   submitAttempt(db, row.attempt_id);
 
   const question = db.prepare("SELECT explanation, model_answer FROM question WHERE id = ?").get(row.question_id) as {
@@ -361,6 +372,9 @@ export type ItemOutcome =
       explanation: string | null;
       model_answer: string | null;
       correct_choice_id: string | null;
+      confidence: "unsure" | "somewhat" | "confident" | null;
+      idk: boolean;
+      misapplied_method: string | null;
     };
 
 export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcome {
@@ -368,12 +382,21 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
 
   const row = db
     .prepare(
-      `SELECT r.attempt_id, r.question_id, a.submitted_at, a.abandoned_at
+      `SELECT r.attempt_id, r.question_id, a.submitted_at, a.abandoned_at,
+              r.confidence, r.idk, r.misapplied_method
        FROM response r JOIN attempt a ON a.id = r.attempt_id
        WHERE r.id = ?`
     )
     .get(responseId) as
-    | { attempt_id: string; question_id: string; submitted_at: string | null; abandoned_at: string | null }
+    | {
+        attempt_id: string;
+        question_id: string;
+        submitted_at: string | null;
+        abandoned_at: string | null;
+        confidence: "unsure" | "somewhat" | "confident" | null;
+        idk: number;
+        misapplied_method: string | null;
+      }
     | undefined;
   if (!row) throw new DomainError("not_found", `Response "${responseId}" does not exist.`);
 
@@ -401,6 +424,9 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
     explanation: question.explanation,
     model_answer: question.model_answer,
     correct_choice_id: correctChoice?.id ?? null,
+    confidence: row.confidence,
+    idk: row.idk === 1,
+    misapplied_method: row.misapplied_method,
   };
 }
 
@@ -472,6 +498,9 @@ interface ResponseRow {
   skipped: number;
   answered_at: string | null;
   elapsed_ms: number | null;
+  confidence: "unsure" | "somewhat" | "confident" | null;
+  idk: number;
+  misapplied_method: string | null;
 }
 
 interface GradeRow {
@@ -590,6 +619,9 @@ export interface AnswerResponseChanges {
   response_text?: string | null;
   skipped?: boolean;
   elapsed_ms?: number;
+  confidence?: "unsure" | "somewhat" | "confident" | null;
+  idk?: boolean;
+  misapplied_method?: string | null;
 }
 
 export function answerResponse(
@@ -614,6 +646,9 @@ export function answerResponse(
          response_text = COALESCE(@response_text, response_text),
          skipped = COALESCE(@skipped, skipped),
          elapsed_ms = COALESCE(@elapsed_ms, elapsed_ms),
+         confidence = COALESCE(@confidence, confidence),
+         idk = COALESCE(@idk, idk),
+         misapplied_method = COALESCE(@misapplied_method, misapplied_method),
          answered_at = datetime('now')
      WHERE id = @id`
   ).run({
@@ -622,6 +657,9 @@ export function answerResponse(
     response_text: changes.response_text ?? null,
     skipped: changes.skipped === undefined ? null : changes.skipped ? 1 : 0,
     elapsed_ms: changes.elapsed_ms ?? null,
+    confidence: changes.confidence ?? null,
+    idk: changes.idk === undefined ? null : changes.idk ? 1 : 0,
+    misapplied_method: changes.misapplied_method ?? null,
   });
 
   const updated = db.prepare("SELECT * FROM response WHERE id = ?").get(responseId) as unknown as ResponseRow;
@@ -632,6 +670,9 @@ export function answerResponse(
     skipped: updated.skipped === 1,
     answered_at: updated.answered_at,
     elapsed_ms: updated.elapsed_ms,
+    confidence: updated.confidence,
+    idk: updated.idk === 1,
+    misapplied_method: updated.misapplied_method,
   };
 }
 

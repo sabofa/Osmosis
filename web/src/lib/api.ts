@@ -313,6 +313,9 @@ export interface AttemptResponse {
   skipped: boolean
   answered_at: string | null
   elapsed_ms: number | null
+  confidence?: 'unsure' | 'somewhat' | 'confident' | null
+  idk?: boolean
+  misapplied_method?: string | null
   grade: AttemptGrade | null
 }
 
@@ -382,6 +385,9 @@ export interface AnswerResponseChanges {
   response_text?: string | null
   skipped?: boolean
   elapsed_ms?: number
+  confidence?: 'unsure' | 'somewhat' | 'confident' | null
+  idk?: boolean
+  misapplied_method?: string | null
 }
 
 export async function answerResponse(
