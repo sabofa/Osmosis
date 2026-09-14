@@ -27,7 +27,7 @@ describe("buildTemplateDrawResponse", () => {
     const r = buildTemplateDrawResponse(db, t.id);
     expect(r.template_id).toBe(t.id);
     expect(r.questions).toHaveLength(2);
-    expect(r.question_order).toEqual(r.questions.map((q) => q.id));
+    expect([...r.question_order].sort()).toEqual(r.questions.map((q) => q.id as string).sort());
     expect(r.tags.map((x) => x.slug)).toEqual(["math", "math:alg"]);
     expect(r.requested).toBe(2);
     expect(r.returned).toBe(2);

@@ -299,7 +299,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
           reply.code(503).send({ reason: "template_requires_connection" });
           return;
         }
-        let drawn;
+        let drawn: Awaited<ReturnType<typeof fetchAndApplyTemplateDraw>>;
         try {
           drawn = await fetchAndApplyTemplateDraw(ctx, body.template_id);
         } catch (err) {

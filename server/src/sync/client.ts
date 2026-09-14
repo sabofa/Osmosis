@@ -182,10 +182,15 @@ export async function fetchAndApplyDailyDraw(
   returned: number;
 }> {
   if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
-  const res = await fetch(`${ctx.env.remoteUrl}/sync/daily-draw`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }),
-    signal: AbortSignal.timeout(15000),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${ctx.env.remoteUrl}/sync/daily-draw`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    throw new Error(`daily-draw fetch failed: ${(err as Error).message}`);
+  }
   if (!res.ok) throw new Error(`daily-draw fetch failed: HTTP ${res.status}`);
   const payload = (await res.json()) as DailyDrawSyncResponse;
 
@@ -231,10 +236,15 @@ export async function fetchAndApplyTemplateDraw(
   templateId: string
 ): Promise<{ questions: { id: string; lineage_id: string; type: "mc" | "written" }[]; short_draw: boolean; requested: number; returned: number; mix_adjusted: boolean }> {
   if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
-  const res = await fetch(`${ctx.env.remoteUrl}/sync/template-draw`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ template_id: templateId }),
-    signal: AbortSignal.timeout(15000),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${ctx.env.remoteUrl}/sync/template-draw`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ template_id: templateId }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    throw new Error(`template-draw fetch failed: ${(err as Error).message}`);
+  }
   if (!res.ok) throw new Error(`template-draw fetch failed: HTTP ${res.status}`);
   const payload = (await res.json()) as TemplateDrawResponse;
 

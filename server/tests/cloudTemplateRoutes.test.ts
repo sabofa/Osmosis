@@ -79,4 +79,41 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     await app.close();
     await canonicalApp.close();
   });
+
+  it("a connection error while online (not just a non-OK response) still returns 503, not 500", async () => {
+    const canonicalDb = openFileDb(dir, "c2.db");
+    insertTag(canonicalDb, "geo2");
+    insertQuestion(canonicalDb, { tags: ["geo2"] });
+    const template = createTemplate(canonicalDb, { name: "geo2 test", tag_query: { all: ["geo2"] }, question_count: 1 });
+    const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c2.db"), remoteUrl: null,
+                   uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime() });
+    const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
+
+    const localDb = openFileDb(dir, "l2.db");
+    // remoteUrl points at a closed port: `runtime.online = true` below fakes the
+    // connectivity check having passed, but every actual fetch (template-draw
+    // included) hits a real connection refusal, not an HTTP error response.
+    const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l2.db"), remoteUrl: "http://127.0.0.1:1",
+                  uploadsDir: dir, mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
+    const node = bootstrapNode(localDb, env);
+    const runtime = createSyncRuntime();
+    const ctx = { db: localDb, env, node, runtime };
+    const app = buildApp(ctx);
+
+    // Mirror the template row locally the way an ordinary pull against the
+    // real canonical would, without going through the unreachable remoteUrl.
+    const realCtx = { db: localDb, env: { ...env, remoteUrl: canonicalUrl }, node, runtime };
+    await runSync(realCtx, runtime);
+    expect(localDb.prepare("SELECT id FROM template WHERE id = ?").get(template.id)).toBeTruthy();
+    expect(isTemplateDownloaded(localDb, template.id)).toBe(false);
+
+    runtime.online = true;
+    const res = await app.inject({ method: "POST", url: "/api/attempts", payload: { source: "template", template_id: template.id } });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().reason).toBe("template_requires_connection");
+
+    await app.close();
+    await canonicalApp.close();
+  });
 });
