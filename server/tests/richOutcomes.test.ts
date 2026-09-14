@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { openTestDb, insertTag } from "./helpers.js";
-import { createQuestions } from "../src/domain/questions.js";
+import { openTestDb, insertTag, insertQuestion } from "./helpers.js";
+import { createQuestions, editQuestion, getQuestionDetail } from "../src/domain/questions.js";
+import { DomainError } from "../src/domain/errors.js";
 import { presentItem, answerResponse, submitAttempt, getItemOutcome } from "../src/domain/attempts.js";
 
 describe("misconception on distractors", () => {
@@ -37,6 +38,39 @@ describe("misconception on distractors", () => {
       },
     ]);
     expect(result.created).toHaveLength(1);
+  });
+
+  it("editQuestion on a legacy mc question (a pre-existing distractor missing misconception) succeeds when the edit doesn't touch choices", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    // insertQuestion writes directly via SQL, bypassing createQuestions'
+    // validation entirely — this simulates a question that was created
+    // before misconception existed (or otherwise predates this rule).
+    const legacy = insertQuestion(db, { tags: ["a"] });
+
+    expect(() => editQuestion(db, legacy.id, { prompt: "updated prompt" })).not.toThrow();
+    const detail = getQuestionDetail(db, legacy.id);
+    expect(detail.prompt).toBe("updated prompt");
+  });
+
+  it("editQuestion still rejects when the edit payload supplies a new choices array missing misconception", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const legacy = insertQuestion(db, { tags: ["a"] });
+
+    let caught: unknown;
+    try {
+      editQuestion(db, legacy.id, {
+        choices: [
+          { body: "right", is_correct: true },
+          { body: "wrong", is_correct: false }, // no misconception
+        ],
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DomainError);
+    expect((caught as DomainError).code).toBe("missing_misconception");
   });
 });
 

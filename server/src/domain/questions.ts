@@ -167,8 +167,16 @@ function findPossibleDuplicates(
 
 function validateQuestionInput(
   db: DatabaseSync,
-  q: QuestionInput
+  q: QuestionInput,
+  opts: { checkMisconception?: boolean } = {}
 ): { reason: string; detail: string } | null {
+  // Defaults to on (createQuestions always validates a brand-new, complete
+  // choice set). editQuestion turns this off when the edit payload doesn't
+  // touch `choices` at all, so a prompt/tag/etc-only edit on a legacy mc
+  // question (created before this field existed) isn't blocked by a
+  // pre-existing distractor missing `misconception` that the edit never
+  // asked to change.
+  const checkMisconception = opts.checkMisconception ?? true;
   if (q.type !== "mc" && q.type !== "written") {
     return { reason: "invalid_type", detail: `type must be "mc" or "written", got "${q.type}"` };
   }
@@ -211,12 +219,14 @@ function validateQuestionInput(
     if (!q.choices.some((c) => c.is_correct)) {
       return { reason: "mc_without_correct", detail: "mc questions need at least one correct choice" };
     }
-    const missingMisconception = q.choices.filter((c) => !c.is_correct && !c.misconception);
-    if (missingMisconception.length > 0) {
-      return {
-        reason: "missing_misconception",
-        detail: "every non-correct mc choice needs a misconception describing which wrong model picking it represents",
-      };
+    if (checkMisconception) {
+      const missingMisconception = q.choices.filter((c) => !c.is_correct && !c.misconception);
+      if (missingMisconception.length > 0) {
+        return {
+          reason: "missing_misconception",
+          detail: "every non-correct mc choice needs a misconception describing which wrong model picking it represents",
+        };
+      }
     }
   }
 
@@ -538,7 +548,11 @@ export function editQuestion(
     node_key: changes.node_key !== undefined ? changes.node_key : current.node_key,
   };
 
-  const invalid = validateQuestionInput(db, merged);
+  // Only re-check the misconception invariant when this edit actually
+  // supplies a new `choices` array to validate as a complete set. An edit
+  // that never touches `choices` shouldn't be blocked by a pre-existing
+  // legacy distractor missing `misconception` that nobody asked to change.
+  const invalid = validateQuestionInput(db, merged, { checkMisconception: changes.choices !== undefined });
   if (invalid) throw new DomainError(invalid.reason, invalid.detail);
 
   const hasAttempts = db.prepare("SELECT 1 FROM response WHERE question_id = ? LIMIT 1").get(id);
