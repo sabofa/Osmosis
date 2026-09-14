@@ -85,7 +85,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
   sudo mkdir -p "$(dirname "$ENV_FILE")"
   sed -e "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=$TOKEN|" \
-      -e "s|^NODE_LABEL=.*|NODE_LABEL=$(hostname -s)|" \
+      -e "s|^NODE_LABEL=.*|NODE_LABEL=$(uname -n | cut -d. -f1)|" \
       "$INSTALL_DIR/server/.env.canonical.example" | sudo tee "$ENV_FILE" >/dev/null
   sudo chown root:osmosis "$ENV_FILE"
   sudo chmod 640 "$ENV_FILE"

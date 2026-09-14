@@ -48,6 +48,29 @@ creates the DNS record, installs cloudflared as a service, and prints the
 connector URL to paste into claude.ai. Re-running the script later without
 `MCP_HOSTNAME` leaves the tunnel alone.
 
+### Host that already runs a cloudflared tunnel
+
+If `/etc/cloudflared/config.yml` already belongs to another tunnel, do not run
+the script's tunnel step. Add one ingress entry to that config, above its
+final `http_status:404` catch-all, and route the hostname to that tunnel:
+
+```yaml
+  - hostname: osmosis.yourdomain.com
+    path: ^/mcp/
+    service: http://127.0.0.1:8081
+    originRequest:
+      connectTimeout: 30s
+```
+
+```bash
+sudo cloudflared tunnel ingress validate --config /etc/cloudflared/config.yml
+cloudflared tunnel route dns <existing-tunnel-name> osmosis.yourdomain.com
+sudo systemctl restart <that-tunnel's-service>
+```
+
+The connector URL is then `https://osmosis.yourdomain.com/mcp/<MCP_AUTH_TOKEN>`
+with the token from `/etc/osmosis/canonical.env`.
+
 ## Updating
 
 ```bash
