@@ -103,4 +103,29 @@ describe("submitQuickCheck", () => {
     });
     expect(outcome.model_answer).toBe("model answer"); // seeded by insertQuestion's helper default
   });
+
+  // Whole-branch review finding: submitQuickCheck threads confidence/idk/
+  // misapplied_method through to answerResponse (and the MCP schema was
+  // updated for them), but nothing exercised that path. Confirm they land.
+  it("threads confidence/idk/misapplied_method through to the underlying response row", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q = insertQuestion(db, { tags: ["a"], type: "written" });
+    const presented = quickCheck(db, { node_id: "test-node", question_id: q.id });
+
+    submitQuickCheck(db, {
+      response_id: presented.response_id,
+      response_text: "I'm not sure, but I think it's the chain rule.",
+      confidence: "unsure",
+      idk: true,
+      misapplied_method: "tried the product rule",
+    });
+
+    const row = db
+      .prepare("SELECT confidence, idk, misapplied_method FROM response WHERE id = ?")
+      .get(presented.response_id) as { confidence: string; idk: number; misapplied_method: string };
+    expect(row.confidence).toBe("unsure");
+    expect(row.idk).toBe(1);
+    expect(row.misapplied_method).toBe("tried the product rule");
+  });
 });

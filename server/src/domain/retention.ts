@@ -2,6 +2,30 @@ import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 
+// Caller-supplied date strings (needs_last_until, before) funnel through
+// here. A bare "YYYY-MM-DD HH:MM:SS" is exactly the format this module
+// itself stores in and returns from due_at (see setRetentionTarget below),
+// so the natural caller flow is "read a due_at value, pass it back in" — but
+// new Date() parses a space-separated, no-timezone string as LOCAL time, not
+// UTC, which would silently shift it by the server's UTC offset on any
+// non-UTC host. Force UTC for that exact shape rather than trusting the
+// runtime's local-time interpretation. Also converts a genuinely
+// unparseable string into a legible DomainError instead of letting
+// toISOString() throw a raw RangeError — these are LLM-supplied free-form
+// strings via MCP tools.
+function parseCallerDateMs(input: string, field: string): number {
+  const iso = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(input) ? input.replace(" ", "T") + "Z" : input;
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) {
+    throw new DomainError("invalid_date", `${field} is not a parseable date: "${input}"`);
+  }
+  return ms;
+}
+
+function toSqliteDatetime(ms: number): string {
+  return new Date(ms).toISOString().replace("T", " ").slice(0, 19);
+}
+
 export interface SetRetentionTargetInput {
   identity_key: string;
   retention_target: string;
@@ -26,11 +50,11 @@ export function setRetentionTarget(
   input: SetRetentionTargetInput
 ): { id: string; due_at: string; first_gap_days: number } {
   const now = Date.now();
-  const target = new Date(input.needs_last_until).getTime();
+  const target = parseCallerDateMs(input.needs_last_until, "needs_last_until");
   const totalDays = Math.max((target - now) / (1000 * 60 * 60 * 24), 0);
   const firstGapDays = totalDays * firstGapRatio(totalDays);
   const dueAtMs = now + firstGapDays * 24 * 60 * 60 * 1000;
-  const dueAt = new Date(dueAtMs).toISOString().replace("T", " ").slice(0, 19);
+  const dueAt = toSqliteDatetime(dueAtMs);
 
   const id = uuidv4();
   db.prepare(
@@ -65,10 +89,13 @@ export function getDueItems(
   opts: { before?: string; limit?: number; offset?: number } = {}
 ): { total: number; items: unknown[]; has_more: boolean } {
   // Normalize before to "YYYY-MM-DD HH:MM:SS" format to match stored due_at values.
-  // Accepts both ISO-8601 (with T separator) and space-separated formats.
+  // Accepts both ISO-8601 (with T separator) and space-separated formats —
+  // the latter is exactly what due_at itself is stored/returned as, so
+  // parseCallerDateMs forces UTC on that shape rather than letting the
+  // server's local timezone shift it.
   const normalizedBefore = opts.before
-    ? new Date(opts.before).toISOString().replace("T", " ").slice(0, 19)
-    : new Date().toISOString().replace("T", " ").slice(0, 19);
+    ? toSqliteDatetime(parseCallerDateMs(opts.before, "before"))
+    : toSqliteDatetime(Date.now());
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
 

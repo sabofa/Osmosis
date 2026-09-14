@@ -60,6 +60,24 @@ describe("ingestion metadata fields (claim_rung, tests_error, provenance, node_k
     expect(result.rejected[0]?.reason).toBe("invalid_claim_rung");
   });
 
+  // Mirrors the invalid_claim_rung test above — validateQuestionInput has an
+  // equivalent invalid_provenance check that had no test coverage.
+  it("rejects an invalid provenance value at the domain layer", () => {
+    const db = openTestDb();
+    insertTag(db, "algebra");
+    const result = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "x",
+        tags: ["algebra"],
+        choices: [{ body: "a", is_correct: true }, { body: "b", is_correct: false, misconception: "m" }],
+        provenance: "made_up_by_ai" as any,
+      },
+    ]);
+    expect(result.created).toHaveLength(0);
+    expect(result.rejected[0]?.reason).toBe("invalid_provenance");
+  });
+
   it("node_key is queryable and indexed — searching by it (via a direct SQL check) finds the right question", () => {
     const db = openTestDb();
     insertTag(db, "algebra");

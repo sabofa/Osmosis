@@ -783,7 +783,7 @@ export function searchQuestions(
 export interface QuestionDetail extends Omit<QuestionRow, "desmos_allowed"> {
   desmos_allowed: boolean;
   tags: string[];
-  choices: { id: string; body: string; is_correct: boolean; ordinal: number }[];
+  choices: { id: string; body: string; is_correct: boolean; ordinal: number; misconception: string | null }[];
 }
 
 export function getQuestionDetail(db: DatabaseSync, id: string): QuestionDetail {
@@ -796,8 +796,8 @@ export function getQuestionDetail(db: DatabaseSync, id: string): QuestionDetail 
 
   const choices = (
     db
-      .prepare("SELECT id, body, is_correct, ordinal FROM choice WHERE question_id = ? ORDER BY ordinal")
-      .all(id) as { id: string; body: string; is_correct: number; ordinal: number }[]
+      .prepare("SELECT id, body, is_correct, ordinal, misconception FROM choice WHERE question_id = ? ORDER BY ordinal")
+      .all(id) as { id: string; body: string; is_correct: number; ordinal: number; misconception: string | null }[]
   ).map((c) => ({ ...c, is_correct: c.is_correct === 1 }));
 
   return { ...question, desmos_allowed: Boolean(question.desmos_allowed), tags, choices };

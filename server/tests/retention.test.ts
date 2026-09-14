@@ -133,6 +133,77 @@ describe("getDueItems", () => {
   });
 });
 
+describe("getDueItems — before parameter parsing (final review fix)", () => {
+  // Whole-branch review finding: getDueItems' `before` (and setRetentionTarget's
+  // needs_last_until) funneled through `new Date(input)`, which parses a bare
+  // "YYYY-MM-DD HH:MM:SS" string as LOCAL time rather than UTC — exactly the
+  // format due_at is stored/returned in, so the natural caller flow (read a
+  // due_at value, pass it back as `before`) broke on any non-UTC host. This
+  // confirms inclusion/exclusion by actual time is correct for that format,
+  // not merely that the call doesn't throw.
+  it("correctly includes/excludes items by real time for a space-separated before value (the stored due_at format)", () => {
+    const db = openTestDb();
+    const past = setRetentionTarget(db, {
+      identity_key: "space-fmt-past",
+      retention_target: "t1",
+      target_source: "tutor_direct",
+      needs_last_until: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    const future = setRetentionTarget(db, {
+      identity_key: "space-fmt-future",
+      retention_target: "t1",
+      target_source: "tutor_direct",
+      needs_last_until: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    db.prepare("UPDATE retention_schedule SET due_at = datetime('now', '-2 hours') WHERE id = ?").run(past.id);
+    db.prepare("UPDATE retention_schedule SET due_at = datetime('now', '+2 hours') WHERE id = ?").run(future.id);
+
+    // A space-separated "YYYY-MM-DD HH:MM:SS" cutoff, exactly what a caller
+    // gets back from due_at — 1 hour from now, i.e. between the two items.
+    const cutoff = new Date(Date.now() + 60 * 60 * 1000).toISOString().replace("T", " ").slice(0, 19);
+    const result = getDueItems(db, { before: cutoff });
+
+    expect((result.items as any[]).some((i) => i.identity_key === "space-fmt-past")).toBe(true);
+    expect((result.items as any[]).some((i) => i.identity_key === "space-fmt-future")).toBe(false);
+  });
+
+  it("throws DomainError (not a raw RangeError) when `before` is unparseable", () => {
+    const db = openTestDb();
+    expect(() => getDueItems(db, { before: "not-a-date" })).toThrow(DomainError);
+    try {
+      getDueItems(db, { before: "not-a-date" });
+      expect.fail("Should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DomainError);
+      expect((err as DomainError).code).toBe("invalid_date");
+    }
+  });
+
+  it("throws DomainError (not a raw RangeError) when needs_last_until is unparseable", () => {
+    const db = openTestDb();
+    expect(() =>
+      setRetentionTarget(db, {
+        identity_key: "bad-date",
+        retention_target: "t1",
+        target_source: "tutor_direct",
+        needs_last_until: "not-a-date",
+      })
+    ).toThrow(DomainError);
+    try {
+      setRetentionTarget(db, {
+        identity_key: "bad-date",
+        retention_target: "t1",
+        target_source: "tutor_direct",
+        needs_last_until: "not-a-date",
+      });
+      expect.fail("Should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DomainError);
+      expect((err as DomainError).code).toBe("invalid_date");
+    }
+  });
+});
+
 describe("recordRetentionResult", () => {
   it("correctly updates last_result to pass or fail for an existing target", () => {
     const db = openTestDb();

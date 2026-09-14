@@ -553,6 +553,9 @@ export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<st
         skipped: r.skipped === 1,
         answered_at: r.answered_at,
         elapsed_ms: r.elapsed_ms,
+        confidence: r.confidence,
+        idk: r.idk === 1,
+        misapplied_method: r.misapplied_method,
         grade: grade
           ? { grader: grade.grader, score: grade.score, feedback: grade.feedback, graded_at: grade.graded_at }
           : null,
