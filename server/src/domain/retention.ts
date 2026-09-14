@@ -84,10 +84,31 @@ export function getNextDueForIdentity(db: DatabaseSync, identityKey: string): st
   return row.due_at;
 }
 
+export type DueReason = "never_demonstrated" | "decayed" | "lapsed";
+
+// Why an identity is due, at the grain the tutor needs to choose between a
+// fresh probe (never shown), a retrieval check (once known, decaying), and
+// re-teaching (last probe failed).
+function dueReasonFor(lastResult: string): DueReason {
+  if (lastResult === "pass") return "decayed";
+  if (lastResult === "fail") return "lapsed";
+  return "never_demonstrated";
+}
+
+export interface DueItem {
+  id: string;
+  identity_key: string;
+  retention_target: string;
+  due_at: string;
+  last_result: "pass" | "fail" | "never_attempted";
+  target_source: "engine" | "tutor_direct";
+  reason: DueReason;
+}
+
 export function getDueItems(
   db: DatabaseSync,
   opts: { before?: string; limit?: number; offset?: number } = {}
-): { total: number; items: unknown[]; has_more: boolean } {
+): { total: number; items: DueItem[]; has_more: boolean } {
   // Normalize before to "YYYY-MM-DD HH:MM:SS" format to match stored due_at values.
   // Accepts both ISO-8601 (with T separator) and space-separated formats —
   // the latter is exactly what due_at itself is stored/returned as, so
@@ -103,12 +124,14 @@ export function getDueItems(
     db.prepare("SELECT COUNT(*) AS n FROM retention_schedule WHERE due_at <= ?").get(normalizedBefore) as { n: number }
   ).n;
 
-  const items = db
+  const rows = db
     .prepare(
       `SELECT id, identity_key, retention_target, due_at, last_result, target_source
        FROM retention_schedule WHERE due_at <= ? ORDER BY due_at ASC, id ASC LIMIT ? OFFSET ?`
     )
-    .all(normalizedBefore, limit, offset);
+    .all(normalizedBefore, limit, offset) as Omit<DueItem, "reason">[];
+
+  const items = rows.map((r) => ({ ...r, reason: dueReasonFor(r.last_result) }));
 
   return { total, items, has_more: offset + items.length < total };
 }

@@ -758,7 +758,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   server.registerTool(
     "get_due_items",
     {
-      description: "List identities whose retention schedule is due now (or before a given time), most-overdue first. Paginated.",
+      description:
+        "List identities whose retention schedule is due now (or before a given time), most-overdue first. Paginated. Each item carries reason: never_demonstrated (no probe recorded yet), decayed (last probe passed, interval elapsed), or lapsed (last probe failed).",
       inputSchema: {
         before: z.string().optional(),
         limit: z.number().optional(),
