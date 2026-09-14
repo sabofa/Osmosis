@@ -40,6 +40,7 @@ export function setRetentionTarget(
        first_gap_days = excluded.first_gap_days,
        due_at = excluded.due_at,
        target_source = excluded.target_source,
+       last_result = 'never_attempted',
        updated_at = datetime('now')`
   ).run(id, input.identity_key, input.retention_target, firstGapDays, dueAt, input.target_source);
 
@@ -63,12 +64,16 @@ export function getDueItems(
   db: DatabaseSync,
   opts: { before?: string; limit?: number; offset?: number } = {}
 ): { total: number; items: unknown[]; has_more: boolean } {
-  const before = opts.before ?? new Date().toISOString().replace("T", " ").slice(0, 19);
+  // Normalize before to "YYYY-MM-DD HH:MM:SS" format to match stored due_at values.
+  // Accepts both ISO-8601 (with T separator) and space-separated formats.
+  const normalizedBefore = opts.before
+    ? new Date(opts.before).toISOString().replace("T", " ").slice(0, 19)
+    : new Date().toISOString().replace("T", " ").slice(0, 19);
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
 
   const total = (
-    db.prepare("SELECT COUNT(*) AS n FROM retention_schedule WHERE due_at <= ?").get(before) as { n: number }
+    db.prepare("SELECT COUNT(*) AS n FROM retention_schedule WHERE due_at <= ?").get(normalizedBefore) as { n: number }
   ).n;
 
   const items = db
@@ -76,7 +81,7 @@ export function getDueItems(
       `SELECT id, identity_key, retention_target, due_at, last_result, target_source
        FROM retention_schedule WHERE due_at <= ? ORDER BY due_at ASC, id ASC LIMIT ? OFFSET ?`
     )
-    .all(before, limit, offset);
+    .all(normalizedBefore, limit, offset);
 
   return { total, items, has_more: offset + items.length < total };
 }

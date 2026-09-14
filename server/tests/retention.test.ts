@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { openTestDb } from "./helpers.js";
-import { setRetentionTarget, getDueItems, getNextDueForIdentity } from "../src/domain/retention.js";
+import { setRetentionTarget, getDueItems, getNextDueForIdentity, recordRetentionResult } from "../src/domain/retention.js";
+import { DomainError } from "../src/domain/errors.js";
 
 describe("setRetentionTarget", () => {
   it("computes a first_gap within the Cepeda ratio for a two-week target", () => {
@@ -94,5 +95,119 @@ describe("getDueItems", () => {
     });
     const result = getDueItems(db);
     expect((result.items as any[]).some((i) => i.identity_key === "calc101:not-yet")).toBe(false);
+  });
+
+  it("correctly handles ISO-8601-with-T format before parameter, comparing correctly against stored due_at", () => {
+    const db = openTestDb();
+    const now = new Date();
+    const pastMs = now.getTime() - 60 * 60 * 1000; // 1 hour ago
+    const futureMs = now.getTime() + 60 * 60 * 1000; // 1 hour in future
+
+    // Create an item with past due_at
+    const past = setRetentionTarget(db, {
+      identity_key: "test-iso-past",
+      retention_target: "past-item",
+      target_source: "tutor_direct",
+      needs_last_until: new Date(pastMs).toISOString(),
+    });
+
+    // Create an item with future due_at
+    const future = setRetentionTarget(db, {
+      identity_key: "test-iso-future",
+      retention_target: "future-item",
+      target_source: "tutor_direct",
+      needs_last_until: new Date(futureMs).toISOString(),
+    });
+
+    // Force past item even further into the past
+    db.prepare("UPDATE retention_schedule SET due_at = datetime('now', '-2 hours') WHERE id = ?").run(past.id);
+
+    // Call getDueItems with an ISO-8601 format before parameter (with T separator)
+    const cutoffTime = new Date(now.getTime() - 30 * 60 * 1000).toISOString(); // 30 minutes ago
+    const result = getDueItems(db, { before: cutoffTime });
+
+    // Should include the past item (due_at is 1 hour ago, cutoff is 30 min ago)
+    expect((result.items as any[]).some((i) => i.identity_key === "test-iso-past")).toBe(true);
+    // Should NOT include the future item (due_at is 1 hour in future, cutoff is 30 min ago)
+    expect((result.items as any[]).some((i) => i.identity_key === "test-iso-future")).toBe(false);
+  });
+});
+
+describe("recordRetentionResult", () => {
+  it("correctly updates last_result to pass or fail for an existing target", () => {
+    const db = openTestDb();
+    const target = setRetentionTarget(db, {
+      identity_key: "calc101:test-result",
+      retention_target: "assignment-1",
+      target_source: "tutor_direct",
+      needs_last_until: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    // Record a pass
+    recordRetentionResult(db, "calc101:test-result", "assignment-1", true);
+    let row = db.prepare("SELECT last_result FROM retention_schedule WHERE id = ?").get(target.id) as { last_result: string };
+    expect(row.last_result).toBe("pass");
+
+    // Record a fail
+    recordRetentionResult(db, "calc101:test-result", "assignment-1", false);
+    row = db.prepare("SELECT last_result FROM retention_schedule WHERE id = ?").get(target.id) as { last_result: string };
+    expect(row.last_result).toBe("fail");
+  });
+
+  it("throws DomainError with code 'not_found' when called with non-existent identity/target pair", () => {
+    const db = openTestDb();
+
+    expect(() => {
+      recordRetentionResult(db, "nonexistent:key", "nonexistent-target", true);
+    }).toThrow(DomainError);
+
+    try {
+      recordRetentionResult(db, "nonexistent:key", "nonexistent-target", true);
+      expect.fail("Should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DomainError);
+      expect((err as DomainError).code).toBe("not_found");
+    }
+  });
+});
+
+describe("setRetentionTarget — rescheduling after failure", () => {
+  it("resets last_result to never_attempted when rescheduling a previously failed target", () => {
+    const db = openTestDb();
+
+    // Create initial target
+    const target = setRetentionTarget(db, {
+      identity_key: "calc101:reschedule-test",
+      retention_target: "quiz-2",
+      target_source: "tutor_direct",
+      needs_last_until: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    // Mark it as failed
+    recordRetentionResult(db, "calc101:reschedule-test", "quiz-2", false);
+    let row = db.prepare("SELECT last_result FROM retention_schedule WHERE id = ?").get(target.id) as { last_result: string };
+    expect(row.last_result).toBe("fail");
+
+    // Verify it's excluded from getNextDueForIdentity (excluded because last_result = 'fail')
+    const beforeReschedule = getNextDueForIdentity(db, "calc101:reschedule-test");
+    expect(beforeReschedule).toBeNull();
+
+    // Reschedule the same target with new needs_last_until
+    const newNeeds = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const rescheduled = setRetentionTarget(db, {
+      identity_key: "calc101:reschedule-test",
+      retention_target: "quiz-2",
+      target_source: "tutor_direct",
+      needs_last_until: newNeeds,
+    });
+
+    // Verify last_result was reset to never_attempted
+    row = db.prepare("SELECT last_result FROM retention_schedule WHERE id = ?").get(rescheduled.id) as { last_result: string };
+    expect(row.last_result).toBe("never_attempted");
+
+    // Verify it's now included in getNextDueForIdentity (no longer excluded)
+    const afterReschedule = getNextDueForIdentity(db, "calc101:reschedule-test");
+    expect(afterReschedule).not.toBeNull();
+    expect(afterReschedule).toBe(rescheduled.due_at);
   });
 });
