@@ -58,6 +58,26 @@
   width: 100%;
   height: 100%;
   overflow: auto;
+  /* Thin, theme-coloured scrollbar — the same treatment the host app uses
+     on its own scroll areas — instead of the bare OS default. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong, #c9c6b3) transparent;
+}
+
+.document-viewer-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.document-viewer-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.document-viewer-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--line-strong, #c9c6b3);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
 }
 
 .document-viewer-content {
