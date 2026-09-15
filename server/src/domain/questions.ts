@@ -86,6 +86,30 @@ function normalizeTokens(text: string): Set<string> {
   );
 }
 
+// Function words carry no signal about what a question tests; "what is the"
+// alone was enough to push two unrelated arithmetic prompts over the
+// duplicate threshold. Kept deliberately small and English-only — the goal
+// is to stop stem boilerplate dominating, not to do NLP.
+const STOPWORDS = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "of", "to", "in", "on", "at", "for", "and", "or",
+  "what", "which", "who", "how", "why", "when", "does", "do", "did", "this", "that", "these", "those",
+  "it", "its", "as", "by", "with", "from", "into", "if", "then", "than", "not", "following", "true",
+  "correct", "best", "describes", "statement", "select", "choose",
+]);
+
+// Tokens for the similarity score (not the FTS prefilter): math atoms stay
+// whole ("1/2", "2x", "x^2", "3.14") and operators count as tokens, so
+// "1/2 ÷ 2/3" and "1/8 + 1/2" share far less than their digits suggest.
+function similarityTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  const re = /[a-z0-9]+(?:[/.^][a-z0-9]+)*|[+\-−×÷*=<>≤≥]/g;
+  for (const m of text.toLowerCase().matchAll(re)) {
+    const t = m[0];
+    if (!STOPWORDS.has(t)) out.add(t);
+  }
+  return out;
+}
+
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let intersection = 0;
@@ -137,11 +161,11 @@ function findPossibleDuplicates(
     )
     .all(ftsQuery, ...tags, excludeId ?? "") as { id: string; prompt: string }[];
 
-  const newTokens = normalizeTokens(prompt);
+  const newTokens = similarityTokens(prompt);
   const results: PossibleDuplicate[] = [];
 
   for (const candidate of candidates) {
-    const similarity = jaccard(newTokens, normalizeTokens(candidate.prompt));
+    const similarity = jaccard(newTokens, similarityTokens(candidate.prompt));
     if (similarity < threshold) continue;
 
     const candidateTags = (
@@ -217,8 +241,18 @@ function validateQuestionInput(
     if (!q.choices || q.choices.length < 2) {
       return { reason: "mc_without_choices", detail: "mc questions need 2 or more choices" };
     }
-    if (!q.choices.some((c) => c.is_correct)) {
-      return { reason: "mc_without_correct", detail: "mc questions need at least one correct choice" };
+    const correctCount = q.choices.filter((c) => c.is_correct).length;
+    if (correctCount === 0) {
+      return { reason: "mc_without_correct", detail: "mc questions need exactly one correct choice" };
+    }
+    // The app's answer UI is single-select and grading resolves one
+    // correct_choice_id, so a second correct choice would be silently
+    // collapsed at grading time. Catch it at authoring time instead.
+    if (correctCount > 1) {
+      return {
+        reason: "mc_multiple_correct",
+        detail: `mc questions need exactly one correct choice, got ${correctCount}; multi-select is not supported — split into separate questions or rewrite as written`,
+      };
     }
     if (checkMisconception) {
       const missingMisconception = q.choices.filter((c) => !c.is_correct && !c.misconception);
@@ -307,7 +341,13 @@ function validateQuestionInput(
           detail: "document_marker_offset must be within the referenced document's extracted text length",
         };
       }
-      if (findTokenSpan(documentText, q.document_marker_offset) === null) {
+      // findTokenSpan tolerates an offset on the space right after a word
+      // (it snaps back to that word so the renderer can size a span), but an
+      // author-set marker must point at the token itself: the readme promises
+      // that, and a marker that "works" only via the snap is one character
+      // away from being wrong.
+      const markedChar = documentText[q.document_marker_offset];
+      if (markedChar === undefined || /\s/.test(markedChar) || findTokenSpan(documentText, q.document_marker_offset) === null) {
         return {
           reason: "invalid_document_marker",
           detail: "document_marker_offset does not land on a token in the referenced document's text (it's in whitespace)",

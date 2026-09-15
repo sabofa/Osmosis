@@ -42,6 +42,21 @@ export function createSession(
   return { id, name: input.name, tag_slug: input.tag_slug ?? null };
 }
 
+// Every write that attaches something to a session (present_item,
+// quick_check, create_template) goes through here: an unknown id is a
+// legible not_found instead of a raw FK error, and an ended session refuses
+// new work rather than silently collecting attempts that postdate its own
+// ended_at.
+export function assertSessionOpen(db: DatabaseSync, id: string): void {
+  const session = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as
+    | { ended_at: string | null }
+    | undefined;
+  if (!session) throw new DomainError("not_found", `Session "${id}" does not exist.`);
+  if (session.ended_at) {
+    throw new DomainError("session_ended", `Session "${id}" ended at ${session.ended_at}; create_session for new work.`);
+  }
+}
+
 export function endSession(db: DatabaseSync, id: string): { id: string; ended_at: string } {
   const current = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as
     | { ended_at: string | null }

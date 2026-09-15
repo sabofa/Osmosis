@@ -4,6 +4,7 @@ import { DomainError } from "./errors.js";
 import { countEligible, resolveDrawFromParams, type EligibilityParams } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
 import { addSlice, removeSlice } from "./sync.js";
+import { assertSessionOpen } from "./sessions.js";
 
 // The deduplicated union of every tag literal a tag_query references —
 // `all`, `any`, and `none` alike — since a Library download needs the
@@ -310,10 +311,7 @@ export function createTemplate(
     })
   );
 
-  if (input.session_id) {
-    const session = db.prepare("SELECT id FROM tutor_session WHERE id = ?").get(input.session_id);
-    if (!session) throw new DomainError("not_found", `Session "${input.session_id}" does not exist.`);
-  }
+  if (input.session_id) assertSessionOpen(db, input.session_id);
 
   const id = uuidv4();
   const frozen = input.frozen ?? false;

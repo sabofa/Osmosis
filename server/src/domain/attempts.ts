@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 import { resolveTemplateDraw, getEligibleQuestions, type DrawResult, type EligibleQuestion } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
+import { assertSessionOpen } from "./sessions.js";
 
 // Unsubmitted attempts older than this many hours are considered abandoned.
 // Swept lazily (no background timer) whenever attempts are read or created.
@@ -197,10 +198,7 @@ export function createAttempt(
 
   // A bad session id would otherwise surface as a raw SQLite FK error (or, on a
   // connection without foreign_keys ON, silently write a dangling reference).
-  if (input.session_id) {
-    const session = db.prepare("SELECT id FROM tutor_session WHERE id = ?").get(input.session_id);
-    if (!session) throw new DomainError("not_found", `Session "${input.session_id}" does not exist.`);
-  }
+  if (input.session_id) assertSessionOpen(db, input.session_id);
 
   const placeholders = input.question_ids.map(() => "?").join(",");
   const found = db

@@ -24,7 +24,7 @@ const tagQueryShape = z
 
 const choiceShape = z.object({
   body: z.string().describe("The choice's text."),
-  is_correct: z.boolean().describe("True for exactly one choice, unless testing a multi-select concept."),
+  is_correct: z.boolean().describe("True for exactly one choice. Multi-select is not supported; a second true is rejected."),
   misconception: z
     .string()
     .nullable()

@@ -49,7 +49,7 @@ export function readme(db: DatabaseSync): ReadmeResult {
       prompt_style: "Direct, single-question prompts. No multi-part questions inside one prompt.",
       explanation_style: "2-4 sentences, explain why the correct answer is correct.",
       difficulty_scale: "1 = intro/recall, 3 = standard practice, 5 = exam-level synthesis.",
-      mc_choice_count: "4 choices, exactly one correct unless testing a multi-select concept.",
+      mc_choice_count: "4 choices, exactly one correct. Multi-select is not supported (the app is single-select): a second is_correct choice is rejected as mc_multiple_correct — split into separate questions or write it as a written item.",
       written_length_target: "1-3 sentences or a short derivation; not an essay.",
     },
     calculator_conventions:
