@@ -48,6 +48,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   const rendererRef = useRef<Renderer | null>(null)
   const modeRef = useRef<Mode | null>(null)
   const rebuildRef = useRef<() => void>(() => {})
+  const applyParsedRef = useRef<((parsed: ParseResult, reportState: boolean) => void) | null>(null)
   // A pan/zoom frame doesn't need the spec re-parsed — the text hasn't
   // changed, only the camera bounds have — so the last parse result is
   // cached here and reused by the view-change path below. Re-parsing on
@@ -68,6 +69,15 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   const [regression, setRegression] = useState<Regression | null>(null)
   const [hover, setHover] = useState<HoverInfo | HoverInfo3D | null>(null)
   const [contextLost, setContextLost] = useState(false)
+  // Which context type the mounted <canvas> is for. A canvas is permanently
+  // bound to the first context it hands out ('2d' for the pan/zoom view,
+  // 'webgl' for the orbit view), so switching modes on the same element makes
+  // the second getContext() return null — three.js then dies on a null
+  // context. The canvas is keyed by this, so a mode switch remounts a fresh
+  // element and the rebuild finishes from the effect on it below.
+  const [canvasMode, setCanvasMode] = useState<Mode>('2d')
+  const canvasModeRef = useRef<Mode>('2d')
+  canvasModeRef.current = canvasMode
 
   useEffect(() => {
     // Shared by both the full (text-driven) rebuild and the lighter
@@ -97,6 +107,15 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       if (!canvas) return
 
       const mode: Mode = isThreeD(parsed.statements) ? '3d' : '2d'
+
+      if (canvasModeRef.current !== mode) {
+        rendererRef.current?.dispose()
+        rendererRef.current = null
+        modeRef.current = null
+        setHover(null)
+        if (reportState) setCanvasMode(mode)
+        return
+      }
 
       if (modeRef.current !== mode) {
         rendererRef.current?.dispose()
@@ -138,6 +157,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       }
     }
 
+    applyParsedRef.current = applyParsed
     rebuildRef.current = () => {
       setContextLost(false)
       const parsed = parseSpec(spec)
@@ -157,6 +177,12 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
     return () => clearTimeout(timeout)
   }, [spec])
 
+  // Second half of a mode switch: the keyed canvas has just remounted, so the
+  // cached parse can now be applied to a fresh element.
+  useEffect(() => {
+    if (parsedRef.current && modeRef.current === null) applyParsedRef.current?.(parsedRef.current, true)
+  }, [canvasMode])
+
   useEffect(
     () => () => {
       rendererRef.current?.dispose()
@@ -172,7 +198,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   // the spec change, before React would get a chance to remount it.
   return (
     <div className={`graph-viewer graph-viewer-${config.theme}`}>
-      <canvas ref={canvasRef} className="graph-viewer-canvas" style={tableMode ? { display: 'none' } : undefined} />
+      <canvas key={canvasMode} ref={canvasRef} className="graph-viewer-canvas" style={tableMode ? { display: 'none' } : undefined} />
       {contextLost && (
         <div className="graph-viewer-context-lost">
           Graph couldn't render — your browser dropped its WebGL context (usually from too many

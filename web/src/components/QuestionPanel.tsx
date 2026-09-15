@@ -59,7 +59,9 @@ export default function QuestionPanel({
       )}
 
       <div className="question-panel-body">
-        {activeMode === 'graph' && graphSpec && <GraphPanel spec={graphSpec} />}
+        {/* Keyed by spec so each question gets its own viewer (fresh canvas,
+            fresh camera) instead of inheriting the previous question's. */}
+        {activeMode === 'graph' && graphSpec && <GraphPanel key={graphSpec} spec={graphSpec} />}
         {activeMode === 'desmos' && <DesmosPanel />}
         {activeMode === 'document' && documentId && (
           <DocumentPanel
