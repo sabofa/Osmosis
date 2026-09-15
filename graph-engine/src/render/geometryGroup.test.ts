@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { GeometryGroupManager, isGeometryKind } from './geometryGroup'
 import type { SceneObject, Vec2 } from '../scene/types'
 
-const palette = { curve: 0x2f5fd0, segment: 0x1f8f5f, region: 0x2f5fd0 }
+const palette = { curve: 0x2f5fd0, segment: 0x1f8f5f, region: 0x2f5fd0, background: 0xfdf6ea, axis: 0x17170f }
 // A simple, non-zoom-dependent stand-in for SceneRenderer's real
 // pixelToWorld (px * viewHeight / canvasHeightPx) — the exact scale factor
 // doesn't matter for these tests, only that widths come out positive and

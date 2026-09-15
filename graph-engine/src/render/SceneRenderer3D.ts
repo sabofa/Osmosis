@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { GraphConfig } from '../parser/config'
 import { clearAndDispose } from './disposeObject3D'
-import { makeLabelSprite, POINT_COLOR } from './labelSprite'
+import { makeLabelSprite } from './labelSprite'
 import type { Scene3D, SceneObject3D } from '../scene/types3d'
 import type { Vec3 } from '../scene/types3d'
 
@@ -75,6 +75,7 @@ export class SceneRenderer3D {
   private curveColor: number
   private segmentColor: number
   private surfaceColor: number
+  private pointColor: number
   private config: GraphConfig
   private options: SceneRenderer3DOptions
   private lastScene: Scene3D | null = null
@@ -92,6 +93,7 @@ export class SceneRenderer3D {
     this.curveColor = palette.curve
     this.segmentColor = palette.segment
     this.surfaceColor = palette.curve
+    this.pointColor = palette.point
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
     this.renderer.setClearColor(palette.background, 1)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -172,6 +174,7 @@ export class SceneRenderer3D {
     this.curveColor = p.curve
     this.segmentColor = p.segment
     this.surfaceColor = p.curve
+    this.pointColor = p.point
 
     // GridHelper bakes its two colors into a vertex-color attribute at
     // construction time rather than a material uniform, so retinting it
@@ -369,11 +372,11 @@ export class SceneRenderer3D {
 
     if (obj.kind === 'point3d') {
       const group = new THREE.Group()
-      const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), new THREE.MeshBasicMaterial({ color: POINT_COLOR }))
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), new THREE.MeshBasicMaterial({ color: this.pointColor }))
       sphere.position.set(obj.position.x, obj.position.y, obj.position.z)
       group.add(sphere)
       if (obj.label) {
-        const sprite = makeLabelSprite(obj.label)
+        const sprite = makeLabelSprite(obj.label, this.pointColor)
         sprite.position.set(obj.position.x + 0.2, obj.position.y + 0.2, obj.position.z + 0.2)
         group.add(sprite)
       }

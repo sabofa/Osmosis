@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { resolveColor } from '../parser/colors'
+import { themedColor, type Palette } from './palette'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
 import type { SceneObject, Vec2 } from '../scene/types'
 
@@ -269,15 +269,7 @@ export function isGeometryKind(kind: SceneObject['kind']): kind is GeometryKind 
   return kind === 'curve' || kind === 'segment' || kind === 'segments' || kind === 'region'
 }
 
-export interface GeometryPalette {
-  curve: number
-  segment: number
-  region: number
-}
-
-function colorOr(color: string | null | undefined, fallback: number): number {
-  return color ? resolveColor(color) : fallback
-}
+export type GeometryPalette = Pick<Palette, 'curve' | 'segment' | 'region' | 'background' | 'axis'>
 
 type GeometrySceneObject = Extract<SceneObject, { kind: GeometryKind }>
 
@@ -354,7 +346,7 @@ export class GeometryGroupManager {
         geometry.setIndex(buildRibbonIndices(n))
       }
       finishIndexedUpdate(geometry, expectedIndexCount)
-      material.color?.setHex(colorOr(obj.color, palette.curve))
+      material.color?.setHex(themedColor(obj.color, palette.curve, palette))
     } else if (obj.kind === 'segment') {
       const halfWidth = pixelToWorld(LINE_WIDTH_PX) / 2
       const dashLen = pixelToWorld(DASH_SIZE_PX)
@@ -368,7 +360,7 @@ export class GeometryGroupManager {
         geometry.setIndex(buildQuadIndices(chunks.length))
       }
       finishIndexedUpdate(geometry, expectedIndexCount)
-      material.color?.setHex(colorOr(obj.color, palette.segment))
+      material.color?.setHex(themedColor(obj.color, palette.segment, palette))
     } else if (obj.kind === 'segments') {
       const halfWidth = pixelToWorld(LINE_WIDTH_PX) / 2
       const dashLen = pixelToWorld(DASH_SIZE_PX)
@@ -383,7 +375,7 @@ export class GeometryGroupManager {
         geometry.setIndex(buildQuadIndices(allChunks.length))
       }
       finishIndexedUpdate(geometry, expectedIndexCount)
-      material.color?.setHex(colorOr(obj.color, palette.segment))
+      material.color?.setHex(themedColor(obj.color, palette.segment, palette))
     } else if (obj.kind === 'region') {
       const n = obj.triangles.length
       const pos = growAttribute(geometry, 'position', n, 3)
@@ -394,7 +386,7 @@ export class GeometryGroupManager {
         pos[i * 3 + 2] = -0.05
       }
       finishPositionUpdate(geometry, n)
-      material.color?.setHex(colorOr(obj.color, palette.region))
+      material.color?.setHex(themedColor(obj.color, palette.region, palette))
     }
   }
 
@@ -409,7 +401,7 @@ export class GeometryGroupManager {
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geometry.setIndex(buildRibbonIndices(n))
       finishIndexedUpdate(geometry, (n - 1) * 6)
-      const color = colorOr(obj.color, palette.curve)
+      const color = themedColor(obj.color, palette.curve, palette)
       // DoubleSide: the ribbon's winding stays consistently front-facing for
       // a smoothly-varying curve (verified by construction — see
       // fillRibbonPositions' normal convention), but this costs nothing
@@ -431,7 +423,7 @@ export class GeometryGroupManager {
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geometry.setIndex(buildQuadIndices(chunks.length))
       finishIndexedUpdate(geometry, chunks.length * 6)
-      const color = colorOr(obj.color, palette.segment)
+      const color = themedColor(obj.color, palette.segment, palette)
       return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }))
     }
 
@@ -449,7 +441,7 @@ export class GeometryGroupManager {
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geometry.setIndex(buildQuadIndices(allChunks.length))
       finishIndexedUpdate(geometry, allChunks.length * 6)
-      const color = colorOr(obj.color, palette.segment)
+      const color = themedColor(obj.color, palette.segment, palette)
       return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }))
     }
 
@@ -463,7 +455,7 @@ export class GeometryGroupManager {
       })
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      const color = colorOr(obj.color, palette.region)
+      const color = themedColor(obj.color, palette.region, palette)
       return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false }))
     }
 

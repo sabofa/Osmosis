@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
-import { resolveColor } from '../parser/colors'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
 import { Camera2D } from './camera2d'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
@@ -16,7 +15,7 @@ import type { Expr } from '../parser/types'
 
 export type { HoverInfo } from './hover'
 
-import { LIGHT_PALETTE, DARK_PALETTE, type Palette } from './palette'
+import { LIGHT_PALETTE, DARK_PALETTE, themedColor, type Palette } from './palette'
 export type { Palette } from './palette'
 
 const ANIMATE_DURATION_MS = 4000
@@ -559,7 +558,7 @@ export class SceneRenderer {
   }
 
   private colorOr(color: string | null | undefined, fallback: number): number {
-    return color ? resolveColor(color) : fallback
+    return themedColor(color, fallback, this.palette)
   }
 
   // A label sprite sized/offset in screen pixels rather than world units —
@@ -573,7 +572,7 @@ export class SceneRenderer {
   // how far out the fixed-pixel offset is allowed to push the label — see
   // maxLabelOffset's own comment in scene/types.ts for why.
   private buildLabel(text: string, worldPos: Vec2, direction?: Vec2, maxOffset?: number | null): THREE.Sprite {
-    const sprite = makeLabelSprite(text)
+    const sprite = makeLabelSprite(text, this.palette.point)
     this.updateLabelSprite(sprite, worldPos, direction, maxOffset)
     return sprite
   }
