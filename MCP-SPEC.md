@@ -86,7 +86,7 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-32 tools. Every schema is sent on every turn a connector is enabled for,
+36 tools. Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
@@ -122,7 +122,7 @@ Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 
-Native tool-calling has a real, measured cost at scale: all 32 tool schemas
+Native tool-calling has a real, measured cost at scale: all 36 tool schemas
 resend on every turn a connector is enabled for regardless of whether that
 turn calls a tool, and a native chat session's conversation history — every
 prior batch's full call and response — accumulates and resends as input on

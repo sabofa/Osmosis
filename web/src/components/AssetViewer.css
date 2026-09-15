@@ -1,0 +1,41 @@
+.asset-viewer {
+  position: relative;
+  width: min(1100px, 100%);
+  height: min(90vh, 100%);
+  border: 2px solid var(--ink);
+  border-radius: 24px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  animation: question-detail-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.asset-viewer-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.asset-viewer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.asset-viewer-body > * {
+  flex: 1;
+  min-height: 0;
+}

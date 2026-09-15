@@ -18,6 +18,7 @@ import {
 import type { useTheme, ThemeChoice } from '../hooks/useTheme'
 import type { useThemePresets, ThemePreset } from '../hooks/useThemePresets'
 import ThemeEditor from './ThemeEditor'
+import AssetViewer from './AssetViewer'
 import {
   getStatus,
   getConfig,
@@ -245,6 +246,7 @@ function AssetsSection() {
   const [assets, setAssets] = useState<AssetSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [viewing, setViewing] = useState<string | null>(null)
 
   function refresh() {
     listAssets()
@@ -294,10 +296,16 @@ function AssetsSection() {
       {error && <div className="bank-empty">Could not reach the local node: {error}</div>}
       {assets === null && !error && <div className="bank-empty">Loading…</div>}
       {assets && assets.length === 0 && <div className="bank-empty">No assets yet.</div>}
+      {viewing && <AssetViewer id={viewing} onClose={() => setViewing(null)} />}
       {assets && assets.length > 0 && (
         <div className="theme-list">
           {assets.map((a) => (
-            <div className="theme-card" key={a.id}>
+            <div
+              className="theme-card"
+              key={a.id}
+              onDoubleClick={() => setViewing(a.id)}
+              title="Double-click to open in the document viewer"
+            >
               <div className="theme-card-main">
                 <AssetTypeIcon type={a.type} />
                 <span className="theme-card-name">{a.title}</span>

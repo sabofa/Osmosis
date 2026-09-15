@@ -13,6 +13,14 @@ import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "..
 import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
+import { listThemes, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
+
+// Mirrors web/src/lib/themeTokens.ts TOKEN_FIELDS — the only custom properties
+// a theme's token sets may name. Anything else belongs in custom_css.
+const THEME_TOKEN_KEYS = ["--accent", "--accent-wash", "--bg", "--surface", "--ink", "--muted", "--line", "--line-strong"] as const;
+const themeTokenSetShape = z
+  .record(z.enum(THEME_TOKEN_KEYS), z.string().regex(/^#[0-9a-fA-F]{6}$/, "hex colour like #c65d22"))
+  .describe("Map of CSS custom property → hex colour. Omitted keys fall back to the app's defaults for that mode.");
 
 const tagQueryShape = z
   .object({
@@ -749,6 +757,81 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     async ({ identity_key, retention_target, target_source, needs_last_until }) => {
       try {
         return ok(setRetentionTarget(db, { identity_key, retention_target, target_source, needs_last_until }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "list_themes",
+    {
+      description:
+        "List the app's colour themes and which one is active. Custom themes live on the server and sync to every device. " +
+        "Built-in themes (ids builtin:slate, builtin:forest, builtin:ember, builtin:plum) are not listed here but can be made active.",
+    },
+    async () => {
+      try {
+        return ok({ themes: listThemes(db), active_theme_id: getActiveThemeId(db), builtin_ids: ["builtin:slate", "builtin:forest", "builtin:ember", "builtin:plum"] });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "save_theme",
+    {
+      description:
+        "Create or replace a colour theme (same id = replace). tokens.light and tokens.dark each map any of " +
+        THEME_TOKEN_KEYS.join(", ") +
+        " to a hex colour; omitted keys keep the app default for that mode. custom_css is optional CSS applied in both " +
+        "modes on top of the tokens — use it for things tokens don't cover (e.g. `:root:not([data-theme=\"light\"]), " +
+        ":root[data-theme=\"light\"] { --heat-4: #3b6ea8; --good: #3f7d5a; --bad: #b0473f; }` for the heatmap ramp and " +
+        "good/bad colours, or `.panel { ... }` for cards). Pass make_active: true to switch to it immediately.",
+      inputSchema: {
+        id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "lowercase letters, digits, _ or -").describe("Stable slug, e.g. 'midnight'."),
+        name: z.string(),
+        tokens: z.object({ light: themeTokenSetShape, dark: themeTokenSetShape }),
+        custom_css: z.string().optional(),
+        make_active: z.boolean().optional(),
+      },
+    },
+    async ({ id, name, tokens, custom_css, make_active }) => {
+      try {
+        const saved = saveTheme(db, { id, name, tokens: { light: tokens.light ?? {}, dark: tokens.dark ?? {} }, custom_css });
+        if (make_active) setActiveTheme(db, id);
+        return ok({ ...saved, active: make_active === true || getActiveThemeId(db) === id });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "delete_theme",
+    {
+      description: "Delete a custom theme on every device. If it was active, the app falls back to 'mode only'. Built-ins can't be deleted.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      try {
+        return ok(deleteTheme(db, id));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "set_active_theme",
+    {
+      description: "Make a theme active on every device: a custom theme id, a builtin:* id, or null for 'mode only'.",
+      inputSchema: { id: z.string().nullable() },
+    },
+    async ({ id }) => {
+      try {
+        return ok(setActiveTheme(db, id));
       } catch (err) {
         return fail(err);
       }
