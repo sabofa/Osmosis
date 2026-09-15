@@ -105,7 +105,7 @@ if ! systemctl is-active --quiet "$SERVICE"; then
   sudo journalctl -u "$SERVICE" -n 30 --no-pager >&2
   exit 1
 fi
-PORT="$(grep '^PORT=' "$ENV_FILE" | cut -d= -f2)"
+PORT="$(sudo grep '^PORT=' "$ENV_FILE" | cut -d= -f2)"
 curl -fsS "http://127.0.0.1:${PORT}/api/status" >/dev/null && log "osmosis is up on port $PORT"
 
 # ---- 5. cloudflared (optional) ----------------------------------------------
@@ -124,7 +124,7 @@ if command -v cloudflared >/dev/null && [[ -n "${MCP_HOSTNAME:-}" ]]; then
       sudo cloudflared service install
     fi
     sudo systemctl restart cloudflared
-    TOKEN="$(grep '^MCP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2)"
+    TOKEN="$(sudo grep '^MCP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2)"
     log "MCP connector URL: https://$MCP_HOSTNAME/mcp/$TOKEN"
   fi
 else
