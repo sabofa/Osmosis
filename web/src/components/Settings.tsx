@@ -324,7 +324,7 @@ export default function Settings({
   themePresets: ReturnType<typeof useThemePresets>
 }) {
   const { theme, setTheme, resolvedMode } = themeApi
-  const { themes, activeId, setActiveId, saveTheme, deleteTheme } = themePresets
+  const { themes, activeId, setActiveId, saveTheme, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
   const [status, setStatus] = useState<NodeStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
@@ -590,7 +590,9 @@ export default function Settings({
             <PaletteIcon size={16} />
             <div>
               <div className="settings-row-title">Themes</div>
-              <div className="settings-row-sub">named palettes layered on top of the mode above</div>
+              <div className="settings-row-sub">
+                named palettes layered on top of the mode above · synced to every device
+              </div>
             </div>
           </div>
           {editing === null && (
@@ -604,14 +606,16 @@ export default function Settings({
           <ThemeEditor
             initial={editing === 'new' ? null : editing}
             onCancel={() => setEditing(null)}
-            onSave={(t) => {
-              saveTheme(t)
-              setActiveId(t.id)
-              setEditing(null)
+            onSave={async (t) => {
+              if (await saveTheme(t)) {
+                setActiveId(t.id)
+                setEditing(null)
+              }
             }}
           />
         ) : (
           <div className="theme-list">
+            {themeError && <div className="bank-empty">{themeError}</div>}
             <button className={`theme-card${activeId === null ? ' active' : ''}`} onClick={() => setActiveId(null)}>
               <span className="theme-card-swatches">
                 <span className="theme-swatch" style={{ background: 'var(--accent)' }} />
@@ -629,13 +633,28 @@ export default function Settings({
                     <span className="theme-swatch" style={{ background: t.tokens[resolvedMode]['--ink'] ?? 'var(--ink)' }} />
                   </span>
                   <span className="theme-card-name">{t.name}</span>
+                  {t.builtin && <span className="settings-row-sub">built in</span>}
                 </button>
-                <button className="theme-card-icon-btn" onClick={() => setEditing(t)} aria-label="Edit theme">
-                  <PencilIcon size={12} />
-                </button>
-                <button className="theme-card-icon-btn" onClick={() => deleteTheme(t.id)} aria-label="Delete theme">
-                  <TrashIcon size={12} />
-                </button>
+                {t.builtin ? (
+                  // Built-ins are read-only; editing one means editing a copy.
+                  <button
+                    className="settings-btn"
+                    onClick={() =>
+                      setEditing({ id: crypto.randomUUID(), name: `${t.name} copy`, tokens: t.tokens, customCss: t.customCss })
+                    }
+                  >
+                    Duplicate
+                  </button>
+                ) : (
+                  <>
+                    <button className="theme-card-icon-btn" onClick={() => setEditing(t)} aria-label="Edit theme">
+                      <PencilIcon size={12} />
+                    </button>
+                    <button className="theme-card-icon-btn" onClick={() => deleteTheme(t.id)} aria-label="Delete theme">
+                      <TrashIcon size={12} />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>

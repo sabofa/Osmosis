@@ -267,6 +267,53 @@ export async function fetchAndApplyTemplateDraw(
   return { questions, short_draw: payload.short_draw, requested: payload.requested, returned: payload.returned, mix_adjusted: payload.mix_adjusted };
 }
 
+// ----------------------------------------------------------------------------
+// Forwarded writes: things the user edits in the app that are user-level,
+// not node-level (themes). Canonical owns them; a local node sends the write
+// to canonical's /api and, once accepted, mirrors canonical's answer into its
+// own tables so the next read is immediately consistent and the next pull is
+// a no-op. Offline, such a write is refused — reading still works from the
+// local copy.
+// ----------------------------------------------------------------------------
+
+export class ForwardError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: unknown
+  ) {
+    super(`forwarded write failed: HTTP ${status}`);
+  }
+}
+
+export async function forwardToCanonical<T>(
+  ctx: AppContext,
+  method: "PUT" | "DELETE",
+  path: string,
+  body?: unknown
+): Promise<T> {
+  if (!ctx.env.remoteUrl) throw new Error("no remote_url configured");
+  let res: Response;
+  try {
+    res = await fetch(`${ctx.env.remoteUrl}${path}`, {
+      method,
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    throw new ForwardError(503, { reason: "requires_connection", message: (err as Error).message });
+  }
+  const text = await res.text();
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = { error: "bad_gateway", message: text.slice(0, 200) };
+  }
+  if (!res.ok) throw new ForwardError(res.status, parsed);
+  return parsed as T;
+}
+
 export function startSyncBackground(ctx: AppContext, runtime: SyncRuntime): void {
   if (ctx.env.role !== "local") return;
 

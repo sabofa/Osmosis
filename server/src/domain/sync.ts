@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveTemplateDraw } from "./draw.js";
 import { PROTOCOL_VERSION } from "../protocol.js";
+import { listThemesForSync, getActiveThemeId, applyThemesFromPull, type ThemeRow } from "./themes.js";
 
 // ----------------------------------------------------------------------------
 // Pull protocol: bank content (tags/questions/templates/grades) flows down
@@ -61,6 +62,11 @@ export interface PullResponse {
     superseded_at: string | null;
   }[];
   frozen_questions: { template_id: string; question_id: string; ordinal: number }[];
+  // User preferences that follow the user across nodes (migration 016). The
+  // full set every pull — it's tiny — tombstones included. Optional so a
+  // response from an older canonical still applies.
+  themes?: ThemeRow[];
+  active_theme_id?: string | null;
   cursor: string;
 }
 
@@ -459,6 +465,8 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
     templates,
     grades,
     frozen_questions: frozenQuestions,
+    themes: listThemesForSync(db),
+    active_theme_id: getActiveThemeId(db),
     cursor,
   };
 }
@@ -672,6 +680,8 @@ export function applyPullResponse(
       });
       gradesApplied += 1;
     }
+
+    if (response.themes) applyThemesFromPull(db, response.themes, response.active_theme_id);
 
     // Freshness bookkeeping for the slices this pull covered: a real pulled_at
     // (replacing the NEVER_PULLED sentinel) and a live local question count,

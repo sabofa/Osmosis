@@ -30,7 +30,11 @@ import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
 import { addSlice, removeSlice } from "../domain/sync.js";
-import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw } from "../sync/client.js";
+import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw, forwardToCanonical, ForwardError } from "../sync/client.js";
+import {
+  listThemes, listThemesForSync, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
+  type ThemeRow, type ThemeInput, type ThemeTokens,
+} from "../domain/themes.js";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
@@ -606,6 +610,98 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       // removeSlice can still raise a raw SQLite error (e.g. an FK we didn't
       // anticipate); a 400 with the detail beats a bare unhandled 500.
       reply.code(400).send({ error: "slice_remove_failed", message: String((err as Error).message ?? err) });
+      return;
+    }
+  });
+
+  // ---- Themes: user-level, canonical-owned, forwarded from local nodes ----
+  // Reads are always local (the pull keeps the local copy current). Writes on
+  // a local node go to canonical first and then mirror canonical's answer.
+  const isLocal = ctx.env.role === "local";
+
+  async function forwardOrLocal<T>(
+    reply: { code: (n: number) => { send: (body: unknown) => void } },
+    forward: () => Promise<T>,
+    local: (fromCanonical: T | null) => unknown
+  ): Promise<unknown> {
+    if (!isLocal) return local(null);
+    if (!ctx.runtime.online) {
+      reply.code(503).send({ reason: "theme_requires_connection", message: "Theme changes need a connection to the server." });
+      return;
+    }
+    let fromCanonical: T;
+    try {
+      fromCanonical = await forward();
+    } catch (err) {
+      if (err instanceof ForwardError) {
+        reply.code(err.status).send(err.status === 503 ? { reason: "theme_requires_connection", message: "Theme changes need a connection to the server." } : err.body);
+        return;
+      }
+      throw err;
+    }
+    return local(fromCanonical);
+  }
+
+  app.get("/api/themes", async () => ({ themes: listThemes(db), active_theme_id: getActiveThemeId(db) }));
+
+  app.put("/api/themes/active", async (request, reply) => {
+    const body = (request.body ?? {}) as { id?: string | null };
+    const id = body.id ?? null;
+    try {
+      return await forwardOrLocal(
+        reply,
+        () => forwardToCanonical<{ active_theme_id: string | null }>(ctx, "PUT", "/api/themes/active", { id }),
+        () => setActiveTheme(db, id)
+      );
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  app.put("/api/themes/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { name?: string; tokens?: ThemeTokens; custom_css?: string };
+    const input: ThemeInput = { id, name: body.name ?? "", tokens: body.tokens as ThemeTokens, custom_css: body.custom_css };
+    try {
+      return await forwardOrLocal(
+        reply,
+        () => forwardToCanonical<ThemeRow>(ctx, "PUT", `/api/themes/${encodeURIComponent(id)}`, body),
+        (fromCanonical) => {
+          if (fromCanonical) {
+            // Mirror canonical's row verbatim (its clock, not ours) so the
+            // next pull's newer-wins compare treats it as already applied.
+            applyThemesFromPull(db, [fromCanonical], undefined);
+            return fromCanonical;
+          }
+          return saveTheme(db, input);
+        }
+      );
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  app.delete("/api/themes/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return await forwardOrLocal(
+        reply,
+        () => forwardToCanonical<{ id: string; tombstone: ThemeRow }>(ctx, "DELETE", `/api/themes/${encodeURIComponent(id)}`),
+        (fromCanonical) => {
+          if (fromCanonical) {
+            applyThemesFromPull(db, [fromCanonical.tombstone], undefined);
+            if (getActiveThemeId(db) === id) setActiveTheme(db, null);
+            return { id };
+          }
+          const result = deleteTheme(db, id);
+          const tombstone = listThemesForSync(db).find((t) => t.id === id)!;
+          return { ...result, tombstone };
+        }
+      );
+    } catch (err) {
+      sendDomainError(reply, err);
       return;
     }
   });

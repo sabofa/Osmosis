@@ -566,3 +566,55 @@ export function timeAgo(iso: string | null): string {
   if (hours < 24) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
 }
+
+// ---- Themes (synced through the node; canonical is authoritative) ----
+
+export interface ThemeTokens {
+  light: Record<string, string>
+  dark: Record<string, string>
+}
+
+export interface ThemeRecord {
+  id: string
+  name: string
+  tokens: ThemeTokens
+  custom_css: string
+  updated_at: string
+}
+
+async function themeError(res: Response, fallback: string): Promise<Error> {
+  const body = await res.json().catch(() => ({}))
+  if (body.reason === 'theme_requires_connection') return new Error('Theme changes need a connection to the server.')
+  return new Error(body.message || body.error || fallback)
+}
+
+export async function getThemes(): Promise<{ themes: ThemeRecord[]; active_theme_id: string | null }> {
+  const res = await fetch('/api/themes')
+  if (!res.ok) throw new Error(`GET /api/themes ${res.status}`)
+  return res.json()
+}
+
+export async function putTheme(theme: { id: string; name: string; tokens: ThemeTokens; custom_css: string }): Promise<ThemeRecord> {
+  const res = await fetch(`/api/themes/${encodeURIComponent(theme.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: theme.name, tokens: theme.tokens, custom_css: theme.custom_css }),
+  })
+  if (!res.ok) throw await themeError(res, `PUT /api/themes/${theme.id} ${res.status}`)
+  return res.json()
+}
+
+export async function deleteThemeRecord(id: string): Promise<void> {
+  const res = await fetch(`/api/themes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) throw await themeError(res, `DELETE /api/themes/${id} ${res.status}`)
+}
+
+export async function putActiveTheme(id: string | null): Promise<{ active_theme_id: string | null }> {
+  const res = await fetch('/api/themes/active', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+  if (!res.ok) throw await themeError(res, `PUT /api/themes/active ${res.status}`)
+  return res.json()
+}
