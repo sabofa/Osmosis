@@ -24,6 +24,17 @@ if ($major -lt 22) { throw "Node $(node -v) is too old: node:sqlite needs 22.13+
 
 function Log($m) { Write-Host "`n==> $m" }
 
+# Stop a running node first: npm ci replaces node_modules, and Windows won't
+# let it delete files a running process has mapped.
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+  Log "Stopping '$TaskName' for the rebuild"
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+    Where-Object { $_.CommandLine -like "*dist/index.js*" -and $_.CommandLine -like "*.env.local*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
 Push-Location $repo
 try {
   Log "Installing dependencies"
