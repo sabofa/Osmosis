@@ -3,22 +3,25 @@
    "Ink-Framed Ruled Grid" treatment so a rendered document feels like it
    belongs to the same family as a plotted graph. */
 :root {
-  --de-bg-light: #fdf6ea;
-  --de-bg-dark: #201e15;
+  /* Each colour follows the host app's design token when it defines one
+     (Osmosis sets --surface/--ink/--line-strong per theme) and falls back
+     to the built-in warm-paper palette otherwise. */
+  --de-bg-light: var(--surface, #fdf6ea);
+  --de-bg-dark: var(--surface, #201e15);
 
-  --de-border-light: #17170f;
-  --de-border-dark: #4a4530;
+  --de-border-light: var(--ink, #17170f);
+  --de-border-dark: var(--line-strong, #4a4530);
 
-  --de-text-light: #17170f;
-  --de-text-dark: #f2efe2;
+  --de-text-light: var(--ink, #17170f);
+  --de-text-dark: var(--ink, #f2efe2);
 
-  --de-marker-bg: rgba(23, 22, 15, 0.12);
-  --de-marker-bg-dark: rgba(242, 239, 226, 0.16);
-  --de-marker-border: #17170f;
-  --de-marker-border-dark: #f2efe2;
+  --de-marker-bg: color-mix(in srgb, var(--ink, #17170f) 12%, transparent);
+  --de-marker-bg-dark: color-mix(in srgb, var(--ink, #f2efe2) 16%, transparent);
+  --de-marker-border: var(--ink, #17170f);
+  --de-marker-border-dark: var(--ink, #f2efe2);
 
-  --de-panel-bg: rgba(23, 22, 15, 0.85);
-  --de-panel-text: #f2efe2;
+  --de-panel-bg: color-mix(in srgb, var(--ink, #17170f) 85%, transparent);
+  --de-panel-text: var(--surface, #f2efe2);
 
   --de-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 

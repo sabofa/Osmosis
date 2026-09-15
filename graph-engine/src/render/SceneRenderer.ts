@@ -16,48 +16,8 @@ import type { Expr } from '../parser/types'
 
 export type { HoverInfo } from './hover'
 
-interface Palette {
-  background: number
-  curve: number
-  segment: number
-  point: number
-  region: number
-  axis: number
-  grid: number
-  gridStrong: number
-  hover: number
-}
-
-// Colors pulled from Osmosis's own design language (see web/src/index.css)
-// and the "Ink-Framed Ruled Grid" reference (warm paper background, bold ink
-// axes, a two-tier ruled grid). curve/region use --accent, segment/ray/vector
-// use --good, point uses --bad — preserves the original palette's functional
-// distinction between object kinds while matching the reference's hues.
-// hover uses --accent too, tying the interaction highlight to the same
-// accent color CSS uses for it.
-const LIGHT_PALETTE: Palette = {
-  background: 0xfdf6ea,
-  curve: 0xc65d22,
-  segment: 0x4c7a4a,
-  point: 0xa34b3f,
-  region: 0xc65d22,
-  axis: 0x17170f,
-  grid: 0xe4e2d4,
-  gridStrong: 0xc9c6b3,
-  hover: 0xc65d22,
-}
-
-const DARK_PALETTE: Palette = {
-  background: 0x201e15,
-  curve: 0xe2803f,
-  segment: 0x6fa06c,
-  point: 0xc76a5c,
-  region: 0xe2803f,
-  axis: 0xf2efe2,
-  grid: 0x34311e,
-  gridStrong: 0x4a4530,
-  hover: 0xe2803f,
-}
+import { LIGHT_PALETTE, DARK_PALETTE, type Palette } from './palette'
+export type { Palette } from './palette'
 
 const ANIMATE_DURATION_MS = 4000
 // pixelToWorld's "fixed on-screen size" markers/line-weights are specified
@@ -118,6 +78,8 @@ const LABEL_OFFSET_PX = 10
 const DEFAULT_LABEL_DIRECTION: Vec2 = { x: Math.SQRT1_2, y: Math.SQRT1_2 }
 
 export interface SceneRendererOptions {
+  // Colours to use instead of the theme's built-in palette (see palette.ts).
+  palette?: Palette
   config: GraphConfig
   onViewChange?: () => void
   onHover?: (info: HoverInfo | null) => void
@@ -212,7 +174,7 @@ export class SceneRenderer {
   constructor(canvas: HTMLCanvasElement, options: SceneRendererOptions) {
     this.canvas = canvas
     this.options = options
-    this.palette = options.config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE
+    this.palette = options.palette ?? (options.config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
     this.renderer.setClearColor(this.palette.background, 1)
 
@@ -279,9 +241,9 @@ export class SceneRenderer {
     return px * sizeScale * this.camera2d.worldPerPixel(height)
   }
 
-  setConfig(config: GraphConfig) {
+  setConfig(config: GraphConfig, palette?: Palette) {
     this.options.config = config
-    this.palette = config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE
+    this.palette = palette ?? (config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
     this.renderer.setClearColor(this.palette.background, 1)
     this.gridRenderer.setPalette(this.palette)
     this.drawGrid()

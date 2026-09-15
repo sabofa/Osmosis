@@ -10,30 +10,7 @@ const AXIS_LENGTH = 6
 const GRID_SIZE = 10
 const HOVER_MAX_SCREEN_DIST = 70
 
-// Colors pulled from Osmosis's own design language (see web/src/index.css) —
-// same mapping as the 2D renderer (curve/surface use --accent, segment/ray
-// use --good, hover uses --accent, axis uses --ink), so the two views read
-// as one consistent system rather than each inventing its own palette. Grid
-// uses --line/--line-strong; background matches GraphViewer.css's --gv-bg.
-const LIGHT_BACKGROUND = 0xfdf6ea
-const LIGHT_GRID = [0xc9c6b3, 0xe4e2d4] as const
-const LIGHT_AXIS = 0x17170f
-const LIGHT_HOVER = 0xc65d22
-const LIGHT_CURVE = 0xc65d22
-const LIGHT_SEGMENT = 0x4c7a4a
-// Same flat 2D accent as LIGHT_CURVE — the earlier "dark and unappealing"
-// read wasn't the color itself, it was too little contrast between lit and
-// shadowed facets (see the lighting setup below); recoloring the surface
-// only made it look washed out instead of actually fixing that.
-const LIGHT_SURFACE = 0xc65d22
-
-const DARK_BACKGROUND = 0x201e15
-const DARK_GRID = [0x4a4530, 0x34311e] as const
-const DARK_AXIS = 0xf2efe2
-const DARK_HOVER = 0xe2803f
-const DARK_CURVE = 0xe2803f
-const DARK_SEGMENT = 0x6fa06c
-const DARK_SURFACE = 0xe2803f
+import { LIGHT_PALETTE, DARK_PALETTE, type Palette } from './palette'
 
 // A warm near-white instead of pure white, so lit surfaces pick up the same
 // warm-paper cast as the rest of the scene instead of a cold studio light.
@@ -68,6 +45,8 @@ export interface HoverInfo3D {
 export interface SceneRenderer3DOptions {
   onHover?: (info: HoverInfo3D | null) => void
   onContextLost?: () => void
+  // Colours to use instead of the theme's built-in palette (see palette.ts).
+  palette?: Palette
 }
 
 // Owns the three.js scene/camera/renderer for the 3D view: a perspective
@@ -108,13 +87,13 @@ export class SceneRenderer3D {
     this.canvas = canvas
     this.config = config
     this.options = options
-    const dark = config.theme === 'dark'
-    this.hoverColor = dark ? DARK_HOVER : LIGHT_HOVER
-    this.curveColor = dark ? DARK_CURVE : LIGHT_CURVE
-    this.segmentColor = dark ? DARK_SEGMENT : LIGHT_SEGMENT
-    this.surfaceColor = dark ? DARK_SURFACE : LIGHT_SURFACE
+    const palette = options.palette ?? (config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
+    this.hoverColor = palette.hover
+    this.curveColor = palette.curve
+    this.segmentColor = palette.segment
+    this.surfaceColor = palette.curve
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
-    this.renderer.setClearColor(dark ? DARK_BACKGROUND : LIGHT_BACKGROUND, 1)
+    this.renderer.setClearColor(palette.background, 1)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 
     const rect = canvas.getBoundingClientRect()
@@ -156,12 +135,12 @@ export class SceneRenderer3D {
     fill.position.set(-8, 6, 4)
     this.scene.add(fill)
 
-    this.grid = this.buildGrid(dark)
+    this.grid = this.buildGrid(palette)
     this.scene.add(this.grid)
     // A single ink-colored axis instead of AxesHelper's default red/green/
     // blue — the default reads as generic 3D-engine chrome and clashes with
     // the rest of the (now unified, warm) palette.
-    this.axisLines = this.buildAxisLines(dark ? DARK_AXIS : LIGHT_AXIS)
+    this.axisLines = this.buildAxisLines(palette.axis)
     this.scene.add(this.axisLines)
 
     this.scene.add(this.objectGroup)
@@ -185,14 +164,14 @@ export class SceneRenderer3D {
     this.options.onContextLost?.()
   }
 
-  setConfig(config: GraphConfig) {
+  setConfig(config: GraphConfig, palette?: Palette) {
     this.config = config
-    const dark = config.theme === 'dark'
-    this.renderer.setClearColor(dark ? DARK_BACKGROUND : LIGHT_BACKGROUND, 1)
-    this.hoverColor = dark ? DARK_HOVER : LIGHT_HOVER
-    this.curveColor = dark ? DARK_CURVE : LIGHT_CURVE
-    this.segmentColor = dark ? DARK_SEGMENT : LIGHT_SEGMENT
-    this.surfaceColor = dark ? DARK_SURFACE : LIGHT_SURFACE
+    const p = palette ?? (config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
+    this.renderer.setClearColor(p.background, 1)
+    this.hoverColor = p.hover
+    this.curveColor = p.curve
+    this.segmentColor = p.segment
+    this.surfaceColor = p.curve
 
     // GridHelper bakes its two colors into a vertex-color attribute at
     // construction time rather than a material uniform, so retinting it
@@ -201,15 +180,15 @@ export class SceneRenderer3D {
     this.scene.remove(this.grid)
     this.grid.geometry.dispose()
     ;(this.grid.material as THREE.Material).dispose()
-    this.grid = this.buildGrid(dark)
+    this.grid = this.buildGrid(p)
     this.scene.add(this.grid)
 
-    ;(this.axisLines.material as THREE.LineBasicMaterial).color.setHex(dark ? DARK_AXIS : LIGHT_AXIS)
+    ;(this.axisLines.material as THREE.LineBasicMaterial).color.setHex(p.axis)
     this.needsRender = true
   }
 
-  private buildGrid(dark: boolean): THREE.GridHelper {
-    const [gridA, gridB] = dark ? DARK_GRID : LIGHT_GRID
+  private buildGrid(p: Palette): THREE.GridHelper {
+    const [gridA, gridB] = [p.gridStrong, p.grid]
     const grid = new THREE.GridHelper(GRID_SIZE, GRID_SIZE, gridA, gridB)
     grid.rotation.x = Math.PI / 2
     return grid

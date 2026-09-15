@@ -10,17 +10,20 @@
    stay legible against either a light or dark canvas rather than following
    it. Don't fold those into the light/dark split below. */
 :root {
-  --gv-bg-light: #fdf6ea;
-  --gv-bg-dark: #201e15;
+  /* Each colour follows the host app's design token when it defines one
+     (Osmosis sets --surface/--ink/--line-strong per theme) and falls back
+     to the built-in warm-paper palette otherwise. */
+  --gv-bg-light: var(--surface, #fdf6ea);
+  --gv-bg-dark: var(--surface, #201e15);
 
-  --gv-border-light: #17170f;
-  --gv-border-dark: #4a4530;
+  --gv-border-light: var(--ink, #17170f);
+  --gv-border-dark: var(--line-strong, #4a4530);
 
-  --gv-stats-bg: rgba(23, 22, 15, 0.85);
-  --gv-stats-text: #f2efe2;
+  --gv-stats-bg: color-mix(in srgb, var(--ink, #17170f) 85%, transparent);
+  --gv-stats-text: var(--surface, #f2efe2);
 
-  --gv-hover-bg: #17170f;
-  --gv-hover-text: #f2efe2;
+  --gv-hover-bg: var(--ink, #17170f);
+  --gv-hover-text: var(--surface, #f2efe2);
 
   --gv-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 

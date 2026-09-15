@@ -8,6 +8,7 @@ import { formatCoord } from './scene/format'
 import { isThreeD } from './scene/mode'
 import { SceneRenderer, type HoverInfo } from './render/SceneRenderer'
 import { SceneRenderer3D, type HoverInfo3D } from './render/SceneRenderer3D'
+import { resolvePalette } from './render/palette'
 import type { Regression } from './scene/types'
 import type { ParseError, ParseResult } from './parser/types'
 import TableView from './TableView'
@@ -45,6 +46,7 @@ const DRAG_RESOLUTION = 45
 // underlying renderer as needed.
 export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<Renderer | null>(null)
   const modeRef = useRef<Mode | null>(null)
   const rebuildRef = useRef<() => void>(() => {})
@@ -117,22 +119,28 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
         return
       }
 
+      // Colours come from the host's design tokens when it defines them (read
+      // off this component's own container, so inline overrides on <html>
+      // and media-query flips both count), else the built-in palette.
+      const palette = resolvePalette(parsed.config.theme, containerRef.current)
+
       if (modeRef.current !== mode) {
         rendererRef.current?.dispose()
         setHover(null)
         const onContextLost = () => setContextLost(true)
         rendererRef.current =
           mode === '3d'
-            ? new SceneRenderer3D(canvas, parsed.config, { onHover: setHover, onContextLost })
+            ? new SceneRenderer3D(canvas, parsed.config, { onHover: setHover, onContextLost, palette })
             : new SceneRenderer(canvas, {
                 config: parsed.config,
                 onViewChange: () => viewChangeRef.current(),
                 onHover: setHover,
                 onContextLost,
+                palette,
               })
         modeRef.current = mode
       } else if (reportState) {
-        rendererRef.current?.setConfig(parsed.config)
+        rendererRef.current?.setConfig(parsed.config, palette)
       }
 
       const renderer = rendererRef.current
@@ -175,7 +183,26 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
 
     const timeout = setTimeout(() => rebuildRef.current(), REBUILD_DEBOUNCE_MS)
     return () => clearTimeout(timeout)
-  }, [spec])
+  }, [spec, theme])
+
+  // The host can change its design tokens without touching this component's
+  // props: a theme preset is applied as inline custom properties on <html>,
+  // light/dark flips its data-theme attribute, and "system" mode follows a
+  // media query. Any of those means the palette must be re-read and the
+  // scene rebuilt with the new colours.
+  useEffect(() => {
+    const rebuild = () => {
+      if (parsedRef.current) rebuildRef.current()
+    }
+    const observer = new MutationObserver(rebuild)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-theme', 'class'] })
+    const mql = window.matchMedia('(prefers-color-scheme: dark)')
+    mql.addEventListener('change', rebuild)
+    return () => {
+      observer.disconnect()
+      mql.removeEventListener('change', rebuild)
+    }
+  }, [])
 
   // Second half of a mode switch: the keyed canvas has just remounted, so the
   // cached parse can now be applied to a fresh element.
@@ -197,7 +224,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   // for a render pass, and the rebuild effect above runs synchronously with
   // the spec change, before React would get a chance to remount it.
   return (
-    <div className={`graph-viewer graph-viewer-${config.theme}`}>
+    <div ref={containerRef} className={`graph-viewer graph-viewer-${config.theme}`}>
       <canvas key={canvasMode} ref={canvasRef} className="graph-viewer-canvas" style={tableMode ? { display: 'none' } : undefined} />
       {contextLost && (
         <div className="graph-viewer-context-lost">

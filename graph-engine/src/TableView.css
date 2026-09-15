@@ -13,27 +13,27 @@
    .table-view-card positioned in that space, so multiple tables sit side by
    side in open space rather than being stacked into one static image. */
 :root {
-  --tv-bg-light: #fdf6ea;
-  --tv-bg-dark: #201e15;
-  --tv-text-light: #17170f;
-  --tv-text-dark: #f2efe2;
+  --tv-bg-light: var(--surface, #fdf6ea);
+  --tv-bg-dark: var(--surface, #201e15);
+  --tv-text-light: var(--ink, #17170f);
+  --tv-text-dark: var(--ink, #f2efe2);
 
-  --tv-text-muted-light: #6b6b5f;
-  --tv-text-muted-dark: #a19d8c;
+  --tv-text-muted-light: var(--muted, #6b6b5f);
+  --tv-text-muted-dark: var(--muted, #a19d8c);
 
-  --tv-border-light: #e4e2d4;
-  --tv-border-strong-light: #c9c6b3;
-  --tv-border-dark: #34311e;
-  --tv-border-strong-dark: #4a4530;
+  --tv-border-light: var(--line, #e4e2d4);
+  --tv-border-strong-light: var(--line-strong, #c9c6b3);
+  --tv-border-dark: var(--line, #34311e);
+  --tv-border-strong-dark: var(--line-strong, #4a4530);
 
-  --tv-frame-light: #17170f;
-  --tv-frame-dark: #4a4530;
+  --tv-frame-light: var(--ink, #17170f);
+  --tv-frame-dark: var(--line-strong, #4a4530);
 
-  --tv-surface-light: #ffffff;
-  --tv-surface-dark: #17150d;
+  --tv-surface-light: var(--surface, #ffffff);
+  --tv-surface-dark: var(--surface, #17150d);
 
-  --tv-header-bg-light: #faf1e9;
-  --tv-header-bg-dark: #2c2113;
+  --tv-header-bg-light: var(--accent-wash, #faf1e9);
+  --tv-header-bg-dark: var(--accent-wash, #2c2113);
   --tv-zebra-light: #f7f1e2;
   --tv-zebra-dark: #262319;
 
@@ -47,8 +47,8 @@
      saturated for the dark background, where the base green is already
      light enough to read — instead of needing to hand-tune two unrelated
      colors that happen to look okay separately. */
-  --tv-good-light: #4c7a4a;
-  --tv-good-dark: #6fa06c;
+  --tv-good-light: var(--good, #4c7a4a);
+  --tv-good-dark: var(--good, #6fa06c);
   --tv-accent-light: color-mix(in srgb, var(--tv-good-light) 100%, black 22%);
   --tv-accent-dark: color-mix(in srgb, var(--tv-good-dark) 100%, black 10%);
 
