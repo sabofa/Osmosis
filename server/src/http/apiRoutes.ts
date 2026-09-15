@@ -99,6 +99,10 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       online: ctx.env.role === "canonical" ? true : ctx.runtime.online,
       canonical: ctx.node.canonical === 1,
       node: { id: ctx.node.id, label: ctx.node.label, canonical: ctx.node.canonical === 1 },
+      // Where this node syncs to (null on canonical). The server app lives at
+      // the same origin, so the app can link a local node's user there for
+      // anything that only exists on canonical (live tutoring sessions).
+      remote_url: ctx.env.remoteUrl,
       last_pull_at: syncState?.last_pull_at ?? null,
       last_push_at: syncState?.last_push_at ?? null,
       last_write_at: lastWrite,

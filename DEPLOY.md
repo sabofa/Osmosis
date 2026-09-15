@@ -104,13 +104,61 @@ sudo -u osmosis sqlite3 /var/lib/osmosis/canonical.db ".backup /var/lib/osmosis/
 Edit `MCP_AUTH_TOKEN` in `/etc/osmosis/canonical.env`, restart the service,
 paste the new URL into the connector dialog. The old URL 404s immediately.
 
-## Local nodes
+## Local nodes (your own devices)
 
-A laptop runs the same server with `NODE_ROLE=local` and
-`REMOTE_URL=http://<server-tailscale-ip>:8081`, pulls tag slices from the
-Library page, and pushes attempts back when online. Live tutor items only
-work against the canonical node's app, since they are created there. Drawing
-from a template the local node hasn't downloaded is a cloud test: it calls
-the canonical node's `POST /sync/template-draw` over Tailscale while online,
-and returns `503 template_requires_connection` when offline — a downloaded
-template always draws locally, online or off.
+The server is the bank. Each device you study on runs its own **local node**:
+the same server program with `NODE_ROLE=local`, its own SQLite file, and the
+web app at `http://localhost:8081/`. It works without any network for every
+test you have **downloaded** in Library; everything else (cloud tests, daily
+draws, syncing your results up) uses the server over Tailscale when it can
+reach it. Two devices never share state except through the server.
+
+What lives where:
+
+| | Local node (this device) | Server |
+|---|---|---|
+| Downloaded tests | run offline | — |
+| Cloud tests, daily question/quiz | need a connection | resolves the draw |
+| Your results | recorded locally, pushed up when online | authoritative |
+| Live tutoring sessions | not available; the Live page links to the server app | created here by the tutor |
+
+### Windows (once per device)
+
+Node 24 LTS and git installed, Tailscale connected. In PowerShell:
+
+```powershell
+git clone https://github.com/sabofa/Osmosis.git $HOME\Osmosis
+cd $HOME\Osmosis
+powershell -ExecutionPolicy Bypass -File deploy\install-local.ps1 -RemoteUrl http://100.86.89.59:8081
+```
+
+That builds everything, writes `server\.env.local`, and registers a Scheduled
+Task **"Osmosis Local Node"** that starts the node at logon (no console
+window) and restarts it if it dies. Open `http://localhost:8081/`. To update:
+`git pull` then run the same command again. To stop it for good:
+`Unregister-ScheduledTask "Osmosis Local Node"`.
+
+### Linux (once per device)
+
+```bash
+git clone https://github.com/sabofa/Osmosis.git ~/Osmosis
+cd ~/Osmosis
+OSMOSIS_ROLE=local REMOTE_URL=http://100.86.89.59:8081 bash deploy/install.sh
+```
+
+Same installer as the server, in local mode: state under `/var/lib/osmosis`
+(`local.db`), env in `/etc/osmosis/canonical.env` (the file name is shared;
+its `NODE_ROLE` says what the node is), service `osmosis`. Update with
+`git pull && bash deploy/install.sh` — the role is fixed on first run.
+
+### Using a device offline
+
+In Library, open a test and click **Download**: its tags become slices held
+on this device and pulled on every sync. The card shows `downloaded`; a test
+without a download shows `cloud` and its Start button is disabled while the
+device is offline. **Delete** removes the download and the test goes back to
+cloud. Settings shows the held slices and the outbox of results waiting to be
+pushed.
+
+Update the server before any local node: local nodes call `/sync/*` routes
+that an older server won't have.

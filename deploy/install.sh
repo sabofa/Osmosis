@@ -80,13 +80,27 @@ sudo chown -R "$(id -u):osmosis" "$INSTALL_DIR"
 sudo chmod -R g+rX "$INSTALL_DIR"
 
 # ---- 3. env file ------------------------------------------------------------
+# OSMOSIS_ROLE=local REMOTE_URL=http://<server-tailscale-ip>:8081 bash deploy/install.sh
+# installs a local node (a laptop that holds downloaded slices and syncs up)
+# instead of the canonical node. The env file's role is fixed on first run.
+ROLE="${OSMOSIS_ROLE:-canonical}"
 if [[ ! -f "$ENV_FILE" ]]; then
-  log "Writing $ENV_FILE (first run)"
-  TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
+  log "Writing $ENV_FILE (first run, role=$ROLE)"
   sudo mkdir -p "$(dirname "$ENV_FILE")"
-  sed -e "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=$TOKEN|" \
-      -e "s|^NODE_LABEL=.*|NODE_LABEL=$(uname -n | cut -d. -f1)|" \
-      "$INSTALL_DIR/server/.env.canonical.example" | sudo tee "$ENV_FILE" >/dev/null
+  if [[ "$ROLE" == "local" ]]; then
+    if [[ -z "${REMOTE_URL:-}" ]]; then
+      echo "A local node needs REMOTE_URL (e.g. REMOTE_URL=http://100.86.89.59:8081)." >&2
+      exit 1
+    fi
+    sed -e "s|^REMOTE_URL=.*|REMOTE_URL=$REMOTE_URL|" \
+        -e "s|^NODE_LABEL=.*|NODE_LABEL=$(uname -n | cut -d. -f1)|" \
+        "$INSTALL_DIR/server/.env.local.example" | sudo tee "$ENV_FILE" >/dev/null
+  else
+    TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
+    sed -e "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=$TOKEN|" \
+        -e "s|^NODE_LABEL=.*|NODE_LABEL=$(uname -n | cut -d. -f1)|" \
+        "$INSTALL_DIR/server/.env.canonical.example" | sudo tee "$ENV_FILE" >/dev/null
+  fi
   sudo chown root:osmosis "$ENV_FILE"
   sudo chmod 640 "$ENV_FILE"
 else

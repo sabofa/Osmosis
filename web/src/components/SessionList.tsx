@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { ChevronDownIcon, ChevronRightIcon, BoltIcon, TagIcon, ClockIcon } from './icons'
 import LiveItem from './LiveItem'
 import {
+  getStatus,
+  type NodeStatus,
   getSessions,
   getSessionDetail,
   timeAgo,
@@ -34,6 +36,14 @@ export default function SessionList({
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
+  // Live items are created on the canonical node by the tutor and never
+  // sync down, so on a local node this page can only point at the server's
+  // own copy of the app (same origin as the sync target).
+  const [status, setStatus] = useState<NodeStatus | null>(null)
+  useEffect(() => {
+    getStatus().then(setStatus).catch(() => {})
+  }, [])
+  const serverAppUrl = status && !status.canonical ? status.remote_url : null
 
   useEffect(() => {
     onLiveActiveChange?.(liveSessionId !== null)
@@ -80,6 +90,13 @@ export default function SessionList({
           </button>
         </div>
 
+        {serverAppUrl && (
+          <div className="session-list-empty">
+            Live tutoring sessions run on the server, not on this device.{' '}
+            <a href={serverAppUrl} target="_blank" rel="noreferrer">Open the server app</a>
+            {status?.online ? '' : ' (needs a connection)'}. Downloaded tests still work here offline.
+          </div>
+        )}
         {error && <div className="session-list-empty">Could not reach the local node: {error}</div>}
         {sessions === null && !error && <div className="session-list-empty">Loading…</div>}
         {sessions && sessions.length === 0 && (
