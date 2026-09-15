@@ -11,3 +11,4 @@ server/seed-review.mts
 *.log
 .DS_Store
 .worktrees/
+data/run-local-node.vbs

@@ -59,14 +59,23 @@ if (-not (Test-Path $envFile)) {
 }
 
 Log "Registering scheduled task '$TaskName' (at logon, restart on failure)"
-$action = New-ScheduledTaskAction -Execute $node `
-  -Argument "--env-file=.env.local --no-warnings=ExperimentalWarning dist/index.js" `
-  -WorkingDirectory $server
+# A hidden-window launcher: an interactive at-logon task would otherwise pop a
+# console window for node. wscript waits on node (last arg True) so the task
+# stays "running" while the node runs and restarts it if the process dies.
+$launcher = Join-Path $data "run-local-node.vbs"
+@(
+  'Set sh = CreateObject("WScript.Shell")',
+  "sh.CurrentDirectory = `"$server`"",
+  "sh.Run `"`"`"$node`"`" --env-file=.env.local --no-warnings=ExperimentalWarning dist/index.js`", 0, True"
+) | Set-Content -Encoding ascii $launcher
+$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$launcher`"" -WorkingDirectory $server
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-# S4U: runs in the background with no console window and no stored password.
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-  -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+  -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+  -MultipleInstances IgnoreNew
+# Interactive logon (runs while you're logged in) needs no admin rights and no
+# stored password; the launcher above keeps it windowless.
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
 Log "Starting"
