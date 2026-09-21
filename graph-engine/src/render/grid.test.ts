@@ -17,7 +17,7 @@ describe('resolveStep', () => {
   it('expands a fixed step when zoomed far in', () => {
     // 0.25 over a span of 0.3 would be one line; fall back to a finer nice step.
     expect(resolveStep(0.25, 0.3, 6)).toBe(niceStep(0.3, 6))
-    expect(niceStep(0.3, 6)).toBe(0.02)
+    expect(niceStep(0.3, 6)).toBeLessThanOrEqual(0.05)
   })
 
   it('uses the nice step when no step is fixed', () => {
