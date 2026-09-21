@@ -812,12 +812,25 @@ export function registerTools(
         "Mark a tutoring session finished and return its summary — presented / answered / abandoned / dont_know " +
         "counts over the session's live items, plus paused_now. Anything still unanswered is marked abandoned " +
         "here, so the counts are final, and any ephemeral question written for this session is retired " +
-        "(retired_ephemeral counts them). Its history stays readable via get_session afterward.",
-      inputSchema: { session_id: z.string() },
+        "(retired_ephemeral counts them). Pass `summary` with the same closing recap you just gave the learner: " +
+        "it is stored on the session and shown at the top of that session in the app, so they can read it back " +
+        "without the conversation. Its history stays readable via get_session afterward.",
+      inputSchema: {
+        session_id: z.string(),
+        summary: z
+          .string()
+          .optional()
+          .describe(
+            "Your closing recap of this session, in markdown (headings, lists, bold and $LaTeX$ all render). " +
+              "Write it for the learner reading it back weeks later — what was covered, what went well, what " +
+              "to pick up next — not as a transcript. Returned as summary_text and shown above the session's " +
+              "attempt history in the app."
+          ),
+      },
     },
-    async ({ session_id }) => {
+    async ({ session_id, summary }) => {
       try {
-        return ok(endSession(db, session_id));
+        return ok(endSession(db, session_id, { summary }));
       } catch (err) {
         return fail(err);
       }

@@ -224,3 +224,17 @@
   font-size: 11px;
   color: var(--muted);
 }
+
+/* Shorter than the daily-history panel it borrows its row styles from: the
+   side column already carries three panels, and this is the newest-first tail
+   of the attempt list, not the whole of it. */
+.results-recent-panel {
+  max-height: 168px;
+}
+
+/* Who set the attempt going. Only the tutor case is marked — an attempt Ben
+   started himself needs no label. */
+.results-daily-kind-badge.tutor {
+  border-color: var(--accent);
+  color: var(--accent);
+}

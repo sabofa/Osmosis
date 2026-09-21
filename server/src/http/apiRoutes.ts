@@ -27,7 +27,8 @@ import {
   pauseAttempt,
   resumeAttempt,
 } from "../domain/attempts.js";
-import { listSessions, getSessionDetail } from "../domain/sessions.js";
+import { listSessions, getSessionDetail, endSession } from "../domain/sessions.js";
+import { onSessionEvent, type SessionEvent } from "../lib/events.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
 import { DomainError } from "../domain/errors.js";
@@ -66,6 +67,14 @@ function rejectIfCanonical(
 
 export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   const { db } = ctx;
+
+  // Every open SSE stream's teardown. preClose, not onClose: Fastify waits
+  // for open connections *before* it runs onClose, and a stream that by
+  // design never ends would hold app.close() open forever.
+  const openStreams = new Set<() => void>();
+  app.addHook("preClose", async () => {
+    for (const close of [...openStreams]) close();
+  });
 
   app.get("/api/status", async () => {
     const syncState = db
@@ -118,6 +127,9 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       slices,
       protocol_version: PROTOCOL_VERSION,
       tools_version: TOOLS_VERSION,
+      // This node pushes session events over SSE — the app reads it to decide
+      // whether to subscribe or fall back to polling.
+      push: true,
       remote_protocol_version: syncState?.remote_protocol_version ?? null,
       model_grades_today: modelGradesToday,
       model_grading_configured: ctx.env.deepseekApiKey !== null,
@@ -240,6 +252,83 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       sendDomainError(reply, err);
       return;
     }
+  });
+
+  // The tutor normally ends its own session over MCP, but it can walk away
+  // (a closed conversation, a crashed client) and leave one open forever.
+  // Same domain function, so the counts and the ephemeral retirement are
+  // identical whichever side closes it.
+  app.post("/api/sessions/:id/end", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { summary?: unknown };
+    if (typeof body !== "object" || Array.isArray(body)) {
+      reply.code(400).send({ error: "invalid_body", message: "POST /api/sessions/:id/end expects a JSON object body." });
+      return;
+    }
+    if (body.summary !== undefined && body.summary !== null && typeof body.summary !== "string") {
+      reply.code(400).send({ error: "invalid_summary", message: "summary must be a string of markdown." });
+      return;
+    }
+    try {
+      return endSession(db, id, { summary: (body.summary as string | null | undefined) ?? null });
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  // The push channel (spec §5.4). One SSE stream per open session screen: the
+  // app subscribes and re-reads whatever the event names, rather than polling
+  // on a timer. Events are nudges, never state — a client that misses one
+  // while reconnecting is a re-read behind, not out of sync.
+  app.get("/api/sessions/:id/events", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const exists = db.prepare("SELECT id FROM tutor_session WHERE id = ?").get(id);
+    if (!exists) {
+      reply.code(404).send({ error: "not_found", message: `Session "${id}" does not exist.` });
+      return;
+    }
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      // nginx and friends buffer a streamed response by default, which turns
+      // a sub-second push into a minutes-long one.
+      "X-Accel-Buffering": "no",
+    });
+    // How long the browser waits before reconnecting after a drop. Sent
+    // first, so even a stream that dies immediately carries it.
+    reply.raw.write("retry: 2000\n\n");
+
+    let lastId = 0;
+    const send = (event: SessionEvent) => {
+      lastId += 1;
+      reply.raw.write(`id: ${lastId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+
+    const off = onSessionEvent(id, send);
+    // A comment line keeps the connection (and any proxy's idle timer) alive
+    // without the client seeing an event.
+    const ping = setInterval(() => reply.raw.write(": ping\n\n"), 15_000);
+
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(ping);
+      off();
+      openStreams.delete(close);
+      reply.raw.end();
+    };
+
+    // Three ways out, all of which must remove the listener: the client goes
+    // away, the socket errors, or the whole server shuts down.
+    openStreams.add(close);
+    request.raw.on("close", close);
+    request.raw.on("error", close);
+    reply.raw.on("error", close);
   });
 
   app.post("/api/attempts", async (request, reply) => {

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
+import { emitSessionEvent } from "../lib/events.js";
 import { resolveTemplateDraw, getEligibleQuestions, type DrawResult, type EligibleQuestion } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
 import { assertSessionOpen, sessionIsOpen, sessionRevealDefault, type Reveal } from "./sessions.js";
@@ -49,6 +50,16 @@ function assertAttemptOpen(
   return { paused_at: attempt.paused_at, paused_ms: attempt.paused_ms };
 }
 
+// Which session (if any) an attempt belongs to — the address an event is
+// published to. An attempt outside a session simply has nobody listening, and
+// emitSessionEvent treats a null id as a no-op.
+function attemptSessionId(db: DatabaseSync, attemptId: string): string | null {
+  const row = db.prepare("SELECT session_id FROM attempt WHERE id = ?").get(attemptId) as
+    | { session_id: string | null }
+    | undefined;
+  return row?.session_id ?? null;
+}
+
 export function pauseAttempt(db: DatabaseSync, attemptId: string): { id: string; paused_at: string } {
   const attempt = assertAttemptOpen(db, attemptId);
   if (attempt.paused_at) {
@@ -56,6 +67,7 @@ export function pauseAttempt(db: DatabaseSync, attemptId: string): { id: string;
   }
   db.prepare("UPDATE attempt SET paused_at = datetime('now') WHERE id = ?").run(attemptId);
   const row = db.prepare("SELECT paused_at FROM attempt WHERE id = ?").get(attemptId) as { paused_at: string };
+  emitSessionEvent(attemptSessionId(db, attemptId), { type: "attempt_paused", attempt_id: attemptId });
   return { id: attemptId, paused_at: row.paused_at };
 }
 
@@ -65,7 +77,9 @@ export function resumeAttempt(
 ): { id: string; paused_at: null; paused_ms: number } {
   const attempt = assertAttemptOpen(db, attemptId);
   if (!attempt.paused_at) throw new DomainError("not_paused", `Attempt "${attemptId}" is not paused.`);
-  return resumeIfPaused(db, attemptId);
+  const resumed = resumeIfPaused(db, attemptId);
+  emitSessionEvent(attemptSessionId(db, attemptId), { type: "attempt_resumed", attempt_id: attemptId });
+  return resumed;
 }
 
 // The unguarded half of resumeAttempt: answerResponse calls it so an answer
@@ -361,6 +375,15 @@ export function presentItem(
   });
 
   const response = db.prepare("SELECT id FROM response WHERE attempt_id = ?").get(attempt_id) as { id: string };
+
+  // The app's live screen is waiting on exactly this: told now rather than up
+  // to a poll interval later. Emitted after createAttempt committed, so the
+  // re-read this triggers already finds the item.
+  emitSessionEvent(input.session_id ?? null, {
+    type: "item_presented",
+    attempt_id,
+    response_id: response.id,
+  });
 
   return {
     attempt_id,
@@ -805,6 +828,7 @@ export function listAttempts(
   const rows = db
     .prepare(
       `SELECT a.id, a.source, a.template_id, t.name AS template_name, a.submitted_at, a.abandoned_at, a.offline,
+              CASE WHEN a.session_id IS NOT NULL OR a.delivery_mode = 'app_live' THEN 'tutor' ELSE 'self' END AS source_kind,
               (SELECT COUNT(*) FROM response r WHERE r.attempt_id = a.id) AS question_count,
               (SELECT AVG(rs.score) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score,
               (SELECT COUNT(*) FROM response_score rs WHERE rs.attempt_id = a.id AND rs.score IS NULL) AS ungraded
@@ -816,6 +840,7 @@ export function listAttempts(
     .all(limit, offset) as {
     id: string;
     source: string;
+    source_kind: "tutor" | "self";
     template_id: string | null;
     template_name: string | null;
     submitted_at: string | null;
@@ -831,6 +856,9 @@ export function listAttempts(
     attempts: rows.map((r) => ({
       id: r.id,
       source: r.source,
+      // Who set this attempt going: the tutor (it belongs to a session, or it
+      // was delivered live into the app) or Ben himself.
+      source_kind: r.source_kind,
       template_id: r.template_id,
       template_name: r.template_name,
       submitted_at: r.submitted_at,
@@ -868,8 +896,10 @@ export function answerResponse(
   responseId: string,
   changes: AnswerResponseChanges
 ): Record<string, unknown> {
-  const attempt = db.prepare("SELECT submitted_at, abandoned_at, paused_at FROM attempt WHERE id = ?").get(attemptId) as
-    | { submitted_at: string | null; abandoned_at: string | null; paused_at: string | null }
+  const attempt = db
+    .prepare("SELECT submitted_at, abandoned_at, paused_at, session_id FROM attempt WHERE id = ?")
+    .get(attemptId) as
+    | { submitted_at: string | null; abandoned_at: string | null; paused_at: string | null; session_id: string | null }
     | undefined;
   if (!attempt) throw new DomainError("not_found", `Attempt "${attemptId}" does not exist.`);
   if (attempt.submitted_at) throw new DomainError("attempt_submitted", "Cannot edit responses after submit.");
@@ -954,6 +984,8 @@ export function answerResponse(
   // rather than refuse, so the app never has to sequence resume-then-answer.
   if (attempt.paused_at) resumeIfPaused(db, attemptId);
 
+  emitSessionEvent(attempt.session_id, { type: "item_answered", attempt_id: attemptId, response_id: responseId });
+
   const updated = db.prepare("SELECT * FROM response WHERE id = ?").get(responseId) as unknown as ResponseRow;
   return {
     id: updated.id,
@@ -981,8 +1013,10 @@ export function submitAttempt(
   attemptId: string,
   role: "canonical" | "local" = "canonical"
 ): Record<string, unknown> {
-  const attempt = db.prepare("SELECT submitted_at, abandoned_at FROM attempt WHERE id = ?").get(attemptId) as
-    | { submitted_at: string | null; abandoned_at: string | null }
+  const attempt = db
+    .prepare("SELECT submitted_at, abandoned_at, session_id FROM attempt WHERE id = ?")
+    .get(attemptId) as
+    | { submitted_at: string | null; abandoned_at: string | null; session_id: string | null }
     | undefined;
   if (!attempt) throw new DomainError("not_found", `Attempt "${attemptId}" does not exist.`);
   if (attempt.submitted_at) throw new DomainError("attempt_submitted", "This attempt was already submitted.");
@@ -1037,6 +1071,19 @@ export function submitAttempt(
     db.exec("ROLLBACK");
     throw err;
   }
+
+  // After COMMIT, never inside it: a listener that re-reads on this event has
+  // to find the grades, not the transaction that was about to write them. A
+  // live item is one question, so its response id is unambiguous; a multi-
+  // question attempt names none and the listener re-reads the attempt.
+  const answered = db.prepare("SELECT id FROM response WHERE attempt_id = ?").all(attemptId) as unknown as {
+    id: string;
+  }[];
+  emitSessionEvent(attempt.session_id, {
+    type: "item_answered",
+    attempt_id: attemptId,
+    response_id: answered.length === 1 ? answered[0].id : null,
+  });
 
   return getAttemptDetail(db, attemptId);
 }

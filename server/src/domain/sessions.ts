@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
+import { emitSessionEvent } from "../lib/events.js";
 import type { Viewer } from "./reveal.js";
 
 // ----------------------------------------------------------------------------
@@ -28,7 +29,18 @@ export interface SessionRow {
   reveal_default: Reveal;
   created_at: string;
   ended_at: string | null;
+  // The tutor's closing words (markdown), written by end_session. Null while
+  // the session runs, and null afterwards if the tutor ended it without any.
+  summary: string | null;
+  // Derived, not stored: ended_at restated as the word the app renders.
+  status: SessionStatus;
+  // A tutor_session row only ever comes from create_session over MCP, so this
+  // is constant — it exists so the app can tell a tutor-made row from a
+  // self-started attempt without special-casing the session list.
+  source: "tutor";
 }
+
+export type SessionStatus = "open" | "closed";
 
 export function createSession(
   db: DatabaseSync,
@@ -105,15 +117,25 @@ export interface EndSessionSummary {
 // also makes paused_now trivially false — a paused attempt is pending.
 export function endSession(
   db: DatabaseSync,
-  id: string
-): { id: string; ended_at: string; summary: EndSessionSummary } {
+  id: string,
+  opts: { summary?: string | null } = {}
+): { id: string; ended_at: string; summary: EndSessionSummary; summary_text: string | null } {
   const current = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as
     | { ended_at: string | null }
     | undefined;
   if (!current) throw new DomainError("not_found", `Session "${id}" does not exist.`);
   if (current.ended_at) throw new DomainError("already_ended", `Session "${id}" already ended.`);
 
-  db.prepare("UPDATE tutor_session SET ended_at = datetime('now') WHERE id = ?").run(id);
+  // The tutor's own recap, stored verbatim (markdown) so the app can show the
+  // learner what was said without them keeping the conversation around.
+  // Whitespace-only is the same as nothing said.
+  if (opts.summary !== undefined && opts.summary !== null && typeof opts.summary !== "string") {
+    throw new DomainError("invalid_summary", "summary must be a string of markdown.");
+  }
+  const summaryText =
+    typeof opts.summary === "string" && opts.summary.trim() !== "" ? opts.summary : null;
+
+  db.prepare("UPDATE tutor_session SET ended_at = datetime('now'), summary = ? WHERE id = ?").run(summaryText, id);
   db.prepare(
     `UPDATE attempt SET abandoned_at = datetime('now'), paused_at = NULL
      WHERE session_id = ? AND delivery_mode = 'app_live' AND submitted_at IS NULL AND abandoned_at IS NULL`
@@ -150,9 +172,16 @@ export function endSession(
   ).n;
 
   const row = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as { ended_at: string };
+
+  // Every screen reading this session is now looking at stale state — the
+  // deferred reveals just opened up and the live screen has nothing more
+  // coming. Emitted last, after all of the writes above have landed.
+  emitSessionEvent(id, { type: "session_ended", session_id: id });
+
   return {
     id,
     ended_at: row.ended_at,
+    summary_text: summaryText,
     summary: {
       presented: counts.presented,
       answered: counts.answered ?? 0,
@@ -162,6 +191,10 @@ export function endSession(
       retired_ephemeral: Number(retiredEphemeral),
     },
   };
+}
+
+function sessionStatus(endedAt: string | null): SessionStatus {
+  return endedAt === null ? "open" : "closed";
 }
 
 // Mirrors the total/limit/offset contract searchQuestions/listAttempts already
@@ -176,13 +209,21 @@ export function listSessions(
   const offset = opts.offset ?? 0;
   const sessions = db
     .prepare(
-      `SELECT id, name, tag_slug, reveal_default, created_at, ended_at
+      `SELECT id, name, tag_slug, reveal_default, created_at, ended_at, summary
        FROM tutor_session
        ORDER BY created_at DESC, id DESC
        LIMIT ? OFFSET ?`
     )
-    .all(limit, offset) as unknown as SessionRow[];
-  return { total, sessions };
+    .all(limit, offset) as unknown as Omit<SessionRow, "status" | "source">[];
+  return {
+    total,
+    sessions: sessions.map((s) => ({
+      ...s,
+      summary: s.summary ?? null,
+      status: sessionStatus(s.ended_at),
+      source: "tutor" as const,
+    })),
+  };
 }
 
 // The session plus its attempts and templates — one function, two callers:
@@ -197,8 +238,8 @@ export function getSessionDetail(
 ): Record<string, unknown> {
   const viewer = opts.viewer ?? "tutor";
   const session = db
-    .prepare("SELECT id, name, tag_slug, reveal_default, created_at, ended_at FROM tutor_session WHERE id = ?")
-    .get(sessionId) as SessionRow | undefined;
+    .prepare("SELECT id, name, tag_slug, reveal_default, created_at, ended_at, summary FROM tutor_session WHERE id = ?")
+    .get(sessionId) as Omit<SessionRow, "status" | "source"> | undefined;
   if (!session) throw new DomainError("not_found", `Session "${sessionId}" does not exist.`);
 
   const attempts = db
@@ -258,6 +299,9 @@ export function getSessionDetail(
     reveal_default: session.reveal_default,
     created_at: session.created_at,
     ended_at: session.ended_at,
+    summary: session.summary ?? null,
+    status: sessionStatus(session.ended_at),
+    source: "tutor",
     attempts: attempts.map((a) => ({
       id: a.id,
       source: a.source,

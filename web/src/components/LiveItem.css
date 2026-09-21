@@ -74,3 +74,10 @@
   font-size: 12px;
   color: var(--bad, #d33);
 }
+
+/* The stream is down and the screen is on its slower polling fallback: the
+   dot goes quiet rather than pretending items are arriving instantly. */
+.live-item-pulse.stalled {
+  background: var(--muted);
+  animation-duration: 3.2s;
+}

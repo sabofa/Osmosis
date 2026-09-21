@@ -13,8 +13,8 @@ export interface ReadmeResult {
     protocol_version: number;
     tools_version: number;
     tools: string[];
-    // Whether this node accepts pushed results from another node. False until
-    // the push path lands; the tutor reads it instead of assuming.
+    // Whether this node pushes session events to the app (SSE on
+    // GET /api/sessions/:id/events) instead of making it poll.
     push: boolean;
     bank_size: number;
     last_write_at: string | null;
@@ -66,7 +66,7 @@ export function readme(
       protocol_version: PROTOCOL_VERSION,
       tools_version: TOOLS_VERSION,
       tools: opts.tools ? [...opts.tools].sort() : listToolNames(),
-      push: false,
+      push: true,
       bank_size: bankSize,
       last_write_at: lastWrite.last_write_at,
     },

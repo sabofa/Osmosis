@@ -432,9 +432,19 @@ export async function gradeResponse(
   return res.json()
 }
 
+export type AttemptSourceKind = 'tutor' | 'self'
+
+// Who set an attempt going: the tutor (it belongs to a tutoring session, or it
+// was delivered live into the app) or Ben himself. Only the tutor case is
+// worth a pill — "self" is the unmarked default everywhere else in the app.
+export function attemptSourceLabel(kind: AttemptSourceKind | undefined): string | null {
+  return kind === 'tutor' ? 'tutor' : null
+}
+
 export interface AttemptSummary {
   id: string
   source: 'template' | 'adhoc'
+  source_kind: AttemptSourceKind
   template_id: string | null
   template_name: string | null
   submitted_at: string | null
@@ -491,12 +501,18 @@ export async function getResultsDaily(limit?: number): Promise<{ daily: DailyRes
   return res.json()
 }
 
+export type SessionStatus = 'open' | 'closed'
+
 export interface SessionSummary {
   id: string
   name: string
   tag_slug: string | null
   created_at: string
   ended_at: string | null
+  // The tutor's closing recap (markdown), written when the session ended.
+  summary: string | null
+  status: SessionStatus
+  source: 'tutor'
 }
 
 export async function getSessions(params: { limit?: number; offset?: number } = {}): Promise<{ total: number; sessions: SessionSummary[] }> {
@@ -537,6 +553,22 @@ export interface SessionTemplateSummary {
 export interface SessionDetail extends SessionSummary {
   attempts: SessionAttemptSummary[]
   templates: SessionTemplateSummary[]
+}
+
+// The tutor normally ends its own session, but it can walk away and leave one
+// open. Same server-side path either way, so the counts and the ephemeral
+// retirement are identical.
+export async function endSession(id: string, summary?: string): Promise<{ id: string; ended_at: string; summary_text: string | null }> {
+  const res = await fetch(`/api/sessions/${id}/end`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(summary === undefined ? {} : { summary }),
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null
+    throw new Error(body?.message ?? `POST /api/sessions/${id}/end ${res.status}`)
+  }
+  return res.json()
 }
 
 export async function getSessionDetail(id: string): Promise<SessionDetail> {

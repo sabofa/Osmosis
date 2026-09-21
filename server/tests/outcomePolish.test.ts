@@ -500,12 +500,12 @@ describe("end_session summary (§3.7)", () => {
 // ----------------------------------------------------------------------------
 
 describe("readme node block (§3.8)", () => {
-  it("reports tools_version, the sorted registered tool list, and push: false", async () => {
+  it("reports tools_version, the sorted registered tool list, and push: true", async () => {
     const db = openTestDb();
     const client = await connectedClient(db);
     const { body } = await callTool(client, "readme", {});
     expect(body.node.tools_version).toBe(TOOLS_VERSION);
-    expect(body.node.push).toBe(false);
+    expect(body.node.push).toBe(true);
     expect(body.node.tools).toContain("grade_response");
     expect(body.node.tools).toEqual([...body.node.tools].sort());
     const listed = (await client.listTools()).tools.map((t) => t.name).sort();

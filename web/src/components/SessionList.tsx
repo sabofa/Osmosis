@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { ChevronDownIcon, ChevronRightIcon, BoltIcon, TagIcon, ClockIcon } from './icons'
 import LiveItem from './LiveItem'
+import RichText from './RichText'
 import {
   getStatus,
   type NodeStatus,
   getSessions,
   getSessionDetail,
+  endSession,
   timeAgo,
   type SessionSummary,
   type SessionDetail,
@@ -15,8 +17,9 @@ import './SessionList.css'
 // The "Live" nav's landing view — a list of tutoring sessions (the tutor
 // creates one per conversation over MCP), each expandable in place to show
 // its templates, its past attempt history, and a distinguished "Live
-// session" row. Clicking that row mounts LiveItem, which polls for whatever
-// the tutor hands off next. Sessions are typically created once per
+// session" row (open sessions only — a closed one has nothing left to hand
+// off). Clicking that row mounts LiveItem, which subscribes to the session's
+// event stream. Sessions are typically created once per
 // tutoring conversation and Ben navigates here deliberately, so this list
 // just re-fetches on mount/manual refresh rather than polling continuously.
 export default function SessionList({
@@ -36,6 +39,9 @@ export default function SessionList({
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
+  // Which session's "Mark closed" is in flight, and what it said if it failed.
+  const [closingId, setClosingId] = useState<string | null>(null)
+  const [closeError, setCloseError] = useState<string | null>(null)
   // Live items are created on the canonical node by the tutor and never
   // sync down, so on a local node this page can only point at the server's
   // own copy of the app (same origin as the sync target).
@@ -79,6 +85,24 @@ export default function SessionList({
     setExpandedId((cur) => (cur === id ? null : id))
   }
 
+  // The tutor normally ends its own session; when it walked away without
+  // doing so, this is how the session stops being "open" forever. Same
+  // server-side path, so the counts and the ephemeral retirement match.
+  async function markClosed(id: string) {
+    setClosingId(id)
+    setCloseError(null)
+    try {
+      await endSession(id)
+      load()
+      const fresh = await getSessionDetail(id)
+      setDetail(fresh)
+    } catch (err) {
+      setCloseError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setClosingId(null)
+    }
+  }
+
   return (
     <div className="session-list">
       <div className="panel session-list-panel">
@@ -105,12 +129,18 @@ export default function SessionList({
 
         <div className="session-list-rows no-scrollbar">
           {sessions?.map((s) => {
-            const isOpen = s.id === expandedId
+            const isExpanded = s.id === expandedId
+            // `status` is the server's word for it; ended_at is the fallback
+            // for a node that predates it.
+            const isClosed = (s.status ?? (s.ended_at ? 'closed' : 'open')) === 'closed'
             return (
               <div className="session-row-wrap" key={s.id}>
-                <button className={`session-row${isOpen ? ' open' : ''}`} onClick={() => toggle(s.id)}>
+                <button
+                  className={`session-row${isExpanded ? ' open' : ''}${isClosed ? ' closed' : ''}`}
+                  onClick={() => toggle(s.id)}
+                >
                   <span className="session-row-chevron">
-                    {isOpen ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
+                    {isExpanded ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
                   </span>
                   <span className="session-row-name">{s.name}</span>
                   {s.tag_slug && (
@@ -120,23 +150,51 @@ export default function SessionList({
                     </span>
                   )}
                   <span className="session-row-spacer" />
-                  <span className={`session-row-status${s.ended_at ? ' ended' : ' active'}`}>
-                    {s.ended_at ? `ended ${timeAgo(s.ended_at)}` : `started ${timeAgo(s.created_at)}`}
+                  <span className={`session-row-status${isClosed ? ' ended' : ' active'}`}>
+                    {isClosed ? `closed ${timeAgo(s.ended_at)}` : `open · started ${timeAgo(s.created_at)}`}
                   </span>
                 </button>
 
-                {isOpen && (
+                {isExpanded && (
                   <div className="session-detail">
                     {detailError && <div className="session-list-empty">Could not load session: {detailError}</div>}
                     {!detail && !detailError && <div className="session-list-empty">Loading…</div>}
                     {detail && (
                       <>
-                        <button className="session-live-row" onClick={() => setLiveSessionId(s.id)}>
-                          <span className="session-live-dot" />
-                          <BoltIcon size={14} />
-                          Live session
-                          <span className="session-live-hint">jump in as the tutor hands off items</span>
-                        </button>
+                        {/* The tutor's closing recap comes first: it is what
+                            this session was, and the attempt list below is the
+                            evidence for it. */}
+                        {detail.summary && (
+                          <div className="session-summary">
+                            <div className="session-detail-label">Summary</div>
+                            <RichText text={detail.summary} className="session-summary-body" />
+                          </div>
+                        )}
+
+                        {/* Only an open session can receive an item, so a
+                            closed one doesn't offer a screen that would wait
+                            forever. */}
+                        {!isClosed && (
+                          <>
+                            <button className="session-live-row" onClick={() => setLiveSessionId(s.id)}>
+                              <span className="session-live-dot" />
+                              <BoltIcon size={14} />
+                              Live session
+                              <span className="session-live-hint">jump in as the tutor hands off items</span>
+                            </button>
+                            <button
+                              className="session-close-row"
+                              disabled={closingId === s.id}
+                              onClick={() => markClosed(s.id)}
+                            >
+                              {closingId === s.id ? 'Closing…' : 'Mark closed'}
+                              <span className="session-close-hint">
+                                if the tutor left without ending it
+                              </span>
+                            </button>
+                            {closeError && <div className="session-list-empty">Could not close: {closeError}</div>}
+                          </>
+                        )}
 
                         {detail.templates.length > 0 && (
                           <div className="session-detail-section">

@@ -53,6 +53,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     app.get("/sync/health", async () => ({
       protocol_version: PROTOCOL_VERSION,
       tools_version: TOOLS_VERSION,
+      push: true,
       node_id: ctx.node.id,
     }));
 

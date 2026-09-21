@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getResultsDaily, getResultsTags, listAttempts, timeAgo, type AttemptSummary, type DailyResultStat, type TagResultStat } from '../lib/api'
+import { getResultsDaily, getResultsTags, listAttempts, timeAgo, attemptSourceLabel, type AttemptSummary, type DailyResultStat, type TagResultStat } from '../lib/api'
 import { attemptsHeatmap } from '../lib/activity'
 import Heatmap from './Heatmap'
 import './Results.css'
@@ -11,6 +11,7 @@ const PAD_BOTTOM = 24
 const Y_TICKS = [0, 0.25, 0.5, 0.75, 1]
 const HEAT_WEEKS = 10
 const HEAT_DAYS = 7
+const RECENT_ATTEMPTS = 20
 
 // draw_date is a bare 'YYYY-MM-DD' calendar date computed in the server's
 // daily_timezone -- NOT a UTC timestamp. Format it directly from its parts
@@ -185,6 +186,37 @@ export default function Results() {
               })}
               {daily !== null && daily.length === 0 && (
                 <div style={{ fontSize: 12, color: 'var(--muted)', padding: '8px 4px' }}>No daily history yet.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="results-panel results-daily-panel results-recent-panel">
+            <div className="results-kicker">Recent attempts</div>
+            <div className="results-daily-list no-scrollbar">
+              {attempts.slice(0, RECENT_ATTEMPTS).map((a) => {
+                const source = attemptSourceLabel(a.source_kind)
+                return (
+                  <div key={a.id} className="results-daily-row">
+                    <span className="results-daily-date">
+                      {a.template_name ?? (a.source === 'adhoc' ? 'Live item' : 'Attempt')}
+                    </span>
+                    {/* Only the tutor-driven side is marked: an attempt Ben
+                        started himself is the unmarked default. */}
+                    {source && <span className="results-daily-kind-badge tutor">{source}</span>}
+                    <span className={`results-daily-score${a.submitted_at ? '' : ' incomplete'}`}>
+                      {a.submitted_at
+                        ? a.mean_score === null
+                          ? 'ungraded'
+                          : a.mean_score.toFixed(2)
+                        : a.abandoned_at
+                          ? 'abandoned'
+                          : 'in progress'}
+                    </span>
+                  </div>
+                )
+              })}
+              {attempts.length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', padding: '8px 4px' }}>No attempts yet.</div>
               )}
             </div>
           </div>

@@ -248,3 +248,65 @@
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* A closed session is history: legible, but visibly not where anything is
+   happening. The status text on the right says when it closed. */
+.session-row.closed .session-row-name {
+  color: var(--muted);
+}
+
+.session-row.closed .session-row-chevron {
+  opacity: 0.6;
+}
+
+.session-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 12px 14px;
+  margin-top: 12px;
+}
+
+.session-summary-body {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.session-close-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 9px 14px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s ease;
+}
+
+.session-close-row:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.session-close-row:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.session-close-row:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.session-close-hint {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}

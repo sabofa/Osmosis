@@ -127,7 +127,7 @@ becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 4), the sorted `tools` list *for the caller's scope*, and `push`. Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 5), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject. Returns `taxonomy: { seeded, seed_available, tag_count }`; `seed: true` creates the subject's shipped taxonomy (`server/src/domain/taxonomies/`, currently `chemistry` — Ebbing 11e ch. 1-12 plus `tech:mhchem`/`tech:calculator` — and `math`), idempotently, so an empty bank gets standard slugs instead of invented near-duplicates |
 | `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
@@ -148,7 +148,7 @@ becoming one larger tool.
 | `get_attempt` | Full attempt read: per-response inputs + derived `outcome` + live grade. `chosen_misconception` and `best_guess_correct` are answer-key material and stay withheld until the attempt is submitted; the attempt carries `reveal`, `revealed`, `paused_at`/`paused_ms`. You read as the *tutor*: a `deferred` reveal withholds the key from the app's screens (`GET /api/attempts/:id`, the submit response), never from this tool |
 | `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `grader`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `best_guess_choice_id`, `best_guess_correct`, `response_text`, `confidence`, `confidence_numeric`, `idk`, `misapplied_method`, `diagnosis`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer`, `node_key`, `node_keys`. `await_item_outcome` takes `timeout_s` (default 25, clamped 1..25) and also reports `status: "paused"` |
 | `grade_response` | The tutor's own verdict on an answered item: `grader` `oracle`/`judge`, optional `score` 0..1, optional one-line `diagnosis`. Supersedes a self/model grade on a written item; on an mc item only the diagnosis is kept and the `auto_mc` grade against the question's own key stands |
-| `end_session` | Ends the session and returns `{ presented, answered, abandoned, dont_know, paused_now, retired_ephemeral }` over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`) |
+| `end_session` | Ends the session and returns `summary: { presented, answered, abandoned, dont_know, paused_now, retired_ephemeral }` over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`). Optional `summary` (markdown) is the tutor's closing recap for the learner: stored on the session, echoed back as `summary_text` (distinct from the counts object), and rendered above that session's attempt history in the app. Whitespace-only is stored as nothing said |
 | `create_session` | Starts a tutoring session. `tag_slug` must already exist. `reveal_default` (`immediate`, the default, or `deferred`) sets what every item presented in it does with its answer key on the learner's screen |
 | `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default; the returned snapshot carries `node_keys`/`node_key` |
 | `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
@@ -182,6 +182,21 @@ from `readme`'s and `bootstrap`'s `bank_size`. They are presentable by
 retires them. Duplicate detection is deliberately left alone: an ephemeral
 item still reports against the bank, since a near-duplicate is worth knowing
 about whichever side it is on.
+
+### 3.3 Push: the app doesn't poll for the tutor's next move
+
+`readme().node.push` is `true`, and `/sync/health` and `/api/status` say the
+same. It means this node publishes session events over SSE at `GET
+/api/sessions/:id/events`, so `present_item` reaches the learner's screen in
+well under a second instead of up to a poll interval later.
+
+An event is `{ type, at, ...ids }` — `item_presented`, `item_answered`,
+`attempt_paused`, `attempt_resumed`, `session_ended` — emitted after the write
+it announces has committed. It is a nudge to re-read, never state: a client
+that missed one while reconnecting is a re-read behind, not out of sync, and
+the app keeps a 15-second poll as its fallback whenever the stream is down.
+Nothing in the tool surface changes — the tutor calls `present_item` exactly as
+before and the push happens underneath it.
 
 ---
 
