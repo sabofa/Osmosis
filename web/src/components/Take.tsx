@@ -803,11 +803,15 @@ export default function Take({
               </span>
             </div>
             <div className="take-nav-right">
-              {index > 0 && (
-                <button className="nav-btn" onClick={() => goTo(index - 1)} disabled={finishing || paused}>
-                  &larr;
-                </button>
-              )}
+              <button
+                className="nav-btn"
+                onClick={() => goTo(index - 1)}
+                disabled={index === 0 || finishing || paused}
+                aria-label="Previous question"
+                title="Previous question"
+              >
+                &larr; Back
+              </button>
               <button className="nav-btn primary" onClick={() => void next()} disabled={finishing || paused}>
                 {finishing ? 'Submitting…' : isLast ? 'Finish' : 'Next'} &rarr;
               </button>

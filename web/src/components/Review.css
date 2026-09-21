@@ -375,9 +375,43 @@
   color: var(--muted);
 }
 
+.review-actions {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.review-nav-btn {
+  border: 2px solid var(--line-strong);
+  background: none;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s ease, opacity 0.15s ease;
+}
+
+.review-nav-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.review-nav-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.review-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .review-exit-btn {
   flex-shrink: 0;
-  align-self: flex-end;
   border: none;
   background: var(--ink);
   color: var(--bg);

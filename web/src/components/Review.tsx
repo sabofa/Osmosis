@@ -277,9 +277,27 @@ export default function Review({
               ))}
             </div>
           </div>
-          <button className="review-exit-btn" onClick={onExit}>
-            Exit test
-          </button>
+          <div className="review-actions">
+            <button
+              className="review-nav-btn"
+              onClick={() => setIndex((i) => Math.max(0, i - 1))}
+              disabled={index === 0}
+              aria-label="Previous question"
+            >
+              &larr; Back
+            </button>
+            <button
+              className="review-nav-btn"
+              onClick={() => setIndex((i) => Math.min(questions.length - 1, i + 1))}
+              disabled={index === questions.length - 1}
+              aria-label="Next question"
+            >
+              Next &rarr;
+            </button>
+            <button className="review-exit-btn" onClick={onExit}>
+              Exit test
+            </button>
+          </div>
         </div>
 
         {hasPanel && (
