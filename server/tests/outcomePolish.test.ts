@@ -105,6 +105,31 @@ describe("best_guess_choice_id (§2.3)", () => {
     );
   });
 
+  it("drops the guess when the learner takes the idk back and answers normally", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q = mcQuestion(db);
+    const p = presentItem(db, { node_id: "n", question_id: q.id });
+    const wrong = choiceId(db, q.id, false);
+    answerResponse(db, p.attempt_id, p.response_id, { idk: true, best_guess_choice_id: wrong, skipped: true });
+
+    // Switching back to a real answer must not leave the guess behind: it
+    // would be graded as an ordinary answer *and* reported as a best guess.
+    const patched = answerResponse(db, p.attempt_id, p.response_id, {
+      idk: false,
+      skipped: false,
+      selected_choice_id: choiceId(db, q.id, true),
+    });
+    expect(patched.best_guess_choice_id).toBeNull();
+    submitAttempt(db, p.attempt_id);
+
+    const o = getItemOutcome(db, p.response_id);
+    if (o.status !== "answered") throw new Error("expected answered");
+    expect(o.outcome).toBe("correct");
+    expect(o.best_guess_choice_id).toBeNull();
+    expect(o.best_guess_correct).toBeNull();
+  });
+
   it("never scores the guess: a correct guess after idk is still dont_know with score 0", () => {
     const db = openTestDb();
     insertTag(db, "a");

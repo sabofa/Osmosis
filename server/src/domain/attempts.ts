@@ -68,14 +68,17 @@ export function resumeAttempt(
 }
 
 // The unguarded half of resumeAttempt: answerResponse calls it so an answer
-// arriving on a paused attempt resumes it instead of being refused.
+// arriving on a paused attempt resumes it instead of being refused. The
+// duration floors at 0: a clock that moved backwards while paused would
+// otherwise store a negative paused_ms, and the sweep's '+-N seconds'
+// modifier would exempt the attempt from ever being abandoned.
 function resumeIfPaused(
   db: DatabaseSync,
   attemptId: string
 ): { id: string; paused_at: null; paused_ms: number } {
   db.prepare(
     `UPDATE attempt
-     SET paused_ms = paused_ms + (strftime('%s', 'now') - strftime('%s', paused_at)) * 1000,
+     SET paused_ms = paused_ms + MAX(0, strftime('%s', 'now') - strftime('%s', paused_at)) * 1000,
          paused_at = NULL
      WHERE id = ? AND paused_at IS NOT NULL`
   ).run(attemptId);
@@ -879,6 +882,11 @@ export function answerResponse(
   if (changes.idk !== undefined) assign("idk", changes.idk ? 1 : 0);
   if (changes.misapplied_method !== undefined) assign("misapplied_method", changes.misapplied_method);
   if (changes.best_guess_choice_id !== undefined) assign("best_guess_choice_id", changes.best_guess_choice_id);
+  // Taking the idk back takes the guess with it. Otherwise a stored
+  // {idk, guess} could be flipped to a plain answer by a later PATCH and
+  // still carry a guess — scored as an ordinary answer *and* reported as a
+  // best guess, which is exactly what best_guess_requires_idk forbids.
+  else if (changes.idk === false) assign("best_guess_choice_id", null);
 
   db.prepare(`UPDATE response SET ${sets.join(", ")} WHERE id = @id`).run(values as Record<string, any>);
 

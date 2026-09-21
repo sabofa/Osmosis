@@ -747,6 +747,8 @@ const ATTEMPT_COLUMNS = [
   "started_at",
   "submitted_at",
   "abandoned_at",
+  "paused_at",
+  "paused_ms",
   "offline",
 ] as const;
 
@@ -819,7 +821,9 @@ export function applyPushRequest(db: DatabaseSync, request: PushRequest): PushRe
       }
       try {
         const fields: Record<string, unknown> = {};
-        for (const c of ATTEMPT_COLUMNS) fields[c] = attempt[c] ?? null;
+        // paused_ms is NOT NULL DEFAULT 0 (migration 017): a payload from a
+        // node that predates pause accounting simply has no paused time.
+        for (const c of ATTEMPT_COLUMNS) fields[c] = attempt[c] ?? (c === "paused_ms" ? 0 : null);
         insertAttempt.run(fields as Record<string, any>);
         accepted.push(id);
       } catch (err) {
