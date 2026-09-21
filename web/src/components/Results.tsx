@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getResultsDaily, getResultsTags, listAttempts, timeAgo, attemptSourceLabel, type AttemptSummary, type DailyResultStat, type TagResultStat } from '../lib/api'
+import {
+  getResultsDaily,
+  getResultsParents,
+  getTagHistory,
+  listAttempts,
+  timeAgo,
+  attemptSourceLabel,
+  type AttemptSummary,
+  type DailyResultStat,
+  type ParentTagStat,
+  type TagHistory,
+} from '../lib/api'
+import { historySpec } from '../lib/resultsGraph'
+import GraphPanel from './GraphPanel'
+import TagResultsPage from './TagResultsPage'
+import DailyHistoryPage from './DailyHistoryPage'
 import { attemptsHeatmap } from '../lib/activity'
 import Heatmap from './Heatmap'
 import './Results.css'
@@ -20,17 +35,20 @@ function formatDrawDate(drawDate: string): string {
 }
 
 export default function Results() {
-  const [tags, setTags] = useState<TagResultStat[] | null>(null)
+  const [tags, setTags] = useState<ParentTagStat[] | null>(null)
+  // The subpages: one tag in full, or one day of daily history.
+  const [view, setView] = useState<{ kind: 'tag'; slug: string } | { kind: 'daily'; date: string } | null>(null)
+  const [history, setHistory] = useState<TagHistory | null>(null)
   const [attempts, setAttempts] = useState<AttemptSummary[]>([])
   const [daily, setDaily] = useState<DailyResultStat[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
 
   useEffect(() => {
-    getResultsTags({ limit: 100 })
+    getResultsParents()
       .then((r) => {
-        setTags(r.tags)
-        if (r.tags.length > 0) setSelected(r.tags[0].tag_slug)
+        setTags(r.parents)
+        if (r.parents.length > 0) setSelected(r.parents[0].tag_slug)
       })
       .catch((err) => setError(String(err)))
     listAttempts({ limit: 500 })
@@ -46,7 +64,45 @@ export default function Results() {
   }, [])
 
   const subject = tags?.find((t) => t.tag_slug === selected) ?? tags?.[0] ?? null
+
+  // The hero's chart: the picked subject's score by day, from the graph engine.
+  useEffect(() => {
+    if (!subject) return
+    let cancelled = false
+    setHistory(null)
+    getTagHistory(subject.tag_slug, 90)
+      .then((h) => {
+        if (!cancelled) setHistory(h)
+      })
+      .catch(() => {
+        /* the hero simply has no chart */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [subject?.tag_slug]) // eslint-disable-line react-hooks/exhaustive-deps
+  const heroSpec = useMemo(() => (history ? historySpec(history.points, { days: 90 }) : null), [history])
   const heat = useMemo(() => attemptsHeatmap(attempts, HEAT_WEEKS, HEAT_DAYS), [attempts])
+
+  if (view?.kind === 'tag') {
+    return (
+      <TagResultsPage
+        slug={view.slug}
+        onBack={() => setView(null)}
+        onOpenTag={(slug) => setView({ kind: 'tag', slug })}
+      />
+    )
+  }
+  if (view?.kind === 'daily') {
+    return (
+      <DailyHistoryPage
+        history={daily ?? []}
+        initialDate={view.date}
+        onBack={() => setView(null)}
+        onOpenTag={(slug) => setView({ kind: 'tag', slug })}
+      />
+    )
+  }
 
   return (
     <div className="results">
@@ -61,7 +117,7 @@ export default function Results() {
           {subject ? (
             <>
               <div className="results-hero-top">
-                <h1>{subject.tag_slug}</h1>
+                <h1>{subject.label}</h1>
                 <span className="results-hero-score">{subject.mean_score === null ? '—' : subject.mean_score.toFixed(2)}</span>
               </div>
               <div className="results-hero-stats">
@@ -74,10 +130,8 @@ export default function Results() {
                   <div className="results-stat-label">misses</div>
                 </div>
                 <div className="results-stat">
-                  <div className="results-stat-value">
-                    {subject.trend_30d === null ? '—' : `${subject.trend_30d >= 0 ? '+' : ''}${(subject.trend_30d * 100).toFixed(0)}%`}
-                  </div>
-                  <div className="results-stat-label">30-day trend</div>
+                  <div className="results-stat-value">{subject.child_count}</div>
+                  <div className="results-stat-label">tags inside</div>
                 </div>
                 <div className="results-stat">
                   <div className="results-stat-value" style={{ fontSize: 14 }}>
@@ -87,6 +141,12 @@ export default function Results() {
                 </div>
               </div>
 
+              <div className="results-hero-chart">
+                {heroSpec && <GraphPanel spec={heroSpec} />}
+              </div>
+              <div className="results-hero-foot">
+                score by day, last 90 days · double-click a subject for the full view
+              </div>
             </>
           ) : (
             <div style={{ margin: 'auto', color: 'var(--muted)', fontSize: 13 }}>
@@ -97,15 +157,18 @@ export default function Results() {
 
         <div className="results-side">
           <div className="results-panel results-subjects">
-            <div className="results-kicker">All tags, worst first</div>
+            <div className="results-kicker">Subjects, worst first</div>
             <div className="results-subject-list no-scrollbar">
               {(tags ?? []).map((t) => (
                 <button
                   key={t.tag_slug}
                   className={`results-subject-row${t.tag_slug === selected ? ' selected' : ''}${t.mean_score !== null && t.mean_score < 0.5 ? ' weak' : ''}`}
                   onClick={() => setSelected(t.tag_slug)}
+                  onDoubleClick={() => setView({ kind: 'tag', slug: t.tag_slug })}
+                  title="Click to pick, double-click to open"
                 >
-                  <span className="results-subject-name">{t.tag_slug}</span>
+                  <span className="results-subject-name">{t.label}</span>
+                  <span className="results-child-meta">{t.child_count ? `${t.child_count} tags` : ''}</span>
                   <span className="results-subject-score">{t.mean_score === null ? '—' : t.mean_score.toFixed(2)}</span>
                 </button>
               ))}
@@ -121,7 +184,12 @@ export default function Results() {
               {(daily ?? []).map((d) => {
                 const graded = d.completed && d.score !== null
                 return (
-                  <div key={`${d.draw_date}-${d.kind}`} className="results-daily-row">
+                  <div
+                    key={`${d.draw_date}-${d.kind}`}
+                    className="results-daily-row clickable"
+                    onDoubleClick={() => setView({ kind: 'daily', date: d.draw_date })}
+                    title="Double-click to open this day"
+                  >
                     <span className="results-daily-date">{formatDrawDate(d.draw_date)}</span>
                     <span className={`results-daily-kind-badge ${d.kind}`}>{d.kind === 'quiz' ? 'quiz' : 'question'}</span>
                     <span className={`results-daily-score${graded ? '' : ' incomplete'}`}>

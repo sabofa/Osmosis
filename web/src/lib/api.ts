@@ -755,3 +755,65 @@ export async function putActiveTheme(id: string | null): Promise<{ active_theme_
   if (!res.ok) throw await themeError(res, `PUT /api/themes/active ${res.status}`)
   return res.json()
 }
+
+// ---- Results subpages ------------------------------------------------------
+
+export interface ParentTagStat {
+  tag_slug: string
+  label: string
+  responses: number
+  graded: number
+  mean_score: number | null
+  misses: number
+  last_seen: string | null
+  child_count: number
+}
+
+export async function getResultsParents(): Promise<{ parents: ParentTagStat[] }> {
+  const res = await fetch('/api/results/parents')
+  if (!res.ok) throw new Error(`GET /api/results/parents ${res.status}`)
+  return res.json()
+}
+
+export interface TagHistory {
+  tag: { slug: string; label: string; description: string | null; parent_slug: string | null }
+  overall: { responses: number; graded: number; mean_score: number | null; misses: number; last_seen: string | null }
+  points: { date: string; mean_score: number; responses: number }[]
+  children: { tag_slug: string; label: string; responses: number; graded: number; mean_score: number | null; misses: number }[]
+}
+
+export async function getTagHistory(slug: string, days?: number): Promise<TagHistory> {
+  const qs = new URLSearchParams()
+  if (days) qs.set('days', String(days))
+  const res = await fetch(`/api/results/tags/${encodeURIComponent(slug)}/history?${qs}`)
+  if (!res.ok) throw new Error(`GET /api/results/tags/${slug}/history ${res.status}`)
+  return res.json()
+}
+
+export interface DailyDayDetail {
+  draw_date: string
+  draws: {
+    kind: string
+    attempt_id: string | null
+    submitted_at: string | null
+    mean_score: number | null
+    responses: {
+      question_id: string
+      prompt: string
+      type: string
+      tags: string[]
+      outcome: string
+      score: number | null
+      answer: string | null
+      correct_answer: string | null
+      explanation: string | null
+    }[]
+  }[]
+  tags_touched: { tag_slug: string; responses: number; day_mean: number | null; overall_mean: number | null }[]
+}
+
+export async function getDailyDayDetail(date: string): Promise<DailyDayDetail> {
+  const res = await fetch(`/api/results/daily/${encodeURIComponent(date)}`)
+  if (!res.ok) throw new Error(`GET /api/results/daily/${date} ${res.status}`)
+  return res.json()
+}

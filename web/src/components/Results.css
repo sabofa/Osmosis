@@ -70,7 +70,23 @@
 .results-hero-chart {
   flex: 1;
   width: 100%;
-  min-height: 0;
+  min-height: 200px;
+  display: flex;
+  margin-top: 8px;
+}
+
+.results-hero-chart > * {
+  flex: 1;
+}
+
+.results-hero-foot {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.results-daily-row.clickable {
+  cursor: pointer;
 }
 
 .chart-axis-label {

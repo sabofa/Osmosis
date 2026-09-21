@@ -32,6 +32,7 @@ import { getSessionStream, markShowSeen, acknowledgeShow } from "../domain/shows
 import { onSessionEvent, type SessionEvent } from "../lib/events.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
+import { listParentTagStats, getTagHistory, getDailyDayDetail } from "../domain/resultsDetail.js";
 import { DomainError } from "../domain/errors.js";
 import { addSlice, removeSlice } from "../domain/sync.js";
 import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw, forwardToCanonical, ForwardError } from "../sync/client.js";
@@ -682,6 +683,32 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       },
       { viewer: "learner" }
     );
+  });
+
+  // The results subpages: parent roll-ups, one tag's history, one day.
+  app.get("/api/results/parents", async () => {
+    return { parents: listParentTagStats(db, "learner") };
+  });
+
+  app.get("/api/results/tags/:slug/history", async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    const q = request.query as { days?: string };
+    try {
+      return getTagHistory(db, slug, { days: q.days ? Number(q.days) : undefined, viewer: "learner" });
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  app.get("/api/results/daily/:date", async (request, reply) => {
+    const { date } = request.params as { date: string };
+    try {
+      return getDailyDayDetail(db, date, "learner");
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
   });
 
   app.get("/api/results/daily", async (request) => {

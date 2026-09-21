@@ -166,6 +166,28 @@
     display: none;
   }
 
+  /* The results subpages stack their two columns. */
+  .results-page {
+    height: auto;
+    min-height: 100dvh;
+    padding: 12px 12px calc(76px + env(safe-area-inset-bottom));
+  }
+  .results-page-body,
+  .results-page-body.daily {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+  }
+  .results-page-body > * {
+    flex: none;
+  }
+  .results-page-graph-fill > * {
+    min-height: 260px;
+  }
+  .results-page-list .results-daily-list {
+    max-height: 40dvh;
+  }
+
   /* Settings and the session list simply lose the rail gutter. */
   .settings {
     padding-right: 12px;
