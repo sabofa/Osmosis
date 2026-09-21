@@ -10,6 +10,7 @@ export interface ReadmeResult {
     difficulty_scale: string;
     mc_choice_count: string;
     written_length_target: string;
+    misconception: string;
   };
   calculator_conventions: string;
   tag_conventions: string;
@@ -51,6 +52,10 @@ export function readme(db: DatabaseSync): ReadmeResult {
       difficulty_scale: "1 = intro/recall, 3 = standard practice, 5 = exam-level synthesis.",
       mc_choice_count: "4 choices, exactly one correct. Multi-select is not supported (the app is single-select): a second is_correct choice is rejected as mc_multiple_correct — split into separate questions or write it as a written item.",
       written_length_target: "1-3 sentences or a short derivation; not an essay.",
+      misconception:
+        "Optional on every mc choice. On a distractor it names which wrong model picking it represents — " +
+        "write one when you know it, omit it when you don't. Null means unknown (nobody recorded one), not " +
+        "'this distractor represents no misconception'. A question is never rejected for a missing one.",
     },
     calculator_conventions:
       "Two independent axes, don't conflate them. calculator_policy ('allowed'|'forbidden'|'n_a', default " +
@@ -65,9 +70,11 @@ export function readme(db: DatabaseSync): ReadmeResult {
     tag_conventions:
       "Tag slugs follow a strict grammar, enforced by create_tag — lowercase ascii segments separated by " +
       "\":\" (segment path mirrors the tag's ancestry — a child's slug is its parent's slug plus one more " +
-      "\":segment\"), with \"_\" separating words within a segment. No hyphens, no other punctuation, no " +
-      "uppercase. Example: \"math:functions:quadratic\". A root tag is a single segment with no colon, e.g. " +
-      "\"math\".",
+      "\":segment\"), with \"_\" separating words within a segment and \".\" allowed inside a segment for " +
+      "textbook section numbers (e.g. \"node:ebbing11e:2.4:atomic_weight\"). Both separators sit between " +
+      "alphanumerics — never leading, trailing or doubled, so \"a..b\", \".a\" and \"a.\" are rejected. No " +
+      "hyphens, no other punctuation, no uppercase. Example: \"math:functions:quadratic\". A root tag is a " +
+      "single segment with no colon, e.g. \"math\".",
     document_conventions:
       "document_id anchors a question to an uploaded asset — use list_assets/search_assets/read_asset to find " +
       "or inspect one. document_anchor_start/end highlights an excerpt range in the asset's extracted_text " +

@@ -37,7 +37,10 @@ const choiceShape = z.object({
     .string()
     .nullable()
     .optional()
-    .describe("Required for every non-correct choice: which wrong model picking it represents."),
+    .describe(
+      "Optional, for a non-correct choice: which wrong model picking it represents. Omit it (or send null) " +
+      "when you didn't record one — null reads as unknown, not as 'this distractor represents none'."
+    ),
 });
 
 const questionInputShape = z.object({
@@ -663,7 +666,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     {
       description:
         "Start a new tutoring session. Everything you present live afterward, and any session-specific test you " +
-        "create, should be tagged with the returned session id so it groups together in the app under one 'Live' entry.",
+        "create, should be tagged with the returned session id so it groups together in the app under one 'Live' entry. " +
+        "`tag_slug` must already exist (create_tag first); an unknown slug is rejected with not_found.",
       inputSchema: { name: z.string(), tag_slug: z.string().optional() },
     },
     async ({ name, tag_slug }) => {

@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { openTestDb, insertTag, insertQuestion } from "./helpers.js";
 import { createQuestions, editQuestion, getQuestionDetail } from "../src/domain/questions.js";
-import { DomainError } from "../src/domain/errors.js";
 import { presentItem, answerResponse, submitAttempt, getItemOutcome, getAttemptDetail } from "../src/domain/attempts.js";
 
 describe("misconception on distractors", () => {
-  it("rejects a new mc question with a non-correct choice missing misconception", () => {
+  // A misconception is a nice-to-have, not a gate: a distractor imported from
+  // a textbook often has no recorded wrong model, and refusing the whole
+  // question over it loses good content. Missing/null/empty all store NULL,
+  // which reads as "unknown", not "none".
+  it.each([
+    ["omitted", {}],
+    ["null", { misconception: null }],
+    ["empty string", { misconception: "" }],
+  ])("accepts a new mc question whose distractor has misconception %s, storing NULL", (_label, extra) => {
     const db = openTestDb();
     insertTag(db, "a");
     const result = createQuestions(db, [
@@ -15,12 +22,60 @@ describe("misconception on distractors", () => {
         tags: ["a"],
         choices: [
           { body: "right", is_correct: true },
-          { body: "wrong", is_correct: false }, // no misconception
+          { body: "wrong", is_correct: false, ...(extra as { misconception?: string | null }) },
         ],
       },
     ]);
-    expect(result.created).toHaveLength(0);
-    expect(result.rejected[0]?.reason).toBe("missing_misconception");
+    expect(result.rejected).toHaveLength(0);
+    expect(result.created).toHaveLength(1);
+    const detail = getQuestionDetail(db, result.created[0]!.id);
+    expect(detail.choices.find((c) => !c.is_correct)?.misconception).toBeNull();
+  });
+
+  // The tutor's own placeholder for "I didn't record one". Storing it would
+  // make an unknown misconception look like a recorded one in every read path.
+  it("normalises the imported-placeholder misconception to NULL on create and on edit", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const placeholder = "distractor (imported; misconception not recorded)";
+    const result = createQuestions(db, [
+      {
+        type: "mc",
+        prompt: "x",
+        tags: ["a"],
+        choices: [
+          { body: "right", is_correct: true },
+          { body: "wrong", is_correct: false, misconception: placeholder },
+        ],
+      },
+    ]);
+    expect(result.created).toHaveLength(1);
+    const id = result.created[0]!.id;
+    expect(getQuestionDetail(db, id).choices.find((c) => !c.is_correct)?.misconception).toBeNull();
+
+    editQuestion(db, id, {
+      choices: [
+        { body: "right", is_correct: true },
+        { body: "wrong", is_correct: false, misconception: placeholder },
+      ],
+    });
+    expect(getQuestionDetail(db, id).choices.find((c) => !c.is_correct)?.misconception).toBeNull();
+  });
+
+  it("editQuestion accepts a new choices array whose distractor has no misconception", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const legacy = insertQuestion(db, { tags: ["a"] });
+
+    expect(() =>
+      editQuestion(db, legacy.id, {
+        choices: [
+          { body: "right", is_correct: true },
+          { body: "wrong", is_correct: false },
+        ],
+      })
+    ).not.toThrow();
+    expect(getQuestionDetail(db, legacy.id).choices.find((c) => !c.is_correct)?.misconception).toBeNull();
   });
 
   it("accepts when every non-correct choice has a misconception (the correct choice needs none)", () => {
@@ -51,26 +106,6 @@ describe("misconception on distractors", () => {
     expect(() => editQuestion(db, legacy.id, { prompt: "updated prompt" })).not.toThrow();
     const detail = getQuestionDetail(db, legacy.id);
     expect(detail.prompt).toBe("updated prompt");
-  });
-
-  it("editQuestion still rejects when the edit payload supplies a new choices array missing misconception", () => {
-    const db = openTestDb();
-    insertTag(db, "a");
-    const legacy = insertQuestion(db, { tags: ["a"] });
-
-    let caught: unknown;
-    try {
-      editQuestion(db, legacy.id, {
-        choices: [
-          { body: "right", is_correct: true },
-          { body: "wrong", is_correct: false }, // no misconception
-        ],
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeInstanceOf(DomainError);
-    expect((caught as DomainError).code).toBe("missing_misconception");
   });
 
   // Whole-branch review finding: a tutor can write misconception via

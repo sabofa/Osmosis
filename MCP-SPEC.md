@@ -50,9 +50,9 @@ static content:
 readme() -> {
   node: { protocol_version, bank_size, last_write_at },
   workflow: string,               // call bootstrap(subject) next, once per subject touched this session
-  prompt_conventions: {...},      // prompt_style, explanation_style, difficulty_scale, mc_choice_count, written_length_target
+  prompt_conventions: {...},      // prompt_style, explanation_style, difficulty_scale, mc_choice_count, written_length_target, misconception
   calculator_conventions: string, // calculator_policy vs desmos_allowed — two independent axes, not redundant
-  tag_conventions: string,        // slug grammar: lowercase, ":"-separated hierarchy, "_"-separated words, no hyphens
+  tag_conventions: string,        // slug grammar: lowercase, ":"-separated hierarchy, "_"- or "."-separated words, no hyphens
   document_conventions: string,   // document_id / document_anchor_* / document_marker_offset, when to use which
   duplicate_workflow: string,     // possible_duplicates is a report, not a rejection — retire_question the loser
   batching_guidance: string,      // prefer ~25-30 questions per create_questions call
@@ -96,12 +96,12 @@ becoming one larger tool.
 | `readme` | Universal conventions, called once per session |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject |
 | `list_tags` | Controlled vocabulary listing. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
-| `create_tag` | One tag at a time, by design |
+| `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
 | `merge_tags` | Vocabulary cleanup |
 | `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec. Paginated (`limit`/`offset`, default 50); response is `{ total, questions, has_more }` |
 | `get_question` | Full detail for one question — the read path before an edit |
-| `create_questions` | Batched, per-question rejection detail, capped duplicate reports |
-| `edit_question` | Versions if attempted, in-place otherwise |
+| `create_questions` | Batched, per-question rejection detail, capped duplicate reports. A choice's `misconception` is optional — missing, null, empty, or the placeholder `"distractor (imported; misconception not recorded)"` all store NULL, which reads as *unknown*, not *none*. A question is never rejected for a missing misconception |
+| `edit_question` | Versions if attempted, in-place otherwise. Same optional-`misconception` normalisation as `create_questions` |
 | `retire_question` | Soft retire |
 | `list_templates` | Live eligible_count. Paginated (`limit`/`offset`, default 50); response is `{ total, templates, has_more }` |
 | `create_template` / `edit_template` / `retire_template` | Draw specs |

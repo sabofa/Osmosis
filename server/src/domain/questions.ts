@@ -192,16 +192,8 @@ function findPossibleDuplicates(
 
 function validateQuestionInput(
   db: DatabaseSync,
-  q: QuestionInput,
-  opts: { checkMisconception?: boolean } = {}
+  q: QuestionInput
 ): { reason: string; detail: string } | null {
-  // Defaults to on (createQuestions always validates a brand-new, complete
-  // choice set). editQuestion turns this off when the edit payload doesn't
-  // touch `choices` at all, so a prompt/tag/etc-only edit on a legacy mc
-  // question (created before this field existed) isn't blocked by a
-  // pre-existing distractor missing `misconception` that the edit never
-  // asked to change.
-  const checkMisconception = opts.checkMisconception ?? true;
   if (q.type !== "mc" && q.type !== "written") {
     return { reason: "invalid_type", detail: `type must be "mc" or "written", got "${q.type}"` };
   }
@@ -253,15 +245,6 @@ function validateQuestionInput(
         reason: "mc_multiple_correct",
         detail: `mc questions need exactly one correct choice, got ${correctCount}; multi-select is not supported — split into separate questions or rewrite as written`,
       };
-    }
-    if (checkMisconception) {
-      const missingMisconception = q.choices.filter((c) => !c.is_correct && !c.misconception);
-      if (missingMisconception.length > 0) {
-        return {
-          reason: "missing_misconception",
-          detail: "every non-correct mc choice needs a misconception describing which wrong model picking it represents",
-        };
-      }
     }
   }
 
@@ -409,12 +392,26 @@ function replaceTags(db: DatabaseSync, questionId: string, tags: string[]): void
   for (const slug of new Set(tags)) insert.run(questionId, slug);
 }
 
+// A misconception is optional — NULL means "nobody recorded which wrong model
+// this distractor represents", which is different from "it represents none".
+// Empty strings and the tutor's own placeholder for an unrecorded one both
+// collapse to NULL so no read path mistakes a placeholder for real content.
+const UNRECORDED_MISCONCEPTION = "distractor (imported; misconception not recorded)";
+
+function normalizeMisconception(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === UNRECORDED_MISCONCEPTION) return null;
+  return value ?? null;
+}
+
 function replaceChoices(db: DatabaseSync, questionId: string, choices: ChoiceInput[]): void {
   db.prepare("DELETE FROM choice WHERE question_id = ?").run(questionId);
   const insert = db.prepare(
     "INSERT INTO choice (id, question_id, body, is_correct, ordinal, misconception) VALUES (?, ?, ?, ?, ?, ?)"
   );
-  choices.forEach((c, i) => insert.run(uuidv4(), questionId, c.body, c.is_correct ? 1 : 0, i, c.misconception ?? null));
+  choices.forEach((c, i) =>
+    insert.run(uuidv4(), questionId, c.body, c.is_correct ? 1 : 0, i, normalizeMisconception(c.misconception))
+  );
 }
 
 export interface CreateQuestionsResult {
@@ -589,11 +586,7 @@ export function editQuestion(
     node_key: changes.node_key !== undefined ? changes.node_key : current.node_key,
   };
 
-  // Only re-check the misconception invariant when this edit actually
-  // supplies a new `choices` array to validate as a complete set. An edit
-  // that never touches `choices` shouldn't be blocked by a pre-existing
-  // legacy distractor missing `misconception` that nobody asked to change.
-  const invalid = validateQuestionInput(db, merged, { checkMisconception: changes.choices !== undefined });
+  const invalid = validateQuestionInput(db, merged);
   if (invalid) throw new DomainError(invalid.reason, invalid.detail);
 
   const hasAttempts = db.prepare("SELECT 1 FROM response WHERE question_id = ? LIMIT 1").get(id);

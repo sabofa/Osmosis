@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "./errors.js";
 
-const SLUG_SEGMENT = "[a-z0-9]+(_[a-z0-9]+)*";
+const SLUG_SEGMENT = "[a-z0-9]+([._][a-z0-9]+)*";
 const SLUG_RE = new RegExp(`^${SLUG_SEGMENT}(:${SLUG_SEGMENT})*$`);
 
 export function isValidSlug(slug: string): boolean {
@@ -86,7 +86,9 @@ export function createTag(
     throw new DomainError(
       "invalid_slug_format",
       `Tag slug "${input.slug}" is invalid. Expected lowercase ascii segments separated by ":" ` +
-        `with "_" separating words within a segment (e.g. "math:functions:quadratic").`
+        `with "_" or "." separating words within a segment — a separator always sits between ` +
+        `alphanumerics, never leading, trailing or doubled ` +
+        `(e.g. "math:functions:quadratic", "node:ebbing11e:2.4:atomic_weight").`
     );
   }
 

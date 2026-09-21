@@ -72,16 +72,26 @@ describe("a null score is ungraded, never zero", () => {
     expect(getTemplateDetail(db, t.id).mean_score).toBe(1);
   });
 
-  it("an attempt with nothing graded has mean_score null, not 0", () => {
+  it("an attempt with nothing graded has mean_score null, not 0, in every read path", () => {
     const db = openTestDb();
     insertTag(db, "w");
     const q = insertQuestion(db, { tags: ["w"], type: "written" });
+    const session = createSession(db, { name: "s" });
     const attemptId = uuidv4();
     const at = isoAgo(1);
-    db.prepare("INSERT INTO attempt (id, node_id, source, started_at, submitted_at) VALUES (?, 'n', 'adhoc', ?, ?)").run(attemptId, at, at);
+    db.prepare("INSERT INTO attempt (id, node_id, source, session_id, started_at, submitted_at) VALUES (?, 'n', 'adhoc', ?, ?, ?)").run(attemptId, session.id, at, at);
     db.prepare("INSERT INTO response (id, attempt_id, question_id, ordinal, response_text, answered_at) VALUES (?, ?, ?, 0, 'x', ?)").run(uuidv4(), attemptId, q.id, at);
+
     const listed = listAttempts(db);
     expect(listed.attempts[0].mean_score).toBeNull();
     expect(listed.attempts[0].ungraded).toBe(1);
+
+    const attemptScope = getResults(db, { scope: "attempt" }) as { attempts: any[] };
+    expect(attemptScope.attempts[0].mean_score).toBeNull();
+    expect(attemptScope.attempts[0].ungraded).toBe(1);
+
+    const detail = getSessionDetail(db, session.id) as { attempts: any[] };
+    expect(detail.attempts[0].mean_score).toBeNull();
+    expect(detail.attempts[0].ungraded).toBe(1);
   });
 });
