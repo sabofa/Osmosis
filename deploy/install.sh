@@ -10,7 +10,8 @@
 # What it does:
 #   1. installs dependencies and builds engines, web, server (as the invoking user)
 #   2. creates the `osmosis` system user and /var/lib/osmosis (db + uploads)
-#   3. writes /etc/osmosis/canonical.env on first run (generates MCP_AUTH_TOKEN)
+#   3. writes /etc/osmosis/canonical.env on first run (generates MCP_AUTH_TOKEN
+#      and MCP_PRESENTER_TOKEN)
 #   4. installs + starts the osmosis systemd service
 #   5. if a cloudflared tunnel named `osmosis` exists, installs its config +
 #      service so only /mcp is public (see deploy/cloudflared.yml)
@@ -97,7 +98,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
         "$INSTALL_DIR/server/.env.local.example" | sudo tee "$ENV_FILE" >/dev/null
   else
     TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
+    # Second, independent secret for the reduced presenter surface. Generated
+    # separately rather than derived from the first: the two must differ (the
+    # server refuses to boot otherwise) and rotating one must not touch the
+    # other.
+    PRESENTER_TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
     sed -e "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=$TOKEN|" \
+        -e "s|^MCP_PRESENTER_TOKEN=.*|MCP_PRESENTER_TOKEN=$PRESENTER_TOKEN|" \
         -e "s|^NODE_LABEL=.*|NODE_LABEL=$(uname -n | cut -d. -f1)|" \
         "$INSTALL_DIR/server/.env.canonical.example" | sudo tee "$ENV_FILE" >/dev/null
   fi

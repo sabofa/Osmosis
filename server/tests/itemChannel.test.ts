@@ -441,7 +441,7 @@ describe("item channel over MCP", () => {
       return { body: JSON.parse(result.content[0].text), isError: result.isError === true };
     };
 
-    expect(TOOLS_VERSION).toBe(3);
+    expect(TOOLS_VERSION).toBe(4);
 
     const session = (await call("create_session", { name: "live", reveal_default: "deferred" })).body;
     expect(session.reveal_default).toBe("deferred");

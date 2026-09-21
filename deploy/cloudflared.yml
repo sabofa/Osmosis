@@ -4,6 +4,15 @@
 # Only /mcp/... is exposed to the public internet. /api and /sync never leave
 # the machine (and Tailscale); anything else on the hostname gets a bare 404,
 # the same answer a wrong token gets, so the tunnel gives a scanner no signal.
+#
+# Note: /mcp/ here covers BOTH tokens — the full authoring token and the
+# reduced MCP_PRESENTER_TOKEN — because `path` is a regex over the request
+# path and cannot distinguish two secrets without writing one into this file.
+# Keeping the presenter surface Tailscale-only is therefore a hostname/network
+# choice (publish the authoring hostname through the tunnel, point the tutor
+# server at http://<tailscale-ip>:8081 directly), not an ingress rule. See
+# DEPLOY.md "Restricting the presenter surface to Tailscale". Nothing about
+# this file's semantics changes for that; the rule below is unchanged.
 tunnel: __TUNNEL_ID__
 credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
 

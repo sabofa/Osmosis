@@ -2,7 +2,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { PROTOCOL_VERSION, TOOLS_VERSION, listToolNames } from "../protocol.js";
 import { CONFIDENCE_NUMERIC } from "./attempts.js";
 
+export type ToolScope = "full" | "presenter";
+
 export interface ReadmeResult {
+  // Which tool surface the caller reached this node through. "full" is the
+  // authoring connector; "presenter" is the tutor server's reduced surface
+  // (the live teaching loop only) — node.tools is the caller's own set.
+  scope: ToolScope;
   node: {
     protocol_version: number;
     tools_version: number;
@@ -35,7 +41,10 @@ export interface ReadmeResult {
 // skill_level, graph_dsl_reference) and gets called again for each new
 // subject touched in the session; this doesn't, so a session spanning
 // biology and chemistry reads this exactly once instead of twice.
-export function readme(db: DatabaseSync): ReadmeResult {
+export function readme(
+  db: DatabaseSync,
+  opts: { scope?: ToolScope; tools?: string[] } = {}
+): ReadmeResult {
   const bankSize = (
     db.prepare("SELECT COUNT(*) AS n FROM question WHERE retired_at IS NULL AND ephemeral = 0").get() as {
       n: number;
@@ -52,10 +61,11 @@ export function readme(db: DatabaseSync): ReadmeResult {
     .get() as { last_write_at: string | null };
 
   return {
+    scope: opts.scope ?? "full",
     node: {
       protocol_version: PROTOCOL_VERSION,
       tools_version: TOOLS_VERSION,
-      tools: listToolNames(),
+      tools: opts.tools ? [...opts.tools].sort() : listToolNames(),
       push: false,
       bank_size: bankSize,
       last_write_at: lastWrite.last_write_at,
@@ -97,7 +107,13 @@ export function readme(db: DatabaseSync): ReadmeResult {
       "textbook section numbers (e.g. \"node:ebbing11e:2.4:atomic_weight\"). Both separators sit between " +
       "alphanumerics — never leading, trailing or doubled, so \"a..b\", \".a\" and \"a.\" are rejected. No " +
       "hyphens, no other punctuation, no uppercase. Example: \"math:functions:quadratic\". A root tag is a " +
-      "single segment with no colon, e.g. \"math\".",
+      "single segment with no colon, e.g. \"math\". Three leading segments are reserved and give a tag its " +
+      "kind, reported as `kind` on every list_tags row and filterable with list_tags(kind:): \"node:\" is one " +
+      "teachable idea, finer-grained than a topic and the same string a question's node_keys carry " +
+      "(\"node:ebbing11e:2.4:atomic_weight\"); \"tech:\" is a rendering or tooling requirement an item has " +
+      "(\"tech:mhchem\", \"tech:calculator\"); \"topic:\" is a cross-subject theme that doesn't belong under " +
+      "one subject tree. Everything else is kind \"subject\" — the subject tree itself, e.g. " +
+      "\"chemistry:stoichiometry\".",
     document_conventions:
       "document_id anchors a question to an uploaded asset — use list_assets/search_assets/read_asset to find " +
       "or inspect one. document_anchor_start/end highlights an excerpt range in the asset's extracted_text " +

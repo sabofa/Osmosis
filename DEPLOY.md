@@ -8,7 +8,8 @@ are optional and point at it over Tailscale with `NODE_ROLE=local`.
 
 | Surface | Who reaches it | How |
 |---|---|---|
-| `/mcp/<token>` | claude.ai connector, Claude Code | Cloudflare tunnel, hostname of your choice, only this path is routed |
+| `/mcp/<MCP_AUTH_TOKEN>` | claude.ai connector, Claude Code — the full authoring surface | Cloudflare tunnel, hostname of your choice, only this path is routed |
+| `/mcp/<MCP_PRESENTER_TOKEN>` | the tutor server, and nothing else — the reduced live-teaching surface | same route; see "The two MCP tokens" below |
 | `/api`, `/` (web app) | you, from any Tailscale device | Tailscale only, no auth |
 | `/sync` | local nodes | Tailscale only, no auth |
 
@@ -27,7 +28,7 @@ bash deploy/install.sh
 
 That copies the repo to `/opt/osmosis`, builds everything, creates the
 `osmosis` system user, writes `/etc/osmosis/canonical.env` with a generated
-`MCP_AUTH_TOKEN`, and starts `osmosis.service`. State lives entirely in
+`MCP_AUTH_TOKEN` and `MCP_PRESENTER_TOKEN`, and starts `osmosis.service`. State lives entirely in
 `/var/lib/osmosis` (SQLite file + uploads).
 
 Then the web app is at `http://<tailscale-ip>:8081/`.
@@ -71,6 +72,56 @@ sudo systemctl restart <that-tunnel's-service>
 The connector URL is then `https://osmosis.yourdomain.com/mcp/<MCP_AUTH_TOKEN>`
 with the token from `/etc/osmosis/canonical.env`.
 
+## The two MCP tokens
+
+`/mcp/:token` resolves the token to a **scope**, in constant time, and 404s
+anything it doesn't recognise — the same bare 404 a wrong token has always got.
+
+| Env var | Scope | Tools |
+|---|---|---|
+| `MCP_AUTH_TOKEN` | `full` | everything (the authoring connector) |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `get_attempt`, `end_session`, `grade_response` |
+
+`install.sh` generates both on first run. **The tutor server gets only
+`MCP_PRESENTER_TOKEN`** — it runs the live teaching loop and never needs to
+retire a question, edit a template, rewrite config or touch a theme, so it
+holds a credential that cannot do any of those things. `readme()` reports
+`scope` and lists exactly the tools that scope has, so the tutor can assert
+what it is holding rather than discovering it on a refused call.
+
+`MCP_PRESENTER_TOKEN` is optional: leave it unset and the presenter surface
+simply doesn't exist. Setting it to the same value as `MCP_AUTH_TOKEN` is
+refused at boot with a clear message — identical tokens would collapse the two
+surfaces into one.
+
+`/mcp/<token>/upload` (the plain multipart route) accepts **either** token.
+
+### Restricting the presenter surface to Tailscale
+
+"The tutor server reaches the presenter token over Tailscale only" is a
+cloudflared **ingress** choice, not something the server enforces — the server
+answers both tokens on the same route. If you want the presenter token
+unreachable from the public internet, publish the two on different hostnames
+and route only the authoring one through the tunnel; the tutor then talks to
+`http://<tailscale-ip>:8081/mcp/<MCP_PRESENTER_TOKEN>` directly, with no tunnel
+involved. That needs no config change at all: `/api` and `/sync` already work
+that way.
+
+`deploy/cloudflared.yml`'s ingress is deliberately left as-is (this host's
+tunnel is shared and hand-edited). An ingress rule that exposed only a
+specific path prefix would look like:
+
+```yaml
+ingress:
+  - hostname: osmosis.yourdomain.com
+    path: ^/mcp/
+    service: http://localhost:8081
+```
+
+`path` is a regex over the request path, so there is no way to express "this
+one token but not that one" there without putting a secret in a config file —
+which is why the split is by hostname/network, not by ingress rule.
+
 ## Updating
 
 ```bash
@@ -99,10 +150,13 @@ use SQLite's online backup:
 sudo -u osmosis sqlite3 /var/lib/osmosis/canonical.db ".backup /var/lib/osmosis/canonical-$(date +%F).db"
 ```
 
-## Rotating the MCP token
+## Rotating the MCP tokens
 
 Edit `MCP_AUTH_TOKEN` in `/etc/osmosis/canonical.env`, restart the service,
 paste the new URL into the connector dialog. The old URL 404s immediately.
+`MCP_PRESENTER_TOKEN` rotates the same way — edit, restart, update the tutor
+server's configured URL. The two must never be equal; the service refuses to
+start if they are.
 
 ## Local nodes (your own devices)
 

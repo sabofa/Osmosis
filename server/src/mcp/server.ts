@@ -4,12 +4,13 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../http/app.js";
 import { registerTools } from "./tools.js";
+import type { ToolScope } from "../domain/readme.js";
 import { createAsset } from "../domain/assets.js";
 import { DomainError } from "../domain/errors.js";
 
-export function buildMcpServer(ctx: AppContext): McpServer {
+export function buildMcpServer(ctx: AppContext, scope: ToolScope = "full"): McpServer {
   const server = new McpServer({ name: "osmosis", version: "1.0.0" });
-  registerTools(server, ctx.db, ctx.env.uploadsDir, ctx.node.id);
+  registerTools(server, ctx.db, ctx.env.uploadsDir, ctx.node.id, scope);
   return server;
 }
 
@@ -21,6 +22,18 @@ function tokenMatches(candidate: string, expected: string): boolean {
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+// Two shared secrets on one route. MCP_AUTH_TOKEN is the authoring connector
+// and gets everything; MCP_PRESENTER_TOKEN (optional — when unset the
+// presenter surface simply doesn't exist) is the tutor server's own
+// connection and gets only PRESENTER_TOOLS. Both compared in constant time,
+// neither ever logged; an unrecognised token resolves to null and 404s the
+// same way a missing one does.
+function resolveScope(ctx: AppContext, token: string): ToolScope | null {
+  if (ctx.env.mcpAuthToken && tokenMatches(token, ctx.env.mcpAuthToken)) return "full";
+  if (ctx.env.mcpPresenterToken && tokenMatches(token, ctx.env.mcpPresenterToken)) return "presenter";
+  return null;
 }
 
 export function mountMcp(app: FastifyInstance, ctx: AppContext): void {
@@ -35,12 +48,13 @@ export function mountMcp(app: FastifyInstance, ctx: AppContext): void {
   // one transport at a time.
   app.all("/mcp/:token", async (request, reply) => {
     const { token } = request.params as { token: string };
-    if (!ctx.env.mcpAuthToken || !tokenMatches(token, ctx.env.mcpAuthToken)) {
+    const scope = resolveScope(ctx, token);
+    if (!scope) {
       reply.code(404).send();
       return;
     }
 
-    const mcpServer = buildMcpServer(ctx);
+    const mcpServer = buildMcpServer(ctx, scope);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.raw.on("close", () => {
       transport.close();
@@ -61,8 +75,11 @@ export function mountMcp(app: FastifyInstance, ctx: AppContext): void {
   // per the deployment model (§13.1) and unreachable from a remote sandbox,
   // while /mcp is the one surface cloudflared actually exposes.
   app.post("/mcp/:token/upload", async (request, reply) => {
+    // Either token: a presenter session hands over a file the same way an
+    // authoring one does, and an upload writes an asset rather than reaching
+    // any of the tools the presenter scope withholds.
     const { token } = request.params as { token: string };
-    if (!ctx.env.mcpAuthToken || !tokenMatches(token, ctx.env.mcpAuthToken)) {
+    if (!resolveScope(ctx, token)) {
       reply.code(404).send();
       return;
     }

@@ -8,6 +8,11 @@ export interface EnvConfig {
   remoteUrl: string | null;
   uploadsDir: string;
   mcpAuthToken: string | null;
+  // Second shared secret for the reduced "presenter" MCP surface (the tutor
+  // server's own connection). Optional in the type so the many EnvConfig
+  // literals that predate it stay valid; undefined and null both mean the
+  // presenter surface is off.
+  mcpPresenterToken?: string | null;
   deepseekApiKey: string | null;
   // Absolute path of the built web app (web/dist). When set, the server
   // serves it at / so a deployment is one process on one port and the app's
@@ -46,6 +51,18 @@ export function loadEnvConfig(): EnvConfig {
     );
   }
 
+  const mcpPresenterToken = process.env.MCP_PRESENTER_TOKEN ?? null;
+  if (mcpPresenterToken && mcpAuthToken && mcpPresenterToken === mcpAuthToken) {
+    // Identical tokens collapse the two surfaces into one: /mcp/:token
+    // resolves the full token first, so the presenter connection would
+    // silently get the whole bank-maintenance inventory. Never name either
+    // value in the message.
+    throw new Error(
+      "MCP_PRESENTER_TOKEN must differ from MCP_AUTH_TOKEN — they name two different surfaces, " +
+        "and an identical value would hand the presenter connection the full tool inventory."
+    );
+  }
+
   return {
     role,
     label: required("NODE_LABEL"),
@@ -54,6 +71,7 @@ export function loadEnvConfig(): EnvConfig {
     remoteUrl,
     uploadsDir,
     mcpAuthToken,
+    mcpPresenterToken,
     deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? null,
     webDistDir: process.env.WEB_DIST_DIR ? resolve(process.env.WEB_DIST_DIR) : null,
   };

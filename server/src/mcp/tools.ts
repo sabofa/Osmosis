@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../domain/errors.js";
 import { recordToolName } from "../protocol.js";
-import { readme } from "../domain/readme.js";
+import { readme, type ToolScope } from "../domain/readme.js";
 import { bootstrap } from "../domain/bootstrap.js";
 import { listTags, createTag, mergeTags, countTags } from "../domain/tags.js";
 import { createQuestions, editQuestion, retireQuestion, searchQuestions, getQuestionDetail } from "../domain/questions.js";
@@ -114,11 +114,45 @@ export function trimListTagsForMcp(tags: ReturnType<typeof listTags>) {
   }));
 }
 
-export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: string, nodeId: string): void {
+// The presenter surface: what the tutor server's own MCP connection can
+// reach. It is the live teaching loop and nothing else — no bank maintenance,
+// no template/theme/config/asset surface — so the token that server holds
+// can't reshape the bank even if it is compromised. Task 8's show tools
+// append here; nothing else about registration changes when they do.
+export const PRESENTER_TOOLS: readonly string[] = [
+  "readme",
+  "create_session",
+  "create_questions",
+  "present_item",
+  "await_item_outcome",
+  "get_attempt",
+  "end_session",
+  "grade_response",
+];
+
+export function registerTools(
+  server: McpServer,
+  db: DatabaseSync,
+  uploadsDir: string,
+  nodeId: string,
+  scope: ToolScope = "full"
+): void {
+  const allowed = scope === "presenter" ? new Set(PRESENTER_TOOLS) : null;
+  // The tools this particular registration actually registered. readme() is
+  // handed this rather than the module-level set in protocol.ts, so a
+  // presenter connection sees its own eight names and a full connection sees
+  // all of them — in one process serving both, neither leaks into the other.
+  const registered: string[] = [];
+
   // Every registration goes through here so readme()'s node.tools list is the
   // set of tools actually registered, not a hand-kept copy beside it.
   const registerTool = ((name: string, config: unknown, cb: unknown) => {
-    recordToolName(name);
+    if (allowed && !allowed.has(name)) return undefined;
+    registered.push(name);
+    // Only the full registration feeds protocol.ts's module-level set, which
+    // is the answer to "what does this build expose", not "what did this
+    // request reach".
+    if (scope === "full") recordToolName(name);
     return (server.registerTool as (...args: unknown[]) => unknown)(name, config, cb);
   }) as unknown as McpServer["registerTool"];
 
@@ -127,12 +161,15 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     {
       description:
         "Call once at the very start of a session, before bootstrap. Returns universal authoring conventions " +
-        "(prompt style, the calculator_policy/desmos_allowed distinction, document anchoring, duplicate-report " +
-        "workflow, batching guidance) that don't repeat per-subject the way bootstrap's taxonomy does.",
+        "(prompt style, the calculator_policy/desmos_allowed distinction, tag kinds, document anchoring, " +
+        "duplicate-report workflow, batching guidance) that don't repeat per-subject the way bootstrap's " +
+        "taxonomy does. `scope` names which tool surface you reached this node through — \"full\" is the " +
+        "authoring connector, \"presenter\" is the reduced live-teaching surface — and node.tools lists " +
+        "exactly the tools your scope has.",
     },
     async () => {
       try {
-        return ok(readme(db));
+        return ok(readme(db, { scope, tools: registered }));
       } catch (err) {
         return fail(err);
       }
@@ -144,12 +181,25 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     {
       description:
         "Call once per subject touched this session (after readme). Returns that subject's tag taxonomy, " +
-        "results pointer, and — for math/science subjects — the graph_spec DSL reference.",
-      inputSchema: { subject: z.string().nullable().optional() },
+        "results pointer, and — for math/science subjects — the graph_spec DSL reference. Also returns " +
+        "`taxonomy: { seeded, seed_available, tag_count }`. If `taxonomy.tag_count` is 0 and " +
+        "`seed_available`, call again with `seed: true` before minting tags — that creates the shipped " +
+        "taxonomy for the subject (idempotent; it only creates what's missing) so you tag against the " +
+        "standard slugs instead of inventing near-duplicates.",
+      inputSchema: {
+        subject: z.string().nullable().optional(),
+        seed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Create the subject's shipped taxonomy tags that don't exist yet. Idempotent: a second call " +
+              "with seed: true creates nothing and reports seeded: false."
+          ),
+      },
     },
-    async ({ subject }) => {
+    async ({ subject, seed }) => {
       try {
-        return ok(bootstrap(db, subject ?? null));
+        return ok(bootstrap(db, subject ?? null, { seed: seed === true }));
       } catch (err) {
         return fail(err);
       }
@@ -160,18 +210,26 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "list_tags",
     {
       description:
-        "List tags in the controlled vocabulary. Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
+        "List tags in the controlled vocabulary. Every row carries `kind` — \"node\" (one teachable idea, " +
+        "the same string a question's node_keys carry), \"tech\" (a rendering/tooling requirement), " +
+        "\"topic\" (a cross-subject theme) or \"subject\" (everything else: the subject trees themselves), " +
+        "derived from the slug's leading segment. `prefix` and `kind` compose (both are applied). " +
+        "Paginated: pass limit/offset to page past the default 50; response includes total and has_more.",
       inputSchema: {
-        prefix: z.string().optional(),
+        prefix: z.string().optional().describe("Limit to this slug and its descendants, e.g. \"chemistry\"."),
+        kind: z
+          .enum(["node", "tech", "topic", "subject"])
+          .optional()
+          .describe("Limit to one tag kind. Composes with prefix rather than replacing it."),
         include_retired: z.boolean().optional(),
         limit: z.number().optional(),
         offset: z.number().optional(),
       },
     },
-    async ({ prefix, include_retired, limit, offset }) => {
+    async ({ prefix, kind, include_retired, limit, offset }) => {
       try {
-        const opts = { prefix, includeRetired: include_retired, limit: limit ?? 50, offset: offset ?? 0 };
-        const total = countTags(db, { prefix, includeRetired: include_retired });
+        const opts = { prefix, kind, includeRetired: include_retired, limit: limit ?? 50, offset: offset ?? 0 };
+        const total = countTags(db, { prefix, kind, includeRetired: include_retired });
         const tags = listTags(db, opts);
         return ok({ total, tags: trimListTagsForMcp(tags), has_more: (offset ?? 0) + tags.length < total });
       } catch (err) {
@@ -203,7 +261,11 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   registerTool(
     "merge_tags",
     {
-      description: "Maintenance op: repoint every question and child tag from from_slug to to_slug, then retire from_slug.",
+      description:
+        "Maintenance op: repoint every question and child tag from from_slug to to_slug, then retire " +
+        "from_slug. When both slugs are \"node:\" tags the node keys move too (question_node_key and the " +
+        "question's primary node_key), reported as node_keys_updated; a merge that isn't node:-to-node: " +
+        "leaves node keys alone.",
       inputSchema: { from_slug: z.string(), to_slug: z.string() },
     },
     async ({ from_slug, to_slug }) => {

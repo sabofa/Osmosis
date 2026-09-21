@@ -19,11 +19,41 @@ surface available (e.g. claude.ai's "Add custom connector" dialog) accepts a
 URL and nothing else for a plain shared-secret setup — no custom header
 field, and OAuth is unnecessary machinery for a single trusted user. Wrong or
 missing token returns a bare 404, not 401, so the endpoint gives no signal to
-anyone probing it. `server/src/mcp/server.ts`, `MCP_AUTH_TOKEN` env var,
-canonical node refuses to boot without one set.
+anyone probing it. `server/src/mcp/server.ts`.
 
-Revocation is "rotate `MCP_AUTH_TOKEN`, restart, re-paste the URL into the
-connector dialog." No live-revoke list is needed for a single-user tool.
+**Two tokens, two scopes.** The route resolves `:token` to a scope in
+constant time (`tokenMatches`, a length-tolerant `timingSafeEqual`); anything
+it doesn't recognise 404s. Neither value is ever logged by this code.
+
+| Env var | Scope | Inventory |
+|---|---|---|
+| `MCP_AUTH_TOKEN` | `full` | all 37 tools. Required — the canonical node refuses to boot without one set |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `get_attempt`, `end_session`, `grade_response`. Optional — unset means the presenter surface does not exist |
+
+`registerTools(server, db, uploadsDir, nodeId, scope)` skips any tool outside
+the allowlist when the scope is `presenter`, so a withheld tool is genuinely
+absent from `tools/list` and answers "tool not found", rather than being
+listed and then refusing. The presenter token is what the **tutor server**
+holds: it runs the live teaching loop and never needs to retire a question,
+rewrite a template, change config or touch a theme, so the credential it
+carries cannot do any of those things. `readme()` reports `scope` (`full` |
+`presenter`) and a `node.tools` list scoped to the caller, so a tutor can
+assert what it is holding instead of discovering it on a refused call. Two
+identical tokens are refused at boot (`server/src/env.ts`) — the full token
+resolves first, so an identical presenter token would silently be the full
+surface.
+
+The upload sibling `POST /mcp/:token/upload` accepts **either** token: it
+writes an asset and reaches none of the tools the presenter scope withholds.
+
+Restricting the presenter surface to Tailscale is a cloudflared *ingress*
+choice, not something the server enforces — `path` is a regex over the request
+path and cannot tell two secrets apart without a secret in the config file.
+See DEPLOY.md.
+
+Revocation is "rotate the token, restart, re-paste the URL into the connector
+dialog (or into the tutor server's config)." No live-revoke list is needed for
+a single-user tool.
 
 ---
 
@@ -48,7 +78,8 @@ static content:
 
 ```
 readme() -> {
-  node: { protocol_version, bank_size, last_write_at },
+  scope: "full" | "presenter",  // which token surface the caller reached this node through
+  node: { protocol_version, bank_size, last_write_at, tools, tools_version, push },
   workflow: string,               // call bootstrap(subject) next, once per subject touched this session
   prompt_conventions: {...},      // prompt_style, explanation_style, difficulty_scale, mc_choice_count, written_length_target, misconception
   calculator_conventions: string, // calculator_policy vs desmos_allowed — two independent axes, not redundant
@@ -86,18 +117,18 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-37 tools. Every schema is sent on every turn a connector is enabled for,
+37 tools on the full surface, 8 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape), the sorted `tools` list, and `push` |
-| `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject |
-| `list_tags` | Controlled vocabulary listing. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 4), the sorted `tools` list *for the caller's scope*, and `push`. Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes |
+| `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject. Returns `taxonomy: { seeded, seed_available, tag_count }`; `seed: true` creates the subject's shipped taxonomy (`server/src/domain/taxonomies/`, currently `chemistry` — Ebbing 11e ch. 1-12 plus `tech:mhchem`/`tech:calculator` — and `math`), idempotently, so an empty bank gets standard slugs instead of invented near-duplicates |
+| `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
-| `merge_tags` | Vocabulary cleanup |
+| `merge_tags` | Vocabulary cleanup. When **both** slugs are `node:` tags the node keys move too — `question_node_key` rows (collapsing rather than colliding on the `(question_id, node_key)` PK, and promoting the survivor when the merged key was primary) and the singular `question.node_key` — reported as `node_keys_updated`. A merge that isn't `node:`-to-`node:` leaves node keys alone rather than minting an invalid one |
 | `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec. Every row carries `node_keys` (primary first) and `node_key` (the primary). Filters: `node_key` (exact, or prefix when the value ends with `:` — `node:ebbing11e:2.4:` matches everything under that section), `session_id`, and `include_ephemeral` (session-only items are excluded otherwise). Paginated (`limit`/`offset`, default 50); response is `{ total, questions, has_more }` |
 | `get_question` | Full detail for one question — the read path before an edit. Carries `node_keys`, `ephemeral` and `session_id` |
 | `create_questions` | Batched, per-question rejection detail, capped duplicate reports. Batch-level `ephemeral` (requires `session_id`, else `ephemeral_requires_session`) and `idempotency_key` (≤128 chars: a repeated key writes nothing and replays the stored result verbatim with `replayed: true`. The key is *not* fingerprinted against the payload: the same key with a different batch replays the stored result and writes nothing, so mint a fresh key per batch). Per question, `node_keys` — first is primary, each `node:`-prefixed and tag-slug-shaped, else that question is rejected `invalid_node_key`; passing both `node_key` and a disagreeing `node_keys[0]` is `node_key_mismatch`. A choice's `misconception` is optional — missing, null, empty, or the placeholder `"distractor (imported; misconception not recorded)"` all store NULL, which reads as *unknown*, not *none*. A question is never rejected for a missing misconception |
@@ -119,8 +150,8 @@ becoming one larger tool.
 | `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default; the returned snapshot carries `node_keys`/`node_key` |
 | `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
 
-Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
-/mcp/:token/upload` — see §5.
+Plus one plain (non-JSON-RPC) HTTP route on the same route family, `POST
+/mcp/:token/upload`, which accepts either token — see §5.
 
 ### 3.1 Reveal, and who is reading
 

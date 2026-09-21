@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { PROTOCOL_VERSION } from "../protocol.js";
+import { createTag } from "./tags.js";
+import { seedForSubject } from "./taxonomies/index.js";
 
 export interface BootstrapResult {
   node: { protocol_version: number; bank_size: number; last_write_at: string | null };
@@ -12,6 +14,15 @@ export interface BootstrapResult {
     stale_tags: { slug: string; last_seen: string | null }[];
   };
   graph_dsl_reference: string | null;
+  taxonomy: {
+    // True when THIS call created at least one tag — a second seed call on the
+    // same subject reports false, because it created nothing.
+    seeded: boolean;
+    // Whether a shipped seed exists for the resolved subject at all.
+    seed_available: boolean;
+    // Tags under the resolved subject after the call (the same set `tags` lists).
+    tag_count: number;
+  };
 }
 
 // Top-level tag subtrees where graph_spec plausibly comes up — a prefix
@@ -86,7 +97,32 @@ Config directives, one per line anywhere in the spec, "@key: value" (order doesn
   @hide: <name>[,<name>...]   @show: <name>[,<name>...]   hide/show specific named statements or tables
 `.trim();
 
-export function bootstrap(db: DatabaseSync, subject: string | null): BootstrapResult {
+// Creates every tag in the subject's shipped seed that doesn't already exist.
+// Idempotent by construction: existence is checked per slug, so a re-run on a
+// fully seeded subject writes nothing and returns 0.
+function seedTaxonomy(db: DatabaseSync, subject: string | null): number {
+  const seed = seedForSubject(subject);
+  if (!seed) return 0;
+
+  const exists = db.prepare("SELECT slug FROM tag WHERE slug = ?");
+  let created = 0;
+  for (const tag of seed.tags) {
+    if (exists.get(tag.slug)) continue;
+    createTag(db, { slug: tag.slug, label: tag.label, parent_slug: tag.parent_slug ?? null });
+    created += 1;
+  }
+  return created;
+}
+
+export function bootstrap(
+  db: DatabaseSync,
+  subject: string | null,
+  opts: { seed?: boolean } = {}
+): BootstrapResult {
+  // Seeding runs before the taxonomy query below, so the returned `tags` and
+  // `taxonomy.tag_count` describe the bank AFTER this call, not before it.
+  const seededCount = opts.seed ? seedTaxonomy(db, subject) : 0;
+
   const bankSize = (
     db.prepare("SELECT COUNT(*) AS n FROM question WHERE retired_at IS NULL AND ephemeral = 0").get() as { n: number }
   ).n;
@@ -158,5 +194,10 @@ export function bootstrap(db: DatabaseSync, subject: string | null): BootstrapRe
       stale_tags: staleTags,
     },
     graph_dsl_reference: subjectIsGraphCapable(subject) ? GRAPH_DSL_REFERENCE : null,
+    taxonomy: {
+      seeded: seededCount > 0,
+      seed_available: seedForSubject(subject) !== undefined,
+      tag_count: tags.length,
+    },
   };
 }
