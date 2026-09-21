@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { XIcon, CheckIcon } from './icons'
 import { getQuestion, type QuestionDetail as QuestionDetailType } from '../lib/api'
 import QuestionPanel from './QuestionPanel'
+import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
 import './QuestionDetail.css'
 
@@ -52,7 +53,7 @@ export default function QuestionDetail({
         {question && (
           <div className={`question-detail-layout${hasPanel ? ' split' : ''}`}>
           <div className="question-detail-main">
-            <div className="question-detail-prompt">{question.prompt}</div>
+            <RichText className="question-detail-prompt" text={question.prompt} />
 
             <div className="question-detail-meta">
               <span className="question-detail-badge">difficulty {question.difficulty}</span>
@@ -70,22 +71,22 @@ export default function QuestionDetail({
                 {question.choices.map((c) => (
                   <div className={`question-detail-choice${c.is_correct ? ' correct' : ''}`} key={c.id}>
                     {c.is_correct && <CheckIcon size={13} />}
-                    <span>{c.body}</span>
+                    <RichText inline text={c.body} />
                   </div>
                 ))}
               </div>
             ) : (
               <div className="question-detail-written">
                 <div className="question-detail-label">Model answer</div>
-                <div className="question-detail-text">{question.model_answer}</div>
-                {question.rubric && <div className="question-detail-rubric">Rubric: {question.rubric}</div>}
+                <RichText className="question-detail-text" text={question.model_answer ?? ''} />
+                {question.rubric && <div className="question-detail-rubric">Rubric: <RichText inline text={question.rubric} /></div>}
               </div>
             )}
 
             {question.explanation && (
               <div className="question-detail-section">
                 <div className="question-detail-label">Explanation</div>
-                <div className="question-detail-text">{question.explanation}</div>
+                <RichText className="question-detail-text" text={question.explanation} />
               </div>
             )}
 

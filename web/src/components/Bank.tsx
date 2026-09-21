@@ -3,6 +3,7 @@ import { TagIcon, ChevronRightIcon, ChartIcon, CalcIcon, BookIcon } from './icon
 import { getTags, getQuestions, type TagSummary, type QuestionSummary } from '../lib/api'
 import TagDetail from './TagDetail'
 import QuestionDetail from './QuestionDetail'
+import RichText from './RichText'
 import './Bank.css'
 
 const TYPE_LABEL: Record<QuestionSummary['type'], string> = { mc: 'MC', written: 'Written' }
@@ -134,7 +135,7 @@ export default function Bank() {
                   )}
                 </div>
               </div>
-              <div className="bank-question-prompt">{q.prompt}</div>
+              <RichText className="bank-question-prompt" text={q.prompt} />
               <div className="bank-question-tags">{q.tags.join(' · ')}</div>
             </div>
           ))}

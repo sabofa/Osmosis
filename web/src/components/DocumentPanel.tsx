@@ -1,6 +1,7 @@
 import React, { Suspense, useEffect, useState } from 'react'
 import { getAsset, assetDownloadUrl, getDocumentMarkers, type Asset, type DocumentMarker as ApiDocumentMarker } from '../lib/api'
 import { useTheme } from '../hooks/useTheme'
+import { useDocumentFont } from '../hooks/useDocumentFont'
 import { DownloadIcon } from './icons'
 import type { DocumentRenderError } from 'document-engine'
 // document-engine's Vite library build extracts CSS into its own file rather
@@ -32,6 +33,11 @@ export default function DocumentPanel({
   const [markers, setMarkers] = useState<ApiDocumentMarker[]>([])
   const [error, setError] = useState<string | null>(null)
   const { resolvedMode } = useTheme()
+  // The reader's chosen document font (Settings › Appearance). Applied on the
+  // panel root so everything the viewer renders inherits it; data-doc-font
+  // also lets index.css nudge katex's size to match the surrounding prose.
+  const { font: docFont, fontFamily } = useDocumentFont()
+  const fontStyle = fontFamily ? { fontFamily } : undefined
 
   useEffect(() => {
     setAsset(null)
@@ -59,7 +65,7 @@ export default function DocumentPanel({
 
   if (asset.type === 'url') {
     return (
-      <div className="document-panel no-scrollbar">
+      <div className="document-panel no-scrollbar" data-doc-font={docFont} style={fontStyle}>
         <div className="document-panel-frame-wrap">
           <iframe className="document-panel-frame" src={asset.content ?? undefined} title={asset.title} />
           <a className="document-panel-fallback-link" href={asset.content ?? undefined} target="_blank" rel="noreferrer">
@@ -79,7 +85,7 @@ export default function DocumentPanel({
   }
 
   return (
-    <div className="document-panel no-scrollbar">
+    <div className="document-panel no-scrollbar" data-doc-font={docFont} style={fontStyle}>
       <div className="document-panel-header">
         <span className="document-panel-title">{asset.title}</span>
         {asset.type === 'file' && (

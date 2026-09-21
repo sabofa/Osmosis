@@ -4,6 +4,7 @@ import { answerResponse, submitAttempt, type AttemptDetail } from '../lib/api'
 import { iconForTags } from '../lib/templateView'
 import QuestionPanel from './QuestionPanel'
 import QuestionDetail from './QuestionDetail'
+import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
 import './Take.css'
 
@@ -308,7 +309,7 @@ export default function Take({
                 Question {index + 1} of {questions.length}
               </span>
             </div>
-            <div className="question-prompt">{question.prompt}</div>
+            <RichText className="question-prompt" text={question.prompt} />
 
             {question.type === 'mc' ? (
               <>
@@ -318,7 +319,7 @@ export default function Take({
                     return (
                       <button key={c.id} className={cls} onClick={() => selectChoice(c.id)}>
                         <span className="choice-letter">{LETTERS[i]}</span>
-                        {c.body}
+                        <RichText inline text={c.body} />
                       </button>
                     )
                   })}

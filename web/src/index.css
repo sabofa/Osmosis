@@ -159,3 +159,11 @@ html::-webkit-scrollbar {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* The document viewer's font is chosen per reader (Settings › Appearance).
+   katex's default sizing is tuned for body text at 1em; serif/mono document
+   fonts read a touch smaller next to it, so nudge the math up to match. */
+[data-doc-font='serif'] .katex,
+[data-doc-font='mono'] .katex {
+  font-size: 1.05em;
+}

@@ -4,6 +4,7 @@ import { gradeResponse, type AttemptDetail, type AttemptResponse } from '../lib/
 import { iconForTags } from '../lib/templateView'
 import QuestionPanel from './QuestionPanel'
 import QuestionDetail from './QuestionDetail'
+import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
 import './Review.css'
 
@@ -119,7 +120,7 @@ export default function Review({
               <div className="review-detail-kicker">
                 Question {index + 1} of {questions.length} &middot; {question.tags[0] ?? 'general'}
               </div>
-              <div className="review-detail-prompt">{question.prompt}</div>
+              <RichText className="review-detail-prompt" text={question.prompt} />
             </div>
             {verdict && (
               <span className={`review-verdict-badge ${verdict}`}>
@@ -139,7 +140,7 @@ export default function Review({
                 if (c.id === response.selected_choice_id && c.id !== correctChoiceId) cls += ' incorrect'
                 return (
                   <div className={cls} key={c.id}>
-                    <span>{c.body}</span>
+                    <RichText inline text={c.body} />
                     {c.id === response.selected_choice_id && <span className="review-choice-tag">your answer</span>}
                     {c.id === correctChoiceId && <span className="review-choice-tag">correct</span>}
                   </div>
@@ -154,17 +155,17 @@ export default function Review({
               </div>
               <div className="review-written-col">
                 <div className="review-written-kicker">Model answer</div>
-                <div className="review-written-text">{question.model_answer}</div>
+                <RichText className="review-written-text" text={question.model_answer ?? ''} />
                 {question.rubric != null && (
                   <div className="review-written-rubric">
-                    Rubric: {typeof question.rubric === 'string' ? question.rubric : JSON.stringify(question.rubric)}
+                    Rubric: <RichText inline text={typeof question.rubric === 'string' ? question.rubric : JSON.stringify(question.rubric)} />
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          <div className="review-explanation">{question.explanation}</div>
+          <RichText className="review-explanation" text={question.explanation ?? ''} />
 
           {question.type === 'written' && (
             <div className="review-grade-actions">

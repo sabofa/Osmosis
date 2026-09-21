@@ -16,6 +16,7 @@ import {
   FolderIcon,
 } from './icons'
 import type { useTheme, ThemeChoice } from '../hooks/useTheme'
+import { useDocumentFont, DOCUMENT_FONT_OPTIONS } from '../hooks/useDocumentFont'
 import type { useThemePresets, ThemePreset } from '../hooks/useThemePresets'
 import ThemeEditor from './ThemeEditor'
 import AssetViewer from './AssetViewer'
@@ -334,6 +335,7 @@ export default function Settings({
   const { theme, setTheme, resolvedMode } = themeApi
   const { themes, activeId, setActiveId, saveTheme, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
+  const { font: docFont, setFont: setDocFont } = useDocumentFont()
   const [status, setStatus] = useState<NodeStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [config, setConfigState] = useState<Record<string, unknown> | null>(null)
@@ -587,6 +589,26 @@ export default function Settings({
                 onClick={() => setTheme(opt.value)}
               >
                 {opt.icon}
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="settings-row">
+          <div className="settings-row-main">
+            <div>
+              <div className="settings-row-title">Document font</div>
+              <div className="settings-row-sub">the typeface documents are read in</div>
+            </div>
+          </div>
+          <div className="theme-toggle">
+            {DOCUMENT_FONT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                className={`theme-toggle-btn${docFont === opt.value ? ' active' : ''}`}
+                onClick={() => setDocFont(opt.value)}
+              >
                 {opt.label}
               </button>
             ))}
