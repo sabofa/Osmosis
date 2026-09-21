@@ -220,3 +220,65 @@
   color: var(--muted);
   padding: 20px 4px;
 }
+
+/* ---- Folding parent tags ----------------------------------------------- */
+
+.bank-fold-all {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.bank-fold-btn {
+  border: 2px solid var(--line);
+  background: none;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.bank-fold-btn:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.bank-fold-toggle {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.bank-fold-toggle:hover {
+  background: var(--accent-wash);
+  color: var(--ink);
+}
+
+.bank-fold-spacer {
+  flex-shrink: 0;
+  width: 20px;
+}
+
+.bank-tag-row.folded .bank-tag-name {
+  font-weight: 700;
+}
+
+.bank-tag-folded-count {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+}

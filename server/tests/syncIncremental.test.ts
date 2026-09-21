@@ -4,7 +4,7 @@ import { buildPullResponse, applyPullResponse } from "../src/domain/sync.js";
 import { createQuestions, editQuestion } from "../src/domain/questions.js";
 import { createTemplate, retireTemplate } from "../src/domain/templates.js";
 import { mergeTags } from "../src/domain/tags.js";
-import { writeModelGrade } from "../src/domain/modelGrading.js";
+import { gradeResponseByTutor } from "../src/domain/attempts.js";
 import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 
 const NODE = "local-1";
@@ -98,7 +98,7 @@ describe("incremental pull: changes that must survive a since-cursor", () => {
   // and sync is jammed on every subsequent run. syncDurability's test 8
   // covers this only when the self-grade's graded_at happens to fall inside
   // the since window; a grade pushed days before the model sweep does not.
-  it("a model grade superseding an old self-grade applies cleanly on an incremental pull", () => {
+  it("a tutor grade superseding an old self-grade applies cleanly on an incremental pull", () => {
     const canonical = openTestDb();
     insertTag(canonical, "w");
     const q = insertQuestion(canonical, { type: "written", tags: ["w"] });
@@ -123,7 +123,7 @@ describe("incremental pull: changes that must survive a since-cursor", () => {
       ).run(selfGradeId, responseId);
     }
 
-    writeModelGrade(canonical, responseId, { score: 0.9, feedback: "ok" });
+    gradeResponseByTutor(canonical, responseId, { grader: "judge", score: 0.9 });
 
     const incremental = pull(canonical, ["w"], "2026-06-01 00:00:00", true);
     expect(incremental.grades.map((g) => g.id)).toContain(selfGradeId);
@@ -132,6 +132,6 @@ describe("incremental pull: changes that must survive a since-cursor", () => {
     const live = local
       .prepare("SELECT grader FROM grade WHERE response_id = ? AND superseded_at IS NULL")
       .get(responseId) as { grader: string };
-    expect(live.grader).toBe("model");
+    expect(live.grader).toBe("judge");
   });
 });

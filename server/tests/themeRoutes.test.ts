@@ -23,7 +23,7 @@ describe("theme routes on canonical", () => {
   it("PUT/GET/active/DELETE round-trip with domain errors mapped to 4xx", async () => {
     const db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
-                  uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
+                  uploadsDir: "/tmp", mcpAuthToken: "t", webDistDir: null };
     const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
     await app.ready();
 
@@ -61,13 +61,13 @@ describe("theme writes from a local node", () => {
   it("forward to canonical when online, mirror canonical's row locally, refuse offline, and pull converges", async () => {
     const canonicalDb = openFileDb(dir, "c.db");
     const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c.db"), remoteUrl: null,
-                   uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
+                   uploadsDir: dir, mcpAuthToken: "t", webDistDir: null };
     const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openFileDb(dir, "l.db");
     const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l.db"), remoteUrl: canonicalUrl,
-                  uploadsDir: dir, mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
+                  uploadsDir: dir, mcpAuthToken: null, webDistDir: null };
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node: bootstrapNode(localDb, env), runtime };
     const app = buildApp({ ...ctx, logger: false });

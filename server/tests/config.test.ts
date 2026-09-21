@@ -2,19 +2,17 @@ import { describe, it, expect } from "vitest";
 import { getConfig, setConfig } from "../src/domain/config.js";
 import { openTestDb } from "./helpers.js";
 
-describe("model_grader_daily_limit config key", () => {
-  it("is seeded to 20 by the migration and is settable over the normal config API", () => {
+describe("the model grader's config keys are gone", () => {
+  it("get_config no longer carries written_grader or model_grader_daily_limit", () => {
     const db = openTestDb();
-    expect(getConfig(db).model_grader_daily_limit).toBe(20);
-
-    setConfig(db, "model_grader_daily_limit", 5);
-    expect(getConfig(db).model_grader_daily_limit).toBe(5);
+    const config = getConfig(db);
+    expect(config).not.toHaveProperty("written_grader");
+    expect(config).not.toHaveProperty("model_grader_daily_limit");
   });
-});
 
-describe("written_grader default correction", () => {
-  it("defaults to self_only, not the old inert model_when_online seed", () => {
+  it("set_config refuses them as unknown keys", () => {
     const db = openTestDb();
-    expect(getConfig(db).written_grader).toBe("self_only");
+    expect(() => setConfig(db, "model_grader_daily_limit", 5)).toThrow(/not a known/);
+    expect(() => setConfig(db, "written_grader", "self_only")).toThrow(/not a known/);
   });
 });

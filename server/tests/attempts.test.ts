@@ -135,7 +135,7 @@ describe("grade supersede rules", () => {
     expect(supersededFirst.superseded_at).not.toBeNull();
   });
 
-  it("refuses a plain self-grade over a live model grade without override", () => {
+  it("refuses a plain self-grade over a live tutor grade without override", () => {
     const db = openTestDb();
     insertTag(db, "a");
     const q = insertQuestion(db, { tags: ["a"], type: "written" });
@@ -149,7 +149,7 @@ describe("grade supersede rules", () => {
       attemptId,
       q.id
     );
-    db.prepare("INSERT INTO grade (id, response_id, grader, score, model_name) VALUES ('m1', ?, 'model', 0.8, 'test-model')").run(
+    db.prepare("INSERT INTO grade (id, response_id, grader, score, model_name) VALUES ('m1', ?, 'judge', 0.8, NULL)").run(
       responseId
     );
 

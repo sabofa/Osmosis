@@ -24,7 +24,6 @@ const env: EnvConfig = {
   remoteUrl: null,
   uploadsDir: ".",
   mcpAuthToken: "test-token-123",
-  deepseekApiKey: null,
   webDistDir: null,
 };
 

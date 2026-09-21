@@ -13,7 +13,6 @@ export interface EnvConfig {
   // literals that predate it stay valid; undefined and null both mean the
   // presenter surface is off.
   mcpPresenterToken?: string | null;
-  deepseekApiKey: string | null;
   // Absolute path of the built web app (web/dist). When set, the server
   // serves it at / so a deployment is one process on one port and the app's
   // /api calls are same-origin with no proxy in front. Unset in dev, where
@@ -72,7 +71,6 @@ export function loadEnvConfig(): EnvConfig {
     uploadsDir,
     mcpAuthToken,
     mcpPresenterToken,
-    deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? null,
     webDistDir: process.env.WEB_DIST_DIR ? resolve(process.env.WEB_DIST_DIR) : null,
   };
 }

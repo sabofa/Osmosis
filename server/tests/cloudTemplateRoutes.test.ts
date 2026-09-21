@@ -28,13 +28,13 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     for (let i = 0; i < 4; i++) insertQuestion(canonicalDb, { tags: ["geo"] });
     const template = createTemplate(canonicalDb, { name: "geo test", tag_query: { all: ["geo"] }, question_count: 2 });
     const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c.db"), remoteUrl: null,
-                   uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
+                   uploadsDir: dir, mcpAuthToken: "t", webDistDir: null };
     const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openFileDb(dir, "l.db");
     const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l.db"), remoteUrl: canonicalUrl,
-                  uploadsDir: dir, mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
+                  uploadsDir: dir, mcpAuthToken: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };
@@ -86,7 +86,7 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     insertQuestion(canonicalDb, { tags: ["geo2"] });
     const template = createTemplate(canonicalDb, { name: "geo2 test", tag_query: { all: ["geo2"] }, question_count: 1 });
     const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c2.db"), remoteUrl: null,
-                   uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
+                   uploadsDir: dir, mcpAuthToken: "t", webDistDir: null };
     const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
@@ -95,7 +95,7 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     // connectivity check having passed, but every actual fetch (template-draw
     // included) hits a real connection refusal, not an HTTP error response.
     const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l2.db"), remoteUrl: "http://127.0.0.1:1",
-                  uploadsDir: dir, mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
+                  uploadsDir: dir, mcpAuthToken: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };

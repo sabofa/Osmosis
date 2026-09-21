@@ -46,7 +46,6 @@ describe("presenter-token MCP scope", () => {
       uploadsDir,
       mcpAuthToken: FULL,
       mcpPresenterToken: PRESENTER,
-      deepseekApiKey: null,
       webDistDir: null,
     };
     const node = bootstrapNode(db, env);
@@ -118,11 +117,11 @@ describe("presenter-token MCP scope", () => {
 
 describe("PRESENTER_TOOLS allowlist", () => {
   // The concrete list, not a membership check: DEPLOY.md, MCP-SPEC.md and
-  // server/.env.canonical.example all spell these eleven names out in prose,
+  // server/.env.canonical.example all spell these twelve names out in prose,
   // and prose has no other way to notice that the allowlist grew. Change the
   // allowlist and this test fails; fix this test and the docs are next to it
   // in the diff.
-  it("is exactly the eleven tools the deploy docs name", () => {
+  it("is exactly the twelve tools the deploy docs name", () => {
     expect([...PRESENTER_TOOLS].sort()).toEqual([
       "await_item_outcome",
       "await_show_outcome",
@@ -131,6 +130,7 @@ describe("PRESENTER_TOOLS allowlist", () => {
       "end_session",
       "get_attempt",
       "grade_response",
+      "list_ungraded_written",
       "present_item",
       "present_show",
       "readme",

@@ -80,7 +80,7 @@ anything it doesn't recognise — the same bare 404 a wrong token has always got
 | Env var | Scope | Tools |
 |---|---|---|
 | `MCP_AUTH_TOKEN` | `full` | everything (the authoring connector) |
-| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response` |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`, `list_ungraded_written` |
 
 `install.sh` generates both on first run. **The tutor server gets only
 `MCP_PRESENTER_TOKEN`** — it runs the live teaching loop and never needs to
@@ -144,11 +144,6 @@ Update canonical before any local node: local nodes call `/sync/*` routes
 (template-draw, daily-draw) that a not-yet-updated canonical won't have, and a
 local node ahead of canonical sees cloud tests fail as "needs a connection".
 
-## Optional: model grading
-
-Add `DEEPSEEK_API_KEY=...` to `/etc/osmosis/canonical.env`, then
-`sudo systemctl restart osmosis`, then flip "Written grading" to "Model when
-online" in the app's Settings.
 
 ## Backups
 

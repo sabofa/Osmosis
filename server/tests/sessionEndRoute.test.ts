@@ -20,7 +20,7 @@ describe("POST /api/sessions/:id/end", () => {
     db = openTestDb();
     const env = {
       role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
-      remoteUrl: null, uploadsDir: ".", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null,
+      remoteUrl: null, uploadsDir: ".", mcpAuthToken: "t", webDistDir: null,
     };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });

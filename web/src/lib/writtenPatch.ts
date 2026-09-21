@@ -7,7 +7,7 @@
 // item sends `skipped: true`, and every later save that does not mention
 // `skipped` leaves the response marked as a deliberate blank no matter what
 // the learner went on to type. A skipped row is invisible to model grading
-// (`server/src/domain/modelGrading.ts` selects on `skipped = 0`) and reads back
+// (a skipped row is never offered for grading) and reads back
 // from `get_attempt` as "skipped" beside the text it is carrying.
 //
 // So every write of the text says what the text means: something in the box is

@@ -700,69 +700,6 @@ export default function Settings({
         )}
       </div>
 
-      <div className="settings-section">
-        <div className="settings-section-title">Grading</div>
-        <div className="settings-row">
-          <div className="settings-row-main">
-            <div>
-              <div className="settings-row-title">Written grading</div>
-              <div className="settings-row-sub">
-                {isCanonical
-                  ? config
-                    ? config.written_grader === 'model_when_online'
-                      ? 'model grades written answers when online'
-                      : 'self-graded only'
-                    : 'loading…'
-                  : 'set on the canonical node'}
-              </div>
-            </div>
-          </div>
-          <div className="theme-toggle">
-            {(['self_only', 'model_when_online'] as const).map((mode) => (
-              <button
-                key={mode}
-                className={`theme-toggle-btn${config?.written_grader === mode ? ' active' : ''}`}
-                disabled={!isCanonical}
-                onClick={async () => {
-                  if (!isCanonical) return
-                  await setConfig('written_grader', mode)
-                  setConfigState((c) => (c ? { ...c, written_grader: mode } : c))
-                }}
-              >
-                {mode === 'self_only' ? 'Self only' : 'Model when online'}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <NumberSetting
-          configKey="model_grader_daily_limit"
-          label="Daily grading cap"
-          sub={isCanonical ? 'max DeepSeek calls per rolling 24h' : 'set on the canonical node'}
-          suffix="grades/day"
-          min={0}
-          max={1000}
-          value={config ? (config.model_grader_daily_limit as number) : null}
-          onSaved={(key, value) => setConfigState((c) => (c ? { ...c, [key]: value } : c))}
-          disabled={!isCanonical}
-        />
-
-        <div className="settings-row">
-          <div className="settings-row-main">
-            <div>
-              <div className="settings-row-title">Grading usage</div>
-              <div className="settings-row-sub">
-                {status
-                  ? status.model_grading_configured
-                    ? `${status.model_grades_today} of ${config ? (config.model_grader_daily_limit as number) : '—'} used today`
-                    : 'not configured (no DEEPSEEK_API_KEY set)'
-                  : 'loading…'}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <AssetsSection />
 
       <div className="settings-sync">

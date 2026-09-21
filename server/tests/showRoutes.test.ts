@@ -29,7 +29,6 @@ describe("the show routes", () => {
       remoteUrl: null,
       uploadsDir: ".",
       mcpAuthToken: "t",
-      deepseekApiKey: null,
       webDistDir: null,
     };
     const node = bootstrapNode(db, env);

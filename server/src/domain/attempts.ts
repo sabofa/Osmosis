@@ -1151,10 +1151,12 @@ export function gradeResponse(
   if (live?.grader === "auto_mc") {
     throw new DomainError("not_self_gradable", "This response was auto-graded (mc) and cannot be self-graded.");
   }
-  if (live?.grader === "model" && !input.override) {
+  // A tutor's verdict (oracle/judge over MCP) outranks a self-grade: the
+  // learner may look, but not overwrite it from the review screen.
+  if ((live?.grader === "oracle" || live?.grader === "judge") && !input.override) {
     throw new DomainError(
-      "model_grade_live",
-      "A model grade is live for this response. Pass override: true to manually replace it."
+      "tutor_grade_live",
+      "The tutor graded this response. Pass override: true to replace that grade."
     );
   }
 
@@ -1197,6 +1199,110 @@ export function gradeResponse(
 // or judge (the tutor is judging a written answer) verdict, plus the one-line
 // diagnosis that goes back on the response itself.
 // ----------------------------------------------------------------------------
+
+// Written answers waiting for a verdict — the read half of grading over MCP.
+// A connected Claude lists these, reads each answer beside its rubric and
+// model answer, and calls grade_response. Self-graded answers are included by
+// default (a learner's own mark is a claim a tutor may still check); answers
+// already graded by a tutor are not.
+export interface UngradedWrittenRow {
+  response_id: string;
+  attempt_id: string;
+  session_id: string | null;
+  submitted_at: string;
+  question_id: string;
+  prompt: string;
+  model_answer: string | null;
+  rubric: unknown;
+  explanation: string | null;
+  tags: string[];
+  response_text: string | null;
+  idk: boolean;
+  confidence: string | null;
+  misapplied_method: string | null;
+  elapsed_ms: number | null;
+  self_grade: { score: number | null; graded_at: string } | null;
+}
+
+export function listUngradedWritten(
+  db: DatabaseSync,
+  opts: { session_id?: string; include_self_graded?: boolean; limit?: number } = {}
+): { total: number; responses: UngradedWrittenRow[] } {
+  const includeSelf = opts.include_self_graded ?? true;
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 25));
+  const where: string[] = [
+    "q.type = 'written'",
+    "a.submitted_at IS NOT NULL",
+    "r.skipped = 0",
+    "(TRIM(COALESCE(r.response_text, '')) <> '' OR r.idk = 1)",
+    // No live grade from a tutor; a self grade is allowed through when asked.
+    "NOT EXISTS (SELECT 1 FROM grade g WHERE g.response_id = r.id AND g.superseded_at IS NULL AND g.grader IN ('oracle','judge','model','auto_mc'))",
+  ];
+  const params: unknown[] = [];
+  if (!includeSelf) {
+    where.push("NOT EXISTS (SELECT 1 FROM grade g WHERE g.response_id = r.id AND g.superseded_at IS NULL)");
+  }
+  if (opts.session_id) {
+    where.push("a.session_id = ?");
+    params.push(opts.session_id);
+  }
+  const base = `FROM response r
+       JOIN attempt a ON a.id = r.attempt_id
+       JOIN question q ON q.id = r.question_id
+       WHERE ${where.join(" AND ")}`;
+  const total = (db.prepare(`SELECT COUNT(*) AS n ${base}`).get(...(params as never[])) as { n: number }).n;
+  const rows = db
+    .prepare(
+      `SELECT r.id AS response_id, a.id AS attempt_id, a.session_id, a.submitted_at,
+              q.id AS question_id, q.prompt, q.model_answer, q.rubric, q.explanation,
+              r.response_text, r.idk, r.confidence, r.misapplied_method, r.elapsed_ms,
+              (SELECT g.score FROM grade g WHERE g.response_id = r.id AND g.superseded_at IS NULL AND g.grader = 'self') AS self_score,
+              (SELECT g.graded_at FROM grade g WHERE g.response_id = r.id AND g.superseded_at IS NULL AND g.grader = 'self') AS self_graded_at
+       ${base}
+       ORDER BY a.submitted_at ASC, r.ordinal ASC
+       LIMIT ?`
+    )
+    .all(...(params as never[]), limit) as {
+    response_id: string;
+    attempt_id: string;
+    session_id: string | null;
+    submitted_at: string;
+    question_id: string;
+    prompt: string;
+    model_answer: string | null;
+    rubric: string | null;
+    explanation: string | null;
+    response_text: string | null;
+    idk: number;
+    confidence: string | null;
+    misapplied_method: string | null;
+    elapsed_ms: number | null;
+    self_score: number | null;
+    self_graded_at: string | null;
+  }[];
+  const tagStmt = db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ? ORDER BY tag_slug");
+  return {
+    total,
+    responses: rows.map((r) => ({
+      response_id: r.response_id,
+      attempt_id: r.attempt_id,
+      session_id: r.session_id,
+      submitted_at: r.submitted_at,
+      question_id: r.question_id,
+      prompt: r.prompt,
+      model_answer: r.model_answer,
+      rubric: r.rubric ? JSON.parse(r.rubric) : null,
+      explanation: r.explanation,
+      tags: (tagStmt.all(r.question_id) as { tag_slug: string }[]).map((t) => t.tag_slug),
+      response_text: r.response_text,
+      idk: r.idk === 1,
+      confidence: r.confidence,
+      misapplied_method: r.misapplied_method,
+      elapsed_ms: r.elapsed_ms,
+      self_grade: r.self_graded_at ? { score: r.self_score, graded_at: r.self_graded_at } : null,
+    })),
+  };
+}
 
 export interface TutorGradeInput {
   grader: "oracle" | "judge";

@@ -7,6 +7,7 @@ import QuestionPanel from './QuestionPanel'
 import QuestionDetail from './QuestionDetail'
 import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
+import { rubricLines } from '../lib/rubric'
 import './Review.css'
 
 type Verdict = 'correct' | 'partial' | 'incorrect'
@@ -28,6 +29,9 @@ export default function Review({
 }) {
   const [index, setIndex] = useState(0)
   const [grading, setGrading] = useState(false)
+  // Which rubric lines the learner ticked, per response — a scratchpad for
+  // self-grading, never sent anywhere.
+  const [rubricTicks, setRubricTicks] = useState<Record<string, Set<number>>>({})
   const [jumpQuestionId, setJumpQuestionId] = useState<string | null>(null)
   const questions = attempt.responses
   const response = questions[index]
@@ -83,6 +87,26 @@ export default function Review({
     } finally {
       setGrading(false)
     }
+  }
+
+  const rubricItems = useMemo(() => rubricLines(question.rubric), [question.rubric])
+  const rubricTicked = rubricTicks[response.id]?.size ?? 0
+  const rubricSuggested: Verdict | null =
+    rubricItems.length === 0 || rubricTicked === 0
+      ? rubricItems.length === 0
+        ? null
+        : 'incorrect'
+      : rubricTicked === rubricItems.length
+        ? 'correct'
+        : 'partial'
+
+  function toggleRubric(i: number) {
+    setRubricTicks((prev) => {
+      const next = new Set(prev[response.id] ?? [])
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return { ...prev, [response.id]: next }
+    })
   }
 
   // Only ever present on a revealed payload; under a hold the choices come
@@ -172,18 +196,39 @@ export default function Review({
               {!held && (
                 <div className="review-written-col">
                   <div className="review-written-kicker">Model answer</div>
-                  <RichText className="review-written-text" text={question.model_answer ?? ''} />
-                  {question.rubric != null && (
-                    <div className="review-written-rubric">
-                      Rubric:{' '}
-                      <RichText
-                        inline
-                        text={typeof question.rubric === 'string' ? question.rubric : JSON.stringify(question.rubric)}
-                      />
-                    </div>
-                  )}
+                  <RichText className="review-written-text" text={question.model_answer ?? '(no model answer written)'} />
                 </div>
               )}
+            </div>
+          )}
+
+          {question.type === 'written' && !held && rubricItems.length > 0 && (
+            <div className="review-rubric">
+              <div className="review-diagnosis-label">Rubric — tick what your answer covered</div>
+              <ul className="review-rubric-list">
+                {rubricItems.map((item, i) => (
+                  <li key={i}>
+                    <label className="review-rubric-item">
+                      <input
+                        type="checkbox"
+                        checked={rubricTicks[response.id]?.has(i) ?? false}
+                        onChange={() => toggleRubric(i)}
+                      />
+                      <RichText inline className="review-rubric-text" text={item.text} />
+                      {item.points != null && <span className="review-rubric-points">{item.points} pt</span>}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <div className="review-rubric-foot">
+                {rubricTicked} of {rubricItems.length} covered
+                {rubricSuggested !== null && (
+                  <>
+                    {' '}
+                    &middot; suggests <strong>{rubricSuggested}</strong>
+                  </>
+                )}
+              </div>
             </div>
           )}
 

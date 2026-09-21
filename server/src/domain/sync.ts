@@ -441,9 +441,13 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
 
   const grades: PullResponse["grades"] = [];
   if (request.include_grades_for_node) {
+    // Grades that only ever originate on canonical — a tutor's oracle/judge
+    // verdict over MCP (and historical model grades) — travel down to the
+    // node that owns the attempt, together with every supersede.
+    //
     // A supersede is a change to an OLD row: the self-grade being superseded
     // may have been graded (and pushed) long before this cursor. If only
-    // graded_at were checked, the local node would receive the new live model
+    // graded_at were checked, the local node would receive the new live tutor
     // grade but not the supersede of its own still-live self-grade, collide
     // on grade_one_live_per_response, roll the whole pull back, and stay
     // jammed on every subsequent sync.
@@ -453,7 +457,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
        FROM grade g
        JOIN response r ON r.id = g.response_id
        JOIN attempt a ON a.id = r.attempt_id
-       WHERE a.node_id = ? AND (g.grader = 'model' OR g.superseded_at IS NOT NULL)
+       WHERE a.node_id = ? AND (g.grader IN ('model', 'oracle', 'judge') OR g.superseded_at IS NOT NULL)
        ${gradeSinceClause}
        ORDER BY g.id`
     );

@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "./errors.js";
 
-// Every key that may be present in `config`, minus any future secret keys
-// (model_grader_api_key, model_grader_name) which set_config refuses over MCP
-// per spec 9.13 and are never exposed here either.
+// Every key that may be present in `config`. Written answers are graded by
+// the learner (self) or by a tutor over MCP (grade_response); there is no
+// model grader and no key for one.
 const ALLOWED_KEYS = new Set([
   "default_weighting",
   "daily_question_weighting",
@@ -12,8 +12,6 @@ const ALLOWED_KEYS = new Set([
   "daily_exclusion_days",
   "daily_tag_filter",
   "daily_timezone",
-  "written_grader",
-  "model_grader_daily_limit",
   "synced_attempt_retention_days",
   "duplicate_similarity_threshold",
   "abandon_after_hours",

@@ -10,7 +10,7 @@ import { runSync, createSyncRuntime } from "../src/sync/client.js";
 import { addSlice, removeSlice, applyPushRequest } from "../src/domain/sync.js";
 import { createTemplate } from "../src/domain/templates.js";
 import { createAttempt, submitAttempt } from "../src/domain/attempts.js";
-import { sweepModelGrading } from "../src/domain/modelGrading.js";
+import { gradeResponseByTutor } from "../src/domain/attempts.js";
 import { insertTag, insertQuestion } from "./helpers.js";
 import { v4 as uuidv4 } from "uuid";
 
@@ -40,8 +40,7 @@ describe("sync durability (spec exit criteria)", () => {
       dbPath: join(dir, dbFile),
       remoteUrl: null,
       uploadsDir: dir,
-      mcpAuthToken: "t",
-      deepseekApiKey: null, webDistDir: null,
+      mcpAuthToken: "t", webDistDir: null,
     };
     const node = bootstrapNode(db, env);
     const app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
@@ -57,8 +56,7 @@ describe("sync durability (spec exit criteria)", () => {
       dbPath: join(dir, dbFile),
       remoteUrl,
       uploadsDir: dir,
-      mcpAuthToken: null,
-      deepseekApiKey: null, webDistDir: null,
+      mcpAuthToken: null, webDistDir: null,
     };
     const node = bootstrapNode(db, env);
     return { db, env, node, runtime: createSyncRuntime() };
@@ -240,7 +238,7 @@ describe("sync durability (spec exit criteria)", () => {
   // Regression for the critical pull-path bug: a model grade superseding a
   // local node's own live self-grade must apply cleanly on the next pull,
   // not throw on grade_one_live_per_response and jam sync permanently.
-  it("8. a model grade superseding a node's own live self-grade applies cleanly on the next pull", async () => {
+  it("8. a tutor grade superseding a node's own live self-grade applies cleanly on the next pull", async () => {
     const canonical = await startCanonical("c8.db");
     insertTag(canonical.db, "wgr");
     const q = insertQuestion(canonical.db, { type: "written", tags: ["wgr"] });
@@ -293,20 +291,14 @@ describe("sync durability (spec exit criteria)", () => {
     await runSync(ctx, ctx.runtime); // push the self-graded response up to canonical
     expect(canonical.db.prepare("SELECT id FROM response WHERE id = ?").get(responseId)).toBeTruthy();
 
-    // Canonical's model-grading sweep supersedes the pushed self-grade.
-    const fetchImpl = (async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: { content: JSON.stringify({ score: 0.9, feedback: "well explained" }) } }] }),
-    })) as unknown as typeof fetch;
-    const sweepResult = await sweepModelGrading(canonical.db, "test-key", 20, fetchImpl);
-    expect(sweepResult.graded).toBe(1);
+    // A tutor's grade over MCP on canonical supersedes the pushed self-grade.
+    gradeResponseByTutor(canonical.db, responseId, { grader: "judge", score: 0.9, diagnosis: "well explained" });
     const canonicalLive = canonical.db
       .prepare("SELECT grader FROM grade WHERE response_id = ? AND superseded_at IS NULL")
       .get(responseId) as { grader: string };
-    expect(canonicalLive.grader).toBe("model");
+    expect(canonicalLive.grader).toBe("judge");
 
-    // The next pull must apply the supersede + new live model grade without throwing.
+    // The next pull must apply the supersede + new live tutor grade without throwing.
     await expect(runSync(ctx, ctx.runtime)).resolves.not.toThrow();
 
     const localSelfGrade = localDb.prepare("SELECT superseded_at FROM grade WHERE id = ?").get(gradeId) as {
@@ -317,7 +309,7 @@ describe("sync durability (spec exit criteria)", () => {
     const localLive = localDb
       .prepare("SELECT grader FROM grade WHERE response_id = ? AND superseded_at IS NULL")
       .get(responseId) as { grader: string };
-    expect(localLive.grader).toBe("model");
+    expect(localLive.grader).toBe("judge");
 
     const state = localDb.prepare("SELECT last_error FROM sync_state WHERE id = 1").get() as { last_error: string | null };
     expect(state.last_error).toBeNull();

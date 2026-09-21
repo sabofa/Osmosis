@@ -14,7 +14,7 @@ afterAll(() => rmSync(dist, { recursive: true, force: true }));
 function envFor(webDistDir: string | null): EnvConfig {
   return {
     role: "canonical", label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
-    uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir,
+    uploadsDir: "/tmp", mcpAuthToken: "t", webDistDir,
   };
 }
 

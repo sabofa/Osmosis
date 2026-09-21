@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { TagIcon, ChevronRightIcon, ChartIcon, CalcIcon, BookIcon } from './icons'
+import { TagIcon, ChevronRightIcon, ChevronDownIcon, ChartIcon, CalcIcon, BookIcon } from './icons'
 import { getTags, getQuestions, type TagSummary, type QuestionSummary } from '../lib/api'
 import TagDetail from './TagDetail'
 import QuestionDetail from './QuestionDetail'
@@ -17,6 +17,39 @@ export default function Bank() {
   const [openQuestionId, setOpenQuestionId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // Folded parent tags (a subject with a hundred children folds to one row).
+  // Remembered per slug so the bank opens the way it was left.
+  const [folded, setFolded] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('osmosis:bank-folded') ?? '[]') as string[])
+    } catch {
+      return new Set()
+    }
+  })
+
+  function toggleFold(slug: string) {
+    setFolded((prev) => {
+      const next = new Set(prev)
+      if (next.has(slug)) next.delete(slug)
+      else next.add(slug)
+      try {
+        localStorage.setItem('osmosis:bank-folded', JSON.stringify([...next]))
+      } catch {
+        /* a private window forgets; the bank still works */
+      }
+      return next
+    })
+  }
+
+  function setAllFolded(fold: boolean) {
+    const next = fold ? new Set((tags ?? []).filter((t) => hasChildren.has(t.slug)).map((t) => t.slug)) : new Set<string>()
+    setFolded(next)
+    try {
+      localStorage.setItem('osmosis:bank-folded', JSON.stringify([...next]))
+    } catch {
+      /* ignore */
+    }
+  }
 
   useEffect(() => {
     getTags()
@@ -52,12 +85,36 @@ export default function Bank() {
 
   const openTagSummary = tags?.find((t) => t.slug === openTag)
 
+  // A tag is hidden when any ancestor is folded. Parents are recognised by
+  // slug prefix, so this needs no extra field from the server.
+  const hasChildren = new Set<string>()
+  for (const t of tags ?? []) {
+    const parts = t.slug.split(':')
+    for (let i = 1; i < parts.length; i++) hasChildren.add(parts.slice(0, i).join(':'))
+  }
+  function hiddenByFold(slug: string): boolean {
+    const parts = slug.split(':')
+    for (let i = 1; i < parts.length; i++) if (folded.has(parts.slice(0, i).join(':'))) return true
+    return false
+  }
+  const visibleTags = (tags ?? []).filter((t) => !hiddenByFold(t.slug))
+
   return (
     <div className="bank">
       <div className="panel bank-tags-panel">
         <div className="bank-panel-header">
           <h1>Bank</h1>
           <span className="bank-count">{tags ? `${tags.length} tags` : '…'}</span>
+          {tags && hasChildren.size > 0 && (
+            <div className="bank-fold-all">
+              <button className="bank-fold-btn" onClick={() => setAllFolded(true)} title="Fold every group">
+                Fold all
+              </button>
+              <button className="bank-fold-btn" onClick={() => setAllFolded(false)} title="Unfold every group">
+                Unfold all
+              </button>
+            </div>
+          )}
         </div>
         <div className="bank-tags-list no-scrollbar">
           <button
@@ -69,22 +126,55 @@ export default function Bank() {
             </span>
             <span className="bank-tag-name">All tags</span>
           </button>
-          {tags?.map((t, i) => (
-            <button
-              key={t.slug}
-              className={`bank-tag-row${t.slug === selectedTag ? ' selected' : ''}`}
-              style={{ paddingLeft: 14 + (t.slug.split(':').length - 1) * 14, animationDelay: `${Math.min(i, 12) * 22}ms` }}
-              onClick={() => setSelectedTag((cur) => (cur === t.slug ? null : t.slug))}
-              onDoubleClick={() => setOpenTag(t.slug)}
-              title="Click to filter, double-click to open"
-            >
-              <span className="bank-tag-name">{t.label}</span>
-              <span className="bank-tag-count">{t.question_count}</span>
-              <span className="bank-tag-chevron">
-                <ChevronRightIcon size={12} />
-              </span>
-            </button>
-          ))}
+          {visibleTags.map((t, i) => {
+            const isParent = hasChildren.has(t.slug)
+            const isFolded = folded.has(t.slug)
+            return (
+              <div
+                key={t.slug}
+                className={`bank-tag-row${t.slug === selectedTag ? ' selected' : ''}${isFolded ? ' folded' : ''}`}
+                style={{ paddingLeft: 6 + (t.slug.split(':').length - 1) * 14, animationDelay: `${Math.min(i, 12) * 22}ms` }}
+                onClick={() => setSelectedTag((cur) => (cur === t.slug ? null : t.slug))}
+                onDoubleClick={() => setOpenTag(t.slug)}
+                title="Click to filter, double-click to open"
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') setSelectedTag((cur) => (cur === t.slug ? null : t.slug))
+                  if (isParent && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                    if ((e.key === 'ArrowLeft') !== isFolded) toggleFold(t.slug)
+                  }
+                }}
+              >
+                {isParent ? (
+                  <button
+                    className="bank-fold-toggle"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleFold(t.slug)
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    aria-label={isFolded ? `Unfold ${t.label}` : `Fold ${t.label}`}
+                    aria-expanded={!isFolded}
+                  >
+                    {isFolded ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
+                  </button>
+                ) : (
+                  <span className="bank-fold-spacer" />
+                )}
+                <span className="bank-tag-name">{t.label}</span>
+                {isFolded && (
+                  <span className="bank-tag-folded-count">
+                    {(tags ?? []).filter((c) => c.slug.startsWith(t.slug + ':')).length} inside
+                  </span>
+                )}
+                <span className="bank-tag-count">{t.question_count}</span>
+                <span className="bank-tag-chevron">
+                  <ChevronRightIcon size={12} />
+                </span>
+              </div>
+            )
+          })}
           {tags === null && !error && <div className="bank-empty">Loading…</div>}
           {tags && tags.length === 0 && <div className="bank-empty">No tags yet — write some over MCP.</div>}
         </div>

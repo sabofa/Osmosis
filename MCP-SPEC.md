@@ -30,8 +30,8 @@ segment, so `buildApp`'s pino `req` serializer rewrites a logged url of
 
 | Env var | Scope | Inventory |
 |---|---|---|
-| `MCP_AUTH_TOKEN` | `full` | all 40 tools. Required — the canonical node refuses to boot without one set |
-| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`. Optional — unset means the presenter surface does not exist |
+| `MCP_AUTH_TOKEN` | `full` | all 41 tools. Required — the canonical node refuses to boot without one set |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`, `list_ungraded_written`. Optional — unset means the presenter surface does not exist |
 
 `registerTools(server, db, uploadsDir, nodeId, scope)` skips any tool outside
 the allowlist when the scope is `presenter`, so a withheld tool is genuinely
@@ -120,7 +120,7 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-40 tools on the full surface, 11 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
+41 tools on the full surface, 12 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
@@ -148,6 +148,7 @@ becoming one larger tool.
 | `get_attempt` | Full attempt read: per-response inputs + derived `outcome` + live grade. `chosen_misconception` and `best_guess_correct` are answer-key material and stay withheld until the attempt is submitted; the attempt carries `reveal`, `revealed`, `paused_at`/`paused_ms`. You read as the *tutor*: a `deferred` reveal withholds the key from the app's screens (`GET /api/attempts/:id`, the submit response), never from this tool |
 | `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `grader`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `best_guess_choice_id`, `best_guess_correct`, `response_text`, `confidence`, `confidence_numeric`, `idk`, `misapplied_method`, `diagnosis`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer`, `node_key`, `node_keys`. `await_item_outcome` takes `timeout_s` (default 25, clamped 1..25) and also reports `status: "paused"` |
 | `grade_response` | The tutor's own verdict on an answered item: `grader` `oracle`/`judge`, optional `score` 0..1, optional one-line `diagnosis`. Supersedes a self/model grade on a written item; on an mc item only the diagnosis is kept and the `auto_mc` grade against the question's own key stands |
+| `list_ungraded_written` | Written answers waiting for a verdict (prompt, rubric, model answer, the learner's text, any self grade), oldest first; optional `session_id`, `include_self_graded`, `limit`. The read half of grading over MCP — there is no model grader |
 | `end_session` | Ends the session and returns `summary: { presented, answered, abandoned, dont_know, shows, paused_now, retired_ephemeral }` (`shows` counts what `present_show` put up — see §3.4) over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`). Optional `summary` (markdown) is the tutor's closing recap for the learner: stored on the session, echoed back as `summary_text` (distinct from the counts object), and rendered above that session's attempt history in the app. Whitespace-only is stored as nothing said |
 | `create_session` | Starts a tutoring session. `tag_slug` must already exist. `reveal_default` (`immediate`, the default, or `deferred`) sets what every item presented in it does with its answer key on the learner's screen |
 | `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default and `context` (§3.4); the returned snapshot carries `node_keys`/`node_key` |

@@ -47,7 +47,6 @@ describe("the show tools over MCP", () => {
       remoteUrl: null,
       uploadsDir: ".",
       mcpAuthToken: TOKEN,
-      deepseekApiKey: null,
       webDistDir: null,
     };
     const node = bootstrapNode(db, env);

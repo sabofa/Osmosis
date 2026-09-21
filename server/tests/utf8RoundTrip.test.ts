@@ -56,7 +56,6 @@ describe("UTF-8 survives the MCP HTTP transport unchanged", () => {
       remoteUrl: null,
       uploadsDir,
       mcpAuthToken: TOKEN,
-      deepseekApiKey: null,
       webDistDir: null,
     };
     const node = bootstrapNode(db, env);

@@ -11,7 +11,8 @@ import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
-import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail, gradeResponseByTutor } from "../domain/attempts.js";
+import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail, gradeResponseByTutor,
+  listUngradedWritten } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { presentShow, updateShow, getShowOutcome } from "../domain/shows.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
@@ -146,6 +147,7 @@ export const PRESENTER_TOOLS: readonly string[] = [
   "get_attempt",
   "end_session",
   "grade_response",
+  "list_ungraded_written",
 ];
 
 export function registerTools(
@@ -978,6 +980,31 @@ export function registerTools(
     async ({ response_id, grader, score, diagnosis }) => {
       try {
         return ok(gradeResponseByTutor(db, response_id, { grader, score, diagnosis }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "list_ungraded_written",
+    {
+      description:
+        "Written answers waiting for a verdict, oldest first: each row carries the prompt, rubric, model answer, " +
+        "explanation, tags and the learner's response_text (plus idk, confidence, misapplied_method, elapsed_ms), " +
+        "and any self grade. Read each one against its rubric and record your verdict with grade_response " +
+        "(grader 'judge', score 0..1, one-line diagnosis). There is no model grader on this node — this is how " +
+        "written work gets graded. Pass session_id to grade only one session's items; include_self_graded " +
+        "defaults to true (a learner's own mark is a claim worth checking), false lists only the never-graded.",
+      inputSchema: {
+        session_id: z.string().optional(),
+        include_self_graded: z.boolean().optional(),
+        limit: z.number().int().min(1).max(200).optional().describe("Default 25."),
+      },
+    },
+    async ({ session_id, include_self_graded, limit }) => {
+      try {
+        return ok(listUngradedWritten(db, { session_id, include_self_graded, limit }));
       } catch (err) {
         return fail(err);
       }

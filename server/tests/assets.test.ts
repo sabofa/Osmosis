@@ -23,8 +23,7 @@ describe("POST /api/assets", () => {
       dbPath: ":memory:",
       remoteUrl: null,
       uploadsDir,
-      mcpAuthToken: "test-token-123",
-      deepseekApiKey: null, webDistDir: null,
+      mcpAuthToken: "test-token-123", webDistDir: null,
     };
     const node = bootstrapNode(db, env);
     app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
