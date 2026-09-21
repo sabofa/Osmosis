@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { PROTOCOL_VERSION, TOOLS_VERSION, listToolNames } from "../protocol.js";
+import { CONFIDENCE_NUMERIC } from "./attempts.js";
 
 export interface ReadmeResult {
   node: {
@@ -68,10 +69,9 @@ export function readme(db: DatabaseSync): ReadmeResult {
       explanation_style: "2-4 sentences, explain why the correct answer is correct.",
       difficulty_scale: "1 = intro/recall, 3 = standard practice, 5 = exam-level synthesis.",
       mc_choice_count: "4 choices, exactly one correct. Multi-select is not supported (the app is single-select): a second is_correct choice is rejected as mc_multiple_correct — split into separate questions or write it as a written item.",
-      confidence_scale: {
-        labels: ["unsure", "somewhat", "confident"],
-        numeric: { unsure: 1, somewhat: 3, confident: 5 },
-      },
+      // The same map the outcome paths compute confidence_numeric from, so
+      // the documented scale can't drift from the one Osmosis reports.
+      confidence_scale: { labels: Object.keys(CONFIDENCE_NUMERIC), numeric: CONFIDENCE_NUMERIC },
       written_length_target: "1-3 sentences or a short derivation; not an essay.",
       misconception:
         "Optional on every mc choice. On a distractor it names which wrong model picking it represents — " +

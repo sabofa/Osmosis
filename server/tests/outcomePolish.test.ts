@@ -353,6 +353,20 @@ describe("grade_response (§2.9)", () => {
     expect(o.diagnosis).toBe("picked the trap");
   });
 
+  it("leaves an earlier diagnosis alone when a later grade omits one", () => {
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q = insertQuestion(db, { type: "written", tags: ["a"] });
+    const p = presentItem(db, { node_id: "n", question_id: q.id });
+    answerResponse(db, p.attempt_id, p.response_id, { response_text: "nine" });
+    submitAttempt(db, p.attempt_id);
+
+    gradeResponseByTutor(db, p.response_id, { grader: "judge", score: 0, diagnosis: "inverted the ratio" });
+    const regraded = gradeResponseByTutor(db, p.response_id, { grader: "judge", score: 1 });
+    expect(regraded.diagnosis).toBe("inverted the ratio");
+    expect(regraded.score).toBe(1);
+  });
+
   it("refuses to grade a response on an unsubmitted attempt", () => {
     const db = openTestDb();
     insertTag(db, "a");

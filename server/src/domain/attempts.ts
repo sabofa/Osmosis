@@ -1081,10 +1081,13 @@ export function gradeResponseByTutor(
     throw new DomainError("attempt_not_submitted", "Grade a response only after its attempt is submitted.");
   }
 
-  const diagnosis = input.diagnosis ?? null;
   db.exec("BEGIN");
   try {
-    db.prepare("UPDATE response SET diagnosis = ? WHERE id = ?").run(diagnosis, responseId);
+    // PATCH semantics, as answerResponse has: an omitted diagnosis leaves the
+    // recorded one alone, an explicit null clears it.
+    if (input.diagnosis !== undefined) {
+      db.prepare("UPDATE response SET diagnosis = ? WHERE id = ?").run(input.diagnosis, responseId);
+    }
 
     // An mc item is already graded against its own key; a tutor verdict would
     // only ever disagree with the key. Take the diagnosis, leave the score.
@@ -1118,11 +1121,14 @@ export function gradeResponseByTutor(
   const grade = db.prepare("SELECT * FROM grade WHERE response_id = ? AND superseded_at IS NULL").get(
     responseId
   ) as unknown as GradeRow | undefined;
+  const stored = db.prepare("SELECT diagnosis FROM response WHERE id = ?").get(responseId) as {
+    diagnosis: string | null;
+  };
   return {
     response_id: responseId,
     grader: grade?.grader ?? null,
     score: grade?.score ?? null,
     graded_at: grade?.graded_at ?? null,
-    diagnosis,
+    diagnosis: stored.diagnosis,
   };
 }
