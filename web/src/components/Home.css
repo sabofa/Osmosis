@@ -700,3 +700,9 @@
   border-radius: 50%;
   background: var(--accent);
 }
+
+/* A daily card already taken today: still readable, clearly not a button. */
+.daily-card.done {
+  opacity: 0.45;
+  cursor: default;
+}

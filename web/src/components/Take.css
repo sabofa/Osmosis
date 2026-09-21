@@ -48,9 +48,29 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* `safe center`: centred when they fit, scrollable from the top when they
+     don't. The strip never squeezes its dots. */
+  justify-content: safe center;
   gap: 14px;
   padding: 20px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.take-dots.horizontal {
+  width: auto;
+  height: 44px;
+  flex-direction: row;
+  border-right: none;
+  border-top: 2px solid var(--line);
+  padding: 0 16px;
+  margin: 0 -28px -22px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.take-dot {
+  flex-shrink: 0;
 }
 
 .take-dot {
@@ -103,11 +123,108 @@
   flex: 1;
 }
 
-@media (max-width: 900px) {
-  .take-panel,
-  .panel-resize-handle {
-    display: none;
-  }
+/* ---- Narrow / portrait (phone-shaped windows) --------------------------- */
+
+.take-frame.narrow {
+  margin: 8px;
+  height: calc(100dvh - 16px);
+  border-radius: 20px;
+}
+
+.take-frame.narrow .take-main {
+  padding: 14px 16px 0;
+  gap: 12px;
+}
+
+.take-frame.narrow .take-dots.horizontal {
+  margin: 0 -16px;
+}
+
+.take-frame.narrow .take-header {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.take-frame.narrow .question-prompt {
+  font-size: 17px;
+}
+
+.take-frame.narrow .take-key-hints {
+  display: none;
+}
+
+.take-panel-switch {
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  background: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.take-panel-switch.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.take-panel-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.take-question-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  border: 2px solid var(--line-strong);
+  border-radius: 18px;
+  padding: 10px 14px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  cursor: pointer;
+  max-height: 30%;
+  overflow: hidden;
+}
+
+.take-question-bubble:hover {
+  border-color: var(--ink);
+}
+
+.take-question-bubble-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.take-question-bubble-text {
+  font-size: 13px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.take-panel.full {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  width: auto !important;
+}
+
+.take-nav-right {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .take-header {

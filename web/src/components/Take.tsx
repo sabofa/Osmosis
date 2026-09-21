@@ -19,6 +19,8 @@ import { KEY_HINTS, WRITTEN_KEY_HINTS, type KeyAction } from '../lib/keymap'
 import { writtenTextPatch } from '../lib/writtenPatch'
 import { createItemClock, type ItemClock } from '../lib/itemClock'
 import { formatClock, timerClass, nextTimeUpPhase, type TimeUpPhase } from '../lib/timeFormat'
+import { useMediaQuery, NARROW_QUERY } from '../hooks/useMediaQuery'
+import ConfirmDialog from './ConfirmDialog'
 import './Take.css'
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
@@ -67,6 +69,13 @@ export default function Take({
   // 'message' is the two seconds where "Time." stands alone; 'finish' is
   // after, when the way out appears alongside it (lib/timeFormat).
   const [timeUpPhase, setTimeUpPhase] = useState<TimeUpPhase>('none')
+  // Leaving and finishing both ask first: an exit abandons the attempt, and a
+  // finish with blanks is usually a slip, not a choice.
+  const [confirm, setConfirm] = useState<'exit' | 'submit' | null>(null)
+  // On a narrow or portrait screen the graph/document panel is a separate
+  // view the learner switches to, not a column beside the question.
+  const narrow = useMediaQuery(NARROW_QUERY)
+  const [view, setView] = useState<'question' | 'panel'>('question')
   const [drafts, setDrafts] = useState<DraftResponse[]>(() =>
     questions.map((r) => ({
       selectedChoiceId: r.selected_choice_id,
@@ -260,11 +269,25 @@ export default function Take({
     }
   }, [])
 
+  // The timer is enforced: when it reaches zero the set is submitted for the
+  // learner after the two-second message. The submit closure is read through
+  // a ref so the timeout always runs the current one.
+  const submitRef = useRef<() => Promise<void>>(async () => {})
   useEffect(() => {
     setTimeUpPhase((phase) => nextTimeUpPhase(phase, secondsLeft))
     if (secondsLeft !== 0 || timeUpTimer.current) return
-    timeUpTimer.current = setTimeout(() => setTimeUpPhase('finish'), TIME_UP_MESSAGE_MS)
+    timeUpTimer.current = setTimeout(() => {
+      setTimeUpPhase('finish')
+      void submitRef.current()
+    }, TIME_UP_MESSAGE_MS)
   }, [secondsLeft])
+
+  // Keep the current question's dot in view as the learner moves through a
+  // long set — the strip scrolls; it never squeezes.
+  const currentDotRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    currentDotRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [index])
 
   function goTo(i: number) {
     flushElapsed(response.id)
@@ -322,10 +345,28 @@ export default function Take({
     }
   }
 
+  submitRef.current = submitNow
+
+  function isDraftAnswered(r: AttemptResponse, d: DraftResponse): boolean {
+    return r.question.type === 'mc' ? d.selectedChoiceId !== null || d.idk : d.writtenText.trim().length > 0 || d.idk
+  }
+  const unansweredCount = questions.reduce((n, r, i) => n + (isDraftAnswered(r, drafts[i]) ? 0 : 1), 0)
+
+  // Finishing with blanks asks first; finishing with everything answered
+  // just finishes.
+  async function finish() {
+    if (finishing) return
+    if (unansweredCount > 0) {
+      setConfirm('submit')
+      return
+    }
+    await submitNow()
+  }
+
   async function next() {
     if (finishing) return
     if (isLast) {
-      await submitNow()
+      await finish()
       return
     }
     goTo(index + 1)
@@ -495,6 +536,11 @@ export default function Take({
   }
 
   function handleExit() {
+    setConfirm('exit')
+  }
+
+  function doExit() {
+    setConfirm(null)
     flushElapsed(response.id)
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (reduced) {
@@ -552,32 +598,39 @@ export default function Take({
     },
     handleKeyAction,
     // A paused drill takes no answers: that is the whole point of stepping away.
-    !paused && !exiting
+    !paused && !exiting && !confirm && view === 'question'
+  )
+
+  const showSidePanel = hasPanel && !narrow
+  const panelLabel = question.graph_spec ? 'Graph' : question.document_id ? 'Document' : 'Desmos'
+
+  const dots = (
+    <div className={`take-dots no-scrollbar${narrow ? ' horizontal' : ''}`} role="tablist" aria-label="Questions">
+      {questions.map((r, i) => {
+        const wasAnswered = isDraftAnswered(r, drafts[i])
+        let cls = 'take-dot'
+        if (i === index) cls += ' current'
+        else if (wasAnswered) cls += ' answered'
+        return (
+          <button
+            key={r.id}
+            ref={i === index ? currentDotRef : undefined}
+            className={cls}
+            disabled={i > maxReached}
+            onClick={() => goTo(i)}
+            aria-label={`Question ${i + 1}`}
+            title={`Question ${i + 1}`}
+          />
+        )
+      })}
+    </div>
   )
 
   return (
-    <div className={`take-frame${exiting ? ' exiting' : ''}${hasPanel ? ' with-panel' : ''}`}>
-      <div className="take-dots">
-        {questions.map((r, i) => {
-          const d = drafts[i]
-          const wasAnswered =
-            r.question.type === 'mc'
-              ? d.selectedChoiceId !== null || d.idk
-              : d.writtenText.trim().length > 0 || d.idk
-          let cls = 'take-dot'
-          if (i === index) cls += ' current'
-          else if (wasAnswered) cls += ' answered'
-          return (
-            <button
-              key={r.id}
-              className={cls}
-              disabled={i > maxReached}
-              onClick={() => goTo(i)}
-              aria-label={`Question ${i + 1}`}
-            />
-          )
-        })}
-      </div>
+    <div
+      className={`take-frame${exiting ? ' exiting' : ''}${showSidePanel ? ' with-panel' : ''}${narrow ? ' narrow' : ''}`}
+    >
+      {!narrow && dots}
 
       <div className="take-main">
         <div className="take-header">
@@ -586,6 +639,14 @@ export default function Take({
             Exit quiz
           </button>
           <span className="take-tag">{question.tags[0] ?? 'general'}</span>
+          {narrow && hasPanel && (
+            <button
+              className={`take-panel-switch${view === 'panel' ? ' active' : ''}`}
+              onClick={() => setView((v) => (v === 'panel' ? 'question' : 'panel'))}
+            >
+              {view === 'panel' ? 'Question' : panelLabel}
+            </button>
+          )}
           {question.calculator_policy !== 'n_a' && (
             <span className="calc-badge" title={question.calculator_policy}>
               {question.calculator_policy === 'forbidden' ? <CalcOffIcon size={14} /> : <CalcIcon size={14} />}
@@ -610,6 +671,27 @@ export default function Take({
           )}
         </div>
 
+        {narrow && hasPanel && view === 'panel' ? (
+          // The switched view: the panel takes the screen, the question rides
+          // along in a bubble at the top, and tapping the bubble comes back.
+          <div className="take-panel-view">
+            <button className="take-question-bubble" onClick={() => setView('question')} title="Back to the question">
+              <span className="take-question-bubble-label">Question {index + 1}</span>
+              <RichText inline className="take-question-bubble-text" text={question.prompt} />
+            </button>
+            <div className="take-panel full no-scrollbar" data-panel="side">
+              <QuestionPanel
+                graphSpec={question.graph_spec}
+                desmosAllowed={question.desmos_allowed}
+                documentId={question.document_id}
+                documentAnchorLabel={question.document_anchor_label}
+                documentAnchorStart={question.document_anchor_start}
+                documentAnchorEnd={question.document_anchor_end}
+                onJumpToQuestion={handleJumpToQuestion}
+              />
+            </div>
+          </div>
+        ) : (
         <div className="question-card no-scrollbar">
           <div className="question-slide" key={index} ref={itemRef} tabIndex={-1}>
             <div className="question-tag-row">
@@ -701,32 +783,42 @@ export default function Take({
             </div>
           )}
         </div>
+        )}
 
         {recorded ? (
           <div className="take-timeup">
-            <span className="take-timeup-text">Time. Your answers are recorded.</span>
-            {timeUpPhase === 'finish' && (
-              <button className="nav-btn primary" onClick={() => void submitNow()} disabled={finishing}>
-                {finishing ? 'Submitting…' : 'Finish'}
-              </button>
-            )}
+            <span className="take-timeup-text">
+              {timeUpPhase === 'finish' ? 'Time. Submitting your answers…' : 'Time. Your answers are recorded.'}
+            </span>
           </div>
         ) : (
           <div className="take-nav">
             <div className="take-nav-left">
-              <span className="take-nav-hint">{answered ? 'Answered' : 'Not answered yet'}</span>
+              <span className="take-nav-hint">
+                {answered ? 'Answered' : 'Not answered yet'}
+                {unansweredCount > 0 && index > 0 ? ` · ${unansweredCount} blank` : ''}
+              </span>
               <span className="take-key-hints">
                 {question.type === 'mc' ? KEY_HINTS : WRITTEN_KEY_HINTS}
               </span>
             </div>
-            <button className="nav-btn primary" onClick={() => void next()} disabled={finishing || paused}>
-              {finishing ? 'Submitting…' : isLast ? 'Finish' : 'Next'} &rarr;
-            </button>
+            <div className="take-nav-right">
+              {index > 0 && (
+                <button className="nav-btn" onClick={() => goTo(index - 1)} disabled={finishing || paused}>
+                  &larr;
+                </button>
+              )}
+              <button className="nav-btn primary" onClick={() => void next()} disabled={finishing || paused}>
+                {finishing ? 'Submitting…' : isLast ? 'Finish' : 'Next'} &rarr;
+              </button>
+            </div>
           </div>
         )}
+
+        {narrow && dots}
       </div>
 
-      {hasPanel && (
+      {showSidePanel && (
         <>
           <div
             className="panel-resize-handle"
@@ -757,6 +849,30 @@ export default function Take({
           id={jumpQuestionId}
           onClose={() => setJumpQuestionId(null)}
           onJumpToQuestion={handleJumpToQuestion}
+        />
+      )}
+
+      {confirm === 'exit' && (
+        <ConfirmDialog
+          title="Leave this test?"
+          body="Your answers so far are kept, but the attempt ends here and is not resumed later."
+          confirmLabel="Leave"
+          danger
+          onConfirm={doExit}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm === 'submit' && (
+        <ConfirmDialog
+          title={`${unansweredCount} ${unansweredCount === 1 ? 'question is' : 'questions are'} unanswered`}
+          body="Submit anyway? Blank questions are scored as not answered. You can still go back with the dots."
+          confirmLabel="Submit anyway"
+          cancelLabel="Go back"
+          onConfirm={() => {
+            setConfirm(null)
+            void submitNow()
+          }}
+          onCancel={() => setConfirm(null)}
         />
       )}
     </div>

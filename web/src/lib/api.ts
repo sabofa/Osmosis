@@ -14,6 +14,9 @@ export interface NodeStatus {
   protocol_version: number
   remote_protocol_version: number | null
   model_grades_today: number
+  // Today's daily attempts, when they exist: the Home cards grey out after
+  // one go.
+  daily_taken?: { question: string | null; quiz: string | null }
   model_grading_configured: boolean
 }
 

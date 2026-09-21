@@ -77,6 +77,22 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     for (const close of [...openStreams]) close();
   });
 
+  // The daily question and quiz are once a day: the second click greys out,
+  // and the route below refuses a second attempt for the same day.
+  function dailyTakenToday(): { question: string | null; quiz: string | null } {
+    const rows = db
+      .prepare(
+        `SELECT source, id FROM attempt
+         WHERE source IN ('daily_question','daily_quiz') AND date(started_at) = date('now')
+         ORDER BY started_at DESC`
+      )
+      .all() as { source: string; id: string }[];
+    return {
+      question: rows.find((r) => r.source === "daily_question")?.id ?? null,
+      quiz: rows.find((r) => r.source === "daily_quiz")?.id ?? null,
+    };
+  }
+
   app.get("/api/status", async () => {
     const syncState = db
       .prepare("SELECT last_pull_at, last_push_at, remote_protocol_version FROM sync_state WHERE id = 1")
@@ -131,6 +147,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       // This node pushes session events over SSE — the app reads it to decide
       // whether to subscribe or fall back to polling.
       push: true,
+      daily_taken: dailyTakenToday(),
       remote_protocol_version: syncState?.remote_protocol_version ?? null,
       model_grades_today: modelGradesToday,
       model_grading_configured: ctx.env.deepseekApiKey !== null,
@@ -423,6 +440,15 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
         return;
       }
       const kind = body.daily_kind;
+      const takenId = dailyTakenToday()[kind];
+      if (takenId) {
+        reply.code(409).send({
+          error: "daily_already_taken",
+          message: `Today's daily ${kind} was already started (attempt ${takenId}). It comes back tomorrow.`,
+          attempt_id: takenId,
+        });
+        return;
+      }
       try {
         if (ctx.env.role === "canonical") {
           const resolved = resolveDailyDraw(db, kind);

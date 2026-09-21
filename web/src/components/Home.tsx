@@ -111,6 +111,10 @@ export default function Home({
   // A canonical node is always "online" to itself — it never needs a remote
   // to serve a daily draw, so it should never show the offline-greyed state.
   const dailyAvailable = !!(status?.canonical || status?.online)
+  // Once a day: after today's attempt exists the card greys out until
+  // tomorrow (the server refuses a second one too).
+  const questionDone = !!status?.daily_taken?.question
+  const quizDone = !!status?.daily_taken?.quiz
 
   // Re-derived whenever status.canonical changes (status loads async, after
   // the initial render) — a canonical node's templates are all local by
@@ -456,15 +460,15 @@ export default function Home({
             <span>
               <div className="template-name">Daily Question</div>
               <div className="template-meta">
-                {!dailyAvailable ? 'Unavailable offline' : starting ? 'Starting…' : "Today's pick"}
+                {questionDone ? 'Done for today' : !dailyAvailable ? 'Unavailable offline' : starting ? 'Starting…' : "Today's pick"}
               </div>
             </span>
           </button>
           <button
-            className="template-row daily-card"
-            disabled={!dailyAvailable || !!starting}
+            className={`template-row daily-card${quizDone ? ' done' : ''}`}
+            disabled={!dailyAvailable || !!starting || quizDone}
             onClick={() => onStartDaily('quiz')}
-            title={dailyAvailable ? "Start today's daily quiz" : 'Unavailable offline'}
+            title={quizDone ? 'Done for today — back tomorrow' : dailyAvailable ? "Start today's daily quiz" : 'Unavailable offline'}
           >
             <span className="template-icon">
               <SubjectIcon icon="bolt" />
@@ -472,7 +476,7 @@ export default function Home({
             <span>
               <div className="template-name">Daily Quiz</div>
               <div className="template-meta">
-                {!dailyAvailable ? 'Unavailable offline' : starting ? 'Starting…' : "Today's set"}
+                {quizDone ? 'Done for today' : !dailyAvailable ? 'Unavailable offline' : starting ? 'Starting…' : "Today's set"}
               </div>
             </span>
           </button>
