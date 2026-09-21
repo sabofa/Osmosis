@@ -31,7 +31,7 @@ segment, so `buildApp`'s pino `req` serializer rewrites a logged url of
 | Env var | Scope | Inventory |
 |---|---|---|
 | `MCP_AUTH_TOKEN` | `full` | all 37 tools. Required — the canonical node refuses to boot without one set |
-| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `get_attempt`, `end_session`, `grade_response`. Optional — unset means the presenter surface does not exist |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`. Optional — unset means the presenter surface does not exist |
 
 `registerTools(server, db, uploadsDir, nodeId, scope)` skips any tool outside
 the allowlist when the scope is `presenter`, so a withheld tool is genuinely
@@ -120,14 +120,14 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-37 tools on the full surface, 8 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
+40 tools on the full surface, 11 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 5), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 6), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject. Returns `taxonomy: { seeded, seed_available, tag_count }`; `seed: true` creates the subject's shipped taxonomy (`server/src/domain/taxonomies/`, currently `chemistry` — Ebbing 11e ch. 1-12 plus `tech:mhchem`/`tech:calculator` — and `math`), idempotently, so an empty bank gets standard slugs instead of invented near-duplicates |
 | `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
@@ -148,9 +148,12 @@ becoming one larger tool.
 | `get_attempt` | Full attempt read: per-response inputs + derived `outcome` + live grade. `chosen_misconception` and `best_guess_correct` are answer-key material and stay withheld until the attempt is submitted; the attempt carries `reveal`, `revealed`, `paused_at`/`paused_ms`. You read as the *tutor*: a `deferred` reveal withholds the key from the app's screens (`GET /api/attempts/:id`, the submit response), never from this tool |
 | `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `grader`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `best_guess_choice_id`, `best_guess_correct`, `response_text`, `confidence`, `confidence_numeric`, `idk`, `misapplied_method`, `diagnosis`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer`, `node_key`, `node_keys`. `await_item_outcome` takes `timeout_s` (default 25, clamped 1..25) and also reports `status: "paused"` |
 | `grade_response` | The tutor's own verdict on an answered item: `grader` `oracle`/`judge`, optional `score` 0..1, optional one-line `diagnosis`. Supersedes a self/model grade on a written item; on an mc item only the diagnosis is kept and the `auto_mc` grade against the question's own key stands |
-| `end_session` | Ends the session and returns `summary: { presented, answered, abandoned, dont_know, paused_now, retired_ephemeral }` over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`). Optional `summary` (markdown) is the tutor's closing recap for the learner: stored on the session, echoed back as `summary_text` (distinct from the counts object), and rendered above that session's attempt history in the app. Whitespace-only is stored as nothing said |
+| `end_session` | Ends the session and returns `summary: { presented, answered, abandoned, dont_know, shows, paused_now, retired_ephemeral }` (`shows` counts what `present_show` put up — see §3.4) over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`). Optional `summary` (markdown) is the tutor's closing recap for the learner: stored on the session, echoed back as `summary_text` (distinct from the counts object), and rendered above that session's attempt history in the app. Whitespace-only is stored as nothing said |
 | `create_session` | Starts a tutoring session. `tag_slug` must already exist. `reveal_default` (`immediate`, the default, or `deferred`) sets what every item presented in it does with its answer key on the learner's screen |
-| `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default; the returned snapshot carries `node_keys`/`node_key` |
+| `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default and `context` (§3.4); the returned snapshot carries `node_keys`/`node_key` |
+| `present_show` | Puts something non-answerable on the learner's screen — `kind` `text`/`markdown`/`graph` (see §3.4 on what `markdown` actually renders), `payload`, optional `caption` (≤500 chars) and `context`. A `graph` payload is parsed with the same grammar as a question's `graph_spec` and rejected `invalid_graph_spec` with the parser's own message. Returns `{ show_id, presented_at }`. See §3.4 |
+| `update_show` | Replaces a graph show's spec so the app redraws it in the same canvas (set `@bounds` to hold the frame). Graph shows only — anything else is `update_not_supported` — and the session must still be open |
+| `await_show_outcome` | Waits for the learner to work through a show, `timeout_s` default 25 clamped 1..25, polling every second and returning early on `acknowledged`. Returns `{ show_id, status: 'pending'/'seen'/'acknowledged', seen_at, dwell_ms, acknowledged_at }` |
 | `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
 
 Plus one plain (non-JSON-RPC) HTTP route on the same route family, `POST
@@ -191,12 +194,56 @@ same. It means this node publishes session events over SSE at `GET
 well under a second instead of up to a poll interval later.
 
 An event is `{ type, at, ...ids }` — `item_presented`, `item_answered`,
-`attempt_paused`, `attempt_resumed`, `session_ended` — emitted after the write
+`attempt_paused`, `attempt_resumed`, `session_ended`, `show_presented`,
+`show_updated` — emitted after the write
 it announces has committed. It is a nudge to re-read, never state: a client
 that missed one while reconnecting is a re-read behind, not out of sync, and
 the app keeps a 15-second poll as its fallback whenever the stream is down.
 Nothing in the tool surface changes — the tutor calls `present_item` exactly as
 before and the push happens underneath it.
+
+---
+
+### 3.4 Showing
+
+`present_show` is the other half of the live loop: putting something on the
+learner's screen that is **not** a question. Nothing is answered, nothing is
+graded, and nothing enters the bank — a show belongs to its session and dies
+with it (migration `020_show.sql` gives it no lineage, no version and no
+retire, and the sync column allowlists don't name it, so it stays node-local).
+
+`kind` is `text`, `markdown` (both go through the app's rich-text renderer,
+the one a question prompt uses — which today renders LaTeX and line breaks but
+**not** markdown emphasis, so `**bold**` arrives with its asterisks showing)
+or `graph` (a graph-engine spec, parsed at the tool boundary so a spec that
+won't render is a rejection rather than an empty canvas).
+`update_show` replaces a graph's spec in place: the app keeps the same
+`<GraphPanel>` instance and feeds it the new spec, so the canvas redraws
+without the frame jumping — put `@bounds` in the spec if you want to hold the
+frame yourself. Prose has no in-place update; call `present_show` again.
+
+What comes back is three facts, not one: `seen_at` (the card reached the
+screen), `dwell_ms` (how long it actually stood in front of them, measured
+from first paint and only ever growing) and `acknowledged_at` (they pressed OK
+or Space). Only `acknowledged` means move on, and `dwell_ms` is worth reading
+alongside it: an OK 400ms after the card appeared is not reading.
+
+`context` — `{ course?, unit?, node?, step?, timer_s? }`, accepted by both
+`present_show` and `present_item` — is the tutor's breadcrumb. It is stored as
+JSON, displayed verbatim in the app's banner above the stream (`course · unit ·
+node · step`, with `timer_s` as a countdown) and never interpreted. The banner
+shows the most recent context across both kinds of entry, so an item that
+names none does not blank what the show before it said.
+
+The app renders all of this through `GET /api/sessions/:id/stream`: items
+(by reference — `attempt_id`, `response_id` and `revealed`) merged with shows
+(in full) in the order they landed, plus `POST /api/shows/:id/seen` and
+`/acknowledge`, both taking `{ dwell_ms }`. While any item in that stream is
+still open, every earlier entry collapses to a one-line stub, and a `deferred`
+item stays collapsed until its key is released. That collapse is a web-side
+rule and deliberately not tamper-proof: the server's job is withholding the
+answer key (§3.1), and this one is about not leaving an earlier answer on the
+same screen as the question being answered.
 
 ---
 

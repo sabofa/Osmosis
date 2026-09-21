@@ -15,6 +15,8 @@ export const SESSION_EVENT_TYPES = [
   'attempt_paused',
   'attempt_resumed',
   'session_ended',
+  'show_presented',
+  'show_updated',
 ] as const
 
 export type SessionEventType = (typeof SESSION_EVENT_TYPES)[number]
@@ -25,6 +27,7 @@ export interface SessionEvent {
   attempt_id?: string | null
   response_id?: string | null
   session_id?: string | null
+  show_id?: string | null
 }
 
 export type StreamState = 'connected' | 'reconnecting'

@@ -1,3 +1,4 @@
+import type { SessionStreamData, StreamContext } from './sessionStream'
 export interface NodeStatus {
   online: boolean
   canonical: boolean
@@ -341,6 +342,9 @@ export interface AttemptDetail {
   // whether it has in fact been handed over yet.
   reveal?: 'immediate' | 'deferred'
   revealed?: boolean
+  // Where in the course the tutor said this item comes from (§5.1). Null
+  // unless present_item named one.
+  context?: StreamContext | null
   started_at: string
   submitted_at: string | null
   abandoned_at: string | null
@@ -636,6 +640,55 @@ export async function getLivePendingAttempt(sessionId: string): Promise<{ attemp
   const res = await fetch(`/api/attempts/live-pending?session_id=${encodeURIComponent(sessionId)}`)
   if (!res.ok) throw new Error(`GET /api/attempts/live-pending ${res.status}`)
   return res.json()
+}
+
+// ---- The session stream (§5.3) --------------------------------------------
+// Everything the tutor has put on this session's screen, in order. Item
+// entries are references: the stream component fetches /api/attempts/:id for
+// the one it is actually rendering rather than this route carrying every
+// answer key in the session.
+
+export type { StreamContext, StreamEntry, ItemEntry, ShowEntry, SessionStreamData } from './sessionStream'
+
+export async function getSessionStream(sessionId: string): Promise<SessionStreamData> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stream`)
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null
+    throw new Error(body?.message ?? `GET /api/sessions/${sessionId}/stream ${res.status}`)
+  }
+  return res.json()
+}
+
+export interface ShowOutcome {
+  show_id: string
+  status: 'pending' | 'seen' | 'acknowledged'
+  seen_at: string | null
+  dwell_ms: number | null
+  acknowledged_at: string | null
+}
+
+async function postShow(showId: string, action: 'seen' | 'acknowledge', dwellMs: number): Promise<ShowOutcome> {
+  const res = await fetch(`/api/shows/${encodeURIComponent(showId)}/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dwell_ms: Math.max(0, Math.round(dwellMs)) }),
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null
+    throw new Error(body?.message ?? `POST /api/shows/${showId}/${action} ${res.status}`)
+  }
+  return res.json()
+}
+
+// The card stood in front of the learner for this long. Sent when it scrolls
+// away or the session ends under it — not a claim that they did anything.
+export function markShowSeen(showId: string, dwellMs: number): Promise<ShowOutcome> {
+  return postShow(showId, 'seen', dwellMs)
+}
+
+// They pressed OK (or Space). This is the tutor's cue to move on.
+export function acknowledgeShow(showId: string, dwellMs: number): Promise<ShowOutcome> {
+  return postShow(showId, 'acknowledge', dwellMs)
 }
 
 export function timeAgo(iso: string | null): string {

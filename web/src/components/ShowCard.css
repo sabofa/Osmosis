@@ -1,0 +1,94 @@
+.show-card {
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  padding: 16px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+
+/* Once it has been acknowledged it is history, not something asking for
+   attention — it stays readable and stops competing with whatever is newest. */
+.show-card.acknowledged {
+  border-color: var(--line);
+  opacity: 0.72;
+}
+
+.show-card-body {
+  min-width: 0;
+}
+
+.show-card-text {
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* A graph needs a height of its own — the viewer sizes to its container, and
+   a flex column with nothing else in it would collapse to nothing — and a
+   width close enough to that height to be worth looking at. The viewer fits
+   its y-range to the box's aspect, so a full-width 3:1 card squeezes y = x^2
+   into a sliver hugging the axis. */
+.show-card[data-show-kind='graph'] .show-card-body {
+  height: 360px;
+  max-width: 560px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.show-card[data-show-kind='graph'] .graph-panel {
+  height: 100%;
+}
+
+.show-card-caption {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.show-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.show-card-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.show-card-done {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.show-card-ok {
+  border: 2px solid var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: 999px;
+  padding: 7px 20px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.show-card-ok:active {
+  transform: scale(0.96);
+}
+
+.show-card-ok:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.show-card-ok:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

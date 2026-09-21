@@ -28,6 +28,7 @@ import {
   resumeAttempt,
 } from "../domain/attempts.js";
 import { listSessions, getSessionDetail, endSession } from "../domain/sessions.js";
+import { getSessionStream, markShowSeen, acknowledgeShow } from "../domain/shows.js";
 import { onSessionEvent, type SessionEvent } from "../lib/events.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { getResults } from "../domain/results.js";
@@ -273,6 +274,80 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       return endSession(db, id, { summary: (body.summary as string | null | undefined) ?? null });
     } catch (err) {
       sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  // Everything this session has put on the learner's screen, in the order it
+  // landed there: items (by reference — attempt_id plus the one fact the
+  // reveal gate needs) merged with shows (in full, they are small). This is
+  // what the app's live page renders, and it re-reads it whenever the event
+  // stream nudges it. Read as the learner, so a deferred item reports
+  // revealed: false while its session runs.
+  app.get("/api/sessions/:id/stream", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return getSessionStream(db, id, { viewer: "learner" });
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  // What the learner did with a show (§5.1). Two routes rather than one with a
+  // flag, because they are two different claims: 'seen' is the card reporting
+  // that it stood in front of them (sent when it scrolls away, or when the
+  // session ends under it), 'acknowledge' is them pressing OK.
+  // dwell_ms is optional on both routes: a card that never got a chance to
+  // measure (the session ended the instant it appeared) still reports that it
+  // was seen.
+  function readDwellMs(body: unknown): number | null | "invalid" {
+    if (body === undefined || body === null) return null;
+    if (typeof body !== "object" || Array.isArray(body)) return "invalid";
+    const value = (body as { dwell_ms?: unknown }).dwell_ms;
+    if (value === undefined || value === null) return null;
+    return typeof value === "number" ? value : "invalid";
+  }
+
+  // A closed session takes neither claim — 409, since the request is
+  // well-formed and it is the state of the world that refuses it.
+  function sendShowError(
+    reply: { code: (n: number) => { send: (body: unknown) => void } },
+    err: unknown
+  ): void {
+    if (err instanceof DomainError && err.code === "session_ended") {
+      reply.code(409).send({ error: err.code, message: err.message });
+      return;
+    }
+    sendDomainError(reply, err);
+  }
+
+  app.post("/api/shows/:id/seen", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const dwellMs = readDwellMs(request.body);
+    if (dwellMs === "invalid") {
+      reply.code(400).send({ error: "invalid_body", message: "dwell_ms must be a number of milliseconds." });
+      return;
+    }
+    try {
+      return markShowSeen(db, id, dwellMs);
+    } catch (err) {
+      sendShowError(reply, err);
+      return;
+    }
+  });
+
+  app.post("/api/shows/:id/acknowledge", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const dwellMs = readDwellMs(request.body);
+    if (dwellMs === "invalid") {
+      reply.code(400).send({ error: "invalid_body", message: "dwell_ms must be a number of milliseconds." });
+      return;
+    }
+    try {
+      return acknowledgeShow(db, id, dwellMs);
+    } catch (err) {
+      sendShowError(reply, err);
       return;
     }
   });

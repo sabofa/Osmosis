@@ -99,6 +99,33 @@ describe('resolveKey — typing and browser shortcuts', () => {
   })
 })
 
+describe('resolveKey — a show waiting to be acknowledged (§5.1)', () => {
+  const showing: KeyContext = {
+    inTextField: false,
+    kind: 'written',
+    choiceCount: 0,
+    recorded: false,
+    showPending: true,
+  }
+
+  it('maps Space to acknowledge', () => {
+    expect(resolveKey({ key: ' ' }, showing)).toEqual({ type: 'acknowledge' })
+  })
+
+  it('does not claim Space when no show is waiting', () => {
+    expect(resolveKey({ key: ' ' }, written)).toBeNull()
+  })
+
+  it('still refuses a modifier and a caret in a text field', () => {
+    expect(resolveKey({ key: ' ', ctrlKey: true }, showing)).toBeNull()
+    expect(resolveKey({ key: ' ' }, { ...showing, inTextField: true })).toBeNull()
+  })
+
+  it('leaves the rest of the map alone — Enter still submits', () => {
+    expect(resolveKey({ key: 'Enter' }, showing)).toEqual({ type: 'submit' })
+  })
+})
+
 describe('isTextEntry', () => {
   it('recognises the elements a keystroke belongs to', async () => {
     const { isTextEntry } = await import('./keymap')

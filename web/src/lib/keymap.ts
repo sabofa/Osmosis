@@ -22,6 +22,7 @@ export type KeyAction =
   | { type: 'toggle-idk' }
   | { type: 'confidence'; level: Confidence }
   | { type: 'advance' }
+  | { type: 'acknowledge' }
 
 export interface KeyContext {
   // The caret is in a textarea/input/contenteditable.
@@ -31,6 +32,10 @@ export interface KeyContext {
   // A "recorded" card is showing — the item is answered and the learner is
   // looking at the acknowledgement, not at an answerable item.
   recorded: boolean
+  // A show is on screen waiting to be acknowledged (§5.1). Only ever true
+  // when no item is open: while one is, the show is collapsed behind it and
+  // Space belongs to the item's own card.
+  showPending?: boolean
 }
 
 // The shape this map needs from a KeyboardEvent, and nothing more.
@@ -52,6 +57,9 @@ const CONFIDENCE_KEYS: Record<string, Confidence> = {
 // cannot drift apart.
 export const KEY_HINTS = "1–5 pick · Enter next · b blank · ? don't know · u/s/c how sure"
 
+// The stream's own legend, for when a show is the thing on screen.
+export const SHOW_KEY_HINT = 'Space to acknowledge'
+
 export function resolveKey(event: KeyLike, ctx: KeyContext): KeyAction | null {
   const ctrl = event.ctrlKey === true
   const meta = event.metaKey === true
@@ -64,6 +72,11 @@ export function resolveKey(event: KeyLike, ctx: KeyContext): KeyAction | null {
     if (ctrl || meta || alt) return null
     if (ctx.inTextField) return null
   }
+
+  // A show is not answerable, so Space is free to mean the one thing there is
+  // to do with it. Above the rest of the map because the stream's own keyboard
+  // is only enabled when nothing else wants these keys.
+  if (ctx.showPending && event.key === ' ') return { type: 'acknowledge' }
 
   // A recorded card has nothing left to answer, so every way out of it agrees:
   // Enter, Ctrl+Enter and Space all move on, and nothing else does anything —

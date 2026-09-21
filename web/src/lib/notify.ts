@@ -103,17 +103,28 @@ export function clearTitleFlash(): void {
   }
 }
 
-// The one thing the live screen calls: an item landed. Does nothing at all
-// while the app is in front — a notification for something already on screen
-// is pure noise.
-export function notifyItemPresented(): void {
+// What the live screen calls when the tutor puts something new on it. Does
+// nothing at all while the app is in front — a notification for something
+// already on screen is pure noise.
+function notifyPresented(body: string): void {
   if (!isAway()) return
   flashTitle()
   if (!notifyPreference() || notifyPermission() !== 'granted') return
   try {
-    new Notification('Osmosis — the tutor sent an item')
+    new Notification(body)
   } catch {
     // Some browsers refuse the constructor outside a service worker; the
     // title flash has already done the important half.
   }
+}
+
+export function notifyItemPresented(): void {
+  notifyPresented('Osmosis — the tutor sent an item')
+}
+
+// A show is the other half of the live loop (§5.1) and is just as easy to
+// miss from another window, so it flashes the title too. Worded differently
+// because "an item" would have Ben reaching for the keyboard to answer one.
+export function notifyShowPresented(): void {
+  notifyPresented('Osmosis — the tutor put something on screen')
 }

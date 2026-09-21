@@ -13,7 +13,11 @@ export type SessionEventType =
   | "item_answered"
   | "attempt_paused"
   | "attempt_resumed"
-  | "session_ended";
+  | "session_ended"
+  // Showing (§5.1/§5.2): the tutor put something non-answerable on the
+  // screen, or redrew a graph already on it.
+  | "show_presented"
+  | "show_updated";
 
 export interface SessionEvent {
   type: SessionEventType;

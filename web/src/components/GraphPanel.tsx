@@ -21,7 +21,9 @@ export default function GraphPanel({ spec }: { spec: string }) {
   const { resolvedMode } = useTheme()
 
   function handleErrors(errors: ParseError[]) {
-    if (errors.length > 0) console.warn('graph spec errors', errors)
+    // The messages, not the objects: a console line reading `{0: Object}` is
+    // no help at all when a graph comes up blank.
+    if (errors.length > 0) console.warn('graph spec errors:', errors.map((e) => e.message).join('; '))
   }
 
   return (

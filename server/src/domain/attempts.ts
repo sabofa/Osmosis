@@ -6,6 +6,7 @@ import { resolveTemplateDraw, getEligibleQuestions, type DrawResult, type Eligib
 import type { TagQuery } from "./tagQuery.js";
 import { assertSessionOpen, sessionIsOpen, sessionRevealDefault, type Reveal } from "./sessions.js";
 import { nodeKeyFields } from "./nodeKeys.js";
+import { serializeContext, parseContext, type ItemContext } from "./context.js";
 
 // Unsubmitted attempts older than this many hours are considered abandoned.
 // Swept lazily (no background timer) whenever attempts are read or created.
@@ -215,6 +216,9 @@ export type CreateAttemptInput =
       // Optional by design: an adhoc attempt with session_id IS NULL behaves
       // exactly as it did before sessions existed. See migration 010.
       session_id?: string;
+      // The tutor's breadcrumb for this item, already serialized (§5.1).
+      // Stored verbatim and only ever displayed — see domain/context.ts.
+      context_json?: string | null;
     };
 
 export function createAttempt(
@@ -297,9 +301,16 @@ export function createAttempt(
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO attempt (id, node_id, source, delivery_mode, session_id, reveal, started_at)
-       VALUES (?, ?, 'adhoc', ?, ?, ?, datetime('now'))`
-    ).run(attemptId, input.node_id, input.delivery_mode, input.session_id ?? null, input.reveal ?? "immediate");
+      `INSERT INTO attempt (id, node_id, source, delivery_mode, session_id, reveal, context_json, started_at)
+       VALUES (?, ?, 'adhoc', ?, ?, ?, ?, datetime('now'))`
+    ).run(
+      attemptId,
+      input.node_id,
+      input.delivery_mode,
+      input.session_id ?? null,
+      input.reveal ?? "immediate",
+      input.context_json ?? null
+    );
 
     const insertResponse = db.prepare(
       "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
@@ -331,6 +342,10 @@ export interface PresentItemInput {
   session_id?: string;
   // Overrides the session's reveal_default for this one item.
   reveal?: Reveal;
+  // Where in the course this item comes from, and how long it is meant to
+  // take — the same object present_show carries, so the app's banner reads
+  // the same whichever kind of entry is newest (§5.1).
+  context?: ItemContext | null;
 }
 
 export function presentItem(
@@ -372,6 +387,7 @@ export function presentItem(
     delivery_mode: "app_live",
     session_id: input.session_id,
     reveal,
+    context_json: serializeContext(input.context),
   });
 
   const response = db.prepare("SELECT id FROM response WHERE attempt_id = ?").get(attempt_id) as { id: string };
@@ -679,6 +695,7 @@ interface AttemptRow {
   daily_draw_id: string | null;
   session_id: string | null;
   reveal: Reveal;
+  context_json: string | null;
   started_at: string;
   submitted_at: string | null;
   abandoned_at: string | null;
@@ -764,6 +781,9 @@ export function getAttemptDetail(
     template_id: attempt.template_id,
     daily_draw_id: attempt.daily_draw_id,
     session_id: attempt.session_id,
+    // The tutor's breadcrumb, if it named one (§5.1). Never answer-key
+    // material — it says where the item came from, not what it answers to.
+    context: parseContext(attempt.context_json),
     started_at: attempt.started_at,
     submitted_at: attempt.submitted_at,
     abandoned_at: attempt.abandoned_at,

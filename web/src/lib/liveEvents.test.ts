@@ -17,6 +17,16 @@ describe('parseSessionEvent', () => {
     expect(e).toEqual({ type: 'item_presented', at: '2026-09-21T10:00:00.000Z', attempt_id: 'a', response_id: 'r' })
   })
 
+  it('accepts the show events the stream added (§5.1)', () => {
+    const presented = parseSessionEvent(
+      JSON.stringify({ type: 'show_presented', at: '2026-09-21T10:00:00.000Z', show_id: 's1' })
+    )
+    expect(presented).toMatchObject({ type: 'show_presented', show_id: 's1' })
+    expect(parseSessionEvent(JSON.stringify({ type: 'show_updated', at: 'x', show_id: 's1' }))).toMatchObject({
+      type: 'show_updated',
+    })
+  })
+
   it('drops anything malformed rather than handing it on', () => {
     expect(parseSessionEvent('')).toBeNull()
     expect(parseSessionEvent('not json')).toBeNull()
@@ -25,7 +35,7 @@ describe('parseSessionEvent', () => {
     expect(parseSessionEvent(JSON.stringify({ at: '2026-09-21T10:00:00.000Z' }))).toBeNull()
     expect(parseSessionEvent(JSON.stringify({ type: 'item_presented' }))).toBeNull()
     // A type this build doesn't know about: ignored, not passed through.
-    expect(parseSessionEvent(JSON.stringify({ type: 'show_presented', at: 'now' }))).toBeNull()
+    expect(parseSessionEvent(JSON.stringify({ type: 'learner_sneezed', at: 'now' }))).toBeNull()
     expect(parseSessionEvent(undefined)).toBeNull()
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChevronDownIcon, ChevronRightIcon, BoltIcon, TagIcon, ClockIcon } from './icons'
-import LiveItem from './LiveItem'
+import SessionStream from './SessionStream'
 import RichText from './RichText'
 import {
   getStatus,
@@ -19,7 +19,7 @@ import './SessionList.css'
 // creates one per conversation over MCP), each expandable in place to show
 // its templates, its past attempt history, and a distinguished "Live
 // session" row (open sessions only — a closed one has nothing left to hand
-// off). Clicking that row mounts LiveItem, which subscribes to the session's
+// off). Clicking that row mounts SessionStream, which subscribes to the session's
 // event stream. Sessions are typically created once per
 // tutoring conversation and Ben navigates here deliberately, so this list
 // just re-fetches on mount/manual refresh rather than polling continuously.
@@ -89,7 +89,7 @@ export default function SessionList({
   }, [expandedId])
 
   if (liveSessionId) {
-    return <LiveItem sessionId={liveSessionId} onExit={() => setLiveSessionId(null)} />
+    return <SessionStream sessionId={liveSessionId} onExit={() => setLiveSessionId(null)} />
   }
 
   function toggle(id: string) {

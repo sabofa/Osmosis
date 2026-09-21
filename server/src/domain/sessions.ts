@@ -105,6 +105,9 @@ export interface EndSessionSummary {
   answered: number;
   abandoned: number;
   dont_know: number;
+  // Non-answerable things the tutor put on the screen during the session
+  // (present_show, §5.1). Counted beside the items, never among them.
+  shows: number;
   paused_now: false;
   // Questions written for this session alone, retired here — they were never
   // part of the bank and must not outlive the moment they were written for.
@@ -187,6 +190,10 @@ export function endSession(
       answered: counts.answered ?? 0,
       abandoned: counts.abandoned ?? 0,
       dont_know: dontKnow,
+      // Counted inline rather than through domain/shows.ts: shows.ts already
+      // imports this module for its session gates, and a cycle between the
+      // two for one COUNT(*) is not worth the tidiness.
+      shows: (db.prepare("SELECT COUNT(*) AS n FROM show WHERE session_id = ?").get(id) as { n: number }).n,
       paused_now: false,
       retired_ephemeral: Number(retiredEphemeral),
     },

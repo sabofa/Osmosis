@@ -477,7 +477,7 @@ describe("end_session summary (§3.7)", () => {
     const pending = presentItem(db, { node_id: "n", question_id: mc.id, session_id: session.id });
 
     const result = endSession(db, session.id);
-    expect(result.summary).toEqual({ presented: 3, answered: 2, abandoned: 1, dont_know: 1, paused_now: false, retired_ephemeral: 0 });
+    expect(result.summary).toEqual({ presented: 3, answered: 2, abandoned: 1, dont_know: 1, shows: 0, paused_now: false, retired_ephemeral: 0 });
     expect(getItemOutcome(db, pending.response_id).status).toBe("abandoned");
   });
 
@@ -491,7 +491,7 @@ describe("end_session summary (§3.7)", () => {
     submitAttempt(db, idk.attempt_id);
 
     const result = endSession(db, session.id);
-    expect(result.summary).toEqual({ presented: 1, answered: 1, abandoned: 0, dont_know: 1, paused_now: false, retired_ephemeral: 0 });
+    expect(result.summary).toEqual({ presented: 1, answered: 1, abandoned: 0, dont_know: 1, shows: 0, paused_now: false, retired_ephemeral: 0 });
   });
 });
 

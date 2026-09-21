@@ -13,6 +13,7 @@ import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
 import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail, gradeResponseByTutor } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
+import { presentShow, updateShow, getShowOutcome } from "../domain/shows.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
 import { listThemes, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
 
@@ -30,6 +31,20 @@ const tagQueryShape = z
     none: z.array(z.string()).optional(),
   })
   .optional();
+
+// The tutor's breadcrumb for an item or a show (§5.1). Every field optional:
+// whatever is named lands in the app's banner above the stream, and timer_s
+// becomes a countdown there.
+const contextShape = z
+  .object({
+    course: z.string().optional().describe("The course this moment belongs to, as the learner would name it."),
+    unit: z.string().optional().describe("The unit or chapter within the course."),
+    node: z.string().optional().describe("The one teachable idea — the same string the item's node_keys carry."),
+    step: z.string().optional().describe("Where in the teaching loop this is, e.g. 'probe', 'worked example', 'check'."),
+    timer_s: z.number().positive().optional().describe("How long the learner is meant to spend, in seconds. Shown as a countdown; nothing is enforced."),
+  })
+  .optional()
+  .describe("Where in the course this comes from. Displayed verbatim in the app's banner and never interpreted.");
 
 const choiceShape = z.object({
   body: z.string().describe("The choice's text."),
@@ -125,6 +140,9 @@ export const PRESENTER_TOOLS: readonly string[] = [
   "create_questions",
   "present_item",
   "await_item_outcome",
+  "present_show",
+  "update_show",
+  "await_show_outcome",
   "get_attempt",
   "end_session",
   "grade_response",
@@ -140,7 +158,7 @@ export function registerTools(
   const allowed = scope === "presenter" ? new Set(PRESENTER_TOOLS) : null;
   // The tools this particular registration actually registered. readme() is
   // handed this rather than the module-level set in protocol.ts, so a
-  // presenter connection sees its own eight names and a full connection sees
+  // presenter connection sees its own names and a full connection sees
   // all of them — in one process serving both, neither leaks into the other.
   const registered: string[] = [];
 
@@ -686,11 +704,12 @@ export function registerTools(
           "Overrides the session's reveal_default for this item: 'immediate' shows the learner the answer key on " +
             "submit, 'deferred' holds it back until end_session. Defaults to the session's setting, or immediate."
         ),
+        context: contextShape,
       },
     },
-    async ({ question_id, tag_query, session_id, reveal }) => {
+    async ({ question_id, tag_query, session_id, reveal, context }) => {
       try {
-        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id, reveal }));
+        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id, reveal, context }));
       } catch (err) {
         return fail(err);
       }
@@ -724,6 +743,109 @@ export function registerTools(
           await sleep(1_000);
         }
         return ok(paused ?? { status: "pending" });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  // --------------------------------------------------------------------------
+  // Showing (§5.1–§5.2). The other half of the live loop: putting something
+  // on the learner's screen that is not a question. Nothing here is answered,
+  // graded, or kept — a show belongs to its session and dies with it.
+  // --------------------------------------------------------------------------
+
+  registerTool(
+    "present_show",
+    {
+      description:
+        "Put something on the learner's screen that is NOT a question: a line of text, a paragraph of markdown, " +
+        "or a graph to talk over. It lands in the app's session stream beside the items, with an OK button. " +
+        "Returns immediately with a show_id — nothing is rendered in this conversation. Call await_show_outcome " +
+        "to learn when it was seen and acknowledged, and update_show to redraw a graph in place. A show is " +
+        "ephemeral: it is never in the bank, never graded, and dies with its session.",
+      inputSchema: {
+        session_id: z.string().describe("The session id from create_session. A show always belongs to a session, and the session must still be open."),
+        kind: z
+          .enum(["text", "markdown", "graph"])
+          .describe(
+            "'text' and 'markdown' both go through the app's rich-text renderer — the one a question prompt " +
+              "uses, which today renders LaTeX ($...$ and $$...$$) and line breaks but not markdown emphasis, " +
+              "so write **bold** only where you'd accept seeing the asterisks. 'graph' is a graph-engine spec, " +
+              "the same DSL as a question's graph_spec, parsed here so a spec that won't render is rejected " +
+              "rather than shown as an empty canvas."
+          ),
+        payload: z.string().describe("The content itself: the text, the markdown, or the graph spec."),
+        caption: z
+          .string()
+          .optional()
+          .describe("A short label shown under the card, up to 500 characters. A label, not the content."),
+        context: contextShape,
+      },
+    },
+    async ({ session_id, kind, payload, caption, context }) => {
+      try {
+        return ok(presentShow(db, { session_id, kind, payload, caption, context }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "update_show",
+    {
+      description:
+        "Redraw a graph show in place — the app keeps the same canvas and feeds it the new spec, so the frame " +
+        "doesn't jump while you talk over it (set @bounds in the spec to hold the frame yourself). Graph shows " +
+        "only: anything else is rejected as update_not_supported, because replacing prose means present_show. " +
+        "The session must still be open, and the new spec is parsed exactly as present_show parses the first one.",
+      inputSchema: {
+        show_id: z.string().describe("The show_id returned by present_show."),
+        payload: z.string().describe("The replacement graph spec."),
+      },
+    },
+    async ({ show_id, payload }) => {
+      try {
+        return ok(updateShow(db, show_id, payload));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "await_show_outcome",
+    {
+      description:
+        "Wait for the learner to work through a show from present_show, up to timeout_s seconds (default 25, " +
+        "clamped to 1..25). Returns status 'acknowledged' once they pressed OK (or Space) — that is your cue to " +
+        "move on — 'seen' if the card reached their screen but they haven't acknowledged it, or 'pending' if " +
+        "nothing has happened yet in that window; call this again to keep waiting. Also carries seen_at, " +
+        "acknowledged_at and dwell_ms, the time the card actually stood in front of them, which is worth more " +
+        "than the acknowledgement on its own: an instant OK after 400ms is not reading.",
+      inputSchema: {
+        show_id: z.string(),
+        timeout_s: z
+          .number()
+          .optional()
+          .describe("How long to wait, in seconds. Default 25; values outside 1..25 are clamped."),
+      },
+    },
+    async ({ show_id, timeout_s }) => {
+      try {
+        const windowS = Math.min(25, Math.max(1, timeout_s ?? 25));
+        const deadline = Date.now() + windowS * 1_000;
+        // Unlike an item, a show has no terminal failure to bail out on — it
+        // is never abandoned — so this polls to the deadline and reports
+        // whatever it last saw. 'acknowledged' is the only status that ends
+        // the wait early, because it is the only one that means "move on".
+        let last = getShowOutcome(db, show_id);
+        while (last.status !== "acknowledged" && Date.now() < deadline) {
+          await sleep(1_000);
+          last = getShowOutcome(db, show_id);
+        }
+        return ok(last);
       } catch (err) {
         return fail(err);
       }
