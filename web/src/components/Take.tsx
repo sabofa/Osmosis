@@ -16,6 +16,7 @@ import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
 import { useKeyboard } from '../hooks/useKeyboard'
 import { KEY_HINTS, WRITTEN_KEY_HINTS, type KeyAction } from '../lib/keymap'
+import { writtenTextPatch } from '../lib/writtenPatch'
 import { createItemClock, type ItemClock } from '../lib/itemClock'
 import { formatClock, timerClass, nextTimeUpPhase, type TimeUpPhase } from '../lib/timeFormat'
 import './Take.css'
@@ -394,9 +395,12 @@ export default function Take({
     // A written idk keeps whatever was typed: "I don't know, but here is what
     // I do know" is the most useful thing a learner can hand a tutor, and it
     // is not a skip — there is something in the box to read.
+    // `skipped: false` and not merely absent: the PATCH leaves an absent key
+    // alone, so an idk arriving after a `b` would otherwise stay marked as a
+    // deliberate blank. Saying "I don't know" is an answer, not a blank.
     if (question.type !== 'mc') {
       patchDraft({ idk: true })
-      mergeSaved(answerResponse(attempt.id, response.id, { idk: true, elapsed_ms: ms }), 'idk')
+      mergeSaved(answerResponse(attempt.id, response.id, { idk: true, skipped: false, elapsed_ms: ms }), 'idk')
       return
     }
     patchDraft({ idk: true, selectedChoiceId: null, bestGuessChoiceId: null })
@@ -427,12 +431,7 @@ export default function Take({
       }
       patchDraft({ writtenText: '', idk: false })
       mergeSaved(
-        answerResponse(attempt.id, responseId, {
-          response_text: '',
-          idk: false,
-          skipped: true,
-          elapsed_ms: ms,
-        }),
+        answerResponse(attempt.id, responseId, { ...writtenTextPatch('', ms), idk: false }),
         'blank'
       )
       return
@@ -457,7 +456,10 @@ export default function Take({
       delete saveTimers.current[responseId]
       const ms = Math.round(currentElapsed(responseId))
       lastSent.current[responseId] = ms
-      answerResponse(attempt.id, responseId, { response_text: text, elapsed_ms: ms })
+      // writtenTextPatch, not a bare { response_text }: every save of the text
+      // has to restate `skipped`, or a `b` pressed earlier outlives the answer
+      // typed after it. See web/src/lib/writtenPatch.ts.
+      answerResponse(attempt.id, responseId, writtenTextPatch(text, ms))
         .then((updated) => {
           setAttempt((prev) =>
             prev
