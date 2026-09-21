@@ -1,0 +1,173 @@
+/* ---- Narrow / portrait layouts for every screen outside a test ------------
+   One rule for the whole app, the same query the test view branches on in
+   JSX (hooks/useMediaQuery NARROW_QUERY): a phone, a half-width window, or
+   anything taller than it is wide. Imported last from App.tsx so it wins
+   ties against each screen's own stylesheet. */
+
+@media (max-width: 760px), (max-aspect-ratio: 1/1) {
+  /* The rail becomes a bottom tab bar: no hover, no labels, always there. */
+  .rail {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 60px;
+    flex-direction: row;
+    justify-content: space-evenly;
+    gap: 6px;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 2px solid var(--line);
+    animation: none;
+  }
+  .rail:hover {
+    width: auto;
+    align-items: center;
+    padding-right: 8px;
+  }
+  .rail:hover .rail-item {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  .rail-item .rail-label,
+  .rail:hover .rail-item .rail-label {
+    display: none;
+  }
+
+  /* Every page: no right gutter for the rail, room at the bottom for the
+     tab bar, and a natural height that scrolls the whole page. */
+  .home,
+  .bank,
+  .library,
+  .results,
+  .session-list,
+  .settings,
+  .session-stream {
+    height: auto;
+    min-height: 100dvh;
+    padding: 12px 12px calc(76px + env(safe-area-inset-bottom));
+  }
+
+  /* Home: templates and the picked template side by side (or stacked when
+     there is no room), the activity heatmap across the bottom. */
+  .home {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: auto;
+    align-content: start;
+    align-items: start;
+    gap: 12px;
+  }
+  .home .templates-panel {
+    max-height: 60dvh;
+    height: auto;
+  }
+  .home .templates-list {
+    flex: none;
+  }
+  .home .right-col {
+    display: contents;
+  }
+  .home .detail-panel {
+    max-height: 60dvh;
+    overflow-y: auto;
+  }
+  .home .heatmap-panel {
+    grid-column: 1 / -1;
+    min-height: 0;
+    padding-bottom: 44px;
+  }
+  .home .heatmap-fill {
+    flex: none;
+  }
+  @media (max-width: 520px) {
+    .home {
+      grid-template-columns: 1fr;
+    }
+    .home .templates-panel,
+    .home .detail-panel {
+      max-height: none;
+    }
+  }
+
+  /* Bank: tags above, questions below. The tag list keeps its own scroll
+     so a long subject never pushes the questions off the screen. */
+  .bank {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .bank .bank-tags-panel {
+    max-height: 40dvh;
+    flex: none;
+  }
+  .bank .bank-questions-panel {
+    flex: none;
+    min-height: 50dvh;
+  }
+
+  /* Library: the test grid, then the picked test. */
+  .library {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .library > * {
+    flex: none;
+    max-height: none;
+  }
+
+  /* Results: hero, then the side column, one under the other. */
+  .results .results-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: none;
+  }
+  .results .results-grid > * {
+    min-height: 0;
+    flex: none;
+  }
+
+  /* Review: the outcome strip runs along the top like the test's dots, the
+     detail below it, the side column after. */
+  .review {
+    height: auto;
+    min-height: 100dvh;
+    padding: 12px;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .review .review-index {
+    width: auto;
+    height: 44px;
+    flex-direction: row;
+    padding: 0 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-radius: 999px;
+  }
+  .review .review-main,
+  .review .review-main.with-panel {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    flex: none;
+  }
+  .review .review-detail {
+    overflow: visible;
+    padding: 18px;
+  }
+  .review .review-panel,
+  .review .panel-resize-handle {
+    display: none;
+  }
+
+  /* Settings and the session list simply lose the rail gutter. */
+  .settings {
+    padding-right: 12px;
+  }
+}

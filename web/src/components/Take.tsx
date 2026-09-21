@@ -865,7 +865,7 @@ export default function Take({
       {confirm === 'submit' && (
         <ConfirmDialog
           title={`${unansweredCount} ${unansweredCount === 1 ? 'question is' : 'questions are'} unanswered`}
-          body="Submit anyway? Blank questions are scored as not answered. You can still go back with the dots."
+          body="Submit anyway? A blank question counts as wrong. You can still go back with the dots."
           confirmLabel="Submit anyway"
           cancelLabel="Go back"
           onConfirm={() => {

@@ -11,6 +11,7 @@ import Settings from './components/Settings'
 import { useTheme } from './hooks/useTheme'
 import { useThemePresets } from './hooks/useThemePresets'
 import { createAttempt, createDailyAttempt, getAttempt, getSessions, sessionIsOpen, type AttemptDetail } from './lib/api'
+import './narrow.css'
 
 function App() {
   const [page, setPage] = useState<Page>('home')

@@ -77,14 +77,17 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     for (const close of [...openStreams]) close();
   });
 
-  // The daily question and quiz are once a day: the second click greys out,
-  // and the route below refuses a second attempt for the same day.
+  // The daily question and quiz are once a day: after today's is submitted
+  // the card greys out and the route below refuses another. An attempt that
+  // was started and walked away from does not count — it is abandoned, and
+  // the learner gets today's draw again.
   function dailyTakenToday(): { question: string | null; quiz: string | null } {
     const rows = db
       .prepare(
         `SELECT source, id FROM attempt
-         WHERE source IN ('daily_question','daily_quiz') AND date(started_at) = date('now')
-         ORDER BY started_at DESC`
+         WHERE source IN ('daily_question','daily_quiz')
+           AND submitted_at IS NOT NULL AND date(submitted_at) = date('now')
+         ORDER BY submitted_at DESC`
       )
       .all() as { source: string; id: string }[];
     return {
@@ -444,7 +447,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       if (takenId) {
         reply.code(409).send({
           error: "daily_already_taken",
-          message: `Today's daily ${kind} was already started (attempt ${takenId}). It comes back tomorrow.`,
+          message: `Today's daily ${kind} is already done (attempt ${takenId}). It comes back tomorrow.`,
           attempt_id: takenId,
         });
         return;
