@@ -488,3 +488,103 @@ describe("item channel over MCP", () => {
     expect(rejected.body.error).toBe("ephemeral_requires_session");
   });
 });
+
+// ----------------------------------------------------------------------------
+// The learner's other screens must honour the same hold (review fix round 1)
+// ----------------------------------------------------------------------------
+
+describe("deferred reveal across the learner's other reads", () => {
+  function heldSession(db: ReturnType<typeof openTestDb>) {
+    insertTag(db, "a");
+    const q = insertQuestion(db, { tags: ["a"] });
+    const session = createSession(db, { name: "s", reveal_default: "deferred" });
+    const item = presentItem(db, { node_id: "n", question_id: q.id, session_id: session.id });
+    answerAndSubmit(db, item.attempt_id, item.response_id);
+    return { session, item };
+  }
+
+  it("hides a held attempt's mean_score from the session detail the app renders", async () => {
+    const { getSessionDetail } = await import("../src/domain/sessions.js");
+    const db = openTestDb();
+    const { session } = heldSession(db);
+
+    const learner = getSessionDetail(db, session.id, { viewer: "learner" }) as any;
+    expect(learner.attempts[0].revealed).toBe(false);
+    expect(learner.attempts[0].mean_score).toBeNull();
+    expect(learner.attempts[0].ungraded).toBeNull();
+
+    // The tutor's read — get_session — is untouched.
+    const tutor = getSessionDetail(db, session.id) as any;
+    expect(tutor.attempts[0].revealed).toBe(true);
+    expect(tutor.attempts[0].mean_score).toBe(0);
+
+    endSession(db, session.id);
+    const afterEnd = getSessionDetail(db, session.id, { viewer: "learner" }) as any;
+    expect(afterEnd.attempts[0].revealed).toBe(true);
+    expect(afterEnd.attempts[0].mean_score).toBe(0);
+  });
+
+  it("keeps a held response out of every get_results scope for the learner", async () => {
+    const { getResults } = await import("../src/domain/results.js");
+    const db = openTestDb();
+    const { session } = heldSession(db);
+
+    const learnerTags = getResults(db, { scope: "tag" }, { viewer: "learner" }) as any;
+    expect(learnerTags.tags).toHaveLength(0);
+    const learnerQuestions = getResults(db, { scope: "question" }, { viewer: "learner" }) as any;
+    expect(learnerQuestions.questions).toHaveLength(0);
+    const learnerAttempts = getResults(db, { scope: "attempt" }, { viewer: "learner" }) as any;
+    expect(learnerAttempts.attempts).toHaveLength(0);
+
+    // The tutor still sees all of it.
+    const tutorTags = getResults(db, { scope: "tag" }) as any;
+    expect(tutorTags.tags[0].responses).toBe(1);
+    const tutorQuestions = getResults(db, { scope: "question" }) as any;
+    expect(tutorQuestions.questions[0].recent_responses[0].outcome).toBe("incorrect");
+
+    // ... and so does the learner, once the session has ended.
+    endSession(db, session.id);
+    const afterEnd = getResults(db, { scope: "question" }, { viewer: "learner" }) as any;
+    expect(afterEnd.questions).toHaveLength(1);
+    expect(afterEnd.questions[0].recent_responses[0].outcome).toBe("incorrect");
+  });
+
+  it("leaves an immediate attempt visible to the learner in both reads", async () => {
+    const { getResults } = await import("../src/domain/results.js");
+    const { getSessionDetail } = await import("../src/domain/sessions.js");
+    const db = openTestDb();
+    insertTag(db, "a");
+    const q = insertQuestion(db, { tags: ["a"] });
+    const session = createSession(db, { name: "s" });
+    const item = presentItem(db, { node_id: "n", question_id: q.id, session_id: session.id });
+    answerAndSubmit(db, item.attempt_id, item.response_id);
+
+    expect((getSessionDetail(db, session.id, { viewer: "learner" }) as any).attempts[0].mean_score).toBe(0);
+    expect((getResults(db, { scope: "question" }, { viewer: "learner" }) as any).questions).toHaveLength(1);
+  });
+});
+
+describe("ephemeral questions never leave canonical over sync", () => {
+  it("is absent from a pull payload for a slice it is tagged under", async () => {
+    const { buildPullResponse } = await import("../src/domain/sync.js");
+    const canonical = openTestDb();
+    insertTag(canonical, "a");
+    const session = createSession(canonical, { name: "s" });
+    const ephemeral = createQuestions(canonical, [mcQuestion({ prompt: "session only" })], {
+      ephemeral: true,
+      session_id: session.id,
+    }).created[0];
+    const ordinary = createQuestions(canonical, [mcQuestion({ prompt: "bank item" })]).created[0];
+
+    const payload = buildPullResponse(canonical, {
+      node_id: "local-1",
+      protocol_version: 1,
+      slices: ["a"],
+      since: null,
+      include_grades_for_node: false,
+    });
+    const ids = payload.questions.map((q: any) => q.id);
+    expect(ids).toContain(ordinary.id);
+    expect(ids).not.toContain(ephemeral.id);
+  });
+});

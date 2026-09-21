@@ -374,6 +374,11 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
        WHERE EXISTS (
          SELECT 1 FROM question_tag qt WHERE qt.question_id = q.id AND ${questionTagMatch.sql}
        )
+       -- An ephemeral question belongs to one live session on this node and
+       -- is retired when it ends. It must never leave canonical: the puller
+       -- has no session to scope it to, doesn't carry the ephemeral column,
+       -- and would draw it as an ordinary bank item forever.
+       AND q.ephemeral = 0
        ${sinceClause}
        ORDER BY q.id`
     );

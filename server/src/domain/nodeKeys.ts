@@ -96,15 +96,23 @@ export function nodeKeyFields(db: DatabaseSync, questionId: string): { node_key:
 // WHERE fragment for search_questions's node_key filter: exact match, or
 // prefix match when the caller's value ends with ':' ("node:ebbing11e:2.4:"
 // matches every key under that section).
+// The `q.node_key OR` half mirrors getNodeKeys' fallback: a row written
+// straight to the column (a sync pull, a raw test INSERT) has no
+// question_node_key rows yet and must still be findable by its primary key.
 export function nodeKeyFilterClause(value: string): { sql: string; params: unknown[] } {
   if (value.endsWith(":")) {
+    const pattern = `${value.replace(/[\\%_]/g, "\\$&")}%`;
     return {
-      sql: "EXISTS (SELECT 1 FROM question_node_key nk WHERE nk.question_id = q.id AND nk.node_key LIKE ? ESCAPE '\\')",
-      params: [`${value.replace(/[\\%_]/g, "\\$&")}%`],
+      sql:
+        "(EXISTS (SELECT 1 FROM question_node_key nk WHERE nk.question_id = q.id AND nk.node_key LIKE ? ESCAPE '\\')" +
+        " OR q.node_key LIKE ? ESCAPE '\\')",
+      params: [pattern, pattern],
     };
   }
   return {
-    sql: "EXISTS (SELECT 1 FROM question_node_key nk WHERE nk.question_id = q.id AND nk.node_key = ?)",
-    params: [value],
+    sql:
+      "(EXISTS (SELECT 1 FROM question_node_key nk WHERE nk.question_id = q.id AND nk.node_key = ?)" +
+      " OR q.node_key = ?)",
+    params: [value, value],
   };
 }

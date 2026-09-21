@@ -50,4 +50,4 @@ CREATE INDEX question_node_key_by_key ON question_node_key (node_key);
 -- Backfill: every question that already has a node_key gets one primary row,
 -- so question_node_key is the complete picture from the first read.
 INSERT INTO question_node_key (question_id, node_key, is_primary, ordinal)
-SELECT id, node_key, 1, 0 FROM question WHERE node_key IS NOT NULL;
+SELECT id, node_key, 1, 0 FROM question WHERE node_key IS NOT NULL AND node_key <> '';

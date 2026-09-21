@@ -3,6 +3,7 @@ import { DomainError } from "./errors.js";
 import { buildTagQueryClause, type TagQuery } from "./tagQuery.js";
 import { bestGuessCorrect, confidenceNumeric, deriveOutcome, type Confidence } from "./attempts.js";
 import { nodeKeyFields } from "./nodeKeys.js";
+import { notHeldSql, type Viewer } from "./reveal.js";
 
 // Every per-response row get_results hands back, at either scope. The binding
 // rule (spec §2): anything the response accepted on input is readable here,
@@ -65,7 +66,26 @@ export interface GetResultsParams {
   offset?: number;
 }
 
-function tagScope(db: DatabaseSync, params: GetResultsParams) {
+// tag_performance's own text, plus the learner's hold filter. The view
+// cannot be filtered from outside (it is already grouped), so the learner's
+// read recomputes it from the same base tables — keep this in step with
+// migration 015's CREATE VIEW if that ever changes.
+function tagPerformanceSource(viewer: Viewer): string {
+  if (viewer !== "learner") return "tag_performance";
+  return `(SELECT qt.tag_slug,
+                  COUNT(*) AS responses,
+                  COUNT(rs.score) AS graded,
+                  AVG(rs.score) AS mean_score,
+                  SUM(CASE WHEN rs.score < 0.5 THEN 1 ELSE 0 END) AS misses,
+                  MAX(a.submitted_at) AS last_seen
+           FROM response_score rs
+           JOIN attempt a ON a.id = rs.attempt_id AND a.submitted_at IS NOT NULL
+           JOIN question_tag qt ON qt.question_id = rs.question_id
+           WHERE ${notHeldSql(viewer)}
+           GROUP BY qt.tag_slug)`;
+}
+
+function tagScope(db: DatabaseSync, params: GetResultsParams, viewer: Viewer) {
   const clauses: string[] = [];
   const args: unknown[] = [];
 
@@ -106,14 +126,14 @@ function tagScope(db: DatabaseSync, params: GetResultsParams) {
                  JOIN response r ON r.id = rs.response_id
                  JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at >= datetime('now', '-30 days')
                  JOIN question_tag qt ON qt.question_id = rs.question_id
-                 WHERE qt.tag_slug = tp.tag_slug) AS recent_mean,
+                 WHERE qt.tag_slug = tp.tag_slug AND ${notHeldSql(viewer)}) AS recent_mean,
               (SELECT AVG(rs.score) FROM response_score rs
                  JOIN response r ON r.id = rs.response_id
                  JOIN attempt a ON a.id = r.attempt_id
                    AND a.submitted_at >= datetime('now', '-60 days') AND a.submitted_at < datetime('now', '-30 days')
                  JOIN question_tag qt ON qt.question_id = rs.question_id
-                 WHERE qt.tag_slug = tp.tag_slug) AS prior_mean
-       FROM tag_performance tp
+                 WHERE qt.tag_slug = tp.tag_slug AND ${notHeldSql(viewer)}) AS prior_mean
+       FROM ${tagPerformanceSource(viewer)} tp
        ${where}
        ORDER BY tp.mean_score IS NULL, tp.mean_score ASC
        LIMIT ? OFFSET ?`
@@ -147,7 +167,7 @@ function truncateResponseText(text: string | null): string | null {
   return `${text.slice(0, RESPONSE_TEXT_PREVIEW_LENGTH)}...`;
 }
 
-function questionScope(db: DatabaseSync, params: GetResultsParams) {
+function questionScope(db: DatabaseSync, params: GetResultsParams, viewer: Viewer) {
   const tagClause = params.tag_query ? buildTagQueryClause(params.tag_query) : { sql: "", params: [] };
   const limit = params.limit ?? 50;
   const offset = params.offset ?? 0;
@@ -166,7 +186,7 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
        JOIN response r ON r.id = rs.response_id
        JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
        JOIN question q ON q.id = rs.question_id
-       WHERE 1=1 ${tagClause.sql}
+       WHERE ${notHeldSql(viewer)} ${tagClause.sql}
        GROUP BY q.lineage_id
        ORDER BY mean_score IS NULL, mean_score ASC
        LIMIT ? OFFSET ?`
@@ -200,7 +220,7 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
          JOIN response r ON r.id = rs.response_id
          JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
          JOIN question q ON q.id = rs.question_id
-         WHERE q.lineage_id = ? AND rs.grader IS NOT NULL
+         WHERE q.lineage_id = ? AND rs.grader IS NOT NULL AND ${notHeldSql(viewer)}
          GROUP BY rs.grader`
       )
       .all(l.lineage_id) as { grader: string; n: number }[];
@@ -212,7 +232,7 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
          JOIN response r ON r.id = rs.response_id
          JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
          JOIN question q ON q.id = rs.question_id
-         WHERE q.lineage_id = ?
+         WHERE q.lineage_id = ? AND ${notHeldSql(viewer)}
          ORDER BY r.answered_at DESC
          LIMIT 3`
       )
@@ -248,8 +268,10 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
   });
 }
 
-function attemptScope(db: DatabaseSync, params: GetResultsParams) {
-  const clauses: string[] = ["a.submitted_at IS NOT NULL"];
+function attemptScope(db: DatabaseSync, params: GetResultsParams, viewer: Viewer) {
+  // A held attempt drops out whole: every one of its responses would be
+  // withheld anyway, and a row of nulls says less than no row.
+  const clauses: string[] = ["a.submitted_at IS NOT NULL", notHeldSql(viewer)];
   const args: unknown[] = [];
   if (params.since) {
     clauses.push("a.submitted_at >= ?");
@@ -305,7 +327,7 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
   }));
 }
 
-function dailyScope(db: DatabaseSync, params: GetResultsParams) {
+function dailyScope(db: DatabaseSync, params: GetResultsParams, viewer: Viewer) {
   const limit = params.limit ?? 50;
   const offset = params.offset ?? 0;
   // Only the first submitted attempt per daily draw is authoritative (spec 5.6);
@@ -318,17 +340,20 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams) {
                  WHERE rs.attempt_id = (
                    SELECT a.id FROM attempt a
                    WHERE a.daily_draw_id = d.id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
+                     AND ${notHeldSql(viewer)}
                    ORDER BY a.submitted_at ASC LIMIT 1
                  )) AS score,
               (SELECT COUNT(*) FROM response_score rs
                  WHERE rs.attempt_id = (
                    SELECT a.id FROM attempt a
                    WHERE a.daily_draw_id = d.id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
+                     AND ${notHeldSql(viewer)}
                    ORDER BY a.submitted_at ASC LIMIT 1
                  ) AND rs.score IS NULL) AS ungraded,
               EXISTS (
                 SELECT 1 FROM attempt a
                 WHERE a.daily_draw_id = d.id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
+                  AND ${notHeldSql(viewer)}
               ) AS completed
        FROM daily_draw d
        ORDER BY d.draw_date DESC
@@ -353,16 +378,23 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams) {
   }));
 }
 
-export function getResults(db: DatabaseSync, params: GetResultsParams): Record<string, unknown> {
+// viewer defaults to 'tutor': every MCP caller reads the full record, and
+// only the /api routes (the app) pass 'learner'.
+export function getResults(
+  db: DatabaseSync,
+  params: GetResultsParams,
+  opts: { viewer?: Viewer } = {}
+): Record<string, unknown> {
+  const viewer = opts.viewer ?? "tutor";
   switch (params.scope) {
     case "tag":
-      return { tags: tagScope(db, params) };
+      return { tags: tagScope(db, params, viewer) };
     case "question":
-      return { questions: questionScope(db, params) };
+      return { questions: questionScope(db, params, viewer) };
     case "attempt":
-      return { attempts: attemptScope(db, params) };
+      return { attempts: attemptScope(db, params, viewer) };
     case "daily":
-      return { daily: dailyScope(db, params) };
+      return { daily: dailyScope(db, params, viewer) };
     default:
       throw new DomainError("invalid_scope", `Unknown scope "${params.scope}".`);
   }

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
+import type { Viewer } from "./reveal.js";
 
 // ----------------------------------------------------------------------------
 // Tutor sessions — the grouping the tutor creates once per tutoring session so
@@ -189,7 +190,12 @@ export function listSessions(
 // MCP tool (the tutor reading its own history back for calibration). Attempt
 // rows mirror listAttempts's summary shape; templates mirror the columns the
 // app's template list already knows how to render.
-export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<string, unknown> {
+export function getSessionDetail(
+  db: DatabaseSync,
+  sessionId: string,
+  opts: { viewer?: Viewer } = {}
+): Record<string, unknown> {
+  const viewer = opts.viewer ?? "tutor";
   const session = db
     .prepare("SELECT id, name, tag_slug, reveal_default, created_at, ended_at FROM tutor_session WHERE id = ?")
     .get(sessionId) as SessionRow | undefined;
@@ -198,7 +204,7 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
   const attempts = db
     .prepare(
       `SELECT a.id, a.source, a.delivery_mode, a.template_id, t.name AS template_name,
-              a.started_at, a.submitted_at, a.abandoned_at, a.offline,
+              a.started_at, a.submitted_at, a.abandoned_at, a.offline, a.reveal,
               (SELECT COUNT(*) FROM response r WHERE r.attempt_id = a.id) AS question_count,
               (SELECT AVG(rs.score) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score,
               (SELECT COUNT(*) FROM response_score rs WHERE rs.attempt_id = a.id AND rs.score IS NULL) AS ungraded
@@ -217,10 +223,15 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
     submitted_at: string | null;
     abandoned_at: string | null;
     offline: number;
+    reveal: Reveal;
     question_count: number;
     mean_score: number | null;
     ungraded: number;
   }[];
+
+  // Same hold as getAttemptDetail's, applied to the summary the app's session
+  // list renders: a held attempt's mean_score is its score, by another name.
+  const held = (reveal: Reveal) => viewer === "learner" && reveal === "deferred" && session.ended_at === null;
 
   const templates = db
     .prepare(
@@ -257,9 +268,11 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
       submitted_at: a.submitted_at,
       abandoned_at: a.abandoned_at,
       offline: a.offline === 1,
+      reveal: a.reveal,
+      revealed: !held(a.reveal),
       question_count: a.question_count,
-      mean_score: a.mean_score,
-      ungraded: a.ungraded,
+      mean_score: held(a.reveal) ? null : a.mean_score,
+      ungraded: held(a.reveal) ? null : a.ungraded,
     })),
     templates: templates.map((t) => ({
       id: t.id,
