@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Rail, { type Page } from './components/Rail'
 import Home from './components/Home'
 import Bank from './components/Bank'
@@ -30,11 +30,18 @@ function App() {
   const theme = useTheme()
   const themePresets = useThemePresets(theme.resolvedMode)
 
+  // Whether Ben has already chosen a page himself. The session read below is a
+  // network round trip, and yanking him onto the live page after he has
+  // clicked somewhere would be worse than not landing there at all.
+  const navigated = useRef(false)
+
   useEffect(() => {
     let cancelled = false
-    getSessions({ limit: 5 })
+    // Wide enough that a run of recently-closed sessions can't hide the open
+    // one behind them.
+    getSessions({ limit: 20 })
       .then(({ sessions }) => {
-        if (cancelled) return
+        if (cancelled || navigated.current) return
         // The list comes back newest first, so the first open row is the
         // newest open session.
         const open = sessions.find(sessionIsOpen)
@@ -53,6 +60,7 @@ function App() {
   // Every navigation but the initial landing forgets the boot session, so the
   // rail always reaches the session list itself.
   function navigate(next: Page) {
+    navigated.current = true
     setBootLiveSessionId(null)
     setPage(next)
   }

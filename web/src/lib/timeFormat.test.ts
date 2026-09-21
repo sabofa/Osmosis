@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatClock, timerClass, FINAL_STRETCH_SEC } from './timeFormat'
+import { formatClock, timerClass, nextTimeUpPhase, FINAL_STRETCH_SEC } from './timeFormat'
 
 describe('formatClock', () => {
   it('formats m:ss with a two-digit seconds field', () => {
@@ -38,5 +38,29 @@ describe('timerClass', () => {
 
   it('is quiet when there is no countdown at all', () => {
     expect(timerClass(null)).toBe('')
+  })
+})
+
+describe('nextTimeUpPhase', () => {
+  it('stays put while there is time left, or no countdown at all', () => {
+    expect(nextTimeUpPhase('none', 30)).toBe('none')
+    expect(nextTimeUpPhase('none', null)).toBe('none')
+  })
+
+  it('opens with the message when the clock reaches zero', () => {
+    expect(nextTimeUpPhase('none', 0)).toBe('message')
+  })
+
+  it('never walks a phase backwards — the message shows once and stays shown', () => {
+    // The countdown sits at 0 for every tick after it runs out, so this is
+    // called repeatedly with the same input; re-opening the message would
+    // reset the two seconds each time and the Finish button would never land.
+    expect(nextTimeUpPhase('message', 0)).toBe('message')
+    expect(nextTimeUpPhase('finish', 0)).toBe('finish')
+  })
+
+  it('does not undo time-up if the countdown somehow reports time again', () => {
+    expect(nextTimeUpPhase('finish', 30)).toBe('finish')
+    expect(nextTimeUpPhase('message', null)).toBe('message')
   })
 })

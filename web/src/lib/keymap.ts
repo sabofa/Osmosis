@@ -59,15 +59,19 @@ export function resolveKey(event: KeyLike, ctx: KeyContext): KeyAction | null {
 
   // Ctrl+Enter is the one combination the app claims, and the one key that
   // works while typing.
-  if (event.key === 'Enter' && ctrl && !meta && !alt && event.shiftKey !== true) return { type: 'submit' }
-  if (ctrl || meta || alt) return null
-  if (ctx.inTextField) return null
+  const ctrlEnter = event.key === 'Enter' && ctrl && !meta && !alt && event.shiftKey !== true
+  if (!ctrlEnter) {
+    if (ctrl || meta || alt) return null
+    if (ctx.inTextField) return null
+  }
+
+  // A recorded card has nothing left to answer, so every way out of it agrees:
+  // Enter, Ctrl+Enter and Space all move on, and nothing else does anything —
+  // the rest would be editing an answer that is already with the tutor. This
+  // sits above the Enter case below precisely so `submit` never wins here.
+  if (ctx.recorded) return event.key === 'Enter' || event.key === ' ' ? { type: 'advance' } : null
 
   if (event.key === 'Enter') return { type: 'submit' }
-
-  // A recorded card has nothing left to answer: Space moves on, everything
-  // else would be editing an answer that is already with the tutor.
-  if (ctx.recorded) return event.key === ' ' ? { type: 'advance' } : null
 
   if (ctx.kind !== 'mc') return null
 

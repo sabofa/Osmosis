@@ -20,3 +20,16 @@ export function timerClass(secondsLeft: number | null): string {
   if (secondsLeft === null) return ''
   return secondsLeft < FINAL_STRETCH_SEC ? 'timer-final' : ''
 }
+
+// The set running out is a one-way trip through two states: 'message' is the
+// two seconds where "Time." stands alone, 'finish' is after, when the way out
+// appears. Pure and monotonic on purpose — the countdown reports 0 on every
+// tick once it runs out, and a transition that re-entered 'message' each time
+// would restart those two seconds forever and never reach 'finish'.
+export type TimeUpPhase = 'none' | 'message' | 'finish'
+
+export function nextTimeUpPhase(phase: TimeUpPhase, secondsLeft: number | null): TimeUpPhase {
+  if (phase !== 'none') return phase
+  if (secondsLeft === null || secondsLeft > 0) return 'none'
+  return 'message'
+}

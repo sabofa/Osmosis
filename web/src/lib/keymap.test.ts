@@ -58,7 +58,15 @@ describe('resolveKey — the rest of the map', () => {
     const rec = { ...mc, recorded: true }
     expect(resolveKey({ key: '1' }, rec)).toBeNull()
     expect(resolveKey({ key: 'u' }, rec)).toBeNull()
-    expect(resolveKey({ key: 'Enter' }, rec)).toEqual({ type: 'submit' })
+    expect(resolveKey({ key: 'b' }, rec)).toBeNull()
+  })
+
+  it('makes every way off a recorded card the same way', () => {
+    const rec = { ...mc, recorded: true }
+    expect(resolveKey({ key: 'Enter' }, rec)).toEqual({ type: 'advance' })
+    expect(resolveKey({ key: ' ' }, rec)).toEqual({ type: 'advance' })
+    expect(resolveKey({ key: 'Enter', ctrlKey: true }, rec)).toEqual({ type: 'advance' })
+    expect(resolveKey({ key: 'Enter', ctrlKey: true }, { ...rec, inTextField: true })).toEqual({ type: 'advance' })
   })
 })
 

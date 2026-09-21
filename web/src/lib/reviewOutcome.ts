@@ -64,6 +64,11 @@ export function countOutcomes(responses: OutcomeInput[], revealed: boolean): Out
   for (const r of responses) {
     const outcome = outcomeFor(r, true)
     if (outcome) counts[outcome] += 1
+    // A don't know is kept out of the mean for the same reason it is kept out
+    // of the incorrect column: it is a report about knowing, not a wrong
+    // answer, and averaging its auto-graded 0 in would score him down for
+    // being honest.
+    if (outcome === 'dont_know') continue
     const score = r.grade?.score
     if (score !== undefined && score !== null) {
       sum += score

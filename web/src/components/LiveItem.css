@@ -144,7 +144,11 @@
 }
 
 @media (min-width: 1100px) {
-  .live-item-stage .take-frame {
+  /* Only an item that actually has a graph or document gets the second
+     column — Take sets .with-panel when it renders one. A plain multiple
+     choice item keeps the full frame rather than a capped card beside an
+     empty gutter. */
+  .live-item-stage .take-frame.with-panel {
     display: grid;
     /* dots · stream · panel — the drag handle is hidden below, so the grid
        is what sets the panel's width here. */
@@ -152,14 +156,14 @@
     align-items: stretch;
   }
 
-  .live-item-stage .take-frame .panel-resize-handle {
+  .live-item-stage .take-frame.with-panel .panel-resize-handle {
     display: none;
   }
 
   /* Take sets the panel width inline for its own flex layout; inside this
      grid the column owns the width, and only !important outranks an inline
      style. */
-  .live-item-stage .take-frame [data-panel='side'] {
+  .live-item-stage .take-frame.with-panel [data-panel='side'] {
     width: auto !important;
     position: sticky;
     top: 0;

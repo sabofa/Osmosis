@@ -17,7 +17,7 @@ import { usePanelWidth } from '../hooks/usePanelWidth'
 import { useKeyboard } from '../hooks/useKeyboard'
 import { KEY_HINTS, type KeyAction } from '../lib/keymap'
 import { createItemClock, type ItemClock } from '../lib/itemClock'
-import { formatClock, timerClass } from '../lib/timeFormat'
+import { formatClock, timerClass, nextTimeUpPhase, type TimeUpPhase } from '../lib/timeFormat'
 import './Take.css'
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
@@ -64,8 +64,8 @@ export default function Take({
   // per-item clock, which is the honest thing to show for a single item.
   const [setLimitSec, setSetLimitSec] = useState<number | null>(null)
   // 'message' is the two seconds where "Time." stands alone; 'finish' is
-  // after, when the way out appears alongside it.
-  const [timeUpPhase, setTimeUpPhase] = useState<'none' | 'message' | 'finish'>('none')
+  // after, when the way out appears alongside it (lib/timeFormat).
+  const [timeUpPhase, setTimeUpPhase] = useState<TimeUpPhase>('none')
   const [drafts, setDrafts] = useState<DraftResponse[]>(() =>
     questions.map((r) => ({
       selectedChoiceId: r.selected_choice_id,
@@ -240,12 +240,26 @@ export default function Take({
   // sent on the learner's behalf here — today's behaviour when the clock runs
   // out is exactly "the clock stops", and this adds the message and one way
   // out in front of it.
+  //
+  // The timeout is guarded by a ref rather than by the phase, and the effect
+  // that schedules it has no cleanup. Clearing it per render is how 'finish'
+  // never arrives: the phase change re-runs the effect, its cleanup cancels
+  // the two seconds, and the learner is left with a message and no button.
+  // Only unmount clears it — and that path nulls the ref as well, so React's
+  // StrictMode double-mount re-schedules rather than stranding the phase.
+  const timeUpTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (secondsLeft !== 0 || timeUpPhase !== 'none') return
-    setTimeUpPhase('message')
-    const t = setTimeout(() => setTimeUpPhase('finish'), TIME_UP_MESSAGE_MS)
-    return () => clearTimeout(t)
-  }, [secondsLeft, timeUpPhase])
+    return () => {
+      if (timeUpTimer.current) clearTimeout(timeUpTimer.current)
+      timeUpTimer.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    setTimeUpPhase((phase) => nextTimeUpPhase(phase, secondsLeft))
+    if (secondsLeft !== 0 || timeUpTimer.current) return
+    timeUpTimer.current = setTimeout(() => setTimeUpPhase('finish'), TIME_UP_MESSAGE_MS)
+  }, [secondsLeft])
 
   function goTo(i: number) {
     flushElapsed(response.id)
@@ -453,11 +467,18 @@ export default function Take({
   // The "recorded" card: the set is over, the answers are with the server, and
   // the only thing left is to move on — which is what Space does there.
   const recorded = timeUpPhase !== 'none'
+  // Nothing takes an answer while the drill is paused or the set has ended.
+  // The keyboard map already refuses both; the mouse has to agree with it.
+  const answeringLocked = paused || recorded
 
   function handleKeyAction(action: KeyAction) {
     switch (action.type) {
       case 'choice': {
-        const choice = question.choices[action.ordinal - 1]
+        // The key names an ordinal, so honour the ordinal the server stored
+        // (0-based, frozen at creation) rather than trusting the array's
+        // order. Position is the fallback for a choice with no ordinal.
+        const wanted = action.ordinal - 1
+        const choice = question.choices.find((c) => c.ordinal === wanted) ?? question.choices[wanted]
         if (choice) selectChoice(choice.id)
         break
       }
@@ -494,7 +515,7 @@ export default function Take({
   )
 
   return (
-    <div className={`take-frame${exiting ? ' exiting' : ''}`}>
+    <div className={`take-frame${exiting ? ' exiting' : ''}${hasPanel ? ' with-panel' : ''}`}>
       <div className="take-dots">
         {questions.map((r, i) => {
           const d = drafts[i]
@@ -571,7 +592,7 @@ export default function Take({
                     const isGuess = draft.idk && draft.bestGuessChoiceId === c.id
                     const cls = `choice-btn${isSelected ? ' selected' : ''}${isGuess ? ' guessed' : ''}`
                     return (
-                      <button key={c.id} className={cls} onClick={() => selectChoice(c.id)} disabled={paused}>
+                      <button key={c.id} className={cls} onClick={() => selectChoice(c.id)} disabled={answeringLocked}>
                         <span className="choice-letter">{LETTERS[i]}</span>
                         <RichText inline text={c.body} />
                         {isGuess && <span className="choice-guess-tag">best guess (not scored)</span>}
@@ -588,7 +609,7 @@ export default function Take({
                         key={level}
                         className={`confidence-btn${draft.confidence === level ? ' selected' : ''}`}
                         onClick={() => setConfidence(level)}
-                        disabled={paused}
+                        disabled={answeringLocked}
                       >
                         {level}
                       </button>
@@ -596,7 +617,7 @@ export default function Take({
                     <button
                       className={`confidence-btn idk-btn${draft.idk ? ' selected' : ''}`}
                       onClick={toggleIdk}
-                      disabled={paused}
+                      disabled={answeringLocked}
                     >
                       I don't know
                     </button>
@@ -609,7 +630,7 @@ export default function Take({
                 placeholder="Type your answer…"
                 value={draft.writtenText}
                 onChange={(e) => setWrittenText(e.target.value)}
-                disabled={paused}
+                disabled={answeringLocked}
               />
             )}
           </div>

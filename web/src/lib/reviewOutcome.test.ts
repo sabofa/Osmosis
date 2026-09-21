@@ -67,6 +67,15 @@ describe('countOutcomes', () => {
   it('averages the graded rows only', () => {
     expect(countOutcomes([{ grade: { score: 1 } }, { grade: { score: 0 } }, { grade: null }], true).mean_score).toBe(0.5)
   })
+
+  it("leaves a don't know out of the mean, auto-graded zero and all", () => {
+    const rows = [{ grade: { score: 1 } }, { outcome: 'dont_know' as const, idk: true, grade: { score: 0 } }]
+    expect(countOutcomes(rows, true)).toMatchObject({ correct: 1, dont_know: 1, incorrect: 0, mean_score: 1 })
+  })
+
+  it("has no mean at all when every row is a don't know", () => {
+    expect(countOutcomes([{ idk: true, grade: { score: 0 } }], true).mean_score).toBeNull()
+  })
 })
 
 describe('OUTCOME_LABELS', () => {
