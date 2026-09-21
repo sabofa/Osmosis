@@ -1,14 +1,24 @@
 import type { DatabaseSync } from "node:sqlite";
-import { PROTOCOL_VERSION } from "../protocol.js";
+import { PROTOCOL_VERSION, TOOLS_VERSION, listToolNames } from "../protocol.js";
 
 export interface ReadmeResult {
-  node: { protocol_version: number; bank_size: number; last_write_at: string | null };
+  node: {
+    protocol_version: number;
+    tools_version: number;
+    tools: string[];
+    // Whether this node accepts pushed results from another node. False until
+    // the push path lands; the tutor reads it instead of assuming.
+    push: boolean;
+    bank_size: number;
+    last_write_at: string | null;
+  };
   workflow: string;
   prompt_conventions: {
     prompt_style: string;
     explanation_style: string;
     difficulty_scale: string;
     mc_choice_count: string;
+    confidence_scale: { labels: string[]; numeric: Record<string, number> };
     written_length_target: string;
     misconception: string;
   };
@@ -39,7 +49,14 @@ export function readme(db: DatabaseSync): ReadmeResult {
     .get() as { last_write_at: string | null };
 
   return {
-    node: { protocol_version: PROTOCOL_VERSION, bank_size: bankSize, last_write_at: lastWrite.last_write_at },
+    node: {
+      protocol_version: PROTOCOL_VERSION,
+      tools_version: TOOLS_VERSION,
+      tools: listToolNames(),
+      push: false,
+      bank_size: bankSize,
+      last_write_at: lastWrite.last_write_at,
+    },
     workflow:
       "Call this once at the start of a session. Then call bootstrap(subject) once per subject you touch " +
       "this session — e.g. once for 'math', once separately for 'biology' if both come up. bootstrap returns " +
@@ -51,6 +68,10 @@ export function readme(db: DatabaseSync): ReadmeResult {
       explanation_style: "2-4 sentences, explain why the correct answer is correct.",
       difficulty_scale: "1 = intro/recall, 3 = standard practice, 5 = exam-level synthesis.",
       mc_choice_count: "4 choices, exactly one correct. Multi-select is not supported (the app is single-select): a second is_correct choice is rejected as mc_multiple_correct — split into separate questions or write it as a written item.",
+      confidence_scale: {
+        labels: ["unsure", "somewhat", "confident"],
+        numeric: { unsure: 1, somewhat: 3, confident: 5 },
+      },
       written_length_target: "1-3 sentences or a short derivation; not an essay.",
       misconception:
         "Optional on every mc choice. On a distractor it names which wrong model picking it represents — " +

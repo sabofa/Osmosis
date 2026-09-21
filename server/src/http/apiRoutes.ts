@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createReadStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { PROTOCOL_VERSION } from "../protocol.js";
+import { PROTOCOL_VERSION, TOOLS_VERSION } from "../protocol.js";
 import { listTags } from "../domain/tags.js";
 import { searchQuestions, getQuestionDetail, getDocumentMarkers } from "../domain/questions.js";
 import { createAsset, getAsset, listAssets, deleteAsset } from "../domain/assets.js";
@@ -24,6 +24,8 @@ import {
   submitAttempt,
   gradeResponse,
   sweepAbandonedAttempts,
+  pauseAttempt,
+  resumeAttempt,
 } from "../domain/attempts.js";
 import { listSessions, getSessionDetail } from "../domain/sessions.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
@@ -115,6 +117,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       dead_outbox: deadOutbox,
       slices,
       protocol_version: PROTOCOL_VERSION,
+      tools_version: TOOLS_VERSION,
       remote_protocol_version: syncState?.remote_protocol_version ?? null,
       model_grades_today: modelGradesToday,
       model_grading_configured: ctx.env.deepseekApiKey !== null,
@@ -402,9 +405,33 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       confidence?: "unsure" | "somewhat" | "confident" | null;
       idk?: boolean;
       misapplied_method?: string | null;
+      best_guess_choice_id?: string | null;
     };
     try {
       return answerResponse(db, id, response_id, body);
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  // The learner stepping away from a live item and coming back (spec §2.8).
+  // A paused attempt is never swept as abandoned, and answering resumes it, so
+  // the app never has to sequence resume-then-answer itself.
+  app.post("/api/attempts/:id/pause", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return pauseAttempt(db, id);
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  app.post("/api/attempts/:id/resume", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return resumeAttempt(db, id);
     } catch (err) {
       sendDomainError(reply, err);
       return;

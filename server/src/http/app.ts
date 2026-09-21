@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { EnvConfig } from "../env.js";
 import type { NodeRow } from "../node.js";
-import { PROTOCOL_VERSION } from "../protocol.js";
+import { PROTOCOL_VERSION, TOOLS_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
 import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, buildTemplateDrawResponse, type PullRequest, type PushRequest } from "../domain/sync.js";
@@ -31,6 +31,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
   if (ctx.env.role === "canonical") {
     app.get("/sync/health", async () => ({
       protocol_version: PROTOCOL_VERSION,
+      tools_version: TOOLS_VERSION,
       node_id: ctx.node.id,
     }));
 

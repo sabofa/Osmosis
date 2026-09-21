@@ -14,6 +14,9 @@ function abandonAfterHours(db: DatabaseSync): number {
   return row ? Number(JSON.parse(row.value)) : 24;
 }
 
+// A paused attempt is never abandoned (the learner stepped away on purpose,
+// §2.8), and time already spent paused is discounted from the window — an
+// attempt started 25h ago with 10h of pause has only been "live" for 15h.
 export function sweepAbandonedAttempts(db: DatabaseSync): void {
   const hours = abandonAfterHours(db);
   db.prepare(
@@ -21,8 +24,63 @@ export function sweepAbandonedAttempts(db: DatabaseSync): void {
      SET abandoned_at = datetime('now')
      WHERE submitted_at IS NULL
        AND abandoned_at IS NULL
-       AND started_at <= datetime('now', ?)`
+       AND paused_at IS NULL
+       AND datetime(started_at, '+' || (paused_ms / 1000) || ' seconds') <= datetime('now', ?)`
   ).run(`-${hours} hours`);
+}
+
+// ----------------------------------------------------------------------------
+// Pause / resume (§2.8) — the learner stepping away from a live item.
+// ----------------------------------------------------------------------------
+
+function assertAttemptOpen(
+  db: DatabaseSync,
+  attemptId: string
+): { paused_at: string | null; paused_ms: number } {
+  const attempt = db
+    .prepare("SELECT submitted_at, abandoned_at, paused_at, paused_ms FROM attempt WHERE id = ?")
+    .get(attemptId) as
+    | { submitted_at: string | null; abandoned_at: string | null; paused_at: string | null; paused_ms: number }
+    | undefined;
+  if (!attempt) throw new DomainError("not_found", `Attempt "${attemptId}" does not exist.`);
+  if (attempt.submitted_at) throw new DomainError("attempt_submitted", "This attempt was already submitted.");
+  if (attempt.abandoned_at) throw new DomainError("attempt_abandoned", "This attempt was abandoned.");
+  return { paused_at: attempt.paused_at, paused_ms: attempt.paused_ms };
+}
+
+export function pauseAttempt(db: DatabaseSync, attemptId: string): { id: string; paused_at: string } {
+  const attempt = assertAttemptOpen(db, attemptId);
+  if (attempt.paused_at) {
+    throw new DomainError("already_paused", `Attempt "${attemptId}" is already paused since ${attempt.paused_at}.`);
+  }
+  db.prepare("UPDATE attempt SET paused_at = datetime('now') WHERE id = ?").run(attemptId);
+  const row = db.prepare("SELECT paused_at FROM attempt WHERE id = ?").get(attemptId) as { paused_at: string };
+  return { id: attemptId, paused_at: row.paused_at };
+}
+
+export function resumeAttempt(
+  db: DatabaseSync,
+  attemptId: string
+): { id: string; paused_at: null; paused_ms: number } {
+  const attempt = assertAttemptOpen(db, attemptId);
+  if (!attempt.paused_at) throw new DomainError("not_paused", `Attempt "${attemptId}" is not paused.`);
+  return resumeIfPaused(db, attemptId);
+}
+
+// The unguarded half of resumeAttempt: answerResponse calls it so an answer
+// arriving on a paused attempt resumes it instead of being refused.
+function resumeIfPaused(
+  db: DatabaseSync,
+  attemptId: string
+): { id: string; paused_at: null; paused_ms: number } {
+  db.prepare(
+    `UPDATE attempt
+     SET paused_ms = paused_ms + (strftime('%s', 'now') - strftime('%s', paused_at)) * 1000,
+         paused_at = NULL
+     WHERE id = ? AND paused_at IS NOT NULL`
+  ).run(attemptId);
+  const row = db.prepare("SELECT paused_ms FROM attempt WHERE id = ?").get(attemptId) as { paused_ms: number };
+  return { id: attemptId, paused_at: null, paused_ms: row.paused_ms };
 }
 
 // ----------------------------------------------------------------------------
@@ -396,48 +454,79 @@ export function deriveOutcome(idk: boolean, score: number | null): OutcomeLabel 
   return "partial";
 }
 
+export type Confidence = "unsure" | "somewhat" | "confident";
+
+// The numeric scale readme() documents under prompt_conventions.confidence_scale,
+// so the tutor's typed channel and Osmosis agree on what "somewhat" is worth.
+export const CONFIDENCE_NUMERIC: Record<Confidence, number> = { unsure: 1, somewhat: 3, confident: 5 };
+
+export function confidenceNumeric(confidence: Confidence | null): number | null {
+  return confidence ? CONFIDENCE_NUMERIC[confidence] : null;
+}
+
+// The "best guess anyway" a learner names after an idk (§2.3). Graded
+// server-side for the tutor's benefit, never scored: the response stays an idk.
+export function bestGuessCorrect(db: DatabaseSync, choiceId: string | null): boolean | null {
+  if (!choiceId) return null;
+  const choice = db.prepare("SELECT is_correct FROM choice WHERE id = ?").get(choiceId) as
+    | { is_correct: number }
+    | undefined;
+  return choice ? choice.is_correct === 1 : null;
+}
+
 export type AnsweredOutcome = {
   status: "answered";
   outcome: OutcomeLabel;
   score: number | null;
+  grader: GradeRow["grader"] | null;
   correct: boolean | null;
   selected_choice_id: string | null;
   chosen_misconception: string | null;
   correct_choice_id: string | null;
+  best_guess_choice_id: string | null;
+  best_guess_correct: boolean | null;
   response_text: string | null;
-  confidence: "unsure" | "somewhat" | "confident" | null;
+  confidence: Confidence | null;
+  confidence_numeric: number | null;
   idk: boolean;
   misapplied_method: string | null;
+  diagnosis: string | null;
   elapsed_ms: number | null;
   answered_at: string | null;
   explanation: string | null;
   model_answer: string | null;
 };
 
-export type ItemOutcome = { status: "pending" } | { status: "abandoned" } | AnsweredOutcome;
+export type ItemOutcome =
+  | { status: "pending" }
+  | { status: "abandoned" }
+  | { status: "paused"; paused_at: string }
+  | AnsweredOutcome;
 
 export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcome {
   sweepAbandonedAttempts(db);
 
   const row = db
     .prepare(
-      `SELECT r.attempt_id, r.question_id, a.submitted_at, a.abandoned_at,
+      `SELECT r.attempt_id, r.question_id, a.submitted_at, a.abandoned_at, a.paused_at,
               r.selected_choice_id, r.response_text, r.elapsed_ms, r.answered_at,
-              r.confidence, r.idk, r.misapplied_method
+              r.confidence, r.idk, r.misapplied_method, r.best_guess_choice_id, r.diagnosis
        FROM response r JOIN attempt a ON a.id = r.attempt_id
        WHERE r.id = ?`
     )
     .get(responseId) as
     | {
         attempt_id: string; question_id: string; submitted_at: string | null; abandoned_at: string | null;
+        paused_at: string | null;
         selected_choice_id: string | null; response_text: string | null; elapsed_ms: number | null;
-        answered_at: string | null; confidence: "unsure" | "somewhat" | "confident" | null; idk: number;
-        misapplied_method: string | null;
+        answered_at: string | null; confidence: Confidence | null; idk: number;
+        misapplied_method: string | null; best_guess_choice_id: string | null; diagnosis: string | null;
       }
     | undefined;
   if (!row) throw new DomainError("not_found", `Response "${responseId}" does not exist.`);
 
   if (row.abandoned_at && !row.submitted_at) return { status: "abandoned" };
+  if (row.paused_at && !row.submitted_at) return { status: "paused", paused_at: row.paused_at };
   if (!row.submitted_at) return { status: "pending" };
 
   const question = db.prepare("SELECT type, explanation, model_answer FROM question WHERE id = ?").get(
@@ -445,8 +534,8 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
   ) as { type: "mc" | "written"; explanation: string | null; model_answer: string | null };
 
   const liveGrade = db
-    .prepare("SELECT score FROM grade WHERE response_id = ? AND superseded_at IS NULL")
-    .get(responseId) as { score: number } | undefined;
+    .prepare("SELECT score, grader FROM grade WHERE response_id = ? AND superseded_at IS NULL")
+    .get(responseId) as { score: number; grader: GradeRow["grader"] } | undefined;
   const score = liveGrade ? liveGrade.score : null;
 
   const correctChoice =
@@ -465,14 +554,19 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
     status: "answered",
     outcome: deriveOutcome(row.idk === 1, score),
     score,
+    grader: liveGrade?.grader ?? null,
     correct: question.type === "mc" ? score === 1 : null,
     selected_choice_id: row.selected_choice_id,
     chosen_misconception: chosen?.misconception ?? null,
     correct_choice_id: correctChoice?.id ?? null,
+    best_guess_choice_id: row.best_guess_choice_id,
+    best_guess_correct: bestGuessCorrect(db, row.best_guess_choice_id),
     response_text: row.response_text,
     confidence: row.confidence,
+    confidence_numeric: confidenceNumeric(row.confidence),
     idk: row.idk === 1,
     misapplied_method: row.misapplied_method,
+    diagnosis: row.diagnosis,
     elapsed_ms: row.elapsed_ms,
     answered_at: row.answered_at,
     explanation: question.explanation,
@@ -534,6 +628,8 @@ interface AttemptRow {
   started_at: string;
   submitted_at: string | null;
   abandoned_at: string | null;
+  paused_at: string | null;
+  paused_ms: number;
   offline: number;
   synced_at: string | null;
 }
@@ -548,15 +644,17 @@ interface ResponseRow {
   skipped: number;
   answered_at: string | null;
   elapsed_ms: number | null;
-  confidence: "unsure" | "somewhat" | "confident" | null;
+  confidence: Confidence | null;
   idk: number;
   misapplied_method: string | null;
+  best_guess_choice_id: string | null;
+  diagnosis: string | null;
 }
 
 interface GradeRow {
   id: string;
   response_id: string;
-  grader: "auto_mc" | "self" | "model";
+  grader: "auto_mc" | "self" | "model" | "oracle" | "judge";
   score: number;
   feedback: string | null;
   rubric_version: string | null;
@@ -591,21 +689,37 @@ export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<st
     started_at: attempt.started_at,
     submitted_at: attempt.submitted_at,
     abandoned_at: attempt.abandoned_at,
+    paused_at: attempt.paused_at,
+    paused_ms: attempt.paused_ms,
     offline: attempt.offline === 1,
     responses: responses.map((r) => {
       const grade = liveGrade.get(r.id) as unknown as GradeRow | undefined;
+      const chosen = r.selected_choice_id
+        ? (db.prepare("SELECT misconception FROM choice WHERE id = ?").get(r.selected_choice_id) as
+            | { misconception: string | null }
+            | undefined)
+        : undefined;
       return {
         id: r.id,
         ordinal: r.ordinal,
         question: questionSnapshot(db, r.question_id, revealAnswer),
         selected_choice_id: r.selected_choice_id,
+        // Both of these are answer-key material (a misconception only hangs on
+        // a distractor; best_guess_correct is correctness outright), so they
+        // stay withheld until submit, exactly like questionSnapshot's key.
+        chosen_misconception: revealAnswer ? chosen?.misconception ?? null : null,
+        best_guess_choice_id: r.best_guess_choice_id,
+        best_guess_correct: revealAnswer ? bestGuessCorrect(db, r.best_guess_choice_id) : null,
         response_text: r.response_text,
         skipped: r.skipped === 1,
         answered_at: r.answered_at,
         elapsed_ms: r.elapsed_ms,
         confidence: r.confidence,
+        confidence_numeric: confidenceNumeric(r.confidence),
         idk: r.idk === 1,
         misapplied_method: r.misapplied_method,
+        diagnosis: r.diagnosis,
+        outcome: deriveOutcome(r.idk === 1, grade ? grade.score : null),
         grade: grade
           ? { grader: grade.grader, score: grade.score, feedback: grade.feedback, graded_at: grade.graded_at }
           : null,
@@ -679,9 +793,10 @@ export interface AnswerResponseChanges {
   response_text?: string | null;
   skipped?: boolean;
   elapsed_ms?: number;
-  confidence?: "unsure" | "somewhat" | "confident" | null;
+  confidence?: Confidence | null;
   idk?: boolean;
   misapplied_method?: string | null;
+  best_guess_choice_id?: string | null;
 }
 
 export function answerResponse(
@@ -690,16 +805,16 @@ export function answerResponse(
   responseId: string,
   changes: AnswerResponseChanges
 ): Record<string, unknown> {
-  const attempt = db.prepare("SELECT submitted_at, abandoned_at FROM attempt WHERE id = ?").get(attemptId) as
-    | { submitted_at: string | null; abandoned_at: string | null }
+  const attempt = db.prepare("SELECT submitted_at, abandoned_at, paused_at FROM attempt WHERE id = ?").get(attemptId) as
+    | { submitted_at: string | null; abandoned_at: string | null; paused_at: string | null }
     | undefined;
   if (!attempt) throw new DomainError("not_found", `Attempt "${attemptId}" does not exist.`);
   if (attempt.submitted_at) throw new DomainError("attempt_submitted", "Cannot edit responses after submit.");
   if (attempt.abandoned_at) throw new DomainError("attempt_abandoned", "This attempt was abandoned.");
 
   const response = db
-    .prepare("SELECT id, question_id FROM response WHERE id = ? AND attempt_id = ?")
-    .get(responseId, attemptId) as { id: string; question_id: string } | undefined;
+    .prepare("SELECT id, question_id, idk FROM response WHERE id = ? AND attempt_id = ?")
+    .get(responseId, attemptId) as { id: string; question_id: string; idk: number } | undefined;
   if (!response) throw new DomainError("not_found", `Response "${responseId}" does not exist on this attempt.`);
 
   // submitAttempt grades an mc response by looking its choice up by id alone,
@@ -713,6 +828,26 @@ export function answerResponse(
       throw new DomainError(
         "invalid_choice",
         `Choice "${changes.selected_choice_id}" does not belong to this response's question.`
+      );
+    }
+  }
+  // The guess is asked *after* the blank decision and only then (§2.3): a
+  // guess without an idk would be an ordinary answer wearing a second name.
+  if (changes.best_guess_choice_id != null) {
+    const idkAfter = changes.idk !== undefined ? changes.idk : response.idk === 1;
+    if (!idkAfter) {
+      throw new DomainError(
+        "best_guess_requires_idk",
+        "best_guess_choice_id is only meaningful on an idk response — pass idk: true with it."
+      );
+    }
+    const guess = db
+      .prepare("SELECT id FROM choice WHERE id = ? AND question_id = ?")
+      .get(changes.best_guess_choice_id, response.question_id);
+    if (!guess) {
+      throw new DomainError(
+        "invalid_choice",
+        `Choice "${changes.best_guess_choice_id}" does not belong to this response's question.`
       );
     }
   }
@@ -743,18 +878,27 @@ export function answerResponse(
   if (changes.confidence !== undefined) assign("confidence", changes.confidence);
   if (changes.idk !== undefined) assign("idk", changes.idk ? 1 : 0);
   if (changes.misapplied_method !== undefined) assign("misapplied_method", changes.misapplied_method);
+  if (changes.best_guess_choice_id !== undefined) assign("best_guess_choice_id", changes.best_guess_choice_id);
 
   db.prepare(`UPDATE response SET ${sets.join(", ")} WHERE id = @id`).run(values as Record<string, any>);
+
+  // An answer arriving on a paused attempt means the learner is back: resume
+  // rather than refuse, so the app never has to sequence resume-then-answer.
+  if (attempt.paused_at) resumeIfPaused(db, attemptId);
 
   const updated = db.prepare("SELECT * FROM response WHERE id = ?").get(responseId) as unknown as ResponseRow;
   return {
     id: updated.id,
     selected_choice_id: updated.selected_choice_id,
+    // The guess itself echoes back; whether it was right does not — that is
+    // answer-key material, withheld until the attempt is submitted.
+    best_guess_choice_id: updated.best_guess_choice_id,
     response_text: updated.response_text,
     skipped: updated.skipped === 1,
     answered_at: updated.answered_at,
     elapsed_ms: updated.elapsed_ms,
     confidence: updated.confidence,
+    confidence_numeric: confidenceNumeric(updated.confidence),
     idk: updated.idk === 1,
     misapplied_method: updated.misapplied_method,
   };
@@ -899,4 +1043,86 @@ export function gradeResponse(
 
   const grade = db.prepare("SELECT * FROM grade WHERE id = ?").get(id) as unknown as GradeRow;
   return { id: grade.id, response_id: grade.response_id, grader: grade.grader, score: grade.score, graded_at: grade.graded_at };
+}
+
+// ----------------------------------------------------------------------------
+// The tutor's own grade (spec §2.9) — an oracle (the tutor knows the answer)
+// or judge (the tutor is judging a written answer) verdict, plus the one-line
+// diagnosis that goes back on the response itself.
+// ----------------------------------------------------------------------------
+
+export interface TutorGradeInput {
+  grader: "oracle" | "judge";
+  score?: number;
+  diagnosis?: string | null;
+}
+
+export function gradeResponseByTutor(
+  db: DatabaseSync,
+  responseId: string,
+  input: TutorGradeInput,
+  role: "canonical" | "local" = "canonical"
+): Record<string, unknown> {
+  if (input.score !== undefined && (!Number.isFinite(input.score) || input.score < 0 || input.score > 1)) {
+    throw new DomainError("invalid_score", "score must be a number between 0 and 1.");
+  }
+
+  const response = db
+    .prepare(
+      `SELECT r.id, q.type, a.submitted_at
+       FROM response r
+       JOIN question q ON q.id = r.question_id
+       JOIN attempt a ON a.id = r.attempt_id
+       WHERE r.id = ?`
+    )
+    .get(responseId) as { id: string; type: "mc" | "written"; submitted_at: string | null } | undefined;
+  if (!response) throw new DomainError("not_found", `Response "${responseId}" does not exist.`);
+  if (!response.submitted_at) {
+    throw new DomainError("attempt_not_submitted", "Grade a response only after its attempt is submitted.");
+  }
+
+  const diagnosis = input.diagnosis ?? null;
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE response SET diagnosis = ? WHERE id = ?").run(diagnosis, responseId);
+
+    // An mc item is already graded against its own key; a tutor verdict would
+    // only ever disagree with the key. Take the diagnosis, leave the score.
+    if (response.type === "written" && input.score !== undefined) {
+      const live = db.prepare("SELECT * FROM grade WHERE response_id = ? AND superseded_at IS NULL").get(
+        responseId
+      ) as unknown as GradeRow | undefined;
+      if (live) db.prepare("UPDATE grade SET superseded_at = datetime('now') WHERE id = ?").run(live.id);
+
+      const id = uuidv4();
+      db.prepare(
+        "INSERT INTO grade (id, response_id, grader, score, graded_at) VALUES (?, ?, ?, ?, datetime('now'))"
+      ).run(id, responseId, input.grader, input.score);
+
+      if (role === "local") {
+        if (live) enqueueOutbox(db, "grade", live.id, db.prepare("SELECT * FROM grade WHERE id = ?").get(live.id));
+        enqueueOutbox(db, "grade", id, db.prepare("SELECT * FROM grade WHERE id = ?").get(id));
+      }
+    }
+
+    if (role === "local") {
+      enqueueOutbox(db, "response", responseId, db.prepare("SELECT * FROM response WHERE id = ?").get(responseId));
+    }
+
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  const grade = db.prepare("SELECT * FROM grade WHERE response_id = ? AND superseded_at IS NULL").get(
+    responseId
+  ) as unknown as GradeRow | undefined;
+  return {
+    response_id: responseId,
+    grader: grade?.grader ?? null,
+    score: grade?.score ?? null,
+    graded_at: grade?.graded_at ?? null,
+    diagnosis,
+  };
 }

@@ -57,7 +57,22 @@ export function assertSessionOpen(db: DatabaseSync, id: string): void {
   }
 }
 
-export function endSession(db: DatabaseSync, id: string): { id: string; ended_at: string } {
+export interface EndSessionSummary {
+  presented: number;
+  answered: number;
+  abandoned: number;
+  dont_know: number;
+  paused_now: false;
+}
+
+// The tutor's CLOSE step cross-checks its own count against this (spec §3.7),
+// so it has to be final: anything still pending when the session ends is
+// marked abandoned here rather than left to the lazy sweep hours later. That
+// also makes paused_now trivially false — a paused attempt is pending.
+export function endSession(
+  db: DatabaseSync,
+  id: string
+): { id: string; ended_at: string; summary: EndSessionSummary } {
   const current = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as
     | { ended_at: string | null }
     | undefined;
@@ -65,8 +80,46 @@ export function endSession(db: DatabaseSync, id: string): { id: string; ended_at
   if (current.ended_at) throw new DomainError("already_ended", `Session "${id}" already ended.`);
 
   db.prepare("UPDATE tutor_session SET ended_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare(
+    `UPDATE attempt SET abandoned_at = datetime('now'), paused_at = NULL
+     WHERE session_id = ? AND delivery_mode = 'app_live' AND submitted_at IS NULL AND abandoned_at IS NULL`
+  ).run(id);
+
+  const counts = db
+    .prepare(
+      `SELECT COUNT(*) AS presented,
+              SUM(CASE WHEN a.submitted_at IS NOT NULL THEN 1 ELSE 0 END) AS answered,
+              SUM(CASE WHEN a.abandoned_at IS NOT NULL AND a.submitted_at IS NULL THEN 1 ELSE 0 END) AS abandoned
+       FROM attempt a
+       WHERE a.session_id = ? AND a.delivery_mode = 'app_live'`
+    )
+    .get(id) as { presented: number; answered: number | null; abandoned: number | null };
+
+  // An idk is a third answer, not a wrong one: it counts here and never under
+  // incorrect anywhere else.
+  const dontKnow = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n
+         FROM response r
+         JOIN attempt a ON a.id = r.attempt_id
+         WHERE a.session_id = ? AND a.delivery_mode = 'app_live' AND a.submitted_at IS NOT NULL AND r.idk = 1`
+      )
+      .get(id) as { n: number }
+  ).n;
+
   const row = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as { ended_at: string };
-  return { id, ended_at: row.ended_at };
+  return {
+    id,
+    ended_at: row.ended_at,
+    summary: {
+      presented: counts.presented,
+      answered: counts.answered ?? 0,
+      abandoned: counts.abandoned ?? 0,
+      dont_know: dontKnow,
+      paused_now: false,
+    },
+  };
 }
 
 // Mirrors the total/limit/offset contract searchQuestions/listAttempts already

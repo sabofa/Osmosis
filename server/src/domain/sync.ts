@@ -763,6 +763,8 @@ const RESPONSE_COLUMNS = [
   "confidence",
   "idk",
   "misapplied_method",
+  "best_guess_choice_id",
+  "diagnosis",
 ] as const;
 
 const GRADE_COLUMNS = [

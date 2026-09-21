@@ -1,6 +1,56 @@
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "./errors.js";
 import { buildTagQueryClause, type TagQuery } from "./tagQuery.js";
+import { bestGuessCorrect, confidenceNumeric, deriveOutcome, type Confidence } from "./attempts.js";
+
+// Every per-response row get_results hands back, at either scope. The binding
+// rule (spec §2): anything the response accepted on input is readable here,
+// and the outcome label is the same deriveOutcome the attempt paths use — an
+// idk is dont_know, never incorrect, and a null score is never a zero.
+interface ResponseRecordRow {
+  score: number | null;
+  grader: string | null;
+  response_text: string | null;
+  selected_choice_id: string | null;
+  best_guess_choice_id: string | null;
+  idk: number;
+  confidence: Confidence | null;
+  misapplied_method: string | null;
+  diagnosis: string | null;
+  elapsed_ms: number | null;
+  answered_at: string | null;
+}
+
+const RESPONSE_RECORD_COLUMNS = `rs.score, rs.grader, r.response_text, r.selected_choice_id, r.best_guess_choice_id,
+                r.idk, r.confidence, r.misapplied_method, r.diagnosis, r.elapsed_ms, r.answered_at`;
+
+function responseRecord(db: DatabaseSync, r: ResponseRecordRow, chosenMisconception: string | null) {
+  return {
+    response_text: truncateResponseText(r.response_text),
+    selected_choice_id: r.selected_choice_id,
+    chosen_misconception: chosenMisconception,
+    best_guess_choice_id: r.best_guess_choice_id,
+    best_guess_correct: bestGuessCorrect(db, r.best_guess_choice_id),
+    idk: r.idk === 1,
+    confidence: r.confidence,
+    confidence_numeric: confidenceNumeric(r.confidence),
+    misapplied_method: r.misapplied_method,
+    diagnosis: r.diagnosis,
+    elapsed_ms: r.elapsed_ms,
+    score: r.score,
+    grader: r.grader,
+    outcome: deriveOutcome(r.idk === 1, r.score),
+    answered_at: r.answered_at,
+  };
+}
+
+function chosenMisconception(db: DatabaseSync, choiceId: string | null): string | null {
+  if (!choiceId) return null;
+  const choice = db.prepare("SELECT misconception FROM choice WHERE id = ?").get(choiceId) as
+    | { misconception: string | null }
+    | undefined;
+  return choice?.misconception ?? null;
+}
 
 export interface GetResultsParams {
   scope: "tag" | "question" | "attempt" | "daily";
@@ -138,10 +188,21 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
       db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?").all(current.id) as { tag_slug: string }[]
     ).map((t) => t.tag_slug);
 
+    const gradedBy = db
+      .prepare(
+        `SELECT rs.grader, COUNT(*) AS n
+         FROM response_score rs
+         JOIN response r ON r.id = rs.response_id
+         JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
+         JOIN question q ON q.id = rs.question_id
+         WHERE q.lineage_id = ? AND rs.grader IS NOT NULL
+         GROUP BY rs.grader`
+      )
+      .all(l.lineage_id) as { grader: string; n: number }[];
+
     const recent = db
       .prepare(
-        `SELECT rs.score, r.response_text, r.selected_choice_id, r.idk, r.confidence, r.misapplied_method,
-                r.elapsed_ms, r.answered_at
+        `SELECT ${RESPONSE_RECORD_COLUMNS}
          FROM response_score rs
          JOIN response r ON r.id = rs.response_id
          JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
@@ -150,10 +211,7 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
          ORDER BY r.answered_at DESC
          LIMIT 3`
       )
-      .all(l.lineage_id) as {
-      score: number | null; response_text: string | null; selected_choice_id: string | null; idk: number;
-      confidence: string | null; misapplied_method: string | null; elapsed_ms: number | null; answered_at: string;
-    }[];
+      .all(l.lineage_id) as unknown as ResponseRecordRow[];
 
     return {
       lineage_id: l.lineage_id,
@@ -166,20 +224,21 @@ function questionScope(db: DatabaseSync, params: GetResultsParams) {
       mean_score: l.mean_score,
       last_seen: l.last_seen,
       last_score: recent[0]?.score ?? null,
+      // Which grader stands behind this lineage's live scores — a self-graded
+      // row is distinguishable from an oracle-graded one (spec §2.9).
+      graded_by: {
+        self: 0,
+        model: 0,
+        oracle: 0,
+        judge: 0,
+        auto_mc: 0,
+        ...Object.fromEntries(gradedBy.map((g) => [g.grader, g.n])),
+      },
       // Every input field the response accepted comes back out, for mc and
       // written alike: the chosen option is the diagnosis for mc, the text is
-      // for written (spec 9.12), and confidence/idk/misapplied_method are the
-      // tutor's own annotations.
-      recent_responses: recent.map((r) => ({
-        response_text: truncateResponseText(r.response_text),
-        selected_choice_id: r.selected_choice_id,
-        idk: r.idk === 1,
-        confidence: r.confidence,
-        misapplied_method: r.misapplied_method,
-        elapsed_ms: r.elapsed_ms,
-        score: r.score,
-        answered_at: r.answered_at,
-      })),
+      // for written (spec 9.12), and confidence/idk/misapplied_method/
+      // best_guess/diagnosis are the tutor's own annotations.
+      recent_responses: recent.map((r) => responseRecord(db, r, chosenMisconception(db, r.selected_choice_id))),
     };
   });
 }
@@ -217,7 +276,28 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
     ungraded: number;
   }[];
 
-  return rows.map((r) => ({ ...r, offline: r.offline === 1 }));
+  // §2.1: the chosen option is the diagnosis, so attempt scope carries the
+  // per-response record too — without it a distractor rationale is write-only
+  // for anyone reading results rather than one attempt at a time.
+  const responsesFor = db.prepare(
+    `SELECT ${RESPONSE_RECORD_COLUMNS}, r.ordinal, rs.question_id
+     FROM response_score rs
+     JOIN response r ON r.id = rs.response_id
+     WHERE r.attempt_id = ?
+     ORDER BY r.ordinal`
+  );
+
+  return rows.map((r) => ({
+    ...r,
+    offline: r.offline === 1,
+    responses: (responsesFor.all(r.id) as unknown as (ResponseRecordRow & { ordinal: number; question_id: string })[]).map(
+      (row) => ({
+        ordinal: row.ordinal,
+        question_id: row.question_id,
+        ...responseRecord(db, row, chosenMisconception(db, row.selected_choice_id)),
+      })
+    ),
+  }));
 }
 
 function dailyScope(db: DatabaseSync, params: GetResultsParams) {

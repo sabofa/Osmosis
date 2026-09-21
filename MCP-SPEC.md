@@ -86,14 +86,14 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-36 tools. Every schema is sent on every turn a connector is enabled for,
+37 tools. Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape), the sorted `tools` list, and `push` |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject |
 | `list_tags` | Controlled vocabulary listing. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
@@ -105,14 +105,16 @@ becoming one larger tool.
 | `retire_question` | Soft retire |
 | `list_templates` | Live eligible_count. Paginated (`limit`/`offset`, default 50); response is `{ total, templates, has_more }` |
 | `create_template` / `edit_template` / `retire_template` | Draw specs |
-| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers; a null `score` (ungraded) is never averaged as zero — tag/question rows carry `graded`, attempt/daily rows carry `ungraded`, so every mean's denominator is visible. Accepts `offset` (all four scopes) to page through rows, but deliberately does *not* return `total`/`has_more` — offset-only, not the full pagination envelope used by the list/search tools above |
+| `get_results` | Weak-area signal, truncated `response_text` on wrong written answers; a null `score` (ungraded) is never averaged as zero — tag/question rows carry `graded`, attempt/daily rows carry `ungraded`, so every mean's denominator is visible. Question rows also carry `graded_by` (`self`/`model`/`oracle`/`judge`/`auto_mc` counts); question and attempt rows both carry the full per-response record (`recent_responses` / `responses`). Accepts `offset` (all four scopes) to page through rows, but deliberately does *not* return `total`/`has_more` — offset-only, not the full pagination envelope used by the list/search tools above |
 | `get_config` / `set_config` | Refuses unknown keys and secrets |
 | `create_asset` | `type: text`/`url`/`file` (base64) — the file variant is the fallback path, see §5 |
 | `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 | `read_asset` | Full `extracted_text` |
 | `search_assets` | FTS snippets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
-| `get_attempt` | Full attempt read: per-response inputs + live grade |
-| `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `response_text`, `confidence`, `idk`, `misapplied_method`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer` |
+| `get_attempt` | Full attempt read: per-response inputs + derived `outcome` + live grade. `chosen_misconception` and `best_guess_correct` are answer-key material and stay withheld until the attempt is submitted; the attempt carries `paused_at`/`paused_ms` |
+| `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `grader`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `best_guess_choice_id`, `best_guess_correct`, `response_text`, `confidence`, `confidence_numeric`, `idk`, `misapplied_method`, `diagnosis`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer`. `await_item_outcome` takes `timeout_s` (default 25, clamped 1..25) and also reports `status: "paused"` |
+| `grade_response` | The tutor's own verdict on an answered item: `grader` `oracle`/`judge`, optional `score` 0..1, optional one-line `diagnosis`. Supersedes a self/model grade on a written item; on an mc item only the diagnosis is kept and the `auto_mc` grade against the question's own key stands |
+| `end_session` | Ends the session and returns `{ presented, answered, abandoned, dont_know, paused_now }` over its live items, marking anything still unanswered abandoned so the counts are final |
 | `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
 
 Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
@@ -122,7 +124,7 @@ Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 
-Native tool-calling has a real, measured cost at scale: all 36 tool schemas
+Native tool-calling has a real, measured cost at scale: all 37 tool schemas
 resend on every turn a connector is enabled for regardless of whether that
 turn calls a tool, and a native chat session's conversation history — every
 prior batch's full call and response — accumulates and resends as input on

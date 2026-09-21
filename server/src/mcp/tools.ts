@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../domain/errors.js";
+import { recordToolName } from "../protocol.js";
 import { readme } from "../domain/readme.js";
 import { bootstrap } from "../domain/bootstrap.js";
 import { listTags, createTag, mergeTags, countTags } from "../domain/tags.js";
@@ -10,7 +11,7 @@ import { getConfig, setConfig } from "../domain/config.js";
 import { listTemplates, countTemplates, createTemplate, editTemplate, retireTemplate } from "../domain/templates.js";
 import { getResults } from "../domain/results.js";
 import { createAsset, getAsset, searchAssets, listAssets, countAssets } from "../domain/assets.js";
-import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail } from "../domain/attempts.js";
+import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDetail, gradeResponseByTutor } from "../domain/attempts.js";
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
 import { listThemes, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
@@ -112,7 +113,14 @@ export function trimListTagsForMcp(tags: ReturnType<typeof listTags>) {
 }
 
 export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: string, nodeId: string): void {
-  server.registerTool(
+  // Every registration goes through here so readme()'s node.tools list is the
+  // set of tools actually registered, not a hand-kept copy beside it.
+  const registerTool = ((name: string, config: unknown, cb: unknown) => {
+    recordToolName(name);
+    return (server.registerTool as (...args: unknown[]) => unknown)(name, config, cb);
+  }) as unknown as McpServer["registerTool"];
+
+  registerTool(
     "readme",
     {
       description:
@@ -129,7 +137,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "bootstrap",
     {
       description:
@@ -146,7 +154,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "list_tags",
     {
       description:
@@ -170,7 +178,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "create_tag",
     {
       description: "Create one tag in the controlled vocabulary. One at a time by design.",
@@ -190,7 +198,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "merge_tags",
     {
       description: "Maintenance op: repoint every question and child tag from from_slug to to_slug, then retire from_slug.",
@@ -205,7 +213,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "search_questions",
     {
       description:
@@ -234,7 +242,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "get_question",
     {
       description:
@@ -250,7 +258,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "create_questions",
     {
       description: "Batch-write questions into the bank. Rejections are per-question; valid siblings still commit. Flags possible duplicates without rejecting them. Also flags (non-blocking) an mc question with other than 4 choices, per readme()'s prompt_conventions.",
@@ -265,7 +273,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "edit_question",
     {
       description: "Edit a question. Versions (new row, old retired) if the question has attempts; edits in place otherwise.",
@@ -316,7 +324,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "retire_question",
     {
       description: "Soft-retire a question. Excluded from draws and future pulls; existing responses unaffected.",
@@ -331,7 +339,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "list_templates",
     {
       description:
@@ -354,7 +362,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "create_template",
     {
       description:
@@ -386,7 +394,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "edit_template",
     {
       description:
@@ -418,7 +426,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "retire_template",
     {
       description: "Soft-retire a template.",
@@ -433,11 +441,11 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "get_results",
     {
       description:
-        "Read attempt results. scope 'question' is sorted worst-first and is the primary signal for what to write more of; it returns recent_responses for every item — mc and written alike — with the chosen option, response text, confidence, idk, misapplied_method and latency, plus graded/ungraded counts, so a null score (ungraded) is never averaged in as zero.",
+        "Read attempt results. scope 'question' is sorted worst-first and is the primary signal for what to write more of; it returns recent_responses for every item — mc and written alike — with the chosen option and its misconception, the best guess after an idk, response text, confidence (plus confidence_numeric), idk, misapplied_method, diagnosis, grader, the derived outcome and latency, plus graded/ungraded and graded_by (self/model/oracle/judge/auto_mc) counts. scope 'attempt' carries the same per-response records under responses. A null score (ungraded) is never averaged in as zero, and an idk is dont_know, never incorrect.",
       inputSchema: {
         scope: z.enum(["tag", "question", "attempt", "daily"]),
         tag_query: tagQueryShape,
@@ -455,7 +463,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "get_config",
     { description: "Read the current app config." },
     async () => {
@@ -467,7 +475,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "set_config",
     {
       description: "Set one config key. Refuses unknown keys and secrets (model grading API key is server-UI-only).",
@@ -482,7 +490,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "create_asset",
     {
       description:
@@ -505,7 +513,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "list_assets",
     {
       description:
@@ -528,7 +536,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "read_asset",
     {
       description: "Read a single asset in full, including its extracted_text.",
@@ -543,7 +551,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "search_assets",
     {
       description:
@@ -565,7 +573,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "present_item",
     {
       description:
@@ -588,31 +596,40 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "await_item_outcome",
     {
       description:
-        "Wait for the learner to answer the item from present_item, up to ~25 seconds. Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), or status: 'pending' if the learner hasn't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation. The answered record carries outcome (correct|partial|incorrect|dont_know|ungraded), score, selected_choice_id with its chosen_misconception, response_text, confidence, idk, misapplied_method, elapsed_ms and answered_at.",
+        "Wait for the learner to answer the item from present_item, up to timeout_s seconds (default 25, clamped to 1..25). Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), status: 'paused' with paused_at if the learner stepped away (it resumes when they answer), or status: 'pending' if they haven't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation. The answered record carries outcome (correct|partial|incorrect|dont_know|ungraded), score with the grader that produced it, selected_choice_id with its chosen_misconception, best_guess_choice_id with best_guess_correct (an idk's guess is recorded, never scored), response_text, confidence with confidence_numeric (1/3/5), idk, misapplied_method, diagnosis, elapsed_ms and answered_at.",
       inputSchema: {
         response_id: z.string(),
+        timeout_s: z
+          .number()
+          .optional()
+          .describe("How long to wait, in seconds. Default 25; values outside 1..25 are clamped."),
       },
     },
-    async ({ response_id }) => {
+    async ({ response_id, timeout_s }) => {
       try {
-        const deadline = Date.now() + 25_000;
+        const windowS = Math.min(25, Math.max(1, timeout_s ?? 25));
+        const deadline = Date.now() + windowS * 1_000;
+        let paused: { status: "paused"; paused_at: string } | null = null;
         while (Date.now() < deadline) {
           const outcome = getItemOutcome(db, response_id);
+          // Abandoned never resolves, so stop waiting; paused still might
+          // inside this window, so keep polling and report it at the deadline.
           if (outcome.status === "answered" || outcome.status === "abandoned") return ok(outcome);
+          paused = outcome.status === "paused" ? outcome : null;
           await sleep(1_000);
         }
-        return ok({ status: "pending" });
+        return ok(paused ?? { status: "pending" });
       } catch (err) {
         return fail(err);
       }
     }
   );
 
-  server.registerTool(
+  registerTool(
     "quick_check",
     {
       description:
@@ -639,11 +656,11 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "submit_quick_check",
     {
       description:
-        "Record the learner's free-response answer to a quick_check. Returns the full outcome record (response_text, outcome, model_answer, explanation, confidence, idk, misapplied_method).",
+        "Record the learner's free-response answer to a quick_check. Returns the full outcome record (response_text, outcome, score with its grader, model_answer, explanation, confidence with confidence_numeric, idk, misapplied_method, diagnosis).",
       inputSchema: {
         response_id: z.string(),
         response_text: z.string(),
@@ -661,7 +678,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "create_session",
     {
       description:
@@ -679,10 +696,13 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "end_session",
     {
-      description: "Mark a tutoring session finished. Its history stays readable via get_session afterward.",
+      description:
+        "Mark a tutoring session finished and return its summary — presented / answered / abandoned / dont_know " +
+        "counts over the session's live items, plus paused_now. Anything still unanswered is marked abandoned " +
+        "here, so the counts are final. Its history stays readable via get_session afterward.",
       inputSchema: { session_id: z.string() },
     },
     async ({ session_id }) => {
@@ -694,7 +714,32 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
+    "grade_response",
+    {
+      description:
+        "Record your own verdict on an answered item: grader 'oracle' (you know the answer) or 'judge' (you " +
+        "judged the written answer), an optional score 0..1, and an optional one-line diagnosis that every " +
+        "outcome path reads back. The attempt must be submitted. On a written item the score supersedes any " +
+        "self or model grade; on an mc item only the diagnosis is stored — the auto_mc grade against the " +
+        "question's own key stands.",
+      inputSchema: {
+        response_id: z.string(),
+        grader: z.enum(["oracle", "judge"]),
+        score: z.number().optional().describe("0..1. Ignored on an mc item, whose key already scored it."),
+        diagnosis: z.string().optional().describe("One line: what went wrong (or right), in your words."),
+      },
+    },
+    async ({ response_id, grader, score, diagnosis }) => {
+      try {
+        return ok(gradeResponseByTutor(db, response_id, { grader, score, diagnosis }));
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  registerTool(
     "get_session",
     {
       description:
@@ -710,14 +755,17 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "get_attempt",
     {
       description:
         "Read one attempt in full: every response with its question snapshot (answer key included once submitted), " +
-        "selected_choice_id, response_text, confidence, idk, misapplied_method, elapsed_ms, answered_at and the live " +
-        "grade. This is the attempt-scope read; get_results stays aggregate. attempt_id comes from present_item, " +
-        "quick_check, get_session, or get_results(scope: 'attempt').",
+        "selected_choice_id with its chosen_misconception, best_guess_choice_id with best_guess_correct, " +
+        "response_text, confidence with confidence_numeric, idk, misapplied_method, diagnosis, elapsed_ms, " +
+        "answered_at, the derived outcome and the live grade with its grader. Correctness — chosen_misconception " +
+        "and best_guess_correct — stays withheld until the attempt is submitted. The attempt itself carries " +
+        "paused_at/paused_ms. This is the attempt-scope read; get_results stays aggregate. attempt_id comes from " +
+        "present_item, quick_check, get_session, or get_results(scope: 'attempt').",
       inputSchema: { attempt_id: z.string() },
     },
     async ({ attempt_id }) => {
@@ -729,7 +777,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "list_sessions",
     {
       description:
@@ -746,7 +794,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "set_retention_target",
     {
       description:
@@ -767,7 +815,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "list_themes",
     {
       description:
@@ -783,7 +831,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "save_theme",
     {
       description:
@@ -812,7 +860,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "delete_theme",
     {
       description: "Delete a custom theme on every device. If it was active, the app falls back to 'mode only'. Built-ins can't be deleted.",
@@ -827,7 +875,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "set_active_theme",
     {
       description: "Make a theme active on every device: a custom theme id, a builtin:* id, or null for 'mode only'.",
@@ -842,7 +890,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     }
   );
 
-  server.registerTool(
+  registerTool(
     "get_due_items",
     {
       description:
