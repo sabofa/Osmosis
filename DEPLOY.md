@@ -178,7 +178,7 @@ What lives where:
 | Downloaded tests | run offline | — |
 | Cloud tests, daily question/quiz | need a connection | resolves the draw |
 | Your results | recorded locally, pushed up when online | authoritative |
-| Live tutoring sessions | not available; the Live page links to the server app | created here by the tutor |
+| Live tutoring sessions | forwarded to the server while online (answers land there directly) | created here by the tutor |
 
 ### Windows (once per device)
 

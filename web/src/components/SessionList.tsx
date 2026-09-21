@@ -48,8 +48,9 @@ export default function SessionList({
   const [closingId, setClosingId] = useState<string | null>(null)
   const [closeError, setCloseError] = useState<string | null>(null)
   // Live items are created on the canonical node by the tutor and never
-  // sync down, so on a local node this page can only point at the server's
-  // own copy of the app (same origin as the sync target).
+  // sync down. A local node forwards this page's reads and writes to the
+  // server (server/src/http/liveProxy.ts), so it works here as long as the
+  // server is reachable; the pill says which it is.
   const [status, setStatus] = useState<NodeStatus | null>(null)
   useEffect(() => {
     getStatus().then(setStatus).catch(() => {})
@@ -125,11 +126,11 @@ export default function SessionList({
           </button>
         </div>
 
-        {serverAppUrl && (
+        {serverAppUrl && !status?.online && (
           <div className="session-list-empty">
-            Live tutoring sessions run on the server, not on this device.{' '}
+            Live sessions come from the server and this device is offline right now. Downloaded tests still work
+            here; the sessions return when the connection does.{' '}
             <a href={serverAppUrl} target="_blank" rel="noreferrer">Open the server app</a>
-            {status?.online ? '' : ' (needs a connection)'}. Downloaded tests still work here offline.
           </div>
         )}
         {error && <div className="session-list-empty">Could not reach the local node: {error}</div>}

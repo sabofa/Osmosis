@@ -10,6 +10,7 @@ import type { NodeRow } from "../node.js";
 import { PROTOCOL_VERSION, TOOLS_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
+import { registerLiveProxy } from "./liveProxy.js";
 import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, buildTemplateDrawResponse, type PullRequest, type PushRequest } from "../domain/sync.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { DomainError } from "../domain/errors.js";
@@ -120,6 +121,10 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     mountMcp(app, ctx);
   }
 
+  // A local node forwards the Live pages' reads and writes to canonical
+  // (http/liveProxy.ts) — registered before the local routes so a forwarded
+  // request never reaches them.
+  registerLiveProxy(app, ctx);
   registerApiRoutes(app, ctx);
 
   // Production only: serve the built web app from the same process. The app
