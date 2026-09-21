@@ -22,12 +22,27 @@ export interface GridPalette {
 // should be the one that persists longest before ticking over, '2' the
 // next-longest, '5' comparatively brief. Thresholds at 5 and 8 give widths
 // 4/3/2 — skewed toward 1 without 5 disappearing entirely.
-function niceStep(worldSpan: number, targetDivisions: number): number {
+export function niceStep(worldSpan: number, targetDivisions: number): number {
   const rough = worldSpan / targetDivisions
   const magnitude = Math.pow(10, Math.floor(Math.log10(rough)))
   const residual = rough / magnitude
   const step = residual >= 8 ? 5 : residual >= 5 ? 2 : 1
   return step * magnitude
+}
+
+// An author's fixed @xstep/@ystep is the step at the zoom the spec was
+// written for, not a promise to draw a line every 0.25 units at any zoom.
+// Zoomed far out that is thousands of lines and labels per axis; zoomed far
+// in it is none. So the fixed step is scaled by 1-2-5 multiples until the
+// visible span holds a readable number of divisions — the author's step
+// survives untouched whenever it already does.
+const MIN_DIVISIONS = 3
+const MAX_DIVISIONS = 14
+export function resolveStep(fixed: number | null, worldSpan: number, targetDivisions: number): number {
+  if (fixed === null || !(fixed > 0) || !(worldSpan > 0)) return niceStep(worldSpan, targetDivisions)
+  const divisions = worldSpan / fixed
+  if (divisions >= MIN_DIVISIONS && divisions <= MAX_DIVISIONS) return fixed
+  return niceStep(worldSpan, targetDivisions)
 }
 
 function updateGeometryAttribute(geometry: THREE.BufferGeometry, name: string, data: number[], itemSize: number) {
@@ -87,8 +102,8 @@ export class GridRenderer {
   // shrinking/growing with the plotted geometry as you zoom.
   draw(bounds: Bounds, config: GraphConfig, pixelToWorld: (px: number) => number) {
     if (config.grid) {
-      const stepX = config.xstep ?? niceStep(bounds.xMax - bounds.xMin, 6)
-      const stepY = config.ystep ?? niceStep(bounds.yMax - bounds.yMin, 6)
+      const stepX = resolveStep(config.xstep, bounds.xMax - bounds.xMin, 6)
+      const stepY = resolveStep(config.ystep, bounds.yMax - bounds.yMin, 6)
 
       const positions: number[] = []
       const startX = Math.ceil(bounds.xMin / stepX) * stepX
