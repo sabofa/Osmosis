@@ -738,6 +738,11 @@ interface GradeRow {
 // 'tutor' is every MCP tool: the tutor is not the learner, and a reveal
 // policy written for the learner's screen must never blind the tutor to what
 // its own item did (§3.1).
+//
+// The default is 'learner', and deliberately the cautious one: a caller that
+// forgets to say gets the withheld view, not the answer key. The tutor's
+// reads are few and all go through the MCP layer, so they can afford to name
+// themselves.
 export type AttemptViewer = "learner" | "tutor";
 
 export function getAttemptDetail(
@@ -752,7 +757,7 @@ export function getAttemptDetail(
     | undefined;
   if (!attempt) throw new DomainError("not_found", `Attempt "${attemptId}" does not exist.`);
 
-  const viewer = opts.viewer ?? "tutor";
+  const viewer = opts.viewer ?? "learner";
   // A deferred attempt holds its key back from the learner until the session
   // it belongs to ends. With no session there is nothing to wait for, so it
   // reveals on submit exactly like an immediate one.
@@ -1004,7 +1009,10 @@ export function answerResponse(
   // rather than refuse, so the app never has to sequence resume-then-answer.
   if (attempt.paused_at) resumeIfPaused(db, attemptId);
 
-  emitSessionEvent(attempt.session_id, { type: "item_answered", attempt_id: attemptId, response_id: responseId });
+  // No item_answered here. This is a draft save — a choice, then another, then
+  // a confidence — and every one of them announcing an "answer" made the live
+  // screens re-read an attempt that was still being typed. The event belongs
+  // to submitAttempt, which is where an outcome actually gets recorded.
 
   const updated = db.prepare("SELECT * FROM response WHERE id = ?").get(responseId) as unknown as ResponseRow;
   return {
@@ -1105,7 +1113,11 @@ export function submitAttempt(
     response_id: answered.length === 1 ? answered[0].id : null,
   });
 
-  return getAttemptDetail(db, attemptId);
+  // The learner's view: this return is what the app's submit route hands
+  // straight back to the screen, and a deferred attempt must not put its key
+  // there. The tutor reads the same attempt through get_attempt, which names
+  // itself.
+  return getAttemptDetail(db, attemptId, { viewer: "learner" });
 }
 
 // ----------------------------------------------------------------------------

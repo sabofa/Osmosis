@@ -84,7 +84,11 @@ describe("the domain writes that emit", () => {
     off();
   });
 
-  it("emits item_answered on an answer, on pause/resume, and session_ended at the end", () => {
+  // item_answered announces a *recorded outcome*, so only submitAttempt emits
+  // it. answerResponse is a draft save — the learner picking a choice, then
+  // another, then a confidence — and announcing each of those as an answer
+  // made every live screen re-read an attempt that had not finished changing.
+  it("emits item_answered once, on submit — not on every draft PATCH", () => {
     const { db, q, session } = seed();
     const item = presentItem(db, { node_id: "test-node", question_id: q.id, session_id: session.id });
 
@@ -102,12 +106,11 @@ describe("the domain writes that emit", () => {
       "attempt_paused",
       "attempt_resumed",
       "item_answered",
-      "item_answered",
       "session_ended",
     ]);
     expect(seen[0].attempt_id).toBe(item.attempt_id);
     expect(seen[2].response_id).toBe(item.response_id);
-    expect(seen[4].session_id).toBe(session.id);
+    expect(seen[3].session_id).toBe(session.id);
     off();
   });
 

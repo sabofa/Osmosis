@@ -571,7 +571,7 @@ export function registerTools(
     },
     async (params) => {
       try {
-        return ok(getResults(db, params));
+        return ok(getResults(db, params, { viewer: "tutor" }));
       } catch (err) {
         return fail(err);
       }
@@ -993,7 +993,7 @@ export function registerTools(
     },
     async ({ session_id }) => {
       try {
-        return ok(getSessionDetail(db, session_id));
+        return ok(getSessionDetail(db, session_id, { viewer: "tutor" }));
       } catch (err) {
         return fail(err);
       }

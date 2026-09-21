@@ -378,14 +378,16 @@ function dailyScope(db: DatabaseSync, params: GetResultsParams, viewer: Viewer) 
   }));
 }
 
-// viewer defaults to 'tutor': every MCP caller reads the full record, and
-// only the /api routes (the app) pass 'learner'.
+// viewer defaults to 'learner', the withholding view: a caller that names no
+// viewer must not be handed a held attempt's score by accident. The MCP
+// get_results reads the full record and says so — `{ viewer: "tutor" }` — and
+// nothing else has to remember anything.
 export function getResults(
   db: DatabaseSync,
   params: GetResultsParams,
   opts: { viewer?: Viewer } = {}
 ): Record<string, unknown> {
-  const viewer = opts.viewer ?? "tutor";
+  const viewer = opts.viewer ?? "learner";
   switch (params.scope) {
     case "tag":
       return { tags: tagScope(db, params, viewer) };

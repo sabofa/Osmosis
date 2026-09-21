@@ -122,7 +122,7 @@ describe("reveal (§3.1)", () => {
     expect(r.grade).not.toBeNull();
   });
 
-  it("never withholds anything from the tutor viewer, which is the default", () => {
+  it("never withholds anything from the tutor viewer, which every MCP tool names", () => {
     const db = openTestDb();
     insertTag(db, "a");
     const q = insertQuestion(db, { tags: ["a"] });
@@ -130,7 +130,7 @@ describe("reveal (§3.1)", () => {
     const item = presentItem(db, { node_id: "n", question_id: q.id, session_id: session.id });
     answerAndSubmit(db, item.attempt_id, item.response_id);
 
-    const tutor = getAttemptDetail(db, item.attempt_id) as any;
+    const tutor = getAttemptDetail(db, item.attempt_id, { viewer: "tutor" }) as any;
     expect(tutor.revealed).toBe(true);
     const r = tutor.responses[0];
     expect(r.question.choices.some((c: any) => c.is_correct === true)).toBe(true);
@@ -514,7 +514,7 @@ describe("deferred reveal across the learner's other reads", () => {
     expect(learner.attempts[0].ungraded).toBeNull();
 
     // The tutor's read — get_session — is untouched.
-    const tutor = getSessionDetail(db, session.id) as any;
+    const tutor = getSessionDetail(db, session.id, { viewer: "tutor" }) as any;
     expect(tutor.attempts[0].revealed).toBe(true);
     expect(tutor.attempts[0].mean_score).toBe(0);
 
@@ -537,9 +537,9 @@ describe("deferred reveal across the learner's other reads", () => {
     expect(learnerAttempts.attempts).toHaveLength(0);
 
     // The tutor still sees all of it.
-    const tutorTags = getResults(db, { scope: "tag" }) as any;
+    const tutorTags = getResults(db, { scope: "tag" }, { viewer: "tutor" }) as any;
     expect(tutorTags.tags[0].responses).toBe(1);
-    const tutorQuestions = getResults(db, { scope: "question" }) as any;
+    const tutorQuestions = getResults(db, { scope: "question" }, { viewer: "tutor" }) as any;
     expect(tutorQuestions.questions[0].recent_responses[0].outcome).toBe("incorrect");
 
     // ... and so does the learner, once the session has ended.
@@ -547,6 +547,35 @@ describe("deferred reveal across the learner's other reads", () => {
     const afterEnd = getResults(db, { scope: "question" }, { viewer: "learner" }) as any;
     expect(afterEnd.questions).toHaveLength(1);
     expect(afterEnd.questions[0].recent_responses[0].outcome).toBe("incorrect");
+  });
+
+  // The default decides what a caller that forgot to say gets. A default of
+  // "tutor" means every future read — a new route, a new domain helper — hands
+  // out the answer key unless someone remembers to ask it not to. The safe
+  // default is the one that withholds; the tutor's own reads say so out loud.
+  it("withholds by default: a read that names no viewer gets the learner's view", async () => {
+    const { getResults } = await import("../src/domain/results.js");
+    const { getSessionDetail } = await import("../src/domain/sessions.js");
+    const { getSessionStream } = await import("../src/domain/shows.js");
+    const db = openTestDb();
+    const { session, item } = heldSession(db);
+
+    const attempt = getAttemptDetail(db, item.attempt_id) as any;
+    expect(attempt.revealed).toBe(false);
+    expect(attempt.responses[0].grade).toBeUndefined();
+    expect(attempt.responses[0].outcome).toBeUndefined();
+    for (const c of attempt.responses[0].question.choices) expect(c.is_correct).toBeUndefined();
+
+    expect((getResults(db, { scope: "tag" }) as any).tags).toHaveLength(0);
+    expect((getResults(db, { scope: "question" }) as any).questions).toHaveLength(0);
+    expect((getResults(db, { scope: "attempt" }) as any).attempts).toHaveLength(0);
+
+    const detail = getSessionDetail(db, session.id) as any;
+    expect(detail.attempts[0].revealed).toBe(false);
+    expect(detail.attempts[0].mean_score).toBeNull();
+
+    const stream = getSessionStream(db, session.id) as any;
+    expect(stream.entries.find((e: any) => e.kind === "item").revealed).toBe(false);
   });
 
   it("leaves an immediate attempt visible to the learner in both reads", async () => {

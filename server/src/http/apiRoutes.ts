@@ -608,15 +608,15 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/attempts/:id/submit", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      submitAttempt(db, id, ctx.env.role);
+      // submitAttempt returns the learner's own view of the attempt, which is
+      // exactly what this response is — no re-read needed.
+      const detail = submitAttempt(db, id, ctx.env.role);
       // 5th sync trigger (spec): on submit, if currently online. Deliberately
       // not awaited — the submit response must not block on the network.
       if (ctx.env.role === "local" && ctx.runtime.online) {
         void runSync(ctx, ctx.runtime);
       }
-      // Re-read as the learner: submitAttempt's own return is the tutor's
-      // full record, which a deferred attempt must not put on the screen.
-      return getAttemptDetail(db, id, { viewer: "learner" });
+      return detail;
     } catch (err) {
       sendDomainError(reply, err);
       return;

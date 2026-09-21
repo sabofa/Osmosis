@@ -138,18 +138,34 @@ export function endSession(
   const summaryText =
     typeof opts.summary === "string" && opts.summary.trim() !== "" ? opts.summary : null;
 
-  db.prepare("UPDATE tutor_session SET ended_at = datetime('now'), summary = ? WHERE id = ?").run(summaryText, id);
-  db.prepare(
-    `UPDATE attempt SET abandoned_at = datetime('now'), paused_at = NULL
-     WHERE session_id = ? AND delivery_mode = 'app_live' AND submitted_at IS NULL AND abandoned_at IS NULL`
-  ).run(id);
+  // Ending a session is three writes that only make sense together: the
+  // session closes, whatever was still open on the learner's screen is
+  // abandoned, and the questions that existed only for this session retire.
+  // Half of that — a closed session still holding a pending attempt, or an
+  // ephemeral question outliving the session that owns it — is a state no
+  // reader knows how to interpret, so they go in one transaction (as
+  // submitAttempt's writes do).
+  let retiredEphemeral: number;
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE tutor_session SET ended_at = datetime('now'), summary = ? WHERE id = ?").run(summaryText, id);
+    db.prepare(
+      `UPDATE attempt SET abandoned_at = datetime('now'), paused_at = NULL
+       WHERE session_id = ? AND delivery_mode = 'app_live' AND submitted_at IS NULL AND abandoned_at IS NULL`
+    ).run(id);
 
-  const retiredEphemeral = db
-    .prepare(
-      `UPDATE question SET retired_at = datetime('now'), retired_reason = 'ephemeral_session_ended'
-       WHERE session_id = ? AND ephemeral = 1 AND retired_at IS NULL`
-    )
-    .run(id).changes as number;
+    retiredEphemeral = db
+      .prepare(
+        `UPDATE question SET retired_at = datetime('now'), retired_reason = 'ephemeral_session_ended'
+         WHERE session_id = ? AND ephemeral = 1 AND retired_at IS NULL`
+      )
+      .run(id).changes as number;
+
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 
   const counts = db
     .prepare(
@@ -243,7 +259,9 @@ export function getSessionDetail(
   sessionId: string,
   opts: { viewer?: Viewer } = {}
 ): Record<string, unknown> {
-  const viewer = opts.viewer ?? "tutor";
+  // Defaults to the withholding view, like getAttemptDetail and getResults:
+  // the tutor's get_session names itself.
+  const viewer = opts.viewer ?? "learner";
   const session = db
     .prepare("SELECT id, name, tag_slug, reveal_default, created_at, ended_at, summary FROM tutor_session WHERE id = ?")
     .get(sessionId) as Omit<SessionRow, "status" | "source"> | undefined;
