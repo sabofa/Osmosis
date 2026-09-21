@@ -240,7 +240,7 @@ describe("show outcome and the learner's acknowledgement", () => {
     expect(out.status).toBe("acknowledged");
   });
 
-  it("404s an unknown show and refuses a closed session", () => {
+  it("404s an unknown show and refuses to acknowledge one whose session closed", () => {
     expect(() => getShowOutcome(db, "nope")).toThrowError(/does not exist/);
     endSession(db, sessionId);
     try {
@@ -249,6 +249,21 @@ describe("show outcome and the learner's acknowledgement", () => {
     } catch (err) {
       expect((err as DomainError).code).toBe("session_ended");
     }
+  });
+
+  it("still takes a seen report after the session closed", () => {
+    // Being seen is a measurement of something that already happened, not an
+    // act — and a card that was on screen when the tutor ended the session is
+    // exactly the one whose dwell would otherwise be lost for good.
+    endSession(db, sessionId);
+    const out = markShowSeen(db, showId, 9000);
+    expect(out.status).toBe("seen");
+    expect(out.seen_at).toBeTruthy();
+    expect(out.dwell_ms).toBe(9000);
+  });
+
+  it("404s a seen report for a show that does not exist", () => {
+    expect(() => markShowSeen(db, "nope", 10)).toThrowError(/does not exist/);
   });
 });
 

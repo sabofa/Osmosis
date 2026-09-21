@@ -16,9 +16,16 @@ import './ShowCard.css'
 //
 // The card keeps exactly one piece of state of its own: dwell, measured from
 // its first paint. It reports that time twice for two different reasons — as
-// `seen` when the card leaves the screen or the session closes under it, and
-// as `acknowledge` when Ben says OK. The server keeps the larger of whatever
-// it is told, so neither report can shorten the other.
+// `seen` when the card leaves the screen, unmounts, or the session closes
+// under it, and as `acknowledge` when Ben says OK. The server keeps the larger
+// of whatever it is told, so neither report can shorten the other.
+//
+// The `seen` report is not suppressed once the session closes, and the server
+// does not refuse it: a show read right up to the moment the tutor ended the
+// session is precisely the one whose dwell is worth having, and staying quiet
+// there would leave it reading `pending` with no dwell forever. Acknowledging
+// after the close is a different matter — that is an act, and the server
+// refuses it with a 409.
 // ----------------------------------------------------------------------------
 
 export default function ShowCard({
@@ -43,18 +50,26 @@ export default function ShowCard({
   // number anyway.
   const reportedSeen = useRef(false)
   const acknowledged = entry.acknowledged_at !== null
+  // Read through a ref so `reportSeen` keeps one identity for the card's whole
+  // life. Its identity is what the observer and the unmount cleanup below are
+  // keyed on, and a `reportSeen` that changed would re-run both — turning
+  // "acknowledged" into a spurious seen report.
+  const acknowledgedRef = useRef(acknowledged)
+  acknowledgedRef.current = acknowledged
 
   const dwell = useCallback(() => Date.now() - mountedAt.current, [])
 
   const reportSeen = useCallback(() => {
-    if (reportedSeen.current || !sessionOpen) return
+    // Never after an acknowledge: that already carried the final dwell, and a
+    // seen behind it would be a second, smaller measurement of the same thing.
+    if (reportedSeen.current || acknowledgedRef.current) return
     reportedSeen.current = true
     markShowSeen(entry.show_id, dwell()).catch(() => {
       // A failed seen costs the tutor a dwell number, not correctness — the
       // acknowledge, if it comes, carries the same measurement.
       reportedSeen.current = false
     })
-  }, [entry.show_id, sessionOpen, dwell])
+  }, [entry.show_id, dwell])
 
   const acknowledge = useCallback(() => {
     if (busy || acknowledged || !sessionOpen) return
@@ -97,6 +112,13 @@ export default function ShowCard({
   useEffect(() => {
     return () => reportSeen()
   }, [reportSeen])
+
+  // The session ended under this card. Nothing unmounts and nothing scrolls,
+  // so without this the dwell of the show Ben was reading when the tutor
+  // wrapped up would never reach the server.
+  useEffect(() => {
+    if (!sessionOpen) reportSeen()
+  }, [sessionOpen, reportSeen])
 
   return (
     <div

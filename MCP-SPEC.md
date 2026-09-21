@@ -238,7 +238,11 @@ names none does not blank what the show before it said.
 The app renders all of this through `GET /api/sessions/:id/stream`: items
 (by reference — `attempt_id`, `response_id` and `revealed`) merged with shows
 (in full) in the order they landed, plus `POST /api/shows/:id/seen` and
-`/acknowledge`, both taking `{ dwell_ms }`. While any item in that stream is
+`/acknowledge`, both taking `{ dwell_ms }`. The two differ on a closed
+session: `/seen` is still accepted, because being seen is a measurement of
+something that already happened and the show the learner was reading when the
+tutor ended the session is the one whose dwell is most worth having;
+`/acknowledge` is an act and returns **409**. While any item in that stream is
 still open, every earlier entry collapses to a one-line stub, and a `deferred`
 item stays collapsed until its key is released. That collapse is a web-side
 rule and deliberately not tamper-proof: the server's job is withholding the

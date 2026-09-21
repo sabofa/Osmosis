@@ -128,7 +128,32 @@ describe("the show routes", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("404s an unknown show and 409s one whose session has closed", async () => {
+  it("accepts a seen report after the session closed, but not an acknowledge", async () => {
+    const s = createSession(db, { name: "Closed under a card" });
+    const show = presentShow(db, { session_id: s.id, kind: "text", payload: "still reading" });
+    endSession(db, s.id);
+
+    // Seen is an observation of something that already happened, so the closed
+    // session takes it — otherwise the show Ben was reading when the tutor
+    // wrapped up reads 'pending' with no dwell forever.
+    const seen = await app.inject({
+      method: "POST",
+      url: `/api/shows/${show.show_id}/seen`,
+      payload: { dwell_ms: 6000 },
+    });
+    expect(seen.statusCode).toBe(200);
+    expect(seen.json()).toMatchObject({ status: "seen", dwell_ms: 6000 });
+
+    // Acknowledging is an act, and the session is over.
+    const acked = await app.inject({
+      method: "POST",
+      url: `/api/shows/${show.show_id}/acknowledge`,
+      payload: { dwell_ms: 6000 },
+    });
+    expect(acked.statusCode).toBe(409);
+  });
+
+  it("404s an unknown show and 409s an acknowledge whose session has closed", async () => {
     const missing = await app.inject({ method: "POST", url: "/api/shows/nope/acknowledge", payload: {} });
     expect(missing.statusCode).toBe(404);
 

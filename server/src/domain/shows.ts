@@ -177,6 +177,11 @@ function nextDwell(stored: number | null, given: number | null | undefined): num
   return stored == null ? Math.round(given) : Math.max(stored, Math.round(given));
 }
 
+// Gates acknowledgement, and only acknowledgement. Saying OK to a show is an
+// act, and a session that has ended takes no further acts. Being *seen* is not
+// an act — it is a measurement of something that already happened — so a card
+// that was on screen when the session closed under it must still be able to
+// report what it observed. See markShowSeen.
 function assertShowSessionOpen(db: DatabaseSync, show: ShowRow): void {
   if (!sessionIsOpen(db, show.session_id)) {
     throw new DomainError(
@@ -188,9 +193,14 @@ function assertShowSessionOpen(db: DatabaseSync, show: ShowRow): void {
 
 // The card reached the screen. Idempotent in the way that matters: seen_at is
 // the *first* time it was seen, so a re-report does not rewrite history.
+//
+// Deliberately *not* gated on the session being open, unlike acknowledgeShow.
+// The commonest way a show is read and never acknowledged is the tutor ending
+// the session while the card is still on screen; refusing the report then
+// would leave exactly that show reading `pending` with no dwell forever, which
+// is the one case the measurement is most worth having.
 export function markShowSeen(db: DatabaseSync, showId: string, dwellMs?: number | null): ShowOutcome {
   const show = loadShow(db, showId);
-  assertShowSessionOpen(db, show);
   db.prepare("UPDATE show SET seen_at = COALESCE(seen_at, datetime('now')), dwell_ms = ? WHERE id = ?").run(
     nextDwell(show.dwell_ms, dwellMs),
     showId
