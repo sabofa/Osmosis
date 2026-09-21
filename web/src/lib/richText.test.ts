@@ -44,6 +44,41 @@ describe('segment', () => {
     expect(segment('a $$x^2')).toEqual([{ kind: 'text', value: 'a $$x^2' }])
   })
 
+  // pandoc's tex_math_dollars rule: an opening `$` must be followed by
+  // non-whitespace, and a closing `$` must be preceded by non-whitespace and
+  // not followed by a digit. Prose full of prices is the whole reason — the
+  // economics prompt below was rendering half a sentence as a formula on the
+  // deployed bank.
+  it('does not read a run of prices as math', () => {
+    const prompt =
+      'Points A and B both lie on the same demand curve D. Moving from A (Q=5, P=$50) to B (Q=15, P=$30) illustrates:'
+    expect(segment(prompt)).toEqual([{ kind: 'text', value: prompt }])
+  })
+
+  it('leaves two prices in one line as text', () => {
+    expect(segment('P=$50 and P=$30')).toEqual([{ kind: 'text', value: 'P=$50 and P=$30' }])
+  })
+
+  it('leaves $5 or $10 as text', () => {
+    expect(segment('$5 or $10')).toEqual([{ kind: 'text', value: '$5 or $10' }])
+  })
+
+  it('leaves a $ with whitespace inside as text', () => {
+    expect(segment('$ x $')).toEqual([{ kind: 'text', value: '$ x $' }])
+  })
+
+  it('still reads two inline runs in one sentence as math', () => {
+    expect(segment('$x$, then $y$')).toEqual([
+      { kind: 'inline', value: 'x' },
+      { kind: 'text', value: ', then ' },
+      { kind: 'inline', value: 'y' },
+    ])
+  })
+
+  it('still reads a fraction as inline math', () => {
+    expect(segment('$\\frac{a}{b}$')).toEqual([{ kind: 'inline', value: '\\frac{a}{b}' }])
+  })
+
   it('keeps a chemistry macro intact inside inline math', () => {
     expect(segment('$\\ce{Al2(SO4)3}$')).toEqual([{ kind: 'inline', value: '\\ce{Al2(SO4)3}' }])
   })

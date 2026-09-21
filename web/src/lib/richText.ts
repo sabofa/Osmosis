@@ -67,7 +67,7 @@ export function segment(text: string): Segment[] {
       continue
     }
 
-    if (rest.startsWith('$')) {
+    if (rest.startsWith('$') && !isSpace(text[i + 1])) {
       const end = findClosingDollar(text, i + 1)
       if (end !== -1) {
         flushText()
@@ -85,17 +85,33 @@ export function segment(text: string): Segment[] {
   return segments
 }
 
+function isSpace(ch: string | undefined): boolean {
+  return ch === undefined || /\s/.test(ch)
+}
+
 // Index of the `$` that closes an inline run opened at `from - 1`, or -1 when
 // there isn't one in the same paragraph. A `\$` doesn't close a run, and a
 // blank line ends the search: prose with two unrelated prices on separate
 // paragraphs must not be read as one enormous formula.
+//
+// The two extra conditions on a closing `$` are pandoc's tex_math_dollars rule
+// (its opening half — no whitespace after the opening `$` — is enforced at the
+// call site): a closer must be preceded by non-whitespace and must not be
+// followed by a digit. That second clause is what finally settles prices — in
+// "P=$50) to B (Q=15, P=$30)" the only candidate closer is followed by `3`, so
+// both dollars stay literal instead of turning most of the sentence into a
+// formula.
 function findClosingDollar(text: string, from: number): number {
   for (let i = from; i < text.length; i++) {
     if (text[i] === '\\') {
       i += 1
       continue
     }
-    if (text[i] === '$') return i
+    if (text[i] === '$') {
+      if (isSpace(text[i - 1])) continue
+      if (/[0-9]/.test(text[i + 1] ?? '')) continue
+      return i
+    }
     if (text[i] === '\n' && text[i + 1] === '\n') return -1
   }
   return -1
