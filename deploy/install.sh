@@ -112,6 +112,20 @@ if [[ ! -f "$ENV_FILE" ]]; then
   sudo chmod 640 "$ENV_FILE"
 else
   log "Keeping existing $ENV_FILE"
+  # MCP_PRESENTER_TOKEN arrived after this host was first installed, and the
+  # branch above only runs on a first run — so an upgrade would otherwise keep
+  # an env file with no presenter token and leave that surface silently off.
+  # Append one if it isn't there. Never rewrite an existing line: that would
+  # rotate a token the tutor server is already configured with.
+  if [[ "$ROLE" != "local" ]] && ! sudo grep -q '^MCP_PRESENTER_TOKEN=' "$ENV_FILE"; then
+    PRESENTER_TOKEN="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
+    {
+      echo ""
+      echo "# Added by deploy/install.sh: reduced presenter MCP surface (see DEPLOY.md)."
+      echo "MCP_PRESENTER_TOKEN=$PRESENTER_TOKEN"
+    } | sudo tee -a "$ENV_FILE" >/dev/null
+    log "Added a generated MCP_PRESENTER_TOKEN to $ENV_FILE (presenter surface was off)"
+  fi
 fi
 
 # ---- 4. systemd -------------------------------------------------------------

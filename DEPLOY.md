@@ -90,7 +90,8 @@ holds a credential that cannot do any of those things. `readme()` reports
 what it is holding rather than discovering it on a refused call.
 
 `MCP_PRESENTER_TOKEN` is optional: leave it unset and the presenter surface
-simply doesn't exist. Setting it to the same value as `MCP_AUTH_TOKEN` is
+simply doesn't exist (but note that re-running `install.sh` on a canonical host
+adds one if the env file has no such line at all — see Updating). Setting it to the same value as `MCP_AUTH_TOKEN` is
 refused at boot with a clear message — identical tokens would collapse the two
 surfaces into one.
 
@@ -129,7 +130,15 @@ cd ~/Osmosis && git pull && bash deploy/install.sh
 ```
 
 Migrations run automatically on start. Re-running the script keeps the
-existing env file and token.
+existing env file and tokens — it never rewrites a token you already have.
+
+One exception, and it is additive: if `/etc/osmosis/canonical.env` predates
+`MCP_PRESENTER_TOKEN` (any install from before the presenter surface existed),
+re-running `install.sh` **appends** a generated one and says so in its output.
+Without that, an upgraded host would keep an env file with no presenter token
+and the presenter surface would silently stay off. Nothing else in the file is
+touched. Read the new token out of the env file and configure the tutor server
+with it.
 
 Update canonical before any local node: local nodes call `/sync/*` routes
 (template-draw, daily-draw) that a not-yet-updated canonical won't have, and a

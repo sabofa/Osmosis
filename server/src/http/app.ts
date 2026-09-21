@@ -22,8 +22,29 @@ export interface AppContext {
   runtime: SyncRuntime;
 }
 
+// The MCP shared secrets travel as a path segment (see mcp/server.ts for why),
+// so Fastify's default request log would write both of them into journald on
+// every call. The token is the segment straight after /mcp; anything after it
+// (the /upload sibling, a query string) is kept, since it is what makes the
+// line worth logging at all.
+export function redactMcpTokenInUrl(url: string): string {
+  return url.replace(/^\/mcp\/[^/?#]+/, "/mcp/<redacted>");
+}
+
 export function buildApp(ctx: AppContext): FastifyInstance {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      serializers: {
+        req: (request) => ({
+          method: request.method,
+          url: redactMcpTokenInUrl(request.url),
+          host: request.host,
+          remoteAddress: request.ip,
+          remotePort: request.socket?.remotePort,
+        }),
+      },
+    },
+  });
   app.register(multipart);
 
   // /sync and /mcp — canonical only. /sync never touches the public internet

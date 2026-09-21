@@ -23,7 +23,10 @@ anyone probing it. `server/src/mcp/server.ts`.
 
 **Two tokens, two scopes.** The route resolves `:token` to a scope in
 constant time (`tokenMatches`, a length-tolerant `timingSafeEqual`); anything
-it doesn't recognise 404s. Neither value is ever logged by this code.
+it doesn't recognise 404s. Neither value is ever logged: the token is a path
+segment, so `buildApp`'s pino `req` serializer rewrites a logged url of
+`/mcp/<token>[/upload]` to `/mcp/<redacted>[/upload]`
+(`redactMcpTokenInUrl`, `server/src/http/app.ts`).
 
 | Env var | Scope | Inventory |
 |---|---|---|
