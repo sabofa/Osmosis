@@ -1,0 +1,103 @@
+import { describe, it, expect } from 'vitest'
+import { resolveKey, type KeyContext } from './keymap'
+
+const mc: KeyContext = { inTextField: false, kind: 'mc', choiceCount: 4, recorded: false }
+const written: KeyContext = { inTextField: false, kind: 'written', choiceCount: 0, recorded: false }
+
+describe('resolveKey — choices', () => {
+  it('maps 1–5 to a choice ordinal on a multiple-choice item', () => {
+    expect(resolveKey({ key: '1' }, mc)).toEqual({ type: 'choice', ordinal: 1 })
+    expect(resolveKey({ key: '4' }, mc)).toEqual({ type: 'choice', ordinal: 4 })
+  })
+
+  it('ignores an ordinal the item does not have', () => {
+    expect(resolveKey({ key: '5' }, mc)).toBeNull()
+  })
+
+  it('ignores digits on a written item', () => {
+    expect(resolveKey({ key: '1' }, written)).toBeNull()
+  })
+
+  it('never maps 6 and up — the map stops at five', () => {
+    expect(resolveKey({ key: '6' }, { ...mc, choiceCount: 6 })).toBeNull()
+    expect(resolveKey({ key: '0' }, mc)).toBeNull()
+  })
+})
+
+describe('resolveKey — the rest of the map', () => {
+  it('submits on Enter', () => {
+    expect(resolveKey({ key: 'Enter' }, mc)).toEqual({ type: 'submit' })
+    expect(resolveKey({ key: 'Enter' }, written)).toEqual({ type: 'submit' })
+  })
+
+  it('blanks on b, toggles idk on ?, sets confidence on u/s/c', () => {
+    expect(resolveKey({ key: 'b' }, mc)).toEqual({ type: 'blank' })
+    expect(resolveKey({ key: '?', shiftKey: true }, mc)).toEqual({ type: 'toggle-idk' })
+    expect(resolveKey({ key: 'u' }, mc)).toEqual({ type: 'confidence', level: 'unsure' })
+    expect(resolveKey({ key: 's' }, mc)).toEqual({ type: 'confidence', level: 'somewhat' })
+    expect(resolveKey({ key: 'c' }, mc)).toEqual({ type: 'confidence', level: 'confident' })
+  })
+
+  it('is case-insensitive', () => {
+    expect(resolveKey({ key: 'B', shiftKey: true }, mc)).toEqual({ type: 'blank' })
+    expect(resolveKey({ key: 'U', shiftKey: true }, mc)).toEqual({ type: 'confidence', level: 'unsure' })
+  })
+
+  it('offers confidence and idk only where they exist — not on a written item', () => {
+    expect(resolveKey({ key: 'u' }, written)).toBeNull()
+    expect(resolveKey({ key: '?', shiftKey: true }, written)).toBeNull()
+    expect(resolveKey({ key: 'b' }, written)).toBeNull()
+  })
+
+  it('advances on Space only while a recorded card is showing', () => {
+    expect(resolveKey({ key: ' ' }, mc)).toBeNull()
+    expect(resolveKey({ key: ' ' }, { ...mc, recorded: true })).toEqual({ type: 'advance' })
+  })
+
+  it('answers nothing on a recorded card but the advance', () => {
+    const rec = { ...mc, recorded: true }
+    expect(resolveKey({ key: '1' }, rec)).toBeNull()
+    expect(resolveKey({ key: 'u' }, rec)).toBeNull()
+    expect(resolveKey({ key: 'Enter' }, rec)).toEqual({ type: 'submit' })
+  })
+})
+
+describe('resolveKey — typing and browser shortcuts', () => {
+  it('stays out of the way while the caret is in a text field', () => {
+    const typing = { ...written, inTextField: true }
+    expect(resolveKey({ key: 'b' }, typing)).toBeNull()
+    expect(resolveKey({ key: 'Enter' }, typing)).toBeNull()
+    expect(resolveKey({ key: ' ' }, { ...typing, recorded: true })).toBeNull()
+  })
+
+  it('submits on Ctrl+Enter even from a text field', () => {
+    expect(resolveKey({ key: 'Enter', ctrlKey: true }, { ...written, inTextField: true })).toEqual({ type: 'submit' })
+    expect(resolveKey({ key: 'Enter', ctrlKey: true }, mc)).toEqual({ type: 'submit' })
+  })
+
+  it('never claims a modifier combination the browser owns', () => {
+    expect(resolveKey({ key: 'b', ctrlKey: true }, mc)).toBeNull()
+    expect(resolveKey({ key: '1', metaKey: true }, mc)).toBeNull()
+    expect(resolveKey({ key: 'c', ctrlKey: true }, mc)).toBeNull()
+    expect(resolveKey({ key: 'u', altKey: true }, mc)).toBeNull()
+    expect(resolveKey({ key: 'Enter', metaKey: true }, mc)).toBeNull()
+    expect(resolveKey({ key: 'Enter', ctrlKey: true, shiftKey: true }, mc)).toBeNull()
+  })
+
+  it('ignores keys with no meaning here', () => {
+    expect(resolveKey({ key: 'z' }, mc)).toBeNull()
+    expect(resolveKey({ key: 'Tab' }, mc)).toBeNull()
+    expect(resolveKey({ key: 'Escape' }, mc)).toBeNull()
+  })
+})
+
+describe('isTextEntry', () => {
+  it('recognises the elements a keystroke belongs to', async () => {
+    const { isTextEntry } = await import('./keymap')
+    expect(isTextEntry({ tagName: 'TEXTAREA' })).toBe(true)
+    expect(isTextEntry({ tagName: 'INPUT' })).toBe(true)
+    expect(isTextEntry({ tagName: 'DIV', isContentEditable: true })).toBe(true)
+    expect(isTextEntry({ tagName: 'BUTTON' })).toBe(false)
+    expect(isTextEntry(null)).toBe(false)
+  })
+})

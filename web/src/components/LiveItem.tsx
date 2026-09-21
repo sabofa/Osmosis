@@ -1,7 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Take from './Take'
-import { getLivePendingAttempt, type AttemptDetail } from '../lib/api'
+import RichText from './RichText'
+import {
+  getLivePendingAttempt,
+  getSessionDetail,
+  sessionIsOpen,
+  type AttemptDetail,
+  type SessionDetail,
+} from '../lib/api'
 import { subscribeSession, canStreamSessionEvents, type StreamState } from '../lib/liveEvents'
+import { notifyItemPresented } from '../lib/notify'
 import './LiveItem.css'
 
 // No stream available at all (an old runtime without EventSource): exactly the
@@ -25,13 +33,34 @@ export default function LiveItem({ sessionId, onExit }: { sessionId: string; onE
   const [attempt, setAttempt] = useState<AttemptDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [streamState, setStreamState] = useState<StreamState | null>(null)
+  // Set once the session is closed. Without this the screen waits for an item
+  // that can never arrive — an open-ended "Waiting for the next item…" is a
+  // lie as soon as the tutor has gone.
+  const [ended, setEnded] = useState<SessionDetail | null>(null)
+
+  // Reads the session itself rather than trusting the event: the summary is
+  // written as part of ending, and this is also how a screen opened *after*
+  // the session closed learns that it did.
+  const checkEnded = useCallback(async () => {
+    try {
+      const detail = await getSessionDetail(sessionId)
+      if (!sessionIsOpen(detail)) setEnded(detail)
+    } catch {
+      // A failed read leaves the screen waiting, which the poll below and the
+      // next event will both correct.
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    void checkEnded()
+  }, [checkEnded])
 
   // Only runs while nothing is pending — once `attempt` is set, Take owns
   // that attempt's lifecycle (via setAttempt) and this effect tears itself
   // down, so a stream nudge or a poll response can never stomp an
   // in-progress answer.
   useEffect(() => {
-    if (attempt) return
+    if (attempt || ended) return
     let cancelled = false
     let timer: ReturnType<typeof setInterval> | null = null
 
@@ -69,7 +98,14 @@ export default function LiveItem({ sessionId, onExit }: { sessionId: string; onE
       (event) => {
         // Everything else on this channel concerns an item already on screen,
         // which is Take's business, not this screen's.
-        if (event.type === 'item_presented' || event.type === 'session_ended') void poll()
+        if (event.type === 'item_presented') {
+          notifyItemPresented()
+          void poll()
+        }
+        if (event.type === 'session_ended') {
+          void poll()
+          void checkEnded()
+        }
       },
       (state) => {
         if (cancelled) return
@@ -90,14 +126,44 @@ export default function LiveItem({ sessionId, onExit }: { sessionId: string; onE
       setPolling(null)
       off()
     }
-  }, [sessionId, attempt])
+  }, [sessionId, attempt, ended, checkEnded])
 
   function handleFinish() {
     setAttempt(null)
   }
 
   if (attempt) {
-    return <Take attempt={attempt} setAttempt={setAttempt} onExit={onExit} onFinish={handleFinish} />
+    // The stage is what gives the live page its two columns at width (§7.8).
+    // All Take exposes for it is a data-panel marker on its side column; the
+    // layout itself lives in LiveItem.css, so Take is unchanged everywhere else.
+    return (
+      <div className="live-item-stage">
+        <Take attempt={attempt} setAttempt={setAttempt} onExit={onExit} onFinish={handleFinish} />
+      </div>
+    )
+  }
+
+  if (ended) {
+    return (
+      <div className="live-item-waiting">
+        <button className="live-item-back" onClick={onExit}>
+          &larr; Back to sessions
+        </button>
+        <div className="live-item-waiting-body">
+          <div className="live-item-ended">
+            <div className="live-item-ended-title">This session has ended</div>
+            {ended.summary ? (
+              <RichText text={ended.summary} className="live-item-ended-summary" />
+            ) : (
+              <div className="live-item-waiting-text">The tutor left no summary.</div>
+            )}
+            <button className="live-item-ended-btn" onClick={onExit}>
+              Back to sessions
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

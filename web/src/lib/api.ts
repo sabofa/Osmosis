@@ -318,6 +318,16 @@ export interface AttemptResponse {
   confidence?: 'unsure' | 'somewhat' | 'confident' | null
   idk?: boolean
   misapplied_method?: string | null
+  // The guess the learner offered alongside an "I don't know". It echoes back
+  // unconditionally; whether it was right does not (see best_guess_correct).
+  best_guess_choice_id?: string | null
+  // Answer-key material, all of it: under a deferred reveal the server omits
+  // these keys outright rather than nulling them, so `undefined` here means
+  // "not yet", not "no verdict".
+  best_guess_correct?: boolean | null
+  chosen_misconception?: string | null
+  diagnosis?: string | null
+  outcome?: 'correct' | 'partial' | 'incorrect' | 'dont_know' | 'ungraded'
   grade: AttemptGrade | null
 }
 
@@ -326,11 +336,26 @@ export interface AttemptDetail {
   node_id: string
   source: 'template' | 'adhoc'
   template_id: string | null
+  session_id?: string | null
+  // Whether this attempt's key is held back until the session ends, and
+  // whether it has in fact been handed over yet.
+  reveal?: 'immediate' | 'deferred'
+  revealed?: boolean
   started_at: string
   submitted_at: string | null
   abandoned_at: string | null
+  // Set while the learner has stepped away (§2.8); paused_ms is the total
+  // already banked, which the server excludes from the abandon sweep.
+  paused_at?: string | null
+  paused_ms?: number
   offline: boolean
   responses: AttemptResponse[]
+}
+
+// Whether an attempt payload carries its answer key. A node that predates
+// `revealed` reveals on submit, which is what the fallback says.
+export function attemptRevealed(attempt: AttemptDetail): boolean {
+  return attempt.revealed ?? attempt.submitted_at !== null
 }
 
 // Template/adhoc attempt creation (POST /api/attempts with source: 'template'
@@ -397,6 +422,9 @@ export interface AnswerResponseChanges {
   confidence?: 'unsure' | 'somewhat' | 'confident' | null
   idk?: boolean
   misapplied_method?: string | null
+  // Only valid alongside idk: true — the server rejects it otherwise with
+  // `best_guess_requires_idk`, and clearing idk drops the guess server-side.
+  best_guess_choice_id?: string | null
 }
 
 export async function answerResponse(
@@ -416,6 +444,21 @@ export async function answerResponse(
 export async function submitAttempt(attemptId: string): Promise<AttemptDetail> {
   const res = await fetch(`/api/attempts/${attemptId}/submit`, { method: 'POST' })
   if (!res.ok) throw new Error(`POST /api/attempts/${attemptId}/submit ${res.status}`)
+  return res.json()
+}
+
+// Stepping away from a live item and coming back (§2.8/§7.6). A paused
+// attempt is never swept as abandoned, and answering resumes it server-side,
+// so the app never has to sequence resume-then-answer itself.
+export async function pauseAttempt(attemptId: string): Promise<{ id: string; paused_at: string }> {
+  const res = await fetch(`/api/attempts/${attemptId}/pause`, { method: 'POST' })
+  if (!res.ok) throw new Error(`POST /api/attempts/${attemptId}/pause ${res.status}`)
+  return res.json()
+}
+
+export async function resumeAttempt(attemptId: string): Promise<{ id: string; paused_at: null; paused_ms: number }> {
+  const res = await fetch(`/api/attempts/${attemptId}/resume`, { method: 'POST' })
+  if (!res.ok) throw new Error(`POST /api/attempts/${attemptId}/resume ${res.status}`)
   return res.json()
 }
 
@@ -515,6 +558,12 @@ export interface SessionSummary {
   source: 'tutor'
 }
 
+// `status` is the server's word for it; ended_at is the fallback for a node
+// that predates the field.
+export function sessionIsOpen(session: { status?: SessionStatus; ended_at: string | null }): boolean {
+  return (session.status ?? (session.ended_at ? 'closed' : 'open')) === 'open'
+}
+
 export async function getSessions(params: { limit?: number; offset?: number } = {}): Promise<{ total: number; sessions: SessionSummary[] }> {
   const qs = new URLSearchParams()
   if (params.limit) qs.set('limit', String(params.limit))
@@ -535,7 +584,9 @@ export interface SessionAttemptSummary {
   abandoned_at: string | null
   offline: boolean
   question_count: number
+  // Null while the session's deferred reveal still holds.
   mean_score: number | null
+  revealed?: boolean
   ungraded: number
 }
 

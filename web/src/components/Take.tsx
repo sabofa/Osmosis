@@ -1,16 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { SubjectIcon, CalcOffIcon, CalcIcon, XIcon, ClockIcon } from './icons'
-import { answerResponse, submitAttempt, type AttemptDetail } from '../lib/api'
+import {
+  answerResponse,
+  submitAttempt,
+  pauseAttempt,
+  resumeAttempt,
+  getTemplate,
+  type AttemptDetail,
+  type AttemptResponse,
+} from '../lib/api'
 import { iconForTags } from '../lib/templateView'
 import QuestionPanel from './QuestionPanel'
 import QuestionDetail from './QuestionDetail'
 import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
+import { useKeyboard } from '../hooks/useKeyboard'
+import { KEY_HINTS, type KeyAction } from '../lib/keymap'
+import { createItemClock, type ItemClock } from '../lib/itemClock'
+import { formatClock, timerClass } from '../lib/timeFormat'
 import './Take.css'
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
-const DEFAULT_TIME_LIMIT_SEC = 20 * 60
 const WRITTEN_SAVE_DEBOUNCE_MS = 700
+// How long "Time." stands on its own before the screen offers the way out.
+const TIME_UP_MESSAGE_MS = 2000
+const TICK_MS = 500
 
 // Local, in-progress overlay of a response's editable fields. Seeded from the
 // real attempt on mount and pushed to the server via PATCH as the user
@@ -21,6 +35,10 @@ interface DraftResponse {
   writtenText: string
   confidence: 'unsure' | 'somewhat' | 'confident' | null
   idk: boolean
+  // The guess offered alongside an idk (§2.3). Never a selection: a best
+  // guess is not scored, and conflating the two would quietly turn "I don't
+  // know, but maybe B" into an answer of B.
+  bestGuessChoiceId: string | null
 }
 
 export default function Take({
@@ -38,17 +56,28 @@ export default function Take({
   const [index, setIndex] = useState(0)
   const [jumpQuestionId, setJumpQuestionId] = useState<string | null>(null)
   const [maxReached, setMaxReached] = useState(0)
-  const [secondsLeft, setSecondsLeft] = useState(DEFAULT_TIME_LIMIT_SEC)
   const [exiting, setExiting] = useState(false)
   const [finishing, setFinishing] = useState(false)
+  const [pausing, setPausing] = useState(false)
+  // The template's limit, when this attempt came from one. A live item handed
+  // over by the tutor has no template and therefore no set timer — only the
+  // per-item clock, which is the honest thing to show for a single item.
+  const [setLimitSec, setSetLimitSec] = useState<number | null>(null)
+  // 'message' is the two seconds where "Time." stands alone; 'finish' is
+  // after, when the way out appears alongside it.
+  const [timeUpPhase, setTimeUpPhase] = useState<'none' | 'message' | 'finish'>('none')
   const [drafts, setDrafts] = useState<DraftResponse[]>(() =>
     questions.map((r) => ({
       selectedChoiceId: r.selected_choice_id,
       writtenText: r.response_text ?? '',
       confidence: r.confidence ?? null,
       idk: r.idk ?? false,
+      bestGuessChoiceId: r.best_guess_choice_id ?? null,
     }))
   )
+  // Re-render so the two timers move; the clocks themselves are refs and
+  // advance on their own whether or not anything re-renders.
+  const [, setTick] = useState(0)
   // Keyed by response id (not a single shared timer) — switching questions
   // mid-debounce must not cancel an earlier question's still-pending save.
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -56,6 +85,11 @@ export default function Take({
   // a choice picked a beat before clicking Finish would otherwise race the
   // submit, and the server grades whatever it has when submit lands.
   const inFlightSaves = useRef<Set<Promise<unknown>>>(new Set())
+  // The item container, focused whenever a new item lands so the keyboard map
+  // has somewhere to act from without the learner reaching for the mouse.
+  const itemRef = useRef<HTMLDivElement>(null)
+
+  const paused = attempt.paused_at != null
 
   function trackSave<T>(p: Promise<T>): Promise<T> {
     inFlightSaves.current.add(p)
@@ -63,40 +97,43 @@ export default function Take({
     return p
   }
 
-  // Time-on-question, per response id, in ms. Accumulates while a response
-  // is the visible one and pauses when you navigate away, so revisiting a
-  // question keeps adding to its total. Seeded from the server's stored
+  // Time-on-question, one held clock per response id (lib/itemClock). Only the
+  // visible question's clock runs, and every clock stops while the tab is
+  // hidden or the attempt is paused — so elapsed_ms is time spent looking at
+  // the item, not wall time since it appeared. Seeded from the server's stored
   // elapsed_ms so a resumed attempt doesn't restart at zero.
-  const elapsed = useRef<Record<string, number>>(
+  const clocks = useRef<Record<string, ItemClock>>({})
+  // The whole set's clock, subject to the same holds.
+  const setClock = useRef<ItemClock>(createItemClock()).current
+  const lastSent = useRef<Record<string, number>>(
     Object.fromEntries(questions.map((r) => [r.id, r.elapsed_ms ?? 0]))
   )
-  const shownAt = useRef<number>(Date.now())
-  const lastSent = useRef<Record<string, number>>({ ...elapsed.current })
   // The currently-visible response id, read live. A debounced written-answer
-  // save (below) closes over the `response` from the render when typing
-  // happened; if the user has since navigated away, that closure's `response`
-  // is stale and would otherwise always compare equal to itself. Comparing
-  // against this ref instead lets currentElapsed correctly detect "the user
-  // moved on" even when called from an old closure.
+  // save closes over the `response` from the render when typing happened; if
+  // the user has since navigated away, that closure's `response` is stale.
   const currentResponseId = useRef<string>(questions[index]?.id ?? '')
 
-  function currentElapsed(responseId: string): number {
-    const base = elapsed.current[responseId] ?? 0
-    return responseId === currentResponseId.current ? base + (Date.now() - shownAt.current) : base
+  function clockFor(responseId: string): ItemClock {
+    let clock = clocks.current[responseId]
+    if (!clock) {
+      clock = createItemClock(questions.find((r) => r.id === responseId)?.elapsed_ms ?? 0)
+      clocks.current[responseId] = clock
+    }
+    return clock
   }
 
-  // Fold the visible question's running time into its total and restart the clock.
-  function bankElapsed() {
-    elapsed.current[response.id] = currentElapsed(response.id)
-    shownAt.current = Date.now()
+  function currentElapsed(responseId: string): number {
+    return clockFor(responseId).read(Date.now())
   }
 
   // Sends elapsed_ms for a response if it moved since the last send.
   function flushElapsed(responseId: string) {
-    const ms = Math.round(elapsed.current[responseId] ?? 0)
+    const ms = Math.round(currentElapsed(responseId))
     if (ms === lastSent.current[responseId]) return
     lastSent.current[responseId] = ms
-    trackSave(answerResponse(attempt.id, responseId, { elapsed_ms: ms })).catch((err) => console.error('Failed to save elapsed time:', err))
+    trackSave(answerResponse(attempt.id, responseId, { elapsed_ms: ms })).catch((err) =>
+      console.error('Failed to save elapsed time:', err)
+    )
   }
 
   const { width: panelWidth, onPointerDown: onPanelResizeStart } = usePanelWidth(
@@ -107,9 +144,61 @@ export default function Take({
   )
 
   useEffect(() => {
-    const t = setInterval(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000)
+    const t = setInterval(() => setTick((n) => n + 1), TICK_MS)
     return () => clearInterval(t)
   }, [])
+
+  // The set clock starts at first paint and, like the item clocks, is held
+  // whenever the learner isn't actually looking at the drill.
+  useEffect(() => {
+    setClock.start(Date.now())
+  }, [setClock])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!attempt.template_id) {
+      setSetLimitSec(null)
+      return
+    }
+    getTemplate(attempt.template_id)
+      .then((t) => {
+        if (!cancelled) setSetLimitSec(t.time_limit_sec ?? null)
+      })
+      .catch(() => {
+        // No limit shown rather than a guessed one: a wrong countdown is
+        // worse than none.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [attempt.template_id])
+
+  // §2.5: a hidden tab is not time on the question. Holds every clock, and
+  // banks what the current item has earned so a tab closed while hidden
+  // doesn't lose it.
+  useEffect(() => {
+    function onVisibility() {
+      const at = Date.now()
+      const hidden = document.hidden
+      for (const clock of [setClock, ...Object.values(clocks.current)]) {
+        if (hidden) clock.pause(at, 'hidden')
+        else clock.resume(at, 'hidden')
+      }
+      if (hidden) flushElapsed(currentResponseId.current)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // §7.6: the attempt's own pause stops both clocks for as long as it stands.
+  useEffect(() => {
+    const at = Date.now()
+    for (const clock of [setClock, ...Object.values(clocks.current)]) {
+      if (paused) clock.pause(at, 'attempt')
+      else clock.resume(at, 'attempt')
+    }
+  }, [paused, setClock])
 
   // Cancel any pending debounced saves on unmount (their work is flushed
   // explicitly before Finish/submit below, not silently dropped here).
@@ -128,18 +217,37 @@ export default function Take({
   const answered =
     question.type === 'mc' ? draft.selectedChoiceId !== null || draft.idk : draft.writtenText.trim().length > 0
 
-  // Restart the on-question clock whenever the visible question changes.
-  // Separate from goTo (which already banks/flushes) because index also
-  // changes via the dots' onClick going through goTo — this effect just
-  // keeps shownAt (and the live "current response" ref) honest for any path
-  // that changes index.
+  // The visible question changed: the one leaving stops counting, the one
+  // arriving starts, and focus follows so the keyboard map lands somewhere.
   useEffect(() => {
-    shownAt.current = Date.now()
+    const at = Date.now()
     currentResponseId.current = response.id
+    const clock = clockFor(response.id)
+    clock.start(at)
+    clock.resume(at, 'offscreen')
+    itemRef.current?.focus()
+    return () => {
+      clockFor(response.id).pause(Date.now(), 'offscreen')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [response.id])
 
+  const setElapsedMs = setClock.read(Date.now())
+  const secondsLeft = setLimitSec === null ? null : Math.max(0, setLimitSec - Math.floor(setElapsedMs / 1000))
+  const itemElapsedMs = currentElapsed(response.id)
+
+  // §7.2: the set ending is Osmosis's message, not a silent submit. Nothing is
+  // sent on the learner's behalf here — today's behaviour when the clock runs
+  // out is exactly "the clock stops", and this adds the message and one way
+  // out in front of it.
+  useEffect(() => {
+    if (secondsLeft !== 0 || timeUpPhase !== 'none') return
+    setTimeUpPhase('message')
+    const t = setTimeout(() => setTimeUpPhase('finish'), TIME_UP_MESSAGE_MS)
+    return () => clearTimeout(t)
+  }, [secondsLeft, timeUpPhase])
+
   function goTo(i: number) {
-    bankElapsed()
     flushElapsed(response.id)
     setIndex(i)
     setMaxReached((m) => Math.max(m, i))
@@ -155,96 +263,183 @@ export default function Take({
     else setJumpQuestionId(questionId)
   }
 
+  // Submit whatever is on the server now, from wherever the learner is. The
+  // set running out (§7.2) finishes from any question, not only the last one.
+  async function submitNow() {
+    if (finishing) return
+    setFinishing(true)
+    try {
+      flushElapsed(response.id)
+      // Flush every question's pending debounced written-answer save (not
+      // just the current one) so a fast Finish click can't drop text on a
+      // written question the user already navigated away from.
+      const pending = Object.entries(saveTimers.current)
+      saveTimers.current = {}
+      await Promise.all(
+        pending.map(([responseId, timer]) => {
+          clearTimeout(timer)
+          const d = drafts[questions.findIndex((r) => r.id === responseId)]
+          return d
+            ? answerResponse(attempt.id, responseId, {
+                response_text: d.writtenText,
+                elapsed_ms: Math.round(currentElapsed(responseId)),
+              })
+            : Promise.resolve()
+        })
+      )
+      // ...and every choice/confidence/idk PATCH that hasn't resolved yet.
+      await Promise.allSettled([...inFlightSaves.current])
+      const submitted = await submitAttempt(attempt.id)
+      setAttempt(submitted)
+      onFinish()
+    } catch (err) {
+      setFinishing(false)
+      window.alert(`Could not submit: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   async function next() {
+    if (finishing) return
     if (isLast) {
-      setFinishing(true)
-      try {
-        bankElapsed()
-        flushElapsed(response.id)
-        // Flush every question's pending debounced written-answer save (not
-        // just the current one) so a fast Finish click can't drop text on a
-        // written question the user already navigated away from.
-        const pending = Object.entries(saveTimers.current)
-        saveTimers.current = {}
-        await Promise.all(
-          pending.map(([responseId, timer]) => {
-            clearTimeout(timer)
-            const d = drafts[questions.findIndex((r) => r.id === responseId)]
-            return d ? answerResponse(attempt.id, responseId, { response_text: d.writtenText }) : Promise.resolve()
-          })
-        )
-        // ...and every choice/confidence/idk PATCH that hasn't resolved yet.
-        await Promise.allSettled([...inFlightSaves.current])
-        const submitted = await submitAttempt(attempt.id)
-        setAttempt(submitted)
-        onFinish()
-      } catch (err) {
-        setFinishing(false)
-        window.alert(`Could not submit: ${err instanceof Error ? err.message : String(err)}`)
-      }
+      await submitNow()
       return
     }
     goTo(index + 1)
   }
 
-  // "I don't know" and a picked choice are mutually exclusive outcomes (idk
-  // is a distinct third signal, not a fourth confidence level) — choosing
-  // one clears the other on both the local draft and the server row, so a
-  // response can't be submitted as simultaneously skipped AND answered.
-  function selectChoice(choiceId: string) {
-    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, selectedChoiceId: choiceId, idk: false } : d)))
-    bankElapsed()
-    const ms = Math.round(elapsed.current[response.id] ?? 0)
+  // One place for the optimistic "the server took it" merge every PATCH below
+  // shares.
+  function mergeSaved(saving: Promise<AttemptResponse>, what: string) {
+    trackSave(saving)
+      .then((updated) => {
+        setAttempt((prev) =>
+          prev
+            ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) }
+            : prev
+        )
+      })
+      .catch((err) => console.error(`Failed to save ${what}:`, err))
+  }
+
+  function patchDraft(changes: Partial<DraftResponse>) {
+    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...changes } : d)))
+  }
+
+  function markSent(): number {
+    const ms = Math.round(currentElapsed(response.id))
     lastSent.current[response.id] = ms
-    trackSave(answerResponse(attempt.id, response.id, { selected_choice_id: choiceId, idk: false, skipped: false, elapsed_ms: ms })).then((updated) => {
-      setAttempt((prev) =>
-        prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
+    return ms
+  }
+
+  // Two steps, never alongside each other (§2.3): while idk stands, a picked
+  // choice is a best guess and is not scored; otherwise it is the answer, and
+  // picking it clears the idk that would contradict it.
+  function selectChoice(choiceId: string) {
+    const ms = markSent()
+    if (draft.idk) {
+      patchDraft({ bestGuessChoiceId: choiceId })
+      mergeSaved(
+        answerResponse(attempt.id, response.id, { idk: true, best_guess_choice_id: choiceId, elapsed_ms: ms }),
+        'best guess'
       )
-    }).catch((err) => console.error('Failed to save answer:', err))
+      return
+    }
+    patchDraft({ selectedChoiceId: choiceId, idk: false, bestGuessChoiceId: null })
+    mergeSaved(
+      answerResponse(attempt.id, response.id, {
+        selected_choice_id: choiceId,
+        idk: false,
+        skipped: false,
+        elapsed_ms: ms,
+      }),
+      'answer'
+    )
   }
 
   function setConfidence(level: 'unsure' | 'somewhat' | 'confident') {
-    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, confidence: level } : d)))
-    bankElapsed()
-    const ms = Math.round(elapsed.current[response.id] ?? 0)
-    lastSent.current[response.id] = ms
-    trackSave(answerResponse(attempt.id, response.id, { confidence: level, elapsed_ms: ms })).then((updated) => {
-      setAttempt((prev) =>
-        prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
-      )
-    }).catch((err) => console.error('Failed to save confidence:', err))
+    const ms = markSent()
+    patchDraft({ confidence: level })
+    mergeSaved(answerResponse(attempt.id, response.id, { confidence: level, elapsed_ms: ms }), 'confidence')
   }
 
-  function setIdk() {
-    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, idk: true, selectedChoiceId: null } : d)))
-    bankElapsed()
-    const ms = Math.round(elapsed.current[response.id] ?? 0)
-    lastSent.current[response.id] = ms
-    trackSave(answerResponse(attempt.id, response.id, { idk: true, skipped: true, selected_choice_id: null, elapsed_ms: ms })).then((updated) => {
-      setAttempt((prev) =>
-        prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
-      )
-    }).catch((err) => console.error('Failed to save idk:', err))
+  // "I don't know" and a picked choice are mutually exclusive outcomes (idk
+  // is a distinct third signal, not a fourth confidence level) — choosing
+  // one clears the other on both the local draft and the server row. Clearing
+  // idk drops the best guess server-side, so the draft drops it here too.
+  function toggleIdk() {
+    const ms = markSent()
+    if (draft.idk) {
+      patchDraft({ idk: false, bestGuessChoiceId: null })
+      mergeSaved(answerResponse(attempt.id, response.id, { idk: false, skipped: false, elapsed_ms: ms }), 'idk')
+      return
+    }
+    patchDraft({ idk: true, selectedChoiceId: null, bestGuessChoiceId: null })
+    mergeSaved(
+      answerResponse(attempt.id, response.id, {
+        idk: true,
+        skipped: true,
+        selected_choice_id: null,
+        elapsed_ms: ms,
+      }),
+      'idk'
+    )
+  }
+
+  // §7.1 'b': leave it blank on purpose. Distinct from an idk — no claim
+  // about knowing, just nothing recorded.
+  function blankAnswer() {
+    const ms = markSent()
+    patchDraft({ selectedChoiceId: null, idk: false, bestGuessChoiceId: null })
+    mergeSaved(
+      answerResponse(attempt.id, response.id, {
+        selected_choice_id: null,
+        idk: false,
+        skipped: true,
+        elapsed_ms: ms,
+      }),
+      'blank'
+    )
   }
 
   function setWrittenText(text: string) {
-    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, writtenText: text } : d)))
+    patchDraft({ writtenText: text })
     const responseId = response.id
     if (saveTimers.current[responseId]) clearTimeout(saveTimers.current[responseId])
     saveTimers.current[responseId] = setTimeout(() => {
       delete saveTimers.current[responseId]
       const ms = Math.round(currentElapsed(responseId))
       lastSent.current[responseId] = ms
-      answerResponse(attempt.id, responseId, { response_text: text, elapsed_ms: ms }).then((updated) => {
-        setAttempt((prev) =>
-          prev ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) } : prev
-        )
-      }).catch((err) => console.error('Failed to save answer:', err))
+      answerResponse(attempt.id, responseId, { response_text: text, elapsed_ms: ms })
+        .then((updated) => {
+          setAttempt((prev) =>
+            prev
+              ? { ...prev, responses: prev.responses.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)) }
+              : prev
+          )
+        })
+        .catch((err) => console.error('Failed to save answer:', err))
     }, WRITTEN_SAVE_DEBOUNCE_MS)
   }
 
+  async function togglePause() {
+    setPausing(true)
+    try {
+      if (paused) {
+        const resumed = await resumeAttempt(attempt.id)
+        setAttempt((prev) => (prev ? { ...prev, paused_at: null, paused_ms: resumed.paused_ms } : prev))
+      } else {
+        flushElapsed(response.id)
+        const stopped = await pauseAttempt(attempt.id)
+        setAttempt((prev) => (prev ? { ...prev, paused_at: stopped.paused_at } : prev))
+      }
+    } catch (err) {
+      window.alert(`Could not ${paused ? 'resume' : 'pause'}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setPausing(false)
+    }
+  }
+
   function handleExit() {
-    bankElapsed()
     flushElapsed(response.id)
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (reduced) {
@@ -255,8 +450,48 @@ export default function Take({
     setTimeout(onExit, 380)
   }
 
-  const mins = String(Math.floor(secondsLeft / 60)).padStart(2, '0')
-  const secs = String(secondsLeft % 60).padStart(2, '0')
+  // The "recorded" card: the set is over, the answers are with the server, and
+  // the only thing left is to move on — which is what Space does there.
+  const recorded = timeUpPhase !== 'none'
+
+  function handleKeyAction(action: KeyAction) {
+    switch (action.type) {
+      case 'choice': {
+        const choice = question.choices[action.ordinal - 1]
+        if (choice) selectChoice(choice.id)
+        break
+      }
+      case 'submit':
+        void next()
+        break
+      // Space on the recorded card: there is nothing left to answer, so it
+      // finishes rather than walking through the remaining questions.
+      case 'advance':
+        void submitNow()
+        break
+      case 'blank':
+        blankAnswer()
+        break
+      case 'toggle-idk':
+        toggleIdk()
+        break
+      case 'confidence':
+        setConfidence(action.level)
+        break
+    }
+  }
+
+  useKeyboard(
+    {
+      inTextField: false,
+      kind: question.type,
+      choiceCount: question.choices.length,
+      recorded,
+    },
+    handleKeyAction,
+    // A paused drill takes no answers: that is the whole point of stepping away.
+    !paused && !exiting
+  )
 
   return (
     <div className={`take-frame${exiting ? ' exiting' : ''}`}>
@@ -293,14 +528,26 @@ export default function Take({
             </span>
           )}
           <div className="take-spacer" />
-          <span className={`timer-badge${secondsLeft < 30 ? ' low' : ''}`}>
-            <ClockIcon size={13} />
-            {mins}:{secs}
+          {!attempt.submitted_at && (
+            <button className={`take-pause-btn${paused ? ' paused' : ''}`} onClick={togglePause} disabled={pausing}>
+              {paused ? 'Resume' : 'Back in five'}
+            </button>
+          )}
+          {/* The item's own clock is always honest about this item; the set's
+              countdown only exists when the template set one. */}
+          <span className="timer-badge item" title="Time on this question">
+            {formatClock(itemElapsedMs)}
           </span>
+          {secondsLeft !== null && (
+            <span className={`timer-badge ${timerClass(secondsLeft)}`} title="Time left in this set">
+              <ClockIcon size={13} />
+              {formatClock(secondsLeft * 1000)}
+            </span>
+          )}
         </div>
 
         <div className="question-card no-scrollbar">
-          <div className="question-slide" key={index}>
+          <div className="question-slide" key={index} ref={itemRef} tabIndex={-1}>
             <div className="question-tag-row">
               <span className="question-icon">
                 <SubjectIcon icon={icon} />
@@ -313,13 +560,21 @@ export default function Take({
 
             {question.type === 'mc' ? (
               <>
-                <div className="choices">
+                {draft.idk && (
+                  <div className="best-guess-caption">
+                    You said you don't know. Pick one anyway as a best guess (not scored), or leave it.
+                  </div>
+                )}
+                <div className={`choices${draft.idk ? ' guessing' : ''}`}>
                   {question.choices.map((c, i) => {
-                    const cls = `choice-btn${draft.selectedChoiceId === c.id ? ' selected' : ''}`
+                    const isSelected = !draft.idk && draft.selectedChoiceId === c.id
+                    const isGuess = draft.idk && draft.bestGuessChoiceId === c.id
+                    const cls = `choice-btn${isSelected ? ' selected' : ''}${isGuess ? ' guessed' : ''}`
                     return (
-                      <button key={c.id} className={cls} onClick={() => selectChoice(c.id)}>
+                      <button key={c.id} className={cls} onClick={() => selectChoice(c.id)} disabled={paused}>
                         <span className="choice-letter">{LETTERS[i]}</span>
                         <RichText inline text={c.body} />
+                        {isGuess && <span className="choice-guess-tag">best guess (not scored)</span>}
                       </button>
                     )
                   })}
@@ -333,11 +588,16 @@ export default function Take({
                         key={level}
                         className={`confidence-btn${draft.confidence === level ? ' selected' : ''}`}
                         onClick={() => setConfidence(level)}
+                        disabled={paused}
                       >
-                        {level === 'unsure' ? 'Unsure' : level === 'somewhat' ? 'Somewhat' : 'Confident'}
+                        {level}
                       </button>
                     ))}
-                    <button className={`confidence-btn idk-btn${draft.idk ? ' selected' : ''}`} onClick={setIdk}>
+                    <button
+                      className={`confidence-btn idk-btn${draft.idk ? ' selected' : ''}`}
+                      onClick={toggleIdk}
+                      disabled={paused}
+                    >
                       I don't know
                     </button>
                   </div>
@@ -349,17 +609,46 @@ export default function Take({
                 placeholder="Type your answer…"
                 value={draft.writtenText}
                 onChange={(e) => setWrittenText(e.target.value)}
+                disabled={paused}
               />
             )}
           </div>
+
+          {paused && (
+            <div className="take-paused-veil">
+              <div className="take-paused-card">
+                <div className="take-paused-title">Paused</div>
+                <div className="take-paused-sub">Both clocks are stopped. Resume when you're back.</div>
+                <button className="nav-btn primary" onClick={togglePause} disabled={pausing}>
+                  Resume
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="take-nav">
-          <span className="take-nav-hint">{answered ? 'Answered' : 'Not answered yet'}</span>
-          <button className="nav-btn primary" onClick={next} disabled={finishing}>
-            {finishing ? 'Submitting…' : isLast ? 'Finish' : 'Next'} &rarr;
-          </button>
-        </div>
+        {recorded ? (
+          <div className="take-timeup">
+            <span className="take-timeup-text">Time. Your answers are recorded.</span>
+            {timeUpPhase === 'finish' && (
+              <button className="nav-btn primary" onClick={() => void submitNow()} disabled={finishing}>
+                {finishing ? 'Submitting…' : 'Finish'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="take-nav">
+            <div className="take-nav-left">
+              <span className="take-nav-hint">{answered ? 'Answered' : 'Not answered yet'}</span>
+              <span className="take-key-hints">
+                {question.type === 'mc' ? KEY_HINTS : 'Ctrl + Enter to move on'}
+              </span>
+            </div>
+            <button className="nav-btn primary" onClick={() => void next()} disabled={finishing || paused}>
+              {finishing ? 'Submitting…' : isLast ? 'Finish' : 'Next'} &rarr;
+            </button>
+          </div>
+        )}
       </div>
 
       {hasPanel && (
@@ -371,7 +660,10 @@ export default function Take({
             aria-orientation="vertical"
             aria-label="Resize panel"
           />
-          <div className="take-panel no-scrollbar" style={{ width: panelWidth }}>
+          {/* data-panel marks the graph/document column so a host screen (the
+              live page) can place it in its own grid without Take having to
+              know about that layout. */}
+          <div className="take-panel no-scrollbar" data-panel="side" style={{ width: panelWidth }}>
             <QuestionPanel
               graphSpec={question.graph_spec}
               desmosAllowed={question.desmos_allowed}

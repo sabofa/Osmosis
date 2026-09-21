@@ -17,6 +17,13 @@ import {
 } from './icons'
 import type { useTheme, ThemeChoice } from '../hooks/useTheme'
 import { useDocumentFont, DOCUMENT_FONT_OPTIONS } from '../hooks/useDocumentFont'
+import {
+  notificationsSupported,
+  notifyPermission,
+  notifyPreference,
+  enableNotifications,
+  disableNotifications,
+} from '../lib/notify'
 import type { useThemePresets, ThemePreset } from '../hooks/useThemePresets'
 import ThemeEditor from './ThemeEditor'
 import AssetViewer from './AssetViewer'
@@ -615,6 +622,8 @@ export default function Settings({
           </div>
         </div>
 
+        <NotifyRow />
+
         <div className="settings-row">
           <div className="settings-row-main">
             <PaletteIcon size={16} />
@@ -761,6 +770,55 @@ export default function Settings({
         {status?.canonical
           ? `up to date${status.last_write_at ? ` · ${timeAgo(status.last_write_at)}` : ''}`
           : `synced ${timeAgo(lastSync)}`}
+      </div>
+    </div>
+  )
+}
+
+// §7.4. The browser's permission prompt is asked for here and nowhere else:
+// asking on load is how a permission gets denied forever, and a denied one
+// cannot be asked for again.
+function NotifyRow() {
+  const [on, setOn] = useState(() => notifyPreference())
+  const [permission, setPermission] = useState(() => notifyPermission())
+  const [asking, setAsking] = useState(false)
+  const supported = notificationsSupported()
+
+  async function toggle() {
+    if (on) {
+      disableNotifications()
+      setOn(false)
+      return
+    }
+    setAsking(true)
+    const granted = await enableNotifications()
+    setAsking(false)
+    setPermission(notifyPermission())
+    setOn(granted)
+  }
+
+  return (
+    <div className="settings-row">
+      <div className="settings-row-main">
+        <div>
+          <div className="settings-row-title">Notify when the tutor asks</div>
+          <div className="settings-row-sub">
+            {!supported
+              ? 'this browser has no desktop notifications'
+              : permission === 'denied'
+                ? 'blocked in this browser — the tab title still flashes'
+                : 'a desktop notification when an item lands while you are elsewhere'}
+          </div>
+        </div>
+      </div>
+      <div className="theme-toggle">
+        <button
+          className={`theme-toggle-btn${on ? ' active' : ''}`}
+          onClick={toggle}
+          disabled={!supported || asking || (permission === 'denied' && !on)}
+        >
+          {asking ? 'Asking…' : on ? 'On' : 'Off'}
+        </button>
       </div>
     </div>
   )

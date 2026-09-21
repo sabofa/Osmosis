@@ -8,6 +8,7 @@ import {
   getSessions,
   getSessionDetail,
   endSession,
+  sessionIsOpen,
   timeAgo,
   type SessionSummary,
   type SessionDetail,
@@ -25,6 +26,7 @@ import './SessionList.css'
 export default function SessionList({
   onStart,
   onLiveActiveChange,
+  initialLiveSessionId,
 }: {
   onStart: (templateId: string) => void
   // Lets App hide the nav rail while a live item is on screen, the same way
@@ -32,13 +34,16 @@ export default function SessionList({
   // the one moment on this page that deserves the same distraction-free
   // treatment, not the session list itself.
   onLiveActiveChange?: (active: boolean) => void
+  // §7.7: App hands the newest open session down on load so the live screen,
+  // not the list, is what Ben lands on while a session is running.
+  initialLiveSessionId?: string | null
 }) {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
-  const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
+  const [liveSessionId, setLiveSessionId] = useState<string | null>(initialLiveSessionId ?? null)
   // Which session's "Mark closed" is in flight, and what it said if it failed.
   const [closingId, setClosingId] = useState<string | null>(null)
   const [closeError, setCloseError] = useState<string | null>(null)
@@ -50,6 +55,12 @@ export default function SessionList({
     getStatus().then(setStatus).catch(() => {})
   }, [])
   const serverAppUrl = status && !status.canonical ? status.remote_url : null
+
+  // The prop normally arrives with the mount, but App's session read can also
+  // land after Ben has already opened this page himself.
+  useEffect(() => {
+    if (initialLiveSessionId) setLiveSessionId(initialLiveSessionId)
+  }, [initialLiveSessionId])
 
   useEffect(() => {
     onLiveActiveChange?.(liveSessionId !== null)
@@ -130,9 +141,7 @@ export default function SessionList({
         <div className="session-list-rows no-scrollbar">
           {sessions?.map((s) => {
             const isExpanded = s.id === expandedId
-            // `status` is the server's word for it; ended_at is the fallback
-            // for a node that predates it.
-            const isClosed = (s.status ?? (s.ended_at ? 'closed' : 'open')) === 'closed'
+            const isClosed = !sessionIsOpen(s)
             return (
               <div className="session-row-wrap" key={s.id}>
                 <button
@@ -218,7 +227,13 @@ export default function SessionList({
                                 </span>
                                 <span className="session-detail-item-meta">
                                   {a.submitted_at
-                                    ? `submitted ${timeAgo(a.submitted_at)}${a.mean_score !== null ? ` · ${a.mean_score.toFixed(2)}` : ''}`
+                                    ? `submitted ${timeAgo(a.submitted_at)}${
+                                        a.revealed === false
+                                          ? ' · recorded, held until this session ends'
+                                          : a.mean_score !== null
+                                            ? ` · ${a.mean_score.toFixed(2)}`
+                                            : ''
+                                      }`
                                     : a.abandoned_at
                                       ? 'abandoned'
                                       : 'in progress'}

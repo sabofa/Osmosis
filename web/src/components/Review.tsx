@@ -1,6 +1,7 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
-import { SubjectIcon, CheckIcon, HalfIcon, XIcon } from './icons'
-import { gradeResponse, type AttemptDetail, type AttemptResponse } from '../lib/api'
+import { SubjectIcon, CheckIcon, HalfIcon, XIcon, ClockIcon } from './icons'
+import { gradeResponse, attemptRevealed, type AttemptDetail } from '../lib/api'
+import { outcomeFor, countOutcomes, OUTCOME_LABELS, type Outcome } from '../lib/reviewOutcome'
 import { iconForTags } from '../lib/templateView'
 import QuestionPanel from './QuestionPanel'
 import QuestionDetail from './QuestionDetail'
@@ -10,17 +11,11 @@ import './Review.css'
 
 type Verdict = 'correct' | 'partial' | 'incorrect'
 
-// mc responses are always auto-graded at submit time (attempts.ts submitAttempt),
-// so `grade` is only ever missing here for a written response nobody has
-// self-graded yet — that's the `null` (ungraded, not "wrong") case.
-function verdictFor(response: AttemptResponse): Verdict | null {
-  if (!response.grade) return null
-  if (response.grade.score >= 1) return 'correct'
-  if (response.grade.score <= 0) return 'incorrect'
-  return 'partial'
-}
-
 const VERDICT_SCORE: Record<Verdict, number> = { correct: 1, partial: 0.5, incorrect: 0 }
+
+function verdictFromOutcome(outcome: Outcome | null): Verdict | null {
+  return outcome === 'correct' || outcome === 'partial' || outcome === 'incorrect' ? outcome : null
+}
 
 export default function Review({
   attempt,
@@ -37,7 +32,15 @@ export default function Review({
   const questions = attempt.responses
   const response = questions[index]
   const question = response.question
-  const verdict = verdictFor(response)
+
+  // §7.3: a deferred attempt shows what was recorded and nothing more until
+  // the session ends. The server already withholds the key — this is the
+  // screen agreeing with it rather than rendering a page full of blanks.
+  const revealed = attemptRevealed(attempt)
+  const held = attempt.reveal === 'deferred' && !revealed
+
+  const outcome = outcomeFor(response, revealed)
+  const verdict = verdictFromOutcome(outcome)
   const icon = useMemo(() => iconForTags(question.tags), [question.tags])
   const hasPanel = !!question.graph_spec || !!question.desmos_allowed || !!question.document_id
   const { width: panelWidth, onPointerDown: onPanelResizeStart } = usePanelWidth(
@@ -47,13 +50,7 @@ export default function Review({
     Math.round(window.innerWidth * 0.75)
   )
 
-  const graded = questions.map((r) => verdictFor(r)).filter((v): v is Verdict => v !== null)
-  const scoreSum = graded.reduce((sum, v) => sum + VERDICT_SCORE[v], 0)
-  const meanScore = graded.length > 0 ? scoreSum / graded.length : null
-  const ungradedCount = questions.length - graded.length
-  const correctCount = graded.filter((v) => v === 'correct').length
-  const incorrectCount = graded.filter((v) => v === 'incorrect').length
-  const partialCount = graded.filter((v) => v === 'partial').length
+  const counts = countOutcomes(questions, revealed)
 
   const tagCounts = new Map<string, number>()
   questions.forEach((r) => {
@@ -64,14 +61,18 @@ export default function Review({
   async function setVerdict(v: Verdict) {
     setGrading(true)
     try {
-      const graded = await gradeResponse(response.id, { grader: 'self', score: VERDICT_SCORE[v], override: true })
+      const saved = await gradeResponse(response.id, { grader: 'self', score: VERDICT_SCORE[v], override: true })
       setAttempt((prev) =>
         prev
           ? {
               ...prev,
               responses: prev.responses.map((r) =>
                 r.id === response.id
-                  ? { ...r, grade: { grader: 'self', score: graded.score, feedback: null, graded_at: graded.graded_at } }
+                  ? {
+                      ...r,
+                      outcome: v,
+                      grade: { grader: 'self', score: saved.score, feedback: null, graded_at: saved.graded_at },
+                    }
                   : r
               ),
             }
@@ -84,7 +85,10 @@ export default function Review({
     }
   }
 
+  // Only ever present on a revealed payload; under a hold the choices come
+  // back without is_correct at all.
   const correctChoiceId = question.choices.find((c) => c.is_correct)?.id
+  const bestGuessChoiceId = response.best_guess_choice_id ?? null
 
   function handleJumpToQuestion(questionId: string) {
     const targetIndex = questions.findIndex((r) => r.question.id === questionId)
@@ -96,9 +100,9 @@ export default function Review({
     <div className="review">
       <div className="review-index no-scrollbar">
         {questions.map((r, i) => {
-          const v = verdictFor(r)
+          const o = outcomeFor(r, revealed)
           let cls = 'review-index-item'
-          if (v) cls += ` ${v}`
+          cls += o ? ` ${o}` : ' recorded'
           if (i === index) cls += ' current'
           return (
             <button key={r.id} className={cls} onClick={() => setIndex(i)} aria-label={`Question ${i + 1}`} />
@@ -122,13 +126,20 @@ export default function Review({
               </div>
               <RichText className="review-detail-prompt" text={question.prompt} />
             </div>
-            {verdict && (
-              <span className={`review-verdict-badge ${verdict}`}>
-                {verdict === 'correct' && <CheckIcon size={13} />}
-                {verdict === 'incorrect' && <XIcon size={13} />}
-                {verdict === 'partial' && <HalfIcon size={13} />}
-                {verdict}
+            {held ? (
+              <span className="review-verdict-badge recorded">
+                <ClockIcon size={13} />
+                recorded
               </span>
+            ) : (
+              outcome && (
+                <span className={`review-verdict-badge ${outcome}`}>
+                  {outcome === 'correct' && <CheckIcon size={13} />}
+                  {outcome === 'incorrect' && <XIcon size={13} />}
+                  {outcome === 'partial' && <HalfIcon size={13} />}
+                  {OUTCOME_LABELS[outcome]}
+                </span>
+              )
             )}
           </div>
 
@@ -136,13 +147,18 @@ export default function Review({
             <div className="review-choices">
               {question.choices.map((c) => {
                 let cls = 'review-choice'
-                if (c.id === correctChoiceId) cls += ' correct'
-                if (c.id === response.selected_choice_id && c.id !== correctChoiceId) cls += ' incorrect'
+                if (!held) {
+                  if (c.id === correctChoiceId) cls += ' correct'
+                  if (c.id === response.selected_choice_id && c.id !== correctChoiceId) cls += ' incorrect'
+                }
                 return (
                   <div className={cls} key={c.id}>
                     <RichText inline text={c.body} />
                     {c.id === response.selected_choice_id && <span className="review-choice-tag">your answer</span>}
-                    {c.id === correctChoiceId && <span className="review-choice-tag">correct</span>}
+                    {c.id === bestGuessChoiceId && (
+                      <span className="review-choice-tag">best guess (not scored)</span>
+                    )}
+                    {!held && c.id === correctChoiceId && <span className="review-choice-tag">correct</span>}
                   </div>
                 )
               })}
@@ -153,21 +169,57 @@ export default function Review({
                 <div className="review-written-kicker">Your answer</div>
                 <div className="review-written-text">{response.response_text || '(no answer given)'}</div>
               </div>
-              <div className="review-written-col">
-                <div className="review-written-kicker">Model answer</div>
-                <RichText className="review-written-text" text={question.model_answer ?? ''} />
-                {question.rubric != null && (
-                  <div className="review-written-rubric">
-                    Rubric: <RichText inline text={typeof question.rubric === 'string' ? question.rubric : JSON.stringify(question.rubric)} />
-                  </div>
-                )}
-              </div>
+              {!held && (
+                <div className="review-written-col">
+                  <div className="review-written-kicker">Model answer</div>
+                  <RichText className="review-written-text" text={question.model_answer ?? ''} />
+                  {question.rubric != null && (
+                    <div className="review-written-rubric">
+                      Rubric:{' '}
+                      <RichText
+                        inline
+                        text={typeof question.rubric === 'string' ? question.rubric : JSON.stringify(question.rubric)}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          <RichText className="review-explanation" text={question.explanation ?? ''} />
+          {held ? (
+            <div className="review-held-note">
+              Recorded. The tutor reveals the answers when this session ends.
+            </div>
+          ) : (
+            <>
+              {response.idk && (
+                <div className="review-idk-note">
+                  You said you didn't know
+                  {response.best_guess_correct === true
+                    ? ' — your best guess was right, which is worth knowing.'
+                    : response.best_guess_correct === false
+                      ? ' — your best guess missed.'
+                      : '.'}
+                </div>
+              )}
+              <RichText className="review-explanation" text={question.explanation ?? ''} />
+              {response.diagnosis && (
+                <div className="review-diagnosis">
+                  <div className="review-diagnosis-label">What the tutor saw</div>
+                  <RichText className="review-diagnosis-body" text={response.diagnosis} />
+                </div>
+              )}
+              {response.chosen_misconception && (
+                <div className="review-misconception">
+                  <div className="review-diagnosis-label">The misconception behind that choice</div>
+                  <RichText className="review-diagnosis-body" text={response.chosen_misconception} />
+                </div>
+              )}
+            </>
+          )}
 
-          {question.type === 'written' && (
+          {question.type === 'written' && !held && (
             <div className="review-grade-actions">
               <button
                 className={`grade-btn correct${verdict === 'correct' ? ' chosen' : ''}`}
@@ -201,10 +253,21 @@ export default function Review({
         <div className="review-side">
           <div className="panel review-summary">
             <div className="review-kicker">General results</div>
-            <div className="review-score">{meanScore === null ? '—' : meanScore.toFixed(2)}</div>
-            <div className="review-score-sub">
-              {correctCount} correct &middot; {incorrectCount} incorrect{partialCount > 0 ? ` · ${partialCount} partial` : ''}{ungradedCount > 0 ? ` · ${ungradedCount} ungraded` : ''}
+            <div className="review-score">
+              {held ? counts.recorded : counts.mean_score === null ? '—' : counts.mean_score.toFixed(2)}
             </div>
+            {held ? (
+              <div className="review-score-sub">
+                {counts.recorded === 1 ? 'answer recorded' : 'answers recorded'} &middot; held until the session ends
+              </div>
+            ) : (
+              <div className="review-score-sub">
+                {/* An idk is its own column, never folded into incorrect (§7.3). */}
+                {counts.correct} correct &middot; {counts.incorrect} incorrect &middot; {counts.dont_know} don't know
+                &middot; {counts.ungraded} ungraded
+                {counts.partial > 0 ? ` · ${counts.partial} partial` : ''}
+              </div>
+            )}
             <div className="review-tags no-scrollbar">
               {[...tagCounts.entries()].map(([tag, count]) => (
                 <div className="review-tag-row" key={tag}>

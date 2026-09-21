@@ -397,3 +397,75 @@
 .review-exit-btn:active {
   transform: scale(0.96);
 }
+
+/* ---- Deferred reveal and the richer outcomes (§7.3) ----------------------
+   A held attempt has a verdict nobody may see yet, so its rows read as
+   "recorded" — neutral, not a blank where a score should be. */
+
+.review-index-item.recorded {
+  background: var(--line);
+  border-color: var(--line-strong);
+}
+
+.review-index-item.dont_know {
+  background: var(--surface);
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.review-index-item.ungraded {
+  background: none;
+  border-color: var(--line-strong);
+}
+
+.review-verdict-badge.recorded,
+.review-verdict-badge.ungraded {
+  color: var(--muted);
+  border: 2px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.review-verdict-badge.dont_know {
+  color: var(--muted);
+  border: 2px dashed var(--line-strong);
+  background: var(--surface);
+}
+
+.review-held-note {
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.review-idk-note {
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 2px solid var(--line-strong);
+  padding-left: 10px;
+}
+
+/* The tutor's own words about this answer sit apart from the question's
+   stock explanation: one is about the item, the other about Ben. */
+.review-diagnosis,
+.review-misconception {
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.review-diagnosis-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.review-diagnosis-body {
+  font-size: 13px;
+  line-height: 1.5;
+}

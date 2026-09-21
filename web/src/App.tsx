@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Rail, { type Page } from './components/Rail'
 import Home from './components/Home'
 import Bank from './components/Bank'
@@ -10,7 +10,7 @@ import Results from './components/Results'
 import Settings from './components/Settings'
 import { useTheme } from './hooks/useTheme'
 import { useThemePresets } from './hooks/useThemePresets'
-import { createAttempt, createDailyAttempt, getAttempt, type AttemptDetail } from './lib/api'
+import { createAttempt, createDailyAttempt, getAttempt, getSessions, sessionIsOpen, type AttemptDetail } from './lib/api'
 
 function App() {
   const [page, setPage] = useState<Page>('home')
@@ -21,10 +21,41 @@ function App() {
   // while browsing the session list) — used below to hide the rail, same as
   // the Take/Review pages do.
   const [liveActive, setLiveActive] = useState(false)
+  // §7.7, one tab: while a tutoring session is open, the live page *is* the
+  // home view. Set once on load and cleared the moment Ben navigates away, so
+  // coming back to Live later lands on the session list like any other visit.
+  const [bootLiveSessionId, setBootLiveSessionId] = useState<string | null>(null)
   // Applied here, not inside Settings, so the theme/preset stay in effect
   // on every screen — not just while Settings itself happens to be mounted.
   const theme = useTheme()
   const themePresets = useThemePresets(theme.resolvedMode)
+
+  useEffect(() => {
+    let cancelled = false
+    getSessions({ limit: 5 })
+      .then(({ sessions }) => {
+        if (cancelled) return
+        // The list comes back newest first, so the first open row is the
+        // newest open session.
+        const open = sessions.find(sessionIsOpen)
+        if (!open) return
+        setBootLiveSessionId(open.id)
+        setPage('live')
+      })
+      .catch(() => {
+        // No node, no sessions to land on — Home is the right fallback.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Every navigation but the initial landing forgets the boot session, so the
+  // rail always reaches the session list itself.
+  function navigate(next: Page) {
+    setBootLiveSessionId(null)
+    setPage(next)
+  }
 
   async function startQuiz(templateId: string) {
     setStarting(true)
@@ -60,7 +91,14 @@ function App() {
   if (page === 'home') content = <Home onStart={startQuiz} onStartDaily={startDaily} startError={startError} starting={starting} />
   else if (page === 'bank') content = <Bank />
   else if (page === 'library') content = <Library onStart={startQuiz} />
-  else if (page === 'live') content = <SessionList onStart={startQuiz} onLiveActiveChange={setLiveActive} />
+  else if (page === 'live')
+    content = (
+      <SessionList
+        onStart={startQuiz}
+        onLiveActiveChange={setLiveActive}
+        initialLiveSessionId={bootLiveSessionId}
+      />
+    )
   else if (page === 'take' && attempt)
     content = (
       <Take
@@ -83,7 +121,7 @@ function App() {
 
   return (
     <>
-      {showRail && <Rail active={page} onNavigate={setPage} />}
+      {showRail && <Rail active={page} onNavigate={navigate} />}
       <div key={page} className="page-transition">
         {content}
       </div>
