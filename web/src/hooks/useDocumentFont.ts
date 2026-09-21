@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 
 export type DocumentFont = 'system' | 'serif' | 'mono'
 
@@ -18,6 +18,20 @@ export const DOCUMENT_FONT_OPTIONS: { value: DocumentFont; label: string }[] = [
   { value: 'serif', label: 'Serif' },
   { value: 'mono', label: 'Mono' },
 ]
+
+// document-engine's stylesheet puts `font-family: var(--de-font-mono)` on
+// `.document-viewer` itself and `font-family: inherit` on the text layer inside
+// it, so setting `font-family` on our wrapper is overridden one level down and
+// changes nothing. --de-font-mono is declared on :root, though, so redefining it
+// on the wrapper inherits into the viewer and is what actually moves the
+// document body. (index.css puts real monospace back on the few places that
+// genuinely need it — code spans, the zoom control.)
+export function documentFontStyle(font: DocumentFont): CSSProperties | undefined {
+  const stack = DOCUMENT_FONT_STACKS[font]
+  // 'system' must leave the engine's own default completely intact.
+  if (!stack) return undefined
+  return { fontFamily: stack, '--de-font-mono': stack } as CSSProperties
+}
 
 function readStored(): DocumentFont {
   const stored = localStorage.getItem(STORAGE_KEY)
@@ -53,5 +67,5 @@ export function useDocumentFont() {
     for (const notify of listeners) notify(choice)
   }, [])
 
-  return { font, setFont, fontFamily: DOCUMENT_FONT_STACKS[font] }
+  return { font, setFont, style: documentFontStyle(font) }
 }

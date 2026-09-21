@@ -40,6 +40,10 @@ describe('segment', () => {
     ])
   })
 
+  it('leaves an unmatched $$ as literal text', () => {
+    expect(segment('a $$x^2')).toEqual([{ kind: 'text', value: 'a $$x^2' }])
+  })
+
   it('keeps a chemistry macro intact inside inline math', () => {
     expect(segment('$\\ce{Al2(SO4)3}$')).toEqual([{ kind: 'inline', value: '\\ce{Al2(SO4)3}' }])
   })

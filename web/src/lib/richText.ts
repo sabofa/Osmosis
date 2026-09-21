@@ -59,6 +59,12 @@ export function segment(text: string): Segment[] {
         i = end + 2
         continue
       }
+      // Unmatched `$$` is literal, same as an unmatched `$`. Consuming both
+      // characters here is what stops the single-`$` branch below from pairing
+      // them with each other and emitting an empty inline segment.
+      buffer += '$$'
+      i += 2
+      continue
     }
 
     if (rest.startsWith('$')) {

@@ -33,11 +33,11 @@ export default function DocumentPanel({
   const [markers, setMarkers] = useState<ApiDocumentMarker[]>([])
   const [error, setError] = useState<string | null>(null)
   const { resolvedMode } = useTheme()
-  // The reader's chosen document font (Settings › Appearance). Applied on the
-  // panel root so everything the viewer renders inherits it; data-doc-font
-  // also lets index.css nudge katex's size to match the surrounding prose.
-  const { font: docFont, fontFamily } = useDocumentFont()
-  const fontStyle = fontFamily ? { fontFamily } : undefined
+  // The reader's chosen document font (Settings › Appearance). The style
+  // redefines the variable document-engine's viewer reads (see
+  // documentFontStyle); data-doc-font lets index.css keep code spans monospace
+  // and nudge katex's size to match the surrounding prose.
+  const { font: docFont, style: fontStyle } = useDocumentFont()
 
   useEffect(() => {
     setAsset(null)

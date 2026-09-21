@@ -160,6 +160,15 @@ html::-webkit-scrollbar {
   display: none;
 }
 
+/* A chosen document font is carried into document-engine by redefining
+   --de-font-mono (see useDocumentFont.documentFontStyle) — that variable also
+   drives the few places inside the viewer that must stay monospace whatever
+   the reader picked, so put a real mono stack back on those. */
+[data-doc-font='serif'] .document-viewer-markdown code,
+[data-doc-font='serif'] .document-viewer-zoom-control button {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* The document viewer's font is chosen per reader (Settings › Appearance).
    katex's default sizing is tuned for body text at 1em; serif/mono document
    fonts read a touch smaller next to it, so nudge the math up to match. */
