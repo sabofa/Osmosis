@@ -18,7 +18,7 @@ describe("local sync engine", () => {
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
                   remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(canonicalDb, env);
-    canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime() });
+    canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime(), logger: false });
     const address = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
     canonicalUrl = address;
   });

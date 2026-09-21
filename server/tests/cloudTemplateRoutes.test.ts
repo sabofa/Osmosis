@@ -29,7 +29,7 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     const template = createTemplate(canonicalDb, { name: "geo test", tag_query: { all: ["geo"] }, question_count: 2 });
     const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c.db"), remoteUrl: null,
                    uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
-    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime() });
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openFileDb(dir, "l.db");
@@ -38,7 +38,7 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };
-    const app = buildApp(ctx);
+    const app = buildApp({ ...ctx, logger: false });
 
     // The template row itself arrives with an ordinary pull (templates always sync);
     // no slice for "geo" is held, so it is a cloud test.
@@ -87,7 +87,7 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     const template = createTemplate(canonicalDb, { name: "geo2 test", tag_query: { all: ["geo2"] }, question_count: 1 });
     const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c2.db"), remoteUrl: null,
                    uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
-    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime() });
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openFileDb(dir, "l2.db");
@@ -99,7 +99,7 @@ describe("cloud tests: a local node runs a non-downloaded template via canonical
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node, runtime };
-    const app = buildApp(ctx);
+    const app = buildApp({ ...ctx, logger: false });
 
     // Mirror the template row locally the way an ordinary pull against the
     // real canonical would, without going through the unreachable remoteUrl.

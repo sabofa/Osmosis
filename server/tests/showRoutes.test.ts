@@ -33,7 +33,7 @@ describe("the show routes", () => {
       webDistDir: null,
     };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     await app.ready();
   });
 

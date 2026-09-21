@@ -14,7 +14,7 @@ describe("GET /api/status last_write_at", () => {
     db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
                   remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
-    app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
     await app.ready();
   });
   afterAll(async () => { await app.close(); });

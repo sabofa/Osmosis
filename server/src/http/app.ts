@@ -20,6 +20,12 @@ export interface AppContext {
   env: EnvConfig;
   node: NodeRow;
   runtime: SyncRuntime;
+  // Request logging, on unless a caller says otherwise. The one caller that
+  // says otherwise is the test suite: a few hundred request lines per run bury
+  // the assertion that actually failed. The serializer below — the thing that
+  // keeps an MCP token out of journald — belongs to the production config and
+  // is unaffected by turning the logger off in a test.
+  logger?: boolean;
 }
 
 // The MCP shared secrets travel as a path segment (see mcp/server.ts for why),
@@ -32,19 +38,23 @@ export function redactMcpTokenInUrl(url: string): string {
 }
 
 export function buildApp(ctx: AppContext): FastifyInstance {
-  const app = Fastify({
-    logger: {
-      serializers: {
-        req: (request) => ({
-          method: request.method,
-          url: redactMcpTokenInUrl(request.url),
-          host: request.host,
-          remoteAddress: request.ip,
-          remotePort: request.socket?.remotePort,
-        }),
-      },
-    },
-  });
+  const app = Fastify(
+    ctx.logger === false
+      ? { logger: false }
+      : {
+          logger: {
+            serializers: {
+              req: (request) => ({
+                method: request.method,
+                url: redactMcpTokenInUrl(request.url),
+                host: request.host,
+                remoteAddress: request.ip,
+                remotePort: request.socket?.remotePort,
+              }),
+            },
+          },
+        }
+  );
   app.register(multipart);
 
   // /sync and /mcp — canonical only. /sync never touches the public internet

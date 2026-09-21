@@ -23,7 +23,7 @@ describe("serving the built web app", () => {
     writeFileSync(join(dist, "index.html"), "<!doctype html><title>Osmosis</title>");
     const db = openTestDb();
     const env = envFor(dist);
-    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime() });
+    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
     await app.ready();
 
     const root = await app.inject({ method: "GET", url: "/" });
@@ -40,7 +40,7 @@ describe("serving the built web app", () => {
   it("does not serve anything at / when WEB_DIST_DIR is unset (dev: Vite owns the app)", async () => {
     const db = openTestDb();
     const env = envFor(null);
-    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime() });
+    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
     await app.ready();
     const root = await app.inject({ method: "GET", url: "/" });
     expect(root.statusCode).toBe(404);
@@ -51,7 +51,7 @@ describe("serving the built web app", () => {
     const empty = mkdtempSync(join(tmpdir(), "osmosis-webdist-empty-"));
     const db = openTestDb();
     const env = envFor(empty);
-    expect(() => buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime() })).toThrow(/index.html/);
+    expect(() => buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false })).toThrow(/index.html/);
     rmSync(empty, { recursive: true, force: true });
   });
 });

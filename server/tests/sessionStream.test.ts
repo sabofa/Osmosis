@@ -36,7 +36,7 @@ describe("GET /api/sessions/:id/events", () => {
   beforeAll(async () => {
     db = openTestDb();
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
   });
 
@@ -104,7 +104,7 @@ describe("app.close() with a stream still open", () => {
   it("ends the stream and drops its listener instead of hanging the close", async () => {
     const db2 = openTestDb();
     const node = bootstrapNode(db2, env);
-    const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime() });
+    const app2 = buildApp({ db: db2, env, node, runtime: createSyncRuntime(), logger: false });
     const url = await app2.listen({ port: 0, host: "127.0.0.1" });
     const session = createSession(db2, { name: "Closing" });
 

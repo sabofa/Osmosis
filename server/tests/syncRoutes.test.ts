@@ -14,7 +14,7 @@ describe("/sync/pull and /sync/push HTTP routes", () => {
     const env = { role: "canonical" as const, label: "test-canonical", port: 0, dbPath: ":memory:",
                   remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "test-token", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     await app.ready();
   });
 
@@ -59,7 +59,7 @@ describe("/sync/pull and /sync/push HTTP routes", () => {
     const env = { role: "local" as const, label: "test-local", port: 0, dbPath: ":memory:",
                   remoteUrl: "http://localhost:9999", uploadsDir: "/tmp", mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(localDb, env);
-    const localApp = buildApp({ db: localDb, env, node, runtime: createSyncRuntime() });
+    const localApp = buildApp({ db: localDb, env, node, runtime: createSyncRuntime(), logger: false });
     await localApp.ready();
 
     const res = await localApp.inject({ method: "POST", url: "/sync/pull", payload: {} });

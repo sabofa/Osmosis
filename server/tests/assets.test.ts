@@ -27,7 +27,7 @@ describe("POST /api/assets", () => {
       deepseekApiKey: null, webDistDir: null,
     };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
   });
 

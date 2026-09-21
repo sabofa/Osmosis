@@ -24,7 +24,7 @@ describe("theme routes on canonical", () => {
     const db = openTestDb();
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
                   uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
-    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime() });
+    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
     await app.ready();
 
     let res = await app.inject({ method: "PUT", url: "/api/themes/ocean", payload: { name: "Ocean", tokens, custom_css: "body{}" } });
@@ -62,7 +62,7 @@ describe("theme writes from a local node", () => {
     const canonicalDb = openFileDb(dir, "c.db");
     const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c.db"), remoteUrl: null,
                    uploadsDir: dir, mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
-    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime() });
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openFileDb(dir, "l.db");
@@ -70,7 +70,7 @@ describe("theme writes from a local node", () => {
                   uploadsDir: dir, mcpAuthToken: null, deepseekApiKey: null, webDistDir: null };
     const runtime = createSyncRuntime();
     const ctx = { db: localDb, env, node: bootstrapNode(localDb, env), runtime };
-    const app = buildApp(ctx);
+    const app = buildApp({ ...ctx, logger: false });
 
     runtime.online = false;
     let res = await app.inject({ method: "PUT", url: "/api/themes/ocean", payload: { name: "Ocean", tokens } });

@@ -50,7 +50,7 @@ describe("presenter-token MCP scope", () => {
       webDistDir: null,
     };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
   });
 
@@ -117,6 +117,27 @@ describe("presenter-token MCP scope", () => {
 });
 
 describe("PRESENTER_TOOLS allowlist", () => {
+  // The concrete list, not a membership check: DEPLOY.md, MCP-SPEC.md and
+  // server/.env.canonical.example all spell these eleven names out in prose,
+  // and prose has no other way to notice that the allowlist grew. Change the
+  // allowlist and this test fails; fix this test and the docs are next to it
+  // in the diff.
+  it("is exactly the eleven tools the deploy docs name", () => {
+    expect([...PRESENTER_TOOLS].sort()).toEqual([
+      "await_item_outcome",
+      "await_show_outcome",
+      "create_questions",
+      "create_session",
+      "end_session",
+      "get_attempt",
+      "grade_response",
+      "present_item",
+      "present_show",
+      "readme",
+      "update_show",
+    ]);
+  });
+
   it("names only tools the full registration actually registers", () => {
     // listToolNames() is filled by the full registration the suite above ran,
     // so a typo'd allowlist entry shows up here rather than as a silently

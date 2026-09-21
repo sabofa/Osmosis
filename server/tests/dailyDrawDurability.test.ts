@@ -42,7 +42,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
       deepseekApiKey: null, webDistDir: null,
     };
     const cNode = bootstrapNode(canonicalDb, cEnv);
-    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: cNode, runtime: createSyncRuntime() });
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: cNode, runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     async function localRequestsDaily(dbName: string): Promise<any> {
@@ -60,7 +60,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
       const node = bootstrapNode(localDb, env);
       const runtime = createSyncRuntime();
       runtime.online = true;
-      const app: FastifyInstance = buildApp({ db: localDb, env, node, runtime });
+      const app: FastifyInstance = buildApp({ db: localDb, env, node, runtime, logger: false });
       const res = await app.inject({ method: "POST", url: "/api/attempts", payload: { daily_kind: "question" } });
       const body = res.json();
       await app.close();
@@ -90,7 +90,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
       deepseekApiKey: null, webDistDir: null,
     };
     const cNode = bootstrapNode(canonicalDb, cEnv);
-    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: cNode, runtime: createSyncRuntime() });
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: cNode, runtime: createSyncRuntime(), logger: false });
     const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openFileDb(dir, "l3.db");
@@ -107,7 +107,7 @@ describe("daily draws: same-date consistency across two nodes", () => {
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = false;
-    const app = buildApp({ db: localDb, env, node, runtime });
+    const app = buildApp({ db: localDb, env, node, runtime, logger: false });
 
     const offlineRes = await app.inject({ method: "POST", url: "/api/attempts", payload: { daily_kind: "question" } });
     expect(offlineRes.statusCode).toBe(503);

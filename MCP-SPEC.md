@@ -30,7 +30,7 @@ segment, so `buildApp`'s pino `req` serializer rewrites a logged url of
 
 | Env var | Scope | Inventory |
 |---|---|---|
-| `MCP_AUTH_TOKEN` | `full` | all 37 tools. Required — the canonical node refuses to boot without one set |
+| `MCP_AUTH_TOKEN` | `full` | all 40 tools. Required — the canonical node refuses to boot without one set |
 | `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`. Optional — unset means the presenter surface does not exist |
 
 `registerTools(server, db, uploadsDir, nodeId, scope)` skips any tool outside

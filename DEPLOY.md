@@ -80,7 +80,7 @@ anything it doesn't recognise — the same bare 404 a wrong token has always got
 | Env var | Scope | Tools |
 |---|---|---|
 | `MCP_AUTH_TOKEN` | `full` | everything (the authoring connector) |
-| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `get_attempt`, `end_session`, `grade_response` |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response` |
 
 `install.sh` generates both on first run. **The tutor server gets only
 `MCP_PRESENTER_TOKEN`** — it runs the live teaching loop and never needs to

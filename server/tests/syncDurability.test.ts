@@ -44,7 +44,7 @@ describe("sync durability (spec exit criteria)", () => {
       deepseekApiKey: null, webDistDir: null,
     };
     const node = bootstrapNode(db, env);
-    const app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    const app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     const url = await app.listen({ port: 0, host: "127.0.0.1" });
     return { db, env, node, app, url };
   }

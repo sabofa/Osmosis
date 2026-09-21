@@ -19,7 +19,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:",
                   remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const node = bootstrapNode(canonicalDb, env);
-    canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime() });
+    canonicalApp = buildApp({ db: canonicalDb, env, node, runtime: createSyncRuntime(), logger: false });
     canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
   });
 
@@ -69,7 +69,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true;
-    const localApp = buildApp({ db: localDb, env, node, runtime });
+    const localApp = buildApp({ db: localDb, env, node, runtime, logger: false });
 
     const res = await localApp.inject({
       method: "POST", url: "/api/attempts", payload: { daily_kind: "bogus" },
@@ -87,7 +87,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = true; // simulate an already-established online state
-    const localApp = buildApp({ db: localDb, env, node, runtime });
+    const localApp = buildApp({ db: localDb, env, node, runtime, logger: false });
 
     const res = await localApp.inject({
       method: "POST", url: "/api/attempts", payload: { daily_kind: "question" },
@@ -124,7 +124,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const node = bootstrapNode(localDb, env);
     const runtime = createSyncRuntime();
     runtime.online = false;
-    const localApp = buildApp({ db: localDb, env, node, runtime });
+    const localApp = buildApp({ db: localDb, env, node, runtime, logger: false });
 
     const res = await localApp.inject({
       method: "POST", url: "/api/attempts", payload: { daily_kind: "question" },
@@ -149,7 +149,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const hierEnv = { role: "canonical" as const, label: "hc", port: 0, dbPath: ":memory:",
                        remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const hierNode = bootstrapNode(hierDb, hierEnv);
-    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
+    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime(), logger: false });
     const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
 
     // A brand new local node holding no slices and no tags at all.
@@ -237,7 +237,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const hierEnv = { role: "canonical" as const, label: "hc2", port: 0, dbPath: ":memory:",
                        remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const hierNode = bootstrapNode(hierDb, hierEnv);
-    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
+    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime(), logger: false });
     const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openTestDb();
@@ -330,7 +330,7 @@ describe("/sync/daily-draw and POST /api/attempts (daily)", () => {
     const hierEnv = { role: "canonical" as const, label: "hc3", port: 0, dbPath: ":memory:",
                        remoteUrl: null, uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
     const hierNode = bootstrapNode(hierDb, hierEnv);
-    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime() });
+    const hierApp = buildApp({ db: hierDb, env: hierEnv, node: hierNode, runtime: createSyncRuntime(), logger: false });
     const hierUrl = await hierApp.listen({ port: 0, host: "127.0.0.1" });
 
     const localDb = openTestDb();

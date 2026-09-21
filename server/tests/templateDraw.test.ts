@@ -13,7 +13,7 @@ import { insertTag, insertQuestion, openTestDb } from "./helpers.js";
 function canonicalApp(db: ReturnType<typeof openTestDb>) {
   const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
                 uploadsDir: "/tmp", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null };
-  return buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime() });
+  return buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
 }
 
 describe("buildTemplateDrawResponse", () => {

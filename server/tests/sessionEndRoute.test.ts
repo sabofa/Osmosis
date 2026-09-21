@@ -23,7 +23,7 @@ describe("POST /api/sessions/:id/end", () => {
       remoteUrl: null, uploadsDir: ".", mcpAuthToken: "t", deepseekApiKey: null, webDistDir: null,
     };
     const node = bootstrapNode(db, env);
-    app = buildApp({ db, env, node, runtime: createSyncRuntime() });
+    app = buildApp({ db, env, node, runtime: createSyncRuntime(), logger: false });
     await app.ready();
   });
 
