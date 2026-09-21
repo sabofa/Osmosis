@@ -374,3 +374,23 @@
   letter-spacing: 0.06em;
   color: var(--muted);
 }
+
+.results-attempts {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.results-attempt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+}

@@ -68,15 +68,8 @@
 }
 
 .results-hero-chart {
-  flex: 1;
   width: 100%;
-  min-height: 200px;
-  display: flex;
-  margin-top: 8px;
-}
-
-.results-hero-chart > * {
-  flex: 1;
+  margin-top: 12px;
 }
 
 .results-hero-foot {

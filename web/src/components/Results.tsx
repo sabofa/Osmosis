@@ -2,17 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   getResultsDaily,
   getResultsParents,
-  getTagHistory,
   listAttempts,
   timeAgo,
   attemptSourceLabel,
   type AttemptSummary,
   type DailyResultStat,
   type ParentTagStat,
-  type TagHistory,
 } from '../lib/api'
-import { historySpec } from '../lib/resultsGraph'
-import GraphPanel from './GraphPanel'
+import ScoreBar from './ScoreBar'
 import TagResultsPage from './TagResultsPage'
 import DailyHistoryPage from './DailyHistoryPage'
 import { attemptsHeatmap } from '../lib/activity'
@@ -38,7 +35,6 @@ export default function Results() {
   const [tags, setTags] = useState<ParentTagStat[] | null>(null)
   // The subpages: one tag in full, or one day of daily history.
   const [view, setView] = useState<{ kind: 'tag'; slug: string } | { kind: 'daily'; date: string } | null>(null)
-  const [history, setHistory] = useState<TagHistory | null>(null)
   const [attempts, setAttempts] = useState<AttemptSummary[]>([])
   const [daily, setDaily] = useState<DailyResultStat[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -65,23 +61,6 @@ export default function Results() {
 
   const subject = tags?.find((t) => t.tag_slug === selected) ?? tags?.[0] ?? null
 
-  // The hero's chart: the picked subject's score by day, from the graph engine.
-  useEffect(() => {
-    if (!subject) return
-    let cancelled = false
-    setHistory(null)
-    getTagHistory(subject.tag_slug, 90)
-      .then((h) => {
-        if (!cancelled) setHistory(h)
-      })
-      .catch(() => {
-        /* the hero simply has no chart */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [subject?.tag_slug]) // eslint-disable-line react-hooks/exhaustive-deps
-  const heroSpec = useMemo(() => (history ? historySpec(history.points, { days: 90 }) : null), [history])
   const heat = useMemo(() => attemptsHeatmap(attempts, HEAT_WEEKS, HEAT_DAYS), [attempts])
 
   if (view?.kind === 'tag') {
@@ -142,11 +121,9 @@ export default function Results() {
               </div>
 
               <div className="results-hero-chart">
-                {heroSpec && <GraphPanel spec={heroSpec} />}
+                <ScoreBar score={subject.mean_score} />
               </div>
-              <div className="results-hero-foot">
-                score by day, last 90 days · double-click a subject for the full view
-              </div>
+              <div className="results-hero-foot">double-click a subject for the full view</div>
             </>
           ) : (
             <div style={{ margin: 'auto', color: 'var(--muted)', fontSize: 13 }}>

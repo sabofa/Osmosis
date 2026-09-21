@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getTagHistory, timeAgo, type TagHistory } from '../lib/api'
-import { historySpec } from '../lib/resultsGraph'
-import GraphPanel from './GraphPanel'
+import ScoreBar from './ScoreBar'
 import './ResultsPages.css'
 
 const WINDOWS = [30, 90, 365] as const
@@ -38,7 +37,6 @@ export default function TagResultsPage({
     }
   }, [slug, days])
 
-  const spec = useMemo(() => (history ? historySpec(history.points, { days }) : null), [history, days])
   const crumbs = slug.split(':')
 
   return (
@@ -114,12 +112,23 @@ export default function TagResultsPage({
         </div>
 
         <div className="panel results-page-graph">
-          <div className="results-kicker">
-            Score by day, last {days === 365 ? 'year' : `${days} days`}
+          <div className="results-kicker">Mean score</div>
+          {history && <ScoreBar score={history.overall.mean_score} />}
+          <div className="results-kicker" style={{ marginTop: 18 }}>
+            Attempts, last {days === 365 ? 'year' : `${days} days`}
             {history && history.points.length === 0 && ' — nothing practised in this window'}
           </div>
-          <div className="results-page-graph-fill">{spec && <GraphPanel spec={spec} />}</div>
-          <div className="results-page-graph-foot">x: days before today · y: mean score that day</div>
+          <div className="results-attempts no-scrollbar">
+            {history &&
+              [...history.points].reverse().map((p) => (
+                <div key={p.at} className="results-attempt-row">
+                  <span className="results-daily-date">{timeAgo(p.at)}</span>
+                  <span className="results-child-meta">{p.responses} {p.responses === 1 ? 'item' : 'items'}</span>
+                  <span className="results-subject-score">{p.mean_score.toFixed(2)}</span>
+                </div>
+              ))}
+          </div>
+          <div className="results-page-graph-foot">the score-over-time graph returns with the graph-engine rework</div>
         </div>
       </div>
     </div>
