@@ -25,7 +25,7 @@ Stated up front, because an earlier draft of this document asked you to confirm 
 | Component | Owns |
 |---|---|
 | **Engine** | Where Ben is in each course, what it expects. Reads D2L. Live |
-| **Learning half** | What's inside the material — sections in PDFs, chunks, terms, derived prerequisites |
+| **Mycelium** | What's inside the material — sections in PDFs, chunks, terms, derived prerequisites |
 | **Tutor** | Teaching, and diagnosis — not *what does he know* but *why did that go wrong* |
 | **Osmosis** (you) | Items and retention |
 
@@ -218,7 +218,7 @@ Strings, never floats — `"8.10" ≠ 8.1` and they don't sort lexically. **Deli
 
 Two ways the tutor needs this to stretch:
 
-**Finer than a section.** The tutor works at *node* grain — one teachable idea, several per section. "Knows §8.3" isn't decomposable and so can't be usefully wrong; "can apply §8.3 but can't tell it apart from §8.4" is the failure that wrecks a cumulative final. Node keys are minted by the tutor and are stable strings — the learning half's extracted terms turned out to shift between extraction runs, so they're a hint rather than an identifier.
+**Finer than a section.** The tutor works at *node* grain — one teachable idea, several per section. "Knows §8.3" isn't decomposable and so can't be usefully wrong; "can apply §8.3 but can't tell it apart from §8.4" is the failure that wrecks a cumulative final. Node keys are minted by the tutor and are stable strings — mycelium's extracted terms turned out to shift between extraction runs, so they're a hint rather than an identifier.
 
 **Wider than a textbook.** A stated goal is that this teaches things with no course attached — an advanced CS or maths topic Ben picks up alone. Those have no `textbook_slug`. The tutor's guess is a learner-named topic slug in the same position, but that's a guess.
 

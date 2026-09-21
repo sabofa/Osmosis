@@ -13,3 +13,4 @@ server/seed-review.mts
 .worktrees/
 data/run-local-node.vbs
 data/uploads/
+.superpowers/
