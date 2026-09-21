@@ -298,11 +298,16 @@ export default function Take({
         pending.map(([responseId, timer]) => {
           clearTimeout(timer)
           const d = drafts[questions.findIndex((r) => r.id === responseId)]
+          // Through the helper like every other write of the text: this flush
+          // is the last thing to touch the row before submit, so a bare
+          // { response_text } here would be the one that leaves a `b` pressed
+          // seconds earlier standing over the answer typed after it.
           return d
-            ? answerResponse(attempt.id, responseId, {
-                response_text: d.writtenText,
-                elapsed_ms: Math.round(currentElapsed(responseId)),
-              })
+            ? answerResponse(
+                attempt.id,
+                responseId,
+                writtenTextPatch(d.writtenText, Math.round(currentElapsed(responseId)))
+              )
             : Promise.resolve()
         })
       )
