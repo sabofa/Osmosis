@@ -382,13 +382,16 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       .get(q.session_id) as { id: string } | undefined;
 
     if (!row) return { attempt: null };
-    return { attempt: getAttemptDetail(db, row.id) };
+    return { attempt: getAttemptDetail(db, row.id, { viewer: "learner" }) };
   });
 
+  // Every /api read of an attempt is the app, i.e. the learner: a
+  // deferred-reveal attempt withholds its answer key here until the session
+  // it belongs to ends. The MCP tools read as the tutor and see everything.
   app.get("/api/attempts/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      return getAttemptDetail(db, id);
+      return getAttemptDetail(db, id, { viewer: "learner" });
     } catch (err) {
       sendDomainError(reply, err);
       return;
@@ -441,13 +444,15 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/attempts/:id/submit", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      const result = submitAttempt(db, id, ctx.env.role);
+      submitAttempt(db, id, ctx.env.role);
       // 5th sync trigger (spec): on submit, if currently online. Deliberately
       // not awaited — the submit response must not block on the network.
       if (ctx.env.role === "local" && ctx.runtime.online) {
         void runSync(ctx, ctx.runtime);
       }
-      return result;
+      // Re-read as the learner: submitAttempt's own return is the tutor's
+      // full record, which a deferred attempt must not put on the screen.
+      return getAttemptDetail(db, id, { viewer: "learner" });
     } catch (err) {
       sendDomainError(reply, err);
       return;

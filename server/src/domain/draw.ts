@@ -21,6 +21,9 @@ export interface EligibleQuestion {
 function buildEligibilityClause(params: EligibilityParams): { sql: string; args: unknown[] } {
   const clauses = [
     "q.retired_at IS NULL",
+    // An ephemeral item exists for one live moment in one session; it is
+    // never drawable, by template, daily draw, or tag_query pick.
+    "q.ephemeral = 0",
     "NOT EXISTS (SELECT 1 FROM question q2 WHERE q2.lineage_id = q.lineage_id AND q2.version > q.version)",
   ];
   const args: unknown[] = [];

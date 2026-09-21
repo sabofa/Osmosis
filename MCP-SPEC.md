@@ -98,10 +98,10 @@ becoming one larger tool.
 | `list_tags` | Controlled vocabulary listing. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
 | `merge_tags` | Vocabulary cleanup |
-| `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec. Paginated (`limit`/`offset`, default 50); response is `{ total, questions, has_more }` |
-| `get_question` | Full detail for one question — the read path before an edit |
-| `create_questions` | Batched, per-question rejection detail, capped duplicate reports. A choice's `misconception` is optional — missing, null, empty, or the placeholder `"distractor (imported; misconception not recorded)"` all store NULL, which reads as *unknown*, not *none*. A question is never rejected for a missing misconception |
-| `edit_question` | Versions if attempted, in-place otherwise. Same optional-`misconception` normalisation as `create_questions` |
+| `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec. Every row carries `node_keys` (primary first) and `node_key` (the primary). Filters: `node_key` (exact, or prefix when the value ends with `:` — `node:ebbing11e:2.4:` matches everything under that section), `session_id`, and `include_ephemeral` (session-only items are excluded otherwise). Paginated (`limit`/`offset`, default 50); response is `{ total, questions, has_more }` |
+| `get_question` | Full detail for one question — the read path before an edit. Carries `node_keys`, `ephemeral` and `session_id` |
+| `create_questions` | Batched, per-question rejection detail, capped duplicate reports. Batch-level `ephemeral` (requires `session_id`, else `ephemeral_requires_session`) and `idempotency_key` (≤128 chars: a repeated key writes nothing and replays the stored result verbatim with `replayed: true`). Per question, `node_keys` — first is primary, each `node:`-prefixed and tag-slug-shaped, else that question is rejected `invalid_node_key`; passing both `node_key` and a disagreeing `node_keys[0]` is `node_key_mismatch`. A choice's `misconception` is optional — missing, null, empty, or the placeholder `"distractor (imported; misconception not recorded)"` all store NULL, which reads as *unknown*, not *none*. A question is never rejected for a missing misconception |
+| `edit_question` | Versions if attempted, in-place otherwise. Same optional-`misconception` normalisation as `create_questions`; `node_keys` replaces the whole set, a singular `node_key` replaces it with that one primary |
 | `retire_question` | Soft retire |
 | `list_templates` | Live eligible_count. Paginated (`limit`/`offset`, default 50); response is `{ total, templates, has_more }` |
 | `create_template` / `edit_template` / `retire_template` | Draw specs |
@@ -111,14 +111,43 @@ becoming one larger tool.
 | `list_assets` | Cheap listing, no query required; `unlinked_only` filters to unreferenced assets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
 | `read_asset` | Full `extracted_text` |
 | `search_assets` | FTS snippets. Paginated (`limit`/`offset`, default 50); response is `{ total, assets, has_more }` |
-| `get_attempt` | Full attempt read: per-response inputs + derived `outcome` + live grade. `chosen_misconception` and `best_guess_correct` are answer-key material and stay withheld until the attempt is submitted; the attempt carries `paused_at`/`paused_ms` |
-| `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `grader`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `best_guess_choice_id`, `best_guess_correct`, `response_text`, `confidence`, `confidence_numeric`, `idk`, `misapplied_method`, `diagnosis`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer`. `await_item_outcome` takes `timeout_s` (default 25, clamped 1..25) and also reports `status: "paused"` |
+| `get_attempt` | Full attempt read: per-response inputs + derived `outcome` + live grade. `chosen_misconception` and `best_guess_correct` are answer-key material and stay withheld until the attempt is submitted; the attempt carries `reveal`, `revealed`, `paused_at`/`paused_ms`. You read as the *tutor*: a `deferred` reveal withholds the key from the app's screens (`GET /api/attempts/:id`, the submit response), never from this tool |
+| `await_item_outcome` / `submit_quick_check` | Once answered/graded, return the full outcome record: `outcome` (`correct`/`partial`/`incorrect`/`dont_know`/`ungraded`), `score`, `grader`, `selected_choice_id`, `chosen_misconception`, `correct_choice_id`, `best_guess_choice_id`, `best_guess_correct`, `response_text`, `confidence`, `confidence_numeric`, `idk`, `misapplied_method`, `diagnosis`, `elapsed_ms`, `answered_at`, `explanation`, `model_answer`, `node_key`, `node_keys`. `await_item_outcome` takes `timeout_s` (default 25, clamped 1..25) and also reports `status: "paused"` |
 | `grade_response` | The tutor's own verdict on an answered item: `grader` `oracle`/`judge`, optional `score` 0..1, optional one-line `diagnosis`. Supersedes a self/model grade on a written item; on an mc item only the diagnosis is kept and the `auto_mc` grade against the question's own key stands |
-| `end_session` | Ends the session and returns `{ presented, answered, abandoned, dont_know, paused_now }` over its live items, marking anything still unanswered abandoned so the counts are final |
+| `end_session` | Ends the session and returns `{ presented, answered, abandoned, dont_know, paused_now, retired_ephemeral }` over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`) |
+| `create_session` | Starts a tutoring session. `tag_slug` must already exist. `reveal_default` (`immediate`, the default, or `deferred`) sets what every item presented in it does with its answer key on the learner's screen |
+| `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default; the returned snapshot carries `node_keys`/`node_key` |
 | `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
 
 Plus one plain (non-JSON-RPC) HTTP route sharing the same token, `POST
 /mcp/:token/upload` — see §5.
+
+### 3.1 Reveal, and who is reading
+
+An attempt's `reveal` is `immediate` (the learner sees the answer key on
+submit — every attempt before this existed, and the default still) or
+`deferred` (they see it when `end_session` runs, so an early item's key can't
+teach the next one). It comes from `present_item`'s own `reveal`, else the
+session's `reveal_default`, else `immediate`.
+
+Withholding applies to exactly one reader: the app. `GET /api/attempts/:id`,
+the live-item poll and the submit response read as the *learner* and, while a
+deferred attempt's session is open, return `revealed: false` with no
+`is_correct`, `explanation`, `model_answer`, per-response `outcome`, `grade`
+or `diagnosis` — the learner's own inputs all stay. Every MCP tool reads as
+the *tutor* and is never gated. A deferred attempt with no session has nothing
+to wait for and reveals on submit like an immediate one.
+
+### 3.2 Ephemeral items
+
+`create_questions(ephemeral: true, session_id)` writes items for one live
+moment. They are excluded from `getEligibleQuestions` (so from every template
+and daily draw), from `search_questions` unless `include_ephemeral: true`, and
+from `readme`'s and `bootstrap`'s `bank_size`. They are presentable by
+`present_item(question_id)` while their session runs, and `end_session`
+retires them. Duplicate detection is deliberately left alone: an ephemeral
+item still reports against the bank, since a near-duplicate is worth knowing
+about whichever side it is on.
 
 ---
 

@@ -88,7 +88,7 @@ Config directives, one per line anywhere in the spec, "@key: value" (order doesn
 
 export function bootstrap(db: DatabaseSync, subject: string | null): BootstrapResult {
   const bankSize = (
-    db.prepare("SELECT COUNT(*) AS n FROM question WHERE retired_at IS NULL").get() as { n: number }
+    db.prepare("SELECT COUNT(*) AS n FROM question WHERE retired_at IS NULL AND ephemeral = 0").get() as { n: number }
   ).n;
   const lastWrite = db
     .prepare(

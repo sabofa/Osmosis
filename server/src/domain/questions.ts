@@ -3,6 +3,16 @@ import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 import { buildTagQueryClause, type TagQuery } from "./tagQuery.js";
 import { getAsset } from "./assets.js";
+import {
+  nodeKeyFields,
+  nodeKeyFilterClause,
+  getNodeKeys,
+  primaryNodeKey,
+  replaceNodeKeys,
+  resolveNodeKeys,
+  validateNodeKeys,
+} from "./nodeKeys.js";
+import { assertSessionOpen } from "./sessions.js";
 // TODO: once graph-engine is published as a built package (a parallel effort
 // is packaging it as `graph-engine/parser` exporting `parseSpec`), this import
 // resolves at runtime. The import itself is correct today; only the dist
@@ -41,6 +51,7 @@ export interface QuestionInput {
   tests_error?: string | null;
   provenance?: "tutor_authored" | "textbook_sourced" | null;
   node_key?: string | null;
+  node_keys?: string[] | null;
 }
 
 export interface QuestionRow {
@@ -71,6 +82,8 @@ export interface QuestionRow {
   tests_error: string | null;
   provenance: string | null;
   node_key: string | null;
+  ephemeral: number;
+  session_id: string | null;
   updated_at: string | null;
 }
 
@@ -229,6 +242,9 @@ function validateQuestionInput(
     return { reason: "invalid_provenance", detail: `provenance must be one of ${[...PROVENANCE_VALUES].join(", ")}` };
   }
 
+  const badNodeKeys = validateNodeKeys(q);
+  if (badNodeKeys) return badNodeKeys;
+
   if (q.type === "mc") {
     if (!q.choices || q.choices.length < 2) {
       return { reason: "mc_without_choices", detail: "mc questions need 2 or more choices" };
@@ -368,6 +384,8 @@ function insertQuestionRow(
     tests_error: string | null;
     provenance: string | null;
     node_key: string | null;
+    ephemeral?: number;
+    session_id?: string | null;
   }
 ): void {
   db.prepare(
@@ -376,14 +394,14 @@ function insertQuestionRow(
         model_answer, rubric, difficulty, calculator_policy, source_note,
         graph_spec, desmos_allowed, document_id, document_anchor_label,
         document_anchor_start, document_anchor_end, document_marker_offset,
-        claim_rung, tests_error, provenance, node_key)
+        claim_rung, tests_error, provenance, node_key, ephemeral, session_id)
      VALUES
        (@id, @lineage_id, @version, @supersedes_id, @type, @prompt, @explanation,
         @model_answer, @rubric, @difficulty, @calculator_policy, @source_note,
         @graph_spec, @desmos_allowed, @document_id, @document_anchor_label,
         @document_anchor_start, @document_anchor_end, @document_marker_offset,
-        @claim_rung, @tests_error, @provenance, @node_key)`
-  ).run(fields);
+        @claim_rung, @tests_error, @provenance, @node_key, @ephemeral, @session_id)`
+  ).run({ ephemeral: 0, session_id: null, ...fields });
 }
 
 function replaceTags(db: DatabaseSync, questionId: string, tags: string[]): void {
@@ -418,6 +436,9 @@ export interface CreateQuestionsResult {
   created: { id: string; lineage_id: string; prompt_preview: string }[];
   rejected: { index: number; reason: string; detail: string }[];
   warnings: { index: number; message: string }[];
+  // Present (and true) only on a replay of a stored idempotency_key: nothing
+  // was written this time, this is the first call's own result.
+  replayed?: true;
   possible_duplicates: {
     new_index: number;
     existing_id: string;
@@ -427,7 +448,47 @@ export interface CreateQuestionsResult {
   }[];
 }
 
-export function createQuestions(db: DatabaseSync, questions: QuestionInput[]): CreateQuestionsResult {
+export interface CreateQuestionsOptions {
+  // Batch-level, not per question: a batch written for one live moment is
+  // ephemeral as a whole, and it belongs to the session that moment is in.
+  ephemeral?: boolean;
+  session_id?: string;
+  // Replay protection for the one write that is expensive to repeat. The
+  // stored result comes back verbatim with replayed: true.
+  idempotency_key?: string;
+}
+
+const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
+
+export function createQuestions(
+  db: DatabaseSync,
+  questions: QuestionInput[],
+  options: CreateQuestionsOptions = {}
+): CreateQuestionsResult {
+  const key = options.idempotency_key;
+  if (key !== undefined) {
+    if (key.length === 0 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+      throw new DomainError(
+        "invalid_idempotency_key",
+        `idempotency_key must be 1..${MAX_IDEMPOTENCY_KEY_LENGTH} characters.`
+      );
+    }
+    const stored = db.prepare("SELECT result_json FROM create_questions_batch WHERE idempotency_key = ?").get(key) as
+      | { result_json: string }
+      | undefined;
+    // Verbatim: the tutor sees exactly what the first call returned, plus the
+    // flag telling it nothing new was written this time.
+    if (stored) return { ...(JSON.parse(stored.result_json) as CreateQuestionsResult), replayed: true };
+  }
+
+  if (options.ephemeral && !options.session_id) {
+    throw new DomainError(
+      "ephemeral_requires_session",
+      "ephemeral: true requires session_id — an ephemeral question is retired when its session ends, so it needs one."
+    );
+  }
+  if (options.session_id) assertSessionOpen(db, options.session_id);
+
   const threshold = Number(
     JSON.parse(
       (db.prepare("SELECT value FROM config WHERE key = 'duplicate_similarity_threshold'").get() as {
@@ -491,9 +552,12 @@ export function createQuestions(db: DatabaseSync, questions: QuestionInput[]): C
         claim_rung: q.claim_rung ?? null,
         tests_error: q.tests_error ?? null,
         provenance: q.provenance ?? null,
-        node_key: q.node_key ?? null,
+        node_key: primaryNodeKey(q),
+        ephemeral: options.ephemeral ? 1 : 0,
+        session_id: options.session_id ?? null,
       });
       replaceTags(db, id, q.tags);
+      replaceNodeKeys(db, id, resolveNodeKeys(q));
       if (q.type === "mc") replaceChoices(db, id, q.choices!);
       db.exec("COMMIT");
     } catch (err) {
@@ -503,6 +567,13 @@ export function createQuestions(db: DatabaseSync, questions: QuestionInput[]): C
 
     result.created.push({ id, lineage_id: lineageId, prompt_preview: q.prompt.slice(0, 120) });
   });
+
+  if (key !== undefined) {
+    db.prepare("INSERT INTO create_questions_batch (idempotency_key, result_json) VALUES (?, ?)").run(
+      key,
+      JSON.stringify(result)
+    );
+  }
 
   return result;
 }
@@ -528,6 +599,7 @@ export interface EditQuestionChanges {
   tests_error?: string | null;
   provenance?: "tutor_authored" | "textbook_sourced" | null;
   node_key?: string | null;
+  node_keys?: string[] | null;
 }
 
 export interface EditQuestionResult {
@@ -589,6 +661,22 @@ export function editQuestion(
   const invalid = validateQuestionInput(db, merged);
   if (invalid) throw new DomainError(invalid.reason, invalid.detail);
 
+  // Only what the caller actually sent is held to the node-key grammar — an
+  // item's already-stored keys (including anything 018 backfilled from the
+  // old free-form column) must not make an unrelated edit unsavable.
+  const badNodeKeys = validateNodeKeys({ node_key: changes.node_key, node_keys: changes.node_keys });
+  if (badNodeKeys) throw new DomainError(badNodeKeys.reason, badNodeKeys.detail);
+
+  // node_keys replaces the whole set; a singular node_key on its own replaces
+  // it with that one key; neither given leaves the set as it is.
+  const nextNodeKeys =
+    changes.node_keys !== undefined
+      ? resolveNodeKeys({ node_key: changes.node_key, node_keys: changes.node_keys })
+      : changes.node_key !== undefined
+        ? resolveNodeKeys({ node_key: changes.node_key })
+        : getNodeKeys(db, id);
+  const primary = nextNodeKeys[0] ?? null;
+
   const hasAttempts = db.prepare("SELECT 1 FROM response WHERE question_id = ? LIMIT 1").get(id);
 
   if (hasAttempts) {
@@ -620,9 +708,12 @@ export function editQuestion(
         claim_rung: merged.claim_rung ?? null,
         tests_error: merged.tests_error ?? null,
         provenance: merged.provenance ?? null,
-        node_key: merged.node_key ?? null,
+        node_key: primary,
+        ephemeral: current.ephemeral,
+        session_id: current.session_id,
       });
       replaceTags(db, newId, merged.tags);
+      replaceNodeKeys(db, newId, nextNodeKeys);
       if (current.type === "mc") replaceChoices(db, newId, merged.choices!);
       db.prepare(
         "UPDATE question SET retired_at = datetime('now'), retired_reason = ? WHERE id = ?"
@@ -668,9 +759,10 @@ export function editQuestion(
       claim_rung: merged.claim_rung ?? null,
       tests_error: merged.tests_error ?? null,
       provenance: merged.provenance ?? null,
-      node_key: merged.node_key ?? null,
+      node_key: primary,
     });
     if (changes.tags) replaceTags(db, id, changes.tags);
+    replaceNodeKeys(db, id, nextNodeKeys);
     if (changes.choices && current.type === "mc") replaceChoices(db, id, changes.choices);
     db.exec("COMMIT");
   } catch (err) {
@@ -717,6 +809,9 @@ export interface QuestionSummary {
   tests_error: string | null;
   provenance: string | null;
   node_key: string | null;
+  node_keys: string[];
+  ephemeral: boolean;
+  session_id: string | null;
 }
 
 export interface SearchQuestionsParams {
@@ -728,6 +823,13 @@ export interface SearchQuestionsParams {
   calculator_policy?: CalculatorPolicy;
   include_retired?: boolean;
   latest_version_only?: boolean;
+  // Exact match, or a prefix match when the value ends with ":" —
+  // "node:ebbing11e:2.4:" matches every key under that section.
+  node_key?: string;
+  session_id?: string;
+  // Ephemeral items are written for one live moment and stay out of every
+  // listing unless asked for by name.
+  include_ephemeral?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -741,6 +843,16 @@ export function searchQuestions(
   let joinFts = "";
 
   if (!params.include_retired) clauses.push("q.retired_at IS NULL");
+  if (!params.include_ephemeral) clauses.push("q.ephemeral = 0");
+  if (params.session_id) {
+    clauses.push("q.session_id = ?");
+    args.push(params.session_id);
+  }
+  if (params.node_key) {
+    const filter = nodeKeyFilterClause(params.node_key);
+    clauses.push(filter.sql);
+    args.push(...filter.params);
+  }
   if (params.latest_version_only ?? true) {
     clauses.push(
       "NOT EXISTS (SELECT 1 FROM question q2 WHERE q2.lineage_id = q.lineage_id AND q2.version > q.version)"
@@ -792,7 +904,7 @@ export function searchQuestions(
               (q.graph_spec IS NOT NULL) AS has_graph,
               q.desmos_allowed AS desmos_allowed,
               (q.document_id IS NOT NULL) AS has_document,
-              q.claim_rung, q.tests_error, q.provenance, q.node_key
+              q.claim_rung, q.tests_error, q.provenance, q.node_key, q.ephemeral, q.session_id
        FROM question q ${joinFts}
        ${fullWhere}
        ORDER BY q.created_at DESC
@@ -800,8 +912,8 @@ export function searchQuestions(
     )
     .all(...(([...args, ...tagClause.params, limit, offset]) as any[])) as unknown as (Omit<
     QuestionSummary,
-    "tags" | "has_graph" | "desmos_allowed" | "has_document"
-  > & { has_graph: number; desmos_allowed: number; has_document: number })[];
+    "tags" | "has_graph" | "desmos_allowed" | "has_document" | "node_keys" | "ephemeral"
+  > & { has_graph: number; desmos_allowed: number; has_document: number; ephemeral: number })[];
 
   const tagsByQuestion = db.prepare("SELECT tag_slug FROM question_tag WHERE question_id = ?");
   const questions = rows.map((r) => ({
@@ -809,14 +921,18 @@ export function searchQuestions(
     has_graph: Boolean(r.has_graph),
     desmos_allowed: Boolean(r.desmos_allowed),
     has_document: Boolean(r.has_document),
+    ephemeral: r.ephemeral === 1,
     tags: (tagsByQuestion.all(r.id) as { tag_slug: string }[]).map((t) => t.tag_slug),
+    ...nodeKeyFields(db, r.id),
   }));
 
   return { total, questions };
 }
 
-export interface QuestionDetail extends Omit<QuestionRow, "desmos_allowed"> {
+export interface QuestionDetail extends Omit<QuestionRow, "desmos_allowed" | "ephemeral"> {
   desmos_allowed: boolean;
+  ephemeral: boolean;
+  node_keys: string[];
   tags: string[];
   choices: { id: string; body: string; is_correct: boolean; ordinal: number; misconception: string | null }[];
 }
@@ -835,7 +951,14 @@ export function getQuestionDetail(db: DatabaseSync, id: string): QuestionDetail 
       .all(id) as { id: string; body: string; is_correct: number; ordinal: number; misconception: string | null }[]
   ).map((c) => ({ ...c, is_correct: c.is_correct === 1 }));
 
-  return { ...question, desmos_allowed: Boolean(question.desmos_allowed), tags, choices };
+  return {
+    ...question,
+    desmos_allowed: Boolean(question.desmos_allowed),
+    ephemeral: question.ephemeral === 1,
+    ...nodeKeyFields(db, id),
+    tags,
+    choices,
+  };
 }
 
 export interface DocumentMarkerSummary {

@@ -3,7 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 import { resolveTemplateDraw, getEligibleQuestions, type DrawResult, type EligibleQuestion } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
-import { assertSessionOpen } from "./sessions.js";
+import { assertSessionOpen, sessionIsOpen, sessionRevealDefault, type Reveal } from "./sessions.js";
+import { nodeKeyFields } from "./nodeKeys.js";
 
 // Unsubmitted attempts older than this many hours are considered abandoned.
 // Swept lazily (no background timer) whenever attempts are read or created.
@@ -151,6 +152,7 @@ export function questionSnapshot(
     document_anchor_start: q.document_anchor_start,
     document_anchor_end: q.document_anchor_end,
     document_marker_offset: q.document_marker_offset,
+    ...nodeKeyFields(db, questionId),
     choices: choices.map((c) => ({
       id: c.id,
       body: c.body,
@@ -193,6 +195,9 @@ export type CreateAttemptInput =
       source: "adhoc";
       question_ids: string[];
       delivery_mode: "app_live" | "chat_quick_check";
+      // Whether the learner sees the answer key on submit ('immediate') or
+      // only once the session ends ('deferred'). Defaults to immediate.
+      reveal?: Reveal;
       // Optional by design: an adhoc attempt with session_id IS NULL behaves
       // exactly as it did before sessions existed. See migration 010.
       session_id?: string;
@@ -278,9 +283,9 @@ export function createAttempt(
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO attempt (id, node_id, source, delivery_mode, session_id, started_at)
-       VALUES (?, ?, 'adhoc', ?, ?, datetime('now'))`
-    ).run(attemptId, input.node_id, input.delivery_mode, input.session_id ?? null);
+      `INSERT INTO attempt (id, node_id, source, delivery_mode, session_id, reveal, started_at)
+       VALUES (?, ?, 'adhoc', ?, ?, ?, datetime('now'))`
+    ).run(attemptId, input.node_id, input.delivery_mode, input.session_id ?? null, input.reveal ?? "immediate");
 
     const insertResponse = db.prepare(
       "INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES (?, ?, ?, ?)"
@@ -310,6 +315,8 @@ export interface PresentItemInput {
   // standalone, but every real tutor-driven call supplies the session it
   // belongs to, so the app's live screen only ever surfaces this session's item.
   session_id?: string;
+  // Overrides the session's reveal_default for this one item.
+  reveal?: Reveal;
 }
 
 export function presentItem(
@@ -330,12 +337,27 @@ export function presentItem(
     throw new DomainError("selection_required", "present_item requires either question_id or tag_query.");
   }
 
+  // An ephemeral item belongs to the session it was written in and is
+  // presentable only while that session is still running.
+  const ephemeral = db.prepare("SELECT ephemeral, session_id FROM question WHERE id = ?").get(questionId) as
+    | { ephemeral: number; session_id: string | null }
+    | undefined;
+  if (ephemeral?.ephemeral === 1) {
+    if (!ephemeral.session_id) {
+      throw new DomainError("not_found", `Ephemeral question "${questionId}" has no session and cannot be presented.`);
+    }
+    assertSessionOpen(db, ephemeral.session_id);
+  }
+
+  const reveal = input.reveal ?? (input.session_id ? sessionRevealDefault(db, input.session_id) : "immediate");
+
   const { attempt_id, questions } = createAttempt(db, {
     node_id: input.node_id,
     source: "adhoc",
     question_ids: [questionId],
     delivery_mode: "app_live",
     session_id: input.session_id,
+    reveal,
   });
 
   const response = db.prepare("SELECT id FROM response WHERE attempt_id = ?").get(attempt_id) as { id: string };
@@ -498,6 +520,10 @@ export type AnsweredOutcome = {
   answered_at: string | null;
   explanation: string | null;
   model_answer: string | null;
+  // Which teachable idea this item was targeting, so the tutor can file the
+  // outcome without a second read (§3.10). Primary first.
+  node_key: string | null;
+  node_keys: string[];
 };
 
 export type ItemOutcome =
@@ -574,6 +600,7 @@ export function getItemOutcome(db: DatabaseSync, responseId: string): ItemOutcom
     answered_at: row.answered_at,
     explanation: question.explanation,
     model_answer: question.model_answer,
+    ...nodeKeyFields(db, row.question_id),
   };
 }
 
@@ -628,6 +655,7 @@ interface AttemptRow {
   template_id: string | null;
   daily_draw_id: string | null;
   session_id: string | null;
+  reveal: Reveal;
   started_at: string;
   submitted_at: string | null;
   abandoned_at: string | null;
@@ -665,7 +693,18 @@ interface GradeRow {
   graded_at: string;
 }
 
-export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<string, unknown> {
+// Who is reading. 'learner' is the app — the Take/Review screens and the
+// submit response — and is the only viewer a deferred attempt withholds from.
+// 'tutor' is every MCP tool: the tutor is not the learner, and a reveal
+// policy written for the learner's screen must never blind the tutor to what
+// its own item did (§3.1).
+export type AttemptViewer = "learner" | "tutor";
+
+export function getAttemptDetail(
+  db: DatabaseSync,
+  attemptId: string,
+  opts: { viewer?: AttemptViewer } = {}
+): Record<string, unknown> {
   sweepAbandonedAttempts(db);
 
   const attempt = db.prepare("SELECT * FROM attempt WHERE id = ?").get(attemptId) as unknown as
@@ -673,7 +712,17 @@ export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<st
     | undefined;
   if (!attempt) throw new DomainError("not_found", `Attempt "${attemptId}" does not exist.`);
 
-  const revealAnswer = attempt.submitted_at !== null;
+  const viewer = opts.viewer ?? "tutor";
+  // A deferred attempt holds its key back from the learner until the session
+  // it belongs to ends. With no session there is nothing to wait for, so it
+  // reveals on submit exactly like an immediate one.
+  const deferredHold =
+    viewer === "learner" &&
+    attempt.reveal === "deferred" &&
+    attempt.session_id !== null &&
+    sessionIsOpen(db, attempt.session_id);
+
+  const revealAnswer = !deferredHold && attempt.submitted_at !== null;
   const responses = db
     .prepare("SELECT * FROM response WHERE attempt_id = ? ORDER BY ordinal")
     .all(attemptId) as unknown as ResponseRow[];
@@ -686,6 +735,9 @@ export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<st
     id: attempt.id,
     node_id: attempt.node_id,
     source: attempt.source,
+    reveal: attempt.reveal,
+    // Whether this payload carries the answer key at all.
+    revealed: revealAnswer,
     template_id: attempt.template_id,
     daily_draw_id: attempt.daily_draw_id,
     session_id: attempt.session_id,
@@ -721,11 +773,19 @@ export function getAttemptDetail(db: DatabaseSync, attemptId: string): Record<st
         confidence_numeric: confidenceNumeric(r.confidence),
         idk: r.idk === 1,
         misapplied_method: r.misapplied_method,
-        diagnosis: r.diagnosis,
-        outcome: deriveOutcome(r.idk === 1, grade ? grade.score : null),
-        grade: grade
-          ? { grader: grade.grader, score: grade.score, feedback: grade.feedback, graded_at: grade.graded_at }
-          : null,
+        // The verdict itself — outcome, score, the tutor's diagnosis — is
+        // answer-key material under a deferred reveal, so it is omitted
+        // outright rather than nulled: an absent key reads as "not yet",
+        // a null would read as "no verdict".
+        ...(deferredHold
+          ? {}
+          : {
+              diagnosis: r.diagnosis,
+              outcome: deriveOutcome(r.idk === 1, grade ? grade.score : null),
+              grade: grade
+                ? { grader: grade.grader, score: grade.score, feedback: grade.feedback, graded_at: grade.graded_at }
+                : null,
+            }),
       };
     }),
   };

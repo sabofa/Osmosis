@@ -37,7 +37,9 @@ export interface ReadmeResult {
 // biology and chemistry reads this exactly once instead of twice.
 export function readme(db: DatabaseSync): ReadmeResult {
   const bankSize = (
-    db.prepare("SELECT COUNT(*) AS n FROM question WHERE retired_at IS NULL").get() as { n: number }
+    db.prepare("SELECT COUNT(*) AS n FROM question WHERE retired_at IS NULL AND ephemeral = 0").get() as {
+      n: number;
+    }
   ).n;
   const lastWrite = db
     .prepare(

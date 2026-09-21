@@ -2,12 +2,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "./errors.js";
 import { buildTagQueryClause, type TagQuery } from "./tagQuery.js";
 import { bestGuessCorrect, confidenceNumeric, deriveOutcome, type Confidence } from "./attempts.js";
+import { nodeKeyFields } from "./nodeKeys.js";
 
 // Every per-response row get_results hands back, at either scope. The binding
 // rule (spec §2): anything the response accepted on input is readable here,
 // and the outcome label is the same deriveOutcome the attempt paths use — an
 // idk is dont_know, never incorrect, and a null score is never a zero.
 interface ResponseRecordRow {
+  question_id: string;
   score: number | null;
   grader: string | null;
   response_text: string | null;
@@ -21,7 +23,7 @@ interface ResponseRecordRow {
   answered_at: string | null;
 }
 
-const RESPONSE_RECORD_COLUMNS = `rs.score, rs.grader, r.response_text, r.selected_choice_id, r.best_guess_choice_id,
+const RESPONSE_RECORD_COLUMNS = `r.question_id, rs.score, rs.grader, r.response_text, r.selected_choice_id, r.best_guess_choice_id,
                 r.idk, r.confidence, r.misapplied_method, r.diagnosis, r.elapsed_ms, r.answered_at`;
 
 function responseRecord(db: DatabaseSync, r: ResponseRecordRow, chosenMisconception: string | null) {
@@ -41,6 +43,9 @@ function responseRecord(db: DatabaseSync, r: ResponseRecordRow, chosenMisconcept
     grader: r.grader,
     outcome: deriveOutcome(r.idk === 1, r.score),
     answered_at: r.answered_at,
+    // Which teachable idea the item was targeting (§3.10), so an outcome can
+    // be filed without a second read.
+    ...nodeKeyFields(db, r.question_id),
   };
 }
 
@@ -280,7 +285,7 @@ function attemptScope(db: DatabaseSync, params: GetResultsParams) {
   // per-response record too — without it a distractor rationale is write-only
   // for anyone reading results rather than one attempt at a time.
   const responsesFor = db.prepare(
-    `SELECT ${RESPONSE_RECORD_COLUMNS}, r.ordinal, rs.question_id
+    `SELECT ${RESPONSE_RECORD_COLUMNS}, r.ordinal
      FROM response_score rs
      JOIN response r ON r.id = rs.response_id
      WHERE r.attempt_id = ?

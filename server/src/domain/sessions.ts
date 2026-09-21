@@ -8,15 +8,23 @@ import { DomainError } from "./errors.js";
 // one entry the app can list and Ben can look back at. See migration 010.
 // ----------------------------------------------------------------------------
 
+export type Reveal = "immediate" | "deferred";
+
 export interface CreateSessionInput {
   name: string;
   tag_slug?: string | null;
+  // What every item presented in this session does with its answer key
+  // unless present_item says otherwise: 'immediate' (today's behaviour — the
+  // learner sees it on submit) or 'deferred' (they see it when the session
+  // ends, so an early item's key can't teach the next one).
+  reveal_default?: Reveal | null;
 }
 
 export interface SessionRow {
   id: string;
   name: string;
   tag_slug: string | null;
+  reveal_default: Reveal;
   created_at: string;
   ended_at: string | null;
 }
@@ -24,7 +32,7 @@ export interface SessionRow {
 export function createSession(
   db: DatabaseSync,
   input: CreateSessionInput
-): { id: string; name: string; tag_slug: string | null } {
+): { id: string; name: string; tag_slug: string | null; reveal_default: Reveal } {
   if (!input.name || input.name.trim() === "") {
     throw new DomainError("invalid_name", "A session needs a non-empty name.");
   }
@@ -33,13 +41,19 @@ export function createSession(
     if (!tag) throw new DomainError("not_found", `Tag "${input.tag_slug}" does not exist.`);
   }
 
+  const revealDefault: Reveal = input.reveal_default ?? "immediate";
+  if (revealDefault !== "immediate" && revealDefault !== "deferred") {
+    throw new DomainError("invalid_reveal", "reveal_default must be 'immediate' or 'deferred'.");
+  }
+
   const id = uuidv4();
-  db.prepare("INSERT INTO tutor_session (id, name, tag_slug) VALUES (?, ?, ?)").run(
+  db.prepare("INSERT INTO tutor_session (id, name, tag_slug, reveal_default) VALUES (?, ?, ?, ?)").run(
     id,
     input.name,
-    input.tag_slug ?? null
+    input.tag_slug ?? null,
+    revealDefault
   );
-  return { id, name: input.name, tag_slug: input.tag_slug ?? null };
+  return { id, name: input.name, tag_slug: input.tag_slug ?? null, reveal_default: revealDefault };
 }
 
 // Every write that attaches something to a session (present_item,
@@ -57,12 +71,31 @@ export function assertSessionOpen(db: DatabaseSync, id: string): void {
   }
 }
 
+// present_item's fallback when the call itself doesn't name a reveal.
+export function sessionRevealDefault(db: DatabaseSync, id: string): Reveal {
+  const row = db.prepare("SELECT reveal_default FROM tutor_session WHERE id = ?").get(id) as
+    | { reveal_default: Reveal }
+    | undefined;
+  return row?.reveal_default ?? "immediate";
+}
+
+// Whether a session is still running — the gate on a deferred attempt's key.
+export function sessionIsOpen(db: DatabaseSync, id: string): boolean {
+  const row = db.prepare("SELECT ended_at FROM tutor_session WHERE id = ?").get(id) as
+    | { ended_at: string | null }
+    | undefined;
+  return row !== undefined && row.ended_at === null;
+}
+
 export interface EndSessionSummary {
   presented: number;
   answered: number;
   abandoned: number;
   dont_know: number;
   paused_now: false;
+  // Questions written for this session alone, retired here — they were never
+  // part of the bank and must not outlive the moment they were written for.
+  retired_ephemeral: number;
 }
 
 // The tutor's CLOSE step cross-checks its own count against this (spec §3.7),
@@ -84,6 +117,13 @@ export function endSession(
     `UPDATE attempt SET abandoned_at = datetime('now'), paused_at = NULL
      WHERE session_id = ? AND delivery_mode = 'app_live' AND submitted_at IS NULL AND abandoned_at IS NULL`
   ).run(id);
+
+  const retiredEphemeral = db
+    .prepare(
+      `UPDATE question SET retired_at = datetime('now'), retired_reason = 'ephemeral_session_ended'
+       WHERE session_id = ? AND ephemeral = 1 AND retired_at IS NULL`
+    )
+    .run(id).changes as number;
 
   const counts = db
     .prepare(
@@ -118,6 +158,7 @@ export function endSession(
       abandoned: counts.abandoned ?? 0,
       dont_know: dontKnow,
       paused_now: false,
+      retired_ephemeral: Number(retiredEphemeral),
     },
   };
 }
@@ -134,7 +175,7 @@ export function listSessions(
   const offset = opts.offset ?? 0;
   const sessions = db
     .prepare(
-      `SELECT id, name, tag_slug, created_at, ended_at
+      `SELECT id, name, tag_slug, reveal_default, created_at, ended_at
        FROM tutor_session
        ORDER BY created_at DESC, id DESC
        LIMIT ? OFFSET ?`
@@ -150,7 +191,7 @@ export function listSessions(
 // app's template list already knows how to render.
 export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<string, unknown> {
   const session = db
-    .prepare("SELECT id, name, tag_slug, created_at, ended_at FROM tutor_session WHERE id = ?")
+    .prepare("SELECT id, name, tag_slug, reveal_default, created_at, ended_at FROM tutor_session WHERE id = ?")
     .get(sessionId) as SessionRow | undefined;
   if (!session) throw new DomainError("not_found", `Session "${sessionId}" does not exist.`);
 
@@ -203,6 +244,7 @@ export function getSessionDetail(db: DatabaseSync, sessionId: string): Record<st
     id: session.id,
     name: session.name,
     tag_slug: session.tag_slug,
+    reveal_default: session.reveal_default,
     created_at: session.created_at,
     ended_at: session.ended_at,
     attempts: attempts.map((a) => ({

@@ -79,7 +79,9 @@ const questionInputShape = z.object({
   provenance: z.enum(["tutor_authored", "textbook_sourced"]).nullable().optional()
     .describe("Where this item's content came from — distinct from created_by (who wrote the JSON)."),
   node_key: z.string().nullable().optional()
-    .describe("A stable string identifying the specific teachable idea this item targets, finer-grained than a tag. You mint and own these — Osmosis stores them but doesn't interpret their structure."),
+    .describe("The primary node key: a stable string identifying the specific teachable idea this item targets, finer-grained than a tag. Shorthand for node_keys with one entry; if you pass both, it must equal node_keys[0] or the question is rejected as node_key_mismatch."),
+  node_keys: z.array(z.string()).nullable().optional()
+    .describe("Every teachable idea this item targets, the first being primary. Each must start with \"node:\" and follow the tag slug grammar (lowercase ascii segments joined by \":\", words joined by \"_\" or \".\"), e.g. \"node:ebbing11e:2.4:atomic_weight\" — anything else rejects that question as invalid_node_key."),
 });
 
 function sleep(ms: number): Promise<void> {
@@ -217,7 +219,9 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "search_questions",
     {
       description:
-        "Search the question bank. Omits explanation/rubric to keep listings cheap. Paginated: pass limit/offset to page past the default 50; response includes has_more (and total).",
+        "Search the question bank. Omits explanation/rubric to keep listings cheap. Every row carries node_keys " +
+        "(primary first) and node_key (the primary). Ephemeral items are excluded unless include_ephemeral: true. " +
+        "Paginated: pass limit/offset to page past the default 50; response includes has_more (and total).",
       inputSchema: {
         tag_query: tagQueryShape,
         text: z.string().optional(),
@@ -227,6 +231,14 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
         calculator_policy: z.enum(["allowed", "forbidden", "n_a"]).optional(),
         include_retired: z.boolean().optional(),
         latest_version_only: z.boolean().optional(),
+        node_key: z.string().optional().describe(
+          "Match items by node key: exactly, or — when the value ends with ':' — by prefix, so " +
+            "\"node:ebbing11e:2.4:\" matches every key under that section."
+        ),
+        session_id: z.string().optional().describe("Only questions written for this session (see create_questions' session_id)."),
+        include_ephemeral: z.boolean().optional().describe(
+          "Include session-only questions, which are otherwise excluded from every listing."
+        ),
         limit: z.number().optional(),
         offset: z.number().optional(),
       },
@@ -246,7 +258,9 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "get_question",
     {
       description:
-        "Read one question in full, including explanation, rubric, and graph_spec — search_questions omits these to stay cheap. Call this before editing a question you don't already have the full content of in this session.",
+        "Read one question in full, including explanation, rubric, graph_spec, node_keys (primary first) and " +
+        "whether it is ephemeral (session-only) — search_questions omits or excludes these. Call this before " +
+        "editing a question you don't already have the full content of in this session.",
       inputSchema: { id: z.string() },
     },
     async ({ id }) => {
@@ -261,12 +275,31 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
   registerTool(
     "create_questions",
     {
-      description: "Batch-write questions into the bank. Rejections are per-question; valid siblings still commit. Flags possible duplicates without rejecting them. Also flags (non-blocking) an mc question with other than 4 choices, per readme()'s prompt_conventions.",
-      inputSchema: { questions: z.array(questionInputShape) },
+      description:
+        "Batch-write questions into the bank. Rejections are per-question; valid siblings still commit. Flags possible " +
+        "duplicates without rejecting them. Also flags (non-blocking) an mc question with other than 4 choices, per " +
+        "readme()'s prompt_conventions. ephemeral: true (which requires session_id) writes items for this session " +
+        "alone — they stay out of every draw, search, and bank count, are presentable by id while the session runs, " +
+        "and end_session retires them. Pass idempotency_key to make a retry safe: a repeat of a key already seen " +
+        "writes nothing and returns the first call's result verbatim with replayed: true.",
+      inputSchema: {
+        questions: z.array(questionInputShape),
+        ephemeral: z.boolean().optional().describe(
+          "Batch-level: these questions exist for this session only. Requires session_id; rejected as " +
+            "ephemeral_requires_session without one."
+        ),
+        session_id: z.string().optional().describe(
+          "The session from create_session these questions belong to. Required with ephemeral: true."
+        ),
+        idempotency_key: z.string().max(128).optional().describe(
+          "Your own id for this batch, up to 128 characters. Repeating it replays the stored result instead of " +
+            "writing the batch a second time."
+        ),
+      },
     },
-    async ({ questions }) => {
+    async ({ questions, ephemeral, session_id, idempotency_key }) => {
       try {
-        return ok(createQuestions(db, questions));
+        return ok(createQuestions(db, questions, { ephemeral, session_id, idempotency_key }));
       } catch (err) {
         return fail(err);
       }
@@ -311,7 +344,9 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
           provenance: z.enum(["tutor_authored", "textbook_sourced"]).nullable().optional()
             .describe("Where this item's content came from — distinct from created_by (who wrote the JSON)."),
           node_key: z.string().nullable().optional()
-            .describe("A stable string identifying the specific teachable idea this item targets, finer-grained than a tag. You mint and own these — Osmosis stores them but doesn't interpret their structure."),
+            .describe("Replaces the whole node-key set with this one primary key. Pass node_keys instead to set several."),
+          node_keys: z.array(z.string()).nullable().optional()
+            .describe("Replaces the item's node keys, first being primary. Same grammar as create_questions; an invalid entry is rejected as invalid_node_key."),
         }),
       },
     },
@@ -577,7 +612,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "present_item",
     {
       description:
-        "Create a live item for the learner to answer in the Osmosis app. Returns immediately with an attempt/response id — the item is NOT rendered in this conversation. Call await_item_outcome afterward to learn what happened once the learner answers in the app. Either pass question_id for a specific item you authored, or tag_query to let Osmosis pick an eligible one.",
+        "Create a live item for the learner to answer in the Osmosis app. The returned question snapshot carries node_keys/node_key. Returns immediately with an attempt/response id — the item is NOT rendered in this conversation. Call await_item_outcome afterward to learn what happened once the learner answers in the app. Either pass question_id for a specific item you authored, or tag_query to let Osmosis pick an eligible one.",
       inputSchema: {
         question_id: z.string().optional(),
         tag_query: tagQueryShape,
@@ -585,11 +620,15 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
           "The session id from create_session. Always call create_session first and pass its id here, so " +
             "the app's live screen for that session surfaces this item and everything groups under one entry."
         ),
+        reveal: z.enum(["immediate", "deferred"]).optional().describe(
+          "Overrides the session's reveal_default for this item: 'immediate' shows the learner the answer key on " +
+            "submit, 'deferred' holds it back until end_session. Defaults to the session's setting, or immediate."
+        ),
       },
     },
-    async ({ question_id, tag_query, session_id }) => {
+    async ({ question_id, tag_query, session_id, reveal }) => {
       try {
-        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id }));
+        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id, reveal }));
       } catch (err) {
         return fail(err);
       }
@@ -600,7 +639,7 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
     "await_item_outcome",
     {
       description:
-        "Wait for the learner to answer the item from present_item, up to timeout_s seconds (default 25, clamped to 1..25). Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), status: 'paused' with paused_at if the learner stepped away (it resumes when they answer), or status: 'pending' if they haven't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation. The answered record carries outcome (correct|partial|incorrect|dont_know|ungraded), score with the grader that produced it, selected_choice_id with its chosen_misconception, best_guess_choice_id with best_guess_correct (an idk's guess is recorded, never scored), response_text, confidence with confidence_numeric (1/3/5), idk, misapplied_method, diagnosis, elapsed_ms and answered_at.",
+        "Wait for the learner to answer the item from present_item, up to timeout_s seconds (default 25, clamped to 1..25). Returns the outcome once answered, status: 'abandoned' if the item timed out unanswered (stop waiting — it will never resolve), status: 'paused' with paused_at if the learner stepped away (it resumes when they answer), or status: 'pending' if they haven't answered yet in that window — call this again to keep waiting, or come back to it later in the conversation. The answered record carries outcome (correct|partial|incorrect|dont_know|ungraded), score with the grader that produced it, selected_choice_id with its chosen_misconception, best_guess_choice_id with best_guess_correct (an idk's guess is recorded, never scored), response_text, confidence with confidence_numeric (1/3/5), idk, misapplied_method, diagnosis, elapsed_ms and answered_at, plus node_keys (primary first) and node_key for the idea the item targets.",
       inputSchema: {
         response_id: z.string(),
         timeout_s: z
@@ -685,11 +724,19 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
         "Start a new tutoring session. Everything you present live afterward, and any session-specific test you " +
         "create, should be tagged with the returned session id so it groups together in the app under one 'Live' entry. " +
         "`tag_slug` must already exist (create_tag first); an unknown slug is rejected with not_found.",
-      inputSchema: { name: z.string(), tag_slug: z.string().optional() },
+      inputSchema: {
+        name: z.string(),
+        tag_slug: z.string().optional(),
+        reveal_default: z.enum(["immediate", "deferred"]).optional().describe(
+          "What items in this session do with their answer key on the learner's screen: 'immediate' (default — " +
+            "shown on submit, today's behaviour) or 'deferred' (held back until end_session, so an early item's " +
+            "key can't teach the next one). Your own reads are never affected either way."
+        ),
+      },
     },
-    async ({ name, tag_slug }) => {
+    async ({ name, tag_slug, reveal_default }) => {
       try {
-        return ok(createSession(db, { name, tag_slug }));
+        return ok(createSession(db, { name, tag_slug, reveal_default }));
       } catch (err) {
         return fail(err);
       }
@@ -702,7 +749,8 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
       description:
         "Mark a tutoring session finished and return its summary — presented / answered / abandoned / dont_know " +
         "counts over the session's live items, plus paused_now. Anything still unanswered is marked abandoned " +
-        "here, so the counts are final. Its history stays readable via get_session afterward.",
+        "here, so the counts are final, and any ephemeral question written for this session is retired " +
+        "(retired_ephemeral counts them). Its history stays readable via get_session afterward.",
       inputSchema: { session_id: z.string() },
     },
     async ({ session_id }) => {
@@ -765,12 +813,13 @@ export function registerTools(server: McpServer, db: DatabaseSync, uploadsDir: s
         "answered_at, the derived outcome and the live grade with its grader. Correctness — chosen_misconception " +
         "and best_guess_correct — stays withheld until the attempt is submitted. The attempt itself carries " +
         "paused_at/paused_ms. This is the attempt-scope read; get_results stays aggregate. attempt_id comes from " +
-        "present_item, quick_check, get_session, or get_results(scope: 'attempt').",
+        "present_item, quick_check, get_session, or get_results(scope: 'attempt'). You read as the tutor, not the " +
+        "learner: a deferred-reveal attempt withholds its key from the app's screens, never from this tool.",
       inputSchema: { attempt_id: z.string() },
     },
     async ({ attempt_id }) => {
       try {
-        return ok(getAttemptDetail(db, attempt_id));
+        return ok(getAttemptDetail(db, attempt_id, { viewer: "tutor" }));
       } catch (err) {
         return fail(err);
       }
