@@ -66,8 +66,10 @@ export function listParentTagStats(db: DatabaseSync, viewer: Viewer = "learner")
 export interface TagHistory {
   tag: { slug: string; label: string; description: string | null; parent_slug: string | null };
   overall: { responses: number; graded: number; mean_score: number | null; misses: number; last_seen: string | null };
-  // One point per day with at least one graded response, oldest first.
-  points: { date: string; mean_score: number; responses: number }[];
+  // One point per submitted attempt that touched the tag, oldest first —
+  // per attempt, not per day, so an afternoon of work draws a line rather
+  // than nudging a single dot.
+  points: { at: string; mean_score: number; responses: number }[];
   children: { tag_slug: string; label: string; responses: number; graded: number; mean_score: number | null; misses: number }[];
 }
 
@@ -94,11 +96,11 @@ export function getTagHistory(db: DatabaseSync, slug: string, opts: { days?: num
 
   const points = db
     .prepare(
-      `SELECT day AS date, AVG(score) AS mean_score, COUNT(*) AS responses
-       FROM (SELECT DISTINCT rs.response_id, rs.score, date(a.submitted_at) AS day
+      `SELECT at, AVG(score) AS mean_score, COUNT(*) AS responses
+       FROM (SELECT DISTINCT rs.response_id, rs.score, a.id AS attempt_id, a.submitted_at AS at
              ${RESPONSE_BASE(viewer)} AND ${subtree}
                AND rs.score IS NOT NULL AND a.submitted_at >= datetime('now', '-' || ? || ' days'))
-       GROUP BY day ORDER BY day ASC`
+       GROUP BY attempt_id ORDER BY at ASC`
     )
     .all(...subtreeParams, days) as TagHistory["points"];
 

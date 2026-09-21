@@ -778,7 +778,7 @@ export async function getResultsParents(): Promise<{ parents: ParentTagStat[] }>
 export interface TagHistory {
   tag: { slug: string; label: string; description: string | null; parent_slug: string | null }
   overall: { responses: number; graded: number; mean_score: number | null; misses: number; last_seen: string | null }
-  points: { date: string; mean_score: number; responses: number }[]
+  points: { at: string; mean_score: number; responses: number }[]
   children: { tag_slug: string; label: string; responses: number; graded: number; mean_score: number | null; misses: number }[]
 }
 

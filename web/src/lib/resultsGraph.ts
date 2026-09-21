@@ -1,33 +1,35 @@
-// A tag's score over time as a graph-engine spec: one point per day the tag
-// was practised, joined by segments, x = days before today (0 is today),
-// y = the day's mean score. The frame is held fixed so a redraw with one more
-// day does not jump.
+// A tag's score over time as a graph-engine spec: one point per submitted
+// attempt, joined by segments, x = days before now (0 is now, fractional
+// within a day), y = that attempt's mean score on the tag. The frame is
+// held fixed so a redraw with one more attempt does not jump.
 
 export interface HistoryPoint {
-  date: string // YYYY-MM-DD
+  at: string // 'YYYY-MM-DD HH:MM:SS' (UTC, as SQLite stores it) or ISO
   mean_score: number
   responses: number
 }
 
 const MS_PER_DAY = 86_400_000
 
-export function daysAgo(date: string, today: Date): number {
-  const [y, m, d] = date.split('-').map(Number)
-  const t = Date.UTC(y, m - 1, d)
-  const now = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-  return Math.round((now - t) / MS_PER_DAY)
+// Days between `at` and `now`, fractional; positive when `at` is in the past.
+export function daysAgo(at: string, now: Date): number {
+  const hasZone = /Z$/.test(at) || /[+-]\d\d:\d\d$/.test(at)
+  const iso = hasZone ? at : at.replace(' ', 'T') + 'Z'
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return 0
+  return (now.getTime() - t) / MS_PER_DAY
 }
 
-export function historySpec(points: HistoryPoint[], opts: { days?: number; today?: Date } = {}): string {
-  const today = opts.today ?? new Date()
+export function historySpec(points: HistoryPoint[], opts: { days?: number; now?: Date } = {}): string {
+  const now = opts.now ?? new Date()
   const days = opts.days ?? 90
   const xs = points
-    .map((p) => ({ x: -daysAgo(p.date, today), y: Math.round(p.mean_score * 100) / 100, n: p.responses }))
+    .map((p) => ({ x: -Math.round(daysAgo(p.at, now) * 1000) / 1000, y: Math.round(p.mean_score * 100) / 100 }))
     .filter((p) => p.x >= -days && p.x <= 0)
     .sort((a, b) => a.x - b.x)
   // The window starts a little before the first point (or the full range
-  // when there is one), and always ends today.
-  const xMin = xs.length ? Math.min(-7, xs[0].x - 2) : -days
+  // when there is none), and always ends now.
+  const xMin = xs.length ? Math.min(-7, Math.floor(xs[0].x) - 2) : -days
   const lines: string[] = [
     `@bounds: ${xMin},1,-0.05,1.05`,
     `@xstep: ${xMin <= -60 ? 14 : xMin <= -21 ? 7 : 1}`,
