@@ -111,7 +111,20 @@ export function isCollapsed(entries: StreamEntry[], index: number): boolean {
 
   if (entry.kind === 'item' && entry.reveal === 'deferred' && !entry.revealed) return true
 
-  return open !== -1 && index < open
+  return open !== -1 && index < open && !isSideBySideShow(entries, index, open)
+}
+
+// The server sorts a show ahead of an item that shares its second (shows.ts
+// `streamOrder`), which is right for the list — the tutor shows a thing and
+// then asks about it. But it also means a show presented *with* the open item,
+// or in the same second just after it, lands behind the item in the array and
+// would collapse the instant it arrived. Reason 1 above is about what came
+// before the question; a show whose timestamp is not earlier than the open
+// item's did not, so it stays open. Only shows get this: an earlier item's
+// answer key is exactly what the gate exists to hide.
+function isSideBySideShow(entries: StreamEntry[], index: number, open: number): boolean {
+  const entry = entries[index]
+  return entry.kind === 'show' && entry.at >= entries[open].at
 }
 
 // Why a stub is a stub, in the words the stub itself uses. Kept here rather
@@ -125,7 +138,9 @@ export function stubReason(entries: StreamEntry[], index: number): string | null
   if (entry.kind === 'item' && entry.reveal === 'deferred' && !entry.revealed) {
     return 'held until the session ends'
   }
-  if (open !== -1 && index < open) return 'collapsed while an item is open'
+  if (open !== -1 && index < open && !isSideBySideShow(entries, index, open)) {
+    return 'collapsed while an item is open'
+  }
   return null
 }
 

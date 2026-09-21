@@ -65,8 +65,8 @@ describe('entryKey and openItem', () => {
 describe('the reveal gate (§5.5)', () => {
   it('collapses everything before an open item and nothing from the item on', () => {
     const entries: StreamEntry[] = [
-      show({ show_id: 's1' }),
-      item({ attempt_id: 'a', status: 'answered', revealed: true }),
+      show({ show_id: 's1', at: '2026-09-21 09:58:00' }),
+      item({ attempt_id: 'a', status: 'answered', revealed: true, at: '2026-09-21 09:59:00' }),
       item({ attempt_id: 'b', status: 'pending' }),
     ]
     expect(entries.map((_, i) => isCollapsed(entries, i))).toEqual([true, true, false])
@@ -97,7 +97,7 @@ describe('the reveal gate (§5.5)', () => {
     // An unanswered deferred item is unrevealed by definition. Collapsing it
     // would hide the question Ben has just been asked.
     const entries: StreamEntry[] = [
-      show({ show_id: 's1' }),
+      show({ show_id: 's1', at: '2026-09-21 09:59:00' }),
       item({ attempt_id: 'a', status: 'pending', reveal: 'deferred', revealed: false }),
     ]
     expect(isCollapsed(entries, 1)).toBe(false)
@@ -114,6 +114,36 @@ describe('the reveal gate (§5.5)', () => {
       item({ attempt_id: 'b', status: 'paused' }),
     ]
     expect(isCollapsed(entries, 1)).toBe(false)
+    expect(isCollapsed(entries, 0)).toBe(true)
+  })
+
+  // The server sorts a show before an item that shares its second (shows.ts
+  // `streamOrder`), so a show presented *with* an item — or just after it —
+  // lands behind the open item in the list and would otherwise collapse the
+  // instant it arrived. The gate is about what came *before* the question, so
+  // a show at or after the open item's own timestamp stays open.
+  it('never collapses a show presented at or after the open item', () => {
+    const entries: StreamEntry[] = [
+      show({ show_id: 'same', at: '2026-09-21 10:00:00' }),
+      item({ attempt_id: 'a', status: 'pending', at: '2026-09-21 10:00:00' }),
+    ]
+    expect(isCollapsed(entries, 0)).toBe(false)
+    expect(stubReason(entries, 0)).toBeNull()
+
+    const earlier: StreamEntry[] = [
+      show({ show_id: 'before', at: '2026-09-21 09:59:59' }),
+      item({ attempt_id: 'a', status: 'pending', at: '2026-09-21 10:00:00' }),
+    ]
+    expect(isCollapsed(earlier, 0)).toBe(true)
+  })
+
+  it("still collapses an earlier item that shares the open item's second", () => {
+    // Only shows get the tie-break reprieve: an earlier item's answer key is
+    // exactly what the gate exists to hide.
+    const entries: StreamEntry[] = [
+      item({ attempt_id: 'a', status: 'answered', revealed: true, at: '2026-09-21 10:00:00' }),
+      item({ attempt_id: 'b', status: 'pending', at: '2026-09-21 10:00:00' }),
+    ]
     expect(isCollapsed(entries, 0)).toBe(true)
   })
 

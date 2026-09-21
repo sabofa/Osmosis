@@ -15,7 +15,7 @@ import QuestionDetail from './QuestionDetail'
 import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
 import { useKeyboard } from '../hooks/useKeyboard'
-import { KEY_HINTS, type KeyAction } from '../lib/keymap'
+import { KEY_HINTS, WRITTEN_KEY_HINTS, type KeyAction } from '../lib/keymap'
 import { createItemClock, type ItemClock } from '../lib/itemClock'
 import { formatClock, timerClass, nextTimeUpPhase, type TimeUpPhase } from '../lib/timeFormat'
 import './Take.css'
@@ -214,8 +214,12 @@ export default function Take({
   const question = response.question
   const icon = useMemo(() => iconForTags(question.tags), [question.tags])
   const hasPanel = !!question.graph_spec || !!question.desmos_allowed || !!question.document_id
+  // An idk is a recorded answer on either kind of item (§2.2) — a written
+  // "I don't know" is a claim, not an empty box.
   const answered =
-    question.type === 'mc' ? draft.selectedChoiceId !== null || draft.idk : draft.writtenText.trim().length > 0
+    question.type === 'mc'
+      ? draft.selectedChoiceId !== null || draft.idk
+      : draft.writtenText.trim().length > 0 || draft.idk
 
   // The visible question changed: the one leaving stops counting, the one
   // arriving starts, and focus follows so the keyboard map lands somewhere.
@@ -387,6 +391,14 @@ export default function Take({
       mergeSaved(answerResponse(attempt.id, response.id, { idk: false, skipped: false, elapsed_ms: ms }), 'idk')
       return
     }
+    // A written idk keeps whatever was typed: "I don't know, but here is what
+    // I do know" is the most useful thing a learner can hand a tutor, and it
+    // is not a skip — there is something in the box to read.
+    if (question.type !== 'mc') {
+      patchDraft({ idk: true })
+      mergeSaved(answerResponse(attempt.id, response.id, { idk: true, elapsed_ms: ms }), 'idk')
+      return
+    }
     patchDraft({ idk: true, selectedChoiceId: null, bestGuessChoiceId: null })
     mergeSaved(
       answerResponse(attempt.id, response.id, {
@@ -403,6 +415,28 @@ export default function Take({
   // about knowing, just nothing recorded.
   function blankAnswer() {
     const ms = markSent()
+    // On a written item there is no choice to clear — the box itself is the
+    // answer, so leaving it blank means emptying it. The debounced save of
+    // whatever was half-typed is cancelled first, or it would land after this
+    // one and un-blank the response.
+    if (question.type !== 'mc') {
+      const responseId = response.id
+      if (saveTimers.current[responseId]) {
+        clearTimeout(saveTimers.current[responseId])
+        delete saveTimers.current[responseId]
+      }
+      patchDraft({ writtenText: '', idk: false })
+      mergeSaved(
+        answerResponse(attempt.id, responseId, {
+          response_text: '',
+          idk: false,
+          skipped: true,
+          elapsed_ms: ms,
+        }),
+        'blank'
+      )
+      return
+    }
     patchDraft({ selectedChoiceId: null, idk: false, bestGuessChoiceId: null })
     mergeSaved(
       answerResponse(attempt.id, response.id, {
@@ -520,7 +554,9 @@ export default function Take({
         {questions.map((r, i) => {
           const d = drafts[i]
           const wasAnswered =
-            r.question.type === 'mc' ? d.selectedChoiceId !== null || d.idk : d.writtenText.trim().length > 0
+            r.question.type === 'mc'
+              ? d.selectedChoiceId !== null || d.idk
+              : d.writtenText.trim().length > 0 || d.idk
           let cls = 'take-dot'
           if (i === index) cls += ' current'
           else if (wasAnswered) cls += ' answered'
@@ -600,39 +636,50 @@ export default function Take({
                     )
                   })}
                 </div>
-
-                <div className="confidence-row">
-                  <span className="confidence-label">How sure are you?</span>
-                  <div className="confidence-buttons">
-                    {(['unsure', 'somewhat', 'confident'] as const).map((level) => (
-                      <button
-                        key={level}
-                        className={`confidence-btn${draft.confidence === level ? ' selected' : ''}`}
-                        onClick={() => setConfidence(level)}
-                        disabled={answeringLocked}
-                      >
-                        {level}
-                      </button>
-                    ))}
-                    <button
-                      className={`confidence-btn idk-btn${draft.idk ? ' selected' : ''}`}
-                      onClick={toggleIdk}
-                      disabled={answeringLocked}
-                    >
-                      I don't know
-                    </button>
-                  </div>
-                </div>
               </>
             ) : (
-              <textarea
-                className="written-answer"
-                placeholder="Type your answer…"
-                value={draft.writtenText}
-                onChange={(e) => setWrittenText(e.target.value)}
-                disabled={answeringLocked}
-              />
+              <>
+                {draft.idk && (
+                  <div className="best-guess-caption">
+                    You said you don't know. Anything you write is still kept — say what you do know, or
+                    leave it.
+                  </div>
+                )}
+                <textarea
+                  className="written-answer"
+                  placeholder="Type your answer…"
+                  value={draft.writtenText}
+                  onChange={(e) => setWrittenText(e.target.value)}
+                  disabled={answeringLocked}
+                />
+              </>
             )}
+
+            {/* Confidence and "I don't know" are properties of an answer, not
+                of a multiple-choice answer (§2.2, §2.4), so they sit below the
+                branch rather than inside its mc arm. */}
+            <div className="confidence-row">
+              <span className="confidence-label">How sure are you?</span>
+              <div className="confidence-buttons">
+                {(['unsure', 'somewhat', 'confident'] as const).map((level) => (
+                  <button
+                    key={level}
+                    className={`confidence-btn${draft.confidence === level ? ' selected' : ''}`}
+                    onClick={() => setConfidence(level)}
+                    disabled={answeringLocked}
+                  >
+                    {level}
+                  </button>
+                ))}
+                <button
+                  className={`confidence-btn idk-btn${draft.idk ? ' selected' : ''}`}
+                  onClick={toggleIdk}
+                  disabled={answeringLocked}
+                >
+                  I don't know
+                </button>
+              </div>
+            </div>
           </div>
 
           {paused && (
@@ -662,7 +709,7 @@ export default function Take({
             <div className="take-nav-left">
               <span className="take-nav-hint">{answered ? 'Answered' : 'Not answered yet'}</span>
               <span className="take-key-hints">
-                {question.type === 'mc' ? KEY_HINTS : 'Ctrl + Enter to move on'}
+                {question.type === 'mc' ? KEY_HINTS : WRITTEN_KEY_HINTS}
               </span>
             </div>
             <button className="nav-btn primary" onClick={() => void next()} disabled={finishing || paused}>

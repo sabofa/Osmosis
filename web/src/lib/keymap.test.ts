@@ -43,10 +43,27 @@ describe('resolveKey — the rest of the map', () => {
     expect(resolveKey({ key: 'U', shiftKey: true }, mc)).toEqual({ type: 'confidence', level: 'unsure' })
   })
 
-  it('offers confidence and idk only where they exist — not on a written item', () => {
-    expect(resolveKey({ key: 'u' }, written)).toBeNull()
-    expect(resolveKey({ key: '?', shiftKey: true }, written)).toBeNull()
-    expect(resolveKey({ key: 'b' }, written)).toBeNull()
+  // §2.2, §2.4, §7.1: confidence, idk and blank are properties of *an answer*,
+  // not of a multiple-choice answer. Only the ordinals are choice-shaped, and
+  // only they stay behind on a written item.
+  it('offers confidence, idk and blank on a written item too', () => {
+    expect(resolveKey({ key: 'u' }, written)).toEqual({ type: 'confidence', level: 'unsure' })
+    expect(resolveKey({ key: 's' }, written)).toEqual({ type: 'confidence', level: 'somewhat' })
+    expect(resolveKey({ key: 'c' }, written)).toEqual({ type: 'confidence', level: 'confident' })
+    expect(resolveKey({ key: '?', shiftKey: true }, written)).toEqual({ type: 'toggle-idk' })
+    expect(resolveKey({ key: 'b' }, written)).toEqual({ type: 'blank' })
+    expect(resolveKey({ key: 'B', shiftKey: true }, written)).toEqual({ type: 'blank' })
+  })
+
+  it('still refuses the choice ordinals on a written item — there is nothing to pick', () => {
+    for (const key of ['1', '2', '3', '4', '5']) expect(resolveKey({ key }, written)).toBeNull()
+  })
+
+  it('takes no key from a written item while the caret is in its textarea', () => {
+    const typing = { ...written, inTextField: true }
+    expect(resolveKey({ key: 'b' }, typing)).toBeNull()
+    expect(resolveKey({ key: 'u' }, typing)).toBeNull()
+    expect(resolveKey({ key: '?', shiftKey: true }, typing)).toBeNull()
   })
 
   it('advances on Space only while a recorded card is showing', () => {

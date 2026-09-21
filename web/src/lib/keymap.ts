@@ -54,8 +54,12 @@ const CONFIDENCE_KEYS: Record<string, Confidence> = {
 }
 
 // The learner-facing legend, kept next to the map it describes so the two
-// cannot drift apart.
+// cannot drift apart. The written variant drops only the ordinals: blank, idk
+// and confidence are properties of an answer, not of a choice (§2.2, §2.4).
 export const KEY_HINTS = "1–5 pick · Enter next · b blank · ? don't know · u/s/c how sure"
+
+export const WRITTEN_KEY_HINTS =
+  "Ctrl + Enter next · b blank · ? don't know · u/s/c how sure"
 
 // The stream's own legend, for when a show is the thing on screen.
 export const SHOW_KEY_HINT = 'Space to acknowledge'
@@ -86,9 +90,12 @@ export function resolveKey(event: KeyLike, ctx: KeyContext): KeyAction | null {
 
   if (event.key === 'Enter') return { type: 'submit' }
 
-  if (ctx.kind !== 'mc') return null
-
+  // The ordinals are the one part of the map that is choice-shaped: a written
+  // item has nothing numbered to pick, so they stop here. Everything below —
+  // blank, idk, confidence — is about the answer rather than about a choice,
+  // and so applies to every kind of item (§2.2, §2.4, §7.1).
   if (event.key >= '1' && event.key <= '5' && event.key.length === 1) {
+    if (ctx.kind !== 'mc') return null
     const ordinal = Number(event.key)
     return ordinal <= ctx.choiceCount ? { type: 'choice', ordinal } : null
   }
