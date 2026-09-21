@@ -54,25 +54,20 @@
   /* Home: templates and the picked template side by side (or stacked when
      there is no room), the activity heatmap across the bottom. */
   .home {
+    height: 100dvh;
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-auto-rows: auto;
-    align-content: start;
-    align-items: start;
+    grid-template-rows: minmax(0, 1fr) auto;
     gap: 12px;
   }
   .home .templates-panel {
-    max-height: 60dvh;
-    height: auto;
-  }
-  .home .templates-list {
-    flex: none;
+    min-height: 0;
   }
   .home .right-col {
     display: contents;
   }
   .home .detail-panel {
-    max-height: 60dvh;
+    min-height: 0;
     overflow-y: auto;
   }
   .home .heatmap-panel {
@@ -85,11 +80,16 @@
   }
   @media (max-width: 520px) {
     .home {
+      height: auto;
       grid-template-columns: 1fr;
+      grid-template-rows: auto;
+      align-content: start;
     }
-    .home .templates-panel,
-    .home .detail-panel {
-      max-height: none;
+    .home .templates-panel {
+      max-height: 60dvh;
+    }
+    .home .templates-list {
+      flex: none;
     }
   }
 
