@@ -1,4 +1,5 @@
 import type { FunctionTable } from '../parser/evalExpr'
+import type { FeatureKind } from '../parser/config'
 import type { Expr } from '../parser/types'
 
 export interface Vec2 {
@@ -38,6 +39,14 @@ export type SceneObject =
       color?: string | null
       labelDirection?: Vec2 | null
       maxLabelOffset?: number | null
+      // Which kind of detected feature this point is, or null/absent for an
+      // ordinary plotted point. The renderer marks each kind differently —
+      // v1 drew all of them as the same anonymous outline dot, which is why
+      // the @points modes were indistinguishable on screen.
+      feature?: FeatureKind | null
+      // True when the position is analytic or converged rather than a sampled
+      // approximation. Hover reports exact values differently (see hover.ts).
+      exact?: boolean
     }
   | { kind: 'segment'; from: Vec2; to: Vec2; dashed?: boolean; color?: string | null }
   // A batch of independent segment pairs rendered as one THREE.LineSegments

@@ -178,3 +178,52 @@ describe('buildScene', () => {
     expect(scene.objects.some((o) => o.kind === 'point')).toBe(true)
   })
 })
+
+describe('feature points', () => {
+  it('marks a parabola vertex as a local minimum at the true vertex', () => {
+    const { scene } = build('@points: extrema\ny = x^2 - 2x - 1')
+    const points = scene.objects.filter((o) => o.kind === 'point')
+    expect(points).toHaveLength(1)
+    if (points[0].kind !== 'point') throw new Error('unreachable')
+    expect(points[0].feature).toBe('local-min')
+    expect(points[0].position.x).toBeCloseTo(1, 4)
+    expect(points[0].position.y).toBeCloseTo(-2, 4)
+  })
+
+  it('distinguishes roots from extrema instead of emitting identical dots', () => {
+    const { scene } = build('@points: roots, extrema\ny = x^2 - 4')
+    const features = scene.objects
+      .filter((o) => o.kind === 'point')
+      .map((o) => (o.kind === 'point' ? o.feature : null))
+      .sort()
+    expect(features).toEqual(['local-min', 'x-intercept', 'x-intercept', 'y-intercept'])
+  })
+
+  it('emits nothing when @points is absent', () => {
+    const { scene } = build('y = x^2 - 4')
+    expect(scene.objects.filter((o) => o.kind === 'point')).toHaveLength(0)
+  })
+
+  it('finds intersections between two statements', () => {
+    const { scene } = build('@points: intersections\ny = x^2\ny = x + 2')
+    const points = scene.objects.filter((o) => o.kind === 'point')
+    expect(points).toHaveLength(2)
+    if (points[0].kind !== 'point') throw new Error('unreachable')
+    expect(points[0].feature).toBe('intersection')
+  })
+
+  // The v1 defect: a circle comes from marching squares, whose output is not
+  // in path order, so scanning consecutive entries produced a scatter of
+  // meaningless "vertices" all over the curve.
+  it('does not scatter spurious extrema over an implicit circle', () => {
+    const { scene } = build('@points: extrema\nx^2 + y^2 = 25')
+    expect(scene.objects.filter((o) => o.kind === 'point').length).toBeLessThanOrEqual(2)
+  })
+
+  it('labels coordinates when @point-labels is coords', () => {
+    const { scene } = build('@points: extrema\n@point-labels: coords\ny = x^2 - 2x - 1')
+    const point = scene.objects.find((o) => o.kind === 'point')
+    if (point?.kind !== 'point') throw new Error('unreachable')
+    expect(point.label).toMatch(/1/)
+  })
+})

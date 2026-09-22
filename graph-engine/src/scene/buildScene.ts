@@ -2,7 +2,7 @@ import type { GraphConfig } from '../parser/config'
 import { compileExpr, evalExpr, type Bindings, type FunctionTable } from '../parser/evalExpr'
 import type { Condition, Statement } from '../parser/types'
 import { traceImplicitCurve, traceImplicitRegion, type Bounds } from '../render/marchingSquares'
-import { detectFeaturePoints } from './detectFeaturePoints'
+import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './featurePoints'
 import { formatCoord } from './format'
 import type { Scene, SceneObject, Vec2 } from './types'
 
@@ -106,17 +106,10 @@ function satisfiesCondition(condition: CompiledCondition | null, t: number): boo
   return lowOk && highOk
 }
 
-// Wraps a sampled curve's points as a SceneObject, plus any requested
-// intercept/vertex feature points detected along it (see
-// scene/detectFeaturePoints.ts for the numerical approach). Feature points
-// keep their own default outline styling regardless of a custom curve color,
-// so they stay visually distinct from the curve itself.
-function curveWithFeatures(points: Vec2[], config: GraphConfig, color: string | null): SceneObject[] {
-  const objects: SceneObject[] = [{ kind: 'curve', points, color }]
-  for (const p of detectFeaturePoints(points, config.points)) {
-    objects.push({ kind: 'point', label: null, position: p, style: 'outline' })
-  }
-  return objects
+// Features are no longer derived from a curve's sampled points (see
+// featurePoints.ts for why), so this is now just "wrap the samples".
+function curveObject(points: Vec2[], color: string | null): SceneObject {
+  return { kind: 'curve', points, color }
 }
 
 function sampleExplicit(statement: Statement & { kind: 'explicit' }, bounds: Bounds, config: GraphConfig, functions: FunctionTable): SceneObject[] {
@@ -162,7 +155,7 @@ function sampleExplicit(statement: Statement & { kind: 'explicit' }, bounds: Bou
   const objects: SceneObject[] = []
   for (const segment of segments) {
     if (segment.length < 2) continue
-    objects.push(...curveWithFeatures(segment, config, statement.color))
+    objects.push(curveObject(segment, statement.color))
   }
   if (config.asymptotes) {
     // A pole's approach can itself jump by more than the threshold across
@@ -203,7 +196,7 @@ function samplePolar(statement: Statement & { kind: 'polar' }, config: GraphConf
       // skip undefined points
     }
   }
-  return curveWithFeatures(points, config, statement.color)
+  return [curveObject(points, statement.color)]
 }
 
 function sampleParametric(statement: Statement & { kind: 'parametric' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
@@ -223,7 +216,52 @@ function sampleParametric(statement: Statement & { kind: 'parametric' }, config:
       // skip undefined points
     }
   }
-  return curveWithFeatures(points, config, statement.color)
+  return [curveObject(points, statement.color)]
+}
+
+function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
+  if (config.pointLabels !== 'coords') return null
+  return `(${formatCoord(feature.position.x)}, ${formatCoord(feature.position.y)})`
+}
+
+// One pass over every explicit statement, after the curves are built. Explicit
+// y = f(x) statements are the only ones that expose a callable f, which is
+// what the analytic feature work needs; other statement kinds contribute
+// nothing here yet (conic features are a later task).
+function buildFeaturePoints(
+  statements: Statement[],
+  bounds: Bounds,
+  config: GraphConfig,
+  functions: FunctionTable
+): SceneObject[] {
+  if (config.points.size === 0) return []
+
+  const callables: ((x: number) => number)[] = []
+  const found: FeaturePoint[] = []
+
+  for (const statement of statements) {
+    if (statement.statementName && config.hidden.has(statement.statementName)) continue
+    if (statement.kind !== 'explicit' || statement.independent !== 'x') continue
+    const body = compileExpr(statement.body, config.angle, functions)
+    const f = (x: number) => body({ x })
+    callables.push(f)
+    found.push(...explicitFeatures(f, bounds.xMin, bounds.xMax, config.points))
+  }
+
+  if (config.points.has('intersection')) {
+    found.push(...intersectionFeatures(callables, bounds.xMin, bounds.xMax))
+  }
+
+  // No `style` here on purpose: a feature point's appearance is chosen from
+  // its kind by the renderer (see render/featureMarker.ts), not set here. The
+  // scene layer must not import from render/.
+  return found.map((feature) => ({
+    kind: 'point' as const,
+    label: featureLabel(feature, config),
+    position: feature.position,
+    feature: feature.kind,
+    exact: feature.exact,
+  }))
 }
 
 function traceImplicit(statement: Statement & { kind: 'implicit' }, bounds: Bounds, config: GraphConfig, resolution: number, functions: FunctionTable): SceneObject[] {
@@ -535,6 +573,8 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
       errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
     }
   }
+
+  objects.push(...buildFeaturePoints(statements, bounds, config, functions))
 
   return { objects, errors, regression }
 }
