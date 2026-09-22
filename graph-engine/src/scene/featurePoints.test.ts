@@ -1,0 +1,65 @@
+import { describe, expect, it } from 'vitest'
+import type { FeatureKind } from '../parser/config'
+import { explicitFeatures } from './featurePoints'
+
+const ALL = new Set<FeatureKind>(['x-intercept', 'y-intercept', 'local-max', 'local-min', 'inflection'])
+
+function kinds(features: { kind: FeatureKind }[]): FeatureKind[] {
+  return features.map((f) => f.kind).sort()
+}
+
+describe('explicitFeatures', () => {
+  it('finds the vertex of a parabola as a local minimum, not a generic point', () => {
+    // y = x^2 - 2x - 1 has its vertex at (1, -2).
+    const features = explicitFeatures((x) => x * x - 2 * x - 1, -10, 10, new Set(['local-min']))
+    expect(features).toHaveLength(1)
+    expect(features[0].kind).toBe('local-min')
+    expect(features[0].position.x).toBeCloseTo(1, 5)
+    expect(features[0].position.y).toBeCloseTo(-2, 5)
+  })
+
+  it('distinguishes a local maximum from a local minimum', () => {
+    // y = x^3 - 3x: max at x=-1, min at x=1.
+    const features = explicitFeatures((x) => x ** 3 - 3 * x, -5, 5, new Set(['local-max', 'local-min']))
+    const max = features.find((f) => f.kind === 'local-max')
+    const min = features.find((f) => f.kind === 'local-min')
+    expect(max?.position.x).toBeCloseTo(-1, 4)
+    expect(min?.position.x).toBeCloseTo(1, 4)
+  })
+
+  it('finds x-intercepts and the y-intercept as separate kinds', () => {
+    const features = explicitFeatures((x) => x * x - 4, -10, 10, new Set(['x-intercept', 'y-intercept']))
+    expect(kinds(features)).toEqual(['x-intercept', 'x-intercept', 'y-intercept'])
+    const y = features.find((f) => f.kind === 'y-intercept')
+    expect(y?.position.x).toBe(0)
+    expect(y?.position.y).toBeCloseTo(-4, 6)
+  })
+
+  it('finds an inflection point', () => {
+    const features = explicitFeatures((x) => x ** 3, -5, 5, new Set(['inflection']))
+    expect(features).toHaveLength(1)
+    expect(features[0].position.x).toBeCloseTo(0, 3)
+  })
+
+  it('returns nothing when nothing is wanted', () => {
+    expect(explicitFeatures((x) => x * x, -5, 5, new Set())).toEqual([])
+  })
+
+  it('omits the y-intercept when x=0 is outside the range', () => {
+    const features = explicitFeatures((x) => x, 1, 5, new Set(['y-intercept']))
+    expect(features).toEqual([])
+  })
+
+  // The exact defect that made v1's modes indistinguishable: a flat line has
+  // no extrema, but comparing consecutive samples on a noisy flat stretch
+  // reports them anyway.
+  it('reports no extrema for a straight line', () => {
+    const features = explicitFeatures((x) => 2 * x + 1, -10, 10, new Set(['local-max', 'local-min']))
+    expect(features).toEqual([])
+  })
+
+  it('marks everything it finds as exact', () => {
+    const features = explicitFeatures((x) => x * x - 4, -10, 10, ALL)
+    expect(features.every((f) => f.exact)).toBe(true)
+  })
+})
