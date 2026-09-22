@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import Rail, { type Page } from './components/Rail'
 import Home from './components/Home'
 import Bank from './components/Bank'
@@ -16,7 +16,7 @@ import QuestionPanel from './components/QuestionPanel'
 import RichText from './components/RichText'
 import type { Ui, NavigateParams } from 'cli-core'
 import { useThemePresets } from './hooks/useThemePresets'
-import { createAttempt, createDailyAttempt, getAttempt, getSessions, sessionIsOpen, type AttemptDetail } from './lib/api'
+import { createAttempt, createDailyAttempt, getAttempt, type AttemptDetail } from './lib/api'
 import './narrow.css'
 
 function App() {
@@ -57,27 +57,8 @@ function App() {
   // clicked somewhere would be worse than not landing there at all.
   const navigated = useRef(false)
 
-  useEffect(() => {
-    let cancelled = false
-    // Wide enough that a run of recently-closed sessions can't hide the open
-    // one behind them.
-    getSessions({ limit: 20 })
-      .then(({ sessions }) => {
-        if (cancelled || navigated.current) return
-        // The list comes back newest first, so the first open row is the
-        // newest open session.
-        const open = sessions.find(sessionIsOpen)
-        if (!open) return
-        setBootLiveSessionId(open.id)
-        setPage('live')
-      })
-      .catch(() => {
-        // No node, no sessions to land on — Home is the right fallback.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // The app opens on Home. A session the tutor left open is one tap away on
+  // the Live tab (and the command line's "open session"), not the landing page.
 
   // Every navigation but the initial landing forgets the boot session, so the
   // rail always reaches the session list itself.
@@ -121,6 +102,13 @@ function App() {
       setAttempt(detail)
       navigated.current = true
       setPage('take')
+      return true
+    },
+    openReview: async (attemptId) => {
+      const detail = await getAttempt(attemptId)
+      setAttempt(detail)
+      navigated.current = true
+      setPage('review')
       return true
     },
     openThemeEditor: async () => {

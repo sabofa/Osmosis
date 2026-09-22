@@ -852,7 +852,7 @@ export function listAttempts(
 
   const rows = db
     .prepare(
-      `SELECT a.id, a.source, a.template_id, t.name AS template_name, a.submitted_at, a.abandoned_at, a.offline,
+      `SELECT a.id, a.source, a.template_id, t.name AS template_name, a.started_at, a.submitted_at, a.abandoned_at, a.offline,
               CASE WHEN a.session_id IS NOT NULL OR a.delivery_mode = 'app_live' THEN 'tutor' ELSE 'self' END AS source_kind,
               (SELECT COUNT(*) FROM response r WHERE r.attempt_id = a.id) AS question_count,
               (SELECT AVG(rs.score) FROM response_score rs WHERE rs.attempt_id = a.id) AS mean_score,
@@ -868,6 +868,7 @@ export function listAttempts(
     source_kind: "tutor" | "self";
     template_id: string | null;
     template_name: string | null;
+    started_at: string;
     submitted_at: string | null;
     abandoned_at: string | null;
     offline: number;
@@ -886,6 +887,7 @@ export function listAttempts(
       source_kind: r.source_kind,
       template_id: r.template_id,
       template_name: r.template_name,
+      started_at: r.started_at,
       submitted_at: r.submitted_at,
       abandoned_at: r.abandoned_at,
       offline: r.offline === 1,

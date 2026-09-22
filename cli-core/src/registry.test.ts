@@ -78,6 +78,7 @@ function fakeCtx() {
     startAttempt: async () => true,
     openThemeEditor: async () => true,
     setThemeMode: async () => true,
+    openReview: async () => true,
     shell: async () => true,
     confirm: async () => true,
     prompt: async () => null,

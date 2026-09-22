@@ -42,6 +42,17 @@ interface AssetRow {
   title: string
   type: string
 }
+interface AttemptRow {
+  id: string
+  template_name: string | null
+  source: string
+  source_kind?: string
+  started_at?: string | null
+  submitted_at: string | null
+  mean_score: number | null
+}
+
+const ID_RE = /^[0-9a-f-]{4,36}$/i
 
 async function tags(ctx: CommandContext): Promise<TagRow[]> {
   return ((await ctx.api.get<{ tags: TagRow[] }>('/api/tags')).tags ?? []) as TagRow[]
@@ -84,6 +95,19 @@ async function findTemplate(ctx: CommandContext, query: string): Promise<Templat
   return pickOne(ctx, 'test', query, await templates(ctx), (t) => t.name)
 }
 
+// An attempt named by a full id or an unambiguous prefix of one.
+async function resolveAttemptId(ctx: CommandContext, query: string): Promise<string | null> {
+  const res = await ctx.api.get<{ attempts: AttemptRow[] }>('/api/attempts', { limit: 500 })
+  const hits = (res.attempts ?? []).filter((x) => x.id.toLowerCase().startsWith(query.toLowerCase()))
+  if (hits.length === 1) return hits[0].id
+  if (hits.length === 0) {
+    ctx.out.error(`No attempt starts with "${query}".`)
+    return null
+  }
+  ctx.out.error(`${hits.length} attempts start with "${query}" — type a few more characters.`)
+  return null
+}
+
 function needsApp(ctx: CommandContext, what: string) {
   ctx.out.text(`${what} needs the app — open it in a browser and run the same command with /.`)
 }
@@ -96,8 +120,17 @@ export function buildRegistry(): Registry {
   r.completer('tag', async (ctx) => (await tags(ctx)).map((t) => ({ value: t.slug, hint: `${t.label} · ${t.question_count}` })))
   r.completer('template', async (ctx) => (await templates(ctx)).map((t) => ({ value: t.name, hint: `${t.question_count} questions` })))
   r.completer('question', async (ctx, partial) => {
-    const res = await ctx.api.get<{ questions: QuestionRow[] }>('/api/questions', { text: partial || undefined, limit: 12 })
+    // An id prefix completes against recent questions by id; words search.
+    const byId = ID_RE.test(partial)
+    const res = await ctx.api.get<{ questions: QuestionRow[] }>('/api/questions', { text: byId ? undefined : partial || undefined, limit: byId ? 200 : 12 })
     return (res.questions ?? []).map((q) => ({ value: q.id, hint: q.prompt.slice(0, 70) }))
+  })
+  r.completer('attempt', async (ctx) => {
+    const res = await ctx.api.get<{ attempts: AttemptRow[] }>('/api/attempts', { limit: 100 })
+    return (res.attempts ?? []).map((a) => ({
+      value: a.id,
+      hint: `${a.template_name ?? a.source} · ${(a.started_at ?? a.submitted_at ?? '').slice(0, 16)} · ${a.mean_score === null ? (a.submitted_at ? 'ungraded' : 'open') : a.mean_score.toFixed(2)}`,
+    }))
   })
   r.completer('theme', async (ctx) => {
     const res = await ctx.api.get<{ themes: ThemeRow[] }>('/api/themes')
@@ -305,10 +338,30 @@ export function buildRegistry(): Registry {
   })
   r.register({
     path: ['attempts'],
-    describe: 'Recent attempts',
+    describe: 'Recent attempts (attempt <id> for one, review <id> to open it)',
     async run(ctx) {
       const res = await ctx.api.get<{ attempts: Record<string, unknown>[] }>('/api/attempts', { limit: 20 })
-      ctx.out.table(res.attempts, ['id', 'template_name', 'source_kind', 'started_at', 'mean_score'])
+      ctx.out.table(res.attempts, ['id', 'template_name', 'source_kind', 'started_at', 'submitted_at', 'mean_score'])
+    },
+  })
+  r.register({
+    path: ['attempt'],
+    args: [{ name: 'attempt', kind: 'attempt' }],
+    describe: 'One attempt in full — every response, answer and grade',
+    async run(ctx, a) {
+      const id = await resolveAttemptId(ctx, a.attempt)
+      if (!id) return
+      ctx.out.json(await ctx.api.get(`/api/attempts/${id}`))
+    },
+  })
+  r.register({
+    path: ['review'],
+    args: [{ name: 'attempt', kind: 'attempt' }],
+    describe: 'Open the review screen for an attempt',
+    async run(ctx, a) {
+      const id = await resolveAttemptId(ctx, a.attempt)
+      if (!id) return
+      if (!(await ctx.ui.openReview(id))) ctx.out.json(await ctx.api.get(`/api/attempts/${id}`))
     },
   })
 
@@ -432,9 +485,12 @@ export function buildRegistry(): Registry {
   })
   r.register({
     path: ['restart'],
-    describe: 'Restart the shell: clear output, forget completions, start fresh',
+    describe: 'Restart Osmosis (this node): off and on again',
     async run(ctx) {
-      await ctx.ui.shell('restart')
+      if (!(await ctx.ui.confirm('Restart this Osmosis node? It is back in a few seconds.'))) return
+      await ctx.api.post('/api/admin/restart')
+      ctx.out.text('Restarting…')
+      if (!(await ctx.ui.shell('wait-for-node'))) ctx.out.text('Sent. The node comes back on its own; run status to check.')
     },
   })
   r.register({

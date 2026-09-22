@@ -150,6 +150,30 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     };
   });
 
+  // Restart this node: reply, close the listener, then either respawn
+  // ourselves (a local node run by the Windows task / a shell) or simply
+  // exit and let systemd bring the service back (INVOCATION_ID is systemd's).
+  app.post("/api/admin/restart", async (_request, reply) => {
+    reply.send({ restarting: true });
+    setTimeout(async () => {
+      try {
+        await app.close();
+      } catch {
+        /* closing anyway */
+      }
+      if (!process.env.INVOCATION_ID) {
+        const { spawn } = await import("node:child_process");
+        spawn(process.execPath, process.execArgv.concat(process.argv.slice(1)), {
+          detached: true,
+          stdio: "ignore",
+          cwd: process.cwd(),
+          env: process.env,
+        }).unref();
+      }
+      process.exit(0);
+    }, 150);
+  });
+
   app.post("/api/sync", async () => {
     const result = await runSync(ctx, ctx.runtime);
     return { ...result, online: ctx.runtime.online };

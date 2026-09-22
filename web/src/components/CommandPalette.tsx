@@ -66,9 +66,7 @@ async function parse<T>(res: Response, what: string): Promise<T> {
 }
 
 export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?: () => void }) {
-  // A restart swaps in a fresh registry (and with it, fresh completions).
-  const [generation, setGeneration] = useState(0)
-  const registry = useMemo(() => buildRegistry(), [generation])
+  const registry = useMemo(() => buildRegistry(), [])
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
   const [log, setLog] = useState<Entry[]>([])
@@ -80,7 +78,11 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
   const history = useRef<string[]>(readHistory())
   const historyPos = useRef(-1)
   const inputRef = useRef<HTMLInputElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const completionSeq = useRef(0)
+  // Set when the arrow keys chose a suggestion: Enter then takes that pick
+  // rather than running what was typed.
+  const pickedByArrow = useRef(false)
 
   const push = useCallback((e: Entry) => setLog((prev) => [...prev, e].slice(-MAX_LOG)), [])
 
@@ -100,13 +102,22 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
           setLog([])
           return true
         }
-        if (action === 'restart') {
-          setLog([])
-          setSuggestions([])
-          setInput('')
-          setGeneration((g) => g + 1)
-          push({ kind: 'text', text: 'Shell restarted.' })
-          return true
+        if (action === 'wait-for-node') {
+          // The node is going down; wait for it to answer again, then reload
+          // so every page reads fresh.
+          for (let i = 0; i < 60; i++) {
+            await new Promise((r) => setTimeout(r, 1000))
+            try {
+              const res = await fetch('/api/status', { cache: 'no-store' })
+              if (res.ok && i > 0) {
+                window.location.reload()
+                return true
+              }
+            } catch {
+              /* still down */
+            }
+          }
+          return false
         }
         window.location.reload()
         return true
@@ -134,6 +145,16 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     if (open) inputRef.current?.focus()
   }, [open])
 
+  // A click anywhere outside the bar collapses it.
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
   // Completion follows the input with a short debounce; a stale answer never
   // overwrites a newer one.
   useEffect(() => {
@@ -145,6 +166,7 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
       setSuggestions(c.suggestions)
       setTokenIndex(c.tokenIndex)
       setCursor(0)
+      pickedByArrow.current = false
     }, 100)
     return () => clearTimeout(t)
   }, [input, open, registry, ctx])
@@ -178,6 +200,10 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     } finally {
       setBusy(false)
       onAfterRun?.()
+      // The page that just opened may have taken focus (a test focuses its
+      // item); the bar takes it back so the next command types straight in.
+      setTimeout(() => inputRef.current?.focus(), 60)
+      setTimeout(() => inputRef.current?.focus(), 400)
     }
   }
 
@@ -190,12 +216,16 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     }
     if (e.key === 'ArrowDown' && suggestions.length) {
       e.preventDefault()
+      pickedByArrow.current = true
       setCursor((c) => (c + 1) % suggestions.length)
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      if (suggestions.length) setCursor((c) => (c - 1 + suggestions.length) % suggestions.length)
+      if (suggestions.length) {
+        pickedByArrow.current = true
+        setCursor((c) => (c - 1 + suggestions.length) % suggestions.length)
+      }
       else if (history.current.length) {
         historyPos.current = Math.min(historyPos.current + 1, history.current.length - 1)
         setInput(history.current[historyPos.current])
@@ -214,11 +244,17 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
       // Enter on a highlighted suggestion fills it in (like Tab) when the
       // typed token does not already spell it out; Enter again runs. So the
       // arrow keys pick, Enter takes the pick, and a second Enter goes.
+      // Fill when the arrows chose the pick (even on an empty token, e.g.
+      // "open " then ↓ to bank), or when a typed token doesn't spell the top
+      // match yet. Run when the token already is the match, or the token is
+      // empty and nothing was picked.
       const s = suggestions[cursor]
       const { tokens } = tokenize(input)
       const last = tokens[tokens.length - 1] ?? ''
-      if (s && s.label.toLowerCase() !== last.toLowerCase() && !input.endsWith(' ')) {
+      const spelled = s ? s.label.toLowerCase() === last.toLowerCase() : true
+      if (s && !spelled && (pickedByArrow.current || last !== '')) {
         accept(s)
+        pickedByArrow.current = false
         return
       }
       void run(input)
@@ -230,7 +266,7 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
   if (!open) return null
 
   return (
-    <div className="cli">
+    <div className="cli" ref={rootRef}>
       {logOpen && log.length > 0 && (
         <div className="cli-log no-scrollbar">
           <button className="cli-log-clear" onClick={() => setLog([])} title="Clear the output (or type clear)">
