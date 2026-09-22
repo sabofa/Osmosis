@@ -50,6 +50,12 @@ if [[ "$REPO_DIR" != "$INSTALL_DIR" ]]; then
   if command -v rsync >/dev/null; then
     rsync -a --delete --exclude node_modules --exclude .git --exclude '*/dist' "$REPO_DIR/" "$INSTALL_DIR/"
   else
+    # tar cannot delete: a source file removed from the repo would otherwise
+    # linger in the copy and break the next build. Drop every workspace's
+    # src/ first; dist/ and node_modules/ are rebuilt or reused as before.
+    for ws in server web graph-engine document-engine cli cli-core scripts/mcp-batch; do
+      rm -rf "$INSTALL_DIR/$ws/src"
+    done
     (cd "$REPO_DIR" && tar --exclude=node_modules --exclude=.git --exclude='*/dist' -cf - .) | (cd "$INSTALL_DIR" && tar -xf -)
   fi
 fi
