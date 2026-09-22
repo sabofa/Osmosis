@@ -525,6 +525,10 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
           label: statement.label,
           position: { x: evalExpr(statement.x, {}, config.angle, functions), y: evalExpr(statement.y, {}, config.angle, functions) },
           color: statement.color,
+          // The author typed these coordinates; nothing about them was
+          // sampled or converged to, so this is the most literal position
+          // the scene contains (see `exact` in types.ts).
+          exact: true,
         })
       } else if (statement.kind === 'segment') {
         objects.push({

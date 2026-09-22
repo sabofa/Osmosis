@@ -44,8 +44,15 @@ export type SceneObject =
       // v1 drew all of them as the same anonymous outline dot, which is why
       // the @points modes were indistinguishable on screen.
       feature?: FeatureKind | null
-      // True when the position is analytic or converged rather than a sampled
-      // approximation. Hover reports exact values differently (see hover.ts).
+      // Whether this position can be trusted digit for digit. True means it
+      // is literal — coordinates the author typed — or analytically
+      // resolved, e.g. a root bisected to convergence or an extremum found
+      // as a root of f'. False/absent means it was read off a sampled curve,
+      // so it is only as accurate as the sample spacing. This is a claim
+      // about the position, not about where the point came from: an
+      // author-typed "A = (2, 3)" is exact and a detected feature is exact,
+      // while a point picked out of a drawn polyline is not. Hover reports
+      // exact values differently (see hover.ts).
       exact?: boolean
     }
   | { kind: 'segment'; from: Vec2; to: Vec2; dashed?: boolean; color?: string | null }

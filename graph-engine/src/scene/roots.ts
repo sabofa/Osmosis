@@ -8,11 +8,18 @@
 // place. Finding roots of f' instead is indifferent to sample spacing and
 // converges to the true location.
 
-const DEFAULT_SAMPLES = 800
+// Exported because a caller that wants to probe *around* a root it was given
+// back needs the scan's own spacing to do it — stepping any finer than this
+// asks a question the scan could not have answered (see featurePoints.ts's
+// inflection guard).
+export const DEFAULT_SAMPLES = 800
 // Central-difference step. Small enough to be accurate, large enough that
 // f(x+h) - f(x-h) does not vanish into floating-point cancellation.
 const DERIV_H = 1e-5
-const SECOND_DERIV_H = 1e-3
+// Exported for the same reason: the size of the second difference's
+// cancellation noise is set by this step, so anything judging whether an f''
+// reading is signal or noise has to know it.
+export const SECOND_DERIV_H = 1e-3
 const BISECT_ITERATIONS = 60
 // Two roots closer together than this are the same root found from adjacent
 // brackets.

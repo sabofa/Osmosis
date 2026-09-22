@@ -116,6 +116,18 @@ describe('buildScene', () => {
     expect(scene.objects.length).toBe(0)
   })
 
+  // `exact` means "this position is literal or analytically resolved", not
+  // "this came from feature detection" (see types.ts). An author-typed point
+  // is the most literal position there is — it used to report exact: false
+  // while a bisected root reported true, which is backwards.
+  it('marks an author-typed point as exact', () => {
+    const { scene } = build('A = (2, 3)')
+    const point = scene.objects.find((o) => o.kind === 'point')
+    if (point?.kind !== 'point') throw new Error('unreachable')
+    expect(point.position).toEqual({ x: 2, y: 3 })
+    expect(point.exact).toBe(true)
+  })
+
   it('points each polygon vertex label away from the polygon\'s own centroid', () => {
     // Right triangle with vertices at the origin, on the x-axis, and on the
     // y-axis — an angle:/right-angle: mark at A always sits toward positive
@@ -218,6 +230,17 @@ describe('feature points', () => {
   it('does not scatter spurious extrema over an implicit circle', () => {
     const { scene } = build('@points: extrema\nx^2 + y^2 = 25')
     expect(scene.objects.filter((o) => o.kind === 'point').length).toBeLessThanOrEqual(2)
+  })
+
+  // The level the noise-firing inflection defect was actually seen at: the
+  // unit test in featurePoints.test.ts pins explicitFeatures, but "@points:
+  // all" is what an author types, and it is the expansion to every group
+  // that put inflections on a statement nobody would ask them for. A
+  // straight line came back with ~800 square markers along it.
+  it('puts no inflections on a straight line under @points: all', () => {
+    const { scene } = build('@points: all\ny = 2x + 1')
+    const inflections = scene.objects.filter((o) => o.kind === 'point' && o.feature === 'inflection')
+    expect(inflections).toEqual([])
   })
 
   it('labels coordinates when @point-labels is coords', () => {

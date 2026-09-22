@@ -81,9 +81,11 @@ const DEFAULT_LABEL_DIRECTION: Vec2 = { x: Math.SQRT1_2, y: Math.SQRT1_2 }
 // every shape is one call with a different segment count and start angle — no
 // per-shape geometry code, and all of them stay centred on the point.
 //
-// Unit radius, always: applyPointSizes scales these meshes rather than
-// rebuilding them (see its comment), so anything pre-sized here gets sized
-// twice.
+// Radii here are relative, not pixel sizes: applyPointSizes scales these
+// meshes rather than rebuilding them (see its comment), so a dot is 1 and
+// every other shape is a ratio against it. Those ratios survive the scaling
+// unchanged, which is why the nudges below are set once here instead of at
+// each call site.
 function markerGeometry(shape: MarkerShape): THREE.CircleGeometry {
   switch (shape) {
     // Segment counts below 24 inscribe a smaller area than a circle of the

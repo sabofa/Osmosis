@@ -41,6 +41,59 @@ describe('explicitFeatures', () => {
     expect(features[0].position.x).toBeCloseTo(0, 3)
   })
 
+  // The inflection counterpart of "reports no extrema for a straight line",
+  // and the worse half of the same defect: a sign change of the *second*
+  // difference was accepted with no validation at all, so on any function
+  // whose true f'' is zero or negligible next to |f| the quotient
+  // (f(x+h) - 2f(x) + f(x-h)) / h^2 is cancellation noise that flips sign at
+  // nearly every sample. Each of these reported 750-800 inflections before
+  // the noise guard; a straight line covered in square markers is the most
+  // ordinary statement in a school graph, so this is the case that matters
+  // most. See INFLECTION_NOISE_FACTOR in featurePoints.ts.
+  it('reports no inflections for a straight line', () => {
+    expect(explicitFeatures((x) => 2 * x + 1, -10, 10, new Set(['inflection']))).toEqual([])
+  })
+
+  it('reports no inflections for a constant function', () => {
+    expect(explicitFeatures(() => 5, -10, 10, new Set(['inflection']))).toEqual([])
+  })
+
+  // abs(x) has a corner, not an inflection: f'' is exactly zero on both arms
+  // and undefined at the origin.
+  it('reports no inflections for abs(x)', () => {
+    expect(explicitFeatures((x) => Math.abs(x), -10, 10, new Set(['inflection']))).toEqual([])
+  })
+
+  // Curvature of 2e-9 sitting on an offset of 1e6: the true second
+  // difference is ~2e-15, four decades below one ulp of 1e6, so f'' here is
+  // not resolvable in double precision at all. Reporting nothing is the
+  // honest answer; reporting 750 inflections was not.
+  it('reports no inflections when the curvature is below the noise floor of a large offset', () => {
+    expect(explicitFeatures((x) => 1e6 + 1e-9 * x * x, -10, 10, new Set(['inflection']))).toEqual([])
+  })
+
+  // The other half of the guard: it must not buy quiet by killing real
+  // inflections. f'' = 6x is unambiguous at the probe points either side.
+  it('still finds the inflection of x^3', () => {
+    const features = explicitFeatures((x) => x ** 3, -10, 10, new Set(['inflection']))
+    expect(features).toHaveLength(1)
+    expect(features[0].kind).toBe('inflection')
+    expect(features[0].position.x).toBeCloseTo(0, 3)
+  })
+
+  it('still finds the inflection of x^3 - 3x', () => {
+    const features = explicitFeatures((x) => x ** 3 - 3 * x, -10, 10, new Set(['inflection']))
+    expect(features).toHaveLength(1)
+    expect(features[0].position.x).toBeCloseTo(0, 3)
+  })
+
+  // sin has inflections at every multiple of pi; [-3, 3] contains only x = 0.
+  it('still finds the inflection of sin(x) at the origin', () => {
+    const features = explicitFeatures((x) => Math.sin(x), -3, 3, new Set(['inflection']))
+    expect(features).toHaveLength(1)
+    expect(features[0].position.x).toBeCloseTo(0, 3)
+  })
+
   it('returns nothing when nothing is wanted', () => {
     expect(explicitFeatures((x) => x * x, -5, 5, new Set())).toEqual([])
   })
