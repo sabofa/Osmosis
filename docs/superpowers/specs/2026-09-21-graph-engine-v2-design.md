@@ -677,6 +677,57 @@ importantly, in `server/src/domain/bootstrap.ts`'s condensed reference — the
 one the tutor actually reads. Write it as hygiene the tutor is expected to
 follow, not as an optional stylistic note.
 
+#### The complexity target is AIME / AMC 12, not SAT
+
+This matters because it changes the renderer's requirements rather than just
+its vocabulary. A competition figure is not a bigger SAT figure:
+
+- **Element count is an order of magnitude higher.** Twenty to fifty objects in
+  one configuration is normal — multiple circles, cevians, auxiliary lines,
+  a dozen or more labelled points.
+- **Label density is the binding constraint.** With twenty labelled points,
+  naive placement is unreadable, and unreadable means wrong. Label layout is
+  therefore **core to the renderer, not a later sub-phase** — the single
+  decision most likely to determine whether this is usable.
+- **Overlap is the norm, so draw order is semantic.** Fills must sit behind
+  lines, marks behind points, labels above everything. SVG paints in document
+  order, so the renderer emits explicit layers rather than relying on emission
+  sequence.
+- **Auxiliary construction lines are first-class**, usually dashed, and often
+  outnumber the "real" figure.
+- **Long construction chains accumulate floating-point drift.** A point derived
+  through six steps and then tested for concurrency with another such point
+  needs a tolerance policy, not exact comparison.
+
+Vocabulary this target implies, beyond the SAT set already specced: excircles,
+the nine-point circle, radical axes, power-of-a-point configurations,
+internally and externally tangent circles, cevians and their concurrency,
+cyclic quadrilaterals, and homothety/spiral-similarity constructions. Those are
+later phases; what matters now is that the renderer is built to carry them.
+
+#### 3D solids render through the same SVG renderer
+
+The spec already decided that test-style solids are 2D drawings rather than 3D
+scenes — computed as 3D geometry, projected through a fixed axonometric camera,
+emitted as 2D lines with hidden-line convention. **SVG is the natural target
+for exactly that**, and it means there is no third renderer: a projection module
+turns 3D geometry into 2D primitives plus a visible/hidden classification, and
+the figure renderer draws them, dashing what is hidden.
+
+Competition 3D adds tetrahedra, skew lines, dihedral angles, inscribed and
+circumscribed spheres, and cross-sections of all of them — but none of it
+changes the pipeline, only what feeds it.
+
+#### A side benefit worth designing for
+
+SVG elements are DOM nodes, so hit-testing and highlighting are free. Track 7's
+tutor tools — "point at this", "mark that intersection", emphasis and spotlight
+— are substantially cheaper against SVG than against a canvas, where every
+interaction needs manual hit-testing against projected coordinates. Give
+emitted elements stable identity (a data attribute naming the statement and
+object that produced them) so that layer can address them later without a
+second lookup mechanism.
+
 #### A migration consequence to face deliberately
 
 Inference changes how **existing stored questions render**. A v1 spec using
