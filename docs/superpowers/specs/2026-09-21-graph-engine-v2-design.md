@@ -39,7 +39,7 @@ engine tracks are worth little until the surfaces that host them exist.
 |---|---|---|
 | 1 | **Milestone A — tracks 1-4** *(in flight)* | this spec |
 | 2 | 2a — retention loop and identity backfill | Osmosis app |
-| 3 | **Graph theme tokens**; decide sandbox ownership | this spec (track 5, split) |
+| 3 | **Graph theme tokens**; **exact/symbolic values**; decide sandbox ownership | this spec (track 5 split; cross-cutting) |
 | 4 | **D1-D3** — viewer/encoding, markdown editor, spreadsheet | document-engine spec |
 | 5 | Sandbox build | Osmosis app |
 | 6 | Shell docs, then shell + item presentation | Osmosis app |
@@ -392,6 +392,52 @@ of a correct one-shot render.
 **Extensions register renderers or widgets, never outcome shapes.** If the
 engine grows a plugin point, it cannot touch the outcome path.
 
+**Values can be exact, and exactness comes from construction rather than from
+guessing.** Every number the engine displays currently goes through
+`formatCoord`, which produces a decimal. That is not a formatting preference;
+it silently destroys mathematical content. A unit circle labelled `0.866`
+instead of `√3/2` teaches nothing, a radian axis labelled `1.571` instead of
+`π/2` is unreadable, and an intercept at `√3` shown as `1.73` has lost the fact
+that it is exact.
+
+A displayed value therefore carries an optional **exact form** alongside its
+number. The closed set of forms is deliberately small — `(p/q)·√r·πᵉ`, with
+`p`, `q` integers, `r` a squarefree positive integer (`r = 1` meaning no
+radical) and `e ∈ {0, 1}`. That covers `1/2`, `√2`, `√3/2`, `2√5`, `π`, `π/6`,
+`3π/2` and `0`, which is the range school and undergraduate work actually uses.
+**Sums are out of scope** — `1 + √2` and `4 + 2√3` fall back to decimal — as
+are `e`, logarithms and everything transcendental beyond π.
+
+**Exactness is structural, never inferred.** An exact form exists only when the
+thing that produced the value knows it: a literal `sqrt(3)/2` written in the
+source, a π-scaled axis whose ticks are multiples of π by construction, a
+closed-form triangle solver that produced `4√3`. The engine does **not** inspect
+a float and guess that `0.3333333` was meant to be `1/3`. Inferring exactness is
+a small and tempting feature that asserts something false about the mathematics
+whenever it is wrong, and a wrong exact label is worse than an honest decimal.
+
+```
+@values: auto        # show exact where it is known, decimal otherwise (default)
+@values: exact       # show exact where known; a value with no exact form is an error
+@values: decimal     # always decimal, ignoring any exact form
+```
+
+`auto` is the default and changes nothing today, because nothing currently
+produces exact forms; it begins paying off as producers are added. `exact` is
+for figures where a decimal leaking through is a defect worth failing on.
+
+One formatter serves every surface — tick labels, point and feature coordinate
+labels, hover readouts, measure labels and table cells — so exactness cannot be
+correct in one place and lost in another. Inside the engine the rendered form is
+Unicode text (`√3/2`, `π/6`, `-2√5/3`); the formatter also exposes a LaTeX
+string for hosts that can typeset it.
+
+**Where this lands in the build order:** early, alongside theme tokens at step
+3. Like them it is a contract rather than a feature — geometry's measure labels,
+the unit circle, and calc-proofing's π-scaled trig axes and radical intercepts
+all build against it, and retrofitting it means changing what a coordinate is
+allowed to be after three tracks have assumed otherwise.
+
 **The live protocol separates durable from ephemeral operations.** Overlays,
 parameter values, revealed statements and snapshots are state: they ride the
 existing nudge-then-refetch contract (`web/src/lib/liveEvents.ts`), so a
@@ -520,6 +566,61 @@ intersecting a circle with a ray yields zero, one or two triangles
 simultaneously, which is precisely the picture that answers "why can't this be
 determined." A constraint solver would have silently picked one.
 
+### Measure labels
+
+v1 can only write a measure as free text — `angle: A-B-C label: 60°` — which
+nothing checks against the figure. A constructive engine has already solved the
+triangle, so refusing to print what it computed wastes the model's main
+advantage.
+
+```
+label: AB               # prints the computed length
+label: AB = 8           # prints 8, and FAILS if the computed length is not 8
+label: AB = x           # prints "x" — a symbolic placeholder, no assertion
+label: angle A          # prints the computed measure
+label: angle A = 30     # prints 30, and fails if the computed measure is not 30
+label: angle A = θ      # symbolic
+label: arc PQ           # arc measure
+```
+
+**The `= <number>` form asserts.** A figure whose labels contradict its own
+geometry is a wrong figure, and this is the cheapest possible way to catch one.
+The assertion is suppressed by the not-to-scale flag below: under
+`@scale: false` the stated value is printed and the computed value ignored,
+which is exactly what that flag is for. The two features are designed together
+— without the assertion the flag is meaningless, and without the flag the
+assertion would make deliberately-not-to-scale figures unauthorable.
+
+Angle measures honour `@angle: degrees|radians`, so `label: angle A` prints
+`30°` or `π/6` depending on the mode — and `π/6` rather than `0.524` only
+because exact values exist (see Cross-cutting decisions). This is the seam
+where that contract earns its place.
+
+### The unit circle
+
+Absent from v1 entirely, and the central object of trigonometry teaching.
+
+```
+unit-circle:                    # the standard figure: circle, axes, special angles
+unit-circle: angles 30          # mark every 30 degrees
+unit-circle: angles pi/6        # the same, written in radians
+unit-circle: mark 3*pi/4        # terminal ray, labelled point, reference angle
+unit-circle: quadrant 1         # restrict to one quadrant
+```
+
+Draws the circle with marked special angles, each carrying both its angle label
+(`π/6` or `30°`, following `@angle`) and its **exact** coordinates
+(`(√3/2, 1/2)`), plus a terminal ray and reference-angle mark for any marked
+angle.
+
+**This feature is the reason exact values are a contract and not a nicety.** A
+unit circle labelled with decimals is not a unit circle; it is a circle of
+radius one with the interesting part removed. Do not build this before exact
+display exists.
+
+Works in figure mode and in graph mode — a unit circle drawn on real axes is a
+different and equally common picture from one drawn on bare paper.
+
 ### Figure mode
 
 `@mode: figure` renders paper rather than a plot: no axes, no grid, locked 1:1
@@ -563,8 +664,14 @@ requirement.
 ### Build order within the track
 
 Lines as objects -> derived points and solved triangles -> circle vocabulary and
-incircle/circumcircle -> figure mode and label layout -> shading and boolean
-regions -> solid primitives -> cross-sections and nets -> composite solids.
+incircle/circumcircle -> measure labels -> the unit circle -> figure mode and
+label layout -> shading and boolean regions -> solid primitives -> cross-sections
+and nets -> composite solids.
+
+Measure labels and the unit circle both sit after the circle vocabulary and
+**both depend on exact values landing at step 3**. Neither can be built before
+that contract exists: a measure label that prints `0.524` for `π/6`, or a unit
+circle labelled in decimals, fails at the only job it has.
 
 ## Track 3 — 3D / multivariable
 
