@@ -70,3 +70,71 @@ describe('HoverResolver', () => {
     expect(resolver.group.children.length).toBe(0)
   })
 })
+
+describe('feature snapping', () => {
+  // The bug: hovering near a parabola's vertex reports the nearest *sampled*
+  // point, so you read 1.9993 instead of 2. A feature carries its exact
+  // position, and hover should prefer it.
+  it('snaps to a feature point instead of the nearest curve sample', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        { kind: 'curve', points: [{ x: 0.9, y: 0.81 }, { x: 1.1, y: 1.21 }] },
+        { kind: 'point', label: null, position: { x: 1, y: 1 }, feature: 'local-min', exact: true },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 1.02, 1.02)
+    expect(info).not.toBeNull()
+    expect(info?.worldX).toBeCloseTo(1, 10)
+    expect(info?.worldY).toBeCloseTo(1, 10)
+    expect(info?.exact).toBe(true)
+    expect(info?.feature).toBe('local-min')
+  })
+
+  it('reports a plain curve reading as inexact', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [{ kind: 'curve', points: [{ x: -5, y: 2 }, { x: 5, y: 2 }] }],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 0, 2)
+    expect(info?.exact).toBe(false)
+  })
+
+  // Snapping must not teleport the readout across the screen: a feature far
+  // from the cursor loses to a curve directly under it.
+  //
+  // The distances here are deliberately chosen so this test only passes if
+  // the SNAP_SCREEN_DIST radius check is actually enforced, not merely
+  // because the feature falls outside HOVER_MAX_SCREEN_DIST altogether (a
+  // weaker version of this test using a far-off feature point would pass
+  // even with the radius check deleted, since HOVER_MAX_SCREEN_DIST alone
+  // would already reject the candidate — that would not be testing the snap
+  // radius at all). With CANVAS=800 and the default viewHeight=12, 1 world
+  // unit = 800/12 ~= 66.667 screen px. The curve sample sits 25px from the
+  // cursor; the feature sits 35px away — inside HOVER_MAX_SCREEN_DIST (70px)
+  // but outside SNAP_SCREEN_DIST (22px). Discounted by FEATURE_BIAS_PX
+  // (14px), the feature's biased distance would be 21px < the curve's 25px,
+  // so if the radius check were removed the feature would wrongly win.
+  it('does not snap to a feature outside the snap radius', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        { kind: 'curve', points: [{ x: -5, y: -0.375 }, { x: 5, y: -0.375 }] },
+        { kind: 'point', label: null, position: { x: 0, y: 0.525 }, feature: 'local-max', exact: true },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 0, 0)
+    expect(info?.exact).toBe(false)
+    expect(info?.feature).toBeFalsy()
+    expect(info?.worldY).toBeCloseTo(-0.375, 6)
+  })
+})

@@ -28,8 +28,8 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       return
     }
     case 'hover': {
-      if (value !== 'all' && value !== 'points' && value !== 'none') {
-        throw new Error(`@hover must be "all", "points", or "none", got "${value}"`)
+      if (value !== 'all' && value !== 'points' && value !== 'features' && value !== 'none') {
+        throw new Error(`@hover must be "all", "points", "features", or "none", got "${value}"`)
       }
       config.hover = value
       return

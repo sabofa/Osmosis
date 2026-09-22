@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { HoverMode } from '../parser/config'
+import type { FeatureKind, HoverMode } from '../parser/config'
 import type { Camera2D } from './camera2d'
 import { clearAndDispose } from './disposeObject3D'
 import type { Scene as GraphScene, Vec2 } from '../scene/types'
@@ -10,9 +10,21 @@ export interface HoverInfo {
   screenX: number
   screenY: number
   label?: string
+  // True when the reported position is a feature's exact location rather than
+  // an interpolated point on a sampled curve. The marker is drawn differently
+  // so an exact reading is visibly not a guess.
+  exact: boolean
+  feature?: FeatureKind | null
 }
 
 const HOVER_MAX_SCREEN_DIST = 70
+// How close the cursor must be, in screen pixels, for a feature to capture the
+// readout. Deliberately smaller than HOVER_MAX_SCREEN_DIST: snapping should
+// feel like magnetism near the feature, not like the readout teleporting.
+const SNAP_SCREEN_DIST = 22
+// A feature within the snap radius beats a curve point this much nearer, so
+// you can land on a vertex that sits directly on the curve you are tracing.
+const FEATURE_BIAS_PX = 14
 
 function nearestPointOnSegment(from: Vec2, to: Vec2, p: Vec2): Vec2 {
   const dx = to.x - from.x
@@ -49,18 +61,37 @@ export class HoverResolver {
     backgroundColor: number,
     pixelToWorld: (px: number) => number
   ): HoverInfo | null {
-    let best: { point: Vec2; label?: string; showGuide: boolean; dist: number } | null = null
-    const consider = (point: Vec2, label: string | undefined, showGuide: boolean) => {
+    let best: {
+      point: Vec2
+      label?: string
+      showGuide: boolean
+      dist: number
+      exact: boolean
+      feature?: FeatureKind | null
+    } | null = null
+
+    const consider = (
+      point: Vec2,
+      label: string | undefined,
+      showGuide: boolean,
+      exact = false,
+      feature: FeatureKind | null = null
+    ) => {
       const screen = camera2d.worldToScreen(point.x, point.y, rectWidth, rectHeight)
-      const dist = Math.hypot(screen.x - cursorScreen.x, screen.y - cursorScreen.y)
-      if (dist <= HOVER_MAX_SCREEN_DIST && (!best || dist < best.dist)) {
-        best = { point, label, showGuide, dist }
+      const raw = Math.hypot(screen.x - cursorScreen.x, screen.y - cursorScreen.y)
+      if (raw > HOVER_MAX_SCREEN_DIST) return
+      // A feature close enough to snap competes at a discounted distance, so a
+      // vertex sitting on the curve wins against the curve sample beside it.
+      const dist = feature && raw <= SNAP_SCREEN_DIST ? Math.max(raw - FEATURE_BIAS_PX, 0) : raw
+      if (!best || dist < best.dist) {
+        best = { point, label, showGuide, dist, exact, feature }
       }
     }
 
     for (const obj of scene.objects) {
       if (obj.kind === 'point') {
-        consider(obj.position, obj.label ?? undefined, false)
+        if (mode === 'features' && !obj.feature) continue
+        consider(obj.position, obj.label ?? undefined, false, obj.exact ?? false, obj.feature ?? null)
       } else if (mode === 'all' && obj.kind === 'curve') {
         // True nearest-point-on-segment per sub-segment, not "interpolate y at
         // the cursor's x" — that breaks down on steep/near-vertical stretches
@@ -83,7 +114,14 @@ export class HoverResolver {
     this.currentTarget = null
     this.guideLine = null
     if (!best) return null
-    const target = best as { point: Vec2; label?: string; showGuide: boolean; dist: number }
+    const target = best as {
+      point: Vec2
+      label?: string
+      showGuide: boolean
+      dist: number
+      exact: boolean
+      feature?: FeatureKind | null
+    }
     this.currentTarget = target.point
 
     if (target.showGuide) {
@@ -112,6 +150,8 @@ export class HoverResolver {
       screenX: screen.x,
       screenY: screen.y,
       label: target.label,
+      exact: target.exact,
+      feature: target.feature,
     }
   }
 

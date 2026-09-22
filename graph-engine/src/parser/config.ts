@@ -9,7 +9,7 @@ export interface GraphBounds {
   yMax: number
 }
 
-export type HoverMode = 'all' | 'points' | 'none'
+export type HoverMode = 'all' | 'points' | 'features' | 'none'
 
 // A detected feature carries which kind of feature it is, so the renderer can
 // mark an x-intercept differently from a local maximum. v1 emitted every
