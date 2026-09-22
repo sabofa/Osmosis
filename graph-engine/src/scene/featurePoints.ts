@@ -80,3 +80,32 @@ export function explicitFeatures(
 
   return out
 }
+
+// Two curves meeting at the same place, found from different pairs, are one
+// intersection as far as a reader is concerned.
+const SAME_POINT_EPSILON = 1e-5
+
+// Every crossing between every pair of the given curves. An intersection of
+// f and g is a root of f - g, so this reuses the same solver as everything
+// else rather than introducing a second notion of "where does this happen".
+export function intersectionFeatures(
+  fs: ((x: number) => number)[],
+  lo: number,
+  hi: number
+): FeaturePoint[] {
+  const out: FeaturePoint[] = []
+  for (let i = 0; i < fs.length; i++) {
+    for (let j = i + 1; j < fs.length; j++) {
+      const f = fs[i]
+      const g = fs[j]
+      for (const x of findRoots((t) => f(t) - g(t), lo, hi)) {
+        const y = f(x)
+        if (!Number.isFinite(y)) continue
+        if (out.some((p) => Math.hypot(p.position.x - x, p.position.y - y) < SAME_POINT_EPSILON)) continue
+        out.push({ position: { x, y }, kind: 'intersection', exact: true })
+      }
+    }
+  }
+  out.sort((a, b) => a.position.x - b.position.x)
+  return out
+}

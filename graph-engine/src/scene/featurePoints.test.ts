@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { FeatureKind } from '../parser/config'
-import { explicitFeatures } from './featurePoints'
+import { explicitFeatures, intersectionFeatures } from './featurePoints'
 
 const ALL = new Set<FeatureKind>(['x-intercept', 'y-intercept', 'local-max', 'local-min', 'inflection'])
 
@@ -74,5 +74,35 @@ describe('explicitFeatures', () => {
     expect(features).toHaveLength(1)
     expect(features[0].kind).toBe('local-min')
     expect(features[0].position.x).toBeCloseTo(1, 4)
+  })
+})
+
+describe('intersectionFeatures', () => {
+  it('finds where a line crosses a parabola', () => {
+    // x^2 = x + 2 at x = -1 and x = 2.
+    const features = intersectionFeatures([(x) => x * x, (x) => x + 2], -10, 10)
+    expect(features).toHaveLength(2)
+    expect(features[0].kind).toBe('intersection')
+    expect(features[0].position.x).toBeCloseTo(-1, 5)
+    expect(features[0].position.y).toBeCloseTo(1, 5)
+    expect(features[1].position.x).toBeCloseTo(2, 5)
+    expect(features[1].position.y).toBeCloseTo(4, 5)
+  })
+
+  it('checks every pair when given three curves', () => {
+    // y=0, y=x, y=-x all meet at the origin; pairwise that is three hits at
+    // the same place, which de-duplication collapses to one.
+    const features = intersectionFeatures([() => 0, (x) => x, (x) => -x], -5, 5)
+    expect(features).toHaveLength(1)
+    expect(features[0].position.x).toBeCloseTo(0, 6)
+  })
+
+  it('finds nothing for parallel lines', () => {
+    expect(intersectionFeatures([(x) => x + 1, (x) => x + 3], -10, 10)).toEqual([])
+  })
+
+  it('needs at least two curves', () => {
+    expect(intersectionFeatures([(x) => x], -10, 10)).toEqual([])
+    expect(intersectionFeatures([], -10, 10)).toEqual([])
   })
 })
