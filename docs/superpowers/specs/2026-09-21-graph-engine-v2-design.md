@@ -29,31 +29,67 @@ engine — the mode matrix, the markdown editor, the spreadsheet page, and the
 text-encoding standard both engines obey. **This document owns the shared
 document format**; that one references it.
 
-## Milestones
+## Build order
 
-**Milestone A — the graphing engine proper: tracks 1 through 4.** The rest of
-Osmosis and the document-engine work wait behind this. The point of the
-boundary is that tracks 1-4 make the graph engine genuinely good at its
-existing job, and everything after expands its job.
+Revised 2026-09-22. This supersedes the earlier A/B/C milestone grouping. The
+order interleaves engine work with the wider Osmosis build, because several
+engine tracks are worth little until the surfaces that host them exist.
 
-**Milestone B — track 5**, customization and UI, so the engine looks
-deliberate before it is expanded.
-
-**Milestone C — tracks 6 and 7**, the diagram engine and the live tutor layer.
-
-| Track | Subject | Milestone |
+| # | Step | Owned by |
 |---|---|---|
-| 1 | Reading the graph: feature points, hover, axis labels, step scaling | A |
-| 2 | Geometry v2: construction-based figures and solids | A |
-| 3 | 3D / multivariable: the chart layer the 3D view never had | A |
-| 4 | Calc-proofing the 2D engine | A |
-| 5 | Customization and UI | B |
-| 6 | Diagram / flowchart mode | C |
-| 7 | Live tutor layer | C |
+| 1 | **Milestone A — tracks 1-4** *(in flight)* | this spec |
+| 2 | 2a — retention loop and identity backfill | Osmosis app |
+| 3 | **Graph theme tokens**; decide sandbox ownership | this spec (track 5, split) |
+| 4 | **D1-D3** — viewer/encoding, markdown editor, spreadsheet | document-engine spec |
+| 5 | Sandbox build | Osmosis app |
+| 6 | Shell docs, then shell + item presentation | Osmosis app |
+| 7 | **Container / multi-page — the tie-in** | this spec (document model) |
+| 8 | **Track 6, track 7, D4** — diagrams, live tutor, code pages | both specs |
+| 9 | **Track 5 + D5 as one pass** | both specs |
+| 10 | Homework and the rest | Osmosis app |
 
-Track 1 is first within Milestone A, because the live tutor tools selected for
-track 7 (feature marking and measurement) depend on feature points being
-correct and typed, and because tracks 2 and 4 both annotate features.
+**After Milestone A the engine work pauses**, while the sandbox, items and the
+rest of Osmosis are built out. Steps 7 onward depend on those surfaces
+existing.
+
+Within Milestone A, track 1 comes first: the live tutor tools selected for
+track 7 depend on feature points being correct and typed, and tracks 2 and 4
+both annotate features.
+
+### What the revision changes
+
+**Track 5 splits in two.** Its *theme tokens* move early, to step 3; the rest
+of its customization and UI work moves late, to step 9. This is the right cut:
+the token set is a **contract** that the document engine's D5 must share, so it
+has to be settled before D1-D3 build against it, while the visual polish it
+enables is only worth doing once there is a finished surface to polish. Step 9
+pairs track 5 with D5 deliberately — a plot, a sheet and a page of prose in one
+document must read as one object, which cannot be achieved by two passes months
+apart.
+
+**The container moves out on its own, to step 7.** The IR still takes its full
+shape during Milestone A (see "What lands when"); only the serialized
+multi-page container waits, and it now waits until after the shell exists to
+open files with.
+
+**D4 (code pages) detaches from D1-D3** and moves to step 8 alongside tracks 6
+and 7, which suits it: an execution surface wants the diagram engine for
+call-graph and data-structure rendering, and the live layer for tutor-driven
+stepping.
+
+### A sequencing consequence worth stating
+
+**D3 lands at step 4, but the container that makes its headline feature work
+lands at step 7.** The spreadsheet is specified as "the data page of the
+document, whose defining property is that other pages read from it" —
+`scatter from Data!A2:B40`. Cross-page references need multi-page documents.
+
+So D3 builds the grid, the formula engine, the dependency graph and CSV import
+against a single-page document, and the cross-page reference it exists to serve
+cannot be demonstrated until step 7. That is workable, but it should be a
+decision rather than a surprise: either D3 ships knowingly incomplete in its
+most important dimension for three steps, or a minimal cross-page reference
+mechanism is pulled forward with it.
 
 ## What v1 got wrong
 
