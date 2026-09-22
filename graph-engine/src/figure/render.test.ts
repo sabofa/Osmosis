@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
 import { LIGHT_PALETTE } from '../render/palette'
 import { FIGURE_LAYERS } from './document'
+import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { renderFigure } from './render'
 
 function render(spec: string): string {
@@ -222,5 +223,103 @@ describe('determinism', () => {
     expect(countTags(layer(svg, 'marks'), 'path')).toBe(1)
     expect(countTags(layer(svg, 'marks'), 'polyline')).toBe(1)
     expect(countTags(layer(svg, 'marks'), 'line')).toBe(2)
+  })
+})
+
+// Verification item 3 of the plan: a dense figure — twenty-plus labelled
+// points with intersecting circles and lines — renders with no overlapping
+// labels and the layers in the right order. The label search is unit-tested
+// in labels.test.ts; this checks the whole path, from spec text to markup.
+describe('a dense figure, end to end', () => {
+  const DENSE = [
+    '@mode: figure',
+    'triangle ABC: AB = 7, BC = 8, AC = 6',
+    'D = foot A to B-C',
+    'M = midpoint of B-C',
+    'N = midpoint of A-B',
+    'P = midpoint of A-C',
+    'G = centroid of ABC',
+    'O = circumcenter of ABC',
+    'I = incenter of ABC',
+    'H = orthocenter of ABC',
+    'E = midpoint of A-H',
+    'F = midpoint of B-H',
+    'J = midpoint of C-H',
+    'K = midpoint of O-H',
+    'L = midpoint of G-A',
+    'Q = midpoint of G-B',
+    'S = midpoint of G-C',
+    'T = midpoint of D-M',
+    'U = midpoint of N-P',
+    'V = midpoint of I-O',
+    // Four more inside the centre cluster: G, I, K and V already sit
+    // within about twenty view units of each other, so these are the
+    // points that make label placement actually hard.
+    'W = midpoint of G-I',
+    'X = midpoint of G-K',
+    'Y = midpoint of I-V',
+    'Z = midpoint of K-V',
+    'c = circle O, 4',
+    'k = circle I, 2',
+    'm = perpendicular bisector of A-B',
+    'n = line through G parallel to B-C',
+    'segment: A-D dashed',
+    'segment: B-P dashed',
+  ].join('\n')
+
+  function placedLabels(svg: string) {
+    const labels = layer(svg, 'labels')
+    return [...labels.matchAll(/<text x="(-?[\d.]+)" y="(-?[\d.]+)"[^>]*>([^<]*)<\/text>/g)].map((m) => {
+      const size = estimateTextSize(m[3], LABEL_FONT_SIZE)
+      return {
+        text: m[3],
+        x: Number(m[1]) - size.width / 2,
+        y: Number(m[2]) - size.height / 2,
+        width: size.width,
+        height: size.height,
+      }
+    })
+  }
+
+  it('labels at least twenty points', () => {
+    const parsed = parseSpec(DENSE)
+    const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    expect(result.errors).toEqual([])
+    expect(placedLabels(result.svg).length).toBeGreaterThanOrEqual(20)
+  })
+
+  it('overlaps none of them', () => {
+    const labels = placedLabels(render(DENSE))
+    const collisions: string[] = []
+    for (let i = 0; i < labels.length; i++) {
+      for (let j = i + 1; j < labels.length; j++) {
+        const a = labels[i]
+        const b = labels[j]
+        if (a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height) {
+          collisions.push(`${a.text}/${b.text}`)
+        }
+      }
+    }
+    expect(collisions).toEqual([])
+  })
+
+  it('paints the layers in E1 order, with the intersecting circles and lines all present', () => {
+    const svg = render(DENSE)
+    const at = (name: string) => svg.indexOf(`data-layer="${name}"`)
+    expect(at('regions')).toBeLessThan(at('auxiliary'))
+    expect(at('auxiliary')).toBeLessThan(at('primary'))
+    expect(at('primary')).toBeLessThan(at('marks'))
+    expect(at('marks')).toBeLessThan(at('points'))
+    expect(at('points')).toBeLessThan(at('labels'))
+    // Two circles, both drawn as circles.
+    expect(countTags(layer(svg, 'primary'), 'circle')).toBe(2)
+    // Three triangle edges.
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(3)
+    // Two construction lines plus two dashed segments.
+    expect(countTags(layer(svg, 'auxiliary'), 'line')).toBe(4)
+  })
+
+  it('renders byte-identically twice', () => {
+    expect(render(DENSE)).toBe(render(DENSE))
   })
 })
