@@ -53,16 +53,39 @@ const CURVATURE_SCALE_FLOOR = 1e-9
 // about 4 (four rounded terms), but the cancellation inside f is not bounded
 // by |f| itself: y = 1e6x + 1e6 near x = -1 cancels against ~1e6 while |f|
 // is only ~1e4, so its noise reads far larger than |f| alone predicts. The
-// margin is therefore set from measurement rather than from the bound.
-// Across a sweep of straight lines (slopes 1e-12..1e15, offsets to 1e12,
-// several ranges) the worst noise reading was ~3e2 * eps * scale / h^2,
-// while the weakest genuine inflection probed (x*e^-x, sin, tanh, x^3/5e6,
-// exp(-x^2), x^5) read at least 3e7. 1e5 sits in the middle of that
-// five-decade gap, so the exact value is not delicate. What it does cost is
-// a function whose curvature is below roughly 2e-5 of its own magnitude,
-// e.g. y = 1e6 + 1e-9x^2 — but that curvature is not resolvable in double
-// precision at this step size in the first place, and reporting nothing is
-// the honest answer rather than reporting hundreds of invented points.
+// margin is therefore set from measurement rather than from the bound, and
+// it is a real compromise, not a comfortably-sized one — it does not fully
+// separate noise from genuine curvature, in either direction:
+//
+//   - It is NOT a safe "below this is definitely noise" line. An offset-
+//     dominated curve (a large constant plus a small-amplitude shape) loses
+//     genuine inflections inside the gate: y = 2000 + sin(x) goes from 7
+//     inflections to 0, y = 10000 + sin(x) goes from 8 to 0, and
+//     y = 10000 + x^3 goes from 1 to 0. Their curvature-to-floor ratios
+//     measure ~6.8e2 to ~1.2e4 — comfortably below the factor, so the gate
+//     rejects them as if they were noise.
+//   - It is NOT a safe "above this is definitely genuine" line either.
+//     Cancellation-shaped expressions can still leak through: y = 1e8 + x -
+//     1e8 (curvature is exactly zero; the "1e8 + x" and "- 1e8" cancel in f
+//     itself, not just in the second difference) still emits ~160 phantom
+//     inflections at this factor.
+//   - The value is measurably sensitive, not "approximately right within an
+//     order of magnitude": 1e4 and 1e5 give different answers on the same
+//     y = 10000 + sin(x) probe (0 inflections at 1e5, 8 at 1e4). Changing
+//     this constant changes real, user-visible output, so do not retune it
+//     without re-measuring both the false-negative (offset-dominated) and
+//     false-positive (cancellation) cases above.
+//
+// The operative bound this actually enforces is closer to "reject a
+// candidate whose relative curvature is below roughly 1e-3 of the local
+// |f|" than to an absolute curvature threshold — because f'' is probed only
+// one sample step (SECOND_DERIV_H) away from the candidate, a small
+// genuine curvature riding on top of a large |f| reads, at that spacing, as
+// statistically indistinguishable from cancellation noise of the same
+// magnitude. Retuning this guard well would mean scaling the floor
+// relative to the candidate's own curvature scale rather than picking a
+// different constant here; that is separate work from this fix, which only
+// corrects this comment's numbers to match what was actually measured.
 const INFLECTION_NOISE_FACTOR = 1e5
 
 export function explicitFeatures(

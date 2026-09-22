@@ -545,9 +545,12 @@ export class SceneRenderer {
 
   // Repositions/recolors an existing point Group in place. Relies on
   // buildObject's 'point' case always producing children in the same
-  // [ring-or-halo, circle, label?] order at the group's local origin (see
-  // buildObject below), with the group itself carrying the world position —
-  // that's what makes "just move the group" a correct, complete update.
+  // [background disc-or-halo, colored ring-or-fill, label?] order at the
+  // group's local origin (see buildObject below — both the outline and
+  // non-outline branches put the background-colored mesh first, at z = 0,
+  // and the point-colored mesh second, at z = 0.01, so it renders in front),
+  // with the group itself carrying the world position — that's what makes
+  // "just move the group" a correct, complete update.
   private updatePointObject(group: THREE.Group, obj: Extract<SceneObject, { kind: 'point' }>) {
     group.position.set(obj.position.x, obj.position.y, 0)
     // Must mirror buildObject's own shape/outline derivation exactly: a
@@ -561,10 +564,13 @@ export class SceneRenderer {
     const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
     const outline = shape === 'ring'
     const pointColor = this.colorOr(obj.color, this.palette.point)
-    const ringOrHalo = group.children[0] as THREE.Mesh
-    const circle = group.children[1] as THREE.Mesh
-    ;(ringOrHalo.material as THREE.MeshBasicMaterial).color.setHex(outline ? pointColor : this.palette.background)
-    ;(circle.material as THREE.MeshBasicMaterial).color.setHex(outline ? this.palette.background : pointColor)
+    // child[0] (background disc / halo) is always background-colored and
+    // child[1] (ring / fill) is always point-colored — true in both the
+    // outline and non-outline shapes, so no outline check is needed here.
+    const backgroundMesh = group.children[0] as THREE.Mesh
+    const coloredMesh = group.children[1] as THREE.Mesh
+    ;(backgroundMesh.material as THREE.MeshBasicMaterial).color.setHex(this.palette.background)
+    ;(coloredMesh.material as THREE.MeshBasicMaterial).color.setHex(pointColor)
     // Re-applied on every reuse, not just at first build — this used to be
     // build-time only, so a point's on-screen size stayed frozen at
     // whatever pixelToWorld returned the moment it was first built, and
@@ -589,21 +595,25 @@ export class SceneRenderer {
     }
   }
 
-  // Sizes an already-built point Group's ring-or-halo + circle meshes via
-  // scale rather than geometry — both are built at unit radius (see
+  // Sizes an already-built point Group's [background disc-or-halo, colored
+  // ring-or-fill] meshes (see updatePointObject's comment on that ordering)
+  // via scale rather than geometry — both are built at unit radius (see
   // buildObject's 'point' case) specifically so resizing them, whether at
   // first build or on every later reuse, is a cheap transform update
   // instead of a GPU buffer rebuild.
   private applyPointSizes(group: THREE.Group, outline: boolean) {
-    const ringOrHalo = group.children[0] as THREE.Mesh
-    const circle = group.children[1] as THREE.Mesh
+    const backgroundMesh = group.children[0] as THREE.Mesh
+    const coloredMesh = group.children[1] as THREE.Mesh
     if (outline) {
+      // The ring's inner/outer ratio is baked into its RingGeometry, not
+      // into this scale — both the backing disc and the ring share the same
+      // outer radius so the disc exactly fills (and sits behind) the ring.
       const outer = this.pixelToWorld(POINT_OUTLINE_OUTER_PX)
-      ringOrHalo.scale.setScalar(outer)
-      circle.scale.setScalar(outer)
+      backgroundMesh.scale.setScalar(outer)
+      coloredMesh.scale.setScalar(outer)
     } else {
-      ringOrHalo.scale.setScalar(this.pixelToWorld(POINT_HALO_PX))
-      circle.scale.setScalar(this.pixelToWorld(POINT_FILL_PX))
+      backgroundMesh.scale.setScalar(this.pixelToWorld(POINT_HALO_PX))
+      coloredMesh.scale.setScalar(this.pixelToWorld(POINT_FILL_PX))
     }
   }
 
@@ -714,14 +724,24 @@ export class SceneRenderer {
         // Unit radius (1) — applyPointSizes below scales this via a
         // transform, not by rebuilding the geometry, so the same mesh works
         // at any zoom level (see applyPointSizes/updatePointObject).
+        //
+        // Background disc goes in BEHIND (z = 0), colored ring goes in FRONT
+        // (z = 0.01) — same front-to-back order as the halo+fill pair below.
+        // Getting this backwards (colored ring at z = 0, background disc at
+        // the same radius at z = 0.01 in front of it) was the reported bug:
+        // the same-radius disc completely covers the ring underneath it, so
+        // the marker renders as a plain background-colored hole with no ring
+        // visible at all, instead of reading as an open-circle marker. With
+        // the disc behind, the ring's colored band shows on top of it and
+        // the disc shows through the ring's open center.
+        const circle = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: this.palette.background }))
+        group.add(circle)
         const ring = new THREE.Mesh(
           new THREE.RingGeometry(POINT_OUTLINE_INNER_PX / POINT_OUTLINE_OUTER_PX, 1, 24),
           new THREE.MeshBasicMaterial({ color: pointColor })
         )
+        ring.position.set(0, 0, 0.01)
         group.add(ring)
-        const circle = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: this.palette.background }))
-        circle.position.set(0, 0, 0.01)
-        group.add(circle)
       } else {
         // A background-colored halo behind the fill reads as a stroke/ring
         // cut into the paper — matching the reference's solid dot with a

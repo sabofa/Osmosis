@@ -94,6 +94,26 @@ describe('explicitFeatures', () => {
     expect(features[0].position.x).toBeCloseTo(0, 3)
   })
 
+  // Pins INFLECTION_NOISE_FACTOR's actual magnitude, not just its sign.
+  // Every other inflection test here is satisfied by any positive factor
+  // (even one far too small to reject noise), because none of them sits
+  // near the gate's threshold — so none of them would catch a regression
+  // that weakens the constant, only one that flips it non-positive.
+  //
+  // y = 10000 + sin(x) does sit right at that threshold: measured directly
+  // against this codebase, INFLECTION_NOISE_FACTOR = 1e5 (the current,
+  // shipped value) rejects all 8 of its genuine inflections over [-10, 10]
+  // as noise, while INFLECTION_NOISE_FACTOR = 1e4 — a change of one order
+  // of magnitude — finds all 8, and INFLECTION_NOISE_FACTOR = 4 (a value
+  // already known to be too small to suppress cancellation noise, see the
+  // comment above the constant) also finds all 8. So this asserts today's
+  // actual, on-the-record behavior at the shipped factor; it fails the
+  // moment the constant drops enough to cross that threshold, which a bare
+  // "is it positive" check never would.
+  it('still suppresses the offset-dominated sin(x) inflections at the current noise factor', () => {
+    expect(explicitFeatures((x) => 10000 + Math.sin(x), -10, 10, new Set(['inflection']))).toEqual([])
+  })
+
   it('returns nothing when nothing is wanted', () => {
     expect(explicitFeatures((x) => x * x, -5, 5, new Set())).toEqual([])
   })
