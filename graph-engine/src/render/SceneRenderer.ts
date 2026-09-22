@@ -6,6 +6,7 @@ import { clearAndDispose, disposeObject3D } from './disposeObject3D'
 import { GeometryGroupManager, isGeometryKind, type GeometryKind } from './geometryGroup'
 import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSegments } from './geometryMarks'
 import { GridRenderer } from './grid'
+import { markerShape, type MarkerShape } from './featureMarker'
 import { HoverResolver, type HoverInfo } from './hover'
 import { clampedLabelPlacement } from './labelLayout'
 import { makeLabelSprite } from './labelSprite'
@@ -76,6 +77,31 @@ const POINT_FILL_PX = 5.5
 const LABEL_OFFSET_PX = 10
 const DEFAULT_LABEL_DIRECTION: Vec2 = { x: Math.SQRT1_2, y: Math.SQRT1_2 }
 
+// three.js's CircleGeometry with a low segment count is a regular polygon, so
+// every shape is one call with a different segment count and start angle — no
+// per-shape geometry code, and all of them stay centred on the point.
+//
+// Unit radius, always: applyPointSizes scales these meshes rather than
+// rebuilding them (see its comment), so anything pre-sized here gets sized
+// twice.
+function markerGeometry(shape: MarkerShape): THREE.CircleGeometry {
+  switch (shape) {
+    // Segment counts below 24 inscribe a smaller area than a circle of the
+    // same radius, so the polygons are nudged outward to read as the same
+    // visual weight as a dot next to them.
+    case 'square':
+      return new THREE.CircleGeometry(1.15, 4, Math.PI / 4)
+    case 'diamond':
+      return new THREE.CircleGeometry(1.25, 4)
+    case 'triangle-up':
+      return new THREE.CircleGeometry(1.3, 3, Math.PI / 2)
+    case 'triangle-down':
+      return new THREE.CircleGeometry(1.3, 3, -Math.PI / 2)
+    default:
+      return new THREE.CircleGeometry(1, 24)
+  }
+}
+
 export interface SceneRendererOptions {
   // Colours to use instead of the theme's built-in palette (see palette.ts).
   palette?: Palette
@@ -103,6 +129,7 @@ interface MiscEntry {
   kind: SceneObject['kind']
   outline: boolean
   hasLabel: boolean
+  shape: MarkerShape
   object3d: THREE.Object3D
   // Only set for kinds contentKey knows how to key (ray + the geometry-
   // annotation marks) — see contentKey below.
@@ -430,10 +457,22 @@ export class SceneRenderer {
     this.animated = []
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i]
-      const outline = obj.kind === 'point' && obj.style === 'outline'
+      // A feature point's appearance comes from its kind; an ordinary plotted
+      // point still honours its own `style`. 'ring' and "outline" are the same
+      // picture, so they share a branch.
+      const shape: MarkerShape =
+        obj.kind !== 'point' ? 'dot' : obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+      const outline = obj.kind === 'point' && shape === 'ring'
       const hasLabel = obj.kind === 'point' && !!obj.label
       const prev = this.miscEntries[i]
-      if (obj.kind === 'point' && prev && prev.kind === 'point' && prev.outline === outline && prev.hasLabel === hasLabel) {
+      if (
+        obj.kind === 'point' &&
+        prev &&
+        prev.kind === 'point' &&
+        prev.outline === outline &&
+        prev.hasLabel === hasLabel &&
+        prev.shape === shape
+      ) {
         this.updatePointObject(prev.object3d as THREE.Group, obj)
         next.push(prev)
         continue
@@ -451,7 +490,7 @@ export class SceneRenderer {
         const built = this.buildObject(obj)
         if (built) {
           this.miscGroup.add(built)
-          next.push({ kind: obj.kind, outline, hasLabel, object3d: built, cacheKey })
+          next.push({ kind: obj.kind, outline, hasLabel, shape, object3d: built, cacheKey })
         }
         continue
       }
@@ -462,7 +501,7 @@ export class SceneRenderer {
       const built = this.buildObject(obj)
       if (built) {
         this.miscGroup.add(built)
-        next.push({ kind: obj.kind, outline, hasLabel, object3d: built })
+        next.push({ kind: obj.kind, outline, hasLabel, shape, object3d: built })
       }
     }
     for (let i = objects.length; i < this.miscEntries.length; i++) {
@@ -509,7 +548,16 @@ export class SceneRenderer {
   // that's what makes "just move the group" a correct, complete update.
   private updatePointObject(group: THREE.Group, obj: Extract<SceneObject, { kind: 'point' }>) {
     group.position.set(obj.position.x, obj.position.y, 0)
-    const outline = obj.style === 'outline'
+    // Must mirror buildObject's own shape/outline derivation exactly: a
+    // feature point (e.g. an x-/y-intercept) gets its 'ring' shape from
+    // `obj.feature`, never from `obj.style` (buildScene never sets `style`
+    // on a feature point — see its comment). Reusing `obj.style === 'outline'`
+    // alone here would compute `outline = false` for such a point even
+    // though the group it's reusing was actually built as a ring, which
+    // flips its ring/fill colors and sizes to the wrong (non-outline) pair
+    // on every reuse after the first build.
+    const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+    const outline = shape === 'ring'
     const pointColor = this.colorOr(obj.color, this.palette.point)
     const ringOrHalo = group.children[0] as THREE.Mesh
     const circle = group.children[1] as THREE.Mesh
@@ -654,7 +702,11 @@ export class SceneRenderer {
       // single group.position.set(...) instead of touching each child.
       const group = new THREE.Group()
       group.position.set(obj.position.x, obj.position.y, 0)
-      const outline = obj.style === 'outline'
+      // A feature point's appearance comes from its kind; an ordinary plotted
+      // point still honours its own `style`. 'ring' and "outline" are the same
+      // picture, so they share a branch.
+      const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+      const outline = shape === 'ring'
       const pointColor = this.colorOr(obj.color, this.palette.point)
       if (outline) {
         // Unit radius (1) — applyPointSizes below scales this via a
@@ -674,9 +726,11 @@ export class SceneRenderer {
         // 2px white stroke — and, using the canvas's own background rather
         // than a hardcoded white, stays correct in dark theme too (same
         // technique the outline style above already uses for its own ring).
-        const halo = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: this.palette.background }))
+        // The halo and the fill share the same shape, or the halo would read
+        // as a mismatched (always-round) backing plate behind e.g. a triangle.
+        const halo = new THREE.Mesh(markerGeometry(shape), new THREE.MeshBasicMaterial({ color: this.palette.background }))
         group.add(halo)
-        const circle = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: pointColor }))
+        const circle = new THREE.Mesh(markerGeometry(shape), new THREE.MeshBasicMaterial({ color: pointColor }))
         circle.position.set(0, 0, 0.01)
         group.add(circle)
       }
