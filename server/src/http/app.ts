@@ -11,6 +11,7 @@ import { PROTOCOL_VERSION, TOOLS_VERSION } from "../protocol.js";
 import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
 import { registerLiveProxy } from "./liveProxy.js";
+import { registerAuthoringRoutes } from "./authoringRoutes.js";
 import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, buildTemplateDrawResponse, type PullRequest, type PushRequest } from "../domain/sync.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
 import { DomainError } from "../domain/errors.js";
@@ -126,6 +127,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
   // request never reaches them.
   registerLiveProxy(app, ctx);
   registerApiRoutes(app, ctx);
+  registerAuthoringRoutes(app, ctx);
 
   // Production only: serve the built web app from the same process. The app
   // keeps all navigation in React state (no client-side routes), so plain

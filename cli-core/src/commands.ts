@@ -475,6 +475,277 @@ export function buildRegistry(): Registry {
     },
   })
 
+  // ---- authoring ------------------------------------------------------------------
+  // `q new` walks through the fields; `--json` takes a whole QuestionInput.
+  r.register({
+    path: ['q', 'new'],
+    args: [{ name: 'json', kind: 'text', optional: true, rest: true }],
+    describe: 'Write a question (guided, or --json with the full object)',
+    help:
+      'Guided: type (mc/written), prompt, choices (mc: one per line, mark the key with a leading *), ' +
+      'explanation, tags, difficulty 1-5. With --json the argument is a QuestionInput as create_questions takes it.',
+    async run(ctx, a, flags) {
+      let input: Record<string, unknown>
+      if (flags.json && a.json) {
+        input = JSON.parse(a.json) as Record<string, unknown>
+      } else {
+        const type = ((await ctx.ui.prompt('Type: mc or written')) ?? '').trim().toLowerCase()
+        if (type !== 'mc' && type !== 'written') return ctx.out.error('Type must be mc or written.')
+        const prompt = (await ctx.ui.prompt('Prompt (LaTeX in $…$ is fine)', { multiline: true })) ?? ''
+        if (!prompt.trim()) return ctx.out.error('A prompt is required.')
+        input = { type, prompt: prompt.trim() }
+        if (type === 'mc') {
+          const raw = (await ctx.ui.prompt('Choices, one per line — start the correct one with *', { multiline: true })) ?? ''
+          const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+          if (lines.length < 2) return ctx.out.error('At least two choices.')
+          input.choices = lines.map((l) => ({ body: l.replace(/^\*\s*/, ''), is_correct: l.startsWith('*') }))
+          if (!(input.choices as { is_correct: boolean }[]).some((c) => c.is_correct)) return ctx.out.error('Mark the correct choice with *.')
+        } else {
+          input.model_answer = ((await ctx.ui.prompt('Model answer', { multiline: true })) ?? '').trim() || null
+          const rubric = ((await ctx.ui.prompt('Rubric, one criterion per line (optional)', { multiline: true })) ?? '').trim()
+          if (rubric) input.rubric = rubric.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+        }
+        input.explanation = ((await ctx.ui.prompt('Explanation (optional)', { multiline: true })) ?? '').trim() || null
+        const tagLine = ((await ctx.ui.prompt('Tags, space separated (existing slugs)')) ?? '').trim()
+        input.tags = tagLine.split(/[\s,]+/).filter(Boolean)
+        if (!(input.tags as string[]).length) return ctx.out.error('At least one tag.')
+        const diff = Number(((await ctx.ui.prompt('Difficulty 1-5 (default 3)')) ?? '').trim() || 3)
+        input.difficulty = Number.isFinite(diff) ? diff : 3
+      }
+      const res = await ctx.api.post<{ created: { id: string }[]; rejected: unknown[] }>('/api/questions', { questions: [input] })
+      ctx.out.json(res)
+      const id = res.created?.[0]?.id
+      if (id) await ctx.ui.showQuestion(id)
+    },
+  })
+  r.register({
+    path: ['q', 'edit'],
+    args: [
+      { name: 'question', kind: 'question' },
+      { name: 'json', kind: 'text', rest: true },
+    ],
+    describe: 'Edit a question: q edit <id> {"prompt": "…", "tags": […]}',
+    async run(ctx, a) {
+      const changes = JSON.parse(a.json) as Record<string, unknown>
+      ctx.out.json(await ctx.api.patch(`/api/questions/${encodeURIComponent(a.question)}`, changes))
+    },
+  })
+  r.register({
+    path: ['q', 'retire'],
+    args: [
+      { name: 'question', kind: 'question' },
+      { name: 'reason', kind: 'text', optional: true, rest: true },
+    ],
+    describe: 'Retire a question (kept for history, never drawn again)',
+    async run(ctx, a) {
+      if (!(await ctx.ui.confirm(`Retire question ${a.question.slice(0, 8)}…?`))) return
+      ctx.out.json(await ctx.api.post(`/api/questions/${encodeURIComponent(a.question)}/retire`, { reason: a.reason }))
+    },
+  })
+  r.register({
+    path: ['template', 'new'],
+    args: [{ name: 'json', kind: 'text', optional: true, rest: true }],
+    describe: 'Make a test (guided, or --json with the full template)',
+    async run(ctx, a, flags) {
+      let input: Record<string, unknown>
+      if (flags.json && a.json) input = JSON.parse(a.json) as Record<string, unknown>
+      else {
+        const name = ((await ctx.ui.prompt('Name')) ?? '').trim()
+        if (!name) return ctx.out.error('A name is required.')
+        const tagsAll = ((await ctx.ui.prompt('Tags every question must carry (space separated)')) ?? '').trim().split(/[\s,]+/).filter(Boolean)
+        const tagsAny = ((await ctx.ui.prompt('Tags any question may carry (optional)')) ?? '').trim().split(/[\s,]+/).filter(Boolean)
+        if (!tagsAll.length && !tagsAny.length) return ctx.out.error('At least one tag.')
+        const count = Number(((await ctx.ui.prompt('How many questions (default 10)')) ?? '').trim() || 10)
+        const limit = ((await ctx.ui.prompt('Time limit in minutes (blank for none)')) ?? '').trim()
+        const frozen = /^y/i.test(((await ctx.ui.prompt('Freeze the draw so it is the same set every time? y/N')) ?? '').trim())
+        input = {
+          name,
+          tag_query: { ...(tagsAll.length ? { all: tagsAll } : {}), ...(tagsAny.length ? { any: tagsAny } : {}) },
+          question_count: Number.isFinite(count) ? count : 10,
+          time_limit_sec: limit ? Math.round(Number(limit) * 60) : null,
+          frozen,
+        }
+      }
+      const res = await ctx.api.post<{ id: string }>('/api/templates', input)
+      ctx.out.json(res)
+      if (res.id && !(await ctx.ui.navigate('library', { template: res.id }))) ctx.out.text(`Template ${res.id} created.`)
+    },
+  })
+  r.register({
+    path: ['template', 'sql'],
+    args: [{ name: 'test', kind: 'template', rest: true }],
+    describe: 'A test as JSON plus the SQL its draw runs, in the document viewer',
+    async run(ctx, a) {
+      const t = await findTemplate(ctx, a.test)
+      if (!t) return
+      const res = await ctx.api.get<{ template: unknown; eligibility_sql: string; eligibility_args: unknown[]; frozen_question_ids: string[] }>(
+        `/api/templates/${t.id}/sql`
+      )
+      const text = [
+        `${res.eligibility_sql}`,
+        `-- args: ${JSON.stringify(res.eligibility_args)}`,
+        res.frozen_question_ids.length ? `-- frozen to ${res.frozen_question_ids.length} questions` : '-- drawn fresh each attempt',
+        '',
+        JSON.stringify(res.template, null, 2),
+      ].join('\n')
+      if (!(await ctx.ui.showDocument({ title: `${t.name} — SQL and JSON`, text }))) ctx.out.text(text)
+    },
+  })
+
+  // ---- showing --------------------------------------------------------------------
+  r.register({
+    path: ['graph'],
+    args: [{ name: 'spec', kind: 'text', rest: true }],
+    describe: 'Render a graph_spec on screen: graph "y = x^2"',
+    async run(ctx, a) {
+      const spec = a.spec.replace(/\\n/g, '\n').replace(/\s*;\s*/g, '\n')
+      if (!(await ctx.ui.showGraph(spec, 'Graph'))) ctx.out.text(spec)
+    },
+  })
+  r.register({
+    path: ['doc'],
+    args: [{ name: 'asset', kind: 'asset', rest: true }],
+    describe: 'Open a document in the viewer',
+    async run(ctx, a) {
+      const res = await ctx.api.get<{ assets: AssetRow[] }>('/api/assets')
+      const hit =
+        (res.assets ?? []).find((x) => x.id === a.asset) ?? (await pickOne(ctx, 'document', a.asset, res.assets ?? [], (x) => x.title))
+      if (!hit) return
+      if (!(await ctx.ui.showDocument({ assetId: hit.id }))) ctx.out.json(await ctx.api.get(`/api/assets/${hit.id}`))
+    },
+  })
+  r.register({
+    path: ['show', 'text'],
+    args: [{ name: 'text', kind: 'text', rest: true }],
+    describe: 'Put a note on screen (LaTeX renders)',
+    async run(ctx, a) {
+      if (!(await ctx.ui.showDocument({ title: 'Note', text: a.text }))) ctx.out.text(a.text)
+    },
+  })
+
+  // ---- live ------------------------------------------------------------------------
+  r.register({
+    path: ['session', 'new'],
+    args: [
+      { name: 'name', kind: 'text' },
+      { name: 'tag', kind: 'tag', optional: true, rest: true },
+    ],
+    describe: 'Open a live session of your own: session new "Friday drill" [tag]',
+    async run(ctx, a) {
+      const tag = a.tag ? await findTag(ctx, a.tag) : null
+      if (a.tag && !tag) return
+      const res = await ctx.api.post<{ id: string; name: string }>('/api/sessions', { name: a.name, tag_slug: tag?.slug ?? null })
+      ctx.out.json(res)
+      if (!(await ctx.ui.navigate('live', { session: res.id }))) ctx.out.text(`Session ${res.id} open.`)
+    },
+  })
+  r.register({
+    path: ['present'],
+    args: [
+      { name: 'question', kind: 'question' },
+      { name: 'session', kind: 'session', optional: true, rest: true },
+    ],
+    describe: 'Present a question into a session (the newest open one by default)',
+    async run(ctx, a, flags) {
+      const res = await ctx.api.get<{ sessions: SessionRow[] }>('/api/sessions', { limit: 50 })
+      const open = (res.sessions ?? []).filter((x) => !x.ended_at)
+      const s = a.session ? await pickOne(ctx, 'session', a.session, open, (x) => x.name) : open[0]
+      if (!s) return ctx.out.error(a.session ? '' : 'No open session — session new "<name>" first.')
+      let qid = a.question
+      if (!/^[0-9a-f-]{32,36}$/i.test(qid)) {
+        const qs = await ctx.api.get<{ questions: QuestionRow[] }>('/api/questions', { text: qid, limit: 5 })
+        const hit = await pickOne(ctx, 'question', qid, qs.questions ?? [], (q) => q.prompt)
+        if (!hit) return
+        qid = hit.id
+      }
+      const out = await ctx.api.post<{ attempt_id: string; response_id: string }>(`/api/sessions/${s.id}/present`, {
+        question_id: qid,
+        reveal: flags.deferred ? 'deferred' : undefined,
+      })
+      ctx.out.json(out)
+      if (!(await ctx.ui.navigate('live', { session: s.id }))) await ctx.ui.startAttempt(out.attempt_id)
+    },
+  })
+  r.register({
+    path: ['ungraded'],
+    args: [{ name: 'session', kind: 'session', optional: true, rest: true }],
+    describe: 'Written answers waiting for a verdict',
+    async run(ctx, a) {
+      let session_id: string | undefined
+      if (a.session) {
+        const res = await ctx.api.get<{ sessions: SessionRow[] }>('/api/sessions', { limit: 100 })
+        const s = await pickOne(ctx, 'session', a.session, res.sessions ?? [], (x) => x.name)
+        if (!s) return
+        session_id = s.id
+      }
+      const res = await ctx.api.get<{ total: number; responses: Record<string, unknown>[] }>('/api/responses/ungraded', { session_id, limit: 30 })
+      ctx.out.table(
+        (res.responses ?? []).map((x) => ({
+          response: String(x.response_id).slice(0, 8),
+          prompt: String(x.prompt).slice(0, 50),
+          answer: String(x.response_text ?? '').slice(0, 50),
+          self: (x.self_grade as { score: number | null } | null)?.score ?? '—',
+        }))
+      )
+      ctx.out.text(`${res.total} waiting · grade <response> <score> ["diagnosis"]`)
+    },
+  })
+  r.register({
+    path: ['grade'],
+    args: [
+      { name: 'response', kind: 'response' },
+      { name: 'score', kind: 'score' },
+      { name: 'diagnosis', kind: 'text', optional: true, rest: true },
+    ],
+    describe: 'Grade a written answer 0..1 as the judge, with a one-line diagnosis',
+    async run(ctx, a) {
+      const score = Number(a.score)
+      if (!(score >= 0 && score <= 1)) return ctx.out.error('Score is 0..1.')
+      const res = await ctx.api.get<{ responses: { response_id: string }[] }>('/api/responses/ungraded', { limit: 200 })
+      const hits = (res.responses ?? []).filter((x) => x.response_id.startsWith(a.response))
+      const id = hits.length === 1 ? hits[0].response_id : a.response
+      ctx.out.json(await ctx.api.post(`/api/responses/${encodeURIComponent(id)}/tutor-grade`, { grader: 'judge', score, diagnosis: a.diagnosis ?? null }))
+    },
+  })
+  r.completer('response', async (ctx) => {
+    const res = await ctx.api.get<{ responses: { response_id: string; prompt: string; response_text: string | null }[] }>('/api/responses/ungraded', { limit: 50 })
+    return (res.responses ?? []).map((x) => ({ value: x.response_id, hint: `${x.prompt.slice(0, 40)} → ${(x.response_text ?? '').slice(0, 30)}` }))
+  })
+  r.completer('score', async () => [{ value: '1' }, { value: '0.5' }, { value: '0' }])
+
+  // ---- administration --------------------------------------------------------------
+  r.completer('admin-scope', async () => [
+    { value: 'attempts', hint: 'every attempt, response and grade' },
+    { value: 'daily', hint: 'daily draws and their attempts' },
+    { value: 'sessions', hint: 'live sessions, their items and shows' },
+    { value: 'all', hint: 'all of the above, plus retention and outbox' },
+  ])
+  r.register({
+    path: ['admin', 'status'],
+    describe: 'Row counts and database size',
+    async run(ctx) {
+      ctx.out.json(await ctx.api.get('/api/admin/status'))
+    },
+  })
+  r.register({
+    path: ['admin', 'reindex'],
+    describe: 'Rebuild the search index and refresh query statistics',
+    async run(ctx) {
+      ctx.out.json(await ctx.api.post('/api/admin/reindex'))
+    },
+  })
+  r.register({
+    path: ['admin', 'clear'],
+    args: [{ name: 'scope', kind: 'admin-scope' }],
+    describe: 'Delete data: attempts | daily | sessions | all (never the bank)',
+    async run(ctx, a) {
+      const scope = a.scope.toLowerCase()
+      if (!['attempts', 'daily', 'sessions', 'all'].includes(scope)) return ctx.out.error('Scope is attempts, daily, sessions or all.')
+      if (!(await ctx.ui.confirm(`Delete ${scope === 'all' ? 'every attempt, daily draw, session, retention row and outbox entry' : scope} on this node? This cannot be undone.`, 'CLEAR'))) return
+      ctx.out.json(await ctx.api.post('/api/admin/clear', { scope, confirm: 'CLEAR' }))
+    },
+  })
+
   // ---- meta ------------------------------------------------------------------------
   r.register({
     path: ['clear'],

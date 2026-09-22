@@ -18,7 +18,7 @@ export interface EligibleQuestion {
   type: "mc" | "written";
 }
 
-function buildEligibilityClause(params: EligibilityParams): { sql: string; args: unknown[] } {
+export function buildEligibilityClause(params: EligibilityParams): { sql: string; args: unknown[] } {
   const clauses = [
     "q.retired_at IS NULL",
     // An ephemeral item exists for one live moment in one session; it is
