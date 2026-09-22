@@ -27,6 +27,12 @@ export type Condition =
 //   r = <expr(theta)> [for theta in [a, b]]      -> polar curve (2D); theta defaults to [0, 2*pi]
 //   <expr(x,y)> = <expr(x,y)>                   -> implicit curve (conics, circles, etc.; 2D)
 //   <expr(x,y)> <|<=|>|>= <expr(x,y)>            -> shaded inequality region (2D)
+//   <expr> <|<= <expr(x,y)> <|<= <expr>          -> chained inequality region (2D); the shaded region is
+//     <expr> >|>= <expr(x,y)> >|>= <expr>           the intersection of both comparisons (e.g. a band or an
+//                                                     annulus). Both operators must point the same way — "a <
+//                                                     x < b" or "a > x > b" — mixing directions ("a < x > b")
+//                                                     is rejected. Strictness can differ per side (e.g. "-2 <=
+//                                                     x < 5"); each traced edge is dashed per its own operator.
 //   field: dy/dx = <expr(x,y)>                   -> slope/direction field (2D, diff eq)
 //   scatter: (x1,y1), (x2,y2), ...               -> scatter points + auto linear regression (2D)
 //   label = (x, y[, z])  |  (x, y[, z])          -> point, label optional; 3-tuple is a 3D point
@@ -87,6 +93,7 @@ export type StatementShape =
   | { kind: 'polar'; body: Expr; from: Expr; to: Expr }
   | { kind: 'implicit'; left: Expr; right: Expr }
   | { kind: 'region'; left: Expr; op: '<' | '<=' | '>' | '>='; right: Expr }
+  | { kind: 'regionChain'; low: Expr; lowOp: '<' | '<='; mid: Expr; highOp: '<' | '<='; high: Expr }
   | { kind: 'field'; body: Expr }
   | { kind: 'scatter'; points: [Expr, Expr][] }
   | { kind: 'point'; label: string | null; x: Expr; y: Expr; z: Expr | null }

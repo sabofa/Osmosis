@@ -454,6 +454,45 @@ function parseStatementCore(rawLine: string): StatementShape {
           `To shade over a bounded interval, restrict the function itself instead, e.g. "y = x^2 if 0 <= x <= 3".`
       )
     }
+
+    // A second top-level comparator inside "right" means this is a chained
+    // comparison ("7 < x < 12"), not a single region — expressions never
+    // contain "<"/">" themselves, so any second comparator here is
+    // unambiguously a chain, not a false positive from the expression text.
+    const second = findComparator(right)
+    if (second) {
+      const mid = right.slice(0, second.idx).trim()
+      const tail = right.slice(second.idx + second.op.length).trim()
+      if (findComparator(tail)) {
+        throw new Error(
+          `A chained comparison supports only two operators (e.g. "7 < x < 12"), but found a third comparator in "${line.trim()}".`
+        )
+      }
+      const firstIsLess = relation.op === '<' || relation.op === '<='
+      const secondIsLess = second.op === '<' || second.op === '<='
+      if (firstIsLess !== secondIsLess) {
+        throw new Error(
+          `Chained comparison operators must point the same direction, but found "${relation.op}" and "${second.op}" in "${line.trim()}". ` +
+            `Use "a < x < b" or "a > x > b", not a mix like "a < x > b".`
+        )
+      }
+      // Normalise "a > x > b" into the equivalent "b < x < a" shape so
+      // buildScene only ever has to handle one internal form.
+      const flip = (op: '<' | '<=' | '>' | '>='): '<' | '<=' => (op === '>' ? '<' : op === '>=' ? '<=' : op)
+      const low = firstIsLess ? left : tail
+      const lowOp = firstIsLess ? relation.op : flip(second.op)
+      const high = firstIsLess ? tail : left
+      const highOp = firstIsLess ? second.op : flip(relation.op)
+      return {
+        kind: 'regionChain',
+        low: parseExprString(low),
+        lowOp: lowOp as '<' | '<=',
+        mid: parseExprString(mid),
+        highOp: highOp as '<' | '<=',
+        high: parseExprString(high),
+      }
+    }
+
     return { kind: 'region', left: parseExprString(left), op: relation.op, right: parseExprString(right) }
   }
 

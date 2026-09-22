@@ -169,6 +169,88 @@ describe('parseStatement', () => {
     expect(s.to).toBe('C')
   })
 
+  describe('chained inequality regions', () => {
+    it('parses a "lo < mid < hi" chain into a normalised regionChain', () => {
+      const s = parseStatement('7 < x < 12')
+      expect(s.kind).toBe('regionChain')
+      if (s.kind !== 'regionChain') throw new Error('unreachable')
+      expect(s.low).toEqual({ kind: 'num', value: 7 })
+      expect(s.lowOp).toBe('<')
+      expect(s.mid).toEqual({ kind: 'var', name: 'x' })
+      expect(s.highOp).toBe('<')
+      expect(s.high).toEqual({ kind: 'num', value: 12 })
+    })
+
+    it('parses an inclusive chain "-2 <= y <= 5"', () => {
+      const s = parseStatement('-2 <= y <= 5')
+      expect(s.kind).toBe('regionChain')
+      if (s.kind !== 'regionChain') throw new Error('unreachable')
+      expect(s.lowOp).toBe('<=')
+      expect(s.mid).toEqual({ kind: 'var', name: 'y' })
+      expect(s.highOp).toBe('<=')
+    })
+
+    it('parses an annulus chain "0 < x^2 + y^2 < 9"', () => {
+      const s = parseStatement('0 < x^2 + y^2 < 9')
+      expect(s.kind).toBe('regionChain')
+      if (s.kind !== 'regionChain') throw new Error('unreachable')
+      expect(s.low).toEqual({ kind: 'num', value: 0 })
+      expect(s.high).toEqual({ kind: 'num', value: 9 })
+    })
+
+    it('parses an inclusive annulus chain "1 <= x^2 + y^2 <= 4"', () => {
+      const s = parseStatement('1 <= x^2 + y^2 <= 4')
+      expect(s.kind).toBe('regionChain')
+      if (s.kind !== 'regionChain') throw new Error('unreachable')
+      expect(s.lowOp).toBe('<=')
+      expect(s.highOp).toBe('<=')
+    })
+
+    it('parses mixed strictness "-2 <= x < 5"', () => {
+      const s = parseStatement('-2 <= x < 5')
+      expect(s.kind).toBe('regionChain')
+      if (s.kind !== 'regionChain') throw new Error('unreachable')
+      expect(s.lowOp).toBe('<=')
+      expect(s.highOp).toBe('<')
+    })
+
+    it('normalises a ">" chain ("x^2 > k > 7") into the equivalent "<" shape', () => {
+      const s = parseStatement('x^2 > k > 7')
+      expect(s.kind).toBe('regionChain')
+      if (s.kind !== 'regionChain') throw new Error('unreachable')
+      expect(s.low).toEqual({ kind: 'num', value: 7 })
+      expect(s.lowOp).toBe('<')
+      expect(s.mid).toEqual({ kind: 'var', name: 'k' })
+      expect(s.highOp).toBe('<')
+      expect(s.high).toEqual({
+        kind: 'binary',
+        op: '^',
+        left: { kind: 'var', name: 'x' },
+        right: { kind: 'num', value: 2 },
+      })
+    })
+
+    it('rejects a mixed-direction chain with a direction-conflict message naming both operators, not a tokenizer error', () => {
+      expect(() => parseStatement('a < x > b')).toThrow(/direction/i)
+      expect(() => parseStatement('a < x > b')).toThrow(/"<"/)
+      expect(() => parseStatement('a < x > b')).toThrow(/">"/)
+      expect(() => parseStatement('a < x > b')).not.toThrow(/Unexpected character/)
+    })
+
+    it('still parses single inequalities exactly as before (not as one-sided chains)', () => {
+      const gt = parseStatement('y > x^2 - 4')
+      expect(gt.kind).toBe('region')
+      if (gt.kind !== 'region') throw new Error('unreachable')
+      expect(gt.op).toBe('>')
+
+      const gte = parseStatement('x >= 3')
+      expect(gte.kind).toBe('region')
+      if (gte.kind !== 'region') throw new Error('unreachable')
+      expect(gte.op).toBe('>=')
+      expect(gte.right).toEqual({ kind: 'num', value: 3 })
+    })
+  })
+
   it('applies a trailing color clause to a polygon and an angle', () => {
     const polygon = parseStatement('polygon: A(0,0), B(4,0), C(2,3) color: teal')
     expect(polygon.color).toBe('teal')

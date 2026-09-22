@@ -309,6 +309,51 @@ function buildRegion(statement: Statement & { kind: 'region' }, bounds: Bounds, 
   return objects
 }
 
+// A chained comparison ("lo op1 mid op2 hi", already normalised in
+// parseStatement.ts so lowOp/highOp are always "<" or "<=") is the
+// intersection of "mid > lo" and "mid < hi". Both hold exactly where
+// min(mid - lo, hi - mid) > 0, so feeding that single function to
+// traceImplicitRegion gets the fill and the boundary in one marching-squares
+// pass, same as the plain single-inequality case above.
+function buildRegionChain(statement: Statement & { kind: 'regionChain' }, bounds: Bounds, config: GraphConfig, resolution: number, functions: FunctionTable): SceneObject[] {
+  const lowFn = compileExpr(statement.low, config.angle, functions)
+  const midFn = compileExpr(statement.mid, config.angle, functions)
+  const highFn = compileExpr(statement.high, config.angle, functions)
+  const bindings: Bindings = { x: 0, y: 0 }
+  const f = (x: number, y: number) => {
+    bindings.x = x
+    bindings.y = y
+    return Math.min(midFn(bindings) - lowFn(bindings), highFn(bindings) - midFn(bindings))
+  }
+  const { triangles, boundarySegments } = traceImplicitRegion(f, bounds, resolution)
+  const objects: SceneObject[] = []
+  if (triangles.length > 0) objects.push({ kind: 'region', triangles, color: statement.color })
+
+  if (boundarySegments.length > 0) {
+    // Strictness can differ per side (e.g. "-2 <= x < 5"), so each traced
+    // edge is classified on its own: evaluate which constraint is tighter
+    // (smaller of mid-lo / hi-mid) at the segment's midpoint — that's the
+    // constraint whose boundary this edge actually lies on — and dash it
+    // according to that constraint's own operator rather than one uniform
+    // style for the whole boundary.
+    const dashedPairs: [Vec2, Vec2][] = []
+    const solidPairs: [Vec2, Vec2][] = []
+    for (const [from, to] of boundarySegments) {
+      bindings.x = (from.x + to.x) / 2
+      bindings.y = (from.y + to.y) / 2
+      const mid = midFn(bindings)
+      const lowGap = mid - lowFn(bindings)
+      const highGap = highFn(bindings) - mid
+      const lowActive = lowGap <= highGap
+      const strict = lowActive ? statement.lowOp === '<' : statement.highOp === '<'
+      ;(strict ? dashedPairs : solidPairs).push([from, to])
+    }
+    if (dashedPairs.length > 0) objects.push({ kind: 'segments', pairs: dashedPairs, dashed: true, color: statement.color })
+    if (solidPairs.length > 0) objects.push({ kind: 'segments', pairs: solidPairs, dashed: false, color: statement.color })
+  }
+  return objects
+}
+
 // One short tick per grid point, angled by the local slope — a direction
 // field for dy/dx = f(x,y).
 function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, config: GraphConfig, functions: FunctionTable): SceneObject[] {
@@ -500,6 +545,8 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
         objects.push(...traceImplicit(statement, bounds, config, resolution, functions))
       } else if (statement.kind === 'region') {
         objects.push(...buildRegion(statement, bounds, config, resolution, functions))
+      } else if (statement.kind === 'regionChain') {
+        objects.push(...buildRegionChain(statement, bounds, config, resolution, functions))
       } else if (statement.kind === 'field') {
         objects.push(...buildField(statement, bounds, config, functions))
       } else if (statement.kind === 'tangent') {
