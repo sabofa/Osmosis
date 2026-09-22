@@ -42,6 +42,8 @@ export interface Ui {
   startAttempt(attemptId: string): Promise<boolean>
   openThemeEditor(themeId?: string): Promise<boolean>
   setThemeMode(mode: 'light' | 'dark' | 'system'): Promise<boolean>
+  // The shell itself: clear its output, restart it fresh, or reload the host.
+  shell(action: 'clear' | 'restart' | 'reload'): Promise<boolean>
   confirm(message: string, typeToConfirm?: string): Promise<boolean>
   prompt(label: string, options?: { placeholder?: string; multiline?: boolean }): Promise<string | null>
   // Which surface this is; commands read it to phrase their fallbacks.

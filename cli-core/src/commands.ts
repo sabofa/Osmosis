@@ -424,6 +424,27 @@ export function buildRegistry(): Registry {
 
   // ---- meta ------------------------------------------------------------------------
   r.register({
+    path: ['clear'],
+    describe: 'Clear the output',
+    async run(ctx) {
+      await ctx.ui.shell('clear')
+    },
+  })
+  r.register({
+    path: ['restart'],
+    describe: 'Restart the shell: clear output, forget completions, start fresh',
+    async run(ctx) {
+      await ctx.ui.shell('restart')
+    },
+  })
+  r.register({
+    path: ['reload'],
+    describe: 'Reload the app',
+    async run(ctx) {
+      if (!(await ctx.ui.shell('reload'))) ctx.out.text('Nothing to reload in a terminal.')
+    },
+  })
+  r.register({
     path: ['help'],
     args: [{ name: 'command', kind: 'word', optional: true, rest: true }],
     describe: 'This list, or one command',

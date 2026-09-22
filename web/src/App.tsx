@@ -131,6 +131,12 @@ function App() {
       theme.setTheme(mode)
       return true
     },
+    // clear / restart are the palette's own; reload is the page's.
+    shell: async (action) => {
+      if (action !== 'reload') return false
+      window.location.reload()
+      return true
+    },
     confirm: (message, typeToConfirm) => new Promise((resolve) => setConfirmReq({ message, typeToConfirm, resolve })),
     prompt: (label) =>
       new Promise((resolve) => {

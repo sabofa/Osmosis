@@ -66,7 +66,9 @@ async function parse<T>(res: Response, what: string): Promise<T> {
 }
 
 export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?: () => void }) {
-  const registry = useMemo(() => buildRegistry(), [])
+  // A restart swaps in a fresh registry (and with it, fresh completions).
+  const [generation, setGeneration] = useState(0)
+  const registry = useMemo(() => buildRegistry(), [generation])
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
   const [log, setLog] = useState<Entry[]>([])
@@ -89,7 +91,28 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
       json: (value) => push({ kind: 'json', value }),
       table: (rows, columns) => push({ kind: 'table', rows, columns: columns ?? Object.keys(rows[0] ?? {}) }),
     }
-    return { api: appApi, out, ui }
+    // The shell's own actions wrap the host's ui: clear and restart are the
+    // palette's to do, reload is the page's.
+    const shellUi: Ui = {
+      ...ui,
+      shell: async (action) => {
+        if (action === 'clear') {
+          setLog([])
+          return true
+        }
+        if (action === 'restart') {
+          setLog([])
+          setSuggestions([])
+          setInput('')
+          setGeneration((g) => g + 1)
+          push({ kind: 'text', text: 'Shell restarted.' })
+          return true
+        }
+        window.location.reload()
+        return true
+      },
+    }
+    return { api: appApi, out, ui: shellUi }
   }, [push, ui])
 
   // `/` opens the bar from anywhere that is not a text field.
@@ -150,8 +173,7 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     setSuggestions([])
     setBusy(true)
     try {
-      if (trimmed === 'clear') setLog([])
-      else if (trimmed === 'history') history.current.forEach((h) => push({ kind: 'text', text: h }))
+      if (trimmed === 'history') history.current.forEach((h) => push({ kind: 'text', text: h }))
       else await registry.run(ctx, trimmed)
     } finally {
       setBusy(false)
@@ -189,14 +211,17 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     }
     if (e.key === 'Enter') {
       e.preventDefault()
-      // Enter on a highlighted suggestion that the typed token does not yet
-      // spell out completes it first — "open bank econ" runs as economics.
+      // Enter on a highlighted suggestion fills it in (like Tab) when the
+      // typed token does not already spell it out; Enter again runs. So the
+      // arrow keys pick, Enter takes the pick, and a second Enter goes.
       const s = suggestions[cursor]
       const { tokens } = tokenize(input)
       const last = tokens[tokens.length - 1] ?? ''
-      if (s && cursor > 0 && last && s.label.toLowerCase() !== last.toLowerCase()) {
-        void run(accept(s))
-      } else void run(input)
+      if (s && s.label.toLowerCase() !== last.toLowerCase() && !input.endsWith(' ')) {
+        accept(s)
+        return
+      }
+      void run(input)
     }
   }
 
@@ -208,6 +233,9 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     <div className="cli">
       {logOpen && log.length > 0 && (
         <div className="cli-log no-scrollbar">
+          <button className="cli-log-clear" onClick={() => setLog([])} title="Clear the output (or type clear)">
+            clear
+          </button>
           {log.map((e, i) => (
             <div key={i} className={`cli-entry ${e.kind}`}>
               {e.kind === 'cmd' && <span className="cli-prompt">/</span>}

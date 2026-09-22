@@ -146,6 +146,7 @@
 }
 
 .cli-log {
+  position: relative;
   border: 2px solid var(--line);
   border-radius: 16px;
   background: var(--surface);
@@ -273,4 +274,24 @@
 .cli-prompt-input {
   resize: vertical;
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.cli-log-clear {
+  position: sticky;
+  top: 0;
+  align-self: flex-end;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  margin-bottom: -18px;
+  z-index: 1;
+}
+
+.cli-log-clear:hover {
+  color: var(--ink);
+  border-color: var(--ink);
 }
