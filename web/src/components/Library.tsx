@@ -88,13 +88,18 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export default function Library({ onStart }: { onStart: (templateId: string) => void }) {
+export default function Library({ onStart, initialTemplateId }: { onStart: (templateId: string) => void; initialTemplateId?: string | null }) {
   const [templates, setTemplates] = useState<TemplateSummary[] | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialTemplateId ?? null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [questions, setQuestions] = useState<TemplateQuestionPreview[] | null>(null)
   const tagPopout = useTagPopout()
+
+  // The command line can pick a test while the library is already open.
+  useEffect(() => {
+    if (initialTemplateId) setSelectedId(initialTemplateId)
+  }, [initialTemplateId])
   const [search, setSearch] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('name-asc')
   const [status, setStatus] = useState<NodeStatus | null>(null)

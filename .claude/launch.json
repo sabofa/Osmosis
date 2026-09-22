@@ -4,27 +4,58 @@
     {
       "name": "web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace=web"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--workspace=web"
+      ],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "server",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:local", "--workspace=server"],
+      "runtimeArgs": [
+        "run",
+        "dev:local",
+        "--workspace=server"
+      ],
       "port": 8081
     },
     {
       "name": "graph-engine",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace=graph-engine", "--", "--port", "5174"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--workspace=graph-engine",
+        "--",
+        "--port",
+        "5174"
+      ],
       "port": 5174
     },
     {
       "name": "document-engine",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace=document-engine", "--", "--port", "5176"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--workspace=document-engine",
+        "--",
+        "--port",
+        "5176"
+      ],
       "port": 5176
+    },
+    {
+      "name": "review",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "review"
+      ],
+      "port": 5180
     }
   ]
 }

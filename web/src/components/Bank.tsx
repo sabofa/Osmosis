@@ -8,11 +8,11 @@ import './Bank.css'
 
 const TYPE_LABEL: Record<QuestionSummary['type'], string> = { mc: 'MC', written: 'Written' }
 
-export default function Bank() {
+export default function Bank({ initialTag }: { initialTag?: string | null } = {}) {
   const [tags, setTags] = useState<TagSummary[] | null>(null)
   const [questions, setQuestions] = useState<QuestionSummary[] | null>(null)
   const [total, setTotal] = useState(0)
-  const [selectedTag, setSelectedTag] = useState<string | null>(null)
+  const [selectedTag, setSelectedTag] = useState<string | null>(initialTag ?? null)
   const [openTag, setOpenTag] = useState<string | null>(null)
   const [openQuestionId, setOpenQuestionId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -56,6 +56,11 @@ export default function Bank() {
       .then((r) => setTags(r.tags))
       .catch((err) => setError(String(err)))
   }, [])
+
+  // The command line can point the bank at a tag while it is already open.
+  useEffect(() => {
+    if (initialTag !== undefined) setSelectedTag(initialTag)
+  }, [initialTag])
 
   // Clearing immediately (rather than leaving the previous tag's results on
   // screen until the new ones arrive) is what stops the "flash the old tag,

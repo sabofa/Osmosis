@@ -31,10 +31,18 @@ function formatDrawDate(drawDate: string): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export default function Results() {
+export default function Results({ initialView }: { initialView?: { tag?: string; date?: string } | null } = {}) {
   const [tags, setTags] = useState<ParentTagStat[] | null>(null)
   // The subpages: one tag in full, or one day of daily history.
-  const [view, setView] = useState<{ kind: 'tag'; slug: string } | { kind: 'daily'; date: string } | null>(null)
+  const [view, setView] = useState<{ kind: 'tag'; slug: string } | { kind: 'daily'; date: string } | null>(() =>
+    initialView?.tag ? { kind: 'tag', slug: initialView.tag } : initialView?.date ? { kind: 'daily', date: initialView.date } : null
+  )
+
+  // The command line can open a subject or a day while results is showing.
+  useEffect(() => {
+    if (initialView?.tag) setView({ kind: 'tag', slug: initialView.tag })
+    else if (initialView?.date) setView({ kind: 'daily', date: initialView.date })
+  }, [initialView])
   const [attempts, setAttempts] = useState<AttemptSummary[]>([])
   const [daily, setDaily] = useState<DailyResultStat[] | null>(null)
   const [error, setError] = useState<string | null>(null)
