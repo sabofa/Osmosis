@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GraphConfig } from '../parser/config'
+import type { GraphConfig, StepMode } from '../parser/config'
 import type { Bounds } from './marchingSquares'
 import { AxisLabelPool } from './axisLabelPool'
 import { formatCoord } from '../scene/format'
@@ -30,16 +30,49 @@ export function niceStep(worldSpan: number, targetDivisions: number): number {
   return step * magnitude
 }
 
+// How many gridlines a view may hold before "fixed" gives up and falls back to
+// a nice step. Well past unreadable — this exists only to stop a pathological
+// spec from asking for tens of thousands of lines, not to second-guess an
+// author who wants a dense grid.
+const FIXED_MAX_DIVISIONS = 1000
+
+// The author's step scaled by whole powers of its own base, so the step family
+// survives zoom: 8 -> 64 -> 512, 10 -> 100 -> 1000, 5 -> 25 -> 125. This is the
+// difference from `nice`, which would replace an author's 8 with a 10.
+function geometricStep(base: number, worldSpan: number, targetDivisions: number): number {
+  const ideal = worldSpan / targetDivisions
+  // Which power of `base` lands nearest the ideal spacing. The exponent is
+  // deliberately unclamped: zooming in must be able to reach base^0 and
+  // negative powers, which is what makes 8 -> 1 -> 0.125 work. Clamping it to
+  // >= 1 would pin the step at the base forever on the way in.
+  const exponent = Math.round(Math.log(ideal) / Math.log(base))
+  return Math.pow(base, exponent)
+}
+
 // An author's fixed @xstep/@ystep is the step at the zoom the spec was
 // written for, not a promise to draw a line every 0.25 units at any zoom.
-// Zoomed far out that is thousands of lines and labels per axis; zoomed far
-// in it is none. So the fixed step is scaled by 1-2-5 multiples until the
-// visible span holds a readable number of divisions — the author's step
-// survives untouched whenever it already does.
+// What happens outside that band depends on @step-mode.
 const MIN_DIVISIONS = 3
 const MAX_DIVISIONS = 14
-export function resolveStep(fixed: number | null, worldSpan: number, targetDivisions: number): number {
+export function resolveStep(
+  fixed: number | null,
+  worldSpan: number,
+  targetDivisions: number,
+  mode: StepMode = 'nice'
+): number {
   if (fixed === null || !(fixed > 0) || !(worldSpan > 0)) return niceStep(worldSpan, targetDivisions)
+
+  if (mode === 'fixed') {
+    return worldSpan / fixed <= FIXED_MAX_DIVISIONS ? fixed : niceStep(worldSpan, targetDivisions)
+  }
+
+  if (mode === 'geometric') {
+    // A base of 1 has no geometric progression to walk (1^k is always 1), so
+    // there is nothing this mode can do that `nice` does not do better.
+    if (fixed === 1) return niceStep(worldSpan, targetDivisions)
+    return geometricStep(fixed, worldSpan, targetDivisions)
+  }
+
   const divisions = worldSpan / fixed
   if (divisions >= MIN_DIVISIONS && divisions <= MAX_DIVISIONS) return fixed
   return niceStep(worldSpan, targetDivisions)
@@ -116,8 +149,8 @@ export class GridRenderer {
   // shrinking/growing with the plotted geometry as you zoom.
   draw(bounds: Bounds, config: GraphConfig, pixelToWorld: (px: number) => number) {
     if (config.grid) {
-      const stepX = resolveStep(config.xstep, bounds.xMax - bounds.xMin, 6)
-      const stepY = resolveStep(config.ystep, bounds.yMax - bounds.yMin, 6)
+      const stepX = resolveStep(config.xstep, bounds.xMax - bounds.xMin, 6, config.stepMode)
+      const stepY = resolveStep(config.ystep, bounds.yMax - bounds.yMin, 6, config.stepMode)
 
       const positions: number[] = []
       const startX = Math.ceil(bounds.xMin / stepX) * stepX

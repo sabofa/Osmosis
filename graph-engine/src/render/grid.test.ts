@@ -64,3 +64,52 @@ describe('shouldLabel', () => {
     expect(shouldLabel(5, config)).toBe(false)
   })
 })
+
+describe('resolveStep in geometric mode', () => {
+  // The author's step multiplies by its own base as the view grows, instead of
+  // being replaced by the universal 1-2-5 ladder. A spec written in 8s shows
+  // 8s, then 64s, then 512s — never 10s.
+  it('multiplies the step by its own base when zooming out', () => {
+    expect(resolveStep(8, 60, 6, 'geometric')).toBe(8)
+    expect(resolveStep(8, 500, 6, 'geometric')).toBe(64)
+    expect(resolveStep(8, 4000, 6, 'geometric')).toBe(512)
+  })
+
+  it('divides by the base when zooming in', () => {
+    expect(resolveStep(8, 6, 6, 'geometric')).toBe(1)
+    expect(resolveStep(8, 0.7, 6, 'geometric')).toBeCloseTo(0.125, 10)
+  })
+
+  it('runs 10 -> 100 -> 1000 for a base of 10', () => {
+    expect(resolveStep(10, 70, 6, 'geometric')).toBe(10)
+    expect(resolveStep(10, 700, 6, 'geometric')).toBe(100)
+    expect(resolveStep(10, 7000, 6, 'geometric')).toBe(1000)
+  })
+
+  it('runs 5 -> 25 -> 125 for a base of 5', () => {
+    expect(resolveStep(5, 35, 6, 'geometric')).toBe(5)
+    expect(resolveStep(5, 175, 6, 'geometric')).toBe(25)
+    expect(resolveStep(5, 875, 6, 'geometric')).toBe(125)
+  })
+
+  it('falls back to nice when no fixed step was given', () => {
+    expect(resolveStep(null, 10, 6, 'geometric')).toBe(niceStep(10, 6))
+  })
+})
+
+describe('resolveStep in fixed mode', () => {
+  it('never rescales while the division count stays sane', () => {
+    expect(resolveStep(0.25, 200, 6, 'fixed')).toBe(0.25)
+  })
+
+  // Without a guard this would ask for 40,000 gridlines and lock the tab.
+  it('falls back to nice rather than drawing a pathological number of lines', () => {
+    expect(resolveStep(0.25, 100000, 6, 'fixed')).toBe(niceStep(100000, 6))
+  })
+})
+
+describe('resolveStep defaults', () => {
+  it('behaves exactly as before when no mode is passed', () => {
+    expect(resolveStep(0.25, 200, 6)).toBe(resolveStep(0.25, 200, 6, 'nice'))
+  })
+})
