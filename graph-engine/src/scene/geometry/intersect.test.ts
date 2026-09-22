@@ -13,7 +13,11 @@ const L2 = infiniteLine({ x: 0, y: 4 }, { x: 8, y: 0 })
 // that happen to lie on it — so the two intersections are exactly the
 // defining points, with no rounding to argue about.
 const O = circle({ x: 0, y: 0 }, 5)
-const CHORD = infiniteLine({ x: -3, y: 4 }, { x: 4, y: 3 })
+// Deliberately defined right-to-left: the solver emits its two hits along the
+// line's own direction, so a chord pointing in -x emits them x-*descending*.
+// D3's sort is therefore the only thing that can produce the expected order,
+// and deleting it fails this test instead of leaving it green by luck.
+const CHORD = infiniteLine({ x: 4, y: 3 }, { x: -3, y: 4 })
 
 describe('intersect — line x line', () => {
   it('finds the crossing point of two non-axis-aligned lines', () => {
@@ -110,7 +114,9 @@ describe('intersect — line x circle', () => {
     // Circle about (1,2) of radius 5, cut by the vertical line x = 4:
     // (4-1)^2 + (y-2)^2 = 25 -> y - 2 = +/-4 -> y = -2 and y = 6.
     const c = circle({ x: 1, y: 2 }, 5)
-    const vertical = infiniteLine({ x: 4, y: 0 }, { x: 4, y: 10 })
+    // Drawn downward, so the natural emission order is y = 6 then y = -2.
+    // Only the D3 tie-break on y puts them back the other way round.
+    const vertical = infiniteLine({ x: 4, y: 10 }, { x: 4, y: 0 })
     const hits = intersect(vertical, c)
     expect(hits).toHaveLength(2)
     expect(hits[0].x).toBeCloseTo(4, 12)
@@ -127,7 +133,10 @@ describe('intersect — circle x circle', () => {
     // half-chord is h = sqrt(25 - 6.25) = 2.5*sqrt(3), offset along the
     // perpendicular (-0.8, 0.6):
     //   (1.5 - 2*sqrt(3), 2 + 1.5*sqrt(3)) and (1.5 + 2*sqrt(3), 2 - 1.5*sqrt(3))
-    const hits = intersect(O, circle({ x: 3, y: 4 }, 5))
+    // The offset circle first, so the centre-to-centre unit vector points in
+    // -x and the two hits come off the perpendicular x-descending. D3's sort
+    // is what restores the order.
+    const hits = intersect(circle({ x: 3, y: 4 }, 5), O)
     const s = Math.sqrt(3)
     expect(hits).toHaveLength(2)
     expect(hits[0].x).toBeCloseTo(1.5 - 2 * s, 10)
