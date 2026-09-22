@@ -71,8 +71,14 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       return
     }
     case 'mode': {
-      if (value !== 'graph' && value !== 'table') throw new Error(`@mode must be "graph" or "table", got "${value}"`)
+      if (value !== 'graph' && value !== 'figure' && value !== 'table') {
+        throw new Error(`@mode must be "graph", "figure" or "table", got "${value}"`)
+      }
       config.mode = value
+      // Recorded separately from the value, because "the author asked for a
+      // graph" and "the author said nothing and graph is the default" have
+      // to be told apart — see scene/mode.ts's resolveMode.
+      config.modeDeclared = true
       return
     }
     case 'hide':

@@ -89,7 +89,12 @@ Config directives, one per line anywhere in the spec, "@key: value" (order doesn
   @xstep: <n>  @ystep: <n>         gridline spacing
   @grid: on|off   @axes: on|off    toggle grid/axes (both default on)
   @angle: degrees|radians          default radians
-  @mode: graph|table                force table-only rendering
+  @mode: graph|figure|table        which renderer draws this spec. ALWAYS WRITE THIS LINE, including
+                                   "@mode: graph". figure = geometry on bare paper (no axes/grid/zoom);
+                                   graph = the plot canvas; table = a plain table. Left out, it is
+                                   inferred — geometry-only specs become figures, any plotted function
+                                   makes it a graph — and then adding one "y = ..." to a figure silently
+                                   turns the whole picture into a plot. Declaring it prevents that.
   @points: intercepts,vertices,all,none   auto-mark these feature points
   @asymptotes: on|off              dashed guide at detected vertical asymptotes (default on)
   @formulas: on|off                show a table generator's formula alongside its table (default off)

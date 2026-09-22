@@ -42,7 +42,15 @@ export interface GraphConfig {
   grid: boolean
   axes: boolean
   angle: 'degrees' | 'radians'
-  mode: 'graph' | 'table'
+  // Which renderer draws this spec. `figure` is the SVG figure renderer —
+  // its own renderer, selected the way `table` already selects TableView,
+  // not the plot renderer with its axes switched off.
+  mode: 'graph' | 'figure' | 'table'
+  // Whether the spec said `@mode:` itself. An explicit value always wins
+  // over inference (see scene/mode.ts's resolveMode), so the two have to be
+  // distinguishable — `mode: 'graph'` alone cannot say whether the author
+  // asked for a graph or simply did not ask for anything.
+  modeDeclared: boolean
   points: Set<FeatureKind>
   // Tick-label density, independent of `axes`. v1 drew labels only when axes
   // were on, so "a graph with no numbers" was only reachable as "a graph with
@@ -86,6 +94,7 @@ export function defaultConfig(): GraphConfig {
     axes: true,
     angle: 'radians',
     mode: 'graph',
+    modeDeclared: false,
     points: new Set(),
     labels: 'all',
     labelEvery: 1,

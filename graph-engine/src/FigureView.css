@@ -1,0 +1,31 @@
+/* Part of the public GraphViewer API surface (see src/index.ts) — kept
+   self-contained, like TableView.css, so a consumer importing only
+   FigureView still gets a correct render.
+
+   There is almost nothing here on purpose. The figure is a single <svg>
+   whose own viewBox carries the layout, its aspect is locked 1:1 by the
+   renderer, and its paper colour comes from the resolved palette — so the
+   page's job is only to give it a box to fit inside and centre it there. */
+.figure-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--surface, #fdf6ea);
+}
+
+.figure-view-dark {
+  background: var(--surface, #201e15);
+}
+
+/* "meet" on the svg's own preserveAspectRatio does the fitting; this just
+   stops the element from overflowing the box it was given. */
+.figure-view > svg {
+  max-width: 100%;
+  max-height: 100%;
+  width: 100%;
+  height: 100%;
+  display: block;
+}

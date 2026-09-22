@@ -464,7 +464,7 @@ different keys; for a repeated key, the last one wins.
 | `@grid` | `on`\|`off` | `on` | |
 | `@axes` | `on`\|`off` | `on` | |
 | `@angle` | `degrees`\|`radians` | `radians` | affects `sin`/`cos`/`tan` argument interpretation |
-| `@mode` | `graph`\|`table` | `graph` | force table-only rendering |
+| `@mode` | `graph`\|`figure`\|`table` | inferred | which renderer draws the spec: the plot canvas, the SVG figure renderer (geometry on bare paper — no axes, grid, pan or zoom), or a plain HTML table. **State it explicitly, including `@mode: graph`** — see below |
 | `@points` | `roots`,`extrema`,`inflections`,`intersections`,`conic`,`all`,`none` (comma list) | none marked | auto-mark these feature points; `intercepts` and `vertices` (v1's names for `roots` and `extrema`) remain accepted as permanent aliases, since stored questions carry them and the server validates `graph_spec` with this same parser — see "Known limitations" below |
 | `@point-labels` | `off`\|`coords` | `off` | print a detected feature point's coordinates next to its marker |
 | `@labels` | `all`\|`coarse`\|`none` | `all` | tick-label density, independent of `@axes` — `coarse` labels only the major (every-5th) gridline, `none` gives a numberless graph with the axes and grid still drawn |
@@ -476,6 +476,29 @@ different keys; for a repeated key, the last one wins.
 | `@hover` | `all`\|`points`\|`features`\|`none` | `all` | `features` restricts hover snapping to detected feature points only (skipping curves, segments, and plain plotted points); a snapped feature reports its exact analytic value, not an interpolated sample |
 | `@hide` | `<name>[,<name>...]` | — | hide specific named statements/tables (by their `name:` clause) |
 | `@show` | `<name>[,<name>...]` | — | un-hide — a later directive always wins for that specific name, regardless of order |
+
+## Declare `@mode`. Always. Including `@mode: graph`.
+
+When a spec does not say, the mode is **inferred**: a spec whose drawable
+content is entirely geometry (points, segments, polygons, circles,
+constructions, marks) renders as a **figure** — bare paper, no axes or grid,
+1:1 aspect, auto-fit; a spec containing any plotted function (`y = f(x)`, an
+implicit curve, a region, polar, parametric, a field, scatter, a surface)
+renders as a **graph**, constructions included.
+
+**Inference is a safety net, not the recommended path.** Write the mode
+anyway, and the reason is concrete: under inference, adding one plotted
+function to a figure silently changes the entire presentation from paper to
+plot. An explicit `@mode:` line makes that impossible and makes the author's
+intent legible to the next reader. A spec that declares its mode cannot be
+surprised by its own content.
+
+This matters for **existing** questions too. A stored spec using `polygon:`,
+`circle:`, `angle:` and `tick:` with no plotted function used to draw on the
+graphing canvas with axes and grid; under inference it now renders as a bare
+figure. That is usually the better picture — those specs were drawing
+geometry onto a plot because there was nowhere else to draw it — but if the
+axes were the point, `@mode: graph` restores the old presentation exactly.
 
 ## `desmos_allowed` vs `calculator_policy` — two independent axes
 

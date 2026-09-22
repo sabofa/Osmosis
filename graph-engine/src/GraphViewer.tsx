@@ -5,13 +5,15 @@ import { buildScene } from './scene/buildScene'
 import { buildScene3d } from './scene/buildScene3d'
 import { buildTable, type NamedTableData } from './scene/buildTable'
 import { formatCoord } from './scene/format'
-import { isThreeD } from './scene/mode'
+import { isThreeD, resolveMode } from './scene/mode'
+import { renderFigure } from './figure/render'
 import { SceneRenderer, type HoverInfo } from './render/SceneRenderer'
 import { SceneRenderer3D, type HoverInfo3D } from './render/SceneRenderer3D'
 import { resolvePalette } from './render/palette'
 import type { Regression } from './scene/types'
 import type { ParseError, ParseResult } from './parser/types'
 import TableView from './TableView'
+import FigureView from './FigureView'
 import './GraphViewer.css'
 
 export interface GraphViewerProps {
@@ -68,6 +70,10 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   const [config, setConfig] = useState<GraphConfig>(defaultConfig())
   const [tableMode, setTableMode] = useState(false)
   const [tables, setTables] = useState<NamedTableData[]>([])
+  // The rendered figure's markup, or null when this spec is not a figure.
+  // Mirrors `tables` above exactly: a mode that owns the view holds its own
+  // built content, and the three.js renderer is disposed while it does.
+  const [figure, setFigure] = useState<string | null>(null)
   const [regression, setRegression] = useState<Regression | null>(null)
   const [hover, setHover] = useState<HoverInfo | HoverInfo3D | null>(null)
   const [contextLost, setContextLost] = useState(false)
@@ -91,19 +97,48 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
     function applyParsed(parsed: ParseResult, reportState: boolean) {
       if (reportState) setConfig(parsed.config)
 
-      if (parsed.config.mode === 'table') {
+      // Which renderer draws this spec — an explicit "@mode:" if the spec
+      // declared one, otherwise inferred from what it draws (see
+      // scene/mode.ts). Table and figure each take the view over entirely.
+      const renderMode = resolveMode(parsed.statements, parsed.config)
+
+      if (renderMode === 'table') {
         if (reportState) {
           rendererRef.current?.dispose()
           rendererRef.current = null
           modeRef.current = null
           setHover(null)
           setTableMode(true)
+          setFigure(null)
           setTables(buildTable(parsed.statements, parsed.config))
           onErrorsRef.current?.(parsed.errors)
         }
         return
       }
-      if (reportState) setTableMode(false)
+
+      // A figure is its own renderer, selected the way table already is: the
+      // three.js renderer is disposed entirely rather than left alive behind
+      // a hidden canvas. Missing this leaks a WebGL context on every mode
+      // change, which is why it follows the table branch above line for line.
+      if (renderMode === 'figure') {
+        if (reportState) {
+          rendererRef.current?.dispose()
+          rendererRef.current = null
+          modeRef.current = null
+          setHover(null)
+          setTableMode(false)
+          const palette = resolvePalette(parsed.config.theme, containerRef.current)
+          const built = renderFigure(parsed.statements, parsed.config, palette)
+          setFigure(built.svg)
+          onErrorsRef.current?.([...parsed.errors, ...built.errors])
+        }
+        return
+      }
+
+      if (reportState) {
+        setTableMode(false)
+        setFigure(null)
+      }
 
       const canvas = canvasRef.current
       if (!canvas) return
@@ -225,7 +260,12 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   // the spec change, before React would get a chance to remount it.
   return (
     <div ref={containerRef} className={`graph-viewer graph-viewer-${config.theme}`}>
-      <canvas key={canvasMode} ref={canvasRef} className="graph-viewer-canvas" style={tableMode ? { display: 'none' } : undefined} />
+      <canvas
+        key={canvasMode}
+        ref={canvasRef}
+        className="graph-viewer-canvas"
+        style={tableMode || figure !== null ? { display: 'none' } : undefined}
+      />
       {contextLost && (
         <div className="graph-viewer-context-lost">
           Graph couldn't render — your browser dropped its WebGL context (usually from too many
@@ -234,13 +274,14 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
         </div>
       )}
       {tableMode && <TableView tables={tables} theme={config.theme} showFormulas={config.tableFormulas} />}
-      {!tableMode && regression && (
+      {figure !== null && <FigureView svg={figure} theme={config.theme} />}
+      {!tableMode && figure === null && regression && (
         <div className="graph-viewer-stats">
           <div>y = {formatCoord(regression.slope)}x + {formatCoord(regression.intercept)}</div>
           <div>r = {formatCoord(regression.r)}</div>
         </div>
       )}
-      {!tableMode && hover && (
+      {!tableMode && figure === null && hover && (
         <div className="graph-viewer-hover-label" style={{ left: hover.screenX, top: hover.screenY }}>
           {hover.label ? `${hover.label}: ` : ''}(
           {formatCoord(hover.worldX)}, {formatCoord(hover.worldY)}
