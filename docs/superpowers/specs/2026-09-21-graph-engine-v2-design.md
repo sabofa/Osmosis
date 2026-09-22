@@ -677,6 +677,63 @@ importantly, in `server/src/domain/bootstrap.ts`'s condensed reference — the
 one the tutor actually reads. Write it as hygiene the tutor is expected to
 follow, not as an optional stylistic note.
 
+#### Revision 2026-09-23: the figure view is navigable, not static
+
+An earlier decision made the figure view deliberately static — no pan, no zoom,
+no camera. **That is reversed.** A competition figure is dense enough that the
+reader needs to get closer to part of it, and a figure that cannot be
+manipulated is a picture rather than a tool.
+
+The figure view gains pan and zoom over the SVG. This is cheaper than the
+equivalent on canvas: panning and zooming an SVG is a viewBox transform, with
+no redraw and no re-layout, so the figure stays crisp at any magnification
+rather than resampling. Labels keep their on-screen size as the view zooms, the
+same convention the plot renderer already uses for tick labels and markers.
+
+What stays true from the original decision: the figure has **no plot camera**.
+There are no axes, no grid and no world-coordinate readout. Navigation is
+"move and magnify the drawing", not "change the plotted window".
+
+#### Geometry notation, not just text
+
+Labels must be able to carry real mathematical notation, because that is what
+the subject is written in:
+
+- **Segment** — an overbar: the segment through two vertices
+- **Ray** and **line** — the corresponding arrow and double-arrow overmarks
+- **Angle** — `∠ABC`; **triangle** — `△ABC`; **arc** — the arc overmark
+- **Relations** — congruent `≅`, similar `~`, parallel `∥`, perpendicular `⊥`
+- **Degrees** — `°`, and exact angle measures once exact values land
+
+Overbars and arrow marks are drawn as SVG geometry above the glyphs rather than
+composed from Unicode combining characters, which render inconsistently across
+fonts and cannot be positioned reliably. The relation symbols are ordinary
+characters and need no special handling.
+
+#### A givens box
+
+Dense figures reach a point where inline labelling makes them worse, not
+better. The renderer therefore supports an optional **boxed panel** — placed in
+a corner or beside the figure — listing given values and relations rather than
+crowding them onto the drawing. This is the convention competition figures
+already use, and it is the pressure valve for the label-density problem: when
+placement gets hard, move some of it out of the drawing entirely.
+
+Inline and boxed labelling coexist; an author chooses per label.
+
+#### Figures and tables share a view
+
+`@mode` is currently one-of, which forces a problem containing both a figure
+and a data table to choose. Real problems contain both.
+
+So the renderer composes **panels** rather than selecting a single mode: a spec
+containing geometry and table statements renders both, laid out side by side.
+Mode selection still exists and still matters — it decides which renderer draws
+the *drawable* content — but a table is additive rather than exclusive.
+
+`@mode: table` keeps its current meaning of "table only", so nothing already
+stored changes.
+
 #### The complexity target is AIME / AMC 12, not SAT
 
 This matters because it changes the renderer's requirements rather than just
