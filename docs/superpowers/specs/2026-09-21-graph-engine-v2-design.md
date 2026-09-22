@@ -621,16 +621,74 @@ display exists.
 Works in figure mode and in graph mode — a unit circle drawn on real axes is a
 different and equally common picture from one drawn on bare paper.
 
-### Figure mode
+### Figure mode — a separate renderer, not hidden chrome
 
-`@mode: figure` renders paper rather than a plot: no axes, no grid, locked 1:1
-aspect, auto-fit with padding, and the "figure not drawn to scale" convention
-available as a flag that permits labels to disagree with drawn lengths.
+**Revised 2026-09-22.** Figure mode is not the plot renderer with its axes
+switched off. It is **its own renderer**, selected the way `@mode: table`
+already selects `TableView`: the three.js renderer is disposed entirely and a
+figure view takes over. No camera, no canvas, no pan/zoom, no plot chrome —
+because a geometry figure is paper, not a graph with things drawn on it.
 
-**Constructions are orthogonal to mode.** `midpoint`, `foot`, `intersect` and
-`bisector` all work in graph mode with axes and grid on, alongside `y = x^2`.
-Mode controls chrome only. Coordinate-plane geometry is therefore better served
-by v2 than by v1, not narrowed by it.
+**Figures render as SVG.** The deciding argument is text. A geometry figure is
+mostly labels — vertex names, side measures, angle values — and in three.js
+those are sprite atlases with hand-computed metrics, which is the entire reason
+label layout is a specced sub-phase with a collision-scoring algorithm. In SVG
+text is native and `getBBox()` gives real metrics, which collapses most of that
+problem. The rest follows: a figure is tens of elements rather than thousands
+of curve samples, so canvas's throughput advantage does not apply; dashed
+strokes, arcs and tick marks are SVG primitives instead of hand-built geometry;
+output is crisp at print resolution and embeds directly into a document page;
+and there is no WebGL context to lose.
+
+`@mode` therefore takes three values: `graph | figure | table`.
+
+Figure mode locks 1:1 aspect, auto-fits with padding, and supports the "figure
+not drawn to scale" flag that permits labels to disagree with drawn lengths.
+
+#### Constructions stay shared
+
+**The construction layer is maths and belongs to neither renderer.**
+`midpoint`, `foot`, `intersect`, `bisector`, the triangle solvers and the
+centres all produce plain coordinates, and **both renderers consume them**.
+
+So `M = midpoint A-B` still works in graph mode beside `y = x^2`, on real axes,
+with grid and numbers. "Geometry has no graphing interface" means the *figure
+renderer* has none — not that constructions are banished from graphs.
+Coordinate-plane geometry remains better served by v2 than by v1, which is the
+commitment this document made earlier and still makes.
+
+#### Selection is automatic, but declaring it is the house rule
+
+Mode is inferred when not stated: a spec whose drawable content is entirely
+geometry renders as a figure; a spec containing any plotted function
+(`y = f(x)`, implicit curves, regions, polar, parametric, fields, scatter,
+surfaces) renders as a graph, constructions included.
+
+**Authors — and the tutor above all — should state the mode explicitly
+anyway, including `@mode: graph`.** Inference is a safety net, not the
+recommended path, and the reason is concrete: under inference, adding one
+plotted function to a figure silently changes the entire presentation from
+paper to plot. An explicit `@mode:` line makes that impossible and makes the
+author's intent legible to the next reader. A spec that declares its mode
+cannot be surprised by its own content.
+
+This must be stated as a rule in `GRAPH-DSL-REFERENCE.md` and, more
+importantly, in `server/src/domain/bootstrap.ts`'s condensed reference — the
+one the tutor actually reads. Write it as hygiene the tutor is expected to
+follow, not as an optional stylistic note.
+
+#### A migration consequence to face deliberately
+
+Inference changes how **existing stored questions render**. A v1 spec using
+`polygon:`, `circle:`, `angle:` and `tick:` with no plotted function currently
+draws on the graphing canvas with axes and grid; under inference it becomes a
+bare figure. That is almost certainly the better picture — those specs were
+drawing geometry onto a plot because there was nowhere else to draw it — but it
+is a change to content already in the bank, not a new-content-only feature.
+
+The escape hatch is an explicit `@mode: graph`, which restores the old
+presentation exactly. Before this ships, existing geometry questions should be
+swept and spot-checked rather than assumed fine.
 
 ### Label layout
 
@@ -663,10 +721,24 @@ requirement.
 
 ### Build order within the track
 
-Lines as objects -> derived points and solved triangles -> circle vocabulary and
-incircle/circumcircle -> measure labels -> the unit circle -> figure mode and
-label layout -> shading and boolean regions -> solid primitives -> cross-sections
-and nets -> composite solids.
+Lines as objects -> derived points and solved triangles **(phase 1, done)** ->
+**the SVG figure renderer** -> circle vocabulary and incircle/circumcircle ->
+measure labels -> the unit circle -> label layout -> shading and boolean regions
+-> solid primitives -> cross-sections and nets -> composite solids.
+
+**The figure renderer moves up, to directly after phase 1.** It was originally
+sequenced late, as "figure mode and label layout", on the assumption that figure
+mode was chrome-hiding on the existing renderer. Now that it is a separate SVG
+renderer it becomes the surface everything after it draws onto, and building
+circle vocabulary, measure labels or the unit circle against the three.js
+renderer first would mean building each of them twice.
+
+Phase 1's construction maths is unaffected by that revision: `intersect`,
+`centres`, `lines`, `solveTriangle`, `derive` and `objects` import nothing but
+`Vec2` and the angle-mode config, so they already serve either renderer. Only
+`sceneObjects.ts` and part of `buildConstructions.ts` are renderer-facing, and
+those gain an SVG sibling rather than being replaced — the three.js path stays,
+because constructions still render in graph mode.
 
 Measure labels and the unit circle both sit after the circle vocabulary and
 **both depend on exact values landing at step 3**. Neither can be built before
