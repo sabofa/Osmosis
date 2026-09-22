@@ -11,10 +11,25 @@ export interface FeaturePoint {
   exact: boolean
 }
 
-// Below this, a stationary point's second derivative is too close to zero to
-// call it a maximum or a minimum — it is a saddle or a higher-order flat spot,
-// and claiming either would be a guess.
+// Below this, a stationary point's second derivative is too small — relative
+// to the function's own scale at that point — to call it a maximum or a
+// minimum; it is a saddle or a higher-order flat spot, and claiming either
+// would be a guess. This is applied as CURVATURE_EPSILON * scale, not as a
+// bare number, mirroring how ROOT_TOLERANCE in roots.ts is applied relative
+// to a bracket's own magnitude rather than as an absolute threshold: a
+// stationary point of a small-magnitude function (e.g. y = (x^2 - 2x) / 1e6,
+// whose curvature is proportionally as small as its own values) has a
+// curvature that would never clear a bare 1e-6 and would be misreported as
+// neither a maximum nor a minimum, even though the shape is unambiguous.
+// CURVATURE_SCALE_FLOOR keeps the check from collapsing to "accept
+// everything" when the extremum's value lands exactly on zero (e.g. x^4 at
+// its flat stationary point at the origin, where |f(x)| = 0). It only needs
+// to be small enough that it does not itself become a second absolute
+// threshold for genuinely small-but-nonzero function values — a floor of 1
+// would do exactly that, since it forces the same 1e-6 bar for every
+// function whose value at the extremum is under 1.
 const CURVATURE_EPSILON = 1e-6
+const CURVATURE_SCALE_FLOOR = 1e-9
 
 export function explicitFeatures(
   f: (x: number) => number,
@@ -46,11 +61,13 @@ export function explicitFeatures(
     // drawing, which is the whole point.
     for (const x of findRoots((t) => derivative(f, t), lo, hi)) {
       const curvature = secondDerivative(f, x)
-      if (Math.abs(curvature) < CURVATURE_EPSILON) continue
+      const y = f(x)
+      if (!Number.isFinite(y)) continue
+      const scale = Math.max(Math.abs(y), CURVATURE_SCALE_FLOOR)
+      if (Math.abs(curvature) < CURVATURE_EPSILON * scale) continue
       const kind: FeatureKind = curvature > 0 ? 'local-min' : 'local-max'
       if (!wanted.has(kind)) continue
-      const y = f(x)
-      if (Number.isFinite(y)) out.push({ position: { x, y }, kind, exact: true })
+      out.push({ position: { x, y }, kind, exact: true })
     }
   }
 

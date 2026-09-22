@@ -62,4 +62,17 @@ describe('explicitFeatures', () => {
     const features = explicitFeatures((x) => x * x - 4, -10, 10, ALL)
     expect(features.every((f) => f.exact)).toBe(true)
   })
+
+  it('classifies an extremum of a small-magnitude function', () => {
+    // curvature here is 2/5e6 = 4e-7, below a bare 1e-6 threshold, so a
+    // non-relative epsilon would misreport this unambiguous minimum as
+    // neither a maximum nor a minimum. (A divisor of 1e6, as one might first
+    // reach for, gives curvature 2e-6 — already above 1e-6 even without a
+    // relative fix, so it would not actually exercise this check; 5e6 is
+    // chosen so the case is genuinely below the bare threshold.)
+    const features = explicitFeatures((x) => (x * x - 2 * x) / 5e6, -10, 10, new Set(['local-min']))
+    expect(features).toHaveLength(1)
+    expect(features[0].kind).toBe('local-min')
+    expect(features[0].position.x).toBeCloseTo(1, 4)
+  })
 })
