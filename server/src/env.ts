@@ -74,6 +74,7 @@ export function loadEnvConfig(): EnvConfig {
     uploadsDir,
     mcpAuthToken,
     mcpPresenterToken,
+    repoDir: process.env.OSMOSIS_REPO_DIR ?? null,
     webDistDir: process.env.WEB_DIST_DIR ? resolve(process.env.WEB_DIST_DIR) : null,
   };
 }

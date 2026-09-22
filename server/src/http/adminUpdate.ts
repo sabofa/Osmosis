@@ -29,10 +29,16 @@ export function findRepoDir(start: string, override?: string | null): string | n
   return null;
 }
 
+// The checkout may belong to another user than the one running the node
+// (the server's does): git refuses "dubious ownership" without this.
 async function git(repo: string, args: string[]): Promise<string> {
-  const { stdout } = await run("git", args, { cwd: repo, timeout: 60_000, windowsHide: true });
+  const { stdout } = await run("git", ["-c", `safe.directory=${repo}`, ...args], { cwd: repo, timeout: 60_000, windowsHide: true });
   return stdout.trim();
 }
+
+// Under systemd the node runs as a service user that can neither write the
+// checkout nor run the installer with sudo; updating there is a shell step.
+export const underSystemd = (): boolean => !!process.env.INVOCATION_ID;
 
 export interface UpdateCheck {
   repo_dir: string | null;
@@ -44,6 +50,11 @@ export interface UpdateCheck {
   dirty: boolean;
   changes: string[];
   error?: string;
+  // Set when origin could not be fetched (no network, or a read-only
+  // checkout): the comparison is against the last fetched origin ref.
+  fetch_error?: string;
+  // How to update when this process cannot do it itself.
+  manual?: string;
 }
 
 export async function checkForUpdate(repoDir: string | null, fetch = true): Promise<UpdateCheck> {
@@ -51,7 +62,14 @@ export async function checkForUpdate(repoDir: string | null, fetch = true): Prom
   if (!repoDir) return { ...none, error: "This node was not started from a git checkout. Set OSMOSIS_REPO_DIR to the checkout to update from here." };
   try {
     const branch = await git(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (fetch) await git(repoDir, ["fetch", "--quiet", "origin"]);
+    let fetchError: string | undefined;
+    if (fetch) {
+      try {
+        await git(repoDir, ["fetch", "--quiet", "origin"]);
+      } catch (err) {
+        fetchError = (err as Error).message.split("\n")[0];
+      }
+    }
     const upstream = `origin/${branch}`;
     const show = async (ref: string) => {
       const out = await git(repoDir, ["log", "-1", "--format=%H%x1f%s%x1f%cI", ref]);
@@ -65,7 +83,10 @@ export async function checkForUpdate(repoDir: string | null, fetch = true): Prom
     const behind = Number(counts[1] ?? 0);
     const dirty = (await git(repoDir, ["status", "--porcelain", "--untracked-files=no"])).length > 0;
     const changes = behind > 0 ? (await git(repoDir, ["log", "--format=%h %s", `HEAD..${upstream}`])).split("\n").filter(Boolean) : [];
-    return { repo_dir: repoDir, branch, local, remote, behind, ahead, dirty, changes };
+    const result: UpdateCheck = { repo_dir: repoDir, branch, local, remote, behind, ahead, dirty, changes };
+    if (fetchError) result.fetch_error = fetchError;
+    if (underSystemd()) result.manual = `On the server: cd ${repoDir} && git pull && bash deploy/install.sh`;
+    return result;
   } catch (err) {
     return { ...none, error: (err as Error).message };
   }
@@ -108,6 +129,13 @@ export function registerAdminUpdateRoutes(app: FastifyInstance, ctx: AppContext)
   app.post("/api/admin/update", async (_request, reply) => {
     if (!repoDir) {
       reply.code(400).send({ error: "no_repo", message: "This node was not started from a git checkout; set OSMOSIS_REPO_DIR." });
+      return;
+    }
+    if (underSystemd()) {
+      reply.code(409).send({
+        error: "service_managed",
+        message: `This node runs under systemd as a service user and cannot rebuild itself. On the server: cd ${repoDir} && git pull && bash deploy/install.sh`,
+      });
       return;
     }
     const check = await checkForUpdate(repoDir, true);
