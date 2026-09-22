@@ -498,10 +498,11 @@ const FIXED_MAX_DIVISIONS = 400
 // difference from `nice`, which would replace an author's 8 with a 10.
 function geometricStep(base: number, worldSpan: number, targetDivisions: number): number {
   const ideal = worldSpan / targetDivisions
-  // How many times to multiply `base` by itself to land nearest the ideal
-  // spacing. base^k * base == base^(k+1), so exponent search is a log.
-  const k = Math.round(Math.log(ideal) / Math.log(base))
-  const exponent = Math.max(k, 1)
+  // Which power of `base` lands nearest the ideal spacing. The exponent is
+  // deliberately unclamped: zooming in must be able to reach base^0 and
+  // negative powers, which is what makes 8 -> 1 -> 0.125 work. Clamping it to
+  // >= 1 would pin the step at the base forever on the way in.
+  const exponent = Math.round(Math.log(ideal) / Math.log(base))
   return Math.pow(base, exponent)
 }
 
@@ -650,6 +651,15 @@ describe('findRoots', () => {
     expect(findRoots((x) => 1 / x, -5, 5)).toEqual([])
   })
 
+  // The other half of that discrimination, and the easy one to get wrong: a
+  // steep line has a genuine root with large values on both sides of it. A
+  // pole test that judges by endpoint magnitude alone throws this away.
+  it('finds the root of a steep line despite large values on both sides', () => {
+    const roots = findRoots((x) => 100 * x - 50, -10, 10)
+    expect(roots).toHaveLength(1)
+    expect(roots[0]).toBeCloseTo(0.5, 6)
+  })
+
   it('skips intervals where the function is undefined', () => {
     const f = (x: number) => (x < 0 ? NaN : x - 1)
     const roots = findRoots(f, -5, 5)
@@ -694,9 +704,9 @@ const BISECT_ITERATIONS = 60
 // Two roots closer together than this are the same root found from adjacent
 // brackets.
 const DEDUPE_EPSILON = 1e-7
-// A bracket whose endpoints differ by more than this factor of the local scale
-// is a pole, not a crossing — 1/x changes sign at 0 without ever being 0.
-const POLE_RATIO = 1e6
+// How small |f(root)| must be, relative to the bracket's own magnitude, for a
+// sign change to count as a crossing rather than a pole.
+const ROOT_TOLERANCE = 1e-3
 
 export function derivative(f: (x: number) => number, x: number, h: number = DERIV_H): number {
   return (f(x + h) - f(x - h)) / (2 * h)
@@ -753,14 +763,16 @@ export function findRoots(
       if (y === 0) {
         push(found, x)
       } else if (prevY < 0 !== y < 0) {
-        // A genuine crossing is bounded on both sides; a pole's neighbours
-        // blow up. Comparing the jump against the bracket's own magnitude
-        // distinguishes them without needing to know where poles are.
-        const jump = Math.abs(y - prevY)
-        const scale = Math.max(Math.abs(y), Math.abs(prevY), 1)
-        if (jump < scale * POLE_RATIO && Math.min(Math.abs(y), Math.abs(prevY)) < scale) {
-          push(found, bisect(f, prevX, x))
-        }
+        // A pole changes sign too, without ever being zero — so the candidate
+        // is validated rather than guessed at from the bracket's endpoints.
+        // Bisection converges on a pole's own location, where |f| is enormous,
+        // and on a root's location, where |f| is ~0. Judging from the endpoint
+        // magnitudes instead would reject steep-but-genuine crossings:
+        // y = 100x - 50 has a real root and huge values on both sides of it.
+        const root = bisect(f, prevX, x)
+        const value = safeEval(f, root)
+        const scale = Math.max(Math.abs(prevY), Math.abs(y), 1)
+        if (value !== null && Math.abs(value) <= scale * ROOT_TOLERANCE) push(found, root)
       }
     }
     prevX = x
