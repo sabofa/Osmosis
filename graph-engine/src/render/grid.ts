@@ -63,6 +63,20 @@ function updateGeometryPositions(geometry: THREE.BufferGeometry, positions: numb
   updateGeometryAttribute(geometry, 'position', positions, 3)
 }
 
+// The major gridline interval grid.ts draws (see draw()'s majorStepX) — reused
+// so "@labels: coarse" means exactly "the lines that are already drawn
+// stronger", rather than a second, unrelated notion of coarse.
+const MAJOR_EVERY = 5
+
+// Whether the nth gridline (counting from the first one drawn in the current
+// view) gets a tick label. Pure, so the rule is testable without standing up a
+// three.js scene.
+export function shouldLabel(index: number, config: GraphConfig): boolean {
+  if (config.labels === 'none') return false
+  const every = config.labelEvery > 1 ? config.labelEvery : config.labels === 'coarse' ? MAJOR_EVERY : 1
+  return index % every === 0
+}
+
 // Owns the axis/grid line meshes and redraws them against the current camera
 // bounds. Split out of SceneRenderer since grid drawing is synchronous and
 // cheap (unlike the rest of a scene rebuild — see geometryGroup.ts) and has
@@ -117,8 +131,8 @@ export class GridRenderer {
       updateGeometryPositions(this.gridLines.geometry, positions)
       this.gridLines.visible = positions.length > 0
 
-      const majorStepX = stepX * 5
-      const majorStepY = stepY * 5
+      const majorStepX = stepX * MAJOR_EVERY
+      const majorStepY = stepY * MAJOR_EVERY
       const majorPositions: number[] = []
       const majorStartX = Math.ceil(bounds.xMin / majorStepX) * majorStepX
       for (let x = majorStartX; x <= bounds.xMax; x += majorStepX) {
@@ -137,7 +151,7 @@ export class GridRenderer {
       // spacing, which would read as a coarser sequence than the visible
       // minor lines. Only drawn when axes are on, since labels are placed
       // relative to the x=0/y=0 lines.
-      if (config.axes) {
+      if (config.axes && config.labels !== 'none') {
         const labelOffsetX = pixelToWorld(14)
         const labelOffsetY = pixelToWorld(14)
         const showXLabels = bounds.yMin <= 0 && 0 <= bounds.yMax
@@ -146,17 +160,21 @@ export class GridRenderer {
         const labelScaleY = pixelToWorld(16)
 
         let xIndex = 0
+        let xTick = 0
         if (showXLabels) {
-          for (let x = startX; x <= bounds.xMax; x += stepX) {
+          for (let x = startX; x <= bounds.xMax; x += stepX, xTick++) {
             if (Math.abs(x) < stepX / 1e6) continue // "0" comes from the y-axis pass below
+            if (!shouldLabel(xTick, config)) continue
             this.xLabels.place(xIndex++, formatCoord(x), x, -labelOffsetY, labelScaleX, labelScaleY)
           }
         }
         this.xLabels.hideFrom(xIndex)
 
         let yIndex = 0
+        let yTick = 0
         if (showYLabels) {
-          for (let y = startY; y <= bounds.yMax; y += stepY) {
+          for (let y = startY; y <= bounds.yMax; y += stepY, yTick++) {
+            if (!shouldLabel(yTick, config)) continue
             const text = Math.abs(y) < stepY / 1e6 ? '0' : formatCoord(y)
             this.yLabels.place(yIndex++, text, -labelOffsetX, y, labelScaleX, labelScaleY)
           }
