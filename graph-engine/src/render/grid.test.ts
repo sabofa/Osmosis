@@ -66,30 +66,39 @@ describe('shouldLabel', () => {
 })
 
 describe('resolveStep in geometric mode', () => {
-  // The author's step multiplies by its own base as the view grows, instead of
-  // being replaced by the universal 1-2-5 ladder. A spec written in 8s shows
-  // 8s, then 64s, then 512s — never 10s.
-  it('multiplies the step by its own base when zooming out', () => {
+  // The author's step doubles as the view grows, instead of being replaced by
+  // the universal 1-2-5 ladder and instead of jumping straight to higher
+  // powers of the base. A spec written in 8s shows 8s, then 16s, then 32s,
+  // then 64s — every rung a whole multiple of 8, never a jump to 64.
+  it('doubles the step when zooming out', () => {
     expect(resolveStep(8, 60, 6, 'geometric')).toBe(8)
+    expect(resolveStep(8, 150, 6, 'geometric')).toBe(32)
     expect(resolveStep(8, 500, 6, 'geometric')).toBe(64)
     expect(resolveStep(8, 4000, 6, 'geometric')).toBe(512)
   })
 
-  it('divides by the base when zooming in', () => {
-    expect(resolveStep(8, 6, 6, 'geometric')).toBe(1)
-    expect(resolveStep(8, 0.7, 6, 'geometric')).toBeCloseTo(0.125, 10)
+  // The base is a floor, not a rung to subdivide past. @xstep: 8 means 8 is
+  // the finest grid ever drawn — the whole point of geometric mode is to
+  // withhold coordinates finer than the author's base, so zooming in must
+  // never hand the learner a sub-base line. This holds across several
+  // successive zoom-in factors, not just the first one past the base.
+  it('never drops the step below the base when zooming in', () => {
+    expect(resolveStep(8, 6, 6, 'geometric')).toBe(8)
+    expect(resolveStep(8, 0.7, 6, 'geometric')).toBe(8)
+    expect(resolveStep(8, 0.07, 6, 'geometric')).toBe(8)
+    expect(resolveStep(8, 0.007, 6, 'geometric')).toBe(8)
   })
 
-  it('runs 10 -> 100 -> 1000 for a base of 10', () => {
+  it('doubles from a base of 10 (which no longer lands on 100)', () => {
     expect(resolveStep(10, 70, 6, 'geometric')).toBe(10)
-    expect(resolveStep(10, 700, 6, 'geometric')).toBe(100)
-    expect(resolveStep(10, 7000, 6, 'geometric')).toBe(1000)
+    expect(resolveStep(10, 700, 6, 'geometric')).toBe(160)
+    expect(resolveStep(10, 7000, 6, 'geometric')).toBe(1280)
   })
 
-  it('runs 5 -> 25 -> 125 for a base of 5', () => {
+  it('doubles from a base of 5', () => {
     expect(resolveStep(5, 35, 6, 'geometric')).toBe(5)
-    expect(resolveStep(5, 175, 6, 'geometric')).toBe(25)
-    expect(resolveStep(5, 875, 6, 'geometric')).toBe(125)
+    expect(resolveStep(5, 175, 6, 'geometric')).toBe(40)
+    expect(resolveStep(5, 875, 6, 'geometric')).toBe(160)
   })
 
   it('falls back to nice when no fixed step was given', () => {

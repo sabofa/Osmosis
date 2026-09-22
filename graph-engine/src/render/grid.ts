@@ -36,17 +36,24 @@ export function niceStep(worldSpan: number, targetDivisions: number): number {
 // author who wants a dense grid.
 const FIXED_MAX_DIVISIONS = 1000
 
-// The author's step scaled by whole powers of its own base, so the step family
-// survives zoom: 8 -> 64 -> 512, 10 -> 100 -> 1000, 5 -> 25 -> 125. This is the
-// difference from `nice`, which would replace an author's 8 with a 10.
+// The author's step doubles as the view zooms out (base -> 2*base -> 4*base
+// -> ...) so every step on the ladder stays a whole multiple of the base:
+// 8 -> 16 -> 32 -> 64 -> 128, not 8 -> 64 -> 512. That is the difference from
+// `nice`, which would replace an author's 8 with a 10.
+//
+// Zooming in, the base is a FLOOR, never subdivided. This mode exists so an
+// author can withhold coordinates: @xstep: 8 means 8 is the finest grid that
+// will ever be drawn, no matter how far in the learner zooms. A grid that
+// subdivided back toward single units would hand the learner the exact
+// values the question was designed to hide. The floor is the feature, not a
+// gap to close.
 function geometricStep(base: number, worldSpan: number, targetDivisions: number): number {
   const ideal = worldSpan / targetDivisions
-  // Which power of `base` lands nearest the ideal spacing. The exponent is
-  // deliberately unclamped: zooming in must be able to reach base^0 and
-  // negative powers, which is what makes 8 -> 1 -> 0.125 work. Clamping it to
-  // >= 1 would pin the step at the base forever on the way in.
-  const exponent = Math.round(Math.log(ideal) / Math.log(base))
-  return Math.pow(base, exponent)
+  // Nearest whole doubling of `base` to the ideal spacing, found in log2
+  // space so "nearest" means nearest multiplicative step. Clamped at 0 so the
+  // step never drops below the base itself.
+  const exponent = Math.max(0, Math.round(Math.log2(ideal / base)))
+  return base * Math.pow(2, exponent)
 }
 
 // An author's fixed @xstep/@ystep is the step at the zoom the spec was
