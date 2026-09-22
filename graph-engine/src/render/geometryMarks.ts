@@ -19,7 +19,7 @@ function normalize(v: Vec2): Vec2 {
 // shape vertex/from/to came from (a triangle's own interior angle is always
 // < 180 degrees, so this is the correct sweep for every ordinary geometry
 // figure, not just a coincidentally-convenient one).
-function angleSweep(vertex: Vec2, from: Vec2, to: Vec2): { start: number; delta: number } {
+export function angleSweep(vertex: Vec2, from: Vec2, to: Vec2): { start: number; delta: number } {
   const dirA = normalize({ x: from.x - vertex.x, y: from.y - vertex.y })
   const dirB = normalize({ x: to.x - vertex.x, y: to.y - vertex.y })
   const start = Math.atan2(dirA.y, dirA.x)

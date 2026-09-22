@@ -44,6 +44,17 @@ export interface ConstructionBuild {
   // table so angle:/tick:/right-angle: can reference a constructed point the
   // same way they reference a polygon vertex.
   points: Map<string, Vec2>
+  // The *geometry values* each construction statement produced, keyed the
+  // same way as objectsByStatement.
+  //
+  // Additive, and it exists for the SVG figure renderer. `objectsByStatement`
+  // above is already renderer-facing — a circle in it has become a 96-point
+  // sampled curve, which is the right shape for three.js and the wrong one
+  // for SVG, where a circle is a `<circle>`. Handing the renderer-agnostic
+  // value alongside the three.js-shaped one lets the second renderer consume
+  // the construction layer without either rewriting Phase 1's maths or
+  // reverse-engineering a centre and radius out of a polyline.
+  geometryByStatement: Map<number, { name: string | null; object: GeometryObject }[]>
 }
 
 const SLOTS: TriangleSlot[] = ['a', 'b', 'c']
@@ -170,6 +181,7 @@ export function buildConstructions(
 ): ConstructionBuild {
   const scope = new GeometryScope()
   const objectsByStatement = new Map<number, SceneObject[]>()
+  const geometryByStatement = new Map<number, { name: string | null; object: GeometryObject }[]>()
   const errors: SceneError[] = []
   const points = new Map<string, Vec2>()
   const evaluateExpr = (expr: Expr) => evalExpr(expr, {}, config.angle, functions)
@@ -196,6 +208,7 @@ export function buildConstructions(
       assertSolutionCount(statement.names, results, statement.body)
 
       const objects: SceneObject[] = []
+      const values: { name: string | null; object: GeometryObject }[] = []
       results.forEach((result, i) => {
         const name = statement.names[i] ?? null
         if (name) {
@@ -203,12 +216,14 @@ export function buildConstructions(
           if (result.kind === 'point') points.set(name, result.at)
         }
         objects.push(...geometryObjectToScene(result, result.kind === 'point' ? name : null, statement.color))
+        values.push({ name, object: result })
       })
       objectsByStatement.set(index, objects)
+      geometryByStatement.set(index, values)
     } catch (err) {
       errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  return { objectsByStatement, errors, points }
+  return { objectsByStatement, errors, points, geometryByStatement }
 }
