@@ -558,6 +558,66 @@ describe('geometry constructions', () => {
     expect(tick.to).toEqual({ x: 3, y: 4 })
   })
 
+  it('wires every derived-point construction to the right transform', () => {
+    // A=(1,1), B=(9,3), C=(4,8). Each expected value hand-computed; the point
+    // of testing these through the DSL is that a swapped argument (rotating
+    // about the wrong centre, dilating from the wrong point) would be
+    // invisible to the unit tests, which call the functions directly.
+    const { scene } = build(
+      [
+        '@angle: degrees',
+        'A = (1, 1)',
+        'B = (9, 3)',
+        'C = (4, 8)',
+        'D = divide A-B at 2:3',
+        'R = reflect C over A-B',
+        'T = translate A by (3, -4)',
+        'E = dilate B from A by 0.5',
+        'K = rotate B about A by 90',
+      ].join('\n')
+    )
+    expect(scene.errors).toEqual([])
+    expect(pointNamed(scene, 'D')).toEqual({ x: 4.2, y: 1.8 })
+    // Foot from C onto A-B is (93/17, 36/17), so the mirror is (118/17, -64/17).
+    expect(pointNamed(scene, 'R').x).toBeCloseTo(118 / 17, 10)
+    expect(pointNamed(scene, 'R').y).toBeCloseTo(-64 / 17, 10)
+    expect(pointNamed(scene, 'T')).toEqual({ x: 4, y: -3 })
+    expect(pointNamed(scene, 'E')).toEqual({ x: 5, y: 2 })
+    // (8,2) turned a quarter turn counter-clockwise is (-2,8), about A.
+    expect(pointNamed(scene, 'K').x).toBeCloseTo(-1, 10)
+    expect(pointNamed(scene, 'K').y).toBeCloseTo(9, 10)
+  })
+
+  it('wires all four triangle centres, and keeps them distinct', () => {
+    const { scene } = build(
+      ['A = (1, 1)', 'B = (9, 3)', 'C = (4, 8)', 'G = centroid ABC', 'O = circumcenter ABC', 'H = orthocenter ABC', 'I = incenter ABC'].join('\n')
+    )
+    expect(scene.errors).toEqual([])
+    const g = pointNamed(scene, 'G')
+    const o = pointNamed(scene, 'O')
+    const h = pointNamed(scene, 'H')
+    const i = pointNamed(scene, 'I')
+
+    expect(g.x).toBeCloseTo(14 / 3, 10)
+    expect(o.x).toBeCloseTo(4.6, 10)
+    expect(o.y).toBeCloseTo(3.6, 10)
+    expect(h.x).toBeCloseTo(4.8, 10)
+    expect(h.y).toBeCloseTo(4.8, 10)
+
+    // The incentre is the one that is equidistant from the three sides. That
+    // pins which function `incenter` is wired to, which four numbers close
+    // together would not.
+    const distToSide = (p: { x: number; y: number }, u: { x: number; y: number }, v: { x: number; y: number }) =>
+      Math.abs((v.x - u.x) * (u.y - p.y) - (u.x - p.x) * (v.y - u.y)) / Math.hypot(v.x - u.x, v.y - u.y)
+    const a = { x: 1, y: 1 }
+    const b = { x: 9, y: 3 }
+    const c = { x: 4, y: 8 }
+    expect(distToSide(i, a, b)).toBeCloseTo(distToSide(i, b, c), 10)
+    expect(distToSide(i, b, c)).toBeCloseTo(distToSide(i, c, a), 10)
+    // ...and the centroid is not, so the two are genuinely different points.
+    expect(Math.abs(distToSide(g, a, b) - distToSide(g, b, c))).toBeGreaterThan(0.1)
+  })
+
   it('reports a triangle it cannot solve without losing the rest of the figure', () => {
     const { scene } = build(['@angle: degrees', 'A = (0, 0)', 'triangle PQR: PQ = 8, QR = 10, angle P = 40'].join('\n'))
     expect(scene.errors).toHaveLength(1)
