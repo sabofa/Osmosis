@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Rail, { type Page } from './components/Rail'
 import Home from './components/Home'
 import Bank from './components/Bank'
@@ -16,7 +16,8 @@ import QuestionPanel from './components/QuestionPanel'
 import RichText from './components/RichText'
 import type { Ui, NavigateParams } from 'cli-core'
 import { useThemePresets } from './hooks/useThemePresets'
-import { createAttempt, createDailyAttempt, getAttempt, type AttemptDetail } from './lib/api'
+import { createAttempt, createDailyAttempt, getAttempt, getSessions, sessionIsOpen, type AttemptDetail } from './lib/api'
+import { readPrefs } from './lib/prefs'
 import './narrow.css'
 
 function App() {
@@ -57,8 +58,24 @@ function App() {
   // clicked somewhere would be worse than not landing there at all.
   const navigated = useRef(false)
 
-  // The app opens on Home. A session the tutor left open is one tap away on
-  // the Live tab (and the command line's "open session"), not the landing page.
+  // The app opens on Home unless the learner turned "Open on Home" off, in
+  // which case an open tutor session is the landing page (§7.7).
+  useEffect(() => {
+    if (readPrefs().startOnHome) return
+    let cancelled = false
+    getSessions({ limit: 20 })
+      .then(({ sessions }) => {
+        if (cancelled || navigated.current) return
+        const open = sessions.find(sessionIsOpen)
+        if (!open) return
+        setBootLiveSessionId(open.id)
+        setPage('live')
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Every navigation but the initial landing forgets the boot session, so the
   // rail always reaches the session list itself.

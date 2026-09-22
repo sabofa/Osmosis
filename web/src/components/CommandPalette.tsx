@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { buildRegistry, tokenize, quote, type Api, type CommandContext, type Out, type Suggestion, type Ui } from 'cli-core'
 import RichText from './RichText'
+import { readBindings } from '../lib/keybinds'
+import { readPrefs } from '../lib/prefs'
 import './CommandPalette.css'
 
 // ----------------------------------------------------------------------------
@@ -70,7 +72,7 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
   const [log, setLog] = useState<Entry[]>([])
-  const [logOpen, setLogOpen] = useState(true)
+  const [logOpen, setLogOpen] = useState(() => readPrefs().cliShowLog)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [tokenIndex, setTokenIndex] = useState(0)
   const [cursor, setCursor] = useState(0)
@@ -131,10 +133,10 @@ export default function CommandPalette({ ui, onAfterRun }: { ui: Ui; onAfterRun?
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null
       const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
-      if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key === readBindings().palette && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault()
         setOpen(true)
-        setLogOpen(true)
+        setLogOpen(readPrefs().cliShowLog)
       }
     }
     window.addEventListener('keydown', onKey)

@@ -26,15 +26,17 @@ import {
 } from '../lib/notify'
 import type { useThemePresets, ThemePreset } from '../hooks/useThemePresets'
 import ThemeEditor from './ThemeEditor'
-import AssetViewer from './AssetViewer'
+import KeysSection from './settings/KeysSection'
+import BehaviourSection from './settings/BehaviourSection'
+import DocumentsSection from './settings/DocumentsSection'
+import DataSection from './settings/DataSection'
+import AboutSection from './settings/AboutSection'
 import {
   getStatus,
   getConfig,
   setConfig,
   timeAgo,
-  listAssets,
   uploadAsset,
-  deleteAsset,
   getSlices,
   addSlice,
   removeSlice,
@@ -147,18 +149,6 @@ function NumberSetting({
   )
 }
 
-function AssetTypeIcon({ type }: { type: AssetSummary['type'] }) {
-  if (type === 'url') return <GlobeIcon size={14} />
-  if (type === 'text') return <ClipboardIcon size={14} />
-  return <FolderIcon size={14} />
-}
-
-// The server's POST /api/assets route is multipart-only: it reads the `type`
-// field (defaulting to "file") and takes the asset's content from the `file`
-// part — as raw bytes for a file, as utf-8 text for url/text (see
-// server/src/http/apiRoutes.ts). So a url/text asset ships its typed content
-// as a small text Blob under `file`; the `content` field below is redundant
-// for the server but harmless.
 function AssetUploadForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: (asset: AssetSummary) => void }) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState<AssetSummary['type']>('url')
@@ -250,87 +240,16 @@ function AssetUploadForm({ onCancel, onSaved }: { onCancel: () => void; onSaved:
   )
 }
 
-function AssetsSection() {
-  const [assets, setAssets] = useState<AssetSummary[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [viewing, setViewing] = useState<string | null>(null)
-
-  function refresh() {
-    listAssets()
-      .then(setAssets)
-      .catch((err) => setError(String(err)))
-  }
-
-  useEffect(refresh, [])
-
-  async function handleDelete(id: string) {
-    try {
-      await deleteAsset(id)
-      setAssets((prev) => prev?.filter((a) => a.id !== id) ?? prev)
-    } catch (err) {
-      setError(String(err))
-    }
-  }
-
-  return (
-    <div className="settings-section">
-      <div className="settings-section-title">Assets</div>
-      <div className="settings-row">
-        <div className="settings-row-main">
-          <FolderIcon size={16} />
-          <div>
-            <div className="settings-row-title">Documents</div>
-            <div className="settings-row-sub">urls, text snippets, and files referenced by questions</div>
-          </div>
-        </div>
-        {!uploading && (
-          <button className="settings-btn" onClick={() => setUploading(true)}>
-            + Upload
-          </button>
-        )}
-      </div>
-
-      {uploading && (
-        <AssetUploadForm
-          onCancel={() => setUploading(false)}
-          onSaved={(asset) => {
-            setAssets((prev) => (prev ? [asset, ...prev] : [asset]))
-            setUploading(false)
-          }}
-        />
-      )}
-
-      {error && <div className="bank-empty">Could not reach the local node: {error}</div>}
-      {assets === null && !error && <div className="bank-empty">Loading…</div>}
-      {assets && assets.length === 0 && <div className="bank-empty">No assets yet.</div>}
-      {viewing && <AssetViewer id={viewing} onClose={() => setViewing(null)} />}
-      {assets && assets.length > 0 && (
-        <div className="theme-list">
-          {assets.map((a) => (
-            <div
-              className="theme-card"
-              key={a.id}
-              onDoubleClick={() => setViewing(a.id)}
-              title="Double-click to open in the document viewer"
-            >
-              <div className="theme-card-main">
-                <AssetTypeIcon type={a.type} />
-                <span className="theme-card-name">{a.title}</span>
-              </div>
-              <span className="settings-row-sub" style={{ flexShrink: 0 }}>
-                {a.created_at.slice(0, 10)}
-              </span>
-              <button className="theme-card-icon-btn" onClick={() => handleDelete(a.id)} aria-label="Delete asset">
-                <TrashIcon size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
+type Tab = 'appearance' | 'behaviour' | 'keys' | 'documents' | 'sync' | 'data' | 'about'
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'behaviour', label: 'Behaviour' },
+  { id: 'keys', label: 'Keys' },
+  { id: 'documents', label: 'Documents' },
+  { id: 'sync', label: 'Sync' },
+  { id: 'data', label: 'Data' },
+  { id: 'about', label: 'About' },
+]
 
 export default function Settings({
   theme: themeApi,
@@ -343,6 +262,25 @@ export default function Settings({
   const { themes, activeId, setActiveId, saveTheme, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
   const { font: docFont, setFont: setDocFont } = useDocumentFont()
+  // Which panel is showing. Remembered so a refresh lands where you were.
+  const [tab, setTab] = useState<Tab>(() => {
+    try {
+      const t = localStorage.getItem('osmosis:settings-tab') as Tab | null
+      return t && TABS.some((x) => x.id === t) ? t : 'appearance'
+    } catch {
+      return 'appearance'
+    }
+  })
+  function pickTab(t: Tab) {
+    setTab(t)
+    try {
+      localStorage.setItem('osmosis:settings-tab', t)
+    } catch {
+      /* fine */
+    }
+  }
+  const [uploading, setUploading] = useState(false)
+  const [docsRefresh, setDocsRefresh] = useState(0)
   const [status, setStatus] = useState<NodeStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [config, setConfigState] = useState<Record<string, unknown> | null>(null)
@@ -411,7 +349,18 @@ export default function Settings({
 
   return (
     <div className="settings">
-      <h1>Settings</h1>
+      <div className="settings-head">
+        <h1>Settings</h1>
+        <nav className="settings-tabs no-scrollbar" aria-label="Settings sections">
+          {TABS.map((t) => (
+            <button key={t.id} className={`settings-tab${tab === t.id ? ' active' : ''}`} onClick={() => pickTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {tab === 'sync' && (
       <div className="settings-rows">
         <div className="settings-row">
           <div className="settings-row-main">
@@ -542,6 +491,30 @@ export default function Settings({
           </div>
         )}
 
+        <div className="settings-row quiet">
+          <div>
+            <div className="settings-row-title">Protocol</div>
+            <div className="settings-row-sub">
+              {status
+                ? `local v${status.protocol_version}${status.remote_protocol_version ? ` · remote v${status.remote_protocol_version}` : ' · remote unknown'}`
+                : 'loading…'}
+            </div>
+          </div>
+          <span style={{ fontSize: 11, color: protocolCurrent ? 'var(--good)' : 'var(--bad)' }}>
+            {status ? (protocolCurrent ? 'up to date' : 'mismatch') : '—'}
+          </span>
+        </div>
+      </div>
+      )}
+
+      {tab === 'behaviour' && (
+        <BehaviourSection>
+          <div className="settings-row quiet">
+            <div>
+              <div className="settings-row-title">Node numbers</div>
+              <div className="settings-row-sub">stored on this node's config, shared by every device that syncs from it</div>
+            </div>
+          </div>
         <NumberSetting
           configKey="synced_attempt_retention_days"
           label="Retention"
@@ -564,21 +537,35 @@ export default function Settings({
           onSaved={(key, value) => setConfigState((c) => (c ? { ...c, [key]: value } : c))}
         />
 
-        <div className="settings-row quiet">
-          <div>
-            <div className="settings-row-title">Protocol</div>
-            <div className="settings-row-sub">
-              {status
-                ? `local v${status.protocol_version}${status.remote_protocol_version ? ` · remote v${status.remote_protocol_version}` : ' · remote unknown'}`
-                : 'loading…'}
-            </div>
-          </div>
-          <span style={{ fontSize: 11, color: protocolCurrent ? 'var(--good)' : 'var(--bad)' }}>
-            {status ? (protocolCurrent ? 'up to date' : 'mismatch') : '—'}
-          </span>
-        </div>
-      </div>
+          <NotifyRow />
+        </BehaviourSection>
+      )}
 
+      {tab === 'keys' && <KeysSection />}
+
+      {tab === 'documents' && (
+        <DocumentsSection
+          uploading={uploading}
+          onUploadClick={() => setUploading(true)}
+          refreshKey={docsRefresh}
+          uploadForm={
+            uploading ? (
+              <AssetUploadForm
+                onCancel={() => setUploading(false)}
+                onSaved={() => {
+                  setUploading(false)
+                  setDocsRefresh((n) => n + 1)
+                }}
+              />
+            ) : null
+          }
+        />
+      )}
+
+      {tab === 'data' && <DataSection />}
+      {tab === 'about' && <AboutSection status={status} />}
+
+      {tab === 'appearance' && (
       <div className="settings-section">
         <div className="settings-section-title">Appearance</div>
         <div className="settings-row">
@@ -622,7 +609,7 @@ export default function Settings({
           </div>
         </div>
 
-        <NotifyRow />
+        
 
         <div className="settings-row">
           <div className="settings-row-main">
@@ -700,7 +687,7 @@ export default function Settings({
         )}
       </div>
 
-      <AssetsSection />
+      )}
 
       <div className="settings-sync">
         <span className="dot" />

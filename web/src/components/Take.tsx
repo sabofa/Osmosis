@@ -15,7 +15,9 @@ import QuestionDetail from './QuestionDetail'
 import RichText from './RichText'
 import { usePanelWidth } from '../hooks/usePanelWidth'
 import { useKeyboard } from '../hooks/useKeyboard'
-import { KEY_HINTS, WRITTEN_KEY_HINTS, type KeyAction } from '../lib/keymap'
+import { keyHints, type KeyAction } from '../lib/keymap'
+import { readBindings } from '../lib/keybinds'
+import { readPrefs } from '../lib/prefs'
 import { writtenTextPatch } from '../lib/writtenPatch'
 import { createItemClock, type ItemClock } from '../lib/itemClock'
 import { formatClock, timerClass, nextTimeUpPhase, type TimeUpPhase } from '../lib/timeFormat'
@@ -190,9 +192,16 @@ export default function Take({
     function onVisibility() {
       const at = Date.now()
       const hidden = document.hidden
-      for (const clock of [setClock, ...Object.values(clocks.current)]) {
+      // The item clocks always hold while hidden (§2.5); the set timer holds
+      // only if the learner wants it to.
+      const holdSet = readPrefs().pauseTimerWhenHidden
+      for (const clock of Object.values(clocks.current)) {
         if (hidden) clock.pause(at, 'hidden')
         else clock.resume(at, 'hidden')
+      }
+      if (holdSet) {
+        if (hidden) setClock.pause(at, 'hidden')
+        else setClock.resume(at, 'hidden')
       }
       if (hidden) flushElapsed(currentResponseId.current)
     }
@@ -356,7 +365,7 @@ export default function Take({
   // just finishes.
   async function finish() {
     if (finishing) return
-    if (unansweredCount > 0) {
+    if (unansweredCount > 0 && readPrefs().confirmBlankSubmit) {
       setConfirm('submit')
       return
     }
@@ -536,6 +545,10 @@ export default function Take({
   }
 
   function handleExit() {
+    if (!readPrefs().confirmExit) {
+      doExit()
+      return
+    }
     setConfirm('exit')
   }
 
@@ -585,6 +598,9 @@ export default function Take({
         break
       case 'confidence':
         setConfidence(action.level)
+        break
+      case 'pause':
+        if (!attempt.submitted_at) void togglePause()
         break
     }
   }
@@ -798,9 +814,7 @@ export default function Take({
                 {answered ? 'Answered' : 'Not answered yet'}
                 {unansweredCount > 0 && index > 0 ? ` · ${unansweredCount} blank` : ''}
               </span>
-              <span className="take-key-hints">
-                {question.type === 'mc' ? KEY_HINTS : WRITTEN_KEY_HINTS}
-              </span>
+              {readPrefs().showKeyHints && <span className="take-key-hints">{keyHints(question.type, readBindings())}</span>}
             </div>
             <div className="take-nav-right">
               <button

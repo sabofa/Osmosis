@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { TagIcon, ChevronRightIcon, ChevronDownIcon, ChartIcon, CalcIcon, BookIcon } from './icons'
 import { getTags, getQuestions, type TagSummary, type QuestionSummary } from '../lib/api'
 import TagDetail from './TagDetail'
 import QuestionDetail from './QuestionDetail'
 import RichText from './RichText'
+import { readPrefs } from '../lib/prefs'
 import './Bank.css'
 
 const TYPE_LABEL: Record<QuestionSummary['type'], string> = { mc: 'MC', written: 'Written' }
@@ -21,11 +22,16 @@ export default function Bank({ initialTag }: { initialTag?: string | null } = {}
   // Remembered per slug so the bank opens the way it was left.
   const [folded, setFolded] = useState<Set<string>>(() => {
     try {
-      return new Set(JSON.parse(localStorage.getItem('osmosis:bank-folded') ?? '[]') as string[])
+      const raw = localStorage.getItem('osmosis:bank-folded')
+      if (raw !== null) return new Set(JSON.parse(raw) as string[])
     } catch {
-      return new Set()
+      /* fall through */
     }
+    return new Set()
   })
+  // First visit with "bank opens folded" on: fold every subject once the tag
+  // list arrives, then let the remembered set take over.
+  const foldedOnce = useRef(false)
 
   function toggleFold(slug: string) {
     setFolded((prev) => {
@@ -53,7 +59,18 @@ export default function Bank({ initialTag }: { initialTag?: string | null } = {}
 
   useEffect(() => {
     getTags()
-      .then((r) => setTags(r.tags))
+      .then((r) => {
+        setTags(r.tags)
+        if (!foldedOnce.current && readPrefs().bankFoldedByDefault && localStorage.getItem('osmosis:bank-folded') === null) {
+          foldedOnce.current = true
+          const parents = new Set<string>()
+          for (const t of r.tags) {
+            const parts = t.slug.split(':')
+            for (let i = 1; i < parts.length; i++) parents.add(parts.slice(0, i).join(':'))
+          }
+          setFolded(parents)
+        }
+      })
       .catch((err) => setError(String(err)))
   }, [])
 

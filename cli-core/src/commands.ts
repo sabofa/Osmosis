@@ -746,6 +746,69 @@ export function buildRegistry(): Registry {
     },
   })
 
+  // ---- updating ---------------------------------------------------------------------
+  r.register({
+    path: ['version'],
+    describe: 'Which commit this node runs, and from which checkout',
+    async run(ctx) {
+      const v = await ctx.api.get<{
+        branch: string | null
+        commit: { commit: string; subject: string; date: string } | null
+        repo_dir: string | null
+        dirty: boolean
+        error?: string
+      }>('/api/admin/version')
+      if (v.error) return ctx.out.error(v.error)
+      ctx.out.text(
+        `${v.commit?.commit.slice(0, 7)} on ${v.branch} — ${v.commit?.subject} (${v.commit?.date.slice(0, 10)})${v.dirty ? ' · uncommitted changes' : ''}\n${v.repo_dir}`
+      )
+    },
+  })
+  r.register({
+    path: ['update', 'check'],
+    describe: 'Fetch and say whether this node is behind',
+    async run(ctx) {
+      const c = await ctx.api.get<{
+        behind: number
+        ahead: number
+        branch: string | null
+        local: { commit: string } | null
+        changes: string[]
+        dirty: boolean
+        error?: string
+      }>('/api/admin/update-check')
+      if (c.error) return ctx.out.error(c.error)
+      if (c.behind === 0) {
+        return ctx.out.text(`Up to date: ${c.local?.commit.slice(0, 7)} on ${c.branch}${c.ahead ? ` (${c.ahead} ahead of origin)` : ''}.`)
+      }
+      const lines = [
+        `${c.behind} commit${c.behind === 1 ? '' : 's'} behind origin/${c.branch}:`,
+        ...c.changes.map((l) => `  ${l}`),
+        '',
+        'Run update to pull and rebuild.',
+      ]
+      if (c.dirty) lines.push('(The checkout has uncommitted changes; update refuses until they are committed or stashed.)')
+      ctx.out.text(lines.join('\n'))
+    },
+  })
+  r.register({
+    path: ['update'],
+    describe: 'Pull the latest Osmosis, rebuild and restart this node — data stays put',
+    async run(ctx) {
+      const c = await ctx.api.get<{ behind: number; branch: string | null; changes: string[]; error?: string }>('/api/admin/update-check')
+      if (c.error) return ctx.out.error(c.error)
+      if (c.behind === 0) return ctx.out.text('Already up to date.')
+      const summary = [`Update this node by ${c.behind} commit${c.behind === 1 ? '' : 's'} on ${c.branch}?`, ...c.changes.slice(0, 8), 'The node rebuilds and restarts; your data is untouched.'].join('\n')
+      if (!(await ctx.ui.confirm(summary))) return
+      const res = await ctx.api.post<{ started: boolean; message: string; log?: string }>('/api/admin/update')
+      ctx.out.text(res.message + (res.log ? `\nInstaller log: ${res.log}` : ''))
+      if (res.started) {
+        ctx.out.text('Waiting for the node to come back (this can take a minute or two)…')
+        if (!(await ctx.ui.shell('wait-for-node'))) ctx.out.text('Still building. Run status in a moment.')
+      }
+    },
+  })
+
   // ---- meta ------------------------------------------------------------------------
   r.register({
     path: ['clear'],

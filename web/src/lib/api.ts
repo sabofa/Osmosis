@@ -12,6 +12,8 @@ export interface NodeStatus {
   dead_outbox: { id: number; entity_type: string; entity_id: string; tries: number; last_try_at: string | null; last_error: string | null }[]
   slices: string[]
   protocol_version: number
+  tools_version?: number
+  push?: boolean
   remote_protocol_version: number | null
   // Today's daily attempts, when they exist: the Home cards grey out after
   // one go.
@@ -816,4 +818,96 @@ export async function getDailyDayDetail(date: string): Promise<DailyDayDetail> {
   const res = await fetch(`/api/results/daily/${encodeURIComponent(date)}`)
   if (!res.ok) throw new Error(`GET /api/results/daily/${date} ${res.status}`)
   return res.json()
+}
+
+// ---- Administration --------------------------------------------------------
+
+export interface AdminStatus {
+  role: 'canonical' | 'local'
+  node: string
+  db_path: string
+  db_bytes: number
+  counts: Record<string, number>
+}
+
+export async function getAdminStatus(): Promise<AdminStatus> {
+  const res = await fetch('/api/admin/status')
+  if (!res.ok) throw new Error(`GET /api/admin/status ${res.status}`)
+  return res.json()
+}
+
+export async function reindex(): Promise<{ reindexed: boolean; fts_rows: number }> {
+  const res = await fetch('/api/admin/reindex', { method: 'POST' })
+  if (!res.ok) throw new Error(`POST /api/admin/reindex ${res.status}`)
+  return res.json()
+}
+
+export type ClearScope = 'attempts' | 'daily' | 'sessions' | 'all'
+
+export async function clearData(scope: ClearScope): Promise<{ scope: ClearScope; deleted: Record<string, number> }> {
+  const res = await fetch('/api/admin/clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scope, confirm: 'CLEAR' }),
+  })
+  if (!res.ok) throw new Error(`POST /api/admin/clear ${res.status}`)
+  return res.json()
+}
+
+export async function restartNode(): Promise<void> {
+  const res = await fetch('/api/admin/restart', { method: 'POST' })
+  if (!res.ok) throw new Error(`POST /api/admin/restart ${res.status}`)
+}
+
+export interface VersionInfo {
+  repo_dir: string | null
+  branch: string | null
+  commit: { commit: string; subject: string; date: string } | null
+  dirty: boolean
+  error?: string
+}
+
+export async function getVersion(): Promise<VersionInfo> {
+  const res = await fetch('/api/admin/version')
+  if (!res.ok) throw new Error(`GET /api/admin/version ${res.status}`)
+  return res.json()
+}
+
+export interface UpdateCheck {
+  repo_dir: string | null
+  branch: string | null
+  local: { commit: string; subject: string; date: string } | null
+  remote: { commit: string; subject: string; date: string } | null
+  behind: number
+  ahead: number
+  dirty: boolean
+  changes: string[]
+  error?: string
+}
+
+export async function checkUpdate(): Promise<UpdateCheck> {
+  const res = await fetch('/api/admin/update-check')
+  if (!res.ok) throw new Error(`GET /api/admin/update-check ${res.status}`)
+  return res.json()
+}
+
+export async function startUpdate(): Promise<{ started: boolean; message: string; log?: string }> {
+  const res = await fetch('/api/admin/update', { method: 'POST' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error((data as { message?: string }).message ?? `POST /api/admin/update ${res.status}`)
+  return data
+}
+
+// Waits for the node to answer again after a restart or update.
+export async function waitForNode(maxSeconds = 180): Promise<boolean> {
+  for (let i = 0; i < maxSeconds; i++) {
+    await new Promise((r) => setTimeout(r, 1000))
+    try {
+      const res = await fetch('/api/status', { cache: 'no-store' })
+      if (res.ok && i > 1) return true
+    } catch {
+      /* down */
+    }
+  }
+  return false
 }

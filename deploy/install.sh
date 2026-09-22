@@ -131,6 +131,16 @@ else
 fi
 
 # ---- 4. systemd -------------------------------------------------------------
+# The checkout this install came from, so the node can update itself
+# (POST /api/admin/update, `osmosis update`) from the same place.
+if ! sudo grep -q '^OSMOSIS_REPO_DIR=' "$ENV_FILE"; then
+  printf '
+# The git checkout `osmosis update` pulls and rebuilds from.
+OSMOSIS_REPO_DIR=%s
+' "$REPO_DIR" | sudo tee -a "$ENV_FILE" >/dev/null
+  log "Recorded OSMOSIS_REPO_DIR=$REPO_DIR in $ENV_FILE"
+fi
+
 log "Installing systemd unit"
 sed "s|__NODE_BIN__|$NODE_BIN|" "$INSTALL_DIR/deploy/osmosis.service" | sudo tee /etc/systemd/system/$SERVICE.service >/dev/null
 sudo systemctl daemon-reload

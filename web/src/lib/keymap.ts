@@ -13,6 +13,8 @@
 //      reputation for breaking find-in-page.
 // ----------------------------------------------------------------------------
 
+import { DEFAULT_BINDINGS, type KeyBindings } from './keybinds'
+
 export type Confidence = 'unsure' | 'somewhat' | 'confident'
 
 export type KeyAction =
@@ -23,6 +25,7 @@ export type KeyAction =
   | { type: 'confidence'; level: Confidence }
   | { type: 'advance' }
   | { type: 'acknowledge' }
+  | { type: 'pause' }
 
 export interface KeyContext {
   // The caret is in a textarea/input/contenteditable.
@@ -47,12 +50,6 @@ export interface KeyLike {
   shiftKey?: boolean
 }
 
-const CONFIDENCE_KEYS: Record<string, Confidence> = {
-  u: 'unsure',
-  s: 'somewhat',
-  c: 'confident',
-}
-
 // The learner-facing legend, kept next to the map it describes so the two
 // cannot drift apart. The written variant drops only the ordinals: blank, idk
 // and confidence are properties of an answer, not of a choice (§2.2, §2.4).
@@ -61,10 +58,16 @@ export const KEY_HINTS = "1–5 pick · Enter next · b blank · ? don't know ·
 export const WRITTEN_KEY_HINTS =
   "Ctrl + Enter next · b blank · ? don't know · u/s/c how sure"
 
+// The same legends, spelled with whatever the learner bound.
+export function keyHints(kind: 'mc' | 'written', b: KeyBindings = DEFAULT_BINDINGS): string {
+  const tail = `${b.blank} blank · ${b.idk} don't know · ${b.unsure}/${b.somewhat}/${b.confident} how sure · ${b.pause} pause`
+  return kind === 'mc' ? `1–5 pick · Enter next · ${tail}` : `Ctrl + Enter next · ${tail}`
+}
+
 // The stream's own legend, for when a show is the thing on screen.
 export const SHOW_KEY_HINT = 'Space to acknowledge'
 
-export function resolveKey(event: KeyLike, ctx: KeyContext): KeyAction | null {
+export function resolveKey(event: KeyLike, ctx: KeyContext, b: KeyBindings = DEFAULT_BINDINGS): KeyAction | null {
   const ctrl = event.ctrlKey === true
   const meta = event.metaKey === true
   const alt = event.altKey === true
@@ -100,11 +103,14 @@ export function resolveKey(event: KeyLike, ctx: KeyContext): KeyAction | null {
     return ordinal <= ctx.choiceCount ? { type: 'choice', ordinal } : null
   }
 
-  const lower = event.key.toLowerCase()
-  if (lower === 'b') return { type: 'blank' }
-  if (event.key === '?') return { type: 'toggle-idk' }
-  const level = CONFIDENCE_KEYS[lower]
-  if (level) return { type: 'confidence', level }
+  const key = event.key
+  const same = (bound: string) => bound.length === 1 && (key === bound || key.toLowerCase() === bound.toLowerCase())
+  if (same(b.blank)) return { type: 'blank' }
+  if (same(b.idk)) return { type: 'toggle-idk' }
+  if (same(b.unsure)) return { type: 'confidence', level: 'unsure' }
+  if (same(b.somewhat)) return { type: 'confidence', level: 'somewhat' }
+  if (same(b.confident)) return { type: 'confidence', level: 'confident' }
+  if (same(b.pause)) return { type: 'pause' }
   return null
 }
 

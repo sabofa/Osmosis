@@ -1,3 +1,4 @@
+import { readBindings } from '../lib/keybinds'
 import { useEffect, useRef } from 'react'
 import { resolveKey, isTextEntry, type KeyAction, type KeyContext } from '../lib/keymap'
 
@@ -21,7 +22,7 @@ export function useKeyboard(context: KeyContext, onAction: (action: KeyAction) =
         ...contextRef.current,
         inTextField: isTextEntry(event.target as { tagName?: string; isContentEditable?: boolean } | null),
       }
-      const action = resolveKey(event, ctx)
+      const action = resolveKey(event, ctx, readBindings())
       if (!action) return
       // Only once the map has claimed the key: Space would scroll the page and
       // Enter would re-fire whatever button happens to hold focus.
