@@ -44,6 +44,7 @@ try {
   npm run build:lib --workspace=graph-engine;     if ($LASTEXITCODE -ne 0) { throw "graph-engine build failed" }
   npm run build:lib --workspace=document-engine;  if ($LASTEXITCODE -ne 0) { throw "document-engine build failed" }
   npm run build --workspace=cli-core
+  npm run build --workspace=cli;
   npm run build --workspace=web;                  if ($LASTEXITCODE -ne 0) { throw "web build failed" }
   npm run build --workspace=server;               if ($LASTEXITCODE -ne 0) { throw "server build failed" }
 } finally { Pop-Location }

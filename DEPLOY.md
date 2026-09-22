@@ -145,6 +145,24 @@ Update canonical before any local node: local nodes call `/sync/*` routes
 local node ahead of canonical sees cloud tests fail as "needs a connection".
 
 
+## The command line
+
+The same commands the app runs from its `/` bar run in a terminal against any
+node. After a build (`npm run build --workspace=cli-core --workspace=cli`, which
+`install.sh` and `install-local.ps1` do), from the repo root:
+
+```bash
+npx osmosis                      # a prompt with Tab completion; exit leaves
+npx osmosis daily q              # answer today's question here
+npx osmosis start "Demand Quiz"  # any test, question by question
+npx osmosis results              # subjects worst first
+npx osmosis help                 # everything
+```
+
+`--url http://100.86.89.59:8081` or `OSMOSIS_URL` picks the node; the default
+is the local node at `http://localhost:8081`. Screen-only commands (`open …`,
+`theme edit`) say so and point at the app.
+
 ## Backups
 
 Everything is in `/var/lib/osmosis`. Copy it while the service is stopped, or

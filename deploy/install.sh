@@ -64,6 +64,7 @@ npm run build:lib --workspace=document-engine
 
 log "Building web app"
 npm run build --workspace=cli-core
+npm run build --workspace=cli
 npm run build --workspace=web
 
 log "Building server"

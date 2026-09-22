@@ -8,6 +8,7 @@
     "graph-engine",
     "document-engine",
     "scripts/mcp-batch",
-    "cli-core"
+    "cli-core",
+    "cli"
   ]
 }
