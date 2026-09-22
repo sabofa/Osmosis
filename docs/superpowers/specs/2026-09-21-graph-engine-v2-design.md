@@ -424,13 +424,23 @@ mode.
 
 ```
 @step-mode: nice        # 1-2-5 x 10^n ladder (current behavior, default)
-@step-mode: geometric   # the step multiplies by its own base
+@step-mode: geometric   # the step doubles upward and floors at its own base
 @step-mode: fixed       # never rescale, guarded against pathological counts
 ```
 
-Under `geometric`, base 8 runs 8 -> 64 -> 512 zooming out and 8 -> 1 -> 0.125
-zooming in; base 10 runs 10 -> 100 -> 1000. The author's chosen step family
-survives zoom instead of being replaced by the universal ladder.
+Under `geometric`, base 8 runs 8 -> 16 -> 32 -> 64 zooming out, and **zooming
+in never goes below 8 at all** — the base is a floor, not just a starting
+point.
+
+Both halves of that exist for one reason, and it is pedagogical rather than
+aesthetic: the mode is how an author withholds coordinates. A grid that
+subdivides back to single units as the learner zooms in hands them the exact
+values the question was meant to hide, so the floor is the feature and the
+upward ladder is the concession. Every step stays a whole multiple of the
+author's base.
+
+A consequence worth stating: under doubling, base 10 runs 10 -> 20 -> 40 -> 80
+and never reaches 100.
 
 ## Track 2 — Geometry v2
 
@@ -763,6 +773,24 @@ merely a construction input changing.
 **Session snapshots** deserve separate mention: a show currently dies with its
 session. Snapshotting a live state as a page in the learner's own document is
 what lets a tutoring session leave behind something durable.
+
+## Backlog — specced later
+
+**Number-line mode (`@mode: numberline`).** A one-dimensional presentation of
+an inequality's solution set: a horizontal axis with a **filled** endpoint dot
+for an inclusive bound, an **open** dot for a strict one, and shading along the
+ray or interval. This is how "graph the solution set" is actually asked, and it
+is a different renderer from 2D region shading rather than a tweak to it.
+
+State what already exists so it is not rebuilt by accident: in 2D a strict
+inequality already draws a **dashed** boundary and a non-strict one a **solid**
+boundary (`graph-engine/src/scene/buildScene.ts`'s region builder). That is the
+2D convention and it works today. The 1D convention does not exist at all.
+
+Needs its own spec before building: an axis renderer, endpoint markers,
+interval and ray shading, and compound forms (`x < -2 or x > 5`,
+`-2 <= x < 5`). It depends on chained-inequality parsing, which track 1's
+follow-up work adds.
 
 ## Non-goals
 
