@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400..700&family=Inter:wght@400..700&display=swap" rel="stylesheet" />
+    <title>Osmosis engines — review</title>
+    <style>
+      /* Same paper-and-ink tokens the two engine harnesses already use (see
+         graph-engine/src/App.css) so the shell reads as one surface with
+         whatever it's framing, rather than a generic dev-tool chrome. */
+      :root {
+        --bg: #eef1e5;
+        --surface: #ffffff;
+        --ink: #17170f;
+        --muted: #6b6b5f;
+        --line: #c9c6b3;
+        --accent: #c65d22;
+        --font-display: 'Space Grotesk', sans-serif;
+        --font-body: 'Inter', sans-serif;
+      }
+      /* Both engine harnesses drive their own theme off `data-theme` on their
+         own <html> (the graph one follows the spec's "@theme:" directive, the
+         document one a toggle in its sidebar). The shell mirrors whichever is
+         showing onto its own <html> — see syncTheme below — so the chrome
+         never sits dark around a light engine. Same two-selector shape those
+         harnesses use: follow the OS unless explicitly told light, and honor
+         an explicit dark. */
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          --bg: #17160f;
+          --surface: #201e15;
+          --ink: #f2efe2;
+          --muted: #a19d8c;
+          --line: #4a4530;
+          --accent: #e2803f;
+        }
+      }
+      :root[data-theme='dark'] {
+        --bg: #17160f;
+        --surface: #201e15;
+        --ink: #f2efe2;
+        --muted: #a19d8c;
+        --line: #4a4530;
+        --accent: #e2803f;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--font-body);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        flex-wrap: wrap;
+        padding: 10px 16px;
+        border-bottom: 2px solid var(--line);
+        background: var(--surface);
+      }
+      h1 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      h1 span { color: var(--muted); font-weight: 400; }
+      nav { display: flex; gap: 8px; }
+      nav button {
+        font-family: var(--font-body);
+        font-size: 13px;
+        padding: 5px 14px;
+        border: 2px solid var(--line);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--ink);
+        cursor: pointer;
+      }
+      nav button:hover { border-color: var(--accent); }
+      nav button[aria-selected='true'] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .spacer { flex: 1; }
+      .hint { font-size: 12px; color: var(--muted); }
+      .hint code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      main { position: relative; flex: 1; min-height: 0; }
+      iframe {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: var(--bg);
+      }
+      iframe[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Osmosis engines <span>· review harness</span></h1>
+      <nav role="tablist">
+        <button role="tab" data-panel="graph" aria-selected="true">Graph engine</button>
+        <button role="tab" data-panel="document" aria-selected="false">Document engine</button>
+      </nav>
+      <div class="spacer"></div>
+      <div class="hint">live from source — edits in <code>graph-engine/src</code> / <code>document-engine/src</code> reload here</div>
+    </header>
+    <main id="panels"></main>
+
+    <script type="module">
+      // Each engine runs in its own document rather than being mounted side
+      // by side in one React tree, because the two demo harnesses' stylesheets
+      // both claim generic `.app-*` class names and both drive theme off
+      // `data-theme` on their own <html>. An iframe per engine keeps those
+      // fully isolated — and keeps a WebGL context teardown or a pdf.js
+      // worker crash in one engine from taking the other down with it.
+      const PANELS = ['graph', 'document']
+      const main = document.getElementById('panels')
+      const tabs = [...document.querySelectorAll('nav button')]
+      const frames = new Map()
+
+      function show(name) {
+        if (!PANELS.includes(name)) name = PANELS[0]
+        // Created on first selection, then kept alive and merely hidden — so
+        // switching tabs preserves whatever spec text / loaded PDF / set of
+        // highlights was mid-review, instead of resetting it every time.
+        if (!frames.has(name)) {
+          const frame = document.createElement('iframe')
+          frame.src = `/${name}.html`
+          frame.title = `${name} engine`
+          frame.addEventListener('load', () => watchTheme(frame))
+          main.append(frame)
+          frames.set(name, frame)
+        }
+        for (const [key, frame] of frames) frame.hidden = key !== name
+        for (const tab of tabs) tab.setAttribute('aria-selected', String(tab.dataset.panel === name))
+        if (location.hash.slice(1) !== name) history.replaceState(null, '', `#${name}`)
+        localStorage.setItem('osmosis-review-panel', name)
+        syncTheme(frames.get(name))
+      }
+
+      // Both engines are served from this same origin, so their documents are
+      // readable from here — no postMessage handshake needed on either side,
+      // which keeps the engines themselves unaware this shell exists.
+      function syncTheme(frame) {
+        if (frame.hidden) return
+        const theme = frame.contentDocument?.documentElement.getAttribute('data-theme')
+        if (theme) document.documentElement.setAttribute('data-theme', theme)
+        else document.documentElement.removeAttribute('data-theme')
+      }
+
+      function watchTheme(frame) {
+        const root = frame.contentDocument?.documentElement
+        if (!root) return
+        // The graph harness rewrites data-theme whenever the spec's
+        // "@theme:" directive changes, so this has to keep watching rather
+        // than read once at load.
+        new MutationObserver(() => syncTheme(frame)).observe(root, { attributes: true, attributeFilter: ['data-theme'] })
+        syncTheme(frame)
+      }
+
+      for (const tab of tabs) tab.addEventListener('click', () => show(tab.dataset.panel))
+      window.addEventListener('hashchange', () => show(location.hash.slice(1)))
+
+      // A #graph / #document link wins over the remembered tab, so a link
+      // into one engine always lands where it says.
+      show(location.hash.slice(1) || localStorage.getItem('osmosis-review-panel') || PANELS[0])
+    </script>
+  </body>
+</html>

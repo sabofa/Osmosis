@@ -10,5 +10,8 @@
     "scripts/mcp-batch",
     "cli-core",
     "cli"
-  ]
+  ],
+  "scripts": {
+    "review": "vite --config review/vite.config.mts"
+  }
 }
