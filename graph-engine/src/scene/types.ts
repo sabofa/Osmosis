@@ -64,6 +64,17 @@ export type SceneObject =
   // actual cause of drag/pan lag, not the math generating them.
   | { kind: 'segments'; pairs: [Vec2, Vec2][]; dashed?: boolean; color?: string | null }
   | { kind: 'ray'; from: Vec2; to: Vec2; label?: string | null; color?: string | null }
+  // A constructed line of unbounded extent — "the line through P parallel to
+  // A-B", a perpendicular bisector, an angle bisector (a ray). Stored
+  // UNCLIPPED, as a point and a direction: a construction line is a locus,
+  // true everywhere along itself, and the part of it that should be drawn
+  // depends entirely on where the view currently is. The renderer clips it to
+  // the visible bounds every time it draws (see render/clipLine.ts), so the
+  // line stays correct under pan and zoom instead of carrying a stale clip
+  // from whatever the bounds happened to be when the scene was built.
+  // `direction` need not be a unit vector; `extent` 'ray' draws only forward
+  // from `through`.
+  | { kind: 'line'; through: Vec2; direction: Vec2; extent: 'infinite' | 'ray'; color?: string | null }
   // Flat triangle list (groups of 3 points) for a filled inequality region.
   | { kind: 'region'; triangles: Vec2[]; color?: string | null }
   // Not pre-evaluated like everything else here — fx/fy stay as expressions

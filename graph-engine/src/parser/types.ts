@@ -18,6 +18,56 @@ export type Condition =
   | { kind: 'compare'; op: '<' | '<=' | '>' | '>='; value: Expr }
   | { kind: 'range'; lowOp: '<' | '<='; low: Expr; highOp: '<' | '<='; high: Expr }
 
+// --------------------------------------------------------------------------
+// Geometry constructions (Geometry v2, phase 1)
+//
+// These describe a construction by *name*, not by coordinates — resolving the
+// names and doing the arithmetic is scene/geometry's job. Kept structurally
+// separate from scene/geometry's own types on purpose: parser/index.ts is a
+// browser-free entry point and must not reach into scene/*.
+// --------------------------------------------------------------------------
+
+// How far a constructed line extends. Mirrors scene/geometry's LineExtent;
+// duplicated rather than imported so the parser stays standalone.
+export type GeometryExtent = 'infinite' | 'ray' | 'segment'
+
+// One operand of a construction: either a name bound earlier in the spec, or
+// a line written inline as two point names ("A-B", "segment A-B", "ray A-B").
+export type GeometryRef =
+  | { kind: 'named'; name: string }
+  | { kind: 'through'; extent: GeometryExtent; from: string; to: string }
+
+export type TriangleCentreKind = 'centroid' | 'circumcenter' | 'incenter' | 'orthocenter' | 'incircle' | 'circumcircle'
+
+// The right-hand side of a construction statement. Names throughout; no
+// numbers except where the DSL genuinely carries one (a rotation angle, a
+// dilation factor, a divide ratio), and those stay as Exprs so a named
+// constant works there like anywhere else.
+export type Construction =
+  | { kind: 'parallelLine'; through: string; base: GeometryRef }
+  | { kind: 'perpendicularLine'; through: string; base: GeometryRef }
+  | { kind: 'perpendicularBisector'; from: string; to: string }
+  | { kind: 'angleBisector'; from: string; vertex: string; to: string }
+  | { kind: 'midpoint'; from: string; to: string }
+  | { kind: 'foot'; from: string; base: GeometryRef }
+  | { kind: 'intersect'; left: GeometryRef; right: GeometryRef }
+  | { kind: 'divide'; from: string; to: string; ratioFrom: Expr; ratioTo: Expr }
+  | { kind: 'reflect'; point: string; over: GeometryRef }
+  | { kind: 'rotate'; point: string; about: string; angle: Expr }
+  | { kind: 'translate'; point: string; dx: Expr; dy: Expr }
+  | { kind: 'dilate'; point: string; from: string; factor: Expr }
+  | { kind: 'triangleCentre'; centre: TriangleCentreKind; vertices: [string, string, string] }
+  // "O = circle P, 5" — a circle by a *named* centre. The existing
+  // "circle: (cx, cy), r" statement draws a circle but binds no geometry
+  // name, so without this there is no way to write the spec's own
+  // "intersect circle O, line B-C", and circle x circle intersection is
+  // unreachable from the DSL entirely.
+  | { kind: 'circleAt'; center: string; radius: Expr }
+
+// Which of the three canonical slots a triangle measurement fills. Side 'a'
+// is opposite the first named vertex, angle 'a' is the angle at it.
+export type TriangleSlot = 'a' | 'b' | 'c'
+
 // One line of the input spec, after parsing.
 //
 // Grammar (documented here as the source of truth for the parser):
@@ -69,6 +119,52 @@ export type Condition =
 //                                                     tick: to mark two segments as congruent.
 //   right-angle: A-B-C                              -> small square marker at vertex B indicating a
 //                                                     90-degree angle between rays B->A and B->C.
+//   segment: A-B [dashed]                           -> a segment between two named points, resolved
+//                                                     the same way as angle:/tick:'s points. The
+//                                                     sibling of those marks, and distinct from the
+//                                                     coordinate form "(x1,y1) -- (x2,y2)", which
+//                                                     cannot reference a constructed point at all.
+//
+// Geometry constructions (v2) — every one of these BINDS its left-hand name
+// into the geometry namespace and DRAWS its result. Names are letters only
+// (A, P, m, AB), the same rule point labels already follow, which keeps them
+// distinct from the general-identifier rule a named constant ("a = 5") uses.
+// A name that is already bound is an error, not a silent rebinding.
+//
+// Unlike function/constant definitions, constructions are DEFINITION-BEFORE-USE:
+// a construction may only reference names defined on an earlier line. They
+// form a dependency chain, and reading them in source order means a cycle is
+// unrepresentable rather than something to detect. Plain "A = (x, y)" points
+// and polygon vertices remain order-independent, as they already were.
+//
+//   <L> = line through P parallel to <line>       -> the line through P parallel to another line
+//   <L> = line through P perpendicular to <line>  -> ...and perpendicular to it
+//   <L> = perpendicular bisector of A-B           -> the perpendicular bisector of a segment
+//   <L> = bisector of angle A-B-C                 -> a RAY from B bisecting the angle there
+//   <P> = midpoint A-B                            -> the midpoint of a segment
+//   <P> = foot C to <line>                        -> the foot of the perpendicular from C
+//   <P> = intersect <obj>, <obj>                  -> one intersection point
+//   <P>, <Q> = intersect <obj>, <obj>             -> both, ordered by x then y (D3)
+//   <P> = divide A-B at 2:3                       -> the point 2/5 of the way from A to B
+//   <P> = reflect C over <line>                   -> C mirrored across a line
+//   <P> = rotate C about O by 90                  -> rotated counter-clockwise (unit per "@angle")
+//   <P> = translate C by (3, -4)                  -> shifted by a vector
+//   <P> = dilate C from O by 1.5                  -> scaled about a centre
+//   <O> = circle P, 5                             -> a circle by named centre and radius
+//   <P> = centroid ABC                            -> also circumcenter/incenter/orthocenter
+//   <O> = incircle of ABC                         -> also circumcircle; "of" is optional throughout
+//   incircle of ABC                               -> the same, drawn without binding a name
+//   triangle ABC: AB = 8, angle A = 90, AC = 6    -> a triangle solved from three measurements
+//                                                    (SSS/SAS/ASA/AAS/RHS; SSA is refused as
+//                                                    ambiguous) and placed by the fixed convention:
+//                                                    A at the origin, B on the positive x-axis, C in
+//                                                    the upper half-plane. Its three vertices become
+//                                                    named points like a polygon's do.
+//
+// A <line> operand is "A-B" (the infinite line through two named points),
+// "line A-B" / "segment A-B" / "ray A-B" to pick the extent explicitly, or
+// the name of a line bound earlier. An <obj> operand is any of those, a
+// "circle <name>", or a bare name of any kind.
 //
 // Any statement may end with "color: <name>" (see parser/colors.ts for the
 // palette, or "#rrggbb") to override its default color, and/or "name: <id>"
@@ -125,6 +221,28 @@ export type StatementShape =
   | { kind: 'angle'; from: string; vertex: string; to: string; label: string | null }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
+  // "segment: A-B [dashed]" — a segment between two *named* points, the
+  // sibling of tick:/angle:/right-angle:. Distinct from the coordinate form
+  // ("(x1,y1) -- (x2,y2)"), which cannot reference a constructed point.
+  | { kind: 'namedSegment'; from: string; to: string; dashed: boolean }
+  // A named geometry construction: "M = midpoint A-B", "m = line through P
+  // parallel to A-B", "P, Q = intersect circle O, line B-C". `names` is the
+  // left-hand side — two names only for `intersect`, which can yield two
+  // points, and empty for the nameless "incircle of ABC" form. Binding a
+  // count of names that doesn't match what the construction produced is an
+  // error (D4), because silently dropping a solution is how a figure becomes
+  // subtly wrong.
+  | { kind: 'construction'; names: string[]; body: Construction }
+  // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
+  // placed by the D5 convention. Measurements arrive already mapped onto the
+  // canonical a/b/c slots, since the parser knows the vertex names and can
+  // therefore reject "side DE" of triangle ABC at parse time.
+  | {
+      kind: 'triangle'
+      names: [string, string, string]
+      sides: Partial<Record<TriangleSlot, Expr>>
+      angles: Partial<Record<TriangleSlot, Expr>>
+    }
 
 // Every statement carries an optional color override and an optional
 // statementName (for @hide/@show targeting — see buildScene.ts), both

@@ -1,6 +1,6 @@
 import { isValidColor } from './colors'
 import { parseExprString } from './parseExpr'
-import type { Condition, Expr, Statement, StatementShape } from './types'
+import type { Condition, Construction, Expr, GeometryRef, Statement, StatementShape, TriangleCentreKind, TriangleSlot } from './types'
 
 function stripComment(line: string): string {
   const idx = line.indexOf('#')
@@ -138,6 +138,227 @@ function parseForRange(rangeStr: string): { param: string; from: Expr; to: Expr 
   const bounds = splitTopLevelComma(bracketStr.slice(1, -1))
   if (bounds.length !== 2) throw new Error(`Expected two bounds in "[a, b]", got "${bracketStr}"`)
   return { param, from: parseExprString(bounds[0]), to: parseExprString(bounds[1]) }
+}
+
+// --------------------------------------------------------------------------
+// Geometry constructions (v2). See parser/types.ts's grammar comment for the
+// full surface. Everything here works in *names*; resolving them and doing the
+// arithmetic belongs to scene/geometry, which this file must not import.
+// --------------------------------------------------------------------------
+
+// Geometry names are letters only — the rule point labels already follow, and
+// what keeps "A" (a point) from colliding with the general-identifier rule
+// that "a = 5" uses.
+const GEOMETRY_NAME = /^[a-zA-Z]+$/
+
+function geometryName(raw: string, role: string): string {
+  const name = raw.trim()
+  if (!GEOMETRY_NAME.test(name)) {
+    throw new Error(`Expected a geometry name (letters only) for the ${role}, got "${name}"`)
+  }
+  return name
+}
+
+// "A-B" -> two point names. Used by every construction that names a segment.
+function parseNamePair(text: string, role: string): [string, string] {
+  const parts = text.split('-')
+  if (parts.length !== 2) throw new Error(`Expected "A-B" (two point names) for the ${role}, got "${text.trim()}"`)
+  return [geometryName(parts[0], role), geometryName(parts[1], role)]
+}
+
+function parseNameTriple(text: string, role: string): [string, string, string] {
+  const parts = text.split('-')
+  if (parts.length !== 3) throw new Error(`Expected "A-B-C" (three point names) for the ${role}, got "${text.trim()}"`)
+  return [geometryName(parts[0], role), geometryName(parts[1], role), geometryName(parts[2], role)]
+}
+
+// A triangle is named as a run of single-letter vertices, "ABC" — the form
+// the DSL uses everywhere a triangle appears. Multi-letter geometry names are
+// legal in general but cannot be written this way, since "ABC" would be
+// ambiguous between three vertices and one two-letter plus one one-letter.
+function parseTriangleNames(text: string, role: string): [string, string, string] {
+  const name = text.trim()
+  if (!/^[a-zA-Z]{3}$/.test(name)) {
+    throw new Error(`Expected three single-letter vertex names (e.g. "ABC") for the ${role}, got "${name}"`)
+  }
+  const [a, b, c] = [name[0], name[1], name[2]]
+  if (a === b || b === c || a === c) throw new Error(`A triangle needs three distinct vertices, got "${name}"`)
+  return [a, b, c]
+}
+
+// One operand of a construction. Either a name bound earlier, or a line
+// written inline: "A-B" (the infinite line through them), or with an explicit
+// "line"/"segment"/"ray" prefix. "circle <name>" is accepted as a readability
+// prefix — the name already carries its kind, so the word is documentation.
+function parseGeometryRef(text: string, role: string): GeometryRef {
+  let rest = text.trim()
+  let extent: 'infinite' | 'ray' | 'segment' | null = null
+  let expectCircle = false
+
+  const prefix = /^(line|segment|ray|circle)\s+/.exec(rest)
+  if (prefix) {
+    rest = rest.slice(prefix[0].length).trim()
+    if (prefix[1] === 'circle') expectCircle = true
+    else extent = prefix[1] === 'line' ? 'infinite' : (prefix[1] as 'ray' | 'segment')
+  }
+
+  if (rest.includes('-')) {
+    if (expectCircle) throw new Error(`A circle is named, not written as two points — got "circle ${rest}"`)
+    const [from, to] = parseNamePair(rest, role)
+    return { kind: 'through', extent: extent ?? 'infinite', from, to }
+  }
+  if (extent !== null) throw new Error(`Expected "${prefix?.[1]} A-B" (two point names), got "${text.trim()}"`)
+  return { kind: 'named', name: geometryName(rest, role) }
+}
+
+const CENTRE_KEYWORDS: TriangleCentreKind[] = ['centroid', 'circumcenter', 'incenter', 'orthocenter', 'incircle', 'circumcircle']
+
+// "<centre> [of] ABC" — shared by the bound form ("G = centroid ABC") and the
+// bare one ("incircle of ABC"), which are the same construction with and
+// without a name to bind.
+function parseTriangleCentre(text: string): Construction | null {
+  const match = /^([a-z]+)\s+(?:of\s+)?([a-zA-Z]{3})$/.exec(text.trim())
+  if (!match) return null
+  const centre = CENTRE_KEYWORDS.find((k) => k === match[1])
+  if (!centre) return null
+  return { kind: 'triangleCentre', centre, vertices: parseTriangleNames(match[2], `${centre} triangle`) }
+}
+
+function parseConstructionBody(rhs: string): Construction | null {
+  const text = rhs.trim()
+
+  // "line through P parallel to A-B" / "line through P perpendicular to A-B"
+  const lineThrough = /^line\s+through\s+([a-zA-Z]+)\s+(parallel|perpendicular)\s+to\s+(.+)$/.exec(text)
+  if (lineThrough) {
+    const base = parseGeometryRef(lineThrough[3], 'base line')
+    const through = geometryName(lineThrough[1], 'point the line passes through')
+    return lineThrough[2] === 'parallel' ? { kind: 'parallelLine', through, base } : { kind: 'perpendicularLine', through, base }
+  }
+
+  const perpBisector = /^perpendicular\s+bisector\s+(?:of\s+)?(.+)$/.exec(text)
+  if (perpBisector) {
+    const [from, to] = parseNamePair(perpBisector[1], 'bisected segment')
+    return { kind: 'perpendicularBisector', from, to }
+  }
+
+  const angleBisector = /^bisector\s+of\s+angle\s+(.+)$/.exec(text)
+  if (angleBisector) {
+    const [from, vertex, to] = parseNameTriple(angleBisector[1], 'bisected angle')
+    return { kind: 'angleBisector', from, vertex, to }
+  }
+
+  const mid = /^midpoint\s+(?:of\s+)?(.+)$/.exec(text)
+  if (mid) {
+    const [from, to] = parseNamePair(mid[1], 'segment')
+    return { kind: 'midpoint', from, to }
+  }
+
+  const foot = /^foot\s+([a-zA-Z]+)\s+to\s+(.+)$/.exec(text)
+  if (foot) {
+    return { kind: 'foot', from: geometryName(foot[1], 'point the perpendicular drops from'), base: parseGeometryRef(foot[2], 'line it drops to') }
+  }
+
+  if (/^intersect\b/.test(text)) {
+    const operands = splitTopLevelComma(text.slice('intersect'.length))
+    if (operands.length !== 2) {
+      throw new Error(`Expected "intersect <object>, <object>" (two operands), got ${operands.length} in "${text}"`)
+    }
+    return { kind: 'intersect', left: parseGeometryRef(operands[0], 'first operand'), right: parseGeometryRef(operands[1], 'second operand') }
+  }
+
+  const divide = /^divide\s+(.+?)\s+at\s+(.+)$/.exec(text)
+  if (divide) {
+    const [from, to] = parseNamePair(divide[1], 'divided segment')
+    const ratio = divide[2].split(':')
+    if (ratio.length !== 2) throw new Error(`Expected a ratio "m:n" after "at", got "${divide[2].trim()}"`)
+    return { kind: 'divide', from, to, ratioFrom: parseExprString(ratio[0]), ratioTo: parseExprString(ratio[1]) }
+  }
+
+  const reflect = /^reflect\s+([a-zA-Z]+)\s+over\s+(.+)$/.exec(text)
+  if (reflect) {
+    return { kind: 'reflect', point: geometryName(reflect[1], 'reflected point'), over: parseGeometryRef(reflect[2], 'mirror line') }
+  }
+
+  const rotate = /^rotate\s+([a-zA-Z]+)\s+about\s+([a-zA-Z]+)\s+by\s+(.+)$/.exec(text)
+  if (rotate) {
+    return {
+      kind: 'rotate',
+      point: geometryName(rotate[1], 'rotated point'),
+      about: geometryName(rotate[2], 'centre of rotation'),
+      angle: parseExprString(rotate[3]),
+    }
+  }
+
+  const translate = /^translate\s+([a-zA-Z]+)\s+by\s+(.+)$/.exec(text)
+  if (translate) {
+    const by = parseTuple(translate[2])
+    if (by.length !== 2) throw new Error(`Expected "translate P by (dx, dy)", got "${text}"`)
+    return { kind: 'translate', point: geometryName(translate[1], 'translated point'), dx: by[0], dy: by[1] }
+  }
+
+  // "O = circle P, 5" — a circle around a named centre. The existing
+  // "circle: (cx, cy), r" statement draws one but binds no geometry name, so
+  // without this form the spec's own "intersect circle O, line B-C" has no
+  // way to get an O to talk about.
+  const circleAt = /^circle\s+([a-zA-Z]+)\s*,(.+)$/.exec(text)
+  if (circleAt) {
+    return { kind: 'circleAt', center: geometryName(circleAt[1], 'circle centre'), radius: parseExprString(circleAt[2]) }
+  }
+
+  const dilate = /^dilate\s+([a-zA-Z]+)\s+from\s+([a-zA-Z]+)\s+by\s+(.+)$/.exec(text)
+  if (dilate) {
+    return {
+      kind: 'dilate',
+      point: geometryName(dilate[1], 'dilated point'),
+      from: geometryName(dilate[2], 'centre of dilation'),
+      factor: parseExprString(dilate[3]),
+    }
+  }
+
+  return parseTriangleCentre(text)
+}
+
+// "triangle ABC: AB = 8, angle A = 90, AC = 6".
+//
+// Measurements are mapped onto the canonical a/b/c slots here rather than in
+// the scene builder, because this is the layer that knows the vertex names —
+// which means "side DE" of triangle ABC can be rejected as a *parse* error,
+// naming the triangle, instead of surfacing later as a missing measurement.
+function parseTriangleStatement(line: string): StatementShape {
+  const colon = line.indexOf(':')
+  if (colon === -1) throw new Error('Expected "triangle ABC: <measurement>, <measurement>, <measurement>"')
+  const names = parseTriangleNames(line.slice('triangle'.length, colon), 'triangle')
+  const sides: Partial<Record<TriangleSlot, Expr>> = {}
+  const angles: Partial<Record<TriangleSlot, Expr>> = {}
+  const slots: TriangleSlot[] = ['a', 'b', 'c']
+
+  for (const chunk of splitTopLevelComma(line.slice(colon + 1))) {
+    const eqIdx = chunk.indexOf('=')
+    if (eqIdx === -1) throw new Error(`Expected "<side> = <value>" or "angle <vertex> = <value>", got "${chunk.trim()}"`)
+    const lhs = chunk.slice(0, eqIdx).trim()
+    const value = parseExprString(chunk.slice(eqIdx + 1))
+
+    const angleAt = /^angle\s+([a-zA-Z])$/.exec(lhs)
+    if (angleAt) {
+      const index = names.indexOf(angleAt[1])
+      if (index === -1) throw new Error(`"${angleAt[1]}" is not a vertex of triangle ${names.join('')}`)
+      if (angles[slots[index]]) throw new Error(`Angle ${angleAt[1]} of triangle ${names.join('')} is given twice`)
+      angles[slots[index]] = value
+      continue
+    }
+
+    if (!/^[a-zA-Z]{2}$/.test(lhs)) throw new Error(`Expected a side ("AB") or an angle ("angle A") of triangle ${names.join('')}, got "${lhs}"`)
+    const endpoints = [lhs[0], lhs[1]]
+    if (endpoints[0] === endpoints[1] || endpoints.some((v) => !names.includes(v))) {
+      throw new Error(`"${lhs}" is not a side of triangle ${names.join('')}`)
+    }
+    // The side joining two vertices is the one opposite the third.
+    const oppositeIndex = names.findIndex((v) => !endpoints.includes(v))
+    if (sides[slots[oppositeIndex]]) throw new Error(`Side ${lhs} of triangle ${names.join('')} is given twice`)
+    sides[slots[oppositeIndex]] = value
+  }
+
+  return { kind: 'triangle', names, sides, angles }
 }
 
 // The kind-specific grammar, unaware of the trailing "color:" clause the
@@ -278,6 +499,23 @@ function parseStatementCore(rawLine: string): StatementShape {
     return { kind: 'tick', from: parts[0], to: parts[1], count }
   }
 
+  // Segment between two named points: "segment: A-B", optionally
+  // "segment: A-B dashed". A/B resolved the same way as angle:'s points, so
+  // this can draw between *constructed* points — which the coordinate form
+  // "(x1,y1) -- (x2,y2)" cannot, since a construction has no coordinates to
+  // type. This is what makes "drop the altitude and draw it dashed" one line.
+  if (line.startsWith('segment:')) {
+    const rest = line.slice('segment:'.length).trim()
+    const dashed = /\bdashed$/.test(rest)
+    const spec = (dashed ? rest.slice(0, rest.length - 'dashed'.length) : rest).trim()
+    const parts = spec.split('-').map((p) => p.trim())
+    const namePattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+    if (parts.length !== 2 || parts.some((p) => !namePattern.test(p))) {
+      throw new Error('Expected "segment: A-B" (two point names), optionally followed by "dashed"')
+    }
+    return { kind: 'namedSegment', from: parts[0], to: parts[1], dashed }
+  }
+
   // Right-angle marker: "right-angle: A-B-C" (vertex is the middle name) —
   // the small square at B indicating a 90-degree angle between rays B->A
   // and B->C. A/B/C resolved the same way as angle:'s points.
@@ -289,6 +527,19 @@ function parseStatementCore(rawLine: string): StatementShape {
       throw new Error('Expected "right-angle: A-B-C" (three point names, vertex in the middle)')
     }
     return { kind: 'rightAngle', from: parts[0], vertex: parts[1], to: parts[2] }
+  }
+
+  // Solved triangle: "triangle ABC: AB = 8, angle A = 90, AC = 6". Checked
+  // before the generic "=" handling below, since the measurement list
+  // contains "=" signs of its own.
+  if (/^triangle\s/.test(line)) return parseTriangleStatement(line)
+
+  // The nameless centre-circle forms the spec writes bare: "incircle of ABC"
+  // and "circumcircle of ABC" draw the circle without binding a name to it.
+  if (/^(incircle|circumcircle)\s/.test(line)) {
+    const centre = parseTriangleCentre(line)
+    if (!centre) throw new Error(`Expected "incircle of ABC" or "circumcircle of ABC", got "${line}"`)
+    return { kind: 'construction', names: [], body: centre }
   }
 
   // Tangent line: "tangent: x^2 - 1 at x = 2"
@@ -510,6 +761,17 @@ function parseStatementCore(rawLine: string): StatementShape {
       return { kind: 'explicit', independent, body, condition }
     }
     if (lhs === 'z') return { kind: 'surface', body: parseExprString(rhs) }
+
+    // A named geometry construction: "M = midpoint A-B", and the two-name
+    // form "P, Q = intersect circle O, line B-C". Checked after the y=/x=/z=
+    // and polar cases above so those reserved names keep their meaning, and
+    // before the labeled-point and named-constant cases below, whose
+    // left-hand sides it would otherwise look identical to.
+    const constructionNames = splitTopLevelComma(lhs).map((part) => part.trim())
+    if (constructionNames.every((name) => GEOMETRY_NAME.test(name))) {
+      const body = parseConstructionBody(rhs)
+      if (body) return { kind: 'construction', names: constructionNames, body }
+    }
 
     // Labeled point: "A = (2, 3)" or "A = (2, 3, 1)"
     if (/^[a-zA-Z]+$/.test(lhs) && rhs.startsWith('(') && rhs.endsWith(')')) {

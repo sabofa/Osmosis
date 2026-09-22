@@ -1,4 +1,4 @@
-# Graph DSL Reference
+﻿# Graph DSL Reference
 
 A complete reference for `graph_spec` — the text DSL that drives `graph-engine`
 and renders as a 2D/3D graph, table, or diagram attached to a question. This
@@ -291,6 +291,120 @@ Small square marker at vertex `B` indicating a 90° angle between rays `B->A`
 and `B->C`.
 ```
 right-angle: A-B-C
+```
+
+```
+segment: A-B [dashed]
+```
+A segment between two *named* points, resolved the same way as `angle:`/
+`tick:`'s points. Distinct from the coordinate form `(x1,y1) -- (x2,y2)`,
+which cannot reference a constructed point — a construction has no
+coordinates to type.
+```
+segment: A-D dashed
+```
+
+### Geometry constructions
+
+Figures can be built by *construction* rather than by hand-solved
+coordinates. Every construction below binds its left-hand name into the
+geometry namespace **and** draws its result.
+
+Geometry names are **letters only** (`A`, `P`, `m`, `AB`) — the same rule
+point labels already follow, which keeps them distinct from the general
+identifier rule a named constant (`a = 5`) uses. **A name that is already
+bound is an error**, not a silent rebinding: silent rebinding would make a
+figure depend on statement order in a way nothing in the spec text signals.
+
+Constructions are **definition-before-use**, in source order. A construction
+may only reference names defined on an earlier line. (Plain `A = (x, y)`
+points and polygon vertices stay order-independent, as they always were.)
+That makes a dependency cycle unrepresentable rather than something to detect
+after the fact — the forward reference fails by name instead.
+
+```
+m = line through P parallel to A-B
+n = line through P perpendicular to A-B
+p = perpendicular bisector of A-B
+b = bisector of angle A-B-C
+```
+The first three produce **infinite** lines; the angle bisector produces a
+**ray** from the vertex, since the backward half of that line would bisect
+the vertical angle instead. An infinite line is stored unclipped and clipped
+to the view when drawn, so panning and zooming reveal more of the same line.
+
+```
+M = midpoint A-B
+D = foot C to A-B
+D = divide A-B at 2:3
+R = reflect P over m
+R = rotate P about O by 90
+T = translate P by (3, -4)
+E = dilate P from O by 1.5
+```
+Derived points. `divide` measures its ratio **from the first point**, so
+`2:3` sits two fifths of the way along. `rotate` turns counter-clockwise for
+a positive angle and reads its unit from `@angle`.
+
+```
+X = intersect m, n
+P, Q = intersect circle O, line B-C
+O = circle P, 5
+```
+Intersections dispatch on the kinds of their operands — line x line, line x
+circle, circle x circle — and respect each line's extent, so a crossing past
+a segment's end or behind a ray's origin is not a solution. An operand is a
+bound name, or a line written inline as `A-B` (infinite), `segment A-B`, or
+`ray A-B`; `circle O` is an optional readability prefix on a name.
+
+When two points are found they are returned **sorted by x ascending, then y
+ascending**, which is what makes `P, Q = ...` reproducible between runs.
+Binding a number of names that does not match the number of solutions found
+is an error — silently dropping one is how a figure becomes subtly wrong.
+
+```
+G = centroid ABC
+O = circumcenter ABC
+I = incenter ABC
+H = orthocenter ABC
+K = incircle of ABC
+J = circumcircle of ABC
+incircle of ABC
+circumcircle of ABC
+```
+Triangle centres, and the two centre circles as **real circles** carrying
+`r = Area/s` and `R = abc/(4*Area)` — a centre point without its circle is
+not usable. The last two forms draw the circle without binding a name. `of`
+is optional throughout. Three collinear points are rejected rather than
+approximated.
+
+```
+triangle ABC: AB = 8, angle A = 90, AC = 6
+```
+A triangle solved in closed form from exactly three measurements — SSS, SAS,
+ASA, AAS or RHS. Its three vertices become named points, like a polygon's do.
+
+**Placement is fixed by convention**: the first named vertex sits at the
+origin, the second on the positive x-axis, and the third in the upper
+half-plane. Without that, "deterministic" would not be achievable — the
+measurements fix a triangle's shape but neither its position nor its
+orientation.
+
+**SSA is deliberately refused.** Two sides and a non-included angle can admit
+zero, one or two triangles, so there is no single figure to draw. Draw it as
+a construction instead: place the angle at its vertex, draw a ray along one
+arm, and intersect a circle centred on the far endpoint with that ray. That
+yields both triangles at once, which is precisely the picture that answers
+"why can't this be determined?".
+
+A full worked figure — a right triangle with the altitude drawn to its
+hypotenuse, which was unauthorable without solving for the foot by hand:
+```
+@angle: degrees
+triangle ABC: angle A = 90, AB = 6, AC = 8
+D = foot A to B-C
+segment: A-D dashed
+right-angle: A-D-B
 ```
 
 ### Tables

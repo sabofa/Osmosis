@@ -3,6 +3,8 @@ import { compileExpr, evalExpr, type Bindings, type FunctionTable } from '../par
 import type { Condition, Statement } from '../parser/types'
 import { traceImplicitCurve, traceImplicitRegion, type Bounds } from '../render/marchingSquares'
 import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './featurePoints'
+import { buildConstructions } from './geometry/buildConstructions'
+import { circleCurve, polygonObjects } from './geometry/sceneObjects'
 import { formatCoord } from './format'
 import type { Scene, SceneObject, Vec2 } from './types'
 
@@ -401,24 +403,18 @@ function buildTangent(statement: Statement & { kind: 'tangent' }, bounds: Bounds
   ]
 }
 
-const CIRCLE_SAMPLES = 96
-
 // A circle by center + radius, sampled as a closed loop (the last sample at
 // t=2*pi coincides with the first at t=0) and reused as a plain 'curve'
 // SceneObject — the existing ribbon renderer already draws a closed shape
 // correctly as long as the point list closes on itself, so no new render
-// path is needed just for this.
+// path is needed just for this. The sampling itself lives in
+// geometry/sceneObjects.ts so an incircle/circumcircle draws identically.
 function buildCircle(statement: Statement & { kind: 'circle' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
   const cx = evalExpr(statement.cx, {}, config.angle, functions)
   const cy = evalExpr(statement.cy, {}, config.angle, functions)
   const radius = evalExpr(statement.radius, {}, config.angle, functions)
   if (radius <= 0) throw new Error('circle radius must be positive')
-  const points: Vec2[] = []
-  for (let i = 0; i <= CIRCLE_SAMPLES; i++) {
-    const t = (i / CIRCLE_SAMPLES) * 2 * Math.PI
-    points.push({ x: cx + radius * Math.cos(t), y: cy + radius * Math.sin(t) })
-  }
-  return [{ kind: 'curve', points, color: statement.color }]
+  return [circleCurve({ x: cx, y: cy }, radius, statement.color)]
 }
 
 // A closed shape from >= 3 labeled vertices — the edges reuse 'segments'
@@ -428,47 +424,18 @@ function buildCircle(statement: Statement & { kind: 'circle' }, config: GraphCon
 // like a plain "A = (x, y)" statement would. Vertex *names* are resolved to
 // coordinates separately, in collectNamedPoints, so angle:/tick:/
 // right-angle: can reference them.
-const POLYGON_LABEL_MAX_FRACTION = 0.35
-
+//
+// Both the edge batch and the "push each vertex label away from the shape's
+// own centroid, capped" rule now live in geometry/sceneObjects.ts, because a
+// solved "triangle ABC:" statement has to draw as exactly the same picture —
+// a hand-typed polygon and a solved triangle should not be two shapes that
+// merely resemble each other.
 function buildPolygon(statement: Statement & { kind: 'polygon' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
   const vertices = statement.vertices.map((v) => ({
     label: v.label,
     position: { x: evalExpr(v.x, {}, config.angle, functions), y: evalExpr(v.y, {}, config.angle, functions) },
   }))
-  const pairs: [Vec2, Vec2][] = vertices.map((v, i) => [v.position, vertices[(i + 1) % vertices.length].position])
-  const objects: SceneObject[] = [{ kind: 'segments', pairs, color: statement.color }]
-
-  // Point labels default to a fixed up-right offset, which for a polygon
-  // vertex often points straight at whatever else is anchored there (an
-  // angle:/right-angle: mark always sits *inside* the shape at its own
-  // vertex). Pointing each vertex's label away from the polygon's own
-  // centroid instead means it lands outside the shape — away from any
-  // interior marks — for every vertex, not just the ones where the default
-  // offset happened to already point outward.
-  const centroid = { x: 0, y: 0 }
-  for (const v of vertices) {
-    centroid.x += v.position.x / vertices.length
-    centroid.y += v.position.y / vertices.length
-  }
-  for (const v of vertices) {
-    const dx = v.position.x - centroid.x
-    const dy = v.position.y - centroid.y
-    const len = Math.hypot(dx, dy) || 1
-    objects.push({
-      kind: 'point',
-      label: v.label,
-      position: v.position,
-      color: statement.color,
-      labelDirection: { x: dx / len, y: dy / len },
-      // Never push the label further from its vertex than a fraction of
-      // that vertex's own distance to the centroid — keeps it from
-      // wandering away from (or, at a small enough on-screen size,
-      // overlapping *other* vertices' labels near) a polygon that's
-      // shrunk to a few screen pixels, same reasoning as the mark clamps.
-      maxLabelOffset: len * POLYGON_LABEL_MAX_FRACTION,
-    })
-  }
-  return objects
+  return polygonObjects(vertices, statement.color)
 }
 
 function linearRegression(points: Vec2[]) {
@@ -522,13 +489,23 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
   const functions = collectFunctions(statements)
   const namedPoints = collectNamedPoints(statements, config, functions)
 
+  // Geometry constructions resolve in one pass up front, in source order (see
+  // geometry/buildConstructions.ts for why definition-before-use rather than
+  // the order-independent treatment function/constant definitions get). The
+  // points they produce join the named-point table, so a constructed point is
+  // referenceable by angle:/tick:/right-angle: exactly like a polygon vertex.
+  const constructions = buildConstructions(statements, config, functions, namedPoints)
+  for (const [name, position] of constructions.points) namedPoints.set(name, position)
+  errors.push(...constructions.errors)
+
   function resolvePoint(name: string): Vec2 {
     const point = namedPoints.get(name)
     if (!point) throw new Error(`Unknown point "${name}" — define it with a point statement (e.g. "${name} = (x, y)") or as a polygon vertex first`)
     return point
   }
 
-  for (const statement of statements) {
+  for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
+    const statement = statements[statementIndex]
     // "@hide: <name>" skips rendering only — collectFunctions above already
     // ran, so a hidden "k(x) = ..." (or a hidden "y = k(x) name: k") stays
     // fully usable by other statements' expressions; hiding just means this
@@ -600,6 +577,12 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
         objects.push(...buildCircle(statement, config, functions))
       } else if (statement.kind === 'polygon') {
         objects.push(...buildPolygon(statement, config, functions))
+      } else if (statement.kind === 'construction' || statement.kind === 'triangle') {
+        // Already solved in the construction pass above; emitted here so the
+        // draw order follows the spec text and "@hide" still applies. A
+        // hidden construction keeps its binding, same as a hidden function
+        // definition stays callable.
+        objects.push(...(constructions.objectsByStatement.get(statementIndex) ?? []))
       } else if (statement.kind === 'angle') {
         objects.push({
           kind: 'angleMark',
@@ -607,6 +590,14 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
           vertex: resolvePoint(statement.vertex),
           to: resolvePoint(statement.to),
           label: statement.label,
+          color: statement.color,
+        })
+      } else if (statement.kind === 'namedSegment') {
+        objects.push({
+          kind: 'segment',
+          from: resolvePoint(statement.from),
+          to: resolvePoint(statement.to),
+          dashed: statement.dashed,
           color: statement.color,
         })
       } else if (statement.kind === 'tick') {

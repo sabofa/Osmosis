@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
 import { Camera2D } from './camera2d'
+import { clipLineToBounds } from './clipLine'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
 import { GeometryGroupManager, isGeometryKind, type GeometryKind } from './geometryGroup'
 import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSegments } from './geometryMarks'
@@ -437,14 +438,37 @@ export class SceneRenderer {
     this.needsRender = true
   }
 
+  // A constructed 'line' object is stored unclipped — it is a locus, true
+  // everywhere along itself, and how much of it to draw is a fact about the
+  // current view rather than about the figure. Clipping it here, against the
+  // camera's live bounds, is what keeps it correct under pan and zoom: the
+  // same stored object yields a different drawn segment each time the view
+  // moves, instead of a fixed-length stick sliding around the screen. A line
+  // that misses the view entirely simply drops out.
+  private clipConstructionLines(objects: SceneObject[]): SceneObject[] {
+    if (!objects.some((o) => o.kind === 'line')) return objects
+    const bounds = this.camera2d.getBounds()
+    const clipped: SceneObject[] = []
+    for (const obj of objects) {
+      if (obj.kind !== 'line') {
+        clipped.push(obj)
+        continue
+      }
+      const span = clipLineToBounds(obj.through, obj.direction, obj.extent, bounds)
+      if (span) clipped.push({ kind: 'segment', from: span[0], to: span[1], color: obj.color })
+    }
+    return clipped
+  }
+
   setGraphScene(scene: GraphScene) {
     this.lastScene = scene
+    const objects = this.clipConstructionLines(scene.objects)
     this.geometryGroupManager.update(
-      scene.objects.filter((o): o is Extract<SceneObject, { kind: GeometryKind }> => isGeometryKind(o.kind)),
+      objects.filter((o): o is Extract<SceneObject, { kind: GeometryKind }> => isGeometryKind(o.kind)),
       this.palette,
       (px) => this.pixelToWorld(px)
     )
-    this.updateMiscGroup(scene.objects.filter((o) => !isGeometryKind(o.kind)))
+    this.updateMiscGroup(objects.filter((o) => !isGeometryKind(o.kind)))
     this.needsRender = true
   }
 

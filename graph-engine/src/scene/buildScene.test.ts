@@ -354,3 +354,216 @@ describe('feature points', () => {
     expect(point.label).toMatch(/1/)
   })
 })
+
+describe('geometry constructions', () => {
+  function points(scene: { objects: { kind: string }[] }) {
+    return scene.objects.filter((o) => o.kind === 'point') as Extract<
+      import('./types').SceneObject,
+      { kind: 'point' }
+    >[]
+  }
+
+  function pointNamed(scene: { objects: { kind: string }[] }, label: string) {
+    const found = points(scene).find((p) => p.label === label)
+    if (!found) throw new Error(`no point labelled "${label}" in the scene`)
+    return found.position
+  }
+
+  it("authors the spec's motivating figure: a right triangle with the altitude to its hypotenuse", () => {
+    // Unauthorable in v1: the foot of the altitude had to be solved by hand
+    // before the segment could be typed.
+    const { scene } = build(
+      ['@angle: degrees', 'triangle ABC: angle A = 90, AB = 6, AC = 8', 'D = foot A to B-C', 'segment: A-D dashed', 'right-angle: A-D-B'].join('\n')
+    )
+    expect(scene.errors).toEqual([])
+    // The right-angle mark lands on the constructed foot, which is only
+    // possible because a constructed point joins the named-point table.
+    const square = scene.objects.find((o) => o.kind === 'rightAngleMark')
+    if (square?.kind !== 'rightAngleMark') throw new Error('no right-angle mark at the foot')
+    expect(square.vertex.x).toBeCloseTo(3.84, 10)
+
+    // D5 placement: A at the origin, B on the positive x-axis, C above.
+    expect(pointNamed(scene, 'A')).toEqual({ x: 0, y: 0 })
+    expect(pointNamed(scene, 'B').x).toBeCloseTo(6, 10)
+    expect(pointNamed(scene, 'B').y).toBeCloseTo(0, 10)
+    expect(pointNamed(scene, 'C').x).toBeCloseTo(0, 10)
+    expect(pointNamed(scene, 'C').y).toBeCloseTo(8, 10)
+
+    // The whole point of the figure: AD is 4.8.
+    const d = pointNamed(scene, 'D')
+    expect(Math.hypot(d.x, d.y)).toBeCloseTo(4.8, 10)
+    expect(d.x).toBeCloseTo(3.84, 10)
+    expect(d.y).toBeCloseTo(2.88, 10)
+
+    // ...drawn, and dashed, between A and D specifically.
+    const dashed = scene.objects.find((o) => o.kind === 'segment' && o.dashed)
+    if (dashed?.kind !== 'segment') throw new Error('the altitude was not drawn dashed')
+    expect(dashed.from).toEqual({ x: 0, y: 0 })
+    expect(dashed.to.x).toBeCloseTo(3.84, 10)
+
+    // And D really is the foot: AD is perpendicular to BC.
+    const b = pointNamed(scene, 'B')
+    const c = pointNamed(scene, 'C')
+    expect(d.x * (c.x - b.x) + d.y * (c.y - b.y)).toBeCloseTo(0, 8)
+  })
+
+  it('expresses a regular hexagon with no trigonometry typed by hand', () => {
+    const { scene } = build(
+      [
+        '@angle: degrees',
+        'O = (0, 0)',
+        'A = (1, 0)',
+        'B = rotate A about O by 60',
+        'C = rotate B about O by 60',
+        'D = rotate C about O by 60',
+        'E = rotate D about O by 60',
+        'F = rotate E about O by 60',
+      ].join('\n')
+    )
+    expect(scene.errors).toEqual([])
+
+    const vertices = ['A', 'B', 'C', 'D', 'E', 'F'].map((n) => pointNamed(scene, n))
+    // Every vertex on the unit circle, and every edge the same length as the
+    // radius — which is what makes it regular, and specifically a hexagon.
+    for (let i = 0; i < 6; i++) {
+      expect(Math.hypot(vertices[i].x, vertices[i].y)).toBeCloseTo(1, 10)
+      const next = vertices[(i + 1) % 6]
+      expect(Math.hypot(next.x - vertices[i].x, next.y - vertices[i].y)).toBeCloseTo(1, 10)
+    }
+    // Five turns of 60 degrees from (1,0) lands at 300 degrees, so a sixth
+    // would close the loop back on A exactly.
+    expect(vertices[5].x).toBeCloseTo(0.5, 10)
+    expect(vertices[5].y).toBeCloseTo(-Math.sqrt(3) / 2, 10)
+  })
+
+  it('resolves a chain of constructions: parallel, perpendicular, and their crossing', () => {
+    const { scene } = build(
+      ['A = (1, 1)', 'B = (4, 5)', 'P = (5, 1)', 'm = line through P parallel to A-B', 'n = line through A perpendicular to A-B', 'X = intersect m, n'].join('\n')
+    )
+    expect(scene.errors).toEqual([])
+    const x = pointNamed(scene, 'X')
+    // m is P=(5,1) + t*(3,4)/5; n is A=(1,1) + s*(-4,3)/5. Equating the two
+    // gives t = -2.4, so X = (5 - 1.44, 1 - 1.92) = (3.56, -0.92).
+    expect(x.x).toBeCloseTo(3.56, 8)
+    expect(x.y).toBeCloseTo(-0.92, 8)
+    // Independently: X is the foot of the perpendicular from A onto m, so
+    // |AX| is the distance between the two parallels, which is P's distance
+    // from line AB — |(0.6,0.8) x (4,0)| = 3.2.
+    expect(Math.hypot(x.x - 1, x.y - 1)).toBeCloseTo(3.2, 8)
+  })
+
+  it('keeps an infinite line unclipped in the scene, independent of the view bounds', () => {
+    const spec = ['A = (1, 1)', 'B = (4, 5)', 'P = (5, 1)', 'm = line through P parallel to A-B'].join('\n')
+    const parsed = parseSpec(spec)
+    const wide = buildScene(parsed.statements, { xMin: -100, xMax: 100, yMin: -100, yMax: 100 }, parsed.config)
+    const narrow = buildScene(parsed.statements, { xMin: 0, xMax: 1, yMin: 0, yMax: 1 }, parsed.config)
+
+    const wideLine = wide.objects.find((o) => o.kind === 'line')
+    const narrowLine = narrow.objects.find((o) => o.kind === 'line')
+    if (wideLine?.kind !== 'line' || narrowLine?.kind !== 'line') throw new Error('no construction line in the scene')
+    // Same object under wildly different views: the clip is the renderer's
+    // job (render/clipLine.ts), so panning and zooming reveal more of the
+    // same line rather than dragging a stale stick around.
+    expect(narrowLine).toEqual(wideLine)
+    expect(wideLine.extent).toBe('infinite')
+    expect(wideLine.through).toEqual({ x: 5, y: 1 })
+  })
+
+  it('draws an angle bisector as a ray, not a full line', () => {
+    const { scene } = build(['A = (4, 5)', 'B = (1, 1)', 'C = (5, -2)', 'b = bisector of angle A-B-C'].join('\n'))
+    expect(scene.errors).toEqual([])
+    const ray = scene.objects.find((o) => o.kind === 'line')
+    if (ray?.kind !== 'line') throw new Error('no bisector in the scene')
+    expect(ray.extent).toBe('ray')
+    expect(ray.through).toEqual({ x: 1, y: 1 })
+  })
+
+  it('binds two names to a two-point intersection, ordered by x then y', () => {
+    const { scene } = build(['A = (0, 0)', 'P = (-3, 4)', 'Q = (4, 3)', 'O = circle A, 5', 'S, T = intersect O, line P-Q'].join('\n'))
+    expect(scene.errors).toEqual([])
+    expect(pointNamed(scene, 'S').x).toBeCloseTo(-3, 8)
+    expect(pointNamed(scene, 'S').y).toBeCloseTo(4, 8)
+    expect(pointNamed(scene, 'T').x).toBeCloseTo(4, 8)
+    expect(pointNamed(scene, 'T').y).toBeCloseTo(3, 8)
+  })
+
+  it('rejects binding one name to a construction that found two points (D4)', () => {
+    const { scene } = build(['A = (0, 0)', 'P = (-3, 4)', 'Q = (4, 3)', 'O = circle A, 5', 'S = intersect O, line P-Q'].join('\n'))
+    expect(scene.errors).toHaveLength(1)
+    expect(scene.errors[0].message).toMatch(/2 solutions/)
+    expect(scene.errors[0].message).toMatch(/\bS\b/)
+  })
+
+  it('reports an undefined name legibly instead of drawing nothing quietly', () => {
+    const { scene } = build(['A = (0, 0)', 'M = midpoint A-B'].join('\n'))
+    expect(scene.errors).toHaveLength(1)
+    expect(scene.errors[0].message).toMatch(/"B"/)
+    expect(scene.errors[0].message).toMatch(/unknown/i)
+  })
+
+  it('errors rather than hanging when constructions refer to each other in a cycle', () => {
+    // Constructions are definition-before-use, which makes a cycle
+    // unrepresentable: the forward reference is what fails, by name, on the
+    // first line of the loop. Nothing here can spin.
+    const { scene } = build(['A = (0, 0)', 'B = (4, 0)', 'P = (1, 5)', 'X = intersect m, n', 'm = line through P parallel to A-B', 'n = line through X perpendicular to A-B'].join('\n'))
+    expect(scene.errors.length).toBeGreaterThan(0)
+    expect(scene.errors[0].message).toMatch(/"m"/)
+    expect(scene.errors[0].message).toMatch(/unknown/i)
+  })
+
+  it('refuses to rebind a name, naming what it was already bound to', () => {
+    const { scene } = build(['A = (0, 0)', 'B = (4, 2)', 'A = midpoint A-B'].join('\n'))
+    expect(scene.errors).toHaveLength(1)
+    expect(scene.errors[0].message).toMatch(/"A".*already/i)
+  })
+
+  it('draws an incircle and a circumcircle with their real radii', () => {
+    const { scene } = build(['@angle: degrees', 'triangle ABC: angle A = 90, AB = 4, AC = 3', 'incircle of ABC', 'circumcircle of ABC'].join('\n'))
+    expect(scene.errors).toEqual([])
+    const curves = scene.objects.filter((o) => o.kind === 'curve') as Extract<import('./types').SceneObject, { kind: 'curve' }>[]
+    expect(curves).toHaveLength(2)
+
+    // 3-4-5: r = Area/s = 6/6 = 1 about (1,1); R = 2.5 about the hypotenuse
+    // midpoint (2, 1.5).
+    const radii = curves.map((c) => {
+      const cx = (Math.min(...c.points.map((p) => p.x)) + Math.max(...c.points.map((p) => p.x))) / 2
+      const cy = (Math.min(...c.points.map((p) => p.y)) + Math.max(...c.points.map((p) => p.y))) / 2
+      return { cx, cy, r: Math.max(...c.points.map((p) => Math.hypot(p.x - cx, p.y - cy))) }
+    })
+    expect(radii[0].r).toBeCloseTo(1, 6)
+    expect(radii[0].cx).toBeCloseTo(1, 6)
+    expect(radii[0].cy).toBeCloseTo(1, 6)
+    expect(radii[1].r).toBeCloseTo(2.5, 6)
+    expect(radii[1].cx).toBeCloseTo(2, 6)
+    expect(radii[1].cy).toBeCloseTo(1.5, 6)
+  })
+
+  it('makes a constructed point referenceable by the existing angle:/tick: marks', () => {
+    const { scene } = build(['A = (0, 0)', 'B = (6, 8)', 'M = midpoint A-B', 'tick: A-M', 'angle: A-M-B'].join('\n'))
+    expect(scene.errors).toEqual([])
+    const tick = scene.objects.find((o) => o.kind === 'tickMark')
+    if (tick?.kind !== 'tickMark') throw new Error('no tick mark')
+    expect(tick.to).toEqual({ x: 3, y: 4 })
+    const angle = scene.objects.find((o) => o.kind === 'angleMark')
+    if (angle?.kind !== 'angleMark') throw new Error('no angle mark')
+    expect(angle.vertex).toEqual({ x: 3, y: 4 })
+  })
+
+  it('hides a construction without unbinding it, like a hidden function definition', () => {
+    const { scene } = build(['@hide: mid', 'A = (0, 0)', 'B = (6, 8)', 'M = midpoint A-B name: mid', 'tick: A-M'].join('\n'))
+    expect(scene.errors).toEqual([])
+    expect(points(scene).some((p) => p.label === 'M')).toBe(false)
+    const tick = scene.objects.find((o) => o.kind === 'tickMark')
+    if (tick?.kind !== 'tickMark') throw new Error('no tick mark')
+    expect(tick.to).toEqual({ x: 3, y: 4 })
+  })
+
+  it('reports a triangle it cannot solve without losing the rest of the figure', () => {
+    const { scene } = build(['@angle: degrees', 'A = (0, 0)', 'triangle PQR: PQ = 8, QR = 10, angle P = 40'].join('\n'))
+    expect(scene.errors).toHaveLength(1)
+    expect(scene.errors[0].message).toMatch(/SSA/)
+    expect(scene.errors[0].message).toMatch(/circle/i)
+    // The plain point statement still drew.
+    expect(points(scene).some((p) => p.label === 'A')).toBe(true)
+  })
+})

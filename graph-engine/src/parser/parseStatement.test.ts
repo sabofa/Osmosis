@@ -260,3 +260,166 @@ describe('parseStatement', () => {
     expect(angle.label).toBe('60°')
   })
 })
+
+describe('parseStatement — geometry constructions', () => {
+  it('parses a parallel and a perpendicular line through a point', () => {
+    const m = parseStatement('m = line through P parallel to A-B')
+    if (m.kind !== 'construction') throw new Error('unreachable')
+    expect(m.names).toEqual(['m'])
+    expect(m.body).toEqual({
+      kind: 'parallelLine',
+      through: 'P',
+      base: { kind: 'through', extent: 'infinite', from: 'A', to: 'B' },
+    })
+
+    const n = parseStatement('n = line through P perpendicular to A-B')
+    if (n.kind !== 'construction') throw new Error('unreachable')
+    expect(n.body.kind).toBe('perpendicularLine')
+  })
+
+  it('parses both bisectors', () => {
+    const b = parseStatement('b = bisector of angle A-B-C')
+    if (b.kind !== 'construction') throw new Error('unreachable')
+    expect(b.body).toEqual({ kind: 'angleBisector', from: 'A', vertex: 'B', to: 'C' })
+
+    const p = parseStatement('p = perpendicular bisector of A-B')
+    if (p.kind !== 'construction') throw new Error('unreachable')
+    expect(p.body).toEqual({ kind: 'perpendicularBisector', from: 'A', to: 'B' })
+  })
+
+  it('parses midpoint and foot', () => {
+    const mid = parseStatement('M = midpoint A-B')
+    if (mid.kind !== 'construction') throw new Error('unreachable')
+    expect(mid.body).toEqual({ kind: 'midpoint', from: 'A', to: 'B' })
+
+    const foot = parseStatement('D = foot C to A-B')
+    if (foot.kind !== 'construction') throw new Error('unreachable')
+    expect(foot.body).toEqual({ kind: 'foot', from: 'C', base: { kind: 'through', extent: 'infinite', from: 'A', to: 'B' } })
+  })
+
+  it('parses intersect with one name and with two', () => {
+    const one = parseStatement('X = intersect m, n')
+    if (one.kind !== 'construction') throw new Error('unreachable')
+    expect(one.names).toEqual(['X'])
+    expect(one.body).toEqual({
+      kind: 'intersect',
+      left: { kind: 'named', name: 'm' },
+      right: { kind: 'named', name: 'n' },
+    })
+
+    const two = parseStatement('P, Q = intersect circle O, line B-C')
+    if (two.kind !== 'construction') throw new Error('unreachable')
+    expect(two.names).toEqual(['P', 'Q'])
+    expect(two.body).toEqual({
+      kind: 'intersect',
+      left: { kind: 'named', name: 'O' },
+      right: { kind: 'through', extent: 'infinite', from: 'B', to: 'C' },
+    })
+  })
+
+  it('carries the extent of an explicitly written segment or ray operand', () => {
+    const seg = parseStatement('X = intersect segment A-B, ray C-D')
+    if (seg.kind !== 'construction' || seg.body.kind !== 'intersect') throw new Error('unreachable')
+    expect(seg.body.left).toEqual({ kind: 'through', extent: 'segment', from: 'A', to: 'B' })
+    expect(seg.body.right).toEqual({ kind: 'through', extent: 'ray', from: 'C', to: 'D' })
+  })
+
+  it('parses the derived-point constructions', () => {
+    const divide = parseStatement('D = divide A-B at 2:3')
+    if (divide.kind !== 'construction' || divide.body.kind !== 'divide') throw new Error('unreachable')
+    expect(divide.body.ratioFrom).toEqual({ kind: 'num', value: 2 })
+    expect(divide.body.ratioTo).toEqual({ kind: 'num', value: 3 })
+
+    const reflect = parseStatement('R = reflect P over m')
+    if (reflect.kind !== 'construction') throw new Error('unreachable')
+    expect(reflect.body).toEqual({ kind: 'reflect', point: 'P', over: { kind: 'named', name: 'm' } })
+
+    const rotate = parseStatement('R = rotate P about O by 90')
+    if (rotate.kind !== 'construction' || rotate.body.kind !== 'rotate') throw new Error('unreachable')
+    expect(rotate.body.about).toBe('O')
+
+    const translate = parseStatement('T = translate P by (3, -4)')
+    if (translate.kind !== 'construction' || translate.body.kind !== 'translate') throw new Error('unreachable')
+    expect(translate.body.dx).toEqual({ kind: 'num', value: 3 })
+
+    const dilate = parseStatement('E = dilate P from O by 1.5')
+    if (dilate.kind !== 'construction' || dilate.body.kind !== 'dilate') throw new Error('unreachable')
+    expect(dilate.body.from).toBe('O')
+  })
+
+  it('parses the four triangle centres and both centre circles', () => {
+    for (const [text, centre] of [
+      ['G = centroid ABC', 'centroid'],
+      ['O = circumcenter ABC', 'circumcenter'],
+      ['I = incenter of ABC', 'incenter'],
+      ['H = orthocenter ABC', 'orthocenter'],
+      ['K = incircle of ABC', 'incircle'],
+    ] as const) {
+      const s = parseStatement(text)
+      if (s.kind !== 'construction') throw new Error('unreachable')
+      expect(s.body).toEqual({ kind: 'triangleCentre', centre, vertices: ['A', 'B', 'C'] })
+    }
+  })
+
+  it('parses the nameless incircle/circumcircle forms', () => {
+    const inc = parseStatement('incircle of ABC')
+    if (inc.kind !== 'construction') throw new Error('unreachable')
+    expect(inc.names).toEqual([])
+    expect(inc.body).toEqual({ kind: 'triangleCentre', centre: 'incircle', vertices: ['A', 'B', 'C'] })
+
+    const circ = parseStatement('circumcircle of ABC')
+    if (circ.kind !== 'construction' || circ.body.kind !== 'triangleCentre') throw new Error('unreachable')
+    expect(circ.body.centre).toBe('circumcircle')
+  })
+
+  it('maps triangle measurements onto the canonical a/b/c slots', () => {
+    const t = parseStatement('triangle ABC: AB = 8, angle A = 90, AC = 6')
+    if (t.kind !== 'triangle') throw new Error('unreachable')
+    expect(t.names).toEqual(['A', 'B', 'C'])
+    // AB joins A and B, so it is the side opposite C -> slot c.
+    expect(t.sides.c).toEqual({ kind: 'num', value: 8 })
+    // AC joins A and C, so it is opposite B -> slot b.
+    expect(t.sides.b).toEqual({ kind: 'num', value: 6 })
+    expect(t.sides.a).toBeUndefined()
+    expect(t.angles.a).toEqual({ kind: 'num', value: 90 })
+  })
+
+  it('maps a side written the other way round to the same slot', () => {
+    // BA and AB are the same side. Writing both is a duplicate, and it is
+    // caught rather than silently overwritten — which is also what proves the
+    // two spellings really do land in one slot.
+    expect(() => parseStatement('triangle ABC: BA = 8, AB = 8, angle A = 90')).toThrow(/given twice/i)
+    const t = parseStatement('triangle ABC: BA = 8, angle A = 90, CA = 6')
+    if (t.kind !== 'triangle') throw new Error('unreachable')
+    expect(t.sides.c).toEqual({ kind: 'num', value: 8 })
+    expect(t.sides.b).toEqual({ kind: 'num', value: 6 })
+  })
+
+  it('rejects a measurement that is not part of the triangle, naming it', () => {
+    expect(() => parseStatement('triangle ABC: DE = 5, angle A = 90, AC = 6')).toThrow(/"DE" is not a side of triangle ABC/)
+    expect(() => parseStatement('triangle ABC: AB = 8, angle D = 90, AC = 6')).toThrow(/"D" is not a vertex of triangle ABC/)
+  })
+
+  it('rejects an intersect with the wrong number of operands', () => {
+    expect(() => parseStatement('X = intersect m')).toThrow(/two operands/i)
+    expect(() => parseStatement('X = intersect m, n, p')).toThrow(/two operands/i)
+  })
+
+  it('leaves the pre-existing "=" statement forms alone', () => {
+    // A construction keyword is only recognised as one; everything else that
+    // looks like "<letters> = ..." keeps its old meaning.
+    expect(parseStatement('a = 5').kind).toBe('constantDef')
+    expect(parseStatement('A = (2, 3)').kind).toBe('point')
+    expect(parseStatement('y = x^2 - 1').kind).toBe('explicit')
+    expect(parseStatement('r = 1 + cos(theta)').kind).toBe('polar')
+    expect(parseStatement('k(x) = x^2 + 1').kind).toBe('functionDef')
+    expect(parseStatement('x^2/9 + y^2/4 = 1').kind).toBe('implicit')
+  })
+
+  it('accepts color: and name: clauses on a construction, like every other statement', () => {
+    const s = parseStatement('M = midpoint A-B color: teal name: mid')
+    expect(s.kind).toBe('construction')
+    expect(s.color).toBe('teal')
+    expect(s.statementName).toBe('mid')
+  })
+})
