@@ -24,4 +24,23 @@ describe('markerShape', () => {
     expect(markerShape('x-intercept')).toBe('ring')
     expect(markerShape('y-intercept')).toBe('ring')
   })
+
+  // The inequality test above only proves inflection and intersection differ
+  // from *each other* and from a couple of neighbours — it would still pass
+  // if their shapes were swapped. Pin both to literals so that swap would be
+  // caught.
+  it('pins the shapes that the inequality test alone would not catch being swapped', () => {
+    expect(markerShape('inflection')).toBe('square')
+    expect(markerShape('intersection')).toBe('diamond')
+  })
+
+  // Nothing emits these kinds yet (conic features are later work), but
+  // pinning them now means the mapping is fully covered from the start —
+  // a future change to SHAPES can't silently drift one of these without a
+  // test noticing, even before anything on the scene/detection side reads it.
+  it('pins the shapes for feature kinds nothing emits yet', () => {
+    expect(markerShape('center')).toBe('dot')
+    expect(markerShape('focus')).toBe('diamond')
+    expect(markerShape('conic-vertex')).toBe('triangle-up')
+  })
 })
