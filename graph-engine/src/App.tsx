@@ -6,7 +6,7 @@ import type { ParseError } from './parser/types'
 import './App.css'
 
 const HOVER_MODES: HoverMode[] = ['all', 'points', 'none']
-const POINTS_MODES = ['none', 'intercepts', 'vertices', 'all'] as const
+const POINTS_MODES = ['none', 'roots', 'extrema', 'all'] as const
 type PointsMode = (typeof POINTS_MODES)[number]
 
 // Rewrites (or inserts) a directive line, so a visible toggle and the spec
@@ -29,12 +29,14 @@ function withPointsMode(spec: string, mode: PointsMode): string {
   return withDirective(spec, 'points', mode)
 }
 
-// The parsed config only ever carries the expanded Set — this maps it back
-// to whichever toggle button should read as active.
+// The parsed config only carries the expanded Set of concrete kinds — this
+// maps it back to whichever toggle button should read as active.
 function pointsModeFromConfig(points: Set<string>): PointsMode {
   if (points.size === 0) return 'none'
-  if (points.has('intercepts') && points.has('vertices')) return 'all'
-  return points.has('intercepts') ? 'intercepts' : 'vertices'
+  const hasRoots = points.has('x-intercept')
+  const hasExtrema = points.has('local-max')
+  if (hasRoots && hasExtrema) return 'all'
+  return hasRoots ? 'roots' : 'extrema'
 }
 
 // Shared by the Hover and Points rows below — both are "one directive value,
@@ -162,9 +164,28 @@ y = x^2 name: main
 y = x + 3 color: teal name: helper`,
   },
   {
-    label: 'Vertices/intercepts',
-    spec: `@points: intercepts, vertices
+    label: 'Feature points',
+    spec: `@points: roots, extrema, inflections
+@point-labels: coords
+y = x^3 - 3x`,
+  },
+  {
+    label: 'Intersections',
+    spec: `@points: intersections
+y = x^2
+y = x + 2`,
+  },
+  {
+    label: 'No numbers',
+    spec: `@labels: none
 y = x^2 - 4`,
+  },
+  {
+    label: 'Steps of 8',
+    spec: `@xstep: 8
+@ystep: 8
+@step-mode: geometric
+y = x^2   # zoom out: 8 -> 64 -> 512, never 10`,
   },
   {
     label: 'Circle',

@@ -351,11 +351,15 @@ different keys; for a repeated key, the last one wins.
 | `@axes` | `on`\|`off` | `on` | |
 | `@angle` | `degrees`\|`radians` | `radians` | affects `sin`/`cos`/`tan` argument interpretation |
 | `@mode` | `graph`\|`table` | `graph` | force table-only rendering |
-| `@points` | `intercepts`,`vertices`,`all`,`none` (comma list) | none marked | auto-mark these feature points |
+| `@points` | `roots`,`extrema`,`inflections`,`intersections`,`conic`,`all`,`none` (comma list) | none marked | auto-mark these feature points; `intercepts` and `vertices` (v1's names for `roots` and `extrema`) remain accepted as permanent aliases, since stored questions carry them and the server validates `graph_spec` with this same parser — see "Known limitations" below |
+| `@point-labels` | `off`\|`coords` | `off` | print a detected feature point's coordinates next to its marker |
+| `@labels` | `all`\|`coarse`\|`none` | `all` | tick-label density, independent of `@axes` — `coarse` labels only the major (every-5th) gridline, `none` gives a numberless graph with the axes and grid still drawn |
+| `@label-every` | positive integer | `1` | label every nth gridline; overrides `@labels: coarse`'s implicit every-5th when set |
+| `@step-mode` | `nice`\|`geometric`\|`fixed` | `nice` | how a fixed `@xstep`/`@ystep` rescales when the view is zoomed outside its 3-14 division comfort band — see mistake 5 below |
 | `@asymptotes` | `on`\|`off` | `on` | dashed guide at a detected vertical asymptote (curve-splitting there always happens; this only toggles the guide line itself) |
 | `@formulas` | `on`\|`off` | `off` | show a `table:` generator's formula alongside its table |
 | `@theme` | `light`\|`dark` | `light` | |
-| `@hover` | `all`\|`points`\|`none` | `all` | |
+| `@hover` | `all`\|`points`\|`features`\|`none` | `all` | `features` restricts hover snapping to detected feature points only (skipping curves, segments, and plain plotted points); a snapped feature reports its exact analytic value, not an interpolated sample |
 | `@hide` | `<name>[,<name>...]` | — | hide specific named statements/tables (by their `name:` clause) |
 | `@show` | `<name>[,<name>...]` | — | un-hide — a later directive always wins for that specific name, regardless of order |
 
@@ -400,12 +404,44 @@ of discoverable only via a validator error:
    <= 3` is rejected with an explicit error — `if` only exists on `y=`/`x=`
    explicit statements. Restrict the function itself instead: `y = x^2 if 0
    <= x <= 3`. See "Shaded inequality region" above.
+5. **Expecting `@xstep` to survive a zoom.** By default it does not — outside
+   3 to 14 visible divisions the step falls back to the universal 1-2-5 ladder,
+   so a spec written in 8s shows 10s when zoomed out. Use
+   `@step-mode: geometric` to keep the author's base: 8 → 64 → 512.
+
+## Known limitations
+
+Real gaps found while building the feature-point/intersection work, not
+hypothetical edge cases — worth knowing before authoring around them:
+
+- **`@points: intersections` does not find tangencies.** Intersection finding
+  looks for sign changes of `f - g` across the visible range. Where two curves
+  *touch* without crossing — a tangent line meeting the curve it's tangent to,
+  or `y = x^2` against `y = 0` — there's a root of `f - g` but no sign change,
+  so nothing is reported at that point. Plain crossings are unaffected; this
+  is specifically the touch-without-cross case. Don't rely on this directive
+  to mark a point of tangency.
+- **Explicit `x = f(y)` statements get no feature points.** Feature detection
+  (`roots`, `extrema`, `inflections`, and the curves fed into `intersections`)
+  only runs over explicit `y = f(x)` statements — a sideways parabola written
+  as `x = y^2` will show no intercepts or extrema even with `@points: all`
+  set. Write the curve as `y = f(x)` (or accept no markers) if feature points
+  matter for it.
+- **`@points: conic` is accepted but currently marks nothing.** The parser
+  expands it to the `center`/`focus`/`conic-vertex` feature kinds and the
+  renderer already knows how to draw them, but no detector populates them yet
+  for any statement kind (implicit conics like `x^2/9 + y^2/4 = 1` included) —
+  this group is reserved for later work, not a settled no-op you should route
+  around by hand.
 
 ## Where the source of truth lives
 
 - Grammar: `graph-engine/src/parser/types.ts`'s top comment, `parseStatement.ts`
 - Expression grammar: `graph-engine/src/parser/parseExpr.ts`, `evalExpr.ts` (builtins/constants)
 - Config directives: `graph-engine/src/parser/parseConfig.ts`, `config.ts`
+- Feature point / intersection detection: `graph-engine/src/scene/featurePoints.ts`,
+  `graph-engine/src/scene/roots.ts` (the old `detectFeaturePoints.ts` sampled-array
+  scan is gone, replaced by these two)
 - Colors: `graph-engine/src/parser/colors.ts`
 - Server-side validation entry point: `server/src/domain/questions.ts`'s `validateQuestionInput` (calls `parseSpec`)
 - Condensed in-tool version Claude actually reads mid-session: `server/src/domain/bootstrap.ts`'s `GRAPH_DSL_REFERENCE`
