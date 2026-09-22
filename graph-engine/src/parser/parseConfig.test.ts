@@ -1,0 +1,82 @@
+import { describe, expect, it } from 'vitest'
+import { defaultConfig } from './config'
+import { parseConfigLine } from './parseConfig'
+
+function parse(line: string) {
+  const config = defaultConfig()
+  parseConfigLine(line, config)
+  return config
+}
+
+describe('@points', () => {
+  it('accepts the new kind names', () => {
+    expect(parse('@points: roots').points).toEqual(new Set(['x-intercept', 'y-intercept']))
+    expect(parse('@points: extrema').points).toEqual(new Set(['local-max', 'local-min']))
+    expect(parse('@points: inflections').points).toEqual(new Set(['inflection']))
+    expect(parse('@points: intersections').points).toEqual(new Set(['intersection']))
+  })
+
+  it('accepts several groups at once', () => {
+    expect(parse('@points: roots, extrema').points).toEqual(
+      new Set(['x-intercept', 'y-intercept', 'local-max', 'local-min'])
+    )
+  })
+
+  // Stored questions in the bank carry the v1 spelling, and the server
+  // validates graph_spec with this parser — rejecting them would reject
+  // existing content, so these stay accepted forever.
+  it('keeps the v1 names working as aliases', () => {
+    expect(parse('@points: intercepts').points).toEqual(new Set(['x-intercept', 'y-intercept']))
+    expect(parse('@points: vertices').points).toEqual(new Set(['local-max', 'local-min']))
+  })
+
+  it('still handles none and all', () => {
+    expect(parse('@points: none').points.size).toBe(0)
+    expect(parse('@points: all').points.has('inflection')).toBe(true)
+    expect(parse('@points: all').points.has('x-intercept')).toBe(true)
+  })
+
+  it('rejects an unknown kind by name', () => {
+    expect(() => parse('@points: bananas')).toThrow(/bananas/)
+  })
+})
+
+describe('@labels and @label-every', () => {
+  it('parses the three label modes', () => {
+    expect(parse('@labels: none').labels).toBe('none')
+    expect(parse('@labels: coarse').labels).toBe('coarse')
+    expect(parse('@labels: all').labels).toBe('all')
+  })
+
+  it('defaults to all', () => {
+    expect(defaultConfig().labels).toBe('all')
+  })
+
+  it('parses a positive integer label interval', () => {
+    expect(parse('@label-every: 5').labelEvery).toBe(5)
+  })
+
+  it('rejects a non-positive or fractional interval', () => {
+    expect(() => parse('@label-every: 0')).toThrow()
+    expect(() => parse('@label-every: 2.5')).toThrow()
+  })
+})
+
+describe('@step-mode', () => {
+  it('parses the three step modes', () => {
+    expect(parse('@step-mode: nice').stepMode).toBe('nice')
+    expect(parse('@step-mode: geometric').stepMode).toBe('geometric')
+    expect(parse('@step-mode: fixed').stepMode).toBe('fixed')
+  })
+
+  it('defaults to nice', () => {
+    expect(defaultConfig().stepMode).toBe('nice')
+  })
+})
+
+describe('@point-labels', () => {
+  it('parses off and coords', () => {
+    expect(parse('@point-labels: coords').pointLabels).toBe('coords')
+    expect(parse('@point-labels: off').pointLabels).toBe('off')
+  })
+})

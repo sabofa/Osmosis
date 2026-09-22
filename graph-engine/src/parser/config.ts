@@ -10,7 +10,28 @@ export interface GraphBounds {
 }
 
 export type HoverMode = 'all' | 'points' | 'none'
-export type FeaturePointKind = 'intercepts' | 'vertices'
+
+// A detected feature carries which kind of feature it is, so the renderer can
+// mark an x-intercept differently from a local maximum. v1 emitted every
+// feature as an identical unlabeled dot, which is why "@points: intercepts"
+// and "@points: vertices" looked like the same setting.
+export type FeatureKind =
+  | 'x-intercept'
+  | 'y-intercept'
+  | 'local-max'
+  | 'local-min'
+  | 'inflection'
+  | 'center'
+  | 'focus'
+  | 'conic-vertex'
+  | 'intersection'
+
+// Back-compat alias: v1's name for the config value. Kept so existing imports
+// and stored specs keep working.
+export type FeaturePointKind = FeatureKind
+
+export type LabelMode = 'all' | 'coarse' | 'none'
+export type StepMode = 'nice' | 'geometric' | 'fixed'
 
 export interface GraphConfig {
   theme: 'light' | 'dark'
@@ -22,7 +43,17 @@ export interface GraphConfig {
   axes: boolean
   angle: 'degrees' | 'radians'
   mode: 'graph' | 'table'
-  points: Set<FeaturePointKind>
+  points: Set<FeatureKind>
+  // Tick-label density, independent of `axes`. v1 drew labels only when axes
+  // were on, so "a graph with no numbers" was only reachable as "a graph with
+  // no axes" — which is not the same picture.
+  labels: LabelMode
+  // Label every nth gridline. 1 labels every line.
+  labelEvery: number
+  // How a fixed @xstep/@ystep rescales as the view zooms. See grid.ts.
+  stepMode: StepMode
+  // Whether a detected feature point prints its coordinates.
+  pointLabels: 'off' | 'coords'
   // Dashed vertical guide at a detected vertical asymptote. Splitting the
   // curve there (so it doesn't draw a fake near-vertical connector line
   // across the discontinuity) always happens — this only toggles the guide line.
@@ -56,6 +87,10 @@ export function defaultConfig(): GraphConfig {
     angle: 'radians',
     mode: 'graph',
     points: new Set(),
+    labels: 'all',
+    labelEvery: 1,
+    stepMode: 'nice',
+    pointLabels: 'off',
     asymptotes: true,
     hidden: new Set(),
     tableFormulas: false,

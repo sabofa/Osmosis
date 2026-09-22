@@ -1,4 +1,4 @@
-import type { FeaturePointKind, GraphConfig } from './config'
+import type { FeatureKind, GraphConfig } from './config'
 
 export function isConfigLine(rawLine: string): boolean {
   return rawLine.trim().startsWith('@')
@@ -86,22 +86,68 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       return
     }
     case 'points': {
-      const kinds = value.split(',').map((v) => v.trim())
-      if (kinds.length === 1 && kinds[0] === 'none') {
+      // Group names expand to the concrete kinds they cover. "intercepts" and
+      // "vertices" are v1's spellings, kept as aliases because stored
+      // questions carry them and the server validates graph_spec with this
+      // parser.
+      const GROUPS: Record<string, FeatureKind[]> = {
+        roots: ['x-intercept', 'y-intercept'],
+        intercepts: ['x-intercept', 'y-intercept'],
+        extrema: ['local-max', 'local-min'],
+        vertices: ['local-max', 'local-min'],
+        inflections: ['inflection'],
+        intersections: ['intersection'],
+        conic: ['center', 'focus', 'conic-vertex'],
+      }
+      const names = value.split(',').map((v) => v.trim())
+      if (names.length === 1 && names[0] === 'none') {
         config.points = new Set()
         return
       }
-      if (kinds.length === 1 && kinds[0] === 'all') {
-        config.points = new Set<FeaturePointKind>(['intercepts', 'vertices'])
+      if (names.length === 1 && names[0] === 'all') {
+        config.points = new Set<FeatureKind>(Object.values(GROUPS).flat())
         return
       }
-      const valid: FeaturePointKind[] = ['intercepts', 'vertices']
-      for (const k of kinds) {
-        if (!valid.includes(k as FeaturePointKind)) {
-          throw new Error(`@points entries must be "intercepts", "vertices", "all", or "none", got "${k}"`)
+      const next = new Set<FeatureKind>()
+      for (const n of names) {
+        const expanded = GROUPS[n]
+        if (!expanded) {
+          throw new Error(
+            `@points entries must be "roots", "extrema", "inflections", "intersections", "conic", "all", or "none", got "${n}"`
+          )
         }
+        for (const kind of expanded) next.add(kind)
       }
-      config.points = new Set(kinds as FeaturePointKind[])
+      config.points = next
+      return
+    }
+    case 'labels': {
+      if (value !== 'all' && value !== 'coarse' && value !== 'none') {
+        throw new Error(`@labels must be "all", "coarse", or "none", got "${value}"`)
+      }
+      config.labels = value
+      return
+    }
+    case 'label-every': {
+      const n = Number.parseInt(value, 10)
+      if (!Number.isFinite(n) || n < 1 || String(n) !== value) {
+        throw new Error(`@label-every must be a positive whole number, got "${value}"`)
+      }
+      config.labelEvery = n
+      return
+    }
+    case 'step-mode': {
+      if (value !== 'nice' && value !== 'geometric' && value !== 'fixed') {
+        throw new Error(`@step-mode must be "nice", "geometric", or "fixed", got "${value}"`)
+      }
+      config.stepMode = value
+      return
+    }
+    case 'point-labels': {
+      if (value !== 'off' && value !== 'coords') {
+        throw new Error(`@point-labels must be "off" or "coords", got "${value}"`)
+      }
+      config.pointLabels = value
       return
     }
     default:
