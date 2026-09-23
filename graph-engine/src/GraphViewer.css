@@ -50,6 +50,51 @@
   border: 2px solid var(--gv-border-dark);
 }
 
+/* Panels (F5). A spec containing both geometry and table statements puts up
+   both, and this is the only thing that changes for one that does not: a
+   single panel fills the frame exactly as the bare canvas used to, because
+   the panel is `position: relative; flex: 1` inside a full-size flex box.
+   Stored table-only and graph-only specs are unaffected. */
+.graph-viewer-panel {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.graph-viewer-split {
+  display: flex;
+  flex-direction: row;
+}
+
+/* Below this the two panels stop being readable side by side — a figure
+   squeezed into half a phone screen is not a figure — so they stack and the
+   frame scrolls instead. */
+@media (max-width: 720px) {
+  .graph-viewer-split {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .graph-viewer-split > .graph-viewer-panel {
+    flex: 0 0 auto;
+    min-height: 240px;
+  }
+}
+
+/* The divider between the panels, on whichever edge they meet. */
+.graph-viewer-split > .graph-viewer-panel + .graph-viewer-panel {
+  border-left: 1px solid var(--line-strong, #c9c6b3);
+}
+
+@media (max-width: 720px) {
+  .graph-viewer-split > .graph-viewer-panel + .graph-viewer-panel {
+    border-left: none;
+    border-top: 1px solid var(--line-strong, #c9c6b3);
+  }
+}
+
 .graph-viewer-canvas {
   display: block;
   width: 100%;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
-import { resolveMode } from './mode'
+import { resolveMode, resolvePanels } from './mode'
 
 function mode(spec: string) {
   const parsed = parseSpec(spec)
@@ -71,5 +71,82 @@ describe('inference, when nothing is declared', () => {
   it('does not let a definition or a directive make a figure a graph', () => {
     // A constant used by the construction is not plotted content.
     expect(mode(`@grid: off\nk = 6\n${GEOMETRY_ONLY}`)).toBe('figure')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// F5 — panels
+// ---------------------------------------------------------------------------
+
+function panels(spec: string) {
+  const parsed = parseSpec(spec)
+  return resolvePanels(parsed.statements, parsed.config)
+}
+
+const TABLE = 'header: x | y\nrow: 1 | 2\nrow: 2 | 4'
+
+describe('a table is additive, not exclusive', () => {
+  it('renders a figure and a table together', () => {
+    expect(panels(`${GEOMETRY_ONLY}\n${TABLE}`)).toEqual({ drawable: 'figure', table: true })
+  })
+
+  it('renders a graph and a table together', () => {
+    expect(panels(`y = x^2\n${TABLE}`)).toEqual({ drawable: 'graph', table: true })
+  })
+
+  it('renders geometry alone as one panel', () => {
+    expect(panels(GEOMETRY_ONLY)).toEqual({ drawable: 'figure', table: false })
+  })
+
+  it('renders a plotted function alone as one panel', () => {
+    expect(panels('y = x^2')).toEqual({ drawable: 'graph', table: false })
+  })
+
+  it('counts every kind of table statement, named or not', () => {
+    expect(panels(`${GEOMETRY_ONLY}\nscores.header: x | y`).table).toBe(true)
+    expect(panels(`${GEOMETRY_ONLY}\nscores.row: 1 | 2`).table).toBe(true)
+    expect(panels(`${GEOMETRY_ONLY}\ntable: y = x^2 for x in [0, 3] step 1`).table).toBe(true)
+  })
+})
+
+describe('@mode: table keeps meaning "table only"', () => {
+  // The compatibility promise: nothing already stored changes.
+  it('shows only the table even when the spec also draws geometry', () => {
+    expect(panels(`@mode: table\n${GEOMETRY_ONLY}\n${TABLE}`)).toEqual({ drawable: null, table: true })
+  })
+
+  it('shows only the table for a spec that is nothing but a table', () => {
+    expect(panels(`@mode: table\n${TABLE}`)).toEqual({ drawable: null, table: true })
+  })
+
+  it('shows only the table even when the spec plots functions', () => {
+    expect(panels(`@mode: table\ny = x^2\n${TABLE}`)).toEqual({ drawable: null, table: true })
+  })
+})
+
+describe('a declared drawable mode still decides the drawing', () => {
+  it('leaves @mode: graph drawing a graph, with the table beside it', () => {
+    expect(panels(`@mode: graph\n${GEOMETRY_ONLY}\n${TABLE}`)).toEqual({ drawable: 'graph', table: true })
+  })
+
+  it('leaves @mode: figure drawing a figure, with the table beside it', () => {
+    expect(panels(`@mode: figure\ny = x^2\n${TABLE}`)).toEqual({ drawable: 'figure', table: true })
+  })
+})
+
+describe('a spec with nothing to draw', () => {
+  it('shows the table alone rather than a blank canvas beside it', () => {
+    // Undeclared, and nothing drawable in it: there is no drawing to put
+    // beside the table, and an empty graph panel is not a second panel.
+    expect(panels(TABLE)).toEqual({ drawable: null, table: true })
+  })
+
+  it('still draws a declared graph, even an empty one', () => {
+    // An explicit @mode is a statement of intent and is not second-guessed.
+    expect(panels(`@mode: graph\n${TABLE}`)).toEqual({ drawable: 'graph', table: true })
+  })
+
+  it('falls back to a graph for a spec with nothing in it at all', () => {
+    expect(panels('')).toEqual({ drawable: 'graph', table: false })
   })
 })

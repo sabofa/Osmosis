@@ -85,3 +85,47 @@ export function resolveMode(statements: Statement[], config: GraphConfig): Rende
   // anything is missing.
   return 'graph'
 }
+
+// ---------------------------------------------------------------------------
+// F5 — panels
+// ---------------------------------------------------------------------------
+
+const TABLE_KINDS: ReadonlySet<Statement['kind']> = new Set(['tableHeader', 'tableRow', 'tableGenerator'])
+
+// What a spec puts on screen: a drawing, a table, or both.
+export interface Panels {
+  // Which renderer draws the drawable content, or null when the spec has no
+  // drawing to show.
+  drawable: RenderMode | null
+  table: boolean
+}
+
+// **A table is additive rather than exclusive.**
+//
+// `@mode` is one-of, which forces a problem containing both a figure and a
+// data table to choose — and real problems contain both. So the renderer
+// composes panels: mode still decides which renderer draws the *drawable*
+// content, and a table sits beside it.
+//
+// `@mode: table` keeps its current meaning of "table only", so nothing
+// already stored changes. That is the whole compatibility promise, and it is
+// why this reads the declaration rather than resolveMode's answer: an
+// inferred 'table' does not exist, and only the author's own word suppresses
+// the drawing.
+//
+// The one case with no status quo to preserve is a spec that declares no mode
+// and has nothing drawable in it — today that renders an empty graph canvas
+// with the table nowhere to be seen. There is no drawing to put beside the
+// table, and an empty panel is not a second panel, so the table takes the
+// view. An explicit `@mode` is still a statement of intent and is not
+// second-guessed.
+export function resolvePanels(statements: Statement[], config: GraphConfig): Panels {
+  const table = statements.some((s) => TABLE_KINDS.has(s.kind))
+  if (config.modeDeclared && config.mode === 'table') return { drawable: null, table: true }
+
+  const drawable = resolveMode(statements, config)
+  if (table && !config.modeDeclared && !statements.some((s) => PLOTTED.has(s.kind) || GEOMETRY.has(s.kind))) {
+    return { drawable: null, table: true }
+  }
+  return { drawable, table }
+}
