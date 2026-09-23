@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { arcBetween } from '../scene/geometry/circles'
+import { circle } from '../scene/geometry/objects'
 import {
   angleMeasure,
+  arcMeasure,
   checkMeasure,
   formatAngleMeasure,
   formatMeasure,
@@ -155,5 +158,63 @@ describe('checkMeasure', () => {
     expect(checkMeasure('AB', 1e6, 1e6 + 1e-7, { toScale: true })).toBeNull()
     // ...while the same absolute residual on a unit length is a real one.
     expect(checkMeasure('AB', 1, 1 + 1e-7, { toScale: true })).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// G2 — an arc's measure and its central angle are the same number
+// ---------------------------------------------------------------------------
+
+describe('arcMeasure', () => {
+  // The same circle the construction tests use: centre (3, 4), radius 5.
+  //   B (8, 4)   at 0 degrees
+  //   D (-1, 7)  at atan2(3, -4) = 143.13010235415598 degrees
+  //   E (3, 9)   at 90 degrees
+  const O = circle({ x: 3, y: 4 }, 5)
+  const B = { x: 8, y: 4 }
+  const D = { x: -1, y: 7 }
+  const E = { x: 3, y: 9 }
+
+  it('measures a minor arc in degrees', () => {
+    expect(arcMeasure(arcBetween(O, B, D, 'minor'), 'degrees')).toBeCloseTo(143.13010235415598, 10)
+  })
+
+  it('measures the same arc in radians', () => {
+    expect(arcMeasure(arcBetween(O, B, D, 'minor'), 'radians')).toBeCloseTo(2.498091544796509, 12)
+  })
+
+  it('measures a major arc as more than a straight angle', () => {
+    const major = arcMeasure(arcBetween(O, B, D, 'major'), 'degrees')
+    expect(major).toBeGreaterThan(180)
+    expect(major).toBeCloseTo(360 - 143.13010235415598, 10)
+  })
+
+  it('measures the way round, not the shorter way — a clockwise quarter is 90, its reverse 270', () => {
+    expect(arcMeasure(arcBetween(O, B, E, 'ccw'), 'degrees')).toBeCloseTo(90, 10)
+    expect(arcMeasure(arcBetween(O, B, E, 'cw'), 'degrees')).toBeCloseTo(270, 10)
+  })
+
+  it('measures a full circle as one whole turn', () => {
+    const full = { center: O.center, radius: O.radius, start: 0, sweep: 2 * Math.PI }
+    expect(arcMeasure(full, 'degrees')).toBeCloseTo(360, 10)
+    expect(arcMeasure(full, 'radians')).toBeCloseTo(2 * Math.PI, 12)
+  })
+
+  it('agrees with the angle at the centre, which is what a central angle mark draws', () => {
+    // An independent route to the same number: angleMeasure knows nothing
+    // about arcs and measures the non-reflex angle between two rays. For a
+    // minor arc the two must agree exactly; for a major one, the arc is the
+    // rest of the turn, which is why a major arc cannot be drawn by measuring
+    // the angle at the centre and printing it.
+    const minor = arcBetween(O, B, D, 'minor')
+    expect(arcMeasure(minor, 'degrees')).toBeCloseTo(angleMeasure(O.center, B, D, 'degrees'), 10)
+    const major = arcBetween(O, B, D, 'major')
+    expect(arcMeasure(major, 'degrees')).toBeCloseTo(360 - angleMeasure(O.center, B, D, 'degrees'), 10)
+  })
+
+  it('prints through the one formatter, so radians stay decimals until exact values land', () => {
+    const arc = arcBetween(O, B, E, 'ccw')
+    expect(formatAngleMeasure(arcMeasure(arc, 'degrees'), 'degrees')).toBe('90°')
+    expect(formatAngleMeasure(arcMeasure(arc, 'radians'), 'radians')).toBe('1.571')
   })
 })

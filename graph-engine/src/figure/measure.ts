@@ -1,4 +1,5 @@
 import type { GraphConfig } from '../parser/config'
+import type { Arc } from '../scene/geometry/circles'
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 
@@ -40,6 +41,24 @@ export function angleMeasure(vertex: Vec2, from: Vec2, to: Vec2, mode: AngleMode
   const cross = u.x * v.y - u.y * v.x
   const dot = u.x * v.x + u.y * v.y
   const radians = Math.atan2(Math.abs(cross), dot)
+  return mode === 'degrees' ? (radians * 180) / Math.PI : radians
+}
+
+// G2 — an arc's measure and the central angle drawn for it are the same
+// number, so they are computed here and nowhere else.
+//
+// The input is the arc itself, not a pair of endpoints, because the arc
+// already carries the signed sweep its direction resolved to (see
+// scene/geometry/circles.ts). That is the whole mechanism: a label reading
+// "arc PQ" and a central-angle mark for the same arc cannot disagree, because
+// neither of them decides which way round the arc goes — the arc did, once.
+//
+// A major arc therefore measures more than a straight angle, which the angle
+// at the centre measured with `angleMeasure` cannot express: that function
+// returns the non-reflex angle by construction, and printing it for a major
+// arc would quietly label a 216-degree arc as 144.
+export function arcMeasure(arc: Arc, mode: AngleMode): number {
+  const radians = Math.abs(arc.sweep)
   return mode === 'degrees' ? (radians * 180) / Math.PI : radians
 }
 
