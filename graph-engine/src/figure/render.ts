@@ -1,6 +1,15 @@
 import type { GraphConfig } from '../parser/config'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
-import type { Expr, GeometryArcDirection, GivenEntry, GivensSection, MeasureContent, MeasureSubject, Statement } from '../parser/types'
+import type {
+  Expr,
+  GeometryArcDirection,
+  GivenEntry,
+  GivensSection,
+  MeasureContent,
+  MeasureSubject,
+  SolidPrimitive,
+  Statement,
+} from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
 import { type Palette, themedColor } from '../render/palette'
@@ -27,6 +36,8 @@ import {
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
+import { cameraFor, projectSolid, type ProjectedEdge } from './project3d'
+import { buildSolid, type SolidBody, type SolidSpec } from './solids'
 import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
@@ -95,6 +106,16 @@ type FigureItem =
   // degrees as 144.
   | { kind: 'centralAngle'; id: Identity; arc: Arc; label: string; color: string | null }
   | { kind: 'polygon'; id: Identity; vertices: Vec2[]; color: string | null }
+  // A solid, already projected: the 3D layer is a PRODUCER feeding this
+  // renderer, not a second renderer, so by the time a solid is an item it is
+  // 2D geometry plus a visible/hidden classification per edge.
+  | { kind: 'solid'; id: Identity; edges: ProjectedEdge[]; color: string | null }
+  // A letter at a projected vertex. Deliberately not a `point`: a solid's
+  // vertices are lettered, not dotted, and — more importantly — they are NOT
+  // registered in the 2D point namespace. "label: AB" there would print the
+  // length of the PROJECTED edge, which is a fact about the camera and not
+  // about the solid. Dimensions are named instead (see solidDimensions).
+  | { kind: 'solidVertex'; id: Identity; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
   | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
   | { kind: 'rightAngleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; color: string | null }
@@ -198,6 +219,36 @@ function geometryItems(object: GeometryObject, name: string | null, id: Identity
       // helped produce them. Phase 1's constructions all produce loci, so this
       // draws every one of them exactly as it did before.
       return [{ kind: 'line', id, a: object.a, b: object.b, extent: object.extent, auxiliary: object.extent !== 'segment', color }]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Solids
+// ---------------------------------------------------------------------------
+
+// The author's primitive, with its dimensions evaluated.
+//
+// Every dimension must be a positive number. A zero or negative one is not a
+// degenerate drawing to be attempted — it is a solid that does not exist, and
+// the convex hidden-edge rule would classify its faces at random.
+function solidSpecOf(primitive: SolidPrimitive, value: (e: Expr) => number): SolidSpec {
+  const positive = (e: Expr, what: string): number => {
+    const n = value(e)
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`A solid's ${what} must be a positive number, got ${n}`)
+    return n
+  }
+  switch (primitive.kind) {
+    case 'prism':
+      return {
+        kind: 'prism',
+        width: positive(primitive.width, 'width'),
+        height: positive(primitive.height, 'height'),
+        depth: positive(primitive.depth, 'depth'),
+      }
+    case 'pyramid':
+      return { kind: 'pyramid', base: positive(primitive.base, 'base'), height: positive(primitive.height, 'height') }
+    case 'tetrahedron':
+      return { kind: 'tetrahedron', edge: positive(primitive.edge, 'edge') }
   }
 }
 
@@ -396,6 +447,10 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   // and that is only known once every other item exists.
   const measureStatements: { statement: Statement; index: number }[] = []
   const givenStatements: { statement: Statement; index: number }[] = []
+  // Bound solids, by name. Definition-before-use, exactly as constructions
+  // are: a solid is built when its own statement is walked, so anything
+  // naming it must come later in the spec.
+  const solids = new Map<string, SolidBody>()
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
 
   // A circle has to be *named* to be talked about: "circle: (0,0), 3" draws
@@ -481,6 +536,36 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
               prefer: awayFrom(vertex.at, centre),
               color: statement.color,
             })
+          }
+          break
+        }
+        case 'solid': {
+          const spec = solidSpecOf(statement.primitive, value)
+          const body = buildSolid(spec)
+          if (statement.name) solids.set(statement.name, body)
+          const polyhedron = body.polyhedron
+          if (!polyhedron) break
+          const camera = cameraFor(config.view)
+          const edges = projectSolid(polyhedron, camera)
+          items.push({ kind: 'solid', id: { statement: index, object: statement.name }, edges, color: statement.color })
+          if (statement.vertices.length > 0) {
+            if (statement.vertices.length !== body.labelOrder.length) {
+              throw new Error(
+                `A ${spec.kind} has ${body.labelOrder.length} vertices, but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
+              )
+            }
+            const projected = body.labelOrder.map((v) => camera.project(polyhedron.vertices[v]))
+            const centre = centroidOf(projected)
+            for (let v = 0; v < statement.vertices.length; v++) {
+              items.push({
+                kind: 'solidVertex',
+                id: { statement: index, object: statement.vertices[v] },
+                at: projected[v],
+                label: statement.vertices[v],
+                prefer: awayFrom(projected[v], centre),
+                color: statement.color,
+              })
+            }
           }
           break
         }
@@ -666,6 +751,12 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
         break
       case 'polygon':
         points.push(...item.vertices)
+        break
+      case 'solid':
+        for (const edge of item.edges) points.push(edge.a, edge.b)
+        break
+      case 'solidVertex':
+        points.push(item.at)
         break
       case 'arc':
         points.push(...arcExtremes(item.arc))
@@ -922,6 +1013,8 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // across its own angle arc is unreadable. Pushing sets where the label
       // starts looking; this is what stops it landing on the ink.
       obstacles.circles.push({ center: projection.toView(item.vertex), radius: angleArcRadius(item, projection) })
+    } else if (item.kind === 'solid') {
+      for (const edge of item.edges) obstacles.segments.push([projection.toView(edge.a), projection.toView(edge.b)])
     } else if (item.kind === 'polygon') {
       const vertices = item.vertices.map((v) => projection.toView(v))
       obstacles.polygons.push(vertices)
@@ -958,6 +1051,10 @@ function labelAnchors(
         fontSize: LABEL_FONT_SIZE,
         prefer: item.prefer,
       })
+      sources.set(id, { id: item.id, notation: null, color: item.color })
+    } else if (item.kind === 'solidVertex') {
+      const id = `${item.label}#${item.id.statement}`
+      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize: LABEL_FONT_SIZE, prefer: item.prefer })
       sources.set(id, { id: item.id, notation: null, color: item.color })
     } else if (item.kind === 'measureLabel') {
       const layout = layoutNotation(item.runs, LABEL_FONT_SIZE)
@@ -1070,6 +1167,28 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       )
       break
     }
+    case 'solid': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      for (const edge of item.edges) {
+        const style: SvgAttrs = {
+          stroke,
+          'stroke-width': edge.hidden ? STROKE_AUXILIARY : STROKE_PRIMARY,
+          'stroke-linecap': 'round',
+          'stroke-dasharray': edge.hidden ? AUXILIARY_DASH : null,
+          opacity: edge.hidden ? AUXILIARY_OPACITY : null,
+          'data-statement': item.id.statement,
+          'data-object': `edge-${edge.vertices[0]}-${edge.vertices[1]}`,
+        }
+        // E1 — a hidden edge goes BEHIND every visible one, so the solid
+        // stroke covers the dashes where they cross rather than the other
+        // way round.
+        layers[edge.hidden ? 'auxiliary' : 'primary'].push(svgLine(to(edge.a), to(edge.b), style))
+      }
+      break
+    }
+    case 'solidVertex':
+      // Emitted with the other labels, after the layout has placed them.
+      break
     case 'polygon': {
       const vertices = item.vertices.map(to)
       const stroke = strokeColor(item.color, palette.axis, palette)

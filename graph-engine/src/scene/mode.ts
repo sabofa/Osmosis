@@ -63,6 +63,11 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   // labels is still a figure rather than a graph.
   'measureLabel',
   'given',
+  // A solid is 3D geometry PROJECTED onto paper, not a 3D scene: it is drawn
+  // by the figure renderer through a fixed camera, with no axes and no orbit.
+  // So it infers `figure`, exactly as a polygon does — and it must not reach
+  // isThreeD, which routes real depth to the plot renderer.
+  'solid',
 ])
 
 // Which renderer a spec gets.

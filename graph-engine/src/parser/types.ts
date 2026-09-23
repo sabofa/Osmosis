@@ -85,6 +85,22 @@ export type Construction =
   | { kind: 'diameter'; circle: string; from: string; to: string }
 
 // --------------------------------------------------------------------------
+// Solids (Geometry v2, phase 5)
+// --------------------------------------------------------------------------
+
+// A solid primitive as the author wrote it. Dimensions stay as Exprs so a
+// named constant works here exactly as it does in a rotation angle or a
+// dilation factor.
+//
+// Where the solid SITS is not in this type and never can be: a constraint
+// fixes a shape, not a placement. The convention is stated once, in
+// figure/solids.ts (H1).
+export type SolidPrimitive =
+  | { kind: 'prism'; width: Expr; height: Expr; depth: Expr }
+  | { kind: 'pyramid'; base: Expr; height: Expr }
+  | { kind: 'tetrahedron'; edge: Expr }
+
+// --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)
 // --------------------------------------------------------------------------
 
@@ -363,6 +379,13 @@ export type StatementShape =
   // error (D4), because silently dropping a solution is how a figure becomes
   // subtly wrong.
   | { kind: 'construction'; names: string[]; body: Construction }
+  // "solid: prism 8 by 5 by 6", "S = solid tetrahedron edge 5 vertices ABCD".
+  // A solid is 3D geometry projected onto the figure, so it is figure content
+  // like a polygon is — not a 3D scene (see scene/mode.ts). `name` binds it so
+  // a later "label:", "cut:" or "section:" can refer to it; `vertices` names
+  // the projected vertices in the solid's own labelling order, and is empty
+  // when the author named none.
+  | { kind: 'solid'; name: string | null; primitive: SolidPrimitive; vertices: string[] }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the
   // canonical a/b/c slots, since the parser knows the vertex names and can

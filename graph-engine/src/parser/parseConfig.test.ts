@@ -130,3 +130,22 @@ describe('@givens-title', () => {
     expect(parse('@givens-title:').givensTitle).toBeNull()
   })
 })
+
+describe('@view', () => {
+  it('defaults to isometric, the viewpoint a textbook drawing uses', () => {
+    expect(defaultConfig().view).toBe('isometric')
+  })
+
+  it('takes each named viewpoint', () => {
+    for (const name of ['isometric', 'front', 'top', 'side'] as const) {
+      const config = defaultConfig()
+      parseConfigLine(`@view: ${name}`, config)
+      expect(config.view).toBe(name)
+    }
+  })
+
+  it('rejects an unknown viewpoint, naming the ones that exist', () => {
+    const config = defaultConfig()
+    expect(() => parseConfigLine('@view: orbit', config)).toThrow(/isometric, front, top, side/)
+  })
+})

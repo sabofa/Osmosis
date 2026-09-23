@@ -10,6 +10,7 @@ import type {
   MeasureOvermark,
   GivensSection,
   MeasureSubject,
+  SolidPrimitive,
   Statement,
   StatementShape,
   TriangleCentreKind,
@@ -472,6 +473,75 @@ function parseConstructionBody(rhs: string): Construction | null {
 // the scene builder, because this is the layer that knows the vertex names —
 // which means "side DE" of triangle ABC can be rejected as a *parse* error,
 // naming the triangle, instead of surfacing later as a missing measurement.
+// --------------------------------------------------------------------------
+// Solids (phase 5)
+// --------------------------------------------------------------------------
+
+// The primitive names an author can write, in the order the error message
+// lists them. Kept here rather than imported from figure/solids.ts because
+// parser/index.ts is a renderer-free entry point — the same reason
+// GeometryExtent is duplicated rather than imported.
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron']
+
+// "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
+//
+// Each form names its own numbers. "8 by 5 by 6" is bare because width,
+// height and depth in that order is how a box is dictated; everything else is
+// keyed, because "pyramid 6, 9" does not say which is the base.
+function parseSolidPrimitive(text: string): SolidPrimitive {
+  const rest = text.trim()
+  const word = /^([a-zA-Z-]+)(?=\s|$)/.exec(rest)
+  const head = word ? word[1] : rest
+  const tail = rest.slice(head.length).trim()
+
+  if (head === 'prism') {
+    const parts = tail.split(/\s+by\s+/i).map((part) => part.trim())
+    if (parts.length !== 3 || parts.some((part) => part === '')) {
+      throw new Error(`Expected "prism <width> by <height> by <depth>", got "${rest}"`)
+    }
+    return { kind: 'prism', width: parseExprString(parts[0]), height: parseExprString(parts[1]), depth: parseExprString(parts[2]) }
+  }
+
+  if (head === 'pyramid') {
+    // "square" is required rather than defaulted: a pyramid on a triangular
+    // base is a different solid with the same word, and guessing which one
+    // an author meant is how a figure becomes quietly wrong.
+    const keyed = /^square\s+base\s+/i.exec(tail)
+    if (!keyed) throw new Error(`Expected "pyramid square base <b>, height <h>", got "${rest}"`)
+    const parts = splitTopLevelComma(tail.slice(keyed[0].length)).map((part) => part.trim())
+    const height = parts.length === 2 ? /^height\s+(.+)$/i.exec(parts[1]) : null
+    if (parts.length !== 2 || !height) throw new Error(`Expected "pyramid square base <b>, height <h>", got "${rest}"`)
+    return { kind: 'pyramid', base: parseExprString(parts[0]), height: parseExprString(height[1]) }
+  }
+
+  if (head === 'tetrahedron') {
+    const edge = /^edge\s+(.+)$/i.exec(tail)
+    if (!edge) throw new Error(`Expected "tetrahedron edge <e>", got "${rest}"`)
+    return { kind: 'tetrahedron', edge: parseExprString(edge[1]) }
+  }
+
+  throw new Error(`Unknown solid "${head}" — the primitives are ${SOLID_PRIMITIVE_NAMES.join(', ')}`)
+}
+
+// The body of a solid statement: the primitive, plus an optional trailing
+// "vertices ABCD" clause naming the projected vertices. `name` comes from the
+// bound form ("S = solid ...") and is null for the drawn-only "solid: ..." one.
+function parseSolidBody(text: string, name: string | null): StatementShape {
+  let rest = text.trim()
+  let vertices: string[] = []
+  const clause = /\s+vertices\s+(\S+)\s*$/i.exec(rest)
+  if (clause) {
+    const names = [...clause[1].trim()]
+    if (names.length < 4 || names.some((n) => !/^[a-zA-Z]$/.test(n))) {
+      throw new Error(`Expected "vertices ABCD" — a run of single-letter names, one per vertex — got "${clause[1]}"`)
+    }
+    if (new Set(names).size !== names.length) throw new Error(`Vertex names must be distinct, got "${clause[1]}"`)
+    vertices = names
+    rest = rest.slice(0, clause.index).trim()
+  }
+  return { kind: 'solid', name, primitive: parseSolidPrimitive(rest), vertices }
+}
+
 function parseTriangleStatement(line: string): StatementShape {
   const colon = line.indexOf(':')
   if (colon === -1) throw new Error('Expected "triangle ABC: <measurement>, <measurement>, <measurement>"')
@@ -693,6 +763,10 @@ function parseStatementCore(rawLine: string): StatementShape {
     }
     return { kind: 'rightAngle', from: parts[0], vertex: parts[1], to: parts[2] }
   }
+
+  // A solid: "solid: prism 8 by 5 by 6". The bound form, "S = solid prism
+  // 8 by 5 by 6", is handled with the other "=" statements below.
+  if (line.startsWith('solid:')) return parseSolidBody(line.slice('solid:'.length), null)
 
   // Solved triangle: "triangle ABC: AB = 8, angle A = 90, AC = 6". Checked
   // before the generic "=" handling below, since the measurement list
@@ -945,6 +1019,14 @@ function parseStatementCore(rawLine: string): StatementShape {
     // and polar cases above so those reserved names keep their meaning, and
     // before the labeled-point and named-constant cases below, whose
     // left-hand sides it would otherwise look identical to.
+    // The bound solid: "S = solid prism 8 by 5 by 6". Checked before the
+    // construction and named-constant cases, whose left-hand sides look the
+    // same — a solid is not a point, a line or a circle, so it is not a
+    // Construction, but it binds a name in the same definition-before-use way.
+    if (GEOMETRY_NAME.test(lhs) && /^solid\s/.test(rhs)) {
+      return parseSolidBody(rhs.slice('solid'.length), lhs)
+    }
+
     const constructionNames = splitTopLevelComma(lhs).map((part) => part.trim())
     if (constructionNames.every((name) => GEOMETRY_NAME.test(name))) {
       const body = parseConstructionBody(rhs)

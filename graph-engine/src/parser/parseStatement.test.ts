@@ -742,3 +742,73 @@ describe('parseStatement \u2014 the Find section', () => {
     expect(() => parseStatement('find:')).toThrow(/find:/)
   })
 })
+
+describe('solids', () => {
+  it('parses a prism by its three dimensions', () => {
+    const s = parseStatement('solid: prism 8 by 5 by 6')
+    expect(s.kind).toBe('solid')
+    if (s.kind !== 'solid') return
+    expect(s.name).toBeNull()
+    expect(s.primitive).toEqual({
+      kind: 'prism',
+      width: { kind: 'num', value: 8 },
+      height: { kind: 'num', value: 5 },
+      depth: { kind: 'num', value: 6 },
+    })
+  })
+
+  it('parses a square pyramid by its base and height', () => {
+    const s = parseStatement('solid: pyramid square base 6, height 9')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.primitive).toEqual({ kind: 'pyramid', base: { kind: 'num', value: 6 }, height: { kind: 'num', value: 9 } })
+  })
+
+  it('parses a tetrahedron by its edge', () => {
+    const s = parseStatement('solid: tetrahedron edge 5')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.primitive).toEqual({ kind: 'tetrahedron', edge: { kind: 'num', value: 5 } })
+  })
+
+  it('binds a name with the "S = solid ..." form', () => {
+    const s = parseStatement('S = solid prism 8 by 5 by 6')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.name).toBe('S')
+  })
+
+  it('keeps dimensions as expressions, so a named constant works', () => {
+    const s = parseStatement('solid: tetrahedron edge 2*a')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.primitive.kind).toBe('tetrahedron')
+    if (s.primitive.kind !== 'tetrahedron') return
+    expect(s.primitive.edge.kind).toBe('binary')
+  })
+
+  it('names the primitives that exist when one does not', () => {
+    expect(() => parseStatement('solid: dodecahedron edge 5')).toThrow(/prism, pyramid, tetrahedron/)
+  })
+
+  it('refuses a pyramid that does not say what its base is', () => {
+    expect(() => parseStatement('solid: pyramid 6, 9')).toThrow(/pyramid square base/)
+  })
+
+  it('refuses a prism that is not three dimensions', () => {
+    expect(() => parseStatement('solid: prism 8 by 5')).toThrow(/width> by <height> by <depth/)
+  })
+
+  it('takes a trailing "vertices" clause naming every vertex', () => {
+    const s = parseStatement('S = solid tetrahedron edge 5 vertices ABCD')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.vertices).toEqual(['A', 'B', 'C', 'D'])
+    expect(s.primitive).toEqual({ kind: 'tetrahedron', edge: { kind: 'num', value: 5 } })
+  })
+
+  it('refuses repeated vertex names', () => {
+    expect(() => parseStatement('solid: tetrahedron edge 5 vertices ABCC')).toThrow(/distinct/)
+  })
+
+  it('still takes a color clause', () => {
+    const s = parseStatement('solid: prism 2 by 2 by 2 color: teal')
+    expect(s.kind).toBe('solid')
+    expect(s.color).toBe('teal')
+  })
+})

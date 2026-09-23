@@ -34,6 +34,17 @@ export const GIVENS_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom
 
 export type GivensPosition = (typeof GIVENS_POSITIONS)[number]
 
+// The named viewpoints a solid can be drawn from. Mirrors figure/project3d.ts's
+// ViewName; duplicated rather than imported so the parser stays standalone,
+// exactly as GeometryExtent is in types.ts.
+//
+// A NAME, never a camera. Free orbit stays rejected — these are drawings — but
+// one fixed direction is degenerate for a solid whose features line up with
+// it, and a name preserves determinism while letting an author escape that.
+export const VIEW_NAMES = ['isometric', 'front', 'top', 'side'] as const
+
+export type ViewName = (typeof VIEW_NAMES)[number]
+
 export type LabelMode = 'all' | 'coarse' | 'none'
 export type StepMode = 'nice' | 'geometric' | 'fixed'
 
@@ -99,6 +110,9 @@ export interface GraphConfig {
   // function/constant *definitions* are always collected and stay usable in
   // other statements' expressions regardless of hidden state.
   hidden: Set<string>
+  // Which named viewpoint a solid is drawn from, set by "@view:". Isometric
+  // is the default and the one a textbook drawing uses.
+  view: ViewName
   // Whether a table built from a "table: y = f(x) for ..." generator
   // statement (see scene/buildTable.ts) shows its generating formula
   // alongside the table. Off by default so an existing spec's table looks
@@ -129,6 +143,7 @@ export function defaultConfig(): GraphConfig {
     pointLabels: 'off',
     asymptotes: true,
     hidden: new Set(),
+    view: 'isometric',
     tableFormulas: false,
   }
 }

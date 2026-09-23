@@ -3,7 +3,9 @@ import { parseSpec } from '../parser/parseSpec'
 import { LIGHT_PALETTE } from '../render/palette'
 import { FIGURE_LAYERS } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
+import { rectangularPrism, renderSolidFigure } from './project3d'
 import { renderFigure } from './render'
+import { resolveMode } from '../scene/mode'
 
 function render(spec: string): string {
   const parsed = parseSpec(spec)
@@ -1213,5 +1215,82 @@ describe('the givens table', () => {
   it('is deterministic', () => {
     const spec = '@givens-title: Problem 14\n' + square + 'given: AB = 6\ngiven: AB parallel CD\nfind: BC'
     expect(render(spec)).toBe(render(spec))
+  })
+})
+
+describe('solids in the figure', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  it('draws a prism as twelve edges, dashing the three hidden ones', () => {
+    const svg = render('@mode: figure\nsolid: prism 8 by 5 by 6')
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(9)
+    expect(countTags(layer(svg, 'auxiliary'), 'line')).toBe(3)
+    // The dashes are in the auxiliary layer and nowhere else, so a visible
+    // edge can never be drawn under a hidden one.
+    expect(layer(svg, 'primary')).not.toContain('stroke-dasharray')
+    expect(layer(svg, 'auxiliary')).toContain('stroke-dasharray')
+  })
+
+  it('draws a tetrahedron and a square pyramid', () => {
+    const tetra = render('@mode: figure\nsolid: tetrahedron edge 5')
+    expect(countTags(layer(tetra, 'primary'), 'line') + countTags(layer(tetra, 'auxiliary'), 'line')).toBe(6)
+    const pyramid = render('@mode: figure\nsolid: pyramid square base 6, height 9')
+    expect(countTags(layer(pyramid, 'primary'), 'line') + countTags(layer(pyramid, 'auxiliary'), 'line')).toBe(8)
+  })
+
+  it('infers figure mode from a solid alone, with no @mode', () => {
+    const parsed = parseSpec('solid: prism 8 by 5 by 6')
+    expect(parsed.errors).toEqual([])
+    expect(resolveMode(parsed.statements, parsed.config)).toBe('figure')
+  })
+
+  it('letters the vertices an author names, without dotting them', () => {
+    const svg = render('@mode: figure\nS = solid tetrahedron edge 5 vertices ABCD')
+    for (const name of ['A', 'B', 'C', 'D']) expect(layer(svg, 'labels')).toContain(`>${name}</text>`)
+    // A solid's vertices are lettered, not dotted: a point marker there would
+    // claim a construction point that does not exist.
+    expect(layer(svg, 'points')).toBe('')
+  })
+
+  it('refuses a vertex list that does not match the solid', () => {
+    const errors = result('@mode: figure\nsolid: tetrahedron edge 5 vertices ABCDE').errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].message).toMatch(/has 4 vertices, but 5 names were given/)
+  })
+
+  it('refuses a dimension that is not positive', () => {
+    const errors = result('@mode: figure\nsolid: prism 8 by 0 by 6').errors
+    expect(errors.map((e) => e.message)).toEqual([`A solid's height must be a positive number, got 0`])
+  })
+
+  it('renders byte-identical svg twice', () => {
+    const spec = '@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH'
+    expect(render(spec)).toBe(render(spec))
+  })
+
+  it('draws a different picture from a different named viewpoint', () => {
+    const iso = render('@mode: figure\nsolid: prism 8 by 5 by 6')
+    const front = render('@mode: figure\n@view: front\nsolid: prism 8 by 5 by 6')
+    expect(front).not.toBe(iso)
+    // Head on, only the +z face turns toward the camera — the four side
+    // faces are exactly edge-on, and "turned toward" is a strict inequality.
+    // So the drawing is that face's rectangle in solid stroke with the other
+    // eight edges dashed underneath it, four of them exactly coincident.
+    // That degeneracy is why named viewpoints exist at all; the rule is
+    // still face orientation, and the picture a reader sees is a rectangle.
+    expect(countTags(layer(front, 'primary'), 'line')).toBe(4)
+    expect(countTags(layer(front, 'auxiliary'), 'line')).toBe(8)
+  })
+
+  it('keeps the isometric prism exactly as project3d already drew it', () => {
+    // The figure path and renderSolidFigure must agree edge for edge: the 3D
+    // layer is one producer, not two.
+    const svg = render('@mode: figure\nsolid: prism 4 by 3 by 2')
+    const direct = renderSolidFigure(rectangularPrism(4, 3, 2), LIGHT_PALETTE)
+    const coords = (s: string) => [...s.matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)].map((m) => m.slice(1, 5).join(','))
+    expect(coords(svg).sort()).toEqual(coords(direct).sort())
   })
 })

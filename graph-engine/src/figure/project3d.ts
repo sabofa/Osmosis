@@ -54,6 +54,96 @@ export const CAMERA_DIRECTION: Vec3 = { x: 1, y: 1, z: 1 }
 
 const COS30 = Math.sqrt(3) / 2
 
+// ---------------------------------------------------------------------------
+// Named viewpoints
+// ---------------------------------------------------------------------------
+
+// **The camera is fixed, but not to one direction.** Free orbit stays
+// rejected — these are drawings — but a single fixed viewpoint is degenerate
+// for a solid whose features align with the view direction, so the engine
+// offers a small NAMED set. Determinism is untouched (a name is not a
+// control) and an author can escape a bad projection.
+export const VIEWPOINT_NAMES = ['isometric', 'front', 'top', 'side'] as const
+
+export type ViewName = (typeof VIEWPOINT_NAMES)[number]
+
+// A camera is an ORTHOGRAPHIC frame plus one uniform scale.
+//
+// `right` and `up` are unit vectors spanning the picture plane and `direction`
+// is the unit vector from the scene toward the viewer, with
+// right x up = direction. `project` is (scale * p.right, scale * p.up) — the
+// *same* uniform factor on both axes, which is exactly the property that makes
+// a projected circle an ellipse whose axes can be computed in closed form.
+// Curved silhouettes (phase 5, task 4) rest on it; without it they would each
+// be an unknown conic.
+//
+// `project` is given explicitly rather than derived from the frame so that the
+// isometric camera keeps the arithmetic it has always had, to the last bit.
+// The byte-identical requirement is a statement about output, and re-deriving
+// `(x - z) * cos30` as `scale * dot(p, right)` would change the last digit of
+// some coordinates and therefore the bytes.
+export interface Camera {
+  name: ViewName
+  direction: Vec3
+  right: Vec3
+  up: Vec3
+  scale: number
+  project(p: Vec3): Vec2
+}
+
+const INV_SQRT2 = 1 / Math.sqrt(2)
+const INV_SQRT6 = 1 / Math.sqrt(6)
+
+const CAMERAS: Record<ViewName, Camera> = {
+  // The (1,1,1) corner. right = (1,0,-1)/sqrt2, up = (-1,2,-1)/sqrt6, and the
+  // uniform scale is sqrt(6)/2 — which is precisely what `projectPoint`
+  // computes, by a route chosen for its bytes rather than its symmetry.
+  isometric: {
+    name: 'isometric',
+    direction: { x: 1 / Math.sqrt(3), y: 1 / Math.sqrt(3), z: 1 / Math.sqrt(3) },
+    right: { x: INV_SQRT2, y: 0, z: -INV_SQRT2 },
+    up: { x: -INV_SQRT6, y: 2 * INV_SQRT6, z: -INV_SQRT6 },
+    scale: Math.sqrt(6) / 2,
+    project: (p) => projectPoint(p),
+  },
+  // Straight down -z. The page IS the xy-plane, so a front elevation reads
+  // its width and height off the drawing directly.
+  front: {
+    name: 'front',
+    direction: { x: 0, y: 0, z: 1 },
+    right: { x: 1, y: 0, z: 0 },
+    up: { x: 0, y: 1, z: 0 },
+    scale: 1,
+    project: (p) => ({ x: p.x, y: p.y }),
+  },
+  // Down -y, the plan view. +z runs DOWN the page, the convention a plan
+  // drawing uses, which is why `up` is -z.
+  top: {
+    name: 'top',
+    direction: { x: 0, y: 1, z: 0 },
+    right: { x: 1, y: 0, z: 0 },
+    up: { x: 0, y: 0, z: -1 },
+    scale: 1,
+    project: (p) => ({ x: p.x, y: -p.z }),
+  },
+  // Along -x, the side elevation. +z runs LEFT, which is what keeps
+  // (right, up, direction) right-handed and the drawing un-mirrored.
+  side: {
+    name: 'side',
+    direction: { x: 1, y: 0, z: 0 },
+    right: { x: 0, y: 0, z: -1 },
+    up: { x: 0, y: 1, z: 0 },
+    scale: 1,
+    project: (p) => ({ x: -p.z, y: p.y }),
+  },
+}
+
+export function cameraFor(name: ViewName): Camera {
+  return CAMERAS[name]
+}
+
+export const ISOMETRIC_CAMERA = CAMERAS.isometric
+
 // Isometric projection onto the plane perpendicular to (1,1,1):
 //
 //   u = (x - z) * cos30
@@ -92,8 +182,8 @@ export function faceNormal(solid: Solid3D, faceIndex: number): Vec3 {
   return { x: nx, y: ny, z: nz }
 }
 
-function facesCamera(normal: Vec3): boolean {
-  return normal.x * CAMERA_DIRECTION.x + normal.y * CAMERA_DIRECTION.y + normal.z * CAMERA_DIRECTION.z > 0
+function facesCamera(normal: Vec3, camera: Camera): boolean {
+  return normal.x * camera.direction.x + normal.y * camera.direction.y + normal.z * camera.direction.z > 0
 }
 
 export interface ProjectedEdge {
@@ -115,8 +205,8 @@ function edgeKey(a: number, b: number): string {
 // Edges in first-seen order over the faces, which is a deterministic function
 // of the solid's own face list — the property the byte-identical requirement
 // rests on.
-export function projectSolid(solid: Solid3D): ProjectedEdge[] {
-  const frontFacing = solid.faces.map((_, i) => facesCamera(faceNormal(solid, i)))
+export function projectSolid(solid: Solid3D, camera: Camera = ISOMETRIC_CAMERA): ProjectedEdge[] {
+  const frontFacing = solid.faces.map((_, i) => facesCamera(faceNormal(solid, i), camera))
   const order: [number, number][] = []
   const anyFront = new Map<string, boolean>()
 
@@ -134,7 +224,7 @@ export function projectSolid(solid: Solid3D): ProjectedEdge[] {
     }
   }
 
-  const projected = solid.vertices.map(projectPoint)
+  const projected = solid.vertices.map((v) => camera.project(v))
   return order.map(([a, b]) => ({
     a: projected[a],
     b: projected[b],
@@ -187,9 +277,9 @@ const HIDDEN_OPACITY = 0.6
 // The solid, drawn by the figure renderer: visible edges in the primary
 // layer, hidden ones dashed in the auxiliary layer beneath them. Nothing here
 // is specific to a prism — feed it any Solid3D.
-export function renderSolidFigure(solid: Solid3D, palette: Palette): string {
+export function renderSolidFigure(solid: Solid3D, palette: Palette, camera: Camera = ISOMETRIC_CAMERA): string {
   const theme = figureTheme(palette)
-  const edges = projectSolid(solid)
+  const edges = projectSolid(solid, camera)
 
   const world = boundsOf(edges.flatMap((e) => [e.a, e.b])) ?? { minX: -1, minY: -1, maxX: 1, maxY: 1 }
   const projection = fitProjection(world)

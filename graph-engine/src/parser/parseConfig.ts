@@ -1,4 +1,4 @@
-import { GIVENS_POSITIONS, type FeatureKind, type GivensPosition, type GraphConfig } from './config'
+import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
 
 export function isConfigLine(rawLine: string): boolean {
   return rawLine.trim().startsWith('@')
@@ -91,6 +91,13 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       // Kept verbatim, including its case: it is a heading an author wrote,
       // not a keyword.
       config.givensTitle = value === '' ? null : value
+      return
+    }
+    case 'view': {
+      if (!(VIEW_NAMES as readonly string[]).includes(value)) {
+        throw new Error(`@view must be one of ${VIEW_NAMES.join(', ')}, got "${value}"`)
+      }
+      config.view = value as ViewName
       return
     }
     case 'mode': {
