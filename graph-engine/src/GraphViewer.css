@@ -38,6 +38,15 @@
   min-height: 160px;
   border-radius: var(--gv-radius);
   overflow: hidden;
+  /* Always a flex container, not only when split. The panels below size
+     themselves with `flex: 1 1 0`, which does nothing at all in a block
+     container — so a single panel collapsed to zero height, taking the
+     figure (absolutely positioned against it) out of sight entirely and
+     leaving the canvas to fall back on its own attribute height, which is
+     what cut the graph off. One panel fills the column; two switch to a row
+     via .graph-viewer-split below. */
+  display: flex;
+  flex-direction: column;
 }
 
 .graph-viewer-light {
@@ -64,7 +73,6 @@
 }
 
 .graph-viewer-split {
-  display: flex;
   flex-direction: row;
 }
 
