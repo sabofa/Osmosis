@@ -200,6 +200,78 @@ tick: B-C
 angle: A-B-C label: x°`,
   },
   {
+    label: 'Solved triangle',
+    spec: `@mode: figure
+@angle: degrees
+triangle ABC: angle A = 90, AB = 6, AC = 8   # solved, not hand-placed
+D = foot A to B-C                              # the altitude's foot
+segment: A-D dashed
+right-angle: B-A-C
+label: AB
+label: AC
+label: BC`,
+  },
+  {
+    label: 'Measured + notation',
+    spec: `@mode: figure
+@angle: degrees
+triangle ABC: AB = 7, BC = 8, AC = 9
+label: AB = 7        # asserted — errors if the figure disagrees
+label: BC = 8
+label: AC = 9
+label: angle ABC`,
+  },
+  {
+    label: 'Centres + circles',
+    spec: `@mode: figure
+@angle: degrees
+triangle ABC: AB = 9, BC = 8, AC = 7
+G = centroid ABC
+O = circumcenter ABC
+H = orthocenter ABC
+I = incenter ABC
+incircle of ABC
+circumcircle of ABC
+segment: O-H dashed   # the Euler line`,
+  },
+  {
+    label: 'Constructions',
+    spec: `@mode: figure
+A = (0, 0)
+B = (8, 0)
+C = (3, 6)
+M = midpoint A-B
+p = perpendicular bisector of A-B
+m = line through C parallel to A-B
+n = line through C perpendicular to A-B
+X = intersect p, m
+segment: A-B
+segment: B-C
+segment: A-C`,
+  },
+  {
+    label: 'Two circles',
+    spec: `@mode: figure
+A = (0, 0)
+B = (7, 0)
+j = circle A, 5
+k = circle B, 5
+P, Q = intersect j, k     # ordered, so P and Q are reproducible
+segment: P-Q dashed       # the radical axis
+segment: A-B`,
+  },
+  {
+    label: 'Figure + table',
+    spec: `@mode: figure
+@angle: degrees
+triangle ABC: angle A = 90, AB = 3, AC = 4
+label: BC
+header: side | length
+row: AB | 3
+row: AC | 4
+row: BC | 5`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,
