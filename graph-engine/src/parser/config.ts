@@ -57,6 +57,15 @@ export interface GraphConfig {
   // corner or a side of the composed figure — see figure/document.ts's
   // layoutGivensBox, which places it outside the drawing rather than over it.
   givens: GivensPosition
+  // The givens table's own heading, from "@givens-title: <text>". Null when
+  // the spec states none, which is the default: the table already labels its
+  // sections ("Given", "Find"), so a title is what an author adds when the
+  // box needs to say something else ("Problem 14", "Known").
+  //
+  // A directive rather than a statement because it is chrome, like the
+  // position above: where the box sits and what it is called belong together,
+  // and the rows stay "given:"/"find:" lines.
+  givensTitle: string | null
   // Which renderer draws this spec. `figure` is the SVG figure renderer —
   // its own renderer, selected the way `table` already selects TableView,
   // not the plot renderer with its axes switched off.
@@ -110,6 +119,7 @@ export function defaultConfig(): GraphConfig {
     angle: 'radians',
     toScale: true,
     givens: 'top-left',
+    givensTitle: null,
     mode: 'graph',
     modeDeclared: false,
     points: new Set(),

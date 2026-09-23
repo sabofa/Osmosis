@@ -10,6 +10,7 @@ import {
   GIVENS_POSITIONS,
   growRect,
   layoutGivensBox,
+  layoutGivensTable,
   rectAround,
   unionRects,
   type FigureLayers,
@@ -287,5 +288,122 @@ describe('layoutGivensBox', () => {
     expect(empty.box.width).toBeGreaterThanOrEqual(0)
     expect(empty.box.height).toBeGreaterThanOrEqual(0)
     expect(empty.rows).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// G4 — the table
+// ---------------------------------------------------------------------------
+
+describe('layoutGivensTable', () => {
+  // A cell's measured extent. `marked` is a cell carrying an overbar: taller
+  // ABOVE its glyphs and not below them, which is the asymmetry the whole of
+  // this layout has to respect.
+  function c(width: number, marked = false) {
+    return { width, top: marked ? -12 : -8.625, bottom: 8.625 }
+  }
+
+  const SUBJECT_WIDE = c(120, true)
+  const SUBJECT_NARROW = c(40, true)
+  const EQUALS = c(10)
+  const VALUE = c(25)
+
+  const table = [
+    {
+      heading: c(50),
+      rows: [{ cells: [SUBJECT_WIDE, EQUALS, VALUE] }, { cells: [SUBJECT_NARROW, EQUALS, c(60)] }],
+    },
+  ]
+
+  it('gives every row the same three column edges, whatever the row holds', () => {
+    const laid = layoutGivensTable(table, null, 'top-left', CONTENT)
+    const [first, second] = laid.sections[0].rows
+    for (let column = 0; column < 3; column++) {
+      expect(first[column].x).toBeCloseTo(second[column].x, 9)
+    }
+    // ...and the columns are in order, each past the widest cell of the one
+    // before it.
+    expect(first[1].x - first[0].x).toBeGreaterThanOrEqual(SUBJECT_WIDE.width)
+    expect(first[2].x - first[1].x).toBeGreaterThanOrEqual(EQUALS.width)
+  })
+
+  it('writes every cell of a row on one glyph line', () => {
+    const laid = layoutGivensTable(table, null, 'top-left', CONTENT)
+    for (const row of laid.sections[0].rows) {
+      for (const cell of row) expect(cell.y).toBeCloseTo(row[0].y, 9)
+    }
+  })
+
+  it('spaces the rows evenly, with a marked row taking no more room than a plain one', () => {
+    const mixed = [
+      {
+        heading: c(50),
+        rows: [{ cells: [SUBJECT_WIDE, EQUALS, VALUE] }, { cells: [c(70), EQUALS, VALUE] }, { cells: [SUBJECT_NARROW, EQUALS, VALUE] }],
+      },
+    ]
+    const rows = layoutGivensTable(mixed, null, 'top-left', CONTENT).sections[0].rows
+    expect(rows[1][0].y - rows[0][0].y).toBeCloseTo(rows[2][0].y - rows[1][0].y, 9)
+  })
+
+  it('takes its columns from the whole table, so two sections line up with each other', () => {
+    const laid = layoutGivensTable(
+      [
+        { heading: c(50), rows: [{ cells: [SUBJECT_WIDE, EQUALS, VALUE] }] },
+        { heading: c(40), rows: [{ cells: [SUBJECT_NARROW, EQUALS, VALUE] }] },
+      ],
+      null,
+      'top-left',
+      CONTENT
+    )
+    expect(laid.sections).toHaveLength(2)
+    for (let column = 0; column < 3; column++) {
+      expect(laid.sections[0].rows[0][column].x).toBeCloseTo(laid.sections[1].rows[0][column].x, 9)
+    }
+    // Each section's heading sits above its own rows, and the second section
+    // below the first.
+    expect(laid.sections[0].heading.y).toBeLessThan(laid.sections[0].rows[0][0].y)
+    expect(laid.sections[0].rows[0][0].y).toBeLessThan(laid.sections[1].heading.y)
+    expect(laid.sections[1].heading.y).toBeLessThan(laid.sections[1].rows[0][0].y)
+  })
+
+  it('places a header above everything, and nothing when there is none', () => {
+    const titled = layoutGivensTable(table, c(200), 'top-left', CONTENT)
+    if (!titled.title) throw new Error('expected a placed title')
+    expect(titled.title.y).toBeLessThan(titled.sections[0].heading.y)
+    // Wide enough for a header wider than any row.
+    expect(titled.box.width).toBeGreaterThan(200)
+    expect(layoutGivensTable(table, null, 'top-left', CONTENT).title).toBeNull()
+  })
+
+  it('holds every column inside the box', () => {
+    const laid = layoutGivensTable(table, null, 'top-left', CONTENT)
+    const last = laid.sections[0].rows[0][2]
+    expect(last.x + VALUE.width).toBeLessThanOrEqual(laid.box.x + laid.box.width)
+    expect(laid.sections[0].rows[0][0].x).toBeGreaterThan(laid.box.x)
+  })
+
+  it('spends no width on a column every row leaves empty', () => {
+    const withValues = layoutGivensTable(table, null, 'top-left', CONTENT)
+    const withoutValues = layoutGivensTable(
+      [{ heading: c(50), rows: [{ cells: [SUBJECT_WIDE, EQUALS, c(0)] }, { cells: [SUBJECT_NARROW, EQUALS, c(0)] }] }],
+      null,
+      'top-left',
+      CONTENT
+    )
+    expect(withoutValues.box.width).toBeLessThan(withValues.box.width)
+  })
+
+  it('never overlaps the drawing, in any position it can be put', () => {
+    for (const position of GIVENS_POSITIONS) {
+      const laid = layoutGivensTable(table, c(60), position, CONTENT)
+      expect(overlaps(laid.box, CONTENT)).toBe(false)
+    }
+  })
+
+  it('handles a table with no rows rather than producing a negative size', () => {
+    const empty = layoutGivensTable([], null, 'top-left', CONTENT)
+    expect(empty.box.width).toBe(0)
+    expect(empty.sections).toEqual([])
+    expect(empty.title).toBeNull()
   })
 })

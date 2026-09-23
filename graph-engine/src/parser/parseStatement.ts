@@ -8,6 +8,7 @@ import type {
   GeometryRef,
   MeasureContent,
   MeasureOvermark,
+  GivensSection,
   MeasureSubject,
   Statement,
   StatementShape,
@@ -636,7 +637,12 @@ function parseStatementCore(rawLine: string): StatementShape {
 
   // A line of the boxed givens panel — the same subjects as "label:", written
   // out rather than measured onto the drawing.
-  if (line.startsWith('given:')) return parseGiven(line.slice('given:'.length))
+  if (line.startsWith('given:')) return parseGiven(line.slice('given:'.length), 'given')
+
+  // The same row, in the table's "Find" section. A sibling statement rather
+  // than a qualifier on "given:", because "find: BC" is how the sentence
+  // reads and the two sections are the conventional pair.
+  if (line.startsWith('find:')) return parseGiven(line.slice('find:'.length), 'find')
 
   // Congruence tick mark(s): "tick: A-B", optionally "tick: A-B count: 2" —
   // give two tick: statements the same count to mark their segments
@@ -1131,17 +1137,21 @@ function parseMeasureLabel(rest: string): StatementShape {
   return { kind: 'measureLabel', subject: named.subject, content: content ?? { kind: 'computed' } }
 }
 
-// "given: <subject> [= <value>]" or "given: <subject> <relation> <subject>".
-function parseGiven(rest: string): StatementShape {
+// "given: <subject> [= <value>]" or "given: <subject> <relation> <subject>",
+// and "find: <subject>", which is the same row in the table's other section.
+function parseGiven(rest: string, section: GivensSection): StatementShape {
   const body = rest.trim()
   if (body === '') {
-    throw new Error('Expected something to state, e.g. "given: AB = 8", "given: angle A-B-C = 30" or "given: AB parallel CD"')
+    throw new Error(
+      `Expected something to state, e.g. "${section}: AB = 8", "${section}: angle A-B-C = 30" or "${section}: AB parallel CD"`
+    )
   }
 
   const relation = splitRelation(body)
   if (relation) {
     return {
       kind: 'given',
+      section,
       entry: {
         kind: 'relation',
         left: parseLabelSubject(relation.left, 'given').subject,
@@ -1154,7 +1164,7 @@ function parseGiven(rest: string): StatementShape {
   const equals = body.indexOf('=')
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
   const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'given')
-  return { kind: 'given', entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
+  return { kind: 'given', section, entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
 }
 
 // Parses one non-empty, comment-stripped line into a Statement. Splices off

@@ -119,6 +119,8 @@ export type MeasureContent =
 // One line of the givens box: a value, or a relation between two pieces of
 // geometry. Relations carry the symbol itself rather than a keyword, because
 // an author may type either and by this point the difference is spent.
+export type GivensSection = 'given' | 'find'
+
 export type GivenEntry =
   | { kind: 'measure'; subject: MeasureSubject; content: MeasureContent }
   | { kind: 'relation'; left: MeasureSubject; symbol: string; right: MeasureSubject }
@@ -329,7 +331,10 @@ export type StatementShape =
   // "given: AB = 8", "given: AB parallel CD" — a line of the boxed panel
   // rather than a label on the drawing. Inline and boxed labelling coexist,
   // and an author chooses per label by choosing the statement.
-  | { kind: 'given'; entry: GivenEntry }
+  // The section of the givens table a row belongs to. A problem states what
+  // it is given and then asks for something, and those are different rows of
+  // the same table rather than two boxes.
+  | { kind: 'given'; entry: GivenEntry; section: GivensSection }
   // "arc P-Q on O minor", "sector P-Q on O ccw", "segment P-Q on O major" —
   // a drawn piece of a circle. A sector and a circular segment are fills and
   // go in the regions layer; a bare arc is a stroked path. The direction is

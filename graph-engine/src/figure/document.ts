@@ -287,6 +287,121 @@ export function layoutGivensBox(rows: readonly GivensRow[], position: GivensPosi
 }
 
 // ---------------------------------------------------------------------------
+// G4 — the givens table
+// ---------------------------------------------------------------------------
+
+// The panel is a TABLE, not a stack of lines. A statement of givens is
+// tabular data — a subject, a relation, a value — and a caption block of
+// ragged text stops being readable at the length a competition problem
+// actually reaches.
+//
+// This sits on layoutGivensBox above rather than replacing it: that function
+// knows how to pack a column of rows into a padded box and place it outside
+// the drawing, and none of that changes when the rows grow columns. What is
+// added here is the column arithmetic and the sections.
+
+// Between one column and the next.
+const GIVENS_COLUMN_GAP = 12
+
+// A cell's measured extent: exactly what notation.ts's layout hands back, so
+// a caller lays a cell out once and passes it straight here.
+//
+// **Measured, and measured on the RENDERED run.** A cell holding a name with
+// an overbar is taller above its glyphs than a bare one, and a table that
+// sized itself from the letters alone would crop the bar off the top of its
+// own box and set every marked row a little low.
+export interface GivensCell {
+  width: number
+  top: number
+  bottom: number
+}
+
+export interface GivensTableSection {
+  heading: GivensCell
+  rows: { cells: GivensCell[] }[]
+}
+
+export interface GivensTableLayout {
+  box: Rect
+  // Where to write the table's own heading, when it has one.
+  title: Vec2 | null
+  sections: {
+    heading: Vec2
+    // One origin per cell, per row: its left edge and the glyph row it is
+    // written on.
+    rows: Vec2[][]
+  }[]
+}
+
+// Every row in the table reserves the same height, and every cell in one row
+// is written on the same glyph line.
+//
+// Both halves matter, and the second is the one a naive implementation gets
+// wrong. Placing each cell against its own extent would set a subject
+// carrying an overbar lower than the plain value beside it, because the
+// overbar makes that cell taller *upward* — so the row would read as though
+// it had been typed on two different lines. One line per row, chosen from the
+// tallest cell in the table, is what keeps a marked row level with an
+// unmarked one.
+export function layoutGivensTable(
+  sections: readonly GivensTableSection[],
+  title: GivensCell | null,
+  position: GivensPosition,
+  content: Rect
+): GivensTableLayout {
+  const dataRows = sections.flatMap((section) => section.rows)
+  if (dataRows.length === 0) {
+    return { box: { x: 0, y: 0, width: 0, height: 0 }, title: null, sections: [] }
+  }
+
+  // Column widths, measured across every row of every section: the columns
+  // are the table's, not each section's, or the two sections would not line
+  // up with each other.
+  const columnCount = Math.max(...dataRows.map((row) => row.cells.length))
+  const widths: number[] = []
+  for (let column = 0; column < columnCount; column++) {
+    widths.push(Math.max(0, ...dataRows.map((row) => row.cells[column]?.width ?? 0)))
+  }
+
+  // An empty column takes no space and no gap — a table of relations has no
+  // values, and a blank third column would leave it visibly off-centre in its
+  // own box.
+  const offsets: number[] = []
+  let x = 0
+  for (let column = 0; column < columnCount; column++) {
+    offsets.push(x)
+    if (widths[column] > 0) x += widths[column] + GIVENS_COLUMN_GAP
+  }
+  const rowWidth = x > 0 ? x - GIVENS_COLUMN_GAP : 0
+
+  const top = Math.min(...dataRows.flatMap((row) => row.cells.map((cell) => cell.top)))
+  const bottom = Math.max(...dataRows.flatMap((row) => row.cells.map((cell) => cell.bottom)))
+
+  // Flattened into the order the lines are written, so the box packs them
+  // exactly as it packed the stacked panel this replaces.
+  const lines: GivensRow[] = []
+  if (title) lines.push({ width: title.width, top: title.top, bottom: title.bottom })
+  for (const section of sections) {
+    lines.push({ width: section.heading.width, top: section.heading.top, bottom: section.heading.bottom })
+    for (const _row of section.rows) lines.push({ width: rowWidth, top, bottom })
+  }
+
+  const laid = layoutGivensBox(lines, position, content)
+  let index = 0
+  const placedTitle = title ? laid.rows[index++] : null
+  const placedSections = sections.map((section) => {
+    const heading = laid.rows[index++]
+    const rows = section.rows.map((row) => {
+      const origin = laid.rows[index++]
+      return row.cells.map((_cell, column) => ({ x: origin.x + offsets[column], y: origin.y }))
+    })
+    return { heading, rows }
+  })
+
+  return { box: laid.box, title: placedTitle, sections: placedSections }
+}
+
+// ---------------------------------------------------------------------------
 // The document
 // ---------------------------------------------------------------------------
 

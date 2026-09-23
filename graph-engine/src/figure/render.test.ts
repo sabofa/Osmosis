@@ -695,9 +695,13 @@ describe('the givens box in a figure', () => {
     const svg = render(square + 'given: AB = 6')
     const labels = layer(svg, 'labels')
     expect(boxRect(svg).width).toBeGreaterThan(0)
-    const row = texts(labels).find((t) => t.text === 'AB')
-    if (!row) throw new Error('expected the name "AB" in the box')
-    expect(labels).toContain('= 6')
+    const cells = texts(labels).map((t) => t.text)
+    // Three cells, one per column: the subject in notation, the relation, the
+    // value. (They are separate <text> elements because they are separate
+    // columns — that is what lets them share an edge down the table.)
+    expect(cells).toContain('AB')
+    expect(cells).toContain('=')
+    expect(cells).toContain('6')
     // One overbar: over AB, not over the value.
     expect(countTags(labels, 'line')).toBe(1)
   })
@@ -787,7 +791,7 @@ describe('the givens box in a figure', () => {
   it('is suppressed by @scale: false, like every other check', () => {
     const result = build('@scale: false\n' + square + 'given: AB = 99')
     expect(result.errors).toEqual([])
-    expect(layer(result.svg, 'labels')).toContain('= 99')
+    expect(texts(layer(result.svg, 'labels')).map((t) => t.text)).toContain('99')
   })
 
   it('coexists with inline labelling, per label', () => {
@@ -1050,6 +1054,164 @@ describe('a worked circle figure', () => {
   })
 
   it('renders byte-identically twice', () => {
+    expect(render(spec)).toBe(render(spec))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// G4 — the givens panel is a table
+// ---------------------------------------------------------------------------
+
+describe('the givens table', () => {
+  const square = '@angle: degrees\npolygon: A(0, 0), B(6, 0), C(6, 6), D(0, 6)\n'
+
+  // Every assertion below is built from MEASURED positions rather than from
+  // the presence of an element: "the table rendered" is not the claim, "the
+  // columns line up" is, and only one of those can be got wrong invisibly.
+  function cell(svg: string, text: string) {
+    const found = texts(layer(svg, 'labels')).filter((t) => t.text === text)
+    if (found.length === 0) throw new Error(`no cell "${text}" in the table`)
+    return found[0]
+  }
+
+  function boxRect(svg: string) {
+    const match = /<rect x="([^"]*)" y="([^"]*)" width="([^"]*)" height="([^"]*)"/.exec(layer(svg, 'labels'))
+    if (!match) throw new Error('no givens box')
+    return { x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: Number(match[4]) }
+  }
+
+  it('aligns the subject column across rows of very different width', () => {
+    const svg = render(square + 'given: AB = 6\ngiven: angle ABC = 90\ngiven: triangle ABD congruent triangle CDB')
+    const subjects = [cell(svg, 'AB'), cell(svg, '\u2220ABC'), cell(svg, '\u25b3ABD')]
+    for (const subject of subjects) expect(subject.x).toBeCloseTo(subjects[0].x, 9)
+  })
+
+  it('aligns the relation and value columns too, past subjects that are not the same width', () => {
+    const svg = render(square + 'given: AB = 6\ngiven: angle ABC = 90')
+    const relations = texts(layer(svg, 'labels')).filter((t) => t.text === '=')
+    expect(relations).toHaveLength(2)
+    expect(relations[0].x).toBeCloseTo(relations[1].x, 9)
+    const values = [cell(svg, '6'), cell(svg, '90\u00b0')]
+    expect(values[0].x).toBeCloseTo(values[1].x, 9)
+    // ...and the value column starts past the widest subject, not on top of it.
+    expect(values[0].x).toBeGreaterThan(cell(svg, '\u2220ABC').x)
+  })
+
+  it('sets a row carrying an overbar on the same line as one that does not', () => {
+    // THE case the naive implementation gets wrong. An overbar makes a cell
+    // taller upward, so a table that placed each cell against its own extent
+    // would set "AB" lower than the "=" and the "6" beside it, and set a
+    // marked row lower than an unmarked one.
+    const svg = render(square + 'given: AB = 6\ngiven: angle ABC = 90')
+    // Within the marked row: the subject carries a bar, the relation and the
+    // value do not.
+    const marked = cell(svg, 'AB')
+    const relations = texts(layer(svg, 'labels')).filter((t) => t.text === '=')
+    expect(marked.y).toBeCloseTo(relations[0].y, 9)
+    expect(marked.y).toBeCloseTo(cell(svg, '6').y, 9)
+    // Across rows: the unmarked row's own cells sit on one line as well.
+    const plain = cell(svg, '\u2220ABC')
+    expect(plain.y).toBeCloseTo(relations[1].y, 9)
+    expect(plain.y).toBeCloseTo(cell(svg, '90\u00b0').y, 9)
+  })
+
+  it('keeps the rhythm even, whether a row carries a mark or not', () => {
+    const svg = render(square + 'given: AB = 6\ngiven: angle ABC = 90\ngiven: BC = 6')
+    const rows = [cell(svg, 'AB').y, cell(svg, '\u2220ABC').y, cell(svg, 'BC').y]
+    expect(rows[1] - rows[0]).toBeCloseTo(rows[2] - rows[1], 9)
+  })
+
+  it('keeps every cell inside the box, overbars included', () => {
+    const svg = render(square + 'given: AB = 6\ngiven: angle ABC = 90')
+    const box = boxRect(svg)
+    for (const text of ['AB', '=', '6', '\u2220ABC', '90\u00b0', 'GIVEN']) {
+      const found = cell(svg, text)
+      expect(found.x).toBeGreaterThanOrEqual(box.x)
+      expect(found.y).toBeGreaterThanOrEqual(box.y)
+      expect(found.y).toBeLessThanOrEqual(box.y + box.height)
+    }
+    // The bar itself is drawn above the glyph row, and must still be inside.
+    const bar = /<line x1="[^"]*" y1="([^"]*)"/.exec(layer(svg, 'labels'))
+    if (!bar) throw new Error('no overbar drawn')
+    expect(Number(bar[1])).toBeGreaterThan(box.y)
+  })
+
+  it('heads each section, and puts Given before Find however they were typed', () => {
+    const svg = render(square + 'find: BC\ngiven: AB = 6')
+    const given = cell(svg, 'GIVEN')
+    const find = cell(svg, 'FIND')
+    expect(given.y).toBeLessThan(find.y)
+    expect(cell(svg, 'AB').y).toBeGreaterThan(given.y)
+    expect(cell(svg, 'AB').y).toBeLessThan(find.y)
+    expect(cell(svg, 'BC').y).toBeGreaterThan(find.y)
+    // Both sections share the table's columns, not each their own.
+    expect(cell(svg, 'BC').x).toBeCloseTo(cell(svg, 'AB').x, 9)
+  })
+
+  it('shows only the sections the spec actually states', () => {
+    const svg = render(square + 'given: AB = 6')
+    expect(texts(layer(svg, 'labels')).map((t) => t.text)).not.toContain('FIND')
+  })
+
+  it('renders a header when the spec asks for one, and none when it does not', () => {
+    const titled = render('@givens-title: Problem 14\n' + square + 'given: AB = 6')
+    const header = cell(titled, 'Problem 14')
+    expect(header.y).toBeLessThan(cell(titled, 'GIVEN').y)
+    expect(texts(layer(render(square + 'given: AB = 6'), 'labels')).map((t) => t.text)).not.toContain('Problem 14')
+  })
+
+  it('grows the box to hold a header wider than every row', () => {
+    const plain = boxRect(render(square + 'given: AB = 6'))
+    const titled = boxRect(render('@givens-title: A rather long heading indeed\n' + square + 'given: AB = 6'))
+    expect(titled.width).toBeGreaterThan(plain.width)
+    expect(titled.height).toBeGreaterThan(plain.height)
+  })
+
+  it('never overlaps the drawing, in any position, with both sections filled', () => {
+    for (const position of ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right']) {
+      const svg = render(`@givens: ${position}\n@givens-title: Problem 14\n` + square + 'given: AB = 6\nfind: BC')
+      const box = boxRect(svg)
+      const edges = [...layer(svg, 'primary').matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)]
+      expect(edges.length).toBeGreaterThan(0)
+      for (const edge of edges) {
+        for (const [px, py] of [
+          [Number(edge[1]), Number(edge[2])],
+          [Number(edge[3]), Number(edge[4])],
+        ]) {
+          const inside = px >= box.x && px <= box.x + box.width && py >= box.y && py <= box.y + box.height
+          expect(inside).toBe(false)
+        }
+      }
+      // ...and the viewBox still holds the whole of it.
+      const view = /viewBox="([^"]*)"/.exec(svg)
+      if (!view) throw new Error('no viewBox')
+      const [x, y, width, height] = view[1].split(' ').map(Number)
+      expect(box.x).toBeGreaterThanOrEqual(x)
+      expect(box.y).toBeGreaterThanOrEqual(y)
+      expect(box.x + box.width).toBeLessThanOrEqual(x + width)
+      expect(box.y + box.height).toBeLessThanOrEqual(y + height)
+    }
+  })
+
+  it('writes a relation as its own column, between the two names', () => {
+    const svg = render(square + 'given: AB parallel CD')
+    const symbol = cell(svg, '\u2225')
+    expect(symbol.x).toBeGreaterThan(cell(svg, 'AB').x)
+    expect(cell(svg, 'CD').x).toBeGreaterThan(symbol.x)
+    expect(symbol.y).toBeCloseTo(cell(svg, 'AB').y, 9)
+    // A bar over each name, and none over the relation.
+    expect(countTags(layer(svg, 'labels'), 'line')).toBe(2)
+  })
+
+  it('carries an arc, with its own overmark, into the table', () => {
+    const svg = render(
+      '@angle: degrees\nC = (0, 0)\nO = circle C, 5\nP = (5, 0)\nQ = (0, 5)\nsegment: P-Q\ngiven: arc PQ on O minor = 90'
+    )
+    expect(cell(svg, 'PQ').y).toBeCloseTo(cell(svg, '90\u00b0').y, 9)
+  })
+
+  it('is deterministic', () => {
+    const spec = '@givens-title: Problem 14\n' + square + 'given: AB = 6\ngiven: AB parallel CD\nfind: BC'
     expect(render(spec)).toBe(render(spec))
   })
 })

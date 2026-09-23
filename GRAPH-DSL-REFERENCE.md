@@ -496,6 +496,51 @@ label: arc PQ on O minor
 These draw in **figure mode**. In graph mode the arc forms say so rather than
 drawing nothing; the six line-producing constructions work in both.
 
+### The givens table
+
+A dense figure reaches a point where inline labelling makes it worse rather
+than better. The renderer draws an optional **boxed table** beside the
+drawing instead — the convention competition figures already use, and the
+pressure valve for label density: when placement gets hard, move some of it
+out of the drawing.
+
+```
+given: AB = 8
+given: angle ABC = 90
+given: AB parallel CD
+find: BC
+```
+
+Each row is a **subject, a relation and a value**, set as three aligned
+columns — subjects share a left edge, relations share theirs, values share
+theirs — because that is what a statement of givens is, and a ragged stack of
+lines stops being readable at the length a real problem reaches. The subject
+is written in geometry notation (an overbar on a segment, the angle and
+triangle signs, the arc mark), and the columns are measured on the
+**rendered** run, so a row carrying an overbar sits level with one that does
+not.
+
+A stated value is checked against the figure exactly as an inline label is,
+and suppressed the same way by `@scale: false`. The relation form takes a
+keyword or the symbol: `congruent`/`cong`/`≅`, `similar`/`sim`/`~`,
+`parallel`/`par`/`∥`, `perpendicular`/`perp`/`⊥`.
+
+`find:` is the same row in the table's other section. A problem states what
+it is given and then asks for something, and the two are sections of one
+table rather than two boxes. `GIVEN` comes before `FIND` however the lines
+were typed. `@givens-title:` adds a heading above both, and `@givens:` says
+which corner or side of the figure the box sits on — always outside the
+drawing, never over it.
+
+```
+@givens: bottom-right
+@givens-title: Problem 14
+```
+
+This is **not** the `@mode: table` data table, which presents rows of data and
+is a different part of the engine. A givens table is part of the figure,
+sized and placed with it, inside the same SVG.
+
 ### Tables
 
 ```
@@ -561,6 +606,9 @@ different keys; for a repeated key, the last one wins.
 | `@step-mode` | `nice`\|`geometric`\|`fixed` | `nice` | how a fixed `@xstep`/`@ystep` rescales when the view is zoomed outside its 3-14 division comfort band — see mistake 5 below |
 | `@asymptotes` | `on`\|`off` | `on` | dashed guide at a detected vertical asymptote (curve-splitting there always happens; this only toggles the guide line itself) |
 | `@formulas` | `on`\|`off` | `off` | show a `table:` generator's formula alongside its table |
+| `@givens` | `top-left`\|`top-right`\|`bottom-left`\|`bottom-right`\|`left`\|`right` | `top-left` | which corner or side of the figure the givens table sits on — always outside the drawing |
+| `@givens-title` | text | none | a heading above the givens table's sections, e.g. `Problem 14` |
+| `@scale` | `on`\|`off` | `on` | `off` is the "figure not drawn to scale" flag: it suppresses the check an asserting measure (`label: AB = 8`) performs |
 | `@theme` | `light`\|`dark` | `light` | |
 | `@hover` | `all`\|`points`\|`features`\|`none` | `all` | `features` restricts hover snapping to detected feature points only (skipping curves, segments, and plain plotted points); a snapped feature reports its exact analytic value, not an interpolated sample |
 | `@hide` | `<name>[,<name>...]` | — | hide specific named statements/tables (by their `name:` clause) |

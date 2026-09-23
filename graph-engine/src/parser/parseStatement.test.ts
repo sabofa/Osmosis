@@ -715,3 +715,30 @@ describe('parseStatement — the circle vocabulary', () => {
     expect(s.entry.content).toEqual({ kind: 'stated', value: 60 })
   })
 })
+
+describe('parseStatement \u2014 the Find section', () => {
+  it('puts a "given:" row in the Given section', () => {
+    const s = parseStatement('given: AB = 6')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    expect(s.section).toBe('given')
+  })
+
+  it('puts a "find:" row in the Find section, with the same subject grammar', () => {
+    const s = parseStatement('find: angle ABC')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    expect(s.section).toBe('find')
+    if (s.entry.kind !== 'measure') throw new Error('unreachable')
+    expect(s.entry.subject).toEqual({ kind: 'angle', from: 'A', vertex: 'B', to: 'C' })
+  })
+
+  it('takes a relation in the Find section too', () => {
+    const s = parseStatement('find: AB parallel CD')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    expect(s.section).toBe('find')
+    expect(s.entry.kind).toBe('relation')
+  })
+
+  it('names the statement the author wrote when there is nothing to find', () => {
+    expect(() => parseStatement('find:')).toThrow(/find:/)
+  })
+})

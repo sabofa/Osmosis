@@ -87,6 +87,12 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       config.givens = value as GivensPosition
       return
     }
+    case 'givens-title': {
+      // Kept verbatim, including its case: it is a heading an author wrote,
+      // not a keyword.
+      config.givensTitle = value === '' ? null : value
+      return
+    }
     case 'mode': {
       if (value !== 'graph' && value !== 'figure' && value !== 'table') {
         throw new Error(`@mode must be "graph", "figure" or "table", got "${value}"`)

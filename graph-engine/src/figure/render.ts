@@ -1,6 +1,6 @@
 import type { GraphConfig } from '../parser/config'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
-import type { Expr, GeometryArcDirection, GivenEntry, MeasureContent, MeasureSubject, Statement } from '../parser/types'
+import type { Expr, GeometryArcDirection, GivenEntry, GivensSection, MeasureContent, MeasureSubject, Statement } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
 import { type Palette, themedColor } from '../render/palette'
@@ -17,7 +17,7 @@ import {
   figureTheme,
   fitProjection,
   growRect,
-  layoutGivensBox,
+  layoutGivensTable,
   unionRects,
   type FigureTheme,
   type Projection,
@@ -26,7 +26,7 @@ import {
 } from './document'
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
-import { layoutNotation, notationElements, notationOrigin, type NotationRun } from './notation'
+import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
 import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
@@ -114,10 +114,14 @@ type FigureItem =
       runs: NotationRun[]
       color: string | null
     }
-  // A line of the boxed givens panel. It has no position of its own: where
-  // the box goes is decided against the finished drawing, after the labels
-  // have been placed and the content rect is known.
-  | { kind: 'given'; id: Identity; runs: NotationRun[]; color: string | null }
+  // A row of the givens table. It has no position of its own: where the box
+  // goes is decided against the finished drawing, after the labels have been
+  // placed and the content rect is known.
+  //
+  // Three cells — subject, relation, value — because that is what a statement
+  // of givens IS, and columns that share an edge are what makes a long list
+  // scannable (G4).
+  | { kind: 'given'; id: Identity; section: GivensSection; cells: NotationRun[][]; color: string | null }
 
 export interface FigureResult {
   svg: string
@@ -314,32 +318,30 @@ function measureRuns(
   }
 }
 
-// One line of the box. A measure is checked exactly as an inline label is —
-// the box is a different place to write a given, not a different standard of
-// truth — and a relation states a fact about the figure that the construction
-// layer has no single number to compare against, so it is written and not
-// checked.
-function givenRuns(
+// One ROW of the table, as its three cells: the subject, the relation between
+// it and something else, and the value.
+//
+// A measure is checked exactly as an inline label is — the box is a different
+// place to write a given, not a different standard of truth — and a relation
+// states a fact about the figure that the construction layer has no single
+// number to compare against, so it is written and not checked.
+function givenCells(
   entry: GivenEntry,
   resolve: (name: string) => Vec2,
   resolveCircle: (name: string) => GeometryCircle,
   config: GraphConfig
-): { runs: NotationRun[]; error: string | null } {
+): { cells: NotationRun[][]; error: string | null } {
   if (entry.kind === 'relation') {
     for (const side of [entry.left, entry.right]) measureOf(side, resolve, resolveCircle, config)
-    return {
-      runs: [...subjectRuns(entry.left), { text: ` ${entry.symbol} `, mark: 'none' }, ...subjectRuns(entry.right)],
-      error: null,
-    }
+    return { cells: [subjectRuns(entry.left), [{ text: entry.symbol, mark: 'none' }], subjectRuns(entry.right)], error: null }
   }
 
   const computed = measureOf(entry.subject, resolve, resolveCircle, config)
   const value = measureRuns(entry.subject, entry.content, computed, config)
-  // One run for "= 8", not two: a measure's own runs never carry a mark, so
-  // splitting the equals sign from the value would buy nothing and would put
-  // a text-element boundary in the middle of a printed equation.
-  const stated = { text: ` = ${value.runs.map((run) => run.text).join('')}`, mark: 'none' as const }
-  return { runs: [...subjectRuns(entry.subject), stated], error: value.error }
+  // The equals sign is a column of its own, not the head of the value: it is
+  // the relation, and relations share an edge down the table the same way
+  // subjects and values do.
+  return { cells: [subjectRuns(entry.subject), [{ text: '=', mark: 'none' }], value.runs], error: value.error }
 }
 
 // The number a subject measures to, or null when the subject is a shape
@@ -575,9 +577,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   for (const { statement, index } of givenStatements) {
     if (statement.kind !== 'given') continue
     try {
-      const { runs, error } = givenRuns(statement.entry, resolve, resolveCircle, config)
+      const { cells, error } = givenCells(statement.entry, resolve, resolveCircle, config)
       if (error) errors.push({ line: 0, message: error })
-      items.push({ kind: 'given', id: { statement: index, object: null }, runs, color: statement.color })
+      items.push({ kind: 'given', id: { statement: index, object: null }, section: statement.section, cells, color: statement.color })
     } catch (err) {
       errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
     }
@@ -753,13 +755,22 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
 
   const contentRect = unionRects([geometryRect, ...placed.map((label) => label.rect)])
 
-  // The givens box is laid out against the finished drawing — geometry plus
+  // The givens table is laid out against the finished drawing — geometry plus
   // its placed labels — and placed outside it, so the viewBox has to hold
   // both (E3).
   const givens = items.filter((item): item is Extract<FigureItem, { kind: 'given' }> => item.kind === 'given')
-  const givenLayouts = givens.map((item) => layoutNotation(item.runs, LABEL_FONT_SIZE))
-  const givensBox = givenLayouts.length > 0 ? layoutGivensBox(givenLayouts, config.givens, contentRect) : null
-  const viewBox = growRect(givensBox ? unionRects([contentRect, givensBox.box]) : contentRect, FIGURE_PADDING)
+  const sections = givensSections(givens)
+  const title = config.givensTitle ? layoutNotation([{ text: config.givensTitle, mark: 'none' }], LABEL_FONT_SIZE) : null
+  const table =
+    sections.length > 0
+      ? layoutGivensTable(
+          sections.map((section) => ({ heading: section.heading, rows: section.rows.map((row) => ({ cells: row.cells })) })),
+          title,
+          config.givens,
+          contentRect
+        )
+      : null
+  const viewBox = growRect(table ? unionRects([contentRect, table.box]) : contentRect, FIGURE_PADDING)
 
   // Pass 2 — emit. Infinite lines and rays are clipped here, against the
   // *final* viewBox, because how much of a locus to draw is a fact about the
@@ -796,31 +807,76 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
     )
   }
 
-  if (givensBox) {
+  if (table) {
     layers.labels.push(
       `<rect${[
-        ` x="${fmt(givensBox.box.x)}"`,
-        ` y="${fmt(givensBox.box.y)}"`,
-        ` width="${fmt(givensBox.box.width)}"`,
-        ` height="${fmt(givensBox.box.height)}"`,
+        ` x="${fmt(table.box.x)}"`,
+        ` y="${fmt(table.box.y)}"`,
+        ` width="${fmt(table.box.width)}"`,
+        ` height="${fmt(table.box.height)}"`,
         ` fill="${theme.background}"`,
         ` stroke="${theme.ink}"`,
         ` stroke-width="${fmt(STROKE_MARK)}"`,
         ' data-object="givens"',
       ].join('')}/>`
     )
-    for (let i = 0; i < givens.length; i++) {
-      layers.labels.push(
-        ...notationElements(givenLayouts[i], givensBox.rows[i], {
-          fill: strokeColor(givens[i].color, palette.axis, palette),
-          fontFamily: FONT_FAMILY,
-          identity: identity(givens[i].id),
-        })
-      )
+    // The title and the section headings carry no data-object: they belong to
+    // the table rather than to any statement or any drawn object, and E4's
+    // identity is for things the tutor layer can point at.
+    if (title && table.title) {
+      layers.labels.push(...notationElements(title, table.title, { fill: theme.label, fontFamily: FONT_FAMILY }))
+    }
+    for (const [s, section] of sections.entries()) {
+      const placed = table.sections[s]
+      layers.labels.push(...notationElements(section.heading, placed.heading, { fill: theme.label, fontFamily: FONT_FAMILY }))
+      for (const [r, row] of section.rows.entries()) {
+        for (const [c, cell] of row.cells.entries()) {
+          layers.labels.push(
+            ...notationElements(cell, placed.rows[r][c], {
+              fill: strokeColor(row.color, palette.axis, palette),
+              fontFamily: FONT_FAMILY,
+              identity: identity(row.id),
+            })
+          )
+        }
+      }
     }
   }
 
   return { svg: figureDocument(layers, viewBox, theme), errors }
+}
+
+// The table's sections, in a fixed order and with their rows laid out.
+//
+// Fixed rather than first-seen: "Given" then "Find" is the order a problem is
+// written in, and an author who interleaves the two statements should still
+// get the table a reader expects rather than a record of their typing order.
+const GIVENS_SECTIONS: { name: GivensSection; heading: string }[] = [
+  { name: 'given', heading: 'GIVEN' },
+  { name: 'find', heading: 'FIND' },
+]
+
+interface GivensSectionModel {
+  heading: NotationLayout
+  rows: { id: Identity; color: string | null; cells: NotationLayout[] }[]
+}
+
+function givensSections(givens: readonly Extract<FigureItem, { kind: 'given' }>[]): GivensSectionModel[] {
+  const models: GivensSectionModel[] = []
+  for (const section of GIVENS_SECTIONS) {
+    const rows = givens.filter((item) => item.section === section.name)
+    if (rows.length === 0) continue
+    models.push({
+      // Set in capitals rather than in bold: a heading has to be
+      // distinguishable from the rows under it, and the one thing the layout
+      // cannot do is measure a weight it does not have metrics for.
+      heading: layoutNotation([{ text: section.heading, mark: 'none' }], LABEL_FONT_SIZE),
+      rows: rows.map((item) => {
+        return { id: item.id, color: item.color, cells: item.cells.map((cell) => layoutNotation(cell, LABEL_FONT_SIZE)) }
+      }),
+    })
+  }
+  return models
 }
 
 function geometryBounds(items: readonly FigureItem[], projection: Projection): Rect {

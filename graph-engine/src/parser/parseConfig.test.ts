@@ -116,3 +116,17 @@ describe('@givens', () => {
     expect(() => parse('@givens: middle')).toThrow(/top-left/)
   })
 })
+
+describe('@givens-title', () => {
+  it('is null unless the spec sets one', () => {
+    expect(parse('@grid: off').givensTitle).toBeNull()
+  })
+
+  it('keeps the heading verbatim, case and spaces included', () => {
+    expect(parse('@givens-title: Problem 14').givensTitle).toBe('Problem 14')
+  })
+
+  it('treats an empty heading as none at all', () => {
+    expect(parse('@givens-title:').givensTitle).toBeNull()
+  })
+})
