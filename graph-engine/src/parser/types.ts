@@ -108,6 +108,11 @@ export type SolidPrimitive =
 // what gets measured and what decides where the label is drawn.
 export type MeasureSubject =
   | { kind: 'length'; from: string; to: string }
+  // A named dimension of a named solid — "S height", "S edge". Deliberately
+  // NOT a length between two points: what is measured is the solid the author
+  // asked for, not the projected edge that stands for it, and the two differ
+  // by whatever the camera does. See figure/solids.ts's solidDimensions.
+  | { kind: 'solidDimension'; solid: string; dimension: string }
   | { kind: 'angle'; from: string; vertex: string; to: string }
   | { kind: 'triangle'; names: [string, string, string] }
   // An arc names the circle it lies on and the way round it goes, because

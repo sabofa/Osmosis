@@ -37,7 +37,7 @@ import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type Labe
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
 import { cameraFor, projectSolid, type ProjectedEdge } from './project3d'
-import { buildSolid, type SolidBody, type SolidSpec } from './solids'
+import { buildSolid, solidDimensions, solidDimensionSegment, type SolidBody, type SolidSpec } from './solids'
 import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
@@ -132,6 +132,9 @@ type FigureItem =
       // Whether this label belongs inside the shape it annotates. True for an
       // angle measure and false for everything else — see labels.ts.
       inside: boolean
+      // See the `leader` local in buildItems: only a solid's dimension label
+      // grows a line back to what it names.
+      leader: boolean
       runs: NotationRun[]
       color: string | null
     }
@@ -267,6 +270,8 @@ function subjectName(subject: MeasureSubject): string {
       return `triangle ${subject.names.join('')}`
     case 'arc':
       return `arc ${subject.from}${subject.to}`
+    case 'solidDimension':
+      return `${subject.solid} ${subject.dimension}`
   }
 }
 
@@ -323,6 +328,10 @@ function subjectRuns(subject: MeasureSubject): NotationRun[] {
       // is actually written in, and the one overmark phase 3 built and had
       // nothing to draw yet.
       return [{ text: `${subject.from}${subject.to}`, mark: 'arc' }]
+    case 'solidDimension':
+      // No overmark: "S height" is a phrase naming a measurement, not a
+      // piece of geometry with a notation of its own.
+      return [{ text: `${subject.solid} ${subject.dimension}`, mark: 'none' }]
   }
 }
 
@@ -361,7 +370,9 @@ function measureRuns(
           ? `${subject.from}${subject.to}`
           : subject.kind === 'angle'
             ? `${subject.from}${subject.vertex}${subject.to}`
-            : subject.names.join('')
+            : subject.kind === 'solidDimension'
+              ? `${subject.solid} ${subject.dimension}`
+              : subject.names.join('')
       // The prefix is a character (△), not a mark: it is set beside the name
       // rather than drawn over it, so it belongs in the same run.
       return { runs: [{ text: content.prefix + names, mark: content.mark }], error: null }
@@ -380,14 +391,15 @@ function givenCells(
   entry: GivenEntry,
   resolve: (name: string) => Vec2,
   resolveCircle: (name: string) => GeometryCircle,
+  resolveSolid: (name: string) => SolidBody,
   config: GraphConfig
 ): { cells: NotationRun[][]; error: string | null } {
   if (entry.kind === 'relation') {
-    for (const side of [entry.left, entry.right]) measureOf(side, resolve, resolveCircle, config)
+    for (const side of [entry.left, entry.right]) measureOf(side, resolve, resolveCircle, resolveSolid, config)
     return { cells: [subjectRuns(entry.left), [{ text: entry.symbol, mark: 'none' }], subjectRuns(entry.right)], error: null }
   }
 
-  const computed = measureOf(entry.subject, resolve, resolveCircle, config)
+  const computed = measureOf(entry.subject, resolve, resolveCircle, resolveSolid, config)
   const value = measureRuns(entry.subject, entry.content, computed, config)
   // The equals sign is a column of its own, not the head of the value: it is
   // the relation, and relations share an edge down the table the same way
@@ -403,6 +415,7 @@ function measureOf(
   subject: MeasureSubject,
   resolve: (name: string) => Vec2,
   resolveCircle: (name: string) => GeometryCircle,
+  resolveSolid: (name: string) => SolidBody,
   config: GraphConfig
 ): number | null {
   switch (subject.kind) {
@@ -417,7 +430,24 @@ function measureOf(
       // Through the arc, never around it: the same call the central angle
       // mark makes, which is what makes the two agree by construction (G2).
       return arcMeasure(arcOf(subject, resolve, resolveCircle), config.angle)
+    case 'solidDimension':
+      return solidDimensionValue(resolveSolid(subject.solid), subject.dimension, subject.solid)
   }
+}
+
+// The value a named dimension measures to, read off the SOLID and never off
+// the drawing. A projected edge's length is a fact about the camera, so
+// measuring one would print a number that contradicts the solid the author
+// asked for — the opposite of what an asserting label is for.
+function solidDimensionValue(body: SolidBody, dimension: string, name: string): number {
+  const available = solidDimensions(body.spec)
+  const value = available[dimension]
+  if (value === undefined) {
+    throw new Error(
+      `A ${body.spec.kind} has no "${dimension}" — "${name}" can be labelled with ${Object.keys(available).join(', ')}`
+    )
+  }
+  return value
 }
 
 // The arc a subject or a statement names, built once from the circle, the two
@@ -462,6 +492,14 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       throw new Error(
         `Unknown circle "${name}" — name a circle before drawing on it (e.g. "${name} = circle C, 5" or "${name} = circumcircle ABC")`
       )
+    }
+    return found
+  }
+
+  function resolveSolid(name: string): SolidBody {
+    const found = solids.get(name)
+    if (!found) {
+      throw new Error(`Unknown solid "${name}" — name a solid before labelling it (e.g. "${name} = solid prism 8 by 5 by 6")`)
     }
     return found
   }
@@ -662,7 +700,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   for (const { statement, index } of givenStatements) {
     if (statement.kind !== 'given') continue
     try {
-      const { cells, error } = givenCells(statement.entry, resolve, resolveCircle, config)
+      const { cells, error } = givenCells(statement.entry, resolve, resolveCircle, resolveSolid, config)
       if (error) errors.push({ line: 0, message: error })
       items.push({ kind: 'given', id: { statement: index, object: null }, section: statement.section, cells, color: statement.color })
     } catch (err) {
@@ -678,6 +716,12 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       let at: Vec2
       let push: Vec2 | null
       let computed: number | null = null
+      // Whether this label may grow a leader line when the layout pushes it
+      // away. A 2D measure never needs one — it sits on the midpoint of
+      // geometry that is drawn, so a reader can see what it names — but a
+      // dimension on a projected solid sits beside an edge among eleven
+      // others, and a displaced one names nothing without a line back.
+      let leader = false
       const inside = subject.kind === 'angle'
       if (subject.kind === 'length') {
         const a = resolve(subject.from)
@@ -700,6 +744,20 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         at = arcMidpoint(arc)
         push = awayFrom(at, arc.center)
         computed = arcMeasure(arc, config.angle)
+      } else if (subject.kind === 'solidDimension') {
+        const body = resolveSolid(subject.solid)
+        computed = solidDimensionValue(body, subject.dimension, subject.solid)
+        const segment = solidDimensionSegment(body.spec, subject.dimension)
+        if (!segment) throw new Error(`A ${body.spec.kind} has no "${subject.dimension}" to attach a label to`)
+        const camera = cameraFor(config.view)
+        const a = camera.project(segment[0])
+        const b = camera.project(segment[1])
+        at = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+        // Outward from the solid's own drawing, the same rule a triangle's
+        // side label follows — a dimension belongs beside the edge it
+        // measures, not across it.
+        push = outwardPerpendicular(a, b, centre)
+        leader = true
       } else {
         const vertices = subject.names.map((name) => resolve(name))
         at = centroidOf(vertices)
@@ -713,6 +771,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         at,
         push,
         inside,
+        leader,
         runs,
         color: statement.color,
       })
@@ -815,6 +874,17 @@ function arcExtremes(arc: Arc): Vec2[] {
 // Emission
 // ---------------------------------------------------------------------------
 
+// The point of a box closest to `p` — where a leader line meets the label it
+// is drawn from. Clamping rather than intersecting the centre-to-anchor
+// segment: it lands on the boundary for any anchor outside the box, and a
+// leader from a box the anchor is inside has nowhere sensible to start.
+function nearestOnRect(rect: Rect, p: Vec2): Vec2 {
+  return {
+    x: Math.max(rect.x, Math.min(p.x, rect.x + rect.width)),
+    y: Math.max(rect.y, Math.min(p.y, rect.y + rect.height)),
+  }
+}
+
 function identity(id: Identity): SvgAttrs {
   // E4 — every element says which statement and which named object produced
   // it, so the tutor layer can address it directly rather than inventing a
@@ -874,6 +944,22 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
     const source = sources.get(label.id)
     const statement = Number(label.id.slice(label.id.lastIndexOf('#') + 1))
     const id = source?.id ?? { statement, object: label.text }
+    // **A leader is drawn exactly when the layout displaced the label** —
+    // when it could not sit beside the edge it measures, in the direction it
+    // asked for. A dimension that got its spot reads as belonging to that
+    // edge and needs no line; one that was pushed elsewhere sits among eleven
+    // other edges naming none of them. The layout decides, because only it
+    // can tell a label that chose its place from one that was moved.
+    if (source?.leader && label.displaced) {
+      layers.marks.push(
+        svgLine(nearestOnRect(label.rect, label.anchor), label.anchor, {
+          stroke: strokeColor(source.color, palette.axis, palette),
+          'stroke-width': STROKE_MARK,
+          'stroke-linecap': 'round',
+          ...identity({ statement: id.statement, object: `leader-${id.object ?? ''}` }),
+        })
+      )
+    }
     if (source?.notation) {
       const layout = layoutNotation(source.notation, label.fontSize)
       const origin = notationOrigin(layout, label.at)
@@ -1031,6 +1117,8 @@ interface LabelSource {
   id: Identity
   notation: NotationRun[] | null
   color: string | null
+  // Whether a leader line is drawn when the layout displaces this label.
+  leader?: boolean
 }
 
 function labelAnchors(
@@ -1071,7 +1159,7 @@ function labelAnchors(
         size: { width: layout.width, height: layout.height },
         mayEnterShapes: item.inside,
       })
-      sources.set(id, { id: item.id, notation: item.runs, color: item.color })
+      sources.set(id, { id: item.id, notation: item.runs, color: item.color, leader: item.leader })
     }
   }
   return { anchors, sources }

@@ -118,6 +118,18 @@ export interface PlacedLabel {
   anchor: Vec2
   rect: Rect
   fontSize: number
+  // Which ring of the escape ladder the label ended up on. Ring 0 is "as
+  // close as a label can sit".
+  ring: number
+  // Whether the label had to settle for somewhere other than what it asked
+  // for: a ring past the nearest one, or a direction more than 45 degrees off
+  // its `prefer` hint.
+  //
+  // It is the LAYOUT that knows this — a caller looking only at coordinates
+  // cannot tell a label that chose its spot from one that was pushed there —
+  // and it is what decides whether a leader line is drawn back to whatever
+  // the label names.
+  displaced: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +167,16 @@ const W_CIRCLE = 1e3
 const W_INSIDE = 400
 const W_PREFER = 60
 const W_RING = 25
+
+// How closely the chosen direction has to match the `prefer` hint for the
+// label to count as having got what it asked for. cos 45 degrees: the hint
+// names one of eight compass directions, so this admits that direction and
+// its two neighbours and nothing else.
+const PREFER_SATISFIED = Math.SQRT1_2
+
+function dot(a: Vec2, b: Vec2): number {
+  return a.x * b.x + a.y * b.y
+}
 
 function rectsOverlap(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
@@ -316,7 +338,16 @@ export function layoutLabels(anchors: readonly LabelAnchor[], obstacles: LabelOb
     }
 
     placedRects.push(best.rect)
-    result.push({ id: anchor.id, text: anchor.text, at: best.at, anchor: anchor.at, rect: best.rect, fontSize: anchor.fontSize })
+    result.push({
+      id: anchor.id,
+      text: anchor.text,
+      at: best.at,
+      anchor: anchor.at,
+      rect: best.rect,
+      fontSize: anchor.fontSize,
+      ring: best.ring,
+      displaced: best.ring > 0 || (anchor.prefer ? dot(best.direction, anchor.prefer) < PREFER_SATISFIED : false),
+    })
   }
 
   return result

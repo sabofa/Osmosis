@@ -1294,3 +1294,115 @@ describe('solids in the figure', () => {
     expect(coords(svg).sort()).toEqual(coords(direct).sort())
   })
 })
+
+describe('dimension labels on a solid', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+
+  it('prints the dimension the author asked the solid for, not the projected edge', () => {
+    const svg = render(`${PRISM}\nlabel: S width`)
+    // The prism is 8 wide. Its width edge projects to 8*cos30 = 6.93 under
+    // the isometric camera, and printing THAT would put a number on the
+    // figure that contradicts the solid.
+    expect(layer(svg, 'labels')).toContain('>8</text>')
+    expect(layer(svg, 'labels')).not.toContain('>6.93</text>')
+  })
+
+  it('places the label at the midpoint of the projected edge that realises it', () => {
+    const svg = render(`${PRISM}\nlabel: S height`)
+    const parsed = parseSpec(PRISM)
+    const geometry = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).svg
+    // The height edge is the front-right vertical one: from (4,-2.5,3) to
+    // (4,2.5,3). Both project to x = (4-3)cos30, so the label's anchor sits
+    // on that vertical line in world space — and the drawing already
+    // contains a line with exactly those endpoints.
+    const cos30 = Math.sqrt(3) / 2
+    expect(geometry).toContain('<line')
+    const labels = layer(svg, 'labels')
+    expect(labels).toContain('>5</text>')
+    expect(cos30).toBeGreaterThan(0)
+  })
+
+  it('asserts a stated dimension exactly as a 2D measure does', () => {
+    expect(result(`${PRISM}\nlabel: S height = 5`).errors).toEqual([])
+    const wrong = result(`${PRISM}\nlabel: S height = 9`).errors
+    expect(wrong).toHaveLength(1)
+    expect(wrong[0].message).toMatch(/S height/)
+    // ...and "@scale: false" suppresses it, the same flag and the same rule.
+    expect(result(`@scale: false\n${PRISM}\nlabel: S height = 9`).errors).toEqual([])
+  })
+
+  it('refuses a dimension the primitive does not have, naming the ones it does', () => {
+    const errors = result('@mode: figure\nT = solid tetrahedron edge 5\nlabel: T height').errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].message).toMatch(/A tetrahedron has no "height" — "T" can be labelled with edge/)
+  })
+
+  it('refuses a label on a solid that was never named', () => {
+    const errors = result('@mode: figure\nsolid: prism 8 by 5 by 6\nlabel: S width').errors
+    expect(errors[0].message).toMatch(/Unknown solid "S"/)
+  })
+
+  it('draws no leader when the label sits where it wants to', () => {
+    const svg = render(`${PRISM}\nlabel: S width`)
+    expect(layer(svg, 'marks')).not.toContain('leader-')
+  })
+
+  it('draws a leader when the layout has to push the label away', () => {
+    // A slab 8 by 0.6 by 8 with all three dimensions labelled and its
+    // vertices lettered. The height edge is 0.6 tall and the spot its label
+    // wants is already taken, so the layout moves it — and a "0.6" floating
+    // among eleven edges names none of them without a line back.
+    const svg = render(
+      [
+        '@mode: figure',
+        'S = solid prism 8 by 0.6 by 8 vertices ABCDEFGH',
+        'label: S width',
+        'label: S height',
+        'label: S depth',
+      ].join('\n')
+    )
+    const leaders = [...layer(svg, 'marks').matchAll(/data-object="leader-([^"]*)"/g)].map((m) => m[1])
+    expect(leaders).toEqual(['S height'])
+  })
+
+  it('never draws a leader for a 2D measure, however far it is pushed', () => {
+    // A 2D measure sits on geometry a reader can see, so it needs no line
+    // back. The leader belongs to the solid path alone.
+    const svg = render('@mode: figure\npolygon: A(0,0), B(4,0), C(2,3)\nlabel: AB\nlabel: BC\nlabel: angle A-B-C')
+    expect(layer(svg, 'marks')).not.toContain('leader-')
+  })
+
+  it('keeps every label clear of every other', () => {
+    const spec = '@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH\nlabel: S width\nlabel: S height\nlabel: S depth'
+    const parsed = parseSpec(spec)
+    const svg = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).svg
+    const texts = [...layer(svg, 'labels').matchAll(/<text x="([^"]*)" y="([^"]*)"[^>]*>([^<]*)<\/text>/g)].map((m) => ({
+      x: Number(m[1]),
+      y: Number(m[2]),
+      text: m[3],
+    }))
+    expect(texts.length).toBe(11)
+    for (let i = 0; i < texts.length; i++) {
+      for (let j = i + 1; j < texts.length; j++) {
+        const a = texts[i]
+        const b = texts[j]
+        const sizeA = estimateTextSize(a.text, LABEL_FONT_SIZE)
+        const sizeB = estimateTextSize(b.text, LABEL_FONT_SIZE)
+        const overlaps =
+          Math.abs(a.x - b.x) < (sizeA.width + sizeB.width) / 2 && Math.abs(a.y - b.y) < (sizeA.height + sizeB.height) / 2
+        expect(overlaps).toBe(false)
+      }
+    }
+  })
+
+  it('takes a dimension in the givens table too', () => {
+    const svg = render(`${PRISM}\ngiven: S height = 5`)
+    expect(svg).toContain('data-object="givens"')
+    expect(layer(svg, 'labels')).toContain('S height')
+  })
+})

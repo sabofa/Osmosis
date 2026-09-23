@@ -172,3 +172,63 @@ export function solidDimensions(spec: SolidSpec): Record<string, number> {
       return { edge: spec.edge }
   }
 }
+
+// The pair of points a dimension label hangs off, in world space.
+//
+// A dimension is usually realised by several parallel edges — a prism's width
+// by four of them — so one is CHOSEN, and the choice is the front of the
+// drawing under the default camera: the edge a reader would put a ruler
+// against. Fixed rather than picked per view, because a label that moved to a
+// different edge when the viewpoint changed would be a different figure.
+//
+// A dimension with no edge of its own — a pyramid's height — hangs off the
+// axis instead, which is exactly what a dimension line does on paper.
+//
+// Null when the primitive has no such dimension.
+export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3, Vec3] | null {
+  switch (spec.kind) {
+    case 'prism': {
+      const x = spec.width / 2
+      const y = spec.height / 2
+      const z = spec.depth / 2
+      if (dimension === 'width') {
+        return [
+          { x: -x, y: -y, z },
+          { x, y: -y, z },
+        ]
+      }
+      if (dimension === 'height') {
+        return [
+          { x, y: -y, z },
+          { x, y, z },
+        ]
+      }
+      if (dimension === 'depth') {
+        return [
+          { x, y: -y, z: -z },
+          { x, y: -y, z },
+        ]
+      }
+      return null
+    }
+    case 'pyramid': {
+      const y = spec.height / 2
+      if (dimension === 'height') {
+        return [
+          { x: 0, y: -y, z: 0 },
+          { x: 0, y, z: 0 },
+        ]
+      }
+      if (dimension === 'base') {
+        const v = squarePyramid(spec.base, spec.height).vertices
+        return [v[0], v[1]]
+      }
+      return null
+    }
+    case 'tetrahedron': {
+      if (dimension !== 'edge') return null
+      const v = regularTetrahedron(spec.edge).vertices
+      return [v[0], v[1]]
+    }
+  }
+}

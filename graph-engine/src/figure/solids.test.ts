@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cameraFor, faceNormal, projectSolid } from './project3d'
-import { buildSolid, solidDimensions, type SolidSpec } from './solids'
+import { buildSolid, solidDimensions, solidDimensionSegment, type SolidSpec } from './solids'
 
 const COS30 = Math.sqrt(3) / 2
 
@@ -219,5 +219,46 @@ describe('vertex labelling order', () => {
   it('walks a tetrahedron base then its apex', () => {
     const body = buildSolid({ kind: 'tetrahedron', edge: 5 })
     expect(body.labelOrder).toEqual([0, 1, 2, 3])
+  })
+})
+
+describe('the edge a dimension attaches to', () => {
+  it('hangs a prism width off its front-bottom edge, running along x', () => {
+    const seg = solidDimensionSegment({ kind: 'prism', width: 8, height: 5, depth: 6 }, 'width')
+    expect(seg).toEqual([
+      { x: -4, y: -2.5, z: 3 },
+      { x: 4, y: -2.5, z: 3 },
+    ])
+  })
+
+  it('hangs a prism height off its front-right vertical edge', () => {
+    expect(solidDimensionSegment({ kind: 'prism', width: 8, height: 5, depth: 6 }, 'height')).toEqual([
+      { x: 4, y: -2.5, z: 3 },
+      { x: 4, y: 2.5, z: 3 },
+    ])
+  })
+
+  it('hangs a prism depth off its bottom-right edge, running along z', () => {
+    expect(solidDimensionSegment({ kind: 'prism', width: 8, height: 5, depth: 6 }, 'depth')).toEqual([
+      { x: 4, y: -2.5, z: -3 },
+      { x: 4, y: -2.5, z: 3 },
+    ])
+  })
+
+  it('hangs a pyramid height off the AXIS, which is no edge of the solid', () => {
+    expect(solidDimensionSegment({ kind: 'pyramid', base: 6, height: 9 }, 'height')).toEqual([
+      { x: 0, y: -4.5, z: 0 },
+      { x: 0, y: 4.5, z: 0 },
+    ])
+  })
+
+  it('hangs a tetrahedron edge off the base edge between its first two vertices', () => {
+    const body = buildSolid({ kind: 'tetrahedron', edge: 5 })
+    const solid = requirePolyhedron(body)
+    expect(solidDimensionSegment(body.spec, 'edge')).toEqual([solid.vertices[0], solid.vertices[1]])
+  })
+
+  it('knows nothing about a dimension the primitive does not have', () => {
+    expect(solidDimensionSegment({ kind: 'tetrahedron', edge: 5 }, 'height')).toBeNull()
   })
 })

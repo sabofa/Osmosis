@@ -483,6 +483,11 @@ function parseConstructionBody(rhs: string): Construction | null {
 // GeometryExtent is duplicated rather than imported.
 const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron']
 
+// The dimension words "label: S height" can name. The renderer decides which
+// of these a given primitive actually HAS (a tetrahedron has no height to
+// label); the parser only needs to recognise the shape of the phrase.
+const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge']
+
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
 // Each form names its own numbers. "8 by 5 by 6" is bare because width,
@@ -1165,6 +1170,19 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
     // this is not an explicit notation form: "label: angle ABC = 30" is a
     // perfectly ordinary asserted measure.
     return { subject: { kind: 'angle', from, vertex, to }, mark: 'none', prefix: '∠', explicit: false }
+  }
+
+  // "S height", "S edge" — a named dimension of a named solid. Two words, so
+  // it cannot be confused with the one-word forms below; checked before them
+  // because "S height" would otherwise fail as a malformed point run.
+  const dimension = new RegExp(`^([a-zA-Z]+)\\s+(${SOLID_DIMENSIONS.join('|')})$`).exec(subjectText)
+  if (dimension) {
+    return {
+      subject: { kind: 'solidDimension', solid: dimension[1], dimension: dimension[2] },
+      mark: 'none',
+      prefix: '',
+      explicit: false,
+    }
   }
 
   const [from, to] = parsePointRun(subjectText, 2, `length ${role}`)
