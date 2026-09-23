@@ -1,6 +1,6 @@
 import type { GraphConfig } from '../parser/config'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
-import type { Expr, MeasureContent, MeasureSubject, Statement } from '../parser/types'
+import type { Expr, GivenEntry, MeasureContent, MeasureSubject, Statement } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
 import { type Palette, themedColor } from '../render/palette'
@@ -16,6 +16,7 @@ import {
   figureTheme,
   fitProjection,
   growRect,
+  layoutGivensBox,
   unionRects,
   type FigureTheme,
   type Projection,
@@ -25,7 +26,7 @@ import {
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, notationElements, notationOrigin, type NotationRun } from './notation'
-import { svgArc, svgCircle, svgLine, svgPolyline, svgText, type SvgAttrs } from './svg'
+import { fmt, svgArc, svgCircle, svgLine, svgPolyline, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
 //
@@ -91,6 +92,10 @@ type FigureItem =
       runs: NotationRun[]
       color: string | null
     }
+  // A line of the boxed givens panel. It has no position of its own: where
+  // the box goes is decided against the finished drawing, after the labels
+  // have been placed and the content rect is known.
+  | { kind: 'given'; id: Identity; runs: NotationRun[]; color: string | null }
 
 export interface FigureResult {
   svg: string
@@ -215,6 +220,21 @@ function outwardPerpendicular(a: Vec2, b: Vec2, centre: Vec2): Vec2 | null {
   return { x: sign * normal.x, y: -sign * normal.y }
 }
 
+// A subject written out as a name: an overbar on a segment, the angle sign,
+// the triangle sign. This is the givens box's spelling of a subject, and the
+// half of notation-composes-with-measures that the box exercises — the name
+// carries a mark and the "= 8" after it does not.
+function subjectRuns(subject: MeasureSubject): NotationRun[] {
+  switch (subject.kind) {
+    case 'length':
+      return [{ text: `${subject.from}${subject.to}`, mark: 'segment' }]
+    case 'angle':
+      return [{ text: `\u2220${subject.from}${subject.vertex}${subject.to}`, mark: 'none' }]
+    case 'triangle':
+      return [{ text: `\u25b3${subject.names.join('')}`, mark: 'none' }]
+  }
+}
+
 // What the label prints, and — for the asserting form — whether the figure
 // agrees with it.
 //
@@ -256,6 +276,49 @@ function measureRuns(
   }
 }
 
+// One line of the box. A measure is checked exactly as an inline label is —
+// the box is a different place to write a given, not a different standard of
+// truth — and a relation states a fact about the figure that the construction
+// layer has no single number to compare against, so it is written and not
+// checked.
+function givenRuns(
+  entry: GivenEntry,
+  resolve: (name: string) => Vec2,
+  config: GraphConfig
+): { runs: NotationRun[]; error: string | null } {
+  if (entry.kind === 'relation') {
+    for (const side of [entry.left, entry.right]) measureOf(side, resolve, config)
+    return {
+      runs: [...subjectRuns(entry.left), { text: ` ${entry.symbol} `, mark: 'none' }, ...subjectRuns(entry.right)],
+      error: null,
+    }
+  }
+
+  const computed = measureOf(entry.subject, resolve, config)
+  const value = measureRuns(entry.subject, entry.content, computed, config)
+  // One run for "= 8", not two: a measure's own runs never carry a mark, so
+  // splitting the equals sign from the value would buy nothing and would put
+  // a text-element boundary in the middle of a printed equation.
+  const stated = { text: ` = ${value.runs.map((run) => run.text).join('')}`, mark: 'none' as const }
+  return { runs: [...subjectRuns(entry.subject), stated], error: value.error }
+}
+
+// The number a subject measures to, or null when the subject is a shape
+// rather than a measurement. Resolving the names is the point even for a
+// shape: a given naming a point that does not exist is a broken spec, and
+// finding that out here is what turns it into a legible error.
+function measureOf(subject: MeasureSubject, resolve: (name: string) => Vec2, config: GraphConfig): number | null {
+  switch (subject.kind) {
+    case 'length':
+      return segmentLength(resolve(subject.from), resolve(subject.to))
+    case 'angle':
+      return angleMeasure(resolve(subject.vertex), resolve(subject.from), resolve(subject.to), config.angle)
+    case 'triangle':
+      for (const name of subject.names) resolve(name)
+      return null
+  }
+}
+
 function buildItems(statements: Statement[], config: GraphConfig): { items: FigureItem[]; errors: SceneError[] } {
   const functions = collectFunctions(statements)
   const namedPoints = collectNamedPoints(statements, config, functions)
@@ -268,6 +331,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   // where the rest of the figure is (a side's label goes on the outside),
   // and that is only known once every other item exists.
   const measureStatements: { statement: Statement; index: number }[] = []
+  const givenStatements: { statement: Statement; index: number }[] = []
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
 
   function resolve(name: string): Vec2 {
@@ -376,9 +440,23 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         case 'measureLabel':
           measureStatements.push({ statement, index })
           break
+        case 'given':
+          givenStatements.push({ statement, index })
+          break
         default:
           break
       }
+    } catch (err) {
+      errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  for (const { statement, index } of givenStatements) {
+    if (statement.kind !== 'given') continue
+    try {
+      const { runs, error } = givenRuns(statement.entry, resolve, config)
+      if (error) errors.push({ line: 0, message: error })
+      items.push({ kind: 'given', id: { statement: index, object: null }, runs, color: statement.color })
     } catch (err) {
       errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
     }
@@ -465,6 +543,10 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'tickMark':
         points.push(item.from, item.to)
         break
+      case 'given':
+        // The box is placed against the finished drawing, so it must not be
+        // part of what decides how big the drawing is.
+        break
       case 'measureLabel':
         // Anchored to geometry that already votes on the bounds — a midpoint,
         // a vertex, a centroid — so it adds nothing of its own. Its *box*
@@ -510,7 +592,14 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   const placed = layoutLabels(anchors, obstacles)
 
   const contentRect = unionRects([geometryRect, ...placed.map((label) => label.rect)])
-  const viewBox = growRect(contentRect, FIGURE_PADDING)
+
+  // The givens box is laid out against the finished drawing — geometry plus
+  // its placed labels — and placed outside it, so the viewBox has to hold
+  // both (E3).
+  const givens = items.filter((item): item is Extract<FigureItem, { kind: 'given' }> => item.kind === 'given')
+  const givenLayouts = givens.map((item) => layoutNotation(item.runs, LABEL_FONT_SIZE))
+  const givensBox = givenLayouts.length > 0 ? layoutGivensBox(givenLayouts, config.givens, contentRect) : null
+  const viewBox = growRect(givensBox ? unionRects([contentRect, givensBox.box]) : contentRect, FIGURE_PADDING)
 
   // Pass 2 — emit. Infinite lines and rays are clipped here, against the
   // *final* viewBox, because how much of a locus to draw is a fact about the
@@ -545,6 +634,30 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
         ...identity(id),
       })
     )
+  }
+
+  if (givensBox) {
+    layers.labels.push(
+      `<rect${[
+        ` x="${fmt(givensBox.box.x)}"`,
+        ` y="${fmt(givensBox.box.y)}"`,
+        ` width="${fmt(givensBox.box.width)}"`,
+        ` height="${fmt(givensBox.box.height)}"`,
+        ` fill="${theme.background}"`,
+        ` stroke="${theme.ink}"`,
+        ` stroke-width="${fmt(STROKE_MARK)}"`,
+        ' data-object="givens"',
+      ].join('')}/>`
+    )
+    for (let i = 0; i < givens.length; i++) {
+      layers.labels.push(
+        ...notationElements(givenLayouts[i], givensBox.rows[i], {
+          fill: strokeColor(givens[i].color, palette.axis, palette),
+          fontFamily: FONT_FAMILY,
+          identity: identity(givens[i].id),
+        })
+      )
+    }
   }
 
   return { svg: figureDocument(layers, viewBox, theme), errors }
@@ -743,6 +856,9 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
     }
     case 'measureLabel':
       // Emitted with the other labels, after the layout has placed them.
+      break
+    case 'given':
+      // Emitted with the box, after the content rect is known.
       break
     case 'rightAngleMark': {
       const vertex = to(item.vertex)

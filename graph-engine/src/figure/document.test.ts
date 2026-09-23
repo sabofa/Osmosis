@@ -7,10 +7,14 @@ import {
   figureDocument,
   figureTheme,
   fitProjection,
+  GIVENS_POSITIONS,
   growRect,
+  layoutGivensBox,
   rectAround,
   unionRects,
   type FigureLayers,
+  type GivensPosition,
+  type Rect,
 } from './document'
 import { svgCircle, svgLine, svgPolygon, svgText } from './svg'
 
@@ -177,5 +181,111 @@ describe('determinism', () => {
       return figureDocument(layers, box, figureTheme(LIGHT_PALETTE))
     }
     expect(build()).toBe(build())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The givens box
+// ---------------------------------------------------------------------------
+
+// A row's vertical extent, relative to its own glyph row — the shape
+// notation.ts's layout hands back.
+function entry(width: number, marked = false) {
+  return { width, top: marked ? -12 : -8.625, bottom: 8.625 }
+}
+
+const CONTENT: Rect = { x: -300, y: -200, width: 600, height: 400 }
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+describe('layoutGivensBox', () => {
+  const rows = [entry(120, true), entry(90), entry(150)]
+
+  it('is wide enough for its widest row, whichever row that is', () => {
+    const wide = layoutGivensBox(rows, 'top-left', CONTENT)
+    const narrow = layoutGivensBox([entry(40), entry(30)], 'top-left', CONTENT)
+    expect(wide.box.width).toBeGreaterThan(150)
+    expect(wide.box.width - 150).toBeCloseTo(narrow.box.width - 40, 9)
+  })
+
+  it('is tall enough for every row it holds', () => {
+    const one = layoutGivensBox([entry(90)], 'top-left', CONTENT)
+    const three = layoutGivensBox(rows, 'top-left', CONTENT)
+    expect(three.box.height).toBeGreaterThan(one.box.height)
+  })
+
+  it('lays the rows out in the order they were given, down the box', () => {
+    const laid = layoutGivensBox(rows, 'top-left', CONTENT)
+    expect(laid.rows).toHaveLength(3)
+    expect(laid.rows[0].y).toBeLessThan(laid.rows[1].y)
+    expect(laid.rows[1].y).toBeLessThan(laid.rows[2].y)
+    // Every row starts at the same left edge, inside the box.
+    for (const row of laid.rows) {
+      expect(row.x).toBeCloseTo(laid.rows[0].x, 9)
+      expect(row.x).toBeGreaterThan(laid.box.x)
+    }
+  })
+
+  it('packs the rows against the box, padding and no more', () => {
+    // Measured from each row's own extent rather than from its glyph row: a
+    // row carrying an overbar is taller above its glyphs than below them, and
+    // a box that packed by glyph row would crowd a marked row against the one
+    // above it while leaving the padding looking uneven.
+    const laid = layoutGivensBox(rows, 'top-left', CONTENT)
+    const first = laid.rows[0].y + rows[0].top
+    const last = laid.rows[rows.length - 1].y + rows[rows.length - 1].bottom
+    expect(first - laid.box.y).toBeCloseTo(14, 9)
+    expect(laid.box.y + laid.box.height - last).toBeCloseTo(14, 9)
+    for (const [i, row] of laid.rows.entries()) {
+      expect(row.x - laid.box.x).toBeCloseTo(14, 9)
+      expect(row.x + rows[i].width).toBeLessThanOrEqual(laid.box.x + laid.box.width)
+    }
+  })
+
+  it('leaves the same gap between every pair of rows, whatever they carry', () => {
+    const laid = layoutGivensBox(rows, 'top-left', CONTENT)
+    for (let i = 1; i < rows.length; i++) {
+      const gap = laid.rows[i].y + rows[i].top - (laid.rows[i - 1].y + rows[i - 1].bottom)
+      expect(gap).toBeCloseTo(9, 9)
+    }
+  })
+
+  it('never overlaps the drawing, in any position it can be put', () => {
+    for (const position of GIVENS_POSITIONS) {
+      const laid = layoutGivensBox(rows, position, CONTENT)
+      expect(overlaps(laid.box, CONTENT)).toBe(false)
+    }
+  })
+
+  it('puts the box where the position names', () => {
+    const above = (p: GivensPosition) => layoutGivensBox(rows, p, CONTENT).box
+    expect(above('top-left').y + above('top-left').height).toBeLessThanOrEqual(CONTENT.y)
+    expect(above('top-right').y + above('top-right').height).toBeLessThanOrEqual(CONTENT.y)
+    expect(above('bottom-left').y).toBeGreaterThanOrEqual(CONTENT.y + CONTENT.height)
+    expect(above('bottom-right').y).toBeGreaterThanOrEqual(CONTENT.y + CONTENT.height)
+    expect(above('left').x + above('left').width).toBeLessThanOrEqual(CONTENT.x)
+    expect(above('right').x).toBeGreaterThanOrEqual(CONTENT.x + CONTENT.width)
+  })
+
+  it('aligns a corner box with the side it is named for', () => {
+    expect(layoutGivensBox(rows, 'top-left', CONTENT).box.x).toBeCloseTo(CONTENT.x, 9)
+    const right = layoutGivensBox(rows, 'top-right', CONTENT).box
+    expect(right.x + right.width).toBeCloseTo(CONTENT.x + CONTENT.width, 9)
+  })
+
+  it('centres a side box against the drawing', () => {
+    for (const position of ['left', 'right'] as const) {
+      const box = layoutGivensBox(rows, position, CONTENT).box
+      expect(box.y + box.height / 2).toBeCloseTo(CONTENT.y + CONTENT.height / 2, 9)
+    }
+  })
+
+  it('handles a box with nothing in it rather than producing a negative size', () => {
+    const empty = layoutGivensBox([], 'top-left', CONTENT)
+    expect(empty.box.width).toBeGreaterThanOrEqual(0)
+    expect(empty.box.height).toBeGreaterThanOrEqual(0)
+    expect(empty.rows).toEqual([])
   })
 })

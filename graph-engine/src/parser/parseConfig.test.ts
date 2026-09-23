@@ -100,3 +100,19 @@ describe('@scale', () => {
     expect(() => parse('@scale: maybe')).toThrow(/true.*false|on.*off/)
   })
 })
+
+describe('@givens', () => {
+  it('defaults to the top-left corner', () => {
+    expect(defaultConfig().givens).toBe('top-left')
+  })
+
+  it('accepts each corner and each side', () => {
+    for (const position of ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right']) {
+      expect(parse(`@givens: ${position}`).givens).toBe(position)
+    }
+  })
+
+  it('rejects anything else, naming the positions it takes', () => {
+    expect(() => parse('@givens: middle')).toThrow(/top-left/)
+  })
+})

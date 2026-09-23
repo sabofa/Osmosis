@@ -1,3 +1,4 @@
+import type { GivensPosition } from '../parser/config'
 import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
 import { fmt, svgGroup, type SvgAttrs } from './svg'
@@ -178,6 +179,111 @@ export function fitProjection(bounds: WorldBounds): Projection {
       return { x: (p.x - cx) * scale, y: -(p.y - cy) * scale }
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// The givens box
+// ---------------------------------------------------------------------------
+
+// A dense figure reaches a point where inline labelling makes it worse rather
+// than better, and the convention competition figures already use is to lift
+// the given values out of the drawing into a box. This is the pressure valve
+// for the label-density problem: when placement gets hard, move some of it
+// out of the drawing entirely.
+
+// The positions themselves are owned by the parser, because "@givens:" is
+// where an author names one and the parser is what has to reject a name that
+// is not one. Re-exported here so a caller of the layout does not need to
+// reach into the parser for the type of its own argument.
+export { GIVENS_POSITIONS, type GivensPosition } from '../parser/config'
+
+// **The box sits outside the drawing, never inset over a corner of it.**
+//
+// "Corner" here therefore means a corner of the composed figure — the box is
+// placed above or below the drawing and aligned to its left or right edge —
+// rather than a corner of the drawing with the box floating on top. An inset
+// box would have to be placed against the geometry to avoid covering it,
+// which is the same search the label layout already does and loses, at the
+// density where an author reaches for this feature in the first place. A
+// figure that has given up on fitting labels inside the drawing is not a
+// figure with room for a box inside the drawing.
+const GIVENS_PADDING = 14
+const GIVENS_ROW_GAP = 9
+
+// The space between the box and the drawing.
+const GIVENS_GAP = FIGURE_PADDING
+
+// One row's extent, relative to its own glyph row. Structurally what
+// notation.ts's NotationLayout hands back, so a caller lays a row out once
+// and passes it straight here.
+export interface GivensRow {
+  width: number
+  top: number
+  bottom: number
+}
+
+export interface GivensBoxLayout {
+  box: Rect
+  // Where to write each row: its left edge and its glyph row, in the order
+  // the rows were given. Not the row's box centre — a row carrying an overbar
+  // is taller above its glyphs than below them.
+  rows: Vec2[]
+}
+
+export function layoutGivensBox(rows: readonly GivensRow[], position: GivensPosition, content: Rect): GivensBoxLayout {
+  let inner = 0
+  let widest = 0
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0) inner += GIVENS_ROW_GAP
+    inner += rows[i].bottom - rows[i].top
+    widest = Math.max(widest, rows[i].width)
+  }
+  const width = rows.length === 0 ? 0 : widest + 2 * GIVENS_PADDING
+  const height = rows.length === 0 ? 0 : inner + 2 * GIVENS_PADDING
+
+  const left = content.x
+  const right = content.x + content.width - width
+  const above = content.y - GIVENS_GAP - height
+  const below = content.y + content.height + GIVENS_GAP
+  const middle = content.y + content.height / 2 - height / 2
+
+  let x: number
+  let y: number
+  switch (position) {
+    case 'top-left':
+      x = left
+      y = above
+      break
+    case 'top-right':
+      x = right
+      y = above
+      break
+    case 'bottom-left':
+      x = left
+      y = below
+      break
+    case 'bottom-right':
+      x = right
+      y = below
+      break
+    case 'left':
+      x = content.x - GIVENS_GAP - width
+      y = middle
+      break
+    case 'right':
+      x = content.x + content.width + GIVENS_GAP
+      y = middle
+      break
+  }
+
+  const box = { x, y, width, height }
+  const placed: Vec2[] = []
+  let cursor = y + GIVENS_PADDING
+  for (const row of rows) {
+    placed.push({ x: x + GIVENS_PADDING, y: cursor - row.top })
+    cursor += row.bottom - row.top + GIVENS_ROW_GAP
+  }
+  return { box, rows: placed }
 }
 
 // ---------------------------------------------------------------------------

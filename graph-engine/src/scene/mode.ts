@@ -57,6 +57,7 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   // A measure label draws nothing on its own, but a spec that is nothing but
   // labels is still a figure rather than a graph.
   'measureLabel',
+  'given',
 ])
 
 // Which renderer a spec gets.

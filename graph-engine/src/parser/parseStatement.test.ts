@@ -520,3 +520,67 @@ describe('parseStatement — measure labels', () => {
     expect(() => parseStatement('label:')).toThrow(/label:/)
   })
 })
+
+describe('parseStatement — the givens box', () => {
+  it('parses a given value, defaulting to the computed one', () => {
+    const s = parseStatement('given: AB')
+    expect(s.kind).toBe('given')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    expect(s.entry).toEqual({ kind: 'measure', subject: { kind: 'length', from: 'A', to: 'B' }, content: { kind: 'computed' } })
+  })
+
+  it('parses a stated given, which asserts like an inline label', () => {
+    const s = parseStatement('given: AB = 8')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    expect(s.entry).toEqual({ kind: 'measure', subject: { kind: 'length', from: 'A', to: 'B' }, content: { kind: 'stated', value: 8 } })
+  })
+
+  it('parses an angle given', () => {
+    const s = parseStatement('given: angle ABC = 30')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    if (s.entry.kind !== 'measure') throw new Error('unreachable')
+    expect(s.entry.subject).toEqual({ kind: 'angle', from: 'A', vertex: 'B', to: 'C' })
+  })
+
+  it('parses a relation written as a word', () => {
+    const s = parseStatement('given: AB parallel CD')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    expect(s.entry).toEqual({
+      kind: 'relation',
+      left: { kind: 'length', from: 'A', to: 'B' },
+      symbol: '∥',
+      right: { kind: 'length', from: 'C', to: 'D' },
+    })
+  })
+
+  it('parses a relation written as the symbol itself', () => {
+    const s = parseStatement('given: AB ∥ CD')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    if (s.entry.kind !== 'relation') throw new Error('unreachable')
+    expect(s.entry.symbol).toBe('∥')
+  })
+
+  it('parses a relation between two triangles', () => {
+    const s = parseStatement('given: triangle ABC similar triangle DEF')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    if (s.entry.kind !== 'relation') throw new Error('unreachable')
+    expect(s.entry.symbol).toBe('~')
+    expect(s.entry.left).toEqual({ kind: 'triangle', names: ['A', 'B', 'C'] })
+    expect(s.entry.right).toEqual({ kind: 'triangle', names: ['D', 'E', 'F'] })
+  })
+
+  it('parses a congruence between two angles', () => {
+    const s = parseStatement('given: angle ABC congruent angle DEF')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    if (s.entry.kind !== 'relation') throw new Error('unreachable')
+    expect(s.entry.symbol).toBe('≅')
+  })
+
+  it('refuses an empty given', () => {
+    expect(() => parseStatement('given:')).toThrow(/given:/)
+  })
+
+  it('refuses a relation whose sides are not geometry', () => {
+    expect(() => parseStatement('given: ABC parallel D')).toThrow(/point names/)
+  })
+})

@@ -1,4 +1,4 @@
-import type { FeatureKind, GraphConfig } from './config'
+import { GIVENS_POSITIONS, type FeatureKind, type GivensPosition, type GraphConfig } from './config'
 
 export function isConfigLine(rawLine: string): boolean {
   return rawLine.trim().startsWith('@')
@@ -78,6 +78,13 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       const b = value === 'true' ? true : value === 'false' ? false : parseBoolean(value)
       if (b === null) throw new Error(`@scale must be "true"/"false" or "on"/"off", got "${value}"`)
       config.toScale = b
+      return
+    }
+    case 'givens': {
+      if (!(GIVENS_POSITIONS as readonly string[]).includes(value)) {
+        throw new Error(`@givens must be one of ${GIVENS_POSITIONS.join(', ')}, got "${value}"`)
+      }
+      config.givens = value as GivensPosition
       return
     }
     case 'mode': {

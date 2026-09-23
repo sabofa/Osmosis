@@ -30,6 +30,10 @@ export type FeatureKind =
 // and stored specs keep working.
 export type FeaturePointKind = FeatureKind
 
+export const GIVENS_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right'] as const
+
+export type GivensPosition = (typeof GIVENS_POSITIONS)[number]
+
 export type LabelMode = 'all' | 'coarse' | 'none'
 export type StepMode = 'nice' | 'geometric' | 'fixed'
 
@@ -49,6 +53,10 @@ export interface GraphConfig {
   // nothing, and without the flag a deliberately-not-to-scale figure could
   // not be authored at all.
   toScale: boolean
+  // Where the boxed givens panel sits, when a spec states any givens. A
+  // corner or a side of the composed figure — see figure/document.ts's
+  // layoutGivensBox, which places it outside the drawing rather than over it.
+  givens: GivensPosition
   // Which renderer draws this spec. `figure` is the SVG figure renderer —
   // its own renderer, selected the way `table` already selects TableView,
   // not the plot renderer with its axes switched off.
@@ -101,6 +109,7 @@ export function defaultConfig(): GraphConfig {
     axes: true,
     angle: 'radians',
     toScale: true,
+    givens: 'top-left',
     mode: 'graph',
     modeDeclared: false,
     points: new Set(),

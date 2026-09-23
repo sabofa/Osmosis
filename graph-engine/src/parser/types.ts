@@ -93,6 +93,13 @@ export type MeasureContent =
   | { kind: 'symbol'; text: string }
   | { kind: 'name'; mark: MeasureOvermark; prefix: string }
 
+// One line of the givens box: a value, or a relation between two pieces of
+// geometry. Relations carry the symbol itself rather than a keyword, because
+// an author may type either and by this point the difference is spent.
+export type GivenEntry =
+  | { kind: 'measure'; subject: MeasureSubject; content: MeasureContent }
+  | { kind: 'relation'; left: MeasureSubject; symbol: string; right: MeasureSubject }
+
 // Which of the three canonical slots a triangle measurement fills. Side 'a'
 // is opposite the first named vertex, angle 'a' is the angle at it.
 export type TriangleSlot = 'a' | 'b' | 'c'
@@ -157,6 +164,16 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     the NAME in geometry notation (overbar,
 //                                                     arrow, double arrow, the triangle sign)
 //                                                     rather than a measure.
+//   given: AB [= 8]  |  given: angle ABC [= 30]     -> a line of the boxed givens panel
+//   given: AB parallel CD                             instead of a label on the drawing. The
+//                                                     name is written in notation (an overbar on
+//                                                     a segment, the angle and triangle signs),
+//                                                     the value plain. A stated value is checked
+//                                                     exactly as an inline label's is. The
+//                                                     relation form takes a keyword or the symbol
+//                                                     (congruent/cong/≅, similar/sim/~,
+//                                                     parallel/par/∥, perpendicular/perp/⊥). The
+//                                                     box's corner or side is "@givens:".
 //   right-angle: A-B-C                              -> small square marker at vertex B indicating a
 //                                                     90-degree angle between rays B->A and B->C.
 //   segment: A-B [dashed]                           -> a segment between two named points, resolved
@@ -262,6 +279,10 @@ export type StatementShape =
   // "label: AB", "label: AB = 8", "label: angle ABC", "label: segment AB" —
   // a value read off the figure, or a name written in geometry notation.
   | { kind: 'measureLabel'; subject: MeasureSubject; content: MeasureContent }
+  // "given: AB = 8", "given: AB parallel CD" — a line of the boxed panel
+  // rather than a label on the drawing. Inline and boxed labelling coexist,
+  // and an author chooses per label by choosing the statement.
+  | { kind: 'given'; entry: GivenEntry }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
   // "segment: A-B [dashed]" — a segment between two *named* points, the

@@ -7,6 +7,7 @@ import type {
   GeometryRef,
   MeasureContent,
   MeasureOvermark,
+  MeasureSubject,
   Statement,
   StatementShape,
   TriangleCentreKind,
@@ -498,6 +499,10 @@ function parseStatementCore(rawLine: string): StatementShape {
   // "label: AB = 8" as an implicit curve.
   if (line.startsWith('label:')) return parseMeasureLabel(line.slice('label:'.length))
 
+  // A line of the boxed givens panel — the same subjects as "label:", written
+  // out rather than measured onto the drawing.
+  if (line.startsWith('given:')) return parseGiven(line.slice('given:'.length))
+
   // Congruence tick mark(s): "tick: A-B", optionally "tick: A-B count: 2" —
   // give two tick: statements the same count to mark their segments
   // congruent. A/B resolved the same way as angle:'s points.
@@ -863,6 +868,75 @@ function parseMeasureContent(text: string): MeasureContent {
   return { kind: 'symbol', text: value }
 }
 
+// What a label or a given names, and how that name is written when it is
+// written out rather than measured.
+//
+// `explicit` says the author chose the notation form by keyword
+// ("segment AB"), which is what makes "label: segment AB = 8" — two different
+// labels asked for at once — refusable.
+interface LabelSubject {
+  subject: MeasureSubject
+  mark: MeasureOvermark
+  prefix: string
+  explicit: boolean
+}
+
+function parseLabelSubject(text: string, role: string): LabelSubject {
+  const subjectText = text.trim()
+
+  const notation = /^(segment|ray|line)\s+(.+)$/.exec(subjectText)
+  if (notation) {
+    const [, word, names] = notation
+    const [from, to] = parsePointRun(names, 2, `${word} ${role}`)
+    return { subject: { kind: 'length', from, to }, mark: word as Exclude<MeasureOvermark, 'none'>, prefix: '', explicit: true }
+  }
+
+  const triangle = /^triangle\s+(.+)$/.exec(subjectText)
+  if (triangle) {
+    const [a, b, c] = parsePointRun(triangle[1], 3, `triangle ${role}`)
+    return { subject: { kind: 'triangle', names: [a, b, c] }, mark: 'none', prefix: '△', explicit: true }
+  }
+
+  const angle = /^angle\s+(.+)$/.exec(subjectText)
+  if (angle) {
+    const [from, vertex, to] = parsePointRun(angle[1], 3, `angle ${role}`)
+    // "angle" selects which measurement is meant, not how to write it, so
+    // this is not an explicit notation form: "label: angle ABC = 30" is a
+    // perfectly ordinary asserted measure.
+    return { subject: { kind: 'angle', from, vertex, to }, mark: 'none', prefix: '∠', explicit: false }
+  }
+
+  const [from, to] = parsePointRun(subjectText, 2, `length ${role}`)
+  // A bare segment name is written with an overbar when it is written at all.
+  return { subject: { kind: 'length', from, to }, mark: 'segment', prefix: '', explicit: false }
+}
+
+// The relations a given can state. Words and symbols both, because a spec is
+// typed text and an author is as likely to paste the symbol as to spell it.
+const RELATION_WORDS = ['congruent', 'cong', 'similar', 'sim', 'parallel', 'par', 'perpendicular', 'perp']
+const RELATION_SYMBOLS: Record<string, string> = {
+  congruent: '≅',
+  cong: '≅',
+  '≅': '≅',
+  similar: '~',
+  sim: '~',
+  '~': '~',
+  parallel: '∥',
+  par: '∥',
+  '∥': '∥',
+  perpendicular: '⊥',
+  perp: '⊥',
+  '⊥': '⊥',
+}
+
+function splitRelation(text: string): { left: string; symbol: string; right: string } | null {
+  const word = new RegExp(`^(.*?)\\s+(${RELATION_WORDS.join('|')})\\s+(.*)$`).exec(text)
+  if (word) return { left: word[1], symbol: RELATION_SYMBOLS[word[2]], right: word[3] }
+  const symbol = /^(.*?)\s*([≅~∥⊥])\s*(.*)$/.exec(text)
+  if (symbol) return { left: symbol[1], symbol: RELATION_SYMBOLS[symbol[2]], right: symbol[3] }
+  return null
+}
+
 // "label: <subject> [= <value>]".
 function parseMeasureLabel(rest: string): StatementShape {
   const body = rest.trim()
@@ -871,33 +945,43 @@ function parseMeasureLabel(rest: string): StatementShape {
   }
 
   const equals = body.indexOf('=')
-  const subjectText = (equals === -1 ? body : body.slice(0, equals)).trim()
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
+  const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'label')
 
-  // The notation forms name a piece of geometry instead of measuring it, so
-  // they take no "= value" — "label: segment AB = 8" is two different labels
-  // asked for at once.
-  const notation = /^(segment|ray|line|triangle)\s+(.+)$/.exec(subjectText)
-  if (notation) {
-    const [, word, names] = notation
-    if (content) throw new Error(`"label: ${word} ..." writes a name in notation and takes no "= value" — use "label: ${names.trim()} = ..." for a measure`)
-    if (word === 'triangle') {
-      const [a, b, c] = parsePointRun(names, 3, 'triangle')
-      return { kind: 'measureLabel', subject: { kind: 'triangle', names: [a, b, c] }, content: { kind: 'name', mark: 'none', prefix: '△' } }
+  if (named.explicit) {
+    if (content) {
+      throw new Error('A notation label writes a name and takes no "= value" — drop the keyword to measure it instead')
     }
-    const [from, to] = parsePointRun(names, 2, `${word} label`)
-    const mark = word as Exclude<MeasureOvermark, 'none'>
-    return { kind: 'measureLabel', subject: { kind: 'length', from, to }, content: { kind: 'name', mark, prefix: '' } }
+    return { kind: 'measureLabel', subject: named.subject, content: { kind: 'name', mark: named.mark, prefix: named.prefix } }
   }
 
-  const angle = /^angle\s+(.+)$/.exec(subjectText)
-  if (angle) {
-    const [from, vertex, to] = parsePointRun(angle[1], 3, 'angle label')
-    return { kind: 'measureLabel', subject: { kind: 'angle', from, vertex, to }, content: content ?? { kind: 'computed' } }
+  return { kind: 'measureLabel', subject: named.subject, content: content ?? { kind: 'computed' } }
+}
+
+// "given: <subject> [= <value>]" or "given: <subject> <relation> <subject>".
+function parseGiven(rest: string): StatementShape {
+  const body = rest.trim()
+  if (body === '') {
+    throw new Error('Expected something to state, e.g. "given: AB = 8", "given: angle A-B-C = 30" or "given: AB parallel CD"')
   }
 
-  const [from, to] = parsePointRun(subjectText, 2, 'length label')
-  return { kind: 'measureLabel', subject: { kind: 'length', from, to }, content: content ?? { kind: 'computed' } }
+  const relation = splitRelation(body)
+  if (relation) {
+    return {
+      kind: 'given',
+      entry: {
+        kind: 'relation',
+        left: parseLabelSubject(relation.left, 'given').subject,
+        symbol: relation.symbol,
+        right: parseLabelSubject(relation.right, 'given').subject,
+      },
+    }
+  }
+
+  const equals = body.indexOf('=')
+  const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
+  const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'given')
+  return { kind: 'given', entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
 }
 
 // Parses one non-empty, comment-stripped line into a Statement. Splices off

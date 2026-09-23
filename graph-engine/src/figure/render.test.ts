@@ -336,6 +336,10 @@ interface EmittedText {
   // two and this is what the position tests measure with.
   centreX: number
   text: string
+  // Whether the element names an object. Everything drawn on the figure
+  // does; a row of the givens box does not, which is how the two are told
+  // apart when both live in the labels layer.
+  named: boolean
 }
 
 // Every <text> in a layer, with the position it was written at.
@@ -349,7 +353,7 @@ function texts(markup: string): EmittedText[] {
     const anchored = /text-anchor="([^"]*)"/.exec(attrs)?.[1]
     const text = m[2]
     const centreX = anchored === 'start' ? x + estimateTextSize(text, LABEL_FONT_SIZE).width / 2 : x
-    out.push({ x, y, centreX, text })
+    out.push({ x, y, centreX, text, named: attrs.includes('data-object=') })
   }
   return out
 }
@@ -657,5 +661,151 @@ describe('notation in a figure', () => {
     // text only, and this phase must not add strokes to the labels layer of
     // a figure that never asked for notation.
     expect(countTags(layer(render(segment), 'labels'), 'line')).toBe(0)
+  })
+})
+
+describe('the givens box in a figure', () => {
+  const square = 'polygon: A(0, 0), B(6, 0), C(6, 6), D(0, 6)\n'
+
+  function boxRect(svg: string) {
+    // The box is the only rect in the labels layer; the paper is its own
+    // element outside every layer.
+    const match = /<rect x="([^"]*)" y="([^"]*)" width="([^"]*)" height="([^"]*)"/.exec(layer(svg, 'labels'))
+    if (!match) throw new Error('no givens box in the labels layer')
+    return { x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: Number(match[4]) }
+  }
+
+  function viewBoxOf(svg: string) {
+    const match = /viewBox="([^"]*)"/.exec(svg)
+    if (!match) throw new Error('no viewBox')
+    const [x, y, width, height] = match[1].split(' ').map(Number)
+    return { x, y, width, height }
+  }
+
+  function contains(outer: { x: number; y: number; width: number; height: number }, inner: { x: number; y: number; width: number; height: number }) {
+    return (
+      outer.x <= inner.x &&
+      outer.y <= inner.y &&
+      outer.x + outer.width >= inner.x + inner.width &&
+      outer.y + outer.height >= inner.y + inner.height
+    )
+  }
+
+  it('draws a box listing the given, with the name in notation and the value plain', () => {
+    const svg = render(square + 'given: AB = 6')
+    const labels = layer(svg, 'labels')
+    expect(boxRect(svg).width).toBeGreaterThan(0)
+    const row = texts(labels).find((t) => t.text === 'AB')
+    if (!row) throw new Error('expected the name "AB" in the box')
+    expect(labels).toContain('= 6')
+    // One overbar: over AB, not over the value.
+    expect(countTags(labels, 'line')).toBe(1)
+  })
+
+  it('never overlaps the drawing', () => {
+    for (const position of ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right']) {
+      const svg = render(`@givens: ${position}\n` + square + 'given: AB = 6\ngiven: BC = 6')
+      const box = boxRect(svg)
+      const edges = [...layer(svg, 'primary').matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)]
+      expect(edges.length).toBeGreaterThan(0)
+      for (const edge of edges) {
+        for (const [px, py] of [
+          [Number(edge[1]), Number(edge[2])],
+          [Number(edge[3]), Number(edge[4])],
+        ]) {
+          const inside = px >= box.x && px <= box.x + box.width && py >= box.y && py <= box.y + box.height
+          expect(inside).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('puts the box where @givens says, not always in the same corner', () => {
+    const at = (position: string) => boxRect(render(`@givens: ${position}\n` + square + 'given: AB = 6'))
+    expect(at('top-left').y).toBeLessThan(at('bottom-left').y)
+    expect(at('left').x).toBeLessThan(at('right').x)
+    expect(at('top-left').x).toBeLessThan(at('top-right').x)
+  })
+
+  it('clears the labels too, not just the geometry', () => {
+    // The box is laid out against the finished drawing — the geometry *and*
+    // the labels already placed around it. Adding a measure above the top
+    // edge therefore pushes a top-corner box further out; laid out against
+    // the bare geometry it would not move at all, and would end up sitting
+    // on the labels it did not look at.
+    const bare = boxRect(render(square + 'given: AB = 6'))
+    const labelled = boxRect(render(square + 'label: DC\ngiven: AB = 6'))
+    expect(labelled.y).toBeLessThan(bare.y)
+    // Never overlapping anything drawn on the figure, in either case.
+    for (const svg of [render(square + 'given: AB = 6'), render(square + 'label: DC\ngiven: AB = 6')]) {
+      const box = boxRect(svg)
+      // Box rows carry no data-object; every label on the drawing does.
+      const drawn = texts(layer(svg, 'labels')).filter((t) => t.named)
+      expect(drawn.length).toBeGreaterThan(0)
+      for (const label of drawn) {
+        const size = estimateTextSize(label.text, LABEL_FONT_SIZE)
+        const overlap =
+          label.centreX - size.width / 2 < box.x + box.width &&
+          box.x < label.centreX + size.width / 2 &&
+          label.y - size.height / 2 < box.y + box.height &&
+          box.y < label.y + size.height / 2
+        expect(overlap).toBe(false)
+      }
+    }
+  })
+
+  it('grows the viewBox to hold the box as well as the drawing', () => {
+    for (const position of ['top-left', 'bottom-right', 'left', 'right']) {
+      const svg = render(`@givens: ${position}\n` + square + 'given: AB = 6\ngiven: angle ABC = 90')
+      expect(contains(viewBoxOf(svg), boxRect(svg))).toBe(true)
+    }
+  })
+
+  it('lists the givens in the order the spec states them', () => {
+    const svg = render(square + 'given: AB = 6\ngiven: BC = 6\ngiven: angle ABC = 90')
+    const rows = texts(layer(svg, 'labels')).filter((t) => t.text === 'AB' || t.text === 'BC' || t.text === '∠ABC')
+    expect(rows.map((r) => r.text)).toEqual(['AB', 'BC', '∠ABC'])
+    expect(rows[0].y).toBeLessThan(rows[1].y)
+    expect(rows[1].y).toBeLessThan(rows[2].y)
+  })
+
+  it('writes a relation with both names in notation', () => {
+    const svg = render(square + 'given: AB parallel CD')
+    const labels = layer(svg, 'labels')
+    expect(labels).toContain('∥')
+    // A bar over each of the two names.
+    expect(countTags(labels, 'line')).toBe(2)
+  })
+
+  it('checks a stated given exactly as an inline label does', () => {
+    const wrong = build(square + 'given: AB = 99')
+    expect(wrong.errors).toHaveLength(1)
+    expect(wrong.errors[0].message).toContain('99')
+    expect(wrong.errors[0].message).toContain('6')
+  })
+
+  it('is suppressed by @scale: false, like every other check', () => {
+    const result = build('@scale: false\n' + square + 'given: AB = 99')
+    expect(result.errors).toEqual([])
+    expect(layer(result.svg, 'labels')).toContain('= 99')
+  })
+
+  it('coexists with inline labelling, per label', () => {
+    const svg = render(square + 'label: BC\ngiven: AB = 6')
+    // The inline measure is out on the figure; the given is in the box.
+    const box = boxRect(svg)
+    const inline = labelNamed(svg, '6')
+    const insideBox = inline.x >= box.x && inline.x <= box.x + box.width
+    expect(insideBox).toBe(false)
+  })
+
+  it('draws no box at all when the spec states no givens', () => {
+    // The guard for every figure that existed before this phase.
+    expect(layer(render(square), 'labels')).not.toContain('<rect')
+  })
+
+  it('is deterministic', () => {
+    const spec = square + 'given: AB = 6\ngiven: AB parallel CD'
+    expect(render(spec)).toBe(render(spec))
   })
 })
