@@ -57,10 +57,122 @@ built.
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 phases beyond 4 (shading/boolean regions, solids
-vocabulary, 3D grammar, competition constructions).
+All of D1–D5. Track 2 phases beyond 4.
+
+**Phase 5 is specced and planned but not built:**
+`docs/superpowers/plans/2026-09-23-geometry-v2-phase-5-solids-grammar.md`.
+It is the next piece of geometry work and it is ready to dispatch.
+
+### What each track-2 phase actually delivered
+
+| Phase | Commits | What it means in practice |
+|---|---|---|
+| 1 | `b507767`..`c070b2d` | Constructions: a figure is *derived*, not hand-placed. `D = foot A to B-C` instead of computing the altitude's foot yourself |
+| 2 | `06e16a3`..`7582783` | The SVG figure renderer. `@mode: figure` is a separate renderer, not axes switched off |
+| 3 | `3781d6b`..`8f0eb54` | Measures (`label: AB` prints what the engine solved), notation (overbars, `∠`, `⊥`), pan/zoom, the givens panel, figure+table panels |
+| 4 | `ff8580f`..`a98bdc7` | Circle vocabulary (chord, arc, sector, tangent at/from, secant, radius, diameter) and the givens **table** with sections |
+
+Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
 ---
+
+---
+
+## How the engine is put together
+
+Read this before touching code; it is the map the module names do not give you.
+
+### The pipeline, end to end
+
+```
+spec text
+  │  parser/parseSpec.ts        → { statements, errors, config }
+  │    parseStatement.ts          one line → one Statement (the big one, ~1100 lines)
+  │    parseConfig.ts             "@key: value" directives
+  ▼
+scene/mode.ts  resolveMode / resolvePanels
+  │    decides WHICH renderer draws, and whether a table sits beside it
+  ├──────────────┬────────────────────┬─────────────────────
+  ▼              ▼                    ▼
+graph           figure               table
+scene/          figure/              scene/buildTable.ts
+buildScene.ts   render.ts            → TableView.tsx (DOM)
+→ Scene         → { svg, errors }
+→ render/       → FigureView.tsx
+  SceneRenderer   (SVG string via
+  (three.js)       dangerouslySetInnerHTML)
+```
+
+`GraphViewer.tsx` owns that fork. It disposes the three.js renderer entirely
+when switching to figure or table — missing that leaks a WebGL context per
+switch, which is why the figure branch follows the table branch line for line.
+
+### The three layers that matter most
+
+**1. Construction maths — `scene/geometry/`.** Renderer-agnostic. Imports
+nothing but `Vec2` and the angle-mode config, which is what let the figure
+renderer arrive later without touching any of it.
+
+```
+objects.ts       point / line / circle, and the name → object scope
+intersect.ts     line×line, line×circle, circle×circle (ordered, see D3 below)
+derive.ts        midpoint, foot, divide, reflect, rotate, translate, dilate
+lines.ts         parallel / perpendicular through a point, bisectors
+centres.ts       centroid, circumcenter, incenter, orthocenter, incircle, circumcircle
+solveTriangle.ts SSS / SAS / ASA / AAS / RHS
+circles.ts       chord, arc, sector, segment, tangent at/from, secant, radius, diameter
+buildConstructions.ts  statements → resolved geometry (the adapter)
+sceneObjects.ts        resolved geometry → three.js SceneObjects (graph mode)
+```
+
+**2. The SVG figure renderer — `figure/`.** Pure string emission; no DOM.
+
+```
+svg.ts         primitive emitters + THE number formatter (determinism lives here)
+document.ts    layers, viewBox, two-pass auto-fit, the givens table
+labels.ts      candidate-position collision layout — the hardest part
+notation.ts    overbars, arrows, arc marks as positioned SVG geometry
+measure.ts     computed lengths/angles/arcs + the asserting form
+render.ts      orchestrates all of the above → { svg, errors }
+project3d.ts   3D → 2D projection, isometric camera, hidden-edge rule
+viewport.ts    pan/zoom viewBox arithmetic (pure, so it is testable)
+```
+
+Layer order is fixed and semantic: `regions → auxiliary → primary → marks →
+points → labels`. SVG paints in document order, and at competition density
+overlap is normal, so this is correctness rather than style.
+
+**3. The plot renderer — `render/`.** Unchanged v1 three.js machinery plus
+track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
+`featureMarker.ts` for the per-kind marker shapes).
+
+### Contracts worth knowing before you edit
+
+- **`renderFigure(statements, config, palette) → { svg, errors }`.** Errors are
+  returned, not thrown — one bad statement must not blank the figure.
+- **Byte-identical output** for the same input at the same view state. Every
+  number goes through one formatter in `svg.ts`. Break that and caching,
+  diffing and the tests all go with it.
+- **Element identity.** Emitted elements carry `data-statement` and
+  `data-object`, so track 7's tutor tools can address them without a second
+  lookup mechanism.
+- **`GEOM_EPS`** is the single shared tolerance. Do not add another.
+- **Parse errors vs render errors** are separate channels and surface
+  differently. A measure assertion failing is a *render* error.
+
+### Running and verifying
+
+```
+npm run test --workspace=graph-engine          # 807 tests, node-only, no DOM
+npx tsc -b graph-engine/tsconfig.json --noEmit
+npm run lint --workspace=graph-engine
+npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
+```
+
+For anything renderer-shaped, a `vite-node` scratch script against
+`parseSpec` + `renderFigure` is the fastest way to see real output — far
+quicker than the browser, and it is how most of the diagnosis in this session
+was done.
 
 ## Lessons that cost real time
 

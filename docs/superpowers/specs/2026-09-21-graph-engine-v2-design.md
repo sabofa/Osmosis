@@ -880,6 +880,82 @@ with exact silhouette extraction is a CAD kernel and would consume the track.
 Arrangements outside the set fail with a legible message naming the
 requirement.
 
+#### How solids are actually represented (2026-09-23)
+
+The projection pipeline built in phase 2 models a solid as
+`{ vertices, faces }` — a **polyhedron** — and classifies an edge as hidden
+when every face meeting it turns away from the camera. That is exactly right
+for a convex polyhedron and is the rule a textbook drawing follows. It is also
+the whole of what exists, and it cannot express most of the vocabulary above.
+
+**A cylinder has no edges in that sense.** Its outline is two lines and two
+elliptical arcs; a sphere's is a circle; a cone's is two lines and an ellipse.
+None of that is vertices-and-faces, and none of it fits the current
+`ProjectedEdge`, which carries a straight segment only.
+
+**Decision: two representations behind one interface.** Polyhedra keep
+vertices-and-faces. Curved primitives carry their parameters and know how to
+emit their own **analytic silhouette** under the camera. Both satisfy one
+`outline(solid, camera)` contract returning drawn edges, and **that edge type
+widens to carry arcs as well as segments**.
+
+The alternative — facet curved solids into fine polyhedra so one code path
+serves everything — was rejected. Faceting makes silhouettes visibly polygonal
+the moment a reader zooms, which the figure view now lets them do; it generates
+dozens of spurious facet edges that then have to be suppressed; and it discards
+the crispness that chose SVG in the first place. A cylinder drawn as two lines
+and two arcs is both correct and smaller than its faceted approximation.
+
+**Hidden-line removal is only solved for convex solids.** The
+every-adjacent-face-turns-away rule is wrong for a non-convex polyhedron, where
+a front-facing face can still be occluded by another part of the same solid,
+and it does not consider other solids at all. This is why composites are
+pre-constrained to four arrangements with per-arrangement rules. A non-convex
+single solid outside those arrangements is **out of scope**, and must fail
+rather than draw something plausible and wrong.
+
+**The camera is fixed, but not to one direction.** Free orbit stays rejected —
+these are drawings. But a single fixed viewpoint is degenerate for solids whose
+features align with the view direction. The engine therefore offers a small set
+of **named viewpoints** (`@view: isometric | front | top | front-right`, or
+similar), which preserves determinism and adds no camera control, while letting
+an author escape a bad projection.
+
+**Every primitive states its placement**, the same way a solved triangle does.
+Constraints fix a solid's shape, not where it sits; without a stated convention
+"deterministic" fails exactly as it would have for triangles.
+
+#### Cross-sections and nets produce 2D geometry
+
+This is the seam most worth getting right. A cross-section is a plane figure.
+So is a net. Both are **3D input, 2D figure output**.
+
+So the 3D layer is not a second renderer. It is a **producer feeding the
+existing SVG figure renderer**, in two modes:
+
+- **projected** — the solid drawn in axonometric with hidden edges dashed
+- **true-shape** — the cross-section or unfolded net handed back as ordinary
+  2D geometry, drawn by the same code that draws every other figure, and
+  therefore able to carry measures, notation and labels for free
+
+Getting this seam right makes cross-sections and nets nearly free once the
+solids exist. Getting it wrong means building a second figure pipeline.
+
+#### Build order within the solids work
+
+1. **Polyhedra** — grammar, placement conventions, dimension labels with
+   leader lines. The existing convex visibility rule already serves this, so
+   prisms, pyramids and tetrahedra are reachable first.
+2. **Curved primitives** — widen the edge type to carry arcs, then analytic
+   silhouettes for cylinder, cone and sphere.
+3. **Cross-sections** — plane ∩ solid, shaded in place and lifted out as a
+   true-shape figure.
+4. **Nets** — per-primitive unfolding templates with fold lines dashed.
+5. **Composites** — the four constrained arrangements.
+
+Each step is shippable alone, and step 1 by itself covers a large share of
+what a test figure asks for.
+
 ### Build order within the track
 
 Lines as objects -> derived points and solved triangles **(phase 1, done)** ->
