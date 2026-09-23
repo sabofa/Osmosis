@@ -122,12 +122,46 @@ export function svgCircle(center: Vec2, radius: number, style: SvgAttrs): string
 // where a polyline's fidelity (and its byte count) is a sample-rate choice
 // that would then have to be pinned for determinism.
 export function svgArc(center: Vec2, radius: number, startAngle: number, endAngle: number, style: SvgAttrs): string {
+  const { from, command } = arcPath(center, radius, startAngle, endAngle)
+  return `<path${attrs({ d: `M ${fmt(from.x)} ${fmt(from.y)} ${command}`, ...style })}/>`
+}
+
+// The shared piece of every arc this file draws: where the sweep starts and
+// ends, and the one `A` command that gets from one to the other.
+//
+// A real elliptical-arc command is four numbers and two flags regardless of
+// how far it sweeps, where a polyline's fidelity (and its byte count) is a
+// sample-rate choice that would then have to be pinned for determinism. It is
+// also the only form that stays crisp when the figure is zoomed, which is
+// most of why the figure renderer is SVG at all.
+function arcPath(
+  center: Vec2,
+  radius: number,
+  startAngle: number,
+  endAngle: number
+): { from: Vec2; to: Vec2; command: string } {
   const from = { x: center.x + radius * Math.cos(startAngle), y: center.y + radius * Math.sin(startAngle) }
   const to = { x: center.x + radius * Math.cos(endAngle), y: center.y + radius * Math.sin(endAngle) }
   const delta = endAngle - startAngle
   const largeArc = Math.abs(delta) > Math.PI ? 1 : 0
   const sweep = delta >= 0 ? 1 : 0
-  const d = `M ${fmt(from.x)} ${fmt(from.y)} A ${fmt(radius)} ${fmt(radius)} 0 ${largeArc} ${sweep} ${fmt(to.x)} ${fmt(to.y)}`
+  return { from, to, command: `A ${fmt(radius)} ${fmt(radius)} 0 ${largeArc} ${sweep} ${fmt(to.x)} ${fmt(to.y)}` }
+}
+
+// The filled wedge between two radii — closed through the CENTRE, which is
+// what makes it a sector rather than a segment.
+export function svgSector(center: Vec2, radius: number, startAngle: number, endAngle: number, style: SvgAttrs): string {
+  const { from, command } = arcPath(center, radius, startAngle, endAngle)
+  const d = `M ${fmt(center.x)} ${fmt(center.y)} L ${fmt(from.x)} ${fmt(from.y)} ${command} Z`
+  return `<path${attrs({ d, ...style })}/>`
+}
+
+// The region between an arc and its own CHORD. Same arc, different closing
+// rule, and the difference is the whole of why the two are separate
+// vocabulary: an area problem asks about one or the other, never both.
+export function svgCircularSegment(center: Vec2, radius: number, startAngle: number, endAngle: number, style: SvgAttrs): string {
+  const { from, command } = arcPath(center, radius, startAngle, endAngle)
+  const d = `M ${fmt(from.x)} ${fmt(from.y)} ${command} Z`
   return `<path${attrs({ d, ...style })}/>`
 }
 

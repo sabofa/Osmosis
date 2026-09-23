@@ -39,6 +39,13 @@ export type GeometryRef =
 
 export type TriangleCentreKind = 'centroid' | 'circumcenter' | 'incenter' | 'orthocenter' | 'incircle' | 'circumcircle'
 
+// Which of the two arcs between two points of a circle is meant (G1).
+// Mirrors scene/geometry/circles.ts's ArcDirection; duplicated rather than
+// imported so the parser stays standalone, exactly as GeometryExtent is.
+// There is deliberately no default: "the arc from P to Q" is two arcs, and a
+// grammar that picks one silently is the failure this type exists to prevent.
+export type GeometryArcDirection = 'minor' | 'major' | 'ccw' | 'cw'
+
 // The right-hand side of a construction statement. Names throughout; no
 // numbers except where the DSL genuinely carries one (a rotation angle, a
 // dilation factor, a divide ratio), and those stay as Exprs so a named
@@ -63,6 +70,19 @@ export type Construction =
   // "intersect circle O, line B-C", and circle x circle intersection is
   // unreachable from the DSL entirely.
   | { kind: 'circleAt'; center: string; radius: Expr }
+  // The circle vocabulary that produces a LINE — everything an author can go
+  // on to intersect, measure or hang a label from. The shapes that are
+  // regions rather than lines (arc, sector, circular segment) are drawn
+  // statements instead, below: nothing intersects an arc, and keeping them
+  // out of the namespace keeps every dispatch over a geometry object at the
+  // three kinds phase 1 defined.
+  | { kind: 'chord'; circle: string; from: string; to: string }
+  | { kind: 'tangentAt'; circle: string; point: string }
+  // Two solutions, ordered by the rule `intersect` uses (D3).
+  | { kind: 'tangentFrom'; circle: string; point: string }
+  | { kind: 'secant'; circle: string; from: string; to: string }
+  | { kind: 'radiusTo'; circle: string; point: string }
+  | { kind: 'diameter'; circle: string; from: string; to: string }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)
@@ -74,12 +94,15 @@ export type MeasureSubject =
   | { kind: 'length'; from: string; to: string }
   | { kind: 'angle'; from: string; vertex: string; to: string }
   | { kind: 'triangle'; names: [string, string, string] }
+  // An arc names the circle it lies on and the way round it goes, because
+  // without both it names neither one arc nor one measure (G1).
+  | { kind: 'arc'; circle: string; from: string; to: string; direction: GeometryArcDirection }
 
 // The overmark a notation form carries. Mirrors figure/notation.ts's
-// Overmark minus 'arc' (arc measures are circle vocabulary, which this phase
-// does not build); duplicated rather than imported so the parser stays
-// standalone, exactly as GeometryExtent is above.
-export type MeasureOvermark = 'none' | 'segment' | 'ray' | 'line'
+// Overmark; duplicated rather than imported so the parser stays standalone,
+// exactly as GeometryExtent is above. 'arc' arrived with the circle
+// vocabulary, which is what writes a name under an arc mark.
+export type MeasureOvermark = 'none' | 'segment' | 'ray' | 'line' | 'arc'
 
 // What the label prints.
 //
@@ -165,6 +188,10 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     arrow, double arrow, the triangle sign)
 //                                                     rather than a measure.
 //   given: AB [= 8]  |  given: angle ABC [= 30]     -> a line of the boxed givens panel
+//   find: BC                                        -> the same row, in the table's "Find"
+//                                                     section rather than its "Given" one: a
+//                                                     problem states givens and then asks for
+//                                                     something.
 //   given: AB parallel CD                             instead of a label on the drawing. The
 //                                                     name is written in notation (an overbar on
 //                                                     a segment, the angle and triangle signs),
@@ -208,6 +235,26 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   <P> = translate C by (3, -4)                  -> shifted by a vector
 //   <P> = dilate C from O by 1.5                  -> scaled about a centre
 //   <O> = circle P, 5                             -> a circle by named centre and radius
+//   <c> = chord P-Q on O                          -> the chord between two points of a circle
+//   <t> = tangent at P on O                       -> the tangent line at a point OF the circle
+//   <t>, <u> = tangent from P to O                -> the two tangents from an EXTERNAL point,
+//                                                    drawn to their touch points and ordered
+//                                                    by the same rule intersect uses (D3)
+//   <k> = secant P-Q on O                         -> the line through P and Q, which must cut
+//                                                    the circle twice
+//   <r> = radius O to P                           -> the radius drawn to a point of the circle
+//   <d> = diameter P-Q on O                       -> a chord through the centre; refused if the
+//                                                    two points are not opposite each other
+//   arc P-Q on O minor|major|ccw|cw               -> a drawn arc. The direction is REQUIRED:
+//   sector P-Q on O <direction>                      "the arc from P to Q" is two arcs, and
+//   segment P-Q on O <direction>                     drawing one silently is worse than
+//                                                    refusing. sector/segment are fills.
+//   central angle P-Q on O <direction>            -> the mark at the centre, printing the arc
+//                                                    measure it shares with "label: arc PQ"
+//   inscribed angle P-Q-R on O                    -> the mark at the circumference, vertex in
+//                                                    the middle
+//   Every one of these also works WITHOUT a name to bind, drawn on its own
+//   line ("chord P-Q on O"), the way "incircle of ABC" already does.
 //   <P> = centroid ABC                            -> also circumcenter/incenter/orthocenter
 //   <O> = incircle of ABC                         -> also circumcircle; "of" is optional throughout
 //   incircle of ABC                               -> the same, drawn without binding a name
@@ -283,6 +330,20 @@ export type StatementShape =
   // rather than a label on the drawing. Inline and boxed labelling coexist,
   // and an author chooses per label by choosing the statement.
   | { kind: 'given'; entry: GivenEntry }
+  // "arc P-Q on O minor", "sector P-Q on O ccw", "segment P-Q on O major" —
+  // a drawn piece of a circle. A sector and a circular segment are fills and
+  // go in the regions layer; a bare arc is a stroked path. The direction is
+  // required, never defaulted (G1).
+  | { kind: 'circleShape'; shape: 'arc' | 'sector' | 'segment'; circle: string; from: string; to: string; direction: GeometryArcDirection }
+  // "central angle P-Q on O minor" — the mark at the centre, which prints the
+  // arc's own measure, so the two cannot disagree (G2). It carries a
+  // direction for the same reason the arc does: the central angle of a major
+  // arc is reflex, and a mark that could not express that would label a
+  // 216-degree arc as 144.
+  | { kind: 'centralAngle'; circle: string; from: string; to: string; direction: GeometryArcDirection }
+  // "inscribed angle P-Q-R on O" — the angle at the circumference, vertex in
+  // the middle. Never reflex, so it needs no direction.
+  | { kind: 'inscribedAngle'; circle: string; from: string; vertex: string; to: string }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
   // "segment: A-B [dashed]" — a segment between two *named* points, the

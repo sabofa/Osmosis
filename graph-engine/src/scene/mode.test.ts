@@ -150,3 +150,18 @@ describe('a spec with nothing to draw', () => {
     expect(panels('')).toEqual({ drawable: 'graph', table: false })
   })
 })
+
+describe('the circle vocabulary is geometry', () => {
+  const circle = 'C = (0, 0)\nO = circle C, 5\nP = (5, 0)\nQ = (0, 5)\n'
+
+  it('infers a figure for a spec whose drawable content is an arc', () => {
+    expect(mode(circle + 'arc P-Q on O ccw')).toBe('figure')
+    expect(mode(circle + 'sector P-Q on O ccw')).toBe('figure')
+    expect(mode(circle + 'central angle P-Q on O ccw')).toBe('figure')
+    expect(mode(circle + 'inscribed angle P-Q-P on O')).toBe('figure')
+  })
+
+  it('still becomes a graph the moment something is plotted, as every figure does', () => {
+    expect(mode(circle + 'arc P-Q on O ccw\ny = x^2')).toBe('graph')
+  })
+})

@@ -627,3 +627,23 @@ describe('geometry constructions', () => {
     expect(points(scene).some((p) => p.label === 'A')).toBe(true)
   })
 })
+
+describe('the circle vocabulary in graph mode', () => {
+  // The plot renderer draws a circle as a 96-point sampled curve, which is
+  // exactly what the figure renderer exists to avoid for an arc. Refusing
+  // out loud beats drawing nothing: a missing arc is a figure missing the
+  // piece the problem is about, with nothing on screen to say so.
+  for (const statement of ['arc P-Q on O ccw', 'sector P-Q on O ccw', 'central angle P-Q on O ccw', 'inscribed angle P-Q-R on O']) {
+    it(`says where "${statement}" draws instead of dropping it`, () => {
+      const { scene } = build('@mode: graph\nC = (0, 0)\nO = circle C, 5\nP = (5, 0)\nQ = (0, 5)\nR = (-3, 4)\n' + statement)
+      expect(scene.errors).toHaveLength(1)
+      expect(scene.errors[0].message).toContain('@mode: figure')
+    })
+  }
+
+  it('still draws the constructions that produce a line, which both renderers can hold', () => {
+    const { scene } = build('@mode: graph\nC = (0, 0)\nO = circle C, 5\nP = (5, 0)\nQ = (0, 5)\nchord P-Q on O')
+    expect(scene.errors).toEqual([])
+    expect(scene.objects.some((o) => o.kind === 'segment')).toBe(true)
+  })
+})

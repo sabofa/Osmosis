@@ -3,6 +3,7 @@ import { parseExprString } from './parseExpr'
 import type {
   Condition,
   Construction,
+  GeometryArcDirection,
   Expr,
   GeometryRef,
   MeasureContent,
@@ -236,6 +237,137 @@ function parseTriangleCentre(text: string): Construction | null {
   return { kind: 'triangleCentre', centre, vertices: parseTriangleNames(match[2], `${centre} triangle`) }
 }
 
+// --------------------------------------------------------------------------
+// The circle vocabulary (phase 4)
+//
+// Every form names the circle it is on, because a figure with two circles
+// makes "the chord P-Q" meaningless, and every ARC form names its direction,
+// because "the arc from P to Q" is two arcs (G1).
+// --------------------------------------------------------------------------
+
+const ARC_DIRECTIONS: GeometryArcDirection[] = ['minor', 'major', 'ccw', 'cw']
+
+// Missing and unrecognised are the same error on purpose: both mean the spec
+// has not said which of the two arcs it means, and the fix for both is to
+// write one of the four words.
+function requireArcDirection(word: string | undefined, subject: string): GeometryArcDirection {
+  const found = ARC_DIRECTIONS.find((d) => d === word?.trim().toLowerCase())
+  if (!found) {
+    throw new Error(
+      `"${subject}" names two different arcs — end the line with "minor", "major", "ccw" or "cw" to say which one you mean` +
+        (word ? `, not "${word.trim()}"` : '')
+    )
+  }
+  return found
+}
+
+// "P-Q" or "PQ", then checked against the geometry-name rule: a circle
+// construction works in the same namespace every other construction does.
+function parseCirclePair(text: string, role: string): [string, string] {
+  const [from, to] = parsePointRun(text, 2, role)
+  return [geometryName(from, role), geometryName(to, role)]
+}
+
+// The forms that produce a LINE, and so can be bound to a name and used
+// again. Shared by "<c> = chord P-Q on O" and the bare "chord P-Q on O".
+function parseCircleConstruction(text: string): Construction | null {
+  const chord = /^chord\s+(.+?)\s+on\s+([a-zA-Z]+)$/.exec(text)
+  if (chord) {
+    const [from, to] = parseCirclePair(chord[1], 'chord')
+    return { kind: 'chord', circle: geometryName(chord[2], 'circle a chord lies on'), from, to }
+  }
+
+  const tangentAt = /^tangent\s+at\s+([a-zA-Z]+)\s+on\s+([a-zA-Z]+)$/.exec(text)
+  if (tangentAt) {
+    return {
+      kind: 'tangentAt',
+      circle: geometryName(tangentAt[2], 'circle a tangent touches'),
+      point: geometryName(tangentAt[1], 'point a tangent touches at'),
+    }
+  }
+
+  const tangentFrom = /^tangent\s+from\s+([a-zA-Z]+)\s+to\s+([a-zA-Z]+)$/.exec(text)
+  if (tangentFrom) {
+    return {
+      kind: 'tangentFrom',
+      circle: geometryName(tangentFrom[2], 'circle a tangent touches'),
+      point: geometryName(tangentFrom[1], 'point the tangents are drawn from'),
+    }
+  }
+
+  if (/^tangent\s/.test(text)) {
+    throw new Error(
+      `Expected "tangent at P on O" (P a point of the circle) or "tangent from P to O" (P outside it), got "${text}"`
+    )
+  }
+
+  // "through" is accepted and ignored: the spec writes "secant through P",
+  // but one point names infinitely many secants, so this takes the two that
+  // determine the line.
+  const secant = /^secant\s+(?:through\s+)?(.+?)\s+on\s+([a-zA-Z]+)$/.exec(text)
+  if (secant) {
+    const [from, to] = parseCirclePair(secant[1], 'secant')
+    return { kind: 'secant', circle: geometryName(secant[2], 'circle a secant cuts'), from, to }
+  }
+
+  const radius = /^radius\s+([a-zA-Z]+)\s+to\s+([a-zA-Z]+)$/.exec(text)
+  if (radius) {
+    return {
+      kind: 'radiusTo',
+      circle: geometryName(radius[1], 'circle a radius belongs to'),
+      point: geometryName(radius[2], 'point a radius is drawn to'),
+    }
+  }
+
+  const diameter = /^diameter\s+(.+?)\s+on\s+([a-zA-Z]+)$/.exec(text)
+  if (diameter) {
+    const [from, to] = parseCirclePair(diameter[1], 'diameter')
+    return { kind: 'diameter', circle: geometryName(diameter[2], 'circle a diameter belongs to'), from, to }
+  }
+
+  return null
+}
+
+// The forms that produce a drawn SHAPE or MARK rather than a value: an arc,
+// the two fills built on one, and the two angle marks. They bind no name —
+// nothing intersects an arc — so they are statements of their own.
+function parseCircleShape(line: string): StatementShape | null {
+  const shape = /^(arc|sector|segment)\s+(.+?)\s+on\s+([a-zA-Z]+)(?:\s+(\S+))?$/.exec(line)
+  if (shape) {
+    const [from, to] = parseCirclePair(shape[2], shape[1])
+    return {
+      kind: 'circleShape',
+      shape: shape[1] as 'arc' | 'sector' | 'segment',
+      circle: geometryName(shape[3], `circle the ${shape[1]} lies on`),
+      from,
+      to,
+      direction: requireArcDirection(shape[4], `${shape[1]} ${shape[2].trim()}`),
+    }
+  }
+
+  const central = /^central\s+angle\s+(.+?)\s+on\s+([a-zA-Z]+)(?:\s+(\S+))?$/.exec(line)
+  if (central) {
+    const [from, to] = parseCirclePair(central[1], 'central angle')
+    return {
+      kind: 'centralAngle',
+      circle: geometryName(central[2], 'circle the angle is central to'),
+      from,
+      to,
+      direction: requireArcDirection(central[3], `central angle ${central[1].trim()}`),
+    }
+  }
+
+  const inscribed = /^inscribed\s+angle\s+(.+?)\s+on\s+([a-zA-Z]+)$/.exec(line)
+  if (inscribed) {
+    const [from, vertex, to] = parsePointRun(inscribed[1], 3, 'inscribed angle').map((n) =>
+      geometryName(n, 'inscribed angle')
+    )
+    return { kind: 'inscribedAngle', circle: geometryName(inscribed[2], 'circle the angle is inscribed in'), from, vertex, to }
+  }
+
+  return null
+}
+
 function parseConstructionBody(rhs: string): Construction | null {
   const text = rhs.trim()
 
@@ -326,6 +458,9 @@ function parseConstructionBody(rhs: string): Construction | null {
       factor: parseExprString(dilate[3]),
     }
   }
+
+  const onACircle = parseCircleConstruction(text)
+  if (onACircle) return onACircle
 
   return parseTriangleCentre(text)
 }
@@ -565,6 +700,19 @@ function parseStatementCore(rawLine: string): StatementShape {
     if (!centre) throw new Error(`Expected "incircle of ABC" or "circumcircle of ABC", got "${line}"`)
     return { kind: 'construction', names: [], body: centre }
   }
+
+  // The circle vocabulary drawn without a name to bind — the same forms the
+  // "<name> = ..." grammar takes, the way "incircle of ABC" already works.
+  // Checked before the generic "=" handling below (and before "tangent:",
+  // which is a different statement entirely: a tangent to a *function*).
+  if (/^(chord|tangent|secant|radius|diameter)\s/.test(line)) {
+    const body = parseCircleConstruction(line)
+    if (body) return { kind: 'construction', names: [], body }
+  }
+
+  // Arcs, the two fills built on one, and the two angle marks.
+  const circleShape = parseCircleShape(line)
+  if (circleShape) return circleShape
 
   // Tangent line: "tangent: x^2 - 1 at x = 2"
   if (line.startsWith('tangent:')) {
@@ -889,6 +1037,31 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
     const [, word, names] = notation
     const [from, to] = parsePointRun(names, 2, `${word} ${role}`)
     return { subject: { kind: 'length', from, to }, mark: word as Exclude<MeasureOvermark, 'none'>, prefix: '', explicit: true }
+  }
+
+  // "arc PQ on O minor" — the circle and the direction are both required,
+  // because an arc without them names neither one arc nor one measure.
+  const arc = /^arc\s+(.+?)\s+on\s+([a-zA-Z]+)(?:\s+(\S+))?$/.exec(subjectText)
+  if (arc) {
+    const [from, to] = parseCirclePair(arc[1], `arc ${role}`)
+    return {
+      subject: {
+        kind: 'arc',
+        circle: geometryName(arc[2], `circle the arc ${role} lies on`),
+        from,
+        to,
+        direction: requireArcDirection(arc[3], `arc ${arc[1].trim()}`),
+      },
+      // Written under an arc mark when it is written out rather than
+      // measured, which is what the givens table does with it.
+      mark: 'arc',
+      prefix: '',
+      explicit: false,
+    }
+  }
+
+  if (/^arc\s/.test(subjectText)) {
+    throw new Error(`Expected "arc PQ on <circle> <direction>" for the ${role}, got "${subjectText}"`)
   }
 
   const triangle = /^triangle\s+(.+)$/.exec(subjectText)

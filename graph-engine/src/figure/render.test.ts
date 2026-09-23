@@ -809,3 +809,247 @@ describe('the givens box in a figure', () => {
     expect(render(spec)).toBe(render(spec))
   })
 })
+
+// ---------------------------------------------------------------------------
+// The circle vocabulary
+// ---------------------------------------------------------------------------
+
+describe('circles — arcs, fills, tangents and secants', () => {
+  // One circle of radius 5 about the origin, with four points that lie on it
+  // exactly, so nothing below argues with a tolerance:
+  //   P (5, 0) at 0 deg, Q (0, 5) at 90, R (-3, 4) at 126.87, S (-5, 0) at 180
+  const base =
+    '@mode: figure\n@angle: degrees\nC = (0, 0)\nO = circle C, 5\n' +
+    'P = (5, 0)\nQ = (0, 5)\nR = (-3, 4)\nS = (-5, 0)\nX = (13, 0)\n'
+
+  function build(spec: string) {
+    const parsed = parseSpec(spec)
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  function paths(markup: string): string[] {
+    return [...markup.matchAll(/<path d="([^"]*)"/g)].map((m) => m[1])
+  }
+
+  // "A rx ry rotation large-arc sweep x y" — the two flags are what say which
+  // of the four arcs joining two points on a circle was drawn.
+  function arcFlags(d: string): { largeArc: string; sweep: string } {
+    const match = /A [^ ]+ [^ ]+ 0 ([01]) ([01])/.exec(d)
+    if (!match) throw new Error(`not an arc path: ${d}`)
+    return { largeArc: match[1], sweep: match[2] }
+  }
+
+  it('draws an arc as an SVG path arc, not as a sampled polyline', () => {
+    const svg = render(base + 'arc P-Q on O ccw')
+    const primary = layer(svg, 'primary')
+    expect(countTags(primary, 'polyline')).toBe(0)
+    const drawn = paths(primary)
+    expect(drawn).toHaveLength(1)
+    expect(drawn[0]).toMatch(/^M [^ ]+ [^ ]+ A /)
+  })
+
+  it('draws the arc the direction names, and a different one for the other direction (G1)', () => {
+    const ccw = paths(layer(render(base + 'arc P-Q on O ccw'), 'primary'))[0]
+    const cw = paths(layer(render(base + 'arc P-Q on O cw'), 'primary'))[0]
+    expect(ccw).not.toBe(cw)
+    // The quarter turn is the small one; the other way round is the big one.
+    expect(arcFlags(ccw).largeArc).toBe('0')
+    expect(arcFlags(cw).largeArc).toBe('1')
+    expect(arcFlags(ccw).sweep).not.toBe(arcFlags(cw).sweep)
+  })
+
+  it('draws a major arc as the long way round', () => {
+    expect(arcFlags(paths(layer(render(base + 'arc P-Q on O major'), 'primary'))[0]).largeArc).toBe('1')
+    expect(arcFlags(paths(layer(render(base + 'arc P-Q on O minor'), 'primary'))[0]).largeArc).toBe('0')
+  })
+
+  it('refuses an arc between opposite ends of a diameter rather than picking one (G1)', () => {
+    const result = build(base + 'arc P-S on O minor')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toMatch(/semicircle/)
+    expect(layer(result.svg, 'primary')).not.toContain('<path')
+  })
+
+  it('refuses an endpoint that is not on the circle, naming the gap', () => {
+    const result = build(base + 'T = (6, 0)\narc P-T on O ccw')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toContain('"T"')
+    expect(result.errors[0].message).toContain('1')
+  })
+
+  it('says which circle it cannot find when the spec never named one', () => {
+    const result = build('@mode: figure\nP = (5, 0)\nQ = (0, 5)\narc P-Q on O ccw')
+    expect(result.errors[0].message).toMatch(/Unknown circle "O"/)
+  })
+
+  it('puts a sector and a circular segment in the regions layer, behind the lines (E1)', () => {
+    for (const shape of ['sector', 'segment']) {
+      const svg = render(base + `${shape} P-Q on O ccw`)
+      expect(paths(layer(svg, 'regions'))).toHaveLength(1)
+      expect(paths(layer(svg, 'primary'))).toHaveLength(0)
+      expect(layer(svg, 'regions')).toContain('fill-opacity')
+    }
+  })
+
+  it('closes a sector through the centre and a segment along its chord', () => {
+    const svg = render(base + 'sector P-Q on O ccw')
+    const sector = paths(layer(svg, 'regions'))[0]
+    const segment = paths(layer(render(base + 'segment P-Q on O ccw'), 'regions'))[0]
+    const circle = /<circle cx="([^"]*)" cy="([^"]*)"/.exec(layer(svg, 'primary'))
+    if (!circle) throw new Error('no circle drawn')
+    // The wedge starts at the centre and runs out to the arc; the segment
+    // starts on the circle and closes straight back across its own chord.
+    expect(sector.startsWith(`M ${circle[1]} ${circle[2]} L `)).toBe(true)
+    expect(sector.endsWith(' Z')).toBe(true)
+    expect(segment).not.toContain(' L ')
+    expect(segment.endsWith(' Z')).toBe(true)
+  })
+
+  it('draws a chord, a radius and a diameter as segments', () => {
+    const svg = render(base + 'chord P-Q on O\nradius O to R\ndiameter P-S on O')
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(3)
+  })
+
+  it('draws the tangent at a point of the circle, touching it once', () => {
+    const svg = render(base + 't = tangent at P on O')
+    // An infinite line is clipped to the view, so it is one line in the
+    // auxiliary layer — every constructed line is scaffolding.
+    expect(countTags(layer(svg, 'auxiliary'), 'line')).toBe(1)
+  })
+
+  it('draws both tangents from an external point, and binds them in order', () => {
+    // Drawn to their touch points, so each one is a segment whose length is
+    // the tangent length — the quantity the problem is usually about — and
+    // therefore part of the figure rather than scaffolding.
+    const svg = render(base + 't, u = tangent from X to O')
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(2)
+    expect(render(base + 't, u = tangent from X to O')).toBe(svg)
+  })
+
+  it('refuses tangents from a point inside the circle', () => {
+    const result = build(base + 'T = (1, 1)\nt, u = tangent from T to O')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toMatch(/inside/)
+  })
+
+  it('draws a secant, and refuses a line that does not cut the circle twice', () => {
+    expect(countTags(layer(render(base + 'k = secant P-Q on O'), 'auxiliary'), 'line')).toBe(1)
+    const missed = build(base + 'U = (0, 9)\nV = (9, 9)\nk = secant U-V on O')
+    expect(missed.errors).toHaveLength(1)
+    expect(missed.errors[0].message).toMatch(/secant cuts the circle/)
+  })
+})
+
+describe('G2 — an arc and its central angle print one number', () => {
+  const base =
+    '@mode: figure\n@angle: degrees\nC = (0, 0)\nO = circle C, 5\nP = (5, 0)\nQ = (0, 5)\n'
+
+  function textFor(svg: string, object: string): string {
+    const match = new RegExp(`<text [^>]*data-object="${object}"[^>]*>([^<]*)</text>`).exec(layer(svg, 'labels'))
+    if (!match) throw new Error(`no label for "${object}"`)
+    return match[1]
+  }
+
+  // Both numbers come out of the rendered figure, and neither is recomputed
+  // here: a test that works the expected value out the same way the renderer
+  // does proves only that the arithmetic is repeatable.
+  for (const [mode, direction, expected] of [
+    ['degrees', 'minor', '90°'],
+    ['degrees', 'major', '270°'],
+    ['radians', 'minor', '1.571'],
+    ['radians', 'major', '4.712'],
+  ] as const) {
+    it(`agrees for a ${direction} arc in ${mode}`, () => {
+      const svg = render(base + `@angle: ${mode}\nlabel: arc PQ on O ${direction}\ncentral angle P-Q on O ${direction}`)
+      const arc = textFor(svg, 'arc PQ')
+      const central = textFor(svg, 'O')
+      expect(arc).toBe(central)
+      expect(arc).toBe(expected)
+    })
+  }
+
+  it('draws the central angle mark as an arc, reflex when the arc is major', () => {
+    const marks = (spec: string) => [...layer(render(spec), 'marks').matchAll(/A [^ ]+ [^ ]+ 0 ([01]) [01]/g)].map((m) => m[1])
+    expect(marks(base + 'central angle P-Q on O minor')).toEqual(['0'])
+    expect(marks(base + 'central angle P-Q on O major')).toEqual(['1'])
+  })
+
+  it('marks an inscribed angle at its vertex, printing what it measures', () => {
+    // P (5,0) and S (-5,0) are ends of a diameter, so the angle at any other
+    // point of the circle is a right angle — Thales, and a figure that got
+    // this wrong would be visibly wrong.
+    const svg = render(base + 'S = (-5, 0)\nR = (-3, 4)\ninscribed angle P-R-S on O')
+    expect(textFor(svg, 'R')).toBe('90°')
+    expect(countTags(layer(svg, 'marks'), 'path')).toBe(1)
+  })
+
+  it('refuses an inscribed angle whose vertex is not on the circle', () => {
+    const parsed = parseSpec(base + 'T = (1, 1)\nS = (-5, 0)\ninscribed angle P-T-S on O')
+    const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toMatch(/inscribed angle's vertex/)
+  })
+
+  it('checks a stated arc measure against the figure, like every other label', () => {
+    const parsed = parseSpec(base + 'label: arc PQ on O minor = 120')
+    const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toContain('120')
+    expect(result.errors[0].message).toContain('90')
+  })
+})
+
+describe('a worked circle figure', () => {
+  // The picture the phase exists for: a circle with a chord, the minor arc on
+  // that chord shaded as a circular segment, the tangent at one end of the
+  // chord, and a secant cutting the circle through the other.
+  const spec =
+    '@mode: figure\n@angle: degrees\n' +
+    'C = (0, 0)\nO = circle C, 5\n' +
+    'P = (5, 0)\nQ = (0, 5)\nR = (-3, 4)\nX = (13, 0)\n' +
+    'chord P-Q on O\n' +
+    'segment P-Q on O minor\n' +
+    't = tangent at P on O\n' +
+    'k = secant Q-R on O\n' +
+    'label: arc PQ on O minor\n'
+
+  it('draws every piece, in the right layer', () => {
+    const svg = render(spec)
+    // The circle itself.
+    expect(countTags(layer(svg, 'primary'), 'circle')).toBe(1)
+    // The chord.
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(1)
+    // The shaded segment, behind everything.
+    expect(countTags(layer(svg, 'regions'), 'path')).toBe(1)
+    // The tangent and the secant, both constructed lines, both clipped.
+    expect(countTags(layer(svg, 'auxiliary'), 'line')).toBe(2)
+    // Every named point: the centre, the three on the circle, and the
+    // external point the secant is aimed from.
+    expect(countTags(layer(svg, 'points'), 'circle')).toBe(5)
+    expect(layer(svg, 'labels')).toContain('>90°</text>')
+  })
+
+  it('reports no errors at all', () => {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    expect(renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors).toEqual([])
+  })
+
+  it('keeps the whole figure inside the viewBox', () => {
+    const svg = render(spec)
+    const view = /viewBox="([^"]*)"/.exec(svg)
+    if (!view) throw new Error('no viewBox')
+    const [x, y, width, height] = view[1].split(' ').map(Number)
+    const circle = /<circle cx="([^"]*)" cy="([^"]*)" r="([^"]*)"/.exec(layer(svg, 'primary'))
+    if (!circle) throw new Error('no circle')
+    const [cx, cy, r] = circle.slice(1).map(Number)
+    expect(cx - r).toBeGreaterThanOrEqual(x)
+    expect(cy - r).toBeGreaterThanOrEqual(y)
+    expect(cx + r).toBeLessThanOrEqual(x + width)
+    expect(cy + r).toBeLessThanOrEqual(y + height)
+  })
+
+  it('renders byte-identically twice', () => {
+    expect(render(spec)).toBe(render(spec))
+  })
+})

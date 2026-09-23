@@ -54,6 +54,11 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   'angle',
   'tick',
   'rightAngle',
+  // The circle vocabulary: an arc, a sector, a circular segment and the two
+  // angle marks are geometry as much as a polygon is.
+  'circleShape',
+  'centralAngle',
+  'inscribedAngle',
   // A measure label draws nothing on its own, but a spec that is nothing but
   // labels is still a figure rather than a graph.
   'measureLabel',

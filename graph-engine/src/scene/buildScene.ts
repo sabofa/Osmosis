@@ -600,6 +600,14 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
           dashed: statement.dashed,
           color: statement.color,
         })
+      } else if (statement.kind === 'circleShape' || statement.kind === 'centralAngle' || statement.kind === 'inscribedAngle') {
+        // The plot renderer has no answer for these: an arc drawn there would
+        // be a sampled polyline, which is the shape the figure renderer exists
+        // to avoid. Saying so is the point — a statement that silently drew
+        // nothing would leave an author staring at a figure missing the piece
+        // the problem is about.
+        const what = statement.kind === 'circleShape' ? statement.shape : statement.kind === 'centralAngle' ? 'central angle' : 'inscribed angle'
+        throw new Error(`"${what}" draws in figure mode — add "@mode: figure", or remove the plotted statement that made this a graph`)
       } else if (statement.kind === 'tick') {
         objects.push({ kind: 'tickMark', from: resolvePoint(statement.from), to: resolvePoint(statement.to), count: statement.count, color: statement.color })
       } else if (statement.kind === 'rightAngle') {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmt, svgArc, svgCircle, svgEscape, svgGroup, svgLine, svgPolygon, svgPolyline, svgText } from './svg'
+import { fmt, svgArc, svgCircle, svgCircularSegment, svgEscape, svgGroup, svgLine, svgPolygon, svgPolyline, svgSector, svgText } from './svg'
 
 describe('fmt — the single number formatter', () => {
   it('holds three decimals and drops trailing zeros', () => {
@@ -126,6 +126,40 @@ describe('determinism', () => {
         ],
         { 'data-layer': 'test' }
       )
+    expect(build()).toBe(build())
+  })
+})
+
+describe('the two circle fills', () => {
+  it('closes a sector through the centre', () => {
+    expect(svgSector({ x: 0, y: 0 }, 10, 0, Math.PI / 2, { fill: 'k' })).toBe(
+      '<path d="M 0 0 L 10 0 A 10 10 0 0 1 0 10 Z" fill="k"/>'
+    )
+  })
+
+  it('closes a circular segment along its own chord, never through the centre', () => {
+    const segment = svgCircularSegment({ x: 0, y: 0 }, 10, 0, Math.PI / 2, { fill: 'k' })
+    expect(segment).toBe('<path d="M 10 0 A 10 10 0 0 1 0 10 Z" fill="k"/>')
+    expect(segment).not.toContain(' L ')
+  })
+
+  it('carries the large-arc flag into both fills, so a major sweep fills the right side', () => {
+    expect(svgSector({ x: 0, y: 0 }, 10, 0, (3 * Math.PI) / 2, { fill: 'k' })).toContain('A 10 10 0 1 1 ')
+    expect(svgCircularSegment({ x: 0, y: 0 }, 10, 0, -(3 * Math.PI) / 2, { fill: 'k' })).toContain('A 10 10 0 1 0 ')
+  })
+
+  it('emits a path arc rather than a sampled polyline, like every other arc here', () => {
+    for (const markup of [
+      svgSector({ x: 1, y: 2 }, 3, 0.1, 2.9, { fill: 'k' }),
+      svgCircularSegment({ x: 1, y: 2 }, 3, 0.1, 2.9, { fill: 'k' }),
+    ]) {
+      expect(markup.startsWith('<path')).toBe(true)
+      expect(markup).not.toContain('polyline')
+    }
+  })
+
+  it('is byte-stable', () => {
+    const build = () => svgSector({ x: 1 / 3, y: 0.1 + 0.2 }, 2 / 3, 0.1, 2.9, { fill: 'k' })
     expect(build()).toBe(build())
   })
 })

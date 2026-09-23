@@ -1,11 +1,12 @@
 import type { GraphConfig } from '../parser/config'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
-import type { Expr, GivenEntry, MeasureContent, MeasureSubject, Statement } from '../parser/types'
+import type { Expr, GeometryArcDirection, GivenEntry, MeasureContent, MeasureSubject, Statement } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
 import { type Palette, themedColor } from '../render/palette'
 import { buildConstructions } from '../scene/geometry/buildConstructions'
-import type { GeometryObject, LineExtent } from '../scene/geometry/objects'
+import { type Arc, arcBetween, arcMidpoint, arcPointAt, requireOnCircle } from '../scene/geometry/circles'
+import type { GeometryCircle, GeometryObject, LineExtent } from '../scene/geometry/objects'
 import type { SceneError, Vec2 } from '../scene/types'
 import {
   boundsOf,
@@ -24,9 +25,9 @@ import {
   type WorldBounds,
 } from './document'
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
-import { angleMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
+import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, notationElements, notationOrigin, type NotationRun } from './notation'
-import { fmt, svgArc, svgCircle, svgLine, svgPolyline, svgText, type SvgAttrs } from './svg'
+import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
 //
@@ -48,6 +49,17 @@ const STROKE_MARK = 1.8
 const AUXILIARY_DASH = '9 7'
 const AUXILIARY_OPACITY = 0.6
 const POINT_RADIUS = 4.5
+
+// A filled region is a backdrop, not a block of colour: at full strength it
+// hides the construction lines crossing it, which at competition density is
+// most of the figure.
+const REGION_OPACITY = 0.22
+
+// A central angle's mark is drawn inside the circle it belongs to, so it is
+// capped as a fraction of that circle's own radius as well as by the shared
+// maximum — on a small circle a 34-unit mark would reach past the arc it
+// annotates.
+const CENTRAL_ANGLE_MAX_FRACTION = 0.4
 
 const ANGLE_ARC_RADIUS = 34
 const ANGLE_ARC_MAX_FRACTION = 0.35
@@ -72,6 +84,16 @@ type FigureItem =
   | { kind: 'point'; id: Identity; at: Vec2; label: string | null; prefer: Vec2 | null; color: string | null }
   | { kind: 'line'; id: Identity; a: Vec2; b: Vec2; extent: LineExtent; auxiliary: boolean; color: string | null }
   | { kind: 'circle'; id: Identity; center: Vec2; radius: number; color: string | null }
+  // A piece of a circle: the arc itself, or one of the two regions built on
+  // it. All three carry the same Arc, which is the object that resolved the
+  // direction, so the drawn sweep and the measure printed for it cannot come
+  // apart (G1, G2).
+  | { kind: 'arc'; id: Identity; arc: Arc; fill: 'none' | 'sector' | 'segment'; color: string | null }
+  // The mark at the centre of a circle. Distinct from `angleMark`, which
+  // measures the non-reflex angle between two rays: a major arc's central
+  // angle IS reflex, and drawing it as the non-reflex one would mark 216
+  // degrees as 144.
+  | { kind: 'centralAngle'; id: Identity; arc: Arc; label: string; color: string | null }
   | { kind: 'polygon'; id: Identity; vertices: Vec2[]; color: string | null }
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
   | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
@@ -159,12 +181,19 @@ function geometryItems(object: GeometryObject, name: string | null, id: Identity
     case 'circle':
       return [{ kind: 'circle', id, center: object.center, radius: object.radius, color }]
     case 'line':
-      // Every line a construction *produces* is scaffolding — a parallel, a
-      // perpendicular, a perpendicular bisector, an angle bisector. They are
-      // loci the author reasoned with rather than edges of the figure, which
-      // is exactly what "auxiliary" means, and at competition density they
-      // routinely outnumber the figure itself.
-      return [{ kind: 'line', id, a: object.a, b: object.b, extent: object.extent, auxiliary: true, color }]
+      // A constructed line is scaffolding when it is a *locus* — a parallel, a
+      // perpendicular, a bisector, a tangent line, a secant: things the author
+      // reasoned with rather than edges of the figure, and at competition
+      // density they routinely outnumber the figure itself.
+      //
+      // The test is the extent, and it is the honest one. An infinite line or
+      // a ray has no endpoints, so it is a locus and nothing else; a segment
+      // has two, which means someone chose them, which makes it an edge. That
+      // is what tells a chord, a radius, a diameter and a drawn tangent
+      // length — all segments, all part of the picture — from the loci that
+      // helped produce them. Phase 1's constructions all produce loci, so this
+      // draws every one of them exactly as it did before.
+      return [{ kind: 'line', id, a: object.a, b: object.b, extent: object.extent, auxiliary: object.extent !== 'segment', color }]
   }
 }
 
@@ -181,6 +210,8 @@ function subjectName(subject: MeasureSubject): string {
       return `angle ${subject.from}${subject.vertex}${subject.to}`
     case 'triangle':
       return `triangle ${subject.names.join('')}`
+    case 'arc':
+      return `arc ${subject.from}${subject.to}`
   }
 }
 
@@ -232,6 +263,11 @@ function subjectRuns(subject: MeasureSubject): NotationRun[] {
       return [{ text: `\u2220${subject.from}${subject.vertex}${subject.to}`, mark: 'none' }]
     case 'triangle':
       return [{ text: `\u25b3${subject.names.join('')}`, mark: 'none' }]
+    case 'arc':
+      // The arc mark over the two endpoint names — the notation the subject
+      // is actually written in, and the one overmark phase 3 built and had
+      // nothing to draw yet.
+      return [{ text: `${subject.from}${subject.to}`, mark: 'arc' }]
   }
 }
 
@@ -248,8 +284,10 @@ function measureRuns(
   computed: number | null,
   config: GraphConfig
 ): { runs: NotationRun[]; error: string | null } {
+  // An arc's measure is an angle, so it carries the degree sign and honours
+  // @angle exactly as an angle does.
   const asText = (value: number) =>
-    subject.kind === 'angle' ? formatAngleMeasure(value, config.angle) : formatMeasure(value)
+    subject.kind === 'angle' || subject.kind === 'arc' ? formatAngleMeasure(value, config.angle) : formatMeasure(value)
 
   switch (content.kind) {
     case 'computed':
@@ -264,7 +302,7 @@ function measureRuns(
       return { runs: [{ text: content.text, mark: 'none' }], error: null }
     case 'name': {
       const names =
-        subject.kind === 'length'
+        subject.kind === 'length' || subject.kind === 'arc'
           ? `${subject.from}${subject.to}`
           : subject.kind === 'angle'
             ? `${subject.from}${subject.vertex}${subject.to}`
@@ -284,17 +322,18 @@ function measureRuns(
 function givenRuns(
   entry: GivenEntry,
   resolve: (name: string) => Vec2,
+  resolveCircle: (name: string) => GeometryCircle,
   config: GraphConfig
 ): { runs: NotationRun[]; error: string | null } {
   if (entry.kind === 'relation') {
-    for (const side of [entry.left, entry.right]) measureOf(side, resolve, config)
+    for (const side of [entry.left, entry.right]) measureOf(side, resolve, resolveCircle, config)
     return {
       runs: [...subjectRuns(entry.left), { text: ` ${entry.symbol} `, mark: 'none' }, ...subjectRuns(entry.right)],
       error: null,
     }
   }
 
-  const computed = measureOf(entry.subject, resolve, config)
+  const computed = measureOf(entry.subject, resolve, resolveCircle, config)
   const value = measureRuns(entry.subject, entry.content, computed, config)
   // One run for "= 8", not two: a measure's own runs never carry a mark, so
   // splitting the equals sign from the value would buy nothing and would put
@@ -307,7 +346,12 @@ function givenRuns(
 // rather than a measurement. Resolving the names is the point even for a
 // shape: a given naming a point that does not exist is a broken spec, and
 // finding that out here is what turns it into a legible error.
-function measureOf(subject: MeasureSubject, resolve: (name: string) => Vec2, config: GraphConfig): number | null {
+function measureOf(
+  subject: MeasureSubject,
+  resolve: (name: string) => Vec2,
+  resolveCircle: (name: string) => GeometryCircle,
+  config: GraphConfig
+): number | null {
   switch (subject.kind) {
     case 'length':
       return segmentLength(resolve(subject.from), resolve(subject.to))
@@ -316,7 +360,25 @@ function measureOf(subject: MeasureSubject, resolve: (name: string) => Vec2, con
     case 'triangle':
       for (const name of subject.names) resolve(name)
       return null
+    case 'arc':
+      // Through the arc, never around it: the same call the central angle
+      // mark makes, which is what makes the two agree by construction (G2).
+      return arcMeasure(arcOf(subject, resolve, resolveCircle), config.angle)
   }
+}
+
+// The arc a subject or a statement names, built once from the circle, the two
+// endpoints and the stated direction.
+function arcOf(
+  named: { circle: string; from: string; to: string; direction: GeometryArcDirection },
+  resolve: (name: string) => Vec2,
+  resolveCircle: (name: string) => GeometryCircle
+): Arc {
+  return arcBetween(resolveCircle(named.circle), resolve(named.from), resolve(named.to), named.direction, {
+    circle: named.circle,
+    from: named.from,
+    to: named.to,
+  })
 }
 
 function buildItems(statements: Statement[], config: GraphConfig): { items: FigureItem[]; errors: SceneError[] } {
@@ -333,6 +395,19 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   const measureStatements: { statement: Statement; index: number }[] = []
   const givenStatements: { statement: Statement; index: number }[] = []
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
+
+  // A circle has to be *named* to be talked about: "circle: (0,0), 3" draws
+  // one and binds nothing, so an arc or a central angle needs the
+  // construction form ("O = circle C, 5", "O = circumcircle ABC").
+  function resolveCircle(name: string): GeometryCircle {
+    const found = constructions.circles.get(name)
+    if (!found) {
+      throw new Error(
+        `Unknown circle "${name}" — name a circle before drawing on it (e.g. "${name} = circle C, 5" or "${name} = circumcircle ABC")`
+      )
+    }
+    return found
+  }
 
   function resolve(name: string): Vec2 {
     const point = namedPoints.get(name)
@@ -424,6 +499,52 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             color: statement.color,
           })
           break
+        case 'circleShape': {
+          const arc = arcOf(statement, resolve, resolveCircle)
+          items.push({
+            kind: 'arc',
+            id: { statement: index, object: statement.circle },
+            arc,
+            fill: statement.shape === 'arc' ? 'none' : statement.shape,
+            color: statement.color,
+          })
+          break
+        }
+        case 'centralAngle': {
+          const arc = arcOf(statement, resolve, resolveCircle)
+          items.push({
+            kind: 'centralAngle',
+            id: { statement: index, object: statement.circle },
+            arc,
+            // Read from the arc, so this mark and "label: arc PQ on O <dir>"
+            // print the same number in both angle modes (G2).
+            label: formatAngleMeasure(arcMeasure(arc, config.angle), config.angle),
+            color: statement.color,
+          })
+          break
+        }
+        case 'inscribedAngle': {
+          const circle = resolveCircle(statement.circle)
+          const vertex = resolve(statement.vertex)
+          const from = resolve(statement.from)
+          const to = resolve(statement.to)
+          // An angle whose vertex is not on the circle is not an inscribed
+          // angle, and the half-the-arc relation it is drawn to show is
+          // simply false for it.
+          requireOnCircle(circle, vertex, statement.vertex, "an inscribed angle's vertex", { circle: statement.circle })
+          requireOnCircle(circle, from, statement.from, "an inscribed angle's arms", { circle: statement.circle })
+          requireOnCircle(circle, to, statement.to, "an inscribed angle's arms", { circle: statement.circle })
+          items.push({
+            kind: 'angleMark',
+            id: { statement: index, object: statement.vertex },
+            vertex,
+            from,
+            to,
+            label: formatAngleMeasure(angleMeasure(vertex, from, to, config.angle), config.angle),
+            color: statement.color,
+          })
+          break
+        }
         case 'tick':
           items.push({ kind: 'tickMark', id, from: resolve(statement.from), to: resolve(statement.to), count: statement.count, color: statement.color })
           break
@@ -454,7 +575,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   for (const { statement, index } of givenStatements) {
     if (statement.kind !== 'given') continue
     try {
-      const { runs, error } = givenRuns(statement.entry, resolve, config)
+      const { runs, error } = givenRuns(statement.entry, resolve, resolveCircle, config)
       if (error) errors.push({ line: 0, message: error })
       items.push({ kind: 'given', id: { statement: index, object: null }, runs, color: statement.color })
     } catch (err) {
@@ -484,6 +605,14 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         at = vertex
         push = bisectorDirection(vertex, from, to)
         computed = angleMeasure(vertex, from, to, config.angle)
+      } else if (subject.kind === 'arc') {
+        const arc = arcOf(subject, resolve, resolveCircle)
+        // On the arc, pushed outward from the centre: an arc's measure
+        // belongs beside the arc itself, and outward is the only side that is
+        // never inside the circle the arc bounds.
+        at = arcMidpoint(arc)
+        push = awayFrom(at, arc.center)
+        computed = arcMeasure(arc, config.angle)
       } else {
         const vertices = subject.names.map((name) => resolve(name))
         at = centroidOf(vertices)
@@ -536,6 +665,17 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'polygon':
         points.push(...item.vertices)
         break
+      case 'arc':
+        points.push(...arcExtremes(item.arc))
+        // A sector reaches the centre as well as the arc; a bare arc and a
+        // circular segment do not.
+        if (item.fill === 'sector') points.push(item.arc.center)
+        break
+      case 'centralAngle':
+        // The mark is drawn inside the circle, which is already voting
+        // through whatever drew it, so only the vertex is anchored here.
+        points.push(item.arc.center)
+        break
       case 'angleMark':
       case 'rightAngleMark':
         points.push(item.vertex)
@@ -553,6 +693,26 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
         // still grows the viewBox, through the placed-label rects in
         // renderFigure, exactly as a point's name does.
         break
+    }
+  }
+  return points
+}
+
+// The exact bounding points of an arc: its two ends, plus whichever of the
+// four cardinal points of its circle the sweep actually passes through.
+//
+// Exact rather than sampled, and it matters in both directions: a quarter arc
+// bounded by its whole circle would leave most of the figure empty, and a
+// three-quarter arc bounded by its endpoints alone would be cropped.
+function arcExtremes(arc: Arc): Vec2[] {
+  const points = [arcPointAt(arc, 0), arcPointAt(arc, 1)]
+  for (let quarter = 0; quarter < 4; quarter++) {
+    const angle = (quarter * Math.PI) / 2
+    // How far round the arc's own direction of travel this cardinal angle is.
+    const along = arc.sweep >= 0 ? angle - arc.start : arc.start - angle
+    const wrapped = ((along % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+    if (wrapped <= Math.abs(arc.sweep)) {
+      points.push({ x: arc.center.x + arc.radius * Math.cos(angle), y: arc.center.y + arc.radius * Math.sin(angle) })
     }
   }
   return points
@@ -798,6 +958,57 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
           fill: 'none',
           stroke: strokeColor(item.color, palette.axis, palette),
           'stroke-width': STROKE_PRIMARY,
+          ...identity(item.id),
+        })
+      )
+      break
+    }
+    case 'arc': {
+      const center = to(item.arc.center)
+      const radius = item.arc.radius * projection.scale
+      // View space flips y, so a counter-clockwise sweep in the plane is a
+      // clockwise one on the page. Negating both angles converts the whole
+      // arc at once, and keeps the large-arc and sweep flags svg.ts derives
+      // from them correct for a reflex arc.
+      const start = -item.arc.start
+      const end = -(item.arc.start + item.arc.sweep)
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      if (item.fill === 'none') {
+        layers.primary.push(
+          svgArc(center, radius, start, end, { fill: 'none', stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) })
+        )
+        break
+      }
+      const fill: SvgAttrs = {
+        fill: theme.region,
+        'fill-opacity': REGION_OPACITY,
+        stroke,
+        'stroke-width': STROKE_PRIMARY,
+        ...identity(item.id),
+      }
+      // E1 — a fill is a backdrop, so both regions go in the regions layer,
+      // behind every line and mark the figure draws over them.
+      layers.regions.push(
+        item.fill === 'sector' ? svgSector(center, radius, start, end, fill) : svgCircularSegment(center, radius, start, end, fill)
+      )
+      break
+    }
+    case 'centralAngle': {
+      const vertex = to(item.arc.center)
+      const radius = Math.min(ANGLE_ARC_RADIUS, item.arc.radius * projection.scale * CENTRAL_ANGLE_MAX_FRACTION)
+      const start = -item.arc.start
+      const end = -(item.arc.start + item.arc.sweep)
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      layers.marks.push(svgArc(vertex, radius, start, end, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }))
+      const mid = (start + end) / 2
+      const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
+      layers.labels.push(
+        svgText(at, item.label, {
+          'font-size': LABEL_FONT_SIZE,
+          'font-family': FONT_FAMILY,
+          fill: theme.label,
+          'text-anchor': 'middle',
+          'dominant-baseline': 'central',
           ...identity(item.id),
         })
       )

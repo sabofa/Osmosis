@@ -584,3 +584,134 @@ describe('parseStatement — the givens box', () => {
     expect(() => parseStatement('given: ABC parallel D')).toThrow(/point names/)
   })
 })
+
+describe('parseStatement — the circle vocabulary', () => {
+  it('parses a chord between two points of a named circle', () => {
+    const s = parseStatement('c = chord P-Q on O')
+    if (s.kind !== 'construction') throw new Error('unreachable')
+    expect(s.names).toEqual(['c'])
+    expect(s.body).toEqual({ kind: 'chord', circle: 'O', from: 'P', to: 'Q' })
+  })
+
+  it('takes the run spelling as well, the way a label does', () => {
+    const s = parseStatement('c = chord PQ on O')
+    if (s.kind !== 'construction') throw new Error('unreachable')
+    expect(s.body).toEqual({ kind: 'chord', circle: 'O', from: 'P', to: 'Q' })
+  })
+
+  it('parses the tangent at a point of the circle', () => {
+    const s = parseStatement('t = tangent at P on O')
+    if (s.kind !== 'construction') throw new Error('unreachable')
+    expect(s.body).toEqual({ kind: 'tangentAt', circle: 'O', point: 'P' })
+  })
+
+  it('parses the two tangents from an external point, and takes two names', () => {
+    const s = parseStatement('t, u = tangent from P to O')
+    if (s.kind !== 'construction') throw new Error('unreachable')
+    expect(s.names).toEqual(['t', 'u'])
+    expect(s.body).toEqual({ kind: 'tangentFrom', circle: 'O', point: 'P' })
+  })
+
+  it('tells the two tangent forms apart rather than guessing', () => {
+    expect(() => parseStatement('t = tangent P on O')).toThrow(/tangent at|tangent from/)
+  })
+
+  it('parses a secant, with or without the spec\'s "through"', () => {
+    const plain = parseStatement('k = secant P-Q on O')
+    const through = parseStatement('k = secant through P-Q on O')
+    if (plain.kind !== 'construction' || through.kind !== 'construction') throw new Error('unreachable')
+    expect(plain.body).toEqual({ kind: 'secant', circle: 'O', from: 'P', to: 'Q' })
+    expect(through.body).toEqual(plain.body)
+  })
+
+  it('parses a radius and a diameter', () => {
+    // Named "u", not "r": "r = ..." is the polar-curve form and keeps its
+    // meaning, exactly as "y = ..." does for a construction.
+    const r = parseStatement('u = radius O to P')
+    const d = parseStatement('d = diameter P-Q on O')
+    if (r.kind !== 'construction' || d.kind !== 'construction') throw new Error('unreachable')
+    expect(r.names).toEqual(['u'])
+    expect(r.body).toEqual({ kind: 'radiusTo', circle: 'O', point: 'P' })
+    expect(d.body).toEqual({ kind: 'diameter', circle: 'O', from: 'P', to: 'Q' })
+  })
+
+  it('draws any of them without a name to bind, like "incircle of ABC"', () => {
+    const s = parseStatement('chord P-Q on O')
+    if (s.kind !== 'construction') throw new Error('unreachable')
+    expect(s.names).toEqual([])
+    expect(s.body).toEqual({ kind: 'chord', circle: 'O', from: 'P', to: 'Q' })
+  })
+
+  it('still parses a tangent to a FUNCTION, which is a different statement', () => {
+    expect(parseStatement('tangent: x^2 - 1 at x = 2').kind).toBe('tangent')
+  })
+
+  it('parses an arc, a sector and a circular segment, each with its direction', () => {
+    for (const shape of ['arc', 'sector', 'segment'] as const) {
+      const s = parseStatement(`${shape} P-Q on O minor`)
+      expect(s.kind).toBe('circleShape')
+      if (s.kind !== 'circleShape') throw new Error('unreachable')
+      expect(s).toMatchObject({ shape, circle: 'O', from: 'P', to: 'Q', direction: 'minor' })
+    }
+  })
+
+  it('takes all four directions', () => {
+    for (const direction of ['minor', 'major', 'ccw', 'cw'] as const) {
+      const s = parseStatement(`arc P-Q on O ${direction}`)
+      if (s.kind !== 'circleShape') throw new Error('unreachable')
+      expect(s.direction).toBe(direction)
+    }
+  })
+
+  it('REFUSES an arc with no direction rather than drawing one of the two (G1)', () => {
+    expect(() => parseStatement('arc P-Q on O')).toThrow(/two different arcs/)
+    expect(() => parseStatement('arc P-Q on O')).toThrow(/minor/)
+    expect(() => parseStatement('sector P-Q on O')).toThrow(/two different arcs/)
+    expect(() => parseStatement('central angle P-Q on O')).toThrow(/two different arcs/)
+  })
+
+  it('refuses a direction it does not recognise, saying what it takes', () => {
+    expect(() => parseStatement('arc P-Q on O widdershins')).toThrow(/widdershins/)
+    expect(() => parseStatement('arc P-Q on O widdershins')).toThrow(/"ccw"/)
+  })
+
+  it('still parses "segment: A-B", which is a segment of a LINE', () => {
+    expect(parseStatement('segment: A-B').kind).toBe('namedSegment')
+  })
+
+  it('parses the two angle marks', () => {
+    const central = parseStatement('central angle P-Q on O major')
+    expect(central).toMatchObject({ kind: 'centralAngle', circle: 'O', from: 'P', to: 'Q', direction: 'major' })
+    const inscribed = parseStatement('inscribed angle P-Q-R on O')
+    expect(inscribed).toMatchObject({ kind: 'inscribedAngle', circle: 'O', from: 'P', vertex: 'Q', to: 'R' })
+  })
+
+  it('still parses "angle: A-B-C", the plain angle mark', () => {
+    expect(parseStatement('angle: A-B-C').kind).toBe('angle')
+  })
+
+  it('parses an arc measure label, which names its circle and its direction', () => {
+    const s = parseStatement('label: arc PQ on O minor')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.subject).toEqual({ kind: 'arc', circle: 'O', from: 'P', to: 'Q', direction: 'minor' })
+    expect(s.content).toEqual({ kind: 'computed' })
+  })
+
+  it('asserts a stated arc measure, exactly as a length or an angle does', () => {
+    const s = parseStatement('label: arc PQ on O minor = 60')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.content).toEqual({ kind: 'stated', value: 60 })
+  })
+
+  it('refuses an arc label with no circle to be on', () => {
+    expect(() => parseStatement('label: arc PQ')).toThrow(/arc PQ on/)
+  })
+
+  it('states an arc in the givens box', () => {
+    const s = parseStatement('given: arc PQ on O minor = 60')
+    if (s.kind !== 'given') throw new Error('unreachable')
+    if (s.entry.kind !== 'measure') throw new Error('unreachable')
+    expect(s.entry.subject).toEqual({ kind: 'arc', circle: 'O', from: 'P', to: 'Q', direction: 'minor' })
+    expect(s.entry.content).toEqual({ kind: 'stated', value: 60 })
+  })
+})

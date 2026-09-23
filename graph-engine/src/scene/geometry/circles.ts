@@ -131,9 +131,9 @@ function circleLabel(names: CircleNames): string {
   return names.circle ? `circle "${names.circle}"` : 'the circle'
 }
 
-// The one near-miss message, so a chord, an arc, a tangent and a radius all
-// fail the same way rather than in four dialects.
-function assertOnCircle(c: GeometryCircle, p: Vec2, name: string | undefined, role: string, names: CircleNames): void {
+// The one near-miss message, so a chord, an arc, a tangent, a radius and an
+// inscribed angle all fail the same way rather than in five dialects.
+export function requireOnCircle(c: GeometryCircle, p: Vec2, name: string | undefined, role: string, names: CircleNames): void {
   if (isPointOnCircle(c, p)) return
   throw new Error(
     `${label(name, p)} is ${amount(distanceFromCircle(c, p))} from ${circleLabel(names)} (radius ${amount(c.radius)}) — ` +
@@ -152,8 +152,8 @@ function assertDistinct(p: Vec2, q: Vec2, names: CircleNames, what: string): voi
 
 // The segment between two points of the circle.
 export function chord(c: GeometryCircle, from: Vec2, to: Vec2, names: CircleNames = {}): GeometryLine {
-  assertOnCircle(c, from, names.from, "a chord's endpoints", names)
-  assertOnCircle(c, to, names.to, "a chord's endpoints", names)
+  requireOnCircle(c, from, names.from, "a chord's endpoints", names)
+  requireOnCircle(c, to, names.to, "a chord's endpoints", names)
   assertDistinct(from, to, names, 'a chord')
   return segment(from, to)
 }
@@ -167,8 +167,8 @@ const TURN = 2 * Math.PI
 
 // An arc from `from` to `to`, going the way `direction` says.
 export function arcBetween(c: GeometryCircle, from: Vec2, to: Vec2, direction: ArcDirection, names: CircleNames = {}): Arc {
-  assertOnCircle(c, from, names.from, "an arc's endpoints", names)
-  assertOnCircle(c, to, names.to, "an arc's endpoints", names)
+  requireOnCircle(c, from, names.from, "an arc's endpoints", names)
+  requireOnCircle(c, to, names.to, "an arc's endpoints", names)
   assertDistinct(from, to, names, 'an arc')
 
   const start = angleOf(c, from)
@@ -225,7 +225,7 @@ export function arcMidpoint(arc: Arc): Vec2 {
 // The tangent at a point *of* the circle: the line through it perpendicular
 // to the radius drawn there.
 export function tangentAt(c: GeometryCircle, p: Vec2, names: CircleNames = {}): GeometryLine {
-  assertOnCircle(c, p, names.point ?? names.from, 'the point a tangent touches at', names)
+  requireOnCircle(c, p, names.point ?? names.from, 'the point a tangent touches at', names)
   const radial = normalize(sub(p, c.center))
   // A fixed quarter turn counter-clockwise, not an arbitrary perpendicular:
   // the two defining points of the line are part of the emitted output.
@@ -303,15 +303,15 @@ export function secantThrough(c: GeometryCircle, from: Vec2, to: Vec2, names: Ci
 
 // A radius, drawn rather than left implicit.
 export function radiusTo(c: GeometryCircle, p: Vec2, names: CircleNames = {}): GeometryLine {
-  assertOnCircle(c, p, names.point ?? names.to, 'the far end of a radius', names)
+  requireOnCircle(c, p, names.point ?? names.to, 'the far end of a radius', names)
   return segment(c.center, p)
 }
 
 // A diameter: a chord through the centre, so its endpoints have to be
 // opposite each other and not merely both on the circle.
 export function diameter(c: GeometryCircle, from: Vec2, to: Vec2, names: CircleNames = {}): GeometryLine {
-  assertOnCircle(c, from, names.from, "a diameter's endpoints", names)
-  assertOnCircle(c, to, names.to, "a diameter's endpoints", names)
+  requireOnCircle(c, from, names.from, "a diameter's endpoints", names)
+  requireOnCircle(c, to, names.to, "a diameter's endpoints", names)
   assertDistinct(from, to, names, 'a diameter')
   const middle = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }
   const offset = distance(middle, c.center)

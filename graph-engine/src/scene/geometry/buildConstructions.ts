@@ -3,11 +3,13 @@ import { evalExpr, type FunctionTable } from '../../parser/evalExpr'
 import type { Construction, Expr, GeometryRef, Statement, TriangleSlot } from '../../parser/types'
 import type { SceneError, SceneObject, Vec2 } from '../types'
 import { centroid, circumcenter, circumcircle, incenter, incircle, orthocenter } from './centres'
+import { chord, diameter, radiusTo, secantThrough, tangentAt, tangentsFrom } from './circles'
 import { dilate, divide, foot, midpoint, reflect, rotate, translate } from './derive'
 import { intersect } from './intersect'
 import { angleBisector, parallelThrough, perpendicularBisector, perpendicularThrough } from './lines'
 import {
   circle,
+  type GeometryCircle,
   type GeometryLine,
   type GeometryObject,
   GeometryScope,
@@ -55,6 +57,12 @@ export interface ConstructionBuild {
   // the construction layer without either rewriting Phase 1's maths or
   // reverse-engineering a centre and radius out of a polyline.
   geometryByStatement: Map<number, { name: string | null; object: GeometryObject }[]>
+  // Every circle the spec bound a name to, so a statement that is *about* a
+  // circle rather than derived from one — an arc, a sector, a central angle,
+  // "label: arc PQ on O" — can find it. Points already travel this way, in
+  // `points` above; a circle could not, which is why the circle vocabulary
+  // needed it.
+  circles: Map<string, GeometryCircle>
 }
 
 const SLOTS: TriangleSlot[] = ['a', 'b', 'c']
@@ -114,6 +122,36 @@ function evaluate(scope: GeometryScope, body: Construction, evaluateExpr: (e: Ex
       return [point(dilate(scope.lookupPoint(body.point), scope.lookupPoint(body.from), evaluateExpr(body.factor)))]
     case 'circleAt':
       return [circle(scope.lookupPoint(body.center), evaluateExpr(body.radius))]
+    case 'chord':
+      return [
+        chord(scope.lookupCircle(body.circle), scope.lookupPoint(body.from), scope.lookupPoint(body.to), {
+          circle: body.circle,
+          from: body.from,
+          to: body.to,
+        }),
+      ]
+    case 'tangentAt':
+      return [tangentAt(scope.lookupCircle(body.circle), scope.lookupPoint(body.point), { circle: body.circle, point: body.point })]
+    case 'tangentFrom':
+      return tangentsFrom(scope.lookupCircle(body.circle), scope.lookupPoint(body.point), { circle: body.circle, point: body.point })
+    case 'secant':
+      return [
+        secantThrough(scope.lookupCircle(body.circle), scope.lookupPoint(body.from), scope.lookupPoint(body.to), {
+          circle: body.circle,
+          from: body.from,
+          to: body.to,
+        }),
+      ]
+    case 'radiusTo':
+      return [radiusTo(scope.lookupCircle(body.circle), scope.lookupPoint(body.point), { circle: body.circle, point: body.point })]
+    case 'diameter':
+      return [
+        diameter(scope.lookupCircle(body.circle), scope.lookupPoint(body.from), scope.lookupPoint(body.to), {
+          circle: body.circle,
+          from: body.from,
+          to: body.to,
+        }),
+      ]
     case 'triangleCentre': {
       const [a, b, c] = triangleVertices(scope, body.vertices)
       switch (body.centre) {
@@ -225,5 +263,11 @@ export function buildConstructions(
     }
   }
 
-  return { objectsByStatement, errors, points, geometryByStatement }
+  const circles = new Map<string, GeometryCircle>()
+  for (const name of scope.names()) {
+    const object = scope.lookup(name)
+    if (object.kind === 'circle') circles.set(name, object)
+  }
+
+  return { objectsByStatement, errors, points, geometryByStatement, circles }
 }

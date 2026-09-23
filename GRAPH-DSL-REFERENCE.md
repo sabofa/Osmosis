@@ -407,6 +407,95 @@ segment: A-D dashed
 right-angle: A-D-B
 ```
 
+### Circle vocabulary
+
+A circle can be outlined, intersected, **and worked with**: a chord, an arc,
+the two regions built on an arc, tangents, a secant, a radius and a diameter,
+plus the central and inscribed angle marks. Every one of them names the
+circle it is on, because in a figure with two circles "the chord P-Q" means
+nothing.
+
+The circle has to be **named**, which `circle: (0,0), 3` does not do — use
+the construction form:
+```
+C = (0, 0)
+O = circle C, 5
+```
+
+```
+c = chord P-Q on O
+t = tangent at P on O
+t, u = tangent from X to O
+k = secant P-Q on O
+u = radius O to P
+d = diameter P-Q on O
+```
+All six produce lines, so they bind names and can be intersected, measured
+and labelled. Each form also works **without** a name, drawn on its own line
+(`chord P-Q on O`), the way `incircle of ABC` does.
+
+`tangent at P on O` needs P **on** the circle and produces the infinite
+tangent line there. `tangent from X to O` needs X **outside** it and produces
+the **two** tangents, drawn to their touch points — so each one's length is
+the tangent length — **ordered by the same rule `intersect` uses** (x
+ascending, then y), which is what makes `t, u = ...` reproducible. A point
+inside the circle, or a chord endpoint that is not on it, fails with a
+message naming the gap it missed by, rather than drawing a "tangent" that
+visibly crosses.
+
+`secant P-Q on O` is the line through two points that must cut the circle
+twice; a line that misses it, or merely touches it, is refused (the second is
+a tangent, and saying so is more useful than drawing it).
+
+```
+arc P-Q on O minor
+sector P-Q on O major
+segment P-Q on O ccw
+central angle P-Q on O minor
+inscribed angle P-Q-R on O
+```
+
+**An arc must say which way it goes.** "The arc from P to Q" is two different
+arcs, so every arc form ends with `minor`, `major`, `ccw` or `cw`, and
+leaving it out is an error rather than a default — a figure that silently
+drew the other arc would look perfectly plausible. `minor`/`major` are
+refused on a **diameter**, where both arcs are semicircles and neither is the
+smaller one; write `ccw` or `cw` there.
+
+`sector` is the wedge closed through the centre, `segment` the region between
+the arc and its own chord. Both are fills and are painted behind every line
+and mark. (`segment P-Q on O <direction>` is the circular segment;
+`segment: A-B` with a colon is still the segment of a *line*.)
+
+An arc's measure and the central angle drawn for it are **the same number,
+computed once**, so they cannot disagree:
+```
+label: arc PQ on O minor       # prints the measure, honouring @angle
+label: arc PQ on O minor = 60  # prints 60, and fails if the figure disagrees
+given: arc PQ on O minor = 60  # the same, in the givens table
+central angle P-Q on O minor   # the mark at the centre, printing that measure
+```
+
+A worked circle figure — a chord, its minor arc shaded, the tangent at one
+end of the chord and a secant through the other:
+```
+@mode: figure
+@angle: degrees
+C = (0, 0)
+O = circle C, 5
+P = (5, 0)
+Q = (0, 5)
+R = (-3, 4)
+chord P-Q on O
+segment P-Q on O minor
+t = tangent at P on O
+k = secant Q-R on O
+label: arc PQ on O minor
+```
+
+These draw in **figure mode**. In graph mode the arc forms say so rather than
+drawing nothing; the six line-producing constructions work in both.
+
 ### Tables
 
 ```
