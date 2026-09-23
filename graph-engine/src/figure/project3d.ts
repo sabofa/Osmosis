@@ -11,7 +11,7 @@ import {
   unionRects,
   type Rect,
 } from './document'
-import { svgLine } from './svg'
+import { ellipsePoint, svgEllipticalArc, svgLine, type SvgAttrs } from './svg'
 
 // 3D solids, drawn through the same SVG renderer.
 //
@@ -186,7 +186,24 @@ function facesCamera(normal: Vec3, camera: Camera): boolean {
   return normal.x * camera.direction.x + normal.y * camera.direction.y + normal.z * camera.direction.z > 0
 }
 
-export interface ProjectedEdge {
+// ---------------------------------------------------------------------------
+// The drawn-edge type (H3)
+// ---------------------------------------------------------------------------
+//
+// **An outline is not made only of straight segments.** A cylinder's is two
+// lines and two elliptical arcs, a cone's is two lines and an ellipse, a
+// sphere's is a circle. None of that is vertices-and-faces, and none of it
+// fits a type carrying two endpoints.
+//
+// So the drawn-edge type is a union, and the two members are the two things a
+// solid's outline is ever made of. Faceting the curves into fine polyhedra so
+// one member would do was considered and rejected: silhouettes go visibly
+// polygonal under the zoom the figure view now offers, faceting generates
+// dozens of spurious edges that then have to be suppressed, and it discards
+// the crispness that chose SVG in the first place.
+
+export interface ProjectedSegment {
+  kind: 'segment'
   a: Vec2
   b: Vec2
   // Dashed when drawn. An edge is hidden when **every** face meeting along it
@@ -198,6 +215,83 @@ export interface ProjectedEdge {
   vertices: [number, number]
 }
 
+// A piece of the ellipse a circle in space projects to.
+//
+// `rotation`, `startAngle` and `endAngle` are radians and the angles are the
+// ELLIPSE PARAMETER, not a polar angle — the parametrisation an orthographic
+// projection of a circle hands over directly (see svg.ts's svgEllipticalArc).
+// Everything is in the same projected, y-up space a ProjectedSegment's
+// endpoints are in; the figure's own projection flips it for SVG later.
+//
+// `object` is what the emitted element's `data-object` says, since an arc has
+// no pair of vertex indices to name itself with.
+export interface ProjectedArc {
+  kind: 'arc'
+  center: Vec2
+  rx: number
+  ry: number
+  rotation: number
+  startAngle: number
+  endAngle: number
+  hidden: boolean
+  object: string
+}
+
+export type ProjectedEdge = ProjectedSegment | ProjectedArc
+
+// Every point that bounds a drawn edge — exact, never sampled.
+//
+// For an arc that means its two ends plus whichever of the four parameters
+// where the ellipse turns back on itself the sweep actually passes through.
+// Exact in both directions: an arc bounded by its whole ellipse would leave
+// most of a figure empty, and one bounded by its endpoints alone would be
+// cropped through its own bulge.
+export function edgeExtremes(edge: ProjectedEdge): Vec2[] {
+  if (edge.kind === 'segment') return [edge.a, edge.b]
+  const at = (t: number) => ellipsePoint(edge.center, edge.rx, edge.ry, edge.rotation, t)
+  const points = [at(edge.startAngle), at(edge.endAngle)]
+  const cos = Math.cos(edge.rotation)
+  const sin = Math.sin(edge.rotation)
+  // x(t) = cx + rx cos(rot) cos t - ry sin(rot) sin t, stationary where its
+  // derivative vanishes; likewise y. Two parameters each, half a turn apart.
+  const stationary = [Math.atan2(-edge.ry * sin, edge.rx * cos), Math.atan2(edge.ry * cos, edge.rx * sin)]
+  const sweep = edge.endAngle - edge.startAngle
+  for (const base of stationary) {
+    for (const t of [base, base + Math.PI]) {
+      // How far along the sweep's own direction of travel this parameter is.
+      const along = sweep >= 0 ? t - edge.startAngle : edge.startAngle - t
+      const wrapped = ((along % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+      if (wrapped <= Math.abs(sweep)) points.push(at(sweep >= 0 ? edge.startAngle + wrapped : edge.startAngle - wrapped))
+    }
+  }
+  return points
+}
+
+// One drawn edge, emitted. **The single place either member of the union
+// becomes markup**, so a caller never dispatches on the kind itself and the
+// two can never drift apart in stroke, order or identity.
+//
+// `toView` and `scale` are the figure's own projection: an arc's radii scale
+// with it, and its rotation and parameters NEGATE, because view space flips y
+// — the same conversion a circular arc already makes in render.ts, and doing
+// it to the rotation and both angles at once converts the whole ellipse.
+export function drawEdge(edge: ProjectedEdge, toView: (p: Vec2) => Vec2, scale: number, style: SvgAttrs): string {
+  if (edge.kind === 'segment') return svgLine(toView(edge.a), toView(edge.b), style)
+  // `fill: none` belongs to the arc and not to the caller's style: a `<path>`
+  // fills by default and a `<line>` has nothing to fill, so putting it in the
+  // shared style would paint a solid black lens under every curved outline
+  // OR add a dead attribute to every straight edge. Callers pass stroke.
+  return svgEllipticalArc(
+    toView(edge.center),
+    edge.rx * scale,
+    edge.ry * scale,
+    -edge.rotation,
+    -edge.startAngle,
+    -edge.endAngle,
+    { fill: 'none', ...style }
+  )
+}
+
 function edgeKey(a: number, b: number): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`
 }
@@ -205,7 +299,7 @@ function edgeKey(a: number, b: number): string {
 // Edges in first-seen order over the faces, which is a deterministic function
 // of the solid's own face list — the property the byte-identical requirement
 // rests on.
-export function projectSolid(solid: Solid3D, camera: Camera = ISOMETRIC_CAMERA): ProjectedEdge[] {
+export function projectSolid(solid: Solid3D, camera: Camera = ISOMETRIC_CAMERA): ProjectedSegment[] {
   const frontFacing = solid.faces.map((_, i) => facesCamera(faceNormal(solid, i), camera))
   const order: [number, number][] = []
   const anyFront = new Map<string, boolean>()
@@ -226,6 +320,7 @@ export function projectSolid(solid: Solid3D, camera: Camera = ISOMETRIC_CAMERA):
 
   const projected = solid.vertices.map((v) => camera.project(v))
   return order.map(([a, b]) => ({
+    kind: 'segment' as const,
     a: projected[a],
     b: projected[b],
     hidden: !anyFront.get(edgeKey(a, b)),
@@ -277,29 +372,35 @@ const HIDDEN_OPACITY = 0.6
 // The solid, drawn by the figure renderer: visible edges in the primary
 // layer, hidden ones dashed in the auxiliary layer beneath them. Nothing here
 // is specific to a prism — feed it any Solid3D.
+// What an emitted edge's `data-object` says. A segment names the two
+// vertices it joins; an arc carries its own name, because it has none.
+export function edgeObject(edge: ProjectedEdge): string {
+  return edge.kind === 'segment' ? `edge-${edge.vertices[0]}-${edge.vertices[1]}` : edge.object
+}
+
 export function renderSolidFigure(solid: Solid3D, palette: Palette, camera: Camera = ISOMETRIC_CAMERA): string {
   const theme = figureTheme(palette)
   const edges = projectSolid(solid, camera)
 
-  const world = boundsOf(edges.flatMap((e) => [e.a, e.b])) ?? { minX: -1, minY: -1, maxX: 1, maxY: 1 }
+  const world = boundsOf(edges.flatMap(edgeExtremes)) ?? { minX: -1, minY: -1, maxX: 1, maxY: 1 }
   const projection = fitProjection(world)
 
   const layers = emptyFigureLayers()
   for (let i = 0; i < edges.length; i++) {
     const edge = edges[i]
-    const line = svgLine(projection.toView(edge.a), projection.toView(edge.b), {
+    const line = drawEdge(edge, projection.toView, projection.scale, {
       stroke: theme.ink,
       'stroke-width': edge.hidden ? STROKE_HIDDEN : STROKE_VISIBLE,
       'stroke-linecap': 'round',
       'stroke-dasharray': edge.hidden ? HIDDEN_DASH : null,
       opacity: edge.hidden ? HIDDEN_OPACITY : null,
       'data-statement': 0,
-      'data-object': `edge-${edge.vertices[0]}-${edge.vertices[1]}`,
+      'data-object': edgeObject(edge),
     })
     layers[edge.hidden ? 'auxiliary' : 'primary'].push(line)
   }
 
-  const view = edges.flatMap((e) => [projection.toView(e.a), projection.toView(e.b)])
+  const view = edges.flatMap((e) => edgeExtremes(e).map(projection.toView))
   const bounds = boundsOf(view)
   const rect: Rect = bounds
     ? { x: bounds.minX, y: bounds.minY, width: bounds.maxX - bounds.minX, height: bounds.maxY - bounds.minY }

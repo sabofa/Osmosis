@@ -36,7 +36,7 @@ import {
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
-import { cameraFor, projectSolid, type ProjectedEdge } from './project3d'
+import { cameraFor, drawEdge, edgeExtremes, edgeObject, projectSolid, type ProjectedEdge } from './project3d'
 import { buildSolid, solidDimensions, solidDimensionSegment, type SolidBody, type SolidSpec } from './solids'
 import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
 
@@ -812,7 +812,7 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
         points.push(...item.vertices)
         break
       case 'solid':
-        for (const edge of item.edges) points.push(edge.a, edge.b)
+        for (const edge of item.edges) points.push(...edgeExtremes(edge))
         break
       case 'solidVertex':
         points.push(item.at)
@@ -1100,7 +1100,13 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // starts looking; this is what stops it landing on the ink.
       obstacles.circles.push({ center: projection.toView(item.vertex), radius: angleArcRadius(item, projection) })
     } else if (item.kind === 'solid') {
-      for (const edge of item.edges) obstacles.segments.push([projection.toView(edge.a), projection.toView(edge.b)])
+      // An arc is an obstacle too, approximated for the label layout by the
+      // chords between its exact extremes — a bound on where the ink is, not
+      // a sampling of the curve, which is why it never reaches the emitter.
+      for (const edge of item.edges) {
+        const points = edgeExtremes(edge).map((point) => projection.toView(point))
+        for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
+      }
     } else if (item.kind === 'polygon') {
       const vertices = item.vertices.map((v) => projection.toView(v))
       obstacles.polygons.push(vertices)
@@ -1265,12 +1271,13 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
           'stroke-dasharray': edge.hidden ? AUXILIARY_DASH : null,
           opacity: edge.hidden ? AUXILIARY_OPACITY : null,
           'data-statement': item.id.statement,
-          'data-object': `edge-${edge.vertices[0]}-${edge.vertices[1]}`,
+          'data-object': edgeObject(edge),
         }
         // E1 — a hidden edge goes BEHIND every visible one, so the solid
         // stroke covers the dashes where they cross rather than the other
-        // way round.
-        layers[edge.hidden ? 'auxiliary' : 'primary'].push(svgLine(to(edge.a), to(edge.b), style))
+        // way round. Both members of the drawn-edge union go through
+        // drawEdge, which is the one place either becomes markup.
+        layers[edge.hidden ? 'auxiliary' : 'primary'].push(drawEdge(edge, projection.toView, projection.scale, style))
       }
       break
     }

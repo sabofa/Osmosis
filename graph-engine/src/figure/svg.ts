@@ -148,6 +148,63 @@ function arcPath(
   return { from, to, command: `A ${fmt(radius)} ${fmt(radius)} 0 ${largeArc} ${sweep} ${fmt(to.x)} ${fmt(to.y)}` }
 }
 
+// An ELLIPTICAL arc: the same `A` command, with two radii and a rotation.
+//
+// A circle in space projects to an ellipse under an orthographic camera, so
+// this is what a cylinder's rim, a cone's base and a sphere's outline are
+// actually made of. There is no faceting anywhere in that path: a sampled
+// polyline goes visibly polygonal the moment a reader zooms — which the
+// figure view now lets them do — and its byte count is a sample-rate choice
+// that would then have to be pinned for determinism. Four numbers and two
+// flags say the whole curve exactly, at any zoom.
+//
+// `rotation`, `startAngle` and `endAngle` are radians, and the two angles are
+// the ELLIPSE PARAMETER, not the polar angle: the point at t is
+// `center + rx cos(t) u + ry sin(t) v`, where u is the rx axis turned by
+// `rotation` and v is u turned a further quarter turn. That is the
+// parametrisation an orthographic projection of a circle produces directly,
+// and converting it to polar angles would be arithmetic done twice.
+//
+// Everything is in the SVG coordinate system — y increasing downward — so the
+// caller converts from world space before getting here, exactly as it does
+// for every other coordinate in this file.
+export function svgEllipticalArc(
+  center: Vec2,
+  rx: number,
+  ry: number,
+  rotation: number,
+  startAngle: number,
+  endAngle: number,
+  style: SvgAttrs
+): string {
+  const at = (t: number): Vec2 => ellipsePoint(center, rx, ry, rotation, t)
+  const from = at(startAngle)
+  const to = at(endAngle)
+  const delta = endAngle - startAngle
+  const largeArc = Math.abs(delta) > Math.PI ? 1 : 0
+  // Increasing the parameter sweeps from the rx axis toward the ry axis, and
+  // the ry axis is the rx axis turned a quarter turn the positive way, so a
+  // positive delta is the positive-sweep direction SVG's flag names.
+  const sweep = delta >= 0 ? 1 : 0
+  const degrees = (rotation * 180) / Math.PI
+  const d =
+    `M ${fmt(from.x)} ${fmt(from.y)} ` +
+    `A ${fmt(rx)} ${fmt(ry)} ${fmt(degrees)} ${largeArc} ${sweep} ${fmt(to.x)} ${fmt(to.y)}`
+  return `<path${attrs({ d, ...style })}/>`
+}
+
+// The point of an ellipse at parameter `t`. Exported because the geometry
+// that decides WHERE an arc starts and stops — a silhouette's tangency, an
+// arc's own bounding box — has to agree with what gets drawn to the last
+// digit, and the only way to guarantee that is to use the same function.
+export function ellipsePoint(center: Vec2, rx: number, ry: number, rotation: number, t: number): Vec2 {
+  const cos = Math.cos(rotation)
+  const sin = Math.sin(rotation)
+  const x = rx * Math.cos(t)
+  const y = ry * Math.sin(t)
+  return { x: center.x + x * cos - y * sin, y: center.y + x * sin + y * cos }
+}
+
 // The filled wedge between two radii — closed through the CENTRE, which is
 // what makes it a sector rather than a segment.
 export function svgSector(center: Vec2, radius: number, startAngle: number, endAngle: number, style: SvgAttrs): string {
