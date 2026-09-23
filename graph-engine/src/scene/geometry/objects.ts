@@ -162,6 +162,34 @@ export function distanceToLine(p: Vec2, l: GeometryLine): number {
 }
 
 // ---------------------------------------------------------------------------
+// D3 — the shared ordering rule for multi-solution constructions
+// ---------------------------------------------------------------------------
+
+// When a construction yields two results they come back sorted by x
+// ascending, then y ascending. That is what makes "P, Q = intersect ..."
+// reproducible from run to run, and it is the reason this engine is closed
+// form rather than a solver.
+//
+// Ties on x are compared with a tolerance rather than exactly: two solutions
+// that are genuinely symmetric about a vertical radical line can differ in
+// their last bits, and an exact-equality tie-break would order them by
+// rounding noise — precisely the non-determinism D3 exists to prevent.
+//
+// It lives here, beside the rest of the shared primitives, because *every*
+// multi-solution construction has to use the same one: intersect, and the two
+// tangents from an external point. A second comparator calibrated slightly
+// differently would be a second ordering rule, which is the same bug as
+// having none.
+export function comparePoints(p: Vec2, q: Vec2): number {
+  if (Math.abs(p.x - q.x) > GEOM_EPS) return p.x - q.x
+  return p.y - q.y
+}
+
+export function orderPoints(points: readonly Vec2[]): Vec2[] {
+  return [...points].sort(comparePoints)
+}
+
+// ---------------------------------------------------------------------------
 // The namespace
 // ---------------------------------------------------------------------------
 

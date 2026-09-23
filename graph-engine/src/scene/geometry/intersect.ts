@@ -9,6 +9,7 @@ import {
   type GeometryLine,
   type GeometryObject,
   lineDirection,
+  orderPoints,
   parameterAlong,
   scale,
   sub,
@@ -26,20 +27,9 @@ import {
 // D3: when a construction yields two points they come back sorted by x
 // ascending, then y ascending. That is what makes "P, Q = intersect ..."
 // reproducible from run to run, which is the whole reason this engine is
-// closed form rather than a solver.
-
-// Ties on x are compared with a tolerance rather than exactly: two solutions
-// that are genuinely symmetric about a vertical radical line can differ in
-// their last bits, and an exact-equality tie-break would order them by
-// rounding noise — precisely the non-determinism D3 exists to prevent.
-function compareSolutions(p: Vec2, q: Vec2): number {
-  if (Math.abs(p.x - q.x) > GEOM_EPS) return p.x - q.x
-  return p.y - q.y
-}
-
-function ordered(points: Vec2[]): Vec2[] {
-  return [...points].sort(compareSolutions)
-}
+// closed form rather than a solver. The comparator itself lives in objects.ts,
+// because the tangents from an external point are ordered by the same rule
+// and two comparators would be two rules.
 
 function describeOperand(object: GeometryObject, name?: string): string {
   const kind = object.kind === 'line' ? (object.extent === 'infinite' ? 'line' : object.extent) : object.kind
@@ -132,7 +122,7 @@ function lineCircle(l: GeometryLine, c: GeometryCircle): Vec2[] {
           return [add(foot, scale(direction, -half)), add(foot, scale(direction, half))]
         })()
 
-  return ordered(hits.filter((p) => withinExtent(p, l)))
+  return orderPoints(hits.filter((p) => withinExtent(p, l)))
 }
 
 function circleCircle(m: GeometryCircle, n: GeometryCircle, mName?: string, nName?: string): Vec2[] {
@@ -163,7 +153,7 @@ function circleCircle(m: GeometryCircle, n: GeometryCircle, mName?: string, nNam
 
   const half = Math.sqrt(Math.max(0, m.radius * m.radius - a * a))
   const perpendicular = { x: -u.y, y: u.x }
-  return ordered([add(mid, scale(perpendicular, half)), add(mid, scale(perpendicular, -half))])
+  return orderPoints([add(mid, scale(perpendicular, half)), add(mid, scale(perpendicular, -half))])
 }
 
 // Dispatches on the pair of kinds. Optional names are threaded through purely
@@ -174,7 +164,7 @@ export function intersect(a: GeometryObject, b: GeometryObject, aName?: string, 
     const which = a.kind === 'point' ? describeOperand(a, aName) : describeOperand(b, bName)
     throw new Error(`Cannot intersect a ${which} — intersection takes two lines, a line and a circle, or two circles`)
   }
-  if (a.kind === 'line' && b.kind === 'line') return ordered(lineLine(a, b, aName, bName))
+  if (a.kind === 'line' && b.kind === 'line') return orderPoints(lineLine(a, b, aName, bName))
   if (a.kind === 'line' && b.kind === 'circle') return lineCircle(a, b)
   if (a.kind === 'circle' && b.kind === 'line') return lineCircle(b, a)
   return circleCircle(a as GeometryCircle, b as GeometryCircle, aName, bName)
