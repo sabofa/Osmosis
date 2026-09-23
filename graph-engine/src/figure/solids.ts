@@ -1,4 +1,5 @@
-import { rectangularPrism, type Solid3D, type Vec3 } from './project3d'
+import { projectSolid, rectangularPrism, type Camera, type ProjectedEdge, type Solid3D, type Vec3 } from './project3d'
+import { coneOutline, cylinderOutline, sphereOutline } from './silhouette'
 
 // The solid vocabulary: what an author can ask for, where it sits, and what
 // its dimensions are called.
@@ -37,7 +38,10 @@ import { rectangularPrism, type Solid3D, type Vec3 } from './project3d'
 //     shape allows, which is both the conventional drawing and the stable
 //     one.
 //
-// A sphere has no axis, so only (1) applies to it.
+// A sphere has no axis, so only (1) applies to it: it is centred on the
+// origin. A cylinder and a cone follow (1)-(3) — a cylinder's two rims at
+// -h/2 and +h/2, a cone's base at -h/2 and its apex at +h/2, all centred on
+// the y-axis. (4) says nothing about them: a circle has no first vertex.
 //
 // Rule 1 is `rectangularPrism`'s existing convention, extended rather than
 // replaced: a prism built here is bit-for-bit the prism phase 2 built.
@@ -50,10 +54,13 @@ export type SolidSpec =
   | { kind: 'prism'; width: number; height: number; depth: number }
   | { kind: 'pyramid'; base: number; height: number }
   | { kind: 'tetrahedron'; edge: number }
+  | { kind: 'cylinder'; radius: number; height: number }
+  | { kind: 'cone'; radius: number; height: number }
+  | { kind: 'sphere'; radius: number }
 
 // The primitive names an author can write, in the order an error message
 // should list them.
-export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron'] as const
+export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere'] as const
 
 export type SolidPrimitiveName = (typeof SOLID_PRIMITIVES)[number]
 
@@ -92,6 +99,32 @@ export function buildSolid(spec: SolidSpec): SolidBody {
       return { spec, polyhedron: squarePyramid(spec.base, spec.height), labelOrder: [0, 1, 2, 3, 4] }
     case 'tetrahedron':
       return { spec, polyhedron: regularTetrahedron(spec.edge), labelOrder: [0, 1, 2, 3] }
+    // H2's second representation: a curved primitive carries its parameters
+    // and emits an analytic silhouette. It has no vertices, so there is
+    // nothing to letter and nothing for the convex face rule to classify.
+    case 'cylinder':
+    case 'cone':
+    case 'sphere':
+      return { spec, polyhedron: null, labelOrder: [] }
+  }
+}
+
+// **The one outline contract (H2).** A polyhedron is classified by the convex
+// face rule; a curved primitive computes its silhouette in closed form. Both
+// hand back the same drawn-edge union, and no caller above this line knows
+// which it got.
+export function solidOutline(body: SolidBody, camera: Camera): ProjectedEdge[] {
+  if (body.polyhedron) return projectSolid(body.polyhedron, camera)
+  switch (body.spec.kind) {
+    case 'cylinder':
+      return cylinderOutline(body.spec.radius, body.spec.height, camera)
+    case 'cone':
+      return coneOutline(body.spec.radius, body.spec.height, camera)
+    case 'sphere':
+      return sphereOutline(body.spec.radius, camera)
+    default:
+      // Unreachable: every polyhedral primitive builds a polyhedron above.
+      return []
   }
 }
 
@@ -170,6 +203,11 @@ export function solidDimensions(spec: SolidSpec): Record<string, number> {
       return { base: spec.base, height: spec.height }
     case 'tetrahedron':
       return { edge: spec.edge }
+    case 'cylinder':
+    case 'cone':
+      return { radius: spec.radius, height: spec.height }
+    case 'sphere':
+      return { radius: spec.radius }
   }
 }
 
@@ -230,5 +268,47 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
       const v = regularTetrahedron(spec.edge).vertices
       return [v[0], v[1]]
     }
+    case 'cylinder': {
+      const y = spec.height / 2
+      // The radius runs out along +x from the centre of the near rim; the
+      // height runs down the surface at +x, which is a silhouette line for
+      // no camera and therefore never lands on top of one.
+      if (dimension === 'radius') {
+        return [
+          { x: 0, y, z: 0 },
+          { x: spec.radius, y, z: 0 },
+        ]
+      }
+      if (dimension === 'height') {
+        return [
+          { x: spec.radius, y: -y, z: 0 },
+          { x: spec.radius, y, z: 0 },
+        ]
+      }
+      return null
+    }
+    case 'cone': {
+      const y = spec.height / 2
+      if (dimension === 'radius') {
+        return [
+          { x: 0, y: -y, z: 0 },
+          { x: spec.radius, y: -y, z: 0 },
+        ]
+      }
+      // A cone's height is its axis, exactly as a pyramid's is.
+      if (dimension === 'height') {
+        return [
+          { x: 0, y: -y, z: 0 },
+          { x: 0, y, z: 0 },
+        ]
+      }
+      return null
+    }
+    case 'sphere':
+      if (dimension !== 'radius') return null
+      return [
+        { x: 0, y: 0, z: 0 },
+        { x: spec.radius, y: 0, z: 0 },
+      ]
   }
 }

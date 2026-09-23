@@ -213,6 +213,10 @@ export interface ProjectedSegment {
   // at random.
   hidden: boolean
   vertices: [number, number]
+  // An explicit name for the emitted element, for a segment that joins no
+  // pair of vertices — a cylinder's silhouette line, a cone's generator.
+  // Absent for a polyhedron's edge, which names itself by its endpoints.
+  object?: string
 }
 
 // A piece of the ellipse a circle in space projects to.
@@ -375,7 +379,8 @@ const HIDDEN_OPACITY = 0.6
 // What an emitted edge's `data-object` says. A segment names the two
 // vertices it joins; an arc carries its own name, because it has none.
 export function edgeObject(edge: ProjectedEdge): string {
-  return edge.kind === 'segment' ? `edge-${edge.vertices[0]}-${edge.vertices[1]}` : edge.object
+  if (edge.kind === 'arc') return edge.object
+  return edge.object ?? `edge-${edge.vertices[0]}-${edge.vertices[1]}`
 }
 
 export function renderSolidFigure(solid: Solid3D, palette: Palette, camera: Camera = ISOMETRIC_CAMERA): string {

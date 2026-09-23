@@ -812,3 +812,34 @@ describe('solids', () => {
     expect(s.color).toBe('teal')
   })
 })
+
+describe('curved solids', () => {
+  it('parses a cylinder and a cone by radius and height', () => {
+    for (const kind of ['cylinder', 'cone'] as const) {
+      const s = parseStatement(`solid: ${kind} radius 3, height 8`)
+      if (s.kind !== 'solid') throw new Error('expected a solid')
+      expect(s.primitive).toEqual({ kind, radius: { kind: 'num', value: 3 }, height: { kind: 'num', value: 8 } })
+    }
+  })
+
+  it('parses a sphere by its radius', () => {
+    const s = parseStatement('S = solid sphere radius 4')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.primitive).toEqual({ kind: 'sphere', radius: { kind: 'num', value: 4 } })
+    expect(s.name).toBe('S')
+  })
+
+  it('names all six primitives when one is unknown', () => {
+    expect(() => parseStatement('solid: torus radius 4')).toThrow(/prism, pyramid, tetrahedron, cylinder, cone, sphere/)
+  })
+
+  it('refuses a cylinder that does not say which number is which', () => {
+    expect(() => parseStatement('solid: cylinder 3, 8')).toThrow(/cylinder radius <r>, height <h>/)
+  })
+
+  it('labels a radius', () => {
+    const s = parseStatement('label: C radius')
+    if (s.kind !== 'measureLabel') throw new Error('expected a measure label')
+    expect(s.subject).toEqual({ kind: 'solidDimension', solid: 'C', dimension: 'radius' })
+  })
+})

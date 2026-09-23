@@ -36,8 +36,8 @@ import {
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
-import { cameraFor, drawEdge, edgeExtremes, edgeObject, projectSolid, type ProjectedEdge } from './project3d'
-import { buildSolid, solidDimensions, solidDimensionSegment, type SolidBody, type SolidSpec } from './solids'
+import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge } from './project3d'
+import { buildSolid, solidDimensions, solidDimensionSegment, solidOutline, type SolidBody, type SolidSpec } from './solids'
 import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
@@ -252,6 +252,12 @@ function solidSpecOf(primitive: SolidPrimitive, value: (e: Expr) => number): Sol
       return { kind: 'pyramid', base: positive(primitive.base, 'base'), height: positive(primitive.height, 'height') }
     case 'tetrahedron':
       return { kind: 'tetrahedron', edge: positive(primitive.edge, 'edge') }
+    case 'cylinder':
+      return { kind: 'cylinder', radius: positive(primitive.radius, 'radius'), height: positive(primitive.height, 'height') }
+    case 'cone':
+      return { kind: 'cone', radius: positive(primitive.radius, 'radius'), height: positive(primitive.height, 'height') }
+    case 'sphere':
+      return { kind: 'sphere', radius: positive(primitive.radius, 'radius') }
   }
 }
 
@@ -581,13 +587,12 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           const spec = solidSpecOf(statement.primitive, value)
           const body = buildSolid(spec)
           if (statement.name) solids.set(statement.name, body)
-          const polyhedron = body.polyhedron
-          if (!polyhedron) break
           const camera = cameraFor(config.view)
-          const edges = projectSolid(polyhedron, camera)
+          const edges = solidOutline(body, camera)
           items.push({ kind: 'solid', id: { statement: index, object: statement.name }, edges, color: statement.color })
+          const polyhedron = body.polyhedron
           if (statement.vertices.length > 0) {
-            if (statement.vertices.length !== body.labelOrder.length) {
+            if (!polyhedron || statement.vertices.length !== body.labelOrder.length) {
               throw new Error(
                 `A ${spec.kind} has ${body.labelOrder.length} vertices, but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
               )

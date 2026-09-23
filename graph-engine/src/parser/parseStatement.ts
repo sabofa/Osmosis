@@ -481,12 +481,12 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
 // label); the parser only needs to recognise the shape of the phrase.
-const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge']
+const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge', 'radius']
 
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
@@ -517,6 +517,20 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const height = parts.length === 2 ? /^height\s+(.+)$/i.exec(parts[1]) : null
     if (parts.length !== 2 || !height) throw new Error(`Expected "pyramid square base <b>, height <h>", got "${rest}"`)
     return { kind: 'pyramid', base: parseExprString(parts[0]), height: parseExprString(height[1]) }
+  }
+
+  if (head === 'cylinder' || head === 'cone') {
+    const parts = splitTopLevelComma(tail).map((part) => part.trim())
+    const radius = parts.length === 2 ? /^radius\s+(.+)$/i.exec(parts[0]) : null
+    const height = parts.length === 2 ? /^height\s+(.+)$/i.exec(parts[1]) : null
+    if (!radius || !height) throw new Error(`Expected "${head} radius <r>, height <h>", got "${rest}"`)
+    return { kind: head, radius: parseExprString(radius[1]), height: parseExprString(height[1]) }
+  }
+
+  if (head === 'sphere') {
+    const radius = /^radius\s+(.+)$/i.exec(tail)
+    if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
+    return { kind: 'sphere', radius: parseExprString(radius[1]) }
   }
 
   if (head === 'tetrahedron') {

@@ -1406,3 +1406,81 @@ describe('dimension labels on a solid', () => {
     expect(layer(svg, 'labels')).toContain('S height')
   })
 })
+
+describe('curved solids in the figure', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  it('draws a cylinder as two lines and four path arcs, never a polyline', () => {
+    const svg = render('@mode: figure\nsolid: cylinder radius 3, height 8')
+    const drawn = layer(svg, 'primary') + layer(svg, 'auxiliary')
+    expect(countTags(drawn, 'line')).toBe(2)
+    expect(countTags(drawn, 'path')).toBe(4)
+    // The requirement, stated as bytes: every curve is one elliptical-arc
+    // command, and nothing anywhere is a sampled polyline.
+    expect(countTags(drawn, 'polyline')).toBe(0)
+    for (const path of drawn.match(/<path [^>]*\/>/g) ?? []) expect(path).toMatch(/ d="M [^"]*A [^"]*"/)
+  })
+
+  it('dashes the cylinder back rim and nothing else, in the layer beneath', () => {
+    const svg = render('@mode: figure\nsolid: cylinder radius 3, height 8')
+    expect(layer(svg, 'primary')).not.toContain('stroke-dasharray')
+    expect(countTags(layer(svg, 'auxiliary'), 'path')).toBe(1)
+    expect(layer(svg, 'auxiliary')).toContain('data-object="rim-far-back"')
+  })
+
+  it('fills no arc, so a cylinder is an outline and not a black lens', () => {
+    const svg = render('@mode: figure\nsolid: cylinder radius 3, height 8')
+    for (const path of (layer(svg, 'primary') + layer(svg, 'auxiliary')).match(/<path [^>]*\/>/g) ?? []) {
+      expect(path).toContain('fill="none"')
+    }
+  })
+
+  it('draws a cone as two lines and two arcs, one dashed', () => {
+    const svg = render('@mode: figure\nsolid: cone radius 3, height 7')
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(2)
+    expect(countTags(layer(svg, 'primary'), 'path')).toBe(1)
+    expect(countTags(layer(svg, 'auxiliary'), 'path')).toBe(1)
+  })
+
+  it('draws a sphere as two arcs and nothing else', () => {
+    const svg = render('@mode: figure\nsolid: sphere radius 4')
+    expect(countTags(layer(svg, 'primary'), 'path')).toBe(2)
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(0)
+    expect(layer(svg, 'auxiliary')).toBe('')
+  })
+
+  it('fits the viewBox around the bulge of a curve, not around its endpoints', () => {
+    // A sphere of radius 4 is drawn entirely by two arcs. If the bounds were
+    // taken from their endpoints alone the figure would be a flat line and
+    // the viewBox would have no height.
+    const svg = render('@mode: figure\nsolid: sphere radius 4')
+    const box = /viewBox="([^"]*)"/.exec(svg)
+    expect(box).not.toBeNull()
+    const [, , width, height] = box![1].split(' ').map(Number)
+    expect(width).toBeGreaterThan(100)
+    expect(Math.abs(width - height)).toBeLessThan(1)
+  })
+
+  it('labels a curved solid with its own dimensions', () => {
+    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 8\nlabel: C radius = 3\nlabel: C height = 8')
+    expect(layer(svg, 'labels')).toContain('>3</text>')
+    expect(layer(svg, 'labels')).toContain('>8</text>')
+    expect(result('@mode: figure\nC = solid cylinder radius 3, height 8\nlabel: C radius = 5').errors).toHaveLength(1)
+  })
+
+  it('refuses vertex names on a solid that has no vertices', () => {
+    const errors = result('@mode: figure\nsolid: sphere radius 4 vertices ABCD').errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].message).toMatch(/A sphere has 0 vertices/)
+  })
+
+  it('renders every curved primitive byte-identically twice', () => {
+    for (const spec of ['cylinder radius 3, height 8', 'cone radius 3, height 7', 'sphere radius 4']) {
+      const text = `@mode: figure\nsolid: ${spec}`
+      expect(render(text)).toBe(render(text))
+    }
+  })
+})

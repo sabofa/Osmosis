@@ -99,6 +99,9 @@ export type SolidPrimitive =
   | { kind: 'prism'; width: Expr; height: Expr; depth: Expr }
   | { kind: 'pyramid'; base: Expr; height: Expr }
   | { kind: 'tetrahedron'; edge: Expr }
+  | { kind: 'cylinder'; radius: Expr; height: Expr }
+  | { kind: 'cone'; radius: Expr; height: Expr }
+  | { kind: 'sphere'; radius: Expr }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)
