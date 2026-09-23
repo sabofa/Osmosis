@@ -549,7 +549,36 @@ circle x circle), `centroid`, `incenter`, `circumcenter`, `orthocenter`,
 Solved shapes: `triangle` in the five classic cases, `right triangle`,
 `rectangle`, `square`, `parallelogram`, `trapezoid`, `regular n-gon`.
 
-Circle vocabulary — absent in v1 beyond the outline: `chord`, `arc`, `sector`,
+**Circle vocabulary, in full (2026-09-23).** v1 could draw a circle's outline
+and nothing else, which is most of why circle geometry was unauthorable. The
+vocabulary, with what each one is *for*:
+
+| Construction | Why it is needed |
+|---|---|
+| `chord P-Q on O` | The basic circle segment; power-of-a-point and inscribed-angle work start here |
+| `arc P-Q on O` | Minor/major arc as a drawn path, with a stated direction so which arc is meant is never ambiguous |
+| `sector P-Q on O` | The filled wedge — area problems |
+| `segment P-Q on O` | The region between a chord and its arc, distinct from the sector |
+| `tangent at P on O` | The tangent line at a point of the circle |
+| `tangent from P to O` | The two tangent lines from an external point; **two solutions, so it needs the same ordering rule as `intersect`** |
+| `secant through P on O` | A line cutting the circle twice — the other half of power-of-a-point |
+| `radius O to P`, `diameter P-Q on O` | Drawn as marked segments rather than left implicit |
+| `inscribed angle P-Q-R on O` | The angle-at-the-circumference mark |
+| `central angle P-Q on O` | The angle-at-the-centre mark, and the thing an arc measure names |
+
+**Arc measure and radians.** An arc has a measure, and it is the measure a
+problem asks about. `label: arc PQ` prints it, honouring `@angle` — so degrees
+or radians, and **radians print as multiples of π once exact values land**
+(`π/3`, not `1.047`). Until then they print as decimals like every other
+measure. An arc's measure and its central angle are the same number, and the
+engine should not let those disagree.
+
+**Tangency needs a tolerance rule, not an equality test.** Whether a line
+touches a circle is a floating-point question after any chain of
+constructions. Use the shared `GEOM_EPS`, and make the near-miss case fail
+legibly rather than drawing a "tangent" that visibly crosses.
+
+Original summary line, kept for continuity — `chord`, `arc`, `sector`,
 `segment` (the region), `tangent at P`, `tangent from P`, `radius`, `diameter`,
 central and inscribed angle marks, and `incircle`/`circumcircle` of a triangle,
 which carry the correct radius (`r = Area/s`, `R = abc/(4*Area)`) and tangent
@@ -710,7 +739,7 @@ composed from Unicode combining characters, which render inconsistently across
 fonts and cannot be positioned reliably. The relation symbols are ordinary
 characters and need no special handling.
 
-#### A givens box
+#### A givens table
 
 Dense figures reach a point where inline labelling makes them worse, not
 better. The renderer therefore supports an optional **boxed panel** — placed in
@@ -720,6 +749,30 @@ already use, and it is the pressure valve for the label-density problem: when
 placement gets hard, move some of it out of the drawing entirely.
 
 Inline and boxed labelling coexist; an author chooses per label.
+
+**Revised 2026-09-23: it is a table, not a list of lines.** The first
+implementation stacked each given as one run of text inside a border. That is
+a caption block, and it stops being readable at the length a competition
+problem actually reaches. A statement of givens is tabular data — a subject, a
+relation, and a value — and it should be set as one:
+
+- **Aligned columns.** Subjects share a left edge, relations share theirs,
+  values share theirs. Ragged rows are what makes a stacked list hard to scan.
+- **An optional header**, so the box can say what it is (`Given`, `Find`).
+- **Rules between rows**, or at minimum consistent row rhythm, so a long list
+  stays legible.
+- **Notation inside cells** — a cell holds `AB` with its overbar, `∠BAC`,
+  `⊥`, `≅`, `≅`-marked congruences, all of it. Column alignment must measure
+  the *rendered* run including its overmarks, not the bare glyphs, or the
+  columns will be visibly off wherever a bar appears.
+
+This is **not** the existing `@mode: table` data table, which exists to present
+rows of data and belongs to a different part of the engine. A givens table is
+part of the figure, sized and placed with it, and inside the same SVG.
+
+**Sections.** A problem often states givens and then asks for something. The
+table should support more than one section — conventionally `Given` and
+`Find` — rather than forcing everything into one undifferentiated list.
 
 #### Figures and tables share a view
 
