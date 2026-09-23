@@ -70,6 +70,16 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
       config.angle = value
       return
     }
+    case 'scale': {
+      // Both spellings on purpose. "@scale: false" is what the spec writes
+      // and what an author reaching for "not to scale" types; on/off is this
+      // parser's convention for every other boolean. Rejecting either would
+      // be a papercut in the one place a figure most needs to be writable.
+      const b = value === 'true' ? true : value === 'false' ? false : parseBoolean(value)
+      if (b === null) throw new Error(`@scale must be "true"/"false" or "on"/"off", got "${value}"`)
+      config.toScale = b
+      return
+    }
     case 'mode': {
       if (value !== 'graph' && value !== 'figure' && value !== 'table') {
         throw new Error(`@mode must be "graph", "figure" or "table", got "${value}"`)

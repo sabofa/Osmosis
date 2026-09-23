@@ -323,3 +323,339 @@ describe('a dense figure, end to end', () => {
     expect(render(DENSE)).toBe(render(DENSE))
   })
 })
+
+// ---------------------------------------------------------------------------
+// Measure labels
+// ---------------------------------------------------------------------------
+
+interface EmittedText {
+  x: number
+  y: number
+  // The centre of the text's box. A plain label is written centred and a
+  // notation label from its left edge, so raw x is not comparable between the
+  // two and this is what the position tests measure with.
+  centreX: number
+  text: string
+}
+
+// Every <text> in a layer, with the position it was written at.
+function texts(markup: string): EmittedText[] {
+  const out: EmittedText[] = []
+  const pattern = /<text ([^>]*)>([^<]*)<\/text>/g
+  for (let m = pattern.exec(markup); m; m = pattern.exec(markup)) {
+    const attrs = m[1]
+    const x = Number(/(?:^|\s)x="([^"]*)"/.exec(attrs)?.[1])
+    const y = Number(/(?:^|\s)y="([^"]*)"/.exec(attrs)?.[1])
+    const anchored = /text-anchor="([^"]*)"/.exec(attrs)?.[1]
+    const text = m[2]
+    const centreX = anchored === 'start' ? x + estimateTextSize(text, LABEL_FONT_SIZE).width / 2 : x
+    out.push({ x, y, centreX, text })
+  }
+  return out
+}
+
+const LABEL_HALF_HEIGHT = estimateTextSize('0', LABEL_FONT_SIZE).height / 2
+
+// Whether two emitted labels' boxes touch. Distance between their centres is
+// not the same question: two labels can be further apart than a label is tall
+// and still overlap, because a label is much wider than it is high.
+function boxesOverlap(a: EmittedText, b: EmittedText): boolean {
+  const box = (t: EmittedText) => {
+    const size = estimateTextSize(t.text, LABEL_FONT_SIZE)
+    return { x0: t.centreX - size.width / 2, x1: t.centreX + size.width / 2, y0: t.y - size.height / 2, y1: t.y + size.height / 2 }
+  }
+  const p = box(a)
+  const q = box(b)
+  return p.x0 < q.x1 && q.x0 < p.x1 && p.y0 < q.y1 && q.y0 < p.y1
+}
+
+// Where a named point was actually drawn, read off its own dot. The tests
+// need view coordinates for the geometry, and this is the renderer's answer
+// rather than a second copy of the projection.
+function pointNamed(svg: string, name: string): { x: number; y: number } {
+  const pattern = new RegExp(`<circle cx="([^"]*)" cy="([^"]*)"[^>]*data-object="${name}"`)
+  const match = pattern.exec(layer(svg, 'points'))
+  if (!match) throw new Error(`no drawn point named "${name}"`)
+  return { x: Number(match[1]), y: Number(match[2]) }
+}
+
+// The angle arc's radius, from render.ts. Duplicated rather than exported:
+// the test is asserting the label clears the arc a reader sees, and pinning
+// the number here means changing the constant has to be done on purpose.
+const ANGLE_ARC_RADIUS = 34
+
+function distanceToSegment(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const vx = b.x - a.x
+  const vy = b.y - a.y
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / (vx * vx + vy * vy)))
+  return Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy))
+}
+
+function labelNamed(svg: string, text: string): EmittedText {
+  const all = texts(layer(svg, 'labels'))
+  const found = all.find((t) => t.text === text)
+  if (!found) throw new Error(`no label "${text}" among [${all.map((t) => t.text).join(', ')}]`)
+  return found
+}
+
+function build(spec: string) {
+  const parsed = parseSpec(spec)
+  return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+}
+
+describe('measure labels', () => {
+  // A 3-4-5 right triangle, placed so that nothing lands on a round view
+  // coordinate by accident.
+  // "triangle: ABC" is not a statement — the solved form is
+  // "triangle ABC: <measurements>" — so a polygon is what draws a triangle
+  // from plain coordinates.
+  const triangle = 'polygon: A(0, 0), B(8, 0), C(8, 6)\n'
+
+  it('prints the computed length of a segment', () => {
+    const svg = render('A = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AB')
+    expect(labelNamed(svg, '8').text).toBe('8')
+  })
+
+  it('prints a length the author never stated, computed from the figure', () => {
+    // The hypotenuse: nothing in the spec says 10.
+    const svg = render(triangle + 'label: AC')
+    expect(labelNamed(svg, '10').text).toBe('10')
+  })
+
+  it('prints an angle measure in the unit @angle selects', () => {
+    const degrees = render('@angle: degrees\n' + triangle + 'label: angle ABC')
+    expect(labelNamed(degrees, '90°').text).toBe('90°')
+    const radians = render('@angle: radians\n' + triangle + 'label: angle ABC')
+    expect(labelNamed(radians, '1.571').text).toBe('1.571')
+  })
+
+  it('places a length label beside the middle of its own segment', () => {
+    // Deliberately without a drawn segment: the label must sit *beside* the
+    // line AB because that is where a measure belongs, not because a stroke
+    // happened to be in the way. This is what the outward push buys — with
+    // no obstacle to escape, the layout's own first choice is straight
+    // right, which lands the number on the line it is measuring.
+    const svg = render('A = (0, 0)\nB = (8, 0)\nlabel: AB')
+    const label = labelNamed(svg, '8')
+    // A and B project symmetrically about the origin, so their midpoint is
+    // at view (0, 0) and the label belongs near it horizontally...
+    expect(Math.abs(label.centreX)).toBeLessThan(2 * LABEL_FONT_SIZE)
+    // ...and off the line joining them vertically.
+    expect(Math.abs(label.y)).toBeGreaterThan(LABEL_HALF_HEIGHT)
+  })
+
+  it('places an angle label somewhere other than the vertex label', () => {
+    const svg = render('@angle: degrees\n' + triangle + 'angle: A-B-C\nlabel: angle ABC')
+    const label = labelNamed(svg, '90°')
+    const vertex = labelNamed(svg, 'B')
+    expect(Math.hypot(label.x - vertex.x, label.y - vertex.y)).toBeGreaterThan(LABEL_FONT_SIZE)
+  })
+
+  it('goes through the collision layout rather than being placed directly', () => {
+    // Two measures on one segment share an anchor exactly. Placed directly
+    // they would be written on top of each other; laid out, the second has
+    // to find somewhere else to be.
+    const svg = render('A = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AB\nlabel: AB = x')
+    expect(boxesOverlap(labelNamed(svg, '8'), labelNamed(svg, 'x'))).toBe(false)
+  })
+
+  it('is laid out together with the point labels, not in a pass of its own', () => {
+    // G is the centroid, and a triangle's name is anchored at the centroid
+    // too, so both labels start from the same point. A separate layout pass
+    // for measures would see only its own rectangles and write one over the
+    // other.
+    const svg = render('polygon: A(0, 0), B(8, 0), C(2, 6)\nG = centroid ABC\nlabel: triangle ABC')
+    expect(boxesOverlap(labelNamed(svg, 'G'), labelNamed(svg, '△ABC'))).toBe(false)
+  })
+
+  it('stands an angle label out past the arc that marks the angle', () => {
+    // The arc has a view-space radius the label layout cannot see — it is
+    // not an obstacle, it is a mark — so the anchor is pushed out past it
+    // before the layout runs. Without that the number sits inside its own arc.
+    const svg = render('@angle: degrees\n' + triangle + 'angle: A-B-C\nlabel: angle ABC')
+    const vertex = pointNamed(svg, 'B')
+    const label = labelNamed(svg, '90°')
+    const distance = Math.hypot(label.centreX - vertex.x, label.y - vertex.y)
+    // Outside the arc...
+    expect(distance).toBeGreaterThan(ANGLE_ARC_RADIUS)
+    // ...and clear of it, rather than written across the stroke.
+    expect(distance - ANGLE_ARC_RADIUS).toBeGreaterThan(LABEL_HALF_HEIGHT)
+  })
+
+  it('writes an angle measure inside the angle it measures', () => {
+    // A number floating on the far side of the vertex names nothing. The
+    // bisector hint is what puts it in the opening between the two arms.
+    const svg = render('@angle: degrees\n' + triangle + 'angle: A-B-C\nlabel: angle ABC')
+    const [a, b, c] = ['A', 'B', 'C'].map((name) => pointNamed(svg, name))
+    const label = labelNamed(svg, '90°')
+    const cross = (p: { x: number; y: number }, q: { x: number; y: number }) => p.x * q.y - p.y * q.x
+    const arm = (p: { x: number; y: number }) => ({ x: p.x - b.x, y: p.y - b.y })
+    const u = arm(a)
+    const v = arm(c)
+    const w = arm({ x: label.centreX, y: label.y })
+    // Inside the wedge: turning from one arm to the label and from the label
+    // to the other arm both go the same way round as the angle itself.
+    expect(Math.sign(cross(u, w))).toBe(Math.sign(cross(u, v)))
+    expect(Math.sign(cross(w, v))).toBe(Math.sign(cross(u, v)))
+  })
+
+  it('keeps a vertex name off an angle arc too', () => {
+    // The arc became an obstacle for the whole layout, not just for measure
+    // labels: a vertex name written across its own angle mark was already
+    // wrong before this phase.
+    const svg = render('@angle: degrees\npolygon: A(0, 0), B(8, 0), C(8, 6)\nangle: A-B-C')
+    const vertex = pointNamed(svg, 'B')
+    const label = labelNamed(svg, 'B')
+    const distance = Math.hypot(label.centreX - vertex.x, label.y - vertex.y)
+    expect(Math.abs(distance - ANGLE_ARC_RADIUS)).toBeGreaterThan(LABEL_HALF_HEIGHT)
+  })
+
+  it('puts each side label on the outside of the shape, with no polygon to go by', () => {
+    // A quadrilateral drawn as four segments has no interior the layout can
+    // penalise a label for sitting in — "inside" is a property of a polygon
+    // item, and there is none here. The outward perpendicular is what keeps
+    // the four measures from landing in the middle of the shape.
+    const svg = render(
+      [
+        'P = (0, 0)',
+        'Q = (10, 0)',
+        'R = (9, 6)',
+        'S = (1, 7)',
+        'segment: P-Q',
+        'segment: Q-R',
+        'segment: R-S',
+        'segment: S-P',
+        'label: PQ',
+        'label: QR',
+        'label: RS',
+        'label: SP',
+      ].join('\n')
+    )
+    const corners = ['P', 'Q', 'R', 'S'].map((name) => pointNamed(svg, name))
+    const middle = {
+      x: corners.reduce((sum, c) => sum + c.x, 0) / corners.length,
+      y: corners.reduce((sum, c) => sum + c.y, 0) / corners.length,
+    }
+    const sides: [number, number, string][] = [
+      [0, 1, '10'],
+      [1, 2, '6.083'],
+      [2, 3, '8.062'],
+      [3, 0, '7.071'],
+    ]
+    for (const [i, j, text] of sides) {
+      const a = corners[i]
+      const b = corners[j]
+      const side = (p: { x: number; y: number }) => Math.sign((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x))
+      const label = labelNamed(svg, text)
+      expect(side({ x: label.centreX, y: label.y })).toBe(-side(middle))
+    }
+  })
+
+  it('stands a side label clear of the edges the figure draws', () => {
+    // What the outward push buys, and the reason it is not left to the
+    // layout's own escape rings: a number touching the line it measures is
+    // exactly what inline labelling gets wrong.
+    const svg = render('polygon: A(0, 0), B(8, 0), C(2, 5)\nlabel: AB\nlabel: BC\nlabel: AC')
+    const edges = [...layer(svg, 'primary').matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)].map(
+      (m) => ({ a: { x: Number(m[1]), y: Number(m[2]) }, b: { x: Number(m[3]), y: Number(m[4]) } })
+    )
+    expect(edges).toHaveLength(3)
+    for (const text of ['8', '7.81', '5.385']) {
+      const label = labelNamed(svg, text)
+      const clearance = Math.min(
+        ...edges.map((edge) => distanceToSegment({ x: label.centreX, y: label.y }, edge.a, edge.b))
+      )
+      expect(clearance).toBeGreaterThan(LABEL_HALF_HEIGHT)
+    }
+  })
+
+  it('prints a stated value that agrees with the figure, and reports nothing', () => {
+    const result = build('A = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AB = 8')
+    expect(result.errors).toEqual([])
+    expect(labelNamed(result.svg, '8').text).toBe('8')
+  })
+
+  it('fails a stated value that contradicts the figure, naming both numbers', () => {
+    const result = build('A = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AB = 99')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toContain('99')
+    expect(result.errors[0].message).toContain('8')
+    expect(result.errors[0].message).toContain('AB')
+    // The figure still draws: an author fixing the error needs to see it.
+    expect(result.svg.startsWith('<svg ')).toBe(true)
+  })
+
+  it('fails an angle assertion the same way', () => {
+    const result = build('@angle: degrees\n' + triangle + 'label: angle ABC = 60')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toContain('60')
+    expect(result.errors[0].message).toContain('90')
+  })
+
+  it('suppresses the check, and prints the stated value, under @scale: false', () => {
+    const result = build('@scale: false\nA = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AB = 99')
+    expect(result.errors).toEqual([])
+    expect(labelNamed(result.svg, '99').text).toBe('99')
+  })
+
+  it('asserts nothing for a symbolic value, and prints it as written', () => {
+    const result = build('A = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AB = x')
+    expect(result.errors).toEqual([])
+    expect(labelNamed(result.svg, 'x').text).toBe('x')
+  })
+
+  it('reports an unknown point instead of dropping the label silently', () => {
+    const result = build('A = (0, 0)\nB = (8, 0)\nsegment: A-B\nlabel: AZ')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].message).toContain('Z')
+  })
+
+  it('is deterministic', () => {
+    const spec = triangle + 'label: AB = 8\nlabel: segment AC\nlabel: angle ABC'
+    expect(render(spec)).toBe(render(spec))
+  })
+})
+
+describe('notation in a figure', () => {
+  const segment = 'A = (0, 0)\nB = (8, 0)\nsegment: A-B\n'
+
+  it('writes a named segment with an overbar above the glyphs', () => {
+    const labels = layer(render(segment + 'label: segment AB'), 'labels')
+    const name = texts(labels).find((t) => t.text === 'AB')
+    if (!name) throw new Error('expected an "AB" label')
+    // The bar is geometry, and sits a fixed fraction of the font size above
+    // the row the glyphs are on (0.46 em, per notation.ts).
+    const bars = [...labels.matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)]
+    const bar = bars.find((m) => Math.abs(Number(m[2]) - (name.y - 0.46 * LABEL_FONT_SIZE)) < 1e-3)
+    if (!bar) throw new Error(`no overbar above the label at y=${name.y}`)
+    // ...and covers the glyphs it belongs to.
+    expect(Number(bar[1])).toBeLessThan(name.x)
+    expect(Number(bar[3])).toBeGreaterThan(name.x + estimateTextSize('AB', LABEL_FONT_SIZE).width - 1e-9)
+    // A horizontal rule, not a diagonal.
+    expect(Number(bar[4])).toBeCloseTo(Number(bar[2]), 9)
+  })
+
+  it('draws a ray arrow and a line double-arrow as polylines', () => {
+    const rayMarkup = layer(render(segment + 'label: ray AB'), 'labels')
+    const lineMarkup = layer(render(segment + 'label: line AB'), 'labels')
+    expect(countTags(rayMarkup, 'polyline')).toBe(1)
+    expect(countTags(lineMarkup, 'polyline')).toBe(2)
+  })
+
+  it('writes a triangle name with the triangle sign and no overbar', () => {
+    const labels = layer(render('polygon: A(0, 0), B(8, 0), C(8, 6)\nlabel: triangle ABC'), 'labels')
+    expect(labels).toContain('△')
+    expect(countTags(labels, 'line')).toBe(0)
+  })
+
+  it('leaves a plain measure unmarked — "AB = 8" bars AB and not the value', () => {
+    expect(countTags(layer(render(segment + 'label: AB = 8'), 'labels'), 'line')).toBe(0)
+  })
+
+  it('draws no notation geometry in a figure that asks for none', () => {
+    // The guard on every assertion above: these figures have always emitted
+    // text only, and this phase must not add strokes to the labels layer of
+    // a figure that never asked for notation.
+    expect(countTags(layer(render(segment), 'labels'), 'line')).toBe(0)
+  })
+})

@@ -80,6 +80,20 @@ export interface LabelAnchor {
   // of on top of the angle mark that always sits inside it. A hint, not a
   // constraint: it loses to a collision every time.
   prefer?: Vec2 | null
+  // The box this label occupies, when the caller already knows it. A plain
+  // text label does not: its size is estimated from its own characters, which
+  // is what `text` is for. A notation label does, because its overbars and
+  // arrows make it taller than its glyphs and the caller has already laid
+  // those out (see notation.ts's layoutNotation).
+  size?: TextSize
+  // Whether this label is allowed to sit inside a closed shape.
+  //
+  // Off by default, because a name floating in the middle of a triangle
+  // belongs to nothing. An *angle measure* is the exception and the reason
+  // this exists: the inside of the shape is exactly where it belongs, and
+  // without the exemption the inside-penalty drives it out past the vertex,
+  // where it names no angle at all.
+  mayEnterShapes?: boolean
 }
 
 export interface LabelObstacles {
@@ -252,8 +266,10 @@ function scoreCandidate(candidate: Candidate, anchor: LabelAnchor, obstacles: La
     if (circleHitsRect(circle.center, circle.radius, candidate.rect)) score += W_CIRCLE
   }
 
-  for (const polygon of obstacles.polygons) {
-    if (polygon.length >= 3 && pointInPolygon(candidate.at, polygon)) score += W_INSIDE
+  if (!anchor.mayEnterShapes) {
+    for (const polygon of obstacles.polygons) {
+      if (polygon.length >= 3 && pointInPolygon(candidate.at, polygon)) score += W_INSIDE
+    }
   }
 
   if (anchor.prefer) {
@@ -281,7 +297,7 @@ export function layoutLabels(anchors: readonly LabelAnchor[], obstacles: LabelOb
   const result: PlacedLabel[] = []
 
   for (const anchor of anchors) {
-    const size = estimateTextSize(anchor.text, anchor.fontSize)
+    const size = anchor.size ?? estimateTextSize(anchor.text, anchor.fontSize)
     const candidates = candidatesFor(anchor, size)
 
     let best = candidates[0]

@@ -64,6 +64,35 @@ export type Construction =
   // unreachable from the DSL entirely.
   | { kind: 'circleAt'; center: string; radius: Expr }
 
+// --------------------------------------------------------------------------
+// Measure labels (Geometry v2, phase 3)
+// --------------------------------------------------------------------------
+
+// What a measure label is attached to — the geometry it names, which is both
+// what gets measured and what decides where the label is drawn.
+export type MeasureSubject =
+  | { kind: 'length'; from: string; to: string }
+  | { kind: 'angle'; from: string; vertex: string; to: string }
+  | { kind: 'triangle'; names: [string, string, string] }
+
+// The overmark a notation form carries. Mirrors figure/notation.ts's
+// Overmark minus 'arc' (arc measures are circle vocabulary, which this phase
+// does not build); duplicated rather than imported so the parser stays
+// standalone, exactly as GeometryExtent is above.
+export type MeasureOvermark = 'none' | 'segment' | 'ray' | 'line'
+
+// What the label prints.
+//
+// `stated` is the load-bearing one: it prints the author's number AND checks
+// it against the geometry, because a figure whose labels contradict its own
+// drawing is a wrong figure. `symbol` prints text and checks nothing, which
+// is what "AB = x" is for.
+export type MeasureContent =
+  | { kind: 'computed' }
+  | { kind: 'stated'; value: number }
+  | { kind: 'symbol'; text: string }
+  | { kind: 'name'; mark: MeasureOvermark; prefix: string }
+
 // Which of the three canonical slots a triangle measurement fills. Side 'a'
 // is opposite the first named vertex, angle 'a' is the angle at it.
 export type TriangleSlot = 'a' | 'b' | 'c'
@@ -117,6 +146,17 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     resolved the same way as angle:'s points. count
 //                                                     defaults to 1; use a matching count on another
 //                                                     tick: to mark two segments as congruent.
+//   label: A-B  |  label: AB                        -> prints the COMPUTED length of the segment.
+//                                                     "label: AB = 8" prints 8 and FAILS if the
+//                                                     computed length is not 8 (suppressed by
+//                                                     "@scale: false"); "label: AB = x" prints "x"
+//                                                     and asserts nothing. "label: angle A-B-C"
+//                                                     (or "angle ABC") measures the angle at B,
+//                                                     honouring "@angle". "label: segment AB" /
+//                                                     "ray AB" / "line AB" / "triangle ABC" print
+//                                                     the NAME in geometry notation (overbar,
+//                                                     arrow, double arrow, the triangle sign)
+//                                                     rather than a measure.
 //   right-angle: A-B-C                              -> small square marker at vertex B indicating a
 //                                                     90-degree angle between rays B->A and B->C.
 //   segment: A-B [dashed]                           -> a segment between two named points, resolved
@@ -219,6 +259,9 @@ export type StatementShape =
   | { kind: 'circle'; cx: Expr; cy: Expr; radius: Expr }
   | { kind: 'polygon'; vertices: { label: string; x: Expr; y: Expr }[] }
   | { kind: 'angle'; from: string; vertex: string; to: string; label: string | null }
+  // "label: AB", "label: AB = 8", "label: angle ABC", "label: segment AB" —
+  // a value read off the figure, or a name written in geometry notation.
+  | { kind: 'measureLabel'; subject: MeasureSubject; content: MeasureContent }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
   // "segment: A-B [dashed]" — a segment between two *named* points, the

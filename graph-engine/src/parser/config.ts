@@ -42,6 +42,13 @@ export interface GraphConfig {
   grid: boolean
   axes: boolean
   angle: 'degrees' | 'radians'
+  // Whether the figure is drawn to scale. False under "@scale: false", the
+  // "figure not drawn to scale" flag, which suppresses the check an asserting
+  // measure label performs (see figure/measure.ts). The flag and the
+  // assertion are designed together: without the assertion the flag means
+  // nothing, and without the flag a deliberately-not-to-scale figure could
+  // not be authored at all.
+  toScale: boolean
   // Which renderer draws this spec. `figure` is the SVG figure renderer —
   // its own renderer, selected the way `table` already selects TableView,
   // not the plot renderer with its axes switched off.
@@ -93,6 +100,7 @@ export function defaultConfig(): GraphConfig {
     grid: true,
     axes: true,
     angle: 'radians',
+    toScale: true,
     mode: 'graph',
     modeDeclared: false,
     points: new Set(),

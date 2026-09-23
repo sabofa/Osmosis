@@ -1,6 +1,17 @@
 import { isValidColor } from './colors'
 import { parseExprString } from './parseExpr'
-import type { Condition, Construction, Expr, GeometryRef, Statement, StatementShape, TriangleCentreKind, TriangleSlot } from './types'
+import type {
+  Condition,
+  Construction,
+  Expr,
+  GeometryRef,
+  MeasureContent,
+  MeasureOvermark,
+  Statement,
+  StatementShape,
+  TriangleCentreKind,
+  TriangleSlot,
+} from './types'
 
 function stripComment(line: string): string {
   const idx = line.indexOf('#')
@@ -479,6 +490,14 @@ function parseStatementCore(rawLine: string): StatementShape {
     return { kind: 'angle', from: parts[0], vertex: parts[1], to: parts[2], label }
   }
 
+  // Measure label: "label: AB", "label: AB = 8", "label: angle ABC",
+  // "label: segment AB". See parseMeasureLabel for the grammar and for why
+  // "= 8" is a check rather than a caption.
+  //
+  // Checked before the generic "=" forms below, which would otherwise read
+  // "label: AB = 8" as an implicit curve.
+  if (line.startsWith('label:')) return parseMeasureLabel(line.slice('label:'.length))
+
   // Congruence tick mark(s): "tick: A-B", optionally "tick: A-B count: 2" —
   // give two tick: statements the same count to mark their segments
   // congruent. A/B resolved the same way as angle:'s points.
@@ -802,6 +821,83 @@ function stripTrailingClause(line: string, pattern: RegExp): { line: string; val
   const match = pattern.exec(line)
   if (!match) return null
   return { line: line.slice(0, match.index), value: match[1] }
+}
+
+// ---------------------------------------------------------------------------
+// Measure labels
+// ---------------------------------------------------------------------------
+
+// The same name rule angle:/tick:/segment: use for their points, so a label
+// can name anything those can.
+const POINT_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
+// A run of single letters ("AB", "ABC") is the form the subject is written in
+// when every point has a one-letter name, which is the common case and the
+// one the spec writes. "A-B" is the fallback for longer names, and is the
+// spelling the rest of the geometry DSL already uses.
+function parsePointRun(text: string, count: number, role: string): string[] {
+  const trimmed = text.trim()
+  const names = trimmed.includes('-') ? trimmed.split('-').map((p) => p.trim()) : [...trimmed]
+  const plural = count === 2 ? 'two point names' : 'three point names'
+  if (names.length !== count || names.some((n) => !POINT_NAME.test(n))) {
+    throw new Error(`Expected ${plural} for the ${role} — "${count === 2 ? 'AB' : 'ABC'}" or "${count === 2 ? 'A-B' : 'A-B-C'}" — got "${trimmed}"`)
+  }
+  return names
+}
+
+// A stated value asserts, so it has to be a value and not an expression: the
+// whole point of the form is comparing a number the author wrote against a
+// number the engine computed. Anything that is not a plain decimal literal is
+// symbolic instead — "x", "θ", "2a" — and prints without being checked.
+//
+// Drawing the line at "is it a literal" rather than "does it evaluate"
+// matters: under an evaluating rule, whether "label: AB = a" asserted would
+// depend on whether some other line happened to define a constant called `a`,
+// and an author could not tell by looking at the label.
+const NUMERIC_VALUE = /^[+-]?(\d+\.?\d*|\.\d+)$/
+
+function parseMeasureContent(text: string): MeasureContent {
+  const value = text.trim()
+  if (value === '') throw new Error('Expected a value after "=" in a label, e.g. "label: AB = 8" or "label: AB = x"')
+  if (NUMERIC_VALUE.test(value)) return { kind: 'stated', value: Number.parseFloat(value) }
+  return { kind: 'symbol', text: value }
+}
+
+// "label: <subject> [= <value>]".
+function parseMeasureLabel(rest: string): StatementShape {
+  const body = rest.trim()
+  if (body === '') {
+    throw new Error('Expected something to label, e.g. "label: AB", "label: AB = 8" or "label: angle A-B-C"')
+  }
+
+  const equals = body.indexOf('=')
+  const subjectText = (equals === -1 ? body : body.slice(0, equals)).trim()
+  const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
+
+  // The notation forms name a piece of geometry instead of measuring it, so
+  // they take no "= value" — "label: segment AB = 8" is two different labels
+  // asked for at once.
+  const notation = /^(segment|ray|line|triangle)\s+(.+)$/.exec(subjectText)
+  if (notation) {
+    const [, word, names] = notation
+    if (content) throw new Error(`"label: ${word} ..." writes a name in notation and takes no "= value" — use "label: ${names.trim()} = ..." for a measure`)
+    if (word === 'triangle') {
+      const [a, b, c] = parsePointRun(names, 3, 'triangle')
+      return { kind: 'measureLabel', subject: { kind: 'triangle', names: [a, b, c] }, content: { kind: 'name', mark: 'none', prefix: '△' } }
+    }
+    const [from, to] = parsePointRun(names, 2, `${word} label`)
+    const mark = word as Exclude<MeasureOvermark, 'none'>
+    return { kind: 'measureLabel', subject: { kind: 'length', from, to }, content: { kind: 'name', mark, prefix: '' } }
+  }
+
+  const angle = /^angle\s+(.+)$/.exec(subjectText)
+  if (angle) {
+    const [from, vertex, to] = parsePointRun(angle[1], 3, 'angle label')
+    return { kind: 'measureLabel', subject: { kind: 'angle', from, vertex, to }, content: content ?? { kind: 'computed' } }
+  }
+
+  const [from, to] = parsePointRun(subjectText, 2, 'length label')
+  return { kind: 'measureLabel', subject: { kind: 'length', from, to }, content: content ?? { kind: 'computed' } }
 }
 
 // Parses one non-empty, comment-stripped line into a Statement. Splices off

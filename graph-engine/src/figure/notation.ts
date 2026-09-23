@@ -102,6 +102,17 @@ export function layoutNotation(runs: readonly NotationRun[], fontSize: number): 
   return { runs: placed, width: x, top, bottom, height: bottom - top, fontSize }
 }
 
+// Where to write a notation label whose *box* has been centred at `centre` —
+// by a label layout, which works in boxes and knows nothing about glyph rows.
+//
+// The two are not the same point. A marked label's box grows upward only, so
+// its centre sits above the row the glyphs are on; writing the text at the
+// box centre would push the overbar out through the top of the box the layout
+// just reserved for it.
+export function notationOrigin(layout: NotationLayout, centre: Vec2): Vec2 {
+  return { x: centre.x - layout.width / 2, y: centre.y - (layout.top + layout.bottom) / 2 }
+}
+
 // ---------------------------------------------------------------------------
 // Mark geometry
 // ---------------------------------------------------------------------------

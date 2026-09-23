@@ -4,6 +4,7 @@ import { fmt } from './svg'
 import {
   layoutNotation,
   notationElements,
+  notationOrigin,
   overmarkGeometry,
   relationSymbol,
   type NotationRun,
@@ -257,5 +258,25 @@ describe('relationSymbol', () => {
 
   it('is null for a word that names no relation', () => {
     expect(relationSymbol('bisects')).toBeNull()
+  })
+})
+
+describe('notationOrigin', () => {
+  it('writes an unmarked label centred on the box it was given', () => {
+    const layout = placed([{ text: 'AB', mark: 'none' }])
+    const origin = notationOrigin(layout, { x: 100, y: 50 })
+    expect(origin.x).toBeCloseTo(100 - layout.width / 2, 12)
+    // Nothing above the glyphs, so the box centre *is* the glyph row.
+    expect(origin.y).toBeCloseTo(50, 12)
+  })
+
+  it('drops the glyph row below the box centre when a mark sits above it', () => {
+    const layout = placed([{ text: 'AB', mark: 'segment' }])
+    const origin = notationOrigin(layout, { x: 100, y: 50 })
+    expect(origin.y).toBeGreaterThan(50)
+    // Exactly far enough that the mark's top edge lands on the box's top
+    // edge — the label fills the box the layout reserved, no more.
+    expect(origin.y + layout.top).toBeCloseTo(50 - layout.height / 2, 12)
+    expect(origin.y + layout.bottom).toBeCloseTo(50 + layout.height / 2, 12)
   })
 })

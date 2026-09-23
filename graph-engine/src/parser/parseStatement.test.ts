@@ -423,3 +423,100 @@ describe('parseStatement — geometry constructions', () => {
     expect(s.statementName).toBe('mid')
   })
 })
+
+describe('parseStatement — measure labels', () => {
+  it('parses a bare length label as a computed measure', () => {
+    const s = parseStatement('label: AB')
+    expect(s.kind).toBe('measureLabel')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.subject).toEqual({ kind: 'length', from: 'A', to: 'B' })
+    expect(s.content).toEqual({ kind: 'computed' })
+  })
+
+  it('accepts the dashed spelling, so multi-letter point names work', () => {
+    const s = parseStatement('label: P1-Q2')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.subject).toEqual({ kind: 'length', from: 'P1', to: 'Q2' })
+  })
+
+  it('parses "= <number>" as a stated value that asserts', () => {
+    const s = parseStatement('label: AB = 8')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.content).toEqual({ kind: 'stated', value: 8 })
+  })
+
+  it('parses a decimal and a negative-free fractional stated value', () => {
+    const s = parseStatement('label: AB = 7.5')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.content).toEqual({ kind: 'stated', value: 7.5 })
+  })
+
+  it('parses "= <anything else>" as symbolic, asserting nothing', () => {
+    const s = parseStatement('label: AB = x')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.content).toEqual({ kind: 'symbol', text: 'x' })
+
+    const greek = parseStatement('label: angle ABC = θ')
+    if (greek.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(greek.content).toEqual({ kind: 'symbol', text: 'θ' })
+  })
+
+  it('parses an angle measure, vertex in the middle', () => {
+    const s = parseStatement('label: angle ABC')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.subject).toEqual({ kind: 'angle', from: 'A', vertex: 'B', to: 'C' })
+    expect(s.content).toEqual({ kind: 'computed' })
+  })
+
+  it('parses an asserted angle measure', () => {
+    const s = parseStatement('label: angle A-B-C = 30')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.subject).toEqual({ kind: 'angle', from: 'A', vertex: 'B', to: 'C' })
+    expect(s.content).toEqual({ kind: 'stated', value: 30 })
+  })
+
+  it('parses the notation forms, each carrying its own overmark', () => {
+    const forms: [string, string][] = [
+      ['label: segment AB', 'segment'],
+      ['label: ray AB', 'ray'],
+      ['label: line AB', 'line'],
+    ]
+    for (const [line, mark] of forms) {
+      const s = parseStatement(line)
+      if (s.kind !== 'measureLabel') throw new Error(`unreachable for "${line}"`)
+      expect(s.subject).toEqual({ kind: 'length', from: 'A', to: 'B' })
+      expect(s.content).toEqual({ kind: 'name', mark, prefix: '' })
+    }
+  })
+
+  it('parses the triangle notation form', () => {
+    const s = parseStatement('label: triangle ABC')
+    if (s.kind !== 'measureLabel') throw new Error('unreachable')
+    expect(s.subject).toEqual({ kind: 'triangle', names: ['A', 'B', 'C'] })
+    expect(s.content).toEqual({ kind: 'name', mark: 'none', prefix: '△' })
+  })
+
+  it('takes color: and name: clauses like every other statement', () => {
+    const s = parseStatement('label: AB = 8 color: teal name: side')
+    expect(s.kind).toBe('measureLabel')
+    expect(s.color).toBe('teal')
+    expect(s.statementName).toBe('side')
+  })
+
+  it('refuses a single-vertex angle, naming the form it wants', () => {
+    // The spec's "label: angle A" needs a containing shape to say which two
+    // rays are meant; nothing in the statement carries that, so it is
+    // refused rather than guessed at.
+    expect(() => parseStatement('label: angle A')).toThrow(/three point names/)
+  })
+
+  it('refuses a subject that names the wrong number of points', () => {
+    expect(() => parseStatement('label: ABC')).toThrow(/two point names/)
+    expect(() => parseStatement('label: A')).toThrow(/two point names/)
+    expect(() => parseStatement('label: triangle AB')).toThrow(/three/)
+  })
+
+  it('refuses an empty label', () => {
+    expect(() => parseStatement('label:')).toThrow(/label:/)
+  })
+})

@@ -1,6 +1,6 @@
 import type { GraphConfig } from '../parser/config'
 import { evalExpr, type FunctionTable } from '../parser/evalExpr'
-import type { Expr, Statement } from '../parser/types'
+import type { Expr, MeasureContent, MeasureSubject, Statement } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
 import { type Palette, themedColor } from '../render/palette'
@@ -23,6 +23,8 @@ import {
   type WorldBounds,
 } from './document'
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
+import { angleMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
+import { layoutNotation, notationElements, notationOrigin, type NotationRun } from './notation'
 import { svgArc, svgCircle, svgLine, svgPolyline, svgText, type SvgAttrs } from './svg'
 
 // The figure renderer: statements in, one SVG document out.
@@ -73,6 +75,22 @@ type FigureItem =
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
   | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
   | { kind: 'rightAngleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; color: string | null }
+  // A measure label draws no geometry of its own: it is text (possibly
+  // carrying notation) hung off a piece of geometry that is already drawn.
+  // `at` is where it belongs in world space and `push` is the direction it
+  // would rather sit in — outward from the figure for a side, into the
+  // opening for an angle.
+  | {
+      kind: 'measureLabel'
+      id: Identity
+      at: Vec2
+      push: Vec2 | null
+      // Whether this label belongs inside the shape it annotates. True for an
+      // angle measure and false for everything else — see labels.ts.
+      inside: boolean
+      runs: NotationRun[]
+      color: string | null
+    }
 
 export interface FigureResult {
   svg: string
@@ -145,6 +163,99 @@ function geometryItems(object: GeometryObject, name: string | null, id: Identity
   }
 }
 
+// ---------------------------------------------------------------------------
+// Measure labels
+// ---------------------------------------------------------------------------
+
+// The name the author would recognise, used in the assertion's message.
+function subjectName(subject: MeasureSubject): string {
+  switch (subject.kind) {
+    case 'length':
+      return `${subject.from}${subject.to}`
+    case 'angle':
+      return `angle ${subject.from}${subject.vertex}${subject.to}`
+    case 'triangle':
+      return `triangle ${subject.names.join('')}`
+  }
+}
+
+// A unit vector in *view* space (y flipped) bisecting the angle at `vertex`.
+// Degenerate — a straight angle, where the two arms cancel — falls back to the
+// perpendicular of one arm, which is where a hand-drawn figure puts the label
+// too.
+function bisectorDirection(vertex: Vec2, from: Vec2, to: Vec2): Vec2 | null {
+  const unit = (p: Vec2): Vec2 | null => {
+    const dx = p.x - vertex.x
+    const dy = p.y - vertex.y
+    const len = Math.hypot(dx, dy)
+    return len === 0 ? null : { x: dx / len, y: dy / len }
+  }
+  const u = unit(from)
+  const v = unit(to)
+  if (!u || !v) return null
+  const sum = { x: u.x + v.x, y: u.y + v.y }
+  const len = Math.hypot(sum.x, sum.y)
+  if (len < 1e-9) return { x: -u.y, y: u.x }
+  // View space flips y, exactly as awayFrom does.
+  return { x: sum.x / len, y: -sum.y / len }
+}
+
+// The side of a segment a label should sit on: perpendicular to it, pointing
+// away from the rest of the figure, so a triangle's three side labels land
+// outside it rather than piled in the middle.
+function outwardPerpendicular(a: Vec2, b: Vec2, centre: Vec2): Vec2 | null {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  if (len === 0) return null
+  const normal = { x: -dy / len, y: dx / len }
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  const away = { x: mid.x - centre.x, y: mid.y - centre.y }
+  const sign = normal.x * away.x + normal.y * away.y < 0 ? -1 : 1
+  return { x: sign * normal.x, y: -sign * normal.y }
+}
+
+// What the label prints, and — for the asserting form — whether the figure
+// agrees with it.
+//
+// F1 lives here: `label: AB = 8` prints 8 *and* is checked, because the only
+// thing worse than an unlabelled figure is a labelled wrong one. The check is
+// suppressed under `@scale: false` (see measure.ts), which is the flag that
+// makes a deliberately-not-to-scale figure authorable.
+function measureRuns(
+  subject: MeasureSubject,
+  content: MeasureContent,
+  computed: number | null,
+  config: GraphConfig
+): { runs: NotationRun[]; error: string | null } {
+  const asText = (value: number) =>
+    subject.kind === 'angle' ? formatAngleMeasure(value, config.angle) : formatMeasure(value)
+
+  switch (content.kind) {
+    case 'computed':
+      if (computed === null) throw new Error(`"label: ${subjectName(subject)}" has no measure to print`)
+      return { runs: [{ text: asText(computed), mark: 'none' }], error: null }
+    case 'stated': {
+      const error =
+        computed === null ? null : checkMeasure(subjectName(subject), content.value, computed, { toScale: config.toScale })
+      return { runs: [{ text: asText(content.value), mark: 'none' }], error }
+    }
+    case 'symbol':
+      return { runs: [{ text: content.text, mark: 'none' }], error: null }
+    case 'name': {
+      const names =
+        subject.kind === 'length'
+          ? `${subject.from}${subject.to}`
+          : subject.kind === 'angle'
+            ? `${subject.from}${subject.vertex}${subject.to}`
+            : subject.names.join('')
+      // The prefix is a character (△), not a mark: it is set beside the name
+      // rather than drawn over it, so it belongs in the same run.
+      return { runs: [{ text: content.prefix + names, mark: content.mark }], error: null }
+    }
+  }
+}
+
 function buildItems(statements: Statement[], config: GraphConfig): { items: FigureItem[]; errors: SceneError[] } {
   const functions = collectFunctions(statements)
   const namedPoints = collectNamedPoints(statements, config, functions)
@@ -153,6 +264,10 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   const items: FigureItem[] = []
   const errors: SceneError[] = [...constructions.errors]
+  // Measure labels are built in a second pass: where one sits depends on
+  // where the rest of the figure is (a side's label goes on the outside),
+  // and that is only known once every other item exists.
+  const measureStatements: { statement: Statement; index: number }[] = []
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
 
   function resolve(name: string): Vec2 {
@@ -258,9 +373,55 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             color: statement.color,
           })
           break
+        case 'measureLabel':
+          measureStatements.push({ statement, index })
+          break
         default:
           break
       }
+    } catch (err) {
+      errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  const centre = centroidOf(anchorPoints(items).length > 0 ? anchorPoints(items) : [{ x: 0, y: 0 }])
+  for (const { statement, index } of measureStatements) {
+    if (statement.kind !== 'measureLabel') continue
+    try {
+      const { subject, content } = statement
+      let at: Vec2
+      let push: Vec2 | null
+      let computed: number | null = null
+      const inside = subject.kind === 'angle'
+      if (subject.kind === 'length') {
+        const a = resolve(subject.from)
+        const b = resolve(subject.to)
+        at = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+        push = outwardPerpendicular(a, b, centre)
+        computed = segmentLength(a, b)
+      } else if (subject.kind === 'angle') {
+        const vertex = resolve(subject.vertex)
+        const from = resolve(subject.from)
+        const to = resolve(subject.to)
+        at = vertex
+        push = bisectorDirection(vertex, from, to)
+        computed = angleMeasure(vertex, from, to, config.angle)
+      } else {
+        const vertices = subject.names.map((name) => resolve(name))
+        at = centroidOf(vertices)
+        push = null
+      }
+      const { runs, error } = measureRuns(subject, content, computed, config)
+      if (error) errors.push({ line: 0, message: error })
+      items.push({
+        kind: 'measureLabel',
+        id: { statement: index, object: subjectName(subject) },
+        at,
+        push,
+        inside,
+        runs,
+        color: statement.color,
+      })
     } catch (err) {
       errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
     }
@@ -304,6 +465,12 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'tickMark':
         points.push(item.from, item.to)
         break
+      case 'measureLabel':
+        // Anchored to geometry that already votes on the bounds — a midpoint,
+        // a vertex, a centroid — so it adds nothing of its own. Its *box*
+        // still grows the viewBox, through the placed-label rects in
+        // renderFigure, exactly as a point's name does.
+        break
     }
   }
   return points
@@ -339,7 +506,7 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   // this, then the viewBox is grown to contain both (E3).
   const geometryRect = geometryBounds(items, projection)
   const obstacles = labelObstacles(items, projection, geometryRect)
-  const anchors = labelAnchors(items, projection)
+  const { anchors, sources } = labelAnchors(items, projection)
   const placed = layoutLabels(anchors, obstacles)
 
   const contentRect = unionRects([geometryRect, ...placed.map((label) => label.rect)])
@@ -351,9 +518,23 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   const layers = emptyFigureLayers()
   for (const item of items) emit(item, projection, viewBox, theme, palette, layers)
   for (const label of placed) {
-    // The anchor id is "<name>#<statement index>" (see labelAnchors), which
-    // is what carries E4's identity through the layout and back out.
+    // The anchor id is "<name>#<statement index>" (see labelAnchors), and the
+    // source map carries E4's identity through the layout and back out.
+    const source = sources.get(label.id)
     const statement = Number(label.id.slice(label.id.lastIndexOf('#') + 1))
+    const id = source?.id ?? { statement, object: label.text }
+    if (source?.notation) {
+      const layout = layoutNotation(source.notation, label.fontSize)
+      const origin = notationOrigin(layout, label.at)
+      layers.labels.push(
+        ...notationElements(layout, origin, {
+          fill: strokeColor(source.color, palette.axis, palette),
+          fontFamily: FONT_FAMILY,
+          identity: identity(id),
+        })
+      )
+      continue
+    }
     layers.labels.push(
       svgText(label.at, label.text, {
         'font-size': label.fontSize,
@@ -361,7 +542,7 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
         fill: theme.label,
         'text-anchor': 'middle',
         'dominant-baseline': 'central',
-        ...identity({ statement, object: label.text }),
+        ...identity(id),
       })
     )
   }
@@ -374,6 +555,17 @@ function geometryBounds(items: readonly FigureItem[], projection: Projection): R
   const bounds = boundsOf(view)
   if (!bounds) return { x: 0, y: 0, width: 0, height: 0 }
   return { x: bounds.minX, y: bounds.minY, width: bounds.maxX - bounds.minX, height: bounds.maxY - bounds.minY }
+}
+
+// The radius the angle mark at `item` is drawn with, in view units. Shared by
+// the emitter and the label layout so that the arc a reader sees and the arc a
+// label avoids are the same circle.
+function angleArcRadius(item: Extract<FigureItem, { kind: 'angleMark' }>, projection: Projection): number {
+  const vertex = projection.toView(item.vertex)
+  const from = projection.toView(item.from)
+  const to = projection.toView(item.to)
+  const legLength = Math.min(Math.hypot(from.x - vertex.x, from.y - vertex.y), Math.hypot(to.x - vertex.x, to.y - vertex.y))
+  return Math.min(ANGLE_ARC_RADIUS, legLength * ANGLE_ARC_MAX_FRACTION)
 }
 
 function labelObstacles(items: readonly FigureItem[], projection: Projection, geometryRect: Rect): LabelObstacles {
@@ -394,6 +586,13 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       }
     } else if (item.kind === 'circle') {
       obstacles.circles.push({ center: projection.toView(item.center), radius: item.radius * projection.scale })
+    } else if (item.kind === 'angleMark') {
+      // The arc is an obstacle like any other stroke. It is not enough to
+      // push a measure label's anchor out past it: the layout is free to
+      // choose a candidate pointing back at the vertex, and a number written
+      // across its own angle arc is unreadable. Pushing sets where the label
+      // starts looking; this is what stops it landing on the ink.
+      obstacles.circles.push({ center: projection.toView(item.vertex), radius: angleArcRadius(item, projection) })
     } else if (item.kind === 'polygon') {
       const vertices = item.vertices.map((v) => projection.toView(v))
       obstacles.polygons.push(vertices)
@@ -403,21 +602,53 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
   return obstacles
 }
 
-function labelAnchors(items: readonly FigureItem[], projection: Projection): LabelAnchor[] {
+// What a placed label needs at emission time that the layout does not carry:
+// which statement produced it, and — for a measure label — the notation runs
+// to draw instead of a plain string.
+interface LabelSource {
+  id: Identity
+  notation: NotationRun[] | null
+  color: string | null
+}
+
+function labelAnchors(
+  items: readonly FigureItem[],
+  projection: Projection
+): { anchors: LabelAnchor[]; sources: Map<string, LabelSource> } {
   const anchors: LabelAnchor[] = []
+  const sources = new Map<string, LabelSource>()
   for (const item of items) {
-    if (item.kind !== 'point' || !item.label) continue
     // The id is unique per emitted label even when two points share a name,
     // which keeps the layout's tie-break total.
-    anchors.push({
-      id: `${item.label}#${item.id.statement}`,
-      text: item.label,
-      at: projection.toView(item.at),
-      fontSize: LABEL_FONT_SIZE,
-      prefer: item.prefer,
-    })
+    if (item.kind === 'point' && item.label) {
+      const id = `${item.label}#${item.id.statement}`
+      anchors.push({
+        id,
+        text: item.label,
+        at: projection.toView(item.at),
+        fontSize: LABEL_FONT_SIZE,
+        prefer: item.prefer,
+      })
+      sources.set(id, { id: item.id, notation: null, color: item.color })
+    } else if (item.kind === 'measureLabel') {
+      const layout = layoutNotation(item.runs, LABEL_FONT_SIZE)
+      const at = projection.toView(item.at)
+      const id = `${item.id.object ?? ''}#${item.id.statement}`
+      anchors.push({
+        id,
+        text: item.runs.map((run) => run.text).join(''),
+        at,
+        fontSize: LABEL_FONT_SIZE,
+        prefer: item.push,
+        // Notation is taller than its own glyphs, and the layout must keep
+        // other labels off the overbar, not just off the letters.
+        size: { width: layout.width, height: layout.height },
+        mayEnterShapes: item.inside,
+      })
+      sources.set(id, { id: item.id, notation: item.runs, color: item.color })
+    }
   }
-  return anchors
+  return { anchors, sources }
 }
 
 function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, layers: ReturnType<typeof emptyFigureLayers>): void {
@@ -478,8 +709,7 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const vertex = to(item.vertex)
       const from = to(item.from)
       const to2 = to(item.to)
-      const legLength = Math.min(Math.hypot(from.x - vertex.x, from.y - vertex.y), Math.hypot(to2.x - vertex.x, to2.y - vertex.y))
-      const radius = Math.min(ANGLE_ARC_RADIUS, legLength * ANGLE_ARC_MAX_FRACTION)
+      const radius = angleArcRadius(item, projection)
       const { start, delta } = angleSweep(vertex, from, to2)
       const stroke = strokeColor(item.color, palette.axis, palette)
       layers.marks.push(svgArc(vertex, radius, start, start + delta, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }))
@@ -511,6 +741,9 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       }
       break
     }
+    case 'measureLabel':
+      // Emitted with the other labels, after the layout has placed them.
+      break
     case 'rightAngleMark': {
       const vertex = to(item.vertex)
       const from = to(item.from)

@@ -80,3 +80,23 @@ describe('@point-labels', () => {
     expect(parse('@point-labels: off').pointLabels).toBe('off')
   })
 })
+
+describe('@scale', () => {
+  it('defaults to a figure that is drawn to scale', () => {
+    expect(defaultConfig().toScale).toBe(true)
+  })
+
+  it('accepts the spelling the spec uses', () => {
+    expect(parse('@scale: false').toScale).toBe(false)
+    expect(parse('@scale: true').toScale).toBe(true)
+  })
+
+  it('accepts this parser\u2019s own on/off spelling too', () => {
+    expect(parse('@scale: off').toScale).toBe(false)
+    expect(parse('@scale: on').toScale).toBe(true)
+  })
+
+  it('rejects anything else, naming both spellings', () => {
+    expect(() => parse('@scale: maybe')).toThrow(/true.*false|on.*off/)
+  })
+})
