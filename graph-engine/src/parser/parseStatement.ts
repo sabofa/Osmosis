@@ -515,12 +515,12 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
 // label); the parser only needs to recognise the shape of the phrase.
-const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge', 'radius', 'top']
+const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge', 'radius', 'top', 'side']
 
 // "A-B-C-D": a hyphenated run of point names, for a solid placed by points.
 // `form` is the whole phrase an error quotes back.
@@ -571,6 +571,16 @@ function parseTetrahedronEdges(namesText: string, edgesText: string): SolidPrimi
   return { kind: 'tetrahedronEdges', vertices, edges }
 }
 
+// "regular <n> side <s>, <key> <v>, ...": the regular forms' shared shape.
+// Returns [n, side, ...the keyed values in `keys` order].
+function regularParts(tail: string, keys: string[], form: string, rest: string): Expr[] {
+  const parts = splitTopLevelComma(tail).map((part) => part.trim())
+  const head = /^regular\s+(\S+)\s+side\s+(.+)$/i.exec(parts[0])
+  const values = keys.map((key, i) => (parts.length === keys.length + 1 ? new RegExp(`^${key}\\s+(.+)$`, 'i').exec(parts[i + 1]) : null))
+  if (!head || values.some((v) => !v)) throw new Error(`Expected "${form}", got "${rest}"`)
+  return [parseExprString(head[1]), parseExprString(head[2]), ...values.map((v) => parseExprString(v![1]))]
+}
+
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
 // Each form names its own numbers. "8 by 5 by 6" is bare because width,
@@ -587,6 +597,11 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const onBase = /^([a-zA-Z]+(?:\s*-\s*[a-zA-Z]+)+)\s+height\s+(.+)$/i.exec(tail)
     if (onBase) {
       return { kind: 'prismOn', base: parsePointList(onBase[1], 'prism A-B-C-D height <h>', 'prism base'), height: parseExprString(onBase[2]) }
+    }
+    // P5 — on a regular n-gon: "prism regular 6 side 12, height 5".
+    if (/^regular\s/i.test(tail)) {
+      const [sides, side, height] = regularParts(tail, ['height'], 'prism regular <n> side <s>, height <h>', rest)
+      return { kind: 'regularPrism', sides, side, height }
     }
     const parts = tail.split(/\s+by\s+/i).map((part) => part.trim())
     if (parts.length !== 3 || parts.some((part) => part === '')) {
@@ -608,8 +623,26 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     // "square" is required rather than defaulted: a pyramid on a triangular
     // base is a different solid with the same word, and guessing which one
     // an author meant is how a figure becomes quietly wrong.
+    // P5 — on a regular n-gon, or on a rectangle (width by depth, like the
+    // box's first and last numbers).
+    if (/^regular\s/i.test(tail)) {
+      const [sides, side, height] = regularParts(tail, ['height'], 'pyramid regular <n> side <s>, height <h>', rest)
+      return { kind: 'regularPyramid', sides, side, height }
+    }
+    if (/^rectangle\s/i.test(tail)) {
+      const parts = splitTopLevelComma(tail).map((part) => part.trim())
+      const base = parts.length === 2 ? /^rectangle\s+(.+?)\s+by\s+(.+)$/i.exec(parts[0]) : null
+      const height = parts.length === 2 ? /^height\s+(.+)$/i.exec(parts[1]) : null
+      if (!base || !height) throw new Error(`Expected "pyramid rectangle <width> by <depth>, height <h>", got "${rest}"`)
+      return { kind: 'rectanglePyramid', width: parseExprString(base[1]), depth: parseExprString(base[2]), height: parseExprString(height[1]) }
+    }
     const keyed = /^square\s+base\s+/i.exec(tail)
-    if (!keyed) throw new Error(`Expected "pyramid square base <b>, height <h>", got "${rest}"`)
+    if (!keyed) {
+      throw new Error(
+        `Expected "pyramid square base <b>, height <h>", "pyramid regular <n> side <s>, height <h>", ` +
+          `"pyramid rectangle <w> by <d>, height <h>" or "pyramid A-B-C-D apex E", got "${rest}"`
+      )
+    }
     const parts = splitTopLevelComma(tail.slice(keyed[0].length)).map((part) => part.trim())
     const height = parts.length === 2 ? /^height\s+(.+)$/i.exec(parts[1]) : null
     if (parts.length !== 2 || !height) throw new Error(`Expected "pyramid square base <b>, height <h>", got "${rest}"`)
@@ -675,6 +708,11 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
         toRadius: parseExprString(placed[4]),
       }
     }
+    // P5 — pyramidal: "frustum regular 4 side 6, top 3, height 4".
+    if (/^regular\s/i.test(tail)) {
+      const [sides, side, top, height] = regularParts(tail, ['top', 'height'], 'frustum regular <n> side <s>, top <t>, height <h>', rest)
+      return { kind: 'regularFrustum', sides, side, top, height }
+    }
     // P2 — keyed like the cylinder and cone it sits between, with the top
     // rim's radius named "top".
     const parts = splitTopLevelComma(tail).map((part) => part.trim())
@@ -696,6 +734,12 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const edge = /^edge\s+(.+)$/i.exec(tail)
     if (!edge) throw new Error(`Expected "tetrahedron edge <e>", got "${rest}"`)
     return { kind: 'tetrahedron', edge: parseExprString(edge[1]) }
+  }
+
+  if (head === 'cube' || head === 'octahedron') {
+    const edge = /^edge\s+(.+)$/i.exec(tail)
+    if (!edge) throw new Error(`Expected "${head} edge <e>", got "${rest}"`)
+    return { kind: head, edge: parseExprString(edge[1]) }
   }
 
   throw new Error(`Unknown solid "${head}" — the primitives are ${SOLID_PRIMITIVE_NAMES.join(', ')}`)

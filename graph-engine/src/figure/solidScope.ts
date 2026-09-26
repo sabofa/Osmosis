@@ -110,7 +110,48 @@ export function solidSpecOf(primitive: DimensionPrimitive, value: (e: Expr) => n
       return { kind: 'sphere', radius: positive(primitive.radius, 'radius') }
     case 'frustum':
       return frustumSpec(positive(primitive.radius, 'radius'), value(primitive.top), positive(primitive.height, 'height'))
+    case 'cube':
+      return { kind: 'cube', edge: positive(primitive.edge, 'edge') }
+    case 'octahedron':
+      return { kind: 'octahedron', edge: positive(primitive.edge, 'edge') }
+    case 'regularPrism':
+    case 'regularPyramid':
+      return {
+        kind: primitive.kind,
+        sides: sideCount(value(primitive.sides)),
+        side: positive(primitive.side, 'side'),
+        height: positive(primitive.height, 'height'),
+      }
+    case 'rectanglePyramid':
+      return {
+        kind: 'rectanglePyramid',
+        width: positive(primitive.width, 'width'),
+        depth: positive(primitive.depth, 'depth'),
+        height: positive(primitive.height, 'height'),
+      }
+    case 'regularFrustum': {
+      const sides = sideCount(value(primitive.sides))
+      const side = positive(primitive.side, 'side')
+      const height = positive(primitive.height, 'height')
+      const top = value(primitive.top)
+      // P2's refusals, for the pyramidal frustum: equal ends are a prism, a
+      // point for a top is a pyramid.
+      if (!Number.isFinite(top) || top < 0) throw new Error(`A frustum's top must be a positive number, got ${top}`)
+      if (top <= GEOM_EPS * Math.max(1, side)) {
+        throw new Error(`A frustum with top 0 is a pyramid — write "pyramid regular ${sides} side ${side}, height ${height}"`)
+      }
+      if (Math.abs(top - side) <= GEOM_EPS * Math.max(1, side)) {
+        throw new Error(`A frustum whose top equals its side is a prism — write "prism regular ${sides} side ${side}, height ${height}"`)
+      }
+      return { kind: 'regularFrustum', sides, side, top, height }
+    }
   }
+}
+
+// A regular base's number of sides: a whole number, at least 3.
+function sideCount(n: number): number {
+  if (!Number.isInteger(n) || n < 3) throw new Error(`A regular base needs a whole number of sides, at least 3, got ${n}`)
+  return n
 }
 
 function positiveValue(value: (e: Expr) => number, e: Expr, what: string): number {

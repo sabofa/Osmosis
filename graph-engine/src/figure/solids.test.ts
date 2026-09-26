@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { maxOutsideDistance } from './convexity.testkit'
 import { authorToWorld, worldToAuthor } from './authorFrame'
 import { cameraFor, DEFAULT_CAMERA, DEFAULT_VIEW, faceNormal, projectSolid, type Camera, type Vec3 } from './project3d'
 import { BASE_START_ANGLE, baseStartAngle, buildSolid, solidDimensions, solidDimensionSegment, type SolidSpec } from './solids'
@@ -654,4 +655,34 @@ describe('the lettered edge each dimension hangs off', () => {
     expect(letters({ kind: 'tetrahedron', edge: 6 }, 'edge', 'ABCD')).toBe('AC')
     expect(letters({ kind: 'pyramid', base: 6, height: 9 }, 'base', 'ABCDE')).toBe('AB')
   })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 7 — the convexity invariant over every new polyhedral primitive
+// ---------------------------------------------------------------------------
+
+describe('every phase 7 polyhedral primitive is convex (H4)', () => {
+  const CASES: SolidSpec[] = [
+    { kind: 'cube', edge: 4 },
+    { kind: 'regularPrism', sides: 3, side: 4, height: 5 },
+    { kind: 'regularPrism', sides: 5, side: 4, height: 5 },
+    { kind: 'regularPrism', sides: 6, side: 12, height: 8 },
+    { kind: 'regularPrism', sides: 8, side: 4, height: 5 },
+    { kind: 'regularPrism', sides: 12, side: 1, height: 20 },
+    { kind: 'regularPyramid', sides: 3, side: 4, height: 6 },
+    { kind: 'regularPyramid', sides: 5, side: 4, height: 6 },
+    { kind: 'regularPyramid', sides: 6, side: 12, height: 5 },
+    { kind: 'rectanglePyramid', width: 6, depth: 4, height: 9 },
+    { kind: 'octahedron', edge: 6 },
+    { kind: 'regularFrustum', sides: 4, side: 6, top: 3, height: 4 },
+    { kind: 'regularFrustum', sides: 6, side: 2, top: 5, height: 3 },
+  ]
+
+  for (const spec of CASES) {
+    it(`holds for ${JSON.stringify(spec)}`, () => {
+      const solid = buildSolid(spec).polyhedron
+      expect(solid).not.toBeNull()
+      expect(maxOutsideDistance(solid!)).toBeLessThan(1e-9)
+    })
+  }
 })

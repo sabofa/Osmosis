@@ -127,6 +127,16 @@ export type SolidPrimitive =
   | { kind: 'cylinderOn'; from: string; to: string; radius: Expr }
   | { kind: 'coneOn'; apex: string; base: string; radius: Expr }
   | { kind: 'frustumOn'; from: string; fromRadius: Expr; to: string; toRadius: Expr }
+  // By dimensions, placed by H1 and P5: "cube edge 4", "prism regular 6
+  // side 12, height 5", "pyramid regular 5 side 4, height 6", "pyramid
+  // rectangle 6 by 4, height 9" (width along Y by depth along X, like the
+  // box), "octahedron edge 6", "frustum regular 4 side 6, top 3, height 4".
+  | { kind: 'cube'; edge: Expr }
+  | { kind: 'regularPrism'; sides: Expr; side: Expr; height: Expr }
+  | { kind: 'regularPyramid'; sides: Expr; side: Expr; height: Expr }
+  | { kind: 'rectanglePyramid'; width: Expr; depth: Expr; height: Expr }
+  | { kind: 'octahedron'; edge: Expr }
+  | { kind: 'regularFrustum'; sides: Expr; side: Expr; top: Expr; height: Expr }
   // "tetrahedron ABCD with AB = ..., AC = ..., ..." (P4): four new vertex
   // names and all six edges, each unordered pair exactly once (checked by
   // the parser, which knows the names). `edges` is as written; the builder

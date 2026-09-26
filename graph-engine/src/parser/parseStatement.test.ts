@@ -966,3 +966,43 @@ describe('the tetrahedron by its six edges (phase 7, P4)', () => {
     expect(() => parseStatement('solid: tetrahedron ABCD with AB = 1, AC = 1, AD = 1, BC = 1, BD = 1')).toThrow(/CD is missing/)
   })
 })
+
+describe('more solids by dimensions (phase 7, P5)', () => {
+  const primitive = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    return s.primitive
+  }
+  const n = (value: number) => ({ kind: 'num', value })
+
+  it('parses the cube, the octahedron and the regular and rectangle forms', () => {
+    expect(primitive('solid: cube edge 4')).toEqual({ kind: 'cube', edge: n(4) })
+    expect(primitive('solid: octahedron edge 6')).toEqual({ kind: 'octahedron', edge: n(6) })
+    expect(primitive('solid: prism regular 6 side 12, height 5')).toEqual({ kind: 'regularPrism', sides: n(6), side: n(12), height: n(5) })
+    expect(primitive('solid: pyramid regular 5 side 4, height 6')).toEqual({ kind: 'regularPyramid', sides: n(5), side: n(4), height: n(6) })
+    expect(primitive('solid: pyramid rectangle 6 by 4, height 9')).toEqual({ kind: 'rectanglePyramid', width: n(6), depth: n(4), height: n(9) })
+    expect(primitive('solid: frustum regular 4 side 6, top 3, height 4')).toEqual({
+      kind: 'regularFrustum',
+      sides: n(4),
+      side: n(6),
+      top: n(3),
+      height: n(4),
+    })
+  })
+
+  it('names every primitive when one is unknown', () => {
+    expect(() => parseStatement('solid: torus radius 4')).toThrow(
+      /prism, pyramid, tetrahedron, cylinder, cone, sphere, frustum, hull, cube, octahedron/
+    )
+  })
+
+  it('labels a side', () => {
+    const s = parseStatement('label: S side')
+    if (s.kind !== 'measureLabel') throw new Error('expected a measure label')
+    expect(s.subject).toEqual({ kind: 'solidDimension', solid: 'S', dimension: 'side' })
+  })
+
+  it('refuses a malformed regular form, quoting the expected shape', () => {
+    expect(() => parseStatement('solid: prism regular 6, height 5')).toThrow(/prism regular <n> side <s>, height <h>/)
+  })
+})

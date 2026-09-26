@@ -1,4 +1,5 @@
 import { DEFAULT_CAMERA, projectSolid, rectangularPrism, type Camera, type ProjectedEdge, type Solid3D, type Vec3 } from './project3d'
+import { rectanglePyramidSolid, regularSolid, type RegularShape } from './regular'
 import {
   coneOutline,
   cylinderOutline,
@@ -89,12 +90,21 @@ export type SolidSpec =
   // tetrahedron, pyramid or prism on points — for messages; the polyhedron
   // is the whole of its geometry, already in world coordinates.
   | { kind: 'hull'; shape: PointSolidShape; polyhedron: Solid3D }
+  // Phase 7 by dimensions. A cube is the box with three equal sides, drawn
+  // by the box's own builder so its bytes are the box's. The rest are placed
+  // and lettered by P5 (regular.ts) and built by the hull builder.
+  | { kind: 'cube'; edge: number }
+  | { kind: 'regularPrism'; sides: number; side: number; height: number }
+  | { kind: 'regularPyramid'; sides: number; side: number; height: number }
+  | { kind: 'rectanglePyramid'; width: number; depth: number; height: number }
+  | { kind: 'octahedron'; edge: number }
+  | { kind: 'regularFrustum'; sides: number; side: number; top: number; height: number }
 
 export type PointSolidShape = 'hull' | 'tetrahedron' | 'pyramid' | 'prism'
 
 // The primitive names an author can write, in the order an error message
 // should list them.
-export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull'] as const
+export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron'] as const
 
 export type SolidPrimitiveName = (typeof SOLID_PRIMITIVES)[number]
 
@@ -162,18 +172,40 @@ function buildShape(spec: SolidSpec): SolidBody {
       // author azimuth — clockwise from above. A stays the first vertex; B
       // and C swap so the base reads counter-clockwise, and D is the apex.
       return { spec, polyhedron: regularTetrahedron(spec.edge), labelOrder: [0, 2, 1, 3], placement }
+    // The box's builder and the box's lettering: a cube IS a box (P6).
+    case 'cube':
+      return { spec, polyhedron: rectangularPrism(spec.edge, spec.edge, spec.edge), labelOrder: [4, 5, 1, 0, 7, 6, 2, 3], placement }
+    // Vertex order is the input order (P3), so the letters are the identity.
+    case 'hull':
+      return { spec, polyhedron: spec.polyhedron, labelOrder: identityOrder(spec.polyhedron), placement, byPoints: true }
+    // P5: built with their vertices already in lettering order.
+    case 'regularPrism':
+    case 'regularPyramid':
+    case 'regularFrustum':
+    case 'octahedron':
+    case 'rectanglePyramid': {
+      const polyhedron = dimensionPolyhedron(spec)
+      return { spec, polyhedron, labelOrder: identityOrder(polyhedron), placement }
+    }
     // H2's second representation: a curved primitive carries its parameters
     // and emits an analytic silhouette. It has no vertices, so there is
     // nothing to letter and nothing for the convex face rule to classify.
-    // Vertex order is the input order (P3), so the letters are the identity.
-    case 'hull':
-      return { spec, polyhedron: spec.polyhedron, labelOrder: spec.polyhedron.vertices.map((_, i) => i), placement, byPoints: true }
     case 'cylinder':
     case 'cone':
     case 'sphere':
     case 'frustum':
       return { spec, polyhedron: null, labelOrder: [], placement }
   }
+}
+
+function identityOrder(solid: Solid3D): number[] {
+  return solid.vertices.map((_, i) => i)
+}
+
+// The polyhedron of a phase 7 dimension primitive, vertices in lettering
+// order (P5).
+function dimensionPolyhedron(spec: Extract<SolidSpec, { kind: RegularShape['kind'] | 'rectanglePyramid' }>): Solid3D {
+  return spec.kind === 'rectanglePyramid' ? rectanglePyramidSolid(spec.width, spec.depth, spec.height) : regularSolid(spec)
 }
 
 // P2 — a frustum's two radii as its geometry uses them: the wider rim is
@@ -311,6 +343,17 @@ export function solidDimensions(spec: SolidSpec): Record<string, number> {
       return { radius: spec.radius, top: spec.top, height: spec.height }
     case 'hull':
       return {}
+    case 'cube':
+      return { edge: spec.edge }
+    case 'regularPrism':
+    case 'regularPyramid':
+      return { side: spec.side, height: spec.height }
+    case 'rectanglePyramid':
+      return { width: spec.width, depth: spec.depth, height: spec.height }
+    case 'octahedron':
+      return { edge: spec.edge }
+    case 'regularFrustum':
+      return { side: spec.side, top: spec.top, height: spec.height }
   }
 }
 
@@ -450,6 +493,36 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
     }
     case 'hull':
       return null
+    // The box's width edge, AB: the front-bottom edge nearest the viewer.
+    case 'cube':
+      return dimension === 'edge' ? solidDimensionSegment({ kind: 'prism', width: spec.edge, height: spec.edge, depth: spec.edge }, 'width') : null
+    // P5's lettering makes AB the front-most base edge, so every side, edge
+    // and width hangs there; a prism's height hangs off B's vertical edge
+    // (the box's BF), a rectangle pyramid's depth off BC (the box's BC),
+    // and a frustum's top off the top edge over AB. A height with no edge of
+    // its own hangs off the axis, as a square pyramid's does.
+    case 'regularPrism':
+    case 'regularPyramid':
+    case 'regularFrustum':
+    case 'octahedron':
+    case 'rectanglePyramid': {
+      const v = dimensionPolyhedron(spec).vertices
+      if (spec.kind === 'octahedron') return dimension === 'edge' ? [v[0], v[1]] : null
+      const half = spec.height / 2
+      const axis = (): [Vec3, Vec3] => [
+        { x: 0, y: -half, z: 0 },
+        { x: 0, y: half, z: 0 },
+      ]
+      if (spec.kind === 'rectanglePyramid') {
+        if (dimension === 'width') return [v[0], v[1]]
+        if (dimension === 'depth') return [v[1], v[2]]
+        return dimension === 'height' ? axis() : null
+      }
+      if (dimension === 'side') return [v[0], v[1]]
+      if (spec.kind === 'regularPrism') return dimension === 'height' ? [v[1], v[spec.sides + 1]] : null
+      if (spec.kind === 'regularFrustum' && dimension === 'top') return [v[spec.sides], v[spec.sides + 1]]
+      return dimension === 'height' ? axis() : null
+    }
   }
 }
 
