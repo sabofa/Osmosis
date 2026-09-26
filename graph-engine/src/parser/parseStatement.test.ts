@@ -911,3 +911,41 @@ describe('the hull of named points (phase 7, P3)', () => {
     expect(() => parseStatement('solid: hull A-B-C-A')).toThrow(/"A" is named twice/)
   })
 })
+
+describe('solids on named points (phase 7, P6)', () => {
+  const primitive = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    return s
+  }
+  const n = (value: number) => ({ kind: 'num', value })
+
+  it('parses a tetrahedron, a pyramid and a prism on points', () => {
+    expect(primitive('T = solid tetrahedron A-B-C-D').primitive).toEqual({ kind: 'tetrahedronOn', points: ['A', 'B', 'C', 'D'] })
+    expect(primitive('P = solid pyramid A-B-C-D apex E').primitive).toEqual({ kind: 'pyramidOn', base: ['A', 'B', 'C', 'D'], apex: 'E' })
+    const prism = primitive('Q = solid prism A-B-C height 5 vertices DEF')
+    expect(prism.primitive).toEqual({ kind: 'prismOn', base: ['A', 'B', 'C'], height: n(5) })
+    expect(prism.vertices).toEqual(['D', 'E', 'F'])
+  })
+
+  it('parses round solids placed by points', () => {
+    expect(primitive('O = solid sphere center M radius 5').primitive).toEqual({ kind: 'sphereOn', center: 'M', radius: n(5) })
+    expect(primitive('C = solid cylinder from A to B radius 3').primitive).toEqual({ kind: 'cylinderOn', from: 'A', to: 'B', radius: n(3) })
+    expect(primitive('K = solid cone apex V base O radius 3').primitive).toEqual({ kind: 'coneOn', apex: 'V', base: 'O', radius: n(3) })
+    expect(primitive('F = solid frustum from O radius 6 to P radius 3').primitive).toEqual({
+      kind: 'frustumOn',
+      from: 'O',
+      fromRadius: n(6),
+      to: 'P',
+      toRadius: n(3),
+    })
+  })
+
+  it('keeps every dimension form as it was', () => {
+    expect(primitive('solid: tetrahedron edge 5').primitive.kind).toBe('tetrahedron')
+    expect(primitive('solid: prism 8 by 5 by 6').primitive.kind).toBe('prism')
+    expect(primitive('solid: cylinder radius 3, height 8').primitive.kind).toBe('cylinder')
+    // A three-letter vertex list is still refused on anything but a prism's top.
+    expect(() => parseStatement('solid: tetrahedron edge 5 vertices ABC')).toThrow(/vertices ABCD/)
+  })
+})

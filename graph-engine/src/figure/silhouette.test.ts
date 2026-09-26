@@ -15,6 +15,11 @@ import {
   type ProjectedCircle,
 } from './silhouette'
 import { buildSolid, solidOutline } from './solids'
+import { authorToWorld } from './authorFrame'
+import { buildSolidFigure } from './solidScope'
+import { parseSpec } from '../parser/parseSpec'
+import { evalExpr } from '../parser/evalExpr'
+import type { Expr } from '../parser/types'
 
 // Every assertion here is against the geometry, not the markup. A silhouette
 // that emits four elements and two arcs is still wrong if its lines are not
@@ -525,5 +530,76 @@ describe('the frustum silhouette', () => {
     expect(JSON.stringify(wide)).not.toBe(JSON.stringify(edges))
     const wideRim = arcs(wide).find((a) => a.object === 'base-0')
     expect(wideRim!.center.y).toBeCloseTo(STANDARD.project({ x: 0, y: 2, z: 0 }).y, 12)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P6 — round solids placed by named points
+// ---------------------------------------------------------------------------
+
+describe('round solids placed by named points', () => {
+  const value = (e: Expr) => evalExpr(e, {}, 'radians', {})
+  function solidOf(spec: string, name: string) {
+    const parsed = parseSpec(`@mode: figure\n${spec}`)
+    expect(parsed.errors).toEqual([])
+    const scope = buildSolidFigure(parsed.statements, value)
+    expect(scope.errors).toEqual([])
+    return scope.solids.get(name)!
+  }
+
+  it('draws a sphere on a centre M as a circle about M’s projection', () => {
+    const edges = solidOutline(solidOf('M = (1, 2, 3)\nS = solid sphere center M radius 5', 'S'), STANDARD)
+    const centre = STANDARD.project(authorToWorld({ x: 1, y: 2, z: 3 }))
+    expect(arcs(edges)).toHaveLength(2)
+    for (const arc of arcs(edges)) {
+      expect(arc.center.x).toBeCloseTo(centre.x, 12)
+      expect(arc.center.y).toBeCloseTo(centre.y, 12)
+      expect(arc.rx).toBeCloseTo(5, 12)
+      expect(arc.ry).toBeCloseTo(5, 12)
+    }
+  })
+
+  it('draws a cylinder from A to B as a horizontal cylinder along author X, tangent to both rims', () => {
+    // A = (0,0,0), B = (6,0,0): the rims are circles of radius 3 about A and
+    // B, square to author X — spanned by author Y and Z, internal x and y.
+    // Built from the named points alone.
+    const edges = solidOutline(solidOf('A = (0, 0, 0)\nB = (6, 0, 0)\nC = solid cylinder from A to B radius 3', 'C'), STANDARD)
+    const rims = [authorToWorld({ x: 0, y: 0, z: 0 }), authorToWorld({ x: 6, y: 0, z: 0 })].map((centre) =>
+      projectCircle(STANDARD, centre, { x: 3, y: 0, z: 0 }, { x: 0, y: 3, z: 0 })
+    )
+    const lines = segments(edges)
+    expect(lines).toHaveLength(2)
+    for (const line of lines) {
+      const direction = { x: line.b.x - line.a.x, y: line.b.y - line.a.y }
+      // Parallel to the projected axis, author X...
+      const axis = STANDARD.project(authorToWorld({ x: 1, y: 0, z: 0 }))
+      expect(Math.abs(direction.x * axis.y - direction.y * axis.x)).toBeLessThan(1e-9)
+      // ...one end on each rim, and tangent there.
+      for (const point of [line.a, line.b]) {
+        const circle = onEllipse(rims[0], point) < onEllipse(rims[1], point) ? rims[0] : rims[1]
+        expect(onEllipse(circle, point)).toBeLessThan(1e-3)
+        const tangent = ellipseTangentAt(circle, angleOf(circle, point))
+        expect(Math.abs(tangent.x * direction.y - tangent.y * direction.x)).toBeLessThan(1e-6)
+      }
+    }
+  })
+
+  it('draws a cone on an apex V and a base centre O with both silhouette lines through V', () => {
+    // Tilted toward author Y, and not so near the view that the camera looks
+    // inside the cone's half-angle (where it has no silhouette at all).
+    const edges = solidOutline(solidOf('V = (0, 4, 2)\nO = (0, 0, -1)\nK = solid cone apex V base O radius 3', 'K'), STANDARD)
+    const apex = STANDARD.project(authorToWorld({ x: 0, y: 4, z: 2 }))
+    const lines = segments(edges)
+    expect(lines).toHaveLength(2)
+    for (const line of lines) {
+      expect(line.a.x).toBeCloseTo(apex.x, 12)
+      expect(line.a.y).toBeCloseTo(apex.y, 12)
+    }
+  })
+
+  it('draws a frustum from O to P as the frustum outline under the same placement', () => {
+    const body = solidOf('O = (0, 0, 0)\nP = (4, 0, 0)\nF = solid frustum from O radius 6 to P radius 3', 'F')
+    const placement = placementAlong(authorToWorld({ x: 2, y: 0, z: 0 }), authorToWorld({ x: 1, y: 0, z: 0 }))
+    expect(JSON.stringify(solidOutline(body, STANDARD))).toBe(JSON.stringify(frustumOutline(6, 3, 4, localCamera(STANDARD, placement))))
   })
 })

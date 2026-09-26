@@ -545,6 +545,11 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   const tail = rest.slice(head.length).trim()
 
   if (head === 'prism') {
+    // P6 — on a base polygon: "prism A-B-C-D height 5".
+    const onBase = /^([a-zA-Z]+(?:\s*-\s*[a-zA-Z]+)+)\s+height\s+(.+)$/i.exec(tail)
+    if (onBase) {
+      return { kind: 'prismOn', base: parsePointList(onBase[1], 'prism A-B-C-D height <h>', 'prism base'), height: parseExprString(onBase[2]) }
+    }
     const parts = tail.split(/\s+by\s+/i).map((part) => part.trim())
     if (parts.length !== 3 || parts.some((part) => part === '')) {
       throw new Error(`Expected "prism <width> by <height> by <depth>", got "${rest}"`)
@@ -553,6 +558,15 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'pyramid') {
+    // P6 — on a base polygon and an apex: "pyramid A-B-C-D apex E".
+    const onBase = /^([a-zA-Z]+(?:\s*-\s*[a-zA-Z]+)+)\s+apex\s+(\S+)$/i.exec(tail)
+    if (onBase) {
+      return {
+        kind: 'pyramidOn',
+        base: parsePointList(onBase[1], 'pyramid A-B-C-D apex E', 'pyramid base'),
+        apex: geometryName(onBase[2], 'apex of the pyramid'),
+      }
+    }
     // "square" is required rather than defaulted: a pyramid on a triangular
     // base is a different solid with the same word, and guessing which one
     // an author meant is how a figure becomes quietly wrong.
@@ -564,6 +578,31 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     return { kind: 'pyramid', base: parseExprString(parts[0]), height: parseExprString(height[1]) }
   }
 
+  // P6 — round solids placed by points. Each names what places it: a
+  // cylinder its two rim centres, a cone its apex and base centre.
+  if (head === 'cylinder') {
+    const placed = /^from\s+(\S+)\s+to\s+(\S+)\s+radius\s+(.+)$/i.exec(tail)
+    if (placed) {
+      return {
+        kind: 'cylinderOn',
+        from: geometryName(placed[1], 'first rim centre of the cylinder'),
+        to: geometryName(placed[2], 'second rim centre of the cylinder'),
+        radius: parseExprString(placed[3]),
+      }
+    }
+  }
+  if (head === 'cone') {
+    const placed = /^apex\s+(\S+)\s+base\s+(\S+)\s+radius\s+(.+)$/i.exec(tail)
+    if (placed) {
+      return {
+        kind: 'coneOn',
+        apex: geometryName(placed[1], 'apex of the cone'),
+        base: geometryName(placed[2], 'base centre of the cone'),
+        radius: parseExprString(placed[3]),
+      }
+    }
+  }
+
   if (head === 'cylinder' || head === 'cone') {
     const parts = splitTopLevelComma(tail).map((part) => part.trim())
     const radius = parts.length === 2 ? /^radius\s+(.+)$/i.exec(parts[0]) : null
@@ -573,6 +612,8 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'sphere') {
+    const placed = /^center\s+(\S+)\s+radius\s+(.+)$/i.exec(tail)
+    if (placed) return { kind: 'sphereOn', center: geometryName(placed[1], 'centre of the sphere'), radius: parseExprString(placed[2]) }
     const radius = /^radius\s+(.+)$/i.exec(tail)
     if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
     return { kind: 'sphere', radius: parseExprString(radius[1]) }
@@ -585,6 +626,17 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'frustum') {
+    // P6 — "frustum from O radius 6 to P radius 3": each rim by its centre.
+    const placed = /^from\s+(\S+)\s+radius\s+(.+?)\s+to\s+(\S+)\s+radius\s+(.+)$/i.exec(tail)
+    if (placed) {
+      return {
+        kind: 'frustumOn',
+        from: geometryName(placed[1], 'first rim centre of the frustum'),
+        fromRadius: parseExprString(placed[2]),
+        to: geometryName(placed[3], 'second rim centre of the frustum'),
+        toRadius: parseExprString(placed[4]),
+      }
+    }
     // P2 — keyed like the cylinder and cone it sits between, with the top
     // rim's radius named "top".
     const parts = splitTopLevelComma(tail).map((part) => part.trim())
@@ -596,6 +648,10 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'tetrahedron') {
+    // P6 — on four named points: "tetrahedron A-B-C-D".
+    if (/^[a-zA-Z]+(?:\s*-\s*[a-zA-Z]+){3}$/.test(tail)) {
+      return { kind: 'tetrahedronOn', points: parsePointList(tail, 'tetrahedron A-B-C-D', 'tetrahedron') }
+    }
     const edge = /^edge\s+(.+)$/i.exec(tail)
     if (!edge) throw new Error(`Expected "tetrahedron edge <e>", got "${rest}"`)
     return { kind: 'tetrahedron', edge: parseExprString(edge[1]) }
@@ -650,16 +706,20 @@ function parseSolidBody(text: string, name: string | null): StatementShape {
   let rest = text.trim()
   let vertices: string[] = []
   const clause = /\s+vertices\s+(\S+)\s*$/i.exec(rest)
+  if (clause) rest = rest.slice(0, clause.index).trim()
+  const primitive = parseSolidPrimitive(rest)
   if (clause) {
     const names = [...clause[1].trim()]
-    if (names.length < 4 || names.some((n) => !/^[a-zA-Z]$/.test(n))) {
+    // A prism on a triangle names a three-letter top (P6); every other
+    // solid has at least four vertices.
+    const least = primitive.kind === 'prismOn' ? 3 : 4
+    if (names.length < least || names.some((n) => !/^[a-zA-Z]$/.test(n))) {
       throw new Error(`Expected "vertices ABCD" — a run of single-letter names, one per vertex — got "${clause[1]}"`)
     }
     if (new Set(names).size !== names.length) throw new Error(`Vertex names must be distinct, got "${clause[1]}"`)
     vertices = names
-    rest = rest.slice(0, clause.index).trim()
   }
-  return { kind: 'solid', name, primitive: parseSolidPrimitive(rest), vertices }
+  return { kind: 'solid', name, primitive, vertices }
 }
 
 function parseTriangleStatement(line: string): StatementShape {

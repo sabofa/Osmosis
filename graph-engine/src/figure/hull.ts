@@ -109,6 +109,76 @@ export function hullOf(points: Vec3[], names: string[]): Solid3D {
   return { vertices: points.slice(), faces: ordered }
 }
 
+// ---------------------------------------------------------------------------
+// A base polygon, for a pyramid or prism on points (P6)
+// ---------------------------------------------------------------------------
+
+// Checks that the named base is a planar, convex polygon in the order given,
+// and returns its unit RIGHT-HAND normal — the direction (B - A) x (C - A)
+// points, from which the base reads counter-clockwise. Each refusal names
+// the offending point: one off the plane, one where the boundary turns the
+// wrong way (reflex), or one on the straight line between its neighbours.
+//
+// The hull would quietly build the convex hull of a non-convex base, which is
+// a different solid from the one the author named, so the base is checked
+// here first and the hull only ever sees a base it will keep whole.
+export function basePolygonNormal(points: Vec3[], names: string[]): Vec3 {
+  const list = nameList(names)
+  const n = points.length
+  if (n < 3) throw new Error(`A base needs at least 3 corners, and ${list} ${n === 1 ? 'is' : 'are'} only ${n}`)
+  const centre = centroid3(points)
+  let extent = 1
+  for (const p of points) extent = Math.max(extent, length3(sub3(p, centre)), Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))
+  const tolerance = GEOM_EPS * extent
+
+  // Newell's normal: the polygon's area vector, sound for any planar loop.
+  let newell: Vec3 = { x: 0, y: 0, z: 0 }
+  for (let i = 0; i < n; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % n]
+    newell = {
+      x: newell.x + (a.y - b.y) * (a.z + b.z),
+      y: newell.y + (a.z - b.z) * (a.x + b.x),
+      z: newell.z + (a.x - b.x) * (a.y + b.y),
+    }
+  }
+  const size = length3(newell)
+  if (size <= tolerance * extent) throw new Error(`The base ${list} has no area — its corners lie on one line`)
+  const normal = scale3(newell, 1 / size)
+  // Flatness, against the plane of A, B and the first corner after them not
+  // on line A-B: which corner is "off the plane" of a warped quad is a
+  // convention, and this one names the first corner that leaves the plane
+  // the base's own first corners fix.
+  let third = 2
+  while (third < n && length3(cross3(sub3(points[1], points[0]), sub3(points[third], points[0]))) <= tolerance * extent) third++
+  const frame = cross3(sub3(points[1], points[0]), sub3(points[third], points[0]))
+  const frameUnit = scale3(frame, 1 / length3(frame))
+  points.forEach((p, i) => {
+    if (Math.abs(dot3(sub3(p, points[0]), frameUnit)) > tolerance) {
+      throw new Error(`${names[i]} is not in the plane ${names[0]}-${names[1]}-${names[third]} of the base ${list} — a base must be flat`)
+    }
+  })
+
+  let turning = 0
+  for (let i = 0; i < n; i++) {
+    const before = sub3(points[i], points[(i + n - 1) % n])
+    const after = sub3(points[(i + 1) % n], points[i])
+    const turn = dot3(cross3(before, after), normal)
+    if (Math.abs(turn) <= tolerance * extent) {
+      throw new Error(`${names[i]} lies on the straight line between its neighbours in the base ${list}, so it is not a corner`)
+    }
+    if (turn < 0) throw new Error(`The base ${list} is not convex: it turns back at ${names[i]}`)
+    turning += Math.atan2(turn / (length3(before) * length3(after)), dot3(before, after) / (length3(before) * length3(after)))
+  }
+  // Every turn the same way and yet more than one full turn: a star. A
+  // convex polygon turns exactly 2 pi in all, a star at least 4 pi, so the
+  // threshold between them needs no tolerance.
+  if (turning > 3 * Math.PI) throw new Error(`The base ${list} winds round more than once — name its corners in order round the edge`)
+
+  const right = cross3(sub3(points[1], points[0]), sub3(points[2], points[0]))
+  return scale3(right, 1 / length3(right))
+}
+
 // The polygon of one face: the 2D convex hull of the points on its plane, in
 // a frame whose second axis is normal x first, so counter-clockwise in that
 // frame is counter-clockwise seen from OUTSIDE (the normal toward the eye).

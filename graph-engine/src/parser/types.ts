@@ -114,6 +114,19 @@ export type SolidPrimitive =
   // The convex hull of named points in space, "hull A-B-C-D-E" (P3). The
   // points place it; every one must be a corner.
   | { kind: 'hull'; points: string[] }
+  // Solids placed by named points (P6) — the points exist already, and they
+  // fix the solid's position and orientation as a solved triangle's
+  // vertices do. "tetrahedron A-B-C-D", "pyramid A-B-C-D apex E",
+  // "prism A-B-C height 5" (extruded along (B - A) x (C - A)).
+  | { kind: 'tetrahedronOn'; points: string[] }
+  | { kind: 'pyramidOn'; base: string[]; apex: string }
+  | { kind: 'prismOn'; base: string[]; height: Expr }
+  // "sphere center M radius 5", "cylinder from A to B radius 3",
+  // "cone apex V base O radius 3", "frustum from O radius 6 to P radius 3".
+  | { kind: 'sphereOn'; center: string; radius: Expr }
+  | { kind: 'cylinderOn'; from: string; to: string; radius: Expr }
+  | { kind: 'coneOn'; apex: string; base: string; radius: Expr }
+  | { kind: 'frustumOn'; from: string; fromRadius: Expr; to: string; toRadius: Expr }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)

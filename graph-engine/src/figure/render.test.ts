@@ -8,7 +8,7 @@ import { DEFAULT_CAMERA, ISOMETRIC_CAMERA, projectSolid, rectangularPrism, rende
 import { evalExpr } from '../parser/evalExpr'
 import { buildSolidFigure } from './solidScope'
 import { GEOM_EPS } from '../scene/geometry/types'
-import { buildSolid, regularTetrahedron } from './solids'
+import { buildSolid, regularTetrahedron, solidOutline } from './solids'
 import { renderFigure } from './render'
 import { resolveMode } from '../scene/mode'
 import { EXAMPLES } from '../examples'
@@ -1371,6 +1371,69 @@ describe('the hull of named points (P3)', () => {
     const parsed = parseSpec(`@mode: figure\n${UNIT_CUBE_POINTS}\nS = solid hull A-B-C-D-E-F-G-H\nlabel: S height`)
     const errors = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors
     expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(/"S" is built on named points.*"label: AB"/)])
+  })
+})
+
+describe('polyhedra on named points (P6)', () => {
+  // Four corners of the unit cube: A at the origin, B, D and E one along
+  // author X, Y and Z. The hull keeps the input order, so A-B-D-E are
+  // vertices 0-3 and each edge is named edge-<i>-<j> by them.
+  const CORNERS = '@mode: figure\nA = (0, 0, 0)\nB = (1, 0, 0)\nD = (0, 1, 0)\nE = (0, 0, 1)\nT = solid tetrahedron A-B-D-E'
+
+  it('draws the tetrahedron A-B-D-E as six edges, dashing exactly the three at A', () => {
+    // The three faces meeting at A lie in the planes x = 0, y = 0 and z = 0,
+    // with outward normals -X, -Y and -Z: all three face away from the
+    // default camera, which looks from the (+, +, +) side. So every edge at
+    // A has two back faces, and BD, BE and DE each border the front face
+    // BDE, normal (1, 1, 1).
+    const svg = render(CORNERS)
+    const edges = (markup: string) =>
+      [...markup.matchAll(/<line [^>]*data-statement="4" data-object="(edge-\d-\d)"/g)].map((m) => m[1]).sort()
+    expect(edges(layer(svg, 'auxiliary'))).toEqual(['edge-0-1', 'edge-0-2', 'edge-0-3'])
+    expect(edges(layer(svg, 'primary'))).toEqual(['edge-1-2', 'edge-1-3', 'edge-2-3'])
+  })
+
+  it('measures BD as sqrt 2, true length', () => {
+    const spec = `${CORNERS}\nlabel: BD = 1.4142135623731`
+    const parsed = parseSpec(spec)
+    expect(renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors).toEqual([])
+    expect(layer(render(spec), 'labels')).toContain('1.414')
+  })
+
+  it('refuses `label: T height` on it, pointing at a length between its points', () => {
+    const parsed = parseSpec(`${CORNERS}\nlabel: T height`)
+    const errors = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors
+    expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(/"T" is built on named points, so it has no "height" to label .*"label: AB"/)])
+  })
+
+  it('draws a pyramid on a square and an apex over its centre as the square pyramid, moved', () => {
+    const scope = walkSpec(
+      '@mode: figure\nA = (0, 0, 0)\nB = (2, 0, 0)\nC = (2, 2, 0)\nD = (0, 2, 0)\nE = (1, 1, 3)\nP = solid pyramid A-B-C-D apex E'
+    )
+    expect(scope.errors).toEqual([])
+    // "pyramid square base 2, height 3" is centred on the origin with its
+    // base at author z = -3/2; this one's base centre is author (1, 1, 0),
+    // so it is that pyramid moved by author (1, 1, 3/2) = internal (1, 3/2, 1).
+    const square = buildSolid({ kind: 'pyramid', base: 2, height: 3 }).polyhedron!
+    expect(worldEdges(scope.solids.get('P')!.polyhedron!)).toEqual(worldEdges(square, { x: 1, y: 1.5, z: 1 }))
+  })
+})
+
+describe('the glass rule between placed round solids', () => {
+  // Two cones of radius 3 and height 8 whose axes cross at right angles.
+  const ONE = 'V = (5, 0, 0)\nO = (-3, 0, 0)\nK = solid cone apex V base O radius 3'
+  const TWO = 'W = (0, 5, 0)\nQ = (0, -3, 0)\nL = solid cone apex W base Q radius 3'
+
+  it("draws each cone's outline exactly as it draws that cone alone", () => {
+    const both = walkSpec(`@mode: figure\n${ONE}\n${TWO}`)
+    expect(both.errors).toEqual([])
+    const alone = (spec: string, name: string) => JSON.stringify(solidOutline(walkSpec(`@mode: figure\n${spec}`).solids.get(name)!, DEFAULT_CAMERA))
+    expect(JSON.stringify(solidOutline(both.solids.get('K')!, DEFAULT_CAMERA))).toBe(alone(ONE, 'K'))
+    expect(JSON.stringify(solidOutline(both.solids.get('L')!, DEFAULT_CAMERA))).toBe(alone(TWO, 'L'))
+    // ...and in the figure, each cone's own elements are the same elements
+    // in the same order: only the placement on the page may differ.
+    const svg = render(`@mode: figure\n${ONE}\n${TWO}`)
+    expect((svg.match(/data-statement="2"/g) ?? []).length).toBe((svg.match(/data-statement="5"/g) ?? []).length)
   })
 })
 

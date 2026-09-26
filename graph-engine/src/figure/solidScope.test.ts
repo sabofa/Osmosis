@@ -266,3 +266,91 @@ describe('the frustum refusals (P2)', () => {
     expect(walk('@mode: figure\nF = solid frustum radius 3, top 6, height 4').errors).toEqual([])
   })
 })
+
+describe('solids on named points (P6)', () => {
+  const TRIANGLE_CCW = '@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (0, 3, 0)'
+
+  it('extrudes a prism on a base wound counter-clockwise from above UP, along (B - A) x (C - A)', () => {
+    const scope = walk(`${TRIANGLE_CCW}\nQ = solid prism A-B-C height 5 vertices DEF`)
+    expect(scope.errors).toEqual([])
+    expectAt(scope, 'D', 0, 0, 5)
+    expectAt(scope, 'E', 4, 0, 5)
+    expectAt(scope, 'F', 0, 3, 5)
+  })
+
+  it('extrudes the same base wound clockwise DOWN — the right-hand rule, not a fixed "up"', () => {
+    const scope = walk(`${TRIANGLE_CCW}\nQ = solid prism A-C-B height 5 vertices DFE`)
+    expect(scope.errors).toEqual([])
+    expectAt(scope, 'D', 0, 0, -5)
+    expectAt(scope, 'E', 4, 0, -5)
+    expectAt(scope, 'F', 0, 3, -5)
+  })
+
+  it('refuses a non-convex base quad, naming the reflex corner', () => {
+    const scope = walk('@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (1, 1, 0)\nD = (0, 4, 0)\nQ = solid prism A-B-C-D height 2')
+    expect(scope.errors.map((e) => e.message)).toEqual(['The base A-B-C-D is not convex: it turns back at C'])
+  })
+
+  it('refuses a base corner off the plane of the base, naming it', () => {
+    // A, B and C fix the plane (the first corners, as the prism's normal
+    // (B - A) x (C - A) does), so D is the corner off it.
+    const scope = walk('@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (4, 4, 1)\nD = (0, 4, 0)\nE = (2, 2, 5)\nP = solid pyramid A-B-C-D apex E')
+    expect(scope.errors.map((e) => e.message)).toEqual(['D is not in the plane A-B-C of the base A-B-C-D — a base must be flat'])
+  })
+
+  it('refuses a height of 0 and a negative height with their own words', () => {
+    expect(walk(`${TRIANGLE_CCW}\nQ = solid prism A-B-C height 0`).errors.map((e) => e.message)).toEqual([
+      'A prism of height 0 on A-B-C is flat — it has no volume',
+    ])
+    expect(walk(`${TRIANGLE_CCW}\nQ = solid prism A-B-C height -2`).errors[0].message).toMatch(/reverse the base \(C-B-A\)/)
+  })
+
+  it('refuses a top with the wrong number of names, and keeps the prism', () => {
+    const scope = walk(`${TRIANGLE_CCW}\nQ = solid prism A-B-C height 5 vertices DEFG`)
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/has a top of 3 vertices, but 4 names were given/)])
+    expect(scope.solids.has('Q')).toBe(true)
+  })
+
+  it('refuses a coplanar apex, naming it, and a flat tetrahedron, naming its fourth point', () => {
+    const square = '@mode: figure\nA = (0, 0, 0)\nB = (2, 0, 0)\nC = (2, 2, 0)\nD = (0, 2, 0)'
+    expect(walk(`${square}\nE = (1, 1, 0)\nP = solid pyramid A-B-C-D apex E`).errors.map((e) => e.message)).toEqual([
+      'E lies in the plane of the base A-B-C-D, so the pyramid has no height',
+    ])
+    expect(walk(`${square}\nT = solid tetrahedron A-B-C-D`).errors.map((e) => e.message)).toEqual([
+      'D lies in the plane A-B-C, so the tetrahedron A-B-C-D is flat — it has no volume',
+    ])
+  })
+
+  it('refuses a round solid on two points that coincide, naming both', () => {
+    const scope = walk('@mode: figure\nA = (1, 2, 3)\nB = (1, 2, 3)\nC = solid cylinder from A to B radius 3')
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/cylinder from A to B has no axis: A and B are the same point/)])
+    const cone = walk('@mode: figure\nV = (0, 0, 0)\nO = (0, 0, 0)\nK = solid cone apex V base O radius 3')
+    expect(cone.errors.map((e) => e.message)).toEqual([expect.stringMatching(/has no axis: V and O are the same point/)])
+  })
+
+  it('refuses vertices on a point-built solid other than a prism top', () => {
+    const tetra = walk('@mode: figure\nA = (0, 0, 0)\nB = (1, 0, 0)\nD = (0, 1, 0)\nE = (0, 0, 1)\nT = solid tetrahedron A-B-D-E vertices PQRS')
+    expect(tetra.errors.map((e) => e.message)).toEqual([expect.stringMatching(/"T" is built on the named points A-B-D-E, which already name its vertices/)])
+    const sphere = walk('@mode: figure\nM = (0, 0, 0)\nO = solid sphere center M radius 2 vertices PQRS')
+    expect(sphere.errors.map((e) => e.message)).toEqual([expect.stringMatching(/"O" is placed by the named point M and has no vertices to name/)])
+  })
+
+  it('places a sphere on its centre, a cylinder between its rim centres, a cone on its apex and base', () => {
+    const scope = walk(
+      '@mode: figure\nM = (1, 2, 3)\nA = (0, 0, 0)\nB = (6, 0, 0)\nV = (0, 0, 8)\nO = (0, 0, 0)\n' +
+        'S = solid sphere center M radius 5\nC = solid cylinder from A to B radius 3\nK = solid cone apex V base O radius 3'
+    )
+    expect(scope.errors).toEqual([])
+    const sphere = scope.solids.get('S')!
+    expect(worldToAuthor(sphere.placement.origin)).toEqual({ x: 1, y: 2, z: 3 })
+    const cylinder = scope.solids.get('C')!
+    expect(cylinder.spec).toEqual({ kind: 'cylinder', radius: 3, height: 6 })
+    expect(worldToAuthor(cylinder.placement.origin)).toEqual({ x: 3, y: 0, z: 0 })
+    // Its axis is author X.
+    expect(worldToAuthor(cylinder.placement.frame.axis)).toEqual({ x: 1, y: 0, z: 0 })
+    const cone = scope.solids.get('K')!
+    expect(cone.spec).toEqual({ kind: 'cone', radius: 3, height: 8 })
+    // Apex up: the axis runs from the base centre to the apex.
+    expect(worldToAuthor(cone.placement.frame.axis)).toEqual({ x: 0, y: 0, z: 1 })
+  })
+})

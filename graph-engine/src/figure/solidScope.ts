@@ -15,13 +15,15 @@ import {
   lineMeetsPlane,
   midpoint3,
   planeThrough,
+  pointPlaneDistance,
   scale3,
   sub3,
   type Plane3,
 } from './construct3d'
 import type { Vec3 } from './project3d'
-import { hullOf } from './hull'
-import { buildSolid, type SolidBody, type SolidSpec } from './solids'
+import { basePolygonNormal, hullOf } from './hull'
+import { placementAlong } from './silhouette'
+import { buildSolid, type PointSolidShape, type SolidBody, type SolidSpec } from './solids'
 
 // Names in space: the solid-figure walk (S3).
 //
@@ -85,21 +87,8 @@ export function isSpaceName(scope: SolidFigureScope, name: string): boolean {
 // Every dimension must be a positive number. A zero or negative one is not a
 // degenerate drawing to be attempted — it is a solid that does not exist, and
 // the convex hidden-edge rule would classify its faces at random.
-// A primitive placed by named points (P6), built by the walk, which can look
-// its points up. Every other primitive is placed by H1's convention.
-type PointPrimitive = Extract<SolidPrimitive, { kind: 'hull' }>
-type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive>
-
-function isPointPrimitive(primitive: SolidPrimitive): primitive is PointPrimitive {
-  return primitive.kind === 'hull'
-}
-
 export function solidSpecOf(primitive: DimensionPrimitive, value: (e: Expr) => number): SolidSpec {
-  const positive = (e: Expr, what: string): number => {
-    const n = value(e)
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`A solid's ${what} must be a positive number, got ${n}`)
-    return n
-  }
+  const positive = (e: Expr, what: string) => positiveValue(value, e, what)
   switch (primitive.kind) {
     case 'prism':
       return {
@@ -120,6 +109,55 @@ export function solidSpecOf(primitive: DimensionPrimitive, value: (e: Expr) => n
       return { kind: 'sphere', radius: positive(primitive.radius, 'radius') }
     case 'frustum':
       return frustumSpec(positive(primitive.radius, 'radius'), value(primitive.top), positive(primitive.height, 'height'))
+  }
+}
+
+function positiveValue(value: (e: Expr) => number, e: Expr, what: string): number {
+  const n = value(e)
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`A solid's ${what} must be a positive number, got ${n}`)
+  return n
+}
+
+// A primitive placed by named points (P6), built by the walk, which can look
+// its points up. Every other primitive is placed by H1's convention.
+type PointPrimitive = Extract<
+  SolidPrimitive,
+  { kind: 'hull' | 'tetrahedronOn' | 'pyramidOn' | 'prismOn' | 'sphereOn' | 'cylinderOn' | 'coneOn' | 'frustumOn' }
+>
+type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive>
+
+const POINT_PRIMITIVES: ReadonlySet<SolidPrimitive['kind']> = new Set([
+  'hull',
+  'tetrahedronOn',
+  'pyramidOn',
+  'prismOn',
+  'sphereOn',
+  'cylinderOn',
+  'coneOn',
+  'frustumOn',
+])
+
+function isPointPrimitive(primitive: SolidPrimitive): primitive is PointPrimitive {
+  return POINT_PRIMITIVES.has(primitive.kind)
+}
+
+// The named points a point-built solid stands on, in the order written.
+function pointsOf(primitive: PointPrimitive): string[] {
+  switch (primitive.kind) {
+    case 'hull':
+    case 'tetrahedronOn':
+      return primitive.points
+    case 'pyramidOn':
+      return [...primitive.base, primitive.apex]
+    case 'prismOn':
+      return primitive.base
+    case 'sphereOn':
+      return [primitive.center]
+    case 'cylinderOn':
+    case 'frustumOn':
+      return [primitive.from, primitive.to]
+    case 'coneOn':
+      return [primitive.apex, primitive.base]
   }
 }
 
@@ -356,6 +394,31 @@ function laterPointRefused(name: string, what: string): Error {
   return new Error(`"${name}" is already bound to ${what} on an earlier line — the later point "${name}" cannot rebind it`)
 }
 
+// What an author calls a point-built solid, for a message.
+function pointShapeWord(primitive: PointPrimitive): string {
+  return primitive.kind === 'hull' ? 'hull' : primitive.kind.slice(0, -'On'.length)
+}
+
+// Whether a height is negligible next to the points it was measured among —
+// GEOM_EPS is relative (see construct3d.ts's `negligible`).
+function flatAgainst(height: number, among: Vec3[]): boolean {
+  let size = 1
+  for (const p of among) size = Math.max(size, length3(p))
+  return height <= GEOM_EPS * size
+}
+
+// A round solid's axis between two named points, refusing two points that
+// coincide: such a solid has no axis, so no direction to stand in.
+function axisBetween(from: Vec3, to: Vec3, what: string, first: string, second: string): Vec3 {
+  const axis = sub3(to, from)
+  if (flatAgainst(length3(axis), [from, to])) throw new Error(`${capitalised(what)} has no axis: ${first} and ${second} are the same point`)
+  return axis
+}
+
+function capitalised(text: string): string {
+  return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
+}
+
 function nameList(names: readonly string[]): string {
   return names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
@@ -475,22 +538,38 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         case 'solid': {
           ownedStatements.add(index)
           const primitive = statement.primitive
-          const body = isPointPrimitive(primitive) ? buildOnPoints(primitive) : buildSolid(solidSpecOf(primitive, value))
+          const body = isPointPrimitive(primitive) ? buildOnPoints(primitive, statement.vertices) : buildSolid(solidSpecOf(primitive, value))
           if (statement.name) solids.set(statement.name, body)
           const entry: { solid: SolidBody; points: { name: string; at: Vec3; drawn: boolean }[] } = { solid: body, points: [] }
           byStatement.set(index, entry)
           if (statement.vertices.length === 0) break
-          // P6 — a solid on named points has its vertices named already.
-          if (isPointPrimitive(primitive)) {
-            throw new Error(
-              `${statement.name ? `"${statement.name}"` : `This ${body.spec.kind}`} is built on the named points ${primitive.points.join('-')}, ` +
-                `which already name its vertices — drop "vertices ${statement.vertices.join('')}"`
-            )
-          }
           // The solid stands whatever is wrong with its lettering: an error
           // in the vertex list costs the letters, not the drawing.
+          let order = body.labelOrder
+          if (isPointPrimitive(primitive)) {
+            const title = statement.name ? `"${statement.name}"` : `This ${pointShapeWord(primitive)}`
+            const on = pointsOf(primitive)
+            // P6 — a solid on named points has its vertices named already,
+            // except a prism's new top, which the vertices clause names.
+            if (primitive.kind !== 'prismOn') {
+              throw new Error(
+                body.polyhedron
+                  ? `${title} is built on the named points ${on.join('-')}, which already name its vertices — drop "vertices ${statement.vertices.join('')}"`
+                  : `${title} is placed by the named point${on.length === 1 ? '' : 's'} ${on.join('-')} and has no vertices to name — drop "vertices ${statement.vertices.join('')}"`
+              )
+            }
+            const n = primitive.base.length
+            if (statement.vertices.length !== n) {
+              throw new Error(
+                `The prism on ${on.join('-')} has a top of ${n} vertices, but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
+              )
+            }
+            // The hull keeps the input order: the base, then the top, each
+            // top corner over its base corner.
+            order = primitive.base.map((_, i) => n + i)
+          }
           const polyhedron = body.polyhedron
-          if (!polyhedron || statement.vertices.length !== body.labelOrder.length) {
+          if (!polyhedron || statement.vertices.length !== order.length) {
             throw new Error(
               `A ${body.spec.kind} has ${body.labelOrder.length} vertices, but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
             )
@@ -501,7 +580,7 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
           // S4 — a solid's named vertices are real points.
           const what = statement.name ? `a vertex of solid "${statement.name}"` : `a vertex of a ${body.spec.kind}`
           statement.vertices.forEach((name, v) => {
-            const at = polyhedron.vertices[body.labelOrder[v]]
+            const at = polyhedron.vertices[order[v]]
             bindSpace(name, at, what)
             entry.points.push({ name, at, drawn: false })
           })
@@ -535,12 +614,85 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
   }
 
   // A solid on named points (P6): its points must already be points in
-  // space, defined on an earlier line or as literals.
-  function buildOnPoints(primitive: PointPrimitive): SolidBody {
+  // space, defined on an earlier line or as literals. A polyhedron checks
+  // the degeneracy particular to its shape, in words about that shape, and
+  // is then built by the one hull builder (P3); a round solid is placed by
+  // its points (P1). `top` is a prism's vertices clause, used only to name
+  // the new top in a message.
+  function buildOnPoints(primitive: PointPrimitive, top: string[]): SolidBody {
     switch (primitive.kind) {
       case 'hull':
-        return buildSolid({ kind: 'hull', shape: 'hull', polyhedron: hullOf(primitive.points.map(lookup), primitive.points) })
+        return pointPolyhedron('hull', primitive.points.map(lookup), primitive.points)
+      case 'tetrahedronOn': {
+        const names = primitive.points
+        const [a, b, c, d] = names.map(lookup)
+        const base = planeThrough(a, b, c, nameList(names.slice(0, 3)))
+        if (flatAgainst(pointPlaneDistance(d, base), [a, b, c, d])) {
+          throw new Error(`${names[3]} lies in the plane ${names.slice(0, 3).join('-')}, so the tetrahedron ${names.join('-')} is flat — it has no volume`)
+        }
+        return pointPolyhedron('tetrahedron', [a, b, c, d], names)
+      }
+      case 'pyramidOn': {
+        const base = primitive.base.map(lookup)
+        const normal = basePolygonNormal(base, primitive.base)
+        const apex = lookup(primitive.apex)
+        if (flatAgainst(Math.abs(dot3(sub3(apex, base[0]), normal)), [...base, apex])) {
+          throw new Error(`${primitive.apex} lies in the plane of the base ${primitive.base.join('-')}, so the pyramid has no height`)
+        }
+        return pointPolyhedron('pyramid', [...base, apex], [...primitive.base, primitive.apex])
+      }
+      case 'prismOn': {
+        const base = primitive.base.map(lookup)
+        const normal = basePolygonNormal(base, primitive.base)
+        const height = value(primitive.height)
+        const list = primitive.base.join('-')
+        if (Number.isFinite(height) && height === 0) throw new Error(`A prism of height 0 on ${list} is flat — it has no volume`)
+        if (!Number.isFinite(height) || height < 0) {
+          throw new Error(
+            `A prism's height must be a positive number, got ${height} — it rises along (B - A) x (C - A); ` +
+              `reverse the base (${[...primitive.base].reverse().join('-')}) to extrude the other way`
+          )
+        }
+        // Along the base's RIGHT-HAND normal, so the base reads
+        // counter-clockwise seen from the new top.
+        const lid = base.map((p) => add3(p, scale3(normal, height)))
+        const lidNames = top.length === base.length ? top : primitive.base.map((name) => `${name}'`)
+        return pointPolyhedron('prism', [...base, ...lid], [...primitive.base, ...lidNames])
+      }
+      case 'sphereOn':
+        return placed({ kind: 'sphere', radius: positiveValue(value, primitive.radius, 'radius') }, lookup(primitive.center), { x: 0, y: 1, z: 0 })
+      case 'cylinderOn': {
+        const from = lookup(primitive.from)
+        const to = lookup(primitive.to)
+        const axis = axisBetween(from, to, `the cylinder from ${primitive.from} to ${primitive.to}`, primitive.from, primitive.to)
+        const radius = positiveValue(value, primitive.radius, 'radius')
+        return placed({ kind: 'cylinder', radius, height: length3(axis) }, midpoint3(from, to), axis)
+      }
+      case 'coneOn': {
+        const apex = lookup(primitive.apex)
+        const base = lookup(primitive.base)
+        const axis = axisBetween(base, apex, `the cone with apex ${primitive.apex} and base ${primitive.base}`, primitive.apex, primitive.base)
+        const radius = positiveValue(value, primitive.radius, 'radius')
+        return placed({ kind: 'cone', radius, height: length3(axis) }, midpoint3(base, apex), axis)
+      }
+      case 'frustumOn': {
+        const from = lookup(primitive.from)
+        const to = lookup(primitive.to)
+        const axis = axisBetween(from, to, `the frustum from ${primitive.from} to ${primitive.to}`, primitive.from, primitive.to)
+        const radius = positiveValue(value, primitive.fromRadius, 'radius')
+        // The rim at `to` is the frustum's "top"; buildSolid reverses the
+        // axis when it is the wider one (P2).
+        return placed(frustumSpec(radius, value(primitive.toRadius), length3(axis)), midpoint3(from, to), axis)
+      }
     }
+  }
+
+  function pointPolyhedron(shape: PointSolidShape, at: Vec3[], names: string[]): SolidBody {
+    return buildSolid({ kind: 'hull', shape, polyhedron: hullOf(at, names) })
+  }
+
+  function placed(spec: SolidSpec, origin: Vec3, axis: Vec3): SolidBody {
+    return { ...buildSolid(spec, placementAlong(origin, axis)), byPoints: true }
   }
 
   function walkConstruction(index: number, names: string[], body: Construction): void {
