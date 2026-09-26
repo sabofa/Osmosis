@@ -631,3 +631,27 @@ describe('textbook lettering (V3)', () => {
     expect(at.D.z).toBeCloseTo(Math.sqrt(6), 12)
   })
 })
+
+describe('the lettered edge each dimension hangs off', () => {
+  // The dimension segment's two ends, named by the letters labelOrder gives
+  // them. solidDimensionSegment takes no camera, so this holds under every view.
+  function letters(spec: SolidSpec, dimension: string, names: string): string {
+    const body = buildSolid(spec)
+    const v = requirePolyhedron(body).vertices
+    const [a, b] = solidDimensionSegment(spec, dimension)!
+    const name = (p: Vec3) => names[body.labelOrder.findIndex((i) => v[i].x === p.x && v[i].y === p.y && v[i].z === p.z)]
+    return [name(a), name(b)].sort().join('')
+  }
+
+  it('hangs a box width, height and depth off AB, BF and BC, which meet at B', () => {
+    const box: SolidSpec = { kind: 'prism', width: 8, height: 5, depth: 6 }
+    expect(letters(box, 'width', 'ABCDEFGH')).toBe('AB')
+    expect(letters(box, 'height', 'ABCDEFGH')).toBe('BF')
+    expect(letters(box, 'depth', 'ABCDEFGH')).toBe('BC')
+  })
+
+  it("hangs a tetrahedron's edge off A-C and a pyramid's base off A-B", () => {
+    expect(letters({ kind: 'tetrahedron', edge: 6 }, 'edge', 'ABCD')).toBe('AC')
+    expect(letters({ kind: 'pyramid', base: 6, height: 9 }, 'base', 'ABCDE')).toBe('AB')
+  })
+})

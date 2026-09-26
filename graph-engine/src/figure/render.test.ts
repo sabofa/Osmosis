@@ -4,7 +4,8 @@ import { LIGHT_PALETTE } from '../render/palette'
 import { FIGURE_LAYERS } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { formatMeasure } from './measure'
-import { ISOMETRIC_CAMERA, rectangularPrism, renderSolidFigure } from './project3d'
+import { DEFAULT_CAMERA, ISOMETRIC_CAMERA, rectangularPrism, renderSolidFigure } from './project3d'
+import { GEOM_EPS } from '../scene/geometry/types'
 import { buildSolid, regularTetrahedron } from './solids'
 import { renderFigure } from './render'
 import { resolveMode } from '../scene/mode'
@@ -2132,4 +2133,100 @@ describe('textbook lettering in the drawing (V3)', () => {
     expect(edges).toHaveLength(12)
     expect(diagonal.reduce((sum, l) => sum + length(l), 0)).toBeGreaterThan(Math.max(...edges.map(length)))
   })
+})
+
+describe('true against projected, under the default view', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const NAMED = '@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH'
+
+  it('measures the diagonal D-F, aimed at the viewer, at its TRUE length', () => {
+    // D, the hidden corner, and F, the corner nearest the viewer: internal
+    // (-4,-2.5,-3) and (4,2.5,3). Under the standard view this diagonal
+    // points almost along the view and draws about 3.98 long, where its true
+    // length is sqrt(125) = 11.18. It is not axis-parallel, so the camera
+    // really does shorten it.
+    const box = buildSolid({ kind: 'prism', width: 8, height: 5, depth: 6 })
+    const D = box.polyhedron!.vertices[box.labelOrder[3]]
+    const F = box.polyhedron!.vertices[box.labelOrder[5]]
+    expect(D).toEqual({ x: -4, y: -2.5, z: -3 })
+    expect(F).toEqual({ x: 4, y: 2.5, z: 3 })
+    const a = DEFAULT_CAMERA.project(D)
+    const b = DEFAULT_CAMERA.project(F)
+    const projected = Math.hypot(b.x - a.x, b.y - a.y)
+    const trueLength = Math.sqrt(125)
+    expect(Math.abs(trueLength - projected)).toBeGreaterThan(1000 * GEOM_EPS * trueLength)
+    expect(Math.abs(trueLength - projected)).toBeGreaterThan(5)
+    expect(result(`${NAMED}\nlabel: DF = ${trueLength}`).errors).toEqual([])
+    const wrong = result(`${NAMED}\nlabel: DF = ${projected}`).errors
+    expect(wrong).toHaveLength(1)
+    expect(wrong[0].message).toMatch(/DF/)
+    expect(layer(render(`${NAMED}\nlabel: DF`), 'labels')).toContain('>11.18</text>')
+  })
+})
+
+describe('the lettered edge each dimension hangs off (V2)', () => {
+  // The letters of the drawn solid edge nearest each dimension label. A label
+  // sits beside the edge it measures, pushed a little outward, so its nearest
+  // edge midpoint is that edge's. Checked under two views: the choice must
+  // not move when the view does.
+  function nearestEdges(spec: string, letters: string, order: number[], values: string[]): Record<string, string> {
+    const svg = render(spec)
+    const edges = [...(layer(svg, 'primary') + layer(svg, 'auxiliary')).matchAll(
+      /<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"[^>]*data-statement="0" data-object="edge-(\d+)-(\d+)"/g
+    )].map((m) => ({
+      mid: { x: (Number(m[1]) + Number(m[3])) / 2, y: (Number(m[2]) + Number(m[4])) / 2 },
+      name: [letters[order.indexOf(Number(m[5]))], letters[order.indexOf(Number(m[6]))]].sort().join(''),
+    }))
+    const out: Record<string, string> = {}
+    for (const m of layer(svg, 'labels').matchAll(/<text x="([^"]*)" y="([^"]*)"[^>]*>([^<]*)<\/text>/g)) {
+      if (!values.includes(m[3])) continue
+      const at = { x: Number(m[1]), y: Number(m[2]) }
+      out[m[3]] = edges.reduce((best, e) =>
+        Math.hypot(e.mid.x - at.x, e.mid.y - at.y) < Math.hypot(best.mid.x - at.x, best.mid.y - at.y) ? e : best
+      ).name
+    }
+    return out
+  }
+
+  for (const view of ['standard', 'isometric']) {
+    it(`hangs a box's width, height and depth off AB, BF and BC, under ${view}`, () => {
+      const order = buildSolid({ kind: 'prism', width: 8, height: 5, depth: 6 }).labelOrder
+      const spec = `@mode: figure\n@view: ${view}\nS = solid prism 8 by 5 by 6\nlabel: S width\nlabel: S height\nlabel: S depth`
+      expect(nearestEdges(spec, 'ABCDEFGH', order, ['8', '5', '6'])).toEqual({ '8': 'AB', '5': 'BF', '6': 'BC' })
+    })
+
+    it(`hangs a tetrahedron's edge off A-C and a pyramid's base off A-B, under ${view}`, () => {
+      const tetra = buildSolid({ kind: 'tetrahedron', edge: 6 }).labelOrder
+      expect(nearestEdges(`@mode: figure\n@view: ${view}\nT = solid tetrahedron edge 6\nlabel: T edge`, 'ABCD', tetra, ['6'])).toEqual({ '6': 'AC' })
+      const pyramid = buildSolid({ kind: 'pyramid', base: 6, height: 9 }).labelOrder
+      expect(nearestEdges(`@mode: figure\n@view: ${view}\nP = solid pyramid square base 6, height 9\nlabel: P base`, 'ABCDE', pyramid, ['6'])).toEqual({
+        '6': 'AB',
+      })
+    })
+  }
+})
+
+describe('a tetrahedron and a pyramid under @view: isometric, as before phase 6b', () => {
+  // Digests of the pre-6b renders, taken at commit ee9eda2, where isometric
+  // was the default: the same specs with no @view line. No `vertices` clause,
+  // so lettering (which phase 6b changed on purpose) cannot enter the bytes.
+  // The tetrahedron is the solid whose placement code changed: its start
+  // angle is now derived from the default camera, one ulp from PI/4.
+  const BEFORE: [string, string][] = [
+    ['T = solid tetrahedron edge 6', '1231:1aa2cfaf16c986'],
+    ['T = solid tetrahedron edge 6\nlabel: T edge', '1442:114c62f27a109a'],
+    ['P = solid pyramid square base 6, height 9', '1632:ec660ce963a38'],
+    ['P = solid pyramid square base 6, height 9\nlabel: P base\nlabel: P height', '2048:ddfb3945d6ecd'],
+  ]
+
+  for (const [body, expected] of BEFORE) {
+    it(`draws exactly what ee9eda2 drew: ${body.split('\n').join(' / ')}`, () => {
+      expect(digest(render(`@mode: figure\n@view: isometric\n${body}`))).toBe(expected)
+    })
+  }
 })

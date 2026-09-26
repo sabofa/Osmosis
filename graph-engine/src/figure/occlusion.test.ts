@@ -100,9 +100,10 @@ describe('segments against a prism', () => {
   })
 
   it('shows a segment along a visible edge and hides one along a hidden edge', () => {
-    // Textbook lettering (phase 6b): D is the hidden corner and A sits above
-    // it along z. FG joins the +x and +y faces, both in front; DA joins -x
-    // and -y, both turned away.
+    // Textbook lettering (phase 6b): D is the hidden corner, and A sits in
+    // FRONT of it along internal z, which is author X (E, not A, is the one
+    // above). FG joins the +x and +y faces, both in front; DA joins -x and
+    // -y, both turned away.
     expect(NAMED.D).toEqual({ x: -4, y: -2.5, z: -3 })
     expect(NAMED.A).toEqual({ x: -4, y: -2.5, z: 3 })
     expectSpans(spans(NAMED.F, NAMED.G), [[0, 1, false]])

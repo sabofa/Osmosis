@@ -149,6 +149,7 @@ describe('the cylinder silhouette', () => {
 
   for (const [name, camera] of [
     ['from above', ISO],
+    ['from above, standard', cameraFor('standard')],
     ['from below', FROM_BELOW],
   ] as const) {
     it(`dashes the half of the far rim that bulges toward the near one, ${name}`, () => {
@@ -336,7 +337,7 @@ describe('the sphere silhouette', () => {
 
   it('is the same circle from every named viewpoint', () => {
     // A sphere has no orientation, so its outline cannot depend on one.
-    for (const name of ['isometric', 'front', 'top', 'side'] as const) {
+    for (const name of ['standard', 'isometric', 'front', 'top', 'side'] as const) {
       const camera = cameraFor(name)
       for (const arc of arcs(sphereOutline(4, camera))) expect(arc.rx).toBeCloseTo(4 * camera.scale, 12)
     }
