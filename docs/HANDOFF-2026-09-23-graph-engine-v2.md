@@ -7,16 +7,61 @@ already been tried and failed, and which traps cost real time.
 
 ## Where things stand
 
-**Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. Working tree clean. **1493 tests passing**,
+**Branch `milestone-a/geometry`**, in the worktree
+`.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
+`graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
+agents" below). Working tree clean. **1528 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-26, after geometry phase 8 (planes as objects, and
-oblique sections).*
+oblique sections) and its two fix rounds.*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
 breaking test runs mid-task.
+
+### Worktrees, milestones and parallel agents (2026-09-26)
+
+**Worktrees are organised by milestone.** The current stopping point is
+**Milestone A** (tracks 1–4). Every branch serving it carries the
+`milestone-a/` prefix, so a branch named just `milestone-a` is impossible —
+git cannot hold both `milestone-a` and `milestone-a/…`.
+
+| Branch | Worktree | Holds |
+|---|---|---|
+| `milestone-a/main` | `.claude/worktrees/milestone-a` | Integration only. Sides merge in at phase boundaries; it merges to `main` when Milestone A is done |
+| `milestone-a/geometry` | `.claude/worktrees/milestone-a-geometry` | Tracks 1–2: reading the graph, geometry, **solid figures** |
+| `milestone-a/space` | `.claude/worktrees/milestone-a-space` | Track 3: **space** (three.js, Calc 3, Physics C) — a separate agent |
+| `milestone-a/calc` | later | Track 4: calc-proofing the 2D engine |
+
+**More than one agent works at once.** Expect branches, worktrees, stash
+entries and review servers you did not create. Do not investigate, clean up,
+pop or drop any of them. Stay in your own worktree, stage with explicit
+`git add <paths>` (never `-A` / `.`), and never use bare `git stash` /
+`git stash pop`. If a file in *your* worktree changes under you, stop and
+report it.
+
+**Review servers, one port per side,** all on the Tailscale IP:
+`milestone-a/geometry` on **5181**, `milestone-a/space` on **5182**.
+
+**The two 3D engines share no code.** *Space* is `scene/buildScene3d.ts`,
+`render/SceneRenderer3D.ts`; *solid figures* is everything under
+`graph-engine/src/figure/`. Never write "3D engine" alone. Fixed between them
+(spec, Track 2 "Revised 2026-09-25"):
+
+- **One author frame, z-up, in both.** Coordinates mean the same place either way.
+- **`solid:` belongs to solid figures.** Track 3's double integral is
+  `volume: under z = f over region`.
+- **The mode rule in `scene/mode.ts`:** a spec with a `solid` or `crossSection`
+  statement infers `figure`, checked **before** `isThreeD`. A 3-coordinate point
+  with no solid still infers `graph` (space). Do not reorder it.
+- **`@view` is the solid-figure camera.** Space needs its own directive.
+
+**Files both sides touch, so coordinate before editing:**
+`parser/parseStatement.ts` (add a side's statements in their own block, or
+better their own module, to keep merges easy), `parser/types.ts`,
+`parser/config.ts`, `scene/mode.ts`, `examples.ts` / `examples.test.ts`, and
+this handoff. **Neither side edits the other's directories.**
 
 ### The two specs are the authority
 
@@ -590,7 +635,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 npm run test --workspace=graph-engine          # 1493 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
-npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
+npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
 ```
 
 For anything renderer-shaped, a `vite-node` scratch script against
