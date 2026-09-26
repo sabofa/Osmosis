@@ -41,7 +41,7 @@ export type GivensPosition = (typeof GIVENS_POSITIONS)[number]
 // A NAME, never a camera. Free orbit stays rejected — these are drawings — but
 // one fixed direction is degenerate for a solid whose features line up with
 // it, and a name preserves determinism while letting an author escape that.
-export const VIEW_NAMES = ['isometric', 'front', 'top', 'side'] as const
+export const VIEW_NAMES = ['standard', 'isometric', 'front', 'top', 'side'] as const
 
 export type ViewName = (typeof VIEW_NAMES)[number]
 
@@ -110,8 +110,10 @@ export interface GraphConfig {
   // function/constant *definitions* are always collected and stay usable in
   // other statements' expressions regardless of hidden state.
   hidden: Set<string>
-  // Which named viewpoint a solid is drawn from, set by "@view:". Isometric
-  // is the default and the one a textbook drawing uses.
+  // Which named viewpoint a solid is drawn from, set by "@view:". The default
+  // is "standard", a view in general position: exact isometric looks along a
+  // cube's space diagonal and puts two of its corners on one point, so it is
+  // kept by name but no longer the default (decided 2026-09-26).
   view: ViewName
   // Whether a table built from a "table: y = f(x) for ..." generator
   // statement (see scene/buildTable.ts) shows its generating formula
@@ -143,7 +145,7 @@ export function defaultConfig(): GraphConfig {
     pointLabels: 'off',
     asymptotes: true,
     hidden: new Set(),
-    view: 'isometric',
+    view: 'standard',
     tableFormulas: false,
   }
 }

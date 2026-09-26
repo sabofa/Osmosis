@@ -11,6 +11,7 @@ import {
   unionRects,
   type Rect,
 } from './document'
+import { authorToWorld } from './authorFrame'
 import { ellipsePoint, svgEllipticalArc, svgLine, type SvgAttrs } from './svg'
 
 // 3D solids, drawn through the same SVG renderer.
@@ -47,9 +48,9 @@ export interface Solid3D {
 // The camera
 // ---------------------------------------------------------------------------
 
-// The direction from the scene toward the camera: the (1,1,1) corner, the
-// standard isometric viewpoint. A face is turned toward the viewer exactly
-// when its outward normal has a positive component along this.
+// The direction from the scene toward the ISOMETRIC camera: the (1,1,1)
+// corner. No longer the default view (see DEFAULT_VIEW); kept because the
+// isometric view still looks along it.
 export const CAMERA_DIRECTION: Vec3 = { x: 1, y: 1, z: 1 }
 
 const COS30 = Math.sqrt(3) / 2
@@ -63,9 +64,25 @@ const COS30 = Math.sqrt(3) / 2
 // for a solid whose features align with the view direction, so the engine
 // offers a small NAMED set. Determinism is untouched (a name is not a
 // control) and an author can escape a bad projection.
-export const VIEWPOINT_NAMES = ['isometric', 'front', 'top', 'side'] as const
+export const VIEWPOINT_NAMES = ['standard', 'isometric', 'front', 'top', 'side'] as const
 
 export type ViewName = (typeof VIEWPOINT_NAMES)[number]
+
+// V1 — **the default view is not isometric** (decided 2026-09-26). Exact
+// isometric looks along a cube's space diagonal, so a cube's front and back
+// corners project to ONE point, and a regular tetrahedron flattens until its
+// altitude lies under an edge: the two most common competition solids, both
+// drawn wrong. The default is `standard` instead, an orthographic view in
+// general position. `isometric` stays, by name and with its exact bytes.
+export const DEFAULT_VIEW: ViewName = 'standard'
+
+// The standard view's direction, in the AUTHOR frame (z up): azimuth measured
+// from +X toward +Y, elevation up from the XY-plane, both in degrees.
+// Measured at this camera, the closest two unit-cube vertices sit 0.49 apart
+// on the page, and every face of a regular tetrahedron (placed as solids.ts
+// places it) stays at least 21 degrees from edge-on.
+export const STANDARD_AZIMUTH = 30
+export const STANDARD_ELEVATION = 25
 
 // A camera is an ORTHOGRAPHIC frame plus one uniform scale.
 //
@@ -94,7 +111,46 @@ export interface Camera {
 const INV_SQRT2 = 1 / Math.sqrt(2)
 const INV_SQRT6 = 1 / Math.sqrt(6)
 
+function dot3(a: Vec3, b: Vec3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+// An orthographic camera built from its FRAME: looking from `azimuth` and
+// `elevation` (degrees, author frame), with author Z drawn page-up, so every
+// vertical edge draws vertical. `up` is author Z with its component along the
+// view removed; `right` is up x direction, which is what keeps
+// (right, up, direction) right-handed. The whole frame is then carried into
+// the internal frame through authorFrame.ts, the one module that knows both.
+//
+// `project` is the frame itself — (scale * p.right, scale * p.up) — because a
+// camera built this way has no legacy bytes to protect. Only `isometric`
+// keeps a hand-written route, and only for that reason.
+function orthographicCamera(name: ViewName, azimuth: number, elevation: number, scale: number): Camera {
+  const az = (azimuth * Math.PI) / 180
+  const el = (elevation * Math.PI) / 180
+  const direction: Vec3 = { x: Math.cos(el) * Math.cos(az), y: Math.cos(el) * Math.sin(az), z: Math.sin(el) }
+  const along = direction.z
+  const raw: Vec3 = { x: -along * direction.x, y: -along * direction.y, z: 1 - along * direction.z }
+  const length = Math.hypot(raw.x, raw.y, raw.z)
+  const up: Vec3 = { x: raw.x / length, y: raw.y / length, z: raw.z / length }
+  const right: Vec3 = {
+    x: up.y * direction.z - up.z * direction.y,
+    y: up.z * direction.x - up.x * direction.z,
+    z: up.x * direction.y - up.y * direction.x,
+  }
+  const frame = { direction: authorToWorld(direction), right: authorToWorld(right), up: authorToWorld(up) }
+  return {
+    name,
+    ...frame,
+    scale,
+    project: (p) => ({ x: scale * dot3(p, frame.right), y: scale * dot3(p, frame.up) }),
+  }
+}
+
 const CAMERAS: Record<ViewName, Camera> = {
+  // V1: the default. General position, so no two vertices of a cube and no
+  // edge of a regular tetrahedron line up with the view.
+  standard: orthographicCamera('standard', STANDARD_AZIMUTH, STANDARD_ELEVATION, 1),
   // The (1,1,1) corner. right = (1,0,-1)/sqrt2, up = (-1,2,-1)/sqrt6, and the
   // uniform scale is sqrt(6)/2 — which is precisely what `projectPoint`
   // computes, by a route chosen for its bytes rather than its symmetry.
@@ -143,6 +199,11 @@ export function cameraFor(name: ViewName): Camera {
 }
 
 export const ISOMETRIC_CAMERA = CAMERAS.isometric
+
+// The camera a spec with no `@view:` is drawn through — and the one every
+// placement convention in solids.ts is fixed against (V2), whatever view is
+// active.
+export const DEFAULT_CAMERA = CAMERAS[DEFAULT_VIEW]
 
 // Isometric projection onto the plane perpendicular to (1,1,1):
 //
@@ -303,7 +364,7 @@ function edgeKey(a: number, b: number): string {
 // Edges in first-seen order over the faces, which is a deterministic function
 // of the solid's own face list — the property the byte-identical requirement
 // rests on.
-export function projectSolid(solid: Solid3D, camera: Camera = ISOMETRIC_CAMERA): ProjectedSegment[] {
+export function projectSolid(solid: Solid3D, camera: Camera = DEFAULT_CAMERA): ProjectedSegment[] {
   const frontFacing = solid.faces.map((_, i) => facesCamera(faceNormal(solid, i), camera))
   const order: [number, number][] = []
   const anyFront = new Map<string, boolean>()
@@ -383,7 +444,7 @@ export function edgeObject(edge: ProjectedEdge): string {
   return edge.object ?? `edge-${edge.vertices[0]}-${edge.vertices[1]}`
 }
 
-export function renderSolidFigure(solid: Solid3D, palette: Palette, camera: Camera = ISOMETRIC_CAMERA): string {
+export function renderSolidFigure(solid: Solid3D, palette: Palette, camera: Camera = DEFAULT_CAMERA): string {
   const theme = figureTheme(palette)
   const edges = projectSolid(solid, camera)
 

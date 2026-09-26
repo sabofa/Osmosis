@@ -6,6 +6,7 @@ import {
   edgeExtremes,
   edgeObject,
   faceNormal,
+  ISOMETRIC_CAMERA,
   projectPoint,
   projectSolid,
   type ProjectedArc,
@@ -169,7 +170,9 @@ const PRISM_4_3_2_BEFORE_ARCS =
 
 describe('the widened drawn-edge type', () => {
   it('emits a polyhedron byte for byte as it did before arcs existed', () => {
-    expect(renderSolidFigure(rectangularPrism(4, 3, 2), LIGHT_PALETTE)).toBe(PRISM_4_3_2_BEFORE_ARCS)
+    // Pinned to the isometric camera by name (phase 6b): these are the bytes
+    // drawn when isometric was the default.
+    expect(renderSolidFigure(rectangularPrism(4, 3, 2), LIGHT_PALETTE, ISOMETRIC_CAMERA)).toBe(PRISM_4_3_2_BEFORE_ARCS)
   })
 
   it('marks every edge of a polyhedron as a segment', () => {

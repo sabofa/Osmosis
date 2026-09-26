@@ -1275,7 +1275,7 @@ describe('solids in the figure', () => {
   })
 
   it('draws a different picture from a different named viewpoint', () => {
-    const iso = render('@mode: figure\nsolid: prism 8 by 5 by 6')
+    const iso = render('@mode: figure\n@view: isometric\nsolid: prism 8 by 5 by 6')
     const front = render('@mode: figure\n@view: front\nsolid: prism 8 by 5 by 6')
     expect(front).not.toBe(iso)
     // Head on, only the +z face turns toward the camera — the four side
@@ -1291,8 +1291,8 @@ describe('solids in the figure', () => {
   it('keeps the isometric prism exactly as project3d already drew it', () => {
     // The figure path and renderSolidFigure must agree edge for edge: the 3D
     // layer is one producer, not two.
-    const svg = render('@mode: figure\nsolid: prism 4 by 3 by 2')
-    const direct = renderSolidFigure(rectangularPrism(4, 3, 2), LIGHT_PALETTE)
+    const svg = render('@mode: figure\n@view: isometric\nsolid: prism 4 by 3 by 2')
+    const direct = renderSolidFigure(rectangularPrism(4, 3, 2), LIGHT_PALETTE, ISOMETRIC_CAMERA)
     const coords = (s: string) => [...s.matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)].map((m) => m.slice(1, 5).join(','))
     expect(coords(svg).sort()).toEqual(coords(direct).sort())
   })
@@ -1315,7 +1315,7 @@ describe('dimension labels on a solid', () => {
     // isometric camera draws every axis-parallel edge at its TRUE length, so
     // no prism dimension can tell the spec from the drawing. A regular
     // tetrahedron's edge is not axis-parallel, and it can.
-    const tetra = render('@mode: figure\nT = solid tetrahedron edge 5\nlabel: T edge')
+    const tetra = render('@mode: figure\n@view: isometric\nT = solid tetrahedron edge 5\nlabel: T edge')
     const [a, b] = regularTetrahedron(5).vertices.map((v) => ISOMETRIC_CAMERA.project(v))
     const drawn = Math.hypot(b.x - a.x, b.y - a.y)
     // The two differ by far more than the formatter's rounding, so the
@@ -1657,7 +1657,10 @@ describe('the z-up author frame (S1)', () => {
     return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
   }
 
-  const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+  // Pinned to the isometric view by name (phase 6b): the digests are phase 5's
+  // bytes, drawn when isometric was the default.
+  const PRISM = '@mode: figure\n@view: isometric\nS = solid prism 8 by 5 by 6'
+  const CYLINDER = '@mode: figure\n@view: isometric\nC = solid cylinder radius 3, height 8'
 
   // Every cross-section input phase 5's tests and examples used, rewritten
   // from the internal frame's "plane y = c" into the author's "plane z = c".
@@ -1665,20 +1668,20 @@ describe('the z-up author frame (S1)', () => {
   // before the frame existed; each rewrite must draw exactly those bytes.
   const REWRITTEN: [string, string][] = [
     [`${PRISM}\ncut: S by plane z = 1`, '2538:27fe13b38d503'],
-    ['@mode: figure\nC = solid cylinder radius 3, height 8\ncut: C by plane z = 1', '1645:d8b3f7da5621d'],
+    [`${CYLINDER}\ncut: C by plane z = 1`, '1645:d8b3f7da5621d'],
     [`${PRISM}\nsection: S by plane z = 1`, '2965:1083d01e74ca92'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS`, '4203:1d739cd9fcdd07'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 8\nlabel: QR = 6`, '4603:1bd3a01c570bd9'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 6.93`, '4409:14559416687fc8'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 8`, '4406:12d478e07528f1'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\ntick: P-Q\nright-angle: S-P-Q\ngiven: PQ = 8\nfind: QR`, '6345:e2a7ca7fc504e'],
-    ['@mode: figure\nC = solid cylinder radius 3, height 8\nsection: C by plane z = 1 vertices PQR', '1480:159fa8dfdf2095'],
+    [`${CYLINDER}\nsection: C by plane z = 1 vertices PQR`, '1480:159fa8dfdf2095'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQR`, '2965:1083d01e74ca92'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ`, '4406:12d478e07528f1'],
   ]
 
   for (const [spec, expected] of REWRITTEN) {
-    it(`draws exactly what phase 5 drew: ${spec.split('\n').slice(2).join(' / ')}`, () => {
+    it(`draws exactly what phase 5 drew: ${spec.split('\n').slice(3).join(' / ')}`, () => {
       expect(digest(render(spec))).toBe(expected)
     })
   }
@@ -1686,8 +1689,9 @@ describe('the z-up author frame (S1)', () => {
   it('draws the rewritten cross-section examples exactly as phase 5 did', () => {
     const cut = EXAMPLES.find((e) => e.label === 'Cross-section (cut)')
     const lifted = EXAMPLES.find((e) => e.label === 'Cross-section (lifted)')
-    expect(digest(render(cut!.spec))).toBe('2538:27fe13b38d503')
-    expect(digest(render(lifted!.spec))).toBe('4603:1bd3a01c570bd9')
+    const isometric = (spec: string) => spec.replace('@mode: figure', '@mode: figure\n@view: isometric')
+    expect(digest(render(isometric(cut!.spec)))).toBe('2538:27fe13b38d503')
+    expect(digest(render(isometric(lifted!.spec)))).toBe('4603:1bd3a01c570bd9')
   })
 
   it('cuts horizontally at z = c and vertically at x = c and y = c', () => {
@@ -1737,8 +1741,9 @@ describe('named points in solid figures', () => {
     // The two differ by far more than GEOM_EPS, so neither assertion below
     // can pass vacuously.
     expect(Math.abs(trueLength - projected)).toBeGreaterThan(1)
-    expect(result(`${NAMED}\nlabel: AG = ${trueLength}`).errors).toEqual([])
-    const wrong = result(`${NAMED}\nlabel: AG = ${projected}`).errors
+    const isometric = NAMED.replace('@mode: figure', '@mode: figure\n@view: isometric')
+    expect(result(`${isometric}\nlabel: AG = ${trueLength}`).errors).toEqual([])
+    const wrong = result(`${isometric}\nlabel: AG = ${projected}`).errors
     expect(wrong).toHaveLength(1)
     expect(wrong[0].message).toMatch(/AG/)
     // And the computed form prints the true length.
@@ -1879,6 +1884,7 @@ describe('segments in solid figures', () => {
     const k = '-10/sqrt(3)'
     const spec = [
       '@mode: figure',
+      '@view: isometric',
       'S = solid sphere radius 5',
       `P = (${k} - 8/sqrt(2), ${k} + 8/sqrt(2), ${k})`,
       `Q = (${k} + 8/sqrt(2), ${k} - 8/sqrt(2), ${k})`,
@@ -1983,5 +1989,88 @@ describe('a plot in a solid figure', () => {
 
   it('leaves a 2D figure exactly as it was', () => {
     expect(errorsOf('@mode: figure\nA = (0, 0)\ny = x^2')).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 6b — the standard default view (V1) and placement fixed against it (V2)
+// ---------------------------------------------------------------------------
+
+describe('the standard default view', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const BOX = 'S = solid prism 8 by 5 by 6'
+
+  it('draws through the standard camera when no @view is given', () => {
+    expect(parseSpec(`@mode: figure\n${BOX}`).config.view).toBe('standard')
+    const plain = render(`@mode: figure\n${BOX}`)
+    expect(plain).toBe(render(`@mode: figure\n@view: standard\n${BOX}`))
+    expect(plain).not.toBe(render(`@mode: figure\n@view: isometric\n${BOX}`))
+  })
+
+  // The dots of a unit cube given by its eight corners, in view coordinates.
+  function cubeDots(view: string): { x: number; y: number }[] {
+    const corners: string[] = []
+    let n = 0
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]) corners.push(`${'ABCDEFGH'[n++]} = (${x}, ${y}, ${z})`)
+    const svg = render(['@mode: figure', view, ...corners].join('\n'))
+    return [...layer(svg, 'points').matchAll(/<circle cx="([^"]*)" cy="([^"]*)"/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }))
+  }
+
+  function closestPair(dots: { x: number; y: number }[]): number {
+    let least = Infinity
+    for (let i = 0; i < dots.length; i++) {
+      for (let j = i + 1; j < dots.length; j++) least = Math.min(least, Math.hypot(dots[i].x - dots[j].x, dots[i].y - dots[j].y))
+    }
+    return least
+  }
+
+  it('draws the eight corners of a cube on eight distinct points by default', () => {
+    const standard = cubeDots('')
+    expect(standard).toHaveLength(8)
+    // The cube is fitted to the page, so the gap is in view units: far more
+    // than a dot's own size.
+    expect(closestPair(standard)).toBeGreaterThan(20)
+    // Exact isometric draws two of them on one point.
+    const isometric = cubeDots('@view: isometric')
+    expect(isometric).toHaveLength(8)
+    expect(closestPair(isometric)).toBeLessThan(0.01)
+  })
+
+  it('dashes exactly three edges of a box and one of a tetrahedron by default', () => {
+    expect(countTags(layer(render(`@mode: figure\n${BOX}`), 'auxiliary'), 'line')).toBe(3)
+    const tetra = render('@mode: figure\nT = solid tetrahedron edge 6')
+    expect(countTags(layer(tetra, 'auxiliary'), 'line')).toBe(1)
+    expect(countTags(layer(tetra, 'primary'), 'line')).toBe(5)
+  })
+
+  it('never re-orients a solid when the view changes (V2)', () => {
+    // A regular tetrahedron of edge 6 sits with its base at Z = -sqrt6 and
+    // its first base vertex at author azimuth 45, on a circle of radius
+    // 2 sqrt3: author (sqrt6, sqrt6, -sqrt6). The other two follow at 165
+    // and 285 degrees. The distances from each to two fixed points off the
+    // axis pin where the vertex is; a turn about the axis moves all of them.
+    const R = 2 * Math.sqrt(3)
+    const base = -Math.sqrt(6)
+    const at = (degrees: number) => ({ x: R * Math.cos((degrees * Math.PI) / 180), y: R * Math.sin((degrees * Math.PI) / 180), z: base })
+    const vertices: Record<string, { x: number; y: number; z: number }> = { A: at(45), B: at(285), C: at(165) }
+    const P = { x: 10, y: 0, z: 0 }
+    const Q = { x: 0, y: 10, z: 0 }
+    const distance = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+    const givens: string[] = []
+    for (const [name, v] of Object.entries(vertices)) {
+      givens.push(`given: ${name}P = ${distance(v, P)}`, `given: ${name}Q = ${distance(v, Q)}`)
+    }
+    for (const view of ['standard', 'isometric', 'front']) {
+      const spec = ['@mode: figure', `@view: ${view}`, 'T = solid tetrahedron edge 6 vertices ABCD', 'P = (10, 0, 0)', 'Q = (0, 10, 0)', ...givens].join('\n')
+      expect(result(spec).errors.map((e) => `${view}: ${e.message}`)).toEqual([])
+    }
+    // The givens can fail: the same vertices a sixth of a turn round are refused.
+    const wrong = ['@mode: figure', 'T = solid tetrahedron edge 6 vertices ABCD', 'P = (10, 0, 0)', `given: AP = ${distance(at(105), P)}`].join('\n')
+    expect(result(wrong).errors).toHaveLength(1)
   })
 })

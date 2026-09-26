@@ -132,12 +132,14 @@ describe('@givens-title', () => {
 })
 
 describe('@view', () => {
-  it('defaults to isometric, the viewpoint a textbook drawing uses', () => {
-    expect(defaultConfig().view).toBe('isometric')
+  it('defaults to standard, a view in general position, not isometric', () => {
+    // Exact isometric looks along a cube's space diagonal and puts two of its
+    // corners on one point (phase 6b), so it is kept by name only.
+    expect(defaultConfig().view).toBe('standard')
   })
 
   it('takes each named viewpoint', () => {
-    for (const name of ['isometric', 'front', 'top', 'side'] as const) {
+    for (const name of ['standard', 'isometric', 'front', 'top', 'side'] as const) {
       const config = defaultConfig()
       parseConfigLine(`@view: ${name}`, config)
       expect(config.view).toBe(name)
@@ -146,6 +148,6 @@ describe('@view', () => {
 
   it('rejects an unknown viewpoint, naming the ones that exist', () => {
     const config = defaultConfig()
-    expect(() => parseConfigLine('@view: orbit', config)).toThrow(/isometric, front, top, side/)
+    expect(() => parseConfigLine('@view: orbit', config)).toThrow(/standard, isometric, front, top, side/)
   })
 })

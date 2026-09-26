@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { cameraFor, faceNormal, projectSolid } from './project3d'
-import { buildSolid, solidDimensions, solidDimensionSegment, type SolidSpec } from './solids'
+import { authorToWorld, worldToAuthor } from './authorFrame'
+import { cameraFor, DEFAULT_CAMERA, DEFAULT_VIEW, faceNormal, projectSolid, type Camera, type Vec3 } from './project3d'
+import { BASE_START_ANGLE, baseStartAngle, buildSolid, solidDimensions, solidDimensionSegment, type SolidSpec } from './solids'
 
 const COS30 = Math.sqrt(3) / 2
 
@@ -42,12 +43,13 @@ describe('the placement convention (H1)', () => {
     ).toEqual([-3, -3, 3, 3])
   })
 
-  it('places a regular tetrahedron with its first base vertex facing the viewer', () => {
+  it('places a regular tetrahedron with its first base vertex 15 degrees round from the default camera', () => {
     const v = requirePolyhedron(buildSolid({ kind: 'tetrahedron', edge: 5 })).vertices
     const R = 5 / Math.sqrt(3)
     const h = 5 * Math.sqrt(2 / 3)
-    // Rule 4: 45 degrees round from +x, the camera's own direction projected
-    // onto the base plane.
+    // Rule 4 (V2): the standard camera looks from author azimuth 30 degrees,
+    // and the first vertex sits at 30 + 15 = 45 — author (R/sqrt2, R/sqrt2),
+    // which is internal 45 degrees round from +x.
     expect(v[0].x).toBeCloseTo(R / Math.sqrt(2), 12)
     expect(v[0].z).toBeCloseTo(R / Math.sqrt(2), 12)
     expect(v[0].y).toBeCloseTo(-h / 2, 12)
@@ -159,7 +161,7 @@ describe('named viewpoints', () => {
   })
 
   it('gives every viewpoint a right-handed (right, up, direction) frame at one uniform scale', () => {
-    for (const name of ['isometric', 'front', 'top', 'side'] as const) {
+    for (const name of ['standard', 'isometric', 'front', 'top', 'side'] as const) {
       const c = cameraFor(name)
       const cross = {
         x: c.right.y * c.up.z - c.right.z * c.up.y,
@@ -333,5 +335,187 @@ describe('every polyhedral primitive is convex (H4)', () => {
       }
     }
     expect(violated).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// V1 / V2 — the standard default view, and placement fixed against it
+// ---------------------------------------------------------------------------
+
+const RAD = Math.PI / 180
+
+function sub3(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }
+}
+
+function dot3(a: Vec3, b: Vec3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+function cross3(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }
+}
+
+// The smallest distance on the page between two of the given points.
+function minimumGap(points: Vec3[], camera: Camera): number {
+  const drawn = points.map((p) => camera.project(p))
+  let least = Infinity
+  for (let i = 0; i < drawn.length; i++) {
+    for (let j = i + 1; j < drawn.length; j++) least = Math.min(least, Math.hypot(drawn[i].x - drawn[j].x, drawn[i].y - drawn[j].y))
+  }
+  return least
+}
+
+// How near the viewer the midpoint of a base edge is, along the view.
+function edgeDepth(vertices: Vec3[], a: number, b: number, camera: Camera): number {
+  const mid = { x: (vertices[a].x + vertices[b].x) / 2, y: (vertices[a].y + vertices[b].y) / 2, z: (vertices[a].z + vertices[b].z) / 2 }
+  return dot3(mid, camera.direction)
+}
+
+const BASE_EDGES: [number, number][] = [
+  [0, 1],
+  [1, 2],
+  [2, 0],
+]
+
+describe('the standard camera (V1)', () => {
+  it('looks from author azimuth 30 and elevation 25, carried into the internal frame', () => {
+    const c = cameraFor('standard')
+    const expected = authorToWorld({ x: Math.cos(25 * RAD) * Math.cos(30 * RAD), y: Math.cos(25 * RAD) * Math.sin(30 * RAD), z: Math.sin(25 * RAD) })
+    expect(c.direction.x).toBeCloseTo(expected.x, 12)
+    expect(c.direction.y).toBeCloseTo(expected.y, 12)
+    expect(c.direction.z).toBeCloseTo(expected.z, 12)
+    expect(Math.hypot(c.direction.x, c.direction.y, c.direction.z)).toBeCloseTo(1, 12)
+    expect(c.scale).toBe(1)
+  })
+
+  it('draws author Z page-up: its up is the projection of Z, and right x up = direction', () => {
+    const c = cameraFor('standard')
+    const z = authorToWorld({ x: 0, y: 0, z: 1 })
+    const along = dot3(z, c.direction)
+    const raw = sub3(z, { x: along * c.direction.x, y: along * c.direction.y, z: along * c.direction.z })
+    const length = Math.hypot(raw.x, raw.y, raw.z)
+    expect(c.up.x).toBeCloseTo(raw.x / length, 12)
+    expect(c.up.y).toBeCloseTo(raw.y / length, 12)
+    expect(c.up.z).toBeCloseTo(raw.z / length, 12)
+    const handed = cross3(c.right, c.up)
+    expect(handed.x).toBeCloseTo(c.direction.x, 12)
+    expect(handed.y).toBeCloseTo(c.direction.y, 12)
+    expect(handed.z).toBeCloseTo(c.direction.z, 12)
+    // So a vertical edge draws vertical: author Z lands straight above the origin.
+    const top = c.project(z)
+    expect(top.x).toBeCloseTo(0, 12)
+    expect(top.y).toBeGreaterThan(0)
+  })
+
+  it('is the default view and the default camera', () => {
+    expect(DEFAULT_VIEW).toBe('standard')
+    expect(DEFAULT_CAMERA).toBe(cameraFor('standard'))
+  })
+
+  it('draws the 8 corners of a unit cube at least 0.45 apart, where isometric does not', () => {
+    const cube: Vec3[] = []
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]) cube.push(authorToWorld({ x, y, z }))
+    expect(minimumGap(cube, cameraFor('standard'))).toBeGreaterThan(0.45)
+    // The same assertion fails under exact isometric: it looks along the
+    // cube's space diagonal and draws (0,0,0) and (1,1,1) on one point.
+    expect(minimumGap(cube, cameraFor('isometric'))).toBeLessThan(0.45)
+    expect(minimumGap(cube, cameraFor('isometric'))).toBeCloseTo(0, 12)
+  })
+})
+
+describe('a regular tetrahedron under the default camera', () => {
+  const body = buildSolid({ kind: 'tetrahedron', edge: 6 })
+  const solid = requirePolyhedron(body)
+  const camera = DEFAULT_CAMERA
+
+  it('keeps every face at least 20 degrees from edge-on', () => {
+    for (let f = 0; f < solid.faces.length; f++) {
+      const n = faceNormal(solid, f)
+      const sine = Math.abs(dot3(n, camera.direction)) / Math.hypot(n.x, n.y, n.z)
+      expect(Math.asin(sine) / RAD).toBeGreaterThan(20)
+    }
+  })
+
+  it('draws the altitude at least 8 degrees away from every edge at the apex', () => {
+    // The altitude runs from the apex (vertex 3) to the base centroid, which
+    // is on the axis at the base's height.
+    const apex = camera.project(solid.vertices[3])
+    const foot = camera.project({ x: 0, y: solid.vertices[0].y, z: 0 })
+    const altitude = { x: foot.x - apex.x, y: foot.y - apex.y }
+    for (const i of [0, 1, 2]) {
+      const end = camera.project(solid.vertices[i])
+      const edge = { x: end.x - apex.x, y: end.y - apex.y }
+      const angle = Math.abs(Math.atan2(altitude.x * edge.y - altitude.y * edge.x, altitude.x * edge.x + altitude.y * edge.y))
+      expect(angle / RAD).toBeGreaterThan(8)
+    }
+  })
+
+  it('dashes exactly one edge: the base edge farthest from the viewer', () => {
+    const hidden = projectSolid(solid, camera).filter((e) => e.hidden)
+    expect(hidden).toHaveLength(1)
+    const back = BASE_EDGES.reduce((far, e) =>
+      edgeDepth(solid.vertices, e[0], e[1], camera) < edgeDepth(solid.vertices, far[0], far[1], camera) ? e : far
+    )
+    expect([...hidden[0].vertices].sort()).toEqual([...back].sort())
+    expect(hidden[0].vertices).not.toContain(3)
+  })
+
+  it('hangs its edge dimension off the front-most base edge', () => {
+    const [a, b] = solidDimensionSegment(body.spec, 'edge')!
+    const i = solid.vertices.findIndex((v) => v.x === a.x && v.y === a.y && v.z === a.z)
+    const j = solid.vertices.findIndex((v) => v.x === b.x && v.y === b.y && v.z === b.z)
+    const front = edgeDepth(solid.vertices, i, j, camera)
+    for (const [p, q] of BASE_EDGES) {
+      if ((p === i && q === j) || (p === j && q === i)) continue
+      expect(front).toBeGreaterThan(edgeDepth(solid.vertices, p, q, camera))
+    }
+  })
+})
+
+describe('a box under the default camera', () => {
+  const spec: SolidSpec = { kind: 'prism', width: 8, height: 5, depth: 6 }
+  const solid = requirePolyhedron(buildSolid(spec))
+
+  it('draws exactly three dashed edges, the ones meeting at the hidden corner', () => {
+    const hidden = projectSolid(solid, DEFAULT_CAMERA).filter((e) => e.hidden)
+    expect(hidden).toHaveLength(3)
+    // The hidden corner is author (-X, -Y, -Z): internal (-,-,-).
+    const corner = solid.vertices.findIndex((v) => v.x < 0 && v.y < 0 && v.z < 0)
+    for (const edge of hidden) expect(edge.vertices).toContain(corner)
+  })
+
+  it('hangs all three dimensions off visible edges at the bottom corner nearest the viewer', () => {
+    const bottom = solid.vertices.filter((v) => v.y < 0)
+    const nearest = bottom.reduce((best, v) => (dot3(v, DEFAULT_CAMERA.direction) > dot3(best, DEFAULT_CAMERA.direction) ? v : best))
+    const drawn = projectSolid(solid, DEFAULT_CAMERA)
+    const key = (p: Vec3) => `${p.x},${p.y},${p.z}`
+    for (const dimension of ['width', 'height', 'depth']) {
+      const [a, b] = solidDimensionSegment(spec, dimension)!
+      expect([key(a), key(b)]).toContain(key(nearest))
+      const edge = drawn.find((e) => {
+        const ends = e.vertices.map((i) => key(solid.vertices[i]))
+        return ends.includes(key(a)) && ends.includes(key(b))
+      })
+      expect(edge?.hidden).toBe(false)
+    }
+  })
+})
+
+describe('placement is fixed against the default camera (V2)', () => {
+  it('derives the base start angle from the DEFAULT camera, 15 degrees round', () => {
+    expect(BASE_START_ANGLE).toBe(baseStartAngle(DEFAULT_CAMERA))
+    // Author azimuth 30 + 15 = 45 degrees, which is internal 90 - 45 = 45.
+    expect(BASE_START_ANGLE).toBeCloseTo(Math.PI / 4, 12)
+    // Any other camera would put the vertex elsewhere, which is exactly why
+    // the rule may not read the active one.
+    expect(Math.abs(baseStartAngle(cameraFor('isometric')) - BASE_START_ANGLE)).toBeGreaterThan(0.1)
+    expect(Math.abs(baseStartAngle(cameraFor('front')) - BASE_START_ANGLE)).toBeGreaterThan(0.1)
+  })
+
+  it('puts the first base vertex of a tetrahedron at author azimuth 45 degrees', () => {
+    const v = requirePolyhedron(buildSolid({ kind: 'tetrahedron', edge: 6 })).vertices
+    const first = worldToAuthor(v[0])
+    expect(Math.atan2(first.y, first.x) / RAD).toBeCloseTo(45, 9)
   })
 })

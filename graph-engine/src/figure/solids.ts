@@ -1,4 +1,4 @@
-import { projectSolid, rectangularPrism, type Camera, type ProjectedEdge, type Solid3D, type Vec3 } from './project3d'
+import { DEFAULT_CAMERA, projectSolid, rectangularPrism, type Camera, type ProjectedEdge, type Solid3D, type Vec3 } from './project3d'
 import { coneOutline, cylinderOutline, sphereOutline } from './silhouette'
 
 // The solid vocabulary: what an author can ask for, where it sits, and what
@@ -19,24 +19,27 @@ import { coneOutline, cylinderOutline, sphereOutline } from './silhouette'
 //  2. Its axis of symmetry is the **y-axis**, so the solid spans
 //     `-h/2 <= y <= h/2` and the drawing's vertical direction is the solid's
 //     own height — which is what makes a height dimension readable off the
-//     page under the isometric camera.
+//     page under every camera that draws author Z page-up.
 //  3. Every cross-section perpendicular to that axis is centred on the axis,
 //     so a base, a mid-section and a top all share a centre.
-//  4. Rotation about the axis is pinned too, and the base's **first vertex
-//     faces the viewer**. In the xz-plane the default isometric camera looks
-//     along (1,0,1)/sqrt(2), so that is 45 degrees from +x — the direction
-//     `BASE_START_ANGLE` names. A rectangular base stays **axis-aligned**
-//     (width along x, depth along z) and simply starts at its (+x, +z)
-//     corner; a regular polygonal base puts a vertex there outright.
+//  4. Rotation about the axis is pinned too, **against the default camera
+//     and never the active view** (V2, phase 6b): switching `@view:` must not
+//     re-orient, re-letter or re-choose the dimension edge of any solid, or
+//     it would be a different figure. A regular polygonal base puts its first
+//     vertex **15 degrees round from the default camera's azimuth** (toward
+//     author +Y) — `BASE_START_ANGLE`. A rectangular base stays
+//     **axis-aligned** (width along x, depth along z).
 //
-//     The rule is not decoration. Under the isometric camera a face is
-//     exactly edge-on when its outward normal turns 104.5 degrees off the
-//     view, and a tetrahedron whose first base vertex sits on +x lands one
-//     of its three faces within a degree of that — half its edges dashed,
-//     and a classification that a rounding error could flip. Starting the
-//     base at the viewer puts every lateral face as far from edge-on as the
-//     shape allows, which is both the conventional drawing and the stable
-//     one.
+//     The offset is not decoration, and it replaces phase 5's "first vertex
+//     exactly facing the viewer". Facing the viewer exactly puts the apex,
+//     the front vertex and the base centroid in ONE vertical plane with the
+//     view, so the altitude projects straight onto the front apex edge and
+//     vanishes under it — which is what exact isometric did to a regular
+//     tetrahedron. Fifteen degrees round keeps the altitude at least 8.7
+//     degrees off every apex edge under the standard camera, and every face
+//     at least 21 degrees from edge-on, so no rounding error can flip a
+//     dashed edge. (It happens to be the 45 degrees phase 5 used: the
+//     standard camera sits 15 degrees round from isometric.)
 //
 // A sphere has no axis, so only (1) applies to it: it is centred on the
 // origin. A cylinder and a cone follow (1)-(3) — a cylinder's two rims at
@@ -132,10 +135,21 @@ export function solidOutline(body: SolidBody, camera: Camera): ProjectedEdge[] {
 // Polyhedra
 // ---------------------------------------------------------------------------
 
-// Rule 4's angle: the default camera's view direction projected onto a base
-// plane perpendicular to the axis, which is (1, 0, 1)/sqrt(2) — 45 degrees
-// round from +x. A rectangular base's (+x, +z) corner is this same direction.
-export const BASE_START_ANGLE = Math.PI / 4
+// Rule 4's turn: how far round from the default camera's azimuth a regular
+// base's first vertex sits, toward author +Y. In the internal xz-plane, angles
+// run from +x (author Y) toward +z (author X), which is author azimuth run
+// BACKWARDS — so the turn is subtracted.
+export const BASE_TURN = Math.PI / 12
+
+// Rule 4's angle for a camera: its view direction projected onto a base plane
+// (internal xz), turned by BASE_TURN.
+export function baseStartAngle(camera: Camera): number {
+  return Math.atan2(camera.direction.z, camera.direction.x) - BASE_TURN
+}
+
+// V2 — fixed against the DEFAULT camera, whatever view is active. Under the
+// standard camera (azimuth 30 degrees) this is 45 degrees round from +x.
+export const BASE_START_ANGLE = baseStartAngle(DEFAULT_CAMERA)
 
 // A pyramid on a square base, base at y = -h/2 and apex at (0, h/2, 0).
 //
@@ -165,7 +179,8 @@ export function regularTetrahedron(edge: number): Solid3D {
   const y = height / 2
   const vertices: Vec3[] = []
   for (let i = 0; i < 3; i++) {
-    // First vertex toward the viewer (rule 4), then round the base.
+    // First vertex 15 degrees round from the default camera (rule 4), then
+    // round the base.
     const angle = BASE_START_ANGLE + (2 * Math.PI * i) / 3
     vertices.push({ x: radius * Math.cos(angle), y: -y, z: radius * Math.sin(angle) })
   }
@@ -215,9 +230,17 @@ export function solidDimensions(spec: SolidSpec): Record<string, number> {
 //
 // A dimension is usually realised by several parallel edges — a prism's width
 // by four of them — so one is CHOSEN, and the choice is the front of the
-// drawing under the default camera: the edge a reader would put a ruler
-// against. Fixed rather than picked per view, because a label that moved to a
-// different edge when the viewpoint changed would be a different figure.
+// drawing under the DEFAULT camera: the edge a reader would put a ruler
+// against. Fixed rather than picked per view (V2), because a label that moved
+// to a different edge when the viewpoint changed would be a different figure.
+//
+// Re-chosen for the standard camera in phase 6b, and it chooses the same
+// edges isometric did: the standard camera also looks from the author's
+// (+X, +Y) side and from above, so a prism's nearest bottom corner is still
+// internal (+x, -y, +z) and its three dimension edges still meet there, all
+// visible. A tetrahedron's edge is its first two base vertices, which under
+// the standard camera is the front-most of the three base edges (under
+// isometric it tied with another).
 //
 // A dimension with no edge of its own — a pyramid's height — hangs off the
 // axis instead, which is exactly what a dimension line does on paper.

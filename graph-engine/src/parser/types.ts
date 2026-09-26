@@ -265,7 +265,10 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   section: S by plane <x|y|z> = <c> [vertices PQRS]
 //                                                 -> the same cut lifted out beside the solid at true
 //                                                    shape, as ordinary 2D geometry
-//   @view: isometric | front | top | side         -> which fixed viewpoint draws the solid
+//   @view: standard | isometric | front | top | side
+//                                                 -> which fixed viewpoint draws the solid. standard
+//                                                    (the default) is in general position; isometric
+//                                                    puts two corners of a cube on one point
 //
 //   Points, constructions and measures in space (phase 6). A name is a point
 //   in the PLANE or a point in SPACE, never both, and a construction may not
