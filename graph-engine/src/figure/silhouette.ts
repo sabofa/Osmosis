@@ -113,7 +113,10 @@ function radiusZ(r: number): Vec3 {
 // where the outward normal `(cos t, 0, sin t)` is perpendicular to the view.
 // Null when the camera looks along the axis, where there is no such angle
 // because the whole rim is the silhouette.
-function cylinderSilhouetteAngles(camera: Camera): [number, number] | null {
+//
+// Exported for segment occlusion (occlusion.ts), whose candidate planes are
+// the planes through exactly these silhouette lines and the view direction.
+export function cylinderSilhouetteAngles(camera: Camera): [number, number] | null {
   const ax = camera.direction.x
   const az = camera.direction.z
   if (Math.hypot(ax, az) <= GEOM_EPS) return null
@@ -220,31 +223,16 @@ function fullEllipse(circle: ProjectedCircle, object: string): ProjectedArc[] {
 export function coneOutline(radius: number, height: number, camera: Camera): ProjectedEdge[] {
   const y = height / 2
   const center: Vec3 = { x: 0, y: -y, z: 0 }
-  const u = radiusX(radius)
-  const v = radiusZ(radius)
-  const base = projectCircle(camera, center, u, v)
+  const base = projectCircle(camera, center, radiusX(radius), radiusZ(radius))
   const apex = camera.project({ x: 0, y, z: 0 })
 
-  const a = camera.project(u)
-  const b = camera.project(v)
-  const d = { x: base.center.x - apex.x, y: base.center.y - apex.y }
-  const p = cross2(d, b)
-  const q = -cross2(d, a)
-  const k = -cross2(a, b)
-  const magnitude = Math.hypot(p, q)
-
+  const angles = coneSilhouetteAngles(radius, height, camera)
   // No tangent line exists when the apex projects inside the base ellipse —
   // the camera is looking along the axis, and the cone IS its own base
   // circle. Drawing lines from the apex there would draw radii, not an
   // outline.
-  if (magnitude <= GEOM_EPS || Math.abs(k) > magnitude) {
-    return fullEllipse(base, 'base')
-  }
-
-  const phase = Math.atan2(q, p)
-  const spread = Math.acos(Math.max(-1, Math.min(1, k / magnitude)))
-  const first = phase - spread
-  const second = phase + spread
+  if (!angles) return fullEllipse(base, 'base')
+  const [first, second] = angles
 
   // The base rim is split at the two tangency angles. The half a reader sees
   // is the one whose LATERAL surface faces the camera — the same test the
@@ -265,6 +253,35 @@ export function coneOutline(radius: number, height: number, camera: Camera): Pro
     apexLine(apex, base, first, 'silhouette-0'),
     apexLine(apex, base, second, 'silhouette-1'),
   ]
+}
+
+// The two base angles at which a line from the apex touches the drawn base
+// ellipse — the circle angles of the cone's two silhouette generators — or
+// null when the apex projects inside the base and there is no such line.
+//
+// Exported for segment occlusion (occlusion.ts): the plane through each of
+// these generators and the view direction bounds a cone's shadow near its
+// apex. Solved on the projected ellipse, as the outline is, so the two can
+// never disagree about where the silhouette is.
+export function coneSilhouetteAngles(radius: number, height: number, camera: Camera): [number, number] | null {
+  const y = height / 2
+  const u = radiusX(radius)
+  const v = radiusZ(radius)
+  const base = projectCircle(camera, { x: 0, y: -y, z: 0 }, u, v)
+  const apex = camera.project({ x: 0, y, z: 0 })
+
+  const a = camera.project(u)
+  const b = camera.project(v)
+  const d = { x: base.center.x - apex.x, y: base.center.y - apex.y }
+  const p = cross2(d, b)
+  const q = -cross2(d, a)
+  const k = -cross2(a, b)
+  const magnitude = Math.hypot(p, q)
+  if (magnitude <= GEOM_EPS || Math.abs(k) > magnitude) return null
+
+  const phase = Math.atan2(q, p)
+  const spread = Math.acos(Math.max(-1, Math.min(1, k / magnitude)))
+  return [phase - spread, phase + spread]
 }
 
 function apexLine(apex: Vec2, base: ProjectedCircle, angle: number, object: string): ProjectedSegment {

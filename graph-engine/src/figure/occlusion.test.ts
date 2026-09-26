@@ -136,11 +136,6 @@ describe('segments against a prism', () => {
     }
   })
 
-  it('refuses a round solid rather than drawing its occlusion wrong', () => {
-    const sphere = buildSolid({ kind: 'sphere', radius: 2 })
-    expect(() => segmentSpans(v(-5, 0, 0), v(5, 0, 0), [sphere], camera)).toThrow(/sphere/)
-  })
-
   it('hides a point behind ANY solid in the figure, splitting at every solid it needs', () => {
     // The prism, and a column 2 by 16 by 2 through it (glass: they do not
     // occlude each other, but both occlude a construction line). The
@@ -159,5 +154,151 @@ describe('segments against a prism', () => {
       [27 / 40, 1, false],
     ])
     for (let i = 1; i < result.length; i++) expect(result[i].from).toBe(result[i - 1].to)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Round solids (Task 5)
+// ---------------------------------------------------------------------------
+
+// Directions for building segments by hand. d is the isometric camera's
+// view direction (toward the viewer); e1 and e2 complete an orthonormal
+// frame with it, so a point's projection is its (e1, e2) coordinates.
+const d = camera.direction
+const e1 = v(1 / Math.SQRT2, 0, -1 / Math.SQRT2)
+const e2 = v(-1 / Math.sqrt(6), 2 / Math.sqrt(6), -1 / Math.sqrt(6))
+const combo = (...terms: [number, Vec3][]): Vec3 =>
+  terms.reduce((acc, [k, w]) => v(acc.x + k * w.x, acc.y + k * w.y, acc.z + k * w.z), v(0, 0, 0))
+
+// The horizontal unit vector toward the viewer, (1, 0, 1)/sqrt(2): the
+// direction d leans along, seen from above.
+const toward = v(1 / Math.SQRT2, 0, 1 / Math.SQRT2)
+
+describe('segments against a sphere', () => {
+  const sphere = buildSolid({ kind: 'sphere', radius: 5 })
+  const round = (a: Vec3, b: Vec3) => segmentSpans(a, b, [sphere], camera)
+
+  it('hides the whole radius from the centre to the front pole', () => {
+    // The centre is inside, and every point short of the pole is too: the
+    // ray toward the viewer from inside the ball is inside it at first. The
+    // pole itself is a single point, so nothing is visible beyond the
+    // surface — the segment ends there. One hidden span.
+    expectSpans(round(v(0, 0, 0), combo([5, d])), [[0, 1, true]])
+  })
+
+  it('hides a diameter perpendicular to the view', () => {
+    expectSpans(round(combo([-5, e1]), combo([5, e1])), [[0, 1, true]])
+  })
+
+  it('shows a segment passing in front', () => {
+    expectSpans(round(combo([10, d], [-8, e1]), combo([10, d], [8, e1])), [[0, 1, false]])
+  })
+
+  it('hides a segment passing behind exactly where its projection is inside the outline', () => {
+    // -10 d + s e1 for s in [-8, 8]. Its projection is s e1, inside the
+    // outline circle for |s| < 5: the view-direction cylinder of radius 5.
+    // u = (s + 8) / 16.
+    expectSpans(round(combo([-10, d], [-8, e1]), combo([-10, d], [8, e1])), [
+      [0, 3 / 16, false],
+      [3 / 16, 13 / 16, true],
+      [13 / 16, 1, false],
+    ])
+  })
+
+  it('does not split a segment whose rays only graze the sphere', () => {
+    // -10 d + 5 e2 + s e1: its projection touches the outline at s = 0 and
+    // nowhere crosses it. The view cylinder's quadratic has a double root.
+    expectSpans(round(combo([-10, d], [5, e2], [-8, e1]), combo([-10, d], [5, e2], [8, e1])), [[0, 1, false]])
+  })
+})
+
+describe('segments against a cylinder', () => {
+  // Radius 3, height 8: x^2 + z^2 < 9, -4 < y < 4.
+  const cylinder = buildSolid({ kind: 'cylinder', radius: 3, height: 8 })
+  const round = (a: Vec3, b: Vec3) => segmentSpans(a, b, [cylinder], camera)
+
+  it('hides the axis', () => {
+    expectSpans(round(v(0, -4, 0), v(0, 4, 0)), [[0, 1, true]])
+  })
+
+  it('shows the front generator, on the surface facing the viewer', () => {
+    const front = combo([3, toward])
+    expectSpans(round(v(front.x, -4, front.z), v(front.x, 4, front.z)), [[0, 1, false]])
+  })
+
+  it('splits a segment behind the cylinder at the silhouette lines', () => {
+    // s e1 - 6 toward + (0, y0, 0), s in [-6, 6]. The ray moves toward the
+    // axis at sqrt(2/3) per unit and climbs at 1/sqrt(3), so it crosses the
+    // axis plane at t = 6 sqrt(3/2), having climbed 3 sqrt(2). With
+    // y0 = -3 sqrt(2) it is inside the disk at mid-height, well clear of
+    // both rims, exactly when |s| < 3: split at the silhouette lines, where
+    // the plane through each line and d is e1 . x = +-3. u = (s + 6) / 12.
+    const y0 = -3 * Math.SQRT2
+    expectSpans(round(combo([-6, e1], [-6, toward], [y0, v(0, 1, 0)]), combo([6, e1], [-6, toward], [y0, v(0, 1, 0)])), [
+      [0, 0.25, false],
+      [0.25, 0.75, true],
+      [0.75, 1, false],
+    ])
+  })
+
+  it('splits a segment behind it at rim height where the swept rim bounds the shadow', () => {
+    // The same line raised so its rays cross the axis plane at y = 4 + 2,
+    // above the top rim: y1 = 6 - 3 sqrt(2). A ray reaches the top rim's
+    // plane y = 4 at xz = s e1 - 2 sqrt(2) toward, inside the rim exactly
+    // when s^2 + 8 < 9: |s| < 1. That is the top rim swept along d — an
+    // elliptic cylinder — and NOT the silhouette lines at |s| = 3.
+    // u = (s + 6) / 12.
+    const y1 = 6 - 3 * Math.SQRT2
+    expectSpans(round(combo([-6, e1], [-6, toward], [y1, v(0, 1, 0)]), combo([6, e1], [-6, toward], [y1, v(0, 1, 0)])), [
+      [0, 5 / 12, false],
+      [5 / 12, 7 / 12, true],
+      [7 / 12, 1, false],
+    ])
+  })
+})
+
+describe('segments against a cone', () => {
+  // Radius 3, height 8: base at y = -4, apex (0, 4, 0).
+  const cone = buildSolid({ kind: 'cone', radius: 3, height: 8 })
+  const round = (a: Vec3, b: Vec3) => segmentSpans(a, b, [cone], camera)
+
+  it('hides the axis', () => {
+    expectSpans(round(v(0, -4, 0), v(0, 4, 0)), [[0, 1, true]])
+  })
+
+  it('splits a segment behind the cone near the apex at the silhouette lines', () => {
+    // (a0 toward) + s e1 + y0 up with a0 = -6, y0 = 2 - 3 sqrt(2): the rays
+    // cross the axis plane at y = 2, where the cone is 0.75 across.
+    //
+    // A generator at base angle phi (from `toward`) is a silhouette where
+    // the surface normal (8 cos phi, 8 sin phi, 3) is square to d:
+    // cos phi = -3 / (8 sqrt 2), sin phi = +-sqrt(119/128). The plane through
+    // it and d, through the apex, meets this line at
+    //   s = +-6 (a0/sqrt2 - y0 + 4) / sqrt(238) = +-12 / sqrt(238).
+    // No other candidate falls on the segment. u = (s + 3) / 6.
+    const y0 = 2 - 3 * Math.SQRT2
+    const s = 12 / Math.sqrt(238)
+    const at = (k: number) => combo([-6, toward], [k, e1], [y0, v(0, 1, 0)])
+    expectSpans(round(at(-3), at(3)), [
+      [0, (3 - s) / 6, false],
+      [(3 - s) / 6, (3 + s) / 6, true],
+      [(3 + s) / 6, 1, false],
+    ])
+  })
+
+  it('splits a segment behind the base at the swept base rim', () => {
+    // (a0 toward) + s e1 + (-6) up, below the base, with a0 = 2 - 2 sqrt(2):
+    // each ray reaches the base plane y = -4 at xz = 2 toward + s e1, on the
+    // near side of the rim, inside it exactly when 4 + s^2 < 9: |s| < sqrt 5.
+    // Beyond that the ray passes in front of the base and moves away from
+    // the axis, so it never enters. u = (s + 3) / 6.
+    const a0 = 2 - 2 * Math.SQRT2
+    const at = (k: number) => combo([a0, toward], [k, e1], [-6, v(0, 1, 0)])
+    const r = Math.sqrt(5)
+    expectSpans(round(at(-3), at(3)), [
+      [0, (3 - r) / 6, false],
+      [(3 - r) / 6, (3 + r) / 6, true],
+      [(3 + r) / 6, 1, false],
+    ])
   })
 })

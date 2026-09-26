@@ -1,7 +1,8 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import { add3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
 import { faceNormal, type Camera, type Solid3D, type Vec3 } from './project3d'
-import type { SolidBody } from './solids'
+import { coneSilhouetteAngles, cylinderSilhouetteAngles } from './silhouette'
+import type { SolidBody, SolidSpec } from './solids'
 
 // S6 — construction segments in a solid figure, and the glass rule.
 //
@@ -150,24 +151,237 @@ function polyhedronCandidates(solid: Solid3D, a: Vec3, b: Vec3, d: Vec3): number
 }
 
 // ---------------------------------------------------------------------------
+// Round solids
+// ---------------------------------------------------------------------------
+//
+// A sphere, a cylinder and a cone, each in H1's placement: centred on the
+// origin, axis along +y. Every surface below is linear or quadratic in both
+// the ray parameter t and the segment parameter u, so every answer is a root
+// of a polynomial of degree at most two.
+
+type RoundSpec = Extract<SolidSpec, { kind: 'sphere' | 'cylinder' | 'cone' }>
+
+const AXIS: Vec3 = { x: 0, y: 1, z: 0 }
+
+function roundSize(spec: RoundSpec): number {
+  return Math.max(1, spec.radius, spec.kind === 'sphere' ? 0 : spec.height / 2)
+}
+
+// Whether f(t) = A t^2 + 2 B t + C is negative somewhere in the open
+// interval (lo, hi), lo >= 0 and hi possibly infinite. A quadratic's least
+// value on an interval is at an end or at its vertex, so three evaluations
+// decide it — no sampling.
+function negativeSomewhere(A: number, B: number, C: number, lo: number, hi: number): boolean {
+  if (!(hi > lo)) return false
+  const f = (t: number) => (A * t + 2 * B) * t + C
+  if (f(lo) < 0) return true
+  if (Number.isFinite(hi)) {
+    if (f(hi) < 0) return true
+  } else {
+    // Unbounded above: negative far out exactly when the leading term is.
+    if (A < -GEOM_EPS) return true
+    if (Math.abs(A) <= GEOM_EPS && B < 0) return true
+  }
+  if (A > GEOM_EPS) {
+    const vertex = -B / A
+    if (vertex > lo && vertex < hi && f(vertex) < 0) return true
+  }
+  return false
+}
+
+// The t-interval a ray spends between the planes y = bottom and y = top (the
+// slab a cylinder or a cone lives in), intersected with t > 0.
+function slab(p: Vec3, d: Vec3, bottom: number, top: number): [number, number] {
+  if (Math.abs(d.y) <= GEOM_EPS) return p.y > bottom && p.y < top ? [0, Infinity] : [0, 0]
+  const t1 = (bottom - p.y) / d.y
+  const t2 = (top - p.y) / d.y
+  return [Math.max(0, Math.min(t1, t2)), Math.max(t1, t2)]
+}
+
+// S6's ray test against a round solid: does p + t d, t > 0, meet the
+// interior? The solid is shrunk by a rounding-sized margin, for the reason
+// polyhedronHides gives: a point ON the surface is judged by where its ray
+// goes, not by the sign of a rounding error.
+function roundHides(spec: RoundSpec, p: Vec3, d: Vec3): boolean {
+  const margin = GEOM_EPS * roundSize(spec)
+  switch (spec.kind) {
+    case 'sphere': {
+      const r = spec.radius - margin
+      return negativeSomewhere(dot3(d, d), dot3(p, d), dot3(p, p) - r * r, 0, Infinity)
+    }
+    case 'cylinder': {
+      const r = spec.radius - margin
+      const h = spec.height / 2 - margin
+      const [lo, hi] = slab(p, d, -h, h)
+      return negativeSomewhere(d.x * d.x + d.z * d.z, p.x * d.x + p.z * d.z, p.x * p.x + p.z * p.z - r * r, lo, hi)
+    }
+    case 'cone': {
+      // Inside: -h/2 < y < h/2 and sqrt(x^2 + z^2) < k (h/2 - y), k = r/h.
+      // The squared form is a double cone; the slab keeps the lower nappe,
+      // which is the solid.
+      const apex = spec.height / 2
+      const k = (spec.radius - margin) / spec.height
+      const k2 = k * k
+      const above = apex - p.y
+      const [lo, hi] = slab(p, d, -apex + margin, apex)
+      return negativeSomewhere(
+        d.x * d.x + d.z * d.z - k2 * d.y * d.y,
+        p.x * d.x + p.z * d.z + k2 * above * d.y,
+        p.x * p.x + p.z * p.z - k2 * above * above,
+        lo,
+        hi
+      )
+    }
+  }
+}
+
+// The roots in (0, 1) of A u^2 + B u + C = 0.
+//
+// GEOM_EPS decides both borderline calls. A discriminant within rounding of
+// zero is a TANGENCY and yields its root once; one below that yields none.
+// Either way a root is only ever a candidate, so a tangency counted as one
+// merely splits a span that classification merges back.
+function quadraticRoots(A: number, B: number, C: number, out: number[]): void {
+  const push = (u: number) => {
+    if (u > 0 && u < 1) out.push(u)
+  }
+  const scale = Math.max(Math.abs(A), Math.abs(B), Math.abs(C))
+  if (scale === 0) return
+  if (Math.abs(A) <= GEOM_EPS * scale) {
+    if (Math.abs(B) > GEOM_EPS * scale) push(-C / B)
+    return
+  }
+  const disc = B * B - 4 * A * C
+  const tolerance = GEOM_EPS * Math.max(B * B, Math.abs(4 * A * C))
+  if (disc < -tolerance) return
+  if (disc <= tolerance) {
+    push(-B / (2 * A))
+    return
+  }
+  // The cancellation-free pair: one root from the formula, the other from
+  // the product of the roots.
+  const q = -(B + (B < 0 ? -1 : 1) * Math.sqrt(disc)) / 2
+  push(q / A)
+  if (q !== 0) push(C / q)
+}
+
+// Where |w0 + u w1|^2 = r0 + r1 u + r2 u^2 — the segment meeting a quadric
+// once the caller has written the quadric as a squared length (of a
+// projection of the point) against a quadratic right-hand side.
+function squaredLengthRoots(w0: Vec3, w1: Vec3, rhs: { u2: number; u1: number; u0: number }, out: number[]): void {
+  quadraticRoots(dot3(w1, w1) - rhs.u2, 2 * dot3(w0, w1) - rhs.u1, dot3(w0, w0) - rhs.u0, out)
+}
+
+function constant(value: number): { u2: number; u1: number; u0: number } {
+  return { u2: 0, u1: 0, u0: value }
+}
+
+// The xz part of a point, as a Vec3 with y = 0.
+function flat(p: Vec3): Vec3 {
+  return { x: p.x, y: 0, z: p.z }
+}
+
+// A rim — the circle of radius r in the plane y = level — swept along d: the
+// elliptic cylinder of points whose line along d passes through the rim.
+// Following the line from q to the rim's plane lands at
+// q + ((level - q.y) / d.y) d, which is linear in u, and its xz part having
+// length r is the quadratic. A camera square to the axis sweeps the rim into
+// its own plane, which the cap-plane candidates already cover.
+function rimSweepRoots(a: Vec3, ab: Vec3, d: Vec3, level: number, r: number, out: number[]): void {
+  if (Math.abs(d.y) <= GEOM_EPS) return
+  const w0 = flat(add3(a, scale3(d, (level - a.y) / d.y)))
+  const w1 = flat(sub3(ab, scale3(d, ab.y / d.y)))
+  squaredLengthRoots(w0, w1, constant(r * r), out)
+}
+
+// The plane through a silhouette LINE (a point `on` it, its direction
+// `along`) and d: the points whose ray toward the viewer grazes that line.
+function silhouettePlaneRoots(a: Vec3, ab: Vec3, on: Vec3, along: Vec3, d: Vec3, out: number[]): void {
+  const normal = cross3(along, d)
+  planeCrossing(a, ab, normal, dot3(normal, on), out)
+}
+
+// Each round solid's candidate families, as S6 names them. Every family has
+// a test that fails when it is deleted.
+function roundCandidates(spec: RoundSpec, a: Vec3, b: Vec3, camera: Camera): number[] {
+  const d = camera.direction
+  const ab = sub3(b, a)
+  const out: number[] = []
+  switch (spec.kind) {
+    case 'sphere': {
+      const r2 = spec.radius * spec.radius
+      // The sphere itself.
+      squaredLengthRoots(a, ab, constant(r2), out)
+      // The view-direction cylinder of the same radius through the centre:
+      // the points whose projection lies on the outline circle.
+      const across = (p: Vec3) => sub3(p, scale3(d, dot3(p, d)))
+      squaredLengthRoots(across(a), across(ab), constant(r2), out)
+      break
+    }
+    case 'cylinder': {
+      const h = spec.height / 2
+      // The lateral surface, and the two cap planes.
+      squaredLengthRoots(flat(a), flat(ab), constant(spec.radius * spec.radius), out)
+      planeCrossing(a, ab, AXIS, h, out)
+      planeCrossing(a, ab, AXIS, -h, out)
+      // The planes through each silhouette line and d — silhouette.ts's
+      // lines, the same ones the outline draws.
+      for (const angle of cylinderSilhouetteAngles(camera) ?? []) {
+        const on = { x: spec.radius * Math.cos(angle), y: 0, z: spec.radius * Math.sin(angle) }
+        silhouettePlaneRoots(a, ab, on, AXIS, d, out)
+      }
+      // Both rims, swept along d.
+      rimSweepRoots(a, ab, d, h, spec.radius, out)
+      rimSweepRoots(a, ab, d, -h, spec.radius, out)
+      break
+    }
+    case 'cone': {
+      const apexY = spec.height / 2
+      const k2 = (spec.radius / spec.height) ** 2
+      // The lateral surface, x^2 + z^2 = k^2 (h/2 - y)^2 with h/2 - y
+      // linear in u. (The double cone's other nappe only adds candidates.)
+      const above0 = apexY - a.y
+      const above1 = -ab.y
+      squaredLengthRoots(flat(a), flat(ab), { u2: k2 * above1 * above1, u1: 2 * k2 * above0 * above1, u0: k2 * above0 * above0 }, out)
+      // The base plane.
+      planeCrossing(a, ab, AXIS, -apexY, out)
+      // The planes through each silhouette generator and d, all through the
+      // apex. The generators are silhouette.ts's, the same the outline draws.
+      const apex = { x: 0, y: apexY, z: 0 }
+      for (const angle of coneSilhouetteAngles(spec.radius, spec.height, camera) ?? []) {
+        const foot = { x: spec.radius * Math.cos(angle), y: -apexY, z: spec.radius * Math.sin(angle) }
+        silhouettePlaneRoots(a, ab, apex, sub3(foot, apex), d, out)
+      }
+      // The base rim, swept along d.
+      rimSweepRoots(a, ab, d, -apexY, spec.radius, out)
+      break
+    }
+  }
+  return out
+}
+
+function roundSpec(body: SolidBody): RoundSpec {
+  const spec = body.spec
+  if (spec.kind === 'sphere' || spec.kind === 'cylinder' || spec.kind === 'cone') return spec
+  // Unreachable: every other primitive builds a polyhedron (solids.ts, H2).
+  throw new Error(`A ${spec.kind} has no polyhedron to occlude with`)
+}
+
+// ---------------------------------------------------------------------------
 // The contract
 // ---------------------------------------------------------------------------
-
-function roundSolid(body: SolidBody): Error {
-  return new Error(`Segments against a ${body.spec.kind} arrive in the next task — this figure cannot draw one's occlusion yet`)
-}
 
 // S6's ray test for one solid.
 export function hidesPoint(body: SolidBody, p: Vec3, camera: Camera): boolean {
   if (body.polyhedron) return polyhedronHides(body.polyhedron, p, camera.direction)
-  throw roundSolid(body)
+  return roundHides(roundSpec(body), p, camera.direction)
 }
 
 // Every parameter in (0, 1) at which this solid could change the segment's
 // status. Unsorted, possibly with repeats: segmentSpans tidies them.
 export function occlusionCandidates(body: SolidBody, a: Vec3, b: Vec3, camera: Camera): number[] {
   if (body.polyhedron) return polyhedronCandidates(body.polyhedron, a, b, camera.direction)
-  throw roundSolid(body)
+  return roundCandidates(roundSpec(body), a, b, camera)
 }
 
 // The segment a-b, split into alternating visible and hidden spans against

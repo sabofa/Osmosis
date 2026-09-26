@@ -1872,6 +1872,22 @@ describe('segments in solid figures', () => {
     expect(drawn.filter((p) => !p.dashed)).toHaveLength(2)
   })
 
+  it('splits a segment behind a sphere where its projection enters and leaves the outline', () => {
+    // In the author frame the camera also looks from (1,1,1), and (-1,1,0)
+    // is square to it: -10 (1,1,1)/sqrt3 + s (-1,1,0)/sqrt2 for s = 8 and
+    // -8 runs behind the sphere, crossing its outline at s = +-5.
+    const k = '-10/sqrt(3)'
+    const spec = [
+      '@mode: figure',
+      'S = solid sphere radius 5',
+      `P = (${k} - 8/sqrt(2), ${k} + 8/sqrt(2), ${k})`,
+      `Q = (${k} + 8/sqrt(2), ${k} - 8/sqrt(2), ${k})`,
+      'segment: P-Q',
+    ].join('\n')
+    expect(result(spec).errors).toEqual([])
+    expect(pieces(render(spec), 3).map((p) => p.dashed).sort()).toEqual([false, false, true])
+  })
+
   it('lets the author force either style, both ways', () => {
     expect(pieces(render(`${NAMED}\nsegment: A-G plain`), 1)).toEqual([{ layer: 'primary', dashed: false }])
     expect(pieces(render(`${NAMED}\nsegment: E-G dashed`), 1)).toEqual([{ layer: 'auxiliary', dashed: true }])
