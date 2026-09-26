@@ -1661,6 +1661,119 @@ describe('curved solids in the figure', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Fix wave 1 — a round solid's dimension label hangs off a drawn reference
+// ---------------------------------------------------------------------------
+
+describe('the reference line a round solid dimension hangs off', () => {
+  interface Drawn {
+    x1: number
+    y1: number
+    x2: number
+    y2: number
+    dashed: boolean
+  }
+
+  // Every <line> in the auxiliary layer carrying this label's identity.
+  function references(svg: string, object: string): Drawn[] {
+    return [...layer(svg, 'auxiliary').matchAll(/<line ([^>]*)\/>/g)]
+      .map((m) => m[1])
+      .filter((attrs) => attrs.includes(`data-object="${object}"`))
+      .map((attrs) => {
+        const n = (name: string) => Number(new RegExp(` ?${name}="([-0-9.]+)"`).exec(` ${attrs}`)![1])
+        return { x1: n('x1'), y1: n('y1'), x2: n('x2'), y2: n('y2'), dashed: attrs.includes('stroke-dasharray') }
+      })
+  }
+
+  // A drawn arc's two ends, from its path.
+  function arcEnds(svg: string, object: string): { start: { x: number; y: number }; end: { x: number; y: number } } {
+    const d = new RegExp(`<path d="M ([-0-9.]+) ([-0-9.]+) A [-0-9.]+ [-0-9.]+ [-0-9.]+ [01] [01] ([-0-9.]+) ([-0-9.]+)"[^>]*data-object="${object}"`).exec(svg)
+    if (!d) throw new Error(`no arc ${object}`)
+    return { start: { x: Number(d[1]), y: Number(d[2]) }, end: { x: Number(d[3]), y: Number(d[4]) } }
+  }
+
+  // The centre of a half-ellipse: the midpoint of its two (antipodal) ends.
+  function halfCentre(svg: string, object: string): { x: number; y: number } {
+    const { start, end } = arcEnds(svg, object)
+    return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }
+  }
+
+  function expectNear(p: { x: number; y: number }, q: { x: number; y: number }): void {
+    expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeLessThan(0.01)
+  }
+
+  it("draws a cylinder's radius on its visible top rim, solid, and its height as the dashed axis", () => {
+    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 8\nlabel: C radius\nlabel: C height')
+    const top = halfCentre(svg, 'rim-near-0')
+    const bottom = halfCentre(svg, 'rim-far-front')
+    const [radius] = references(svg, 'C radius')
+    expect(references(svg, 'C radius')).toHaveLength(1)
+    expect(radius.dashed).toBe(false)
+    // From the top rim's centre to the rim, at the rim's own angle 0 —
+    // where the near rim's first half-arc starts.
+    expectNear({ x: radius.x1, y: radius.y1 }, top)
+    expectNear({ x: radius.x2, y: radius.y2 }, arcEnds(svg, 'rim-near-0').start)
+    const [height] = references(svg, 'C height')
+    expect(references(svg, 'C height')).toHaveLength(1)
+    expect(height.dashed).toBe(true)
+    expectNear({ x: height.x1, y: height.y1 }, bottom)
+    expectNear({ x: height.x2, y: height.y2 }, top)
+  })
+
+  it("draws a cone's height from its base centre to its apex and its radius on the hidden base, both dashed", () => {
+    const svg = render('@mode: figure\nK = solid cone radius 3, height 8\nlabel: K radius\nlabel: K height')
+    const apex = /<line x1="([-0-9.]+)" y1="([-0-9.]+)"[^>]*data-object="silhouette-0"/.exec(svg)!
+    const [height] = references(svg, 'K height')
+    expect(height.dashed).toBe(true)
+    expectNear({ x: height.x2, y: height.y2 }, { x: Number(apex[1]), y: Number(apex[2]) })
+    const [radius] = references(svg, 'K radius')
+    expect(references(svg, 'K radius')).toHaveLength(1)
+    expect(radius.dashed).toBe(true)
+    expectNear({ x: radius.x1, y: radius.y1 }, { x: height.x1, y: height.y1 })
+  })
+
+  it("draws a sphere's radius from its centre, dashed inside it", () => {
+    const svg = render('@mode: figure\nO = solid sphere radius 4\nlabel: O radius')
+    const [radius] = references(svg, 'O radius')
+    expect(references(svg, 'O radius')).toHaveLength(1)
+    expect(radius.dashed).toBe(true)
+    expectNear({ x: radius.x1, y: radius.y1 }, halfCentre(svg, 'outline-0'))
+    // ...out to the outline: its length is the drawn circle's radius, since
+    // it runs square to this camera's view (along internal x).
+    const { start, end } = arcEnds(svg, 'outline-0')
+    const drawnRadius = Math.hypot(start.x - end.x, start.y - end.y) / 2
+    expect(Math.hypot(radius.x2 - radius.x1, radius.y2 - radius.y1)).toBeLessThan(drawnRadius + 0.01)
+  })
+
+  it("draws a frustum's base radius dashed, its top radius solid and its height as the dashed axis between them", () => {
+    const svg = render('@mode: figure\nF = solid frustum radius 6, top 3, height 4\nlabel: F radius\nlabel: F top\nlabel: F height')
+    const [height] = references(svg, 'F height')
+    const [radius] = references(svg, 'F radius')
+    const [top] = references(svg, 'F top')
+    expect(height.dashed).toBe(true)
+    expect(radius.dashed).toBe(true)
+    expect(top.dashed).toBe(false)
+    expectNear({ x: radius.x1, y: radius.y1 }, { x: height.x1, y: height.y1 })
+    expectNear({ x: top.x1, y: top.y1 }, { x: height.x2, y: height.y2 })
+  })
+
+  it('puts a reversed (placed) frustum’s radius on its bottom rim and its top on its top rim', () => {
+    const svg = render('@mode: figure\nF = solid frustum radius 3, top 6, height 4\nlabel: F radius\nlabel: F top')
+    const [radius] = references(svg, 'F radius')
+    const [top] = references(svg, 'F top')
+    // SVG y runs down: the base rim's centre is below the top rim's.
+    expect(radius.y1).toBeGreaterThan(top.y1)
+    expect(radius.dashed).toBe(true)
+    expect(top.dashed).toBe(false)
+  })
+
+  it('draws no reference for a polyhedron, whose dimensions hang off edges already drawn', () => {
+    const svg = render('@mode: figure\nS = solid prism 8 by 5 by 6\nlabel: S width\nlabel: S height')
+    expect(references(svg, 'S width')).toEqual([])
+    expect(references(svg, 'S height')).toEqual([])
+  })
+})
+
 describe('cross-sections', () => {
   function result(spec: string) {
     const parsed = parseSpec(spec)

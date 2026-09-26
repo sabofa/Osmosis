@@ -445,9 +445,10 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
     }
     case 'cylinder': {
       const y = spec.height / 2
-      // The radius runs out along +x from the centre of the near rim; the
-      // height runs down the surface at +x, which is a silhouette line for
-      // no camera and therefore never lands on top of one.
+      // The radius runs out along +x from the centre of the top rim; the
+      // height is the axis, between the two rims' centres — the line a
+      // textbook draws for it (fix wave 1; it ran down the surface at +x
+      // before, where no reference line could show what it measured).
       if (dimension === 'radius') {
         return [
           { x: 0, y, z: 0 },
@@ -456,8 +457,8 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
       }
       if (dimension === 'height') {
         return [
-          { x: spec.radius, y: -y, z: 0 },
-          { x: spec.radius, y, z: 0 },
+          { x: 0, y: -y, z: 0 },
+          { x: 0, y, z: 0 },
         ]
       }
       return null

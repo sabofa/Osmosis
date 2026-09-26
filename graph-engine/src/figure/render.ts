@@ -112,6 +112,15 @@ interface Identity {
 type FigureItem =
   | { kind: 'point'; id: Identity; at: Vec2; label: string | null; prefer: Vec2 | null; color: string | null }
   | { kind: 'line'; id: Identity; a: Vec2; b: Vec2; extent: LineExtent; auxiliary: boolean; color: string | null }
+  // The reference line a ROUND solid's dimension label hangs off (fix wave
+  // 1): a radius from its rim's centre to the rim, a height along the axis.
+  // A polyhedron's dimension hangs off an edge already drawn; a round
+  // solid's radius and height are drawn nowhere else, so a bare number would
+  // say nothing about what it measures. One item per span of the glass rule
+  // against the solid itself: solid where a face shows it, dashed where the
+  // solid hides it. Always in the auxiliary layer, carrying the LABEL's
+  // identity.
+  | { kind: 'dimensionReference'; id: Identity; a: Vec2; b: Vec2; hidden: boolean; color: string | null }
   | { kind: 'circle'; id: Identity; center: Vec2; radius: number; color: string | null }
   // A piece of a circle: the arc itself, or one of the two regions built on
   // it. All three carry the same Arc, which is the object that resolved the
@@ -1016,6 +1025,21 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         // measures, not across it.
         push = outwardPerpendicular(a, b, centre)
         leader = true
+        if (!body.polyhedron) {
+          const [from, to] = segment
+          const along = (u: number): Vec2 =>
+            camera.project({ x: from.x + u * (to.x - from.x), y: from.y + u * (to.y - from.y), z: from.z + u * (to.z - from.z) })
+          for (const span of segmentSpans(from, to, [body], camera)) {
+            items.push({
+              kind: 'dimensionReference',
+              id: { statement: index, object: subjectName(subject) },
+              a: along(span.from),
+              b: along(span.to),
+              hidden: span.hidden,
+              color: statement.color,
+            })
+          }
+        }
       } else {
         const vertices = subject.names.map((name) => resolve(name))
         at = centroidOf(vertices)
@@ -1059,6 +1083,9 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'line':
         if (item.extent === 'segment') points.push(item.a, item.b)
         else points.push(item.a)
+        break
+      case 'dimensionReference':
+        points.push(item.a, item.b)
         break
       case 'circle':
         points.push(
@@ -1350,7 +1377,9 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
   // line that crosses the drawing.
   const probe = growRect(geometryRect, FIGURE_PADDING)
   for (const item of items) {
-    if (item.kind === 'line') {
+    if (item.kind === 'dimensionReference') {
+      obstacles.segments.push([projection.toView(item.a), projection.toView(item.b)])
+    } else if (item.kind === 'line') {
       const a = projection.toView(item.a)
       const b = projection.toView(item.b)
       if (item.extent === 'segment') obstacles.segments.push([a, b])
@@ -1451,6 +1480,19 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       )
       break
     }
+    case 'dimensionReference':
+      // Thin, in the auxiliary layer, dashed only where the solid hides it.
+      layers.auxiliary.push(
+        svgLine(to(item.a), to(item.b), {
+          stroke: strokeColor(item.color, palette.axis, palette),
+          'stroke-width': STROKE_AUXILIARY,
+          'stroke-linecap': 'round',
+          'stroke-dasharray': item.hidden ? AUXILIARY_DASH : null,
+          opacity: item.hidden ? AUXILIARY_OPACITY : null,
+          ...identity(item.id),
+        })
+      )
+      break
     case 'line': {
       const a = to(item.a)
       const b = to(item.b)

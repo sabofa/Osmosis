@@ -335,7 +335,10 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //     its points ("label: AB") instead.
 //
 //   label: S width | height | depth | base | edge | radius | top | side [= <value>]
-//                                                 -> a dimension read off the SOLID, never the drawing
+//                                                 -> a dimension read off the SOLID, never the drawing. A
+//                                                    round solid's radius or height also draws the line it
+//                                                    measures (rim centre to rim, or the axis), dashed
+//                                                    where the solid hides it
 //   cut: S by plane <x|y|z> = <c>                 -> the section shaded in place. "plane z = 1" is
 //                                                    horizontal; "plane x = c" and "plane y = c" are
 //                                                    vertical. Axis-perpendicular planes only. A frustum

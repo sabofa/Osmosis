@@ -320,6 +320,18 @@ normal points nearest the camera; counter-clockwise from above; top over
 base; apex last; the octahedron's equator, then its top, then its bottom
 apex. It is the box's textbook lettering, generalised.
 
+*A round solid's dimension label draws its reference line* (fix wave 1,
+controller's browser look). A polyhedron's dimension hangs off an edge that
+is already drawn; a cylinder's radius or height had nothing, so the label was
+a bare number. Now `label: C radius` draws the radius from its rim's centre
+to the rim and `label: C height` the axis between the rim (or apex) centres,
+split by the glass rule against the solid itself — solid where a face shows
+it, dashed where the solid hides it — in the auxiliary layer, carrying the
+label's identity. A cylinder's height moved from its +x surface line to the
+axis to make this possible. This deliberately changed the bytes of exactly
+the specs that label a round solid's radius or height (the "Cylinder" example
+and three baseline specs, under every view); nothing else moved.
+
 *Point-built solids have no named dimensions* — `label: S height` is refused,
 pointing at `label: AB` — and take no `vertices` clause except a prism's new
 top. *A tilted round solid refuses `cut:`/`section:`* until oblique planes
