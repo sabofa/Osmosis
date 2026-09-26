@@ -8,9 +8,10 @@ already been tried and failed, and which traps cost real time.
 ## Where things stand
 
 **Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. 55 commits ahead of `main`. Working tree
-clean. **807 tests passing**, `tsc -b graph-engine/tsconfig.json --noEmit`
-clean, `oxlint` clean.
+`.claude/worktrees/graph-track-1`. Working tree clean. **957 tests passing**,
+`tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
+
+*Last updated 2026-09-25, after geometry phase 5 (solids).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -57,11 +58,9 @@ built.
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 phases beyond 4.
-
-**Phase 5 is specced and planned but not built:**
-`docs/superpowers/plans/2026-09-23-geometry-v2-phase-5-solids-grammar.md`.
-It is the next piece of geometry work and it is ready to dispatch.
+All of D1–D5. Track 2 beyond phase 5: **composite solids, nets, oblique
+cross-sections**, shading and boolean regions, and the competition-specific
+constructions (excircles, nine-point circle, radical axes, cevian concurrency).
 
 ### What each track-2 phase actually delivered
 
@@ -71,8 +70,50 @@ It is the next piece of geometry work and it is ready to dispatch.
 | 2 | `06e16a3`..`7582783` | The SVG figure renderer. `@mode: figure` is a separate renderer, not axes switched off |
 | 3 | `3781d6b`..`8f0eb54` | Measures (`label: AB` prints what the engine solved), notation (overbars, `∠`, `⊥`), pan/zoom, the givens panel, figure+table panels |
 | 4 | `ff8580f`..`a98bdc7` | Circle vocabulary (chord, arc, sector, tangent at/from, secant, radius, diameter) and the givens **table** with sections |
+| 5 | `5f09b6d`..`4977327` | Solids: the `solid:` statement, dimension labels, arcs in the edge type, analytic silhouettes, cross-sections |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
+
+### Phase 5 in detail (solids), because it is the newest
+
+Grammar that now works:
+
+```
+S = solid prism 8 by 5 by 6
+T = solid tetrahedron edge 5 vertices ABCD
+C = solid cylinder radius 3, height 8
+label: S height = 5           # asserts, like every other measure
+cut: S by plane y = 1         # shaded where it lies, behind the solid's lines
+section: S by plane y = 1 vertices PQRS   # lifted out as a true-shape figure
+```
+
+Primitives: `prism`, `pyramid`, `tetrahedron`, `cylinder`, `cone`, `sphere`.
+`@view:` selects a named viewpoint; there is no free camera by design.
+
+**The two decisions worth not re-litigating:**
+
+*Curved primitives are not faceted.* `SolidBody.polyhedron` is `null` for them;
+they emit an **analytic silhouette** instead — a cylinder as two lines plus a
+front and a back elliptical arc. Faceting was considered and rejected: it goes
+visibly polygonal under the figure view's zoom, generates spurious facet edges
+to suppress, and discards the crispness that chose SVG. This is why
+`ProjectedEdge` carries arcs as well as segments.
+
+*Cross-sections hand back real 2D geometry*, which is the whole seam. The test
+that pins it: a section of an 8×5×6 prism measures `PQ = 8` in its own plane,
+while the projected edge is 8·cos30 = 6.93 — so a section returning projected
+coordinates would silently assert the wrong number. Because the section is
+genuinely 2D, it also picks up notation, tick marks and the givens table for
+free.
+
+**Hidden-line removal is convex-only**, and `SOLID_PRIMITIVES` is the only
+route from a spec to a solid, so every solid reachable from the DSL is convex
+by construction. The plan called for a runtime guard rejecting non-convex
+solids; that would have been a branch no input can reach. The **invariant** is
+pinned instead in `solids.test.ts` — every vertex on the inner side of every
+face plane, with a deliberately dented cube alongside so the check cannot pass
+vacuously. **If you add a non-convex primitive, that test fails and it is
+telling you the visibility rule no longer holds.**
 
 ---
 
@@ -134,8 +175,12 @@ labels.ts      candidate-position collision layout — the hardest part
 notation.ts    overbars, arrows, arc marks as positioned SVG geometry
 measure.ts     computed lengths/angles/arcs + the asserting form
 render.ts      orchestrates all of the above → { svg, errors }
-project3d.ts   3D → 2D projection, isometric camera, hidden-edge rule
 viewport.ts    pan/zoom viewBox arithmetic (pure, so it is testable)
+
+project3d.ts    3D → 2D projection, cameras, the convex hidden-edge rule
+solids.ts       the six primitives, placement convention, SolidBody
+silhouette.ts   analytic outlines for cylinder, cone, sphere
+crossSection.ts plane ∩ solid, serving both `cut:` and `section:`
 ```
 
 Layer order is fixed and semantic: `regions → auxiliary → primary → marks →
@@ -332,12 +377,14 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
 6. **Exact/symbolic values** — specced, scheduled at build-order step 3. Until
    then measures print decimals; everything routes through one formatter so it
    becomes a one-place change.
-7. **Phase 5: 3D grammar.** The projection pipeline exists and is tested
-   (`figure/project3d.ts`, fixed axonometric camera, hidden-edge
-   classification, rectangular prism). **There is no `solid:` statement** — it
-   is unreachable from the DSL by design, Task 6 having been scoped to prove
-   the path. The vocabulary (prisms, pyramids, cylinders, cones, spheres,
-   tetrahedra), cross-sections and nets all follow.
+7. **Solids beyond phase 5** — composite solids (the four constrained
+   arrangements in the spec), nets, and oblique cross-sections. Phase 5
+   delivered the grammar, all six primitives, dimension labels and
+   axis-perpendicular cross-sections; these three were explicitly out of its
+   scope. Composites are the one with real difficulty in it: they need
+   occlusion *between* solids, which the convex per-solid rule does not do,
+   and which is why the spec pre-constrained them to four arrangements rather
+   than allowing general boolean modelling.
 8. Minor, recorded: intersections have no secondary sort key;
    `conic-vertex`/`local-max` and `focus`/`intersection` share marker shapes
    (latent — nothing emits the conic kinds); `x = f(y)` gets no feature points;
