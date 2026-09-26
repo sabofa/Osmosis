@@ -46,6 +46,14 @@ import { coneOutline, cylinderOutline, sphereOutline } from './silhouette'
 // -h/2 and +h/2, a cone's base at -h/2 and its apex at +h/2, all centred on
 // the y-axis. (4) says nothing about them: a circle has no first vertex.
 //
+// **Vertex lettering (V3, phase 6b) is textbook order**, and like the rest of
+// placement it is fixed against the default camera, never the active view. A
+// prism's ABCD run counter-clockwise seen from above, A the front-left bottom
+// corner, so the front face is ABFE and D is the hidden corner; E-H sit above
+// A-D, E over A. A square pyramid's base is lettered the same way, apex E. A
+// tetrahedron's A is its first base vertex, B and C follow counter-clockwise
+// seen from above, and D is the apex. Lettering lives in `labelOrder`.
+//
 // Rule 1 is `rectangularPrism`'s existing convention, extended rather than
 // replaced: a prism built here is bit-for-bit the prism phase 2 built.
 
@@ -81,8 +89,8 @@ export interface SolidBody {
   // Separate from the solid's own vertex order because `rectangularPrism`'s
   // is a binary count over (x, y, z) — the order its faces were written
   // against, and the order the byte-identical requirement pins — while the
-  // order a *problem* names a prism's vertices in is "base, then top, so A
-  // sits under E". Empty for a solid with no vertices to name.
+  // order a *problem* names a prism's vertices in is textbook order (V3).
+  // Empty for a solid with no vertices to name.
   labelOrder: number[]
 }
 
@@ -92,16 +100,24 @@ export function buildSolid(spec: SolidSpec): SolidBody {
       return {
         spec,
         polyhedron: rectangularPrism(spec.width, spec.height, spec.depth),
-        // rectangularPrism's vertices are (-x,-y,-z), (x,-y,-z), (x,y,-z),
-        // (-x,y,-z) then the same four at +z. The base (y = -h/2) is
-        // therefore 0, 1, 5, 4 and the top 3, 2, 6, 7 — matched position for
-        // position, so A is under E.
-        labelOrder: [0, 1, 5, 4, 3, 2, 6, 7],
+        // rectangularPrism's vertices are internal (-x,-y,-z), (x,-y,-z),
+        // (x,y,-z), (-x,y,-z) then the same four at +z. In the author frame
+        // (X, Y, Z) = (z, x, y) the bottom corners are 4 (+X,-Y), 5 (+X,+Y),
+        // 1 (-X,+Y), 0 (-X,-Y) — counter-clockwise from the front-left one —
+        // and the top corners above them are 7, 6, 2, 3, matched position
+        // for position so A is under E.
+        labelOrder: [4, 5, 1, 0, 7, 6, 2, 3],
       }
     case 'pyramid':
-      return { spec, polyhedron: squarePyramid(spec.base, spec.height), labelOrder: [0, 1, 2, 3, 4] }
+      // squarePyramid's base runs 0 (+X,+Y), 1 (+X,-Y), 2 (-X,-Y), 3 (-X,+Y)
+      // in the author frame, which is clockwise from above; textbook order
+      // starts at the front-left corner, 1, and runs the other way.
+      return { spec, polyhedron: squarePyramid(spec.base, spec.height), labelOrder: [1, 0, 3, 2, 4] }
     case 'tetrahedron':
-      return { spec, polyhedron: regularTetrahedron(spec.edge), labelOrder: [0, 1, 2, 3] }
+      // The base is built at increasing INTERNAL angle, which is decreasing
+      // author azimuth — clockwise from above. A stays the first vertex; B
+      // and C swap so the base reads counter-clockwise, and D is the apex.
+      return { spec, polyhedron: regularTetrahedron(spec.edge), labelOrder: [0, 2, 1, 3] }
     // H2's second representation: a curved primitive carries its parameters
     // and emits an analytic silhouette. It has no vertices, so there is
     // nothing to letter and nothing for the convex face rule to classify.

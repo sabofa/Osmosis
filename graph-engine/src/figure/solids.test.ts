@@ -218,9 +218,21 @@ describe('vertex labelling order', () => {
     }
   })
 
-  it('walks a tetrahedron base then its apex', () => {
+  it('walks a tetrahedron base then its apex, the base counter-clockwise from above', () => {
+    // Textbook lettering (phase 6b): A is the first base vertex (author
+    // azimuth 45), then B at 165 and C at 285 — counter-clockwise seen from
+    // above — which is the base built at vertex indices 0, 2, 1. D is the apex.
     const body = buildSolid({ kind: 'tetrahedron', edge: 5 })
-    expect(body.labelOrder).toEqual([0, 1, 2, 3])
+    expect(body.labelOrder).toEqual([0, 2, 1, 3])
+    const v = requirePolyhedron(body).vertices
+    const azimuth = (i: number) => {
+      const p = worldToAuthor(v[body.labelOrder[i]])
+      return (((Math.atan2(p.y, p.x) / RAD) % 360) + 360) % 360
+    }
+    expect(azimuth(0)).toBeCloseTo(45, 9)
+    expect(azimuth(1)).toBeCloseTo(165, 9)
+    expect(azimuth(2)).toBeCloseTo(285, 9)
+    expect(worldToAuthor(v[body.labelOrder[3]]).z).toBeGreaterThan(0)
   })
 })
 
@@ -517,5 +529,105 @@ describe('placement is fixed against the default camera (V2)', () => {
     const v = requirePolyhedron(buildSolid({ kind: 'tetrahedron', edge: 6 })).vertices
     const first = worldToAuthor(v[0])
     expect(Math.atan2(first.y, first.x) / RAD).toBeCloseTo(45, 9)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// V3 — textbook lettering
+// ---------------------------------------------------------------------------
+
+// A solid's vertices by the letters "vertices ABCD..." gives them, in the
+// AUTHOR frame (z up), so every assertion reads the way a problem does.
+function lettered(spec: SolidSpec): Record<string, Vec3> {
+  const body = buildSolid(spec)
+  const solid = requirePolyhedron(body)
+  return Object.fromEntries(body.labelOrder.map((index, i) => ['ABCDEFGH'[i], worldToAuthor(solid.vertices[index])]))
+}
+
+// True when the points run counter-clockwise seen from above (from +Z): every
+// turn from one to the next is a left turn in the author's XY-plane.
+function counterClockwiseFromAbove(points: Vec3[]): boolean {
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    const c = points[(i + 2) % points.length]
+    const turn = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+    if (turn <= 0) return false
+  }
+  return true
+}
+
+describe('textbook lettering (V3)', () => {
+  const BOX: SolidSpec = { kind: 'prism', width: 8, height: 5, depth: 6 }
+
+  it("puts a prism's A at the front-left bottom corner: largest X, smallest Y, at the bottom", () => {
+    const at = lettered(BOX)
+    expect(at.A).toEqual({ x: 3, y: -4, z: -2.5 })
+  })
+
+  it('runs A, B, C, D counter-clockwise seen from above', () => {
+    const at = lettered(BOX)
+    expect(counterClockwiseFromAbove([at.A, at.B, at.C, at.D])).toBe(true)
+    // The check can fail: the same corners in phase 5's order run clockwise.
+    expect(counterClockwiseFromAbove([at.D, at.C, at.B, at.A])).toBe(false)
+    expect(at.B).toEqual({ x: 3, y: 4, z: -2.5 })
+    expect(at.C).toEqual({ x: -3, y: 4, z: -2.5 })
+    expect(at.D).toEqual({ x: -3, y: -4, z: -2.5 })
+  })
+
+  it('puts E directly above A, and E-H above A-D in order', () => {
+    const at = lettered(BOX)
+    expect(at.E).toEqual({ x: 3, y: -4, z: 2.5 })
+    for (const [low, high] of ['AE', 'BF', 'CG', 'DH']) {
+      expect(at[high].x).toBe(at[low].x)
+      expect(at[high].y).toBe(at[low].y)
+      expect(at[high].z).toBe(2.5)
+    }
+  })
+
+  it('makes D the hidden corner under the default camera: its three edges are the dashed ones', () => {
+    const body = buildSolid(BOX)
+    const D = body.labelOrder[3]
+    const hidden = projectSolid(requirePolyhedron(body), DEFAULT_CAMERA).filter((e) => e.hidden)
+    expect(hidden).toHaveLength(3)
+    for (const edge of hidden) expect(edge.vertices).toContain(D)
+    // ...and the front face is ABFE: all four of its edges drawn solid.
+    const letter = (i: number) => 'ABCDEFGH'[body.labelOrder.indexOf(i)]
+    const drawn = projectSolid(requirePolyhedron(body), DEFAULT_CAMERA)
+    for (const pair of ['AB', 'BF', 'FE', 'EA']) {
+      const edge = drawn.find((e) => [letter(e.vertices[0]), letter(e.vertices[1])].sort().join('') === [...pair].sort().join(''))
+      expect(edge?.hidden).toBe(false)
+    }
+  })
+
+  it('draws the space diagonal A-G longer than any edge of the box', () => {
+    const body = buildSolid(BOX)
+    const solid = requirePolyhedron(body)
+    const drawnLength = (p: Vec3, q: Vec3) => {
+      const a = DEFAULT_CAMERA.project(p)
+      const b = DEFAULT_CAMERA.project(q)
+      return Math.hypot(a.x - b.x, a.y - b.y)
+    }
+    const A = solid.vertices[body.labelOrder[0]]
+    const G = solid.vertices[body.labelOrder[6]]
+    const longestEdge = Math.max(...projectSolid(solid, DEFAULT_CAMERA).map((e) => Math.hypot(e.a.x - e.b.x, e.a.y - e.b.y)))
+    expect(drawnLength(A, G)).toBeGreaterThan(longestEdge)
+  })
+
+  it('letters a square pyramid the same way round, with its apex E', () => {
+    const at = lettered({ kind: 'pyramid', base: 6, height: 9 })
+    expect(at.A).toEqual({ x: 3, y: -3, z: -4.5 })
+    expect(counterClockwiseFromAbove([at.A, at.B, at.C, at.D])).toBe(true)
+    expect(at.E).toEqual({ x: 0, y: 0, z: 4.5 })
+  })
+
+  it('letters a tetrahedron from its first base vertex, counter-clockwise, with its apex D', () => {
+    const body = buildSolid({ kind: 'tetrahedron', edge: 6 })
+    expect(body.labelOrder[0]).toBe(0)
+    const at = lettered({ kind: 'tetrahedron', edge: 6 })
+    expect(counterClockwiseFromAbove([at.A, at.B, at.C])).toBe(true)
+    expect(at.D.x).toBeCloseTo(0, 12)
+    expect(at.D.y).toBeCloseTo(0, 12)
+    expect(at.D.z).toBeCloseTo(Math.sqrt(6), 12)
   })
 })

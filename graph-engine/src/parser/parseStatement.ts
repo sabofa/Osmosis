@@ -501,9 +501,11 @@ function parseConstructionBody(rhs: string): Construction | null {
 // that at one boundary, figure/authorFrame.ts.
 //
 // Phase 6 added points in space ("A = (0, 0, 0)"), a solid's named vertices
-// as real points, constructions on them ("plane A-B-C" as an operand of foot
-// and intersect, "centroid ABCD"), and "segment: A-G [dashed | plain]" under
-// the glass rule. Nothing here knows which names are points in space: that is
+// as real points (lettered in textbook order since phase 6b: a prism's ABCD
+// counter-clockwise from above from the front-left bottom corner, EFGH above
+// them; a pyramid's apex E; a tetrahedron's apex D), constructions on them
+// ("plane A-B-C" as an operand of foot and intersect, "centroid ABCD"), and
+// "segment: A-G [dashed | plain]" under the glass rule. Nothing here knows which names are points in space: that is
 // decided by the solid-figure walk (figure/solidScope.ts), after parsing. The
 // full surface, and the mode rule for solid figures, is documented in
 // parser/types.ts's grammar comment.

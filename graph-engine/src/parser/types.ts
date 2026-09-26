@@ -276,8 +276,13 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //
 //   A = (x, y, z)                                 -> a point in space, z up; drawn as a dot and a label
 //   S = solid ... vertices ABCDEFGH               -> the named vertices ARE points in space (lettered,
-//                                                    not dotted). A prism names its base ABCD, then
-//                                                    its top EFGH, so A is under E.
+//                                                    not dotted), in textbook order: a prism's base
+//                                                    ABCD runs counter-clockwise seen from above from
+//                                                    A, the front-left bottom corner, then its top
+//                                                    EFGH, so A is under E, the front face is ABFE
+//                                                    and D is the hidden corner. A square pyramid's
+//                                                    base is ABCD the same way, apex E; a
+//                                                    tetrahedron's base is ABC, apex D.
 //   M = midpoint A-G                              -> the midpoint in space
 //   P = divide A-G at 1:2                         -> one part from A to two parts to G
 //   G = centroid ABC  |  G = centroid ABCD        -> of a triangle, or of a tetrahedron (four names)

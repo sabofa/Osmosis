@@ -5,7 +5,7 @@ import { FIGURE_LAYERS } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { formatMeasure } from './measure'
 import { ISOMETRIC_CAMERA, rectangularPrism, renderSolidFigure } from './project3d'
-import { regularTetrahedron } from './solids'
+import { buildSolid, regularTetrahedron } from './solids'
 import { renderFigure } from './render'
 import { resolveMode } from '../scene/mode'
 import { EXAMPLES } from '../examples'
@@ -1733,10 +1733,18 @@ describe('named points in solid figures', () => {
 
   it('measures the space diagonal AG at its TRUE length, never the projected one', () => {
     const trueLength = Math.sqrt(125)
-    // A and G as labelOrder places them, internal y-up: A = (-4,-2.5,-3),
-    // G = (4, 2.5, 3). The projected length is computed through the camera.
-    const a = ISOMETRIC_CAMERA.project({ x: -4, y: -2.5, z: -3 })
-    const g = ISOMETRIC_CAMERA.project({ x: 4, y: 2.5, z: 3 })
+    // A and G in textbook lettering (phase 6b), internal y-up: A, the
+    // front-left bottom corner, is (-4,-2.5,3) and G, diagonally opposite,
+    // is (4, 2.5, -3).
+    const box = buildSolid({ kind: 'prism', width: 8, height: 5, depth: 6 })
+    expect(box.polyhedron!.vertices[box.labelOrder[0]]).toEqual({ x: -4, y: -2.5, z: 3 })
+    expect(box.polyhedron!.vertices[box.labelOrder[6]]).toEqual({ x: 4, y: 2.5, z: -3 })
+    // Pinned to isometric: under the standard view AG is the LONG diagonal,
+    // drawn within 0.05 of its true length, which is too close to make the
+    // point. Isometric draws it 1.6 longer. The projected length is computed
+    // through the camera.
+    const a = ISOMETRIC_CAMERA.project({ x: -4, y: -2.5, z: 3 })
+    const g = ISOMETRIC_CAMERA.project({ x: 4, y: 2.5, z: -3 })
     const projected = Math.hypot(g.x - a.x, g.y - a.y)
     // The two differ by far more than GEOM_EPS, so neither assertion below
     // can pass vacuously.
@@ -2050,14 +2058,14 @@ describe('the standard default view', () => {
 
   it('never re-orients a solid when the view changes (V2)', () => {
     // A regular tetrahedron of edge 6 sits with its base at Z = -sqrt6 and
-    // its first base vertex at author azimuth 45, on a circle of radius
-    // 2 sqrt3: author (sqrt6, sqrt6, -sqrt6). The other two follow at 165
-    // and 285 degrees. The distances from each to two fixed points off the
+    // its first base vertex A at author azimuth 45, on a circle of radius
+    // 2 sqrt3: author (sqrt6, sqrt6, -sqrt6). B and C follow
+    // counter-clockwise from above, at 165 and 285 degrees. The distances from each to two fixed points off the
     // axis pin where the vertex is; a turn about the axis moves all of them.
     const R = 2 * Math.sqrt(3)
     const base = -Math.sqrt(6)
     const at = (degrees: number) => ({ x: R * Math.cos((degrees * Math.PI) / 180), y: R * Math.sin((degrees * Math.PI) / 180), z: base })
-    const vertices: Record<string, { x: number; y: number; z: number }> = { A: at(45), B: at(285), C: at(165) }
+    const vertices: Record<string, { x: number; y: number; z: number }> = { A: at(45), B: at(165), C: at(285) }
     const P = { x: 10, y: 0, z: 0 }
     const Q = { x: 0, y: 10, z: 0 }
     const distance = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
@@ -2072,5 +2080,56 @@ describe('the standard default view', () => {
     // The givens can fail: the same vertices a sixth of a turn round are refused.
     const wrong = ['@mode: figure', 'T = solid tetrahedron edge 6 vertices ABCD', 'P = (10, 0, 0)', `given: AP = ${distance(at(105), P)}`].join('\n')
     expect(result(wrong).errors).toHaveLength(1)
+  })
+})
+
+describe('textbook lettering in the drawing (V3)', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const NAMED = '@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH'
+
+  const lines = (markup: string) =>
+    [...markup.matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"[^>]*\/>/g)].map((m) => ({
+      a: { x: Number(m[1]), y: Number(m[2]) },
+      b: { x: Number(m[3]), y: Number(m[4]) },
+      markup: m[0],
+    }))
+
+  it('measures AB as the front bottom edge: 8, with A at author (3, -4, -2.5)', () => {
+    expect(result(`${NAMED}\nlabel: AB = 8`).errors).toEqual([])
+    expect(layer(render(`${NAMED}\nlabel: AB`), 'labels')).toContain('>8</text>')
+    // Where A is, pinned by its distance to a fixed point: 7 from (10, -4, -2.5).
+    expect(result(`${NAMED}\nP = (10, -4, -2.5)\ngiven: AP = 7`).errors).toEqual([])
+  })
+
+  it('letters the hidden corner D: the three dashed edges meet at the label D', () => {
+    const svg = render(NAMED)
+    const dashed = lines(layer(svg, 'auxiliary'))
+    expect(dashed).toHaveLength(3)
+    const key = (p: { x: number; y: number }) => `${p.x},${p.y}`
+    const ends = dashed.flatMap((l) => [key(l.a), key(l.b)])
+    const corner = ends.find((e) => ends.filter((f) => f === e).length === 3)!
+    const [cx, cy] = corner.split(',').map(Number)
+    const labels = [...layer(svg, 'labels').matchAll(/<text x="([^"]*)" y="([^"]*)"[^>]*>([A-H])<\/text>/g)].map((m) => ({
+      name: m[3],
+      d: Math.hypot(Number(m[1]) - cx, Number(m[2]) - cy),
+    }))
+    expect(labels).toHaveLength(8)
+    expect(labels.reduce((near, l) => (l.d < near.d ? l : near)).name).toBe('D')
+  })
+
+  it('draws the space diagonal A-G longer than any edge of the box', () => {
+    const svg = render(`${NAMED}\nsegment: A-G`)
+    const all = [...lines(layer(svg, 'primary')), ...lines(layer(svg, 'auxiliary'))]
+    const length = (l: { a: { x: number; y: number }; b: { x: number; y: number } }) => Math.hypot(l.a.x - l.b.x, l.a.y - l.b.y)
+    const diagonal = all.filter((l) => l.markup.includes('data-statement="1"'))
+    const edges = all.filter((l) => l.markup.includes('data-object="edge-'))
+    expect(diagonal.length).toBeGreaterThan(0)
+    expect(edges).toHaveLength(12)
+    expect(diagonal.reduce((sum, l) => sum + length(l), 0)).toBeGreaterThan(Math.max(...edges.map(length)))
   })
 })

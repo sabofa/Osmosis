@@ -8,7 +8,7 @@ import { buildSolid } from './solids'
 // Everything here is in the INTERNAL y-up frame, where the isometric camera
 // looks from (1,1,1). The 8-by-5-by-6 prism spans x in [-4, 4], y in
 // [-2.5, 2.5], z in [-3, 3]; its three front faces are +x, +y, +z, and its
-// one hidden corner is (-4,-2.5,-3), which labelOrder names A.
+// one hidden corner is (-4,-2.5,-3), which textbook lettering names D.
 
 const camera = ISOMETRIC_CAMERA
 const PRISM = buildSolid({ kind: 'prism', width: 8, height: 5, depth: 6 })
@@ -100,10 +100,13 @@ describe('segments against a prism', () => {
   })
 
   it('shows a segment along a visible edge and hides one along a hidden edge', () => {
-    // FG joins the +x and +y faces, both in front. AB joins -y and -z, both
-    // turned away.
+    // Textbook lettering (phase 6b): D is the hidden corner and A sits above
+    // it along z. FG joins the +x and +y faces, both in front; DA joins -x
+    // and -y, both turned away.
+    expect(NAMED.D).toEqual({ x: -4, y: -2.5, z: -3 })
+    expect(NAMED.A).toEqual({ x: -4, y: -2.5, z: 3 })
     expectSpans(spans(NAMED.F, NAMED.G), [[0, 1, false]])
-    expectSpans(spans(NAMED.A, NAMED.B), [[0, 1, true]])
+    expectSpans(spans(NAMED.D, NAMED.A), [[0, 1, true]])
   })
 
   it('judges a segment lying ACROSS an oblique face by the face, not by rounding', () => {

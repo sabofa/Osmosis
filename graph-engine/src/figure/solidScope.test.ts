@@ -68,12 +68,15 @@ describe("a solid's named vertices (S4)", () => {
   it('binds them at the vertices labelOrder names, undrawn', () => {
     const scope = walk('@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH')
     expect(scope.solids.get('S')).toBeDefined()
-    // A under E, G diagonally opposite A: width 8 along Y, depth 6 along X,
-    // height 5 along Z, centred on the origin.
-    expectAt(scope, 'A', -3, -4, -2.5)
-    expectAt(scope, 'B', -3, 4, -2.5)
-    expectAt(scope, 'E', -3, -4, 2.5)
-    expectAt(scope, 'G', 3, 4, 2.5)
+    // Textbook lettering (phase 6b): A the front-left bottom corner (largest
+    // X, smallest Y), ABCD counter-clockwise from above, A under E, G
+    // diagonally opposite A. Width 8 along Y, depth 6 along X, height 5 along
+    // Z, centred on the origin.
+    expectAt(scope, 'A', 3, -4, -2.5)
+    expectAt(scope, 'B', 3, 4, -2.5)
+    expectAt(scope, 'D', -3, -4, -2.5)
+    expectAt(scope, 'E', 3, -4, 2.5)
+    expectAt(scope, 'G', -3, 4, 2.5)
     const bound = scope.byStatement.get(0)
     expect(bound?.solid).toBe(scope.solids.get('S'))
     expect(bound?.points.map((p) => p.drawn)).toEqual(Array(8).fill(false))
@@ -205,8 +208,9 @@ describe('source order decides a rebinding, even for hoisted literals', () => {
       '"A" is already bound to a vertex of solid "S" on an earlier line — the later point "A" cannot rebind it',
     ])
     expect(scope.byStatement.get(0)?.points.map((p) => p.name)).toEqual('ABCDEFGH'.split(''))
-    expectAt(scope, 'A', -3, -4, -2.5)
-    expectAt(scope, 'G', 3, 4, 2.5)
+    // Textbook lettering: A front-left bottom, G diagonally opposite it.
+    expectAt(scope, 'A', 3, -4, -2.5)
+    expectAt(scope, 'G', -3, 4, 2.5)
     // The refused literal draws nothing.
     expect(scope.byStatement.get(1)).toBeUndefined()
   })
