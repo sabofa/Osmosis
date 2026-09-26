@@ -381,8 +381,10 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   plane through P parallel to A-B-C             -> parallel to another plane, through P; also
 //   plane through P parallel to p                    "parallel to plane <any form>"
 //   plane 2x + y - z = 3                          -> an equation, which must be LINEAR in x, y, z
-//                                                    (read exactly at the origin and the unit points,
-//                                                    and checked at three more); "x^2 + y = 1" and
+//                                                    by its STRUCTURE: x, y, z added, subtracted and
+//                                                    scaled by constants, divided only by constants;
+//                                                    powers and functions only of constants.
+//                                                    "x^2 + y = 1", "abs(x) + y = 1" and
 //                                                    "0x + 0y + 0z = 1" are refused
 //   plane z = 1                                   -> the axis form, exactly as before
 //   p = plane <any form>                          -> a NAMED plane: it binds p (unique across points,

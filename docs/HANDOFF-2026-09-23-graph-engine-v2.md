@@ -386,9 +386,14 @@ else is **general**: its point is the foot of the origin (so one plane
 written two ways is one value), its normal faces the DEFAULT camera (edge-on:
 author +Z, then +X), `v` is author Z projected into it, `u = v × n`. A lifted
 section therefore reads upright and unmirrored, and never turns with
-`@view:`. The equation form reads the affine fit at the origin and unit
-points and checks it at (1,1,1), (2,−1,3) **and (1/2,1/3,1/5)**: the plan's
-two integer probes alone accept `x(x−1)(x−2) + y = 1`.
+`@view:`. **The equation form's linearity is read off the expression tree,
+exactly** (`isAffine` in plane.ts: constants, x/y/z, ±, `*` with one side
+constant, `/` by a constant, `^` and calls only over constants), and only
+then are its coefficients read by evaluation at the origin and unit points.
+The first version probed points instead, and review round 1 showed that no
+probe set is sound once functions appear: `abs(x) + y = 1` and
+`sqrt(x^2) + z = 2` agree with a plane at every probe with x, z ≥ 0 and
+were drawn as one.
 
 *The winding snap.* Q1's vertex order (angle about the centroid, from
 atan2's cut at 9 o'clock) is ambiguous for a vertex exactly at 9 o'clock —
