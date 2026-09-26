@@ -613,7 +613,7 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron', 'circumsphere']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron', 'insphere', 'circumsphere']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
@@ -831,6 +831,13 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const radius = /^radius\s+(.+)$/i.exec(tail)
     if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
     return { kind: 'sphere', radius: parseExprString(radius[1]) }
+  }
+
+  // Phase 9 (R3, R6) — the sphere tangent to every face of a solid.
+  if (head === 'insphere') {
+    const of = /^of\s+(\S+)$/i.exec(tail)
+    if (!of) throw new Error(`Expected "insphere of <solid>", got "${rest}" — an inscribed sphere is a solid's, named by the solid`)
+    return { kind: 'insphere', of: geometryName(of[1], 'solid the sphere is inscribed in') }
   }
 
   // Phase 9 (R3, R6) — the sphere through a solid's vertices, or through

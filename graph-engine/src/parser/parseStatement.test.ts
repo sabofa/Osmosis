@@ -1207,6 +1207,11 @@ describe('circumspheres (phase 9, R3 and R6)', () => {
     return s.primitive
   }
 
+  it('reads the insphere of a solid, and nothing else', () => {
+    expect(primitive('I = solid insphere of T')).toEqual({ kind: 'insphere', of: 'T' })
+    expect(() => parseStatement('I = solid insphere A-B-C-D')).toThrow(/"insphere of <solid>"/)
+  })
+
   it('reads the circumsphere of a solid, and of four points', () => {
     expect(primitive('O = solid circumsphere of T')).toEqual({ kind: 'circumsphere', of: 'T' })
     expect(primitive('O = solid circumsphere A-B-C-D')).toEqual({ kind: 'circumsphereOn', points: ['A', 'B', 'C', 'D'] })

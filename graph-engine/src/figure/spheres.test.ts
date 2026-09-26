@@ -8,6 +8,7 @@ import { cameraFor, DEFAULT_CAMERA, type Vec3 } from './project3d'
 import { renderFigure } from './render'
 import { buildSolidFigure } from './solidScope'
 import { buildScene } from '../scene/buildScene'
+import { GEOM_EPS } from '../scene/geometry/types'
 import { drawnDimensionSegment } from './solids'
 
 // Phase 9 — inscribed and circumscribed spheres, and spheres by tangency.
@@ -355,5 +356,231 @@ describe('the circumsphere of a round solid (R4)', () => {
     const s = sphereOf(walk(spec), 'S')
     expectNear(s.center, { x: 1 + (7 / 8) * (2 / 3), y: 1 + (7 / 8) * (1 / 3), z: 1 + (7 / 8) * (2 / 3) })
     expect(s.radius).toBeCloseTo(25 / 8, 12)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Task 3 — inspheres (R3, R4)
+// ---------------------------------------------------------------------------
+
+// AIME 2024 I, problem 14: AB = CD = sqrt 41, AC = BD = sqrt 80,
+// AD = BC = sqrt 89. V = 160/3 and every face has area 6 sqrt 21, so
+// r = 3V / (4 * 6 sqrt 21) = 160 / (24 sqrt 21) = 20 / (3 sqrt 21) =
+// 20 sqrt 21 / 63.
+const AIME = 'T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)'
+const AIME_R = (20 * Math.sqrt(21)) / 63
+
+// The face-area-weighted mean of a tetrahedron's vertices, each weighted by
+// the area of the face OPPOSITE it — the spec's formula for the incentre,
+// computed here independently of the code under test.
+function weightedIncentre(a: Vec3, b: Vec3, c: Vec3, d: Vec3): Vec3 {
+  const area = (p: Vec3, q: Vec3, s: Vec3) => {
+    const u = { x: q.x - p.x, y: q.y - p.y, z: q.z - p.z }
+    const v = { x: s.x - p.x, y: s.y - p.y, z: s.z - p.z }
+    return Math.hypot(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x) / 2
+  }
+  const weights = [area(b, c, d), area(a, c, d), area(a, b, d), area(a, b, c)]
+  const total = weights.reduce((s, w) => s + w, 0)
+  const points = [a, b, c, d]
+  const mean = (axis: 'x' | 'y' | 'z') => points.reduce((s, p, i) => s + weights[i] * p[axis], 0) / total
+  return { x: mean('x'), y: mean('y'), z: mean('z') }
+}
+
+// Whether P is strictly inside the tetrahedron ABCD: on the same side of
+// each face's plane as the fourth vertex.
+function insideTetrahedron(p: Vec3, [a, b, c, d]: Vec3[]): boolean {
+  const side = (q: Vec3, r: Vec3, s: Vec3, t: Vec3) => {
+    const u = { x: r.x - q.x, y: r.y - q.y, z: r.z - q.z }
+    const v = { x: s.x - q.x, y: s.y - q.y, z: s.z - q.z }
+    const n = { x: u.y * v.z - u.z * v.y, y: u.z * v.x - u.x * v.z, z: u.x * v.y - u.y * v.x }
+    return n.x * (t.x - q.x) + n.y * (t.y - q.y) + n.z * (t.z - q.z)
+  }
+  return [
+    [a, b, c, d],
+    [a, b, d, c],
+    [a, c, d, b],
+    [b, c, d, a],
+  ].every(([q, r, s, t]) => side(q, r, s, t) * side(q, r, s, p) > 0)
+}
+
+describe('the insphere of a tetrahedron (R3)', () => {
+  it('of the AIME 2024 I tetrahedron: 20 sqrt 21 / 63, centred inside it', () => {
+    const scope = walk(`@mode: figure\n${AIME}\nI = solid insphere of T\nP = center of I`)
+    const s = sphereOf(scope, 'I')
+    expect(s.radius).toBeCloseTo(AIME_R, 12)
+    const vertices = ['A', 'B', 'C', 'D'].map((name) => authorPoint(scope, name))
+    expect(insideTetrahedron(authorPoint(scope, 'P'), vertices)).toBe(true)
+  })
+
+  it('prints its radius, formatted, and checks it', () => {
+    const svg = rendered(`@mode: figure\n${AIME}\nI = solid insphere of T\nlabel: I radius`).svg
+    expect(svg).toMatch(/data-object="I radius"[^>]*>1\.455</)
+    expect(errorsOf(`@mode: figure\n${AIME}\nI = solid insphere of T\nlabel: I radius = 20*sqrt(21)/63`)).toEqual([])
+    expect(errorsOf(`@mode: figure\n${AIME}\nI = solid insphere of T\nlabel: I radius = 1.5`)).toHaveLength(1)
+  })
+
+  it('is the face-area-weighted mean of the vertices, on the AIME tetrahedron and on a scalene one', () => {
+    for (const spec of [
+      `@mode: figure\n${AIME}`,
+      '@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (0, 3, 0)\nD = (0, 0, 2)\nT = solid tetrahedron A-B-C-D',
+    ]) {
+      const scope = walk(`${spec}\nI = solid insphere of T`)
+      const [a, b, c, d] = ['A', 'B', 'C', 'D'].map((name) => authorPoint(scope, name))
+      const centre = sphereOf(scope, 'I').center
+      const expected = weightedIncentre(a, b, c, d)
+      expect(Math.hypot(centre.x - expected.x, centre.y - expected.y, centre.z - expected.z)).toBeLessThan(GEOM_EPS)
+    }
+  })
+
+  it('of the corner tetrahedron (0,0,0), (4,0,0), (0,3,0), (0,0,2): r = 3V / S = 12 / (13 + sqrt 61) at (r, r, r)', () => {
+    // V = 4 * 3 * 2 / 6 = 4. Faces: 6, 4, 3 on the coordinate planes, and
+    // BCD with (-4, 3, 0) x (-4, 0, 2) = (6, 8, 12), area sqrt(244)/2 =
+    // sqrt 61. It touches the three coordinate planes, so c = (r, r, r).
+    const s = sphereOf(walk('@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (0, 3, 0)\nD = (0, 0, 2)\nT = solid tetrahedron A-B-C-D\nI = solid insphere of T'), 'I')
+    const r = 12 / (13 + Math.sqrt(61))
+    expect(s.radius).toBeCloseTo(r, 12)
+    expectNear(s.center, { x: r, y: r, z: r })
+  })
+})
+
+describe('the insphere of the regular solids (R3)', () => {
+  const inscribed = (solid: string) => sphereOf(walk(`@mode: figure\nS = solid ${solid}\nI = solid insphere of S`), 'I')
+
+  it('of the regular tetrahedron of edge 6: 6 / (2 sqrt 6) = sqrt 6 / 2, a quarter of the height up', () => {
+    const s = inscribed('tetrahedron edge 6')
+    expect(s.radius).toBeCloseTo(Math.sqrt(6) / 2, 12)
+    expectNear(s.center, { x: 0, y: 0, z: -Math.sqrt(6) + Math.sqrt(6) / 2 })
+  })
+
+  it('of the cube of edge 2: 1', () => {
+    const s = inscribed('cube edge 2')
+    expect(s.radius).toBeCloseTo(1, 12)
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+  })
+
+  it('of the octahedron of edge 6: 6 / sqrt 6 = sqrt 6', () => {
+    const s = inscribed('octahedron edge 6')
+    expect(s.radius).toBeCloseTo(Math.sqrt(6), 12)
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+  })
+
+  it('of the square pyramid with every edge 4: 3V / S = sqrt 2 (sqrt 3 - 1), r above the base', () => {
+    // Height 2 sqrt 2, so V = 16 * 2 sqrt 2 / 3 = 32 sqrt 2 / 3. Surface:
+    // the base 16 and four equilateral triangles of side 4, 4 sqrt 3 each:
+    // 16 + 16 sqrt 3. r = 32 sqrt 2 / (16 + 16 sqrt 3) = 2 sqrt 2 / (1 +
+    // sqrt 3) = sqrt 2 (sqrt 3 - 1).
+    const r = Math.sqrt(2) * (Math.sqrt(3) - 1)
+    const s = sphereOf(
+      walk('@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (4, 4, 0)\nD = (0, 4, 0)\nE = (2, 2, 2*sqrt(2))\nP = solid pyramid A-B-C-D apex E\nI = solid insphere of P'),
+      'I'
+    )
+    expect(s.radius).toBeCloseTo(r, 12)
+    expectNear(s.center, { x: 2, y: 2, z: r })
+  })
+})
+
+describe('a polyhedron with no insphere is refused (R3)', () => {
+  it('refuses the 8 x 5 x 6 box, naming a face', () => {
+    const spec = '@mode: figure\nS = solid prism 8 by 5 by 6\nI = solid insphere of S'
+    // Worked by hand. The box's faces are +z, -z, +x, -x, +y, -y (internal),
+    // at 3, 3, 4, 4, 2.5, 2.5 from its centre. Rows (n, 1): -x is +x's row
+    // minus 2 e_x, already in the span of the first three, so the four that
+    // fix (c, r) are +z, -z, +x, +y: r = 3, c_z = 0, c_x = 4 - 3 = 1,
+    // c_y = 2.5 - 3 = -0.5. The first face that fails is -x, 4 + 1 = 5 away:
+    // internal x = -4, author Y = -4, centred at (0, -4, 0); lettered DAEH.
+    expect(errorsOf(spec)).toEqual([
+      '"S" has no inscribed sphere — no point inside it is equidistant from all 6 of its faces: the face centred at (0, -4, 0) is 5 from the only candidate centre, not 3',
+    ])
+    expect(walk(spec).solids.has('I')).toBe(false)
+    // Lettered, the face is named by its letters.
+    expect(errorsOf('@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH\nI = solid insphere of S')).toEqual([
+      '"S" has no inscribed sphere — no point inside it is equidistant from all 6 of its faces: the face DAEH is 5 from the only candidate centre, not 3',
+    ])
+  })
+
+  it('refuses a hull with no insphere: a 2 x 1 x 1 box on points', () => {
+    const spec = [
+      '@mode: figure',
+      'A = (0, 0, 0)',
+      'B = (2, 0, 0)',
+      'C = (2, 1, 0)',
+      'D = (0, 1, 0)',
+      'E = (0, 0, 1)',
+      'F = (2, 0, 1)',
+      'G = (2, 1, 1)',
+      'H = (0, 1, 1)',
+      'S = solid hull A-B-C-D-E-F-G-H',
+      'I = solid insphere of S',
+    ].join('\n')
+    // Worked by hand. The hull's faces, in its order: ABFE (y = 0), ADCB
+    // (z = 0), AEHD (x = 0), BCGF (x = 2), CDHG (y = 1), EFGH (z = 1). The
+    // first four fix r = 1 at (1, 1, 1) — which is ON the face y = 1.
+    expect(errorsOf(spec)).toEqual([
+      '"S" has no inscribed sphere — no point inside it is equidistant from all 6 of its faces: the only candidate centre lies on or outside the face CDHG',
+    ])
+  })
+
+  it('refuses a sphere, and anything that is not a solid', () => {
+    expect(errorsOf('@mode: figure\nS = solid sphere radius 2\nI = solid insphere of S')).toEqual(['"S" is already a sphere — it is its own inscribed sphere'])
+    expect(errorsOf('@mode: figure\nM = (0, 0, 0)\nI = solid insphere of M')).toEqual([expect.stringMatching(/"M" is a point in space, not a solid/)])
+  })
+})
+
+describe('the insphere of a round solid (R4)', () => {
+  const inscribed = (solid: string) => sphereOf(walk(`@mode: figure\nS = solid ${solid}\nI = solid insphere of S`), 'I')
+
+  it('of the cone R = 3, H = 4: rho = 12 / (3 + 5) = 1.5, 1.5 above the base', () => {
+    const s = inscribed('cone radius 3, height 4')
+    expect(s.radius).toBeCloseTo(1.5, 12)
+    expectNear(s.center, { x: 0, y: 0, z: -2 + 1.5 })
+  })
+
+  it('of the cylinder r = 3, h = 6: 3 at its middle; with h = 8 refused', () => {
+    const s = inscribed('cylinder radius 3, height 6')
+    expect(s.radius).toBeCloseTo(3, 12)
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+    expect(errorsOf('@mode: figure\nS = solid cylinder radius 3, height 8\nI = solid insphere of S')).toEqual([
+      '"S" has no inscribed sphere — a sphere touches both ends and the side of S only when its height is twice its radius (height 8, radius 3)',
+    ])
+  })
+
+  it('of the frustum r1 = 4, r2 = 1, h = 4: radius 2 at mid-height; with h = 5 refused', () => {
+    // h = 2 sqrt(4 * 1) = 4, so the insphere exists, radius h/2 = 2.
+    const s = inscribed('frustum radius 4, top 1, height 4')
+    expect(s.radius).toBeCloseTo(2, 12)
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+    expect(errorsOf('@mode: figure\nS = solid frustum radius 4, top 1, height 5\nI = solid insphere of S')).toEqual([
+      '"S" has no inscribed sphere — a sphere touches both rims and the side of S only when its height is 2 sqrt(r1 r2) = 4 (height 5)',
+    ])
+  })
+
+  it('of a tilted cone: 1.5 along its axis from the base centre', () => {
+    const spec = '@mode: figure\nO = (1, 1, 1)\nV = (11/3, 7/3, 11/3)\nK = solid cone apex V base O radius 3\nI = solid insphere of K'
+    const s = sphereOf(walk(spec), 'I')
+    expect(s.radius).toBeCloseTo(1.5, 12)
+    expectNear(s.center, { x: 1 + 1.5 * (2 / 3), y: 1 + 1.5 * (1 / 3), z: 1 + 1.5 * (2 / 3) })
+  })
+})
+
+describe('an insphere is glass (the spec, "Composites")', () => {
+  // Every element a statement drew, in document order.
+  const drawnBy = (svg: string, statement: number) => [...svg.matchAll(new RegExp(`<(?:line|path)[^>]*data-statement="${statement}"[^>]*/>`, 'g'))].map((m) => m[0])
+
+  it("leaves the tetrahedron's own edges byte for byte as drawn alone", () => {
+    const alone = rendered(`@mode: figure\n${AIME}`).svg
+    const withSphere = rendered(`@mode: figure\n${AIME}\nI = solid insphere of T`).svg
+    expect(drawnBy(alone, 0).length).toBe(6)
+    expect(drawnBy(withSphere, 0)).toEqual(drawnBy(alone, 0))
+    // ...and the sphere inside it is drawn in full, its outline not dashed.
+    const sphere = drawnBy(withSphere, 1)
+    expect(sphere.length).toBeGreaterThan(0)
+    for (const element of sphere) expect(element).not.toContain('stroke-dasharray')
+  })
+
+  it('dashes a segment from a vertex to the centre, which the tetrahedron hides', () => {
+    const svg = rendered(`@mode: figure\n${AIME}\nI = solid insphere of T\nP = center of I\nsegment: A-P`).svg
+    const segment = [...svg.matchAll(/<line [^>]*data-object="AP"[^>]*\/>/g)].map((m) => m[0])
+    expect(segment.length).toBeGreaterThan(0)
+    for (const element of segment) expect(element).toContain('stroke-dasharray')
   })
 })

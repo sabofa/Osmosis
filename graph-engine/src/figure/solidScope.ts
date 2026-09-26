@@ -28,7 +28,7 @@ import { basePolygonNormal, hullOf, MAX_HULL_POINTS } from './hull'
 import { tetrahedronFromEdges } from './tetrahedron'
 import { placementAlong } from './silhouette'
 import { buildSolid, type PointSolidShape, type SolidBody, type SolidSpec } from './solids'
-import { circumsphereOf, circumsphereOfPoints, radiusTangentToPlane, radiusTangentToSphere, type SphereFit } from './spheres'
+import { circumsphereOf, circumsphereOfPoints, insphereOf, radiusTangentToPlane, radiusTangentToSphere, type SphereFit } from './spheres'
 
 // Names in space: the solid-figure walk (S3).
 //
@@ -186,11 +186,11 @@ type PointPrimitive = Extract<
 type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive | SphereConstruction | { kind: 'tetrahedronEdges' }>
 
 // A sphere the figure CONSTRUCTS (phase 9): placed by its centre, its radius
-// following from what it touches (R5), or circumscribed about a solid or four
-// points (R3, R4). Built by the walk, which can look up the names.
-type SphereConstruction = Extract<SolidPrimitive, { kind: 'sphereTangent' | 'circumsphere' | 'circumsphereOn' }>
+// following from what it touches (R5), inscribed in a solid, or circumscribed
+// about a solid or four points (R3, R4). Built by the walk, which can look up the names.
+type SphereConstruction = Extract<SolidPrimitive, { kind: 'sphereTangent' | 'circumsphere' | 'circumsphereOn' | 'insphere' }>
 
-const SPHERE_CONSTRUCTIONS: ReadonlySet<SolidPrimitive['kind']> = new Set(['sphereTangent', 'circumsphere', 'circumsphereOn'])
+const SPHERE_CONSTRUCTIONS: ReadonlySet<SolidPrimitive['kind']> = new Set(['sphereTangent', 'circumsphere', 'circumsphereOn', 'insphere'])
 
 function isSphereConstruction(primitive: SolidPrimitive): primitive is SphereConstruction {
   return SPHERE_CONSTRUCTIONS.has(primitive.kind)
@@ -1010,6 +1010,12 @@ export function buildSolidFigure(
       }
       case 'circumsphereOn':
         return sphereAt(circumsphereOfPoints(primitive.points.map(lookup), primitive.points))
+      case 'insphere': {
+        // R3 / R4 — tangent to every face of a polyhedron (verified against
+        // each), or to a round solid's ends and side.
+        const body = solidNamed(primitive.of, 'solid tetrahedron A-B-C-D')
+        return sphereAt(insphereOf(body, primitive.of, vertexNames.get(body)))
+      }
     }
   }
 

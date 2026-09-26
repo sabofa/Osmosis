@@ -176,6 +176,9 @@ export type SolidPrimitive =
   // polyhedron's, verified against each one) or through a round solid's rims
   // and apex; and the sphere through four named points.
   | { kind: 'circumsphere'; of: string }
+  // Phase 9 (R3, R4) — the sphere tangent to every face of a named solid (a
+  // polyhedron's, verified against each), or to a round solid's ends and side.
+  | { kind: 'insphere'; of: string }
   | { kind: 'circumsphereOn'; points: [string, string, string, string] }
 
 // What a sphere placed by tangency touches (R5).

@@ -4,6 +4,7 @@ import { add3, centroid3, cross3, distance3, dot3, length3, pointPlaneDistance, 
 import type { Solid3D, Vec3 } from './project3d'
 import { toWorld } from './silhouette'
 import { frustumRadii, type SolidBody } from './solids'
+import { fmt } from './svg'
 
 // Phase 9 — spheres a figure CONSTRUCTS rather than states: placed by
 // tangency (R5), inscribed in a solid, or circumscribed about one (R3, R4).
@@ -313,4 +314,182 @@ function placeLocal(body: SolidBody, local: LocalSphere, title: string, what: st
 export function circumsphereOf(body: SolidBody, title: string, names: VertexNames = []): SphereFit {
   if (body.polyhedron) return circumsphereOfPolyhedron(body.polyhedron, title, names)
   return placeLocal(body, localCircumsphere(body, title), title, 'circumscribed')
+}
+
+// ---------------------------------------------------------------------------
+// R3 — the insphere of a polyhedron, by a fixed-order solve, verified
+// ---------------------------------------------------------------------------
+
+// A face as its plane n . x = d, n the OUTWARD unit normal. The normal is
+// Newell's (exact for a planar polygon, whatever its winding) turned away
+// from the vertex centroid, which is inside a convex solid — so nothing here
+// depends on how a builder wound its faces.
+interface FacePlane {
+  normal: Vec3
+  offset: number
+  centre: Vec3
+}
+
+function facePlanes(solid: Solid3D): FacePlane[] {
+  const inside = centroid3(solid.vertices)
+  return solid.faces.map((face) => {
+    const corners = face.map((i) => solid.vertices[i])
+    let n = { x: 0, y: 0, z: 0 }
+    corners.forEach((p, k) => {
+      const q = corners[(k + 1) % corners.length]
+      n = add3(n, { x: (p.y - q.y) * (p.z + q.z), y: (p.z - q.z) * (p.x + q.x), z: (p.x - q.x) * (p.y + q.y) })
+    })
+    const centre = centroid3(corners)
+    let normal = scale3(n, 1 / length3(n))
+    if (dot3(normal, sub3(centre, inside)) < 0) normal = scale3(normal, -1)
+    return { normal, offset: dot3(normal, centre), centre }
+  })
+}
+
+// The first four faces, in face order, whose rows (n, 1) are independent —
+// the stated scan order: a face is taken when its row is not a combination
+// of the rows already taken (its residual after removing their span, by
+// Gram-Schmidt in that order, is not negligible). For a bounded solid four
+// always exist: rows spanning less would put every normal in one plane or on
+// one cone, and a closed surface's area-weighted normals sum to zero.
+function inBasis(faces: readonly FacePlane[]): number[] {
+  const taken: number[] = []
+  const basis: number[][] = []
+  faces.forEach((face, i) => {
+    if (taken.length === 4) return
+    let row = [face.normal.x, face.normal.y, face.normal.z, 1]
+    for (const e of basis) {
+      const along = row.reduce((s, v, k) => s + v * e[k], 0)
+      row = row.map((v, k) => v - along * e[k])
+    }
+    const size = Math.hypot(...row)
+    if (size <= GEOM_EPS * Math.SQRT2) return
+    taken.push(i)
+    basis.push(row.map((v) => v / size))
+  })
+  return taken
+}
+
+function faceText(solid: Solid3D, faceIndex: number, names: VertexNames): string {
+  const face = solid.faces[faceIndex]
+  const letters = face.map((i) => names[i])
+  if (letters.every((name): name is string => name !== undefined)) {
+    return `the face ${letters.join(letters.every((name) => name.length === 1) ? '' : '-')}`
+  }
+  return `the face centred at ${authorText(centroid3(face.map((i) => solid.vertices[i])))}`
+}
+
+// A polyhedron's insphere. Every face is n_i . x = d_i with n_i outward, so
+// a point c inside is d_i - n_i . c from face i. The insphere's centre is
+// equally far, r, from all of them: n_i . c + r = d_i. The first four faces
+// that fix (c, r) give a 4x4 system, solved by Cramer's rule (written about
+// the vertex centroid g, c = g + u, so the arithmetic is at the solid's own
+// size); then EVERY face is checked: strictly in front of c, and at r. A
+// solid with no such point (a box that is not a cube) is refused, naming the
+// first face that fails — never drawn with a sphere touching some faces. The
+// "only candidate centre" is exactly that: the four faces fix (c, r) uniquely,
+// so if it fails any face, no point is equidistant from all of them.
+//
+// For a tetrahedron this is the face-area-weighted mean of the vertices
+// (each weighted by the area of the face opposite it), the spec's formula;
+// the tests pin that identity.
+function insphereOfPolyhedron(solid: Solid3D, title: string, names: VertexNames): SphereFit {
+  const faces = facePlanes(solid)
+  const basis = inBasis(faces)
+  // Unreachable for a solid (see inBasis); a guard, so nothing is ever
+  // solved from fewer rows than unknowns.
+  if (basis.length < 4) throw new Error(`"${title}" has no inscribed sphere — its faces do not fix a centre`)
+  const g = centroid3(solid.vertices)
+  const [ux, uy, uz, r] = cramer(
+    basis.map((i) => [faces[i].normal.x, faces[i].normal.y, faces[i].normal.z, 1]),
+    basis.map((i) => faces[i].offset - dot3(faces[i].normal, g))
+  )
+  const center = add3(g, { x: ux, y: uy, z: uz })
+  const eps = GEOM_EPS * Math.max(extentOf(solid.vertices), Math.abs(r))
+  const refuse = (detail: string) =>
+    new Error(`"${title}" has no inscribed sphere — no point inside it is equidistant from all ${faces.length} of its faces: ${detail}`)
+  for (let i = 0; i < faces.length; i++) {
+    const distance = faces[i].offset - dot3(faces[i].normal, center)
+    if (distance <= eps || r <= eps) throw refuse(`the only candidate centre lies on or outside ${faceText(solid, i, names)}`)
+    if (Math.abs(distance - r) > eps) {
+      throw refuse(`${faceText(solid, i, names)} is ${fmt(distance)} from the only candidate centre, not ${fmt(r)}`)
+    }
+  }
+  return { center, radius: r }
+}
+
+// ---------------------------------------------------------------------------
+// R4 — the insphere of a round solid, closed form in its own frame
+// ---------------------------------------------------------------------------
+
+// Where a sphere centred on the axis at height y touches the side through
+// the rim points (r1, y1) and (r2, y2): the foot on that generator, in the
+// local xy half-plane. The check is then that the foot is one radius away.
+function footOnSide(y: number, r1: number, y1: number, r2: number, y2: number): Vec3 {
+  const a = { x: r1, y: y1, z: 0 }
+  const d = { x: r2 - r1, y: y2 - y1, z: 0 }
+  const t = dot3(sub3({ x: 0, y, z: 0 }, a), d) / dot3(d, d)
+  return add3(a, scale3(d, t))
+}
+
+function localInsphere(body: SolidBody, title: string): LocalSphere {
+  const spec = body.spec
+  switch (spec.kind) {
+    case 'cylinder': {
+      // Only when h = 2r: then radius r at the middle, touching both ends
+      // and the side.
+      const { radius: r, height: h } = spec
+      if (Math.abs(h - 2 * r) > GEOM_EPS * Math.max(1, h)) {
+        throw new Error(
+          `"${title}" has no inscribed sphere — a sphere touches both ends and the side of ${title} only when its height is twice its radius ` +
+            `(height ${fmt(h)}, radius ${fmt(r)})`
+        )
+      }
+      return {
+        y: 0,
+        radius: r,
+        through: [
+          { x: 0, y: -h / 2, z: 0 },
+          { x: 0, y: h / 2, z: 0 },
+          { x: r, y: 0, z: 0 },
+        ],
+      }
+    }
+    case 'cone': {
+      // Always: rho = R H / (R + sqrt(R^2 + H^2)), the inradius of the
+      // cone's axial triangle, rho above the base.
+      const { radius: r, height: h } = spec
+      const rho = (r * h) / (r + Math.hypot(r, h))
+      const y = -h / 2 + rho
+      return { y, radius: rho, through: [{ x: 0, y: -h / 2, z: 0 }, footOnSide(y, r, -h / 2, 0, h / 2)] }
+    }
+    case 'frustum': {
+      // Only when h = 2 sqrt(r1 r2): then radius h/2 at mid-height.
+      const { bottom: r1, top: r2 } = frustumRadii(spec)
+      const h = spec.height
+      const needed = 2 * Math.sqrt(r1 * r2)
+      if (Math.abs(h - needed) > GEOM_EPS * Math.max(1, h)) {
+        throw new Error(
+          `"${title}" has no inscribed sphere — a sphere touches both rims and the side of ${title} only when its height is ` +
+            `2 sqrt(r1 r2) = ${fmt(needed)} (height ${fmt(h)})`
+        )
+      }
+      return {
+        y: 0,
+        radius: h / 2,
+        through: [{ x: 0, y: -h / 2, z: 0 }, { x: 0, y: h / 2, z: 0 }, footOnSide(0, r1, -h / 2, r2, h / 2)],
+      }
+    }
+    case 'sphere':
+      throw new Error(`"${title}" is already a sphere — it is its own inscribed sphere`)
+    default:
+      // Unreachable: every other solid is a polyhedron.
+      throw new Error(`"${title}" has no inscribed sphere`)
+  }
+}
+
+// "solid insphere of S": R3 for a polyhedron, R4 for a round solid.
+export function insphereOf(body: SolidBody, title: string, names: VertexNames = []): SphereFit {
+  if (body.polyhedron) return insphereOfPolyhedron(body.polyhedron, title, names)
+  return placeLocal(body, localInsphere(body, title), title, 'inscribed')
 }
