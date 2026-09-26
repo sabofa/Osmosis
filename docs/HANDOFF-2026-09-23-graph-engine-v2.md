@@ -8,11 +8,11 @@ already been tried and failed, and which traps cost real time.
 ## Where things stand
 
 **Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. Working tree clean. **1326 tests passing**,
+`.claude/worktrees/graph-track-1`. Working tree clean. **1493 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-26, after geometry phase 7 (solids by points, and
-general polyhedra).*
+*Last updated 2026-09-26, after geometry phase 8 (planes as objects, and
+oblique sections).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -51,7 +51,7 @@ built.
   (roots by bisection, extrema as roots of f′ classified by f″, intersections
   as roots of f−g), typed and distinctly marked, hover snapping, `@labels` /
   `@label-every`, `@step-mode`, chained inequalities.
-- **Track 2 — geometry, phases 1–6b.** Construction core (lines/points/circles
+- **Track 2 — geometry, phases 1–8.** Construction core (lines/points/circles
   as intersectable objects, derived points, triangle solvers, centres with
   their circles); the SVG figure renderer; measures, notation, navigation and
   panels; circle vocabulary and the givens table; solid primitives with
@@ -59,14 +59,17 @@ built.
   measures and occluded segments in solid figures; a `standard` default view
   in general position and textbook vertex lettering; solids on named points,
   the tetrahedron from six edges, the exact convex hull, regular prisms and
-  pyramids, the octahedron, frusta, and round solids at any position and tilt.
+  pyramids, the octahedron, frusta, and round solids at any position and tilt;
+  planes as objects (six author forms, named planes) and sections of any
+  solid by any plane, in place with the hidden outline dashed and lifted at
+  true shape.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 beyond phase 7: build steps 8–11 of the spec's
-"Revised 2026-09-25" section (oblique sections, inscribed/circumscribed
-solids, measures and marks in space, nets),
+All of D1–D5. Track 2 beyond phase 8: build steps 9–11 of the spec's
+"Revised 2026-09-25" section (inscribed/circumscribed solids, measures and
+marks in space, nets),
 shading and boolean regions, and the competition-specific constructions
 (excircles, nine-point circle, radical axes, cevian concurrency).
 
@@ -82,6 +85,7 @@ shading and boolean regions, and the competition-specific constructions
 | 6 | `2d4ecd4`..`8d4dd68` | Solid figures get a construction core: the z-up author frame, points in space, a solid's vertices as real points, midpoint/divide/centroid/centres/foot/line-meets-plane in space, true-3D `label:`/`given:`, and `segment:` split visible/hidden against every solid (the glass rule) |
 | 6b | `242b04b`, `0f7a892`, then the docs commit | The default view is `standard` (azimuth 30°, elevation 25°, general position), not isometric; placement is fixed against the default camera, never the active view; prisms, pyramids and tetrahedra are lettered in textbook order |
 | 7 | `df94340`..`d4a3aae`, then the docs commit | Solids are stated the way competition problems state them: on named points (hull, tetrahedron, pyramid, prism, sphere, cylinder, cone, frustum), a tetrahedron from its six edges (AIME 2024 I draws and measures), regular n-gon prisms and pyramids, the octahedron, conical and pyramidal frusta, the cube; round solids at any position and tilt through a placement and a local camera |
+| 8 | `9677aeb`..`2b97c75`, then the docs commit | Planes are objects: through three points, perpendicular to a line, parallel to a plane, by an equation, the axis form, and named (`p = plane ...`, used as `plane p`), all canonicalised to one internal plane. Any solid is cut by any plane: the cube's central hexagon, the tetrahedron's square, the AIME pyramid's pentagon, the log wedge's half ellipse, a sphere's circle through three points. In place, the outline the solid hides is dashed; lifted, the section is true shape, corners nameable |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -355,6 +359,96 @@ neither axis, and checks that the camera foreshortens it.
 two phases (Open items 1). The user has scheduled the tutor reference for
 much later.
 
+### Phase 8 in detail (planes as objects, and oblique sections)
+
+Grammar that now works (author frame, z up; every plane form works in
+`cut:`, `section:`, `foot … to plane` and `intersect line …, plane …`):
+
+```
+p = plane A-B-C                              # a NAMED plane: binds p, draws nothing
+q = plane through O perpendicular to A-G
+r = plane through P parallel to A-B-C        # ...or "parallel to p"
+s = plane 2x + y - z = 3                     # must be linear in x, y, z
+cut: S by plane p                            # in place, hidden outline dashed
+section: S by plane M-N-L vertices PQRS      # lifted at true shape
+section: C by plane x - z = 5 vertices PQ    # a region: arcs + chords, corners named
+F = foot A to plane p
+```
+
+**The decisions worth not re-litigating:**
+
+*One internal plane, canonicalised (Q1).* Every author form resolves, in the
+walk, to a `Plane3` and then to a `SectionPlane` (`figure/plane.ts`): a
+normal parallel to an internal axis becomes phase 5's **axis** form exactly,
+`{ axis, at }`, so `plane A-B-C` through three points at z = 1 cuts byte for
+byte as `plane z = 1` — the same object down the same code path. Everything
+else is **general**: its point is the foot of the origin (so one plane
+written two ways is one value), its normal faces the DEFAULT camera (edge-on:
+author +Z, then +X), `v` is author Z projected into it, `u = v × n`. A lifted
+section therefore reads upright and unmirrored, and never turns with
+`@view:`. The equation form reads the affine fit at the origin and unit
+points and checks it at (1,1,1), (2,−1,3) **and (1/2,1/3,1/5)**: the plan's
+two integer probes alone accept `x(x−1)(x−2) + y = 1`.
+
+*The winding snap.* Q1's vertex order (angle about the centroid, from
+atan2's cut at 9 o'clock) is ambiguous for a vertex exactly at 9 o'clock —
+and the cube's central hexagon has one. A general plane takes that vertex as
+−π, so it is always P; without the snap, the sign of a rounding error made it
+last. The axis form keeps phase 5's bare atan2 and its bytes.
+
+*Polyhedra: the edge walk with a signed distance (Q3).* `normal · p − normal
+· point`; for the axis form, exactly `coordinate − at`. A plane holding a
+face returns the face; one that only touches a vertex or an edge is refused
+naming it in author coordinates.
+
+*Round solids: solved in their own frame, in closed form (Q4,
+`figure/conicSection.ts`).* An axis plane through an UPRIGHT round solid keeps
+the phase-5/7 paths (bytes); everything else — an oblique plane, or any
+plane through a tilted solid — goes to the local frame, which is what lifted
+P7's tilted refusal. The cylinder's ellipse is parametrised by the cylinder
+angle; the cone's and frustum's come from the cone's quadratic form restricted
+to the plane (centre `−M⁻¹β`, principal semi-axes from a closed-form 2 × 2
+eigenproblem). **Every ellipse is trimmed by one rule**: its height is
+`c.y + K cos(t − φ)`, so a cap crosses it at a closed-form pair of angles.
+The solid's support range along the normal is closed form too, and a plane
+at either end only touches (apex, one generator, a rim point, tangent to a
+sphere) and is refused as such. Parabolas and hyperbolas are refused.
+
+*A section can be a region (Q5).* `Section` and `TrueShape` gain `{ kind:
+'region', boundary }`, chords and arcs `center + u cos t + v sin t` chaining
+end to end, counter-clockwise in the plane's frame from the lowest chord. A
+circle stays a circle. Lifted, a region is a new 2D item drawn through the
+SAME drawn-edge union a solid's outline uses (`drawEdge`, `edgeExtremes`),
+its arcs from conjugate semi-diameters by the ONE closed form —
+`ellipseFromConjugates`, moved out of `projectCircle` with its arithmetic
+unchanged. Its corners (arc meets chord) take `vertices`; a whole ellipse
+refuses them, as a circle does.
+
+*In-place outlines dash what the solid hides (Q6,
+`figure/sectionVisibility.ts`).* The fill stays in the regions layer, now
+unstroked; the outline is drawn piece by piece like a solid's edges. A side
+on a face is visible iff that face (either, along an edge) faces the viewer
+— projectSolid's rule; a cap chord iff its cap does; an arc on a curved side
+is split where `A cos t + B sin t + C` (the outward normal is affine in the
+point) changes sign. **This is the one sanctioned byte change**: the sweep
+over every spec the suite parses plus every example, under all five views,
+changed exactly the 30 keys holding a `cut:` and nothing else; the three cut
+digests were re-pinned beside explicit dash assertions.
+
+**Lesson 1, again.** The render test for the tilted cylinder cut by `plane x
+= 0` asserted only "no errors". Deleting the local-frame transform left it
+GREEN: in the wrong frame that plane is parallel to the axis and cuts a
+rectangle, which is not an error. It now asserts one lifted `<circle>` and no
+straight side, and goes red. **"No error" is not a geometric assertion.**
+
+**Corrections to the plan, recorded.** The tangent-plane refusal of a sphere
+changed an existing expectation (the axis path said "misses"); it now says
+"touches … at one point", as Q4's table asks. `vertices` accepts two names,
+since a log wedge has only two corners. Plane messages quote the author's
+text ("The plane A-B-C does not cut …"), except the three-point form's
+collinearity refusal, which keeps phase 6's wording ("A, M and G are
+collinear") so no existing message moved.
+
 
 ---
 
@@ -421,7 +515,11 @@ viewport.ts    pan/zoom viewBox arithmetic (pure, so it is testable)
 project3d.ts    3D → 2D projection, cameras, the convex hidden-edge rule
 solids.ts       the six primitives, placement convention, SolidBody
 silhouette.ts   analytic outlines for cylinder, cone, sphere
-crossSection.ts plane ∩ solid, serving both `cut:` and `section:`
+crossSection.ts plane ∩ solid, serving both `cut:` and `section:`; the SectionPlane union,
+                the polyhedron walk, the region shape, true shape
+plane.ts        Q1: canonicalisation, a general plane's frame, the equation form, signed distance
+conicSection.ts Q4: a round solid by any plane, in its own frame, closed form (conics, trims, refusals)
+sectionVisibility.ts  Q6: an in-place outline's pieces, visible or hidden
 authorFrame.ts  the z-up author frame <-> the internal y-up frame (S1)
 construct3d.ts  the Vec3 toolkit and constructions in space, camera-free
 solidScope.ts   the solid-figure walk: solids + space points, source order
@@ -484,7 +582,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1326 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1493 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
@@ -650,7 +748,7 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    in space and `segment: … dashed | plain` are all unreachable to the tutor.
    **As of phase 7 it lags by two**: every solid on points, the six-edge
    tetrahedron, the hull, the frustum and the regular solids are unreachable
-   too. The user has scheduled the tutor reference for much later.
+   too. **As of phase 8, by three**: planes as objects and oblique sections. The user has scheduled the tutor reference for much later.
    The house rule "declare `@mode:`" matters doubly for solid figures: under
    S5 a spec of 3-coordinate points with no solid still infers the *space*
    renderer, so a tutor sketching points in space before adding the solid gets
@@ -719,6 +817,14 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    draws AG long, "Cylinder and cone" turned its two lines 15° with the
    camera, and "Regular tetrahedron and its height" shows the altitude clear
    of every edge.
+
+10. **Phase 8's out-of-scope items (Q7), each refused legibly today.** A
+    plane drawn on its own (a patch — `plane: A-B-C` is refused, pointing at
+    `cut:` and at naming it); the line where two planes meet (`intersect
+    plane …, plane …` is refused); parabolic and hyperbolic sections of a
+    cone or frustum (refused, naming the conic); nets (`net:` is refused,
+    build step 11). Inscribed and circumscribed solids are build step 9;
+    angle and dihedral marks step 10.
 
 ---
 

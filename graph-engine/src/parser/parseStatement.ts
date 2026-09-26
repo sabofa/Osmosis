@@ -592,6 +592,11 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lettering of regular bases (P5), and which sections a placed round solid
 // takes (P7) are in the grammar comment too.
 //
+// Phase 8 added planes as objects: every plane form ("plane A-B-C", "plane
+// through P perpendicular to A-B", "... parallel to A-B-C", "plane 2x + y -
+// z = 3", "plane z = 1", "plane p") wherever a plane is taken, and named
+// planes, "p = plane ..." (see parsePlaneForm).
+//
 // Nothing here knows which names are points in space: that is decided by
 // the solid-figure walk (figure/solidScope.ts), after parsing. The full
 // surface, and the mode rule for solid figures, is documented in
@@ -1125,6 +1130,16 @@ function parseStatementCore(rawLine: string): StatementShape {
   // A solid: "solid: prism 8 by 5 by 6". The bound form, "S = solid prism
   // 8 by 5 by 6", is handled with the other "=" statements below.
   if (line.startsWith('solid:')) return parseSolidBody(line.slice('solid:'.length), null)
+
+  // Q7 (phase 8) — what an author might ask for that is not drawn: a plane on
+  // its own (a plane is drawn only through the section it cuts), and a net
+  // (build step 11). Refused in words, rather than as an unrecognised line.
+  if (/^plane(:|\s)/.test(line)) {
+    throw new Error(
+      'A plane is not drawn on its own — it is drawn through the section it cuts ("cut: S by plane A-B-C"), and named with "p = plane A-B-C"'
+    )
+  }
+  if (/^net(:|\s)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit

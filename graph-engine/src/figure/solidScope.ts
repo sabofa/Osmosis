@@ -1001,6 +1001,13 @@ export function buildSolidFigure(
         )
       }
       case 'intersect': {
+        // Q7 (phase 8): the line where two planes meet is not drawn.
+        if (body.left.kind === 'plane' && body.right.kind === 'plane') {
+          throw new Error(
+            `${statementText(names, body)}: two planes meet in a line, and the line of two planes is not drawn yet — ` +
+              'intersect a line with a plane ("intersect line A-G, plane B-D-E") for a point'
+          )
+        }
         const [line, plane] =
           body.left.kind === 'plane' ? [body.right, body.left] : body.right.kind === 'plane' ? [body.left, body.right] : [null, null]
         if (!line || !plane || line.kind !== 'through' || plane.kind !== 'plane') {

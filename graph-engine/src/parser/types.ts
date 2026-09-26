@@ -360,16 +360,76 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                    pyramidal frustum's height, also draws the line it
 //                                                    measures (rim centre to rim, or the axis), dashed
 //                                                    where the solid hides it
-//   cut: S by plane <x|y|z> = <c>                 -> the section shaded in place. "plane z = 1" is
-//                                                    horizontal; "plane x = c" and "plane y = c" are
-//                                                    vertical. Axis-perpendicular planes only. A frustum
-//                                                    cuts in a circle square to its axis and a trapezoid
-//                                                    through it. A round solid placed by points is cut
-//                                                    where it is while its axis is vertical; a TILTED one
-//                                                    is refused until oblique planes (build step 8)
-//   section: S by plane <x|y|z> = <c> [vertices PQRS]
-//                                                 -> the same cut lifted out beside the solid at true
+//   cut: S by plane <plane>                       -> the section shaded in place, by ANY plane (phase 8;
+//                                                    the forms are below). "plane z = 1" is horizontal.
+//                                                    Its outline is drawn apart from the fill, DASHED
+//                                                    where the solid hides it: a side on a face (or
+//                                                    along an edge) is visible iff that face (either
+//                                                    face) faces the viewer, a chord on a cap iff the
+//                                                    cap does, an arc on a curved side is split where
+//                                                    that side turns away (the exact angles). Other
+//                                                    solids do not hide it (the glass rule).
+//   section: S by plane <plane> [vertices PQRS]   -> the same cut lifted out beside the solid at true
 //                                                    shape, as ordinary 2D geometry
+//
+//   Planes (phase 8). A plane is in the AUTHOR frame, z up, and every form
+//   works wherever a plane is taken (cut:, section:, foot ... to plane,
+//   intersect line ..., plane ...):
+//
+//   plane A-B-C                                   -> through three points in space (not collinear)
+//   plane through P perpendicular to A-B          -> its normal along A-B (A and B distinct)
+//   plane through P parallel to A-B-C             -> parallel to another plane, through P; also
+//   plane through P parallel to p                    "parallel to plane <any form>"
+//   plane 2x + y - z = 3                          -> an equation, which must be LINEAR in x, y, z
+//                                                    (read exactly at the origin and the unit points,
+//                                                    and checked at three more); "x^2 + y = 1" and
+//                                                    "0x + 0y + 0z = 1" are refused
+//   plane z = 1                                   -> the axis form, exactly as before
+//   p = plane <any form>                          -> a NAMED plane: it binds p (unique across points,
+//                                                    lines, circles and planes) and DRAWS NOTHING —
+//   plane p                                          a plane is drawn only through the section it
+//                                                    cuts; later lines write "plane p"
+//
+//   One plane, canonicalised: a plane square to an axis IS the axis form, so
+//   "plane A-B-C" through three points at z = 1 cuts byte for byte as
+//   "plane z = 1". Any other plane's own frame, which a lifted section is
+//   drawn in, is fixed against the DEFAULT view (never the active one): its
+//   normal faces the viewer, "up" (v) is author Z projected into the plane,
+//   and "right" (u) completes a right-handed frame — so a lifted section
+//   reads upright, seen from the viewer's side.
+//
+//   A lifted polygon's vertices (what "vertices PQRS" names) run counter-
+//   clockwise in that frame, by angle about their centroid, from 9 o'clock:
+//   P is the first vertex at or past straight left, going down (a vertex
+//   exactly at 9 o'clock is P). A region's CORNERS (where an arc meets a
+//   chord) run counter-clockwise from the left end of its lowest chord; a
+//   whole ellipse, like a circle, has no vertices to name.
+//
+//   What a plane cuts:
+//     polyhedron  -> the polygon through its edges; a plane holding a face
+//                    gives that face; one touching only a vertex or an edge
+//                    is refused ("meets S only at the vertex (1, 1, 1)")
+//     sphere      -> a circle about the foot of the centre, radius
+//                    sqrt(r^2 - d^2); a tangent plane is refused ("touches
+//                    S at one point")
+//     cylinder    -> square to the axis a circle; parallel to it a rectangle
+//                    (two sides, two cap chords); otherwise an ellipse,
+//                    trimmed by the caps: the whole ellipse, half-ellipse-
+//                    like (one arc, one chord: the log wedge), or two arcs
+//                    and two chords
+//     cone,       -> square to the axis a circle; cutting every generator an
+//     frustum        ellipse, trimmed by the base (and the top); through the
+//                    apex (a frustum's virtual apex) and steeper than the
+//                    generators the triangle (trapezoid) of two generators;
+//                    parallel to a generator a PARABOLA and steeper a
+//                    HYPERBOLA, both refused — only circles and ellipses are
+//                    drawn; through the apex only, or along one generator,
+//                    refused as such
+//     any round solid placed by points, tilted or not, is cut in its own frame
+//
+//   Not drawn (refused where an author could ask): a plane on its own
+//   ("plane: A-B-C"), the line where two planes meet, parabolic and
+//   hyperbolic sections, and nets.
 //   @view: standard | isometric | front | top | side
 //                                                 -> which fixed viewpoint draws the solid. standard
 //                                                    (the default) is in general position; isometric
@@ -403,7 +463,7 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   label: AG                                     -> the TRUE length in space, never the drawn one
 //   given: AG = 10  |  given: angle ABC           -> true lengths and angles in the givens table
 //
-//   "plane A-B-C" is only an operand; a plane is not drawn or named. A
+//   A plane is an operand, and a named plane binds without drawing. A
 //   planar construction (rotate, reflect, a tangent, a circle...) refuses a
 //   point in space, and so do angle marks, ticks, polygons and inline angle
 //   labels ("label: angle ABC") in space — the givens table takes the angle.

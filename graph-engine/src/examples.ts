@@ -575,6 +575,97 @@ label: F top
 label: F height`,
   },
   {
+    // Phase 8: the plane through the centre O square to the space diagonal
+    // A-G cuts the cube in a regular hexagon through six edge midpoints.
+    // Shaded in place, its three sides on the back faces dashed; lifted at
+    // true shape, P on the left and the rest counter-clockwise, each side
+    // sqrt 2 (half a face diagonal of the edge-2 cube).
+    label: 'Cube: the hexagonal section',
+    spec: `@mode: figure
+A = (0, 0, 0)
+B = (2, 0, 0)
+C = (2, 2, 0)
+D = (0, 2, 0)
+E = (0, 0, 2)
+F = (2, 0, 2)
+G = (2, 2, 2)
+H = (0, 2, 2)
+K = solid hull A-B-C-D-E-F-G-H
+O = midpoint A-G
+cut: K by plane through O perpendicular to A-G
+section: K by plane through O perpendicular to A-G vertices PQRSTU
+label: PQ          # sqrt 2`,
+  },
+  {
+    // The regular tetrahedron's square section: the plane through the
+    // midpoints of AB, AC and BD is parallel to BC and AD, which are
+    // perpendicular, so it cuts a square of side 3 (half an edge).
+    label: 'Tetrahedron: the square section',
+    spec: `@mode: figure
+T = solid tetrahedron edge 6 vertices ABCD
+M = midpoint A-B
+N = midpoint A-C
+L = midpoint B-D
+cut: T by plane M-N-L
+section: T by plane M-N-L vertices PQRS
+segment: P-R
+label: PQ          # 3, half of BC
+label: PR          # the diagonal, 3 sqrt 2`,
+  },
+  {
+    // AIME 2007 I #13: a square pyramid with all eight edges 4 (so its height
+    // is 2 sqrt 2), cut by the plane through the midpoints of AE, BC and CD.
+    // The section is a pentagon of area sqrt 80.
+    label: 'Pyramid through midpoints',
+    spec: `@mode: figure
+W = solid pyramid square base 4, height 2*sqrt(2) vertices ABCDE
+M = midpoint A-E
+N = midpoint B-C
+K = midpoint C-D
+cut: W by plane M-N-K
+section: W by plane M-N-K vertices PQRSU`,
+  },
+  {
+    // A cylindrical log cut at 45 degrees through a diameter of its base: the
+    // wedge's face is half an ellipse (semi-axes 3 and 3 sqrt 2), standing on
+    // the base diameter. In place the chord on the base and the back of the
+    // arc are dashed; lifted, the chord PQ is the diameter.
+    label: 'Log wedge',
+    spec: `@mode: figure
+C = solid cylinder radius 3, height 10
+cut: C by plane x - z = 5
+section: C by plane x - z = 5 vertices PQ
+label: PQ          # 6`,
+  },
+  {
+    // A 13-14-15 triangle ABC with O 20 from each vertex, and the sphere of
+    // radius 20 about O through A, B and C. Plane A-B-C cuts the sphere in
+    // the circumcircle of ABC, radius 65/8, and O is 15 sqrt(95)/8 above it.
+    label: 'Sphere through three points',
+    spec: `@mode: figure
+T = solid tetrahedron ABCO with AB = 13, BC = 14, CA = 15, AO = 20, BO = 20, CO = 20
+S = solid sphere center O radius 20
+cut: S by plane A-B-C
+section: S by plane A-B-C
+F = foot O to plane A-B-C
+segment: O-F
+label: OF          # 15 sqrt(95) / 8`,
+  },
+  {
+    // A plane by its equation, named once and used twice: to cut the box and
+    // to drop a perpendicular from the corner F onto it. FK is the distance
+    // from F = (3, 4, 2.5) to x + y + z = 4, which is 5.5 / sqrt 3.
+    label: 'Plane by equation',
+    spec: `@mode: figure
+S = solid prism 8 by 5 by 6 vertices ABCDEFGH
+p = plane x + y + z = 4
+cut: S by plane p
+section: S by plane p
+K = foot F to plane p
+segment: F-K
+label: FK          # 5.5 / sqrt 3`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,

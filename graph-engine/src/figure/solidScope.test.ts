@@ -533,3 +533,11 @@ describe('planes as objects (phase 8, Q2)', () => {
     expect(scope.sectionPlanes.get(5)).toMatchObject({ plane: { kind: 'general', source: 'x + z = 1' } })
   })
 })
+
+describe('what phase 8 does not draw (Q7)', () => {
+  it('refuses the line two planes meet in, saying what intersect takes', () => {
+    const parsed = parseSpec(`${CUBE}\nX = intersect plane A-B-C, plane A-B-E`)
+    const scope = buildSolidFigure(parsed.statements, value)
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/two planes meet in a line, and the line of two planes is not drawn yet/)])
+  })
+})

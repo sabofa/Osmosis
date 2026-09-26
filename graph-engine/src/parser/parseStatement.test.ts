@@ -1085,3 +1085,15 @@ describe('planes as objects (phase 8, Q2)', () => {
     expect(() => parseStatement('F = foot D to plane A-B')).toThrow(/three point names/)
   })
 })
+
+describe('what phase 8 does not draw (Q7)', () => {
+  it('refuses a plane drawn on its own, pointing at cut: and at naming it', () => {
+    for (const line of ['plane: A-B-C', 'plane A-B-C']) {
+      expect(() => parseStatement(line)).toThrow(/A plane is not drawn on its own — it is drawn through the section it cuts/)
+    }
+  })
+
+  it('refuses a net', () => {
+    expect(() => parseStatement('net: S')).toThrow('Nets of solids are not drawn yet (build step 11)')
+  })
+})
