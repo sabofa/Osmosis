@@ -1046,6 +1046,34 @@ primitive. A solid **defined by points** — a tetrahedron on ABCD, a sphere on
 a centre, a cone on an apex and a base centre — is placed by those points and
 inherits their determinism, as a solved triangle does.
 
+##### The default view is not isometric (decided 2026-09-26)
+
+Exact isometric looks along a cube's space diagonal. A cube's front and back
+corners then project to **the same point**, and a regular tetrahedron
+flattens to a rhombus whose altitude lies under an edge. Those are the two
+most common competition solids. Phase 6 found this by looking at the drawings.
+The rectangular-prism examples had hidden it, because 8×5×6 has unequal sides.
+
+**The default camera is a fixed, orthographic view in general position,
+named `standard`.** It looks from azimuth **30°** (measured from +X toward +Y)
+and elevation **25°**, both in the author frame, with author Z drawn vertical,
+at uniform scale 1. `isometric` stays as a named view with its exact
+bytes, and front, top and side are unchanged. Measured at this camera:
+- the closest two unit-cube vertices sit 0.49 apart on the page;
+- every face of a regular tetrahedron stays at least 21° from edge-on;
+- a tetrahedron's altitude projects at least 8.7° away from every edge.
+
+The placement conventions are fixed against **the default camera, not the
+active view**, so switching `@view:` never re-letters or re-orients a solid:
+- **Tetrahedron:** the first base vertex sits 15° round from the camera's
+  azimuth rather than exactly facing it. Facing the viewer exactly puts the
+  apex, the front vertex and the base centroid in one vertical plane with the
+  view, which is the overlap above.
+- **Prism and pyramid lettering, in textbook order:** ABCD run
+  counter-clockwise seen from above. A is the front-left bottom corner, so
+  the front face is ABFE and D is the hidden corner. E–H sit above A–D, with
+  E over A. A pyramid's apex is E.
+
 ##### Revised build order (continues from phase 5)
 
 6. **Construction core** — the z-up author frame; points, segments and
