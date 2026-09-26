@@ -486,6 +486,12 @@ function parseConstructionBody(rhs: string): Construction | null {
     return { kind: 'angleBisector', from, vertex, to }
   }
 
+  // "M = center of S" (phase 9, R1): a sphere solid's centre, as a point in
+  // space. Exactly this shape — one name after "of" — so nothing else an
+  // author writes is read as it.
+  const centerOf = /^center\s+of\s+([a-zA-Z]+)$/.exec(text)
+  if (centerOf) return { kind: 'centerOf', solid: geometryName(centerOf[1], 'sphere whose centre it is') }
+
   const mid = /^midpoint\s+(?:of\s+)?(.+)$/.exec(text)
   if (mid) {
     const [from, to] = parseNamePair(mid[1], 'segment')
@@ -673,6 +679,49 @@ function regularParts(tail: string, keys: string[], form: string, rest: string):
   return [parseExprString(head[1]), parseExprString(head[2]), ...values.map((v) => parseExprString(v![1]))]
 }
 
+// Phase 9, R5 — "sphere center P tangent to plane <any form>", "sphere
+// center P externally tangent to T", "... internally tangent to T". The
+// centre is given and the radius follows from the one thing it touches. Null
+// when the text is not a tangency, so the other sphere forms read it.
+//
+// Refused here, where the words are: a sphere "tangent to T" with no side (a
+// sphere touches another from outside or from inside, and guessing which is
+// how a figure becomes quietly wrong); a plane "externally" tangent; several
+// objects at once, which is a solver (R7); and a tangent sphere with no
+// centre, which is the same solver.
+function parseSphereTangency(tail: string): SolidPrimitive | null {
+  if (!/\btangent\s+to\b/i.test(tail)) return null
+  const form = /^center\s+(\S+)\s+(?:(externally|internally)\s+)?tangent\s+to\s+(.+)$/i.exec(tail)
+  if (!form) {
+    throw new Error(
+      'A sphere by tangency is placed by its centre — write "sphere center P tangent to plane A-B-C" or ' +
+        '"sphere center P externally tangent to T"; a sphere tangent to several objects at once needs a solver, ' +
+        'so place it by its computed centre'
+    )
+  }
+  const center = geometryName(form[1], 'centre of the sphere')
+  const side = form[2]?.toLowerCase() as 'externally' | 'internally' | undefined
+  const target = form[3].trim()
+  if (/\s+and\s+/i.test(target) || splitTopLevelComma(target).length > 1) {
+    throw new Error(
+      `"tangent to ${target}" names more than one object — a sphere is placed by tangency to one object at a time; ` +
+        'several at once needs a solver, so place it by its computed centre and check each tangency with a label'
+    )
+  }
+  const plane = /^plane\s+(.+)$/i.exec(target)
+  if (plane) {
+    if (side) throw new Error(`A plane has no inside — write "tangent to plane ${plane[1].trim()}", without "${side}"`)
+    return { kind: 'sphereTangent', center, to: { kind: 'plane', plane: parsePlaneForm(plane[1], 'plane the sphere is tangent to') } }
+  }
+  const sphere = geometryName(target, 'sphere it is tangent to')
+  if (!side) {
+    throw new Error(
+      `A sphere touches another from outside or from inside — write "externally tangent to ${sphere}" or "internally tangent to ${sphere}"`
+    )
+  }
+  return { kind: 'sphereTangent', center, to: { kind: 'sphere', sphere, side: side === 'externally' ? 'external' : 'internal' } }
+}
+
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
 // Each form names its own numbers. "8 by 5 by 6" is bare because width,
@@ -775,6 +824,8 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'sphere') {
+    const tangent = parseSphereTangency(tail)
+    if (tangent) return tangent
     const placed = /^center\s+(\S+)\s+radius\s+(.+)$/i.exec(tail)
     if (placed) return { kind: 'sphereOn', center: geometryName(placed[1], 'centre of the sphere'), radius: parseExprString(placed[2]) }
     const radius = /^radius\s+(.+)$/i.exec(tail)

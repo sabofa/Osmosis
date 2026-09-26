@@ -110,6 +110,11 @@ export type Construction =
   | { kind: 'secant'; circle: string; from: string; to: string }
   | { kind: 'radiusTo'; circle: string; point: string }
   | { kind: 'diameter'; circle: string; from: string; to: string }
+  // "M = center of S" (phase 9, R1) — the centre of a SPHERE solid, as a
+  // point in space. It exists only in a solid figure: the solid-figure walk
+  // owns it, and the 2D pass refuses it (a circle's centre is the point it
+  // was drawn around, already named).
+  | { kind: 'centerOf'; solid: string }
 
 // --------------------------------------------------------------------------
 // Solids (Geometry v2, phase 5)
@@ -162,6 +167,14 @@ export type SolidPrimitive =
   // the parser, which knows the names). `edges` is as written; the builder
   // reads it by pair, so order and letter order do not matter.
   | { kind: 'tetrahedronEdges'; vertices: [string, string, string, string]; edges: { from: string; to: string; length: Expr }[] }
+  // Phase 9 (R5) — a sphere placed by its centre, its radius following from
+  // a tangency: to a plane (any Q2 form), or externally or internally to
+  // another sphere solid. "sphere center P tangent to plane A-B-C",
+  // "sphere center P externally tangent to T".
+  | { kind: 'sphereTangent'; center: string; to: SphereTangency }
+
+// What a sphere placed by tangency touches (R5).
+export type SphereTangency = { kind: 'plane'; plane: PlaneForm } | { kind: 'sphere'; sphere: string; side: 'external' | 'internal' }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)

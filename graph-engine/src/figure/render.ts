@@ -527,8 +527,11 @@ function hangsOffAxis(spec: SolidSpec, dimension: string): boolean {
 // asked for — the opposite of what an asserting label is for.
 function solidDimensionValue(body: SolidBody, dimension: string, name: string): number {
   // P6 — a solid on named points has no named dimensions; its points name
-  // every length worth measuring.
-  if (body.byPoints) {
+  // every length worth measuring. Except a sphere's radius (phase 9, R2):
+  // however a sphere was placed — by its centre, by tangency, inscribed or
+  // circumscribed — its radius is a named dimension, and no two of its
+  // points name it.
+  if (body.byPoints && body.spec.kind !== 'sphere') {
     throw new Error(
       `"${name}" is built on named points, so it has no "${dimension}" to label — measure between its points instead (e.g. "label: AB")`
     )

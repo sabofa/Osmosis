@@ -1141,3 +1141,61 @@ describe('the Q7 refusals never catch a line the base grammar read (fix round 2)
     })
   }
 })
+
+describe('spheres by tangency, and a sphere\'s centre (phase 9, R5 and R1)', () => {
+  const primitive = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    return s.primitive
+  }
+
+  it('reads a sphere tangent to a plane, in any plane form', () => {
+    expect(primitive('S = solid sphere center P tangent to plane A-B-C')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'plane', plane: { kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' } },
+    })
+    expect(primitive('S = solid sphere center P tangent to plane p')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'plane', plane: { kind: 'named', name: 'p', source: 'p' } },
+    })
+    const tilted = primitive('S = solid sphere center P tangent to plane x + y + z = 3')
+    if (tilted.kind !== 'sphereTangent' || tilted.to.kind !== 'plane') throw new Error('expected a plane tangency')
+    expect(tilted.to.plane.kind).toBe('equation')
+  })
+
+  it('reads a sphere externally or internally tangent to another', () => {
+    expect(primitive('S = solid sphere center P externally tangent to T')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'sphere', sphere: 'T', side: 'external' },
+    })
+    expect(primitive('S = solid sphere center P internally tangent to T')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'sphere', sphere: 'T', side: 'internal' },
+    })
+  })
+
+  it('refuses a tangency it cannot read, saying which forms there are', () => {
+    // Tangent to a sphere is one of two things, and guessing is refused.
+    expect(() => parseStatement('S = solid sphere center P tangent to T')).toThrow(/externally tangent to T" or "internally tangent to T/)
+    // A plane is tangent, full stop.
+    expect(() => parseStatement('S = solid sphere center P externally tangent to plane z = 1')).toThrow(/tangent to plane z = 1/)
+    // Several objects at once is a solver (R7).
+    expect(() => parseStatement('S = solid sphere center P tangent to plane z = 0 and T')).toThrow(/one object at a time/)
+    expect(() => parseStatement('S = solid sphere center P externally tangent to T, U')).toThrow(/one object at a time/)
+    expect(() => parseStatement('S = solid sphere tangent to plane z = 0')).toThrow(/placed by its centre/)
+  })
+
+  it('keeps the sphere forms it had', () => {
+    expect(primitive('O = solid sphere center M radius 5').kind).toBe('sphereOn')
+    expect(primitive('solid: sphere radius 4').kind).toBe('sphere')
+  })
+
+  it('reads "center of S" as a construction binding a point', () => {
+    const s = parseStatement('M = center of S')
+    expect(s).toMatchObject({ kind: 'construction', names: ['M'], body: { kind: 'centerOf', solid: 'S' } })
+  })
+})
