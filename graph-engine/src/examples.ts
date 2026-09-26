@@ -314,34 +314,36 @@ label: QR = 6`,
   },
   {
     // Phase 6: points in space, z up. X runs toward the viewer and left, Y
-    // right, Z up; the camera looks from the (+,+,+) corner, so A is the
+    // right, Z up. Lettered the textbook way (phase 6b): ABCD counter-
+    // clockwise from above from the front-left bottom corner A, EFGH above
+    // them. The camera looks from the (+,+,+) side, so D at the origin is the
     // hidden corner and its three edges are dashed by hand — this cube is
     // points, not a solid, so nothing occludes it.
     label: 'Cube by points',
     spec: `@mode: figure
-A = (0, 0, 0)
-B = (4, 0, 0)
-C = (4, 4, 0)
-D = (0, 4, 0)
-E = (0, 0, 4)
-F = (4, 0, 4)
-G = (4, 4, 4)
-H = (0, 4, 4)
-segment: A-B dashed
-segment: A-D dashed
-segment: A-E dashed
+A = (4, 0, 0)
+B = (4, 4, 0)
+C = (0, 4, 0)
+D = (0, 0, 0)
+E = (4, 0, 4)
+F = (4, 4, 4)
+G = (0, 4, 4)
+H = (0, 0, 4)
+segment: D-A dashed
+segment: D-C dashed
+segment: D-H dashed
+segment: A-B
 segment: B-C
-segment: C-D
+segment: A-E
 segment: B-F
 segment: C-G
-segment: D-H
 segment: E-F
 segment: F-G
 segment: G-H
 segment: H-E
-P = midpoint A-E
-Q = midpoint B-C
-R = midpoint C-D
+P = midpoint D-H
+Q = midpoint A-B
+R = midpoint B-C
 segment: P-Q
 segment: Q-R
 segment: R-P
@@ -363,6 +365,17 @@ T = solid tetrahedron edge 6 vertices ABCD
 F = foot D to plane A-B-C
 segment: D-F       # inside the solid, so dashed
 label: DF          # the height, 6 sqrt(2/3)`,
+  },
+  {
+    // The regular tetrahedron under the standard view (phase 6b): exact
+    // isometric flattened it until this altitude lay under the edge D-A.
+    label: 'Regular tetrahedron and its height',
+    spec: `@mode: figure
+T = solid tetrahedron edge 6 vertices ABCD
+F = foot D to plane A-B-C
+segment: D-F       # the altitude, inside the solid, so dashed
+label: DF          # 6 sqrt(2/3) = 4.899
+label: T edge = 6`,
   },
   {
     label: 'Sphere with a chord',
@@ -394,14 +407,16 @@ label: AX          # a third of AG`,
   },
   {
     // Glass: the cone runs through the cylinder and neither hides the other,
-    // but both hide a line drawn behind them.
+    // but both hide a line drawn behind them. The two lines sit square to the
+    // standard view (azimuth 30), so each is split visible, hidden, visible;
+    // phase 6b turned them 15 degrees with the default camera.
     label: 'Cylinder and cone',
     spec: `@mode: figure
 C = solid cylinder radius 3, height 4
 K = solid cone radius 2, height 16
-(-1.1, -7.4, -4.2) -- (-7.4, -1.1, -4.2)   # behind the cylinder
-P = (-2.1, -6.4, 1.8)
-Q = (-6.4, -2.1, 1.8)
+(-3, -6.9, -4.2) -- (-7.4, 0.9, -4.2)     # behind the cylinder
+P = (-3.7, -5.6, 1.8)
+Q = (-6.7, -0.4, 1.8)
 segment: P-Q       # behind the cone, near its apex
 M = (0, 0, -2)
 N = (0, 0, 2)

@@ -8,11 +8,11 @@ already been tried and failed, and which traps cost real time.
 ## Where things stand
 
 **Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. Working tree clean. **1098 tests passing**,
+`.claude/worktrees/graph-track-1`. Working tree clean. **1126 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-26, after geometry phase 6 (solid-figure construction
-core).*
+*Last updated 2026-09-26, after geometry phase 6b (the standard default view
+and textbook lettering).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -51,12 +51,13 @@ built.
   (roots by bisection, extrema as roots of f′ classified by f″, intersections
   as roots of f−g), typed and distinctly marked, hover snapping, `@labels` /
   `@label-every`, `@step-mode`, chained inequalities.
-- **Track 2 — geometry, phases 1–6.** Construction core (lines/points/circles
+- **Track 2 — geometry, phases 1–6b.** Construction core (lines/points/circles
   as intersectable objects, derived points, triangle solvers, centres with
   their circles); the SVG figure renderer; measures, notation, navigation and
   panels; circle vocabulary and the givens table; solid primitives with
   dimensions and axis-perpendicular sections; points, constructions, true-3D
-  measures and occluded segments in solid figures.
+  measures and occluded segments in solid figures; a `standard` default view
+  in general position and textbook vertex lettering.
 
 ### Not started
 
@@ -77,6 +78,7 @@ shading and boolean regions, and the competition-specific constructions
 | 4 | `ff8580f`..`a98bdc7` | Circle vocabulary (chord, arc, sector, tangent at/from, secant, radius, diameter) and the givens **table** with sections |
 | 5 | `5f09b6d`..`4977327` | Solids: the `solid:` statement, dimension labels, arcs in the edge type, analytic silhouettes, cross-sections |
 | 6 | `2d4ecd4`..`8d4dd68` | Solid figures get a construction core: the z-up author frame, points in space, a solid's vertices as real points, midpoint/divide/centroid/centres/foot/line-meets-plane in space, true-3D `label:`/`given:`, and `segment:` split visible/hidden against every solid (the glass rule) |
+| 6b | `242b04b`, `0f7a892`, then the docs commit | The default view is `standard` (azimuth 30°, elevation 25°, general position), not isometric; placement is fixed against the default camera, never the active view; prisms, pyramids and tetrahedra are lettered in textbook order |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -94,7 +96,9 @@ section: S by plane y = 1 vertices PQRS   # lifted out as a true-shape figure
 ```
 
 Primitives: `prism`, `pyramid`, `tetrahedron`, `cylinder`, `cone`, `sphere`.
-`@view:` selects a named viewpoint; there is no free camera by design.
+`@view:` selects a named viewpoint; there is no free camera by design. **Since
+phase 6b the default is `standard`, not `isometric`** (see "Phase 6b in
+detail").
 
 **The two decisions worth not re-litigating:**
 
@@ -188,12 +192,48 @@ prism edge can never tell true from projected. The repaired tests measure a
 tetrahedron edge and a section's diagonal and right angle instead. The rule
 stands: **never test true-vs-projected with an axis-parallel segment.**
 
-**A prism's vertex lettering runs clockwise seen from above.** Phase 5's
-`labelOrder` puts A at the hidden (-,-,-) corner and runs ABCD clockwise in
-the author's view from +Z, where a textbook letters the base
-counter-clockwise from a front corner. The "Cube by points" example letters
-its own points the textbook way; the two conventions now sit side by side.
-Changing `labelOrder` changes every lettered prism, so it was left alone.
+~~**A prism's vertex lettering runs clockwise seen from above.**~~ **Changed
+in phase 6b**: prisms, pyramids and tetrahedra are lettered in textbook order
+now; see below.
+
+### Phase 6b in detail (the default view and lettering)
+
+**The default view is `standard`, not isometric (V1).** Exact isometric looks
+along a cube's space diagonal: a cube's front and back corners project to the
+same point, and a regular tetrahedron flattens until its altitude lies under
+an edge. `standard` is orthographic, from author azimuth 30° (from +X toward
++Y) and elevation 25°, author Z drawn page-up, scale 1, and it is built from
+its frame (`orthographicCamera` in `project3d.ts`, converted through
+`authorFrame.ts`). `DEFAULT_VIEW` / `DEFAULT_CAMERA` name it; `@view` defaults
+to it; `projectSolid` and `renderSolidFigure` default to it. `isometric`,
+`front`, `top` and `side` are unchanged, and `@view: isometric` draws
+byte-for-byte what the old default drew (the S1 digests now pin it by name).
+Measured: unit-cube vertices at least 0.49 apart on the page, tetrahedron
+faces at least 21.2° from edge-on, its altitude at least 8.7° off every apex
+edge.
+
+**Placement follows the default camera, never the active view (V2).** The
+tetrahedron's first base vertex sits 15° round from the default camera's
+azimuth (`BASE_START_ANGLE = baseStartAngle(DEFAULT_CAMERA)`), which is the
+45° phase 5 used, so the tetrahedron did not move; the camera did. Facing the
+viewer exactly puts apex, front vertex and base centroid in one vertical
+plane with the view: that was the overlap. The dimension edges were re-chosen
+for `standard` and came out the same (a prism's nearest bottom corner is
+unchanged). Switching `@view:` never re-letters, re-orients or re-chooses a
+dimension edge; a render test pins vertex positions under three views.
+
+**Textbook lettering (V3).** A prism's ABCD run counter-clockwise seen from
+above from A, the front-left bottom corner (author largest X, smallest Y), so
+the front face is ABFE, D is the hidden corner, E–H sit above A–D with E over
+A, and AG is the *long* diagonal. A square pyramid's base is lettered the same
+way, apex E. A tetrahedron's A is its first base vertex, B and C follow
+counter-clockwise from above, D is the apex. It all lives in `labelOrder`.
+
+**True-vs-projected, revisited.** `standard` does not draw axis-parallel
+segments at true length, but AG, the long diagonal, draws within 0.05 of its
+true length under it. The rule stands and gains a corollary: **pick a segment
+the camera visibly foreshortens**, and check that it does, before using it to
+tell true from projected.
 
 ---
 
@@ -301,7 +341,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1098 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1126 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
@@ -376,7 +416,17 @@ draws. It caught three of five new examples on its first run.
 
 If you add engine capability, add an example in `graph-engine/src/examples.ts`.
 
-### 5. The commit trailer is a fixed string
+### 5. Exact isometric is degenerate for a cube, and the examples hid it
+
+Phase 5 shipped isometric as the default and every example looked right,
+because every example was an 8×5×6 box: unequal sides move the far corner off
+the near one. A cube puts them on **one point** (isometric looks along its
+space diagonal), and a regular tetrahedron's altitude vanishes under an edge.
+It took phase 6's "Cube by points" example to show it, by looking. **Test a
+projection on the symmetric solids** (cube, regular tetrahedron), the ones
+competition problems use, not only on a convenient box.
+
+### 6. The commit trailer is a fixed string
 
 Every commit body ends with exactly:
 
@@ -513,16 +563,16 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    (latent — nothing emits the conic kinds); `x = f(y)` gets no feature points;
    tangencies are not detected by intersection finding (sign-change based), and
    **track 7's "show me where these cross" will inherit that silent miss**.
-9. **Phase 6: the default camera and prism lettering — decision pending with
-   the user.** The default isometric camera is degenerate for a cube: the
-   (+,+,+) corner and its opposite project to the same point, so A and G
-   coincide in the "Cube by points" example. It also flattens a regular
-   tetrahedron to a rhombus, so the D–F foot segment in "Foot of a
-   perpendicular" lies under edge A–D. Bundled with the prism vertex
-   lettering (phase 5's `labelOrder` runs ABCD clockwise seen from above, A
-   at the hidden corner; see "Phase 6 in detail"). Neither the camera nor the
-   lettering was changed in phase 6: every lettered solid's bytes depend on
-   both, so they wait for one ruling.
+9. ~~**Phase 6: the default camera and prism lettering.**~~ **Closed in phase
+   6b.** Decided with the user: a new `standard` default camera in general
+   position (azimuth 30°, elevation 25°), `isometric` kept by name with its
+   bytes, placement fixed against the default camera rather than the active
+   view (the tetrahedron's first vertex 15° off it), and textbook lettering
+   for prisms, pyramids and tetrahedra. See "Phase 6b in detail". The "Cube
+   by points" example is re-lettered with D the hidden corner, "Box diagonal"
+   draws AG long, "Cylinder and cone" turned its two lines 15° with the
+   camera, and "Regular tetrahedron and its height" shows the altitude clear
+   of every edge.
 
 ---
 
