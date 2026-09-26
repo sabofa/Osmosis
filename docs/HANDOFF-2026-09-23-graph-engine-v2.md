@@ -385,6 +385,28 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    occlusion *between* solids, which the convex per-solid rule does not do,
    and which is why the spec pre-constrained them to four arrangements rather
    than allowing general boolean modelling.
+
+   **How far this is from AIME, measured rather than guessed.** The solids
+   path currently draws one solid, an axis-perpendicular cut, dimension
+   labels and a lifted section. Competition 3D mostly asks for what is
+   missing: a sphere inscribed in a cone or a cube in a sphere (composites),
+   a plane through the midpoints of edges (oblique sections — the regular
+   tetrahedron's square cross-section is the canonical example and cannot be
+   drawn), shortest-path-over-the-surface problems (nets), and skew lines and
+   dihedral angles (no vocabulary at all). What exists is solid AMC 10/12
+   early-to-mid territory. Oblique sections are probably the highest value
+   per unit of work of the three, since the machinery already solves
+   plane ∩ solid and only the plane's generality is restricted.
+
+8. **Solid vertex names are drawn but not measurable.** `S = solid prism
+   8 by 6 by 10 vertices ABCDEFGH` labels the drawing, but `label: AB` then
+   fails with *"Unknown point A"*, while `label: PQ` on a **lifted section's**
+   vertices works. Plausibly deliberate — a solid's vertices are 3D, so the
+   measure would be the true distance rather than the projected one, and the
+   dimension form (`label: S width`) exists for that — but it is asymmetric
+   and surprising immediately after naming them. Either register them with
+   true-3D measures, or reject with a message that says why and points at the
+   dimension form.
 8. Minor, recorded: intersections have no secondary sort key;
    `conic-vertex`/`local-max` and `focus`/`intersection` share marker shapes
    (latent — nothing emits the conic kinds); `x = f(y)` gets no feature points;
