@@ -68,6 +68,9 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   // So it infers `figure`, exactly as a polygon does — and it must not reach
   // isThreeD, which routes real depth to the plot renderer.
   'solid',
+  // A cross-section is a plane figure either way: shaded on the projected
+  // solid, or lifted out as ordinary 2D geometry.
+  'crossSection',
 ])
 
 // Which renderer a spec gets.

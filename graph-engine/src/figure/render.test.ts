@@ -1484,3 +1484,117 @@ describe('curved solids in the figure', () => {
     }
   })
 })
+
+describe('cross-sections', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+
+  it('shades a cut in place, behind the solid it cuts', () => {
+    const svg = render(`${PRISM}\ncut: S by plane y = 1`)
+    expect(countTags(layer(svg, 'regions'), 'polygon')).toBe(1)
+    // E1 — a fill is a backdrop. A cut drawn over the solid's own lines would
+    // hide the thing it is a section OF.
+    expect(svg.indexOf('data-layer="regions"')).toBeLessThan(svg.indexOf('data-layer="primary"'))
+    // The solid is still all there: twelve edges, none of them swallowed.
+    expect(countTags(layer(svg, 'primary'), 'line') + countTags(layer(svg, 'auxiliary'), 'line')).toBe(12)
+  })
+
+  it('shades a cut through a cylinder as one closed ellipse, not two arcs', () => {
+    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 8\ncut: C by plane y = 1')
+    expect(countTags(layer(svg, 'regions'), 'ellipse')).toBe(1)
+    // Two arc paths would each close through their own chord and paint a seam
+    // down the middle of the fill.
+    expect(countTags(layer(svg, 'regions'), 'path')).toBe(0)
+  })
+
+  it('lifts a section out as an ORDINARY polygon, beside the solid', () => {
+    const svg = render(`${PRISM}\nsection: S by plane y = 1`)
+    // It is not a shaded face: it is a plane figure, drawn by the same code
+    // that draws every other polygon.
+    expect(layer(svg, 'regions')).toBe('')
+    // Four sides of the section plus twelve edges of the solid.
+    expect(countTags(layer(svg, 'primary'), 'line') + countTags(layer(svg, 'auxiliary'), 'line')).toBe(16)
+  })
+
+  it('places the lifted section clear of the solid, never over it', () => {
+    const svg = render(`${PRISM}
+section: S by plane y = 1 vertices PQRS`)
+    // The solid's own edges name themselves "edge-i-j"; the lifted section's
+    // vertices are the only dots in the figure.
+    const solidRight = Math.max(
+      ...[...svg.matchAll(/<line x1="([^"]*)" y1="[^"]*" x2="([^"]*)"[^>]*data-object="edge-/g)].flatMap((m) => [
+        Number(m[1]),
+        Number(m[2]),
+      ])
+    )
+    const sectionLeft = Math.min(...[...layer(svg, 'points').matchAll(/<circle cx="([^"]*)"/g)].map((m) => Number(m[1])))
+    expect(Number.isFinite(solidRight)).toBe(true)
+    expect(Number.isFinite(sectionLeft)).toBe(true)
+    // A section lifted where it lies would overlap the drawing it came from,
+    // and the two are different pictures of different things.
+    expect(sectionLeft).toBeGreaterThan(solidRight)
+  })
+
+  // ---------------------------------------------------------------------
+  // H5 — the integration test
+  // ---------------------------------------------------------------------
+
+  it('carries a measure label on a lifted section through the NORMAL 2D path', () => {
+    // The section of an 8-by-5-by-6 prism at y = 1 is an 8-by-6 rectangle.
+    // Its vertices are named, registered as ordinary points, and measured by
+    // the same `label:` that measures any other segment — which is the whole
+    // of H5. If the lifted section went through a parallel pipeline inside
+    // the 3D layer, none of this line would exist.
+    const spec = `${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ = 8\nlabel: QR = 6`
+    expect(result(spec).errors).toEqual([])
+    const svg = render(spec)
+    expect(layer(svg, 'labels')).toContain('>8</text>')
+    expect(layer(svg, 'labels')).toContain('>6</text>')
+    for (const name of ['P', 'Q', 'R', 'S']) expect(layer(svg, 'labels')).toContain(`>${name}</text>`)
+  })
+
+  it('asserts that measure against the TRUE shape, not the projection', () => {
+    // PQ is 8 in the section's own plane. Under the isometric camera the
+    // corresponding projected edge is 8*cos30 = 6.93, so a section that
+    // handed back projected coordinates would fail this and pass "= 6.93".
+    const wrong = result(`${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ = 6.93`).errors
+    expect(wrong).toHaveLength(1)
+    expect(wrong[0].message).toMatch(/PQ/)
+    expect(result(`${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ = 8`).errors).toEqual([])
+  })
+
+  it('takes notation, marks and the givens table on a lifted section too', () => {
+    // Everything the 2D path offers, for free, because the section IS 2D.
+    const svg = render(
+      `${PRISM}\nsection: S by plane y = 1 vertices PQRS\ntick: P-Q\nright-angle: S-P-Q\ngiven: PQ = 8\nfind: QR`
+    )
+    expect(layer(svg, 'marks')).not.toBe('')
+    expect(svg).toContain('data-object="givens"')
+  })
+
+  it('fails legibly when the plane misses the solid', () => {
+    const errors = result(`${PRISM}\nsection: S by plane y = 9`).errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].message).toMatch(/does not cut "S" — it misses the solid entirely/)
+  })
+
+  it('refuses to name the vertices of a circular section', () => {
+    const errors = result('@mode: figure\nC = solid cylinder radius 3, height 8\nsection: C by plane y = 1 vertices PQR').errors
+    expect(errors[0].message).toMatch(/is a circle, which has no vertices to name/)
+  })
+
+  it('refuses a vertex list that does not match the section', () => {
+    const errors = result(`${PRISM}\nsection: S by plane y = 1 vertices PQR`).errors
+    expect(errors[0].message).toMatch(/has 4 vertices, but 3 names were given/)
+  })
+
+  it('renders a cut and a section byte-identically twice', () => {
+    for (const spec of [`${PRISM}\ncut: S by plane y = 1`, `${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ`]) {
+      expect(render(spec)).toBe(render(spec))
+    }
+  })
+})

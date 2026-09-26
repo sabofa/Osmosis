@@ -542,6 +542,44 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   throw new Error(`Unknown solid "${head}" — the primitives are ${SOLID_PRIMITIVE_NAMES.join(', ')}`)
 }
 
+// "cut: S by plane z = 3" / "section: S by plane z = 3 vertices PQRS".
+//
+// The plane is written the way a problem writes it — an equation — rather
+// than as a normal and an offset, because "the plane z = 3" is the sentence
+// and a normal vector is an implementation.
+function parseCrossSection(text: string, lift: boolean): StatementShape {
+  const keyword = lift ? 'section' : 'cut'
+  let rest = text.trim()
+  let vertices: string[] = []
+  const clause = /\s+vertices\s+(\S+)\s*$/i.exec(rest)
+  if (clause) {
+    if (!lift) {
+      throw new Error(
+        'A "cut:" is drawn on the solid, in projection, where lengths are foreshortened — ' +
+          'use "section:" to lift it out at true shape and name its vertices'
+      )
+    }
+    const names = [...clause[1].trim()]
+    if (names.length < 3 || names.some((n) => !/^[a-zA-Z]$/.test(n))) {
+      throw new Error(`Expected "vertices PQRS" — a run of single-letter names, one per vertex — got "${clause[1]}"`)
+    }
+    if (new Set(names).size !== names.length) throw new Error(`Vertex names must be distinct, got "${clause[1]}"`)
+    vertices = names
+    rest = rest.slice(0, clause.index).trim()
+  }
+
+  const shape = /^([a-zA-Z]+)\s+by\s+plane\s+([xyz])\s*=\s*(.+)$/i.exec(rest)
+  if (!shape) throw new Error(`Expected "${keyword}: <solid> by plane <x|y|z> = <value>", got "${rest}"`)
+  return {
+    kind: 'crossSection',
+    solid: geometryName(shape[1], `solid the ${keyword} applies to`),
+    lift,
+    axis: shape[2].toLowerCase() as 'x' | 'y' | 'z',
+    at: parseExprString(shape[3]),
+    vertices,
+  }
+}
+
 // The body of a solid statement: the primitive, plus an optional trailing
 // "vertices ABCD" clause naming the projected vertices. `name` comes from the
 // bound form ("S = solid ...") and is null for the drawn-only "solid: ..." one.
@@ -786,6 +824,12 @@ function parseStatementCore(rawLine: string): StatementShape {
   // A solid: "solid: prism 8 by 5 by 6". The bound form, "S = solid prism
   // 8 by 5 by 6", is handled with the other "=" statements below.
   if (line.startsWith('solid:')) return parseSolidBody(line.slice('solid:'.length), null)
+
+  // The two forms of a cross-section. Checked before the generic "=" handling
+  // below, which would otherwise read "cut: S by plane z = 3" as an implicit
+  // curve.
+  if (line.startsWith('cut:')) return parseCrossSection(line.slice('cut:'.length), false)
+  if (line.startsWith('section:')) return parseCrossSection(line.slice('section:'.length), true)
 
   // Solved triangle: "triangle ABC: AB = 8, angle A = 90, AC = 6". Checked
   // before the generic "=" handling below, since the measurement list

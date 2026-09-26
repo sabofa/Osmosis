@@ -394,6 +394,14 @@ export type StatementShape =
   // the projected vertices in the solid's own labelling order, and is empty
   // when the author named none.
   | { kind: 'solid'; name: string | null; primitive: SolidPrimitive; vertices: string[] }
+  // "cut: S by plane z = 3" and "section: S by plane z = 3 vertices PQRS".
+  //
+  // Two forms of one cut, and the difference is what a reader is being shown.
+  // `cut` shades it ON the solid, in projection, where lengths are
+  // foreshortened. `section` lifts it out as a TRUE-SHAPE plane figure, which
+  // is ordinary 2D geometry and carries measures and labels through the
+  // normal path (H5) — which is why only that form can name its vertices.
+  | { kind: 'crossSection'; solid: string; lift: boolean; axis: 'x' | 'y' | 'z'; at: Expr; vertices: string[] }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the
   // canonical a/b/c slots, since the parser knows the vertex names and can

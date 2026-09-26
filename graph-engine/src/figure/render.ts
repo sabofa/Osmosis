@@ -38,7 +38,21 @@ import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasu
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
 import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge } from './project3d'
 import { buildSolid, solidDimensions, solidDimensionSegment, solidOutline, type SolidBody, type SolidSpec } from './solids'
-import { fmt, svgArc, svgCircle, svgCircularSegment, svgLine, svgPolyline, svgSector, svgText, type SvgAttrs } from './svg'
+import { liftOffset, planeRadii, sectionOf, trueShape, type SectionPlane } from './crossSection'
+import { projectCircle, type ProjectedCircle } from './silhouette'
+import {
+  fmt,
+  svgArc,
+  svgCircle,
+  svgCircularSegment,
+  svgEllipse,
+  svgLine,
+  svgPolygon,
+  svgPolyline,
+  svgSector,
+  svgText,
+  type SvgAttrs,
+} from './svg'
 
 // The figure renderer: statements in, one SVG document out.
 //
@@ -116,6 +130,15 @@ type FigureItem =
   // length of the PROJECTED edge, which is a fact about the camera and not
   // about the solid. Dimensions are named instead (see solidDimensions).
   | { kind: 'solidVertex'; id: Identity; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
+  // A cross-section shaded ON the projected solid. The lifted form is not
+  // here at all: it comes back as an ordinary polygon or circle, which is the
+  // whole of H5.
+  | {
+      kind: 'sectionFace'
+      id: Identity
+      outline: { kind: 'polygon'; vertices: Vec2[] } | { kind: 'ellipse'; circle: ProjectedCircle }
+      color: string | null
+    }
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
   | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
   | { kind: 'rightAngleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; color: string | null }
@@ -612,6 +635,82 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           }
           break
         }
+        case 'crossSection': {
+          const body = resolveSolid(statement.solid)
+          const plane: SectionPlane = { axis: statement.axis, at: value(statement.at) }
+          const section = sectionOf(body, plane, statement.solid)
+          const camera = cameraFor(config.view)
+
+          if (!statement.lift) {
+            // Shaded in place: the section drawn where it sits, through the
+            // same camera as the solid it cuts.
+            items.push({
+              kind: 'sectionFace',
+              id: { statement: index, object: statement.solid },
+              outline:
+                section.kind === 'polygon'
+                  ? { kind: 'polygon', vertices: section.points.map((point) => camera.project(point)) }
+                  : {
+                      kind: 'ellipse',
+                      circle: projectCircle(camera, section.center, ...planeRadii(plane, section.radius)),
+                    },
+              color: statement.color,
+            })
+            break
+          }
+
+          // **H5.** Lifted, the section is a plane figure and nothing more, so
+          // it becomes the same polygon and circle items a 2D statement
+          // produces — and gets measures, notation and label layout for free.
+          const shape = trueShape(section, plane)
+          const solidBounds = boundsOf(solidOutline(body, camera).flatMap(edgeExtremes))
+          const shapeBounds = boundsOf(
+            shape.kind === 'polygon'
+              ? shape.vertices
+              : [
+                  { x: shape.center.x - shape.radius, y: shape.center.y - shape.radius },
+                  { x: shape.center.x + shape.radius, y: shape.center.y + shape.radius },
+                ]
+          )
+          const offset = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds) : { x: 0, y: 0 }
+          const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
+
+          if (shape.kind === 'circle') {
+            if (statement.vertices.length > 0) {
+              throw new Error(`The section of "${statement.solid}" by ${plane.axis} = ${plane.at} is a circle, which has no vertices to name`)
+            }
+            items.push({ kind: 'circle', id: { statement: index, object: statement.solid }, center: move(shape.center), radius: shape.radius, color: statement.color })
+            break
+          }
+
+          const vertices = shape.vertices.map(move)
+          items.push({ kind: 'polygon', id: { statement: index, object: statement.solid }, vertices, color: statement.color })
+          if (statement.vertices.length > 0) {
+            if (statement.vertices.length !== vertices.length) {
+              throw new Error(
+                `The section of "${statement.solid}" by ${plane.axis} = ${plane.at} has ${vertices.length} vertices, ` +
+                  `but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
+              )
+            }
+            const centre = centroidOf(vertices)
+            for (let v = 0; v < vertices.length; v++) {
+              // Registered as ORDINARY named points. A lifted section is at
+              // true size, so "label: PQ" measures the real edge — which is
+              // exactly what a projected solid's vertices could never offer,
+              // and the reason they are not registered.
+              namedPoints.set(statement.vertices[v], vertices[v])
+              items.push({
+                kind: 'point',
+                id: { statement: index, object: statement.vertices[v] },
+                at: vertices[v],
+                label: statement.vertices[v],
+                prefer: awayFrom(vertices[v], centre),
+                color: statement.color,
+              })
+            }
+          }
+          break
+        }
         case 'construction': {
           for (const built of constructions.geometryByStatement.get(index) ?? []) {
             items.push(...geometryItems(built.object, built.name, { statement: index, object: built.name }, statement.color))
@@ -821,6 +920,16 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
         break
       case 'solidVertex':
         points.push(item.at)
+        break
+      case 'sectionFace':
+        if (item.outline.kind === 'polygon') points.push(...item.outline.vertices)
+        else {
+          const { center, rx, ry } = item.outline.circle
+          // The ellipse's own bounding box, which is never smaller than the
+          // section and never bigger than its axes allow.
+          const half = Math.max(rx, ry)
+          points.push({ x: center.x - half, y: center.y - half }, { x: center.x + half, y: center.y + half })
+        }
         break
       case 'arc':
         points.push(...arcExtremes(item.arc))
@@ -1112,6 +1221,9 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
         const points = edgeExtremes(edge).map((point) => projection.toView(point))
         for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
       }
+    } else if (item.kind === 'sectionFace' && item.outline.kind === 'polygon') {
+      const vertices = item.outline.vertices.map((v) => projection.toView(v))
+      for (let i = 0; i < vertices.length; i++) obstacles.segments.push([vertices[i], vertices[(i + 1) % vertices.length]])
     } else if (item.kind === 'polygon') {
       const vertices = item.vertices.map((v) => projection.toView(v))
       obstacles.polygons.push(vertices)
@@ -1289,6 +1401,28 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
     case 'solidVertex':
       // Emitted with the other labels, after the layout has placed them.
       break
+    case 'sectionFace': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      const fill: SvgAttrs = {
+        fill: theme.region,
+        'fill-opacity': REGION_OPACITY,
+        stroke,
+        'stroke-width': STROKE_PRIMARY,
+        ...identity(item.id),
+      }
+      // E1 — a fill is a backdrop, so the shaded face goes in the regions
+      // layer, behind every edge of the solid it cuts. A cut drawn over the
+      // solid's own lines would hide the thing it is a section OF.
+      if (item.outline.kind === 'polygon') {
+        layers.regions.push(svgPolygon(item.outline.vertices.map(to), fill))
+        break
+      }
+      const circle = item.outline.circle
+      layers.regions.push(
+        svgEllipse(to(circle.center), circle.rx * projection.scale, circle.ry * projection.scale, -circle.rotation, fill)
+      )
+      break
+    }
     case 'polygon': {
       const vertices = item.vertices.map(to)
       const stroke = strokeColor(item.color, palette.axis, palette)

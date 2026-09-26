@@ -222,6 +222,18 @@ export function svgCircularSegment(center: Vec2, radius: number, startAngle: num
   return `<path${attrs({ d, ...style })}/>`
 }
 
+// A whole ellipse, as a shape rather than as a pair of arcs.
+//
+// A section shaded in place is a FILLED region, and a fill wants one closed
+// element: two arc paths would each be closed through their own chord and
+// paint a seam down the middle. The rotation is applied about the centre, so
+// `cx`/`cy` stay the readable numbers they are everywhere else in this file.
+export function svgEllipse(center: Vec2, rx: number, ry: number, rotation: number, style: SvgAttrs): string {
+  const degrees = (rotation * 180) / Math.PI
+  const transform = Math.abs(degrees) < 1e-9 ? null : `rotate(${fmt(degrees)} ${fmt(center.x)} ${fmt(center.y)})`
+  return `<ellipse${attrs({ cx: center.x, cy: center.y, rx, ry, transform, ...style })}/>`
+}
+
 export function svgText(at: Vec2, text: string, style: SvgAttrs): string {
   return `<text${attrs({ x: at.x, y: at.y, ...style })}>${svgEscape(text)}</text>`
 }
