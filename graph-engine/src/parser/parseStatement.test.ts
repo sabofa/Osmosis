@@ -1118,3 +1118,26 @@ describe('the Q7 refusals never catch an assignment (fix round 1)', () => {
     expect(() => parseStatement('net S')).toThrow(/Nets of solids are not drawn yet/)
   })
 })
+
+describe('the Q7 refusals never catch a line the base grammar read (fix round 2)', () => {
+  // Each line below parsed at the base commit 27c1ff9 — as an implicit curve
+  // or a region over named constants "plane" and "net" — and the expected
+  // statements are that commit's own output, verbatim. Only "plane: ...",
+  // "net: ..." and a bare "plane <operand>" / "net <solid>" with no relation
+  // in it (all "Unrecognized statement" at base) are refused.
+  const BASE: [string, unknown][] = [
+    ["net + x = y", {"kind": "implicit", "left": {"kind": "binary", "op": "+", "left": {"kind": "var", "name": "net"}, "right": {"kind": "var", "name": "x"}}, "right": {"kind": "var", "name": "y"}, "color": null, "statementName": null}],
+    ["net + 1 = y", {"kind": "implicit", "left": {"kind": "binary", "op": "+", "left": {"kind": "var", "name": "net"}, "right": {"kind": "num", "value": 1}}, "right": {"kind": "var", "name": "y"}, "color": null, "statementName": null}],
+    ["plane * x = y", {"kind": "implicit", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "plane"}, "right": {"kind": "var", "name": "x"}}, "right": {"kind": "var", "name": "y"}, "color": null, "statementName": null}],
+    ["plane - y = 0", {"kind": "implicit", "left": {"kind": "binary", "op": "-", "left": {"kind": "var", "name": "plane"}, "right": {"kind": "var", "name": "y"}}, "right": {"kind": "num", "value": 0}, "color": null, "statementName": null}],
+    ["net (x) = x^2", {"kind": "implicit", "left": {"kind": "call", "name": "net", "args": [{"kind": "var", "name": "x"}]}, "right": {"kind": "binary", "op": "^", "left": {"kind": "var", "name": "x"}, "right": {"kind": "num", "value": 2}}, "color": null, "statementName": null}],
+    ["plane (t) = t + 1", {"kind": "implicit", "left": {"kind": "call", "name": "plane", "args": [{"kind": "var", "name": "t"}]}, "right": {"kind": "binary", "op": "+", "left": {"kind": "var", "name": "t"}, "right": {"kind": "num", "value": 1}}, "color": null, "statementName": null}],
+    ["plane x = 1", {"kind": "implicit", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "plane"}, "right": {"kind": "var", "name": "x"}}, "right": {"kind": "num", "value": 1}, "color": null, "statementName": null}],
+    ["net x > y", {"kind": "region", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "net"}, "right": {"kind": "var", "name": "x"}}, "op": ">", "right": {"kind": "var", "name": "y"}, "color": null, "statementName": null}],
+  ]
+  for (const [line, statement] of BASE) {
+    it(`parses "${line}" exactly as the base commit did`, () => {
+      expect(parseStatement(line)).toEqual(statement)
+    })
+  }
+})

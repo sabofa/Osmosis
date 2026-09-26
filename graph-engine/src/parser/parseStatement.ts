@@ -1134,15 +1134,19 @@ function parseStatementCore(rawLine: string): StatementShape {
   // Q7 (phase 8) — what an author might ask for that is not drawn: a plane on
   // its own (a plane is drawn only through the section it cuts), and a net
   // (build step 11). Refused in words, rather than as an unrecognised line.
-  // Never an assignment: "plane = 2" and "net = 5" are named constants, as
-  // they always were (the lookahead refuses only a line that does not go on
-  // to "=").
-  if (/^plane(?!\s*=)(:|\s)/.test(line)) {
+  // They catch ONLY those shapes (fix rounds 1 and 2): "plane:" / "net:", or
+  // "plane <operand>" / "net <solid>" — the keyword, a space, a letter — on a
+  // line with no relation in it (no "=", "<" or ">"). Every such line was an
+  // "Unrecognized statement" before phase 8. Anything else starting with the
+  // word — an assignment ("plane = 2"), an operator ("net + x = y"), a call
+  // ("net (x) = x^2"), an implicit product ("plane x = 1", "net x > y") —
+  // falls through to the grammar below exactly as it always did.
+  if (/^plane(:|\s+[a-zA-Z][^=<>]*$)/.test(line)) {
     throw new Error(
       'A plane is not drawn on its own — it is drawn through the section it cuts ("cut: S by plane A-B-C"), and named with "p = plane A-B-C"'
     )
   }
-  if (/^net(?!\s*=)(:|\s)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
+  if (/^net(:|\s+[a-zA-Z][^=<>]*$)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit
