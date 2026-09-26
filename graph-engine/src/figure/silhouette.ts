@@ -1,5 +1,6 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
+import { dot3 } from './construct3d'
 import type { Camera, ProjectedArc, ProjectedEdge, ProjectedSegment, Vec3 } from './project3d'
 
 // Analytic silhouettes for the curved primitives (H2).
@@ -16,10 +17,6 @@ import type { Camera, ProjectedArc, ProjectedEdge, ProjectedSegment, Vec3 } from
 // zooms, which the figure view now lets them do; it generates dozens of
 // spurious facet edges that then have to be suppressed; and it discards the
 // crispness that chose SVG in the first place.
-
-function dot3(a: Vec3, b: Vec3): number {
-  return a.x * b.x + a.y * b.y + a.z * b.z
-}
 
 function cross2(a: Vec2, b: Vec2): number {
   return a.x * b.y - a.y * b.x

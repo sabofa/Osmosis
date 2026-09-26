@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { authorPlane, authorToWorld, describeAuthorPlane, worldToAuthor } from './authorFrame'
+import { cross3 } from './construct3d'
 import { ISOMETRIC_CAMERA, type Vec3 } from './project3d'
 import { solidDimensionSegment } from './solids'
 
@@ -13,10 +14,6 @@ const SAMPLES: Vec3[] = [
   { x: 0, y: -1, z: 0 },
   { x: 1e-3, y: 1e3, z: -2.75 },
 ]
-
-function cross(a: Vec3, b: Vec3): Vec3 {
-  return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }
-}
 
 function det3(c0: Vec3, c1: Vec3, c2: Vec3): number {
   // Columns c0, c1, c2: the images of the author basis vectors.
@@ -43,8 +40,8 @@ describe('the author frame (S1)', () => {
     // every drawing; the cross product is what tells them apart.
     for (const a of SAMPLES) {
       for (const b of SAMPLES) {
-        const lhs = authorToWorld(cross(a, b))
-        const rhs = cross(authorToWorld(a), authorToWorld(b))
+        const lhs = authorToWorld(cross3(a, b))
+        const rhs = cross3(authorToWorld(a), authorToWorld(b))
         expect(lhs.x).toBeCloseTo(rhs.x, 9)
         expect(lhs.y).toBeCloseTo(rhs.y, 9)
         expect(lhs.z).toBeCloseTo(rhs.z, 9)
