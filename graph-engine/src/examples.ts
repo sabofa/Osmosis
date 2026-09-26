@@ -666,6 +666,75 @@ segment: F-K
 label: FK          # 5.5 / sqrt 3`,
   },
   {
+    // Phase 9: AIME 2024 I, problem 14. Every face has area 6 sqrt 21 and
+    // V = 160/3, so the inradius is 3V / (4 * 6 sqrt 21) = 20 sqrt 21 / 63
+    // (1.455). The insphere is drawn through the tetrahedron (the glass rule)
+    // and its centre named; the radius's reference is dashed inside it.
+    label: 'AIME tetrahedron and its insphere',
+    spec: `@mode: figure
+T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)
+I = solid insphere of T
+P = center of I
+label: I radius    # 20 sqrt 21 / 63`,
+  },
+  {
+    // A cube of edge 4 between its insphere (radius 2, touching each face at
+    // its centre) and its circumsphere (radius 2 sqrt 3, through all eight
+    // corners): MG runs from the common centre to a corner.
+    label: 'Cube between two spheres',
+    spec: `@mode: figure
+S = solid cube edge 4 vertices ABCDEFGH
+I = solid insphere of S
+O = solid circumsphere of S
+M = center of O
+segment: M-G
+label: I radius
+label: MG          # the circumradius, 2 sqrt 3`,
+  },
+  {
+    // R = 3, H = 4: the slant is 5, so the insphere's radius is the axial
+    // triangle's inradius, 3 * 4 / (3 + 5) = 1.5, touching the base at its
+    // centre.
+    label: 'Sphere in a cone',
+    spec: `@mode: figure
+K = solid cone radius 3, height 4
+I = solid insphere of K
+label: I radius
+label: K height`,
+  },
+  {
+    // A frustum has an insphere only when its height is 2 sqrt(r1 r2):
+    // here 2 sqrt(4 * 1) = 4, so the sphere of radius 2 touches both rims'
+    // discs and the side.
+    label: 'Frustum with an insphere',
+    spec: `@mode: figure
+F = solid frustum radius 4, top 1, height 4
+I = solid insphere of F
+label: I radius
+label: F height`,
+  },
+  {
+    // Spheres placed by tangency: S rests on the floor z = 0 (radius 2, the
+    // distance from P), and T is externally tangent to S, so the distance
+    // between their centres, PQ = sqrt 18, is the sum of the radii: T's is
+    // sqrt 18 - 2. The floor is outlined by four segments; a plane is never
+    // drawn on its own.
+    label: 'Spheres by tangency',
+    spec: `@mode: figure
+P = (0, 0, 2)
+S = solid sphere center P tangent to plane z = 0
+Q = (4, 1, 3)
+T = solid sphere center Q externally tangent to S
+segment: P-Q
+label: PQ          # = 2 + (sqrt 18 - 2)
+label: S radius
+label: T radius
+(-4, -4, 0) -- (6, -4, 0)
+(6, -4, 0) -- (6, 5, 0)
+(6, 5, 0) -- (-4, 5, 0)
+(-4, 5, 0) -- (-4, -4, 0)`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,

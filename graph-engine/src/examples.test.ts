@@ -106,3 +106,42 @@ describe('the "Two cones and a sphere" example is tangent', () => {
     })
   }
 })
+
+// Phase 9's examples construct their spheres; the numbers they print are
+// checked here against hand values, so an example cannot quietly draw a
+// sphere that is not the one its comment promises.
+describe('the phase 9 sphere examples', () => {
+  const walkOf = (label: string) => {
+    const parsed = parseSpec(EXAMPLES.find((e) => e.label === label)!.spec)
+    return buildSolidFigure(parsed.statements, (e) => evalExpr(e, {}, 'radians', {}))
+  }
+  const radius = (scope: ReturnType<typeof walkOf>, name: string) => {
+    const body = scope.solids.get(name)!
+    return body.spec.kind === 'sphere' ? body.spec.radius : NaN
+  }
+
+  it('gives the AIME tetrahedron an insphere of radius 20 sqrt 21 / 63', () => {
+    expect(radius(walkOf('AIME tetrahedron and its insphere'), 'I')).toBeCloseTo((20 * Math.sqrt(21)) / 63, 12)
+  })
+
+  it('puts the cube of edge 4 between spheres of radius 2 and 2 sqrt 3', () => {
+    const scope = walkOf('Cube between two spheres')
+    expect(radius(scope, 'I')).toBeCloseTo(2, 12)
+    expect(radius(scope, 'O')).toBeCloseTo(2 * Math.sqrt(3), 12)
+  })
+
+  it('puts a sphere of radius 1.5 in the cone and of radius 2 in the frustum', () => {
+    expect(radius(walkOf('Sphere in a cone'), 'I')).toBeCloseTo(1.5, 12)
+    expect(radius(walkOf('Frustum with an insphere'), 'I')).toBeCloseTo(2, 12)
+  })
+
+  it('makes PQ, between the tangent spheres, the sum of their radii', () => {
+    const scope = walkOf('Spheres by tangency')
+    const [p, q] = [scope.points.get('P')!, scope.points.get('Q')!]
+    const pq = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z)
+    // P = (0, 0, 2) over z = 0: radius 2. PQ = |(4, 1, 1)| = sqrt 18.
+    expect(radius(scope, 'S')).toBeCloseTo(2, 12)
+    expect(pq).toBeCloseTo(Math.sqrt(18), 12)
+    expect(radius(scope, 'S') + radius(scope, 'T')).toBeCloseTo(pq, 12)
+  })
+})

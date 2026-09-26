@@ -373,7 +373,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                    the reason, when a face or the whole cannot close
 //     A solid on named points takes no "vertices" (its points name them),
 //     except a prism's new top, and has no named dimensions: measure between
-//     its points ("label: AB") instead.
+//     its points ("label: AB") instead. The exception is a sphere's radius
+//     (phase 9): every sphere has "label: S radius".
 //
 //   label: S width | height | depth | base | edge | radius | top | side [= <value>]
 //                                                 -> a dimension read off the SOLID, never the drawing. A
@@ -453,6 +454,53 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   Not drawn (refused where an author could ask): a plane on its own
 //   ("plane: A-B-C"), the line where two planes meet, parabolic and
 //   hyperbolic sections, and nets.
+//
+//   Spheres a figure constructs (phase 9). Each is an ORDINARY sphere solid,
+//   placed exactly as "sphere center M radius r" places one: it draws,
+//   hides segments and is cut like one, and it is glass to every other solid
+//   (solids never hide each other). Closed form, never a solver; a sphere
+//   that does not exist is refused, saying why, and never approximated.
+//
+//   [I =] solid insphere of T                     -> tangent to every face of T
+//   [O =] solid circumsphere of T                 -> through every vertex of T
+//   [O =] solid circumsphere A-B-C-D              -> through four named points, not in one plane
+//   [S =] solid sphere center P tangent to plane <plane>
+//                                                 -> radius = the distance from P to the plane (any
+//                                                    plane form, named planes included)
+//   [S =] solid sphere center P externally tangent to T
+//                                                 -> T a sphere: radius |PT| - r_T (P outside T)
+//   [S =] solid sphere center P internally tangent to T
+//                                                 -> radius r_T - |PT| (P inside T, not its centre)
+//   M = center of S                               -> a sphere's centre as a point in space (any
+//                                                    sphere; only a sphere, in this phase)
+//   label: S radius                               -> works for EVERY sphere, however it was placed
+//
+//   A polyhedron's circumsphere is the sphere through its first four
+//   vertices (in vertex order) not in one plane, and EVERY vertex is then
+//   checked against it; its insphere is fixed by its first four faces whose
+//   planes determine a centre and radius, and EVERY face is then checked
+//   (the centre strictly inside, at the radius from each). A polyhedron that
+//   fails is refused, naming the first vertex the sphere misses or the first
+//   face that fails: a box that is not a cube has no insphere, a pyramid on a
+//   kite no circumsphere. Round solids, in their own frame (so placed and
+//   tilted ones work), r the radius, h the height, a frustum's r1 its wider
+//   rim and r2 its narrower:
+//     cylinder  insphere only when h = 2r (radius r, at the middle);
+//               circumsphere always, at the middle, sqrt(r^2 + (h/2)^2)
+//     cone      insphere always, radius r h / (r + sqrt(r^2 + h^2)), that far
+//               above the base; circumsphere always, through the apex and the
+//               base rim, x = (h^2 - r^2) / (2h) above the base, radius h - x
+//     frustum   insphere only when h = 2 sqrt(r1 r2) (radius h/2, at mid-
+//               height); circumsphere always, y = (h^2 + r2^2 - r1^2) / (2h)
+//               from the wider rim, radius sqrt(y^2 + r1^2)
+//     sphere    refused: it is already a sphere
+//   Refused: a tangent sphere whose centre is on the plane, on T, inside T
+//   (externally) or outside T (internally), or at T's centre (internally);
+//   "tangent to T" with no side; a sphere tangent to several objects at once
+//   (a solver: place it by its computed centre); "center of" anything but a
+//   sphere. Not drawn: contact circles on a cone or cylinder, inscribed
+//   cubes and other inscribed polyhedra, tangency assertions in the givens
+//   table, and opaque stacking.
 //   @view: standard | isometric | front | top | side
 //                                                 -> which fixed viewpoint draws the solid. standard
 //                                                    (the default) is in general position; isometric

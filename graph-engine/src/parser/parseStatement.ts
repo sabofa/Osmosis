@@ -603,6 +603,11 @@ function parseConstructionBody(rhs: string): Construction | null {
 // z = 3", "plane z = 1", "plane p") wherever a plane is taken, and named
 // planes, "p = plane ..." (see parsePlaneForm).
 //
+// Phase 9 added spheres the figure constructs: "insphere of T",
+// "circumsphere of T", "circumsphere A-B-C-D", "sphere center P tangent to
+// plane ...", "... externally | internally tangent to T" (see
+// parseSphereTangency), and the construction "M = center of S".
+//
 // Nothing here knows which names are points in space: that is decided by
 // the solid-figure walk (figure/solidScope.ts), after parsing. The full
 // surface, and the mode rule for solid figures, is documented in

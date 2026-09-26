@@ -10,11 +10,11 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1528 tests passing**,
+agents" below). Working tree clean. **1599 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-26, after geometry phase 8 (planes as objects, and
-oblique sections) and its two fix rounds.*
+*Last updated 2026-09-26, after geometry phase 9 (inscribed and
+circumscribed spheres, and tangency).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -107,14 +107,15 @@ built.
   pyramids, the octahedron, frusta, and round solids at any position and tilt;
   planes as objects (six author forms, named planes) and sections of any
   solid by any plane, in place with the hidden outline dashed and lifted at
-  true shape.
+  true shape; inspheres and circumspheres of polyhedra and round solids,
+  spheres placed by tangency, and a sphere's centre and radius as a point
+  and a named dimension.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 beyond phase 8: build steps 9–11 of the spec's
-"Revised 2026-09-25" section (inscribed/circumscribed solids, measures and
-marks in space, nets),
+All of D1–D5. Track 2 beyond phase 9: build steps 10–11 of the spec's
+"Revised 2026-09-25" section (measures and marks in space, nets),
 shading and boolean regions, and the competition-specific constructions
 (excircles, nine-point circle, radical axes, cevian concurrency).
 
@@ -131,6 +132,7 @@ shading and boolean regions, and the competition-specific constructions
 | 6b | `242b04b`, `0f7a892`, then the docs commit | The default view is `standard` (azimuth 30°, elevation 25°, general position), not isometric; placement is fixed against the default camera, never the active view; prisms, pyramids and tetrahedra are lettered in textbook order |
 | 7 | `df94340`..`d4a3aae`, then the docs commit | Solids are stated the way competition problems state them: on named points (hull, tetrahedron, pyramid, prism, sphere, cylinder, cone, frustum), a tetrahedron from its six edges (AIME 2024 I draws and measures), regular n-gon prisms and pyramids, the octahedron, conical and pyramidal frusta, the cube; round solids at any position and tilt through a placement and a local camera |
 | 8 | `9677aeb`..`2b97c75`, then the docs commit | Planes are objects: through three points, perpendicular to a line, parallel to a plane, by an equation, the axis form, and named (`p = plane ...`, used as `plane p`), all canonicalised to one internal plane. Any solid is cut by any plane: the cube's central hexagon, the tetrahedron's square, the AIME pyramid's pentagon, the log wedge's half ellipse, a sphere's circle through three points. In place, the outline the solid hides is dashed; lifted, the section is true shape, corners nameable |
+| 9 | `ac7c0fd`..`267576c`, then the docs commit | Spheres the figure constructs, each an ordinary sphere solid: the insphere and circumsphere of any polyhedron (a fixed-order linear solve, verified against every face or vertex, refused naming the first that fails) and of a cylinder, cone or frustum (closed form in its own frame, so placed and tilted ones work); a sphere tangent to a plane or externally/internally to another sphere; `M = center of S`; `label: S radius` on every sphere. The AIME 2024 I tetrahedron's insphere measures 20√21/63 |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -499,6 +501,84 @@ text ("The plane A-B-C does not cut …"), except the three-point form's
 collinearity refusal, which keeps phase 6's wording ("A, M and G are
 collinear") so no existing message moved.
 
+### Phase 9 in detail (inscribed and circumscribed spheres, and tangency)
+
+Grammar that now works (author frame, z up):
+
+```
+I = solid insphere of T                          # tangent to every face
+O = solid circumsphere of T                      # through every vertex
+O = solid circumsphere A-B-C-D                   # four points, not in one plane
+S = solid sphere center P tangent to plane p     # radius = distance to the plane (any plane form)
+S = solid sphere center P externally tangent to T   # |PT| - r_T
+S = solid sphere center P internally tangent to T   # r_T - |PT|
+M = center of S                                  # any sphere's centre, as a point in space
+label: S radius                                  # every sphere, however placed
+```
+
+**The decisions worth not re-litigating:**
+
+*A constructed sphere is an ordinary sphere solid (R1).* The walk places it
+with the same `placed(...)` call `sphere center M radius r` uses, so it draws,
+occludes and is sectioned by the existing code and is glass to every other
+solid. No drawing code changed; the byte sweep proved it (below). All the
+maths is in `figure/spheres.ts`.
+
+*Polyhedra: a fixed-order linear solve, then EVERY vertex or face checked
+(R3).* Circumsphere: the first four vertices in vertex order not in one plane
+(scan: P0; the first not at P0; the first off line P0P1; the first off plane
+P0P1P2), the 3×3 system `2(Pk − P0)·c = |Pk|² − |P0|²` (solved about P0, the
+same system shifted) by Cramer's rule, then every vertex. Insphere: faces as
+`n·x = d` with Newell's normal turned away from the vertex centroid (so no
+builder's winding matters), the first four faces whose rows `(n, 1)` are
+independent (greedy Gram–Schmidt in face order), the 4×4 system `n·c + r = d`
+by Cramer's rule, then every face (the centre strictly inside, at r). A
+failure is refused naming the first vertex or face that fails, by the
+author's letters (the walk keeps each polyhedron's vertex names by index) or
+by where it is: `"S" has no inscribed sphere — no point inside it is
+equidistant from all 6 of its faces: the face DAEH is 5 from the only
+candidate centre, not 3`. The four rows fix (c, r) uniquely, so a failure
+proves no sphere exists; nothing is ever approximated.
+
+*Round solids: closed form in the local frame, through the placement (R4).*
+Cylinder insphere only when h = 2r; cone always, ρ = RH/(R + √(R²+H²));
+frustum only when h = 2√(r₁r₂), r₁ the WIDER rim (P2's local base). The
+circumspheres always exist. Each answer is checked against the points that
+fix it (a rim point, the apex, the foot on the side generator). Placed and
+tilted solids need nothing more; a frustum wider at the top is handled by
+its reversed placement.
+
+*R2: a sphere's radius is a named dimension however it was placed.* The
+by-points rule ("measure between its points instead") exempts spheres, and
+only spheres; the reference line is phase 7's radius segment with its
+side-view fallback.
+
+*Tangency is scoped to R5 on purpose.* Build step 9's "tangency" is one
+object at a time — a plane, or one sphere externally or internally. Spheres
+tangent to several objects at once (three spheres and a plane) are a
+solver, and stay out (R7): the author places such a sphere by its computed
+centre and checks each tangency with a label. Also out, and refused where an
+author could ask: contact circles on a cone or cylinder, inscribed cubes and
+other inscribed polyhedra, tangency assertions in the givens table, opaque
+stacking.
+
+**Correction to the plan, recorded.** The plan said replacing the insphere's
+linear solve with the vertex centroid turns the AIME test red. It cannot:
+AB = CD, AC = BD, AD = BC make that tetrahedron a disphenoid, all four faces
+congruent (6√21 each), so its incentre IS its vertex centroid. The deletion
+is caught by the face-area identity test's scalene half, the corner
+tetrahedron and the square pyramid.
+
+**Grammar note.** `M = center of S` parsed at the base as a named constant
+(`center*of*S`). A construction takes precedence over a named constant, as
+every construction form does; the match is exactly `center of <name>`.
+
+**Byte identity, and how it was measured.** Every `renderFigure` input the
+suite makes (captured by a scratch vitest setup file that wraps
+`renderFigure`; 402 distinct) plus every example, re-rendered under its own
+config and all five views — 2412 keys — before and after each task:
+identical, errors included.
+
 
 ---
 
@@ -577,6 +657,7 @@ occlusion.ts    the glass rule: segments split visible/hidden, exactly
 hull.ts         the one exact convex-hull builder (P3), and base-polygon checks
 tetrahedron.ts  the tetrahedron from six edges, Cayley-Menger checked (P4)
 regular.ts      regular n-gon solids and the octahedron: P5's rotation and lettering
+spheres.ts      phase 9: in- and circumspheres (fixed-order solves, verified), tangency radii
 ```
 
 **Placements and the local camera (P1).** A round solid (cylinder, cone,
@@ -632,7 +713,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1493 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1599 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
@@ -798,7 +879,7 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    in space and `segment: … dashed | plain` are all unreachable to the tutor.
    **As of phase 7 it lags by two**: every solid on points, the six-edge
    tetrahedron, the hull, the frustum and the regular solids are unreachable
-   too. **As of phase 8, by three**: planes as objects and oblique sections. The user has scheduled the tutor reference for much later.
+   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. The user has scheduled the tutor reference for much later.
    The house rule "declare `@mode:`" matters doubly for solid figures: under
    S5 a spec of 3-coordinate points with no solid still infers the *space*
    renderer, so a tutor sketching points in space before adding the solid gets
@@ -873,8 +954,19 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     `cut:` and at naming it); the line where two planes meet (`intersect
     plane …, plane …` is refused); parabolic and hyperbolic sections of a
     cone or frustum (refused, naming the conic); nets (`net:` is refused,
-    build step 11). Inscribed and circumscribed solids are build step 9;
-    angle and dihedral marks step 10.
+    build step 11). ~~Inscribed and circumscribed solids are build step 9~~
+    (**done in phase 9**, for spheres); angle and dihedral marks step 10.
+
+11. **Phase 9's out-of-scope items (R7), left out on purpose.** Build step
+    9's "tangency" is scoped to one object at a time (R5). Spheres tangent
+    to several objects at once need a solver and are refused at parse time
+    ("tangent to plane z = 0 and T"), as is a tangent sphere with no centre;
+    the author places such a sphere by its computed centre, and a label
+    checks each tangency. Not drawn: contact circles on a cone or cylinder;
+    inscribed cubes and other inscribed polyhedra (`insphere`/`circumsphere`
+    only ever make spheres); tangency assertions in the givens table; opaque
+    coaxial stacking. `center of` takes only a sphere (a 2D circle's centre
+    is already the point it was drawn around).
 
 ---
 
