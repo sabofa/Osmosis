@@ -9,7 +9,7 @@ import { evalExpr } from '../parser/evalExpr'
 import { buildSolidFigure } from './solidScope'
 import { GEOM_EPS } from '../scene/geometry/types'
 import { bodyDimensionSegment, buildSolid, drawnDimensionSegment, regularTetrahedron, solidOutline, type SolidSpec } from './solids'
-import { renderFigure } from './render'
+import { figureLabelObstacles, renderFigure } from './render'
 import { sectionOf } from './crossSection'
 import { resolveMode } from '../scene/mode'
 import { EXAMPLES } from '../examples'
@@ -2975,5 +2975,109 @@ describe('in-place outlines show what the solid hides (phase 8, Q6)', () => {
   it('leaves every lifted section alone: no dashes', () => {
     const svg = render('@mode: figure\nC = solid cylinder radius 3, height 10\nsection: C by plane x - z = 5')
     expect(dashed(svg, 1, 'path') + dashed(svg, 1, 'line')).toBe(0)
+  })
+})
+
+describe('constants named like the new keywords draw as before (fix round 1)', () => {
+  it('renders a figure using constants "plane" and "net" exactly as it renders the same figure with other names', () => {
+    const named = parseSpec('@mode: figure\nplane = 3\nnet = 4\nA = (0, 0)\nB = (plane, net)\nsegment: A-B')
+    const plain = parseSpec('@mode: figure\nw = 3\nh = 4\nA = (0, 0)\nB = (w, h)\nsegment: A-B')
+    expect(named.errors).toEqual([])
+    const a = renderFigure(named.statements, named.config, LIGHT_PALETTE)
+    const b = renderFigure(plain.statements, plain.config, LIGHT_PALETTE)
+    expect(a.errors).toEqual([])
+    expect(a.svg).toBe(b.svg)
+  })
+})
+
+describe('a horizontal ring under the front view (Q6, fix round 1)', () => {
+  for (const solid of ['cylinder radius 3, height 8', 'cone radius 3, height 4', 'sphere radius 5']) {
+    it(`draws the ${solid}'s ring as one visible front arc and one dashed back arc`, () => {
+      const svg = render(`@mode: figure\n@view: front\nK = solid ${solid}\ncut: K by plane z = 1`)
+      expect([...layer(svg, 'primary').matchAll(/<path [^>]*data-statement="1"/g)]).toHaveLength(1)
+      const back = [...layer(svg, 'auxiliary').matchAll(/<path [^>]*data-statement="1"/g)]
+      expect(back).toHaveLength(1)
+      expect(back[0][0]).toContain('stroke-dasharray="9 7"')
+    })
+  }
+})
+
+describe('a plane equation with a named constant (fix round 1)', () => {
+  it('reads "a*x + z = 1" with a = 2 exactly as "2x + z = 1"', () => {
+    const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+    const named = parseSpec(`${PRISM}\na = 2\nsection: S by plane a*x + z = 1`)
+    const plain = parseSpec(`${PRISM}\nk = 2\nsection: S by plane 2x + z = 1`)
+    const a = renderFigure(named.statements, named.config, LIGHT_PALETTE)
+    expect(a.errors).toEqual([])
+    expect(a.svg).toBe(renderFigure(plain.statements, plain.config, LIGHT_PALETTE).svg)
+  })
+
+  it('refuses abs(x) in a cut, where the probes once drew the plane x + y = 1', () => {
+    const parsed = parseSpec('@mode: figure\nS = solid prism 8 by 5 by 6\ncut: S by plane abs(x) + y = 1')
+    const errors = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors.map((e) => e.message)
+    expect(errors).toEqual(['plane abs(x) + y = 1 is not a plane — it must be linear in x, y, z'])
+  })
+})
+
+describe('a lifted region keeps labels out of its interior, as a polygon does (fix round 1)', () => {
+  const obstacles = (spec: string) => {
+    const parsed = parseSpec(spec)
+    return figureLabelObstacles(parsed.statements, parsed.config)
+  }
+  const inside = (p: { x: number; y: number }, polygon: { x: number; y: number }[]) => {
+    let hit = false
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const a = polygon[i]
+      const b = polygon[j]
+      if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) hit = !hit
+    }
+    return hit
+  }
+
+  it('registers the lifted polygon section’s interior (the parity it matches)', () => {
+    expect(obstacles('@mode: figure\nS = solid prism 8 by 5 by 6\nsection: S by plane z = 1').polygons).toHaveLength(1)
+  })
+
+  it('registers a lifted whole ellipse’s interior: a polygon on its boundary, holding its centre', () => {
+    const { polygons } = obstacles('@mode: figure\nC = solid cylinder radius 3, height 10\nsection: C by plane x + z = 0')
+    expect(polygons).toHaveLength(1)
+    const [polygon] = polygons
+    // Its extremes: the four points where the drawn ellipse turns in x or y,
+    // and the two halves' ends.
+    expect(polygon.length).toBeGreaterThanOrEqual(4)
+    const centre = { x: polygon.reduce((s, p) => s + p.x, 0) / polygon.length, y: polygon.reduce((s, p) => s + p.y, 0) / polygon.length }
+    expect(inside(centre, polygon)).toBe(true)
+  })
+
+  it('registers the log wedge’s half ellipse too', () => {
+    const { polygons } = obstacles('@mode: figure\nC = solid cylinder radius 3, height 10\nsection: C by plane x - z = 5')
+    expect(polygons).toHaveLength(1)
+    expect(polygons[0].length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('a polyhedron cut drawn under the front, side and top views (fix round 1)', () => {
+  const lines = (svg: string, layerName: string) => [...layer(svg, layerName).matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"[^>]*data-statement="1"[^>]*>/g)]
+  const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+
+  for (const view of ['front', 'side']) {
+    it(`draws the box cut z = 1 under the ${view} view as one visible side over one dashed one, and no end-on dots`, () => {
+      // The visible side (on the face toward the viewer) and the hidden one
+      // (on the face away) project onto one line; the two sides running along
+      // the view are points and are not drawn.
+      const svg = render(`${PRISM}\n@view: ${view}\ncut: S by plane z = 1`)
+      const visible = lines(svg, 'primary')
+      const hidden = lines(svg, 'auxiliary')
+      expect(visible).toHaveLength(1)
+      expect(hidden).toHaveLength(1)
+      expect(hidden[0][0]).toContain('stroke-dasharray="9 7"')
+      for (const m of [...visible, ...hidden]) expect(Math.hypot(Number(m[3]) - Number(m[1]), Number(m[4]) - Number(m[2]))).toBeGreaterThan(1)
+    })
+  }
+
+  it('draws the box cut z = 1 under the top view as four dashed sides, hidden by the top face', () => {
+    const svg = render(`${PRISM}\n@view: top\ncut: S by plane z = 1`)
+    expect(lines(svg, 'primary')).toHaveLength(0)
+    expect(lines(svg, 'auxiliary')).toHaveLength(4)
   })
 })

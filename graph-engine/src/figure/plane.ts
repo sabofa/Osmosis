@@ -104,13 +104,12 @@ export function signedDistance(plane: SectionPlane, p: Vec3): number {
 // "plane 2x + y - z = 3", read EXACTLY for any genuinely linear input, and
 // refused for anything else — so this is reading, not solving.
 //
-// f(x, y, z) = left - right is evaluated at the origin and the three unit
-// points, which fixes the only affine function it could be, c0 + a x + b y +
-// c z. That fit is then checked at (1, 1, 1) and (2, -1, 3), the two probes
-// the plan names, and at one non-integer probe (1/2, 1/3, 1/5): a polynomial
-// can vanish at every integer probe — x(x - 1)(x - 2) does at 0, 1 and 2 —
-// but not also there. Each check allows GEOM_EPS against the size of the
-// terms it sums.
+// **Linearity is read off the expression TREE, never probed** (fix round 1,
+// controller ruling). No finite set of probe points is sound once functions
+// appear: abs(x) agrees with x at every probe with x >= 0, and so does
+// sqrt(x^2). `isAffine` is exact instead. Once both sides are affine,
+// f(x, y, z) = left - right IS c0 + a x + b y + c z, and evaluating it at the
+// origin and the three unit points reads those four numbers.
 //
 // The equation is in the AUTHOR frame; the plane comes back internal.
 export function planeFromEquation(
@@ -119,6 +118,7 @@ export function planeFromEquation(
   evaluate: (e: Expr, vars: Bindings) => number,
   source: string
 ): Plane3 {
+  if (!isAffine(left) || !isAffine(right)) throw new Error(`plane ${source} is not a plane — it must be linear in x, y, z`)
   const f = (x: number, y: number, z: number): number => {
     const value = evaluate(left, { x, y, z }) - evaluate(right, { x, y, z })
     if (!Number.isFinite(value)) throw new Error(`plane ${source} does not evaluate to a number at (${x}, ${y}, ${z})`)
@@ -128,15 +128,6 @@ export function planeFromEquation(
   const a = f(1, 0, 0) - c0
   const b = f(0, 1, 0) - c0
   const c = f(0, 0, 1) - c0
-  for (const [x, y, z] of [
-    [1, 1, 1],
-    [2, -1, 3],
-    [1 / 2, 1 / 3, 1 / 5],
-  ]) {
-    const fit = c0 + a * x + b * y + c * z
-    const size = Math.max(1, Math.abs(c0) + Math.abs(a * x) + Math.abs(b * y) + Math.abs(c * z))
-    if (Math.abs(f(x, y, z) - fit) > GEOM_EPS * size) throw new Error(`plane ${source} is not a plane — it must be linear in x, y, z`)
-  }
   const normal: Vec3 = { x: a, y: b, z: c }
   const size = length3(normal)
   if (size <= GEOM_EPS * Math.max(1, Math.abs(c0))) {
@@ -145,4 +136,53 @@ export function planeFromEquation(
   // a x + b y + c z = -c0: the foot of the origin is n (-c0) / |n|^2.
   const point = scale3(normal, -c0 / (size * size))
   return { point: authorToWorld(point), normal: authorToWorld(scale3(normal, 1 / size)) }
+}
+
+const AXIS_VARIABLES: ReadonlySet<string> = new Set(['x', 'y', 'z'])
+
+// Whether an expression depends on x, y or z at all.
+function dependsOnAxes(e: Expr): boolean {
+  switch (e.kind) {
+    case 'num':
+      return false
+    case 'var':
+      return AXIS_VARIABLES.has(e.name)
+    case 'unary':
+      return dependsOnAxes(e.arg)
+    case 'binary':
+      return dependsOnAxes(e.left) || dependsOnAxes(e.right)
+    case 'call':
+      return e.args.some(dependsOnAxes)
+  }
+}
+
+// Whether an expression is AFFINE in x, y, z, by its structure alone:
+// numbers and named constants (constant), x, y, z (linear), unary minus, + and
+// -, * with at most one side depending on x, y, z, / by something that does
+// not, and ^ and function calls only over subexpressions that do not (those
+// are constants, and may be evaluated). Anything else is refused — even an
+// expression that happens to simplify to a linear one, such as x^1.
+export function isAffine(e: Expr): boolean {
+  switch (e.kind) {
+    case 'num':
+    case 'var':
+      return true
+    case 'unary':
+      return isAffine(e.arg)
+    case 'binary':
+      switch (e.op) {
+        case '+':
+        case '-':
+          return isAffine(e.left) && isAffine(e.right)
+        case '*':
+          return (!dependsOnAxes(e.left) && isAffine(e.right)) || (!dependsOnAxes(e.right) && isAffine(e.left))
+        case '/':
+          return isAffine(e.left) && !dependsOnAxes(e.right)
+        case '^':
+          return !dependsOnAxes(e.left) && !dependsOnAxes(e.right)
+      }
+      return false
+    case 'call':
+      return !e.args.some(dependsOnAxes)
+  }
 }

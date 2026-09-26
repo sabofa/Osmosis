@@ -129,6 +129,36 @@ describe('the equation form (Q2)', () => {
     expect(() => equation('x*(x - 1)*(x - 2) + y = 1')).toThrow(/is not a plane — it must be linear in x, y, z/)
   })
 
+  // Fix round 1 (controller ruling): linearity is read off the expression
+  // TREE, exactly — no finite set of probes is sound once functions appear.
+  // abs(x) agrees with x at every probe with x >= 0, and sqrt(x^2) too.
+  it('refuses abs and sqrt(x^2), which agree with a linear function at non-negative probes', () => {
+    for (const text of ['abs(x) + y = 1', 'abs(x) + abs(z) = 1', 'sqrt(x^2) + z = 2', 'x*y = 1', '1/x + y = 2', '2^x = y', 'x^1 = y']) {
+      expect(() => equation(text)).toThrow(`plane ${text} is not a plane — it must be linear in x, y, z`)
+    }
+  })
+
+  it('accepts every affine form, reading its normal exactly', () => {
+    // (x + y)/2 = z: x/2 + y/2 - z = 0, normal (1, 1, -2). sqrt(2) x + z = 1:
+    // normal (sqrt 2, 0, 1). 3(x - 1) + 2 = y: 3x - y - 1 = 0, normal
+    // (3, -1, 0), through (1/3, 0, 0). A constant under a function or a
+    // power is fine: 2^3 x = z is 8x - z = 0.
+    for (const [text, normal] of [
+      ['2x + y - z = 3', { x: 2, y: 1, z: -1 }],
+      ['(x + y)/2 = z', { x: 1, y: 1, z: -2 }],
+      ['sqrt(2)*x + z = 1', { x: Math.SQRT2, y: 0, z: 1 }],
+      ['3*(x - 1) + 2 = y', { x: 3, y: -1, z: 0 }],
+      ['2^3*x = z', { x: 8, y: 0, z: -1 }],
+      ['-(x - z)/sqrt(4) = 1', { x: -1, y: 0, z: 1 }],
+    ] as const) {
+      const n = worldToAuthor(equation(text).normal)
+      const len = Math.hypot(normal.x, normal.y, normal.z)
+      expectVec(n, { x: normal.x / len, y: normal.y / len, z: normal.z / len }, 14)
+    }
+    const p = worldToAuthor(equation('3*(x - 1) + 2 = y').point)
+    expect(3 * p.x - p.y - 1).toBeCloseTo(0, 14)
+  })
+
   it('refuses an equation with no variable in it', () => {
     expect(() => equation('0x + 0y + 0z = 1')).toThrow(
       'plane 0x + 0y + 0z = 1 is not a plane — x, y and z all have coefficient 0, so it fixes no direction'

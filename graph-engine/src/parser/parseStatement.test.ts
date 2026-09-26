@@ -1097,3 +1097,24 @@ describe('what phase 8 does not draw (Q7)', () => {
     expect(() => parseStatement('net: S')).toThrow('Nets of solids are not drawn yet (build step 11)')
   })
 })
+
+describe('the Q7 refusals never catch an assignment (fix round 1)', () => {
+  it('still reads "plane = 2", "plane=2", "net = 5" and "net=5" as named constants', () => {
+    for (const [line, name, value] of [
+      ['plane = 2', 'plane', 2],
+      ['plane=2', 'plane', 2],
+      ['plane  =  3', 'plane', 3],
+      ['net = 5', 'net', 5],
+      ['net=5', 'net', 5],
+    ] as const) {
+      expect(parseStatement(line)).toMatchObject({ kind: 'constantDef', name, value: { kind: 'num', value } })
+    }
+  })
+
+  it('still refuses a plane or a net written as a statement', () => {
+    expect(() => parseStatement('plane: A-B-C')).toThrow(/A plane is not drawn on its own/)
+    expect(() => parseStatement('plane A-B-C')).toThrow(/A plane is not drawn on its own/)
+    expect(() => parseStatement('net: S')).toThrow(/Nets of solids are not drawn yet/)
+    expect(() => parseStatement('net S')).toThrow(/Nets of solids are not drawn yet/)
+  })
+})

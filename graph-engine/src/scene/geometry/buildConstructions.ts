@@ -1,6 +1,6 @@
 import type { GraphConfig } from '../../parser/config'
 import { evalExpr, type FunctionTable } from '../../parser/evalExpr'
-import type { Construction, Expr, GeometryRef, Statement, TriangleSlot } from '../../parser/types'
+import type { Construction, Expr, GeometryRef, PlaneForm, Statement, TriangleSlot } from '../../parser/types'
 import type { SceneError, SceneObject, Vec2 } from '../types'
 import { centroid, circumcenter, circumcircle, incenter, incircle, orthocenter } from './centres'
 import { chord, diameter, radiusTo, secantThrough, tangentAt, tangentsFrom } from './circles'
@@ -69,18 +69,21 @@ const SLOTS: TriangleSlot[] = ['a', 'b', 'c']
 
 function resolveObject(scope: GeometryScope, ref: GeometryRef): GeometryObject {
   if (ref.kind === 'named') return scope.lookup(ref.name)
-  if (ref.kind === 'plane') throw planeInThePlane(ref.plane.source)
+  if (ref.kind === 'plane') throw planeInThePlane(ref.plane)
   return makeLine(scope.lookupPoint(ref.from), scope.lookupPoint(ref.to), ref.extent)
 }
 
-// A plane through three points is an object of a solid figure. Reaching this
-// pass means its points are not points in space — the solid-figure walk
-// claims every construction that names one — so the honest message is about
-// the points, not about a missing feature.
-function planeInThePlane(source: string): Error {
+// A plane — in any of its forms (phase 8) — is an object of a solid figure.
+// Reaching this pass means the construction is in the plane: the solid-figure
+// walk claims every construction that names a point in space. So the message
+// says where planes live, and for a plane through points, what its points
+// would have to be.
+function planeInThePlane(plane: PlaneForm): Error {
+  const what = `"plane ${plane.source}" is a plane, and planes exist only in solid figures`
   return new Error(
-    `"plane ${source}" needs three points in space (e.g. "A = (0, 0, 0)" or a solid's vertices) — ` +
-      'these are points in the plane, where every point already lies in one plane'
+    plane.kind === 'points'
+      ? `${what} — it needs three points in space (e.g. "A = (0, 0, 0)" or a solid's vertices), and these are points in the plane`
+      : `${what} — this construction is in the plane; write it among points in space, in a figure ("@mode: figure")`
   )
 }
 

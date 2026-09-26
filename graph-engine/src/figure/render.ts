@@ -1172,8 +1172,17 @@ function liftedRegion(boundary: readonly TrueShapePiece[], move: (p: Vec2) => Ve
 
 // Q6 — a cut's outline through the camera, each piece keeping whether the
 // solid hides it.
+//
+// A side seen END-ON — along the view, as a box's side on a face edge-on to
+// the front, side or top view is — projects to a point: nothing to draw, as a
+// dimension reference seen end-on draws nothing (fix round 1). Without this
+// it was a round-capped dot.
 function projectedOutline(pieces: readonly OutlinePiece[], camera: Camera): ProjectedEdge[] {
-  return pieces.flatMap(({ piece, hidden }, i) => projectedRegion([piece], camera).map((edge) => ({ ...edge, hidden, object: `outline-${i}` })))
+  return pieces.flatMap(({ piece, hidden }, i) =>
+    projectedRegion([piece], camera)
+      .filter((edge) => edge.kind !== 'segment' || Math.hypot(edge.b.x - edge.a.x, edge.b.y - edge.a.y) > GEOM_EPS * Math.max(1, Math.hypot(edge.a.x, edge.a.y)))
+      .map((edge) => ({ ...edge, hidden, object: `outline-${i}` }))
+  )
 }
 
 // A region in space, through the camera: an arc is a circle's image under an
@@ -1187,6 +1196,23 @@ function projectedRegion(boundary: readonly SectionPiece[], camera: Camera): Pro
     const circle = projectCircle(camera, piece.center, piece.u, piece.v)
     return splitTurn(piece.from, piece.to).map(([from, to]) => arcEdge(circle, from, to, `piece-${i}`))
   })
+}
+
+// A convex region's interior, for the label layout: every exact extreme of
+// its edges (chord ends, arc ends, and where an arc turns back in x or y) —
+// all on its boundary — wound by angle about their centroid. The region is
+// convex, so that winding is its boundary order and the polygon lies inside
+// it: a bound on where the region is, never a sampling of its arcs.
+function regionInterior(edges: readonly ProjectedEdge[]): Vec2[] {
+  const points: Vec2[] = []
+  for (const p of edges.flatMap(edgeExtremes)) {
+    if (!points.some((q) => Math.hypot(q.x - p.x, q.y - p.y) <= GEOM_EPS * Math.max(1, Math.hypot(p.x, p.y)))) points.push(p)
+  }
+  const centre = centroidOf(points)
+  return points
+    .map((p) => ({ p, angle: Math.atan2(p.y - centre.y, p.x - centre.x) }))
+    .sort((a, b) => a.angle - b.angle)
+    .map((entry) => entry.p)
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,6 +1347,17 @@ function strokeColor(color: string | null, fallback: number, palette: Palette): 
 
 function clipToBox(through: Vec2, direction: Vec2, extent: 'infinite' | 'ray', box: Rect): [Vec2, Vec2] | null {
   return clipLineToBounds(through, direction, extent, { xMin: box.x, xMax: box.x + box.width, yMin: box.y, yMax: box.y + box.height })
+}
+
+// The label obstacles of a figure, in view coordinates, exactly as
+// renderFigure lays its labels out against them. Exported for the tests: what
+// a label may not sit on is not visible in the markup until a label lands
+// somewhere it should not.
+export function figureLabelObstacles(statements: Statement[], config: GraphConfig): LabelObstacles {
+  const { items } = buildItems(statements, config)
+  const world: WorldBounds = boundsOf(anchorPoints(items)) ?? { minX: -1, minY: -1, maxX: 1, maxY: 1 }
+  const projection = fitProjection(world)
+  return labelObstacles(items, projection, geometryBounds(items, projection))
 }
 
 export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette): FigureResult {
@@ -1533,6 +1570,9 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
         const points = edgeExtremes(edge).map((point) => projection.toView(point))
         for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
       }
+      // A LIFTED region keeps labels out of its interior, as a lifted
+      // polygon does (fix round 1): the convex polygon of its exact extremes.
+      if (item.kind === 'region') obstacles.polygons.push(regionInterior(edges).map((point) => projection.toView(point)))
     } else if (item.kind === 'sectionFace' && item.outline.kind === 'polygon') {
       const vertices = item.outline.vertices.map((v) => projection.toView(v))
       for (let i = 0; i < vertices.length; i++) obstacles.segments.push([vertices[i], vertices[(i + 1) % vertices.length]])

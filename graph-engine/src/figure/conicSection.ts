@@ -208,6 +208,11 @@ function coneEllipse(n: Vec3, d: number, k: number, apex: Vec3): { c: Vec3; a: V
   const e2 = cross3(n, e1)
   const D = sub3(p0, apex)
   const m11 = form(e1, e1)
+  // m12 is 0 up to rounding: e2 is horizontal (e2.y = 0) and perpendicular to
+  // e1's horizontal part (both lie across n, one along it), so the form's
+  // cross term vanishes and e1, e2 are already M's principal directions. The
+  // general 2 x 2 eigen-solve below is kept anyway; it costs nothing and needs
+  // no special case.
   const m12 = form(e1, e2)
   const m22 = form(e2, e2)
   const b1 = form(D, e1)

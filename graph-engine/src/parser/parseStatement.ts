@@ -1134,12 +1134,15 @@ function parseStatementCore(rawLine: string): StatementShape {
   // Q7 (phase 8) — what an author might ask for that is not drawn: a plane on
   // its own (a plane is drawn only through the section it cuts), and a net
   // (build step 11). Refused in words, rather than as an unrecognised line.
-  if (/^plane(:|\s)/.test(line)) {
+  // Never an assignment: "plane = 2" and "net = 5" are named constants, as
+  // they always were (the lookahead refuses only a line that does not go on
+  // to "=").
+  if (/^plane(?!\s*=)(:|\s)/.test(line)) {
     throw new Error(
       'A plane is not drawn on its own — it is drawn through the section it cuts ("cut: S by plane A-B-C"), and named with "p = plane A-B-C"'
     )
   }
-  if (/^net(:|\s)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
+  if (/^net(?!\s*=)(:|\s)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit

@@ -647,3 +647,18 @@ describe('the circle vocabulary in graph mode', () => {
     expect(scene.objects.some((o) => o.kind === 'segment')).toBe(true)
   })
 })
+
+describe('a plane in a figure in the plane (phase 8, fix round 1)', () => {
+  it('says planes exist only in solid figures, for every form of plane', () => {
+    const points = 'A = (1, 2)\nB = (3, 4)\nC = (5, 0)\ny = x\n'
+    for (const [plane, tail] of [
+      ['A-B-C', 'it needs three points in space'],
+      ['x + y = 1', 'this construction is in the plane'],
+      ['through A perpendicular to B-C', 'this construction is in the plane'],
+      ['through A parallel to B-C-A', 'this construction is in the plane'],
+    ]) {
+      const { scene } = build(`${points}F = foot A to plane ${plane}`)
+      expect(scene.errors.map((e) => e.message)).toEqual([expect.stringContaining(`"plane ${plane}" is a plane, and planes exist only in solid figures — ${tail}`)])
+    }
+  })
+})

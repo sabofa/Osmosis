@@ -173,8 +173,16 @@ function roundPiece(body: SolidBody, piece: SectionPiece, camera: Camera): Outli
 
 // The arc split where A cos t + B sin t + C changes sign, each span hidden
 // where it is negative. The zeros are t = phi +- acos(-C / R), R = |(A, B)|,
-// phi = atan2(B, A). A whole turn that crosses the silhouette is re-based at
-// its first zero, so it comes out as exactly one front and one back arc.
+// phi = atan2(B, A).
+//
+// A WHOLE turn has no ends that matter: its zeros are collected on the
+// half-open turn [lo, lo + 2 pi), a zero AT lo included (fix round 1 — under
+// the front view a horizontal ring's zero falls exactly at its start angle,
+// and dropping it left one span of a whole turn, classified at a zero, so
+// the whole ring came out dashed). The turn is then re-based at its first
+// zero, so it comes out as exactly one front and one back arc. A PARTIAL arc
+// is split only at zeros strictly inside it: a zero at its end changes
+// nothing.
 function splitArc(piece: Extract<SectionPiece, { kind: 'arc' }>, A: number, B: number, C: number): OutlinePiece[] {
   const facing = (t: number) => A * Math.cos(t) + B * Math.sin(t) + C
   const R = Math.hypot(A, B)
@@ -182,29 +190,28 @@ function splitArc(piece: Extract<SectionPiece, { kind: 'arc' }>, A: number, B: n
   const lo = Math.min(piece.from, piece.to)
   const hi = Math.max(piece.from, piece.to)
   const whole = hi - lo >= 2 * Math.PI - GEOM_EPS
-  let zeros: number[] = []
+  const zeros: number[] = []
   if (R > GEOM_EPS && Math.abs(C) < R) {
     const phi = Math.atan2(B, A)
     const alpha = Math.acos(-C / R)
     for (const base of [phi - alpha, phi + alpha]) {
-      // Every turn of this zero that falls strictly inside the arc.
-      for (let t = base + 2 * Math.PI * Math.ceil((lo - base) / (2 * Math.PI)); t < hi; t += 2 * Math.PI) {
+      // The first turn of this zero at or after lo.
+      let t = base + 2 * Math.PI * Math.ceil((lo - base) / (2 * Math.PI))
+      if (whole) {
+        // On [lo, lo + 2 pi): a zero a rounding error short of the next turn
+        // is the zero at lo.
+        if (t >= lo + 2 * Math.PI - GEOM_EPS) t = lo
+        if (!zeros.some((z) => Math.abs(z - t) <= GEOM_EPS)) zeros.push(t)
+        continue
+      }
+      for (; t < hi; t += 2 * Math.PI) {
         if (t > lo + GEOM_EPS && t < hi - GEOM_EPS) zeros.push(t)
       }
     }
     zeros.sort((x, y) => x - y)
   }
   if (zeros.length === 0) return [{ piece, hidden: !(facing((lo + hi) / 2) > 0) }]
-  let cuts: number[]
-  if (whole) {
-    // Re-based at the first zero: the spans between consecutive zeros, round
-    // the whole turn.
-    const start = zeros[0]
-    zeros = zeros.filter((t) => t < start + 2 * Math.PI - GEOM_EPS)
-    cuts = [...zeros, start + 2 * Math.PI]
-  } else {
-    cuts = [lo, ...zeros, hi]
-  }
+  const cuts = whole ? [...zeros, zeros[0] + 2 * Math.PI] : [lo, ...zeros, hi]
   const spans: [number, number][] = []
   for (let i = 0; i + 1 < cuts.length; i++) spans.push([cuts[i], cuts[i + 1]])
   const ordered = direction > 0 ? spans : spans.map(([a, b]): [number, number] => [b, a]).reverse()
