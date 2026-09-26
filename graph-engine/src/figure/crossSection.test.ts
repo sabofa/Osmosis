@@ -19,7 +19,7 @@ function shape(spec: SolidSpec, plane: SectionPlane) {
   return trueShape(section(spec, plane), plane)
 }
 
-function sortedVertices(s: { kind: 'polygon'; vertices: { x: number; y: number }[] } | { kind: 'circle' }) {
+function sortedVertices(s: { kind: 'polygon'; vertices: { x: number; y: number }[] } | { kind: 'circle' } | { kind: 'region' }) {
   if (s.kind !== 'polygon') throw new Error('expected a polygon')
   return [...s.vertices].sort((a, b) => a.x - b.x || a.y - b.y).map((p) => [round(p.x), round(p.y)])
 }
@@ -160,8 +160,12 @@ describe('a plane through a curved primitive', () => {
     expect(s.radius).toBeCloseTo(4, 12)
   })
 
-  it('fails legibly when the plane misses a sphere', () => {
-    expect(() => section({ kind: 'sphere', radius: 5 }, { kind: 'axis', axis: 'z', at: 5 })).toThrow(/misses the solid entirely/)
+  it('fails legibly when the plane misses a sphere, and says so when it only touches it (Q4)', () => {
+    expect(() => section({ kind: 'sphere', radius: 5 }, { kind: 'axis', axis: 'z', at: 6 })).toThrow(/misses the solid entirely/)
+    // Phase 8: tangent is not "misses" — the plane touches the sphere at one point.
+    expect(() => section({ kind: 'sphere', radius: 5 }, { kind: 'axis', axis: 'z', at: 5 })).toThrow(
+      'The plane x = 5 touches "S" at one point — it does not cut through it'
+    )
   })
 })
 
@@ -196,13 +200,6 @@ describe('a plane through a frustum (P2)', () => {
 })
 
 describe('sections of a placed round solid (P7)', () => {
-  it("refuses a tilted solid's section until oblique planes arrive", () => {
-    const tilted = buildSolid({ kind: 'cylinder', radius: 3, height: 8 }, placementAlong({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }))
-    expect(() => sectionOf(tilted, { kind: 'axis', axis: 'y', at: 1 }, 'C')).toThrow(
-      /"C" is a tilted cylinder: sections of a tilted cylinder arrive with oblique planes \(build step 8\)/
-    )
-  })
-
   it('cuts a vertical solid off the origin where it actually is, the offset measured in the world', () => {
     // A cylinder of radius 3 and height 8 centred at internal (2, 3, 1): it
     // spans y in [-1, 7]. The world plane y = 5 is 2 above its centre.
@@ -408,5 +405,256 @@ describe('the AIME square pyramid (Q3)', () => {
       twice += p.x * q.y - q.x * p.y
     })
     expect(Math.abs(twice) / 2).toBeCloseTo(Math.sqrt(80), 10)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8, Task 3 — sections of round solids by any plane (Q4, Q5)
+// ---------------------------------------------------------------------------
+//
+// Every expected value below is computed by hand in the AUTHOR frame (z up),
+// never read back from the code under test.
+
+type Piece3 = { kind: 'segment'; a: Vec3; b: Vec3 } | { kind: 'arc'; center: Vec3; u: Vec3; v: Vec3; from: number; to: number }
+
+function pieceStart(piece: Piece3): Vec3 {
+  if (piece.kind === 'segment') return piece.a
+  return {
+    x: piece.center.x + piece.u.x * Math.cos(piece.from) + piece.v.x * Math.sin(piece.from),
+    y: piece.center.y + piece.u.y * Math.cos(piece.from) + piece.v.y * Math.sin(piece.from),
+    z: piece.center.z + piece.u.z * Math.cos(piece.from) + piece.v.z * Math.sin(piece.from),
+  }
+}
+
+function pieceEnd(piece: Piece3): Vec3 {
+  if (piece.kind === 'segment') return piece.b
+  return pieceStart({ ...piece, from: piece.to })
+}
+
+// A plane from an author normal (need not be unit) and an author point on it.
+function authorPlane3(normal: Vec3, point: Vec3, source = 'the plane') {
+  const n = authorToWorld(normal)
+  return canonicalPlane({ point: authorToWorld(point), normal: scale3(n, 1 / length3(n)) }, source)
+}
+
+// The semi-axes of the ellipse an arc lies on, from its conjugate
+// semi-diameters — independently of the code under test: for conjugate u, v
+// the semi-axes are the square roots of the eigenvalues of the Gram matrix
+// [[u.u, u.v], [u.v, v.v]].
+function semiAxes(u: Vec3, v: Vec3): [number, number] {
+  const a = u.x * u.x + u.y * u.y + u.z * u.z
+  const c = v.x * v.x + v.y * v.y + v.z * v.z
+  const b = u.x * v.x + u.y * v.y + u.z * v.z
+  const mid = (a + c) / 2
+  const root = Math.sqrt(((a - c) / 2) ** 2 + b * b)
+  return [Math.sqrt(mid - root), Math.sqrt(mid + root)]
+}
+
+type Region = Extract<ReturnType<typeof sectionOf>, { kind: 'region' }>
+
+function region(s: ReturnType<typeof sectionOf>): Region {
+  if (s.kind !== 'region') throw new Error(`expected a region, got a ${s.kind}`)
+  return s
+}
+
+const arcsOf = (r: Region) => r.boundary.filter((p) => p.kind === 'arc')
+const chordsOf = (r: Region) => r.boundary.filter((p) => p.kind === 'segment')
+const chordLengths = (r: Region) =>
+  chordsOf(r)
+    .map((c) => (c.kind === 'segment' ? length3(sub3(c.b, c.a)) : 0))
+    .sort((a, b) => a - b)
+
+describe('sections of a sphere by any plane (Q4)', () => {
+  const SPHERE = buildSolid({ kind: 'sphere', radius: 5 })
+
+  it('cuts in a circle centred at the foot of the centre, radius sqrt(r^2 - d^2)', () => {
+    // n = (1, 2, 2)/3, distance 3: the foot is (1, 2, 2), the radius 4.
+    const s = sectionOf(SPHERE, authorPlane3({ x: 1, y: 2, z: 2 }, { x: 1, y: 2, z: 2 }), 'S')
+    if (s.kind !== 'circle') throw new Error('expected a circle')
+    expect(s.radius).toBeCloseTo(4, 12)
+    const c = worldToAuthor(s.center)
+    expect(c.x).toBeCloseTo(1, 12)
+    expect(c.y).toBeCloseTo(2, 12)
+    expect(c.z).toBeCloseTo(2, 12)
+  })
+
+  it('refuses a tangent plane: it touches the sphere at one point', () => {
+    expect(() => sectionOf(SPHERE, authorPlane3({ x: 3, y: 0, z: 4 }, { x: 3, y: 0, z: 4 }, '3x + 4z = 25'), 'S')).toThrow(
+      'The plane 3x + 4z = 25 touches "S" at one point — it does not cut through it'
+    )
+  })
+})
+
+describe('sections of a cylinder by any plane (Q4; radius 3, height 10, axis author Z)', () => {
+  const CYLINDER = buildSolid({ kind: 'cylinder', radius: 3, height: 10 })
+
+  it('cuts at 45 degrees through its centre in a whole ellipse, semi-axes 3 and 3 sqrt 2', () => {
+    // Normal (1, 0, 1): the plane's reach along the axis is +-3 tan 45 = +-3,
+    // inside the half-height 5, so nothing trims it.
+    const r = region(sectionOf(CYLINDER, authorPlane3({ x: 1, y: 0, z: 1 }, { x: 0, y: 0, z: 0 }), 'C'))
+    expect(chordsOf(r)).toHaveLength(0)
+    expect(arcsOf(r)).toHaveLength(1)
+    const [arc] = arcsOf(r)
+    if (arc.kind !== 'arc') return
+    expect(Math.abs(arc.to - arc.from)).toBeCloseTo(2 * Math.PI, 12)
+    const [minor, major] = semiAxes(arc.u, arc.v)
+    expect(minor).toBeCloseTo(3, 12)
+    expect(major).toBeCloseTo(3 * Math.SQRT2, 12)
+  })
+
+  it('cuts at 60 degrees from the axis through its centre in two arcs and two cap chords', () => {
+    // Reach +-3 tan 60 = +-5.196 > 5: both caps trim. On the cap z = 5 the
+    // plane sqrt(3)/2 x + z/2 = 0 is the line x = -5/sqrt 3, 5/sqrt 3 from the
+    // axis, so each chord is 2 sqrt(9 - 25/3) = 2 sqrt(2/3) = 2 sqrt(6)/3.
+    const r = region(sectionOf(CYLINDER, authorPlane3({ x: Math.sqrt(3) / 2, y: 0, z: 0.5 }, { x: 0, y: 0, z: 0 }), 'C'))
+    expect(arcsOf(r)).toHaveLength(2)
+    expect(chordsOf(r)).toHaveLength(2)
+    for (const length of chordLengths(r)) expect(length).toBeCloseTo((2 * Math.sqrt(6)) / 3, 12)
+    // The pieces chain end to end, closed.
+    r.boundary.forEach((piece, i) => {
+      const next = r.boundary[(i + 1) % r.boundary.length]
+      expect(length3(sub3(pieceEnd(piece), pieceStart(next)))).toBeLessThan(1e-9)
+    })
+  })
+
+  it('cuts the log wedge: 45 degrees through a diameter of the base, half an ellipse', () => {
+    // x - z = 5 contains the base diameter along Y at z = -5. On the side the
+    // height is -5 + 3 sin(theta) >= -5 for exactly half a turn.
+    const r = region(sectionOf(CYLINDER, authorPlane3({ x: 1, y: 0, z: -1 }, { x: 0, y: 0, z: -5 }), 'C'))
+    expect(arcsOf(r)).toHaveLength(1)
+    const [arc] = arcsOf(r)
+    if (arc.kind !== 'arc') return
+    expect(Math.abs(arc.to - arc.from)).toBeCloseTo(Math.PI, 12)
+    expect(chordLengths(r)).toHaveLength(1)
+    expect(chordLengths(r)[0]).toBeCloseTo(6, 12)
+  })
+
+  it('cuts parallel to its axis at distance 2 in a rectangle 2 sqrt 5 by 10', () => {
+    // An oblique vertical plane, x + y = 2 sqrt 2, 2 from the axis.
+    const s = sectionOf(CYLINDER, authorPlane3({ x: 1, y: 1, z: 0 }, { x: Math.SQRT2, y: Math.SQRT2, z: 0 }), 'C')
+    if (s.kind !== 'polygon') throw new Error('expected a polygon')
+    expect(s.points).toHaveLength(4)
+    const sides = s.points.map((p, i) => length3(sub3(s.points[(i + 1) % 4], p))).sort((a, b) => a - b)
+    expect(sides[0]).toBeCloseTo(2 * Math.sqrt(5), 12)
+    expect(sides[1]).toBeCloseTo(2 * Math.sqrt(5), 12)
+    expect(sides[2]).toBeCloseTo(10, 12)
+    expect(sides[3]).toBeCloseTo(10, 12)
+  })
+})
+
+describe('sections of a cone by any plane (Q4; radius 3, height 4: base z = -2, apex z = 2)', () => {
+  const CONE = buildSolid({ kind: 'cone', radius: 3, height: 4 })
+
+  it('cuts in an ellipse when the plane is less steep than the generators', () => {
+    // z = -1 + x/4. In the meridian y = 0 the generators z = 2 -+ 4x/3 meet it
+    // at (36/19, 0, -10/19) and (-36/13, 0, -22/13), both above the base: the
+    // major axis, 2a = 288 sqrt 17 / 247. At the centre (-108/247, 0,
+    // -274/247) the cone's radius is 576/247, 108/247 from the axis, so
+    // b = sqrt(576^2 - 108^2)/247 = 36/sqrt 247.
+    const r = region(sectionOf(CONE, authorPlane3({ x: -1, y: 0, z: 4 }, { x: 0, y: 0, z: -1 }), 'K'))
+    expect(chordsOf(r)).toHaveLength(0)
+    const [arc] = arcsOf(r)
+    if (arc.kind !== 'arc') return
+    const [minor, major] = semiAxes(arc.u, arc.v)
+    expect(major).toBeCloseTo((144 * Math.sqrt(17)) / 247, 12)
+    expect(minor).toBeCloseTo(36 / Math.sqrt(247), 12)
+    const centre = worldToAuthor(arc.center)
+    expect(centre.x).toBeCloseTo(-108 / 247, 12)
+    expect(centre.y).toBeCloseTo(0, 12)
+    expect(centre.z).toBeCloseTo(-274 / 247, 12)
+    // An independent parametric solve: where the plane meets the generators
+    // at other angles, the point is on the drawn ellipse. u and v are its
+    // principal semi-axes (perpendicular), so ((p - c).u/|u|^2)^2 +
+    // ((p - c).v/|v|^2)^2 = 1.
+    expect(Math.abs(arc.u.x * arc.v.x + arc.u.y * arc.v.y + arc.u.z * arc.v.z)).toBeLessThan(1e-9)
+    for (const theta of [0.3, 1.1, 2.5, 4.0]) {
+      // The generator from the apex (0, 0, 2) toward the rim at theta:
+      // (0, 0, 2) + t (3 cos, 3 sin, -4). On z = -1 + x/4:
+      // 2 - 4t = -1 + 3t cos(theta)/4, so t = 3 / (4 + 3 cos(theta)/4).
+      const t = 3 / (4 + (3 * Math.cos(theta)) / 4)
+      const p = authorToWorld({ x: 3 * t * Math.cos(theta), y: 3 * t * Math.sin(theta), z: 2 - 4 * t })
+      const d = sub3(p, arc.center)
+      const along = (w: Vec3) => (d.x * w.x + d.y * w.y + d.z * w.z) / (w.x * w.x + w.y * w.y + w.z * w.z)
+      expect(along(arc.u) ** 2 + along(arc.v) ** 2).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('refuses a plane parallel to a generator as a parabola', () => {
+    // 4x + 3z = 0 contains the direction (3, 0, -4) of a generator, and cuts
+    // the cone (the apex is on one side, the base centre on the other).
+    expect(() => sectionOf(CONE, authorPlane3({ x: 4, y: 0, z: 3 }, { x: 0, y: 0, z: 0 }, '4x + 3z = 0'), 'K')).toThrow(
+      'The plane 4x + 3z = 0 cuts "K" in a parabola, which is not drawn — only circles and ellipses are'
+    )
+  })
+
+  it('refuses a plane steeper than the generators, off the apex, as a hyperbola', () => {
+    expect(() => sectionOf(CONE, authorPlane3({ x: 1, y: 0, z: 0.1 }, { x: 1, y: 0, z: 0 }, 'x + 0.1z = 1'), 'K')).toThrow(
+      'The plane x + 0.1z = 1 cuts "K" in a hyperbola, which is not drawn — only circles and ellipses are'
+    )
+    // The axis-parallel plane on a cone at the origin keeps phase 5's wording.
+    expect(() => sectionOf(CONE, { kind: 'axis', axis: 'z', at: 1 }, 'K')).toThrow(/HYPERBOLA/)
+  })
+
+  it('cuts a plane through the apex that crosses the base in the triangle apex-chord', () => {
+    // x + 0.2 z = 0.4 passes through the apex (0, 0, 2); at the base z = -2 it
+    // is x = 0.8, a chord from (0.8, -sqrt 8.36, -2) to (0.8, sqrt 8.36, -2).
+    const s = sectionOf(CONE, authorPlane3({ x: 1, y: 0, z: 0.2 }, { x: 0, y: 0, z: 2 }), 'K')
+    if (s.kind !== 'polygon') throw new Error(`expected a polygon, got a ${s.kind}`)
+    const key = (p: Vec3) => [p.x, p.y, p.z].map((c) => Math.round(c * 1e9) / 1e9 + 0).join(',')
+    const half = Math.round(Math.sqrt(8.36) * 1e9) / 1e9
+    expect(s.points.map((p) => key(worldToAuthor(p))).sort()).toEqual(['0,0,2', `0.8,${half},-2`, `0.8,-${half},-2`].sort())
+  })
+
+  it('refuses a plane through the apex only, and one along a single generator, specifically', () => {
+    expect(() => sectionOf(CONE, authorPlane3({ x: 0.1, y: 0, z: 1 }, { x: 0, y: 0, z: 2 }, 'A'), 'K')).toThrow(
+      'The plane A meets "K" only at its apex — it does not cut through it'
+    )
+    expect(() => sectionOf(CONE, authorPlane3({ x: 4, y: 0, z: 3 }, { x: 0, y: 0, z: 2 }, 'B'), 'K')).toThrow(
+      'The plane B meets "K" only along one generator — it does not cut through it'
+    )
+  })
+})
+
+describe('sections of a frustum by any plane (Q4; radius 6, top 3, height 4)', () => {
+  it('cuts in two arcs and two cap chords when the plane reaches both caps', () => {
+    // x = z: on the top z = 2 it is x = 2 across a rim of radius 3, a chord
+    // 2 sqrt 5; on the base z = -2 it is x = -2 across a rim of radius 6, a
+    // chord 2 sqrt 32 = 8 sqrt 2. (The extended cone's apex is 8 above the
+    // base, so its generators rise at 4/3, steeper than the plane's 1: an
+    // ellipse.)
+    const frustum = buildSolid({ kind: 'frustum', radius: 6, top: 3, height: 4 })
+    const r = region(sectionOf(frustum, authorPlane3({ x: 1, y: 0, z: -1 }, { x: 0, y: 0, z: 0 }), 'F'))
+    expect(arcsOf(r)).toHaveLength(2)
+    expect(chordsOf(r)).toHaveLength(2)
+    const [short, long] = chordLengths(r)
+    expect(short).toBeCloseTo(2 * Math.sqrt(5), 12)
+    expect(long).toBeCloseTo(8 * Math.SQRT2, 12)
+  })
+})
+
+describe('a tilted round solid, cut in its own frame (Q4)', () => {
+  it('cuts a cylinder along author X by plane x = 0 in a circle of its radius (the old P7 refusal)', () => {
+    const tilted = buildSolid({ kind: 'cylinder', radius: 2, height: 6 }, placementAlong({ x: 0, y: 0, z: 0 }, authorToWorld({ x: 1, y: 0, z: 0 })))
+    // Author x = 0 is internal z = 0.
+    const s = sectionOf(tilted, { kind: 'axis', axis: 'z', at: 0 }, 'C')
+    if (s.kind !== 'circle') throw new Error(`expected a circle, got a ${s.kind}`)
+    expect(s.radius).toBeCloseTo(2, 12)
+    expect(length3(s.center)).toBeCloseTo(0, 12)
+  })
+})
+
+describe('the lifted true shape of a region (Q5)', () => {
+  it('keeps the log wedge a half ellipse at true size in its plane: semi-axes 3 and 3 sqrt 2, chord 6', () => {
+    const CYLINDER = buildSolid({ kind: 'cylinder', radius: 3, height: 10 })
+    const plane = authorPlane3({ x: 1, y: 0, z: -1 }, { x: 0, y: 0, z: -5 })
+    const shape = trueShape(sectionOf(CYLINDER, plane, 'C'), plane)
+    if (shape.kind !== 'region') throw new Error('expected a region')
+    const arc = shape.boundary.find((p) => p.kind === 'arc')
+    const chord = shape.boundary.find((p) => p.kind === 'segment')
+    if (!arc || arc.kind !== 'arc' || !chord || chord.kind !== 'segment') throw new Error('expected an arc and a chord')
+    const [minor, major] = semiAxes({ ...arc.u, z: 0 }, { ...arc.v, z: 0 })
+    expect(minor).toBeCloseTo(3, 12)
+    expect(major).toBeCloseTo(3 * Math.SQRT2, 12)
+    expect(Math.hypot(chord.b.x - chord.a.x, chord.b.y - chord.a.y)).toBeCloseTo(6, 12)
   })
 })

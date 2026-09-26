@@ -39,12 +39,12 @@ import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasu
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
 import { angle3, distance3 } from './construct3d'
 import { segmentSpans, type Span } from './occlusion'
-import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge, type Vec3 } from './project3d'
+import { cameraFor, drawClosedEdges, drawEdge, edgeExtremes, edgeObject, type Camera, type ProjectedEdge, type Vec3 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
 import { authorToWorld, describeAuthorPlane } from './authorFrame'
-import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
-import { projectCircle, type ProjectedCircle } from './silhouette'
+import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
+import { ellipseFromConjugates, projectCircle, type ProjectedCircle } from './silhouette'
 import {
   fmt,
   svgArc,
@@ -151,9 +151,20 @@ type FigureItem =
   | {
       kind: 'sectionFace'
       id: Identity
-      outline: { kind: 'polygon'; vertices: Vec2[] } | { kind: 'ellipse'; circle: ProjectedCircle }
+      outline:
+        | { kind: 'polygon'; vertices: Vec2[] }
+        | { kind: 'ellipse'; circle: ProjectedCircle }
+        // Q5 (phase 8) — a region bounded by chords and elliptical arcs, as
+        // the drawn-edge union a solid's outline uses.
+        | { kind: 'region'; edges: ProjectedEdge[] }
       color: string | null
     }
+  // Q5 (phase 8) — a LIFTED section that is a region: chords and elliptical
+  // arcs at true shape, in the plane, drawn by the one drawn-edge path a
+  // solid's outline uses (drawEdge, edgeExtremes). It is the 2D figure's own
+  // item, stroked like a polygon, so it takes part in the bounds and in label
+  // avoidance.
+  | { kind: 'region'; id: Identity; edges: ProjectedEdge[]; color: string | null }
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
   | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
   | { kind: 'rightAngleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; color: string | null }
@@ -652,6 +663,26 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     }))
   }
 
+  // A lifted section's named vertices (or a region's corners), registered as
+  // ORDINARY named points in the plane. A lifted section is at true size, so
+  // "label: PQ" measures the real edge, through the ordinary 2D path (H5).
+  function nameLiftedVertices(index: number, names: readonly string[], at: readonly Vec2[], color: string | null): void {
+    const clash = names.find((name) => isSpaceName(scope, name))
+    if (clash) throw new Error(`"${clash}" is already bound to a point in space — name the section's vertices differently`)
+    const centre = centroidOf(at)
+    for (let v = 0; v < at.length; v++) {
+      namedPoints.set(names[v], at[v])
+      items.push({
+        kind: 'point',
+        id: { statement: index, object: names[v] },
+        at: at[v],
+        label: names[v],
+        prefer: awayFrom(at[v], centre),
+        color,
+      })
+    }
+  }
+
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
     return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
@@ -795,10 +826,12 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
               outline:
                 section.kind === 'polygon'
                   ? { kind: 'polygon', vertices: section.points.map((point) => camera.project(point)) }
-                  : {
-                      kind: 'ellipse',
-                      circle: projectCircle(camera, section.center, ...planeRadii(plane, section.radius)),
-                    },
+                  : section.kind === 'region'
+                    ? { kind: 'region', edges: projectedRegion(section.boundary, camera) }
+                    : {
+                        kind: 'ellipse',
+                        circle: projectCircle(camera, section.center, ...planeRadii(plane, section.radius)),
+                      },
               color: statement.color,
             })
             break
@@ -812,13 +845,34 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           const shapeBounds = boundsOf(
             shape.kind === 'polygon'
               ? shape.vertices
-              : [
-                  { x: shape.center.x - shape.radius, y: shape.center.y - shape.radius },
-                  { x: shape.center.x + shape.radius, y: shape.center.y + shape.radius },
-                ]
+              : shape.kind === 'region'
+                ? liftedRegion(shape.boundary, (p) => p).flatMap(edgeExtremes)
+                : [
+                    { x: shape.center.x - shape.radius, y: shape.center.y - shape.radius },
+                    { x: shape.center.x + shape.radius, y: shape.center.y + shape.radius },
+                  ]
           )
           const offset = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds) : { x: 0, y: 0 }
           const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
+
+          if (shape.kind === 'region') {
+            items.push({ kind: 'region', id: { statement: index, object: statement.solid }, edges: liftedRegion(shape.boundary, move), color: statement.color })
+            if (statement.vertices.length === 0) break
+            // Q5 — a region's CORNERS, where an arc meets a chord, in boundary
+            // order from the first chord's start. A whole ellipse has none.
+            const corners = regionCorners(shape.boundary).map(move)
+            if (corners.length === 0) {
+              throw new Error(`The section of "${statement.solid}" by ${describeAuthorPlane(plane)} is an ellipse, which has no vertices to name`)
+            }
+            if (statement.vertices.length !== corners.length) {
+              throw new Error(
+                `The section of "${statement.solid}" by ${describeAuthorPlane(plane)} has ${corners.length} corners, ` +
+                  `but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
+              )
+            }
+            nameLiftedVertices(index, statement.vertices, corners, statement.color)
+            break
+          }
 
           if (shape.kind === 'circle') {
             if (statement.vertices.length > 0) {
@@ -837,23 +891,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
                   `but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
               )
             }
-            const clash = statement.vertices.find((name) => isSpaceName(scope, name))
-            if (clash) throw new Error(`"${clash}" is already bound to a point in space — name the section's vertices differently`)
-            const centre = centroidOf(vertices)
-            for (let v = 0; v < vertices.length; v++) {
-              // Registered as ORDINARY named points in the plane. A lifted
-              // section is at true size, so "label: PQ" measures the real
-              // edge, through the ordinary 2D path (H5).
-              namedPoints.set(statement.vertices[v], vertices[v])
-              items.push({
-                kind: 'point',
-                id: { statement: index, object: statement.vertices[v] },
-                at: vertices[v],
-                label: statement.vertices[v],
-                prefer: awayFrom(vertices[v], centre),
-                color: statement.color,
-              })
-            }
+            nameLiftedVertices(index, statement.vertices, vertices, statement.color)
           }
           break
         }
@@ -1087,6 +1125,59 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 }
 
 // ---------------------------------------------------------------------------
+// Q5 — a region's boundary, as drawn edges
+// ---------------------------------------------------------------------------
+
+// A whole turn is two arcs: one `A` command cannot sweep a full turn (its two
+// ends coincide and the curve is undefined), exactly as a rim is two halves.
+function splitTurn(from: number, to: number): [number, number][] {
+  if (Math.abs(to - from) < 2 * Math.PI - GEOM_EPS) return [[from, to]]
+  const half = (from + to) / 2
+  return [
+    [from, half],
+    [half, to],
+  ]
+}
+
+function arcEdge(circle: ProjectedCircle, from: number, to: number, object: string): ProjectedEdge {
+  return {
+    kind: 'arc',
+    center: circle.center,
+    rx: circle.rx,
+    ry: circle.ry,
+    rotation: circle.rotation,
+    startAngle: circle.parameter(from),
+    endAngle: circle.parameter(to),
+    hidden: false,
+    object,
+  }
+}
+
+// A lifted region, in the plane: each arc `center + u cos t + v sin t` is
+// already 2D, so its ellipse comes straight from its conjugate semi-diameters
+// by the one closed form (silhouette.ts's ellipseFromConjugates).
+function liftedRegion(boundary: readonly TrueShapePiece[], move: (p: Vec2) => Vec2): ProjectedEdge[] {
+  return boundary.flatMap((piece, i): ProjectedEdge[] => {
+    if (piece.kind === 'segment') return [{ kind: 'segment', a: move(piece.a), b: move(piece.b), hidden: false, vertices: [0, 0], object: `piece-${i}` }]
+    const circle = ellipseFromConjugates(move(piece.center), piece.u, piece.v)
+    return splitTurn(piece.from, piece.to).map(([from, to]) => arcEdge(circle, from, to, `piece-${i}`))
+  })
+}
+
+// A region in space, through the camera: an arc is a circle's image under an
+// orthographic camera, which projectCircle already draws from any two
+// conjugate semi-diameters.
+function projectedRegion(boundary: readonly SectionPiece[], camera: Camera): ProjectedEdge[] {
+  return boundary.flatMap((piece, i): ProjectedEdge[] => {
+    if (piece.kind === 'segment') {
+      return [{ kind: 'segment', a: camera.project(piece.a), b: camera.project(piece.b), hidden: false, vertices: [0, 0], object: `piece-${i}` }]
+    }
+    const circle = projectCircle(camera, piece.center, piece.u, piece.v)
+    return splitTurn(piece.from, piece.to).map(([from, to]) => arcEdge(circle, from, to, `piece-${i}`))
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Bounds
 // ---------------------------------------------------------------------------
 
@@ -1123,8 +1214,12 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'solidVertex':
         points.push(item.at)
         break
+      case 'region':
+        for (const edge of item.edges) points.push(...edgeExtremes(edge))
+        break
       case 'sectionFace':
         if (item.outline.kind === 'polygon') points.push(...item.outline.vertices)
+        else if (item.outline.kind === 'region') for (const edge of item.outline.edges) points.push(...edgeExtremes(edge))
         else {
           const { center, rx, ry } = item.outline.circle
           // The ellipse's own bounding box, which is never smaller than the
@@ -1417,11 +1512,12 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // across its own angle arc is unreadable. Pushing sets where the label
       // starts looking; this is what stops it landing on the ink.
       obstacles.circles.push({ center: projection.toView(item.vertex), radius: angleArcRadius(item, projection) })
-    } else if (item.kind === 'solid') {
+    } else if (item.kind === 'solid' || item.kind === 'region' || (item.kind === 'sectionFace' && item.outline.kind === 'region')) {
       // An arc is an obstacle too, approximated for the label layout by the
       // chords between its exact extremes — a bound on where the ink is, not
       // a sampling of the curve, which is why it never reaches the emitter.
-      for (const edge of item.edges) {
+      const edges = item.kind === 'sectionFace' ? (item.outline.kind === 'region' ? item.outline.edges : []) : item.edges
+      for (const edge of edges) {
         const points = edgeExtremes(edge).map((point) => projection.toView(point))
         for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
       }
@@ -1634,10 +1730,23 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         layers.regions.push(svgPolygon(item.outline.vertices.map(to), fill))
         break
       }
+      if (item.outline.kind === 'region') {
+        layers.regions.push(drawClosedEdges(item.outline.edges, projection.toView, projection.scale, fill))
+        break
+      }
       const circle = item.outline.circle
       layers.regions.push(
         svgEllipse(to(circle.center), circle.rx * projection.scale, circle.ry * projection.scale, -circle.rotation, fill)
       )
+      break
+    }
+    case 'region': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      for (const edge of item.edges) {
+        layers.primary.push(
+          drawEdge(edge, projection.toView, projection.scale, { stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) })
+        )
+      }
       break
     }
     case 'polygon': {

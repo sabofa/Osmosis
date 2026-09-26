@@ -851,7 +851,9 @@ function parseCrossSection(text: string, lift: boolean): StatementShape {
       )
     }
     const names = [...clause[1].trim()]
-    if (names.length < 3 || names.some((n) => !/^[a-zA-Z]$/.test(n))) {
+    // Two names at least: a region cut from a round solid (phase 8, Q5) can
+    // have only two corners, the ends of its one chord.
+    if (names.length < 2 || names.some((n) => !/^[a-zA-Z]$/.test(n))) {
       throw new Error(`Expected "vertices PQRS" — a run of single-letter names, one per vertex — got "${clause[1]}"`)
     }
     if (new Set(names).size !== names.length) throw new Error(`Vertex names must be distinct, got "${clause[1]}"`)

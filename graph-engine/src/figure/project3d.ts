@@ -12,7 +12,7 @@ import {
   type Rect,
 } from './document'
 import { authorToWorld } from './authorFrame'
-import { ellipsePoint, svgEllipticalArc, svgLine, type SvgAttrs } from './svg'
+import { ellipsePoint, ellipticalArcCommand, lineCommand, svgClosedPath, svgEllipticalArc, svgLine, type SvgAttrs } from './svg'
 
 // 3D solids, drawn through the same SVG renderer.
 //
@@ -363,6 +363,26 @@ export function drawEdge(edge: ProjectedEdge, toView: (p: Vec2) => Vec2, scale: 
     -edge.endAngle,
     { fill: 'none', ...style }
   )
+}
+
+// A closed chain of drawn edges — a section's region (phase 8) — as ONE
+// filled path, through the same conversions `drawEdge` makes: an arc's radii
+// scale with the figure and its rotation and parameters negate, because view
+// space flips y.
+export function drawClosedEdges(edges: readonly ProjectedEdge[], toView: (p: Vec2) => Vec2, scale: number, style: SvgAttrs): string {
+  let start: Vec2 | null = null
+  const commands: string[] = []
+  for (const edge of edges) {
+    if (edge.kind === 'segment') {
+      start ??= toView(edge.a)
+      commands.push(lineCommand(toView(edge.b)))
+      continue
+    }
+    const { from, command } = ellipticalArcCommand(toView(edge.center), edge.rx * scale, edge.ry * scale, -edge.rotation, -edge.startAngle, -edge.endAngle)
+    start ??= from
+    commands.push(command)
+  }
+  return svgClosedPath(start ?? { x: 0, y: 0 }, commands, style)
 }
 
 function edgeKey(a: number, b: number): string {

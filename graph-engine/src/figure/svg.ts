@@ -177,6 +177,21 @@ export function svgEllipticalArc(
   endAngle: number,
   style: SvgAttrs
 ): string {
+  const { from, command } = ellipticalArcCommand(center, rx, ry, rotation, startAngle, endAngle)
+  const d = `M ${fmt(from.x)} ${fmt(from.y)} ` + command
+  return `<path${attrs({ d, ...style })}/>`
+}
+
+// The one `A` command of an elliptical arc, and the point it starts from —
+// shared by a stand-alone arc and by a closed region's outline (phase 8).
+export function ellipticalArcCommand(
+  center: Vec2,
+  rx: number,
+  ry: number,
+  rotation: number,
+  startAngle: number,
+  endAngle: number
+): { from: Vec2; command: string } {
   const at = (t: number): Vec2 => ellipsePoint(center, rx, ry, rotation, t)
   const from = at(startAngle)
   const to = at(endAngle)
@@ -187,10 +202,19 @@ export function svgEllipticalArc(
   // positive delta is the positive-sweep direction SVG's flag names.
   const sweep = delta >= 0 ? 1 : 0
   const degrees = (rotation * 180) / Math.PI
-  const d =
-    `M ${fmt(from.x)} ${fmt(from.y)} ` +
-    `A ${fmt(rx)} ${fmt(ry)} ${fmt(degrees)} ${largeArc} ${sweep} ${fmt(to.x)} ${fmt(to.y)}`
+  return { from, command: `A ${fmt(rx)} ${fmt(ry)} ${fmt(degrees)} ${largeArc} ${sweep} ${fmt(to.x)} ${fmt(to.y)}` }
+}
+
+// A closed outline, as one path: a start point, then line and arc commands,
+// closed. A region (phase 8) is filled as ONE element, so its fill has no
+// seam where two pieces meet.
+export function svgClosedPath(start: Vec2, commands: readonly string[], style: SvgAttrs): string {
+  const d = [`M ${fmt(start.x)} ${fmt(start.y)}`, ...commands, 'Z'].join(' ')
   return `<path${attrs({ d, ...style })}/>`
+}
+
+export function lineCommand(to: Vec2): string {
+  return `L ${fmt(to.x)} ${fmt(to.y)}`
 }
 
 // The point of an ellipse at parameter `t`. Exported because the geometry

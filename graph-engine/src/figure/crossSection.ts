@@ -4,9 +4,10 @@ import type { Solid3D, Vec3 } from './project3d'
 import { dot3, scale3, sub3 } from './construct3d'
 import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
 import { describeAuthorPlane, worldToAuthor } from './authorFrame'
-import { signedDistance } from './plane'
+import { planeOfSection, signedDistance } from './plane'
 import { fmt } from './svg'
-import { isIdentityPlacement, toWorld, type Placement } from './silhouette'
+import { isIdentityPlacement, rotateToLocal, rotateToWorld, toLocal, toWorld, type Placement } from './silhouette'
+import { localSection, type LocalSection, type SectionPiece } from './conicSection'
 
 // Plane ∩ solid.
 //
@@ -48,13 +49,30 @@ export type SectionPlane =
 type AxisPlane = Extract<SectionPlane, { kind: 'axis' }>
 
 // The section, in space. A polygon for a polyhedron; a circle for a plane
-// square to a cylinder's, a cone's or a sphere's axis.
+// square to a cylinder's, a cone's or a sphere's axis, and for any plane
+// through a sphere; and (Q5, phase 8) a REGION bounded by straight chords and
+// elliptical arcs — an oblique cut of a cylinder, cone or frustum. A region's
+// pieces chain end to end, closed; a whole ellipse is one arc of a full turn.
+// A circle stays a circle, so every axis cut keeps its shape and its bytes.
 export type Section =
   | { kind: 'polygon'; points: Vec3[] }
   | { kind: 'circle'; center: Vec3; radius: number }
+  | { kind: 'region'; boundary: SectionPiece[] }
 
-// The same section, in its OWN plane — the true shape, at true size.
-export type TrueShape = { kind: 'polygon'; vertices: Vec2[] } | { kind: 'circle'; center: Vec2; radius: number }
+export type { SectionPiece }
+
+// A piece of a region's boundary in the plane: a chord, or the arc
+// `center + u cos t + v sin t` for t from `from` to `to`.
+export type TrueShapePiece =
+  | { kind: 'segment'; a: Vec2; b: Vec2 }
+  | { kind: 'arc'; center: Vec2; u: Vec2; v: Vec2; from: number; to: number }
+
+// The same section, in its OWN plane — the true shape, at true size. A
+// region's vectors are expressed in the plane's own frame (Q5).
+export type TrueShape =
+  | { kind: 'polygon'; vertices: Vec2[] }
+  | { kind: 'circle'; center: Vec2; radius: number }
+  | { kind: 'region'; boundary: TrueShapePiece[] }
 
 // ---------------------------------------------------------------------------
 // The plane's own 2D frame
@@ -83,6 +101,13 @@ export function inPlane(plane: SectionPlane, p: Vec3): Vec2 {
     case 'z':
       return { x: p.x, y: p.y }
   }
+}
+
+// A VECTOR lying in the plane, in the plane's own frame: the linear part of
+// `inPlane`. A region's arcs carry their conjugate semi-diameters this way.
+export function inPlaneVector(plane: SectionPlane, v: Vec3): Vec2 {
+  if (plane.kind === 'general') return { x: dot3(v, plane.u), y: dot3(v, plane.v) }
+  return inPlane(plane, v)
 }
 
 // The two radius vectors of a circle lying in the plane, for a circle of the
@@ -175,12 +200,17 @@ function polyhedronSection(solid: Solid3D, plane: SectionPlane, name: string): S
   if (unique.length === 2) throw touches(plane, name, `along the edge ${authorText(unique[0])}-${authorText(unique[1])}`)
   if (unique.length < 3) throw missesSolid(plane, name)
 
+  return { kind: 'polygon', points: windPolygon(unique, plane) }
+}
+
+// Q1's vertex order: by angle about the centroid, in the plane's own frame.
+function windPolygon(unique: Vec3[], plane: SectionPlane): Vec3[] {
   const flat = unique.map((p) => inPlane(plane, p))
   const centre = flat.reduce((acc, p) => ({ x: acc.x + p.x / flat.length, y: acc.y + p.y / flat.length }), { x: 0, y: 0 })
   const order = flat
     .map((p, index) => ({ index, angle: windingAngle(plane, p.y - centre.y, p.x - centre.x), p }))
     .sort((a, b) => a.angle - b.angle || a.p.x - b.p.x || a.p.y - b.p.y)
-  return { kind: 'polygon', points: order.map((entry) => unique[entry.index]) }
+  return order.map((entry) => unique[entry.index])
 }
 
 // Q1's winding: by angle about the centroid in the plane's own frame,
@@ -218,32 +248,117 @@ function missesSolid(plane: SectionPlane, name: string): Error {
 
 export function sectionOf(body: SolidBody, plane: SectionPlane, name: string): Section {
   if (body.polyhedron) return polyhedronSection(body.polyhedron, plane, name)
-  if (plane.kind === 'general') throw new Error(`The plane ${describeAuthorPlane(plane)} is oblique, and oblique sections of a round solid are not drawn yet`)
-  if (isIdentityPlacement(body.placement)) return curvedSection(body.spec, plane, name)
-  return placedSection(body, plane, name)
+  // An axis plane through an upright round solid keeps phase 5's and phase
+  // 7's own code paths, and their bytes. Every other cut of a round solid —
+  // an oblique plane, or any plane through a tilted solid — is solved in the
+  // solid's own frame (Q4).
+  if (plane.kind === 'axis') {
+    if (isIdentityPlacement(body.placement)) return curvedSection(body.spec, plane, name)
+    if (isUpright(body.placement)) return placedSection(body, plane, name)
+  }
+  return roundSection(body, plane, name)
+}
+
+function isUpright(placement: Placement): boolean {
+  return Math.abs(Math.abs(placement.frame.axis.y) - 1) <= GEOM_EPS
 }
 
 // ---------------------------------------------------------------------------
-// P7 — sections of a PLACED round solid
+// Q4 — a round solid by any plane, in its own frame
 // ---------------------------------------------------------------------------
 //
-// A round solid placed by points (P1) is cut in its own frame. This phase's
-// planes are axis-perpendicular, so that works only while the solid's axis is
-// author-vertical: its local frame is then the world's, turned about the
-// vertical by at most a half turn, and every axis plane stays an axis plane.
-// A TILTED round solid meets an axis plane obliquely — an ellipse, or worse —
-// and that arrives with build step 8's oblique planes, so it is refused now
-// rather than drawn wrong.
+// The world plane becomes `n . p = d` in the solid's local frame (P1: centred,
+// axis +y), conicSection.ts solves it there in closed form, and the answer is
+// carried back out: points through the placement, vectors through its
+// rotation. This is what lifts P7's refusal of a tilted round solid.
+function roundSection(body: SolidBody, plane: SectionPlane, name: string): Section {
+  const world = planeOfSection(plane)
+  const n = rotateToLocal(body.placement, world.normal)
+  const d = dot3(n, toLocal(body.placement, world.point))
+  const where = describeAuthorPlane(plane)
+  const local = localSection(body.spec, n, d, {
+    misses: () => missesSolid(plane, name),
+    touches: (at) => new Error(`The plane ${where} meets "${name}" only ${at} — it does not cut through it`),
+    tangent: () => tangentTo(plane, name),
+    conic: (kind) => new Error(`The plane ${where} cuts "${name}" in a ${kind}, which is not drawn — only circles and ellipses are`),
+  })
+  return worldSection(local, body.placement, plane)
+}
+
+function tangentTo(plane: SectionPlane, name: string): Error {
+  return new Error(`The plane ${describeAuthorPlane(plane)} touches "${name}" at one point — it does not cut through it`)
+}
+
+function worldSection(local: LocalSection, placement: Placement, plane: SectionPlane): Section {
+  switch (local.kind) {
+    case 'circle':
+      return { kind: 'circle', center: toWorld(placement, local.center), radius: local.radius }
+    case 'polygon':
+      return { kind: 'polygon', points: windPolygon(local.points.map((p) => toWorld(placement, p)), plane) }
+    case 'region': {
+      const boundary = local.boundary.map(
+        (piece): SectionPiece =>
+          piece.kind === 'segment'
+            ? { kind: 'segment', a: toWorld(placement, piece.a), b: toWorld(placement, piece.b) }
+            : {
+                kind: 'arc',
+                center: toWorld(placement, piece.center),
+                u: rotateToWorld(placement, piece.u),
+                v: rotateToWorld(placement, piece.v),
+                from: piece.from,
+                to: piece.to,
+              }
+      )
+      return { kind: 'region', boundary: orderRegion(boundary, plane) }
+    }
+  }
+}
+
+// Q5's boundary order, fixed so a region's corners can be named: counter-
+// clockwise in the plane's own frame (the frame a lifted section is drawn
+// in), starting with the chord lowest in that frame — its midpoint's v, then
+// its u — so a region's first corner is the left end of its lowest chord.
+// A whole ellipse has no chord and keeps its one arc.
+function orderRegion(boundary: SectionPiece[], plane: SectionPlane): SectionPiece[] {
+  const arc = boundary.find((piece) => piece.kind === 'arc')
+  let pieces = boundary
+  if (arc && arc.kind === 'arc') {
+    const u = inPlaneVector(plane, arc.u)
+    const v = inPlaneVector(plane, arc.v)
+    // Increasing t turns counter-clockwise when u x v > 0; every arc of one
+    // boundary runs the same way round, so one arc decides.
+    if ((u.x * v.y - u.y * v.x) * (arc.to - arc.from) < 0) {
+      pieces = [...boundary].reverse().map(
+        (piece): SectionPiece =>
+          piece.kind === 'segment' ? { kind: 'segment', a: piece.b, b: piece.a } : { ...piece, from: piece.to, to: piece.from }
+      )
+    }
+  }
+  let first = -1
+  let lowest = { x: Infinity, y: Infinity }
+  pieces.forEach((piece, i) => {
+    if (piece.kind !== 'segment') return
+    const mid = inPlane(plane, { x: (piece.a.x + piece.b.x) / 2, y: (piece.a.y + piece.b.y) / 2, z: (piece.a.z + piece.b.z) / 2 })
+    if (mid.y < lowest.y - GEOM_EPS || (Math.abs(mid.y - lowest.y) <= GEOM_EPS && mid.x < lowest.x)) {
+      first = i
+      lowest = mid
+    }
+  })
+  return first <= 0 ? pieces : [...pieces.slice(first), ...pieces.slice(0, first)]
+}
+
+// ---------------------------------------------------------------------------
+// P7 — sections of a PLACED, UPRIGHT round solid by an axis plane
+// ---------------------------------------------------------------------------
 //
-// A vertical solid off the origin is cut where it actually is: the world
-// plane's offset is converted into the local frame, the section solved there,
-// and its points carried back out.
+// A round solid placed by points (P1) with its axis author-vertical: its
+// local frame is the world's, turned about the vertical by at most a half
+// turn, and every axis plane stays an axis plane. It is cut where it actually
+// is: the world plane's offset is converted into the local frame, the section
+// solved there, and its points carried back out. (A TILTED round solid, which
+// P7 refused, is cut by roundSection above since phase 8.)
 function placedSection(body: SolidBody, plane: AxisPlane, name: string): Section {
   const { origin, frame } = body.placement
-  const vertical = Math.abs(Math.abs(frame.axis.y) - 1) <= GEOM_EPS
-  if (!vertical) {
-    throw new Error(`"${name}" is a tilted ${body.spec.kind}: sections of a tilted ${body.spec.kind} arrive with oblique planes (build step 8)`)
-  }
   // A vertical frame is (u, axis, w) = (+-x, +-y, z) exactly (see
   // frameForAxis), so each world axis is one local axis, perhaps reversed.
   const sign: Record<PlaneAxis, number> = { x: Math.sign(frame.u.x), y: Math.sign(frame.axis.y), z: Math.sign(frame.w.z) }
@@ -255,6 +370,7 @@ function placedSection(body: SolidBody, plane: AxisPlane, name: string): Section
 
 function placeSection(section: Section, placement: Placement): Section {
   if (section.kind === 'circle') return { kind: 'circle', center: toWorld(placement, section.center), radius: section.radius }
+  if (section.kind === 'region') throw new Error('An axis section of an upright round solid is a circle or a polygon')
   return { kind: 'polygon', points: section.points.map((p) => toWorld(placement, p)) }
 }
 
@@ -273,6 +389,8 @@ function curvedSection(
   switch (spec.kind) {
     case 'sphere': {
       const inside = spec.radius * spec.radius - plane.at * plane.at
+      // Q4 (phase 8): tangent is not "misses".
+      if (Math.abs(inside) <= GEOM_EPS) throw tangentTo(world(plane), name)
       if (inside <= GEOM_EPS) throw misses()
       return { kind: 'circle', center: centreOnPlane(plane), radius: Math.sqrt(inside) }
     }
@@ -388,7 +506,45 @@ function frustumTrapezoid(plane: AxisPlane, bottom: number, top: number, y: numb
 // This is what goes back to the figure renderer (H5).
 export function trueShape(section: Section, plane: SectionPlane): TrueShape {
   if (section.kind === 'circle') return { kind: 'circle', center: inPlane(plane, section.center), radius: section.radius }
+  if (section.kind === 'region') {
+    return {
+      kind: 'region',
+      boundary: section.boundary.map(
+        (piece): TrueShapePiece =>
+          piece.kind === 'segment'
+            ? { kind: 'segment', a: inPlane(plane, piece.a), b: inPlane(plane, piece.b) }
+            : {
+                kind: 'arc',
+                center: inPlane(plane, piece.center),
+                u: inPlaneVector(plane, piece.u),
+                v: inPlaneVector(plane, piece.v),
+                from: piece.from,
+                to: piece.to,
+              }
+      ),
+    }
+  }
   return { kind: 'polygon', vertices: section.points.map((p) => inPlane(plane, p)) }
+}
+
+// A region's CORNERS, where an arc meets a chord, in boundary order from the
+// first chord's start (Q5): what "vertices PQ..." names. A whole ellipse has
+// none.
+export function regionCorners(boundary: readonly TrueShapePiece[]): Vec2[] {
+  const corners: Vec2[] = []
+  boundary.forEach((piece, i) => {
+    const before = boundary[(i + boundary.length - 1) % boundary.length]
+    if (boundary.length > 1 && before.kind !== piece.kind) corners.push(pieceStart2(piece))
+  })
+  return corners
+}
+
+export function pieceStart2(piece: TrueShapePiece): Vec2 {
+  if (piece.kind === 'segment') return piece.a
+  return {
+    x: piece.center.x + piece.u.x * Math.cos(piece.from) + piece.v.x * Math.sin(piece.from),
+    y: piece.center.y + piece.u.y * Math.cos(piece.from) + piece.v.y * Math.sin(piece.from),
+  }
 }
 
 // Where a lifted section sits: **beside the solid, never on top of it**.

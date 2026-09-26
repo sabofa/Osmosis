@@ -173,6 +173,15 @@ export function projectCircle(camera: Camera, center: Vec3, u: Vec3, v: Vec3): P
   // (P1) is affine, and hands over its linear part for exactly this.
   const a = projectVector(camera, u)
   const b = projectVector(camera, v)
+  return ellipseFromConjugates(camera.project(center), a, b)
+}
+
+// The ellipse `center + a cos t + b sin t` in the plane, for any two
+// conjugate semi-diameters a and b, in the axis-and-rotation form SVG's `A`
+// command wants — THE closed form, shared by every circle a camera projects
+// and by a lifted section's elliptical arcs (phase 8, Q5), which are already
+// in the plane and need no camera.
+export function ellipseFromConjugates(center: Vec2, a: Vec2, b: Vec2): ProjectedCircle {
   const t0 = 0.5 * Math.atan2(2 * (a.x * b.x + a.y * b.y), a.x * a.x + a.y * a.y - (b.x * b.x + b.y * b.y))
   const cos = Math.cos(t0)
   const sin = Math.sin(t0)
@@ -187,7 +196,7 @@ export function projectCircle(camera: Camera, center: Vec3, u: Vec3, v: Vec3): P
   const sign = cross2(major, minor) < 0 ? -1 : 1
   const rotation = Math.atan2(major.y, major.x)
   return {
-    center: camera.project(center),
+    center,
     rx,
     ry,
     rotation,

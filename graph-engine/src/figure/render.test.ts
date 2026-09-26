@@ -10,6 +10,7 @@ import { buildSolidFigure } from './solidScope'
 import { GEOM_EPS } from '../scene/geometry/types'
 import { bodyDimensionSegment, buildSolid, drawnDimensionSegment, regularTetrahedron, solidOutline, type SolidSpec } from './solids'
 import { renderFigure } from './render'
+import { sectionOf } from './crossSection'
 import { resolveMode } from '../scene/mode'
 import { EXAMPLES } from '../examples'
 
@@ -2757,5 +2758,150 @@ describe('oblique sections of polyhedra (phase 8)', () => {
   it('refuses a plane that only touches the solid, in the author’s words', () => {
     const errors = result(`${CUBE}\nsection: K by plane through G perpendicular to A-G`).errors.map((e) => e.message)
     expect(errors).toEqual(['The plane through G perpendicular to A-G meets "K" only at the vertex (1, 1, 1) — it does not cut through it'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8, Task 3 — sections of round solids in the 2D figure path (Q4, Q5)
+// ---------------------------------------------------------------------------
+
+describe('round solids cut by any plane, drawn (phase 8)', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const LOG = '@mode: figure\nC = solid cylinder radius 3, height 10'
+  // 45 degrees through the base diameter along Y at z = -5: half an ellipse.
+  const WEDGE = 'x - z = 5'
+
+  function viewBox(svg: string): { x: number; y: number; width: number; height: number } {
+    const m = /viewBox="([^"]*)"/.exec(svg)
+    if (!m) throw new Error('no viewBox')
+    const [x, y, width, height] = m[1].split(' ').map(Number)
+    return { x, y, width, height }
+  }
+
+  // Every elliptical-arc path the lifted section (statement `index`) emits.
+  function sectionArcs(svg: string, index: number) {
+    return [...svg.matchAll(/<path d="M ([^ ]+) ([^ ]+) A ([^ ]+) ([^ ]+) ([^ ]+) (\d) (\d) ([^ ]+) ([^"]+)"[^>]*data-statement="(\d+)"/g)]
+      .filter((m) => Number(m[10]) === index)
+      .map((m) => ({
+        from: { x: Number(m[1]), y: Number(m[2]) },
+        rx: Number(m[3]),
+        ry: Number(m[4]),
+        rotation: (Number(m[5]) * Math.PI) / 180,
+        to: { x: Number(m[8]), y: Number(m[9]) },
+      }))
+  }
+
+  it('lifts the log wedge as a region of true elliptical arcs, never a polyline', () => {
+    const svg = render(`${LOG}\nsection: C by plane ${WEDGE}`)
+    expect(svg).not.toContain('<polyline')
+    const arcs = sectionArcs(svg, 1)
+    expect(arcs.length).toBeGreaterThan(0)
+    // Semi-axes 3 and 3 sqrt 2 at the figure's scale: their ratio is sqrt 2.
+    for (const arc of arcs) expect(Math.max(arc.rx, arc.ry) / Math.min(arc.rx, arc.ry)).toBeCloseTo(Math.SQRT2, 2)
+  })
+
+  it('names the wedge’s two corners and measures its chord, the base diameter, at 6', () => {
+    const base = `${LOG}\nsection: C by plane ${WEDGE} vertices PQ`
+    expect(result(`${base}\nlabel: PQ = 6`).errors).toEqual([])
+    expect(result(`${base}\nlabel: PQ = 5`).errors).toHaveLength(1)
+    // P is the left end of the lowest chord: the chord is the bottom edge,
+    // so P is left of Q and level with it.
+    const svg = render(base)
+    const at = (name: string) => {
+      const m = new RegExp(`<circle cx="([^"]*)" cy="([^"]*)"[^>]*data-object="${name}"`).exec(svg)
+      if (!m) throw new Error(`no ${name}`)
+      return { x: Number(m[1]), y: Number(m[2]) }
+    }
+    expect(at('P').x).toBeLessThan(at('Q').x)
+    expect(at('P').y).toBeCloseTo(at('Q').y, 2)
+  })
+
+  it('counts every corner of a region cut by both caps', () => {
+    // A plane 60 degrees from the axis through the centre: two arcs, two chords.
+    const spec = `${LOG}\nsection: C by plane sqrt(3)*x + z = 0 vertices PQRS`
+    expect(result(spec).errors).toEqual([])
+    // Each chord is 2 sqrt(6)/3 (hand-computed in crossSection.test.ts).
+    const chord = ((2 * Math.sqrt(6)) / 3).toFixed(12)
+    expect(result(`${spec}\nlabel: PQ = ${chord}\nlabel: RS = ${chord}`).errors).toEqual([])
+    expect(result(`${LOG}\nsection: C by plane sqrt(3)*x + z = 0 vertices PQR`).errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/has 4 corners, but 3 names were given/),
+    ])
+  })
+
+  it('refuses to name the vertices of a whole ellipse', () => {
+    const errors = result(`${LOG}\nsection: C by plane x + z = 0 vertices PQ`).errors.map((e) => e.message)
+    expect(errors).toEqual([expect.stringMatching(/is an ellipse, which has no vertices to name/)])
+  })
+
+  it('keeps a lifted ellipse inside the figure: the region votes on the bounds', () => {
+    // 45 degrees through the centre: a whole ellipse, lifted to the right of
+    // the solid. Its drawn extent, from the emitted arcs, lies inside the
+    // viewBox.
+    const svg = render(`${LOG}\nsection: C by plane x + z = 0`)
+    const arcs = sectionArcs(svg, 1)
+    expect(arcs).toHaveLength(2)
+    // The two halves of a whole ellipse meet at opposite ends: the centre is
+    // their midpoint.
+    const centre = { x: (arcs[0].from.x + arcs[0].to.x) / 2, y: (arcs[0].from.y + arcs[0].to.y) / 2 }
+    const { rx, ry, rotation } = arcs[0]
+    const halfWidth = Math.hypot(rx * Math.cos(rotation), ry * Math.sin(rotation))
+    const halfHeight = Math.hypot(rx * Math.sin(rotation), ry * Math.cos(rotation))
+    const box = viewBox(svg)
+    expect(centre.x + halfWidth).toBeLessThanOrEqual(box.x + box.width)
+    expect(centre.x - halfWidth).toBeGreaterThanOrEqual(box.x)
+    expect(centre.y + halfHeight).toBeLessThanOrEqual(box.y + box.height)
+    expect(centre.y - halfHeight).toBeGreaterThanOrEqual(box.y)
+  })
+
+  it('cuts a tilted cylinder by plane x = 0 in its circle, where P7 refused', () => {
+    const spec = '@mode: figure\nA = (-3, 0, 0)\nB = (3, 0, 0)\nC = solid cylinder from A to B radius 2\ncut: C by plane x = 0\nsection: C by plane x = 0'
+    const figure = result(spec)
+    expect(figure.errors).toEqual([])
+    // Not merely "no error": the lifted section IS a circle — one <circle>
+    // for statement 4 and no straight side — which a plane taken in the
+    // wrong frame (parallel to the axis: a rectangle) would not be.
+    expect([...layer(figure.svg, 'primary').matchAll(/<circle [^>]*data-statement="4"/g)]).toHaveLength(1)
+    expect([...layer(figure.svg, 'primary').matchAll(/<line [^>]*data-statement="4"/g)]).toHaveLength(0)
+    // In place, the circle's projection: one closed ellipse.
+    expect(countTags(layer(figure.svg, 'regions'), 'ellipse')).toBe(1)
+  })
+
+  it('shades an oblique cut of a round solid in place as one closed region', () => {
+    const svg = render(`${LOG}\ncut: C by plane ${WEDGE}`)
+    const regions = layer(svg, 'regions')
+    expect(countTags(regions, 'path')).toBe(1)
+    expect(regions).toMatch(/<path d="M [^"]* A [^"]* Z"/)
+  })
+
+  it('draws the AIME sphere-through-three-points check: the circle radius 65/8, and OF = 15 sqrt 95 / 8', () => {
+    // A 13-14-15 triangle ABC with O 20 from each vertex, and the sphere of
+    // radius 20 about O. Plane A-B-C cuts it in the circumcircle of ABC,
+    // radius abc/(4K) = 2730/336 = 65/8, and O is sqrt(400 - (65/8)^2) =
+    // sqrt(21375)/8 = 15 sqrt(95)/8 from the plane.
+    const spec = [
+      '@mode: figure',
+      'T = solid tetrahedron ABCO with AB = 13, BC = 14, CA = 15, AO = 20, BO = 20, CO = 20',
+      'S = solid sphere center O radius 20',
+      'section: S by plane A-B-C',
+      'F = foot O to plane A-B-C',
+      'label: OF',
+    ].join('\n')
+    const figure = result(spec)
+    expect(figure.errors).toEqual([])
+    expect(layer(figure.svg, 'labels')).toContain(`>${formatMeasure((15 * Math.sqrt(95)) / 8)}</text>`)
+    expect(result(`${spec} = ${((15 * Math.sqrt(95)) / 8).toFixed(12)}`).errors).toEqual([])
+    // The circle itself, through the walk and the section it resolved.
+    const parsed = parseSpec(spec)
+    const scope = buildSolidFigure(parsed.statements, (e) => evalExpr(e, {}, 'radians', {}))
+    const resolved = scope.sectionPlanes.get(2)
+    if (!resolved || !('plane' in resolved)) throw new Error('no plane')
+    const s = sectionOf(scope.solids.get('S')!, resolved.plane, 'S')
+    if (s.kind !== 'circle') throw new Error('expected a circle')
+    expect(s.radius).toBeCloseTo(65 / 8, 10)
   })
 })
