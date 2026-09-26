@@ -336,7 +336,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //
 //   label: S width | height | depth | base | edge | radius | top | side [= <value>]
 //                                                 -> a dimension read off the SOLID, never the drawing. A
-//                                                    round solid's radius or height also draws the line it
+//                                                    round solid's radius or height, and a pyramid's or
+//                                                    pyramidal frustum's height, also draws the line it
 //                                                    measures (rim centre to rim, or the axis), dashed
 //                                                    where the solid hides it
 //   cut: S by plane <x|y|z> = <c>                 -> the section shaded in place. "plane z = 1" is

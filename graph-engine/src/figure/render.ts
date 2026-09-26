@@ -17,6 +17,7 @@ import { isPlotted, isSolidFigureStatement } from '../scene/mode'
 import { type Arc, arcBetween, arcMidpoint, arcPointAt, requireOnCircle } from '../scene/geometry/circles'
 import type { GeometryCircle, GeometryObject, LineExtent } from '../scene/geometry/objects'
 import type { SceneError, Vec2 } from '../scene/types'
+import { GEOM_EPS } from '../scene/geometry/types'
 import {
   boundsOf,
   cssColor,
@@ -40,7 +41,7 @@ import { angle3, distance3 } from './construct3d'
 import { segmentSpans, type Span } from './occlusion'
 import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge, type Vec3 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
-import { bodyDimensionSegment, solidDimensions, solidOutline, type SolidBody } from './solids'
+import { bodyDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
 import { authorPlane, authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
 import { projectCircle, type ProjectedCircle } from './silhouette'
@@ -112,11 +113,12 @@ interface Identity {
 type FigureItem =
   | { kind: 'point'; id: Identity; at: Vec2; label: string | null; prefer: Vec2 | null; color: string | null }
   | { kind: 'line'; id: Identity; a: Vec2; b: Vec2; extent: LineExtent; auxiliary: boolean; color: string | null }
-  // The reference line a ROUND solid's dimension label hangs off (fix wave
-  // 1): a radius from its rim's centre to the rim, a height along the axis.
-  // A polyhedron's dimension hangs off an edge already drawn; a round
-  // solid's radius and height are drawn nowhere else, so a bare number would
-  // say nothing about what it measures. One item per span of the glass rule
+  // The reference line a dimension label hangs off when nothing else draws
+  // it (fix wave 1): a ROUND solid's radius (rim centre to rim) or height
+  // (the axis), and a pyramid's or pyramidal frustum's height (the axis).
+  // Every other polyhedral dimension hangs off an edge already drawn; these
+  // would otherwise be a bare number that says nothing about what it
+  // measures. One item per span of the glass rule
   // against the solid itself: solid where a face shows it, dashed where the
   // solid hides it. Always in the auxiliary layer, carrying the LABEL's
   // identity.
@@ -491,6 +493,16 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
     case 'solidDimension':
       return solidDimensionValue(resolvers.solid(subject.solid), subject.dimension, subject.solid)
   }
+}
+
+// Whether a polyhedron's named dimension hangs off its AXIS rather than an
+// edge: a pyramid's (square, regular or rectangle) or a pyramidal frustum's
+// height, from the base centre to the apex or the top face's centre. That
+// line is drawn nowhere else, so, like a round solid's radius or height, it
+// is drawn as the label's reference (fix wave 1).
+function hangsOffAxis(spec: SolidSpec, dimension: string): boolean {
+  if (dimension !== 'height') return false
+  return spec.kind === 'pyramid' || spec.kind === 'regularPyramid' || spec.kind === 'rectanglePyramid' || spec.kind === 'regularFrustum'
 }
 
 // The value a named dimension measures to, read off the SOLID and never off
@@ -1025,16 +1037,20 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         // measures, not across it.
         push = outwardPerpendicular(a, b, centre)
         leader = true
-        if (!body.polyhedron) {
+        if (!body.polyhedron || hangsOffAxis(body.spec, subject.dimension)) {
           const [from, to] = segment
           const along = (u: number): Vec2 =>
             camera.project({ x: from.x + u * (to.x - from.x), y: from.y + u * (to.y - from.y), z: from.z + u * (to.z - from.z) })
           for (const span of segmentSpans(from, to, [body], camera)) {
+            const [p, q] = [along(span.from), along(span.to)]
+            // Seen end-on (a height from straight above), the line is a
+            // point: nothing to draw, and nothing for a label to avoid.
+            if (Math.hypot(q.x - p.x, q.y - p.y) <= GEOM_EPS * Math.max(1, Math.hypot(p.x, p.y))) continue
             items.push({
               kind: 'dimensionReference',
               id: { statement: index, object: subjectName(subject) },
-              a: along(span.from),
-              b: along(span.to),
+              a: p,
+              b: q,
               hidden: span.hidden,
               color: statement.color,
             })

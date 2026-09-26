@@ -1665,7 +1665,7 @@ describe('curved solids in the figure', () => {
 // Fix wave 1 — a round solid's dimension label hangs off a drawn reference
 // ---------------------------------------------------------------------------
 
-describe('the reference line a round solid dimension hangs off', () => {
+describe('the reference line a dimension hangs off when no edge draws it', () => {
   interface Drawn {
     x1: number
     y1: number
@@ -1765,6 +1765,62 @@ describe('the reference line a round solid dimension hangs off', () => {
     expect(radius.y1).toBeGreaterThan(top.y1)
     expect(radius.dashed).toBe(true)
     expect(top.dashed).toBe(false)
+  })
+
+  // A pyramid's or pyramidal frustum's height hangs off its axis, which no
+  // edge draws: the reference runs from the base centre to the apex (or the
+  // top face's centre), dashed inside the solid. The centres are read off
+  // the drawn edges: every edge i-j with i < j starts at vertex i, so the
+  // lateral edges i-n give each base corner and, at their far end, the apex
+  // (pyramid) or the top corner over it (frustum). A projection is affine,
+  // so the projected centroid is the centroid of the projected corners.
+  function lateral(svg: string, n: number, apexOrTop: (i: number) => number) {
+    return Array.from({ length: n }, (_, i) => {
+      const m = new RegExp(`<line x1="([-0-9.]+)" y1="([-0-9.]+)" x2="([-0-9.]+)" y2="([-0-9.]+)"[^>]*data-object="edge-${i}-${apexOrTop(i)}"`).exec(svg)
+      if (!m) throw new Error(`no edge ${i}-${apexOrTop(i)}`)
+      return { from: { x: Number(m[1]), y: Number(m[2]) }, to: { x: Number(m[3]), y: Number(m[4]) } }
+    })
+  }
+  const mean = (ps: { x: number; y: number }[]) => ({ x: ps.reduce((s, p) => s + p.x, 0) / ps.length, y: ps.reduce((s, p) => s + p.y, 0) / ps.length })
+
+  for (const [text, n] of [
+    ['pyramid regular 5 side 4, height 6', 5],
+    ['pyramid rectangle 6 by 4, height 9', 4],
+  ] as const) {
+    it(`draws the height of "${text}" as the dashed axis from the base centre to the apex`, () => {
+      const svg = render(`@mode: figure\nP = solid ${text}\nlabel: P height`)
+      const edges = lateral(svg, n, () => n)
+      const refs = references(svg, 'P height')
+      expect(refs).toHaveLength(1)
+      expect(refs[0].dashed).toBe(true)
+      expectNear({ x: refs[0].x1, y: refs[0].y1 }, mean(edges.map((e) => e.from)))
+      expectNear({ x: refs[0].x2, y: refs[0].y2 }, edges[0].to)
+    })
+  }
+
+  it('draws a pyramidal frustum’s height as the dashed axis between its base and top centres', () => {
+    const svg = render('@mode: figure\nF = solid frustum regular 4 side 6, top 3, height 4\nlabel: F height')
+    const edges = lateral(svg, 4, (i) => 4 + i)
+    const refs = references(svg, 'F height')
+    expect(refs).toHaveLength(1)
+    expect(refs[0].dashed).toBe(true)
+    expectNear({ x: refs[0].x1, y: refs[0].y1 }, mean(edges.map((e) => e.from)))
+    expectNear({ x: refs[0].x2, y: refs[0].y2 }, mean(edges.map((e) => e.to)))
+  })
+
+  it('draws no reference for a height seen end-on, where the axis is a point', () => {
+    // From the top view a pyramid's axis and a cylinder's project to their
+    // centres: nothing to draw, and nothing for a label to steer round.
+    for (const spec of ['P = solid pyramid square base 6, height 9\nlabel: P height', 'P = solid cylinder radius 3, height 9\nlabel: P height']) {
+      expect(references(render(`@mode: figure\n@view: top\n${spec}`), 'P height')).toEqual([])
+      expect(references(render(`@mode: figure\n${spec}`), 'P height')).toHaveLength(1)
+    }
+  })
+
+  it('draws no reference for a pyramid dimension that is an edge', () => {
+    const svg = render('@mode: figure\nP = solid pyramid square base 6, height 9\nlabel: P base')
+    expect(references(svg, 'P base')).toEqual([])
+    expect(layer(svg, 'auxiliary')).not.toContain('data-statement="1"')
   })
 
   it('draws no reference for a polyhedron, whose dimensions hang off edges already drawn', () => {
@@ -2501,7 +2557,27 @@ describe('a tetrahedron and a pyramid under @view: isometric, as before phase 6b
 
   for (const [body, expected] of BEFORE) {
     it(`draws exactly what ee9eda2 drew: ${body.split('\n').join(' / ')}`, () => {
-      expect(digest(render(`@mode: figure\n@view: isometric\n${body}`))).toBe(expected)
+      let svg = render(`@mode: figure\n@view: isometric\n${body}`)
+      if (body.includes('label: P height')) {
+        // Fix wave 1 (sanctioned): a pyramid's height label now draws its
+        // reference, the axis from the base centre (0, -4.5, 0) to the apex
+        // (0, 4.5, 0), dashed. Pinned explicitly, then removed: everything
+        // ELSE is still exactly what ee9eda2 drew.
+        const reference = /<line x1="([-0-9.]+)" y1="([-0-9.]+)" x2="([-0-9.]+)" y2="([-0-9.]+)"[^>]*data-statement="2" data-object="P height"\/>/.exec(svg)
+        expect(reference).not.toBeNull()
+        expect(reference![0]).toContain('stroke-dasharray')
+        expect(layer(svg, 'auxiliary')).toContain(reference![0])
+        // The apex is where every lateral edge meets; the base centre is the
+        // midpoint of the base diagonal from vertex 0 to vertex 2.
+        const edge = (i: number, j: number) => new RegExp(`<line x1="([-0-9.]+)" y1="([-0-9.]+)" x2="([-0-9.]+)" y2="([-0-9.]+)"[^>]*data-object="edge-${i}-${j}"`).exec(svg)!
+        const apex = edge(0, 4)
+        expect([Number(reference![3]), Number(reference![4])]).toEqual([Number(apex[3]), Number(apex[4])])
+        const [v0, v2] = [edge(0, 1), edge(1, 2)]
+        expect(Number(reference![1])).toBeCloseTo((Number(v0[1]) + Number(v2[3])) / 2, 2)
+        expect(Number(reference![2])).toBeCloseTo((Number(v0[2]) + Number(v2[4])) / 2, 2)
+        svg = svg.replace(reference![0], '')
+      }
+      expect(digest(svg)).toBe(expected)
     })
   }
 })

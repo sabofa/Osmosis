@@ -330,7 +330,13 @@ it, dashed where the solid hides it — in the auxiliary layer, carrying the
 label's identity. A cylinder's height moved from its +x surface line to the
 axis to make this possible. This deliberately changed the bytes of exactly
 the specs that label a round solid's radius or height (the "Cylinder" example
-and three baseline specs, under every view); nothing else moved.
+and three baseline specs, under every view); nothing else moved. **Extended
+the same wave:** a pyramid's (square, regular or rectangle) and a pyramidal
+frustum's height hangs off the axis too, so it draws its reference — base
+centre to apex or top centre, dashed. A reference seen end-on (a height from
+the top view) projects to a point and is not drawn. The isometric pin for a
+labelled square pyramid now asserts the new line, then checks everything
+else is still exactly ee9eda2's bytes.
 
 *Point-built solids have no named dimensions* — `label: S height` is refused,
 pointing at `label: AB` — and take no `vertices` clause except a prism's new
