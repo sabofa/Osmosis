@@ -334,7 +334,10 @@ and three baseline specs, under every view); nothing else moved. **Extended
 the same wave:** a pyramid's (square, regular or rectangle) and a pyramidal
 frustum's height hangs off the axis too, so it draws its reference — base
 centre to apex or top centre, dashed. A reference seen end-on (a height from
-the top view) projects to a point and is not drawn. The isometric pin for a
+the top view) projects to a point and is not drawn. A radius, whose
+direction round its rim is only a convention (local +x), turns a quarter
+turn to local +z in a view that sees +x end-on (`@view: side`), so it is
+always drawn; every other view keeps the +x radius byte for byte. The isometric pin for a
 labelled square pyramid now asserts the new line, then checks everything
 else is still exactly ee9eda2's bytes.
 

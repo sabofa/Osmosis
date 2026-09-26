@@ -1,3 +1,4 @@
+import { GEOM_EPS } from '../scene/geometry/types'
 import { DEFAULT_CAMERA, projectSolid, rectangularPrism, type Camera, type ProjectedEdge, type Solid3D, type Vec3 } from './project3d'
 import { rectanglePyramidSolid, regularSolid, type RegularShape } from './regular'
 import {
@@ -556,6 +557,31 @@ function polyhedronDimensionSegment(
   if (spec.kind === 'regularPrism') return dimension === 'height' ? [v[1], v[spec.sides + 1]] : null
   if (spec.kind === 'regularFrustum' && dimension === 'top') return [v[spec.sides], v[spec.sides + 1]]
   return dimension === 'height' ? axis() : null
+}
+
+// The dimension segment a label hangs off AND draws, for the active camera.
+//
+// It is `bodyDimensionSegment` except in one case: a round solid's radius
+// (or a frustum's top radius) runs along its local +x by convention, and a
+// view straight along that direction — `@view: side` for every solid placed
+// by H1 — would see it end-on, a point, and draw no line (fix round 2). A
+// radius's direction round its rim is a convention, not a fact, so then it
+// turns a quarter turn to local +z, which that view sees at full length.
+// Only the drawn line and the label's anchor move; the value, the placement
+// and every polyhedron's chosen edge stay view-independent, and every view
+// that sees +x keeps exactly the segment it had.
+export function drawnDimensionSegment(body: SolidBody, dimension: string, camera: Camera): [Vec3, Vec3] | null {
+  const segment = bodyDimensionSegment(body, dimension)
+  if (!segment || body.polyhedron || (dimension !== 'radius' && dimension !== 'top')) return segment
+  const a = camera.project(segment[0])
+  const b = camera.project(segment[1])
+  const drawn = Math.hypot(b.x - a.x, b.y - a.y)
+  const radius = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y, segment[1].z - segment[0].z)
+  if (drawn > GEOM_EPS * Math.max(1, radius * camera.scale)) return segment
+  const local = solidDimensionSegment(body.spec, dimension)!
+  const turned: [Vec3, Vec3] = [local[0], { x: local[0].x, y: local[1].y, z: local[0].z + (local[1].x - local[0].x) }]
+  if (isIdentityPlacement(body.placement)) return turned
+  return [toWorld(body.placement, turned[0]), toWorld(body.placement, turned[1])]
 }
 
 // The dimension segment of a BUILT solid, in world coordinates: a round

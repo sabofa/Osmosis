@@ -21,7 +21,7 @@ import {
   type Plane3,
 } from './construct3d'
 import type { Vec3 } from './project3d'
-import { basePolygonNormal, hullOf } from './hull'
+import { basePolygonNormal, hullOf, MAX_HULL_POINTS } from './hull'
 import { tetrahedronFromEdges } from './tetrahedron'
 import { placementAlong } from './silhouette'
 import { buildSolid, type PointSolidShape, type SolidBody, type SolidSpec } from './solids'
@@ -148,7 +148,6 @@ export function solidSpecOf(primitive: DimensionPrimitive, value: (e: Expr) => n
   }
 }
 
-// A regular base's number of sides: a whole number, at least 3.
 // A regular base's number of sides: a whole number, 3 to 24. More is a
 // cylinder drawn badly — use "cylinder" — and a figure cannot letter it.
 export const MAX_REGULAR_SIDES = 24
@@ -702,7 +701,7 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         if (flatAgainst(Math.abs(dot3(sub3(apex, base[0]), normal)), [...base, apex])) {
           throw new Error(`${primitive.apex} lies in the plane of the base ${primitive.base.join('-')}, so the pyramid has no height`)
         }
-        return pointPolyhedron('pyramid', [...base, apex], [...primitive.base, primitive.apex])
+        return pointPolyhedron('pyramid', [...base, apex], [...primitive.base, primitive.apex], base.length)
       }
       case 'prismOn': {
         const base = primitive.base.map(lookup)
@@ -720,7 +719,7 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         // counter-clockwise seen from the new top.
         const lid = base.map((p) => add3(p, scale3(normal, height)))
         const lidNames = top.length === base.length ? top : primitive.base.map((name) => `${name}'`)
-        return pointPolyhedron('prism', [...base, ...lid], [...primitive.base, ...lidNames])
+        return pointPolyhedron('prism', [...base, ...lid], [...primitive.base, ...lidNames], base.length)
       }
       case 'sphereOn':
         return placed({ kind: 'sphere', radius: positiveValue(value, primitive.radius, 'radius') }, lookup(primitive.center), { x: 0, y: 1, z: 0 })
@@ -742,6 +741,14 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         const from = lookup(primitive.from)
         const to = lookup(primitive.to)
         const axis = axisBetween(from, to, `the frustum from ${primitive.from} to ${primitive.to}`, primitive.from, primitive.to)
+        // A rim of radius 0 at either end is a cone with its apex there, and
+        // is refused pointing at the by-points cone (P2's refusals, in the
+        // form the author used). The `from` end first; the `to` end below.
+        const fromRadius = value(primitive.fromRadius)
+        if (Number.isFinite(fromRadius) && fromRadius === 0) {
+          const other = value(primitive.toRadius)
+          throw new Error(`A frustum with radius 0 at ${primitive.from} is a cone — write "cone apex ${primitive.from} base ${primitive.to} radius ${other}"`)
+        }
         const radius = positiveValue(value, primitive.fromRadius, 'radius')
         // The rim at `to` is the frustum's "top"; buildSolid reverses the
         // axis when it is the wider one (P2).
@@ -794,7 +801,12 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
     })
   }
 
-  function pointPolyhedron(shape: PointSolidShape, at: Vec3[], names: string[]): SolidBody {
+  // The hull's point cap, checked here first so a solid on points is refused
+  // in the words of the form the author wrote, not as "a hull of N points".
+  function pointPolyhedron(shape: PointSolidShape, at: Vec3[], names: string[], baseCorners = 0): SolidBody {
+    if (shape !== 'hull' && at.length > MAX_HULL_POINTS) {
+      throw new Error(`A ${shape} on a ${baseCorners}-corner base has ${at.length} vertices — at most ${MAX_HULL_POINTS}`)
+    }
     return buildSolid({ kind: 'hull', shape, polyhedron: hullOf(at, names) })
   }
 

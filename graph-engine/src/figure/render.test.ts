@@ -4,11 +4,11 @@ import { LIGHT_PALETTE } from '../render/palette'
 import { FIGURE_LAYERS } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { formatMeasure } from './measure'
-import { DEFAULT_CAMERA, ISOMETRIC_CAMERA, projectSolid, rectangularPrism, renderSolidFigure, type Solid3D, type Vec3 } from './project3d'
+import { cameraFor, DEFAULT_CAMERA, ISOMETRIC_CAMERA, projectSolid, rectangularPrism, renderSolidFigure, type Solid3D, type Vec3 } from './project3d'
 import { evalExpr } from '../parser/evalExpr'
 import { buildSolidFigure } from './solidScope'
 import { GEOM_EPS } from '../scene/geometry/types'
-import { buildSolid, regularTetrahedron, solidOutline } from './solids'
+import { bodyDimensionSegment, buildSolid, drawnDimensionSegment, regularTetrahedron, solidOutline, type SolidSpec } from './solids'
 import { renderFigure } from './render'
 import { resolveMode } from '../scene/mode'
 import { EXAMPLES } from '../examples'
@@ -1816,6 +1816,40 @@ describe('the reference line a dimension hangs off when no edge draws it', () =>
       expect(references(render(`@mode: figure\n${spec}`), 'P height')).toHaveLength(1)
     }
   })
+
+  // Fix round 2: a radius runs along the solid's local +x by convention,
+  // which `@view: side` looks straight along. There it turns a quarter turn
+  // round its rim to local +z, so every round solid still draws its radius.
+  const SIDE = cameraFor('side')
+  const CASES: [string, SolidSpec, string, Vec3, number][] = [
+    ['cylinder radius 3, height 8', { kind: 'cylinder', radius: 3, height: 8 }, 'radius', { x: 0, y: 4, z: 0 }, 3],
+    ['cone radius 3, height 8', { kind: 'cone', radius: 3, height: 8 }, 'radius', { x: 0, y: -4, z: 0 }, 3],
+    ['frustum radius 6, top 3, height 4', { kind: 'frustum', radius: 6, top: 3, height: 4 }, 'radius', { x: 0, y: -2, z: 0 }, 6],
+    ['frustum radius 6, top 3, height 4', { kind: 'frustum', radius: 6, top: 3, height: 4 }, 'top', { x: 0, y: 2, z: 0 }, 3],
+    ['sphere radius 4', { kind: 'sphere', radius: 4 }, 'radius', { x: 0, y: 0, z: 0 }, 4],
+  ]
+  for (const [text, spec, dimension, centre, radius] of CASES) {
+    it(`draws the ${dimension} of "${text}" under @view: side, from its centre, at true length, seen full length`, () => {
+      const body = buildSolid(spec)
+      const segment = drawnDimensionSegment(body, dimension, SIDE)!
+      // Starts at the rim's (or sphere's) centre, and is a true radius...
+      expect(segment[0]).toEqual(centre)
+      const d = { x: segment[1].x - centre.x, y: segment[1].y - centre.y, z: segment[1].z - centre.z }
+      expect(Math.hypot(d.x, d.y, d.z)).toBeCloseTo(radius, 12)
+      // ...in the rim's plane (square to the axis, internal y)...
+      expect(d.y).toBeCloseTo(0, 12)
+      // ...which the side view sees at its full length.
+      const [a, b] = [SIDE.project(segment[0]), SIDE.project(segment[1])]
+      expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeCloseTo(radius * SIDE.scale, 12)
+      // And the figure draws it.
+      const svg = render(`@mode: figure\n@view: side\nS = solid ${text}\nlabel: S ${dimension}`)
+      const drawn = references(svg, `S ${dimension}`)
+      expect(drawn.length).toBeGreaterThan(0)
+      expect(Math.hypot(drawn[0].x2 - drawn[0].x1, drawn[0].y2 - drawn[0].y1)).toBeGreaterThan(1)
+      // Every other view keeps the +x radius, exactly.
+      expect(drawnDimensionSegment(body, dimension, DEFAULT_CAMERA)).toEqual(bodyDimensionSegment(body, dimension))
+    })
+  }
 
   it('draws no reference for a pyramid dimension that is an edge', () => {
     const svg = render('@mode: figure\nP = solid pyramid square base 6, height 9\nlabel: P base')

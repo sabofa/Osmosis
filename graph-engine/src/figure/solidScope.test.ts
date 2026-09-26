@@ -393,3 +393,37 @@ describe('solids on points far from the origin (fix wave 1)', () => {
     expect(scope.solids.get('T')!.polyhedron!.faces).toHaveLength(4)
   })
 })
+
+describe('fix round 2 — refusals in the form the author wrote', () => {
+  // n corners of a regular polygon of circumradius 5 in the plane z = 0,
+  // counter-clockwise from above, named Pa, Pb, ...
+  function ring(n: number): { names: string[]; lines: string } {
+    const names = Array.from({ length: n }, (_, i) => `P${String.fromCharCode(97 + i)}`)
+    const lines = names
+      // Fixed-point: the DSL does not read "3e-16" (handoff, open item 4).
+      .map((name, i) => `${name} = (${(5 * Math.cos((2 * Math.PI * i) / n)).toFixed(12)}, ${(5 * Math.sin((2 * Math.PI * i) / n)).toFixed(12)}, 0)`)
+      .join('\n')
+    return { names, lines }
+  }
+
+  it('refuses a prism on a 13-corner base as a prism, not as "a hull of 26 points"', () => {
+    const { names, lines } = ring(13)
+    expect(walk(`@mode: figure\n${lines}\nQ = solid prism ${names.join('-')} height 2`).errors.map((e) => e.message)).toEqual([
+      'A prism on a 13-corner base has 26 vertices — at most 24',
+    ])
+  })
+
+  it('refuses a pyramid on a 24-corner base as a pyramid', () => {
+    const { names, lines } = ring(24)
+    expect(walk(`@mode: figure\n${lines}\nV = (0, 0, 6)\nQ = solid pyramid ${names.join('-')} apex V`).errors.map((e) => e.message)).toEqual([
+      'A pyramid on a 24-corner base has 25 vertices — at most 24',
+    ])
+  })
+
+  it('points a frustum from a rim of radius 0 at the cone with its apex there', () => {
+    const ends = '@mode: figure\nO = (0, 0, 0)\nP = (0, 0, 4)'
+    expect(walk(`${ends}\nF = solid frustum from O radius 0 to P radius 3`).errors.map((e) => e.message)).toEqual([
+      'A frustum with radius 0 at O is a cone — write "cone apex O base P radius 3"',
+    ])
+  })
+})
