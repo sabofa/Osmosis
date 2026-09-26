@@ -8,10 +8,11 @@ already been tried and failed, and which traps cost real time.
 ## Where things stand
 
 **Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. Working tree clean. **957 tests passing**,
+`.claude/worktrees/graph-track-1`. Working tree clean. **1083 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-25, after geometry phase 5 (solids).*
+*Last updated 2026-09-26, after geometry phase 6 (solid-figure construction
+core).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -50,17 +51,21 @@ built.
   (roots by bisection, extrema as roots of f′ classified by f″, intersections
   as roots of f−g), typed and distinctly marked, hover snapping, `@labels` /
   `@label-every`, `@step-mode`, chained inequalities.
-- **Track 2 — geometry, phases 1–4.** Construction core (lines/points/circles
+- **Track 2 — geometry, phases 1–6.** Construction core (lines/points/circles
   as intersectable objects, derived points, triangle solvers, centres with
   their circles); the SVG figure renderer; measures, notation, navigation and
-  panels; circle vocabulary and the givens table.
+  panels; circle vocabulary and the givens table; solid primitives with
+  dimensions and axis-perpendicular sections; points, constructions, true-3D
+  measures and occluded segments in solid figures.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 beyond phase 5: **composite solids, nets, oblique
-cross-sections**, shading and boolean regions, and the competition-specific
-constructions (excircles, nine-point circle, radical axes, cevian concurrency).
+All of D1–D5. Track 2 beyond phase 6: build steps 7–11 of the spec's
+"Revised 2026-09-25" section (solids by points and general polyhedra, oblique
+sections, inscribed/circumscribed solids, measures and marks in space, nets),
+shading and boolean regions, and the competition-specific constructions
+(excircles, nine-point circle, radical axes, cevian concurrency).
 
 ### What each track-2 phase actually delivered
 
@@ -71,6 +76,7 @@ constructions (excircles, nine-point circle, radical axes, cevian concurrency).
 | 3 | `3781d6b`..`8f0eb54` | Measures (`label: AB` prints what the engine solved), notation (overbars, `∠`, `⊥`), pan/zoom, the givens panel, figure+table panels |
 | 4 | `ff8580f`..`a98bdc7` | Circle vocabulary (chord, arc, sector, tangent at/from, secant, radius, diameter) and the givens **table** with sections |
 | 5 | `5f09b6d`..`4977327` | Solids: the `solid:` statement, dimension labels, arcs in the edge type, analytic silhouettes, cross-sections |
+| 6 | `2d4ecd4`..(this docs commit) | Solid figures get a construction core: the z-up author frame, points in space, a solid's vertices as real points, midpoint/divide/centroid/centres/foot/line-meets-plane in space, true-3D `label:`/`given:`, and `segment:` split visible/hidden against every solid (the glass rule) |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -122,6 +128,72 @@ pinned instead in `solids.test.ts` — every vertex on the inner side of every
 face plane, with a deliberately dented cube alongside so the check cannot pass
 vacuously. **If you add a non-convex primitive, that test fails and it is
 telling you the visibility rule no longer holds.**
+
+### Phase 6 in detail (the solid-figure construction core)
+
+Grammar that now works, all z-up:
+
+```
+A = (0, 0, 0)                                   # a point in space: dot + label
+S = solid prism 8 by 5 by 6 vertices ABCDEFGH   # A-H are points in space now
+M = midpoint A-G                                # also divide, centroid ABC / ABCD,
+F = foot D to plane A-B-C                       #   circumcenter/incenter/orthocenter ABC,
+X = intersect line A-G, plane B-D-E             #   foot D to line A-B
+segment: A-G                                    # dashed where a solid hides it
+segment: A-G plain                              # ...or forced either way
+(0, 0, 6) -- (0, 0, -12)                        # the coordinate form, in space
+label: AG                                       # TRUE length, never the drawn one
+given: angle ABC                                # true angle, givens table only
+cut: S by plane z = 1                           # horizontal (was "y = 1" in phase 5)
+```
+
+**The decisions worth not re-litigating:**
+
+*One author frame, converted at one boundary (S1).* Authors write z-up; the
+solid-figure engine stays y-up inside, because every byte it emits depends on
+it. `figure/authorFrame.ts` is the only module that knows both: author
+(X, Y, Z) -> internal (Y, Z, X), a proper rotation fixing (1,1,1), so the
+isometric camera views from the author's (+,+,+) octant — X toward the viewer
+and left, Y right, Z up; width along Y, depth along X, height along Z. Error
+messages convert back ("The plane z = 9 does not cut "S"").
+
+*Dimension is a property of a name (S2).* A name is a plane point or a space
+point; constructions may not mix them, a planar construction refuses a space
+point by saying it is planar, and names stay unique across both kinds.
+
+*One source-order walk owns solids and space constructions (S3).*
+`figure/solidScope.ts` runs before `buildConstructions`, which now takes a
+skip set so it never sees a space construction. Triangle centres in space
+reuse `scene/geometry/centres.ts` by laying the triangle into its own plane
+(first axis A->B, second toward C) and lifting the answer back — the centre
+formulas exist once.
+
+*The glass rule (S6).* Solids never hide each other; every solid hides a
+construction segment. `figure/occlusion.ts` splits a segment at exact
+candidate parameters (face planes and silhouette-edge planes for polyhedra;
+the surface, cap/base planes, silhouette-line planes and swept rims for
+cylinders and cones; the sphere and its view cylinder) and classifies each
+span at its midpoint by the ray test. Candidates may be superfluous, never
+missing; every family has a test that fails when it is deleted. Each solid is
+shrunk by a rounding-sized margin for the ray test — without it, a segment
+lying across an oblique front face (a tetrahedron's) is dashed by rounding.
+
+*Mode (S5).* A solid or a cut/section infers `figure` BEFORE the depth
+check, so a 3-coordinate point beside a solid no longer sends the spec to
+the space renderer. 3-coordinate points with no solid still infer space.
+
+**Two phase-5 tests pinned nothing and were repaired in phase 6.** The
+isometric camera draws every axis-parallel segment at true length, so a
+prism edge can never tell true from projected. The repaired tests measure a
+tetrahedron edge and a section's diagonal and right angle instead. The rule
+stands: **never test true-vs-projected with an axis-parallel segment.**
+
+**A prism's vertex lettering runs clockwise seen from above.** Phase 5's
+`labelOrder` puts A at the hidden (-,-,-) corner and runs ABCD clockwise in
+the author's view from +Z, where a textbook letters the base
+counter-clockwise from a front corner. The "Cube by points" example letters
+its own points the textbook way; the two conventions now sit side by side.
+Changing `labelOrder` changes every lettered prism, so it was left alone.
 
 ---
 
@@ -189,7 +261,20 @@ project3d.ts    3D → 2D projection, cameras, the convex hidden-edge rule
 solids.ts       the six primitives, placement convention, SolidBody
 silhouette.ts   analytic outlines for cylinder, cone, sphere
 crossSection.ts plane ∩ solid, serving both `cut:` and `section:`
+authorFrame.ts  the z-up author frame <-> the internal y-up frame (S1)
+construct3d.ts  the Vec3 toolkit and constructions in space, camera-free
+solidScope.ts   the solid-figure walk: solids + space points, source order
+occlusion.ts    the glass rule: segments split visible/hidden, exactly
 ```
+
+**Two 3D engines, and they share no code.** *Space* is track 3 — three.js,
+orbitable, calculus (`scene/buildScene3d.ts`, `render/SceneRenderer3D.ts`).
+*Solid figures* are this track — the SVG figure renderer through fixed named
+views (the modules above). Say "space" or "solid figure" in code, tests,
+commits and errors, never "3D engine" alone, and do not name anything in the
+solid-figure engine `space…`. The two share one thing an author sees: the
+z-up frame. The solid-figure engine converts it at one boundary
+(`authorFrame.ts`); nothing downstream of the grammar knows it exists.
 
 Layer order is fixed and semantic: `regions → auxiliary → primary → marks →
 points → labels`. SVG paints in document order, and at competition density
@@ -216,7 +301,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 807 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1083 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
@@ -367,7 +452,13 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    MCP tutor actually reads, so **the tutor cannot reach any of this work** —
    not `@labels`, `@step-mode`, `roots`/`extrema`, chained inequalities, nor
    any geometry construction, figure mode, measure or circle vocabulary. The
-   declare-your-mode rule landed there; nothing else has.
+   declare-your-mode rule landed there; nothing else has. **As of phase 6 it
+   lags by one more phase**: points in space, the z-up frame, constructions
+   in space and `segment: … dashed | plain` are all unreachable to the tutor.
+   The house rule "declare `@mode:`" matters doubly for solid figures: under
+   S5 a spec of 3-coordinate points with no solid still infers the *space*
+   renderer, so a tutor sketching points in space before adding the solid gets
+   a different renderer until it declares `@mode: figure`.
 2. **Migration sweep of stored geometry questions.** Mode inference changes how
    v1 `polygon:`/`circle:`/`angle:` specs render — bare figure instead of a
    plot with axes. Almost certainly better, but it is live content and the spec
@@ -413,15 +504,10 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    per unit of work of the three, since the machinery already solves
    plane ∩ solid and only the plane's generality is restricted.
 
-8. **Solid vertex names are drawn but not measurable.** `S = solid prism
-   8 by 6 by 10 vertices ABCDEFGH` labels the drawing, but `label: AB` then
-   fails with *"Unknown point A"*, while `label: PQ` on a **lifted section's**
-   vertices works. Plausibly deliberate — a solid's vertices are 3D, so the
-   measure would be the true distance rather than the projected one, and the
-   dimension form (`label: S width`) exists for that — but it is asymmetric
-   and surprising immediately after naming them. Either register them with
-   true-3D measures, or reject with a message that says why and points at the
-   dimension form.
+8. ~~**Solid vertex names are drawn but not measurable.**~~ **Closed in
+   phase 6.** A solid's named vertices are points in space (S4): `label: AB`
+   resolves, and measures the TRUE 3D length, as does every length between
+   points in space. "Unknown point A" is gone.
 8. Minor, recorded: intersections have no secondary sort key;
    `conic-vertex`/`local-max` and `focus`/`intersection` share marker shapes
    (latent — nothing emits the conic kinds); `x = f(y)` gets no feature points;

@@ -313,6 +313,69 @@ label: PQ = 8      # measured in the section's own plane, not the projection
 label: QR = 6`,
   },
   {
+    // Phase 6: points in space, z up. X runs toward the viewer and left, Y
+    // right, Z up; the camera looks from the (+,+,+) corner, so A is the
+    // hidden corner and its three edges are dashed by hand — this cube is
+    // points, not a solid, so nothing occludes it.
+    label: 'Cube by points',
+    spec: `@mode: figure
+A = (0, 0, 0)
+B = (4, 0, 0)
+C = (4, 4, 0)
+D = (0, 4, 0)
+E = (0, 0, 4)
+F = (4, 0, 4)
+G = (4, 4, 4)
+H = (0, 4, 4)
+segment: A-B dashed
+segment: A-D dashed
+segment: A-E dashed
+segment: B-C
+segment: C-D
+segment: B-F
+segment: C-G
+segment: D-H
+segment: E-F
+segment: F-G
+segment: G-H
+segment: H-E
+P = midpoint A-E
+Q = midpoint B-C
+R = midpoint C-D
+segment: P-Q
+segment: Q-R
+segment: R-P
+label: PQ          # the true length, sqrt(24)`,
+  },
+  {
+    label: 'Box diagonal',
+    spec: `@mode: figure
+@givens: right
+S = solid prism 8 by 5 by 6 vertices ABCDEFGH
+segment: A-G       # dashed where the box hides it
+label: AG          # the TRUE length, sqrt(125), not the drawn one
+given: AB = 8`,
+  },
+  {
+    label: 'Foot of a perpendicular',
+    spec: `@mode: figure
+T = solid tetrahedron edge 6 vertices ABCD
+F = foot D to plane A-B-C
+segment: D-F       # inside the solid, so dashed
+label: DF          # the height, 6 sqrt(2/3)`,
+  },
+  {
+    label: 'Sphere with a chord',
+    spec: `@mode: figure
+S = solid sphere radius 4
+N = (0, 0, 4)
+W = (0, -4, 0)
+segment: N-W       # a chord: inside the sphere, so hidden throughout
+P = (-7, 3, -2)
+Q = (3, -7, -2)
+segment: P-Q       # behind the sphere: visible, hidden, visible`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,

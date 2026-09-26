@@ -267,6 +267,39 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                    shape, as ordinary 2D geometry
 //   @view: isometric | front | top | side         -> which fixed viewpoint draws the solid
 //
+//   Points, constructions and measures in space (phase 6). A name is a point
+//   in the PLANE or a point in SPACE, never both, and a construction may not
+//   mix the two kinds:
+//
+//   A = (x, y, z)                                 -> a point in space, z up; drawn as a dot and a label
+//   S = solid ... vertices ABCDEFGH               -> the named vertices ARE points in space (lettered,
+//                                                    not dotted). A prism names its base ABCD, then
+//                                                    its top EFGH, so A is under E.
+//   M = midpoint A-G                              -> the midpoint in space
+//   P = divide A-G at 1:2                         -> one part from A to two parts to G
+//   G = centroid ABC  |  G = centroid ABCD        -> of a triangle, or of a tetrahedron (four names)
+//   O = circumcenter ABC                          -> also incenter / orthocenter, of a triangle in space
+//   F = foot D to plane A-B-C                     -> the foot of the perpendicular to a plane
+//   F = foot D to line A-B                        -> ...or to a line (infinite)
+//   X = intersect line A-G, plane B-D-E           -> where a line meets a plane
+//   segment: A-G                                  -> drawn dashed where a solid hides it and split
+//                                                    where that changes: the GLASS rule. Solids never
+//                                                    hide each other; every solid hides a segment.
+//   segment: A-G dashed  |  segment: A-G plain    -> force either style against the rule
+//   (x1, y1, z1) -- (x2, y2, z2)                  -> the coordinate form of a segment in space
+//   label: AG                                     -> the TRUE length in space, never the drawn one
+//   given: AG = 10  |  given: angle ABC           -> true lengths and angles in the givens table
+//
+//   "plane A-B-C" is only an operand; a plane is not drawn or named. A
+//   planar construction (rotate, reflect, a tangent, a circle...) refuses a
+//   point in space, and so do angle marks, ticks, polygons and inline angle
+//   labels ("label: angle ABC") in space — the givens table takes the angle.
+//
+//   Which renderer: a spec with a solid or a cut/section is a solid figure,
+//   even with 3-coordinate points in it. A spec of 3-coordinate points and
+//   no solid is a *space* plot, as it always was — so declare "@mode: figure"
+//   for points in space with no solid, and declare the mode anyway.
+//
 // Geometry constructions (v2) — every one of these BINDS its left-hand name
 // into the geometry namespace and DRAWS its result. Names are letters only
 // (A, P, m, AB), the same rule point labels already follow, which keeps them

@@ -498,8 +498,15 @@ function parseConstructionBody(rhs: string): Construction | null {
 // and left, Y right, Z up. A prism's width runs along Y, its depth along X
 // and its height along Z; "plane z = 1" is a horizontal cut. The parser keeps
 // the author's axes as written and never converts — the figure renderer does
-// that at one boundary, figure/authorFrame.ts. The full surface is documented
-// in parser/types.ts's grammar comment.
+// that at one boundary, figure/authorFrame.ts.
+//
+// Phase 6 added points in space ("A = (0, 0, 0)"), a solid's named vertices
+// as real points, constructions on them ("plane A-B-C" as an operand of foot
+// and intersect, "centroid ABCD"), and "segment: A-G [dashed | plain]" under
+// the glass rule. Nothing here knows which names are points in space: that is
+// decided by the solid-figure walk (figure/solidScope.ts), after parsing. The
+// full surface, and the mode rule for solid figures, is documented in
+// parser/types.ts's grammar comment.
 // --------------------------------------------------------------------------
 
 // The primitive names an author can write, in the order the error message
