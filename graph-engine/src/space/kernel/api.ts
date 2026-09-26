@@ -20,4 +20,6 @@ export interface SpaceKernel {
   setValue(name: string, value: number): SpaceScene
 }
 
-export type CreateSpaceKernel = (statements: Statement[], config: GraphConfig) => SpaceKernel
+// `lines[i]` is the 1-based source line of `statements[i]` (parseSpec knows
+// it; a Statement does not), so every scene error names its line.
+export type CreateSpaceKernel = (statements: Statement[], config: GraphConfig, lines: readonly number[]) => SpaceKernel

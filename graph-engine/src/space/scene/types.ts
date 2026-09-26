@@ -218,8 +218,10 @@ export interface SpaceScene {
   marks: Mark[]
   labels: LabelAnchor[]
   colorScales: ColorScale[]
-  // The data extent (every finite vertex), for automatic bounds; null when the
-  // scene draws nothing.
+  // The data extent, for automatic bounds; null when the scene draws nothing.
+  // x and y span every finite vertex. z is robust against poles (SP5): when
+  // the 1st-99th percentile span of all z values is under a fifth of the full
+  // span, z is that percentile span.
   extent: Box3 | null
   errors: SceneError[]
 }
