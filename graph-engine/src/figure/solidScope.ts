@@ -28,7 +28,7 @@ import { basePolygonNormal, hullOf, MAX_HULL_POINTS } from './hull'
 import { tetrahedronFromEdges } from './tetrahedron'
 import { placementAlong } from './silhouette'
 import { buildSolid, type PointSolidShape, type SolidBody, type SolidSpec } from './solids'
-import { radiusTangentToPlane, radiusTangentToSphere, type SphereFit } from './spheres'
+import { circumsphereOf, circumsphereOfPoints, radiusTangentToPlane, radiusTangentToSphere, type SphereFit } from './spheres'
 
 // Names in space: the solid-figure walk (S3).
 //
@@ -186,11 +186,11 @@ type PointPrimitive = Extract<
 type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive | SphereConstruction | { kind: 'tetrahedronEdges' }>
 
 // A sphere the figure CONSTRUCTS (phase 9): placed by its centre, its radius
-// following from what it touches (R5). Built by the walk, which can look up
-// the centre, the plane and the other sphere.
-type SphereConstruction = Extract<SolidPrimitive, { kind: 'sphereTangent' }>
+// following from what it touches (R5), or circumscribed about a solid or four
+// points (R3, R4). Built by the walk, which can look up the names.
+type SphereConstruction = Extract<SolidPrimitive, { kind: 'sphereTangent' | 'circumsphere' | 'circumsphereOn' }>
 
-const SPHERE_CONSTRUCTIONS: ReadonlySet<SolidPrimitive['kind']> = new Set(['sphereTangent'])
+const SPHERE_CONSTRUCTIONS: ReadonlySet<SolidPrimitive['kind']> = new Set(['sphereTangent', 'circumsphere', 'circumsphereOn'])
 
 function isSphereConstruction(primitive: SolidPrimitive): primitive is SphereConstruction {
   return SPHERE_CONSTRUCTIONS.has(primitive.kind)
@@ -561,6 +561,10 @@ export function buildSolidFigure(
 ): SolidFigureScope {
   const solids = new Map<string, SolidBody>()
   const points = new Map<string, Vec3>()
+  // The author's name for each vertex of a polyhedron, by vertex index, where
+  // the figure named it — so a phase 9 refusal can say "misses G" rather
+  // than print a coordinate.
+  const vertexNames = new Map<SolidBody, (string | undefined)[]>()
   const planes = new Map<string, Plane3>()
   const sectionPlanes: SolidFigureScope['sectionPlanes'] = new Map()
   const ownedStatements = new Set<number>()
@@ -773,11 +777,14 @@ export function buildSolidFigure(
           for (const name of statement.vertices) checkClaim(name, index)
           // S4 — a solid's named vertices are real points.
           const what = statement.name ? `a vertex of solid "${statement.name}"` : `a vertex of a ${body.spec.kind}`
+          const named = vertexNames.get(body) ?? []
           statement.vertices.forEach((name, v) => {
             const at = polyhedron.vertices[order[v]]
             bindSpace(name, at, what)
             entry.points.push({ name, at, drawn: false })
+            named[order[v]] = name
           })
+          vertexNames.set(body, named)
           break
         }
         case 'construction':
@@ -954,7 +961,10 @@ export function buildSolidFigure(
     if (shape !== 'hull' && at.length > MAX_HULL_POINTS) {
       throw new Error(`A ${shape} on a ${baseCorners}-corner base has ${at.length} vertices — at most ${MAX_HULL_POINTS}`)
     }
-    return buildSolid({ kind: 'hull', shape, polyhedron: hullOf(at, names) })
+    const body = buildSolid({ kind: 'hull', shape, polyhedron: hullOf(at, names) })
+    // The hull keeps the input order, so the names ARE the vertices (P3).
+    vertexNames.set(body, [...names])
+    return body
   }
 
   function placed(spec: SolidSpec, origin: Vec3, axis: Vec3): SolidBody {
@@ -988,8 +998,23 @@ export function buildSolidFigure(
     return { center: body.placement.origin, radius: body.spec.radius }
   }
 
-  // R5 — a sphere placed by its centre, its radius from what it touches.
   function constructSphere(primitive: SphereConstruction): SolidBody {
+    switch (primitive.kind) {
+      case 'sphereTangent':
+        return tangentSphere(primitive)
+      case 'circumsphere': {
+        // R3 / R4 — through every vertex of a polyhedron (verified against
+        // each), or through a round solid's rims and apex.
+        const body = solidNamed(primitive.of, 'solid tetrahedron A-B-C-D')
+        return sphereAt(circumsphereOf(body, primitive.of, vertexNames.get(body)))
+      }
+      case 'circumsphereOn':
+        return sphereAt(circumsphereOfPoints(primitive.points.map(lookup), primitive.points))
+    }
+  }
+
+  // R5 — a sphere placed by its centre, its radius from what it touches.
+  function tangentSphere(primitive: Extract<SphereConstruction, { kind: 'sphereTangent' }>): SolidBody {
     const center = lookup(primitive.center)
     const to = primitive.to
     if (to.kind === 'plane') {

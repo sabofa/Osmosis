@@ -1,5 +1,6 @@
 import type { PlaneAxis, SectionPlane } from './crossSection'
 import type { Vec3 } from './project3d'
+import { fmt } from './svg'
 
 // S1 — one author frame, converted at one boundary.
 //
@@ -38,6 +39,14 @@ export function authorToWorld(p: Vec3): Vec3 {
 
 export function worldToAuthor(p: Vec3): Vec3 {
   return { x: p.z, y: p.x, z: p.y }
+}
+
+// An internal point written in the author's frame, for a message:
+// "(1, 1, 1)". Moved here from crossSection.ts in phase 9, unchanged, so
+// every message that prints a point in space prints it one way.
+export function authorText(p: Vec3): string {
+  const a = worldToAuthor(p)
+  return `(${fmt(a.x)}, ${fmt(a.y)}, ${fmt(a.z)})`
 }
 
 // The internal axis each author axis becomes, and back. X -> z, Y -> x,

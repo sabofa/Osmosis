@@ -190,3 +190,170 @@ describe('a sphere tangent to another sphere (R5)', () => {
     expect(errorsOf('@mode: figure\nP = (5, 0, 0)\nS = solid sphere center P externally tangent to T')).toEqual([expect.stringMatching(/Unknown solid "T"/)])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Task 2 — circumspheres (R3, R4)
+// ---------------------------------------------------------------------------
+
+describe('the circumsphere of a polyhedron (R3)', () => {
+  const circum = (solid: string) => sphereOf(walk(`@mode: figure\nS = solid ${solid}\nO = solid circumsphere of S`), 'O')
+
+  it('of the 8 x 5 x 6 box: its centre, radius sqrt(64 + 25 + 36) / 2 = sqrt 125 / 2', () => {
+    const s = circum('prism 8 by 5 by 6')
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+    expect(s.radius).toBeCloseTo(Math.sqrt(125) / 2, 12)
+  })
+
+  it('of the cube of edge 2: sqrt 3', () => {
+    const s = circum('cube edge 2')
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+    expect(s.radius).toBeCloseTo(Math.sqrt(3), 12)
+  })
+
+  it('of the regular tetrahedron of edge 6: 6 sqrt 6 / 4, a quarter of the height above the base', () => {
+    // Height 6 sqrt(2/3) = 2 sqrt 6, the base at -sqrt 6: the centre sits at
+    // -sqrt 6 + sqrt 6 / 2 = -sqrt 6 / 2.
+    const s = circum('tetrahedron edge 6')
+    expectNear(s.center, { x: 0, y: 0, z: -Math.sqrt(6) / 2 })
+    expect(s.radius).toBeCloseTo((3 * Math.sqrt(6)) / 2, 12)
+  })
+
+  it('of the regular octahedron of edge 6: 6 / sqrt 2 = 3 sqrt 2', () => {
+    const s = circum('octahedron edge 6')
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+    expect(s.radius).toBeCloseTo(3 * Math.sqrt(2), 12)
+  })
+
+  it('of the square pyramid with every edge 4: 2 sqrt 2, centred on the base, whose half-diagonal is also the height', () => {
+    // Half-diagonal of the base: 2 sqrt 2. Height: sqrt(4^2 - (2 sqrt 2)^2) =
+    // sqrt 8 = 2 sqrt 2. So the base centre is 2 sqrt 2 from all five.
+    const byPoints = sphereOf(
+      walk(
+        '@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (4, 4, 0)\nD = (0, 4, 0)\nE = (2, 2, 2*sqrt(2))\nP = solid pyramid A-B-C-D apex E\nO = solid circumsphere of P'
+      ),
+      'O'
+    )
+    expectNear(byPoints.center, { x: 2, y: 2, z: 0 })
+    expect(byPoints.radius).toBeCloseTo(2 * Math.sqrt(2), 12)
+    // By dimensions it is centred on the origin, base at -sqrt 2.
+    const byDimensions = circum('pyramid square base 4, height 2*sqrt(2)')
+    expectNear(byDimensions.center, { x: 0, y: 0, z: -Math.sqrt(2) })
+    expect(byDimensions.radius).toBeCloseTo(2 * Math.sqrt(2), 12)
+  })
+
+  it('of four points: (0,0,0), (2,0,0), (0,2,0), (0,0,2) have centre (1, 1, 1) and radius sqrt 3', () => {
+    const s = sphereOf(walk('@mode: figure\nA = (0, 0, 0)\nB = (2, 0, 0)\nC = (0, 2, 0)\nD = (0, 0, 2)\nO = solid circumsphere A-B-C-D'), 'O')
+    expectNear(s.center, { x: 1, y: 1, z: 1 })
+    expect(s.radius).toBeCloseTo(Math.sqrt(3), 12)
+  })
+
+  it('labels its radius and names its centre', () => {
+    const spec = '@mode: figure\nS = solid cube edge 2\nO = solid circumsphere of S\nlabel: O radius = sqrt(3)\nM = center of O'
+    expect(errorsOf(spec)).toEqual([])
+    expectNear(authorPoint(walk(spec), 'M'), { x: 0, y: 0, z: 0 })
+  })
+})
+
+describe('a polyhedron with no circumsphere is refused (R3)', () => {
+  // The unit cube with G pushed out along the space diagonal: still a
+  // corner, so still a hull, but off the sphere through A, B, C and E.
+  const DENTED = [
+    '@mode: figure',
+    'A = (0, 0, 0)',
+    'B = (1, 0, 0)',
+    'C = (1, 1, 0)',
+    'D = (0, 1, 0)',
+    'E = (0, 0, 1)',
+    'F = (1, 0, 1)',
+    'G = (1.2, 1.2, 1.2)',
+    'H = (0, 1, 1)',
+    'S = solid hull A-B-C-D-E-F-G-H',
+    'O = solid circumsphere of S',
+  ].join('\n')
+
+  it('names the first vertex off the sphere through the first four that fix it', () => {
+    expect(errorsOf(DENTED)).toEqual([
+      '"S" has no circumscribed sphere — no sphere passes through all 8 of its vertices: the sphere through A, B, C and E misses G',
+    ])
+    expect(walk(DENTED).solids.has('O')).toBe(false)
+  })
+
+  it('names the vertex of a non-cyclic base, and lets a cyclic one through', () => {
+    // A rectangle is cyclic, so a pyramid on one has a circumsphere.
+    const rectangle =
+      '@mode: figure\nA = (0, 0, 0)\nB = (4, 0, 0)\nC = (4, 2, 0)\nD = (0, 2, 0)\nE = (1, 1, 3)\nS = solid pyramid A-B-C-D apex E\nO = solid circumsphere of S'
+    expect(errorsOf(rectangle)).toEqual([])
+    // A kite is not: D is off the circle through A, B and C, so the sphere
+    // through A, B, C and the apex E misses it.
+    const kite =
+      '@mode: figure\nA = (0, 0, 0)\nB = (2, -1, 0)\nC = (4, 0, 0)\nD = (2, 3, 0)\nE = (2, 0, 3)\nS = solid pyramid A-B-C-D apex E\nO = solid circumsphere of S'
+    expect(errorsOf(kite)).toEqual([expect.stringMatching(/the sphere through A, B, C and E misses D$/)])
+  })
+
+  it("names a prism's new top by the primed letters it is known by", () => {
+    // Every polyhedron by dimensions is cyclic, so an unnamed vertex is never
+    // the one refused; a prism on points with no "vertices" clause names its
+    // top A', B', ... in messages, as phase 7 does.
+    const spec = '@mode: figure\nA = (0, 0, 0)\nB = (2, -1, 0)\nC = (4, 0, 0)\nD = (2, 3, 0)\nS = solid prism A-B-C-D height 2\nO = solid circumsphere of S'
+    expect(errorsOf(spec)).toEqual([expect.stringMatching(/the sphere through A, B, C and A' misses D$/)])
+  })
+
+  it('refuses four coplanar points', () => {
+    expect(errorsOf('@mode: figure\nA = (0, 0, 0)\nB = (2, 0, 0)\nC = (0, 2, 0)\nD = (2, 2, 0)\nO = solid circumsphere A-B-C-D')).toEqual([
+      'A, B, C and D lie in one plane, so no sphere passes through all four — a circumsphere needs four points not in one plane',
+    ])
+  })
+
+  it('refuses a sphere, and anything that is not a solid', () => {
+    expect(errorsOf('@mode: figure\nS = solid sphere radius 2\nO = solid circumsphere of S')).toEqual(['"S" is already a sphere — it is its own circumscribed sphere'])
+    expect(errorsOf('@mode: figure\nM = (0, 0, 0)\nO = solid circumsphere of M')).toEqual([expect.stringMatching(/"M" is a point in space, not a solid/)])
+    expect(errorsOf('@mode: figure\nS = solid cube edge 2\nO = solid circumsphere of T')).toEqual([expect.stringMatching(/Unknown solid "T"/)])
+  })
+})
+
+describe('the circumsphere of a round solid (R4)', () => {
+  const circum = (solid: string) => sphereOf(walk(`@mode: figure\nS = solid ${solid}\nO = solid circumsphere of S`), 'O')
+
+  it('of the cylinder r = 3, h = 6: at its middle, sqrt(9 + 9) = 3 sqrt 2', () => {
+    const s = circum('cylinder radius 3, height 6')
+    expectNear(s.center, { x: 0, y: 0, z: 0 })
+    expect(s.radius).toBeCloseTo(3 * Math.sqrt(2), 12)
+  })
+
+  it('of the cone R = 3, H = 4: 7/8 above the base, radius 25/8', () => {
+    // x = (16 - 9) / 8 = 7/8; H - x = 25/8; and sqrt(3^2 + (7/8)^2) =
+    // sqrt(625/64) = 25/8 to the rim. The base is at z = -2.
+    const s = circum('cone radius 3, height 4')
+    expectNear(s.center, { x: 0, y: 0, z: -2 + 7 / 8 })
+    expect(s.radius).toBeCloseTo(25 / 8, 12)
+  })
+
+  it('of the frustum r1 = 4, r2 = 1, h = 4: 1/8 above the base, radius sqrt 1025 / 8', () => {
+    // y = (16 + 1 - 16) / 8 = 1/8; sqrt((1/8)^2 + 16) = sqrt(1025) / 8, and
+    // to the top rim sqrt((31/8)^2 + 1) = sqrt(1025) / 8 too.
+    const s = circum('frustum radius 4, top 1, height 4')
+    expectNear(s.center, { x: 0, y: 0, z: -2 + 1 / 8 })
+    expect(s.radius).toBeCloseTo(Math.sqrt(1025) / 8, 12)
+    // Wider at the top: the same solid turned over, so the centre is 1/8
+    // below the (now upper) wide rim: 16 + (2 - z)^2 = 1 + (z + 2)^2 gives
+    // 20 - 4z = 5 + 4z, z = 15/8.
+    const turned = circum('frustum radius 1, top 4, height 4')
+    expectNear(turned.center, { x: 0, y: 0, z: 15 / 8 })
+    expect(turned.radius).toBeCloseTo(Math.sqrt(1025) / 8, 12)
+  })
+
+  it('of a tilted cylinder from A to B: centred at the midpoint of AB', () => {
+    // |AB| = |(2, 4, 4)| = 6, so R = sqrt(3^2 + 3^2) = 3 sqrt 2.
+    const s = sphereOf(walk('@mode: figure\nA = (0, 0, 0)\nB = (2, 4, 4)\nC = solid cylinder from A to B radius 3\nO = solid circumsphere of C'), 'O')
+    expectNear(s.center, { x: 1, y: 2, z: 2 })
+    expect(s.radius).toBeCloseTo(3 * Math.sqrt(2), 12)
+  })
+
+  it('of a tilted cone: 7/8 along its axis from the base centre', () => {
+    // Axis O -> V along (2, 1, 2)/3, height 4: V = O + 4 u.
+    const spec = '@mode: figure\nO = (1, 1, 1)\nV = (11/3, 7/3, 11/3)\nK = solid cone apex V base O radius 3\nS = solid circumsphere of K'
+    const s = sphereOf(walk(spec), 'S')
+    expectNear(s.center, { x: 1 + (7 / 8) * (2 / 3), y: 1 + (7 / 8) * (1 / 3), z: 1 + (7 / 8) * (2 / 3) })
+    expect(s.radius).toBeCloseTo(25 / 8, 12)
+  })
+})

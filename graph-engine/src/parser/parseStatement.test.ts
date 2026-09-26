@@ -1199,3 +1199,22 @@ describe('spheres by tangency, and a sphere\'s centre (phase 9, R5 and R1)', () 
     expect(s).toMatchObject({ kind: 'construction', names: ['M'], body: { kind: 'centerOf', solid: 'S' } })
   })
 })
+
+describe('circumspheres (phase 9, R3 and R6)', () => {
+  const primitive = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    return s.primitive
+  }
+
+  it('reads the circumsphere of a solid, and of four points', () => {
+    expect(primitive('O = solid circumsphere of T')).toEqual({ kind: 'circumsphere', of: 'T' })
+    expect(primitive('O = solid circumsphere A-B-C-D')).toEqual({ kind: 'circumsphereOn', points: ['A', 'B', 'C', 'D'] })
+  })
+
+  it('refuses any other count of points, pointing at the hull', () => {
+    expect(() => parseStatement('O = solid circumsphere A-B-C')).toThrow(/"circumsphere A-B-C-D" \(four points\).*hull A-B-C-D-E/)
+    expect(() => parseStatement('O = solid circumsphere A-B-C-D-E')).toThrow(/four points/)
+    expect(() => parseStatement('O = solid circumsphere A-B-C-A')).toThrow(/"A" is named twice/)
+  })
+})

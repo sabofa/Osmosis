@@ -3,9 +3,8 @@ import type { Vec2 } from '../scene/types'
 import type { Solid3D, Vec3 } from './project3d'
 import { dot3, scale3, sub3 } from './construct3d'
 import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
-import { describeAuthorPlane, worldToAuthor } from './authorFrame'
+import { authorText, describeAuthorPlane } from './authorFrame'
 import { planeOfSection, signedDistance } from './plane'
-import { fmt } from './svg'
 import { isIdentityPlacement, rotateToLocal, rotateToWorld, toLocal, toWorld, type Placement } from './silhouette'
 import { localSection, type LocalSection, type SectionPiece } from './conicSection'
 
@@ -230,12 +229,6 @@ function windingAngle(plane: SectionPlane, dy: number, dx: number): number {
 // without cutting through: there is no section to draw.
 function touches(plane: SectionPlane, name: string, where: string): Error {
   return new Error(`The plane ${describeAuthorPlane(plane)} meets "${name}" only ${where} — it does not cut through it`)
-}
-
-// A point in the author's frame, for a message.
-function authorText(p: Vec3): string {
-  const a = worldToAuthor(p)
-  return `(${fmt(a.x)}, ${fmt(a.y)}, ${fmt(a.z)})`
 }
 
 function missesSolid(plane: SectionPlane, name: string): Error {

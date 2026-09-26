@@ -613,7 +613,7 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron', 'circumsphere']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
@@ -831,6 +831,21 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const radius = /^radius\s+(.+)$/i.exec(tail)
     if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
     return { kind: 'sphere', radius: parseExprString(radius[1]) }
+  }
+
+  // Phase 9 (R3, R6) — the sphere through a solid's vertices, or through
+  // four named points.
+  if (head === 'circumsphere') {
+    const of = /^of\s+(\S+)$/i.exec(tail)
+    if (of) return { kind: 'circumsphere', of: geometryName(of[1], 'solid the sphere is circumscribed about') }
+    if (/^[a-zA-Z]+(?:\s*-\s*[a-zA-Z]+){3}$/.test(tail)) {
+      const [a, b, c, d] = parsePointList(tail, 'circumsphere A-B-C-D', 'circumsphere')
+      return { kind: 'circumsphereOn', points: [a, b, c, d] }
+    }
+    throw new Error(
+      `Expected "circumsphere of <solid>" or "circumsphere A-B-C-D" (four points), got "${rest}" — ` +
+        'for more points, build the solid ("hull A-B-C-D-E") and take its circumsphere'
+    )
   }
 
   if (head === 'hull') {

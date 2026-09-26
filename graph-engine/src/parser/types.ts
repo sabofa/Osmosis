@@ -172,6 +172,11 @@ export type SolidPrimitive =
   // another sphere solid. "sphere center P tangent to plane A-B-C",
   // "sphere center P externally tangent to T".
   | { kind: 'sphereTangent'; center: string; to: SphereTangency }
+  // Phase 9 (R3, R4) — the sphere through every vertex of a named solid (a
+  // polyhedron's, verified against each one) or through a round solid's rims
+  // and apex; and the sphere through four named points.
+  | { kind: 'circumsphere'; of: string }
+  | { kind: 'circumsphereOn'; points: [string, string, string, string] }
 
 // What a sphere placed by tangency touches (R5).
 export type SphereTangency = { kind: 'plane'; plane: PlaneForm } | { kind: 'sphere'; sphere: string; side: 'external' | 'internal' }

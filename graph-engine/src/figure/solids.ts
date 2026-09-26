@@ -116,7 +116,7 @@ export type PointSolidShape = 'hull' | 'tetrahedron' | 'pyramid' | 'prism'
 
 // The primitive names an author can write, in the order an error message
 // should list them.
-export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron'] as const
+export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron', 'circumsphere'] as const
 
 export type SolidPrimitiveName = (typeof SOLID_PRIMITIVES)[number]
 
