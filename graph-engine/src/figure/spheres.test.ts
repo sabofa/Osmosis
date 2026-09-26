@@ -584,3 +584,61 @@ describe('an insphere is glass (the spec, "Composites")', () => {
     for (const element of segment) expect(element).toContain('stroke-dasharray')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------
+
+describe('fix round 1: near-degenerate spheres are refused, not approximated', () => {
+  it('refuses a non-cyclic slab whose base corner D is nudged just off the base plane', () => {
+    // The base A, B, C, D is not cyclic (the circle through A, B, C has
+    // centre (0.5, 0.5) and radius^2 0.5; D is 0.41 from it, squared), so no
+    // circumsphere exists. D sits 1.5e-9 above the plane of A, B, C — just
+    // past the coplanarity threshold — so the sphere through A, B, C, D is
+    // about 3e7 across; E, 0.01 above A, is 0.01 off it. A tolerance scaled
+    // by the fitted radius (3e7 * 1e-9 = 0.03) accepted that.
+    const spec = [
+      '@mode: figure',
+      'A = (0, 0, 0)',
+      'B = (1, 0, 0)',
+      'C = (0, 1, 0)',
+      'D = (1, 0.9, 0.0000000015)',
+      'E = (0, 0, 0.01)',
+      'F = (1, 0, 0.01)',
+      'G = (0, 1, 0.01)',
+      'H = (1, 0.9, 0.01)',
+      'S = solid hull A-B-C-D-E-F-G-H',
+      'O = solid circumsphere of S',
+    ].join('\n')
+    expect(errorsOf(spec)).toEqual([
+      '"S" has no circumscribed sphere — no sphere passes through all 8 of its vertices: the sphere through A, B, C and D misses E',
+    ])
+  })
+
+  it('checks the sphere through four points against all four, refusing four so nearly coplanar that it cannot be fixed', () => {
+    // D is 3e-8 off the plane of A, B, C at a scale of 10: past the
+    // coplanarity threshold, but the sphere through them is so large that
+    // rounding moves D off it by more than the tolerance.
+    expect(errorsOf('@mode: figure\nA = (0, 0, 0)\nB = (10, 0, 0)\nC = (0, 10, 0)\nD = (10, 9, 0.00000003)\nO = solid circumsphere A-B-C-D')).toEqual([
+      'A, B, C and D lie so nearly in one plane that no sphere through all four can be fixed — the sphere through A, B, C and D misses D by more than rounding allows',
+    ])
+  })
+})
+
+describe('fix round 1: refusals print numbers that stay distinct at any scale', () => {
+  it('prints a small cylinder and a small frustum to significant figures', () => {
+    expect(errorsOf('@mode: figure\nS = solid cylinder radius 0.0003, height 0.0007\nI = solid insphere of S')).toEqual([
+      '"S" has no inscribed sphere — a sphere touches both ends and the side of S only when its height is twice its radius (height 0.0007, radius 0.0003)',
+    ])
+    expect(errorsOf('@mode: figure\nS = solid frustum radius 0.004, top 0.001, height 0.0041\nI = solid insphere of S')).toEqual([
+      '"S" has no inscribed sphere — a sphere touches both rims and the side of S only when its height is 2 sqrt(r1 r2) = 0.004 (height 0.0041)',
+    ])
+  })
+})
+
+describe('fix round 1: "centre of" is "center of"', () => {
+  it('binds the same point', () => {
+    const scope = walk('@mode: figure\nM = (1, 2, 3)\nS = solid sphere center M radius 5\nP = centre of S')
+    expectNear(authorPoint(scope, 'P'), { x: 1, y: 2, z: 3 })
+  })
+})

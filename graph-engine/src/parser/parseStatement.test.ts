@@ -1198,6 +1198,17 @@ describe('spheres by tangency, and a sphere\'s centre (phase 9, R5 and R1)', () 
     const s = parseStatement('M = center of S')
     expect(s).toMatchObject({ kind: 'construction', names: ['M'], body: { kind: 'centerOf', solid: 'S' } })
   })
+
+  it('reads "centre of S" as the same construction (fix round 1)', () => {
+    expect(parseStatement('M = centre of S')).toMatchObject({ kind: 'construction', names: ['M'], body: { kind: 'centerOf', solid: 'S' } })
+  })
+
+  it('points "tangent to p" at a named plane too, since the parser cannot tell p is one (fix round 1)', () => {
+    expect(() => parseStatement('S = solid sphere center P tangent to p')).toThrow(
+      'A sphere touches another from outside or from inside — write "externally tangent to p" or "internally tangent to p"; ' +
+        'if p is a plane, write "tangent to plane p"'
+    )
+  })
 })
 
 describe('circumspheres (phase 9, R3 and R6)', () => {

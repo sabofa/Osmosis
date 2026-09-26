@@ -143,5 +143,22 @@ describe('the phase 9 sphere examples', () => {
     expect(radius(scope, 'S')).toBeCloseTo(2, 12)
     expect(pq).toBeCloseTo(Math.sqrt(18), 12)
     expect(radius(scope, 'S') + radius(scope, 'T')).toBeCloseTo(pq, 12)
+    // U is centred 1 from Q, inside T, and internally tangent to it.
+    expect(radius(scope, 'U')).toBeCloseTo(Math.sqrt(18) - 2 - 1, 12)
+  })
+
+  it("circumscribes the cone: 7/8 above its base, radius 25/8", () => {
+    const scope = walkOf('Sphere in a cone')
+    expect(radius(scope, 'O')).toBeCloseTo(25 / 8, 12)
+    // Internal y is author z; the base is at z = -2.
+    expect(scope.solids.get('O')!.placement.origin.y).toBeCloseTo(-2 + 7 / 8, 12)
+  })
+
+  it('puts the four points on a sphere of radius sqrt 3 about (1, 1, 1)', () => {
+    const scope = walkOf('Sphere through four points')
+    expect(radius(scope, 'O')).toBeCloseTo(Math.sqrt(3), 12)
+    // (1, 1, 1) is fixed by the author-to-internal map.
+    const m = scope.points.get('M')!
+    for (const c of [m.x, m.y, m.z]) expect(c).toBeCloseTo(1, 12)
   })
 })

@@ -4,7 +4,6 @@ import { add3, centroid3, cross3, distance3, dot3, length3, pointPlaneDistance, 
 import type { Solid3D, Vec3 } from './project3d'
 import { toWorld } from './silhouette'
 import { frustumRadii, type SolidBody } from './solids'
-import { fmt } from './svg'
 
 // Phase 9 — spheres a figure CONSTRUCTS rather than states: placed by
 // tangency (R5), inscribed in a solid, or circumscribed about one (R3, R4).
@@ -131,6 +130,15 @@ function vertexText(vertices: readonly Vec3[], names: VertexNames, i: number): s
   return names[i] ?? `the vertex at ${authorText(vertices[i])}`
 }
 
+// A number in a refusal: six significant figures, trailing zeros dropped —
+// so a small solid's height and radius stay distinguishable in the text
+// (fix round 1: svg.ts's fmt, three decimals, printed "height 0.001, radius
+// 0" for a cylinder 0.0007 high and 0.0003 across). Coordinates in messages
+// stay on authorText, which every solid-figure message shares.
+function numberText(n: number): string {
+  return String(Number(n.toPrecision(6)))
+}
+
 function listText(items: readonly string[]): string {
   return items.length <= 2 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
@@ -186,21 +194,34 @@ function sphereThrough(points: readonly Vec3[], basis: readonly number[]): Spher
 }
 
 // The first vertex, in vertex order, that is not on the sphere; -1 when all
-// of them are. The tolerance is GEOM_EPS scaled by the solid's own size.
+// of them are. The tolerance is GEOM_EPS scaled by the POINTS' own size and
+// never by the fitted radius (fix round 1): four points barely off one plane
+// fit an enormous sphere, and a tolerance that grew with it accepted a
+// non-cyclic solid (a 1 x 1 x 0.01 slab with one base corner nudged 1.5e-9
+// off the base fitted R = 3e7 and passed).
 function firstOffSphere(points: readonly Vec3[], fit: SphereFit): number {
-  const eps = GEOM_EPS * Math.max(extentOf(points), fit.radius)
+  const eps = GEOM_EPS * extentOf(points)
   return points.findIndex((p) => Math.abs(distance3(p, fit.center) - fit.radius) > eps)
 }
 
-// "solid circumsphere A-B-C-D": the sphere through four named points.
+// "solid circumsphere A-B-C-D": the sphere through four named points,
+// checked against all four like any other answer. It is exact by
+// construction when the points are well apart from one plane; when they are
+// barely off it, the sphere is so large that it cannot be fixed to within
+// tolerance, and the check refuses it rather than draw it.
 export function circumsphereOfPoints(points: readonly Vec3[], names: readonly string[]): SphereFit {
   const basis = circumBasis(points)
-  if (!basis) {
+  const coplanar = () =>
+    new Error(`${listText(names)} lie in one plane, so no sphere passes through all four — a circumsphere needs four points not in one plane`)
+  if (!basis) throw coplanar()
+  const fit = sphereThrough(points, basis)
+  const off = firstOffSphere(points, fit)
+  if (off >= 0) {
     throw new Error(
-      `${listText(names)} lie in one plane, so no sphere passes through all four — a circumsphere needs four points not in one plane`
+      `${listText(names)} lie so nearly in one plane that no sphere through all four can be fixed — the sphere through ${listText(basis.map((i) => names[i]))} misses ${names[off]} by more than rounding allows`
     )
   }
-  return sphereThrough(points, basis)
+  return fit
 }
 
 // A polyhedron's circumsphere: the sphere through the first four vertices
@@ -412,7 +433,7 @@ function insphereOfPolyhedron(solid: Solid3D, title: string, names: VertexNames)
     const distance = faces[i].offset - dot3(faces[i].normal, center)
     if (distance <= eps || r <= eps) throw refuse(`the only candidate centre lies on or outside ${faceText(solid, i, names)}`)
     if (Math.abs(distance - r) > eps) {
-      throw refuse(`${faceText(solid, i, names)} is ${fmt(distance)} from the only candidate centre, not ${fmt(r)}`)
+      throw refuse(`${faceText(solid, i, names)} is ${numberText(distance)} from the only candidate centre, not ${numberText(r)}`)
     }
   }
   return { center, radius: r }
@@ -442,7 +463,7 @@ function localInsphere(body: SolidBody, title: string): LocalSphere {
       if (Math.abs(h - 2 * r) > GEOM_EPS * Math.max(1, h)) {
         throw new Error(
           `"${title}" has no inscribed sphere — a sphere touches both ends and the side of ${title} only when its height is twice its radius ` +
-            `(height ${fmt(h)}, radius ${fmt(r)})`
+            `(height ${numberText(h)}, radius ${numberText(r)})`
         )
       }
       return {
@@ -471,7 +492,7 @@ function localInsphere(body: SolidBody, title: string): LocalSphere {
       if (Math.abs(h - needed) > GEOM_EPS * Math.max(1, h)) {
         throw new Error(
           `"${title}" has no inscribed sphere — a sphere touches both rims and the side of ${title} only when its height is ` +
-            `2 sqrt(r1 r2) = ${fmt(needed)} (height ${fmt(h)})`
+            `2 sqrt(r1 r2) = ${numberText(needed)} (height ${numberText(h)})`
         )
       }
       return {

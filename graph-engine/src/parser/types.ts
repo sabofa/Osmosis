@@ -464,6 +464,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   [I =] solid insphere of T                     -> tangent to every face of T
 //   [O =] solid circumsphere of T                 -> through every vertex of T
 //   [O =] solid circumsphere A-B-C-D              -> through four named points, not in one plane
+//                                                    (so nearly in one plane that the sphere cannot be
+//                                                    fixed to within tolerance is refused too)
 //   [S =] solid sphere center P tangent to plane <plane>
 //                                                 -> radius = the distance from P to the plane (any
 //                                                    plane form, named planes included)
@@ -471,7 +473,7 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                 -> T a sphere: radius |PT| - r_T (P outside T)
 //   [S =] solid sphere center P internally tangent to T
 //                                                 -> radius r_T - |PT| (P inside T, not its centre)
-//   M = center of S                               -> a sphere's centre as a point in space (any
+//   M = center of S  |  M = centre of S           -> a sphere's centre as a point in space (any
 //                                                    sphere; only a sphere, in this phase)
 //   label: S radius                               -> works for EVERY sphere, however it was placed
 //

@@ -488,8 +488,9 @@ function parseConstructionBody(rhs: string): Construction | null {
 
   // "M = center of S" (phase 9, R1): a sphere solid's centre, as a point in
   // space. Exactly this shape — one name after "of" — so nothing else an
-  // author writes is read as it.
-  const centerOf = /^center\s+of\s+([a-zA-Z]+)$/.exec(text)
+  // author writes is read as it. "centre of S" is the same construction
+  // (fix round 1): the engine's own prose spells it that way.
+  const centerOf = /^cent(?:er|re)\s+of\s+([a-zA-Z]+)$/.exec(text)
   if (centerOf) return { kind: 'centerOf', solid: geometryName(centerOf[1], 'sphere whose centre it is') }
 
   const mid = /^midpoint\s+(?:of\s+)?(.+)$/.exec(text)
@@ -721,7 +722,8 @@ function parseSphereTangency(tail: string): SolidPrimitive | null {
   const sphere = geometryName(target, 'sphere it is tangent to')
   if (!side) {
     throw new Error(
-      `A sphere touches another from outside or from inside — write "externally tangent to ${sphere}" or "internally tangent to ${sphere}"`
+      `A sphere touches another from outside or from inside — write "externally tangent to ${sphere}" or "internally tangent to ${sphere}"; ` +
+        `if ${sphere} is a plane, write "tangent to plane ${sphere}"`
     )
   }
   return { kind: 'sphereTangent', center, to: { kind: 'sphere', sphere, side: side === 'externally' ? 'external' : 'internal' } }

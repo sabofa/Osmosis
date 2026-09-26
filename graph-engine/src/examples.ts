@@ -694,12 +694,16 @@ label: MG          # the circumradius, 2 sqrt 3`,
   {
     // R = 3, H = 4: the slant is 5, so the insphere's radius is the axial
     // triangle's inradius, 3 * 4 / (3 + 5) = 1.5, touching the base at its
-    // centre.
+    // centre. The circumsphere passes through the apex and the base rim:
+    // its centre is (16 - 9) / 8 = 7/8 above the base, its radius 4 - 7/8 =
+    // 25/8.
     label: 'Sphere in a cone',
     spec: `@mode: figure
 K = solid cone radius 3, height 4
 I = solid insphere of K
+O = solid circumsphere of K
 label: I radius
+label: O radius    # 25/8
 label: K height`,
   },
   {
@@ -717,14 +721,17 @@ label: F height`,
     // Spheres placed by tangency: S rests on the floor z = 0 (radius 2, the
     // distance from P), and T is externally tangent to S, so the distance
     // between their centres, PQ = sqrt 18, is the sum of the radii: T's is
-    // sqrt 18 - 2. The floor is outlined by four segments; a plane is never
-    // drawn on its own.
+    // sqrt 18 - 2. U, centred at R = 1 from Q inside T, is internally
+    // tangent to T: radius (sqrt 18 - 2) - 1. The floor is outlined by four
+    // segments; a plane is never drawn on its own.
     label: 'Spheres by tangency',
     spec: `@mode: figure
 P = (0, 0, 2)
 S = solid sphere center P tangent to plane z = 0
 Q = (4, 1, 3)
 T = solid sphere center Q externally tangent to S
+R = (4, 1, 4)
+U = solid sphere center R internally tangent to T
 segment: P-Q
 label: PQ          # = 2 + (sqrt 18 - 2)
 label: S radius
@@ -733,6 +740,22 @@ label: T radius
 (6, -4, 0) -- (6, 5, 0)
 (6, 5, 0) -- (-4, 5, 0)
 (-4, 5, 0) -- (-4, -4, 0)`,
+  },
+  {
+    // The sphere through four points: a corner of a cube of edge 2 and its
+    // three neighbours along the axes. They lie on the cube's circumsphere,
+    // so the centre is the cube's centre (1, 1, 1) and MA = sqrt 3.
+    label: 'Sphere through four points',
+    spec: `@mode: figure
+A = (0, 0, 0)
+B = (2, 0, 0)
+C = (0, 2, 0)
+D = (0, 0, 2)
+T = solid tetrahedron A-B-C-D
+O = solid circumsphere A-B-C-D
+M = center of O
+segment: M-A
+label: MA          # sqrt 3`,
   },
   {
     label: 'Right angle',
