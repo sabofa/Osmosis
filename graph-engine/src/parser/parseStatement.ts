@@ -515,12 +515,12 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
 // label); the parser only needs to recognise the shape of the phrase.
-const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge', 'radius']
+const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge', 'radius', 'top']
 
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
@@ -565,6 +565,17 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const radius = /^radius\s+(.+)$/i.exec(tail)
     if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
     return { kind: 'sphere', radius: parseExprString(radius[1]) }
+  }
+
+  if (head === 'frustum') {
+    // P2 — keyed like the cylinder and cone it sits between, with the top
+    // rim's radius named "top".
+    const parts = splitTopLevelComma(tail).map((part) => part.trim())
+    const radius = parts.length === 3 ? /^radius\s+(.+)$/i.exec(parts[0]) : null
+    const top = parts.length === 3 ? /^top\s+(.+)$/i.exec(parts[1]) : null
+    const height = parts.length === 3 ? /^height\s+(.+)$/i.exec(parts[2]) : null
+    if (!radius || !top || !height) throw new Error(`Expected "frustum radius <r>, top <r>, height <h>", got "${rest}"`)
+    return { kind: 'frustum', radius: parseExprString(radius[1]), top: parseExprString(top[1]), height: parseExprString(height[1]) }
   }
 
   if (head === 'tetrahedron') {

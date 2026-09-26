@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { inPlane, liftOffset, sectionOf, trueShape, type SectionPlane } from './crossSection'
+import { placementAlong } from './silhouette'
 import { buildSolid, type SolidSpec } from './solids'
 
 // Hand-computed vertices throughout. A section that returns four points is
@@ -156,6 +157,76 @@ describe('a plane through a curved primitive', () => {
 
   it('fails legibly when the plane misses a sphere', () => {
     expect(() => section({ kind: 'sphere', radius: 5 }, { axis: 'z', at: 5 })).toThrow(/misses the solid entirely/)
+  })
+})
+
+describe('a plane through a frustum (P2)', () => {
+  // Radius 6, top 3, height 4: base at y = -2, top at y = +2.
+  const FRUSTUM: SolidSpec = { kind: 'frustum', radius: 6, top: 3, height: 4 }
+
+  it('cuts it square to its axis at mid-height in a circle of radius (6 + 3) / 2', () => {
+    const s = shape(FRUSTUM, { axis: 'y', at: 0 })
+    if (s.kind !== 'circle') throw new Error('expected a circle')
+    expect(s.radius).toBeCloseTo(4.5, 12)
+  })
+
+  it('cuts it through its axis in an isosceles trapezoid with parallel sides 12 and 6', () => {
+    const s = shape(FRUSTUM, { axis: 'z', at: 0 })
+    expect(sortedVertices(s)).toEqual([
+      [-6, -2],
+      [-3, 2],
+      [3, 2],
+      [6, -2],
+    ])
+    if (s.kind !== 'polygon') return
+    const bottom = s.vertices.filter((p) => Math.abs(p.y + 2) < 1e-12)
+    const top = s.vertices.filter((p) => Math.abs(p.y - 2) < 1e-12)
+    expect(Math.abs(bottom[0].x - bottom[1].x)).toBeCloseTo(12, 12)
+    expect(Math.abs(top[0].x - top[1].x)).toBeCloseTo(6, 12)
+  })
+
+  it('refuses the hyperbola off the axis, like a cone', () => {
+    expect(() => section(FRUSTUM, { axis: 'x', at: 1 })).toThrow(/parallel to a frustum's axis but off it .* HYPERBOLA/)
+  })
+})
+
+describe('sections of a placed round solid (P7)', () => {
+  it("refuses a tilted solid's section until oblique planes arrive", () => {
+    const tilted = buildSolid({ kind: 'cylinder', radius: 3, height: 8 }, placementAlong({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }))
+    expect(() => sectionOf(tilted, { axis: 'y', at: 1 }, 'C')).toThrow(
+      /"C" is a tilted cylinder: sections of a tilted cylinder arrive with oblique planes \(build step 8\)/
+    )
+  })
+
+  it('cuts a vertical solid off the origin where it actually is, the offset measured in the world', () => {
+    // A cylinder of radius 3 and height 8 centred at internal (2, 3, 1): it
+    // spans y in [-1, 7]. The world plane y = 5 is 2 above its centre.
+    const placed = buildSolid({ kind: 'cylinder', radius: 3, height: 8 }, placementAlong({ x: 2, y: 3, z: 1 }, { x: 0, y: 1, z: 0 }))
+    const s = sectionOf(placed, { axis: 'y', at: 5 }, 'C')
+    if (s.kind !== 'circle') throw new Error('expected a circle')
+    expect(s.center).toEqual({ x: 2, y: 5, z: 1 })
+    expect(s.radius).toBeCloseTo(3, 12)
+    // At world x = 4, 2 from its axis: the chord half-length is sqrt(5),
+    // across z about 1, and the rectangle as tall as the cylinder.
+    const chord = sectionOf(placed, { axis: 'x', at: 4 }, 'C')
+    if (chord.kind !== 'polygon') throw new Error('expected a polygon')
+    const zs = chord.points.map((p) => p.z).sort((a, b) => a - b)
+    expect(zs[0]).toBeCloseTo(1 - Math.sqrt(5), 12)
+    expect(zs[3]).toBeCloseTo(1 + Math.sqrt(5), 12)
+    for (const p of chord.points) expect(p.x).toBeCloseTo(4, 12)
+    // World y = 8 is above it, and the message names the plane the author
+    // wrote (internal y is author z).
+    expect(() => sectionOf(placed, { axis: 'y', at: 8 }, 'C')).toThrow(/The plane z = 8 does not cut "C"/)
+  })
+
+  it('cuts a frustum wider at the top, reversed, with its wide rim on top in the world', () => {
+    // Radius 3 at the base, 6 at the top: a quarter of the way up (y = -1)
+    // the section is 3 + 3/4 = 3.75, not 6 - 3/4.
+    const wide = buildSolid({ kind: 'frustum', radius: 3, top: 6, height: 4 })
+    const s = sectionOf(wide, { axis: 'y', at: -1 }, 'F')
+    if (s.kind !== 'circle') throw new Error('expected a circle')
+    expect(s.radius).toBeCloseTo(3.75, 12)
+    expect(s.center.y).toBeCloseTo(-1, 12)
   })
 })
 

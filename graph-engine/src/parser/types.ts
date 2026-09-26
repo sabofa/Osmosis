@@ -109,6 +109,8 @@ export type SolidPrimitive =
   | { kind: 'cylinder'; radius: Expr; height: Expr }
   | { kind: 'cone'; radius: Expr; height: Expr }
   | { kind: 'sphere'; radius: Expr }
+  // A conical frustum (P2): base radius, top radius, height.
+  | { kind: 'frustum'; radius: Expr; top: Expr; height: Expr }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)

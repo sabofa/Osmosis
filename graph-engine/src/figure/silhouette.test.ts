@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { cameraFor, type ProjectedArc, type ProjectedEdge, type ProjectedSegment } from './project3d'
+import { cameraFor, type ProjectedArc, type ProjectedEdge, type ProjectedSegment, type Vec3 } from './project3d'
 import {
   coneOutline,
   cylinderOutline,
   ellipseAt,
   ellipseTangentAt,
+  frustumOutline,
+  IDENTITY_PLACEMENT,
+  localCamera,
+  placementAlong,
   projectCircle,
   sphereOutline,
+  toWorld,
   type ProjectedCircle,
 } from './silhouette'
+import { buildSolid, solidOutline } from './solids'
 
 // Every assertion here is against the geometry, not the markup. A silhouette
 // that emits four elements and two arcs is still wrong if its lines are not
@@ -341,5 +347,183 @@ describe('the sphere silhouette', () => {
       const camera = cameraFor(name)
       for (const arc of arcs(sphereOutline(4, camera))) expect(arc.rx).toBeCloseTo(4 * camera.scale, 12)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P1 — placements and the local camera (phase 7)
+// ---------------------------------------------------------------------------
+
+const STANDARD = cameraFor('standard')
+
+function dot(a: Vec3, b: Vec3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }
+}
+
+describe('the local camera (P1)', () => {
+  // An axis in no special direction, off the origin.
+  const TILTED = placementAlong({ x: 1, y: -2, z: 0.5 }, { x: 1, y: 2, z: 3 })
+
+  it('keeps direction, right and up orthonormal and right-handed for a tilted axis', () => {
+    const local = localCamera(STANDARD, TILTED)
+    expect(local).not.toBe(STANDARD)
+    for (const v of [local.direction, local.right, local.up]) expect(dot(v, v)).toBeCloseTo(1, 12)
+    expect(dot(local.direction, local.right)).toBeCloseTo(0, 12)
+    expect(dot(local.direction, local.up)).toBeCloseTo(0, 12)
+    expect(dot(local.right, local.up)).toBeCloseTo(0, 12)
+    const handed = cross(local.right, local.up)
+    expect(handed.x).toBeCloseTo(local.direction.x, 12)
+    expect(handed.y).toBeCloseTo(local.direction.y, 12)
+    expect(handed.z).toBeCloseTo(local.direction.z, 12)
+    // Its frame is the placement's: local y is the axis, normalised.
+    const axis = TILTED.frame.axis
+    const n = Math.hypot(1, 2, 3)
+    expect(axis.x * n).toBeCloseTo(1, 12)
+    expect(axis.y * n).toBeCloseTo(2, 12)
+    expect(axis.z * n).toBeCloseTo(3, 12)
+  })
+
+  it('projects a local point exactly where the world camera projects the placed point', () => {
+    const local = localCamera(STANDARD, TILTED)
+    for (const p of [
+      { x: 0, y: 0, z: 0 },
+      { x: 3, y: -1, z: 2 },
+      { x: -0.5, y: 7, z: 1.25 },
+    ]) {
+      // origin + x u + y axis + z w, written out by hand from the frame.
+      const { u, axis, w } = TILTED.frame
+      const world = {
+        x: TILTED.origin.x + p.x * u.x + p.y * axis.x + p.z * w.x,
+        y: TILTED.origin.y + p.x * u.y + p.y * axis.y + p.z * w.y,
+        z: TILTED.origin.z + p.x * u.z + p.y * axis.z + p.z * w.z,
+      }
+      expect(local.project(p).x).toBeCloseTo(STANDARD.project(world).x, 12)
+      expect(local.project(p).y).toBeCloseTo(STANDARD.project(world).y, 12)
+      const placed = toWorld(TILTED, p)
+      expect(placed.x).toBeCloseTo(world.x, 12)
+      expect(placed.y).toBeCloseTo(world.y, 12)
+      expect(placed.z).toBeCloseTo(world.z, 12)
+    }
+  })
+
+  it('uses the world camera ITSELF for an identity placement, so no byte can move', () => {
+    expect(localCamera(STANDARD, IDENTITY_PLACEMENT)).toBe(STANDARD)
+    // A vertical axis at the origin IS the identity: the frame rule gives
+    // exactly (x, y, z) for it.
+    expect(localCamera(ISO, placementAlong({ x: 0, y: 0, z: 0 }, { x: 0, y: 5, z: 0 }))).toBe(ISO)
+  })
+
+  // At the origin, and off it: off it, the local camera's projection is
+  // affine, and a radius VECTOR must go through its linear part.
+  for (const origin of [
+    { x: 0, y: 0, z: 0 },
+    { x: 2, y: -1, z: 3 },
+  ]) {
+    it(`draws a cylinder along author X at ${JSON.stringify(origin)} with its silhouette lines GENUINELY tangent to both projected rims`, () => {
+      // Author X is internal +z. The rims are the circles of radius 3 about
+      // origin + (0, 0, +-4) in planes square to z, built here from the WORLD
+      // geometry alone — the local camera appears nowhere in the expectation.
+      const body = buildSolid({ kind: 'cylinder', radius: 3, height: 8 }, placementAlong(origin, { x: 0, y: 0, z: 1 }))
+      const edges = solidOutline(body, STANDARD)
+      const rims = [4, -4].map((z) =>
+        projectCircle(STANDARD, { x: origin.x, y: origin.y, z: origin.z + z }, { x: 3, y: 0, z: 0 }, { x: 0, y: 3, z: 0 })
+      )
+      // Every drawn rim arc lies ON one of the two world rims — ends and middle.
+      // (A radius vector projected with the placement's translation in it
+      // would draw a different ellipse, and the lines alone would not notice.)
+      expect(arcs(edges)).toHaveLength(4)
+      for (const arc of arcs(edges)) {
+        const drawn = { ...arc, parameter: (t: number) => t }
+        for (const t of [arc.startAngle, (arc.startAngle + arc.endAngle) / 2, arc.endAngle]) {
+          const point = ellipseAt(drawn, t)
+          expect(Math.min(onEllipse(rims[0], point), onEllipse(rims[1], point))).toBeLessThan(1e-3)
+        }
+      }
+      const lines = segments(edges)
+      expect(lines).toHaveLength(2)
+      for (const line of lines) {
+        const direction = { x: line.b.x - line.a.x, y: line.b.y - line.a.y }
+        // One endpoint on each rim: a line along the body, not across a rim.
+        const onFirst = [line.a, line.b].map((point) => onEllipse(rims[0], point) < 1e-3)
+        expect(onFirst[0]).not.toBe(onFirst[1])
+        for (const point of [line.a, line.b]) {
+          const circle = onEllipse(rims[0], point) < onEllipse(rims[1], point) ? rims[0] : rims[1]
+          expect(onEllipse(circle, point)).toBeLessThan(1e-3)
+          const tangent = ellipseTangentAt(circle, angleOf(circle, point))
+          expect(Math.abs(tangent.x * direction.y - tangent.y * direction.x)).toBeLessThan(1e-6)
+        }
+      }
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// P2 — the frustum
+// ---------------------------------------------------------------------------
+
+describe('the frustum silhouette', () => {
+  // Radius 6, top 3, height 4: base rim at y = -2, top rim at y = +2, and
+  // the virtual apex where the generators meet, 4 * 6 / (6 - 3) = 8 above
+  // the base, at y = 6.
+  const edges = frustumOutline(6, 3, 4, STANDARD)
+  const base = projectCircle(STANDARD, { x: 0, y: -2, z: 0 }, { x: 6, y: 0, z: 0 }, { x: 0, y: 0, z: 6 })
+  const top = projectCircle(STANDARD, { x: 0, y: 2, z: 0 }, { x: 3, y: 0, z: 0 }, { x: 0, y: 0, z: 3 })
+
+  it('is two lines and four arcs', () => {
+    expect(segments(edges)).toHaveLength(2)
+    expect(arcs(edges)).toHaveLength(4)
+  })
+
+  it('runs both silhouette lines through the projected virtual apex', () => {
+    const apex = STANDARD.project({ x: 0, y: 6, z: 0 })
+    for (const line of segments(edges)) {
+      const along = { x: line.b.x - line.a.x, y: line.b.y - line.a.y }
+      const toApex = { x: apex.x - line.a.x, y: apex.y - line.a.y }
+      expect(Math.abs(along.x * toApex.y - along.y * toApex.x) / Math.hypot(along.x, along.y)).toBeLessThan(1e-9)
+    }
+  })
+
+  it('makes both lines GENUINELY tangent to both rims', () => {
+    for (const line of segments(edges)) {
+      const direction = { x: line.b.x - line.a.x, y: line.b.y - line.a.y }
+      for (const [circle, point] of [
+        [base, line.a],
+        [top, line.b],
+      ] as const) {
+        expect(onEllipse(circle, point)).toBeLessThan(1e-3)
+        const tangent = ellipseTangentAt(circle, angleOf(circle, point))
+        expect(Math.abs(tangent.x * direction.y - tangent.y * direction.x)).toBeLessThan(1e-6)
+      }
+    }
+  })
+
+  it('dashes the back half of the base rim, draws its front half, and draws the whole top rim', () => {
+    const baseArcs = arcs(edges).filter((a) => a.object.startsWith('base'))
+    const topArcs = arcs(edges).filter((a) => a.object.startsWith('top'))
+    expect(baseArcs).toHaveLength(2)
+    expect(topArcs).toHaveLength(2)
+    expect(baseArcs.filter((a) => a.hidden)).toHaveLength(1)
+    expect(topArcs.filter((a) => a.hidden)).toHaveLength(0)
+    // Which half, geometrically: the camera looks down, so the back half of
+    // the base rim is the one ABOVE its centre on the page.
+    for (const arc of baseArcs) {
+      const mid = ellipseAt({ ...arc, parameter: (t) => t }, (arc.startAngle + arc.endAngle) / 2)
+      if (arc.hidden) expect(mid.y).toBeGreaterThan(arc.center.y)
+      else expect(mid.y).toBeLessThan(arc.center.y)
+    }
+  })
+
+  it('draws a frustum wider at the top as the same solid with its axis reversed, byte for byte', () => {
+    const wide = solidOutline(buildSolid({ kind: 'frustum', radius: 3, top: 6, height: 4 }), STANDARD)
+    const reversed = frustumOutline(6, 3, 4, localCamera(STANDARD, placementAlong({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 })))
+    expect(JSON.stringify(wide)).toBe(JSON.stringify(reversed))
+    // ...which is not the frustum the right way up: its wide rim is on top.
+    expect(JSON.stringify(wide)).not.toBe(JSON.stringify(edges))
+    const wideRim = arcs(wide).find((a) => a.object === 'base-0')
+    expect(wideRim!.center.y).toBeCloseTo(STANDARD.project({ x: 0, y: 2, z: 0 }).y, 12)
   })
 })

@@ -1497,6 +1497,30 @@ describe('curved solids in the figure', () => {
       expect(render(text)).toBe(render(text))
     }
   })
+
+  it('draws a frustum as two lines and four arcs, one dashed, and labels its three dimensions', () => {
+    const spec = '@mode: figure\nF = solid frustum radius 6, top 3, height 4\nlabel: F radius = 6\nlabel: F top = 3\nlabel: F height = 4'
+    expect(result(spec).errors).toEqual([])
+    const svg = render(spec)
+    expect(countTags(layer(svg, 'primary'), 'line')).toBe(2)
+    expect(countTags(layer(svg, 'primary'), 'path')).toBe(3)
+    expect(countTags(layer(svg, 'auxiliary'), 'path')).toBe(1)
+    for (const text of ['>6</text>', '>3</text>', '>4</text>']) expect(layer(svg, 'labels')).toContain(text)
+    expect(result('@mode: figure\nF = solid frustum radius 6, top 3, height 4\nlabel: F top = 4').errors).toHaveLength(1)
+  })
+
+  it('hangs a reversed frustum’s radius label off its BOTTOM rim, where the author put it', () => {
+    // Radius 3 at the base, 6 on top: the radius label sits by the base rim,
+    // below the top label, whichever way the solid is built inside.
+    const svg = render('@mode: figure\nF = solid frustum radius 3, top 6, height 4\nlabel: F radius\nlabel: F top')
+    const y = (value: string) => {
+      const match = new RegExp(`<text[^>]* y="([-0-9.]+)"[^>]*>${value}</text>`).exec(layer(svg, 'labels'))
+      if (!match) throw new Error(`no label ${value}`)
+      return Number(match[1])
+    }
+    // SVG y runs down the page.
+    expect(y('3')).toBeGreaterThan(y('6'))
+  })
 })
 
 describe('cross-sections', () => {

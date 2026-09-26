@@ -1,5 +1,6 @@
 import type { Construction, Expr, GeometryRef, SolidPrimitive, Statement } from '../parser/types'
 import { centroid, circumcenter, incenter, orthocenter } from '../scene/geometry/centres'
+import { GEOM_EPS } from '../scene/geometry/types'
 import type { SceneError, Vec2 } from '../scene/types'
 import { authorToWorld } from './authorFrame'
 import {
@@ -107,7 +108,24 @@ export function solidSpecOf(primitive: SolidPrimitive, value: (e: Expr) => numbe
       return { kind: 'cone', radius: positive(primitive.radius, 'radius'), height: positive(primitive.height, 'height') }
     case 'sphere':
       return { kind: 'sphere', radius: positive(primitive.radius, 'radius') }
+    case 'frustum':
+      return frustumSpec(positive(primitive.radius, 'radius'), value(primitive.top), positive(primitive.height, 'height'))
   }
+}
+
+// P2's refusals. A frustum whose rims are equal is a cylinder and one whose
+// top is a point is a cone: each is refused with a pointer to the primitive
+// that draws it, rather than drawn as a degenerate frustum (whose virtual
+// apex would sit at infinity, or on the top rim).
+function frustumSpec(radius: number, top: number, height: number): SolidSpec {
+  if (!Number.isFinite(top) || top < 0) throw new Error(`A frustum's top must be a positive number, got ${top}`)
+  if (top <= GEOM_EPS * Math.max(1, radius)) {
+    throw new Error(`A frustum with top 0 is a cone — write "cone radius ${radius}, height ${height}"`)
+  }
+  if (Math.abs(top - radius) <= GEOM_EPS * Math.max(1, radius)) {
+    throw new Error(`A frustum whose top equals its radius is a cylinder — write "cylinder radius ${radius}, height ${height}"`)
+  }
+  return { kind: 'frustum', radius, top, height }
 }
 
 // ---------------------------------------------------------------------------

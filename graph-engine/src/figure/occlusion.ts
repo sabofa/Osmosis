@@ -1,8 +1,16 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import { add3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
 import { faceNormal, type Camera, type Solid3D, type Vec3 } from './project3d'
-import { coneSilhouetteAngles, cylinderSilhouetteAngles } from './silhouette'
-import type { SolidBody, SolidSpec } from './solids'
+import {
+  coneSilhouetteAngles,
+  cylinderSilhouetteAngles,
+  frustumApexHeight,
+  isIdentityPlacement,
+  localCamera,
+  rotateToLocal,
+  toLocal,
+} from './silhouette'
+import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
 
 // S6 — construction segments in a solid figure, and the glass rule.
 //
@@ -154,17 +162,23 @@ function polyhedronCandidates(solid: Solid3D, a: Vec3, b: Vec3, d: Vec3): number
 // Round solids
 // ---------------------------------------------------------------------------
 //
-// A sphere, a cylinder and a cone, each in H1's placement: centred on the
-// origin, axis along +y. Every surface below is linear or quadratic in both
-// the ray parameter t and the segment parameter u, so every answer is a root
-// of a polynomial of degree at most two.
+// A sphere, a cylinder, a cone and a frustum, each in H1's placement:
+// centred on the origin, axis along +y. Every surface below is linear or
+// quadratic in both the ray parameter t and the segment parameter u, so every
+// answer is a root of a polynomial of degree at most two.
+//
+// A round solid PLACED elsewhere, or tilted (P1), is handled by carrying the
+// segment into its local frame, where all of this applies unchanged: the
+// segment's endpoints go through `toLocal`, the view direction through the
+// frame's rotation, and a span's parameters are invariant under a rigid
+// motion, so they come back out as they are.
 
-type RoundSpec = Extract<SolidSpec, { kind: 'sphere' | 'cylinder' | 'cone' }>
+type RoundSpec = Extract<SolidSpec, { kind: 'sphere' | 'cylinder' | 'cone' | 'frustum' }>
 
 const AXIS: Vec3 = { x: 0, y: 1, z: 0 }
 
 function roundSize(spec: RoundSpec): number {
-  return Math.max(1, spec.radius, spec.kind === 'sphere' ? 0 : spec.height / 2)
+  return Math.max(1, spec.radius, spec.kind === 'sphere' ? 0 : spec.height / 2, spec.kind === 'frustum' ? spec.top : 0)
 }
 
 // Whether f(t) = A t^2 + 2 B t + C is negative somewhere in the open
@@ -224,6 +238,24 @@ function roundHides(spec: RoundSpec, p: Vec3, d: Vec3): boolean {
       const k2 = k * k
       const above = apex - p.y
       const [lo, hi] = slab(p, d, -apex + margin, apex)
+      return negativeSomewhere(
+        d.x * d.x + d.z * d.z - k2 * d.y * d.y,
+        p.x * d.x + p.z * d.z + k2 * above * d.y,
+        p.x * p.x + p.z * p.z - k2 * above * above,
+        lo,
+        hi
+      )
+    }
+    case 'frustum': {
+      // The extended cone's inside, kept to the frustum's own slab: the
+      // cone's test with the virtual apex h R / (R - r) above the base.
+      const { bottom, top } = frustumRadii(spec)
+      const half = spec.height / 2
+      const apexHeight = frustumApexHeight(bottom, top, spec.height)
+      const k = (bottom - margin) / apexHeight
+      const k2 = k * k
+      const above = -half + apexHeight - p.y
+      const [lo, hi] = slab(p, d, -half + margin, half - margin)
       return negativeSomewhere(
         d.x * d.x + d.z * d.z - k2 * d.y * d.y,
         p.x * d.x + p.z * d.z + k2 * above * d.y,
@@ -356,13 +388,37 @@ function roundCandidates(spec: RoundSpec, a: Vec3, b: Vec3, camera: Camera): num
       rimSweepRoots(a, ab, d, -apexY, spec.radius, out)
       break
     }
+    case 'frustum': {
+      // The extended cone's families, clipped by the frustum's slab — plus
+      // the TOP cap plane and the top rim's sweep, which a cone does not
+      // have: above the silhouette lines' reach, the top rim is what bounds
+      // the frustum's shadow.
+      const { bottom, top } = frustumRadii(spec)
+      const half = spec.height / 2
+      const apexHeight = frustumApexHeight(bottom, top, spec.height)
+      const apexY = -half + apexHeight
+      const k2 = (bottom / apexHeight) ** 2
+      const above0 = apexY - a.y
+      const above1 = -ab.y
+      squaredLengthRoots(flat(a), flat(ab), { u2: k2 * above1 * above1, u1: 2 * k2 * above0 * above1, u0: k2 * above0 * above0 }, out)
+      planeCrossing(a, ab, AXIS, -half, out)
+      planeCrossing(a, ab, AXIS, half, out)
+      const apex = { x: 0, y: apexY, z: 0 }
+      for (const angle of coneSilhouetteAngles(bottom, apexHeight, camera) ?? []) {
+        const foot = { x: bottom * Math.cos(angle), y: -half, z: bottom * Math.sin(angle) }
+        silhouettePlaneRoots(a, ab, apex, sub3(foot, apex), d, out)
+      }
+      rimSweepRoots(a, ab, d, -half, bottom, out)
+      rimSweepRoots(a, ab, d, half, top, out)
+      break
+    }
   }
   return out
 }
 
 function roundSpec(body: SolidBody): RoundSpec {
   const spec = body.spec
-  if (spec.kind === 'sphere' || spec.kind === 'cylinder' || spec.kind === 'cone') return spec
+  if (spec.kind === 'sphere' || spec.kind === 'cylinder' || spec.kind === 'cone' || spec.kind === 'frustum') return spec
   // Unreachable: every other primitive builds a polyhedron (solids.ts, H2).
   throw new Error(`A ${spec.kind} has no polyhedron to occlude with`)
 }
@@ -372,16 +428,23 @@ function roundSpec(body: SolidBody): RoundSpec {
 // ---------------------------------------------------------------------------
 
 // S6's ray test for one solid.
+//
+// A round solid judges the point in its own frame (P1). An identity
+// placement skips the conversion, so nothing placed by H1 changes by a bit.
 export function hidesPoint(body: SolidBody, p: Vec3, camera: Camera): boolean {
   if (body.polyhedron) return polyhedronHides(body.polyhedron, p, camera.direction)
-  return roundHides(roundSpec(body), p, camera.direction)
+  const placement = body.placement
+  if (isIdentityPlacement(placement)) return roundHides(roundSpec(body), p, camera.direction)
+  return roundHides(roundSpec(body), toLocal(placement, p), rotateToLocal(placement, camera.direction))
 }
 
 // Every parameter in (0, 1) at which this solid could change the segment's
 // status. Unsorted, possibly with repeats: segmentSpans tidies them.
 export function occlusionCandidates(body: SolidBody, a: Vec3, b: Vec3, camera: Camera): number[] {
   if (body.polyhedron) return polyhedronCandidates(body.polyhedron, a, b, camera.direction)
-  return roundCandidates(roundSpec(body), a, b, camera)
+  const placement = body.placement
+  if (isIdentityPlacement(placement)) return roundCandidates(roundSpec(body), a, b, camera)
+  return roundCandidates(roundSpec(body), toLocal(placement, a), toLocal(placement, b), localCamera(camera, placement))
 }
 
 // The segment a-b, split into alternating visible and hidden spans against

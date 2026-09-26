@@ -248,3 +248,21 @@ describe('what a plane name is', () => {
     ])
   })
 })
+
+describe('the frustum refusals (P2)', () => {
+  it('refuses a top equal to the radius, pointing at the cylinder', () => {
+    const scope = walk('@mode: figure\nF = solid frustum radius 6, top 6, height 4')
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/is a cylinder — write "cylinder radius 6, height 4"/)])
+    expect(scope.solids.size).toBe(0)
+  })
+
+  it('refuses a top of 0, pointing at the cone', () => {
+    const scope = walk('@mode: figure\nF = solid frustum radius 6, top 0, height 4')
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/is a cone — write "cone radius 6, height 4"/)])
+  })
+
+  it('builds either way up', () => {
+    expect(walk('@mode: figure\nF = solid frustum radius 6, top 3, height 4').errors).toEqual([])
+    expect(walk('@mode: figure\nF = solid frustum radius 3, top 6, height 4').errors).toEqual([])
+  })
+})

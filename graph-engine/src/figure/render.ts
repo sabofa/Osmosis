@@ -40,7 +40,7 @@ import { angle3, distance3 } from './construct3d'
 import { segmentSpans, type Span } from './occlusion'
 import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge, type Vec3 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
-import { solidDimensions, solidDimensionSegment, solidOutline, type SolidBody } from './solids'
+import { bodyDimensionSegment, solidDimensions, solidOutline, type SolidBody } from './solids'
 import { authorPlane, authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
 import { projectCircle, type ProjectedCircle } from './silhouette'
@@ -999,7 +999,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       } else if (subject.kind === 'solidDimension') {
         const body = resolveSolid(subject.solid)
         computed = solidDimensionValue(body, subject.dimension, subject.solid)
-        const segment = solidDimensionSegment(body.spec, subject.dimension)
+        const segment = bodyDimensionSegment(body, subject.dimension)
         if (!segment) throw new Error(`A ${body.spec.kind} has no "${subject.dimension}" to attach a label to`)
         const a = camera.project(segment[0])
         const b = camera.project(segment[1])

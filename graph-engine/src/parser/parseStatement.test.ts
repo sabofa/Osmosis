@@ -875,3 +875,26 @@ describe('segment styles (phase 6)', () => {
     expect(parseStatement('segment: A-G plain')).toMatchObject({ kind: 'namedSegment', style: 'plain' })
   })
 })
+
+describe('the frustum (phase 7, P2)', () => {
+  it('parses a conical frustum by radius, top and height', () => {
+    const s = parseStatement('F = solid frustum radius 6, top 3, height 4')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.primitive).toEqual({
+      kind: 'frustum',
+      radius: { kind: 'num', value: 6 },
+      top: { kind: 'num', value: 3 },
+      height: { kind: 'num', value: 4 },
+    })
+  })
+
+  it('refuses a frustum that does not say which number is which', () => {
+    expect(() => parseStatement('solid: frustum 6, 3, 4')).toThrow(/frustum radius <r>, top <r>, height <h>/)
+  })
+
+  it('labels a top', () => {
+    const s = parseStatement('label: F top')
+    if (s.kind !== 'measureLabel') throw new Error('expected a measure label')
+    expect(s.subject).toEqual({ kind: 'solidDimension', solid: 'F', dimension: 'top' })
+  })
+})

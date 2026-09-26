@@ -1,8 +1,9 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 import type { Solid3D, Vec3 } from './project3d'
-import type { SolidBody, SolidSpec } from './solids'
+import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
 import { describeAuthorPlane } from './authorFrame'
+import { isIdentityPlacement, toWorld, type Placement } from './silhouette'
 
 // Plane ∩ solid.
 //
@@ -169,38 +170,83 @@ function missesSolid(plane: SectionPlane, name: string): Error {
 
 export function sectionOf(body: SolidBody, plane: SectionPlane, name: string): Section {
   if (body.polyhedron) return polyhedronSection(body.polyhedron, plane, name)
-  return curvedSection(body.spec, plane, name)
+  if (isIdentityPlacement(body.placement)) return curvedSection(body.spec, plane, name)
+  return placedSection(body, plane, name)
+}
+
+// ---------------------------------------------------------------------------
+// P7 — sections of a PLACED round solid
+// ---------------------------------------------------------------------------
+//
+// A round solid placed by points (P1) is cut in its own frame. This phase's
+// planes are axis-perpendicular, so that works only while the solid's axis is
+// author-vertical: its local frame is then the world's, turned about the
+// vertical by at most a half turn, and every axis plane stays an axis plane.
+// A TILTED round solid meets an axis plane obliquely — an ellipse, or worse —
+// and that arrives with build step 8's oblique planes, so it is refused now
+// rather than drawn wrong.
+//
+// A vertical solid off the origin is cut where it actually is: the world
+// plane's offset is converted into the local frame, the section solved there,
+// and its points carried back out.
+function placedSection(body: SolidBody, plane: SectionPlane, name: string): Section {
+  const { origin, frame } = body.placement
+  const vertical = Math.abs(Math.abs(frame.axis.y) - 1) <= GEOM_EPS
+  if (!vertical) {
+    throw new Error(`"${name}" is a tilted ${body.spec.kind}: sections of a tilted ${body.spec.kind} arrive with oblique planes (build step 8)`)
+  }
+  // A vertical frame is (u, axis, w) = (+-x, +-y, z) exactly (see
+  // frameForAxis), so each world axis is one local axis, perhaps reversed.
+  const sign: Record<PlaneAxis, number> = { x: Math.sign(frame.u.x), y: Math.sign(frame.axis.y), z: Math.sign(frame.w.z) }
+  const toLocalPlane = (p: SectionPlane): SectionPlane => ({ axis: p.axis, at: (p.at - origin[p.axis]) * sign[p.axis] })
+  const toWorldPlane = (p: SectionPlane): SectionPlane => ({ axis: p.axis, at: p.at * sign[p.axis] + origin[p.axis] })
+  const local = curvedSection(body.spec, toLocalPlane(plane), name, toWorldPlane)
+  return placeSection(local, body.placement)
+}
+
+function placeSection(section: Section, placement: Placement): Section {
+  if (section.kind === 'circle') return { kind: 'circle', center: toWorld(placement, section.center), radius: section.radius }
+  return { kind: 'polygon', points: section.points.map((p) => toWorld(placement, p)) }
 }
 
 // Solved in closed form per primitive, never by faceting and cutting the
 // facets: a circle is the answer, and a 96-gon is a picture of the answer.
-function curvedSection(spec: SolidSpec, plane: SectionPlane, name: string): Section {
+//
+// `plane` is in the solid's own frame; `world` converts it back for a
+// message, so an author reads the plane they wrote (P7).
+function curvedSection(
+  spec: SolidSpec,
+  plane: SectionPlane,
+  name: string,
+  world: (p: SectionPlane) => SectionPlane = (p) => p
+): Section {
+  const misses = () => missesSolid(world(plane), name)
   switch (spec.kind) {
     case 'sphere': {
       const inside = spec.radius * spec.radius - plane.at * plane.at
-      if (inside <= GEOM_EPS) throw missesSolid(plane, name)
+      if (inside <= GEOM_EPS) throw misses()
       return { kind: 'circle', center: centreOnPlane(plane), radius: Math.sqrt(inside) }
     }
     case 'cylinder': {
       const y = spec.height / 2
       if (plane.axis === 'y') {
-        if (Math.abs(plane.at) > y + GEOM_EPS) throw missesSolid(plane, name)
+        if (Math.abs(plane.at) > y + GEOM_EPS) throw misses()
         return { kind: 'circle', center: { x: 0, y: plane.at, z: 0 }, radius: spec.radius }
       }
       // A plane parallel to the axis cuts a rectangle: as deep as the chord
       // it takes across the circular cross-section, as tall as the cylinder.
       const inside = spec.radius * spec.radius - plane.at * plane.at
-      if (inside <= GEOM_EPS) throw missesSolid(plane, name)
+      if (inside <= GEOM_EPS) throw misses()
       const half = Math.sqrt(inside)
       return { kind: 'polygon', points: rectangleInPlane(plane, half, y) }
     }
     case 'cone': {
       const y = spec.height / 2
       if (plane.axis === 'y') {
-        if (plane.at < -y - GEOM_EPS || plane.at > y + GEOM_EPS) throw missesSolid(plane, name)
+        if (plane.at < -y - GEOM_EPS || plane.at > y + GEOM_EPS) throw misses()
         const radius = (spec.radius * (y - plane.at)) / spec.height
         if (radius <= GEOM_EPS) {
-          throw new Error(`The plane ${describeAuthorPlane(plane)} meets "${name}" only at its apex, which is a point and not a section`)
+          throw new Error(`The plane ${describeAuthorPlane(world(plane))} meets "${name}" only at its apex, which is a point and not a section`)
         }
         return { kind: 'circle', center: { x: 0, y: plane.at, z: 0 }, radius }
       }
@@ -208,17 +254,37 @@ function curvedSection(spec: SolidSpec, plane: SectionPlane, name: string): Sect
       // axis it is a hyperbola, and refusing is the honest answer: this phase
       // draws polygons, circles and ellipses, and a branch of a hyperbola is
       // none of them.
-      if (Math.abs(plane.at) > GEOM_EPS) {
-        throw new Error(
-          `A plane parallel to a cone's axis but off it cuts "${name}" in a HYPERBOLA, which this phase does not draw — ` +
-            `use ${describeAuthorPlane({ axis: plane.axis, at: 0 })} for the axial triangle, or cut square to the axis for a circle`
-        )
-      }
+      if (Math.abs(plane.at) > GEOM_EPS) throw hyperbola('cone', plane, name, world)
       return { kind: 'polygon', points: coneTriangle(plane, spec.radius, y) }
+    }
+    case 'frustum': {
+      // P2 — square to the axis, a circle whose radius runs linearly from the
+      // base rim's to the top rim's; through the axis, the isosceles
+      // trapezoid of the two rims' diameters; parallel to the axis but off
+      // it, a hyperbola, refused as a cone's is.
+      const { bottom, top } = frustumRadii(spec)
+      const y = spec.height / 2
+      if (plane.axis === 'y') {
+        if (Math.abs(plane.at) > y + GEOM_EPS) throw misses()
+        const radius = bottom + ((top - bottom) * (plane.at + y)) / spec.height
+        return { kind: 'circle', center: { x: 0, y: plane.at, z: 0 }, radius }
+      }
+      if (Math.abs(plane.at) >= bottom - GEOM_EPS) throw misses()
+      if (Math.abs(plane.at) > GEOM_EPS) throw hyperbola('frustum', plane, name, world)
+      return { kind: 'polygon', points: frustumTrapezoid(plane, bottom, top, y) }
     }
     default:
       throw new Error(`"${name}" cannot be cut`)
   }
+}
+
+// The refusal of a plane parallel to a round solid's axis but off it. The
+// wording is phase 5's for the cone, unchanged.
+function hyperbola(kind: 'cone' | 'frustum', plane: SectionPlane, name: string, world: (p: SectionPlane) => SectionPlane): Error {
+  return new Error(
+    `A plane parallel to a ${kind}'s axis but off it cuts "${name}" in a HYPERBOLA, which this phase does not draw — ` +
+      `use ${describeAuthorPlane(world({ axis: plane.axis, at: 0 }))} for the axial ${kind === 'cone' ? 'triangle' : 'trapezoid'}, or cut square to the axis for a circle`
+  )
 }
 
 function centreOnPlane(plane: SectionPlane): Vec3 {
@@ -251,6 +317,18 @@ function coneTriangle(plane: SectionPlane, radius: number, y: number): Vec3[] {
     z: plane.axis === 'z' ? 0 : across === 'z' ? side * radius : 0,
   })
   return [base(-1), base(1), { x: 0, y, z: 0 }]
+}
+
+// The trapezoid a plane through a frustum's axis cuts: the base rim's
+// diameter in the plane, then the top rim's, wound round.
+function frustumTrapezoid(plane: SectionPlane, bottom: number, top: number, y: number): Vec3[] {
+  const across = plane.axis === 'x' ? 'z' : 'x'
+  const at = (side: number, level: number): Vec3 => ({
+    x: across === 'x' ? side : 0,
+    y: level,
+    z: across === 'z' ? side : 0,
+  })
+  return [at(-bottom, -y), at(bottom, -y), at(top, y), at(-top, y)]
 }
 
 // ---------------------------------------------------------------------------

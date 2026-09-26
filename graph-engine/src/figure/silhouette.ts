@@ -1,6 +1,6 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
-import { dot3 } from './construct3d'
+import { add3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
 import type { Camera, ProjectedArc, ProjectedEdge, ProjectedSegment, Vec3 } from './project3d'
 
 // Analytic silhouettes for the curved primitives (H2).
@@ -20,6 +20,123 @@ import type { Camera, ProjectedArc, ProjectedEdge, ProjectedSegment, Vec3 } from
 
 function cross2(a: Vec2, b: Vec2): number {
   return a.x * b.y - a.y * b.x
+}
+
+// ---------------------------------------------------------------------------
+// P1 — a round solid has a placement, and the maths below runs in its frame
+// ---------------------------------------------------------------------------
+//
+// Every outline in this module (and every occlusion candidate in
+// occlusion.ts) is written for H1's placement: centred on the origin, axis
+// along +y. A round solid placed by points — a cylinder from A to B, a cone
+// on an apex and a base centre, a sphere on a centre — sits anywhere, tilted
+// any way. Rather than write every silhouette a second time for a general
+// axis, the solid carries a PLACEMENT: an origin and an orthonormal,
+// right-handed frame whose local y is the axis. Local coordinates map to
+// world as `origin + x u + y axis + z w`.
+//
+// To draw it, the world camera is re-expressed in that frame — a LOCAL
+// camera — and the y-axis maths runs unchanged against it. A rigid motion
+// preserves everything a silhouette is made of (tangency, facing, the
+// uniform scale), so this is exact, not an approximation of a tilted solid.
+
+export interface Frame3 {
+  u: Vec3
+  axis: Vec3
+  w: Vec3
+}
+
+export interface Placement {
+  origin: Vec3
+  frame: Frame3
+}
+
+// H1's placement, and every round primitive's placement before phase 7.
+export const IDENTITY_PLACEMENT: Placement = {
+  origin: { x: 0, y: 0, z: 0 },
+  frame: { u: { x: 1, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, w: { x: 0, y: 0, z: 1 } },
+}
+
+function same(a: Vec3, b: Vec3): boolean {
+  return a.x === b.x && a.y === b.y && a.z === b.z
+}
+
+// Exactly the identity — compared exactly, because what hangs on it is byte
+// identity: an identity placement draws through the world camera itself.
+export function isIdentityPlacement(placement: Placement): boolean {
+  const { origin, frame } = placement
+  const id = IDENTITY_PLACEMENT.frame
+  return same(origin, IDENTITY_PLACEMENT.origin) && same(frame.u, id.u) && same(frame.axis, id.axis) && same(frame.w, id.w)
+}
+
+// The deterministic frame for an axis (internal coordinates; need not be
+// unit). A round solid's silhouette does not depend on its rotation about
+// its own axis, but the start angles of the arcs that draw it do, so the
+// rotation is FIXED: u = normalize(axis x ref), with ref internal author-X
+// (internal +z) unless the axis is within GEOM_EPS of it, then internal
+// author-Y (internal +x); w = u x axis, which makes (u, axis, w)
+// right-handed. For a vertical axis this is exactly the identity frame.
+export function frameForAxis(axis: Vec3): Frame3 {
+  const unit = scale3(axis, 1 / length3(axis))
+  const authorX: Vec3 = { x: 0, y: 0, z: 1 }
+  const ref = Math.abs(dot3(unit, authorX)) > 1 - GEOM_EPS ? { x: 1, y: 0, z: 0 } : authorX
+  const raw = cross3(unit, ref)
+  const u = scale3(raw, 1 / length3(raw))
+  return { u, axis: unit, w: cross3(u, unit) }
+}
+
+export function placementAlong(origin: Vec3, axis: Vec3): Placement {
+  return { origin, frame: frameForAxis(axis) }
+}
+
+// A local direction, in world coordinates.
+export function rotateToWorld(placement: Placement, v: Vec3): Vec3 {
+  const { u, axis, w } = placement.frame
+  return add3(add3(scale3(u, v.x), scale3(axis, v.y)), scale3(w, v.z))
+}
+
+// A world direction, in local coordinates: its components along the frame.
+export function rotateToLocal(placement: Placement, v: Vec3): Vec3 {
+  const { u, axis, w } = placement.frame
+  return { x: dot3(v, u), y: dot3(v, axis), z: dot3(v, w) }
+}
+
+export function toWorld(placement: Placement, p: Vec3): Vec3 {
+  return add3(placement.origin, rotateToWorld(placement, p))
+}
+
+export function toLocal(placement: Placement, p: Vec3): Vec3 {
+  return rotateToLocal(placement, sub3(p, placement.origin))
+}
+
+// The world camera, re-expressed in a placement's frame. `direction`,
+// `right` and `up` are the world vectors' components along (u, axis, w),
+// which keeps them orthonormal and right-handed (a rotation preserves both);
+// `project(p)` is the world projection of the placed point, and
+// `projectVector` its linear part, for radius vectors. `scale` and `name`
+// are the world camera's.
+//
+// An identity placement gets the world camera ITSELF, not a wrapped copy: a
+// wrapper would compute `0 + 1 x + 0 y + 0 z` where the camera computed `x`,
+// and every pre-phase-7 byte of every cylinder, cone and sphere rests on
+// those being the same arithmetic.
+export function localCamera(camera: Camera, placement: Placement): Camera {
+  if (isIdentityPlacement(placement)) return camera
+  return {
+    name: camera.name,
+    direction: rotateToLocal(placement, camera.direction),
+    right: rotateToLocal(placement, camera.right),
+    up: rotateToLocal(placement, camera.up),
+    scale: camera.scale,
+    project: (p) => camera.project(toWorld(placement, p)),
+    projectVector: (v) => projectVector(camera, rotateToWorld(placement, v)),
+  }
+}
+
+// A direction's image on the page: `project` for a world camera, which is
+// linear, and the linear part of a local camera's affine `project`.
+export function projectVector(camera: Camera, v: Vec3): Vec2 {
+  return camera.projectVector ? camera.projectVector(v) : camera.project(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -52,9 +169,10 @@ export interface ProjectedCircle {
 // `(2 A·B, |A|² − |B|²)`.
 export function projectCircle(camera: Camera, center: Vec3, u: Vec3, v: Vec3): ProjectedCircle {
   // The camera's projection is linear, so it maps the radius VECTORS the same
-  // way it maps points — no subtraction of the centre needed.
-  const a = camera.project(u)
-  const b = camera.project(v)
+  // way it maps points — no subtraction of the centre needed. A local camera
+  // (P1) is affine, and hands over its linear part for exactly this.
+  const a = projectVector(camera, u)
+  const b = projectVector(camera, v)
   const t0 = 0.5 * Math.atan2(2 * (a.x * b.x + a.y * b.y), a.x * a.x + a.y * a.y - (b.x * b.x + b.y * b.y))
   const cos = Math.cos(t0)
   const sin = Math.sin(t0)
@@ -270,8 +388,8 @@ export function coneSilhouetteAngles(radius: number, height: number, camera: Cam
   const base = projectCircle(camera, { x: 0, y: -y, z: 0 }, u, v)
   const apex = camera.project({ x: 0, y, z: 0 })
 
-  const a = camera.project(u)
-  const b = camera.project(v)
+  const a = projectVector(camera, u)
+  const b = projectVector(camera, v)
   const d = { x: base.center.x - apex.x, y: base.center.y - apex.y }
   const p = cross2(d, b)
   const q = -cross2(d, a)
@@ -282,6 +400,83 @@ export function coneSilhouetteAngles(radius: number, height: number, camera: Cam
   const phase = Math.atan2(q, p)
   const spread = Math.acos(Math.max(-1, Math.min(1, k / magnitude)))
   return [phase - spread, phase + spread]
+}
+
+// ---------------------------------------------------------------------------
+// P2 — the conical frustum
+// ---------------------------------------------------------------------------
+
+// The height of a frustum's EXTENDED cone — the cone it is cut from — above
+// its base: the virtual apex sits where the two rims' generators meet,
+// h R / (R - r) above the base. Callers pass R > r (solids.ts normalises a
+// frustum wider at the top by reversing its axis, P2).
+export function frustumApexHeight(radius: number, top: number, height: number): number {
+  return (height * radius) / (radius - top)
+}
+
+// A frustum: base rim (radius R) at y = -h/2, top rim (radius r < R) at
+// y = +h/2, axis +y.
+//
+// Its silhouette is its extended cone's, clipped to its own height. The
+// generators that graze the extended cone are the ones through the base
+// angles `coneSilhouetteAngles` solves for — the cone's angles depend only on
+// the base and the apex, not on where the cone sits along its axis — and a
+// generator at base angle t crosses the top rim at the same angle t, so each
+// silhouette line runs from the base rim to the top rim at one angle, and is
+// tangent to both (the top rim is the base rim scaled about the apex).
+//
+// Both rims split at those angles. A rim's half is hidden when it lies behind
+// the body: the base rim's back half unless the camera is below the base,
+// which then faces it; the top rim's back half unless the camera is above
+// the top cap. Which half is the back is the cone's lateral-facing test, with
+// the extended cone's height.
+export function frustumOutline(radius: number, top: number, height: number, camera: Camera): ProjectedEdge[] {
+  const y = height / 2
+  const apexHeight = frustumApexHeight(radius, top, height)
+  const base = projectCircle(camera, { x: 0, y: -y, z: 0 }, radiusX(radius), radiusZ(radius))
+  const rim = projectCircle(camera, { x: 0, y, z: 0 }, radiusX(top), radiusZ(top))
+  const axisTowardCamera = dot3(AXIS, camera.direction)
+  const wholeBaseVisible = -axisTowardCamera > 0
+  const wholeTopVisible = axisTowardCamera > 0
+
+  const angles = coneSilhouetteAngles(radius, apexHeight, camera)
+  // Looking along the axis: the lateral surface is all in front or all
+  // behind, so there is no silhouette line. The rim on the cap facing the
+  // viewer is whole, and so is the base rim from above (it is the outline);
+  // from below, the top rim is behind the base disc.
+  if (!angles) {
+    return [...wholeEllipse(base, 'base', false), ...wholeEllipse(rim, 'top', !wholeTopVisible)]
+  }
+  const [first, second] = angles
+  const lateralTowardCamera = (t: number): number =>
+    apexHeight * (Math.cos(t) * camera.direction.x + Math.sin(t) * camera.direction.z) + radius * axisTowardCamera
+  const firstArcVisible = lateralTowardCamera((first + second) / 2) > 0
+
+  const generator = (t: number, object: string): ProjectedSegment => ({
+    kind: 'segment',
+    a: camera.project({ x: radius * Math.cos(t), y: -y, z: radius * Math.sin(t) }),
+    b: camera.project({ x: top * Math.cos(t), y, z: top * Math.sin(t) }),
+    hidden: false,
+    vertices: [0, 0],
+    object,
+  })
+
+  return [
+    arcOfCircle(base, first, second, wholeBaseVisible ? false : !firstArcVisible, 'base-0'),
+    arcOfCircle(base, second, first + 2 * Math.PI, wholeBaseVisible ? false : firstArcVisible, 'base-1'),
+    arcOfCircle(rim, first, second, wholeTopVisible ? false : !firstArcVisible, 'top-0'),
+    arcOfCircle(rim, second, first + 2 * Math.PI, wholeTopVisible ? false : firstArcVisible, 'top-1'),
+    generator(first, 'silhouette-0'),
+    generator(second, 'silhouette-1'),
+  ]
+}
+
+// A whole ellipse as two halves, both hidden or both not.
+function wholeEllipse(circle: ProjectedCircle, object: string, hidden: boolean): ProjectedArc[] {
+  return [
+    arcOfCircle(circle, 0, Math.PI, hidden, `${object}-0`),
+    arcOfCircle(circle, Math.PI, 2 * Math.PI, hidden, `${object}-1`),
+  ]
 }
 
 function apexLine(apex: Vec2, base: ProjectedCircle, angle: number, object: string): ProjectedSegment {

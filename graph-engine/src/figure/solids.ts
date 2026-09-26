@@ -1,5 +1,17 @@
 import { DEFAULT_CAMERA, projectSolid, rectangularPrism, type Camera, type ProjectedEdge, type Solid3D, type Vec3 } from './project3d'
-import { coneOutline, cylinderOutline, sphereOutline } from './silhouette'
+import {
+  coneOutline,
+  cylinderOutline,
+  frustumOutline,
+  IDENTITY_PLACEMENT,
+  isIdentityPlacement,
+  localCamera,
+  placementAlong,
+  rotateToWorld,
+  sphereOutline,
+  toWorld,
+  type Placement,
+} from './silhouette'
 
 // The solid vocabulary: what an author can ask for, where it sits, and what
 // its dimensions are called.
@@ -68,10 +80,14 @@ export type SolidSpec =
   | { kind: 'cylinder'; radius: number; height: number }
   | { kind: 'cone'; radius: number; height: number }
   | { kind: 'sphere'; radius: number }
+  // A conical frustum (P2): base radius, top radius, height. `top` may be
+  // larger than `radius` — the frustum wider at the top — and is then built
+  // as the same solid with its axis reversed (see frustumRadii).
+  | { kind: 'frustum'; radius: number; top: number; height: number }
 
 // The primitive names an author can write, in the order an error message
 // should list them.
-export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere'] as const
+export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum'] as const
 
 export type SolidPrimitiveName = (typeof SOLID_PRIMITIVES)[number]
 
@@ -92,9 +108,26 @@ export interface SolidBody {
   // order a *problem* names a prism's vertices in is textbook order (V3).
   // Empty for a solid with no vertices to name.
   labelOrder: number[]
+  // P1 — where a round solid sits and which way its axis points: local
+  // coordinates (H1's placement, axis +y) map to world through it. The
+  // identity for every polyhedron, whose vertices are already world points,
+  // and for every round solid placed by H1's convention.
+  placement: Placement
 }
 
-export function buildSolid(spec: SolidSpec): SolidBody {
+// `placement` places a ROUND solid; a polyhedron ignores it. A frustum wider
+// at the top reverses it (P2).
+export function buildSolid(spec: SolidSpec, placement: Placement = IDENTITY_PLACEMENT): SolidBody {
+  const body = buildShape(spec)
+  if (body.polyhedron) return body
+  if (spec.kind === 'frustum' && frustumRadii(spec).reversed) {
+    return { ...body, placement: placementAlong(placement.origin, rotateToWorld(placement, { x: 0, y: -1, z: 0 })) }
+  }
+  return { ...body, placement }
+}
+
+function buildShape(spec: SolidSpec): SolidBody {
+  const placement = IDENTITY_PLACEMENT
   switch (spec.kind) {
     case 'prism':
       return {
@@ -107,40 +140,62 @@ export function buildSolid(spec: SolidSpec): SolidBody {
         // and the top corners above them are 7, 6, 2, 3, matched position
         // for position so A is under E.
         labelOrder: [4, 5, 1, 0, 7, 6, 2, 3],
+        placement,
       }
     case 'pyramid':
       // squarePyramid's base runs 0 (+X,+Y), 1 (+X,-Y), 2 (-X,-Y), 3 (-X,+Y)
       // in the author frame, which is clockwise from above; textbook order
       // starts at the front-left corner, 1, and runs the other way.
-      return { spec, polyhedron: squarePyramid(spec.base, spec.height), labelOrder: [1, 0, 3, 2, 4] }
+      return { spec, polyhedron: squarePyramid(spec.base, spec.height), labelOrder: [1, 0, 3, 2, 4], placement }
     case 'tetrahedron':
       // The base is built at increasing INTERNAL angle, which is decreasing
       // author azimuth — clockwise from above. A stays the first vertex; B
       // and C swap so the base reads counter-clockwise, and D is the apex.
-      return { spec, polyhedron: regularTetrahedron(spec.edge), labelOrder: [0, 2, 1, 3] }
+      return { spec, polyhedron: regularTetrahedron(spec.edge), labelOrder: [0, 2, 1, 3], placement }
     // H2's second representation: a curved primitive carries its parameters
     // and emits an analytic silhouette. It has no vertices, so there is
     // nothing to letter and nothing for the convex face rule to classify.
     case 'cylinder':
     case 'cone':
     case 'sphere':
-      return { spec, polyhedron: null, labelOrder: [] }
+    case 'frustum':
+      return { spec, polyhedron: null, labelOrder: [], placement }
   }
+}
+
+// P2 — a frustum's two radii as its geometry uses them: the wider rim is
+// always the local BASE (y = -h/2), so the silhouette and occlusion maths
+// only ever see R > r. A frustum written wider at the top is `reversed`: the
+// same solid, its placement's axis turned over (buildSolid), which puts the
+// wide rim back on top in the world. One code path, not two.
+export function frustumRadii(spec: { radius: number; top: number }): { bottom: number; top: number; reversed: boolean } {
+  return spec.top > spec.radius
+    ? { bottom: spec.top, top: spec.radius, reversed: true }
+    : { bottom: spec.radius, top: spec.top, reversed: false }
 }
 
 // **The one outline contract (H2).** A polyhedron is classified by the convex
 // face rule; a curved primitive computes its silhouette in closed form. Both
 // hand back the same drawn-edge union, and no caller above this line knows
 // which it got.
+//
+// A round solid is drawn in its own frame, through the world camera
+// re-expressed there (P1) — which for an identity placement is the world
+// camera itself.
 export function solidOutline(body: SolidBody, camera: Camera): ProjectedEdge[] {
   if (body.polyhedron) return projectSolid(body.polyhedron, camera)
+  const local = localCamera(camera, body.placement)
   switch (body.spec.kind) {
     case 'cylinder':
-      return cylinderOutline(body.spec.radius, body.spec.height, camera)
+      return cylinderOutline(body.spec.radius, body.spec.height, local)
     case 'cone':
-      return coneOutline(body.spec.radius, body.spec.height, camera)
+      return coneOutline(body.spec.radius, body.spec.height, local)
     case 'sphere':
-      return sphereOutline(body.spec.radius, camera)
+      return sphereOutline(body.spec.radius, local)
+    case 'frustum': {
+      const radii = frustumRadii(body.spec)
+      return frustumOutline(radii.bottom, radii.top, body.spec.height, local)
+    }
     default:
       // Unreachable: every polyhedral primitive builds a polyhedron above.
       return []
@@ -239,6 +294,8 @@ export function solidDimensions(spec: SolidSpec): Record<string, number> {
       return { radius: spec.radius, height: spec.height }
     case 'sphere':
       return { radius: spec.radius }
+    case 'frustum':
+      return { radius: spec.radius, top: spec.top, height: spec.height }
   }
 }
 
@@ -349,5 +406,42 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
         { x: 0, y: 0, z: 0 },
         { x: spec.radius, y: 0, z: 0 },
       ]
+    case 'frustum': {
+      // In the frustum's LOCAL frame (P2): the author's base rim is the
+      // local bottom unless the frustum is reversed, when it is the local
+      // top. Each radius runs out along +x from its rim's centre, as a
+      // cone's does; the height is the axis.
+      const y = spec.height / 2
+      const baseY = frustumRadii(spec).reversed ? y : -y
+      if (dimension === 'radius') {
+        return [
+          { x: 0, y: baseY, z: 0 },
+          { x: spec.radius, y: baseY, z: 0 },
+        ]
+      }
+      if (dimension === 'top') {
+        return [
+          { x: 0, y: -baseY, z: 0 },
+          { x: spec.top, y: -baseY, z: 0 },
+        ]
+      }
+      if (dimension === 'height') {
+        return [
+          { x: 0, y: -y, z: 0 },
+          { x: 0, y, z: 0 },
+        ]
+      }
+      return null
+    }
   }
+}
+
+// The dimension segment of a BUILT solid, in world coordinates: a round
+// solid's comes out of `solidDimensionSegment` in its local frame and is
+// carried through its placement (P1). Untouched for an identity placement,
+// so every pre-phase-7 label sits on exactly the bytes it did.
+export function bodyDimensionSegment(body: SolidBody, dimension: string): [Vec3, Vec3] | null {
+  const segment = solidDimensionSegment(body.spec, dimension)
+  if (!segment || body.polyhedron || isIdentityPlacement(body.placement)) return segment
+  return [toWorld(body.placement, segment[0]), toWorld(body.placement, segment[1])]
 }

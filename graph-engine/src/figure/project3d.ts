@@ -106,6 +106,14 @@ export interface Camera {
   up: Vec3
   scale: number
   project(p: Vec3): Vec2
+  // The LINEAR part of `project`, for a camera whose `project` carries a
+  // translation: a round solid's local camera (silhouette.ts, P1), whose
+  // `project(p)` is the world camera's projection of the placed point. A
+  // radius VECTOR must not pick up that translation, so projecting one goes
+  // through this. Absent on every world camera, whose `project` is itself
+  // linear — which is what keeps their arithmetic, and their bytes, as they
+  // were.
+  projectVector?(v: Vec3): Vec2
 }
 
 const INV_SQRT2 = 1 / Math.sqrt(2)

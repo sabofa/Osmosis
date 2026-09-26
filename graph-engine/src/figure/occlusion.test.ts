@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hidesPoint, occlusionCandidates, segmentSpans, type Span } from './occlusion'
 import { faceNormal, ISOMETRIC_CAMERA, type Vec3 } from './project3d'
+import { placementAlong } from './silhouette'
 import { buildSolid } from './solids'
 
 // S6 — the glass rule for construction segments, against polyhedra.
@@ -310,6 +311,70 @@ describe('segments against a cone', () => {
       [0, (3 - r) / 6, false],
       [(3 - r) / 6, (3 + r) / 6, true],
       [(3 + r) / 6, 1, false],
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P1 — a round solid on a tilted axis, occluding in its own frame (phase 7)
+// ---------------------------------------------------------------------------
+
+describe('segments against a cylinder whose axis runs along author X', () => {
+  // Author X is internal +z: x^2 + y^2 < 9, -4 < z < 4.
+  const tilted = buildSolid({ kind: 'cylinder', radius: 3, height: 8 }, placementAlong(v(0, 0, 0), v(0, 0, 1)))
+  const round = (a: Vec3, b: Vec3) => segmentSpans(a, b, [tilted], camera)
+  // The cyclic map (x, y, z) -> (z, x, y) is a rotation that fixes the
+  // isometric view direction (1,1,1) and carries +y to +z — the vertical
+  // cylinder above onto this one. A segment carried by it therefore meets
+  // this cylinder exactly where the original met the vertical one, and the
+  // hand computation there ("splits a segment behind the cylinder at the
+  // silhouette lines": |s| < 3, u = (s + 6) / 12) carries over unchanged.
+  const turn = (p: Vec3): Vec3 => v(p.z, p.x, p.y)
+
+  it('hides the axis, which runs along author X', () => {
+    expectSpans(round(v(0, 0, -4), v(0, 0, 4)), [[0, 1, true]])
+  })
+
+  it('splits a segment behind it at the silhouette planes, u = 1/4 and 3/4', () => {
+    const y0 = -3 * Math.SQRT2
+    const a = turn(combo([-6, e1], [-6, toward], [y0, v(0, 1, 0)]))
+    const b = turn(combo([6, e1], [-6, toward], [y0, v(0, 1, 0)]))
+    expectSpans(round(a, b), [
+      [0, 0.25, false],
+      [0.25, 0.75, true],
+      [0.75, 1, false],
+    ])
+  })
+})
+
+describe('segments against a frustum', () => {
+  // Radius 6, top 3, height 4: base rim radius 6 at y = -2, top rim radius 3
+  // at y = +2; the solid's radius at height y is 3 + (3/4)(2 - y).
+  const frustum = buildSolid({ kind: 'frustum', radius: 6, top: 3, height: 4 })
+  const round = (a: Vec3, b: Vec3) => segmentSpans(a, b, [frustum], camera)
+
+  it('hides the axis', () => {
+    expectSpans(round(v(0, -2, 0), v(0, 2, 0)), [[0, 1, true]])
+  })
+
+  it('splits a segment behind it at the height of the top rim where the swept TOP rim bounds the shadow', () => {
+    // (-6 toward) + s e1 + y0 up, s in [-6, 6]. Toward the viewer a ray moves
+    // sqrt(2/3) along `toward` per unit and climbs 1/sqrt(3): it climbs
+    // 1/sqrt(2) per unit it travels toward the viewer. With
+    // y0 = 4 - 3 sqrt(2) it reaches the top plane y = 2 at
+    // xz = -2 sqrt(2) toward + s e1, inside the top rim exactly when
+    // 8 + s^2 < 9: |s| < 1. Short of that plane the ray is lower and further
+    // back, where it is |c| = 2 sqrt(2) + e from the axis while the solid is
+    // only 3 + (3/4) e / sqrt(2) across: it gains distance faster than the
+    // solid widens, so it never enters below. Past it, it is above the
+    // solid. Hidden exactly for |s| < 1 — the top rim swept along d, which
+    // is neither a silhouette plane nor the base rim. u = (s + 6) / 12.
+    const y0 = 4 - 3 * Math.SQRT2
+    const at = (s: number) => combo([-6, toward], [s, e1], [y0, v(0, 1, 0)])
+    expectSpans(round(at(-6), at(6)), [
+      [0, 5 / 12, false],
+      [5 / 12, 7 / 12, true],
+      [7 / 12, 1, false],
     ])
   })
 })
