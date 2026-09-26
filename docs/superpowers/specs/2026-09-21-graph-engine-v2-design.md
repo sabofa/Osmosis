@@ -1303,13 +1303,26 @@ graph-engine/src/
 
 **Shared files are touched additively, at named hook points.** These are
 coordinated with the solid-figure side before editing:
-- `parser/parseStatement.ts`: `parseSpaceStatement(line)` runs **first** in
-  `parseStatementCore` and returns `null` for any line it does not own. The
-  trailing-clause loop in `parseStatement` also strips space's style clauses
-  (SP8) through one call.
+- `parser/parseStatement.ts`: two hooks, both returning `null` for any line
+  space does not own. Agreed with the solid-figure side on 2026-09-26.
+  - **`parseSpaceKeyword(line)` runs first** in `parseStatementCore`. It claims
+    only keyword-led space statements (`contour:`, `trace:`, `plane:`, …; SP9).
+    It returns `null` for `plane: A-B-C` and other point-list plane forms, so
+    solid figures' refusal of drawn plane patches still catches them.
+  - **`parseSpaceUnkeyed(line)` runs immediately before the earliest existing
+    branch that would misread an unkeyed space form.** Each claim needs an
+    unmistakable space signal (the S1 plan lists them). It never claims a line
+    whose left side is a bare name and whose right side is a solid-figure form
+    (`solid …`, a coordinate tuple, `midpoint`, `divide`, `foot`, `intersect`,
+    `centroid`, `center of`, `plane …`, `circumsphere`, `insphere`). An
+    equation without `z` (such as `x^2 + y^2 = 25`) stays the 2D implicit
+    curve.
+  - **Style clauses (SP8) are stripped only inside a line space has already
+    claimed**, never in the shared trailing-clause loop. `dashed` and `width`
+    are solid-figure words there too.
 - `parser/types.ts`: one union member `{ kind: 'space'; form: SpaceForm }`,
-  where `SpaceForm` is defined in `space/grammar/types.ts`, plus an optional
-  `style` field beside `color`.
+  where `SpaceForm` is defined in `space/grammar/types.ts`. Style lives inside
+  the form.
 - `parser/config.ts` and `parseConfig.ts`: one `space: SpaceConfig` field and
   one `bindings: Binding[]` field, and one delegation for space's directives
   and `@param`.
@@ -1318,15 +1331,20 @@ coordinated with the solid-figure side before editing:
 - `examples.ts`: concatenates `space/examples.ts`.
 - `GraphViewer.tsx`: swaps the renderer class.
 
-**Existing syntax keeps its statement kinds.** These all parse exactly as
-before:
+**Existing syntax keeps its statement kinds.** Written without space clauses
+or domains, these all parse exactly as before:
 - `z = f(x, y)`
 - `(fx, fy, fz) for t in [a, b]`
 - `(fx, fy, fz) for u in [..], v in [..]`
 - 3-coordinate points, segments, rays and vectors
 
-The space grammar claims only new forms. The existing kinds are consumed by
-space's kernel. The one sanctioned change to pre-existing output is that
+The space grammar claims only new forms, and one of these lines once it
+carries a space clause or a domain: `z = x^2 opacity: 0.5` becomes a space
+form. The existing kinds are consumed by space's kernel. Before any merge into
+`milestone-a/main`, a byte-identity sweep compares two things between the
+merge base and the head: the parse output of every spec string in the
+examples and the existing test files, and the rendered output of every figure
+spec under every `@view`. Every difference must be one a plan names. The one sanctioned change to pre-existing output is that
 **every space spec renders through the new renderer**, which is the point of
 the track.
 
@@ -1640,8 +1658,9 @@ It has ticks from the same module and is titled with the colour source.
 
 #### SP8 — Style clauses
 
-These are trailing clauses, stripped beside `color:` and `name:`, on any space
-statement where they make sense:
+These are trailing clauses on a line the space grammar has claimed. They are
+never stripped in the shared loop. `color:` and `name:` keep their shared
+handling. The style clauses are:
 
 ```
 opacity: 0.5
@@ -1685,7 +1704,7 @@ reading, which gives a cylinder.
 | OpenStax | Concept | Statement |
 |---|---|---|
 | 2.2–2.4 | vectors, dot, cross | `vector: (0,0,0) -> (1,2,3)` (exists); `cross: u x v` (parallelogram, result, right-angle marks); `project: u onto v` (projection plus perpendicular part) |
-| 2.5 | lines, planes | `line: through (1,2,3) direction <1,-1,2>`, `line: through P and Q`; `plane: 2x + y - z = 3`, `plane: through P normal <1,1,1>`, `plane: through P, Q, R`. A plane is a patch clipped to the box. `p = plane …` is the solid-figure form and is not accepted in space |
+| 2.5 | lines, planes | `line: through (1,2,3) direction <1,-1,2>`, `line: through P and Q`; `plane: 2x + y - z = 3`, `plane: through P normal <1,1,1>`, `plane: through P, Q, R`. A plane is a patch clipped to the box. `p = plane …` and `plane: A-B-C` belong to solid figures and are not space forms |
 | 2.6 | quadric surfaces | implicit equations (above) |
 | 2.7 | cylindrical, spherical | `cylindrical: r = 2`, `cylindrical: z = r`, `spherical: rho = 2 sin(phi)`, `spherical: phi = pi/4`: one coordinate as a function of the other two, with default ranges and optional `for` clauses |
 | 3.1–3.4 | space curves, TNB, curvature, motion | `frame: r at t = 1` (T, N, B); `osculating: r at t = 1` (circle, κ in the readout); `motion: r at t = 1` (v, a, and optionally `components` for the tangential and normal parts of a) |
