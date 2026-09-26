@@ -82,11 +82,14 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   // A cross-section is a plane figure either way: shaded on the projected
   // solid, or lifted out as ordinary 2D geometry.
   'crossSection',
+  // A named plane (phase 8) draws nothing, but it exists only among points
+  // in space, so it belongs to a solid figure.
+  'planeDef',
 ])
 
 // The statements that exist only in a solid figure. Either one settles the
 // renderer on its own (S5).
-const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection'])
+const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef'])
 
 // Which renderer a spec gets.
 //

@@ -36,11 +36,31 @@ export type GeometryExtent = 'infinite' | 'ray' | 'segment'
 export type GeometryRef =
   | { kind: 'named'; name: string }
   | { kind: 'through'; extent: GeometryExtent; from: string; to: string }
-  // "plane A-B-C" — the plane through three points, which exists only among
-  // points in space (a solid figure). A plane is an operand and never a bound
-  // or drawn object in this phase: it appears inside "foot D to plane A-B-C"
-  // and "intersect line A-G, plane B-D-E" and nowhere else.
-  | { kind: 'plane'; points: [string, string, string] }
+  // "plane A-B-C", or any other plane form (phase 8, Q2) — a plane, which
+  // exists only among points in space (a solid figure). As an operand it
+  // appears inside "foot D to plane A-B-C" and "intersect line A-G, plane
+  // B-D-E"; a plane is never drawn on its own (a cut draws it through the
+  // solid it cuts).
+  | { kind: 'plane'; plane: PlaneForm }
+
+// A plane as the author wrote it (phase 8, Q2), in the AUTHOR's frame, z up.
+// `source` is the text after "plane", as written, so a message can quote it.
+//
+//   plane A-B-C                          -> points: through three points
+//   plane through P perpendicular to A-B -> perpendicular: normal along A-B
+//   plane through P parallel to A-B-C    -> parallel: to another plane form
+//   plane through P parallel to p        ...or to a named plane
+//   plane 2x + y - z = 3                 -> equation: linear in x, y, z
+//   plane z = 1                          -> axis: the phase-5 form, unchanged
+//   plane p                              -> named: a plane bound by "p = plane ..."
+export type PlaneForm = (
+  | { kind: 'points'; points: [string, string, string] }
+  | { kind: 'perpendicular'; through: string; line: [string, string] }
+  | { kind: 'parallel'; through: string; to: PlaneForm }
+  | { kind: 'equation'; left: Expr; right: Expr }
+  | { kind: 'axis'; axis: 'x' | 'y' | 'z'; at: Expr }
+  | { kind: 'named'; name: string }
+) & { source: string }
 
 export type TriangleCentreKind = 'centroid' | 'circumcenter' | 'incenter' | 'orthocenter' | 'incircle' | 'circumcircle'
 
@@ -565,9 +585,15 @@ export type StatementShape =
   // is ordinary 2D geometry and carries measures and labels through the
   // normal path (H5) — which is why only that form can name its vertices.
   //
-  // `axis` is the AUTHOR's axis, z up. The figure renderer converts it to its
-  // internal frame (figure/authorFrame.ts); the parser never does.
-  | { kind: 'crossSection'; solid: string; lift: boolean; axis: 'x' | 'y' | 'z'; at: Expr; vertices: string[] }
+  // `plane` is the AUTHOR's plane, z up, in any Q2 form (phase 8). The figure
+  // renderer converts it to its internal frame (figure/authorFrame.ts,
+  // figure/plane.ts); the parser never does.
+  | { kind: 'crossSection'; solid: string; lift: boolean; plane: PlaneForm; vertices: string[] }
+  // "p = plane A-B-C" (phase 8, Q2) — a NAMED plane. It binds the name, in the
+  // one namespace points, lines and circles share, and draws nothing: a plane
+  // is drawn only through the section it cuts. Later lines use it as
+  // "plane p".
+  | { kind: 'planeDef'; name: string; plane: PlaneForm }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the
   // canonical a/b/c slots, since the parser knows the vertex names and can

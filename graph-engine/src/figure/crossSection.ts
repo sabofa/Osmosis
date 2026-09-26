@@ -1,6 +1,7 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 import type { Solid3D, Vec3 } from './project3d'
+import { dot3, scale3, sub3 } from './construct3d'
 import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
 import { describeAuthorPlane } from './authorFrame'
 import { isIdentityPlacement, toWorld, type Placement } from './silhouette'
@@ -24,18 +25,25 @@ export const PLANE_AXES = ['x', 'y', 'z'] as const
 
 export type PlaneAxis = (typeof PLANE_AXES)[number]
 
-// Only axis-perpendicular planes.
+// Q1 (phase 8) — one internal plane, in two forms.
 //
-// **Oblique planes are deferred, not forgotten.** For a polyhedron they are
-// no harder — the edge-crossing walk below does not care about the plane's
-// normal — but for the curved primitives they are the whole conic-section
-// problem, and a grammar that accepted an oblique plane and then refused it
-// for three of the six primitives would be worse than one that does not
-// accept it yet.
-export interface SectionPlane {
-  axis: PlaneAxis
-  at: number
-}
+// The AXIS form is phase 5's: a plane square to an internal axis, `axis = at`.
+// Every author form whose normal is parallel to an axis canonicalises to it
+// (figure/plane.ts), so "plane A-B-C" through three points at author z = 1 is
+// this object exactly, cut by the code path and drawn in the bytes that
+// "plane z = 1" always was. `source` is the author's text when the plane was
+// written some other way, for a message; "plane z = 1" itself carries none,
+// and its messages print "z = 1" as they always did.
+//
+// The GENERAL form is any other plane: a point on it (the foot of the
+// origin), its unit normal facing the default camera, and an orthonormal
+// in-plane frame (u, v) with u x v = normal and v as near author Z as the
+// plane allows. `source` is the plane as the author wrote it.
+export type SectionPlane =
+  | { kind: 'axis'; axis: PlaneAxis; at: number; source?: string }
+  | { kind: 'general'; point: Vec3; normal: Vec3; u: Vec3; v: Vec3; source: string }
+
+type AxisPlane = Extract<SectionPlane, { kind: 'axis' }>
 
 // The section, in space. A polygon for a polyhedron; a circle for a plane
 // square to a cylinder's, a cone's or a sphere's axis.
@@ -58,7 +66,13 @@ export type TrueShape = { kind: 'polygon'; vertices: Vec2[] } | { kind: 'circle'
 // remaining coordinates in their own order means a width stays a width — a
 // horizontal cut of an 8-by-5-by-6 prism comes out 8 across and 6 down, not
 // transposed.
+//
+// A general plane's own frame is (u, v) about its point (Q1).
 export function inPlane(plane: SectionPlane, p: Vec3): Vec2 {
+  if (plane.kind === 'general') {
+    const d = sub3(p, plane.point)
+    return { x: dot3(d, plane.u), y: dot3(d, plane.v) }
+  }
   switch (plane.axis) {
     case 'x':
       return { x: p.y, y: p.z }
@@ -69,7 +83,7 @@ export function inPlane(plane: SectionPlane, p: Vec3): Vec2 {
   }
 }
 
-function coordinate(plane: SectionPlane, p: Vec3): number {
+function coordinate(plane: Extract<SectionPlane, { kind: 'axis' }>, p: Vec3): number {
   return plane.axis === 'x' ? p.x : plane.axis === 'y' ? p.y : p.z
 }
 
@@ -77,6 +91,7 @@ function coordinate(plane: SectionPlane, p: Vec3): number {
 // given radius. Their order matches `inPlane`'s, so a circle's own angle and
 // its true-shape angle agree.
 export function planeRadii(plane: SectionPlane, radius: number): [Vec3, Vec3] {
+  if (plane.kind === 'general') return [scale3(plane.u, radius), scale3(plane.v, radius)]
   switch (plane.axis) {
     case 'x':
       return [
@@ -126,7 +141,7 @@ function edgesOf(solid: Solid3D): [number, number][] {
 // the convexity invariant `solids.test.ts` pins for every primitive — so the
 // section is a convex polygon and sorting the crossings by angle about their
 // own centroid is both correct and the deterministic winding a drawing needs.
-function polyhedronSection(solid: Solid3D, plane: SectionPlane, name: string): Section {
+function polyhedronSection(solid: Solid3D, plane: Extract<SectionPlane, { kind: 'axis' }>, name: string): Section {
   const points: Vec3[] = []
   for (const [i, j] of edgesOf(solid)) {
     const a = solid.vertices[i]
@@ -169,6 +184,7 @@ function missesSolid(plane: SectionPlane, name: string): Error {
 // ---------------------------------------------------------------------------
 
 export function sectionOf(body: SolidBody, plane: SectionPlane, name: string): Section {
+  if (plane.kind === 'general') throw new Error(`The plane ${describeAuthorPlane(plane)} is oblique, and oblique sections are not drawn yet`)
   if (body.polyhedron) return polyhedronSection(body.polyhedron, plane, name)
   if (isIdentityPlacement(body.placement)) return curvedSection(body.spec, plane, name)
   return placedSection(body, plane, name)
@@ -189,7 +205,7 @@ export function sectionOf(body: SolidBody, plane: SectionPlane, name: string): S
 // A vertical solid off the origin is cut where it actually is: the world
 // plane's offset is converted into the local frame, the section solved there,
 // and its points carried back out.
-function placedSection(body: SolidBody, plane: SectionPlane, name: string): Section {
+function placedSection(body: SolidBody, plane: AxisPlane, name: string): Section {
   const { origin, frame } = body.placement
   const vertical = Math.abs(Math.abs(frame.axis.y) - 1) <= GEOM_EPS
   if (!vertical) {
@@ -198,8 +214,8 @@ function placedSection(body: SolidBody, plane: SectionPlane, name: string): Sect
   // A vertical frame is (u, axis, w) = (+-x, +-y, z) exactly (see
   // frameForAxis), so each world axis is one local axis, perhaps reversed.
   const sign: Record<PlaneAxis, number> = { x: Math.sign(frame.u.x), y: Math.sign(frame.axis.y), z: Math.sign(frame.w.z) }
-  const toLocalPlane = (p: SectionPlane): SectionPlane => ({ axis: p.axis, at: (p.at - origin[p.axis]) * sign[p.axis] })
-  const toWorldPlane = (p: SectionPlane): SectionPlane => ({ axis: p.axis, at: p.at * sign[p.axis] + origin[p.axis] })
+  const toLocalPlane = (p: AxisPlane): AxisPlane => ({ kind: 'axis', axis: p.axis, at: (p.at - origin[p.axis]) * sign[p.axis] })
+  const toWorldPlane = (p: AxisPlane): AxisPlane => ({ ...p, kind: 'axis', axis: p.axis, at: p.at * sign[p.axis] + origin[p.axis] })
   const local = curvedSection(body.spec, toLocalPlane(plane), name, toWorldPlane)
   return placeSection(local, body.placement)
 }
@@ -216,9 +232,9 @@ function placeSection(section: Section, placement: Placement): Section {
 // message, so an author reads the plane they wrote (P7).
 function curvedSection(
   spec: SolidSpec,
-  plane: SectionPlane,
+  plane: AxisPlane,
   name: string,
-  world: (p: SectionPlane) => SectionPlane = (p) => p
+  world: (p: AxisPlane) => AxisPlane = (p) => p
 ): Section {
   const misses = () => missesSolid(world(plane), name)
   switch (spec.kind) {
@@ -280,14 +296,14 @@ function curvedSection(
 
 // The refusal of a plane parallel to a round solid's axis but off it. The
 // wording is phase 5's for the cone, unchanged.
-function hyperbola(kind: 'cone' | 'frustum', plane: SectionPlane, name: string, world: (p: SectionPlane) => SectionPlane): Error {
+function hyperbola(kind: 'cone' | 'frustum', plane: AxisPlane, name: string, world: (p: AxisPlane) => AxisPlane): Error {
   return new Error(
     `A plane parallel to a ${kind}'s axis but off it cuts "${name}" in a HYPERBOLA, which this phase does not draw — ` +
-      `use ${describeAuthorPlane(world({ axis: plane.axis, at: 0 }))} for the axial ${kind === 'cone' ? 'triangle' : 'trapezoid'}, or cut square to the axis for a circle`
+      `use ${describeAuthorPlane(world({ kind: 'axis', axis: plane.axis, at: 0 }))} for the axial ${kind === 'cone' ? 'triangle' : 'trapezoid'}, or cut square to the axis for a circle`
   )
 }
 
-function centreOnPlane(plane: SectionPlane): Vec3 {
+function centreOnPlane(plane: AxisPlane): Vec3 {
   return {
     x: plane.axis === 'x' ? plane.at : 0,
     y: plane.axis === 'y' ? plane.at : 0,
@@ -297,7 +313,7 @@ function centreOnPlane(plane: SectionPlane): Vec3 {
 
 // The rectangle a plane parallel to a y-axis cylinder cuts: `half` either side
 // across the plane's own first coordinate direction, `y` above and below.
-function rectangleInPlane(plane: SectionPlane, half: number, y: number): Vec3[] {
+function rectangleInPlane(plane: AxisPlane, half: number, y: number): Vec3[] {
   const across = plane.axis === 'x' ? 'z' : 'x'
   const corner = (side: number, up: number): Vec3 => ({
     x: plane.axis === 'x' ? plane.at : across === 'x' ? side * half : 0,
@@ -309,7 +325,7 @@ function rectangleInPlane(plane: SectionPlane, half: number, y: number): Vec3[] 
 
 // The triangle a plane through a cone's axis cuts: the two ends of the base
 // diameter that lies in the plane, and the apex.
-function coneTriangle(plane: SectionPlane, radius: number, y: number): Vec3[] {
+function coneTriangle(plane: AxisPlane, radius: number, y: number): Vec3[] {
   const across = plane.axis === 'x' ? 'z' : 'x'
   const base = (side: number): Vec3 => ({
     x: plane.axis === 'x' ? 0 : across === 'x' ? side * radius : 0,
@@ -321,7 +337,7 @@ function coneTriangle(plane: SectionPlane, radius: number, y: number): Vec3[] {
 
 // The trapezoid a plane through a frustum's axis cuts: the base rim's
 // diameter in the plane, then the top rim's, wound round.
-function frustumTrapezoid(plane: SectionPlane, bottom: number, top: number, y: number): Vec3[] {
+function frustumTrapezoid(plane: AxisPlane, bottom: number, top: number, y: number): Vec3[] {
   const across = plane.axis === 'x' ? 'z' : 'x'
   const at = (side: number, level: number): Vec3 => ({
     x: across === 'x' ? side : 0,

@@ -364,14 +364,18 @@ describe('parseStatement — geometry constructions', () => {
   it('parses a plane through three points as an operand (solid figures)', () => {
     const foot = parseStatement('F = foot D to plane A-B-C')
     if (foot.kind !== 'construction') throw new Error('unreachable')
-    expect(foot.body).toEqual({ kind: 'foot', from: 'D', base: { kind: 'plane', points: ['A', 'B', 'C'] } })
+    expect(foot.body).toEqual({
+      kind: 'foot',
+      from: 'D',
+      base: { kind: 'plane', plane: { kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' } },
+    })
 
     const meet = parseStatement('X = intersect line A-G, plane B-D-E')
     if (meet.kind !== 'construction') throw new Error('unreachable')
     expect(meet.body).toEqual({
       kind: 'intersect',
       left: { kind: 'through', extent: 'infinite', from: 'A', to: 'G' },
-      right: { kind: 'plane', points: ['B', 'D', 'E'] },
+      right: { kind: 'plane', plane: { kind: 'points', points: ['B', 'D', 'E'], source: 'B-D-E' } },
     })
 
     expect(() => parseStatement('F = foot D to plane A-B')).toThrow(/three point names/)
@@ -1004,5 +1008,80 @@ describe('more solids by dimensions (phase 7, P5)', () => {
 
   it('refuses a malformed regular form, quoting the expected shape', () => {
     expect(() => parseStatement('solid: prism regular 6, height 5')).toThrow(/prism regular <n> side <s>, height <h>/)
+  })
+})
+
+describe('planes as objects (phase 8, Q2)', () => {
+  const n = (value: number) => ({ kind: 'num', value })
+  const cut = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'crossSection') throw new Error('expected a cross-section')
+    return s
+  }
+
+  it('keeps "plane z = 1" as the axis form, exactly as written', () => {
+    expect(cut('cut: S by plane z = 1').plane).toEqual({ kind: 'axis', axis: 'z', at: n(1), source: 'z = 1' })
+    // The axis letter is case-insensitive, as it always was.
+    expect(cut('section: S by plane Z = 1 vertices PQRS').plane).toEqual({ kind: 'axis', axis: 'z', at: n(1), source: 'Z = 1' })
+  })
+
+  it('reads a plane through three points, a perpendicular, a parallel and a named plane', () => {
+    expect(cut('cut: S by plane M-N-P').plane).toEqual({ kind: 'points', points: ['M', 'N', 'P'], source: 'M-N-P' })
+    expect(cut('cut: C by plane through O perpendicular to A-G').plane).toEqual({
+      kind: 'perpendicular',
+      through: 'O',
+      line: ['A', 'G'],
+      source: 'through O perpendicular to A-G',
+    })
+    expect(cut('cut: C by plane through P parallel to A-B-C').plane).toEqual({
+      kind: 'parallel',
+      through: 'P',
+      to: { kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' },
+      source: 'through P parallel to A-B-C',
+    })
+    expect(cut('cut: C by plane through P parallel to p').plane).toEqual({
+      kind: 'parallel',
+      through: 'P',
+      to: { kind: 'named', name: 'p', source: 'p' },
+      source: 'through P parallel to p',
+    })
+    expect(cut('cut: C by plane p').plane).toEqual({ kind: 'named', name: 'p', source: 'p' })
+  })
+
+  it('reads an equation, keeping both sides as expressions', () => {
+    const plane = cut('section: S by plane 2x + y - z = 3 vertices PQR').plane
+    expect(plane.kind).toBe('equation')
+    if (plane.kind !== 'equation') return
+    expect(plane.source).toBe('2x + y - z = 3')
+    expect(plane.right).toEqual(n(3))
+    expect(plane.left.kind).toBe('binary')
+    // An axis letter equal to something that mentions another axis is an
+    // equation, not the axis form.
+    expect(cut('cut: S by plane z = x + 1').plane.kind).toBe('equation')
+  })
+
+  it('binds a named plane with "p = plane ...", which is a statement of its own', () => {
+    const s = parseStatement('p = plane A-B-C')
+    expect(s.kind).toBe('planeDef')
+    if (s.kind !== 'planeDef') return
+    expect(s.name).toBe('p')
+    expect(s.plane).toEqual({ kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' })
+    const eq = parseStatement('q = plane 2x + y - z = 3')
+    if (eq.kind !== 'planeDef') throw new Error('expected a plane definition')
+    expect(eq.plane.kind).toBe('equation')
+  })
+
+  it('takes every form as a construction operand too', () => {
+    const foot = parseStatement('F = foot A to plane p')
+    if (foot.kind !== 'construction' || foot.body.kind !== 'foot') throw new Error('unreachable')
+    expect(foot.body.base).toEqual({ kind: 'plane', plane: { kind: 'named', name: 'p', source: 'p' } })
+    const meet = parseStatement('X = intersect line A-G, plane x + y + z = 1')
+    if (meet.kind !== 'construction' || meet.body.kind !== 'intersect') throw new Error('unreachable')
+    expect(meet.body.right).toMatchObject({ kind: 'plane', plane: { kind: 'equation', source: 'x + y + z = 1' } })
+  })
+
+  it('refuses a plane it cannot read, naming the forms', () => {
+    expect(() => parseStatement('cut: S by plane through O')).toThrow(/plane through P perpendicular to A-B/)
+    expect(() => parseStatement('F = foot D to plane A-B')).toThrow(/three point names/)
   })
 })

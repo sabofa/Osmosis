@@ -2615,3 +2615,68 @@ describe('a tetrahedron and a pyramid under @view: isometric, as before phase 6b
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Phase 8, Task 1 — planes as objects (Q1, Q2)
+// ---------------------------------------------------------------------------
+
+describe('planes as objects (phase 8)', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+  // Three points at author z = 1, so plane A-B-C IS the plane z = 1. They are
+  // written in both specs, so the only difference is how the plane is named.
+  const LEVEL = 'A = (0, 0, 1)\nB = (1, 0, 1)\nC = (0, 1, 1)'
+
+  for (const view of ['standard', 'isometric']) {
+    it(`cuts and sections by plane A-B-C at z = 1 byte for byte as by plane z = 1 (${view})`, () => {
+      const at = (tail: string) => `${PRISM}\n@view: ${view}\n${LEVEL}\n${tail}`
+      for (const [written, axis] of [
+        ['cut: S by plane A-B-C', 'cut: S by plane z = 1'],
+        ['section: S by plane A-B-C vertices PQRS\nlabel: PQ', 'section: S by plane z = 1 vertices PQRS\nlabel: PQ'],
+      ]) {
+        const canonical = result(at(written))
+        expect(canonical.errors).toEqual([])
+        expect(canonical.svg).toBe(result(at(axis)).svg)
+      }
+    })
+  }
+
+  it('reads "plane 0x + 0y + 2z = 2" as z = 1, byte for byte', () => {
+    for (const [written, axis] of [
+      ['cut: S by plane 0x + 0y + 2z = 2', 'cut: S by plane z = 1'],
+      ['section: S by plane 0x + 0y + 2z = 2 vertices PQRS', 'section: S by plane z = 1 vertices PQRS'],
+    ]) {
+      const canonical = result(`${PRISM}\n${written}`)
+      expect(canonical.errors).toEqual([])
+      expect(canonical.svg).toBe(result(`${PRISM}\n${axis}`).svg)
+    }
+  })
+
+  it('names a plane that misses the solid as the author wrote it', () => {
+    const missed = result(`${PRISM}\nA = (0, 0, 9)\nB = (1, 0, 9)\nC = (0, 1, 9)\nsection: S by plane A-B-C`)
+    expect(missed.errors.map((e) => e.message)).toEqual(['The plane A-B-C does not cut "S" — it misses the solid entirely'])
+  })
+
+  it('binds a named plane and draws nothing for it', () => {
+    const bare = result(`${PRISM}\n${LEVEL}`)
+    const named = result(`${PRISM}\n${LEVEL}\np = plane A-B-C`)
+    expect(named.errors).toEqual([])
+    expect(named.svg).toBe(bare.svg)
+    // ...and cuts by it exactly as by the plane it names.
+    expect(result(`${PRISM}\n${LEVEL}\np = plane A-B-C\ncut: S by plane p`).svg).toBe(result(`${PRISM}\n${LEVEL}\np = plane A-B-C\ncut: S by plane z = 1`).svg)
+  })
+
+  it('refuses a plane name used as a point in a label, naming it a plane', () => {
+    const errors = result(`${PRISM}\n${LEVEL}\np = plane A-B-C\nlabel: pA`).errors.map((e) => e.message)
+    expect(errors).toEqual([expect.stringMatching(/"p" is a plane, not a point/)])
+  })
+
+  it('infers a solid figure from a named plane', () => {
+    expect(resolveMode(parseSpec('A = (0, 0, 1)\nB = (1, 0, 1)\nC = (0, 1, 1)\np = plane A-B-C').statements, parseSpec('').config)).toBe('figure')
+  })
+})

@@ -48,11 +48,15 @@ const TO_AUTHOR_AXIS: Record<PlaneAxis, AuthorAxis> = { x: 'y', y: 'z', z: 'x' }
 // The author's axis-plane `<axis> = at`, as the internal section plane.
 // "plane z = 1" is horizontal: internal y = 1.
 export function authorPlane(axis: AuthorAxis, at: number): SectionPlane {
-  return { axis: TO_WORLD_AXIS[axis], at }
+  return { kind: 'axis', axis: TO_WORLD_AXIS[axis], at }
 }
 
 // An internal plane written the way the author wrote it — "z = 1" — for an
-// error message. The number is printed as given, exactly as phase 5 did.
+// error message. The number is printed as given, exactly as phase 5 did. A
+// plane written some other way (phase 8) is quoted as written: "A-B-C",
+// "through O perpendicular to A-G".
 export function describeAuthorPlane(plane: SectionPlane): string {
+  if (plane.source !== undefined) return plane.source
+  if (plane.kind === 'general') return 'the plane'
   return `${TO_AUTHOR_AXIS[plane.axis]} = ${plane.at}`
 }

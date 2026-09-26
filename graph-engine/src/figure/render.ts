@@ -42,7 +42,7 @@ import { segmentSpans, type Span } from './occlusion'
 import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge, type Vec3 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
-import { authorPlane, authorToWorld, describeAuthorPlane } from './authorFrame'
+import { authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
 import { projectCircle, type ProjectedCircle } from './silhouette'
 import {
@@ -546,7 +546,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
   // S3 — solids and constructions in space first, in one source-order walk,
   // so the 2D pass can be told which statements are not its business.
-  const scope: SolidFigureScope = buildSolidFigure(statements, value)
+  const scope: SolidFigureScope = buildSolidFigure(statements, value, (e, vars) => evalExpr(e, vars, config.angle, functions))
   const namedPoints = collectNamedPoints(statements, config, functions, scope.ownedStatements)
   const constructions = buildConstructions(statements, config, functions, namedPoints, scope.ownedStatements)
   for (const [name, position] of constructions.points) namedPoints.set(name, position)
@@ -590,6 +590,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   function resolve(name: string): Vec2 {
     const point = namedPoints.get(name)
+    if (!point && scope.planes.has(name)) throw new Error(`"${name}" is a plane, not a point`)
     if (!point && isSpaceName(scope, name)) {
       // S7 — the refusal is legible, not "unknown": the point exists, in
       // space, and this statement only draws in the plane.
@@ -776,9 +777,13 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         }
         case 'crossSection': {
           const body = resolveSolid(statement.solid)
-          // S1 — the author wrote the plane z-up; everything past this line
-          // works in the internal frame.
-          const plane = authorPlane(statement.axis, value(statement.at))
+          // S1 — the author wrote the plane z-up; the walk resolved and
+          // canonicalised it (Q1), and everything past this line works in the
+          // internal frame.
+          const resolved = scope.sectionPlanes.get(index)
+          if (!resolved) throw new Error(`The plane of this ${statement.lift ? 'section' : 'cut'} was never resolved`)
+          if ('error' in resolved) throw new Error(resolved.error)
+          const plane = resolved.plane
           const section = sectionOf(body, plane, statement.solid)
 
           if (!statement.lift) {

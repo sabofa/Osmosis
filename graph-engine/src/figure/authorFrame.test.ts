@@ -58,15 +58,15 @@ describe('the author frame (S1)', () => {
   })
 
   it('maps each author axis-plane to the internal one', () => {
-    expect(authorPlane('z', 1)).toEqual({ axis: 'y', at: 1 })
-    expect(authorPlane('x', 2)).toEqual({ axis: 'z', at: 2 })
-    expect(authorPlane('y', -3)).toEqual({ axis: 'x', at: -3 })
+    expect(authorPlane('z', 1)).toEqual({ kind: 'axis', axis: 'y', at: 1 })
+    expect(authorPlane('x', 2)).toEqual({ kind: 'axis', axis: 'z', at: 2 })
+    expect(authorPlane('y', -3)).toEqual({ kind: 'axis', axis: 'x', at: -3 })
   })
 
   it('describes an internal plane in the author frame, for error messages', () => {
-    expect(describeAuthorPlane({ axis: 'y', at: 1 })).toBe('z = 1')
-    expect(describeAuthorPlane({ axis: 'z', at: 2 })).toBe('x = 2')
-    expect(describeAuthorPlane({ axis: 'x', at: -3 })).toBe('y = -3')
+    expect(describeAuthorPlane({ kind: 'axis', axis: 'y', at: 1 })).toBe('z = 1')
+    expect(describeAuthorPlane({ kind: 'axis', axis: 'z', at: 2 })).toBe('x = 2')
+    expect(describeAuthorPlane({ kind: 'axis', axis: 'x', at: -3 })).toBe('y = -3')
     for (const axis of ['x', 'y', 'z'] as const) {
       expect(describeAuthorPlane(authorPlane(axis, 4))).toBe(`${axis} = 4`)
     }

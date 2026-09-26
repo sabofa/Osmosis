@@ -1,8 +1,9 @@
-import type { Construction, Expr, GeometryRef, SolidPrimitive, Statement } from '../parser/types'
+import { evalExpr, type Bindings } from '../parser/evalExpr'
+import type { Construction, Expr, GeometryRef, PlaneForm, SolidPrimitive, Statement } from '../parser/types'
 import { centroid, circumcenter, incenter, orthocenter } from '../scene/geometry/centres'
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { SceneError, Vec2 } from '../scene/types'
-import { authorToWorld } from './authorFrame'
+import { authorPlane, authorToWorld } from './authorFrame'
 import {
   add3,
   centroid3,
@@ -21,6 +22,8 @@ import {
   type Plane3,
 } from './construct3d'
 import type { Vec3 } from './project3d'
+import type { SectionPlane } from './crossSection'
+import { canonicalPlane, planeFromEquation, planeOfSection } from './plane'
 import { basePolygonNormal, hullOf, MAX_HULL_POINTS } from './hull'
 import { tetrahedronFromEdges } from './tetrahedron'
 import { placementAlong } from './silhouette'
@@ -72,6 +75,14 @@ export interface SolidFigureScope {
   // gets a dot and a label. An unnamed 3-coordinate point ("(1, 2, 3)") is
   // drawn with the empty name: a dot, and no label to lay out.
   byStatement: Map<number, { solid?: SolidBody; points: { name: string; at: Vec3; drawn: boolean }[] }>
+  // Named planes (phase 8, Q2), in the INTERNAL frame, keyed by name. A plane
+  // binds a name in the one namespace and draws nothing.
+  planes: Map<string, Plane3>
+  // The plane each cut: / section: statement is made by, resolved in source
+  // order (so "plane p" must follow "p = plane ...") and canonicalised (Q1).
+  // A plane that cannot be resolved keeps its message here, and the renderer
+  // reports it where it reports the rest of the statement's errors.
+  sectionPlanes: Map<number, { plane: SectionPlane } | { error: string }>
   errors: SceneError[]
 }
 
@@ -242,8 +253,31 @@ function refNames(ref: GeometryRef): string[] {
     case 'through':
       return [ref.from, ref.to]
     case 'plane':
-      return [...ref.points]
+      return planeFormNames(ref.plane)
   }
+}
+
+// Every name a plane form reads, in the order written.
+function planeFormNames(form: PlaneForm): string[] {
+  switch (form.kind) {
+    case 'points':
+      return [...form.points]
+    case 'perpendicular':
+      return [form.through, ...form.line]
+    case 'parallel':
+      return [form.through, ...planeFormNames(form.to)]
+    case 'named':
+      return [form.name]
+    case 'equation':
+    case 'axis':
+      return []
+  }
+}
+
+// A plane form as the author wrote it, after "plane". The three-point form is
+// written back from its names, exactly as phase 6's messages wrote it.
+function planeText(form: PlaneForm): string {
+  return form.kind === 'points' ? form.points.join('-') : form.source
 }
 
 // Every name a construction reads, in the order it is written — which is the
@@ -309,7 +343,7 @@ function refText(ref: GeometryRef): string {
     case 'through':
       return `${ref.extent === 'infinite' ? '' : `${ref.extent} `}${ref.from}-${ref.to}`
     case 'plane':
-      return `plane ${ref.points.join('-')}`
+      return `plane ${planeText(ref.plane)}`
   }
 }
 
@@ -485,9 +519,17 @@ function nameList(names: readonly string[]): string {
 // The walk
 // ---------------------------------------------------------------------------
 
-export function buildSolidFigure(statements: Statement[], value: (e: Expr) => number): SolidFigureScope {
+// `evaluateAt` reads an expression with variables bound — the equation form of
+// a plane (Q2) is the one place the walk needs it.
+export function buildSolidFigure(
+  statements: Statement[],
+  value: (e: Expr) => number,
+  evaluateAt: (e: Expr, vars: Bindings) => number = (e, vars) => evalExpr(e, vars)
+): SolidFigureScope {
   const solids = new Map<string, SolidBody>()
   const points = new Map<string, Vec3>()
+  const planes = new Map<string, Plane3>()
+  const sectionPlanes: SolidFigureScope['sectionPlanes'] = new Map()
   const ownedStatements = new Set<number>()
   const byStatement: SolidFigureScope['byStatement'] = new Map()
   const errors: SceneError[] = []
@@ -513,6 +555,7 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
   // source order decides, so the literal is the statement refused. Anything
   // else throws, against this statement.
   const checkClaim = (name: string, index: number): void => {
+    if (planes.has(name)) throw alreadyBound(name, 'a plane')
     if (points.has(name)) {
       const at = spaceLiteral.get(name)
       if (at === undefined || at < index) throw alreadyBound(name, spaceWhat.get(name) ?? 'a point in space')
@@ -552,14 +595,63 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
   const lookup = (name: string): Vec3 => {
     const p = points.get(name)
     if (p) return p
+    if (planes.has(name)) throw planeAsPoint(name)
     if (planeNames.has(name)) throw new Error(`"${name}" is ${describePlane(name)}, and this construction needs points in space`)
     throw new Error(
       `Unknown point "${name}" — define it before this line (e.g. "${name} = (x, y, z)", or name it among a solid's vertices)`
     )
   }
 
-  const planeOf = (ref: Extract<GeometryRef, { kind: 'plane' }>): Plane3 =>
-    planeThrough(lookup(ref.points[0]), lookup(ref.points[1]), lookup(ref.points[2]), nameList(ref.points))
+  const planeOf = (ref: Extract<GeometryRef, { kind: 'plane' }>): Plane3 => resolvePlane(ref.plane)
+
+  // Q2 — every plane form, as a point and a unit normal in the internal
+  // frame. The three-point form is phase 6's `planeThrough`, unchanged, so
+  // every foot and intersection it already drew keeps its value.
+  function resolvePlane(form: PlaneForm): Plane3 {
+    switch (form.kind) {
+      case 'points':
+        return planeThrough(lookup(form.points[0]), lookup(form.points[1]), lookup(form.points[2]), nameList(form.points))
+      case 'perpendicular': {
+        const through = lookup(form.through)
+        const [a, b] = form.line.map(lookup)
+        const along = sub3(b, a)
+        if (flatAgainst(length3(along), [a, b])) {
+          const [first, second] = form.line
+          throw new Error(
+            `plane ${form.source}: ${first} and ${second} are the same point, so ${first}-${second} has no direction to be perpendicular to`
+          )
+        }
+        return { point: through, normal: scale3(along, 1 / length3(along)) }
+      }
+      case 'parallel': {
+        const through = lookup(form.through)
+        return { point: through, normal: resolvePlane(form.to).normal }
+      }
+      case 'equation':
+        return planeFromEquation(form.left, form.right, evaluateAt, form.source)
+      case 'axis':
+        return planeOfSection(authorPlane(form.axis, value(form.at)))
+      case 'named': {
+        const plane = planes.get(form.name)
+        if (plane) return plane
+        if (points.has(form.name)) {
+          throw new Error(`"${form.name}" is a point in space, not a plane — write "plane A-B-C" through three points, or name a plane first`)
+        }
+        if (planeNames.has(form.name)) throw new Error(`"${form.name}" is ${describePlane(form.name)}, not a plane`)
+        if (solids.has(form.name)) throw new Error(`"${form.name}" is a solid, not a plane`)
+        throw new Error(`Unknown plane "${form.name}" — define it before this line (e.g. "${form.name} = plane A-B-C")`)
+      }
+    }
+  }
+
+  // Q1 — the plane a cut or a section is made by. "plane z = 1" keeps its
+  // phase-5 object exactly (no source: its messages print "z = 1" as they
+  // always did); every other form is canonicalised, which turns an
+  // axis-parallel plane into that same object.
+  function sectionPlaneOf(form: PlaneForm): SectionPlane {
+    if (form.kind === 'axis') return authorPlane(form.axis, value(form.at))
+    return canonicalPlane(resolvePlane(form), planeText(form))
+  }
 
   // Plain points are literals with no dependencies, so — exactly as in 2D —
   // they are order-independent: a construction may name one defined below it.
@@ -665,8 +757,23 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
           }
           break
         case 'crossSection':
+          try {
+            sectionPlanes.set(index, { plane: sectionPlaneOf(statement.plane) })
+          } catch (err) {
+            sectionPlanes.set(index, { error: err instanceof Error ? err.message : String(err) })
+          }
           if (statement.lift) for (const name of statement.vertices) planeNames.set(name, 'point')
           break
+        case 'planeDef': {
+          // Q2 — a named plane binds and does not draw. Its name is unique
+          // across points, lines, circles and planes (S2's rule, extended).
+          ownedStatements.add(index)
+          checkClaim(statement.name, index)
+          const plane = resolvePlane(statement.plane)
+          takeName(statement.name, 'a plane')
+          planes.set(statement.name, plane)
+          break
+        }
         default:
           break
       }
@@ -817,6 +924,18 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
   function walkConstruction(index: number, names: string[], body: Construction): void {
     const operands = operandNames(body)
     const space = operands.filter((name) => points.has(name))
+    // A named plane is not a point or a line: it may be bound only once, and
+    // read only as a plane operand, "plane p".
+    const rebound = names.find((name) => planes.has(name))
+    if (rebound !== undefined) {
+      ownedStatements.add(index)
+      throw alreadyBound(rebound, 'a plane')
+    }
+    const misused = operands.find((name) => planes.has(name) && !namesPlane(body, name))
+    if (misused !== undefined) {
+      ownedStatements.add(index)
+      throw planeAsPoint(misused)
+    }
 
     if (space.length === 0 && !hasPlaneRef(body)) {
       // A construction in the plane: the 2D pass's, unless it would rebind a
@@ -889,7 +1008,7 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
             `${statementText(names, body)}: in a solid figure, intersect takes a line and a plane (e.g. "intersect line A-G, plane B-D-E")`
           )
         }
-        return [lineMeetsPlane(lookup(line.from), lookup(line.to), planeOf(plane), `line ${line.from}-${line.to}`, `plane ${plane.points.join('-')}`)]
+        return [lineMeetsPlane(lookup(line.from), lookup(line.to), planeOf(plane), `line ${line.from}-${line.to}`, `plane ${planeText(plane.plane)}`)]
       }
       case 'triangleCentre': {
         const vertices = body.vertices.map(lookup)
@@ -909,5 +1028,29 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
     }
   }
 
-  return { solids, points, ownedStatements, byStatement, errors }
+  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, errors }
+}
+
+function planeAsPoint(name: string): Error {
+  return new Error(`"${name}" is a plane, not a point — a plane is an operand ("plane ${name}") of foot and intersect`)
+}
+
+// Whether a construction reads `name` as a named PLANE — "plane p", or
+// "plane through P parallel to p" — which is where a plane's name belongs.
+function namesPlane(body: Construction, name: string): boolean {
+  const refs: GeometryRef[] =
+    body.kind === 'foot' || body.kind === 'parallelLine' || body.kind === 'perpendicularLine'
+      ? [body.base]
+      : body.kind === 'intersect'
+        ? [body.left, body.right]
+        : body.kind === 'reflect'
+          ? [body.over]
+          : []
+  return refs.some((ref) => ref.kind === 'plane' && namedIn(ref.plane, name))
+}
+
+function namedIn(form: PlaneForm, name: string): boolean {
+  if (form.kind === 'named') return form.name === name
+  if (form.kind === 'parallel') return namedIn(form.to, name)
+  return false
 }

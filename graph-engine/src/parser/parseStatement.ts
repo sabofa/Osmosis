@@ -10,6 +10,7 @@ import type {
   MeasureOvermark,
   GivensSection,
   MeasureSubject,
+  PlaneForm,
   SolidPrimitive,
   Statement,
   StatementShape,
@@ -210,11 +211,11 @@ function parseGeometryRef(text: string, role: string): GeometryRef {
   let extent: 'infinite' | 'ray' | 'segment' | null = null
   let expectCircle = false
 
-  // "plane A-B-C": the plane through three points. Only a solid figure has
-  // anywhere for one to be, and the solid-figure walk says so when it is
-  // given points in the plane.
+  // "plane A-B-C", or any other plane form (phase 8, Q2). Only a solid
+  // figure has anywhere for one to be, and the solid-figure walk says so
+  // when it is given points in the plane.
   const plane = /^plane\s+(.+)$/.exec(rest)
-  if (plane) return { kind: 'plane', points: parseNameTriple(plane[1], `plane of the ${role}`) }
+  if (plane) return { kind: 'plane', plane: parsePlaneForm(plane[1], `plane of the ${role}`) }
 
   const prefix = /^(line|segment|ray|circle)\s+/.exec(rest)
   if (prefix) {
@@ -230,6 +231,80 @@ function parseGeometryRef(text: string, role: string): GeometryRef {
   }
   if (extent !== null) throw new Error(`Expected "${prefix?.[1]} A-B" (two point names), got "${text.trim()}"`)
   return { kind: 'named', name: geometryName(rest, role) }
+}
+
+// ---------------------------------------------------------------------------
+// Planes (phase 8, Q2)
+// ---------------------------------------------------------------------------
+//
+// Every way an author writes a plane, in the AUTHOR's frame, z up. The text
+// after "plane" is kept as `source`, so a message quotes the plane as it was
+// written. Which names are points, and whether the plane exists at all, is
+// the solid-figure walk's to decide: the parser only reads the shape.
+
+const PLANE_FORMS =
+  '"plane A-B-C", "plane through P perpendicular to A-B", "plane through P parallel to A-B-C", ' +
+  '"plane 2x + y - z = 3", "plane z = 1" or "plane p" (a named plane)'
+
+// Whether an expression mentions a variable — so "z = x + 1" reads as an
+// equation, and "z = 1" (or "z = 2 * a") as the axis form.
+function mentions(expr: Expr, names: ReadonlySet<string>): boolean {
+  switch (expr.kind) {
+    case 'num':
+      return false
+    case 'var':
+      return names.has(expr.name)
+    case 'unary':
+      return mentions(expr.arg, names)
+    case 'binary':
+      return mentions(expr.left, names) || mentions(expr.right, names)
+    case 'call':
+      return expr.args.some((arg) => mentions(arg, names))
+  }
+}
+
+const AXIS_NAMES: ReadonlySet<string> = new Set(['x', 'y', 'z'])
+
+export function parsePlaneForm(text: string, role = 'plane'): PlaneForm {
+  const source = text.trim().replace(/\s+/g, ' ')
+
+  const perpendicular = /^through\s+([a-zA-Z]+)\s+perpendicular\s+to\s+(?:line\s+)?(.+)$/.exec(source)
+  if (perpendicular) {
+    return {
+      kind: 'perpendicular',
+      through: geometryName(perpendicular[1], 'point the plane passes through'),
+      line: parseNamePair(perpendicular[2], 'line the plane is perpendicular to'),
+      source,
+    }
+  }
+
+  const parallel = /^through\s+([a-zA-Z]+)\s+parallel\s+to\s+(.+)$/.exec(source)
+  if (parallel) {
+    // "parallel to A-B-C", "parallel to p", or with the word written out:
+    // "parallel to plane A-B-C" (any form).
+    const to = parsePlaneForm(parallel[2].trim().replace(/^plane\s+/, ''), role)
+    return { kind: 'parallel', through: geometryName(parallel[1], 'point the plane passes through'), to, source }
+  }
+
+  if (/^through\s/.test(source)) throw new Error(`Expected a plane — ${PLANE_FORMS} — got "plane ${source}"`)
+
+  const equals = source.indexOf('=')
+  if (equals !== -1) {
+    if (source.indexOf('=', equals + 1) !== -1) throw new Error(`A plane has one "=", got "plane ${source}"`)
+    const lhs = source.slice(0, equals).trim()
+    const left = parseExprString(lhs)
+    const right = parseExprString(source.slice(equals + 1))
+    // The phase-5 axis form: one axis letter equal to a value. It keeps its
+    // own path (and every byte it drew) all the way to the section.
+    if (/^[xyzXYZ]$/.test(lhs) && !mentions(right, AXIS_NAMES)) {
+      return { kind: 'axis', axis: lhs.toLowerCase() as 'x' | 'y' | 'z', at: right, source }
+    }
+    return { kind: 'equation', left, right, source }
+  }
+
+  if (source.includes('-')) return { kind: 'points', points: parseNameTriple(source, role), source }
+  if (GEOMETRY_NAME.test(source)) return { kind: 'named', name: source, source }
+  throw new Error(`Expected a plane — ${PLANE_FORMS} — got "plane ${source}"`)
 }
 
 const CENTRE_KEYWORDS: TriangleCentreKind[] = ['centroid', 'circumcenter', 'incenter', 'orthocenter', 'incircle', 'circumcircle']
@@ -784,14 +859,13 @@ function parseCrossSection(text: string, lift: boolean): StatementShape {
     rest = rest.slice(0, clause.index).trim()
   }
 
-  const shape = /^([a-zA-Z]+)\s+by\s+plane\s+([xyz])\s*=\s*(.+)$/i.exec(rest)
+  const shape = /^([a-zA-Z]+)\s+by\s+plane\s+(.+)$/i.exec(rest)
   if (!shape) throw new Error(`Expected "${keyword}: <solid> by plane <x|y|z> = <value>", got "${rest}"`)
   return {
     kind: 'crossSection',
     solid: geometryName(shape[1], `solid the ${keyword} applies to`),
     lift,
-    axis: shape[2].toLowerCase() as 'x' | 'y' | 'z',
-    at: parseExprString(shape[3]),
+    plane: parsePlaneForm(shape[2], `plane the ${keyword} is made by`),
     vertices,
   }
 }
@@ -1313,6 +1387,12 @@ function parseStatementCore(rawLine: string): StatementShape {
     // Construction, but it binds a name in the same definition-before-use way.
     if (GEOMETRY_NAME.test(lhs) && /^solid\s/.test(rhs)) {
       return parseSolidBody(rhs.slice('solid'.length), lhs)
+    }
+
+    // A named plane (phase 8, Q2): "p = plane A-B-C", any plane form on the
+    // right. It binds, and draws nothing.
+    if (GEOMETRY_NAME.test(lhs) && /^plane\s/.test(rhs)) {
+      return { kind: 'planeDef', name: lhs, plane: parsePlaneForm(rhs.slice('plane'.length), 'named plane') }
     }
 
     const constructionNames = splitTopLevelComma(lhs).map((part) => part.trim())

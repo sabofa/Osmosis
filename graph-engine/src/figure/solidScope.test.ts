@@ -427,3 +427,109 @@ describe('fix round 2 — refusals in the form the author wrote', () => {
     ])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Phase 8, Task 1 — planes as objects
+// ---------------------------------------------------------------------------
+
+describe('planes as objects (phase 8, Q2)', () => {
+  function walkAny(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return buildSolidFigure(parsed.statements, value)
+  }
+
+  function plane(scope: ReturnType<typeof walk>, name: string) {
+    const p = scope.planes.get(name)
+    if (!p) throw new Error(`no plane ${name}: ${scope.errors.map((e) => e.message).join('; ')}`)
+    return { point: worldToAuthor(p.point), normal: worldToAuthor(p.normal) }
+  }
+
+  function expectParallel(n: Vec3, to: Vec3): void {
+    const len = Math.hypot(to.x, to.y, to.z)
+    const along = (n.x * to.x + n.y * to.y + n.z * to.z) / len
+    expect(Math.abs(along)).toBeCloseTo(1, 12)
+  }
+
+  it('binds a plane through O perpendicular to A-G: it contains O, and its normal is along (1, 1, 1)', () => {
+    const scope = walk(`${CUBE}\nO = midpoint A-G\np = plane through O perpendicular to A-G`)
+    expect(scope.errors).toEqual([])
+    const p = plane(scope, 'p')
+    expectParallel(p.normal, { x: 1, y: 1, z: 1 })
+    // O = (1/2, 1/2, 1/2) lies on it.
+    const o = { x: 0.5 - p.point.x, y: 0.5 - p.point.y, z: 0.5 - p.point.z }
+    expect(o.x * p.normal.x + o.y * p.normal.y + o.z * p.normal.z).toBeCloseTo(0, 12)
+  })
+
+  it('binds a plane through P parallel to A-B-C: parallel, and through P', () => {
+    const scope = walk(`${CUBE}\nP = (3, -2, 5)\np = plane through P parallel to A-B-C`)
+    expect(scope.errors).toEqual([])
+    const p = plane(scope, 'p')
+    // A-B-C is the floor z = 0, so the parallel plane is z = 5.
+    expectParallel(p.normal, { x: 0, y: 0, z: 1 })
+    expect((5 - p.point.z) * p.normal.z).toBeCloseTo(0, 12)
+    // ...and to a named plane, the same.
+    const named = walk(`${CUBE}\nP = (3, -2, 5)\nq = plane A-B-C\np = plane through P parallel to q`)
+    expect(named.errors).toEqual([])
+    expectParallel(plane(named, 'p').normal, { x: 0, y: 0, z: 1 })
+  })
+
+  it('reads an equation plane in the author frame', () => {
+    const scope = walk(`${CUBE}\np = plane 2x + y - z = 3`)
+    const p = plane(scope, 'p')
+    expectParallel(p.normal, { x: 2, y: 1, z: -1 })
+    expect(2 * p.point.x + p.point.y - p.point.z).toBeCloseTo(3, 12)
+  })
+
+  it('drops the same foot to a named plane as to the plane it names', () => {
+    const spec = [
+      '@mode: figure',
+      'M = (1, 0, 0)',
+      'N = (0, 2, 0)',
+      'P = (0, 0, 3)',
+      'A = (3, 3, 3)',
+      'p = plane M-N-P',
+      'F = foot A to plane p',
+      'G = foot A to plane M-N-P',
+    ].join('\n')
+    const scope = walk(spec)
+    expect(scope.errors).toEqual([])
+    const f = authorPoint(scope, 'F')
+    const g = authorPoint(scope, 'G')
+    expectAt(scope, 'F', g.x, g.y, g.z)
+    // And it IS the foot: 6x + 3y + 2z = 6 is the plane M-N-P, so F lies on it.
+    expect(6 * f.x + 3 * f.y + 2 * f.z).toBeCloseTo(6, 12)
+  })
+
+  it('refuses to rebind a plane, and a plane name used as a point, naming it a plane', () => {
+    const rebound = walkAny(`${CUBE}\np = plane A-B-C\np = plane A-B-G`)
+    expect(rebound.errors.map((e) => e.message)).toEqual(['"p" is already bound to a plane — pick a different name rather than redefining it'])
+    const asPoint = walkAny(`${CUBE}\np = plane A-B-C\nM = midpoint p-G`)
+    expect(asPoint.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^"p" is a plane, not a point/)])
+    // A point's name used as a plane operand is refused the other way round.
+    const asPlane = walkAny(`${CUBE}\nF = foot A to plane G`)
+    expect(asPlane.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^"G" is a point in space, not a plane/)])
+    // And a plane may not take a point's name.
+    const clash = walkAny(`${CUBE}\nG = plane A-B-C`)
+    expect(clash.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^"G" is already bound to a point in space/)])
+  })
+
+  it('refuses collinear points and a line of zero length, quoting the plane as written', () => {
+    const collinear = walkAny(`${CUBE}\nM = midpoint A-G\np = plane A-M-G`)
+    expect(collinear.errors.map((e) => e.message)).toEqual([expect.stringMatching(/A, M and G are collinear/)])
+    const zero = walkAny(`${CUBE}\nK = (1, 0, 0)\np = plane through A perpendicular to B-K`)
+    expect(zero.errors.map((e) => e.message)).toEqual([
+      'plane through A perpendicular to B-K: B and K are the same point, so B-K has no direction to be perpendicular to',
+    ])
+  })
+
+  it('canonicalises the plane a cut is made by: A-B-C at author z = 1 is the axis plane z = 1', () => {
+    const scope = walk(
+      '@mode: figure\nS = solid prism 8 by 5 by 6\nA = (0, 0, 1)\nB = (1, 0, 1)\nC = (0, 1, 1)\ncut: S by plane A-B-C\ncut: S by plane x + z = 1'
+    )
+    expect(scope.errors).toEqual([])
+    // Directives are not statements: the cut is statement 4.
+    expect(scope.sectionPlanes.get(4)).toEqual({ plane: { kind: 'axis', axis: 'y', at: 1, source: 'A-B-C' } })
+    expect(scope.sectionPlanes.get(5)).toMatchObject({ plane: { kind: 'general', source: 'x + z = 1' } })
+  })
+})

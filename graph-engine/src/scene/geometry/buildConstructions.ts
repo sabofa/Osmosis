@@ -69,7 +69,7 @@ const SLOTS: TriangleSlot[] = ['a', 'b', 'c']
 
 function resolveObject(scope: GeometryScope, ref: GeometryRef): GeometryObject {
   if (ref.kind === 'named') return scope.lookup(ref.name)
-  if (ref.kind === 'plane') throw planeInThePlane(ref.points)
+  if (ref.kind === 'plane') throw planeInThePlane(ref.plane.source)
   return makeLine(scope.lookupPoint(ref.from), scope.lookupPoint(ref.to), ref.extent)
 }
 
@@ -77,9 +77,9 @@ function resolveObject(scope: GeometryScope, ref: GeometryRef): GeometryObject {
 // pass means its points are not points in space — the solid-figure walk
 // claims every construction that names one — so the honest message is about
 // the points, not about a missing feature.
-function planeInThePlane(points: readonly string[]): Error {
+function planeInThePlane(source: string): Error {
   return new Error(
-    `"plane ${points.join('-')}" needs three points in space (e.g. "A = (0, 0, 0)" or a solid's vertices) — ` +
+    `"plane ${source}" needs three points in space (e.g. "A = (0, 0, 0)" or a solid's vertices) — ` +
       'these are points in the plane, where every point already lies in one plane'
   )
 }
@@ -95,7 +95,7 @@ function resolveLine(scope: GeometryScope, ref: GeometryRef, role: string): Geom
 
 function refLabel(ref: GeometryRef): string {
   if (ref.kind === 'named') return ref.name
-  if (ref.kind === 'plane') return `plane ${ref.points.join('-')}`
+  if (ref.kind === 'plane') return `plane ${ref.plane.source}`
   return `${ref.from}-${ref.to}`
 }
 
