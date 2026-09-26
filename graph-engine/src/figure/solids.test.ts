@@ -262,3 +262,76 @@ describe('the edge a dimension attaches to', () => {
     expect(solidDimensionSegment({ kind: 'tetrahedron', edge: 5 }, 'height')).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// H4 — the invariant the hidden-edge rule rests on
+// ---------------------------------------------------------------------------
+
+// The visibility rule is "an edge is hidden when every face meeting it turns
+// away from the camera". That is correct for a CONVEX polyhedron and wrong for
+// a non-convex one, where a front-facing face can still be occluded by another
+// part of the same solid.
+//
+// The plan called for a runtime guard rejecting non-convex solids. There is
+// nothing to reject: `SOLID_PRIMITIVES` is the only way to make a solid from a
+// spec, and every entry is convex by construction, so the guard would be a
+// branch no input can reach — the kind of dead code this project has deleted
+// before rather than kept.
+//
+// What is worth pinning is the invariant itself, because it is what keeps the
+// visibility rule sound as primitives are added. A convex polyhedron is one
+// where every vertex lies on the inner side of every face plane; if a future
+// primitive breaks that, this fails and names it.
+describe('every polyhedral primitive is convex (H4)', () => {
+  const CASES: SolidSpec[] = [
+    { kind: 'prism', width: 8, height: 5, depth: 6 },
+    { kind: 'prism', width: 1, height: 12, depth: 1 },
+    { kind: 'pyramid', base: 6, height: 9 },
+    { kind: 'pyramid', base: 10, height: 2 },
+    { kind: 'tetrahedron', edge: 5 },
+  ]
+
+  for (const spec of CASES) {
+    it(`holds for ${JSON.stringify(spec)}`, () => {
+      const body = buildSolid(spec)
+      const solid = body.polyhedron
+      expect(solid).not.toBeNull()
+      if (!solid) return
+
+      for (let f = 0; f < solid.faces.length; f++) {
+        const n = faceNormal(solid, f)
+        const onFace = solid.vertices[solid.faces[f][0]]
+        for (let v = 0; v < solid.vertices.length; v++) {
+          const p = solid.vertices[v]
+          // Signed distance from the face plane along its OUTWARD normal. A
+          // convex solid has every vertex at or behind every face.
+          const d = (p.x - onFace.x) * n.x + (p.y - onFace.y) * n.y + (p.z - onFace.z) * n.z
+          expect(d).toBeLessThan(1e-9)
+        }
+      }
+    })
+  }
+
+  it('the check can actually fail — a dented cube is rejected', () => {
+    // Guards against the test passing because the distance rule is vacuous.
+    // This is a cube with one vertex pushed inward through the far face, so it
+    // is genuinely non-convex while still being a closed, well-wound solid.
+    const dented = {
+      vertices: [
+        { x: -1, y: -1, z: -1 }, { x: 1, y: -1, z: -1 }, { x: 1, y: 1, z: -1 }, { x: -1, y: 1, z: -1 },
+        { x: -1, y: -1, z: 1 }, { x: 1, y: -1, z: 1 }, { x: 1, y: 1, z: 1 }, { x: -0.2, y: 0.2, z: -2 },
+      ],
+      faces: [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]],
+    }
+    let violated = false
+    for (let f = 0; f < dented.faces.length; f++) {
+      const n = faceNormal(dented, f)
+      const onFace = dented.vertices[dented.faces[f][0]]
+      for (const p of dented.vertices) {
+        const d = (p.x - onFace.x) * n.x + (p.y - onFace.y) * n.y + (p.z - onFace.z) * n.z
+        if (d > 1e-9) violated = true
+      }
+    }
+    expect(violated).toBe(true)
+  })
+})

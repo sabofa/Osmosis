@@ -278,6 +278,41 @@ find: BC
 find: AD`,
   },
   {
+    label: 'Solid (prism)',
+    spec: `@mode: figure
+S = solid prism 8 by 5 by 6
+label: S width = 8
+label: S height = 5
+label: S depth = 6`,
+  },
+  {
+    label: 'Tetrahedron',
+    spec: `@mode: figure
+T = solid tetrahedron edge 5 vertices ABCD
+label: T edge = 5`,
+  },
+  {
+    label: 'Cylinder',
+    spec: `@mode: figure
+C = solid cylinder radius 3, height 8
+label: C radius = 3
+label: C height = 8`,
+  },
+  {
+    label: 'Cross-section (cut)',
+    spec: `@mode: figure
+S = solid prism 8 by 5 by 6
+cut: S by plane y = 1      # shaded where it lies`,
+  },
+  {
+    label: 'Cross-section (lifted)',
+    spec: `@mode: figure
+S = solid prism 8 by 5 by 6
+section: S by plane y = 1 vertices PQRS   # lifted out as a true-shape figure
+label: PQ = 8      # measured in the section's own plane, not the projection
+label: QR = 6`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,
