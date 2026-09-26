@@ -474,7 +474,14 @@ function parseConstructionBody(rhs: string): Construction | null {
 // which means "side DE" of triangle ABC can be rejected as a *parse* error,
 // naming the triangle, instead of surfacing later as a missing measurement.
 // --------------------------------------------------------------------------
-// Solids (phase 5)
+// Solid figures (phase 5; z-up author frame from phase 6)
+//
+// Everything written here is in the AUTHOR's frame, z up: X toward the viewer
+// and left, Y right, Z up. A prism's width runs along Y, its depth along X
+// and its height along Z; "plane z = 1" is a horizontal cut. The parser keeps
+// the author's axes as written and never converts — the figure renderer does
+// that at one boundary, figure/authorFrame.ts. The full surface is documented
+// in parser/types.ts's grammar comment.
 // --------------------------------------------------------------------------
 
 // The primitive names an author can write, in the order the error message
@@ -546,7 +553,8 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
 //
 // The plane is written the way a problem writes it — an equation — rather
 // than as a normal and an offset, because "the plane z = 3" is the sentence
-// and a normal vector is an implementation.
+// and a normal vector is an implementation. The axis is the author's, z up,
+// kept exactly as written.
 function parseCrossSection(text: string, lift: boolean): StatementShape {
   const keyword = lift ? 'section' : 'cut'
   let rest = text.trim()

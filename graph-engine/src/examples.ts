@@ -302,13 +302,13 @@ label: C height = 8`,
     label: 'Cross-section (cut)',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6
-cut: S by plane y = 1      # shaded where it lies`,
+cut: S by plane z = 1      # shaded where it lies`,
   },
   {
     label: 'Cross-section (lifted)',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6
-section: S by plane y = 1 vertices PQRS   # lifted out as a true-shape figure
+section: S by plane z = 1 vertices PQRS   # lifted out as a true-shape figure
 label: PQ = 8      # measured in the section's own plane, not the projection
 label: QR = 6`,
   },

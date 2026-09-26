@@ -2,6 +2,7 @@ import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 import type { Solid3D, Vec3 } from './project3d'
 import type { SolidBody, SolidSpec } from './solids'
+import { describeAuthorPlane } from './authorFrame'
 
 // Plane ∩ solid.
 //
@@ -118,7 +119,10 @@ function edgesOf(solid: Solid3D): [number, number][] {
 
 // Where the plane crosses each edge, wound into a polygon.
 //
-// The solid is convex — the guard in solids.ts makes sure of it — so the
+// The solid is convex — not by a runtime guard (one was planned and
+// deliberately not built: every solid reachable from the DSL comes from
+// SOLID_PRIMITIVES, so a guard would be a branch no input can reach) but by
+// the convexity invariant `solids.test.ts` pins for every primitive — so the
 // section is a convex polygon and sorting the crossings by angle about their
 // own centroid is both correct and the deterministic winding a drawing needs.
 function polyhedronSection(solid: Solid3D, plane: SectionPlane, name: string): Section {
@@ -156,7 +160,7 @@ function polyhedronSection(solid: Solid3D, plane: SectionPlane, name: string): S
 }
 
 function missesSolid(plane: SectionPlane, name: string): Error {
-  return new Error(`The plane ${plane.axis} = ${plane.at} does not cut "${name}" — it misses the solid entirely`)
+  return new Error(`The plane ${describeAuthorPlane(plane)} does not cut "${name}" — it misses the solid entirely`)
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +200,7 @@ function curvedSection(spec: SolidSpec, plane: SectionPlane, name: string): Sect
         if (plane.at < -y - GEOM_EPS || plane.at > y + GEOM_EPS) throw missesSolid(plane, name)
         const radius = (spec.radius * (y - plane.at)) / spec.height
         if (radius <= GEOM_EPS) {
-          throw new Error(`The plane y = ${plane.at} meets "${name}" only at its apex, which is a point and not a section`)
+          throw new Error(`The plane ${describeAuthorPlane(plane)} meets "${name}" only at its apex, which is a point and not a section`)
         }
         return { kind: 'circle', center: { x: 0, y: plane.at, z: 0 }, radius }
       }
@@ -207,7 +211,7 @@ function curvedSection(spec: SolidSpec, plane: SectionPlane, name: string): Sect
       if (Math.abs(plane.at) > GEOM_EPS) {
         throw new Error(
           `A plane parallel to a cone's axis but off it cuts "${name}" in a HYPERBOLA, which this phase does not draw — ` +
-            `use ${plane.axis} = 0 for the axial triangle, or cut square to the axis for a circle`
+            `use ${describeAuthorPlane({ axis: plane.axis, at: 0 })} for the axial triangle, or cut square to the axis for a circle`
         )
       }
       return { kind: 'polygon', points: coneTriangle(plane, spec.radius, y) }

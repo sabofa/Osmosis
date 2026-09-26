@@ -235,6 +235,31 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     coordinate form "(x1,y1) -- (x2,y2)", which
 //                                                     cannot reference a constructed point at all.
 //
+// Solid figures (drawn by the SVG figure renderer through a fixed named view —
+// not the orbitable *space* renderer). Everything an author writes about a
+// solid is in ONE z-up frame: X toward the viewer and left, Y to the right,
+// Z up (see figure/authorFrame.ts, which is the only place that knows the
+// renderer is y-up inside). A primitive sits centred on the origin, its axis
+// vertical, and:
+//
+//   width  runs along Y     depth  runs along X     height runs along Z
+//
+//   [S =] solid prism <w> by <h> by <d> [vertices ABCDEFGH]
+//   [S =] solid pyramid square base <b>, height <h> [vertices ABCDE]
+//   [S =] solid tetrahedron edge <e> [vertices ABCD]
+//   [S =] solid cylinder radius <r>, height <h>
+//   [S =] solid cone radius <r>, height <h>
+//   [S =] solid sphere radius <r>
+//   label: S width | height | depth | base | edge | radius [= <value>]
+//                                                 -> a dimension read off the SOLID, never the drawing
+//   cut: S by plane <x|y|z> = <c>                 -> the section shaded in place. "plane z = 1" is
+//                                                    horizontal; "plane x = c" and "plane y = c" are
+//                                                    vertical. Axis-perpendicular planes only.
+//   section: S by plane <x|y|z> = <c> [vertices PQRS]
+//                                                 -> the same cut lifted out beside the solid at true
+//                                                    shape, as ordinary 2D geometry
+//   @view: isometric | front | top | side         -> which fixed viewpoint draws the solid
+//
 // Geometry constructions (v2) — every one of these BINDS its left-hand name
 // into the geometry namespace and DRAWS its result. Names are letters only
 // (A, P, m, AB), the same rule point labels already follow, which keeps them
@@ -401,6 +426,9 @@ export type StatementShape =
   // foreshortened. `section` lifts it out as a TRUE-SHAPE plane figure, which
   // is ordinary 2D geometry and carries measures and labels through the
   // normal path (H5) — which is why only that form can name its vertices.
+  //
+  // `axis` is the AUTHOR's axis, z up. The figure renderer converts it to its
+  // internal frame (figure/authorFrame.ts); the parser never does.
   | { kind: 'crossSection'; solid: string; lift: boolean; axis: 'x' | 'y' | 'z'; at: Expr; vertices: string[] }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the

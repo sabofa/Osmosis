@@ -38,7 +38,8 @@ import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasu
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
 import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge } from './project3d'
 import { buildSolid, solidDimensions, solidDimensionSegment, solidOutline, type SolidBody, type SolidSpec } from './solids'
-import { liftOffset, planeRadii, sectionOf, trueShape, type SectionPlane } from './crossSection'
+import { authorPlane, describeAuthorPlane } from './authorFrame'
+import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
 import { projectCircle, type ProjectedCircle } from './silhouette'
 import {
   fmt,
@@ -637,7 +638,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         }
         case 'crossSection': {
           const body = resolveSolid(statement.solid)
-          const plane: SectionPlane = { axis: statement.axis, at: value(statement.at) }
+          // S1 — the author wrote the plane z-up; everything past this line
+          // works in the internal frame.
+          const plane = authorPlane(statement.axis, value(statement.at))
           const section = sectionOf(body, plane, statement.solid)
           const camera = cameraFor(config.view)
 
@@ -677,7 +680,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
           if (shape.kind === 'circle') {
             if (statement.vertices.length > 0) {
-              throw new Error(`The section of "${statement.solid}" by ${plane.axis} = ${plane.at} is a circle, which has no vertices to name`)
+              throw new Error(`The section of "${statement.solid}" by ${describeAuthorPlane(plane)} is a circle, which has no vertices to name`)
             }
             items.push({ kind: 'circle', id: { statement: index, object: statement.solid }, center: move(shape.center), radius: shape.radius, color: statement.color })
             break
@@ -688,7 +691,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           if (statement.vertices.length > 0) {
             if (statement.vertices.length !== vertices.length) {
               throw new Error(
-                `The section of "${statement.solid}" by ${plane.axis} = ${plane.at} has ${vertices.length} vertices, ` +
+                `The section of "${statement.solid}" by ${describeAuthorPlane(plane)} has ${vertices.length} vertices, ` +
                   `but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
               )
             }

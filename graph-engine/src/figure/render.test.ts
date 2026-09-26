@@ -3,9 +3,12 @@ import { parseSpec } from '../parser/parseSpec'
 import { LIGHT_PALETTE } from '../render/palette'
 import { FIGURE_LAYERS } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
-import { rectangularPrism, renderSolidFigure } from './project3d'
+import { formatMeasure } from './measure'
+import { ISOMETRIC_CAMERA, rectangularPrism, renderSolidFigure } from './project3d'
+import { regularTetrahedron } from './solids'
 import { renderFigure } from './render'
 import { resolveMode } from '../scene/mode'
+import { EXAMPLES } from '../examples'
 
 function render(spec: string): string {
   const parsed = parseSpec(spec)
@@ -1305,11 +1308,21 @@ describe('dimension labels on a solid', () => {
 
   it('prints the dimension the author asked the solid for, not the projected edge', () => {
     const svg = render(`${PRISM}\nlabel: S width`)
-    // The prism is 8 wide. Its width edge projects to 8*cos30 = 6.93 under
-    // the isometric camera, and printing THAT would put a number on the
-    // figure that contradicts the solid.
     expect(layer(svg, 'labels')).toContain('>8</text>')
-    expect(layer(svg, 'labels')).not.toContain('>6.93</text>')
+    // Repaired in phase 6 (Task 1, Step 5b). This used to assert the label
+    // was not "6.93", on the grounds that the 8-long width edge projects to
+    // 8*cos30. It does not: 6.93 is that edge's horizontal extent, and the
+    // isometric camera draws every axis-parallel edge at its TRUE length, so
+    // no prism dimension can tell the spec from the drawing. A regular
+    // tetrahedron's edge is not axis-parallel, and it can.
+    const tetra = render('@mode: figure\nT = solid tetrahedron edge 5\nlabel: T edge')
+    const [a, b] = regularTetrahedron(5).vertices.map((v) => ISOMETRIC_CAMERA.project(v))
+    const drawn = Math.hypot(b.x - a.x, b.y - a.y)
+    // The two differ by far more than the formatter's rounding, so the
+    // assertions below cannot pass vacuously.
+    expect(Math.abs(drawn - 5)).toBeGreaterThan(0.1)
+    expect(layer(tetra, 'labels')).toContain('>5</text>')
+    expect(layer(tetra, 'labels')).not.toContain(`>${formatMeasure(drawn)}</text>`)
   })
 
   it('places the label at the midpoint of the projected edge that realises it', () => {
@@ -1494,7 +1507,7 @@ describe('cross-sections', () => {
   const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
 
   it('shades a cut in place, behind the solid it cuts', () => {
-    const svg = render(`${PRISM}\ncut: S by plane y = 1`)
+    const svg = render(`${PRISM}\ncut: S by plane z = 1`)
     expect(countTags(layer(svg, 'regions'), 'polygon')).toBe(1)
     // E1 — a fill is a backdrop. A cut drawn over the solid's own lines would
     // hide the thing it is a section OF.
@@ -1504,7 +1517,7 @@ describe('cross-sections', () => {
   })
 
   it('shades a cut through a cylinder as one closed ellipse, not two arcs', () => {
-    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 8\ncut: C by plane y = 1')
+    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 8\ncut: C by plane z = 1')
     expect(countTags(layer(svg, 'regions'), 'ellipse')).toBe(1)
     // Two arc paths would each close through their own chord and paint a seam
     // down the middle of the fill.
@@ -1512,7 +1525,7 @@ describe('cross-sections', () => {
   })
 
   it('lifts a section out as an ORDINARY polygon, beside the solid', () => {
-    const svg = render(`${PRISM}\nsection: S by plane y = 1`)
+    const svg = render(`${PRISM}\nsection: S by plane z = 1`)
     // It is not a shaded face: it is a plane figure, drawn by the same code
     // that draws every other polygon.
     expect(layer(svg, 'regions')).toBe('')
@@ -1522,7 +1535,7 @@ describe('cross-sections', () => {
 
   it('places the lifted section clear of the solid, never over it', () => {
     const svg = render(`${PRISM}
-section: S by plane y = 1 vertices PQRS`)
+section: S by plane z = 1 vertices PQRS`)
     // The solid's own edges name themselves "edge-i-j"; the lifted section's
     // vertices are the only dots in the figure.
     const solidRight = Math.max(
@@ -1544,12 +1557,13 @@ section: S by plane y = 1 vertices PQRS`)
   // ---------------------------------------------------------------------
 
   it('carries a measure label on a lifted section through the NORMAL 2D path', () => {
-    // The section of an 8-by-5-by-6 prism at y = 1 is an 8-by-6 rectangle.
+    // The section of an 8-by-5-by-6 prism by the horizontal plane z = 1 is
+    // an 8-by-6 rectangle.
     // Its vertices are named, registered as ordinary points, and measured by
     // the same `label:` that measures any other segment — which is the whole
     // of H5. If the lifted section went through a parallel pipeline inside
     // the 3D layer, none of this line would exist.
-    const spec = `${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ = 8\nlabel: QR = 6`
+    const spec = `${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 8\nlabel: QR = 6`
     expect(result(spec).errors).toEqual([])
     const svg = render(spec)
     expect(layer(svg, 'labels')).toContain('>8</text>')
@@ -1558,43 +1572,135 @@ section: S by plane y = 1 vertices PQRS`)
   })
 
   it('asserts that measure against the TRUE shape, not the projection', () => {
-    // PQ is 8 in the section's own plane. Under the isometric camera the
-    // corresponding projected edge is 8*cos30 = 6.93, so a section that
-    // handed back projected coordinates would fail this and pass "= 6.93".
-    const wrong = result(`${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ = 6.93`).errors
+    // Repaired in phase 6 (Task 1, Step 5b). This test used to check only
+    // that PQ = 8 passes and PQ = 6.93 fails, "because the projected edge is
+    // 8*cos30 = 6.93". It is not: 6.93 is that edge's horizontal EXTENT. The
+    // isometric camera draws every axis-parallel segment at its true length,
+    // so a section handing back projected coordinates would ALSO measure
+    // PQ = 8 and QR = 6. Those checks are kept at the end, because they are
+    // still true, but they pin nothing.
+    //
+    // What the projection does distort is the angle between two axes, and
+    // with it every diagonal. In the section's own plane the rectangle is
+    // 8 by 6, so its diagonal PR is 10 and the angle at P is a right angle.
+    // Projected, the x- and z-axes meet at 60 or 120 degrees and the
+    // diagonal is sqrt(52) or sqrt(148); both of these fail there.
+    const section = `${PRISM}\nsection: S by plane z = 1 vertices PQRS`
+    expect(result(`${section}\nlabel: PR = 10`).errors).toEqual([])
+    expect(result(`@angle: degrees\n${section}\nlabel: angle SPQ = 90`).errors).toEqual([])
+    // The same assertions, made false: each must be refused, or the passes
+    // above could be a checker that accepts anything.
+    expect(result(`${section}\nlabel: PR = 12.17`).errors).toHaveLength(1)
+    expect(result(`@angle: degrees\n${section}\nlabel: angle SPQ = 60`).errors).toHaveLength(1)
+
+    const wrong = result(`${section}\nlabel: PQ = 6.93`).errors
     expect(wrong).toHaveLength(1)
     expect(wrong[0].message).toMatch(/PQ/)
-    expect(result(`${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ = 8`).errors).toEqual([])
+    expect(result(`${section}\nlabel: PQ = 8`).errors).toEqual([])
   })
 
   it('takes notation, marks and the givens table on a lifted section too', () => {
     // Everything the 2D path offers, for free, because the section IS 2D.
     const svg = render(
-      `${PRISM}\nsection: S by plane y = 1 vertices PQRS\ntick: P-Q\nright-angle: S-P-Q\ngiven: PQ = 8\nfind: QR`
+      `${PRISM}\nsection: S by plane z = 1 vertices PQRS\ntick: P-Q\nright-angle: S-P-Q\ngiven: PQ = 8\nfind: QR`
     )
     expect(layer(svg, 'marks')).not.toBe('')
     expect(svg).toContain('data-object="givens"')
   })
 
   it('fails legibly when the plane misses the solid', () => {
-    const errors = result(`${PRISM}\nsection: S by plane y = 9`).errors
+    const errors = result(`${PRISM}\nsection: S by plane z = 9`).errors
     expect(errors).toHaveLength(1)
     expect(errors[0].message).toMatch(/does not cut "S" — it misses the solid entirely/)
   })
 
   it('refuses to name the vertices of a circular section', () => {
-    const errors = result('@mode: figure\nC = solid cylinder radius 3, height 8\nsection: C by plane y = 1 vertices PQR').errors
+    const errors = result('@mode: figure\nC = solid cylinder radius 3, height 8\nsection: C by plane z = 1 vertices PQR').errors
     expect(errors[0].message).toMatch(/is a circle, which has no vertices to name/)
   })
 
   it('refuses a vertex list that does not match the section', () => {
-    const errors = result(`${PRISM}\nsection: S by plane y = 1 vertices PQR`).errors
+    const errors = result(`${PRISM}\nsection: S by plane z = 1 vertices PQR`).errors
     expect(errors[0].message).toMatch(/has 4 vertices, but 3 names were given/)
   })
 
   it('renders a cut and a section byte-identically twice', () => {
-    for (const spec of [`${PRISM}\ncut: S by plane y = 1`, `${PRISM}\nsection: S by plane y = 1 vertices PQRS\nlabel: PQ`]) {
+    for (const spec of [`${PRISM}\ncut: S by plane z = 1`, `${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ`]) {
       expect(render(spec)).toBe(render(spec))
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// S1 — the z-up author frame (phase 6, Task 1)
+// ---------------------------------------------------------------------------
+
+// A short, deterministic digest of a whole document: its length and a 53-bit
+// string hash (cyrb53). The frame change is a claim about BYTES, and a digest
+// is the way to hold a test to that without committing the documents.
+function digest(s: string): string {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 2654435761)
+    h2 = Math.imul(h2 ^ ch, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return `${s.length}:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16)}`
+}
+
+describe('the z-up author frame (S1)', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const PRISM = '@mode: figure\nS = solid prism 8 by 5 by 6'
+
+  // Every cross-section input phase 5's tests and examples used, rewritten
+  // from the internal frame's "plane y = c" into the author's "plane z = c".
+  // The digests were taken from the phase 5 renders of the ORIGINAL inputs,
+  // before the frame existed; each rewrite must draw exactly those bytes.
+  const REWRITTEN: [string, string][] = [
+    [`${PRISM}\ncut: S by plane z = 1`, '2538:27fe13b38d503'],
+    ['@mode: figure\nC = solid cylinder radius 3, height 8\ncut: C by plane z = 1', '1645:d8b3f7da5621d'],
+    [`${PRISM}\nsection: S by plane z = 1`, '2965:1083d01e74ca92'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQRS`, '4203:1d739cd9fcdd07'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 8\nlabel: QR = 6`, '4603:1bd3a01c570bd9'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 6.93`, '4409:14559416687fc8'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 8`, '4406:12d478e07528f1'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\ntick: P-Q\nright-angle: S-P-Q\ngiven: PQ = 8\nfind: QR`, '6345:e2a7ca7fc504e'],
+    ['@mode: figure\nC = solid cylinder radius 3, height 8\nsection: C by plane z = 1 vertices PQR', '1480:159fa8dfdf2095'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQR`, '2965:1083d01e74ca92'],
+    [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ`, '4406:12d478e07528f1'],
+  ]
+
+  for (const [spec, expected] of REWRITTEN) {
+    it(`draws exactly what phase 5 drew: ${spec.split('\n').slice(2).join(' / ')}`, () => {
+      expect(digest(render(spec))).toBe(expected)
+    })
+  }
+
+  it('draws the rewritten cross-section examples exactly as phase 5 did', () => {
+    const cut = EXAMPLES.find((e) => e.label === 'Cross-section (cut)')
+    const lifted = EXAMPLES.find((e) => e.label === 'Cross-section (lifted)')
+    expect(digest(render(cut!.spec))).toBe('2538:27fe13b38d503')
+    expect(digest(render(lifted!.spec))).toBe('4603:1bd3a01c570bd9')
+  })
+
+  it('cuts horizontally at z = c and vertically at x = c and y = c', () => {
+    // An 8 (width, Y) by 5 (height, Z) by 6 (depth, X) prism. Each plane
+    // leaves the two dimensions it does not fix.
+    const sides = (plane: string, pq: number, qr: number) =>
+      result(`${PRISM}\nsection: S by plane ${plane} vertices PQRS\nlabel: PQ = ${pq}\nlabel: QR = ${qr}`).errors
+    expect(sides('z = 1', 8, 6)).toEqual([])
+    expect(sides('y = 1', 5, 6)).toEqual([])
+    expect(sides('x = 1', 8, 5)).toEqual([])
+  })
+
+  it('names the plane in the author frame when it misses the solid', () => {
+    expect(result(`${PRISM}\nsection: S by plane z = 9`).errors[0].message).toBe('The plane z = 9 does not cut "S" — it misses the solid entirely')
   })
 })
