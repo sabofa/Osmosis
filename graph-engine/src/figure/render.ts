@@ -13,6 +13,7 @@ import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/
 import { clipLineToBounds } from '../render/clipLine'
 import { type Palette, themedColor } from '../render/palette'
 import { buildConstructions } from '../scene/geometry/buildConstructions'
+import { isPlotted, isSolidFigureStatement } from '../scene/mode'
 import { type Arc, arcBetween, arcMidpoint, arcPointAt, requireOnCircle } from '../scene/geometry/circles'
 import type { GeometryCircle, GeometryObject, LineExtent } from '../scene/geometry/objects'
 import type { SceneError, Vec2 } from '../scene/types'
@@ -191,10 +192,19 @@ function collectFunctions(statements: Statement[]): FunctionTable {
   return functions
 }
 
-function collectNamedPoints(statements: Statement[], config: GraphConfig, functions: FunctionTable): Map<string, Vec2> {
+// `skip` holds the statements the solid-figure walk owns — which, for a
+// 2-coordinate point, means one it refused because an earlier line had
+// already bound its name (source order decides; see solidScope.ts).
+function collectNamedPoints(
+  statements: Statement[],
+  config: GraphConfig,
+  functions: FunctionTable,
+  skip: ReadonlySet<number>
+): Map<string, Vec2> {
   const points = new Map<string, Vec2>()
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
-  for (const statement of statements) {
+  for (const [index, statement] of statements.entries()) {
+    if (skip.has(index)) continue
     try {
       // A 3-coordinate point is a point in SPACE in a figure (S2): the
       // solid-figure walk binds it, and it is not a point of the plane.
@@ -259,6 +269,27 @@ function geometryItems(object: GeometryObject, name: string | null, id: Identity
 
 // A solid's dimensions are evaluated by the solid-figure walk (solidScope.ts),
 // which builds every solid before this renderer's main loop runs (S3).
+
+// A plot in a solid figure, refused in words the author will recognise. The
+// statement's own text is gone by now, so it is named by its form.
+function plotRefusal(statement: Statement): string {
+  const named: Partial<Record<Statement['kind'], string>> = {
+    implicit: 'An implicit curve',
+    polar: 'A polar curve "r = …"',
+    parametric: 'A parametric curve',
+    parametricSurface: 'A parametric surface',
+    surface: 'A surface "z = …"',
+    region: 'An inequality region',
+    regionChain: 'An inequality region',
+    field: 'A slope field',
+    scatter: 'A scatter plot',
+    tangent: 'A tangent to a function',
+    animatedPoint: 'An animated point',
+  }
+  const what =
+    statement.kind === 'explicit' ? `"${statement.independent === 'x' ? 'y' : 'x'} = …"` : (named[statement.kind] ?? 'This statement')
+  return `${what} is a plot, and a solid figure does not draw plots — put it on its own graph page`
+}
 
 // ---------------------------------------------------------------------------
 // Measure labels
@@ -436,7 +467,7 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
       // space is refused (it would float with no arc to label).
       const space = resolvers.space([subject.from, subject.vertex, subject.to], `angle ${subject.from}${subject.vertex}${subject.to}`)
       if (space) {
-        const radians = angle3(space[1], space[0], space[2])
+        const radians = angle3(space[1], space[0], space[2], `angle ${subject.from}${subject.vertex}${subject.to}`)
         return config.angle === 'degrees' ? (radians * 180) / Math.PI : radians
       }
       return angleMeasure(resolvers.point(subject.vertex), resolvers.point(subject.from), resolvers.point(subject.to), config.angle)
@@ -484,17 +515,18 @@ function arcOf(
 
 function buildItems(statements: Statement[], config: GraphConfig): { items: FigureItem[]; errors: SceneError[] } {
   const functions = collectFunctions(statements)
-  const namedPoints = collectNamedPoints(statements, config, functions)
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
   // S3 — solids and constructions in space first, in one source-order walk,
   // so the 2D pass can be told which statements are not its business.
   const scope: SolidFigureScope = buildSolidFigure(statements, value)
+  const namedPoints = collectNamedPoints(statements, config, functions, scope.ownedStatements)
   const constructions = buildConstructions(statements, config, functions, namedPoints, scope.ownedStatements)
   for (const [name, position] of constructions.points) namedPoints.set(name, position)
   const camera = cameraFor(config.view)
 
   const items: FigureItem[] = []
   const errors: SceneError[] = [...scope.errors, ...constructions.errors]
+  const hasSolid = statements.some((s) => isSolidFigureStatement(s.kind))
   // Measure labels are built in a second pass: where one sits depends on
   // where the rest of the figure is (a side's label goes on the outside),
   // and that is only known once every other item exists.
@@ -603,7 +635,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     try {
       switch (statement.kind) {
         case 'point':
-          if (statement.z !== null) {
+          // A point the walk owns is a point in space, or a plane point it
+          // refused; either way it is drawn from the walk's record or not at all.
+          if (statement.z !== null || scope.ownedStatements.has(index)) {
             for (const p of scope.byStatement.get(index)?.points ?? []) items.push(spacePointItem(index, p.name, p.at, statement.color))
             break
           }
@@ -877,6 +911,11 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           givenStatements.push({ statement, index })
           break
         default:
+          // S5 sends a solid beside a plot to this renderer, which draws no
+          // plots. Say so, rather than drop the plot without a word. Only
+          // when the spec holds a solid: a plain 2D figure keeps exactly the
+          // behaviour it had.
+          if (hasSolid && isPlotted(statement.kind)) throw new Error(plotRefusal(statement))
           break
       }
     } catch (err) {

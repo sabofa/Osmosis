@@ -260,10 +260,33 @@ const PLANAR_WORD: Partial<Record<Construction['kind'], string>> = {
   radiusTo: 'a radius',
 }
 
-function alreadyBound(name: string, kind: 'space' | 'plane'): Error {
-  return new Error(
-    `"${name}" is already bound to a point ${kind === 'space' ? 'in space' : 'in the plane'} — pick a different name rather than redefining it`
-  )
+function alreadyBound(name: string, what: string): Error {
+  return new Error(`"${name}" is already bound to ${what} — pick a different name rather than redefining it`)
+}
+
+// What a name bound in the plane is: the 2D namespace holds lines and
+// circles as well as points, and a message that called a line "a point"
+// would send the author looking for the wrong thing.
+type PlaneKind = 'point' | 'line' | 'circle'
+
+const LINE_CONSTRUCTIONS: ReadonlySet<Construction['kind']> = new Set([
+  'parallelLine',
+  'perpendicularLine',
+  'perpendicularBisector',
+  'angleBisector',
+  'chord',
+  'tangentAt',
+  'tangentFrom',
+  'secant',
+  'radiusTo',
+  'diameter',
+])
+
+function planeKindOf(body: Construction): PlaneKind {
+  if (LINE_CONSTRUCTIONS.has(body.kind)) return 'line'
+  if (body.kind === 'circleAt') return 'circle'
+  if (body.kind === 'triangleCentre' && (body.centre === 'incircle' || body.centre === 'circumcircle')) return 'circle'
+  return 'point'
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +322,12 @@ function centreInSpace(
   return add3(a, add3(scale3(e1, centre.x), scale3(e2, centre.y)))
 }
 
+// The refusal of a literal point that a statement EARLIER in the spec
+// already bound the name of.
+function laterPointRefused(name: string, what: string): Error {
+  return new Error(`"${name}" is already bound to ${what} on an earlier line — the later point "${name}" cannot rebind it`)
+}
+
 function nameList(names: readonly string[]): string {
   return names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
@@ -313,16 +342,68 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
   const ownedStatements = new Set<number>()
   const byStatement: SolidFigureScope['byStatement'] = new Map()
   const errors: SceneError[] = []
-  // Names bound as points in the plane. Tracked only so the walk can tell a
-  // mixed construction from an unknown name; the 2D pass owns their values.
-  const planeNames = new Set<string>()
+  // Names bound in the plane, and what each is. Tracked only so the walk can
+  // tell a mixed construction from an unknown name; the 2D pass owns their
+  // values.
+  const planeNames = new Map<string, PlaneKind>()
+  // What each space name is bound to, for a message that refuses a rebinding.
+  const spaceWhat = new Map<string, string>()
+  // The literal points, by the statement that wrote them. Literals are bound
+  // before the walk (order-independent, as in 2D), so a literal can be bound
+  // before an EARLIER statement claims its name; these say where it really
+  // sits in the source, so the later line is the one refused.
+  const spaceLiteral = new Map<string, number>()
+  const planeLiteral = new Map<string, number>()
 
   const fail = (err: unknown) => errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
+
+  const describePlane = (name: string) => `a ${planeNames.get(name) ?? 'point'} in the plane`
+
+  // A binding at `index` wants `name`. It may take it when the name is free,
+  // or when the name is held only by a LITERAL written LATER in the spec:
+  // source order decides, so the literal is the statement refused. Anything
+  // else throws, against this statement.
+  const checkClaim = (name: string, index: number): void => {
+    if (points.has(name)) {
+      const at = spaceLiteral.get(name)
+      if (at === undefined || at < index) throw alreadyBound(name, spaceWhat.get(name) ?? 'a point in space')
+    }
+    if (planeNames.has(name)) {
+      const at = planeLiteral.get(name)
+      if (at === undefined || at < index) throw alreadyBound(name, describePlane(name))
+    }
+  }
+
+  // Takes a name checkClaim allowed, refusing the later literal that held it.
+  const takeName = (name: string, what: string): void => {
+    const laterSpace = spaceLiteral.get(name)
+    if (laterSpace !== undefined && points.has(name)) {
+      points.delete(name)
+      spaceLiteral.delete(name)
+      // Still owned, so neither the 2D pass nor the renderer takes it up;
+      // with no entry, nothing is drawn for it.
+      byStatement.delete(laterSpace)
+      fail(laterPointRefused(name, what))
+    }
+    const laterPlane = planeLiteral.get(name)
+    if (laterPlane !== undefined && planeNames.has(name)) {
+      planeNames.delete(name)
+      planeLiteral.delete(name)
+      ownedStatements.add(laterPlane)
+      fail(laterPointRefused(name, what))
+    }
+  }
+
+  const bindSpace = (name: string, at: Vec3, what: string): void => {
+    takeName(name, what)
+    points.set(name, at)
+    spaceWhat.set(name, what)
+  }
 
   const lookup = (name: string): Vec3 => {
     const p = points.get(name)
     if (p) return p
-    if (planeNames.has(name)) throw new Error(`"${name}" is a point in the plane, and this construction needs points in space`)
+    if (planeNames.has(name)) throw new Error(`"${name}" is ${describePlane(name)}, and this construction needs points in space`)
     throw new Error(
       `Unknown point "${name}" — define it before this line (e.g. "${name} = (x, y, z)", or name it among a solid's vertices)`
     )
@@ -334,21 +415,25 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
   // Plain points are literals with no dependencies, so — exactly as in 2D —
   // they are order-independent: a construction may name one defined below it.
   // Plane literals first, so a space literal reusing a plane name is caught.
-  for (const statement of statements) {
-    if (statement.kind === 'point' && statement.label && statement.z === null) planeNames.add(statement.label)
-    else if (statement.kind === 'polygon') for (const v of statement.vertices) planeNames.add(v.label)
-  }
+  statements.forEach((statement, index) => {
+    if (statement.kind === 'point' && statement.label && statement.z === null) {
+      planeNames.set(statement.label, 'point')
+      if (!planeLiteral.has(statement.label)) planeLiteral.set(statement.label, index)
+    } else if (statement.kind === 'polygon') for (const v of statement.vertices) planeNames.set(v.label, 'point')
+  })
   for (let index = 0; index < statements.length; index++) {
     const statement = statements[index]
     if (statement.kind !== 'point' || statement.z === null) continue
     ownedStatements.add(index)
     try {
       const name = statement.label ?? ''
-      if (name && points.has(name)) throw alreadyBound(name, 'space')
-      if (name && planeNames.has(name)) throw alreadyBound(name, 'plane')
+      if (name) checkClaim(name, index)
       // S1 — the one place an author's coordinates enter the solid figure.
       const at = authorToWorld({ x: value(statement.x), y: value(statement.y), z: value(statement.z) })
-      if (name) points.set(name, at)
+      if (name) {
+        bindSpace(name, at, 'a point in space')
+        spaceLiteral.set(name, index)
+      }
       byStatement.set(index, { points: [{ name, at, drawn: true }] })
     } catch (err) {
       fail(err)
@@ -374,14 +459,14 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
               `A ${body.spec.kind} has ${body.labelOrder.length} vertices, but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
             )
           }
-          for (const name of statement.vertices) {
-            if (points.has(name)) throw alreadyBound(name, 'space')
-            if (planeNames.has(name)) throw alreadyBound(name, 'plane')
-          }
+          // Every letter is checked before any is taken, so a refused list
+          // takes nothing — not even the letters that were free.
+          for (const name of statement.vertices) checkClaim(name, index)
           // S4 — a solid's named vertices are real points.
+          const what = statement.name ? `a vertex of solid "${statement.name}"` : `a vertex of a ${body.spec.kind}`
           statement.vertices.forEach((name, v) => {
             const at = polyhedron.vertices[body.labelOrder[v]]
-            points.set(name, at)
+            bindSpace(name, at, what)
             entry.points.push({ name, at, drawn: false })
           })
           break
@@ -390,13 +475,20 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
           walkConstruction(index, statement.names, statement.body)
           break
         case 'triangle':
+          // Only a clash with a point in SPACE is this walk's to judge; the 2D
+          // pass judges clashes in the plane, exactly as before phase 6.
           for (const name of statement.names) {
-            if (points.has(name)) throw alreadyBound(name, 'space')
-            planeNames.add(name)
+            if (!points.has(name)) continue
+            const at = spaceLiteral.get(name)
+            if (at === undefined || at < index) throw alreadyBound(name, spaceWhat.get(name) ?? 'a point in space')
+          }
+          for (const name of statement.names) {
+            if (points.has(name)) takeName(name, 'a vertex of a solved triangle')
+            planeNames.set(name, 'point')
           }
           break
         case 'crossSection':
-          if (statement.lift) for (const name of statement.vertices) planeNames.add(name)
+          if (statement.lift) for (const name of statement.vertices) planeNames.set(name, 'point')
           break
         default:
           break
@@ -413,19 +505,28 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
     if (space.length === 0 && !hasPlaneRef(body)) {
       // A construction in the plane: the 2D pass's, unless it would rebind a
       // space point, which is refused here because the 2D pass cannot see it.
-      const clash = names.find((name) => points.has(name))
-      if (clash) {
-        ownedStatements.add(index)
-        throw alreadyBound(clash, 'space')
+      // A later space LITERAL of the same name is the one refused (source
+      // order decides); any other clash refuses this construction.
+      for (const name of names) {
+        if (!points.has(name)) continue
+        const at = spaceLiteral.get(name)
+        if (at === undefined || at < index) {
+          ownedStatements.add(index)
+          throw alreadyBound(name, spaceWhat.get(name) ?? 'a point in space')
+        }
       }
-      for (const name of names) planeNames.add(name)
+      const kind = planeKindOf(body)
+      for (const name of names) {
+        if (points.has(name)) takeName(name, `a ${kind} in the plane`)
+        planeNames.set(name, kind)
+      }
       return
     }
 
     ownedStatements.add(index)
     const plane = operands.find((name) => planeNames.has(name))
     if (plane && space.length > 0) {
-      throw new Error(`${statementText(names, body)} mixes a point in space (${space[0]}) with a point in the plane (${plane})`)
+      throw new Error(`${statementText(names, body)} mixes a point in space (${space[0]}) with ${describePlane(plane)} (${plane})`)
     }
     const planar = PLANAR_WORD[body.kind]
     if (planar && space.length > 0) {
@@ -441,12 +542,9 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
           `construction that produced ${results.length === 1 ? '1 solution' : `${results.length} solutions`}`
       )
     }
-    for (const name of names) {
-      if (points.has(name)) throw alreadyBound(name, 'space')
-      if (planeNames.has(name)) throw alreadyBound(name, 'plane')
-    }
+    for (const name of names) checkClaim(name, index)
     const bound = names.map((name, i) => ({ name, at: results[i], drawn: true }))
-    for (const p of bound) points.set(p.name, p.at)
+    for (const p of bound) bindSpace(p.name, p.at, 'a point in space')
     byStatement.set(index, { points: bound })
   }
 
@@ -475,7 +573,7 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
             `${statementText(names, body)}: in a solid figure, intersect takes a line and a plane (e.g. "intersect line A-G, plane B-D-E")`
           )
         }
-        return [lineMeetsPlane(lookup(line.from), lookup(line.to), planeOf(plane), `line ${line.from}-${line.to}`)]
+        return [lineMeetsPlane(lookup(line.from), lookup(line.to), planeOf(plane), `line ${line.from}-${line.to}`, `plane ${plane.points.join('-')}`)]
       }
       case 'triangleCentre': {
         const vertices = body.vertices.map(lookup)

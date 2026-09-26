@@ -208,7 +208,14 @@ describe('segments against a sphere', () => {
   it('does not split a segment whose rays only graze the sphere', () => {
     // -10 d + 5 e2 + s e1: its projection touches the outline at s = 0 and
     // nowhere crosses it. The view cylinder's quadratic has a double root.
-    expectSpans(round(combo([-10, d], [5, e2], [-8, e1]), combo([-10, d], [5, e2], [8, e1])), [[0, 1, false]])
+    const a = combo([-10, d], [5, e2], [-8, e1])
+    const b = combo([-10, d], [5, e2], [8, e1])
+    expectSpans(round(a, b), [[0, 1, false]])
+    // ...and the double root is yielded ONCE, at the graze (u = 1/2): the
+    // contract the outcome above cannot pin on its own, since the open,
+    // margined ray test would call the graze visible with no candidate there.
+    const atGraze = occlusionCandidates(sphere, a, b, camera).filter((u) => Math.abs(u - 0.5) < 1e-9)
+    expect(atGraze).toHaveLength(1)
   })
 })
 

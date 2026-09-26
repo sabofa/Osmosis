@@ -1930,3 +1930,58 @@ describe('segments in solid figures', () => {
     expect(render(spec)).toBe(render(spec))
   })
 })
+
+describe('source order decides a rebinding in a solid figure', () => {
+  it('keeps every vertex of a solid when a later literal reuses a letter', () => {
+    const parsed = parseSpec('@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH\nA = (0, 0, 0)\nlabel: AB = 8\nlabel: EH = 6\ngiven: CG = 5')
+    const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    // One error, on the literal, and no cascade of "Unknown point" for B-H.
+    expect(result.errors.map((e) => e.message)).toEqual([
+      '"A" is already bound to a vertex of solid "S" on an earlier line — the later point "A" cannot rebind it',
+    ])
+    for (const name of 'ABCDEFGH') expect(layer(result.svg, 'labels')).toContain(`>${name}</text>`)
+    // The refused literal is not drawn.
+    expect(layer(result.svg, 'points')).toBe('')
+  })
+
+  it('does not draw or register a later plane point that reuses a vertex name', () => {
+    // The tick names A in the plane: had the refused literal been registered,
+    // the tick would draw there instead of refusing.
+    const parsed = parseSpec('@mode: figure\nT = solid tetrahedron edge 5 vertices ABCD\nA = (1, 2)\nP = (4, 4)\nlabel: AB = 5\ntick: A-P')
+    const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    expect(result.errors.map((e) => e.message)).toEqual([
+      '"A" is already bound to a vertex of solid "T" on an earlier line — the later point "A" cannot rebind it',
+      expect.stringMatching(/^"A" is a point in space/),
+    ])
+    expect(layer(result.svg, 'points')).not.toContain('data-object="A"')
+  })
+})
+
+describe('errors in space name what they are about', () => {
+  it('names the angle whose arm has zero length', () => {
+    const parsed = parseSpec('@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH\ngiven: angle ABB')
+    const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    expect(result.errors.map((e) => e.message)).toEqual(['An arm of angle ABB has zero length: its end and the vertex coincide'])
+  })
+})
+
+describe('a plot in a solid figure', () => {
+  function errorsOf(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors.map((e) => e.message)
+  }
+
+  it('is refused by name rather than dropped without a word', () => {
+    expect(errorsOf('S = solid prism 8 by 5 by 6\ny = x^2')).toEqual([
+      '"y = …" is a plot, and a solid figure does not draw plots — put it on its own graph page',
+    ])
+    expect(errorsOf('S = solid sphere radius 2\nx^2 + y^2 = 4')).toEqual([
+      'An implicit curve is a plot, and a solid figure does not draw plots — put it on its own graph page',
+    ])
+  })
+
+  it('leaves a 2D figure exactly as it was', () => {
+    expect(errorsOf('@mode: figure\nA = (0, 0)\ny = x^2')).toEqual([])
+  })
+})

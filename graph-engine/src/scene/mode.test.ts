@@ -180,3 +180,9 @@ describe('solid figures and 3-coordinate points (S5)', () => {
     expect(mode('A = (1, 2, 3)')).toBe('graph')
   })
 })
+
+describe('a solid beside a plot (S5, deliberately)', () => {
+  it('infers figure: the solid wins, and the figure renderer refuses the plot by name', () => {
+    expect(mode('S = solid prism 8 by 5 by 6\ny = x^2')).toBe('figure')
+  })
+})

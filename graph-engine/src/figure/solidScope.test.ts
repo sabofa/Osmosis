@@ -158,7 +158,7 @@ describe('constructions in space, against hand-computed author coordinates', () 
 
   it('refuses a line parallel to the plane it is asked to meet', () => {
     const scope = walk(`${CUBE}\nX = intersect line A-B, plane D-C-G`)
-    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/A-B is parallel to the plane/)])
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^Line A-B is parallel to plane D-C-G, /)])
   })
 })
 
@@ -192,5 +192,55 @@ describe('the two kinds of name (S2)', () => {
     const scope = walk('@mode: figure\nP = (1, 2)\nQ = (3, 4)\nM = midpoint P-Q')
     expect(scope.errors).toEqual([])
     expect(scope.ownedStatements.size).toBe(0)
+  })
+})
+
+describe('source order decides a rebinding, even for hoisted literals', () => {
+  it('refuses a LATER literal that reuses a vertex name, and keeps all eight letters', () => {
+    // Literal points are bound before the walk (order-independent, as in
+    // 2D), so the literal on line 2 used to take "A" first — stripping the
+    // solid on line 1 of its letters and blaming it.
+    const scope = walk('@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH\nA = (0, 0, 0)')
+    expect(scope.errors.map((e) => e.message)).toEqual([
+      '"A" is already bound to a vertex of solid "S" on an earlier line — the later point "A" cannot rebind it',
+    ])
+    expect(scope.byStatement.get(0)?.points.map((p) => p.name)).toEqual('ABCDEFGH'.split(''))
+    expectAt(scope, 'A', -3, -4, -2.5)
+    expectAt(scope, 'G', 3, 4, 2.5)
+    // The refused literal draws nothing.
+    expect(scope.byStatement.get(1)).toBeUndefined()
+  })
+
+  it('still refuses the solid when the literal comes FIRST', () => {
+    const scope = walk('@mode: figure\nA = (0, 0, 0)\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH')
+    expect(scope.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^"A" is already bound to a point in space/)])
+    expectAt(scope, 'A', 0, 0, 0)
+  })
+
+  it('refuses a later literal that reuses a constructed name', () => {
+    const scope = walk(`${CUBE}\nM = midpoint A-G\nM = (5, 5, 5)`)
+    expect(scope.errors.map((e) => e.message)).toEqual([
+      '"M" is already bound to a point in space on an earlier line — the later point "M" cannot rebind it',
+    ])
+    expectAt(scope, 'M', 0.5, 0.5, 0.5)
+  })
+
+  it('refuses a later point in the plane that reuses a vertex name', () => {
+    const scope = walk('@mode: figure\nT = solid tetrahedron edge 5 vertices ABCD\nA = (1, 2)')
+    expect(scope.errors.map((e) => e.message)).toEqual([
+      '"A" is already bound to a vertex of solid "T" on an earlier line — the later point "A" cannot rebind it',
+    ])
+    expect(isSpaceName(scope, 'A')).toBe(true)
+    // Owned, so neither the 2D pass nor the renderer takes it up.
+    expect(scope.ownedStatements.has(1)).toBe(true)
+  })
+})
+
+describe('what a plane name is', () => {
+  it('names a line in the plane as a line when a construction mixes it with a space point', () => {
+    const scope = walk(`${CUBE}\nP = (1, 2)\nQ = (3, 4)\nm = line through P parallel to P-Q\nX = intersect line A-G, m`)
+    expect(scope.errors.map((e) => e.message)).toEqual([
+      'X = intersect A-G, m mixes a point in space (A) with a line in the plane (m)',
+    ])
   })
 })

@@ -139,11 +139,11 @@ export function footToPlane(p: Vec3, plane: Plane3): Vec3 {
 
 // Where the INFINITE line through a and b crosses the plane. A line parallel
 // to the plane either misses it or lies in it, and neither is one point.
-export function lineMeetsPlane(a: Vec3, b: Vec3, plane: Plane3, label = 'the line'): Vec3 {
+export function lineMeetsPlane(a: Vec3, b: Vec3, plane: Plane3, label = 'the line', planeLabel = 'the plane'): Vec3 {
   const d = direction(a, b, label)
   const along = dot3(d, plane.normal)
   if (Math.abs(along) <= GEOM_EPS * length3(d)) {
-    throw new Error(`${capitalise(label)} is parallel to the plane, so it meets it nowhere or lies in it`)
+    throw new Error(`${capitalise(label)} is parallel to ${planeLabel}, so it meets it nowhere or lies in it`)
   }
   const t = dot3(sub3(plane.point, a), plane.normal) / along
   return add3(a, scale3(d, t))
@@ -196,11 +196,11 @@ export function lineLineDistance(a: Vec3, b: Vec3, c: Vec3, d: Vec3): number {
 // Unlike the 2D measure, an arm of zero length throws: in space there is no
 // drawn arc to show that an angle is degenerate, so a silent zero would be a
 // number nobody can check.
-export function angle3(vertex: Vec3, from: Vec3, to: Vec3): number {
+export function angle3(vertex: Vec3, from: Vec3, to: Vec3, label = 'the angle'): number {
   const u = sub3(from, vertex)
   const v = sub3(to, vertex)
   if (negligible(length3(u), from, vertex) || negligible(length3(v), to, vertex)) {
-    throw new Error('An arm of the angle has zero length: its end and the vertex coincide')
+    throw new Error(`An arm of ${label} has zero length: its end and the vertex coincide`)
   }
   return Math.atan2(length3(cross3(u, v)), dot3(u, v))
 }

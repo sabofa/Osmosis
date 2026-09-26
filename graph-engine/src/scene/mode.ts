@@ -39,6 +39,17 @@ const PLOTTED: ReadonlySet<Statement['kind']> = new Set([
   'animatedPoint',
 ])
 
+// Whether a statement plots a function (see PLOTTED). The figure renderer
+// asks this to refuse a plot legibly in a solid figure rather than drop it.
+export function isPlotted(kind: Statement['kind']): boolean {
+  return PLOTTED.has(kind)
+}
+
+// Whether a statement exists only in a solid figure (see SOLID_FIGURE, S5).
+export function isSolidFigureStatement(kind: Statement['kind']): boolean {
+  return SOLID_FIGURE.has(kind)
+}
+
 // Statement kinds that draw *geometry* — shapes on paper, with no domain
 // behind them.
 const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
@@ -94,6 +105,11 @@ export function resolveMode(statements: Statement[], config: GraphConfig): Rende
   // without this ordering one "A = (0, 0, 0)" beside a prism would silently
   // send the whole spec to the space renderer, which has no solids to draw.
   // A spec with 3-coordinate points and no solid still infers space.
+  //
+  // It also comes before the PLOTTED check, deliberately: a solid beside
+  // "y = x^2" infers figure, and the figure renderer refuses the plot with
+  // an error naming it (a solid in the graph renderer would be dropped
+  // without a word, which is the worse of the two).
   if (statements.some((s) => SOLID_FIGURE.has(s.kind))) return 'figure'
 
   // Depth means a 3D scene, which the figure renderer has no answer for: a

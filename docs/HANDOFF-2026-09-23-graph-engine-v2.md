@@ -8,7 +8,7 @@ already been tried and failed, and which traps cost real time.
 ## Where things stand
 
 **Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. Working tree clean. **1083 tests passing**,
+`.claude/worktrees/graph-track-1`. Working tree clean. **1098 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-26, after geometry phase 6 (solid-figure construction
@@ -76,7 +76,7 @@ shading and boolean regions, and the competition-specific constructions
 | 3 | `3781d6b`..`8f0eb54` | Measures (`label: AB` prints what the engine solved), notation (overbars, `∠`, `⊥`), pan/zoom, the givens panel, figure+table panels |
 | 4 | `ff8580f`..`a98bdc7` | Circle vocabulary (chord, arc, sector, tangent at/from, secant, radius, diameter) and the givens **table** with sections |
 | 5 | `5f09b6d`..`4977327` | Solids: the `solid:` statement, dimension labels, arcs in the edge type, analytic silhouettes, cross-sections |
-| 6 | `2d4ecd4`..(this docs commit) | Solid figures get a construction core: the z-up author frame, points in space, a solid's vertices as real points, midpoint/divide/centroid/centres/foot/line-meets-plane in space, true-3D `label:`/`given:`, and `segment:` split visible/hidden against every solid (the glass rule) |
+| 6 | `2d4ecd4`..`8d4dd68` | Solid figures get a construction core: the z-up author frame, points in space, a solid's vertices as real points, midpoint/divide/centroid/centres/foot/line-meets-plane in space, true-3D `label:`/`given:`, and `segment:` split visible/hidden against every solid (the glass rule) |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -301,7 +301,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1083 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1098 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
@@ -513,6 +513,16 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    (latent — nothing emits the conic kinds); `x = f(y)` gets no feature points;
    tangencies are not detected by intersection finding (sign-change based), and
    **track 7's "show me where these cross" will inherit that silent miss**.
+9. **Phase 6: the default camera and prism lettering — decision pending with
+   the user.** The default isometric camera is degenerate for a cube: the
+   (+,+,+) corner and its opposite project to the same point, so A and G
+   coincide in the "Cube by points" example. It also flattens a regular
+   tetrahedron to a rhombus, so the D–F foot segment in "Foot of a
+   perpendicular" lies under edge A–D. Bundled with the prism vertex
+   lettering (phase 5's `labelOrder` runs ABCD clockwise seen from above, A
+   at the hidden corner; see "Phase 6 in detail"). Neither the camera nor the
+   lettering was changed in phase 6: every lettered solid's bytes depend on
+   both, so they wait for one ruling.
 
 ---
 

@@ -376,6 +376,38 @@ Q = (3, -7, -2)
 segment: P-Q       # behind the sphere: visible, hidden, visible`,
   },
   {
+    // The classic: the plane through the three neighbours of A cuts the
+    // space diagonal a third of the way along. Also a triangle centre in
+    // space, and the centroid of four points (the tetrahedron ACFH inside
+    // the box), which is the box's centre, on the diagonal.
+    label: 'Diagonal meets a plane',
+    spec: `@mode: figure
+S = solid prism 8 by 5 by 6 vertices ABCDEFGH
+segment: B-D
+segment: D-E
+segment: E-B
+X = intersect line A-G, plane B-D-E
+O = circumcenter BDE
+K = centroid ACFH
+segment: A-G       # dashed where the box hides it, which is all of it
+label: AX          # a third of AG`,
+  },
+  {
+    // Glass: the cone runs through the cylinder and neither hides the other,
+    // but both hide a line drawn behind them.
+    label: 'Cylinder and cone',
+    spec: `@mode: figure
+C = solid cylinder radius 3, height 4
+K = solid cone radius 2, height 16
+(-1.1, -7.4, -4.2) -- (-7.4, -1.1, -4.2)   # behind the cylinder
+P = (-2.1, -6.4, 1.8)
+Q = (-6.4, -2.1, 1.8)
+segment: P-Q       # behind the cone, near its apex
+M = (0, 0, -2)
+N = (0, 0, 2)
+segment: M-N plain # the axis, forced solid though the cylinder hides it`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,
