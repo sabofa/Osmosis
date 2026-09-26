@@ -127,6 +127,11 @@ export type SolidPrimitive =
   | { kind: 'cylinderOn'; from: string; to: string; radius: Expr }
   | { kind: 'coneOn'; apex: string; base: string; radius: Expr }
   | { kind: 'frustumOn'; from: string; fromRadius: Expr; to: string; toRadius: Expr }
+  // "tetrahedron ABCD with AB = ..., AC = ..., ..." (P4): four new vertex
+  // names and all six edges, each unordered pair exactly once (checked by
+  // the parser, which knows the names). `edges` is as written; the builder
+  // reads it by pair, so order and letter order do not matter.
+  | { kind: 'tetrahedronEdges'; vertices: [string, string, string, string]; edges: { from: string; to: string; length: Expr }[] }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)

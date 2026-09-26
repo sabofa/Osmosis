@@ -533,6 +533,44 @@ function parsePointList(text: string, form: string, role: string): string[] {
   return names
 }
 
+// P4 — "ABCD" and "AB = sqrt(41), CD = sqrt(41), AC = ..., ...": four
+// distinct single-letter vertices and six edges, each unordered pair of them
+// exactly once, in any order and either letter order. Checked HERE, where the
+// names are known, so a missing, repeated or foreign pair is a parse error
+// that names it — the same reason a triangle's sides are checked here.
+function parseTetrahedronEdges(namesText: string, edgesText: string): SolidPrimitive {
+  const vertices = [...namesText] as [string, string, string, string]
+  if (new Set(vertices).size !== 4) throw new Error(`A tetrahedron's four vertex names must be distinct, got "${namesText}"`)
+  const edges: { from: string; to: string; length: Expr }[] = []
+  const seen = new Map<string, string>()
+  for (const chunk of splitTopLevelComma(edgesText)) {
+    const eq = chunk.indexOf('=')
+    const pair = eq === -1 ? null : /^([a-zA-Z])\s*-?\s*([a-zA-Z])$/.exec(chunk.slice(0, eq).trim())
+    if (!pair) throw new Error(`Expected "<edge> = <length>", e.g. "AB = 5", got "${chunk.trim()}"`)
+    const [from, to] = [pair[1], pair[2]]
+    for (const letter of [from, to]) {
+      if (!vertices.includes(letter)) throw new Error(`${letter} is not one of the tetrahedron's vertices ${namesText} (in "${chunk.trim()}")`)
+    }
+    if (from === to) throw new Error(`"${from}${to}" is not an edge — an edge joins two different vertices`)
+    const key = [from, to].sort().join('')
+    const earlier = seen.get(key)
+    if (earlier) throw new Error(`The edge ${key} is given twice ("${earlier}" and "${from}${to}")`)
+    seen.set(key, `${from}${to}`)
+    edges.push({ from, to, length: parseExprString(chunk.slice(eq + 1)) })
+  }
+  const missing: string[] = []
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      const key = [vertices[i], vertices[j]].sort().join('')
+      if (!seen.has(key)) missing.push(`${vertices[i]}${vertices[j]}`)
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`A tetrahedron by its edges needs all six; ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing`)
+  }
+  return { kind: 'tetrahedronEdges', vertices, edges }
+}
+
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
 // Each form names its own numbers. "8 by 5 by 6" is bare because width,
@@ -648,6 +686,9 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'tetrahedron') {
+    // P4 — by its six edges: "tetrahedron ABCD with AB = ..., ...".
+    const byEdges = /^([a-zA-Z]{4})\s+with\s+(.+)$/i.exec(tail)
+    if (byEdges) return parseTetrahedronEdges(byEdges[1], byEdges[2])
     // P6 — on four named points: "tetrahedron A-B-C-D".
     if (/^[a-zA-Z]+(?:\s*-\s*[a-zA-Z]+){3}$/.test(tail)) {
       return { kind: 'tetrahedronOn', points: parsePointList(tail, 'tetrahedron A-B-C-D', 'tetrahedron') }

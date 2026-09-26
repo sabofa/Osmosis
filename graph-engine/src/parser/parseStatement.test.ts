@@ -949,3 +949,20 @@ describe('solids on named points (phase 7, P6)', () => {
     expect(() => parseStatement('solid: tetrahedron edge 5 vertices ABC')).toThrow(/vertices ABCD/)
   })
 })
+
+describe('the tetrahedron by its six edges (phase 7, P4)', () => {
+  it('parses four vertex names and six edges, as written', () => {
+    const s = parseStatement('T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = 9, BD = 9, AD = 7, CB = 7')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    const primitive = s.primitive
+    if (primitive.kind !== 'tetrahedronEdges') throw new Error('expected a tetrahedron by its edges')
+    expect(primitive.vertices).toEqual(['A', 'B', 'C', 'D'])
+    expect(primitive.edges.map((e) => `${e.from}${e.to}`)).toEqual(['AB', 'CD', 'AC', 'BD', 'AD', 'CB'])
+    expect(primitive.edges[0].length).toEqual({ kind: 'call', name: 'sqrt', args: [{ kind: 'num', value: 41 }] })
+  })
+
+  it('refuses a pair given twice in either letter order, and a missing one', () => {
+    expect(() => parseStatement('solid: tetrahedron ABCD with AB = 1, BA = 1, AD = 1, BC = 1, BD = 1, CD = 1')).toThrow(/AB is given twice/)
+    expect(() => parseStatement('solid: tetrahedron ABCD with AB = 1, AC = 1, AD = 1, BC = 1, BD = 1')).toThrow(/CD is missing/)
+  })
+})

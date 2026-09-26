@@ -22,6 +22,7 @@ import {
 } from './construct3d'
 import type { Vec3 } from './project3d'
 import { basePolygonNormal, hullOf } from './hull'
+import { tetrahedronFromEdges } from './tetrahedron'
 import { placementAlong } from './silhouette'
 import { buildSolid, type PointSolidShape, type SolidBody, type SolidSpec } from './solids'
 
@@ -124,7 +125,7 @@ type PointPrimitive = Extract<
   SolidPrimitive,
   { kind: 'hull' | 'tetrahedronOn' | 'pyramidOn' | 'prismOn' | 'sphereOn' | 'cylinderOn' | 'coneOn' | 'frustumOn' }
 >
-type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive>
+type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive | { kind: 'tetrahedronEdges' }>
 
 const POINT_PRIMITIVES: ReadonlySet<SolidPrimitive['kind']> = new Set([
   'hull',
@@ -538,6 +539,10 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         case 'solid': {
           ownedStatements.add(index)
           const primitive = statement.primitive
+          if (primitive.kind === 'tetrahedronEdges') {
+            edgeTetrahedron(index, statement.name, primitive, statement.vertices)
+            break
+          }
           const body = isPointPrimitive(primitive) ? buildOnPoints(primitive, statement.vertices) : buildSolid(solidSpecOf(primitive, value))
           if (statement.name) solids.set(statement.name, body)
           const entry: { solid: SolidBody; points: { name: string; at: Vec3; drawn: boolean }[] } = { solid: body, points: [] }
@@ -685,6 +690,43 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         return placed(frustumSpec(radius, value(primitive.toRadius), length3(axis)), midpoint3(from, to), axis)
       }
     }
+  }
+
+  // P4 — the tetrahedron from its six edges. Its four letters are NEW space
+  // points, bound here like a solid's named vertices (lettered, not dotted),
+  // and every one is checked before any is taken.
+  function edgeTetrahedron(
+    index: number,
+    name: string | null,
+    primitive: Extract<SolidPrimitive, { kind: 'tetrahedronEdges' }>,
+    vertices: string[]
+  ): void {
+    const [a, b, c, d] = primitive.vertices
+    // The parser has checked each unordered pair appears exactly once.
+    const length = (from: string, to: string): number => {
+      const edge = primitive.edges.find((e) => (e.from === from && e.to === to) || (e.from === to && e.to === from))
+      if (!edge) throw new Error(`The edge ${from}${to} is missing`)
+      return positiveValue(value, edge.length, `edge ${from}${to}`)
+    }
+    const at = tetrahedronFromEdges(
+      { AB: length(a, b), AC: length(a, c), AD: length(a, d), BC: length(b, c), BD: length(b, d), CD: length(c, d) },
+      primitive.vertices
+    )
+    const body = pointPolyhedron('tetrahedron', at, primitive.vertices)
+    if (name) solids.set(name, body)
+    const entry: { solid: SolidBody; points: { name: string; at: Vec3; drawn: boolean }[] } = { solid: body, points: [] }
+    byStatement.set(index, entry)
+    if (vertices.length > 0) {
+      throw new Error(
+        `${name ? `"${name}"` : 'This tetrahedron'} names its vertices ${primitive.vertices.join('')} already — drop "vertices ${vertices.join('')}"`
+      )
+    }
+    for (const letter of primitive.vertices) checkClaim(letter, index)
+    const what = name ? `a vertex of solid "${name}"` : 'a vertex of a tetrahedron'
+    primitive.vertices.forEach((letter, i) => {
+      bindSpace(letter, at[i], what)
+      entry.points.push({ name: letter, at: at[i], drawn: false })
+    })
   }
 
   function pointPolyhedron(shape: PointSolidShape, at: Vec3[], names: string[]): SolidBody {
