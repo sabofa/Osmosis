@@ -2680,3 +2680,82 @@ describe('planes as objects (phase 8)', () => {
     expect(resolveMode(parseSpec('A = (0, 0, 1)\nB = (1, 0, 1)\nC = (0, 1, 1)\np = plane A-B-C').statements, parseSpec('').config)).toBe('figure')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Phase 8, Task 2 — oblique sections of polyhedra, measured at true shape
+// ---------------------------------------------------------------------------
+
+describe('oblique sections of polyhedra (phase 8)', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const CUBE = [
+    '@mode: figure',
+    '@angle: degrees',
+    'A = (0, 0, 0)',
+    'B = (1, 0, 0)',
+    'C = (1, 1, 0)',
+    'D = (0, 1, 0)',
+    'E = (0, 0, 1)',
+    'F = (1, 0, 1)',
+    'G = (1, 1, 1)',
+    'H = (0, 1, 1)',
+    'K = solid hull A-B-C-D-E-F-G-H',
+    'O = midpoint A-G',
+  ].join('\n')
+
+  // sqrt(2)/2 = 0.70710678118654752..., to twelve places.
+  const HALF_ROOT_2 = '0.707106781187'
+
+  it('lifts the regular hexagon a plane square to the space diagonal cuts through the centre', () => {
+    const names = ['P', 'Q', 'R', 'S', 'T', 'U']
+    const lines = [`${CUBE}`, 'section: K by plane through O perpendicular to A-G vertices PQRSTU']
+    for (let i = 0; i < 6; i++) {
+      const [a, b, c] = [names[i], names[(i + 1) % 6], names[(i + 2) % 6]]
+      lines.push(`label: ${a}${b} = ${HALF_ROOT_2}`, `label: angle ${a}${b}${c} = 120`)
+    }
+    expect(result(lines.join('\n')).errors).toEqual([])
+    // The opposite corners are sqrt 2 apart — and a wrong side is refused, so
+    // the passes above cannot be a checker that accepts anything.
+    const base = `${CUBE}\nsection: K by plane through O perpendicular to A-G vertices PQRSTU`
+    expect(result(`${base}\nlabel: PS = 1.414213562373`).errors).toEqual([])
+    expect(result(`${base}\nlabel: PQ = 0.8`).errors).toHaveLength(1)
+    expect(result(`${base}\nlabel: angle PQR = 90`).errors).toHaveLength(1)
+  })
+
+  it('lifts the square a plane through three edge midpoints cuts from a regular tetrahedron', () => {
+    // Edge 6. The midpoints of AB, AC, DC and DB form a square of side 3 (half
+    // BC, half AD, and AD is perpendicular to BC), diagonal 3 sqrt 2.
+    const spec = [
+      '@mode: figure',
+      '@angle: degrees',
+      'T = solid tetrahedron edge 6 vertices ABCD',
+      'M = midpoint A-B',
+      'N = midpoint A-C',
+      'L = midpoint B-D',
+      'section: T by plane M-N-L vertices PQRS',
+      'label: PQ = 3',
+      'label: QR = 3',
+      'label: RS = 3',
+      'label: SP = 3',
+      'label: PR = 4.242640687119',
+      'label: QS = 4.242640687119',
+      'label: angle PQR = 90',
+    ].join('\n')
+    expect(result(spec).errors).toEqual([])
+    expect(result(spec.replace('label: PQ = 3', 'label: PQ = 3.1')).errors).toHaveLength(1)
+  })
+
+  it('lifts the equilateral triangle plane B-D-E cuts from the cube, side sqrt 2', () => {
+    const spec = `${CUBE}\nsection: K by plane B-D-E vertices PQR\nlabel: PQ = 1.414213562373\nlabel: QR = 1.414213562373\nlabel: RP = 1.414213562373`
+    expect(result(spec).errors).toEqual([])
+  })
+
+  it('refuses a plane that only touches the solid, in the author’s words', () => {
+    const errors = result(`${CUBE}\nsection: K by plane through G perpendicular to A-G`).errors.map((e) => e.message)
+    expect(errors).toEqual(['The plane through G perpendicular to A-G meets "K" only at the vertex (1, 1, 1) — it does not cut through it'])
+  })
+})

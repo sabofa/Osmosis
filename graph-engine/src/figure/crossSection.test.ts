@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { inPlane, liftOffset, sectionOf, trueShape, type SectionPlane } from './crossSection'
 import { placementAlong } from './silhouette'
 import { buildSolid, type SolidSpec } from './solids'
+import { authorToWorld, worldToAuthor } from './authorFrame'
+import { length3, planeThrough, scale3, sub3 } from './construct3d'
+import { hullOf } from './hull'
+import { canonicalPlane } from './plane'
+import type { Vec3 } from './project3d'
 
 // Hand-computed vertices throughout. A section that returns four points is
 // still wrong if they are the wrong four, and a count would not notice.
@@ -253,5 +258,155 @@ describe('where a lifted section is placed', () => {
   it('levels the centres rather than the tops', () => {
     const offset = liftOffset({ minX: 0, minY: 0, maxX: 4, maxY: 10 }, { minX: 0, minY: 0, maxX: 2, maxY: 2 })
     expect(offset.y).toBeCloseTo(4, 12)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8, Task 2 — oblique sections of polyhedra (Q3)
+// ---------------------------------------------------------------------------
+
+describe('oblique sections of a polyhedron (Q3)', () => {
+  // The unit cube by points, A-D the floor counter-clockwise from the origin
+  // and E-H above them, in the AUTHOR frame.
+  const NAMES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+  const AUTHOR: Vec3[] = [
+    { x: 0, y: 0, z: 0 },
+    { x: 1, y: 0, z: 0 },
+    { x: 1, y: 1, z: 0 },
+    { x: 0, y: 1, z: 0 },
+    { x: 0, y: 0, z: 1 },
+    { x: 1, y: 0, z: 1 },
+    { x: 1, y: 1, z: 1 },
+    { x: 0, y: 1, z: 1 },
+  ]
+  const at = (name: string) => authorToWorld(AUTHOR[NAMES.indexOf(name)])
+  const cube = buildSolid({ kind: 'hull', shape: 'hull', polyhedron: hullOf(AUTHOR.map(authorToWorld), NAMES) })
+
+  // The plane through the centre O perpendicular to the diagonal A-G:
+  // x + y + z = 3/2.
+  const O = authorToWorld({ x: 0.5, y: 0.5, z: 0.5 })
+  const diagonal = sub3(at('G'), at('A'))
+  const HEXAGON = canonicalPlane({ point: O, normal: scale3(diagonal, 1 / length3(diagonal)) }, 'through O perpendicular to A-G')
+
+  function authorPoints(s: ReturnType<typeof sectionOf>): Vec3[] {
+    if (s.kind !== 'polygon') throw new Error('expected a polygon')
+    return s.points.map(worldToAuthor)
+  }
+
+  it('cuts the cube through its centre, square to A-G, in the six edge midpoints', () => {
+    // By hand: the edges not touching A or G, each at its midpoint, where
+    // the one free coordinate is 1/2.
+    const points = authorPoints(sectionOf(cube, HEXAGON, 'C'))
+    expect(points).toHaveLength(6)
+    const key = (p: Vec3) => [p.x, p.y, p.z].map((c) => Math.round(c * 1e9) / 1e9).join(',')
+    expect(points.map(key).sort()).toEqual(['0,0.5,1', '0,1,0.5', '0.5,0,1', '0.5,1,0', '1,0,0.5', '1,0.5,0'].sort())
+  })
+
+  it('winds the hexagon by angle about its centroid, starting from the vertex at 9 o’clock', () => {
+    // Q1's frame for x + y + z = 3/2: v = (-1, -1, 2)/sqrt 6 (author Z in the
+    // plane), u = v x n = (-1, 1, 0)/sqrt 2. The midpoint of BF, (1, 0, 1/2),
+    // sits at u = -sqrt(2)/2, v = 0 from the centre: straight left, angle pi,
+    // which the rule takes as -pi — the FIRST vertex, whatever side of zero
+    // the rounding puts its v. Then counter-clockwise: (1, 1/2, 0) at -120
+    // degrees, (1/2, 1, 0) at -60, (0, 1, 1/2) at 0, (0, 1/2, 1) at 60,
+    // (1/2, 0, 1) at 120.
+    const points = authorPoints(sectionOf(cube, HEXAGON, 'C'))
+    const expected = [
+      { x: 1, y: 0, z: 0.5 },
+      { x: 1, y: 0.5, z: 0 },
+      { x: 0.5, y: 1, z: 0 },
+      { x: 0, y: 1, z: 0.5 },
+      { x: 0, y: 0.5, z: 1 },
+      { x: 0.5, y: 0, z: 1 },
+    ]
+    points.forEach((p, i) => {
+      expect(p.x).toBeCloseTo(expected[i].x, 12)
+      expect(p.y).toBeCloseTo(expected[i].y, 12)
+      expect(p.z).toBeCloseTo(expected[i].z, 12)
+    })
+    // Lifted, P is the leftmost vertex, level with the centre.
+    const shape = trueShape(sectionOf(cube, HEXAGON, 'C'), HEXAGON)
+    if (shape.kind !== 'polygon') throw new Error('expected a polygon')
+    const [p] = shape.vertices
+    const centre = { x: shape.vertices.reduce((s, q) => s + q.x, 0) / 6, y: shape.vertices.reduce((s, q) => s + q.y, 0) / 6 }
+    expect(p.x - centre.x).toBeCloseTo(-Math.SQRT1_2, 12)
+    expect(p.y - centre.y).toBeCloseTo(0, 12)
+  })
+
+  it('returns the face itself when the plane contains one (an oblique face of a tetrahedron)', () => {
+    const tetra = buildSolid({ kind: 'tetrahedron', edge: 6 })
+    const v = tetra.polyhedron!.vertices
+    // A face of the regular tetrahedron: base vertex 0, base vertex 1, apex.
+    const plane = canonicalPlane(planeThrough(v[0], v[1], v[3]), 'A-B-D')
+    expect(plane.kind).toBe('general')
+    const s = sectionOf(tetra, plane, 'T')
+    if (s.kind !== 'polygon') throw new Error('expected a polygon')
+    expect(s.points).toHaveLength(3)
+    for (const corner of [v[0], v[1], v[3]]) {
+      expect(s.points.some((p) => length3(sub3(p, corner)) < 1e-12)).toBe(true)
+    }
+  })
+
+  it('refuses a plane that only touches a vertex', () => {
+    // x + y + z = 3 meets the cube only at G = (1, 1, 1).
+    const touch = canonicalPlane({ point: at('G'), normal: scale3(diagonal, 1 / length3(diagonal)) }, 'through G perpendicular to A-G')
+    expect(() => sectionOf(cube, touch, 'C')).toThrow(
+      'The plane through G perpendicular to A-G meets "C" only at the vertex (1, 1, 1) — it does not cut through it'
+    )
+  })
+
+  it('refuses a plane that only touches an edge', () => {
+    // x + z = 2 meets the cube only along F-G, from (1, 0, 1) to (1, 1, 1).
+    const n = authorToWorld({ x: Math.SQRT1_2, y: 0, z: Math.SQRT1_2 })
+    const touch = canonicalPlane({ point: at('F'), normal: n }, 'x + z = 2')
+    expect(() => sectionOf(cube, touch, 'C')).toThrow(
+      'The plane x + z = 2 meets "C" only along the edge (1, 0, 1)-(1, 1, 1) — it does not cut through it'
+    )
+  })
+
+  it('refuses an axis plane that only touches the apex, too', () => {
+    // A pyramid 9 tall: the apex is at internal y = 4.5, author z = 4.5.
+    expect(() => section({ kind: 'pyramid', base: 6, height: 9 }, { kind: 'axis', axis: 'y', at: 4.5 })).toThrow(
+      'The plane z = 4.5 meets "S" only at the vertex (0, 0, 4.5) — it does not cut through it'
+    )
+  })
+})
+
+describe('the AIME square pyramid (Q3)', () => {
+  it('cuts the pyramid of eight edges 4, through the midpoints of AE, BC and CD, in a pentagon on its edges', () => {
+    // AIME 2007 I #13: all eight edges 4, so the height is 4/sqrt 2 = 2 sqrt 2.
+    const pyramid = buildSolid({ kind: 'pyramid', base: 4, height: 2 * Math.SQRT2 })
+    const v = pyramid.polyhedron!.vertices
+    const [A, B, C, D, E] = pyramid.labelOrder.map((i) => v[i])
+    const mid = (p: Vec3, q: Vec3): Vec3 => scale3({ x: p.x + q.x, y: p.y + q.y, z: p.z + q.z }, 0.5)
+    const plane = canonicalPlane(planeThrough(mid(A, E), mid(B, C), mid(C, D)), 'M-N-K')
+    expect(plane.kind).toBe('general')
+    const s = sectionOf(pyramid, plane, 'P')
+    if (s.kind !== 'polygon') throw new Error('expected a polygon')
+    expect(s.points).toHaveLength(5)
+    // Every vertex lies on an edge of the pyramid, within its two ends.
+    const edges: [Vec3, Vec3][] = [
+      [A, B], [B, C], [C, D], [D, A],
+      [A, E], [B, E], [C, E], [D, E],
+    ]
+    for (const p of s.points) {
+      const onEdge = edges.some(([a, b]) => {
+        const d = sub3(b, a)
+        const t = (sub3(p, a).x * d.x + sub3(p, a).y * d.y + sub3(p, a).z * d.z) / (length3(d) * length3(d))
+        const foot = { x: a.x + t * d.x, y: a.y + t * d.y, z: a.z + t * d.z }
+        return t >= -1e-12 && t <= 1 + 1e-12 && length3(sub3(p, foot)) < 1e-9
+      })
+      expect(onEdge).toBe(true)
+    }
+    // And its area is the AIME answer, sqrt 80, by the shoelace formula on the
+    // lifted true shape.
+    const shape = trueShape(s, plane)
+    if (shape.kind !== 'polygon') throw new Error('expected a polygon')
+    let twice = 0
+    shape.vertices.forEach((p, i) => {
+      const q = shape.vertices[(i + 1) % shape.vertices.length]
+      twice += p.x * q.y - q.x * p.y
+    })
+    expect(Math.abs(twice) / 2).toBeCloseTo(Math.sqrt(80), 10)
   })
 })

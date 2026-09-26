@@ -3,7 +3,9 @@ import type { Vec2 } from '../scene/types'
 import type { Solid3D, Vec3 } from './project3d'
 import { dot3, scale3, sub3 } from './construct3d'
 import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
-import { describeAuthorPlane } from './authorFrame'
+import { describeAuthorPlane, worldToAuthor } from './authorFrame'
+import { signedDistance } from './plane'
+import { fmt } from './svg'
 import { isIdentityPlacement, toWorld, type Placement } from './silhouette'
 
 // Plane ∩ solid.
@@ -83,10 +85,6 @@ export function inPlane(plane: SectionPlane, p: Vec3): Vec2 {
   }
 }
 
-function coordinate(plane: Extract<SectionPlane, { kind: 'axis' }>, p: Vec3): number {
-  return plane.axis === 'x' ? p.x : plane.axis === 'y' ? p.y : p.z
-}
-
 // The two radius vectors of a circle lying in the plane, for a circle of the
 // given radius. Their order matches `inPlane`'s, so a circle's own angle and
 // its true-shape angle agree.
@@ -135,19 +133,27 @@ function edgesOf(solid: Solid3D): [number, number][] {
 
 // Where the plane crosses each edge, wound into a polygon.
 //
+// Q3 (phase 8) — which side of the plane a vertex is on is its SIGNED
+// DISTANCE, `normal . p - normal . point` (plane.ts), so the walk takes any
+// plane; for the axis form that is "coordinate - at", exactly the arithmetic
+// phase 5 did. A plane containing a whole face returns that face (its
+// corners are the on-plane vertices, and nothing crosses). A plane that only
+// TOUCHES the solid — every vertex on one side, and only a vertex or an edge
+// on the plane — is refused rather than drawn as a degenerate polygon.
+//
 // The solid is convex — not by a runtime guard (one was planned and
 // deliberately not built: every solid reachable from the DSL comes from
 // SOLID_PRIMITIVES, so a guard would be a branch no input can reach) but by
 // the convexity invariant `solids.test.ts` pins for every primitive — so the
 // section is a convex polygon and sorting the crossings by angle about their
 // own centroid is both correct and the deterministic winding a drawing needs.
-function polyhedronSection(solid: Solid3D, plane: Extract<SectionPlane, { kind: 'axis' }>, name: string): Section {
+function polyhedronSection(solid: Solid3D, plane: SectionPlane, name: string): Section {
   const points: Vec3[] = []
   for (const [i, j] of edgesOf(solid)) {
     const a = solid.vertices[i]
     const b = solid.vertices[j]
-    const da = coordinate(plane, a) - plane.at
-    const db = coordinate(plane, b) - plane.at
+    const da = signedDistance(plane, a)
+    const db = signedDistance(plane, b)
     // An endpoint ON the plane counts once, through whichever edge finds it;
     // the dedupe below removes the repeats.
     if (Math.abs(da) <= GEOM_EPS) points.push(a)
@@ -165,14 +171,41 @@ function polyhedronSection(solid: Solid3D, plane: Extract<SectionPlane, { kind: 
     }
     unique.push(p)
   }
+  if (unique.length === 1) throw touches(plane, name, `at the vertex ${authorText(unique[0])}`)
+  if (unique.length === 2) throw touches(plane, name, `along the edge ${authorText(unique[0])}-${authorText(unique[1])}`)
   if (unique.length < 3) throw missesSolid(plane, name)
 
   const flat = unique.map((p) => inPlane(plane, p))
   const centre = flat.reduce((acc, p) => ({ x: acc.x + p.x / flat.length, y: acc.y + p.y / flat.length }), { x: 0, y: 0 })
   const order = flat
-    .map((p, index) => ({ index, angle: Math.atan2(p.y - centre.y, p.x - centre.x), p }))
+    .map((p, index) => ({ index, angle: windingAngle(plane, p.y - centre.y, p.x - centre.x), p }))
     .sort((a, b) => a.angle - b.angle || a.p.x - b.p.x || a.p.y - b.p.y)
   return { kind: 'polygon', points: order.map((entry) => unique[entry.index]) }
+}
+
+// Q1's winding: by angle about the centroid in the plane's own frame,
+// counter-clockwise, from atan2's cut at 9 o'clock. For a GENERAL plane a
+// vertex exactly at 9 o'clock (angle pi) is taken as -pi, so it is always
+// the FIRST vertex and never the last by the sign of a rounding error in its
+// v — the regular hexagon a cube's central cut makes puts a vertex exactly
+// there. The axis form keeps phase 5's bare atan2, and its bytes.
+function windingAngle(plane: SectionPlane, dy: number, dx: number): number {
+  const angle = Math.atan2(dy, dx)
+  if (plane.kind === 'general' && angle > Math.PI - GEOM_EPS) return angle - 2 * Math.PI
+  return angle
+}
+
+// A plane that meets the solid in a vertex or an edge and nothing more.
+// Every vertex is on one side of it (or on it), so it touches the solid
+// without cutting through: there is no section to draw.
+function touches(plane: SectionPlane, name: string, where: string): Error {
+  return new Error(`The plane ${describeAuthorPlane(plane)} meets "${name}" only ${where} — it does not cut through it`)
+}
+
+// A point in the author's frame, for a message.
+function authorText(p: Vec3): string {
+  const a = worldToAuthor(p)
+  return `(${fmt(a.x)}, ${fmt(a.y)}, ${fmt(a.z)})`
 }
 
 function missesSolid(plane: SectionPlane, name: string): Error {
@@ -184,8 +217,8 @@ function missesSolid(plane: SectionPlane, name: string): Error {
 // ---------------------------------------------------------------------------
 
 export function sectionOf(body: SolidBody, plane: SectionPlane, name: string): Section {
-  if (plane.kind === 'general') throw new Error(`The plane ${describeAuthorPlane(plane)} is oblique, and oblique sections are not drawn yet`)
   if (body.polyhedron) return polyhedronSection(body.polyhedron, plane, name)
+  if (plane.kind === 'general') throw new Error(`The plane ${describeAuthorPlane(plane)} is oblique, and oblique sections of a round solid are not drawn yet`)
   if (isIdentityPlacement(body.placement)) return curvedSection(body.spec, plane, name)
   return placedSection(body, plane, name)
 }
