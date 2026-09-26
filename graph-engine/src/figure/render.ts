@@ -45,6 +45,7 @@ import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, t
 import { authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
 import { ellipseFromConjugates, projectCircle, type ProjectedCircle } from './silhouette'
+import { sectionOutline, type OutlinePiece } from './sectionVisibility'
 import {
   fmt,
   svgArc,
@@ -157,6 +158,10 @@ type FigureItem =
         // Q5 (phase 8) — a region bounded by chords and elliptical arcs, as
         // the drawn-edge union a solid's outline uses.
         | { kind: 'region'; edges: ProjectedEdge[] }
+      // Q6 (phase 8) — the outline, stroked apart from the fill: each piece
+      // visible or hidden by where it lies on the solid, and drawn as a
+      // solid's edge is (hidden pieces dashed, in the auxiliary layer).
+      edges: ProjectedEdge[]
       color: string | null
     }
   // Q5 (phase 8) — a LIFTED section that is a region: chords and elliptical
@@ -832,6 +837,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
                         kind: 'ellipse',
                         circle: projectCircle(camera, section.center, ...planeRadii(plane, section.radius)),
                       },
+              edges: projectedOutline(sectionOutline(body, section, plane, camera), camera),
               color: statement.color,
             })
             break
@@ -1162,6 +1168,12 @@ function liftedRegion(boundary: readonly TrueShapePiece[], move: (p: Vec2) => Ve
     const circle = ellipseFromConjugates(move(piece.center), piece.u, piece.v)
     return splitTurn(piece.from, piece.to).map(([from, to]) => arcEdge(circle, from, to, `piece-${i}`))
   })
+}
+
+// Q6 — a cut's outline through the camera, each piece keeping whether the
+// solid hides it.
+function projectedOutline(pieces: readonly OutlinePiece[], camera: Camera): ProjectedEdge[] {
+  return pieces.flatMap(({ piece, hidden }, i) => projectedRegion([piece], camera).map((edge) => ({ ...edge, hidden, object: `outline-${i}` })))
 }
 
 // A region in space, through the camera: an arc is a circle's image under an
@@ -1716,12 +1728,24 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       break
     case 'sectionFace': {
       const stroke = strokeColor(item.color, palette.axis, palette)
+      // The fill is unstroked: its outline is drawn below, piece by piece,
+      // visible or hidden (Q6).
       const fill: SvgAttrs = {
         fill: theme.region,
         'fill-opacity': REGION_OPACITY,
-        stroke,
-        'stroke-width': STROKE_PRIMARY,
         ...identity(item.id),
+      }
+      for (const edge of item.edges) {
+        layers[edge.hidden ? 'auxiliary' : 'primary'].push(
+          drawEdge(edge, projection.toView, projection.scale, {
+            stroke,
+            'stroke-width': edge.hidden ? STROKE_AUXILIARY : STROKE_PRIMARY,
+            'stroke-linecap': 'round',
+            'stroke-dasharray': edge.hidden ? AUXILIARY_DASH : null,
+            opacity: edge.hidden ? AUXILIARY_OPACITY : null,
+            ...identity(item.id),
+          })
+        )
       }
       // E1 — a fill is a backdrop, so the shaded face goes in the regions
       // layer, behind every edge of the solid it cuts. A cut drawn over the

@@ -1880,7 +1880,26 @@ describe('cross-sections', () => {
     // hide the thing it is a section OF.
     expect(svg.indexOf('data-layer="regions"')).toBeLessThan(svg.indexOf('data-layer="primary"'))
     // The solid is still all there: twelve edges, none of them swallowed.
-    expect(countTags(layer(svg, 'primary'), 'line') + countTags(layer(svg, 'auxiliary'), 'line')).toBe(12)
+    expect([...svg.matchAll(/data-object="edge-/g)]).toHaveLength(12)
+  })
+
+  it('dashes the part of a cut\u2019s outline the solid hides (Q6, the sanctioned change)', () => {
+    // Phase 5 stroked the whole outline solid with the fill. Since phase 8
+    // the fill is unstroked and the four sides are drawn apart: under the
+    // standard view the +X and +Y faces face the viewer, so the two sides on
+    // the X = -3 and Y = -4 faces are dashed (sectionVisibility.test.ts
+    // names them by author coordinates), and they meet at the back corner.
+    const svg = render(`${PRISM}\ncut: S by plane z = 1`)
+    expect(layer(svg, 'regions')).not.toContain('stroke=')
+    const sides = (name: string) => [...layer(svg, name).matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"[^>]*data-statement="1"[^>]*>/g)]
+    const dashed = sides('auxiliary')
+    expect(dashed).toHaveLength(2)
+    for (const side of dashed) expect(side[0]).toContain('stroke-dasharray="9 7"')
+    expect(sides('primary')).toHaveLength(2)
+    for (const side of sides('primary')) expect(side[0]).not.toContain('stroke-dasharray')
+    const ends = (m: RegExpMatchArray) => [`${m[1]},${m[2]}`, `${m[3]},${m[4]}`]
+    const shared = ends(dashed[0]).filter((p) => ends(dashed[1]).includes(p))
+    expect(shared).toHaveLength(1)
   })
 
   it('shades a cut through a cylinder as one closed ellipse, not two arcs', () => {
@@ -1889,6 +1908,12 @@ describe('cross-sections', () => {
     // Two arc paths would each close through their own chord and paint a seam
     // down the middle of the fill.
     expect(countTags(layer(svg, 'regions'), 'path')).toBe(0)
+    // Q6 — its ring is drawn apart from the fill: a visible front arc and a
+    // dashed back arc.
+    const ring = (name: string) => [...layer(svg, name).matchAll(/<path [^>]*data-statement="1"[^>]*>/g)]
+    expect(ring('primary')).toHaveLength(1)
+    expect(ring('auxiliary')).toHaveLength(1)
+    expect(ring('auxiliary')[0][0]).toContain('stroke-dasharray="9 7"')
   })
 
   it('lifts a section out as an ORDINARY polygon, beside the solid', () => {
@@ -2033,9 +2058,14 @@ describe('the z-up author frame (S1)', () => {
   // from the internal frame's "plane y = c" into the author's "plane z = c".
   // The digests were taken from the phase 5 renders of the ORIGINAL inputs,
   // before the frame existed; each rewrite must draw exactly those bytes.
+  //
+  // Phase 8 (Q6) changed the two CUT digests, and only those: a cut's outline
+  // is now drawn apart from its fill, dashed where the solid hides it. The
+  // new digests are pinned below after "dashes the cut's hidden outline under
+  // isometric too" asserts that dashing; every lifted section keeps phase 5's.
   const REWRITTEN: [string, string][] = [
-    [`${PRISM}\ncut: S by plane z = 1`, '2538:27fe13b38d503'],
-    [`${CYLINDER}\ncut: C by plane z = 1`, '1645:d8b3f7da5621d'],
+    [`${PRISM}\ncut: S by plane z = 1`, '3174:e02c28e3e04fc'],
+    [`${CYLINDER}\ncut: C by plane z = 1`, '1998:1353fde5010efa'],
     [`${PRISM}\nsection: S by plane z = 1`, '2965:1083d01e74ca92'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS`, '4203:1d739cd9fcdd07'],
     [`${PRISM}\nsection: S by plane z = 1 vertices PQRS\nlabel: PQ = 8\nlabel: QR = 6`, '4603:1bd3a01c570bd9'],
@@ -2053,11 +2083,24 @@ describe('the z-up author frame (S1)', () => {
     })
   }
 
-  it('draws the rewritten cross-section examples exactly as phase 5 did', () => {
+  it('dashes the cut\u2019s hidden outline under isometric too (the Q6 change the cut digests pin)', () => {
+    // Isometric looks from author (+, +, +): the same two back faces turn
+    // away, so the same two sides are dashed; the cylinder's back arc is.
+    const box = render(`${PRISM}\ncut: S by plane z = 1`)
+    expect([...layer(box, 'auxiliary').matchAll(/<line [^>]*stroke-dasharray="9 7"[^>]*data-statement="1"/g)]).toHaveLength(2)
+    expect([...layer(box, 'primary').matchAll(/<line [^>]*data-statement="1"/g)]).toHaveLength(2)
+    const cylinder = render(`${CYLINDER}\ncut: C by plane z = 1`)
+    expect([...layer(cylinder, 'auxiliary').matchAll(/<path [^>]*stroke-dasharray="9 7"[^>]*data-statement="1"/g)]).toHaveLength(1)
+    expect([...layer(cylinder, 'primary').matchAll(/<path [^>]*data-statement="1"/g)]).toHaveLength(1)
+  })
+
+  it('draws the rewritten cross-section examples exactly as phase 5 did — the cut with phase 8\u2019s dashed outline', () => {
     const cut = EXAMPLES.find((e) => e.label === 'Cross-section (cut)')
     const lifted = EXAMPLES.find((e) => e.label === 'Cross-section (lifted)')
     const isometric = (spec: string) => spec.replace('@mode: figure', '@mode: figure\n@view: isometric')
-    expect(digest(render(isometric(cut!.spec)))).toBe('2538:27fe13b38d503')
+    // The cut example is the prism cut above, whose Q6 dashing is asserted
+    // there; the lifted example is phase 5's bytes, untouched.
+    expect(digest(render(isometric(cut!.spec)))).toBe('3174:e02c28e3e04fc')
     expect(digest(render(isometric(lifted!.spec)))).toBe('4603:1bd3a01c570bd9')
   })
 
@@ -2903,5 +2946,34 @@ describe('round solids cut by any plane, drawn (phase 8)', () => {
     const s = sectionOf(scope.solids.get('S')!, resolved.plane, 'S')
     if (s.kind !== 'circle') throw new Error('expected a circle')
     expect(s.radius).toBeCloseTo(65 / 8, 10)
+  })
+})
+
+describe('in-place outlines show what the solid hides (phase 8, Q6)', () => {
+  const dashed = (svg: string, statement: number, tag: string) =>
+    [...layer(svg, 'auxiliary').matchAll(new RegExp(`<${tag} [^>]*stroke-dasharray="9 7"[^>]*data-statement="${statement}"`, 'g'))].length
+  const solid = (svg: string, statement: number, tag: string) =>
+    [...layer(svg, 'primary').matchAll(new RegExp(`<${tag} [^>]*data-statement="${statement}"`, 'g'))].length
+
+  it('draws the cube’s central hexagon with its three hidden sides dashed', () => {
+    // The sides on the -X, -Y and -Z faces (sectionVisibility.test.ts).
+    const svg = render(
+      '@mode: figure\nA = (0, 0, 0)\nB = (1, 0, 0)\nC = (1, 1, 0)\nD = (0, 1, 0)\nE = (0, 0, 1)\nF = (1, 0, 1)\nG = (1, 1, 1)\nH = (0, 1, 1)\nK = solid hull A-B-C-D-E-F-G-H\nO = midpoint A-G\ncut: K by plane through O perpendicular to A-G'
+    )
+    expect(dashed(svg, 10, 'line')).toBe(3)
+    expect(solid(svg, 10, 'line')).toBe(3)
+  })
+
+  it('dashes the log wedge’s base chord and the back of its arc', () => {
+    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 10\ncut: C by plane x - z = 5')
+    expect(dashed(svg, 1, 'line')).toBe(1)
+    expect(solid(svg, 1, 'line')).toBe(0)
+    expect(dashed(svg, 1, 'path')).toBe(1)
+    expect(solid(svg, 1, 'path')).toBe(1)
+  })
+
+  it('leaves every lifted section alone: no dashes', () => {
+    const svg = render('@mode: figure\nC = solid cylinder radius 3, height 10\nsection: C by plane x - z = 5')
+    expect(dashed(svg, 1, 'path') + dashed(svg, 1, 'line')).toBe(0)
   })
 })
