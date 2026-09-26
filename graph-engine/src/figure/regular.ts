@@ -1,4 +1,4 @@
-import { authorToWorld } from './authorFrame'
+import { authorToWorld, worldToAuthor } from './authorFrame'
 import { dot3, length3 } from './construct3d'
 import { hullOf } from './hull'
 import { DEFAULT_CAMERA, faceNormal, type Solid3D, type Vec3 } from './project3d'
@@ -171,16 +171,36 @@ function build(shape: RegularShape, rotation: number): Solid3D {
 // The rule's objective for one rotation: the least of every face's margin
 // from edge-on and every base corner's azimuthal distance from the camera's
 // vertical plane, in degrees.
+//
+// Turning the solid about the vertical turns its face normals with it and
+// changes nothing else, so the faces are found ONCE (at rotation 0) and
+// their unit normals, in the author frame, are turned for each candidate —
+// rather than building a hull per candidate, which for n = 12 is thirty
+// hulls of 24 points.
 export function placementMargin(shape: RegularShape, rotation: number): number {
-  const solid = build(shape, rotation)
-  const d = DEFAULT_CAMERA.direction
+  return marginAt(unitNormals(shape), baseCount(shape), rotation)
+}
+
+function unitNormals(shape: RegularShape): Vec3[] {
+  const solid = build(shape, 0)
+  return solid.faces.map((_, f) => {
+    const n = worldToAuthor(faceNormal(solid, f))
+    const size = length3(n)
+    return { x: n.x / size, y: n.y / size, z: n.z / size }
+  })
+}
+
+function marginAt(normals: Vec3[], corners: number, rotation: number): number {
+  const d = worldToAuthor(DEFAULT_CAMERA.direction)
+  const cos = Math.cos(rotation * DEG)
+  const sin = Math.sin(rotation * DEG)
   let least = Infinity
-  for (let f = 0; f < solid.faces.length; f++) {
-    const n = faceNormal(solid, f)
-    least = Math.min(least, Math.asin(Math.min(1, Math.abs(dot3(n, d)) / length3(n))) / DEG)
+  for (const n of normals) {
+    const turned = { x: n.x * cos - n.y * sin, y: n.x * sin + n.y * cos, z: n.z }
+    least = Math.min(least, Math.asin(Math.min(1, Math.abs(dot3(turned, d)))) / DEG)
   }
-  for (const azimuth of baseAzimuths(baseCount(shape), rotation)) {
-    const m = ((((azimuth - CAMERA_AZIMUTH) % 180) + 180) % 180)
+  for (const azimuth of baseAzimuths(corners, rotation)) {
+    const m = (((azimuth - CAMERA_AZIMUTH) % 180) + 180) % 180
     least = Math.min(least, Math.min(m, 180 - m))
   }
   return least
@@ -189,11 +209,13 @@ export function placementMargin(shape: RegularShape, rotation: number): number {
 // P5's rotation: integer degrees in [0, 360/n), the best margin, ties to the
 // smallest.
 export function regularRotation(shape: RegularShape): number {
-  const period = 360 / baseCount(shape)
+  const corners = baseCount(shape)
+  const normals = unitNormals(shape)
+  const period = 360 / corners
   let best = 0
   let bestMargin = -Infinity
   for (let rotation = 0; rotation < period; rotation++) {
-    const margin = placementMargin(shape, rotation)
+    const margin = marginAt(normals, corners, rotation)
     if (margin > bestMargin + 1e-9) {
       best = rotation
       bestMargin = margin
