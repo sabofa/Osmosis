@@ -20,6 +20,7 @@ import {
   type Plane3,
 } from './construct3d'
 import type { Vec3 } from './project3d'
+import { hullOf } from './hull'
 import { buildSolid, type SolidBody, type SolidSpec } from './solids'
 
 // Names in space: the solid-figure walk (S3).
@@ -84,7 +85,16 @@ export function isSpaceName(scope: SolidFigureScope, name: string): boolean {
 // Every dimension must be a positive number. A zero or negative one is not a
 // degenerate drawing to be attempted — it is a solid that does not exist, and
 // the convex hidden-edge rule would classify its faces at random.
-export function solidSpecOf(primitive: SolidPrimitive, value: (e: Expr) => number): SolidSpec {
+// A primitive placed by named points (P6), built by the walk, which can look
+// its points up. Every other primitive is placed by H1's convention.
+type PointPrimitive = Extract<SolidPrimitive, { kind: 'hull' }>
+type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive>
+
+function isPointPrimitive(primitive: SolidPrimitive): primitive is PointPrimitive {
+  return primitive.kind === 'hull'
+}
+
+export function solidSpecOf(primitive: DimensionPrimitive, value: (e: Expr) => number): SolidSpec {
   const positive = (e: Expr, what: string): number => {
     const n = value(e)
     if (!Number.isFinite(n) || n <= 0) throw new Error(`A solid's ${what} must be a positive number, got ${n}`)
@@ -464,11 +474,19 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
       switch (statement.kind) {
         case 'solid': {
           ownedStatements.add(index)
-          const body = buildSolid(solidSpecOf(statement.primitive, value))
+          const primitive = statement.primitive
+          const body = isPointPrimitive(primitive) ? buildOnPoints(primitive) : buildSolid(solidSpecOf(primitive, value))
           if (statement.name) solids.set(statement.name, body)
           const entry: { solid: SolidBody; points: { name: string; at: Vec3; drawn: boolean }[] } = { solid: body, points: [] }
           byStatement.set(index, entry)
           if (statement.vertices.length === 0) break
+          // P6 — a solid on named points has its vertices named already.
+          if (isPointPrimitive(primitive)) {
+            throw new Error(
+              `${statement.name ? `"${statement.name}"` : `This ${body.spec.kind}`} is built on the named points ${primitive.points.join('-')}, ` +
+                `which already name its vertices — drop "vertices ${statement.vertices.join('')}"`
+            )
+          }
           // The solid stands whatever is wrong with its lettering: an error
           // in the vertex list costs the letters, not the drawing.
           const polyhedron = body.polyhedron
@@ -513,6 +531,15 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
       }
     } catch (err) {
       fail(err)
+    }
+  }
+
+  // A solid on named points (P6): its points must already be points in
+  // space, defined on an earlier line or as literals.
+  function buildOnPoints(primitive: PointPrimitive): SolidBody {
+    switch (primitive.kind) {
+      case 'hull':
+        return buildSolid({ kind: 'hull', shape: 'hull', polyhedron: hullOf(primitive.points.map(lookup), primitive.points) })
     }
   }
 

@@ -515,12 +515,23 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
 // label); the parser only needs to recognise the shape of the phrase.
 const SOLID_DIMENSIONS = ['width', 'height', 'depth', 'base', 'edge', 'radius', 'top']
+
+// "A-B-C-D": a hyphenated run of point names, for a solid placed by points.
+// `form` is the whole phrase an error quotes back.
+function parsePointList(text: string, form: string, role: string): string[] {
+  const trimmed = text.trim()
+  if (!trimmed.includes('-')) throw new Error(`Expected "${form}" — point names joined by hyphens — got "${trimmed}"`)
+  const names = trimmed.split('-').map((part) => geometryName(part, `points of the ${role}`))
+  const repeated = names.find((name, i) => names.indexOf(name) !== i)
+  if (repeated) throw new Error(`"${repeated}" is named twice in "${trimmed}" — each point is one corner`)
+  return names
+}
 
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
 //
@@ -565,6 +576,12 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
     const radius = /^radius\s+(.+)$/i.exec(tail)
     if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
     return { kind: 'sphere', radius: parseExprString(radius[1]) }
+  }
+
+  if (head === 'hull') {
+    // P6 — named points, hyphenated like "plane A-B-C". Hyphens are required:
+    // "ABCD" is ambiguous between four points and multi-letter names.
+    return { kind: 'hull', points: parsePointList(tail, 'hull A-B-C-D', 'hull') }
   }
 
   if (head === 'frustum') {

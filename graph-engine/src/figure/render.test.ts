@@ -4,7 +4,9 @@ import { LIGHT_PALETTE } from '../render/palette'
 import { FIGURE_LAYERS } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { formatMeasure } from './measure'
-import { DEFAULT_CAMERA, ISOMETRIC_CAMERA, rectangularPrism, renderSolidFigure } from './project3d'
+import { DEFAULT_CAMERA, ISOMETRIC_CAMERA, projectSolid, rectangularPrism, renderSolidFigure, type Solid3D, type Vec3 } from './project3d'
+import { evalExpr } from '../parser/evalExpr'
+import { buildSolidFigure } from './solidScope'
 import { GEOM_EPS } from '../scene/geometry/types'
 import { buildSolid, regularTetrahedron } from './solids'
 import { renderFigure } from './render'
@@ -1296,6 +1298,79 @@ describe('solids in the figure', () => {
     const direct = renderSolidFigure(rectangularPrism(4, 3, 2), LIGHT_PALETTE, ISOMETRIC_CAMERA)
     const coords = (s: string) => [...s.matchAll(/<line x1="([^"]*)" y1="([^"]*)" x2="([^"]*)" y2="([^"]*)"/g)].map((m) => m.slice(1, 5).join(','))
     expect(coords(svg).sort()).toEqual(coords(direct).sort())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 7 — solids on named points
+// ---------------------------------------------------------------------------
+
+// A spec's solid-figure walk, for tests that compare solids as geometry.
+function walkSpec(spec: string) {
+  const parsed = parseSpec(spec)
+  expect(parsed.errors).toEqual([])
+  return buildSolidFigure(parsed.statements, (e) => evalExpr(e, {}, 'radians', {}))
+}
+
+// A polyhedron's drawn edges as WORLD coordinates (rounded) plus hidden or
+// not under the default camera: the drawing, independent of vertex order.
+function worldEdges(solid: Solid3D, shift: Vec3 = { x: 0, y: 0, z: 0 }): string[] {
+  const key = (p: Vec3) => [p.x + shift.x, p.y + shift.y, p.z + shift.z].map((c) => (Math.round(c * 1e9) / 1e9).toString()).join(',')
+  return projectSolid(solid, DEFAULT_CAMERA)
+    .map((edge) => {
+      const ends = [key(solid.vertices[edge.vertices[0]]), key(solid.vertices[edge.vertices[1]])].sort()
+      return `${ends.join(' | ')} ${edge.hidden ? 'hidden' : 'drawn'}`
+    })
+    .sort()
+}
+
+const UNIT_CUBE_POINTS = [
+  'A = (0, 0, 0)',
+  'B = (1, 0, 0)',
+  'C = (1, 1, 0)',
+  'D = (0, 1, 0)',
+  'E = (0, 0, 1)',
+  'F = (1, 0, 1)',
+  'G = (1, 1, 1)',
+  'H = (0, 1, 1)',
+].join('\n')
+
+describe('the hull of named points (P3)', () => {
+  it('draws the unit cube as a hull with the same edges as a unit prism moved to the same place', () => {
+    const scope = walkSpec(`@mode: figure\n${UNIT_CUBE_POINTS}\nS = solid hull A-B-C-D-E-F-G-H`)
+    expect(scope.errors).toEqual([])
+    const hull = scope.solids.get('S')!.polyhedron!
+    // The prism is centred on the origin; the cube's centre is author
+    // (1/2, 1/2, 1/2), which is internal (1/2, 1/2, 1/2) too.
+    const prism = buildSolid({ kind: 'prism', width: 1, height: 1, depth: 1 }).polyhedron!
+    expect(worldEdges(hull)).toEqual(worldEdges(prism, { x: 0.5, y: 0.5, z: 0.5 }))
+    expect(worldEdges(hull)).toHaveLength(12)
+    expect(worldEdges(hull).filter((e) => e.endsWith('hidden'))).toHaveLength(3)
+  })
+
+  it('draws it in the figure: twelve lines, three dashed, and the points keep their own dots', () => {
+    const svg = render(`@mode: figure\n${UNIT_CUBE_POINTS}\nS = solid hull A-B-C-D-E-F-G-H`)
+    const solidLines = (markup: string) => (markup.match(/<line [^>]*data-statement="8"[^>]*\/>/g) ?? []).length
+    expect(solidLines(layer(svg, 'primary'))).toBe(9)
+    expect(solidLines(layer(svg, 'auxiliary'))).toBe(3)
+  })
+
+  it('refuses a point that is not a corner, and an undefined one, naming it', () => {
+    const parsed = parseSpec(`@mode: figure\n${UNIT_CUBE_POINTS}\nI = (0.5, 0.5, 0.5)\nS = solid hull A-B-C-D-E-F-G-H-I`)
+    const inside = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+    expect(inside.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^I lies inside the solid/)])
+    const missing = walkSpec('@mode: figure\nA = (0, 0, 0)\nS = solid hull A-B-C-D')
+    expect(missing.errors.map((e) => e.message)).toEqual([expect.stringMatching(/Unknown point "B"/)])
+  })
+
+  it('refuses vertex names and named dimensions: its points already name it', () => {
+    const named = walkSpec(`@mode: figure\n${UNIT_CUBE_POINTS}\nS = solid hull A-B-C-D-E-F-G-H vertices PQRSTUVW`)
+    expect(named.errors.map((e) => e.message)).toEqual([expect.stringMatching(/built on the named points A-B-C-D-E-F-G-H, which already name its vertices/)])
+    // ...and the solid still stands.
+    expect(named.solids.has('S')).toBe(true)
+    const parsed = parseSpec(`@mode: figure\n${UNIT_CUBE_POINTS}\nS = solid hull A-B-C-D-E-F-G-H\nlabel: S height`)
+    const errors = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).errors
+    expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(/"S" is built on named points.*"label: AB"/)])
   })
 })
 

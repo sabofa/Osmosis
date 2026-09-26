@@ -111,6 +111,9 @@ export type SolidPrimitive =
   | { kind: 'sphere'; radius: Expr }
   // A conical frustum (P2): base radius, top radius, height.
   | { kind: 'frustum'; radius: Expr; top: Expr; height: Expr }
+  // The convex hull of named points in space, "hull A-B-C-D-E" (P3). The
+  // points place it; every one must be a corner.
+  | { kind: 'hull'; points: string[] }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)

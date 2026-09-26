@@ -898,3 +898,16 @@ describe('the frustum (phase 7, P2)', () => {
     expect(s.subject).toEqual({ kind: 'solidDimension', solid: 'F', dimension: 'top' })
   })
 })
+
+describe('the hull of named points (phase 7, P3)', () => {
+  it('parses a hyphenated run of point names', () => {
+    const s = parseStatement('S = solid hull A-B-C-D-E')
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    expect(s.primitive).toEqual({ kind: 'hull', points: ['A', 'B', 'C', 'D', 'E'] })
+  })
+
+  it('refuses a run with no hyphens, and a repeated name', () => {
+    expect(() => parseStatement('solid: hull ABCD')).toThrow(/hull A-B-C-D/)
+    expect(() => parseStatement('solid: hull A-B-C-A')).toThrow(/"A" is named twice/)
+  })
+})

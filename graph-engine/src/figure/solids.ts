@@ -84,10 +84,17 @@ export type SolidSpec =
   // larger than `radius` — the frustum wider at the top — and is then built
   // as the same solid with its axis reversed (see frustumRadii).
   | { kind: 'frustum'; radius: number; top: number; height: number }
+  // A polyhedron built from named points by the one hull builder (P3,
+  // hull.ts). `shape` is what the author called it — a hull, or a
+  // tetrahedron, pyramid or prism on points — for messages; the polyhedron
+  // is the whole of its geometry, already in world coordinates.
+  | { kind: 'hull'; shape: PointSolidShape; polyhedron: Solid3D }
+
+export type PointSolidShape = 'hull' | 'tetrahedron' | 'pyramid' | 'prism'
 
 // The primitive names an author can write, in the order an error message
 // should list them.
-export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum'] as const
+export const SOLID_PRIMITIVES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull'] as const
 
 export type SolidPrimitiveName = (typeof SOLID_PRIMITIVES)[number]
 
@@ -113,6 +120,9 @@ export interface SolidBody {
   // identity for every polyhedron, whose vertices are already world points,
   // and for every round solid placed by H1's convention.
   placement: Placement
+  // Built on named points rather than by dimensions (P6). Such a solid has
+  // no named dimensions: its points already name everything measurable.
+  byPoints?: boolean
 }
 
 // `placement` places a ROUND solid; a polyhedron ignores it. A frustum wider
@@ -155,6 +165,9 @@ function buildShape(spec: SolidSpec): SolidBody {
     // H2's second representation: a curved primitive carries its parameters
     // and emits an analytic silhouette. It has no vertices, so there is
     // nothing to letter and nothing for the convex face rule to classify.
+    // Vertex order is the input order (P3), so the letters are the identity.
+    case 'hull':
+      return { spec, polyhedron: spec.polyhedron, labelOrder: spec.polyhedron.vertices.map((_, i) => i), placement, byPoints: true }
     case 'cylinder':
     case 'cone':
     case 'sphere':
@@ -296,6 +309,8 @@ export function solidDimensions(spec: SolidSpec): Record<string, number> {
       return { radius: spec.radius }
     case 'frustum':
       return { radius: spec.radius, top: spec.top, height: spec.height }
+    case 'hull':
+      return {}
   }
 }
 
@@ -433,6 +448,8 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
       }
       return null
     }
+    case 'hull':
+      return null
   }
 }
 

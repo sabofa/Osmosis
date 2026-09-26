@@ -489,6 +489,13 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
 // measuring one would print a number that contradicts the solid the author
 // asked for — the opposite of what an asserting label is for.
 function solidDimensionValue(body: SolidBody, dimension: string, name: string): number {
+  // P6 — a solid on named points has no named dimensions; its points name
+  // every length worth measuring.
+  if (body.byPoints) {
+    throw new Error(
+      `"${name}" is built on named points, so it has no "${dimension}" to label — measure between its points instead (e.g. "label: AB")`
+    )
+  }
   const available = solidDimensions(body.spec)
   const value = available[dimension]
   if (value === undefined) {
