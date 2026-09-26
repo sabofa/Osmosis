@@ -873,6 +873,7 @@ camera, and emitted as 2D lines drawn by the figure renderer.
 Slicing a cone yields circle, ellipse, parabola and hyperbola: the same conics
 the 2D engine plots, derivable from the figure that defines them.
 
+*(Superseded 2026-09-25 by the glass rule — see "Revised 2026-09-25" below.)*
 **Composite solids are limited to four canonical arrangements** — coaxially
 stacked, embedded, coaxially subtracted, and face-adjacent — each with an
 occlusion rule computed from the shared axis. General boolean solid modeling
@@ -956,6 +957,120 @@ solids exist. Getting it wrong means building a second figure pipeline.
 Each step is shippable alone, and step 1 by itself covers a large share of
 what a test figure asks for.
 
+#### Revised 2026-09-25 — two 3D engines, and the road to AIME
+
+Steps 1–3 above shipped as phase 5. Measured against competition problems,
+what they reach is AMC 10/12 early-to-mid: one solid, sitting at the origin,
+described by its dimensions. This section **supersedes steps 4 and 5 above
+and the four-arrangement rule for composites**, for the reasons below.
+
+##### There are two 3D engines, and they are not to be confused
+
+| | **space** | **solid figures** |
+|---|---|---|
+| Track | 3 | 2 (geometry) |
+| Page kind | `space` | `figure` |
+| Renderer | three.js + GLSL, orbitable | the SVG figure renderer, fixed named views |
+| Content | surfaces, fields, curves, Calc 3, Physics C | polyhedra, round solids, constructions in space |
+| Code | `scene/buildScene3d.ts`, `render/SceneRenderer3D.ts` | `figure/project3d.ts`, `solids.ts`, `silhouette.ts`, `crossSection.ts`, and what follows here |
+
+They **share no code**, and neither is "the 3D engine". Say *space* or *solid
+figures* in specs, plans, code comments and the tutor reference.
+
+They do share two things an author sees, and both are fixed here:
+
+**One author frame: z is up, in both.** Authors write coordinates and planes in
+a right-handed frame with **z vertical** — the calculus convention, and the one
+a competition solution uses when it sets up coordinates. The solid-figure
+engine keeps its internal y-up frame (every existing byte depends on it) and
+converts at the grammar boundary, in one module, by the cyclic map
+
+```
+author (X, Y, Z)  ->  internal (x, y, z) = (Y, Z, X)
+```
+
+A cyclic permutation is a proper rotation, and it fixes the (1, 1, 1)
+direction — so the isometric camera views from the author's (+, +, +) octant,
+which is the textbook drawing: X toward the viewer and left, Y to the right, Z
+up. A primitive's width therefore runs along Y, its depth along X and its
+height along Z. The shipped `cut: S by plane y = 1` becomes `plane z = 1`.
+
+**Keywords belong to one engine.** `solid:` is the solid-figure statement;
+track 3's double-integral statement is renamed `volume: under z = f over
+region`. A 3-coordinate point is a *space* point by default and a *figure*
+point in any spec that contains a solid or declares `@mode: figure` — the same
+coordinates mean the same place either way, because the frame is shared.
+
+##### The missing layer is constructions, not features
+
+Solids today are primitives with dimensions. There are no points in space, no
+segments between them, no planes through them and no derived objects — which
+is what phase 1 gave 2D. Competition 3D is almost entirely constructions on
+named points: *the plane through the midpoints of AE, BC and CD*, *the foot of
+the perpendicular from D to face ABC*, *the centres of the faces*. That is why
+oblique sections alone would not reach AIME: they need midpoints, which need
+3D points that can be addressed, which is also why a solid's named vertices
+can be drawn but not measured.
+
+Every construction needed is closed-form, so the **no-solver non-goal
+stands**: midpoints, division, centroids, feet to lines and planes, line ∩
+plane; a tetrahedron from six edges placed by a stated convention (the D5
+analogue) with a Cayley–Menger check that fails legibly when the edges cannot
+close; a circumsphere as a 3×3 linear solve; an insphere as the face-area
+weighted mean of the vertices.
+
+##### Composites: the glass rule replaces the four arrangements
+
+Competition composite figures — a sphere in a cube, a cube in a sphere, a
+sphere in a cone, the insphere of a tetrahedron — are drawn with the solids
+**transparent to each other**: each solid dashes only its own back, and the
+inner solid shows through the outer one. The four-arrangement occlusion model
+was aimed at opaque stacking, which is the rarer case and the wrong default.
+
+- **Solids are glass to each other.** Each is drawn with its own convex
+  visibility rule, exactly as today.
+- **Construction lines are occluded by solids.** A point of a segment is
+  hidden when the ray from it toward the viewer passes through the interior of
+  any solid. For a convex solid this set is one interval along the segment,
+  so a space diagonal draws dashed, a face diagonal on a front face draws
+  solid, and a segment passing through a solid draws solid–dashed–solid. An
+  author may force either style per segment.
+- **Opaque coaxial stacking** (a cone on a cylinder) is the one arrangement
+  needing occlusion between solids. It is deferred, and it is the easy case of
+  it: the shared axis gives the occlusion boundary.
+
+##### Placement by points
+
+The origin-centred, axis-vertical convention stays for a standalone
+primitive. A solid **defined by points** — a tetrahedron on ABCD, a sphere on
+a centre, a cone on an apex and a base centre — is placed by those points and
+inherits their determinism, as a solved triangle does.
+
+##### Revised build order (continues from phase 5)
+
+6. **Construction core** — the z-up author frame; points, segments and
+   derived points in space; solid vertices as real points; true-3D lengths;
+   segment visibility against solids.
+7. **Solids by points and general polyhedra** — tetrahedron on four points or
+   six edges, prisms and pyramids over any polygon, frustum, octahedron, the
+   convex hull of named points; round solids placed and oriented by points.
+8. **Oblique sections** — planes through three points; polygon sections of
+   any polyhedron; circles of a sphere; ellipses of a cylinder or cone
+   (parabolic and hyperbolic cone sections still refuse).
+9. **Inscribed and circumscribed solids** under the glass rule — insphere,
+   circumsphere, spheres in cones and cylinders, tangency.
+10. **Measures and marks in space** — angles between lines, line–plane and
+    dihedral angles with their marks, skew-line distance with the common
+    perpendicular, right-angle marks in space.
+11. **Nets** — per-primitive unfolding with fold lines dashed, and the
+    shortest-path-over-the-surface problems they exist for.
+
+Exact values (build-order step 3) matter more here than anywhere: a
+competition tetrahedron is given as √41, √80, √89.
+
+**Deliberately out:** tori, liquid-level problems, and assemblies of unit
+cubes. Each is its own machinery for a handful of problems.
+
 ### Build order within the track
 
 Lines as objects -> derived points and solved triangles **(phase 1, done)** ->
@@ -1024,7 +1139,7 @@ opt-in: perspective converges parallel lines, which defeats reading values.
 | Vector fields | `field3d: (P, Q, R)` with density, glyph scaling, normalization |
 | Field lines | `streamline: field F from (x,y,z)` |
 | Space curve frames | `frame: TNB on r(t) at t = 1`, curvature, osculating circle |
-| Double integrals | `region:` (type I/II, shaded) and `solid: under z = f over region` |
+| Double integrals | `region:` (type I/II, shaded) and `volume: under z = f over region` (not `solid:`, which is the solid-figure statement) |
 | Riemann visualization | `riemann: under z = f over region, n = 12` |
 | Triple integrals | `cylindrical:` / `spherical:` coordinate boxes and surfaces |
 | **Implicit surfaces** | Marching cubes — one primitive retiring every quadric, level set and constraint surface |
@@ -1248,7 +1363,7 @@ follow-up work adds.
 
 - A general geometric constraint solver.
 - General boolean solid modeling (CSG) or general polyhedron unfolding.
-- Composite solids outside the four canonical arrangements.
+- Occlusion between solids beyond the glass rule and opaque coaxial stacking.
 - An IR-canonical document in which the DSL is merely one front-end; the source
   text stays canonical at the page level.
 - A hand-written WebGL rasterizer.

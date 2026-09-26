@@ -99,12 +99,20 @@ visibly polygonal under the figure view's zoom, generates spurious facet edges
 to suppress, and discards the crispness that chose SVG. This is why
 `ProjectedEdge` carries arcs as well as segments.
 
-*Cross-sections hand back real 2D geometry*, which is the whole seam. The test
-that pins it: a section of an 8×5×6 prism measures `PQ = 8` in its own plane,
-while the projected edge is 8·cos30 = 6.93 — so a section returning projected
-coordinates would silently assert the wrong number. Because the section is
-genuinely 2D, it also picks up notation, tick marks and the givens table for
-free.
+*Cross-sections hand back real 2D geometry*, which is the whole seam. Because
+the section is genuinely 2D, it picks up notation, tick marks and the givens
+table for free.
+
+**Correction (2026-09-26): the test said to pin this pins nothing.** It checks
+that a section of an 8×5×6 prism measures `PQ = 8` "while the projected edge is
+8·cos30 = 6.93". That is wrong: 6.93 is the edge's horizontal *extent*. The
+isometric camera draws every **axis-parallel** segment at true length
+(`(8·cos30, −4)` has length exactly 8), so a section returning projected
+coordinates would also measure 8. The same mistake makes the dimension-label
+test's `not.toContain('>6.93')` unfailable. Both are repaired in phase 6,
+Task 1, Step 5b, by testing a diagonal or an angle, which the projection does
+distort. **To tell true from projected in a solid figure, never test an
+axis-parallel segment.**
 
 **Hidden-line removal is convex-only**, and `SOLID_PRIMITIVES` is the only
 route from a spec to a solid, so every solid reachable from the DSL is convex
@@ -377,7 +385,14 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
 6. **Exact/symbolic values** — specced, scheduled at build-order step 3. Until
    then measures print decimals; everything routes through one formatter so it
    becomes a one-place change.
-7. **Solids beyond phase 5** — composite solids (the four constrained
+7. **Solids beyond phase 5.** *Superseded 2026-09-26.* The spec's "Revised
+   2026-09-25 — two 3D engines, and the road to AIME" replaces this item: build
+   steps 6–11, the z-up author frame, and the glass rule in place of the four
+   composite arrangements. Phase 6's plan is
+   `docs/superpowers/plans/2026-09-26-geometry-v2-phase-6-solid-construction-core.md`.
+   The original text follows for the record.
+
+   Composite solids (the four constrained
    arrangements in the spec), nets, and oblique cross-sections. Phase 5
    delivered the grammar, all six primitives, dimension labels and
    axis-perpendicular cross-sections; these three were explicitly out of its
