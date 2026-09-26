@@ -149,8 +149,14 @@ export function solidSpecOf(primitive: DimensionPrimitive, value: (e: Expr) => n
 }
 
 // A regular base's number of sides: a whole number, at least 3.
+// A regular base's number of sides: a whole number, 3 to 24. More is a
+// cylinder drawn badly — use "cylinder" — and a figure cannot letter it.
+export const MAX_REGULAR_SIDES = 24
+
 function sideCount(n: number): number {
-  if (!Number.isInteger(n) || n < 3) throw new Error(`A regular base needs a whole number of sides, at least 3, got ${n}`)
+  if (!Number.isInteger(n) || n < 3 || n > MAX_REGULAR_SIDES) {
+    throw new Error(`A regular base needs a whole number of sides from 3 to ${MAX_REGULAR_SIDES}, got ${n}`)
+  }
   return n
 }
 
@@ -207,13 +213,21 @@ function pointsOf(primitive: PointPrimitive): string[] {
 // top is a point is a cone: each is refused with a pointer to the primitive
 // that draws it, rather than drawn as a degenerate frustum (whose virtual
 // apex would sit at infinity, or on the top rim).
-function frustumSpec(radius: number, top: number, height: number): SolidSpec {
+//
+// `instead` writes the replacement in the form the author used: the
+// dimension forms by default, and the by-points forms for "frustum from O
+// radius r to P radius s", which pass their own.
+interface FrustumPointers {
+  cone: string
+  cylinder: string
+}
+
+function frustumSpec(radius: number, top: number, height: number, instead?: FrustumPointers): SolidSpec {
+  const pointers = instead ?? { cone: `cone radius ${radius}, height ${height}`, cylinder: `cylinder radius ${radius}, height ${height}` }
   if (!Number.isFinite(top) || top < 0) throw new Error(`A frustum's top must be a positive number, got ${top}`)
-  if (top <= GEOM_EPS * Math.max(1, radius)) {
-    throw new Error(`A frustum with top 0 is a cone — write "cone radius ${radius}, height ${height}"`)
-  }
+  if (top <= GEOM_EPS * Math.max(1, radius)) throw new Error(`A frustum with top 0 is a cone — write "${pointers.cone}"`)
   if (Math.abs(top - radius) <= GEOM_EPS * Math.max(1, radius)) {
-    throw new Error(`A frustum whose top equals its radius is a cylinder — write "cylinder radius ${radius}, height ${height}"`)
+    throw new Error(`A frustum whose top equals its radius is a cylinder — write "${pointers.cylinder}"`)
   }
   return { kind: 'frustum', radius, top, height }
 }
@@ -442,10 +456,13 @@ function pointShapeWord(primitive: PointPrimitive): string {
 }
 
 // Whether a height is negligible next to the points it was measured among —
-// GEOM_EPS is relative (see construct3d.ts's `negligible`).
+// GEOM_EPS is relative (see construct3d.ts's `negligible`) — measured against
+// their spread about their own centroid, not their distance from the origin
+// (a small solid far from the origin is not flat).
 function flatAgainst(height: number, among: Vec3[]): boolean {
+  const centre = centroid3(among)
   let size = 1
-  for (const p of among) size = Math.max(size, length3(p))
+  for (const p of among) size = Math.max(size, length3(sub3(p, centre)))
   return height <= GEOM_EPS * size
 }
 
@@ -728,7 +745,14 @@ export function buildSolidFigure(statements: Statement[], value: (e: Expr) => nu
         const radius = positiveValue(value, primitive.fromRadius, 'radius')
         // The rim at `to` is the frustum's "top"; buildSolid reverses the
         // axis when it is the wider one (P2).
-        return placed(frustumSpec(radius, value(primitive.toRadius), length3(axis)), midpoint3(from, to), axis)
+        // P2's refusals, pointing at the by-points forms: a point for the
+        // top rim makes the cone with its apex there; equal rims, the
+        // cylinder between the same two centres.
+        const pointers = {
+          cone: `cone apex ${primitive.to} base ${primitive.from} radius ${radius}`,
+          cylinder: `cylinder from ${primitive.from} to ${primitive.to} radius ${radius}`,
+        }
+        return placed(frustumSpec(radius, value(primitive.toRadius), length3(axis), pointers), midpoint3(from, to), axis)
       }
     }
   }

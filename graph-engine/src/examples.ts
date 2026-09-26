@@ -497,6 +497,84 @@ R = (2, 2, 1)
 S = solid hull A-B-C-D-E-F-H-P-Q-R`,
   },
   {
+    // Every solid placed by named points (P6), side by side along author Y:
+    // a tetrahedron, a pyramid on a square and an apex, a prism rising from
+    // a triangle along (K - J) x (L - J) with its new top named, a tilted
+    // cylinder between two rim centres, and a frustum between two.
+    label: 'Solids on points',
+    spec: `@mode: figure
+A = (2, -14, 0)
+B = (2, -11, 0)
+C = (-1, -12.5, 0)
+D = (1, -12.5, 3)
+solid: tetrahedron A-B-C-D
+E = (2, -7, 0)
+F = (2, -4, 0)
+G = (-1, -4, 0)
+H = (-1, -7, 0)
+I = (0.5, -5.5, 4)
+solid: pyramid E-F-G-H apex I
+J = (2, 0, 0)
+K = (2, 3, 0)
+L = (-1, 1.5, 0)
+solid: prism J-K-L height 3 vertices MNQ
+R = (1, 7, 0)
+S = (-1, 9, 3)
+solid: cylinder from R to S radius 1
+T = (0, 13, 0)
+U = (0, 13, 3)
+solid: frustum from T radius 2 to U radius 1
+label: KN`,
+  },
+  {
+    // A cube is the box with three equal sides — byte for byte "prism 4 by 4
+    // by 4" — lettered the same way, so AG is the space diagonal.
+    label: 'Cube',
+    spec: `@mode: figure
+S = solid cube edge 4 vertices ABCDEFGH
+segment: A-G
+label: S edge
+label: AG`,
+  },
+  {
+    // The octahedron (P5): its square equator turned by the placement rule
+    // and lettered from the front edge, then the top apex E and the bottom
+    // apex F. EF and AC are both 6 sqrt 2.
+    label: 'Octahedron',
+    spec: `@mode: figure
+O = solid octahedron edge 6 vertices ABCDEF
+segment: E-F
+label: O edge
+label: EF`,
+  },
+  {
+    // A regular pentagonal pyramid (P5), its apex over the base centre.
+    label: 'Regular pyramid',
+    spec: `@mode: figure
+P = solid pyramid regular 5 side 4, height 6 vertices ABCDEF
+label: P side
+label: P height`,
+  },
+  {
+    // A pyramid on a rectangle: width along Y by depth along X, like a box.
+    label: 'Rectangle pyramid',
+    spec: `@mode: figure
+P = solid pyramid rectangle 6 by 4, height 9 vertices ABCDE
+label: P width
+label: P depth
+label: P height`,
+  },
+  {
+    // A pyramidal frustum: a square base of side 6, the top of side 3 over
+    // it, turned with it.
+    label: 'Pyramidal frustum',
+    spec: `@mode: figure
+F = solid frustum regular 4 side 6, top 3, height 4 vertices ABCDEFGH
+label: F side
+label: F top
+label: F height`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,

@@ -34,16 +34,25 @@ import type { Solid3D, Vec3 } from './project3d'
 // that names a point is claiming it is a vertex, and a hull that silently
 // dropped it would draw a different solid from the one the names describe.
 
-export function hullOf(points: Vec3[], names: string[]): Solid3D {
+// The most points a hull takes. The enumeration is O(n^4), and a figure
+// whose every corner is named stops being readable long before that bites:
+// 24 corners is a truncated octahedron's, and a figure of it already needs
+// two-letter names.
+export const MAX_HULL_POINTS = 24
+
+export function hullOf(sourcePoints: Vec3[], names: string[]): Solid3D {
   const list = nameList(names)
-  if (points.length < 4) {
-    throw new Error(`A solid needs at least 4 corners, and ${list} ${points.length === 1 ? 'is' : 'are'} only ${points.length}`)
+  if (sourcePoints.length < 4) {
+    throw new Error(`A solid needs at least 4 corners, and ${list} ${sourcePoints.length === 1 ? 'is' : 'are'} only ${sourcePoints.length}`)
+  }
+  if (sourcePoints.length > MAX_HULL_POINTS) {
+    throw new Error(`A hull of ${sourcePoints.length} points is more than a figure can show — at most ${MAX_HULL_POINTS}`)
   }
 
-  const centre = centroid3(points)
-  let extent = 1
-  for (const p of points) extent = Math.max(extent, length3(sub3(p, centre)), Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))
-  const tolerance = GEOM_EPS * extent
+  // Everything below works about the points' own centroid, with the
+  // tolerance scaled to their spread about it — not to how far they sit from
+  // the origin, which would refuse a small solid far away as flat.
+  const { points, tolerance, extent } = centred(sourcePoints)
 
   for (let i = 0; i < points.length; i++) {
     for (let j = i + 1; j < points.length; j++) {
@@ -106,7 +115,18 @@ export function hullOf(points: Vec3[], names: string[]): Solid3D {
   })
 
   const ordered = faces.map(fromLowest).sort(compareSequences)
-  return { vertices: points.slice(), faces: ordered }
+  return { vertices: sourcePoints.slice(), faces: ordered }
+}
+
+// The points moved to their centroid, their extent about it (at least 1:
+// GEOM_EPS is relative, and a figure drawn near unit size must not demand
+// exact zeros), and the length tolerance that extent gives.
+function centred(points: Vec3[]): { points: Vec3[]; extent: number; tolerance: number } {
+  const centre = centroid3(points)
+  const moved = points.map((p) => sub3(p, centre))
+  let extent = 1
+  for (const p of moved) extent = Math.max(extent, length3(p))
+  return { points: moved, extent, tolerance: GEOM_EPS * extent }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,14 +142,12 @@ export function hullOf(points: Vec3[], names: string[]): Solid3D {
 // The hull would quietly build the convex hull of a non-convex base, which is
 // a different solid from the one the author named, so the base is checked
 // here first and the hull only ever sees a base it will keep whole.
-export function basePolygonNormal(points: Vec3[], names: string[]): Vec3 {
+export function basePolygonNormal(sourcePoints: Vec3[], names: string[]): Vec3 {
   const list = nameList(names)
-  const n = points.length
+  const n = sourcePoints.length
   if (n < 3) throw new Error(`A base needs at least 3 corners, and ${list} ${n === 1 ? 'is' : 'are'} only ${n}`)
-  const centre = centroid3(points)
-  let extent = 1
-  for (const p of points) extent = Math.max(extent, length3(sub3(p, centre)), Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))
-  const tolerance = GEOM_EPS * extent
+  // About the base's own centroid, as the hull works (see `centred`).
+  const { points, tolerance, extent } = centred(sourcePoints)
 
   // Newell's normal: the polygon's area vector, sound for any planar loop.
   let newell: Vec3 = { x: 0, y: 0, z: 0 }

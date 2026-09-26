@@ -1,5 +1,5 @@
 import { GEOM_EPS } from '../scene/geometry/types'
-import { authorToWorld } from './authorFrame'
+import { authorToWorld, worldToAuthor } from './authorFrame'
 import { formatMeasure } from './measure'
 import { DEFAULT_CAMERA, type Vec3 } from './project3d'
 import { BASE_TURN } from './solids'
@@ -92,9 +92,9 @@ export function tetrahedronFromEdges(edges: SixEdges, names: readonly [string, s
   // default camera's azimuth + BASE_TURN from the base centroid.
   const gu = (edges.AB + cu) / 3
   const gv = cv / 3
-  const camera = DEFAULT_CAMERA.direction
-  // The default camera's author azimuth: internal (x, z) is author (Y, X).
-  const target = Math.atan2(camera.x, camera.z) + BASE_TURN
+  // The default camera's author azimuth, through the one frame converter.
+  const camera = worldToAuthor(DEFAULT_CAMERA.direction)
+  const target = Math.atan2(camera.y, camera.x) + BASE_TURN
   const turn = target - Math.atan2(-gv, -gu)
   const cos = Math.cos(turn)
   const sin = Math.sin(turn)

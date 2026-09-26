@@ -347,6 +347,29 @@ describe('segments against a cylinder whose axis runs along author X', () => {
   })
 })
 
+describe('segments against the same cylinder moved off the origin', () => {
+  // The author-X cylinder above, and its split segment, both moved by one
+  // vector along no axis. A rigid motion changes no span parameter, so the
+  // split is the same u = 1/4, 3/4 — provided the segment is taken into the
+  // cylinder's frame with the origin subtracted.
+  const shift = v(2, -1, 3)
+  const moved = buildSolid({ kind: 'cylinder', radius: 3, height: 8 }, placementAlong(shift, v(0, 0, 1)))
+  const at = (p: Vec3): Vec3 => v(p.x + shift.x, p.y + shift.y, p.z + shift.z)
+  const turn = (p: Vec3): Vec3 => v(p.z, p.x, p.y)
+
+  it('splits the moved segment where the original split, and hides the moved axis', () => {
+    const y0 = -3 * Math.SQRT2
+    const a = at(turn(combo([-6, e1], [-6, toward], [y0, v(0, 1, 0)])))
+    const b = at(turn(combo([6, e1], [-6, toward], [y0, v(0, 1, 0)])))
+    expectSpans(segmentSpans(a, b, [moved], camera), [
+      [0, 0.25, false],
+      [0.25, 0.75, true],
+      [0.75, 1, false],
+    ])
+    expectSpans(segmentSpans(at(v(0, 0, -4)), at(v(0, 0, 4)), [moved], camera), [[0, 1, true]])
+  })
+})
+
 describe('segments against a frustum', () => {
   // Radius 6, top 3, height 4: base rim radius 6 at y = -2, top rim radius 3
   // at y = +2; the solid's radius at height y is 3 + (3/4)(2 - y).

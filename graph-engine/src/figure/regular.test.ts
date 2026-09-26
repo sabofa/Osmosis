@@ -63,16 +63,19 @@ function achievedMargin(spec: SolidSpec, baseCorners: number): number {
   return least
 }
 
-// [shape, recorded rotation, recorded margin]
+// [shape at the REFERENCE proportion (height = side), recorded rotation,
+// recorded least margin] — the rotation is a function of the kind and n
+// alone (fix wave 1).
 const RECORDED: [RegularShape, number, number][] = [
-  [{ kind: 'regularPrism', sides: 3, side: 4, height: 5 }, 16, 14.0],
-  [{ kind: 'regularPrism', sides: 5, side: 4, height: 5 }, 3, 8.151],
-  [{ kind: 'regularPrism', sides: 6, side: 12, height: 5 }, 0, 25.0],
-  [{ kind: 'regularPrism', sides: 8, side: 4, height: 5 }, 19, 10.41],
-  [{ kind: 'regularPyramid', sides: 3, side: 4, height: 6 }, 13, 16.264],
-  [{ kind: 'regularPyramid', sides: 5, side: 4, height: 6 }, 8, 13.515],
-  [{ kind: 'regularPyramid', sides: 6, side: 4, height: 6 }, 0, 10.436],
-  [{ kind: 'octahedron', edge: 6 }, 75, 14.123],
+  [{ kind: 'regularPrism', sides: 3, side: 1, height: 1 }, 16, 14.0],
+  [{ kind: 'regularPrism', sides: 5, side: 1, height: 1 }, 3, 8.151],
+  [{ kind: 'regularPrism', sides: 6, side: 1, height: 1 }, 0, 25.0],
+  [{ kind: 'regularPrism', sides: 8, side: 1, height: 1 }, 19, 10.41],
+  [{ kind: 'regularPyramid', sides: 3, side: 1, height: 1 }, 12, 17.353],
+  [{ kind: 'regularPyramid', sides: 4, side: 1, height: 1 }, 16, 13.209],
+  [{ kind: 'regularPyramid', sides: 5, side: 1, height: 1 }, 8, 13.905],
+  [{ kind: 'regularPyramid', sides: 6, side: 1, height: 1 }, 20, 9.074],
+  [{ kind: 'octahedron', edge: 1 }, 75, 14.123],
 ]
 
 describe('P5 — the rotation that maximises the least margin', () => {
@@ -92,15 +95,40 @@ describe('P5 — the rotation that maximises the least margin', () => {
       }
     })
 
-    it(`keeps every face of the built ${label} at least ${margin} degrees from edge-on under the default camera`, () => {
+    it(`keeps every face of the built reference ${label} at least ${margin} degrees from edge-on under the default camera`, () => {
       expect(achievedMargin(shape, corners)).toBeGreaterThanOrEqual(margin - 1e-3)
     })
   }
 
+  it("turns a pyramid by its n alone: every proportion, and the frustum cut from it, stands the same way", () => {
+    for (const [sides, rotation] of [
+      [3, 12],
+      [4, 16],
+      [5, 8],
+      [6, 20],
+    ] as const) {
+      for (const [side, height] of [
+        [1, 1],
+        [4, 6],
+        [12, 5],
+        [1, 10],
+        [10, 1],
+      ]) {
+        expect(regularRotation({ kind: 'regularPyramid', sides, side, height })).toBe(rotation)
+        expect(regularRotation({ kind: 'regularFrustum', sides, side, top: side / 2, height })).toBe(rotation)
+      }
+      // A prism of the same n, whatever its proportions, keeps the prism's.
+      expect(regularRotation({ kind: 'regularPrism', sides, side: 7, height: 0.5 })).toBe(
+        regularRotation({ kind: 'regularPrism', sides, side: 1, height: 1 })
+      )
+    }
+  })
+
   it("draws every regular pyramid's apex-to-centre segment clear of every lateral edge", () => {
     // The angle at the projected apex between the axis and each lateral
-    // edge: the rule keeps it at least 6 degrees for all three (6.05,
-    // 10.66, 16.16), and the rectangle pyramid's is 9.53.
+    // edge: at least 5 degrees for all three (6.40, 10.66, 5.59 — the
+    // hexagonal one is turned for its reference proportion, not its own),
+    // and the rectangle pyramid's is 9.53.
     const shapes: Extract<SolidSpec, { kind: 'regularPyramid' | 'rectanglePyramid' }>[] = [
       { kind: 'regularPyramid', sides: 3, side: 4, height: 6 },
       { kind: 'regularPyramid', sides: 5, side: 4, height: 6 },
@@ -115,24 +143,22 @@ describe('P5 — the rotation that maximises the least margin', () => {
       for (const corner of solid.vertices.slice(0, -1).map((v) => DEFAULT_CAMERA.project(v))) {
         let gap = Math.abs(Math.atan2(corner.y - apex.y, corner.x - apex.x) - axis) * DEG
         gap = Math.min(gap, 360 - gap)
-        expect(gap).toBeGreaterThan(6)
+        expect(gap).toBeGreaterThan(5)
       }
     }
   })
 
   it('reports, for information only, what it would pick for the pinned tetrahedron and square pyramid', () => {
     // Both have sat at 45 degrees absolute (camera azimuth + 15) since phase
-    // 6b, and stay there. The rule would pick 12 (mod 120) for the regular
-    // tetrahedron of edge 6 and 14 (mod 90) for the square pyramid of base
-    // 6 and height 9, each about three degrees of margin better than 45.
-    const tetrahedron: RegularShape = { kind: 'regularPyramid', sides: 3, side: 6, height: 6 * Math.sqrt(2 / 3) }
-    const square: RegularShape = { kind: 'regularPyramid', sides: 4, side: 6, height: 9 }
-    expect(regularRotation(tetrahedron)).toBe(12)
-    expect(placementMargin(tetrahedron, 12)).toBeCloseTo(18, 3)
-    expect(placementMargin(tetrahedron, 45)).toBeCloseTo(15, 3)
-    expect(regularRotation(square)).toBe(14)
-    expect(placementMargin(square, 14)).toBeCloseTo(16, 3)
-    expect(placementMargin(square, 45)).toBeCloseTo(15, 3)
+    // 6b, and stay there. At the reference proportion the rule picks 12 (mod
+    // 120) for n = 3 and 16 (mod 90) for n = 4; 45 scores 15.0 and 12.49
+    // there, against 17.35 and 13.21.
+    const triangle: RegularShape = { kind: 'regularPyramid', sides: 3, side: 1, height: 1 }
+    const square: RegularShape = { kind: 'regularPyramid', sides: 4, side: 1, height: 1 }
+    expect(regularRotation(triangle)).toBe(12)
+    expect(placementMargin(triangle, 45)).toBeCloseTo(15, 3)
+    expect(regularRotation(square)).toBe(16)
+    expect(placementMargin(square, 45)).toBeCloseTo(12.493, 3)
     // ...and the pinned solids are untouched: the tetrahedron's A is still
     // at author azimuth 45.
     const pinned = buildSolid({ kind: 'tetrahedron', edge: 6 })
@@ -321,10 +347,40 @@ describe('every named dimension of the new solids', () => {
         }
         expect(standard?.hidden).toBe(false)
         expect(isometric?.hidden).toBe(false)
-        // Fixed against the default camera, never the active view: nothing
-        // about it depends on a camera at all.
-        expect(bodyDimensionSegment(body, dimension)).toEqual(segment)
       }
     })
   }
+})
+
+// ---------------------------------------------------------------------------
+// Bounded cost (fix wave 1)
+// ---------------------------------------------------------------------------
+
+describe('regular solids are built in closed form, and bounded', () => {
+  it('renders "prism regular 24" with two dimension labels well within a figure-drawing budget', () => {
+    const spec = '@mode: figure\nS = solid prism regular 24 side 1, height 1\nlabel: S side = 1\nlabel: S height = 1'
+    const start = performance.now()
+    const result = render(spec)
+    expect(performance.now() - start).toBeLessThan(250)
+    expect(result.errors).toEqual([])
+    // Closed form: two 24-gon caps and 24 lateral quads, faces a hull of 48
+    // points could never have produced (it refuses more than 24).
+    const solid = buildSolid({ kind: 'regularPrism', sides: 24, side: 1, height: 1 }).polyhedron!
+    expect(solid.faces.map((f) => f.length).sort((a, b) => a - b)).toEqual([...Array(24).fill(4), 24, 24])
+  })
+
+  it('refuses a regular base of fewer than 3 or more than 24 sides', () => {
+    for (const n of [2, 25, 100]) {
+      expect(render(`@mode: figure\nS = solid prism regular ${n} side 1, height 1`).errors.map((e) => e.message)).toEqual([
+        `A regular base needs a whole number of sides from 3 to 24, got ${n}`,
+      ])
+    }
+  })
+
+  it("reads each label's segment off the built solid's own vertices, never a rebuilt copy", () => {
+    const body = buildSolid({ kind: 'regularPrism', sides: 6, side: 12, height: 8 })
+    const segment = bodyDimensionSegment(body, 'side')!
+    expect(segment[0]).toBe(body.polyhedron!.vertices[0])
+    expect(segment[1]).toBe(body.polyhedron!.vertices[1])
+  })
 })

@@ -284,11 +284,15 @@ deterministic.
 triple's plane (O(n⁴), exact, no iteration), keeps the supporting ones, and
 **merges coplanar ones into one polygonal face** — a split face would draw a
 spurious diagonal. Vertex order is the input order, so a point-built solid's
-`labelOrder` is the identity. Every point-built polyhedron, every phase 7
-regular solid and the six-edge tetrahedron is built by it, so they are convex
-by construction, and the convexity invariant covers them (plus 20 seeded
-random hulls). It refuses a named point that is not a corner — inside, on an
-edge, on a face — naming it.
+`labelOrder` is the identity. Every point-built polyhedron and the
+six-edge tetrahedron is built by it, so they are convex by construction, and
+the convexity invariant covers them (plus 20 seeded random hulls). It refuses
+a named point that is not a corner — inside, on an edge, on a face — naming
+it. **It is bounded (fix wave 1):** at most 24 points, refused legibly beyond
+that, because O(n⁴) on authored input froze rendering (`prism regular 100`
+took about 45 s when regular solids still went through it). Its tolerances
+are taken about the points' own centroid, so a small solid far from the
+origin is not refused as flat.
 
 *The six-edge tetrahedron is placed exactly like the regular one (P4).*
 `tetrahedron.ts`: every face by the strict triangle inequality, then the
@@ -304,13 +308,14 @@ height 80 / (3√21) (from V = 160/3 and area 6√21, computed by hand).
 `regular.ts`: the rotation is the integer degree in one symmetry period that
 maximises the least of every face's margin from edge-on under the default
 camera and every base corner's azimuthal distance from the camera's vertical
-plane; ties go to the smallest. Recorded: prism n = 3: 16°, 5: 3°, 6: 0°,
-8: 19° (a prism's proportions do not matter to the rule); octahedron 75°.
-**A pyramid's rotation depends on its proportions** (its faces lean), so it is
-a function of the shape; the tested shapes' values are recorded in
-`regular.ts`. The rule would put the regular tetrahedron at 12° and the
-square pyramid at 14°, each about 3° of margin better; both stay pinned at
-45°. Lettering: A is the left end, from the viewer, of the base edge whose
+plane; ties go to the smallest. **It is evaluated at a fixed reference
+proportion, height = side** (controller ruling, fix wave 1), so the rotation
+is a function of the kind and n alone — a pyramid no longer turns when only
+its height changes, and a pyramidal frustum stands as its pyramid does.
+Recorded: prism n = 3: 16°, 5: 3°, 6: 0°, 8: 19°; pyramid (and frustum)
+n = 3: 12°, 4: 16°, 5: 8°, 6: 20°; octahedron 75° (the full table is in
+`regular.ts`). The pinned regular tetrahedron and square pyramid stay at 45°
+(the rule would pick 12° and 16°). Lettering: A is the left end, from the viewer, of the base edge whose
 normal points nearest the camera; counter-clockwise from above; top over
 base; apex last; the octahedron's equator, then its top, then its bottom
 apex. It is the box's textbook lettering, generalised.
@@ -415,10 +420,13 @@ Identity placements short-circuit every conversion, which is what kept every
 pre-phase-7 byte. Polyhedra need none of this: their vertices are world
 points already.
 
-**Every polyhedron built from points goes through `hullOf` (P3).** So are
-the phase 7 dimension primitives (their vertices listed in lettering order,
-so `labelOrder` is the identity). The pre-phase-7 box, square pyramid and
-regular tetrahedron keep their hand-built face lists, because their bytes
+**Every polyhedron built from points goes through `hullOf` (P3).** The
+phase 7 dimension primitives do NOT: their faces are known, and `regular.ts`
+writes them in closed form (caps, then lateral quads or triangles), with
+vertices in lettering order so `labelOrder` is the identity. A regular base
+has 3 to 24 sides. A dimension label on a built solid reads its segment off
+`body.polyhedron`, never a rebuilt copy. The pre-phase-7 box, square pyramid
+and regular tetrahedron keep their hand-built face lists, because their bytes
 are pinned.
 
 **Two 3D engines, and they share no code.** *Space* is track 3 — three.js,

@@ -302,10 +302,11 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   [S =] solid octahedron edge <e>
 //   [S =] solid frustum regular <n> side <s>, top <t>, height <h>
 //                                                 -> pyramidal; top = side refused (a prism), top 0 (a pyramid)
-//     A regular base (and the octahedron's equator) is turned about the
-//     vertical to the integer degree that keeps every face farthest from
-//     edge-on under the DEFAULT view and no corner in line with the view
-//     through the axis (figure/regular.ts records the angles), and lettered
+//     A regular base has 3 to 24 sides. It (and the octahedron's equator)
+//     is turned about the vertical to the integer degree that keeps every
+//     face farthest from edge-on under the DEFAULT view and no corner in
+//     line with the view through the axis, judged at height = side so the
+//     turn depends on n alone (figure/regular.ts records it), and lettered
 //     like a box: A the left end of the front-most base edge, the base
 //     counter-clockwise from above, a top over its base, an apex last; an
 //     octahedron's equator, then its top, then its bottom apex.
@@ -313,7 +314,7 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   Solids on named points (phase 7) — the points place the solid, so it
 //   sits and turns wherever they are. Points are defined first:
 //
-//   [S =] solid hull A-B-C-D-...                  -> the convex hull; every named point must be a corner
+//   [S =] solid hull A-B-C-D-...                  -> the convex hull of at most 24 points; every one must be a corner
 //   [S =] solid tetrahedron A-B-C-D
 //   [S =] solid pyramid A-B-C-D apex E            -> base polygon, then apex; the base must be flat and convex
 //   [S =] solid prism A-B-C-D height <h> [vertices EFGH]

@@ -354,3 +354,42 @@ describe('solids on named points (P6)', () => {
     expect(worldToAuthor(cone.placement.frame.axis)).toEqual({ x: 0, y: 0, z: 1 })
   })
 })
+
+describe('a frustum on points refuses in its own form (fix wave 1)', () => {
+  const ENDS = '@mode: figure\nO = (0, 0, 0)\nP = (0, 0, 4)'
+
+  it('points equal rims at the cylinder between the same two centres', () => {
+    expect(walk(`${ENDS}\nF = solid frustum from O radius 3 to P radius 3`).errors.map((e) => e.message)).toEqual([
+      'A frustum whose top equals its radius is a cylinder — write "cylinder from O to P radius 3"',
+    ])
+  })
+
+  it('points a top of 0 at the cone with its apex there', () => {
+    expect(walk(`${ENDS}\nF = solid frustum from O radius 3 to P radius 0`).errors.map((e) => e.message)).toEqual([
+      'A frustum with top 0 is a cone — write "cone apex P base O radius 3"',
+    ])
+  })
+})
+
+describe('solids on points far from the origin (fix wave 1)', () => {
+  it('builds a unit pyramid and a unit tetrahedron at (3e4, 3e4, 3e4)', () => {
+    const scope = walk(
+      '@mode: figure\nA = (30000, 30000, 30000)\nB = (30001, 30000, 30000)\nC = (30001, 30001, 30000)\nD = (30000, 30001, 30000)\n' +
+        'E = (30000.5, 30000.5, 30001)\nP = solid pyramid A-B-C-D apex E\nT = solid tetrahedron A-B-D-E'
+    )
+    expect(scope.errors).toEqual([])
+    expect(scope.solids.get('P')!.polyhedron!.faces).toHaveLength(5)
+  })
+
+  it('judges a thin tetrahedron far away by its own size: D 1e-5 above a unit base is not flat', () => {
+    // Measured against the distance from the origin (5e4), 1e-5 would be
+    // under GEOM_EPS * 5e4 = 5e-5 and refused; against the solid's own
+    // spread it is ten thousand times the tolerance.
+    const scope = walk(
+      '@mode: figure\nA = (30000, 30000, 30000)\nB = (30001, 30000, 30000)\nC = (30000, 30001, 30000)\n' +
+        'D = (30000.3, 30000.3, 30000.00001)\nT = solid tetrahedron A-B-C-D'
+    )
+    expect(scope.errors).toEqual([])
+    expect(scope.solids.get('T')!.polyhedron!.faces).toHaveLength(4)
+  })
+})

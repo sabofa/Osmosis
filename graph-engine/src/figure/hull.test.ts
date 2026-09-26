@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { maxOutsideDistance } from './convexity.testkit'
-import { hullOf } from './hull'
+import { basePolygonNormal, hullOf } from './hull'
 import { faceNormal, type Solid3D, type Vec3 } from './project3d'
 
 // P3 — the one exact convex-hull builder. Every expectation is about the
@@ -181,4 +181,48 @@ describe('the convexity invariant over hulls (H4)', () => {
       expect(hull.vertices.length - edgeCount(hull) + hull.faces.length).toBe(2)
     })
   }
+})
+
+describe('the hull is bounded, and does not care where the solid is (fix wave 1)', () => {
+  it('refuses more than 24 points, saying how many a figure can show', () => {
+    const many = Array.from({ length: 25 }, (_, i) => v(Math.cos(i), Math.sin(i), i / 10))
+    expect(() =>
+      hullOf(
+        many,
+        many.map((_, i) => `P${i}`)
+      )
+    ).toThrow('A hull of 25 points is more than a figure can show — at most 24')
+  })
+
+  it('builds 24 points on a sphere well within a figure-drawing budget', () => {
+    const next = random(7)
+    const points: Vec3[] = []
+    for (let i = 0; i < 24; i++) {
+      const z = 2 * next() - 1
+      const phi = 2 * Math.PI * next()
+      points.push(v(Math.sqrt(1 - z * z) * Math.cos(phi), Math.sqrt(1 - z * z) * Math.sin(phi), z))
+    }
+    const start = performance.now()
+    const hull = hullOf(
+      points,
+      points.map((_, i) => `P${i}`)
+    )
+    expect(performance.now() - start).toBeLessThan(250)
+    expect(maxOutsideDistance(hull)).toBeLessThan(1e-9)
+  })
+
+  it('builds a unit cube centred at (3e4, 3e4, 3e4) as six quads, not "flat"', () => {
+    // Tolerances scale with the points' spread about their centroid, not
+    // with their distance from the origin.
+    const far = CUBE.map((p) => v(p.x + 3e4 - 0.5, p.y + 3e4 - 0.5, p.z + 3e4 - 0.5))
+    const cube = hullOf(far, CUBE_NAMES)
+    expect(cube.faces).toHaveLength(6)
+    for (const face of cube.faces) expect(face).toHaveLength(4)
+  })
+
+  it('checks a small base far from the origin as a square, not a line', () => {
+    const square = [v(0, 0, 0), v(1, 0, 0), v(1, 1, 0), v(0, 1, 0)].map((p) => v(p.x + 3e4, p.y + 3e4, p.z + 3e4))
+    const normal = basePolygonNormal(square, 'ABCD'.split(''))
+    expect(normal.z).toBeCloseTo(1, 12)
+  })
 })

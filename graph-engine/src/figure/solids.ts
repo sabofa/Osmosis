@@ -103,7 +103,7 @@ export type SolidSpec =
   | { kind: 'hull'; shape: PointSolidShape; polyhedron: Solid3D }
   // Phase 7 by dimensions. A cube is the box with three equal sides, drawn
   // by the box's own builder so its bytes are the box's. The rest are placed
-  // and lettered by P5 (regular.ts) and built by the hull builder.
+  // and lettered by P5 (regular.ts), their faces written in closed form.
   | { kind: 'cube'; edge: number }
   | { kind: 'regularPrism'; sides: number; side: number; height: number }
   | { kind: 'regularPyramid'; sides: number; side: number; height: number }
@@ -211,6 +211,16 @@ function buildShape(spec: SolidSpec): SolidBody {
 
 function identityOrder(solid: Solid3D): number[] {
   return solid.vertices.map((_, i) => i)
+}
+
+function isPhase7Polyhedron(spec: SolidSpec): spec is Extract<SolidSpec, { kind: RegularShape['kind'] | 'rectanglePyramid' }> {
+  return (
+    spec.kind === 'regularPrism' ||
+    spec.kind === 'regularPyramid' ||
+    spec.kind === 'regularFrustum' ||
+    spec.kind === 'octahedron' ||
+    spec.kind === 'rectanglePyramid'
+  )
 }
 
 // The polyhedron of a phase 7 dimension primitive, vertices in lettering
@@ -517,24 +527,34 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
     case 'regularFrustum':
     case 'octahedron':
     case 'rectanglePyramid': {
-      const v = dimensionPolyhedron(spec).vertices
-      if (spec.kind === 'octahedron') return dimension === 'edge' ? [v[0], v[1]] : null
-      const half = spec.height / 2
-      const axis = (): [Vec3, Vec3] => [
-        { x: 0, y: -half, z: 0 },
-        { x: 0, y: half, z: 0 },
-      ]
-      if (spec.kind === 'rectanglePyramid') {
-        if (dimension === 'width') return [v[0], v[1]]
-        if (dimension === 'depth') return [v[1], v[2]]
-        return dimension === 'height' ? axis() : null
-      }
-      if (dimension === 'side') return [v[0], v[1]]
-      if (spec.kind === 'regularPrism') return dimension === 'height' ? [v[1], v[spec.sides + 1]] : null
-      if (spec.kind === 'regularFrustum' && dimension === 'top') return [v[spec.sides], v[spec.sides + 1]]
-      return dimension === 'height' ? axis() : null
+      return polyhedronDimensionSegment(spec, dimensionPolyhedron(spec).vertices, dimension)
     }
   }
+}
+
+// A phase 7 polyhedron's dimension segment, read off its vertices in
+// lettering order. Separate so a BUILT solid's own vertices serve it
+// (bodyDimensionSegment) rather than every label building the solid again.
+function polyhedronDimensionSegment(
+  spec: Extract<SolidSpec, { kind: RegularShape['kind'] | 'rectanglePyramid' }>,
+  v: Vec3[],
+  dimension: string
+): [Vec3, Vec3] | null {
+  if (spec.kind === 'octahedron') return dimension === 'edge' ? [v[0], v[1]] : null
+  const half = spec.height / 2
+  const axis = (): [Vec3, Vec3] => [
+    { x: 0, y: -half, z: 0 },
+    { x: 0, y: half, z: 0 },
+  ]
+  if (spec.kind === 'rectanglePyramid') {
+    if (dimension === 'width') return [v[0], v[1]]
+    if (dimension === 'depth') return [v[1], v[2]]
+    return dimension === 'height' ? axis() : null
+  }
+  if (dimension === 'side') return [v[0], v[1]]
+  if (spec.kind === 'regularPrism') return dimension === 'height' ? [v[1], v[spec.sides + 1]] : null
+  if (spec.kind === 'regularFrustum' && dimension === 'top') return [v[spec.sides], v[spec.sides + 1]]
+  return dimension === 'height' ? axis() : null
 }
 
 // The dimension segment of a BUILT solid, in world coordinates: a round
@@ -542,7 +562,9 @@ export function solidDimensionSegment(spec: SolidSpec, dimension: string): [Vec3
 // carried through its placement (P1). Untouched for an identity placement,
 // so every pre-phase-7 label sits on exactly the bytes it did.
 export function bodyDimensionSegment(body: SolidBody, dimension: string): [Vec3, Vec3] | null {
-  const segment = solidDimensionSegment(body.spec, dimension)
+  const spec = body.spec
+  if (body.polyhedron && isPhase7Polyhedron(spec)) return polyhedronDimensionSegment(spec, body.polyhedron.vertices, dimension)
+  const segment = solidDimensionSegment(spec, dimension)
   if (!segment || body.polyhedron || isIdentityPlacement(body.placement)) return segment
   return [toWorld(body.placement, segment[0]), toWorld(body.placement, segment[1])]
 }
