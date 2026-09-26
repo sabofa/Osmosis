@@ -8,11 +8,11 @@ already been tried and failed, and which traps cost real time.
 ## Where things stand
 
 **Branch `graph-engine-track-1`**, in the worktree
-`.claude/worktrees/graph-track-1`. Working tree clean. **1139 tests passing**,
+`.claude/worktrees/graph-track-1`. Working tree clean. **1326 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-26, after geometry phase 6b (the standard default view
-and textbook lettering).*
+*Last updated 2026-09-26, after geometry phase 7 (solids by points, and
+general polyhedra).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -57,14 +57,16 @@ built.
   panels; circle vocabulary and the givens table; solid primitives with
   dimensions and axis-perpendicular sections; points, constructions, true-3D
   measures and occluded segments in solid figures; a `standard` default view
-  in general position and textbook vertex lettering.
+  in general position and textbook vertex lettering; solids on named points,
+  the tetrahedron from six edges, the exact convex hull, regular prisms and
+  pyramids, the octahedron, frusta, and round solids at any position and tilt.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 beyond phase 6: build steps 7–11 of the spec's
-"Revised 2026-09-25" section (solids by points and general polyhedra, oblique
-sections, inscribed/circumscribed solids, measures and marks in space, nets),
+All of D1–D5. Track 2 beyond phase 7: build steps 8–11 of the spec's
+"Revised 2026-09-25" section (oblique sections, inscribed/circumscribed
+solids, measures and marks in space, nets),
 shading and boolean regions, and the competition-specific constructions
 (excircles, nine-point circle, radical axes, cevian concurrency).
 
@@ -79,6 +81,7 @@ shading and boolean regions, and the competition-specific constructions
 | 5 | `5f09b6d`..`4977327` | Solids: the `solid:` statement, dimension labels, arcs in the edge type, analytic silhouettes, cross-sections |
 | 6 | `2d4ecd4`..`8d4dd68` | Solid figures get a construction core: the z-up author frame, points in space, a solid's vertices as real points, midpoint/divide/centroid/centres/foot/line-meets-plane in space, true-3D `label:`/`given:`, and `segment:` split visible/hidden against every solid (the glass rule) |
 | 6b | `242b04b`, `0f7a892`, then the docs commit | The default view is `standard` (azimuth 30°, elevation 25°, general position), not isometric; placement is fixed against the default camera, never the active view; prisms, pyramids and tetrahedra are lettered in textbook order |
+| 7 | `df94340`..`d4a3aae`, then the docs commit | Solids are stated the way competition problems state them: on named points (hull, tetrahedron, pyramid, prism, sphere, cylinder, cone, frustum), a tetrahedron from its six edges (AIME 2024 I draws and measures), regular n-gon prisms and pyramids, the octahedron, conical and pyramidal frusta, the cube; round solids at any position and tilt through a placement and a local camera |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -235,6 +238,98 @@ true length under it. The rule stands and gains a corollary: **pick a segment
 the camera visibly foreshortens**, and check that it does, before using it to
 tell true from projected.
 
+### Phase 7 in detail (solids by points, and general polyhedra)
+
+Grammar that now works (author frame, z up; points are defined first):
+
+```
+S = solid hull A-B-C-D-E-F                       # every named point must be a corner
+T = solid tetrahedron A-B-C-D
+P = solid pyramid A-B-C-D apex E                 # base flat and convex, or refused naming the corner
+Q = solid prism A-B-C-D height 5 vertices EFGH   # rises along (B - A) x (C - A); top names optional
+O = solid sphere center M radius 5
+C = solid cylinder from A to B radius 3          # any direction
+K = solid cone apex V base O radius 3
+F = solid frustum from O radius 6 to P radius 3
+T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)
+solid frustum radius 6, top 3, height 4          # conical; top > radius is the same solid turned over
+solid cube edge 4                                # byte for byte "prism 4 by 4 by 4"
+solid prism regular 6 side 12, height 5
+solid pyramid regular 5 side 4, height 6
+solid pyramid rectangle 6 by 4, height 9         # width (Y) by depth (X)
+solid octahedron edge 6
+solid frustum regular 4 side 6, top 3, height 4  # pyramidal
+```
+
+**The decisions worth not re-litigating:**
+
+*A round solid carries a placement, and the maths runs in its frame (P1).*
+`SolidBody.placement` is an origin plus an orthonormal, right-handed frame
+whose local y is the axis (`silhouette.ts`: `Placement`, `frameForAxis`,
+`toWorld`/`toLocal`). To draw or occlude, the world camera is re-expressed in
+that frame — a **local camera** whose `project(p)` is the world projection of
+the placed point — and the existing y-axis silhouette and occlusion code runs
+unchanged against it. Two things make that safe. An **identity placement
+uses the world camera itself** (`===`), so every pre-phase-7 round solid kept
+its bytes. And `Camera` gained an optional `projectVector`, the linear part
+of a local camera's affine `project`: `projectCircle` and
+`coneSilhouetteAngles` project radius VECTORS, which must not pick up the
+placement's translation. A test at the origin cannot see that bug; the
+off-origin tilted-cylinder test can (it went red when `projectVector` was
+deleted, and the origin case did not). The frame for an axis is fixed
+(u = axis × author-X, falling back to author-Y), so arc start angles are
+deterministic.
+
+*One exact convex-hull builder (P3).* `hull.ts`'s `hullOf` enumerates every
+triple's plane (O(n⁴), exact, no iteration), keeps the supporting ones, and
+**merges coplanar ones into one polygonal face** — a split face would draw a
+spurious diagonal. Vertex order is the input order, so a point-built solid's
+`labelOrder` is the identity. Every point-built polyhedron, every phase 7
+regular solid and the six-edge tetrahedron is built by it, so they are convex
+by construction, and the convexity invariant covers them (plus 20 seeded
+random hulls). It refuses a named point that is not a corner — inside, on an
+edge, on a face — naming it.
+
+*The six-edge tetrahedron is placed exactly like the regular one (P4).*
+`tetrahedron.ts`: every face by the strict triangle inequality, then the
+Cayley–Menger determinant (288 V²) must be positive. The height comes from
+the determinant (h = 3V / area), so the check is the whole story: without it
+the height is NaN and the hull refuses in the wrong words. Base ABC level and
+counter-clockwise from above, centroid on the axis, A at the default camera's
+azimuth + 15°. Six equal edges reproduce `tetrahedron edge e vertices ABCD`
+within GEOM_EPS. The AIME 2024 I tetrahedron measures all six edges and its
+height 80 / (3√21) (from V = 160/3 and area 6√21, computed by hand).
+
+*P5 — one placement rule and one lettering rule for regular bases.*
+`regular.ts`: the rotation is the integer degree in one symmetry period that
+maximises the least of every face's margin from edge-on under the default
+camera and every base corner's azimuthal distance from the camera's vertical
+plane; ties go to the smallest. Recorded: prism n = 3: 16°, 5: 3°, 6: 0°,
+8: 19° (a prism's proportions do not matter to the rule); octahedron 75°.
+**A pyramid's rotation depends on its proportions** (its faces lean), so it is
+a function of the shape; the tested shapes' values are recorded in
+`regular.ts`. The rule would put the regular tetrahedron at 12° and the
+square pyramid at 14°, each about 3° of margin better; both stay pinned at
+45°. Lettering: A is the left end, from the viewer, of the base edge whose
+normal points nearest the camera; counter-clockwise from above; top over
+base; apex last; the octahedron's equator, then its top, then its bottom
+apex. It is the box's textbook lettering, generalised.
+
+*Point-built solids have no named dimensions* — `label: S height` is refused,
+pointing at `label: AB` — and take no `vertices` clause except a prism's new
+top. *A tilted round solid refuses `cut:`/`section:`* until oblique planes
+(build step 8); a vertical one off the origin is cut where it is.
+
+**Correction to the plan, recorded.** The plan said the hexagonal prism's
+long diagonal AD is not axis-parallel. Under P5's rotation for n = 6 (0°) it
+runs along author X. The test keeps AD = 24 and adds BE = 24, which is along
+neither axis, and checks that the camera foreshortens it.
+
+**Not yet reachable by the tutor:** `server/src/domain/bootstrap.ts` now lags
+two phases (Open items 1). The user has scheduled the tutor reference for
+much later.
+
+
 ---
 
 ---
@@ -305,7 +400,26 @@ authorFrame.ts  the z-up author frame <-> the internal y-up frame (S1)
 construct3d.ts  the Vec3 toolkit and constructions in space, camera-free
 solidScope.ts   the solid-figure walk: solids + space points, source order
 occlusion.ts    the glass rule: segments split visible/hidden, exactly
+hull.ts         the one exact convex-hull builder (P3), and base-polygon checks
+tetrahedron.ts  the tetrahedron from six edges, Cayley-Menger checked (P4)
+regular.ts      regular n-gon solids and the octahedron: P5's rotation and lettering
 ```
+
+**Placements and the local camera (P1).** A round solid (cylinder, cone,
+sphere, frustum) is always computed in H1's frame — centred, axis +y — and
+carries a `placement` saying where that frame sits in the world.
+`solidOutline`, `hidesPoint`/`occlusionCandidates` and `sectionOf` convert at
+their door: outlines through `localCamera(camera, placement)`, occlusion by
+taking the segment into local coordinates, sections by moving the plane.
+Identity placements short-circuit every conversion, which is what kept every
+pre-phase-7 byte. Polyhedra need none of this: their vertices are world
+points already.
+
+**Every polyhedron built from points goes through `hullOf` (P3).** So are
+the phase 7 dimension primitives (their vertices listed in lettering order,
+so `labelOrder` is the identity). The pre-phase-7 box, square pyramid and
+regular tetrahedron keep their hand-built face lists, because their bytes
+are pinned.
 
 **Two 3D engines, and they share no code.** *Space* is track 3 — three.js,
 orbitable, calculus (`scene/buildScene3d.ts`, `render/SceneRenderer3D.ts`).
@@ -341,7 +455,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1139 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1326 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the worktree
@@ -505,6 +619,9 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    declare-your-mode rule landed there; nothing else has. **As of phase 6 it
    lags by one more phase**: points in space, the z-up frame, constructions
    in space and `segment: … dashed | plain` are all unreachable to the tutor.
+   **As of phase 7 it lags by two**: every solid on points, the six-edge
+   tetrahedron, the hull, the frustum and the regular solids are unreachable
+   too. The user has scheduled the tutor reference for much later.
    The house rule "declare `@mode:`" matters doubly for solid figures: under
    S5 a spec of 3-coordinate points with no solid still infers the *space*
    renderer, so a tutor sketching points in space before adding the solid gets

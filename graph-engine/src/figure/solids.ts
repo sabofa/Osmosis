@@ -69,6 +69,17 @@ import {
 //
 // Rule 1 is `rectangularPrism`'s existing convention, extended rather than
 // replaced: a prism built here is bit-for-bit the prism phase 2 built.
+//
+// **Phase 7.** A cube is the box. A frustum follows (1)-(3), base rim at
+// -h/2. The regular prisms, pyramids and frusta, the rectangle pyramid and
+// the octahedron follow (1)-(3), and (4) becomes P5 (regular.ts): the base's
+// rotation is the integer degree keeping every face farthest from edge-on
+// under the default camera, and the letters start at the left end of the
+// front-most base edge — the box's textbook lettering, generalised. A solid
+// ON NAMED POINTS is placed by them, not by this convention (spec, "Placement
+// by points"): a polyhedron is the hull of its points, and a round solid
+// carries a placement (P1, silhouette.ts) taking H1's frame to where its
+// points put it.
 
 // ---------------------------------------------------------------------------
 // The vocabulary

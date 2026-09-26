@@ -290,11 +290,58 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   [S =] solid cylinder radius <r>, height <h>
 //   [S =] solid cone radius <r>, height <h>
 //   [S =] solid sphere radius <r>
-//   label: S width | height | depth | base | edge | radius [= <value>]
+//   [S =] solid frustum radius <r>, top <t>, height <h>
+//                                                 -> a conical frustum, base rim r, top rim t. top > r is
+//                                                    the same solid turned over; top = r is refused (write
+//                                                    a cylinder), top 0 is refused (write a cone)
+//   [S =] solid cube edge <e>                     -> exactly "prism e by e by e", same bytes
+//   [S =] solid prism regular <n> side <s>, height <h>
+//   [S =] solid pyramid regular <n> side <s>, height <h>
+//   [S =] solid pyramid rectangle <w> by <d>, height <h>
+//                                                 -> width along Y by depth along X, like a prism
+//   [S =] solid octahedron edge <e>
+//   [S =] solid frustum regular <n> side <s>, top <t>, height <h>
+//                                                 -> pyramidal; top = side refused (a prism), top 0 (a pyramid)
+//     A regular base (and the octahedron's equator) is turned about the
+//     vertical to the integer degree that keeps every face farthest from
+//     edge-on under the DEFAULT view and no corner in line with the view
+//     through the axis (figure/regular.ts records the angles), and lettered
+//     like a box: A the left end of the front-most base edge, the base
+//     counter-clockwise from above, a top over its base, an apex last; an
+//     octahedron's equator, then its top, then its bottom apex.
+//
+//   Solids on named points (phase 7) — the points place the solid, so it
+//   sits and turns wherever they are. Points are defined first:
+//
+//   [S =] solid hull A-B-C-D-...                  -> the convex hull; every named point must be a corner
+//   [S =] solid tetrahedron A-B-C-D
+//   [S =] solid pyramid A-B-C-D apex E            -> base polygon, then apex; the base must be flat and convex
+//   [S =] solid prism A-B-C-D height <h> [vertices EFGH]
+//                                                 -> a right prism rising along (B - A) x (C - A), so the
+//                                                    base reads counter-clockwise from the top; reverse the
+//                                                    base to extrude the other way. "vertices" names the new top
+//   [S =] solid sphere center M radius <r>
+//   [S =] solid cylinder from A to B radius <r>   -> A and B are the rim centres; any direction
+//   [S =] solid cone apex V base O radius <r>
+//   [S =] solid frustum from O radius <r> to P radius <r>
+//   [S =] solid tetrahedron ABCD with AB = <e>, AC = <e>, AD = <e>, BC = <e>, BD = <e>, CD = <e>
+//                                                 -> by its six edges, in any order and either letter order;
+//                                                    placed like "tetrahedron edge e" (base ABC level, D
+//                                                    above), and A-D become points in space. Refused, with
+//                                                    the reason, when a face or the whole cannot close
+//     A solid on named points takes no "vertices" (its points name them),
+//     except a prism's new top, and has no named dimensions: measure between
+//     its points ("label: AB") instead.
+//
+//   label: S width | height | depth | base | edge | radius | top | side [= <value>]
 //                                                 -> a dimension read off the SOLID, never the drawing
 //   cut: S by plane <x|y|z> = <c>                 -> the section shaded in place. "plane z = 1" is
 //                                                    horizontal; "plane x = c" and "plane y = c" are
-//                                                    vertical. Axis-perpendicular planes only.
+//                                                    vertical. Axis-perpendicular planes only. A frustum
+//                                                    cuts in a circle square to its axis and a trapezoid
+//                                                    through it. A round solid placed by points is cut
+//                                                    where it is while its axis is vertical; a TILTED one
+//                                                    is refused until oblique planes (build step 8)
 //   section: S by plane <x|y|z> = <c> [vertices PQRS]
 //                                                 -> the same cut lifted out beside the solid at true
 //                                                    shape, as ordinary 2D geometry

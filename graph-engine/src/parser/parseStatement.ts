@@ -505,9 +505,21 @@ function parseConstructionBody(rhs: string): Construction | null {
 // counter-clockwise from above from the front-left bottom corner, EFGH above
 // them; a pyramid's apex E; a tetrahedron's apex D), constructions on them
 // ("plane A-B-C" as an operand of foot and intersect, "centroid ABCD"), and
-// "segment: A-G [dashed | plain]" under the glass rule. Nothing here knows which names are points in space: that is
-// decided by the solid-figure walk (figure/solidScope.ts), after parsing. The
-// full surface, and the mode rule for solid figures, is documented in
+// "segment: A-G [dashed | plain]" under the glass rule.
+//
+// Phase 7 added solids on named points ("hull A-B-C-D", "tetrahedron
+// A-B-C-D", "pyramid A-B-C-D apex E", "prism A-B-C height 5", "sphere center
+// M radius 5", "cylinder from A to B radius 3", "cone apex V base O radius
+// 3", "frustum from O radius 6 to P radius 3"), the tetrahedron by its six
+// edges ("tetrahedron ABCD with AB = ..., ..."), and more solids by
+// dimensions (frustum, cube, regular prism/pyramid/frustum, rectangle
+// pyramid, octahedron). The frustum's rules (P2), the placement and
+// lettering of regular bases (P5), and which sections a placed round solid
+// takes (P7) are in the grammar comment too.
+//
+// Nothing here knows which names are points in space: that is decided by
+// the solid-figure walk (figure/solidScope.ts), after parsing. The full
+// surface, and the mode rule for solid figures, is documented in
 // parser/types.ts's grammar comment.
 // --------------------------------------------------------------------------
 

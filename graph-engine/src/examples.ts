@@ -423,6 +423,80 @@ N = (0, 0, 2)
 segment: M-N plain # the axis, forced solid though the cylinder hides it`,
   },
   {
+    // AIME 2024 I, problem 14: the tetrahedron given only by its six edges
+    // (P4), placed like the regular one — base ABC horizontal, D above it.
+    // D's height over ABC is 3V / area(ABC) = 80 / (3 sqrt 21) = 5.819.
+    label: 'AIME tetrahedron',
+    spec: `@mode: figure
+T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)
+F = foot D to plane A-B-C
+segment: D-F       # the altitude, inside the solid, so dashed
+label: DF
+given: AB = √41    # symbolic: printed as written (exact values are build step 3)
+given: AC = √80
+given: AD = √89`,
+  },
+  {
+    // A regular hexagonal prism lettered by P5: A the left end of the front
+    // edge, ABCDEF counter-clockwise from above, G-L over them. The triangle
+    // through A's three neighbours B, F and G is the AIME dihedral-angle
+    // setup (the angle mark itself arrives with build step 10).
+    label: 'Hexagonal prism',
+    spec: `@mode: figure
+S = solid prism regular 6 side 12, height 8 vertices ABCDEFGHIJKL
+segment: B-F
+segment: F-G
+segment: G-B
+label: S side
+label: S height`,
+  },
+  {
+    // Two cones of radius 3 and height 8, placed by points (P6), their axes
+    // crossing at right angles at O, 3 from each base — and the sphere at O
+    // tangent to both, radius 15 / sqrt(73): the distance from O to the
+    // generator from (5, 0, 0) through (-3, 3, 0). Glass: each cone draws
+    // its own back dashed and neither hides the other.
+    label: 'Two cones and a sphere',
+    spec: `@mode: figure
+O = (0, 0, 0)
+P = (-3, 0, 0)
+V = (5, 0, 0)
+K = solid cone apex V base P radius 3
+Q = (0, -3, 0)
+W = (0, 5, 0)
+L = solid cone apex W base Q radius 3
+S = solid sphere center O radius 15/sqrt(73)`,
+  },
+  {
+    // A conical frustum (P2): radius 6 at the base, 3 at the top, height 4,
+    // with its axis and its three named dimensions.
+    label: 'Frustum',
+    spec: `@mode: figure
+F = solid frustum radius 6, top 3, height 4
+label: F radius = 6
+label: F top = 3
+label: F height = 4`,
+  },
+  {
+    // A polyhedron given only as the hull of named points (P3): a cube of
+    // edge 2 with its corner at (2, 2, 2) sliced off through the midpoints
+    // of the three edges there. Every named point is a corner; the slice is
+    // one triangular face, and each cut face is one pentagon.
+    label: 'Hull of points',
+    spec: `@mode: figure
+A = (0, 0, 0)
+B = (2, 0, 0)
+C = (2, 2, 0)
+D = (0, 2, 0)
+E = (0, 0, 2)
+F = (2, 0, 2)
+H = (0, 2, 2)
+P = (1, 2, 2)
+Q = (2, 1, 2)
+R = (2, 2, 1)
+S = solid hull A-B-C-D-E-F-H-P-Q-R`,
+  },
+  {
     label: 'Right angle',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,

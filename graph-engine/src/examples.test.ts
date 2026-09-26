@@ -6,6 +6,10 @@ import { buildScene } from './scene/buildScene'
 import { buildTable } from './scene/buildTable'
 import { resolvePanels } from './scene/mode'
 import { LIGHT_PALETTE } from './render/palette'
+import { evalExpr } from './parser/evalExpr'
+import { authorToWorld } from './figure/authorFrame'
+import { toWorld } from './figure/silhouette'
+import { buildSolidFigure } from './figure/solidScope'
 
 // Every example is a button in the review harness, and a button that does not
 // work is a defect the user meets on their first click. Three phases of
@@ -55,6 +59,50 @@ describe('review harness examples', () => {
           expect(scene.objects.length).toBeGreaterThan(0)
         }
       })
+    })
+  }
+})
+
+// The "Two cones and a sphere" example states its sphere's radius as a
+// number, 15/sqrt(73), rather than constructing tangency (build step 9). A
+// wrong number would draw a sphere that is not tangent, and nothing else
+// would notice — so it is checked here, against the solids the example
+// actually builds.
+describe('the "Two cones and a sphere" example is tangent', () => {
+  const example = EXAMPLES.find((e) => e.label === 'Two cones and a sphere')!
+  const parsed = parseSpec(example.spec)
+  const scope = buildSolidFigure(parsed.statements, (e) => evalExpr(e, {}, 'radians', {}))
+
+  it('builds both cones and the sphere', () => {
+    expect(scope.errors).toEqual([])
+    expect([...scope.solids.keys()].sort()).toEqual(['K', 'L', 'S'])
+  })
+
+  for (const [cone, rimPoint] of [
+    ['K', { x: -3, y: 3, z: 0 }],
+    ['L', { x: 3, y: -3, z: 0 }],
+  ] as const) {
+    it(`puts the sphere at distance 15 / sqrt(73) from the generator of ${cone} through (${rimPoint.x}, ${rimPoint.y}, ${rimPoint.z})`, () => {
+      const body = scope.solids.get(cone)!
+      const sphere = scope.solids.get('S')!
+      const h = body.spec.kind === 'cone' ? body.spec.height : NaN
+      const apex = toWorld(body.placement, { x: 0, y: h / 2, z: 0 })
+      const baseCentre = toWorld(body.placement, { x: 0, y: -h / 2, z: 0 })
+      const rim = authorToWorld(rimPoint)
+      // The point really is on this cone's base rim: radius 3 from the base
+      // centre, square to the axis.
+      const out = { x: rim.x - baseCentre.x, y: rim.y - baseCentre.y, z: rim.z - baseCentre.z }
+      const axis = body.placement.frame.axis
+      expect(Math.hypot(out.x, out.y, out.z)).toBeCloseTo(3, 12)
+      expect(out.x * axis.x + out.y * axis.y + out.z * axis.z).toBeCloseTo(0, 12)
+      // Distance from the sphere's centre to the line apex -> rim.
+      const d = { x: rim.x - apex.x, y: rim.y - apex.y, z: rim.z - apex.z }
+      const c = sphere.placement.origin
+      const w = { x: c.x - apex.x, y: c.y - apex.y, z: c.z - apex.z }
+      const cross = { x: w.y * d.z - w.z * d.y, y: w.z * d.x - w.x * d.z, z: w.x * d.y - w.y * d.x }
+      const distance = Math.hypot(cross.x, cross.y, cross.z) / Math.hypot(d.x, d.y, d.z)
+      expect(distance).toBeCloseTo(15 / Math.sqrt(73), 12)
+      expect(sphere.spec.kind === 'sphere' && sphere.spec.radius).toBeCloseTo(distance, 12)
     })
   }
 })
