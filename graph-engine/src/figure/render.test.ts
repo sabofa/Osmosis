@@ -1817,3 +1817,100 @@ describe('named points in solid figures', () => {
     expect(render(spec)).toBe(render(spec))
   })
 })
+
+// ---------------------------------------------------------------------------
+// Segments in space, and the glass rule (phase 6, Task 4)
+// ---------------------------------------------------------------------------
+
+describe('segments in solid figures', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const NAMED = '@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH'
+
+  // The drawn pieces of one statement's segment, in emission order per layer.
+  function pieces(svg: string, statement: number): { layer: string; dashed: boolean }[] {
+    const out: { layer: string; dashed: boolean }[] = []
+    for (const name of ['auxiliary', 'primary']) {
+      for (const m of layer(svg, name).matchAll(/<line [^>]*\/>/g)) {
+        if (!m[0].includes(`data-statement="${statement}"`)) continue
+        out.push({ layer: name, dashed: m[0].includes('stroke-dasharray') })
+      }
+    }
+    return out
+  }
+
+  it('dashes the space diagonal A-G, in the layer beneath, exactly as a hidden edge', () => {
+    const svg = render(`${NAMED}\nsegment: A-G`)
+    expect(result(`${NAMED}\nsegment: A-G`).errors).toEqual([])
+    expect(pieces(svg, 1)).toEqual([{ layer: 'auxiliary', dashed: true }])
+    // The same stroke a hidden solid edge gets.
+    const hiddenEdge = /<line [^>]*data-object="edge-[^"]*"[^>]*\/>/.exec(layer(svg, 'auxiliary'))![0]
+    const diagonal = [...layer(svg, 'auxiliary').matchAll(/<line [^>]*\/>/g)].map((m) => m[0]).find((l) => l.includes('data-statement="1"'))!
+    const style = (line: string) => line.replace(/ (x1|y1|x2|y2|data-statement|data-object)="[^"]*"/g, '')
+    expect(style(diagonal)).toBe(style(hiddenEdge))
+  })
+
+  it('draws a front-face diagonal solid and a back-face diagonal dashed', () => {
+    expect(pieces(render(`${NAMED}\nsegment: E-G`), 1)).toEqual([{ layer: 'primary', dashed: false }])
+    expect(pieces(render(`${NAMED}\nsegment: B-D`), 1)).toEqual([{ layer: 'auxiliary', dashed: true }])
+  })
+
+  it('splits a segment through the solid into visible, hidden, visible pieces', () => {
+    // In author coordinates: straight down the vertical through the centre,
+    // from above the top face to well below the solid — the internal
+    // (0, 6, 0) to (0, -12, 0) is author (0, 0, 6) to (0, 0, -12).
+    // Internal y is the prism's height axis here, so it enters through the
+    // top face (a front face) and leaves the shadow at a silhouette edge.
+    const svg = render(`${NAMED}\n(0, 0, 6) -- (0, 0, -12)`)
+    expect(result(`${NAMED}\n(0, 0, 6) -- (0, 0, -12)`).errors).toEqual([])
+    const drawn = pieces(svg, 1)
+    expect(drawn.filter((p) => p.dashed)).toHaveLength(1)
+    expect(drawn.filter((p) => !p.dashed)).toHaveLength(2)
+  })
+
+  it('lets the author force either style, both ways', () => {
+    expect(pieces(render(`${NAMED}\nsegment: A-G plain`), 1)).toEqual([{ layer: 'primary', dashed: false }])
+    expect(pieces(render(`${NAMED}\nsegment: E-G dashed`), 1)).toEqual([{ layer: 'auxiliary', dashed: true }])
+  })
+
+  it('keeps a segment between plane points exactly as it was', () => {
+    const spec = '@mode: figure\nA = (0, 0)\nB = (4, 0)\nsegment: A-B dashed\nsegment: A-B plain\nsegment: A-B'
+    const svg = render(spec)
+    expect(pieces(svg, 2)).toEqual([{ layer: 'auxiliary', dashed: true }])
+    expect(pieces(svg, 3)).toEqual([{ layer: 'primary', dashed: false }])
+    expect(pieces(svg, 4)).toEqual([{ layer: 'primary', dashed: false }])
+  })
+
+  it('refuses a segment from a point in space to a point in the plane', () => {
+    const errors = result(`${NAMED}\nP = (1, 2)\nsegment: A-P`).errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].message).toMatch(/space \(A\).*plane \(P\)/)
+  })
+
+  it('keeps solids glass to each other: each draws its own edges exactly as alone', () => {
+    // A tetrahedron inside the prism. The prism's projection contains the
+    // tetrahedron's, so both figures fit the same box, and the prism's edges
+    // must be the same bytes with or without the tetrahedron in front of its
+    // back. The tetrahedron is not dashed by the prism around it.
+    const both = render('@mode: figure\nsolid: prism 8 by 5 by 6\nsolid: tetrahedron edge 3')
+    const alone = render('@mode: figure\nsolid: prism 8 by 5 by 6')
+    const edgesOf = (svg: string, statement: number) =>
+      ['primary', 'auxiliary'].map((name) =>
+        [...layer(svg, name).matchAll(/<line [^>]*\/>/g)].map((m) => m[0]).filter((l) => l.includes(`data-statement="${statement}"`))
+      )
+    expect(edgesOf(both, 0)).toEqual(edgesOf(alone, 0))
+    const tetraAlone = render('@mode: figure\nsolid: tetrahedron edge 3')
+    const objects = (svg: string, statement: number) =>
+      edgesOf(svg, statement).map((lines) => lines.map((l) => /data-object="([^"]*)"/.exec(l)![1]).sort())
+    expect(objects(both, 1)).toEqual(objects(tetraAlone, 0))
+  })
+
+  it('renders byte-identically twice', () => {
+    const spec = `${NAMED}\nM = midpoint E-G\nsegment: A-G\nsegment: A-M\n(0, 0, 6) -- (0, 0, -12)\nlabel: AG`
+    expect(render(spec)).toBe(render(spec))
+  })
+})

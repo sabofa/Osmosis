@@ -597,7 +597,7 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
           kind: 'segment',
           from: resolvePoint(statement.from),
           to: resolvePoint(statement.to),
-          dashed: statement.dashed,
+          dashed: statement.style === 'dashed',
           color: statement.color,
         })
       } else if (statement.kind === 'circleShape' || statement.kind === 'centralAngle' || statement.kind === 'inscribedAngle') {

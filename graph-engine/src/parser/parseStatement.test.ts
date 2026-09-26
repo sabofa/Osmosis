@@ -867,3 +867,11 @@ describe('curved solids', () => {
     expect(s.subject).toEqual({ kind: 'solidDimension', solid: 'C', dimension: 'radius' })
   })
 })
+
+describe('segment styles (phase 6)', () => {
+  it('parses auto, dashed and plain', () => {
+    expect(parseStatement('segment: A-G')).toMatchObject({ kind: 'namedSegment', from: 'A', to: 'G', style: 'auto' })
+    expect(parseStatement('segment: A-G dashed')).toMatchObject({ kind: 'namedSegment', style: 'dashed' })
+    expect(parseStatement('segment: A-G plain')).toMatchObject({ kind: 'namedSegment', style: 'plain' })
+  })
+})

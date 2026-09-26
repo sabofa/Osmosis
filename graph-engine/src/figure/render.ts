@@ -36,10 +36,11 @@ import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type Labe
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
 import { angle3, distance3 } from './construct3d'
+import { segmentSpans, type Span } from './occlusion'
 import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge, type Vec3 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { solidDimensions, solidDimensionSegment, solidOutline, type SolidBody } from './solids'
-import { authorPlane, describeAuthorPlane } from './authorFrame'
+import { authorPlane, authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
 import { projectCircle, type ProjectedCircle } from './silhouette'
 import {
@@ -554,6 +555,42 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   const resolvers: Resolvers = { point: resolve, circle: resolveCircle, solid: resolveSolid, space: resolveSpace }
 
+  // S6 — every solid the figure draws occludes a construction segment, in
+  // source order (the order does not change the answer, only the order the
+  // candidates are gathered in). A hidden solid is not drawn, so it hides
+  // nothing.
+  const occluders: SolidBody[] = []
+  for (const [index, built] of [...scope.byStatement.entries()].sort((x, y) => x[0] - y[0])) {
+    const statement = statements[index]
+    if (!built.solid || (statement.statementName && config.hidden.has(statement.statementName))) continue
+    occluders.push(built.solid)
+  }
+
+  // A segment in space, drawn as line items: split into visible and hidden
+  // pieces by the glass rule, or all one style when the author forced it.
+  // Hidden pieces are auxiliary lines, which is exactly how a hidden solid
+  // edge is stroked — dashed, thinner, fainter, in the layer beneath.
+  function spaceSegmentItems(
+    index: number,
+    a: Vec3,
+    b: Vec3,
+    style: 'auto' | 'dashed' | 'plain',
+    object: string | null,
+    color: string | null
+  ): FigureItem[] {
+    const spans: Span[] = style === 'auto' ? segmentSpans(a, b, occluders, camera) : [{ from: 0, to: 1, hidden: style === 'dashed' }]
+    const at = (u: number): Vec2 => camera.project({ x: a.x + u * (b.x - a.x), y: a.y + u * (b.y - a.y), z: a.z + u * (b.z - a.z) })
+    return spans.map((span) => ({
+      kind: 'line' as const,
+      id: { statement: index, object },
+      a: at(span.from),
+      b: at(span.to),
+      extent: 'segment' as const,
+      auxiliary: span.hidden,
+      color,
+    }))
+  }
+
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
     return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
@@ -582,15 +619,34 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         case 'segment':
         case 'ray':
         case 'vector': {
+          if (statement.z1 !== null || statement.z2 !== null) {
+            if (statement.kind !== 'segment' || statement.z1 === null || statement.z2 === null) {
+              throw new Error(
+                statement.kind === 'segment'
+                  ? 'A segment in space needs three coordinates at both ends, "(x1, y1, z1) -- (x2, y2, z2)"'
+                  : `A ${statement.kind} in space is not drawn in a solid figure yet — draw a segment, "(x1, y1, z1) -- (x2, y2, z2)"`
+              )
+            }
+            // S1 — the author's z-up coordinates, converted at the boundary.
+            const a = authorToWorld({ x: value(statement.x1), y: value(statement.y1), z: value(statement.z1) })
+            const b = authorToWorld({ x: value(statement.x2), y: value(statement.y2), z: value(statement.z2) })
+            items.push(...spaceSegmentItems(index, a, b, 'auto', null, statement.color))
+            break
+          }
           const a = { x: value(statement.x1), y: value(statement.y1) }
           const b = { x: value(statement.x2), y: value(statement.y2) }
           items.push({ kind: 'line', id, a, b, extent: statement.kind === 'ray' ? 'ray' : 'segment', auxiliary: false, color: statement.color })
           break
         }
         case 'namedSegment': {
+          const space = resolveSpace([statement.from, statement.to], `segment: ${statement.from}-${statement.to}`)
+          if (space) {
+            items.push(...spaceSegmentItems(index, space[0], space[1], statement.style, `${statement.from}${statement.to}`, statement.color))
+            break
+          }
           const a = resolve(statement.from)
           const b = resolve(statement.to)
-          items.push({ kind: 'line', id, a, b, extent: 'segment', auxiliary: statement.dashed, color: statement.color })
+          items.push({ kind: 'line', id, a, b, extent: 'segment', auxiliary: statement.style === 'dashed', color: statement.color })
           break
         }
         case 'circle':

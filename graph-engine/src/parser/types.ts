@@ -236,7 +236,7 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     box's corner or side is "@givens:".
 //   right-angle: A-B-C                              -> small square marker at vertex B indicating a
 //                                                     90-degree angle between rays B->A and B->C.
-//   segment: A-B [dashed]                           -> a segment between two named points, resolved
+//   segment: A-B [dashed | plain]                   -> a segment between two named points, resolved
 //                                                     the same way as angle:/tick:'s points. The
 //                                                     sibling of those marks, and distinct from the
 //                                                     coordinate form "(x1,y1) -- (x2,y2)", which
@@ -407,10 +407,15 @@ export type StatementShape =
   | { kind: 'inscribedAngle'; circle: string; from: string; vertex: string; to: string }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
-  // "segment: A-B [dashed]" — a segment between two *named* points, the
-  // sibling of tick:/angle:/right-angle:. Distinct from the coordinate form
-  // ("(x1,y1) -- (x2,y2)"), which cannot reference a constructed point.
-  | { kind: 'namedSegment'; from: string; to: string; dashed: boolean }
+  // "segment: A-B [dashed | plain]" — a segment between two *named* points,
+  // the sibling of tick:/angle:/right-angle:. Distinct from the coordinate
+  // form ("(x1,y1) -- (x2,y2)"), which cannot reference a constructed point.
+  //
+  // `style` is 'auto' unless the author forced one. In the plane 'auto' is
+  // plain; between points in space it is the glass rule (S6): dashed where
+  // a solid hides it, split where that changes. 'dashed' and 'plain' override
+  // the rule either way.
+  | { kind: 'namedSegment'; from: string; to: string; style: 'auto' | 'dashed' | 'plain' }
   // A named geometry construction: "M = midpoint A-B", "m = line through P
   // parallel to A-B", "P, Q = intersect circle O, line B-C". `names` is the
   // left-hand side — two names only for `intersect`, which can yield two

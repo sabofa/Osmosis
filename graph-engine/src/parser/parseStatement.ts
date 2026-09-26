@@ -822,16 +822,21 @@ function parseStatementCore(rawLine: string): StatementShape {
   // this can draw between *constructed* points — which the coordinate form
   // "(x1,y1) -- (x2,y2)" cannot, since a construction has no coordinates to
   // type. This is what makes "drop the altitude and draw it dashed" one line.
+  //
+  // "plain" is the other override: between points in a solid figure a
+  // segment is dashed where a solid hides it (S6), and an author may force
+  // either style against that rule.
   if (line.startsWith('segment:')) {
     const rest = line.slice('segment:'.length).trim()
-    const dashed = /\bdashed$/.test(rest)
-    const spec = (dashed ? rest.slice(0, rest.length - 'dashed'.length) : rest).trim()
+    const forced = /\b(dashed|plain)$/.exec(rest)
+    const style = forced ? (forced[1] as 'dashed' | 'plain') : 'auto'
+    const spec = (forced ? rest.slice(0, forced.index) : rest).trim()
     const parts = spec.split('-').map((p) => p.trim())
     const namePattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/
     if (parts.length !== 2 || parts.some((p) => !namePattern.test(p))) {
-      throw new Error('Expected "segment: A-B" (two point names), optionally followed by "dashed"')
+      throw new Error('Expected "segment: A-B" (two point names), optionally followed by "dashed" or "plain"')
     }
-    return { kind: 'namedSegment', from: parts[0], to: parts[1], dashed }
+    return { kind: 'namedSegment', from: parts[0], to: parts[1], style }
   }
 
   // Right-angle marker: "right-angle: A-B-C" (vertex is the middle name) —
