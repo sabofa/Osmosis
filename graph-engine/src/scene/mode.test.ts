@@ -165,3 +165,18 @@ describe('the circle vocabulary is geometry', () => {
     expect(mode(circle + 'arc P-Q on O ccw\ny = x^2')).toBe('graph')
   })
 })
+
+describe('solid figures and 3-coordinate points (S5)', () => {
+  it('infers figure for a solid with a 3-coordinate point beside it', () => {
+    expect(mode('S = solid prism 8 by 5 by 6\nA = (1, 2, 3)')).toBe('figure')
+    expect(mode('A = (1, 2, 3)\nS = solid sphere radius 2')).toBe('figure')
+  })
+
+  it('infers figure for a cross-section with a 3-coordinate point', () => {
+    expect(mode('A = (1, 2, 3)\ncut: S by plane z = 1')).toBe('figure')
+  })
+
+  it('still infers graph (space) for 3-coordinate points with no solid', () => {
+    expect(mode('A = (1, 2, 3)')).toBe('graph')
+  })
+})

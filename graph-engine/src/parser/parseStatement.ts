@@ -210,6 +210,12 @@ function parseGeometryRef(text: string, role: string): GeometryRef {
   let extent: 'infinite' | 'ray' | 'segment' | null = null
   let expectCircle = false
 
+  // "plane A-B-C": the plane through three points. Only a solid figure has
+  // anywhere for one to be, and the solid-figure walk says so when it is
+  // given points in the plane.
+  const plane = /^plane\s+(.+)$/.exec(rest)
+  if (plane) return { kind: 'plane', points: parseNameTriple(plane[1], `plane of the ${role}`) }
+
   const prefix = /^(line|segment|ray|circle)\s+/.exec(rest)
   if (prefix) {
     rest = rest.slice(prefix[0].length).trim()
@@ -231,11 +237,23 @@ const CENTRE_KEYWORDS: TriangleCentreKind[] = ['centroid', 'circumcenter', 'ince
 // "<centre> [of] ABC" — shared by the bound form ("G = centroid ABC") and the
 // bare one ("incircle of ABC"), which are the same construction with and
 // without a name to bind.
+//
+// Four vertices are accepted for a centroid alone: "G = centroid ABCD" is the
+// centroid of a tetrahedron, which the solid-figure walk resolves. Every other
+// centre is a triangle's and has no four-point meaning.
 function parseTriangleCentre(text: string): Construction | null {
-  const match = /^([a-z]+)\s+(?:of\s+)?([a-zA-Z]{3})$/.exec(text.trim())
+  const match = /^([a-z]+)\s+(?:of\s+)?([a-zA-Z]{3,4})$/.exec(text.trim())
   if (!match) return null
   const centre = CENTRE_KEYWORDS.find((k) => k === match[1])
   if (!centre) return null
+  if (match[2].length === 4) {
+    if (centre !== 'centroid') {
+      throw new Error(`Expected three vertices for a ${centre} ("${centre} ABC") — only a centroid takes four, got "${match[2]}"`)
+    }
+    const [a, b, c, d] = [...match[2]]
+    if (new Set([a, b, c, d]).size !== 4) throw new Error(`A centroid needs four distinct vertices, got "${match[2]}"`)
+    return { kind: 'triangleCentre', centre, vertices: [a, b, c, d] }
+  }
   return { kind: 'triangleCentre', centre, vertices: parseTriangleNames(match[2], `${centre} triangle`) }
 }
 

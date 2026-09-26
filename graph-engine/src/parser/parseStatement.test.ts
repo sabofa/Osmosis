@@ -361,6 +361,30 @@ describe('parseStatement — geometry constructions', () => {
     }
   })
 
+  it('parses a plane through three points as an operand (solid figures)', () => {
+    const foot = parseStatement('F = foot D to plane A-B-C')
+    if (foot.kind !== 'construction') throw new Error('unreachable')
+    expect(foot.body).toEqual({ kind: 'foot', from: 'D', base: { kind: 'plane', points: ['A', 'B', 'C'] } })
+
+    const meet = parseStatement('X = intersect line A-G, plane B-D-E')
+    if (meet.kind !== 'construction') throw new Error('unreachable')
+    expect(meet.body).toEqual({
+      kind: 'intersect',
+      left: { kind: 'through', extent: 'infinite', from: 'A', to: 'G' },
+      right: { kind: 'plane', points: ['B', 'D', 'E'] },
+    })
+
+    expect(() => parseStatement('F = foot D to plane A-B')).toThrow(/three point names/)
+  })
+
+  it('parses a centroid of four points, and only a centroid', () => {
+    const s = parseStatement('G = centroid ABCD')
+    if (s.kind !== 'construction') throw new Error('unreachable')
+    expect(s.body).toEqual({ kind: 'triangleCentre', centre: 'centroid', vertices: ['A', 'B', 'C', 'D'] })
+    expect(() => parseStatement('O = circumcenter ABCD')).toThrow(/only a centroid/)
+    expect(() => parseStatement('G = centroid ABCA')).toThrow(/distinct/)
+  })
+
   it('parses the nameless incircle/circumcircle forms', () => {
     const inc = parseStatement('incircle of ABC')
     if (inc.kind !== 'construction') throw new Error('unreachable')

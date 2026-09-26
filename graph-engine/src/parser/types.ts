@@ -36,6 +36,11 @@ export type GeometryExtent = 'infinite' | 'ray' | 'segment'
 export type GeometryRef =
   | { kind: 'named'; name: string }
   | { kind: 'through'; extent: GeometryExtent; from: string; to: string }
+  // "plane A-B-C" — the plane through three points, which exists only among
+  // points in space (a solid figure). A plane is an operand and never a bound
+  // or drawn object in this phase: it appears inside "foot D to plane A-B-C"
+  // and "intersect line A-G, plane B-D-E" and nowhere else.
+  | { kind: 'plane'; points: [string, string, string] }
 
 export type TriangleCentreKind = 'centroid' | 'circumcenter' | 'incenter' | 'orthocenter' | 'incircle' | 'circumcircle'
 
@@ -63,7 +68,9 @@ export type Construction =
   | { kind: 'rotate'; point: string; about: string; angle: Expr }
   | { kind: 'translate'; point: string; dx: Expr; dy: Expr }
   | { kind: 'dilate'; point: string; from: string; factor: Expr }
-  | { kind: 'triangleCentre'; centre: TriangleCentreKind; vertices: [string, string, string] }
+  // Three vertices, or four for a centroid — the centroid of a tetrahedron,
+  // which exists only among points in space.
+  | { kind: 'triangleCentre'; centre: TriangleCentreKind; vertices: [string, string, string] | [string, string, string, string] }
   // "O = circle P, 5" — a circle by a *named* centre. The existing
   // "circle: (cx, cy), r" statement draws a circle but binds no geometry
   // name, so without this there is no way to write the spec's own

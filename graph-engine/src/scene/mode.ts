@@ -73,6 +73,10 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   'crossSection',
 ])
 
+// The statements that exist only in a solid figure. Either one settles the
+// renderer on its own (S5).
+const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection'])
+
 // Which renderer a spec gets.
 //
 // **An explicit `@mode` always wins, and declaring it is the house rule.**
@@ -84,6 +88,13 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
 // back the presentation it has today.
 export function resolveMode(statements: Statement[], config: GraphConfig): RenderMode {
   if (config.modeDeclared) return config.mode
+
+  // S5 — a solid means a solid figure, and this comes BEFORE the depth check
+  // below. A solid figure's points have three coordinates by nature, so
+  // without this ordering one "A = (0, 0, 0)" beside a prism would silently
+  // send the whole spec to the space renderer, which has no solids to draw.
+  // A spec with 3-coordinate points and no solid still infers space.
+  if (statements.some((s) => SOLID_FIGURE.has(s.kind))) return 'figure'
 
   // Depth means a 3D scene, which the figure renderer has no answer for: a
   // figure is a flat drawing, and quietly dropping the z would be worse than

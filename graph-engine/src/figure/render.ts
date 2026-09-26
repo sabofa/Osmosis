@@ -7,7 +7,6 @@ import type {
   GivensSection,
   MeasureContent,
   MeasureSubject,
-  SolidPrimitive,
   Statement,
 } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
@@ -36,8 +35,10 @@ import {
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
-import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge } from './project3d'
-import { buildSolid, solidDimensions, solidDimensionSegment, solidOutline, type SolidBody, type SolidSpec } from './solids'
+import { angle3, distance3 } from './construct3d'
+import { cameraFor, drawEdge, edgeExtremes, edgeObject, type ProjectedEdge, type Vec3 } from './project3d'
+import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
+import { solidDimensions, solidDimensionSegment, solidOutline, type SolidBody } from './solids'
 import { authorPlane, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, sectionOf, trueShape } from './crossSection'
 import { projectCircle, type ProjectedCircle } from './silhouette'
@@ -126,10 +127,10 @@ type FigureItem =
   // 2D geometry plus a visible/hidden classification per edge.
   | { kind: 'solid'; id: Identity; edges: ProjectedEdge[]; color: string | null }
   // A letter at a projected vertex. Deliberately not a `point`: a solid's
-  // vertices are lettered, not dotted, and — more importantly — they are NOT
-  // registered in the 2D point namespace. "label: AB" there would print the
-  // length of the PROJECTED edge, which is a fact about the camera and not
-  // about the solid. Dimensions are named instead (see solidDimensions).
+  // vertices are lettered, not dotted. Since phase 6 they ARE points — points
+  // in space, bound by the solid-figure walk (S4) — and never points of the
+  // plane: "label: AB" measures the TRUE 3D length, not the projected edge,
+  // which is a fact about the camera and not about the solid.
   | { kind: 'solidVertex'; id: Identity; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
   // A cross-section shaded ON the projected solid. The lifted form is not
   // here at all: it comes back as an ordinary polygon or circle, which is the
@@ -194,7 +195,9 @@ function collectNamedPoints(statements: Statement[], config: GraphConfig, functi
   const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
   for (const statement of statements) {
     try {
-      if (statement.kind === 'point' && statement.label) {
+      // A 3-coordinate point is a point in SPACE in a figure (S2): the
+      // solid-figure walk binds it, and it is not a point of the plane.
+      if (statement.kind === 'point' && statement.label && statement.z === null) {
         points.set(statement.label, { x: value(statement.x), y: value(statement.y) })
       } else if (statement.kind === 'polygon') {
         for (const vertex of statement.vertices) points.set(vertex.label, { x: value(vertex.x), y: value(vertex.y) })
@@ -253,37 +256,8 @@ function geometryItems(object: GeometryObject, name: string | null, id: Identity
 // Solids
 // ---------------------------------------------------------------------------
 
-// The author's primitive, with its dimensions evaluated.
-//
-// Every dimension must be a positive number. A zero or negative one is not a
-// degenerate drawing to be attempted — it is a solid that does not exist, and
-// the convex hidden-edge rule would classify its faces at random.
-function solidSpecOf(primitive: SolidPrimitive, value: (e: Expr) => number): SolidSpec {
-  const positive = (e: Expr, what: string): number => {
-    const n = value(e)
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`A solid's ${what} must be a positive number, got ${n}`)
-    return n
-  }
-  switch (primitive.kind) {
-    case 'prism':
-      return {
-        kind: 'prism',
-        width: positive(primitive.width, 'width'),
-        height: positive(primitive.height, 'height'),
-        depth: positive(primitive.depth, 'depth'),
-      }
-    case 'pyramid':
-      return { kind: 'pyramid', base: positive(primitive.base, 'base'), height: positive(primitive.height, 'height') }
-    case 'tetrahedron':
-      return { kind: 'tetrahedron', edge: positive(primitive.edge, 'edge') }
-    case 'cylinder':
-      return { kind: 'cylinder', radius: positive(primitive.radius, 'radius'), height: positive(primitive.height, 'height') }
-    case 'cone':
-      return { kind: 'cone', radius: positive(primitive.radius, 'radius'), height: positive(primitive.height, 'height') }
-    case 'sphere':
-      return { kind: 'sphere', radius: positive(primitive.radius, 'radius') }
-  }
-}
+// A solid's dimensions are evaluated by the solid-figure walk (solidScope.ts),
+// which builds every solid before this renderer's main loop runs (S3).
 
 // ---------------------------------------------------------------------------
 // Measure labels
@@ -417,19 +391,24 @@ function measureRuns(
 // place to write a given, not a different standard of truth — and a relation
 // states a fact about the figure that the construction layer has no single
 // number to compare against, so it is written and not checked.
-function givenCells(
-  entry: GivenEntry,
-  resolve: (name: string) => Vec2,
-  resolveCircle: (name: string) => GeometryCircle,
-  resolveSolid: (name: string) => SolidBody,
-  config: GraphConfig
-): { cells: NotationRun[][]; error: string | null } {
+// How a measure finds what it names. `space` answers for names that are
+// points in space (S2): the points themselves, in the internal frame, when
+// every name is one; null when none is; and an error naming one of each when
+// the names mix the two kinds.
+interface Resolvers {
+  point(name: string): Vec2
+  circle(name: string): GeometryCircle
+  solid(name: string): SolidBody
+  space(names: readonly string[], what: string): Vec3[] | null
+}
+
+function givenCells(entry: GivenEntry, resolvers: Resolvers, config: GraphConfig): { cells: NotationRun[][]; error: string | null } {
   if (entry.kind === 'relation') {
-    for (const side of [entry.left, entry.right]) measureOf(side, resolve, resolveCircle, resolveSolid, config)
+    for (const side of [entry.left, entry.right]) measureOf(side, resolvers, config)
     return { cells: [subjectRuns(entry.left), [{ text: entry.symbol, mark: 'none' }], subjectRuns(entry.right)], error: null }
   }
 
-  const computed = measureOf(entry.subject, resolve, resolveCircle, resolveSolid, config)
+  const computed = measureOf(entry.subject, resolvers, config)
   const value = measureRuns(entry.subject, entry.content, computed, config)
   // The equals sign is a column of its own, not the head of the value: it is
   // the relation, and relations share an edge down the table the same way
@@ -441,27 +420,35 @@ function givenCells(
 // rather than a measurement. Resolving the names is the point even for a
 // shape: a given naming a point that does not exist is a broken spec, and
 // finding that out here is what turns it into a legible error.
-function measureOf(
-  subject: MeasureSubject,
-  resolve: (name: string) => Vec2,
-  resolveCircle: (name: string) => GeometryCircle,
-  resolveSolid: (name: string) => SolidBody,
-  config: GraphConfig
-): number | null {
+function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphConfig): number | null {
   switch (subject.kind) {
-    case 'length':
-      return segmentLength(resolve(subject.from), resolve(subject.to))
-    case 'angle':
-      return angleMeasure(resolve(subject.vertex), resolve(subject.from), resolve(subject.to), config.angle)
+    case 'length': {
+      // S4 — between points in space the measure is the TRUE 3D length,
+      // never the projected one: the same commitment solidDimensions makes.
+      const space = resolvers.space([subject.from, subject.to], `${subject.from}${subject.to}`)
+      if (space) return distance3(space[0], space[1])
+      return segmentLength(resolvers.point(subject.from), resolvers.point(subject.to))
+    }
+    case 'angle': {
+      // The true angle in space, in the unit "@angle" selects. Only the
+      // givens table reaches this for space points: an inline angle label in
+      // space is refused (it would float with no arc to label).
+      const space = resolvers.space([subject.from, subject.vertex, subject.to], `angle ${subject.from}${subject.vertex}${subject.to}`)
+      if (space) {
+        const radians = angle3(space[1], space[0], space[2])
+        return config.angle === 'degrees' ? (radians * 180) / Math.PI : radians
+      }
+      return angleMeasure(resolvers.point(subject.vertex), resolvers.point(subject.from), resolvers.point(subject.to), config.angle)
+    }
     case 'triangle':
-      for (const name of subject.names) resolve(name)
+      for (const name of subject.names) resolvers.point(name)
       return null
     case 'arc':
       // Through the arc, never around it: the same call the central angle
       // mark makes, which is what makes the two agree by construction (G2).
-      return arcMeasure(arcOf(subject, resolve, resolveCircle), config.angle)
+      return arcMeasure(arcOf(subject, resolvers.point, resolvers.circle), config.angle)
     case 'solidDimension':
-      return solidDimensionValue(resolveSolid(subject.solid), subject.dimension, subject.solid)
+      return solidDimensionValue(resolvers.solid(subject.solid), subject.dimension, subject.solid)
   }
 }
 
@@ -497,11 +484,16 @@ function arcOf(
 function buildItems(statements: Statement[], config: GraphConfig): { items: FigureItem[]; errors: SceneError[] } {
   const functions = collectFunctions(statements)
   const namedPoints = collectNamedPoints(statements, config, functions)
-  const constructions = buildConstructions(statements, config, functions, namedPoints)
+  const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
+  // S3 — solids and constructions in space first, in one source-order walk,
+  // so the 2D pass can be told which statements are not its business.
+  const scope: SolidFigureScope = buildSolidFigure(statements, value)
+  const constructions = buildConstructions(statements, config, functions, namedPoints, scope.ownedStatements)
   for (const [name, position] of constructions.points) namedPoints.set(name, position)
+  const camera = cameraFor(config.view)
 
   const items: FigureItem[] = []
-  const errors: SceneError[] = [...constructions.errors]
+  const errors: SceneError[] = [...scope.errors, ...constructions.errors]
   // Measure labels are built in a second pass: where one sits depends on
   // where the rest of the figure is (a side's label goes on the outside),
   // and that is only known once every other item exists.
@@ -510,8 +502,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   // Bound solids, by name. Definition-before-use, exactly as constructions
   // are: a solid is built when its own statement is walked, so anything
   // naming it must come later in the spec.
+  // The walk has already built every solid; this map is filled as the loop
+  // passes each one, which keeps "cut: S" before "S = solid ..." an error.
   const solids = new Map<string, SolidBody>()
-  const value = (e: Expr) => evalExpr(e, {}, config.angle, functions)
 
   // A circle has to be *named* to be talked about: "circle: (0,0), 3" draws
   // one and binds nothing, so an arc or a central angle needs the
@@ -536,8 +529,34 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   function resolve(name: string): Vec2 {
     const point = namedPoints.get(name)
+    if (!point && isSpaceName(scope, name)) {
+      // S7 — the refusal is legible, not "unknown": the point exists, in
+      // space, and this statement only draws in the plane.
+      throw new Error(
+        `"${name}" is a point in space, and this draws only in the plane — angle marks, ticks, polygons and circles in space are not drawn yet`
+      )
+    }
     if (!point) throw new Error(`Unknown point "${name}" — define it with a point statement (e.g. "${name} = (x, y)") or as a polygon vertex first`)
     return point
+  }
+
+  // The names as points in space, or null when none of them is one (S2).
+  function resolveSpace(names: readonly string[], what: string): Vec3[] | null {
+    const space = names.filter((name) => isSpaceName(scope, name))
+    if (space.length === 0) return null
+    const plane = names.find((name) => !isSpaceName(scope, name))
+    if (plane !== undefined) {
+      if (!namedPoints.has(plane)) resolve(plane)
+      throw new Error(`"${what}" mixes a point in space (${space[0]}) with a point in the plane (${plane})`)
+    }
+    return names.map((name) => scope.points.get(name) as Vec3)
+  }
+
+  const resolvers: Resolvers = { point: resolve, circle: resolveCircle, solid: resolveSolid, space: resolveSpace }
+
+  // A point in space, drawn: a dot at its projection, lettered with its name.
+  function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
+    return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
   }
 
   for (let index = 0; index < statements.length; index++) {
@@ -547,6 +566,10 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     try {
       switch (statement.kind) {
         case 'point':
+          if (statement.z !== null) {
+            for (const p of scope.byStatement.get(index)?.points ?? []) items.push(spacePointItem(index, p.name, p.at, statement.color))
+            break
+          }
           items.push({
             kind: 'point',
             id: { statement: index, object: statement.label },
@@ -608,31 +631,28 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           break
         }
         case 'solid': {
-          const spec = solidSpecOf(statement.primitive, value)
-          const body = buildSolid(spec)
+          // Built by the walk (S3); a solid that failed there has already
+          // reported why, and there is nothing to draw.
+          const built = scope.byStatement.get(index)
+          const body = built?.solid
+          if (!built || !body) break
           if (statement.name) solids.set(statement.name, body)
-          const camera = cameraFor(config.view)
           const edges = solidOutline(body, camera)
           items.push({ kind: 'solid', id: { statement: index, object: statement.name }, edges, color: statement.color })
-          const polyhedron = body.polyhedron
-          if (statement.vertices.length > 0) {
-            if (!polyhedron || statement.vertices.length !== body.labelOrder.length) {
-              throw new Error(
-                `A ${spec.kind} has ${body.labelOrder.length} vertices, but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
-              )
-            }
-            const projected = body.labelOrder.map((v) => camera.project(polyhedron.vertices[v]))
-            const centre = centroidOf(projected)
-            for (let v = 0; v < statement.vertices.length; v++) {
-              items.push({
-                kind: 'solidVertex',
-                id: { statement: index, object: statement.vertices[v] },
-                at: projected[v],
-                label: statement.vertices[v],
-                prefer: awayFrom(projected[v], centre),
-                color: statement.color,
-              })
-            }
+          // A solid's vertices are lettered, not dotted — they are real points
+          // now (S4), but a dot would claim a construction point that the
+          // author did not construct.
+          const projected = built.points.map((p) => camera.project(p.at))
+          const centre = centroidOf(projected)
+          for (let v = 0; v < built.points.length; v++) {
+            items.push({
+              kind: 'solidVertex',
+              id: { statement: index, object: built.points[v].name },
+              at: projected[v],
+              label: built.points[v].name,
+              prefer: awayFrom(projected[v], centre),
+              color: statement.color,
+            })
           }
           break
         }
@@ -642,7 +662,6 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           // works in the internal frame.
           const plane = authorPlane(statement.axis, value(statement.at))
           const section = sectionOf(body, plane, statement.solid)
-          const camera = cameraFor(config.view)
 
           if (!statement.lift) {
             // Shaded in place: the section drawn where it sits, through the
@@ -695,12 +714,13 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
                   `but ${statement.vertices.length} names were given ("${statement.vertices.join('')}")`
               )
             }
+            const clash = statement.vertices.find((name) => isSpaceName(scope, name))
+            if (clash) throw new Error(`"${clash}" is already bound to a point in space — name the section's vertices differently`)
             const centre = centroidOf(vertices)
             for (let v = 0; v < vertices.length; v++) {
-              // Registered as ORDINARY named points. A lifted section is at
-              // true size, so "label: PQ" measures the real edge — which is
-              // exactly what a projected solid's vertices could never offer,
-              // and the reason they are not registered.
+              // Registered as ORDINARY named points in the plane. A lifted
+              // section is at true size, so "label: PQ" measures the real
+              // edge, through the ordinary 2D path (H5).
               namedPoints.set(statement.vertices[v], vertices[v])
               items.push({
                 kind: 'point',
@@ -715,6 +735,10 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           break
         }
         case 'construction': {
+          if (scope.ownedStatements.has(index)) {
+            for (const p of scope.byStatement.get(index)?.points ?? []) items.push(spacePointItem(index, p.name, p.at, statement.color))
+            break
+          }
           for (const built of constructions.geometryByStatement.get(index) ?? []) {
             items.push(...geometryItems(built.object, built.name, { statement: index, object: built.name }, statement.color))
           }
@@ -807,7 +831,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   for (const { statement, index } of givenStatements) {
     if (statement.kind !== 'given') continue
     try {
-      const { cells, error } = givenCells(statement.entry, resolve, resolveCircle, resolveSolid, config)
+      const { cells, error } = givenCells(statement.entry, resolvers, config)
       if (error) errors.push({ line: 0, message: error })
       items.push({ kind: 'given', id: { statement: index, object: null }, section: statement.section, cells, color: statement.color })
     } catch (err) {
@@ -830,7 +854,33 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       // others, and a displaced one names nothing without a line back.
       let leader = false
       const inside = subject.kind === 'angle'
-      if (subject.kind === 'length') {
+      const space =
+        subject.kind === 'length'
+          ? resolveSpace([subject.from, subject.to], subjectName(subject))
+          : subject.kind === 'angle'
+            ? resolveSpace([subject.from, subject.vertex, subject.to], subjectName(subject))
+            : null
+      if (space && subject.kind === 'angle') {
+        // An angle label with no drawn arc floats. Angle marks in space are
+        // build step 10; until then the true angle lives in the givens table.
+        const names = `${subject.from}${subject.vertex}${subject.to}`
+        throw new Error(
+          `"label: angle ${names}" names points in space, where there is no angle mark to hang a label on yet — ` +
+            `write "given: angle ${names}" to put its true measure in the givens table`
+        )
+      }
+      if (space) {
+        // S4 — a segment between points in space prints its TRUE length, and
+        // its label is placed by the solid-dimension path (leader-capable),
+        // fed the projected endpoints: it sits among a solid's edges exactly
+        // as a dimension does. No third placement.
+        const a = camera.project(space[0])
+        const b = camera.project(space[1])
+        at = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+        push = outwardPerpendicular(a, b, centre)
+        computed = distance3(space[0], space[1])
+        leader = true
+      } else if (subject.kind === 'length') {
         const a = resolve(subject.from)
         const b = resolve(subject.to)
         at = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
@@ -856,7 +906,6 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         computed = solidDimensionValue(body, subject.dimension, subject.solid)
         const segment = solidDimensionSegment(body.spec, subject.dimension)
         if (!segment) throw new Error(`A ${body.spec.kind} has no "${subject.dimension}" to attach a label to`)
-        const camera = cameraFor(config.view)
         const a = camera.project(segment[0])
         const b = camera.project(segment[1])
         at = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }

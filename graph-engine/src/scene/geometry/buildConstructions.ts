@@ -69,7 +69,19 @@ const SLOTS: TriangleSlot[] = ['a', 'b', 'c']
 
 function resolveObject(scope: GeometryScope, ref: GeometryRef): GeometryObject {
   if (ref.kind === 'named') return scope.lookup(ref.name)
+  if (ref.kind === 'plane') throw planeInThePlane(ref.points)
   return makeLine(scope.lookupPoint(ref.from), scope.lookupPoint(ref.to), ref.extent)
+}
+
+// A plane through three points is an object of a solid figure. Reaching this
+// pass means its points are not points in space — the solid-figure walk
+// claims every construction that names one — so the honest message is about
+// the points, not about a missing feature.
+function planeInThePlane(points: readonly string[]): Error {
+  return new Error(
+    `"plane ${points.join('-')}" needs three points in space (e.g. "A = (0, 0, 0)" or a solid's vertices) — ` +
+      'these are points in the plane, where every point already lies in one plane'
+  )
 }
 
 function resolveLine(scope: GeometryScope, ref: GeometryRef, role: string): GeometryLine {
@@ -82,10 +94,17 @@ function resolveLine(scope: GeometryScope, ref: GeometryRef, role: string): Geom
 }
 
 function refLabel(ref: GeometryRef): string {
-  return ref.kind === 'named' ? ref.name : `${ref.from}-${ref.to}`
+  if (ref.kind === 'named') return ref.name
+  if (ref.kind === 'plane') return `plane ${ref.points.join('-')}`
+  return `${ref.from}-${ref.to}`
 }
 
-function triangleVertices(scope: GeometryScope, names: [string, string, string]): [Vec2, Vec2, Vec2] {
+function triangleVertices(scope: GeometryScope, names: readonly string[], centre: string): [Vec2, Vec2, Vec2] {
+  // Four names reach here only as "centroid ABCD", which is a tetrahedron's:
+  // four points in the plane have a centroid, but not one this grammar means.
+  if (names.length !== 3) {
+    throw new Error(`A ${centre} of four points (${names.join('')}) is a tetrahedron's, and needs points in space`)
+  }
   return [scope.lookupPoint(names[0]), scope.lookupPoint(names[1]), scope.lookupPoint(names[2])]
 }
 
@@ -153,7 +172,7 @@ function evaluate(scope: GeometryScope, body: Construction, evaluateExpr: (e: Ex
         }),
       ]
     case 'triangleCentre': {
-      const [a, b, c] = triangleVertices(scope, body.vertices)
+      const [a, b, c] = triangleVertices(scope, body.vertices, body.centre)
       switch (body.centre) {
         case 'centroid':
           return [point(centroid(a, b, c))]
@@ -211,11 +230,16 @@ function buildTriangle(
   }
 }
 
+// `skip` holds the statements another pass owns. The figure renderer passes
+// the solid-figure walk's `ownedStatements` (S3): a construction on points in
+// space is resolved there, and must never reach this pass, which would report
+// "unknown geometry name" for a vertex it was never meant to resolve.
 export function buildConstructions(
   statements: Statement[],
   config: GraphConfig,
   functions: FunctionTable,
-  seedPoints: Map<string, Vec2>
+  seedPoints: Map<string, Vec2>,
+  skip: ReadonlySet<number> = new Set()
 ): ConstructionBuild {
   const scope = new GeometryScope()
   const objectsByStatement = new Map<number, SceneObject[]>()
@@ -233,6 +257,7 @@ export function buildConstructions(
 
   for (let index = 0; index < statements.length; index++) {
     const statement = statements[index]
+    if (skip.has(index)) continue
     try {
       if (statement.kind === 'triangle') {
         const built = buildTriangle(scope, statement, evaluateExpr, config.angle)

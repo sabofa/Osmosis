@@ -1704,3 +1704,116 @@ describe('the z-up author frame (S1)', () => {
     expect(result(`${PRISM}\nsection: S by plane z = 9`).errors[0].message).toBe('The plane z = 9 does not cut "S" — it misses the solid entirely')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Names in space: the solid-figure walk (phase 6, Task 3)
+// ---------------------------------------------------------------------------
+
+describe('named points in solid figures', () => {
+  function result(spec: string) {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+  }
+
+  const NAMED = '@mode: figure\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH'
+
+  it("resolves a solid's vertex names as points: label: AB = 8 passes", () => {
+    // This only shows the NAME resolves. AB is axis-parallel, and the
+    // isometric camera draws axis-parallel segments at true length, so an
+    // edge cannot tell a true measure from a projected one.
+    const errors = result(`${NAMED}\nlabel: AB = 8`).errors.map((e) => e.message)
+    expect(errors).toEqual([])
+    expect(errors.join(' ')).not.toContain('Unknown point')
+  })
+
+  it('measures the space diagonal AG at its TRUE length, never the projected one', () => {
+    const trueLength = Math.sqrt(125)
+    // A and G as labelOrder places them, internal y-up: A = (-4,-2.5,-3),
+    // G = (4, 2.5, 3). The projected length is computed through the camera.
+    const a = ISOMETRIC_CAMERA.project({ x: -4, y: -2.5, z: -3 })
+    const g = ISOMETRIC_CAMERA.project({ x: 4, y: 2.5, z: 3 })
+    const projected = Math.hypot(g.x - a.x, g.y - a.y)
+    // The two differ by far more than GEOM_EPS, so neither assertion below
+    // can pass vacuously.
+    expect(Math.abs(trueLength - projected)).toBeGreaterThan(1)
+    expect(result(`${NAMED}\nlabel: AG = ${trueLength}`).errors).toEqual([])
+    const wrong = result(`${NAMED}\nlabel: AG = ${projected}`).errors
+    expect(wrong).toHaveLength(1)
+    expect(wrong[0].message).toMatch(/AG/)
+    // And the computed form prints the true length.
+    expect(layer(render(`${NAMED}\nlabel: AG`), 'labels')).toContain('>11.18</text>')
+  })
+
+  it('checks a true length in the givens table too', () => {
+    expect(result(`${NAMED}\ngiven: AG = ${Math.sqrt(125)}`).errors).toEqual([])
+    expect(result(`${NAMED}\ngiven: AG = 10`).errors).toHaveLength(1)
+  })
+
+  it('checks a true angle in space in the givens table', () => {
+    // The angle at B between A and F is a right angle of the solid (a face
+    // corner), and no projection of it is.
+    const spec = `@angle: degrees\n${NAMED}`
+    expect(result(`${spec}\ngiven: angle ABF = 90`).errors).toEqual([])
+    expect(result(`${spec}\ngiven: angle ABF = 60`).errors).toHaveLength(1)
+    const svg = render(`${spec}\ngiven: angle ABG`)
+    expect(svg).toContain('data-object="givens"')
+  })
+
+  it('refuses an inline angle label in space, pointing at the givens form', () => {
+    const errors = result(`${NAMED}\nlabel: angle ABG`).errors
+    expect(errors).toHaveLength(1)
+    expect(errors[0].message).toMatch(/given: angle ABG/)
+  })
+
+  it('refuses a length between a space point and a plane point, naming both', () => {
+    const errors = result(`${NAMED}\nP = (1, 2)\nlabel: AP`).errors
+    expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(/A.*P|P.*A/)])
+    expect(errors[0].message).toMatch(/space/)
+  })
+
+  it('draws a constructed space point as a dot and a label, and keeps vertices undotted', () => {
+    const svg = render(`${NAMED}\nM = midpoint A-G`)
+    expect(countTags(layer(svg, 'points'), 'circle')).toBe(1)
+    expect(layer(svg, 'points')).toContain('data-object="M"')
+    expect(layer(svg, 'labels')).toContain('>M</text>')
+    for (const name of 'ABCDEFGH') expect(layer(svg, 'labels')).toContain(`>${name}</text>`)
+  })
+
+  it('draws the solid itself exactly as before when its vertices become points', () => {
+    const svg = render(NAMED)
+    expect(layer(svg, 'points')).toBe('')
+    expect(countTags(layer(svg, 'primary'), 'line') + countTags(layer(svg, 'auxiliary'), 'line')).toBe(12)
+  })
+
+  it('sends no space construction to the 2D pass (S3): no construction errors', () => {
+    const spec = [NAMED, 'M = midpoint A-G', 'P = divide A-G at 1:2', 'K = foot C to plane A-B-F', 'X = intersect line A-G, plane B-D-E'].join('\n')
+    expect(result(spec).errors).toEqual([])
+  })
+
+  it('reports a construction naming a point defined only later', () => {
+    const errors = result('@mode: figure\nM = midpoint A-G\nS = solid prism 8 by 5 by 6 vertices ABCDEFGH').errors
+    expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(/"A"/)])
+  })
+
+  it('draws a 3-coordinate point in space under a declared figure mode', () => {
+    // B is straight above A in the author's z-up frame, so it is drawn
+    // straight above it on the page. Dropping z would draw them on top of
+    // each other; skipping the frame conversion would put B off to the side.
+    const svg = render('@mode: figure\nA = (0, 0, 0)\nB = (0, 0, 4)')
+    const dots = [...layer(svg, 'points').matchAll(/<circle cx="([^"]*)" cy="([^"]*)"[^>]*data-object="([AB])"/g)].map((m) => ({
+      name: m[3],
+      x: Number(m[1]),
+      y: Number(m[2]),
+    }))
+    const a = dots.find((d) => d.name === 'A')!
+    const b = dots.find((d) => d.name === 'B')!
+    expect(b.x).toBeCloseTo(a.x, 6)
+    expect(b.y).toBeLessThan(a.y - 10)
+  })
+
+  it('renders byte-identically twice', () => {
+    const spec = [NAMED, 'M = midpoint A-G', 'label: AG', 'given: AG = 11.18'].join('\n')
+    expect(render(spec)).toBe(render(spec))
+  })
+})
