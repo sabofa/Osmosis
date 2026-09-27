@@ -25,6 +25,14 @@ import { ARROW, POINT, SEGMENT } from './primitives'
 import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
 import { buildScope } from './scope'
 import { SURFACE } from './surface'
+import { IMPLICIT_SURFACE } from './geometry/implicit'
+import { CONTOUR } from './geometry/levelSurfaces'
+import { namedPoints } from './geometry/operands'
+import { LINE } from './geometry/lines'
+import { PLANE } from './geometry/planes'
+import { VECTOR_OP } from './geometry/vectorOps'
+import { COORDINATE_SURFACE } from './geometry/coordinateSurfaces'
+import { CURVE_FRAME } from './curves/frames'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -41,16 +49,20 @@ registerBuilder('point', POINT)
 registerBuilder('segment', SEGMENT)
 registerBuilder('ray', ARROW)
 registerBuilder('vector', ARROW)
-registerBuilder('space:implicitSurface', {
-  draws: true,
-  prepare: () => {
-    throw new Error('implicit surfaces are drawn from phase S4')
-  },
-})
+registerBuilder('space:implicitSurface', IMPLICIT_SURFACE)
 // Definitions and tables draw nothing and are not errors.
 for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vectorFunction', 'tableHeader', 'tableRow', 'tableGenerator']) {
   registerBuilder(key, DEFINITION)
 }
+registerBuilder('space:contour', CONTOUR)
+registerBuilder('space:line', LINE)
+registerBuilder('space:plane', PLANE)
+registerBuilder('space:cross', VECTOR_OP)
+registerBuilder('space:project', VECTOR_OP)
+registerBuilder('space:coordinateSurface', COORDINATE_SURFACE)
+registerBuilder('space:frame', CURVE_FRAME)
+registerBuilder('space:osculating', CURVE_FRAME)
+registerBuilder('space:motion', CURVE_FRAME)
 
 interface StatementRecord {
   line: number
@@ -91,6 +103,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
   const records: StatementRecord[] = []
   let slots = 0
   let scales = 0
+  const points = namedPoints(statements)
 
   statements.forEach((statement, i) => {
     const line = lines[i] ?? 0
@@ -108,6 +121,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       source: { line, statement: statement.statementName, object: `s${line}` },
       color: { author: statement.color, slot: entry.draws ? slots++ : -1 },
       colorScaleId: wantsScale ? scales : null,
+      points,
     }
     let prepared: PreparedStatement
     try {

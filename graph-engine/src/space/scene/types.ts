@@ -133,6 +133,9 @@ export type SurfacePick =
       // stays at the triangle's (u, v).
       ru?: (u: number, v: number) => Vec3
       rv?: (u: number, v: number) => Vec3
+      // A coordinate surface's readout row (S4a): the hit in its own
+      // system, e.g. { label: '(r, θ, z)', value: '(2, 1.571, 1)' }.
+      coordinates?: (p: Vec3) => { label: string; value: string }
     }
   | {
       kind: 'implicit'
