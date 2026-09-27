@@ -13,6 +13,7 @@
 // solid-figure territory, and the solid-figure refusal still catches them.
 
 import { parseExprString } from '../../parser/parseExpr'
+import { INTEGRAL_KEYWORDS } from './keywords/integrals'
 import { buildStyle, splitStyle } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 import { parseContour } from './keywords/contour'
@@ -59,6 +60,7 @@ const KEYWORDS: readonly KeywordRow[] = [
   { keyword: 'osculating', parse: parseOsculating },
   { keyword: 'motion', parse: parseMotion },
   ...SURFACE_TOOL_KEYWORDS,
+  ...INTEGRAL_KEYWORDS,
 ]
 
 // The uniform ownership rule (agreed with solid figures, 2026-09-26): an

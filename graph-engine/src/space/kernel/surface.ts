@@ -33,6 +33,7 @@ import {
   surfaceColormap,
 } from './common'
 import { inequalitySamples, iteratedSamples, rectSamples, type Condition, type DomainSamples } from './domain'
+import { namedRegionDomain } from './integrals/named'
 import { finishMesh } from './mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from './registry'
 
@@ -57,7 +58,7 @@ function partial(expr: Expr, i: number, scope: MathScope): CompiledFn {
 }
 
 // h(x, y) <= 0 inside, for each comparison of each condition.
-function compileConditions(conditions: readonly RegionCondition[], scope: MathScope, reads: Reads): Condition[] {
+export function compileConditions(conditions: readonly RegionCondition[], scope: MathScope, reads: Reads): Condition[] {
   const out: Condition[] = []
   const side = (e: Expr) => {
     reads.add(e, ['x', 'y'])
@@ -114,13 +115,16 @@ function prepareDomain(domain: Domain | null, config: GraphConfig, scope: MathSc
       return { samples: () => inequalitySamples(conditions, boxX(config), boxY(config), n) }
     }
     case 'named':
-      throw new Error(`named regions arrive with region: (phase S5) — "over ${domain.name}" cannot be drawn yet`)
+      throw new Error(`the region "${domain.name}" is resolved before sampling`)
   }
 }
 
 function prepareSurface(statement: Statement, context: BuildContext): PreparedStatement {
   const { scope, config } = context
-  const { body, domain, style } = surfaceParts(statement)
+  const parts = surfaceParts(statement)
+  const { body, style } = parts
+  // "over R" (S5): the domain the named region stands for.
+  const domain = parts.domain?.kind === 'named' ? namedRegionDomain(context, parts.domain.name) : parts.domain
   const n = resolution(style.res, config, DEFAULT_RES)
   checkBudget(2 * n * n, n)
 

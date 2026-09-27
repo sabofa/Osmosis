@@ -12,7 +12,8 @@
 // arrows, then translucent meshes by order-independent transparency (or
 // sorted, without float targets), composited or blitted to the canvas. The
 // targets (targets.ts) follow the canvas's size and are rebuilt after a
-// context restore. Box marks are skipped until S5.
+// context restore. Box marks (S5) draw in the opaque pass for now; integration Task 4 sends
+// translucent boxes through OIT.
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
@@ -20,6 +21,7 @@ import type { FrameLineRole, FrameModel } from '../frame/types'
 import type { ArrowMark, LineMark, Mark, SpaceScene } from '../scene/types'
 import { resolveSpaceColor, type Rgb, type SpaceColors } from '../theme'
 import { ARROWHEAD_PROGRAM, drawArrowHeads, uploadArrows, type ArrowGpu, type ArrowLook } from './arrowPipeline'
+import { BOX_PROGRAM, drawOpaqueBoxes, drawTranslucentBoxes, uploadBoxes, type BoxGpu } from './boxPipeline'
 import { syncByIdentity, type GpuResource } from './buffers'
 import { createContext, queryCapabilities, watchContext, type GlCapabilities } from './context'
 import {
@@ -67,6 +69,7 @@ type MarkGpu =
   | { kind: 'lines'; gpu: LineGpu }
   | { kind: 'points'; gpu: PointGpu }
   | { kind: 'arrows'; gpu: ArrowGpu }
+  | { kind: 'boxes'; gpu: BoxGpu }
 
 type CachedMark = MarkGpu & GpuResource
 
@@ -76,7 +79,7 @@ interface FrameGpu extends GpuResource {
   arrows: ArrowGpu[]
 }
 
-const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM, COMPOSITE_PROGRAM]
+const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM, COMPOSITE_PROGRAM, BOX_PROGRAM]
 
 // The frame's look (plan G9 "Frame drawing"): 1 px grid, 1.5 px walls and
 // ticks; the axes frame's axes as 1.5 px arrows with 10 px heads.
@@ -185,8 +188,6 @@ export class GlBackend {
     // The retained frame belongs to the previous scene's box: drop it, so
     // nothing draws until the caller sets this scene's frame.
     this.dropFrame()
-    const boxes = scene.marks.filter((m) => m.kind === 'boxes').length
-    if (boxes > 0) console.warn(`space: box marks are not drawn until S5; skipped ${boxes}`)
     this.upload()
     // A new box re-uploads the overlay too (its positions are relative to the centre).
     this.uploadOverlay()
@@ -235,7 +236,8 @@ export class GlBackend {
       const point = this.program(POINT_PROGRAM)
       const head = this.program(ARROWHEAD_PROGRAM)
       const composite = this.program(COMPOSITE_PROGRAM)
-      if (!mesh || !line || !point || !head || !composite) return
+      const box = this.program(BOX_PROGRAM)
+      if (!mesh || !line || !point || !head || !composite || !box) return
       this.sizeTargets(gl, width, height)
       const look = markLook(camera, world, colors, this.depthcue)
       const target: DrawTarget = { camera, world, colors, width, height, pixelRatio, look }
@@ -244,12 +246,15 @@ export class GlBackend {
       const lines: LineGpu[] = []
       const arrows: ArrowGpu[] = []
       const points: PointGpu[] = []
+      const boxes: BoxGpu[] = []
       for (const m of this.marks.values()) {
         if (m.kind === 'mesh') meshes.push(m.gpu)
         else if (m.kind === 'lines') lines.push(m.gpu)
         else if (m.kind === 'arrows') arrows.push(m.gpu)
+        else if (m.kind === 'boxes') boxes.push(m.gpu)
         else points.push(m.gpu)
       }
+      for (const b of boxes) if (b.edges) lines.push(b.edges)
       const key = cameraKey(camera)
       for (const l of lines) updateDashes(gl, l, camera, key, world)
 
@@ -308,7 +313,10 @@ export class GlBackend {
           const at = { ...target, depthBias: frameDepthBias(frameGpu.style), look: frameLook(look) }
           antialiased([...frameGpu.lines, ...frameGpu.arrows.map((a) => a.shaft)], frameGpu.arrows, [], at)
         },
-        opaque: () => drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw),
+        opaque: () => {
+          drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw)
+          drawOpaqueBoxes(gl, box, boxes, camera, world, colors)
+        },
         // Where a surface hides them: both antialiasing passes blend (the loop
         // has turned depth writes off), dashed, faint.
         hidden: () => {
@@ -318,7 +326,12 @@ export class GlBackend {
             drawArrowHeads(gl, head, hiddenArrows, target, pass, HIDDEN_OPACITY)
           }
         },
-        marks: () => antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target),
+        marks: () => {
+          antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target)
+          // Interim (merge of S5): translucent boxes blend here, sorted, without
+          // writing depth; integration Task 4 sends them through OIT.
+          drawTranslucentBoxes(gl, box, boxes, camera, world, colors, key)
+        },
         translucent: (oit) => {
           if (oit) drawMeshesOit(gl, mesh, translucent, meshDraw)
           else drawTranslucentMeshes(gl, mesh, sortBackToFront(translucent, camera), meshDraw)
@@ -410,8 +423,7 @@ export class GlBackend {
         this.overlay.clear()
         this.worldKey = key
       }
-      const drawable = scene.marks.filter((m) => m.kind !== 'boxes')
-      syncByIdentity(gl, this.marks, drawable, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
+      syncByIdentity(gl, this.marks, scene.marks, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
     } catch (error) {
       this.fail(error)
     }
@@ -446,6 +458,10 @@ export class GlBackend {
       case 'arrows': {
         const gpu = uploadArrows(gl, shared, mark.tails, mark.vectors, world, arrowLook(mark))
         return gpu && { kind: 'arrows', gpu }
+      }
+      case 'boxes': {
+        const gpu = uploadBoxes(gl, shared, mark, world)
+        return gpu && { kind: 'boxes', gpu }
       }
       default:
         return null

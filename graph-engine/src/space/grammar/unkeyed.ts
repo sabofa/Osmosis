@@ -27,6 +27,7 @@ import type { Expr } from '../../parser/types'
 import { BUILTIN_NAMES } from '../../math/compile'
 import { varNames } from '../../math/expr'
 import { parseForDomain, parseOverDomain } from './domain'
+import { parseNamedIntegral } from './keywords/integrals'
 import { buildStyle, splitStyle, type RawClause } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 import { parseVectorLiteral } from './vector'
@@ -170,6 +171,9 @@ const SOLID_FIGURE_WORD =
 
 export function parseSpaceUnkeyed(line: string): SpaceStatement | null {
   if (SOLID_FIGURE_WORD.test(line)) return null
+  // "R = region ..." (S5), after the exclusions above; never "G = centroid ABC".
+  const named = parseNamedIntegral(line)
+  if (named) return named
   const { rest, clauses } = splitStyle(line)
 
   // A one-parameter scalar definition keeps the shared parser's reading (its

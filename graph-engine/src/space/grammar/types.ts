@@ -6,6 +6,7 @@ import type { Expr } from '../../parser/types'
 import type { ColormapName } from '../scene/types'
 import type { GeometryForm } from './keywords/geometryForms'
 import type { SurfaceToolForm } from './keywords/surfaceTools'
+import type { IntegralForm } from './keywords/integrals'
 
 // "t in [a, b]". Bounds are expressions: they may read parameters, and an
 // iterated domain's inner bounds read the outer variable.
@@ -70,6 +71,8 @@ export type SpaceForm =
   // The calculus of a surface (S4b): path:, trace:, tangent-plane:, gradient:,
   // directional:, critical:, lagrange:.
   | SurfaceToolForm
+  // Regions, volumes, Riemann sums and centroids (S5).
+  | IntegralForm
 
 // What the two hooks return: the parser/types.ts Statement member for space.
 // The shared wrapper overwrites color and statementName, as for every line.

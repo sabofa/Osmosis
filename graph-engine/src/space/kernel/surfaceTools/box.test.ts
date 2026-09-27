@@ -12,6 +12,7 @@ function context(spec: string): BuildContext {
     source: { line: 1, statement: null, object: 's1' },
     color: { author: null, slot: 0 },
     colorScaleId: null,
+    named: new Map(),
   }
 }
 

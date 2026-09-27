@@ -32,6 +32,15 @@ export interface BuildContext {
   // The spec's named points ("P = (1, 2, 3)"), hidden or not, for statements
   // that take a point by name (S4a: "line: through P and Q").
   points?: ReadonlyMap<string, NamedPoint>
+  // Statements that bind a name to a shape rather than a value ("R = region
+  // ...", S5), by that name: what "over R" and "centroid: R" resolve. Every
+  // one in the spec, hidden or not, collected once at setup.
+  named: ReadonlyMap<string, NamedStatement>
+}
+
+export interface NamedStatement {
+  line: number
+  statement: Statement
 }
 
 export interface BuildResult {
@@ -57,6 +66,8 @@ export interface BuilderEntry {
   draws: boolean
   // Whether the statement can carry a colour scale (reserves an id).
   colorScale?(statement: Statement, config: GraphConfig): boolean
+  // The shape name the statement binds (BuildContext.named), if any.
+  binds?(statement: Statement): string | null
 }
 
 const REGISTRY = new Map<string, BuilderEntry>()

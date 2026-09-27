@@ -30,6 +30,7 @@ function contour(target: string, levels: Levels, options: { floor?: boolean; lab
     source: { line, statement: null, object: `s${line}` },
     color: { author: options.color ?? null, slot: 0 },
     colorScaleId: null,
+    named: new Map(),
   }
   return contourCurves.prepare(statement, context).build()
 }

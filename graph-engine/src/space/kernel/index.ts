@@ -20,6 +20,11 @@ import type { ColorScale, Mark, SceneError, SpaceScene } from '../scene/types'
 import type { CreateSpaceKernel, SpaceKernel } from './api'
 import { messageOf } from './common'
 import { CURVE, IMPLICIT_CURVE } from './curves'
+import { collectNamed } from './integrals/named'
+import { CENTROID } from './integrals/centroids'
+import { NAMED_REGION, REGION } from './integrals/regions'
+import { RIEMANN } from './integrals/riemann'
+import { NAMED_VOLUME, VOLUME } from './integrals/volumes2'
 import { PARAMETRIC_SURFACE } from './parametric'
 import { ARROW, POINT, SEGMENT } from './primitives'
 import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
@@ -65,6 +70,12 @@ registerBuilder('space:frame', CURVE_FRAME)
 registerBuilder('space:osculating', CURVE_FRAME)
 registerBuilder('space:motion', CURVE_FRAME)
 for (const [key, entry] of SURFACE_TOOL_BUILDERS) registerBuilder(key, entry)
+registerBuilder('space:region', REGION)
+registerBuilder('space:namedRegion', NAMED_REGION)
+registerBuilder('space:centroid', CENTROID)
+registerBuilder('space:volume', VOLUME)
+registerBuilder('space:riemann', RIEMANN)
+registerBuilder('space:namedVolume', NAMED_VOLUME)
 
 interface StatementRecord {
   line: number
@@ -100,6 +111,7 @@ function run(prepared: PreparedStatement, line: number): BuildResult {
 export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], config, lines) => {
   const bindings: readonly Binding[] = config.bindings
   const { scope, errors: scopeErrors } = buildScope(statements, lines, bindings, config.angle)
+  const { named, errors: namedErrors } = collectNamed(statements, lines, scope)
   const bindingNames = new Set(bindings.map((b) => b.name))
   const setupErrors: SceneError[] = []
   const records: StatementRecord[] = []
@@ -124,6 +136,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       color: { author: statement.color, slot: entry.draws ? slots++ : -1 },
       colorScaleId: wantsScale ? scales : null,
       points,
+      named,
     }
     let prepared: PreparedStatement
     try {
@@ -171,7 +184,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       })
     )
     const labels = records.flatMap((r) => r.result.labels)
-    const errors = [...scopeErrors, ...setupErrors, ...records.flatMap((r) => r.result.errors)].sort((a, b) => a.line - b.line)
+    const errors = [...scopeErrors, ...namedErrors, ...setupErrors, ...records.flatMap((r) => r.result.errors)].sort((a, b) => a.line - b.line)
     return { marks, labels, colorScales, extent: sceneExtent(marks, labels), errors }
   }
 
