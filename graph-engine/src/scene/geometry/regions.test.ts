@@ -189,6 +189,22 @@ describe('coincident boundaries (F2)', () => {
   })
 })
 
+describe('boundaries too close to tell apart (fix round 1, M2)', () => {
+  // A tolerance or two apart without meeting: a sliver of one is judged ON
+  // the other and the chain cannot close — refused in the author's words.
+  it('a square or a circle 5e-9 wider than its inscribed one', () => {
+    expect(() => combineRegions('union', square(-2, -2, 4), diskRegion(circle(P(0, 0), 2.000000005)), 'square ABCD or circle O')).toThrow(
+      'square ABCD or circle O has boundaries too close to tell apart — make them meet exactly, or move them clearly apart'
+    )
+  })
+
+  it('two unit disks whose centres are 5e-9 short of 2 apart', () => {
+    expect(() => combineRegions('intersection', diskRegion(circle(P(0, 0), 1)), diskRegion(circle(P(2 - 5e-9, 0), 1)), 'circle O and circle P')).toThrow(
+      'circle O and circle P has boundaries too close to tell apart — make them meet exactly, or move them clearly apart'
+    )
+  })
+})
+
 describe('polygons must be simple (F1)', () => {
   it('refuses the bow-tie, naming the crossing edges', () => {
     expect(() => polygonRegion([P(0, 0), P(2, 2), P(2, 0), P(0, 2)], ['A', 'B', 'C', 'D'])).toThrow(/A-B and C-D cross/)
@@ -214,6 +230,19 @@ describe('F6 — the interior point an area label hangs at', () => {
     const p = interiorLabelPoint(combineRegions('difference', square(-2, -2, 4), diskRegion(circle(P(0, 0), 2))))
     expect(p.x).toBeCloseTo(-(2 + Math.sqrt(1.75)) / 2, CLOSE)
     expect(p.y).toBeCloseTo(-1.5, CLOSE)
+  })
+
+  it('a chord runs on through a point where the boundary only touches the line', () => {
+    // A disk r = 2 minus the disk r = 1 at (1, 0), tangent inside it at
+    // (2, 0). h = 4, lines at y = −2 + i/2. At y = −1 the outer circle is at
+    // x = ±√3 and the hole only TOUCHES the line, at (1, −1): one chord
+    // [−√3, √3], 2√3 ≈ 3.464, anchor (0, −1). Every other line is shorter:
+    // y = −1.5 gives 2√1.75 ≈ 2.646; y = −0.5 gives [−√3.75, 1 − √0.75] ≈
+    // 2.070 and [1 + √0.75, √3.75] ≈ 0.070; y = 0 only [−2, 0], 2; the upper
+    // three mirror the lower. Cut at the touch, it would be (−0.366, −1).
+    const p = interiorLabelPoint(combineRegions('difference', diskRegion(circle(P(0, 0), 2)), diskRegion(circle(P(1, 0), 1))))
+    expect(p.x).toBeCloseTo(0, CLOSE)
+    expect(p.y).toBeCloseTo(-1, CLOSE)
   })
 
   it('the largest component: a unit disk beside a 2×2 square hangs in the square, on its lowest line', () => {

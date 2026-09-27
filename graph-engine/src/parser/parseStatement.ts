@@ -1938,6 +1938,11 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
   // of a shaded region. "area of S" stays with the refusal below.
   const area = /^area\s+(.+)$/.exec(subjectText)
   if (area && !/^of\s/.test(area[1])) {
+    // Fix round 1 (M6) — "area R < area S" and the like: a relation between
+    // two areas is not a region, and is not stated yet.
+    if (/[<>≤≥≅~∥⊥]|\barea\s/.test(area[1])) {
+      throw new Error(`Relations between areas are not stated yet — give each area its own line ("${role}: area R", "${role}: area S")`)
+    }
     return { subject: { kind: 'area', region: parseRegionExpr(area[1]) }, mark: 'none', prefix: '', explicit: false }
   }
 

@@ -88,9 +88,46 @@ fill: circle O minus circle P`).svg
     expect(attribute(fill, 'fill-rule')).toBe('evenodd')
   })
 
+  // The arcs' direction and flags (fix round 1, M1), pinned by the exact d.
+  // The lens of unit circles at K = (0, 0) and L = (1, 0) is fitted to the
+  // box [−1, 2] × [−1, 1]: 640 / 3 = 213.333 view units a unit, centred on
+  // (0.5, 0), y down. Its corners (0.5, ∓√3/2) are (0, ±184.752). From the
+  // lower corner, circle O's arc runs up round the right counter-clockwise
+  // (a world CCW arc is SVG sweep 0), then circle P's back down, both minor
+  // (large-arc 0). A hole runs clockwise: the annulus (fitted at 640 / 6 a
+  // unit) draws its outer circle, r = 3 → 320, with sweep 0 and its hole,
+  // r = 2 → 213.333, with sweep 1.
+  it('draws each arc the way it runs: the lens and the annulus, exactly', () => {
+    const lens = rendered(`@mode: figure
+K = (0, 0)
+L = (1, 0)
+O = circle K, 1
+P = circle L, 1
+fill: circle O and circle P`).svg
+    expect(attribute(paths(layer(lens, 'regions'))[0], 'd')).toBe(
+      'M 0 184.752 A 213.333 213.333 0 0 0 0 -184.752 A 213.333 213.333 0 0 0 0 184.752 Z'
+    )
+    const annulus = rendered(`@mode: figure
+M = (0, 0)
+O = circle M, 3
+P = circle M, 2
+fill: circle O minus circle P`).svg
+    expect(attribute(paths(layer(annulus, 'regions'))[0], 'd')).toBe(
+      'M 320 0 A 320 320 0 0 0 -320 0 A 320 320 0 0 0 320 0 Z M 213.333 0 A 213.333 213.333 0 0 1 -213.333 0 A 213.333 213.333 0 0 1 213.333 0 Z'
+    )
+  })
+
   it('names the region it draws with the name: clause', () => {
     const svg = rendered(`${SQUARE_AND_CIRCLE}\nfill: circle O name: R`).svg
     expect(attribute(paths(layer(svg, 'regions'))[0], 'data-object')).toBe('R')
+  })
+
+  it('lets several fills share a name, as "@hide" groups do, and draws them all (fix round 1, M4)', () => {
+    const result = rendered(`${SQUARE_AND_CIRCLE}\nfill: triangle ABD name: shade\nfill: triangle BCD name: shade`)
+    expect(result.errors).toEqual([])
+    expect(paths(layer(result.svg, 'regions')).map((p) => attribute(p, 'data-object'))).toEqual(['shade', 'shade'])
+    const hidden = rendered(`@hide: shade\n${SQUARE_AND_CIRCLE}\nfill: triangle ABD name: shade\nfill: triangle BCD name: shade`)
+    expect(layer(hidden.svg, 'regions')).toBe('')
   })
 
   it('draws two fills in statement order, each in its own colour', () => {

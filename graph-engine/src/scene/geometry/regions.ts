@@ -614,7 +614,12 @@ interface Kept {
 // (which traces the smallest loop round the interior on its left); ties go to
 // the piece curving more to the left, then to the earlier piece. A fixed
 // rule, so the result depends on nothing but the input.
-function assemble(pieces: readonly Kept[], tol: number): Loop[] {
+//
+// Null when a chain cannot close. The kept pieces of two exact boundaries
+// always close; they fail to only when two boundaries run within a
+// tolerance or two of each other without meeting, so that a sliver of one is
+// judged to lie ON the other — the caller refuses that in the author's words.
+function assemble(pieces: readonly Kept[], tol: number): Loop[] | null {
   const used = pieces.map(() => false)
   const loops: Loop[] = []
   for (let i = 0; i < pieces.length; i++) {
@@ -640,7 +645,7 @@ function assemble(pieces: readonly Kept[], tol: number): Loop[] {
           bestCurvature = k
         }
       }
-      if (!best) throw new Error(`The boundary of a shaded region does not close at ${describePoint(current.piece.b)}`)
+      if (!best) return null
       used[best.j] = true
       loop.push(best.kept.piece)
       current = best.kept
@@ -685,6 +690,9 @@ export function combineRegions(op: RegionOperator, first: Region, second: Region
   })
 
   const loops = assemble(kept, tol)
+  if (!loops) {
+    throw new Error(`${what} has boundaries too close to tell apart — make them meet exactly, or move them clearly apart`)
+  }
   if (loops.length === 0) throw new Error(`${what} leaves nothing to shade`)
   return { loops }
 }
@@ -744,7 +752,8 @@ function crossingsAt(piece: Piece, y: number, tol: number): number[] {
 // F6's scan over the loops of one component (the first is its outer loop):
 // the seven horizontal lines at i·h/8 up its height h, i = 1 … 7, each met
 // with every piece in closed form; the midpoint of the longest chord lying
-// strictly inside, ties to the lowest line, then to the leftmost chord. Null
+// strictly inside (a chord runs on through a point where the boundary only
+// touches the line), ties to the lowest line, then to the leftmost chord. Null
 // only for a component with no inside, which a region never has.
 function chordPoint(loops: readonly Loop[]): Vec2 | null {
   const shape: Region = { loops: [...loops] }
@@ -752,6 +761,9 @@ function chordPoint(loops: readonly Loop[]): Vec2 | null {
   const box = boxOf(extremes)
   const tol = toleranceFor(extremes)
   const h = box.maxY - box.minY
+
+  const onBoundary = (p: Vec2) => loops.some((loop) => loop.some((piece) => distanceToPiece(p, piece) <= tol))
+  const interior = (p: Vec2) => !onBoundary(p) && windingNumber(shape, p) !== 0
 
   let best: Vec2 | null = null
   let bestLength = 0
@@ -761,14 +773,35 @@ function chordPoint(loops: readonly Loop[]): Vec2 | null {
       .flat()
       .flatMap((piece) => crossingsAt(piece, y, tol))
       .sort((p, q) => p - q)
+    // The chords lying strictly inside, left to right.
+    const inside: [number, number][] = []
     for (let k = 0; k + 1 < xs.length; k++) {
-      const length = xs[k + 1] - xs[k]
-      if (length <= bestLength + tol) continue
-      const m = { x: (xs[k] + xs[k + 1]) / 2, y }
-      if (loops.some((loop) => loop.some((piece) => distanceToPiece(m, piece) <= tol))) continue
-      if (windingNumber(shape, m) === 0) continue
-      best = m
-      bestLength = length
+      if (xs[k + 1] - xs[k] <= tol) continue
+      if (interior({ x: (xs[k] + xs[k + 1]) / 2, y })) inside.push([xs[k], xs[k + 1]])
+    }
+    // Two inside chords meeting end to end are ONE chord: the boundary only
+    // touches the line there (a tangency, or a vertex on the line), so the
+    // region is on both sides of the point (fix round 1, M5). Should the
+    // merged chord's midpoint be that touching point itself, its two parts
+    // stand as chords of their own instead.
+    const candidates: [number, number][] = []
+    let run: [number, number][] = []
+    const flush = () => {
+      if (run.length === 0) return
+      const merged: [number, number] = [run[0][0], run[run.length - 1][1]]
+      if (run.length === 1 || interior({ x: (merged[0] + merged[1]) / 2, y })) candidates.push(merged)
+      else candidates.push(...run)
+      run = []
+    }
+    for (const chord of inside) {
+      if (run.length > 0 && chord[0] - run[run.length - 1][1] > tol) flush()
+      run.push(chord)
+    }
+    flush()
+    for (const [from, to] of candidates) {
+      if (to - from <= bestLength + tol) continue
+      best = { x: (from + to) / 2, y }
+      bestLength = to - from
     }
   }
   return best

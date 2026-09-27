@@ -760,7 +760,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   "circle O or circle P minus triangle ABC" is "(circle O or circle P)
 //   minus triangle ABC"; parenthesise to say otherwise. A result with
 //   nothing left is refused: "square ABCD minus circle O leaves nothing to
-//   shade".
+//   shade"; so are two boundaries a rounding error or two apart that do not
+//   meet ("... has boundaries too close to tell apart").
 //   F3 — the area is exact given the pieces: the shoelace sum over each
 //   piece's chord plus each arc's circular segment, 1/2 r^2 (t - sin t). It
 //   PRINTS as a decimal until exact values land (build-order step 3 turns
@@ -776,8 +777,13 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   or angles), as it lifts every assertion.
 //   Names: a region is named with the "name:" clause, never "R = region
 //   ...": that unkeyed form belongs to space (keyword ownership, in the
-//   graph spec). The name also serves "@hide: R", and a hidden fill still
-//   names its region, so its area can be stated with nothing shaded.
+//   graph spec). "name:" stays a GROUP name, as it is for "@hide": several
+//   fills may share one and all draw, but "area R" (or R inside a later
+//   fill) is then refused as ambiguous, naming the fills. A hidden fill
+//   still names its region, so its area can be stated with nothing shaded;
+//   when R's one fill was refused, "area R" says so and why, rather than
+//   calling R unknown. Relations between areas ("area R < area S") are not
+//   stated yet, and are refused as such.
 //   F5 — a fill is ONE path in the regions layer, behind every line: "L"
 //   per side, "A" per arc (a whole turn as two), never a polyline, holes
 //   by the even-odd rule, in its "color:" (the theme's region colour
@@ -788,7 +794,9 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   F6 — "label: area R" sits ON a point inside the region: on its largest
 //   component, the midpoint of the longest chord inside it among seven
 //   horizontal lines at i/8 of its height (ties to the lowest line, then
-//   the leftmost chord). An annulus's label sits in the ring.
+//   the leftmost chord). A chord runs on through a point where the boundary
+//   only touches the line (a tangency, or a vertex on it). An annulus's
+//   label sits in the ring.
 //   F7 — refused where an author could ask: fills in a graph ("fill: draws
 //   in figures — declare @mode: figure"), fills on points in space ("fills
 //   are drawn in the plane"), regions bounded by an ellipse, parabola or

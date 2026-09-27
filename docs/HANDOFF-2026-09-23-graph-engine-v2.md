@@ -10,7 +10,7 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1853 tests passing**,
+agents" below). Working tree clean. **1862 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-27, after geometry phase 12 (shading and shaded
@@ -879,9 +879,24 @@ always offset a label from its anchor, so `labels.ts` gained an opt-in
 `centred` candidate (the anchor itself, first), set only by area labels —
 every other label lays out exactly as before.
 
-*Names use `name:`,* never `R = region …` (space owns that form). A hidden
-fill still names its region. `square`/`rectangle` are asserted like
+*Names use `name:`,* never `R = region …` (space owns that form). `name:`
+stays a group name (fix round 1, ruling): fills may share one and all draw
+(`@hide` hides them together), and measuring a shared name is refused as
+ambiguous, naming the fills. A hidden fill still names its region; when a
+named fill was refused, `area R` says "was named, but its fill was refused:
+<reason>" rather than "unknown". `square`/`rectangle` are asserted like
 `right-angle:` in space, lifted by `@scale: false`.
+
+*Fix round 1, the minor items.* Boundaries a tolerance or two apart that do
+not meet (a circle 5e-9 wider than a square's inscribed one) used to surface
+an internal "does not close at (…)"; assembly now returns null and
+`combineRegions` refuses in the author's words ("… has boundaries too close
+to tell apart"). F6 merges inside chords meeting at a point where the
+boundary only touches the line: a disk r = 2 minus a disk r = 1 at (1, 0)
+anchors at (0, −1), not (−0.366, −1); the annulus and square-minus-circle
+anchors are unchanged. The lens's and the annulus's exact path strings are
+pinned, so an arc's direction and flags are tested. `area R < area S` says
+relations between areas are not stated yet.
 
 **Byte identity, measured as in phases 9–11** (a scratch vitest setup
 wrapping `renderFigure` and `parseStatement`: 551 distinct suite inputs
@@ -1028,7 +1043,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1853 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1862 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)

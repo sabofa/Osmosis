@@ -850,7 +850,14 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   // Phase 12 (F4) — shaded regions. A region named with "name:" on its
   // "fill:" line, by that name, for "area R" and for later fills.
-  const namedRegions = new Map<string, Region>()
+  //
+  // "name:" is a GROUP name — it also serves "@hide", and several statements
+  // may share one — so several fills may carry the same name (fix round 1,
+  // M4). Each is recorded in source order with its region, or with why it
+  // was refused, so that measuring the name can say which of three things
+  // is wrong: no fill carries it, more than one does, or its one fill was
+  // refused (M3).
+  const namedFills = new Map<string, { source: string; region: Region | null; refused: string | null }[]>()
 
   // A fill's points are points of the plane: a fill in space would be a face,
   // which a solid figure draws as a section (F7).
@@ -892,9 +899,17 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   function regionOf(expr: RegionExpr): Region {
     switch (expr.kind) {
       case 'named': {
-        const found = namedRegions.get(expr.name)
-        if (!found) throw new Error(unknownRegion(expr.name))
-        return found
+        const fills = namedFills.get(expr.name) ?? []
+        if (fills.length === 0) throw new Error(unknownRegion(expr.name))
+        if (fills.length > 1) {
+          throw new Error(
+            `"${expr.name}" names ${fills.length} fills (${fills.map((fill) => `"fill: ${fill.source}"`).join(', ')}), so which region it means is ambiguous — ` +
+              'give the one to measure a name of its own'
+          )
+        }
+        const [fill] = fills
+        if (!fill.region) throw new Error(`"${expr.name}" was named, but its fill was refused: ${fill.refused}`)
+        return fill.region
       }
       case 'disk':
         return diskRegion(resolveCircle(expr.circle))
@@ -915,12 +930,21 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   // A fill's region, named when its statement names it.
   function fillRegion(statement: Extract<Statement, { kind: 'fill' }>): Region {
-    const region = regionOf(statement.region)
     const name = statement.statementName
-    if (name) {
-      if (namedRegions.has(name)) throw new Error(`"${name}" already names a shaded region — pick a different name`)
-      namedRegions.set(name, region)
+    const record = (region: Region | null, refused: string | null) => {
+      if (!name) return
+      const fills = namedFills.get(name) ?? []
+      fills.push({ source: statement.region.source, region, refused })
+      namedFills.set(name, fills)
     }
+    let region: Region
+    try {
+      region = regionOf(statement.region)
+    } catch (err) {
+      record(null, err instanceof Error ? err.message : String(err))
+      throw err
+    }
+    record(region, null)
     return region
   }
 

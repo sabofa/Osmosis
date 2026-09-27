@@ -147,6 +147,30 @@ label: area R = 4`)).toEqual([])
     ])
   })
 
+  it('says a named fill was refused, rather than calling its name unknown (fix round 1, M3)', () => {
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nfill: square ABCD minus square ABCD name: Q\nlabel: area Q`)).toEqual([
+      'square ABCD minus square ABCD leaves nothing to shade',
+      '"Q" was named, but its fill was refused: square ABCD minus square ABCD leaves nothing to shade',
+    ])
+    // Hidden, the fill reports nothing itself; the area still says why.
+    expect(errorsOf(`@hide: Q\n${SQUARE_AND_CIRCLE}\nfill: square ABCD minus square ABCD name: Q\ngiven: area Q`)).toEqual([
+      '"Q" was named, but its fill was refused: square ABCD minus square ABCD leaves nothing to shade',
+    ])
+  })
+
+  it('refuses a name carried by more than one fill as ambiguous, naming the fills (fix round 1, M4)', () => {
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nfill: triangle ABD name: Q\nfill: triangle BCD name: Q\nlabel: area Q`)).toEqual([
+      '"Q" names 2 fills ("fill: triangle ABD", "fill: triangle BCD"), so which region it means is ambiguous — give the one to measure a name of its own',
+    ])
+  })
+
+  it('says relations between areas are not stated yet (fix round 1, M6)', () => {
+    expect(() => parseStatement('given: area R < area S')).toThrow(
+      'Relations between areas are not stated yet — give each area its own line ("given: area R", "given: area S")'
+    )
+    expect(() => parseStatement('given: area R congruent area S')).toThrow(/Relations between areas are not stated yet/)
+  })
+
   it('measures a region whose fill is hidden', () => {
     const svg = rendered(`@hide: R\n${SQUARE_AND_CIRCLE}\ngiven: area R`).svg
     expect(layer(svg, 'regions')).toBe('')
