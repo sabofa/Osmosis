@@ -6,7 +6,9 @@ import { resolveMode } from '../scene/mode'
 import type { Vec2 } from '../scene/types'
 import { liftOffset } from './crossSection'
 import { hullOf } from './hull'
-import { netOf, netOverlaps, refuseOverlap, type Net, type NetFace, type NetLine } from './nets'
+import { netOf, netOverlaps, netSeam, refuseOverlap, unrolledAngle, unrollingOf, type Net, type NetFace, type NetLine } from './nets'
+import { DEFAULT_CAMERA } from './project3d'
+import { toWorld } from './silhouette'
 import { renderFigure } from './render'
 import { buildSolidFigure } from './solidScope'
 import { buildSolid } from './solids'
@@ -252,6 +254,119 @@ describe('the overlap check (N2)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Round solids (task 2)
+// ---------------------------------------------------------------------------
+
+function pieces(net: Net, object: string) {
+  return net.lines.filter((l) => l.object === object).map((l) => l.piece)
+}
+
+describe('nets of round solids (N2)', () => {
+  it('unrolls a cylinder r = 3, h = 10 into a 6π-by-10 rectangle, its rims tangent at the middle', () => {
+    const { net } = built('S = solid cylinder radius 3, height 10')
+    const flatNet = net()
+    // 2π r = 6π = 18.850 wide, 10 tall; the two rim edges are the folds.
+    const folds = flatNet.lines.filter((l) => l.fold)
+    expect(folds.map((l) => l.object).sort()).toEqual(['fold-base', 'fold-top'])
+    for (const fold of folds) expect(lineLength(fold)).toBeCloseTo(6 * Math.PI, 12)
+    expect(lineLength(folds[0])).toBeCloseTo(18.85, 3)
+    const seams = flatNet.lines.filter((l) => l.object === 'cut-seam')
+    expect(seams).toHaveLength(2)
+    for (const seam of seams) expect(lineLength(seam)).toBeCloseTo(10, 12)
+    // Each rim a whole circle of radius 3, tangent at its edge's midpoint:
+    // the midpoints are (0, 0) and (0, 10), so the centres are 3 beyond them.
+    const [base] = pieces(flatNet, 'cut-base')
+    const [top] = pieces(flatNet, 'cut-top')
+    for (const [circle, centreY] of [
+      [base, -3],
+      [top, 13],
+    ] as const) {
+      if (circle.kind !== 'arc') throw new Error('expected a circle')
+      expect(circle.radius).toBe(3)
+      expect(circle.center.x).toBeCloseTo(0, 12)
+      expect(circle.center.y).toBeCloseTo(centreY, 12)
+      expect(circle.to - circle.from).toBeCloseTo(2 * Math.PI, 12)
+    }
+  })
+
+  it('unrolls a cone R = 3, H = 4 into a sector of radius 5 and angle 6π/5 (216°), the base tangent at the arc’s middle', () => {
+    const { net } = built('S = solid cone radius 3, height 4')
+    const sector = net()
+    // Slant √(9 + 16) = 5; the base rim's length 6π is the arc's, so the
+    // angle is 6π / 5 = 2π · 3/5 — 216°, symmetric about the downward vertical.
+    const [arc] = pieces(sector, 'fold-base')
+    if (arc.kind !== 'arc') throw new Error('expected an arc')
+    expect(arc.radius).toBeCloseTo(5, 12)
+    expect(arc.to - arc.from).toBeCloseTo((6 * Math.PI) / 5, 12)
+    expect(((arc.to - arc.from) * 180) / Math.PI).toBeCloseTo(216, 10)
+    expect((arc.from + arc.to) / 2).toBeCloseTo(-Math.PI / 2, 12)
+    // Two radii, the seam, from the apex to the arc's ends.
+    const radii = pieces(sector, 'cut-seam')
+    expect(radii).toHaveLength(2)
+    for (const radius of radii) {
+      if (radius.kind !== 'segment') throw new Error('expected a segment')
+      expect(distance(radius.a, { x: 0, y: 0 })).toBeCloseTo(0, 12)
+      expect(distance(radius.b, { x: 0, y: 0 })).toBeCloseTo(5, 12)
+    }
+    // The base circle, radius 3, tangent at the arc's midpoint (0, -5).
+    const [base] = pieces(sector, 'cut-base')
+    if (base.kind !== 'arc') throw new Error('expected a circle')
+    expect(base.radius).toBe(3)
+    expect(base.center.x).toBeCloseTo(0, 12)
+    expect(base.center.y).toBeCloseTo(-8, 12)
+  })
+
+  it('unrolls a frustum r₁ = 4, r₂ = 1, h = 4 into an annular sector of radii 20/3 and 5/3, angle 6π/5', () => {
+    // Slant √(3² + 4²) = 5; the extended cone's slant 5 · 4/3 = 20/3, the top
+    // rim 20/3 · 1/4 = 5/3 from its apex; angle 2π · 4 / (20/3) = 6π/5.
+    const { net } = built('S = solid frustum radius 4, top 1, height 4')
+    const ring = net()
+    const [outer] = pieces(ring, 'fold-base')
+    const [inner] = pieces(ring, 'fold-top')
+    if (outer.kind !== 'arc' || inner.kind !== 'arc') throw new Error('expected arcs')
+    expect(outer.radius).toBeCloseTo(20 / 3, 12)
+    expect(inner.radius).toBeCloseTo(5 / 3, 12)
+    for (const arc of [outer, inner]) expect(arc.to - arc.from).toBeCloseTo((6 * Math.PI) / 5, 12)
+    for (const seam of ring.lines.filter((l) => l.object === 'cut-seam')) expect(lineLength(seam)).toBeCloseTo(5, 12)
+    // Both rims tangent at their arcs' midpoints: the base (radius 4) below
+    // (0, -20/3), the top (radius 1) inside the hole above (0, -5/3).
+    const [base] = pieces(ring, 'cut-base')
+    const [top] = pieces(ring, 'cut-top')
+    if (base.kind !== 'arc' || top.kind !== 'arc') throw new Error('expected circles')
+    expect(base.radius).toBe(4)
+    expect(base.center.y).toBeCloseTo(-20 / 3 - 4, 12)
+    expect(top.radius).toBe(1)
+    expect(top.center.y).toBeCloseTo(-5 / 3 + 1, 12)
+  })
+
+  // N2: the seam runs directly AWAY from the default camera, so the net's
+  // middle is the generator facing the viewer. Found here by brute force over
+  // the base rim (a check, not an answer): the rim point nearest the viewer —
+  // largest depth along the default camera's direction — must unroll to the
+  // net's midline (x = 0 for a cylinder, the downward vertical for a cone).
+  it('cuts the seam behind: the net’s middle is the generator nearest the viewer', () => {
+    for (const [spec, middle] of [
+      ['S = solid cylinder radius 3, height 10', 0],
+      ['S = solid cone radius 3, height 4', -Math.PI / 2],
+      // Tilted, by points: the local frame is not the world's.
+      ['V = (1, 2, 5)\nO = (0, -1, 0)\nS = solid cone apex V base O radius 2', -Math.PI / 2],
+    ] as const) {
+      const { body } = built(spec)
+      const unrolling = unrollingOf(body)!
+      let best = 0
+      let bestDepth = -Infinity
+      for (let k = 0; k < 36000; k++) {
+        const theta = (2 * Math.PI * k) / 36000
+        const rim = toWorld(body.placement, { x: Math.cos(theta), y: -unrolling.height / 2, z: Math.sin(theta) })
+        const depth = rim.x * DEFAULT_CAMERA.direction.x + rim.y * DEFAULT_CAMERA.direction.y + rim.z * DEFAULT_CAMERA.direction.z
+        if (depth > bestDepth) [best, bestDepth] = [theta, depth]
+      }
+      expect(unrolledAngle(unrolling, netSeam(body), best)).toBeCloseTo(middle, 3)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // net: in a figure
 // ---------------------------------------------------------------------------
 
@@ -320,6 +435,32 @@ describe('net: in a figure', () => {
     expect(liftOffset(solid, shape)).toEqual(liftOffset(solid, shape, null))
     // A running edge past the solid moves the next lift past it.
     expect(liftOffset(solid, shape, 20).x).toBe(20 + 2 - 1)
+  })
+
+  it('dashes a cylinder’s two rim folds and draws its seam and circles solid', () => {
+    const { svg, errors } = render('S = solid cylinder radius 3, height 10\nnet: S')
+    expect(errors).toEqual([])
+    const drawn = lines(svg, 1)
+    expect(drawn.filter((l) => l.attrs.includes('stroke-dasharray')).map((l) => /data-object="([^"]*)"/.exec(l.attrs)![1]).sort()).toEqual(['fold-base', 'fold-top'])
+    expect(drawn.filter((l) => l.attrs.includes('data-object="cut-seam"') && !l.attrs.includes('stroke-dasharray'))).toHaveLength(2)
+    // Each circle is two half-turn arcs, solid.
+    const circles = [...svg.matchAll(/<path d="[^"]*"([^>]*data-statement="1"[^>]*)\/>/g)].map((m) => m[1])
+    expect(circles.filter((a) => a.includes('data-object="cut-base"'))).toHaveLength(2)
+    expect(circles.filter((a) => a.includes('data-object="cut-top"'))).toHaveLength(2)
+    for (const attrs of circles) expect(attrs).not.toContain('stroke-dasharray')
+  })
+
+  it('draws a cone’s sector as one circular arc, dashed, plus two solid radii', () => {
+    const { svg, errors } = render('S = solid cone radius 3, height 4\nnet: S')
+    expect(errors).toEqual([])
+    const arcs = [...svg.matchAll(/<path d="M [^A]*A ([^ ]+) ([^ ]+) [^"]*"([^>]*)\/>/g)].filter((m) => m[3].includes('data-statement="1"') && m[3].includes('data-object="fold-base"'))
+    expect(arcs).toHaveLength(1)
+    // Circular: equal radii (the SVG arc's rx and ry).
+    expect(arcs[0][1]).toBe(arcs[0][2])
+    expect(arcs[0][3]).toContain('stroke-dasharray')
+    const radii = lines(svg, 1).filter((l) => l.attrs.includes('data-object="cut-seam"'))
+    expect(radii).toHaveLength(2)
+    for (const radius of radii) expect(radius.attrs).not.toContain('stroke-dasharray')
   })
 
   it('reports a refused net as an error and draws the rest', () => {

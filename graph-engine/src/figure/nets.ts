@@ -1,8 +1,9 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 import { centroid3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
-import type { Solid3D, Vec3 } from './project3d'
-import type { SolidBody } from './solids'
+import { DEFAULT_CAMERA, type Solid3D, type Vec3 } from './project3d'
+import { rotateToLocal } from './silhouette'
+import { frustumRadii, type SolidBody } from './solids'
 
 // Phase 11 — nets: a solid unfolded flat, fold lines dashed.
 //
@@ -527,13 +528,168 @@ function strictlyInside(p: Vec2, polygon: readonly Vec2[], tolerance: number): b
 }
 
 // ---------------------------------------------------------------------------
+// Round solids (task 2): the lateral surface unrolled, in closed form
+// ---------------------------------------------------------------------------
+//
+// A cylinder's lateral surface unrolls to a rectangle 2 pi r by h; a cone's
+// to a sector of radius l (the slant) and angle 2 pi r / l; a conical
+// frustum's to an annular sector cut from its extended cone's. Each is exact:
+// arc length along a rim is preserved, and so is distance along a generator.
+//
+// Everything is read in the solid's LOCAL frame (P1: axis +y, the base rim at
+// y = -h/2), through its placement, so a tilted cone unrolls as an upright
+// one does. A point's angle round the axis is theta = atan2(z, x), local.
+//
+// **The seam** runs along the generator directly AWAY from the default
+// camera (N2), so the side of the surface facing the viewer lands in the
+// middle of the net. Fixed against the DEFAULT camera, never the active view
+// (V2), like every placement: the net never turns with "@view:".
+//
+// **Seen from outside**, as a polyhedron's net is: standing outside the
+// surface, axis up, the reader's right is DECREASING theta (the tangent of
+// increasing theta is (-sin, 0, cos), and facing in, right = facing x up =
+// (sin, 0, -cos)). So a net's horizontal runs with (middle - theta).
+
+// The local angle of the generator facing the default camera: the camera's
+// direction in the solid's frame, projected across the axis. A camera
+// looking straight down the axis sees no front; the local +x is taken then.
+export function frontAngle(body: SolidBody): number {
+  const d = rotateToLocal(body.placement, DEFAULT_CAMERA.direction)
+  return Math.hypot(d.x, d.z) <= GEOM_EPS ? 0 : Math.atan2(d.z, d.x)
+}
+
+// An angle wrapped into [-pi, pi).
+export function wrapAngle(t: number): number {
+  const turn = 2 * Math.PI
+  return t - turn * Math.floor((t + Math.PI) / turn)
+}
+
+// A round solid's lateral surface, as it unrolls.
+//  - cylinder: radius and height; unrolled as a rectangle.
+//  - cone and frustum: radius (the base rim, the wider), top (0 for a cone)
+//    and height; slant is the extended cone's slant, from the apex (virtual
+//    for a frustum) to the base rim, and inner the top rim's distance from
+//    it; sector = 2 pi radius / slant, the angle unrolled; apexY the apex's
+//    local height.
+export type Unrolling =
+  | { kind: 'cylinder'; radius: number; height: number }
+  | { kind: 'cone' | 'frustum'; radius: number; top: number; height: number; slant: number; inner: number; sector: number; apexY: number }
+
+export function unrollingOf(body: SolidBody): Unrolling | null {
+  const spec = body.spec
+  switch (spec.kind) {
+    case 'cylinder':
+      return { kind: 'cylinder', radius: spec.radius, height: spec.height }
+    case 'cone': {
+      const slant = Math.hypot(spec.radius, spec.height)
+      return { kind: 'cone', radius: spec.radius, top: 0, height: spec.height, slant, inner: 0, sector: (2 * Math.PI * spec.radius) / slant, apexY: spec.height / 2 }
+    }
+    case 'frustum': {
+      // P2: the wider rim is always the LOCAL base.
+      const { bottom, top } = frustumRadii(spec)
+      // The extended cone: its slant from the virtual apex to the base rim is
+      // the frustum's slant scaled by R / (R - r); the top rim sits r / R of
+      // the way along it from the apex.
+      const slant = (Math.hypot(bottom - top, spec.height) * bottom) / (bottom - top)
+      const apexY = -spec.height / 2 + (spec.height * bottom) / (bottom - top)
+      return { kind: 'frustum', radius: bottom, top, height: spec.height, slant, inner: (slant * top) / bottom, sector: (2 * Math.PI * bottom) / slant, apexY }
+    }
+    default:
+      return null
+  }
+}
+
+// Where the generator at local angle theta runs in an unrolling cut along
+// the generator at `seam`: its horizontal position (a cylinder) or its polar
+// angle about the apex (a cone or frustum, opening downward), measured from
+// the unrolling's middle — the generator opposite the seam.
+export function unrolledAngle(unrolling: Unrolling, seam: number, theta: number): number {
+  const around = wrapAngle(seam + Math.PI - theta)
+  if (unrolling.kind === 'cylinder') return unrolling.radius * around
+  return -Math.PI / 2 + (around * unrolling.radius) / unrolling.slant
+}
+
+// A local point of the lateral surface, unrolled: (x, height above the base
+// rim) for a cylinder; about the apex at the origin for a cone or frustum.
+export function unrolledPoint(unrolling: Unrolling, seam: number, p: Vec3): Vec2 {
+  const theta = Math.atan2(p.z, p.x)
+  if (unrolling.kind === 'cylinder') return { x: unrolledAngle(unrolling, seam, theta), y: p.y + unrolling.height / 2 }
+  const rho = distanceFromApex(unrolling, p)
+  // The apex has no angle round the axis; it unrolls to the origin.
+  if (rho === 0) return { x: 0, y: 0 }
+  const phi = unrolledAngle(unrolling, seam, theta)
+  return { x: rho * Math.cos(phi), y: rho * Math.sin(phi) }
+}
+
+// A lateral point's distance from the (virtual) apex, along its generator.
+export function distanceFromApex(unrolling: Extract<Unrolling, { kind: 'cone' | 'frustum' }>, p: Vec3): number {
+  return Math.hypot(p.x, p.y - unrolling.apexY, p.z)
+}
+
+// N2: the round templates, the seam behind (front + pi).
+function roundNet(body: SolidBody): Net | null {
+  const unrolling = unrollingOf(body)
+  return unrolling ? unrolledNet(unrolling, true) : null
+}
+
+// The unrolled lateral surface, centred on its middle generator, and — for a
+// net — the rims' circles, tangent at the middle of the edges they fold on.
+// With `withRims` the rim edges are folds (dashed); without them (a shortest
+// path's unrolling, task 4) the rims are the boundary, drawn solid.
+export function unrolledNet(unrolling: Unrolling, withRims: boolean): Net {
+  const lines: NetLine[] = []
+  const rim = (piece: NetPiece, object: string) => lines.push({ piece, fold: withRims, object: `${withRims ? 'fold' : 'cut'}-${object}` })
+  const cut = (piece: NetPiece, object: string) => lines.push({ piece, fold: false, object: `cut-${object}` })
+  if (unrolling.kind === 'cylinder') {
+    // A rectangle 2 pi r wide and h tall, centred on x = 0; the base circle
+    // tangent under the bottom edge's midpoint, the top's over the top edge's.
+    const { radius: r, height: h } = unrolling
+    const half = Math.PI * r
+    rim({ kind: 'segment', a: { x: -half, y: 0 }, b: { x: half, y: 0 } }, 'base')
+    rim({ kind: 'segment', a: { x: -half, y: h }, b: { x: half, y: h } }, 'top')
+    cut({ kind: 'segment', a: { x: -half, y: 0 }, b: { x: -half, y: h } }, 'seam')
+    cut({ kind: 'segment', a: { x: half, y: 0 }, b: { x: half, y: h } }, 'seam')
+    if (withRims) {
+      cut({ kind: 'arc', center: { x: 0, y: -r }, radius: r, from: 0, to: 2 * Math.PI }, 'base')
+      cut({ kind: 'arc', center: { x: 0, y: h + r }, radius: r, from: 0, to: 2 * Math.PI }, 'top')
+    }
+    return { shape: 'net', faces: [], lines, letters: [], copies: new Map() }
+  }
+  // A sector (annular for a frustum) about the apex at the origin, symmetric
+  // about the vertical and opening downward: polar angles -pi/2 -/+ half the
+  // sector angle. The base circle is tangent at the outer arc's midpoint,
+  // (0, -slant), from outside; a frustum's top circle at the inner arc's
+  // midpoint, (0, -inner), from inside the hole — it fits, its far side
+  // exactly inner from the apex.
+  const { slant, inner, sector, radius, top } = unrolling
+  const from = -Math.PI / 2 - sector / 2
+  const to = -Math.PI / 2 + sector / 2
+  const at = (rho: number, phi: number): Vec2 => ({ x: rho * Math.cos(phi), y: rho * Math.sin(phi) })
+  rim({ kind: 'arc', center: { x: 0, y: 0 }, radius: slant, from, to }, 'base')
+  if (unrolling.kind === 'frustum') rim({ kind: 'arc', center: { x: 0, y: 0 }, radius: inner, from, to }, 'top')
+  cut({ kind: 'segment', a: at(inner, from), b: at(slant, from) }, 'seam')
+  cut({ kind: 'segment', a: at(inner, to), b: at(slant, to) }, 'seam')
+  if (withRims) {
+    cut({ kind: 'arc', center: { x: 0, y: -slant - radius }, radius, from: 0, to: 2 * Math.PI }, 'base')
+    if (unrolling.kind === 'frustum') cut({ kind: 'arc', center: { x: 0, y: -inner + top }, radius: top, from: 0, to: 2 * Math.PI }, 'top')
+  }
+  return { shape: 'net', faces: [], lines, letters: [], copies: new Map() }
+}
+
+// The seam of a round solid's NET: the generator directly away from the
+// default camera.
+export function netSeam(body: SolidBody): number {
+  return frontAngle(body) + Math.PI
+}
+
+// ---------------------------------------------------------------------------
 // The one entry point
 // ---------------------------------------------------------------------------
 
 // The net of a solid, or a refusal naming why there is none.
 export function netOf(body: SolidBody, name: string, names: readonly (string | undefined)[] = []): Net {
   if (body.spec.kind === 'sphere') throw new Error(`"${name}" is a sphere, and a sphere has no net — ${NET_SOLIDS}`)
-  const net = polyhedronNet(body, name, names)
+  const net = polyhedronNet(body, name, names) ?? roundNet(body)
   if (net) return net
   throw new Error(`"${name}" is ${netSolidWord(body)}, and ${NET_SOLIDS}`)
 }
