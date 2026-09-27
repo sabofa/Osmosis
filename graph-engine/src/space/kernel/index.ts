@@ -31,6 +31,7 @@ import { namedPoints } from './geometry/operands'
 import { LINE } from './geometry/lines'
 import { PLANE } from './geometry/planes'
 import { VECTOR_OP } from './geometry/vectorOps'
+import { COORDINATE_SURFACE } from './geometry/coordinateSurfaces'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -57,6 +58,7 @@ registerBuilder('space:line', LINE)
 registerBuilder('space:plane', PLANE)
 registerBuilder('space:cross', VECTOR_OP)
 registerBuilder('space:project', VECTOR_OP)
+registerBuilder('space:coordinateSurface', COORDINATE_SURFACE)
 
 interface StatementRecord {
   line: number

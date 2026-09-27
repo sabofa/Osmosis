@@ -3,7 +3,7 @@
 // union member, GeometryForm, so the shared file changes by one line.
 
 import type { Expr } from '../../../parser/types'
-import type { SpaceStyle } from '../types'
+import type { ParamRange, SpaceStyle } from '../types'
 
 // "levels 12", "levels -4..4 step 1", "levels 1, 4, 9" (and "level 4").
 export type Levels =
@@ -70,4 +70,16 @@ export interface VectorOpForm {
   style: SpaceStyle
 }
 
-export type GeometryForm = ContourForm | LineForm | PlaneForm | VectorOpForm
+// "cylindrical: <r|theta|z> = <expr> [for ...]" and
+// "spherical: <rho|theta|phi> = <expr> [for ...]": one coordinate as a
+// function of the other two, over their default or given ranges.
+export interface CoordinateSurfaceForm {
+  form: 'coordinateSurface'
+  system: 'cylindrical' | 'spherical'
+  solved: string
+  body: Expr
+  ranges: ParamRange[]
+  style: SpaceStyle
+}
+
+export type GeometryForm = ContourForm | LineForm | PlaneForm | VectorOpForm | CoordinateSurfaceForm

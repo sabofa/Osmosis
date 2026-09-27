@@ -1,0 +1,125 @@
+// Coordinate surfaces (plan A5): "cylindrical: r = 2" (a cylinder),
+// "cylindrical: z = r" (a cone), "spherical: phi = pi/4" (a cone),
+// "spherical: rho = 2 sin(phi)", "spherical: theta = pi/3" (a half-plane).
+//
+// Each is a parametric surface through the exact coordinate map,
+//   cylindrical (r, θ, z) -> (r cos θ, r sin θ, z)
+//   spherical  (ρ, θ, φ) -> (ρ sin φ cos θ, ρ sin φ sin θ, ρ cos φ)
+// with the solved coordinate replaced by its expression, over the other two
+// (in the order r, θ, z / ρ, θ, φ), which name the pick's parameters. It is
+// built by the parametric surface's builder, so normals, mesh lines, style
+// and the pick are that builder's; the pick also carries the hit in the
+// surface's own coordinates.
+//
+// θ is the azimuth from +x toward +y; φ is measured from +z (OpenStax).
+// Default ranges: θ over a full turn and φ over a half turn (in the spec's
+// @angle unit, since the map's trig reads it), z over the box's z range, and
+// r and ρ over [0, R], R the box's largest half-span. The box is box.ts's
+// (@bounds3d, else [-5, 5] per axis), as for an implicit surface.
+
+import type { Expr, Statement } from '../../../parser/types'
+import { call, mul, num, substitute, variable } from '../../../math/expr'
+import type { CoordinateSurfaceForm } from '../../grammar/keywords/geometryForms'
+import type { ParamRange } from '../../grammar/types'
+import { formatNumber } from '../../pick/format'
+import type { MeshMark, Vec3 } from '../../scene/types'
+import { PARAMETRIC_SURFACE } from '../parametric'
+import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { largestSpan, spaceBox } from './box'
+
+type System = CoordinateSurfaceForm['system']
+type Angle = 'radians' | 'degrees'
+
+const v = variable
+
+// The coordinate maps, over the coordinates' own names.
+const MAPS: Record<System, [Expr, Expr, Expr]> = {
+  cylindrical: [mul(v('r'), call('cos', v('theta'))), mul(v('r'), call('sin', v('theta'))), v('z')],
+  spherical: [
+    mul(mul(v('rho'), call('sin', v('phi'))), call('cos', v('theta'))),
+    mul(mul(v('rho'), call('sin', v('phi'))), call('sin', v('theta'))),
+    mul(v('rho'), call('cos', v('phi'))),
+  ],
+}
+
+const ORDER: Record<System, readonly string[]> = {
+  cylindrical: ['r', 'theta', 'z'],
+  spherical: ['rho', 'theta', 'phi'],
+}
+
+const LABELS: Record<System, string> = { cylindrical: '(r, θ, z)', spherical: '(ρ, θ, φ)' }
+
+function form(statement: Statement): CoordinateSurfaceForm {
+  if (statement.kind === 'space' && statement.form.form === 'coordinateSurface') return statement.form
+  throw new Error(`not a coordinate surface: ${statement.kind}`)
+}
+
+function defaultRange(name: string, context: BuildContext): ParamRange {
+  const box = spaceBox(context.config)
+  const turn = context.config.angle === 'degrees' ? num(360) : mul(num(2), v('pi'))
+  const half = context.config.angle === 'degrees' ? num(180) : v('pi')
+  switch (name) {
+    case 'theta':
+      return { param: name, from: num(0), to: turn }
+    case 'phi':
+      return { param: name, from: num(0), to: half }
+    case 'z':
+      return { param: name, from: num(box.z.min), to: num(box.z.max) }
+    default:
+      return { param: name, from: num(0), to: num(largestSpan(box) / 2) }
+  }
+}
+
+// The point p in the system's coordinates, angles in the given unit; θ in
+// [0, a full turn), φ in [0, a half turn].
+export function coordinatesOf(system: System, p: Vec3, angle: Angle): [number, number, number] {
+  const [x, y, z] = p
+  const toUnit = (a: number) => (angle === 'degrees' ? (a * 180) / Math.PI : a)
+  let theta = Math.atan2(y, x)
+  if (theta < 0) theta += 2 * Math.PI
+  if (system === 'cylindrical') return [Math.hypot(x, y), toUnit(theta), z]
+  const rho = Math.hypot(x, y, z)
+  const phi = rho > 0 ? Math.acos(Math.max(-1, Math.min(1, z / rho))) : 0
+  return [rho, toUnit(theta), toUnit(phi)]
+}
+
+export function coordinateRow(system: System, p: Vec3, angle: Angle): { label: string; value: string } {
+  const [a, b, c] = coordinatesOf(system, p, angle)
+  const deg = angle === 'degrees' ? '°' : ''
+  const value =
+    system === 'cylindrical'
+      ? `(${formatNumber(a)}, ${formatNumber(b)}${deg}, ${formatNumber(c)})`
+      : `(${formatNumber(a)}, ${formatNumber(b)}${deg}, ${formatNumber(c)}${deg})`
+  return { label: LABELS[system], value }
+}
+
+function prepareCoordinateSurface(statement: Statement, context: BuildContext): PreparedStatement {
+  const f = form(statement)
+  const params = ORDER[f.system].filter((c) => c !== f.solved)
+  const ranges = params.map((name) => f.ranges.find((r) => r.param === name) ?? defaultRange(name, context)) as [ParamRange, ParamRange]
+  const solved = new Map([[f.solved, f.body]])
+  const [fx, fy, fz] = MAPS[f.system].map((e) => substitute(e, solved))
+  const parametric: Statement = {
+    kind: 'space',
+    form: { form: 'parametricSurface', fx, fy, fz, u: ranges[0], v: ranges[1], style: f.style },
+    color: statement.color,
+    statementName: statement.statementName,
+  }
+  const prepared = PARAMETRIC_SURFACE.prepare(parametric, context)
+  const angle = context.config.angle
+  const coordinates = (p: Vec3) => coordinateRow(f.system, p, angle)
+  const build = (): BuildResult => {
+    const result = prepared.build()
+    const marks = result.marks.map((mark) =>
+      mark.kind === 'mesh' && mark.pick?.kind === 'parametric' ? ({ ...mark, pick: { ...mark.pick, coordinates } } satisfies MeshMark) : mark
+    )
+    return { ...result, marks }
+  }
+  return { reads: prepared.reads, build }
+}
+
+export const COORDINATE_SURFACE: BuilderEntry = {
+  draws: true,
+  prepare: prepareCoordinateSurface,
+  colorScale: (statement) => (form(statement).style.colormap?.by.kind ?? 'none') !== 'none',
+}

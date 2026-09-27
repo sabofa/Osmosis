@@ -214,3 +214,42 @@ describe('cross: and project:', () => {
     })
   }
 })
+
+describe('cylindrical: and spherical:', () => {
+  const SURFACE_STYLE = NO_STYLE
+
+  it('cylindrical: r = 2', () => {
+    expect(form('cylindrical: r = 2')).toEqual({ form: 'coordinateSurface', system: 'cylindrical', solved: 'r', body: p('2'), ranges: [], style: SURFACE_STYLE })
+  })
+
+  it('spherical: rho = 2 sin(phi) for theta in [0, pi], with style', () => {
+    expect(form('spherical: rho = 2 sin(phi) for theta in [0, pi] opacity: 0.5')).toMatchObject({
+      system: 'spherical',
+      solved: 'rho',
+      body: p('2 sin(phi)'),
+      ranges: [{ param: 'theta', from: p('0'), to: p('pi') }],
+      style: { opacity: 0.5 },
+    })
+    expect(form('spherical: phi = pi/4 for rho in [0, 2], theta in [0, pi] res: 20')).toMatchObject({
+      solved: 'phi',
+      ranges: [{ param: 'rho' }, { param: 'theta' }],
+      style: { res: 20 },
+    })
+  })
+
+  const refusals: [string, RegExp][] = [
+    ['cylindrical: rho = 2', /cylindrical: expects r, theta or z on the left, got "rho"/],
+    ['spherical: z = 1', /spherical: expects rho, theta or phi on the left, got "z"/],
+    ['cylindrical: r = r + 1', /cylindrical: r = … gives r from theta and z — it cannot read r/],
+    ['spherical: rho = 1 for rho in [0, 1]', /spherical: rho = … ranges over theta and phi, not rho/],
+    ['cylindrical: r = 2 for theta in [0, pi], theta in [0, 1]', /theta is given two ranges/],
+    ['cylindrical: r = 2 for theta in [0, 1], z in [0, 1], r in [0, 1]', /at most two ranges/],
+    ['cylindrical: 2', /Expected "cylindrical: r = 2"/],
+    ['cylindrical: r = 2 width: 2', /width: does not apply to cylindrical: — it takes opacity:, colormap:, mesh:, res: and color:/],
+  ]
+  for (const [line, message] of refusals) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseSpaceKeyword(line)).toThrow(message)
+    })
+  }
+})
