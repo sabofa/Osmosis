@@ -1,7 +1,9 @@
 // Readout rows for a hit (plan E7), every number through format.ts. Pure.
 //
 // - Graph z = f: x, y, z (= f), then the partials.
-// - Parametric: the point, then its two parameters under their own names.
+// - Parametric: the point, then its two parameters under their own names,
+//   then, for a coordinate surface (S4a), the point in its own system as one
+//   row, e.g. "(r, θ, z)" = "(2, 1.571, 1)" (the pick's coordinates(p)).
 // - Implicit: the point, then |grad F|.
 // - Curve: the point, its parameter under its own name, and the speed
 //   |r'(t)|.
@@ -33,8 +35,16 @@ export function graphReadout(p: Vec3, fx: number, fy: number): ReadoutRow[] {
   return [...point(p), { label: '∂f/∂x', value: formatNumber(fx) }, { label: '∂f/∂y', value: formatNumber(fy) }]
 }
 
-export function parametricReadout(p: Vec3, names: readonly [string, string], u: number, v: number): ReadoutRow[] {
-  return [...point(p), { label: names[0], value: formatNumber(u) }, { label: names[1], value: formatNumber(v) }]
+export function parametricReadout(
+  p: Vec3,
+  names: readonly [string, string],
+  u: number,
+  v: number,
+  coordinates?: (p: Vec3) => ReadoutRow
+): ReadoutRow[] {
+  const rows = [...point(p), { label: names[0], value: formatNumber(u) }, { label: names[1], value: formatNumber(v) }]
+  if (coordinates) rows.push(coordinates(p))
+  return rows
 }
 
 export function implicitReadout(p: Vec3, grad: Vec3): ReadoutRow[] {

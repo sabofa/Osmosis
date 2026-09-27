@@ -6,6 +6,7 @@ import { createSpaceKernel } from '../kernel/index'
 import type { Box3, LineMark, MeshMark, Vec3 } from '../scene/types'
 import { graphMesh, lineMark, parametricMesh, pointMark, scene } from '../testing/marks'
 import { authorRay, pickAt, surfaceHit } from './pick'
+import { reevaluate } from './reevaluate'
 import { at, boxSpan, clipRay } from './refine'
 import type { Ray } from './types'
 
@@ -271,5 +272,57 @@ describe('pickAt: thin things before surfaces', () => {
     const s = (toP[0] * d[0] + toP[1] * d[1] + toP[2] * d[2]) / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
     const q = at(ray, s)
     for (let k = 0; k < 3; k++) expect(q[k]).toBeCloseTo(P[k], 9)
+  })
+})
+
+// Integration J5: the readout rows S4a's and S4b's surfaces carry, through
+// the real kernel and the real pick.
+describe('readouts of coordinate surfaces and level surfaces', () => {
+  const meshAt = (spec: string, object: string): MeshMark => {
+    const parsed = parseSpec(spec)
+    expect(parsed.errors).toEqual([])
+    const scene = createSpaceKernel(parsed.statements, parsed.config, parsed.statementLines).scene()
+    expect(scene.errors).toEqual([])
+    const mark = scene.marks.find((m) => m.source.object === object)
+    if (mark?.kind !== 'mesh') throw new Error(`no mesh ${object}`)
+    return mark
+  }
+  const CUBE: Box3 = { x: { min: -3, max: 3 }, y: { min: -3, max: 3 }, z: { min: -3, max: 3 } }
+
+  it('a cylindrical pick at (0, 2, 1) shows (r, θ, z) = (2, 1.571, 1) as its last row, and keeps it on re-evaluation', () => {
+    // θ = atan2(2, 0) = π/2 = 1.5708 -> 1.571; r = 2; z = 1.
+    const mark = meshAt('@bounds3d: x [-3, 3], y [-3, 3], z [-3, 3]\ncylindrical: r = 2', 's2')
+    const found = hitOn(mark, { origin: [0, 10, 1], direction: [0, -1, 0] }, CUBE)!
+    expect(found.hit.kind).toBe('parametric')
+    const p = found.hit.position
+    expect(Math.hypot(p[0] - 0, p[1] - 2, p[2] - 1)).toBeLessThanOrEqual(1e-9)
+    expect(found.hit.values.at(-1)).toEqual({ label: '(r, θ, z)', value: '(2, 1.571, 1)' })
+    const again = reevaluate(found.hit, { marks: [mark], labels: [], colorScales: [], extent: null, errors: [] })!
+    expect(again.values.at(-1)).toEqual({ label: '(r, θ, z)', value: '(2, 1.571, 1)' })
+  })
+
+  it('a parametric surface with no coordinate system has no such row: the sphere reads x, y, z, u, v', () => {
+    const mark = meshAt('(cos(u) sin(v), sin(u) sin(v), cos(v)) for u in [0, 2*pi], v in [0, pi]', 's1')
+    const found = hitOn(mark, { origin: [3, 0.2, 0.1], direction: [-3, -0.2, -0.1] }, CUBE)!
+    expect(found.hit.values.map((r) => r.label)).toEqual(['x', 'y', 'z', 'u', 'v'])
+  })
+
+  it('the level surface gradient: … surface draws is picked as implicit: at (0, 0, √3), |∇F| = 2√3 = 3.464', () => {
+    // F = x^2 + y^2 + z^2 through (1, 1, 1) is the sphere of radius √3; a
+    // ray down the z axis meets it at (0, 0, √3), where ∇F = (0, 0, 2√3).
+    const mark = meshAt('@bounds3d: x [-3, 3], y [-3, 3], z [-3, 3]\ngradient: x^2 + y^2 + z^2 at (1, 1, 1) surface res: 24', 's2.surface')
+    const found = hitOn(mark, { origin: [0, 0, 10], direction: [0, 0, -1] }, CUBE)!
+    expect(found.hit.kind).toBe('implicit')
+    expect(Math.abs(found.hit.position[2] - Math.sqrt(3))).toBeLessThanOrEqual(1e-12)
+    expect(row(found.hit.values, '|∇F|')).toBe('3.464')
+  })
+
+  it('so is three-variable lagrange:’s constraint surface: g = 9 at (0, 0, 3) reads |∇F| = |∇g| = 6', () => {
+    const mark = meshAt('@bounds3d: x [-4, 4], y [-4, 4], z [-4, 4]\nlagrange: max x + 2y + 2z subject to x^2 + y^2 + z^2 = 9 res: 24', 's2.constraint')
+    const box: Box3 = { x: { min: -4, max: 4 }, y: { min: -4, max: 4 }, z: { min: -4, max: 4 } }
+    const found = hitOn(mark, { origin: [0, 0, 10], direction: [0, 0, -1] }, box)!
+    expect(found.hit.kind).toBe('implicit')
+    expect(Math.abs(found.hit.position[2] - 3)).toBeLessThanOrEqual(1e-12)
+    expect(row(found.hit.values, '|∇F|')).toBe('6')
   })
 })

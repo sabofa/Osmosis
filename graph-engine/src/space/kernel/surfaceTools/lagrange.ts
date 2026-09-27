@@ -325,7 +325,6 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
         scalars: null,
         uv: null,
         style: { color: context.color, opacity: SURFACE_OPACITY, colorScale: null, meshLines: null },
-        pick: null,
       }
       marks.push(surface)
     }

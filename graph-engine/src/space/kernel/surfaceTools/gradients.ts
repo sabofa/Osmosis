@@ -127,7 +127,6 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
           scalars: null,
           uv: null,
           style: { color: context.color, opacity: 0.45, colorScale: null, meshLines: null },
-          pick: null,
         }
         marks.push(surface)
       }

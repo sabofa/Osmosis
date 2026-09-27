@@ -12,14 +12,16 @@
 //   does);
 // - every vertex is bisected onto the true F = c, and shared by edge key;
 // - normals are the symbolic ∇F the caller compiled, normalised, with S4a's
-//   fallbacks where it vanishes.
+//   fallbacks where it vanishes;
+// - the mesh carries S4a's implicit pick (F - c and ∇F), so probing it reads
+//   the point and |∇F| off the true function (integration J5).
 // res is S4a's: a res: clause as written (refused above the implicit limit),
 // else @resolution clamped to it, else S4a A1's default of 64.
 
 import type { GraphConfig } from '../../../parser/config'
-import type { Box3 } from '../../scene/types'
+import type { Box3, SurfacePick } from '../../scene/types'
 import { checkBudget } from '../common'
-import { DEFAULT_IMPLICIT_RES, levelMesh, type LevelField } from '../geometry/implicit'
+import { DEFAULT_IMPLICIT_RES, implicitPick, levelMesh, type LevelField } from '../geometry/implicit'
 import { countTriangles, implicitRes, sampleGrid } from '../geometry/marchingTets'
 
 type Scalar3 = (x: number, y: number, z: number) => number
@@ -29,6 +31,7 @@ export interface LevelSurfaceMesh {
   // Unit normals, per vertex.
   normals: Float64Array
   indices: Uint32Array
+  pick: SurfacePick
 }
 
 // F with its symbolic gradient, as S4b compiles a three-variable target
@@ -61,7 +64,8 @@ export const MESH_LEVEL_SURFACE: LevelSurfaceMesher = (field, c, box, res) => {
   const level = levelField(field)
   const grid = sampleGrid(level.f, box, res)
   checkBudget(countTriangles(grid, c), res)
-  return levelMesh(level, grid, c)
+  const mesh = levelMesh(level, grid, c)
+  return mesh ? { ...mesh, pick: implicitPick(level, c) } : null
 }
 
 // The cubes per axis a level surface is sampled at (see the header).

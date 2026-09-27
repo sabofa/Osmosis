@@ -39,7 +39,7 @@ export function reevaluate(hit: Hit, scene: SpaceScene): Hit | null {
     case 'parametric': {
       if (mark.kind !== 'mesh' || mark.pick?.kind !== 'parametric') return null
       const p = mark.pick.r(at.u, at.v)
-      return done(p, parametricReadout(p, mark.pick.param, at.u, at.v), at)
+      return done(p, parametricReadout(p, mark.pick.param, at.u, at.v, mark.pick.coordinates), at)
     }
     case 'implicit': {
       if (mark.kind !== 'mesh' || mark.pick?.kind !== 'implicit') return null

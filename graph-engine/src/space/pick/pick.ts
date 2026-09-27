@@ -82,7 +82,7 @@ export function surfaceHit(mark: MeshMark, ray: Ray, s0: number, s1: number, spa
   // Parametric: (u, v) from the triangle's corners, then Newton on the true r.
   const uv = mark.uv
   if (!uv) {
-    return { s: tri.s, hit: { source: mark.source, kind: 'parametric', position: onRay, values: parametricReadout(onRay, pick.param, NaN, NaN), at: { kind: 'parametric', u: NaN, v: NaN } } }
+    return { s: tri.s, hit: { source: mark.source, kind: 'parametric', position: onRay, values: parametricReadout(onRay, pick.param, NaN, NaN, pick.coordinates), at: { kind: 'parametric', u: NaN, v: NaN } } }
   }
   const [a, b, c] = [0, 1, 2].map((k) => mark.indices[3 * tri.triangle + k])
   const w = 1 - tri.b1 - tri.b2
@@ -96,7 +96,7 @@ export function surfaceHit(mark: MeshMark, ray: Ray, s0: number, s1: number, spa
     }
   }
   const position = pick.r(u, v)
-  return { s, hit: { source: mark.source, kind: 'parametric', position, values: parametricReadout(position, pick.param, u, v), at: { kind: 'parametric', u, v } } }
+  return { s, hit: { source: mark.source, kind: 'parametric', position, values: parametricReadout(position, pick.param, u, v, pick.coordinates), at: { kind: 'parametric', u, v } } }
 }
 
 function rank(c: Candidate): number {
