@@ -9,7 +9,8 @@ import { renderFigure } from './render'
 import { buildSolidFigure } from './solidScope'
 import { buildScene } from '../scene/buildScene'
 import { GEOM_EPS } from '../scene/geometry/types'
-import { drawnDimensionSegment } from './solids'
+import { buildSolid, drawnDimensionSegment, regularTetrahedron } from './solids'
+import { circumsphereOf, insphereOf } from './spheres'
 
 // Phase 9 — inscribed and circumscribed spheres, and spheres by tangency.
 // Every expected value here is computed by hand in the AUTHOR's z-up frame;
@@ -640,5 +641,69 @@ describe('fix round 1: "centre of" is "center of"', () => {
   it('binds the same point', () => {
     const scope = walk('@mode: figure\nM = (1, 2, 3)\nS = solid sphere center M radius 5\nP = centre of S')
     expectNear(authorPoint(scope, 'P'), { x: 1, y: 2, z: 3 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 2
+// ---------------------------------------------------------------------------
+
+describe('fix round 2: every threshold is relative to the figure, with no floor', () => {
+  // A regular tetrahedron of edge a = 1e-6: alternate corners of a cube of
+  // half-side k = a / (2 sqrt 2). Circumradius a sqrt 6 / 4, inradius
+  // a sqrt 6 / 12 (the edge-6 hand values, scaled). Placed at (1000, 1000,
+  // 1000), each coordinate carries rounding of about 1e-13, a relative
+  // 1e-7 of the edge — so the radii are compared to 1e-5, relatively.
+  const EDGE = 1e-6
+  const R = (EDGE * Math.sqrt(6)) / 4
+  const r = (EDGE * Math.sqrt(6)) / 12
+  const near = (actual: number, expected: number) => expect(Math.abs(actual / expected - 1)).toBeLessThan(1e-5)
+  // Each coordinate is 1000 +- k, k = 1e-6 / (2 sqrt 2), written out.
+  const K = '0.000001/(2*sqrt(2))'
+  const at = (x: string, y: string, z: string) => `(1000 ${x} ${K}, 1000 ${y} ${K}, 1000 ${z} ${K})`
+  const FAR = `A = ${at('+', '+', '+')}\nB = ${at('+', '-', '-')}\nC = ${at('-', '+', '-')}\nD = ${at('-', '-', '+')}`
+
+  it('fits the sphere through four points of a tetrahedron of edge 1e-6 far from the origin', () => {
+    const s = sphereOf(walk(`@mode: figure\n${FAR}\nO = solid circumsphere A-B-C-D`), 'O')
+    near(s.radius, R)
+    for (const c of [s.center.x, s.center.y, s.center.z]) expect(Math.abs(c - 1000)).toBeLessThan(1e-12)
+  })
+
+  it('still refuses four points genuinely in one plane at that scale', () => {
+    const spec =
+      '@mode: figure\nA = (1000, 1000, 1000)\nB = (1000.000001, 1000, 1000)\nC = (1000, 1000.000001, 1000)\nD = (1000.000001, 1000.000001, 1000)\nO = solid circumsphere A-B-C-D'
+    expect(errorsOf(spec)).toEqual([
+      'A, B, C and D lie in one plane, so no sphere passes through all four — a circumsphere needs four points not in one plane',
+    ])
+  })
+
+  it('gives the regular tetrahedron of edge 1e-6 (by its dimension) both spheres', () => {
+    const scope = walk('@mode: figure\nS = solid tetrahedron edge 0.000001\nI = solid insphere of S\nO = solid circumsphere of S')
+    near(sphereOf(scope, 'I').radius, r)
+    near(sphereOf(scope, 'O').radius, R)
+  })
+
+  it('places a tiny sphere by tangency far from the origin, judged by its own size', () => {
+    // T has radius 1e-6 at (1000, 1000, 1000); P is 1.5e-6 from its centre,
+    // so the externally tangent sphere has radius 5e-7. A threshold of
+    // GEOM_EPS times the coordinates (1e-6) took P to lie ON T.
+    const spec =
+      '@mode: figure\nO = (1000, 1000, 1000)\nT = solid sphere center O radius 0.000001\nP = (1000.0000015, 1000, 1000)\nS = solid sphere center P externally tangent to T'
+    near(sphereOf(walk(spec), 'S').radius, 5e-7)
+  })
+
+  it('gives that tetrahedron, moved to (1000, 1000, 1000), both spheres', () => {
+    // Built as a polyhedron directly: a solid on four points this small is
+    // refused upstream, by phase 6's plane-through-three-points floor (see
+    // the fix round 2 report), which this module does not own.
+    const shift = { x: 1000, y: 1000, z: 1000 }
+    const polyhedron = regularTetrahedron(EDGE)
+    const body = buildSolid({
+      kind: 'hull',
+      shape: 'tetrahedron',
+      polyhedron: { vertices: polyhedron.vertices.map((v) => ({ x: v.x + shift.x, y: v.y + shift.y, z: v.z + shift.z })), faces: polyhedron.faces },
+    })
+    near(insphereOf(body, 'S').radius, r)
+    near(circumsphereOf(body, 'S').radius, R)
   })
 })
