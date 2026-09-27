@@ -15,7 +15,7 @@ import type { Statement } from '../../../parser/types'
 import type { LabelAnchor, LineMark, Mark, Vec3 } from '../../scene/types'
 import { constant, CURVE_WIDTH, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, clipLine, lineMark, part, pointMark, polygonMesh, surfaceBox } from './box'
+import { annotation, clipLine, lineMark, part, pointMark, polygonMesh, toolBox } from './box'
 import { pointText } from './readout'
 import { formatNumber } from '../../pick/format'
 import { prepareDomain, requireArity, resolveTarget, surface2 } from './target'
@@ -45,7 +45,7 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
 
   const build = (): BuildResult => {
     const rect = domain()
-    const box = surfaceBox(config, rect, (x, y) => f(x, y))
+    const box = toolBox(context, rect, (x, y) => f(x, y))
     const c = at()
     const fixed = alongX ? rect.y : rect.x
     if (!(c >= fixed.min && c <= fixed.max)) {

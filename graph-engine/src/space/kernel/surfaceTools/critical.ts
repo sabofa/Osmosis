@@ -19,7 +19,7 @@ import { seededRoots } from '../../../math/roots'
 import type { LabelAnchor, Mark, PointShape, Vec3 } from '../../scene/types'
 import { Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, part, pointMark, surfaceBox } from './box'
+import { annotation, part, pointMark, toolBox } from './box'
 import { approx, approxPoint } from './readout'
 import { prepareDomain, requireArity, resolveTarget, surface2 } from './target'
 
@@ -86,7 +86,7 @@ function prepareCritical(statement: Statement, context: BuildContext): PreparedS
     const marks: Mark[] = []
     const labels: LabelAnchor[] = []
     if (found.length === 0) {
-      const floor = surfaceBox(config, rect, (x, y) => f(x, y)).z.min
+      const floor = toolBox(context, rect, (x, y) => f(x, y)).z.min
       const centre: Vec3 = [(rect.x.min + rect.x.max) / 2, (rect.y.min + rect.y.max) / 2, floor]
       labels.push(annotation(part(context, 'note'), centre, 'no critical points found in the domain'))
       return { marks, labels, errors: [], colorScale: null }

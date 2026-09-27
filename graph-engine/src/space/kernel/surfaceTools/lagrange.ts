@@ -32,7 +32,7 @@ import { ROOT_DEDUP_REL } from '../../../math/tolerance'
 import type { Box3, LabelAnchor, Mark, MeshMark, Vec3 } from '../../scene/types'
 import { boundNames, constant, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, arrowMark, largestSpan, lineMark, part, pointMark, spaceBox, surfaceBox } from './box'
+import { annotation, arrowMark, largestSpan, lineMark, part, pointMark, toolBox } from './box'
 import { LEVEL_RES, levelCurves, lift } from './contours'
 import { MESH_LEVEL_SURFACE } from './levelSurface'
 import { approx, approxPoint } from './readout'
@@ -191,7 +191,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       const kept = choose(collect(candidates, inside, ROOT_DEDUP_REL * Math.hypot(rect.x.max - rect.x.min, rect.y.max - rect.y.min)), form.goal)
       if (kept.length === 0) throw new Error(NOTHING_FOUND)
 
-      const box = surfaceBox(config, rect, (x, y) => F.f(x, y))
+      const box = toolBox(context, rect, (x, y) => F.f(x, y))
       const floor = box.z.min
       const marks: Mark[] = []
       const labels: LabelAnchor[] = []
@@ -241,7 +241,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
   const F = surface3(within3(fTarget), scope)
   const G = surface3(within3(gTarget), scope)
   const build = (): BuildResult => {
-    const box = spaceBox(config, domain())
+    const box = toolBox(context, domain(), null)
     const c = level()
     const h = (x: number, y: number, z: number) => G.F(x, y, z) - c
     const mesh = MESH_LEVEL_SURFACE ? MESH_LEVEL_SURFACE(h, 0, box, SEED_GRID) : null

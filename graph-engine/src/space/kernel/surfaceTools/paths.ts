@@ -17,7 +17,7 @@ import { formatApprox, formatPoint } from '../../pick/format'
 import type { LabelAnchor, LineMark, Mark } from '../../scene/types'
 import { boundNames, constant, CURVE_WIDTH, Reads, renameBound, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, lineMark, part, pointMark, surfaceBox } from './box'
+import { annotation, lineMark, part, pointMark, toolBox } from './box'
 import { compileOver, preparePoint, prepareDomain, requireArity, resolveTarget } from './target'
 
 const DEFAULT_SEGMENTS = 512
@@ -55,7 +55,7 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
   const build = (): BuildResult => {
     const a = from()
     const b = to()
-    const floor = surfaceBox(config, domain(), (x, y) => f(x, y)).z.min
+    const floor = toolBox(context, domain(), (x, y) => f(x, y)).z.min
     const runs: number[][] = []
     const runParams: number[][] = []
     let run: number[] = []

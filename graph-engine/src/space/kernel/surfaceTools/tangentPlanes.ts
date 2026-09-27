@@ -22,7 +22,7 @@ import type { LabelAnchor, Mark, Vec3 } from '../../scene/types'
 import { formatNumber } from '../../pick/format'
 import { Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, arrowMark, clipPolygon, largestSpan, lineMark, part, pointMark, polygonMesh, spaceBox, surfaceBox } from './box'
+import { annotation, arrowMark, clipPolygon, largestSpan, lineMark, part, pointMark, polygonMesh, toolBox } from './box'
 import { affineText, pointText } from './readout'
 import { preparePoint, prepareDomain, resolveTarget, surface2, surface3 } from './target'
 
@@ -81,7 +81,7 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
         throw new Error(`tangent-plane: f has no tangent plane at ${pointText([a, b])} — f or a partial derivative is undefined there`)
       }
       const rect = domain()
-      const box = surfaceBox(config, rect, (x, y) => f(x, y))
+      const box = toolBox(context, rect, (x, y) => f(x, y))
       const s = PATCH * Math.max(rect.x.max - rect.x.min, rect.y.max - rect.y.min)
       const [x0, x1] = [Math.max(a - s, rect.x.min), Math.min(a + s, rect.x.max)]
       const [y0, y1] = [Math.max(b - s, rect.y.min), Math.min(b + s, rect.y.max)]
@@ -120,7 +120,7 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
     const length = Math.hypot(...g)
     if (!Number.isFinite(length)) throw new Error(`tangent-plane: ∇F is undefined at ${pointText([x0, y0, z0])}`)
     if (length === 0) throw new Error(`tangent-plane: ∇F is zero at ${pointText([x0, y0, z0])}; the tangent plane is undefined`)
-    const box = spaceBox(config, domain())
+    const box = toolBox(context, domain(), null)
     const s = PATCH * largestSpan(box)
     const n: Vec3 = [g[0] / length, g[1] / length, g[2] / length]
     const [e1, e2] = planeFrame(n)

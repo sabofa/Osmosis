@@ -14,7 +14,7 @@ import { formatNumber } from '../../pick/format'
 import type { LabelAnchor, LineMark, Mark, Vec3 } from '../../scene/types'
 import { CURVE_WIDTH, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, arrowMark, clipLine, lineMark, part, pointMark, polygonMesh, surfaceBox, verticalPlane } from './box'
+import { annotation, arrowMark, clipLine, lineMark, part, pointMark, polygonMesh, toolBox, verticalPlane } from './box'
 import { pointText } from './readout'
 import { preparePoint, prepareDomain, requireArity, resolveTarget, surface2 } from './target'
 
@@ -48,7 +48,7 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
     if (![f0, p, q].every(Number.isFinite)) throw new Error(`directional: f or ∇f is undefined at ${pointText([a, b])}`)
     const slope = p * u[0] + q * u[1]
     const rect = domain()
-    const box = surfaceBox(config, rect, (x, y) => f(x, y))
+    const box = toolBox(context, rect, (x, y) => f(x, y))
     const plane = verticalPlane(a, b, u, box)
     if (!plane) throw new Error(`directional: ${pointText([a, b])} is outside the domain`)
 

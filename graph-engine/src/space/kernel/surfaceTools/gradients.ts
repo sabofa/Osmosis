@@ -20,7 +20,7 @@ import { formatNumber } from '../../pick/format'
 import type { LabelAnchor, Mark, MeshMark, SceneError, Vec3 } from '../../scene/types'
 import { Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, arrowMark, lineMark, part, pointMark, spaceBox, surfaceBox } from './box'
+import { annotation, arrowMark, lineMark, part, pointMark, toolBox } from './box'
 import { LEVEL_RES, levelCurves, lift } from './contours'
 import { LEVEL_SURFACE_PENDING, MESH_LEVEL_SURFACE } from './levelSurface'
 import { pointText } from './readout'
@@ -63,7 +63,7 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
       const q = fy(a, b)
       if (![c, p, q].every(Number.isFinite)) throw new Error(`gradient: ∇f is undefined at ${pointText([a, b])}`)
       const rect = domain()
-      const box = surfaceBox(config, rect, (x, y) => f(x, y))
+      const box = toolBox(context, rect, (x, y) => f(x, y))
       const z = form.lifted ? c : box.z.min
       const tail: Vec3 = [a, b, z]
       const marks: Mark[] = []
@@ -113,7 +113,7 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
     }
     if (form.surface) {
       const mesh = MESH_LEVEL_SURFACE
-        ? MESH_LEVEL_SURFACE((x, y, z) => F(x, y, z), F(x0, y0, z0), spaceBox(config, domain()), resolution(form.style.res, config, LEVEL_SURFACE_RES))
+        ? MESH_LEVEL_SURFACE((x, y, z) => F(x, y, z), F(x0, y0, z0), toolBox(context, domain(), null), resolution(form.style.res, config, LEVEL_SURFACE_RES))
         : null
       if (!MESH_LEVEL_SURFACE) errors.push({ line: context.line, message: `gradient: … surface — ${LEVEL_SURFACE_PENDING}` })
       if (mesh) {

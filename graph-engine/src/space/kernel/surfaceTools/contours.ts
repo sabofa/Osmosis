@@ -29,7 +29,7 @@ import type { ColorSpec, LabelAnchor, LineMark } from '../../scene/types'
 import { colorScale, constant, Reads, resolution } from '../common'
 import { chain } from '../curves'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, lineMark, part, surfaceBox } from './box'
+import { annotation, lineMark, part, toolBox } from './box'
 import { compileOver, prepareDomain, requireArity, resolveTarget, type Rect } from './target'
 
 export const LEVEL_RES = 160
@@ -249,7 +249,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
     const levels = authored ? authored() : niceLevels(min, max, levelsSpec.kind === 'count' ? levelsSpec.count : 1)
     if (levels.length > MAX_LEVELS) throw new Error(`contour: ${levels.length} levels — at most ${MAX_LEVELS}`)
     const colors = levelColors(levels, Float64Array.from(samples), context)
-    const floor = form.floor ? surfaceBox(config, rect, (x, y) => f(x, y)).z.min : 0
+    const floor = form.floor ? toolBox(context, rect, (x, y) => f(x, y)).z.min : 0
 
     const marks: LineMark[] = []
     const labels: LabelAnchor[] = []

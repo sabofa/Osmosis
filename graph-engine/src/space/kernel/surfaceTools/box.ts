@@ -27,8 +27,17 @@ import type { Rect } from './target'
 const ESTIMATE_SAMPLES = 64
 const DEFAULT_Z: Range = { min: -5, max: 5 }
 
-// The box a two-variable target's tools draw into (see the header).
-export function surfaceBox(config: GraphConfig, rect: Rect, f: (x: number, y: number) => number): Box3 {
+// THE box a tool draws into: every surface tool calls this, and nothing else
+// estimates the box. It is the seam for the two-pass kernel (ruling I5, after
+// S4a, S4b and S5 merge): there, the box resolved from the other statements'
+// extent arrives through BuildContext and this function returns it. A
+// two-variable target passes f; a three-variable one passes null.
+export function toolBox(context: BuildContext, rect: Rect, f: ((x: number, y: number) => number) | null): Box3 {
+  return f ? surfaceBox(context.config, rect, f) : spaceBox(context.config, rect)
+}
+
+// The estimate for a two-variable target (see the header).
+function surfaceBox(config: GraphConfig, rect: Rect, f: (x: number, y: number) => number): Box3 {
   const authored = config.space.bounds.z
   if (authored) return { x: rect.x, y: rect.y, z: { min: authored.min, max: authored.max } }
   const n = ESTIMATE_SAMPLES
@@ -45,8 +54,8 @@ export function surfaceBox(config: GraphConfig, rect: Rect, f: (x: number, y: nu
   return { x: rect.x, y: rect.y, z: box.z }
 }
 
-// A three-variable target's box.
-export function spaceBox(config: GraphConfig, rect: Rect): Box3 {
+// The estimate for a three-variable target.
+function spaceBox(config: GraphConfig, rect: Rect): Box3 {
   return { x: rect.x, y: rect.y, z: config.space.bounds.z ?? DEFAULT_Z }
 }
 
