@@ -14,6 +14,7 @@ import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
 import type { Range, Vec3 } from '../scene/types'
 import { edgeLabels, edgeNormal, estimateLabelSize, halfExtentAlong, screenOf, type EdgeTick } from './labels'
+import { frameGeometryKey } from './key'
 import { formatTick, tickIndex, ticks } from './ticks'
 import { TITLE_FONT_PX, type FrameAxes, type FrameAxis, type FrameLabel, type FrameLine, type FrameModel } from './types'
 
@@ -87,5 +88,5 @@ export function axesFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAx
     labels.push({ key: `title:${NAMES[axis]}`, position: b, screenOffset: [dir[0] * reach, dir[1] * reach], text: spec.title, role: 'title' })
   }
 
-  return { lines, labels, key: `axes:${tickAxes.join('')}` }
+  return { lines, labels, key: `${frameGeometryKey('axes', world, axes)}|${tickAxes.join('')}` }
 }

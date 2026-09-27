@@ -142,6 +142,9 @@ export class GlBackend {
     this.world = world
     this.colors = colors
     this.sceneGeneration++
+    // The retained frame belongs to the previous scene's box: drop it, so
+    // nothing draws until the caller sets this scene's frame.
+    this.dropFrame()
     const boxes = scene.marks.filter((m) => m.kind === 'boxes').length
     if (boxes > 0) console.warn(`space: box marks are not drawn until S5; skipped ${boxes}`)
     this.upload()
@@ -149,7 +152,7 @@ export class GlBackend {
 
   // The frame's lines, in author coordinates, drawn before the marks. They
   // are re-uploaded only when their geometry can have changed: a new frame
-  // key (the walls flipped) or a new scene (a new box or new ticks).
+  // key (a new box, new ticks, or walls flipped) or a new scene.
   setFrame(frame: FrameModel, colors: SpaceColors): void {
     this.frame = frame
     this.colors = colors
@@ -284,7 +287,6 @@ export class GlBackend {
       }
       const drawable = scene.marks.filter((m) => m.kind !== 'boxes')
       syncByIdentity(gl, this.marks, drawable, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
-      this.uploadFrame()
     } catch (error) {
       this.fail(error)
     }
@@ -311,6 +313,13 @@ export class GlBackend {
       default:
         return null
     }
+  }
+
+  private dropFrame(): void {
+    if (this.gl && this.frameGpu && !this.lost && !this.gl.isContextLost()) this.frameGpu.destroy(this.gl)
+    this.frameGpu = null
+    this.frame = null
+    this.frameKey = ''
   }
 
   private uploadFrame(): void {
@@ -385,6 +394,7 @@ export class GlBackend {
     this.lost = false
     this.prepare()
     this.upload()
+    this.uploadFrame()
     this.options.onContextRestored?.()
   }
 

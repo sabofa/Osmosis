@@ -162,6 +162,26 @@ describe('boxFrame labels never collide', () => {
   }
 })
 
+describe('the frame key identifies the line geometry', () => {
+  const keyOf = (box: Box3, step: number | null, azimuth = 40) => {
+    const world = worldMap(box, [1, 1, 1])
+    const camera = cameraMatrices({ azimuth, elevation: 25, zoom: 1, target: world.centre }, world, VIEWPORT, 'orthographic')
+    const space = defaultSpaceConfig()
+    const ticks = step === null ? space.ticks : { ...space.ticks, x: { value: step, pi: null } }
+    return boxFrame(world, camera, frameAxes({ ...space, ticks }, box)).key
+  }
+  const other: Box3 = { x: { min: -2, max: 2 }, y: { min: -1.5, max: 1.5 }, z: { min: -4, max: 4 } }
+
+  it('differs for a different box, or different ticks, with the same wall choice', () => {
+    expect(keyOf(other, null)).not.toBe(keyOf(CUBE, null))
+    expect(keyOf(CUBE, 0.25)).not.toBe(keyOf(CUBE, null))
+  })
+
+  it('is the same for the same box, ticks and wall choice from a nearby camera', () => {
+    expect(keyOf(CUBE, null, 42)).toBe(keyOf(CUBE, null, 40))
+  })
+})
+
 describe('boxFrame flips its walls', () => {
   it('at azimuth 130 the back walls are x = +1 and y = -1', () => {
     const planes = planesOf(setup(130, 25).frame, 'grid')

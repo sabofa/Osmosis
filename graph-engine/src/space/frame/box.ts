@@ -18,6 +18,7 @@ import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
 import type { Range, Vec3 } from '../scene/types'
 import { dropCrossEdgeCollisions, edgeLabels, edgeNormal, screenOf, TICK_LABEL_PUSH_PX, type EdgeTick } from './labels'
+import { frameGeometryKey } from './key'
 import { formatTick, tickIndex, ticks } from './ticks'
 import type { FrameAxes, FrameAxis, FrameLabel, FrameLine, FrameModel } from './types'
 
@@ -145,7 +146,7 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
   const labels = dropCrossEdgeCollisions(world, camera, edges)
 
   const key = [
-    'box',
+    frameGeometryKey('box', world, axes),
     xBack === box.x.min ? 0 : 1,
     yBack === box.y.min ? 0 : 1,
     zFloor === box.z.min ? 0 : 1,

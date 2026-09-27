@@ -25,7 +25,7 @@ function setup() {
   const canvas = fakeCanvas(fake)
   const onError = vi.fn()
   const backend = new GlBackend(canvas.canvas, { onError })
-  return { fake, backend, onError }
+  return { fake, backend, onError, canvas }
 }
 
 const pipeline = (fake: FakeGl, d: FakeDraw) => /space: (\w+)/.exec(fake.programSource(d.program).vertex)?.[1] ?? '?'
@@ -234,6 +234,62 @@ describe('the frame, drawn', () => {
     const flipped = cameraMatrices({ azimuth: 130, elevation: 25, zoom: 1, target: [0, 0, 0] }, WORLD, { width: 800, height: 600 }, 'orthographic')
     backend.setFrame(boxFrame(WORLD, flipped, AXES), LIGHT)
     expect(fake.created.buffer).toBeGreaterThan(buffers)
+  })
+
+  // The segment buffer of the first frame line draw (the grid) of the last draw() call.
+  function gridBuffer(fake: FakeGl, drawsBefore: number): Float32Array {
+    const first = fake.draws.slice(drawsBefore).find((d) => pipeline(fake, d) === 'line')!
+    return fake.bufferContents(fake.attribBuffer(first.vao, 1)) as Float32Array
+  }
+  function expectedGrid(frame: ReturnType<typeof boxFrame>, world: typeof WORLD): number[] {
+    const c = world.centre
+    return frame.lines
+      .filter((l) => l.role === 'grid')
+      .flatMap((l) => [l.a[0] - c[0], l.a[1] - c[1], l.a[2] - c[2], l.b[0] - c[0], l.b[1] - c[1], l.b[2] - c[2]])
+      .map((v) => Math.fround(v))
+  }
+
+  it("draws the new box's frame after a scene change, never the previous box's", () => {
+    const { fake, backend } = setup()
+    const boxB: Box3 = { x: { min: -2, max: 2 }, y: { min: -1.5, max: 1.5 }, z: { min: -4, max: 4 } }
+    const worldB = worldMap(boxB, [1, 0.75, 0.7])
+    const cameraB = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: [0, 0, 0] }, worldB, { width: 800, height: 600 }, 'orthographic')
+    backend.setScene(scene([]), WORLD, LIGHT)
+    backend.setFrame(boxFrame(WORLD, CAMERA, AXES), LIGHT)
+    backend.draw(CAMERA, 1)
+    backend.setScene(scene([]), worldB, LIGHT)
+    const frameB = boxFrame(worldB, cameraB, frameAxes(defaultSpaceConfig(), boxB))
+    backend.setFrame(frameB, LIGHT)
+    const before = fake.draws.length
+    backend.draw(cameraB, 1)
+    expect(Array.from(gridBuffer(fake, before))).toEqual(expectedGrid(frameB, worldB))
+  })
+
+  it('never draws a frame retained from the previous scene', () => {
+    const { fake, backend } = setup()
+    backend.setScene(scene([]), WORLD, LIGHT)
+    backend.setFrame(boxFrame(WORLD, CAMERA, AXES), LIGHT)
+    backend.draw(CAMERA, 1)
+    backend.setScene(scene([]), worldMap({ ...CUBE, z: { min: 0, max: 8 } }, [1, 1, 0.7]), LIGHT)
+    const before = fake.draws.length
+    backend.draw(CAMERA, 1)
+    expect(fake.draws.length).toBe(before)
+  })
+
+  it('restores the frame after a context loss', () => {
+    const { fake, backend, canvas } = setup()
+    const frame = boxFrame(WORLD, CAMERA, AXES)
+    backend.setScene(scene([]), WORLD, LIGHT)
+    backend.setFrame(frame, LIGHT)
+    backend.draw(CAMERA, 1)
+    const frameDraws = fake.draws.length
+    expect(frameDraws).toBeGreaterThan(0)
+    canvas.lose()
+    canvas.restore()
+    const before = fake.draws.length
+    backend.draw(CAMERA, 1)
+    expect(fake.draws.length - before).toBe(frameDraws)
+    expect(Array.from(gridBuffer(fake, before))).toEqual(expectedGrid(frame, WORLD))
   })
 
   it('frees everything, frame included, on dispose', () => {

@@ -66,6 +66,14 @@ describe('axesFrame', () => {
   })
 })
 
+describe('the axes frame key', () => {
+  it('differs for a different box', () => {
+    const a = frameFor({ x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -2, max: 2 } })
+    const b = frameFor({ x: { min: -1, max: 3 }, y: { min: -2, max: 2 }, z: { min: -2, max: 2 } })
+    expect(a.key).not.toBe(b.key)
+  })
+})
+
 describe('buildFrame', () => {
   it('@frame: none produces an empty model', () => {
     const f = frameFor({ x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }, 'none')
