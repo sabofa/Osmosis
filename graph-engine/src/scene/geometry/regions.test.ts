@@ -6,6 +6,7 @@ import {
   circularSegmentRegion,
   combineRegions,
   diskRegion,
+  interiorLabelPoint,
   loopArea,
   polygonRegion,
   regionArea,
@@ -196,6 +197,31 @@ describe('polygons must be simple (F1)', () => {
   it('refuses a repeated point and a polygon with no area', () => {
     expect(() => polygonRegion([P(0, 0), P(0, 0), P(1, 1)], ['A', 'B', 'C'])).toThrow(/A and B are the same point/)
     expect(() => polygonRegion([P(0, 0), P(1, 1), P(2, 2)], ['A', 'B', 'C'])).toThrow(/no area/)
+  })
+})
+
+describe('F6 — the interior point an area label hangs at', () => {
+  // By hand (see figure/area.test.ts for the working): the seven lines at
+  // i·h/8 up the largest component, the longest inside chord's midpoint,
+  // ties to the lowest line, then the leftmost chord.
+  it('an annulus: (0, −2.25), in the ring', () => {
+    const p = interiorLabelPoint(combineRegions('difference', diskRegion(circle(P(0, 0), 3)), diskRegion(circle(P(0, 0), 2))))
+    expect(p.x).toBeCloseTo(0, CLOSE)
+    expect(p.y).toBeCloseTo(-2.25, CLOSE)
+  })
+
+  it('a square minus its inscribed circle: (−(2 + √1.75)/2, −1.5)', () => {
+    const p = interiorLabelPoint(combineRegions('difference', square(-2, -2, 4), diskRegion(circle(P(0, 0), 2))))
+    expect(p.x).toBeCloseTo(-(2 + Math.sqrt(1.75)) / 2, CLOSE)
+    expect(p.y).toBeCloseTo(-1.5, CLOSE)
+  })
+
+  it('the largest component: a unit disk beside a 2×2 square hangs in the square, on its lowest line', () => {
+    // π < 4, so the square; every line's chord is the square's width, 2, and
+    // the lowest line is y = −1 + 2/8 = −0.75.
+    const p = interiorLabelPoint(combineRegions('union', diskRegion(circle(P(0, 0), 1)), square(3, -1, 2)))
+    expect(p.x).toBeCloseTo(4, CLOSE)
+    expect(p.y).toBeCloseTo(-0.75, CLOSE)
   })
 })
 

@@ -254,6 +254,10 @@ export type MeasureSubject =
   // Phase 11 (N5) — "shortest P to Q over S": the length of the shortest
   // path over the surface of S, printed on the path.
   | { kind: 'shortestPath'; from: string; to: string; solid: string }
+  // Phase 12 (F3) — "area R" or "area <region expression>": the exact area
+  // of a shaded region, named with "name:" on its "fill:" line or written
+  // inline ("area circle O and circle P").
+  | { kind: 'area'; region: RegionExpr }
 
 // The overmark a notation form carries. Mirrors figure/notation.ts's
 // Overmark; duplicated rather than imported so the parser stays standalone,

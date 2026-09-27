@@ -1934,6 +1934,13 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
     return { subject: { kind: 'triangle', names: [a, b, c] }, mark: 'none', prefix: '△', explicit: true }
   }
 
+  // Phase 12 (F3) — "area R", "area square ABCD minus circle O": the area
+  // of a shaded region. "area of S" stays with the refusal below.
+  const area = /^area\s+(.+)$/.exec(subjectText)
+  if (area && !/^of\s/.test(area[1])) {
+    return { subject: { kind: 'area', region: parseRegionExpr(area[1]) }, mark: 'none', prefix: '', explicit: false }
+  }
+
   // M8 (phase 10) — areas and volumes are not measured yet; said so, rather
   // than misread as a malformed pair of point names.
   if (/^(?:[a-zA-Z]+\s+(?:volume|area|surface\s+area)|(?:volume|area|surface\s+area)\s+of\s+.+)$/.test(subjectText)) {
@@ -2056,7 +2063,8 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
     return { kind: 'given', section, entry: { kind: 'measure', subject: space.subject, content } }
   }
 
-  const relation = splitRelation(body)
+  // An area's region is a boolean of shapes, never a relation (phase 12).
+  const relation = /^area\s/.test(body) ? null : splitRelation(body)
   if (relation) {
     return {
       kind: 'given',

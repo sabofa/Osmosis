@@ -94,6 +94,11 @@ export interface LabelAnchor {
   // without the exemption the inside-penalty drives it out past the vertex,
   // where it names no angle at all.
   mayEnterShapes?: boolean
+  // Whether the label may sit ON its anchor, centred there, before trying
+  // the rings around it. An area's label (phase 12, F6) is anchored at a
+  // point chosen inside the region for it, which is where it belongs; every
+  // other label names a point or a stroke it must not cover.
+  centred?: boolean
 }
 
 export interface LabelObstacles {
@@ -263,6 +268,7 @@ function candidatesFor(anchor: LabelAnchor, size: TextSize): Candidate[] {
   const base = 0.75 * anchor.fontSize + Math.max(size.width, size.height) / 2
   const out: Candidate[] = []
   let index = 0
+  if (anchor.centred) out.push({ index: index++, ring: 0, direction: { x: 0, y: 0 }, at: anchor.at, rect: rectAround(anchor.at, size.width, size.height) })
   for (let ring = 0; ring < RINGS.length; ring++) {
     for (const direction of DIRECTIONS) {
       const offset = base * RINGS[ring]

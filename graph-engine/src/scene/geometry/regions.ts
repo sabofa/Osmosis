@@ -688,3 +688,104 @@ export function combineRegions(op: RegionOperator, first: Region, second: Region
   if (loops.length === 0) throw new Error(`${what} leaves nothing to shade`)
   return { loops }
 }
+
+// ---------------------------------------------------------------------------
+// Components, and where an area label hangs (F6)
+// ---------------------------------------------------------------------------
+
+// One connected piece of a region: an outer loop and the holes inside it.
+export interface RegionComponent {
+  outer: Loop
+  holes: Loop[]
+  area: number
+}
+
+// The outer loops (positive area) each with the holes they contain. A hole
+// belongs to the smallest outer loop round a point strictly inside the hole
+// — never a point of its boundary, which may touch the outer loop (an
+// inscribed circle touches its square at four points).
+export function regionComponents(region: Region): RegionComponent[] {
+  const outers = region.loops.filter((loop) => loopArea(loop) > 0)
+  const components: RegionComponent[] = outers.map((outer) => ({ outer, holes: [], area: loopArea(outer) }))
+  for (const hole of region.loops.filter((loop) => loopArea(loop) < 0)) {
+    const inside = chordPoint([reversedLoop(hole)])
+    if (!inside) continue
+    const owner = components
+      .filter((component) => windingNumber({ loops: [component.outer] }, inside) !== 0)
+      .sort((x, y) => loopArea(x.outer) - loopArea(y.outer))[0]
+    if (!owner) continue
+    owner.holes.push(hole)
+    owner.area += loopArea(hole)
+  }
+  return components
+}
+
+// Where the horizontal line at height y meets a piece, in closed form: the
+// x of each crossing (both ends of a side lying along the line).
+function crossingsAt(piece: Piece, y: number, tol: number): number[] {
+  if (piece.kind === 'segment') {
+    const { a, b } = piece
+    if (Math.abs(a.y - b.y) <= tol) return Math.abs(a.y - y) <= tol ? [a.x, b.x] : []
+    if (y < Math.min(a.y, b.y) - tol || y > Math.max(a.y, b.y) + tol) return []
+    return [a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x)]
+  }
+  const s = (y - piece.center.y) / piece.radius
+  if (Math.abs(s) > 1) return []
+  const sweep = Math.abs(sweepOf(piece))
+  const angles = [Math.asin(s), Math.PI - Math.asin(s)]
+  return angles
+    .filter((angle) => {
+      const along = alongArc(piece, angle)
+      return along <= sweep + GEOM_EPS || along >= TURN - GEOM_EPS
+    })
+    .map((angle) => piece.center.x + piece.radius * Math.cos(angle))
+}
+
+// F6's scan over the loops of one component (the first is its outer loop):
+// the seven horizontal lines at i·h/8 up its height h, i = 1 … 7, each met
+// with every piece in closed form; the midpoint of the longest chord lying
+// strictly inside, ties to the lowest line, then to the leftmost chord. Null
+// only for a component with no inside, which a region never has.
+function chordPoint(loops: readonly Loop[]): Vec2 | null {
+  const shape: Region = { loops: [...loops] }
+  const extremes = loops[0].flatMap(pieceExtremes)
+  const box = boxOf(extremes)
+  const tol = toleranceFor(extremes)
+  const h = box.maxY - box.minY
+
+  let best: Vec2 | null = null
+  let bestLength = 0
+  for (let i = 1; i <= 7; i++) {
+    const y = box.minY + (i * h) / 8
+    const xs = loops
+      .flat()
+      .flatMap((piece) => crossingsAt(piece, y, tol))
+      .sort((p, q) => p - q)
+    for (let k = 0; k + 1 < xs.length; k++) {
+      const length = xs[k + 1] - xs[k]
+      if (length <= bestLength + tol) continue
+      const m = { x: (xs[k] + xs[k + 1]) / 2, y }
+      if (loops.some((loop) => loop.some((piece) => distanceToPiece(m, piece) <= tol))) continue
+      if (windingNumber(shape, m) === 0) continue
+      best = m
+      bestLength = length
+    }
+  }
+  return best
+}
+
+// F6 — a deterministic point INSIDE the region for its area label: the scan
+// above, on the largest component by area. Seven lines rather than one,
+// because a single middle line can meet nothing but boundary: a square minus
+// its inscribed circle has chords of length zero across its middle. Exact,
+// and never outside the region: an annulus's label sits in the ring.
+export function interiorLabelPoint(region: Region): Vec2 {
+  const components = regionComponents(region)
+  let largest = components[0]
+  for (const component of components) if (component.area > largest.area) largest = component
+  const found = chordPoint([largest.outer, ...largest.holes])
+  if (found) return found
+  // Unreachable for a region with area; the middle of its box otherwise.
+  const box = boxOf(largest.outer.flatMap(pieceExtremes))
+  return { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }
+}

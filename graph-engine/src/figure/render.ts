@@ -24,7 +24,9 @@ import {
   circularSegmentRegion,
   combineRegions,
   diskRegion,
+  interiorLabelPoint,
   polygonRegion,
+  regionArea,
   regionExtremes,
   sectorRegion,
   sweepOf,
@@ -246,6 +248,8 @@ type FigureItem =
       // See the `leader` local in buildItems: only a solid's dimension label
       // grows a line back to what it names.
       leader: boolean
+      // Phase 12 (F6) — an area's label sits ON its anchor when it can.
+      centred?: boolean
       runs: NotationRun[]
       color: string | null
     }
@@ -421,6 +425,9 @@ function subjectName(subject: MeasureSubject): string {
       return `distance from ${subject.point} to line ${subject.line.join('-')}`
     case 'shortestPath':
       return `shortest ${subject.from} to ${subject.to} over ${subject.solid}`
+    // Phase 12 — the author's own words.
+    case 'area':
+      return `area ${subject.region.source}`
   }
 }
 
@@ -514,6 +521,9 @@ function subjectRuns(subject: MeasureSubject): NotationRun[] {
     // Phase 11 (N5) — the path's length, in words: there is no notation for it.
     case 'shortestPath':
       return [{ text: `shortest ${subject.from}${subject.to} over ${subject.solid}`, mark: 'none' }]
+    // Phase 12 — in words, as written: a region has no notation.
+    case 'area':
+      return [{ text: `area ${subject.region.source}`, mark: 'none' }]
   }
 }
 
@@ -540,7 +550,9 @@ function measureRuns(
       return { runs: [{ text: asText(computed), mark: 'none' }], error: null }
     case 'stated': {
       const error =
-        computed === null ? null : checkMeasure(subjectName(subject), content.value, computed, { toScale: config.toScale })
+        computed === null
+          ? null
+          : checkMeasure(subjectName(subject), content.value, computed, { toScale: config.toScale, printed: subject.kind === 'area' })
       return { runs: [{ text: asText(content.value), mark: 'none' }], error }
     }
     case 'symbol':
@@ -583,6 +595,8 @@ interface Resolvers {
   plane(form: PlaneForm): Plane3
   // Phase 11 (N3, N4) — the shortest path over a solid between two points.
   path(subject: Extract<MeasureSubject, { kind: 'shortestPath' }>): SurfacePath
+  // Phase 12 (F3) — a shaded region, by name or written inline.
+  region(expr: RegionExpr): Region
 }
 
 // M5 — names that must all be points in space: a measure between lines and
@@ -673,6 +687,10 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
     }
     case 'shortestPath':
       return resolvers.path(subject).length
+    // Phase 12 (F3) — exact: the shoelace over chords plus each arc's
+    // circular segment.
+    case 'area':
+      return regionArea(resolvers.region(subject.region))
   }
 }
 
@@ -915,6 +933,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     space: resolveSpace,
     plane: resolveMeasurePlane,
     path: resolvePath,
+    region: regionOf,
   }
 
   // S6 — every solid the figure draws occludes a construction segment, in
@@ -1568,7 +1587,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       // dimension on a projected solid sits beside an edge among eleven
       // others, and a displaced one names nothing without a line back.
       let leader = false
-      const inside = subject.kind === 'angle' || subject.kind === 'dihedral'
+      // F6 — an area's label sits inside its region, centred on its anchor.
+      const inside = subject.kind === 'angle' || subject.kind === 'dihedral' || subject.kind === 'area'
+      const centred = subject.kind === 'area'
       const space =
         subject.kind === 'length'
           ? resolveSpace([subject.from, subject.to], subjectName(subject))
@@ -1667,6 +1688,13 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         // Among a solid's edges a displaced label needs its line back, as a
         // dimension does; on a lifted unrolling the path stands alone.
         leader = drawn.onSolid
+      } else if (subject.kind === 'area') {
+        // F6 — at the region's interior point: on the largest component, the
+        // midpoint of the longest inside chord of seven horizontal lines.
+        const region = regionOf(subject.region)
+        at = interiorLabelPoint(region)
+        push = null
+        computed = regionArea(region)
       } else if (subject.kind === 'dihedral') {
         // M3 — the value, on the mark: drawn here (once — not again beside a
         // "dihedral:" for the same angle), the label on the arc's middle,
@@ -1694,6 +1722,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         push,
         inside,
         leader,
+        ...(centred ? { centred } : {}),
         runs,
         color: statement.color,
       })
@@ -2302,6 +2331,7 @@ function labelAnchors(
         // other labels off the overbar, not just off the letters.
         size: { width: layout.width, height: layout.height },
         mayEnterShapes: item.inside,
+        ...(item.centred ? { centred: true } : {}),
       })
       sources.set(id, { id: item.id, notation: item.runs, color: item.color, leader: item.leader })
     }
