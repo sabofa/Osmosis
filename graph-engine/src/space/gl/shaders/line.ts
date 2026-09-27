@@ -14,7 +14,11 @@
 // - Dashes run on a cumulative screen length per vertex (u_dashMode 1), or
 //   restart per segment for very large marks (u_dashMode 2).
 // - An arrow shaft (u_headSize > 0) is trimmed short of its tip in screen
-//   space so it ends inside the head, unless the head is a ring.
+//   space so it ends inside a triangular head (arrowHead() from
+//   gl/arrowHead.ts, the same rule the head uses); a ring or dot head leaves
+//   it whole.
+
+import { ARROW_HEAD_GLSL } from '../arrowHead'
 
 export const LINE_VERTEX = /* glsl */ `#version 300 es
 // space: line
@@ -30,11 +34,14 @@ uniform float u_width;                  // CSS px
 uniform float u_depthBias;              // NDC z
 uniform float u_headSize;               // CSS px; > 0 for arrow shafts
 uniform int u_dashMode;                 // 0 solid, 1 cumulative, 2 per segment
+uniform vec3 u_eyeDir;                  // world, toward the eye (orthographic)
+uniform vec3 u_eye;                     // world eye position (perspective)
+uniform bool u_perspective;
 out vec2 v_local;                       // backing px: x from p0 along the segment, y across
 out float v_length;                     // backing px
 out float v_halfWidth;                  // backing px
 out float v_along;                      // CSS px along the line, for dashes
-
+${ARROW_HEAD_GLSL}
 void main() {
   vec4 c0 = u_viewProj * vec4(a_p0 * u_scale, 1.0);
   vec4 c1 = u_viewProj * vec4(a_p1 * u_scale, 1.0);
@@ -60,11 +67,16 @@ void main() {
   float full = length(dir);
   vec2 t = full > 1e-4 ? dir / full : vec2(1.0, 0.0);
   float len = full;
-  if (u_headSize > 0.0 && full >= u_headSize * u_pixelRatio) {
-    float trim = 0.6 * u_headSize * u_pixelRatio;
-    s1 -= t * trim;
-    len = full - trim;
-    z1 = mix(z0, z1, len / full);
+  if (u_headSize > 0.0) {
+    vec3 tipWorld = a_p1 * u_scale;
+    vec3 toEye = u_perspective ? normalize(u_eye - tipWorld) : u_eyeDir;
+    float headLen;
+    if (arrowHead((a_p1 - a_p0) * u_scale, toEye, full / u_pixelRatio, u_headSize, headLen) == 0) {
+      float trim = 0.6 * headLen * u_pixelRatio;
+      s1 -= t * trim;
+      len = full - trim;
+      z1 = mix(z0, z1, len / full);
+    }
   }
   vec2 n = vec2(-t.y, t.x);
   float hw = 0.5 * u_width * u_pixelRatio;

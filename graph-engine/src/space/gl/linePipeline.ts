@@ -176,6 +176,9 @@ export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, line
   gl.uniform1f(program.uniform('u_pixelRatio'), target.pixelRatio)
   gl.uniform1f(program.uniform('u_depthBias'), LINE_DEPTH_BIAS)
   gl.uniform1i(program.uniform('u_pass'), pass)
+  gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
+  gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])
+  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
   for (const line of lines) {
     const [r, g, b] = line.look.color(colors)
     const dash = dashUniform(line.look.dash)

@@ -9,7 +9,9 @@ import { frameAxes } from '../frame/ticks'
 import type { Box3, Vec3 } from '../scene/types'
 import { arrowMark, curveMark, lineMark, meshMark, pointMark, scene } from '../testing/marks'
 import { spaceColors } from '../theme'
-import { arrowHeadKind } from './arrowPipeline'
+import { ARROWHEAD_PROGRAM, arrowHeadKind } from './arrowPipeline'
+import { ARROW_HEAD_GLSL, DOT_DIAMETER_PX } from './arrowHead'
+import { LINE_PROGRAM } from './linePipeline'
 import { GlBackend } from './backend'
 import { cumulativeScreenLength, dashUniform } from './dash'
 import { createFakeGl, fakeCanvas, type FakeDraw, type FakeGl } from './fakeGl'
@@ -130,11 +132,38 @@ describe('the line pipeline', () => {
 })
 
 describe('arrows', () => {
-  it('arrowHeadKind: a ring below headSize, a triangle otherwise', () => {
-    expect(arrowHeadKind(4, 10)).toBe('ring')
-    expect(arrowHeadKind(9.99, 10)).toBe('ring')
-    expect(arrowHeadKind(10, 10)).toBe('triangle')
-    expect(arrowHeadKind(80, 10)).toBe('triangle')
+  const EYE: Vec3 = [0, 0, 1]
+  const at = (degrees: number, length = 1): Vec3 => {
+    const r = (degrees * Math.PI) / 180
+    return [Math.sin(r) * length, 0, Math.cos(r) * length]
+  }
+
+  it('arrowHeadKind: a ring when the vector is within 12 degrees of the view direction, either way', () => {
+    expect(arrowHeadKind(at(0), EYE, 0, 10).kind).toBe('ring')
+    expect(arrowHeadKind(at(180), EYE, 0, 10).kind).toBe('ring')
+    expect(arrowHeadKind(at(11), EYE, 40, 10).kind).toBe('ring')
+    expect(arrowHeadKind(at(13), EYE, 200, 10)).toEqual({ kind: 'triangle', length: 10 })
+  })
+
+  it('arrowHeadKind: decides by angle, not projected length', () => {
+    // A long vector 10 degrees off the eye projects long, but points at the viewer.
+    expect(arrowHeadKind(at(10, 50), EYE, 80, 10).kind).toBe('ring')
+    // A short sideways vector projects shorter than the head, but is not a ring.
+    expect(arrowHeadKind([1, 0, 0], EYE, 6, 10).kind).not.toBe('ring')
+  })
+
+  it('arrowHeadKind: shrinks the head to 45% of the projected length, and below 4 px draws a dot', () => {
+    expect(arrowHeadKind([1, 0, 0], EYE, 20, 10)).toEqual({ kind: 'triangle', length: 9 })
+    expect(arrowHeadKind([1, 0, 0], EYE, 100, 10)).toEqual({ kind: 'triangle', length: 10 })
+    expect(arrowHeadKind([1, 0, 0], EYE, 8, 10)).toEqual({ kind: 'dot', length: DOT_DIAMETER_PX })
+    expect(arrowHeadKind([0, 0, 0], EYE, 0, 10).kind).toBe('dot')
+  })
+
+  it('the arrowhead and line shaders carry the same rule, from the same constants', () => {
+    for (const source of [ARROWHEAD_PROGRAM.vertex, LINE_PROGRAM.vertex]) {
+      expect(source).toContain(ARROW_HEAD_GLSL)
+      expect(source).toContain('arrowHead(')
+    }
   })
 
   it('draws a shaft through the line pipeline and a head per arrow', () => {

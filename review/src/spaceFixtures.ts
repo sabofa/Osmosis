@@ -126,7 +126,7 @@ export const SPACE_FIXTURES: SpaceFixture[] = [
     id: 'arrows',
     title: 'Arrows along the axes, one at the camera',
     look:
-      'Three arrows from the origin along +x (left-front), +y (right) and +z (up), each with a triangular head. A fourth, from (0, 0, 0) toward the viewer, shows as a ring with a dot at its centre (⊙) at the default camera; orbit and it becomes a normal arrow.',
+      'Three blue arrows from the origin along +x (front-left), +y (right) and +z (up), with triangular heads. A fourth, from the origin straight at the viewer, is an orange ring with a dot at its centre (⊙): a head is a ring whenever the vector is within 12° of the view direction, however long it projects. Two short gold arrows along +y at the upper left: the upper one (about 15 px long on screen) has a head shrunk to 45% of its length, the lower one (about 6 px) ends in a 4 px dot. Orbit and the ring becomes an arrow.',
     scene: scene([
       arrowMark(
         [
@@ -140,6 +140,14 @@ export const SPACE_FIXTURES: SpaceFixture[] = [
         line: 2,
         style: { color: { author: null, slot: 0 }, headSize: 14 },
       }),
+   
+      arrowMark(
+        [
+          { tail: [1, -1.8, 1.2], vector: [0, 0.25, 0] },
+          { tail: [1, -1.8, 0.6], vector: [0, 0.1, 0] },
+        ],
+        { line: 3, style: { color: { author: null, slot: 4 } } },
+      ),
     ]),
     space: config({ bounds: { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -2, max: 2 } } }),
   },

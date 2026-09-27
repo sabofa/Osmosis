@@ -1,12 +1,14 @@
 // Arrowheads (plan G9 "Arrows"). The shaft is a line drawn by the line
-// pipeline; this draws the head at the tip, per instance:
-// - a screen-space isosceles triangle `headSize` px long, pointing along the
-//   projected direction;
-// - or, when the projected length is shorter than `headSize` (the vector
-//   points at or away from the viewer), a ring of `headSize` px: the
-//   textbook "vector out of the page". The shaft, too short to trim, is the
-//   dot inside it.
-// The kind is chosen exactly as arrowHeadKind() in arrowPipeline.ts does.
+// pipeline; this draws the head at the tip, per instance, shaped by
+// arrowHead() from gl/arrowHead.ts (the same rule as arrowHeadKind):
+// - a ring of headSize px when the vector is within 12 degrees of the view
+//   direction (the textbook "vector out of the page"; the shaft, untrimmed,
+//   is the dot inside it);
+// - otherwise a screen-space isosceles triangle along the projected
+//   direction, at most 45% of the projected length;
+// - or a 4 px dot when that triangle would be under 4 px.
+
+import { ARROW_HEAD_GLSL } from '../arrowHead'
 
 export const ARROW_VERTEX = /* glsl */ `#version 300 es
 // space: arrowhead
@@ -19,15 +21,21 @@ uniform vec2 u_viewport;
 uniform float u_pixelRatio;
 uniform float u_headSize;               // CSS px
 uniform float u_depthBias;
+uniform vec3 u_eyeDir;                  // world, toward the eye (orthographic)
+uniform vec3 u_eye;                     // world eye position (perspective)
+uniform bool u_perspective;
 out vec2 v_local;                       // backing px in the head's frame: x along, y across, tip at 0
-flat out int v_ring;
+flat out int v_kind;                    // 0 triangle, 1 ring, 2 dot
+out float v_size;                       // backing px: triangle length, ring or dot diameter
+${ARROW_HEAD_GLSL}
 void main() {
   vec4 a = u_viewProj * vec4(a_tail * u_scale, 1.0);
   vec4 b = u_viewProj * vec4(a_tip * u_scale, 1.0);
   float h = u_headSize * u_pixelRatio;
   float r = h + 1.0;
   v_local = a_corner * r;
-  v_ring = 0;
+  v_kind = 2;
+  v_size = 0.0;
   if (b.w <= 0.0 || b.z < -b.w) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
@@ -39,7 +47,11 @@ void main() {
     dir = sb - sa;
   }
   float len = length(dir);
-  v_ring = len < h ? 1 : 0;
+  vec3 tipWorld = a_tip * u_scale;
+  vec3 toEye = u_perspective ? normalize(u_eye - tipWorld) : u_eyeDir;
+  float size;
+  v_kind = arrowHead((a_tip - a_tail) * u_scale, toEye, len / u_pixelRatio, u_headSize, size);
+  v_size = size * u_pixelRatio;
   vec2 t = len > 1e-4 ? dir / len : vec2(1.0, 0.0);
   vec2 n = vec2(-t.y, t.x);
   vec2 pos = sb + t * v_local.x + n * v_local.y;
@@ -51,7 +63,8 @@ export const ARROW_FRAGMENT = /* glsl */ `#version 300 es
 precision highp float;
 precision highp int;
 in vec2 v_local;
-flat in int v_ring;
+flat in int v_kind;
+in float v_size;
 uniform vec3 u_color;
 uniform float u_opacity;
 uniform float u_pixelRatio;
@@ -63,14 +76,16 @@ void main() {
   float h = u_headSize * u_pixelRatio;
   vec2 p = v_local;
   float d;
-  if (v_ring == 1) {
+  if (v_kind == 1) {
     float R = 0.5 * h;
     float t = max(1.5 * u_pixelRatio, u_shaftWidth * u_pixelRatio);
     d = abs(length(p) - (R - 0.5 * t)) - 0.5 * t;
+  } else if (v_kind == 2) {
+    d = length(p) - 0.5 * v_size;
   } else {
-    // Apex at the tip (0, 0), base at x = -h, half-base 0.4 h.
-    float L = h;
-    float B = 0.4 * h;
+    // Apex at the tip (0, 0), base at x = -L, half-base 0.4 L.
+    float L = v_size;
+    float B = 0.4 * L;
     float side = (p.x * B + abs(p.y) * L) / sqrt(B * B + L * L);
     float base = -p.x - L;
     d = max(side, base);

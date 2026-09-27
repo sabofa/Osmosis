@@ -1,7 +1,8 @@
 // The arrow pipeline (plan G9 "Arrows"): the shaft through the line pipeline
-// (at `shaftWidth`, trimmed to end inside the head), the head as an
-// instanced screen-space triangle, or a ring when the vector points at the
-// viewer. Used for ArrowMarks and the axes frame's axes.
+// (at `shaftWidth`, trimmed to end inside a triangular head), the head as an
+// instanced screen-space triangle, a ring when the vector points at the
+// viewer, or a dot when it is too short for a head (arrowHead.ts). Used for
+// ArrowMarks and the axes frame's axes.
 
 import type { WorldMap } from '../camera/world'
 import type { Rgb, SpaceColors } from '../theme'
@@ -12,13 +13,9 @@ import { ARROW_FRAGMENT, ARROW_VERTEX } from './shaders/arrow'
 
 export const ARROWHEAD_PROGRAM = { name: 'arrowhead', vertex: ARROW_VERTEX, fragment: ARROW_FRAGMENT }
 
-// The head's shape for a projected arrow `projectedLength` CSS px long: a
-// ring when it is shorter than the head (it points at or away from the
-// viewer), a triangle otherwise. The arrowhead vertex shader makes the same
-// comparison in backing pixels.
-export function arrowHeadKind(projectedLength: number, headSize: number): 'ring' | 'triangle' {
-  return projectedLength < headSize ? 'ring' : 'triangle'
-}
+// The head's shape is decided by arrowHead.ts (by angle to the view
+// direction, not projected length); re-exported here with the pipeline.
+export { arrowHeadKind, type ArrowHeadShape } from './arrowHead'
 
 export interface ArrowLook {
   shaftWidth: number
@@ -105,6 +102,9 @@ export function drawArrowHeads(gl: WebGL2RenderingContext, program: ProgramInfo,
   gl.uniform1f(program.uniform('u_pixelRatio'), target.pixelRatio)
   gl.uniform1f(program.uniform('u_depthBias'), LINE_DEPTH_BIAS)
   gl.uniform1i(program.uniform('u_pass'), pass)
+  gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
+  gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])
+  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
   for (const a of arrows) {
     const [r, g, b] = a.look.color(colors)
     gl.uniform3f(program.uniform('u_color'), r, g, b)
