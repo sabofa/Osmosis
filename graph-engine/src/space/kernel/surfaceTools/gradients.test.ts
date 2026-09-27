@@ -175,3 +175,13 @@ describe('a zero gradient', () => {
     expect(labelOf(scene, 's1.readout').text).toBe('∇f = 0 (a critical point)')
   })
 })
+
+// Fix round 1 on the box pass (Important 1): a tool's box is its "over"
+// rectangle in x and y, and the scene's box in z.
+describe('gradient of three variables over a rectangle', () => {
+  it('refuses a point outside the rectangle: (3, 0, 0) over x in [-1, 1], y in [-1, 1]', () => {
+    expect(sceneOf('gradient: x^2 + y^2 + z^2 at (3, 0, 0) over x in [-1, 1], y in [-1, 1]').errors).toEqual([
+      { line: 1, message: 'gradient: (3, 0, 0) is outside the box' },
+    ])
+  })
+})

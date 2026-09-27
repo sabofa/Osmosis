@@ -34,14 +34,16 @@ describe('clipToZ', () => {
 // kernel resolves it from the other statements and hands it over. The
 // estimate's own tests went with it; kernel/boxPass.test.ts has what replaced
 // them.
-describe('toolBox: the box the kernel resolved (J1)', () => {
-  it('is the only box box.ts exports, and it is context.box', () => {
+describe('toolBox: the tool’s domain in x and y, the box the kernel resolved in z (J1)', () => {
+  const resolved = { x: { min: -1, max: 2 }, y: { min: -1, max: 1 }, z: { min: -1, max: 4 } }
+
+  it('is the only box box.ts exports: the rect’s x and y, context.box’s z', () => {
     expect(Object.keys(box).filter((k) => /Box$/.test(k))).toEqual(['toolBox'])
-    const resolved = { x: { min: -1, max: 2 }, y: { min: -1, max: 1 }, z: { min: -1, max: 4 } }
-    expect(box.toolBox({ ...context(''), box: resolved })).toBe(resolved)
+    const rect = { x: { min: 0, max: 1 }, y: { min: 0, max: 0.5 } }
+    expect(box.toolBox({ ...context(''), box: resolved }, rect)).toEqual({ x: rect.x, y: rect.y, z: resolved.z })
   })
 
   it('refuses to guess: without the kernel’s box it throws, naming the line', () => {
-    expect(() => box.toolBox(context(''))).toThrow("internal: line 1 needs the scene's box, and it was built without one")
+    expect(() => box.toolBox(context(''), resolved)).toThrow("internal: line 1 needs the scene's box, and it was built without one")
   })
 })

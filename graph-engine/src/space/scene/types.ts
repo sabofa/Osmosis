@@ -241,7 +241,13 @@ export interface SpaceScene {
   marks: Mark[]
   labels: LabelAnchor[]
   colorScales: ColorScale[]
-  // The data extent, for automatic bounds; null when the scene draws nothing.
+  // The data extent, for automatic bounds: the box pass's FIRST pass only
+  // (integration J1, kernel/index.ts). Box-dependent statements (a plane, an
+  // implicit surface, every S4b tool, ...) are left out, so resolveBox over
+  // this extent is the box they were built in; `region:` adds only its x and
+  // y. Null when nothing but box-dependent statements draws. z is the empty
+  // range (min +Infinity, max -Infinity: no data, which resolveBox treats as
+  // absent) when only regions draw.
   // x and y span every finite vertex and label. z is robust against poles
   // (SP5) over SAMPLED marks only — meshes, curves (lines carrying their
   // parameter) and boxes: when the 1st-99th percentile span of their z values

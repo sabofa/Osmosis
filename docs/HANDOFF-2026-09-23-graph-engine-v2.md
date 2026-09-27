@@ -550,8 +550,11 @@ renderer's own function), and box-dependent statements build against
 `context.box` (`registry.ts`: `boxDependent`, `boxOf`; the list is at
 registration in `kernel/index.ts`). Box-dependent: implicit and level
 surfaces, contours, `line:`, `plane:`, coordinate surfaces, `frame:`, every
-S4b tool (its default domain and floor are the box's), `centroid:`; and
-`region:` by its z only. `scene.extent` is the first pass's extent, so the
+S4b tool, `centroid:`; `region:` by its z only; and a coordinate surface
+only when a defaulted r, ρ or z range reads the box (`spherical: rho = 2`
+sizes the box itself). A tool draws into `toolBox(context, rect)`: its `over`
+rectangle (else the box's x and y) by the box's z; back-wall copies go on the
+frame's own wall. `scene.extent` is the first pass's extent, so the
 renderer draws the same box **by construction** — clipping dependent marks
 would not be enough, because rounding a wider extent can pick a coarser step
 (pinned in `kernel/boxPass.test.ts`). During play and drag the renderer passes
@@ -615,9 +618,13 @@ headless shots of every example, light and dark):
   collision layout as tick labels.
 - **S5 readouts print many digits** (`∬ ≈ 25.1327412287`,
   `area ≈ 0.166666666667`): honest to the error estimate, heavy to read.
-- **A translucent closed surface reads grey under OIT**: its front and back
-  faces both accumulate, and the back-face tint wins (three-variable
-  Lagrange's constraint sphere).
+- **A translucent sphere under OIT is a flat tint.** "Lagrange in three
+  variables" first showed a flat grey ball: that was a double draw (a
+  hand-drawn sphere left from before S4a, coinciding with the tool's own
+  constraint mesh), since removed. Re-shot alone, a single translucent sphere
+  (`x^2 + y^2 + z^2 = 9 opacity: 0.35`) reads as a tinted ball with the walls
+  showing through; its shading is flat, since OIT averages its front and back
+  faces. Not a bug; a look S6 may want to strengthen.
 - **A draggable point is easy to lose**: a small dot on a dark underside
   (Drag a point on a paraboloid, A tangent plane you can drag). Give
   draggable points a halo.

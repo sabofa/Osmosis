@@ -44,6 +44,7 @@ import { NAMED_VOLUME, VOLUME } from './integrals/volumes2'
 import { PARAMETRIC_SURFACE } from './parametric'
 import { ARROW, POINT, SEGMENT } from './primitives'
 import { builderFor, DEFINITION, registerBuilder, sameBox, type BuildContext, type BuilderEntry, type BuildResult, type PreparedStatement } from './registry'
+import { coordinateSurfaceReadsBox } from './geometry/coordinateSurfaces'
 import { buildScope } from './scope'
 import { SURFACE } from './surface'
 import { IMPLICIT_SURFACE } from './geometry/implicit'
@@ -59,10 +60,11 @@ import { SURFACE_TOOL_BUILDERS } from './surfaceTools'
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space". onBox marks a box-dependent row (J1, registry.ts): a surface
 // sampled over the box, a line or plane spanning it, a curve frame sized by
-// it, every tool of S4b (its domain and floor are the box's), a centroid's
-// drop lines to the floor and walls; and, by its z only, a region shaded on
-// the floor.
-const onBox = (entry: BuilderEntry, dependence: true | 'z' = true): BuilderEntry => ({ ...entry, boxDependent: dependence })
+// it, every tool of S4b (its default domain and floor are the box's), a
+// centroid's drop lines to the floor and walls; by its z only, a region
+// shaded on the floor; and a coordinate surface only when a defaulted range
+// reads the box.
+const onBox = (entry: BuilderEntry, dependence: NonNullable<BuilderEntry['boxDependent']> = true): BuilderEntry => ({ ...entry, boxDependent: dependence })
 registerBuilder('surface', SURFACE)
 registerBuilder('space:surface', SURFACE)
 registerBuilder('parametricSurface', PARAMETRIC_SURFACE)
@@ -86,7 +88,7 @@ registerBuilder('space:line', onBox(LINE))
 registerBuilder('space:plane', onBox(PLANE))
 registerBuilder('space:cross', VECTOR_OP)
 registerBuilder('space:project', VECTOR_OP)
-registerBuilder('space:coordinateSurface', onBox(COORDINATE_SURFACE))
+registerBuilder('space:coordinateSurface', onBox(COORDINATE_SURFACE, (statement) => coordinateSurfaceReadsBox(statement)))
 registerBuilder('space:frame', onBox(CURVE_FRAME))
 registerBuilder('space:osculating', CURVE_FRAME)
 registerBuilder('space:motion', CURVE_FRAME)
@@ -209,9 +211,10 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     }
     // The id is taken only by a statement that compiled.
     if (wantsScale) scales++
+    const dependence = typeof entry.boxDependent === 'function' ? entry.boxDependent(statement) : entry.boxDependent
     records.push({
       line,
-      stage: entry.boxDependent === true ? 'box' : entry.boxDependent === 'z' ? 'z' : 'data',
+      stage: dependence === true ? 'box' : dependence === 'z' ? 'z' : 'data',
       context,
       builtWith: undefined,
       prepared,

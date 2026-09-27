@@ -249,7 +249,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
     if (levels.length === 0) throw new Error(`contour: ${form.text} has no nice level inside its range — list its levels`)
     if (levels.length > MAX_LEVELS) throw new Error(`contour: ${levels.length} levels — at most ${MAX_LEVELS}`)
     const colors = levelColors(levels, Float64Array.from(samples), context)
-    const floor = form.floor ? toolBox(context).z.min : 0
+    const floor = form.floor ? toolBox(context, rect).z.min : 0
 
     const marks: LineMark[] = []
     const labels: LabelAnchor[] = []

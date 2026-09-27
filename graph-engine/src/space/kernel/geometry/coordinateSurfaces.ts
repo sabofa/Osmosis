@@ -14,8 +14,10 @@
 // θ is the azimuth from +x toward +y; φ is measured from +z (OpenStax).
 // Default ranges: θ over a full turn and φ over a half turn (in the spec's
 // @angle unit, since the map's trig reads it), z over the box's z range, and
-// r and ρ over [0, R], R the box's largest half-span. The box is box.ts's
-// (@bounds3d, else [-5, 5] per axis), as for an implicit surface.
+// r and ρ over [0, R], R the box's largest half-span. The box is the one the
+// scene resolves to (integration J1), so a statement with a defaulted r, ρ or
+// z range is box-dependent; one with only its angles defaulted (a full
+// sphere, rho = 2) is not, and sizes the box itself.
 
 import type { Expr, Statement } from '../../../parser/types'
 import { call, mul, num, substitute, variable } from '../../../math/expr'
@@ -90,6 +92,18 @@ function defaultRange(name: string, box: Box3, angle: Angle): ParamRange {
   }
 }
 
+// The free coordinates whose default range reads the box.
+const READS_BOX: ReadonlySet<string> = new Set(['r', 'rho', 'z'])
+
+function boxRanged(f: CoordinateSurfaceForm): boolean {
+  return ORDER[f.system].some((c) => c !== f.solved && READS_BOX.has(c) && !f.ranges.some((r) => r.param === c))
+}
+
+// Whether the statement reads the box: a defaulted r, ρ or z range.
+export function coordinateSurfaceReadsBox(statement: Statement): boolean {
+  return boxRanged(form(statement))
+}
+
 // The point p in the system's coordinates, angles in the given unit; θ in
 // [0, a full turn), φ in [0, a half turn].
 export function coordinatesOf(system: System, p: Vec3, angle: Angle): [number, number, number] {
@@ -119,10 +133,11 @@ function prepareCoordinateSurface(statement: Statement, context: BuildContext): 
   const params = ORDER[f.system].filter((c) => c !== f.solved)
   const solved = new Map([[f.solved, f.body]])
   const [fx, fy, fz] = MAPS[f.system].map((e) => substitute(e, solved))
-  // The parametric surface over the box's default ranges. A default range is
-  // a number read off the box, so the surface is prepared again when the box
-  // it was prepared for moves (J1); what it reads does not depend on them.
-  const defaulted = params.some((name) => !f.ranges.some((r) => r.param === name))
+  // The parametric surface over the box's default ranges. A default r, ρ or
+  // z range is a number read off the box, so the surface is prepared again
+  // when the box it was prepared for moves (J1); what it reads does not depend
+  // on them. With only angles defaulted it never reads the box.
+  const defaulted = boxRanged(f)
   const parametricIn = (box: Box3): PreparedStatement => {
     const ranges = params.map((name) => f.ranges.find((r) => r.param === name) ?? defaultRange(name, box, angle)) as [ParamRange, ParamRange]
     const parametric: Statement = {
@@ -139,10 +154,12 @@ function prepareCoordinateSurface(statement: Statement, context: BuildContext): 
   const coordinates = (p: Vec3) => coordinateRow(f.system, p, angle)
   const flip = FLIPPED.has(`${f.system} ${f.solved}`)
   const build = (): BuildResult => {
-    const box = boxOf(context)
-    if (defaulted && !sameBox(box, preparedBox)) {
-      prepared = parametricIn(box)
-      preparedBox = box
+    if (defaulted) {
+      const box = boxOf(context)
+      if (!sameBox(box, preparedBox)) {
+        prepared = parametricIn(box)
+        preparedBox = box
+      }
     }
     const result = prepared.build()
     const marks = result.marks.map((mark) => {

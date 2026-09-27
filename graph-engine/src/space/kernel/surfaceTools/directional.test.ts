@@ -92,3 +92,22 @@ directional: x^2 - y^2 at (1, 2) toward <k, 0>`)
     ])
   })
 })
+
+// Fix round 1 on the box pass (Important 1): over x in [0, 2], y in [0, 2]
+// the vertical plane, the trace and the tangent span that rectangle, not the
+// scene's [-5, 5].
+describe('directional over a rectangle', () => {
+  it('directional: x^2 - y^2 at (1, 1) toward <1, 0> over x in [0, 2], y in [0, 2] spans x in [0, 2]', () => {
+    const scene = sceneOf('directional: x^2 - y^2 at (1, 1) toward <1, 0> over x in [0, 2], y in [0, 2]')
+    expect(scene.errors).toEqual([])
+    const xs = (object: string) => {
+      const mark = scene.marks.find((m) => m.source.object === object)
+      if (!mark || (mark.kind !== 'lines' && mark.kind !== 'mesh')) throw new Error('no line or mesh ' + object)
+      return vertices(mark.positions).map((p) => p[0])
+    }
+    for (const object of ['s1.plane', 's1', 's1.tangent']) {
+      const x = xs(object)
+      expect([Math.min(...x), Math.max(...x)]).toEqual([0, 2])
+    }
+  })
+})

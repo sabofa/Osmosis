@@ -87,9 +87,13 @@ export interface BuilderEntry {
   // context.box, and its marks do not size the box. 'z': its x and y size the
   // box (a first build, against the provisional box — @bounds3d, else
   // [-5, 5] — counts only them), and it is rebuilt against the resolved box,
-  // whose floor it lies on (a region shaded on the floor).
-  boxDependent?: true | 'z'
+  // whose floor it lies on (a region shaded on the floor). A function decides
+  // per statement (a coordinate surface reads the box only through a
+  // defaulted range); false is not box-dependent.
+  boxDependent?: BoxDependence | ((statement: Statement) => BoxDependence | false)
 }
+
+export type BoxDependence = true | 'z'
 
 const REGISTRY = new Map<string, BuilderEntry>()
 

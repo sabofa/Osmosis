@@ -144,7 +144,7 @@ function prepareCritical(statement: Statement, context: BuildContext): PreparedS
     const marks: Mark[] = []
     const labels: LabelAnchor[] = []
     if (found.length === 0) {
-      const floor = toolBox(context).z.min
+      const floor = toolBox(context, rect).z.min
       const centre: Vec3 = [(rect.x.min + rect.x.max) / 2, (rect.y.min + rect.y.max) / 2, floor]
       labels.push(annotation(part(context, 'note'), centre, 'no critical points found in the domain'))
       return { marks, labels, errors: [], colorScale: null }

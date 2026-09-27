@@ -741,6 +741,40 @@ plane: x = 1`)
     r.dispose()
   })
 
+  it('rebuilds box-dependent statements in the resolved box when a drag ends with no last move (a cancelled pointer)', () => {
+    // Dragging P = (a, 0, 0) from x = 1 to 1.6 raises a*x^2 + y^2's top from
+    // 8 to 10.4. While dragging, the box holds and plane: x = 1 stays in it;
+    // a pointercancel ends the drag with no position, so no value changes on
+    // the last frame: the held box resolves then, and the plane follows it.
+    const { clock, r, pointer } = live(`${SPEC}
+plane: x = 1`)
+    const planeZ = () => {
+      const plane = (r['scene'] as SpaceScene).marks.find((m) => m.source.object === 's4')!
+      if (plane.kind !== 'mesh') throw new Error('not a mesh')
+      let max = -Infinity
+      for (let i = 2; i < plane.positions.length; i += 3) max = Math.max(max, plane.positions[i])
+      return max
+    }
+    const camera = r['camera']()!
+    const world = r['world']!
+    const at = (p: readonly [number, number, number]) => project(camera, world.toWorld(p))
+    const start = at([1, 0, 0])
+    const end = at([1.6, 0, 0])
+    pointer('pointerdown', start.x, start.y, 1)
+    pointer('pointermove', end.x, end.y, 1)
+    clock.flush()
+    const held = r['world']!.box.z.max
+    expect(held).toBe(world.box.z.max)
+    expect((r['kernel'] as SpaceKernel).values().get('a')).toBeCloseTo(1.6, 6)
+    expect(planeZ()).toBe(held)
+    pointer('pointercancel', end.x, end.y, 0)
+    clock.flush()
+    expect(r['dragging']).toBeNull()
+    expect(r['world']!.box.z.max).toBeGreaterThan(held)
+    expect(planeZ()).toBe(r['world']!.box.z.max)
+    r.dispose()
+  })
+
   it('moves a pin with a value change (the pin on the surface reads the new z)', () => {
     const { clock, r, readouts, value, pointer } = live()
     pointer('pointerdown', 400, 300, 1)

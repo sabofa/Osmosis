@@ -176,3 +176,47 @@ plane: x = 1`
     expect(kernel.setValues(new Map())).toBe(released)
   })
 })
+
+// Fix round 1 (Important 2): a region reads the box's z (its floor) only, and
+// is rebuilt when that moves.
+describe('the box pass: a region follows the floor', () => {
+  it('lies on the floor of the surface beside it, and moves with it when setValue moves the surface', () => {
+    // x*y + a over [0, 2]^2 spans z in [a, 4 + a]: at a = 1 the box z is
+    // [1, 5] (step 0.5), at a = 2 it is [2, 6]. Built against the
+    // provisional box alone, the region would lie at z = -5, below the box.
+    const { kernel } = kernelOf(`@param a = 1 range [0, 3]
+z = x*y + a for x in [0, 2], y in [0, 2]
+region: x in [0, 1], y in [0, 1]`)
+    const before = markOf(kernel.scene(), 's3')
+    expect(new Set(positions(before).map((p) => p[2]))).toEqual(new Set([1]))
+    const after = markOf(kernel.setValue('a', 2), 's3')
+    expect(after).not.toBe(before)
+    expect(new Set(positions(after).map((p) => p[2]))).toEqual(new Set([2]))
+  })
+})
+
+// Fix round 1 (Minor 3): a coordinate surface is box-dependent only when a
+// default range reads the box (r or ρ over [0, the largest half-span], z over
+// the box's z); with its angles alone defaulted it is data, and sizes the box.
+describe('the box pass: coordinate surfaces, statement by statement', () => {
+  it('spherical: rho = 2 (θ and φ defaulted, a full sphere) sizes the box: [-2, 2]^3 alone, and beside a segment', () => {
+    for (const spec of ['spherical: rho = 2', '(0, 0, 0) -- (1, 1, 1)' + '\n' + 'spherical: rho = 2']) {
+      const { kernel, space } = kernelOf(spec)
+      const scene = kernel.scene()
+      expect(scene.errors).toEqual([])
+      // ±2 on each axis; niceStep(4, 8) = 0.5 keeps it
+      expect(resolveBox(space, scene.extent)).toEqual(box([-2, 2], [-2, 2], [-2, 2]))
+      const sphere = scene.marks.find((m) => m.kind === 'mesh')!
+      for (const p of positions(sphere)) expect(Math.abs(Math.hypot(...p) - 2)).toBeLessThanOrEqual(1e-12)
+    }
+  })
+
+  it('cylindrical: r = 2 (z defaulted, so it reads the box) spans the box the segment sizes: z in [0, 1]', () => {
+    // The segment alone: [0, 1]^3 (niceStep(1, 8) = 0.1 keeps it).
+    const { kernel, space } = kernelOf('(0, 0, 0) -- (1, 1, 1)' + '\n' + 'cylindrical: r = 2')
+    const scene = kernel.scene()
+    expect(scene.errors).toEqual([])
+    expect(resolveBox(space, scene.extent)).toEqual(box([0, 1], [0, 1], [0, 1]))
+    expect(range(positions(markOf(scene, 's2')).map((p) => p[2]))).toEqual([0, 1])
+  })
+})

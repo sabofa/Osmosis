@@ -1,11 +1,13 @@
 // The box a surface tool draws into, and the marks it draws with (S4b).
 //
-// A floor copy, a slicing plane and a tangent line must reach the walls of
-// the box the frame draws. Since the box pass (integration J1) every tool is
-// box-dependent: the kernel resolves the box from the statements that define
-// the scene (the surface z = f the author draws beside the tool, above all)
-// and hands it to the tool, and toolBox returns it. With nothing else drawn
-// it is @bounds3d, else [-5, 5] on each axis.
+// Since the box pass (integration J1) every tool is box-dependent: the kernel
+// resolves the box from the statements that define the scene (the surface
+// z = f the author draws beside the tool, above all) and hands it over; with
+// nothing else drawn it is @bounds3d, else [-5, 5] on each axis. A tool draws
+// into ITS box, toolBox: the tool's domain in x and y (its "over"
+// rectangle, else the box's own x and y) and the scene box's z. A slicing
+// plane, a tangent line and a constraint surface span that; a floor copy
+// lies on its z.min; a back-wall copy goes on the frame's own wall (boxOf).
 //
 // Slicing planes are box-clipped patches built here. A vertical plane meets
 // the box in a rectangle, which rectPatch draws exactly; a general plane (the
@@ -16,12 +18,13 @@
 import type { ArrowMark, Box3, ColorSpec, LabelAnchor, LineMark, MarkSource, MeshMark, PointMark, PointShape, Range, Vec3 } from '../../scene/types'
 import { DASH } from '../common'
 import { boxOf, type BuildContext } from '../registry'
+import type { Rect } from './target'
 
-// THE box a tool draws into: every surface tool calls this. It is the box
+// THE box a tool draws into: its domain `rect` in x and y, and in z the box
 // the kernel resolved from the other statements (J1), or the renderer's
 // frozen box during play and drag.
-export function toolBox(context: BuildContext): Box3 {
-  return boxOf(context)
+export function toolBox(context: BuildContext, rect: Rect): Box3 {
+  return { x: rect.x, y: rect.y, z: boxOf(context).z }
 }
 
 export function largestSpan(box: Box3): number {

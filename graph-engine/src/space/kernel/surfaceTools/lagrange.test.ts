@@ -286,3 +286,29 @@ describe('lagrange helpers', () => {
     ])
   })
 })
+
+// Fix round 1 on the box pass (Important 1): over x in [0, 2], y in [0, 2]
+// the constraint is meshed over that rectangle only (by the scene's z range),
+// not the whole sphere. On x^2 + y^2 + z^2 = 3, ∇(x + y + z) = (1, 1, 1) =
+// λ(2x, 2y, 2z) gives x = y = z = 1/(2λ), 3/(4λ^2) = 3, λ = 1/2 at (1, 1, 1),
+// where f = 3: inside the rectangle.
+describe('lagrange in three variables over a rectangle', () => {
+  const scene = sceneOf('lagrange: max x + y + z subject to x^2 + y^2 + z^2 = 3 over x in [0, 2], y in [0, 2] res: 16')
+
+  it('meshes the constraint over the rectangle only', () => {
+    expect(scene.errors).toEqual([])
+    const points = vertices(meshOf(scene, 's1.constraint').positions)
+    expect(points.length).toBeGreaterThan(10)
+    for (const [x, y] of points) {
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(x).toBeLessThanOrEqual(2)
+      expect(y).toBeGreaterThanOrEqual(0)
+      expect(y).toBeLessThanOrEqual(2)
+    }
+  })
+
+  it('finds (1, 1, 1), f = 3, λ = 1/2', () => {
+    expectClose(Array.from(pointsOf(scene, 's1').positions), [1, 1, 1], 1e-12)
+    expect(labelOf(scene, 's1.p0').text).toBe('max ≈ (1, 1, 1), f ≈ 3, λ ≈ 0.5')
+  })
+})

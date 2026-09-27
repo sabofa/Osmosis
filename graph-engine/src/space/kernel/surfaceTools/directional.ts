@@ -49,7 +49,7 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
     const q = fy(a, b)
     if (![f0, p, q].every(Number.isFinite)) throw new Error(`directional: f or ∇f is undefined at ${pointText([a, b])}`)
     const slope = p * u[0] + q * u[1]
-    const box = toolBox(context)
+    const box = toolBox(context, rect)
     const plane = verticalPlane(a, b, u, box)
     if (!plane) throw new Error(`directional: ${pointText([a, b])} is outside the domain`)
 

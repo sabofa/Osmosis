@@ -135,7 +135,7 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
   const build = (): BuildResult => {
     const a = from()
     const b = to()
-    const box = toolBox(context)
+    const box = toolBox(context, domain())
     const floor = box.z.min
     const runs: number[][] = []
     const runParams: number[][] = []

@@ -82,7 +82,7 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
       if (![f0, p, q].every(Number.isFinite)) {
         throw new Error(`tangent-plane: f has no tangent plane at ${pointText([a, b])} — f or a partial derivative is undefined there`)
       }
-      const box = toolBox(context)
+      const box = toolBox(context, rect)
       const s = PATCH * Math.max(rect.x.max - rect.x.min, rect.y.max - rect.y.min)
       const [x0, x1] = [Math.max(a - s, rect.x.min), Math.min(a + s, rect.x.max)]
       const [y0, y1] = [Math.max(b - s, rect.y.min), Math.min(b + s, rect.y.max)]
@@ -116,7 +116,7 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
   const { F, grad } = surface3(target, scope)
   const build = (): BuildResult => {
     const [x0, y0, z0] = point()
-    const box = toolBox(context)
+    const box = toolBox(context, domain())
     requireInside('tangent-plane', [x0, y0, z0], [box.x, box.y, box.z], 'the box')
     const g: Vec3 = [grad[0](x0, y0, z0), grad[1](x0, y0, z0), grad[2](x0, y0, z0)]
     const length = Math.hypot(...g)

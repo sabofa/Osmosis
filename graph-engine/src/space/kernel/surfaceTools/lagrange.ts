@@ -226,7 +226,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       }
       const kept = judge(chosen, samples, NEIGHBOURHOOD * span)
 
-      const box = toolBox(context)
+      const box = toolBox(context, rect)
       const floor = box.z.min
       const marks: Mark[] = []
       const labels: LabelAnchor[] = []
@@ -296,7 +296,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
   const G = surface3(within3(gTarget), scope)
   const res = levelSurfaceRes(form.style.res, config)
   const build = (): BuildResult => {
-    const box = toolBox(context)
+    const box = toolBox(context, domain())
     const c = level()
     const h = (x: number, y: number, z: number) => G.F(x, y, z) - c
     const mesh = MESH_LEVEL_SURFACE({ F: G.F, grad: G.grad }, c, box, res)

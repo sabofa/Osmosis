@@ -14,7 +14,7 @@
 import type { Statement } from '../../../parser/types'
 import type { LabelAnchor, LineMark, Mark, Vec3 } from '../../scene/types'
 import { constant, CURVE_WIDTH, Reads } from '../common'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { annotation, clipLine, clipToZ, lineMark, part, pointMark, polygonMesh, toolBox } from './box'
 import { pointText } from './readout'
 import { formatNumber } from '../../pick/format'
@@ -45,7 +45,7 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
 
   const build = (): BuildResult => {
     const rect = domain()
-    const box = toolBox(context)
+    const box = toolBox(context, rect)
     const c = at()
     const fixed = alongX ? rect.y : rect.x
     if (!(c >= fixed.min && c <= fixed.max)) {
@@ -93,7 +93,9 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
       }
       marks.push(curve)
       // The copy on the back wall parallel to the slicing plane.
-      const wall = alongX ? box.y.min : box.x.min
+      // on the frame's own back wall, not the domain's edge
+      const frame = boxOf(context)
+      const wall = alongX ? frame.y.min : frame.x.min
       // Sampled like the trace (it carries its parameter), so a pole on the
       // wall counts under the extent's robust rule, not as authored geometry.
       const copy = runs.map((r) => r.map((v, i) => (i % 3 === (alongX ? 1 : 0) ? wall : v)))

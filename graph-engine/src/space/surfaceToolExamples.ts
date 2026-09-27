@@ -72,8 +72,6 @@ lagrange: extrema x + y subject to x^2 + y^2 = 1    # ∇f ∥ ∇g at ±(√2/2
     label: 'Space · Lagrange in three variables',
     spec: `@bounds3d: x [-4, 4], y [-4, 4], z [-4, 4]
 @camera: azimuth -20, elevation 15       # (1, 2, 2) near the limb, so ∇f and ∇g show their length
-# the constraint x^2 + y^2 + z^2 = 9, drawn by hand until level surfaces merge (S4a)
-(3 cos(u) sin(v), 3 sin(u) sin(v), 3 cos(v)) for u in [0, 2*pi], v in [0, pi] opacity: 0.3
 lagrange: max x + 2y + 2z subject to x^2 + y^2 + z^2 = 9     # (1, 2, 2), f = 9, λ = 1/2`,
   },
 ]
