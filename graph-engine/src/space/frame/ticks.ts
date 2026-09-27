@@ -2,6 +2,7 @@
 
 import type { SpaceConfig, TickStep } from '../config'
 import type { Box3, Range } from '../scene/types'
+import { stepFor } from './nice'
 import type { AxisScale, FrameAxes } from './types'
 
 // How many intervals the automatic step aims for across a span.
@@ -10,27 +11,6 @@ export const TICK_TARGET = 8
 // A cap on one axis's tick count, so an authored step far too small for its
 // range cannot make an unbounded loop. Gridlines past this are noise anyway.
 export const MAX_TICKS = 1000
-
-// replaced by frame/nice.ts at the S1 merge
-// The value on the 1-2-5 x 10^n ladder nearest to span / target in log scale,
-// ties going to the larger. A tie is an exact geometric mean, which no double
-// hits exactly, so "tie" means within 1e-12 in log.
-export function niceStep(span: number, target: number): number {
-  const raw = span / target
-  if (!(raw > 0) || !Number.isFinite(raw)) return 1
-  const base = 10 ** Math.floor(Math.log10(raw))
-  let best = base
-  let bestDistance = Number.POSITIVE_INFINITY
-  for (const m of [1, 2, 5, 10]) {
-    const candidate = m * base
-    const distance = Math.abs(Math.log(raw / candidate))
-    if (distance <= bestDistance + 1e-12) {
-      best = candidate
-      bestDistance = Math.min(distance, bestDistance)
-    }
-  }
-  return best
-}
 
 // Every k * step within the range, inclusive with a 1e-9 tolerance relative
 // to the step, computed as k * step and never by accumulation. `scale` is the
@@ -57,7 +37,7 @@ export function tickIndex(value: number, step: number): number {
 export function frameAxes(space: SpaceConfig, box: Box3): FrameAxes {
   const axis = (authored: TickStep | null, range: Range, title: string) => ({
     scale: 'linear' as const,
-    step: authored && authored.value > 0 ? authored.value : niceStep(range.max - range.min, TICK_TARGET),
+    step: stepFor(range.max - range.min, TICK_TARGET, authored && authored.value > 0 ? authored : null),
     authored,
     title,
   })

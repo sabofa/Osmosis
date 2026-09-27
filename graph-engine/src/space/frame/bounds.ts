@@ -11,7 +11,8 @@
 
 import type { SpaceConfig } from '../config'
 import type { Box3, Range } from '../scene/types'
-import { niceStep, TICK_TARGET } from './ticks'
+import { niceStep } from './nice'
+import { TICK_TARGET } from './ticks'
 
 const DEFAULT_RANGE: Range = { min: -5, max: 5 }
 

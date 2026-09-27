@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { defaultSpaceConfig } from '../config'
-import { formatTick, frameAxes, niceStep, ticks } from './ticks'
+import { niceStep } from './nice'
+import { formatTick, frameAxes, ticks } from './ticks'
 
 const PI_HALF = { value: Math.PI / 2, pi: { num: 1, den: 2 } }
 
-describe('niceStep (temporary, until frame/nice.ts lands with S1)', () => {
+describe("the frame's steps come from frame/nice.ts (S1)", () => {
   it('picks the 1-2-5 ladder value nearest to span / target in log scale', () => {
     expect(niceStep(3, 8)).toBe(0.5) // 0.375: log distance to 0.5 is 0.125, to 0.2 is 0.273
     expect(niceStep(1, 8)).toBe(0.1)
