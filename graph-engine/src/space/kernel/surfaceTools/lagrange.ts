@@ -12,9 +12,10 @@
 //   min the least, extrema both.
 // Drawn: the constraint on the floor and lifted onto z = f; f's level curve
 // through each kept point, on the floor; the kept points on the floor and
-// lifted; ∇f and ∇g at each floor point, scaled to a common 0.15 of the box's
-// largest span so their parallelism reads. Readout per point: the point, f
-// and λ, all ≈.
+// lifted; ∇f and ∇g at each floor point, of fixed lengths — ∇f 0.15 of the
+// box's largest span, ∇g 0.6 of that — so their parallelism reads, and both
+// heads show when they point the same way (λ > 0). Readout per point: the
+// point, f and λ, all ≈.
 //
 // Three variables (f or g reads z): seeds are points on g = c (the vertices
 // of S4a's level-surface mesh once it merges; until then the crossings of
@@ -39,6 +40,9 @@ import { prepareDomain, resolveTarget, surface2, surface3, type Target } from '.
 
 export const MAX_SEEDS = 64
 const ARROW = 0.15
+// ∇g's length as a fraction of ∇f's: at equal lengths two arrows pointing the
+// same way would be one arrow.
+const GRAD_G = 0.6
 const TIE = 1e-9
 // Newton's answers below this fraction of the domain's span print ≈ 0.
 const RESOLVED = 1e-10
@@ -214,13 +218,13 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
         const through = levelCurves((u, v) => F.f(u, v) - s.f, rect, res)
         if (through.length > 0) marks.push(lineMark(part(context, `level${k}`), through.map((l) => lift(l, () => floor)), context, { width: LEVEL_WIDTH }))
         const tail: Vec3 = [x, y, floor]
-        for (const [name, gx, gy] of [
-          ['∇f', F.fx(x, y), F.fy(x, y)],
-          ['∇g', G.fx(x, y), G.fy(x, y)],
+        for (const [name, gx, gy, size] of [
+          ['∇f', F.fx(x, y), F.fy(x, y), length],
+          ['∇g', G.fx(x, y), G.fy(x, y), GRAD_G * length],
         ] as const) {
           const norm = Math.hypot(gx, gy)
           if (!(norm > 0)) continue
-          const vector: Vec3 = [(gx / norm) * length, (gy / norm) * length, 0]
+          const vector: Vec3 = [(gx / norm) * size, (gy / norm) * size, 0]
           const object = name === '∇f' ? 'gradf' : 'gradg'
           marks.push(arrowMark(part(context, `${object}${k}`), [{ tail, vector }], context))
           labels.push({ source: part(context, `${object}${k}.label`), position: [x + vector[0], y + vector[1], floor], text: name, kind: 'point' })
@@ -284,14 +288,14 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
     const scale = Math.max(1, ...kept.map(({ s }) => Math.abs(s.f)))
     kept.forEach(({ s, kind }, k) => {
       const tail: Vec3 = [s.at[0], s.at[1], s.at[2]]
-      for (const [name, grad] of [
-        ['∇f', F.grad],
-        ['∇g', G.grad],
+      for (const [name, grad, size] of [
+        ['∇f', F.grad, length],
+        ['∇g', G.grad, GRAD_G * length],
       ] as const) {
         const d = grad.map((fn) => fn(tail[0], tail[1], tail[2]))
         const norm = Math.hypot(...d)
         if (!(norm > 0)) continue
-        const vector: Vec3 = [(d[0] / norm) * length, (d[1] / norm) * length, (d[2] / norm) * length]
+        const vector: Vec3 = [(d[0] / norm) * size, (d[1] / norm) * size, (d[2] / norm) * size]
         const object = name === '∇f' ? 'gradf' : 'gradg'
         marks.push(arrowMark(part(context, `${object}${k}`), [{ tail, vector }], context))
         labels.push({ source: part(context, `${object}${k}.label`), position: [tail[0] + vector[0], tail[1] + vector[1], tail[2] + vector[2]], text: name, kind: 'point' })

@@ -35,14 +35,18 @@ describe('lagrange: max x + y subject to x^2 + y^2 = 1', () => {
     }
   })
 
-  it('marks the point on the floor with ∇f and ∇g at a common 0.15 x 20 = 3, parallel', () => {
+  it('marks the point on the floor with ∇f (0.15 x 20 = 3 long) and ∇g (0.6 x 3 = 1.8), parallel', () => {
     expectClose(Array.from(pointsOf(scene, 's1.floorPoints').positions), [H, H, -10], 1e-12)
-    for (const object of ['s1.gradf0', 's1.gradg0']) {
+    for (const [object, length] of [
+      ['s1.gradf0', 3],
+      ['s1.gradg0', 1.8],
+    ] as const) {
       const arrow = arrowsOf(scene, object)
       expectClose(Array.from(arrow.tails), [H, H, -10], 1e-12)
       const v = Array.from(arrow.vectors)
       expectParallel(v, [1, 1, 0], 1e-12)
-      expect(Math.abs(Math.hypot(...v) - 3)).toBeLessThanOrEqual(1e-12)
+      expect(v[0]).toBeGreaterThan(0)
+      expect(Math.abs(Math.hypot(...v) - length)).toBeLessThanOrEqual(1e-12)
     }
     expect([labelOf(scene, 's1.gradf0.label').text, labelOf(scene, 's1.gradg0.label').text]).toEqual(['∇f', '∇g'])
   })
@@ -76,11 +80,15 @@ describe('lagrange in three variables', () => {
     expect(labelOf(scene, 's1.p0').text).toBe('max ≈ (1, 2, 2), f ≈ 9, λ ≈ 0.5')
   })
 
-  it('marks it with ∇f and ∇g, both along (1, 2, 2), at 0.15 x 10 = 1.5', () => {
-    for (const object of ['s1.gradf0', 's1.gradg0']) {
+  it('marks it with ∇f (0.15 x 10 = 1.5 long) and ∇g (0.9), both along (1, 2, 2)', () => {
+    for (const [object, length] of [
+      ['s1.gradf0', 1.5],
+      ['s1.gradg0', 0.9],
+    ] as const) {
       const v = Array.from(arrowsOf(scene, object).vectors)
       expectParallel(v, [1, 2, 2], 1e-12)
-      expect(Math.abs(Math.hypot(...v) - 1.5)).toBeLessThanOrEqual(1e-12)
+      expect(v[0]).toBeGreaterThan(0)
+      expect(Math.abs(Math.hypot(...v) - length)).toBeLessThanOrEqual(1e-12)
     }
   })
 })

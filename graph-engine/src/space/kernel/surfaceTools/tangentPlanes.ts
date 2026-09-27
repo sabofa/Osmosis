@@ -12,6 +12,10 @@
 // side 2s (s = 0.2 x the box's largest span) in that plane, clipped to the
 // box. Whether the point is on a level surface of interest is not checked;
 // the readout shows the plane and F at the point. ∇F = 0 is refused.
+//
+// A readout sits at the patch's corner nearest the default camera (the
+// greatest x + y), not at the point, where an author's own label for the
+// point (P = (a, b, f(a, b))) would sit on top of it.
 
 import type { Statement } from '../../../parser/types'
 import type { LabelAnchor, Mark, Vec3 } from '../../scene/types'
@@ -37,6 +41,11 @@ function planeFrame(n: Vec3): [Vec3, Vec3] {
   const e1: Vec3 = [c[0] / len, c[1] / len, c[2] / len]
   const e2: Vec3 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]]
   return [e1, e2]
+}
+
+// The patch corner the readout sits at, or the point when the patch is empty.
+function readoutAnchor(polygon: readonly Vec3[], at: Vec3): Vec3 {
+  return polygon.reduce<Vec3>((best, p) => (p[0] + p[1] > best[0] + best[1] ? p : best), polygon[0] ?? at)
 }
 
 function closed(polygon: readonly Vec3[]): number[] {
@@ -98,7 +107,7 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
         { coef: p, variable: 'x', at: a },
         { coef: q, variable: 'y', at: b },
       ])}`
-      const labels: LabelAnchor[] = [annotation(part(context, 'readout'), at, text)]
+      const labels: LabelAnchor[] = [annotation(part(context, 'readout'), readoutAnchor(polygon, at), text)]
       return { marks, labels, errors: [], colorScale: null }
     }
     return { reads: reads.names, build }
@@ -131,7 +140,7 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
       { coef: g[1], variable: 'y', at: y0 },
       { coef: g[2], variable: 'z', at: z0 },
     ])} = 0`
-    const labels: LabelAnchor[] = [annotation(part(context, 'readout'), at, `${plane}, F${pointText(at)} = ${formatNumber(F(x0, y0, z0))}`)]
+    const labels: LabelAnchor[] = [annotation(part(context, 'readout'), readoutAnchor(polygon, at), `${plane}, F${pointText(at)} = ${formatNumber(F(x0, y0, z0))}`)]
     return { marks, labels, errors: [], colorScale: null }
   }
   return { reads: reads.names, build }

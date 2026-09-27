@@ -5,6 +5,7 @@
 // not know the space forms.
 
 import type { Example } from '../examples'
+import { SURFACE_TOOL_EXAMPLES } from './surfaceToolExamples'
 
 export const SPACE_EXAMPLES: Example[] = [
   {
@@ -47,4 +48,5 @@ vector: (0,0,0) -> (1,2,3)
 vector: (0,0,0) -> (-2,1,1) color: purple
 (1,2,3) -- (-2,1,1)`,
   },
+  ...SURFACE_TOOL_EXAMPLES,
 ]

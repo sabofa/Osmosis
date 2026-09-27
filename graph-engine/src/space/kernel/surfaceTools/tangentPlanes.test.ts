@@ -32,8 +32,11 @@ tangent-plane: f at (1, 2)`)
     expectClose(Array.from(pointsOf(scene, 's2.point').positions), [1, 2, -3])
   })
 
-  it('reads out L with its signs folded in', () => {
-    expect(labelOf(scene, 's2.readout').text).toBe('L(x, y) = −3 + 2(x − 1) − 4(y − 2)')
+  it('reads out L with its signs folded in, at the corner nearest the default camera', () => {
+    const readout = labelOf(scene, 's2.readout')
+    expect(readout.text).toBe('L(x, y) = −3 + 2(x − 1) − 4(y − 2)')
+    // the greatest x + y: (3, 4), where L = -3 + 4 - 8 = -7
+    expectClose([...readout.position], [3, 4, -7])
   })
 
   it('draws no normal unless asked', () => {
