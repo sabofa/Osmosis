@@ -16,7 +16,7 @@ import type { Statement } from '../../parser/types'
 import { roundHalfAway } from '../../math/compile'
 import type { Binding } from '../config'
 import { sceneExtent } from '../scene/extent'
-import type { ColorScale, SceneError, SpaceScene } from '../scene/types'
+import type { ColorScale, Mark, SceneError, SpaceScene } from '../scene/types'
 import type { CreateSpaceKernel, SpaceKernel } from './api'
 import { messageOf } from './common'
 import { CURVE, IMPLICIT_CURVE } from './curves'
@@ -57,9 +57,21 @@ interface StatementRecord {
   prepared: PreparedStatement
   // the bindings it reads
   reads: ReadonlySet<string>
+  // the colour-scale id reserved at setup, which its meshes carry
   scaleId: number | null
   result: BuildResult
-  lastScale: ColorScale | null
+  // Copies made when this statement's scale moved to another index in the
+  // scene (an earlier scale went unreferenced), kept so the copy is reused.
+  moved: Map<object, { index: number; copy: Mark | ColorScale }>
+}
+
+// The same mark or scale at a new colour-scale index, reusing an earlier copy.
+function atIndex<T extends Mark | ColorScale>(record: StatementRecord, original: T, index: number, make: () => T): T {
+  const known = record.moved.get(original)
+  if (known && known.index === index) return known.copy as T
+  const copy = make()
+  record.moved.set(original, { index, copy })
+  return copy
 }
 
 function run(prepared: PreparedStatement, line: number): BuildResult {
@@ -113,26 +125,38 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       reads: new Set([...prepared.reads].filter((name) => bindingNames.has(name))),
       scaleId: context.colorScaleId,
       result,
-      lastScale: result.colorScale,
+      moved: new Map(),
     })
   })
 
+  // colorScales holds only the scales a mark references, in source order,
+  // each at the index its id names. In the ordinary case that index is the id
+  // reserved at setup and every object is reused; when an earlier statement's
+  // scale is unreferenced (its rebuild failed), later scales and their meshes
+  // are copied to their new index.
   const assemble = (): SpaceScene => {
     const colorScales: ColorScale[] = []
+    const indexOf = new Map<number, number>()
     for (const record of records) {
-      if (record.scaleId === null) continue
-      const scale = record.result.colorScale ?? record.lastScale
-      colorScales[record.scaleId] = scale ?? { id: record.scaleId, title: '', map: config.space.colormap, domain: { min: 0, max: 1 }, diverging: false }
+      const scale = record.result.colorScale
+      if (!scale || record.scaleId === null) continue
+      const id = record.scaleId
+      if (!record.result.marks.some((m) => m.kind === 'mesh' && m.style.colorScale === id)) continue
+      const index = colorScales.length
+      indexOf.set(id, index)
+      colorScales.push(index === scale.id ? scale : atIndex(record, scale, index, () => ({ ...scale, id: index })))
     }
-    const marks = records.flatMap((r) => r.result.marks)
+    const marks = records.flatMap((record) =>
+      record.result.marks.map((mark) => {
+        if (mark.kind !== 'mesh' || mark.style.colorScale === null) return mark
+        const index = indexOf.get(mark.style.colorScale)!
+        if (index === mark.style.colorScale) return mark
+        return atIndex(record, mark, index, () => ({ ...mark, style: { ...mark.style, colorScale: index } }))
+      })
+    )
+    const labels = records.flatMap((r) => r.result.labels)
     const errors = [...scopeErrors, ...setupErrors, ...records.flatMap((r) => r.result.errors)].sort((a, b) => a.line - b.line)
-    return {
-      marks,
-      labels: records.flatMap((r) => r.result.labels),
-      colorScales,
-      extent: sceneExtent(marks),
-      errors,
-    }
+    return { marks, labels, colorScales, extent: sceneExtent(marks, labels), errors }
   }
 
   let current = assemble()
@@ -152,7 +176,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       for (const record of records) {
         if (!record.reads.has(name)) continue
         record.result = run(record.prepared, record.line)
-        if (record.result.colorScale) record.lastScale = record.result.colorScale
+        record.moved.clear()
       }
       current = assemble()
       return current

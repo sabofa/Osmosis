@@ -12,7 +12,7 @@ import { niceStep } from '../frame/nice'
 import type { SpaceStyle } from '../grammar/types'
 import type { MeshMark } from '../scene/types'
 import { boundNames, checkBudget, colorScale, constant, parametricColormap, Reads, renameBound, resolution } from './common'
-import { finishMesh, gridIndices } from './mesh'
+import { finishMesh, gridIndices, reversedWinding } from './mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from './registry'
 
 const DEFAULT_RES = 96
@@ -96,7 +96,10 @@ function preparedParametric(statement: Statement, context: BuildContext): Prepar
         uv[2 * k + 1] = vv
       }
     }
-    const mesh = finishMesh({ positions, normals, uv, indices: gridIndices(n) }, false)
+    // The grid winds counter-clockwise in (u, v), which r_u x r_v follows; a
+    // range written high-to-low reverses one axis, and so the winding.
+    const grid = (ub - ua) * (vb - va) < 0 ? reversedWinding(gridIndices(n)) : gridIndices(n)
+    const mesh = finishMesh({ positions, normals, uv, indices: grid }, false)
     if (mesh.indices.length === 0) return { marks: [], labels: [], errors: [], colorScale: null }
 
     const vertices = mesh.positions.length / 3

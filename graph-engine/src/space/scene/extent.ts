@@ -1,10 +1,11 @@
 // The data extent of a scene (the contract's SpaceScene.extent) and the robust
-// z rule (SP5): when the 1st-99th percentile span of the z values is under a
-// fifth of their full span, that percentile span is used instead, so a pole
-// does not stretch the box. The same rule gives a height colour scale its
-// domain.
+// z rule (SP5): when the 1st-99th percentile span of SAMPLED z values is
+// under a fifth of their full span, that percentile span is used instead, so
+// a pole does not stretch the box. Authored geometry (points, segments,
+// arrows, labels) extends the extent exactly: an author put it there. The
+// same rule gives a height colour scale its domain.
 
-import type { Box3, Mark, Range } from './types'
+import type { Box3, LabelAnchor, Mark, Range } from './types'
 
 // Moves the k-th smallest of a[lo..hi] to a[k], with everything before it no
 // larger and everything after it no smaller (quickselect, median-of-three
@@ -80,25 +81,41 @@ class Accumulator {
   xMax = -Infinity
   yMin = Infinity
   yMax = -Infinity
+  // sampled z, for the robust rule
   zs: Float64Array
   count = 0
+  // authored z, exact
+  zMin = Infinity
+  zMax = -Infinity
 
   constructor(capacity: number) {
     this.zs = new Float64Array(capacity)
   }
 
-  add(x: number, y: number, z: number) {
+  add(x: number, y: number, z: number, sampled: boolean) {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return
     if (x < this.xMin) this.xMin = x
     if (x > this.xMax) this.xMax = x
     if (y < this.yMin) this.yMin = y
     if (y > this.yMax) this.yMax = y
-    this.zs[this.count++] = z
+    if (sampled) this.zs[this.count++] = z
+    else {
+      if (z < this.zMin) this.zMin = z
+      if (z > this.zMax) this.zMax = z
+    }
   }
 
-  addAll(p: Float64Array) {
-    for (let i = 0; i + 2 < p.length; i += 3) this.add(p[i], p[i + 1], p[i + 2])
+  addAll(p: Float64Array, sampled: boolean) {
+    for (let i = 0; i + 2 < p.length; i += 3) this.add(p[i], p[i + 1], p[i + 2], sampled)
   }
+}
+
+// Sampled marks are a function's samples, where a pole can live: meshes,
+// curves (a line carrying its parameter) and boxes. Everything else is
+// authored geometry: points, arrows, and lines without a parameter
+// (segments, and curves traced on z = 0).
+function sampled(mark: Mark): boolean {
+  return mark.kind === 'mesh' || mark.kind === 'boxes' || (mark.kind === 'lines' && mark.params !== null)
 }
 
 function vertexCount(mark: Mark): number {
@@ -114,33 +131,41 @@ function vertexCount(mark: Mark): number {
   }
 }
 
-// x and y span every finite vertex; z is robust over all z values. Null when
-// the scene has no finite vertex.
-export function sceneExtent(marks: readonly Mark[]): Box3 | null {
+// x and y span every finite vertex and label. z is the robust range of the
+// sampled marks' z, widened to take in every authored vertex and label
+// exactly. Null when the scene has nothing finite.
+export function sceneExtent(marks: readonly Mark[], labels: readonly LabelAnchor[] = []): Box3 | null {
   let capacity = 0
-  for (const mark of marks) capacity += vertexCount(mark)
+  for (const mark of marks) if (sampled(mark)) capacity += vertexCount(mark)
   const acc = new Accumulator(capacity)
   for (const mark of marks) {
+    const isSampled = sampled(mark)
     switch (mark.kind) {
       case 'mesh':
       case 'lines':
       case 'points':
-        acc.addAll(mark.positions)
+        acc.addAll(mark.positions, isSampled)
         break
       case 'arrows':
         for (let i = 0; i + 2 < mark.tails.length; i += 3) {
           const [x, y, z] = [mark.tails[i], mark.tails[i + 1], mark.tails[i + 2]]
-          acc.add(x, y, z)
-          acc.add(x + mark.vectors[i], y + mark.vectors[i + 1], z + mark.vectors[i + 2])
+          acc.add(x, y, z, false)
+          acc.add(x + mark.vectors[i], y + mark.vectors[i + 1], z + mark.vectors[i + 2], false)
         }
         break
       case 'boxes':
-        acc.addAll(mark.mins)
-        acc.addAll(mark.maxs)
+        acc.addAll(mark.mins, true)
+        acc.addAll(mark.maxs, true)
         break
     }
   }
-  const z = robustRange(acc.zs.subarray(0, acc.count))
+  for (const label of labels) acc.add(label.position[0], label.position[1], label.position[2], false)
+
+  const robust = robustRange(acc.zs.subarray(0, acc.count))
+  const z: Range | null =
+    robust || acc.zMin <= acc.zMax
+      ? { min: Math.min(robust?.min ?? Infinity, acc.zMin), max: Math.max(robust?.max ?? -Infinity, acc.zMax) }
+      : null
   if (!z) return null
   return { x: { min: acc.xMin, max: acc.xMax }, y: { min: acc.yMin, max: acc.yMax }, z }
 }

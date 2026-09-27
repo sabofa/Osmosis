@@ -94,14 +94,17 @@ export function parametricColormap(statement: Statement): ColormapClause {
 }
 
 // A colour scale over `values`. Height is sequential unless the statement
-// says diverging; an expression diverges when its range straddles zero. A
+// says diverging; an expression diverges when its range straddles zero and no
+// sequential map was named ("colormap: x map viridis" stays viridis). A
 // diverging scale is symmetric about zero on the balance map. @bounds3d z, if
 // set, is a height scale's domain. A zero-width domain is widened by 1/2 each
 // way so a flat surface still maps to one colour.
 export function colorScale(clause: ColormapClause, values: Float64Array, config: GraphConfig, id: number): ColorScale {
   const height = clause.by.kind === 'height'
   let domain: Range = (height ? config.space.bounds.z : null) ?? robustRange(values) ?? { min: 0, max: 1 }
-  const diverging = clause.diverging || (!height && domain.min < 0 && domain.max > 0)
+  // An expression diverges on its own only when no sequential map was named.
+  const mapFree = clause.map === null || clause.map === 'balance'
+  const diverging = clause.diverging || (!height && mapFree && domain.min < 0 && domain.max > 0)
   if (diverging) {
     const m = Math.max(Math.abs(domain.min), Math.abs(domain.max))
     domain = { min: -m, max: m }

@@ -532,6 +532,103 @@ describe('a definition named after a built-in is refused (fix round 1, I1)', () 
   })
 })
 
+describe('extent: sampled marks are robust, authored ones exact (fix round 1, R1)', () => {
+  it('a pole does not clip an authored point: A = (0, 0, 100) keeps extent.z.max >= 100', () => {
+    const scene = sceneOf('z = 1/(x^2 + y^2) for x in [-1, 1], y in [-1, 1] res: 96\nA = (0, 0, 100)')
+    expect(scene.extent!.z.max).toBeGreaterThanOrEqual(100)
+    // and the surface's own spike is still cut: its largest sample is 2304
+    expect(scene.extent!.z.max).toBeLessThan(2304)
+  })
+
+  it('so does a point with no label: (0, 0, 100)', () => {
+    // A = (…) is also kept by its label anchor; a bare point only by the mark rule.
+    const scene = sceneOf('z = 1/(x^2 + y^2) for x in [-1, 1], y in [-1, 1] res: 96\n(0, 0, 100)')
+    expect(scene.labels).toEqual([])
+    expect(scene.extent!.z.max).toBeGreaterThanOrEqual(100)
+  })
+
+  it('a segment and an arrow extend it exactly', () => {
+    // the surface's own robust range is about [0.5, 79.4]
+    const scene = sceneOf('z = 1/(x^2 + y^2) for x in [-1, 1], y in [-1, 1]\n(0, 0, 0) -- (0, 0, -50)\n(0, 0, 0) -> (0, 0, 700)')
+    expect(scene.extent!.z.min).toBe(-50)
+    expect(scene.extent!.z.max).toBe(700)
+  })
+})
+
+describe('colour scales are only those a mark references (fix round 1, R4)', () => {
+  // The first surface's inner bounds cross when a > 2 (2 - a x changes sign
+  // at x = 2/a), so setValue('a', 3) makes it fail and draw nothing.
+  const SPEC = '@param a = 1 range [0, 3]\nz = x over x in [0, 1], y in [a*x - 1, 1]\nz = y for x in [0, 1], y in [0, 1]'
+  const referenced = (scene: SpaceScene) => {
+    const meshes = scene.marks.filter((m): m is MeshMark => m.kind === 'mesh')
+    for (const m of meshes) {
+      const i = m.style.colorScale!
+      expect(scene.colorScales[i].id).toBe(i)
+    }
+    return meshes.map((m) => m.style.colorScale)
+  }
+
+  it('a failed rebuild leaves no orphan scale, and the others are renumbered', () => {
+    const kernel = kernelOf(SPEC)
+    expect(referenced(kernel.scene())).toEqual([0, 1])
+    const failed = kernel.setValue('a', 3)
+    expect(failed.errors.map((e) => e.line)).toEqual([2])
+    expect(failed.colorScales).toHaveLength(1)
+    expect(referenced(failed)).toEqual([0])
+    // the remaining scale is the second surface's: height over [0, 1]
+    expect(failed.colorScales[0].domain).toEqual({ min: 0, max: 1 })
+    const back = kernel.setValue('a', 1)
+    expect(back.colorScales).toHaveLength(2)
+    expect(referenced(back)).toEqual([0, 1])
+  })
+})
+
+describe('an explicit sequential map is kept (fix round 1, M1)', () => {
+  it('colormap: x map viridis over x in [-1, 1] stays viridis, not diverging', () => {
+    const scene = sceneOf('z = x for x in [-1, 1], y in [0, 1] colormap: x map viridis')
+    expect(scene.colorScales[0]).toMatchObject({ map: 'viridis', diverging: false, domain: { min: -1, max: 1 } })
+  })
+
+  it('with no map named, a range across zero still diverges', () => {
+    const scene = sceneOf('z = x for x in [-1, 2], y in [0, 1] colormap: x')
+    expect(scene.colorScales[0]).toMatchObject({ map: 'balance', diverging: true, domain: { min: -2, max: 2 } })
+  })
+})
+
+describe('parametric triangles wind with r_u x r_v (fix round 1, M2)', () => {
+  // Every triangle's face normal (b - a) x (c - a) must point the way the
+  // vertex normals do.
+  const agrees = (mesh: MeshMark) => {
+    const p = mesh.positions
+    const n = mesh.normals
+    for (let t = 0; t < mesh.indices.length; t += 3) {
+      const [a, b, c] = [mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]]
+      const e1 = [p[3 * b] - p[3 * a], p[3 * b + 1] - p[3 * a + 1], p[3 * b + 2] - p[3 * a + 2]]
+      const e2 = [p[3 * c] - p[3 * a], p[3 * c + 1] - p[3 * a + 1], p[3 * c + 2] - p[3 * a + 2]]
+      const face = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]
+      const dot = face[0] * n[3 * a] + face[1] * n[3 * a + 1] + face[2] * n[3 * a + 2]
+      if (!(dot > 0)) return false
+    }
+    return true
+  }
+
+  it('for increasing ranges', () => {
+    expect(agrees(only(sceneOf('(u, v, 0) for u in [0, 1], v in [0, 1] res: 4'), 'mesh'))).toBe(true)
+  })
+
+  it('for a reversed range, u in [1, 0]', () => {
+    // r_u x r_v = (1, 0, 0) x (0, 1, 0) = (0, 0, 1) still, but the grid now
+    // runs the other way in u
+    const mesh = only(sceneOf('(u, v, 0) for u in [1, 0], v in [0, 1] res: 4'), 'mesh')
+    expect(vertex(mesh.normals, 0)).toEqual([0, 0, 1])
+    expect(agrees(mesh)).toBe(true)
+  })
+
+  it('for both ranges reversed (orientation restored)', () => {
+    expect(agrees(only(sceneOf('(u, v, 0) for u in [1, 0], v in [1, 0] res: 4'), 'mesh'))).toBe(true)
+  })
+})
+
 describe('determinism', () => {
   it('the same spec gives the same scene, typed arrays included', () => {
     const spec = 'z = sin(x) cos(y) over x^2 + y^2 <= 9\n(cos(t), sin(t), t/4) for t in [0, 6]\nA = (1, 2, 3)'

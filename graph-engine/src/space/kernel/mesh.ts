@@ -29,12 +29,18 @@ export interface FinishedMesh {
 
 // Two triangles per grid cell, (i, j) -> j * (n + 1) + i with i fastest:
 // [a, b, c] and [a, c, d], counter-clockwise in (i, j). Read-only once made,
-// so one array per resolution is shared.
+// so an array is shared per resolution: the few most recently used are kept
+// (a Map iterates in insertion order, so re-inserting on use makes it an LRU).
 const GRIDS = new Map<number, Uint32Array>()
+const GRIDS_KEPT = 4
 
 export function gridIndices(n: number): Uint32Array {
   const cached = GRIDS.get(n)
-  if (cached) return cached
+  if (cached) {
+    GRIDS.delete(n)
+    GRIDS.set(n, cached)
+    return cached
+  }
   const indices = new Uint32Array(6 * n * n)
   let k = 0
   for (let j = 0; j < n; j++) {
@@ -52,7 +58,18 @@ export function gridIndices(n: number): Uint32Array {
     }
   }
   GRIDS.set(n, indices)
+  if (GRIDS.size > GRIDS_KEPT) GRIDS.delete(GRIDS.keys().next().value!)
   return indices
+}
+
+// The same triangles wound the other way (a copy; the grid is shared).
+export function reversedWinding(indices: Uint32Array): Uint32Array {
+  const out = indices.slice()
+  for (let t = 0; t < out.length; t += 3) {
+    out[t + 1] = indices[t + 2]
+    out[t + 2] = indices[t + 1]
+  }
+  return out
 }
 
 export function finishMesh(raw: RawMesh, orientUp: boolean): FinishedMesh {
