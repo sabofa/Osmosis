@@ -208,7 +208,9 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       if (mode === '3d') {
         // Space builds its own scene from the statements (the kernel), keeps
         // the viewer's camera across rebuilds, and returns its errors by line.
-        const errors = (renderer as SpaceRenderer).setSpec(parsed.statements, parsed.config, parsed.statementLines)
+        // The spec text titles its readouts and lets a pin survive a rebuild
+        // whose line for it reads the same (a theme flip, an edit elsewhere).
+        const errors = (renderer as SpaceRenderer).setSpec(parsed.statements, parsed.config, parsed.statementLines, spec)
         if (reportState) {
           setRegression(null)
           onErrorsRef.current?.([...parsed.errors, ...errors])

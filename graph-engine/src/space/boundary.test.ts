@@ -96,6 +96,15 @@ describe('space and math import boundaries', () => {
     }
   })
 
+  it('GraphViewer gives SpaceRenderer.setSpec the spec text it parsed (pins survive rebuilds whose line is unchanged)', () => {
+    // GraphViewer cannot be mounted in this node-only suite, so its call is
+    // read from the source: the fourth argument is the `spec` prop, the same
+    // text the effect (keyed on [spec, theme]) handed to parseSpec.
+    const viewer = readFileSync(join(SRC, 'GraphViewer.tsx'), 'utf8')
+    expect(viewer).toMatch(/\.setSpec\(parsed\.statements, parsed\.config, parsed\.statementLines, spec\)/)
+    expect(viewer).toMatch(/const parsed = parseSpec\(spec\)/)
+  })
+
   it('only space/ui/ and space/SpaceRenderer.ts touch the DOM', () => {
     const touching = SPACE.filter((s) => s.file !== SELF && !s.file.startsWith('space/ui/') && s.file !== 'space/SpaceRenderer.ts')
       .filter((s) => /\b(document|window)\./.test(s.text))
