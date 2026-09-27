@@ -89,9 +89,9 @@ Read `docs/HANDOFF-2026-09-23-graph-engine-v2.md` first: "Worktrees, milestones 
 **N4: shortest paths over round solids, on the lateral surface.**
 Both points must be on the **lateral** surface; otherwise the path is refused ("… on the curved side only"). Everything is closed-form in the unrolled surface:
 - **Cylinder:** unroll with arc position s and height y. The length is `min over k ∈ {−1, 0, 1} of hypot(Δs + k·2πr, Δy)`.
-- **Cone:** unroll to polar form (ρ = distance from the apex along the surface, φ = θ·r/l). The angular separation is α = the wrapped |Δφ|, taken modulo the sector angle and the shorter way round.
-  - If α < π, the length is √(ρ_P² + ρ_Q² − 2ρ_Pρ_Q cos α).
-  - Otherwise the path goes through the apex: ρ_P + ρ_Q.
+- **Cone:** unroll to polar form (ρ = distance from the apex along the surface, φ = θ·r/l). The angular separation is α = the wrapped |Δφ|, taken modulo the sector angle and the shorter way round. The length is √(ρ_P² + ρ_Q² − 2ρ_Pρ_Q cos α).
+  - **There is no through-the-apex case.** The wrapped separation is at most half the sector angle, πr/l, and that is always less than π because r < l.
+  - Do not write a branch for it: it could never be reached, and a test for it could never be honest. State this in a code comment.
 - **Conical frustum:** as for the cone, but the straight segment must stay outside the inner radius (the top rim). If it would cross it, refuse: "the shortest path would run along the top rim — not drawn".
 - **Drawing:** a geodesic on a curved surface is not a conic in projection. So it is drawn **on the unrolling only**, which is always lifted (`unfold` is implied), with P and Q marked on the solid. Say so in the grammar header.
 
@@ -115,7 +115,7 @@ given: shortest P to Q over S    # and find:
 **Files:** create `figure/nets.ts` and `figure/nets.test.ts`. Modify the parser (the `net:` statement, replacing phase 8's refusal), `figure/crossSection.ts` or `render.ts` (N1's multi-lift stacking), `render.ts` (net items through the 2D path, with fold and cut styles), and tests.
 
 - [ ] **Step 1: failing tests:**
-  - **Cube `edge 2`:** the net is the **cross**, 6 squares of side 2. There are **5 fold lines** (dashed) and **14 cut edges** (solid), and the boundary is 14 edges long, a total of 28. Vertex letters: 14 positions for the 8 letters, with A appearing three times. Hand-derive and assert.
+  - **Cube `edge 2`:** the net is the **cross**, 6 squares of side 2. There are **5 fold lines** (dashed) and **14 cut edges** (solid), and the boundary is 14 edges long, a total of 28. Vertex letters: 14 positions for the 8 letters. Hand-derive how many times each letter appears in this template (the counts sum to 14) and assert them.
   - **Box 8×5×6:** each face is at true size, so the strip's width is 2(8+6) = 28 and the caps attach to lateral face 1 (0-based).
   - **Square pyramid (all edges 4):** the base square plus four equilateral triangles of side 4, with 4 fold lines.
   - **Regular tetrahedron edge 6:** a star forming one large equilateral triangle of side 12, with 3 fold lines.
@@ -177,14 +177,14 @@ given: shortest P to Q over S    # and find:
     - The fly starts at P on a generator, 125 from V. It ends at Q on the exactly opposite generator, 375√2 from V.
     - Build P and Q with `divide` along two opposite generators (V to rim points R and R').
     - The shortest path is **625**: the sector is 3π/2, the separation is 3π/4 < π, and √(125² + (375√2)² + 2·125·375√2·(√2/2)) = 625.
-  - **Through the apex:** points on a cone whose unrolled separation is ≥ π take the length ρ_P + ρ_Q. Construct one: a cone whose sector exceeds 2π·(1/2) with the points half a turn apart.
+  - **The largest separation:** on the wide cone R = 4, H = 3 (l = 5), two points half a turn apart around the cone unroll to a separation of exactly πr/l = 4π/5, still less than π. The length is the law-of-cosines value with α = 4π/5. This test pins the wrap to the shorter way round.
   - **Cylinder:** r = 3, h = 10. P is at height 1 and Q at height 9 on the diametrically opposite generator, giving length hypot(3π, 8). Also test a wrap case where k = −1 wins.
   - **Frustum refusal:** a path whose straight segment would cross the top rim is refused with the N4 message.
   - **Refusals:** a point on a cap; a sphere.
   - **Drawing:** the unrolling is lifted, with the straight path drawn on it. P and Q are marked on the solid. No geodesic is drawn in 3D.
 - [ ] **Step 2: implement per N4.**
 - [ ] **Step 3: prove it.**
-  - Remove the through-the-apex branch: that test must go red.
+  - Wrap the separation the long way round: the largest-separation test must go red.
   - Remove the k = ±1 wraps: the wrap test must go red.
 - [ ] **Step 4:** run all three checks, then commit as `feat(graph-engine): shortest paths over cylinders, cones and conical frusta`.
 
