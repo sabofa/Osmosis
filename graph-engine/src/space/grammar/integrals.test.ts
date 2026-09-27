@@ -161,3 +161,70 @@ describe('S5 grammar — riemann:', () => {
     expect(() => form('riemann: under x*y over x in [0, 2], y in [0, 2], n = 2 sample: middle')).toThrow(/sample: mid, lower-left, upper-right, lower-right, upper-left or random/)
   })
 })
+
+describe('S5 grammar — volume: triple-integral regions', () => {
+  const X = { param: 'x', from: p('0'), to: p('1') }
+  const Y = { param: 'y', from: p('0'), to: p('1 - x') }
+  const Z = { param: 'z', from: p('0'), to: p('1 - x - y') }
+
+  it('rectangular, in the written order when it is a chain', () => {
+    expect(form('volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y]')).toEqual({
+      form: 'volume',
+      solid: { kind: 'iterated', coords: 'rectangular', order: [X, Y, Z], integrand: null },
+      style: { opacity: null, colormap: null, mesh: null, res: null, width: null, dashed: false },
+    })
+  })
+
+  it('any written order: the innermost variable is the one whose bounds read the others', () => {
+    expect(form('volume: z in [0, 1 - x - y], y in [0, 1 - x], x in [0, 1]')).toMatchObject({ solid: { order: [X, Y, Z] } })
+    expect(form('volume: y in [0, 1 - x], x in [0, 1], z in [0, 1 - x - y]')).toMatchObject({ solid: { order: [X, Y, Z] } })
+  })
+
+  it('cylindrical and spherical, by suffix', () => {
+    expect(form('volume: r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical')).toMatchObject({
+      solid: { coords: 'cylindrical', order: [{ param: 'r' }, { param: 'theta' }, { param: 'z' }] },
+    })
+    expect(form('volume: rho in [0, 2], phi in [0, pi/4], theta in [0, 2*pi] spherical')).toMatchObject({
+      solid: { coords: 'spherical', order: [{ param: 'rho' }, { param: 'phi' }, { param: 'theta' }] },
+    })
+  })
+
+  it('an integrand, with or without a colon, before or after the suffix', () => {
+    expect(form('volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y] integrand x')).toMatchObject({ solid: { integrand: { text: 'x' } } })
+    expect(form('volume: x in [0, 1], y in [0, 1], z in [0, 1] integrand: x*y opacity: 0.3')).toMatchObject({
+      solid: { integrand: { expr: p('x*y') } },
+      style: { opacity: 0.3 },
+    })
+    expect(form('volume: r in [0, 1], theta in [0, pi], z in [0, 1] integrand r cylindrical')).toMatchObject({
+      solid: { coords: 'cylindrical', integrand: { text: 'r' } },
+    })
+    expect(form('volume: r in [0, 1], theta in [0, pi], z in [0, 1] cylindrical integrand r')).toMatchObject({
+      solid: { coords: 'cylindrical', integrand: { text: 'r' } },
+    })
+  })
+
+  it('refuses bounds that are not a chain, naming the offending bounds', () => {
+    expect(() => form('volume: x in [0, y], y in [0, x], z in [0, 1]')).toThrow(/the bounds of x read y, and the bounds of y read x/)
+    expect(() => form('volume: x in [0, y], y in [0, z], z in [0, x]')).toThrow(/the bounds of x read y, y's read z and z's read x/)
+  })
+
+  it('refuses the wrong variables for the system, with the fix', () => {
+    expect(() => form('volume: r in [0, 1], theta in [0, pi], z in [0, 1]')).toThrow(/add "cylindrical"/)
+    expect(() => form('volume: x in [0, 1], y in [0, 1], z in [0, 1] spherical')).toThrow(/A spherical volume is over rho, phi and theta/)
+    expect(() => form('volume: x in [0, 1], y in [0, 1]')).toThrow(/three ranges/)
+  })
+
+  it('names a volume: V = volume ..., drawn by volume: V', () => {
+    expect(form('V = volume x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y]')).toMatchObject({
+      form: 'namedVolume',
+      name: 'V',
+      solid: { kind: 'iterated', order: [X, Y, Z] },
+    })
+    expect(form('W = volume under f over R')).toMatchObject({ form: 'namedVolume', name: 'W', solid: { kind: 'between' } })
+    expect(form('volume: V')).toMatchObject({ form: 'volume', solid: { kind: 'named', name: 'V' } })
+  })
+
+  it('never claims a point list', () => {
+    expect(parseSpaceKeyword('volume: A-B-C-D')).toBeNull()
+  })
+})

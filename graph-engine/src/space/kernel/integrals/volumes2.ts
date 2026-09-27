@@ -25,9 +25,11 @@ import { finishMesh } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
 import { approxText, COLLAPSED_REL, formOf, part, readoutLabel } from './common'
-import { resolveDomain } from './named'
+import type { VolumeSolid } from '../../grammar/keywords/integrals'
+import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
 import { compileOnRegion, targetExpr, targetName, targetText } from './target'
+import { prepareIterated } from './volumes3'
 
 export const VOLUME_OPACITY = 0.45
 const DEFAULT_RES = 96
@@ -96,10 +98,8 @@ function diagonal(meshes: readonly MeshMark[]): number {
   return hi[0] >= lo[0] ? Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) : 0
 }
 
-function prepareVolume(statement: Statement, context: BuildContext): PreparedStatement {
+function prepareBetween(statement: Statement, context: BuildContext, solid: Extract<VolumeSolid, { kind: 'between' }>, style: SpaceStyle): PreparedStatement {
   const { scope, config } = context
-  const form = formOf(statement, 'volume')
-  const { solid, style } = form
   const { domain, name: regionName } = resolveDomain(context, solid.region)
   const n = resolution(style.res, config, DEFAULT_RES)
   checkBudget(4 * n * n, n)
@@ -160,4 +160,27 @@ function prepareVolume(statement: Statement, context: BuildContext): PreparedSta
   return { reads: reads.names, build }
 }
 
+// "volume: ..." in any form; "volume: V" draws the named volume.
+function prepareVolume(statement: Statement, context: BuildContext): PreparedStatement {
+  const form = formOf(statement, 'volume')
+  const { solid, name } = resolveSolid(context, form.solid)
+  return solid.kind === 'between' ? prepareBetween(statement, context, solid, form.style) : prepareIterated(context, solid, form.style, name)
+}
+
+// "V = volume ...": compiled, so a bad expression is refused on its own line,
+// and nothing drawn.
+function prepareNamedVolume(statement: Statement, context: BuildContext): PreparedStatement {
+  const form = formOf(statement, 'namedVolume')
+  const { solid } = resolveSolid(context, form.solid)
+  const style: SpaceStyle = { opacity: null, colormap: null, mesh: null, res: null, width: null, dashed: false }
+  const prepared = solid.kind === 'between' ? prepareBetween(statement, context, solid, style) : prepareIterated(context, solid, style, form.name)
+  return { reads: prepared.reads, build: () => ({ marks: [], labels: [], errors: [], colorScale: null }) }
+}
+
 export const VOLUME: BuilderEntry = { draws: true, prepare: prepareVolume }
+
+export const NAMED_VOLUME: BuilderEntry = {
+  draws: false,
+  prepare: prepareNamedVolume,
+  binds: (statement) => (statement.kind === 'space' && statement.form.form === 'namedVolume' ? statement.form.name : null),
+}

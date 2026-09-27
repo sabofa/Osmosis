@@ -23,7 +23,7 @@ import { CURVE, IMPLICIT_CURVE } from './curves'
 import { collectNamed } from './integrals/named'
 import { CENTROID, NAMED_REGION, REGION } from './integrals/regions'
 import { RIEMANN } from './integrals/riemann'
-import { VOLUME } from './integrals/volumes2'
+import { NAMED_VOLUME, VOLUME } from './integrals/volumes2'
 import { PARAMETRIC_SURFACE } from './parametric'
 import { ARROW, POINT, SEGMENT } from './primitives'
 import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
@@ -60,6 +60,7 @@ registerBuilder('space:namedRegion', NAMED_REGION)
 registerBuilder('space:centroid', CENTROID)
 registerBuilder('space:volume', VOLUME)
 registerBuilder('space:riemann', RIEMANN)
+registerBuilder('space:namedVolume', NAMED_VOLUME)
 
 interface StatementRecord {
   line: number
