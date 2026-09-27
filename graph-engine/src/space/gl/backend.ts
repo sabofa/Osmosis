@@ -8,12 +8,11 @@
 // context is rebuilt on `webglcontextrestored` by re-uploading them.
 //
 // A frame is drawn by the frame loop (frameLoop.ts): into a multisampled
-// target, the frame, opaque meshes, the hidden-part pass, lines, points and
-// arrows, then translucent meshes by order-independent transparency (or
-// sorted, without float targets), composited or blitted to the canvas. The
-// targets (targets.ts) follow the canvas's size and are rebuilt after a
-// context restore. Box marks (S5) draw in the opaque pass for now; integration Task 4 sends
-// translucent boxes through OIT.
+// target, the frame, opaque meshes and boxes, the hidden-part pass, lines,
+// points and arrows, then translucent meshes and boxes by order-independent
+// transparency (or sorted together, farthest first, without float targets),
+// composited or blitted to the canvas. The targets (targets.ts) follow the
+// canvas's size and are rebuilt after a context restore.
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
@@ -21,7 +20,7 @@ import type { FrameLineRole, FrameModel } from '../frame/types'
 import type { ArrowMark, LineMark, Mark, SpaceScene } from '../scene/types'
 import { resolveSpaceColor, type Rgb, type SpaceColors } from '../theme'
 import { ARROWHEAD_PROGRAM, drawArrowHeads, uploadArrows, type ArrowGpu, type ArrowLook } from './arrowPipeline'
-import { BOX_PROGRAM, drawOpaqueBoxes, drawTranslucentBoxes, uploadBoxes, type BoxGpu } from './boxPipeline'
+import { BOX_PROGRAM, boxDepth, drawBoxesOit, drawOpaqueBoxes, drawTranslucentBoxes, isOpaqueBox, uploadBoxes, type BoxDraw, type BoxGpu } from './boxPipeline'
 import { syncByIdentity, type GpuResource } from './buffers'
 import { createContext, queryCapabilities, watchContext, type GlCapabilities } from './context'
 import {
@@ -48,8 +47,8 @@ import {
   drawTranslucentMeshes,
   isTranslucent,
   mapsUsed,
+  meshDepth,
   MESH_PROGRAM,
-  sortBackToFront,
   uploadMesh,
   type MeshDraw,
   type MeshGpu,
@@ -263,6 +262,7 @@ export class GlBackend {
       const maps = mapsUsed(meshes, scales)
       this.luts.retain(gl, new Set([...maps].map((m) => lutKey(m, colors))))
       const meshDraw: MeshDraw = { camera, world, colors, look, pixelRatio, scales, lut: (map) => this.luts.get(gl, map, colors) }
+      const boxDraw: BoxDraw = { camera, world, colors, look }
 
       // Lines, arrowheads and points in two passes: their opaque cores
       // write depth, then their antialiased fringes blend without writing it.
@@ -281,9 +281,11 @@ export class GlBackend {
       }
       const frameGpu = this.frameGpu
       const translucent = meshes.filter(isTranslucent)
-      // The OIT target, made only once a translucent mesh needs it.
+      const translucentBoxes = boxes.filter((b) => !isOpaqueBox(b))
+      const hasTranslucent = translucent.length > 0 || translucentBoxes.length > 0
+      // The OIT target, made only once a translucent mesh or box needs it.
       const targets = this.targets
-      if (translucent.length > 0 && targets && !targets.oit && !this.oitFailed && this.caps?.colorBufferFloat) {
+      if (hasTranslucent && targets && !targets.oit && !this.oitFailed && this.caps?.colorBufferFloat) {
         this.oitFailed = !attachOit(gl, targets)
       }
       const hiddenLines = lines.filter((l) => l.look.hidden)
@@ -300,7 +302,7 @@ export class GlBackend {
       for (const l of overlayLines) updateDashes(gl, l, camera, key, world)
 
       const passes: FramePasses = {
-        hasTranslucent: translucent.length > 0,
+        hasTranslucent,
         overlay: () => {
           if (this.overlay.size === 0) return
           const at = { ...target, depthBias: 0, look: frameLook(look) }
@@ -315,7 +317,7 @@ export class GlBackend {
         },
         opaque: () => {
           drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw)
-          drawOpaqueBoxes(gl, box, boxes, camera, world, colors)
+          drawOpaqueBoxes(gl, box, boxes, boxDraw)
         },
         // Where a surface hides them: both antialiasing passes blend (the loop
         // has turned depth writes off), dashed, faint.
@@ -326,15 +328,20 @@ export class GlBackend {
             drawArrowHeads(gl, head, hiddenArrows, target, pass, HIDDEN_OPACITY)
           }
         },
-        marks: () => {
-          antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target)
-          // Interim (merge of S5): translucent boxes blend here, sorted, without
-          // writing depth; integration Task 4 sends them through OIT.
-          drawTranslucentBoxes(gl, box, boxes, camera, world, colors, key)
-        },
+        marks: () => antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target),
         translucent: (oit) => {
-          if (oit) drawMeshesOit(gl, mesh, translucent, meshDraw)
-          else drawTranslucentMeshes(gl, mesh, sortBackToFront(translucent, camera), meshDraw)
+          if (oit) {
+            drawMeshesOit(gl, mesh, translucent, meshDraw)
+            drawBoxesOit(gl, box, translucentBoxes, boxDraw)
+            return
+          }
+          // The sorted fallback: meshes and box marks in one order, farthest
+          // first (a stable sort keeps a mesh before a box at equal depth).
+          const layers = [
+            ...translucent.map((m) => ({ depth: meshDepth(m, camera), draw: () => drawTranslucentMeshes(gl, mesh, [m], meshDraw) })),
+            ...translucentBoxes.map((b) => ({ depth: boxDepth(b, camera), draw: () => drawTranslucentBoxes(gl, box, [b], boxDraw, key) })),
+          ].sort((a, b) => a.depth - b.depth)
+          for (const layer of layers) layer.draw()
         },
       }
       runFrameLoop(gl, { targets: this.targets, composite, background: colors.background, width, height }, passes)

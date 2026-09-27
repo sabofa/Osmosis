@@ -3,10 +3,12 @@
 // the default framebuffer: the resolved opaque colour, with the average
 // translucent colour laid over it by 1 - revealage.
 //
-// The accumulation itself is the mesh shader with u_oit set (shaders/mesh.ts):
-// it writes (premultiplied colour x w, alpha) to target 0 and alpha x w to
-// target 1, with w = alpha * clamp(0.03 / (1e-5 + (z / 200)^4), 1e-2, 3e3)
-// and z the view depth. targets.ts explains the single-blend-state layout.
+// The accumulation itself is the mesh or box shader with u_oit set
+// (shaders/mesh.ts, shaders/box.ts): it writes (premultiplied colour x w,
+// alpha) to target 0 and alpha x w to target 1, with w = oitWeight(alpha, z)
+// below and z the view depth. Both take the weight from here, so a box and a
+// surface accumulate on one scale. targets.ts explains the single-blend-state
+// layout.
 
 export const COMPOSITE_VERTEX = /* glsl */ `#version 300 es
 // space: composite
@@ -31,5 +33,13 @@ void main() {
   float coverage = 1.0 - accum.a;
   vec3 average = accum.rgb / clamp(weight, 1e-5, 5e4);
   fragColor = vec4(mix(opaque, average, coverage), 1.0);
+}
+`
+
+// McGuire and Bavoil's weight: alpha * clamp(0.03 / (1e-5 + (z / 200)^4),
+// 1e-2, 3e3), z the view depth (positive in front of the eye).
+export const OIT_WEIGHT_GLSL = /* glsl */ `
+float oitWeight(float a, float z) {
+  return a * clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
 }
 `

@@ -8,10 +8,14 @@
 //   centre.
 // - Boxes are closed and convex, so back faces are culled: opaque, they are
 //   never seen; translucent, one layer of faces reads as one tinted volume.
-// - Translucent boxes (opacity < 1) blend without writing depth, marks
-//   farthest first and each mark's instances re-sorted back to front when
-//   the camera moves. This is the sorted fallback; S3's order-independent
-//   transparency makes the order irrelevant where it is available.
+// - In S3's frame loop (integration J4): opaque boxes draw in the opaque
+//   pass, under the meshes' polygon offset (drawOpaqueBoxes); translucent
+//   boxes (opacity < 1) accumulate by order-independent transparency, in any
+//   order (drawBoxesOit). Without EXT_color_buffer_float they blend without
+//   writing depth, each mark's instances re-sorted back to front when the
+//   camera moves, in one farthest-first order with the translucent meshes
+//   (drawTranslucentBoxes; boxDepth). Every fragment is clipped to the axis
+//   box and depth-cued, as a mesh's is (look.ts).
 // - Edges (style.edges) are each box's 12 edges, generated on the CPU into
 //   one polyline batch and drawn by the line pipeline, 1 px, in the box's
 //   colour.
@@ -21,6 +25,7 @@ import type { WorldMap } from '../camera/world'
 import type { BoxMark } from '../scene/types'
 import { resolveSpaceColor, type SpaceColors } from '../theme'
 import { createBuffer, float32, floatAttribute, type GpuResource } from './buffers'
+import { applyLook, type MarkLook } from './look'
 import { uploadLines, type LineGpu, type SharedQuads } from './linePipeline'
 import type { ProgramInfo } from './program'
 import { BOX_FRAGMENT, BOX_VERTEX } from './shaders/box'
@@ -161,13 +166,24 @@ export function uploadBoxes(gl: WebGL2RenderingContext, shared: SharedQuads, mar
   }
 }
 
+// Everything a box draw needs beyond the boxes.
+export interface BoxDraw {
+  camera: CameraMatrices
+  world: WorldMap
+  colors: SpaceColors
+  // Box clipping and the depth cue, as the marks take them.
+  look: MarkLook
+}
+
 // View-space depth (more negative is farther).
 function viewDepth(camera: CameraMatrices, x: number, y: number, z: number): number {
   const m = camera.view
   return m[2] * x + m[6] * y + m[10] * z + m[14]
 }
 
-function meanDepth(box: BoxGpu, camera: CameraMatrices): number {
+// A mark's depth for the sorted fallback: its boxes' mean view depth (more
+// negative is farther), on the scale meshPipeline's meshDepth uses.
+export function boxDepth(box: BoxGpu, camera: CameraMatrices): number {
   let sum = 0
   for (let i = 0; i < box.count; i++) sum += viewDepth(camera, box.centres[3 * i], box.centres[3 * i + 1], box.centres[3 * i + 2])
   return sum / box.count
@@ -199,12 +215,15 @@ export function isOpaqueBox(box: BoxGpu): boolean {
   return box.mark.style.opacity >= 1
 }
 
-function bindBoxProgram(gl: WebGL2RenderingContext, program: ProgramInfo, camera: CameraMatrices, world: WorldMap): void {
+function bindBoxProgram(gl: WebGL2RenderingContext, program: ProgramInfo, draw: BoxDraw, oit: boolean): void {
+  const { camera, world } = draw
   gl.useProgram(program.program)
   gl.uniformMatrix4fv(program.uniform('u_view'), false, float32(camera.view))
   gl.uniformMatrix4fv(program.uniform('u_proj'), false, float32(camera.proj))
   gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
   gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+  gl.uniform1i(program.uniform('u_oit'), oit ? 1 : 0)
+  applyLook(gl, program, draw.look)
   gl.enable(gl.CULL_FACE)
   gl.cullFace(gl.BACK)
 }
@@ -219,57 +238,49 @@ function restore(gl: WebGL2RenderingContext): void {
 }
 
 // The opaque box marks (opacity 1) among `boxes`, writing depth: for the
-// frame loop's opaque pass.
-export function drawOpaqueBoxes(gl: WebGL2RenderingContext, program: ProgramInfo, boxes: readonly BoxGpu[], camera: CameraMatrices, world: WorldMap, colors: SpaceColors): void {
+// frame loop's opaque pass, whose polygon offset they take as meshes do.
+export function drawOpaqueBoxes(gl: WebGL2RenderingContext, program: ProgramInfo, boxes: readonly BoxGpu[], draw: BoxDraw): void {
   const opaque = boxes.filter(isOpaqueBox)
   if (opaque.length === 0) return
-  bindBoxProgram(gl, program, camera, world)
+  bindBoxProgram(gl, program, draw, false)
   gl.disable(gl.BLEND)
   gl.depthMask(true)
-  for (const box of opaque) drawOne(gl, program, box, colors)
+  for (const box of opaque) drawOne(gl, program, box, draw.colors)
   restore(gl)
 }
 
-// The translucent box marks among `boxes`, blended without writing depth,
-// marks farthest first and each mark's instances re-sorted when the camera
-// (`key`, linePipeline's cameraKey) moves: for the frame loop's translucent
-// pass. Under order-independent transparency the sort is moot.
-export function drawTranslucentBoxes(
-  gl: WebGL2RenderingContext,
-  program: ProgramInfo,
-  boxes: readonly BoxGpu[],
-  camera: CameraMatrices,
-  world: WorldMap,
-  colors: SpaceColors,
-  key: string,
-): void {
+// The translucent box marks among `boxes`, accumulating for
+// order-independent transparency, in any order: the frame loop has bound the
+// OIT target and its blend state (frameLoop.ts) and turned depth writes off,
+// and leaves them so; the shader writes the weighted pair (u_oit).
+export function drawBoxesOit(gl: WebGL2RenderingContext, program: ProgramInfo, boxes: readonly BoxGpu[], draw: BoxDraw): void {
+  const translucent = boxes.filter((box) => !isOpaqueBox(box))
+  if (translucent.length === 0) return
+  bindBoxProgram(gl, program, draw, true)
+  for (const box of translucent) drawOne(gl, program, box, draw.colors)
+  gl.uniform1i(program.uniform('u_oit'), 0)
+  gl.disable(gl.CULL_FACE)
+  gl.bindVertexArray(null)
+}
+
+// The sorted fallback, without EXT_color_buffer_float: the translucent box
+// marks among `boxes`, blended without writing depth, marks farthest first
+// and each mark's instances re-sorted when the camera (`key`, linePipeline's
+// cameraKey) moves. The backend interleaves the marks with the translucent
+// meshes by boxDepth, one mark per call.
+export function drawTranslucentBoxes(gl: WebGL2RenderingContext, program: ProgramInfo, boxes: readonly BoxGpu[], draw: BoxDraw, key: string): void {
   const translucent = boxes
     .filter((box) => !isOpaqueBox(box))
-    .map((box) => ({ box, depth: meanDepth(box, camera) }))
+    .map((box) => ({ box, depth: boxDepth(box, draw.camera) }))
     .sort((a, b) => a.depth - b.depth)
   if (translucent.length === 0) return
-  bindBoxProgram(gl, program, camera, world)
+  bindBoxProgram(gl, program, draw, false)
   gl.enable(gl.BLEND)
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
   gl.depthMask(false)
   for (const { box } of translucent) {
-    sortInstances(gl, box, camera, key)
-    drawOne(gl, program, box, colors)
+    sortInstances(gl, box, draw.camera, key)
+    drawOne(gl, program, box, draw.colors)
   }
   restore(gl)
-}
-
-// Both, opaque first: the single call today's backend makes. At the merge
-// with S3's frame loop each half moves to its own pass.
-export function drawBoxes(
-  gl: WebGL2RenderingContext,
-  program: ProgramInfo,
-  boxes: readonly BoxGpu[],
-  camera: CameraMatrices,
-  world: WorldMap,
-  colors: SpaceColors,
-  key: string,
-): void {
-  drawOpaqueBoxes(gl, program, boxes, camera, world, colors)
-  drawTranslucentBoxes(gl, program, boxes, camera, world, colors, key)
 }

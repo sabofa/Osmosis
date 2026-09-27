@@ -122,10 +122,16 @@ function viewDepth(camera: CameraMatrices, p: Vec3): number {
   return m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]
 }
 
+// A mesh's depth for the sorted fallback: its centroid's view depth (more
+// negative is farther), on the scale boxPipeline's boxDepth uses.
+export function meshDepth(mesh: MeshGpu, camera: CameraMatrices): number {
+  return viewDepth(camera, mesh.centroid)
+}
+
 // Farthest first.
 export function sortBackToFront(meshes: MeshGpu[], camera: CameraMatrices): MeshGpu[] {
   return meshes
-    .map((mesh) => ({ mesh, depth: viewDepth(camera, mesh.centroid) }))
+    .map((mesh) => ({ mesh, depth: meshDepth(mesh, camera) }))
     .sort((a, b) => a.depth - b.depth)
     .map((e) => e.mesh)
 }

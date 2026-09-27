@@ -30,6 +30,7 @@
 
 import { NORMALISE_GLSL_FUNCTION } from '../../colormaps'
 import { LOOK_FRAGMENT_GLSL, LOOK_VERTEX_GLSL } from '../look'
+import { OIT_WEIGHT_GLSL } from './oit'
 
 export const MESH_VERTEX = /* glsl */ `#version 300 es
 // space: mesh
@@ -85,6 +86,7 @@ uniform float u_pixelRatio;
 uniform bool u_oit;
 ${LOOK_FRAGMENT_GLSL}
 ${NORMALISE_GLSL_FUNCTION}
+${OIT_WEIGHT_GLSL}
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragWeight;
 
@@ -149,10 +151,9 @@ void main() {
 
   color = depthCue(color, v_depth);
   if (u_oit) {
-    // McGuire and Bavoil's weight, z the view depth.
+    // McGuire and Bavoil's weight (shaders/oit.ts), z the view depth.
     float a = u_opacity;
-    float z = max(-v_viewPos.z, 0.0);
-    float w = a * clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
+    float w = oitWeight(a, max(-v_viewPos.z, 0.0));
     fragColor = vec4(color * a * w, a);
     fragWeight = vec4(a * w, 0.0, 0.0, 0.0);
   } else {
