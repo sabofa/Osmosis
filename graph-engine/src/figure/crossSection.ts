@@ -547,12 +547,21 @@ export function pieceStart2(piece: TrueShapePiece): Vec2 {
 // so it stays deterministic: the section's bounding box is placed with its
 // left edge one quarter of the solid's own width clear of the solid's right
 // edge, and its vertical centre level with the solid's.
+//
+// **Several lifts stack (phase 11, N1).** Sections, nets and path unfoldings
+// are all lifted, left to right in statement order, each clear of the one
+// before: `rightEdge` is the running right edge of everything lifted so far,
+// and the gap is taken from the larger of it and the solid's own right edge.
+// With no earlier lift it is absent, and the arithmetic is exactly phase 5's
+// (the max of a number with itself), so a single lift keeps its bytes.
 export const SECTION_GAP_FRACTION = 0.25
 
-export function liftOffset(solid: { minX: number; minY: number; maxX: number; maxY: number }, shape: { minX: number; minY: number; maxX: number; maxY: number }): Vec2 {
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+
+export function liftOffset(solid: Bounds, shape: Bounds, rightEdge: number | null = null): Vec2 {
   const gap = (solid.maxX - solid.minX) * SECTION_GAP_FRACTION
   return {
-    x: solid.maxX + gap - shape.minX,
+    x: Math.max(solid.maxX, rightEdge ?? solid.maxX) + gap - shape.minX,
     y: (solid.minY + solid.maxY) / 2 - (shape.minY + shape.maxY) / 2,
   }
 }

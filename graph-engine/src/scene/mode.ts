@@ -87,11 +87,13 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   'planeDef',
   // A dihedral angle's mark (phase 10) exists only among points in space.
   'dihedral',
+  // A net (phase 11) is a solid unfolded flat: a plane figure of a solid.
+  'net',
 ])
 
 // The statements that exist only in a solid figure. Either one settles the
 // renderer on its own (S5).
-const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef', 'dihedral'])
+const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef', 'dihedral', 'net'])
 
 // Which renderer a spec gets.
 //

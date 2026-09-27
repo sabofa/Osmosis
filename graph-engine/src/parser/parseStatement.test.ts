@@ -1093,8 +1093,10 @@ describe('what phase 8 does not draw (Q7)', () => {
     }
   })
 
-  it('refuses a net', () => {
-    expect(() => parseStatement('net: S')).toThrow('Nets of solids are not drawn yet (build step 11)')
+  // Rewritten in phase 11 (sanctioned): "net: S" was refused here until
+  // build step 11 made it the net statement (N1). It now reads the solid.
+  it('reads a net (phase 11: no longer refused)', () => {
+    expect(parseStatement('net: S')).toEqual({ kind: 'net', solid: 'S', color: null, statementName: null })
   })
 })
 
@@ -1111,11 +1113,13 @@ describe('the Q7 refusals never catch an assignment (fix round 1)', () => {
     }
   })
 
-  it('still refuses a plane or a net written as a statement', () => {
+  // Rewritten in phase 11 (sanctioned): "net: S" is the net statement now,
+  // and a bare "net S" is still refused, pointing at the colon.
+  it('still refuses a plane written as a statement, and a net with no colon', () => {
     expect(() => parseStatement('plane: A-B-C')).toThrow(/A plane is not drawn on its own/)
     expect(() => parseStatement('plane A-B-C')).toThrow(/A plane is not drawn on its own/)
-    expect(() => parseStatement('net: S')).toThrow(/Nets of solids are not drawn yet/)
-    expect(() => parseStatement('net S')).toThrow(/Nets of solids are not drawn yet/)
+    expect(parseStatement('net: S')).toMatchObject({ kind: 'net', solid: 'S' })
+    expect(() => parseStatement('net S')).toThrow('A net is written with a colon — "net: S"')
   })
 })
 
@@ -1134,6 +1138,10 @@ describe('the Q7 refusals never catch a line the base grammar read (fix round 2)
     ["plane (t) = t + 1", {"kind": "implicit", "left": {"kind": "call", "name": "plane", "args": [{"kind": "var", "name": "t"}]}, "right": {"kind": "binary", "op": "+", "left": {"kind": "var", "name": "t"}, "right": {"kind": "num", "value": 1}}, "color": null, "statementName": null}],
     ["plane x = 1", {"kind": "implicit", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "plane"}, "right": {"kind": "var", "name": "x"}}, "right": {"kind": "num", "value": 1}, "color": null, "statementName": null}],
     ["net x > y", {"kind": "region", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "net"}, "right": {"kind": "var", "name": "x"}}, "op": ">", "right": {"kind": "var", "name": "y"}, "color": null, "statementName": null}],
+    // Phase 11 — the net and shortest-path keywords take only "net:" and
+    // "shortest:"; these read exactly as the base commit d2b91e8 read them.
+    ["net(x) = x^2", {"kind": "functionDef", "name": "net", "param": "x", "body": {"kind": "binary", "op": "^", "left": {"kind": "var", "name": "x"}, "right": {"kind": "num", "value": 2}}, "color": null, "statementName": null}],
+    ["net = 5", {"kind": "constantDef", "name": "net", "value": {"kind": "num", "value": 5}, "color": null, "statementName": null}],
   ]
   for (const [line, statement] of BASE) {
     it(`parses "${line}" exactly as the base commit did`, () => {

@@ -975,6 +975,13 @@ function parseCrossSection(text: string, lift: boolean): StatementShape {
   }
 }
 
+// "net: S" (phase 11, N1): one solid, by name.
+function parseNet(text: string): StatementShape {
+  const rest = text.trim()
+  if (!/^[a-zA-Z]+$/.test(rest)) throw new Error(`Expected "net: <solid>" — the name of a solid defined earlier — got "${rest}"`)
+  return { kind: 'net', solid: rest }
+}
+
 // The body of a solid statement: the primitive, plus an optional trailing
 // "vertices ABCD" clause naming the projected vertices. `name` comes from the
 // bound form ("S = solid ...") and is null for the drawn-only "solid: ..." one.
@@ -1247,8 +1254,9 @@ function parseStatementCore(rawLine: string): StatementShape {
   if (line.startsWith('solid:')) return parseSolidBody(line.slice('solid:'.length), null)
 
   // Q7 (phase 8) — what an author might ask for that is not drawn: a plane on
-  // its own (a plane is drawn only through the section it cuts), and a net
-  // (build step 11). Refused in words, rather than as an unrecognised line.
+  // its own (a plane is drawn only through the section it cuts), and — until
+  // phase 11 made "net:" a statement — a net. Refused in words, rather than
+  // as an unrecognised line.
   // They catch ONLY those shapes (fix rounds 1 and 2): "plane:" / "net:", or
   // "plane <operand>" / "net <solid>" — the keyword, a space, a letter — on a
   // line with no relation in it (no "=", "<" or ">"). Every such line was an
@@ -1261,7 +1269,12 @@ function parseStatementCore(rawLine: string): StatementShape {
       'A plane is not drawn on its own — it is drawn through the section it cuts ("cut: S by plane A-B-C"), and named with "p = plane A-B-C"'
     )
   }
-  if (/^net(:|\s+[a-zA-Z][^=<>]*$)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
+  // Phase 11 (N1) — "net: S" is the statement now. A bare "net S" with no
+  // relation in it (refused since phase 8) stays refused, pointing at the
+  // colon; every other line starting with the word ("net = 5", "net(x) =
+  // x^2", "net + x = y") falls through exactly as it always did.
+  if (line.startsWith('net:')) return parseNet(line.slice('net:'.length))
+  if (/^net\s+[a-zA-Z][^=<>]*$/.test(line)) throw new Error(`A net is written with a colon — "net: ${line.slice('net'.length).trim()}"`)
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit

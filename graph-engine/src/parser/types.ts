@@ -830,6 +830,11 @@ export type StatementShape =
   // is drawn only through the section it cuts. Later lines use it as
   // "plane p".
   | { kind: 'planeDef'; name: string; plane: PlaneForm }
+  // "net: S" (phase 11, N1) — the solid S unfolded flat by its primitive's
+  // template, at true size, lifted beside the drawing like a section: fold
+  // lines dashed, cut edges solid. Its vertex letters are display labels,
+  // repeated at every copy, and never named points.
+  | { kind: 'net'; solid: string }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the
   // canonical a/b/c slots, since the parser knows the vertex names and can

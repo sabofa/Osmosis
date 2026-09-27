@@ -69,6 +69,7 @@ import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type Secti
 import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
 import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden, projectArc, rightAngleCorners, type SpaceArc } from './spaceMarks'
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
+import { netOf, type Net, type NetPiece } from './nets'
 import {
   fmt,
   svgArc,
@@ -241,6 +242,15 @@ type FigureItem =
   // of givens IS, and columns that share an edge are what makes a long list
   // scannable (G4).
   | { kind: 'given'; id: Identity; section: GivensSection; cells: NotationRun[][]; color: string | null }
+  // Phase 11 (N1) — a lifted net, or a lifted unfolding of a shortest path:
+  // plane geometry at true size, already moved beside the drawing. Each line
+  // is a fold (dashed) or a cut (solid); `faces` are the flat faces, kept so
+  // labels stay out of them as they stay out of a lifted polygon.
+  | { kind: 'net'; id: Identity; lines: { edge: ProjectedEdge; fold: boolean }[]; faces: Vec2[][]; color: string | null }
+  // A net's vertex letter (N1): a DISPLAY label, repeated at every copy of
+  // the vertex, never a named point — the same letter can sit at three places
+  // in one net. `copy` keeps each one's layout identity unique.
+  | { kind: 'netLabel'; id: Identity; copy: number; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
 
 export interface FigureResult {
   svg: string
@@ -712,6 +722,11 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   // The walk has already built every solid; this map is filled as the loop
   // passes each one, which keeps "cut: S" before "S = solid ..." an error.
   const solids = new Map<string, SolidBody>()
+  // N1 — the right edge of everything lifted so far (sections, nets, path
+  // unfoldings), so each lift sits clear of the one before, in statement
+  // order. Null until the first lift, which then sits exactly where phase 5
+  // put a section.
+  let liftRight: number | null = null
 
   // A circle has to be *named* to be talked about: "circle: (0,0), 3" draws
   // one and binds nothing, so an arc or a central angle needs the
@@ -893,6 +908,27 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     }
   }
 
+  // N1 — a flat net (or a path's unfolding) lifted beside its solid, stacked
+  // after every earlier lift, with its letters as display labels. Returns the
+  // move that placed it, for anything drawn on it.
+  function liftNet(index: number, object: string, body: SolidBody, net: Net, names: readonly (string | undefined)[], color: string | null): (p: Vec2) => Vec2 {
+    const flat = net.lines.flatMap((line) => netEdges(line.piece, line.object))
+    const solidBounds = boundsOf(solidOutline(body, camera).flatMap(edgeExtremes))
+    const shapeBounds = boundsOf(flat.flatMap(edgeExtremes))
+    const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight) : { x: 0, y: 0 }
+    if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
+    const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
+    const lines = net.lines.flatMap((line) => netEdges(movePiece(line.piece, move), line.object).map((edge) => ({ edge, fold: line.fold })))
+    items.push({ kind: 'net', id: { statement: index, object }, lines, faces: net.faces.map((f) => f.corners.map(move)), color })
+    net.letters.forEach((letter, copy) => {
+      const label = names[letter.vertex]
+      if (!label) return
+      const at = move(letter.at)
+      items.push({ kind: 'netLabel', id: { statement: index, object: label }, copy, at, label, prefer: awayFrom(at, move(letter.toward)), color })
+    })
+    return move
+  }
+
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
     return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
@@ -1063,8 +1099,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
                     { x: shape.center.x + shape.radius, y: shape.center.y + shape.radius },
                   ]
           )
-          const offset = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds) : { x: 0, y: 0 }
+          const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight) : { x: 0, y: 0 }
           const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
+          if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
 
           if (shape.kind === 'region') {
             items.push({ kind: 'region', id: { statement: index, object: statement.solid }, edges: liftedRegion(shape.boundary, move), color: statement.color })
@@ -1104,6 +1141,15 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             }
             nameLiftedVertices(index, statement.vertices, vertices, statement.color)
           }
+          break
+        }
+        case 'net': {
+          // N1 — the solid unfolded by its template, lifted beside it like a
+          // section, at true size. Refusals (a sphere, a hull, an overlap)
+          // come back in the author's names.
+          const body = resolveSolid(statement.solid)
+          const names = scope.vertexNames.get(body) ?? []
+          liftNet(index, statement.solid, body, netOf(body, statement.solid, names), names, statement.color)
           break
         }
         case 'construction': {
@@ -1452,6 +1498,19 @@ function liftedRegion(boundary: readonly TrueShapePiece[], move: (p: Vec2) => Ve
   })
 }
 
+// N1 — a net's flat piece as drawn edges: a segment as it is, an arc of a
+// circle through the one ellipse closed form (a circle is the ellipse with
+// equal conjugate semi-diameters), a whole turn as two halves.
+function netEdges(piece: NetPiece, object: string): ProjectedEdge[] {
+  if (piece.kind === 'segment') return [{ kind: 'segment', a: piece.a, b: piece.b, hidden: false, vertices: [0, 0], object }]
+  const circle = ellipseFromConjugates(piece.center, { x: piece.radius, y: 0 }, { x: 0, y: piece.radius })
+  return splitTurn(piece.from, piece.to).map(([from, to]) => arcEdge(circle, from, to, object))
+}
+
+function movePiece(piece: NetPiece, move: (p: Vec2) => Vec2): NetPiece {
+  return piece.kind === 'segment' ? { kind: 'segment', a: move(piece.a), b: move(piece.b) } : { ...piece, center: move(piece.center) }
+}
+
 // Q6 — a cut's outline through the camera, each piece keeping whether the
 // solid hides it.
 //
@@ -1571,6 +1630,12 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
         break
       case 'tickMark':
         points.push(item.from, item.to)
+        break
+      case 'net':
+        for (const line of item.lines) points.push(...edgeExtremes(line.edge))
+        break
+      case 'netLabel':
+        points.push(item.at)
         break
       case 'given':
         // The box is placed against the finished drawing, so it must not be
@@ -1885,6 +1950,14 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // A LIFTED region keeps labels out of its interior, as a lifted
       // polygon does (fix round 1): the convex polygon of its exact extremes.
       if (item.kind === 'region') obstacles.polygons.push(regionInterior(edges).map((point) => projection.toView(point)))
+    } else if (item.kind === 'net') {
+      // As a lifted polygon: its lines are strokes, its faces are shapes a
+      // letter should stay out of.
+      for (const { edge } of item.lines) {
+        const points = edgeExtremes(edge).map((point) => projection.toView(point))
+        for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
+      }
+      for (const face of item.faces) obstacles.polygons.push(face.map((v) => projection.toView(v)))
     } else if (item.kind === 'sectionFace' && item.outline.kind === 'polygon') {
       const vertices = item.outline.vertices.map((v) => projection.toView(v))
       for (let i = 0; i < vertices.length; i++) obstacles.segments.push([vertices[i], vertices[(i + 1) % vertices.length]])
@@ -1926,6 +1999,12 @@ function labelAnchors(
         fontSize: LABEL_FONT_SIZE,
         prefer: item.prefer,
       })
+      sources.set(id, { id: item.id, notation: null, color: item.color })
+    } else if (item.kind === 'netLabel') {
+      // One letter at several copies in one statement: the copy keeps the id
+      // unique, and the statement stays after the last "#".
+      const id = `${item.label}.${item.copy}#${item.id.statement}`
+      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize: LABEL_FONT_SIZE, prefer: item.prefer })
       sources.set(id, { id: item.id, notation: null, color: item.color })
     } else if (item.kind === 'solidVertex') {
       const id = `${item.label}#${item.id.statement}`
@@ -2076,8 +2155,26 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       break
     }
     case 'solidVertex':
+    case 'netLabel':
       // Emitted with the other labels, after the layout has placed them.
       break
+    case 'net': {
+      // N1 — a fold is dashed and drawn beneath; a cut edge is solid.
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      for (const { edge, fold } of item.lines) {
+        layers[fold ? 'auxiliary' : 'primary'].push(
+          drawEdge(edge, projection.toView, projection.scale, {
+            stroke,
+            'stroke-width': fold ? STROKE_AUXILIARY : STROKE_PRIMARY,
+            'stroke-linecap': 'round',
+            'stroke-dasharray': fold ? AUXILIARY_DASH : null,
+            'data-statement': item.id.statement,
+            'data-object': edgeObject(edge),
+          })
+        )
+      }
+      break
+    }
     case 'sectionFace': {
       const stroke = strokeColor(item.color, palette.axis, palette)
       // The fill is unstroked: its outline is drawn below, piece by piece,

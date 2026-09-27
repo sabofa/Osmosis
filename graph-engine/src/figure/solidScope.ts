@@ -90,6 +90,9 @@ export interface SolidFigureScope {
   // form itself and resolved in source order like a cut's. The renderer
   // reports a plane that failed, where it reports the measure.
   measurePlanes: Map<PlaneForm, { plane: Plane3 } | { error: string }>
+  // The author's letter for each vertex of a polyhedron, by vertex index,
+  // where the figure named it (phase 11: a net's letters, a path's messages).
+  vertexNames: Map<SolidBody, (string | undefined)[]>
   errors: SceneError[]
 }
 
@@ -1220,7 +1223,7 @@ export function buildSolidFigure(
     }
   }
 
-  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, measurePlanes, errors }
+  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, measurePlanes, vertexNames, errors }
 }
 
 function planeAsPoint(name: string): Error {
