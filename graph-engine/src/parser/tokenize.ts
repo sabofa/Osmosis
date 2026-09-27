@@ -36,7 +36,14 @@ export function tokenize(input: string): Token[] {
           while (j < input.length && input[j] >= '0' && input[j] <= '9') j++
         }
       }
-      tokens.push({ kind: 'num', value: Number.parseFloat(input.slice(i, j)) })
+      // One literal is one finite number: a second decimal point would be
+      // cut off by parseFloat ("1.2.3" -> 1.2), and a literal past the
+      // largest double would become Infinity.
+      const text = input.slice(i, j)
+      if (text.indexOf('.') !== text.lastIndexOf('.')) throw new Error(`${text} has more than one decimal point`)
+      const value = Number.parseFloat(text)
+      if (!Number.isFinite(value)) throw new Error(`${text} is too large for a number`)
+      tokens.push({ kind: 'num', value })
       i = j
       continue
     }

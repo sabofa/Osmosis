@@ -218,6 +218,37 @@ describe('lagrange: refusals', () => {
   })
 })
 
+// Fix round 1 (Important 1): judge and choose took max and min by spreading
+// every sample into Math.max, and Node's argument limit (~120k) threw
+// "Maximum call stack size exceeded" on a fine constraint mesh.
+describe('lagrange on a fine constraint mesh (fix round 1)', () => {
+  // ∇f = (1, 2, 2) = λ(2x, 2y, 2z): x = 1/(2λ), y = z = 1/λ, and
+  // (1/4 + 2)/λ^2 = 20 gives λ = 3/√80 at (2√5/3, 4√5/3, 4√5/3), f = 6√5.
+  const R5 = Math.sqrt(5)
+
+  it('res: 160 on x^2 + y^2 + z^2 = 20 draws and finds (2√5/3, 4√5/3, 4√5/3), f = 6√5, λ = 3/√80', { timeout: 60000 }, () => {
+    const scene = sceneOf('lagrange: max x + 2y + 2z subject to x^2 + y^2 + z^2 = 20 res: 160')
+    expect(scene.errors).toEqual([])
+    // Past the argument limit that broke the spread.
+    expect(meshOf(scene, 's1.constraint').positions.length / 3).toBeGreaterThan(150000)
+    expectClose(Array.from(pointsOf(scene, 's1').positions), [(2 * R5) / 3, (4 * R5) / 3, (4 * R5) / 3], 1e-12)
+    expect(labelOf(scene, 's1.p0').text).toBe('max ≈ (1.491, 2.981, 2.981), f ≈ 13.42, λ ≈ 0.3354')
+  })
+
+  it('judge takes the max, the min and the tie scale from 300,000 samples', () => {
+    const samples = Array.from({ length: 300000 }, (_, i) => ({ at: [i], f: i === 1000 ? -7 : i % 100 }))
+    const s = (f: number) => ({ at: [0], lambda: 0, f })
+    expect(judge([{ s: s(99), kind: 'max' }], samples, 0).map((k) => k.kind)).toEqual(['max'])
+    expect(judge([{ s: s(-7), kind: 'min' }], samples, 0).map((k) => k.kind)).toEqual(['min'])
+    expect(judge([{ s: s(98), kind: 'max' }], samples, 0)[0].note).toBe(" — f is larger toward the domain's edge")
+  })
+
+  it('choose keeps the max of 300,000 solutions', () => {
+    const solutions = Array.from({ length: 300000 }, (_, i) => ({ at: [i], lambda: 0, f: i === 5 ? 2 : 1 }))
+    expect(choose(solutions, 'max').map((k) => k.s.at[0])).toEqual([5])
+  })
+})
+
 describe('lagrange with a parameter (M3)', () => {
   it('rebuilds when the level reads one: k = 2 moves the max to (√2, √2), f = 2√2', () => {
     const kernel = kernelOf(`@param k = 1 range [0.5, 3]

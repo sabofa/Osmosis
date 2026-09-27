@@ -8,7 +8,7 @@ import { buildScope } from '../scope'
 import type { ContourForm, Levels } from '../../grammar/keywords/geometryForms'
 import type { SpaceStyle } from '../../grammar/types'
 import { contourCurves, levelCurves, niceLevels } from './contours'
-import { lineOf, sceneOf } from './testing'
+import { kernelOf, lineOf, sceneOf } from './testing'
 
 const p = parseExprString
 
@@ -233,7 +233,8 @@ contour: f levels 9 floor labels`)
   it('dashed dashes the level curves; opacity: is refused, since it applies to level surfaces', () => {
     const scene = sceneOf('contour: x^2 + y^2 levels 1, 4 dashed')
     expect(scene.errors).toEqual([])
-    for (const mark of scene.marks) expect(mark.kind === 'lines' && mark.style.dash).not.toBeNull()
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.level0', 's1.level1'])
+    for (const object of ['s1.level0', 's1.level1']) expect(lineOf(scene, object).style.dash).not.toBeNull()
     expect(sceneOf('f(x, y) = x^2 + y^2\ncontour: f levels 1, 4 opacity: 0.5').errors).toEqual([
       { line: 2, message: 'opacity: applies to level surfaces of F(x, y, z), not to level curves — f has two variables' },
     ])
@@ -241,5 +242,58 @@ contour: f levels 9 floor labels`)
 
   it('a one-variable function is still refused in S4a’s words', () => {
     expect(sceneOf('k(t) = t^2\ncontour: k levels 3').errors[0].message).toMatch(/k takes 1 variable/)
+  })
+})
+
+// Fix round 1 (Important 2): a level that draws nothing says so on its line,
+// in S4a's words for a level surface ("The level 100 of g does not meet the
+// box"); f = x^2 + y^2 over [-5, 5]^2 ranges over [0, 50].
+describe('contour: of two variables, levels that draw nothing', () => {
+  const F = 'f(x, y) = x^2 + y^2'
+
+  it('an authored level outside f’s range is an error on its line; the others still draw', () => {
+    const lone = sceneOf(`${F}\ncontour: f level 100`)
+    expect(lone.errors).toEqual([{ line: 2, message: 'The level 100 of f does not meet the domain' }])
+    expect(lone.marks).toEqual([])
+    const mixed = sceneOf(`${F}\ncontour: f levels 4, 100, -1`)
+    expect(mixed.errors).toEqual([
+      { line: 2, message: 'The level 100 of f does not meet the domain' },
+      { line: 2, message: 'The level −1 of f does not meet the domain' },
+    ])
+    expect(mixed.marks.map((m) => m.source.object)).toEqual(['s2.level0'])
+  })
+
+  it('so is a level from a..b step s, and a level read from a parameter, until it moves inside', () => {
+    expect(sceneOf(`${F}\ncontour: f levels 60..70 step 10`).errors).toEqual([
+      { line: 2, message: 'The level 60 of f does not meet the domain' },
+      { line: 2, message: 'The level 70 of f does not meet the domain' },
+    ])
+    const kernel = kernelOf(`@param c = 100 range [0, 200]\n${F}\ncontour: f level c`)
+    expect(kernel.scene().errors).toEqual([{ line: 3, message: 'The level 100 of f does not meet the domain' }])
+    const moved = kernel.setValue('c', 4)
+    expect(moved.errors).toEqual([])
+    for (const [x, y] of polylines(lineOf(moved, 's3.level0'))[0]) expect(Math.abs(Math.hypot(x, y) - 2)).toBeLessThanOrEqual(1e-8)
+  })
+
+  it('a constant target has no level curves: contour: a levels 1, a a parameter, says so', () => {
+    expect(sceneOf('@param a = 1 range [0, 5]\ncontour: a levels 1').errors).toEqual([
+      { line: 2, message: 'contour: a is constant over the domain — it has no level curves' },
+    ])
+    expect(sceneOf('@param a = 1 range [0, 5]\ncontour: a level 1').errors).toEqual([
+      { line: 2, message: 'contour: a is constant over the domain — it has no level curves' },
+    ])
+  })
+
+  it('a target with no finite value over the domain says so', () => {
+    expect(sceneOf('contour: sqrt(-1 - x^2) levels 3').errors).toEqual([
+      { line: 1, message: 'contour: sqrt(-1 - x^2) has no finite value over the domain' },
+    ])
+  })
+
+  it('"levels n" with no nice value strictly inside the range asks for a list, as S4a does', () => {
+    // x over [0.1, 0.9]: niceStep(0.8, 1) = 1, and no multiple of 1 lies in (0.1, 0.9).
+    expect(sceneOf('@bounds3d: x [0.1, 0.9]\ncontour: x levels 1').errors).toEqual([
+      { line: 2, message: 'contour: x has no nice level inside its range — list its levels' },
+    ])
   })
 })

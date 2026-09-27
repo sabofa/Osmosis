@@ -11,8 +11,9 @@
 //
 // Three variables: ∇F at true length from the point; "surface" adds the level
 // surface through it (levelSurface.ts: S4a's marching tetrahedra, at S4a's
-// resolution), or says on the line that the level set there has no area (a
-// strict extremum of F, where the "surface" is the point alone).
+// resolution), or, when the level set meets no cell of the grid, says so on
+// the line: at a strict extremum of F it is the point alone, and otherwise it
+// is smaller than a cell and a finer res: finds it.
 //
 // A zero gradient is drawn as the point with the readout "∇f = 0 (a
 // critical point)".
@@ -118,8 +119,12 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
     }
     if (form.surface) {
       const mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, surfaceRes)
-      if (!mesh) errors.push({ line: context.line, message: `gradient: the level surface through ${pointText(at)} has no area in the box` })
-      else {
+      if (!mesh) {
+        errors.push({
+          line: context.line,
+          message: `gradient: the level set through ${pointText(at)} meets no cell at res ${surfaceRes} — at an extremum of F it is a single point; otherwise raise res:`,
+        })
+      } else {
         const surface: MeshMark = {
           kind: 'mesh',
           source: part(context, 'surface'),

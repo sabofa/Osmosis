@@ -102,6 +102,23 @@ interface Sample {
   f: number
 }
 
+// The greatest and least of the values, and the largest |value| (at least
+// 1, the tie tolerance's scale), in one loop: a constraint mesh has more
+// samples than Math.max(...values) can take as arguments (fix round 1).
+// Empty, high is -Infinity and low Infinity, as Math.max() and Math.min() are.
+export function valueRange(values: Iterable<number>): { high: number; low: number; scale: number } {
+  let high = -Infinity
+  let low = Infinity
+  let scale = 1
+  for (const v of values) {
+    if (v > high) high = v
+    if (v < low) low = v
+    const a = Math.abs(v)
+    if (a > scale) scale = a
+  }
+  return { high, low, scale }
+}
+
 // Each kept solution judged against f sampled over the constraint: a max
 // stands when no sample exceeds it (within the tie tolerance), a min when
 // none is below it. One that does not stand is named by the samples within
@@ -109,10 +126,8 @@ interface Sample {
 // otherwise a critical point on the constraint — with a note saying which
 // way f goes toward the domain's edge.
 export function judge(kept: readonly { s: Solution; kind: Kept }[], samples: readonly Sample[], radius: number): { s: Solution; kind: Kind; note: string }[] {
-  const values = samples.map((p) => p.f)
-  const tie = TIE * Math.max(1, ...values.map(Math.abs), ...kept.map(({ s }) => Math.abs(s.f)))
-  const high = Math.max(...values)
-  const low = Math.min(...values)
+  const { high, low, scale } = valueRange(samples.map((p) => p.f))
+  const tie = TIE * Math.max(scale, valueRange(kept.map(({ s }) => s.f)).scale)
   return kept.map(({ s, kind }) => {
     const isMax = !(high > s.f + tie)
     const isMin = !(low < s.f - tie)
@@ -138,10 +153,8 @@ export function judge(kept: readonly { s: Solution; kind: Kept }[], samples: rea
 // the least at once: an extremum, not a max or a min.
 export function choose(solutions: readonly Solution[], goal: 'max' | 'min' | 'extrema'): { s: Solution; kind: Kept }[] {
   if (solutions.length === 0) return []
-  const values = solutions.map((s) => s.f)
-  const tie = TIE * Math.max(1, ...values.map(Math.abs))
-  const high = Math.max(...values)
-  const low = Math.min(...values)
+  const { high, low, scale } = valueRange(solutions.map((s) => s.f))
+  const tie = TIE * scale
   const out: { s: Solution; kind: Kept }[] = []
   for (const s of solutions) {
     if (goal === 'extrema' && high - low <= tie) out.push({ s, kind: 'extremum' })
@@ -253,7 +266,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       }
       // The arrows lie in the floor: sized by its span, not the box's height.
       const length = ARROW * span
-      const scale = Math.max(1, ...kept.map(({ s }) => Math.abs(s.f)))
+      const scale = valueRange(kept.map(({ s }) => s.f)).scale
       kept.forEach(({ s, kind, note }, k) => {
         const [x, y] = s.at
         const through = levelCurves((u, v) => F.f(u, v) - s.f, rect, res)
@@ -330,7 +343,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
     }
     marks.push(pointMark(context.source, kept.map(({ s }): Vec3 => [s.at[0], s.at[1], s.at[2]]), context))
     const length = ARROW * largestSpan(box)
-    const scale = Math.max(1, ...kept.map(({ s }) => Math.abs(s.f)))
+    const scale = valueRange(kept.map(({ s }) => s.f)).scale
     kept.forEach(({ s, kind, note }, k) => {
       const tail: Vec3 = [s.at[0], s.at[1], s.at[2]]
       for (const [name, grad, size] of [

@@ -90,3 +90,23 @@ describe('tokenize: scientific notation', () => {
     expect(tokenize('2sec(x)')).toEqual([num(2), ident('sec'), op('('), ident('x'), op(')')])
   })
 })
+
+// Fix round 1: a numeric literal the scanner cannot read as one finite
+// number is refused, never silently cut short or made infinite.
+describe('tokenize: numeric literals that are not one finite number', () => {
+  it('refuses a literal too large for a double: 1e400, 2e+309, and 400 digits', () => {
+    expect(() => tokenize('1e400')).toThrow('1e400 is too large for a number')
+    expect(() => tokenize('y = 2e+309 x')).toThrow('2e+309 is too large for a number')
+    expect(() => tokenize(`1${'0'.repeat(400)}`)).toThrow(/is too large for a number$/)
+    // the largest double is still a number
+    expect(tokenize('1.7e308')).toEqual([{ kind: 'num', value: 1.7e308 }])
+  })
+
+  it('refuses a second decimal point: 1.2.3e5 and 1.2.3 no longer read as 1.2', () => {
+    expect(() => tokenize('1.2.3e5')).toThrow('1.2.3e5 has more than one decimal point')
+    expect(() => tokenize('x + 1.2.3')).toThrow('1.2.3 has more than one decimal point')
+    // one point, leading or trailing digits, is a number
+    expect(tokenize('2.')).toEqual([{ kind: 'num', value: 2 }])
+    expect(tokenize('2.5e-1')).toEqual([{ kind: 'num', value: 0.25 }])
+  })
+})

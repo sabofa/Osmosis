@@ -18,7 +18,10 @@
 //
 // Levels (S4a A2): "levels n" is the multiples of niceStep(range, n) strictly
 // inside the range f takes on the tracing grid; a list, or "a..b step s", is
-// used as written.
+// used as written. A level that draws nothing is an error on the line, in
+// S4a's words for a level surface ("The level 100 of f does not meet the
+// domain"), and the other levels still draw; a constant f, one with no finite
+// value, and "levels n" with no nice value inside the range are refused.
 //
 // The form is S4a's (grammar/keywords/geometryForms.ts); S4a's contour:
 // builder dispatches a two-variable target here (integration J2).
@@ -31,7 +34,7 @@ import { niceStep } from '../../frame/nice'
 import type { ContourForm, Levels } from '../../grammar/keywords/geometryForms'
 import type { ColormapClause } from '../../grammar/types'
 import { formatNumber } from '../../pick/format'
-import type { ColorSpec, LabelAnchor, LineMark } from '../../scene/types'
+import type { ColorSpec, LabelAnchor, LineMark, SceneError } from '../../scene/types'
 import { colorScale, constant, Reads, resolution } from '../common'
 import { chain } from '../curves'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
@@ -235,16 +238,24 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
         if (v > max) max = v
       }
     }
+    if (!(min <= max)) throw new Error(`contour: ${form.text} has no finite value over the domain`)
+    if (min === max) throw new Error(`contour: ${form.text} is constant over the domain — it has no level curves`)
     const levels = authored ? authored() : niceLevels(min, max, levelsSpec.kind === 'count' ? levelsSpec.count : 1)
+    if (levels.length === 0) throw new Error(`contour: ${form.text} has no nice level inside its range — list its levels`)
     if (levels.length > MAX_LEVELS) throw new Error(`contour: ${levels.length} levels — at most ${MAX_LEVELS}`)
     const colors = levelColors(levels, Float64Array.from(samples), context)
     const floor = form.floor ? toolBox(context, rect, (x, y) => f(x, y)).z.min : 0
 
     const marks: LineMark[] = []
     const labels: LabelAnchor[] = []
+    const errors: SceneError[] = []
     levels.forEach((c, k) => {
       const lines = levelCurves((x, y) => f(x, y) - c, rect, res)
-      if (lines.length === 0) return
+      if (lines.length === 0) {
+        // Only an authored level can miss: "levels n" lies inside the range.
+        errors.push({ line: context.line, message: `The level ${formatNumber(c)} of ${form.text} does not meet the domain` })
+        return
+      }
       const color = colors[k]
       marks.push(lineMark(part(context, `level${k}`), lines.map((l) => lift(l, () => c)), context, { width, dashed, color }))
       if (form.floor) {
@@ -253,7 +264,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
       const mid = form.labels ? midpointOf(lines) : null
       if (mid) labels.push(annotation(part(context, `label${k}`), [mid[0], mid[1], c], formatNumber(c)))
     })
-    return { marks, labels, errors: [], colorScale: null }
+    return { marks, labels, errors, colorScale: null }
   }
 
   return { reads: reads.names, build }

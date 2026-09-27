@@ -117,10 +117,27 @@ describe('gradient of a function of three variables', () => {
     expect([...new Set(edges.values())]).toEqual([2])
   })
 
-  it('"surface" at a point where the level set has no area (the origin of x^2 + y^2 + z^2) says so on its line', () => {
+  it('"surface" whose level set meets no cell says so, naming res: a strict extremum is a point', () => {
     const scene = sceneOf('@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\ngradient: x^2 + y^2 + z^2 at (0, 0, 0) surface res: 8')
-    expect(scene.errors).toEqual([{ line: 2, message: 'gradient: the level surface through (0, 0, 0) has no area in the box' }])
+    expect(scene.errors).toEqual([
+      {
+        line: 2,
+        message: 'gradient: the level set through (0, 0, 0) meets no cell at res 8 — at an extremum of F it is a single point; otherwise raise res:',
+      },
+    ])
     expect(labelOf(scene, 's2.readout').text).toBe('∇F = 0 (a critical point)')
+  })
+
+  it('a real level surface smaller than a cell is not called a point: the sphere of radius 0.1 at res 7 over [-2, 2]^3', () => {
+    // F = x^2 + y^2 + z^2 at (0.1, 0, 0) is 0.01. At res 7 the grid points
+    // are -2 + 4k/7, the nearest to the origin (±2/7, ±2/7, ±2/7), where
+    // F = 12/49 > 0.01: none is inside the sphere, so no cell is crossed. At
+    // res 64 (cells 1/16, a grid point at the origin) it is meshed.
+    const coarse = sceneOf('@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\ngradient: x^2 + y^2 + z^2 at (0.1, 0, 0) surface res: 7')
+    expect(coarse.errors[0].message).toMatch(/meets no cell at res 7 — at an extremum of F it is a single point; otherwise raise res:$/)
+    const fine = sceneOf('@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\ngradient: x^2 + y^2 + z^2 at (0.1, 0, 0) surface res: 64')
+    expect(fine.errors).toEqual([])
+    for (const p of vertices(meshOf(fine, 's2.surface').positions)) expect(Math.abs(Math.hypot(...p) - 0.1)).toBeLessThanOrEqual(1e-8)
   })
 
   it('"surface" takes S4a’s limit on res:', () => {
