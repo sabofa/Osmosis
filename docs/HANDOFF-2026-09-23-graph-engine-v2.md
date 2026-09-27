@@ -149,7 +149,7 @@ step 3).
 | 9 | `ac7c0fd`..`267576c`, then the docs commit | Spheres the figure constructs, each an ordinary sphere solid: the insphere and circumsphere of any polyhedron (a fixed-order linear solve, verified against every face or vertex, refused naming the first that fails) and of a cylinder, cone or frustum (closed form in its own frame, so placed and tilted ones work); a sphere tangent to a plane or externally/internally to another sphere; `M = center of S`; `label: S radius` on every sphere. The AIME 2024 I tetrahedron's insphere measures 20√21/63 |
 | 10 | `b10860b`..`bc9903d`, then the docs commit | Measures and marks in space: `given: angle between A-B and C-D` (skew allowed), `… and plane <any form>`, `distance between A-B and C-D`, `distance from P to plane …` / `to line …` in the givens table; `dihedral C-A-B-D` as a value and as a drawn mark (`dihedral:`) — the AIME 2016 I hexagonal prism reads 60 at height √108; `P, Q = common perpendicular of A-B and C-D`; `angle:`, `right-angle:` (asserted 90), `tick:` and `label: angle ABC` on points in space, the marks built in space and projected, each drawn whole by its middle under the glass rule |
 | 11 | `5c33aa4`..`c078df9`, then the docs commit | Nets and shortest paths over a surface: `net: S` unfolds every polyhedral primitive by its template (the cube's cross, a prism's strip, a pyramid's or tetrahedron's star, the octahedron's strip, the frustum's star) and every round one (rectangle, sector, annular sector, rims tangent), true size, lifted and stacked, folds dashed, letters repeated as display labels; `shortest: P to Q over S [unfold]` — Dudeney's spider reads 40 over five faces, the cube's corner path √5, the AIME fly on a cone 625 on the unrolling |
-| 12 | `f565063`..`0e453f9`, then the docs commit | Shaded regions: `fill: square ABCD minus circle O`, `circle O and circle P` (the lens), `circle O minus circle P` (the annulus), sectors, circular segments and polygons, booleans with parentheses, drawn as ONE path (arcs as `A`, holes even-odd, no outline of its own) behind every line; `label: area R` prints the exact area inside the region (16 − 4π → 3.434) and `= 3.434` asserts it to the printed precision; `square`/`rectangle` are asserted shapes |
+| 12 | `f565063`..`0e453f9`, then the docs commit | Shaded regions: `fill: square ABCD minus circle O`, `circle O and circle P` (the lens), `circle O minus circle P` (the annulus), sectors, circular segments and polygons, booleans with parentheses, drawn as ONE path (arcs as `A`, holes even-odd, no outline of its own) behind every line; `label: area R` prints the exact area inside the region (16 − 4π → 3.434), and a stated area asserts at the one shared tolerance, like every measure; `square`/`rectangle` are asserted shapes |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -817,7 +817,7 @@ fill: circle O                               # the disk of a named circle
 fill: sector P-Q on O minor                  # and segment P-Q on O <dir>
 fill: square ABCD minus circle O name: R     # minus | and/intersect | or/union, left to right, parentheses
 fill: (circle O or circle P) minus triangle ABC
-label: area R = 3.434                        # exact area, inside the region; asserts to the printed precision
+label: area R                                # exact area, computed, printed inside the region
 given: area circle O and circle P            # inline expressions work too (and find:)
 ```
 
@@ -858,12 +858,18 @@ region colour otherwise, the same string a sector uses). The author's own
 lines draw the edges. The existing `sector`/`segment` statements are
 untouched.
 
-*Areas assert to the printed precision (plan correction).* `checkMeasure`
-compares at GEOM_EPS, so the plan's `label: area R = 3.434` would have
-refused 16 − 4π. An area — and only an area — now passes when it is within
-half a unit of the third place (`printed` in `MeasureCheckOptions`): 3.434
-holds, 3.43, 3.435 and 4 are refused naming the true value. Areas are
-almost always irrational, and exact values wait on build-order step 3.
+*Areas assert at the one shared tolerance (fix round 1).* The first
+version gave areas their own absolute tolerance (half a unit of the printed
+third place) so the plan's `label: area R = 3.434` would pass for 16 − 4π.
+Review round 1 refused it, and the controller ruled: ONE tolerance rule for
+every measure assertion. It contradicted `checkMeasure`'s own policy (an
+absolute tolerance accepts wrong figures drawn small — an area of 0.0003
+stated as 0.0007 passed) and made areas inconsistent with lengths
+(`label: AC = 5.657` for 4√2 is refused). Now `= 3.434` is refused for
+16 − 4π, naming 3.434; the examples use `label: area R` (computed), and
+the square example also writes `given: area R = 16 − 4π`, a SYMBOLIC
+value, printed as written and not checked. Asserting an exact expression
+against the value belongs to build step 3 (exact values), engine-wide.
 
 *F6: the label sits ON a point inside the region.* The largest component
 (holes assigned by a point strictly inside each hole, since a hole may
@@ -1329,15 +1335,17 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     author could ask.** Hatching patterns (Track 5 styling; a fill is a flat
     tint), fills in graph mode, fills on points in space (a face in a solid
     figure is drawn as a section), and regions bounded by conics other than
-    circles. **Exact symbolic areas wait on build-order step 3**: until then
-    an area prints as a decimal (3.434, not 16 − 4π) and asserts to that
-    printed precision — when exact values land, the area's `printed`
-    tolerance in `checkMeasure` should give way to an exact comparison.
-    Drawing notes from the PNG review: a fill's edges are drawn only where
-    the author draws them, so a fill with no lines of its own reads as a
-    soft shape; and a union's F6 label can land in the overlap of its parts
-    when the widest chord runs through it (two overlapping squares do this,
-    which is why the "Shaded union" example is a square and a circle).
+    circles. **Exact symbolic areas wait on build-order step 3**, and so
+    does asserting one: today an area prints as a decimal (3.434, not
+    16 − 4π), a stated decimal asserts at the shared tolerance like every
+    measure, and a symbolic `= 16 − 4π` prints as written and is not
+    checked. Checking an exact expression against the value is build step
+    3's, for every measure — not a special case for areas. Drawing notes
+    from the PNG review: a fill's edges are drawn only where the author
+    draws them, so a fill with no lines of its own reads as a soft shape;
+    and a union's F6 label can land in the overlap of its parts when the
+    widest chord runs through it (two overlapping squares do this, which is
+    why the "Shaded union" example is a square and a circle).
 
 ---
 

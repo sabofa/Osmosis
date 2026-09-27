@@ -764,11 +764,16 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   F3 — the area is exact given the pieces: the shoelace sum over each
 //   piece's chord plus each arc's circular segment, 1/2 r^2 (t - sin t). It
 //   PRINTS as a decimal until exact values land (build-order step 3 turns
-//   3.434 into 16 - 4 pi), so a stated area asserts to the precision it
-//   prints: "area R = 3.434" holds for 16 - 4 pi, 3.43 and 4 do not. Every
-//   other measure still asserts at the shared tolerance. "@scale: false"
-//   lifts the check, and lifts the square and rectangle assertions (refused
-//   otherwise with the true sides or angles), as it lifts every assertion.
+//   3.434 into 16 - 4 pi). A stated "= value" asserts at the ONE tolerance
+//   every measure uses (GEOM_EPS, relative), so the printed decimal of an
+//   irrational area does not assert it: "area R = 3.434" is refused for
+//   16 - 4 pi, naming 3.434. Write "label: area R" to print the computed
+//   value, a full-precision decimal to assert it, or a symbolic value
+//   ("= 16 - 4π"), which prints as written and is NOT checked — asserting an
+//   exact expression against the value is build step 3's, for every
+//   measure, not areas alone. "@scale: false" lifts the check, and lifts the
+//   square and rectangle assertions (refused otherwise with the true sides
+//   or angles), as it lifts every assertion.
 //   Names: a region is named with the "name:" clause, never "R = region
 //   ...": that unkeyed form belongs to space (keyword ownership, in the
 //   graph spec). The name also serves "@hide: R", and a hidden fill still

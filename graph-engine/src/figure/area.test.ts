@@ -105,18 +105,40 @@ describe('label: area', () => {
     expect(texts(svg).map((t) => t.text)).toContain('3.434')
   })
 
-  it('asserts a stated area to the precision it prints', () => {
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 3.434`)).toEqual([])
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 4`)).toEqual([
+  // One tolerance rule for every measure assertion (fix round 1): an area
+  // is checked at the shared relative GEOM_EPS exactly as a length is, so
+  // the printed decimal of an irrational area does NOT assert it. 16 − 4π
+  // = 16 − 12.5663706144… = 3.4336293856…
+  it('asserts a stated area at the one shared tolerance: the printed 3.434 is refused, the full value holds', () => {
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}
+label: area R = 3.434`)).toEqual([
+      '"area R = 3.434" disagrees with the figure — the geometry gives 3.434. Fix the construction, write "area R = x" for a symbolic value, or set "@scale: false" if the figure is deliberately not to scale.',
+    ])
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}
+label: area R = 4`)).toEqual([
       '"area R = 4" disagrees with the figure — the geometry gives 3.434. Fix the construction, write "area R = x" for a symbolic value, or set "@scale: false" if the figure is deliberately not to scale.',
     ])
-    // Printed to three places, 3.434 is the area; 3.43 and 3.435 are not.
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 3.43`)).toHaveLength(1)
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 3.435`)).toHaveLength(1)
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}
+label: area R = 3.4336293856`)).toEqual([])
   })
 
-  it('accepts any stated area under @scale: false', () => {
-    expect(errorsOf(`@scale: false\n${SQUARE_AND_CIRCLE}\nlabel: area R = 4`)).toEqual([])
+  it('prints a symbolic area as written, and checks nothing (exact values are build step 3)', () => {
+    const result = rendered(`${SQUARE_AND_CIRCLE}
+label: area R = 16 - 4π`)
+    expect(result.errors).toEqual([])
+    expect(texts(result.svg).map((t) => t.text)).toContain('16 - 4π')
+    // Unchecked: a wrong symbolic value is not caught today.
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}
+label: area R = 16 - 3π`)).toEqual([])
+  })
+
+  it('accepts any stated area under @scale: false, the rounded one included', () => {
+    expect(errorsOf(`@scale: false
+${SQUARE_AND_CIRCLE}
+label: area R = 3.434`)).toEqual([])
+    expect(errorsOf(`@scale: false
+${SQUARE_AND_CIRCLE}
+label: area R = 4`)).toEqual([])
   })
 
   it('refuses an unknown region, pointing at name: on a fill', () => {

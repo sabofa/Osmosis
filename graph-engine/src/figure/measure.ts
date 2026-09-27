@@ -112,12 +112,6 @@ export interface MeasureCheckOptions {
   // permit a label to disagree with the drawing, so it suppresses the check
   // rather than weakening it.
   toScale: boolean
-  // Phase 12 — an area is asserted to the precision it prints: a shaded
-  // region's area is almost always irrational (16 − 4π), and until exact
-  // values land (build-order step 3) an author can only write it as the
-  // decimal the label prints. So "= 3.434" holds for 3.43363…, while 3.43,
-  // 3.435 and 4 do not.
-  printed?: boolean
 }
 
 // Returns a message when a stated value contradicts the figure, or null when
@@ -131,8 +125,7 @@ export interface MeasureCheckOptions {
 // and accept wrong ones drawn small.
 export function checkMeasure(subject: string, stated: number, computed: number, options: MeasureCheckOptions): string | null {
   if (!options.toScale) return null
-  const relative = GEOM_EPS * Math.max(1, Math.abs(stated), Math.abs(computed))
-  const tolerance = options.printed ? Math.max(relative, 0.5 * 10 ** -MEASURE_PRECISION) : relative
+  const tolerance = GEOM_EPS * Math.max(1, Math.abs(stated), Math.abs(computed))
   if (Math.abs(stated - computed) <= tolerance) return null
   return (
     `"${subject} = ${formatMeasure(stated)}" disagrees with the figure — the geometry gives ${formatMeasure(computed)}. ` +

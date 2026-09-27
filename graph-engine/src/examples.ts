@@ -1113,7 +1113,9 @@ polygon: A(3*cos(0), 3*sin(0)), B(3*cos(pi/3), 3*sin(pi/3)), C(3*cos(2*pi/3), 3*
   },
   // Phase 12 — "find the area of the shaded region". Each fill is one path
   // behind the author's own lines, holes by the even-odd rule, and its area
-  // is exact: labels print it to three places and "= value" asserts to them.
+  // is exact: "label: area R" computes it and prints it to three places. A
+  // symbolic "= 16 − 4π" prints as written and is NOT checked — asserting an
+  // exact expression waits on exact values (build step 3), engine-wide.
   {
     // 4² − π·2² = 16 − 4π ≈ 3.434, labelled in a corner (F6: the lowest of
     // seven lines is the first to clear the circle).
@@ -1124,7 +1126,8 @@ polygon: A(0,0), B(4,0), C(4,4), D(0,4)
 M = (2, 2)
 O = circle M, 2               # the inscribed circle: named O, centred at M
 fill: square ABCD minus circle O name: R
-label: area R = 3.434         # 16 − 4π, asserted to the printed precision`,
+label: area R                 # computed: 3.434
+given: area R = 16 − 4π       # symbolic: printed as written, not checked (exact values are build step 3)`,
   },
   {
     // Two unit circles a radius apart: each chord through the crossings
@@ -1154,7 +1157,7 @@ radius O to T
 radius P to S
 label: MT
 label: MS
-label: area R = 15.708        # 5π`,
+label: area R                 # computed: 15.708, which is 5π`,
   },
   {
     // A-C-B on a line, AC = 4 and CB = 2: the half-disk on AB less the half-
@@ -1179,7 +1182,7 @@ arc B-A on k ccw
 arc C-A on m ccw
 arc B-C on n ccw
 segment: A-B
-label: area R = 6.283         # 2π`,
+label: area R                 # computed: 6.283, which is 2π`,
   },
   {
     // A 120° sector of radius 3 less its triangle is the circular segment on
@@ -1209,7 +1212,7 @@ polygon: A(0,0), B(4,0), C(4,4), D(0,4)
 M = (2, 4)
 O = circle M, 2
 fill: square ABCD or circle O name: U color: teal
-label: area U = 22.283        # 16 + 2π`,
+label: area U                 # computed: 22.283, which is 16 + 2π`,
   },
   {
     label: 'Hyperbola',

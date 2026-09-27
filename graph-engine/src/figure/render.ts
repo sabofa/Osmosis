@@ -550,9 +550,7 @@ function measureRuns(
       return { runs: [{ text: asText(computed), mark: 'none' }], error: null }
     case 'stated': {
       const error =
-        computed === null
-          ? null
-          : checkMeasure(subjectName(subject), content.value, computed, { toScale: config.toScale, printed: subject.kind === 'area' })
+        computed === null ? null : checkMeasure(subjectName(subject), content.value, computed, { toScale: config.toScale })
       return { runs: [{ text: asText(content.value), mark: 'none' }], error }
     }
     case 'symbol':
