@@ -7,6 +7,7 @@ import type {
   GivensSection,
   MeasureContent,
   MeasureSubject,
+  PlaneForm,
   Statement,
 } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
@@ -37,7 +38,17 @@ import {
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
 import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
-import { angle3, distance3 } from './construct3d'
+import {
+  angle3,
+  dihedral3,
+  distance3,
+  lineAngle3,
+  lineLineDistance,
+  linePlaneAngle3,
+  pointLineDistance,
+  pointPlaneDistance,
+  type Plane3,
+} from './construct3d'
 import { segmentSpans, type Span } from './occlusion'
 import { cameraFor, drawClosedEdges, drawEdge, edgeExtremes, edgeObject, type Camera, type ProjectedEdge, type Vec3 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
@@ -335,7 +346,35 @@ function subjectName(subject: MeasureSubject): string {
       return `arc ${subject.from}${subject.to}`
     case 'solidDimension':
       return `${subject.solid} ${subject.dimension}`
+    // Phase 10 — the author's own words, so an assertion's message quotes
+    // the row they wrote.
+    case 'dihedral':
+      return `dihedral ${subject.from}-${subject.edge.join('-')}-${subject.to}`
+    case 'lineAngle':
+      return `angle between ${subject.first.join('-')} and ${subject.second.join('-')}`
+    case 'linePlaneAngle':
+      return `angle between ${subject.line.join('-')} and plane ${subject.plane.source}`
+    case 'lineDistance':
+      return `distance between ${subject.first.join('-')} and ${subject.second.join('-')}`
+    case 'pointPlaneDistance':
+      return `distance from ${subject.point} to plane ${subject.plane.source}`
+    case 'pointLineDistance':
+      return `distance from ${subject.point} to line ${subject.line.join('-')}`
   }
+}
+
+// Whether a subject measures an ANGLE: it prints with the degree sign and
+// honours "@angle".
+function isAngleSubject(subject: MeasureSubject): boolean {
+  return subject.kind === 'angle' || subject.kind === 'arc' || subject.kind === 'dihedral' || subject.kind === 'lineAngle' || subject.kind === 'linePlaneAngle'
+}
+
+// A plane as the givens table writes it (M5): three points run together as
+// a face is ("ABC"), a named plane by its name, any other form as written.
+function planeNotation(plane: PlaneForm): string {
+  if (plane.kind === 'points') return plane.points.join('')
+  if (plane.kind === 'named') return plane.name
+  return plane.source
 }
 
 // A unit vector in *view* space (y flipped) bisecting the angle at `vertex`.
@@ -395,6 +434,22 @@ function subjectRuns(subject: MeasureSubject): NotationRun[] {
       // No overmark: "S height" is a phrase naming a measurement, not a
       // piece of geometry with a notation of its own.
       return [{ text: `${subject.solid} ${subject.dimension}`, mark: 'none' }]
+    // Phase 10 — the table's notation (M3, M5): the dihedral as its edge
+    // between its two ends, "∠C-AB-D"; the angle between two lines or a line
+    // and a plane as "∠(AB, CD)" and "∠(AB, PQR)"; a distance as
+    // "d(AB, CD)", "d(P, PQR)", "d(P, AB)".
+    case 'dihedral':
+      return [{ text: `\u2220${subject.from}-${subject.edge.join('')}-${subject.to}`, mark: 'none' }]
+    case 'lineAngle':
+      return [{ text: `\u2220(${subject.first.join('')}, ${subject.second.join('')})`, mark: 'none' }]
+    case 'linePlaneAngle':
+      return [{ text: `\u2220(${subject.line.join('')}, ${planeNotation(subject.plane)})`, mark: 'none' }]
+    case 'lineDistance':
+      return [{ text: `d(${subject.first.join('')}, ${subject.second.join('')})`, mark: 'none' }]
+    case 'pointPlaneDistance':
+      return [{ text: `d(${subject.point}, ${planeNotation(subject.plane)})`, mark: 'none' }]
+    case 'pointLineDistance':
+      return [{ text: `d(${subject.point}, ${subject.line.join('')})`, mark: 'none' }]
   }
 }
 
@@ -413,8 +468,7 @@ function measureRuns(
 ): { runs: NotationRun[]; error: string | null } {
   // An arc's measure is an angle, so it carries the degree sign and honours
   // @angle exactly as an angle does.
-  const asText = (value: number) =>
-    subject.kind === 'angle' || subject.kind === 'arc' ? formatAngleMeasure(value, config.angle) : formatMeasure(value)
+  const asText = (value: number) => (isAngleSubject(subject) ? formatAngleMeasure(value, config.angle) : formatMeasure(value))
 
   switch (content.kind) {
     case 'computed':
@@ -435,7 +489,9 @@ function measureRuns(
             ? `${subject.from}${subject.vertex}${subject.to}`
             : subject.kind === 'solidDimension'
               ? `${subject.solid} ${subject.dimension}`
-              : subject.names.join('')
+              : subject.kind === 'triangle'
+                ? subject.names.join('')
+                : subjectName(subject)
       // The prefix is a character (△), not a mark: it is set beside the name
       // rather than drawn over it, so it belongs in the same run.
       return { runs: [{ text: content.prefix + names, mark: content.mark }], error: null }
@@ -459,6 +515,21 @@ interface Resolvers {
   circle(name: string): GeometryCircle
   solid(name: string): SolidBody
   space(names: readonly string[], what: string): Vec3[] | null
+  // M5 — a measure's plane, as the solid-figure walk resolved it.
+  plane(form: PlaneForm): Plane3
+}
+
+// M5 — names that must all be points in space: a measure between lines and
+// planes means nothing in the plane. An unknown name is refused as unknown.
+function spaceOnly(resolvers: Resolvers, names: readonly string[], what: string): Vec3[] {
+  const space = resolvers.space(names, what)
+  if (space) return space
+  for (const name of names) resolvers.point(name)
+  throw new Error(`"${what}" is measured in space, and ${names[0]} is a point in the plane`)
+}
+
+function inAngleUnit(radians: number, config: GraphConfig): number {
+  return config.angle === 'degrees' ? (radians * 180) / Math.PI : radians
 }
 
 function givenCells(entry: GivenEntry, resolvers: Resolvers, config: GraphConfig): { cells: NotationRun[][]; error: string | null } {
@@ -508,6 +579,32 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
       return arcMeasure(arcOf(subject, resolvers.point, resolvers.circle), config.angle)
     case 'solidDimension':
       return solidDimensionValue(resolvers.solid(subject.solid), subject.dimension, subject.solid)
+    // Phase 10 — true values in space, closed form (construct3d.ts).
+    case 'dihedral': {
+      const [from, a, b, to] = spaceOnly(resolvers, [subject.from, ...subject.edge, subject.to], subjectName(subject))
+      const names = { from: subject.from, a: subject.edge[0], b: subject.edge[1], to: subject.to }
+      return inAngleUnit(dihedral3(from, a, b, to, names).angle, config)
+    }
+    case 'lineAngle': {
+      const [a, b, c, d] = spaceOnly(resolvers, [...subject.first, ...subject.second], subjectName(subject))
+      return inAngleUnit(lineAngle3(a, b, c, d, `line ${subject.first.join('-')}`, `line ${subject.second.join('-')}`), config)
+    }
+    case 'linePlaneAngle': {
+      const [a, b] = spaceOnly(resolvers, subject.line, subjectName(subject))
+      return inAngleUnit(linePlaneAngle3(a, b, resolvers.plane(subject.plane), `line ${subject.line.join('-')}`), config)
+    }
+    case 'lineDistance': {
+      const [a, b, c, d] = spaceOnly(resolvers, [...subject.first, ...subject.second], subjectName(subject))
+      return lineLineDistance(a, b, c, d, `line ${subject.first.join('-')}`, `line ${subject.second.join('-')}`)
+    }
+    case 'pointPlaneDistance': {
+      const [p] = spaceOnly(resolvers, [subject.point], subjectName(subject))
+      return pointPlaneDistance(p, resolvers.plane(subject.plane))
+    }
+    case 'pointLineDistance': {
+      const [p, a, b] = spaceOnly(resolvers, [subject.point, ...subject.line], subjectName(subject))
+      return pointLineDistance(p, a, b, `line ${subject.line.join('-')}`)
+    }
   }
 }
 
@@ -633,7 +730,16 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     return names.map((name) => scope.points.get(name) as Vec3)
   }
 
-  const resolvers: Resolvers = { point: resolve, circle: resolveCircle, solid: resolveSolid, space: resolveSpace }
+  // M5 — the walk resolved every measure's plane in source order (a named
+  // plane must come first); this reads the answer, or its refusal.
+  function resolveMeasurePlane(form: PlaneForm): Plane3 {
+    const resolved = scope.measurePlanes.get(form)
+    if (!resolved) throw new Error(`The plane ${form.source} was never resolved`)
+    if ('error' in resolved) throw new Error(resolved.error)
+    return resolved.plane
+  }
+
+  const resolvers: Resolvers = { point: resolve, circle: resolveCircle, solid: resolveSolid, space: resolveSpace, plane: resolveMeasurePlane }
 
   // S6 — every solid the figure draws occludes a construction segment, in
   // source order (the order does not change the answer, only the order the
@@ -1108,10 +1214,15 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             })
           }
         }
-      } else {
+      } else if (subject.kind === 'triangle') {
         const vertices = subject.names.map((name) => resolve(name))
         at = centroidOf(vertices)
         push = null
+      } else if (subject.kind === 'dihedral') {
+        throw new Error(`"label: ${subjectName(subject)}" is not drawn yet — write "given: ${subjectName(subject)}" for its value`)
+      } else {
+        // Refused at parse time (M5); the table is where these belong.
+        throw new Error(`"label: ${subjectName(subject)}" has no single point to hang a label on — write "given: ${subjectName(subject)}"`)
       }
       const { runs, error } = measureRuns(subject, content, computed, config)
       if (error) errors.push({ line: 0, message: error })

@@ -182,6 +182,12 @@ function parseNamePair(text: string, role: string): [string, string] {
   return [geometryName(parts[0], role), geometryName(parts[1], role)]
 }
 
+// A LINE through two named points, as a measure or the common perpendicular
+// takes it (phase 10): "A-B", or "line A-B". Always the infinite line.
+function parseLineOperand(text: string, role: string): [string, string] {
+  return parseNamePair(text.trim().replace(/^line\s+/, ''), role)
+}
+
 function parseNameTriple(text: string, role: string): [string, string, string] {
   const parts = text.split('-')
   if (parts.length !== 3) throw new Error(`Expected "A-B-C" (three point names) for the ${role}, got "${text.trim()}"`)
@@ -492,6 +498,18 @@ function parseConstructionBody(rhs: string): Construction | null {
   // (fix round 1): the engine's own prose spells it that way.
   const centerOf = /^cent(?:er|re)\s+of\s+([a-zA-Z]+)$/.exec(text)
   if (centerOf) return { kind: 'centerOf', solid: geometryName(centerOf[1], 'sphere whose centre it is') }
+
+  // "P, Q = common perpendicular of A-B and C-D" (phase 10, M6): the feet of
+  // the common perpendicular of two lines in space. "line" before either
+  // line is optional, as in "distance between".
+  const common = /^common\s+perpendicular\s+(?:of\s+)?(.+?)\s+and\s+(.+)$/.exec(text)
+  if (common) {
+    return {
+      kind: 'commonPerpendicular',
+      first: parseLineOperand(common[1], 'first line of the common perpendicular'),
+      second: parseLineOperand(common[2], 'second line of the common perpendicular'),
+    }
+  }
 
   const mid = /^midpoint\s+(?:of\s+)?(.+)$/.exec(text)
   if (mid) {
@@ -1551,11 +1569,111 @@ const POINT_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 function parsePointRun(text: string, count: number, role: string): string[] {
   const trimmed = text.trim()
   const names = trimmed.includes('-') ? trimmed.split('-').map((p) => p.trim()) : [...trimmed]
-  const plural = count === 2 ? 'two point names' : 'three point names'
+  const plural = `${['', 'one', 'two', 'three', 'four'][count]} point names`
+  const letters = 'ABCD'.slice(0, count)
   if (names.length !== count || names.some((n) => !POINT_NAME.test(n))) {
-    throw new Error(`Expected ${plural} for the ${role} — "${count === 2 ? 'AB' : 'ABC'}" or "${count === 2 ? 'A-B' : 'A-B-C'}" — got "${trimmed}"`)
+    throw new Error(`Expected ${plural} for the ${role} — "${letters}" or "${[...letters].join('-')}" — got "${trimmed}"`)
   }
   return names
+}
+
+// ---------------------------------------------------------------------------
+// Measures between lines and planes (phase 10, M5)
+// ---------------------------------------------------------------------------
+//
+// "angle between A-B and C-D", "angle between A-B and plane P-Q-R",
+// "distance between A-B and C-D", "distance from P to plane P-Q-R",
+// "distance from P to line A-B". Each reads its own "= value", because a
+// plane written as an equation carries an "=" of its own:
+// "distance from G to plane x + y + z = 1" names a plane and asserts
+// nothing, "distance from G to plane x + y + z = 1 = 0.577" asserts.
+
+interface SpaceMeasure {
+  subject: MeasureSubject
+  // The subject as the author wrote it, before any "= value".
+  text: string
+  value: string | null
+}
+
+// Splits "<plane>[ = value]" where the plane may be an equation. Two "=":
+// the last is the assertion. One: it is the plane's own when what precedes
+// it is an equation side (an axis letter, or anything that is not a list of
+// point names, "through ..." or a plane's name), else the assertion.
+function splitPlaneValue(text: string): { plane: string; value: string | null } {
+  const first = text.indexOf('=')
+  if (first === -1) return { plane: text, value: null }
+  const last = text.lastIndexOf('=')
+  if (last !== first) return { plane: text.slice(0, last), value: text.slice(last + 1) }
+  const before = text.slice(0, first).trim()
+  const named = /^[a-zA-Z]+(\s*-\s*[a-zA-Z]+){2}$/.test(before) || /^through\s/.test(before) || (GEOMETRY_NAME.test(before) && !/^[xyzXYZ]$/.test(before))
+  return named ? { plane: before, value: text.slice(first + 1) } : { plane: text, value: null }
+}
+
+function splitValue(text: string): { rest: string; value: string | null } {
+  const equals = text.indexOf('=')
+  return equals === -1 ? { rest: text, value: null } : { rest: text.slice(0, equals), value: text.slice(equals + 1) }
+}
+
+function parseSpaceMeasure(body: string): SpaceMeasure | null {
+  const between = /^(angle|distance)\s+between\s+(.+?)\s+and\s+(.+)$/.exec(body)
+  if (between) {
+    const [, what, firstText, tail] = between
+    if (/^plane\s/.test(firstText.trim()) || /^plane\s/.test(tail.trim())) {
+      if (/^plane\s/.test(firstText.trim())) {
+        throw new Error(
+          what === 'angle'
+            ? `The angle between two planes is a dihedral angle — write "dihedral C-A-B-D" along the edge A-B they share; "angle between" takes a line first ("angle between A-B and plane P-Q-R")`
+            : `"distance between" takes two lines — for a plane, measure from a point: "distance from P to plane P-Q-R"`
+        )
+      }
+      if (what === 'distance') {
+        throw new Error(`"distance between" takes two lines — for a line and a plane, measure from a point of the line: "distance from P to plane P-Q-R"`)
+      }
+      const { plane, value } = splitPlaneValue(tail.trim().slice('plane'.length))
+      const line = parseLineOperand(firstText, 'line of the angle')
+      return {
+        subject: { kind: 'linePlaneAngle', line, plane: parsePlaneForm(plane, 'plane of the angle') },
+        text: `angle between ${firstText.trim()} and plane ${plane.trim()}`,
+        value,
+      }
+    }
+    const { rest, value } = splitValue(tail)
+    const first = parseLineOperand(firstText, `first line of the ${what}`)
+    const second = parseLineOperand(rest, `second line of the ${what}`)
+    return {
+      subject: what === 'angle' ? { kind: 'lineAngle', first, second } : { kind: 'lineDistance', first, second },
+      text: `${what} between ${firstText.trim()} and ${rest.trim()}`,
+      value,
+    }
+  }
+
+  const from = /^distance\s+from\s+(\S+)\s+to\s+(.+)$/.exec(body)
+  if (from) {
+    const point = geometryName(from[1], 'point the distance is measured from')
+    const target = from[2].trim()
+    if (/^plane\s/.test(target)) {
+      const { plane, value } = splitPlaneValue(target.slice('plane'.length))
+      return {
+        subject: { kind: 'pointPlaneDistance', point, plane: parsePlaneForm(plane, 'plane the distance is measured to') },
+        text: `distance from ${point} to plane ${plane.trim()}`,
+        value,
+      }
+    }
+    const { rest, value } = splitValue(target)
+    return {
+      subject: { kind: 'pointLineDistance', point, line: parseLineOperand(rest, 'line the distance is measured to') },
+      text: `distance from ${point} to ${rest.trim()}`,
+      value,
+    }
+  }
+
+  if (/^(angle|distance)\s+(between|from)\s/.test(body)) {
+    throw new Error(
+      `Expected "angle between A-B and C-D", "angle between A-B and plane P-Q-R", "distance between A-B and C-D", ` +
+        `"distance from P to plane P-Q-R" or "distance from P to line A-B", got "${body}"`
+    )
+  }
+  return null
 }
 
 // A stated value asserts, so it has to be a value and not an expression: the
@@ -1630,6 +1748,13 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
     return { subject: { kind: 'triangle', names: [a, b, c] }, mark: 'none', prefix: '△', explicit: true }
   }
 
+  // "dihedral C-A-B-D" (phase 10, M3): the edge is the middle two names.
+  const dihedral = /^dihedral\s+(.+)$/.exec(subjectText)
+  if (dihedral) {
+    const [from, a, b, to] = parsePointRun(dihedral[1], 4, `dihedral ${role}`)
+    return { subject: { kind: 'dihedral', from, edge: [a, b], to }, mark: 'none', prefix: '', explicit: false }
+  }
+
   const angle = /^angle\s+(.+)$/.exec(subjectText)
   if (angle) {
     const [from, vertex, to] = parsePointRun(angle[1], 3, `angle ${role}`)
@@ -1690,6 +1815,17 @@ function parseMeasureLabel(rest: string): StatementShape {
     throw new Error('Expected something to label, e.g. "label: AB", "label: AB = 8" or "label: angle A-B-C"')
   }
 
+  // M5 — an angle or a distance between lines and planes has no one point to
+  // hang an inline label on: its place is the givens table, or the author
+  // draws the construction (a foot, a common perpendicular) and labels that.
+  const space = parseSpaceMeasure(body)
+  if (space) {
+    throw new Error(
+      `"label: ${space.text}" has no single point to hang a label on — write "given: ${space.text}" to put it in the givens table, ` +
+        'or draw the construction (a foot, or a common perpendicular) and label its segment'
+    )
+  }
+
   const equals = body.indexOf('=')
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
   const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'label')
@@ -1712,6 +1848,14 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
     throw new Error(
       `Expected something to state, e.g. "${section}: AB = 8", "${section}: angle A-B-C = 30" or "${section}: AB parallel CD"`
     )
+  }
+
+  // M5 first: a plane written "through P perpendicular to A-B" holds a
+  // relation word, and an equation holds an "=" of its own.
+  const space = parseSpaceMeasure(body)
+  if (space) {
+    const content = space.value === null ? { kind: 'computed' as const } : parseMeasureContent(space.value)
+    return { kind: 'given', section, entry: { kind: 'measure', subject: space.subject, content } }
   }
 
   const relation = splitRelation(body)

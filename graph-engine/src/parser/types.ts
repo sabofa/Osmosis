@@ -115,6 +115,11 @@ export type Construction =
   // owns it, and the 2D pass refuses it (a circle's centre is the point it
   // was drawn around, already named).
   | { kind: 'centerOf'; solid: string }
+  // "P, Q = common perpendicular of A-B and C-D" (phase 10, M6) — the feet of
+  // the common perpendicular of two lines in space: P on line AB, Q on line
+  // CD, PQ square to both. Closed form; parallel lines (not unique) and
+  // lines that meet (zero length) are refused. Only a solid figure has it.
+  | { kind: 'commonPerpendicular'; first: [string, string]; second: [string, string] }
 
 // --------------------------------------------------------------------------
 // Solids (Geometry v2, phase 5)
@@ -202,6 +207,23 @@ export type MeasureSubject =
   // An arc names the circle it lies on and the way round it goes, because
   // without both it names neither one arc nor one measure (G1).
   | { kind: 'arc'; circle: string; from: string; to: string; direction: GeometryArcDirection }
+  // Phase 10 (M3) — the dihedral angle along edge AB between the half-plane
+  // ABC and the half-plane ABD, written "dihedral C-A-B-D": the edge is the
+  // middle two names. In [0, 180] degrees.
+  | { kind: 'dihedral'; from: string; edge: [string, string]; to: string }
+  // Phase 10 (M5) — measures between lines and planes in space. Table rows
+  // only ("given:" / "find:"): none has a single point an inline label could
+  // hang on, so "label:" refuses them at parse time.
+  //   angle between A-B and C-D          -> the acute angle between the lines' directions (skew allowed)
+  //   angle between A-B and plane <form> -> the line–plane angle, in [0, 90] degrees
+  //   distance between A-B and C-D       -> line to line (skew or parallel; 0 if they meet)
+  //   distance from P to plane <form>
+  //   distance from P to line A-B
+  | { kind: 'lineAngle'; first: [string, string]; second: [string, string] }
+  | { kind: 'linePlaneAngle'; line: [string, string]; plane: PlaneForm }
+  | { kind: 'lineDistance'; first: [string, string]; second: [string, string] }
+  | { kind: 'pointPlaneDistance'; point: string; plane: PlaneForm }
+  | { kind: 'pointLineDistance'; point: string; line: [string, string] }
 
 // The overmark a notation form carries. Mirrors figure/notation.ts's
 // Overmark; duplicated rather than imported so the parser stays standalone,

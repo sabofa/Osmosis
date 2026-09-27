@@ -3,10 +3,11 @@ import type { Construction, Expr, GeometryRef, PlaneForm, SolidPrimitive, Statem
 import { centroid, circumcenter, incenter, orthocenter } from '../scene/geometry/centres'
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { SceneError, Vec2 } from '../scene/types'
-import { authorPlane, authorToWorld } from './authorFrame'
+import { authorPlane, authorText, authorToWorld } from './authorFrame'
 import {
   add3,
   centroid3,
+  commonPerpendicular3,
   cross3,
   divide3,
   dot3,
@@ -84,6 +85,11 @@ export interface SolidFigureScope {
   // A plane that cannot be resolved keeps its message here, and the renderer
   // reports it where it reports the rest of the statement's errors.
   sectionPlanes: Map<number, { plane: SectionPlane } | { error: string }>
+  // Phase 10 (M5) — the plane each measure names ("angle between A-G and
+  // plane A-B-C", "distance from G to plane p"), keyed by the parsed plane
+  // form itself and resolved in source order like a cut's. The renderer
+  // reports a plane that failed, where it reports the measure.
+  measurePlanes: Map<PlaneForm, { plane: Plane3 } | { error: string }>
   errors: SceneError[]
 }
 
@@ -331,6 +337,8 @@ function operandNames(body: Construction): string[] {
       return [body.circle, body.point]
     case 'centerOf':
       return [body.solid]
+    case 'commonPerpendicular':
+      return [...body.first, ...body.second]
   }
 }
 
@@ -405,6 +413,8 @@ function bodyText(body: Construction): string {
       return `radius ${body.circle} to ${body.point}`
     case 'centerOf':
       return `center of ${body.solid}`
+    case 'commonPerpendicular':
+      return `common perpendicular of ${body.first.join('-')} and ${body.second.join('-')}`
   }
 }
 
@@ -567,6 +577,7 @@ export function buildSolidFigure(
   const vertexNames = new Map<SolidBody, (string | undefined)[]>()
   const planes = new Map<string, Plane3>()
   const sectionPlanes: SolidFigureScope['sectionPlanes'] = new Map()
+  const measurePlanes: SolidFigureScope['measurePlanes'] = new Map()
   const ownedStatements = new Set<number>()
   const byStatement: SolidFigureScope['byStatement'] = new Map()
   const errors: SceneError[] = []
@@ -819,6 +830,27 @@ export function buildSolidFigure(
           const plane = resolvePlane(statement.plane)
           takeName(statement.name, 'a plane')
           planes.set(statement.name, plane)
+          break
+        }
+        case 'given':
+        case 'measureLabel': {
+          // M5 — a measure's plane, resolved here so "plane p" follows
+          // "p = plane ..." in source order. Not owned: the renderer draws
+          // the row, and reports a plane that failed.
+          const subjects =
+            statement.kind === 'measureLabel'
+              ? [statement.subject]
+              : statement.entry.kind === 'measure'
+                ? [statement.entry.subject]
+                : [statement.entry.left, statement.entry.right]
+          for (const subject of subjects) {
+            if (subject.kind !== 'linePlaneAngle' && subject.kind !== 'pointPlaneDistance') continue
+            try {
+              measurePlanes.set(subject.plane, { plane: resolvePlane(subject.plane) })
+            } catch (err) {
+              measurePlanes.set(subject.plane, { error: err instanceof Error ? err.message : String(err) })
+            }
+          }
           break
         }
         default:
@@ -1088,6 +1120,13 @@ export function buildSolidFigure(
     }
 
     ownedStatements.add(index)
+    // M6 — a common perpendicular has two feet, and a name for each.
+    if (body.kind === 'commonPerpendicular' && names.length !== 2) {
+      throw new Error(
+        `${statementText(names, body)}: a common perpendicular has two feet, one on each line, so it binds two names ` +
+          `("P, Q = common perpendicular of ${body.first.join('-')} and ${body.second.join('-')}")`
+      )
+    }
     const plane = operands.find((name) => planeNames.has(name))
     if (plane && space.length > 0) {
       throw new Error(`${statementText(names, body)} mixes a point in space (${space[0]}) with ${describePlane(plane)} (${plane})`)
@@ -1157,6 +1196,23 @@ export function buildSolidFigure(
         const [a, b, c] = vertices
         return [centreInSpace(body.centre, a, b, c, nameList(body.vertices))]
       }
+      case 'commonPerpendicular': {
+        // M6 — closed form (construct3d.ts); the two refusals are worded
+        // here, where the author's frame is known.
+        const [first, second] = [body.first.join('-'), body.second.join('-')]
+        const [a, b] = body.first.map(lookup)
+        const [c, d] = body.second.map(lookup)
+        const found = commonPerpendicular3(a, b, c, d, `line ${first}`, `line ${second}`)
+        if (found.kind === 'parallel') {
+          throw new Error(`${statementText(names, body)}: ${first} and ${second} are parallel, so their common perpendicular is not unique`)
+        }
+        if (found.kind === 'meet') {
+          throw new Error(
+            `${statementText(names, body)}: ${first} and ${second} meet at a point, ${authorText(found.at)}, so their common perpendicular has zero length`
+          )
+        }
+        return [found.p, found.q]
+      }
       default:
         // Unreachable for a planar construction (refused above); what is
         // left is a line construction on a plane operand.
@@ -1164,7 +1220,7 @@ export function buildSolidFigure(
     }
   }
 
-  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, errors }
+  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, measurePlanes, errors }
 }
 
 function planeAsPoint(name: string): Error {

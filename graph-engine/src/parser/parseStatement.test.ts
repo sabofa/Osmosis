@@ -1234,3 +1234,73 @@ describe('circumspheres (phase 9, R3 and R6)', () => {
     expect(() => parseStatement('O = solid circumsphere A-B-C-A')).toThrow(/"A" is named twice/)
   })
 })
+
+describe('measures in space (phase 10, M3, M5 and M6)', () => {
+  const given = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'given' || s.entry.kind !== 'measure') throw new Error('expected a measure row')
+    return s.entry
+  }
+
+  it('reads the angle and the distance between two lines, "line" optional', () => {
+    expect(given('given: angle between A-C and B-G').subject).toEqual({ kind: 'lineAngle', first: ['A', 'C'], second: ['B', 'G'] })
+    expect(given('find: distance between line A-G and line B-F').subject).toEqual({ kind: 'lineDistance', first: ['A', 'G'], second: ['B', 'F'] })
+    expect(given('given: angle between A-C and B-G = 60').content).toEqual({ kind: 'stated', value: 60 })
+  })
+
+  it('reads a line against a plane, and a point against a plane or a line', () => {
+    expect(given('given: angle between A-G and plane A-B-C').subject).toEqual({
+      kind: 'linePlaneAngle',
+      line: ['A', 'G'],
+      plane: { kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' },
+    })
+    expect(given('given: distance from G to plane p').subject).toEqual({ kind: 'pointPlaneDistance', point: 'G', plane: { kind: 'named', name: 'p', source: 'p' } })
+    expect(given('given: distance from G to line A-B').subject).toEqual({ kind: 'pointLineDistance', point: 'G', line: ['A', 'B'] })
+    expect(given('given: distance from G to A-B = 1.5').content).toEqual({ kind: 'stated', value: 1.5 })
+  })
+
+  it('tells a plane equation\'s own "=" from the assertion', () => {
+    // One "=" after an equation side: the plane's.
+    const plain = given('given: distance from G to plane x + y + z = 1')
+    expect(plain.subject).toMatchObject({ plane: { kind: 'equation', source: 'x + y + z = 1' } })
+    expect(plain.content).toEqual({ kind: 'computed' })
+    const axis = given('given: angle between A-B and plane z = 3')
+    expect(axis.subject).toMatchObject({ plane: { kind: 'axis', axis: 'z', source: 'z = 3' } })
+    expect(axis.content).toEqual({ kind: 'computed' })
+    // Two: the last is the assertion.
+    const asserted = given('given: distance from G to plane x + y + z = 1 = 0.577')
+    expect(asserted.subject).toMatchObject({ plane: { kind: 'equation', source: 'x + y + z = 1' } })
+    expect(asserted.content).toEqual({ kind: 'stated', value: 0.577 })
+    // One after three names, "through ..." or a name: the assertion.
+    expect(given('given: angle between A-G and plane A-B-C = 35').content).toEqual({ kind: 'stated', value: 35 })
+    expect(given('given: distance from G to plane p = 2').content).toEqual({ kind: 'stated', value: 2 })
+    expect(given('given: distance from G to plane through A perpendicular to A-G = 2').subject).toMatchObject({
+      plane: { kind: 'perpendicular', through: 'A', line: ['A', 'G'] },
+    })
+  })
+
+  it('reads a dihedral with its edge in the middle, as a label or a row', () => {
+    expect(given('given: dihedral C-A-B-D = 90').subject).toEqual({ kind: 'dihedral', from: 'C', edge: ['A', 'B'], to: 'D' })
+    expect(given('given: dihedral CABD').subject).toEqual({ kind: 'dihedral', from: 'C', edge: ['A', 'B'], to: 'D' })
+    const label = parseStatement('label: dihedral A-B-F-G')
+    expect(label).toMatchObject({ kind: 'measureLabel', subject: { kind: 'dihedral', from: 'A', edge: ['B', 'F'], to: 'G' }, content: { kind: 'computed' } })
+    expect(() => parseStatement('given: dihedral A-B-C')).toThrow(/four point names/)
+  })
+
+  it('refuses an inline label on the between and from forms, pointing at the table', () => {
+    expect(() => parseStatement('label: angle between A-C and B-G')).toThrow(/write "given: angle between A-C and B-G"/)
+    expect(() => parseStatement('label: distance from P to line A-B = 3')).toThrow(/write "given: distance from P to line A-B"/)
+  })
+
+  it('refuses the angle between two planes, pointing at the dihedral, and a line–plane distance', () => {
+    expect(() => parseStatement('given: angle between plane A-B-C and plane A-B-D')).toThrow(/dihedral C-A-B-D/)
+    expect(() => parseStatement('given: distance between A-B and plane P-Q-R')).toThrow(/distance from P to plane P-Q-R/)
+    expect(() => parseStatement('given: distance between A-B')).toThrow(/Expected "angle between A-B and C-D"/)
+  })
+
+  it('reads the common perpendicular of two lines as a two-name construction', () => {
+    const s = parseStatement('P, Q = common perpendicular of A-G and B-F')
+    expect(s).toMatchObject({ kind: 'construction', names: ['P', 'Q'], body: { kind: 'commonPerpendicular', first: ['A', 'G'], second: ['B', 'F'] } })
+    expect(parseStatement('P, Q = common perpendicular line A-G and line B-F')).toMatchObject({ body: { first: ['A', 'G'], second: ['B', 'F'] } })
+  })
+})
