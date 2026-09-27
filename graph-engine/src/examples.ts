@@ -13,6 +13,7 @@ export const EXAMPLE_GROUPS = [
   'Tables',
   'Space',
   'Plane geometry',
+  'Shaded regions',
   'Solids',
   'Points & constructions',
   'Sections',
@@ -1109,6 +1110,106 @@ angle: A-B-C label: α`,
     group: 'Plane geometry',
     spec: `circle: (0, 0), 3
 polygon: A(3*cos(0), 3*sin(0)), B(3*cos(pi/3), 3*sin(pi/3)), C(3*cos(2*pi/3), 3*sin(2*pi/3)), D(3*cos(pi), 3*sin(pi)), E(3*cos(4*pi/3), 3*sin(4*pi/3)), F(3*cos(5*pi/3), 3*sin(5*pi/3))`,
+  },
+  // Phase 12 — "find the area of the shaded region". Each fill is one path
+  // behind the author's own lines, holes by the even-odd rule, and its area
+  // is exact: labels print it to three places and "= value" asserts to them.
+  {
+    // 4² − π·2² = 16 − 4π ≈ 3.434, labelled in a corner (F6: the lowest of
+    // seven lines is the first to clear the circle).
+    label: 'Square minus its circle',
+    group: 'Shaded regions',
+    spec: `@mode: figure
+polygon: A(0,0), B(4,0), C(4,4), D(0,4)
+M = (2, 2)
+O = circle M, 2               # the inscribed circle: named O, centred at M
+fill: square ABCD minus circle O name: R
+label: area R = 3.434         # 16 − 4π, asserted to the printed precision`,
+  },
+  {
+    // Two unit circles a radius apart: each chord through the crossings
+    // subtends 120° at its centre, so the lens is 2π/3 − √3/2 ≈ 1.228.
+    label: 'Lens of two circles',
+    group: 'Shaded regions',
+    spec: `@mode: figure
+K = (0, 0)
+L = (1, 0)
+O = circle K, 1
+P = circle L, 1
+fill: circle O and circle P name: R    # "and" is the intersection
+label: area R`,
+  },
+  {
+    // π(3² − 2²) = 5π ≈ 15.708. The label sits in the ring, never in the hole.
+    label: 'Annulus',
+    group: 'Shaded regions',
+    spec: `@mode: figure
+M = (0, 0)
+O = circle M, 3
+P = circle M, 2
+T = (0, 3)
+S = (2, 0)
+fill: circle O minus circle P name: R
+radius O to T
+radius P to S
+label: MT
+label: MS
+label: area R = 15.708        # 5π`,
+  },
+  {
+    // A-C-B on a line, AC = 4 and CB = 2: the half-disk on AB less the half-
+    // disks on AC and CB, π/2 (3² − 2² − 1²) = 2π ≈ 6.283. The circles are
+    // hidden and only their upper arcs drawn; each half-disk is a circular
+    // segment on its diameter.
+    label: 'Arbelos',
+    group: 'Shaded regions',
+    spec: `@mode: figure
+@hide: circles
+A = (0, 0)
+C = (4, 0)
+B = (6, 0)
+M = (3, 0)
+N = (2, 0)
+K = (5, 0)
+k = circle M, 3 name: circles
+m = circle N, 2 name: circles
+n = circle K, 1 name: circles
+fill: segment B-A on k ccw minus segment C-A on m ccw minus segment B-C on n ccw name: R
+arc B-A on k ccw
+arc C-A on m ccw
+arc B-C on n ccw
+segment: A-B
+label: area R = 6.283         # 2π`,
+  },
+  {
+    // A 120° sector of radius 3 less its triangle is the circular segment on
+    // the same arc: ½·9·(2π/3 − sin 120°) ≈ 5.528, both ways.
+    label: 'Circular segment',
+    group: 'Shaded regions',
+    spec: `@mode: figure
+M = (0, 0)
+O = circle M, 3
+P = (3, 0)
+Q = (-1.5, 3*sqrt(3)/2)
+fill: sector P-Q on O minor minus triangle MPQ name: S
+radius O to P
+radius O to Q
+chord P-Q on O
+label: area S
+given: area sector P-Q on O minor minus triangle MPQ
+given: area segment P-Q on O minor`,
+  },
+  {
+    // A square with a circle on its top side: the square and the half of the
+    // disk above it, 16 + 2π ≈ 22.283.
+    label: 'Shaded union',
+    group: 'Shaded regions',
+    spec: `@mode: figure
+polygon: A(0,0), B(4,0), C(4,4), D(0,4)
+M = (2, 4)
+O = circle M, 2
+fill: square ABCD or circle O name: U color: teal
+label: area U = 22.283        # 16 + 2π`,
   },
   {
     label: 'Hyperbola',

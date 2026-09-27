@@ -10,12 +10,13 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1785 tests passing**,
+agents" below). Working tree clean. **1853 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-27, after geometry phase 11 (nets and shortest paths
-over a surface) — **build step 11, which completes the solids build
-order** of the spec's "Revised 2026-09-25" section.*
+*Last updated 2026-09-27, after geometry phase 12 (shading and shaded
+regions — "find the area of the shaded region"). Phase 11 completed the
+solids build order of the spec's "Revised 2026-09-25" section; phase 12
+returned to plane geometry.*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -97,7 +98,7 @@ built.
   (roots by bisection, extrema as roots of f′ classified by f″, intersections
   as roots of f−g), typed and distinctly marked, hover snapping, `@labels` /
   `@label-every`, `@step-mode`, chained inequalities.
-- **Track 2 — geometry, phases 1–10.** Construction core (lines/points/circles
+- **Track 2 — geometry, phases 1–12.** Construction core (lines/points/circles
   as intersectable objects, derived points, triangle solvers, centres with
   their circles); the SVG figure renderer; measures, notation, navigation and
   panels; circle vocabulary and the givens table; solid primitives with
@@ -117,16 +118,20 @@ built.
   polyhedral and round primitive by per-primitive templates, folds dashed,
   and the shortest path over a solid's surface — an exact enumeration of
   face sequences over polyhedra, closed form on the unrolled side of a
-  cylinder, cone or frustum.
+  cylinder, cone or frustum; shaded regions of the plane — polygons, disks,
+  sectors and circular segments and their exact booleans (a square minus
+  its circle, a lens, an annulus, the arbelos) — with exact areas labelled
+  inside them and asserted.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
 All of D1–D5. **The solids build order is complete** (phase 11 was its
-build step 11). What remains of Track 2: shading and boolean regions (the
-next phase), the competition-specific constructions (excircles,
-nine-point circle, radical axes, cevian concurrency), and the unit circle,
-which is gated on exact values (build-order step 3).
+build step 11), and shading and boolean regions followed as phase 12.
+What remains of Track 2: the competition-specific constructions
+(excircles, nine-point circle, radical axes, cevian concurrency — the next
+phase), and the unit circle, which is gated on exact values (build-order
+step 3).
 
 ### What each track-2 phase actually delivered
 
@@ -144,6 +149,7 @@ which is gated on exact values (build-order step 3).
 | 9 | `ac7c0fd`..`267576c`, then the docs commit | Spheres the figure constructs, each an ordinary sphere solid: the insphere and circumsphere of any polyhedron (a fixed-order linear solve, verified against every face or vertex, refused naming the first that fails) and of a cylinder, cone or frustum (closed form in its own frame, so placed and tilted ones work); a sphere tangent to a plane or externally/internally to another sphere; `M = center of S`; `label: S radius` on every sphere. The AIME 2024 I tetrahedron's insphere measures 20√21/63 |
 | 10 | `b10860b`..`bc9903d`, then the docs commit | Measures and marks in space: `given: angle between A-B and C-D` (skew allowed), `… and plane <any form>`, `distance between A-B and C-D`, `distance from P to plane …` / `to line …` in the givens table; `dihedral C-A-B-D` as a value and as a drawn mark (`dihedral:`) — the AIME 2016 I hexagonal prism reads 60 at height √108; `P, Q = common perpendicular of A-B and C-D`; `angle:`, `right-angle:` (asserted 90), `tick:` and `label: angle ABC` on points in space, the marks built in space and projected, each drawn whole by its middle under the glass rule |
 | 11 | `5c33aa4`..`c078df9`, then the docs commit | Nets and shortest paths over a surface: `net: S` unfolds every polyhedral primitive by its template (the cube's cross, a prism's strip, a pyramid's or tetrahedron's star, the octahedron's strip, the frustum's star) and every round one (rectangle, sector, annular sector, rims tangent), true size, lifted and stacked, folds dashed, letters repeated as display labels; `shortest: P to Q over S [unfold]` — Dudeney's spider reads 40 over five faces, the cube's corner path √5, the AIME fly on a cone 625 on the unrolling |
+| 12 | `f565063`..`0e453f9`, then the docs commit | Shaded regions: `fill: square ABCD minus circle O`, `circle O and circle P` (the lens), `circle O minus circle P` (the annulus), sectors, circular segments and polygons, booleans with parentheses, drawn as ONE path (arcs as `A`, holes even-odd, no outline of its own) behind every line; `label: area R` prints the exact area inside the region (16 − 4π → 3.434) and `= 3.434` asserts it to the printed precision; `square`/`rectangle` are asserted shapes |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -800,6 +806,84 @@ six view settings and both palettes, 1364 parsed lines plus the constant
 lines): 5509 keys, and after every task exactly two differ — the parse of
 `net: S` and `net S`, the sanctioned phase 8 refusal lines.
 
+### Phase 12 in detail (shading and shaded regions)
+
+Grammar that now works (the plane; see the grammar header in
+`parser/types.ts` for all of it):
+
+```
+fill: A-B-C                                  # polygon by named points; also polygon/triangle/square/rectangle
+fill: circle O                               # the disk of a named circle
+fill: sector P-Q on O minor                  # and segment P-Q on O <dir>
+fill: square ABCD minus circle O name: R     # minus | and/intersect | or/union, left to right, parentheses
+fill: (circle O or circle P) minus triangle ABC
+label: area R = 3.434                        # exact area, inside the region; asserts to the printed precision
+given: area circle O and circle P            # inline expressions work too (and find:)
+```
+
+**The decisions worth not re-litigating:**
+
+*An exact region engine, not SVG masks (F1–F3, `scene/geometry/regions.ts`).*
+A region is closed loops of segments and circle arcs, outer loops
+counter-clockwise and holes clockwise, so the interior is always on a
+piece's left. Booleans split both boundaries at every closed-form meeting
+point (plus every end of one lying on the other — that is how coincident
+overlaps are found), classify each piece by its midpoint (an exact winding
+number; ON only for a coincident piece, whose side is read off the
+direction of travel), keep per the F2 table, and chain and merge. Area is
+the shoelace plus each arc's ½r²(θ − sin θ). Masks were rejected (ledger
+ruling): not testable in node, no area, and mask ids collide between two
+figures on one page. `intersect.ts` is not reused: its tolerances floor at
+an absolute 1 and it throws on overlaps a boolean needs as values.
+
+*The winding number reads one cross product.* The chord angle and the
+"inside the circular segment" test both read cross(b − a, p − a), so a
+point a rounding error off an arc's chord gets one answer from either
+side; a point exactly on the chord inside the circle is swept half a turn
+the way the arc runs. A scratch fuzz (inclusion–exclusion identities over
+64k random polygon/disk/sector/segment pairs, on and off a grid) found the
+exact-chord case; it is pinned by a test on a hole, where the sign of zero
+went the wrong way.
+
+*Where loops touch, the chain stays on the loop it came from* (else the
+sharpest left turn). A circle inscribed in a square is one square and one
+hole touching at four points — which F5's path test and F6's anchor both
+assume — and two disks touching from outside stay two loops, not a figure
+of eight. Both alternatives were tried and each breaks one of the two.
+
+*F5: one path, no outline.* `svgClosedPaths` in `svg.ts`: per loop `M`, `L`
+per side (the last side is the `Z`), `A` per arc (a whole turn is two),
+`fill-rule="evenodd"`, `REGION_OPACITY`, the `color:` clause (the theme's
+region colour otherwise, the same string a sector uses). The author's own
+lines draw the edges. The existing `sector`/`segment` statements are
+untouched.
+
+*Areas assert to the printed precision (plan correction).* `checkMeasure`
+compares at GEOM_EPS, so the plan's `label: area R = 3.434` would have
+refused 16 − 4π. An area — and only an area — now passes when it is within
+half a unit of the third place (`printed` in `MeasureCheckOptions`): 3.434
+holds, 3.43, 3.435 and 4 are refused naming the true value. Areas are
+almost always irrational, and exact values wait on build-order step 3.
+
+*F6: the label sits ON a point inside the region.* The largest component
+(holes assigned by a point strictly inside each hole, since a hole may
+touch its outer loop), seven horizontal lines at i·h/8, the longest inside
+chord's midpoint, ties to the lowest line then the leftmost. The layout
+always offset a label from its anchor, so `labels.ts` gained an opt-in
+`centred` candidate (the anchor itself, first), set only by area labels —
+every other label lays out exactly as before.
+
+*Names use `name:`,* never `R = region …` (space owns that form). A hidden
+fill still names its region. `square`/`rectangle` are asserted like
+`right-angle:` in space, lifted by `@scale: false`.
+
+**Byte identity, measured as in phases 9–11** (a scratch vitest setup
+wrapping `renderFigure` and `parseStatement`: 551 distinct suite inputs
+under five views, the 78 pre-existing examples under six view settings and
+both palettes, 1652 parsed lines plus `fill = 3`, `fill(x) = x^2`,
+`fill + x = y` and similar, and three graph specs using `fill` as a
+constant): 5384 keys, 0 differ after every task.
+
 ---
 
 ---
@@ -847,6 +931,8 @@ lines.ts         parallel / perpendicular through a point, bisectors
 centres.ts       centroid, circumcenter, incenter, orthocenter, incircle, circumcircle
 solveTriangle.ts SSS / SAS / ASA / AAS / RHS
 circles.ts       chord, arc, sector, segment, tangent at/from, secant, radius, diameter
+regions.ts       phase 12: regions of segments and arcs, exact booleans (split, midpoint
+                 classification, chain), exact areas, F6's interior label point
 buildConstructions.ts  statements → resolved geometry (the adapter)
 sceneObjects.ts        resolved geometry → three.js SceneObjects (graph mode)
 ```
@@ -936,7 +1022,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1785 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1853 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
@@ -1102,7 +1188,7 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    in space and `segment: … dashed | plain` are all unreachable to the tutor.
    **As of phase 7 it lags by two**: every solid on points, the six-edge
    tetrahedron, the hull, the frustum and the regular solids are unreachable
-   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. **As of phase 10, by five**: measures between lines and planes, dihedrals, the common perpendicular, and every mark on points in space. **As of phase 11, by six**: nets and shortest paths over a surface. The user has scheduled the tutor reference for much later.
+   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. **As of phase 10, by five**: measures between lines and planes, dihedrals, the common perpendicular, and every mark on points in space. **As of phase 11, by six**: nets and shortest paths over a surface. **As of phase 12, by seven**: `fill:` and area measures. The user has scheduled the tutor reference for much later.
    The house rule "declare `@mode:`" matters doubly for solid figures: under
    S5 a spec of 3-coordinate points with no solid still infers the *space*
    renderer, so a tutor sketching points in space before adding the solid gets
@@ -1238,6 +1324,20 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     itself is usually tilted; points written as literals (a room's corners)
     are dotted as every literal point is, so the examples place solids by
     dimensions where they can.
+
+17. **Phase 12's out-of-scope items (F7), each refused legibly where an
+    author could ask.** Hatching patterns (Track 5 styling; a fill is a flat
+    tint), fills in graph mode, fills on points in space (a face in a solid
+    figure is drawn as a section), and regions bounded by conics other than
+    circles. **Exact symbolic areas wait on build-order step 3**: until then
+    an area prints as a decimal (3.434, not 16 − 4π) and asserts to that
+    printed precision — when exact values land, the area's `printed`
+    tolerance in `checkMeasure` should give way to an exact comparison.
+    Drawing notes from the PNG review: a fill's edges are drawn only where
+    the author draws them, so a fill with no lines of its own reads as a
+    soft shape; and a union's F6 label can land in the overlap of its parts
+    when the widest chord runs through it (two overlapping squares do this,
+    which is why the "Shaded union" example is a square and a circle).
 
 ---
 

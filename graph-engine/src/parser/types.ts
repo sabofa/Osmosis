@@ -727,6 +727,69 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   or over solids of more than 12 faces, geodesics drawn on a curved
 //   surface in space, and areas.
 //
+//   Shaded regions (phase 12). "Find the area of the shaded region": a
+//   region of the PLANE, bounded by segments and circle arcs, shaded, and
+//   its exact area measured.
+//
+//   fill: A-B-C                                   -> a polygon through named points (the spec's form)
+//   fill: polygon A-B-C-D                         -> the same, spelled out
+//   fill: triangle ABC                            -> three points
+//   fill: square ABCD                             -> four points, ASSERTED a square
+//   fill: rectangle ABCD                          -> four points, ASSERTED a rectangle
+//   fill: circle O                                -> the disk of a NAMED circle
+//   fill: sector P-Q on O <direction>             -> a sector (direction required, as for "sector")
+//   fill: segment P-Q on O <direction>            -> a circular segment
+//   fill: <region> minus <region>                 -> difference
+//   fill: <region> and|intersect <region>         -> intersection
+//   fill: <region> or|union <region>              -> union
+//   fill: (circle O or circle P) minus triangle ABC   -> parentheses group
+//   fill: ... name: R                             -> names the region; later "R" is a region too
+//   label: area R [= value]                       -> its area, inside it; "= value" asserts
+//   given: area R [= value]                       -> ...or a givens-table row (and "find:")
+//   given: area square ABCD minus circle O        -> any region expression works inline
+//
+//   F1 — a region is closed loops of segments and arcs, outer loops
+//   counter-clockwise and holes clockwise; a polygon must be simple (one
+//   that crosses itself is refused naming the two sides). A disk is its
+//   circle; a sector or circular segment resolves its arc direction exactly
+//   as the drawn "sector"/"segment" do.
+//   F2 — booleans are exact: both boundaries split at every closed-form
+//   meeting point, each piece kept or dropped by its midpoint (inside,
+//   outside, or on a coincident boundary), the kept pieces chained back
+//   into loops. The operators have ONE precedence and group left to right:
+//   "circle O or circle P minus triangle ABC" is "(circle O or circle P)
+//   minus triangle ABC"; parenthesise to say otherwise. A result with
+//   nothing left is refused: "square ABCD minus circle O leaves nothing to
+//   shade".
+//   F3 — the area is exact given the pieces: the shoelace sum over each
+//   piece's chord plus each arc's circular segment, 1/2 r^2 (t - sin t). It
+//   PRINTS as a decimal until exact values land (build-order step 3 turns
+//   3.434 into 16 - 4 pi), so a stated area asserts to the precision it
+//   prints: "area R = 3.434" holds for 16 - 4 pi, 3.43 and 4 do not. Every
+//   other measure still asserts at the shared tolerance. "@scale: false"
+//   lifts the check, and lifts the square and rectangle assertions (refused
+//   otherwise with the true sides or angles), as it lifts every assertion.
+//   Names: a region is named with the "name:" clause, never "R = region
+//   ...": that unkeyed form belongs to space (keyword ownership, in the
+//   graph spec). The name also serves "@hide: R", and a hidden fill still
+//   names its region, so its area can be stated with nothing shaded.
+//   F5 — a fill is ONE path in the regions layer, behind every line: "L"
+//   per side, "A" per arc (a whole turn as two), never a polyline, holes
+//   by the even-odd rule, in its "color:" (the theme's region colour
+//   otherwise), faint. It draws NO outline: the author's own polygons,
+//   circles, arcs and segments draw the lines, as a textbook figure does,
+//   so no edge is ever doubled. It counts toward the figure's size and is
+//   not a label obstacle.
+//   F6 — "label: area R" sits ON a point inside the region: on its largest
+//   component, the midpoint of the longest chord inside it among seven
+//   horizontal lines at i/8 of its height (ties to the lowest line, then
+//   the leftmost chord). An annulus's label sits in the ring.
+//   F7 — refused where an author could ask: fills in a graph ("fill: draws
+//   in figures — declare @mode: figure"), fills on points in space ("fills
+//   are drawn in the plane"), regions bounded by an ellipse, parabola or
+//   hyperbola, and hatching (a fill is a flat tint). "fill = 3",
+//   "fill(x) = x^2" and the like read as they always did.
+//
 //   Which renderer: a spec with a solid or a cut/section is a solid figure,
 //   even with 3-coordinate points in it. A spec of 3-coordinate points and
 //   no solid is a *space* plot, as it always was — so declare "@mode: figure"
