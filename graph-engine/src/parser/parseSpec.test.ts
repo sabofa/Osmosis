@@ -85,3 +85,19 @@ describe('space directives read constants in the spec’s angle unit (fix round 
     expect(result.config.bindings[0].value).toBeCloseTo(0.5, 15)
   })
 })
+
+describe('the last @angle wins for every directive, wherever it is (fix round 2, item 4)', () => {
+  // sin(30 radians) = -0.9880316240928618; sin(30 degrees) = 1/2
+  it('degrees then radians: the directive between them reads radians', () => {
+    const result = parseSpec('@angle: degrees\n@param a = sin(30) range [-1, 1]\n@angle: radians')
+    expect(result.config.angle).toBe('radians')
+    expect(result.config.bindings[0].value).toBe(Math.sin(30))
+  })
+
+  it('radians then degrees: it reads degrees', () => {
+    const result = parseSpec('@angle: radians\n@bounds3d: x [0, 2*sin(90)]\n@param a = sin(30) range [-1, 1]\n@angle: degrees')
+    expect(result.config.angle).toBe('degrees')
+    expect(result.config.bindings[0].value).toBeCloseTo(0.5, 15)
+    expect(result.config.space.bounds.x).toEqual({ min: 0, max: 2 })
+  })
+})
