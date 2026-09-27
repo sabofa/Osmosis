@@ -18,6 +18,7 @@ export const EXAMPLE_GROUPS = [
   'Sections',
   'Spheres',
   'Measures in space',
+  'Nets and paths',
 ] as const
 
 export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
@@ -964,6 +965,129 @@ angle: G-A-F
 label: angle GAF          # 45
 right-angle: G-F-A
 given: angle between A-G and plane A-B-C`,
+  },
+  {
+    // Phase 11 (N1, N2): the cube's cross. The four side faces in one strip
+    // from the front face ABFE, the base and the top on the second face; the
+    // five fold lines dashed, the cut edges solid. Letters repeat at every
+    // copy of a vertex — A three times — and are labels, not points.
+    label: 'Cube and its net',
+    group: 'Nets and paths',
+    spec: `@mode: figure
+S = solid cube edge 4 vertices ABCDEFGH
+net: S`,
+  },
+  {
+    // Phase 11: a regular hexagonal prism's strip — six side faces left to
+    // right from AB, the two hexagons on the third.
+    label: "A prism's strip",
+    group: 'Nets and paths',
+    spec: `@mode: figure
+P = solid prism regular 6 side 2, height 4 vertices ABCDEFGHIJKL
+net: P`,
+  },
+  {
+    // Phase 11: a square pyramid's star — the base, each triangle folded
+    // out about its base edge. The apex E appears four times.
+    label: "A pyramid's star",
+    group: 'Nets and paths',
+    spec: `@mode: figure
+P = solid pyramid regular 4 side 4, height 3 vertices ABCDE
+net: P`,
+  },
+  {
+    // Phase 11: a cone of radius 3 and height 4 has slant 5, so its side
+    // unrolls to a sector of radius 5 and angle 2π · 3/5 = 216°, the base
+    // circle tangent at the arc's middle. The seam is cut behind, so the
+    // side facing the viewer is the middle of the sector.
+    label: "A cone's sector",
+    group: 'Nets and paths',
+    spec: `@mode: figure
+K = solid cone radius 3, height 4
+net: K
+label: K radius
+label: K height`,
+  },
+  {
+    // Phase 11: a cylinder unrolls to a rectangle 2πr by h, both rims
+    // tangent at the middles of its long edges; a conical frustum to an
+    // annular sector of the cone it was cut from (radii 20/3 and 5/3 here,
+    // angle 6π/5), each rim tangent at its arc's middle.
+    label: 'Cylinder and frustum nets',
+    group: 'Nets and paths',
+    spec: `@mode: figure
+O = (0, 0, 0)
+M = (0, 0, 10)
+C = solid cylinder from O to M radius 3
+net: C
+N = (0, 0, -14)
+L = (0, 0, -10)
+F = solid frustum from N radius 4 to L radius 1
+net: F`,
+  },
+  {
+    // Phase 11 (N3): Dudeney's spider and fly. The room is 30 long, 12 wide
+    // and 12 high; the spider P is on one end wall, on its centre line, 1
+    // below the ceiling, and the fly Q on the other, 1 above the floor. Over
+    // the ceiling and down is 1 + 30 + 11 = 42; across five faces — end
+    // wall, ceiling, side wall, floor, end wall — it is √(32² + 24²) = 40.
+    label: "Dudeney's spider and fly",
+    group: 'Nets and paths',
+    spec: `@mode: figure
+R = solid prism 30 by 12 by 12 vertices ABCDEFGH
+P = (0, -15, 5)
+Q = (0, 15, -5)
+shortest: P to Q over R unfold color: red
+label: shortest P to Q over R = 40`,
+  },
+  {
+    // Phase 11 (N4), AIME: a cone of radius 600 and height 200√7 (slant
+    // 800). A fly starts 125 from the apex and crawls to the exactly
+    // opposite generator, 375√2 from the apex. Unrolled, the sector is
+    // 3π/2 and the two generators 3π/4 apart, so the path is
+    // √(125² + (375√2)² + 2 · 125 · 375√2 · √2/2) = 625. A path on a curved
+    // side is drawn on the unrolling, straight.
+    label: 'AIME: a fly on a cone',
+    group: 'Nets and paths',
+    spec: `@mode: figure
+V = (0, 0, 200*sqrt(7))
+O = (0, 0, 0)
+R = (0, 600, 0)
+T = (0, -600, 0)
+K = solid cone apex V base O radius 600
+segment: V-R
+segment: V-T
+P = divide V-R at 125:675
+Q = divide V-T at 375*sqrt(2):800-375*sqrt(2)
+shortest: P to Q over K color: red
+label: shortest P to Q over K = 625`,
+  },
+  {
+    // Phase 11 (N3): corner to corner over a unit cube. The space diagonal
+    // AG is √3, but over the surface the path crosses two faces through the
+    // middle of their shared edge: unfolded, a 2-by-1 rectangle's diagonal,
+    // √5. With "unfold", the strip of the two faces is lifted beside it.
+    label: 'Over a cube, corner to corner',
+    group: 'Nets and paths',
+    spec: `@mode: figure
+S = solid cube edge 1 vertices ABCDEFGH
+shortest: A to G over S unfold color: red
+label: shortest A to G over S
+segment: A-G
+label: AG`,
+  },
+  {
+    // Phase 11 (N4): round a cylinder of radius 3 and height 10, from 1 up
+    // on one generator to 9 up on the one opposite: half the rim, 3π, by 8,
+    // hypot(3π, 8) ≈ 12.36, straight on the unrolled side.
+    label: 'Round a cylinder',
+    group: 'Nets and paths',
+    spec: `@mode: figure
+C = solid cylinder radius 3, height 10
+P = (0, 3, -4)
+Q = (0, -3, 4)
+shortest: P to Q over C color: red
+label: shortest P to Q over C`,
   },
   {
     label: 'Right angle',

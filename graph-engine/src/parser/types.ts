@@ -480,8 +480,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //     any round solid placed by points, tilted or not, is cut in its own frame
 //
 //   Not drawn (refused where an author could ask): a plane on its own
-//   ("plane: A-B-C"), the line where two planes meet, parabolic and
-//   hyperbolic sections, and nets.
+//   ("plane: A-B-C"), the line where two planes meet, and parabolic and
+//   hyperbolic sections. (Nets were refused here until phase 11.)
 //
 //   Spheres a figure constructs (phase 9). Each is an ORDINARY sphere solid,
 //   placed exactly as "sphere center M radius r" places one: it draws,
@@ -641,7 +641,55 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   no vertex ("angle: between A-B and C-D" — skew lines never meet; for a
 //   line and a plane, drop the foot F and mark "angle: A-P-F"), the angle
 //   between two planes as such (write the dihedral), a line–plane distance,
-//   area and volume measures, exact values, and nets.
+//   area and volume measures, and exact values.
+//
+//   Nets and shortest paths over a surface (phase 11). Build step 11, the
+//   last of the solids build order.
+//
+//   net: S                                        -> S unfolded flat, lifted beside it
+//   shortest: P to Q over S                       -> the shortest path over S's surface
+//   shortest: P to Q over S unfold                -> polyhedra: also lift the strip it crosses
+//   label: shortest P to Q over S [= value]       -> its length, on the path; "= value" asserts
+//   given: shortest P to Q over S [= value]       -> ...or a givens-table row (and "find:")
+//
+//   N1 — a net is 2D geometry, like a lifted section: true size, lifted
+//   beside the solid, never turning with "@view:". Several lifts (sections,
+//   nets, path unfoldings) stack left to right in statement order, each
+//   clear of the one before. Fold lines are dashed, cut edges solid. Every
+//   net is drawn SEEN FROM OUTSIDE. Its vertex letters are DISPLAY LABELS,
+//   repeated at every copy of a vertex (a cube's cross shows A three
+//   times), and are never named points: "label: AB" still measures the
+//   solid's edge.
+//   N2 — one template per primitive, never a search: a prism (box, cube,
+//   regular, on points) is its side faces in one strip from face AB, both
+//   ends on side face ceil(n/2) - 1 (the cube's cross); a pyramid or
+//   tetrahedron (every form) the base with each side folded out about its
+//   base edge (the star); a pyramidal frustum the star of trapezoids, its
+//   top on trapezoid ceil(n/2) - 1; the octahedron a strip of eight round
+//   the equator; a cylinder a 2 pi r by h rectangle, a cone a sector of
+//   radius l and angle 2 pi r / l, a conical frustum an annular sector, each
+//   with its rim circles tangent at the middles of the edges they fold on,
+//   the seam cut along the generator directly away from the default camera.
+//   A net is checked for overlap, exactly, and one that overlapped would be
+//   refused (no template reachable today can overlap). A sphere and a hull
+//   of named points have no net.
+//   N3 — over a polyhedron (at most 12 faces), both ends in space ON its
+//   surface: an exact enumeration of simple face sequences, each unfolded
+//   in closed form and valid only when the straight line crosses every
+//   shared edge in order within it; the least valid length wins. Drawn on
+//   the solid as its per-face segments (dashed where a face hides them),
+//   and with "unfold" straight across the lifted strip of faces it crosses.
+//   N4 — over a cylinder, cone or conical frustum, both ends on the CURVED
+//   side (a rim counts; a flat end is refused): closed form on the unrolled
+//   side. A geodesic on a curved surface is not a conic in projection, so it
+//   is drawn ONLY on the lifted unrolling (cut opposite the path's middle,
+//   the path one straight segment); P and Q are drawn on the solid by their
+//   own statements. A frustum path that would run inside the top rim is
+//   refused ("would run along the top rim — not drawn").
+//   N6 — not drawn, refused where an author could ask: general polyhedron
+//   unfolding (hulls), nets of spheres, paths over flat ends of round solids
+//   or over solids of more than 12 faces, geodesics drawn on a curved
+//   surface in space, and areas.
 //
 //   Which renderer: a spec with a solid or a cut/section is a solid figure,
 //   even with 3-coordinate points in it. A spec of 3-coordinate points and

@@ -10,11 +10,12 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1707 tests passing**,
+agents" below). Working tree clean. **1774 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-26, after geometry phase 10 (measures and marks in
-space).*
+*Last updated 2026-09-27, after geometry phase 11 (nets and shortest paths
+over a surface) — **build step 11, which completes the solids build
+order** of the spec's "Revised 2026-09-25" section.*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -112,15 +113,20 @@ built.
   and a named dimension; measures and marks in space — angle arcs,
   asserted right angles and ticks on points in space, dihedral angles
   with their plane-angle mark, angles and distances between lines and
-  planes in the givens table, and the common perpendicular of two lines.
+  planes in the givens table, and the common perpendicular of two lines; nets of every
+  polyhedral and round primitive by per-primitive templates, folds dashed,
+  and the shortest path over a solid's surface — an exact enumeration of
+  face sequences over polyhedra, closed form on the unrolled side of a
+  cylinder, cone or frustum.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 beyond phase 10: build step 11 of the spec's
-"Revised 2026-09-25" section (nets),
-shading and boolean regions, and the competition-specific constructions
-(excircles, nine-point circle, radical axes, cevian concurrency).
+All of D1–D5. **The solids build order is complete** (phase 11 was its
+build step 11). What remains of Track 2: shading and boolean regions (the
+next phase), the competition-specific constructions (excircles,
+nine-point circle, radical axes, cevian concurrency), and the unit circle,
+which is gated on exact values (build-order step 3).
 
 ### What each track-2 phase actually delivered
 
@@ -137,6 +143,7 @@ shading and boolean regions, and the competition-specific constructions
 | 8 | `9677aeb`..`2b97c75`, then the docs commit | Planes are objects: through three points, perpendicular to a line, parallel to a plane, by an equation, the axis form, and named (`p = plane ...`, used as `plane p`), all canonicalised to one internal plane. Any solid is cut by any plane: the cube's central hexagon, the tetrahedron's square, the AIME pyramid's pentagon, the log wedge's half ellipse, a sphere's circle through three points. In place, the outline the solid hides is dashed; lifted, the section is true shape, corners nameable |
 | 9 | `ac7c0fd`..`267576c`, then the docs commit | Spheres the figure constructs, each an ordinary sphere solid: the insphere and circumsphere of any polyhedron (a fixed-order linear solve, verified against every face or vertex, refused naming the first that fails) and of a cylinder, cone or frustum (closed form in its own frame, so placed and tilted ones work); a sphere tangent to a plane or externally/internally to another sphere; `M = center of S`; `label: S radius` on every sphere. The AIME 2024 I tetrahedron's insphere measures 20√21/63 |
 | 10 | `b10860b`..`bc9903d`, then the docs commit | Measures and marks in space: `given: angle between A-B and C-D` (skew allowed), `… and plane <any form>`, `distance between A-B and C-D`, `distance from P to plane …` / `to line …` in the givens table; `dihedral C-A-B-D` as a value and as a drawn mark (`dihedral:`) — the AIME 2016 I hexagonal prism reads 60 at height √108; `P, Q = common perpendicular of A-B and C-D`; `angle:`, `right-angle:` (asserted 90), `tick:` and `label: angle ABC` on points in space, the marks built in space and projected, each drawn whole by its middle under the glass rule |
+| 11 | `5c33aa4`..`c078df9`, then the docs commit | Nets and shortest paths over a surface: `net: S` unfolds every polyhedral primitive by its template (the cube's cross, a prism's strip, a pyramid's or tetrahedron's star, the octahedron's strip, the frustum's star) and every round one (rectangle, sector, annular sector, rims tangent), true size, lifted and stacked, folds dashed, letters repeated as display labels; `shortest: P to Q over S [unfold]` — Dudeney's spider reads 40 over five faces, the cube's corner path √5, the AIME fly on a cone 625 on the unrolling |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -686,6 +693,88 @@ their own config and the five views, plus the 73 examples under six view
 settings and both palettes): every other digest identical after each
 task, errors included.
 
+### Phase 11 in detail (nets and shortest paths over a surface)
+
+Grammar that now works (author frame, z up):
+
+```
+net: S                                   # S unfolded flat, lifted beside it (any prism, pyramid,
+                                         #   tetrahedron, octahedron, frustum, cylinder, cone)
+shortest: P to Q over S                  # the shortest path over S's surface, P and Q points on it
+shortest: P to Q over S unfold           # polyhedra: also lift the strip of faces it crosses
+label: shortest P to Q over S = 40       # its length on the path; asserts
+given: shortest P to Q over S            # a table row (and find:)
+```
+
+**The decisions worth not re-litigating:**
+
+*A net is 2D geometry from a TEMPLATE (N1, N2; `figure/nets.ts`).* Each
+primitive has one face tree written down — root, and which face hangs off
+which along which edge — read off its lettering (`labelOrder`). Every face
+is laid out SEEN FROM OUTSIDE in its own chart, and a child is placed by
+the one rigid motion putting its shared edge on its parent's copy (the
+fold into the parent's plane, done in the plane). Folds are the tree's
+edges (dashed, auxiliary layer); every other face edge is a cut (solid).
+A vertex copy is a class of (face, vertex) pairs joined across folds, and
+its letter is a DISPLAY label (`netLabel` item), never a named point.
+Round solids unroll in their local frame, the seam along the generator
+directly away from the DEFAULT camera, rims tangent at the middles of the
+edges they fold on.
+
+*Lifts stack (N1).* `liftOffset` takes the running right edge of every
+earlier lift (sections, nets, path unfoldings), in statement order. With
+no earlier lift the arithmetic is phase 5's, so every single-lift spec kept
+its bytes.
+
+*Shortest paths over polyhedra are an exact enumeration (N3,
+`figure/shortestPath.ts`).* Every simple face sequence from a face holding
+P, depth first in face order, ending at the first face holding Q; each is
+unfolded in closed form (the nets' machinery) and valid only when P'Q'
+crosses every shared edge in order within it; the least valid length wins,
+ties to the first found. Faces a path only touches at an end are trimmed.
+At most 12 faces (about 13 ms for a decagonal prism, the worst case).
+Drawn on the solid piece by piece under the glass rule, and with `unfold`
+straight across the lifted strip, turned so the path runs left to right.
+
+*Round solids are closed form on the unrolled side (N4).* Cylinder:
+min over k of hypot(ds + 2 pi r k, dy). Cone: alpha = |d theta| r/l wrapped
+modulo the sector the short way, then the law of cosines. **No
+through-the-apex branch**: the short way is at most pi r/l < pi. A frustum
+path passing inside the top rim is refused. Drawn only on the lifted
+unrolling (cut opposite the path's middle); P and Q are drawn by their own
+statements; no geodesic in space.
+
+**Corrections to the plan, recorded.**
+- *No template net reachable from the grammar can overlap.* The plan
+  expected an obtuse six-edge tetrahedron's star to; it cannot — any two
+  lateral faces share a base vertex whose base angle and two face angles
+  sum below 360°, so their wedges there are disjoint. Right prisms, the
+  regular frustum and the octahedron are fixed shapes, and 20000 seeded
+  pyramids on points never overlapped. The exact check stays as the guard
+  every template passes, and the tests pin the invariant beside hand-built
+  overlapping nets the check must refuse (the phase 5 convexity precedent).
+- *The octahedron's strip alternates upper and lower faces in pairs*
+  (L0 U0 U1 L1 L2 U2 U3 L3): single alternation has no chain.
+- *The validity check's test* could not use a regular solid: a scratch
+  search found invalid-but-shorter unfoldings only on frusta and irregular
+  hulls. The test is a square frustum on points, from a top corner to a
+  point on the same side face (1.5 exactly), where the chain round the top
+  puts Q' 1.12 away.
+- *Points half a turn apart cannot pin the shorter wrap on a cone*: both
+  ways round are equal there. That test stays (it pins the largest
+  separation, 4π/5 < π), and a three-quarter-turn test pins the wrap.
+
+**Grammar notes.** A bare `net S` is still refused, now pointing at the
+colon. `net = 5`, `net(x) = x^2`, `net + x = y`, `shortest = 3` and the
+like parse exactly as at base (in the byte sweep and the tests).
+
+**Byte identity, measured as in phases 9 and 10** (a scratch vitest setup
+wrapping `renderFigure` and `parseStatement`: 516 distinct suite inputs
+under their own config and five views, the 78 pre-existing examples under
+six view settings and both palettes, 1364 parsed lines plus the constant
+lines): 5509 keys, and after every task exactly two differ — the parse of
+`net: S` and `net S`, the sanctioned phase 8 refusal lines.
+
 ---
 
 ---
@@ -765,6 +854,8 @@ tetrahedron.ts  the tetrahedron from six edges, Cayley-Menger checked (P4)
 regular.ts      regular n-gon solids and the octahedron: P5's rotation and lettering
 spheres.ts      phase 9: in- and circumspheres (fixed-order solves, verified), tangency radii
 spaceMarks.ts   phase 10: arcs, right-angle squares and dihedral marks in space (M1, M3), M4's whole-mark rule
+nets.ts         phase 11: per-primitive net templates, the closed-form unfolding (charts, rigid motion), the overlap check, round unrollings
+shortestPath.ts phase 11: shortest paths over a surface — polyhedra by exact face-sequence enumeration (N3), round solids closed form (N4)
 ```
 
 **Placements and the local camera (P1).** A round solid (cylinder, cone,
@@ -820,7 +911,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1707 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1774 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
@@ -986,7 +1077,7 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    in space and `segment: … dashed | plain` are all unreachable to the tutor.
    **As of phase 7 it lags by two**: every solid on points, the six-edge
    tetrahedron, the hull, the frustum and the regular solids are unreachable
-   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. **As of phase 10, by five**: measures between lines and planes, dihedrals, the common perpendicular, and every mark on points in space. The user has scheduled the tutor reference for much later.
+   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. **As of phase 10, by five**: measures between lines and planes, dihedrals, the common perpendicular, and every mark on points in space. **As of phase 11, by six**: nets and shortest paths over a surface. The user has scheduled the tutor reference for much later.
    The house rule "declare `@mode:`" matters doubly for solid figures: under
    S5 a spec of 3-coordinate points with no solid still infers the *space*
    renderer, so a tutor sketching points in space before adding the solid gets
@@ -1060,8 +1151,8 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     plane drawn on its own (a patch — `plane: A-B-C` is refused, pointing at
     `cut:` and at naming it); the line where two planes meet (`intersect
     plane …, plane …` is refused); parabolic and hyperbolic sections of a
-    cone or frustum (refused, naming the conic); nets (`net:` is refused,
-    build step 11). ~~Inscribed and circumscribed solids are build step 9~~
+    cone or frustum (refused, naming the conic). ~~Nets (`net:` is
+    refused, build step 11)~~ (**done in phase 11**). ~~Inscribed and circumscribed solids are build step 9~~
     (**done in phase 9**, for spheres); angle and dihedral marks step 10
     (**done in phase 10**).
 
@@ -1109,6 +1200,18 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     notes from the PNG review: a convex solid's dihedral arc is always
     dashed (it lies inside the solid, M4), and its radius, 0.2 × 0.3 |AB|,
     is small — a candidate for a larger fraction if review finds it faint.
+
+16. **Phase 11's out-of-scope items (N6), each refused legibly.** General
+    polyhedron unfolding (`net:` on a hull of named points), nets of
+    spheres, paths over the flat ends of round solids, over spheres, or
+    over polyhedra of more than 12 faces, geodesics drawn on a curved
+    surface in space, and areas. Drawing notes from the PNG review: a net's
+    left-hand letters sit close to the solid's right-hand ones (the lift
+    gap is a quarter of the solid's width, as a section's is); a path's
+    `unfold` strip is turned so the path runs left to right, so the strip
+    itself is usually tilted; points written as literals (a room's corners)
+    are dotted as every literal point is, so the examples place solids by
+    dimensions where they can.
 
 ---
 
