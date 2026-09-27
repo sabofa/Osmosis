@@ -11,6 +11,7 @@ import {
   graphMesh,
   label,
   lineMark,
+  meshMark,
   parametricMesh,
   pointMark,
   scene,
@@ -34,7 +35,7 @@ const DEG = Math.PI / 180
 // along it, in an equal-aspect box, points straight at the viewer.
 const TOWARD_CAMERA: Vec3 = [Math.cos(25 * DEG) * Math.cos(40 * DEG), Math.cos(25 * DEG) * Math.sin(40 * DEG), Math.sin(25 * DEG)]
 
-const sphereAt = (r: number, c: Vec3 = [0, 0, 0]) =>
+const sphereAt = (r: number, c: Vec3 = [0, 0, 0], opacity = 0.6) =>
   parametricMesh(
     (u, v) => [c[0] + r * Math.sin(v) * Math.cos(u), c[1] + r * Math.sin(v) * Math.sin(u), c[2] + r * Math.cos(v)],
     (u, v) => [Math.sin(v) * Math.cos(u), Math.sin(v) * Math.sin(u), Math.cos(v)],
@@ -44,7 +45,7 @@ const sphereAt = (r: number, c: Vec3 = [0, 0, 0]) =>
     Math.PI,
     64,
     32,
-    { line: 2, style: { opacity: 0.6, color: { author: null, slot: 1 } } },
+    { line: 2, style: { opacity, color: { author: null, slot: 1 } } },
   )
 
 const saddle = () =>
@@ -83,9 +84,25 @@ export const SPACE_FIXTURES: SpaceFixture[] = [
     id: 'sphere',
     title: 'Unit sphere, translucent 0.6',
     look:
-      'A round (equal aspect) blue sphere at 60% opacity, lit from the upper left with a soft highlight there and darker toward the lower right. The back walls, their outlines and gridlines show through it. Only its nearest layer is drawn (the sorted fallback; S3’s order-independent transparency adds the far side). It stays round as you orbit.',
+      'A round (equal aspect) blue sphere at 60% opacity, lit from the upper left with a soft highlight there and darker toward the lower right. Both layers draw: its far inside, then its near side over it, so the back walls, their outlines and gridlines show through only faintly (two layers of 0.6 cover 84%). It stays round as you orbit.',
     scene: scene([sphereAt(1)]),
     space: config(),
+  },
+  {
+    id: 'two-translucent',
+    title: 'Translucent sphere cut by a translucent plane',
+    look:
+      'A blue sphere and a green square plane z = 0, both at 50% opacity, the plane cutting the sphere at its equator. Nothing vanishes: the plane’s band across the sphere, its edges and the back walls all stay visible through the sphere, dimmed, and the plane’s corners outside the sphere read plainly. Their centroids tie, so one mesh composites wholly over the other (here the sphere over the plane); the sorted fallback cannot interleave two meshes, which S3’s order-independent transparency does.',
+    scene: scene([
+      sphereAt(1, [0, 0, 0], 0.5),
+      meshMark(
+        [-1.6, -1.6, 0, 1.6, -1.6, 0, 1.6, 1.6, 0, -1.6, 1.6, 0],
+        [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+        [0, 1, 2, 0, 2, 3],
+        { line: 3, style: { opacity: 0.5, color: { author: null, slot: 2 } } },
+      ),
+    ]),
+    space: config({ bounds: { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -1.5, max: 1.5 } } }),
   },
   {
     id: 'helix',

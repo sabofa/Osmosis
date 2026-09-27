@@ -1,8 +1,8 @@
 // The mesh pipeline (plan G9): lit two-sided triangles, opaque first, then
 // translucent (opacity < 1) in a second pass with depth writes off, blended,
-// sorted back to front by centroid depth, each mesh as its nearest layer
-// (see drawTranslucentMeshes). That pass is the fallback S3's
-// order-independent transparency replaces.
+// sorted back to front by centroid depth, each mesh back faces first (see
+// drawTranslucentMeshes). That pass is the fallback S3's order-independent
+// transparency replaces.
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
@@ -116,12 +116,14 @@ export function drawMeshes(
   gl.bindVertexArray(null)
 }
 
-// Translucent meshes, already sorted back to front. Each is drawn as its
-// nearest layer only: a depth-only prepass, then its colour, blended, where
-// the depth matches, without writing depth. Without the prepass the
-// triangles of one closed mesh composite in index order, so its far side
-// can land over its near side (seen on a translucent sphere). The far
-// layers of a translucent mesh wait for S3's order-independent transparency.
+// Translucent meshes, already sorted back to front, blended, never writing
+// depth: a translucent mesh that wrote depth would hide every translucent
+// mesh drawn after it wherever it lies in front of that mesh's far parts
+// (a tangent plane cutting a translucent surface lost whole regions). Each
+// mesh draws its back faces (front culled) and then its front faces (back
+// culled), so a closed surface's far side composites under its near side.
+// This sorted fallback stays on devices without EXT_color_buffer_float
+// (SP4); S3's order-independent transparency replaces it elsewhere.
 export function drawTranslucentMeshes(
   gl: WebGL2RenderingContext,
   program: ProgramInfo,
@@ -132,17 +134,17 @@ export function drawTranslucentMeshes(
 ): void {
   if (meshes.length === 0) return
   bindMeshProgram(gl, program, camera, world)
+  gl.enable(gl.BLEND)
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+  gl.depthMask(false)
+  gl.enable(gl.CULL_FACE)
   for (const mesh of meshes) {
-    gl.disable(gl.BLEND)
-    gl.colorMask(false, false, false, false)
-    gl.depthMask(true)
+    gl.cullFace(gl.FRONT)
     drawOne(gl, program, mesh, colors)
-    gl.colorMask(true, true, true, true)
-    gl.depthMask(false)
-    gl.enable(gl.BLEND)
+    gl.cullFace(gl.BACK)
     drawOne(gl, program, mesh, colors)
   }
+  gl.disable(gl.CULL_FACE)
   gl.depthMask(true)
   gl.disable(gl.BLEND)
   gl.bindVertexArray(null)

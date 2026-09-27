@@ -157,7 +157,7 @@ describe('GlBackend: upload', () => {
 })
 
 describe('GlBackend: drawing meshes', () => {
-  it('draws translucent meshes after opaque ones, back to front, each as its nearest layer only', () => {
+  it('draws translucent meshes after opaque ones, back to front, back faces then front faces, never writing depth', () => {
     const { fake, backend } = setup()
     // Scene order: near translucent, opaque, far translucent. The camera
     // looks down from +z (elevation 25), so higher z is nearer.
@@ -168,16 +168,26 @@ describe('GlBackend: drawing meshes', () => {
     backend.draw(camera(), 1)
     const draws = meshDraws(fake)
     const heightOf = (d: (typeof draws)[number]) => Math.round((attribData(fake, d.vao, 0) as Float32Array)[2] * 10) / 10
-    // Each translucent mesh: a depth-only prepass (so an unsorted closed mesh
-    // cannot composite its far side over its near side), then its colour,
-    // blended, without writing depth.
-    expect(draws.map((d) => [heightOf(d), d.colorWrite, d.depthWrite, d.blend])).toEqual([
-      [0, true, true, false],
-      [-0.8, false, true, false],
-      [-0.8, true, false, true],
-      [0.8, false, true, false],
-      [0.8, true, false, true],
+    // A translucent mesh never writes depth, so a nearer translucent mesh is
+    // never hidden behind a farther one; drawing its back faces (front
+    // culled) before its front faces (back culled) composites a closed
+    // surface's far side under its near side.
+    expect(draws.map((d) => [heightOf(d), d.cull, d.depthWrite, d.blend])).toEqual([
+      [0, 'none', true, false],
+      [-0.8, 'front', false, true],
+      [-0.8, 'back', false, true],
+      [0.8, 'front', false, true],
+      [0.8, 'back', false, true],
     ])
+  })
+
+  it('leaves culling off for the next frame: lines, points and opaque meshes', () => {
+    const { fake, backend } = setup()
+    backend.setScene(scene([square(0.8, -0.5, 0.5, 1), square(0, -0.5, 1, 2)]), WORLD, LIGHT)
+    backend.draw(camera(), 1)
+    const before = fake.draws.length
+    backend.draw(camera(), 1)
+    expect(fake.draws[before].cull).toBe('none')
   })
 
   it('clears to the palette background', () => {

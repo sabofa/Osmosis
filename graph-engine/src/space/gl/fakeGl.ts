@@ -32,10 +32,12 @@ export interface FakeDraw {
   mode: number
   count: number
   instances: number
-  // Whether colour writes, depth writes and blending were on for this draw.
+  // Whether colour writes, depth writes and blending were on for this draw,
+  // and which faces were culled.
   colorWrite: boolean
   depthWrite: boolean
   blend: boolean
+  cull: 'none' | 'front' | 'back' | 'both'
 }
 
 export interface FakeUpload {
@@ -59,6 +61,9 @@ export const GL_CONSTANTS = {
   LESS: 0x0201,
   LEQUAL: 0x0203,
   CULL_FACE: 0x0b44,
+  FRONT: 0x0404,
+  BACK: 0x0405,
+  FRONT_AND_BACK: 0x0408,
   DEPTH_TEST: 0x0b71,
   BLEND: 0x0be2,
   UNSIGNED_SHORT: 0x1403,
@@ -124,6 +129,10 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   let colorWrite = true
   let depthWrite = true
   let blend = false
+  let cullEnabled = false
+  let cullMode: number = GL_CONSTANTS.BACK
+  const cull = (): FakeDraw['cull'] =>
+    !cullEnabled ? 'none' : cullMode === GL_CONSTANTS.FRONT ? 'front' : cullMode === GL_CONSTANTS.BACK ? 'back' : 'both'
   let arrayBuffer: FakeHandle | null = null
   // Element buffers bind to the VAO; tracked for completeness of uploads.
   let elementBuffer: FakeHandle | null = null
@@ -192,9 +201,14 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     },
     enable: (cap: number) => {
       if (cap === GL_CONSTANTS.BLEND) blend = true
+      if (cap === GL_CONSTANTS.CULL_FACE) cullEnabled = true
     },
     disable: (cap: number) => {
       if (cap === GL_CONSTANTS.BLEND) blend = false
+      if (cap === GL_CONSTANTS.CULL_FACE) cullEnabled = false
+    },
+    cullFace: (mode: number) => {
+      cullMode = mode
     },
     useProgram: (p: FakeHandle | null) => {
       program = p
@@ -226,16 +240,16 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       attribs.set(vao.id, map)
     },
     drawArrays: (mode: number, _first: number, count: number) => {
-      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend })
+      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull() })
     },
     drawElements: (mode: number, count: number) => {
-      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend })
+      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull() })
     },
     drawArraysInstanced: (mode: number, _first: number, count: number, instances: number) => {
-      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend })
+      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull() })
     },
     drawElementsInstanced: (mode: number, count: number, _type: number, _offset: number, instances: number) => {
-      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend })
+      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull() })
     },
   }
 
@@ -297,6 +311,8 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       colorWrite = true
       depthWrite = true
       blend = false
+      cullEnabled = false
+      cullMode = GL_CONSTANTS.BACK
       arrayBuffer = null
       elementBuffer = null
     },

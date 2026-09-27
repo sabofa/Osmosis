@@ -228,7 +228,7 @@ export class GlBackend {
       // Lines, arrows and points, with their depth bias.
       antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points)
 
-      // Translucent meshes, back to front, blended, each its nearest layer.
+      // Translucent meshes, back to front, blended, back faces then front faces.
       drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), camera, world, colors)
     } catch (error) {
       this.fail(error)
