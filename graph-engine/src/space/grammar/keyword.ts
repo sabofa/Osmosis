@@ -19,6 +19,7 @@ import { parseContour } from './keywords/contour'
 import { parseLine, parsePlane } from './keywords/geometry'
 import { parseCross, parseProject } from './keywords/vectors'
 import { parseCylindrical, parseSpherical } from './keywords/coordinates'
+import { parseFrame, parseMotion, parseOsculating } from './keywords/curves'
 
 interface KeywordRow {
   keyword: string
@@ -53,6 +54,9 @@ const KEYWORDS: readonly KeywordRow[] = [
   { keyword: 'project', parse: parseProject },
   { keyword: 'cylindrical', parse: parseCylindrical },
   { keyword: 'spherical', parse: parseSpherical },
+  { keyword: 'frame', parse: parseFrame },
+  { keyword: 'osculating', parse: parseOsculating },
+  { keyword: 'motion', parse: parseMotion },
 ]
 
 // "keyword: A-B-C [dashed | plain]": a solid figure's point list.

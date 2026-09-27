@@ -13,26 +13,7 @@
 import { splitStyle } from '../style'
 import type { SpaceForm } from '../types'
 import { parsePointOperand, parseVectorOperand } from './operands'
-import { keywordStyle } from './shared'
-
-// The bracket depth before each character.
-function depths(text: string): number[] {
-  const out: number[] = []
-  let depth = 0
-  for (const c of text) {
-    out.push(depth)
-    if (c === '(' || c === '[' || c === '<' || c === '⟨') depth++
-    else if (c === ')' || c === ']' || c === '>' || c === '⟩') depth--
-  }
-  return out
-}
-
-// The matches of `separator` that lie outside every bracket.
-function topLevel(text: string, separator: RegExp): RegExpExecArray[] {
-  const depth = depths(text)
-  const global = new RegExp(separator.source, 'g')
-  return [...text.matchAll(global)].filter((m) => depth[m.index] === 0 && depth[m.index + m[0].length - 1] === 0) as RegExpExecArray[]
-}
+import { keywordStyle, topLevel } from './shared'
 
 function parseVectorOp(keyword: 'cross' | 'project', text: string): SpaceForm {
   const usage = keyword === 'cross' ? '"cross: u x v" or "cross: u x v at (1, 1, 1)"' : '"project: u onto v" or "project: u onto v at (1, 1, 1)"'

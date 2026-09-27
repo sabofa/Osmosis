@@ -36,3 +36,23 @@ export function keywordStyle(clauses: readonly RawClause[], allowed: readonly St
   const line = buildStyle(clauses.filter(isLine), 'curve')
   return { ...surface, width: line.width, dashed: line.dashed }
 }
+
+// The bracket depth before each character, counting (), [], <> and ⟨⟩: in
+// an operand, < and > are only ever a vector's brackets.
+function depths(text: string): number[] {
+  const out: number[] = []
+  let depth = 0
+  for (const c of text) {
+    out.push(depth)
+    if (c === '(' || c === '[' || c === '<' || c === '⟨') depth++
+    else if (c === ')' || c === ']' || c === '>' || c === '⟩') depth--
+  }
+  return out
+}
+
+// The matches of `separator` that lie outside every bracket, in order.
+export function topLevel(text: string, separator: RegExp): RegExpExecArray[] {
+  const depth = depths(text)
+  const global = new RegExp(separator.source, 'g')
+  return [...text.matchAll(global)].filter((m) => depth[m.index] === 0 && depth[m.index + m[0].length - 1] === 0) as RegExpExecArray[]
+}

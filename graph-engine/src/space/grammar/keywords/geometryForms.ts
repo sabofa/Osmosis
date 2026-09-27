@@ -82,4 +82,19 @@ export interface CoordinateSurfaceForm {
   style: SpaceStyle
 }
 
-export type GeometryForm = ContourForm | LineForm | PlaneForm | VectorOpForm | CoordinateSurfaceForm
+// A space curve: a vector function's name ("r", defined by "r(t) = <...>"),
+// or an inline "<cos(t), sin(t), t>" whose parameter "at" names.
+export type CurveOperand = ({ kind: 'named'; name: string } | { kind: 'inline'; components: [Expr, Expr, Expr] }) & { text: string }
+
+// "frame: r at t = 1", "osculating: r at t = 1", "motion: r at t = 1
+// [components]".
+export interface CurveFrameForm {
+  form: 'frame' | 'osculating' | 'motion'
+  curve: CurveOperand
+  param: string
+  at: Expr
+  components: boolean
+  style: SpaceStyle
+}
+
+export type GeometryForm = ContourForm | LineForm | PlaneForm | VectorOpForm | CoordinateSurfaceForm | CurveFrameForm

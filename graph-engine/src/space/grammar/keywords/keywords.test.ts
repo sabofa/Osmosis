@@ -253,3 +253,45 @@ describe('cylindrical: and spherical:', () => {
     })
   }
 })
+
+describe('frame:, osculating: and motion:', () => {
+  it('frame: r at t = 1', () => {
+    expect(form('frame: r at t = 1')).toEqual({
+      form: 'frame',
+      curve: { kind: 'named', name: 'r', text: 'r' },
+      param: 't',
+      at: p('1'),
+      components: false,
+      style: NO_STYLE,
+    })
+  })
+
+  it('an inline curve names its parameter in "at"; r(t) is the name r', () => {
+    expect(form('osculating: <cos(s), sin(s), s/4> at s = pi/2')).toMatchObject({
+      form: 'osculating',
+      curve: { kind: 'inline', components: [p('cos(s)'), p('sin(s)'), p('s/4')] },
+      param: 's',
+      at: p('pi/2'),
+    })
+    expect(form('frame: r(t) at t = 0')).toMatchObject({ curve: { kind: 'named', name: 'r' } })
+    expect(form('frame: (t, t^2, 0) at t = 1')).toMatchObject({ curve: { kind: 'inline', components: [p('t'), p('t^2'), p('0')] } })
+  })
+
+  it('motion: ... components; osculating takes width: and dashed', () => {
+    expect(form('motion: r at t = 1 components')).toMatchObject({ form: 'motion', components: true })
+    expect(form('osculating: r at t = 1 width: 1 dashed')).toMatchObject({ style: { width: 1, dashed: true } })
+  })
+
+  const refusals: [string, RegExp][] = [
+    ['frame: r', /Expected "frame: r at t = 1"/],
+    ['frame: r at 1', /Expected "frame: r at t = 1"/],
+    ['frame: r at t = 1 components', /"components" belongs to motion:/],
+    ['motion: r at t = 1 width: 2', /width: does not apply to motion: — it takes color:/],
+    ['frame: 3 at t = 1', /Expected a curve — a vector function's name "r" or "<cos\(t\), sin\(t\), t>"/],
+  ]
+  for (const [line, message] of refusals) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseSpaceKeyword(line)).toThrow(message)
+    })
+  }
+})
