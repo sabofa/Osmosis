@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { choose, crossingSeeds, evenly } from './lagrange'
+import { parseSpec } from '../../../parser/parseSpec'
+import { resolveBox } from '../../frame/bounds'
+import { choose, crossingSeeds, evenly, judge } from './lagrange'
 import { arrowsOf, expectClose, expectParallel, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
 
 // max x + y on x^2 + y^2 = 1: ∇f = (1, 1) = λ(2x, 2y), so x = y = 1/(2λ) and
@@ -35,11 +37,11 @@ describe('lagrange: max x + y subject to x^2 + y^2 = 1', () => {
     }
   })
 
-  it('marks the point on the floor with ∇f (0.15 x 20 = 3 long) and ∇g (0.6 x 3 = 1.8), parallel', () => {
+  it("marks the point on the floor with ∇f (0.15 x the floor's span 10 = 1.5 long) and ∇g (0.6 x 1.5 = 0.9), parallel", () => {
     expectClose(Array.from(pointsOf(scene, 's1.floorPoints').positions), [H, H, -10], 1e-12)
     for (const [object, length] of [
-      ['s1.gradf0', 3],
-      ['s1.gradg0', 1.8],
+      ['s1.gradf0', 1.5],
+      ['s1.gradg0', 0.9],
     ] as const) {
       const arrow = arrowsOf(scene, object)
       expectClose(Array.from(arrow.tails), [H, H, -10], 1e-12)
@@ -116,8 +118,52 @@ describe('lagrange over a domain', () => {
   it('keeps only the solutions inside it: with x <= 0.2, Newton from the arc’s end reaches (√2/2, √2/2), which is dropped', () => {
     const scene = sceneOf('lagrange: extrema x + y subject to x^2 + y^2 = 1 over x in [-1, 0.2], y in [-1, 1]')
     expectClose(Array.from(pointsOf(scene, 's1.points').positions), [-H, -H, -R2], 1e-12)
-    // the one solution left is the greatest and the least found at once
-    expect(labelOf(scene, 's1.p0').text).toBe('extremum ≈ (−0.7071, −0.7071), f ≈ −1.414, λ ≈ −0.7071')
+    // The one solution left is the least f takes on the arc, and no more:
+    // the arc's end at x = 0.2 is higher.
+    expect(labelOf(scene, 's1.p0').text).toBe('min ≈ (−0.7071, −0.7071), f ≈ −1.414, λ ≈ −0.7071')
+  })
+})
+
+describe('lagrange when the constraint runs out of the domain (I4)', () => {
+  it('max x^2 + y^2 subject to x + y = 1: the one solution is the constrained MIN, not a max', () => {
+    // ∇f = (2x, 2y) = λ(1, 1): (1/2, 1/2), f = 1/2, λ = 1; along the line f
+    // grows to 41 at (-4, 5).
+    const scene = sceneOf('lagrange: max x^2 + y^2 subject to x + y = 1')
+    expect(labelOf(scene, 's1.p0').text).toBe("local min ≈ (0.5, 0.5), f ≈ 0.5, λ ≈ 1 — f is larger toward the domain's edge")
+  })
+
+  it('max x + y subject to xy = 1: (1, 1) is a local min on its branch, and f is larger toward the edge', () => {
+    // ∇f = (1, 1) = λ(y, x): (1, 1) with f = 2 and (-1, -1) with f = -2; the
+    // branch through (1, 1) reaches f = 5.2 at (0.2, 5).
+    const scene = sceneOf('lagrange: max x + y subject to x*y = 1')
+    expect(labelOf(scene, 's1.p0').text).toBe("local min ≈ (1, 1), f ≈ 2, λ ≈ 1 — f is larger toward the domain's edge")
+  })
+
+  it('in three variables, max xyz subject to x + y + z = 3: (1, 1, 1) is a local max; (-1, -1, 5) in the box has f = 5', () => {
+    const scene = sceneOf('lagrange: max x*y*z subject to x + y + z = 3')
+    expect(labelOf(scene, 's1.p0').text).toBe("local max ≈ (1, 1, 1), f ≈ 1, λ ≈ 1 — f is larger toward the domain's edge")
+  })
+})
+
+describe('the floor arrows are sized by the floor (I6)', () => {
+  it('min x^2 + y^2 subject to x + y = 1 over [-5, 5]^2: ∇f 1.5 and ∇g 0.9 long, and the frame stays the data’s', () => {
+    // Sized by the box's largest span (z runs to 50) they were 7.5 long, and
+    // the frame grew to [-5, 6].
+    const spec = 'lagrange: min x^2 + y^2 subject to x + y = 1'
+    const scene = sceneOf(spec)
+    for (const [object, length] of [
+      ['s1.gradf0', 1.5],
+      ['s1.gradg0', 0.9],
+    ] as const) {
+      expect(Math.abs(Math.hypot(...Array.from(arrowsOf(scene, object).vectors)) - length)).toBeLessThanOrEqual(1e-12)
+    }
+    // The line x + y = 1 spans x and y in [-4, 5]; the arrows at (1/2, 1/2)
+    // now stay inside that.
+    const frame = resolveBox(parseSpec(spec).config.space, scene.extent)
+    expect([frame.x, frame.y]).toEqual([
+      { min: -4, max: 5 },
+      { min: -4, max: 5 },
+    ])
   })
 })
 
@@ -149,6 +195,25 @@ describe('lagrange helpers', () => {
     // 5 x 5 x-edges between x = 0 and x = 0.5.
     const seeds = crossingSeeds((x) => x - 0.3, { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }, 4)
     expect(seeds).toHaveLength(25)
-    for (const [x] of seeds) expect(Math.abs(x - 0.3)).toBeLessThanOrEqual(1e-15)
+    for (const [x] of seeds) expect(Math.abs(x - 0.3)).toBeLessThanOrEqual(1e-10)
+  })
+
+  it('crossingSeeds bisects onto a curved surface: on the sphere of radius 3, every seed is within 1e-9 of it', () => {
+    // Linear interpolation on this 24-cube grid (cells of 5/12) is off by
+    // up to ~1e-2; the samples a max is judged against must not be.
+    const seeds = crossingSeeds((x, y, z) => x * x + y * y + z * z - 9, { x: { min: -5, max: 5 }, y: { min: -5, max: 5 }, z: { min: -5, max: 5 } }, 24)
+    expect(seeds.length).toBeGreaterThan(100)
+    for (const [x, y, z] of seeds) expect(Math.abs(Math.hypot(x, y, z) - 3)).toBeLessThanOrEqual(1e-9)
+  })
+
+  it('judge: a max stands when no sample exceeds it; otherwise its neighbours name it', () => {
+    const s = (x: number, f: number) => ({ at: [x], lambda: 0, f })
+    const samples = [0, 1, 2, 3, 4].map((x) => ({ at: [x], f: [0, 1, 0, 1, 3][x] }))
+    expect(judge([{ s: s(4, 3), kind: 'max' }], samples, 1.5)).toEqual([{ s: s(4, 3), kind: 'max', note: '' }])
+    expect(judge([{ s: s(1, 1), kind: 'max' }], samples, 1.5)).toEqual([{ s: s(1, 1), kind: 'local max', note: " — f is larger toward the domain's edge" }])
+    expect(judge([{ s: s(2, 0), kind: 'max' }], samples, 1.5)).toEqual([{ s: s(2, 0), kind: 'local min', note: " — f is larger toward the domain's edge" }])
+    expect(judge([{ s: s(3, 1), kind: 'min' }], samples, 1.5)).toEqual([
+      { s: s(3, 1), kind: 'critical point on the constraint', note: " — f is smaller toward the domain's edge" },
+    ])
   })
 })

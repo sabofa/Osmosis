@@ -9,30 +9,39 @@
 //   ROOT_DEDUP_REL of the domain's diagonal are one; the first, in seed order,
 //   stands), sorted lexicographically, and f is evaluated at each;
 // - max keeps the greatest f (every solution within 1e-9 · max(1, |f|) of it),
-//   min the least, extrema both.
+//   min the least, extrema both;
+// - each kept solution is judged against f sampled over the whole traced
+//   constraint (judge): Lagrange finds only where ∇f ∥ ∇g, so when the
+//   constraint runs out of the domain, f may be larger (or smaller) toward the
+//   domain's edge. A solution that is not the sampled extreme is labelled by
+//   its neighbourhood on the constraint — local max, local min, or critical
+//   point on the constraint — with the note "f is larger toward the domain's
+//   edge".
 // Drawn: the constraint on the floor and lifted onto z = f; f's level curve
 // through each kept point, on the floor; the kept points on the floor and
 // lifted; ∇f and ∇g at each floor point, of fixed lengths — ∇f 0.15 of the
-// box's largest span, ∇g 0.6 of that — so their parallelism reads, and both
-// heads show when they point the same way (λ > 0). Readout per point: the
-// point, f and λ, all ≈.
+// domain's larger span (the arrows lie in the floor), ∇g 0.6 of that — so
+// their parallelism reads, and both heads show when they point the same way
+// (λ > 0). Readout per point: the point, f and λ, all ≈.
 //
 // Three variables (f or g reads z): seeds are points on g = c (the vertices
 // of S4a's level-surface mesh once it merges; until then the crossings of
-// g − c on the edges of a grid over the box, which are where such a mesh's
-// vertices lie), then Newton on the 4x4 system in (x, y, z, λ). The points are
-// marked with ∇f and ∇g; the constraint surface is drawn when levelSurface.ts
-// has a mesher.
+// g − c on the edges of a grid over the box, bisected onto g = c, which are
+// where such a mesh's vertices lie), then Newton on the 4x4 system in
+// (x, y, z, λ). All those points are the samples a solution is judged
+// against. The points are marked with ∇f and ∇g (0.15 of the box's largest
+// span); the constraint surface is drawn when levelSurface.ts has a mesher.
 //
 // Nothing found is an error on the line.
 
 import type { Statement } from '../../../parser/types'
 import { newton } from '../../../math/roots'
-import { ROOT_DEDUP_REL } from '../../../math/tolerance'
+import { BISECTION_REL, ROOT_DEDUP_REL } from '../../../math/tolerance'
 import type { Box3, LabelAnchor, Mark, MeshMark, Vec3 } from '../../scene/types'
 import { boundNames, constant, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, clipToZ, largestSpan, lineMark, part, pointMark, toolBox } from './box'
+import type { Rect } from './target'
 import { LEVEL_RES, levelCurves, lift } from './contours'
 import { MESH_LEVEL_SURFACE } from './levelSurface'
 import { approx, approxPoint } from './readout'
@@ -48,6 +57,9 @@ const TIE = 1e-9
 const RESOLVED = 1e-10
 // Cubes per axis for the three-variable seeds, before S4a's mesh.
 const SEED_GRID = 24
+// A solution's neighbourhood on the constraint, for "local max" or "local
+// min": the samples within this fraction of the domain's larger span.
+const NEIGHBOURHOOD = 0.05
 const CONSTRAINT_WIDTH = 2
 const LEVEL_WIDTH = 1.5
 const SURFACE_OPACITY = 0.35
@@ -82,6 +94,43 @@ function collect(candidates: readonly Solution[], inside: (p: readonly number[])
 }
 
 export type Kept = 'max' | 'min' | 'extremum'
+export type Kind = Kept | 'local max' | 'local min' | 'critical point on the constraint'
+
+interface Sample {
+  at: readonly number[]
+  f: number
+}
+
+// Each kept solution judged against f sampled over the constraint: a max
+// stands when no sample exceeds it (within the tie tolerance), a min when
+// none is below it. One that does not stand is named by the samples within
+// `radius` of it — all no greater: a local max; all no less: a local min;
+// otherwise a critical point on the constraint — with a note saying which
+// way f goes toward the domain's edge.
+export function judge(kept: readonly { s: Solution; kind: Kept }[], samples: readonly Sample[], radius: number): { s: Solution; kind: Kind; note: string }[] {
+  const values = samples.map((p) => p.f)
+  const tie = TIE * Math.max(1, ...values.map(Math.abs), ...kept.map(({ s }) => Math.abs(s.f)))
+  const high = Math.max(...values)
+  const low = Math.min(...values)
+  return kept.map(({ s, kind }) => {
+    const isMax = !(high > s.f + tie)
+    const isMin = !(low < s.f - tie)
+    if (kind === 'extremum' && isMax && isMin) return { s, kind, note: '' }
+    if (kind !== 'min' && isMax) return { s, kind: 'max', note: '' }
+    if (kind !== 'max' && isMin) return { s, kind: 'min', note: '' }
+    const near = samples.filter((p) => Math.hypot(...p.at.map((v, i) => v - s.at[i])) <= radius)
+    const local: Kind =
+      near.length === 0
+        ? 'critical point on the constraint'
+        : near.every((p) => p.f <= s.f + tie)
+          ? 'local max'
+          : near.every((p) => p.f >= s.f - tie)
+            ? 'local min'
+            : 'critical point on the constraint'
+    const way = kind === 'max' ? 'larger' : kind === 'min' ? 'smaller' : 'larger and smaller'
+    return { s, kind: local, note: ` — f is ${way} toward the domain's edge` }
+  })
+}
 
 // The solutions the goal keeps, each with the kind it is. Under extrema, when
 // every solution has the same f (one solution, say), each is the greatest and
@@ -102,7 +151,7 @@ export function choose(solutions: readonly Solution[], goal: 'max' | 'min' | 'ex
 }
 
 // Points on h = 0: the crossings of h's sign on the edges of an n^3 grid over
-// the box, linearly interpolated, in grid order.
+// the box, bisected along their edge to BISECTION_REL of it, in grid order.
 export function crossingSeeds(h: (x: number, y: number, z: number) => number, box: Box3, n: number): number[][] {
   const axes = [box.x, box.y, box.z].map((r) => Array.from({ length: n + 1 }, (_, i) => r.min + ((r.max - r.min) * i) / n))
   const at = (i: number, j: number, k: number) => h(axes[0][i], axes[1][j], axes[2][k])
@@ -123,9 +172,26 @@ export function crossingSeeds(h: (x: number, y: number, z: number) => number, bo
           if (i + di > n || j + dj > n || k + dk > n) continue
           const w = value(i + di, j + dj, k + dk)
           if (!Number.isFinite(v) || !Number.isFinite(w) || v > 0 === w > 0) continue
-          const t = v / (v - w)
           const q = [...p]
-          q[axis] = p[axis] + t * (axes[axis][[i, j, k][axis] + 1] - p[axis])
+          const next = axes[axis][[i, j, k][axis] + 1]
+          const along = (u: number) => {
+            q[axis] = p[axis] + u * (next - p[axis])
+            return h(q[0], q[1], q[2])
+          }
+          let lo = 0
+          let hi = 1
+          let hlo = v
+          while (hi - lo > BISECTION_REL) {
+            const m = (lo + hi) / 2
+            const hm = along(m)
+            if (hm > 0 === hlo > 0) {
+              lo = m
+              hlo = hm
+            } else {
+              hi = m
+            }
+          }
+          along((lo + hi) / 2)
           out.push(q)
         }
       }
@@ -148,9 +214,9 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
   reads.add(form.level)
   const level = constant(form.level, scope)
   const domain = prepareDomain(form.over, config, scope, reads)
-  const arrowLength = (box: Box3) => ARROW * largestSpan(box)
-  const readout = (kind: string, s: Solution, span: number, scale: number) =>
-    `${kind} ${approxPoint(s.at, RESOLVED * span)}, f ${approx(s.f, RESOLVED * scale)}, λ ${approx(s.lambda, RESOLVED * Math.max(1, Math.abs(s.lambda)))}`
+  const readout = (kind: string, s: Solution, span: number, scale: number, note: string) =>
+    `${kind} ${approxPoint(s.at, RESOLVED * span)}, f ${approx(s.f, RESOLVED * scale)}, λ ${approx(s.lambda, RESOLVED * Math.max(1, Math.abs(s.lambda)))}${note}`
+  const larger = (rect: Rect) => Math.max(rect.x.max - rect.x.min, rect.y.max - rect.y.min)
 
   if (fTarget.arity === 2 && gTarget.arity === 2) {
     const F = surface2(fTarget, scope)
@@ -186,10 +252,16 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
         )
         if (result.converged) candidates.push({ at: [result.x[0], result.x[1]], lambda: result.x[2], f: F.f(result.x[0], result.x[1]) })
       }
-      const span = Math.max(rect.x.max - rect.x.min, rect.y.max - rect.y.min)
+      const span = larger(rect)
       const inside = (p: readonly number[]) => p[0] >= rect.x.min && p[0] <= rect.x.max && p[1] >= rect.y.min && p[1] <= rect.y.max
-      const kept = choose(collect(candidates, inside, ROOT_DEDUP_REL * Math.hypot(rect.x.max - rect.x.min, rect.y.max - rect.y.min)), form.goal)
-      if (kept.length === 0) throw new Error(NOTHING_FOUND)
+      const chosen = choose(collect(candidates, inside, ROOT_DEDUP_REL * Math.hypot(rect.x.max - rect.x.min, rect.y.max - rect.y.min)), form.goal)
+      if (chosen.length === 0) throw new Error(NOTHING_FOUND)
+      const samples: Sample[] = []
+      for (const [x, y] of vertices) {
+        const value = F.f(x, y)
+        if (Number.isFinite(value)) samples.push({ at: [x, y], f: value })
+      }
+      const kept = judge(chosen, samples, NEIGHBOURHOOD * span)
 
       const box = toolBox(context, rect, (x, y) => F.f(x, y))
       const floor = box.z.min
@@ -229,9 +301,10 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       if (onBox.runs.length > 0) {
         marks.push(lineMark(context.source, onBox.runs, context, { width: CONSTRAINT_WIDTH, params: Float64Array.from(onBox.params.flat()) }))
       }
-      const length = arrowLength(box)
+      // The arrows lie in the floor: sized by its span, not the box's height.
+      const length = ARROW * span
       const scale = Math.max(1, ...kept.map(({ s }) => Math.abs(s.f)))
-      kept.forEach(({ s, kind }, k) => {
+      kept.forEach(({ s, kind, note }, k) => {
         const [x, y] = s.at
         const through = levelCurves((u, v) => F.f(u, v) - s.f, rect, res)
         if (through.length > 0) marks.push(lineMark(part(context, `level${k}`), through.map((l) => lift(l, () => floor)), context, { width: LEVEL_WIDTH }))
@@ -247,7 +320,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
           marks.push(arrowMark(part(context, `${object}${k}`), [{ tail, vector }], context))
           labels.push({ source: part(context, `${object}${k}.label`), position: [x + vector[0], y + vector[1], floor], text: name, kind: 'point' })
         }
-        labels.push(annotation(part(context, `p${k}`), [x, y, s.f], readout(kind, s, span, scale)))
+        labels.push(annotation(part(context, `p${k}`), [x, y, s.f], readout(kind, s, span, scale, note)))
       })
       marks.push(pointMark(part(context, 'floorPoints'), kept.map(({ s }) => [s.at[0], s.at[1], floor]), context))
       marks.push(pointMark(part(context, 'points'), kept.map(({ s }) => [s.at[0], s.at[1], s.f]), context))
@@ -284,8 +357,14 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
     }
     const inside = (p: readonly number[]) => [box.x, box.y, box.z].every((r, i) => p[i] >= r.min && p[i] <= r.max)
     const diagonal = Math.hypot(box.x.max - box.x.min, box.y.max - box.y.min, box.z.max - box.z.min)
-    const kept = choose(collect(candidates, inside, ROOT_DEDUP_REL * diagonal), form.goal)
-    if (kept.length === 0) throw new Error(NOTHING_FOUND)
+    const chosen = choose(collect(candidates, inside, ROOT_DEDUP_REL * diagonal), form.goal)
+    if (chosen.length === 0) throw new Error(NOTHING_FOUND)
+    const samples: Sample[] = []
+    for (const at of points) {
+      const value = F.F(at[0], at[1], at[2])
+      if (Number.isFinite(value)) samples.push({ at, f: value })
+    }
+    const kept = judge(chosen, samples, NEIGHBOURHOOD * largestSpan(box))
 
     const marks: Mark[] = []
     const labels: LabelAnchor[] = []
@@ -302,9 +381,9 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       marks.push(surface)
     }
     marks.push(pointMark(context.source, kept.map(({ s }): Vec3 => [s.at[0], s.at[1], s.at[2]]), context))
-    const length = arrowLength(box)
+    const length = ARROW * largestSpan(box)
     const scale = Math.max(1, ...kept.map(({ s }) => Math.abs(s.f)))
-    kept.forEach(({ s, kind }, k) => {
+    kept.forEach(({ s, kind, note }, k) => {
       const tail: Vec3 = [s.at[0], s.at[1], s.at[2]]
       for (const [name, grad, size] of [
         ['∇f', F.grad, length],
@@ -318,7 +397,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
         marks.push(arrowMark(part(context, `${object}${k}`), [{ tail, vector }], context))
         labels.push({ source: part(context, `${object}${k}.label`), position: [tail[0] + vector[0], tail[1] + vector[1], tail[2] + vector[2]], text: name, kind: 'point' })
       }
-      labels.push(annotation(part(context, `p${k}`), tail, readout(kind, s, diagonal, scale)))
+      labels.push(annotation(part(context, `p${k}`), tail, readout(kind, s, diagonal, scale, note)))
     })
     return { marks, labels, errors: [], colorScale: null }
   }
