@@ -31,7 +31,7 @@ git cannot hold both `milestone-a` and `milestone-a/…`.
 |---|---|---|
 | `milestone-a/main` | `.claude/worktrees/milestone-a` | Integration only. Sides merge in at phase boundaries; it merges to `main` when Milestone A is done |
 | `milestone-a/geometry` | `.claude/worktrees/milestone-a-geometry` | Tracks 1–2: reading the graph, geometry, **solid figures** |
-| `milestone-a/space` | `.claude/worktrees/milestone-a-space` | Track 3: **space** (three.js, Calc 3, Physics C) — a separate agent |
+| `milestone-a/space` | `.claude/worktrees/milestone-a-space` | Track 3: **space**, a hand-made WebGL2 engine (Calc 3 now; Physics C is sub-project 3) — a separate agent; phase branches `milestone-a/space-s…` merge into it |
 | `milestone-a/calc` | later | Track 4: calc-proofing the 2D engine |
 
 **More than one agent works at once.** Expect branches, worktrees, stash
@@ -44,9 +44,11 @@ report it.
 **Review servers, one port per side,** all on the Tailscale IP:
 `milestone-a/geometry` on **5181**, `milestone-a/space` on **5182**.
 
-**The two 3D engines share no code.** *Space* is `scene/buildScene3d.ts`,
-`render/SceneRenderer3D.ts`; *solid figures* is everything under
-`graph-engine/src/figure/`. Never write "3D engine" alone. Fixed between them
+**The two 3D engines share no code.** *Space* is everything under
+`graph-engine/src/space/`, a hand-made WebGL2 engine with no three.js (the
+old `scene/buildScene3d.ts` and `render/SceneRenderer3D.ts` were deleted in
+space S2); *solid figures* is everything under `graph-engine/src/figure/`.
+Never write "3D engine" alone. Fixed between them
 (spec, Track 2 "Revised 2026-09-25"):
 
 - **One author frame, z-up, in both.** Coordinates mean the same place either way.
@@ -111,7 +113,10 @@ built.
 
 ### Not started
 
-Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
+Track 4 (calc-proofing). Track 3's sub-projects 1–2 are built (space S1–S5
+and the integration pass, see "Track 3 — space" below); its S6 (visual
+polish), sub-project 3 (vector calculus, Physics C) and sub-project 4 (quant)
+are not.
 All of D1–D5. Track 2 beyond phase 8: build steps 9–11 of the spec's
 "Revised 2026-09-25" section (inscribed/circumscribed solids, measures and
 marks in space, nets),
@@ -500,6 +505,137 @@ collinearity refusal, which keeps phase 6's wording ("A, M and G are
 collinear") so no existing message moved.
 
 
+### Track 3 — space (S1–S5 and the integration pass, 2026-09-26/27)
+
+*Written after the integration pass. Branch `milestone-a/space`, worktree
+`.claude/worktrees/milestone-a-space`, review server on **5182**.*
+
+**Space is a hand-made WebGL2 engine** (spec, Track 3 "Revised 2026-09-26":
+the three.js decision was reversed for space only; the 2D plot renderer keeps
+three.js, and solid figures are SVG). What an author writes goes:
+
+```
+parseSpec ── space/grammar/ (keyword rows, unkeyed forms, directives, @param)
+   │           claims only space lines; returns null for anything else
+   ▼
+space/kernel/  createSpaceKernel: one builder per form via registry.ts,
+   │           typed arrays, two passes (the box pass, below), setValue
+   ▼           rebuilds only what a binding touches
+SpaceScene     marks (mesh, lines, points, arrows, boxes), labels, colour
+   │           scales, extent, errors: plain data, backend-agnostic
+   ▼
+SpaceRenderer  frame/ (box, aspect, ticks, walls), camera/ (turntable),
+   │           pick/ (CPU rays re-evaluated on the true function), ui/ (DOM
+   ▼           overlay, readouts, pins, parameter panel)
+space/gl/      the only WebGL: frame loop, MSAA, OIT, lines as quads
+```
+
+**What each phase delivered** (each: one implementer, an independent review,
+fix rounds until clean):
+
+| Phase | Commits | Delivered |
+|---|---|---|
+| S1 | `bbed1b7`..`0bce803` | `math/` (compile, diff, simplify, roots, quadrature, linalg), the space grammar hook, domains and style clauses, `@param`, the `SpaceScene` contract, kernel builders for the old forms, the boundary test |
+| S2 | `dd737c3`..`f023bea` | `gl/` backend, camera, frame (box, axes, none), DOM overlay; `SpaceRenderer` replaced `SceneRenderer3D`; `review/space.html` |
+| S3 | `a45e5dc`..`bec5d12` | colormaps and colorbar, mesh lines, back-face tint, box clipping, hidden-line dashes, weighted blended OIT, depth cue, MSAA; probe, pins, drop lines; parameter panel, play, drag; events |
+| S4a | `174ca39`..`b1f32c3` (merge `de551e2`) | implicit and level surfaces by marching tetrahedra, lines, planes, cross and projection, cylindrical and spherical coordinate surfaces, TNB frames, osculating circle, motion |
+| S4b | `8498899`..`d81fa5c` (merge `c9482c3`) | level curves, paths, traces, tangent planes, gradients, directional derivatives, classified critical points, Lagrange (2 and 3 variables) |
+| S5 | `a0207ca`..`95ea254` (merge `eed87a1`) | regions (type I/II, polar, inequality, named), volumes under and between surfaces, Riemann boxes (the box pipeline), triple integrals in three coordinate systems, centroids. **Its fix round 3 (honest quadrature error by construction) merges over this later.** |
+| Integration | `fe4cc5b`..`daccc28`, then the docs commit | contour dispatch by arity and level surfaces for S4b; coordinate and gradient readouts; scientific notation in the shared tokenizer (open item 4); boxes in the frame loop (opaque pass, OIT); the box pass |
+
+**The box pass (integration J1) is the contract most likely to bite.** The
+kernel builds in two passes: statements that define the scene first; then the
+box is resolved from their extent with `frame/bounds.ts` `resolveBox` (the
+renderer's own function), and box-dependent statements build against
+`context.box` (`registry.ts`: `boxDependent`, `boxOf`; the list is at
+registration in `kernel/index.ts`). Box-dependent: implicit and level
+surfaces, contours, `line:`, `plane:`, coordinate surfaces, `frame:`, every
+S4b tool (its default domain and floor are the box's), `centroid:`; and
+`region:` by its z only. `scene.extent` is the first pass's extent, so the
+renderer draws the same box **by construction** — clipping dependent marks
+would not be enough, because rounding a wider extent can pick a coarser step
+(pinned in `kernel/boxPass.test.ts`). During play and drag the renderer passes
+its frozen box (`setValues(values, { holdBox })`). Consequences worth knowing:
+a tool drawn alone gets `@bounds3d` or [-5, 5]³, so tools are meant to sit
+beside the surface they describe (every example does); Riemann boxes and
+volume bottoms start at z = 0, the integral's zero, not the floor.
+
+**How to verify space.** Node tests cover everything but pixels (the GL layer
+through a recording fake context, `gl/fakeGl.ts`). Pixels are checked by
+**headless Edge screenshots from PowerShell**, never the browser pane (each
+load asks the user to approve the site) nor Chrome:
+
+```
+Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -Wait -NoNewWindow -ArgumentList @("--headless=new","--use-angle=swiftshader","--enable-unsafe-swiftshader","--user-data-dir=`"$env:TEMP\claude-headless-x`"","--window-size=1400,900","--virtual-time-budget=7000","--screenshot=`"<out.png>`"",'"http://100.90.203.2:5182/space.html?example=<slug>&theme=dark"')
+```
+
+then Read the PNG. `?spec=<url-encoded spec>` loads any spec. The slug is the
+example label without "Space · ", lower-cased, non-alphanumerics to `-`.
+
+**Lessons from track 3 worth keeping.**
+
+- **Merge seams should be named in the plan, with a named owner.** S4a, S4b
+  and S5 ran in parallel and each left a stub for the others (a registered-by-
+  name contour builder, a null level-surface mesher, an interim box draw);
+  the integration plan listed every one, which is why wiring them took hours,
+  not a redesign. Ledger "merge notes" were the source.
+- **A per-tool box estimate is the wrong seam.** S4b's tools each estimated
+  the frame's box from their own target; with two surfaces the floor was
+  wrong. The fix was structural (the box pass), not per tool.
+- **"The renderer resolves the same box" is only true by construction.** The
+  plan argued clipping would suffice; a hand-worked counterexample (x over
+  [0.19, 2.71]) showed a plane spanning the box would move it. Test the
+  argument, not only the code.
+- **Wall-clock asserts flake on a shared machine.** Other agents' suites and a
+  sync client push a 250 ms test past a 1 s bound (S5's round 3 replaces them
+  with evaluation counts). Prefer counting work.
+- **`Math.max(...array)` throws past ~120k arguments.** A constraint mesh at
+  res 120 crossed it; take extremes in a loop over anything mesh-sized.
+- **Fake-GL tests pass for the wrong reason easily** (S3's I4: extensions not
+  re-enabled after a restore, yet the test passed). The fake now turns
+  extensions off on a loss, as a real context does.
+- **Shared-tokenizer changes need a byte-identity sweep over every literal,
+  not only the examples.** The scientific-notation sweep (5818 literals, every
+  figure example under every `@view`) found only test titles changed.
+
+**Open, for S6 and after** (from the phase ledgers and the integration pass's
+headless shots of every example, light and dark):
+
+- **Nothing is broken.** Every one of the 50 space examples draws, in light
+  and dark (integration pass, 2026-09-27). What follows is ugly, not wrong.
+- **A scene whose only data is flat has an empty z axis.** A lone `region:`
+  (A polar region, The centroid of a half-disc) sizes x and y, and z falls
+  back to [-5, 5] by the box pass's rule, so the region lies on the floor of
+  a tall empty box with meaningless z ticks. Flat vectors (Projection of u
+  onto v) get the opposite: a thin [0, 1] z. S6 should decide what a flat
+  scene's box is (a flat box, or no z ticks).
+- **Readouts collide** with tick labels and each other: the two gradient
+  readouts run into the x ticks; the half-disc's centroid and area readouts
+  overlap; level-curve labels crowd a saddle point. Readouts need the same
+  collision layout as tick labels.
+- **S5 readouts print many digits** (`∬ ≈ 25.1327412287`,
+  `area ≈ 0.166666666667`): honest to the error estimate, heavy to read.
+- **A translucent closed surface reads grey under OIT**: its front and back
+  faces both accumulate, and the back-face tint wins (three-variable
+  Lagrange's constraint sphere).
+- **A draggable point is easy to lose**: a small dot on a dark underside
+  (Drag a point on a paraboloid, A tangent plane you can drag). Give
+  draggable points a halo.
+- **A hole at a pole leaves sliver triangles** (Limits along two paths, at
+  the origin).
+- **Riemann boxes' edges seen through translucent boxes make a busy lattice.**
+- **Dark theme:** the balance map's neutral centre nearly vanishes (S3,
+  parked); grey operands (`project:`, `cross:`) are low-contrast; mesh lines
+  mixed toward the light ink are loud.
+- **Parked in the phase ledgers:** OIT depth-weight normalisation (S3 M10); a
+  grazing pick ray can pass between march steps near a silhouette (S3);
+  corner labels (S3); a drag could jump behind a surface in rare views (S3);
+  implicit surfaces cost ~0.5 s per setValue at res 64 (S4a); parametric
+  setValue is 10.8–14.5 ms against an 8 ms budget (S1); curves of critical
+  points, e.g. the ring (x²+y²−1)², want a "critical curves" feature (S4b
+  M4); no committed test of GraphViewer's remount orchestration (S2, needs a
+  jsdom layer).
+
 ---
 
 ---
@@ -598,8 +734,9 @@ has 3 to 24 sides. A dimension label on a built solid reads its segment off
 and regular tetrahedron keep their hand-built face lists, because their bytes
 are pinned.
 
-**Two 3D engines, and they share no code.** *Space* is track 3 — three.js,
-orbitable, calculus (`scene/buildScene3d.ts`, `render/SceneRenderer3D.ts`).
+**Two 3D engines, and they share no code.** *Space* is track 3 — hand-made
+WebGL2, orbitable, calculus (`graph-engine/src/space/`; see "Track 3 —
+space").
 *Solid figures* are this track — the SVG figure renderer through fixed named
 views (the modules above). Say "space" or "solid figure" in code, tests,
 commits and errors, never "3D engine" alone, and do not name anything in the
