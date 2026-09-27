@@ -33,6 +33,11 @@
 - A compiled closure owns one evaluation frame and is not re-entrant. Never call a mark's pick functions from inside a kernel build. JS is single-threaded, so this holds as long as picking runs only from input handlers.
 - Show only colour scales that some mark references; S1's fix round prunes the others.
 
+**Carried from S2's Task 7:**
+- Automatic bounds must round out to an authored `@ticks3d` step when one is given, not to `niceStep`. Today, `@ticks3d: x pi/2` with a surface over [−2π, 2π] draws a box out to ±5π/2. Fold this into E2 or E4's task as a small `frame/bounds.ts` change, with a test.
+- Curves lying on surfaces win the depth test by a 1e-5 NDC bias, which a 16-bit depth buffer cannot resolve. Use polygon offset on meshes (`gl.polygonOffset`) in the offscreen loop instead, and keep the hidden-part pass (E4 step 4) consistent with it.
+- At a box's shared front corner, the x and y end labels (e.g. `5` and `5`) sit side by side. Leave it for S6 unless it is trivial.
+
 **Prior work to consume** (from S1 and S2, merged on `milestone-a/space`):
 - the contract: `space/scene/types.ts`, `space/config.ts`, `space/kernel/api.ts`;
 - `space/kernel/*`: the builders, `setValue` with identity reuse, and the compiled picks;
