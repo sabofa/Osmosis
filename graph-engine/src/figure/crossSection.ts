@@ -556,10 +556,23 @@ export function pieceStart2(piece: TrueShapePiece): Vec2 {
 // (the max of a number with itself), so a single lift keeps its bytes.
 export const SECTION_GAP_FRACTION = 0.25
 
+// The clearance a net or a path's strip reserves in the gap before it: 10% of
+// the figure's width is about 64 view units at FIGURE_SIZE 640 — a label a
+// side (15-unit type, a few units off its vertex) and air between them.
+export const NET_LABEL_CLEARANCE = 0.1
+
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
 
-export function liftOffset(solid: Bounds, shape: Bounds, rightEdge: number | null = null): Vec2 {
-  const gap = (solid.maxX - solid.minX) * SECTION_GAP_FRACTION
+export function liftOffset(solid: Bounds, shape: Bounds, rightEdge: number | null = null, clearance?: number): Vec2 {
+  const quarter = (solid.maxX - solid.minX) * SECTION_GAP_FRACTION
+  // A net's letters face the drawing (fix round 1): with a clearance c, the
+  // gap is also at least the fraction c of the lifted figure's whole width
+  // (the span so far, the gap and the shape), solved for the gap. The figure
+  // is fitted to a fixed view width, so that fraction is a fixed width in
+  // view units — room for a letter on each side of the gap, at any scale.
+  // Absent (every section), the gap is phase 5's quarter, bit for bit.
+  const span = Math.max(solid.maxX, rightEdge ?? solid.maxX) - solid.minX
+  const gap = clearance === undefined ? quarter : Math.max(quarter, (clearance * (span + shape.maxX - shape.minX)) / (1 - clearance))
   return {
     x: Math.max(solid.maxX, rightEdge ?? solid.maxX) + gap - shape.minX,
     y: (solid.minY + solid.maxY) / 2 - (shape.minY + shape.maxY) / 2,

@@ -741,8 +741,11 @@ min over k of hypot(ds + 2 pi r k, dy). Cone: alpha = |d theta| r/l wrapped
 modulo the sector the short way, then the law of cosines. **No
 through-the-apex branch**: the short way is at most pi r/l < pi. A frustum
 path passing inside the top rim is refused. Drawn only on the lifted
-unrolling (cut opposite the path's middle); P and Q are drawn by their own
-statements; no geodesic in space.
+unrolling — the net's own, cut behind (fix round 1), so the generator facing
+the viewer is its middle and P and Q sit where the net puts them; a path
+crossing that seam is drawn as two straight pieces (a tie, exactly half a
+turn round, goes the way that stays inside, which keeps the AIME path one
+piece). P and Q are drawn by their own statements; no geodesic in space.
 
 **Corrections to the plan, recorded.**
 - *No template net reachable from the grammar can overlap.* The plan
@@ -750,9 +753,16 @@ statements; no geodesic in space.
   lateral faces share a base vertex whose base angle and two face angles
   sum below 360°, so their wedges there are disjoint. Right prisms, the
   regular frustum and the octahedron are fixed shapes, and 20000 seeded
-  pyramids on points never overlapped. The exact check stays as the guard
-  every template passes, and the tests pin the invariant beside hand-built
-  overlapping nets the check must refuse (the phase 5 convexity precedent).
+  pyramids on points never overlapped. So there is **no runtime overlap
+  check** (fix round 1): as phase 5 did for convexity — an unreachable
+  runtime guard replaced by a pinned invariant — `nets.test.ts` checks
+  every template the grammar can produce (every dimension primitive over a
+  spread of n and proportions, seeded six-edge tetrahedra with the obtuse
+  one, seeded prisms, pyramids and tetrahedra on points) with an EXACT
+  test-only separating-axis predicate (`figure/net.testkit.ts`: positive
+  area overlaps, touching along an edge or at a point does not), itself
+  proven on hand-built faces — including two squares offset along an edge,
+  which the first, runtime version wrongly passed.
 - *The octahedron's strip alternates upper and lower faces in pairs*
   (L0 U0 U1 L1 L2 U2 U3 L3): single alternation has no chain.
 - *The validity check's test* could not use a regular solid: a scratch
@@ -763,6 +773,16 @@ statements; no geodesic in space.
 - *Points half a turn apart cannot pin the shorter wrap on a cone*: both
   ways round are equal there. That test stays (it pins the largest
   separation, 4π/5 < π), and a three-quarter-turn test pins the wrap.
+
+**Fix round 1.** No runtime overlap check (above). A net or a path's strip
+reserves label clearance in its gap (`NET_LABEL_CLEARANCE`, 10% of the
+lifted figure's width, so about 64 view units at any scale: the cube's G no
+longer runs into the net's E); sections keep phase 5's quarter-width gap,
+bit for bit. The running lift edge advances only once a section is drawn. A
+later `shortest: … unfold` of a path already drawn lifts its strip; a
+polyhedron path lifts nothing unless asked (P = Q included). The round
+path's unrolling is the net's (above). `turned` turns an arc's angles with
+its centre.
 
 **Grammar notes.** A bare `net S` is still refused, now pointing at the
 colon. `net = 5`, `net(x) = x^2`, `net + x = y`, `shortest = 3` and the
@@ -854,7 +874,7 @@ tetrahedron.ts  the tetrahedron from six edges, Cayley-Menger checked (P4)
 regular.ts      regular n-gon solids and the octahedron: P5's rotation and lettering
 spheres.ts      phase 9: in- and circumspheres (fixed-order solves, verified), tangency radii
 spaceMarks.ts   phase 10: arcs, right-angle squares and dihedral marks in space (M1, M3), M4's whole-mark rule
-nets.ts         phase 11: per-primitive net templates, the closed-form unfolding (charts, rigid motion), the overlap check, round unrollings
+nets.ts         phase 11: per-primitive net templates, the closed-form unfolding (charts, rigid motion), round unrollings (net.testkit.ts: the test-only overlap predicate)
 shortestPath.ts phase 11: shortest paths over a surface — polyhedra by exact face-sequence enumeration (N3), round solids closed form (N4)
 ```
 
@@ -1205,9 +1225,10 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     polyhedron unfolding (`net:` on a hull of named points), nets of
     spheres, paths over the flat ends of round solids, over spheres, or
     over polyhedra of more than 12 faces, geodesics drawn on a curved
-    surface in space, and areas. Drawing notes from the PNG review: a net's
-    left-hand letters sit close to the solid's right-hand ones (the lift
-    gap is a quarter of the solid's width, as a section's is); a path's
+    surface in space, and areas. Drawing notes from the PNG review: a
+    SECTION's letters can still sit close to the solid's (its gap is phase
+    5's quarter of the solid's width, kept for byte identity; nets and path
+    strips reserve label clearance since fix round 1); a path's
     `unfold` strip is turned so the path runs left to right, so the strip
     itself is usually tilted; points written as literals (a room's corners)
     are dotted as every literal point is, so the examples place solids by

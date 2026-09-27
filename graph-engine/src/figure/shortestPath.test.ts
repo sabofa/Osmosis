@@ -9,7 +9,7 @@ import { distance3, midpoint3 } from './construct3d'
 import { netSolidWord } from './nets'
 import type { Vec3 } from './project3d'
 import { renderFigure } from './render'
-import { facesHolding, shortestPath } from './shortestPath'
+import { facesHolding, shortestPath, turned } from './shortestPath'
 import { buildSolidFigure } from './solidScope'
 
 // The path between two named points over the solid S of a spec.
@@ -355,5 +355,108 @@ describe('shortest paths over round solids (N4)', () => {
     // P and Q are dotted on the solid by their own statements.
     expect(layer(svg, 'points')).toMatch(/data-statement="5" data-object="P"/)
     expect(layer(svg, 'points')).toMatch(/data-statement="6" data-object="Q"/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------
+
+describe('fix round 1: the unrolling a round path is drawn on', () => {
+  // M1 — the path's unrolling is the NET's: cut behind, so the generator
+  // facing the default camera (author azimuth 30°) is its middle. A point
+  // on that generator is drawn on the middle vertical of the lifted
+  // rectangle, and on the vertical through a cone's apex.
+  it('puts a point on the generator facing the viewer on the middle of the drawn unrolling', () => {
+    const cylinder = render('C = solid cylinder radius 3, height 10\nP = (3*cos(pi/6), 3*sin(pi/6), -4)\nQ = (0, -3, 4)\nshortest: P to Q over C')
+    expect(cylinder.errors).toEqual([])
+    const seams = lines(cylinder.svg, 3, 'cut-seam')
+    expect(seams).toHaveLength(2)
+    const middle = (seams[0].x1 + seams[1].x1) / 2
+    const dot = /<circle cx="([^"]*)"[^>]*data-statement="3" data-object="P"/.exec(cylinder.svg)
+    expect(Number(dot![1])).toBeCloseTo(middle, 2)
+
+    // Cone R = 4, H = 3: the generator at azimuth 30°, rho 2, is
+    // (1.6 cos 30°, 1.6 sin 30°, 0.3).
+    const cone = render('K = solid cone radius 4, height 3\nP = (1.6*cos(pi/6), 1.6*sin(pi/6), 0.3)\nQ = (0, -4, -1.5)\nshortest: P to Q over K')
+    expect(cone.errors).toEqual([])
+    const radii = lines(cone.svg, 3, 'cut-seam')
+    expect(radii).toHaveLength(2)
+    const apex = radii[0].x1
+    expect(radii[1].x1).toBeCloseTo(apex, 2)
+    const coneDot = /<circle cx="([^"]*)"[^>]*data-statement="3" data-object="P"/.exec(cone.svg)
+    expect(Number(coneDot![1])).toBeCloseTo(apex, 2)
+  })
+
+  it('draws a path across the seam as two straight pieces meeting the two cut edges', () => {
+    // The seam is the generator at azimuth 210°. P at azimuth 200°, height
+    // 1; Q at 220°, height 9: 20° apart across it, √((π/3)² + 8²).
+    const at = (degrees: number, z: number) => `(3*cos(${degrees}*pi/180), 3*sin(${degrees}*pi/180), ${z})`
+    const cylinder = pathIn(`C = solid cylinder radius 3, height 10\nP = ${at(200, -4)}\nQ = ${at(220, 4)}`, 'P', 'Q', 'C').find()
+    expect(cylinder.length).toBeCloseTo(Math.hypot(Math.PI / 3, 8), 12)
+    expect(cylinder.flat.pieces).toHaveLength(2)
+    const drawn = cylinder.flat.pieces.reduce((sum, [a, b]) => sum + Math.hypot(b.x - a.x, b.y - a.y), 0)
+    expect(drawn).toBeCloseTo(cylinder.length, 12)
+    expect(Math.abs(cylinder.flat.pieces[0][1].x)).toBeCloseTo(3 * Math.PI, 12)
+    expect(Math.abs(cylinder.flat.pieces[1][0].x)).toBeCloseTo(3 * Math.PI, 12)
+
+    // Cone R = 4, H = 3 (sector 8π/5): rho 2 at 200°, rho 5 (the rim) at
+    // 220°; alpha = 20° · 4/5 = 16°, so the length is √(4 + 25 - 20 cos 16°).
+    const onCone = (degrees: number, rho: number) => `(${(4 * rho) / 5}*cos(${degrees}*pi/180), ${(4 * rho) / 5}*sin(${degrees}*pi/180), ${1.5 - (3 * rho) / 5})`
+    const cone = pathIn(`K = solid cone radius 4, height 3\nP = ${onCone(200, 2)}\nQ = ${onCone(220, 5)}`, 'P', 'Q', 'K').find()
+    expect(cone.length).toBeCloseTo(Math.sqrt(29 - 20 * Math.cos((16 * Math.PI) / 180)), 12)
+    expect(cone.flat.pieces).toHaveLength(2)
+    expect(cone.flat.pieces.reduce((sum, [a, b]) => sum + Math.hypot(b.x - a.x, b.y - a.y), 0)).toBeCloseTo(cone.length, 12)
+    // The pieces meet the seam's two radii, at the sector's two edges.
+    const edges = [-Math.PI / 2 - (4 * Math.PI) / 5, -Math.PI / 2 + (4 * Math.PI) / 5]
+    const angleOf = (p: { x: number; y: number }) => Math.atan2(p.y, p.x)
+    for (const p of [cone.flat.pieces[0][1], cone.flat.pieces[1][0]]) {
+      expect(edges.some((e) => Math.abs(Math.cos(angleOf(p)) - Math.cos(e)) < 1e-9 && Math.abs(Math.sin(angleOf(p)) - Math.sin(e)) < 1e-9)).toBe(true)
+    }
+  })
+
+  it('draws the AIME path, exactly half a turn round, as one piece: the tie goes the way that stays in the sector', () => {
+    const path = pathIn(AIME, 'P', 'Q', 'K').find()
+    expect(path.flat.pieces).toHaveLength(1)
+    expect(path.length).toBeCloseTo(625, 9)
+  })
+})
+
+describe('fix round 1: what a shortest: statement lifts', () => {
+  it('lifts the strip for a later "unfold" of a path already drawn, and draws the path on the solid once', () => {
+    const { svg, errors } = render(`${CUBE}\nshortest: A to G over S\nshortest: A to G over S unfold`)
+    expect(errors).toEqual([])
+    expect(lines(svg, 5, 'path-AG')).toHaveLength(2)
+    expect(lines(svg, 6).filter((l) => l.attrs.includes('data-object="fold-'))).toHaveLength(1)
+    expect(lines(svg, 6, 'path-AG')).toHaveLength(1)
+  })
+
+  it('lifts nothing for a path from a point to itself on a polyhedron, unless asked', () => {
+    const { svg, errors } = render(`${CUBE}\nshortest: A to A over S\nlabel: shortest A to A over S`)
+    expect(errors).toEqual([])
+    expect(lines(svg, 5)).toEqual([])
+    expect(svg).toContain('>0<')
+  })
+
+  it('turns an arc with its strip: centre and angles both', () => {
+    // A quarter arc of the unit circle about (1, 0), from angle 0 to π/2,
+    // its ends (2, 0) and (1, 1). Turned about P' = (0, 0) so Q' = (0, 2)
+    // lies on +x — a quarter turn clockwise — its ends go to (0, -2) and
+    // (1, -1).
+    const flat = turned({
+      net: { faces: [], letters: [], lines: [{ piece: { kind: 'arc', center: { x: 1, y: 0 }, radius: 1, from: 0, to: Math.PI / 2 }, fold: false, object: 'arc' }] },
+      from: { x: 0, y: 0 },
+      to: { x: 0, y: 2 },
+      pieces: [[{ x: 0, y: 0 }, { x: 0, y: 2 }]],
+    })
+    const arc = flat.net.lines[0].piece
+    if (arc.kind !== 'arc') throw new Error('expected an arc')
+    const end = (t: number) => ({ x: arc.center.x + arc.radius * Math.cos(t), y: arc.center.y + arc.radius * Math.sin(t) })
+    expect(end(arc.from).x).toBeCloseTo(0, 12)
+    expect(end(arc.from).y).toBeCloseTo(-2, 12)
+    expect(end(arc.to).x).toBeCloseTo(1, 12)
+    expect(end(arc.to).y).toBeCloseTo(-1, 12)
+    expect(flat.to.x).toBeCloseTo(2, 12)
+    expect(flat.to.y).toBeCloseTo(0, 12)
   })
 })

@@ -6,8 +6,9 @@ import { resolveMode } from '../scene/mode'
 import type { Vec2 } from '../scene/types'
 import { liftOffset } from './crossSection'
 import { hullOf } from './hull'
-import { netOf, netOverlaps, netSeam, refuseOverlap, unrolledAngle, unrollingOf, type Net, type NetFace, type NetLine } from './nets'
-import { DEFAULT_CAMERA } from './project3d'
+import { convexOverlap, netOverlaps } from './net.testkit'
+import { netOf, netSeam, unrolledAngle, unrollingOf, type Net, type NetFace, type NetLine } from './nets'
+import { DEFAULT_CAMERA, type Vec3 } from './project3d'
 import { toWorld } from './silhouette'
 import { renderFigure } from './render'
 import { buildSolidFigure } from './solidScope'
@@ -163,7 +164,7 @@ describe('nets of polyhedra (N1, N2)', () => {
     expect(strip.lines.filter((l) => l.fold)).toHaveLength(7)
     expect(strip.lines.filter((l) => !l.fold)).toHaveLength(10)
     for (const face of strip.faces) for (const side of sides(face)) expect(side).toBeCloseTo(6, 12)
-    expect(netOverlaps(strip.faces, strip.copies)).toBe(false)
+    expect(netOverlaps(strip.faces)).toBe(false)
     // Round the equator: every equator edge (AB, BC, CD, DA) is crossed once,
     // as a fold. E and F are the apexes.
     const foldNames = strip.lines.filter((l) => l.fold).map((l) => l.object)
@@ -179,76 +180,113 @@ describe('nets of polyhedra (N1, N2)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// The overlap check (N2), and the invariant it guards
+// N2's invariant: no template net overlaps (pinned, not checked at run time)
 // ---------------------------------------------------------------------------
 
-// A flat face with its own corner copies, for the hand-built nets below.
-function square(face: number, at: Vec2, copies: number[]): { face: NetFace; keys: [string, number][] } {
-  const corners = [at, { x: at.x + 2, y: at.y }, { x: at.x + 2, y: at.y + 2 }, { x: at.x, y: at.y + 2 }]
-  const vertices = [0, 1, 2, 3].map((k) => face * 10 + k)
-  return { face: { face, vertices, corners }, keys: vertices.map((v, k) => [`${face}:${v}`, copies[k]]) }
+// A 2-by-2 square with its lower-left corner at `at`.
+function square(x: number, y: number): Vec2[] {
+  return [
+    { x, y },
+    { x: x + 2, y },
+    { x: x + 2, y: y + 2 },
+    { x, y: y + 2 },
+  ]
 }
 
-function flat(...faces: ReturnType<typeof square>[]): Net {
-  return { shape: 'star', faces: faces.map((f) => f.face), lines: [], letters: [], copies: new Map(faces.flatMap((f) => f.keys)) }
+describe('the exact overlap predicate (test-only, net.testkit.ts)', () => {
+  it('finds a positive-area overlap, including one whose edges only meet collinearly', () => {
+    // Offset (1, 0): the overlap is the 1-by-2 strip x in [1, 2] — area 2 —
+    // yet no two edges cross properly and each square's centroid lies on the
+    // other's edge. The phase 11 runtime check said "no overlap" here.
+    expect(convexOverlap(square(0, 0), square(1, 0))).toBe(true)
+    // Offset (1, 1): edges cross at (2, 1) and (1, 2), overlap area 1.
+    expect(convexOverlap(square(0, 0), square(1, 1))).toBe(true)
+    // Laid exactly on each other.
+    expect(convexOverlap(square(0, 0), square(0, 0))).toBe(true)
+    // A triangle poking into a square: area 0.5 inside.
+    expect(convexOverlap(square(0, 0), [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 1, y: 3 }])).toBe(true)
+  })
+
+  it('lets faces touch along an edge or at one point', () => {
+    // Edge-adjacent (a fold): they share the edge x = 2, area 0.
+    expect(convexOverlap(square(0, 0), square(2, 0))).toBe(false)
+    // Sharing half an edge only.
+    expect(convexOverlap(square(0, 0), square(2, 1))).toBe(false)
+    // Corner to corner at (2, 2).
+    expect(convexOverlap(square(0, 0), square(2, 2))).toBe(false)
+    // Well apart.
+    expect(convexOverlap(square(0, 0), square(5, 0))).toBe(false)
+    expect(netOverlaps([{ corners: square(0, 0) }, { corners: square(2, 0) }, { corners: square(0, 2) }])).toBe(false)
+    expect(netOverlaps([{ corners: square(0, 0) }, { corners: square(2, 0) }, { corners: square(1, 0) }])).toBe(true)
+  })
+})
+
+// Seeded, so the invariant is checked on the same solids every run.
+function seeded(seed: number): () => number {
+  let state = seed
+  return () => (state = (state * 1103515245 + 12345) % 2147483648) / 2147483648
 }
 
-describe('the overlap check (N2)', () => {
-  it('refuses a net whose faces overlap, and names the template', () => {
-    // Two 2-by-2 squares, the second moved (1, 1): their edges cross at
-    // (2, 1) and (1, 2), and each has a corner inside the other.
-    const net = flat(square(0, { x: 0, y: 0 }, [0, 1, 2, 3]), square(1, { x: 1, y: 1 }, [4, 5, 6, 7]))
-    expect(netOverlaps(net.faces, net.copies)).toBe(true)
-    expect(() => refuseOverlap(net, 'pyramid', 'S')).toThrow('"S": this pyramid\'s star net overlaps itself')
-  })
+// A convex polygon: n points at sorted random angles on an ellipse, in the
+// internal xz-plane at height y.
+function convexBase(random: () => number, n: number, y: number): Vec3[] {
+  const angles = Array.from({ length: n }, () => random() * 2 * Math.PI).sort((a, b) => a - b)
+  const [rx, rz] = [1 + random() * 5, 1 + random() * 5]
+  return angles.map((t) => ({ x: rx * Math.cos(t), y, z: rz * Math.sin(t) }))
+}
 
-  it('refuses two faces laid exactly on each other (the centroid test)', () => {
-    const net = flat(square(0, { x: 0, y: 0 }, [0, 1, 2, 3]), square(1, { x: 0, y: 0 }, [4, 5, 6, 7]))
-    expect(netOverlaps(net.faces, net.copies)).toBe(true)
-  })
+describe('no net the grammar can produce overlaps itself (the invariant)', () => {
+  function expectFlat(net: Net, what: string) {
+    expect(net.faces.length, what).toBeGreaterThan(0)
+    expect(netOverlaps(net.faces), what).toBe(false)
+  }
 
-  it('lets two faces touch along a fold, or at one shared corner', () => {
-    // Side by side, sharing the copies on x = 2: a fold.
-    expect(netOverlaps(...(() => { const n = flat(square(0, { x: 0, y: 0 }, [0, 1, 2, 3]), square(1, { x: 2, y: 0 }, [1, 4, 5, 2])); return [n.faces, n.copies] as const })())).toBe(false)
-    // Corner to corner at (2, 2), sharing that one copy.
-    expect(netOverlaps(...(() => { const n = flat(square(0, { x: 0, y: 0 }, [0, 1, 2, 3]), square(1, { x: 2, y: 2 }, [2, 4, 5, 6])); return [n.faces, n.copies] as const })())).toBe(false)
-  })
-
-  // The invariant (correction to the plan): no template net the grammar can
-  // reach overlaps. A tetrahedron's star cannot — any two lateral faces share
-  // a base vertex whose base angle and two face angles sum below 360°, so the
-  // wedges there are disjoint — and an OBTUSE six-edge tetrahedron is the
-  // case the plan expected to overlap: BC = 19 against AB = AC = 10 puts a
-  // 143.6° angle at A (cos A = (100 + 100 - 361) / 200 = -0.805).
-  it('draws an obtuse six-edge tetrahedron’s star, which cannot overlap', () => {
-    const { net } = built('S = solid tetrahedron ABCD with AB = 10, AC = 10, BC = 19, AD = 6, BD = 13, CD = 13')
-    const star = net()
-    expect(star.faces).toHaveLength(4)
-    expect(netOverlaps(star.faces, star.copies)).toBe(false)
-  })
-
-  it('holds for every regular template and seeded pyramids on points leaning far out', () => {
-    for (let n = 3; n <= 12; n++) {
-      for (const spec of [`prism regular ${n} side 2, height 5`, `pyramid regular ${n} side 2, height 3`, `frustum regular ${n} side 4, top 1, height 2`, `frustum regular ${n} side 2, top 1.9, height 0.1`]) {
-        const { net } = built(`S = solid ${spec}`)
-        const drawn = net()
-        expect(netOverlaps(drawn.faces, drawn.copies)).toBe(false)
-      }
+  it('holds for every dimension primitive, over a spread of proportions and n', () => {
+    const specs = ['cube edge 3', 'prism 8 by 5 by 6', 'prism 1 by 9 by 2', 'prism 20 by 1 by 3', 'pyramid square base 4, height 7', 'pyramid square base 6, height 0.3', 'tetrahedron edge 6', 'octahedron edge 6']
+    for (const width of [1, 6]) for (const height of [0.2, 9]) specs.push(`pyramid rectangle ${width} by 3, height ${height}`)
+    for (const n of [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 24]) {
+      specs.push(`prism regular ${n} side 2, height 5`, `prism regular ${n} side 2, height 0.1`, `pyramid regular ${n} side 2, height 3`, `pyramid regular ${n} side 2, height 0.05`)
+      specs.push(`frustum regular ${n} side 4, top 1, height 2`, `frustum regular ${n} side 2, top 1.9, height 0.1`, `frustum regular ${n} side 1, top 3, height 4`)
     }
-    // Pyramids on points: a convex base of 4 to 8 corners on an ellipse, the
-    // apex anywhere within 30 of the axis and as low as 0.05 — the petal
-    // unfolding still never overlaps.
-    let seed = 20260926
-    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
-    for (let trial = 0; trial < 400; trial++) {
-      const corners = 4 + Math.floor(random() * 5)
-      const angles = Array.from({ length: corners }, () => random() * 2 * Math.PI).sort((a, b) => a - b)
-      const [rx, rz] = [1 + random() * 5, 1 + random() * 5]
-      const points = angles.map((t) => ({ x: rx * Math.cos(t), y: 0, z: rz * Math.sin(t) }))
-      points.push({ x: (random() - 0.5) * 60, y: 0.05 + random() * random() * 10, z: (random() - 0.5) * 60 })
-      const body = buildSolid({ kind: 'hull', shape: 'pyramid', polyhedron: hullOf(points, points.map((_, i) => `P${i}`)) })
-      const drawn = netOf(body, 'S')
-      expect(netOverlaps(drawn.faces, drawn.copies)).toBe(false)
+    for (const spec of specs) expectFlat(built(`S = solid ${spec}`).net(), spec)
+  })
+
+  // A tetrahedron's star cannot overlap — any two lateral faces share a base
+  // vertex whose base angle and two face angles sum below 360°, so the
+  // wedges there are disjoint. The OBTUSE six-edge tetrahedron is the case the
+  // plan expected to overlap: BC = 19 against AB = AC = 10 puts a 143.6° angle
+  // at A (cos A = (100 + 100 - 361) / 200 = -0.805).
+  it('holds for six-edge tetrahedra, the obtuse one included', () => {
+    expectFlat(built('S = solid tetrahedron ABCD with AB = 10, AC = 10, BC = 19, AD = 6, BD = 13, CD = 13').net(), 'obtuse')
+    expectFlat(built('S = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)').net(), 'AIME 2024 I')
+    const random = seeded(11)
+    for (let trial = 0; trial < 60; trial++) {
+      const p = Array.from({ length: 4 }, () => ({ x: (random() - 0.5) * 20, y: (random() - 0.5) * 20, z: (random() - 0.5) * 20 }))
+      const d = (i: number, j: number) => Math.hypot(p[i].x - p[j].x, p[i].y - p[j].y, p[i].z - p[j].z).toFixed(12)
+      const spec = `S = solid tetrahedron ABCD with AB = ${d(0, 1)}, AC = ${d(0, 2)}, AD = ${d(0, 3)}, BC = ${d(1, 2)}, BD = ${d(1, 3)}, CD = ${d(2, 3)}`
+      expectFlat(built(spec).net(), spec)
+    }
+  })
+
+  it('holds for prisms, pyramids and tetrahedra on seeded named points, apexes leaning far out and low', () => {
+    const random = seeded(20260926)
+    for (let trial = 0; trial < 300; trial++) {
+      const corners = 3 + Math.floor(random() * 6)
+      const base = convexBase(random, corners, 0)
+      const height = 0.05 + random() * random() * 10
+      const apex = { x: (random() - 0.5) * 60, y: height, z: (random() - 0.5) * 60 }
+      const names = (n: number) => Array.from({ length: n }, (_, i) => `P${i}`)
+      if (corners >= 4) {
+        const pyramid = buildSolid({ kind: 'hull', shape: 'pyramid', polyhedron: hullOf([...base, apex], names(corners + 1)) })
+        expectFlat(netOf(pyramid, 'S'), `pyramid ${trial}`)
+      }
+      // A prism on points is a right prism: its top is its base moved along
+      // the base's normal.
+      const top = base.map((p) => ({ ...p, y: height }))
+      const prism = buildSolid({ kind: 'hull', shape: 'prism', polyhedron: hullOf([...base, ...top], names(2 * corners)) })
+      expectFlat(netOf(prism, 'S'), `prism ${trial}`)
+      const tetrahedron = buildSolid({ kind: 'hull', shape: 'tetrahedron', polyhedron: hullOf([...base.slice(0, 3), apex], names(4)) })
+      expectFlat(netOf(tetrahedron, 'S'), `tetrahedron ${trial}`)
     }
   })
 })
@@ -472,5 +510,50 @@ describe('net: in a figure', () => {
   it('infers a solid figure from a net', () => {
     const parsed = parseSpec('A = (0, 0, 0)\nnet: S')
     expect(resolveMode(parsed.statements, parsed.config)).toBe('figure')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------
+
+describe('fix round 1: lifts', () => {
+  it('leaves no gap for a section refused before it was drawn', () => {
+    // A cylinder's section by z = 0 is a circle, which has no vertices to
+    // name: refused, and nothing drawn. The net after it sits exactly where
+    // it sits alone.
+    const alone = render('C = solid cylinder radius 3, height 4\nnet: C')
+    const after = render('C = solid cylinder radius 3, height 4\nsection: C by plane z = 0 vertices PQ\nnet: C')
+    expect(after.errors.map((e) => e.message)).toEqual(['The section of "C" by z = 0 is a circle, which has no vertices to name'])
+    const folds = (svg: string, statement: number) => lines(svg, statement).filter((l) => l.attrs.includes('data-object="fold-base"')).map((l) => [l.x1, l.x2])
+    expect(folds(after.svg, 2)).toEqual(folds(alone.svg, 1))
+  })
+
+  // V1 — a net's letters face the drawing it is lifted beside: its gap
+  // reserves room for a letter on each side, so the solid's right-hand
+  // letters and the net's left-hand ones never run together ("GE").
+  it("keeps a net's letters clear of the solid's across the gap", () => {
+    for (const spec of ['S = solid cube edge 4 vertices ABCDEFGH\nnet: S', 'P = solid prism regular 6 side 2, height 4 vertices ABCDEFGHIJKL\nnet: P']) {
+      const { svg, errors } = render(spec)
+      expect(errors).toEqual([])
+      const letters = (statement: number) => [...svg.matchAll(/<text x="([^"]*)"[^>]*data-statement="(\d+)"/g)].filter((m) => Number(m[2]) === statement).map((m) => Number(m[1]))
+      // Text is centred on x; a capital is under 10 view units wide, so
+      // centres 30 apart leave a clear 20 between the letters.
+      expect(Math.min(...letters(1)) - Math.max(...letters(0))).toBeGreaterThan(30)
+    }
+  })
+
+  // V2 — a cylinder's net placed by points: only the rims fold.
+  it('dashes only the rims of a cylinder placed by points: 2 folds, 2 solid seam edges, 2 solid circles', () => {
+    const { svg, errors } = render('O = (0, 0, 0)\nM = (0, 0, 10)\nC = solid cylinder from O to M radius 3\nnet: C')
+    expect(errors).toEqual([])
+    const drawn = lines(svg, 3)
+    expect(drawn.filter((l) => l.attrs.includes('stroke-dasharray')).map((l) => /data-object="([^"]*)"/.exec(l.attrs)![1]).sort()).toEqual(['fold-base', 'fold-top'])
+    const seams = drawn.filter((l) => l.attrs.includes('data-object="cut-seam"'))
+    expect(seams).toHaveLength(2)
+    for (const seam of seams) expect(seam.attrs).not.toContain('stroke-dasharray')
+    const arcs = [...svg.matchAll(/<path d="[^"]*"([^>]*data-statement="3"[^>]*)\/>/g)].map((m) => m[1])
+    expect(arcs).toHaveLength(4)
+    for (const attrs of arcs) expect(attrs).not.toContain('stroke-dasharray')
   })
 })

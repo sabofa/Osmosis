@@ -1,7 +1,7 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 import { add3, centroid3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
-import { chartPoint, distanceFromApex, faceChart, faceFrame, moveChart, outwardNormal, placedNet, unrolledNet, unrollingOf, wrapAngle, type Net, type NetPiece, type Unrolling } from './nets'
+import { chartPoint, distanceFromApex, faceChart, faceFrame, moveChart, netSeam, outwardNormal, placedNet, unrolledAngle, unrolledNet, unrolledPoint, unrollingOf, wrapAngle, type Net, type NetPiece, type Unrolling } from './nets'
 import type { Solid3D, Vec3 } from './project3d'
 import { toLocal } from './silhouette'
 import type { SolidBody } from './solids'
@@ -40,12 +40,21 @@ import type { SolidBody } from './solids'
 export const MAX_PATH_FACES = 12
 
 // A path found: its length, where it runs on the solid (P, each crossing, Q,
-// internal frame), and the flat picture it is straight in, with P' and Q'.
+// internal frame), and the flat picture it is straight in, with P' and Q'
+// and the path's drawn pieces there — one segment, or two where a round
+// solid's path crosses the unrolling's seam.
+export interface FlatPath {
+  net: Net
+  from: Vec2
+  to: Vec2
+  pieces: [Vec2, Vec2][]
+}
+
 export interface SurfacePath {
   length: number
   onSolid: Vec3[]
   faces: number[]
-  flat: { net: Net; from: Vec2; to: Vec2 }
+  flat: FlatPath
 }
 
 // The faces a point lies on (closed: a point on an edge is on both faces,
@@ -169,8 +178,8 @@ export function polyhedronPath(
   })
   onSolid.push(q)
   const children = path.edges.map((edge, i) => ({ face: path.faces[i + 1], parent: path.faces[i], edge }))
-  const net = placedNet(solid, 'strip', path.faces[0], children, path.placed, names)
-  return { length: path.length, onSolid: withoutRepeats(onSolid, tolerance), faces: path.faces, flat: turned(net, path.from, path.to) }
+  const net = placedNet(solid, path.faces[0], children, path.placed, names)
+  return { length: path.length, onSolid: withoutRepeats(onSolid, tolerance), faces: path.faces, flat: turned({ net, from: path.from, to: path.to, pieces: [[path.from, path.to]] }) }
 }
 
 // A path from a point ON the edge it first crosses (a vertex, say) starts
@@ -249,17 +258,21 @@ function withoutRepeats(points: Vec3[], tolerance: number): Vec3[] {
 }
 
 // A flat picture turned about P' so the path runs left to right: the one
-// rotation taking Q' - P' to +x (none when they coincide).
-export function turned(net: Net, from: Vec2, to: Vec2): { net: Net; from: Vec2; to: Vec2 } {
+// rotation taking Q' - P' to +x (none when they coincide). An arc turns
+// with it: its centre moves, and its angles advance by the turn.
+export function turned(flat: FlatPath): FlatPath {
+  const { net, from, to } = flat
   const length = Math.hypot(to.x - from.x, to.y - from.y)
-  if (length === 0) return { net, from, to }
+  if (length === 0) return flat
   const cos = (to.x - from.x) / length
   const sin = -(to.y - from.y) / length
+  const angle = Math.atan2(sin, cos)
   const turn = (p: Vec2): Vec2 => ({
     x: from.x + cos * (p.x - from.x) - sin * (p.y - from.y),
     y: from.y + sin * (p.x - from.x) + cos * (p.y - from.y),
   })
-  const piece = (pc: NetPiece): NetPiece => (pc.kind === 'segment' ? { kind: 'segment', a: turn(pc.a), b: turn(pc.b) } : { ...pc, center: turn(pc.center) })
+  const piece = (pc: NetPiece): NetPiece =>
+    pc.kind === 'segment' ? { kind: 'segment', a: turn(pc.a), b: turn(pc.b) } : { ...pc, center: turn(pc.center), from: pc.from + angle, to: pc.to + angle }
   return {
     net: {
       ...net,
@@ -269,6 +282,7 @@ export function turned(net: Net, from: Vec2, to: Vec2): { net: Net; from: Vec2; 
     },
     from: turn(from),
     to: turn(to),
+    pieces: flat.pieces.map(([a, b]) => [turn(a), turn(b)]),
   }
 }
 
@@ -296,9 +310,11 @@ export function turned(net: Net, from: Vec2, to: Vec2): { net: Net; from: Vec2; 
 //
 // A geodesic on a curved surface is not a conic in projection, so it is
 // drawn on the lifted UNROLLING only, never on the solid (P and Q are drawn
-// on the solid by their own statements). The unrolling is cut along the
-// generator opposite the path's middle, so the path is one straight segment
-// centred in it; the side of the solid the path runs over is its middle.
+// on the solid by their own statements). The unrolling is the NET's (fix
+// round 1): cut along the generator directly away from the default camera,
+// so the side facing the viewer is its middle and P and Q sit where the
+// net puts them. A path that crosses that seam is drawn as its two pieces,
+// each straight, meeting the two edges the seam cut.
 
 const ROUND_PATHS = `shortest paths are found over polyhedra of at most ${MAX_PATH_FACES} faces and the curved sides of cylinders, cones and frusta`
 
@@ -311,21 +327,33 @@ function roundPath(body: SolidBody, name: string, word: string, [p, q]: [Vec3, V
   const [a, b] = local
   const thetaP = Math.atan2(a.z, a.x)
   const thetaQ = Math.atan2(b.z, b.x)
+  const seam = netSeam(body)
+  const net = unrolledNet(unrolling, false)
+  const from = unrolledPoint(unrolling, seam, a)
 
   if (unrolling.kind === 'cylinder') {
     const r = unrolling.radius
     const dy = b.y - a.y
     const ds = r * (thetaQ - thetaP)
+    const half = Math.PI * r
+    // The reader's right is decreasing theta (nets.ts), so Q lies `turn` to
+    // the LEFT of P, in the unrolling continued past its seam. Two ways round
+    // that tie (Q exactly opposite) are drawn the way that stays inside it.
+    const inside = (turn: number) => Math.abs(from.x - turn) <= half + tolerance
     let best = { length: Infinity, turn: 0 }
     for (const k of [0, -1, 1]) {
-      const length = Math.hypot(ds + 2 * Math.PI * r * k, dy)
-      if (length < best.length - tolerance) best = { length, turn: ds + 2 * Math.PI * r * k }
+      const turn = ds + 2 * Math.PI * r * k
+      const length = Math.hypot(turn, dy)
+      if (length < best.length - tolerance || (length <= best.length + tolerance && !inside(best.turn) && inside(turn))) best = { length, turn }
     }
-    // Centred on the path's middle generator; the reader's right is
-    // decreasing theta (nets.ts), so P sits at +turn/2 and Q at -turn/2.
-    const from = { x: best.turn / 2, y: a.y + unrolling.height / 2 }
-    const to = { x: -best.turn / 2, y: b.y + unrolling.height / 2 }
-    return { length: best.length, onSolid: [], faces: [], flat: { net: unrolledNet(unrolling, false), from, to } }
+    const far = { x: from.x - best.turn, y: b.y + unrolling.height / 2 }
+    const edge = far.x < -half - tolerance ? -half : far.x > half + tolerance ? half : null
+    if (edge === null) return { length: best.length, onSolid: [], faces: [], flat: { net, from, to: far, pieces: [[from, far]] } }
+    // Across the seam: to the edge, then on from the opposite edge.
+    const t = (edge - from.x) / (far.x - from.x)
+    const cross = { x: edge, y: from.y + t * (far.y - from.y) }
+    const shift = (p: Vec2): Vec2 => ({ x: p.x - 2 * edge, y: p.y })
+    return { length: best.length, onSolid: [], faces: [], flat: { net, from, to: shift(far), pieces: splitPieces(from, cross, shift(cross), shift(far), tolerance) } }
   }
 
   const rhoP = distanceFromApex(unrolling, a)
@@ -336,11 +364,22 @@ function roundPath(body: SolidBody, name: string, word: string, [p, q]: [Vec3, V
   const unwrapped = (Math.abs(thetaQ - thetaP) * scale) % sector
   const alpha = Math.min(unwrapped, sector - unwrapped)
   const length = Math.sqrt(Math.max(0, rhoP * rhoP + rhoQ * rhoQ - 2 * rhoP * rhoQ * Math.cos(alpha)))
-  // Which way round is shorter, for the layout: P to the right of the
-  // middle when Q lies at larger theta (the reader's right is decreasing theta).
-  const sign = wrapAngle(thetaQ - thetaP) >= 0 ? 1 : -1
-  const from = polar(rhoP, -Math.PI / 2 + (sign * alpha) / 2)
-  const to = polar(rhoQ, -Math.PI / 2 - (sign * alpha) / 2)
+  // Which way round is shorter, for the layout: the unrolled angle falls as
+  // theta rises (the reader's right is decreasing theta), so Q is alpha
+  // clockwise of P when it lies at larger theta, in the sector continued
+  // past its seam.
+  // Exactly half a turn apart the two ways round tie; the layout then takes
+  // the way that stays inside the sector.
+  // P's angle on the sector's own branch, [low, high) — atan2 of P' would
+  // name the same direction on another branch once the sector passes pi.
+  const phiP = unrolledAngle(unrolling, seam, thetaP)
+  const low = -Math.PI / 2 - sector / 2
+  const high = -Math.PI / 2 + sector / 2
+  let sign = wrapAngle(thetaQ - thetaP) >= 0 ? 1 : -1
+  const within = (sg: number) => phiP - sg * alpha >= low - tolerance && phiP - sg * alpha <= high + tolerance
+  if (Math.abs(sector - 2 * alpha) <= tolerance && !within(sign) && within(-sign)) sign = -sign
+  // From the apex itself (no angle of its own), Q is where the net puts it.
+  const to = rhoP === 0 ? unrolledPoint(unrolling, seam, b) : polar(rhoQ, phiP - sign * alpha)
   if (unrolling.kind === 'frustum') {
     // The segment's nearest approach to the apex: at the foot of the
     // perpendicular when that falls inside it, else at an end.
@@ -354,7 +393,41 @@ function roundPath(body: SolidBody, name: string, word: string, [p, q]: [Vec3, V
       )
     }
   }
-  return { length, onSolid: [], faces: [], flat: { net: unrolledNet(unrolling, false), from, to } }
+  return { length, onSolid: [], faces: [], flat: acrossSeam(net, from, phiP, to, unrolling.sector, tolerance) }
+}
+
+// A cone's (or frustum's) path in the sector continued past its seam:
+// one piece when Q' lies inside the sector, else the two pieces either side
+// of the seam ray it crosses, the second turned by the sector angle back in.
+// A straight segment not through the apex turns monotonically about it, and
+// alpha < pi, so it crosses the seam at most once.
+function acrossSeam(net: Net, from: Vec2, phiP: number, far: Vec2, sector: number, tolerance: number): FlatPath {
+  const low = -Math.PI / 2 - sector / 2
+  const high = -Math.PI / 2 + sector / 2
+  const phi = Math.atan2(far.y, far.x)
+  // The far end's angle continued past the seam, measured from P's.
+  const rhoFar = Math.hypot(far.x, far.y)
+  const continued = phiP + wrapAngle(phi - phiP)
+  const slack = tolerance / Math.max(1, rhoFar)
+  if (rhoFar === 0 || (continued >= low - slack && continued <= high + slack)) return { net, from, to: far, pieces: [[from, far]] }
+  const edge = continued < low ? low : high
+  const turn = continued < low ? sector : -sector
+  const u = { x: Math.cos(edge), y: Math.sin(edge) }
+  const d = { x: far.x - from.x, y: far.y - from.y }
+  const t = -(u.x * from.y - u.y * from.x) / (u.x * d.y - u.y * d.x)
+  const cross = { x: from.x + t * d.x, y: from.y + t * d.y }
+  const rotate = (p: Vec2): Vec2 => ({ x: p.x * Math.cos(turn) - p.y * Math.sin(turn), y: p.x * Math.sin(turn) + p.y * Math.cos(turn) })
+  return { net, from, to: rotate(far), pieces: splitPieces(from, cross, rotate(cross), rotate(far), tolerance) }
+}
+
+// The two pieces of a path cut by a seam, dropping one of zero length (a
+// path that starts or ends on the seam).
+function splitPieces(from: Vec2, cross: Vec2, again: Vec2, to: Vec2, tolerance: number): [Vec2, Vec2][] {
+  const pieces: [Vec2, Vec2][] = [
+    [from, cross],
+    [again, to],
+  ]
+  return pieces.filter(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y) > tolerance)
 }
 
 function polar(rho: number, phi: number): Vec2 {

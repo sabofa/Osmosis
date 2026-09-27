@@ -670,9 +670,9 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   radius l and angle 2 pi r / l, a conical frustum an annular sector, each
 //   with its rim circles tangent at the middles of the edges they fold on,
 //   the seam cut along the generator directly away from the default camera.
-//   A net is checked for overlap, exactly, and one that overlapped would be
-//   refused (no template reachable today can overlap). A sphere and a hull
-//   of named points have no net.
+//   No template net can overlap itself, so none is checked at run time: the
+//   invariant is pinned by the tests instead, with an exact test-only
+//   predicate. A sphere and a hull of named points have no net.
 //   N3 — over a polyhedron (at most 12 faces), both ends in space ON its
 //   surface: an exact enumeration of simple face sequences, each unfolded
 //   in closed form and valid only when the straight line crosses every
@@ -682,9 +682,12 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   N4 — over a cylinder, cone or conical frustum, both ends on the CURVED
 //   side (a rim counts; a flat end is refused): closed form on the unrolled
 //   side. A geodesic on a curved surface is not a conic in projection, so it
-//   is drawn ONLY on the lifted unrolling (cut opposite the path's middle,
-//   the path one straight segment); P and Q are drawn on the solid by their
-//   own statements. A frustum path that would run inside the top rim is
+//   is drawn ONLY on the lifted unrolling — the net's, cut behind, so P and
+//   Q sit where the net puts them; a path crossing that seam is drawn as its
+//   two straight pieces (a tie, exactly half a turn round, goes the way that
+//   stays inside); P and Q are drawn on the solid by their own statements.
+//   A second "shortest:" of the same path with "unfold" lifts the strip
+//   then; a polyhedron path lifts nothing unless asked. A frustum path that would run inside the top rim is
 //   refused ("would run along the top rim — not drawn").
 //   N6 — not drawn, refused where an author could ask: general polyhedron
 //   unfolding (hulls), nets of spheres, paths over flat ends of round solids

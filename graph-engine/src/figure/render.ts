@@ -65,7 +65,7 @@ import {
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
 import { authorToWorld, describeAuthorPlane } from './authorFrame'
-import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
+import { liftOffset, NET_LABEL_CLEARANCE, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
 import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
 import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden, projectArc, rightAngleCorners, type SpaceArc } from './spaceMarks'
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
@@ -952,7 +952,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     const flat = net.lines.flatMap((line) => netEdges(line.piece, line.object))
     const solidBounds = boundsOf(solidOutline(body, camera).flatMap(edgeExtremes))
     const shapeBounds = boundsOf(flat.flatMap(edgeExtremes))
-    const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight) : { x: 0, y: 0 }
+    // A net's letters face the drawing it is lifted beside, so it reserves
+    // label clearance in the gap (fix round 1); a section keeps phase 5's.
+    const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight, NET_LABEL_CLEARANCE) : { x: 0, y: 0 }
     if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
     const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
     const lines = net.lines.flatMap((line) => netEdges(movePiece(line.piece, move), line.object).map((edge) => ({ edge, fold: line.fold })))
@@ -967,39 +969,63 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   }
 
   // N3 / N4 — a shortest path, drawn: on a polyhedron as its per-face
-  // segments on the solid, split by the glass rule; with `unfold`, and always
-  // on a round solid, straight across the lifted strip or unrolling, its
-  // ends dotted and lettered there (unless a vertex copy already letters the
-  // spot). Drawn once per (P, Q, S); a later label reuses what was drawn.
-  // Returns where the path's middle is, for a label.
-  const drawnPaths = new Map<string, { at: Vec2; along: [Vec2, Vec2] }>()
-  function drawPath(index: number, subject: { from: string; to: string; solid: string }, unfold: boolean, color: string | null): { at: Vec2; along: [Vec2, Vec2] } {
+  // segments on the solid, split by the glass rule, and — only when some
+  // statement asks for "unfold" — straight across the lifted strip; on a
+  // round solid, always and only on the lifted unrolling (the net's, cut
+  // behind), in one or two straight pieces. Its ends are dotted and
+  // lettered on the lift (unless a vertex copy already letters the spot).
+  // Each part is drawn once per (P, Q, S): a later "unfold" of a path
+  // already drawn lifts its strip then (fix round 1), and a label reuses
+  // what was drawn. Returns where the path's middle is, for a label.
+  type PathAnchor = { at: Vec2; along: [Vec2, Vec2]; onSolid: boolean }
+  const pathsOnSolid = new Map<string, PathAnchor>()
+  const pathsLifted = new Map<string, PathAnchor>()
+  function drawPath(index: number, subject: { from: string; to: string; solid: string }, unfold: boolean, color: string | null): PathAnchor {
     const key = `${subject.from}|${subject.to}|${subject.solid}`
-    const drawn = drawnPaths.get(key)
-    if (drawn) return drawn
     const path = resolvePath(subject)
-    const object = `path-${subject.from}${subject.to}`
     const body = resolveSolid(subject.solid)
-    let anchor: { at: Vec2; along: [Vec2, Vec2] } | null = null
-    for (let i = 0; i + 1 < path.onSolid.length; i++) items.push(...spaceSegmentItems(index, path.onSolid[i], path.onSolid[i + 1], 'auto', object, color))
-    if (path.onSolid.length >= 2) anchor = middleOf(path.onSolid)
-    if (unfold || path.onSolid.length < 2) {
-      const names = scope.vertexNames.get(body) ?? []
-      // The strip is scaffolding, in the figure's ink; the path takes the colour.
-      const move = liftNet(index, `unfold-${subject.from}${subject.to}`, body, path.flat.net, names, null)
-      const [a, b] = [move(path.flat.from), move(path.flat.to)]
-      items.push({ kind: 'line', id: { statement: index, object }, a, b, extent: 'segment', auxiliary: false, color })
-      for (const [name, at] of [
-        [subject.from, a],
-        [subject.to, b],
-      ] as const) {
-        const lettered = path.flat.net.letters.some((letter) => names[letter.vertex] === name && Math.hypot(move(letter.at).x - at.x, move(letter.at).y - at.y) <= GEOM_EPS * Math.max(1, Math.hypot(at.x, at.y)))
-        items.push({ kind: 'point', id: { statement: index, object: name }, at, label: lettered ? null : name, prefer: null, color })
-      }
-      anchor ??= { at: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, along: [a, b] }
+    const object = `path-${subject.from}${subject.to}`
+    if (!body.polyhedron) {
+      if (!pathsLifted.has(key)) pathsLifted.set(key, liftPath(index, subject, path, body, object, color))
+      return pathsLifted.get(key)!
     }
-    drawnPaths.set(key, anchor!)
-    return anchor!
+    let anchor = pathsOnSolid.get(key)
+    if (!anchor) {
+      for (let i = 0; i + 1 < path.onSolid.length; i++) items.push(...spaceSegmentItems(index, path.onSolid[i], path.onSolid[i + 1], 'auto', object, color))
+      anchor = { ...middleOf(path.onSolid), onSolid: true }
+      pathsOnSolid.set(key, anchor)
+    }
+    if (unfold && !pathsLifted.has(key)) pathsLifted.set(key, liftPath(index, subject, path, body, object, color))
+    return anchor
+  }
+
+  // The flat picture of a path, lifted: the strip or unrolling in the
+  // figure's ink, the path's pieces in its colour, its ends dotted.
+  function liftPath(index: number, subject: { from: string; to: string }, path: SurfacePath, body: SolidBody, object: string, color: string | null): PathAnchor {
+    const names = scope.vertexNames.get(body) ?? []
+    const move = liftNet(index, `unfold-${subject.from}${subject.to}`, body, path.flat.net, names, null)
+    const pieces = path.flat.pieces.map(([a, b]): [Vec2, Vec2] => [move(a), move(b)])
+    for (const [a, b] of pieces) items.push({ kind: 'line', id: { statement: index, object }, a, b, extent: 'segment', auxiliary: false, color })
+    for (const [name, at] of [
+      [subject.from, move(path.flat.from)],
+      [subject.to, move(path.flat.to)],
+    ] as const) {
+      const lettered = path.flat.net.letters.some((letter) => names[letter.vertex] === name && Math.hypot(move(letter.at).x - at.x, move(letter.at).y - at.y) <= GEOM_EPS * Math.max(1, Math.hypot(at.x, at.y)))
+      items.push({ kind: 'point', id: { statement: index, object: name }, at, label: lettered ? null : name, prefer: null, color })
+    }
+    // Halfway along the drawn pieces.
+    const lengths = pieces.map(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y))
+    let half = lengths.reduce((sum, l) => sum + l, 0) / 2
+    for (let i = 0; i < pieces.length; i++) {
+      if (half <= lengths[i] || i === pieces.length - 1) {
+        const [a, b] = pieces[i]
+        const u = lengths[i] === 0 ? 0 : Math.min(1, half / lengths[i])
+        return { at: { x: a.x + u * (b.x - a.x), y: a.y + u * (b.y - a.y) }, along: [a, b], onSolid: false }
+      }
+      half -= lengths[i]
+    }
+    const at = move(path.flat.from)
+    return { at, along: [at, at], onSolid: false }
   }
 
   // The point halfway along a path on the solid, projected, and the drawn
@@ -1193,10 +1219,15 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           )
           const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight) : { x: 0, y: 0 }
           const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
-          if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
+          // The running edge moves only once the section is drawn (fix round
+          // 1): one refused before it is drawn leaves no gap behind it.
+          const lifted = () => {
+            if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
+          }
 
           if (shape.kind === 'region') {
             items.push({ kind: 'region', id: { statement: index, object: statement.solid }, edges: liftedRegion(shape.boundary, move), color: statement.color })
+            lifted()
             if (statement.vertices.length === 0) break
             // Q5 — a region's CORNERS, where an arc meets a chord, in boundary
             // order from the first chord's start. A whole ellipse has none.
@@ -1219,11 +1250,13 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
               throw new Error(`The section of "${statement.solid}" by ${describeAuthorPlane(plane)} is a circle, which has no vertices to name`)
             }
             items.push({ kind: 'circle', id: { statement: index, object: statement.solid }, center: move(shape.center), radius: shape.radius, color: statement.color })
+            lifted()
             break
           }
 
           const vertices = shape.vertices.map(move)
           items.push({ kind: 'polygon', id: { statement: index, object: statement.solid }, vertices, color: statement.color })
+          lifted()
           if (statement.vertices.length > 0) {
             if (statement.vertices.length !== vertices.length) {
               throw new Error(
@@ -1524,7 +1557,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         computed = resolvePath(subject).length
         // Among a solid's edges a displaced label needs its line back, as a
         // dimension does; on a lifted unrolling the path stands alone.
-        leader = resolvePath(subject).onSolid.length >= 2
+        leader = drawn.onSolid
       } else if (subject.kind === 'dihedral') {
         // M3 — the value, on the mark: drawn here (once — not again beside a
         // "dihedral:" for the same angle), the label on the arc's middle,

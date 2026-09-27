@@ -43,27 +43,23 @@ import { frustumRadii, type SolidBody } from './solids'
 // one class of (face, vertex) pairs joined across fold lines — the faces that
 // stay attached at that corner once the net is cut out.
 //
-// **Overlap is refused, exactly (N2).** Every polyhedral net is checked for
-// self-overlap before it is drawn: a proper crossing between two edges of
-// different faces that share no corner copy, or a face's corner or centroid
-// strictly inside another face — "this pyramid's star net overlaps itself".
-//
-// **Correction to the plan, recorded: no template net reachable from the
-// grammar overlaps.** The plan expected an obtuse six-edge tetrahedron's star
-// to. It cannot: any two of a tetrahedron's lateral faces share a base
-// vertex, where the base angle and the two face angles sum to less than 360
-// degrees (a convex corner), so the three wedges at that vertex are disjoint
-// and so are the triangles inside them. A prism's strip is rectangles (every
-// prism here is a right prism) with its caps wholly above and below it; the
-// regular frustum's star and the octahedron's strip are fixed shapes; and a
-// pyramid's star — the petal unfolding — did not overlap on any of 20000
-// seeded pyramids on points, apexes leaning far out and low over bases of 4
-// to 8 corners. So the check stays as the guard every template passes
-// through (it costs nothing, and a future template or an oblique prism would
-// meet it), and the tests pin the INVARIANT — every reachable net, over
-// seeded random solids, passes — beside a hand-built overlapping net the
-// check must refuse, so it cannot pass vacuously. The phase 5 precedent: the
-// convexity invariant, pinned beside a dented cube.
+// **No template net can overlap itself, and there is no runtime check.**
+// The plan asked for an overlap refusal, expecting an obtuse six-edge
+// tetrahedron's star to overlap. It cannot: any two of a tetrahedron's
+// lateral faces share a base vertex, where the base angle and the two face
+// angles sum to less than 360 degrees (a convex corner), so the three wedges
+// at that vertex are disjoint and so are the triangles inside them. A prism's
+// strip is rectangles (every prism here is a right prism) with its caps
+// wholly above and below it; the regular frustum's star and the octahedron's
+// strip are fixed shapes; and a pyramid's star — the petal unfolding — did
+// not overlap on any of 20000 seeded pyramids on points, apexes leaning far
+// out and low over bases of 4 to 8 corners. A refusal no input can reach is a
+// branch no test can honestly exercise, so, as phase 5 did for convexity
+// (it replaced an unreachable runtime guard with a pinned invariant), the
+// INVARIANT is pinned instead: nets.test.ts checks every template the grammar
+// can produce with an exact separating-axis predicate (net.testkit.ts),
+// itself proven on hand-built overlapping and touching faces. A new template,
+// or an oblique prism, that broke it would turn that test red.
 
 // ---------------------------------------------------------------------------
 // The flat pieces
@@ -101,14 +97,9 @@ export interface NetFace {
 }
 
 export interface Net {
-  // What the net is called in a refusal: a prism's or octahedron's "strip",
-  // a pyramid's, tetrahedron's or frustum's "star", a round solid's "net".
-  shape: 'strip' | 'star' | 'net'
   faces: NetFace[]
   lines: NetLine[]
   letters: NetLetter[]
-  // The copy (an index into `letters`) each "face:vertex" pair belongs to.
-  copies: Map<string, number>
 }
 
 // ---------------------------------------------------------------------------
@@ -216,8 +207,6 @@ export function attachChart(solid: Solid3D, faceIndex: number, a: number, b: num
 // A face tree: the root, its first edge, and each other face with the face
 // it hangs off and the edge they share, parents before children.
 interface Template {
-  // What the net is called in a refusal: "strip" or "star".
-  shape: 'strip' | 'star'
   root: number
   rootEdge: [number, number]
   children: { face: number; parent: number; edge: [number, number] }[]
@@ -242,7 +231,7 @@ function prismTemplate(solid: Solid3D, base: number[], top: number[]): Template 
   for (let i = 1; i < n; i++) children.push({ face: lateral[i], parent: lateral[i - 1], edge: [base[i], top[i]] })
   children.push({ face: faceWith(solid, base), parent: lateral[k], edge: [base[k], base[(k + 1) % n]] })
   children.push({ face: faceWith(solid, top), parent: lateral[k], edge: [top[k], top[(k + 1) % n]] })
-  return { shape: 'strip', root: lateral[0], rootEdge: [base[0], base[1]], children }
+  return { root: lateral[0], rootEdge: [base[0], base[1]], children }
 }
 
 // N2: pyramids and tetrahedra — the base as root, each lateral triangle
@@ -262,7 +251,7 @@ function starTemplate(solid: Solid3D, base: number[], apexOrTop: number | number
     const k = Math.ceil(n / 2) - 1
     children.push({ face: faceWith(solid, apexOrTop), parent: lateral[k], edge: [apexOrTop[k], apexOrTop[(k + 1) % n]] })
   }
-  return { shape: 'star', root, rootEdge: [base[0], base[1]], children }
+  return { root, rootEdge: [base[0], base[1]], children }
 }
 
 // N2: the octahedron — a zig-zag strip of all eight triangles round the
@@ -280,7 +269,6 @@ function octahedronTemplate(solid: Solid3D, order: number[]): Template {
   const upper = ring.map((v, i) => faceWith(solid, [v, ring[(i + 1) % 4], top]))
   const lower = ring.map((v, i) => faceWith(solid, [v, ring[(i + 1) % 4], bottom]))
   return {
-    shape: 'strip',
     root: upper[0],
     rootEdge: [a, b],
     children: [
@@ -365,17 +353,7 @@ function templateOf(body: SolidBody, name: string): Template | null {
 export function polyhedronNet(body: SolidBody, name: string, names: readonly (string | undefined)[] = []): Net | null {
   const template = templateOf(body, name)
   if (!template || !body.polyhedron) return null
-  const solid = body.polyhedron
-  const net = unfoldTree(solid, template, names)
-  refuseOverlap(net, netSolidWord(body), name)
-  return net
-}
-
-// N2's guard: a net that overlaps itself is refused, never drawn.
-export function refuseOverlap(net: Net, word: string, name: string): void {
-  if (netOverlaps(net.faces, net.copies)) {
-    throw new Error(`"${name}": this ${word}'s ${net.shape} net overlaps itself, so it cannot be drawn flat in one piece`)
-  }
+  return unfoldTree(body.polyhedron, template, names)
 }
 
 function unfoldTree(solid: Solid3D, template: Template, names: readonly (string | undefined)[]): Net {
@@ -384,7 +362,7 @@ function unfoldTree(solid: Solid3D, template: Template, names: readonly (string 
   for (const child of template.children) {
     placed.set(child.face, attachChart(solid, child.face, child.edge[0], child.edge[1], placed.get(child.parent)!))
   }
-  return placedNet(solid, template.shape, template.root, template.children, placed, names)
+  return placedNet(solid, template.root, template.children, placed, names)
 }
 
 // A net from faces already placed flat: the root, then each child with the
@@ -392,7 +370,6 @@ function unfoldTree(solid: Solid3D, template: Template, names: readonly (string 
 // net and a shortest path's strip of faces (N3's `unfold`).
 export function placedNet(
   solid: Solid3D,
-  shape: Net['shape'],
   root: number,
   children: readonly { face: number; parent: number; edge: [number, number] }[],
   placed: ReadonlyMap<number, ReadonlyMap<number, Vec2>>,
@@ -425,7 +402,6 @@ export function placedNet(
     folds.add(foldKey(child.parent, child.edge))
   }
   const copyIndex = new Map<string, number>()
-  const copyKeys = new Map<string, number>()
   const letters: NetLetter[] = []
   const touching: Vec2[][] = []
   for (const f of faces) {
@@ -440,7 +416,6 @@ export function placedNet(
         touching.push([])
       }
       touching[index].push(centre)
-      copyKeys.set(`${f.face}:${v}`, index)
     })
   }
   letters.forEach((letter, i) => (letter.toward = centroid2(touching[i])))
@@ -462,7 +437,7 @@ export function placedNet(
       lines.push({ piece: { kind: 'segment', a: f.corners[i], b: f.corners[(i + 1) % f.corners.length] }, fold: false, object: `cut-${label(v)}-${label(w)}` })
     })
   }
-  return { shape, faces, lines, letters, copies: copyKeys }
+  return { faces, lines, letters }
 }
 
 function foldKey(face: number, [a, b]: readonly [number, number] | number[]): string {
@@ -477,83 +452,6 @@ export function centroid2(points: readonly Vec2[]): Vec2 {
     y += p.y / points.length
   }
   return { x, y }
-}
-
-// ---------------------------------------------------------------------------
-// The overlap check (N2), exact
-// ---------------------------------------------------------------------------
-
-// Whether any two faces of a flat net overlap with positive area. Two faces
-// may touch where they share a corner copy (along a fold, or at one corner);
-// anything else is an overlap: two edges that share no copy crossing
-// properly, or a corner (not shared) or the centroid of one face strictly
-// inside another. The faces are convex, so these cover every way two of them
-// can overlap. Tolerances are GEOM_EPS scaled to the net's own size.
-export function netOverlaps(faces: readonly NetFace[], copies: ReadonlyMap<string, number>): boolean {
-  let size = 1
-  for (const f of faces) for (const p of f.corners) size = Math.max(size, Math.abs(p.x), Math.abs(p.y))
-  const tolerance = GEOM_EPS * size
-  const copyOf = (f: NetFace, i: number) => copies.get(`${f.face}:${f.vertices[i]}`)
-  for (let i = 0; i < faces.length; i++) {
-    for (let j = i + 1; j < faces.length; j++) {
-      const f = faces[i]
-      const g = faces[j]
-      const fCopies = new Set(f.vertices.map((_, k) => copyOf(f, k)))
-      const gCopies = new Set(g.vertices.map((_, k) => copyOf(g, k)))
-      for (let a = 0; a < f.corners.length; a++) {
-        const a2 = (a + 1) % f.corners.length
-        for (let b = 0; b < g.corners.length; b++) {
-          const b2 = (b + 1) % g.corners.length
-          const shared = [copyOf(f, a), copyOf(f, a2)].some((c) => c === copyOf(g, b) || c === copyOf(g, b2))
-          if (shared) continue
-          if (properlyCross(f.corners[a], f.corners[a2], g.corners[b], g.corners[b2], tolerance)) return true
-        }
-      }
-      for (const [inner, outer, outerCopies] of [
-        [g, f, fCopies],
-        [f, g, gCopies],
-      ] as const) {
-        for (let k = 0; k < inner.corners.length; k++) {
-          if (outerCopies.has(copyOf(inner, k))) continue
-          if (strictlyInside(inner.corners[k], outer.corners, tolerance)) return true
-        }
-        if (strictlyInside(centroid2(inner.corners), outer.corners, tolerance)) return true
-      }
-    }
-  }
-  return false
-}
-
-function cross2(o: Vec2, a: Vec2, b: Vec2): number {
-  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-}
-
-// Two segments crossing at a point interior to both (not at an end, not
-// merely touching, not collinear).
-function properlyCross(p: Vec2, q: Vec2, r: Vec2, s: Vec2, tolerance: number): boolean {
-  const scale = Math.max(Math.hypot(q.x - p.x, q.y - p.y), Math.hypot(s.x - r.x, s.y - r.y))
-  const eps = tolerance * scale
-  const d1 = cross2(p, q, r)
-  const d2 = cross2(p, q, s)
-  const d3 = cross2(r, s, p)
-  const d4 = cross2(r, s, q)
-  return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))
-}
-
-// Strictly inside a convex polygon, whichever way it is wound.
-function strictlyInside(p: Vec2, polygon: readonly Vec2[], tolerance: number): boolean {
-  let sign = 0
-  for (let i = 0; i < polygon.length; i++) {
-    const a = polygon[i]
-    const b = polygon[(i + 1) % polygon.length]
-    const c = cross2(a, b, p)
-    const eps = tolerance * Math.max(1, Math.hypot(b.x - a.x, b.y - a.y))
-    if (Math.abs(c) <= eps) return false
-    const s = c > 0 ? 1 : -1
-    if (sign === 0) sign = s
-    else if (s !== sign) return false
-  }
-  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -682,7 +580,7 @@ export function unrolledNet(unrolling: Unrolling, withRims: boolean): Net {
       cut({ kind: 'arc', center: { x: 0, y: -r }, radius: r, from: 0, to: 2 * Math.PI }, 'base')
       cut({ kind: 'arc', center: { x: 0, y: h + r }, radius: r, from: 0, to: 2 * Math.PI }, 'top')
     }
-    return { shape: 'net', faces: [], lines, letters: [], copies: new Map() }
+    return { faces: [], lines, letters: [] }
   }
   // A sector (annular for a frustum) about the apex at the origin, symmetric
   // about the vertical and opening downward: polar angles -pi/2 -/+ half the
@@ -702,7 +600,7 @@ export function unrolledNet(unrolling: Unrolling, withRims: boolean): Net {
     cut({ kind: 'arc', center: { x: 0, y: -slant - radius }, radius, from: 0, to: 2 * Math.PI }, 'base')
     if (unrolling.kind === 'frustum') cut({ kind: 'arc', center: { x: 0, y: -inner + top }, radius: top, from: 0, to: 2 * Math.PI }, 'top')
   }
-  return { shape: 'net', faces: [], lines, letters: [], copies: new Map() }
+  return { faces: [], lines, letters: [] }
 }
 
 // The seam of a round solid's NET: the generator directly away from the
