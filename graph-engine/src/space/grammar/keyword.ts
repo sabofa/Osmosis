@@ -8,6 +8,7 @@
 // adds space's "plane:" forms, that row must return null for them.
 
 import { parseExprString } from '../../parser/parseExpr'
+import { INTEGRAL_KEYWORDS } from './keywords/integrals'
 import { buildStyle, splitStyle } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 
@@ -34,11 +35,21 @@ function parseImplicit(text: string): SpaceForm {
   }
 }
 
-const KEYWORDS: readonly KeywordRow[] = [{ keyword: 'implicit', parse: parseImplicit }]
+const KEYWORDS: readonly KeywordRow[] = [
+  { keyword: 'implicit', parse: parseImplicit },
+  ...INTEGRAL_KEYWORDS,
+]
+
+// An operand that is only a hyphenated point list ("A-B-C") belongs to
+// solid figures, whatever the keyword: it is never claimed.
+const POINT_LIST = /^[A-Z][A-Za-z0-9']*(\s*-\s*[A-Z][A-Za-z0-9']*)+$/
 
 export function parseSpaceKeyword(line: string): SpaceStatement | null {
   for (const row of KEYWORDS) {
-    if (line.startsWith(`${row.keyword}:`)) return spaceStatement(row.parse(line.slice(row.keyword.length + 1).trim()))
+    if (!line.startsWith(`${row.keyword}:`)) continue
+    const rest = line.slice(row.keyword.length + 1).trim()
+    if (POINT_LIST.test(rest)) return null
+    return spaceStatement(row.parse(rest))
   }
   return null
 }

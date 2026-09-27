@@ -4,6 +4,7 @@
 
 import type { Expr } from '../../parser/types'
 import type { ColormapName } from '../scene/types'
+import type { IntegralForm } from './keywords/integrals'
 
 // "t in [a, b]". Bounds are expressions: they may read parameters, and an
 // iterated domain's inner bounds read the outer variable.
@@ -63,6 +64,8 @@ export type SpaceForm =
   // An equation whose free variables include z, or "implicit: <equation>"
   // (forced). Claimed in S1, built in S4.
   | { form: 'implicitSurface'; left: Expr; right: Expr; forced: boolean; style: SpaceStyle }
+  // Regions, volumes, Riemann sums and centroids (S5).
+  | IntegralForm
 
 // What the two hooks return: the parser/types.ts Statement member for space.
 // The shared wrapper overwrites color and statementName, as for every line.

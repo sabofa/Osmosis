@@ -378,9 +378,9 @@ describe('errors are returned with their line, never thrown', () => {
     expect(scene.errors).toEqual([{ line: 1, message: 'implicit surfaces are drawn from phase S4' }])
   })
 
-  it('a named region arrives with region: in phase S5', () => {
+  it('a named region must be defined (S5 resolves "over R")', () => {
     const scene = sceneOf('z = x over R')
-    expect(scene.errors[0].message).toMatch(/named regions arrive with region: \(phase S5\)/)
+    expect(scene.errors[0].message).toMatch(/no region named "R"/)
   })
 
   it('a hidden statement draws nothing but still defines', () => {
