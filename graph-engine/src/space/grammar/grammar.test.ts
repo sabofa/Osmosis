@@ -231,6 +231,10 @@ describe('K5.6 — implicit surfaces', () => {
     })
   })
 
+  it('a built-in on the left is an equation, not a definition: hypot(x, y, z) = 1', () => {
+    expect(form('hypot(x, y, z) = 1')).toMatchObject({ form: 'implicitSurface', left: p('hypot(x, y, z)'), right: p('1'), forced: false })
+  })
+
   it('an implicit surface may carry surface style', () => {
     expect(form('x^2 + y^2 + z^2 = 4 opacity: 0.4')).toMatchObject({ form: 'implicitSurface', style: { opacity: 0.4 } })
   })
@@ -265,6 +269,20 @@ describe('lines space does not claim (both hooks return null)', () => {
     '(cos(t), sin(t)) for t in [0, 6] width: 3',
     // relations that are not equations
     'x^2 + z^2 < 4',
+    // a definition named after a built-in, pi or e (fix round 1, I1)
+    'log(y, x) = 2',
+    'log(x, y) = 1',
+    'sin(x, y) = 1',
+    'pi = <1, 2, 3>',
+    'e(x, y) = x + y',
+    // a first word that is a solid-figure keyword (fix round 1, R2)
+    'plane z = 1',
+    'plane x + y + z = 4',
+    'triangle = <1, 2, 3>',
+    'label z = 3',
+    'angle z = 1',
+    'circle x^2 + z^2 = 1 opacity: 0.5',
+    'solid (u, v, 1) for u in [0, 1], v in [0, 1] mesh: off',
   ]
   for (const line of negatives) {
     it(line, () => {
@@ -298,6 +316,10 @@ describe('refusals on a claimed line', () => {
     ['f(x, x) = x', /twice/],
     ['z = x over 1 < x > 2', /same direction/],
     ['implicit: x^2 + y^2', /equation/],
+    // color: or name: left before a style clause (fix round 1, R3)
+    ['z = x color: red opacity: 0.5', /write color: and name: after the other clauses/],
+    ['(t, t, t) for t in [0, 1] name: c width: 2', /write color: and name: after the other clauses/],
+    ['implicit: x^2 + z^2 = 1 color: red mesh: off', /write color: and name: after the other clauses/],
   ]
   for (const [line, message] of refusals) {
     it(line, () => {

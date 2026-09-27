@@ -1249,3 +1249,48 @@ describe('space claims its own forms through the full wrapper (K5 positives)', (
     expect(() => parseStatement('(cos(t), sin(t)) for t in [0, 6] width: 3')).toThrow(/range/)
   })
 })
+
+describe('space leaves built-in names and solid-figure words alone (fix round 1, I1 and R2)', () => {
+  // Expected trees written out by hand: what the base commit parses.
+  const call2 = (name: string, a: string, b: string) => ({ kind: 'call', name, args: [v(a), v(b)] })
+  const BEFORE: [string, unknown][] = [
+    ['log(y, x) = 2', { kind: 'implicit', left: call2('log', 'y', 'x'), right: n(2), ...plain }],
+    ['log(x, y) = 1', { kind: 'implicit', left: call2('log', 'x', 'y'), right: n(1), ...plain }],
+    ['sin(x, y) = 1', { kind: 'implicit', left: call2('sin', 'x', 'y'), right: n(1), ...plain }],
+    ['plane z = 1', { kind: 'implicit', left: bin('*', v('plane'), v('z')), right: n(1), ...plain }],
+    [
+      'plane x + y + z = 4',
+      { kind: 'implicit', left: bin('+', bin('+', bin('*', v('plane'), v('x')), v('y')), v('z')), right: n(4), ...plain },
+    ],
+    // "label" with no colon is not the label statement: an implicit product
+    ['label z = 3', { kind: 'implicit', left: bin('*', v('label'), v('z')), right: n(3), ...plain }],
+    ['pi = <1, 2, 3>', { threw: 'Unexpected character "<" at position 0' }],
+    ['sin(z) = z^2', { kind: 'functionDef', name: 'sin', param: 'z', body: bin('^', v('z'), n(2)), ...plain }],
+  ]
+  for (const [line, statement] of BEFORE) {
+    it(line, () => {
+      let actual: unknown
+      try {
+        actual = parseStatement(line)
+      } catch (err) {
+        actual = { threw: (err as Error).message }
+      }
+      expect(actual).toEqual(statement)
+    })
+  }
+})
+
+describe('a color: or name: left before a style clause gets a legible error (fix round 1, R3)', () => {
+  it('z = x color: red opacity: 0.5', () => {
+    expect(() => parseStatement('z = x color: red opacity: 0.5')).toThrow(/write color: and name: after the other clauses/)
+    expect(() => parseStatement('z = x color: red opacity: 0.5')).not.toThrow(/Unexpected character/)
+  })
+
+  it('name: before colormap:, on a surface over a domain', () => {
+    expect(() => parseStatement('z = x over x^2 + y^2 <= 1 name: s colormap: height')).toThrow(/write color: and name: after/)
+  })
+
+  it('after the other clauses they still work', () => {
+    expect(parseStatement('z = x opacity: 0.5 color: red name: s')).toMatchObject({ kind: 'space', color: 'red', statementName: 's' })
+  })
+})

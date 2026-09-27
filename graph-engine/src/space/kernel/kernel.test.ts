@@ -515,6 +515,23 @@ describe('compositions build (fix round 1, C1)', () => {
   })
 })
 
+describe('a definition named after a built-in is refused (fix round 1, I1)', () => {
+  it('sin(x) = x^2 is an error on its line, and sin stays the built-in', () => {
+    const scene = sceneOf('sin(x) = x^2\nA = (sin(0), 1, 0)')
+    expect(scene.errors).toEqual([{ line: 1, message: expect.stringMatching(/"sin" is a built-in/) }])
+    // the built-in: sin(0) = 0, not 0^2 via the definition (which is also 0), so
+    // check a point where they differ: sin(pi/2) = 1, (pi/2)^2 = 2.467
+    const other = sceneOf('sin(x) = x^2\nA = (sin(pi/2), 1, 0)')
+    expect([...(other.marks[0] as PointMark).positions]).toEqual([1, 1, 0])
+  })
+
+  it('pi = 3 is refused, and pi stays pi', () => {
+    const scene = sceneOf('pi = 3\nA = (pi, 0, 0)')
+    expect(scene.errors).toEqual([{ line: 1, message: expect.stringMatching(/"pi"/) }])
+    expect((scene.marks[0] as PointMark).positions[0]).toBe(Math.PI)
+  })
+})
+
 describe('determinism', () => {
   it('the same spec gives the same scene, typed arrays included', () => {
     const spec = 'z = sin(x) cos(y) over x^2 + y^2 <= 9\n(cos(t), sin(t), t/4) for t in [0, 6]\nA = (1, 2, 3)'

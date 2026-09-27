@@ -2,11 +2,14 @@
 // every definition — the existing functionDef (one parameter) and
 // constantDef, and space's function and vectorFunction — hidden or not, and
 // its parameters from the @param bindings. Clashes need the whole spec, so
-// they are found here: a binding that is also a definition's name, and a
-// name defined twice. Both are errors on the later line; evaluation goes on
-// (the parameter shadows the definition; the later definition is used).
+// they are found here, each an error on the definition's line:
+// - a binding that is also a definition's name (the parameter shadows it);
+// - a name defined twice (the later definition is used);
+// - a definition named after a built-in, pi or e (refused, so the built-in
+//   keeps its meaning).
 
 import type { Statement } from '../../parser/types'
+import { BUILTIN_NAMES } from '../../math/compile'
 import { makeScope, type MathFunction, type MathScope } from '../../math/scope'
 import type { Binding } from '../config'
 import type { SceneError } from '../scene/types'
@@ -43,6 +46,15 @@ export function buildScope(
     if (!entry) return
     const [name, fn] = entry
     const line = lines[i] ?? 0
+    // A built-in, pi and e keep their meaning: the definition is refused.
+    if (BUILTIN_NAMES.has(name)) {
+      errors.push({ line, message: `"${name}" is a built-in function — a definition cannot take its name` })
+      return
+    }
+    if (name === 'pi' || name === 'e') {
+      errors.push({ line, message: `"${name}" is a constant — a definition cannot take its name` })
+      return
+    }
     const earlier = definedAt.get(name)
     if (earlier !== undefined) {
       errors.push({ line, message: `"${name}" is defined twice (lines ${earlier} and ${line}) — the later definition is used` })

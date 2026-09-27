@@ -15,7 +15,9 @@ import { parseExprString } from '../../parser/parseExpr'
 import type { ColormapName } from '../scene/types'
 import type { ColormapClause, SpaceStyle } from './types'
 
-export type StyleKey = 'opacity' | 'colormap' | 'mesh' | 'res' | 'width' | 'dashed'
+// color and name are the shared clauses; one read here was written before a
+// style clause, where the shared loop cannot strip it, and is refused.
+export type StyleKey = 'opacity' | 'colormap' | 'mesh' | 'res' | 'width' | 'dashed' | 'color' | 'name'
 
 export interface RawClause {
   key: StyleKey
@@ -45,7 +47,7 @@ export function splitStyle(line: string): { rest: string; clauses: RawClause[] }
       rest = rest.slice(0, dashed.index).trimEnd()
       continue
     }
-    const keyword = /\s(opacity|colormap|mesh|res|width):/g
+    const keyword = /\s(opacity|colormap|mesh|res|width|color|name):/g
     let last: RegExpExecArray | null = null
     for (let m = keyword.exec(rest); m; m = keyword.exec(rest)) last = m
     if (!last) break
@@ -120,6 +122,9 @@ export function buildStyle(clauses: readonly RawClause[], target: StyleTarget): 
   const style: SpaceStyle = { opacity: null, colormap: null, mesh: null, res: null, width: null, dashed: false }
   const seen = new Set<StyleKey>()
   for (const { key, value } of clauses) {
+    if (key === 'color' || key === 'name') {
+      throw new Error('write color: and name: after the other clauses, e.g. "z = x^2 opacity: 0.5 color: red"')
+    }
     if (!applies(key, target)) throw refuse(key, target)
     if (seen.has(key)) throw new Error(`${key === 'dashed' ? 'dashed' : `${key}:`} is given twice`)
     seen.add(key)
