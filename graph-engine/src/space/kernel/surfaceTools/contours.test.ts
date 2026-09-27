@@ -285,6 +285,13 @@ describe('contour: of two variables, levels that draw nothing', () => {
     ])
   })
 
+  it('an inverted range, levels 10..5 step 1, is refused as S4a refuses it, not as "no nice level"', () => {
+    expect(sceneOf(`${F}\ncontour: f levels 10..5 step 1`).errors).toEqual([{ line: 2, message: '"levels a..b" needs a ≤ b, got 10..5' }])
+    expect(sceneOf(`${F}\ncontour: f levels 1..5 step 0`).errors).toEqual([
+      { line: 2, message: 'The step of "levels a..b step s" must be positive, got 0' },
+    ])
+  })
+
   it('a target with no finite value over the domain says so', () => {
     expect(sceneOf('contour: sqrt(-1 - x^2) levels 3').errors).toEqual([
       { line: 1, message: 'contour: sqrt(-1 - x^2) has no finite value over the domain' },

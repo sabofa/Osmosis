@@ -211,12 +211,17 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
       reads.add(e)
       return constant(e, scope)
     })
+    // Checked in S4a's words (geometry/levelSurfaces.ts, prepareLevels), so
+    // a contour refuses a range the same way whatever its arity.
     authored = () => {
       const [from, to, step] = [a(), b(), s()]
-      if (!(step > 0)) throw new Error(`contour: levels ${from}..${to} needs a positive step, got ${step}`)
+      if (!(step > 0)) throw new Error(`The step of "levels a..b step s" must be positive, got ${formatNumber(step)}`)
+      if (!(to >= from)) throw new Error(`"levels a..b" needs a ≤ b, got ${formatNumber(from)}..${formatNumber(to)}`)
       const count = Math.floor((to - from) / step + 1e-9) + 1
-      if (count > MAX_LEVELS) throw new Error(`contour: levels ${from}..${to} step ${step} is ${count} levels — at most ${MAX_LEVELS}`)
-      return Array.from({ length: Math.max(0, count) }, (_, i) => from + i * step)
+      if (count > MAX_LEVELS) {
+        throw new Error(`A contour draws at most ${MAX_LEVELS} levels; ${formatNumber(from)}..${formatNumber(to)} step ${formatNumber(step)} is ${count}`)
+      }
+      return Array.from({ length: count }, (_, i) => from + i * step)
     }
   } else if (!(Number.isInteger(levelsSpec.count) && levelsSpec.count >= 1 && levelsSpec.count <= MAX_LEVELS)) {
     throw new Error(`contour: levels takes a whole number from 1 to ${MAX_LEVELS}, got ${levelsSpec.count}`)
