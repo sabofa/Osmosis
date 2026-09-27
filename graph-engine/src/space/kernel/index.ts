@@ -1,0 +1,162 @@
+// createSpaceKernel (K8; the contract is kernel/api.ts). Built once per parsed
+// spec:
+// - the MathScope is built once (kernel/scope.ts);
+// - every statement is prepared once — compiled, with the names it reads
+//   followed through user functions — and built;
+// - setValue writes one parameter slot and rebuilds only the statements that
+//   read it; every other statement's marks are the same objects, which is
+//   what makes a drag cheap.
+// Colour slots and colour-scale ids are handed out in source order at setup,
+// so they are properties of the statements and stable across setValue.
+// Hidden statements (@hide) build nothing but still define. Errors are
+// returned with their line, never thrown; one bad statement never blanks the
+// scene.
+
+import type { Statement } from '../../parser/types'
+import { roundHalfAway } from '../../math/compile'
+import type { Binding } from '../config'
+import { sceneExtent } from '../scene/extent'
+import type { ColorScale, SceneError, SpaceScene } from '../scene/types'
+import type { CreateSpaceKernel, SpaceKernel } from './api'
+import { messageOf } from './common'
+import { CURVE, IMPLICIT_CURVE } from './curves'
+import { PARAMETRIC_SURFACE } from './parametric'
+import { ARROW, POINT, SEGMENT } from './primitives'
+import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
+import { buildScope } from './scope'
+import { SURFACE } from './surface'
+
+// One row per statement kind or space form. A kind with no row is "not drawn
+// in space".
+registerBuilder('surface', SURFACE)
+registerBuilder('space:surface', SURFACE)
+registerBuilder('parametricSurface', PARAMETRIC_SURFACE)
+registerBuilder('space:parametricSurface', PARAMETRIC_SURFACE)
+registerBuilder('parametric', CURVE)
+registerBuilder('space:curve', CURVE)
+registerBuilder('explicit', CURVE)
+registerBuilder('polar', CURVE)
+registerBuilder('implicit', IMPLICIT_CURVE)
+registerBuilder('point', POINT)
+registerBuilder('segment', SEGMENT)
+registerBuilder('ray', ARROW)
+registerBuilder('vector', ARROW)
+registerBuilder('space:implicitSurface', {
+  draws: true,
+  prepare: () => {
+    throw new Error('implicit surfaces are drawn from phase S4')
+  },
+})
+// Definitions and tables draw nothing and are not errors.
+for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vectorFunction', 'tableHeader', 'tableRow', 'tableGenerator']) {
+  registerBuilder(key, DEFINITION)
+}
+
+interface StatementRecord {
+  line: number
+  prepared: PreparedStatement
+  // the bindings it reads
+  reads: ReadonlySet<string>
+  scaleId: number | null
+  result: BuildResult
+  lastScale: ColorScale | null
+}
+
+function run(prepared: PreparedStatement, line: number): BuildResult {
+  try {
+    const result = prepared.build()
+    return { ...result, errors: result.errors.map((e) => ({ line: e.line || line, message: e.message })) }
+  } catch (err) {
+    return { marks: [], labels: [], errors: [{ line, message: messageOf(err) }], colorScale: null }
+  }
+}
+
+export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], config, lines) => {
+  const bindings: readonly Binding[] = config.bindings
+  const { scope, errors: scopeErrors } = buildScope(statements, lines, bindings, config.angle)
+  const bindingNames = new Set(bindings.map((b) => b.name))
+  const setupErrors: SceneError[] = []
+  const records: StatementRecord[] = []
+  let slots = 0
+  let scales = 0
+
+  statements.forEach((statement, i) => {
+    const line = lines[i] ?? 0
+    if (statement.statementName && config.hidden.has(statement.statementName)) return
+    const entry = builderFor(statement)
+    if (!entry) {
+      setupErrors.push({ line, message: `${statement.kind} is not drawn in space` })
+      return
+    }
+    const wantsScale = entry.colorScale?.(statement, config) ?? false
+    const context: BuildContext = {
+      scope,
+      config,
+      line,
+      source: { line, statement: statement.statementName, object: `s${line}` },
+      color: { author: statement.color, slot: entry.draws ? slots++ : -1 },
+      colorScaleId: wantsScale ? scales : null,
+    }
+    let prepared: PreparedStatement
+    try {
+      prepared = entry.prepare(statement, context)
+    } catch (err) {
+      setupErrors.push({ line, message: messageOf(err) })
+      return
+    }
+    // The id is taken only by a statement that compiled.
+    if (wantsScale) scales++
+    const result = run(prepared, line)
+    records.push({
+      line,
+      prepared,
+      reads: new Set([...prepared.reads].filter((name) => bindingNames.has(name))),
+      scaleId: context.colorScaleId,
+      result,
+      lastScale: result.colorScale,
+    })
+  })
+
+  const assemble = (): SpaceScene => {
+    const colorScales: ColorScale[] = []
+    for (const record of records) {
+      if (record.scaleId === null) continue
+      const scale = record.result.colorScale ?? record.lastScale
+      colorScales[record.scaleId] = scale ?? { id: record.scaleId, title: '', map: config.space.colormap, domain: { min: 0, max: 1 }, diverging: false }
+    }
+    const marks = records.flatMap((r) => r.result.marks)
+    const errors = [...scopeErrors, ...setupErrors, ...records.flatMap((r) => r.result.errors)].sort((a, b) => a.line - b.line)
+    return {
+      marks,
+      labels: records.flatMap((r) => r.result.labels),
+      colorScales,
+      extent: sceneExtent(marks),
+      errors,
+    }
+  }
+
+  let current = assemble()
+
+  const kernel: SpaceKernel = {
+    scene: () => current,
+    bindings: () => bindings,
+    values: () => new Map(bindings.map((b) => [b.name, scope.params.values[scope.params.index.get(b.name)!]])),
+    setValue(name, value) {
+      const slot = scope.params.index.get(name)
+      const binding = bindings.find((b) => b.name === name)
+      if (slot === undefined || !binding || !Number.isFinite(value)) return current
+      let next = binding.integer ? roundHalfAway(value) : value
+      next = Math.min(binding.max, Math.max(binding.min, next))
+      if (next === scope.params.values[slot]) return current
+      scope.params.values[slot] = next
+      for (const record of records) {
+        if (!record.reads.has(name)) continue
+        record.result = run(record.prepared, record.line)
+        if (record.result.colorScale) record.lastScale = record.result.colorScale
+      }
+      current = assemble()
+      return current
+    },
+  }
+  return kernel
+}

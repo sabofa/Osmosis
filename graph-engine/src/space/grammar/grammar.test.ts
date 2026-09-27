@@ -197,6 +197,9 @@ describe('K5.5 — the existing forms, carrying a style clause', () => {
       },
     })
     expect(form('(t, t, t) for t in [0, 1] dashed width: 2')).toMatchObject({ style: { dashed: true, width: 2 } })
+    // res: counts cells per axis on a surface, segments on a curve
+    expect(form('z = x res: 4')).toMatchObject({ style: { res: 4 } })
+    expect(form('(t, t, t) for t in [0, 1] res: 1000')).toMatchObject({ style: { res: 1000 } })
     expect(form('z = x colormap: height map magma')).toMatchObject({ style: { colormap: { by: { kind: 'height' }, map: 'magma', diverging: false } } })
     expect(form('z = x colormap: none')).toMatchObject({ style: { colormap: { by: { kind: 'none' }, map: null } } })
   })
@@ -277,8 +280,10 @@ describe('refusals on a claimed line', () => {
     ['z = x^2 dashed', /dashed applies to curves and lines, not to a surface/],
     ['(t, t, t) for t in [0, 1] opacity: 0.5', /opacity: applies to surfaces, not to a curve/],
     ['z = x^2 opacity: 2', /opacity/],
-    ['z = x^2 res: 1000', /res/],
-    ['z = x^2 res: 7', /res/],
+    ['z = x^2 res: 1000', /res: must be a whole number from 2 to 400 on a surface/],
+    ['z = x^2 res: 1', /res/],
+    ['z = x^2 res: 2.5', /res/],
+    ['(t, t, t) for t in [0, 1] res: 20000', /from 2 to 10000 on a curve/],
     ['z = x^2 colormap: height map neon', /neon/],
     ['z = x^2 colormap: height map viridis diverging', /diverging/],
     ['z = x^2 opacity: 0.5 opacity: 0.6', /twice/],

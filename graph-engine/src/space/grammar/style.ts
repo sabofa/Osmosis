@@ -131,8 +131,13 @@ export function buildStyle(clauses: readonly RawClause[], target: StyleTarget): 
         break
       }
       case 'res': {
+        // Cells per axis on a surface (400 is @resolution's cap, well inside
+        // the 1,000,000-triangle budget); segments on a curve.
         const v = number('res', value)
-        if (!Number.isInteger(v) || v < 8 || v > 400) throw new Error(`res: must be a whole number from 8 to 400, got ${value}`)
+        const max = target === 'curve' ? 10000 : 400
+        if (!Number.isInteger(v) || v < 2 || v > max) {
+          throw new Error(`res: must be a whole number from 2 to ${max} on ${article(target)} ${target}, got ${value}`)
+        }
         style.res = v
         break
       }
