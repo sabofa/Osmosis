@@ -1,0 +1,44 @@
+/* Space's DOM overlay (plan G10): all of space's text, over the canvas.
+   The canvas's parent must be `position: relative`. The font is the host's;
+   only sizes are set here. Colour comes from the palette (set inline). */
+
+.space-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  user-select: none;
+}
+
+.space-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
+  font-size: 13px;
+  will-change: transform;
+}
+
+.space-label[data-role='tick'] {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.space-label[data-role='title'] {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.space-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.4;
+}

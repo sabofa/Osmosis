@@ -1,0 +1,232 @@
+/* The space review page. Same paper-and-ink tokens as the other review pages
+   (graph-engine/src/App.css), keyed off data-theme on <html>, which the
+   review shell (index.html) mirrors onto its own chrome. */
+:root {
+  --sr-bg: #eef1e5;
+  --sr-surface: #ffffff;
+  --sr-ink: #17170f;
+  --sr-muted: #6b6b5f;
+  --sr-line: #c9c6b3;
+  --sr-accent: #c65d22;
+  --sr-bad: #a34b3f;
+  --sr-font-display: 'Space Grotesk', sans-serif;
+  --sr-font-body: 'Inter', sans-serif;
+  --sr-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root[data-theme='dark'] {
+  --sr-bg: #17160f;
+  --sr-surface: #201e15;
+  --sr-ink: #f2efe2;
+  --sr-muted: #a19d8c;
+  --sr-line: #4a4530;
+  --sr-accent: #e2803f;
+  --sr-bad: #c76a5c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--sr-bg);
+  color: var(--sr-ink);
+  font-family: var(--sr-font-body);
+}
+
+.space-review {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+  padding: 16px;
+}
+
+.space-review-side {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  border: 2px solid var(--sr-line);
+  border-radius: 14px;
+  background: var(--sr-surface);
+}
+
+.space-review-side h1 {
+  margin: 0 0 6px;
+  font-family: var(--sr-font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.space-review-side h1 span {
+  color: var(--sr-muted);
+  font-weight: 400;
+}
+
+.space-review-side h2 {
+  margin: 0 0 8px;
+  font-family: var(--sr-font-display);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sr-muted);
+}
+
+.space-review-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sr-muted);
+}
+
+.space-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.space-review-list button,
+.space-review-toggle button {
+  width: 100%;
+  padding: 6px 10px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sr-ink);
+  font: 13px var(--sr-font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.space-review-list button:hover,
+.space-review-toggle button:hover {
+  border-color: var(--sr-line);
+}
+
+.space-review-list button[aria-pressed='true'],
+.space-review-toggle button[aria-pressed='true'] {
+  border-color: var(--sr-accent);
+  color: var(--sr-accent);
+  font-weight: 600;
+}
+
+.space-review-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.space-review-toggle button {
+  width: auto;
+  text-align: center;
+}
+
+.space-review-look {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.space-review-spec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.space-review-spec textarea {
+  resize: vertical;
+  padding: 8px;
+  border: 2px solid var(--sr-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sr-ink);
+  font: 12px/1.5 var(--sr-font-mono);
+}
+
+.space-review-spec textarea:focus {
+  outline: none;
+  border-color: var(--sr-accent);
+}
+
+.space-review-view {
+  display: block;
+  font: 11px/1.5 var(--sr-font-mono);
+  color: var(--sr-muted);
+  word-break: break-word;
+}
+
+.space-review-errors {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--sr-bad);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.space-review-look {
+  margin-top: 10px;
+}
+
+/* The view: the canvas fills it, and the overlay (created by SpaceRenderer
+   beside the canvas) needs this box to be position: relative. */
+.space-review-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 2px solid var(--sr-line);
+  border-radius: 14px;
+}
+
+.space-review-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.space-review-stage canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--sr-accent);
+}
+
+/* SpaceRenderer as the host: the canvas and its overlay share this box. */
+.space-review-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+
+/* GraphViewer as the host: it fills the stage and brings its own frame. */
+.space-review-graphviewer {
+  position: absolute;
+  inset: 0;
+}
+
+.space-review-stage-note {
+  margin: 0;
+  padding: 24px;
+  color: var(--sr-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 700px) {
+  .space-review {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(360px, 1fr);
+    height: auto;
+    min-height: 100%;
+  }
+}

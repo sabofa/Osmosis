@@ -2,7 +2,7 @@
 // .ts file under src/space/ and src/math/ is scanned for its import
 // specifiers (static, re-export and dynamic), resolved against src/.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -84,6 +84,16 @@ describe('space and math import boundaries', () => {
       .filter((s) => s.text.includes('WebGL2RenderingContext') || s.text.includes('getContext('))
       .map((s) => s.file)
     expect(touching).toEqual([])
+  })
+
+  it('GraphViewer draws space through SpaceRenderer; the three.js space renderer is gone (S2 Task 7)', () => {
+    const viewer = readFileSync(join(SRC, 'GraphViewer.tsx'), 'utf8')
+    const imports = [...viewer.matchAll(SPECIFIER)].map((m) => m[1])
+    expect(imports.filter((i) => /SceneRenderer3D|buildScene3d|types3d/.test(i))).toEqual([])
+    expect(imports).toContain('./space/SpaceRenderer')
+    for (const gone of ['render/SceneRenderer3D.ts', 'scene/buildScene3d.ts', 'scene/buildScene3d.test.ts', 'scene/types3d.ts']) {
+      expect([gone, existsSync(join(SRC, gone))]).toEqual([gone, false])
+    }
   })
 
   it('only space/ui/ and space/SpaceRenderer.ts touch the DOM', () => {
