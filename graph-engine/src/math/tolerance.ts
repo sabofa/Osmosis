@@ -24,6 +24,15 @@ export const NEWTON_RESIDUAL_LOOSE = 1e-9
 // The damped step is halved at most this many times before Newton gives up.
 export const NEWTON_MAX_HALVINGS = 30
 export const NEWTON_MAX_ITERATIONS = 60
+// Multiple roots: when the last NEWTON_LINEAR_WINDOW ratios of successive full
+// Newton step lengths agree within NEWTON_LINEAR_SPREAD and the latest, rho,
+// lies in [NEWTON_LINEAR_MIN, NEWTON_LINEAR_MAX), Newton is converging
+// linearly, as it does at a root of multiplicity m = round(1 / (1 - rho)):
+// 2 at the low end, at most 100 at the high end.
+export const NEWTON_LINEAR_WINDOW = 3
+export const NEWTON_LINEAR_SPREAD = 0.02
+export const NEWTON_LINEAR_MIN = 0.5
+export const NEWTON_LINEAR_MAX = 0.99
 
 // seededRoots: two converged points closer than this fraction of the search
 // box's diagonal are the same root.

@@ -213,3 +213,34 @@ describe('Newton never declares a non-root converged (fix round 2)', () => {
     expect(Math.abs(r.x[0])).toBeLessThan(1e-9)
   })
 })
+
+describe('Newton reaches multiple roots (fix round 3, item 1)', () => {
+  // At a root of multiplicity m, Newton's step shrinks by (1 - 1/m) each
+  // time: too slowly for sqrt(eps) within the iteration cap from m = 5. The
+  // steady ratio reveals m, and the step m * delta (Schröder's) lands.
+  for (const m of [5, 7, 10]) {
+    it(`x^${m} = 0 from 0.5`, () => {
+      const r = newton(
+        (v) => [v[0] ** m],
+        (v) => [[m * v[0] ** (m - 1)]],
+        [0.5]
+      )
+      expect(r.converged).toBe(true)
+      expect(Math.abs(r.x[0])).toBeLessThanOrEqual(1e-6)
+    })
+  }
+
+  it('grad((x - 1)^6 + (y - 2)^6) = 0 at (1, 2), a degree-6 bowl', () => {
+    const r = newton(
+      (v) => [6 * (v[0] - 1) ** 5, 6 * (v[1] - 2) ** 5],
+      (v) => [
+        [30 * (v[0] - 1) ** 4, 0],
+        [0, 30 * (v[1] - 2) ** 4],
+      ],
+      [1.7, 2.9]
+    )
+    expect(r.converged).toBe(true)
+    expect(Math.abs(r.x[0] - 1)).toBeLessThanOrEqual(1e-6)
+    expect(Math.abs(r.x[1] - 2)).toBeLessThanOrEqual(1e-6)
+  })
+})

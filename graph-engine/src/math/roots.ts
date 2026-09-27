@@ -5,6 +5,10 @@
 
 import { solve2, solve3 } from './linalg'
 import {
+  NEWTON_LINEAR_MAX,
+  NEWTON_LINEAR_MIN,
+  NEWTON_LINEAR_SPREAD,
+  NEWTON_LINEAR_WINDOW,
   NEWTON_MAX_HALVINGS,
   NEWTON_MAX_ITERATIONS,
   NEWTON_RESIDUAL,
@@ -70,8 +74,42 @@ function rowNorm(j: readonly (readonly number[])[]): number {
   return m
 }
 
+// The latest ratio of successive full-step lengths, rho, when the last
+// NEWTON_LINEAR_WINDOW ratios are steady (within NEWTON_LINEAR_SPREAD) and rho
+// lies in [NEWTON_LINEAR_MIN, NEWTON_LINEAR_MAX); 0 otherwise.
+function steadyRatio(norms: readonly number[]): number {
+  if (norms.length <= NEWTON_LINEAR_WINDOW) return 0
+  let lo = Infinity
+  let hi = -Infinity
+  for (let k = norms.length - NEWTON_LINEAR_WINDOW; k < norms.length; k++) {
+    const ratio = norms[k] / norms[k - 1]
+    if (!Number.isFinite(ratio)) return 0
+    lo = Math.min(lo, ratio)
+    hi = Math.max(hi, ratio)
+  }
+  const rho = norms[norms.length - 1] / norms[norms.length - 2]
+  return hi - lo <= NEWTON_LINEAR_SPREAD && rho >= NEWTON_LINEAR_MIN && rho < NEWTON_LINEAR_MAX ? rho : 0
+}
+
+interface Trial {
+  x: Float64Array
+  f: number[]
+  phi: number
+  lambda: number
+}
+
 // Newton's method, damped by backtracking: a step is halved until the
 // residual's sum of squares decreases (Armijo, c = 1e-4).
+//
+// At a root of multiplicity m the full step shrinks by rho = 1 - 1/m each time
+// (x^m: the step is -x/m), too slowly to reach the step test below within the
+// iteration cap from m = 5. A steady ratio (steadyRatio) reveals m =
+// round(1 / (1 - rho)), and Schröder's step m x the Newton step lands on the
+// root; it goes through the same line search, and is kept only if the full
+// step from where it lands is shorter than rho x this one, which is what a
+// plain step would have left. Slow travel towards a simple root can steady the
+// ratio too (x e^x from 30, near 0.98): there the long step overshoots, fails
+// that check, and the plain step is taken instead.
 //
 // Convergence is relative, never an absolute residual, so it does not depend
 // on the equations' scale (scaling F by a constant changes nothing):
@@ -94,6 +132,28 @@ export function newton(F: SystemFn, J: JacobianFn, x0: ArrayLike<number>, option
     if (r <= tol * rowNorm(jacobian) * size) return true
     return step !== null && maxAbs(step) <= NEWTON_STEP_SQRT_EPS * size && r <= tol * seedScale
   }
+  // factor x step, halved until the residual decreases enough; null if it
+  // never does.
+  const lineSearch = (step: number[], factor: number): Trial | null => {
+    let lambda = 1
+    for (let halving = 0; halving <= NEWTON_MAX_HALVINGS; halving++) {
+      const trial = x.map((xi, i) => xi + lambda * factor * step[i])
+      const ft = Array.from(F(trial))
+      const phiT = sumSquares(ft)
+      if (Number.isFinite(phiT) && phiT <= (1 - 1e-4 * lambda) * phi) return { x: trial, f: ft, phi: phiT, lambda }
+      lambda /= 2
+    }
+    return null
+  }
+  // Whether an accelerated step made more progress than a plain one: it hit
+  // the root exactly, or the full step from it is shorter than `plain`.
+  const landed = (trial: Trial, plain: number) => {
+    if (maxAbs(trial.f) === 0) return true
+    const next = newtonStep(J(trial.x), trial.f)
+    return next !== null && maxAbs(next) < plain
+  }
+  // Full step lengths since the last damped or accelerated step.
+  let norms: number[] = []
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (!Number.isFinite(phi)) return { x, converged: false, iterations: iteration }
     const jacobian = J(x)
@@ -110,17 +170,18 @@ export function newton(F: SystemFn, J: JacobianFn, x0: ArrayLike<number>, option
     }
     if (!step) return { x, converged: false, iterations: iteration }
 
-    let lambda = 1
-    let accepted: { x: Float64Array; f: number[]; phi: number } | null = null
-    for (let halving = 0; halving <= NEWTON_MAX_HALVINGS; halving++) {
-      const trial = x.map((xi, i) => xi + lambda * step[i])
-      const ft = Array.from(F(trial))
-      const phiT = sumSquares(ft)
-      if (Number.isFinite(phiT) && phiT <= (1 - 1e-4 * lambda) * phi) {
-        accepted = { x: trial, f: ft, phi: phiT }
-        break
-      }
-      lambda /= 2
+    norms.push(maxAbs(step))
+    let accepted: Trial | null = null
+    const rho = steadyRatio(norms)
+    if (rho > 0) {
+      const trial = lineSearch(step, Math.round(1 / (1 - rho)))
+      if (trial && landed(trial, rho * norms[norms.length - 1])) accepted = trial
+      norms = []
+    }
+    if (!accepted) {
+      accepted = lineSearch(step, 1)
+      // A damped step breaks the ratio's meaning; start counting again.
+      if (accepted && accepted.lambda < 1) norms = []
     }
     // No descent along the Newton direction: a stall, which is a root only
     // by the same (looser) test.
