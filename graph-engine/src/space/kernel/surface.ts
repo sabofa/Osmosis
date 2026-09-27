@@ -161,10 +161,16 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
     }
     const names = varNames(body)
     if (names.has('r') || names.has('theta')) {
+      // r(r, theta) = (r cos, r sin, g); r_r = (cos, sin, g_r) and
+      // r_theta = (-r sin, r cos, g_theta), times the angle unit for theta.
+      const gr = compileScalar(partialExpr(polarBody, 0, scope), vars, scope)
+      const gt = compileScalar(partialExpr(polarBody, 1, scope), vars, scope)
       pick = {
         kind: 'parametric',
         param: ['r', 'theta'],
         r: (r, theta) => [r * Math.cos(theta * angle), r * Math.sin(theta * angle), height(r, theta)],
+        ru: (r, theta) => [Math.cos(theta * angle), Math.sin(theta * angle), gr(r, theta)],
+        rv: (r, theta) => [-r * angle * Math.sin(theta * angle), r * angle * Math.cos(theta * angle), gt(r, theta)],
       }
     } else {
       const xyBody = renameBound(body, ['x', 'y'])

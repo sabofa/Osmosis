@@ -55,8 +55,13 @@ function preparedParametric(statement: Statement, context: BuildContext): Prepar
   // r (for the pick), and r, r_u, r_v in one frame for sampling: they share
   // most of their terms, which compileMany computes once per vertex.
   const r = compileVector(renamed, vars, scope)
-  const partial = (i: number) => renamed.map((e) => simplify(diff(e, vars[i], scope)))
-  const sample = compileMany([...renamed, ...partial(0), ...partial(1)], vars, scope)
+  const partial = (i: number) => renamed.map((e) => simplify(diff(e, vars[i], scope))) as [Expr, Expr, Expr]
+  const [pu, pv] = [partial(0), partial(1)]
+  const sample = compileMany([...renamed, ...pu, ...pv], vars, scope)
+  // The pick's own closures: a compiled function owns one evaluation frame,
+  // so the pick never shares one with sampling.
+  const ru = compileVector(pu, vars, scope)
+  const rv = compileVector(pv, vars, scope)
   const [u0, u1, v0, v1] = [u.from, u.to, v.from, v.to].map((e) => {
     reads.add(e)
     return constant(e, scope)
@@ -131,6 +136,14 @@ function preparedParametric(statement: Statement, context: BuildContext): Prepar
         param: [u.param, v.param],
         r: (a, b) => {
           const out = r(new Float64Array(3), a, b)
+          return [out[0], out[1], out[2]]
+        },
+        ru: (a, b) => {
+          const out = ru(new Float64Array(3), a, b)
+          return [out[0], out[1], out[2]]
+        },
+        rv: (a, b) => {
+          const out = rv(new Float64Array(3), a, b)
           return [out[0], out[1], out[2]]
         },
       },

@@ -128,6 +128,11 @@ export type SurfacePick =
       kind: 'parametric'
       param: readonly [string, string]
       r: (u: number, v: number) => Vec3
+      // r_u and r_v from symbolic derivatives (S3, optional): picking refines
+      // a hit on the true surface by Newton with them. Without them a hit
+      // stays at the triangle's (u, v).
+      ru?: (u: number, v: number) => Vec3
+      rv?: (u: number, v: number) => Vec3
     }
   | {
       kind: 'implicit'
