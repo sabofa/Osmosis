@@ -112,6 +112,58 @@ export function clipPolygon(polygon: readonly Vec3[], box: Box3): Vec3[] {
   return out
 }
 
+// Sampled polylines (flat xyz, with a parameter per vertex) cut to the box's
+// z range exactly where they cross it — where the renderer clips too — with
+// the parameter interpolated alike. A tool draws nothing outside the box it
+// draws into: a curve through a pole would otherwise stretch the frame.
+export function clipToZ(runs: readonly (readonly number[])[], params: readonly (readonly number[])[], z: Range): { runs: number[][]; params: number[][] } {
+  const out: number[][] = []
+  const outParams: number[][] = []
+  runs.forEach((run, r) => {
+    const ps = params[r]
+    let cur: number[] = []
+    let curParams: number[] = []
+    const flush = () => {
+      if (curParams.length > 1) {
+        out.push(cur)
+        outParams.push(curParams)
+      }
+      cur = []
+      curParams = []
+    }
+    const at = (i: number, u: number) => {
+      for (let c = 0; c < 3; c++) cur.push(run[3 * i + c] + u * (run[3 * i + 3 + c] - run[3 * i + c]))
+      curParams.push(ps[i] + u * (ps[i + 1] - ps[i]))
+    }
+    for (let i = 0; i + 1 < ps.length; i++) {
+      const za = run[3 * i + 2]
+      const zb = run[3 * i + 5]
+      let u0 = 0
+      let u1 = 1
+      if (za === zb) {
+        if (za < z.min || za > z.max) u0 = 2
+      } else {
+        const a = (z.min - za) / (zb - za)
+        const b = (z.max - za) / (zb - za)
+        u0 = Math.max(0, Math.min(a, b))
+        u1 = Math.min(1, Math.max(a, b))
+      }
+      if (u0 > u1) {
+        flush()
+        continue
+      }
+      if (curParams.length === 0 || u0 > 0) {
+        flush()
+        at(i, u0)
+      }
+      at(i, u1)
+      if (u1 < 1) flush()
+    }
+    flush()
+  })
+  return { runs: out, params: outParams }
+}
+
 export function part(context: BuildContext, name: string): MarkSource {
   return { ...context.source, object: `${context.source.object}.${name}` }
 }

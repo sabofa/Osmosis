@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { parseSpec } from '../../../parser/parseSpec'
+import { resolveBox } from '../../frame/bounds'
+import type { SpaceScene } from '../../scene/types'
+import { approachSide } from './paths'
 import { expectClose, kernelOf, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
+
+// The box the frame draws for a scene: what a reader sees stretch.
+function frameZ(spec: string, scene: SpaceScene) {
+  return resolveBox(parseSpec(spec).config.space, scene.extent).z
+}
 
 // f = xy / (x^2 + y^2) has no limit at the origin: 1/2 along y = x, 0 along
 // y = 0 (OpenStax 4.2).
@@ -60,6 +69,93 @@ describe('the same surface along (t, 0)', () => {
     const scene = sceneOf(`path: on x + y along (t, t) for t in [0, 1] toward (1, 1)`)
     expectClose(Array.from(pointsOf(scene, 's1.limit').positions), [1, 1, 2], 1e-7)
     expect(labelOf(scene, 's1.readout').text).toBe('along this path, f → ≈ 2')
+  })
+})
+
+describe('the limit along a path: both sides, errors, and what is not a limit', () => {
+  it('x + y along (t, t), t in [-1, 1], toward (0, 0): the target is inside the path, not at an end — f → ≈ 0 from both sides', () => {
+    const scene = sceneOf('path: on x + y along (t, t) for t in [-1, 1] toward (0, 0)')
+    expect(scene.errors).toEqual([])
+    expect(labelOf(scene, 's1.readout').text).toBe('along this path, f → ≈ 0')
+    const ring = vertices(pointsOf(scene, 's1.limit').positions)
+    expect(ring).toHaveLength(1)
+    expect(Math.abs(ring[0][2])).toBeLessThanOrEqual(1e-7)
+  })
+
+  it('(1 - cos x)/x^2 along (t, 0): 1/2, though rounding makes the smallest step read 0', () => {
+    // 1 - cos(1e-8) is 0 in doubles: the last approach value is 0, and the
+    // estimate is where successive values agree best.
+    const scene = sceneOf('path: on (1 - cos(x))/x^2 along (t, 0) for t in [0, 1] toward (0, 0)')
+    expect(labelOf(scene, 's1.readout').text).toBe('along this path, f → ≈ 0.5')
+    expect(Math.abs(vertices(pointsOf(scene, 's1.limit').positions)[0][2] - 0.5)).toBeLessThanOrEqual(1e-6)
+  })
+
+  it('xy/(x^2 + y^2) along (t, |t|): -1/2 before the origin and 1/2 after it, so no limit along this path', () => {
+    const scene = sceneOf('path: on x*y/(x^2 + y^2) along (t, abs(t)) for t in [-1, 1] toward (0, 0)')
+    expect(labelOf(scene, 's1.readout').text).toBe('along this path, f → ≈ −0.5 before (0, 0) and ≈ 0.5 after it: no limit along this path')
+    expect(vertices(pointsOf(scene, 's1.limit').positions).map((v) => v[2])).toEqual([-0.5, 0.5])
+  })
+
+  it('finds the parameter off the sample grid: (t, t^2) reaches (1/3, 1/9) at t = 1/3, where x + y → 4/9', () => {
+    const scene = sceneOf('path: on x + y along (t, t^2) for t in [-1, 1] toward (1/3, 1/9)')
+    expect(scene.errors).toEqual([])
+    expect(labelOf(scene, 's1.readout').text).toMatch(/^along this path, f → ≈ 0\.4444/)
+  })
+
+  it('refuses a target the path does not reach, on its line, and still draws the path', () => {
+    // (t, t + 1) for t in [0, 1] comes nearest (0, 0) at t = 0, at (0, 1).
+    const scene = sceneOf('path: on x*y along (t, t + 1) for t in [0, 1] toward (0, 0)')
+    expect(scene.errors).toEqual([{ line: 1, message: 'path: the path does not reach (0, 0): its nearest point is (0, 1), at t = 0' }])
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1', 's1.shadow'])
+  })
+
+  it('sin(1/x) along (t, 0) does not settle', () => {
+    const scene = sceneOf('path: on sin(1/x) along (t, 0) for t in [0, 1] toward (0, 0)')
+    expect(labelOf(scene, 's1.readout').text).toBe('along this path, f does not settle near (0, 0)')
+    expect(scene.marks.some((m) => m.source.object === 's1.limit')).toBe(false)
+  })
+})
+
+describe('a path through a pole (I3)', () => {
+  const SURFACE = 'z = 1/(x^2 + y^2)'
+  const SPEC = `${SURFACE}
+path: on 1/(x^2 + y^2) along (t, t) for t in [0, 1] toward (0, 0)`
+
+  it('reads "f grows without bound along this path", and draws no ring', () => {
+    const scene = sceneOf(SPEC)
+    expect(labelOf(scene, 's2.readout').text).toBe('f grows without bound along this path')
+    expect(scene.marks.some((m) => m.source.object === 's2.limit')).toBe(false)
+  })
+
+  it('leaves the frame as the surface alone makes it: the curve is cut where it leaves the box', () => {
+    const alone = frameZ(SURFACE, sceneOf(SURFACE))
+    expect(frameZ(SPEC, sceneOf(SPEC))).toEqual(alone)
+    for (const [, , z] of vertices(lineOf(sceneOf(SPEC), 's2').positions)) expect(z).toBeLessThanOrEqual(alone.max)
+  })
+})
+
+describe('approachSide', () => {
+  it('a constant is its own value, with no error', () => {
+    expect(approachSide([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])).toEqual({ kind: 'value', value: 0.5, error: 0 })
+  })
+
+  it('takes the value where successive values differ least, not the last', () => {
+    // differences 0.1, 0.01, 0.2, 0.3: the least is between the 2nd and 3rd
+    expect(approachSide([1.1, 1.0, 1.01, 1.21, 1.51])).toEqual({ kind: 'value', value: 1.01, error: expect.closeTo(0.01, 12) })
+  })
+
+  it('growth of at least twofold, one sign, over each of the last three steps is unbounded; zeros are not', () => {
+    expect(approachSide([1, 10, 100, 1000, 10000])).toEqual({ kind: 'unbounded' })
+    expect(approachSide([-1, -10, -100, -1000])).toEqual({ kind: 'unbounded' })
+    expect(approachSide([0, 0, 0, 0, 0])).toEqual({ kind: 'value', value: 0, error: 0 })
+  })
+
+  it('values whose differences never shrink below a tenth of the largest do not settle', () => {
+    expect(approachSide([1, -1, 1, -1, 1])).toEqual({ kind: 'unsettled' })
+  })
+
+  it('fewer than three finite values is undefined', () => {
+    expect(approachSide([Number.NaN, 1, Number.NaN, 2])).toEqual({ kind: 'undefined' })
   })
 })
 

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { parseSpec } from '../../../parser/parseSpec'
+import { resolveBox } from '../../frame/bounds'
 import { expectClose, expectParallel, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
 // f = x^2 - y^2 over the default [-5, 5]^2: its range [-25, 25] is already on
@@ -89,6 +91,20 @@ trace: f at y = 1 tangent at x = 2`)
     expectParallel([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [1, 0, 4])
     expectParallel([a[0] - 2, a[1] - 1, a[2] - 3], [1, 0, 4])
     expect(labelOf(scene, 's2.slope').text).toBe('∂f/∂x (2, 1) = 4')
+  })
+})
+
+describe('a trace through a pole (I3)', () => {
+  it('leaves the frame as the surface alone makes it; the wall copy is sampled, carrying its parameter', () => {
+    const surface = 'z = 1/(x^2 + y^2)'
+    const spec = `${surface}
+trace: 1/(x^2 + y^2) at x = 0`
+    const frame = (text: string) => resolveBox(parseSpec(text).config.space, sceneOf(text).extent).z
+    expect(frame(spec)).toEqual(frame(surface))
+    const scene = sceneOf(spec)
+    const wall = lineOf(scene, 's2.wall')
+    expect(wall.params).not.toBeNull()
+    expect(Array.from(wall.params!)).toEqual(Array.from(lineOf(scene, 's2').params!))
   })
 })
 

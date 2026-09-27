@@ -52,6 +52,25 @@ describe('lagrange: max x + y subject to x^2 + y^2 = 1', () => {
   })
 })
 
+describe('the lifted constraint (I3)', () => {
+  it('is sampled, carrying its arc length, and cut to the box: under @bounds3d z [-1, 1], x + y on the circle of radius 2 stays in [-1, 1]', () => {
+    const scene = sceneOf(`@bounds3d: z [-1, 1]
+lagrange: max x + y subject to x^2 + y^2 = 4`)
+    const lifted = lineOf(scene, 's2')
+    for (const [x, y, z] of vertices(lifted.positions)) {
+      expect(Math.abs(z)).toBeLessThanOrEqual(1 + 1e-12)
+      expect(Math.abs(z - (x + y))).toBeLessThanOrEqual(1e-12)
+    }
+    const params = Array.from(lifted.params!)
+    for (let k = 0; k < lifted.starts.length; k++) {
+      const end = k + 1 < lifted.starts.length ? lifted.starts[k + 1] : params.length
+      for (let i = lifted.starts[k] + 1; i < end; i++) expect(params[i]).toBeGreaterThan(params[i - 1])
+    }
+    // The circle leaves z in [-1, 1] and comes back: more than one piece.
+    expect(lifted.starts.length).toBeGreaterThan(1)
+  })
+})
+
 describe('lagrange: min and extrema', () => {
   it('min finds (-√2/2, -√2/2), f = -√2, λ = -√2/2', () => {
     const scene = sceneOf('lagrange: min x + y subject to x^2 + y^2 = 1')

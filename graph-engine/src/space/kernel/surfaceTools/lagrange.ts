@@ -32,7 +32,7 @@ import { ROOT_DEDUP_REL } from '../../../math/tolerance'
 import type { Box3, LabelAnchor, Mark, MeshMark, Vec3 } from '../../scene/types'
 import { boundNames, constant, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, arrowMark, largestSpan, lineMark, part, pointMark, toolBox } from './box'
+import { annotation, arrowMark, clipToZ, largestSpan, lineMark, part, pointMark, toolBox } from './box'
 import { LEVEL_RES, levelCurves, lift } from './contours'
 import { MESH_LEVEL_SURFACE } from './levelSurface'
 import { approx, approxPoint } from './readout'
@@ -196,21 +196,39 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       const marks: Mark[] = []
       const labels: LabelAnchor[] = []
       marks.push(lineMark(part(context, 'constraint'), constraint.map((l) => lift(l, () => floor)), context, { width: CONSTRAINT_WIDTH }))
-      // The constraint lifted onto z = f, split where f is undefined.
+      // The constraint lifted onto z = f, split where f is undefined. It is
+      // sampled, carrying its arc length in the plane as its parameter, and
+      // cut to the box: a pole on the constraint does not stretch the frame.
       const lifted: number[][] = []
+      const arcs: number[][] = []
+      let arc = 0
       for (const line of constraint) {
         let run: number[] = []
-        for (let i = 0; i < line.length; i += 2) {
-          const z = F.f(line[i], line[i + 1])
-          if (Number.isFinite(z)) run.push(line[i], line[i + 1], z)
-          else if (run.length > 0) {
-            if (run.length > 3) lifted.push(run)
-            run = []
+        let runArcs: number[] = []
+        const close = () => {
+          if (runArcs.length > 1) {
+            lifted.push(run)
+            arcs.push(runArcs)
           }
+          run = []
+          runArcs = []
         }
-        if (run.length > 3) lifted.push(run)
+        for (let i = 0; i < line.length; i += 2) {
+          if (i > 0) arc += Math.hypot(line[i] - line[i - 2], line[i + 1] - line[i - 1])
+          const z = F.f(line[i], line[i + 1])
+          if (!Number.isFinite(z)) {
+            close()
+            continue
+          }
+          run.push(line[i], line[i + 1], z)
+          runArcs.push(arc)
+        }
+        close()
       }
-      if (lifted.length > 0) marks.push(lineMark(context.source, lifted, context, { width: CONSTRAINT_WIDTH }))
+      const onBox = clipToZ(lifted, arcs, box.z)
+      if (onBox.runs.length > 0) {
+        marks.push(lineMark(context.source, onBox.runs, context, { width: CONSTRAINT_WIDTH, params: Float64Array.from(onBox.params.flat()) }))
+      }
       const length = arrowLength(box)
       const scale = Math.max(1, ...kept.map(({ s }) => Math.abs(s.f)))
       kept.forEach(({ s, kind }, k) => {

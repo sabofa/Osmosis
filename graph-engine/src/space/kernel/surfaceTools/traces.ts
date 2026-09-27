@@ -15,7 +15,7 @@ import type { Statement } from '../../../parser/types'
 import type { LabelAnchor, LineMark, Mark, Vec3 } from '../../scene/types'
 import { constant, CURVE_WIDTH, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, clipLine, lineMark, part, pointMark, polygonMesh, toolBox } from './box'
+import { annotation, clipLine, clipToZ, lineMark, part, pointMark, polygonMesh, toolBox } from './box'
 import { pointText } from './readout'
 import { formatNumber } from '../../pick/format'
 import { prepareDomain, requireArity, resolveTarget, surface2 } from './target'
@@ -53,14 +53,14 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
     }
     const range = alongX ? rect.x : rect.y
 
-    const runs: number[][] = []
-    const params: number[] = []
+    const sampled: number[][] = []
+    const sampledParams: number[][] = []
     let run: number[] = []
     let runParams: number[] = []
     const close = () => {
       if (runParams.length > 1) {
-        runs.push(run)
-        params.push(...runParams)
+        sampled.push(run)
+        sampledParams.push(runParams)
       }
       run = []
       runParams = []
@@ -76,13 +76,15 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
       runParams.push(s)
     }
     close()
+    const { runs, params: runParams2 } = clipToZ(sampled, sampledParams, box.z)
+    const params = Float64Array.from(runParams2.flat())
 
     const marks: Mark[] = []
     const labels: LabelAnchor[] = []
     const width = form.style.width ?? CURVE_WIDTH
     if (runs.length > 0) {
       const curve: LineMark = {
-        ...lineMark(context.source, runs, context, { width, params: Float64Array.from(params) }),
+        ...lineMark(context.source, runs, context, { width, params }),
         pick: {
           param: free,
           r: (s) => point(c, s),
@@ -92,7 +94,10 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
       marks.push(curve)
       // The copy on the back wall parallel to the slicing plane.
       const wall = alongX ? box.y.min : box.x.min
-      marks.push(lineMark(part(context, 'wall'), runs.map((r) => r.map((v, i) => (i % 3 === (alongX ? 1 : 0) ? wall : v))), context, { width: WALL_WIDTH, dashed: true }))
+      // Sampled like the trace (it carries its parameter), so a pole on the
+      // wall counts under the extent's robust rule, not as authored geometry.
+      const copy = runs.map((r) => r.map((v, i) => (i % 3 === (alongX ? 1 : 0) ? wall : v)))
+      marks.push(lineMark(part(context, 'wall'), copy, context, { width: WALL_WIDTH, dashed: true, params }))
     }
     const corners: Vec3[] = alongX
       ? [

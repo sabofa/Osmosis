@@ -14,7 +14,7 @@ import { formatNumber } from '../../pick/format'
 import type { LabelAnchor, LineMark, Mark, Vec3 } from '../../scene/types'
 import { CURVE_WIDTH, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, arrowMark, clipLine, lineMark, part, pointMark, polygonMesh, toolBox, verticalPlane } from './box'
+import { annotation, arrowMark, clipLine, clipToZ, lineMark, part, pointMark, polygonMesh, toolBox, verticalPlane } from './box'
 import { pointText } from './readout'
 import { preparePoint, prepareDomain, requireArity, resolveTarget, surface2 } from './target'
 
@@ -58,14 +58,14 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
       return [x, y, f(x, y)]
     }
     const [s0, s1] = plane.s
-    const runs: number[][] = []
-    const params: number[] = []
+    const sampled: number[][] = []
+    const sampledParams: number[][] = []
     let run: number[] = []
     let runParams: number[] = []
     const close = () => {
       if (runParams.length > 1) {
-        runs.push(run)
-        params.push(...runParams)
+        sampled.push(run)
+        sampledParams.push(runParams)
       }
       run = []
       runParams = []
@@ -81,11 +81,12 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
       runParams.push(s)
     }
     close()
+    const inside = clipToZ(sampled, sampledParams, box.z)
 
     const marks: Mark[] = []
-    if (runs.length > 0) {
+    if (inside.runs.length > 0) {
       const curve: LineMark = {
-        ...lineMark(context.source, runs, context, { width: form.style.width ?? CURVE_WIDTH, params: Float64Array.from(params) }),
+        ...lineMark(context.source, inside.runs, context, { width: form.style.width ?? CURVE_WIDTH, params: Float64Array.from(inside.params.flat()) }),
         pick: {
           param: 's',
           r: at,

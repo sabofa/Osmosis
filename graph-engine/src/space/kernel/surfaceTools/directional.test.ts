@@ -54,6 +54,15 @@ describe(SPEC, () => {
   })
 })
 
+describe('the directional trace is cut to the box', () => {
+  it('under @bounds3d z [0, 2], x^2 + y^2 along y = 0 from (1, 0) keeps to z <= 2, entering and leaving at x = ±√2', () => {
+    const curve = lineOf(sceneOf('@bounds3d: z [0, 2]\ndirectional: x^2 + y^2 at (1, 0) toward <1, 0>'), 's2')
+    const points = vertices(curve.positions)
+    for (const [, , z] of points) expect(z).toBeLessThanOrEqual(2 + 1e-12)
+    expectClose([points[0][0], points[points.length - 1][0]], [-Math.SQRT2, Math.SQRT2], 1e-3)
+  })
+})
+
 describe('directional: refusals and parameters', () => {
   it('refuses a zero u, on its line', () => {
     expect(sceneOf('directional: x^2 - y^2 at (1, 2) toward <0, 0>').errors).toEqual([

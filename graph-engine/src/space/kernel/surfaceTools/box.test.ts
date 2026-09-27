@@ -17,6 +17,20 @@ function context(spec: string): BuildContext {
 
 const RECT = { x: { min: -5, max: 5 }, y: { min: -5, max: 5 } }
 
+describe('clipToZ', () => {
+  it('cuts a polyline exactly where it leaves the z range, interpolating the parameter', () => {
+    // z runs 0, 2, 4 at t = 0, 1, 2; the range [1, 3] is entered at t = 0.5
+    // and left at t = 1.5.
+    const out = box.clipToZ([[0, 0, 0, 1, 0, 2, 2, 0, 4]], [[0, 1, 2]], { min: 1, max: 3 })
+    expect(out).toEqual({ runs: [[0.5, 0, 1, 1, 0, 2, 1.5, 0, 3]], params: [[0.5, 1, 1.5]] })
+  })
+
+  it('splits a polyline that leaves and comes back into two', () => {
+    const out = box.clipToZ([[0, 0, 0, 1, 0, 4, 2, 0, 0]], [[0, 1, 2]], { min: -1, max: 2 })
+    expect(out).toEqual({ runs: [[0, 0, 0, 0.5, 0, 2], [1.5, 0, 2, 2, 0, 0]], params: [[0, 0.5], [1.5, 2]] })
+  })
+})
+
 describe('toolBox: the one box estimate every surface tool calls (the seam for the two-pass kernel)', () => {
   it('is the only box estimate box.ts exports', () => {
     expect(Object.keys(box).filter((k) => /Box$/.test(k))).toEqual(['toolBox'])
