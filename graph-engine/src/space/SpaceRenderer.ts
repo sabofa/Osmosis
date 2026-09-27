@@ -44,6 +44,9 @@ export interface SpaceRendererOptions {
   theme: 'light' | 'dark'
   onError?: (message: string) => void
   onContextLost?: () => void
+  // The context came back and everything was rebuilt from the retained scene
+  // (a host clears its "couldn't render" notice here).
+  onContextRestored?: () => void
   // Called when the viewer moves the camera (drag, wheel, keys, inertia).
   onViewChange?: (view: SpaceView) => void
 }
@@ -168,7 +171,10 @@ export class SpaceRenderer {
         this.scheduler.cancel()
         options.onContextLost?.()
       },
-      onContextRestored: () => this.scheduler.request(),
+      onContextRestored: () => {
+        this.scheduler.request()
+        options.onContextRestored?.()
+      },
     })
     if (!this.backend.available) this.overlay.showMessage(NO_WEBGL2_MESSAGE)
     canvas.tabIndex = 0

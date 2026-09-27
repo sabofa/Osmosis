@@ -93,6 +93,8 @@ export interface FakeGl {
   // Calls made while the context was lost.
   errors: string[]
   extensionsQueried: string[]
+  // Calls to WEBGL_lose_context.loseContext(): releasing the context on purpose.
+  readonly loseContextCalls: number
   created: Record<FakeKind, number>
   deleted: Record<FakeKind, number>
   live: Record<FakeKind, Set<number>>
@@ -124,6 +126,7 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   const attached = new Map<number, number[]>()
   const contents = new Map<number, FakeUpload['data']>()
   const attribs = new Map<number, Map<number, FakeHandle>>()
+  let loseContextCalls = 0
   let program: FakeHandle | null = null
   let vao: FakeHandle | null = null
   let colorWrite = true
@@ -159,6 +162,15 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     getExtension: (name: string) => {
       extensionsQueried.push(name)
       if (name === 'EXT_color_buffer_float') return options.colorBufferFloat === false ? null : {}
+      if (name === 'WEBGL_lose_context') {
+        return {
+          loseContext: () => {
+            loseContextCalls++
+            loseAll()
+          },
+          restoreContext: () => {},
+        }
+      }
       return null
     },
     createBuffer: () => make('buffer'),
@@ -285,6 +297,9 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     get lost() {
       return lost
     },
+    get loseContextCalls() {
+      return loseContextCalls
+    },
     programSource(p) {
       const shaders = p ? (attached.get(p.id) ?? []) : []
       let vertex = ''
@@ -304,21 +319,25 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       return v ? attribs.get(v.id)?.get(location) : undefined
     },
     lose() {
-      lost = true
-      for (const k of KINDS) live[k].clear()
-      program = null
-      vao = null
-      colorWrite = true
-      depthWrite = true
-      blend = false
-      cullEnabled = false
-      cullMode = GL_CONSTANTS.BACK
-      arrayBuffer = null
-      elementBuffer = null
+      loseAll()
     },
     restore() {
       lost = false
     },
+  }
+  // A loss frees every live resource, as a real one does.
+  function loseAll() {
+    lost = true
+    for (const k of KINDS) live[k].clear()
+    program = null
+    vao = null
+    colorWrite = true
+    depthWrite = true
+    blend = false
+    cullEnabled = false
+    cullMode = GL_CONSTANTS.BACK
+    arrayBuffer = null
+    elementBuffer = null
   }
 }
 

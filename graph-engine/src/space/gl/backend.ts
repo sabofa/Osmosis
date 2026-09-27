@@ -256,6 +256,11 @@ export class GlBackend {
     this.programs.forget()
     this.scene = null
     this.frame = null
+    // Deleting resources does not release the context itself, and browsers
+    // cap live contexts (about 16 in Chrome): release it on purpose. The
+    // loss listeners are already detached, and the canvas can never be drawn
+    // on again (GraphViewer gives the next renderer a fresh canvas).
+    if (!this.lost && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext()
   }
 
   private program(spec: { name: string; vertex: string; fragment: string }): ProgramInfo | null {

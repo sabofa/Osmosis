@@ -8,6 +8,7 @@ import { isThreeD, resolvePanels } from './scene/mode'
 import { renderFigure } from './figure/render'
 import { SceneRenderer, type HoverInfo } from './render/SceneRenderer'
 import { SpaceRenderer } from './space/SpaceRenderer'
+import { canvasKey, releaseRenderer } from './viewerCanvas'
 import { resolvePalette } from './render/palette'
 import type { Regression } from './scene/types'
 import type { ParseError, ParseResult } from './parser/types'
@@ -92,6 +93,15 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   const [canvasMode, setCanvasMode] = useState<Mode>('2d')
   const canvasModeRef = useRef<Mode>('2d')
   canvasModeRef.current = canvasMode
+  // Every renderer releases its context when disposed, and a released canvas
+  // can never be drawn on again: each release bumps this generation, which is
+  // part of the canvas's key, so the next renderer always gets a fresh
+  // element (viewerCanvas.ts). Reusing the spent canvas is what crashed
+  // 2D -> figure -> 2D ("reading 'precision'").
+  const [canvasGeneration, setCanvasGeneration] = useState(0)
+  // Set when a rebuild stopped to wait for a fresh canvas; the effect on the
+  // canvas's key finishes it once the new element has mounted.
+  const awaitingCanvasRef = useRef(false)
 
   useEffect(() => {
     // Shared by both the full (text-driven) rebuild and the lighter
@@ -100,6 +110,14 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
     // list, so skipping those setState calls avoids forcing a React
     // re-render (of this component and, via onErrors, the parent) on every
     // single drag frame.
+    // Fully dispose the renderer (releasing its WebGL context), and retire its
+    // canvas if it had one.
+    function release() {
+      if (releaseRenderer(rendererRef)) setCanvasGeneration((g) => g + 1)
+      modeRef.current = null
+      setHover(null)
+    }
+
     function applyParsed(parsed: ParseResult, reportState: boolean) {
       if (reportState) setConfig(parsed.config)
 
@@ -115,10 +133,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
 
       if (panels.drawable === null) {
         if (reportState) {
-          rendererRef.current?.dispose()
-          rendererRef.current = null
-          modeRef.current = null
-          setHover(null)
+          release()
           setFigure(null)
           onErrorsRef.current?.(parsed.errors)
         }
@@ -131,10 +146,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       // change, which is why it follows the table branch above line for line.
       if (panels.drawable === 'figure') {
         if (reportState) {
-          rendererRef.current?.dispose()
-          rendererRef.current = null
-          modeRef.current = null
-          setHover(null)
+          release()
           const palette = resolvePalette(parsed.config.theme, containerRef.current)
           const built = renderFigure(parsed.statements, parsed.config, palette)
           setFigure(built.svg)
@@ -151,10 +163,8 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       const mode: Mode = isThreeD(parsed.statements) ? '3d' : '2d'
 
       if (canvasModeRef.current !== mode) {
-        rendererRef.current?.dispose()
-        rendererRef.current = null
-        modeRef.current = null
-        setHover(null)
+        release()
+        awaitingCanvasRef.current = true
         if (reportState) setCanvasMode(mode)
         return
       }
@@ -165,12 +175,19 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       const palette = resolvePalette(parsed.config.theme, containerRef.current)
 
       if (modeRef.current !== mode) {
-        rendererRef.current?.dispose()
+        // A renderer still on this canvas has spent it: release it and wait
+        // for the fresh element.
+        if (rendererRef.current) {
+          release()
+          awaitingCanvasRef.current = true
+          return
+        }
         setHover(null)
         const onContextLost = () => setContextLost(true)
+        const onContextRestored = () => setContextLost(false)
         rendererRef.current =
           mode === '3d'
-            ? new SpaceRenderer(canvas, { palette, theme: parsed.config.theme, onContextLost })
+            ? new SpaceRenderer(canvas, { palette, theme: parsed.config.theme, onContextLost, onContextRestored })
             : new SceneRenderer(canvas, {
                 config: parsed.config,
                 onViewChange: () => viewChangeRef.current(),
@@ -247,11 +264,13 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
     }
   }, [])
 
-  // Second half of a mode switch: the keyed canvas has just remounted, so the
-  // cached parse can now be applied to a fresh element.
+  // Second half of a mode switch or a release: the keyed canvas has just
+  // remounted, so the cached parse can now be applied to the fresh element.
   useEffect(() => {
-    if (parsedRef.current && modeRef.current === null) applyParsedRef.current?.(parsedRef.current, true)
-  }, [canvasMode])
+    if (!parsedRef.current || !awaitingCanvasRef.current) return
+    awaitingCanvasRef.current = false
+    applyParsedRef.current?.(parsedRef.current, true)
+  }, [canvasMode, canvasGeneration])
 
   useEffect(
     () => () => {
@@ -276,7 +295,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
     <div ref={containerRef} className={`graph-viewer graph-viewer-${config.theme}${split ? ' graph-viewer-split' : ''}`}>
       <div className="graph-viewer-panel graph-viewer-panel-drawing" style={drawing ? undefined : { display: 'none' }}>
         <canvas
-          key={canvasMode}
+          key={canvasKey(canvasMode, canvasGeneration)}
           ref={canvasRef}
           className="graph-viewer-canvas"
           style={figure !== null ? { display: 'none' } : undefined}

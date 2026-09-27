@@ -84,15 +84,21 @@ interface StageProps {
 // SpaceRenderer on a bare canvas. Specs go through setSpec (the kernel);
 // fixtures through setScene.
 function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<SpaceRenderer | null>(null)
   const lastPick = useRef(-1)
   const themeRef = useRef(theme)
   themeRef.current = theme
 
+  // The canvas is made here, not rendered by React: dispose() releases the
+  // WebGL context, and a released canvas cannot be drawn on again, so each
+  // renderer (StrictMode mounts twice in development) gets its own element.
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const host = hostRef.current
+    if (!host) return
+    const canvas = document.createElement('canvas')
+    canvas.setAttribute('aria-label', 'Space view')
+    host.appendChild(canvas)
     const renderer = new SpaceRenderer(canvas, {
       palette: palette(themeRef.current),
       theme: themeRef.current,
@@ -102,6 +108,7 @@ function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps)
     rendererRef.current = renderer
     return () => {
       renderer.dispose()
+      canvas.remove()
       rendererRef.current = null
     }
   }, [onErrors, onView])
@@ -137,7 +144,7 @@ function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps)
     rendererRef.current?.setPalette(palette(theme), theme)
   }, [theme])
 
-  return <canvas ref={canvasRef} aria-label="Space view" />
+  return <div ref={hostRef} className="space-review-canvas-host" />
 }
 
 // The real GraphViewer, which decides space vs 2D from the spec itself.

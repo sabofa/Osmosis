@@ -249,6 +249,30 @@ describe('SpaceRenderer and the display', () => {
   })
 })
 
+describe('SpaceRenderer and context loss', () => {
+  it('tells its host when the context is lost and when it is restored, and redraws on restore', () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const onContextLost = vi.fn()
+    const onContextRestored = vi.fn()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light', onContextLost, onContextRestored }, clock.env)
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    fake.lose()
+    canvas.dispatch('webglcontextlost')
+    expect(onContextLost).toHaveBeenCalledTimes(1)
+    expect(onContextRestored).not.toHaveBeenCalled()
+    fake.restore()
+    canvas.dispatch('webglcontextrestored')
+    expect(onContextRestored).toHaveBeenCalledTimes(1)
+    const draws = fake.draws.length
+    clock.flush()
+    expect(fake.draws.length).toBeGreaterThan(draws)
+    r.dispose()
+  })
+})
+
 describe('SpaceRenderer and its host', () => {
   it('puts its overlay beside the canvas, fills it with labels, and removes it on dispose', () => {
     const fake = createFakeGl()

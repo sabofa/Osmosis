@@ -225,6 +225,27 @@ describe('GlBackend: context loss', () => {
     expect(fake.draws.length - before).toBe(before)
   })
 
+  it('releases its WebGL context on dispose (browsers cap live contexts at about 16)', () => {
+    const { fake, backend } = setup()
+    backend.setScene(scene([square()]), WORLD, LIGHT)
+    backend.draw(camera(), 1)
+    backend.dispose()
+    expect(fake.loseContextCalls).toBe(1)
+    expect(fake.lost).toBe(true)
+    // Its resources were deleted first, not merely dropped with the context.
+    for (const [kind, n] of Object.entries(balance(fake))) expect([kind, n]).toEqual([kind, 0])
+    backend.dispose()
+    expect(fake.loseContextCalls).toBe(1)
+  })
+
+  it('does not release a context that is already lost', () => {
+    const { fake, canvas, backend } = setup()
+    canvas.lose()
+    backend.dispose()
+    expect(fake.loseContextCalls).toBe(0)
+    expect(fake.errors).toEqual([])
+  })
+
   it('removes its context listeners on dispose', () => {
     const { canvas, backend } = setup()
     expect(canvas.listenerCount('webglcontextlost')).toBe(1)
