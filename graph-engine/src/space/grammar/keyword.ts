@@ -3,13 +3,19 @@
 // rows ("contour:", "trace:", "plane:", ...) without touching the hook.
 //
 // In S1 the table has one row, "implicit:", the forced implicit-surface
-// reading. "plane:" is not a row: "plane: A-B-C" and every point-list plane
-// form belong to solid figures, whose refusal must still catch them. When S4
-// adds space's "plane:" forms, that row must return null for them.
+// reading. S4a adds contour:, line:, plane:, cross:, project:, cylindrical:,
+// spherical:, frame:, osculating: and motion:.
+//
+// One rule holds for every keyword, agreed with the solid-figure side
+// (2026-09-26): a statement whose operand is only a hyphenated list of point
+// names ("A-B", "A-B-C", ...), optionally followed by "dashed" or "plain", is
+// never claimed. "line: A-B", "plane: A-B-C" and "path: A-B-C-D" stay
+// solid-figure territory, and the solid-figure refusal still catches them.
 
 import { parseExprString } from '../../parser/parseExpr'
 import { buildStyle, splitStyle } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
+import { parseContour } from './keywords/contour'
 
 interface KeywordRow {
   keyword: string
@@ -34,9 +40,16 @@ function parseImplicit(text: string): SpaceForm {
   }
 }
 
-const KEYWORDS: readonly KeywordRow[] = [{ keyword: 'implicit', parse: parseImplicit }]
+const KEYWORDS: readonly KeywordRow[] = [
+  { keyword: 'implicit', parse: parseImplicit },
+  { keyword: 'contour', parse: parseContour },
+]
+
+// "keyword: A-B-C [dashed | plain]": a solid figure's point list.
+const POINT_LIST = /^[a-z][a-z-]*:\s*[A-Za-z][A-Za-z0-9_']*(-[A-Za-z][A-Za-z0-9_']*)+(\s+(dashed|plain))?\s*$/
 
 export function parseSpaceKeyword(line: string): SpaceStatement | null {
+  if (POINT_LIST.test(line)) return null
   for (const row of KEYWORDS) {
     if (line.startsWith(`${row.keyword}:`)) return spaceStatement(row.parse(line.slice(row.keyword.length + 1).trim()))
   }

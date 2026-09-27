@@ -25,6 +25,8 @@ import { ARROW, POINT, SEGMENT } from './primitives'
 import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
 import { buildScope } from './scope'
 import { SURFACE } from './surface'
+import { IMPLICIT_SURFACE } from './geometry/implicit'
+import { CONTOUR } from './geometry/levelSurfaces'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -41,16 +43,12 @@ registerBuilder('point', POINT)
 registerBuilder('segment', SEGMENT)
 registerBuilder('ray', ARROW)
 registerBuilder('vector', ARROW)
-registerBuilder('space:implicitSurface', {
-  draws: true,
-  prepare: () => {
-    throw new Error('implicit surfaces are drawn from phase S4')
-  },
-})
+registerBuilder('space:implicitSurface', IMPLICIT_SURFACE)
 // Definitions and tables draw nothing and are not errors.
 for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vectorFunction', 'tableHeader', 'tableRow', 'tableGenerator']) {
   registerBuilder(key, DEFINITION)
 }
+registerBuilder('space:contour', CONTOUR)
 
 interface StatementRecord {
   line: number

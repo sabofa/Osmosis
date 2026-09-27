@@ -69,6 +69,13 @@ export function builderFor(statement: Statement): BuilderEntry | undefined {
   return REGISTRY.get(registryKey(statement))
 }
 
+// A builder registered under a name rather than a statement kind, for a
+// builder that dispatches ("contour:" hands two-variable targets to S4b's
+// "contourCurves"); undefined until that builder is registered.
+export function registeredBuilder(key: string): BuilderEntry | undefined {
+  return REGISTRY.get(key)
+}
+
 export function emptyResult(): BuildResult {
   return { marks: [], labels: [], errors: [], colorScale: null }
 }

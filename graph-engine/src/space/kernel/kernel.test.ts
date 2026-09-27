@@ -373,9 +373,10 @@ describe('errors are returned with their line, never thrown', () => {
     expect(scene.marks).toHaveLength(1)
   })
 
-  it('an implicit surface is claimed now and drawn from phase S4', () => {
-    const scene = sceneOf('x^2 + y^2 + z^2 = 4')
-    expect(scene.errors).toEqual([{ line: 1, message: 'implicit surfaces are drawn from phase S4' }])
+  it('an implicit surface is drawn (phase S4a; kernel/geometry/implicit.test.ts)', () => {
+    const scene = sceneOf('x^2 + y^2 + z^2 = 4 res: 8')
+    expect(scene.errors).toEqual([])
+    expect(scene.marks.map((m) => m.kind)).toEqual(['mesh'])
   })
 
   it('a named region arrives with region: in phase S5', () => {
