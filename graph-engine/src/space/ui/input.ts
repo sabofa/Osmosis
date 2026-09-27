@@ -13,11 +13,15 @@
 //   in that direction would, + and - zoom about the centre, 0 resets.
 // - Releasing a moving orbit drag hands its velocity to inertia, unless the
 //   user prefers reduced motion or had stopped before letting go.
+// - For the probe and pins (S3): a move with no gesture under way is a
+//   hover; a press released within 4 px and 400 ms is a click (pins.ts);
+//   leaving the canvas and Esc are reported too.
 
 import type { Projection, SpaceView } from '../config'
 import { orbit, ORBIT_DEG_PER_PX, pan, reset, WHEEL_STEP, zoomAt, type OrbitVelocity } from '../camera/controls'
 import type { Viewport } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
+import { isClick } from './pins'
 
 export interface InputContext {
   view: SpaceView
@@ -199,6 +203,16 @@ export interface InputHandlers {
   stopInertia(): void
   now(): number
   prefersReducedMotion(): boolean
+  // The pointer moved with no gesture under way (CSS px in the canvas).
+  hover?(x: number, y: number): void
+  // The pointer left the canvas.
+  leave?(): void
+  // A press began.
+  press?(): void
+  // A click: a primary press released within 4 px and 400 ms of it.
+  click?(x: number, y: number): void
+  // Esc, with the canvas focused.
+  escape?(): void
 }
 
 export interface AttachedInput {
@@ -210,9 +224,8 @@ export interface AttachedInput {
 // The DOM layer: listens on the canvas and feeds the machine. The canvas is
 // focusable (tabIndex 0) so the keys work once it is clicked or tabbed to.
 //
-// No layout is read on a hover move: a move with no gesture under way
-// returns at once, and the canvas rect is cached, read afresh when a drag
-// starts, and dropped on resize and on any scroll.
+// A hover move reads no layout beyond the cached canvas rect, which is read
+// afresh when a drag starts, and dropped on resize and on any scroll.
 export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, handlers: InputHandlers): AttachedInput {
   let rect: { left: number; top: number } | null = null
   const invalidate = () => {
@@ -230,10 +243,16 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     shift: e.shiftKey,
     time: handlers.now(),
   })
+  // The primary press that may become a click.
+  let pressed: { id: number; x: number; y: number; time: number } | null = null
   const down = (e: PointerEvent) => {
     handlers.stopInertia()
-    if (!machine.active) invalidate()
-    machine.down(sample(e))
+    handlers.press?.()
+    const first = !machine.active
+    if (first) invalidate()
+    const s = sample(e)
+    pressed = first && e.button === 0 ? { id: e.pointerId, x: s.x, y: s.y, time: s.time } : null
+    machine.down(s)
     try {
       canvas.setPointerCapture(e.pointerId)
     } catch {
@@ -241,17 +260,31 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     }
   }
   const move = (e: PointerEvent) => {
-    if (!machine.active) return
+    if (!machine.active) {
+      if (handlers.hover) {
+        const p = local(e)
+        handlers.hover(p.x, p.y)
+      }
+      return
+    }
     const ctx = handlers.context()
     if (!ctx) return
     const view = machine.move(sample(e), ctx)
     if (view) handlers.apply(view)
   }
   const up = (e: PointerEvent) => {
-    const velocity = machine.up(sample(e), handlers.prefersReducedMotion())
+    const s = sample(e)
+    const velocity = machine.up(s, handlers.prefersReducedMotion())
     if (velocity) handlers.startInertia(velocity)
+    const press = pressed
+    pressed = null
+    if (press && press.id === e.pointerId && isClick(press, s)) handlers.click?.(s.x, s.y)
   }
-  const cancel = () => machine.cancel()
+  const cancel = () => {
+    pressed = null
+    machine.cancel()
+  }
+  const leave = () => handlers.leave?.()
   const lost = (e: PointerEvent) => machine.lose(e.pointerId)
   const wheel = (e: WheelEvent) => {
     const ctx = handlers.context()
@@ -269,6 +302,10 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
   }
   const keydown = (e: KeyboardEvent) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return
+    if (e.key === 'Escape') {
+      handlers.escape?.()
+      return
+    }
     const ctx = handlers.context()
     if (!ctx) return
     const view = machine.key(e.key, ctx)
@@ -285,6 +322,7 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     ['pointermove', move as EventListener],
     ['pointerup', up as EventListener],
     ['pointercancel', cancel],
+    ['pointerleave', leave],
     ['lostpointercapture', lost as EventListener],
     ['wheel', wheel as EventListener, { passive: false }],
     ['dblclick', dblclick as EventListener],

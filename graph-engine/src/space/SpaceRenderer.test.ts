@@ -5,7 +5,8 @@ import { createFakeGl, type FakeGl } from './gl/fakeGl'
 import { parseSpec } from '../parser/parseSpec'
 import { SpaceRenderer, type SpaceRendererEnv } from './SpaceRenderer'
 import { FakeDocument, type FakeElement } from './testing/fakeDom'
-import { curveMark, label, meshMark, scene } from './testing/marks'
+import type { SpaceEvent } from './events'
+import { curveMark, graphMesh, label, meshMark, scene } from './testing/marks'
 
 // A canvas in a parent, both fake, handing out the recording fake GL.
 function mount(fake: FakeGl | null = createFakeGl()) {
@@ -214,7 +215,7 @@ describe('SpaceRenderer and the display', () => {
     expect(clock.listeners()).toBe(0)
   })
 
-  it('reads no layout on hover, and at most the rect once per drag', () => {
+  it('reads no layout on hover beyond the cached rect, and at most the rect once per drag', () => {
     const { canvas } = mount()
     let reads = 0
     let rects = 0
@@ -238,8 +239,12 @@ describe('SpaceRenderer and the display', () => {
     reads = 0
     rects = 0
     const move = (x: number, buttons: number) => canvas.dispatch('pointermove', { pointerId: 1, clientX: x, clientY: 100, button: -1, buttons, shiftKey: false })
+    // The probe needs the cursor in canvas pixels: the rect is read once and
+    // cached for every later move.
     for (let x = 0; x < 20; x++) move(x, 0)
-    expect([reads, rects]).toEqual([0, 0])
+    expect(reads).toBe(0)
+    expect(rects).toBe(1)
+    rects = 0
     canvas.dispatch('pointerdown', { pointerId: 1, clientX: 20, clientY: 100, button: 0, buttons: 1, shiftKey: false })
     for (let x = 21; x < 40; x++) move(x, 1)
     expect(reads).toBe(0)
@@ -369,3 +374,113 @@ describe('SpaceRenderer and its host', () => {
     r.dispose()
   })
 })
+
+describe('SpaceRenderer: the probe and pins', () => {
+  // A saddle through the box centre: the ray through the middle of the view
+  // meets it at the origin.
+  // Every evaluation of f is counted: only the probe's pick evaluates it.
+  let evaluations = 0
+  const saddle = graphMesh(
+    (x, y) => {
+      evaluations++
+      return x * x - y * y
+    },
+    (x) => 2 * x,
+    (_x, y) => -2 * y,
+    -2,
+    2,
+    -2,
+    2,
+    32,
+    { line: 3 },
+  )
+
+  function live(config: Parameters<SpaceRenderer['setScene']>[1] = CONFIG) {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const events: SpaceEvent[] = []
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light', onEvent: (e) => events.push(e) }, clock.env)
+    r.setScene(scene([saddle]), config)
+    clock.flush()
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const readouts = () => overlay.children.filter((c) => c.className === 'space-readout')
+    const pointer = (type: string, x: number, y: number, buttons: number) =>
+      canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
+    return { fake, canvas, clock, events, r, readouts, pointer }
+  }
+
+  it('picks once per frame on hover, shows a readout with the partials, and reports the mark once', () => {
+    const { clock, events, r, readouts, pointer } = live()
+    evaluations = 0
+    for (let dx = 0; dx < 5; dx++) pointer('pointermove', 400 + dx * 0.01, 300, 0)
+    // Five moves, no pick yet: it waits for the frame.
+    expect(evaluations).toBe(0)
+    expect(readouts()).toHaveLength(0)
+    clock.flush()
+    const once = evaluations
+    expect(once).toBeGreaterThan(0)
+    const [box] = readouts()
+    expect(box).toBeDefined()
+    const [title, rows] = box.children
+    expect(title.textContent).toBe('line 3')
+    const labels = rows.children.map((c) => c.textContent)
+    expect(labels).toContain('∂f/∂x')
+    expect(labels).toContain('∂f/∂y')
+    expect(events.filter((e) => e.type === 'hover')).toHaveLength(1)
+    expect(events[0]).toMatchObject({ type: 'hover', hit: { kind: 'graph', source: { object: 's3' } } })
+    // Moving over the same mark reports nothing new; leaving reports null.
+    pointer('pointermove', 402, 301, 0)
+    clock.flush()
+    expect(events).toHaveLength(1)
+    r['hoverAt'](null, null)
+    expect(events.at(-1)).toEqual({ type: 'hover', hit: null })
+    clock.flush()
+    expect(readouts()).toHaveLength(0)
+    r.dispose()
+  })
+
+  it('pins on a click, unpins on a click at the marker, and clears on Esc, reporting each', () => {
+    const { clock, canvas, events, r, readouts, pointer } = live()
+    pointer('pointerdown', 400, 300, 1)
+    pointer('pointerup', 400, 300, 0)
+    clock.flush()
+    expect(events.filter((e) => e.type === 'pin')).toMatchObject([{ action: 'add', hit: { kind: 'graph' } }])
+    expect(readouts().filter((b) => b.dataset.pinned === 'true')).toHaveLength(1)
+    // A 5 px drag is not a click.
+    pointer('pointerdown', 300, 300, 1)
+    pointer('pointermove', 305, 300, 1)
+    pointer('pointerup', 305, 300, 0)
+    expect(events.filter((e) => e.type === 'pin')).toHaveLength(1)
+    canvas.dispatch('keydown', { key: 'Escape' })
+    expect(events.filter((e) => e.type === 'pin').at(-1)).toEqual({ type: 'pin', action: 'clear', hit: null })
+    clock.flush()
+    expect(readouts()).toHaveLength(0)
+    r.dispose()
+  })
+
+  it('does neither under @hover: none', () => {
+    const { clock, events, r, readouts, pointer } = live({ ...CONFIG, hover: 'none' })
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    pointer('pointerdown', 400, 300, 1)
+    pointer('pointerup', 400, 300, 0)
+    clock.flush()
+    expect(readouts()).toHaveLength(0)
+    expect(events).toEqual([])
+    r.dispose()
+  })
+
+  it('draws the probe marker and drop lines last, into the canvas, over everything', () => {
+    const { fake, clock, r, pointer } = live()
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    const last = fake.draws.slice(-6)
+    expect(last.every((d) => d.framebuffer === null && !d.depthTest)).toBe(true)
+    // Two AA passes of drop lines, feet and the ring.
+    const programs = last.map((d) => /space: (\w+)/.exec(fake.programSource(d.program).vertex)?.[1])
+    expect(programs).toEqual(['line', 'point', 'point', 'line', 'point', 'point'])
+    r.dispose()
+  })
+})
+

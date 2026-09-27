@@ -42,6 +42,7 @@ export interface FakeDraw {
   blend: boolean
   cull: 'none' | 'front' | 'back' | 'both'
   depthFunc: number
+  depthTest: boolean
   polygonOffset: boolean
   // The DRAW_FRAMEBUFFER binding; null is the default framebuffer.
   framebuffer: FakeHandle | null
@@ -179,6 +180,7 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   let cullEnabled = false
   let cullMode: number = GL_CONSTANTS.BACK
   let depthFunc: number = GL_CONSTANTS.LESS
+  let depthTest = false
   let polygonOffset = false
   let drawFramebuffer: FakeHandle | null = null
   const cull = (): FakeDraw['cull'] =>
@@ -262,11 +264,13 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       if (cap === GL_CONSTANTS.BLEND) blend = true
       if (cap === GL_CONSTANTS.CULL_FACE) cullEnabled = true
       if (cap === GL_CONSTANTS.POLYGON_OFFSET_FILL) polygonOffset = true
+      if (cap === GL_CONSTANTS.DEPTH_TEST) depthTest = true
     },
     disable: (cap: number) => {
       if (cap === GL_CONSTANTS.BLEND) blend = false
       if (cap === GL_CONSTANTS.CULL_FACE) cullEnabled = false
       if (cap === GL_CONSTANTS.POLYGON_OFFSET_FILL) polygonOffset = false
+      if (cap === GL_CONSTANTS.DEPTH_TEST) depthTest = false
     },
     depthFunc: (fn: number) => {
       depthFunc = fn
@@ -309,16 +313,16 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       attribs.set(vao.id, map)
     },
     drawArrays: (mode: number, _first: number, count: number) => {
-      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
+      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull(), depthFunc, depthTest, polygonOffset, framebuffer: drawFramebuffer })
     },
     drawElements: (mode: number, count: number) => {
-      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
+      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull(), depthFunc, depthTest, polygonOffset, framebuffer: drawFramebuffer })
     },
     drawArraysInstanced: (mode: number, _first: number, count: number, instances: number) => {
-      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
+      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull(), depthFunc, depthTest, polygonOffset, framebuffer: drawFramebuffer })
     },
     drawElementsInstanced: (mode: number, count: number, _type: number, _offset: number, instances: number) => {
-      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
+      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull(), depthFunc, depthTest, polygonOffset, framebuffer: drawFramebuffer })
     },
   }
 
@@ -394,6 +398,7 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     cullEnabled = false
     cullMode = GL_CONSTANTS.BACK
     depthFunc = GL_CONSTANTS.LESS
+    depthTest = false
     polygonOffset = false
     drawFramebuffer = null
     arrayBuffer = null

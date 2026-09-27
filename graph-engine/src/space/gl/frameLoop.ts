@@ -24,6 +24,10 @@
 //    formats, and the canvas (alpha: false) is RGB8. Without OIT the resolved
 //    colour is then blitted, single-sampled, to the canvas.
 //
+// 7. The overlay (the interaction layer: probe and pin markers, drop
+//    lines), last, into the canvas, over everything: no depth test, never
+//    clipped, never in the hidden pass.
+//
 // When the targets cannot be made (an incomplete framebuffer), the same
 // passes draw straight into the canvas.
 
@@ -47,6 +51,7 @@ export interface FramePasses {
   // Translucent meshes: accumulating for OIT (`oit`), or sorted and blended.
   translucent(oit: boolean): void
   hasTranslucent: boolean
+  overlay(): void
 }
 
 export interface FrameLoopInput {
@@ -140,11 +145,17 @@ export function runFrameLoop(gl: WebGL2RenderingContext, input: FrameLoopInput, 
     gl.disable(gl.BLEND)
     gl.depthMask(true)
     composite(gl, input.composite, targets, oit)
-    return
+  } else {
+    if (passes.hasTranslucent) passes.translucent(false)
+    if (targets) {
+      blit(gl, targets, targets.msaa.fbo, targets.resolve.fbo, false)
+      blit(gl, targets, targets.resolve.fbo, null, false)
+    }
   }
-  if (passes.hasTranslucent) passes.translucent(false)
-  if (targets) {
-    blit(gl, targets, targets.msaa.fbo, targets.resolve.fbo, false)
-    blit(gl, targets, targets.resolve.fbo, null, false)
-  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  gl.viewport(0, 0, input.width, input.height)
+  gl.disable(gl.DEPTH_TEST)
+  passes.overlay()
+  gl.enable(gl.DEPTH_TEST)
 }

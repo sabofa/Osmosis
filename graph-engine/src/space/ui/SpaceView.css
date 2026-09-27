@@ -106,3 +106,45 @@
   width: 20px;
   opacity: 1;
 }
+
+/* Readout boxes (plan E9, E10): the probe's beside the cursor, each pin's
+   beside its marker. Colours come from the palette, set inline. */
+.space-readout {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 6px 8px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  will-change: transform;
+}
+
+.space-readout[data-pinned] {
+  box-shadow: none;
+}
+
+.space-readout-title {
+  font-weight: 600;
+  margin-bottom: 3px;
+  max-width: 28em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.space-readout-rows {
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 10px;
+}
+
+.space-readout-label {
+  opacity: 0.75;
+}
+
+.space-readout-value {
+  text-align: right;
+}

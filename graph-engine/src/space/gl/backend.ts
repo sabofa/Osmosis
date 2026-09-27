@@ -122,6 +122,9 @@ export class GlBackend {
   private readonly gl: WebGL2RenderingContext | null
   private readonly programs = new ProgramCache()
   private readonly marks = new Map<Mark, CachedMark>()
+  // The interaction layer's transient marks (setOverlay), cached the same way.
+  private readonly overlay = new Map<Mark, CachedMark>()
+  private overlayMarks: readonly Mark[] = []
   private readonly luts = new LutCache()
   private depthcue = true
   private readonly unwatch: (() => void) | null
@@ -180,6 +183,8 @@ export class GlBackend {
     const boxes = scene.marks.filter((m) => m.kind === 'boxes').length
     if (boxes > 0) console.warn(`space: box marks are not drawn until S5; skipped ${boxes}`)
     this.upload()
+    // A new box re-uploads the overlay too (its positions are relative to the centre).
+    this.uploadOverlay()
   }
 
   // The frame's lines, in author coordinates, drawn before the marks. They
@@ -193,6 +198,14 @@ export class GlBackend {
 
   setColors(colors: SpaceColors): void {
     this.colors = colors
+  }
+
+  // The interaction layer's marks (probe and pin markers, drop lines): never
+  // part of the scene, drawn last over everything, unclipped, uncued and
+  // outside the hidden pass. Kept by identity like the scene's marks.
+  setOverlay(marks: readonly Mark[]): void {
+    this.overlayMarks = marks
+    this.uploadOverlay()
   }
 
   // `pixelRatio` is the backing store's pixels per CSS pixel.
@@ -261,8 +274,23 @@ export class GlBackend {
       const hiddenLines = lines.filter((l) => l.look.hidden)
       const hiddenArrows = arrows.filter((a) => a.look.hidden)
 
+      const overlayLines: LineGpu[] = []
+      const overlayArrows: ArrowGpu[] = []
+      const overlayPoints: PointGpu[] = []
+      for (const m of this.overlay.values()) {
+        if (m.kind === 'lines') overlayLines.push(m.gpu)
+        else if (m.kind === 'arrows') overlayArrows.push(m.gpu)
+        else if (m.kind === 'points') overlayPoints.push(m.gpu)
+      }
+      for (const l of overlayLines) updateDashes(gl, l, camera, key, world)
+
       const passes: FramePasses = {
         hasTranslucent: translucent.length > 0,
+        overlay: () => {
+          if (this.overlay.size === 0) return
+          const at = { ...target, depthBias: 0, look: frameLook(look) }
+          antialiased([...overlayLines, ...overlayArrows.map((a) => a.shaft)], overlayArrows, overlayPoints, at)
+        },
         // The frame: a box frame biased behind data that meets its walls, the
         // axes frame as content.
         frame: () => {
@@ -300,6 +328,7 @@ export class GlBackend {
     if (!gl) return
     if (!this.lost && !gl.isContextLost()) {
       for (const m of this.marks.values()) m.destroy(gl)
+      for (const m of this.overlay.values()) m.destroy(gl)
       this.frameGpu?.destroy(gl)
       this.shared?.destroy(gl)
       this.targets?.destroy(gl)
@@ -308,6 +337,7 @@ export class GlBackend {
     }
     this.luts.forget()
     this.marks.clear()
+    this.overlay.clear()
     this.frameGpu = null
     this.shared = null
     this.targets = null
@@ -361,10 +391,24 @@ export class GlBackend {
       if (key !== this.worldKey) {
         for (const m of this.marks.values()) m.destroy(gl)
         this.marks.clear()
+        for (const m of this.overlay.values()) m.destroy(gl)
+        this.overlay.clear()
         this.worldKey = key
       }
       const drawable = scene.marks.filter((m) => m.kind !== 'boxes')
       syncByIdentity(gl, this.marks, drawable, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  private uploadOverlay(): void {
+    const gl = this.gl
+    const world = this.world
+    const shared = this.shared
+    if (!gl || !world || !shared || this.failed || this.lost || this.disposed) return
+    try {
+      syncByIdentity(gl, this.overlay, this.overlayMarks, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
     } catch (error) {
       this.fail(error)
     }
@@ -461,6 +505,7 @@ export class GlBackend {
     this.lost = true
     // The context took every resource with it: drop the handles undeleted.
     this.marks.clear()
+    this.overlay.clear()
     this.frameGpu = null
     this.frameKey = ''
     this.shared = null
@@ -477,6 +522,7 @@ export class GlBackend {
     this.lost = false
     this.prepare()
     this.upload()
+    this.uploadOverlay()
     this.uploadFrame()
     this.options.onContextRestored?.()
   }
