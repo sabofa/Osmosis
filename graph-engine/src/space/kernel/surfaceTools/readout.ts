@@ -24,13 +24,19 @@ function term({ coef, variable, at }: AffineTerm): { negative: boolean; body: st
   return { negative: coef < 0, body }
 }
 
+// A coefficient below this fraction of the largest part (|c| and the |coef|s)
+// is rounding noise — cos(π/2) is 6.1×10⁻¹⁷, not 0 — and is left out.
+export const NOISE = 1e-12
+
 // c + Σ coef (variable − at), with the signs folded in and zero parts left
 // out: "−3 + 2(x − 1) − 4(y − 2)".
 export function affineText(constant: number | null, terms: readonly AffineTerm[]): string {
   const pieces: string[] = []
   const c = constant === null ? '0' : formatNumber(constant)
   if (c !== '0') pieces.push(c)
+  const largest = Math.max(Math.abs(constant ?? 0), ...terms.map((t) => Math.abs(t.coef)))
   for (const t of terms) {
+    if (Math.abs(t.coef) <= NOISE * largest) continue
     const part = term(t)
     if (!part) continue
     if (pieces.length === 0) pieces.push(part.negative ? `${MINUS}${part.body}` : part.body)

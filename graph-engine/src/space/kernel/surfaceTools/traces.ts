@@ -117,6 +117,9 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
 
     if (tangentAt) {
       const s = tangentAt()
+      if (!(s >= range.min && s <= range.max)) {
+        throw new Error(`trace: tangent at ${free} = ${formatNumber(s)} is outside the domain's ${free} range [${formatNumber(range.min)}, ${formatNumber(range.max)}]`)
+      }
       const p = point(c, s)
       const m = slope(c, s)
       const xy = alongX ? [s, c] : [c, s]

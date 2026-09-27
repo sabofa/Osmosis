@@ -64,6 +64,10 @@ describe('the directional trace is cut to the box', () => {
 })
 
 describe('directional: refusals and parameters', () => {
+  it('refuses a point outside the domain, on its line (M2)', () => {
+    expect(sceneOf('directional: x^2 - y^2 at (7, 0) toward <1, 0>').errors).toEqual([{ line: 1, message: 'directional: (7, 0) is outside the domain' }])
+  })
+
   it('refuses a zero u, on its line', () => {
     expect(sceneOf('directional: x^2 - y^2 at (1, 2) toward <0, 0>').errors).toEqual([
       { line: 1, message: 'directional: the direction ⟨0, 0⟩ has no length — give a nonzero u' },

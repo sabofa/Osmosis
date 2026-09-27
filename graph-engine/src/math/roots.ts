@@ -202,7 +202,9 @@ function lexicographic(a: Float64Array, b: Float64Array): number {
 }
 
 // Newton from every cell centre of a seedsPerAxis^n grid over the box. Keeps
-// the converged points inside the box, merges any two closer than
+// the converged points inside the box — with the merge distance as slack, so
+// a root on the box's edge that lands a rounding error outside it is kept,
+// clamped onto the edge — merges any two closer than
 // ROOT_DEDUP_REL x the box diagonal (the first found, in seed order, stands),
 // and returns them in lexicographic order, so the result is deterministic.
 export function seededRoots(F: SystemFn, J: JacobianFn, box: SearchBox, seedsPerAxis: number, options: NewtonOptions = {}): Float64Array[] {
@@ -216,8 +218,9 @@ export function seededRoots(F: SystemFn, J: JacobianFn, box: SearchBox, seedsPer
   for (;;) {
     for (let i = 0; i < n; i++) seed[i] = box.min[i] + ((counters[i] + 0.5) * (box.max[i] - box.min[i])) / seedsPerAxis
     const result = newton(F, J, seed, options)
-    const inside = result.x.every((xi, i) => xi >= box.min[i] && xi <= box.max[i])
+    const inside = result.x.every((xi, i) => xi >= box.min[i] - mergeDistance && xi <= box.max[i] + mergeDistance)
     if (result.converged && inside) {
+      for (let i = 0; i < n; i++) result.x[i] = Math.min(box.max[i], Math.max(box.min[i], result.x[i]))
       const duplicate = found.some((r) => Math.hypot(...r.map((ri, i) => ri - result.x[i])) <= mergeDistance)
       if (!duplicate) found.push(result.x)
     }

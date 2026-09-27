@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../../parser/parseSpec'
 import { resolveBox } from '../../frame/bounds'
-import { expectClose, expectParallel, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
+import { expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
 // f = x^2 - y^2 over the default [-5, 5]^2: its range [-25, 25] is already on
 // multiples of niceStep(50, 8) = 5, so the box is [-5, 5]^2 x [-25, 25].
@@ -116,10 +116,23 @@ trace: f at x = 7`).errors
     ).toEqual([{ line: 2, message: "trace: x = 7 is outside the domain's x range [−5, 5]" }])
   })
 
-  it('reads the slice from a parameter, and follows it', () => {
-    const scene = sceneOf(`@param c = 3 range [0, 4]
+  it('reads the slice from a parameter, and follows it through setValue (M3)', () => {
+    const kernel = kernelOf(`@param c = 3 range [0, 4]
 ${F}
 trace: f at x = c over x in [0, 4], y in [-1, 1]`)
-    for (const [x] of vertices(lineOf(scene, 's3').positions)) expect(x).toBe(3)
+    for (const [x] of vertices(lineOf(kernel.scene(), 's3').positions)) expect(x).toBe(3)
+    const moved = kernel.setValue('c', 1)
+    expect(moved.errors).toEqual([])
+    for (const [x, y, z] of vertices(lineOf(moved, 's3').positions)) {
+      expect(x).toBe(1)
+      expect(Math.abs(z - (1 - y * y))).toBeLessThanOrEqual(1e-12)
+    }
+  })
+
+  it('refuses a tangent outside the domain, on its line (M2)', () => {
+    expect(
+      sceneOf(`${F}
+trace: f at x = 1 tangent at y = 9`).errors
+    ).toEqual([{ line: 2, message: "trace: tangent at y = 9 is outside the domain's y range [−5, 5]" }])
   })
 })

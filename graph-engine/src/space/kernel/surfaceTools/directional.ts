@@ -16,7 +16,7 @@ import { CURVE_WIDTH, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, clipLine, clipToZ, lineMark, part, pointMark, polygonMesh, toolBox, verticalPlane } from './box'
 import { pointText } from './readout'
-import { preparePoint, prepareDomain, requireArity, resolveTarget, surface2 } from './target'
+import { preparePoint, prepareDomain, requireArity, requireInside, resolveTarget, surface2 } from './target'
 
 const SEGMENTS = 512
 const PLANE_OPACITY = 0.2
@@ -36,6 +36,8 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
 
   const build = (): BuildResult => {
     const [a, b] = point()
+    const rect = domain()
+    requireInside('directional', [a, b], [rect.x, rect.y])
     const [w1, w2] = toward()
     const norm = Math.hypot(w1, w2)
     if (!(norm > 0) || !Number.isFinite(norm)) {
@@ -47,7 +49,6 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
     const q = fy(a, b)
     if (![f0, p, q].every(Number.isFinite)) throw new Error(`directional: f or ∇f is undefined at ${pointText([a, b])}`)
     const slope = p * u[0] + q * u[1]
-    const rect = domain()
     const box = toolBox(context, rect, (x, y) => f(x, y))
     const plane = verticalPlane(a, b, u, box)
     if (!plane) throw new Error(`directional: ${pointText([a, b])} is outside the domain`)

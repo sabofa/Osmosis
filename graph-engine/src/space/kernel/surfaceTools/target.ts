@@ -21,6 +21,7 @@ import type { GraphConfig } from '../../../parser/config'
 import type { RectOver } from '../../grammar/keywords/surfaceTools'
 import type { Range } from '../../scene/types'
 import { boundNames, boxX, boxY, constant, type Reads, renameBound } from '../common'
+import { pointText } from './readout'
 
 const XY = ['x', 'y'] as const
 const XYZ = ['x', 'y', 'z'] as const
@@ -144,6 +145,13 @@ export function preparePoint(exprs: readonly Expr[], scope: MathScope, reads: Re
 export interface Rect {
   x: Range
   y: Range
+}
+
+// The point a tool is drawn at lies in its domain (the box, in three
+// variables); outside it, the tool would draw beyond the frame and stretch it.
+export function requireInside(keyword: string, point: readonly number[], ranges: readonly Range[], where = 'the domain'): void {
+  if (point.every((v, i) => v >= ranges[i].min && v <= ranges[i].max)) return
+  throw new Error(`${keyword}: ${pointText(point)} is outside ${where}`)
 }
 
 // The statement's domain: its "over <rect>", else the box's x/y range.

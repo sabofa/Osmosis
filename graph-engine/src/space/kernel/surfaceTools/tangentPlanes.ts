@@ -24,7 +24,7 @@ import { Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, clipPolygon, largestSpan, lineMark, part, pointMark, polygonMesh, toolBox } from './box'
 import { affineText, pointText } from './readout'
-import { preparePoint, prepareDomain, resolveTarget, surface2, surface3 } from './target'
+import { preparePoint, prepareDomain, requireInside, resolveTarget, surface2, surface3 } from './target'
 
 const PATCH = 0.2
 const NORMAL = 0.18
@@ -74,18 +74,18 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
     const { f, fx, fy } = surface2(target, scope)
     const build = (): BuildResult => {
       const [a, b] = point()
+      const rect = domain()
+      requireInside('tangent-plane', [a, b], [rect.x, rect.y])
       const f0 = f(a, b)
       const p = fx(a, b)
       const q = fy(a, b)
       if (![f0, p, q].every(Number.isFinite)) {
         throw new Error(`tangent-plane: f has no tangent plane at ${pointText([a, b])} — f or a partial derivative is undefined there`)
       }
-      const rect = domain()
       const box = toolBox(context, rect, (x, y) => f(x, y))
       const s = PATCH * Math.max(rect.x.max - rect.x.min, rect.y.max - rect.y.min)
       const [x0, x1] = [Math.max(a - s, rect.x.min), Math.min(a + s, rect.x.max)]
       const [y0, y1] = [Math.max(b - s, rect.y.min), Math.min(b + s, rect.y.max)]
-      if (!(x0 < x1 && y0 < y1)) throw new Error(`tangent-plane: ${pointText([a, b])} is outside the domain`)
       const L = (x: number, y: number) => f0 + p * (x - a) + q * (y - b)
       const square: Vec3[] = [
         [x0, y0, L(x0, y0)],
@@ -116,11 +116,12 @@ function prepareTangentPlane(statement: Statement, context: BuildContext): Prepa
   const { F, grad } = surface3(target, scope)
   const build = (): BuildResult => {
     const [x0, y0, z0] = point()
+    const box = toolBox(context, domain(), null)
+    requireInside('tangent-plane', [x0, y0, z0], [box.x, box.y, box.z], 'the box')
     const g: Vec3 = [grad[0](x0, y0, z0), grad[1](x0, y0, z0), grad[2](x0, y0, z0)]
     const length = Math.hypot(...g)
     if (!Number.isFinite(length)) throw new Error(`tangent-plane: ∇F is undefined at ${pointText([x0, y0, z0])}`)
     if (length === 0) throw new Error(`tangent-plane: ∇F is zero at ${pointText([x0, y0, z0])}; the tangent plane is undefined`)
-    const box = toolBox(context, domain(), null)
     const s = PATCH * largestSpan(box)
     const n: Vec3 = [g[0] / length, g[1] / length, g[2] / length]
     const [e1, e2] = planeFrame(n)

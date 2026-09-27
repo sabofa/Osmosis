@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../../parser/parseSpec'
 import { resolveBox } from '../../frame/bounds'
 import { choose, crossingSeeds, evenly, judge } from './lagrange'
-import { arrowsOf, expectClose, expectParallel, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
+import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
 
 // max x + y on x^2 + y^2 = 1: ∇f = (1, 1) = λ(2x, 2y), so x = y = 1/(2λ) and
 // 2/(4λ^2) = 1: λ = √2/2 at (√2/2, √2/2), where f = √2. The min is the
@@ -167,11 +167,33 @@ describe('the floor arrows are sized by the floor (I6)', () => {
   })
 })
 
+describe('lagrange: a solution on the domain’s edge (M1)', () => {
+  it('with the edge 1e-12 short of the max (√2/2, √2/2), the max is kept, clamped onto the edge', () => {
+    // A solution on the edge lands a rounding error either side of it; here
+    // it is 1e-12 outside, within the merge distance 1e-7 x the diagonal. An
+    // exact comparison dropped it and left the min, judged "local min".
+    const scene = sceneOf('lagrange: max x + y subject to x^2 + y^2 = 1 over x in [-1, sqrt(2)/2 - 0.000000000001], y in [-1, 1]')
+    expect(scene.errors).toEqual([])
+    expect(labelOf(scene, 's1.p0').text).toBe('max ≈ (0.7071, 0.7071), f ≈ 1.414, λ ≈ 0.7071')
+    expect(pointsOf(scene, 's1.points').positions[0]).toBe(Math.sqrt(2) / 2 - 1e-12)
+  })
+})
+
 describe('lagrange: refusals', () => {
   it('an infeasible constraint is an error on its line', () => {
     expect(sceneOf('lagrange: max x + y subject to x^2 + y^2 = -1').errors).toEqual([
       { line: 1, message: 'lagrange: no constrained extremum found; try a tighter @bounds3d' },
     ])
+  })
+})
+
+describe('lagrange with a parameter (M3)', () => {
+  it('rebuilds when the level reads one: k = 2 moves the max to (√2, √2), f = 2√2', () => {
+    const kernel = kernelOf(`@param k = 1 range [0.5, 3]
+lagrange: max x + y subject to x^2 + y^2 = k^2`)
+    expectClose(Array.from(pointsOf(kernel.scene(), 's2.points').positions), [H, H, R2], 1e-12)
+    const scene = kernel.setValue('k', 2)
+    expectClose(Array.from(pointsOf(scene, 's2.points').positions), [R2, R2, 2 * R2], 1e-12)
   })
 })
 

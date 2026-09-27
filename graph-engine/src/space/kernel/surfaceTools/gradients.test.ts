@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrowsOf, expectClose, expectParallel, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
+import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
 
 // f = x^2 - y^2 at (1, 2): ∇f = (2, -4), |∇f| = √20 = 4.472, f = -3. Over
 // [-5, 5]^2 the box floor is z = -25.
@@ -91,6 +91,22 @@ describe('gradient of a function of three variables', () => {
     const scene = sceneOf('gradient: x*y*z at (1, 2, 3) surface')
     expect(scene.errors).toEqual([{ line: 1, message: 'gradient: … surface — the level surface arrives with phase S4a (marching tetrahedra)' }])
     expect(Array.from(arrowsOf(scene, 's1').vectors)).toEqual([6, 3, 2])
+  })
+})
+
+describe('gradient: points outside, and parameters', () => {
+  it('refuses a point outside the domain, or the box (M2)', () => {
+    expect(sceneOf('gradient: x^2 - y^2 at (7, 0)').errors).toEqual([{ line: 1, message: 'gradient: (7, 0) is outside the domain' }])
+    expect(sceneOf('gradient: x*y*z at (1, 2, 9)').errors).toEqual([{ line: 1, message: 'gradient: (1, 2, 9) is outside the box' }])
+  })
+
+  it('rebuilds when the point reads a parameter (M3): a = 1/2 moves the arrow to (1/2, 2), ∇f = (1, -4)', () => {
+    const kernel = kernelOf(`@param a = 1 range [-2, 2]
+gradient: x^2 - y^2 at (a, 2)`)
+    const scene = kernel.setValue('a', 0.5)
+    const arrow = arrowsOf(scene, 's2')
+    expect(Array.from(arrow.tails)).toEqual([0.5, 2, -25])
+    expect(Array.from(arrow.vectors)).toEqual([1, -4, 0])
   })
 })
 

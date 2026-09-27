@@ -37,7 +37,7 @@
 import type { Statement } from '../../../parser/types'
 import { newton } from '../../../math/roots'
 import { BISECTION_REL, ROOT_DEDUP_REL } from '../../../math/tolerance'
-import type { Box3, LabelAnchor, Mark, MeshMark, Vec3 } from '../../scene/types'
+import type { Box3, LabelAnchor, Mark, MeshMark, Range, Vec3 } from '../../scene/types'
 import { boundNames, constant, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, clipToZ, largestSpan, lineMark, part, pointMark, toolBox } from './box'
@@ -79,11 +79,15 @@ export function evenly<T>(items: readonly T[], count: number): T[] {
 }
 
 // Solutions in seed order: converged, inside the domain, not a duplicate of an
-// earlier one; then sorted lexicographically.
-function collect(candidates: readonly Solution[], inside: (p: readonly number[]) => boolean, merge: number): Solution[] {
+// earlier one; then sorted lexicographically. "Inside" has the merge distance
+// as slack — a solution on the domain's edge lands a rounding error either
+// side of it — and one within the slack is clamped onto the edge.
+function collect(candidates: readonly Solution[], ranges: readonly Range[], merge: number): Solution[] {
   const kept: Solution[] = []
-  for (const s of candidates) {
-    if (!s.at.every(Number.isFinite) || !Number.isFinite(s.lambda) || !Number.isFinite(s.f) || !inside(s.at)) continue
+  for (const candidate of candidates) {
+    if (!candidate.at.every(Number.isFinite) || !Number.isFinite(candidate.lambda) || !Number.isFinite(candidate.f)) continue
+    if (!candidate.at.every((v, i) => v >= ranges[i].min - merge && v <= ranges[i].max + merge)) continue
+    const s = { ...candidate, at: candidate.at.map((v, i) => Math.min(ranges[i].max, Math.max(ranges[i].min, v))) }
     if (kept.some((k) => Math.hypot(...k.at.map((v, i) => v - s.at[i])) <= merge)) continue
     kept.push(s)
   }
@@ -253,8 +257,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
         if (result.converged) candidates.push({ at: [result.x[0], result.x[1]], lambda: result.x[2], f: F.f(result.x[0], result.x[1]) })
       }
       const span = larger(rect)
-      const inside = (p: readonly number[]) => p[0] >= rect.x.min && p[0] <= rect.x.max && p[1] >= rect.y.min && p[1] <= rect.y.max
-      const chosen = choose(collect(candidates, inside, ROOT_DEDUP_REL * Math.hypot(rect.x.max - rect.x.min, rect.y.max - rect.y.min)), form.goal)
+      const chosen = choose(collect(candidates, [rect.x, rect.y], ROOT_DEDUP_REL * Math.hypot(rect.x.max - rect.x.min, rect.y.max - rect.y.min)), form.goal)
       if (chosen.length === 0) throw new Error(NOTHING_FOUND)
       const samples: Sample[] = []
       for (const [x, y] of vertices) {
@@ -355,9 +358,8 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       )
       if (result.converged) candidates.push({ at: [result.x[0], result.x[1], result.x[2]], lambda: result.x[3], f: F.F(result.x[0], result.x[1], result.x[2]) })
     }
-    const inside = (p: readonly number[]) => [box.x, box.y, box.z].every((r, i) => p[i] >= r.min && p[i] <= r.max)
     const diagonal = Math.hypot(box.x.max - box.x.min, box.y.max - box.y.min, box.z.max - box.z.min)
-    const chosen = choose(collect(candidates, inside, ROOT_DEDUP_REL * diagonal), form.goal)
+    const chosen = choose(collect(candidates, [box.x, box.y, box.z], ROOT_DEDUP_REL * diagonal), form.goal)
     if (chosen.length === 0) throw new Error(NOTHING_FOUND)
     const samples: Sample[] = []
     for (const at of points) {

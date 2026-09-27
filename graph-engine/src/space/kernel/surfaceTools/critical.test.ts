@@ -107,6 +107,16 @@ describe('critical: degenerate points off the axes (the Hessian singular along a
   })
 })
 
+describe('critical: a point on the domain’s edge', () => {
+  it('x^3 - x + y^2 over x in [1/sqrt(3), 1] finds the min at the edge x = 1/sqrt(3), f = -2/(3 sqrt 3)', () => {
+    // Newton lands on 0.5773502691896257, one ulp below the edge
+    // 1/sqrt(3) = 0.5773502691896258: an exact comparison dropped it.
+    const scene = sceneOf('critical: x^3 - x + y^2 over x in [1/sqrt(3), 1], y in [-1, 1]')
+    expect(scene.labels.map((l) => l.text)).toEqual(['min ≈ (0.5774, 0), f ≈ −0.3849'])
+    expect(pointsOf(scene, 's1.min').positions[0]).toBe(1 / Math.sqrt(3))
+  })
+})
+
 describe('critical: none found, and parameters', () => {
   it('x + y has none: a note, not an error', () => {
     const scene = sceneOf('critical: x + y')

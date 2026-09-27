@@ -113,7 +113,24 @@ tangent-plane: f at (a, 2)`)
   })
 })
 
+describe('tangent-plane readouts drop rounding noise', () => {
+  it('sin(x) at (π/2, 0): f_x = cos(π/2) is 6.1×10⁻¹⁷, not a term — L(x, y) = 1', () => {
+    expect(labelOf(sceneOf('tangent-plane: sin(x) at (pi/2, 0)'), 's1.readout').text).toBe('L(x, y) = 1')
+  })
+
+  it('in three variables too: x^2 + y^2 + sin(z) at (1, 1, π/2) has no z term', () => {
+    expect(labelOf(sceneOf('tangent-plane: x^2 + y^2 + sin(z) at (1, 1, pi/2)'), 's1.readout').text).toBe(
+      '2(x − 1) + 2(y − 1) = 0, F(1, 1, 1.571) = 3'
+    )
+  })
+})
+
 describe('tangent-plane refusals', () => {
+  it('refuses a point outside the domain, or the box (M2)', () => {
+    expect(sceneOf('tangent-plane: x^2 - y^2 at (6, 0)').errors).toEqual([{ line: 1, message: 'tangent-plane: (6, 0) is outside the domain' }])
+    expect(sceneOf('tangent-plane: x^2 + y^2 + z^2 at (1, 1, 9)').errors).toEqual([{ line: 1, message: 'tangent-plane: (1, 1, 9) is outside the box' }])
+  })
+
   it('refuses a point with the wrong number of coordinates', () => {
     expect(
       sceneOf(`${F}

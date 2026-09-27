@@ -57,6 +57,19 @@ describe('newton', () => {
     for (const [i, v] of [1, 2, 2, 0.5].entries()) expect(result.x[i]).toBeCloseTo(v, 12)
   })
 
+  it('seededRoots keeps a root a rounding error outside the box, clamped onto its edge', () => {
+    // x^2 = 2 has its root 1e-12 below the box [sqrt 2 + 1e-12, 2], well
+    // within the merge distance 1e-7 x the box's length.
+    const edge = Math.SQRT2 + 1e-12
+    const roots = seededRoots(
+      (v) => [v[0] * v[0] - 2],
+      (v) => [[2 * v[0]]],
+      { min: [edge], max: [2] },
+      4
+    )
+    expect(roots.map((r) => r[0])).toEqual([edge])
+  })
+
   it('reports failure rather than a wrong root: x^2 + 1 = 0 has none', () => {
     const result = newton(
       (v) => [v[0] * v[0] + 1],
