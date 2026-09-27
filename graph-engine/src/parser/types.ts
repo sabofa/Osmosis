@@ -224,6 +224,9 @@ export type MeasureSubject =
   | { kind: 'lineDistance'; first: [string, string]; second: [string, string] }
   | { kind: 'pointPlaneDistance'; point: string; plane: PlaneForm }
   | { kind: 'pointLineDistance'; point: string; line: [string, string] }
+  // Phase 11 (N5) — "shortest P to Q over S": the length of the shortest
+  // path over the surface of S, printed on the path.
+  | { kind: 'shortestPath'; from: string; to: string; solid: string }
 
 // The overmark a notation form carries. Mirrors figure/notation.ts's
 // Overmark; duplicated rather than imported so the parser stays standalone,
@@ -835,6 +838,12 @@ export type StatementShape =
   // lines dashed, cut edges solid. Its vertex letters are display labels,
   // repeated at every copy, and never named points.
   | { kind: 'net'; solid: string }
+  // "shortest: P to Q over S [unfold]" (phase 11, N3/N4) — the shortest path
+  // over the surface of S between two points in space on it. On a
+  // polyhedron it is drawn on the solid (and, with "unfold", straight across
+  // the lifted strip of faces it crosses); on a round solid, straight on the
+  // lifted unrolling of the curved side only.
+  | { kind: 'shortestPath'; from: string; to: string; solid: string; unfold: boolean }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the
   // canonical a/b/c slots, since the parser knows the vertex names and can

@@ -89,11 +89,14 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   'dihedral',
   // A net (phase 11) is a solid unfolded flat: a plane figure of a solid.
   'net',
+  // A shortest path over a solid's surface (phase 11) runs between points in
+  // space on a solid.
+  'shortestPath',
 ])
 
 // The statements that exist only in a solid figure. Either one settles the
 // renderer on its own (S5).
-const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef', 'dihedral', 'net'])
+const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef', 'dihedral', 'net', 'shortestPath'])
 
 // Which renderer a spec gets.
 //

@@ -135,17 +135,31 @@ export function outwardNormal(solid: Solid3D, faceIndex: number): Vec3 {
 // the reader, so a face's outside-counter-clockwise winding stays
 // counter-clockwise in the chart.
 export function faceChart(solid: Solid3D, faceIndex: number): Map<number, Vec2> {
+  const frame = faceFrame(solid, faceIndex)
+  const chart = new Map<number, Vec2>()
+  for (const v of solid.faces[faceIndex]) chart.set(v, chartPoint(frame, solid.vertices[v]))
+  return chart
+}
+
+// The chart's frame: its origin and two in-plane unit axes.
+export interface FaceFrame {
+  origin: Vec3
+  e1: Vec3
+  e2: Vec3
+}
+
+export function faceFrame(solid: Solid3D, faceIndex: number): FaceFrame {
   const face = solid.faces[faceIndex]
   const origin = solid.vertices[face[0]]
   const along = sub3(solid.vertices[face[1]], origin)
   const e1 = scale3(along, 1 / length3(along))
-  const e2 = cross3(outwardNormal(solid, faceIndex), e1)
-  const chart = new Map<number, Vec2>()
-  for (const v of face) {
-    const d = sub3(solid.vertices[v], origin)
-    chart.set(v, { x: dot3(d, e1), y: dot3(d, e2) })
-  }
-  return chart
+  return { origin, e1, e2: cross3(outwardNormal(solid, faceIndex), e1) }
+}
+
+// A point of the face, in the face's chart.
+export function chartPoint(frame: FaceFrame, p: Vec3): Vec2 {
+  const d = sub3(p, frame.origin)
+  return { x: dot3(d, frame.e1), y: dot3(d, frame.e2) }
 }
 
 // The rigid motion (rotation then translation) taking `from` a -> b onto
@@ -370,7 +384,22 @@ function unfoldTree(solid: Solid3D, template: Template, names: readonly (string 
   for (const child of template.children) {
     placed.set(child.face, attachChart(solid, child.face, child.edge[0], child.edge[1], placed.get(child.parent)!))
   }
-  const order = [template.root, ...template.children.map((c) => c.face)]
+  return placedNet(solid, template.shape, template.root, template.children, placed, names)
+}
+
+// A net from faces already placed flat: the root, then each child with the
+// face it hangs off and the edge they share (its fold). Serves a template's
+// net and a shortest path's strip of faces (N3's `unfold`).
+export function placedNet(
+  solid: Solid3D,
+  shape: Net['shape'],
+  root: number,
+  children: readonly { face: number; parent: number; edge: [number, number] }[],
+  placed: ReadonlyMap<number, ReadonlyMap<number, Vec2>>,
+  names: readonly (string | undefined)[]
+): Net {
+  const template = { children }
+  const order = [root, ...children.map((c) => c.face)]
   const faces: NetFace[] = order.map((face) => ({
     face,
     vertices: solid.faces[face].slice(),
@@ -433,7 +462,7 @@ function unfoldTree(solid: Solid3D, template: Template, names: readonly (string 
       lines.push({ piece: { kind: 'segment', a: f.corners[i], b: f.corners[(i + 1) % f.corners.length] }, fold: false, object: `cut-${label(v)}-${label(w)}` })
     })
   }
-  return { shape: template.shape, faces, lines, letters, copies: copyKeys }
+  return { shape, faces, lines, letters, copies: copyKeys }
 }
 
 function foldKey(face: number, [a, b]: readonly [number, number] | number[]): string {

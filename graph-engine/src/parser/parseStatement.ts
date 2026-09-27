@@ -982,6 +982,23 @@ function parseNet(text: string): StatementShape {
   return { kind: 'net', solid: rest }
 }
 
+// "P to Q over S" — the ends of a shortest path and the solid it runs over,
+// shared by the statement and the measure subject (N5).
+const SHORTEST_PATH = /^([a-zA-Z_][a-zA-Z0-9_]*)\s+to\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+over\s+([a-zA-Z]+)$/
+
+function shortestParts(text: string, form: string): { from: string; to: string; solid: string } {
+  const found = SHORTEST_PATH.exec(text.trim())
+  if (!found) throw new Error(`Expected "${form}" — two point names and a solid — got "${text.trim()}"`)
+  return { from: found[1], to: found[2], solid: found[3] }
+}
+
+// "shortest: P to Q over S [unfold]" (phase 11, N3).
+function parseShortest(text: string): StatementShape {
+  const unfold = /\s+unfold\s*$/.exec(text)
+  const parts = shortestParts(unfold ? text.slice(0, unfold.index) : text, 'shortest: P to Q over S')
+  return { kind: 'shortestPath', ...parts, unfold: unfold !== null }
+}
+
 // The body of a solid statement: the primitive, plus an optional trailing
 // "vertices ABCD" clause naming the projected vertices. `name` comes from the
 // bound form ("S = solid ...") and is null for the drawn-only "solid: ..." one.
@@ -1275,6 +1292,9 @@ function parseStatementCore(rawLine: string): StatementShape {
   // x^2", "net + x = y") falls through exactly as it always did.
   if (line.startsWith('net:')) return parseNet(line.slice('net:'.length))
   if (/^net\s+[a-zA-Z][^=<>]*$/.test(line)) throw new Error(`A net is written with a colon — "net: ${line.slice('net'.length).trim()}"`)
+  // Phase 11 (N3, N5) — "shortest: P to Q over S [unfold]". Only the keyword
+  // with its colon: "shortest = 3" and the like read as they always did.
+  if (line.startsWith('shortest:')) return parseShortest(line.slice('shortest:'.length))
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit
@@ -1782,6 +1802,12 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
   // than misread as a malformed pair of point names.
   if (/^(?:[a-zA-Z]+\s+(?:volume|area|surface\s+area)|(?:volume|area|surface\s+area)\s+of\s+.+)$/.test(subjectText)) {
     throw new Error(`Areas and volumes are not measured yet — "${subjectText}" cannot be ${role === 'label' ? 'labelled' : 'stated'}; measure lengths and angles instead`)
+  }
+
+  // "shortest P to Q over S" (phase 11, N5): the length of the path.
+  const shortest = /^shortest\s+(.+)$/.exec(subjectText)
+  if (shortest) {
+    return { subject: { kind: 'shortestPath', ...shortestParts(shortest[1], 'shortest P to Q over S') }, mark: 'none', prefix: '', explicit: false }
   }
 
   // "dihedral C-A-B-D" (phase 10, M3): the edge is the middle two names.

@@ -69,7 +69,8 @@ import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type Secti
 import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
 import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden, projectArc, rightAngleCorners, type SpaceArc } from './spaceMarks'
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
-import { netOf, type Net, type NetPiece } from './nets'
+import { netOf, netSolidWord, type Net, type NetPiece } from './nets'
+import { shortestPath, type SurfacePath } from './shortestPath'
 import {
   fmt,
   svgArc,
@@ -400,6 +401,8 @@ function subjectName(subject: MeasureSubject): string {
       return `distance from ${subject.point} to plane ${subject.plane.source}`
     case 'pointLineDistance':
       return `distance from ${subject.point} to line ${subject.line.join('-')}`
+    case 'shortestPath':
+      return `shortest ${subject.from} to ${subject.to} over ${subject.solid}`
   }
 }
 
@@ -490,6 +493,9 @@ function subjectRuns(subject: MeasureSubject): NotationRun[] {
       return [{ text: `d(${subject.point}, ${planeNotation(subject.plane)})`, mark: 'none' }]
     case 'pointLineDistance':
       return [{ text: `d(${subject.point}, ${subject.line.join('')})`, mark: 'none' }]
+    // Phase 11 (N5) — the path's length, in words: there is no notation for it.
+    case 'shortestPath':
+      return [{ text: `shortest ${subject.from}${subject.to} over ${subject.solid}`, mark: 'none' }]
   }
 }
 
@@ -557,6 +563,8 @@ interface Resolvers {
   space(names: readonly string[], what: string): Vec3[] | null
   // M5 — a measure's plane, as the solid-figure walk resolved it.
   plane(form: PlaneForm): Plane3
+  // Phase 11 (N3, N4) — the shortest path over a solid between two points.
+  path(subject: Extract<MeasureSubject, { kind: 'shortestPath' }>): SurfacePath
 }
 
 // M5 — names that must all be points in space: a measure between lines and
@@ -645,6 +653,8 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
       const [p, a, b] = spaceOnly(resolvers, [subject.point, ...subject.line], subjectName(subject))
       return pointLineDistance(p, a, b, `line ${subject.line.join('-')}`)
     }
+    case 'shortestPath':
+      return resolvers.path(subject).length
   }
 }
 
@@ -784,7 +794,34 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     return resolved.plane
   }
 
-  const resolvers: Resolvers = { point: resolve, circle: resolveCircle, solid: resolveSolid, space: resolveSpace, plane: resolveMeasurePlane }
+  // N3 / N4 — a shortest path, found once per (P, Q, S) and shared by the
+  // statement that draws it and a label or row that measures it.
+  const paths = new Map<string, SurfacePath>()
+  function resolvePath(subject: { from: string; to: string; solid: string }): SurfacePath {
+    const key = `${subject.from}|${subject.to}|${subject.solid}`
+    const known = paths.get(key)
+    if (known) return known
+    const body = resolveSolid(subject.solid)
+    const what = `shortest ${subject.from} to ${subject.to} over ${subject.solid}`
+    const ends = resolveSpace([subject.from, subject.to], what)
+    if (!ends) {
+      resolve(subject.from)
+      resolve(subject.to)
+      throw new Error(`"${what}": ${subject.from} and ${subject.to} are points in the plane — a shortest path runs over a solid, between points in space on it`)
+    }
+    const found = shortestPath(body, subject.solid, netSolidWord(body), [ends[0], ends[1]], [subject.from, subject.to], scope.vertexNames.get(body) ?? [])
+    paths.set(key, found)
+    return found
+  }
+
+  const resolvers: Resolvers = {
+    point: resolve,
+    circle: resolveCircle,
+    solid: resolveSolid,
+    space: resolveSpace,
+    plane: resolveMeasurePlane,
+    path: resolvePath,
+  }
 
   // S6 — every solid the figure draws occludes a construction segment, in
   // source order (the order does not change the answer, only the order the
@@ -927,6 +964,61 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       items.push({ kind: 'netLabel', id: { statement: index, object: label }, copy, at, label, prefer: awayFrom(at, move(letter.toward)), color })
     })
     return move
+  }
+
+  // N3 / N4 — a shortest path, drawn: on a polyhedron as its per-face
+  // segments on the solid, split by the glass rule; with `unfold`, and always
+  // on a round solid, straight across the lifted strip or unrolling, its
+  // ends dotted and lettered there (unless a vertex copy already letters the
+  // spot). Drawn once per (P, Q, S); a later label reuses what was drawn.
+  // Returns where the path's middle is, for a label.
+  const drawnPaths = new Map<string, { at: Vec2; along: [Vec2, Vec2] }>()
+  function drawPath(index: number, subject: { from: string; to: string; solid: string }, unfold: boolean, color: string | null): { at: Vec2; along: [Vec2, Vec2] } {
+    const key = `${subject.from}|${subject.to}|${subject.solid}`
+    const drawn = drawnPaths.get(key)
+    if (drawn) return drawn
+    const path = resolvePath(subject)
+    const object = `path-${subject.from}${subject.to}`
+    const body = resolveSolid(subject.solid)
+    let anchor: { at: Vec2; along: [Vec2, Vec2] } | null = null
+    for (let i = 0; i + 1 < path.onSolid.length; i++) items.push(...spaceSegmentItems(index, path.onSolid[i], path.onSolid[i + 1], 'auto', object, color))
+    if (path.onSolid.length >= 2) anchor = middleOf(path.onSolid)
+    if (unfold || path.onSolid.length < 2) {
+      const names = scope.vertexNames.get(body) ?? []
+      // The strip is scaffolding, in the figure's ink; the path takes the colour.
+      const move = liftNet(index, `unfold-${subject.from}${subject.to}`, body, path.flat.net, names, null)
+      const [a, b] = [move(path.flat.from), move(path.flat.to)]
+      items.push({ kind: 'line', id: { statement: index, object }, a, b, extent: 'segment', auxiliary: false, color })
+      for (const [name, at] of [
+        [subject.from, a],
+        [subject.to, b],
+      ] as const) {
+        const lettered = path.flat.net.letters.some((letter) => names[letter.vertex] === name && Math.hypot(move(letter.at).x - at.x, move(letter.at).y - at.y) <= GEOM_EPS * Math.max(1, Math.hypot(at.x, at.y)))
+        items.push({ kind: 'point', id: { statement: index, object: name }, at, label: lettered ? null : name, prefer: null, color })
+      }
+      anchor ??= { at: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, along: [a, b] }
+    }
+    drawnPaths.set(key, anchor!)
+    return anchor!
+  }
+
+  // The point halfway along a path on the solid, projected, and the drawn
+  // piece it lies on (for the side a label goes).
+  function middleOf(points: readonly Vec3[]): { at: Vec2; along: [Vec2, Vec2] } {
+    const lengths = points.slice(1).map((p, i) => distance3(points[i], p))
+    let half = lengths.reduce((sum, l) => sum + l, 0) / 2
+    for (let i = 0; i < lengths.length; i++) {
+      if (half <= lengths[i] || i === lengths.length - 1) {
+        const u = lengths[i] === 0 ? 0 : Math.min(1, half / lengths[i])
+        const [a, b] = [points[i], points[i + 1]]
+        return {
+          at: camera.project({ x: a.x + u * (b.x - a.x), y: a.y + u * (b.y - a.y), z: a.z + u * (b.z - a.z) }),
+          along: [camera.project(a), camera.project(b)],
+        }
+      }
+      half -= lengths[i]
+    }
+    return { at: camera.project(points[0]), along: [camera.project(points[0]), camera.project(points[0])] }
   }
 
   // A point in space, drawn: a dot at its projection, lettered with its name.
@@ -1152,6 +1244,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           liftNet(index, statement.solid, body, netOf(body, statement.solid, names), names, statement.color)
           break
         }
+        case 'shortestPath':
+          drawPath(index, statement, statement.unfold, statement.color)
+          break
         case 'construction': {
           if (scope.ownedStatements.has(index)) {
             for (const p of scope.byStatement.get(index)?.points ?? []) items.push(spacePointItem(index, p.name, p.at, statement.color))
@@ -1420,6 +1515,14 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         const vertices = subject.names.map((name) => resolve(name))
         at = centroidOf(vertices)
         push = null
+      } else if (subject.kind === 'shortestPath') {
+        // N5 — the length, on the path: drawn here when no "shortest:" drew
+        // it (as a label draws its angle's arc, M7), at the path's middle.
+        const drawn = drawPath(index, subject, false, statement.color)
+        at = drawn.at
+        push = outwardPerpendicular(drawn.along[0], drawn.along[1], centre)
+        computed = resolvePath(subject).length
+        leader = true
       } else if (subject.kind === 'dihedral') {
         // M3 — the value, on the mark: drawn here (once — not again beside a
         // "dihedral:" for the same angle), the label on the arc's middle,
@@ -1951,13 +2054,14 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // polygon does (fix round 1): the convex polygon of its exact extremes.
       if (item.kind === 'region') obstacles.polygons.push(regionInterior(edges).map((point) => projection.toView(point)))
     } else if (item.kind === 'net') {
-      // As a lifted polygon: its lines are strokes, its faces are shapes a
-      // letter should stay out of.
+      // Its lines are strokes a label keeps off. Its faces are NOT shapes a
+      // label is kept out of, unlike a lifted polygon's: a path's ends sit
+      // inside faces, and their letters belong beside them. A vertex letter
+      // is pointed outward by its own preference instead.
       for (const { edge } of item.lines) {
         const points = edgeExtremes(edge).map((point) => projection.toView(point))
         for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
       }
-      for (const face of item.faces) obstacles.polygons.push(face.map((v) => projection.toView(v)))
     } else if (item.kind === 'sectionFace' && item.outline.kind === 'polygon') {
       const vertices = item.outline.vertices.map((v) => projection.toView(v))
       for (let i = 0; i < vertices.length; i++) obstacles.segments.push([vertices[i], vertices[(i + 1) % vertices.length]])
