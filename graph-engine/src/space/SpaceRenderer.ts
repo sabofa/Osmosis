@@ -20,7 +20,11 @@
 // Parameters (S3): a spec's @param bindings get a panel (ui/params.ts) with
 // sliders and play; a point defined by one or two bindings can be dragged
 // (pick/drag.ts). Every change, from the panel, play, a drag or a host's
-// setValue, is coalesced to one kernel rebuild per animation frame.
+// setValue, is coalesced to one kernel rebuild per animation frame
+// (kernel.setValues). While something plays or a point is dragged, the box
+// and the camera target hold still; they are resolved once when it stops.
+// A value change re-evaluates the probe and the pins through the new scene;
+// the probe is re-picked only when the pointer moves.
 
 import type { GraphConfig, HoverMode } from '../parser/config'
 import type { Statement } from '../parser/types'
@@ -43,6 +47,7 @@ import { createSpaceKernel } from './kernel/index'
 import { solveDrag } from './pick/drag'
 import { pickAt } from './pick/pick'
 import { readoutTitle } from './pick/readout'
+import { reevaluate } from './pick/reevaluate'
 import type { Hit } from './pick/types'
 import type { Mark, SceneError, SpaceScene } from './scene/types'
 import { spaceColors, type SpaceColors } from './theme'
@@ -195,9 +200,8 @@ export class SpaceRenderer {
   private hoverMode: HoverMode = 'all'
   // The probe: what is under the cursor, and where the cursor is.
   private probe: { hit: Hit; x: number; y: number } | null = null
-  // A hover position waiting for the next frame's pick, and the last one.
+  // A hover position waiting for the next frame's pick.
   private pendingHover: { x: number; y: number } | null = null
-  private lastHover: { x: number; y: number } | null = null
   // The mark the probe was last reported on (hover events fire on a change).
   private hoverObject: string | null = null
   private pins: PinsState = NO_PINS
@@ -212,6 +216,11 @@ export class SpaceRenderer {
   // The point being dragged (by source object) and the cursor to solve for.
   private dragging: { object: string } | null = null
   private pendingDrag: { x: number; y: number } | null = null
+  // The drag was released: solve its last position, then end it.
+  private dragEnding = false
+  // The box and camera target are held (a value played or dragged since the
+  // last resolve).
+  private held = false
 
   constructor(canvas: HTMLCanvasElement, options: SpaceRendererOptions, env: SpaceRendererEnv = browserEnv()) {
     this.canvas = canvas
@@ -267,9 +276,11 @@ export class SpaceRenderer {
         this.pendingDrag = { x, y }
         this.scheduler.request()
       },
-      release: () => {
-        this.dragging = null
-        this.pendingDrag = null
+      release: (x, y) => {
+        if (!this.dragging) return
+        if (x !== null && y !== null) this.pendingDrag = { x, y }
+        this.dragEnding = true
+        this.scheduler.request()
       },
     })
     // A resize redraws at once: ResizeObserver runs after layout and before
@@ -294,7 +305,7 @@ export class SpaceRenderer {
     if (this.disposed) return
     this.dropKernel()
     this.params.setBindings([])
-    this.install(scene, config)
+    this.install(scene, config, true)
     this.scheduler.request()
   }
 
@@ -305,7 +316,20 @@ export class SpaceRenderer {
     this.queueValue(name, value, null)
   }
 
-  private install(scene: SpaceScene, config: SpaceRenderConfig): void {
+  // `fresh`: a new spec or scene (setSpec, setScene), rather than a value
+  // change of the same one.
+  private install(scene: SpaceScene, config: SpaceRenderConfig, fresh = false): void {
+    // Playing or dragging: the box and the camera hold still, so the frame
+    // does not slide under the moving surface; resolved once when it stops.
+    if (!fresh && this.world && this.axes && (this.playing.size > 0 || this.dragging !== null)) {
+      this.held = true
+      this.config = config
+      this.scene = scene
+      this.backend.setScene(scene, this.world, this.colors, { depthcue: config.space.depthcue })
+      this.follow(scene, fresh)
+      return
+    }
+    this.held = false
     this.config = config
     const space = config.space
     const box = resolveBox(space, scene.extent)
@@ -330,15 +354,29 @@ export class SpaceRenderer {
     this.authored = sanitizeView(authored, authored)
     this.axes = frameAxes(space, box)
     this.backend.setScene(scene, world, this.colors, { depthcue: space.depthcue })
-    const { hidden } = colorbarScales(scene)
-    if (hidden > 0) console.info(`space: showing the first 2 colorbars; ${hidden} more colour scale${hidden === 1 ? '' : 's'} not shown`)
+    if (fresh) {
+      const { hidden } = colorbarScales(scene)
+      if (hidden > 0) console.info(`space: showing the first 2 colorbars; ${hidden} more colour scale${hidden === 1 ? '' : 's'} not shown`)
+    }
+    this.follow(scene, fresh)
+  }
+
+  // The colorbars, pins and probe follow a new scene. Pins and the probe are
+  // re-evaluated through its picks (the probe keeps its mark, so no hover
+  // event); a fresh scene drops the probe until the pointer moves again.
+  private follow(scene: SpaceScene, fresh: boolean): void {
     this.updateColorbars()
-    // Pins follow the new scene through its picks; the probe is re-read at
-    // the cursor on the next frame.
     if (this.hoverMode === 'none') this.applyPins({ type: 'clear' })
     else this.applyPins({ type: 'reevaluate', scene })
-    this.setProbe(null)
-    if (this.lastHover && this.hoverMode !== 'none' && !this.dragging) this.pendingHover = this.lastHover
+    const probe = this.probe
+    if (!probe) return
+    const hit = fresh || this.hoverMode === 'none' ? null : reevaluate(probe.hit, scene)
+    if (hit) {
+      this.probe = { ...probe, hit }
+      this.scheduler.request()
+    } else {
+      this.setProbe(null)
+    }
   }
 
   // Build the space kernel from a parsed spec (parseSpec's statements, config
@@ -358,7 +396,9 @@ export class SpaceRenderer {
       this.params.setBindings([])
       return [{ line: 0, message: `space could not build this spec: ${error instanceof Error ? error.message : String(error)}` }]
     }
-    this.install(scene, config)
+    // A pin survives the edit only if its statement's line reads the same.
+    this.applyPins({ type: 'respec', text: (line) => this.sourceLines?.[line - 1] ?? null })
+    this.install(scene, config, true)
     this.params.setBindings(this.kernel.bindings())
     this.syncParams()
     this.scheduler.request()
@@ -419,6 +459,7 @@ export class SpaceRenderer {
     this.looping.clear()
     this.dragging = null
     this.pendingDrag = null
+    this.dragEnding = false
   }
 
   private queueValue(name: string, value: number, source: 'slider' | 'play' | 'drag' | null): void {
@@ -498,18 +539,31 @@ export class SpaceRenderer {
         names.forEach((n, i) => this.pendingValues.set(n, { value: solution.values[i], source: 'drag' }))
       }
     }
+    if (this.dragEnding) {
+      this.dragging = null
+      this.dragEnding = false
+    }
+    let installed = false
     if (this.pendingValues.size > 0) {
-      let next = this.scene
-      for (const [name, { value, source }] of this.pendingValues) {
-        const before = kernel.values().get(name)
-        next = kernel.setValue(name, value)
-        const after = kernel.values().get(name)
-        if (source && after !== undefined && after !== before) this.emit({ type: 'param', name, value: after, source })
+      // Every queued value in one rebuild.
+      const before = kernel.values()
+      const next = kernel.setValues(new Map([...this.pendingValues].map(([name, { value }]) => [name, value])))
+      const after = kernel.values()
+      for (const [name, { source }] of this.pendingValues) {
+        const was = before.get(name)
+        const now = after.get(name)
+        if (source && now !== undefined && now !== was) this.emit({ type: 'param', name, value: now, source })
       }
       this.pendingValues.clear()
-      if (next && next !== this.scene) this.install(next, this.config)
+      if (next !== this.scene) {
+        this.install(next, this.config)
+        installed = true
+      }
       this.syncParams()
     }
+    // Play stopped or the drag ended: the held box is resolved now, once.
+    const still = this.playing.size > 0 || this.dragging !== null
+    if (this.held && !still && !installed && this.scene) this.install(this.scene, this.config)
     return again
   }
 
@@ -530,13 +584,11 @@ export class SpaceRenderer {
   private hoverAt(x: number | null, y: number | null): void {
     if (this.disposed) return
     if (x === null || y === null) {
-      this.lastHover = null
       this.pendingHover = null
       this.setProbe(null)
       return
     }
     if (this.hoverMode === 'none') return
-    this.lastHover = { x, y }
     this.pendingHover = { x, y }
     this.scheduler.request()
   }
@@ -561,7 +613,9 @@ export class SpaceRenderer {
       const s = project(camera, world.toWorld(p.hit.position))
       return { id: p.id, x: s.x, y: s.y }
     })
-    this.applyPins({ type: 'click', x, y, hit: this.pickAt(x, y, camera), markers })
+    const hit = this.pickAt(x, y, camera)
+    const text = hit ? (this.sourceLines?.[hit.source.line - 1] ?? null) : null
+    this.applyPins({ type: 'click', x, y, hit, markers, text })
   }
 
   private applyPins(action: PinAction): void {

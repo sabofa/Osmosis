@@ -23,7 +23,7 @@ describe('the pins reducer', () => {
   it('pins a clicked hit, and reports it', () => {
     const hit = hitAt([1, 2, 3])
     const { state, events } = reducePins(NO_PINS, { type: 'click', x: 100, y: 100, hit, markers: [] })
-    expect(state.pins).toEqual([{ id: 1, hit }])
+    expect(state.pins).toEqual([{ id: 1, hit, text: null }])
     expect(events).toEqual([{ type: 'pin', action: 'add', hit }])
     // A click on nothing adds nothing.
     expect(reducePins(state, { type: 'click', x: 300, y: 300, hit: null, markers: [{ id: 1, x: 100, y: 100 }] }).state).toBe(state)

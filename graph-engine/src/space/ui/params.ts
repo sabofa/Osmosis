@@ -36,6 +36,24 @@ export function sliderStep(binding: Binding): number {
   return (binding.max - binding.min) / 1000
 }
 
+// How many decimals a step is written with: 0.25 -> 2, 0.1 -> 1, 5 -> 0.
+export function stepDecimals(step: number): number {
+  for (let d = 0; d <= 10; d++) {
+    const scaled = step * 10 ** d
+    if (Math.abs(scaled - Math.round(scaled)) < 1e-9 * Math.max(1, scaled)) return d
+  }
+  return 10
+}
+
+// What the number box shows: an integer binding as an integer, a stepped one
+// to its step's decimals, a continuous one to 4 significant digits. Plain
+// ASCII (no U+2212 minus), so the number input accepts it.
+export function displayValue(binding: Binding, value: number): string {
+  if (binding.integer) return String(Math.round(value))
+  if (binding.step !== null && binding.step > 0) return value.toFixed(stepDecimals(binding.step))
+  return String(Number(value.toPrecision(4)))
+}
+
 export class ParamsPanel {
   readonly element: HTMLDivElement
   private readonly handlers: ParamsHandlers
@@ -123,8 +141,9 @@ export class ParamsPanel {
     for (const row of this.rows) {
       const s = state.get(row.binding.name)
       if (!s) continue
-      const text = String(s.value)
-      if (row.slider.value !== text) row.slider.value = text
+      const slide = String(s.value)
+      const text = displayValue(row.binding, s.value)
+      if (row.slider.value !== slide) row.slider.value = slide
       if (!row.editing && row.number.value !== text) row.number.value = text
       const play = s.playing ? '❚❚' : '▶'
       if (row.play.textContent !== play) row.play.textContent = play

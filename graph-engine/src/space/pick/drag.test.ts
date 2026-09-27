@@ -118,3 +118,25 @@ describe('solveDrag', () => {
     expect(solution.values[0]).toBeCloseTo(2, 6)
   })
 })
+
+describe('solveDrag with a parameter the point does not depend on here', () => {
+  it('P = (rad cos ang, rad sin ang, 0) at rad = 0 still moves rad (ang has a zero column there)', () => {
+    // (r and t are reserved binding names.)
+    const parsed = parseSpec('@param rad = 0 range [0, 3]\n@param ang = 0 range [-3.2, 3.2]\nP = (rad cos(ang), rad sin(ang), 0)')
+    const [p] = createSpaceKernel(parsed.statements, parsed.config, parsed.statementLines)
+      .scene()
+      .marks.filter((m): m is PointMark => m.kind === 'points')
+    expect(Array.from(p.drag!.jacobian(Float64Array.from([0, 0])))).toEqual([1, -0, 0, 0, 0, 0])
+    const box: Box3 = { x: { min: -3, max: 3 }, y: { min: -3, max: 3 }, z: { min: -1, max: 1 } }
+    const world = worldMap(box, [1, 1, 0.7])
+    const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, { width: 800, height: 600 }, 'orthographic')
+    const cursor = project(camera, world.toWorld([1, 0, 0]))
+    const solution = solveDrag(p.drag!, [0, 0], cursor, camera, world, [
+      { min: 0, max: 3 },
+      { min: -3.2, max: 3.2 },
+    ])
+    expect(solution.values[0]).toBeCloseTo(1, 6)
+    expect(solution.values[1]).toBeCloseTo(0, 6)
+  })
+})
+

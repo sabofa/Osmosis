@@ -526,15 +526,15 @@ P = (a, b, a^2 + b^2)`
 
   it('coalesces 10 slider inputs in one frame into one setValue, with the last value', () => {
     const { clock, events, row, kernel, r } = live()
-    const setValue = vi.spyOn(kernel(), 'setValue')
+    const setValues = vi.spyOn(kernel(), 'setValues')
     const { slider } = row(0)
     for (let i = 1; i <= 10; i++) {
       slider.value = String(i / 10)
       slider.dispatch('input')
     }
-    expect(setValue).not.toHaveBeenCalled()
+    expect(setValues).not.toHaveBeenCalled()
     clock.flush()
-    expect(setValue.mock.calls).toEqual([['a', 1]])
+    expect(setValues.mock.calls).toEqual([[new Map([['a', 1]])]])
     expect(events.filter((e) => e.type === 'param')).toEqual([{ type: 'param', name: 'a', value: 1, source: 'slider' }])
     r.dispose()
   })
@@ -626,6 +626,210 @@ P = (a, a^2, 0)`
     expect(r.getView()).toEqual(view)
     expect((r['kernel'] as SpaceKernel).values().get('a')).toBeCloseTo(1, 6)
     r.dispose()
+  })
+})
+
+describe('SpaceRenderer: value changes, the probe, pins and the box', () => {
+  const SPEC = `@param a = 1 range [0.5, 2]
+z = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]
+P = (a, 0, 0)`
+
+  function live(spec = SPEC) {
+    const fake = createFakeGl()
+    const { canvas, parent, doc } = mount(fake)
+    const clock = fakeEnv()
+    const events: SpaceEvent[] = []
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light', onEvent: (e) => events.push(e) }, clock.env)
+    const load = (text: string, withSource = true) => {
+      const parsed = parseSpec(text)
+      r.setSpec(parsed.statements, parsed.config, parsed.statementLines, withSource ? text : undefined)
+      clock.flush()
+    }
+    load(spec)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const readouts = () => overlay.children.filter((c) => c.className === 'space-readout')
+    const value = (box: FakeElement, label: string) => {
+      const rows = box.children[1].children
+      const i = rows.findIndex((c) => c.textContent === label)
+      return i >= 0 ? rows[i + 1].textContent : undefined
+    }
+    const pointer = (type: string, x: number, y: number, buttons: number) =>
+      canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
+    const panel = overlay.children.find((c) => c.className === 'space-params')!
+    const play = () => panel.children[0].children[3].dispatch('click')
+    return { fake, canvas, doc, clock, events, r, load, overlay, readouts, value, pointer, play }
+  }
+
+  it('re-reads the probe through each new scene during play: one hover event, no re-pick', () => {
+    const { clock, events, r, readouts, value, pointer, play } = live()
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    const first = value(readouts()[0], 'z')
+    play()
+    for (let i = 0; i < 10; i++) clock.flush()
+    expect(events.filter((e) => e.type === 'hover')).toHaveLength(1)
+    // The same (x, y) on the surface, the new z.
+    expect(value(readouts()[0], 'z')).not.toBe(first)
+    expect(r['pendingHover']).toBeNull()
+    r.dispose()
+  })
+
+  it('holds the box and the camera target still while playing, and resolves them once when play stops', () => {
+    const { clock, r, play } = live()
+    const before = r['world']
+    const target = r.getView().target
+    play()
+    for (let i = 0; i < 10; i++) {
+      clock.flush()
+      expect(r['world']).toBe(before)
+      expect(r.getView().target).toEqual(target)
+    }
+    // Stopped by hand, with no value change in that frame: resolved once.
+    // (a started over at 0.5 and has barely moved: z tops out near 6, not 8.)
+    play()
+    clock.flush()
+    expect(r['world']).not.toBe(before)
+    expect(r['world']!.box.z.max).toBeLessThan(before!.box.z.max)
+    // a runs 0.5 -> 2 over 6 s: played to the end, the box follows a = 2.
+    play()
+    let frames = 0
+    while (clock.pending() > 0 && frames++ < 1000) clock.flush()
+    // z reaches 2 * 4 + 4 = 12, past the first box's top.
+    expect(r['world']!.box.z.max).toBeGreaterThanOrEqual(12)
+    expect(before!.box.z.max).toBeLessThan(12)
+    r.dispose()
+  })
+
+  it('moves a pin with a value change (the pin on the surface reads the new z)', () => {
+    const { clock, r, readouts, value, pointer } = live()
+    pointer('pointerdown', 400, 300, 1)
+    pointer('pointerup', 400, 300, 0)
+    clock.flush()
+    const pinned = () => readouts().find((b) => b.dataset.pinned === 'true')!
+    const x = Number(value(pinned(), 'x')!.replace('−', '-'))
+    const y = Number(value(pinned(), 'y')!.replace('−', '-'))
+    r.setValue('a', 2)
+    clock.flush()
+    const z = Number(value(pinned(), 'z')!.replace('−', '-'))
+    // z = 2 x^2 + y^2 at the pinned (x, y), to the readout's 4 digits.
+    expect(z).toBeCloseTo(2 * x * x + y * y, 2)
+    r.dispose()
+  })
+
+  it('solves a drag once more at its release, so a last move with no frame after it is not lost', () => {
+    const { clock, r, pointer } = live()
+    const camera = r['camera']()!
+    const world = r['world']!
+    const at = (p: readonly [number, number, number]) => project(camera, world.toWorld(p))
+    const start = at([1, 0, 0])
+    const end = at([1.6, 0, 0])
+    pointer('pointerdown', start.x, start.y, 1)
+    pointer('pointermove', (start.x + end.x) / 2, (start.y + end.y) / 2, 1)
+    pointer('pointerup', end.x, end.y, 0)
+    clock.flush()
+    expect((r['kernel'] as SpaceKernel).values().get('a')).toBeCloseTo(1.6, 6)
+    expect(r['dragging']).toBeNull()
+    r.dispose()
+  })
+
+  it('notes extra colour scales once per spec, not per value change, and keeps an unchanged colorbar', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const spec = `@param a = 1 range [0.5, 2]
+z = x^2 for x in [-2, 2], y in [-2, 2]
+z = y^2 for x in [-2, 2], y in [-2, 2]
+z = x y for x in [-2, 2], y in [-2, 2]
+P = (a, 0, 0)`
+    const { clock, r, overlay } = live(spec)
+    expect(info).toHaveBeenCalledTimes(1)
+    const bars = overlay.children.find((c) => c.className === 'space-colorbars')!
+    const block = bars.children[0]
+    for (const v of [1.2, 1.4, 1.6]) {
+      r.setValue('a', v)
+      clock.flush()
+    }
+    expect(info).toHaveBeenCalledTimes(1)
+    // P moved; the surfaces and their colorbars did not: the same DOM.
+    expect(bars.children[0]).toBe(block)
+    info.mockRestore()
+    r.dispose()
+  })
+
+  it('keeps a pin across a spec edit only while its statement line reads the same', () => {
+    const { clock, r, load, readouts, pointer } = live()
+    const pinned = () => readouts().filter((b) => b.dataset.pinned === 'true')
+    pointer('pointerdown', 400, 300, 1)
+    pointer('pointerup', 400, 300, 0)
+    clock.flush()
+    expect(pinned()).toHaveLength(1)
+    // A line appended: the surface is still line 2 with the same text.
+    load(`${SPEC}\nQ = (0, 0, 1)`)
+    expect(pinned()).toHaveLength(1)
+    // A surface inserted above: line 2 (object s2, which the pin was on) is
+    // now ANOTHER graph surface, which re-evaluation alone would reattach the
+    // pin to. The pin is dropped instead.
+    const lines = SPEC.split('\n')
+    load([lines[0], 'z = x^2 - y^2 for x in [-2, 2], y in [-2, 2]', ...lines.slice(1)].join('\n'))
+    expect(pinned()).toHaveLength(0)
+    r.dispose()
+  })
+
+  it('drops pins across a spec set with no source text (their lines cannot be checked)', () => {
+    const { clock, load, readouts, pointer, r } = live()
+    const pinned = () => readouts().filter((b) => b.dataset.pinned === 'true')
+    const pin = () => {
+      pointer('pointerdown', 400, 300, 1)
+      pointer('pointerup', 400, 300, 0)
+      clock.flush()
+    }
+    pin()
+    load(SPEC, false)
+    expect(pinned()).toHaveLength(0)
+    // Pinned with no source text, then the same spec with it: still dropped.
+    pin()
+    expect(pinned()).toHaveLength(1)
+    load(SPEC)
+    expect(pinned()).toHaveLength(0)
+    r.dispose()
+  })
+
+  it('rebuilds a two-parameter dragged point once per frame', async () => {
+    const { registerBuilder } = await import('./kernel/registry')
+    const { POINT } = await import('./kernel/primitives')
+    let builds = 0
+    registerBuilder('point', {
+      ...POINT,
+      prepare: (statement, context) => {
+        const prepared = POINT.prepare(statement, context)
+        return {
+          reads: prepared.reads,
+          build: () => {
+            builds++
+            return prepared.build()
+          },
+        }
+      },
+    })
+    try {
+      const spec = `@param a = 0.8 range [-2, 2]
+@param b = 0.6 range [-2, 2]
+P = (a, b, a^2 + b^2)`
+      const { clock, r, pointer } = live(spec)
+      const camera = r['camera']()!
+      const world = r['world']!
+      const at = (p: readonly [number, number, number]) => project(camera, world.toWorld(p))
+      const start = at([0.8, 0.6, 1])
+      const end = at([0.9, 0.7, 1.3])
+      pointer('pointerdown', start.x, start.y, 1)
+      builds = 0
+      pointer('pointermove', end.x, end.y, 1)
+      clock.flush()
+      // a and b both changed; P was built once.
+      expect((r['kernel'] as SpaceKernel).values().get('b')).toBeCloseTo(0.7, 6)
+      expect(builds).toBe(1)
+      r.dispose()
+    } finally {
+      registerBuilder('point', POINT)
+    }
   })
 })
 

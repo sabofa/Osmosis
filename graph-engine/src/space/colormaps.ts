@@ -102,9 +102,24 @@ function quantise(c: Rgb, minL: number): { bytes: [number, number, number]; L: n
   return best!
 }
 
+// Tables made so far, by (map, theme, background): a table is never
+// modified after it is made, so every caller shares it.
+const TABLES = new Map<string, Uint8Array>()
+
 // The map as 256 RGBA8 entries, entry i at t = i / 255, alpha 255. A
 // sequential map's entries never decrease in Oklab lightness (quantise).
+// Shared and read-only: callers must not write into it.
 export function colormapTable(name: ColormapName, theme: ColormapTheme): Uint8Array {
+  const key = `${name}|${theme.theme}|${theme.background.join(',')}`
+  let table = TABLES.get(key)
+  if (!table) {
+    table = buildTable(name, theme)
+    TABLES.set(key, table)
+  }
+  return table
+}
+
+function buildTable(name: ColormapName, theme: ColormapTheme): Uint8Array {
   const anchors = colormapAnchors(name, theme)
   const monotone = !isDiverging(name)
   const out = new Uint8Array(TABLE_SIZE * 4)

@@ -182,3 +182,11 @@ function evalGlsl(source: string, vars: Record<string, number>): number {
   if (i !== tokens.length) throw new Error(`trailing tokens in ${source}`)
   return value
 }
+
+describe('colormapTable is made once per (map, theme)', () => {
+  it('returns the same table for the same map and theme, and another for another theme', () => {
+    expect(colormapTable('viridis', LIGHT)).toBe(colormapTable('viridis', LIGHT))
+    expect(colormapTable('balance', LIGHT)).not.toBe(colormapTable('balance', DARK))
+  })
+})
+

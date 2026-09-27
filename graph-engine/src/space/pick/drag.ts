@@ -19,6 +19,11 @@ export const DRAG_MAX_ITERATIONS = 8
 const LAMBDA_START = 1e-6
 const LAMBDA_UP = 10
 const LAMBDA_DOWN = 10
+// A floor on the damping, relative to the largest diagonal of J^T J, so a
+// parameter the point does not depend on here (a zero column of J: r at
+// r = 0 for (r cos t, r sin t, 0)) leaves the system solvable and simply does
+// not move, instead of freezing the other.
+const DAMPING_FLOOR = 1e-9
 
 export interface ScreenJacobian {
   x: number
@@ -86,14 +91,15 @@ export function solveDrag(
     const A = (a: number, b: number) => J[a] * J[b] + J[k + a] * J[k + b]
     const g = (a: number) => J[a] * current.r[0] + J[k + a] * current.r[1]
     let step: number[] | null
+    const floor = DAMPING_FLOOR * Math.max(A(0, 0), k === 2 ? A(1, 1) : 0)
     if (k === 1) {
-      const a = A(0, 0) * (1 + lambda)
+      const a = A(0, 0) * (1 + lambda) + floor
       step = a > 0 ? [-g(0) / a] : null
     } else {
       step = solve2(
         [
-          [A(0, 0) * (1 + lambda), A(0, 1)],
-          [A(1, 0), A(1, 1) * (1 + lambda)],
+          [A(0, 0) * (1 + lambda) + floor, A(0, 1)],
+          [A(1, 0), A(1, 1) * (1 + lambda) + floor],
         ],
         [-g(0), -g(1)],
       )

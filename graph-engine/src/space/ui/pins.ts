@@ -8,6 +8,10 @@
 // - Esc clears every pin.
 // - After the scene changes, every pin is re-evaluated through the new
 //   scene's picks (pick/reevaluate.ts); a pin whose mark is gone is dropped.
+// - A pin remembers the source line of the statement it is on; after a spec
+//   edit it survives only if that line's text is unchanged ('respec'), so an
+//   edit that renumbers statements drops it rather than reattaching it to
+//   whatever now sits at its line.
 // - Pins are view state, not source: they are reported as events.
 
 import { reevaluate } from '../pick/reevaluate'
@@ -33,6 +37,8 @@ export function isClick(down: PointerMark, up: PointerMark): boolean {
 export interface Pin {
   id: number
   hit: Hit
+  // The text of its statement's source line when pinned, or null when not known.
+  text: string | null
 }
 
 export interface PinsState {
@@ -50,9 +56,12 @@ export interface PinEvent {
 
 export type PinAction =
   // `markers`: where each pin's marker is on screen now, CSS px.
-  | { type: 'click'; x: number; y: number; hit: Hit | null; markers: readonly { id: number; x: number; y: number }[] }
+  // `text`: the hit statement's source line, when known.
+  | { type: 'click'; x: number; y: number; hit: Hit | null; markers: readonly { id: number; x: number; y: number }[]; text?: string | null }
   | { type: 'clear' }
   | { type: 'reevaluate'; scene: SpaceScene }
+  // The spec changed: `text(line)` is the new text of a source line.
+  | { type: 'respec'; text: (line: number) => string | null }
 
 export function reducePins(state: PinsState, action: PinAction): { state: PinsState; events: PinEvent[] } {
   switch (action.type) {
@@ -68,7 +77,7 @@ export function reducePins(state: PinsState, action: PinAction): { state: PinsSt
         return { state: { ...state, pins: state.pins.filter((p) => p !== removed) }, events: [{ type: 'pin', action: 'remove', hit: removed.hit }] }
       }
       if (!action.hit) return { state, events: [] }
-      const pin: Pin = { id: state.nextId, hit: action.hit }
+      const pin: Pin = { id: state.nextId, hit: action.hit, text: action.text ?? null }
       return { state: { pins: [...state.pins, pin], nextId: state.nextId + 1 }, events: [{ type: 'pin', action: 'add', hit: action.hit }] }
     }
     case 'clear':
@@ -79,9 +88,14 @@ export function reducePins(state: PinsState, action: PinAction): { state: PinsSt
       const pins: Pin[] = []
       for (const p of state.pins) {
         const hit = reevaluate(p.hit, action.scene)
-        if (hit) pins.push({ id: p.id, hit })
+        if (hit) pins.push({ ...p, hit })
       }
       return { state: { ...state, pins }, events: [] }
+    }
+    case 'respec': {
+      if (state.pins.length === 0) return { state, events: [] }
+      const pins = state.pins.filter((p) => p.text !== null && p.text === action.text(p.hit.source.line))
+      return pins.length === state.pins.length ? { state, events: [] } : { state: { ...state, pins }, events: [] }
     }
   }
 }

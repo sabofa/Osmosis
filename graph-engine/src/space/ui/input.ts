@@ -219,7 +219,9 @@ export interface InputHandlers {
   // and its moves and release go to dragTo and release instead of the camera.
   grab?(x: number, y: number): boolean
   dragTo?(x: number, y: number): void
-  release?(): void
+  // The drag ended: at (x, y) on a release, or with no position when the
+  // pointer was cancelled or lost.
+  release?(x: number | null, y: number | null): void
 }
 
 export interface AttachedInput {
@@ -297,14 +299,14 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     const view = machine.move(sample(e), ctx)
     if (view) handlers.apply(view)
   }
-  const letGo = (id: number) => {
+  const letGo = (id: number, at: { x: number; y: number } | null) => {
     if (grabbed !== id) return false
     grabbed = null
-    handlers.release?.()
+    handlers.release?.(at?.x ?? null, at?.y ?? null)
     return true
   }
   const up = (e: PointerEvent) => {
-    if (letGo(e.pointerId)) return
+    if (grabbed === e.pointerId && letGo(e.pointerId, local(e))) return
     const s = sample(e)
     const velocity = machine.up(s, handlers.prefersReducedMotion())
     if (velocity) handlers.startInertia(velocity)
@@ -314,12 +316,12 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
   }
   const cancel = (e: PointerEvent) => {
     pressed = null
-    if (letGo(e.pointerId)) return
+    if (letGo(e.pointerId, null)) return
     machine.cancel()
   }
   const leave = () => handlers.leave?.()
   const lost = (e: PointerEvent) => {
-    if (letGo(e.pointerId)) return
+    if (letGo(e.pointerId, null)) return
     machine.lose(e.pointerId)
   }
   const wheel = (e: WheelEvent) => {

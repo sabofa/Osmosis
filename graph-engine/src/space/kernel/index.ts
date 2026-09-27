@@ -166,15 +166,24 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     bindings: () => bindings,
     values: () => new Map(bindings.map((b) => [b.name, scope.params.values[scope.params.index.get(b.name)!]])),
     setValue(name, value) {
-      const slot = scope.params.index.get(name)
-      const binding = bindings.find((b) => b.name === name)
-      if (slot === undefined || !binding || !Number.isFinite(value)) return current
-      let next = binding.integer ? roundHalfAway(value) : value
-      next = Math.min(binding.max, Math.max(binding.min, next))
-      if (next === scope.params.values[slot]) return current
-      scope.params.values[slot] = next
+      return kernel.setValues(new Map([[name, value]]))
+    },
+    setValues(values) {
+      const changed = new Set<string>()
+      for (const [name, value] of values) {
+        const slot = scope.params.index.get(name)
+        const binding = bindings.find((b) => b.name === name)
+        if (slot === undefined || !binding || !Number.isFinite(value)) continue
+        let next = binding.integer ? roundHalfAway(value) : value
+        next = Math.min(binding.max, Math.max(binding.min, next))
+        if (next === scope.params.values[slot]) continue
+        scope.params.values[slot] = next
+        changed.add(name)
+      }
+      if (changed.size === 0) return current
+      // Each statement that reads any changed binding rebuilds once.
       for (const record of records) {
-        if (!record.reads.has(name)) continue
+        if (![...changed].some((name) => record.reads.has(name))) continue
         record.result = run(record.prepared, record.line)
         record.moved.clear()
       }

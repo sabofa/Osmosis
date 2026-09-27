@@ -18,6 +18,11 @@ export interface SpaceKernel {
   // integer binding) and return the rebuilt scene. Statements that do not
   // read `name` keep their marks by identity.
   setValue(name: string, value: number): SpaceScene
+  // Set several bindings at once (S3: a two-parameter drag, a frame's worth
+  // of slider changes): every value is written first, then each statement
+  // that reads any of them is rebuilt once. Unknown names and non-finite
+  // values are ignored, as in setValue.
+  setValues(values: ReadonlyMap<string, number>): SpaceScene
 }
 
 // `lines[i]` is the 1-based source line of `statements[i]` (parseSpec knows

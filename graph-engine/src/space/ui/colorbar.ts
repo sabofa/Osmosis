@@ -9,6 +9,8 @@ import type { ColorbarModel } from './colorbarModel'
 export class Colorbars {
   readonly element: HTMLDivElement
   private blocks: HTMLElement[] = []
+  // What is shown, so an identical update touches no DOM.
+  private shown = ''
 
   constructor(overlay: HTMLElement) {
     this.element = overlay.ownerDocument.createElement('div')
@@ -17,6 +19,9 @@ export class Colorbars {
   }
 
   update(models: readonly ColorbarModel[]): void {
+    const key = JSON.stringify(models.map((m) => [m.title, m.gradient, m.ticks.map((t) => [t.text, t.position, t.zero])]))
+    if (key === this.shown) return
+    this.shown = key
     const doc = this.element.ownerDocument
     for (const b of this.blocks) b.remove()
     this.blocks = []
