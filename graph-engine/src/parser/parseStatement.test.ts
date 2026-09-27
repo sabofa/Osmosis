@@ -1304,3 +1304,11 @@ describe('measures in space (phase 10, M3, M5 and M6)', () => {
     expect(parseStatement('P, Q = common perpendicular line A-G and line B-F')).toMatchObject({ body: { first: ['A', 'G'], second: ['B', 'F'] } })
   })
 })
+
+describe('marks with no vertex are refused (phase 10, M8)', () => {
+  it('refuses an angle mark between two lines, pointing at the table and at the foot', () => {
+    expect(() => parseStatement('angle: between A-B and C-D')).toThrow(/no vertex to draw its mark at.*"given: angle between A-B and C-D".*"angle: A-P-F"/)
+    // The ordinary mark still parses.
+    expect(parseStatement('angle: A-B-C label: 30°')).toMatchObject({ kind: 'angle', from: 'A', vertex: 'B', to: 'C', label: '30°' })
+  })
+})

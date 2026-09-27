@@ -42,6 +42,7 @@ import {
   angle3,
   dihedral3,
   distance3,
+  midpoint3,
   lineAngle3,
   lineLineDistance,
   linePlaneAngle3,
@@ -50,12 +51,23 @@ import {
   type Plane3,
 } from './construct3d'
 import { segmentSpans, type Span } from './occlusion'
-import { cameraFor, drawClosedEdges, drawEdge, edgeExtremes, edgeObject, type Camera, type ProjectedEdge, type Vec3 } from './project3d'
+import {
+  cameraFor,
+  drawClosedEdges,
+  drawEdge,
+  edgeExtremes,
+  edgeObject,
+  type Camera,
+  type ProjectedArc,
+  type ProjectedEdge,
+  type Vec3,
+} from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
 import { authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
-import { ellipseFromConjugates, projectCircle, type ProjectedCircle } from './silhouette'
+import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
+import { angleArc, angleFrame, arcBisector, arcMiddle, markHidden, projectArc, rightAngleCorners } from './spaceMarks'
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
 import {
   fmt,
@@ -182,8 +194,26 @@ type FigureItem =
   // avoidance.
   | { kind: 'region'; id: Identity; edges: ProjectedEdge[]; color: string | null }
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
-  | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
+  // `hidden` only for a tick on a segment in space (phase 10, M4): the
+  // endpoints are then the segment's projected ends, and the tick is drawn
+  // in the picture plane by the 2D convention.
+  | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; hidden?: boolean; color: string | null }
   | { kind: 'rightAngleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; color: string | null }
+  // Phase 10 (M1) — an angle's arc on points in space: a circle arc in the
+  // angle's own plane, already projected to an elliptical arc. `hidden` is
+  // M4's whole-mark decision. `text` is an "angle: … label:" caption, hung
+  // on the arc's middle (projected) and pushed along the projected bisector.
+  | {
+      kind: 'spaceArc'
+      id: Identity
+      edge: ProjectedArc
+      hidden: boolean
+      text: { at: Vec2; push: Vec2 | null; label: string } | null
+      color: string | null
+    }
+  // Phase 10 (M1) — a right angle's square in space, projected: its three
+  // outer corners, the "L" the plane draws.
+  | { kind: 'spaceRightAngle'; id: Identity; points: [Vec2, Vec2, Vec2]; hidden: boolean; color: string | null }
   // A measure label draws no geometry of its own: it is text (possibly
   // carrying notation) hung off a piece of geometry that is already drawn.
   // `at` is where it belongs in world space and `push` is the direction it
@@ -711,7 +741,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       // S7 — the refusal is legible, not "unknown": the point exists, in
       // space, and this statement only draws in the plane.
       throw new Error(
-        `"${name}" is a point in space, and this draws only in the plane — angle marks, ticks, polygons and circles in space are not drawn yet`
+        `"${name}" is a point in space, and this draws only in the plane — polygons, triangles, circles and arcs in space are not drawn`
       )
     }
     if (!point) throw new Error(`Unknown point "${name}" — define it with a point statement (e.g. "${name} = (x, y)") or as a polygon vertex first`)
@@ -796,6 +826,44 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       })
     }
   }
+
+  // Phase 10 (M1, M4) — the arc of angle from-vertex-to on points in space,
+  // as an item: built in the angle's plane, projected, and hidden or not as
+  // a whole by its middle. `names` are the author's, for the refusals.
+  function spaceArcItem(
+    index: number,
+    [from, vertex, to]: Vec3[],
+    names: { from: string; vertex: string; to: string },
+    label: string | null,
+    color: string | null
+  ): Extract<FigureItem, { kind: 'spaceArc' }> {
+    const arc = angleArc(angleFrame(vertex, from, to, names))
+    const hidden = markHidden(arcMiddle(arc), occluders, camera)
+    return {
+      kind: 'spaceArc',
+      id: { statement: index, object: names.vertex },
+      edge: projectArc(arc, camera, names.vertex, hidden),
+      hidden,
+      text: label === null ? null : { at: camera.project(arcMiddle(arc)), push: viewDirection(arcBisector(arc)), label },
+      color,
+    }
+  }
+
+  // A direction in space as the label layout wants it: projected, unit, in
+  // VIEW space (y flipped, as awayFrom does). Null when the camera looks
+  // along it.
+  function viewDirection(direction: Vec3): Vec2 | null {
+    const p = projectVector(camera, direction)
+    const length = Math.hypot(p.x, p.y)
+    if (length <= GEOM_EPS) return null
+    return { x: p.x / length, y: -p.y / length }
+  }
+
+  // M7 / the dedupe below: an angle mark in space, keyed by its vertex and
+  // its unordered arms, so "label: angle GBA" beside "angle: A-B-G" does not
+  // draw the arc twice.
+  const spaceAngleMarks = new Set<string>()
+  const angleKey = (from: string, vertex: string, to: string) => `${vertex}:${[from, to].sort().join(',')}`
 
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
@@ -1020,7 +1088,15 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           }
           break
         }
-        case 'angle':
+        case 'angle': {
+          // Phase 10 (M1) — on points in space, the arc in the angle's plane.
+          const names = { from: statement.from, vertex: statement.vertex, to: statement.to }
+          const space = resolveSpace([statement.from, statement.vertex, statement.to], `angle: ${statement.from}-${statement.vertex}-${statement.to}`)
+          if (space) {
+            items.push(spaceArcItem(index, space, names, statement.label, statement.color))
+            spaceAngleMarks.add(angleKey(statement.from, statement.vertex, statement.to))
+            break
+          }
           items.push({
             kind: 'angleMark',
             id: { statement: index, object: statement.vertex },
@@ -1031,6 +1107,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             color: statement.color,
           })
           break
+        }
         case 'circleShape': {
           const arc = arcOf(statement, resolve, resolveCircle)
           items.push({
@@ -1077,10 +1154,42 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           })
           break
         }
-        case 'tick':
+        case 'tick': {
+          // Phase 10 (M1, M4) — on a segment in space, drawn in the picture
+          // plane at the projected segment, hidden or not by its midpoint.
+          const space = resolveSpace([statement.from, statement.to], `tick: ${statement.from}-${statement.to}`)
+          if (space) {
+            const hidden = markHidden(midpoint3(space[0], space[1]), occluders, camera)
+            items.push({ kind: 'tickMark', id, from: camera.project(space[0]), to: camera.project(space[1]), count: statement.count, hidden, color: statement.color })
+            break
+          }
           items.push({ kind: 'tickMark', id, from: resolve(statement.from), to: resolve(statement.to), count: statement.count, color: statement.color })
           break
-        case 'rightAngle':
+        }
+        case 'rightAngle': {
+          // Phase 10 (M1, M2) — on points in space, a square in the angle's
+          // plane, and only on an angle that IS right: a projected square
+          // cannot be checked by eye, so it would state something false.
+          // "@scale: false" lifts the check, as it lifts every assertion.
+          const space = resolveSpace([statement.from, statement.vertex, statement.to], `right-angle: ${statement.from}-${statement.vertex}-${statement.to}`)
+          if (space) {
+            const frame = angleFrame(space[1], space[0], space[2], { from: statement.from, vertex: statement.vertex, to: statement.to })
+            const degrees = (frame.angle * 180) / Math.PI
+            if (config.toScale && Math.abs(degrees - 90) > GEOM_EPS * 90) {
+              throw new Error(`${statement.from}-${statement.vertex}-${statement.to} is not a right angle — its true angle is ${formatMeasure(degrees)}°`)
+            }
+            const [vertex, onFrom, corner, onTo] = rightAngleCorners(frame)
+            // M4 — judged at the square's centre.
+            const hidden = markHidden(midpoint3(vertex, corner), occluders, camera)
+            items.push({
+              kind: 'spaceRightAngle',
+              id: { statement: index, object: statement.vertex },
+              points: [camera.project(onFrom), camera.project(corner), camera.project(onTo)],
+              hidden,
+              color: statement.color,
+            })
+            break
+          }
           items.push({
             kind: 'rightAngleMark',
             id: { statement: index, object: statement.vertex },
@@ -1090,6 +1199,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             color: statement.color,
           })
           break
+        }
         case 'measureLabel':
           measureStatements.push({ statement, index })
           break
@@ -1142,15 +1252,20 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             ? resolveSpace([subject.from, subject.vertex, subject.to], subjectName(subject))
             : null
       if (space && subject.kind === 'angle') {
-        // An angle label with no drawn arc floats. Angle marks in space are
-        // build step 10; until then the true angle lives in the givens table.
-        const names = `${subject.from}${subject.vertex}${subject.to}`
-        throw new Error(
-          `"label: angle ${names}" names points in space, where there is no angle mark to hang a label on yet — ` +
-            `write "given: angle ${names}" to put its true measure in the givens table`
-        )
-      }
-      if (space) {
+        // M7 — the label draws M1's arc (once: not again beside an "angle:"
+        // statement for the same angle) and hangs on the arc's middle,
+        // pushed outward along the bisector in space, then projected.
+        const arc = spaceArcItem(index, space, { from: subject.from, vertex: subject.vertex, to: subject.to }, null, statement.color)
+        const key = angleKey(subject.from, subject.vertex, subject.to)
+        if (!spaceAngleMarks.has(key)) {
+          items.push(arc)
+          spaceAngleMarks.add(key)
+        }
+        const frame = angleArc(angleFrame(space[1], space[0], space[2], { from: subject.from, vertex: subject.vertex, to: subject.to }))
+        at = camera.project(arcMiddle(frame))
+        push = viewDirection(arcBisector(frame))
+        computed = inAngleUnit(angle3(space[1], space[0], space[2], subjectName(subject)), config)
+      } else if (space) {
         // S4 — a segment between points in space prints its TRUE length, and
         // its label is placed by the solid-dimension path (leader-capable),
         // fed the projected endpoints: it sits among a solid's edges exactly
@@ -1395,6 +1510,12 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'rightAngleMark':
         points.push(item.vertex)
         break
+      case 'spaceArc':
+        points.push(...edgeExtremes(item.edge))
+        break
+      case 'spaceRightAngle':
+        points.push(...item.points)
+        break
       case 'tickMark':
         points.push(item.from, item.to)
         break
@@ -1446,6 +1567,11 @@ function nearestOnRect(rect: Rect, p: Vec2): Vec2 {
     x: Math.max(rect.x, Math.min(p.x, rect.x + rect.width)),
     y: Math.max(rect.y, Math.min(p.y, rect.y + rect.height)),
   }
+}
+
+// M4 — a hidden mark is dashed and faded like a hidden edge.
+function hiddenMark(): SvgAttrs {
+  return { 'stroke-dasharray': AUXILIARY_DASH, opacity: AUXILIARY_OPACITY }
 }
 
 function identity(id: Identity): SvgAttrs {
@@ -1675,6 +1801,13 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // across its own angle arc is unreadable. Pushing sets where the label
       // starts looking; this is what stops it landing on the ink.
       obstacles.circles.push({ center: projection.toView(item.vertex), radius: angleArcRadius(item, projection) })
+    } else if (item.kind === 'spaceArc') {
+      // Bounded by the chords between its exact extremes, as a solid's arc.
+      const points = edgeExtremes(item.edge).map((point) => projection.toView(point))
+      for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
+    } else if (item.kind === 'spaceRightAngle') {
+      const [a, b, c] = item.points.map((point) => projection.toView(point))
+      obstacles.segments.push([a, b], [b, c])
     } else if (item.kind === 'solid' || item.kind === 'region' || (item.kind === 'sectionFace' && item.outline.kind === 'region')) {
       // An arc is an obstacle too, approximated for the label layout by the
       // chords between its exact extremes — a bound on where the ink is, not
@@ -1974,8 +2107,45 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const gap = Math.min(TICK_GAP, segLength * TICK_MAX_FRACTION)
       const stroke = strokeColor(item.color, palette.axis, palette)
       for (const [a, b] of tickMarkSegments(from, target, item.count, length, gap)) {
+        // M4 — a tick on a hidden stretch of a segment in space is dashed
+        // like a hidden edge, beneath the visible lines. Plane ticks carry no
+        // `hidden` and keep their bytes.
+        if (item.hidden) {
+          layers.auxiliary.push(svgLine(a, b, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...hiddenMark(), ...identity(item.id) }))
+          continue
+        }
         layers.marks.push(svgLine(a, b, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...identity(item.id) }))
       }
+      break
+    }
+    case 'spaceArc': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      const style: SvgAttrs = { stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) }
+      layers[item.hidden ? 'auxiliary' : 'marks'].push(drawEdge(item.edge, projection.toView, projection.scale, style))
+      if (item.text) {
+        // As the plane writes an "angle: … label:" caption: a font size out
+        // from the arc, along the bisector.
+        const anchor = to(item.text.at)
+        const push = item.text.push ?? { x: 0, y: 0 }
+        const at = { x: anchor.x + LABEL_FONT_SIZE * push.x, y: anchor.y + LABEL_FONT_SIZE * push.y }
+        layers.labels.push(
+          svgText(at, item.text.label, {
+            'font-size': LABEL_FONT_SIZE,
+            'font-family': FONT_FAMILY,
+            fill: theme.label,
+            'text-anchor': 'middle',
+            'dominant-baseline': 'central',
+            ...identity(item.id),
+          })
+        )
+      }
+      break
+    }
+    case 'spaceRightAngle': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      layers[item.hidden ? 'auxiliary' : 'marks'].push(
+        svgPolyline(item.points.map(to), { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) })
+      )
       break
     }
     case 'measureLabel':

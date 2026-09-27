@@ -1145,6 +1145,16 @@ function parseStatementCore(rawLine: string): StatementShape {
     const labelIdx = rest.indexOf('label:')
     const spec = (labelIdx === -1 ? rest : rest.slice(0, labelIdx)).trim()
     const label = labelIdx === -1 ? null : rest.slice(labelIdx + 'label:'.length).trim()
+    // M8 (phase 10) — an angle between two lines, or a line and a plane, has
+    // no vertex: skew lines never meet, and a line meets a plane where the
+    // angle is not drawn. Its value belongs in the table; its mark, on a
+    // construction that has a vertex.
+    if (/^between\s/.test(spec)) {
+      throw new Error(
+        `An angle between two lines, or a line and a plane, has no vertex to draw its mark at — put its measure in the givens table ` +
+          `("given: angle ${spec}"), or draw the construction that has one (drop the foot F and mark "angle: A-P-F")`
+      )
+    }
     const parts = spec.split('-').map((p) => p.trim())
     const namePattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/
     if (parts.length !== 3 || parts.some((p) => !namePattern.test(p))) {
