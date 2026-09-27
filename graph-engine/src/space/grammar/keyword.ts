@@ -10,6 +10,7 @@
 import { parseExprString } from '../../parser/parseExpr'
 import { buildStyle, splitStyle } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
+import { SURFACE_TOOL_KEYWORDS } from './keywords/surfaceTools'
 
 interface KeywordRow {
   keyword: string
@@ -34,11 +35,23 @@ function parseImplicit(text: string): SpaceForm {
   }
 }
 
-const KEYWORDS: readonly KeywordRow[] = [{ keyword: 'implicit', parse: parseImplicit }]
+const KEYWORDS: readonly KeywordRow[] = [
+  { keyword: 'implicit', parse: parseImplicit },
+  ...SURFACE_TOOL_KEYWORDS,
+]
+
+// The uniform ownership rule (agreed with solid figures, 2026-09-26): an
+// operand that is only a hyphenated list of point names ("A-B", "A-B-C-D"),
+// optionally followed by "dashed" or "plain", is a solid figure's, whatever
+// the keyword, so "path: A-B-C-D" is never claimed here.
+const POINT_LIST = /^[A-Z][A-Za-z0-9_]*'*(\s*-\s*[A-Z][A-Za-z0-9_]*'*)+(\s+(dashed|plain))?$/
 
 export function parseSpaceKeyword(line: string): SpaceStatement | null {
   for (const row of KEYWORDS) {
-    if (line.startsWith(`${row.keyword}:`)) return spaceStatement(row.parse(line.slice(row.keyword.length + 1).trim()))
+    if (!line.startsWith(`${row.keyword}:`)) continue
+    const operand = line.slice(row.keyword.length + 1).trim()
+    if (POINT_LIST.test(operand)) return null
+    return spaceStatement(row.parse(operand))
   }
   return null
 }

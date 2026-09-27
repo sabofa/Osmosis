@@ -164,7 +164,7 @@ export const CURVE: BuilderEntry = { draws: true, prepare: prepareCurve }
 // Chains the tracer's independent two-point segments into polylines, joining
 // ends that are the same point (the tracer computes a shared cell edge's
 // crossing identically from either side). Deterministic in input order.
-function chain(segments: readonly (readonly { x: number; y: number }[])[]): { x: number; y: number }[][] {
+export function chain(segments: readonly (readonly { x: number; y: number }[])[]): { x: number; y: number }[][] {
   const key = (p: { x: number; y: number }) => `${p.x},${p.y}`
   const at = new Map<string, number[]>()
   segments.forEach((s, i) => {

@@ -25,6 +25,7 @@ import { ARROW, POINT, SEGMENT } from './primitives'
 import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
 import { buildScope } from './scope'
 import { SURFACE } from './surface'
+import { SURFACE_TOOL_BUILDERS } from './surfaceTools'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -51,6 +52,7 @@ registerBuilder('space:implicitSurface', {
 for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vectorFunction', 'tableHeader', 'tableRow', 'tableGenerator']) {
   registerBuilder(key, DEFINITION)
 }
+for (const [key, entry] of SURFACE_TOOL_BUILDERS) registerBuilder(key, entry)
 
 interface StatementRecord {
   line: number
