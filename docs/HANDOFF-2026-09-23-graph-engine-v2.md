@@ -10,7 +10,7 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1609 tests passing**,
+agents" below). Working tree clean. **1614 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-26, after geometry phase 9 (inscribed and
@@ -713,7 +713,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1609 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1614 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
@@ -976,6 +976,20 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     labels the circumradius through a segment to a vertex (`segment: M-G`,
     `label: MG`). A fix would turn a second concentric radius to another
     direction (as the side-view fallback turns one to local +z); not done.
+13. **Tiny solids on named points are refused by phase 6's absolute floors.**
+    Phase 9's round 2 made every threshold in `figure/spheres.ts` relative to
+    the figure's own size, so a regular tetrahedron of edge 1e-6 far from the
+    origin gets its insphere and circumsphere. But four points 1e-6 apart
+    written as `solid tetrahedron A-B-C-D` still fail first with "A, B and C
+    are collinear", from the absolute tolerances in `construct3d.ts` and
+    `hull.ts`. No competition figure is that small. The fix is the same
+    make-it-relative change there.
+14. **A space `plane:` statement inside a solid figure** will hit the generic
+    "is a plot; a solid figure does not draw plots" refusal once
+    `milestone-a/space` is merged, because space owns `plane:` (spec, "Keyword
+    ownership"). After that merge, give it its own message saying a plane is
+    drawn through the section it cuts (`cut:`). It can't be done before the
+    merge: the `space` statement kind exists only on that branch.
 
 ---
 
