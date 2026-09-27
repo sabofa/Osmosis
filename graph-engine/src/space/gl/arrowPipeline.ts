@@ -100,7 +100,7 @@ export function drawArrowHeads(gl: WebGL2RenderingContext, program: ProgramInfo,
   gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
   gl.uniform2f(program.uniform('u_viewport'), target.width, target.height)
   gl.uniform1f(program.uniform('u_pixelRatio'), target.pixelRatio)
-  gl.uniform1f(program.uniform('u_depthBias'), LINE_DEPTH_BIAS)
+  gl.uniform1f(program.uniform('u_depthBias'), target.depthBias ?? LINE_DEPTH_BIAS)
   gl.uniform1i(program.uniform('u_pass'), pass)
   gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
   gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])

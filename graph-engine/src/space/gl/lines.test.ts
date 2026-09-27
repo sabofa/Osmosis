@@ -321,6 +321,33 @@ describe('the frame, drawn', () => {
     expect(Array.from(gridBuffer(fake, before))).toEqual(expectedGrid(frame, WORLD))
   })
 
+  it('draws the frame behind data at the walls: frame lines are biased back, marks forward', () => {
+    // A z = f surface ends exactly on the x and y walls (auto bounds come
+    // from its extent); a wall gridline biased forward like a curve poked
+    // through the surface's edge there, as a dotted line.
+    const { fake, backend } = setup()
+    const curve = lineMark([
+      [
+        [0, 0, 0],
+        [1, 1, 1],
+      ],
+    ])
+    backend.setScene(scene([curve]), WORLD, LIGHT)
+    backend.setFrame(boxFrame(WORLD, CAMERA, AXES), LIGHT)
+    backend.draw(CAMERA, 1)
+    // The u_depthBias in force at each line draw, from the ordered call log.
+    const bias = new Map<unknown, number>()
+    let program: unknown = null
+    const atDraw: number[] = []
+    for (const c of fake.calls) {
+      if (c.fn === 'useProgram') program = c.args[0]
+      if (c.fn === 'uniform1f' && (c.args[0] as { uniform: string }).uniform === 'u_depthBias') bias.set(program, c.args[1] as number)
+      if (c.fn === 'drawArraysInstanced' && fake.programSource(program as FakeDraw['program']).vertex.includes('space: line')) atDraw.push(bias.get(program)!)
+    }
+    // The frame (grid, walls, ticks; core pass then fringe pass), then the curve's two passes.
+    expect(atDraw.map(Math.sign)).toEqual([-1, -1, -1, -1, -1, -1, 1, 1])
+  })
+
   it('frees everything, frame included, on dispose', () => {
     const { fake, backend } = setup()
     backend.setScene(scene([curveMark((t) => [t, t, t], -1, 1, 8, { style: { dash: [4, 4] } }), arrowMark([{ tail: [0, 0, 0], vector: [1, 1, 1] }]), pointMark([[0, 0, 0]])]), WORLD, LIGHT)

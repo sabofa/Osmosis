@@ -13,6 +13,11 @@ import { LINE_FRAGMENT, LINE_VERTEX } from './shaders/line'
 export const LINE_PROGRAM = { name: 'line', vertex: LINE_VERTEX, fragment: LINE_FRAGMENT }
 // NDC z subtracted from lines, points and arrowheads so they win against a surface they lie on.
 export const LINE_DEPTH_BIAS = 1e-5
+// The frame's lines go the other way: they lie on the box's walls, where data
+// often ends exactly (a z = f surface's edges, with automatic bounds), and a
+// wall gridline biased forward would poke through that edge. Pushed back, the
+// data wins.
+export const FRAME_DEPTH_BIAS = -1e-5
 
 // The corner buffers every instanced quad shares, created once per context.
 export interface SharedQuads extends GpuResource {
@@ -164,6 +169,8 @@ export interface DrawTarget {
   width: number
   height: number
   pixelRatio: number
+  // NDC z subtracted from depth; LINE_DEPTH_BIAS unless given.
+  depthBias?: number
 }
 
 export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, lines: readonly LineGpu[], target: DrawTarget, pass: AaPass): void {
@@ -174,7 +181,7 @@ export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, line
   gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
   gl.uniform2f(program.uniform('u_viewport'), target.width, target.height)
   gl.uniform1f(program.uniform('u_pixelRatio'), target.pixelRatio)
-  gl.uniform1f(program.uniform('u_depthBias'), LINE_DEPTH_BIAS)
+  gl.uniform1f(program.uniform('u_depthBias'), target.depthBias ?? LINE_DEPTH_BIAS)
   gl.uniform1i(program.uniform('u_pass'), pass)
   gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
   gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])

@@ -23,6 +23,7 @@ import {
   cameraKey,
   createSharedQuads,
   drawLines,
+  FRAME_DEPTH_BIAS,
   LINE_PROGRAM,
   updateDashes,
   uploadLines,
@@ -204,29 +205,31 @@ export class GlBackend {
 
       // Lines, arrowheads and points in two passes: their opaque cores
       // write depth, then their antialiased fringes blend without writing it.
-      const antialiased = (ls: readonly LineGpu[], heads: readonly ArrowGpu[], ps: readonly PointGpu[]) => {
+      const antialiased = (ls: readonly LineGpu[], heads: readonly ArrowGpu[], ps: readonly PointGpu[], at: DrawTarget) => {
         for (const pass of [0, 1] as const) {
           if (pass === 1) {
             gl.enable(gl.BLEND)
             gl.depthMask(false)
           }
-          drawLines(gl, line, ls, target, pass)
-          drawArrowHeads(gl, head, heads, target, pass)
-          drawPoints(gl, point, ps, target, pass)
+          drawLines(gl, line, ls, at, pass)
+          drawArrowHeads(gl, head, heads, at, pass)
+          drawPoints(gl, point, ps, at, pass)
         }
         gl.depthMask(true)
         gl.disable(gl.BLEND)
       }
 
-      // The frame, first.
+      // The frame, first, biased behind data that meets the walls.
       gl.disable(gl.BLEND)
-      if (this.frameGpu) antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [])
+      if (this.frameGpu) {
+        antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [], { ...target, depthBias: FRAME_DEPTH_BIAS })
+      }
 
       // Opaque meshes.
       drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), camera, world, colors)
 
       // Lines, arrows and points, with their depth bias.
-      antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points)
+      antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target)
 
       // Translucent meshes, back to front, blended, back faces then front faces.
       drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), camera, world, colors)
