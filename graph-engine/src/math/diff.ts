@@ -26,7 +26,7 @@
 import type { Expr } from '../parser/types'
 import { builtinArity, CompileError, freeVariablesDeep } from './compile'
 import { add, call, div, mul, neg, num, pow, sub, substitute, variable } from './expr'
-import { isVectorBody, type MathScope } from './scope'
+import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
 const ZERO = num(0)
@@ -38,20 +38,48 @@ const PI_OVER_180 = div(variable('pi'), num(180))
 const OVER_PI_180 = div(num(180), variable('pi'))
 
 // The functions and constants being differentiated, outermost first (cycle
-// detection), and a counter for fresh parameter names.
+// detection).
 interface Ctx {
   stack: string[]
-  fresh: number
 }
 
 export function diff(expr: Expr, v: string, scope: MathScope): Expr {
-  return differentiate(expr, v, scope, { stack: [], fresh: 0 })
+  return differentiate(expr, v, scope, { stack: [] })
 }
 
+// Names the cycle and its path, as compile.ts's cycleError does.
 function cycle(ctx: Ctx, name: string): CompileError {
-  const loop = [...new Set(ctx.stack.slice(ctx.stack.indexOf(name)))]
-  const names = loop.map((n) => `"${n}"`).join(' and ')
-  return new CompileError(`${names} ${loop.length === 1 ? 'is defined in terms of itself' : 'are defined in terms of each other'}`, loop)
+  const loop = ctx.stack.slice(ctx.stack.indexOf(name))
+  const names = [...new Set(loop)]
+  const path = [...loop, name].join(' → ')
+  const message =
+    names.length === 1
+      ? `"${name}" is defined in terms of itself (${path})`
+      : `${names.map((n) => `"${n}"`).join(' and ')} are defined in terms of each other (${path})`
+  return new CompileError(message, names)
+}
+
+// Each user function's partials with respect to its own parameters, over
+// canonical fresh names ("#f.x"; "#" never reaches an Expr from text, and a
+// function cannot appear inside its own partial without a cycle), simplified,
+// and computed once per scope: a nested definition is differentiated once per
+// (function, parameter), not once per call site.
+const PARTIALS = new WeakMap<MathScope, Map<string, Expr[]>>()
+
+function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], scope: MathScope, ctx: Ctx): Expr[] {
+  let cache = PARTIALS.get(scope)
+  if (!cache) {
+    cache = new Map()
+    PARTIALS.set(scope, cache)
+  }
+  const known = cache.get(name)
+  if (known) return known
+  const body = substitute(fn.body as Expr, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
+  ctx.stack.push(name)
+  const partials = fresh.map((p) => simplify(differentiate(body, p, scope, ctx)))
+  ctx.stack.pop()
+  cache.set(name, partials)
+  return partials
 }
 
 // The simplified partial derivatives of `expr`, in the order of `vars`.
@@ -120,17 +148,22 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       throw new CompileError(`"${name}" takes ${fn.params.length} argument${fn.params.length === 1 ? '' : 's'}, got ${args.length}`, [name])
     }
     if (ctx.stack.includes(name)) throw cycle(ctx, name)
-    // The body over fresh parameter names ("#" never reaches an Expr from text).
-    const fresh = fn.params.map((param) => `#${name}.${param}.${ctx.fresh++}`)
-    const body = substitute(fn.body, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
-    ctx.stack.push(name)
-    const partials = fresh.map((p) => differentiate(body, p, scope, ctx))
-    const own = differentiate(body, v, scope, ctx)
-    ctx.stack.pop()
+    const fresh = fn.params.map((param) => `#${name}.${param}`)
+    const partials = partialsOf(name, fn, fresh, scope, ctx)
     // Back to the arguments; their derivatives are taken outside f.
     const back = new Map(fresh.map((p, i) => [p, args[i]]))
-    let result = substitute(own, back)
+    let result: Expr = ZERO
+    // The body's own reads of v (v a parameter or constant it reads), only
+    // when it has any.
+    if (freeVariablesDeep(fn.body, scope, new Set(fn.params)).has(v)) {
+      const body = substitute(fn.body, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
+      ctx.stack.push(name)
+      const own = simplify(differentiate(body, v, scope, ctx))
+      ctx.stack.pop()
+      result = substitute(own, back)
+    }
     partials.forEach((partial, i) => {
+      if (partial.kind === 'num' && partial.value === 0) return
       result = add(result, mul(substitute(partial, back), differentiate(args[i], v, scope, ctx)))
     })
     return result

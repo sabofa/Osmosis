@@ -446,3 +446,17 @@ describe('compileMany is exact on everything compileScalar compiles (fix round 1
     expect(many(new Float64Array(1), 2)[0]).toBe(8)
   })
 })
+
+describe('freeVariablesDeep walks each function once (fix round 2)', () => {
+  it('a 2-call nesting 20 deep is walked in linear time', () => {
+    // f_k(s, t) = f_{k+1}(s, t) + f_{k+1}(t, s) + a; walking each call site
+    // would visit 2^20 bodies.
+    const functions: [string, MathFunction][] = [['f21', fn(['s', 't'], 's * t + b')]]
+    for (let k = 20; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s) + a`)])
+    const scope = makeScope({ functions })
+    const t0 = performance.now()
+    const names = freeVariablesDeep(p('f1(x, y)'), scope)
+    expect(performance.now() - t0).toBeLessThan(20)
+    expect([...names].sort()).toEqual(['a', 'b', 'x', 'y'])
+  }, 30000)
+})

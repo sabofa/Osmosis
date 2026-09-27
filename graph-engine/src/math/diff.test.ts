@@ -277,3 +277,55 @@ describe('diff with respect to a parameter follows constants and bodies (fix rou
     expect(() => diff(p('m'), 'x', loop)).toThrow(CompileError)
   })
 })
+
+describe('diff stays small on nested definitions (fix round 2, item 2)', () => {
+  // f_k(s, t) = f_{k+1}(s, t) + f_{k+1}(t, s) for k = 1..7, f_8(s, t) = s^2 t.
+  // By hand: f_7 = s^2 t + t^2 s, and each level doubles, so
+  // f_1 = 64 (s^2 t + s t^2); d f_1/ds = 64 (2st + t^2), d f_1/dt = 64 (s^2 + 2st).
+  const functions: [string, MathFunction][] = [['f8', fn(['s', 't'], 's^2 * t')]]
+  for (let k = 7; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s)`)])
+  const scope = makeScope({ functions })
+
+  it('depth 7: under 50k nodes before simplify, under 50 ms, with the hand-computed values', () => {
+    const t0 = performance.now()
+    const dx = diff(p('f1(x, y)'), 'x', scope)
+    const dy = diff(p('f1(x, y)'), 'y', scope)
+    const elapsed = performance.now() - t0
+    expect(countNodes(dx)).toBeLessThan(50000)
+    expect(countNodes(dy)).toBeLessThan(50000)
+    expect(elapsed).toBeLessThan(50)
+    const fx = compileScalar(simplify(dx), ['x', 'y'], scope)
+    const fy = compileScalar(simplify(dy), ['x', 'y'], scope)
+    // at (2, 1): 64 (4 + 1) = 320 and 64 (4 + 4) = 512; at (1, 2): 64 (4 + 4) = 512 and 64 (1 + 4) = 320
+    expect(fx(2, 1)).toBe(320)
+    expect(fy(2, 1)).toBe(512)
+    expect(fx(1, 2)).toBe(512)
+    expect(fy(1, 2)).toBe(320)
+  }, 30000)
+
+  it('names the cycle path, as compile does', () => {
+    const cyclic = makeScope({ functions: [['f', fn(['x'], 'g(x) + 1')], ['g', fn(['x'], 'f(x) * 2')]] })
+    expect(() => diff(p('f(x)'), 'x', cyclic)).toThrow('"f" and "g" are defined in terms of each other (f → g → f)')
+  })
+})
+
+describe('diff stays linear in the nesting when v is not read by the bodies (fix round 2, item 2)', () => {
+  // The same family at depth 12: f_1 = 2^11 (s^2 t + s t^2). Its derivative
+  // is 40,965 nodes when expanded; skipping the bodies' own reads of x (they
+  // have none) is what keeps it near 10 ms rather than ~150 ms.
+  const functions: [string, MathFunction][] = [['f13', fn(['s', 't'], 's^2 * t')]]
+  for (let k = 12; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s)`)])
+
+  it('depth 12 within 50 ms and 50k nodes, with the hand-computed values', () => {
+    const scope = makeScope({ functions })
+    const t0 = performance.now()
+    const dx = diff(p('f1(x, y)'), 'x', scope)
+    const elapsed = performance.now() - t0
+    expect(countNodes(dx)).toBeLessThan(50000)
+    expect(elapsed).toBeLessThan(50)
+    // 2048 (2st + t^2) at (2, 1) = 2048 * 5; at (1, 2) = 2048 * 8
+    const fx = compileScalar(simplify(dx), ['x', 'y'], scope)
+    expect(fx(2, 1)).toBe(10240)
+    expect(fx(1, 2)).toBe(16384)
+  }, 30000)
+})

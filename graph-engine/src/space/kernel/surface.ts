@@ -174,15 +174,18 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
   } else {
     reads.add(body, ['x', 'y'])
     const xyBody = renameBound(body, ['x', 'y'])
-    sample = compileMany([xyBody, partialExpr(xyBody, 0, scope), partialExpr(xyBody, 1, scope)], vars, scope)
+    // The partials are differentiated once, for sampling and the pick alike.
+    const dx = partialExpr(xyBody, 0, scope)
+    const dy = partialExpr(xyBody, 1, scope)
+    sample = compileMany([xyBody, dx, dy], vars, scope)
     normal = (_x, _y, g, out) => {
       out[0] = -g[1]
       out[1] = -g[2]
       out[2] = 1
     }
     const f = compileScalar(xyBody, vars, scope)
-    const fx = partial(xyBody, 0, scope)
-    const fy = partial(xyBody, 1, scope)
+    const fx = compileScalar(dx, vars, scope)
+    const fy = compileScalar(dy, vars, scope)
     pick = { kind: 'graph', f: (x, y) => f(x, y), fx: (x, y) => fx(x, y), fy: (x, y) => fy(x, y) }
   }
 

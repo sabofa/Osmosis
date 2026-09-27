@@ -916,25 +916,53 @@ export function compileVector(exprs: readonly [Expr, Expr, Expr], vars: readonly
   }
 }
 
+// Each user function's free names (its body's, minus its own parameters,
+// followed through the functions it uses), once per scope: nested
+// definitions are walked once each, not once per call site, which would be
+// exponential in the nesting depth.
+const FUNCTION_FREE = new WeakMap<MathScope, Map<string, ReadonlySet<string>>>()
+const NONE: ReadonlySet<string> = new Set()
+
 // The free variables of `expr`, followed through the user functions and
 // constants it uses. `bound` removes the top level's own bound names only: a
 // function body's free names stay free (lexical scope), which is what lets
 // the kernel find every parameter a statement reads. `pi` and `e` are left
 // out unless the scope defines them. Survives a cycle (compile reports it).
 export function freeVariablesDeep(expr: Expr, scope: MathScope, bound: ReadonlySet<string> = new Set()): Set<string> {
-  const found = new Set<string>()
+  let cache = FUNCTION_FREE.get(scope)
+  if (!cache) {
+    cache = new Map()
+    FUNCTION_FREE.set(scope, cache)
+  }
+  const functionCache = cache
   const visiting = new Set<string>()
+  // Cycles cut so far: a function computed while one was cut may be missing
+  // names, so it is not cached (compile reports the cycle).
+  let cut = 0
 
-  function followFunction(name: string, fn: MathFunction) {
-    if (visiting.has(name)) return
+  function freeOf(name: string, fn: MathFunction): ReadonlySet<string> {
+    const known = functionCache.get(name)
+    if (known) return known
+    if (visiting.has(name)) {
+      cut++
+      return NONE
+    }
     visiting.add(name)
+    const before = cut
+    const names = new Set<string>()
     const own = new Set(fn.params)
     const bodies = isVectorBody(fn.body) ? fn.body : [fn.body]
-    for (const body of bodies) walk(body, own)
+    for (const body of bodies) walk(body, own, names)
     visiting.delete(name)
+    if (cut === before) functionCache.set(name, names)
+    return names
   }
 
-  function walk(e: Expr, local: ReadonlySet<string>) {
+  function follow(name: string, fn: MathFunction, into: Set<string>) {
+    for (const n of freeOf(name, fn)) into.add(n)
+  }
+
+  function walk(e: Expr, local: ReadonlySet<string>, into: Set<string>) {
     switch (e.kind) {
       case 'num':
         return
@@ -942,29 +970,30 @@ export function freeVariablesDeep(expr: Expr, scope: MathScope, bound: ReadonlyS
         if (local.has(e.name)) return
         const fn = scope.functions.get(e.name)
         if (fn && !scope.params.index.has(e.name)) {
-          followFunction(e.name, fn)
+          follow(e.name, fn, into)
           return
         }
         if (!fn && (e.name === 'pi' || e.name === 'e') && !scope.params.index.has(e.name)) return
-        found.add(e.name)
+        into.add(e.name)
         return
       }
       case 'unary':
-        walk(e.arg, local)
+        walk(e.arg, local, into)
         return
       case 'binary':
-        walk(e.left, local)
-        walk(e.right, local)
+        walk(e.left, local, into)
+        walk(e.right, local, into)
         return
       case 'call': {
-        for (const arg of e.args) walk(arg, local)
+        for (const arg of e.args) walk(arg, local, into)
         const fn = scope.functions.get(e.name)
-        if (fn) followFunction(e.name, fn)
+        if (fn) follow(e.name, fn, into)
         return
       }
     }
   }
 
-  walk(expr, bound)
+  const found = new Set<string>()
+  walk(expr, bound, found)
   return found
 }
