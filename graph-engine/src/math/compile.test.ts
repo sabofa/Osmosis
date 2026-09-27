@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseExprString } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
-import { CompileError, compileMany, compileScalar, compileVector, freeVariablesDeep } from './compile'
+import { BUILTIN_NAMES, builtinArity, CompileError, compileMany, compileScalar, compileVector, freeVariablesDeep } from './compile'
 import { makeScope, type MathFunction } from './scope'
 import { evalExpr } from '../parser/evalExpr'
 
@@ -459,4 +459,33 @@ describe('freeVariablesDeep walks each function once (fix round 2)', () => {
     expect(performance.now() - t0).toBeLessThan(20)
     expect([...names].sort()).toEqual(['a', 'b', 'x', 'y'])
   }, 30000)
+})
+
+describe('compileMany covers every registered built-in (fix round 2, item 3)', () => {
+  // Iterates the registry, not a hand list: a built-in added to the compiler
+  // without an instruction in the register program fails here.
+  const args = ['x', 'y', '0.7', 'a']
+  for (const angle of ['radians', 'degrees'] as const) {
+    it(`every name in BUILTIN_NAMES, at every arity up to 4, in ${angle}`, () => {
+      const scope = makeScope({ angle, params: [['a', 0.35]] })
+      const texts: string[] = []
+      for (const name of BUILTIN_NAMES) {
+        const arity = builtinArity(name)!
+        for (let n = arity.min; n <= Math.min(arity.max, 4); n++) texts.push(`${name}(${args.slice(0, n).join(', ')})`)
+      }
+      expect(texts.length).toBeGreaterThanOrEqual(BUILTIN_NAMES.size)
+      const many = compileMany(texts.map(p), ['x', 'y'], scope)
+      const alone = texts.map((t) => compileScalar(p(t), ['x', 'y'], scope))
+      const out = new Float64Array(texts.length)
+      for (const [x, y] of [
+        [0.3, 0.6],
+        [1.9, -0.25],
+      ]) {
+        many(out, x, y)
+        texts.forEach((t, i) => {
+          if (!Object.is(out[i], alone[i](x, y))) throw new Error(`${t} at (${x}, ${y}): ${out[i]} vs ${alone[i](x, y)}`)
+        })
+      }
+    })
+  }
 })

@@ -561,6 +561,14 @@ const UNARY_TABLE: readonly ((v: number) => number)[] = [
 const UNARY_INDEX: ReadonlyMap<string, number> = new Map(
   ['sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'floor', 'ceil', 'round', 'sign', 'log10'].map((n, i) => [n, i])
 )
+// The table slot of a built-in with no opcode of its own. A built-in that has
+// neither is refused, never silently computed as another (slot 0 is sec).
+function unaryIndex(name: string): number {
+  const index = UNARY_INDEX.get(name)
+  if (index === undefined) throw new Error(`compileMany has no instruction for the built-in "${name}"`)
+  return index
+}
+
 const BINARY_TABLE: readonly ((x: number, y: number) => number)[] = [(x, y) => Math.log(x) / Math.log(y), floorMod]
 
 // Instruction layout: [op, dst, a, b, c].
@@ -701,11 +709,11 @@ function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, n
     case 'sec':
     case 'csc':
     case 'cot':
-      return p.emit(OP_CALL1, toRadians(a), UNARY_INDEX.get(name)!)
+      return p.emit(OP_CALL1, toRadians(a), unaryIndex(name))
     case 'asin':
     case 'acos':
     case 'atan':
-      return toDegrees(p.emit(OP_CALL1, a, UNARY_INDEX.get(name)!))
+      return toDegrees(p.emit(OP_CALL1, a, unaryIndex(name)))
     case 'atan2':
       return toDegrees(p.emit(OP_ATAN2, a, b))
     case 'sqrt':
@@ -717,7 +725,7 @@ function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, n
     case 'ln':
       return p.emit(OP_LN, a)
     case 'log':
-      return args.length === 2 ? p.emit(OP_CALL2, a, b, 0) : p.emit(OP_CALL1, a, UNARY_INDEX.get('log10')!)
+      return args.length === 2 ? p.emit(OP_CALL2, a, b, 0) : p.emit(OP_CALL1, a, unaryIndex('log10'))
     case 'mod':
       return p.emit(OP_CALL2, a, b, 1)
     case 'min':
@@ -734,7 +742,7 @@ function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, n
       return p.emit(OP_HYPOTN, first, args.length)
     }
     default:
-      return p.emit(OP_CALL1, a, UNARY_INDEX.get(name)!)
+      return p.emit(OP_CALL1, a, unaryIndex(name))
   }
 }
 
