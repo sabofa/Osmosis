@@ -28,7 +28,7 @@ const TANGENT_WIDTH = 2
 function prepareTrace(statement: Statement, context: BuildContext): PreparedStatement {
   if (statement.kind !== 'space' || statement.form.form !== 'trace') throw new Error(`not a trace: ${statement.kind}`)
   const form = statement.form
-  const { scope, config } = context
+  const { scope } = context
   const reads = new Reads(scope)
   const target = resolveTarget(form.target, scope, reads, 'trace')
   requireArity(target, 2, 'trace')
@@ -36,7 +36,7 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
   reads.add(form.at)
   const at = constant(form.at, scope)
   const tangentAt = form.tangentAt ? (reads.add(form.tangentAt), constant(form.tangentAt, scope)) : null
-  const domain = prepareDomain(form.over, config, scope, reads)
+  const domain = prepareDomain(form.over, context, reads)
   const alongX = form.axis === 'y'
   const free = alongX ? 'x' : 'y'
   // The trace's point and derivative at the free coordinate s.
@@ -45,7 +45,7 @@ function prepareTrace(statement: Statement, context: BuildContext): PreparedStat
 
   const build = (): BuildResult => {
     const rect = domain()
-    const box = toolBox(context, rect, (x, y) => f(x, y))
+    const box = toolBox(context)
     const c = at()
     const fixed = alongX ? rect.y : rect.x
     if (!(c >= fixed.min && c <= fixed.max)) {

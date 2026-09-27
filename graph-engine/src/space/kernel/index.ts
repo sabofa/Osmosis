@@ -11,12 +11,28 @@
 // Hidden statements (@hide) build nothing but still define. Errors are
 // returned with their line, never thrown; one bad statement never blanks the
 // scene.
+//
+// The box pass (integration J1; registry.ts). Statements build in two passes:
+// 1. every statement that is not box-dependent, and the x and y of each 'z'
+//    one (built against the provisional box, resolveBox with no data);
+// 2. the extent of what pass 1 drew (extentOf) resolves the box with
+//    frame/bounds.ts's resolveBox, and every box-dependent statement builds
+//    against it (context.box).
+// The scene's extent is pass 1's, so the renderer's resolveBox over it is the
+// kernel's box, by construction: a box-dependent mark can never move it. On
+// setValue, pass 1 rebuilds what reads a changed binding; when the resolved
+// box moves, every box-dependent statement rebuilds, otherwise only those that
+// read a changed binding (the S1 identity rule). During play and drag the
+// renderer passes its frozen box (holdBox), and box-dependent statements
+// build against that instead of the resolved box, so they stay in the frame
+// that is drawn; a later call without it brings them to the resolved box.
 
 import type { Statement } from '../../parser/types'
 import { roundHalfAway } from '../../math/compile'
 import type { Binding } from '../config'
 import { sceneExtent } from '../scene/extent'
-import type { ColorScale, Mark, SceneError, SpaceScene } from '../scene/types'
+import { resolveBox } from '../frame/bounds'
+import type { Box3, ColorScale, LabelAnchor, Mark, Range, SceneError, SpaceScene } from '../scene/types'
 import type { CreateSpaceKernel, SpaceKernel } from './api'
 import { messageOf } from './common'
 import { CURVE, IMPLICIT_CURVE } from './curves'
@@ -27,7 +43,7 @@ import { RIEMANN } from './integrals/riemann'
 import { NAMED_VOLUME, VOLUME } from './integrals/volumes2'
 import { PARAMETRIC_SURFACE } from './parametric'
 import { ARROW, POINT, SEGMENT } from './primitives'
-import { builderFor, DEFINITION, registerBuilder, type BuildContext, type BuildResult, type PreparedStatement } from './registry'
+import { builderFor, DEFINITION, registerBuilder, sameBox, type BuildContext, type BuilderEntry, type BuildResult, type PreparedStatement } from './registry'
 import { buildScope } from './scope'
 import { SURFACE } from './surface'
 import { IMPLICIT_SURFACE } from './geometry/implicit'
@@ -41,7 +57,12 @@ import { CURVE_FRAME } from './curves/frames'
 import { SURFACE_TOOL_BUILDERS } from './surfaceTools'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
-// in space".
+// in space". onBox marks a box-dependent row (J1, registry.ts): a surface
+// sampled over the box, a line or plane spanning it, a curve frame sized by
+// it, every tool of S4b (its domain and floor are the box's), a centroid's
+// drop lines to the floor and walls; and, by its z only, a region shaded on
+// the floor.
+const onBox = (entry: BuilderEntry, dependence: true | 'z' = true): BuilderEntry => ({ ...entry, boxDependent: dependence })
 registerBuilder('surface', SURFACE)
 registerBuilder('space:surface', SURFACE)
 registerBuilder('parametricSurface', PARAMETRIC_SURFACE)
@@ -55,30 +76,40 @@ registerBuilder('point', POINT)
 registerBuilder('segment', SEGMENT)
 registerBuilder('ray', ARROW)
 registerBuilder('vector', ARROW)
-registerBuilder('space:implicitSurface', IMPLICIT_SURFACE)
+registerBuilder('space:implicitSurface', onBox(IMPLICIT_SURFACE))
 // Definitions and tables draw nothing and are not errors.
 for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vectorFunction', 'tableHeader', 'tableRow', 'tableGenerator']) {
   registerBuilder(key, DEFINITION)
 }
-registerBuilder('space:contour', CONTOUR)
-registerBuilder('space:line', LINE)
-registerBuilder('space:plane', PLANE)
+registerBuilder('space:contour', onBox(CONTOUR))
+registerBuilder('space:line', onBox(LINE))
+registerBuilder('space:plane', onBox(PLANE))
 registerBuilder('space:cross', VECTOR_OP)
 registerBuilder('space:project', VECTOR_OP)
-registerBuilder('space:coordinateSurface', COORDINATE_SURFACE)
-registerBuilder('space:frame', CURVE_FRAME)
+registerBuilder('space:coordinateSurface', onBox(COORDINATE_SURFACE))
+registerBuilder('space:frame', onBox(CURVE_FRAME))
 registerBuilder('space:osculating', CURVE_FRAME)
 registerBuilder('space:motion', CURVE_FRAME)
-for (const [key, entry] of SURFACE_TOOL_BUILDERS) registerBuilder(key, entry)
-registerBuilder('space:region', REGION)
+for (const [key, entry] of SURFACE_TOOL_BUILDERS) registerBuilder(key, onBox(entry))
+registerBuilder('space:region', onBox(REGION, 'z'))
 registerBuilder('space:namedRegion', NAMED_REGION)
-registerBuilder('space:centroid', CENTROID)
+registerBuilder('space:centroid', onBox(CENTROID))
 registerBuilder('space:volume', VOLUME)
 registerBuilder('space:riemann', RIEMANN)
 registerBuilder('space:namedVolume', NAMED_VOLUME)
 
+// When a statement builds (J1): 'data' in the first pass (it sizes the box),
+// 'box' in the second, 'z' in both (its x and y size the box; it takes the
+// resolved box's floor).
+type Stage = 'data' | 'box' | 'z'
+
 interface StatementRecord {
   line: number
+  stage: Stage
+  // The context its builds read; the kernel sets context.box before each.
+  context: BuildContext
+  // The box its last build read (undefined for a 'data' statement).
+  builtWith: Box3 | undefined
   prepared: PreparedStatement
   // the bindings it reads
   reads: ReadonlySet<string>
@@ -97,6 +128,37 @@ function atIndex<T extends Mark | ColorScale>(record: StatementRecord, original:
   const copy = make()
   record.moved.set(original, { index, copy })
   return copy
+}
+
+const EMPTY: Range = { min: Infinity, max: -Infinity }
+
+function hull(a: Range, b: Range): Range {
+  return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) }
+}
+
+// The extent the box is resolved from: the 'data' statements' marks and
+// labels (sceneExtent: exact x and y, robust z), with the x and y of the 'z'
+// statements'. An axis with no data is the empty range, which resolveBox
+// treats as no data; null when nothing is drawn.
+function extentOf(records: readonly StatementRecord[]): Box3 | null {
+  const gather = (stage: Stage) => {
+    const marks: Mark[] = []
+    const labels: LabelAnchor[] = []
+    for (const r of records) {
+      if (r.stage !== stage) continue
+      marks.push(...r.result.marks)
+      labels.push(...r.result.labels)
+    }
+    return sceneExtent(marks, labels)
+  }
+  const data = gather('data')
+  const floor = gather('z')
+  if (!floor) return data
+  return {
+    x: data ? hull(data.x, floor.x) : floor.x,
+    y: data ? hull(data.y, floor.y) : floor.y,
+    z: data ? data.z : EMPTY,
+  }
 }
 
 function run(prepared: PreparedStatement, line: number): BuildResult {
@@ -147,16 +209,43 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     }
     // The id is taken only by a statement that compiled.
     if (wantsScale) scales++
-    const result = run(prepared, line)
     records.push({
       line,
+      stage: entry.boxDependent === true ? 'box' : entry.boxDependent === 'z' ? 'z' : 'data',
+      context,
+      builtWith: undefined,
       prepared,
       reads: new Set([...prepared.reads].filter((name) => bindingNames.has(name))),
       scaleId: context.colorScaleId,
-      result,
+      result: { marks: [], labels: [], errors: [], colorScale: null },
       moved: new Map(),
     })
   })
+
+  const build = (record: StatementRecord, box: Box3 | undefined) => {
+    record.context.box = box
+    record.builtWith = box
+    record.result = run(record.prepared, record.line)
+    record.moved.clear()
+  }
+  // Whether a box-dependent statement's last build is out of date in `box`:
+  // a 'z' statement reads only the box's z (its floor), so a box that moved
+  // in x or y alone leaves it as it is.
+  const stale = (record: StatementRecord, box: Box3) => {
+    const was = record.builtWith
+    if (!was) return true
+    if (record.stage === 'z') return was.z.min !== box.z.min || was.z.max !== box.z.max
+    return !sameBox(was, box)
+  }
+
+  // Pass 1: what sizes the box; a 'z' statement against the provisional box.
+  const provisional = resolveBox(config.space, null)
+  for (const record of records) if (record.stage !== 'box') build(record, record.stage === 'z' ? provisional : undefined)
+  let extent = extentOf(records)
+  // The box the box-dependent statements are built against.
+  let builtBox = resolveBox(config.space, extent)
+  // Pass 2: what needs the box (a 'z' statement only when its z moved).
+  for (const record of records) if (record.stage !== 'data' && stale(record, builtBox)) build(record, builtBox)
 
   // colorScales holds only the scales a mark references, in source order,
   // each at the index its id names. In the ordinary case that index is the id
@@ -185,7 +274,8 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     )
     const labels = records.flatMap((r) => r.result.labels)
     const errors = [...scopeErrors, ...namedErrors, ...setupErrors, ...records.flatMap((r) => r.result.errors)].sort((a, b) => a.line - b.line)
-    return { marks, labels, colorScales, extent: sceneExtent(marks, labels), errors }
+    // Pass 1's extent, not every mark's: the renderer resolves the same box.
+    return { marks, labels, colorScales, extent, errors }
   }
 
   let current = assemble()
@@ -194,10 +284,10 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     scene: () => current,
     bindings: () => bindings,
     values: () => new Map(bindings.map((b) => [b.name, scope.params.values[scope.params.index.get(b.name)!]])),
-    setValue(name, value) {
-      return kernel.setValues(new Map([[name, value]]))
+    setValue(name, value, options) {
+      return kernel.setValues(new Map([[name, value]]), options)
     },
-    setValues(values) {
+    setValues(values, options = {}) {
       const changed = new Set<string>()
       for (const [name, value] of values) {
         const slot = scope.params.index.get(name)
@@ -209,13 +299,29 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
         scope.params.values[slot] = next
         changed.add(name)
       }
-      if (changed.size === 0) return current
-      // Each statement that reads any changed binding rebuilds once.
+      const reads = (record: StatementRecord) => [...changed].some((name) => record.reads.has(name))
+      // Pass 1: each statement that sizes the box and reads a changed
+      // binding rebuilds once; a 'z' one against the box it is in now.
+      let rebuilt = false
       for (const record of records) {
-        if (![...changed].some((name) => record.reads.has(name))) continue
-        record.result = run(record.prepared, record.line)
-        record.moved.clear()
+        if (record.stage === 'box' || !reads(record)) continue
+        build(record, record.stage === 'z' ? builtBox : undefined)
+        rebuilt = true
       }
+      if (rebuilt) extent = extentOf(records)
+      // Pass 2, against the held box or the one the data resolves to now:
+      // every box-dependent statement whose last build that box outdates,
+      // and those that read a changed binding.
+      const target = options.holdBox ?? resolveBox(config.space, extent)
+      for (const record of records) {
+        if (record.stage === 'data') continue
+        if (stale(record, target) || (record.stage === 'box' && reads(record))) {
+          build(record, target)
+          rebuilt = true
+        }
+      }
+      builtBox = target
+      if (!rebuilt) return current
       current = assemble()
       return current
     },

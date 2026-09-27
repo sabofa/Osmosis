@@ -9,7 +9,8 @@
 //
 // A point is a list of expressions, so it may read parameters: that is how a
 // slider moves a tangent plane. The domain is "over <rect>" when the
-// statement gives one, else the box's x/y range (@bounds3d, else [-5, 5]^2).
+// statement gives one, else the x/y range of the box the scene resolves to
+// (integration J1: every tool is box-dependent).
 
 import type { Expr } from '../../../parser/types'
 import { compileScalar, freeVariablesDeep, type CompiledFn } from '../../../math/compile'
@@ -17,10 +18,10 @@ import { diff } from '../../../math/diff'
 import { call, variable } from '../../../math/expr'
 import { isVectorBody, type MathScope } from '../../../math/scope'
 import { simplify } from '../../../math/simplify'
-import type { GraphConfig } from '../../../parser/config'
 import type { RectOver } from '../../grammar/keywords/surfaceTools'
 import type { Range } from '../../scene/types'
-import { boundNames, boxX, boxY, constant, type Reads, renameBound } from '../common'
+import { boundNames, constant, type Reads, renameBound } from '../common'
+import { boxOf, type BuildContext } from '../registry'
 import { pointText } from './readout'
 
 const XY = ['x', 'y'] as const
@@ -154,12 +155,17 @@ export function requireInside(keyword: string, point: readonly number[], ranges:
   throw new Error(`${keyword}: ${pointText(point)} is outside ${where}`)
 }
 
-// The statement's domain: its "over <rect>", else the box's x/y range.
-export function prepareDomain(over: RectOver | null, config: GraphConfig, scope: MathScope, reads: Reads): () => Rect {
-  if (!over) return () => ({ x: boxX(config), y: boxY(config) })
+// The statement's domain: its "over <rect>", else the resolved box's x/y range.
+export function prepareDomain(over: RectOver | null, context: BuildContext, reads: Reads): () => Rect {
+  if (!over) {
+    return () => {
+      const box = boxOf(context)
+      return { x: box.x, y: box.y }
+    }
+  }
   const [x0, x1, y0, y1] = [over.x.from, over.x.to, over.y.from, over.y.to].map((e) => {
     reads.add(e)
-    return constant(e, scope)
+    return constant(e, context.scope)
   })
   return () => {
     const rect = { x: { min: x0(), max: x1() }, y: { min: y0(), max: y1() } }

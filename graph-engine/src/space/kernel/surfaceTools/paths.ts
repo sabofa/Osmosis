@@ -37,7 +37,7 @@ import { boundNames, constant, CURVE_WIDTH, Reads, renameBound, resolution } fro
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, clipToZ, lineMark, part, pointMark, toolBox } from './box'
 import { approxWithin } from './readout'
-import { compileOver, preparePoint, prepareDomain, requireArity, resolveTarget } from './target'
+import { preparePoint, prepareDomain, requireArity, resolveTarget } from './target'
 
 const DEFAULT_SEGMENTS = 512
 const SHADOW_WIDTH = 1.5
@@ -77,7 +77,6 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
   const reads = new Reads(scope)
   const target = resolveTarget(form.target, scope, reads, 'path')
   requireArity(target, 2, 'path')
-  const f = compileOver(target.body, target, scope)
 
   // x(t) and y(t) over $0, then f composed with them.
   const t = form.t.param
@@ -94,7 +93,7 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
   const from = constant(form.t.from, scope)
   const to = constant(form.t.to, scope)
   const toward = form.toward ? preparePoint(form.toward, scope, reads) : null
-  const domain = prepareDomain(null, config, scope, reads)
+  const domain = prepareDomain(null, context, reads)
   const segments = resolution(form.style.res, config, DEFAULT_SEGMENTS)
   const q = new Float64Array(3)
   const dq = new Float64Array(3)
@@ -136,7 +135,7 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
   const build = (): BuildResult => {
     const a = from()
     const b = to()
-    const box = toolBox(context, domain(), (x, y) => f(x, y))
+    const box = toolBox(context)
     const floor = box.z.min
     const runs: number[][] = []
     const runParams: number[][] = []

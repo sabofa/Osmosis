@@ -9,6 +9,7 @@ import { project } from './camera/projection'
 import type { SpaceEvent } from './events'
 import type { SpaceKernel } from './kernel/api'
 import { curveMark, graphMesh, label, meshMark, scene } from './testing/marks'
+import type { SpaceScene } from './scene/types'
 
 // A canvas in a parent, both fake, handing out the recording fake GL.
 function mount(fake: FakeGl | null = createFakeGl()) {
@@ -534,7 +535,8 @@ P = (a, b, a^2 + b^2)`
     }
     expect(setValues).not.toHaveBeenCalled()
     clock.flush()
-    expect(setValues.mock.calls).toEqual([[new Map([['a', 1]])]])
+    // a slider is not play or drag: no held box (J1)
+    expect(setValues.mock.calls).toEqual([[new Map([['a', 1]]), undefined]])
     expect(events.filter((e) => e.type === 'param')).toEqual([{ type: 'param', name: 'a', value: 1, source: 'slider' }])
     r.dispose()
   })
@@ -709,6 +711,33 @@ P = (a, 0, 0)`
     // z reaches 2 * 4 + 4 = 12, past the first box's top.
     expect(r['world']!.box.z.max).toBeGreaterThanOrEqual(12)
     expect(before!.box.z.max).toBeLessThan(12)
+    r.dispose()
+  })
+
+  it('builds box-dependent statements in the held box during play, and in the resolved box once it stops (J1)', () => {
+    // plane: x = 1 spans the box's z: [0, 8] at a = 1 (4 + 4), and it grows
+    // with a once play stops, never while the frame holds still.
+    const { clock, r, play } = live(`${SPEC}
+plane: x = 1`)
+    const planeZ = () => {
+      const plane = (r['scene'] as SpaceScene).marks.find((m) => m.source.object === 's4')!
+      if (plane.kind !== 'mesh') throw new Error('not a mesh')
+      let max = -Infinity
+      for (let i = 2; i < plane.positions.length; i += 3) max = Math.max(max, plane.positions[i])
+      return max
+    }
+    const held = r['world']!.box.z.max
+    expect(planeZ()).toBe(held)
+    play()
+    for (let i = 0; i < 6 && clock.pending() > 0; i++) {
+      clock.advance(1500)
+      clock.flush()
+      // every frame, the plane reaches exactly the top of the box drawn
+      expect(planeZ()).toBe(r['world']!.box.z.max)
+    }
+    // a = 2 at the end: z reaches 2 * 4 + 4 = 12, and so does the plane.
+    expect(r['world']!.box.z.max).toBeGreaterThanOrEqual(12)
+    expect(planeZ()).toBe(r['world']!.box.z.max)
     r.dispose()
   })
 

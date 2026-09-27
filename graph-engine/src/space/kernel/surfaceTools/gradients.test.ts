@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
-// f = x^2 - y^2 at (1, 2): ∇f = (2, -4), |∇f| = √20 = 4.472, f = -3. Over
-// [-5, 5]^2 the box floor is z = -25.
+// f = x^2 - y^2 at (1, 2): ∇f = (2, -4), |∇f| = √20 = 4.472, f = -3. A tool
+// is drawn beside its surface, which sizes the box (the box pass, J1): the
+// surface z = x^2 - y^2 over [-5, 5]^2, written after the tool so the tool
+// keeps line 1, spans z in [-25, 25], so the box floor is z = -25.
+const SADDLE = '\nz = x^2 - y^2'
 
 // The distance from p to the nearest segment of a polyline in the plane.
 function distanceToPolyline(p: readonly number[], points: readonly (readonly number[])[]): number {
@@ -19,7 +22,7 @@ function distanceToPolyline(p: readonly number[], points: readonly (readonly num
 }
 
 describe('gradient: x^2 - y^2 at (1, 2)', () => {
-  const scene = sceneOf('gradient: x^2 - y^2 at (1, 2)')
+  const scene = sceneOf(`gradient: x^2 - y^2 at (1, 2)${SADDLE}`)
 
   it('draws ∇f = (2, -4, 0) at true length from (1, 2) on the floor', () => {
     expect(scene.errors).toEqual([])
@@ -155,7 +158,7 @@ describe('gradient: points outside, and parameters', () => {
 
   it('rebuilds when the point reads a parameter (M3): a = 1/2 moves the arrow to (1/2, 2), ∇f = (1, -4)', () => {
     const kernel = kernelOf(`@param a = 1 range [-2, 2]
-gradient: x^2 - y^2 at (a, 2)`)
+gradient: x^2 - y^2 at (a, 2)${SADDLE}`)
     const scene = kernel.setValue('a', 0.5)
     const arrow = arrowsOf(scene, 's2')
     expect(Array.from(arrow.tails)).toEqual([0.5, 2, -25])
@@ -165,9 +168,9 @@ gradient: x^2 - y^2 at (a, 2)`)
 
 describe('a zero gradient', () => {
   it('draws the point and the readout "∇f = 0 (a critical point)", and no arrow', () => {
-    // x^2 + y^2 on [-5, 5]^2 ranges over [0, 50]: the floor is 0.
-    const scene = sceneOf('gradient: x^2 + y^2 at (0, 0)')
-    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.point'])
+    // Beside z = x^2 + y^2 over [-5, 5]^2, z in [0, 50]: the floor is 0.
+    const scene = sceneOf('gradient: x^2 + y^2 at (0, 0)\nz = x^2 + y^2')
+    expect(scene.marks.filter((m) => m.source.line === 1).map((m) => m.source.object)).toEqual(['s1.point'])
     expect(Array.from(pointsOf(scene, 's1.point').positions)).toEqual([0, 0, 0])
     expect(labelOf(scene, 's1.readout').text).toBe('∇f = 0 (a critical point)')
   })

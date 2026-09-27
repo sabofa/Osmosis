@@ -1,14 +1,11 @@
 // The box a surface tool draws into, and the marks it draws with (S4b).
 //
-// A statement cannot see the box the frame will draw (that comes from every
-// statement's extent), yet a floor copy, a slicing plane and a tangent line
-// must reach its walls. So each tool estimates it the way the frame will
-// compute it: x and y are the tool's domain; z is @bounds3d z when authored,
-// else the target's robust range over the domain, rounded outward exactly as
-// frame/bounds.ts rounds a data extent. When the author draws z = f beside
-// the tool — the intended use, since tools never draw the surface — the two
-// agree. A three-variable target's z is @bounds3d z, else [-5, 5], the region
-// an implicit surface samples.
+// A floor copy, a slicing plane and a tangent line must reach the walls of
+// the box the frame draws. Since the box pass (integration J1) every tool is
+// box-dependent: the kernel resolves the box from the statements that define
+// the scene (the surface z = f the author draws beside the tool, above all)
+// and hands it to the tool, and toolBox returns it. With nothing else drawn
+// it is @bounds3d, else [-5, 5] on each axis.
 //
 // Slicing planes are box-clipped patches built here. A vertical plane meets
 // the box in a rectangle, which rectPatch draws exactly; a general plane (the
@@ -16,47 +13,15 @@
 // plane-and-box polygon (kernel/geometry/planes.ts); at the merge a
 // general-plane patch here can be drawn by it instead.
 
-import type { GraphConfig } from '../../../parser/config'
-import { resolveBox } from '../../frame/bounds'
-import { robustRange } from '../../scene/extent'
 import type { ArrowMark, Box3, ColorSpec, LabelAnchor, LineMark, MarkSource, MeshMark, PointMark, PointShape, Range, Vec3 } from '../../scene/types'
 import { DASH } from '../common'
-import type { BuildContext } from '../registry'
-import type { Rect } from './target'
+import { boxOf, type BuildContext } from '../registry'
 
-const ESTIMATE_SAMPLES = 64
-const DEFAULT_Z: Range = { min: -5, max: 5 }
-
-// THE box a tool draws into: every surface tool calls this, and nothing else
-// estimates the box. It is the seam for the two-pass kernel (ruling I5, after
-// S4a, S4b and S5 merge): there, the box resolved from the other statements'
-// extent arrives through BuildContext and this function returns it. A
-// two-variable target passes f; a three-variable one passes null.
-export function toolBox(context: BuildContext, rect: Rect, f: ((x: number, y: number) => number) | null): Box3 {
-  return f ? surfaceBox(context.config, rect, f) : spaceBox(context.config, rect)
-}
-
-// The estimate for a two-variable target (see the header).
-function surfaceBox(config: GraphConfig, rect: Rect, f: (x: number, y: number) => number): Box3 {
-  const authored = config.space.bounds.z
-  if (authored) return { x: rect.x, y: rect.y, z: { min: authored.min, max: authored.max } }
-  const n = ESTIMATE_SAMPLES
-  const values: number[] = []
-  for (let j = 0; j <= n; j++) {
-    const y = rect.y.min + ((rect.y.max - rect.y.min) * j) / n
-    for (let i = 0; i <= n; i++) {
-      const v = f(rect.x.min + ((rect.x.max - rect.x.min) * i) / n, y)
-      if (Number.isFinite(v)) values.push(v)
-    }
-  }
-  const z = robustRange(values)
-  const box = resolveBox({ ...config.space, bounds: { x: rect.x, y: rect.y, z: null } }, z ? { x: rect.x, y: rect.y, z } : null)
-  return { x: rect.x, y: rect.y, z: box.z }
-}
-
-// The estimate for a three-variable target.
-function spaceBox(config: GraphConfig, rect: Rect): Box3 {
-  return { x: rect.x, y: rect.y, z: config.space.bounds.z ?? DEFAULT_Z }
+// THE box a tool draws into: every surface tool calls this. It is the box
+// the kernel resolved from the other statements (J1), or the renderer's
+// frozen box during play and drag.
+export function toolBox(context: BuildContext): Box3 {
+  return boxOf(context)
 }
 
 export function largestSpan(box: Box3): number {

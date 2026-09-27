@@ -25,14 +25,14 @@ const TANGENT_WIDTH = 2
 function prepareDirectional(statement: Statement, context: BuildContext): PreparedStatement {
   if (statement.kind !== 'space' || statement.form.form !== 'directional') throw new Error(`not a directional derivative: ${statement.kind}`)
   const form = statement.form
-  const { scope, config } = context
+  const { scope } = context
   const reads = new Reads(scope)
   const target = resolveTarget(form.target, scope, reads, 'directional')
   requireArity(target, 2, 'directional')
   const { f, fx, fy } = surface2(target, scope)
   const point = preparePoint(form.point, scope, reads)
   const toward = preparePoint(form.toward, scope, reads)
-  const domain = prepareDomain(form.over, config, scope, reads)
+  const domain = prepareDomain(form.over, context, reads)
 
   const build = (): BuildResult => {
     const [a, b] = point()
@@ -49,7 +49,7 @@ function prepareDirectional(statement: Statement, context: BuildContext): Prepar
     const q = fy(a, b)
     if (![f0, p, q].every(Number.isFinite)) throw new Error(`directional: f or ∇f is undefined at ${pointText([a, b])}`)
     const slope = p * u[0] + q * u[1]
-    const box = toolBox(context, rect, (x, y) => f(x, y))
+    const box = toolBox(context)
     const plane = verticalPlane(a, b, u, box)
     if (!plane) throw new Error(`directional: ${pointText([a, b])} is outside the domain`)
 

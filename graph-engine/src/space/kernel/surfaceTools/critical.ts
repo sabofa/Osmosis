@@ -91,12 +91,12 @@ const KINDS: readonly { kind: CriticalKind; shape: PointShape; label: string }[]
 function prepareCritical(statement: Statement, context: BuildContext): PreparedStatement {
   if (statement.kind !== 'space' || statement.form.form !== 'critical') throw new Error(`not a critical: ${statement.kind}`)
   const form = statement.form
-  const { scope, config } = context
+  const { scope } = context
   const reads = new Reads(scope)
   const target = resolveTarget(form.target, scope, reads, 'critical')
   requireArity(target, 2, 'critical')
   const { f, fx, fy, fxx, fxy, fyy } = surface2(target, scope)
-  const domain = prepareDomain(form.over, config, scope, reads)
+  const domain = prepareDomain(form.over, context, reads)
 
   const build = (): BuildResult => {
     const rect = domain()
@@ -144,7 +144,7 @@ function prepareCritical(statement: Statement, context: BuildContext): PreparedS
     const marks: Mark[] = []
     const labels: LabelAnchor[] = []
     if (found.length === 0) {
-      const floor = toolBox(context, rect, (x, y) => f(x, y)).z.min
+      const floor = toolBox(context).z.min
       const centre: Vec3 = [(rect.x.min + rect.x.max) / 2, (rect.y.min + rect.y.max) / 2, floor]
       labels.push(annotation(part(context, 'note'), centre, 'no critical points found in the domain'))
       return { marks, labels, errors: [], colorScale: null }

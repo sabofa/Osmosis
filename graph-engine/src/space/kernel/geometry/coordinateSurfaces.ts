@@ -22,10 +22,10 @@ import { call, mul, num, substitute, variable } from '../../../math/expr'
 import type { CoordinateSurfaceForm } from '../../grammar/keywords/geometryForms'
 import type { ParamRange } from '../../grammar/types'
 import { formatNumber } from '../../pick/format'
-import type { MeshMark, Vec3 } from '../../scene/types'
+import type { Box3, MeshMark, Vec3 } from '../../scene/types'
 import { reversedWinding } from '../mesh'
 import { PARAMETRIC_SURFACE } from '../parametric'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { boxOf, sameBox, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { largestSpan, spaceBox } from './box'
 
 type System = CoordinateSurfaceForm['system']
@@ -75,10 +75,9 @@ function form(statement: Statement): CoordinateSurfaceForm {
   throw new Error(`not a coordinate surface: ${statement.kind}`)
 }
 
-function defaultRange(name: string, context: BuildContext): ParamRange {
-  const box = spaceBox(context.config)
-  const turn = context.config.angle === 'degrees' ? num(360) : mul(num(2), v('pi'))
-  const half = context.config.angle === 'degrees' ? num(180) : v('pi')
+function defaultRange(name: string, box: Box3, angle: Angle): ParamRange {
+  const turn = angle === 'degrees' ? num(360) : mul(num(2), v('pi'))
+  const half = angle === 'degrees' ? num(180) : v('pi')
   switch (name) {
     case 'theta':
       return { param: name, from: num(0), to: turn }
@@ -116,21 +115,35 @@ export function coordinateRow(system: System, p: Vec3, angle: Angle): { label: s
 
 function prepareCoordinateSurface(statement: Statement, context: BuildContext): PreparedStatement {
   const f = form(statement)
+  const angle = context.config.angle
   const params = ORDER[f.system].filter((c) => c !== f.solved)
-  const ranges = params.map((name) => f.ranges.find((r) => r.param === name) ?? defaultRange(name, context)) as [ParamRange, ParamRange]
   const solved = new Map([[f.solved, f.body]])
   const [fx, fy, fz] = MAPS[f.system].map((e) => substitute(e, solved))
-  const parametric: Statement = {
-    kind: 'space',
-    form: { form: 'parametricSurface', fx, fy, fz, u: ranges[0], v: ranges[1], style: f.style },
-    color: statement.color,
-    statementName: statement.statementName,
+  // The parametric surface over the box's default ranges. A default range is
+  // a number read off the box, so the surface is prepared again when the box
+  // it was prepared for moves (J1); what it reads does not depend on them.
+  const defaulted = params.some((name) => !f.ranges.some((r) => r.param === name))
+  const parametricIn = (box: Box3): PreparedStatement => {
+    const ranges = params.map((name) => f.ranges.find((r) => r.param === name) ?? defaultRange(name, box, angle)) as [ParamRange, ParamRange]
+    const parametric: Statement = {
+      kind: 'space',
+      form: { form: 'parametricSurface', fx, fy, fz, u: ranges[0], v: ranges[1], style: f.style },
+      color: statement.color,
+      statementName: statement.statementName,
+    }
+    return PARAMETRIC_SURFACE.prepare(parametric, context)
   }
-  const prepared = PARAMETRIC_SURFACE.prepare(parametric, context)
-  const angle = context.config.angle
+  // Prepared once here, in the authored box, so a bad body is refused at setup.
+  let preparedBox: Box3 = spaceBox(context.config)
+  let prepared = parametricIn(preparedBox)
   const coordinates = (p: Vec3) => coordinateRow(f.system, p, angle)
   const flip = FLIPPED.has(`${f.system} ${f.solved}`)
   const build = (): BuildResult => {
+    const box = boxOf(context)
+    if (defaulted && !sameBox(box, preparedBox)) {
+      prepared = parametricIn(box)
+      preparedBox = box
+    }
     const result = prepared.build()
     const marks = result.marks.map((mark) => {
       if (mark.kind !== 'mesh') return mark

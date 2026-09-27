@@ -24,10 +24,9 @@ import type { ContourForm } from '../../grammar/keywords/geometryForms'
 import { formatNumber } from '../../pick/format'
 import type { ColorScale, LabelAnchor, MeshMark, Range, SceneError } from '../../scene/types'
 import { constant, MAX_TRIANGLES, Reads } from '../common'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { contourCurves } from '../surfaceTools/contours'
 import { targetArity } from '../surfaceTools/target'
-import { spaceBox } from './box'
 import { compileField, DEFAULT_IMPLICIT_RES, implicitPick, levelMesh, XYZ } from './implicit'
 import { countTriangles, implicitRes, sampledRange, sampleGrid } from './marchingTets'
 
@@ -120,7 +119,7 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
   const levelsOf = prepareLevels(form, scope, reads)
 
   const build = (): BuildResult => {
-    const box = spaceBox(config)
+    const box = boxOf(context)
     const values = levelsOf(() => sampledRange(field.f, box, LEVEL_RANGE_SAMPLES))
     if (values.length > MAX_LEVEL_SURFACES) {
       throw new Error(`contour: ${form.text} would draw ${values.length} level surfaces — at most ${MAX_LEVEL_SURFACES}; give fewer levels`)

@@ -193,7 +193,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
   requireArity(target, 2, 'contour')
   if (form.style.opacity !== null) throw new Error(`opacity: applies to level surfaces of F(x, y, z), not to level curves — ${form.text} has two variables`)
   const f = compileOver(target.body, target, scope)
-  const domain = prepareDomain(null, config, scope, reads)
+  const domain = prepareDomain(null, context, reads)
   const res = resolution(form.style.res, config, LEVEL_RES)
   const width = form.style.width ?? LEVEL_WIDTH
   const dashed = form.style.dashed
@@ -249,7 +249,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
     if (levels.length === 0) throw new Error(`contour: ${form.text} has no nice level inside its range — list its levels`)
     if (levels.length > MAX_LEVELS) throw new Error(`contour: ${levels.length} levels — at most ${MAX_LEVELS}`)
     const colors = levelColors(levels, Float64Array.from(samples), context)
-    const floor = form.floor ? toolBox(context, rect, (x, y) => f(x, y)).z.min : 0
+    const floor = form.floor ? toolBox(context).z.min : 0
 
     const marks: LineMark[] = []
     const labels: LabelAnchor[] = []

@@ -9,8 +9,7 @@ import type { Statement } from '../../../parser/types'
 import type { LineForm } from '../../grammar/keywords/geometryForms'
 import type { Box3, LineMark } from '../../scene/types'
 import { lineStyle, Reads } from '../common'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { spaceBox } from './box'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { prepareVector, preparePoint } from './operands'
 import { add, isFiniteV, norm, scale, sub, type V3 } from './vec'
 
@@ -94,7 +93,7 @@ function prepareLine(statement: Statement, context: BuildContext): PreparedState
       if (norm(d) === 0) throw new Error(`${form.through.text} and ${to.point.text} are the same point — a line needs two`)
     }
     if (!isFiniteV(p) || !isFiniteV(d)) throw new Error(`The line ${form.text} is not finite`)
-    const clip = clipSegment(p, d, spaceBox(context.config))
+    const clip = clipSegment(p, d, boxOf(context))
     if (!clip) throw new Error(`The line ${form.text} does not meet the box — widen @bounds3d`)
     const mark: LineMark = {
       kind: 'lines',

@@ -23,6 +23,9 @@
 // setValue, is coalesced to one kernel rebuild per animation frame
 // (kernel.setValues). While something plays or a point is dragged, the box
 // and the camera target hold still; they are resolved once when it stops.
+// The kernel is told the held box (holdBox), so its box-dependent statements
+// (integration J1: a plane, a tool's floor copy) stay in the frame that is
+// drawn, and are rebuilt in the resolved box when it stops.
 // A value change re-evaluates the probe and the pins through the new scene;
 // the probe is re-picked only when the pointer moves.
 
@@ -545,9 +548,12 @@ export class SpaceRenderer {
     }
     let installed = false
     if (this.pendingValues.size > 0) {
-      // Every queued value in one rebuild.
+      // Every queued value in one rebuild; while still playing or dragging,
+      // against the held box.
       const before = kernel.values()
-      const next = kernel.setValues(new Map([...this.pendingValues].map(([name, { value }]) => [name, value])))
+      const holding = this.world !== null && (this.playing.size > 0 || this.dragging !== null)
+      const values = new Map([...this.pendingValues].map(([name, { value }]) => [name, value]))
+      const next = kernel.setValues(values, holding ? { holdBox: this.world!.box } : undefined)
       const after = kernel.values()
       for (const [name, { source }] of this.pendingValues) {
         const was = before.get(name)
@@ -561,9 +567,10 @@ export class SpaceRenderer {
       }
       this.syncParams()
     }
-    // Play stopped or the drag ended: the held box is resolved now, once.
+    // Play stopped or the drag ended: the held box is resolved now, once, and
+    // the kernel's box-dependent statements follow it.
     const still = this.playing.size > 0 || this.dragging !== null
-    if (this.held && !still && !installed && this.scene) this.install(this.scene, this.config)
+    if (this.held && !still && !installed && this.scene) this.install(kernel.setValues(new Map()), this.config)
     return again
   }
 

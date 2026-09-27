@@ -16,8 +16,6 @@ function context(spec: string): BuildContext {
   }
 }
 
-const RECT = { x: { min: -5, max: 5 }, y: { min: -5, max: 5 } }
-
 describe('clipToZ', () => {
   it('cuts a polyline exactly where it leaves the z range, interpolating the parameter', () => {
     // z runs 0, 2, 4 at t = 0, 1, 2; the range [1, 3] is entered at t = 0.5
@@ -32,22 +30,18 @@ describe('clipToZ', () => {
   })
 })
 
-describe('toolBox: the one box estimate every surface tool calls (the seam for the two-pass kernel)', () => {
-  it('is the only box estimate box.ts exports', () => {
+// Since the box pass (integration J1) a tool no longer estimates the box: the
+// kernel resolves it from the other statements and hands it over. The
+// estimate's own tests went with it; kernel/boxPass.test.ts has what replaced
+// them.
+describe('toolBox: the box the kernel resolved (J1)', () => {
+  it('is the only box box.ts exports, and it is context.box', () => {
     expect(Object.keys(box).filter((k) => /Box$/.test(k))).toEqual(['toolBox'])
+    const resolved = { x: { min: -1, max: 2 }, y: { min: -1, max: 1 }, z: { min: -1, max: 4 } }
+    expect(box.toolBox({ ...context(''), box: resolved })).toBe(resolved)
   })
 
-  it('takes an authored @bounds3d z as written', () => {
-    expect(box.toolBox(context('@bounds3d: z [-2, 6]'), RECT, (x, y) => x * x + y * y).z).toEqual({ min: -2, max: 6 })
-  })
-
-  it("otherwise rounds the target's range out as the frame does: x^2 - y^2 - 3 spans [-28, 22], step 5, so [-30, 25]", () => {
-    expect(box.toolBox(context(''), RECT, (x, y) => x * x - y * y - 3)).toEqual({ x: RECT.x, y: RECT.y, z: { min: -30, max: 25 } })
-  })
-
-  it('gives a three-variable target (null) the region an implicit surface samples: [-5, 5], whatever the x/y domain', () => {
-    // A flat two-variable estimate over [-2, 2]^2 would widen to [-2, 2].
-    const small = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 } }
-    expect(box.toolBox(context('@bounds3d: x [-2, 2], y [-2, 2]'), small, null).z).toEqual({ min: -5, max: 5 })
+  it('refuses to guess: without the kernel’s box it throws, naming the line', () => {
+    expect(() => box.toolBox(context(''))).toThrow("internal: line 1 needs the scene's box, and it was built without one")
   })
 })

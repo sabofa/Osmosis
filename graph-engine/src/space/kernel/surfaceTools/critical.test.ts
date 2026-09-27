@@ -119,10 +119,11 @@ describe('critical: a point on the domain’s edge', () => {
 
 describe('critical: none found, and parameters', () => {
   it('x + y has none: a note, not an error', () => {
-    const scene = sceneOf('critical: x + y')
+    // Beside z = x + y (the box pass, J1: the surface sizes the box), which on
+    // [-5, 5]^2 ranges over [-10, 10]: the note sits at the centre of the floor.
+    const scene = sceneOf('critical: x + y\nz = x + y')
     expect(scene.errors).toEqual([])
-    expect(scene.marks).toEqual([])
-    // x + y on [-5, 5]^2 ranges over [-10, 10]: the note sits at the centre of the floor.
+    expect(scene.marks.filter((m) => m.source.line === 1)).toEqual([])
     expect(labelOf(scene, 's1.note')).toMatchObject({ text: 'no critical points found in the domain', position: [0, 0, -10] })
   })
 

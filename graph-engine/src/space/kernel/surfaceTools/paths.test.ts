@@ -15,7 +15,9 @@ function frameZ(spec: string, scene: SpaceScene) {
 const F = 'x*y/(x^2 + y^2)'
 
 describe('path: on xy/(x^2 + y^2) along (t, t) for t in [0, 1] toward (0, 0)', () => {
-  const scene = sceneOf(`path: on ${F} along (t, t) for t in [0, 1] toward (0, 0)`)
+  // Beside its surface, which sizes the box (the box pass, J1), written after
+  // the tool so the tool keeps line 1.
+  const scene = sceneOf(`path: on ${F} along (t, t) for t in [0, 1] toward (0, 0)\nz = ${F}`)
 
   it('lifts the curve onto the surface: every vertex is (t, t, 1/2)', () => {
     expect(scene.errors).toEqual([])

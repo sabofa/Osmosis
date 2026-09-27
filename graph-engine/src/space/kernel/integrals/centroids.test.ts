@@ -19,7 +19,9 @@ describe('centroid: of regions', () => {
     const [px, py, pz] = centre(scene, 2)
     expect(px).toBeCloseTo(2 / 3, 12)
     expect(py).toBeCloseTo(1 / 3, 12)
-    expect(pz).toBe(0)
+    // a region's centre lies on the box floor: with nothing drawn that has z,
+    // the box pass (J1) gives z [-5, 5]
+    expect(pz).toBe(-5)
   })
 
   it('the upper half-disc r in [0, 1], theta in [0, pi]: (0, 4/(3π)) ≈ (0, 0.42441)', () => {
@@ -85,8 +87,11 @@ describe('centroid: of volumes', () => {
 })
 
 describe('centroid: the drawing', () => {
-  it('a diamond at the centre, with dashed drop lines to the floor and the planes x = 0 and y = 0', () => {
-    const scene = sceneOf('V = volume x in [1, 2], y in [1, 2], z in [1, 2]\ncentroid: V')
+  it('a diamond at the centre, with dashed drop lines to the floor and the two back walls of the box', () => {
+    // The volume drawn after the centroid (so the centroid keeps line 2)
+    // makes the box [1, 2]^3 (the box pass, J1): the floor z = 1 and the walls
+    // x = 1 and y = 1.
+    const scene = sceneOf('V = volume x in [1, 2], y in [1, 2], z in [1, 2]\ncentroid: V\nvolume: V')
     const point = markNamed(scene, 's2', 'points')
     expect(point.style.shape).toBe('diamond')
     const drops = markNamed(scene, 's2.drops', 'lines')
@@ -94,23 +99,23 @@ describe('centroid: the drawing', () => {
     expect(polylines(drops).map((l) => l.map((p) => p.map((c) => Math.round(c * 1e9) / 1e9)))).toEqual([
       [
         [1.5, 1.5, 1.5],
-        [1.5, 1.5, 0],
+        [1.5, 1.5, 1],
       ],
       [
         [1.5, 1.5, 1.5],
-        [0, 1.5, 1.5],
+        [1, 1.5, 1.5],
       ],
       [
         [1.5, 1.5, 1.5],
-        [1.5, 0, 1.5],
+        [1.5, 1, 1.5],
       ],
     ])
   })
 
   it('a drop line of no length is left out (a region’s centre lies on the floor)', () => {
-    const drops = polylines(markNamed(sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D'), 's2.drops', 'lines'))
-    // to the floor: none; to x = 0: none (x̄ = 0); to y = 0: one
-    expect(drops).toHaveLength(1)
+    const drops = polylines(markNamed(sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D\nregion: D'), 's2.drops', 'lines'))
+    // to the floor: none; to the walls x = -1 and y = 0 of the half-disc's box: one each
+    expect(drops).toHaveLength(2)
   })
 
   it('an unknown name, and a density that reads a parameter', () => {

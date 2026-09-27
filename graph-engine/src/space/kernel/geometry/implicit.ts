@@ -22,8 +22,7 @@ import type { ColorScale, MeshMark, SurfacePick, Vec3 } from '../../scene/types'
 import { boundNames, checkBudget, colorScale, Reads, renameBound } from '../common'
 import { finishMesh } from '../mesh'
 import { normalizeAt } from '../normals'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { spaceBox } from './box'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { countTriangles, implicitRes, marchingTets, sampleGrid, type Field, type Grid } from './marchingTets'
 
 export const DEFAULT_IMPLICIT_RES = 64
@@ -158,7 +157,7 @@ function prepareImplicit(statement: Statement, context: BuildContext): PreparedS
   }
 
   const build = (): BuildResult => {
-    const grid = sampleGrid(field.f, spaceBox(config), n)
+    const grid = sampleGrid(field.f, boxOf(context), n)
     // The budget is checked before anything is meshed.
     checkBudget(countTriangles(grid, 0), n)
     const mesh = levelMesh(field, grid, 0)

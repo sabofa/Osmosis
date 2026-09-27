@@ -582,9 +582,9 @@ function prepareRegion(statement: Statement, context: BuildContext): PreparedSta
   checkBudget(2 * n * n, n)
   const reads = new Reads(context.scope)
   const region = prepareRegion2(domain, context, reads)
-  const z = floorHeight(context.config)
 
   const build = (): BuildResult => {
+    const z = floorHeight(context)
     const r = region.build(n)
     const errors: SceneError[] = []
     const area = attempt(context, errors, () => r.integrate(() => 1, true))

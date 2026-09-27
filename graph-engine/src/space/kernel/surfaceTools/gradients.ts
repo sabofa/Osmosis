@@ -52,7 +52,7 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
     )
   }
   const point = preparePoint(form.point, scope, reads)
-  const domain = prepareDomain(form.over, config, scope, reads)
+  const domain = prepareDomain(form.over, context, reads)
 
   if (target.arity === 2) {
     const { f, fx, fy } = surface2(target, scope)
@@ -65,7 +65,7 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
       const p = fx(a, b)
       const q = fy(a, b)
       if (![c, p, q].every(Number.isFinite)) throw new Error(`gradient: ∇f is undefined at ${pointText([a, b])}`)
-      const box = toolBox(context, rect, (x, y) => f(x, y))
+      const box = toolBox(context)
       const z = form.lifted ? c : box.z.min
       const tail: Vec3 = [a, b, z]
       const marks: Mark[] = []
@@ -102,7 +102,7 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
   const surfaceRes = form.surface ? levelSurfaceRes(form.style.res, config) : 0
   const build = (): BuildResult => {
     const [x0, y0, z0] = point()
-    const box = toolBox(context, domain(), null)
+    const box = toolBox(context)
     requireInside('gradient', [x0, y0, z0], [box.x, box.y, box.z], 'the box')
     const g: Vec3 = [grad[0](x0, y0, z0), grad[1](x0, y0, z0), grad[2](x0, y0, z0)]
     const length = Math.hypot(...g)

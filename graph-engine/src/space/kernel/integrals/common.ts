@@ -2,14 +2,13 @@
 // floor a region is drawn on, and the tolerance that decides when a sampled
 // piece (a boundary edge, a wall, a face) has collapsed.
 
-import type { GraphConfig } from '../../../parser/config'
 import type { Statement } from '../../../parser/types'
 import { QuadratureError } from '../../../math/quadrature'
 import { QUAD_BUDGET } from '../../../math/tolerance'
 import { APPROX, formatApprox, formatNumber, supportedDigits, MAX_DIGITS } from '../../pick/format'
 import type { LabelAnchor, SceneError, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
-import type { BuildContext } from '../registry'
+import { boxOf, type BuildContext } from '../registry'
 
 // A numeric answer. `error` bounds |value - true value|: the method's own
 // estimate, never below what the arithmetic can resolve (errorFloor), or
@@ -125,11 +124,10 @@ export function attempt<T>(context: BuildContext, errors: SceneError[], run: () 
 // height. Real pieces are many orders above it.
 export const COLLAPSED_REL = 1e-9
 
-// Where a region is drawn: the box floor when @bounds3d states z, else the
-// xy-plane. The kernel builds before the frame's automatic bounds exist, and
-// the xy-plane is where the region lives.
-export function floorHeight(config: GraphConfig): number {
-  return config.space.bounds.z?.min ?? 0
+// Where a region is drawn: the floor of the box the scene resolves to, which
+// the kernel hands a box-dependent statement (integration J1).
+export function floorHeight(context: BuildContext): number {
+  return boxOf(context).z.min
 }
 
 export function part(context: BuildContext, name: string): BuildContext['source'] {

@@ -4,12 +4,16 @@ import { resolveBox } from '../../frame/bounds'
 import { expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
 // f = x^2 - y^2 over the default [-5, 5]^2: its range [-25, 25] is already on
-// multiples of niceStep(50, 8) = 5, so the box is [-5, 5]^2 x [-25, 25].
+// multiples of niceStep(50, 8) = 5, so the box is [-5, 5]^2 x [-25, 25]. A
+// tool is drawn beside its surface, which sizes the box (the box pass, J1):
+// each spec ends with z = f(x, y) (Z), after the tool, so the tool keeps its
+// line.
 const F = 'f(x, y) = x^2 - y^2'
+const Z = '\nz = f(x, y)'
 
 describe('trace: f at x = 1', () => {
   const scene = sceneOf(`${F}
-trace: f at x = 1`)
+trace: f at x = 1${Z}`)
 
   it('draws (1, y, 1 - y^2) over the whole y range, with y as its parameter', () => {
     expect(scene.errors).toEqual([])
@@ -48,14 +52,14 @@ trace: f at x = 1`)
   })
 
   it('draws no tangent unless asked', () => {
-    expect(scene.marks.map((m) => m.source.object)).toEqual(['s2', 's2.wall', 's2.plane'])
+    expect(scene.marks.filter((m) => m.source.line === 2).map((m) => m.source.object)).toEqual(['s2', 's2.wall', 's2.plane'])
     expect(scene.labels).toEqual([])
   })
 })
 
 describe('trace: f at x = 1 tangent at y = 2', () => {
   const scene = sceneOf(`${F}
-trace: f at x = 1 tangent at y = 2`)
+trace: f at x = 1 tangent at y = 2${Z}`)
 
   it('draws the tangent through (1, 2, -3) along (0, 1, -4), out to the box', () => {
     const [a, b] = vertices(lineOf(scene, 's2.tangent').positions)
@@ -75,7 +79,7 @@ trace: f at x = 1 tangent at y = 2`)
 
 describe('trace: f at y = 1 tangent at x = 2 (the roles swapped)', () => {
   const scene = sceneOf(`${F}
-trace: f at y = 1 tangent at x = 2`)
+trace: f at y = 1 tangent at x = 2${Z}`)
 
   it('draws (x, 1, x^2 - 1), its copy on the wall y = -5, and the plane y = 1', () => {
     for (const [x, y, z] of vertices(lineOf(scene, 's2').positions)) {
@@ -112,14 +116,14 @@ describe('trace: refusals', () => {
   it('refuses a slice outside the domain, on its line', () => {
     expect(
       sceneOf(`${F}
-trace: f at x = 7`).errors
+trace: f at x = 7${Z}`).errors
     ).toEqual([{ line: 2, message: "trace: x = 7 is outside the domain's x range [−5, 5]" }])
   })
 
   it('reads the slice from a parameter, and follows it through setValue (M3)', () => {
     const kernel = kernelOf(`@param c = 3 range [0, 4]
 ${F}
-trace: f at x = c over x in [0, 4], y in [-1, 1]`)
+trace: f at x = c over x in [0, 4], y in [-1, 1]${Z}`)
     for (const [x] of vertices(lineOf(kernel.scene(), 's3').positions)) expect(x).toBe(3)
     const moved = kernel.setValue('c', 1)
     expect(moved.errors).toEqual([])
@@ -132,7 +136,7 @@ trace: f at x = c over x in [0, 4], y in [-1, 1]`)
   it('refuses a tangent outside the domain, on its line (M2)', () => {
     expect(
       sceneOf(`${F}
-trace: f at x = 1 tangent at y = 9`).errors
+trace: f at x = 1 tangent at y = 9${Z}`).errors
     ).toEqual([{ line: 2, message: "trace: tangent at y = 9 is outside the domain's y range [−5, 5]" }])
   })
 })

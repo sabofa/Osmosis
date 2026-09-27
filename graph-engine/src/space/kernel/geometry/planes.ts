@@ -18,8 +18,8 @@ import { sub as subExpr } from '../../../math/expr'
 import type { PlaneForm } from '../../grammar/keywords/geometryForms'
 import type { Box3, LineMark, MeshMark } from '../../scene/types'
 import { Reads } from '../common'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { largestSpan, spaceBox } from './box'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
+import { largestSpan } from './box'
 import { XYZ } from './implicit'
 import { prepareVector, preparePoint } from './operands'
 import { add, cross, dot, isFiniteV, norm, scale, sub, unit, type V3 } from './vec'
@@ -147,7 +147,7 @@ function preparePlane(statement: Statement, context: BuildContext): PreparedStat
   const build = (): BuildResult => {
     const { n, k } = planeOf()
     if (!isFiniteV(n) || !Number.isFinite(k)) throw new Error(`The plane ${form.text} is not finite`)
-    const polygon = planeBoxPolygon(n, k, spaceBox(context.config))
+    const polygon = planeBoxPolygon(n, k, boxOf(context))
     if (polygon.length < 3) throw new Error(`The plane ${form.text} does not meet the box — widen @bounds3d`)
     const m = unit(n)
     const count = polygon.length

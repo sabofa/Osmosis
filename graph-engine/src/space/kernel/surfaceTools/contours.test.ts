@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseExprString } from '../../../parser/parseExpr'
 import { parseSpec } from '../../../parser/parseSpec'
 import type { Statement } from '../../../parser/types'
+import { resolveBox } from '../../frame/bounds'
 import type { LineMark } from '../../scene/types'
 import type { BuildContext, BuildResult } from '../registry'
 import { buildScope } from '../scope'
@@ -30,6 +31,9 @@ function contour(target: string, levels: Levels, options: { floor?: boolean; lab
     source: { line, statement: null, object: `s${line}` },
     color: { author: options.color ?? null, slot: 0 },
     colorScaleId: null,
+    // With nothing else drawn, the box pass hands a tool @bounds3d, else
+    // [-5, 5] on each axis (integration J1).
+    box: resolveBox(parsed.config.space, null),
     named: new Map(),
   }
   return contourCurves.prepare(statement, context).build()
@@ -91,8 +95,8 @@ describe('contourCurves: x^2 + y^2 at levels 1 and 4', () => {
 
 describe('contourCurves with floor', () => {
   it('adds a dashed 1 px copy of each level at the box floor', () => {
-    // x^2 + y^2 - 3 on [-5, 5]^2 ranges over [-3, 47]; the frame rounds that
-    // out by niceStep(50, 8) = 5, so the floor is -5.
+    // With nothing else drawn the box is [-5, 5]^3 (the box pass, J1), so
+    // the floor is -5.
     const result = contour('x^2 + y^2 - 3', list('1', '6'), { floor: true })
     expect(result.marks.map((m) => m.source.object)).toEqual(['s1.level0', 's1.floor0', 's1.level1', 's1.floor1'])
     for (const [object, r] of [

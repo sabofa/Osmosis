@@ -23,9 +23,10 @@ describe('region: type I, x in [0, 1], y in [x^2, x]', () => {
   })
 
   it('anchors its readout halfway along its longest boundary piece, clear of its centre and the box corners', () => {
-    // the half-disc: the arc (length π) beats the diameter (2); its middle is (0, 1)
+    // the half-disc: the arc (length π) beats the diameter (2); its middle is
+    // (0, 1), on the floor: with no z data the box pass (J1) gives z [-5, 5]
     const [x, y, z] = readout(sceneOf('region: r in [0, 1], theta in [0, pi]'), 1).position
-    expect([Math.abs(x) < 1e-12, y, z]).toEqual([true, 1, 0])
+    expect([Math.abs(x) < 1e-12, y, z]).toEqual([true, 1, -5])
     // type I: the parabola (length √5/2 + asinh(2)/4 = 1.4789) beats the line (1.4142). Half
     // its length, 0.7394, is reached at x = 0.6106 (L(0.60) = 0.7226, L(0.62) = 0.7542); the
     // anchor is the first of its 256 samples past it, x = 157/256.
@@ -43,9 +44,9 @@ describe('region: type I, x in [0, 1], y in [x^2, x]', () => {
     }
   })
 
-  it('shades the region on the floor (z = 0 unless @bounds3d says), at opacity 0.35', () => {
+  it('shades the region on the box floor (with no z data the box pass, J1, gives z [-5, 5]), at opacity 0.35', () => {
     const floor = markNamed(scene, 's1', 'mesh')
-    expect(vertices(floor).every((p) => p[2] === 0)).toBe(true)
+    expect(vertices(floor).every((p) => p[2] === -5)).toBe(true)
     expect(floor.style.opacity).toBe(0.35)
     expect(meshArea(floor)).toBeCloseTo(1 / 6, 3)
     const raised = sceneOf('@bounds3d: z [-2, 3]\nregion: x in [0, 1], y in [x^2, x]')

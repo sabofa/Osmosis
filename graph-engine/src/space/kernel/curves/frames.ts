@@ -35,10 +35,10 @@ import type { CurveFrameForm } from '../../grammar/keywords/geometryForms'
 import { formatNumber } from '../../pick/format'
 import type { LabelAnchor, Mark, PointMark, SceneError } from '../../scene/types'
 import { boundNames, constant, Reads, renameBound } from '../common'
-import { largestSpan, spaceBox } from '../geometry/box'
+import { largestSpan } from '../geometry/box'
 import { add, cross, dot, isFiniteV, norm, scale, sub, unit, type V3 } from '../geometry/vec'
 import { arrowMark, label, polylines } from '../geometry/vectorOps'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 
 export const FRAME_SPAN = 0.18
 export const CIRCLE_SEGMENTS = 256
@@ -151,7 +151,7 @@ function prepareCurveFrame(statement: Statement, context: BuildContext): Prepare
     const frame = curveFrame(v, a)
 
     if (form.form === 'frame') {
-      const L = FRAME_SPAN * largestSpan(spaceBox(context.config))
+      const L = FRAME_SPAN * largestSpan(boxOf(context))
       const axes: [string, V3][] = frame.N && frame.B ? [['T', frame.T], ['N', frame.N], ['B', frame.B]] : [['T', frame.T]]
       const vectors = axes.map(([, u]) => scale(u, L))
       const labels = axes.map(([text], i) => label(context, text, add(p, vectors[i]), text, 'point'))

@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
 // f = x^2 - y^2 at (1, 2) toward <3, 4>: u = (0.6, 0.8), ∇f = (2, -4),
-// D_u f = 2(0.6) + (-4)(0.8) = -2. The box is [-5, 5]^2 x [-25, 25].
+// D_u f = 2(0.6) + (-4)(0.8) = -2. The tool is drawn beside its surface,
+// which sizes the box (the box pass, J1): z = x^2 - y^2 over [-5, 5]^2,
+// written after the tool, makes it [-5, 5]^2 x [-25, 25].
 const SPEC = 'directional: x^2 - y^2 at (1, 2) toward <3, 4>'
+const SADDLE = '\nz = x^2 - y^2'
 
 describe(SPEC, () => {
-  const scene = sceneOf(SPEC)
+  const scene = sceneOf(SPEC + SADDLE)
 
   it('reads out D_u f = -2 with the unit u and ∇f', () => {
     expect(scene.errors).toEqual([])

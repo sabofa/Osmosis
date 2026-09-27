@@ -42,9 +42,12 @@ describe('line:', () => {
   })
 
   it('through P and Q (named points) is clipped to the box, each end exactly on a face', () => {
-    // P + t (Q - P) with P = (1, 2, 3), Q - P = (-1, -2, -2): the slabs give
-    // x: [-4, 6], y: [-1.5, 3.5], z: [-1, 4], so t runs over [-1, 3.5].
-    const line = onlyLine('P = (1, 2, 3)\nQ = (0, 0, 1)\nline: through P and Q')
+    // P + t (Q - P) with P = (1, 2, 3), Q - P = (-1, -2, -2): the slabs of
+    // [-5, 5]^3 give x: [-4, 6], y: [-1.5, 3.5], z: [-1, 4], so t runs over
+    // [-1, 3.5]. The box is authored: since the box pass (J1) the drawn P and
+    // Q would otherwise size it to [0, 1] x [0, 2] x [1, 3], where the line is
+    // the segment P-Q.
+    const line = onlyLine('@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\nP = (1, 2, 3)\nQ = (0, 0, 1)\nline: through P and Q')
     expect(vertices(line.positions)).toEqual([
       [2, 4, 5],
       [-2.5, -5, -4],

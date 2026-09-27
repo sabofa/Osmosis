@@ -4,11 +4,15 @@ import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, meshO
 // f = x^2 - y^2 at (1, 2): f = -3, f_x = 2, f_y = -4, so
 // L(x, y) = -3 + 2(x - 1) - 4(y - 2) (spec SP10).
 const F = 'f(x, y) = x^2 - y^2'
+// The surface the tool is drawn beside, which sizes the box (the box pass,
+// J1): over [-5, 5]^2, z in [-25, 25]. It is written after the tool, so the
+// tool keeps its line.
+const Z = '\nz = f(x, y)'
 const L = (x: number, y: number) => -3 + 2 * (x - 1) - 4 * (y - 2)
 
 describe('tangent-plane: f at (1, 2)', () => {
   const scene = sceneOf(`${F}
-tangent-plane: f at (1, 2)`)
+tangent-plane: f at (1, 2)${Z}`)
 
   it('draws L over the square of half-side 0.2 x 10 = 2 about (1, 2), at opacity 0.5', () => {
     expect(scene.errors).toEqual([])
@@ -47,7 +51,7 @@ tangent-plane: f at (1, 2)`)
 describe('tangent-plane: f at (1, 2) normal', () => {
   it('adds the arrow along (-f_x, -f_y, 1) = (-2, 4, 1), 0.18 x the largest box span (50) = 9 long', () => {
     const arrow = arrowsOf(sceneOf(`${F}
-tangent-plane: f at (1, 2) normal`), 's2.normal')
+tangent-plane: f at (1, 2) normal${Z}`), 's2.normal')
     expectClose(Array.from(arrow.tails), [1, 2, -3])
     const v = Array.from(arrow.vectors)
     expectParallel(v, [-2, 4, 1])
@@ -60,7 +64,7 @@ describe('the patch is clipped to the box', () => {
   it('under @bounds3d z [-10, 10] the corner (-1, 4), where L = -15, is cut off: a pentagon, still on L', () => {
     const mesh = meshOf(sceneOf(`@bounds3d: z [-10, 10]
 ${F}
-tangent-plane: f at (1, 2)`), 's3')
+tangent-plane: f at (1, 2)${Z}`), 's3')
     const points = vertices(mesh.positions)
     expect(points).toHaveLength(5)
     expect(mesh.indices.length / 3).toBe(3)

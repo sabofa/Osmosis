@@ -11,7 +11,8 @@ const H = Math.SQRT1_2
 const R2 = Math.SQRT2
 
 describe('lagrange: max x + y subject to x^2 + y^2 = 1', () => {
-  const scene = sceneOf('lagrange: max x + y subject to x^2 + y^2 = 1')
+  // Beside z = x + y, which sizes the box (the box pass, J1).
+  const scene = sceneOf('lagrange: max x + y subject to x^2 + y^2 = 1\nz = x + y')
 
   it('finds (√2/2, √2/2), f = √2, λ = √2/2 — once', () => {
     expect(scene.errors).toEqual([])
@@ -179,8 +180,8 @@ describe('lagrange when the constraint runs out of the domain (I4)', () => {
 describe('the floor arrows are sized by the floor (I6)', () => {
   it('min x^2 + y^2 subject to x + y = 1 over [-5, 5]^2: ∇f 1.5 and ∇g 0.9 long, and the frame stays the data’s', () => {
     // Sized by the box's largest span (z runs to 50) they were 7.5 long, and
-    // the frame grew to [-5, 6].
-    const spec = 'lagrange: min x^2 + y^2 subject to x + y = 1'
+    // the frame grew to [-5, 6]. Beside z = x^2 + y^2 (the box pass, J1).
+    const spec = 'lagrange: min x^2 + y^2 subject to x + y = 1\nz = x^2 + y^2'
     const scene = sceneOf(spec)
     for (const [object, length] of [
       ['s1.gradf0', 1.5],
@@ -188,12 +189,12 @@ describe('the floor arrows are sized by the floor (I6)', () => {
     ] as const) {
       expect(Math.abs(Math.hypot(...Array.from(arrowsOf(scene, object).vectors)) - length)).toBeLessThanOrEqual(1e-12)
     }
-    // The line x + y = 1 spans x and y in [-4, 5]; the arrows at (1/2, 1/2)
-    // now stay inside that.
+    // Since the box pass (J1) nothing a tool draws sizes the frame: it is the
+    // surface's, [-5, 5]^2.
     const frame = resolveBox(parseSpec(spec).config.space, scene.extent)
     expect([frame.x, frame.y]).toEqual([
-      { min: -4, max: 5 },
-      { min: -4, max: 5 },
+      { min: -5, max: 5 },
+      { min: -5, max: 5 },
     ])
   })
 })

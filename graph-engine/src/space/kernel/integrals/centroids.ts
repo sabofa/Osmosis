@@ -12,8 +12,9 @@
 // refused.
 //
 // Drawn: a diamond at the centre, always, with dashed drop lines to the floor
-// and to the planes x = 0 and y = 0 (a line of no length is left out: a
-// region's centre lies on the floor). The readout, at the centre, is
+// and the two back walls (x and y at their minimum) of the scene's box
+// (integration J1; a line of no length is left out: a region's centre lies on
+// the floor). The readout, at the centre, is
 // "centroid ≈ (x, y[, z]); M ≈ m" — "centre of mass" with a density — each
 // value to the digits its error estimate supports.
 
@@ -21,7 +22,7 @@ import type { Expr, Statement } from '../../../parser/types'
 import { call, mul, num, variable } from '../../../math/expr'
 import type { LineMark, PointMark, SceneError } from '../../scene/types'
 import { DASH, Reads, resolution } from '../common'
-import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { approxText, approxTupleText, attempt, floorHeight, formOf, part, readoutLabel, type Approx } from './common'
 import { namedShape } from './named'
 import { prepareRegion2 } from './regions'
@@ -85,9 +86,12 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
   const reads = new Reads(context.scope)
   const measure = prepareMeasure(context, form.of, form.density, reads)
   const name = form.density ? 'centre of mass' : 'centroid'
-  const z0 = floorHeight(context.config)
 
   const build = (): BuildResult => {
+    // The floor and the two back walls (x and y at their minimum) of the
+    // scene's box (integration J1), where the drop lines land.
+    const box = boxOf(context)
+    const z0 = floorHeight(context)
     const errors: SceneError[] = []
     const measured = attempt(context, errors, measure)
     if (!measured) return { marks: [], labels: [], errors, colorScale: null }
@@ -105,8 +109,8 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
     }
     const feet: [number, number, number][] = [
       [p[0], p[1], z0],
-      [0, p[1], p[2]],
-      [p[0], 0, p[2]],
+      [box.x.min, p[1], p[2]],
+      [p[0], box.y.min, p[2]],
     ]
     const drops = feet.filter((q) => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) > 1e-12 * (1 + Math.hypot(...p)))
     const marks: (PointMark | LineMark)[] = [point]

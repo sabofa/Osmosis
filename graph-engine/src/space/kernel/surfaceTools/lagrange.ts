@@ -177,7 +177,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
   const gTarget = resolveTarget(form.constraint, scope, reads, 'lagrange')
   reads.add(form.level)
   const level = constant(form.level, scope)
-  const domain = prepareDomain(form.over, config, scope, reads)
+  const domain = prepareDomain(form.over, context, reads)
   const readout = (kind: string, s: Solution, span: number, scale: number, note: string) =>
     `${kind} ${approxPoint(s.at, RESOLVED * span)}, f ${approx(s.f, RESOLVED * scale)}, λ ${approx(s.lambda, RESOLVED * Math.max(1, Math.abs(s.lambda)))}${note}`
   const larger = (rect: Rect) => Math.max(rect.x.max - rect.x.min, rect.y.max - rect.y.min)
@@ -226,7 +226,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
       }
       const kept = judge(chosen, samples, NEIGHBOURHOOD * span)
 
-      const box = toolBox(context, rect, (x, y) => F.f(x, y))
+      const box = toolBox(context)
       const floor = box.z.min
       const marks: Mark[] = []
       const labels: LabelAnchor[] = []
@@ -296,7 +296,7 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
   const G = surface3(within3(gTarget), scope)
   const res = levelSurfaceRes(form.style.res, config)
   const build = (): BuildResult => {
-    const box = toolBox(context, domain(), null)
+    const box = toolBox(context)
     const c = level()
     const h = (x: number, y: number, z: number) => G.F(x, y, z) - c
     const mesh = MESH_LEVEL_SURFACE({ F: G.F, grad: G.grad }, c, box, res)

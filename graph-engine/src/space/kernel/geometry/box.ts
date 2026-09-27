@@ -1,10 +1,9 @@
-// The box S4a's unbounded forms are built in (plan A1, A3, A5): an implicit
-// surface, a line, a plane and a coordinate surface have no extent of their
-// own to size the box from, so they are sampled, clipped or ranged over
-// @bounds3d where it is given and [-5, 5] on every axis it does not name.
-// (The frame's own box comes later, from the scene's extent; for these forms
-// that extent is this box.) Sizes that scale with the box (a frame's arrows,
-// a right-angle mark) read its largest span.
+// The authored box: @bounds3d where it is given and [-5, 5] on every axis it
+// does not name. S4a's unbounded forms (an implicit surface, a line, a plane,
+// a coordinate surface, a curve frame's arrows) no longer read it: since the
+// box pass (integration J1) they are box-dependent and build in the box the
+// scene resolves to (registry.ts, boxOf). What still reads it: a cross
+// product's right-angle mark, whose statement sizes the box itself.
 
 import type { GraphConfig } from '../../../parser/config'
 import type { Box3, Range } from '../../scene/types'
