@@ -491,6 +491,30 @@ describe('the triangle budget', () => {
   })
 })
 
+describe('compositions build (fix round 1, C1)', () => {
+  it('z = k(k(x)) + y: the normal uses d/dx x^4 = 4x^3, 4 at x = 1', () => {
+    const scene = sceneOf('k(x) = x^2\nz = k(k(x)) + y for x in [0, 1], y in [0, 1] res: 4')
+    expect(scene.errors).toEqual([])
+    const mesh = only(scene, 'mesh')
+    if (mesh.pick?.kind !== 'graph') throw new Error('expected a graph pick')
+    expect(mesh.pick.fx(1, 0)).toBe(4)
+    expect(mesh.pick.fy(1, 0)).toBe(1)
+  })
+
+  it('a lifted y = k(k(x)) - 5 builds', () => {
+    const scene = sceneOf('k(x) = x^2\ny = k(k(x)) - 5')
+    expect(scene.errors).toEqual([])
+    // y' = 4x^3: 32 at x = 2
+    expect(only(scene, 'lines').pick!.dr(2)).toEqual([1, 32, 0])
+  })
+
+  it('a curve (k(k(t)), t, 0) builds, with r\'(1) = (4, 1, 0)', () => {
+    const scene = sceneOf('k(x) = x^2\n(k(k(t)), t, 0) for t in [0, 1]')
+    expect(scene.errors).toEqual([])
+    expect(only(scene, 'lines').pick!.dr(1)).toEqual([4, 1, 0])
+  })
+})
+
 describe('determinism', () => {
   it('the same spec gives the same scene, typed arrays included', () => {
     const spec = 'z = sin(x) cos(y) over x^2 + y^2 <= 9\n(cos(t), sin(t), t/4) for t in [0, 6]\nA = (1, 2, 3)'

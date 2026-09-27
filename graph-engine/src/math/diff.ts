@@ -2,12 +2,19 @@
 // consumers compile simplify(diff(...)). Space never finite-differences a
 // formula it has (SP2).
 //
-// User functions are inlined by the chain rule: d/dv f(a1, ..., an) is the
-// derivative of f's body with its parameters replaced by the arguments. A
-// body's other free names (the spec's parameters and constants) are then read
-// in the caller's context, so a caller that binds a variable with the same
-// name as one of those must rename its own bound variables first (renameVars);
-// space's kernel does, for every statement it differentiates.
+// User functions go through the chain rule:
+//   d/dv f(a1, ..., an) = sum_i (df/dp_i)(a1, ..., an) * d(a_i)/dv + (df/dv)(a1, ..., an)
+// Each partial is taken of f's body with its parameters renamed to fresh
+// names no author can write, while f is on the cycle stack; the arguments are
+// substituted afterwards and differentiated with f OFF the stack, so a
+// composition (f(f(x)), or f(g(x)) where g calls f) is not mistaken for a
+// cycle. The last term differentiates the body's own reads of v: v is a
+// parameter when a caller differentiates with respect to one. A constant
+// differentiates as its body does, for the same reason (k = 2a, dk/da = 2).
+// A body's free names are the spec's parameters and constants, read in the
+// caller's context after substitution, so a caller that binds a variable with
+// the same name as one of those must rename its own bound variables first
+// (renameVars); space's kernel does, for every statement it differentiates.
 //
 // Non-smooth built-ins differentiate almost everywhere: abs gives sign;
 // floor, ceil, round and sign give 0; mod(a, b) = a - b floor(a/b) gives
@@ -30,8 +37,21 @@ const TWO = num(2)
 const PI_OVER_180 = div(variable('pi'), num(180))
 const OVER_PI_180 = div(num(180), variable('pi'))
 
+// The functions and constants being differentiated, outermost first (cycle
+// detection), and a counter for fresh parameter names.
+interface Ctx {
+  stack: string[]
+  fresh: number
+}
+
 export function diff(expr: Expr, v: string, scope: MathScope): Expr {
-  return differentiate(expr, v, scope, [])
+  return differentiate(expr, v, scope, { stack: [], fresh: 0 })
+}
+
+function cycle(ctx: Ctx, name: string): CompileError {
+  const loop = [...new Set(ctx.stack.slice(ctx.stack.indexOf(name)))]
+  const names = loop.map((n) => `"${n}"`).join(' and ')
+  return new CompileError(`${names} ${loop.length === 1 ? 'is defined in terms of itself' : 'are defined in terms of each other'}`, loop)
 }
 
 // The simplified partial derivatives of `expr`, in the order of `vars`.
@@ -43,16 +63,23 @@ function dependsOn(expr: Expr, v: string, scope: MathScope): boolean {
   return freeVariablesDeep(expr, scope).has(v)
 }
 
-function differentiate(expr: Expr, v: string, scope: MathScope, stack: string[]): Expr {
-  const d = (e: Expr) => differentiate(e, v, scope, stack)
+function differentiate(expr: Expr, v: string, scope: MathScope, ctx: Ctx): Expr {
+  const d = (e: Expr) => differentiate(e, v, scope, ctx)
   switch (expr.kind) {
     case 'num':
       return ZERO
     case 'var': {
       if (expr.name === v) return ONE
-      // A constant's body sees only parameters and other constants, never a
-      // bound variable, so it is constant in v; a parameter is too.
-      return ZERO
+      // A constant differentiates as its body does (it may read parameters);
+      // a parameter other than v is constant, and so is any other name.
+      const fn = scope.functions.get(expr.name)
+      if (!fn || fn.params.length > 0 || scope.params.index.has(expr.name)) return ZERO
+      if (isVectorBody(fn.body)) throw new CompileError(`"${expr.name}" is vector-valued and cannot be used as a number`, [expr.name])
+      if (ctx.stack.includes(expr.name)) throw cycle(ctx, expr.name)
+      ctx.stack.push(expr.name)
+      const result = d(fn.body)
+      ctx.stack.pop()
+      return result
     }
     case 'unary':
       return neg(d(expr.arg))
@@ -79,12 +106,12 @@ function differentiate(expr: Expr, v: string, scope: MathScope, stack: string[])
       break
     }
     case 'call':
-      return differentiateCall(expr, v, scope, stack)
+      return differentiateCall(expr, v, scope, ctx)
   }
   throw new Error('Unreachable expression kind')
 }
 
-function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: MathScope, stack: string[]): Expr {
+function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: MathScope, ctx: Ctx): Expr {
   const { name, args } = expr
   const fn = scope.functions.get(name)
   if (fn) {
@@ -92,15 +119,20 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
     if (args.length !== fn.params.length) {
       throw new CompileError(`"${name}" takes ${fn.params.length} argument${fn.params.length === 1 ? '' : 's'}, got ${args.length}`, [name])
     }
-    if (stack.includes(name)) {
-      const loop = stack.slice(stack.indexOf(name))
-      throw new CompileError(`${[...new Set(loop)].map((n) => `"${n}"`).join(' and ')} are defined in terms of each other`, [...new Set(loop)])
-    }
-    const map = new Map<string, Expr>()
-    fn.params.forEach((param, i) => map.set(param, args[i]))
-    stack.push(name)
-    const result = differentiate(substitute(fn.body, map), v, scope, stack)
-    stack.pop()
+    if (ctx.stack.includes(name)) throw cycle(ctx, name)
+    // The body over fresh parameter names ("#" never reaches an Expr from text).
+    const fresh = fn.params.map((param) => `#${name}.${param}.${ctx.fresh++}`)
+    const body = substitute(fn.body, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
+    ctx.stack.push(name)
+    const partials = fresh.map((p) => differentiate(body, p, scope, ctx))
+    const own = differentiate(body, v, scope, ctx)
+    ctx.stack.pop()
+    // Back to the arguments; their derivatives are taken outside f.
+    const back = new Map(fresh.map((p, i) => [p, args[i]]))
+    let result = substitute(own, back)
+    partials.forEach((partial, i) => {
+      result = add(result, mul(substitute(partial, back), differentiate(args[i], v, scope, ctx)))
+    })
     return result
   }
 
@@ -110,7 +142,7 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
     throw new CompileError(`"${name}" takes ${arity.min === arity.max ? arity.min : `${arity.min} or more`} arguments, got ${args.length}`, [name])
   }
 
-  const d = (e: Expr) => differentiate(e, v, scope, stack)
+  const d = (e: Expr) => differentiate(e, v, scope, ctx)
   const degrees = scope.angle === 'degrees'
   // Trig: f'(a) a', times pi/180 when a is in degrees.
   const trig = (outer: Expr) => (degrees ? mul(mul(outer, d(args[0])), PI_OVER_180) : mul(outer, d(args[0])))

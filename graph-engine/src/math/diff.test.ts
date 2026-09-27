@@ -219,3 +219,61 @@ describe('simplify', () => {
     expect(compileScalar(simple, ['x'], makeScope())(0) === 0).toBe(true)
   })
 })
+
+describe('diff composes user functions (fix round 1, C1)', () => {
+  const f = fn(['x'], 'x^2')
+
+  it('d/dx f(f(x)) = 4x^3 with f = x^2: 32 at x = 2', () => {
+    // f(f(x)) = x^4
+    const scope = makeScope({ functions: [['f', f]] })
+    expect(derivative('f(f(x))', 'x', ['x'], scope)(2)).toBe(32)
+  })
+
+  it('three deep: d/dx f(f(f(x))) = 8x^7, 8 at x = 1', () => {
+    const scope = makeScope({ functions: [['f', f]] })
+    expect(derivative('f(f(f(x)))', 'x', ['x'], scope)(1)).toBe(8)
+  })
+
+  it('d/dx f(g(x)) with g = f + 1 = 2(x^2 + 1) * 2x: 40 at x = 2', () => {
+    // g calls f, and f's argument is g: not a cycle
+    const scope = makeScope({ functions: [['f', f], ['g', fn(['x'], 'f(x) + 1')]] })
+    expect(derivative('f(g(x))', 'x', ['x'], scope)(2)).toBe(40)
+  })
+
+  it('still refuses a genuine cycle, naming both', () => {
+    const cyclic = makeScope({ functions: [['f', fn(['x'], 'g(x) + 1')], ['g', fn(['x'], 'f(x) * 2')]] })
+    let caught: unknown = null
+    try {
+      diff(p('f(x)'), 'x', cyclic)
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(CompileError)
+    expect((caught as CompileError).names).toEqual(expect.arrayContaining(['f', 'g']))
+  })
+})
+
+describe('diff with respect to a parameter follows constants and bodies (fix round 1, M3)', () => {
+  const scope = makeScope({ params: [['a', 3]], functions: [['k', fn([], '2a')], ['f', fn(['x'], 'a*x')]] })
+
+  it('k = 2a: d/da k = 2', () => {
+    expect(derivative('k', 'a', [], scope)()).toBe(2)
+  })
+
+  it('d/da (k * a) = 2a + k = 4a: 12 at a = 3', () => {
+    expect(derivative('k*a', 'a', [], scope)()).toBe(12)
+  })
+
+  it('f(x) = a x: d/da f(3) = 3', () => {
+    expect(derivative('f(3)', 'a', [], scope)()).toBe(3)
+  })
+
+  it('a constant is still constant in a bound variable', () => {
+    expect(derivative('k*x', 'x', ['x'], scope)(5)).toBe(6)
+  })
+
+  it('refuses a cycle among constants', () => {
+    const loop = makeScope({ functions: [['m', fn([], 'n + 1')], ['n', fn([], 'm')]] })
+    expect(() => diff(p('m'), 'x', loop)).toThrow(CompileError)
+  })
+})
