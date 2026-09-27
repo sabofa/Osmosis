@@ -23,7 +23,7 @@ import { boundNames, checkBudget, colorScale, Reads, renameBound } from '../comm
 import { finishMesh } from '../mesh'
 import { normalizeAt } from '../normals'
 import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
-import { countTriangles, implicitRes, marchingTets, sampleGrid, type Field, type Grid } from './marchingTets'
+import { countTriangles, heldRes, implicitRes, marchingTets, sampleGrid, type Field, type Grid } from './marchingTets'
 
 export const DEFAULT_IMPLICIT_RES = 64
 
@@ -158,9 +158,15 @@ function prepareImplicit(statement: Statement, context: BuildContext): PreparedS
   }
 
   const build = (): BuildResult => {
-    const grid = sampleGrid(field.f, boxOf(context), n)
+    // S6 plan V11: a play or a drag can trigger this every frame — while
+    // held (context.held, set by the kernel: the box is frozen for the same
+    // reason), mesh at half the resolution (heldRes), then once more at the
+    // full one when it releases (kernel/index.ts's builtHeld forces that
+    // rebuild even if the box itself never moved).
+    const activeRes = heldRes(n, context.held)
+    const grid = sampleGrid(field.f, boxOf(context), activeRes)
     // The budget is checked before anything is meshed.
-    checkBudget(countTriangles(grid, 0), n)
+    checkBudget(countTriangles(grid, 0), activeRes)
     const mesh = levelMesh(field, grid, 0)
     if (!mesh) {
       return {

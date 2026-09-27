@@ -51,6 +51,12 @@ export interface BuildContext {
   // Undefined for a statement that is not box-dependent. Read it through
   // boxOf.
   box?: Box3
+  // S6 plan V11: true while a value plays or a point is dragged (setValues'
+  // holdBox is set — the same condition that freezes the box), set by the
+  // kernel before each build, same as box. An implicit surface (geometry/
+  // implicit.ts) reads it to mesh at half its resolution while held, and full
+  // resolution once released, so a drag or a play stays interactive.
+  held?: boolean
 }
 
 export interface NamedStatement {

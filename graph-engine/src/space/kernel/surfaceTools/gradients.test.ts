@@ -148,6 +148,21 @@ describe('gradient of a function of three variables', () => {
       { line: 1, message: 'res 200 is over the 160 cubes per axis an implicit surface is sampled at — lower the resolution' },
     ])
   })
+
+  // S6 plan V11: the same marching tetrahedra as implicit.ts, so it is owed
+  // the same half-resolution-while-held (implicit.test.ts proves the
+  // mechanism itself; this proves gradients.ts actually wires it in).
+  it('meshes the level surface coarser while held, full res on the next release', () => {
+    const BOX = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -2, max: 2 } }
+    const spec = '@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\n@param a = 1 range [0.5, 1.5]\ngradient: x^2 + y^2 + z^2 at (a, 1, 1) surface res: 24'
+    const kernel = kernelOf(spec)
+    const held = kernel.setValue('a', 1.1, { holdBox: BOX })
+    const heldMesh = meshOf(held, 's3.surface')
+    const released = kernel.setValues(new Map())
+    const releasedMesh = meshOf(released, 's3.surface')
+    expect(releasedMesh).not.toBe(heldMesh)
+    expect(heldMesh.positions.length).toBeLessThan(releasedMesh.positions.length * 0.5)
+  })
 })
 
 describe('gradient: points outside, and parameters', () => {

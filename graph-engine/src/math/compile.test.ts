@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { parseExprString } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
 import { BUILTIN_NAMES, builtinArity, CompileError, compileMany, compileScalar, compileVector, freeVariablesDeep } from './compile'
+import { diff } from './diff'
+import { simplify } from './simplify'
 import { makeScope, type MathFunction } from './scope'
 import { evalExpr } from '../parser/evalExpr'
 
@@ -363,6 +365,23 @@ describe('compileMany: several outputs in one frame, shared subexpressions once 
     expect(many.instructions).toBe(4)
     // 2 * 0.5 = 1
     expect([...out]).toEqual([Math.sin(1), Math.cos(1), 2])
+  })
+
+  // S6 plan V11 (space/kernel/parametric.ts): a parametric surface samples
+  // r and its two partials r_u, r_v at every vertex, exactly as compiled
+  // here — diff + simplify, then one compileMany over all nine components
+  // (parametric.ts's actual recipe). fz shares u*cos(v) with fx and with
+  // its own u-partial, so the sharing is real, not contrived.
+  it('a parametric surface shares subexpressions across r, r_u and r_v: the combined register program is smaller than compiling each alone', () => {
+    const scope = makeScope()
+    const vars = ['u', 'v']
+    const f: Expr[] = [p('u * cos(v)'), p('u * sin(v)'), p('u^2 + sin(u * cos(v))')]
+    const diffAt = (i: 0 | 1) => f.map((e) => simplify(diff(e, vars[i], scope)))
+    const [pu, pv] = [diffAt(0), diffAt(1)]
+    const combined = compileMany([...f, ...pu, ...pv], vars, scope)
+    const apart =
+      compileMany(f, vars, scope).instructions + compileMany(pu, vars, scope).instructions + compileMany(pv, vars, scope).instructions
+    expect(combined.instructions).toBeLessThan(apart)
   })
 
   it('keeps 0 and -0 apart', () => {

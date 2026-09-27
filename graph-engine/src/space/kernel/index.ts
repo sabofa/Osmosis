@@ -112,6 +112,12 @@ interface StatementRecord {
   context: BuildContext
   // The box its last build read (undefined for a 'data' statement).
   builtWith: Box3 | undefined
+  // S6 plan V11: whether its last build was held (context.held) — a box
+  // that has not moved never goes stale on release (sameBox), so this is
+  // what makes a held→released transition rebuild once on its own, giving a
+  // resolution-sensitive builder (an implicit surface) its one full-res
+  // rebuild even when the box itself never changed.
+  builtHeld: boolean
   prepared: PreparedStatement
   // the bindings it reads
   reads: ReadonlySet<string>
@@ -217,6 +223,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       stage: dependence === true ? 'box' : dependence === 'z' ? 'z' : 'data',
       context,
       builtWith: undefined,
+      builtHeld: false,
       prepared,
       reads: new Set([...prepared.reads].filter((name) => bindingNames.has(name))),
       scaleId: context.colorScaleId,
@@ -225,9 +232,13 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     })
   })
 
-  const build = (record: StatementRecord, box: Box3 | undefined) => {
+  // S6 plan V11: `held` mirrors whether this build carries a frozen box (a
+  // play or a drag in progress) — set alongside it, for the same reason.
+  const build = (record: StatementRecord, box: Box3 | undefined, held = false) => {
     record.context.box = box
+    record.context.held = held
     record.builtWith = box
+    record.builtHeld = held
     record.result = run(record.prepared, record.line)
     record.moved.clear()
   }
@@ -314,12 +325,20 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       if (rebuilt) extent = extentOf(records)
       // Pass 2, against the held box or the one the data resolves to now:
       // every box-dependent statement whose last build that box outdates,
-      // and those that read a changed binding.
+      // and those that read a changed binding. S6 plan V11: `held` is
+      // exactly "a holdBox was given" — the box is frozen for the same
+      // reason a slow box-dependent builder (an implicit surface) should
+      // mesh coarser: a play or a drag is in progress.
+      const held = options.holdBox != null
       const target = options.holdBox ?? resolveBox(config.space, extent)
       for (const record of records) {
         if (record.stage === 'data') continue
-        if (stale(record, target) || (record.stage === 'box' && reads(record))) {
-          build(record, target)
+        // A held→released transition rebuilds even an unmoved box: a
+        // resolution-sensitive builder (an implicit surface) is owed its
+        // one full-res rebuild on release (V11), and `stale` alone would
+        // miss it whenever the box happens not to move.
+        if (stale(record, target) || (record.stage === 'box' && reads(record)) || (record.builtHeld && !held)) {
+          build(record, target, held)
           rebuilt = true
         }
       }

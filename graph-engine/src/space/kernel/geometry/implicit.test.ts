@@ -200,6 +200,36 @@ describe('implicit surfaces: holes, style, parameters and refusals', () => {
   })
 })
 
+describe('S6 plan V11: progressive resolution while held', () => {
+  const BOX3 = { x: { min: -3, max: 3 }, y: { min: -3, max: 3 }, z: { min: -3, max: 3 } }
+  const SPHERE = `${CUBE3}\n@param a = 2 range [1, 3]\nx^2 + y^2 + z^2 = a^2 res: 32`
+
+  it('meshes coarser while held than the very next release, at the same value — the release is a real rebuild, not a stale one, though the box never moved', () => {
+    const kernel = kernelOf(SPHERE)
+    const held = kernel.setValue('a', 2.5, { holdBox: BOX3 })
+    const heldMesh = held.marks[0] as MeshMark
+    const heldVertices = heldMesh.positions.length / 3
+    const released = kernel.setValues(new Map())
+    const releasedMesh = released.marks[0] as MeshMark
+    expect(releasedMesh).not.toBe(heldMesh)
+    const releasedVertices = releasedMesh.positions.length / 3
+    // res 16 (held: heldRes(32, true)) vs res 32 (released): markedly
+    // sparser, not just a rounding difference.
+    expect(heldVertices).toBeLessThan(releasedVertices * 0.5)
+    // Both are the true sphere at the same radius: a lower-poly
+    // approximation while held, never a wrong one.
+    for (const p of vertices(heldMesh.positions)) expect(Math.hypot(...p)).toBeCloseTo(2.5, 6)
+    for (const p of vertices(releasedMesh.positions)) expect(Math.hypot(...p)).toBeCloseTo(2.5, 6)
+  })
+
+  it('does not rebuild again while held at the same value: one rebuild per change, not per frame', () => {
+    const kernel = kernelOf(SPHERE)
+    const a = kernel.setValue('a', 2.5, { holdBox: BOX3 }).marks[0]
+    const b = kernel.setValue('a', 2.5, { holdBox: BOX3 }).marks[0]
+    expect(b).toBe(a)
+  })
+})
+
 describe('marchingTets on its own', () => {
   it('meets a plane x + y + z = 0.5 in a flat sheet, every vertex on it', () => {
     const box = { x: { min: 0, max: 1 }, y: { min: 0, max: 1 }, z: { min: 0, max: 1 } }
