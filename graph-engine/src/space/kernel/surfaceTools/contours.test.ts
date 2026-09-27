@@ -5,17 +5,22 @@ import type { Statement } from '../../../parser/types'
 import type { LineMark } from '../../scene/types'
 import type { BuildContext, BuildResult } from '../registry'
 import { buildScope } from '../scope'
-import { contourCurves, levelCurves, niceLevels, type ContourForm, type ContourLevels } from './contours'
+import type { ContourForm, Levels } from '../../grammar/keywords/geometryForms'
+import type { SpaceStyle } from '../../grammar/types'
+import { contourCurves, levelCurves, niceLevels } from './contours'
+import { lineOf, sceneOf } from './testing'
 
 const p = parseExprString
 
-// contourCurves is built against S4a's contour form (its plan, A2), whose
-// grammar S4a owns: these tests construct the form directly.
-function contour(target: string, levels: ContourLevels, options: { floor?: boolean; labels?: boolean; spec?: string; color?: string } = {}): BuildResult {
+const NO_STYLE: SpaceStyle = { opacity: null, colormap: null, mesh: null, res: null, width: null, dashed: false }
+
+// contourCurves reads S4a's contour form (its plan, A2); these unit tests
+// construct the form directly, and the last block goes through the grammar.
+function contour(target: string, levels: Levels, options: { floor?: boolean; labels?: boolean; spec?: string; color?: string } = {}): BuildResult {
   const parsed = parseSpec(options.spec ?? '')
   expect(parsed.errors).toEqual([])
   const { scope } = buildScope(parsed.statements, parsed.statementLines, parsed.config.bindings, parsed.config.angle)
-  const form: ContourForm = { form: 'contour', target: p(target), levels, floor: options.floor ?? false, labels: options.labels ?? false }
+  const form: ContourForm = { form: 'contour', target: p(target), text: target, levels, floor: options.floor ?? false, labels: options.labels ?? false, style: NO_STYLE }
   const statement = { kind: 'space', form, color: options.color ?? null, statementName: null } as unknown as Statement
   const line = parsed.statementLines.length + 1
   const context: BuildContext = {
@@ -29,7 +34,7 @@ function contour(target: string, levels: ContourLevels, options: { floor?: boole
   return contourCurves.prepare(statement, context).build()
 }
 
-const list = (...values: string[]): ContourLevels => ({ kind: 'list', values: values.map((v) => p(v)) })
+const list = (...values: string[]): Levels => ({ kind: 'list', values: values.map((v) => p(v)) })
 
 function polylines(mark: LineMark): [number, number, number][][] {
   const out: [number, number, number][][] = []
@@ -170,5 +175,71 @@ describe('contourCurves refusals', () => {
 describe('levelCurves', () => {
   it('returns nothing for a level the function never takes', () => {
     expect(levelCurves((x, y) => x * x + y * y + 1, { x: { min: -1, max: 1 }, y: { min: -1, max: 1 } }, 20)).toEqual([])
+  })
+})
+
+// Integration J2: S4a's contour: grammar and dispatcher reach contourCurves
+// for a target of two variables; three still draw level surfaces.
+describe('contour: of two variables, through the grammar, draws level curves', () => {
+  it('f(x, y) = x^2 + y^2, contour: f levels 1, 4: circles of radii 1 and 2 at z = 1 and z = 4, within 1e-8', () => {
+    const scene = sceneOf('f(x, y) = x^2 + y^2\ncontour: f levels 1, 4')
+    expect(scene.errors).toEqual([])
+    expect(scene.marks.map((m) => [m.source.object, m.kind])).toEqual([
+      ['s2.level0', 'lines'],
+      ['s2.level1', 'lines'],
+    ])
+    for (const [object, r, c] of [
+      ['s2.level0', 1, 1],
+      ['s2.level1', 2, 4],
+    ] as const) {
+      const lines = polylines(lineOf(scene, object))
+      expect(lines).toHaveLength(1)
+      for (const [x, y, z] of lines[0]) {
+        expect(z).toBe(c)
+        expect(Math.abs(Math.hypot(x, y) - r)).toBeLessThanOrEqual(1e-8)
+      }
+    }
+  })
+
+  it('an inline expression without z has two variables: levels 4 of x^2 - y^2 on [-2, 2]^2 are -2, 0, 2', () => {
+    // range [-4, 4]; niceStep(8, 4) = 2; strictly inside: -2, 0, 2.
+    const scene = sceneOf('@bounds3d: x [-2, 2], y [-2, 2]\ncontour: x^2 - y^2 levels 4')
+    expect(scene.errors).toEqual([])
+    expect(scene.marks.map((m) => (m.kind === 'lines' ? m.positions[2] : NaN))).toEqual([-2, 0, 2])
+  })
+
+  it('the contour example: levels 9 of x^2 - y^2 on [-2, 2]^2 are -3..3, each on the surface, on the floor z = -4, and labelled', () => {
+    // range [-4, 4]; niceStep(8, 9) = 1; strictly inside: -3, -2, ..., 3.
+    // The surface's box: z from f's range [-4, 4], rounded out by
+    // niceStep(8, 8) = 1, so the floor is -4.
+    const scene = sceneOf(`@bounds3d: x [-2, 2], y [-2, 2]
+f(x, y) = x^2 - y^2
+z = f(x, y) opacity: 0.5
+contour: f levels 9 floor labels`)
+    expect(scene.errors).toEqual([])
+    const levels = [-3, -2, -1, 0, 1, 2, 3]
+    levels.forEach((c, k) => {
+      for (const [x, y, z] of polylines(lineOf(scene, `s4.level${k}`)).flat()) {
+        expect(z).toBe(c)
+        expect(Math.abs(x * x - y * y - c)).toBeLessThanOrEqual(1e-8)
+      }
+      const floor = lineOf(scene, `s4.floor${k}`)
+      expect(floor.style.dash).not.toBeNull()
+      for (const [, , z] of polylines(floor).flat()) expect(z).toBe(-4)
+    })
+    expect(scene.labels.map((l) => l.text)).toEqual(levels.map(String).map((t) => t.replace('-', '−')))
+  })
+
+  it('dashed dashes the level curves; opacity: is refused, since it applies to level surfaces', () => {
+    const scene = sceneOf('contour: x^2 + y^2 levels 1, 4 dashed')
+    expect(scene.errors).toEqual([])
+    for (const mark of scene.marks) expect(mark.kind === 'lines' && mark.style.dash).not.toBeNull()
+    expect(sceneOf('f(x, y) = x^2 + y^2\ncontour: f levels 1, 4 opacity: 0.5').errors).toEqual([
+      { line: 2, message: 'opacity: applies to level surfaces of F(x, y, z), not to level curves — f has two variables' },
+    ])
+  })
+
+  it('a one-variable function is still refused in S4a’s words', () => {
+    expect(sceneOf('k(t) = t^2\ncontour: k levels 3').errors[0].message).toMatch(/k takes 1 variable/)
   })
 })

@@ -10,7 +10,9 @@
 // an angle, in @angle's unit.
 //
 // Three variables: ∇F at true length from the point; "surface" adds the level
-// surface through it (levelSurface.ts: S4a's marching tetrahedra).
+// surface through it (levelSurface.ts: S4a's marching tetrahedra, at S4a's
+// resolution), or says on the line that the level set there has no area (a
+// strict extremum of F, where the "surface" is the point alone).
 //
 // A zero gradient is drawn as the point with the readout "∇f = 0 (a
 // critical point)".
@@ -22,7 +24,7 @@ import { Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, lineMark, part, pointMark, toolBox } from './box'
 import { LEVEL_RES, levelCurves, lift } from './contours'
-import { LEVEL_SURFACE_PENDING, MESH_LEVEL_SURFACE } from './levelSurface'
+import { levelSurfaceRes, MESH_LEVEL_SURFACE } from './levelSurface'
 import { pointText } from './readout'
 import { preparePoint, prepareDomain, requireInside, resolveTarget, surface2, surface3 } from './target'
 
@@ -30,8 +32,6 @@ import { preparePoint, prepareDomain, requireInside, resolveTarget, surface2, su
 const SQUARE = 0.04
 const LEVEL_WIDTH = 2
 const SQUARE_WIDTH = 1.5
-// S4a A1's default grid for an implicit surface.
-const LEVEL_SURFACE_RES = 64
 
 function angleText(radians: number, unit: 'radians' | 'degrees'): string {
   return unit === 'degrees' ? `${formatNumber((radians * 180) / Math.PI)}°` : `${formatNumber(radians)} rad`
@@ -97,6 +97,8 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
   }
 
   const { F, grad } = surface3(target, scope)
+  // Checked here, so a res: over S4a's limit is refused before any build.
+  const surfaceRes = form.surface ? levelSurfaceRes(form.style.res, config) : 0
   const build = (): BuildResult => {
     const [x0, y0, z0] = point()
     const box = toolBox(context, domain(), null)
@@ -115,11 +117,9 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
       labels.push(annotation(part(context, 'readout'), at, `∇F = ${pointText(g)}, |∇F| = ${formatNumber(length)}`))
     }
     if (form.surface) {
-      const mesh = MESH_LEVEL_SURFACE
-        ? MESH_LEVEL_SURFACE((x, y, z) => F(x, y, z), F(x0, y0, z0), box, resolution(form.style.res, config, LEVEL_SURFACE_RES))
-        : null
-      if (!MESH_LEVEL_SURFACE) errors.push({ line: context.line, message: `gradient: … surface — ${LEVEL_SURFACE_PENDING}` })
-      if (mesh) {
+      const mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, surfaceRes)
+      if (!mesh) errors.push({ line: context.line, message: `gradient: the level surface through ${pointText(at)} has no area in the box` })
+      else {
         const surface: MeshMark = {
           kind: 'mesh',
           source: part(context, 'surface'),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
+import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
 // f = x^2 - y^2 at (1, 2): ∇f = (2, -4), |∇f| = √20 = 4.472, f = -3. Over
 // [-5, 5]^2 the box floor is z = -25.
@@ -87,10 +87,46 @@ describe('gradient of a function of three variables', () => {
     expect(labelOf(scene, 's1.readout').text).toBe('∇F = (6, 3, 2), |∇F| = 7')
   })
 
-  it('"surface" is an error on its line until S4a’s marching tetrahedra merge; the arrow still draws', () => {
-    const scene = sceneOf('gradient: x*y*z at (1, 2, 3) surface')
-    expect(scene.errors).toEqual([{ line: 1, message: 'gradient: … surface — the level surface arrives with phase S4a (marching tetrahedra)' }])
-    expect(Array.from(arrowsOf(scene, 's1').vectors)).toEqual([6, 3, 2])
+  // Integration J3: "surface" meshes the level surface through the point by
+  // S4a's marching tetrahedra. F = x^2 + y^2 + z^2 at (1, 1, 1) is 3: the
+  // sphere of radius √3, with ∇F = (2, 2, 2) pointing out of it.
+  it('"surface" draws the level surface through the point: the sphere |p| = √3, closed, normals outward', () => {
+    const scene = sceneOf('@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\ngradient: x^2 + y^2 + z^2 at (1, 1, 1) surface res: 24')
+    expect(scene.errors).toEqual([])
+    expect(Array.from(arrowsOf(scene, 's2').vectors)).toEqual([2, 2, 2])
+    const mesh = meshOf(scene, 's2.surface')
+    expect(mesh.style.opacity).toBe(0.45)
+    const points = vertices(mesh.positions)
+    expect(points.length).toBeGreaterThan(100)
+    points.forEach((p, v) => {
+      expect(Math.abs(Math.hypot(...p) - Math.sqrt(3))).toBeLessThanOrEqual(1e-8)
+      const n = [mesh.normals[3 * v], mesh.normals[3 * v + 1], mesh.normals[3 * v + 2]]
+      expect(Math.abs(Math.hypot(...n) - 1)).toBeLessThanOrEqual(1e-12)
+      expect(n[0] * p[0] + n[1] * p[1] + n[2] * p[2]).toBeGreaterThan(0)
+    })
+    // Closed: every edge is shared by exactly two triangles.
+    const edges = new Map<string, number>()
+    for (let t = 0; t < mesh.indices.length; t += 3) {
+      for (let k = 0; k < 3; k++) {
+        const a = mesh.indices[t + k]
+        const b = mesh.indices[t + ((k + 1) % 3)]
+        const key = a < b ? `${a},${b}` : `${b},${a}`
+        edges.set(key, (edges.get(key) ?? 0) + 1)
+      }
+    }
+    expect([...new Set(edges.values())]).toEqual([2])
+  })
+
+  it('"surface" at a point where the level set has no area (the origin of x^2 + y^2 + z^2) says so on its line', () => {
+    const scene = sceneOf('@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\ngradient: x^2 + y^2 + z^2 at (0, 0, 0) surface res: 8')
+    expect(scene.errors).toEqual([{ line: 2, message: 'gradient: the level surface through (0, 0, 0) has no area in the box' }])
+    expect(labelOf(scene, 's2.readout').text).toBe('∇F = 0 (a critical point)')
+  })
+
+  it('"surface" takes S4a’s limit on res:', () => {
+    expect(sceneOf('gradient: x*y*z at (1, 2, 3) surface res: 200').errors).toEqual([
+      { line: 1, message: 'res 200 is over the 160 cubes per axis an implicit surface is sampled at — lower the resolution' },
+    ])
   })
 })
 

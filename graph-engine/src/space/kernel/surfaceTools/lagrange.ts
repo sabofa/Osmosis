@@ -24,26 +24,25 @@
 // their parallelism reads, and both heads show when they point the same way
 // (λ > 0). Readout per point: the point, f and λ, all ≈.
 //
-// Three variables (f or g reads z): seeds are points on g = c (the vertices
-// of S4a's level-surface mesh once it merges; until then the crossings of
-// g − c on the edges of a grid over the box, bisected onto g = c, which are
-// where such a mesh's vertices lie), then Newton on the 4x4 system in
-// (x, y, z, λ). All those points are the samples a solution is judged
-// against. The points are marked with ∇f and ∇g (0.15 of the box's largest
-// span); the constraint surface is drawn when levelSurface.ts has a mesher.
+// Three variables (f or g reads z): the constraint surface g = c is S4a's
+// marching-tetrahedra mesh (levelSurface.ts), at res: cubes per axis (S4a's
+// default and limit), drawn translucent. Its vertices, each bisected onto
+// g = c, seed Newton on the 4x4 system in (x, y, z, λ) — up to 64, evenly
+// spaced — and all of them are the samples a solution is judged against. The
+// points are marked with ∇f and ∇g (0.15 of the box's largest span).
 //
 // Nothing found is an error on the line.
 
 import type { Statement } from '../../../parser/types'
 import { newton } from '../../../math/roots'
-import { BISECTION_REL, ROOT_DEDUP_REL } from '../../../math/tolerance'
-import type { Box3, LabelAnchor, Mark, MeshMark, Range, Vec3 } from '../../scene/types'
+import { ROOT_DEDUP_REL } from '../../../math/tolerance'
+import type { LabelAnchor, Mark, MeshMark, Range, Vec3 } from '../../scene/types'
 import { boundNames, constant, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, clipToZ, largestSpan, lineMark, part, pointMark, toolBox } from './box'
 import type { Rect } from './target'
 import { LEVEL_RES, levelCurves, lift } from './contours'
-import { MESH_LEVEL_SURFACE } from './levelSurface'
+import { levelSurfaceRes, MESH_LEVEL_SURFACE } from './levelSurface'
 import { approx, approxPoint } from './readout'
 import { prepareDomain, resolveTarget, surface2, surface3, type Target } from './target'
 
@@ -55,8 +54,6 @@ const GRAD_G = 0.6
 const TIE = 1e-9
 // Newton's answers below this fraction of the domain's span print ≈ 0.
 const RESOLVED = 1e-10
-// Cubes per axis for the three-variable seeds, before S4a's mesh.
-const SEED_GRID = 24
 // A solution's neighbourhood on the constraint, for "local max" or "local
 // min": the samples within this fraction of the domain's larger span.
 const NEIGHBOURHOOD = 0.05
@@ -150,56 +147,6 @@ export function choose(solutions: readonly Solution[], goal: 'max' | 'min' | 'ex
     if (goal === 'extrema' && high - low <= tie) out.push({ s, kind: 'extremum' })
     else if (goal !== 'min' && s.f >= high - tie) out.push({ s, kind: 'max' })
     else if (goal !== 'max' && s.f <= low + tie) out.push({ s, kind: 'min' })
-  }
-  return out
-}
-
-// Points on h = 0: the crossings of h's sign on the edges of an n^3 grid over
-// the box, bisected along their edge to BISECTION_REL of it, in grid order.
-export function crossingSeeds(h: (x: number, y: number, z: number) => number, box: Box3, n: number): number[][] {
-  const axes = [box.x, box.y, box.z].map((r) => Array.from({ length: n + 1 }, (_, i) => r.min + ((r.max - r.min) * i) / n))
-  const at = (i: number, j: number, k: number) => h(axes[0][i], axes[1][j], axes[2][k])
-  const values: number[] = []
-  for (let k = 0; k <= n; k++) for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) values.push(at(i, j, k))
-  const value = (i: number, j: number, k: number) => values[(k * (n + 1) + j) * (n + 1) + i]
-  const out: number[][] = []
-  for (let k = 0; k <= n; k++) {
-    for (let j = 0; j <= n; j++) {
-      for (let i = 0; i <= n; i++) {
-        const v = value(i, j, k)
-        const p = [axes[0][i], axes[1][j], axes[2][k]]
-        for (const [di, dj, dk, axis] of [
-          [1, 0, 0, 0],
-          [0, 1, 0, 1],
-          [0, 0, 1, 2],
-        ] as const) {
-          if (i + di > n || j + dj > n || k + dk > n) continue
-          const w = value(i + di, j + dj, k + dk)
-          if (!Number.isFinite(v) || !Number.isFinite(w) || v > 0 === w > 0) continue
-          const q = [...p]
-          const next = axes[axis][[i, j, k][axis] + 1]
-          const along = (u: number) => {
-            q[axis] = p[axis] + u * (next - p[axis])
-            return h(q[0], q[1], q[2])
-          }
-          let lo = 0
-          let hi = 1
-          let hlo = v
-          while (hi - lo > BISECTION_REL) {
-            const m = (lo + hi) / 2
-            const hm = along(m)
-            if (hm > 0 === hlo > 0) {
-              lo = m
-              hlo = hm
-            } else {
-              hi = m
-            }
-          }
-          along((lo + hi) / 2)
-          out.push(q)
-        }
-      }
-    }
   }
   return out
 }
@@ -334,14 +281,14 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
 
   const F = surface3(within3(fTarget), scope)
   const G = surface3(within3(gTarget), scope)
+  const res = levelSurfaceRes(form.style.res, config)
   const build = (): BuildResult => {
     const box = toolBox(context, domain(), null)
     const c = level()
     const h = (x: number, y: number, z: number) => G.F(x, y, z) - c
-    const mesh = MESH_LEVEL_SURFACE ? MESH_LEVEL_SURFACE(h, 0, box, SEED_GRID) : null
+    const mesh = MESH_LEVEL_SURFACE({ F: G.F, grad: G.grad }, c, box, res)
     const points: number[][] = []
     if (mesh) for (let i = 0; i < mesh.positions.length; i += 3) points.push([mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]])
-    else points.push(...crossingSeeds(h, box, SEED_GRID))
     const candidates: Solution[] = []
     for (const [x0, y0, z0] of evenly(points, MAX_SEEDS)) {
       const g = G.grad.map((d) => d(x0, y0, z0))

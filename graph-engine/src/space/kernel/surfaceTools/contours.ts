@@ -8,22 +8,28 @@
 // BISECTION_REL of the edge — so a vertex is on the level curve to rounding,
 // not to the grid's linear interpolation.
 //
-// Placement: each level draws on the surface at z = c exactly and, with
-// floor, a projected copy on the box floor (dashed, 1 px). A line takes its
-// level's colour on the spec's colormap, over the domain a height scale would
-// use, unless color: gives a flat one. labels puts the value at the vertex of
-// each level's longest polyline nearest its arc-length midpoint.
+// Placement: each level draws on the surface at z = c exactly (width: sets
+// its width, dashed dashes it) and, with floor, a projected copy on the box
+// floor (dashed, 1 px). opacity: is refused: it is a level surface's clause.
+// A line takes its level's colour on the spec's colormap, over the domain a
+// height scale would use, unless color: gives a flat one. labels puts the
+// value at the vertex of each level's longest polyline nearest its
+// arc-length midpoint.
 //
 // Levels (S4a A2): "levels n" is the multiples of niceStep(range, n) strictly
 // inside the range f takes on the tracing grid; a list, or "a..b step s", is
 // used as written.
+//
+// The form is S4a's (grammar/keywords/geometryForms.ts); S4a's contour:
+// builder dispatches a two-variable target here (integration J2).
 
-import type { Expr, Statement } from '../../../parser/types'
+import type { Statement } from '../../../parser/types'
 import { BISECTION_REL } from '../../../math/tolerance'
 import { traceImplicitCurve } from '../../../render/marchingSquares'
 import { colormapAt, normalise } from '../../colormaps'
 import { niceStep } from '../../frame/nice'
-import type { ColormapClause, SpaceStyle } from '../../grammar/types'
+import type { ContourForm, Levels } from '../../grammar/keywords/geometryForms'
+import type { ColormapClause } from '../../grammar/types'
 import { formatNumber } from '../../pick/format'
 import type { ColorSpec, LabelAnchor, LineMark } from '../../scene/types'
 import { colorScale, constant, Reads, resolution } from '../common'
@@ -36,24 +42,6 @@ export const LEVEL_RES = 160
 export const MAX_LEVELS = 100
 const LEVEL_WIDTH = 2
 const FLOOR_WIDTH = 1
-
-// The shape of S4a's contour form (its plan, A2). S4a owns the grammar and
-// the SpaceForm member; this is the part contourCurves reads, so the two meet
-// at the merge without either importing the other's unmerged types.
-export type ContourLevels =
-  | { kind: 'count'; count: number }
-  | { kind: 'range'; from: Expr; to: Expr; step: Expr }
-  | { kind: 'list'; values: Expr[] }
-
-export interface ContourForm {
-  form: 'contour'
-  target: Expr
-  levels: ContourLevels
-  floor: boolean
-  labels: boolean
-  // res: and width:, when the grammar carries them.
-  style?: Partial<SpaceStyle>
-}
 
 // The polylines of g(x, y) = 0 over the rectangle, each a flat [x0, y0, x1,
 // y1, ...] list; a closed curve's first and last vertices are the same.
@@ -190,9 +178,8 @@ export function midpointOf(lines: readonly Float64Array[]): [number, number] | n
 }
 
 function contourFormOf(statement: Statement): ContourForm {
-  const form = statement.kind === 'space' ? (statement.form as unknown as { form: string }) : null
-  if (!form || form.form !== 'contour') throw new Error(`not a contour: ${statement.kind}`)
-  return form as unknown as ContourForm
+  if (statement.kind === 'space' && statement.form.form === 'contour') return statement.form
+  throw new Error(`not a contour: ${statement.kind}`)
 }
 
 function prepareContourCurves(statement: Statement, context: BuildContext): PreparedStatement {
@@ -201,12 +188,14 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
   const reads = new Reads(scope)
   const target = resolveTarget(form.target, scope, reads, 'contour')
   requireArity(target, 2, 'contour')
+  if (form.style.opacity !== null) throw new Error(`opacity: applies to level surfaces of F(x, y, z), not to level curves — ${form.text} has two variables`)
   const f = compileOver(target.body, target, scope)
   const domain = prepareDomain(null, config, scope, reads)
-  const res = resolution(form.style?.res ?? null, config, LEVEL_RES)
-  const width = form.style?.width ?? LEVEL_WIDTH
+  const res = resolution(form.style.res, config, LEVEL_RES)
+  const width = form.style.width ?? LEVEL_WIDTH
+  const dashed = form.style.dashed
 
-  const levelsSpec = form.levels
+  const levelsSpec: Levels = form.levels
   let authored: (() => number[]) | null = null
   if (levelsSpec.kind === 'list') {
     const fns = levelsSpec.values.map((e) => {
@@ -257,7 +246,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
       const lines = levelCurves((x, y) => f(x, y) - c, rect, res)
       if (lines.length === 0) return
       const color = colors[k]
-      marks.push(lineMark(part(context, `level${k}`), lines.map((l) => lift(l, () => c)), context, { width, color }))
+      marks.push(lineMark(part(context, `level${k}`), lines.map((l) => lift(l, () => c)), context, { width, dashed, color }))
       if (form.floor) {
         marks.push(lineMark(part(context, `floor${k}`), lines.map((l) => lift(l, () => floor)), context, { width: FLOOR_WIDTH, dashed: true, color }))
       }
@@ -270,7 +259,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
   return { reads: reads.names, build }
 }
 
-// The builder of a two-variable contour. S4a's contour: dispatcher calls it
-// for a target of x and y (targetArity in ./target); it is not registered
-// under a key of its own.
+// The builder of a two-variable contour. S4a's contour: dispatcher
+// (kernel/geometry/levelSurfaces.ts) calls it for a target of x and y
+// (targetArity in ./target); it is not registered under a key of its own.
 export const contourCurves: BuilderEntry = { draws: true, prepare: prepareContourCurves }

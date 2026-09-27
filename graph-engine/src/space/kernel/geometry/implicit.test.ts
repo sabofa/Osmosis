@@ -259,11 +259,6 @@ describe('contour: of three variables draws level surfaces', () => {
     expect(marksOf(scene, 'mesh').map((m) => m.scalars![0])).toEqual([2, 5, 8])
   })
 
-  it('a two-variable target is an error on its line until phase S4b', () => {
-    expect(sceneOf('f(x, y) = x^2 - y^2\ncontour: f levels 5').errors).toEqual([{ line: 2, message: 'level curves arrive with phase S4b' }])
-    expect(sceneOf('contour: x^2 + y^2 levels 1, 4').errors).toEqual([{ line: 1, message: 'level curves arrive with phase S4b' }])
-  })
-
   it('refuses in its own words: floor and width on level surfaces, a level outside the box, a one-variable function', () => {
     expect(sceneOf(`${G}\ncontour: g levels 3 floor`).errors[0].message).toMatch(/"floor" projects level curves/)
     expect(sceneOf(`${G}\ncontour: g levels 3 width: 2`).errors[0].message).toMatch(/width: applies to level curves/)

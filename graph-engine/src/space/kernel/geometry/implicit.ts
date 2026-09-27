@@ -32,10 +32,17 @@ export const XYZ: readonly string[] = ['x', 'y', 'z']
 
 const NONE: ColormapClause = { by: { kind: 'none' }, map: null, diverging: false }
 
+// F over (x, y, z) with its gradient, written into `out` with no allocation
+// per call: what the mesher's normals and the pick read. S4b's level
+// surfaces (surfaceTools/levelSurface.ts) pass their own compiled gradient.
+export interface LevelField {
+  f: Field
+  grad: (out: Float64Array, x: number, y: number, z: number) => Float64Array
+}
+
 // F over (x, y, z), compiled with its gradient. x, y and z are renamed to the
 // kernel's bound names before diff, as every builder does (common.ts).
-export interface CompiledField {
-  f: Field
+export interface CompiledField extends LevelField {
   grad: CompiledMany
 }
 
@@ -59,7 +66,7 @@ export interface LevelMesh {
 
 // The level set F = level as a finished mesh, or null when it has no
 // triangle in the box.
-export function levelMesh(field: CompiledField, grid: Grid, level: number): LevelMesh | null {
+export function levelMesh(field: LevelField, grid: Grid, level: number): LevelMesh | null {
   const iso = marchingTets(field.f, grid, level)
   if (iso.indices.length === 0) return null
   const count = iso.positions.length / 3
@@ -114,7 +121,7 @@ function foldedNormals(positions: Float64Array, normals: Float64Array, indices: 
   }
 }
 
-export function implicitPick(field: CompiledField, level: number): SurfacePick {
+export function implicitPick(field: LevelField, level: number): SurfacePick {
   return {
     kind: 'implicit',
     F: (x, y, z) => field.f(x, y, z) - level,

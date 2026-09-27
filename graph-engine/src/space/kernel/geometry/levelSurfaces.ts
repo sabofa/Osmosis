@@ -1,9 +1,9 @@
-// "contour:" (plan A2). The builder dispatches on the target's arity:
+// "contour:" (plan A2; integration J2). The builder dispatches on the
+// target's arity (targetArity, surfaceTools/target.ts):
 // - three variables (g(x, y, z), or an expression reading z) draw LEVEL
 //   SURFACES, here, by marching tetrahedra over the box (implicit.ts);
-// - two variables draw level curves, built by phase S4b's "contourCurves"
-//   builder. Until S4b registers it, a two-variable contour is an error on
-//   its line.
+// - two variables draw level curves, by phase S4b's contourCurves
+//   (surfaceTools/contours.ts), which reads the same ContourForm.
 //
 // Levels (levelValues):
 // - "levels n": the multiples of niceStep(range, n) strictly inside the
@@ -16,7 +16,6 @@
 // value at its surface's highest point.
 
 import type { Expr, Statement } from '../../../parser/types'
-import { freeVariablesDeep } from '../../../math/compile'
 import { call, variable } from '../../../math/expr'
 import { isVectorBody, type MathScope } from '../../../math/scope'
 import { niceStep } from '../../frame/nice'
@@ -25,7 +24,9 @@ import type { ContourForm } from '../../grammar/keywords/geometryForms'
 import { formatNumber } from '../../pick/format'
 import type { ColorScale, LabelAnchor, MeshMark, Range, SceneError } from '../../scene/types'
 import { constant, MAX_TRIANGLES, Reads } from '../common'
-import { registeredBuilder, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
+import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
+import { contourCurves } from '../surfaceTools/contours'
+import { targetArity } from '../surfaceTools/target'
 import { spaceBox } from './box'
 import { compileField, DEFAULT_IMPLICIT_RES, implicitPick, levelMesh, XYZ } from './implicit'
 import { countTriangles, implicitRes, sampledRange, sampleGrid } from './marchingTets'
@@ -42,8 +43,9 @@ export function contourForm(statement: Statement): ContourForm {
 }
 
 // The target's arity, and F over its variables: a defined function's name
-// is called with (x, y) or (x, y, z); an inline expression has three
-// variables when it reads z.
+// is called with (x, y) or (x, y, z), and one of another kind is refused
+// here; otherwise the arity is targetArity's (an inline expression has three
+// variables when it reads z), the one rule S4b's tools use too.
 export function contourTarget(form: ContourForm, scope: MathScope): { arity: 2 | 3; F: Expr } {
   const target = form.target
   if (target.kind === 'var') {
@@ -55,7 +57,7 @@ export function contourTarget(form: ContourForm, scope: MathScope): { arity: 2 |
       throw new Error(`contour: ${target.name} takes ${fn.params.length} variable — a contour needs a function of two or three variables`)
     }
   }
-  return { arity: freeVariablesDeep(target, scope).has('z') ? 3 : 2, F: target }
+  return { arity: targetArity(target, scope), F: target }
 }
 
 // The multiples of niceStep(span, n) strictly inside the range.
@@ -184,10 +186,8 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
 function prepareContour(statement: Statement, context: BuildContext): PreparedStatement {
   const form = contourForm(statement)
   const { arity, F } = contourTarget(form, context.scope)
-  if (arity === 3) return prepareLevelSurfaces(form, F, context)
-  const curves = registeredBuilder('contourCurves')
-  if (!curves) throw new Error('level curves arrive with phase S4b')
-  return curves.prepare(statement, context)
+  if (arity === 2) return contourCurves.prepare(statement, context)
+  return prepareLevelSurfaces(form, F, context)
 }
 
 export const CONTOUR: BuilderEntry = {

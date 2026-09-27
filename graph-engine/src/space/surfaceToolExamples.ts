@@ -2,13 +2,17 @@
 // SPACE_EXAMPLES. examples.test.ts builds every one through the space kernel
 // and asserts it draws with no errors. Each draws its surface itself: the
 // tools never draw it for you.
-//
-// The level-curve example ("contour: f levels 9 floor labels") waits for
-// S4a's contour: grammar and is added at the merge.
 
 import type { Example } from '../examples'
 
 export const SURFACE_TOOL_EXAMPLES: Example[] = [
+  {
+    label: 'Space · Level curves of a saddle',
+    spec: `@bounds3d: x [-2, 2], y [-2, 2]
+f(x, y) = x^2 - y^2
+z = f(x, y) opacity: 0.5
+contour: f levels 9 floor labels         # -3..3 on the surface, and projected onto the floor`,
+  },
   {
     label: 'Space · Limits along two paths',
     spec: `@bounds3d: x [-1, 1], y [-1, 1], z [-1, 1]

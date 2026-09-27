@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../../parser/parseSpec'
 import { resolveBox } from '../../frame/bounds'
-import { choose, crossingSeeds, evenly, judge } from './lagrange'
-import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, pointsOf, sceneOf, vertices } from './testing'
+import { choose, evenly, judge } from './lagrange'
+import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
 
 // max x + y on x^2 + y^2 = 1: ∇f = (1, 1) = λ(2x, 2y), so x = y = 1/(2λ) and
 // 2/(4λ^2) = 1: λ = √2/2 at (√2/2, √2/2), where f = √2. The min is the
@@ -86,6 +86,37 @@ describe('lagrange: min and extrema', () => {
     expect(scene.labels.filter((l) => l.kind === 'annotation').map((l) => l.text)).toEqual([
       'min ≈ (−0.7071, −0.7071), f ≈ −1.414, λ ≈ −0.7071',
       'max ≈ (0.7071, 0.7071), f ≈ 1.414, λ ≈ 0.7071',
+    ])
+  })
+})
+
+// Integration J3: the constraint surface is S4a's marching-tetrahedra mesh of
+// g = c, drawn, and its vertices seed Newton (up to 64, evenly spaced).
+describe('lagrange in three variables draws S4a’s constraint surface', () => {
+  it('the sphere x^2 + y^2 + z^2 = 9: every vertex at |p| = 3 within 1e-8, at opacity 0.35, and the max is still (1, 2, 2)', () => {
+    const scene = sceneOf('lagrange: max x + 2y + 2z subject to x^2 + y^2 + z^2 = 9 res: 16')
+    expect(scene.errors).toEqual([])
+    const mesh = meshOf(scene, 's1.constraint')
+    expect(mesh.style.opacity).toBe(0.35)
+    for (const p of vertices(mesh.positions)) expect(Math.abs(Math.hypot(...p) - 3)).toBeLessThanOrEqual(1e-8)
+    expectClose(Array.from(pointsOf(scene, 's1').positions), [1, 2, 2], 1e-12)
+  })
+
+  it('honours res: the mesh is S4a’s level surface g = 9 at 12 and at 20 cubes per axis, vertex for vertex', () => {
+    const counts: number[] = []
+    for (const res of [12, 20]) {
+      const constraint = meshOf(sceneOf(`lagrange: max x + 2y + 2z subject to x^2 + y^2 + z^2 = 9 res: ${res}`), 's1.constraint')
+      const level = meshOf(sceneOf(`contour: x^2 + y^2 + z^2 level 9 res: ${res}`), 's1.level1')
+      expect(Array.from(constraint.positions)).toEqual(Array.from(level.positions))
+      expect(Array.from(constraint.indices)).toEqual(Array.from(level.indices))
+      counts.push(constraint.positions.length)
+    }
+    expect(counts[1]).toBeGreaterThan(counts[0])
+  })
+
+  it('refuses a res: over S4a’s limit for an implicit surface', () => {
+    expect(sceneOf('lagrange: max x + 2y + 2z subject to x^2 + y^2 + z^2 = 9 res: 300').errors).toEqual([
+      { line: 1, message: 'res 300 is over the 160 cubes per axis an implicit surface is sampled at — lower the resolution' },
     ])
   })
 })
@@ -210,22 +241,6 @@ describe('lagrange helpers', () => {
     expect(choose([s(1), s(0.7), s(0.5)], 'extrema').map((k) => k.kind)).toEqual(['max', 'min'])
     expect(choose([s(0.7)], 'extrema').map((k) => k.kind)).toEqual(['extremum'])
     expect(choose([s(0.7)], 'max').map((k) => k.kind)).toEqual(['max'])
-  })
-
-  it('crossingSeeds finds a plane where the grid edges cross it', () => {
-    // x = 0.3 in [-1, 1]^3 on a 4-cube grid: one crossing on each of the
-    // 5 x 5 x-edges between x = 0 and x = 0.5.
-    const seeds = crossingSeeds((x) => x - 0.3, { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }, 4)
-    expect(seeds).toHaveLength(25)
-    for (const [x] of seeds) expect(Math.abs(x - 0.3)).toBeLessThanOrEqual(1e-10)
-  })
-
-  it('crossingSeeds bisects onto a curved surface: on the sphere of radius 3, every seed is within 1e-9 of it', () => {
-    // Linear interpolation on this 24-cube grid (cells of 5/12) is off by
-    // up to ~1e-2; the samples a max is judged against must not be.
-    const seeds = crossingSeeds((x, y, z) => x * x + y * y + z * z - 9, { x: { min: -5, max: 5 }, y: { min: -5, max: 5 }, z: { min: -5, max: 5 } }, 24)
-    expect(seeds.length).toBeGreaterThan(100)
-    for (const [x, y, z] of seeds) expect(Math.abs(Math.hypot(x, y, z) - 3)).toBeLessThanOrEqual(1e-9)
   })
 
   it('judge: a max stands when no sample exceeds it; otherwise its neighbours name it', () => {
