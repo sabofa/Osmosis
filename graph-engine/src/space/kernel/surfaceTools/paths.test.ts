@@ -114,6 +114,27 @@ describe('the limit along a path: both sides, errors, and what is not a limit', 
     expect(labelOf(scene, 's1.readout').text).toBe('along this path, f does not settle near (0, 0)')
     expect(scene.marks.some((m) => m.source.object === 's1.limit')).toBe(false)
   })
+
+  it('cos(1/x)/x^2 swings in sign as it grows: it grows without bound, with no number', () => {
+    // f at h = 1e-2 .. 1e-8: 8623, 562379, -9.5e7, -1.0e10, 9.4e11, -9.1e13,
+    // -3.6e15 (it read ≈ 6×10⁵).
+    const scene = sceneOf('path: on cos(1/x)/x^2 along (t, 0) for t in [0, 1] toward (0, 0)')
+    expect(labelOf(scene, 's1.readout').text).toBe('f grows without bound along this path')
+    expect(scene.marks.some((m) => m.source.object === 's1.limit')).toBe(false)
+  })
+
+  it('sin(1/x)/x swings and grows unevenly: it does not settle, with no number', () => {
+    // f at h = 1e-2 .. 1e-8: -50.6, 827, -3056, 3574, ... (it read ≈ 0).
+    const scene = sceneOf('path: on sin(1/x)/x along (t, 0) for t in [0, 1] toward (0, 0)')
+    expect(labelOf(scene, 's1.readout').text).toBe('along this path, f does not settle near (0, 0)')
+    expect(scene.marks.some((m) => m.source.object === 's1.limit')).toBe(false)
+  })
+
+  it('(1 - cos x)/x^2 - 1/2 → ≈ 0, though its rounding tail grows to 0.5', () => {
+    expect(labelOf(sceneOf('path: on (1 - cos(x))/x^2 - 1/2 along (t, 0) for t in [0, 1] toward (0, 0)'), 's1.readout').text).toBe(
+      'along this path, f → ≈ 0'
+    )
+  })
 })
 
 describe('a path through a pole (I3)', () => {
@@ -140,8 +161,22 @@ describe('approachSide', () => {
   })
 
   it('takes the value where successive values differ least, not the last', () => {
-    // differences 0.1, 0.01, 0.2, 0.3: the least is between the 2nd and 3rd
-    expect(approachSide([1.1, 1.0, 1.01, 1.21, 1.51])).toEqual({ kind: 'value', value: 1.01, error: expect.closeTo(0.01, 12) })
+    // differences 0.1, 0.001, 0.2, 0.3: the least is between the 2nd and 3rd
+    expect(approachSide([1.1, 1.0, 1.001, 1.201, 1.501])).toEqual({ kind: 'value', value: 1.001, error: expect.closeTo(0.001, 12) })
+  })
+
+  it('|f| growing twofold at every step is unbounded whatever the sign: cos(1/x)/x^2 at h = 1e-2 .. 1e-8', () => {
+    expect(approachSide([8623, 562379, -9.5e7, -1.0e10, 9.4e11, -9.1e13, -3.6e15])).toEqual({ kind: 'unbounded' })
+  })
+
+  it('a tail that grows only after shrinking is rounding, not divergence: (1 - cos x)/x^2 - 1/2 reads ≈ 0', () => {
+    const side = approachSide([-4.2e-6, -4.2e-8, 1e-8, 1e-6, 1e-4, 0.02, -0.5])
+    expect(side.kind).toBe('value')
+  })
+
+  it('differences that grow before one small one do not settle: 1, 2, 4, 8, 8.0001', () => {
+    // differences 1, 2, 4, 0.0001: the smallest comes after growth
+    expect(approachSide([1, 2, 4, 8, 8.0001])).toEqual({ kind: 'unsettled' })
   })
 
   it('growth of at least twofold, one sign, over each of the last three steps is unbounded; zeros are not', () => {

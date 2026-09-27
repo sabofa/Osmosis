@@ -15,11 +15,16 @@
 //   digits follow the error (formatApprox), and a value within its error of 0
 //   prints ≈ 0. Rounding makes the smallest h the worst ((1 - cos x)/x^2 at
 //   x = 1e-8 is 0), which is why the last value is not simply taken.
-// - Values growing at least twofold, with one sign, over each of the last
-//   three steps grow without bound: no ring, and "f grows without bound along
-//   this path". Values whose differences never shrink below a tenth of the
-//   largest do not settle. Two sides that disagree beyond their errors both
-//   show, with "no limit along this path".
+// - |f| growing at least twofold at every step, whatever the sign (cos(1/x)/x^2
+//   swings from 8623 to -3.6e15), grows without bound: no ring, and "f grows
+//   without bound along this path". Not "the last few steps": rounding makes
+//   a limit of 0 grow in its tail ((1 - cos x)/x^2 - 1/2 runs 4e-6, 4e-8,
+//   then 1e-6, 1e-4, 0.02, 0.5), after shrinking first.
+// - A limit is reported only where the successive differences shrink toward
+//   the small-h end: they must not grow from the first up to the smallest,
+//   and the smallest must be a tenth of the first or less. Otherwise f does
+//   not settle (sin(1/x); sin(1/x)/x). Two sides that disagree beyond their
+//   errors both show, with "no limit along this path".
 
 import type { Expr, Statement } from '../../../parser/types'
 import { compileVector } from '../../../math/compile'
@@ -41,11 +46,10 @@ const APPROACH = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
 // A path reaches (x0, y0) when it comes within this fraction of the domain's
 // larger span.
 export const REACH = 1e-9
-// Growth by this factor over each of the last three approach steps is
-// unbounded.
+// Growth of |f| by this factor at every approach step is unbounded.
 const GROWTH = 2
-// Values settle when some successive difference is below this fraction of the
-// largest.
+// Values settle when the successive differences shrink, from the first to the
+// smallest, to this fraction of the first or less.
 const SETTLE = 0.1
 
 export type Side = { kind: 'value'; value: number; error: number } | { kind: 'unbounded' } | { kind: 'unsettled' } | { kind: 'undefined' }
@@ -56,14 +60,13 @@ export function approachSide(values: readonly number[]): Side {
   const finite = values.filter(Number.isFinite)
   const n = finite.length
   if (n < 3) return { kind: 'undefined' }
-  const grows = (k: number) =>
-    Math.abs(finite[k - 1]) > 0 && Math.abs(finite[k]) >= GROWTH * Math.abs(finite[k - 1]) && Math.sign(finite[k]) === Math.sign(finite[k - 1])
-  if (n >= 4 && grows(n - 1) && grows(n - 2) && grows(n - 3)) return { kind: 'unbounded' }
+  const grows = (k: number) => Math.abs(finite[k - 1]) > 0 && Math.abs(finite[k]) >= GROWTH * Math.abs(finite[k - 1])
+  if (n >= 4 && finite.every((_, k) => k === 0 || grows(k))) return { kind: 'unbounded' }
   const d = finite.slice(1).map((v, k) => Math.abs(v - finite[k]))
   let best = 0
   for (let k = 1; k < d.length; k++) if (d[k] <= d[best]) best = k
-  const largest = Math.max(...d)
-  if (largest > 0 && d[best] > SETTLE * largest) return { kind: 'unsettled' }
+  const shrinking = d.slice(1, best + 1).every((dk, k) => dk <= d[k])
+  if (!shrinking || d[best] > SETTLE * d[0]) return { kind: 'unsettled' }
   return { kind: 'value', value: finite[best + 1], error: d[best] }
 }
 
