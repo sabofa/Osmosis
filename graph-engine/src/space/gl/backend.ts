@@ -7,9 +7,12 @@
 // Every GPU resource derives from the retained scene and frame, so a lost
 // context is rebuilt on `webglcontextrestored` by re-uploading them.
 //
-// Draw order: the frame (its lines, then the axes frame's arrows), opaque
-// meshes, the scene's lines, arrows and points, then translucent meshes back
-// to front. Box marks are skipped until S5.
+// A frame is drawn by the frame loop (frameLoop.ts): into a multisampled
+// target, the frame, opaque meshes, the hidden-part pass, lines, points and
+// arrows, then translucent meshes by order-independent transparency (or
+// sorted, without float targets), composited or blitted to the canvas. The
+// targets (targets.ts) follow the canvas's size and are rebuilt after a
+// context restore. Box marks are skipped until S5.
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
@@ -24,6 +27,8 @@ import {
   createSharedQuads,
   drawLines,
   frameDepthBias,
+  HIDDEN_DASH,
+  HIDDEN_OPACITY,
   LINE_PROGRAM,
   updateDashes,
   uploadLines,
@@ -32,10 +37,12 @@ import {
   type LineLook,
   type SharedQuads,
 } from './linePipeline'
+import { COMPOSITE_PROGRAM, runFrameLoop, type FramePasses } from './frameLoop'
 import { frameLook, markLook } from './look'
 import { LutCache, lutKey } from './lut'
 import {
   drawMeshes,
+  drawMeshesOit,
   drawTranslucentMeshes,
   isTranslucent,
   mapsUsed,
@@ -47,6 +54,7 @@ import {
 } from './meshPipeline'
 import { drawPoints, POINT_PROGRAM, uploadPoints, type PointGpu } from './pointPipeline'
 import { ProgramCache, type ProgramInfo } from './program'
+import { createTargets, type Targets } from './targets'
 
 export interface GlBackendOptions {
   onError?: (message: string) => void
@@ -68,7 +76,7 @@ interface FrameGpu extends GpuResource {
   arrows: ArrowGpu[]
 }
 
-const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM]
+const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM, COMPOSITE_PROGRAM]
 
 // The frame's look (plan G9 "Frame drawing"): 1 px grid, 1.5 px walls and
 // ticks; the axes frame's axes as 1.5 px arrows with 10 px heads.
@@ -87,6 +95,7 @@ function lineLook(mark: LineMark): LineLook {
     opacity: 1,
     headSize: 0,
     color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
+    hidden: mark.style.hidden === 'dashed',
   }
 }
 
@@ -96,6 +105,7 @@ function arrowLook(mark: ArrowMark): ArrowLook {
     headSize: mark.style.headSize,
     opacity: 1,
     color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
+    hidden: mark.style.hidden === 'dashed',
   }
 }
 
@@ -124,6 +134,10 @@ export class GlBackend {
   private frame: FrameModel | null = null
   private frameGpu: FrameGpu | null = null
   private frameKey = ''
+  // The frame loop's targets, for the backing-store size in `targetsKey`
+  // (null there means they could not be made at that size).
+  private targets: Targets | null = null
+  private targetsKey = ''
   private failed = false
   private lost = false
   private disposed = false
@@ -187,26 +201,26 @@ export class GlBackend {
     if (!gl || this.failed || this.lost || this.disposed || gl.isContextLost()) return
     const colors = this.colors
     try {
-      gl.viewport(0, 0, this.canvas.width, this.canvas.height)
-      const bg = colors?.background ?? [1, 1, 1]
-      gl.clearColor(bg[0], bg[1], bg[2], 1)
-      gl.clearDepth(1)
-      gl.depthMask(true)
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+      const width = this.canvas.width
+      const height = this.canvas.height
       const world = this.world
-      if (!colors || !world) return
+      if (!colors || !world) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.viewport(0, 0, width, height)
+        const bg = colors?.background ?? [1, 1, 1]
+        gl.clearColor(bg[0], bg[1], bg[2], 1)
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+        return
+      }
       const mesh = this.program(MESH_PROGRAM)
       const line = this.program(LINE_PROGRAM)
       const point = this.program(POINT_PROGRAM)
       const head = this.program(ARROWHEAD_PROGRAM)
-      if (!mesh || !line || !point || !head) return
+      const composite = this.program(COMPOSITE_PROGRAM)
+      if (!mesh || !line || !point || !head || !composite) return
+      this.sizeTargets(gl, width, height)
       const look = markLook(camera, world, colors, this.depthcue)
-      const target: DrawTarget = { camera, world, colors, width: this.canvas.width, height: this.canvas.height, pixelRatio, look }
-
-      gl.enable(gl.DEPTH_TEST)
-      gl.depthFunc(gl.LEQUAL)
-      gl.disable(gl.CULL_FACE)
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+      const target: DrawTarget = { camera, world, colors, width, height, pixelRatio, look }
 
       const meshes: MeshGpu[] = []
       const lines: LineGpu[] = []
@@ -242,23 +256,37 @@ export class GlBackend {
         gl.depthMask(true)
         gl.disable(gl.BLEND)
       }
+      const frameGpu = this.frameGpu
+      const translucent = meshes.filter(isTranslucent)
+      const hiddenLines = lines.filter((l) => l.look.hidden)
+      const hiddenArrows = arrows.filter((a) => a.look.hidden)
 
-      // The frame, first: a box frame biased behind data that meets its
-      // walls, the axes frame as content.
-      gl.disable(gl.BLEND)
-      if (this.frameGpu) {
-        const at = { ...target, depthBias: frameDepthBias(this.frameGpu.style), look: frameLook(look) }
-        antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [], at)
+      const passes: FramePasses = {
+        hasTranslucent: translucent.length > 0,
+        // The frame: a box frame biased behind data that meets its walls, the
+        // axes frame as content.
+        frame: () => {
+          if (!frameGpu) return
+          const at = { ...target, depthBias: frameDepthBias(frameGpu.style), look: frameLook(look) }
+          antialiased([...frameGpu.lines, ...frameGpu.arrows.map((a) => a.shaft)], frameGpu.arrows, [], at)
+        },
+        opaque: () => drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw),
+        // Where a surface hides them: both antialiasing passes blend (the loop
+        // has turned depth writes off), dashed, faint.
+        hidden: () => {
+          const shafts = [...hiddenLines, ...hiddenArrows.map((a) => a.shaft)]
+          for (const pass of [0, 1] as const) {
+            drawLines(gl, line, shafts, target, pass, { dash: HIDDEN_DASH, opacity: HIDDEN_OPACITY })
+            drawArrowHeads(gl, head, hiddenArrows, target, pass, HIDDEN_OPACITY)
+          }
+        },
+        marks: () => antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target),
+        translucent: (oit) => {
+          if (oit) drawMeshesOit(gl, mesh, translucent, meshDraw)
+          else drawTranslucentMeshes(gl, mesh, sortBackToFront(translucent, camera), meshDraw)
+        },
       }
-
-      // Opaque meshes.
-      drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw)
-
-      // Lines, arrows and points, with their depth bias.
-      antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target)
-
-      // Translucent meshes, back to front, blended, back faces then front faces.
-      drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), meshDraw)
+      runFrameLoop(gl, { targets: this.targets, composite, background: colors.background, width, height }, passes)
     } catch (error) {
       this.fail(error)
     }
@@ -274,6 +302,7 @@ export class GlBackend {
       for (const m of this.marks.values()) m.destroy(gl)
       this.frameGpu?.destroy(gl)
       this.shared?.destroy(gl)
+      this.targets?.destroy(gl)
       this.luts.deleteAll(gl)
       this.programs.deleteAll(gl)
     }
@@ -281,6 +310,8 @@ export class GlBackend {
     this.marks.clear()
     this.frameGpu = null
     this.shared = null
+    this.targets = null
+    this.targetsKey = ''
     this.programs.forget()
     this.scene = null
     this.frame = null
@@ -289,6 +320,17 @@ export class GlBackend {
     // loss listeners are already detached, and the canvas can never be drawn
     // on again (GraphViewer gives the next renderer a fresh canvas).
     if (!this.lost && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext()
+  }
+
+  // The frame loop's targets at the backing store's size: made on first
+  // draw, remade (the old ones deleted) when the size changes, and after a
+  // context restore. A size at which they cannot be made is not retried.
+  private sizeTargets(gl: WebGL2RenderingContext, width: number, height: number): void {
+    const key = `${width}x${height}`
+    if (key === this.targetsKey) return
+    this.targets?.destroy(gl)
+    this.targets = createTargets(gl, width, height, this.capabilities?.colorBufferFloat ?? false)
+    this.targetsKey = key
   }
 
   private program(spec: { name: string; vertex: string; fragment: string }): ProgramInfo | null {
@@ -379,7 +421,7 @@ export class GlBackend {
           positions.set([l.a[0], l.a[1], l.a[2], l.b[0], l.b[1], l.b[2]], i * 6)
           starts[i] = i * 2
         })
-        const gpu = uploadLines(gl, shared, positions, starts, world, { width: spec.width, dash: null, opacity: 1, headSize: 0, color: spec.color })
+        const gpu = uploadLines(gl, shared, positions, starts, world, { width: spec.width, dash: null, opacity: 1, headSize: 0, color: spec.color, hidden: false })
         if (gpu) lines.push(gpu)
       }
       const arrows: ArrowGpu[] = []
@@ -396,6 +438,7 @@ export class GlBackend {
           headSize: FRAME_AXIS_HEAD,
           opacity: 1,
           color: (c) => c.axis,
+          hidden: false,
         })
         if (gpu) arrows.push(gpu)
       }
@@ -421,6 +464,8 @@ export class GlBackend {
     this.frameGpu = null
     this.frameKey = ''
     this.shared = null
+    this.targets = null
+    this.targetsKey = ''
     this.luts.forget()
     this.programs.forget()
     this.worldKey = ''

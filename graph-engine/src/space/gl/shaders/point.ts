@@ -1,6 +1,8 @@
 // Shaped points (plan G9 "Points"): instanced screen-aligned quads of `size`
 // CSS px, the shape drawn by a signed distance in the fragment shader and
-// antialiased, depth-tested at the point's own depth (less the line bias).
+// antialiased. It is depth-tested as a small sphere would be: at its
+// centre moved toward the eye by its own radius, so a point lying on a
+// surface is not half-buried in it where the surface tilts toward the viewer.
 // Shapes: 0 dot, 1 ring, 2 cross (+), 3 diamond, 4 square. A point is
 // clipped and depth-cued by its centre (look.ts).
 
@@ -16,6 +18,10 @@ uniform vec2 u_viewport;
 uniform float u_pixelRatio;
 uniform float u_size;                   // CSS px diameter
 uniform float u_depthBias;
+uniform vec3 u_eyeDir;                  // world, toward the eye (orthographic)
+uniform vec3 u_eye;                     // world eye position (perspective)
+uniform bool u_perspective;
+uniform float u_worldPerPixel;          // world units per CSS px at the target
 out vec2 v_local;                       // backing px from the centre
 flat out vec3 v_rel;
 flat out float v_depth;
@@ -31,7 +37,11 @@ void main() {
     return;
   }
   vec2 ndc = c.xy / c.w;
-  gl_Position = vec4(ndc + a_corner * r / u_viewport * 2.0, c.z / c.w - u_depthBias, 1.0);
+  vec3 world = a_centre * u_scale;
+  vec3 toEye = u_perspective ? normalize(u_eye - world) : u_eyeDir;
+  vec4 lifted = u_viewProj * vec4(world + toEye * (0.5 * u_size * u_worldPerPixel), 1.0);
+  float z = lifted.w > 0.0 ? lifted.z / lifted.w : c.z / c.w;
+  gl_Position = vec4(ndc + a_corner * r / u_viewport * 2.0, z - u_depthBias, 1.0);
 }
 `
 

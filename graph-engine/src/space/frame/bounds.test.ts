@@ -46,6 +46,21 @@ describe('resolveBox', () => {
     expect(box).toEqual(extent([2, 4], [2, 4], [2, 4]))
   })
 
+  it('rounds out to an authored @ticks3d step: x pi/2 over [-2pi, 2pi] stays [-2pi, 2pi]', () => {
+    const c = defaultSpaceConfig()
+    const pi2 = { value: Math.PI / 2, pi: { num: 1, den: 2 } }
+    const space: SpaceConfig = { ...c, ticks: { ...c.ticks, x: pi2 } }
+    const box = resolveBox(space, extent([-2 * Math.PI, 2 * Math.PI], [-1, 1], [0, 1]))
+    // -2pi / (pi/2) = -4 exactly, so the bound is already a multiple.
+    expect(box.x).toEqual({ min: -2 * Math.PI, max: 2 * Math.PI })
+    // Inside a multiple, it rounds out to the next one: [-7, 7] -> [-5pi/2, 5pi/2].
+    const wider = resolveBox(space, extent([-7, 7], [-1, 1], [0, 1]))
+    expect(wider.x.min).toBeCloseTo((-5 * Math.PI) / 2, 12)
+    expect(wider.x.max).toBeCloseTo((5 * Math.PI) / 2, 12)
+    // An axis with no authored step keeps the ladder: y [-1, 1] with niceStep(2, 8) = 0.2.
+    expect(box.y).toEqual({ min: -1, max: 1 })
+  })
+
   it('does not accumulate: an extent on multiples of 0.1 stays put', () => {
     // niceStep(0.9, 8) = 0.1; 0.3 / 0.1 is 2.9999999999999996 in doubles.
     const box = resolveBox(config(), extent([0.3, 1.2], [0, 1], [0, 1]))

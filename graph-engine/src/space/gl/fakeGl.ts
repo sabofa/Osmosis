@@ -8,7 +8,10 @@
 // - bufferData keeps a copy of what was uploaded, and vertexAttribPointer
 //   records which buffer feeds which attribute location of the bound VAO.
 // - useProgram and every draw call are logged in order, with the program in
-//   use, so a test can assert draw order.
+//   use and the framebuffer bound for drawing, so a test can assert draw
+//   order and which target each draw went to.
+// - getParameter(MAX_SAMPLES) answers `maxSamples` (default 4), and every
+//   framebuffer is complete.
 // - lose()/restore() simulate context loss: while lost every call is recorded
 //   as an error, create* return null, and nothing draws. A loss frees every
 //   live resource, as a real loss does.
@@ -38,6 +41,10 @@ export interface FakeDraw {
   depthWrite: boolean
   blend: boolean
   cull: 'none' | 'front' | 'back' | 'both'
+  depthFunc: number
+  polygonOffset: boolean
+  // The DRAW_FRAMEBUFFER binding; null is the default framebuffer.
+  framebuffer: FakeHandle | null
 }
 
 export interface FakeUpload {
@@ -60,6 +67,7 @@ export const GL_CONSTANTS = {
   ONE_MINUS_SRC_ALPHA: 0x0303,
   LESS: 0x0201,
   LEQUAL: 0x0203,
+  GREATER: 0x0204,
   CULL_FACE: 0x0b44,
   FRONT: 0x0404,
   BACK: 0x0405,
@@ -92,12 +100,33 @@ export const GL_CONSTANTS = {
   NEAREST: 0x2600,
   LINEAR: 0x2601,
   CLAMP_TO_EDGE: 0x812f,
+  FRAMEBUFFER: 0x8d40,
+  READ_FRAMEBUFFER: 0x8ca8,
+  DRAW_FRAMEBUFFER: 0x8ca9,
+  RENDERBUFFER: 0x8d41,
+  COLOR_ATTACHMENT0: 0x8ce0,
+  COLOR_ATTACHMENT1: 0x8ce1,
+  DEPTH_ATTACHMENT: 0x8d00,
+  DEPTH_COMPONENT: 0x1902,
+  DEPTH_COMPONENT24: 0x81a6,
+  RGBA16F: 0x881a,
+  R16F: 0x822d,
+  RED: 0x1903,
+  HALF_FLOAT: 0x140b,
+  MAX_SAMPLES: 0x8d57,
+  FRAMEBUFFER_COMPLETE: 0x8cd5,
+  POLYGON_OFFSET_FILL: 0x8037,
+  COLOR: 0x1800,
+  NONE: 0,
 } as const
 
 export interface FakeGlOptions {
   // Make every shader compile fail (or only those whose source matches).
   failCompile?: boolean | ((source: string) => boolean)
   colorBufferFloat?: boolean
+  maxSamples?: number
+  // Make checkFramebufferStatus report every framebuffer incomplete.
+  incompleteFramebuffers?: boolean
 }
 
 export interface FakeGl {
@@ -149,6 +178,9 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   let blend = false
   let cullEnabled = false
   let cullMode: number = GL_CONSTANTS.BACK
+  let depthFunc: number = GL_CONSTANTS.LESS
+  let polygonOffset = false
+  let drawFramebuffer: FakeHandle | null = null
   const cull = (): FakeDraw['cull'] =>
     !cullEnabled ? 'none' : cullMode === GL_CONSTANTS.FRONT ? 'front' : cullMode === GL_CONSTANTS.BACK ? 'back' : 'both'
   let arrayBuffer: FakeHandle | null = null
@@ -229,11 +261,21 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     enable: (cap: number) => {
       if (cap === GL_CONSTANTS.BLEND) blend = true
       if (cap === GL_CONSTANTS.CULL_FACE) cullEnabled = true
+      if (cap === GL_CONSTANTS.POLYGON_OFFSET_FILL) polygonOffset = true
     },
     disable: (cap: number) => {
       if (cap === GL_CONSTANTS.BLEND) blend = false
       if (cap === GL_CONSTANTS.CULL_FACE) cullEnabled = false
+      if (cap === GL_CONSTANTS.POLYGON_OFFSET_FILL) polygonOffset = false
     },
+    depthFunc: (fn: number) => {
+      depthFunc = fn
+    },
+    bindFramebuffer: (target: number, fb: FakeHandle | null) => {
+      if (target === GL_CONSTANTS.FRAMEBUFFER || target === GL_CONSTANTS.DRAW_FRAMEBUFFER) drawFramebuffer = fb
+    },
+    getParameter: (name: number) => (name === GL_CONSTANTS.MAX_SAMPLES ? (options.maxSamples ?? 4) : null),
+    checkFramebufferStatus: () => (options.incompleteFramebuffers ? 0 : GL_CONSTANTS.FRAMEBUFFER_COMPLETE),
     cullFace: (mode: number) => {
       cullMode = mode
     },
@@ -267,16 +309,16 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       attribs.set(vao.id, map)
     },
     drawArrays: (mode: number, _first: number, count: number) => {
-      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull() })
+      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
     },
     drawElements: (mode: number, count: number) => {
-      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull() })
+      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
     },
     drawArraysInstanced: (mode: number, _first: number, count: number, instances: number) => {
-      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull() })
+      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
     },
     drawElementsInstanced: (mode: number, count: number, _type: number, _offset: number, instances: number) => {
-      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull() })
+      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend, cull: cull(), depthFunc, polygonOffset, framebuffer: drawFramebuffer })
     },
   }
 
@@ -351,6 +393,9 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     blend = false
     cullEnabled = false
     cullMode = GL_CONSTANTS.BACK
+    depthFunc = GL_CONSTANTS.LESS
+    polygonOffset = false
+    drawFramebuffer = null
     arrayBuffer = null
     elementBuffer = null
   }

@@ -51,6 +51,10 @@ export function drawPoints(gl: WebGL2RenderingContext, program: ProgramInfo, poi
   gl.uniform1f(program.uniform('u_pixelRatio'), target.pixelRatio)
   gl.uniform1f(program.uniform('u_depthBias'), target.depthBias ?? LINE_DEPTH_BIAS)
   gl.uniform1i(program.uniform('u_pass'), pass)
+  gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
+  gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])
+  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+  gl.uniform1f(program.uniform('u_worldPerPixel'), camera.worldPerPixel)
   applyLook(gl, program, target.look)
   for (const p of points) {
     const [r, g, b] = resolveSpaceColor(p.mark.style.color, colors.palette, colors.theme)

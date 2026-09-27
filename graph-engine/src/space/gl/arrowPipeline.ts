@@ -23,6 +23,8 @@ export interface ArrowLook {
   headSize: number
   opacity: number
   color: (colors: SpaceColors) => Rgb
+  // Drawn by the hidden-part pass where a surface hides it.
+  hidden: boolean
 }
 
 export interface ArrowGpu extends GpuResource {
@@ -65,6 +67,7 @@ export function uploadArrows(
     opacity: look.opacity,
     headSize: look.headSize,
     color: look.color,
+    hidden: look.hidden,
   })
   if (!shaft) return null
   const vao = gl.createVertexArray()
@@ -93,7 +96,15 @@ export function uploadArrows(
   }
 }
 
-export function drawArrowHeads(gl: WebGL2RenderingContext, program: ProgramInfo, arrows: readonly ArrowGpu[], target: DrawTarget, pass: AaPass): void {
+// `opacity` scales the arrows' own (the hidden-part pass draws heads faint).
+export function drawArrowHeads(
+  gl: WebGL2RenderingContext,
+  program: ProgramInfo,
+  arrows: readonly ArrowGpu[],
+  target: DrawTarget,
+  pass: AaPass,
+  opacity = 1,
+): void {
   if (arrows.length === 0) return
   const { camera, world, colors } = target
   gl.useProgram(program.program)
@@ -110,7 +121,7 @@ export function drawArrowHeads(gl: WebGL2RenderingContext, program: ProgramInfo,
   for (const a of arrows) {
     const [r, g, b] = a.look.color(colors)
     gl.uniform3f(program.uniform('u_color'), r, g, b)
-    gl.uniform1f(program.uniform('u_opacity'), a.look.opacity)
+    gl.uniform1f(program.uniform('u_opacity'), a.look.opacity * opacity)
     gl.uniform1f(program.uniform('u_headSize'), a.look.headSize)
     gl.uniform1f(program.uniform('u_shaftWidth'), a.look.shaftWidth)
     gl.bindVertexArray(a.vao)

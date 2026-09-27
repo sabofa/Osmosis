@@ -57,6 +57,20 @@ function uniformValues(fake: FakeGl, name: string): { program: string; values: u
 
 const texImages = (fake: FakeGl) => fake.calls.filter((c) => c.fn === 'texImage2D')
 
+// The colormap textures: the ones given pixels by texImage2D (the frame
+// loop's targets are allocated by texStorage2D), each the texture bound just
+// before its upload.
+function lutTextures(fake: FakeGl): { created: number; live: number; deleted: number } {
+  const handles: FakeHandle[] = []
+  let bound: FakeHandle | null = null
+  for (const c of fake.calls) {
+    if (c.fn === 'bindTexture') bound = c.args[1] as FakeHandle | null
+    if (c.fn === 'texImage2D' && bound) handles.push(bound)
+  }
+  const live = handles.filter((h) => fake.live.texture.has(h.id)).length
+  return { created: handles.length, live, deleted: handles.length - live }
+}
+
 describe('GlBackend: colormap textures', () => {
   it('uploads one 256 x 1 RGBA8 texture per (map, theme), shared by every mesh using the map', () => {
     const { fake, backend } = setup()
@@ -65,7 +79,7 @@ describe('GlBackend: colormap textures', () => {
     backend.draw(camera(), 1)
     backend.draw(camera(), 1)
     // viridis (shared by two meshes) and magma: two textures, each uploaded once.
-    expect(fake.created.texture).toBe(2)
+    expect(lutTextures(fake).created).toBe(2)
     const images = texImages(fake)
     expect(images).toHaveLength(2)
     const [target, level, internal, width, height, border, format, type, data] = images[0].args as [
@@ -96,13 +110,12 @@ describe('GlBackend: colormap textures', () => {
     const { fake, backend } = setup()
     backend.setScene(withScales(scene([coloured(0, 0)]), [scaleOf(0, 'balance')]), WORLD, LIGHT)
     backend.draw(camera(), 1)
-    expect(fake.live.texture.size).toBe(1)
+    expect(lutTextures(fake)).toEqual({ created: 1, live: 1, deleted: 0 })
     backend.setColors(DARK)
     backend.draw(camera(), 1)
-    expect(fake.created.texture).toBe(2)
-    expect(fake.deleted.texture).toBe(1)
-    expect(fake.live.texture.size).toBe(1)
+    expect(lutTextures(fake)).toEqual({ created: 2, live: 1, deleted: 1 })
     backend.dispose()
+    expect(lutTextures(fake).live).toBe(0)
     expect(fake.live.texture.size).toBe(0)
   })
 
@@ -112,8 +125,7 @@ describe('GlBackend: colormap textures', () => {
     backend.draw(camera(), 1)
     backend.setScene(scene([coloured(0, null)]), WORLD, LIGHT)
     backend.draw(camera(), 1)
-    expect(fake.created.texture).toBe(1)
-    expect(fake.live.texture.size).toBe(0)
+    expect(lutTextures(fake)).toEqual({ created: 1, live: 0, deleted: 1 })
   })
 })
 
@@ -177,6 +189,16 @@ describe('GlBackend: box clipping and the depth cue', () => {
     const off = uniformValues(drawn({ depthcue: false }), 'u_cue')
     expect(off.some((u) => u.program === 'mesh')).toBe(true)
     expect(off.every((u) => u.values[0] === 0)).toBe(true)
+  })
+
+  it('lifts a point toward the eye by its radius for the depth test (it reads as a small sphere, not half-buried)', () => {
+    const fake = drawn()
+    const cam = camera(world)
+    const perPixel = uniformValues(fake, 'u_worldPerPixel').filter((u) => u.program === 'point')
+    expect(perPixel.length).toBeGreaterThan(0)
+    for (const u of perPixel) expect(u.values).toEqual([cam.worldPerPixel])
+    const eyeDir = uniformValues(fake, 'u_eyeDir').filter((u) => u.program === 'point')
+    for (const u of eyeDir) expect(u.values).toEqual([...cam.direction])
   })
 
   it('normalises cue depth across the box sphere: the range is the centre depth -/+ |h|', () => {

@@ -157,8 +157,8 @@ describe('GlBackend: upload', () => {
 })
 
 describe('GlBackend: drawing meshes', () => {
-  it('draws translucent meshes after opaque ones, back to front, back faces then front faces, never writing depth', () => {
-    const { fake, backend } = setup()
+  it('without float targets, draws translucent meshes after opaque ones, back to front, back faces then front faces, never writing depth', () => {
+    const { fake, backend } = setup({ colorBufferFloat: false })
     // Scene order: near translucent, opaque, far translucent. The camera
     // looks down from +z (elevation 25), so higher z is nearer.
     const near = square(0.8, -0.5, 0.5, 1)

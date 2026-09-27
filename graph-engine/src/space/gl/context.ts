@@ -1,7 +1,10 @@
 // The WebGL2 context (plan G9, spec SP4). Only space/gl/ touches a context.
 
+// The canvas itself is not multisampled: the frame loop draws into its own
+// MSAA target and blits (frameLoop.ts), and only falls back to drawing on
+// the canvas directly when that target cannot be made.
 export const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
-  antialias: true,
+  antialias: false,
   alpha: false,
   premultipliedAlpha: false,
   preserveDrawingBuffer: false,
@@ -10,8 +13,8 @@ export const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
 export const NO_WEBGL2_MESSAGE = 'Space needs WebGL2, which this browser or device does not provide, so this view cannot be drawn.'
 
 export interface GlCapabilities {
-  // Queried now and recorded for S3's order-independent transparency; S2
-  // draws translucent meshes with the sorted fallback either way.
+  // Float colour targets: order-independent transparency (frameLoop.ts);
+  // without it, translucent meshes draw sorted.
   colorBufferFloat: boolean
 }
 

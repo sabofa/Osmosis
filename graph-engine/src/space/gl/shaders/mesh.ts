@@ -24,6 +24,9 @@
 //    family of lines fades out as its on-screen spacing falls from 5 CSS px
 //    to 2.5, so a zoomed-out surface is not all lines.
 // 6. Depth cue (look.ts).
+// 7. Output: the colour at the mesh's opacity; or, accumulating for
+//    order-independent transparency (u_oit), the weighted pair shaders/oit.ts
+//    composites.
 
 import { NORMALISE_GLSL_FUNCTION } from '../../colormaps'
 import { LOOK_FRAGMENT_GLSL, LOOK_VERTEX_GLSL } from '../look'
@@ -79,9 +82,11 @@ uniform bool u_meshLines;
 uniform vec2 u_meshStep;
 uniform vec3 u_ink;
 uniform float u_pixelRatio;
+uniform bool u_oit;
 ${LOOK_FRAGMENT_GLSL}
 ${NORMALISE_GLSL_FUNCTION}
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragWeight;
 
 const vec3 KEY = vec3(-0.5014, 0.6017, 0.6217);   // normalise(-0.5, 0.6, 0.62)
 const vec3 FILL = vec3(0.6046, -0.2519, 0.7557);  // normalise(0.6, -0.25, 0.75)
@@ -142,6 +147,17 @@ void main() {
     color = mix(color, u_ink, MESH_INK * ink);
   }
 
-  fragColor = vec4(depthCue(color, v_depth), u_opacity);
+  color = depthCue(color, v_depth);
+  if (u_oit) {
+    // McGuire and Bavoil's weight, z the view depth.
+    float a = u_opacity;
+    float z = max(-v_viewPos.z, 0.0);
+    float w = a * clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
+    fragColor = vec4(color * a * w, a);
+    fragWeight = vec4(a * w, 0.0, 0.0, 0.0);
+  } else {
+    fragColor = vec4(color, u_opacity);
+    fragWeight = vec4(0.0);
+  }
 }
 `

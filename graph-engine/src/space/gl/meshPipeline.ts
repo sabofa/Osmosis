@@ -166,6 +166,7 @@ export function bindMeshProgram(gl: WebGL2RenderingContext, program: ProgramInfo
   gl.uniform3f(program.uniform('u_noData'), colors.grid[0], colors.grid[1], colors.grid[2])
   gl.uniform1f(program.uniform('u_pixelRatio'), draw.pixelRatio)
   gl.uniform1i(program.uniform('u_lut'), 0)
+  gl.uniform1i(program.uniform('u_oit'), 0)
   applyLook(gl, program, draw.look)
 }
 
@@ -194,6 +195,19 @@ export function drawMeshes(gl: WebGL2RenderingContext, program: ProgramInfo, mes
   if (meshes.length === 0) return
   bindMeshProgram(gl, program, draw)
   for (const mesh of meshes) drawOneMesh(gl, program, mesh, draw)
+  gl.bindVertexArray(null)
+}
+
+// Translucent meshes accumulating for order-independent transparency, in any
+// order, both faces: the frame loop has bound the OIT target and its blend
+// state (frameLoop.ts), and the shader writes the weighted pair (u_oit).
+export function drawMeshesOit(gl: WebGL2RenderingContext, program: ProgramInfo, meshes: readonly MeshGpu[], draw: MeshDraw): void {
+  if (meshes.length === 0) return
+  bindMeshProgram(gl, program, draw)
+  gl.uniform1i(program.uniform('u_oit'), 1)
+  gl.disable(gl.CULL_FACE)
+  for (const mesh of meshes) drawOneMesh(gl, program, mesh, draw)
+  gl.uniform1i(program.uniform('u_oit'), 0)
   gl.bindVertexArray(null)
 }
 

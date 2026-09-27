@@ -13,13 +13,19 @@ import type { ProgramInfo } from './program'
 import { LINE_FRAGMENT, LINE_VERTEX } from './shaders/line'
 
 export const LINE_PROGRAM = { name: 'line', vertex: LINE_VERTEX, fragment: LINE_FRAGMENT }
-// NDC z subtracted from lines, points and arrowheads so they win against a surface they lie on.
-export const LINE_DEPTH_BIAS = 1e-5
+// NDC z subtracted from lines, points and arrowheads. Zero since S3: opaque
+// meshes are pushed back by polygon offset instead (frameLoop.ts), so a
+// curve lying on a surface wins without a bias of its own.
+export const LINE_DEPTH_BIAS = 0
 // The box frame's lines go the other way: they lie on the box's walls, where
 // data often ends exactly (a z = f surface's edges, with automatic bounds),
-// and a wall gridline biased forward would poke through that edge. Pushed
-// back, the data wins.
-export const FRAME_DEPTH_BIAS = -1e-5
+// and a wall gridline would poke through that edge. Pushed back further than
+// the meshes' polygon offset, the data wins.
+export const FRAME_DEPTH_BIAS = -1e-4
+
+// The hidden-part pass (frameLoop.ts step 4): 4 px on, 4 px off, at 45%.
+export const HIDDEN_DASH: readonly number[] = [4, 4]
+export const HIDDEN_OPACITY = 0.45
 
 // The bias a frame draws with. The box frame (walls, grid, tick edges) sits
 // behind data; the axes frame is content, like a curve: an axis lying in
@@ -58,19 +64,23 @@ export interface LineLook {
   // CSS px; > 0 marks an arrow shaft, trimmed to end inside its head.
   headSize: number
   color: (colors: SpaceColors) => Rgb
+  // Drawn by the hidden-part pass where a surface hides it.
+  hidden: boolean
 }
 
 export interface LineGpu extends GpuResource {
   vao: WebGLVertexArrayObject
   instances: number
   look: LineLook
-  // 0 solid, 1 cumulative dash lengths, 2 per-segment dash phase.
+  // Its own dash: 0 solid, 1 cumulative dash lengths, 2 per-segment dash phase.
   dashMode: 0 | 1 | 2
   // What the dash lengths are recomputed from (author coordinates).
   positions: Float64Array
   starts: Uint32Array
   // Per instance, the index of its first vertex.
   firstVertex: Uint32Array
+  // Cumulative screen lengths per instance, for its own dash or for the
+  // hidden pass's; null when neither needs them (or the mark is too large).
   dashBuffer: WebGLBuffer | null
   dashKey: string
 }
@@ -119,9 +129,10 @@ export function uploadLines(
     floatAttribute(gl, 2, segments, 3, 24, 12, 1)
   }
   const dashed = dashUniform(look.dash) !== null
-  const dashMode: 0 | 1 | 2 = !dashed ? 0 : positions.length / 3 > CUMULATIVE_DASH_LIMIT ? 2 : 1
+  const tooLong = positions.length / 3 > CUMULATIVE_DASH_LIMIT
+  const dashMode: 0 | 1 | 2 = !dashed ? 0 : tooLong ? 2 : 1
   let dashBuffer: WebGLBuffer | null = null
-  if (dashMode === 1) {
+  if (!tooLong && (dashed || look.hidden)) {
     dashBuffer = createBuffer(gl, gl.ARRAY_BUFFER, new Float32Array(firstVertex.length * 2), gl.DYNAMIC_DRAW)
     if (dashBuffer) {
       buffers.push(dashBuffer)
@@ -153,7 +164,7 @@ export function cameraKey(camera: CameraMatrices): string {
 
 // Recompute a dashed line's cumulative screen lengths when the camera moved.
 export function updateDashes(gl: WebGL2RenderingContext, line: LineGpu, camera: CameraMatrices, key: string, world: WorldMap): void {
-  if (line.dashMode !== 1 || !line.dashBuffer || line.dashKey === key) return
+  if (!line.dashBuffer || line.dashKey === key) return
   const lengths = cumulativeScreenLength(line.positions, line.starts, (x, y, z) => project(camera, world.toWorld([x, y, z])))
   const data = new Float32Array(line.instances * 2)
   for (let k = 0; k < line.instances; k++) {
@@ -184,7 +195,22 @@ export interface DrawTarget {
   look: MarkLook
 }
 
-export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, lines: readonly LineGpu[], target: DrawTarget, pass: AaPass): void {
+// Draws `lines` in their own style, or, for the hidden-part pass, all in the
+// hidden style: dashed on their cumulative length (per segment without it),
+// at a fraction of their opacity.
+export interface LineOverride {
+  dash: readonly number[]
+  opacity: number
+}
+
+export function drawLines(
+  gl: WebGL2RenderingContext,
+  program: ProgramInfo,
+  lines: readonly LineGpu[],
+  target: DrawTarget,
+  pass: AaPass,
+  override: LineOverride | null = null,
+): void {
   if (lines.length === 0) return
   const { camera, world, colors } = target
   gl.useProgram(program.program)
@@ -200,12 +226,13 @@ export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, line
   applyLook(gl, program, target.look)
   for (const line of lines) {
     const [r, g, b] = line.look.color(colors)
-    const dash = dashUniform(line.look.dash)
+    const dash = dashUniform(override ? override.dash : line.look.dash)
+    const mode = !dash ? 0 : override ? (line.dashBuffer ? 1 : 2) : line.dashMode
     gl.uniform3f(program.uniform('u_color'), r, g, b)
-    gl.uniform1f(program.uniform('u_opacity'), line.look.opacity)
+    gl.uniform1f(program.uniform('u_opacity'), line.look.opacity * (override ? override.opacity : 1))
     gl.uniform1f(program.uniform('u_width'), line.look.width)
     gl.uniform1f(program.uniform('u_headSize'), line.look.headSize)
-    gl.uniform1i(program.uniform('u_dashMode'), dash ? line.dashMode : 0)
+    gl.uniform1i(program.uniform('u_dashMode'), mode)
     gl.uniform4f(program.uniform('u_dash'), ...(dash?.pattern ?? ([0, 0, 0, 0] as const)))
     gl.uniform1f(program.uniform('u_dashTotal'), dash?.total ?? 0)
     gl.bindVertexArray(line.vao)
