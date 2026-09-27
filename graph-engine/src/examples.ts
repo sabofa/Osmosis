@@ -3,14 +3,34 @@
 // that does not parse is a defect a user sees immediately — see
 // examples.test.ts, which renders all of them.
 
+// The harness shows one group at a time (plus a search across all of them),
+// because a single wall of seventy-odd buttons stopped being navigable. The
+// order here is the order the group tabs appear in. Every example must name
+// one — examples.test.ts checks it — so a new example cannot quietly land in
+// no group at all.
+export const EXAMPLE_GROUPS = [
+  'Graphing',
+  'Tables',
+  'Space',
+  'Plane geometry',
+  'Solids',
+  'Points & constructions',
+  'Sections',
+  'Spheres',
+] as const
+
+export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
+
 export interface Example {
   label: string
+  group: ExampleGroup
   spec: string
 }
 
 export const EXAMPLES: Example[] = [
   {
     label: '2D',
+    group: 'Graphing',
     spec: `y = x^2 - 2x - 1
 x^2/9 + y^2/4 = 1        # ellipse
 x^2 + y^2 = 25            # circle
@@ -21,6 +41,7 @@ A = (2, 3)
   },
   {
     label: '3D',
+    group: 'Space',
     spec: `z = sin(x) * cos(y)
 (3*cos(u)*sin(v), 3*sin(u)*sin(v), 3*cos(v)) for u in [0, 6.283], v in [0, 3.1416]   # sphere
 A = (2, 2, 3)
@@ -30,47 +51,56 @@ A = (2, 2, 3)
   },
   {
     label: 'Inequality',
+    group: 'Graphing',
     spec: `@hover: none
 y > x^2 - 4
 x^2 + y^2 <= 16`,
   },
   {
     label: 'Vector',
+    group: 'Graphing',
     spec: `vector: (0,0) -> (3,4)
 vector: (0,0) -> (-2,3) color: purple`,
   },
   {
     label: 'Tangent',
+    group: 'Graphing',
     spec: `y = x^3 - 3x
 tangent: x^3 - 3x at x = 1
 tangent: x^3 - 3x at x = -1 color: purple`,
   },
   {
     label: 'Animate',
+    group: 'Graphing',
     spec: `k(t) = cos(t) * 2
 animate: (k(t), sin(t)*2) for t in [0, 6.283]   # references k(t), a named function`,
   },
   {
     label: 'Piecewise',
+    group: 'Graphing',
     spec: `@points: vertices
 y = -x - 1 if x < 0
 y = x^2 - 1 if x >= 0`,
   },
   {
     label: 'Polar',
+    group: 'Graphing',
     spec: `r = 2 + 2*sin(3*theta)`,
   },
   {
     label: 'Slope field',
+    group: 'Graphing',
     spec: `field: dy/dx = x - y
 y = x - 1   # one solution curve through the field`,
   },
   {
     label: 'Scatter',
+    group: 'Graphing',
     spec: `scatter: (1,2.1), (2,3.9), (3,6.2), (4,7.8), (5,10.1), (6,11.9)`,
   },
   {
     label: 'Table (data)',
+    group: 'Tables',
     spec: `@mode: table
 header: Score range | Frequency
 row: 90-100 | 4
@@ -80,17 +110,20 @@ row: 60-69 | 5`,
   },
   {
     label: 'Table (function)',
+    group: 'Tables',
     spec: `@mode: table
 table: y = x^2 - 1 for x in [0, 6] step 1`,
   },
   {
     label: 'Table (formula)',
+    group: 'Tables',
     spec: `@mode: table
 @formulas: on
 table: y = x^2 - 1 for x in [0, 6] step 1`,
   },
   {
     label: 'Table (multiple)',
+    group: 'Tables',
     spec: `@mode: table
 scores.header: Trial | Score
 scores.row: 1 | 82
@@ -100,29 +133,34 @@ times.table: y = 2x + 1 for x in [0, 4] step 1`,
   },
   {
     label: 'Hide/show',
+    group: 'Graphing',
     spec: `@hide: helper
 y = x^2 name: main
 y = x + 3 color: teal name: helper`,
   },
   {
     label: 'Feature points',
+    group: 'Graphing',
     spec: `@points: roots, extrema, inflections
 @point-labels: coords
 y = x^3 - 3x`,
   },
   {
     label: 'Intersections',
+    group: 'Graphing',
     spec: `@points: intersections
 y = x^2
 y = x + 2`,
   },
   {
     label: 'No numbers',
+    group: 'Graphing',
     spec: `@labels: none
 y = x^2 - 4`,
   },
   {
     label: 'Steps of 8',
+    group: 'Graphing',
     spec: `@xstep: 8
 @ystep: 8
 @step-mode: geometric
@@ -130,11 +168,13 @@ y = x^2   # zoom out: 8 -> 64 -> 512, never 10`,
   },
   {
     label: 'Circle',
+    group: 'Plane geometry',
     spec: `circle: (0, 0), 3
 O = (0, 0)`,
   },
   {
     label: 'Triangle',
+    group: 'Plane geometry',
     spec: `polygon: A(0,0), B(4,0), C(2,3)
 tick: A-C
 tick: B-C
@@ -142,6 +182,7 @@ angle: A-B-C label: x°`,
   },
   {
     label: 'Solved triangle',
+    group: 'Plane geometry',
     spec: `@mode: figure
 @angle: degrees
 triangle ABC: angle A = 90, AB = 6, AC = 8   # solved, not hand-placed
@@ -154,6 +195,7 @@ label: BC`,
   },
   {
     label: 'Measured + notation',
+    group: 'Plane geometry',
     spec: `@mode: figure
 @angle: degrees
 triangle ABC: AB = 7, BC = 8, AC = 9
@@ -164,6 +206,7 @@ label: angle ABC`,
   },
   {
     label: 'Centres + circles',
+    group: 'Plane geometry',
     spec: `@mode: figure
 @angle: degrees
 triangle ABC: AB = 9, BC = 8, AC = 7
@@ -177,6 +220,7 @@ segment: O-H dashed   # the Euler line`,
   },
   {
     label: 'Constructions',
+    group: 'Plane geometry',
     spec: `@mode: figure
 A = (0, 0)
 B = (8, 0)
@@ -192,6 +236,7 @@ segment: A-C`,
   },
   {
     label: 'Two circles',
+    group: 'Plane geometry',
     spec: `@mode: figure
 A = (0, 0)
 B = (7, 0)
@@ -203,6 +248,7 @@ segment: A-B`,
   },
   {
     label: 'Figure + table',
+    group: 'Tables',
     spec: `@mode: figure
 @angle: degrees
 triangle ABC: angle A = 90, AB = 3, AC = 4
@@ -214,6 +260,7 @@ row: BC | 5`,
   },
   {
     label: 'Circle vocabulary',
+    group: 'Plane geometry',
     spec: `@mode: figure
 O = (0, 0)
 k = circle O, 5
@@ -226,6 +273,7 @@ radius k to Q`,
   },
   {
     label: 'Tangents from a point',
+    group: 'Plane geometry',
     spec: `@mode: figure
 O = (0, 0)
 k = circle O, 3
@@ -237,6 +285,7 @@ segment: O-E dashed`,
   },
   {
     label: 'Arc measure',
+    group: 'Plane geometry',
     spec: `@mode: figure
 @angle: degrees
 O = (0, 0)
@@ -251,6 +300,7 @@ radius k to B`,
   },
   {
     label: 'Secant and chord',
+    group: 'Plane geometry',
     spec: `@mode: figure
 O = (0, 0)
 k = circle O, 5
@@ -263,6 +313,7 @@ segment R-P on k minor    # the region between a chord and its arc`,
   },
   {
     label: 'Givens table',
+    group: 'Plane geometry',
     spec: `@mode: figure
 @angle: degrees
 @givens: right
@@ -279,6 +330,7 @@ find: AD`,
   },
   {
     label: 'Solid (prism)',
+    group: 'Solids',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6
 label: S width = 8
@@ -287,12 +339,14 @@ label: S depth = 6`,
   },
   {
     label: 'Tetrahedron',
+    group: 'Solids',
     spec: `@mode: figure
 T = solid tetrahedron edge 5 vertices ABCD
 label: T edge = 5`,
   },
   {
     label: 'Cylinder',
+    group: 'Solids',
     spec: `@mode: figure
 C = solid cylinder radius 3, height 8
 label: C radius = 3
@@ -300,12 +354,14 @@ label: C height = 8`,
   },
   {
     label: 'Cross-section (cut)',
+    group: 'Sections',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6
 cut: S by plane z = 1      # shaded where it lies`,
   },
   {
     label: 'Cross-section (lifted)',
+    group: 'Sections',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6
 section: S by plane z = 1 vertices PQRS   # lifted out as a true-shape figure
@@ -320,6 +376,7 @@ label: QR = 6`,
     // hidden corner and its three edges are dashed by hand — this cube is
     // points, not a solid, so nothing occludes it.
     label: 'Cube by points',
+    group: 'Points & constructions',
     spec: `@mode: figure
 A = (4, 0, 0)
 B = (4, 4, 0)
@@ -351,6 +408,7 @@ label: PQ          # the true length, sqrt(24)`,
   },
   {
     label: 'Box diagonal',
+    group: 'Points & constructions',
     spec: `@mode: figure
 @givens: right
 S = solid prism 8 by 5 by 6 vertices ABCDEFGH
@@ -360,6 +418,7 @@ given: AB = 8`,
   },
   {
     label: 'Foot of a perpendicular',
+    group: 'Points & constructions',
     spec: `@mode: figure
 T = solid tetrahedron edge 6 vertices ABCD
 F = foot D to plane A-B-C
@@ -370,6 +429,7 @@ label: DF          # the height, 6 sqrt(2/3)`,
     // The regular tetrahedron under the standard view (phase 6b): exact
     // isometric flattened it until this altitude lay under the edge D-A.
     label: 'Regular tetrahedron and its height',
+    group: 'Points & constructions',
     spec: `@mode: figure
 T = solid tetrahedron edge 6 vertices ABCD
 F = foot D to plane A-B-C
@@ -379,6 +439,7 @@ label: T edge = 6`,
   },
   {
     label: 'Sphere with a chord',
+    group: 'Points & constructions',
     spec: `@mode: figure
 S = solid sphere radius 4
 N = (0, 0, 4)
@@ -394,6 +455,7 @@ segment: P-Q       # behind the sphere: visible, hidden, visible`,
     // space, and the centroid of four points (the tetrahedron ACFH inside
     // the box), which is the box's centre, on the diagonal.
     label: 'Diagonal meets a plane',
+    group: 'Points & constructions',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6 vertices ABCDEFGH
 segment: B-D
@@ -411,6 +473,7 @@ label: AX          # a third of AG`,
     // standard view (azimuth 30), so each is split visible, hidden, visible;
     // phase 6b turned them 15 degrees with the default camera.
     label: 'Cylinder and cone',
+    group: 'Points & constructions',
     spec: `@mode: figure
 C = solid cylinder radius 3, height 4
 K = solid cone radius 2, height 16
@@ -427,6 +490,7 @@ segment: M-N plain # the axis, forced solid though the cylinder hides it`,
     // (P4), placed like the regular one — base ABC horizontal, D above it.
     // D's height over ABC is 3V / area(ABC) = 80 / (3 sqrt 21) = 5.819.
     label: 'AIME tetrahedron',
+    group: 'Solids',
     spec: `@mode: figure
 T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)
 F = foot D to plane A-B-C
@@ -442,6 +506,7 @@ given: AD = √89`,
     // through A's three neighbours B, F and G is the AIME dihedral-angle
     // setup (the angle mark itself arrives with build step 10).
     label: 'Hexagonal prism',
+    group: 'Solids',
     spec: `@mode: figure
 S = solid prism regular 6 side 12, height 8 vertices ABCDEFGHIJKL
 segment: B-F
@@ -457,6 +522,7 @@ label: S height`,
     // generator from (5, 0, 0) through (-3, 3, 0). Glass: each cone draws
     // its own back dashed and neither hides the other.
     label: 'Two cones and a sphere',
+    group: 'Points & constructions',
     spec: `@mode: figure
 O = (0, 0, 0)
 P = (-3, 0, 0)
@@ -471,6 +537,7 @@ S = solid sphere center O radius 15/sqrt(73)`,
     // A conical frustum (P2): radius 6 at the base, 3 at the top, height 4,
     // with its axis and its three named dimensions.
     label: 'Frustum',
+    group: 'Solids',
     spec: `@mode: figure
 F = solid frustum radius 6, top 3, height 4
 label: F radius = 6
@@ -483,6 +550,7 @@ label: F height = 4`,
     // of the three edges there. Every named point is a corner; the slice is
     // one triangular face, and each cut face is one pentagon.
     label: 'Hull of points',
+    group: 'Points & constructions',
     spec: `@mode: figure
 A = (0, 0, 0)
 B = (2, 0, 0)
@@ -502,6 +570,7 @@ S = solid hull A-B-C-D-E-F-H-P-Q-R`,
     // a triangle along (K - J) x (L - J) with its new top named, a tilted
     // cylinder between two rim centres, and a frustum between two.
     label: 'Solids on points',
+    group: 'Points & constructions',
     spec: `@mode: figure
 A = (2, -14, 0)
 B = (2, -11, 0)
@@ -530,6 +599,7 @@ label: KN`,
     // A cube is the box with three equal sides — byte for byte "prism 4 by 4
     // by 4" — lettered the same way, so AG is the space diagonal.
     label: 'Cube',
+    group: 'Solids',
     spec: `@mode: figure
 S = solid cube edge 4 vertices ABCDEFGH
 segment: A-G
@@ -541,6 +611,7 @@ label: AG`,
     // and lettered from the front edge, then the top apex E and the bottom
     // apex F. EF and AC are both 6 sqrt 2.
     label: 'Octahedron',
+    group: 'Solids',
     spec: `@mode: figure
 O = solid octahedron edge 6 vertices ABCDEF
 segment: E-F
@@ -550,6 +621,7 @@ label: EF`,
   {
     // A regular pentagonal pyramid (P5), its apex over the base centre.
     label: 'Regular pyramid',
+    group: 'Solids',
     spec: `@mode: figure
 P = solid pyramid regular 5 side 4, height 6 vertices ABCDEF
 label: P side
@@ -558,6 +630,7 @@ label: P height`,
   {
     // A pyramid on a rectangle: width along Y by depth along X, like a box.
     label: 'Rectangle pyramid',
+    group: 'Solids',
     spec: `@mode: figure
 P = solid pyramid rectangle 6 by 4, height 9 vertices ABCDE
 label: P width
@@ -568,6 +641,7 @@ label: P height`,
     // A pyramidal frustum: a square base of side 6, the top of side 3 over
     // it, turned with it.
     label: 'Pyramidal frustum',
+    group: 'Solids',
     spec: `@mode: figure
 F = solid frustum regular 4 side 6, top 3, height 4 vertices ABCDEFGH
 label: F side
@@ -581,6 +655,7 @@ label: F height`,
     // true shape, P on the left and the rest counter-clockwise, each side
     // sqrt 2 (half a face diagonal of the edge-2 cube).
     label: 'Cube: the hexagonal section',
+    group: 'Sections',
     spec: `@mode: figure
 A = (0, 0, 0)
 B = (2, 0, 0)
@@ -601,6 +676,7 @@ label: PQ          # sqrt 2`,
     // midpoints of AB, AC and BD is parallel to BC and AD, which are
     // perpendicular, so it cuts a square of side 3 (half an edge).
     label: 'Tetrahedron: the square section',
+    group: 'Sections',
     spec: `@mode: figure
 T = solid tetrahedron edge 6 vertices ABCD
 M = midpoint A-B
@@ -617,6 +693,7 @@ label: PR          # the diagonal, 3 sqrt 2`,
     // is 2 sqrt 2), cut by the plane through the midpoints of AE, BC and CD.
     // The section is a pentagon of area sqrt 80.
     label: 'Pyramid through midpoints',
+    group: 'Sections',
     spec: `@mode: figure
 W = solid pyramid square base 4, height 2*sqrt(2) vertices ABCDE
 M = midpoint A-E
@@ -631,6 +708,7 @@ section: W by plane M-N-K vertices PQRSU`,
     // the base diameter. In place the chord on the base and the back of the
     // arc are dashed; lifted, the chord PQ is the diameter.
     label: 'Log wedge',
+    group: 'Sections',
     spec: `@mode: figure
 C = solid cylinder radius 3, height 10
 cut: C by plane x - z = 5
@@ -642,6 +720,7 @@ label: PQ          # 6`,
     // radius 20 about O through A, B and C. Plane A-B-C cuts the sphere in
     // the circumcircle of ABC, radius 65/8, and O is 15 sqrt(95)/8 above it.
     label: 'Sphere through three points',
+    group: 'Sections',
     spec: `@mode: figure
 T = solid tetrahedron ABCO with AB = 13, BC = 14, CA = 15, AO = 20, BO = 20, CO = 20
 S = solid sphere center O radius 20
@@ -656,6 +735,7 @@ label: OF          # 15 sqrt(95) / 8`,
     // to drop a perpendicular from the corner F onto it. FK is the distance
     // from F = (3, 4, 2.5) to x + y + z = 4, which is 5.5 / sqrt 3.
     label: 'Plane by equation',
+    group: 'Sections',
     spec: `@mode: figure
 S = solid prism 8 by 5 by 6 vertices ABCDEFGH
 p = plane x + y + z = 4
@@ -671,6 +751,7 @@ label: FK          # 5.5 / sqrt 3`,
     // (1.455). The insphere is drawn through the tetrahedron (the glass rule)
     // and its centre named; the radius's reference is dashed inside it.
     label: 'AIME tetrahedron and its insphere',
+    group: 'Spheres',
     spec: `@mode: figure
 T = solid tetrahedron ABCD with AB = sqrt(41), CD = sqrt(41), AC = sqrt(80), BD = sqrt(80), AD = sqrt(89), BC = sqrt(89)
 I = solid insphere of T
@@ -682,6 +763,7 @@ label: I radius    # 20 sqrt 21 / 63`,
     // its centre) and its circumsphere (radius 2 sqrt 3, through all eight
     // corners): MG runs from the common centre to a corner.
     label: 'Cube between two spheres',
+    group: 'Spheres',
     spec: `@mode: figure
 S = solid cube edge 4 vertices ABCDEFGH
 I = solid insphere of S
@@ -698,6 +780,7 @@ label: MG          # the circumradius, 2 sqrt 3`,
     // its centre is (16 - 9) / 8 = 7/8 above the base, its radius 4 - 7/8 =
     // 25/8.
     label: 'Sphere in a cone',
+    group: 'Spheres',
     spec: `@mode: figure
 K = solid cone radius 3, height 4
 I = solid insphere of K
@@ -711,6 +794,7 @@ label: K height`,
     // here 2 sqrt(4 * 1) = 4, so the sphere of radius 2 touches both rims'
     // discs and the side.
     label: 'Frustum with an insphere',
+    group: 'Spheres',
     spec: `@mode: figure
 F = solid frustum radius 4, top 1, height 4
 I = solid insphere of F
@@ -725,6 +809,7 @@ label: F height`,
     // tangent to T: radius (sqrt 18 - 2) - 1. The floor is outlined by four
     // segments; a plane is never drawn on its own.
     label: 'Spheres by tangency',
+    group: 'Spheres',
     spec: `@mode: figure
 P = (0, 0, 2)
 S = solid sphere center P tangent to plane z = 0
@@ -746,6 +831,7 @@ label: T radius
     // three neighbours along the axes. They lie on the cube's circumsphere,
     // so the centre is the cube's centre (1, 1, 1) and MA = sqrt 3.
     label: 'Sphere through four points',
+    group: 'Spheres',
     spec: `@mode: figure
 A = (0, 0, 0)
 B = (2, 0, 0)
@@ -759,11 +845,13 @@ label: MA          # sqrt 3`,
   },
   {
     label: 'Right angle',
+    group: 'Plane geometry',
     spec: `polygon: A(0,0), B(4,0), C(0,3)
 right-angle: B-A-C`,
   },
   {
     label: 'Isosceles angles',
+    group: 'Plane geometry',
     spec: `polygon: A(0,0), B(6,0), C(3,4)
 tick: A-C
 tick: B-C
@@ -772,21 +860,25 @@ angle: A-B-C label: α`,
   },
   {
     label: 'Hexagon',
+    group: 'Plane geometry',
     spec: `circle: (0, 0), 3
 polygon: A(3*cos(0), 3*sin(0)), B(3*cos(pi/3), 3*sin(pi/3)), C(3*cos(2*pi/3), 3*sin(2*pi/3)), D(3*cos(pi), 3*sin(pi)), E(3*cos(4*pi/3), 3*sin(4*pi/3)), F(3*cos(5*pi/3), 3*sin(5*pi/3))`,
   },
   {
     label: 'Hyperbola',
+    group: 'Graphing',
     spec: `x^2/4 - y^2/9 = 1`,
   },
   {
     label: 'Damped oscillation',
+    group: 'Graphing',
     spec: `y = exp(-x/4) * cos(3x)
 y = exp(-x/4) color: gray
 y = -exp(-x/4) color: gray`,
   },
   {
     label: 'Functions',
+    group: 'Graphing',
     spec: `k(x) = x^2 - 2x + 1
 a = 3
 y = a * k(x - 2) color: teal

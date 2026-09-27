@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EXAMPLES } from './examples'
+import { EXAMPLE_GROUPS, EXAMPLES } from './examples'
 import { parseSpec } from './parser/parseSpec'
 import { renderFigure } from './figure/render'
 import { buildScene } from './scene/buildScene'
@@ -24,6 +24,13 @@ describe('review harness examples', () => {
     const labels = EXAMPLES.map((e) => e.label)
     expect(labels.length).toBeGreaterThan(20)
     expect(new Set(labels).size).toBe(labels.length)
+  })
+
+  // The harness shows one group at a time, so an example outside every group
+  // is an example nobody can reach — the failure this file exists to prevent.
+  it('puts every example in a known group, and leaves no group empty', () => {
+    for (const example of EXAMPLES) expect(EXAMPLE_GROUPS, example.label).toContain(example.group)
+    for (const group of EXAMPLE_GROUPS) expect(EXAMPLES.some((e) => e.group === group), group).toBe(true)
   })
 
   for (const example of EXAMPLES) {
