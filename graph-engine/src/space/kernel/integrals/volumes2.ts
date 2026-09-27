@@ -16,20 +16,22 @@
 // f < g somewhere the solid is drawn as written and the readout says the
 // integral counts that part negatively.
 
-import type { Statement } from '../../../parser/types'
-import { num } from '../../../math/expr'
+import type { Expr, Statement } from '../../../parser/types'
+import { compileScalar } from '../../../math/compile'
+import { num, substitute } from '../../../math/expr'
+import { integrate1 } from '../../../math/quadrature'
 import type { SpaceStyle } from '../../grammar/types'
 import type { Mark, MeshMark } from '../../scene/types'
 import { checkBudget, Reads, resolution } from '../common'
 import { finishMesh } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
-import { approxText, COLLAPSED_REL, formOf, part, readoutLabel } from './common'
+import { approxText, COLLAPSED_REL, errorFloor, formOf, part, readoutLabel, ROUNDING_REL, type Approx } from './common'
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
-import { compileOnRegion, targetExpr, targetName, targetText } from './target'
-import { prepareIterated } from './volumes3'
+import { compileOnRegion, POLAR_XY, targetExpr, targetName, targetText } from './target'
+import { nonNegative, prepareIterated, type PreparedSolid } from './volumes3'
 
 export const VOLUME_OPACITY = 0.45
 const DEFAULT_RES = 96
@@ -158,6 +160,44 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     return { marks, labels: [readoutLabel(context, anchor, text)], errors: [], colorScale: null }
   }
   return { reads: reads.names, build }
+}
+
+// The solid between z = g and z = f over R as something to integrate over
+// (centroid: of a named volume): the double integral over R, in the region's
+// coordinates, of the single integral in z from g to f. The inner integrals'
+// largest error estimate, times R's area, is added to the outer estimate.
+export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between' }>, context: BuildContext, reads: Reads): PreparedSolid {
+  const { scope, config } = context
+  const { domain } = resolveDomain(context, solid.region)
+  const n = resolution(null, config, DEFAULT_RES)
+  const region = prepareRegion2(domain, context, reads)
+  const f = compileOnRegion(targetExpr(solid.top, scope), region.coords, scope, reads)
+  const g = compileOnRegion(solid.bottom ? targetExpr(solid.bottom, scope) : num(0), region.coords, scope, reads)
+  const vars = [...region.vars, 'z']
+  return {
+    integrals(exprs: readonly Expr[]) {
+      const hs = exprs.map((expr) => {
+        reads.add(expr, ['x', 'y', 'z', 'r', 'theta'])
+        return compileScalar(region.coords === 'polar' ? substitute(expr, POLAR_XY) : expr, vars, scope)
+      })
+      return (): Approx[] => {
+        const r = region.build(n)
+        const area = Math.abs(r.integrate(() => 1, true).value)
+        return hs.map((h, k) => {
+          let inner = 0
+          const outer = r.integrate((a, b) => {
+            const q = integrate1((z) => h(a, b, z), g(a, b), f(a, b))
+            inner = Math.max(inner, q.error)
+            return q.value
+          })
+          const error = (outer.error ?? 0) + area * inner
+          if (nonNegative(exprs[k])) return { value: outer.value, error: errorFloor(error, outer.value, ROUNDING_REL) }
+          const absolute = r.integrate((a, b) => Math.abs(integrate1((z) => Math.abs(h(a, b, z)), g(a, b), f(a, b)).value), true)
+          return { value: outer.value, error: errorFloor(error, absolute.value, ROUNDING_REL) }
+        })
+      }
+    },
+  }
 }
 
 // "volume: ..." in any form; "volume: V" draws the named volume.

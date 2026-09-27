@@ -41,7 +41,7 @@ import type { LineMark, MeshMark } from '../../scene/types'
 import { boundNames, checkBudget, constant, lineStyle, Reads, resolution } from '../common'
 import { finishMesh, gridIndices, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, PreparedStatement } from '../registry'
-import { approxText, COLLAPSED_REL, part, readoutLabel, type Approx } from './common'
+import { approxText, COLLAPSED_REL, errorFloor, part, readoutLabel, ROUNDING_REL, type Approx } from './common'
 import { targetText } from './target'
 
 type Iterated = Extract<VolumeSolid, { kind: 'iterated' }>
@@ -80,9 +80,16 @@ function jacobian(coords: Coordinates3, k: number): Expr {
 const XYZ = ['x', 'y', 'z']
 
 // Something that integrates over a solid: every expression compiled once,
-// all integrated together with the current parameter values.
+// all integrated together with the current parameter values, each error
+// floored by the integral of |expr| (common.ts).
 export interface PreparedSolid {
   integrals(exprs: readonly Expr[]): () => Approx[]
+}
+
+// Whether an integrand is written so it cannot be negative (1, or |...|), so
+// the integral of its absolute value is itself.
+export function nonNegative(expr: Expr): boolean {
+  return (expr.kind === 'num' && expr.value >= 0) || (expr.kind === 'call' && expr.name === 'abs')
 }
 
 // The sign an iterated integral carries from ranges written high-to-low, and
@@ -127,7 +134,8 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
       const fs = exprs.map((expr) => {
         reads.add(expr, [...XYZ, ...vars])
         const inSystem = solid.coords === 'rectangular' ? expr : substitute(expr, toSystem)
-        return compileScalar(mul(inSystem, jac), vars, scope)
+        const f = compileScalar(mul(inSystem, jac), vars, scope)
+        return { f, abs: nonNegative(expr) ? null : compileScalar(call('abs', mul(inSystem, jac)), vars, scope) }
       })
       return () => {
         const [aa, bb] = [a(), b()]
@@ -136,9 +144,10 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
         const ee = (u: number, v: number) => e(u, v)
         const gg = (u: number, v: number) => g(u, v)
         const sign = orientation(solid, aa, bb, cc, dd, ee, gg)
-        return fs.map((f) => {
+        return fs.map(({ f, abs }) => {
           const r = integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg)
-          return { value: sign * r.value, error: r.error }
+          const absolute = abs ? integrate3((u, v, w) => abs(u, v, w), aa, bb, cc, dd, ee, gg).value : r.value
+          return { value: sign * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
         })
       }
     },

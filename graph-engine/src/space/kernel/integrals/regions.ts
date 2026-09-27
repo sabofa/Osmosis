@@ -17,8 +17,9 @@
 // An inequality region is S1's grid-clipped mesh over the box, and its values
 // are sums over that mesh — the area is the mesh's area, and an integral uses
 // each triangle's edge midpoints (exact for quadratics). integrate2 cannot
-// follow an implicit boundary, so these carry no error estimate and print 4
-// significant digits.
+// follow an implicit boundary, so these carry no quadrature estimate: they
+// are taken as good to 1e-4 of the integral of |g| (MESH_REL), which prints 4
+// significant digits of an area.
 
 import type { Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
@@ -30,7 +31,7 @@ import { inequalitySamples, iteratedSamples, type DomainSamples, type IteratedSp
 import { finishMesh } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { compileConditions } from '../surface'
-import { approxText, COLLAPSED_REL, floorHeight, formOf, part, readoutLabel, type Approx } from './common'
+import { approxText, COLLAPSED_REL, errorFloor, floorHeight, formOf, MESH_REL, part, readoutLabel, ROUNDING_REL, type Approx } from './common'
 import { resolveDomain } from './named'
 
 export const REGION_OPACITY = 0.35
@@ -48,8 +49,10 @@ export interface RegionSample {
   // The floor mesh: (x, y), and (a, b) where the region is evaluated.
   samples: DomainSamples
   boundary: BoundaryPiece[]
-  // The integral over the region of g, written in the region's coordinates.
-  integrate(g: (a: number, b: number) => number): Approx
+  // The integral over the region of g, written in the region's coordinates,
+  // its error floored by the integral of |g| (common.ts); `nonNegative` says
+  // g >= 0, so that integral is the value itself.
+  integrate(g: (a: number, b: number) => number, nonNegative?: boolean): Approx
   // (a, b) in the region's coordinates -> (x, y), into out[0..1].
   toXY(a: number, b: number, out: Float64Array): void
 }
@@ -155,19 +158,15 @@ function iteratedRegion(spec: IteratedSpec, n: number): RegionSample {
     samples,
     boundary: sides.filter((_, i) => keep[i]),
     toXY,
-    integrate(g) {
-      const r = integrate2(
-        (uu, ww) => {
-          const p = swap ? ww : uu
-          const q = swap ? uu : ww
-          return polar ? g(p, q) * Math.abs(p) * angle : g(p, q)
-        },
-        a,
-        b,
-        lo,
-        hi,
-      )
-      return { value: orientation * r.value, error: r.error }
+    integrate(g, nonNegative = false) {
+      const at = (h: (p: number, q: number) => number) => (uu: number, ww: number) => {
+        const p = swap ? ww : uu
+        const q = swap ? uu : ww
+        return polar ? h(p, q) * Math.abs(p) * angle : h(p, q)
+      }
+      const r = integrate2(at(g), a, b, lo, hi)
+      const absolute = nonNegative ? r.value : integrate2(at((p, q) => Math.abs(g(p, q))), a, b, lo, hi).value
+      return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
     },
   }
 }
@@ -231,14 +230,20 @@ function inequalityRegion(samples: DomainSamples): RegionSample {
     },
     integrate(g) {
       let value = 0
+      let absolute = 0
       for (let t = 0; t < indices.length; t += 3) {
         const [i, j, k] = [indices[t], indices[t + 1], indices[t + 2]]
         const area = Math.abs((x[j] - x[i]) * (y[k] - y[i]) - (x[k] - x[i]) * (y[j] - y[i])) / 2
         if (area === 0) continue
-        const mid = (p: number, q: number) => g((x[p] + x[q]) / 2, (y[p] + y[q]) / 2)
-        value += (area * (mid(i, j) + mid(j, k) + mid(k, i))) / 3
+        const mids = [
+          g((x[i] + x[j]) / 2, (y[i] + y[j]) / 2),
+          g((x[j] + x[k]) / 2, (y[j] + y[k]) / 2),
+          g((x[k] + x[i]) / 2, (y[k] + y[i]) / 2),
+        ]
+        value += (area * (mids[0] + mids[1] + mids[2])) / 3
+        absolute += (area * (Math.abs(mids[0]) + Math.abs(mids[1]) + Math.abs(mids[2]))) / 3
       }
-      return { value, error: null }
+      return { value, error: errorFloor(null, absolute, MESH_REL) }
     },
   }
 }
@@ -347,7 +352,7 @@ function prepareRegion(statement: Statement, context: BuildContext): PreparedSta
 
   const build = (): BuildResult => {
     const r = region.build(n)
-    const area = r.integrate(() => 1)
+    const area = r.integrate(() => 1, true)
     const floor = floorMark(r.samples, z, context, form.style.opacity ?? REGION_OPACITY, context.source.object)
     const boundary = boundaryMark(r.boundary, z, context, part(context, 'boundary').object)
     const marks = [floor, boundary].filter((m) => m !== null)
@@ -379,11 +384,4 @@ export const NAMED_REGION: BuilderEntry = {
   draws: false,
   prepare: prepareNamedRegion,
   binds: (statement) => (statement.kind === 'space' && statement.form.form === 'namedRegion' ? statement.form.name : null),
-}
-
-export const CENTROID: BuilderEntry = {
-  draws: true,
-  prepare: () => {
-    throw new Error('centroid: is drawn once the centroid builder lands (S5, task 5)')
-  },
 }

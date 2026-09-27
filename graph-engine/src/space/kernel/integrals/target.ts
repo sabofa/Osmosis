@@ -36,7 +36,7 @@ export function targetName(target: Target | null, scope: MathScope): string | nu
   return (scope.functions.get(target.expr.name)?.params.length ?? 0) > 0 ? target.expr.name : null
 }
 
-const POLAR_XY = new Map([
+export const POLAR_XY: ReadonlyMap<string, Expr> = new Map([
   ['x', mul(variable('r'), call('cos', variable('theta')))],
   ['y', mul(variable('r'), call('sin', variable('theta')))],
 ])

@@ -24,7 +24,7 @@ import type { BoxMark, PointMark } from '../../scene/types'
 import { RIEMANN_RECTANGLE, readsOuter, type SampleRule } from '../../grammar/keywords/integrals'
 import { constant, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { approxText, formOf, part, readoutLabel } from './common'
+import { approxText, errorFloor, formOf, part, readoutLabel, ROUNDING_REL } from './common'
 import { resolveDomain } from './named'
 import { compileOnRegion, targetExpr, targetName } from './target'
 
@@ -107,6 +107,7 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
     const points = new Float64Array(3 * cells)
     const at = sampler(form.sample)
     let sum = 0
+    let absolute = 0
     for (let j = 0; j < ny; j++) {
       for (let i = 0; i < nx; i++) {
         const k = j * nx + i
@@ -122,19 +123,18 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
         const h = f(x, y)
         if (!Number.isFinite(h)) throw new Error(`${name} is undefined at the sample ${formatPoint([x, y])} — move the samples or the rectangle`)
         sum += h
+        absolute += Math.abs(h)
         mins.set([cx0, cy0, Math.min(0, h)], 3 * k)
         maxs.set([cx1, cy1, Math.max(0, h)], 3 * k)
         points.set([x, y, h], 3 * k)
       }
     }
     const riemann = sum * dx * dy
-    const integral = integrate2(
-      (x, y) => f(x, y),
-      x0,
-      x1,
-      () => y0,
-      () => y1,
-    )
+    const over = (g: (x: number, y: number) => number) => integrate2(g, x0, x1, () => y0, () => y1)
+    const raw = over((x, y) => f(x, y))
+    const integral = { value: raw.value, error: errorFloor(raw.error, over((x, y) => Math.abs(f(x, y))).value, ROUNDING_REL) }
+    // The sum is plain arithmetic, shown to the formatter's 4 digits; a sum
+    // that cancels to rounding noise shows as 0.
     const boxes: BoxMark = { kind: 'boxes', source: context.source, mins, maxs, style: { color: context.color, opacity, edges: true } }
     const dots: PointMark = {
       kind: 'points',
@@ -144,7 +144,8 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
     }
     let top = 0
     for (let k = 0; k < cells; k++) top = Math.max(top, maxs[3 * k + 2])
-    const text = `Σ ${name}(x*, y*) ΔA ${formatApprox(riemann)}; ∬_${R} ${name} dA ${approxText(integral)}`
+    const shownSum = Math.abs(riemann) <= ROUNDING_REL * absolute * dx * dy ? 0 : riemann
+    const text = `Σ ${name}(x*, y*) ΔA ${formatApprox(shownSum)}; ∬_${R} ${name} dA ${approxText(integral)}`
     return { marks: [boxes, dots], labels: [readoutLabel(context, [(x0 + x1) / 2, (y0 + y1) / 2, top], text)], errors: [], colorScale: null }
   }
   return { reads: reads.names, build }

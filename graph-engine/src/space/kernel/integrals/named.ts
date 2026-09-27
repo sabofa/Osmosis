@@ -88,8 +88,12 @@ export function resolveSolid(context: BuildContext, solid: VolumeSolid): { solid
   return { solid: shape.solid, name: solid.name }
 }
 
+export type ResolvedShape =
+  | { kind: 'region'; domain: Domain; name: string }
+  | { kind: 'volume'; solid: Exclude<VolumeSolid, { kind: 'named' }>; name: string }
+
 // Either kind of shape, by name, for centroid: (which takes both).
-export function namedShape(context: BuildContext, name: string): NamedShape & { name: string } {
+export function namedShape(context: BuildContext, name: string): ResolvedShape {
   const entry = context.named.get(name)
   const shape = entry ? shapeOf(entry.statement) : null
   if (!shape) throw new Error(`no region or volume named "${name}" — define one first, e.g. "${name} = region x in [0, 1], y in [0, x]"`)

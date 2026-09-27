@@ -9,20 +9,39 @@ import type { LabelAnchor, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
 import type { BuildContext } from '../registry'
 
-// A numeric answer. `error` is the method's estimate of |value - true value|,
-// or null when the method has none (a mesh sum), which prints 4 digits.
+// A numeric answer. `error` bounds |value - true value|: the method's own
+// estimate, never below what the arithmetic can resolve (errorFloor), or
+// null when there is none, which prints 4 digits.
 export interface Approx {
   value: number
   error: number | null
 }
 
+// What floating point can resolve in an integral: this fraction of the
+// integral of |g|. A quadrature estimate says nothing about rounding, so a
+// value that cancels (the moment of a symmetric region) would otherwise print
+// its rounding noise, 2×10⁻¹⁷, as if it were a value.
+export const ROUNDING_REL = 1e-13
+// A mesh sum (an inequality region) is good to about 4 digits of the
+// integral of |g|: the plan's "4 significant digits" for a positive integrand.
+export const MESH_REL = 1e-4
+
+export function errorFloor(error: number | null, absolute: number, rel: number): number {
+  return Math.max(error ?? 0, rel * Math.abs(absolute))
+}
+
+// Zero within its error prints as zero ("≈ 0"): no digit of it is supported.
+function shown(a: Approx): number {
+  return a.error !== null && Math.abs(a.value) <= a.error ? 0 : a.value
+}
+
 export function approxText(a: Approx): string {
-  return a.error === null ? formatApprox(a.value) : formatApprox(a.value, a.error)
+  return a.error === null ? formatApprox(a.value) : formatApprox(shown(a), a.error)
 }
 
 // "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate supports.
 export function approxTupleText(values: readonly Approx[]): string {
-  const parts = values.map((a) => formatNumber(a.value, a.error === null ? 4 : Math.min(MAX_DIGITS, supportedDigits(a.value, a.error))))
+  const parts = values.map((a) => formatNumber(shown(a), a.error === null ? 4 : Math.min(MAX_DIGITS, supportedDigits(shown(a), a.error))))
   return `${APPROX} (${parts.join(', ')})`
 }
 
