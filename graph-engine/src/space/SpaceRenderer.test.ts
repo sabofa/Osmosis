@@ -690,10 +690,22 @@ P = (a, 0, 0)`
     clock.flush()
     expect(r['world']).not.toBe(before)
     expect(r['world']!.box.z.max).toBeLessThan(before!.box.z.max)
-    // a runs 0.5 -> 2 over 6 s: played to the end, the box follows a = 2.
+    // a runs 0.5 -> 2 over 6 s: played to the end in 1.5 s jumps of the fake
+    // clock (frames at +1.516, +3.032, +4.548 and +6.064 s), the box is held
+    // on every frame of the play and resolved exactly once, on the last, to
+    // follow a = 2; then no frame is asked for.
     play()
-    let frames = 0
-    while (clock.pending() > 0 && frames++ < 1000) clock.flush()
+    const held = r['world']
+    const worlds: unknown[] = []
+    for (let i = 0; i < 6 && clock.pending() > 0; i++) {
+      clock.advance(1500)
+      clock.flush()
+      worlds.push(r['world'])
+    }
+    expect(worlds).toHaveLength(4)
+    expect(worlds.slice(0, -1).every((w) => w === held)).toBe(true)
+    expect(worlds.at(-1)).not.toBe(held)
+    expect(clock.pending()).toBe(0)
     // z reaches 2 * 4 + 4 = 12, past the first box's top.
     expect(r['world']!.box.z.max).toBeGreaterThanOrEqual(12)
     expect(before!.box.z.max).toBeLessThan(12)
