@@ -2,15 +2,39 @@ import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 // Straight from graph-engine's source, like the other review pages: an edit
 // to space shows up here on save.
+import { EXAMPLES, type Example } from '../../graph-engine/src/examples'
+import GraphViewer from '../../graph-engine/src/GraphViewer'
+import { parseSpec } from '../../graph-engine/src/parser/parseSpec'
+import type { ParseError } from '../../graph-engine/src/parser/types'
 import { DARK_PALETTE, LIGHT_PALETTE } from '../../graph-engine/src/render/palette'
 import type { SpaceView } from '../../graph-engine/src/space/config'
+import { SPACE_EXAMPLES } from '../../graph-engine/src/space/examples'
 import { SpaceRenderer } from '../../graph-engine/src/space/SpaceRenderer'
-import { SPACE_FIXTURES } from './spaceFixtures'
+import { SPACE_FIXTURES, type SpaceFixture } from './spaceFixtures'
 import './space.css'
 
 type Theme = 'light' | 'dark'
+// Which component draws: SpaceRenderer mounted directly, or the real
+// GraphViewer (its panel, its stats layer, its error channel).
+type Host = 'space' | 'graphviewer'
+// What is showing: the spec in the textarea, or a hand-built fixture scene
+// (for mark kinds the kernel does not emit yet).
+type Source = { kind: 'spec' } | { kind: 'fixture'; fixture: SpaceFixture }
+
+// Space's examples, plus the old 3D example, which now draws through space.
+const SPEC_EXAMPLES: Example[] = [...SPACE_EXAMPLES, ...EXAMPLES.filter((e) => e.label === '3D')]
+const REBUILD_DEBOUNCE_MS = 80
 
 const palette = (theme: Theme) => (theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
+
+// "Space · Paraboloid over a disk" -> "paraboloid-over-a-disk"; "3D" -> "3d".
+function slug(label: string): string {
+  return label
+    .replace(/^Space\s*·\s*/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+}
 
 function fmt(v: number): string {
   return (Math.round(v * 100) / 100).toString()
@@ -21,62 +45,141 @@ function viewText(v: SpaceView | null): string {
   return `azimuth ${fmt(v.azimuth)}, elevation ${fmt(v.elevation)}, zoom ${fmt(v.zoom)}, target (${v.target.map(fmt).join(', ')})`
 }
 
-function initialTheme(): Theme {
-  return new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light'
+// The page's state lives in the URL too (?example=, ?spec=, ?fixture=,
+// &theme=, &host=), so a link or a headless screenshot lands on exactly what
+// was being looked at.
+function fromUrl(): { spec: string; source: Source; theme: Theme; host: Host } {
+  const q = new URLSearchParams(location.search)
+  const fixture = SPACE_FIXTURES.find((f) => f.id === q.get('fixture'))
+  const example = SPEC_EXAMPLES.find((e) => slug(e.label) === q.get('example')) ?? SPEC_EXAMPLES[0]
+  return {
+    // A spec in the link wins over a named example.
+    spec: q.get('spec') ?? example.spec,
+    source: fixture ? { kind: 'fixture', fixture } : { kind: 'spec' },
+    theme: q.get('theme') === 'dark' ? 'dark' : 'light',
+    host: q.get('host') === 'graphviewer' ? 'graphviewer' : 'space',
+  }
 }
 
-function initialFixture(): string {
-  const wanted = new URLSearchParams(location.search).get('fixture')
-  return SPACE_FIXTURES.some((f) => f.id === wanted) ? wanted! : SPACE_FIXTURES[0].id
+function setUrl(params: Record<string, string | null>): void {
+  const url = new URL(location.href)
+  for (const [k, v] of Object.entries(params)) {
+    if (v === null) url.searchParams.delete(k)
+    else url.searchParams.set(k, v)
+  }
+  history.replaceState(null, '', url)
 }
 
-export default function SpaceReview() {
+interface StageProps {
+  source: Source
+  spec: string
+  theme: Theme
+  // Bumped when an example or fixture is picked (not while typing): the view
+  // returns to that scene's authored camera.
+  pick: number
+  onErrors: (errors: ParseError[]) => void
+  onView: (view: SpaceView | null) => void
+}
+
+// SpaceRenderer on a bare canvas. Specs go through setSpec (the kernel);
+// fixtures through setScene.
+function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rendererRef = useRef<SpaceRenderer | null>(null)
-  const [fixtureId, setFixtureId] = useState(initialFixture)
-  const [theme, setTheme] = useState<Theme>(initialTheme)
-  const [view, setView] = useState<SpaceView | null>(null)
-  const [errors, setErrors] = useState<string[]>([])
-  const fixture = SPACE_FIXTURES.find((f) => f.id === fixtureId) ?? SPACE_FIXTURES[0]
+  const lastPick = useRef(-1)
+  const themeRef = useRef(theme)
+  themeRef.current = theme
 
-  // One renderer for the page's lifetime.
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const renderer = new SpaceRenderer(canvas, {
-      palette: palette(initialTheme()),
-      theme: initialTheme(),
-      onError: (message) => setErrors((list) => [...list, message]),
-      onViewChange: setView,
+      palette: palette(themeRef.current),
+      theme: themeRef.current,
+      onError: (message) => onErrors([{ line: 0, message }]),
+      onViewChange: onView,
     })
     rendererRef.current = renderer
     return () => {
       renderer.dispose()
       rendererRef.current = null
     }
-  }, [])
+  }, [onErrors, onView])
 
-  // Each example opens at its own authored camera.
   useEffect(() => {
-    const renderer = rendererRef.current
-    if (!renderer) return
-    renderer.setScene(fixture.scene, { space: fixture.space })
-    renderer.resetView()
-    setView(renderer.getView())
-    const url = new URL(location.href)
-    url.searchParams.set('fixture', fixture.id)
-    history.replaceState(null, '', url)
-  }, [fixture])
+    const build = () => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      if (source.kind === 'fixture') {
+        renderer.setScene(source.fixture.scene, { space: source.fixture.space })
+        onErrors([])
+      } else {
+        const parsed = parseSpec(spec)
+        const errors = renderer.setSpec(parsed.statements, parsed.config, parsed.statementLines)
+        onErrors([...parsed.errors, ...errors].sort((a, b) => a.line - b.line))
+      }
+      if (lastPick.current !== pick) {
+        lastPick.current = pick
+        renderer.resetView()
+      }
+      onView(renderer.getView())
+    }
+    // Typing is debounced; a pick draws at once.
+    if (lastPick.current !== pick) {
+      build()
+      return
+    }
+    const timer = setTimeout(build, REBUILD_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [source, spec, pick, onErrors, onView])
 
-  // The theme and the example both live in the URL, so a link (or a
-  // screenshot) lands on exactly what was being looked at.
+  useEffect(() => {
+    rendererRef.current?.setPalette(palette(theme), theme)
+  }, [theme])
+
+  return <canvas ref={canvasRef} aria-label="Space view" />
+}
+
+// The real GraphViewer, which decides space vs 2D from the spec itself.
+function GraphViewerStage({ source, spec, theme, onErrors }: StageProps) {
+  if (source.kind === 'fixture') {
+    return <p className="space-review-stage-note">Fixtures are hand-built scenes, not specs, so they draw with the SpaceRenderer host only.</p>
+  }
+  return (
+    <div className="space-review-graphviewer">
+      <GraphViewer spec={spec} theme={theme} onErrors={onErrors} />
+    </div>
+  )
+}
+
+export default function SpaceReview() {
+  const initial = useRef(fromUrl()).current
+  const [spec, setSpec] = useState(initial.spec)
+  const [source, setSource] = useState<Source>(initial.source)
+  const [theme, setTheme] = useState<Theme>(initial.theme)
+  const [host, setHost] = useState<Host>(initial.host)
+  const [pick, setPick] = useState(0)
+  const [view, setView] = useState<SpaceView | null>(null)
+  const [errors, setErrors] = useState<ParseError[]>([])
+
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    rendererRef.current?.setPalette(palette(theme), theme)
-    const url = new URL(location.href)
-    url.searchParams.set('theme', theme)
-    history.replaceState(null, '', url)
+    setUrl({ theme })
   }, [theme])
+
+  const pickExample = (e: Example) => {
+    setSpec(e.spec)
+    setSource({ kind: 'spec' })
+    setPick((p) => p + 1)
+    setUrl({ example: slug(e.label), fixture: null })
+  }
+  const pickFixture = (f: SpaceFixture) => {
+    setSource({ kind: 'fixture', fixture: f })
+    setPick((p) => p + 1)
+    setUrl({ fixture: f.id, example: null })
+  }
+  const selectedExample = source.kind === 'spec' ? SPEC_EXAMPLES.find((e) => e.spec === spec) : undefined
+  const stage: StageProps = { source, spec, theme, pick, onErrors: setErrors, onView: setView }
 
   return (
     <div className="space-review">
@@ -94,10 +197,10 @@ export default function SpaceReview() {
         <section>
           <h2>Examples</h2>
           <ul className="space-review-list">
-            {SPACE_FIXTURES.map((f) => (
-              <li key={f.id}>
-                <button type="button" aria-pressed={f.id === fixture.id} onClick={() => setFixtureId(f.id)}>
-                  {f.title}
+            {SPEC_EXAMPLES.map((e) => (
+              <li key={e.label}>
+                <button type="button" aria-pressed={e === selectedExample} onClick={() => pickExample(e)}>
+                  {e.label.replace(/^Space\s*·\s*/, '')}
                 </button>
               </li>
             ))}
@@ -105,8 +208,43 @@ export default function SpaceReview() {
         </section>
 
         <section>
-          <h2>What a correct render shows</h2>
-          <p className="space-review-look">{fixture.look}</p>
+          <label className="space-review-spec">
+            <h2>Spec</h2>
+            <textarea
+              rows={8}
+              spellCheck={false}
+              value={spec}
+              onChange={(e) => {
+                setSpec(e.target.value)
+                if (source.kind !== 'spec') setSource({ kind: 'spec' })
+              }}
+            />
+          </label>
+          {errors.length > 0 && (
+            <ul className="space-review-errors" aria-label="Errors">
+              {errors.map((e, i) => (
+                <li key={i}>
+                  {e.line > 0 ? <strong>line {e.line}: </strong> : null}
+                  {e.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section>
+          <h2>Fixtures</h2>
+          <p className="space-review-hint">Hand-built scenes for mark kinds the kernel does not emit yet (shapes, arrows, dashes).</p>
+          <ul className="space-review-list">
+            {SPACE_FIXTURES.map((f) => (
+              <li key={f.id}>
+                <button type="button" aria-pressed={source.kind === 'fixture' && source.fixture.id === f.id} onClick={() => pickFixture(f)}>
+                  {f.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {source.kind === 'fixture' && <p className="space-review-look">{source.fixture.look}</p>}
         </section>
 
         <section>
@@ -121,33 +259,36 @@ export default function SpaceReview() {
         </section>
 
         <section>
-          <label className="space-review-spec">
-            <h2>Spec</h2>
-            <span className="space-review-hint">Not live yet: specs render here once the space kernel lands (S2 Task 7). The examples above are hand-built scenes.</span>
-            <textarea disabled rows={6} placeholder={'z = x^2 - y^2\n@camera: azimuth 40, elevation 25'} />
-          </label>
+          <h2>Drawn by</h2>
+          <div className="space-review-toggle" role="group" aria-label="Drawn by">
+            {(
+              [
+                ['space', 'SpaceRenderer'],
+                ['graphviewer', 'GraphViewer'],
+              ] as const
+            ).map(([h, name]) => (
+              <button
+                key={h}
+                type="button"
+                aria-pressed={host === h}
+                onClick={() => {
+                  setHost(h)
+                  setUrl({ host: h === 'space' ? null : h })
+                }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
         </section>
 
         <section>
           <h2>View</h2>
-          <code className="space-review-view">{viewText(view)}</code>
+          <code className="space-review-view">{host === 'space' ? viewText(view) : 'inside GraphViewer'}</code>
         </section>
-
-        {errors.length > 0 && (
-          <section>
-            <h2>Errors</h2>
-            <ul className="space-review-errors">
-              {errors.map((e, i) => (
-                <li key={i}>{e}</li>
-              ))}
-            </ul>
-          </section>
-        )}
       </aside>
 
-      <main className="space-review-stage">
-        <canvas ref={canvasRef} aria-label={`Space view: ${fixture.title}`} />
-      </main>
+      <main className="space-review-stage">{host === 'space' ? <SpaceStage {...stage} /> : <GraphViewerStage {...stage} />}</main>
     </div>
   )
 }

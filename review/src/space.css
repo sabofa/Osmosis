@@ -153,8 +153,13 @@ body {
   border: 2px solid var(--sr-line);
   border-radius: 8px;
   background: transparent;
-  color: var(--sr-muted);
-  font: 12px var(--sr-font-mono);
+  color: var(--sr-ink);
+  font: 12px/1.5 var(--sr-font-mono);
+}
+
+.space-review-spec textarea:focus {
+  outline: none;
+  border-color: var(--sr-accent);
 }
 
 .space-review-view {
@@ -165,10 +170,15 @@ body {
 }
 
 .space-review-errors {
-  margin: 0;
+  margin: 8px 0 0;
   padding-left: 18px;
   color: var(--sr-bad);
   font-size: 12px;
+  line-height: 1.45;
+}
+
+.space-review-look {
+  margin-top: 10px;
 }
 
 /* The view: the canvas fills it, and the overlay (created by SpaceRenderer
@@ -191,6 +201,19 @@ body {
 
 .space-review-stage canvas:focus-visible {
   box-shadow: inset 0 0 0 2px var(--sr-accent);
+}
+
+/* GraphViewer as the host: it fills the stage and brings its own frame. */
+.space-review-graphviewer {
+  position: absolute;
+  inset: 0;
+}
+
+.space-review-stage-note {
+  margin: 0;
+  padding: 24px;
+  color: var(--sr-muted);
+  font-size: 13px;
 }
 
 @media (max-width: 700px) {
