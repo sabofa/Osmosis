@@ -200,7 +200,7 @@ describe('label thinning', () => {
       const size = estimateLabelSize((-1 + i * 0.05).toFixed(2), 12)
       return { x: 100 + i * 7.5, y: 200, width: size.width, height: size.height }
     })
-    const kept = thinLabels(items, true)
+    const kept = thinLabels(items)
     expect(kept.length).toBeLessThan(41)
     expect(kept.length).toBeGreaterThan(2)
     expect(kept[0]).toBe(0)
@@ -208,9 +208,44 @@ describe('label thinning', () => {
     for (let i = 1; i < kept.length; i++) expect(labelsOverlap(items[kept[i - 1]], items[kept[i]])).toBe(false)
   })
 
+  it('keeps both end labels, symmetrically, even when the pattern does not reach the last', () => {
+    // 15 labels 12 px apart, ticks k = -1 .. 13: the interior thins to a
+    // common multiple of k, and both ends stay.
+    const items = Array.from({ length: 15 }, (_, i) => ({ x: i * 12, y: 0, width: 22, height: 12, index: i - 1 }))
+    const kept = thinLabels(items)
+    expect(kept[0]).toBe(0)
+    expect(kept[kept.length - 1]).toBe(14)
+    expect(kept.length).toBeLessThan(15)
+    for (let i = 1; i < kept.length; i++) expect(labelsOverlap(items[kept[i - 1]], items[kept[i]])).toBe(false)
+    const interior = kept.slice(1, -1).map((i) => items[i].index)
+    const step = interior[1] - interior[0]
+    for (const k of interior) expect(Math.abs(k % step)).toBe(0)
+  })
+
+  it('an interior label crowding an end label gives way to it, and only that one', () => {
+    const at = (xs: number[]) => xs.map((x, i) => ({ x, y: 0, width: 20, height: 12, index: i }))
+    // The last end sits 10 px past its neighbour: only the neighbour goes.
+    expect(thinLabels(at([0, 30, 60, 90, 100]))).toEqual([0, 1, 2, 4])
+    // The same at the first end.
+    expect(thinLabels(at([0, 10, 40, 70, 100]))).toEqual([0, 2, 3, 4])
+  })
+
   it('keeps every label that already fits', () => {
     const items = Array.from({ length: 5 }, (_, i) => ({ x: i * 60, y: 0, width: 20, height: 12 }))
-    expect(thinLabels(items, true)).toEqual([0, 1, 2, 3, 4])
+    expect(thinLabels(items)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('keeps the first and last tick labels with authored bounds off the tick lattice', () => {
+    // x in [-0.3, 2.7] with step 0.2: ticks -0.2 .. 2.6, neither on an end.
+    const box: Box3 = { x: { min: -0.3, max: 2.7 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }
+    const world = worldMap(box, [1, 2 / 3, 2 / 3])
+    const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, { width: 520, height: 420 }, 'orthographic')
+    const space = defaultSpaceConfig()
+    const frame = boxFrame(world, camera, frameAxes({ ...space, ticks: { ...space.ticks, x: { value: 0.2, pi: null } } }, box))
+    const xs = tickLabels(frame, 'x').map((l) => l.position[0])
+    expect(xs.length).toBeLessThan(15)
+    expect(Math.min(...xs)).toBeCloseTo(-0.2, 12)
+    expect(Math.max(...xs)).toBeCloseTo(2.6, 12)
   })
 
   it('thins a real edge: step 0.05 on [-1, 1] gives 41 x ticks, fewer labels, both ends kept', () => {

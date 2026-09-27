@@ -33,24 +33,32 @@ export function labelsOverlap(a: LabelBox, b: LabelBox): boolean {
   )
 }
 
-// Which of an edge's labels (in order along it) to show: all, else every 2nd,
-// then every 3rd, and so on, until no two neighbours overlap. The first always
-// stays, and the last stays when it sits at the edge's end (`keepLast`); the
-// kept label before it gives way if the two collide.
-export function thinLabels(items: readonly LabelBox[], keepLast: boolean): number[] {
+// A label to thin: its box, and the multiple of the step its tick is.
+export interface ThinItem extends LabelBox {
+  index?: number
+}
+
+// Which of an edge's labels (in order along it) to show. Both end labels
+// (the first and last ticks) always stay, the same rule at each end, whether
+// or not the ends sit on the box's bounds. Between them: all, else the ticks
+// whose multiple is divisible by 2, then 3, and so on, so the interior labels
+// read at a coarser step (0, 0.4, 0.8 ...), until no two neighbours overlap;
+// an interior label that collides with an end label gives way to it.
+export function thinLabels(items: readonly ThinItem[]): number[] {
   const n = items.length
   if (n <= 1) return items.map((_, i) => i)
+  if (n === 2) return labelsOverlap(items[0], items[1]) ? [0] : [0, 1]
   const clear = (kept: number[]) => kept.every((k, i) => i === 0 || !labelsOverlap(items[kept[i - 1]], items[k]))
+  const multiple = (i: number) => items[i].index ?? i
   for (let m = 1; m < n; m++) {
-    const kept: number[] = []
-    for (let i = 0; i < n; i += m) kept.push(i)
-    if (keepLast && kept[kept.length - 1] !== n - 1) {
-      while (kept.length > 1 && labelsOverlap(items[kept[kept.length - 1]], items[n - 1])) kept.pop()
-      kept.push(n - 1)
-    }
+    const kept = [0]
+    for (let i = 1; i < n - 1; i++) if (((multiple(i) % m) + m) % m === 0) kept.push(i)
+    kept.push(n - 1)
+    while (kept.length > 2 && labelsOverlap(items[kept[0]], items[kept[1]])) kept.splice(1, 1)
+    while (kept.length > 2 && labelsOverlap(items[kept[kept.length - 1]], items[kept[kept.length - 2]])) kept.splice(kept.length - 2, 1)
     if (clear(kept)) return kept
   }
-  return [0]
+  return labelsOverlap(items[0], items[n - 1]) ? [0] : [0, n - 1]
 }
 
 // The extent of a w x h box along a unit screen direction, halved.
@@ -86,31 +94,32 @@ export interface EdgeTick {
   key: string
   position: Vec3
   text: string
+  // The multiple of the step this tick is (k in k * step).
+  index: number
 }
 
 // Tick labels along one edge, pushed along `normal` by the push distance plus
-// half their extent, then thinned; and the axis title at `titleAt`, beyond
-// the labels. `keepLast` says the last tick sits at the edge's end.
+// half their extent, then thinned (both end labels kept); and the axis title
+// beyond the labels.
 export function edgeLabels(
   world: WorldMap,
   camera: CameraMatrices,
   ticks: readonly EdgeTick[],
   normal: readonly [number, number],
   push: number,
-  keepLast: boolean,
   title: { key: string; position: Vec3; text: string } | null,
 ): FrameLabel[] {
-  const boxes: LabelBox[] = []
+  const boxes: ThinItem[] = []
   const offsets: [number, number][] = []
   for (const t of ticks) {
     const size = estimateLabelSize(t.text, TICK_FONT_PX)
     const reach = push + halfExtentAlong(normal, size)
     const offset: [number, number] = [normal[0] * reach, normal[1] * reach]
     const s = screenOf(world, camera, t.position)
-    boxes.push({ x: s.x + offset[0], y: s.y + offset[1], ...size })
+    boxes.push({ x: s.x + offset[0], y: s.y + offset[1], ...size, index: t.index })
     offsets.push(offset)
   }
-  const kept = thinLabels(boxes, keepLast)
+  const kept = thinLabels(boxes)
   const labels: FrameLabel[] = kept.map((i) => ({
     key: ticks[i].key,
     position: ticks[i].position,

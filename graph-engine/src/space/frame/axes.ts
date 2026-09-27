@@ -71,12 +71,13 @@ export function axesFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAx
       if (Math.abs(v - origin[axis]) <= 1e-9 * Math.max(spec.step, Math.abs(v))) continue
       const p = with3(origin, axis, v)
       lines.push({ a: with3(p, along, p[along] - half), b: with3(p, along, p[along] + half), role: 'tick' })
-      items.push({ key: `tick:${NAMES[axis]}:${tickIndex(v, spec.step)}`, position: p, text: formatTick(v, spec.authored, spec.step) })
+      const index = tickIndex(v, spec.step)
+      items.push({ key: `tick:${NAMES[axis]}:${index}`, position: p, text: formatTick(v, spec.authored, spec.step), index })
     }
     const sa = screenOf(world, camera, a)
     const sb = screenOf(world, camera, b)
     const normal = edgeNormal(sa, sb, LABEL_SIDE)
-    labels.push(...edgeLabels(world, camera, items, normal, AXIS_LABEL_PUSH_PX, false, null))
+    labels.push(...edgeLabels(world, camera, items, normal, AXIS_LABEL_PUSH_PX, null))
 
     // The letter, beyond the tip along the axis's own screen direction.
     const ex = sb.x - sa.x

@@ -127,16 +127,15 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
     for (const v of tickValues[axis]) {
       const p = with3(base, axis, v)
       lines.push({ a: p, b: with3(p, outAxis, p[outAxis] + outSign * markLength(outAxis)), role: 'tick' })
-      items.push({ key: `tick:${NAMES[axis]}:${tickIndex(v, spec.step)}`, position: p, text: formatTick(v, spec.authored, spec.step) })
+      const index = tickIndex(v, spec.step)
+      items.push({ key: `tick:${NAMES[axis]}:${index}`, position: p, text: formatTick(v, spec.authored, spec.step), index })
     }
     const sa = screenOf(world, camera, a)
     const sb = screenOf(world, camera, b)
     const mid = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 }
     const normal = edgeNormal(sa, sb, [mid.x - centre.x, mid.y - centre.y])
-    const values = tickValues[axis]
-    const keepLast = values.length > 0 && near(values[values.length - 1], r.max, spec.step)
     const title = { key: `title:${NAMES[axis]}`, position: with3(base, axis, (r.min + r.max) / 2), text: spec.title }
-    edges.push(edgeLabels(world, camera, items, normal, TICK_LABEL_PUSH_PX, keepLast, title))
+    edges.push(edgeLabels(world, camera, items, normal, TICK_LABEL_PUSH_PX, title))
   }
   const ySign = yFront === box.y.max ? 1 : -1
   const xSign = xFront === box.x.max ? 1 : -1
