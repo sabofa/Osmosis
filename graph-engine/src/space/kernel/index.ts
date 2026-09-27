@@ -30,6 +30,7 @@ import { CONTOUR } from './geometry/levelSurfaces'
 import { namedPoints } from './geometry/operands'
 import { LINE } from './geometry/lines'
 import { PLANE } from './geometry/planes'
+import { VECTOR_OP } from './geometry/vectorOps'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -54,6 +55,8 @@ for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vector
 registerBuilder('space:contour', CONTOUR)
 registerBuilder('space:line', LINE)
 registerBuilder('space:plane', PLANE)
+registerBuilder('space:cross', VECTOR_OP)
+registerBuilder('space:project', VECTOR_OP)
 
 interface StatementRecord {
   line: number

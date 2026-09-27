@@ -17,6 +17,7 @@ import { buildStyle, splitStyle } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 import { parseContour } from './keywords/contour'
 import { parseLine, parsePlane } from './keywords/geometry'
+import { parseCross, parseProject } from './keywords/vectors'
 
 interface KeywordRow {
   keyword: string
@@ -47,6 +48,8 @@ const KEYWORDS: readonly KeywordRow[] = [
   { keyword: 'contour', parse: parseContour },
   { keyword: 'line', parse: parseLine },
   { keyword: 'plane', parse: parsePlane },
+  { keyword: 'cross', parse: parseCross },
+  { keyword: 'project', parse: parseProject },
 ]
 
 // "keyword: A-B-C [dashed | plain]": a solid figure's point list.

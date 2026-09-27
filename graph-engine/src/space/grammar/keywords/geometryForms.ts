@@ -60,4 +60,14 @@ export interface PlaneForm {
   style: SpaceStyle
 }
 
-export type GeometryForm = ContourForm | LineForm | PlaneForm
+// "cross: u x v [at P]" (also "×") and "project: u onto v [at P]"; the
+// tails sit at P, the origin by default.
+export interface VectorOpForm {
+  form: 'cross' | 'project'
+  u: VectorOperand
+  v: VectorOperand
+  at: PointOperand | null
+  style: SpaceStyle
+}
+
+export type GeometryForm = ContourForm | LineForm | PlaneForm | VectorOpForm

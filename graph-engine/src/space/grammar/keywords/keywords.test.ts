@@ -165,3 +165,52 @@ describe('plane:', () => {
     })
   }
 })
+
+describe('cross: and project:', () => {
+  const lit = (a: string, b: string, c: string) => ({ kind: 'literal', components: [p(a), p(b), p(c)] })
+
+  it('cross: <1,0,0> x <0,1,0>', () => {
+    expect(form('cross: <1,0,0> x <0,1,0>')).toEqual({
+      form: 'cross',
+      u: { ...lit('1', '0', '0'), text: '<1,0,0>' },
+      v: { ...lit('0', '1', '0'), text: '<0,1,0>' },
+      at: null,
+      style: NO_STYLE,
+    })
+  })
+
+  it('cross: u × v at (1, 1, 1); named and evaluated operands', () => {
+    expect(form('cross: u × v at (1, 1, 1)')).toMatchObject({
+      u: { kind: 'named', name: 'u' },
+      v: { kind: 'named', name: 'v' },
+      at: { kind: 'tuple', coords: [p('1'), p('1'), p('1')] },
+    })
+    expect(form('cross: F(1, 0, 2) x <x0, 1, 0> at P')).toMatchObject({
+      u: { kind: 'named', name: 'F', args: [p('1'), p('0'), p('2')] },
+      v: lit('x0', '1', '0'),
+      at: { kind: 'name', name: 'P' },
+    })
+  })
+
+  it('cross: takes opacity: for its parallelogram', () => {
+    expect(form('cross: u x v opacity: 0.5')).toMatchObject({ style: { opacity: 0.5 } })
+  })
+
+  it('project: u onto v [at P]', () => {
+    expect(form('project: <3,4,0> onto <1,0,0>')).toMatchObject({ form: 'project', u: lit('3', '4', '0'), v: lit('1', '0', '0'), at: null })
+    expect(form('project: u onto v at Q')).toMatchObject({ at: { kind: 'name', name: 'Q' } })
+  })
+
+  const refusals: [string, RegExp][] = [
+    ['cross: u v', /Expected "cross: u x v"/],
+    ['cross: u x', /Expected "cross: u x v"/],
+    ['cross: (1,0,0) x <0,1,0>', /a vector is written <1,0,0>/],
+    ['project: u on v', /Expected "project: u onto v"/],
+    ['project: u onto v opacity: 0.5', /opacity: does not apply to project: — it takes color:/],
+  ]
+  for (const [line, message] of refusals) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseSpaceKeyword(line)).toThrow(message)
+    })
+  }
+})
