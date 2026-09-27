@@ -134,3 +134,42 @@ describe('tangent-plane:', () => {
     expect(() => parseSpaceKeyword(line)).toThrow(message)
   })
 })
+
+describe('gradient:', () => {
+  it('parses a point in the plane with lifted, and a point in space with surface', () => {
+    expect(form('gradient: f at (1, 2) lifted')).toEqual({
+      form: 'gradient',
+      target: p('f'),
+      point: [p('1'), p('2')],
+      lifted: true,
+      surface: false,
+      over: null,
+      style: NO_STYLE,
+    })
+    expect(form('gradient: x*y*z at (1, 2, 3) surface')).toMatchObject({ form: 'gradient', point: [p('1'), p('2'), p('3')], lifted: false, surface: true })
+  })
+
+  it.each([
+    ['gradient: f at (1, 2, 3) lifted', /"lifted" applies to a gradient of f\(x, y\) at \(a, b\)/],
+    ['gradient: f at (1, 2) surface', /"surface" applies to a gradient of F\(x, y, z\)/],
+    ['gradient: f', /Expected "gradient: f at \(1, 2\)"/],
+  ])('refuses "%s" in its own words', (line, message) => {
+    expect(() => parseSpaceKeyword(line)).toThrow(message)
+  })
+})
+
+describe('directional:', () => {
+  it('parses the point and the direction, in either bracket', () => {
+    const expected = { form: 'directional', target: p('f'), point: [p('1'), p('2')], toward: [p('3'), p('4')], over: null, style: NO_STYLE }
+    expect(form('directional: f at (1, 2) toward <3, 4>')).toEqual(expected)
+    expect(form('directional: f at (1, 2) toward ⟨3, 4⟩')).toEqual(expected)
+  })
+
+  it.each([
+    ['directional: f at (1, 2) toward <3, 4, 5>', /A direction in the plane has two components, got 3/],
+    ['directional: f at (1, 2) toward (3, 4)', /Expected a direction "<u1, u2>" after "toward"/],
+    ['directional: f at (1, 2)', /Expected "directional: f at \(1, 2\) toward <3, 4>"/],
+  ])('refuses "%s" in its own words', (line, message) => {
+    expect(() => parseSpaceKeyword(line)).toThrow(message)
+  })
+})

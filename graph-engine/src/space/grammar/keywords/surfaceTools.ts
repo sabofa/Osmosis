@@ -18,7 +18,7 @@
 // contour: is shared with S4a, which owns its grammar; S4b owns the builder of
 // a two-variable contour (kernel/surfaceTools/contours.ts).
 
-import { parseForRange, parseTuple } from '../../../parser/grammarUtil'
+import { parseForRange, parseTuple, splitTopLevelComma } from '../../../parser/grammarUtil'
 import { parseExprString } from '../../../parser/parseExpr'
 import type { Expr } from '../../../parser/types'
 import { parseForDomain } from '../domain'
@@ -152,6 +152,16 @@ function flags(words: readonly string[], allowed: readonly string[], keyword: st
   return out
 }
 
+// "<u1, u2>" or "⟨u1, u2⟩": a direction in the plane.
+function planeVector(text: string, keyword: string): [Expr, Expr] {
+  const t = text.trim()
+  const bracketed = (t.startsWith('<') && t.endsWith('>')) || (t.startsWith('⟨') && t.endsWith('⟩'))
+  if (!bracketed) throw new Error(`Expected a direction "<u1, u2>" after "toward" in ${keyword}:, got "${t}"`)
+  const parts = splitTopLevelComma(t.slice(1, -1))
+  if (parts.length !== 2) throw new Error(`A direction in the plane has two components, got ${parts.length} in "${t}"`)
+  return [parseExprString(parts[0]), parseExprString(parts[1])]
+}
+
 function pair(text: string, what: string): [Expr, Expr] {
   const tuple = parseTuple(text)
   if (tuple.length !== 2) throw new Error(`${what} takes two coordinates "(a, b)", got "${text.trim()}"`)
@@ -211,8 +221,41 @@ function parseTangentPlane(text: string): SurfaceToolForm {
   return { form: 'tangentPlane', target, point, normal: set.has('normal'), over, style: toolStyle(clauses, 'tangent-plane', ['opacity']) }
 }
 
+// gradient: <target> at (a, b) [lifted], or at (x0, y0, z0) [surface]
+function parseGradient(text: string): SurfaceToolForm {
+  const { rest: styled, clauses } = splitStyle(text)
+  const { rest, over } = splitOver(styled, 'gradient')
+  const example = 'f at (1, 2)'
+  const { target, after } = splitAt(rest, 'gradient', example)
+  const { point, words } = leadingPoint(after, 'gradient', example)
+  const set = flags(words, ['lifted', 'surface'], 'gradient')
+  if (set.has('lifted') && point.length === 3) throw new Error('"lifted" applies to a gradient of f(x, y) at (a, b): a gradient in space is drawn at its point')
+  if (set.has('surface') && point.length === 2) throw new Error('"surface" applies to a gradient of F(x, y, z) at (x0, y0, z0): it draws the level surface through the point')
+  return { form: 'gradient', target, point, lifted: set.has('lifted'), surface: set.has('surface'), over, style: toolStyle(clauses, 'gradient', ['res']) }
+}
+
+// directional: <target> at (a, b) toward <u1, u2>
+function parseDirectional(text: string): SurfaceToolForm {
+  const { rest: styled, clauses } = splitStyle(text)
+  const { rest, over } = splitOver(styled, 'directional')
+  const example = 'f at (1, 2) toward <3, 4>'
+  const { target, after } = splitAt(rest, 'directional', example)
+  const toward = after.indexOf(' toward ')
+  if (toward === -1) throw new Error(`Expected "directional: ${example}", got "directional: ${text}"`)
+  return {
+    form: 'directional',
+    target,
+    point: pair(after.slice(0, toward), 'directional:'),
+    toward: planeVector(after.slice(toward + ' toward '.length), 'directional'),
+    over,
+    style: toolStyle(clauses, 'directional', ['opacity', 'width']),
+  }
+}
+
 export const SURFACE_TOOL_KEYWORDS: readonly { keyword: string; parse(rest: string): SurfaceToolForm }[] = [
   { keyword: 'path', parse: parsePath },
   { keyword: 'trace', parse: parseTrace },
   { keyword: 'tangent-plane', parse: parseTangentPlane },
+  { keyword: 'gradient', parse: parseGradient },
+  { keyword: 'directional', parse: parseDirectional },
 ]

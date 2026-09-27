@@ -1,0 +1,78 @@
+import { describe, expect, it } from 'vitest'
+import { arrowsOf, expectClose, expectParallel, kernelOf, labelOf, lineOf, meshOf, pointsOf, sceneOf, vertices } from './testing'
+
+// f = x^2 - y^2 at (1, 2) toward <3, 4>: u = (0.6, 0.8), ∇f = (2, -4),
+// D_u f = 2(0.6) + (-4)(0.8) = -2. The box is [-5, 5]^2 x [-25, 25].
+const SPEC = 'directional: x^2 - y^2 at (1, 2) toward <3, 4>'
+
+describe(SPEC, () => {
+  const scene = sceneOf(SPEC)
+
+  it('reads out D_u f = -2 with the unit u and ∇f', () => {
+    expect(scene.errors).toEqual([])
+    expect(labelOf(scene, 's1.readout').text).toBe('D_u f = −2, u = (0.6, 0.8), ∇f = (2, −4)')
+  })
+
+  it('draws the unit arrow u on the floor from (1, 2)', () => {
+    const u = arrowsOf(scene, 's1.u')
+    expect(Array.from(u.tails)).toEqual([1, 2, -25])
+    expectClose(Array.from(u.vectors), [0.6, 0.8, 0])
+  })
+
+  it('draws the trace along u through (1, 2, -3), on the surface and in the vertical plane', () => {
+    const curve = lineOf(scene, 's1')
+    expectClose([...curve.pick!.r(0)], [1, 2, -3])
+    for (const [x, y, z] of vertices(curve.positions)) {
+      expect(Math.abs((x - 1) * 0.8 - (y - 2) * 0.6)).toBeLessThanOrEqual(1e-12)
+      expect(Math.abs(z - (x * x - y * y))).toBeLessThanOrEqual(1e-12)
+    }
+    // Along u the slope at s = 0 is D_u f.
+    expectClose([...curve.pick!.dr(0)], [0.6, 0.8, -2])
+    // It spans the domain: s from -8.75 (y = -5) to 3.75 (y = 5).
+    expectClose([curve.params![0], curve.params![curve.params!.length - 1]], [-8.75, 3.75])
+  })
+
+  it('draws the tangent at (1, 2, -3) with slope -2 along u', () => {
+    const [a, b] = vertices(lineOf(scene, 's1.tangent').positions)
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+    expectParallel(d, [0.6, 0.8, -2])
+    expect(Math.abs(d[2] / Math.hypot(d[0], d[1]) + 2)).toBeLessThanOrEqual(1e-12)
+    expectParallel([a[0] - 1, a[1] - 2, a[2] + 3], [0.6, 0.8, -2])
+    expectClose(Array.from(pointsOf(scene, 's1.point').positions), [1, 2, -3])
+  })
+
+  it('draws the vertical plane through (1, 2) along u across the box, at opacity 0.2', () => {
+    const plane = meshOf(scene, 's1.plane')
+    expect(plane.style.opacity).toBe(0.2)
+    const corners = vertices(plane.positions)
+    expect(corners.map((c) => c[2])).toEqual([-25, -25, 25, 25])
+    for (const [x, y] of corners) expect(Math.abs((x - 1) * 0.8 - (y - 2) * 0.6)).toBeLessThanOrEqual(1e-12)
+    // (1, 2) + s (0.6, 0.8) leaves [-5, 5]^2 at y = -5 (s = -8.75) and y = 5
+    // (s = 3.75).
+    expectClose([corners[0][0], corners[0][1]], [1 - 8.75 * 0.6, -5])
+    expectClose([corners[1][0], corners[1][1]], [1 + 3.75 * 0.6, 5])
+  })
+})
+
+describe('directional: refusals and parameters', () => {
+  it('refuses a zero u, on its line', () => {
+    expect(sceneOf('directional: x^2 - y^2 at (1, 2) toward <0, 0>').errors).toEqual([
+      { line: 1, message: 'directional: the direction ⟨0, 0⟩ has no length — give a nonzero u' },
+    ])
+  })
+
+  it('reads u from a parameter: k = 0 is refused, and k = 2 draws u = (1, 0)', () => {
+    const kernel = kernelOf(`@param k = 1 range [0, 5]
+directional: x^2 - y^2 at (1, 2) toward <k, 0>`)
+    expect(kernel.setValue('k', 0).errors.map((e) => e.line)).toEqual([2])
+    const scene = kernel.setValue('k', 2)
+    expect(scene.errors).toEqual([])
+    expect(labelOf(scene, 's2.readout').text).toBe('D_u f = 2, u = (1, 0), ∇f = (2, −4)')
+  })
+
+  it('refuses a function of three variables', () => {
+    expect(sceneOf('directional: x*y*z at (1, 2) toward <1, 0>').errors.map((e) => e.message)).toEqual([
+      'directional: needs a function of x and y, and this one reads z',
+    ])
+  })
+})

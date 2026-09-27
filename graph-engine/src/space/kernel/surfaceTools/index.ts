@@ -3,6 +3,8 @@
 // dispatcher calls it for a two-variable target.
 
 import type { BuilderEntry } from '../registry'
+import { DIRECTIONAL } from './directional'
+import { GRADIENT } from './gradients'
 import { PATH } from './paths'
 import { TANGENT_PLANE } from './tangentPlanes'
 import { TRACE } from './traces'
@@ -11,4 +13,6 @@ export const SURFACE_TOOL_BUILDERS: readonly (readonly [string, BuilderEntry])[]
   ['space:path', PATH],
   ['space:trace', TRACE],
   ['space:tangentPlane', TANGENT_PLANE],
+  ['space:gradient', GRADIENT],
+  ['space:directional', DIRECTIONAL],
 ]
