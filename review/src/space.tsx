@@ -178,7 +178,8 @@ export default function SpaceReview() {
     setSpec(e.spec)
     setSource({ kind: 'spec' })
     setPick((p) => p + 1)
-    setUrl({ example: slug(e.label), fixture: null })
+    // The example replaces any spec carried in the link, so a reload shows it.
+    setUrl({ example: slug(e.label), fixture: null, spec: null })
   }
   const pickFixture = (f: SpaceFixture) => {
     setSource({ kind: 'fixture', fixture: f })

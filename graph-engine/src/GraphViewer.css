@@ -70,6 +70,9 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* Its own stacking context: the space overlay's and the stats' z-indices
+     below order them against each other, never against the host page. */
+  isolation: isolate;
 }
 
 .graph-viewer-split {
