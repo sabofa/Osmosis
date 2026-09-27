@@ -328,17 +328,23 @@ export function boundaryMark(pieces: readonly BoundaryPiece[], z: number, contex
   return { kind: 'lines', source: { ...context.source, object }, positions, starts, params: null, style: lineStyle(context.color, SEGMENT_WIDTH, false), pick: null }
 }
 
-// The mean of a mesh's vertices: where a readout is anchored.
-export function meanVertex(mesh: MeshMark): [number, number, number] {
-  const p = mesh.positions
-  const n = p.length / 3
-  let [x, y, z] = [0, 0, 0]
-  for (let i = 0; i < p.length; i += 3) {
-    x += p[i]
-    y += p[i + 1]
-    z += p[i + 2]
+// Where a region's readout is anchored: halfway along its longest boundary
+// piece, on the region's edge — clear of anything drawn at its centre (a
+// centroid), and of the box's corners, where the tick labels are.
+export function boundaryAnchor(pieces: readonly BoundaryPiece[], z: number): [number, number, number] {
+  let longest: Float64Array | null = null
+  let most = -1
+  for (const { xy } of pieces) {
+    const l = length(xy)
+    if (l > most) [longest, most] = [xy, l]
   }
-  return [x / n, y / n, z / n]
+  if (!longest || !(most > 0)) return longest ? [longest[0], longest[1], z] : [0, 0, z]
+  let run = 0
+  for (let k = 2; k + 1 < longest.length; k += 2) {
+    run += Math.hypot(longest[k] - longest[k - 2], longest[k + 1] - longest[k - 1])
+    if (run >= most / 2) return [longest[k], longest[k + 1], z]
+  }
+  return [longest[longest.length - 2], longest[longest.length - 1], z]
 }
 
 function prepareRegion(statement: Statement, context: BuildContext): PreparedStatement {
@@ -356,8 +362,7 @@ function prepareRegion(statement: Statement, context: BuildContext): PreparedSta
     const floor = floorMark(r.samples, z, context, form.style.opacity ?? REGION_OPACITY, context.source.object)
     const boundary = boundaryMark(r.boundary, z, context, part(context, 'boundary').object)
     const marks = [floor, boundary].filter((m) => m !== null)
-    const anchor = floor ? meanVertex(floor) : ([0, 0, z] as const)
-    return { marks, labels: [readoutLabel(context, anchor, `area ${approxText(area)}`)], errors: [], colorScale: null }
+    return { marks, labels: [readoutLabel(context, boundaryAnchor(r.boundary, z), `area ${approxText(area)}`)], errors: [], colorScale: null }
   }
   return { reads: reads.names, build }
 }

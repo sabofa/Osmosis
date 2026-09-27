@@ -22,6 +22,18 @@ describe('region: type I, x in [0, 1], y in [x^2, x]', () => {
     expect(polylines(boundary).map((l) => l.length)).toEqual([257, 257])
   })
 
+  it('anchors its readout halfway along its longest boundary piece, clear of its centre and the box corners', () => {
+    // the half-disc: the arc (length π) beats the diameter (2); its middle is (0, 1)
+    const [x, y, z] = readout(sceneOf('region: r in [0, 1], theta in [0, pi]'), 1).position
+    expect([Math.abs(x) < 1e-12, y, z]).toEqual([true, 1, 0])
+    // type I: the parabola (length √5/2 + asinh(2)/4 = 1.4789) beats the line (1.4142). Half
+    // its length, 0.7394, is reached at x = 0.6106 (L(0.60) = 0.7226, L(0.62) = 0.7542); the
+    // anchor is the first of its 256 samples past it, x = 157/256.
+    const [px, py] = readout(sceneOf('region: x in [0, 1], y in [x^2, x]'), 1).position
+    expect(px).toBe(157 / 256)
+    expect(py).toBeCloseTo(px * px, 12)
+  })
+
   it('is a set: either range written high-to-low gives the same area', () => {
     // Each reverses the iterated integral's sign once.
     for (const spec of ['region: x in [1, 0], y in [x^2, x]', 'region: x in [0, 1], y in [x, x^2]']) {
