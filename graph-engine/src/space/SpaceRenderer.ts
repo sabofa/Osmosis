@@ -10,6 +10,8 @@
 // Nothing here throws into its host: a missing WebGL2 shows a legible
 // message in the view, and shader or GL failures go to onError.
 
+import type { GraphConfig } from '../parser/config'
+import type { Statement } from '../parser/types'
 import type { Palette } from '../render/palette'
 import { clampElevation, inertiaStep, sanitizeView, wrapAzimuth, type OrbitVelocity } from './camera/controls'
 import { cameraMatrices, type Viewport } from './camera/projection'
@@ -22,16 +24,17 @@ import { frameAxes } from './frame/ticks'
 import type { FrameAxes } from './frame/types'
 import { GlBackend } from './gl/backend'
 import { NO_WEBGL2_MESSAGE } from './gl/context'
-import type { SpaceScene } from './scene/types'
+import type { SpaceKernel } from './kernel/api'
+import { createSpaceKernel } from './kernel/index'
+import type { SceneError, SpaceScene } from './scene/types'
 import { spaceColors, type SpaceColors } from './theme'
 import { attachInput, InputMachine, type AttachedInput, type InputContext } from './ui/input'
 import { layoutLabels } from './ui/layout'
 import { Overlay } from './ui/overlay'
 import { FrameScheduler, type CancelFrame, type RequestFrame } from './ui/scheduler'
 
-// The part of GraphConfig the renderer reads. GraphConfig gains `space` with
-// S1; until then any object carrying it will do, and after the merge a
-// GraphConfig is one.
+// The part of GraphConfig setScene reads: a GraphConfig is one, and so is a
+// bare { space } for hand-built scenes (the review page's fixtures).
 export interface SpaceRenderConfig {
   space: SpaceConfig
 }
@@ -131,6 +134,9 @@ export class SpaceRenderer {
   private readonly stopPixelRatio: () => void
   private colors: SpaceColors
   private scene: SpaceScene | null = null
+  // The kernel behind the current scene, when it came from a spec; S3's
+  // parameter panel drives it through setValue.
+  private kernel: SpaceKernel | null = null
   private space: SpaceConfig = defaultSpaceConfig()
   private world: WorldMap | null = null
   private axes: FrameAxes | null = null
@@ -218,6 +224,24 @@ export class SpaceRenderer {
     this.scheduler.request()
   }
 
+  // Build the space kernel from a parsed spec (parseSpec's statements, config
+  // and statementLines) and draw its scene. Returns the scene's errors, each
+  // with its 1-based line; nothing is thrown, and one bad statement never
+  // blanks the rest.
+  setSpec(statements: Statement[], config: GraphConfig, lines: readonly number[]): SceneError[] {
+    if (this.disposed) return []
+    let scene: SpaceScene
+    try {
+      this.kernel = createSpaceKernel(statements, config, lines)
+      scene = this.kernel.scene()
+    } catch (error) {
+      this.kernel = null
+      return [{ line: 0, message: `space could not build this spec: ${error instanceof Error ? error.message : String(error)}` }]
+    }
+    this.setScene(scene, config)
+    return scene.errors
+  }
+
   setPalette(palette: Palette, theme: 'light' | 'dark'): void {
     if (this.disposed) return
     this.colors = spaceColors(palette, theme)
@@ -254,6 +278,7 @@ export class SpaceRenderer {
     this.backend.dispose()
     this.overlay.dispose()
     this.scene = null
+    this.kernel = null
   }
 
   private redrawNow(): void {

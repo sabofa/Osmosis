@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { parseSpec } from './parser/parseSpec'
 import { defaultConfig, type GraphConfig } from './parser/config'
 import { buildScene } from './scene/buildScene'
-import { buildScene3d } from './scene/buildScene3d'
 import { buildTable, type NamedTableData } from './scene/buildTable'
 import { formatCoord } from './scene/format'
 import { isThreeD, resolvePanels } from './scene/mode'
 import { renderFigure } from './figure/render'
 import { SceneRenderer, type HoverInfo } from './render/SceneRenderer'
-import { SceneRenderer3D, type HoverInfo3D } from './render/SceneRenderer3D'
+import { SpaceRenderer } from './space/SpaceRenderer'
 import { resolvePalette } from './render/palette'
 import type { Regression } from './scene/types'
 import type { ParseError, ParseResult } from './parser/types'
@@ -27,7 +26,9 @@ export interface GraphViewerProps {
 }
 
 type Mode = '2d' | '3d'
-type Renderer = SceneRenderer | SceneRenderer3D
+// The 2D plot renderer (three.js) or space (track 3's hand-made WebGL2
+// renderer, which draws every 3D spec).
+type Renderer = SceneRenderer | SpaceRenderer
 
 // Collapses a burst of spec changes (fast typing, a paste, a streamed LLM
 // write) into one rebuild instead of one per keystroke — the rebuild itself
@@ -43,7 +44,7 @@ const DRAG_RESOLUTION = 45
 
 // The reusable, app-agnostic entry point: text spec in, live-rendered scene
 // out. No dependency on anything outside this package. Switches between a 2D
-// pan/zoom view, a 3D orbit view (see scene/mode.ts), and a plain HTML table
+// pan/zoom view, the space view (see scene/mode.ts), and a plain HTML table
 // (via "@mode: table") based on what the spec contains, swapping the
 // underlying renderer as needed.
 export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps) {
@@ -76,10 +77,11 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   const [tables, setTables] = useState<NamedTableData[]>([])
   // The rendered figure's markup, or null when this spec is not a figure.
   // Mirrors `tables` above exactly: a mode that owns the view holds its own
-  // built content, and the three.js renderer is disposed while it does.
+  // built content, and the canvas renderer is disposed while it does.
   const [figure, setFigure] = useState<string | null>(null)
   const [regression, setRegression] = useState<Regression | null>(null)
-  const [hover, setHover] = useState<HoverInfo | HoverInfo3D | null>(null)
+  // 2D hover only: space's probe and readout arrive in S3.
+  const [hover, setHover] = useState<HoverInfo | null>(null)
   const [contextLost, setContextLost] = useState(false)
   // Which context type the mounted <canvas> is for. A canvas is permanently
   // bound to the first context it hands out ('2d' for the pan/zoom view,
@@ -124,7 +126,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       }
 
       // A figure is its own renderer, selected the way table already is: the
-      // three.js renderer is disposed entirely rather than left alive behind
+      // canvas renderer (2D or space) is disposed entirely rather than left alive behind
       // a hidden canvas. Missing this leaks a WebGL context on every mode
       // change, which is why it follows the table branch above line for line.
       if (panels.drawable === 'figure') {
@@ -168,7 +170,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
         const onContextLost = () => setContextLost(true)
         rendererRef.current =
           mode === '3d'
-            ? new SceneRenderer3D(canvas, parsed.config, { onHover: setHover, onContextLost, palette })
+            ? new SpaceRenderer(canvas, { palette, theme: parsed.config.theme, onContextLost })
             : new SceneRenderer(canvas, {
                 config: parsed.config,
                 onViewChange: () => viewChangeRef.current(),
@@ -178,18 +180,21 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
               })
         modeRef.current = mode
       } else if (reportState) {
-        rendererRef.current?.setConfig(parsed.config, palette)
+        const current = rendererRef.current
+        if (current instanceof SpaceRenderer) current.setPalette(palette, parsed.config.theme)
+        else current?.setConfig(parsed.config, palette)
       }
 
       const renderer = rendererRef.current
       if (!renderer) return
 
       if (mode === '3d') {
-        const scene = buildScene3d(parsed.statements, parsed.config)
-        ;(renderer as SceneRenderer3D).setGraphScene(scene)
+        // Space builds its own scene from the statements (the kernel), keeps
+        // the viewer's camera across rebuilds, and returns its errors by line.
+        const errors = (renderer as SpaceRenderer).setSpec(parsed.statements, parsed.config, parsed.statementLines)
         if (reportState) {
           setRegression(null)
-          onErrorsRef.current?.([...parsed.errors, ...scene.errors])
+          onErrorsRef.current?.([...parsed.errors, ...errors])
         }
       } else {
         const renderer2d = renderer as SceneRenderer
@@ -293,8 +298,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
         {figure === null && hover && (
           <div className="graph-viewer-hover-label" style={{ left: hover.screenX, top: hover.screenY }}>
             {hover.label ? `${hover.label}: ` : ''}(
-            {formatCoord(hover.worldX)}, {formatCoord(hover.worldY)}
-            {'worldZ' in hover ? `, ${formatCoord(hover.worldZ)}` : ''})
+            {formatCoord(hover.worldX)}, {formatCoord(hover.worldY)})
           </div>
         )}
       </div>

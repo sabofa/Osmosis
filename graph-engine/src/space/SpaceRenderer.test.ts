@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DARK_PALETTE, LIGHT_PALETTE } from '../render/palette'
 import { defaultSpaceConfig, type SpaceConfig } from './config'
 import { createFakeGl, type FakeGl } from './gl/fakeGl'
+import { parseSpec } from '../parser/parseSpec'
 import { SpaceRenderer, type SpaceRendererEnv } from './SpaceRenderer'
 import { FakeDocument, type FakeElement } from './testing/fakeDom'
 import { curveMark, label, scene } from './testing/marks'
@@ -162,6 +163,36 @@ describe('SpaceRenderer renders on demand', () => {
     r.setScene(scene([helix]), CONFIG)
     clock.flush()
     expect([canvas.width, canvas.height]).toEqual([1600, 1200])
+    r.dispose()
+  })
+})
+
+describe('SpaceRenderer.setSpec', () => {
+  it('builds the kernel from a parsed spec, draws its scene, and returns no errors for a good spec', () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const parsed = parseSpec('@camera: azimuth -30, elevation 20\nz = x^2 - y^2 for x in [-1, 1], y in [-1, 1]')
+    expect(parsed.errors).toEqual([])
+    expect(r.setSpec(parsed.statements, parsed.config, parsed.statementLines)).toEqual([])
+    clock.flush()
+    expect(fake.draws.some((d) => fake.programSource(d.program).vertex.includes('space: mesh'))).toBe(true)
+    // The authored camera, aimed at the box centre.
+    expect([r.getView().azimuth, r.getView().elevation]).toEqual([-30, 20])
+    r.dispose()
+  })
+
+  it("returns the kernel's errors with their 1-based lines, and still draws the rest", () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const parsed = parseSpec('z = x^2 + y^2 for x in [-1, 1], y in [-1, 1]\n\nz = nope(x) + y for x in [0, 1], y in [0, 1]')
+    const errors = r.setSpec(parsed.statements, parsed.config, parsed.statementLines)
+    expect(errors.map((e) => e.line)).toEqual([3])
+    clock.flush()
+    expect(fake.draws.some((d) => fake.programSource(d.program).vertex.includes('space: mesh'))).toBe(true)
     r.dispose()
   })
 })

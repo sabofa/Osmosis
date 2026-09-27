@@ -12,8 +12,11 @@ export { defaultConfig } from './parser/config'
 export type { GraphConfig, GraphBounds, HoverMode, FeaturePointKind } from './parser/config'
 export { buildScene } from './scene/buildScene'
 export type { Scene, SceneObject, Regression } from './scene/types'
-export { buildScene3d } from './scene/buildScene3d'
-export type { Scene3D, SceneObject3D } from './scene/types3d'
+// Space (track 3): the renderer GraphViewer mounts for 3D specs, and the
+// kernel that turns parsed statements into its scene.
+export { SpaceRenderer } from './space/SpaceRenderer'
+export { createSpaceKernel } from './space/kernel/index'
+export type { SpaceScene } from './space/scene/types'
 export { buildTable } from './scene/buildTable'
 export type { NamedTableData } from './scene/buildTable'
 export { isThreeD, resolveMode } from './scene/mode'

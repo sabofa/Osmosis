@@ -103,6 +103,20 @@
   }
 }
 
+/* Space (3D specs) puts its text in a DOM overlay beside the canvas in this
+   panel (space/ui/SpaceView.css), which is why the panel is position:
+   relative. The panel's own overlays (stats, the context-lost notice, the
+   hover label) stack above it. */
+.graph-viewer-panel > .space-overlay {
+  z-index: 1;
+}
+
+.graph-viewer-stats,
+.graph-viewer-context-lost,
+.graph-viewer-hover-label {
+  z-index: 2;
+}
+
 .graph-viewer-canvas {
   display: block;
   width: 100%;
