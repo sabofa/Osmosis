@@ -67,7 +67,7 @@ import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, t
 import { authorToWorld, describeAuthorPlane } from './authorFrame'
 import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
 import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
-import { angleArc, angleFrame, arcBisector, arcMiddle, markHidden, projectArc, rightAngleCorners } from './spaceMarks'
+import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden, projectArc, rightAngleCorners, type SpaceArc } from './spaceMarks'
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
 import {
   fmt,
@@ -865,6 +865,34 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   const spaceAngleMarks = new Set<string>()
   const angleKey = (from: string, vertex: string, to: string) => `${vertex}:${[from, to].sort().join(',')}`
 
+  // M3 — a dihedral's mark as items: its two construction segments, each
+  // split exactly by the glass rule (segmentSpans, never M4's midpoint
+  // rule), and M1's arc between them, hidden or not whole by its middle.
+  // Returns the arc so a label can hang on it. `names` are the author's.
+  const spaceDihedralMarks = new Set<string>()
+  const dihedralKey = (from: string, [a, b]: [string, string], to: string) => `${[a, b].sort().join(',')}|${[from, to].sort().join(',')}`
+
+  function dihedralItems(
+    index: number,
+    [from, a, b, to]: Vec3[],
+    names: { from: string; edge: [string, string]; to: string },
+    color: string | null
+  ): { items: FigureItem[]; arc: SpaceArc } {
+    const title = `dihedral ${names.from}-${names.edge.join('-')}-${names.to}`
+    const found = dihedral3(from, a, b, to, { from: names.from, a: names.edge[0], b: names.edge[1], to: names.to })
+    const mark = dihedralMark(found, distance3(a, b), title)
+    const object = `${names.from}-${names.edge.join('')}-${names.to}`
+    const hidden = markHidden(arcMiddle(mark.arc), occluders, camera)
+    return {
+      arc: mark.arc,
+      items: [
+        ...spaceSegmentItems(index, mark.mid, mark.ends[0], 'auto', `${object}:${names.from}`, color),
+        ...spaceSegmentItems(index, mark.mid, mark.ends[1], 'auto', `${object}:${names.to}`, color),
+        { kind: 'spaceArc', id: { statement: index, object }, edge: projectArc(mark.arc, camera, object, hidden), hidden, text: null, color },
+      ],
+    }
+  }
+
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
     return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
@@ -1200,6 +1228,19 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           })
           break
         }
+        case 'dihedral': {
+          // M3 — only among points in space.
+          const names = [statement.from, ...statement.edge, statement.to]
+          const what = `dihedral: ${names.join('-')}`
+          const space = resolveSpace(names, what)
+          if (!space) {
+            for (const name of names) resolve(name)
+            throw new Error(`"${what}" is a dihedral angle, which exists only among points in space — ${statement.from} is a point in the plane`)
+          }
+          items.push(...dihedralItems(index, space, statement, statement.color).items)
+          spaceDihedralMarks.add(dihedralKey(statement.from, statement.edge, statement.to))
+          break
+        }
         case 'measureLabel':
           measureStatements.push({ statement, index })
           break
@@ -1244,7 +1285,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       // dimension on a projected solid sits beside an edge among eleven
       // others, and a displaced one names nothing without a line back.
       let leader = false
-      const inside = subject.kind === 'angle'
+      const inside = subject.kind === 'angle' || subject.kind === 'dihedral'
       const space =
         subject.kind === 'length'
           ? resolveSpace([subject.from, subject.to], subjectName(subject))
@@ -1334,7 +1375,19 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         at = centroidOf(vertices)
         push = null
       } else if (subject.kind === 'dihedral') {
-        throw new Error(`"label: ${subjectName(subject)}" is not drawn yet — write "given: ${subjectName(subject)}" for its value`)
+        // M3 — the value, on the mark: drawn here (once — not again beside a
+        // "dihedral:" for the same angle), the label on the arc's middle,
+        // pushed along its bisector in space, then projected (M7's rule).
+        const space = spaceOnly(resolvers, [subject.from, ...subject.edge, subject.to], subjectName(subject))
+        const mark = dihedralItems(index, space, subject, statement.color)
+        const key = dihedralKey(subject.from, subject.edge, subject.to)
+        if (!spaceDihedralMarks.has(key)) {
+          items.push(...mark.items)
+          spaceDihedralMarks.add(key)
+        }
+        at = camera.project(arcMiddle(mark.arc))
+        push = viewDirection(arcBisector(mark.arc))
+        computed = measureOf(subject, resolvers, config)
       } else {
         // Refused at parse time (M5); the table is where these belong.
         throw new Error(`"label: ${subjectName(subject)}" has no single point to hang a label on — write "given: ${subjectName(subject)}"`)

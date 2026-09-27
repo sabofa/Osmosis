@@ -1235,6 +1235,13 @@ function parseStatementCore(rawLine: string): StatementShape {
     return { kind: 'rightAngle', from: parts[0], vertex: parts[1], to: parts[2] }
   }
 
+  // The dihedral angle's mark (phase 10, M3): "dihedral: C-A-B-D", the edge
+  // in the middle ("C-AB-D"). "CABD" works too, as in a label.
+  if (line.startsWith('dihedral:')) {
+    const [from, a, b, to] = parsePointRun(line.slice('dihedral:'.length), 4, 'dihedral')
+    return { kind: 'dihedral', from, edge: [a, b], to }
+  }
+
   // A solid: "solid: prism 8 by 5 by 6". The bound form, "S = solid prism
   // 8 by 5 by 6", is handled with the other "=" statements below.
   if (line.startsWith('solid:')) return parseSolidBody(line.slice('solid:'.length), null)

@@ -1312,3 +1312,11 @@ describe('marks with no vertex are refused (phase 10, M8)', () => {
     expect(parseStatement('angle: A-B-C label: 30°')).toMatchObject({ kind: 'angle', from: 'A', vertex: 'B', to: 'C', label: '30°' })
   })
 })
+
+describe('the dihedral mark (phase 10, M3)', () => {
+  it('reads "dihedral: C-A-B-D" with its edge in the middle, and the run form', () => {
+    expect(parseStatement('dihedral: A-B-F-G')).toMatchObject({ kind: 'dihedral', from: 'A', edge: ['B', 'F'], to: 'G' })
+    expect(parseStatement('dihedral: ABFG color: red')).toMatchObject({ kind: 'dihedral', from: 'A', edge: ['B', 'F'], to: 'G', color: 'red' })
+    expect(() => parseStatement('dihedral: A-B-C')).toThrow(/four point names/)
+  })
+})

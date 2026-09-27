@@ -1,5 +1,5 @@
 import { GEOM_EPS } from '../scene/geometry/types'
-import { add3, angle3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
+import { add3, angle3, cross3, dot3, length3, scale3, sub3, type Dihedral3 } from './construct3d'
 import { hidesPoint } from './occlusion'
 import type { Camera, ProjectedArc, Vec3 } from './project3d'
 import { projectCircle } from './silhouette'
@@ -117,6 +117,40 @@ export function rightAngleCorners(frame: AngleFrame, side = SPACE_SQUARE_FRACTIO
   const su = scale3(frame.u, side)
   const sv = scale3(frame.v, side)
   return [frame.vertex, add3(frame.vertex, su), add3(frame.vertex, add3(su, sv)), add3(frame.vertex, sv)]
+}
+
+// M3 — a dihedral angle's mark: its PLANE angle, drawn at the edge's
+// midpoint M. Two construction segments, M -> M + l u and M -> M + l v (u, v
+// the unit directions square to the edge, into each half-plane —
+// dihedral3's), and M1's arc between them (radius 0.2 l).
+//
+// l = 0.3 x the edge, **but never longer than either end point's distance
+// from the edge's line** (a correction to the plan, which says 0.3 x the
+// edge alone). Past that distance a segment runs beyond the point that
+// defines its half-plane, out of the face it lies in: in the AIME 2016 I
+// prism, 0.3 |BF| = 6.24 but A is only 6 from BF, so the segment toward A
+// poked 0.24 out of the prism past its vertex A and drew a visible stub
+// outside the solid. Capped, it ends exactly at A. Wherever 0.3 x the edge
+// is short enough — the cube, the regular solids — nothing changes.
+export const DIHEDRAL_SEGMENT_FRACTION = 0.3
+
+export interface DihedralMark {
+  mid: Vec3
+  ends: [Vec3, Vec3]
+  arc: SpaceArc
+}
+
+// Two half-planes that make one plane (180) or one half-plane (0) have no
+// plane angle with a side to draw it on, and are refused by name.
+export function dihedralMark(dihedral: Dihedral3, edgeLength: number, name = 'the dihedral'): DihedralMark {
+  const segment = Math.min(DIHEDRAL_SEGMENT_FRACTION * edgeLength, ...dihedral.reach)
+  const ends: [Vec3, Vec3] = [add3(dihedral.mid, scale3(dihedral.u, segment)), add3(dihedral.mid, scale3(dihedral.v, segment))]
+  if (length3(cross3(dihedral.u, dihedral.v)) <= GEOM_EPS) {
+    const degrees = dot3(dihedral.u, dihedral.v) < 0 ? 180 : 0
+    throw new Error(`The half-planes of ${name} lie in one plane (it measures ${degrees}°), so it has no plane angle to draw`)
+  }
+  const arc = angleArc(angleFrame(dihedral.mid, ends[0], ends[1], { from: 'U', vertex: 'M', to: 'V' }))
+  return { mid: dihedral.mid, ends, arc }
 }
 
 // M4 — whether a mark judged at `at` is hidden: the glass rule's ray test,

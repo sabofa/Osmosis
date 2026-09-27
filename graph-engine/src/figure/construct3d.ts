@@ -246,6 +246,9 @@ export interface Dihedral3 {
   u: Vec3
   v: Vec3
   angle: number
+  // How far `from` and `to` are from the edge's line: the lengths of the
+  // square components before they were made unit.
+  reach: [number, number]
 }
 
 export function dihedral3(
@@ -261,18 +264,18 @@ export function dihedral3(
   }
   const mid = midpoint3(a, b)
   const along = scale3(edge, 1 / length3(edge))
-  const square = (p: Vec3, name: string): Vec3 => {
+  const square = (p: Vec3, name: string): { unit: Vec3; size: number } => {
     const offset = sub3(p, mid)
     const perpendicular = sub3(offset, scale3(along, dot3(offset, along)))
     const size = length3(perpendicular)
     if (negligible(size, p, a, b)) {
       throw new Error(`${name} lies on the line ${names.a}-${names.b}, so it fixes no half-plane at the edge ${names.a}${names.b}`)
     }
-    return scale3(perpendicular, 1 / size)
+    return { unit: scale3(perpendicular, 1 / size), size }
   }
   const u = square(from, names.from)
   const v = square(to, names.to)
-  return { mid, u, v, angle: Math.atan2(length3(cross3(u, v)), dot3(u, v)) }
+  return { mid, u: u.unit, v: v.unit, angle: Math.atan2(length3(cross3(u.unit, v.unit)), dot3(u.unit, v.unit)), reach: [u.size, v.size] }
 }
 
 // ---------------------------------------------------------------------------

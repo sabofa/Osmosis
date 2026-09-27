@@ -10,7 +10,8 @@ import { hidesPoint } from './occlusion'
 import { DEFAULT_CAMERA, type Vec3 } from './project3d'
 import { renderFigure } from './render'
 import { buildSolidFigure } from './solidScope'
-import { angleArc, angleFrame, arcPoint, projectArc, rightAngleCorners } from './spaceMarks'
+import { angleArc, angleFrame, arcPoint, dihedralMark, projectArc, rightAngleCorners } from './spaceMarks'
+import { dihedral3 } from './construct3d'
 import { ellipsePoint } from './svg'
 
 // Phase 10, Task 2 — angle arcs, right-angle marks and ticks on points in
@@ -344,6 +345,153 @@ describe('marks under the glass rule: decided whole, by their middle (M4)', () =
 
   it('renders byte-identically twice', () => {
     const spec = `${SOLID_CUBE}\nangle: A-B-G\nright-angle: A-B-F\ntick: A-G count: 3\nlabel: angle CBF`
+    expect(rendered(spec).svg).toBe(rendered(spec).svg)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Task 3 — the dihedral angle, drawn as its plane angle on the edge (M3)
+// ---------------------------------------------------------------------------
+
+describe("a dihedral mark is its plane angle at the edge's midpoint (M3)", () => {
+  const AIME = '@mode: figure\n@angle: degrees\nS = solid prism regular 6 side 12, height sqrt(108) vertices ABCDEFGHIJKL'
+  const pointsOf = (spec: string) => buildSolidFigure(parseSpec(spec).statements, value).points
+
+  // The construction segments of one statement, by which half-plane each
+  // lies in: data-object "<dihedral>:<end name>".
+  function pieces(svg: string, statement: number, object: string): { dashed: boolean }[] {
+    const out: { dashed: boolean }[] = []
+    for (const name of ['auxiliary', 'primary']) {
+      for (const line of elements(layer(svg, name), 'line', statement)) {
+        if (line.includes(`data-object="${object}"`)) out.push({ dashed: line.includes('stroke-dasharray') })
+      }
+    }
+    return out
+  }
+
+  // Corrected from the plan (0.3 |BF| on both): a segment is capped at its
+  // end point's distance from the edge, so the one toward A ends AT A.
+  it('draws two segments from the midpoint of BF toward A and G, capped at A, in the AIME prism', () => {
+    const points = pointsOf(AIME)
+    const [a, b, f, g] = ['A', 'B', 'F', 'G'].map((n) => points.get(n)!)
+    const m = { x: (b.x + f.x) / 2, y: (b.y + f.y) / 2, z: (b.z + f.z) / 2 }
+    // Hand values: BF is the hexagon's short diagonal, 12 sqrt3; A is 6 from
+    // it (12 cos 60) on the axis of symmetry through M, and G is sqrt(108)
+    // above A, so |G - M| = sqrt(36 + 108) = 12. Both offsets are already
+    // square to BF here.
+    const length = (p: Vec3, q: Vec3) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z)
+    expect(length(b, f)).toBeCloseTo(12 * Math.sqrt(3), 12)
+    expect(length(a, m)).toBeCloseTo(6, 12)
+    expect(length(g, m)).toBeCloseTo(12, 12)
+    // 0.3 |BF| = 3.6 sqrt3 = 6.24 is longer than |A - M| = 6: the segments
+    // are 6 long, so the first ends at A.
+    expect(0.3 * 12 * Math.sqrt(3)).toBeGreaterThan(6)
+    const ell = 6
+    const toward = (p: Vec3, d: number) => ({ x: m.x + (ell * (p.x - m.x)) / d, y: m.y + (ell * (p.y - m.y)) / d, z: m.z + (ell * (p.z - m.z)) / d })
+    const mark = dihedralMark(dihedral3(a, b, f, g, { from: 'A', a: 'B', b: 'F', to: 'G' }), length(b, f))
+    const want = [toward(a, 6), toward(g, 12)]
+    mark.ends.forEach((end, i) => {
+      expect(end.x).toBeCloseTo(want[i].x, 12)
+      expect(end.y).toBeCloseTo(want[i].y, 12)
+      expect(end.z).toBeCloseTo(want[i].z, 12)
+    })
+    // The arc between them: radius 0.2 x the segment, sweeping the 60.
+    expect(mark.arc.radius).toBeCloseTo(0.2 * ell, 12)
+    expect(mark.arc.sweep).toBeCloseTo(Math.PI / 3, 12)
+  })
+
+  it("points the cube's segments square to the edge, where the raw offsets are not", () => {
+    // Edge BC, M = (1, 1/2, 0). A - M = (-1, -1/2, 0) and G - M = (0, 1/2, 1)
+    // are not square to BC; their square parts are -x and +z, and the
+    // segments are 0.3 long.
+    const mark = dihedralMark(dihedral3(A, B, author(1, 1, 0), G, { from: 'A', a: 'B', b: 'C', to: 'G' }), 1)
+    const want = [author(0.7, 0.5, 0), author(1, 0.5, 0.3)]
+    mark.ends.forEach((end, i) => {
+      expect(end.x).toBeCloseTo(want[i].x, 14)
+      expect(end.y).toBeCloseTo(want[i].y, 14)
+      expect(end.z).toBeCloseTo(want[i].z, 14)
+    })
+    expect(mark.arc.sweep).toBeCloseTo(Math.PI / 2, 14)
+    expect(mark.arc.radius).toBeCloseTo(0.06, 14)
+  })
+
+  it('draws the AIME dihedral: both segments dashed, an arc, and the label 60', () => {
+    const result = rendered(`${AIME}\ndihedral: A-B-F-G\nlabel: dihedral A-B-F-G`)
+    expect(result.errors).toEqual([])
+    // The segment in face ABF lies in the base, which faces away; the one in
+    // plane GBF runs through the prism's inside. Both are hidden, and
+    // neither is split.
+    expect(pieces(result.svg, 1, 'A-BF-G:A')).toEqual([{ dashed: true }])
+    expect(pieces(result.svg, 1, 'A-BF-G:G')).toEqual([{ dashed: true }])
+    const arcs = [...elements(layer(result.svg, 'marks'), 'path', 1), ...elements(layer(result.svg, 'auxiliary'), 'path', 1)]
+    expect(arcs).toHaveLength(1)
+    expect(arcs[0]).toContain('data-object="A-BF-G"')
+    expect(arcs[0]).toMatch(/ A [-\d.]+ [-\d.]+ /)
+    expect(layer(result.svg, 'labels')).toContain('>60°</text>')
+  })
+
+  it("draws the cube's dihedral: the segment in the hidden base dashed, the one on the front face solid", () => {
+    const result = rendered(`@angle: degrees\n${SOLID_CUBE}\ndihedral: A-B-C-G\nlabel: dihedral A-B-C-G`)
+    expect(result.errors).toEqual([])
+    const statement = MARK + 1
+    expect(pieces(result.svg, statement, 'A-BC-G:A')).toEqual([{ dashed: true }])
+    expect(pieces(result.svg, statement, 'A-BC-G:G')).toEqual([{ dashed: false }])
+    expect(layer(result.svg, 'labels')).toContain('>90°</text>')
+  })
+
+  it('splits a construction segment exactly where a second solid starts to hide it', () => {
+    // A sphere of radius 0.05 in front of (1, 1/2, 0.25), the upper part of
+    // the segment on the face x = 1, which runs from (1, 1/2, 0) to
+    // (1, 1/2, 0.3). Its midpoint, at z = 0.15, is clear of the sphere, so a
+    // segment judged by its midpoint would be drawn solid whole.
+    const d = worldToAuthor(DEFAULT_CAMERA.direction)
+    const centre = { x: 1 + 2 * d.x, y: 0.5 + 2 * d.y, z: 0.25 + 2 * d.z }
+    const spec = [
+      '@angle: degrees',
+      SOLID_CUBE,
+      `O = (${centre.x}, ${centre.y}, ${centre.z})`,
+      'K = solid sphere center O radius 0.05',
+      'dihedral: A-B-C-G',
+    ].join('\n')
+    const scope = buildSolidFigure(parseSpec(spec).statements, value)
+    const ball = scope.solids.get('K')!
+    expect(hidesPoint(ball, author(1, 0.5, 0.25), DEFAULT_CAMERA)).toBe(true)
+    expect(hidesPoint(ball, author(1, 0.5, 0.15), DEFAULT_CAMERA)).toBe(false)
+    const result = rendered(spec)
+    expect(result.errors).toEqual([])
+    const drawn = pieces(result.svg, MARK + 3, 'A-BC-G:G')
+    expect(drawn.filter((p) => p.dashed)).toHaveLength(1)
+    expect(drawn.filter((p) => !p.dashed).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('refuses an edge of one point and an end on the edge line', () => {
+    expect(rendered(`${CUBE}\ndihedral: A-B-B-G`).errors.map((e) => e.message)).toEqual([expect.stringMatching(/B and B are the same point/)])
+    expect(rendered(`${CUBE}\nK = (2, 0, 0)\ndihedral: K-A-B-G`).errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/K lies on the line A-B/),
+    ])
+  })
+
+  it('refuses a dihedral whose half-planes make one plane: it has no plane angle to draw', () => {
+    // D = (0, 1, 0) and K = (0, -1, 0) lie on opposite sides of the edge
+    // A-B in one plane: 180.
+    const errors = rendered(`${CUBE}\nK = (0, -1, 0)\ndihedral: D-A-B-K`).errors.map((e) => e.message)
+    expect(errors).toEqual(['The half-planes of dihedral D-A-B-K lie in one plane (it measures 180°), so it has no plane angle to draw'])
+  })
+
+  it('refuses a dihedral on points in the plane', () => {
+    const errors = rendered('@mode: figure\nA = (0, 0)\nB = (1, 0)\nC = (0, 1)\nD = (1, 1)\ndihedral: C-A-B-D').errors.map((e) => e.message)
+    expect(errors).toEqual([expect.stringMatching(/dihedral: C-A-B-D.*points in space/)])
+  })
+
+  it('draws one mark, not two, for a "dihedral:" and its label', () => {
+    const svg = rendered(`${AIME}\ndihedral: A-B-F-G\nlabel: dihedral G-F-B-A`).svg
+    const arcs = [...layer(svg, 'marks').matchAll(/<path /g), ...layer(svg, 'auxiliary').matchAll(/<path [^>]*data-object="[AG]-BF-[GA]"/g)]
+    expect(arcs).toHaveLength(1)
+    expect(layer(svg, 'auxiliary').match(/data-object="[AG]-(BF|FB)-[GA]:/g)).toHaveLength(2)
+  })
+
+  it('renders byte-identically twice', () => {
+    const spec = `${AIME}\ndihedral: A-B-F-G\nlabel: dihedral A-B-F-G`
     expect(rendered(spec).svg).toBe(rendered(spec).svg)
   })
 })

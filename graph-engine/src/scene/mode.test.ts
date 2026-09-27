@@ -186,3 +186,11 @@ describe('a solid beside a plot (S5, deliberately)', () => {
     expect(mode('S = solid prism 8 by 5 by 6\ny = x^2')).toBe('figure')
   })
 })
+
+describe('a dihedral mark belongs to a solid figure (phase 10)', () => {
+  it('infers figure for points in space with a dihedral, which would otherwise infer space', () => {
+    const points = 'A = (0, 0, 0)\nB = (1, 0, 0)\nC = (0, 1, 0)\nD = (0, 0, 1)'
+    expect(mode(points)).toBe('graph')
+    expect(mode(`${points}\ndihedral: C-A-B-D`)).toBe('figure')
+  })
+})

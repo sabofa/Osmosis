@@ -708,6 +708,10 @@ export type StatementShape =
   | { kind: 'inscribedAngle'; circle: string; from: string; vertex: string; to: string }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
+  // "dihedral: C-A-B-D" (phase 10, M3) — the dihedral angle along the edge
+  // AB (the middle two names) between the half-planes ABC and ABD, drawn as
+  // its plane angle at the edge's midpoint. Only among points in space.
+  | { kind: 'dihedral'; from: string; edge: [string, string]; to: string }
   // "segment: A-B [dashed | plain]" — a segment between two *named* points,
   // the sibling of tick:/angle:/right-angle:. Distinct from the coordinate
   // form ("(x1,y1) -- (x2,y2)"), which cannot reference a constructed point.
