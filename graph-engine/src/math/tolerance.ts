@@ -11,14 +11,15 @@ export const SINGULAR_REL = 1e-12
 export const JACOBI_REL = 1e-15
 
 // newton: converged when the largest residual component is at most this
-// fraction of the larger of the seed's residual and ||J|| (1 + ||x||) — a
-// relative test, so scaling the equations changes nothing...
+// fraction of ||J|| (1 + ||x||) — relative, so scaling the equations changes
+// nothing — or, at a multiple root (vanishing Jacobian), at most this fraction
+// of the seed's residual while the full Newton step is below
+// NEWTON_STEP_SQRT_EPS (1 + ||x||).
 export const NEWTON_RESIDUAL = 1e-12
-// ...or when the step is below this fraction of (1 + |x|) AND the residual is
-// at most NEWTON_RESIDUAL_LOOSE of the same scale (a slowly converging
-// multiple root stalls on its step before its residual reaches
-// NEWTON_RESIDUAL).
-export const NEWTON_STEP_REL = 1e-14
+// sqrt of the double's epsilon (2^-26): a step this small relative to x is
+// lost in rounding, so there is nowhere left to go.
+export const NEWTON_STEP_SQRT_EPS = Math.sqrt(Number.EPSILON)
+// The same tests after a failed line search (a stall), a little looser.
 export const NEWTON_RESIDUAL_LOOSE = 1e-9
 // The damped step is halved at most this many times before Newton gives up.
 export const NEWTON_MAX_HALVINGS = 30

@@ -9,7 +9,7 @@ import {
   NEWTON_MAX_ITERATIONS,
   NEWTON_RESIDUAL,
   NEWTON_RESIDUAL_LOOSE,
-  NEWTON_STEP_REL,
+  NEWTON_STEP_SQRT_EPS,
   ROOT_DEDUP_REL,
 } from './tolerance'
 
@@ -74,24 +74,31 @@ function rowNorm(j: readonly (readonly number[])[]): number {
 // residual's sum of squares decreases (Armijo, c = 1e-4).
 //
 // Convergence is relative, never an absolute residual, so it does not depend
-// on the equations' scale: the residual must be at most `tol` times the larger
-// of the seed's residual (a reduction by 1e-12; what a multiple root, whose
-// Jacobian vanishes, can reach) and ||J|| (1 + ||x||) (the size of the terms
-// F is made of, which bounds its rounding floor at a simple root). Scaling F
-// by any constant leaves the answer unchanged.
+// on the equations' scale (scaling F by a constant changes nothing):
+// - primary: the residual is at most tol x ||J|| (1 + ||x||), the size of the
+//   terms F is made of, which bounds its rounding floor at a simple root;
+// - or, for a multiple root, whose Jacobian vanishes: the residual is at most
+//   tol x the SEED's residual AND the full Newton step is below
+//   sqrt(eps) (1 + ||x||). The step condition is what keeps a seed with a huge
+//   residual from passing a large one (grad e^(x^2+y^2) far out, x e^x at 30,
+//   x^2 + 1, which has no root).
 export function newton(F: SystemFn, J: JacobianFn, x0: ArrayLike<number>, options: NewtonOptions = {}): NewtonResult {
   const maxIterations = options.maxIterations ?? NEWTON_MAX_ITERATIONS
   let x: Float64Array = Float64Array.from(x0)
   let f = Array.from(F(x))
   let phi = sumSquares(f)
   const seedScale = maxAbs(f)
-  const small = (residual: number[], jacobian: readonly (readonly number[])[], at: Float64Array, tol: number) =>
-    maxAbs(residual) <= tol * Math.max(seedScale, rowNorm(jacobian) * (1 + maxAbs(at)))
+  const converged = (residual: number[], jacobian: readonly (readonly number[])[], step: number[] | null, at: Float64Array, tol: number) => {
+    const r = maxAbs(residual)
+    const size = 1 + maxAbs(at)
+    if (r <= tol * rowNorm(jacobian) * size) return true
+    return step !== null && maxAbs(step) <= NEWTON_STEP_SQRT_EPS * size && r <= tol * seedScale
+  }
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (!Number.isFinite(phi)) return { x, converged: false, iterations: iteration }
     const jacobian = J(x)
     const step = newtonStep(jacobian, f)
-    if (small(f, jacobian, x, NEWTON_RESIDUAL)) {
+    if (converged(f, jacobian, step, x, NEWTON_RESIDUAL)) {
       // One full polishing step, kept if it does not raise the residual: a
       // simple root then lands to rounding, not merely within the tolerance.
       if (step) {
@@ -115,17 +122,16 @@ export function newton(F: SystemFn, J: JacobianFn, x0: ArrayLike<number>, option
       }
       lambda /= 2
     }
-    if (!accepted) return { x, converged: small(f, jacobian, x, NEWTON_RESIDUAL_LOOSE), iterations: iteration + 1 }
-
-    const moved = lambda * maxAbs(step)
+    // No descent along the Newton direction: a stall, which is a root only
+    // by the same (looser) test.
+    if (!accepted) return { x, converged: converged(f, jacobian, step, x, NEWTON_RESIDUAL_LOOSE), iterations: iteration + 1 }
     x = accepted.x
     f = accepted.f
     phi = accepted.phi
-    if (moved <= NEWTON_STEP_REL * (1 + maxAbs(x)) && small(f, J(x), x, NEWTON_RESIDUAL_LOOSE)) {
-      return { x, converged: true, iterations: iteration + 1 }
-    }
   }
-  return { x, converged: Number.isFinite(phi) && small(f, J(x), x, NEWTON_RESIDUAL), iterations: maxIterations }
+  if (!Number.isFinite(phi)) return { x, converged: false, iterations: maxIterations }
+  const jacobian = J(x)
+  return { x, converged: converged(f, jacobian, newtonStep(jacobian, f), x, NEWTON_RESIDUAL), iterations: maxIterations }
 }
 
 function lexicographic(a: Float64Array, b: Float64Array): number {

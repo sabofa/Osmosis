@@ -168,3 +168,48 @@ describe('Newton convergence is scale-aware (fix round 1, M7)', () => {
     expect(Math.abs(r.x[0])).toBeLessThan(1e-4)
   })
 })
+
+describe('Newton never declares a non-root converged (fix round 2)', () => {
+  // grad exp(x^2 + y^2) = 2 e^(x^2+y^2) (x, y): its one root is the origin.
+  const E = (v: Float64Array) => Math.exp(v[0] * v[0] + v[1] * v[1])
+  const F = (v: Float64Array) => [2 * v[0] * E(v), 2 * v[1] * E(v)]
+  const J = (v: Float64Array) => {
+    const e = E(v)
+    return [
+      [e * (2 + 4 * v[0] * v[0]), 4 * v[0] * v[1] * e],
+      [4 * v[0] * v[1] * e, e * (2 + 4 * v[1] * v[1])],
+    ]
+  }
+
+  it('grad exp(x^2 + y^2) from (4.5, 4.5) reaches the origin, not (2.49, 2.49)', () => {
+    const r = newton(F, J, [4.5, 4.5])
+    expect(r.converged).toBe(true)
+    expect(Math.abs(r.x[0])).toBeLessThan(1e-9)
+    expect(Math.abs(r.x[1])).toBeLessThan(1e-9)
+  })
+
+  it('seeded roots of the same on [-5, 5]^2 with 6 per axis: only the origin', () => {
+    const roots = seededRoots(F, J, { min: [-5, -5], max: [5, 5] }, 6)
+    expect(roots).toHaveLength(1)
+    expect(Math.abs(roots[0][0]) + Math.abs(roots[0][1])).toBeLessThan(1e-9)
+  })
+
+  it('x^2 + 1 from 3e6 has no real root and is not declared converged', () => {
+    const r = newton(
+      (v) => [v[0] * v[0] + 1],
+      (v) => [[2 * v[0]]],
+      [3e6]
+    )
+    expect(r.converged).toBe(false)
+  })
+
+  it('x e^x from 30 converges to 0', () => {
+    const r = newton(
+      (v) => [v[0] * Math.exp(v[0])],
+      (v) => [[(1 + v[0]) * Math.exp(v[0])]],
+      [30]
+    )
+    expect(r.converged).toBe(true)
+    expect(Math.abs(r.x[0])).toBeLessThan(1e-9)
+  })
+})
