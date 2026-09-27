@@ -216,7 +216,7 @@ describe('points', () => {
 })
 
 describe('the frame, drawn', () => {
-  it('draws every box-frame line through the line pipeline, before any mark', () => {
+  it('draws every box-frame line through the line pipeline, after the opaque meshes and before any mark', () => {
     const { fake, backend } = setup()
     const frame = boxFrame(WORLD, CAMERA, AXES)
     const mesh = meshMark([0, 0, 0, 1, 0, 0, 1, 1, 0], [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2])
@@ -230,9 +230,10 @@ describe('the frame, drawn', () => {
     backend.setFrame(frame, LIGHT)
     backend.draw(CAMERA, 1)
     const order = fake.draws.map((d) => pipeline(fake, d))
-    // Grid, walls, ticks (core pass, then fringe pass), then the mesh, then the curve.
-    expect(order).toEqual(['line', 'line', 'line', 'line', 'line', 'line', 'mesh', 'line', 'line'])
-    const frameInstances = fake.draws.slice(0, 3).reduce((n, d) => n + d.instances, 0)
+    // The mesh, then grid, walls, ticks (core pass, then fringe pass), then
+    // the curve: the frame follows the hidden-part pass (frameLoop.ts).
+    expect(order).toEqual(['mesh', 'line', 'line', 'line', 'line', 'line', 'line', 'line', 'line'])
+    const frameInstances = fake.draws.slice(1, 4).reduce((n, d) => n + d.instances, 0)
     expect(frameInstances).toBe(frame.lines.length)
     expect(frame.lines.some((l) => l.role === 'grid')).toBe(true)
   })

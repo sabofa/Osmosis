@@ -175,16 +175,18 @@ describe('GlBackend: box clipping and the depth cue', () => {
     expect(new Set(mins.map((u) => u.program))).toEqual(new Set(['mesh', 'line', 'point']))
     for (const u of mins) expect(u.values).toEqual([-2, -2, -5])
     for (const u of maxs) expect(u.values).toEqual([2, 2, 5])
-    // The frame's lines draw first, unclipped; the marks' draws clip.
+    // The frame's lines draw unclipped (after the mesh, before the marks);
+    // the marks' draws clip.
     const clip = uniformValues(fake, 'u_clip')
-    expect(clip[0]).toEqual({ program: 'line', values: [0] })
+    expect(clip.filter((u) => u.program === 'line').map((u) => u.values[0])).toEqual([0, 0, 1, 1])
     expect(clip.filter((u) => u.program === 'mesh').map((u) => u.values[0])).toEqual([1])
     expect(clip.filter((u) => u.program === 'point').every((u) => u.values[0] === 1)).toBe(true)
   })
 
   it('cues marks at 0.35 by default and the frame never; @depthcue: off sets 0', () => {
     const on = uniformValues(drawn(), 'u_cue')
-    expect(on[0]).toEqual({ program: 'line', values: [0] })
+    // The frame's two line passes, uncued; the curve's two, cued.
+    expect(on.filter((u) => u.program === 'line').map((u) => u.values[0])).toEqual([0, 0, 0.35, 0.35])
     expect(on.filter((u) => u.program === 'mesh').map((u) => u.values[0])).toEqual([0.35])
     const off = uniformValues(drawn({ depthcue: false }), 'u_cue')
     expect(off.some((u) => u.program === 'mesh')).toBe(true)

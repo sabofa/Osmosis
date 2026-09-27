@@ -72,25 +72,26 @@ function blits(fake: FakeGl): [string, string][] {
   return out
 }
 
-// The frame as a sequence of passes, consecutive repeats folded.
+// The frame as a sequence of passes, consecutive repeats folded. The frame
+// and the marks share pipelines: the frame draws with u_clip 0 (never
+// clipped), the marks with 1.
 function timeline(fake: FakeGl): string[] {
   const out: string[] = []
   let drawn = 0
   let msaa: FakeHandle | null | undefined
-  let meshSeen = false
+  let clip: unknown = null
   for (const c of fake.calls) {
     let label: string | null = null
+    if ((c.args[0] as { uniform?: string } | null)?.uniform === 'u_clip') clip = c.args[1]
     if (c.fn === 'blitFramebuffer') label = ((c.args[8] as number) & GL_CONSTANTS.DEPTH_BUFFER_BIT) !== 0 ? 'resolve' : 'blit'
     else if (DRAWS.has(c.fn)) {
       const d = fake.draws[drawn++]
       const p = pipeline(fake, d)
       if (msaa === undefined) msaa = d.framebuffer
       if (p === 'composite') label = 'composite'
-      else if (p === 'mesh') {
-        meshSeen = true
-        label = d.framebuffer !== msaa ? 'oit' : d.polygonOffset ? 'opaque' : 'sorted'
-      } else if (d.depthFunc === GL_CONSTANTS.GREATER) label = 'hidden'
-      else label = meshSeen ? 'marks' : 'frame'
+      else if (p === 'mesh') label = d.framebuffer !== msaa ? 'oit' : d.polygonOffset ? 'opaque' : 'sorted'
+      else if (d.depthFunc === GL_CONSTANTS.GREATER) label = 'hidden'
+      else label = clip === 0 ? 'frame' : 'marks'
     }
     if (label && out[out.length - 1] !== label) out.push(label)
   }
@@ -98,11 +99,13 @@ function timeline(fake: FakeGl): string[] {
 }
 
 describe('the frame loop, with EXT_color_buffer_float', () => {
-  it('runs frame -> opaque meshes -> hidden parts -> lines, points, arrows -> resolve -> OIT -> composite', () => {
+  it('runs opaque meshes -> hidden parts -> frame -> lines, points, arrows -> resolve -> OIT -> composite', () => {
+    // The hidden pass precedes the frame, so a curve behind an axis of the
+    // axes frame gets no dashed stub: it tests against the surfaces only.
     const { fake, backend, onError } = setup()
     drawAll(backend)
     expect(onError).not.toHaveBeenCalled()
-    expect(timeline(fake)).toEqual(['frame', 'opaque', 'hidden', 'marks', 'resolve', 'oit', 'composite'])
+    expect(timeline(fake)).toEqual(['opaque', 'hidden', 'frame', 'marks', 'resolve', 'oit', 'composite'])
   })
 
   it('draws into the multisampled target, then composites into the canvas', () => {
@@ -197,16 +200,49 @@ describe('the frame loop, with EXT_color_buffer_float', () => {
     }
   })
 
-  it('has its targets again after a context restore', () => {
+  it('has its targets again after a context restore, asking for EXT_color_buffer_float again', () => {
     const { fake, canvas, backend } = setup()
     drawAll(backend)
     canvas.lose()
+    const asked = fake.extensionsQueried.length
     canvas.restore()
+    // A restored context has no extension on until it is asked for again;
+    // the fake turns them off, as a real one does.
+    expect(fake.extensionsQueried.slice(asked)).toContain('EXT_color_buffer_float')
     expect(fake.live.framebuffer.size).toBe(0)
     backend.draw(CAMERA, 1)
     expect(fake.live.framebuffer.size).toBe(3)
     expect(fake.live.renderbuffer.size).toBe(2)
     expect(timeline(fake).slice(-3)).toEqual(['resolve', 'oit', 'composite'])
+  })
+
+  it('keeps the MSAA target when only the OIT target cannot be made, and draws translucent meshes sorted', () => {
+    const { fake, backend, onError } = setup({ floatIncomplete: true })
+    drawAll(backend)
+    expect(onError).not.toHaveBeenCalled()
+    expect(timeline(fake)).toEqual(['opaque', 'hidden', 'frame', 'marks', 'sorted', 'blit'])
+    // MSAA and resolve live; the OIT framebuffer and its two float textures
+    // were made, found incomplete and deleted.
+    expect(fake.live.framebuffer.size).toBe(2)
+    expect(fake.live.renderbuffer.size).toBe(2)
+    expect(fake.created.framebuffer - fake.live.framebuffer.size).toBe(1)
+    // Not retried every frame.
+    const made = fake.created.framebuffer
+    backend.draw(CAMERA, 1)
+    expect(fake.created.framebuffer).toBe(made)
+  })
+
+  it('makes the OIT target only once a translucent mesh needs it', () => {
+    const { fake, backend } = setup()
+    const floats = () => fake.calls.filter((c) => c.fn === 'texStorage2D' && (c.args[2] === GL_CONSTANTS.RGBA16F || c.args[2] === GL_CONSTANTS.R16F))
+    backend.setScene(scene([square(0, 1)]), WORLD, LIGHT)
+    backend.draw(CAMERA, 1)
+    expect(floats()).toHaveLength(0)
+    expect(fake.live.framebuffer.size).toBe(2)
+    backend.setScene(scene([square(0, 1), square(0.5, 0.5)]), WORLD, LIGHT)
+    backend.draw(CAMERA, 1)
+    expect(floats()).toHaveLength(2)
+    expect(fake.live.framebuffer.size).toBe(3)
   })
 
   it('takes MAX_SAMPLES when it is under 4', () => {
@@ -220,7 +256,7 @@ describe('the frame loop, without EXT_color_buffer_float', () => {
   it('makes no float targets, blends translucent meshes sorted into the MSAA target, then resolves and blits', () => {
     const { fake, backend } = setup({ colorBufferFloat: false })
     drawAll(backend)
-    expect(timeline(fake)).toEqual(['frame', 'opaque', 'hidden', 'marks', 'sorted', 'blit'])
+    expect(timeline(fake)).toEqual(['opaque', 'hidden', 'frame', 'marks', 'sorted', 'blit'])
     // The multisample resolve goes to the RGBA8 resolve target (a resolve
     // blit needs identical formats, and the canvas is RGB8); only then a
     // single-sample blit to the canvas.
@@ -246,6 +282,29 @@ describe('the frame loop, when its targets cannot be made', () => {
     expect(fake.draws.every((d) => d.framebuffer === null)).toBe(true)
     expect(fake.live.framebuffer.size).toBe(0)
     expect(fake.live.renderbuffer.size).toBe(0)
-    expect(timeline(fake)).toEqual(['frame', 'opaque', 'hidden', 'marks', 'sorted'])
+    expect(timeline(fake)).toEqual(['opaque', 'hidden', 'frame', 'marks', 'sorted'])
   })
 })
+
+describe('the fake GL context, as the restore tests rely on it', () => {
+  it('turns extensions off on a loss: a float framebuffer is incomplete until the extension is asked for again', () => {
+    const fake = createFakeGl()
+    const gl = fake.gl
+    const floatFramebuffer = () => {
+      const t = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, 4, 4)
+      const f = gl.createFramebuffer()
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0)
+      return gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+    }
+    expect(floatFramebuffer()).toBe(0)
+    gl.getExtension('EXT_color_buffer_float')
+    expect(floatFramebuffer()).toBe(GL_CONSTANTS.FRAMEBUFFER_COMPLETE)
+    fake.lose()
+    fake.restore()
+    expect(floatFramebuffer()).toBe(0)
+  })
+})
+

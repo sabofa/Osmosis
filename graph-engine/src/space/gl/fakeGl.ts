@@ -10,8 +10,11 @@
 // - useProgram and every draw call are logged in order, with the program in
 //   use and the framebuffer bound for drawing, so a test can assert draw
 //   order and which target each draw went to.
-// - getParameter(MAX_SAMPLES) answers `maxSamples` (default 4), and every
-//   framebuffer is complete.
+// - getParameter(MAX_SAMPLES) answers `maxSamples` (default 4).
+// - Extensions are enabled by getExtension, per context, as on a real one: a
+//   loss (and so a restore) turns them all off again. A framebuffer with a
+//   float colour attachment (RGBA16F, R16F) is complete only while
+//   EXT_color_buffer_float is enabled; every other framebuffer is complete.
 // - lose()/restore() simulate context loss: while lost every call is recorded
 //   as an error, create* return null, and nothing draws. A loss frees every
 //   live resource, as a real loss does.
@@ -128,6 +131,8 @@ export interface FakeGlOptions {
   maxSamples?: number
   // Make checkFramebufferStatus report every framebuffer incomplete.
   incompleteFramebuffers?: boolean
+  // Report float colour attachments incomplete even with the extension on.
+  floatIncomplete?: boolean
 }
 
 export interface FakeGl {
@@ -179,6 +184,14 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   let blend = false
   let cullEnabled = false
   let cullMode: number = GL_CONSTANTS.BACK
+  // Extensions enabled on this context by getExtension.
+  const enabled = new Set<string>()
+  // The internal format of each texture given storage, and each
+  // framebuffer's attachments (by attachment point).
+  const textureFormat = new Map<number, number>()
+  const attachments = new Map<number, Map<number, FakeHandle | null>>()
+  let boundTexture: FakeHandle | null = null
+  let boundFramebuffer: FakeHandle | null = null
   let depthFunc: number = GL_CONSTANTS.LESS
   let depthTest = false
   let polygonOffset = false
@@ -210,7 +223,11 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     isContextLost: () => lost,
     getExtension: (name: string) => {
       extensionsQueried.push(name)
-      if (name === 'EXT_color_buffer_float') return options.colorBufferFloat === false ? null : {}
+      if (name === 'EXT_color_buffer_float') {
+        if (options.colorBufferFloat === false) return null
+        enabled.add(name)
+        return {}
+      }
       if (name === 'WEBGL_lose_context') {
         return {
           loseContext: () => {
@@ -277,9 +294,30 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     },
     bindFramebuffer: (target: number, fb: FakeHandle | null) => {
       if (target === GL_CONSTANTS.FRAMEBUFFER || target === GL_CONSTANTS.DRAW_FRAMEBUFFER) drawFramebuffer = fb
+      if (target === GL_CONSTANTS.FRAMEBUFFER) boundFramebuffer = fb
+    },
+    bindTexture: (_target: number, t: FakeHandle | null) => {
+      boundTexture = t
+    },
+    texStorage2D: (_target: number, _levels: number, format: number) => {
+      if (boundTexture) textureFormat.set(boundTexture.id, format)
+    },
+    framebufferTexture2D: (_target: number, attachment: number, _textarget: number, texture: FakeHandle | null) => {
+      if (!boundFramebuffer) return
+      const map = attachments.get(boundFramebuffer.id) ?? new Map<number, FakeHandle | null>()
+      map.set(attachment, texture)
+      attachments.set(boundFramebuffer.id, map)
     },
     getParameter: (name: number) => (name === GL_CONSTANTS.MAX_SAMPLES ? (options.maxSamples ?? 4) : null),
-    checkFramebufferStatus: () => (options.incompleteFramebuffers ? 0 : GL_CONSTANTS.FRAMEBUFFER_COMPLETE),
+    checkFramebufferStatus: () => {
+      if (options.incompleteFramebuffers) return 0
+      const float = [...(boundFramebuffer ? (attachments.get(boundFramebuffer.id)?.values() ?? []) : [])].some((t) => {
+        const format = t ? textureFormat.get(t.id) : undefined
+        return format === GL_CONSTANTS.RGBA16F || format === GL_CONSTANTS.R16F
+      })
+      if (float && (options.floatIncomplete || !enabled.has('EXT_color_buffer_float'))) return 0
+      return GL_CONSTANTS.FRAMEBUFFER_COMPLETE
+    },
     cullFace: (mode: number) => {
       cullMode = mode
     },
@@ -389,6 +427,10 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   // A loss frees every live resource, as a real one does.
   function loseAll() {
     lost = true
+    // A lost (and so a restored) context has no extension enabled.
+    enabled.clear()
+    boundTexture = null
+    boundFramebuffer = null
     for (const k of KINDS) live[k].clear()
     program = null
     vao = null

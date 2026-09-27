@@ -21,7 +21,7 @@ import type { ArrowMark, LineMark, Mark, SpaceScene } from '../scene/types'
 import { resolveSpaceColor, type Rgb, type SpaceColors } from '../theme'
 import { ARROWHEAD_PROGRAM, drawArrowHeads, uploadArrows, type ArrowGpu, type ArrowLook } from './arrowPipeline'
 import { syncByIdentity, type GpuResource } from './buffers'
-import { createContext, watchContext, type GlCapabilities } from './context'
+import { createContext, queryCapabilities, watchContext, type GlCapabilities } from './context'
 import {
   cameraKey,
   createSharedQuads,
@@ -54,7 +54,7 @@ import {
 } from './meshPipeline'
 import { drawPoints, POINT_PROGRAM, uploadPoints, type PointGpu } from './pointPipeline'
 import { ProgramCache, type ProgramInfo } from './program'
-import { createTargets, type Targets } from './targets'
+import { attachOit, createTargets, type Targets } from './targets'
 
 export interface GlBackendOptions {
   onError?: (message: string) => void
@@ -116,7 +116,9 @@ function cached(entry: MarkGpu | null): CachedMark | null {
 
 export class GlBackend {
   readonly available: boolean
-  readonly capabilities: GlCapabilities | null
+  // Queried when the context is made and again after every restore: a
+  // restored context has no extension enabled until it is asked for again.
+  private caps: GlCapabilities | null
   private readonly canvas: HTMLCanvasElement
   private readonly options: GlBackendOptions
   private readonly gl: WebGL2RenderingContext | null
@@ -141,6 +143,9 @@ export class GlBackend {
   // (null there means they could not be made at that size).
   private targets: Targets | null = null
   private targetsKey = ''
+  // The OIT target could not be made for these targets: translucent meshes
+  // draw sorted until the targets are remade.
+  private oitFailed = false
   private failed = false
   private lost = false
   private disposed = false
@@ -152,14 +157,14 @@ export class GlBackend {
     if ('error' in context) {
       this.gl = null
       this.available = false
-      this.capabilities = null
+      this.caps = null
       this.unwatch = null
       this.report(context.error)
       return
     }
     this.gl = context.gl
     this.available = true
-    this.capabilities = context.capabilities
+    this.caps = context.capabilities
     this.unwatch = watchContext(
       canvas,
       () => this.handleLost(),
@@ -271,6 +276,11 @@ export class GlBackend {
       }
       const frameGpu = this.frameGpu
       const translucent = meshes.filter(isTranslucent)
+      // The OIT target, made only once a translucent mesh needs it.
+      const targets = this.targets
+      if (translucent.length > 0 && targets && !targets.oit && !this.oitFailed && this.caps?.colorBufferFloat) {
+        this.oitFailed = !attachOit(gl, targets)
+      }
       const hiddenLines = lines.filter((l) => l.look.hidden)
       const hiddenArrows = arrows.filter((a) => a.look.hidden)
 
@@ -359,8 +369,13 @@ export class GlBackend {
     const key = `${width}x${height}`
     if (key === this.targetsKey) return
     this.targets?.destroy(gl)
-    this.targets = createTargets(gl, width, height, this.capabilities?.colorBufferFloat ?? false)
+    this.targets = createTargets(gl, width, height)
     this.targetsKey = key
+    this.oitFailed = false
+  }
+
+  get capabilities(): GlCapabilities | null {
+    return this.caps
   }
 
   private program(spec: { name: string; vertex: string; fragment: string }): ProgramInfo | null {
@@ -518,8 +533,10 @@ export class GlBackend {
   }
 
   private handleRestored(): void {
-    if (this.disposed) return
+    if (this.disposed || !this.gl) return
     this.lost = false
+    // Extensions are off on a restored context until asked for again.
+    this.caps = queryCapabilities(this.gl)
     this.prepare()
     this.upload()
     this.uploadOverlay()

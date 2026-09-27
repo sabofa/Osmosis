@@ -1,16 +1,17 @@
 // The frame loop (plan E4; spec SP4 "Frame loop"). One frame, in order:
 //
 // 1. Into the multisampled target (targets.ts), cleared to the background.
-// 2. The frame.
-// 3. Opaque meshes, pushed back by polygon offset, so a curve or point
+// 2. Opaque meshes, pushed back by polygon offset, so a curve or point
 //    lying on a surface wins the depth test with no bias of its own. (A
 //    fixed NDC bias on lines, S2's, is below what a depth buffer resolves
 //    once the view is face-on.)
-// 4. The hidden-part pass: lines and arrows marked hidden: 'dashed', drawn
+// 3. The hidden-part pass: lines and arrows marked hidden: 'dashed', drawn
 //    only where they are behind something (depthFunc GREATER), without
-//    writing depth, faint and dashed. It runs before any mark has written
-//    depth, so it tests against the frame and the opaque surfaces only, and
-//    against the same polygon offset: a curve on a surface is not hidden by it.
+//    writing depth, faint and dashed. It runs before the frame or any mark
+//    has written depth, so it tests against the opaque surfaces only, and
+//    against the same polygon offset: a curve on a surface is not hidden by
+//    it, and a curve behind an axis of the axes frame gets no dashed stub.
+// 4. The frame.
 // 5. Lines, points and arrows.
 // 6. Translucent meshes:
 //    - with EXT_color_buffer_float, by weighted blended OIT: the MSAA colour
@@ -113,8 +114,6 @@ export function runFrameLoop(gl: WebGL2RenderingContext, input: FrameLoopInput, 
   gl.disable(gl.BLEND)
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-  passes.frame()
-
   gl.enable(gl.POLYGON_OFFSET_FILL)
   gl.polygonOffset(MESH_POLYGON_OFFSET.factor, MESH_POLYGON_OFFSET.units)
   passes.opaque()
@@ -128,6 +127,7 @@ export function runFrameLoop(gl: WebGL2RenderingContext, input: FrameLoopInput, 
   gl.depthMask(true)
   gl.depthFunc(gl.LEQUAL)
 
+  passes.frame()
   passes.marks()
 
   const oit = targets?.oit ?? null
