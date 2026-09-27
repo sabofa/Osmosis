@@ -65,10 +65,45 @@ describe('critical: one point each', () => {
     expect(scene.labels.map((l) => l.text)).toEqual(['? ≈ (0, 0), f ≈ 0: the second-derivative test is inconclusive'])
   })
 
+  it('(x - 0.3)^4 + (y + 0.2)^4, where the root is not a double: still one ?', () => {
+    // Newton lands within rounding of (0.3, -0.2) (at 0.30000000000000004,
+    // -0.19999999999999982), where the Hessian 12 diag((x - 0.3)^2,
+    // (y + 0.2)^2) is about 1e-31 rather than 0: only the eigenvalue
+    // tolerance calls it degenerate. (x^4 + y^4 lands on 0 exactly, where the
+    // Hessian is 0 and no tolerance matters.)
+    const scene = sceneOf('critical: (x - 0.3)^4 + (y + 0.2)^4')
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.degenerate'])
+    expect(vertices(pointsOf(scene, 's1.degenerate').positions)).toHaveLength(1)
+    expect(scene.labels.map((l) => l.text)).toEqual(['? ≈ (0.3, −0.2), f ≈ 0: the second-derivative test is inconclusive'])
+  })
+
   it('xy has a saddle at the origin', () => {
     const scene = sceneOf('critical: x*y')
     expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.saddle'])
     expectClose(Array.from(pointsOf(scene, 's1.saddle').positions), [0, 0, 0], 1e-12)
+  })
+})
+
+describe('critical: degenerate points off the axes (the Hessian singular along a slanted direction)', () => {
+  it('(x - y)^2 + x^4 has exactly one ?, at the origin — not five mins', () => {
+    const scene = sceneOf('critical: (x - y)^2 + x^4')
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.degenerate'])
+    expect(vertices(pointsOf(scene, 's1.degenerate').positions)).toHaveLength(1)
+    expect(scene.labels.map((l) => l.text)).toEqual(['? ≈ (0, 0), f ≈ 0: the second-derivative test is inconclusive'])
+  })
+
+  it('(x - y)^4 + (x + y)^2 has exactly one ?, not ten mins', () => {
+    const scene = sceneOf('critical: (x - y)^4 + (x + y)^2')
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.degenerate'])
+    expect(vertices(pointsOf(scene, 's1.degenerate').positions)).toHaveLength(1)
+  })
+
+  it('(x + y - 0.3)^3 + (x - y + 0.1)^2 is ? at (0.1, 0.2), not a saddle', () => {
+    // u = x + y - 0.3, v = x - y + 0.1: f = u^3 + v^2 is critical at u = v = 0,
+    // where its Hessian diag(6u, 2) is singular.
+    const scene = sceneOf('critical: (x + y - 0.3)^3 + (x - y + 0.1)^2')
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1.degenerate'])
+    expect(scene.labels.map((l) => l.text)).toEqual(['? ≈ (0.1, 0.2), f ≈ 0: the second-derivative test is inconclusive'])
   })
 })
 
