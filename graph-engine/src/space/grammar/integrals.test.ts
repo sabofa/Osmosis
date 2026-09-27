@@ -100,3 +100,28 @@ describe('S5 grammar — keyword ownership', () => {
     }
   })
 })
+
+describe('S5 grammar — volume: under and between', () => {
+  it('under f over a region', () => {
+    expect(form('volume: under 4 - x^2 - y^2 over r in [0, 2], theta in [0, 2*pi]')).toMatchObject({
+      form: 'volume',
+      solid: { kind: 'between', top: { expr: p('4 - x^2 - y^2'), text: '4 - x^2 - y^2' }, bottom: null, region: { kind: 'iterated', coords: 'polar' } },
+    })
+  })
+
+  it('between g and f: g is the bottom, f the top', () => {
+    expect(form('volume: between x^2 + y^2 and 2 over x in [-1, 1], y in [-1, 1]')).toMatchObject({
+      solid: { kind: 'between', bottom: { text: 'x^2 + y^2' }, top: { text: '2' }, region: { kind: 'iterated' } },
+    })
+  })
+
+  it('over a named region, or an inequality', () => {
+    expect(form('volume: under f over R opacity: 0.3')).toMatchObject({ solid: { region: { kind: 'named', name: 'R' } }, style: { opacity: 0.3 } })
+    expect(form('volume: under 1 over x^2 + y^2 <= 1')).toMatchObject({ solid: { region: { kind: 'inequality' } } })
+  })
+
+  it('refuses a volume with no region', () => {
+    expect(() => form('volume: under x*y')).toThrow(/volume: under f over R/)
+    expect(() => form('volume: between x and y')).toThrow(/between g and f over R/)
+  })
+})
