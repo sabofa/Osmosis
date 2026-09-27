@@ -811,9 +811,17 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    polar grammar claims any `r = <expr>`. Any construction bound to a name the
    plotting grammar reserves is silently misread — no error, wrong figure.
    Pre-existing; the grammar should disambiguate or reject.
-4. **Scientific notation fails silently.** `y = 1e6 * x` lexes `1e6` as
-   `1 * e6` with `e6` unbound, producing **no curve and no error**. Pre-existing,
-   and it will bite quant work.
+4. ~~**Scientific notation fails silently.**~~ **Closed 2026-09-27** by the
+   space integration pass (Task 3, `fix(graph-engine): the tokenizer reads
+   scientific notation; …`). `y = 1e6 * x` used to lex `1e6` as `1 * e6` with
+   `e6` unbound, producing no curve and no error. The rule, agreed with the
+   solid-figure side: a lowercase `e` is an exponent only when it directly
+   follows a numeral and is directly followed by an optional sign and a digit
+   (`1e-12`, `2e3`, `1.5e+6`); an uppercase `E` never is (`2E3` is 2 times
+   `E3`). `2e`, `3e x`, `2e^x`, `2e-x` and `e^(-x)` keep the constant e. The
+   byte-identity sweep over every example, every test literal and every
+   figure example under every `@view` changed only test titles that mention
+   such numbers.
 5. **The `Vector` example now infers figure mode**, so it draws with no axes —
    arguably wrong, since a vector's meaning is its coordinates. A
    classification question about whether `vector:` is plot or figure content.

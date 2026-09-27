@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { parseExprString } from './parseExpr'
 import { parseSpec } from './parseSpec'
 
 describe('parseSpec', () => {
@@ -99,5 +100,16 @@ describe('the last @angle wins for every directive, wherever it is (fix round 2,
     expect(result.config.angle).toBe('degrees')
     expect(result.config.bindings[0].value).toBeCloseTo(0.5, 15)
     expect(result.config.space.bounds.x).toEqual({ min: 0, max: 2 })
+  })
+})
+
+// Handoff open item 4: "y = 1e6 * x" lexed as 1 * e6 with e6 unbound, and
+// drew no curve with no error. The tokenizer now reads the exponent (J6).
+describe('scientific notation in a spec (integration J6)', () => {
+  it('y = 1e6 * x is the line of slope 1000000', () => {
+    const result = parseSpec('y = 1e6 * x')
+    expect(result.errors).toEqual([])
+    expect(result.statements).toHaveLength(1)
+    expect(result.statements[0]).toMatchObject({ kind: 'explicit', independent: 'x', body: parseExprString('1000000 * x') })
   })
 })
