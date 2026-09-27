@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseExprString } from '../../parser/parseExpr'
 import { parseStatement } from '../../parser/parseStatement'
 import { parseSpaceKeyword } from './keyword'
+import { STYLE_CLAUSE_START, STYLE_KEYS } from './style'
 import type { SpaceForm } from './types'
 import { parseSpaceUnkeyed } from './unkeyed'
 
@@ -261,5 +262,14 @@ describe('S5 grammar — fix round 1', () => {
   it('never claims a hyphenated point list after "NAME = region" or "NAME = volume"', () => {
     expect(parseSpaceUnkeyed('V = volume A-B-C-D')).toBeNull()
     expect(parseSpaceUnkeyed('R = region A-B-C')).toBeNull()
+  })
+})
+
+describe('S5 grammar — the style clause keys have one source (fix round 2)', () => {
+  it('STYLE_CLAUSE_START finds every keyed clause and "dashed", and nothing inside a word', () => {
+    for (const key of STYLE_KEYS) expect(STYLE_CLAUSE_START.test(` ${key}: 1`)).toBe(true)
+    expect(STYLE_CLAUSE_START.test(' dashed')).toBe(true)
+    expect(STYLE_CLAUSE_START.test(' opacityx: 1')).toBe(false)
+    expect(STYLE_CLAUSE_START.test('x in [0, 1]')).toBe(false)
   })
 })

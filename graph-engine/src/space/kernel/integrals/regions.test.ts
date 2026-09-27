@@ -85,7 +85,8 @@ describe('region: polar and inequality', () => {
     const text = readout(scene, 1).text
     const area = approx(text, 'area')
     expect(Math.abs(area / (2 * Math.PI) - 1)).toBeLessThan(0.005)
-    // The digits come from the mesh's own error, |A(128) - A(64)|, so the last one printed is right.
+    // The digits come from the mesh's own error (the larger of its last two changes, the
+    // boundary's measured gap, rounding), so the last one printed is right.
     expect(Math.abs(area - 2 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
     // Its boundary lies on the circle or on y = 0.
     for (const p of vertices(markNamed(scene, 's1.boundary', 'lines'))) {
@@ -192,5 +193,69 @@ describe('named regions and "over R"', () => {
   it('crossing bounds on a named region are refused where it is used', () => {
     const scene = sceneOf('R = region x in [0, 2], y in [x, 1]\nregion: R')
     expect(scene.errors.some((e) => e.line === 2 && /cross near x = 1/.test(e.message))).toBe(true)
+  })
+})
+
+describe('inequality regions: meshed on their own box, every printed digit right (fix round 2)', () => {
+  for (const r of [0.05, 0.1, 0.15, 0.2, 0.3, 0.5]) {
+    it(`the disc of radius ${r} at the default resolution: area πr², not refused`, () => {
+      const scene = sceneOf(`region: x^2 + y^2 <= ${r * r}`)
+      expect(scene.errors).toEqual([])
+      const text = readout(scene, 1).text
+      expect(Math.abs(approx(text, 'area') - Math.PI * r * r)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+      // and at least 2 digits of it (the error is the larger of the last two
+      // changes, |A(96) - A(48)| and |A(48) - A(24)|: honest, if cautious)
+      expect(lastDigitUnit(text, 'area')).toBeLessThanOrEqual(Math.PI * r * r * 1e-1)
+    })
+  }
+
+  it('a small region is meshed on its own box: the drawn floor spans it at full resolution', () => {
+    const floor = markNamed(sceneOf('region: x^2 + y^2 <= 0.01'), 's1', 'mesh')
+    const xs = vertices(floor).map((p) => p[0])
+    // 96 cells over about 0.3 across, not 2 cells of the box's 10/96
+    expect(new Set(xs.map((v) => v.toFixed(9))).size).toBeGreaterThan(50)
+  })
+
+  it('a region the grid cannot find is refused, saying what to do', () => {
+    expect(sceneOf('region: x^2 + y^2 <= 0.000001 res: 95').errors).toEqual([
+      { line: 1, message: 'the region is empty or too small to find at this resolution; raise res:' },
+    ])
+  })
+
+  it('a polygon is meshed exactly: abs(x) + abs(y) <= 1 at res 32 reads 2', () => {
+    expect(readout(sceneOf('region: abs(x) + abs(y) <= 1 res: 32'), 1).text).toBe('area ≈ 2')
+  })
+
+  it('the hemisphere over the disc at res 160: no sample lands outside, so no NaN; digits right', () => {
+    const scene = sceneOf('volume: under sqrt(1 - x^2 - y^2) over x^2 + y^2 <= 1 res: 160')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'dA') - (2 * Math.PI) / 3)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  })
+})
+
+describe('inequality regions: samples never fall outside, divergence only on evidence (fix round 2)', () => {
+  it('a concave boundary: sqrt(x^2 + y^2 - 1) over the annulus 1 <= r <= 2 is 2π√3, no sample in the hole', () => {
+    // the chords along r = 1 lie in the hole, where the integrand is not a number
+    const scene = sceneOf('volume: under sqrt(x^2 + y^2 - 1) over x^2 + y^2 >= 1 and x^2 + y^2 <= 4')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'dA') - 2 * Math.PI * Math.sqrt(3))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  })
+
+  it('a bounded, oscillating integrand is not taken for divergence: 1 + sin(40x) over the unit disc is π', () => {
+    for (const spec of ['volume: under 1 + sin(40*x) over x^2 + y^2 <= 1', 'volume: under 1 + sin(20*x)*sin(20*y) over x^2 + y^2 <= 1']) {
+      const scene = sceneOf(spec)
+      expect(scene.errors).toEqual([])
+      const text = readout(scene, 1).text
+      expect(Math.abs(approx(text, 'dA') - Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+    }
+    // Under-resolved rings: the sums wander (6.257, 6.262, 6.282, 6.255) without shrinking, but
+    // |g| <= 3 everywhere, so it is a value with a wide error, never divergence.
+    // 2π(1 + sin(150)/300)
+    const rings = sceneOf('volume: under 2 + cos(150*(x^2+y^2)) over x^2 + y^2 <= 1')
+    expect(rings.errors).toEqual([])
+    const text = readout(rings, 1).text
+    expect(Math.abs(approx(text, 'dA') - 2 * Math.PI * (1 + Math.sin(150) / 300))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   })
 })

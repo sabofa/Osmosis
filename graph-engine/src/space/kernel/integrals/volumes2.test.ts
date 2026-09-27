@@ -82,7 +82,7 @@ describe('volume: the readout and its note', () => {
     expect(Math.abs(approx(text, 'dA') - 8 * Math.PI)).toBeLessThan(1e-8)
   })
 
-  it('over an inequality region: the mesh sum, with only the digits its two resolutions agree on', () => {
+  it('over an inequality region: the mesh sum, with only the digits its error supports', () => {
     // the unit disc under z = 1: π
     const disc = readout(sceneOf('volume: under 1 over x^2 + y^2 <= 1 res: 160'), 1).text
     expect(Math.abs(approx(disc, 'dA') - Math.PI)).toBeLessThanOrEqual(lastDigitUnit(disc, 'dA'))
@@ -110,8 +110,10 @@ describe('volume: every boundary face points out of the solid', () => {
       expect(scene.errors).toEqual([])
       const top = markNamed(scene, 's1', 'mesh')
       const bottom = markNamed(scene, 's1.bottom', 'mesh')
-      for (const t of windings(top)) expect(t.normal[2]).toBeGreaterThan(0)
-      for (const t of windings(bottom)) expect(t.normal[2]).toBeLessThan(0)
+      // counted, then asserted once: tens of thousands of triangles
+      const wrong = new Set<string>()
+      for (const t of windings(top)) if (!(t.normal[2] > 0)) wrong.add('top faces down')
+      for (const t of windings(bottom)) if (!(t.normal[2] < 0)) wrong.add('bottom faces up')
       const four = walls(scene)
       expect(four.length).toBeGreaterThan(0)
       for (const wall of four) {
@@ -120,11 +122,12 @@ describe('volume: every boundary face points out of the solid', () => {
           if (len === 0) continue
           // 1e-2 out: past the mesh's chords, which lie up to 5e-4 inside its circle
           const [ox, oy] = [t.centre[0] + (1e-2 * t.normal[0]) / len, t.centre[1] + (1e-2 * t.normal[1]) / len]
-          expect(inside(ox, oy)).toBe(false)
+          if (inside(ox, oy)) wrong.add(`${wall.source.object} faces in`)
         }
       }
       // and every triangle's winding agrees with its vertex normals, so the lit side is the outside
-      for (const mesh of [top, bottom, ...four]) for (const t of windings(mesh)) expect(dot(t.normal, t.vertexNormal)).toBeGreaterThan(0)
+      for (const mesh of [top, bottom, ...four]) for (const t of windings(mesh)) if (!(dot(t.normal, t.vertexNormal) > 0)) wrong.add(`${mesh.source.object} against its normals`)
+      expect([...wrong]).toEqual([])
     })
   }
 })

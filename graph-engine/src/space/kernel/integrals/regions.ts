@@ -17,10 +17,13 @@
 // An inequality region is S1's grid-clipped mesh over the box, and its values
 // are sums over that mesh — the area is the mesh's area, and an integral uses
 // each triangle's edge midpoints (exact for quadratics). integrate2 cannot
-// follow an implicit boundary, so their error is the mesh's own: the change
-// in the sum from half the resolution, |A(n) - A(n/2)|, which bounds the
-// digits shown. A sum that does not settle as the mesh refines (from n/4 to
-// n/2 to n) is refused as an integral that does not converge.
+// follow an implicit boundary. The region is meshed on its own box (a small
+// disc gets the full resolution), samples are interior points (never on the
+// boundary, where rounding can leave the region), and the error is the
+// mesh's own: the larger of the changes from n/2 and from n/4, the measured
+// gap between the boundary polygon and the curve, and rounding. A sum is
+// refused as divergent only when its changes do not shrink, its peak |g|
+// keeps growing, and the mesh is fine enough to tell.
 //
 // Every integral is budgeted (math/quadrature): one with no value — undefined
 // at a node, or not settling — is refused with an IntegralRefusal naming where.
@@ -30,9 +33,9 @@ import { compileScalar } from '../../../math/compile'
 import { coarse2, coarse3, gaussLegendre7, integrate2, integrate3 } from '../../../math/quadrature'
 import { formatNumber, formatPoint } from '../../pick/format'
 import type { Domain } from '../../grammar/types'
-import type { LineMark, MeshMark, SceneError } from '../../scene/types'
+import type { LineMark, MeshMark, Range, SceneError } from '../../scene/types'
 import { boxX, boxY, checkBudget, constant, lineStyle, Reads, resolution, SEGMENT_WIDTH } from '../common'
-import { inequalitySamples, iteratedSamples, type DomainSamples, type IteratedSpec } from '../domain'
+import { inequalitySamples, iteratedSamples, type Condition, type DomainSamples, type IteratedSpec } from '../domain'
 import { finishMesh } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { compileConditions } from '../surface'
@@ -49,7 +52,9 @@ import {
   readoutLabel,
   ROUNDING_REL,
   type Approx,
+  type QuadLevel,
 } from './common'
+import { exprText } from './exprText'
 import { resolveDomain } from './named'
 
 export const REGION_OPACITY = 0.35
@@ -68,6 +73,9 @@ export interface RegionSample {
   samples: DomainSamples
   // Counter-clockwise, the region on the left of each piece.
   boundary: BoundaryPiece[]
+  // An inequality region's own box, where it is meshed (the floor, the sums,
+  // and a volume's top and bottom); null for an iterated region.
+  box: { x: Range; y: Range } | null
   // The integral over the region of g, written in the region's coordinates,
   // its error floored by the integral of |g| (common.ts); `nonNegative` says
   // g >= 0, so that integral is the value itself. An integral with no value
@@ -75,7 +83,12 @@ export interface RegionSample {
   integrate(g: (a: number, b: number) => number, nonNegative?: boolean): Approx
   // The triple integral of h(a, b, z) over the solid z from zlo(a, b) to
   // zhi(a, b) above the region (a volume under or between surfaces).
-  integrateSolid(h: (a: number, b: number, z: number) => number, zlo: (a: number, b: number) => number, zhi: (a: number, b: number) => number): Approx
+  integrateSolid(
+    h: (a: number, b: number, z: number) => number,
+    zlo: (a: number, b: number) => number,
+    zhi: (a: number, b: number) => number,
+    zText: readonly [string, string],
+  ): Approx
   // (a, b) in the region's coordinates -> (x, y), into out[0..1].
   toXY(a: number, b: number, out: Float64Array): void
 }
@@ -137,7 +150,7 @@ function scale(estimate: () => number): number {
   return Number.isFinite(v) ? Math.abs(v) : 0
 }
 
-function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readonly string[]): RegionSample {
+function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readonly QuadLevel[]): RegionSample {
   const samples = iteratedSamples(spec, n)
   const { outerRange, lo, hi, polar } = spec
   const a = outerRange.min
@@ -211,20 +224,21 @@ function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readon
   return {
     samples,
     boundary: sides.filter((_, i) => keep[i]),
+    box: null,
     toXY,
     integrate(g, nonNegative = false) {
       const r = quadrature(levels, () => integrate2(inUW(g), a, b, lo, hi))
       const absolute = nonNegative ? Math.abs(r.value) : scale(() => coarse2(inUW((p, q) => Math.abs(g(p, q))), a, b, lo, hi))
       return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
     },
-    integrateSolid(h, zlo, zhi) {
+    integrateSolid(h, zlo, zhi, zText) {
       const at = <T>(k: (p: number, q: number) => T) => (uu: number, ww: number) => (swap ? k(ww, uu) : k(uu, ww))
       const F = (uu: number, ww: number, z: number) => {
         const p = swap ? ww : uu
         const q = swap ? uu : ww
         return h(p, q, z) * jacobian(p)
       }
-      const r = quadrature([...levels, 'z'], () => integrate3(F, a, b, lo, hi, at(zlo), at(zhi)))
+      const r = quadrature([...levels, { name: 'z', lower: zText[0], upper: zText[1] }], () => integrate3(F, a, b, lo, hi, at(zlo), at(zhi)))
       const absolute = scale(() => coarse3((uu, ww, z) => Math.abs(F(uu, ww, z)), a, b, lo, hi, at(zlo), at(zhi)))
       return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
     },
@@ -276,72 +290,178 @@ function meshBoundary(samples: DomainSamples): BoundaryPiece[] {
   return pieces
 }
 
-// Resolutions below which a mesh sum is too coarse to judge its own
-// convergence (a disc a few cells across).
-const SETTLE_MIN_RES = 32
-// A sum has not settled when refining once more shrinks its change by less
-// than this factor while the change is still this fraction of the integral
-// of |g| (a sum converging at order 1 or better at least halves it).
-const SETTLE_RATIO = 0.75
-const SETTLE_REL = 1e-2
+// A mesh sum is too coarse to judge its own convergence below this many
+// cells a side at its coarsest comparison (n/4 on the fitted grid).
+const SETTLE_MIN_CELLS = 8
+// Divergence needs three things together: the changes between successive
+// resolutions do not shrink (each at least this fraction of the one before —
+// twice running when the n/8 mesh is fine enough to count; a convergent
+// sum's shrink by 2 to 4, a log-divergent one's hold steady), the largest |g|
+// at the samples keeps growing (by this factor at each refinement), and the
+// change is not negligible.
+const SETTLE_RATIO = 0.9
+const PEAK_GROWTH = 1.5
+// A mesh sum is good to no better than this fraction of the integral of |g|:
+// its boundary vertices are bisected onto the curve to BISECTION_REL of an
+// edge.
+const MESH_ROUNDING_REL = 1e-9
+
+// The degree-2 rule at interior points (barycentric 2/3, 1/6, 1/6), so a
+// sample never sits on the boundary, where rounding can put it just outside
+// (sqrt(1 - x^2 - y^2) at a chord's midpoint went NaN).
+const INTERIOR: readonly [number, number, number][] = [
+  [2 / 3, 1 / 6, 1 / 6],
+  [1 / 6, 2 / 3, 1 / 6],
+  [1 / 6, 1 / 6, 2 / 3],
+]
 
 interface MeshSum {
   value: number
+  // Σ area × |g|, for the rounding floor.
   absolute: number
+  // The largest |g| at any sample: evidence of an unbounded integrand, and the
+  // scale of the boundary's floor.
+  peak: number
+  // Area whose samples all fell just outside the region (slivers at a
+  // concave boundary): counted in the error, not the value.
+  lost: number
 }
 
-// Σ over the mesh's triangles of area × the mean of `at` at the three edge
-// midpoints (exact for quadratics); refused where `at` is not a number.
-function meshSum(samples: DomainSamples, at: (x: number, y: number) => number): MeshSum {
+// Σ over the mesh's triangles of area × the mean of `at` at the interior
+// points. A sample where `at` is not a number is refused when it lies in the
+// region; one just outside it (by rounding, at a concave boundary) falls back
+// to the triangle's centroid. An infinity is divergence there.
+function meshSum(samples: DomainSamples, at: (x: number, y: number) => number, inside: (x: number, y: number) => boolean): MeshSum {
   const { x, y, indices } = samples
-  let value = 0
-  let absolute = 0
-  const mid = (p: number, q: number) => {
-    const [mx, my] = [(x[p] + x[q]) / 2, (y[p] + y[q]) / 2]
-    const v = at(mx, my)
-    if (!Number.isFinite(v)) throw new IntegralRefusal(`the integral is undefined: the integrand is not a number at (x, y) = ${formatPoint([mx, my])}`)
+  const sum: MeshSum = { value: 0, absolute: 0, peak: 0, lost: 0 }
+  const sample = (px: number, py: number): number => {
+    const v = at(px, py)
+    if (Number.isNaN(v)) {
+      if (inside(px, py)) throw new IntegralRefusal(`the integral is undefined: the integrand is not a number at (x, y) = ${formatPoint([px, py])}`)
+      return Number.NaN
+    }
+    if (!Number.isFinite(v)) throw new IntegralRefusal(`the integral does not converge: it grows without bound near (x, y) = ${formatPoint([px, py])}`)
     return v
   }
   for (let t = 0; t < indices.length; t += 3) {
     const [i, j, k] = [indices[t], indices[t + 1], indices[t + 2]]
     const area = Math.abs((x[j] - x[i]) * (y[k] - y[i]) - (x[k] - x[i]) * (y[j] - y[i])) / 2
     if (area === 0) continue
-    const [m1, m2, m3] = [mid(i, j), mid(j, k), mid(k, i)]
-    value += (area * (m1 + m2 + m3)) / 3
-    absolute += (area * (Math.abs(m1) + Math.abs(m2) + Math.abs(m3))) / 3
+    let values = INTERIOR.map(([a, b, c]) => sample(a * x[i] + b * x[j] + c * x[k], a * y[i] + b * y[j] + c * y[k]))
+    if (values.some(Number.isNaN)) {
+      const centre = sample((x[i] + x[j] + x[k]) / 3, (y[i] + y[j] + y[k]) / 3)
+      if (Number.isNaN(centre)) {
+        sum.lost += area
+        continue
+      }
+      values = values.map((v) => (Number.isNaN(v) ? centre : v))
+    }
+    for (const v of values) {
+      sum.value += (area * v) / 3
+      sum.absolute += (area * Math.abs(v)) / 3
+      sum.peak = Math.max(sum.peak, Math.abs(v))
+    }
   }
-  return { value, absolute }
+  return sum
 }
 
-function inequalityRegion(samplesAt: (n: number) => DomainSamples, n: number): RegionSample {
+// The area between the mesh's boundary polygon and the region: each chord's
+// gap to its curve, measured by bisection along the chord's normal on the
+// condition nearest zero at its midpoint, summed as (2/3) L s (a parabolic
+// cap). A chord on the box's edge, or on a straight boundary, has none.
+function boundaryGap(pieces: readonly BoundaryPiece[], conditions: readonly Condition[]): number {
+  let total = 0
+  for (const { xy } of pieces) {
+    for (let k = 0; k + 3 < xy.length; k += 2) {
+      const [px, py, qx, qy] = [xy[k], xy[k + 1], xy[k + 2], xy[k + 3]]
+      const L = Math.hypot(qx - px, qy - py)
+      if (!(L > 0)) continue
+      const [mx, my] = [(px + qx) / 2, (py + qy) / 2]
+      // outward, for a counter-clockwise piece
+      const [nx, ny] = [(qy - py) / L, -(qx - px) / L]
+      let active: Condition | null = null
+      let nearest = -Infinity
+      for (const c of conditions) {
+        const h = c.h(mx, my)
+        if (Number.isFinite(h) && h > nearest) [active, nearest] = [c, h]
+      }
+      if (!active) continue
+      const H = (s: number) => active!.h(mx + s * nx, my + s * ny)
+      // Inside at the midpoint: the curve lies outward; outside: inward.
+      const far = nearest <= 0 ? L : -L
+      if ((H(far) <= 0) === (nearest <= 0)) continue
+      let [lo, hi] = [0, far]
+      for (let step = 0; step < 50 && lo !== hi; step++) {
+        const s = (lo + hi) / 2
+        if ((H(s) <= 0) === (nearest <= 0)) lo = s
+        else hi = s
+      }
+      total += (2 / 3) * L * Math.abs(lo)
+    }
+  }
+  return total
+}
+
+// The region's own box on the grid of `box`: the extent of what a first
+// meshing at n finds, one cell wider each way, within the box. A small region
+// then gets the full resolution. Nothing found is refused.
+function fittedBox(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): { x: Range; y: Range } {
+  const probe = inequalitySamples(conditions, box.x, box.y, n)
+  if (probe.indices.length === 0) throw new Error('the region is empty or too small to find at this resolution; raise res:')
+  let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity]
+  for (const v of probe.indices) {
+    x0 = Math.min(x0, probe.x[v])
+    x1 = Math.max(x1, probe.x[v])
+    y0 = Math.min(y0, probe.y[v])
+    y1 = Math.max(y1, probe.y[v])
+  }
+  const cx = (box.x.max - box.x.min) / n
+  const cy = (box.y.max - box.y.min) / n
+  return {
+    x: { min: Math.max(box.x.min, x0 - cx), max: Math.min(box.x.max, x1 + cx) },
+    y: { min: Math.max(box.y.min, y0 - cy), max: Math.min(box.y.max, y1 + cy) },
+  }
+}
+
+function inequalityRegion(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): RegionSample {
+  const fitted = fittedBox(conditions, box, n)
+  const samplesAt = (res: number) => inequalitySamples(conditions, fitted.x, fitted.y, res)
   const samples = samplesAt(n)
-  // The mesh at n, n/2 and n/4: the value is the sum at n, its error the
-  // change from n/2, and a change that does not shrink is a sum that does not
-  // settle (an integral that diverges).
-  const resolutions = [n, Math.max(2, Math.round(n / 2)), Math.max(2, Math.round(n / 4))]
+  const boundary = meshBoundary(samples)
+  const inside = (px: number, py: number) => conditions.every((c) => c.h(px, py) <= 0)
+  // The mesh at n, n/2, n/4 and n/8 on the fitted grid: the value is the sum
+  // at n; its error the larger of the last two changes, the boundary's gap,
+  // and rounding; a sum refused only on real evidence of divergence.
+  const resolutions = [n, n / 2, n / 4, n / 8].map((r) => Math.max(2, Math.round(r)))
   const meshes: DomainSamples[] = [samples]
   const meshAt = (i: number) => (meshes[i] ??= samplesAt(resolutions[i]))
+  let gap: number | null = null
   const settle = (at: (x: number, y: number) => number): Approx => {
-    const [A, B, C] = [0, 1, 2].map((i) => meshSum(meshAt(i), at))
-    const d1 = Math.abs(A.value - B.value)
-    const d2 = Math.abs(B.value - C.value)
-    if (n >= SETTLE_MIN_RES && d1 > SETTLE_RATIO * d2 && d1 > SETTLE_REL * A.absolute) {
-      const sums = [C, B, A].map((s) => formatNumber(s.value)).join(', ')
+    const sums = [0, 1, 2, 3].map((i) => meshSum(meshAt(i), at, inside))
+    const [A, B, C, D] = sums
+    const [d1, d2, d3] = [Math.abs(A.value - B.value), Math.abs(B.value - C.value), Math.abs(C.value - D.value)]
+    const twice = resolutions[3] >= SETTLE_MIN_CELLS
+    const growing = d1 >= SETTLE_RATIO * d2 && (!twice || d2 >= SETTLE_RATIO * d3) && d1 > MESH_ROUNDING_REL * A.absolute
+    const unbounded = A.peak > PEAK_GROWTH * B.peak && B.peak > PEAK_GROWTH * C.peak
+    if (resolutions[2] >= SETTLE_MIN_CELLS && growing && unbounded) {
+      const values = [D, C, B, A].map((s) => formatNumber(s.value)).join(', ')
       throw new IntegralRefusal(
-        `the integral does not converge: its sum over the mesh does not settle as the mesh refines (${sums} at res ${[...resolutions].reverse().join(', ')})`,
+        `the integral does not converge: its sum over the mesh grows as the mesh refines (${values} at res ${[...resolutions].reverse().join(', ')})`,
       )
     }
-    return { value: A.value, error: errorFloor(d1, A.absolute, ROUNDING_REL) }
+    gap ??= boundaryGap(boundary, conditions)
+    return { value: A.value, error: Math.max(d1, d2, gap * A.peak, A.lost * A.peak, MESH_ROUNDING_REL * A.absolute) }
   }
   return {
     samples,
-    boundary: meshBoundary(samples),
+    boundary,
+    box: fitted,
     toXY(p, q, out) {
       out[0] = p
       out[1] = q
     },
     integrate: (g) => settle(g),
-    // The z integral at each midpoint by the 7-point Gauss rule (exact for
+    // The z integral at each sample by the 7-point Gauss rule (exact for
     // polynomials of degree 13 in z); the mesh's own error dominates.
     integrateSolid: (h, zlo, zhi) => settle((x, y) => gaussLegendre7((z) => h(x, y, z), zlo(x, y), zhi(x, y))),
   }
@@ -371,7 +491,10 @@ export function prepareRegion2(domain: Domain, context: BuildContext, reads: Rea
             { outer: outer.param, outerRange: { min: u0(), max: u1() }, lo: (u) => lo(u), hi: (u) => hi(u), polar, outerIsX: outer.param === 'x' },
             n,
             sides,
-            [outer.param, inner.param],
+            [
+              { name: outer.param, lower: exprText(outer.from), upper: exprText(outer.to) },
+              { name: inner.param, lower: exprText(inner.from), upper: exprText(inner.to) },
+            ],
           ),
       }
     }
@@ -380,7 +503,7 @@ export function prepareRegion2(domain: Domain, context: BuildContext, reads: Rea
       return {
         coords: 'cartesian',
         vars: ['x', 'y'],
-        build: (n) => inequalityRegion((res) => inequalitySamples(conditions, boxX(config), boxY(config), res), n),
+        build: (n) => inequalityRegion(conditions, { x: boxX(config), y: boxY(config) }, n),
       }
     }
     case 'named':

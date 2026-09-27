@@ -27,7 +27,7 @@ import type { Expr } from '../../../parser/types'
 import { BUILTIN_NAMES } from '../../../math/compile'
 import { varNames } from '../../../math/expr'
 import { parseOverDomain } from '../domain'
-import { splitStyle, type RawClause, type StyleKey } from '../style'
+import { splitStyle, STYLE_CLAUSE_START, type RawClause, type StyleKey } from '../style'
 import { spaceStatement, type Domain, type ParamRange, type SpaceForm, type SpaceStatement, type SpaceStyle } from '../types'
 
 // A function of two variables as written: a defined name or an expression.
@@ -116,8 +116,6 @@ function integralStyle(clauses: readonly RawClause[], target: IntegralTarget): S
   return style
 }
 
-// Where a style clause (SP8) begins in a line.
-const STYLE_START = /\s(?:opacity|colormap|mesh|res|width|color|name):|\sdashed(?=\s|$)/
 
 // Takes "<keyword> <value>" out of `text` wherever it stands, before or after
 // the style clauses: its value runs to the next style clause or the end.
@@ -125,7 +123,7 @@ function pull(text: string, keyword: RegExp): { rest: string; value: string | nu
   const m = keyword.exec(text)
   if (!m) return { rest: text.trim(), value: null }
   const from = m.index + m[0].length
-  const next = STYLE_START.exec(text.slice(from))
+  const next = STYLE_CLAUSE_START.exec(text.slice(from))
   const to = next ? from + next.index : text.length
   return { rest: `${text.slice(0, m.index)}${text.slice(to)}`.trim(), value: text.slice(from, to).trim() }
 }

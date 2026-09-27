@@ -54,23 +54,51 @@ export class IntegralRefusal extends Error {
 }
 
 // A quadrature's refusal, naming its levels' variables (outer first).
-export function refusalOf(err: QuadratureError, levels: readonly string[]): IntegralRefusal {
-  const known = levels.map((name, i) => [name, err.at[i]] as const).filter((e): e is readonly [string, number] => typeof e[1] === 'number')
-  if (err.reason === 'undefined') {
-    const where =
-      known.length === 0
-        ? ''
-        : known.length === 1
-          ? ` at ${known[0][0]} = ${formatNumber(known[0][1])}`
-          : ` at (${known.map((e) => e[0]).join(', ')}) = (${known.map((e) => formatNumber(e[1])).join(', ')})`
-    return new IntegralRefusal(`the integral is undefined: the integrand is not a number${where}`)
+// A level of a quadrature, outer first: its variable, and its bounds as the
+// author wrote them (for "the bound sqrt(x - 0.5) is not a number").
+export interface QuadLevel {
+  name: string
+  lower: string
+  upper: string
+}
+
+// " at x = 0.5", " at (x, y) = (0, 0.5)": the levels that know where.
+function place(err: QuadratureError, levels: readonly QuadLevel[], upTo: number, word: string): string {
+  const known = levels.slice(0, upTo).flatMap((level, i) => (typeof err.at[i] === 'number' ? [[level.name, err.at[i] as number] as const] : []))
+  if (known.length === 0) return ''
+  if (known.length === 1) return ` ${word} ${known[0][0]} = ${formatNumber(known[0][1])}`
+  return ` ${word} (${known.map((e) => e[0]).join(', ')}) = (${known.map((e) => formatNumber(e[1])).join(', ')})`
+}
+
+// A quadrature's refusal in words:
+// - divergence: "the integral does not converge: it grows without bound near x = 0";
+// - NaN in the integrand: "the integral is undefined: the integrand is not a number at (x, y) = ...";
+// - NaN in a bound: "the bound sqrt(x - 0.5) is not a number at x = 0.4";
+// - the budget: "the integral did not settle within 4,000,000 evaluations" — never "does not converge".
+export function refusalOf(err: QuadratureError, levels: readonly QuadLevel[]): IntegralRefusal {
+  switch (err.reason) {
+    case 'diverges': {
+      const where = place(err, levels, levels.length, 'near')
+      return new IntegralRefusal(`the integral does not converge: it grows without bound${where}`)
+    }
+    case 'undefined':
+      return new IntegralRefusal(`the integral is undefined: the integrand is not a number${place(err, levels, levels.length, 'at')}`)
+    case 'bound': {
+      const { level, side } = err.bound ?? { level: 0, side: 'lower' as const }
+      const text = levels[level] ? (side === 'lower' ? levels[level].lower : levels[level].upper) : 'a bound'
+      return new IntegralRefusal(`the bound ${text} is not a number${place(err, levels, level, 'at')}`)
+    }
+    case 'budget': {
+      const where = place(err, levels, levels.length, 'near')
+      return new IntegralRefusal(
+        `the integral did not settle within ${QUAD_BUDGET.toLocaleString('en-US')} evaluations${where ? ` (it was still refining${where})` : ''}`,
+      )
+    }
   }
-  const where = known.length > 0 ? ` near ${known[0][0]} = ${formatNumber(known[0][1])}` : ''
-  return new IntegralRefusal(`the integral does not converge${where}: it did not settle within ${QUAD_BUDGET.toLocaleString('en-US')} evaluations`)
 }
 
 // Runs a quadrature over `levels`, turning its refusal into words.
-export function quadrature<T>(levels: readonly string[], run: () => T): T {
+export function quadrature<T>(levels: readonly QuadLevel[], run: () => T): T {
   try {
     return run()
   } catch (err) {

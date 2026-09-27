@@ -42,6 +42,7 @@ import { boundNames, checkBudget, constant, lineStyle, Reads, resolution } from 
 import { finishMesh, gridIndices, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, PreparedStatement } from '../registry'
 import { approxText, attempt, COLLAPSED_REL, errorFloor, part, quadrature, readoutLabel, ROUNDING_REL, type Approx } from './common'
+import { exprText } from './exprText'
 import { targetText } from './target'
 
 type Iterated = Extract<VolumeSolid, { kind: 'iterated' }>
@@ -129,6 +130,7 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
   const toSystem = new Map(XYZ.map((name, i) => [name, xyz[i]]))
   const jac = jacobian(solid.coords, k)
   const vars = [O.param, M.param, I.param]
+  const levels = solid.order.map((r) => ({ name: r.param, lower: exprText(r.from), upper: exprText(r.to) }))
   return {
     integrals(exprs) {
       const fs = exprs.map((expr) => {
@@ -144,7 +146,7 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
         const gg = (u: number, v: number) => g(u, v)
         const sign = orientation(solid, aa, bb, cc, dd, ee, gg)
         return fs.map(({ f, positive }) => {
-          const r = quadrature(vars, () => integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg))
+          const r = quadrature(levels, () => integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg))
           // The scale of the error floor, coarsely (common.ts).
           const coarse = positive ? r.value : coarse3((u, v, w) => Math.abs(f(u, v, w)), aa, bb, cc, dd, ee, gg)
           return { value: sign * r.value, error: errorFloor(r.error, Number.isFinite(coarse) ? coarse : 0, ROUNDING_REL) }

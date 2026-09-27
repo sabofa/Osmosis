@@ -30,7 +30,7 @@ describe('centroid: of regions', () => {
     expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThan(1e-10)
   })
 
-  it('the same half-disc as an inequality: mesh sums, each coordinate to the digits two resolutions agree on', () => {
+  it('the same half-disc as an inequality: mesh sums, each coordinate to the digits its error supports', () => {
     const scene = sceneOf('@resolution: 160\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D')
     expect(scene.errors).toEqual([])
     const text = readout(scene, 3).text
@@ -127,10 +127,32 @@ describe('readouts: a value that is zero within its error shows as ≈ 0, never 
     expect(readout(sceneOf('volume: x in [-1, 1], y in [0, 1], z in [0, 1] integrand x'), 1).text).toBe('∭ x dV ≈ 0')
     expect(readout(sceneOf('volume: under x over x^2 + y^2 <= 1'), 1).text.startsWith('∬_R x dA ≈ 0;')).toBe(true)
     expect(readout(sceneOf('riemann: under x over x in [-1, 1], y in [0, 1], n = 4'), 1).text).toBe('Σ x ΔA ≈ 0; ∬_R x dA ≈ 0')
-    expect(readout(sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D'), 2).text).toMatch(/^centroid ≈ \(0, 0\.4244131815\d\);/)
+    expect(readout(sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D'), 2).text).toMatch(/^centroid ≈ \(0, 0\.4244131815\d*\);/)
   })
 
-  it('a mesh region’s x̄ of 5×10⁻⁵ (the grid’s asymmetry) lies inside its two-resolution error, so it reads 0', () => {
+  it('a mesh region’s x̄ of 5×10⁻⁵ (the grid’s asymmetry) lies inside its error (the changes between resolutions), so it reads 0', () => {
     expect(readout(sceneOf('@resolution: 160\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D'), 3).text).toMatch(/^centroid ≈ \(0, /)
+  })
+})
+
+describe('centroids over mesh regions and solids (fix round 2)', () => {
+  it('the half-disc at @resolution: 64 is not refused, and every printed digit is right', () => {
+    const scene = sceneOf('@resolution: 64\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 3).text
+    const [x, y] = approxTuple(text, 'centroid')
+    expect(x).toBe(0)
+    const printed = /\(([^,]+), ([^)]+)\)/.exec(text)!
+    expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThanOrEqual(10 ** -(printed[2].split('.')[1]?.length ?? 0))
+  })
+
+  it('the dome over the unit disc (a mesh solid): x̄ and ȳ read ≈ 0, z̄ = 3/8 to its digits', () => {
+    const scene = sceneOf('V = volume under sqrt(1 - x^2 - y^2) over x^2 + y^2 <= 1\ncentroid: V')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 2).text
+    const [x, y, z] = approxTuple(text, 'centroid')
+    expect([x, y]).toEqual([0, 0])
+    const printed = /\(([^,]+), ([^,]+), ([^)]+)\)/.exec(text)!
+    expect(Math.abs(z - 0.375)).toBeLessThanOrEqual(10 ** -(printed[3].split('.')[1]?.length ?? 0))
   })
 })

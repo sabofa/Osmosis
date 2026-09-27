@@ -34,6 +34,11 @@ export function unknownColormap(name: string): Error {
   return new Error(`Unknown colormap "${name}" — the maps are ${COLORMAPS.join(', ')}`)
 }
 
+// The keyed clauses (every one but the bare "dashed"), and where one starts
+// in a line: the single list the space grammar reads clauses by.
+export const STYLE_KEYS = ['opacity', 'colormap', 'mesh', 'res', 'width', 'color', 'name'] as const
+export const STYLE_CLAUSE_START = new RegExp(String.raw`\s(?:${STYLE_KEYS.join('|')}):|\sdashed(?=\s|$)`)
+
 // Reads the trailing style clauses off `line`, last first, and returns what is
 // left. Nothing is validated here: a clause is recognised by its keyword, so a
 // claimed line with a bad value is refused by name rather than misread.
@@ -47,7 +52,7 @@ export function splitStyle(line: string): { rest: string; clauses: RawClause[] }
       rest = rest.slice(0, dashed.index).trimEnd()
       continue
     }
-    const keyword = /\s(opacity|colormap|mesh|res|width|color|name):/g
+    const keyword = new RegExp(String.raw`\s(${STYLE_KEYS.join('|')}):`, 'g')
     let last: RegExpExecArray | null = null
     for (let m = keyword.exec(rest); m; m = keyword.exec(rest)) last = m
     if (!last) break

@@ -16,6 +16,7 @@
 // f < g somewhere the solid is drawn as written and the readout says the
 // integral counts that part negatively.
 
+import type { GraphConfig } from '../../../parser/config'
 import type { Expr, Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
 import { num, substitute } from '../../../math/expr'
@@ -113,10 +114,14 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
   const opacity = style.opacity ?? VOLUME_OPACITY
 
   // The top and bottom are surfaces over the same domain, in one flat colour.
+  // An inequality region is meshed on its own box (regions.ts): the surfaces
+  // sample on that box too, set before each build, so the walls meet them
+  // vertex for vertex.
+  const surfaceConfig: GraphConfig = { ...config, space: { ...config.space, bounds: { ...config.space.bounds } } }
   const surface = (body: typeof topExpr, object: string, mesh: boolean | null) => {
     const surfaceStyle: SpaceStyle = { opacity, colormap: { by: { kind: 'none' }, map: null, diverging: false }, mesh, res: n, width: null, dashed: false }
     const s: Statement = { kind: 'space', form: { form: 'surface', body, domain, style: surfaceStyle }, color: statement.color, statementName: statement.statementName }
-    const prepared = SURFACE.prepare(s, { ...context, source: { ...context.source, object }, colorScaleId: null })
+    const prepared = SURFACE.prepare(s, { ...context, config: surfaceConfig, source: { ...context.source, object }, colorScaleId: null })
     for (const name of prepared.reads) reads.names.add(name)
     return prepared
   }
@@ -133,6 +138,10 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     const r = region.build(n, n)
     const errors: SceneError[] = []
     const value = attempt(context, errors, () => r.integrate((a, b) => f(a, b) - g(a, b)))
+    if (r.box) {
+      surfaceConfig.space.bounds.x = r.box.x
+      surfaceConfig.space.bounds.y = r.box.y
+    }
     const surfaces = [...top.build().marks, ...bottom.build().marks.map(facingDown)].filter((m): m is MeshMark => m.kind === 'mesh')
     const candidates = r.boundary.map((piece, i) => wallMark(piece, f, g, context, part(context, `wall${i}`).object, opacity))
     const size = diagonal([...surfaces, ...candidates.filter((w) => w !== null)])
@@ -191,7 +200,7 @@ export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between
       })
       return (): Approx[] => {
         const r = region.build(n)
-        return hs.map((h) => r.integrateSolid(h, g, f))
+        return hs.map((h) => r.integrateSolid(h, g, f, [solid.bottom ? solid.bottom.text : '0', solid.top.text]))
       }
     },
   }

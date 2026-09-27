@@ -26,6 +26,7 @@ import { RIEMANN_RECTANGLE, readsOuter, type SampleRule } from '../../grammar/ke
 import { constant, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { approxText, attempt, errorFloor, formOf, part, quadrature, readoutLabel, ROUNDING_REL } from './common'
+import { exprText } from './exprText'
 import { resolveDomain } from './named'
 import { compileOnRegion, targetExpr, targetName, targetText } from './target'
 
@@ -145,7 +146,8 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
     const riemann = sum * dx * dy
     const errors: SceneError[] = []
     const integral = attempt(context, errors, () => {
-      const raw = quadrature(['x', 'y'], () => integrate2((x, y) => f(x, y), x0, x1, () => y0, () => y1))
+      const levels = (outerIsX ? [rect.outer, rect.inner] : [rect.inner, rect.outer]).map((r) => ({ name: r.param, lower: exprText(r.from), upper: exprText(r.to) }))
+      const raw = quadrature(levels, () => integrate2((x, y) => f(x, y), x0, x1, () => y0, () => y1))
       const coarse = coarse2((x, y) => Math.abs(f(x, y)), x0, x1, () => y0, () => y1)
       return { value: raw.value, error: errorFloor(raw.error, Number.isFinite(coarse) ? coarse : 0, ROUNDING_REL) }
     })

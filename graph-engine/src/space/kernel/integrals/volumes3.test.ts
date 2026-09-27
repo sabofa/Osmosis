@@ -56,13 +56,16 @@ describe('volume: the tetrahedron x in [0, 1], y in [0, 1 - x], z in [0, 1 - x -
       const centre = faces(scene).flatMap((name) => vertices(face(scene, name))).reduce((m, p) => [m[0] + p[0], m[1] + p[1], m[2] + p[2]], [0, 0, 0])
       const count = faces(scene).reduce((m, name) => m + vertices(face(scene, name)).length, 0)
       const c = centre.map((v) => v / count)
+      // counted, then asserted once: thousands of triangles
+      const wrong: string[] = []
       for (const name of faces(scene)) {
         for (const t of windings(face(scene, name))) {
           if (Math.hypot(...t.normal) < 1e-12) continue
-          expect([spec, name, dot(t.normal, t.vertexNormal) > 0]).toEqual([spec, name, true])
-          expect([spec, name, dot(t.normal, [t.centre[0] - c[0], t.centre[1] - c[1], t.centre[2] - c[2]]) > 0]).toEqual([spec, name, true])
+          if (!(dot(t.normal, t.vertexNormal) > 0)) wrong.push(`${name} against its normals`)
+          if (!(dot(t.normal, [t.centre[0] - c[0], t.centre[1] - c[1], t.centre[2] - c[2]]) > 0)) wrong.push(`${name} inward`)
         }
       }
+      expect([spec, [...new Set(wrong)]]).toEqual([spec, []])
     }
   })
 
