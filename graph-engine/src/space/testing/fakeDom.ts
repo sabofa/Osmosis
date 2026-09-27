@@ -1,17 +1,45 @@
 // A minimal fake DOM for constructing SpaceRenderer in node: just the element
 // members the overlay, the label pool and the input layer use. A test helper.
 
+// A plain string-keyed store (element.style.color = '...' still reads and
+// writes as a normal property) with setProperty/removeProperty/
+// getPropertyValue added as non-enumerable methods, so overlay.ts's real
+// CSSStyleDeclaration calls (custom properties: --space-surface and the
+// like) work here too, without changing how every existing test reads a
+// style property.
+function fakeStyle(): Record<string, string> {
+  const style: Record<string, string> = {}
+  Object.defineProperties(style, {
+    setProperty: { value: (prop: string, value: string) => { style[prop] = value }, enumerable: false },
+    removeProperty: { value: (prop: string) => { delete style[prop] }, enumerable: false },
+    getPropertyValue: { value: (prop: string) => style[prop] ?? '', enumerable: false },
+  })
+  return style
+}
+
 export class FakeElement {
   readonly tagName: string
-  readonly style: Record<string, string> = {}
+  readonly style: Record<string, string> = fakeStyle()
   readonly dataset: Record<string, string> = {}
   readonly children: FakeElement[] = []
   readonly ownerDocument: FakeDocument
   parentElement: FakeElement | null = null
   className = ''
-  textContent = ''
   tabIndex = -1
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>()
+  // Real DOM semantics: reading textContent concatenates every descendant's
+  // (an element with children has no "own" text of its own); assigning it
+  // replaces every child with that one text run, same as the real DOM.
+  private ownText = ''
+
+  get textContent(): string {
+    return this.children.length === 0 ? this.ownText : this.children.map((c) => c.textContent).join('')
+  }
+
+  set textContent(value: string) {
+    this.ownText = value
+    this.children.length = 0
+  }
 
   constructor(tagName: string, ownerDocument: FakeDocument) {
     this.tagName = tagName.toUpperCase()

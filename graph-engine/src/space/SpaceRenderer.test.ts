@@ -279,6 +279,59 @@ describe('SpaceRenderer and context loss', () => {
     expect(fake.draws.length).toBeGreaterThan(draws)
     r.dispose()
   })
+
+  it('shows "restoring…" while the context is lost, S6 plan V9, and clears it once restored', () => {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const message = () => overlay.children.find((c) => c.className === 'space-message')
+    expect(message()).toBeUndefined()
+    fake.lose()
+    canvas.dispatch('webglcontextlost')
+    expect(message()?.textContent).toBe('restoring…')
+    fake.restore()
+    canvas.dispatch('webglcontextrestored')
+    expect(message()).toBeUndefined()
+    r.dispose()
+  })
+})
+
+describe('SpaceRenderer and the empty-scene state (S6 plan V9)', () => {
+  it('shows "nothing to draw yet: add a statement" for a scene with no marks and no errors, and clears it once the scene has marks', () => {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const message = () => overlay.children.find((c) => c.className === 'space-message')
+    r.setScene(scene([]), CONFIG)
+    clock.flush()
+    expect(message()?.textContent).toBe('nothing to draw yet: add a statement')
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    expect(message()).toBeUndefined()
+    r.dispose()
+  })
+
+  it('does not show the empty-scene message over a shader failure, and never without WebGL2', () => {
+    const noGl = mount(null)
+    const noGlR = new SpaceRenderer(noGl.canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, fakeEnv().env)
+    noGlR.setScene(scene([]), CONFIG)
+    const noGlOverlay = noGl.parent.children.find((c) => c.className === 'space-overlay')!
+    expect(noGlOverlay.children.find((c) => c.className === 'space-message')?.textContent).toMatch(/WebGL2/)
+    noGlR.dispose()
+
+    const { canvas, parent } = mount(createFakeGl({ failCompile: true }))
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, fakeEnv().env)
+    r.setScene(scene([]), CONFIG)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    expect(overlay.children.find((c) => c.className === 'space-message')?.textContent).toMatch(/shader failed to compile/)
+    r.dispose()
+  })
 })
 
 describe('SpaceRenderer and its host', () => {
@@ -327,7 +380,7 @@ describe('SpaceRenderer and its host', () => {
     r.dispose()
   })
 
-  it('starts from the authored camera aimed at the box centre, and double-click returns there', () => {
+  it('starts from the authored camera aimed at the box centre, and double-click eases back there over 280 ms (S6 plan V9)', () => {
     const { canvas } = mount()
     const clock = fakeEnv()
     const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
@@ -336,7 +389,52 @@ describe('SpaceRenderer and its host', () => {
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
     r.setView({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
     canvas.dispatch('dblclick')
+    // Eases, not snaps: right after the click the view has not jumped yet.
+    expect(r.getView()).toEqual({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
+    let frames = 0
+    while (clock.pending() > 0 && frames < 100) {
+      clock.flush()
+      frames++
+    }
+    // 280 ms at 16 ms a frame is about 17-18 frames.
+    expect(frames).toBeGreaterThan(10)
+    expect(frames).toBeLessThan(30)
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    r.dispose()
+  })
+
+  it('reduced motion snaps double-click back to the authored view instead of easing (S6 plan V9)', () => {
+    const { canvas } = mount()
+    const clock = fakeEnv({ prefersReducedMotion: () => true })
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const space: SpaceConfig = { ...defaultSpaceConfig(), camera: { azimuth: -30, elevation: 10, zoom: 2 }, bounds: { x: { min: 0, max: 4 }, y: { min: -1, max: 1 }, z: { min: 0, max: 2 } } }
+    r.setScene(scene([helix]), { space })
+    r.setView({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
+    canvas.dispatch('dblclick')
+    expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    // A snap still schedules its one redraw, but no animation loop: flushing
+    // it asks for no further frame.
+    clock.flush()
+    expect(clock.pending()).toBe(0)
+    expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    r.dispose()
+  })
+
+  it('azimuth takes the shortest way round when easing (S6 plan V9): 170 -> -170 turns 20 degrees, not 340', () => {
+    const { canvas } = mount()
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const space: SpaceConfig = { ...defaultSpaceConfig(), camera: { azimuth: -170, elevation: 10, zoom: 1 }, bounds: { x: { min: 0, max: 4 }, y: { min: -1, max: 1 }, z: { min: 0, max: 2 } } }
+    r.setScene(scene([helix]), { space })
+    r.setView({ azimuth: 170, elevation: 10, zoom: 1, target: [2, 0, 1] })
+    canvas.dispatch('dblclick')
+    clock.flush()
+    // One 16 ms frame in: azimuth has moved a small step past 170 toward
+    // 180/-180, not backward toward 0 (which the naive -340-degree route would).
+    const view = r.getView()
+    expect(view.azimuth).toBeGreaterThan(170)
+    while (clock.pending() > 0) clock.flush()
+    expect(r.getView().azimuth).toBeCloseTo(-170, 6)
     r.dispose()
   })
 

@@ -32,7 +32,7 @@
 import type { GraphConfig, HoverMode } from '../parser/config'
 import type { Statement } from '../parser/types'
 import type { Palette } from '../render/palette'
-import { clampElevation, inertiaStep, sanitizeView, wrapAzimuth, type OrbitVelocity } from './camera/controls'
+import { clampElevation, easeStep, inertiaStep, sanitizeView, startEase, wrapAzimuth, type Easing, type OrbitVelocity } from './camera/controls'
 import { cameraMatrices, project, type CameraMatrices, type Viewport } from './camera/projection'
 import { colormapTable } from './colormaps'
 import { worldMap, type WorldMap } from './camera/world'
@@ -44,7 +44,7 @@ import { buildFrame } from './frame/build'
 import { frameAxes } from './frame/ticks'
 import type { FrameAxes } from './frame/types'
 import { GlBackend } from './gl/backend'
-import { NO_WEBGL2_MESSAGE } from './gl/context'
+import { CONTEXT_LOST_MESSAGE, NO_WEBGL2_STATE } from './gl/context'
 import type { SpaceKernel } from './kernel/api'
 import { createSpaceKernel } from './kernel/index'
 import { solveDrag } from './pick/drag'
@@ -144,6 +144,10 @@ export function browserEnv(): SpaceRendererEnv {
 // The backing store is CSS size x min(devicePixelRatio, 2).
 export const MAX_PIXEL_RATIO = 2
 
+// S6 plan V9: the empty-scene state — a spec with no marks (and no errors:
+// an errored spec is not "empty", it already has its own report).
+export const EMPTY_SCENE_MESSAGE = 'nothing to draw yet: add a statement'
+
 function sameView(a: SpaceView, b: SpaceView): boolean {
   return (
     a.azimuth === b.azimuth &&
@@ -197,6 +201,13 @@ export class SpaceRenderer {
   private pixelRatio = 1
   private inertia: OrbitVelocity | null = null
   private lastInertiaTime: number | null = null
+  // S6 plan V9: the double-click / 0 ease back to the authored view.
+  private easing: Easing | null = null
+  // S6 plan V9 states: a lost context or a backend failure (typically a
+  // shader compile failure) each own the message overlay while active, so
+  // an empty scene never overwrites them, and the reverse.
+  private contextLost = false
+  private backendFailed = false
   private disposed = false
   // The spec's source lines, for readout titles (setSpec's `source`).
   private sourceLines: readonly string[] | null = null
@@ -247,25 +258,37 @@ export class SpaceRenderer {
     this.backend = new GlBackend(canvas, {
       // A backend failure leaves nothing drawn: say why in the view too.
       onError: (message) => {
+        this.backendFailed = true
         this.overlay?.showMessage(`Space could not draw this view. ${message}`)
         this.report(message)
       },
       onContextLost: () => {
+        this.contextLost = true
+        this.overlay?.showMessage(CONTEXT_LOST_MESSAGE)
         this.scheduler.cancel()
         options.onContextLost?.()
       },
       onContextRestored: () => {
+        this.contextLost = false
+        // A restored context is a fresh one: shaders recompile from
+        // scratch, so a prior compile failure no longer applies.
+        this.backendFailed = false
+        // The empty-scene state (or nothing, for a real one) replaces
+        // "restoring…" once that draw happens.
+        this.overlay?.showMessage(null)
+        this.updateEmptyState()
         this.scheduler.request()
         options.onContextRestored?.()
       },
     })
-    if (!this.backend.available) this.overlay.showMessage(NO_WEBGL2_MESSAGE)
+    if (!this.backend.available) this.overlay.showMessage(NO_WEBGL2_STATE)
     canvas.tabIndex = 0
     this.attached = attachInput(canvas, this.input, {
       context: () => this.inputContext(),
       apply: (view) => this.applyUserView(view),
       startInertia: (velocity) => this.startInertia(velocity),
       stopInertia: () => this.stopInertia(),
+      resetView: () => this.resetView(),
       now: () => env.now(),
       prefersReducedMotion: () => env.prefersReducedMotion(),
       hover: (x, y) => this.hoverAt(x, y),
@@ -359,11 +382,23 @@ export class SpaceRenderer {
     this.authored = sanitizeView(authored, authored)
     this.axes = frameAxes(space, box, flat)
     this.backend.setScene(scene, world, this.colors, { depthcue: space.depthcue })
+    this.updateEmptyState()
     if (fresh) {
       const { hidden } = colorbarScales(scene)
       if (hidden > 0) console.info(`space: showing the first 2 colorbars; ${hidden} more colour scale${hidden === 1 ? '' : 's'} not shown`)
     }
     this.follow(scene, fresh)
+  }
+
+  // S6 plan V9: the empty-scene state, shown only while nothing else (no
+  // WebGL2, a lost context, a backend failure) already owns the message —
+  // an empty spec is not a failure, so it never overwrites a real one, and a
+  // scene that gains marks clears it, but only if it was the one showing.
+  private updateEmptyState(): void {
+    if (!this.backend.available || this.contextLost || this.backendFailed) return
+    const scene = this.scene
+    const empty = scene !== null && scene.marks.length === 0 && scene.errors.length === 0
+    this.overlay.showMessage(empty ? EMPTY_SCENE_MESSAGE : null)
   }
 
   // The colorbars, pins and probe follow a new scene. Pins and the probe are
@@ -422,9 +457,18 @@ export class SpaceRenderer {
     this.scheduler.request()
   }
 
-  // Back to the authored view (what double-click and the 0 key do).
+  // Back to the authored view (what double-click and the 0 key do): eases
+  // over 280 ms, ease-out cubic, azimuth the shortest way round (S6 plan
+  // V9), or snaps instantly under prefers-reduced-motion.
   resetView(): void {
-    this.setView(this.authored)
+    if (this.disposed) return
+    if (this.env.prefersReducedMotion()) {
+      this.easing = null
+      this.setView(this.authored)
+      return
+    }
+    this.easing = startEase(this.view, sanitizeView(this.authored, this.view), this.env.now())
+    this.scheduler.request()
   }
 
   getView(): SpaceView {
@@ -715,13 +759,29 @@ export class SpaceRenderer {
   private stopInertia(): void {
     this.inertia = null
     this.lastInertiaTime = null
+    // Any other automatic camera motion is interrupted the same way a new
+    // gesture interrupts inertia: every caller of stopInertia() means "the
+    // viewer is taking the camera back".
+    this.easing = null
   }
 
-  // One frame: advance inertia, then draw. Returns true to run again.
+  // One frame: advance inertia and any camera ease, then draw. Returns true
+  // to run again.
   private frame(time: number): boolean {
     if (this.disposed) return false
     const playing = this.advanceValues(time)
     let again = false
+    if (this.easing) {
+      const next = easeStep(this.easing, time)
+      if (next) {
+        this.view = next
+        again = true
+      } else {
+        this.view = this.easing.to
+        this.easing = null
+      }
+      this.options.onViewChange?.(this.getView())
+    }
     if (this.inertia) {
       const dt = this.lastInertiaTime === null ? 1000 / 60 : Math.min(64, Math.max(0, time - this.lastInertiaTime))
       const v = this.inertia

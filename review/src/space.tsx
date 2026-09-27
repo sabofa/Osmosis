@@ -77,6 +77,40 @@ function fromUrl(): { spec: string; source: Source; theme: Theme; host: Host } {
   }
 }
 
+// S6 plan V9: a headless screenshot of the no-WebGL2 or shader-compile-
+// failure state needs a real failure, not a fixture — ?state= on this
+// review page injects one on the canvas SpaceStage builds, before
+// SpaceRenderer (space/gl/context.ts, program.ts) ever sees it. Dev/review
+// only: gated behind an explicit query param, and does nothing without it.
+type InjectedState = 'no-webgl2' | 'shader-failure' | 'context-lost' | null
+
+function injectedStateFromUrl(): InjectedState {
+  const s = new URLSearchParams(location.search).get('state')
+  return s === 'no-webgl2' || s === 'shader-failure' || s === 'context-lost' ? s : null
+}
+
+function injectState(canvas: HTMLCanvasElement, state: InjectedState): void {
+  if (!state) return
+  const real = canvas.getContext.bind(canvas)
+  canvas.getContext = ((type: string, attrs?: unknown) => {
+    if (type !== 'webgl2') return real(type as '2d', attrs as never)
+    if (state === 'no-webgl2') return null
+    const gl = real('webgl2', attrs as WebGLContextAttributes)
+    if (!gl) return gl
+    if (state === 'shader-failure') {
+      const realGetParam = gl.getShaderParameter.bind(gl)
+      gl.getShaderParameter = (shader: WebGLShader, pname: number) =>
+        pname === gl.COMPILE_STATUS ? false : (realGetParam(shader, pname) as unknown)
+      gl.getShaderInfoLog = () => 'ERROR: 0:1: injected failure (review page ?state=shader-failure)'
+    } else if (state === 'context-lost') {
+      // Fires for real once the renderer has had a frame to draw: the same
+      // webglcontextlost/restored path a real device loss takes.
+      setTimeout(() => gl.getExtension('WEBGL_lose_context')?.loseContext(), 200)
+    }
+    return gl
+  }) as typeof canvas.getContext
+}
+
 function setUrl(params: Record<string, string | null>): void {
   const url = new URL(location.href)
   for (const [k, v] of Object.entries(params)) {
@@ -117,6 +151,7 @@ function SpaceStage({ source, spec, theme, pick, onErrors, onView, onEvent }: St
     if (!host) return
     const canvas = document.createElement('canvas')
     canvas.setAttribute('aria-label', 'Space view')
+    injectState(canvas, injectedStateFromUrl())
     host.appendChild(canvas)
     const renderer = new SpaceRenderer(canvas, {
       palette: palette(themeRef.current),

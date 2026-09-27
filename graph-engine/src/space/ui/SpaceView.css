@@ -63,8 +63,25 @@
   justify-content: center;
   padding: 24px;
   text-align: center;
+}
+
+/* S6 plan V9: the message's own card, legible over whatever the canvas
+   shows (black on a failed clear, a stale frame). One line for the reason,
+   a second, quieter one for the next step, where there is one. */
+.space-message-card {
+  max-width: 32em;
+  padding: 16px 20px;
+  border: 1px solid var(--space-line, currentColor);
+  border-radius: 8px;
+  background: var(--space-surface, transparent);
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
+}
+
+.space-message-next {
+  margin-top: 4px;
+  opacity: 0.75;
+  font-size: 13px;
 }
 
 /* The colorbars (plan E5): right edge, inset 16 px, 12 x 160 px strips with

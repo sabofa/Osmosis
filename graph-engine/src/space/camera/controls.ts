@@ -114,6 +114,47 @@ export function reset(authored: SpaceView): SpaceView {
   return { ...authored, target: [...authored.target] }
 }
 
+// S6 plan V9: double-click and 0 animate back to the authored view over 280
+// ms, ease-out cubic, azimuth the shortest way round; none of this under
+// prefers-reduced-motion (the caller checks that and calls reset() plainly
+// instead of starting an Easing).
+export const EASE_MS = 280
+
+// 1 - (1 - t)^3.
+export function easeOutCubic(t: number): number {
+  const u = 1 - t
+  return 1 - u * u * u
+}
+
+export interface Easing {
+  from: SpaceView
+  to: SpaceView
+  // The shortest signed azimuth turn from `from` to `to`, in (-180, 180]:
+  // wrapAzimuth applied to a difference gives the shortest delta the same
+  // way it gives the shortest absolute angle.
+  azimuthDelta: number
+  startMs: number
+}
+
+export function startEase(from: SpaceView, to: SpaceView, startMs: number): Easing {
+  return { from, to, azimuthDelta: wrapAzimuth(to.azimuth - from.azimuth), startMs }
+}
+
+// The eased view at `nowMs`, or null once it is done (t >= 1) — the caller
+// then applies `easing.to` exactly and drops the Easing.
+export function easeStep(easing: Easing, nowMs: number): SpaceView | null {
+  const t = (nowMs - easing.startMs) / EASE_MS
+  if (t >= 1) return null
+  const e = easeOutCubic(Math.max(0, t))
+  const { from, to } = easing
+  return {
+    azimuth: wrapAzimuth(from.azimuth + easing.azimuthDelta * e),
+    elevation: from.elevation + (to.elevation - from.elevation) * e,
+    zoom: from.zoom + (to.zoom - from.zoom) * e,
+    target: [0, 1, 2].map((i) => from.target[i] + (to.target[i] - from.target[i]) * e) as SpaceView['target'],
+  }
+}
+
 // Degrees per millisecond, as measured from the last moves of an orbit drag.
 export interface OrbitVelocity {
   azimuth: number
