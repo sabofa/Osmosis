@@ -102,46 +102,52 @@ export function sampledRange(F: Field, box: Box3, samples: number): Range | null
 export function marchingTets(F: Field, grid: Grid, level: number): Isosurface {
   const { n, values } = grid
   const s = n + 1
-  const total = s * s * s
   const xs = coordinates(grid.box.x, n)
   const ys = coordinates(grid.box.y, n)
   const zs = coordinates(grid.box.z, n)
-  const gx = (g: number) => xs[g % s]
-  const gy = (g: number) => ys[Math.floor(g / s) % s]
-  const gz = (g: number) => zs[Math.floor(g / (s * s))]
 
   const positions: number[] = []
   const indices: number[] = []
+  // Edge key: the lower grid point * 8 + the corner bits the edge adds (a
+  // Kuhn edge only ever adds bits, so its ends are ordered); a grid point on
+  // the level is keyed -1 - its index. Small integers keep the Map fast.
   const vertexOf = new Map<number, number>()
 
-  // The vertex where F crosses the level on the edge from grid point `a`
-  // (inside) to `b` (outside).
+  // This cube's corners: grid index, F - level, and position.
+  const corner = new Int32Array(8)
+  const cv = new Float64Array(8)
+  const cx = new Float64Array(8)
+  const cy = new Float64Array(8)
+  const cz = new Float64Array(8)
+
+  // The vertex where F crosses the level on the edge from corner `a`
+  // (inside) to corner `b` (outside) of the current cube.
   const crossing = (a: number, b: number): number => {
-    const onB = values[b] - level === 0
-    const key = onB ? -1 - b : a < b ? a * total + b : b * total + a
+    const onB = cv[b] === 0
+    const key = onB ? -1 - corner[b] : (a < b ? corner[a] : corner[b]) * 8 + (a ^ b)
     const known = vertexOf.get(key)
     if (known !== undefined) return known
-    const ax = gx(a)
-    const ay = gy(a)
-    const az = gz(a)
-    const bx = gx(b)
-    const by = gy(b)
-    const bz = gz(b)
-    let t = 1
-    if (!onB) {
+    const index = positions.length / 3
+    if (onB) {
+      positions.push(cx[b], cy[b], cz[b])
+    } else {
+      const ax = cx[a]
+      const ay = cy[a]
+      const az = cz[a]
+      const ex = cx[b] - ax
+      const ey = cy[b] - ay
+      const ez = cz[b] - az
       let lo = 0
       let hi = 1
       while (hi - lo > BISECTION_REL) {
         const mid = 0.5 * (lo + hi)
         // A non-finite value counts as outside, as a value >= level does.
-        if (F(ax + mid * (bx - ax), ay + mid * (by - ay), az + mid * (bz - az)) - level < 0) lo = mid
+        if (F(ax + mid * ex, ay + mid * ey, az + mid * ez) - level < 0) lo = mid
         else hi = mid
       }
-      t = 0.5 * (lo + hi)
+      const t = 0.5 * (lo + hi)
+      positions.push(ax + t * ex, ay + t * ey, az + t * ez)
     }
-    const index = positions.length / 3
-    if (onB) positions.push(bx, by, bz)
-    else positions.push(ax + t * (bx - ax), ay + t * (by - ay), az + t * (bz - az))
     vertexOf.set(key, index)
     return index
   }
@@ -166,51 +172,64 @@ export function marchingTets(F: Field, grid: Grid, level: number): Isosurface {
     }
   }
 
-  const corner = new Int32Array(8)
-  const inside: number[] = []
-  const outside: number[] = []
+  const inside = new Int32Array(4)
+  const outside = new Int32Array(4)
   for (let k = 0; k < n; k++) {
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const base = (k * s + j) * s + i
         let finite = true
+        let below = 0
         for (let c = 0; c < 8; c++) {
           const g = base + (c & 1) + ((c >> 1) & 1) * s + ((c >> 2) & 1) * s * s
           corner[c] = g
-          if (!Number.isFinite(values[g])) finite = false
+          const v = values[g] - level
+          cv[c] = v
+          if (!Number.isFinite(v)) finite = false
+          else if (v < 0) below++
         }
-        if (!finite) continue
+        // A cube wholly on one side has no crossing in any of its
+        // tetrahedra (most cubes: the surface is thin).
+        if (!finite || below === 0 || below === 8) continue
+        for (let c = 0; c < 8; c++) {
+          cx[c] = xs[i + (c & 1)]
+          cy[c] = ys[j + ((c >> 1) & 1)]
+          cz[c] = zs[k + ((c >> 2) & 1)]
+        }
         for (const tet of KUHN_TETS) {
-          inside.length = 0
-          outside.length = 0
-          for (const c of tet) (values[corner[c]] - level < 0 ? inside : outside).push(corner[c])
-          if (inside.length === 0 || outside.length === 0) continue
+          let ni = 0
+          let no = 0
+          for (const c of tet) {
+            if (cv[c] < 0) inside[ni++] = c
+            else outside[no++] = c
+          }
+          if (ni === 0 || no === 0) continue
           // From the inside corners' centroid toward the outside corners':
           // the direction F increases in.
           let dx = 0
           let dy = 0
           let dz = 0
-          for (const g of outside) {
-            dx += gx(g) / outside.length
-            dy += gy(g) / outside.length
-            dz += gz(g) / outside.length
+          for (let m = 0; m < no; m++) {
+            dx += cx[outside[m]] / no
+            dy += cy[outside[m]] / no
+            dz += cz[outside[m]] / no
           }
-          for (const g of inside) {
-            dx -= gx(g) / inside.length
-            dy -= gy(g) / inside.length
-            dz -= gz(g) / inside.length
+          for (let m = 0; m < ni; m++) {
+            dx -= cx[inside[m]] / ni
+            dy -= cy[inside[m]] / ni
+            dz -= cz[inside[m]] / ni
           }
-          if (inside.length === 1) {
-            const [p] = inside
+          if (ni === 1) {
+            const p = inside[0]
             emit(crossing(p, outside[0]), crossing(p, outside[1]), crossing(p, outside[2]), dx, dy, dz)
-          } else if (inside.length === 3) {
-            const [q] = outside
+          } else if (ni === 3) {
+            const q = outside[0]
             emit(crossing(inside[0], q), crossing(inside[1], q), crossing(inside[2], q), dx, dy, dz)
           } else {
             // The quad's corners in cyclic order: consecutive ones share an
             // inside or an outside corner.
-            const [p1, p2] = inside
-            const [q1, q2] = outside
+            const [p1, p2] = [inside[0], inside[1]]
+            const [q1, q2] = [outside[0], outside[1]]
             const a = crossing(p1, q1)
             const b = crossing(p1, q2)
             const c = crossing(p2, q2)

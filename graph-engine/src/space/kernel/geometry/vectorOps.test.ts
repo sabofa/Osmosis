@@ -113,7 +113,10 @@ describe('project:', () => {
     ])
     expect(perp.style.dash).not.toBeNull()
     // cos theta = 3/5, theta = 53.130...°
-    expect(labelText(scene)).toEqual(expect.arrayContaining(['comp_v u = 3', 'θ = 53.13°']))
+    // one readout, so the two numbers never print over each other
+    expect(labelText(scene)).toContain('comp_v u = 3 · θ = 53.13°')
+    const anchors = scene.labels.map((l) => l.position.join(','))
+    expect(new Set(anchors).size).toBe(anchors.length)
     // The right angle sits at the projection's tip, between -v and the
     // perpendicular part; its side is min(0.08 * 10, 0.25 * min(|proj|, |perp|))
     // = min(0.8, 0.75) = 0.75.
@@ -126,7 +129,7 @@ describe('project:', () => {
   })
 
   it('reports the angle in radians as a decimal by default', () => {
-    expect(labelText(clean('project: <3,4,0> onto <1,0,0>'))).toContain('θ = 0.9273')
+    expect(labelText(clean('project: <3,4,0> onto <1,0,0>'))).toContain('comp_v u = 3 · θ = 0.9273')
   })
 
   it('draws u and v from P, and takes names and "at"', () => {
@@ -136,14 +139,15 @@ describe('project:', () => {
       [1, 0, 0],
     ])
     expect(arrows(scene, 's3').tails).toEqual([[0, 0, 1]])
-    expect(labelText(scene)).toContain('comp_v u = 3')
+    expect(labelText(scene)).toContain('comp_v u = 3 · θ = 0.9273')
   })
 
   it('a negative component points the projection backward', () => {
     const scene = clean('project: <-3,4,0> onto <2,0,0>')
     // + 0 turns the -0 of 0 * (-3/2) into 0
     expect(arrows(scene, 's1').vectors.map((v) => v.map((c) => c + 0))).toEqual([[-3, 0, 0]])
-    expect(labelText(scene)).toContain('comp_v u = −3')
+    // cos θ = -6 / (5 * 2), θ = 2.214
+    expect(labelText(scene)).toContain('comp_v u = −3 · θ = 2.214')
   })
 
   it('refuses a zero vector in its own words', () => {

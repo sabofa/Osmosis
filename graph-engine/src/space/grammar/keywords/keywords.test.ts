@@ -50,7 +50,8 @@ describe('contour:', () => {
   })
 
   it('levels n is a count; level c is one level', () => {
-    expect(form('contour: f levels 12')).toMatchObject({ levels: { kind: 'count', n: 12 } })
+    expect(form('contour: f levels 12')).toMatchObject({ levels: { kind: 'count', count: 12 } })
+    expect(form('contour: f levels 100')).toMatchObject({ levels: { kind: 'count', count: 100 } })
     expect(form('contour: f level 2.5')).toMatchObject({ levels: { kind: 'list', values: [p('2.5')] } })
     expect(form('contour: f levels pi, 2 pi')).toMatchObject({ levels: { kind: 'list', values: [p('pi'), p('2 pi')] } })
   })
@@ -64,8 +65,8 @@ describe('contour:', () => {
     ['contour: g', /Expected "contour: g levels 5"/],
     ['contour: levels 3', /Expected "contour: g levels 5"/],
     ['contour: g levels 2.5', /not a count, a list or a range .* "level 2.5" for one level/],
-    ['contour: g levels 0', /the count is from 1 to 50/],
-    ['contour: g levels 51', /the count is from 1 to 50/],
+    ['contour: g levels 0', /the count is from 1 to 100/],
+    ['contour: g levels 101', /the count is from 1 to 100/],
     ['contour: g levels 1..4', /needs a step: "levels 1..4 step 1"/],
     ['contour: g level 1, 2', /"level" takes one value/],
     ['contour: g levels 3 floor floor', /"floor" is given twice/],

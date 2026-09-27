@@ -18,7 +18,8 @@
 //   refused.
 // motion: r at t = 1 [components]
 //   s<line>         v = r' and a = r'' as arrows from r(t), at true length
-//   labels          v, a, and the readouts |v|, a_T = a·T (signed) and |a_N|
+//   labels          v and a at their tips, and one readout at r(t):
+//                   "|v| = ... · a_T = a·T (signed) · |a_N| = ..."
 //   with components, a_T = (a·T)T and a_N = a - a_T as dashed arrows: a
 //   dashed shaft (s<line>.components) and a head with no shaft of its own
 //   (s<line>.componentHeads), since an ArrowMark has no dash. A zero part
@@ -183,14 +184,15 @@ function buildMotion(form: CurveFrameForm, context: BuildContext, p: V3, v: V3, 
   marks.push(point)
   const labels: LabelAnchor[] = drawn.map(([text, u]) => label(context, text, add(p, u), text, 'point'))
   const speed = norm(v)
-  labels.push(label(context, 'speed', p, `|v| = ${formatNumber(speed)}`, 'annotation'))
+  // One readout, so the numbers never print over each other.
+  const readout = label(context, 'readout', p, `|v| = ${formatNumber(speed)}`, 'annotation')
+  labels.push(readout)
   if (speed > 0) {
     const T = unit(v)
     const tangential = dot(a, T)
     const aT = scale(T, tangential)
     const aN = sub(a, aT)
-    labels.push(label(context, 'aT', p, `a_T = ${formatNumber(tangential)}`, 'annotation'))
-    labels.push(label(context, 'aN', p, `|a_N| = ${formatNumber(norm(aN))}`, 'annotation'))
+    readout.text += ` · a_T = ${formatNumber(tangential)} · |a_N| = ${formatNumber(norm(aN))}`
     if (form.components) {
       const parts = (
         [

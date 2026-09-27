@@ -33,6 +33,8 @@ import { checkImplicitRes, sampledRange, sampleGrid } from './marchingTets'
 // "levels n" divides the range of F sampled on this many points per axis.
 export const LEVEL_RANGE_SAMPLES = 16
 export const LEVEL_OPACITY = 0.45
+// The most level surfaces one contour draws: each is a marching pass.
+export const MAX_LEVEL_SURFACES = 20
 
 export function contourForm(statement: Statement): ContourForm {
   if (statement.kind === 'space' && statement.form.form === 'contour') return statement.form
@@ -77,7 +79,7 @@ export function prepareLevels(form: ContourForm, scope: MathScope, reads: Reads)
       return (range) => {
         const r = range()
         if (!r || !(r.max > r.min)) throw new Error(`contour: ${form.text} is constant over the box — list its levels, e.g. "levels 1, 2"`)
-        const values = levelsInside(r, levels.n)
+        const values = levelsInside(r, levels.count)
         if (values.length === 0) throw new Error(`contour: ${form.text} has no nice level inside its range — list its levels`)
         return values
       }
@@ -119,6 +121,9 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
   const build = (): BuildResult => {
     const box = spaceBox(config)
     const values = levelsOf(() => sampledRange(field.f, box, LEVEL_RANGE_SAMPLES))
+    if (values.length > MAX_LEVEL_SURFACES) {
+      throw new Error(`contour: ${form.text} would draw ${values.length} level surfaces — at most ${MAX_LEVEL_SURFACES}; give fewer levels`)
+    }
     const grid = sampleGrid(field.f, box, n)
     const mapped = values.length > 1 && context.colorScaleId !== null
     let scale: ColorScale | null = null

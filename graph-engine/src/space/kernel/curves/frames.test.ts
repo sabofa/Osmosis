@@ -144,7 +144,10 @@ describe('motion:', () => {
       [1, 0, 0],
     ])
     close([...arrows.vectors], [0, 1, 1, -1, 0, 0], 15)
-    expect(labelText(scene)).toEqual(['v', 'a', '|v| = 1.414', 'a_T = 0', '|a_N| = 1'])
+    // one readout, so the numbers never print over each other
+    expect(labelText(scene)).toEqual(['v', 'a', '|v| = 1.414 · a_T = 0 · |a_N| = 1'])
+    const anchors = scene.labels.map((l) => l.position.join(','))
+    expect(new Set(anchors).size).toBe(anchors.length)
   })
 
   it('with components: a_T = 0 draws nothing, a_N = (-1, 0, 0) is a dashed arrow', () => {
@@ -164,6 +167,6 @@ describe('motion:', () => {
     const scene = clean('r(t) = <t, t^2, 0>\nmotion: r at t = 1 components')
     const heads = markAt(scene, 's2.componentHeads') as ArrowMark
     close([...heads.vectors], [0.8, 1.6, 0, -0.8, 0.4, 0], 14)
-    expect(labelText(scene)).toEqual(expect.arrayContaining(['|v| = 2.236', 'a_T = 1.789', '|a_N| = 0.8944']))
+    expect(labelText(scene)).toContain('|v| = 2.236 · a_T = 1.789 · |a_N| = 0.8944')
   })
 })

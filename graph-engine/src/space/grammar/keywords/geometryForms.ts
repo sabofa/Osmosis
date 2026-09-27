@@ -7,7 +7,7 @@ import type { ParamRange, SpaceStyle } from '../types'
 
 // "levels 12", "levels -4..4 step 1", "levels 1, 4, 9" (and "level 4").
 export type Levels =
-  | { kind: 'count'; n: number }
+  | { kind: 'count'; count: number }
   | { kind: 'range'; from: Expr; to: Expr; step: Expr }
   | { kind: 'list'; values: Expr[] }
 

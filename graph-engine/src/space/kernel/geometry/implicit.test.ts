@@ -269,6 +269,10 @@ describe('contour: of three variables draws level surfaces', () => {
     expect(sceneOf(`${G}\ncontour: g levels 3 width: 2`).errors[0].message).toMatch(/width: applies to level curves/)
     expect(sceneOf(`${CUBE3}\n${G}\ncontour: g levels 4, 100 res: 12`).errors).toEqual([{ line: 3, message: 'The level 100 of g does not meet the box' }])
     expect(sceneOf('k(t) = t^2\ncontour: k levels 3').errors[0].message).toMatch(/k takes 1 variable/)
+    // Each level surface is a marching pass over the box: at most 20.
+    expect(sceneOf(`${G}\ncontour: g levels 1..30 step 1 res: 8`).errors).toEqual([
+      { line: 2, message: 'contour: g would draw 30 level surfaces — at most 20; give fewer levels' },
+    ])
   })
 })
 

@@ -19,9 +19,9 @@ import type { SpaceForm } from '../types'
 import type { Levels } from './geometryForms'
 import { keywordStyle } from './shared'
 
-// The most levels one contour draws: each level surface is a marching pass
-// over the whole box.
-export const MAX_LEVELS = 50
+// The most levels one contour asks for (level surfaces have a lower limit of
+// their own in the kernel: each is a marching pass over the whole box).
+export const MAX_LEVELS = 100
 
 const USAGE = '"contour: g levels 5", "contour: g levels -4..4 step 1" or "contour: g levels 1, 4, 9"'
 
@@ -45,7 +45,7 @@ function parseLevels(word: 'level' | 'levels', text: string): Levels {
   if (/^\d+$/.test(spec)) {
     const n = Number(spec)
     if (n < 1 || n > MAX_LEVELS) throw new Error(`"levels ${spec}" asks for ${n} levels — the count is from 1 to ${MAX_LEVELS}`)
-    return { kind: 'count', n }
+    return { kind: 'count', count: n }
   }
   throw new Error(`"levels ${spec}" is not a count, a list or a range — write ${USAGE}, or "level ${spec}" for one level`)
 }

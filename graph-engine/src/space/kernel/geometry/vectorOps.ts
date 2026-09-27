@@ -18,8 +18,10 @@
 //   s<line>.operands       u and v, grey arrows
 //   s<line>.perpendicular  u − proj_v u, dashed, from the projection's tip to u's
 //   s<line>.right          a right-angle mark at the projection's tip
-//   labels                 "comp_v u = u·v/|v|" and the angle between u and v,
-//                          in degrees or radians per @angle, as a decimal
+//   labels                 u and v at their tips, and one readout at the
+//                          projection's midpoint: "comp_v u = u·v/|v| · θ = ...",
+//                          the angle in degrees or radians per @angle, as a
+//                          decimal (one label, so the numbers never overprint)
 //   A zero u or v is refused.
 //
 // A right-angle mark's side is 0.08 × the box's largest span (box.ts), but
@@ -181,12 +183,11 @@ function buildProject(form: VectorOpForm, context: BuildContext, U: V3, V: V3, P
   const cosine = Math.max(-1, Math.min(1, dot(U, V) / (norm(U) * norm(V))))
   const theta = Math.acos(cosine)
   const angle = context.config.angle === 'degrees' ? `${formatNumber((theta * 180) / Math.PI)}°` : formatNumber(theta)
-  const near = Math.min(norm(U), norm(V)) * 0.25
+  const readout = `comp_${v} ${u} = ${formatNumber(dot(U, V) / norm(V))} · θ = ${angle}`
   const labels = [
     label(context, 'u', add(P, U), u, 'point'),
     label(context, 'v', add(P, V), v, 'point'),
-    label(context, 'component', add(P, scale(proj, 0.5)), `comp_${v} ${u} = ${formatNumber(dot(U, V) / norm(V))}`, 'annotation'),
-    label(context, 'angle', add(P, scale(add(unit(U), unit(V)), near)), `θ = ${angle}`, 'annotation'),
+    label(context, 'readout', add(P, scale(proj, 0.5)), readout, 'annotation'),
   ]
   return { marks, labels, errors: [], colorScale: null }
 }
