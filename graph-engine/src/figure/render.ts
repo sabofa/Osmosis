@@ -1522,7 +1522,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         at = drawn.at
         push = outwardPerpendicular(drawn.along[0], drawn.along[1], centre)
         computed = resolvePath(subject).length
-        leader = true
+        // Among a solid's edges a displaced label needs its line back, as a
+        // dimension does; on a lifted unrolling the path stands alone.
+        leader = resolvePath(subject).onSolid.length >= 2
       } else if (subject.kind === 'dihedral') {
         // M3 — the value, on the mark: drawn here (once — not again beside a
         // "dihedral:" for the same angle), the label on the arc's middle,

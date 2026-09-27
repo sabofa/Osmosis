@@ -1,8 +1,9 @@
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { Vec2 } from '../scene/types'
 import { add3, centroid3, cross3, dot3, length3, scale3, sub3 } from './construct3d'
-import { chartPoint, faceChart, faceFrame, moveChart, outwardNormal, placedNet, type Net, type NetPiece } from './nets'
+import { chartPoint, distanceFromApex, faceChart, faceFrame, moveChart, outwardNormal, placedNet, unrolledNet, unrollingOf, wrapAngle, type Net, type NetPiece, type Unrolling } from './nets'
 import type { Solid3D, Vec3 } from './project3d'
+import { toLocal } from './silhouette'
 import type { SolidBody } from './solids'
 
 // Phase 11 — the shortest path over a solid's surface (N3, N4).
@@ -272,6 +273,112 @@ export function turned(net: Net, from: Vec2, to: Vec2): { net: Net; from: Vec2; 
 }
 
 // ---------------------------------------------------------------------------
+// N4 — round solids: closed form on the unrolled curved side
+// ---------------------------------------------------------------------------
+//
+// Both points must be on the LATERAL surface (a rim counts); a point on a
+// flat end is refused. The side unrolls isometrically (nets.ts), so the
+// shortest path is the straight segment in the unrolling, in closed form:
+//
+//  - cylinder: arc position s = r theta, height y; the length is the least of
+//    hypot(ds + 2 pi r k, dy) over k in {-1, 0, 1};
+//  - cone: polar (rho from the apex, phi = theta r / l); the separation
+//    alpha is |d theta| r / l wrapped modulo the sector angle and taken the
+//    shorter way round, and the length is the law of cosines,
+//    sqrt(rhoP^2 + rhoQ^2 - 2 rhoP rhoQ cos alpha).
+//    **There is no through-the-apex case**, and no branch for one: the
+//    shorter way round is at most half the sector angle, pi r / l, and that
+//    is always less than pi because r < l. A branch for it could never run.
+//  - conical frustum: as the cone, about the virtual apex, but the segment
+//    must stay outside the top rim's radius; one that would cross it is
+//    refused — the true path would run along the top rim, which is not
+//    drawn.
+//
+// A geodesic on a curved surface is not a conic in projection, so it is
+// drawn on the lifted UNROLLING only, never on the solid (P and Q are drawn
+// on the solid by their own statements). The unrolling is cut along the
+// generator opposite the path's middle, so the path is one straight segment
+// centred in it; the side of the solid the path runs over is its middle.
+
+const ROUND_PATHS = `shortest paths are found over polyhedra of at most ${MAX_PATH_FACES} faces and the curved sides of cylinders, cones and frusta`
+
+function roundPath(body: SolidBody, name: string, word: string, [p, q]: [Vec3, Vec3], endNames: [string, string]): SurfacePath {
+  const unrolling = unrollingOf(body)
+  if (!unrolling) throw new Error(`"${name}" is ${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word} — ${ROUND_PATHS}`)
+  const local = [toLocal(body.placement, p), toLocal(body.placement, q)] as const
+  const tolerance = GEOM_EPS * Math.max(1, unrolling.radius, unrolling.height)
+  local.forEach((point, i) => onCurvedSide(unrolling, point, tolerance, endNames[i], name, word))
+  const [a, b] = local
+  const thetaP = Math.atan2(a.z, a.x)
+  const thetaQ = Math.atan2(b.z, b.x)
+
+  if (unrolling.kind === 'cylinder') {
+    const r = unrolling.radius
+    const dy = b.y - a.y
+    const ds = r * (thetaQ - thetaP)
+    let best = { length: Infinity, turn: 0 }
+    for (const k of [0, -1, 1]) {
+      const length = Math.hypot(ds + 2 * Math.PI * r * k, dy)
+      if (length < best.length - tolerance) best = { length, turn: ds + 2 * Math.PI * r * k }
+    }
+    // Centred on the path's middle generator; the reader's right is
+    // decreasing theta (nets.ts), so P sits at +turn/2 and Q at -turn/2.
+    const from = { x: best.turn / 2, y: a.y + unrolling.height / 2 }
+    const to = { x: -best.turn / 2, y: b.y + unrolling.height / 2 }
+    return { length: best.length, onSolid: [], faces: [], flat: { net: unrolledNet(unrolling, false), from, to } }
+  }
+
+  const rhoP = distanceFromApex(unrolling, a)
+  const rhoQ = distanceFromApex(unrolling, b)
+  const sector = unrolling.sector
+  const scale = unrolling.radius / unrolling.slant
+  // The separation, wrapped modulo the sector and taken the shorter way round.
+  const unwrapped = (Math.abs(thetaQ - thetaP) * scale) % sector
+  const alpha = Math.min(unwrapped, sector - unwrapped)
+  const length = Math.sqrt(Math.max(0, rhoP * rhoP + rhoQ * rhoQ - 2 * rhoP * rhoQ * Math.cos(alpha)))
+  // Which way round is shorter, for the layout: P to the right of the
+  // middle when Q lies at larger theta (the reader's right is decreasing theta).
+  const sign = wrapAngle(thetaQ - thetaP) >= 0 ? 1 : -1
+  const from = polar(rhoP, -Math.PI / 2 + (sign * alpha) / 2)
+  const to = polar(rhoQ, -Math.PI / 2 - (sign * alpha) / 2)
+  if (unrolling.kind === 'frustum') {
+    // The segment's nearest approach to the apex: at the foot of the
+    // perpendicular when that falls inside it, else at an end.
+    const d = { x: to.x - from.x, y: to.y - from.y }
+    const t = length === 0 ? 0 : -(from.x * d.x + from.y * d.y) / (length * length)
+    const nearest = t > 0 && t < 1 ? Math.abs(from.x * to.y - from.y * to.x) / length : Math.min(rhoP, rhoQ)
+    if (nearest < unrolling.inner - tolerance) {
+      throw new Error(
+        `The shortest path from ${endNames[0]} to ${endNames[1]} over "${name}" would run along the top rim — not drawn ` +
+          '(on the unrolled side the straight line passes inside the top rim)'
+      )
+    }
+  }
+  return { length, onSolid: [], faces: [], flat: { net: unrolledNet(unrolling, false), from, to } }
+}
+
+function polar(rho: number, phi: number): Vec2 {
+  return { x: rho * Math.cos(phi), y: rho * Math.sin(phi) }
+}
+
+// A point in the round solid's local frame on its curved side (a rim
+// counts), or a refusal: on a flat end, or not on the surface at all.
+function onCurvedSide(unrolling: Unrolling, p: Vec3, tolerance: number, point: string, name: string, word: string): void {
+  const half = unrolling.height / 2
+  const across = Math.hypot(p.x, p.z)
+  const radiusAt = unrolling.kind === 'cylinder' ? unrolling.radius : unrolling.radius + ((unrolling.top - unrolling.radius) * (p.y + half)) / unrolling.height
+  const within = p.y >= -half - tolerance && p.y <= half + tolerance
+  if (within && Math.abs(across - radiusAt) <= tolerance) return
+  const endRadius = (y: number) => (unrolling.kind === 'cylinder' ? unrolling.radius : y < 0 ? unrolling.radius : unrolling.top)
+  for (const y of [-half, half]) {
+    if (Math.abs(p.y - y) <= tolerance && across <= endRadius(y) + tolerance && endRadius(y) > 0) {
+      throw new Error(`${point} is on a flat end of "${name}" — a shortest path over ${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word} is found on the curved side only`)
+    }
+  }
+  throw new Error(`${point} is not on the surface of "${name}" — a shortest path runs over the surface of the ${word}, so both its ends must lie on it`)
+}
+
+// ---------------------------------------------------------------------------
 // The one entry point
 // ---------------------------------------------------------------------------
 
@@ -286,5 +393,5 @@ export function shortestPath(
   names: readonly (string | undefined)[] = []
 ): SurfacePath {
   if (body.polyhedron) return polyhedronPath(body.polyhedron, name, word, ends, endNames, names)
-  throw new Error(`"${name}" is ${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word} — shortest paths are found over polyhedra of at most ${MAX_PATH_FACES} faces`)
+  return roundPath(body, name, word, ends, endNames)
 }

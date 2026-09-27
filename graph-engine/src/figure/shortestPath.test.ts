@@ -244,3 +244,116 @@ describe('the shortest: grammar (N5)', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Round solids (N4)
+// ---------------------------------------------------------------------------
+
+// AIME: a cone of radius 600 and height 200√7, so its slant is
+// √(360000 + 280000) = 800. P is on the generator V-R, 125 from V; Q on the
+// exactly opposite generator V-T, 375√2 from V. Unrolled, the sector is
+// 2π · 600/800 = 3π/2 and half a turn round the cone is 3π/4 < π apart.
+const AIME = `V = (0, 0, 200*sqrt(7))
+O = (0, 0, 0)
+R = (0, 600, 0)
+T = (0, -600, 0)
+K = solid cone apex V base O radius 600
+P = divide V-R at 125:675
+Q = divide V-T at 375*sqrt(2):800-375*sqrt(2)`
+
+// A cone of radius 4 and height 3 (slant 5), upright: its apex is at
+// Z = 1.5, and the point rho from the apex on the generator at local angle
+// theta is (X, Y, Z) = (4 rho/5 sin theta, 4 rho/5 cos theta, 1.5 - 3 rho/5)
+// (local x is author Y, local z author X). Sector 2π · 4/5 = 8π/5.
+const WIDE = 'K = solid cone radius 4, height 3'
+
+describe('shortest paths over round solids (N4)', () => {
+  it('flies 625 over the AIME cone: √(125² + (375√2)² + 2 · 125 · 375√2 · √2/2)', () => {
+    // cos(3π/4) = -√2/2, so the law of cosines gives
+    // 15625 + 281250 + 93750 = 390625 = 625².
+    const path = pathIn(AIME, 'P', 'Q', 'K').find()
+    expect(path.length).toBeCloseTo(625, 9)
+    // Drawn on the unrolling only: no geodesic on the solid.
+    expect(path.onSolid).toEqual([])
+  })
+
+  it('unrolls points half a turn apart to the largest separation, πr/l = 4π/5 — still less than π', () => {
+    // P: theta 0, rho 2 -> (0, 1.6, 0.3); Q: theta π, rho 5 (the rim) ->
+    // (0, -4, -1.5). alpha = π · 4/5; cos(4π/5) = -(1 + √5)/4, so the length
+    // is √(4 + 25 + 20(1 + √5)/4) = √(34 + 5√5).
+    const path = pathIn(`${WIDE}\nP = (0, 1.6, 0.3)\nQ = (0, -4, -1.5)`, 'P', 'Q', 'K').find()
+    expect(path.length).toBeCloseTo(Math.sqrt(34 + 5 * Math.sqrt(5)), 12)
+  })
+
+  // Correction to the plan, recorded: half a turn apart the two ways round
+  // are EQUAL (alpha = 8π/5 - 4π/5), so the test above cannot tell the
+  // shorter wrap from the longer. Three-quarters of a turn one way is a
+  // quarter the other, and pins it.
+  it('takes the separation the shorter way round: a quarter turn, not three quarters', () => {
+    // P: theta 3π/4, rho 2 -> (0.8√2, -0.8√2, 0.3); Q: theta -3π/4, rho 5 ->
+    // (-2√2, -2√2, -1.5). |d theta| = 3π/2 by the angles, π/2 the short way:
+    // alpha = π/2 · 4/5 = 2π/5, cos(2π/5) = (√5 - 1)/4, so the length is
+    // √(29 - 5(√5 - 1)) = √(34 - 5√5). The long way, 6π/5, would give
+    // √(34 + 5√5).
+    const spec = `${WIDE}\nP = (0.8*sqrt(2), -0.8*sqrt(2), 0.3)\nQ = (-2*sqrt(2), -2*sqrt(2), -1.5)`
+    const path = pathIn(spec, 'P', 'Q', 'K').find()
+    expect(path.length).toBeCloseTo(Math.sqrt(34 - 5 * Math.sqrt(5)), 12)
+  })
+
+  it('crosses a cylinder to the opposite generator in hypot(3π, 8)', () => {
+    // r = 3, h = 10 (Z from -5 to 5): P at height 1, Q at height 9 on the
+    // generator diametrically opposite. Half the rim, 3π, by 8 up.
+    const spec = 'C = solid cylinder radius 3, height 10\nP = (0, 3, -4)\nQ = (0, -3, 4)'
+    const path = pathIn(spec, 'P', 'Q', 'C').find()
+    expect(path.length).toBeCloseTo(Math.hypot(3 * Math.PI, 8), 12)
+  })
+
+  it('wraps a cylinder the short way across the seam of the angles: k = -1 wins', () => {
+    // P at local angle -170°, Q at +170° (author X = 3 sin theta, Y = 3 cos
+    // theta), 4 apart in height. The angles differ by 340°; round the other
+    // way it is 20° = π/9, an arc of 3π/9 = π/3: √(π²/9 + 16).
+    const spec = 'C = solid cylinder radius 3, height 10\nP = (-3*sin(pi/18), -3*cos(pi/18), -3)\nQ = (3*sin(pi/18), -3*cos(pi/18), 1)'
+    const path = pathIn(spec, 'P', 'Q', 'C').find()
+    expect(path.length).toBeCloseTo(Math.sqrt((Math.PI * Math.PI) / 9 + 16), 12)
+  })
+
+  it('runs over a frustum clear of its top rim, and refuses a path that would cross it', () => {
+    // r₁ = 4, r₂ = 1, h = 4: the virtual apex is at Z = -2 + 4 · 4/3 = 10/3,
+    // the extended slant 20/3, the top rim 5/3 from the apex, the sector 6π/5.
+    // Half a turn apart is alpha = 3π/5, whose half is 54°.
+    // Far down, rho = 6 each ((0, ±3.6, -22/15)): the chord passes 6 cos 54°
+    // = 3.53 from the apex, outside 5/3, and is 2 · 6 sin 54° = 3(1 + √5).
+    const frustum = 'F = solid frustum radius 4, top 1, height 4'
+    const clear = pathIn(`${frustum}\nP = (0, 3.6, -22/15)\nQ = (0, -3.6, -22/15)`, 'P', 'Q', 'F').find()
+    expect(clear.length).toBeCloseTo(3 * (1 + Math.sqrt(5)), 12)
+    // Near the top, rho = 2 each ((0, ±1.2, 26/15)): the chord would pass
+    // 2 cos 54° = 1.18 from the apex, inside 5/3 — over the top rim.
+    const { find } = pathIn(`${frustum}\nP = (0, 1.2, 26/15)\nQ = (0, -1.2, 26/15)`, 'P', 'Q', 'F')
+    expect(() => find()).toThrow('The shortest path from P to Q over "F" would run along the top rim — not drawn')
+  })
+
+  it('refuses a point on a flat end, and a sphere', () => {
+    const cap = pathIn('C = solid cylinder radius 3, height 10\nP = (0, 3, -4)\nQ = (1, 1, 5)', 'P', 'Q', 'C')
+    expect(() => cap.find()).toThrow('Q is on a flat end of "C" — a shortest path over a cylinder is found on the curved side only')
+    const ball = pathIn('S = solid sphere radius 3\nP = (0, 0, 3)\nQ = (0, 3, 0)', 'P', 'Q')
+    expect(() => ball.find()).toThrow('"S" is a sphere — shortest paths are found over polyhedra of at most 12 faces and the curved sides of cylinders, cones and frusta')
+  })
+
+  it('draws the AIME path straight on the lifted unrolling, marks P and Q on the solid, and draws no geodesic in space', () => {
+    const { svg, errors } = render(`${AIME}\nshortest: P to Q over K\nlabel: shortest P to Q over K`)
+    expect(errors).toEqual([])
+    expect(svg).toContain('>625<')
+    // One straight segment, on the unrolling, right of the cone.
+    const path = lines(svg, 7, 'path-PQ')
+    expect(path).toHaveLength(1)
+    const cone = [...svg.matchAll(/<path d="M ([^ ]+) [^"]*"[^>]*data-statement="4"/g)].map((m) => Number(m[1]))
+    expect(Math.min(path[0].x1, path[0].x2)).toBeGreaterThan(Math.max(...cone))
+    // The unrolling's outline: two radii and the arc, all solid (no rims
+    // fold here: the path's unrolling is the curved side alone).
+    expect(lines(svg, 7).filter((l) => l.attrs.includes('data-object="cut-seam"'))).toHaveLength(2)
+    expect(svg).not.toMatch(/data-statement="7"[^>]*stroke-dasharray|stroke-dasharray[^>]*data-statement="7"/)
+    // P and Q are dotted on the solid by their own statements.
+    expect(layer(svg, 'points')).toMatch(/data-statement="5" data-object="P"/)
+    expect(layer(svg, 'points')).toMatch(/data-statement="6" data-object="Q"/)
+  })
+})
