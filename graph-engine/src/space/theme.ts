@@ -74,6 +74,8 @@ export interface SpaceColors {
   axis: Rgb
   grid: Rgb
   gridStrong: Rgb
+  // S6 plan V10: the chrome's secondary text (ui/SpaceView.css --space-muted).
+  muted: Rgb
 }
 
 export function spaceColors(palette: Palette, theme: 'light' | 'dark'): SpaceColors {
@@ -84,6 +86,7 @@ export function spaceColors(palette: Palette, theme: 'light' | 'dark'): SpaceCol
     axis: hexToRgb(palette.axis),
     grid: hexToRgb(palette.grid),
     gridStrong: hexToRgb(palette.gridStrong),
+    muted: hexToRgb(palette.muted),
   }
 }
 

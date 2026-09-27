@@ -37,14 +37,17 @@ export class Overlay {
     this.pool = new LabelPool(this.element)
   }
 
+  // S6 plan V10: the whole chrome's one visual language — the message card
+  // (V9), the parameter panel, the colorbar and the readout boxes (probe.ts)
+  // all read these four custom properties, so a theme change moves every
+  // one of them together. --space-line is gridStrong (a graph's own grid
+  // is grid, too faint to read as a bounded object's edge).
   setColors(colors: SpaceColors): void {
     this.element.style.color = cssRgb(colors.axis)
-    // S6 plan V9: a state message's own card, so it reads whatever the
-    // canvas behind it shows (black on a failed clear, the wrong theme's
-    // tint left over from before) — the theme's own surface and hairline,
-    // not the page's.
+    this.element.style.setProperty('--space-ink', cssRgb(colors.axis))
     this.element.style.setProperty('--space-surface', cssRgb(colors.background))
-    this.element.style.setProperty('--space-line', cssRgb(colors.grid))
+    this.element.style.setProperty('--space-line', cssRgb(colors.gridStrong))
+    this.element.style.setProperty('--space-muted', cssRgb(colors.muted))
   }
 
   update(items: readonly LabelItem[]): void {

@@ -58,13 +58,36 @@ export class ParamsPanel {
   readonly element: HTMLDivElement
   private readonly handlers: ParamsHandlers
   private rows: Row[] = []
+  // S6 plan V10: collapsed to a chip unless hovered, focused, or a
+  // parameter is playing.
+  private hovered = false
+  private focused = false
+  private anyPlaying = false
 
   constructor(overlay: HTMLElement, handlers: ParamsHandlers) {
     this.handlers = handlers
     this.element = overlay.ownerDocument.createElement('div')
     this.element.className = 'space-params'
     this.element.style.display = 'none'
+    this.element.addEventListener('mouseenter', () => this.setExpanded('hovered', true))
+    this.element.addEventListener('mouseleave', () => this.setExpanded('hovered', false))
+    // A hidden collapsed row cannot hold focus, so this only ever fires
+    // from the one row the chip already shows — but it also has to clear
+    // when focus leaves the panel for anywhere else on the page.
+    this.element.addEventListener('focusin', () => this.setExpanded('focused', true))
+    this.element.addEventListener('focusout', () => this.setExpanded('focused', false))
     overlay.appendChild(this.element)
+  }
+
+  private setExpanded(which: 'hovered' | 'focused', value: boolean): void {
+    this[which] = value
+    this.updateCollapsed()
+  }
+
+  private updateCollapsed(): void {
+    const collapsed = this.rows.length > 1 && !this.hovered && !this.focused && !this.anyPlaying
+    if (collapsed) this.element.dataset.collapsed = 'true'
+    else delete this.element.dataset.collapsed
   }
 
   get size(): number {
@@ -133,14 +156,20 @@ export class ParamsPanel {
       loop.addEventListener('click', () => this.handlers.toggleLoop(binding.name))
     }
     this.element.style.display = bindings.length > 0 ? '' : 'none'
+    this.hovered = false
+    this.focused = false
+    this.anyPlaying = false
+    this.updateCollapsed()
   }
 
   // Reflect the live values and play state. The number box a reader is
   // typing into keeps what they typed until they commit.
   sync(state: ReadonlyMap<string, ParamRowState>): void {
+    let anyPlaying = false
     for (const row of this.rows) {
       const s = state.get(row.binding.name)
       if (!s) continue
+      if (s.playing) anyPlaying = true
       const slide = String(s.value)
       const text = displayValue(row.binding, s.value)
       if (row.slider.value !== slide) row.slider.value = slide
@@ -149,6 +178,10 @@ export class ParamsPanel {
       if (row.play.textContent !== play) row.play.textContent = play
       row.play.setAttribute('aria-pressed', String(s.playing))
       row.loop.setAttribute('aria-pressed', String(s.loop))
+    }
+    if (anyPlaying !== this.anyPlaying) {
+      this.anyPlaying = anyPlaying
+      this.updateCollapsed()
     }
   }
 

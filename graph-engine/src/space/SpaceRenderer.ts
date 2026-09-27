@@ -41,6 +41,7 @@ import type { SpaceEvent } from './events'
 import { boxHalfExtents } from './frame/aspect'
 import { flatAxes, resolveBox } from './frame/bounds'
 import { buildFrame } from './frame/build'
+import type { LabelBox } from './frame/labels'
 import { frameAxes } from './frame/ticks'
 import type { FrameAxes } from './frame/types'
 import { GlBackend } from './gl/backend'
@@ -731,6 +732,27 @@ export class SpaceRenderer {
     this.colorbars.update(shown.map((scale) => colorbarModel(scale, colormapTable(scale.map, this.colors))))
   }
 
+  // S6 plan V10: "nothing overlaps the frame's tick labels: V2's placer
+  // knows the chrome's rectangles." The panel, the colorbars and the live
+  // readout boxes are ordinary DOM already positioned by the time this
+  // runs (syncReadouts just ran; the panel and colorbars only move on a
+  // bindings, scene or theme change, all earlier than draw()) — their real
+  // rectangles, measured here and converted to the overlay's own origin, are
+  // the layer boundary between this impure class and layout.ts's pure math.
+  // A hidden or empty element (display: none, or no readout boxes yet)
+  // measures zero-sized and drops out on its own; no special-casing needed.
+  private chromeRects(): LabelBox[] {
+    const origin = this.overlay.element.getBoundingClientRect()
+    const elements = [this.params.element, this.colorbars.element, ...this.readouts.elements()]
+    const rects: LabelBox[] = []
+    for (const el of elements) {
+      const r = el.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) continue
+      rects.push({ x: r.left - origin.left + r.width / 2, y: r.top - origin.top + r.height / 2, width: r.width, height: r.height })
+    }
+    return rects
+  }
+
   private redrawNow(): void {
     if (this.disposed) return
     this.scheduler.cancel()
@@ -832,8 +854,11 @@ export class SpaceRenderer {
       this.backend.setFrame(frame, this.colors)
       this.syncInteraction(camera, world)
       this.backend.draw(camera, this.pixelRatio)
-      this.overlay.update(layoutLabels(frame, scene.labels, camera, world))
+      // The readout boxes go up first (V10): their transform is set from the
+      // probe/pin anchor alone, never from layout, so the placer can measure
+      // where they landed and keep tick labels off them.
       this.syncReadouts(camera, world)
+      this.overlay.update(layoutLabels(frame, scene.labels, camera, world, this.chromeRects()))
     } catch (error) {
       this.report(error instanceof Error ? error.message : String(error))
     }

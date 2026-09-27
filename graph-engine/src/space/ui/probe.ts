@@ -46,6 +46,12 @@ export class ReadoutBoxes {
     return this.boxes.size
   }
 
+  // S6 plan V10: the live boxes' elements, so SpaceRenderer.ts can measure
+  // their rectangles for the label placer's chrome-avoidance.
+  elements(): readonly HTMLElement[] {
+    return [...this.boxes.values()].map((b) => b.element)
+  }
+
   setColors(colors: SpaceColors): void {
     this.colors = colors
     for (const box of this.boxes.values()) this.paint(box.element)

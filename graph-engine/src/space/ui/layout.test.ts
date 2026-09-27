@@ -97,6 +97,20 @@ describe('layoutLabels', () => {
     expect(a).toEqual(b)
   })
 
+  // S6 plan V10: "nothing overlaps the frame's tick labels: V2's placer
+  // knows the chrome's rectangles." layoutLabels only has to hand its
+  // `chromeRects` argument to placeLabels unchanged; placeLabels.test.ts
+  // (labelPlacer.test.ts) proves the placer itself avoids them.
+  it('drops a frame label sitting on a chrome rectangle passed as an obstacle', () => {
+    const frame: FrameModel = { ...EMPTY, labels: [{ key: 'tick:x:0', position: [0, 0, 0], screenOffset: [12, -3], text: '0', role: 'tick' }] }
+    const o = project(cam(40), [0, 0, 0])
+    const obstacle = { x: o.x + 12, y: o.y - 3, width: 200, height: 200 }
+    const withoutChrome = layoutLabels(frame, [], cam(40), WORLD)
+    const withChrome = layoutLabels(frame, [], cam(40), WORLD, [obstacle])
+    expect(withoutChrome[0].visible).toBe(true)
+    expect(withChrome[0].visible).toBe(false)
+  })
+
   it('keeps keys stable across camera positions, so the pool reuses spans', () => {
     const labels = [label([0.2, 0.1, 0.3], 'P', 3), label([0.5, 0.5, 0.5], 'Q', 4)]
     const a = layoutLabels(boxFrame(WORLD, cam(40), AXES), labels, cam(40), WORLD)

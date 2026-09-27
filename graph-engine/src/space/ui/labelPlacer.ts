@@ -55,12 +55,17 @@ export interface PlacedLabel {
 // tick label was there first.
 const PRIORITY: Record<PlacedRole, number> = { annotation: 0, label: 1, tick: 2, title: 2 }
 
-export function placeLabels(requests: readonly LabelRequest[]): PlacedLabel[] {
+// S6 plan V10: "nothing overlaps the frame's tick labels" — the placer also
+// takes the chrome's own rectangles (the parameter panel, the colorbar, the
+// readout boxes; SpaceRenderer.ts measures them from the DOM, since this
+// module stays pure). They out-rank every label — seeded into `placed`
+// before anything is placed — but never appear in the output themselves.
+export function placeLabels(requests: readonly LabelRequest[], obstacles: readonly LabelBox[] = []): PlacedLabel[] {
   const order = requests
     .map((request, index) => ({ request, index }))
     .sort((a, b) => PRIORITY[a.request.role] - PRIORITY[b.request.role] || a.index - b.index)
 
-  const placed: LabelBox[] = []
+  const placed: LabelBox[] = [...obstacles]
   const out = new Map<string, PlacedLabel>()
   for (const { request } of order) {
     const size = estimateLabelSize(request.text, request.fontSize)

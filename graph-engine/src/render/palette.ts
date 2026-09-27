@@ -10,6 +10,9 @@ export interface Palette {
   grid: number
   gridStrong: number
   hover: number
+  // S6 plan V10: de-emphasised text (a chrome panel's secondary line, a
+  // tick's own muted role) — legible, but plainly quieter than axis.
+  muted: number
 }
 
 // Colors pulled from Osmosis's own design language (see web/src/index.css)
@@ -30,6 +33,7 @@ export const LIGHT_PALETTE: Palette = {
   grid: 0xe4e2d4,
   gridStrong: 0xc9c6b3,
   hover: 0xc65d22,
+  muted: 0x6b6558,
 }
 
 export const DARK_PALETTE: Palette = {
@@ -42,6 +46,7 @@ export const DARK_PALETTE: Palette = {
   grid: 0x34311e,
   gridStrong: 0x4a4530,
   hover: 0xe2803f,
+  muted: 0xa39d8c,
 }
 
 // Which CSS custom property feeds each palette slot. The names are the
@@ -57,6 +62,7 @@ const TOKEN_FOR: Record<keyof Palette, string> = {
   axis: '--ink',
   grid: '--line',
   gridStrong: '--line-strong',
+  muted: '--muted',
 }
 
 function parseHex(value: string): number | null {

@@ -18,7 +18,7 @@
 //   is hidden.
 // - Keys are stable across camera moves, so the pool reuses its spans.
 
-import { estimateLabelSize } from '../frame/labels'
+import { estimateLabelSize, type LabelBox } from '../frame/labels'
 import { LABEL_FONT_PX, TICK_FONT_PX, TITLE_FONT_PX } from '../frame/types'
 import { project, type CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
@@ -64,7 +64,17 @@ function publicRole(role: PlacedRole): LabelRole {
   return role === 'annotation' ? 'label' : role
 }
 
-export function layoutLabels(frame: FrameModel, sceneLabels: readonly LabelAnchor[], camera: CameraMatrices, world: WorldMap): LabelItem[] {
+// `chromeRects` (S6 plan V10): the panel, colorbar and readout boxes'
+// screen-space rectangles, in the same CSS-px viewport frame as everything
+// else here — SpaceRenderer.ts measures them from the live DOM (this module
+// stays pure) and passes them through unchanged.
+export function layoutLabels(
+  frame: FrameModel,
+  sceneLabels: readonly LabelAnchor[],
+  camera: CameraMatrices,
+  world: WorldMap,
+  chromeRects: readonly LabelBox[] = [],
+): LabelItem[] {
   const requests: LabelRequest[] = []
   const anchors = new Map<string, { x: number; y: number; visible: boolean }>()
   const fullTexts = new Map<string, string>()
@@ -101,7 +111,7 @@ export function layoutLabels(frame: FrameModel, sceneLabels: readonly LabelAncho
 
   // An off-screen anchor never contests a placement a visible label could use.
   const onScreen = requests.filter((r) => anchors.get(r.key)!.visible)
-  const placedByKey = new Map(placeLabels(onScreen).map((p) => [p.key, p]))
+  const placedByKey = new Map(placeLabels(onScreen, chromeRects).map((p) => [p.key, p]))
 
   return requests.map((r) => {
     const a = anchors.get(r.key)!

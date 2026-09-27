@@ -112,6 +112,47 @@ describe('placeLabels: priority and candidates (unit)', () => {
     expect(placeLabels(a)).toEqual(placeLabels(a))
     expect(placeLabels(a)).toEqual(placeLabels([...a]))
   })
+
+  // S6 plan V10: "nothing overlaps the frame's tick labels: V2's placer
+  // knows the chrome's rectangles."
+  describe('obstacles (S6 plan V10: the chrome`s rectangles)', () => {
+    it('a tick label dropped over an obstacle is hidden, not overlapped', () => {
+      const anchor = { x: 0, y: 0 }
+      const obstacle: LabelBox = { x: 0, y: 0, width: 40, height: 20 }
+      const placed = placeLabels([{ key: 'tick', text: '0', role: 'tick', fontSize: 13, anchor, candidates: [anchor] }], [obstacle])
+      expect(placed[0].visible).toBe(false)
+    })
+
+    it('a point label steps past an obstacle on its first candidate to its next one', () => {
+      const anchor = { x: 0, y: 0 }
+      const candidates = [{ x: 0, y: 0 }, { x: 100, y: 0 }]
+      const obstacle: LabelBox = { x: 0, y: 0, width: 20, height: 20 }
+      const placed = placeLabels([{ key: 'p', text: 'P', role: 'label', fontSize: 13, anchor, candidates }], [obstacle])
+      expect(placed[0].visible).toBe(true)
+      expect(placed[0].x).toBe(100)
+      expect(placed[0].y).toBe(0)
+    })
+
+    it('an annotation steps past an obstacle the same way, before ever falling back to a leader', () => {
+      const anchor = { x: 0, y: 0 }
+      const candidates = [{ x: 0, y: 0 }, { x: 100, y: 0 }]
+      const obstacle: LabelBox = { x: 0, y: 0, width: 20, height: 20 }
+      const placed = placeLabels([{ key: 'a', text: 'readout', role: 'annotation', fontSize: 13, anchor, candidates }], [obstacle])
+      expect(placed[0].visible).toBe(true)
+      expect(placed[0].leader).toBeNull()
+      expect(placed[0].x).toBe(100)
+      expect(placed[0].y).toBe(0)
+    })
+
+    it('an obstacle never appears in the output: it is not one of the requests', () => {
+      const anchor = { x: 0, y: 0 }
+      const placed = placeLabels([{ key: 'tick', text: '0', role: 'tick', fontSize: 13, anchor, candidates: [anchor] }], [
+        { x: 500, y: 500, width: 40, height: 20 },
+      ])
+      expect(placed).toHaveLength(1)
+      expect(placed[0].key).toBe('tick')
+    })
+  })
 })
 
 describe('S6 plan V2 scenarios, through the real pipeline', () => {
