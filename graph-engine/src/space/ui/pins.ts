@@ -75,6 +75,7 @@ export function reducePins(state: PinsState, action: PinAction): { state: PinsSt
       if (state.pins.length === 0) return { state, events: [] }
       return { state: { ...state, pins: [] }, events: [{ type: 'pin', action: 'clear', hit: null }] }
     case 'reevaluate': {
+      if (state.pins.length === 0) return { state, events: [] }
       const pins: Pin[] = []
       for (const p of state.pins) {
         const hit = reevaluate(p.hit, action.scene)

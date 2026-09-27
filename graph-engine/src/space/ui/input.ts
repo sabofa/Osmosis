@@ -16,6 +16,8 @@
 // - For the probe and pins (S3): a move with no gesture under way is a
 //   hover; a press released within 4 px and 400 ms is a click (pins.ts);
 //   leaving the canvas and Esc are reported too.
+// - Dragging a point (S3): a primary press the host grabs (handlers.grab)
+//   is not an orbit; its moves and release go to the host.
 
 import type { Projection, SpaceView } from '../config'
 import { orbit, ORBIT_DEG_PER_PX, pan, reset, WHEEL_STEP, zoomAt, type OrbitVelocity } from '../camera/controls'
@@ -213,6 +215,11 @@ export interface InputHandlers {
   click?(x: number, y: number): void
   // Esc, with the canvas focused.
   escape?(): void
+  // A primary press: true takes the gesture (a draggable point is under it),
+  // and its moves and release go to dragTo and release instead of the camera.
+  grab?(x: number, y: number): boolean
+  dragTo?(x: number, y: number): void
+  release?(): void
 }
 
 export interface AttachedInput {
@@ -245,21 +252,39 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
   })
   // The primary press that may become a click.
   let pressed: { id: number; x: number; y: number; time: number } | null = null
-  const down = (e: PointerEvent) => {
-    handlers.stopInertia()
-    handlers.press?.()
-    const first = !machine.active
-    if (first) invalidate()
-    const s = sample(e)
-    pressed = first && e.button === 0 ? { id: e.pointerId, x: s.x, y: s.y, time: s.time } : null
-    machine.down(s)
+  // The pointer dragging a grabbed point, if any.
+  let grabbed: number | null = null
+  const capture = (id: number) => {
     try {
-      canvas.setPointerCapture(e.pointerId)
+      canvas.setPointerCapture(id)
     } catch {
       // A synthetic or already-released pointer cannot be captured; moves still arrive.
     }
   }
+  const down = (e: PointerEvent) => {
+    handlers.stopInertia()
+    handlers.press?.()
+    const first = !machine.active && grabbed === null
+    if (first) invalidate()
+    const s = sample(e)
+    if (first && e.button === 0 && !e.shiftKey && handlers.grab?.(s.x, s.y)) {
+      grabbed = e.pointerId
+      pressed = null
+      capture(e.pointerId)
+      return
+    }
+    pressed = first && e.button === 0 ? { id: e.pointerId, x: s.x, y: s.y, time: s.time } : null
+    machine.down(s)
+    capture(e.pointerId)
+  }
   const move = (e: PointerEvent) => {
+    if (grabbed !== null) {
+      if (e.pointerId === grabbed) {
+        const p = local(e)
+        handlers.dragTo?.(p.x, p.y)
+      }
+      return
+    }
     if (!machine.active) {
       if (handlers.hover) {
         const p = local(e)
@@ -272,7 +297,14 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     const view = machine.move(sample(e), ctx)
     if (view) handlers.apply(view)
   }
+  const letGo = (id: number) => {
+    if (grabbed !== id) return false
+    grabbed = null
+    handlers.release?.()
+    return true
+  }
   const up = (e: PointerEvent) => {
+    if (letGo(e.pointerId)) return
     const s = sample(e)
     const velocity = machine.up(s, handlers.prefersReducedMotion())
     if (velocity) handlers.startInertia(velocity)
@@ -280,12 +312,16 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     pressed = null
     if (press && press.id === e.pointerId && isClick(press, s)) handlers.click?.(s.x, s.y)
   }
-  const cancel = () => {
+  const cancel = (e: PointerEvent) => {
     pressed = null
+    if (letGo(e.pointerId)) return
     machine.cancel()
   }
   const leave = () => handlers.leave?.()
-  const lost = (e: PointerEvent) => machine.lose(e.pointerId)
+  const lost = (e: PointerEvent) => {
+    if (letGo(e.pointerId)) return
+    machine.lose(e.pointerId)
+  }
   const wheel = (e: WheelEvent) => {
     const ctx = handlers.context()
     if (!ctx) return
@@ -321,7 +357,7 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     ['pointerdown', down as EventListener],
     ['pointermove', move as EventListener],
     ['pointerup', up as EventListener],
-    ['pointercancel', cancel],
+    ['pointercancel', cancel as EventListener],
     ['pointerleave', leave],
     ['lostpointercapture', lost as EventListener],
     ['wheel', wheel as EventListener, { passive: false }],

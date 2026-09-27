@@ -1,11 +1,21 @@
 // Points, segments, rays and vectors (K8), in space or lifted onto z = 0 when
 // written with two coordinates. Coordinates are expressions, so they may read
 // parameters (a point that follows a slider).
+//
+// A point whose coordinates read one or two bindings is draggable (S3): its
+// mark carries `drag`, the position and its Jacobian with respect to those
+// bindings at any values, from symbolic derivatives. Both evaluate by writing
+// the given values into the bindings' slots, evaluating, and restoring the
+// live values, so user functions that read a binding follow it too. They are
+// called only from input handlers, never inside a kernel build.
 
 import type { Expr, Statement } from '../../parser/types'
 import type { CompiledFn } from '../../math/compile'
+import { diff } from '../../math/diff'
+import type { MathScope } from '../../math/scope'
+import { simplify } from '../../math/simplify'
 import { formatCoord } from '../../scene/format'
-import type { ArrowMark, LabelAnchor, LineMark, PointMark } from '../scene/types'
+import type { ArrowMark, LabelAnchor, LineMark, PointDrag, PointMark, Vec3 } from '../scene/types'
 import { constant, lineStyle, Reads, SEGMENT_WIDTH } from './common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from './registry'
 
@@ -21,10 +31,44 @@ function coordinates(exprs: readonly (Expr | null)[], context: BuildContext, rea
   })
 }
 
+// The drag descriptor for coordinates that read `params` (one or two bindings).
+function pointDrag(exprs: readonly (Expr | null)[], params: readonly string[], scope: MathScope): PointDrag {
+  const slots = params.map((p) => scope.params.index.get(p)!)
+  const coords = exprs.map((e) => (e ? constant(e, scope) : () => 0))
+  const partials = exprs.map((e) => params.map((p) => (e ? constant(simplify(diff(e, p, scope)), scope) : () => 0)))
+  const at = <T>(values: Float64Array, evaluate: () => T): T => {
+    const live = scope.params.values
+    const saved = slots.map((s) => live[s])
+    slots.forEach((s, i) => (live[s] = values[i]))
+    try {
+      return evaluate()
+    } finally {
+      slots.forEach((s, i) => (live[s] = saved[i]))
+    }
+  }
+  const k = params.length
+  return {
+    params,
+    position: (values) => at(values, (): Vec3 => [coords[0](), coords[1](), coords[2]()]),
+    jacobian: (values) =>
+      at(values, () => {
+        const out = new Float64Array(3 * k)
+        for (let r = 0; r < 3; r++) for (let c = 0; c < k; c++) out[r * k + c] = partials[r][c]()
+        return out
+      }),
+  }
+}
+
 function preparePoint(statement: Statement, context: BuildContext): PreparedStatement {
   if (statement.kind !== 'point') throw new Error(`not a point: ${statement.kind}`)
   const reads = new Reads(context.scope)
-  const [x, y, z] = coordinates([statement.x, statement.y, statement.z], context, reads)
+  const exprs = [statement.x, statement.y, statement.z]
+  const [x, y, z] = coordinates(exprs, context, reads)
+  // Draggable when it reads one or two bindings (in source order); three or
+  // more would leave the drag underdetermined on a 2D screen.
+  const names = new Set(reads.names)
+  const params = context.config.bindings.map((b) => b.name).filter((n) => names.has(n))
+  const drag = params.length >= 1 && params.length <= 2 ? pointDrag(exprs, params, context.scope) : undefined
   const build = (): BuildResult => {
     const position = [x(), y(), z()] as const
     const mark: PointMark = {
@@ -32,6 +76,7 @@ function preparePoint(statement: Statement, context: BuildContext): PreparedStat
       source: context.source,
       positions: Float64Array.from(position),
       style: { color: context.color, size: POINT_SIZE, shape: 'dot' },
+      ...(drag ? { drag } : {}),
     }
     const labels: LabelAnchor[] = statement.label
       ? [{ source: { ...context.source, object: `${context.source.object}.label` }, position, text: statement.label, kind: 'point' }]

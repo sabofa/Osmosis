@@ -5,7 +5,9 @@ import { createFakeGl, type FakeGl } from './gl/fakeGl'
 import { parseSpec } from '../parser/parseSpec'
 import { SpaceRenderer, type SpaceRendererEnv } from './SpaceRenderer'
 import { FakeDocument, type FakeElement } from './testing/fakeDom'
+import { project } from './camera/projection'
 import type { SpaceEvent } from './events'
+import type { SpaceKernel } from './kernel/api'
 import { curveMark, graphMesh, label, meshMark, scene } from './testing/marks'
 
 // A canvas in a parent, both fake, handing out the recording fake GL.
@@ -480,6 +482,116 @@ describe('SpaceRenderer: the probe and pins', () => {
     // Two AA passes of drop lines, feet and the ring.
     const programs = last.map((d) => /space: (\w+)/.exec(fake.programSource(d.program).vertex)?.[1])
     expect(programs).toEqual(['line', 'point', 'point', 'line', 'point', 'point'])
+    r.dispose()
+  })
+})
+
+describe('SpaceRenderer: parameters, play and drag', () => {
+  const SPEC = `@param a = 0.5 range [-2, 2]
+@param b = 1 range [-2, 2]
+@param n = 3 range [1, 30] integer
+z = x^2 + y^2 for x in [-2, 2], y in [-2, 2]
+P = (a, b, a^2 + b^2)`
+
+  function live() {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const events: SpaceEvent[] = []
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light', onEvent: (e) => events.push(e) }, clock.env)
+    const parsed = parseSpec(SPEC)
+    r.setSpec(parsed.statements, parsed.config, parsed.statementLines, SPEC)
+    clock.flush()
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const panel = overlay.children.find((c) => c.className === 'space-params')!
+    const row = (i: number) => {
+      const [name, slider, number, play, loop] = panel.children[i].children
+      return { name, slider: slider as FakeElement & { value: string }, number: number as FakeElement & { value: string }, play, loop }
+    }
+    const kernel = () => r['kernel'] as SpaceKernel
+    return { fake, canvas, clock, events, r, panel, row, kernel }
+  }
+
+  it('shows a row per binding, with its live value', () => {
+    const { panel, row, r } = live()
+    expect(panel.style.display).toBe('')
+    expect(panel.children.map((c) => c.children[0].textContent)).toEqual(['a', 'b', 'n'])
+    expect(row(0).slider.value).toBe('0.5')
+    expect(row(2).number.value).toBe('3')
+    // A hand-built scene has no parameters: the panel hides.
+    r.setScene(scene([helix]), CONFIG)
+    expect(panel.style.display).toBe('none')
+    r.dispose()
+  })
+
+  it('coalesces 10 slider inputs in one frame into one setValue, with the last value', () => {
+    const { clock, events, row, kernel, r } = live()
+    const setValue = vi.spyOn(kernel(), 'setValue')
+    const { slider } = row(0)
+    for (let i = 1; i <= 10; i++) {
+      slider.value = String(i / 10)
+      slider.dispatch('input')
+    }
+    expect(setValue).not.toHaveBeenCalled()
+    clock.flush()
+    expect(setValue.mock.calls).toEqual([['a', 1]])
+    expect(events.filter((e) => e.type === 'param')).toEqual([{ type: 'param', name: 'a', value: 1, source: 'slider' }])
+    r.dispose()
+  })
+
+  it('commits the number box on Enter, and reports nothing for a host setValue', () => {
+    const { clock, events, row, kernel, r } = live()
+    const { number } = row(1)
+    number.value = '-1.25'
+    number.dispatch('keydown', { key: 'Enter' })
+    clock.flush()
+    expect(kernel().values().get('b')).toBe(-1.25)
+    r.setValue('b', 0.75)
+    clock.flush()
+    expect(kernel().values().get('b')).toBe(0.75)
+    expect(events.filter((e) => e.type === 'param').map((e) => e.type === 'param' && e.source)).toEqual(['slider'])
+    r.dispose()
+  })
+
+  it('plays a binding min -> max over 6 s, stepping an integer one, then stops asking for frames', () => {
+    const { clock, events, row, kernel, r } = live()
+    row(2).play.dispatch('click')
+    expect(row(2).play.textContent).toBe('❚❚')
+    // Frames every 16 ms; after about 3.2 s the integer n is near round(1 + 29 * 3.2 / 6) = 16.
+    let frames = 0
+    while (clock.pending() > 0 && frames < 1000) {
+      clock.flush()
+      frames++
+    }
+    // 6 s at 16 ms a frame, and not a standing loop after it.
+    expect(frames).toBeGreaterThan(300)
+    expect(frames).toBeLessThan(400)
+    expect(kernel().values().get('n')).toBe(30)
+    expect(row(2).play.textContent).toBe('▶')
+    const played = events.filter((e) => e.type === 'param' && e.name === 'n')
+    expect(played.every((e) => e.type === 'param' && e.source === 'play' && Number.isInteger(e.value))).toBe(true)
+    expect(played.at(-1)).toMatchObject({ value: 30 })
+    r.dispose()
+  })
+
+  it('drags P = (a, b, a^2 + b^2) under the cursor instead of orbiting, writing a and b', () => {
+    const { clock, canvas, events, kernel, r } = live()
+    const camera = r['camera']()!
+    const world = r['world']!
+    const at = (p: readonly [number, number, number]) => project(camera, world.toWorld(p))
+    const start = at([0.5, 1, 1.25])
+    const view = r.getView()
+    const pointer = (type: string, x: number, y: number, buttons: number) =>
+      canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
+    pointer('pointerdown', start.x, start.y, 1)
+    const target = at([0.8, 1.2, 0.8 ** 2 + 1.2 ** 2])
+    pointer('pointermove', target.x, target.y, 1)
+    clock.flush()
+    pointer('pointerup', target.x, target.y, 0)
+    expect(r.getView()).toEqual(view)
+    expect(kernel().values().get('a')).toBeCloseTo(0.8, 6)
+    expect(kernel().values().get('b')).toBeCloseTo(1.2, 6)
+    expect(new Set(events.filter((e) => e.type === 'param').map((e) => e.type === 'param' && e.source))).toEqual(new Set(['drag']))
     r.dispose()
   })
 })

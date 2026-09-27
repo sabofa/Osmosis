@@ -176,11 +176,26 @@ export interface LineMark {
   pick: CurvePick | null
 }
 
+// How a point defined by one or two parameters is dragged (S3, optional; SP6
+// "Drag"): its position and the 3 x k Jacobian of its position with respect
+// to its parameters, both at any parameter values (not only the live ones),
+// from the symbolic derivatives. Dragging solves for the values that put the
+// point under the cursor.
+export interface PointDrag {
+  // The bindings it moves, in source order (one or two).
+  params: readonly string[]
+  position(values: Float64Array): Vec3
+  // Row-major: [d x/d p0, d x/d p1, d y/d p0, ...], 3 x params.length.
+  jacobian(values: Float64Array): Float64Array
+}
+
 export interface PointMark {
   kind: 'points'
   source: MarkSource
   positions: Float64Array
   style: PointStyle
+  // Present when the point's coordinates read one or two bindings.
+  drag?: PointDrag
 }
 
 export interface ArrowMark {

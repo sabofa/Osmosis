@@ -148,3 +148,66 @@
 .space-readout-value {
   text-align: right;
 }
+
+/* The parameter panel (plan E11): top left, one row per @param. The only
+   part of the overlay that takes pointer events. */
+.space-params {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.space-param {
+  display: grid;
+  grid-template-columns: auto 120px 64px auto auto;
+  align-items: center;
+  column-gap: 6px;
+}
+
+.space-param-name {
+  font-style: italic;
+  min-width: 1em;
+}
+
+.space-param-slider {
+  width: 120px;
+  margin: 0;
+}
+
+.space-param-number {
+  width: 64px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 4px;
+  opacity: 0.9;
+}
+
+.space-param-play,
+.space-param-loop {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 5px;
+  min-width: 24px;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.space-param-loop[aria-pressed='true'] {
+  opacity: 1;
+  font-weight: 700;
+}
