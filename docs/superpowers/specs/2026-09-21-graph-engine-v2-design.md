@@ -1757,9 +1757,12 @@ Change of variables (5.7) is a 2D mapping of regions and belongs to track 4.
 | **S3** | colormaps and colorbar, mesh lines, two-sided tint, box clipping, hidden-line dashes, OIT, depth cue; probe, pins and drop lines; `@param` panel, play and drag; events |
 | **S4** | the differential vocabulary above, and implicit surfaces |
 | **S5** | the integral vocabulary above |
+| **S6** | Visual polish (the user asked for it on 2026-09-26: "a nice to have"). It runs after S5, on the real examples rather than fixtures. It covers: lighting and material feel; the categorical colour series against both themes; frame and gridline weights; label typography and spacing; the readout, pin, colorbar and parameter-panel styling; camera easing (an animated return to the authored view, honouring `prefers-reduced-motion`); empty, error and no-WebGL2 states; and a light-and-dark pass over every example. Colours come from the host's theme tokens (`resolvePalette`), never hard-coded, so track 5's customization builds on it rather than redoing it. |
 
 S1 and S2 may run in parallel once S1's first task has committed the
-`SpaceScene` contract. S4 and S5 may run in parallel after S3. Each phase:
+`SpaceScene` contract. S4 splits into S4a (surfaces in space, vectors,
+curve frames) and S4b (the calculus of a surface). S4a, S4b and S5 may run in
+parallel after S3. Each phase:
 one implementer, then an independent review, fix rounds until the review is
 clean, then a scoped re-review and a look in the browser.
 

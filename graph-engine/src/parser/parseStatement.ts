@@ -1,5 +1,8 @@
 import { isValidColor } from './colors'
+import { parseForRange, parseTuple, splitTopLevelComma } from './grammarUtil'
 import { parseExprString } from './parseExpr'
+import { parseSpaceKeyword } from '../space/grammar/keyword'
+import { parseSpaceUnkeyed } from '../space/grammar/unkeyed'
 import type {
   Condition,
   Construction,
@@ -21,41 +24,6 @@ import type {
 function stripComment(line: string): string {
   const idx = line.indexOf('#')
   return idx === -1 ? line : line.slice(0, idx)
-}
-
-// Splits a comma-separated list at paren/bracket depth 0 (so "cos(t)*3, sin(t)*2"
-// splits into two parts, not three).
-function splitTopLevelComma(s: string): string[] {
-  const parts: string[] = []
-  let depth = 0
-  let start = 0
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]
-    if (c === '(' || c === '[') depth++
-    else if (c === ')' || c === ']') depth--
-    else if (c === ',' && depth === 0) {
-      parts.push(s.slice(start, i))
-      start = i + 1
-    }
-  }
-  parts.push(s.slice(start))
-  return parts
-}
-
-function stripOuterParens(s: string): string {
-  const t = s.trim()
-  if (t.startsWith('(') && t.endsWith(')')) return t.slice(1, -1)
-  throw new Error(`Expected a parenthesized "(x, y)" or "(x, y, z)" tuple, got "${s.trim()}"`)
-}
-
-// A 2-tuple is a 2D coordinate/direction; a 3-tuple is 3D. Anything else is an error.
-function parseTuple(s: string): Expr[] {
-  const inner = stripOuterParens(s)
-  const parts = splitTopLevelComma(inner).map((p) => parseExprString(p))
-  if (parts.length !== 2 && parts.length !== 3) {
-    throw new Error(`Expected "(x, y)" or "(x, y, z)", got "${s.trim()}"`)
-  }
-  return parts
 }
 
 // "(x1,y1[,z1]) -> (x2,y2[,z2])" — shared by the plain ray statement and the
@@ -141,19 +109,6 @@ function splitTableName(line: string, keyword: 'header' | 'row' | 'table'): { ta
   const prefixed = new RegExp(`^([a-zA-Z_][a-zA-Z0-9_]*)\\.${keyword}:`).exec(line)
   if (prefixed) return { tableName: prefixed[1], rest: line.slice(prefixed[0].length) }
   return null
-}
-
-function parseForRange(rangeStr: string): { param: string; from: Expr; to: Expr } {
-  const inIdx = rangeStr.indexOf(' in ')
-  if (inIdx === -1) throw new Error(`Expected "<param> in [a, b]", got "${rangeStr.trim()}"`)
-  const param = rangeStr.slice(0, inIdx).trim()
-  const bracketStr = rangeStr.slice(inIdx + ' in '.length).trim()
-  if (!bracketStr.startsWith('[') || !bracketStr.endsWith(']')) {
-    throw new Error(`Expected a "[a, b]" range, got "${bracketStr}"`)
-  }
-  const bounds = splitTopLevelComma(bracketStr.slice(1, -1))
-  if (bounds.length !== 2) throw new Error(`Expected two bounds in "[a, b]", got "${bracketStr}"`)
-  return { param, from: parseExprString(bounds[0]), to: parseExprString(bounds[1]) }
 }
 
 // --------------------------------------------------------------------------
@@ -943,6 +898,12 @@ function parseStatementCore(rawLine: string): StatementShape {
   const line = stripComment(rawLine).trim()
   if (line.length === 0) throw new Error('Empty statement')
 
+  // Space's keyword-led statements (track 3; space/grammar/keyword.ts). It runs
+  // first and returns null for every line space does not own — including
+  // "plane: A-B-C", whose solid-figure refusal is below.
+  const spaceKeyword = parseSpaceKeyword(line)
+  if (spaceKeyword) return spaceKeyword
+
   // Slope/direction field: "field: dy/dx = <expr(x,y)>"
   if (line.startsWith('field:')) {
     const rest = line.slice('field:'.length).trim()
@@ -1217,6 +1178,13 @@ function parseStatementCore(rawLine: string): StatementShape {
       to: range.to,
     }
   }
+
+  // Space's unkeyed forms (track 3; space/grammar/unkeyed.ts): multi-parameter
+  // and vector definitions, surfaces over domains, space style clauses and
+  // implicit surfaces. Immediately before the function-definition branch, the
+  // earliest that could misread one; null for every line space does not own.
+  const spaceUnkeyed = parseSpaceUnkeyed(line)
+  if (spaceUnkeyed) return spaceUnkeyed
 
   // Named function definition: "k(x) = x^2 + 1" — usable in later statements
   // as k(...), including composed with other functions. Checked before the

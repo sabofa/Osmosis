@@ -151,3 +151,77 @@ describe('@view', () => {
     expect(() => parseConfigLine('@view: orbit', config)).toThrow(/standard, isometric, front, top, side/)
   })
 })
+
+describe('space directives and @param (S1, K7)', () => {
+  it('the defaults: space config and no bindings', () => {
+    const config = defaultConfig()
+    expect(config.space).toEqual({
+      bounds: { x: null, y: null, z: null },
+      aspect: null,
+      projection: 'orthographic',
+      camera: { azimuth: 40, elevation: 25, zoom: 1 },
+      frame: 'box',
+      ticks: { x: null, y: null, z: null },
+      titles: { x: 'x', y: 'y', z: 'z' },
+      colormap: 'viridis',
+      resolution: null,
+      depthcue: true,
+    })
+    expect(config.bindings).toEqual([])
+  })
+
+  it('delegates every SP7 key to space', () => {
+    const config = parse('@bounds3d: x [-3, 3], z [0, 10]')
+    expect(config.space.bounds).toEqual({ x: { min: -3, max: 3 }, y: null, z: { min: 0, max: 10 } })
+    expect(parse('@aspect: 1:1:0.5').space.aspect).toEqual({ kind: 'ratio', x: 1, y: 1, z: 0.5 })
+    expect(parse('@projection: perspective').space.projection).toBe('perspective')
+    expect(parse('@frame: axes').space.frame).toBe('axes')
+    expect(parse('@colormap: magma').space.colormap).toBe('magma')
+    expect(parse('@resolution: 120').space.resolution).toBe(120)
+    expect(parse('@depthcue: off').space.depthcue).toBe(false)
+    expect(parse('@titles: x "t (s)", z "E (J)"').space.titles).toEqual({ x: 't (s)', y: 'y', z: 'E (J)' })
+  })
+
+  it('@camera: azimuth -30 keeps the default elevation 25 and zoom 1', () => {
+    expect(parse('@camera: azimuth -30').space.camera).toEqual({ azimuth: -30, elevation: 25, zoom: 1 })
+  })
+
+  it('@ticks3d: x pi/2, z 0.5 marks the pi multiple by structure', () => {
+    expect(parse('@ticks3d: x pi/2, z 0.5').space.ticks).toEqual({
+      x: { value: Math.PI / 2, pi: { num: 1, den: 2 } },
+      y: null,
+      z: { value: 0.5, pi: null },
+    })
+  })
+
+  it('@ticks3d never infers pi from a float', () => {
+    expect(parse('@ticks3d: x 1.5707963267948966').space.ticks.x).toEqual({ value: 1.5707963267948966, pi: null })
+  })
+
+  it('@param has no colon', () => {
+    expect(parse('@param a = 1 range [0, 5] step 0.1').bindings).toEqual([
+      { name: 'a', value: 1, min: 0, max: 5, step: 0.1, integer: false, line: 0 },
+    ])
+    expect(parse('@param n = 8 range [1, 30] integer').bindings).toEqual([
+      { name: 'n', value: 8, min: 1, max: 30, step: null, integer: true, line: 0 },
+    ])
+  })
+
+  it('@param: with a colon is accepted too, and a source line is kept when given', () => {
+    const config = defaultConfig()
+    parseConfigLine('@param: a = 1 range [0, 5]', config, 7)
+    expect(config.bindings).toEqual([{ name: 'a', value: 1, min: 0, max: 5, step: null, integer: false, line: 7 }])
+  })
+
+  it('@view is still the solid-figure directive, untouched by space', () => {
+    const config = parse('@view: top')
+    expect(config.view).toBe('top')
+    expect(config.space).toEqual(defaultConfig().space)
+  })
+
+  it('refuses a bad space directive by name', () => {
+    expect(() => parse('@bounds3d: x [3, -3]')).toThrow(/bounds3d/)
+    expect(() => parse('@frame: cube')).toThrow(/@frame/)
+    expect(() => parse('@param a = 9 range [0, 5]')).toThrow(/outside/)
+  })
+})

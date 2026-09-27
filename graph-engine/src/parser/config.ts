@@ -2,6 +2,8 @@
 // the spec text (order doesn't matter; last value for a repeated key wins).
 // Threaded from parseSpec -> GraphViewer -> the renderers/scene builders, so
 // a test writer controls presentation without touching code.
+
+import { defaultSpaceConfig, type Binding, type SpaceConfig } from '../space/config'
 export interface GraphBounds {
   xMin: number
   xMax: number
@@ -121,6 +123,12 @@ export interface GraphConfig {
   // the same until asked for; header/row-only tables have no formula to show
   // regardless of this setting.
   tableFormulas: boolean
+  // Space's own directives (@bounds3d, @camera, @ticks3d, ...; SP7), parsed by
+  // space/grammar/directives.ts. @view above stays the solid-figure camera.
+  space: SpaceConfig
+  // The spec's @param bindings, in source order (SP6). Space-only for now:
+  // the 2D renderer ignores bindings until track 4 adopts them.
+  bindings: Binding[]
 }
 
 export function defaultConfig(): GraphConfig {
@@ -147,5 +155,7 @@ export function defaultConfig(): GraphConfig {
     hidden: new Set(),
     view: 'standard',
     tableFormulas: false,
+    space: defaultSpaceConfig(),
+    bindings: [],
   }
 }

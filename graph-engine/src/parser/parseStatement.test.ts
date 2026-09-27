@@ -1141,3 +1141,156 @@ describe('the Q7 refusals never catch a line the base grammar read (fix round 2)
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Space's two hooks (S1, K5): what they must leave alone, and what they claim.
+// ---------------------------------------------------------------------------
+
+// Expected trees written out by hand, not produced by any parser.
+const n = (value: number) => ({ kind: 'num', value })
+const v = (name: string) => ({ kind: 'var', name })
+const bin = (op: string, left: unknown, right: unknown) => ({ kind: 'binary', op, left, right })
+const fnCall = (name: string, ...args: unknown[]) => ({ kind: 'call', name, args })
+const plain = { color: null, statementName: null }
+
+describe('space never claims these lines: each parses exactly as before (K5 negatives)', () => {
+  const SQUARES = bin('+', bin('^', v('x'), n(2)), bin('^', v('y'), n(2)))
+  const BEFORE: [string, unknown][] = [
+    ['x^2 + y^2 = 25', { kind: 'implicit', left: SQUARES, right: n(25), ...plain }],
+    ['y = x^2', { kind: 'explicit', independent: 'x', body: bin('^', v('x'), n(2)), condition: null, ...plain }],
+    ['z = x*y', { kind: 'surface', body: bin('*', v('x'), v('y')), ...plain }],
+    ['k(x) = x^2', { kind: 'functionDef', name: 'k', param: 'x', body: bin('^', v('x'), n(2)), ...plain }],
+    ['g(z) = z^2', { kind: 'functionDef', name: 'g', param: 'z', body: bin('^', v('z'), n(2)), ...plain }],
+    ['A = (1, 2, 3)', { kind: 'point', label: 'A', x: n(1), y: n(2), z: n(3), ...plain }],
+    ['k = z + 1', { kind: 'constantDef', name: 'k', value: bin('+', v('z'), n(1)), ...plain }],
+    ['M = midpoint A-B', { kind: 'construction', names: ['M'], body: { kind: 'midpoint', from: 'A', to: 'B' }, ...plain }],
+    [
+      'S = solid prism 8 by 5 by 6',
+      { kind: 'solid', name: 'S', primitive: { kind: 'prism', width: n(8), height: n(5), depth: n(6) }, vertices: [], ...plain },
+    ],
+    [
+      'p = plane x + y + z = 4',
+      {
+        kind: 'planeDef',
+        name: 'p',
+        plane: { kind: 'equation', left: bin('+', bin('+', v('x'), v('y')), v('z')), right: n(4), source: 'x + y + z = 4' },
+        ...plain,
+      },
+    ],
+    ['segment: A-B dashed', { kind: 'namedSegment', from: 'A', to: 'B', style: 'dashed', ...plain }],
+    [
+      '(cos(t), sin(t)) for t in [0, 6]',
+      { kind: 'parametric', fx: fnCall('cos', v('t')), fy: fnCall('sin', v('t')), fz: null, param: 't', from: n(0), to: n(6), ...plain },
+    ],
+    [
+      '(cos(t), sin(t), t) for t in [0, 6]',
+      { kind: 'parametric', fx: fnCall('cos', v('t')), fy: fnCall('sin', v('t')), fz: v('t'), param: 't', from: n(0), to: n(6), ...plain },
+    ],
+    ['plane = 2', { kind: 'constantDef', name: 'plane', value: n(2), ...plain }],
+    ['net = 5', { kind: 'constantDef', name: 'net', value: n(5), ...plain }],
+    ['z = x*y color: red name: s', { kind: 'surface', body: bin('*', v('x'), v('y')), color: 'red', statementName: 's' }],
+  ]
+  for (const [line, statement] of BEFORE) {
+    it(line, () => {
+      expect(parseStatement(line)).toEqual(statement)
+    })
+  }
+
+  it('plane: A-B-C still throws the phase-8 refusal', () => {
+    expect(() => parseStatement('plane: A-B-C')).toThrow(/A plane is not drawn on its own — it is drawn through the section it cuts/)
+  })
+
+  // A keyword branch that runs before the hook keeps its line: "triangle"
+  // followed by a space is the solved-triangle statement, so this is its
+  // error, not a vector constant named "triangle".
+  it('triangle = <1, 2, 3> is still the triangle statement’s error', () => {
+    expect(() => parseStatement('triangle = <1, 2, 3>')).toThrow(/Expected "triangle ABC:/)
+  })
+})
+
+describe('space claims its own forms through the full wrapper (K5 positives)', () => {
+  const POSITIVE: [string, string][] = [
+    ['f(x, y) = x^2 - y^2', 'function'],
+    ['F(x, y, z) = <-y, x, 0>', 'vectorFunction'],
+    ['r(t) = ⟨cos(t), sin(t), t/4⟩', 'vectorFunction'],
+    ['r(t) = (cos(t), sin(t), t)', 'vectorFunction'],
+    ['u = <1, 2, 3>', 'vectorFunction'],
+    ['z = x*y for x in [0, 1], y in [0, 2]', 'surface'],
+    ['z = x + y over x in [0, 1], y in [x^2, x]', 'surface'],
+    ['z = 1 over y in [0, 2], x in [0, y/2]', 'surface'],
+    ['z = r over r in [0, 2], theta in [0, pi]', 'surface'],
+    ['z = 4 - x^2 - y^2 over x^2 + y^2 <= 4', 'surface'],
+    ['z = x over 1 <= x^2 + y^2 <= 4 and y >= 0', 'surface'],
+    ['z = x^2 opacity: 0.5', 'surface'],
+    ['(cos(t), sin(t), t) for t in [0, 6] width: 3', 'curve'],
+    ['x^2 + y^2 - z^2 = 1', 'implicitSurface'],
+    ['x = y^2 + z^2', 'implicitSurface'],
+    ['implicit: x^2 + y^2 = 4', 'implicitSurface'],
+  ]
+  for (const [line, form] of POSITIVE) {
+    it(line, () => {
+      const s = parseStatement(line)
+      expect(s.kind).toBe('space')
+      if (s.kind !== 'space') throw new Error('unreachable')
+      expect(s.form.form).toBe(form)
+    })
+  }
+
+  it('color: and name: land on a space statement', () => {
+    const s = parseStatement('z = x over x^2 + y^2 <= 1 color: purple name: s')
+    expect(s).toMatchObject({ kind: 'space', color: 'purple', statementName: 's' })
+    if (s.kind !== 'space') throw new Error('unreachable')
+    expect(s.form).toMatchObject({ form: 'surface', domain: { kind: 'inequality' } })
+  })
+
+  it('a style clause is not stripped from a line space does not claim', () => {
+    // A 2D curve with "width:" is not a space form, so the shared grammar sees
+    // the whole line and refuses it as it always did.
+    expect(() => parseStatement('(cos(t), sin(t)) for t in [0, 6] width: 3')).toThrow(/range/)
+  })
+})
+
+describe('space leaves built-in names and solid-figure words alone (fix round 1, I1 and R2)', () => {
+  // Expected trees written out by hand: what the base commit parses.
+  const call2 = (name: string, a: string, b: string) => ({ kind: 'call', name, args: [v(a), v(b)] })
+  const BEFORE: [string, unknown][] = [
+    ['log(y, x) = 2', { kind: 'implicit', left: call2('log', 'y', 'x'), right: n(2), ...plain }],
+    ['log(x, y) = 1', { kind: 'implicit', left: call2('log', 'x', 'y'), right: n(1), ...plain }],
+    ['sin(x, y) = 1', { kind: 'implicit', left: call2('sin', 'x', 'y'), right: n(1), ...plain }],
+    ['plane z = 1', { kind: 'implicit', left: bin('*', v('plane'), v('z')), right: n(1), ...plain }],
+    [
+      'plane x + y + z = 4',
+      { kind: 'implicit', left: bin('+', bin('+', bin('*', v('plane'), v('x')), v('y')), v('z')), right: n(4), ...plain },
+    ],
+    // "label" with no colon is not the label statement: an implicit product
+    ['label z = 3', { kind: 'implicit', left: bin('*', v('label'), v('z')), right: n(3), ...plain }],
+    ['pi = <1, 2, 3>', { threw: 'Unexpected character "<" at position 0' }],
+    ['sin(z) = z^2', { kind: 'functionDef', name: 'sin', param: 'z', body: bin('^', v('z'), n(2)), ...plain }],
+  ]
+  for (const [line, statement] of BEFORE) {
+    it(line, () => {
+      let actual: unknown
+      try {
+        actual = parseStatement(line)
+      } catch (err) {
+        actual = { threw: (err as Error).message }
+      }
+      expect(actual).toEqual(statement)
+    })
+  }
+})
+
+describe('a color: or name: left before a style clause gets a legible error (fix round 1, R3)', () => {
+  it('z = x color: red opacity: 0.5', () => {
+    expect(() => parseStatement('z = x color: red opacity: 0.5')).toThrow(/write color: and name: after the other clauses/)
+    expect(() => parseStatement('z = x color: red opacity: 0.5')).not.toThrow(/Unexpected character/)
+  })
+
+  it('name: before colormap:, on a surface over a domain', () => {
+    expect(() => parseStatement('z = x over x^2 + y^2 <= 1 name: s colormap: height')).toThrow(/write color: and name: after/)
+  })
+
+  it('after the other clauses they still work', () => {
+    expect(parseStatement('z = x opacity: 0.5 color: red name: s')).toMatchObject({ kind: 'space', color: 'red', statementName: 's' })
+  })
+})

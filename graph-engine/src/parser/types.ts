@@ -1,4 +1,5 @@
 import type { GraphConfig } from './config'
+import type { SpaceForm } from '../space/grammar/types'
 
 // Expression AST — a hand-rolled recursive-descent grammar covering standard
 // infix math (+ - * / ^), implicit multiplication (2x, 3(x+1)), unary minus,
@@ -666,6 +667,11 @@ export type StatementShape =
       sides: Partial<Record<TriangleSlot, Expr>>
       angles: Partial<Record<TriangleSlot, Expr>>
     }
+  // A space form (track 3, S1): multi-parameter and vector definitions,
+  // surfaces over domains, space-styled curves and surfaces, implicit
+  // surfaces. Claimed by space/grammar's two hooks in parseStatement.ts; the
+  // grammar, the forms and their style clauses are in space/grammar/.
+  | { kind: 'space'; form: SpaceForm }
 
 // Every statement carries an optional color override and an optional
 // statementName (for @hide/@show targeting — see buildScene.ts), both
@@ -687,6 +693,8 @@ export interface ParseError {
 
 export interface ParseResult {
   statements: Statement[]
+  // The 1-based source line of each statement, parallel to `statements`.
+  statementLines: number[]
   errors: ParseError[]
   config: GraphConfig
 }
