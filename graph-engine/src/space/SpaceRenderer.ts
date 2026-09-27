@@ -24,7 +24,7 @@ import { GlBackend } from './gl/backend'
 import { NO_WEBGL2_MESSAGE } from './gl/context'
 import type { SpaceScene } from './scene/types'
 import { spaceColors, type SpaceColors } from './theme'
-import { attachInput, InputMachine, type InputContext } from './ui/input'
+import { attachInput, InputMachine, type AttachedInput, type InputContext } from './ui/input'
 import { layoutLabels } from './ui/layout'
 import { Overlay } from './ui/overlay'
 import { FrameScheduler, type CancelFrame, type RequestFrame } from './ui/scheduler'
@@ -55,6 +55,9 @@ export interface SpaceRendererEnv {
   prefersReducedMotion(): boolean
   // Calls back whenever the element's CSS size may have changed; returns the unsubscribe.
   observeSize(element: HTMLElement, callback: () => void): () => void
+  // Calls back whenever devicePixelRatio changes (a move to another monitor,
+  // browser zoom), which resizes nothing in CSS; returns the unsubscribe.
+  observePixelRatio(callback: () => void): () => void
 }
 
 export function browserEnv(): SpaceRendererEnv {
@@ -73,6 +76,23 @@ export function browserEnv(): SpaceRendererEnv {
       const observer = new ResizeObserver(() => callback())
       observer.observe(element)
       return () => observer.disconnect()
+    },
+    observePixelRatio(callback) {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {}
+      // A resolution query matches only the current ratio, so it fires once
+      // when the ratio changes and must be re-armed for the new one.
+      let query: MediaQueryList | null = null
+      const changed = () => {
+        arm()
+        callback()
+      }
+      const arm = () => {
+        query?.removeEventListener('change', changed)
+        query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
+        query.addEventListener('change', changed)
+      }
+      arm()
+      return () => query?.removeEventListener('change', changed)
     },
   }
 }
@@ -106,8 +126,9 @@ export class SpaceRenderer {
   private readonly overlay: Overlay
   private readonly scheduler: FrameScheduler
   private readonly input = new InputMachine()
-  private readonly detachInput: () => void
+  private readonly attached: AttachedInput
   private readonly stopObserving: () => void
+  private readonly stopPixelRatio: () => void
   private colors: SpaceColors
   private scene: SpaceScene | null = null
   private space: SpaceConfig = defaultSpaceConfig()
@@ -145,7 +166,7 @@ export class SpaceRenderer {
     })
     if (!this.backend.available) this.overlay.showMessage(NO_WEBGL2_MESSAGE)
     canvas.tabIndex = 0
-    this.detachInput = attachInput(canvas, this.input, {
+    this.attached = attachInput(canvas, this.input, {
       context: () => this.inputContext(),
       apply: (view) => this.applyUserView(view),
       startInertia: (velocity) => this.startInertia(velocity),
@@ -158,7 +179,12 @@ export class SpaceRenderer {
     // paint. Waiting for the next animation frame would show the old frame
     // stretched to the new size for one frame (and a screenshot taken then
     // shows labels that no longer match the drawing).
-    this.stopObserving = env.observeSize(canvas, () => this.redrawNow())
+    this.stopObserving = env.observeSize(canvas, () => {
+      this.attached.invalidate()
+      this.redrawNow()
+    })
+    // A new devicePixelRatio needs a new backing store even at the same CSS size.
+    this.stopPixelRatio = env.observePixelRatio(() => this.redrawNow())
   }
 
   // Resolve the box, aspect and frame axes; upload; draw. The initial view
@@ -222,8 +248,9 @@ export class SpaceRenderer {
     if (this.disposed) return
     this.disposed = true
     this.scheduler.cancel()
-    this.detachInput()
+    this.attached.detach()
     this.stopObserving()
+    this.stopPixelRatio()
     this.backend.dispose()
     this.overlay.dispose()
     this.scene = null
@@ -235,9 +262,9 @@ export class SpaceRenderer {
     if (this.frame(this.env.now())) this.scheduler.request()
   }
 
+  // The viewport measured at the last draw or resize: input never reads layout.
   private inputContext(): InputContext | null {
     if (!this.world || this.disposed) return null
-    this.measure()
     return { view: this.view, authored: this.authored, viewport: this.viewport, world: this.world, projection: this.space.projection }
   }
 

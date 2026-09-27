@@ -28,6 +28,8 @@ function fakeEnv(overrides: Partial<SpaceRendererEnv> = {}) {
   let next = 1
   const queue = new Map<number, (t: number) => void>()
   const resize: (() => void)[] = []
+  const pixelRatio: (() => void)[] = []
+  let ratio = 1.5
   const env: SpaceRendererEnv = {
     requestFrame: vi.fn((cb: (t: number) => void) => {
       queue.set(next, cb)
@@ -37,11 +39,15 @@ function fakeEnv(overrides: Partial<SpaceRendererEnv> = {}) {
       queue.delete(h)
     }),
     now: () => time,
-    devicePixelRatio: () => 1.5,
+    devicePixelRatio: () => ratio,
     prefersReducedMotion: () => false,
     observeSize: (_el, cb) => {
       resize.push(cb)
       return () => resize.splice(resize.indexOf(cb), 1)
+    },
+    observePixelRatio: (cb) => {
+      pixelRatio.push(cb)
+      return () => pixelRatio.splice(pixelRatio.indexOf(cb), 1)
     },
     ...overrides,
   }
@@ -63,6 +69,12 @@ function fakeEnv(overrides: Partial<SpaceRendererEnv> = {}) {
       time += ms
     },
     resize: () => resize.forEach((cb) => cb()),
+    // The display's pixel ratio changes (a monitor move, browser zoom) with no CSS resize.
+    setPixelRatio(next: number) {
+      ratio = next
+      pixelRatio.forEach((cb) => cb())
+    },
+    listeners: () => resize.length + pixelRatio.length,
   }
 }
 
@@ -125,7 +137,7 @@ describe('SpaceRenderer renders on demand', () => {
     const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light', onViewChange }, clock.env)
     r.setScene(scene([helix]), CONFIG)
     clock.flush()
-    const pointer = (x: number) => ({ pointerId: 1, clientX: x, clientY: 100, button: 0, shiftKey: false })
+    const pointer = (x: number) => ({ pointerId: 1, clientX: x, clientY: 100, button: 0, buttons: 1, shiftKey: false })
     canvas.dispatch('pointerdown', pointer(100))
     clock.advance(16)
     canvas.dispatch('pointermove', pointer(130))
@@ -150,6 +162,58 @@ describe('SpaceRenderer renders on demand', () => {
     r.setScene(scene([helix]), CONFIG)
     clock.flush()
     expect([canvas.width, canvas.height]).toEqual([1600, 1200])
+    r.dispose()
+  })
+})
+
+describe('SpaceRenderer and the display', () => {
+  it('re-sizes the backing store and redraws when devicePixelRatio changes without a CSS resize', () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    expect(canvas.width).toBe(1200)
+    const draws = fake.draws.length
+    clock.setPixelRatio(2)
+    expect(canvas.width).toBe(1600)
+    expect(fake.draws.length).toBeGreaterThan(draws)
+    r.dispose()
+    expect(clock.listeners()).toBe(0)
+  })
+
+  it('reads no layout on hover, and at most the rect once per drag', () => {
+    const { canvas } = mount()
+    let reads = 0
+    let rects = 0
+    for (const prop of ['clientWidth', 'clientHeight'] as const) {
+      const value = canvas[prop] as number
+      Object.defineProperty(canvas, prop, {
+        get: () => {
+          reads++
+          return value
+        },
+      })
+    }
+    canvas.getBoundingClientRect = () => {
+      rects++
+      return { left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600 }
+    }
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    reads = 0
+    rects = 0
+    const move = (x: number, buttons: number) => canvas.dispatch('pointermove', { pointerId: 1, clientX: x, clientY: 100, button: -1, buttons, shiftKey: false })
+    for (let x = 0; x < 20; x++) move(x, 0)
+    expect([reads, rects]).toEqual([0, 0])
+    canvas.dispatch('pointerdown', { pointerId: 1, clientX: 20, clientY: 100, button: 0, buttons: 1, shiftKey: false })
+    for (let x = 21; x < 40; x++) move(x, 1)
+    expect(reads).toBe(0)
+    expect(rects).toBeLessThanOrEqual(1)
+    expect(r.getView().azimuth).not.toBe(40)
     r.dispose()
   })
 })

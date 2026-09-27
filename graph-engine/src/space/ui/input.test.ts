@@ -11,9 +11,10 @@ function context(view: SpaceView = AUTHORED): InputContext {
   return { view, authored: AUTHORED, viewport: { width: 800, height: 600 }, world: worldMap(CUBE, [1, 1, 1]), projection: 'orthographic' }
 }
 
-const pointer = (x: number, y: number, time: number, extra: Partial<{ id: number; button: number; shift: boolean }> = {}) => ({
+const pointer = (x: number, y: number, time: number, extra: Partial<{ id: number; button: number; buttons: number; shift: boolean }> = {}) => ({
   id: 1,
   button: 0,
+  buttons: 1,
   shift: false,
   ...extra,
   x,
@@ -31,6 +32,26 @@ describe('InputMachine', () => {
     input.up(pointer(110, 100, 16), false)
     // Released: further moves do nothing.
     expect(input.move(pointer(150, 100, 40), context(moved!))).toBeNull()
+  })
+
+  it('a drag whose buttons read 0 was released unseen: it ends, and later moves do nothing', () => {
+    const input = new InputMachine()
+    input.down(pointer(100, 100, 0))
+    expect(input.move(pointer(110, 100, 16), context())).not.toBeNull()
+    expect(input.move(pointer(120, 100, 32, { buttons: 0 }), context())).toBeNull()
+    expect(input.active).toBe(false)
+    expect(input.move(pointer(130, 100, 48), context())).toBeNull()
+  })
+
+  it('losing pointer capture cancels the drag, with no inertia after', () => {
+    const input = new InputMachine()
+    input.down(pointer(100, 100, 0))
+    input.move(pointer(120, 100, 16), context())
+    input.move(pointer(140, 100, 32), context())
+    input.lose(1)
+    expect(input.active).toBe(false)
+    expect(input.move(pointer(160, 100, 40), context())).toBeNull()
+    expect(input.up(pointer(160, 100, 40), false)).toBeNull()
   })
 
   it('a move with no button down does nothing', () => {

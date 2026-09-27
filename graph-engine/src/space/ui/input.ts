@@ -33,6 +33,8 @@ export interface PointerSample {
   x: number
   y: number
   button: number
+  // Which buttons are held now; 0 during a drag means the release was missed.
+  buttons: number
   shift: boolean
   // ms, any monotonic clock.
   time: number
@@ -65,6 +67,11 @@ export class InputMachine {
   private samples: { time: number; dt: number; azimuth: number; elevation: number }[] = []
   private lastMove = 0
 
+  // Whether a gesture is under way (a hover move has nothing to do).
+  get active(): boolean {
+    return this.gesture !== 'none'
+  }
+
   down(p: PointerSample): void {
     this.pointers.set(p.id, { x: p.x, y: p.y })
     if (this.pointers.size >= 2) this.gesture = 'pinch'
@@ -76,6 +83,12 @@ export class InputMachine {
   move(p: PointerSample, ctx: InputContext): SpaceView | null {
     const prev = this.pointers.get(p.id)
     if (!prev || this.gesture === 'none') return null
+    // No button held: the release happened where we could not see it (outside
+    // the window, or capture failed). The drag is over.
+    if (p.buttons === 0) {
+      this.cancel()
+      return null
+    }
     if (this.gesture === 'pinch') return this.pinch(p, prev, ctx)
     this.pointers.set(p.id, { x: p.x, y: p.y })
     const dx = p.x - prev.x
@@ -114,6 +127,16 @@ export class InputMachine {
   cancel(): void {
     this.pointers.clear()
     this.gesture = 'none'
+    this.samples = []
+  }
+
+  // Pointer capture was lost (the element went away, or the browser took the
+  // pointer): that pointer's gesture ends here, with no inertia.
+  lose(id: number): void {
+    if (!this.pointers.has(id)) return
+    this.pointers.delete(id)
+    this.samples = []
+    this.gesture = this.pointers.size === 0 ? 'none' : this.pointers.size === 1 ? 'orbit' : 'pinch'
   }
 
   wheel(w: WheelSample, ctx: InputContext): SpaceView {
@@ -178,23 +201,38 @@ export interface InputHandlers {
   prefersReducedMotion(): boolean
 }
 
-// The DOM layer: listens on the canvas and feeds the machine. Returns the
-// detach. The canvas is focusable (tabIndex 0) so the keys work once it is
-// clicked or tabbed to.
-export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, handlers: InputHandlers): () => void {
+export interface AttachedInput {
+  detach(): void
+  // The canvas moved or resized: the cached rect is stale.
+  invalidate(): void
+}
+
+// The DOM layer: listens on the canvas and feeds the machine. The canvas is
+// focusable (tabIndex 0) so the keys work once it is clicked or tabbed to.
+//
+// No layout is read on a hover move: a move with no gesture under way
+// returns at once, and the canvas rect is cached, read afresh when a drag
+// starts, and dropped on resize and on any scroll.
+export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, handlers: InputHandlers): AttachedInput {
+  let rect: { left: number; top: number } | null = null
+  const invalidate = () => {
+    rect = null
+  }
   const local = (e: { clientX: number; clientY: number }) => {
-    const rect = canvas.getBoundingClientRect()
+    rect ??= canvas.getBoundingClientRect()
     return { x: e.clientX - rect.left, y: e.clientY - rect.top }
   }
   const sample = (e: PointerEvent): PointerSample => ({
     id: e.pointerId,
     ...local(e),
     button: e.button,
+    buttons: e.buttons,
     shift: e.shiftKey,
     time: handlers.now(),
   })
   const down = (e: PointerEvent) => {
     handlers.stopInertia()
+    if (!machine.active) invalidate()
     machine.down(sample(e))
     try {
       canvas.setPointerCapture(e.pointerId)
@@ -203,6 +241,7 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     }
   }
   const move = (e: PointerEvent) => {
+    if (!machine.active) return
     const ctx = handlers.context()
     if (!ctx) return
     const view = machine.move(sample(e), ctx)
@@ -213,6 +252,7 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     if (velocity) handlers.startInertia(velocity)
   }
   const cancel = () => machine.cancel()
+  const lost = (e: PointerEvent) => machine.lose(e.pointerId)
   const wheel = (e: WheelEvent) => {
     const ctx = handlers.context()
     if (!ctx) return
@@ -245,15 +285,24 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     ['pointermove', move as EventListener],
     ['pointerup', up as EventListener],
     ['pointercancel', cancel],
+    ['lostpointercapture', lost as EventListener],
     ['wheel', wheel as EventListener, { passive: false }],
     ['dblclick', dblclick as EventListener],
     ['keydown', keydown as EventListener],
     ['contextmenu', contextmenu],
   ]
   for (const [type, fn, options] of listeners) canvas.addEventListener(type, fn, options)
+  // Scroll events do not bubble, but a capturing listener on the window sees
+  // every one, the page's and any scrolling ancestor's.
+  const view = canvas.ownerDocument?.defaultView ?? null
+  view?.addEventListener('scroll', invalidate, { capture: true, passive: true })
   // Touch gestures belong to the view, not the page's scroll and zoom.
   canvas.style.touchAction = 'none'
-  return () => {
-    for (const [type, fn] of listeners) canvas.removeEventListener(type, fn)
+  return {
+    invalidate,
+    detach() {
+      for (const [type, fn] of listeners) canvas.removeEventListener(type, fn)
+      view?.removeEventListener('scroll', invalidate, { capture: true })
+    },
   }
 }
