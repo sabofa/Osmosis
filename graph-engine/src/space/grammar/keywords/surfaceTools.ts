@@ -21,6 +21,7 @@
 import { parseForRange, parseTuple } from '../../../parser/grammarUtil'
 import { parseExprString } from '../../../parser/parseExpr'
 import type { Expr } from '../../../parser/types'
+import { parseForDomain } from '../domain'
 import { splitStyle, type RawClause, type StyleKey } from '../style'
 import type { ParamRange, SpaceStyle } from '../types'
 
@@ -91,6 +92,66 @@ function toolStyle(clauses: readonly RawClause[], keyword: string, allowed: read
   return style
 }
 
+// The index of the bracket closing the one at `open` ("(" or "["), or -1.
+function closing(text: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < text.length; i++) {
+    const c = text[i]
+    if (c === '(' || c === '[') depth++
+    else if (c === ')' || c === ']') {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+// A trailing "over <rect>", split off.
+function splitOver(text: string, keyword: string): { rest: string; over: RectOver | null } {
+  const idx = text.lastIndexOf(' over ')
+  if (idx === -1) return { rest: text, over: null }
+  const example = `${keyword}: takes "over x in [a, b], y in [c, d]" (a rectangle)`
+  let domain
+  try {
+    domain = parseForDomain(text.slice(idx + ' over '.length))
+  } catch (err) {
+    throw new Error(`${example} — ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (domain.kind !== 'rect') throw new Error(example)
+  return { rest: text.slice(0, idx).trim(), over: { x: domain.x, y: domain.y } }
+}
+
+// "<target> at <rest>": the target, and what follows "at".
+function splitAt(text: string, keyword: string, example: string): { target: Expr; after: string } {
+  const idx = text.indexOf(' at ')
+  if (idx === -1) throw new Error(`Expected "${keyword}: ${example}", got "${keyword}: ${text}"`)
+  return { target: parseExprString(text.slice(0, idx)), after: text.slice(idx + ' at '.length).trim() }
+}
+
+// "(a, b)" or "(a, b, c)" at the start of `text`, and the words after it.
+function leadingPoint(text: string, keyword: string, example: string): { point: Expr[]; words: string[] } {
+  if (!text.startsWith('(')) throw new Error(`Expected a point "(a, b)" after "at", e.g. "${keyword}: ${example}", got "${text}"`)
+  const end = closing(text, 0)
+  if (end === -1) throw new Error(`Unclosed "(" in the point "${text}"`)
+  const point = parseTuple(text.slice(0, end + 1))
+  const tail = text.slice(end + 1).trim()
+  return { point, words: tail === '' ? [] : tail.split(/\s+/) }
+}
+
+// The words after a point, each one of `allowed`, none twice.
+function flags(words: readonly string[], allowed: readonly string[], keyword: string): Set<string> {
+  const out = new Set<string>()
+  for (const w of words) {
+    if (!allowed.includes(w)) {
+      const takes = allowed.length ? `it takes ${allowed.map((a) => `"${a}"`).join(' or ')}` : 'nothing may follow it'
+      throw new Error(`Unexpected "${w}" after the point in ${keyword}: — ${takes}`)
+    }
+    if (out.has(w)) throw new Error(`"${w}" is given twice`)
+    out.add(w)
+  }
+  return out
+}
+
 function pair(text: string, what: string): [Expr, Expr] {
   const tuple = parseTuple(text)
   if (tuple.length !== 2) throw new Error(`${what} takes two coordinates "(a, b)", got "${text.trim()}"`)
@@ -115,6 +176,43 @@ function parsePath(text: string): SurfaceToolForm {
   return { form: 'path', target, along: curve, t, toward, style: toolStyle(clauses, 'path', ['width', 'res'], 10000) }
 }
 
+// trace: <target> at x = a [tangent at y = b]   (or with x and y swapped)
+function parseTrace(text: string): SurfaceToolForm {
+  const { rest: styled, clauses } = splitStyle(text)
+  const { rest, over } = splitOver(styled, 'trace')
+  const example = 'f at x = 2 tangent at y = 1'
+  const { target, after } = splitAt(rest, 'trace', example)
+  const match = /^([xy])\s*=\s*(.+?)(?:\s+tangent\s+at\s+([a-z]+)\s*=\s*(.+))?$/.exec(after)
+  if (!match) throw new Error(`Expected "trace: ${example}" (or "at y = 1 tangent at x = 2"), got "trace: ${text}"`)
+  const axis = match[1] as 'x' | 'y'
+  const other = axis === 'x' ? 'y' : 'x'
+  if (match[3] !== undefined && match[3] !== other) {
+    throw new Error(`The trace at ${axis} = … is a curve in ${other}, so its tangent is "tangent at ${other} = …", got "tangent at ${match[3]} = …"`)
+  }
+  return {
+    form: 'trace',
+    target,
+    axis,
+    at: parseExprString(match[2]),
+    tangentAt: match[4] === undefined ? null : parseExprString(match[4]),
+    over,
+    style: toolStyle(clauses, 'trace', ['opacity', 'width']),
+  }
+}
+
+// tangent-plane: <target> at (a, b) [normal], or at (x0, y0, z0)
+function parseTangentPlane(text: string): SurfaceToolForm {
+  const { rest: styled, clauses } = splitStyle(text)
+  const { rest, over } = splitOver(styled, 'tangent-plane')
+  const example = 'f at (1, 2) normal'
+  const { target, after } = splitAt(rest, 'tangent-plane', example)
+  const { point, words } = leadingPoint(after, 'tangent-plane', example)
+  const set = flags(words, ['normal'], 'tangent-plane')
+  return { form: 'tangentPlane', target, point, normal: set.has('normal'), over, style: toolStyle(clauses, 'tangent-plane', ['opacity']) }
+}
+
 export const SURFACE_TOOL_KEYWORDS: readonly { keyword: string; parse(rest: string): SurfaceToolForm }[] = [
   { keyword: 'path', parse: parsePath },
+  { keyword: 'trace', parse: parseTrace },
+  { keyword: 'tangent-plane', parse: parseTangentPlane },
 ]
