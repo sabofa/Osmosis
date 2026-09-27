@@ -22,7 +22,7 @@ import { call, mul, num, variable } from '../../../math/expr'
 import type { LineMark, PointMark, SceneError } from '../../scene/types'
 import { DASH, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { approxText, approxTupleText, attempt, floorHeight, formOf, part, readoutLabel, type Approx } from './common'
+import { approxText, approxTupleText, attempt, determined, floorHeight, formOf, IntegralRefusal, part, readoutLabel, type Approx } from './common'
 import { namedShape } from './named'
 import { prepareRegion2 } from './regions'
 import { compileOnRegion } from './target'
@@ -59,7 +59,7 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
       return {
         mass: r.integrate(d),
         moments: [moment(0), moment(1)],
-        total: r.integrate((a, b) => Math.abs(d(a, b)), true).value,
+        total: r.integrate((a, b) => Math.abs(d(a, b))).value,
         floor: true,
       }
     }
@@ -73,11 +73,16 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
   }
 }
 
-// moment / mass, with the error of a quotient.
+// moment / mass, with the error of a quotient, and the moment's scale
+// carried over, so a coordinate that is negligible reads ≈ 0 and one known to
+// no digit is refused (common.ts).
 function quotient(moment: Approx, mass: Approx): Approx {
   const value = moment.value / mass.value
-  if (moment.error === null || mass.error === null) return { value, error: null }
-  return { value, error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value) }
+  return {
+    value,
+    error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value),
+    scale: moment.scale / Math.abs(mass.value),
+  }
 }
 
 function prepareCentroid(statement: Statement, context: BuildContext): PreparedStatement {
@@ -95,7 +100,14 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
     if (!(Math.abs(mass.value) > ZERO_MASS_REL * total) || !Number.isFinite(mass.value)) {
       throw new Error('the mass is zero; the centre is undefined')
     }
-    const centre = moments.map((m) => quotient(m, mass))
+    let centre: Approx[]
+    try {
+      determined(mass)
+      centre = moments.map((m) => determined(quotient(m, mass)))
+    } catch (err) {
+      if (!(err instanceof IntegralRefusal)) throw err
+      return { marks: [], labels: [], errors: [...errors, { line: context.line, message: err.message }], colorScale: null }
+    }
     const p: [number, number, number] = [centre[0].value, centre[1].value, floor ? z0 : centre[2].value]
     const point: PointMark = {
       kind: 'points',

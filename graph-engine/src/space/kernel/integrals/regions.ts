@@ -30,7 +30,7 @@
 
 import type { Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
-import { coarse2, coarse3, gaussLegendre7, integrate2, integrate3 } from '../../../math/quadrature'
+import { gaussLegendre7, integrate2, integrate3 } from '../../../math/quadrature'
 import { formatNumber, formatPoint } from '../../pick/format'
 import type { Domain } from '../../grammar/types'
 import type { LineMark, MeshMark, Range, SceneError } from '../../scene/types'
@@ -43,6 +43,7 @@ import {
   approxText,
   attempt,
   COLLAPSED_REL,
+  determined,
   errorFloor,
   floorHeight,
   formOf,
@@ -77,10 +78,9 @@ export interface RegionSample {
   // and a volume's top and bottom); null for an iterated region.
   box: { x: Range; y: Range } | null
   // The integral over the region of g, written in the region's coordinates,
-  // its error floored by the integral of |g| (common.ts); `nonNegative` says
-  // g >= 0, so that integral is the value itself. An integral with no value
-  // throws an IntegralRefusal.
-  integrate(g: (a: number, b: number) => number, nonNegative?: boolean): Approx
+  // its error honest and floored by rounding, its scale the integral of |g|
+  // (common.ts). An integral with no value throws an IntegralRefusal.
+  integrate(g: (a: number, b: number) => number): Approx
   // The triple integral of h(a, b, z) over the solid z from zlo(a, b) to
   // zhi(a, b) above the region (a volume under or between surfaces).
   integrateSolid(
@@ -142,12 +142,6 @@ function reversePairs(p: Float64Array): Float64Array {
     out[2 * k + 1] = p[2 * (n - 1 - k) + 1]
   }
   return out
-}
-
-// A fixed-cost scale for an error floor: the value when finite, else 0.
-function scale(estimate: () => number): number {
-  const v = estimate()
-  return Number.isFinite(v) ? Math.abs(v) : 0
 }
 
 function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readonly QuadLevel[]): RegionSample {
@@ -226,10 +220,9 @@ function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readon
     boundary: sides.filter((_, i) => keep[i]),
     box: null,
     toXY,
-    integrate(g, nonNegative = false) {
+    integrate(g) {
       const r = quadrature(levels, () => integrate2(inUW(g), a, b, lo, hi))
-      const absolute = nonNegative ? Math.abs(r.value) : scale(() => coarse2(inUW((p, q) => Math.abs(g(p, q))), a, b, lo, hi))
-      return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
+      return { value: orientation * r.value, error: errorFloor(r.error, r.absolute, ROUNDING_REL), scale: r.absolute }
     },
     integrateSolid(h, zlo, zhi, zText) {
       const at = <T>(k: (p: number, q: number) => T) => (uu: number, ww: number) => (swap ? k(ww, uu) : k(uu, ww))
@@ -239,8 +232,7 @@ function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readon
         return h(p, q, z) * jacobian(p)
       }
       const r = quadrature([...levels, { name: 'z', lower: zText[0], upper: zText[1] }], () => integrate3(F, a, b, lo, hi, at(zlo), at(zhi)))
-      const absolute = scale(() => coarse3((uu, ww, z) => Math.abs(F(uu, ww, z)), a, b, lo, hi, at(zlo), at(zhi)))
-      return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
+      return { value: orientation * r.value, error: errorFloor(r.error, r.absolute, ROUNDING_REL), scale: r.absolute }
     },
   }
 }
@@ -305,6 +297,15 @@ const PEAK_GROWTH = 1.5
 // its boundary vertices are bisected onto the curve to BISECTION_REL of an
 // edge.
 const MESH_ROUNDING_REL = 1e-9
+// A singular integrand's sum whose changes shrink by less than this ratio
+// has not settled: its geometric tail is too long to trust. Below it, the
+// tail d1·ρ/(1-ρ) is both the correction added and the error.
+const SLOW_RATIO = 0.9
+// A region fewer than this many cells thick (thickness 2·area/perimeter) is
+// summed on a finer grid, doubling up to THIN_CAP a side; still thin there,
+// it is refused.
+const THIN_CELLS = 4
+const THIN_CAP = 400
 
 // The degree-2 rule at interior points (barycentric 2/3, 1/6, 1/6), so a
 // sample never sits on the boundary, where rounding can put it just outside
@@ -423,34 +424,78 @@ function fittedBox(conditions: readonly Condition[], box: { x: Range; y: Range }
   }
 }
 
+// A mesh's area and the length of its boundary.
+function areaAndPerimeter(samples: DomainSamples, pieces: readonly BoundaryPiece[]): [number, number] {
+  const { x, y, indices } = samples
+  let area = 0
+  for (let t = 0; t < indices.length; t += 3) {
+    const [i, j, k] = [indices[t], indices[t + 1], indices[t + 2]]
+    area += Math.abs((x[j] - x[i]) * (y[k] - y[i]) - (x[k] - x[i]) * (y[j] - y[i])) / 2
+  }
+  return [area, pieces.reduce((m, p) => m + length(p.xy), 0)]
+}
+
 function inequalityRegion(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): RegionSample {
   const fitted = fittedBox(conditions, box, n)
   const samplesAt = (res: number) => inequalitySamples(conditions, fitted.x, fitted.y, res)
   const samples = samplesAt(n)
   const boundary = meshBoundary(samples)
   const inside = (px: number, py: number) => conditions.every((c) => c.h(px, py) <= 0)
-  // The mesh at n, n/2, n/4 and n/8 on the fitted grid: the value is the sum
-  // at n; its error the larger of the last two changes, the boundary's gap,
-  // and rounding; a sum refused only on real evidence of divergence.
-  const resolutions = [n, n / 2, n / 4, n / 8].map((r) => Math.max(2, Math.round(r)))
-  const meshes: DomainSamples[] = [samples]
+  // A thin region (a strip, a ring) is summed on a finer grid: at least
+  // THIN_CELLS cells across its thickness 2·area/perimeter.
+  const [area, perimeter] = areaAndPerimeter(samples, boundary)
+  const thickness = perimeter > 0 ? (2 * area) / perimeter : Infinity
+  const cellAt = (res: number) => Math.max(fitted.x.max - fitted.x.min, fitted.y.max - fitted.y.min) / res
+  let m = n
+  while (thickness < THIN_CELLS * cellAt(m) && m < THIN_CAP) m = Math.min(THIN_CAP, 2 * m)
+  const thin = thickness < THIN_CELLS * cellAt(m)
+  // The mesh at m, m/2, m/4 and m/8 on the fitted grid. The value is the sum
+  // at m plus the geometric tail of its changes; the error that tail, the
+  // boundary's measured gap, lost area and rounding. A sum is refused as
+  // divergent only on evidence, and as too slow when its changes barely
+  // shrink.
+  const resolutions = [m, m / 2, m / 4, m / 8].map((r) => Math.max(2, Math.round(r)))
+  const meshes: DomainSamples[] = m === n ? [samples] : []
   const meshAt = (i: number) => (meshes[i] ??= samplesAt(resolutions[i]))
   let gap: number | null = null
   const settle = (at: (x: number, y: number) => number): Approx => {
+    if (thin) {
+      throw new IntegralRefusal(`the region is thinner than the grid at res ${m} (about ${formatNumber(thickness)} across) — raise res:, or write it as ranges`)
+    }
     const sums = [0, 1, 2, 3].map((i) => meshSum(meshAt(i), at, inside))
     const [A, B, C, D] = sums
-    const [d1, d2, d3] = [Math.abs(A.value - B.value), Math.abs(B.value - C.value), Math.abs(C.value - D.value)]
+    const [s1, s2, s3] = [A.value - B.value, B.value - C.value, C.value - D.value]
+    const [d1, d2, d3] = [Math.abs(s1), Math.abs(s2), Math.abs(s3)]
     const twice = resolutions[3] >= SETTLE_MIN_CELLS
-    const growing = d1 >= SETTLE_RATIO * d2 && (!twice || d2 >= SETTLE_RATIO * d3) && d1 > MESH_ROUNDING_REL * A.absolute
+    const tiny = MESH_ROUNDING_REL * A.absolute
+    const growing = d1 >= SETTLE_RATIO * d2 && (!twice || d2 >= SETTLE_RATIO * d3) && d1 > tiny
     const unbounded = A.peak > PEAK_GROWTH * B.peak && B.peak > PEAK_GROWTH * C.peak
+    const values = () => `${[D, C, B, A].map((s) => formatNumber(s.value)).join(', ')} at res ${[...resolutions].reverse().join(', ')}`
     if (resolutions[2] >= SETTLE_MIN_CELLS && growing && unbounded) {
-      const values = [D, C, B, A].map((s) => formatNumber(s.value)).join(', ')
-      throw new IntegralRefusal(
-        `the integral does not converge: its sum over the mesh grows as the mesh refines (${values} at res ${[...resolutions].reverse().join(', ')})`,
-      )
+      throw new IntegralRefusal(`the integral does not converge: its sum over the mesh grows as the mesh refines (${values()})`)
     }
     gap ??= boundaryGap(boundary, conditions)
-    return { value: A.value, error: Math.max(d1, d2, gap * A.peak, A.lost * A.peak, MESH_ROUNDING_REL * A.absolute) }
+    const floor = Math.max(gap * A.peak, A.lost * A.peak, tiny)
+    // A bounded integrand (its largest sample no longer growing): the mesh's
+    // error is its cells' and its boundary's, no long tail to guess — the
+    // larger of the last two changes. Sums that wander (under-resolved
+    // rings) are a value with a wide error, never a refusal.
+    if (!(A.peak > PEAK_GROWTH * B.peak)) return { value: A.value, error: Math.max(d1, d2, floor), scale: A.absolute }
+    // A singular one (x^2 + y^2)^-0.9 converges slowly: the changes shrink by
+    // ρ per halving of the cell — over two halvings when the n/8 mesh counts,
+    // ρ = sqrt(d1/d3), so a lucky small middle change says nothing about the
+    // rate — and what is left is their geometric tail d1 ρ/(1 - ρ): added
+    // (Richardson) where the last two went one way, and the error, never
+    // below the last change itself. At ρ >= SLOW_RATIO it is too long to
+    // trust, and refused. Changes at rounding level are none.
+    const ratio = (num: number, den: number) => (num <= tiny ? 0 : den <= tiny ? 1 : num / den)
+    const rho = twice ? Math.sqrt(ratio(d1, d3)) : ratio(d1, d2)
+    if (rho >= SLOW_RATIO && d1 > tiny) {
+      throw new IntegralRefusal(`the integral did not settle on this mesh (its sums ${values()} shrink too slowly to judge) — raise res:`)
+    }
+    const tail = (d1 * rho) / (1 - rho)
+    const value = s1 !== 0 && Math.sign(s1) === Math.sign(s2) ? A.value + Math.sign(s1) * tail : A.value
+    return { value, error: Math.max(tail, d1, floor), scale: A.absolute }
   }
   return {
     samples,
@@ -587,7 +632,7 @@ function prepareRegion(statement: Statement, context: BuildContext): PreparedSta
   const build = (): BuildResult => {
     const r = region.build(n)
     const errors: SceneError[] = []
-    const area = attempt(context, errors, () => r.integrate(() => 1, true))
+    const area = attempt(context, errors, () => determined(r.integrate(() => 1)))
     const floor = floorMark(r.samples, z, context, form.style.opacity ?? REGION_OPACITY, context.source.object)
     const boundary = boundaryMark(r.boundary, z, context, part(context, 'boundary').object)
     const marks = [floor, boundary].filter((m) => m !== null)

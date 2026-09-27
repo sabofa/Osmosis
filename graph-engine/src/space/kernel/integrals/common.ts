@@ -12,11 +12,12 @@ import type { SpaceForm } from '../../grammar/types'
 import type { BuildContext } from '../registry'
 
 // A numeric answer. `error` bounds |value - true value|: the method's own
-// estimate, never below what the arithmetic can resolve (errorFloor), or
-// null when there is none, which prints 4 digits.
+// honest estimate, never below what the arithmetic can resolve (errorFloor).
+// `scale` is the integral of |g|, what the value is small or large against.
 export interface Approx {
   value: number
-  error: number | null
+  error: number
+  scale: number
 }
 
 // What floating point can resolve in an integral: this fraction of the
@@ -25,22 +26,40 @@ export interface Approx {
 // its rounding noise, 2×10⁻¹⁷, as if it were a value.
 export const ROUNDING_REL = 1e-13
 
-export function errorFloor(error: number | null, absolute: number, rel: number): number {
-  return Math.max(error ?? 0, rel * Math.abs(absolute))
+// "≈ 0" is shown only for a value within its error when that error is also
+// at most this fraction of the integral of |g|: the value is then known to be
+// negligible against the integrand, not merely unknown (x^(-2/3) over the
+// cube, 3 ± 1000, is not "≈ 0").
+export const ZERO_REL = 1e-3
+
+export function errorFloor(error: number, absolute: number, rel: number): number {
+  return Math.max(error, rel * Math.abs(absolute))
 }
 
-// Zero within its error prints as zero ("≈ 0"): no digit of it is supported.
+function isZero(a: Approx): boolean {
+  return Math.abs(a.value) <= a.error && a.error <= ZERO_REL * Math.abs(a.scale)
+}
+
+// A value may be shown when it is negligible (≈ 0) or known to at least one
+// significant digit; anything less is refused, never printed.
+export function determined(a: Approx): Approx {
+  if (isZero(a) || a.error < Math.abs(a.value) / 2) return a
+  throw new IntegralRefusal(
+    `the integral could not be determined to one significant digit (≈ ${formatNumber(a.value)} ± ${formatNumber(a.error)}) — try tighter bounds or a finer res:`,
+  )
+}
+
 function shown(a: Approx): number {
-  return a.error !== null && Math.abs(a.value) <= a.error ? 0 : a.value
+  return isZero(a) ? 0 : a.value
 }
 
 export function approxText(a: Approx): string {
-  return a.error === null ? formatApprox(a.value) : formatApprox(shown(a), a.error)
+  return formatApprox(shown(a), a.error)
 }
 
 // "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate supports.
 export function approxTupleText(values: readonly Approx[]): string {
-  const parts = values.map((a) => formatNumber(shown(a), a.error === null ? 4 : Math.min(MAX_DIGITS, supportedDigits(shown(a), a.error))))
+  const parts = values.map((a) => formatNumber(shown(a), Math.min(MAX_DIGITS, supportedDigits(shown(a), a.error))))
   return `${APPROX} (${parts.join(', ')})`
 }
 
@@ -74,7 +93,9 @@ function place(err: QuadratureError, levels: readonly QuadLevel[], upTo: number,
 // - divergence: "the integral does not converge: it grows without bound near x = 0";
 // - NaN in the integrand: "the integral is undefined: the integrand is not a number at (x, y) = ...";
 // - NaN in a bound: "the bound sqrt(x - 0.5) is not a number at x = 0.4";
-// - the budget: "the integral did not settle within 4,000,000 evaluations" — never "does not converge".
+// - the budget: "the integral did not settle within 6,000,000 evaluations" (QUAD_BUDGET) — never "does not converge";
+// - a singular point whose pieces shrink too slowly to judge (x^-0.99 at 0):
+//   "the integral did not settle near x = 0: ..." — never "does not converge".
 export function refusalOf(err: QuadratureError, levels: readonly QuadLevel[]): IntegralRefusal {
   switch (err.reason) {
     case 'diverges': {
@@ -87,6 +108,12 @@ export function refusalOf(err: QuadratureError, levels: readonly QuadLevel[]): I
       const { level, side } = err.bound ?? { level: 0, side: 'lower' as const }
       const text = levels[level] ? (side === 'lower' ? levels[level].lower : levels[level].upper) : 'a bound'
       return new IntegralRefusal(`the bound ${text} is not a number${place(err, levels, level, 'at')}`)
+    }
+    case 'slow': {
+      const where = place(err, levels, levels.length, 'near')
+      return new IntegralRefusal(
+        `the integral did not settle${where}: the pieces shed there shrink too slowly to tell a value from divergence in floating point`,
+      )
     }
     case 'budget': {
       const where = place(err, levels, levels.length, 'near')

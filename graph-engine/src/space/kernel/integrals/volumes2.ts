@@ -26,7 +26,7 @@ import { checkBudget, Reads, resolution } from '../common'
 import { finishMesh, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
-import { approxText, attempt, COLLAPSED_REL, formOf, part, readoutLabel, type Approx } from './common'
+import { approxText, attempt, COLLAPSED_REL, determined, formOf, part, readoutLabel, type Approx } from './common'
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
@@ -137,7 +137,7 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     // vertex for vertex.
     const r = region.build(n, n)
     const errors: SceneError[] = []
-    const value = attempt(context, errors, () => r.integrate((a, b) => f(a, b) - g(a, b)))
+    const value = attempt(context, errors, () => determined(r.integrate((a, b) => f(a, b) - g(a, b))))
     if (r.box) {
       surfaceConfig.space.bounds.x = r.box.x
       surfaceConfig.space.bounds.y = r.box.y

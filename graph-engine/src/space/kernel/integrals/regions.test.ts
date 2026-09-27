@@ -259,3 +259,25 @@ describe('inequality regions: samples never fall outside, divergence only on evi
     expect(Math.abs(approx(text, 'dA') - 2 * Math.PI * (1 + Math.sin(150) / 300))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   })
 })
+
+describe('thin regions are summed on a finer grid, or refused (fix round 3)', () => {
+  it('a slanted strip 0.04 wide at res 48 reads 0.16, every digit right (it read 0.2 on the coarse grid)', () => {
+    // |y - x| <= 0.02·√2 is 0.04 across; |x + y| <= 2√2 makes it 4 long
+    const text = readout(sceneOf('region: abs(y - x) <= 0.02*sqrt(2) and abs(x + y) <= 2*sqrt(2) res: 48'), 1).text
+    expect(Math.abs(approx(text, 'area') - 0.16)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+    expect(lastDigitUnit(text, 'area')).toBeLessThanOrEqual(0.01)
+  })
+
+  it('a ring 0.04 wide at res 40 reads π·0.08 ≈ 0.25, every digit right', () => {
+    const text = readout(sceneOf('region: x^2 + y^2 >= 0.95 and x^2 + y^2 <= 1.03 res: 40'), 1).text
+    expect(Math.abs(approx(text, 'area') - 0.08 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+    expect(lastDigitUnit(text, 'area')).toBeLessThanOrEqual(0.01)
+  })
+
+  it('a strip thinner than the finest grid is refused, with its width — never a number', () => {
+    const scene = sceneOf('region: abs(y - x) <= 0.0002 and abs(x + y) <= 2 res: 48')
+    expect(scene.errors.map((e) => e.message)).toEqual([
+      'the region is thinner than the grid at res 400 (about 2.828×10⁻⁴ across) — raise res:, or write it as ranges',
+    ])
+  })
+})
