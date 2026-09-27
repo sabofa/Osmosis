@@ -10,7 +10,7 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1783 tests passing**,
+agents" below). Working tree clean. **1785 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-27, after geometry phase 11 (nets and shortest paths
@@ -775,14 +775,19 @@ piece). P and Q are drawn by their own statements; no geodesic in space.
   separation, 4π/5 < π), and a three-quarter-turn test pins the wrap.
 
 **Fix round 1.** No runtime overlap check (above). A net or a path's strip
-reserves label clearance in its gap (`NET_LABEL_CLEARANCE`, 10% of the
-lifted figure's width, so about 64 view units at any scale: the cube's G no
-longer runs into the net's E); sections keep phase 5's quarter-width gap,
+reserves label clearance in its gap (`NET_LABEL_CLEARANCE`: 10% of the
+size the figure is fitted to — the larger of its width and height, fix
+round 2 — so about 64 view units at any scale and aspect: the cube's G no
+longer runs into the net's E, nor a tall prism's letters into its strip's); sections keep phase 5's quarter-width gap,
 bit for bit. The running lift edge advances only once a section is drawn. A
 later `shortest: … unfold` of a path already drawn lifts its strip; a
 polyhedron path lifts nothing unless asked (P = Q included). The round
 path's unrolling is the net's (above). `turned` turns an arc's angles with
-its centre.
+its centre. **Fix round 2:** a path from a cone's apex (a named apex carries
+rounding, so within the tolerance) runs down one generator to where the net
+puts the other end, in one piece; an end exactly on the seam is dotted on
+the cut edge its path leaves from; the test-only overlap predicate's
+tolerance is relative to the faces' own extent.
 
 **Grammar notes.** A bare `net S` is still refused, now pointing at the
 colon. `net = 5`, `net(x) = x^2`, `net + x = y`, `shortest = 3` and the
@@ -931,7 +936,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1783 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1785 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)

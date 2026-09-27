@@ -6,11 +6,12 @@ import { LIGHT_PALETTE } from '../render/palette'
 import { resolveMode } from '../scene/mode'
 import { GEOM_EPS } from '../scene/geometry/types'
 import { distance3, midpoint3 } from './construct3d'
-import { netSolidWord } from './nets'
+import { netSeam, netSolidWord, unrolledPoint, unrollingOf } from './nets'
 import type { Vec3 } from './project3d'
 import { renderFigure } from './render'
 import { facesHolding, shortestPath, turned } from './shortestPath'
 import { buildSolidFigure } from './solidScope'
+import { toLocal, toWorld } from './silhouette'
 
 // The path between two named points over the solid S of a spec.
 function pathIn(spec: string, from: string, to: string, name = 'S') {
@@ -458,5 +459,53 @@ describe('fix round 1: what a shortest: statement lifts', () => {
     expect(end(arc.to).y).toBeCloseTo(-1, 12)
     expect(flat.to.x).toBeCloseTo(2, 12)
     expect(flat.to.y).toBeCloseTo(0, 12)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 2
+// ---------------------------------------------------------------------------
+
+describe('fix round 2: a path from the apex, and a path from the seam', () => {
+  // A cone tilted on named points: the apex V, read back in the cone's frame,
+  // sits 4.4e-16 from the apex — rounding, not a point on a generator. Every
+  // path from V runs straight down one generator: length the slant,
+  // √(2² + |VO|²) with |VO| = √(1 + 9 + 25) = √35, so √39; drawn as one
+  // piece from the apex to exactly where the net puts the rim point.
+  it('runs from a named apex straight down the generator to where the net puts the other end', () => {
+    const parsed = parseSpec('V = (1, 2, 5)\nO = (0, -1, 0)\nK = solid cone apex V base O radius 2')
+    const scope = buildSolidFigure(parsed.statements, (e) => evalExpr(e, {}, parsed.config.angle, {}))
+    const body = scope.solids.get('K')!
+    const unrolling = unrollingOf(body)!
+    const apex = scope.points.get('V')!
+    for (let k = 0; k < 24; k++) {
+      const t = (2 * Math.PI * k) / 24
+      const rim = toWorld(body.placement, { x: 2 * Math.cos(t), y: -unrolling.height / 2, z: 2 * Math.sin(t) })
+      const path = shortestPath(body, 'K', 'cone', [apex, rim], ['V', 'Q'])
+      expect(path.length).toBeCloseTo(Math.sqrt(39), 12)
+      expect(path.flat.pieces).toHaveLength(1)
+      const [start, end] = path.flat.pieces[0]
+      expect(Math.hypot(start.x, start.y)).toBe(0)
+      const expected = unrolledPoint(unrolling, netSeam(body), toLocal(body.placement, rim))
+      expect(end.x).toBeCloseTo(expected.x, 9)
+      expect(end.y).toBeCloseTo(expected.y, 9)
+    }
+  })
+
+  it('dots P on the cut edge its path leaves from when P is exactly on the seam', () => {
+    // Radius 3: the seam is the generator at azimuth 210°. P on it, height
+    // 1; Q at 190°, height 9. The net puts P on the LEFT cut edge, but the
+    // path leaves it the other way, from the right edge: P's dot is there.
+    const at = (degrees: number, z: number) => `(3*cos(${degrees}*pi/180), 3*sin(${degrees}*pi/180), ${z})`
+    const { svg, errors } = render(`C = solid cylinder radius 3, height 10\nP = ${at(210, -4)}\nQ = ${at(190, 4)}\nshortest: P to Q over C`)
+    expect(errors).toEqual([])
+    const path = lines(svg, 3, 'path-PQ')
+    expect(path).toHaveLength(1)
+    const dot = /<circle cx="([^"]*)" cy="([^"]*)"[^>]*data-statement="3" data-object="P"/.exec(svg)!
+    const ends = [
+      [path[0].x1, path[0].y1],
+      [path[0].x2, path[0].y2],
+    ]
+    expect(ends.some(([x, y]) => Math.hypot(x - Number(dot[1]), y - Number(dot[2])) < 1e-2)).toBe(true)
   })
 })

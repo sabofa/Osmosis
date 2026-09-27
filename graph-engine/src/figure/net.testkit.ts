@@ -11,11 +11,13 @@ import type { Vec2 } from '../scene/types'
 // plane): on every such axis their projections overlap by MORE than a
 // tolerance. Touching along an edge or at a point projects to intervals that
 // meet in a single value on the edge's own normal, so it is not an overlap.
-// The tolerance is GEOM_EPS scaled to the two polygons' size.
+// The tolerance is GEOM_EPS scaled to the two polygons' own extent (their
+// joint bounding box), never to how far from the origin they sit.
 export function convexOverlap(a: readonly Vec2[], b: readonly Vec2[]): boolean {
-  let size = 1
-  for (const p of [...a, ...b]) size = Math.max(size, Math.abs(p.x), Math.abs(p.y))
-  const tolerance = GEOM_EPS * size
+  const all = [...a, ...b]
+  const width = Math.max(...all.map((p) => p.x)) - Math.min(...all.map((p) => p.x))
+  const height = Math.max(...all.map((p) => p.y)) - Math.min(...all.map((p) => p.y))
+  const tolerance = GEOM_EPS * Math.max(width, height)
   for (const polygon of [a, b]) {
     for (let i = 0; i < polygon.length; i++) {
       const p = polygon[i]

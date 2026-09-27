@@ -353,11 +353,20 @@ function roundPath(body: SolidBody, name: string, word: string, [p, q]: [Vec3, V
     const t = (edge - from.x) / (far.x - from.x)
     const cross = { x: edge, y: from.y + t * (far.y - from.y) }
     const shift = (p: Vec2): Vec2 => ({ x: p.x - 2 * edge, y: p.y })
-    return { length: best.length, onSolid: [], faces: [], flat: { net, from, to: shift(far), pieces: splitPieces(from, cross, shift(cross), shift(far), tolerance) } }
+    return { length: best.length, onSolid: [], faces: [], flat: splitAtSeam(net, from, cross, shift(cross), shift(far), tolerance) }
   }
 
   const rhoP = distanceFromApex(unrolling, a)
   const rhoQ = distanceFromApex(unrolling, b)
+  // An end AT the apex (within the tolerance: a named apex point carries
+  // rounding) has no angle round the axis. The path is then the generator
+  // to the other end, length its distance from the apex, drawn as one piece
+  // from the apex to where the net puts the other end (fix round 2).
+  if (rhoP <= tolerance || rhoQ <= tolerance) {
+    const apex = { x: 0, y: 0 }
+    const [start, end] = rhoP <= tolerance ? [apex, unrolledPoint(unrolling, seam, b)] : [from, apex]
+    return { length: rhoP <= tolerance ? rhoQ : rhoP, onSolid: [], faces: [], flat: { net, from: start, to: end, pieces: [[start, end]] } }
+  }
   const sector = unrolling.sector
   const scale = unrolling.radius / unrolling.slant
   // The separation, wrapped modulo the sector and taken the shorter way round.
@@ -378,8 +387,7 @@ function roundPath(body: SolidBody, name: string, word: string, [p, q]: [Vec3, V
   let sign = wrapAngle(thetaQ - thetaP) >= 0 ? 1 : -1
   const within = (sg: number) => phiP - sg * alpha >= low - tolerance && phiP - sg * alpha <= high + tolerance
   if (Math.abs(sector - 2 * alpha) <= tolerance && !within(sign) && within(-sign)) sign = -sign
-  // From the apex itself (no angle of its own), Q is where the net puts it.
-  const to = rhoP === 0 ? unrolledPoint(unrolling, seam, b) : polar(rhoQ, phiP - sign * alpha)
+  const to = polar(rhoQ, phiP - sign * alpha)
   if (unrolling.kind === 'frustum') {
     // The segment's nearest approach to the apex: at the foot of the
     // perpendicular when that falls inside it, else at an end.
@@ -409,7 +417,7 @@ function acrossSeam(net: Net, from: Vec2, phiP: number, far: Vec2, sector: numbe
   const rhoFar = Math.hypot(far.x, far.y)
   const continued = phiP + wrapAngle(phi - phiP)
   const slack = tolerance / Math.max(1, rhoFar)
-  if (rhoFar === 0 || (continued >= low - slack && continued <= high + slack)) return { net, from, to: far, pieces: [[from, far]] }
+  if (continued >= low - slack && continued <= high + slack) return { net, from, to: far, pieces: [[from, far]] }
   const edge = continued < low ? low : high
   const turn = continued < low ? sector : -sector
   const u = { x: Math.cos(edge), y: Math.sin(edge) }
@@ -417,17 +425,20 @@ function acrossSeam(net: Net, from: Vec2, phiP: number, far: Vec2, sector: numbe
   const t = -(u.x * from.y - u.y * from.x) / (u.x * d.y - u.y * d.x)
   const cross = { x: from.x + t * d.x, y: from.y + t * d.y }
   const rotate = (p: Vec2): Vec2 => ({ x: p.x * Math.cos(turn) - p.y * Math.sin(turn), y: p.x * Math.sin(turn) + p.y * Math.cos(turn) })
-  return { net, from, to: rotate(far), pieces: splitPieces(from, cross, rotate(cross), rotate(far), tolerance) }
+  return splitAtSeam(net, from, cross, rotate(cross), rotate(far), tolerance)
 }
 
 // The two pieces of a path cut by a seam, dropping one of zero length (a
-// path that starts or ends on the seam).
-function splitPieces(from: Vec2, cross: Vec2, again: Vec2, to: Vec2, tolerance: number): [Vec2, Vec2][] {
-  const pieces: [Vec2, Vec2][] = [
+// path that starts or ends ON the seam). P' and Q' are the ends of the
+// pieces kept, so an end on the seam is dotted on the cut edge its path
+// leaves from, not on the other one (fix round 2).
+function splitAtSeam(net: Net, from: Vec2, cross: Vec2, again: Vec2, to: Vec2, tolerance: number): FlatPath {
+  const pieces = ([
     [from, cross],
     [again, to],
-  ]
-  return pieces.filter(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y) > tolerance)
+  ] as [Vec2, Vec2][]).filter(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y) > tolerance)
+  if (pieces.length === 0) return { net, from, to, pieces: [[from, to]] }
+  return { net, from: pieces[0][0], to: pieces[pieces.length - 1][1], pieces }
 }
 
 function polar(rho: number, phi: number): Vec2 {

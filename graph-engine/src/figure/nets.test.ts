@@ -203,6 +203,12 @@ describe('the exact overlap predicate (test-only, net.testkit.ts)', () => {
     expect(convexOverlap(square(0, 0), square(1, 1))).toBe(true)
     // Laid exactly on each other.
     expect(convexOverlap(square(0, 0), square(0, 0))).toBe(true)
+    // Tiny faces overlapping by a millionth of a unit, far from the origin:
+    // the tolerance is relative to the faces' own extent (fix round 2), not
+    // to their distance from the origin, so this is still an overlap.
+    const tiny = (x: number) => square(0, 0).map((p) => ({ x: 1e6 + (x + p.x) * 1e-6, y: 1e6 + p.y * 1e-6 }))
+    expect(convexOverlap(tiny(0), tiny(1))).toBe(true)
+    expect(convexOverlap(tiny(0), tiny(2))).toBe(false)
     // A triangle poking into a square: area 0.5 inside.
     expect(convexOverlap(square(0, 0), [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 1, y: 3 }])).toBe(true)
   })
@@ -533,7 +539,14 @@ describe('fix round 1: lifts', () => {
   // reserves room for a letter on each side, so the solid's right-hand
   // letters and the net's left-hand ones never run together ("GE").
   it("keeps a net's letters clear of the solid's across the gap", () => {
-    for (const spec of ['S = solid cube edge 4 vertices ABCDEFGH\nnet: S', 'P = solid prism regular 6 side 2, height 4 vertices ABCDEFGHIJKL\nnet: P']) {
+    // The last two are TALL (fix round 2): the fit is to the larger of width
+    // and height, so the gap is reserved against that.
+    for (const spec of [
+      'S = solid cube edge 4 vertices ABCDEFGH\nnet: S',
+      'P = solid prism regular 6 side 2, height 4 vertices ABCDEFGHIJKL\nnet: P',
+      'P = solid prism regular 3 side 1, height 12 vertices ABCDEF\nnet: P',
+      'P = solid pyramid regular 4 side 1, height 20 vertices ABCDE\nnet: P',
+    ]) {
       const { svg, errors } = render(spec)
       expect(errors).toEqual([])
       const letters = (statement: number) => [...svg.matchAll(/<text x="([^"]*)"[^>]*data-statement="(\d+)"/g)].filter((m) => Number(m[2]) === statement).map((m) => Number(m[1]))

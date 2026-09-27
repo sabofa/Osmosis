@@ -565,14 +565,21 @@ type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
 
 export function liftOffset(solid: Bounds, shape: Bounds, rightEdge: number | null = null, clearance?: number): Vec2 {
   const quarter = (solid.maxX - solid.minX) * SECTION_GAP_FRACTION
-  // A net's letters face the drawing (fix round 1): with a clearance c, the
-  // gap is also at least the fraction c of the lifted figure's whole width
-  // (the span so far, the gap and the shape), solved for the gap. The figure
-  // is fitted to a fixed view width, so that fraction is a fixed width in
-  // view units — room for a letter on each side of the gap, at any scale.
-  // Absent (every section), the gap is phase 5's quarter, bit for bit.
+  // A net's letters face the drawing (fix rounds 1 and 2): with a clearance
+  // c, the gap is also at least the fraction c of the size the figure is
+  // FITTED to — the larger of its width and its height (document.ts's
+  // fitProjection) — which the fit then maps to c x FIGURE_SIZE view units:
+  // room for a letter on each side of the gap, at any scale and any aspect.
+  // The width is the span so far, the gap and the shape (solved for the
+  // gap); the height is the taller of the solid and the shape, which sits
+  // level with it. Absent (every section), the gap is phase 5's quarter, bit
+  // for bit.
   const span = Math.max(solid.maxX, rightEdge ?? solid.maxX) - solid.minX
-  const gap = clearance === undefined ? quarter : Math.max(quarter, (clearance * (span + shape.maxX - shape.minX)) / (1 - clearance))
+  const tall = Math.max(solid.maxY - solid.minY, shape.maxY - shape.minY)
+  const gap =
+    clearance === undefined
+      ? quarter
+      : Math.max(quarter, (clearance * (span + shape.maxX - shape.minX)) / (1 - clearance), clearance * tall)
   return {
     x: Math.max(solid.maxX, rightEdge ?? solid.maxX) + gap - shape.minX,
     y: (solid.minY + solid.maxY) / 2 - (shape.minY + shape.maxY) / 2,

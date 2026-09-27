@@ -687,8 +687,10 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   two straight pieces (a tie, exactly half a turn round, goes the way that
 //   stays inside); P and Q are drawn on the solid by their own statements.
 //   A second "shortest:" of the same path with "unfold" lifts the strip
-//   then; a polyhedron path lifts nothing unless asked. A frustum path that would run inside the top rim is
-//   refused ("would run along the top rim — not drawn").
+//   then; a polyhedron path lifts nothing unless asked. A path from a
+//   cone's apex runs straight down one generator. A frustum path that would
+//   run inside the top rim is refused ("would run along the top rim — not
+//   drawn").
 //   N6 — not drawn, refused where an author could ask: general polyhedron
 //   unfolding (hulls), nets of spheres, paths over flat ends of round solids
 //   or over solids of more than 12 faces, geodesics drawn on a curved
