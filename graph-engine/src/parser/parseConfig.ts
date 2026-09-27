@@ -1,4 +1,5 @@
 import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
+import { parseSpaceDirective } from '../space/grammar/directives'
 
 export function isConfigLine(rawLine: string): boolean {
   return rawLine.trim().startsWith('@')
@@ -13,13 +14,25 @@ function parseBoolean(value: string): boolean | null {
 // Mutates `config` in place with the directive on one "@key: value" line.
 // Throws with a human-readable message on an unknown key or a bad value —
 // caught by the caller (parseSpec) the same way a bad statement line is.
-export function parseConfigLine(rawLine: string, config: GraphConfig): void {
+// `line` is the 1-based source line, which a @param binding keeps for errors.
+export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0): void {
+  // "@param a = 1 range [0, 5]" has no colon after its key (SP6), so it is
+  // recognised before the "@key: value" split and handed to space.
+  const param = /^@param\s+(.*)$/.exec(rawLine.trim())
+  if (param) {
+    parseSpaceDirective('param', param[1].replace(/^:\s*/, ''), config, line)
+    return
+  }
+
   const body = rawLine.trim().slice(1) // strip leading "@"
   const colonIdx = body.indexOf(':')
   if (colonIdx === -1) throw new Error(`Expected "@key: value", got "@${body}"`)
 
   const key = body.slice(0, colonIdx).trim()
   const value = body.slice(colonIdx + 1).trim()
+
+  // Space's directives (SP7: @bounds3d, @aspect, @camera, ..., @param).
+  if (parseSpaceDirective(key, value, config, line)) return
 
   switch (key) {
     case 'theme': {

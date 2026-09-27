@@ -7,6 +7,8 @@ import type { Statement } from '../parser/types'
 // lifted onto the z=0 plane, so mixed specs "just work".
 export function isThreeD(statements: Statement[]): boolean {
   return statements.some((s) => {
+    // Every space form routes the spec to space (track 3, SP9).
+    if (s.kind === 'space') return true
     if (s.kind === 'surface' || s.kind === 'parametricSurface') return true
     if (s.kind === 'point') return s.z !== null
     if (s.kind === 'segment' || s.kind === 'ray') return s.z1 !== null || s.z2 !== null
@@ -37,6 +39,9 @@ const PLOTTED: ReadonlySet<Statement['kind']> = new Set([
   'scatter',
   'tangent',
   'animatedPoint',
+  // Space's forms (track 3): definitions and surfaces over domains plot on
+  // axes, as z = f always has.
+  'space',
 ])
 
 // Whether a statement plots a function (see PLOTTED). The figure renderer

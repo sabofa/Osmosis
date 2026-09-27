@@ -8,16 +8,17 @@ import type { ParseResult } from './types'
 // lines are collected rather than thrown, so one bad line doesn't blank out
 // the rest of the scene while editing live.
 export function parseSpec(text: string): ParseResult {
-  const result: ParseResult = { statements: [], errors: [], config: defaultConfig() }
+  const result: ParseResult = { statements: [], statementLines: [], errors: [], config: defaultConfig() }
   const lines = text.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].split('#')[0].trim()
     if (trimmed.length === 0) continue
     try {
       if (isConfigLine(trimmed)) {
-        parseConfigLine(trimmed, result.config)
+        parseConfigLine(trimmed, result.config, i + 1)
       } else {
         result.statements.push(parseStatement(lines[i]))
+        result.statementLines.push(i + 1)
       }
     } catch (err) {
       result.errors.push({ line: i + 1, message: err instanceof Error ? err.message : String(err) })

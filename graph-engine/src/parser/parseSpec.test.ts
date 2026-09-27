@@ -39,3 +39,22 @@ describe('parseSpec', () => {
     expect(result.errors[0].line).toBe(1)
   })
 })
+
+describe('statement line numbers (S1, K7)', () => {
+  it('records the 1-based source line of each statement, parallel to statements', () => {
+    // line 1 is blank, 2 a directive, 3 a statement, 4 blank, 5 a statement
+    const result = parseSpec('\n@theme: dark\nz = x*y\n\nA = (1,2,3)')
+    expect(result.statementLines).toEqual([3, 5])
+    expect(result.statements).toHaveLength(2)
+  })
+
+  it('skips a line that failed to parse', () => {
+    const result = parseSpec('y = x\nthis is not valid\nx^2 + y^2 = 1')
+    expect(result.statementLines).toEqual([1, 3])
+  })
+
+  it('gives a @param its source line', () => {
+    const result = parseSpec('y = x\n\n@param a = 1 range [0, 5]')
+    expect(result.config.bindings).toEqual([{ name: 'a', value: 1, min: 0, max: 5, step: null, integer: false, line: 3 }])
+  })
+})

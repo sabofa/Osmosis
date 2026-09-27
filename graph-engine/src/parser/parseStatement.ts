@@ -1,6 +1,8 @@
 import { isValidColor } from './colors'
 import { parseForRange, parseTuple, splitTopLevelComma } from './grammarUtil'
 import { parseExprString } from './parseExpr'
+import { parseSpaceKeyword } from '../space/grammar/keyword'
+import { parseSpaceUnkeyed } from '../space/grammar/unkeyed'
 import type {
   Condition,
   Construction,
@@ -896,6 +898,12 @@ function parseStatementCore(rawLine: string): StatementShape {
   const line = stripComment(rawLine).trim()
   if (line.length === 0) throw new Error('Empty statement')
 
+  // Space's keyword-led statements (track 3; space/grammar/keyword.ts). It runs
+  // first and returns null for every line space does not own — including
+  // "plane: A-B-C", whose solid-figure refusal is below.
+  const spaceKeyword = parseSpaceKeyword(line)
+  if (spaceKeyword) return spaceKeyword
+
   // Slope/direction field: "field: dy/dx = <expr(x,y)>"
   if (line.startsWith('field:')) {
     const rest = line.slice('field:'.length).trim()
@@ -1170,6 +1178,13 @@ function parseStatementCore(rawLine: string): StatementShape {
       to: range.to,
     }
   }
+
+  // Space's unkeyed forms (track 3; space/grammar/unkeyed.ts): multi-parameter
+  // and vector definitions, surfaces over domains, space style clauses and
+  // implicit surfaces. Immediately before the function-definition branch, the
+  // earliest that could misread one; null for every line space does not own.
+  const spaceUnkeyed = parseSpaceUnkeyed(line)
+  if (spaceUnkeyed) return spaceUnkeyed
 
   // Named function definition: "k(x) = x^2 + 1" — usable in later statements
   // as k(...), including composed with other functions. Checked before the
