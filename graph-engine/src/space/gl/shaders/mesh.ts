@@ -29,6 +29,7 @@ void main() {
 
 export const MESH_FRAGMENT = /* glsl */ `#version 300 es
 precision highp float;
+precision highp int;
 in vec3 v_normal;
 in vec3 v_viewPos;
 uniform vec3 u_color;

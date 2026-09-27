@@ -6,15 +6,33 @@
 //
 // Every GPU resource derives from the retained scene and frame, so a lost
 // context is rebuilt on `webglcontextrestored` by re-uploading them.
+//
+// Draw order: the frame (its lines, then the axes frame's arrows), opaque
+// meshes, the scene's lines, arrows and points, then translucent meshes back
+// to front. Box marks are skipped until S5.
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
-import type { FrameModel } from '../frame/types'
-import type { Mark, SpaceScene } from '../scene/types'
-import type { SpaceColors } from '../theme'
+import type { FrameLineRole, FrameModel } from '../frame/types'
+import type { ArrowMark, LineMark, Mark, SpaceScene } from '../scene/types'
+import { resolveSpaceColor, type Rgb, type SpaceColors } from '../theme'
+import { ARROWHEAD_PROGRAM, drawArrowHeads, uploadArrows, type ArrowGpu, type ArrowLook } from './arrowPipeline'
 import { syncByIdentity, type GpuResource } from './buffers'
 import { createContext, watchContext, type GlCapabilities } from './context'
+import {
+  cameraKey,
+  createSharedQuads,
+  drawLines,
+  LINE_PROGRAM,
+  updateDashes,
+  uploadLines,
+  type DrawTarget,
+  type LineGpu,
+  type LineLook,
+  type SharedQuads,
+} from './linePipeline'
 import { drawMeshes, isTranslucent, MESH_PROGRAM, sortBackToFront, uploadMesh, type MeshGpu } from './meshPipeline'
+import { drawPoints, POINT_PROGRAM, uploadPoints, type PointGpu } from './pointPipeline'
 import { ProgramCache, type ProgramInfo } from './program'
 
 export interface GlBackendOptions {
@@ -23,9 +41,54 @@ export interface GlBackendOptions {
   onContextRestored?: () => void
 }
 
-type MarkGpu = { kind: 'mesh'; gpu: MeshGpu } & GpuResource
+type MarkGpu =
+  | { kind: 'mesh'; gpu: MeshGpu }
+  | { kind: 'lines'; gpu: LineGpu }
+  | { kind: 'points'; gpu: PointGpu }
+  | { kind: 'arrows'; gpu: ArrowGpu }
 
-const PROGRAMS = [MESH_PROGRAM]
+type CachedMark = MarkGpu & GpuResource
+
+interface FrameGpu extends GpuResource {
+  lines: LineGpu[]
+  arrows: ArrowGpu[]
+}
+
+const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM]
+
+// The frame's look (plan G9 "Frame drawing"): 1 px grid, 1.5 px walls and
+// ticks; the axes frame's axes as 1.5 px arrows with 10 px heads.
+const FRAME_LINES: readonly { role: FrameLineRole; width: number; color: (c: SpaceColors) => Rgb }[] = [
+  { role: 'grid', width: 1, color: (c) => c.grid },
+  { role: 'wall', width: 1.5, color: (c) => c.gridStrong },
+  { role: 'tick', width: 1.5, color: (c) => c.axis },
+]
+export const FRAME_AXIS_SHAFT = 1.5
+export const FRAME_AXIS_HEAD = 10
+
+function lineLook(mark: LineMark): LineLook {
+  return {
+    width: mark.style.width,
+    dash: mark.style.dash,
+    opacity: 1,
+    headSize: 0,
+    color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
+  }
+}
+
+function arrowLook(mark: ArrowMark): ArrowLook {
+  return {
+    shaftWidth: mark.style.shaftWidth,
+    headSize: mark.style.headSize,
+    opacity: 1,
+    color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
+  }
+}
+
+function cached(entry: MarkGpu | null): CachedMark | null {
+  if (!entry) return null
+  return { ...entry, destroy: (g: WebGL2RenderingContext) => entry.gpu.destroy(g) } as CachedMark
+}
 
 export class GlBackend {
   readonly available: boolean
@@ -34,12 +97,17 @@ export class GlBackend {
   private readonly options: GlBackendOptions
   private readonly gl: WebGL2RenderingContext | null
   private readonly programs = new ProgramCache()
-  private readonly marks = new Map<Mark, MarkGpu>()
+  private readonly marks = new Map<Mark, CachedMark>()
   private readonly unwatch: (() => void) | null
+  private shared: SharedQuads | null = null
   private scene: SpaceScene | null = null
   private world: WorldMap | null = null
   private worldKey = ''
+  private sceneGeneration = 0
   private colors: SpaceColors | null = null
+  private frame: FrameModel | null = null
+  private frameGpu: FrameGpu | null = null
+  private frameKey = ''
   private failed = false
   private lost = false
   private disposed = false
@@ -64,7 +132,7 @@ export class GlBackend {
       () => this.handleLost(),
       () => this.handleRestored(),
     )
-    this.compilePrograms()
+    this.prepare()
   }
 
   // Replace the scene. Marks kept by identity keep their buffers, unless the
@@ -73,22 +141,27 @@ export class GlBackend {
     this.scene = scene
     this.world = world
     this.colors = colors
+    this.sceneGeneration++
     const boxes = scene.marks.filter((m) => m.kind === 'boxes').length
     if (boxes > 0) console.warn(`space: box marks are not drawn until S5; skipped ${boxes}`)
     this.upload()
   }
 
-  // The frame's lines, in author coordinates. Wired to the line and arrow
-  // pipelines with them (S2 Task 4); until then only its colours apply.
-  setFrame(_frame: FrameModel, colors: SpaceColors): void {
+  // The frame's lines, in author coordinates, drawn before the marks. They
+  // are re-uploaded only when their geometry can have changed: a new frame
+  // key (the walls flipped) or a new scene (a new box or new ticks).
+  setFrame(frame: FrameModel, colors: SpaceColors): void {
+    this.frame = frame
     this.colors = colors
+    this.uploadFrame()
   }
 
   setColors(colors: SpaceColors): void {
     this.colors = colors
   }
 
-  draw(camera: CameraMatrices, _pixelRatio: number): void {
+  // `pixelRatio` is the backing store's pixels per CSS pixel.
+  draw(camera: CameraMatrices, pixelRatio: number): void {
     const gl = this.gl
     if (!gl || this.failed || this.lost || this.disposed || gl.isContextLost()) return
     const colors = this.colors
@@ -99,27 +172,65 @@ export class GlBackend {
       gl.clearDepth(1)
       gl.depthMask(true)
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-      if (!colors || !this.world) return
+      const world = this.world
+      if (!colors || !world) return
+      const mesh = this.program(MESH_PROGRAM)
+      const line = this.program(LINE_PROGRAM)
+      const point = this.program(POINT_PROGRAM)
+      const head = this.program(ARROWHEAD_PROGRAM)
+      if (!mesh || !line || !point || !head) return
+      const target: DrawTarget = { camera, world, colors, width: this.canvas.width, height: this.canvas.height, pixelRatio }
+
       gl.enable(gl.DEPTH_TEST)
       gl.depthFunc(gl.LEQUAL)
       gl.disable(gl.CULL_FACE)
-      gl.disable(gl.BLEND)
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
       const meshes: MeshGpu[] = []
-      for (const m of this.marks.values()) if (m.kind === 'mesh') meshes.push(m.gpu)
-      const program = this.program(MESH_PROGRAM)
-      if (!program) return
+      const lines: LineGpu[] = []
+      const arrows: ArrowGpu[] = []
+      const points: PointGpu[] = []
+      for (const m of this.marks.values()) {
+        if (m.kind === 'mesh') meshes.push(m.gpu)
+        else if (m.kind === 'lines') lines.push(m.gpu)
+        else if (m.kind === 'arrows') arrows.push(m.gpu)
+        else points.push(m.gpu)
+      }
+      const key = cameraKey(camera)
+      for (const l of lines) updateDashes(gl, l, camera, key, world)
 
-      // 1. Opaque meshes.
-      drawMeshes(gl, program, meshes.filter((m) => !isTranslucent(m)), camera, this.world, colors)
+      // Lines, arrowheads and points in two passes: their opaque cores
+      // write depth, then their antialiased fringes blend without writing it.
+      const antialiased = (ls: readonly LineGpu[], heads: readonly ArrowGpu[], ps: readonly PointGpu[]) => {
+        for (const pass of [0, 1] as const) {
+          if (pass === 1) {
+            gl.enable(gl.BLEND)
+            gl.depthMask(false)
+          }
+          drawLines(gl, line, ls, target, pass)
+          drawArrowHeads(gl, head, heads, target, pass)
+          drawPoints(gl, point, ps, target, pass)
+        }
+        gl.depthMask(true)
+        gl.disable(gl.BLEND)
+      }
 
-      // 4. Translucent meshes, back to front, blended, no depth writes.
+      // The frame, first.
+      gl.disable(gl.BLEND)
+      if (this.frameGpu) antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [])
+
+      // Opaque meshes.
+      drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), camera, world, colors)
+
+      // Lines, arrows and points, with their depth bias.
+      antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points)
+
+      // Translucent meshes, back to front, blended, no depth writes.
       const translucent = sortBackToFront(meshes.filter(isTranslucent), camera)
       if (translucent.length > 0) {
         gl.enable(gl.BLEND)
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
         gl.depthMask(false)
-        drawMeshes(gl, program, translucent, camera, this.world, colors)
+        drawMeshes(gl, mesh, translucent, camera, world, colors)
         gl.depthMask(true)
         gl.disable(gl.BLEND)
       }
@@ -136,11 +247,16 @@ export class GlBackend {
     if (!gl) return
     if (!this.lost && !gl.isContextLost()) {
       for (const m of this.marks.values()) m.destroy(gl)
+      this.frameGpu?.destroy(gl)
+      this.shared?.destroy(gl)
       this.programs.deleteAll(gl)
     }
     this.marks.clear()
+    this.frameGpu = null
+    this.shared = null
     this.programs.forget()
     this.scene = null
+    this.frame = null
   }
 
   private program(spec: { name: string; vertex: string; fragment: string }): ProgramInfo | null {
@@ -148,10 +264,13 @@ export class GlBackend {
     return this.programs.get(this.gl, spec.name, spec.vertex, spec.fragment)
   }
 
-  private compilePrograms(): void {
-    if (!this.gl) return
+  // Programs and the shared quad corners: everything not tied to a mark.
+  private prepare(): void {
+    const gl = this.gl
+    if (!gl) return
     try {
       for (const spec of PROGRAMS) this.program(spec)
+      this.shared = createSharedQuads(gl)
     } catch (error) {
       this.fail(error)
     }
@@ -161,7 +280,8 @@ export class GlBackend {
     const gl = this.gl
     const scene = this.scene
     const world = this.world
-    if (!gl || !scene || !world || this.failed || this.lost || this.disposed) return
+    const shared = this.shared
+    if (!gl || !scene || !world || !shared || this.failed || this.lost || this.disposed) return
     try {
       const key = `${world.centre.join(',')}|${world.scale.join(',')}`
       if (key !== this.worldKey) {
@@ -169,12 +289,87 @@ export class GlBackend {
         this.marks.clear()
         this.worldKey = key
       }
-      const drawable = scene.marks.filter((m) => m.kind === 'mesh')
-      syncByIdentity(gl, this.marks, drawable, (mark) => {
-        if (mark.kind !== 'mesh') return null
+      const drawable = scene.marks.filter((m) => m.kind !== 'boxes')
+      syncByIdentity(gl, this.marks, drawable, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
+      this.uploadFrame()
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  private uploadMark(gl: WebGL2RenderingContext, shared: SharedQuads, mark: Mark, world: WorldMap): MarkGpu | null {
+    switch (mark.kind) {
+      case 'mesh': {
         const gpu = uploadMesh(gl, mark, world)
-        return gpu ? { kind: 'mesh', gpu, destroy: (g) => gpu.destroy(g) } : null
-      })
+        return gpu && { kind: 'mesh', gpu }
+      }
+      case 'lines': {
+        const gpu = uploadLines(gl, shared, mark.positions, mark.starts, world, lineLook(mark))
+        return gpu && { kind: 'lines', gpu }
+      }
+      case 'points': {
+        const gpu = uploadPoints(gl, shared, mark, world)
+        return gpu && { kind: 'points', gpu }
+      }
+      case 'arrows': {
+        const gpu = uploadArrows(gl, shared, mark.tails, mark.vectors, world, arrowLook(mark))
+        return gpu && { kind: 'arrows', gpu }
+      }
+      default:
+        return null
+    }
+  }
+
+  private uploadFrame(): void {
+    const gl = this.gl
+    const frame = this.frame
+    const world = this.world
+    const shared = this.shared
+    if (!gl || !frame || !world || !shared || this.failed || this.lost || this.disposed) return
+    const key = `${frame.key}|${this.sceneGeneration}|${this.worldKey}`
+    if (key === this.frameKey && this.frameGpu) return
+    try {
+      this.frameGpu?.destroy(gl)
+      this.frameGpu = null
+      const lines: LineGpu[] = []
+      for (const spec of FRAME_LINES) {
+        const own = frame.lines.filter((l) => l.role === spec.role)
+        if (own.length === 0) continue
+        const positions = new Float64Array(own.length * 6)
+        const starts = new Uint32Array(own.length)
+        own.forEach((l, i) => {
+          positions.set([l.a[0], l.a[1], l.a[2], l.b[0], l.b[1], l.b[2]], i * 6)
+          starts[i] = i * 2
+        })
+        const gpu = uploadLines(gl, shared, positions, starts, world, { width: spec.width, dash: null, opacity: 1, headSize: 0, color: spec.color })
+        if (gpu) lines.push(gpu)
+      }
+      const arrows: ArrowGpu[] = []
+      const axes = frame.lines.filter((l) => l.role === 'axis')
+      if (axes.length > 0) {
+        const tails = new Float64Array(axes.length * 3)
+        const vectors = new Float64Array(axes.length * 3)
+        axes.forEach((l, i) => {
+          tails.set(l.a, i * 3)
+          vectors.set([l.b[0] - l.a[0], l.b[1] - l.a[1], l.b[2] - l.a[2]], i * 3)
+        })
+        const gpu = uploadArrows(gl, shared, tails, vectors, world, {
+          shaftWidth: FRAME_AXIS_SHAFT,
+          headSize: FRAME_AXIS_HEAD,
+          opacity: 1,
+          color: (c) => c.axis,
+        })
+        if (gpu) arrows.push(gpu)
+      }
+      this.frameGpu = {
+        lines,
+        arrows,
+        destroy(g) {
+          for (const l of lines) l.destroy(g)
+          for (const a of arrows) a.destroy(g)
+        },
+      }
+      this.frameKey = key
     } catch (error) {
       this.fail(error)
     }
@@ -184,6 +379,9 @@ export class GlBackend {
     this.lost = true
     // The context took every resource with it: drop the handles undeleted.
     this.marks.clear()
+    this.frameGpu = null
+    this.frameKey = ''
+    this.shared = null
     this.programs.forget()
     this.worldKey = ''
     this.options.onContextLost?.()
@@ -192,7 +390,7 @@ export class GlBackend {
   private handleRestored(): void {
     if (this.disposed) return
     this.lost = false
-    this.compilePrograms()
+    this.prepare()
     this.upload()
     this.options.onContextRestored?.()
   }
