@@ -91,7 +91,16 @@ function dependsOn(expr: Expr, v: string, scope: MathScope): boolean {
   return freeVariablesDeep(expr, scope).has(v)
 }
 
+// How many nodes diff has visited in this module's life: a deterministic
+// measure of its work, for tests and profiling (wall time is not, under load).
+let steps = 0
+
+export function differentiationSteps(): number {
+  return steps
+}
+
 function differentiate(expr: Expr, v: string, scope: MathScope, ctx: Ctx): Expr {
+  steps++
   const d = (e: Expr) => differentiate(e, v, scope, ctx)
   switch (expr.kind) {
     case 'num':

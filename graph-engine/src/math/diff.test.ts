@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseExprString } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
 import { compileScalar, CompileError } from './compile'
-import { diff, gradient } from './diff'
+import { diff, differentiationSteps, gradient } from './diff'
 import { countNodes } from './expr'
 import { makeScope, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
@@ -288,9 +288,13 @@ describe('diff stays small on nested definitions (fix round 2, item 2)', () => {
 
   it('depth 7: under 50k nodes before simplify, under 50 ms, with the hand-computed values', () => {
     const t0 = performance.now()
+    const before = differentiationSteps()
     const dx = diff(p('f1(x, y)'), 'x', scope)
     const dy = diff(p('f1(x, y)'), 'y', scope)
     const elapsed = performance.now() - t0
+    // 109 steps for d/dx, fewer for d/dy (the partials are cached by then);
+    // uncached, d/dx alone is 4.5 million
+    expect(differentiationSteps() - before).toBeLessThan(1000)
     expect(countNodes(dx)).toBeLessThan(50000)
     expect(countNodes(dy)).toBeLessThan(50000)
     expect(elapsed).toBeLessThan(50)
@@ -316,13 +320,14 @@ describe('diff stays linear in the nesting when v is not read by the bodies (fix
   const functions: [string, MathFunction][] = [['f13', fn(['s', 't'], 's^2 * t')]]
   for (let k = 12; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s)`)])
 
-  it('depth 12 within 50 ms and 50k nodes, with the hand-computed values', () => {
+  it('depth 12 in linear work and under 50k nodes, with the hand-computed values', () => {
+    // Work is counted, not timed: wall time under a loaded test run is not a
+    // measure. Linear here is 179 steps; without the skip it is 225,072.
     const scope = makeScope({ functions })
-    const t0 = performance.now()
+    const before = differentiationSteps()
     const dx = diff(p('f1(x, y)'), 'x', scope)
-    const elapsed = performance.now() - t0
+    expect(differentiationSteps() - before).toBeLessThan(1000)
     expect(countNodes(dx)).toBeLessThan(50000)
-    expect(elapsed).toBeLessThan(50)
     // 2048 (2st + t^2) at (2, 1) = 2048 * 5; at (1, 2) = 2048 * 8
     const fx = compileScalar(simplify(dx), ['x', 'y'], scope)
     expect(fx(2, 1)).toBe(10240)
