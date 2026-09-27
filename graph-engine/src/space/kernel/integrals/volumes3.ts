@@ -33,15 +33,15 @@ import type { Expr } from '../../../parser/types'
 import { compileMany, compileScalar } from '../../../math/compile'
 import { diff } from '../../../math/diff'
 import { add, call, mul, num, pow, sub, substitute, variable } from '../../../math/expr'
-import { integrate3 } from '../../../math/quadrature'
+import { coarse3, integrate3 } from '../../../math/quadrature'
 import { simplify } from '../../../math/simplify'
 import type { Coordinates3, VolumeSolid } from '../../grammar/keywords/integrals'
 import type { SpaceStyle } from '../../grammar/types'
-import type { LineMark, MeshMark } from '../../scene/types'
+import type { LineMark, MeshMark, SceneError } from '../../scene/types'
 import { boundNames, checkBudget, constant, lineStyle, Reads, resolution } from '../common'
 import { finishMesh, gridIndices, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, PreparedStatement } from '../registry'
-import { approxText, COLLAPSED_REL, errorFloor, part, readoutLabel, ROUNDING_REL, type Approx } from './common'
+import { approxText, attempt, COLLAPSED_REL, errorFloor, part, quadrature, readoutLabel, ROUNDING_REL, type Approx } from './common'
 import { targetText } from './target'
 
 type Iterated = Extract<VolumeSolid, { kind: 'iterated' }>
@@ -134,8 +134,7 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
       const fs = exprs.map((expr) => {
         reads.add(expr, [...XYZ, ...vars])
         const inSystem = solid.coords === 'rectangular' ? expr : substitute(expr, toSystem)
-        const f = compileScalar(mul(inSystem, jac), vars, scope)
-        return { f, abs: nonNegative(expr) ? null : compileScalar(call('abs', mul(inSystem, jac)), vars, scope) }
+        return { f: compileScalar(mul(inSystem, jac), vars, scope), positive: nonNegative(expr) }
       })
       return () => {
         const [aa, bb] = [a(), b()]
@@ -144,10 +143,11 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
         const ee = (u: number, v: number) => e(u, v)
         const gg = (u: number, v: number) => g(u, v)
         const sign = orientation(solid, aa, bb, cc, dd, ee, gg)
-        return fs.map(({ f, abs }) => {
-          const r = integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg)
-          const absolute = abs ? integrate3((u, v, w) => abs(u, v, w), aa, bb, cc, dd, ee, gg).value : r.value
-          return { value: sign * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
+        return fs.map(({ f, positive }) => {
+          const r = quadrature(vars, () => integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg))
+          // The scale of the error floor, coarsely (common.ts).
+          const coarse = positive ? r.value : coarse3((u, v, w) => Math.abs(f(u, v, w)), aa, bb, cc, dd, ee, gg)
+          return { value: sign * r.value, error: errorFloor(r.error, Number.isFinite(coarse) ? coarse : 0, ROUNDING_REL) }
         })
       }
     },
@@ -228,7 +228,8 @@ export function prepareIterated(context: BuildContext, solid: Iterated, style: S
   const label = `∭${name ? `_${name}` : ''} ${solid.integrand ? `${targetText(solid.integrand)} ` : ''}dV`
 
   const build = (): BuildResult => {
-    const [value] = measure()
+    const errors: SceneError[] = []
+    const value = attempt(context, errors, () => measure()[0])
     const out = new Float64Array(12)
     const params = [0, 0, 0]
 
@@ -341,7 +342,7 @@ export function prepareIterated(context: BuildContext, solid: Iterated, style: S
 
     const anchor: [number, number, number] = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2]]
     const marks = edges ? [...faces, edges] : faces
-    return { marks, labels: [readoutLabel(context, anchor, `${label} ${approxText(value)}`)], errors: [], colorScale: null }
+    return { marks, labels: value ? [readoutLabel(context, anchor, `${label} ${approxText(value)}`)] : [], errors, colorScale: null }
   }
   return { reads: reads.names, build }
 }

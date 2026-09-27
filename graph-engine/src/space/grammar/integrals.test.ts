@@ -228,3 +228,38 @@ describe('S5 grammar — volume: triple-integral regions', () => {
     expect(parseSpaceKeyword('volume: A-B-C-D')).toBeNull()
   })
 })
+
+describe('S5 grammar — fix round 1', () => {
+  it('style clauses may come before sample:, integrand or a coordinate system', () => {
+    expect(form('riemann: under x*y over x in [0, 2], y in [0, 2], n = 2 opacity: 0.5 sample: upper-right')).toMatchObject({
+      sample: 'upper-right',
+      style: { opacity: 0.5 },
+    })
+    expect(form('volume: x in [0, 1], y in [0, 1], z in [0, 1] opacity: 0.3 integrand x*y')).toMatchObject({
+      solid: { integrand: { expr: p('x*y') } },
+      style: { opacity: 0.3 },
+    })
+    expect(form('volume: r in [0, 1], theta in [0, pi], z in [0, 1] opacity: 0.3 cylindrical')).toMatchObject({
+      solid: { coords: 'cylindrical' },
+      style: { opacity: 0.3 },
+    })
+    expect(form('volume: r in [0, 1], theta in [0, pi], z in [0, 1] res: 20 integrand r cylindrical opacity: 0.3')).toMatchObject({
+      solid: { coords: 'cylindrical', integrand: { text: 'r' } },
+      style: { opacity: 0.3, res: 20 },
+    })
+  })
+
+  it('a cylindrical or spherical bound that reads x or y says which variables it may use', () => {
+    expect(() => form('volume: r in [0, 1], theta in [0, pi], z in [0, x] cylindrical')).toThrow(
+      /bounds in cylindrical coordinates may use r, theta and z, not x/,
+    )
+    expect(() => form('volume: rho in [0, y], phi in [0, pi/4], theta in [0, 2*pi] spherical')).toThrow(
+      /bounds in spherical coordinates may use rho, phi and theta, not y/,
+    )
+  })
+
+  it('never claims a hyphenated point list after "NAME = region" or "NAME = volume"', () => {
+    expect(parseSpaceUnkeyed('V = volume A-B-C-D')).toBeNull()
+    expect(parseSpaceUnkeyed('R = region A-B-C')).toBeNull()
+  })
+})

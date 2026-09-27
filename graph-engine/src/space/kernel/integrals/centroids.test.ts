@@ -30,12 +30,15 @@ describe('centroid: of regions', () => {
     expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThan(1e-10)
   })
 
-  it('the same half-disc as an inequality: the mesh sum, 4 digits', () => {
+  it('the same half-disc as an inequality: mesh sums, each coordinate to the digits two resolutions agree on', () => {
     const scene = sceneOf('@resolution: 160\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D')
     expect(scene.errors).toEqual([])
-    const [x, y] = approxTuple(readout(scene, 3).text, 'centroid')
-    expect(Math.abs(x)).toBeLessThan(1e-3)
-    expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThan(1e-3)
+    const text = readout(scene, 3).text
+    const [x, y] = approxTuple(text, 'centroid')
+    const printed = /\(([^,]+), ([^)]+)\)/.exec(text)!
+    const unit = (t: string) => (t.includes('.') ? 10 ** -t.split('.')[1].length : 1)
+    expect(Math.abs(x)).toBeLessThanOrEqual(unit(printed[1]))
+    expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThanOrEqual(unit(printed[2]))
   })
 
   it('density x on the triangle: M = 1/3, x̄ = (1/4)/(1/3) = 3/4, a centre of mass', () => {
@@ -123,11 +126,11 @@ describe('readouts: a value that is zero within its error shows as ≈ 0, never 
   it('odd integrands over symmetric shapes, by quadrature, by the mesh, and as a Riemann sum', () => {
     expect(readout(sceneOf('volume: x in [-1, 1], y in [0, 1], z in [0, 1] integrand x'), 1).text).toBe('∭ x dV ≈ 0')
     expect(readout(sceneOf('volume: under x over x^2 + y^2 <= 1'), 1).text.startsWith('∬_R x dA ≈ 0;')).toBe(true)
-    expect(readout(sceneOf('riemann: under x over x in [-1, 1], y in [0, 1], n = 4'), 1).text).toBe('Σ f(x*, y*) ΔA ≈ 0; ∬_R f dA ≈ 0')
+    expect(readout(sceneOf('riemann: under x over x in [-1, 1], y in [0, 1], n = 4'), 1).text).toBe('Σ x ΔA ≈ 0; ∬_R x dA ≈ 0')
     expect(readout(sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D'), 2).text).toMatch(/^centroid ≈ \(0, 0\.4244131815\d\);/)
   })
 
-  it('a mesh region places its centre to 1e-4 of its size: the half-disc reads (0, 0.424)', () => {
-    expect(readout(sceneOf('@resolution: 160\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D'), 3).text).toBe('centroid ≈ (0, 0.424); M ≈ 1.57')
+  it('a mesh region’s x̄ of 5×10⁻⁵ (the grid’s asymmetry) lies inside its two-resolution error, so it reads 0', () => {
+    expect(readout(sceneOf('@resolution: 160\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D'), 3).text).toMatch(/^centroid ≈ \(0, /)
   })
 })

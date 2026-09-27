@@ -19,10 +19,10 @@
 
 import type { Expr, Statement } from '../../../parser/types'
 import { call, mul, num, variable } from '../../../math/expr'
-import type { LineMark, PointMark } from '../../scene/types'
+import type { LineMark, PointMark, SceneError } from '../../scene/types'
 import { DASH, Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { approxText, approxTupleText, floorHeight, formOf, MESH_REL, part, readoutLabel, type Approx } from './common'
+import { approxText, approxTupleText, attempt, floorHeight, formOf, part, readoutLabel, type Approx } from './common'
 import { namedShape } from './named'
 import { prepareRegion2 } from './regions'
 import { compileOnRegion } from './target'
@@ -34,11 +34,11 @@ const DROP_WIDTH = 1
 const DEFAULT_RES = 96
 export const ZERO_MASS_REL = 1e-9
 
-// M, the moments, the integral of |density|, whether the centre lies on the
-// floor (a region), and the least error a coordinate carries: a mesh region
-// places its centre to 1e-4 of its size (MESH_REL), since its odd moments
-// carry the grid's asymmetry (the half-disc's x̄ comes out 5×10⁻⁵).
-type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean; placed: number }
+// M, the moments, the integral of |density|, and whether the centre lies on
+// the floor (a region). Each carries its method's own error: a mesh region's
+// from two resolutions, which also covers its odd moments' grid asymmetry
+// (the half-disc's x̄ comes out 5×10⁻⁵, inside its error, so it reads 0).
+type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean }
 
 function prepareMeasure(context: BuildContext, of: string, density: Expr | null, reads: Reads): Measure {
   const { scope, config } = context
@@ -48,7 +48,6 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
     const region = prepareRegion2(shape.domain, context, reads)
     const n = resolution(null, config, DEFAULT_RES)
     const d = compileOnRegion(delta, region.coords, scope, reads)
-    const mesh = shape.domain.kind === 'inequality'
     return () => {
       const r = region.build(n)
       const xy = new Float64Array(2)
@@ -57,26 +56,11 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
           r.toXY(a, b, xy)
           return xy[axis] * d(a, b)
         })
-      // The size of the region itself: the grid's vertices outside it are
-      // not in any triangle.
-      let size = 0
-      if (mesh) {
-        const { x, y, indices } = r.samples
-        let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity]
-        for (const v of indices) {
-          x0 = Math.min(x0, x[v])
-          x1 = Math.max(x1, x[v])
-          y0 = Math.min(y0, y[v])
-          y1 = Math.max(y1, y[v])
-        }
-        if (x1 >= x0) size = Math.hypot(x1 - x0, y1 - y0)
-      }
       return {
         mass: r.integrate(d),
         moments: [moment(0), moment(1)],
         total: r.integrate((a, b) => Math.abs(d(a, b)), true).value,
         floor: true,
-        placed: MESH_REL * size,
       }
     }
   }
@@ -85,7 +69,7 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
   const run = solid.integrals(exprs)
   return () => {
     const [mass, mx, my, mz, total] = run()
-    return { mass, moments: [mx, my, mz], total: total.value, floor: false, placed: 0 }
+    return { mass, moments: [mx, my, mz], total: total.value, floor: false }
   }
 }
 
@@ -104,14 +88,14 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
   const z0 = floorHeight(context.config)
 
   const build = (): BuildResult => {
-    const { mass, moments, total, floor, placed } = measure()
+    const errors: SceneError[] = []
+    const measured = attempt(context, errors, measure)
+    if (!measured) return { marks: [], labels: [], errors, colorScale: null }
+    const { mass, moments, total, floor } = measured
     if (!(Math.abs(mass.value) > ZERO_MASS_REL * total) || !Number.isFinite(mass.value)) {
       throw new Error('the mass is zero; the centre is undefined')
     }
-    const centre = moments.map((m) => {
-      const q = quotient(m, mass)
-      return { value: q.value, error: q.error === null ? null : Math.max(q.error, placed) }
-    })
+    const centre = moments.map((m) => quotient(m, mass))
     const p: [number, number, number] = [centre[0].value, centre[1].value, floor ? z0 : centre[2].value]
     const point: PointMark = {
       kind: 'points',

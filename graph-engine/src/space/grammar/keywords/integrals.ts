@@ -116,6 +116,23 @@ function integralStyle(clauses: readonly RawClause[], target: IntegralTarget): S
   return style
 }
 
+// Where a style clause (SP8) begins in a line.
+const STYLE_START = /\s(?:opacity|colormap|mesh|res|width|color|name):|\sdashed(?=\s|$)/
+
+// Takes "<keyword> <value>" out of `text` wherever it stands, before or after
+// the style clauses: its value runs to the next style clause or the end.
+function pull(text: string, keyword: RegExp): { rest: string; value: string | null } {
+  const m = keyword.exec(text)
+  if (!m) return { rest: text.trim(), value: null }
+  const from = m.index + m[0].length
+  const next = STYLE_START.exec(text.slice(from))
+  const to = next ? from + next.index : text.length
+  return { rest: `${text.slice(0, m.index)}${text.slice(to)}`.trim(), value: text.slice(from, to).trim() }
+}
+
+// A hyphenated point list ("A-B-C") is a solid-figure operand, never claimed.
+const POINT_LIST = /^[A-Z][A-Za-z0-9']*(\s*-\s*[A-Z][A-Za-z0-9']*)+$/
+
 // "<domain>", with a region's own message when the ranges do not pair up.
 function regionDomain(text: string, shape: string): Domain {
   const body = text.trim()
@@ -189,24 +206,35 @@ function chainOrder(ranges: readonly ParamRange[]): [ParamRange, ParamRange, Par
   throw new Error(`the bounds of ${names[0]} read ${names[second]}, ${names[second]}'s read ${names[third]} and ${names[third]}'s read ${names[next(third)]} — ${hint}`)
 }
 
-// "x in [..], y in [..], z in [..] [cylindrical | spherical] [integrand[:] <expr>]",
-// the suffix before or after the integrand.
-function parseIterated(text: string): VolumeSolid {
-  let rest = text.trim()
-  let integrand: Target | null = null
-  let coords: Coordinates3 = 'rectangular'
-  const suffix = (t: string) => {
-    const m = /\s+(cylindrical|spherical|rectangular)$/.exec(t)
-    if (m) coords = m[1] as Coordinates3
-    return m ? t.slice(0, m.index).trim() : t
+// A volume's own clauses, taken out wherever they stand (before or after the
+// style clauses): "integrand[:] <expr>" and the coordinate system's name.
+interface VolumeClauses {
+  rest: string
+  integrand: Target | null
+  coords: Coordinates3 | null
+}
+
+const SYSTEM_WORD = /\s(cylindrical|spherical|rectangular)(?=\s|$)/
+
+function volumeClauses(text: string): VolumeClauses {
+  let coords: Coordinates3 | null = null
+  const word = (t: string) => {
+    const m = SYSTEM_WORD.exec(` ${t}`)
+    if (!m) return t
+    if (coords && coords !== m[1]) throw new Error(`a volume is in one coordinate system, got ${coords} and ${m[1]}`)
+    coords = m[1] as Coordinates3
+    return `${` ${t}`.slice(0, m.index)}${` ${t}`.slice(m.index + m[0].length)}`.trim()
   }
-  const keyword = /\s+integrand:?\s+/.exec(rest)
-  if (keyword) {
-    integrand = target(suffix(rest.slice(keyword.index + keyword[0].length)), 'volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y] integrand x')
-    rest = rest.slice(0, keyword.index)
-  }
-  rest = suffix(rest)
-  const parts = splitTopLevelComma(rest)
+  const { rest, value } = pull(` ${text}`, /\sintegrand:?\s+/)
+  const integrand = value === null ? null : target(word(value), 'volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y] integrand x')
+  return { rest: word(rest), integrand, coords }
+}
+
+// "x in [..], y in [..], z in [..]", in the system named (rectangular when
+// none is), with its integrand.
+function parseIterated(text: string, integrand: Target | null, system: Coordinates3 | null): VolumeSolid {
+  const coords: Coordinates3 = system ?? 'rectangular'
+  const parts = splitTopLevelComma(text.trim())
   if (parts.length !== 3) {
     throw new Error(`A triple-integral region needs three ranges, got ${parts.length}: "volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y]"`)
   }
@@ -220,11 +248,23 @@ function parseIterated(text: string): VolumeSolid {
     }
     throw new Error(`A ${coords} volume is over ${describe(SYSTEMS[coords])}, got ${describe(ranges.map((r) => r.param))}`)
   }
+  if (coords !== 'rectangular') {
+    for (const r of ranges) {
+      const foreign = ['x', 'y', 'z'].find((v) => !SYSTEMS[coords].includes(v) && varNames(r.to, varNames(r.from)).has(v))
+      if (foreign) {
+        throw new Error(`bounds in ${coords} coordinates may use ${describe(SYSTEMS[coords])}, not ${foreign} — the bounds of ${r.param} read ${foreign}`)
+      }
+    }
+  }
   return { kind: 'iterated', coords, order: chainOrder(ranges), integrand }
 }
 
 // Every volume: form but its style.
-function parseVolumeSolid(rest: string): VolumeSolid {
+function parseVolumeSolid(rest: string, clauses: VolumeClauses): VolumeSolid {
+  if (/\sin\s*\[/.test(` ${rest}`) && !/^(under|between)\s/.test(rest)) return parseIterated(rest, clauses.integrand, clauses.coords)
+  if (clauses.integrand || clauses.coords) {
+    throw new Error(`${clauses.integrand ? 'integrand' : clauses.coords} applies to a triple-integral region, e.g. "volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y] integrand x"`)
+  }
   if (NAME.test(rest)) return { kind: 'named', name: rest }
   const under = /^under\s+(.+)$/.exec(rest)
   if (under) {
@@ -246,15 +286,15 @@ function parseVolumeSolid(rest: string): VolumeSolid {
     const top = target(between[1].slice(and + ' and '.length, over), shape)
     return { kind: 'between', top, bottom, region: regionDomain(between[1].slice(over + ' over '.length), shape) }
   }
-  if (/\sin\s*\[/.test(` ${rest}`)) return parseIterated(rest)
   throw new Error(
     `Expected "volume: under f over R", "volume: between g and f over R" or "volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y]", got "volume: ${rest}"`,
   )
 }
 
 function parseVolume(text: string): SpaceForm {
-  const { rest, clauses } = splitStyle(text)
-  return { form: 'volume', solid: parseVolumeSolid(rest.trim()), style: integralStyle(clauses, 'volume') }
+  const own = volumeClauses(text)
+  const { rest, clauses } = splitStyle(own.rest)
+  return { form: 'volume', solid: parseVolumeSolid(rest.trim(), own), style: integralStyle(clauses, 'volume') }
 }
 
 export const RIEMANN_RECTANGLE = 'Riemann boxes need a rectangle; use x in [a, b], y in [c, d]'
@@ -268,17 +308,16 @@ export function readsOuter(region: Extract<Domain, { kind: 'iterated' }>): boole
 // named region is checked for being a rectangle where it is resolved.
 function parseRiemann(text: string): SpaceForm {
   const shape = 'riemann: under f over x in [0, 2], y in [0, 2], n = 4'
-  const { rest: styled, clauses } = splitStyle(text)
+  // sample: may stand before or after the style clauses.
+  const rule = pull(` ${text}`, /\ssample:\s*/)
+  const { rest, clauses } = splitStyle(rule.rest)
   const style = integralStyle(clauses, 'Riemann sum')
-  let rest = styled
   let sample: SampleRule = 'mid'
-  const rule = /\s+sample:\s*(\S+)/.exec(rest)
-  if (rule) {
-    if (!(SAMPLE_RULES as readonly string[]).includes(rule[1])) {
-      throw new Error(`sample: mid, lower-left, upper-right, lower-right, upper-left or random, got "${rule[1]}"`)
+  if (rule.value !== null) {
+    if (!(SAMPLE_RULES as readonly string[]).includes(rule.value)) {
+      throw new Error(`sample: mid, lower-left, upper-right, lower-right, upper-left or random, got "${rule.value}"`)
     }
-    sample = rule[1] as SampleRule
-    rest = (rest.slice(0, rule.index) + rest.slice(rule.index + rule[0].length)).trim()
+    sample = rule.value as SampleRule
   }
   const under = /^under\s+(.+)$/.exec(rest)
   const over = under ? under[1].indexOf(' over ') : -1
@@ -335,12 +374,13 @@ export function parseNamedIntegral(line: string): SpaceStatement | null {
   const match = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(region|volume)\s+(.+)$/.exec(line.trim())
   if (!match) return null
   const [, name, kind, body] = match
-  if (kind === 'volume' && /^of\s/.test(body)) return null
+  if ((kind === 'volume' && /^of\s/.test(body)) || POINT_LIST.test(body.trim())) return null
   checkName(name, kind)
-  const { rest, clauses } = splitStyle(body)
+  const own = kind === 'volume' ? volumeClauses(body) : { rest: body, integrand: null, coords: null }
+  const { rest, clauses } = splitStyle(own.rest)
   if (clauses.some((c) => c.key !== 'color' && c.key !== 'name')) {
     throw new Error(`a named ${kind} draws nothing — style the statement that draws it, e.g. "${kind}: ${name} opacity: 0.5"`)
   }
-  if (kind === 'volume') return spaceStatement({ form: 'namedVolume', name, solid: parseVolumeSolid(rest.trim()) })
+  if (kind === 'volume') return spaceStatement({ form: 'namedVolume', name, solid: parseVolumeSolid(rest.trim(), own) })
   return spaceStatement({ form: 'namedRegion', name, domain: regionDomain(rest, `${name} = region x in [0, 1], y in [x^2, x]`) })
 }

@@ -76,3 +76,32 @@ export function polylines(mark: LineMark): [number, number, number][][] {
   const starts = Array.from(mark.starts)
   return starts.map((s, i) => all.slice(s, i + 1 < starts.length ? starts[i + 1] : all.length))
 }
+
+// The unit of the last digit of the number after "<name> ≈ " in a readout:
+// "area ≈ 6.28" gives 0.01, "≈ 0.8" gives 0.1, "≈ 4" gives 1.
+export function lastDigitUnit(text: string, name: string): number {
+  const at = text.indexOf(`${name} ${APPROX} `)
+  const match = /^[−-]?(\d+)(?:\.(\d+))?/.exec(text.slice(at + name.length + 3))
+  if (at < 0 || !match) throw new Error(`no number after "${name} ${APPROX}" in "${text}"`)
+  return match[2] ? 10 ** -match[2].length : 1
+}
+
+// Each triangle's winding normal, (b - a) x (c - a), with its centroid.
+export function windings(mesh: MeshMark): { normal: [number, number, number]; centre: [number, number, number]; vertexNormal: [number, number, number] }[] {
+  const p = mesh.positions
+  const n = mesh.normals
+  const out = []
+  for (let t = 0; t < mesh.indices.length; t += 3) {
+    const [a, b, c] = [3 * mesh.indices[t], 3 * mesh.indices[t + 1], 3 * mesh.indices[t + 2]]
+    const e1 = [p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]]
+    const e2 = [p[c] - p[a], p[c + 1] - p[a + 1], p[c + 2] - p[a + 2]]
+    out.push({
+      normal: [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]] as [number, number, number],
+      centre: [(p[a] + p[b] + p[c]) / 3, (p[a + 1] + p[b + 1] + p[c + 1]) / 3, (p[a + 2] + p[b + 2] + p[c + 2]) / 3] as [number, number, number],
+      vertexNormal: [n[a] + n[b] + n[c], n[a + 1] + n[b + 1] + n[c + 1], n[a + 2] + n[b + 2] + n[c + 2]] as [number, number, number],
+    })
+  }
+  return out
+}
+
+export const dot = (u: readonly number[], v: readonly number[]) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2]

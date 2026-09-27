@@ -18,19 +18,20 @@
 // this statement rebuilds.
 
 import type { Statement } from '../../../parser/types'
-import { integrate2 } from '../../../math/quadrature'
+import { varNames } from '../../../math/expr'
+import { coarse2, integrate2 } from '../../../math/quadrature'
 import { formatApprox, formatPoint } from '../../pick/format'
-import type { BoxMark, PointMark } from '../../scene/types'
+import type { BoxMark, PointMark, SceneError } from '../../scene/types'
 import { RIEMANN_RECTANGLE, readsOuter, type SampleRule } from '../../grammar/keywords/integrals'
 import { constant, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { approxText, errorFloor, formOf, part, readoutLabel, ROUNDING_REL } from './common'
+import { approxText, attempt, errorFloor, formOf, part, quadrature, readoutLabel, ROUNDING_REL } from './common'
 import { resolveDomain } from './named'
-import { compileOnRegion, targetExpr, targetName } from './target'
+import { compileOnRegion, targetExpr, targetName, targetText } from './target'
 
 export const RIEMANN_OPACITY = 0.6
 export const MAX_CELLS = 100
-const SAMPLE_SIZE = 6
+const SAMPLE_SIZE = 8
 
 // The generator behind "sample: random": Numerical Recipes' LCG, reseeded
 // with 1 on every build.
@@ -63,10 +64,11 @@ function sampler(rule: SampleRule): () => [number, number] {
   }
 }
 
-function count(value: number, what: string): number {
+// `hint` names what to do when a slider feeds n.
+function count(value: number, what: string, hint: string): number {
   const n = Math.round(value)
   if (!Number.isFinite(value) || Math.abs(value - n) > 1e-9 || n < 1 || n > MAX_CELLS) {
-    throw new Error(`${what} must be a whole number from 1 to ${MAX_CELLS}, got ${Number.isFinite(value) ? String(Number(value.toPrecision(6))) : String(value)}`)
+    throw new Error(`${what} must be a whole number from 1 to ${MAX_CELLS}, got ${Number.isFinite(value) ? String(Number(value.toPrecision(6))) : String(value)}${hint}`)
   }
   return n
 }
@@ -88,17 +90,28 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
     reads.add(e)
     return constant(e, scope)
   })
+  // A @param feeding n that is not an integer one: say how to make it one.
+  const counted = new Set([...varNames(form.n[0]), ...varNames(form.n[1])])
+  const loose = context.config.bindings.filter((b) => counted.has(b.name) && !b.integer).map((b) => b.name)
+  const hint = loose.length > 0 ? ` — add "integer" to ${loose.map((b) => `@param ${b}`).join(' and ')}` : ''
   const opacity = form.style.opacity ?? RIEMANN_OPACITY
-  const name = targetName(form.target, scope) ?? 'f'
+  // "Σ f(x*, y*) ΔA" for a defined function; the expression itself otherwise.
+  const named = targetName(form.target, scope)
+  const summand = named ? `${named}(x*, y*)` : targetText(form.target)
+  const integrand = named ?? targetText(form.target)
   const R = regionName ?? 'R'
+  // The sample dots in a colour that stands out on the boxes: the accent
+  // (slot 0), or the first series colour when the boxes are the accent. The
+  // kernel cannot reach the palette's ink; a slot is what a mark can name.
+  const dotColor = { author: null, slot: context.color.slot === 0 ? 1 : 0 }
 
   const build = (): BuildResult => {
     const [o0, o1, i0, i1] = [outer0(), outer1(), inner0(), inner1()]
     const [xa, xb, ya, yb] = outerIsX ? [o0, o1, i0, i1] : [i0, i1, o0, o1]
     // The rectangle is a set: its corners, whichever way the ranges run.
     const [x0, x1, y0, y1] = [Math.min(xa, xb), Math.max(xa, xb), Math.min(ya, yb), Math.max(ya, yb)]
-    const nx = count(nxf(), form.n[0] === form.n[1] ? 'n' : 'n along x')
-    const ny = count(nyf(), form.n[0] === form.n[1] ? 'n' : 'n along y')
+    const nx = count(nxf(), form.n[0] === form.n[1] ? 'n' : 'n along x', hint)
+    const ny = count(nyf(), form.n[0] === form.n[1] ? 'n' : 'n along y', hint)
     const dx = (x1 - x0) / nx
     const dy = (y1 - y0) / ny
     const cells = nx * ny
@@ -121,7 +134,7 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
         const x = s === 0 ? cx0 : s === 1 ? cx1 : cx0 + (cx1 - cx0) * s
         const y = t === 0 ? cy0 : t === 1 ? cy1 : cy0 + (cy1 - cy0) * t
         const h = f(x, y)
-        if (!Number.isFinite(h)) throw new Error(`${name} is undefined at the sample ${formatPoint([x, y])} — move the samples or the rectangle`)
+        if (!Number.isFinite(h)) throw new Error(`${integrand} is undefined at the sample ${formatPoint([x, y])} — move the samples or the rectangle`)
         sum += h
         absolute += Math.abs(h)
         mins.set([cx0, cy0, Math.min(0, h)], 3 * k)
@@ -130,23 +143,26 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
       }
     }
     const riemann = sum * dx * dy
-    const over = (g: (x: number, y: number) => number) => integrate2(g, x0, x1, () => y0, () => y1)
-    const raw = over((x, y) => f(x, y))
-    const integral = { value: raw.value, error: errorFloor(raw.error, over((x, y) => Math.abs(f(x, y))).value, ROUNDING_REL) }
-    // The sum is plain arithmetic, shown to the formatter's 4 digits; a sum
-    // that cancels to rounding noise shows as 0.
+    const errors: SceneError[] = []
+    const integral = attempt(context, errors, () => {
+      const raw = quadrature(['x', 'y'], () => integrate2((x, y) => f(x, y), x0, x1, () => y0, () => y1))
+      const coarse = coarse2((x, y) => Math.abs(f(x, y)), x0, x1, () => y0, () => y1)
+      return { value: raw.value, error: errorFloor(raw.error, Number.isFinite(coarse) ? coarse : 0, ROUNDING_REL) }
+    })
     const boxes: BoxMark = { kind: 'boxes', source: context.source, mins, maxs, style: { color: context.color, opacity, edges: true } }
     const dots: PointMark = {
       kind: 'points',
       source: part(context, 'samples'),
       positions: points,
-      style: { color: context.color, size: SAMPLE_SIZE, shape: 'dot' },
+      style: { color: dotColor, size: SAMPLE_SIZE, shape: 'dot' },
     }
     let top = 0
     for (let k = 0; k < cells; k++) top = Math.max(top, maxs[3 * k + 2])
+    // The sum is plain arithmetic, shown to the formatter's 4 digits; a sum
+    // that cancels to rounding noise shows as 0.
     const shownSum = Math.abs(riemann) <= ROUNDING_REL * absolute * dx * dy ? 0 : riemann
-    const text = `Σ ${name}(x*, y*) ΔA ${formatApprox(shownSum)}; ∬_${R} ${name} dA ${approxText(integral)}`
-    return { marks: [boxes, dots], labels: [readoutLabel(context, [(x0 + x1) / 2, (y0 + y1) / 2, top], text)], errors: [], colorScale: null }
+    const text = `Σ ${summand} ΔA ${formatApprox(shownSum)}${integral ? `; ∬_${R} ${integrand} dA ${approxText(integral)}` : ''}`
+    return { marks: [boxes, dots], labels: [readoutLabel(context, [(x0 + x1) / 2, (y0 + y1) / 2, top], text)], errors, colorScale: null }
   }
   return { reads: reads.names, build }
 }

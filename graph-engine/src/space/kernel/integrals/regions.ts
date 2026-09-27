@@ -17,21 +17,39 @@
 // An inequality region is S1's grid-clipped mesh over the box, and its values
 // are sums over that mesh — the area is the mesh's area, and an integral uses
 // each triangle's edge midpoints (exact for quadratics). integrate2 cannot
-// follow an implicit boundary, so these carry no quadrature estimate: they
-// are taken as good to 1e-4 of the integral of |g| (MESH_REL), which prints 4
-// significant digits of an area.
+// follow an implicit boundary, so their error is the mesh's own: the change
+// in the sum from half the resolution, |A(n) - A(n/2)|, which bounds the
+// digits shown. A sum that does not settle as the mesh refines (from n/4 to
+// n/2 to n) is refused as an integral that does not converge.
+//
+// Every integral is budgeted (math/quadrature): one with no value — undefined
+// at a node, or not settling — is refused with an IntegralRefusal naming where.
 
 import type { Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
-import { integrate2 } from '../../../math/quadrature'
+import { coarse2, coarse3, gaussLegendre7, integrate2, integrate3 } from '../../../math/quadrature'
+import { formatNumber, formatPoint } from '../../pick/format'
 import type { Domain } from '../../grammar/types'
-import type { LineMark, MeshMark } from '../../scene/types'
+import type { LineMark, MeshMark, SceneError } from '../../scene/types'
 import { boxX, boxY, checkBudget, constant, lineStyle, Reads, resolution, SEGMENT_WIDTH } from '../common'
 import { inequalitySamples, iteratedSamples, type DomainSamples, type IteratedSpec } from '../domain'
 import { finishMesh } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { compileConditions } from '../surface'
-import { approxText, COLLAPSED_REL, errorFloor, floorHeight, formOf, MESH_REL, part, readoutLabel, ROUNDING_REL, type Approx } from './common'
+import {
+  approxText,
+  attempt,
+  COLLAPSED_REL,
+  errorFloor,
+  floorHeight,
+  formOf,
+  IntegralRefusal,
+  part,
+  quadrature,
+  readoutLabel,
+  ROUNDING_REL,
+  type Approx,
+} from './common'
 import { resolveDomain } from './named'
 
 export const REGION_OPACITY = 0.35
@@ -48,11 +66,16 @@ export interface BoundaryPiece {
 export interface RegionSample {
   // The floor mesh: (x, y), and (a, b) where the region is evaluated.
   samples: DomainSamples
+  // Counter-clockwise, the region on the left of each piece.
   boundary: BoundaryPiece[]
   // The integral over the region of g, written in the region's coordinates,
   // its error floored by the integral of |g| (common.ts); `nonNegative` says
-  // g >= 0, so that integral is the value itself.
+  // g >= 0, so that integral is the value itself. An integral with no value
+  // throws an IntegralRefusal.
   integrate(g: (a: number, b: number) => number, nonNegative?: boolean): Approx
+  // The triple integral of h(a, b, z) over the solid z from zlo(a, b) to
+  // zhi(a, b) above the region (a volume under or between surfaces).
+  integrateSolid(h: (a: number, b: number, z: number) => number, zlo: (a: number, b: number) => number, zhi: (a: number, b: number) => number): Approx
   // (a, b) in the region's coordinates -> (x, y), into out[0..1].
   toXY(a: number, b: number, out: Float64Array): void
 }
@@ -61,7 +84,10 @@ export interface PreparedRegion2 {
   coords: 'cartesian' | 'polar'
   // The region's own coordinate names: x and y, or r and theta.
   vars: readonly [string, string]
-  build(n: number): RegionSample
+  // Sampled at n cells a side, its boundary at `sides` segments a side (an
+  // iterated region; a volume passes n, so its walls meet its top and bottom
+  // vertex for vertex).
+  build(n: number, sides?: number): RegionSample
 }
 
 function diagonal(pieces: readonly Float64Array[]): number {
@@ -95,7 +121,23 @@ function coincideReversed(a: Float64Array, b: Float64Array, tol: number): boolea
   return true
 }
 
-function iteratedRegion(spec: IteratedSpec, n: number): RegionSample {
+function reversePairs(p: Float64Array): Float64Array {
+  const out = new Float64Array(p.length)
+  const n = p.length / 2
+  for (let k = 0; k < n; k++) {
+    out[2 * k] = p[2 * (n - 1 - k)]
+    out[2 * k + 1] = p[2 * (n - 1 - k) + 1]
+  }
+  return out
+}
+
+// A fixed-cost scale for an error floor: the value when finite, else 0.
+function scale(estimate: () => number): number {
+  const v = estimate()
+  return Number.isFinite(v) ? Math.abs(v) : 0
+}
+
+function iteratedRegion(spec: IteratedSpec, n: number, m: number, levels: readonly string[]): RegionSample {
   const samples = iteratedSamples(spec, n)
   const { outerRange, lo, hi, polar } = spec
   const a = outerRange.min
@@ -113,14 +155,20 @@ function iteratedRegion(spec: IteratedSpec, n: number): RegionSample {
     }
   }
 
-  // The four sides of the unit square, in order round it.
-  const m = BOUNDARY_SEGMENTS
+  // The perimeter of the unit square, in grid steps of 1/m, computed exactly
+  // as iteratedSamples places grid vertex (i, j), so a side sampled at m = n
+  // is the surface's own edge, vertex for vertex.
+  const point = (i: number, j: number): [number, number] => {
+    const u = a + (b - a) * (i / m)
+    const g1 = lo(u)
+    return [u, g1 + (hi(u) - g1) * (j / m)]
+  }
   const side = (at: (k: number) => [number, number]): BoundaryPiece => {
     const xy = new Float64Array(2 * (m + 1))
     const ab = new Float64Array(2 * (m + 1))
     const out = new Float64Array(2)
     for (let k = 0; k <= m; k++) {
-      const [u, w] = at(k / m)
+      const [u, w] = at(k)
       const p = swap ? w : u
       const q = swap ? u : w
       ab[2 * k] = p
@@ -131,13 +179,7 @@ function iteratedRegion(spec: IteratedSpec, n: number): RegionSample {
     }
     return { xy, ab }
   }
-  const u = (s: number) => a + (b - a) * s
-  const sides = [
-    side((s) => [u(s), lo(u(s))]),
-    side((s) => [b, lo(b) + (hi(b) - lo(b)) * s]),
-    side((s) => [u(1 - s), hi(u(1 - s))]),
-    side((s) => [a, hi(a) + (lo(a) - hi(a)) * s]),
-  ]
+  let sides = [side((k) => point(k, 0)), side((k) => point(m, k)), side((k) => point(m - k, m)), side((k) => point(0, m - k))]
   const tol = COLLAPSED_REL * diagonal(sides.map((s) => s.xy))
   const keep = sides.map((s) => length(s.xy) > tol)
   for (const [i, j] of [
@@ -151,28 +193,47 @@ function iteratedRegion(spec: IteratedSpec, n: number): RegionSample {
   // the region does not. The inner bounds never cross (iteratedSamples
   // refused that), so their order is one sign throughout.
   let inner = 0
-  for (let k = 0; k <= n && inner === 0; k++) inner = Math.sign(hi(u(k / n)) - lo(u(k / n)))
+  for (let k = 0; k <= n && inner === 0; k++) {
+    const u = a + (b - a) * (k / n)
+    inner = Math.sign(hi(u) - lo(u))
+  }
   const orientation = Math.sign(b - a) * (inner || 1)
+  // The square's perimeter runs counter-clockwise in (u, w); in the plane it
+  // does too unless the map reflects: (u, w) swapped, or a range reversed.
+  if (orientation * (swap ? -1 : 1) < 0) sides = sides.map((s) => ({ xy: reversePairs(s.xy), ab: reversePairs(s.ab) }))
 
+  const jacobian = (p: number) => (polar ? Math.abs(p) * angle : 1)
+  const inUW = (h: (p: number, q: number) => number) => (uu: number, ww: number) => {
+    const p = swap ? ww : uu
+    const q = swap ? uu : ww
+    return h(p, q) * jacobian(p)
+  }
   return {
     samples,
     boundary: sides.filter((_, i) => keep[i]),
     toXY,
     integrate(g, nonNegative = false) {
-      const at = (h: (p: number, q: number) => number) => (uu: number, ww: number) => {
+      const r = quadrature(levels, () => integrate2(inUW(g), a, b, lo, hi))
+      const absolute = nonNegative ? Math.abs(r.value) : scale(() => coarse2(inUW((p, q) => Math.abs(g(p, q))), a, b, lo, hi))
+      return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
+    },
+    integrateSolid(h, zlo, zhi) {
+      const at = <T>(k: (p: number, q: number) => T) => (uu: number, ww: number) => (swap ? k(ww, uu) : k(uu, ww))
+      const F = (uu: number, ww: number, z: number) => {
         const p = swap ? ww : uu
         const q = swap ? uu : ww
-        return polar ? h(p, q) * Math.abs(p) * angle : h(p, q)
+        return h(p, q, z) * jacobian(p)
       }
-      const r = integrate2(at(g), a, b, lo, hi)
-      const absolute = nonNegative ? r.value : integrate2(at((p, q) => Math.abs(g(p, q))), a, b, lo, hi).value
+      const r = quadrature([...levels, 'z'], () => integrate3(F, a, b, lo, hi, at(zlo), at(zhi)))
+      const absolute = scale(() => coarse3((uu, ww, z) => Math.abs(F(uu, ww, z)), a, b, lo, hi, at(zlo), at(zhi)))
       return { value: orientation * r.value, error: errorFloor(r.error, absolute, ROUNDING_REL) }
     },
   }
 }
 
 // The boundary of a mesh: its edges used by one triangle, chained into
-// polylines in the order the triangles list them.
+// polylines along their own direction. The mesh's triangles wind counter-
+// clockwise, so every loop runs with the region on its left.
 function meshBoundary(samples: DomainSamples): BoundaryPiece[] {
   const { x, y, indices } = samples
   const count = new Map<string, number>()
@@ -191,11 +252,8 @@ function meshBoundary(samples: DomainSamples): BoundaryPiece[] {
       if (p !== q && count.get(key(p, q)) === 1) edges.push([p, q])
     }
   }
-  const at = new Map<number, number[]>()
-  edges.forEach(([p, q], i) => {
-    at.set(p, [...(at.get(p) ?? []), i])
-    at.set(q, [...(at.get(q) ?? []), i])
-  })
+  const from = new Map<number, number[]>()
+  edges.forEach(([p], i) => from.set(p, [...(from.get(p) ?? []), i]))
   const used = new Uint8Array(edges.length)
   const pieces: BoundaryPiece[] = []
   for (let first = 0; first < edges.length; first++) {
@@ -203,11 +261,10 @@ function meshBoundary(samples: DomainSamples): BoundaryPiece[] {
     used[first] = 1
     const chain = [edges[first][0], edges[first][1]]
     for (;;) {
-      const end = chain[chain.length - 1]
-      const next = (at.get(end) ?? []).find((i) => !used[i])
+      const next = (from.get(chain[chain.length - 1]) ?? []).find((i) => !used[i])
       if (next === undefined) break
       used[next] = 1
-      chain.push(edges[next][0] === end ? edges[next][1] : edges[next][0])
+      chain.push(edges[next][1])
     }
     const xy = new Float64Array(2 * chain.length)
     chain.forEach((v, i) => {
@@ -219,8 +276,63 @@ function meshBoundary(samples: DomainSamples): BoundaryPiece[] {
   return pieces
 }
 
-function inequalityRegion(samples: DomainSamples): RegionSample {
+// Resolutions below which a mesh sum is too coarse to judge its own
+// convergence (a disc a few cells across).
+const SETTLE_MIN_RES = 32
+// A sum has not settled when refining once more shrinks its change by less
+// than this factor while the change is still this fraction of the integral
+// of |g| (a sum converging at order 1 or better at least halves it).
+const SETTLE_RATIO = 0.75
+const SETTLE_REL = 1e-2
+
+interface MeshSum {
+  value: number
+  absolute: number
+}
+
+// Σ over the mesh's triangles of area × the mean of `at` at the three edge
+// midpoints (exact for quadratics); refused where `at` is not a number.
+function meshSum(samples: DomainSamples, at: (x: number, y: number) => number): MeshSum {
   const { x, y, indices } = samples
+  let value = 0
+  let absolute = 0
+  const mid = (p: number, q: number) => {
+    const [mx, my] = [(x[p] + x[q]) / 2, (y[p] + y[q]) / 2]
+    const v = at(mx, my)
+    if (!Number.isFinite(v)) throw new IntegralRefusal(`the integral is undefined: the integrand is not a number at (x, y) = ${formatPoint([mx, my])}`)
+    return v
+  }
+  for (let t = 0; t < indices.length; t += 3) {
+    const [i, j, k] = [indices[t], indices[t + 1], indices[t + 2]]
+    const area = Math.abs((x[j] - x[i]) * (y[k] - y[i]) - (x[k] - x[i]) * (y[j] - y[i])) / 2
+    if (area === 0) continue
+    const [m1, m2, m3] = [mid(i, j), mid(j, k), mid(k, i)]
+    value += (area * (m1 + m2 + m3)) / 3
+    absolute += (area * (Math.abs(m1) + Math.abs(m2) + Math.abs(m3))) / 3
+  }
+  return { value, absolute }
+}
+
+function inequalityRegion(samplesAt: (n: number) => DomainSamples, n: number): RegionSample {
+  const samples = samplesAt(n)
+  // The mesh at n, n/2 and n/4: the value is the sum at n, its error the
+  // change from n/2, and a change that does not shrink is a sum that does not
+  // settle (an integral that diverges).
+  const resolutions = [n, Math.max(2, Math.round(n / 2)), Math.max(2, Math.round(n / 4))]
+  const meshes: DomainSamples[] = [samples]
+  const meshAt = (i: number) => (meshes[i] ??= samplesAt(resolutions[i]))
+  const settle = (at: (x: number, y: number) => number): Approx => {
+    const [A, B, C] = [0, 1, 2].map((i) => meshSum(meshAt(i), at))
+    const d1 = Math.abs(A.value - B.value)
+    const d2 = Math.abs(B.value - C.value)
+    if (n >= SETTLE_MIN_RES && d1 > SETTLE_RATIO * d2 && d1 > SETTLE_REL * A.absolute) {
+      const sums = [C, B, A].map((s) => formatNumber(s.value)).join(', ')
+      throw new IntegralRefusal(
+        `the integral does not converge: its sum over the mesh does not settle as the mesh refines (${sums} at res ${[...resolutions].reverse().join(', ')})`,
+      )
+    }
+    return { value: A.value, error: errorFloor(d1, A.absolute, ROUNDING_REL) }
+  }
   return {
     samples,
     boundary: meshBoundary(samples),
@@ -228,23 +340,10 @@ function inequalityRegion(samples: DomainSamples): RegionSample {
       out[0] = p
       out[1] = q
     },
-    integrate(g) {
-      let value = 0
-      let absolute = 0
-      for (let t = 0; t < indices.length; t += 3) {
-        const [i, j, k] = [indices[t], indices[t + 1], indices[t + 2]]
-        const area = Math.abs((x[j] - x[i]) * (y[k] - y[i]) - (x[k] - x[i]) * (y[j] - y[i])) / 2
-        if (area === 0) continue
-        const mids = [
-          g((x[i] + x[j]) / 2, (y[i] + y[j]) / 2),
-          g((x[j] + x[k]) / 2, (y[j] + y[k]) / 2),
-          g((x[k] + x[i]) / 2, (y[k] + y[i]) / 2),
-        ]
-        value += (area * (mids[0] + mids[1] + mids[2])) / 3
-        absolute += (area * (Math.abs(mids[0]) + Math.abs(mids[1]) + Math.abs(mids[2]))) / 3
-      }
-      return { value, error: errorFloor(null, absolute, MESH_REL) }
-    },
+    integrate: (g) => settle(g),
+    // The z integral at each midpoint by the 7-point Gauss rule (exact for
+    // polynomials of degree 13 in z); the mesh's own error dominates.
+    integrateSolid: (h, zlo, zhi) => settle((x, y) => gaussLegendre7((z) => h(x, y, z), zlo(x, y), zhi(x, y))),
   }
 }
 
@@ -267,16 +366,22 @@ export function prepareRegion2(domain: Domain, context: BuildContext, reads: Rea
       return {
         coords,
         vars: coords === 'polar' ? ['r', 'theta'] : ['x', 'y'],
-        build: (n) =>
+        build: (n, sides = BOUNDARY_SEGMENTS) =>
           iteratedRegion(
             { outer: outer.param, outerRange: { min: u0(), max: u1() }, lo: (u) => lo(u), hi: (u) => hi(u), polar, outerIsX: outer.param === 'x' },
             n,
+            sides,
+            [outer.param, inner.param],
           ),
       }
     }
     case 'inequality': {
       const conditions = compileConditions(domain.conditions, scope, reads)
-      return { coords: 'cartesian', vars: ['x', 'y'], build: (n) => inequalityRegion(inequalitySamples(conditions, boxX(config), boxY(config), n)) }
+      return {
+        coords: 'cartesian',
+        vars: ['x', 'y'],
+        build: (n) => inequalityRegion((res) => inequalitySamples(conditions, boxX(config), boxY(config), res), n),
+      }
     }
     case 'named':
       throw new Error(`the region "${domain.name}" is resolved before it is prepared`)
@@ -358,11 +463,13 @@ function prepareRegion(statement: Statement, context: BuildContext): PreparedSta
 
   const build = (): BuildResult => {
     const r = region.build(n)
-    const area = r.integrate(() => 1, true)
+    const errors: SceneError[] = []
+    const area = attempt(context, errors, () => r.integrate(() => 1, true))
     const floor = floorMark(r.samples, z, context, form.style.opacity ?? REGION_OPACITY, context.source.object)
     const boundary = boundaryMark(r.boundary, z, context, part(context, 'boundary').object)
     const marks = [floor, boundary].filter((m) => m !== null)
-    return { marks, labels: [readoutLabel(context, boundaryAnchor(r.boundary, z), `area ${approxText(area)}`)], errors: [], colorScale: null }
+    const labels = area ? [readoutLabel(context, boundaryAnchor(r.boundary, z), `area ${approxText(area)}`)] : []
+    return { marks, labels, errors, colorScale: null }
   }
   return { reads: reads.names, build }
 }

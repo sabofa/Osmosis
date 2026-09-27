@@ -47,6 +47,23 @@ export const QUAD_MAX_PANELS = 2000
 // inner result carries stays below the outer target.
 export const QUAD_INNER_FRACTION = 0.1
 export const QUAD_INNER_MAX_PANELS = 200
+// integrate2 and integrate3: the most integrand evaluations one nested
+// integral may spend, every level included, before it is refused as not
+// settling (an improper integral that diverges refines without end). A smooth
+// triple integral spends a few thousand.
+export const QUAD_BUDGET = 200_000
+// Where a refused integral was refining: a level's worst panel is reported
+// when it is at most this fraction of the level's range wide.
+export const QUAD_NARROW_REL = 1e-3
+// No error target is tighter than rounding allows: a panel sum is settled
+// when its error is at most this fraction of the sum of |panel values| (50
+// ulps, QUADPACK's floor), so a large, constant integrand does not refine
+// forever chasing an absolute target below its own rounding.
+export const QUAD_ROUNDING = 50 * Number.EPSILON
+// A budgeted level that spends its panels with its error still above this
+// fraction of |value| has not settled (1/y from 0: every split leaves the same
+// error), and is refused rather than shown with digits it does not have.
+export const QUAD_UNSETTLED_REL = 1e-6
 
 // K10 — an inequality domain's boundary crossing is refined by bisection along
 // the grid edge until the bracket is shorter than this fraction of the edge.

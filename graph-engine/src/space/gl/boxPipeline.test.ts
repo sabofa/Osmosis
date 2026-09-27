@@ -6,7 +6,9 @@ import type { Box3, BoxMark } from '../scene/types'
 import { meshMark, scene } from '../testing/marks'
 import { spaceColors } from '../theme'
 import { GlBackend } from './backend'
-import { boxEdges, UNIT_CUBE } from './boxPipeline'
+import { BOX_PROGRAM, boxEdges, drawOpaqueBoxes, drawTranslucentBoxes, UNIT_CUBE, uploadBoxes } from './boxPipeline'
+import { createSharedQuads } from './linePipeline'
+import { ProgramCache } from './program'
 import { createFakeGl, fakeCanvas, GL_CONSTANTS, type FakeGl } from './fakeGl'
 
 const LIGHT = spaceColors(LIGHT_PALETTE, 'light')
@@ -151,5 +153,43 @@ describe('GlBackend draws box marks through the box pipeline', () => {
     backend.draw(CAMERA, 1)
     backend.dispose()
     for (const [kind, n] of balance(fake)) expect([kind, n]).toEqual([kind, 0])
+  })
+})
+
+describe('the box pipeline’s two entry points (for the frame loop’s opaque and translucent passes)', () => {
+  function uploaded(marks: BoxMark[]) {
+    const fake = createFakeGl()
+    const shared = createSharedQuads(fake.gl)!
+    const program = new ProgramCache().get(fake.gl, BOX_PROGRAM.name, BOX_PROGRAM.vertex, BOX_PROGRAM.fragment)
+    const gpus = marks.map((m) => uploadBoxes(fake.gl, shared, m, WORLD)!)
+    return { fake, program, gpus }
+  }
+  const mixed = () => [boxMark(TWO, 1, false, 2), boxMark(TWO, 0.6, false, 3), boxMark(TWO.slice(0, 1), 1, false, 4)]
+
+  it('drawOpaqueBoxes draws only the opaque marks, writing depth, unblended, back faces culled', () => {
+    const { fake, program, gpus } = uploaded(mixed())
+    drawOpaqueBoxes(fake.gl, program, gpus, CAMERA, WORLD, LIGHT)
+    expect(fake.draws.map((d) => [d.instances, d.depthWrite, d.blend, d.cull])).toEqual([
+      [2, true, false, 'back'],
+      [1, true, false, 'back'],
+    ])
+    expect(fake.draws.map((d) => d.vao)).toEqual([gpus[0].vao, gpus[2].vao])
+  })
+
+  it('drawTranslucentBoxes draws only the translucent marks, blended, not writing depth, back faces culled', () => {
+    const { fake, program, gpus } = uploaded(mixed())
+    drawTranslucentBoxes(fake.gl, program, gpus, CAMERA, WORLD, LIGHT, 'k')
+    expect(fake.draws.map((d) => [d.vao, d.instances, d.depthWrite, d.blend, d.cull])).toEqual([[gpus[1].vao, 2, false, true, 'back']])
+  })
+
+  it('each leaves the frame loop’s defaults behind, and draws nothing when it has nothing to draw', () => {
+    const { fake, program, gpus } = uploaded(mixed())
+    drawTranslucentBoxes(fake.gl, program, gpus, CAMERA, WORLD, LIGHT, 'k')
+    drawOpaqueBoxes(fake.gl, program, gpus, CAMERA, WORLD, LIGHT)
+    fake.gl.drawArrays(fake.gl.TRIANGLES, 0, 3)
+    expect(fake.draws[fake.draws.length - 1]).toMatchObject({ depthWrite: true, blend: false, cull: 'none' })
+    const empty = uploaded([boxMark(TWO, 1, false)])
+    drawTranslucentBoxes(empty.fake.gl, empty.program, empty.gpus, CAMERA, WORLD, LIGHT, 'k')
+    expect(empty.fake.draws).toEqual([])
   })
 })

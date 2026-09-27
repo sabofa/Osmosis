@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../../parser/parseSpec'
 import type { MeshMark, SpaceScene } from '../../scene/types'
-import { approx, kernelOf, markNamed, polylines, readout, sceneOf, vertices } from './testing'
+import { approx, dot, kernelOf, markNamed, polylines, readout, sceneOf, vertices, windings } from './testing'
 
 const faces = (scene: SpaceScene, line = 1) =>
   scene.marks.filter((m) => m.source.object.startsWith(`s${line}.face`)).map((m) => m.source.object.slice(`s${line}.`.length))
@@ -43,6 +43,26 @@ describe('volume: the tetrahedron x in [0, 1], y in [0, 1 - x], z in [0, 1 - x -
       const n = mesh.normals
       const mid = Math.floor(p.length / 6) * 3
       expect((p[mid] - c[0]) * n[mid] + (p[mid + 1] - c[1]) * n[mid + 1] + (p[mid + 2] - c[2]) * n[mid + 2]).toBeGreaterThan(0)
+    }
+  })
+
+  it('winds every face triangle so its front side is the outside: winding and normals agree, pointing out', () => {
+    for (const spec of [
+      'volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y]',
+      'volume: x in [1, 0], y in [0, 1 - x], z in [0, 1 - x - y]',
+      'volume: r in [0, 1], theta in [0, pi], z in [0, 1] cylindrical',
+    ]) {
+      const scene = sceneOf(spec)
+      const centre = faces(scene).flatMap((name) => vertices(face(scene, name))).reduce((m, p) => [m[0] + p[0], m[1] + p[1], m[2] + p[2]], [0, 0, 0])
+      const count = faces(scene).reduce((m, name) => m + vertices(face(scene, name)).length, 0)
+      const c = centre.map((v) => v / count)
+      for (const name of faces(scene)) {
+        for (const t of windings(face(scene, name))) {
+          if (Math.hypot(...t.normal) < 1e-12) continue
+          expect([spec, name, dot(t.normal, t.vertexNormal) > 0]).toEqual([spec, name, true])
+          expect([spec, name, dot(t.normal, [t.centre[0] - c[0], t.centre[1] - c[1], t.centre[2] - c[2]]) > 0]).toEqual([spec, name, true])
+        }
+      }
     }
   })
 

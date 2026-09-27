@@ -193,10 +193,72 @@ function drawOne(gl: WebGL2RenderingContext, program: ProgramInfo, box: BoxGpu, 
   gl.drawArraysInstanced(gl.TRIANGLES, 0, CUBE_VERTICES, box.count)
 }
 
-// Every box mark: opaque ones first (writing depth), then translucent ones
-// blended, farthest first. `key` identifies the camera (linePipeline's
-// cameraKey). Leaves culling, blending and depth writes as it found the
-// frame loop's defaults: off, off, on.
+export function isOpaqueBox(box: BoxGpu): boolean {
+  return box.mark.style.opacity >= 1
+}
+
+function bindBoxProgram(gl: WebGL2RenderingContext, program: ProgramInfo, camera: CameraMatrices, world: WorldMap): void {
+  gl.useProgram(program.program)
+  gl.uniformMatrix4fv(program.uniform('u_view'), false, float32(camera.view))
+  gl.uniformMatrix4fv(program.uniform('u_proj'), false, float32(camera.proj))
+  gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
+  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+  gl.enable(gl.CULL_FACE)
+  gl.cullFace(gl.BACK)
+}
+
+// The frame loop's defaults, restored by both entry points: culling and
+// blending off, depth writes on.
+function restore(gl: WebGL2RenderingContext): void {
+  gl.depthMask(true)
+  gl.disable(gl.BLEND)
+  gl.disable(gl.CULL_FACE)
+  gl.bindVertexArray(null)
+}
+
+// The opaque box marks (opacity 1) among `boxes`, writing depth: for the
+// frame loop's opaque pass.
+export function drawOpaqueBoxes(gl: WebGL2RenderingContext, program: ProgramInfo, boxes: readonly BoxGpu[], camera: CameraMatrices, world: WorldMap, colors: SpaceColors): void {
+  const opaque = boxes.filter(isOpaqueBox)
+  if (opaque.length === 0) return
+  bindBoxProgram(gl, program, camera, world)
+  gl.disable(gl.BLEND)
+  gl.depthMask(true)
+  for (const box of opaque) drawOne(gl, program, box, colors)
+  restore(gl)
+}
+
+// The translucent box marks among `boxes`, blended without writing depth,
+// marks farthest first and each mark's instances re-sorted when the camera
+// (`key`, linePipeline's cameraKey) moves: for the frame loop's translucent
+// pass. Under order-independent transparency the sort is moot.
+export function drawTranslucentBoxes(
+  gl: WebGL2RenderingContext,
+  program: ProgramInfo,
+  boxes: readonly BoxGpu[],
+  camera: CameraMatrices,
+  world: WorldMap,
+  colors: SpaceColors,
+  key: string,
+): void {
+  const translucent = boxes
+    .filter((box) => !isOpaqueBox(box))
+    .map((box) => ({ box, depth: meanDepth(box, camera) }))
+    .sort((a, b) => a.depth - b.depth)
+  if (translucent.length === 0) return
+  bindBoxProgram(gl, program, camera, world)
+  gl.enable(gl.BLEND)
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+  gl.depthMask(false)
+  for (const { box } of translucent) {
+    sortInstances(gl, box, camera, key)
+    drawOne(gl, program, box, colors)
+  }
+  restore(gl)
+}
+
+// Both, opaque first: the single call today's backend makes. At the merge
+// with S3's frame loop each half moves to its own pass.
 export function drawBoxes(
   gl: WebGL2RenderingContext,
   program: ProgramInfo,
@@ -206,32 +268,6 @@ export function drawBoxes(
   colors: SpaceColors,
   key: string,
 ): void {
-  if (boxes.length === 0) return
-  gl.useProgram(program.program)
-  gl.uniformMatrix4fv(program.uniform('u_view'), false, float32(camera.view))
-  gl.uniformMatrix4fv(program.uniform('u_proj'), false, float32(camera.proj))
-  gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
-  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
-  gl.enable(gl.CULL_FACE)
-  gl.cullFace(gl.BACK)
-  gl.disable(gl.BLEND)
-  gl.depthMask(true)
-  for (const box of boxes) if (box.mark.style.opacity >= 1) drawOne(gl, program, box, colors)
-  const translucent = boxes
-    .filter((box) => box.mark.style.opacity < 1)
-    .map((box) => ({ box, depth: meanDepth(box, camera) }))
-    .sort((a, b) => a.depth - b.depth)
-  if (translucent.length > 0) {
-    gl.enable(gl.BLEND)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-    gl.depthMask(false)
-    for (const { box } of translucent) {
-      sortInstances(gl, box, camera, key)
-      drawOne(gl, program, box, colors)
-    }
-  }
-  gl.depthMask(true)
-  gl.disable(gl.BLEND)
-  gl.disable(gl.CULL_FACE)
-  gl.bindVertexArray(null)
+  drawOpaqueBoxes(gl, program, boxes, camera, world, colors)
+  drawTranslucentBoxes(gl, program, boxes, camera, world, colors, key)
 }

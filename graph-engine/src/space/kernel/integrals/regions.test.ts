@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
-import { approx, kernelOf, markNamed, meshArea, polylines, readout, sceneOf, vertices } from './testing'
+import { approx, kernelOf, lastDigitUnit, markNamed, meshArea, polylines, readout, sceneOf, vertices } from './testing'
 
 describe('region: type I, x in [0, 1], y in [x^2, x]', () => {
   const scene = sceneOf('region: x in [0, 1], y in [x^2, x]')
@@ -79,18 +79,55 @@ describe('region: polar and inequality', () => {
     expect(Math.abs(approx(readout(scene, 1).text, 'area') - 4 * Math.PI)).toBeLessThan(1e-9)
   })
 
-  it('x^2 + y^2 <= 4 and y >= 0 at res 128: the mesh area is within 0.5% of 2 pi, shown to 4 digits', () => {
+  it('x^2 + y^2 <= 4 and y >= 0 at res 128: the mesh area is within 0.5% of 2 pi, and every digit it prints is right', () => {
     const scene = sceneOf('region: x^2 + y^2 <= 4 and y >= 0 res: 128')
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
-    expect(Math.abs(approx(text, 'area') / (2 * Math.PI) - 1)).toBeLessThan(0.005)
-    // The mesh area carries no error estimate: 4 significant digits.
-    expect(text).toMatch(/^area ≈ \d\.\d{3}$/)
+    const area = approx(text, 'area')
+    expect(Math.abs(area / (2 * Math.PI) - 1)).toBeLessThan(0.005)
+    // The digits come from the mesh's own error, |A(128) - A(64)|, so the last one printed is right.
+    expect(Math.abs(area - 2 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
     // Its boundary lies on the circle or on y = 0.
     for (const p of vertices(markNamed(scene, 's1.boundary', 'lines'))) {
       expect(Math.abs(Math.hypot(p[0], p[1]) - 2) < 1e-6 || Math.abs(p[1]) < 1e-12).toBe(true)
     }
   })
+
+  it('a small disc at the default resolution: 0.7832 printed 4 digits against π/4 = 0.7854; now only the digits that are right', () => {
+    const text = readout(sceneOf('region: x^2 + y^2 <= 0.25'), 1).text
+    expect(Math.abs(approx(text, 'area') - Math.PI / 4)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+  })
+})
+
+describe('boundary orientation: every piece runs counter-clockwise, the region on its left', () => {
+  // The probe's distance from the boundary: the iterated boundaries lie on
+  // their curves; the mesh's is chords, up to 5e-4 inside the circle, so its
+  // probe steps past that.
+  const cases: [string, (x: number, y: number) => boolean, number][] = [
+    ['region: x in [0, 1], y in [x^2, x]', (x, y) => x > 0 && x < 1 && y > x * x && y < x, 1e-4],
+    ['region: x in [1, 0], y in [x^2, x]', (x, y) => x > 0 && x < 1 && y > x * x && y < x, 1e-4],
+    ['region: y in [0, 2], x in [0, y/2]', (x, y) => y > 0 && y < 2 && x > 0 && x < y / 2, 1e-4],
+    ['region: r in [1, 2], theta in [0, pi/2]', (x, y) => Math.hypot(x, y) > 1 && Math.hypot(x, y) < 2 && x > 0 && y > 0, 1e-4],
+    ['region: theta in [0, pi/2], r in [1, 2]', (x, y) => Math.hypot(x, y) > 1 && Math.hypot(x, y) < 2 && x > 0 && y > 0, 1e-4],
+    ['region: x^2 + y^2 <= 1 and y >= 0', (x, y) => x * x + y * y < 1 && y > 0, 1e-2],
+  ]
+  for (const [spec, inside, eps] of cases) {
+    it(spec, () => {
+      const pieces = polylines(markNamed(sceneOf(spec), 's1.boundary', 'lines'))
+      expect(pieces.length).toBeGreaterThan(0)
+      for (const piece of pieces) {
+        for (let k = 0; k + 1 < piece.length; k += Math.max(1, Math.floor(piece.length / 7))) {
+          const [p, q] = [piece[k], piece[k + 1]]
+          const len = Math.hypot(q[0] - p[0], q[1] - p[1])
+          if (len === 0) continue
+          const left = [-(q[1] - p[1]) / len, (q[0] - p[0]) / len]
+          const mid = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]
+          expect([spec, k, inside(mid[0] + eps * left[0], mid[1] + eps * left[1])]).toEqual([spec, k, true])
+          expect([spec, k, inside(mid[0] - eps * left[0], mid[1] - eps * left[1])]).toEqual([spec, k, false])
+        }
+      }
+    })
+  }
 })
 
 describe('named regions and "over R"', () => {

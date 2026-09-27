@@ -19,19 +19,18 @@
 import type { Expr, Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
 import { num, substitute } from '../../../math/expr'
-import { integrate1 } from '../../../math/quadrature'
 import type { SpaceStyle } from '../../grammar/types'
-import type { Mark, MeshMark } from '../../scene/types'
+import type { Mark, MeshMark, SceneError } from '../../scene/types'
 import { checkBudget, Reads, resolution } from '../common'
-import { finishMesh } from '../mesh'
+import { finishMesh, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
-import { approxText, COLLAPSED_REL, errorFloor, formOf, part, readoutLabel, ROUNDING_REL, type Approx } from './common'
+import { approxText, attempt, COLLAPSED_REL, formOf, part, readoutLabel, type Approx } from './common'
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
-import { compileOnRegion, POLAR_XY, targetExpr, targetName, targetText } from './target'
-import { nonNegative, prepareIterated, type PreparedSolid } from './volumes3'
+import { compileOnRegion, POLAR_XY, targetExpr, targetText } from './target'
+import { prepareIterated, type PreparedSolid } from './volumes3'
 
 export const VOLUME_OPACITY = 0.45
 const DEFAULT_RES = 96
@@ -126,12 +125,15 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
 
   const R = regionName ?? 'R'
   const integrand = solid.bottom ? `(${solid.top.text} − ${targetText(solid.bottom)})` : targetText(solid.top)
-  const note = `${targetName(solid.top, scope) ?? 'f'} < ${solid.bottom ? (targetName(solid.bottom, scope) ?? 'g') : '0'} on part of ${R}; the integral counts that part negatively`
+  const note = `${targetText(solid.top)} < ${solid.bottom ? targetText(solid.bottom) : '0'} on part of ${R}; the integral counts that part negatively`
 
   const build = (): BuildResult => {
-    const r = region.build(n)
-    const value = r.integrate((a, b) => f(a, b) - g(a, b))
-    const surfaces = [...top.build().marks, ...bottom.build().marks].filter((m): m is MeshMark => m.kind === 'mesh')
+    // Sides sampled at n, as the top and bottom are, so the walls meet them
+    // vertex for vertex.
+    const r = region.build(n, n)
+    const errors: SceneError[] = []
+    const value = attempt(context, errors, () => r.integrate((a, b) => f(a, b) - g(a, b)))
+    const surfaces = [...top.build().marks, ...bottom.build().marks.map(facingDown)].filter((m): m is MeshMark => m.kind === 'mesh')
     const candidates = r.boundary.map((piece, i) => wallMark(piece, f, g, context, part(context, `wall${i}`).object, opacity))
     const size = diagonal([...surfaces, ...candidates.filter((w) => w !== null)])
     const walls = candidates.filter((w): w is MeshMark => w !== null && area(w) > COLLAPSED_REL * size * size)
@@ -143,7 +145,6 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     const scale = gaps.reduce((m, d) => (Number.isFinite(d) ? Math.max(m, Math.abs(d)) : m), 0)
     const crosses = gaps.some((d) => d < -1e-12 * scale)
 
-    const text = `∬_${R} ${integrand} dA ${approxText(value)}${crosses ? `; ${note}` : ''}`
     const marks: Mark[] = [...surfaces, ...walls]
     const topMark = surfaces.find((m) => m.source.object === context.source.object)
     let anchor: [number, number, number] = [0, 0, 0]
@@ -157,15 +158,23 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
       }
       anchor = [(3 * sx) / p.length, (3 * sy) / p.length, zmax]
     }
-    return { marks, labels: [readoutLabel(context, anchor, text)], errors: [], colorScale: null }
+    const labels = value ? [readoutLabel(context, anchor, `∬_${R} ${integrand} dA ${approxText(value)}${crosses ? `; ${note}` : ''}`)] : []
+    return { marks, labels, errors, colorScale: null }
   }
   return { reads: reads.names, build }
 }
 
+// The bottom surface seen from below: the solid's outside there. Normals
+// negated, winding reversed, so its lit (front) side faces down.
+function facingDown(mark: Mark): Mark {
+  if (mark.kind !== 'mesh') return mark
+  return { ...mark, normals: mark.normals.map((v) => -v), indices: reversedWinding(mark.indices) }
+}
+
 // The solid between z = g and z = f over R as something to integrate over
-// (centroid: of a named volume): the double integral over R, in the region's
-// coordinates, of the single integral in z from g to f. The inner integrals'
-// largest error estimate, times R's area, is added to the outer estimate.
+// (centroid: of a named volume): one triple integral, over R's own ranges
+// then z from g to f, sharing one evaluation budget (or the mesh sum over an
+// inequality region, the z integral at each midpoint).
 export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between' }>, context: BuildContext, reads: Reads): PreparedSolid {
   const { scope, config } = context
   const { domain } = resolveDomain(context, solid.region)
@@ -182,19 +191,7 @@ export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between
       })
       return (): Approx[] => {
         const r = region.build(n)
-        const area = Math.abs(r.integrate(() => 1, true).value)
-        return hs.map((h, k) => {
-          let inner = 0
-          const outer = r.integrate((a, b) => {
-            const q = integrate1((z) => h(a, b, z), g(a, b), f(a, b))
-            inner = Math.max(inner, q.error)
-            return q.value
-          })
-          const error = (outer.error ?? 0) + area * inner
-          if (nonNegative(exprs[k])) return { value: outer.value, error: errorFloor(error, outer.value, ROUNDING_REL) }
-          const absolute = r.integrate((a, b) => Math.abs(integrate1((z) => Math.abs(h(a, b, z)), g(a, b), f(a, b)).value), true)
-          return { value: outer.value, error: errorFloor(error, absolute.value, ROUNDING_REL) }
-        })
+        return hs.map((h) => r.integrateSolid(h, g, f))
       }
     },
   }
@@ -207,14 +204,14 @@ function prepareVolume(statement: Statement, context: BuildContext): PreparedSta
   return solid.kind === 'between' ? prepareBetween(statement, context, solid, form.style) : prepareIterated(context, solid, form.style, name)
 }
 
-// "V = volume ...": compiled, so a bad expression is refused on its own line,
-// and nothing drawn.
+// "V = volume ...": built in full, so a bad expression or an integral with
+// no value is refused on its own line, and nothing drawn.
 function prepareNamedVolume(statement: Statement, context: BuildContext): PreparedStatement {
   const form = formOf(statement, 'namedVolume')
   const { solid } = resolveSolid(context, form.solid)
   const style: SpaceStyle = { opacity: null, colormap: null, mesh: null, res: null, width: null, dashed: false }
   const prepared = solid.kind === 'between' ? prepareBetween(statement, context, solid, style) : prepareIterated(context, solid, style, form.name)
-  return { reads: prepared.reads, build: () => ({ marks: [], labels: [], errors: [], colorScale: null }) }
+  return { reads: prepared.reads, build: () => ({ marks: [], labels: [], errors: prepared.build().errors, colorScale: null }) }
 }
 
 export const VOLUME: BuilderEntry = { draws: true, prepare: prepareVolume }

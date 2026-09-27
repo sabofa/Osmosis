@@ -54,10 +54,23 @@ describe('riemann: under x*y over x in [0, 2], y in [0, 2], n = 2', () => {
     ])
   })
 
-  it('is drawn at opacity 0.6 with edges, in the statement’s colour, sample dots on the tops', () => {
+  it('is drawn at opacity 0.6 with edges, in the statement’s colour; the sample dots, 8 px, in a contrasting slot', () => {
     const scene = sceneOf(spec)
     expect(boxes(scene).style).toEqual({ color: { author: null, slot: 0 }, opacity: 0.6, edges: true })
-    expect(markNamed(scene, 's1.samples', 'points').style.color).toEqual({ author: null, slot: 0 })
+    expect(markNamed(scene, 's1.samples', 'points').style).toEqual({ color: { author: null, slot: 1 }, size: 8, shape: 'dot' })
+    // boxes in another slot: the dots take the accent
+    const second = sceneOf(`z = x*y\n${spec}`)
+    expect(markNamed(second, 's2.samples', 'points').style.color).toEqual({ author: null, slot: 0 })
+  })
+
+  it('names the target in its readout: the expression, or a defined function f(x*, y*)', () => {
+    expect(readout(sceneOf(spec), 1).text).toBe('Σ (x*y) ΔA ≈ 4; ∬_R (x*y) dA ≈ 4')
+    expect(readout(sceneOf('f(x, y) = x*y\nriemann: under f over x in [0, 2], y in [0, 2], n = 2'), 2).text).toBe('Σ f(x*, y*) ΔA ≈ 4; ∬_R f dA ≈ 4')
+  })
+
+  it('a @param n that is not an integer one: the refusal says to add "integer"', () => {
+    const scene = sceneOf('@param n = 2.5 range [1, 10]\nriemann: under x*y over x in [0, 2], y in [0, 2], n = n')
+    expect(scene.errors).toEqual([{ line: 2, message: 'n must be a whole number from 1 to 100, got 2.5 — add "integer" to @param n' }])
   })
 })
 

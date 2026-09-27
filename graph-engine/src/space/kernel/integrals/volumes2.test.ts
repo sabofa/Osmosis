@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
-import { approx, markNamed, meshArea, readout, sceneOf, vertices } from './testing'
+import { approx, dot, lastDigitUnit, markNamed, meshArea, readout, sceneOf, vertices, windings } from './testing'
 
 const walls = (scene: ReturnType<typeof sceneOf>) => scene.marks.filter((m) => /\.wall\d+$/.test(m.source.object)) as MeshMark[]
 
@@ -61,17 +61,17 @@ describe('volume: between x^2 + y^2 and 2 over x in [-1, 1], y in [-1, 1]', () =
 })
 
 describe('volume: the readout and its note', () => {
-  it('f < g on part of R: the note says the integral counts that part negatively', () => {
+  it('f < g on part of R: the note names both, as written ("0 < x"), and says the integral counts that part negatively', () => {
     // top 0, bottom x: f < g where x > 0, and the integral of -x is 0
     const scene = sceneOf('volume: between x and 0 over x in [-1, 1], y in [0, 1]')
     const text = readout(scene, 1).text
-    expect(text).toMatch(/f < g on part of R; the integral counts that part negatively/)
+    expect(text).toMatch(/0 < x on part of R; the integral counts that part negatively/)
     expect(Math.abs(approx(text, 'dA'))).toBeLessThan(1e-12)
   })
 
-  it('under a surface that dips below zero: f < 0', () => {
+  it('under a surface that dips below zero: "x < 0 on part of R"', () => {
     const text = readout(sceneOf('volume: under x over x in [-1, 1], y in [0, 1]'), 1).text
-    expect(text).toMatch(/f < 0 on part of R/)
+    expect(text).toMatch(/x < 0 on part of R/)
   })
 
   it('names a defined function and a named region by their names', () => {
@@ -82,15 +82,60 @@ describe('volume: the readout and its note', () => {
     expect(Math.abs(approx(text, 'dA') - 8 * Math.PI)).toBeLessThan(1e-8)
   })
 
-  it('over an inequality region: the mesh sum, 4 digits', () => {
-    // the unit disc under z = 1: pi
-    const text = readout(sceneOf('volume: under 1 over x^2 + y^2 <= 1 res: 160'), 1).text
-    expect(Math.abs(approx(text, 'dA') - Math.PI)).toBeLessThan(2e-3)
-    expect(text).toMatch(/dA ≈ \d\.\d{3}$/)
+  it('over an inequality region: the mesh sum, with only the digits its two resolutions agree on', () => {
+    // the unit disc under z = 1: π
+    const disc = readout(sceneOf('volume: under 1 over x^2 + y^2 <= 1 res: 160'), 1).text
+    expect(Math.abs(approx(disc, 'dA') - Math.PI)).toBeLessThanOrEqual(lastDigitUnit(disc, 'dA'))
+    // the hemisphere: 2π/3 = 2.0944, which 4 assumed digits printed as 2.092
+    const dome = readout(sceneOf('volume: under sqrt(1 - x^2 - y^2) over x^2 + y^2 <= 1'), 1).text
+    expect(Math.abs(approx(dome, 'dA') - (2 * Math.PI) / 3)).toBeLessThanOrEqual(lastDigitUnit(dome, 'dA'))
   })
 
   it('refuses a function of three variables as a target', () => {
     const scene = sceneOf('F(x, y, z) = x + y + z\nvolume: under F over x in [0, 1], y in [0, 1]')
     expect(scene.errors).toEqual([{ line: 2, message: expect.stringMatching(/"F" is a function of 3 variables/) }])
   })
+})
+
+describe('volume: every boundary face points out of the solid', () => {
+  const cases: [string, (x: number, y: number) => boolean][] = [
+    ['volume: between x^2 + y^2 and 2 over x in [-1, 1], y in [-1, 1]', (x, y) => Math.abs(x) < 1 && Math.abs(y) < 1],
+    ['volume: under 1 + x over y in [0, 2], x in [0, y/2]', (x, y) => y > 0 && y < 2 && x > 0 && x < y / 2],
+    ['volume: under 2 over theta in [0, pi/2], r in [1, 2]', (x, y) => Math.hypot(x, y) > 1 && Math.hypot(x, y) < 2 && x > 0 && y > 0],
+    ['volume: under 1 over x^2 + y^2 <= 1 and y >= 0', (x, y) => x * x + y * y < 1 && y > 0],
+  ]
+  for (const [spec, inside] of cases) {
+    it(spec, () => {
+      const scene = sceneOf(spec)
+      expect(scene.errors).toEqual([])
+      const top = markNamed(scene, 's1', 'mesh')
+      const bottom = markNamed(scene, 's1.bottom', 'mesh')
+      for (const t of windings(top)) expect(t.normal[2]).toBeGreaterThan(0)
+      for (const t of windings(bottom)) expect(t.normal[2]).toBeLessThan(0)
+      const four = walls(scene)
+      expect(four.length).toBeGreaterThan(0)
+      for (const wall of four) {
+        for (const t of windings(wall)) {
+          const len = Math.hypot(t.normal[0], t.normal[1])
+          if (len === 0) continue
+          // 1e-2 out: past the mesh's chords, which lie up to 5e-4 inside its circle
+          const [ox, oy] = [t.centre[0] + (1e-2 * t.normal[0]) / len, t.centre[1] + (1e-2 * t.normal[1]) / len]
+          expect(inside(ox, oy)).toBe(false)
+        }
+      }
+      // and every triangle's winding agrees with its vertex normals, so the lit side is the outside
+      for (const mesh of [top, bottom, ...four]) for (const t of windings(mesh)) expect(dot(t.normal, t.vertexNormal)).toBeGreaterThan(0)
+    })
+  }
+})
+
+describe('volume: the walls meet the top and bottom without T-junctions', () => {
+  for (const spec of ['volume: between x^2 + y^2 and 2 over x in [-1, 1], y in [-1, 1]', 'volume: under 4 - x^2 - y^2 over r in [0, 2], theta in [0, pi]', 'volume: under 2 - x over x^2 + y^2 <= 1 res: 40']) {
+    it(spec, () => {
+      const scene = sceneOf(spec)
+      const key = (p: readonly number[]) => p.map((c) => Math.round(c * 1e9)).join(',')
+      const corners = new Set([...vertices(markNamed(scene, 's1', 'mesh')), ...vertices(markNamed(scene, 's1.bottom', 'mesh'))].map(key))
+      for (const wall of walls(scene)) for (const p of vertices(wall)) expect([spec, corners.has(key(p))]).toEqual([spec, true])
+    })
+  }
 })

@@ -4,8 +4,10 @@
 
 import type { GraphConfig } from '../../../parser/config'
 import type { Statement } from '../../../parser/types'
+import { QuadratureError } from '../../../math/quadrature'
+import { QUAD_BUDGET } from '../../../math/tolerance'
 import { APPROX, formatApprox, formatNumber, supportedDigits, MAX_DIGITS } from '../../pick/format'
-import type { LabelAnchor, Vec3 } from '../../scene/types'
+import type { LabelAnchor, SceneError, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
 import type { BuildContext } from '../registry'
 
@@ -22,9 +24,6 @@ export interface Approx {
 // value that cancels (the moment of a symmetric region) would otherwise print
 // its rounding noise, 2×10⁻¹⁷, as if it were a value.
 export const ROUNDING_REL = 1e-13
-// A mesh sum (an inequality region) is good to about 4 digits of the
-// integral of |g|: the plan's "4 significant digits" for a positive integrand.
-export const MESH_REL = 1e-4
 
 export function errorFloor(error: number | null, absolute: number, rel: number): number {
   return Math.max(error ?? 0, rel * Math.abs(absolute))
@@ -43,6 +42,53 @@ export function approxText(a: Approx): string {
 export function approxTupleText(values: readonly Approx[]): string {
   const parts = values.map((a) => formatNumber(shown(a), a.error === null ? 4 : Math.min(MAX_DIGITS, supportedDigits(shown(a), a.error))))
   return `${APPROX} (${parts.join(', ')})`
+}
+
+// An integral with no value, in words an author can act on: returned as an
+// error on the statement's line while the figure still draws.
+export class IntegralRefusal extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'IntegralRefusal'
+  }
+}
+
+// A quadrature's refusal, naming its levels' variables (outer first).
+export function refusalOf(err: QuadratureError, levels: readonly string[]): IntegralRefusal {
+  const known = levels.map((name, i) => [name, err.at[i]] as const).filter((e): e is readonly [string, number] => typeof e[1] === 'number')
+  if (err.reason === 'undefined') {
+    const where =
+      known.length === 0
+        ? ''
+        : known.length === 1
+          ? ` at ${known[0][0]} = ${formatNumber(known[0][1])}`
+          : ` at (${known.map((e) => e[0]).join(', ')}) = (${known.map((e) => formatNumber(e[1])).join(', ')})`
+    return new IntegralRefusal(`the integral is undefined: the integrand is not a number${where}`)
+  }
+  const where = known.length > 0 ? ` near ${known[0][0]} = ${formatNumber(known[0][1])}` : ''
+  return new IntegralRefusal(`the integral does not converge${where}: it did not settle within ${QUAD_BUDGET.toLocaleString('en-US')} evaluations`)
+}
+
+// Runs a quadrature over `levels`, turning its refusal into words.
+export function quadrature<T>(levels: readonly string[], run: () => T): T {
+  try {
+    return run()
+  } catch (err) {
+    if (err instanceof QuadratureError) throw refusalOf(err, levels)
+    throw err
+  }
+}
+
+// Runs an integral; a refusal becomes an error on the statement's line and
+// null, so the caller draws what it can.
+export function attempt<T>(context: BuildContext, errors: SceneError[], run: () => T): T | null {
+  try {
+    return run()
+  } catch (err) {
+    if (!(err instanceof IntegralRefusal)) throw err
+    errors.push({ line: context.line, message: err.message })
+    return null
+  }
 }
 
 // A piece is collapsed when its size is at most this fraction of the whole
