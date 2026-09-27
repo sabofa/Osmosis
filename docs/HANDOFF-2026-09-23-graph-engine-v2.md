@@ -10,7 +10,7 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1774 tests passing**,
+agents" below). Working tree clean. **1783 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-27, after geometry phase 11 (nets and shortest paths
@@ -931,7 +931,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1774 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1783 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
