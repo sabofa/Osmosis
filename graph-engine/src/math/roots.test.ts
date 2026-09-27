@@ -40,6 +40,23 @@ describe('newton', () => {
     expect([...result.x].map((c) => Math.round(c * 1e12) / 1e12)).toEqual([1, 2, 3])
   })
 
+  it('in four dimensions: the Lagrange system of x + 2y + 2z on the sphere of radius 3', () => {
+    // ∇f = λ∇g: 1 = 2λx, 2 = 2λy, 2 = 2λz, so x = 1/(2λ), y = z = 1/λ, and
+    // x^2 + y^2 + z^2 = (1/4 + 2)/λ^2 = 9 gives λ = 1/2: (1, 2, 2).
+    const result = newton(
+      (v) => [1 - 2 * v[3] * v[0], 2 - 2 * v[3] * v[1], 2 - 2 * v[3] * v[2], v[0] ** 2 + v[1] ** 2 + v[2] ** 2 - 9],
+      (v) => [
+        [-2 * v[3], 0, 0, -2 * v[0]],
+        [0, -2 * v[3], 0, -2 * v[1]],
+        [0, 0, -2 * v[3], -2 * v[2]],
+        [2 * v[0], 2 * v[1], 2 * v[2], 0],
+      ],
+      [1.2, 1.8, 2.3, 0.4]
+    )
+    expect(result.converged).toBe(true)
+    for (const [i, v] of [1, 2, 2, 0.5].entries()) expect(result.x[i]).toBeCloseTo(v, 12)
+  })
+
   it('reports failure rather than a wrong root: x^2 + 1 = 0 has none', () => {
     const result = newton(
       (v) => [v[0] * v[0] + 1],

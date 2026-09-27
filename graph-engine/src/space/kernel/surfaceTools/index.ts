@@ -3,8 +3,10 @@
 // dispatcher calls it for a two-variable target.
 
 import type { BuilderEntry } from '../registry'
+import { CRITICAL } from './critical'
 import { DIRECTIONAL } from './directional'
 import { GRADIENT } from './gradients'
+import { LAGRANGE } from './lagrange'
 import { PATH } from './paths'
 import { TANGENT_PLANE } from './tangentPlanes'
 import { TRACE } from './traces'
@@ -15,4 +17,6 @@ export const SURFACE_TOOL_BUILDERS: readonly (readonly [string, BuilderEntry])[]
   ['space:tangentPlane', TANGENT_PLANE],
   ['space:gradient', GRADIENT],
   ['space:directional', DIRECTIONAL],
+  ['space:critical', CRITICAL],
+  ['space:lagrange', LAGRANGE],
 ]

@@ -1,5 +1,7 @@
 // 2x2 and 3x3 dense linear algebra (K4): determinants, solves that refuse a
-// singular matrix, and symmetric eigenvalues. Matrices are row-major arrays.
+// singular matrix, and symmetric eigenvalues; and a 4x4 solve, for Newton on
+// a three-variable Lagrange system (x, y, z, λ). Matrices are row-major
+// arrays.
 
 import { JACOBI_REL, SINGULAR_REL } from './tolerance'
 
@@ -54,6 +56,38 @@ export function solve3(m: Matrix, b: readonly number[]): [number, number, number
   const x1 = (a[1][3] - a[1][2] * x2) / a[1][1]
   const x0 = (a[0][3] - a[0][1] * x1 - a[0][2] * x2) / a[0][0]
   return [x0, x1, x2]
+}
+
+// Gaussian elimination with partial pivoting, on a copy. The determinant is
+// the product of the pivots, negated for each row swap, and the matrix is
+// refused as singular by the same relative test as solve2 and solve3.
+export function solve4(m: Matrix, b: readonly number[]): [number, number, number, number] | null {
+  const a = m.map((row, i) => [row[0], row[1], row[2], row[3], b[i]])
+  let det = 1
+  for (let col = 0; col < 4; col++) {
+    let pivot = col
+    for (let r = col + 1; r < 4; r++) if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r
+    if (pivot !== col) {
+      const swap = a[col]
+      a[col] = a[pivot]
+      a[pivot] = swap
+      det = -det
+    }
+    det *= a[col][col]
+    if (a[col][col] === 0) return null
+    for (let r = col + 1; r < 4; r++) {
+      const factor = a[r][col] / a[col][col]
+      for (let c = col; c < 5; c++) a[r][c] -= factor * a[col][c]
+    }
+  }
+  if (singular(det, m)) return null
+  const x = [0, 0, 0, 0]
+  for (let r = 3; r >= 0; r--) {
+    let sum = a[r][4]
+    for (let c = r + 1; c < 4; c++) sum -= a[r][c] * x[c]
+    x[r] = sum / a[r][r]
+  }
+  return [x[0], x[1], x[2], x[3]]
 }
 
 // Eigenvalues of a symmetric 2x2, ascending, in closed form.

@@ -1,9 +1,9 @@
-// Damped Newton in one to three dimensions, and roots seeded from a grid
+// Damped Newton in one to four dimensions, and roots seeded from a grid
 // (K4). For questions with no closed form: critical points (grad f = 0) and
 // Lagrange systems. Every answer is approximate and flagged as converged or
 // not; a caller shows it with "≈".
 
-import { solve2, solve3 } from './linalg'
+import { solve2, solve3, solve4 } from './linalg'
 import {
   NEWTON_LINEAR_MAX,
   NEWTON_LINEAR_MIN,
@@ -17,7 +17,7 @@ import {
   ROOT_DEDUP_REL,
 } from './tolerance'
 
-// The system F(x) = 0 and its Jacobian, over 1-3 unknowns.
+// The system F(x) = 0 and its Jacobian, over 1-4 unknowns.
 export type SystemFn = (x: Float64Array) => ArrayLike<number>
 export type JacobianFn = (x: Float64Array) => readonly (readonly number[])[]
 
@@ -60,7 +60,8 @@ function newtonStep(j: readonly (readonly number[])[], f: ArrayLike<number>): nu
   }
   if (n === 2) return solve2(j, [-f[0], -f[1]])
   if (n === 3) return solve3(j, [-f[0], -f[1], -f[2]])
-  throw new Error(`newton works in one to three dimensions, got ${n}`)
+  if (n === 4) return solve4(j, [-f[0], -f[1], -f[2], -f[3]])
+  throw new Error(`newton works in one to four dimensions, got ${n}`)
 }
 
 // The largest absolute row sum of a Jacobian.

@@ -252,10 +252,43 @@ function parseDirectional(text: string): SurfaceToolForm {
   }
 }
 
+// critical: <target> [over <rect>]
+function parseCritical(text: string): SurfaceToolForm {
+  const { rest: styled, clauses } = splitStyle(text)
+  const { rest, over } = splitOver(styled, 'critical')
+  if (rest === '') throw new Error('Expected "critical: f" (a function of x and y, or an expression in them)')
+  return { form: 'critical', target: parseExprString(rest), over, style: toolStyle(clauses, 'critical', []) }
+}
+
+// lagrange: max|min|extrema <f> subject to <g> = <c>
+function parseLagrange(text: string): SurfaceToolForm {
+  const { rest: styled, clauses } = splitStyle(text)
+  const { rest, over } = splitOver(styled, 'lagrange')
+  const example = 'max f subject to g = c'
+  const match = /^(max|min|extrema)\s+(.+?)\s+subject\s+to\s+(.+)$/.exec(rest)
+  if (!match) throw new Error(`Expected "lagrange: ${example}" (or min, or extrema), got "lagrange: ${text}"`)
+  const equation = match[3]
+  const eq = equation.indexOf('=')
+  if (eq === -1 || equation.indexOf('=', eq + 1) !== -1 || /[<>]/.test(equation)) {
+    throw new Error(`The constraint of lagrange: is one equation "g = c", got "${equation}"`)
+  }
+  return {
+    form: 'lagrange',
+    goal: match[1] as 'max' | 'min' | 'extrema',
+    target: parseExprString(match[2]),
+    constraint: parseExprString(equation.slice(0, eq)),
+    level: parseExprString(equation.slice(eq + 1)),
+    over,
+    style: toolStyle(clauses, 'lagrange', ['res']),
+  }
+}
+
 export const SURFACE_TOOL_KEYWORDS: readonly { keyword: string; parse(rest: string): SurfaceToolForm }[] = [
   { keyword: 'path', parse: parsePath },
   { keyword: 'trace', parse: parseTrace },
   { keyword: 'tangent-plane', parse: parseTangentPlane },
   { keyword: 'gradient', parse: parseGradient },
   { keyword: 'directional', parse: parseDirectional },
+  { keyword: 'critical', parse: parseCritical },
+  { keyword: 'lagrange', parse: parseLagrange },
 ]

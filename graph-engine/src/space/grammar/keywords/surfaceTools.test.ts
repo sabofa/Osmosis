@@ -173,3 +173,45 @@ describe('directional:', () => {
     expect(() => parseSpaceKeyword(line)).toThrow(message)
   })
 })
+
+describe('critical:', () => {
+  it('parses a target, with an optional domain', () => {
+    expect(form('critical: x^3 - 3x + y^2')).toEqual({ form: 'critical', target: p('x^3 - 3x + y^2'), over: null, style: NO_STYLE })
+    expect(form('critical: f over x in [-3, 3], y in [-3, 3]')).toMatchObject({
+      form: 'critical',
+      target: p('f'),
+      over: { x: { param: 'x', from: p('-3'), to: p('3') }, y: { param: 'y', from: p('-3'), to: p('3') } },
+    })
+  })
+
+  it.each([
+    ['critical: f res: 20', /res: does not apply to critical: — it takes only color: and name:/],
+    ['critical:', /Expected "critical: f"/],
+  ])('refuses "%s" in its own words', (line, message) => {
+    expect(() => parseSpaceKeyword(line)).toThrow(message)
+  })
+})
+
+describe('lagrange:', () => {
+  it('parses the goal, the objective and the constraint', () => {
+    expect(form('lagrange: max x + y subject to x^2 + y^2 = 1')).toEqual({
+      form: 'lagrange',
+      goal: 'max',
+      target: p('x + y'),
+      constraint: p('x^2 + y^2'),
+      level: p('1'),
+      over: null,
+      style: NO_STYLE,
+    })
+    expect(form('lagrange: extrema f subject to g = c')).toMatchObject({ goal: 'extrema', target: p('f'), constraint: p('g'), level: p('c') })
+    expect(form('lagrange: min x*y*z subject to x + y + z = 3')).toMatchObject({ goal: 'min' })
+  })
+
+  it.each([
+    ['lagrange: largest f subject to g = 1', /Expected "lagrange: max f subject to g = c" \(or min, or extrema\)/],
+    ['lagrange: max f subject to g', /The constraint of lagrange: is one equation "g = c", got "g"/],
+    ['lagrange: max f subject to g <= 1', /The constraint of lagrange: is one equation/],
+  ])('refuses "%s" in its own words', (line, message) => {
+    expect(() => parseSpaceKeyword(line)).toThrow(message)
+  })
+})
