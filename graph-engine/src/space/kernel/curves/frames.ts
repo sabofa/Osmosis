@@ -47,6 +47,17 @@ const CURVE_WIDTH = 2
 // κ = 0 when |r' × r''| is below this fraction of |r'||r''| (a straight line
 // gives exactly 0).
 const STRAIGHT_REL = 1e-12
+// r' = 0 when |r'| is below this fraction of the summed sizes of the terms
+// of its components (a cancellation, not a speed).
+export const STATIONARY_REL = 1e-9
+
+// The terms of a sum as written: a - b + c gives a, b and c (a negated term
+// is the same size).
+function terms(e: Expr): Expr[] {
+  if (e.kind === 'binary' && (e.op === '+' || e.op === '-')) return [...terms(e.left), ...terms(e.right)]
+  if (e.kind === 'unary') return terms(e.arg)
+  return [e]
+}
 
 export interface Frame {
   T: V3
@@ -103,6 +114,18 @@ function prepareCurveFrame(statement: Statement, context: BuildContext): Prepare
   const d1 = r.map((e) => simplify(diff(e, vars[0], scope)))
   const d2 = d1.map((e) => simplify(diff(e, vars[0], scope)))
   const sample = compileMany([...r, ...d1, ...d2], vars, scope)
+  const termList = d1.flatMap(terms)
+  const sizes = compileMany(termList, vars, scope)
+  const sized = new Float64Array(termList.length)
+  // r' is 0 when it is below STATIONARY_REL of the sizes of the terms it is
+  // the sum of: at the cycloid's cusp 1 - cos(2 pi) cancels two terms of
+  // size 1 to 2.4e-16, which is not a speed.
+  const stationary = (v: V3, t: number) => {
+    sizes(sized, t)
+    let size = 0
+    for (const term of sized) size += Math.abs(term)
+    return norm(v) <= STATIONARY_REL * size
+  }
   reads.add(form.at)
   const at = constant(form.at, scope)
   const name = form.curve.kind === 'named' ? form.curve.name : 'r'
@@ -111,8 +134,8 @@ function prepareCurveFrame(statement: Statement, context: BuildContext): Prepare
     const t = at()
     const s = sample(new Float64Array(9), t)
     const p: V3 = [s[0], s[1], s[2]]
-    const v: V3 = [s[3], s[4], s[5]]
     const a: V3 = [s[6], s[7], s[8]]
+    const v: V3 = stationary([s[3], s[4], s[5]], t) ? [0, 0, 0] : [s[3], s[4], s[5]]
     const where = `${form.param} = ${formatNumber(t)}`
     if (!isFiniteV(p) || !isFiniteV(v) || !isFiniteV(a)) throw new Error(`${name} is not defined at ${where}`)
     const noTangent = () => new Error(`${name}′(${formatNumber(t)}) = 0: the curve has no tangent there`)

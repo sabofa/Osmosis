@@ -23,6 +23,7 @@ import type { CoordinateSurfaceForm } from '../../grammar/keywords/geometryForms
 import type { ParamRange } from '../../grammar/types'
 import { formatNumber } from '../../pick/format'
 import type { MeshMark, Vec3 } from '../../scene/types'
+import { reversedWinding } from '../mesh'
 import { PARAMETRIC_SURFACE } from '../parametric'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { largestSpan, spaceBox } from './box'
@@ -48,6 +49,26 @@ const ORDER: Record<System, readonly string[]> = {
 }
 
 const LABELS: Record<System, string> = { cylindrical: '(r, θ, z)', spherical: '(ρ, θ, φ)' }
+
+// Every form faces its INCREASING solved coordinate s, as an implicit
+// surface faces increasing F. The parametric normal is r_u × r_v, u and v
+// the free coordinates in order; with r = p(s = f(u, v), u, v), its component
+// along p_s is det[r_u, r_v, p_s] = det[p_u, p_v, p_s] (the f terms are
+// multiples of p_s), the coordinate map's Jacobian up to order:
+// det[p_r, p_θ, p_z] = r and det[p_ρ, p_θ, p_φ] = -ρ² sin φ. So
+//   cylindrical r (θ, z): det[p_θ, p_z, p_r] = +r         kept
+//   cylindrical θ (r, z): det[p_r, p_z, p_θ] = -r         flipped
+//   cylindrical z (r, θ): det[p_r, p_θ, p_z] = +r         kept
+//   spherical ρ (θ, φ):   det[p_θ, p_φ, p_ρ] = -ρ² sin φ  flipped
+//   spherical θ (ρ, φ):   det[p_ρ, p_φ, p_θ] = +ρ² sin φ  kept
+//   spherical φ (ρ, θ):   det[p_ρ, p_θ, p_φ] = -ρ² sin φ  flipped
+// A flipped form's normals are negated and its triangles rewound, so the
+// winding still agrees with them.
+const FLIPPED: ReadonlySet<string> = new Set(['cylindrical theta', 'spherical rho', 'spherical phi'])
+
+function flipped(mark: MeshMark): MeshMark {
+  return { ...mark, normals: mark.normals.map((c) => -c), indices: reversedWinding(mark.indices) }
+}
 
 function form(statement: Statement): CoordinateSurfaceForm {
   if (statement.kind === 'space' && statement.form.form === 'coordinateSurface') return statement.form
@@ -108,11 +129,14 @@ function prepareCoordinateSurface(statement: Statement, context: BuildContext): 
   const prepared = PARAMETRIC_SURFACE.prepare(parametric, context)
   const angle = context.config.angle
   const coordinates = (p: Vec3) => coordinateRow(f.system, p, angle)
+  const flip = FLIPPED.has(`${f.system} ${f.solved}`)
   const build = (): BuildResult => {
     const result = prepared.build()
-    const marks = result.marks.map((mark) =>
-      mark.kind === 'mesh' && mark.pick?.kind === 'parametric' ? ({ ...mark, pick: { ...mark.pick, coordinates } } satisfies MeshMark) : mark
-    )
+    const marks = result.marks.map((mark) => {
+      if (mark.kind !== 'mesh') return mark
+      const faced = flip ? flipped(mark) : mark
+      return faced.pick?.kind === 'parametric' ? ({ ...faced, pick: { ...faced.pick, coordinates } } satisfies MeshMark) : faced
+    })
     return { ...result, marks }
   }
   return { reads: prepared.reads, build }

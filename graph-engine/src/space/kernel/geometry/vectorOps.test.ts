@@ -155,3 +155,17 @@ describe('project:', () => {
     expect(sceneOf('project: <0,0,0> onto <1,0,0>').errors[0].message).toMatch(/<0,0,0> is the zero vector/)
   })
 })
+
+describe('fix round 1: project: near-parallel and parallel operands', () => {
+  it('reads a tiny angle from atan2(|u × v|, u·v): <1, 1e-8, 0> onto <1, 0, 0> is θ = 1e-8, not 0', () => {
+    // (the expression grammar has no 1e-8: that reads as 1·e - 8)
+    expect(labelText(clean('project: <1, 10^(-8), 0> onto <1, 0, 0>'))).toContain('comp_v u = 1 · θ = 1×10⁻⁸')
+  })
+
+  it('draws no perpendicular part and no right angle when u is parallel to v up to rounding', () => {
+    // (0.1, 0.2, 0.3) = (0.3, 0.6, 0.9)/3: u - proj_v u is ~1e-17, not a part
+    const scene = clean('project: <0.1,0.2,0.3> onto <0.3,0.6,0.9>')
+    expect(scene.marks.map((m) => m.source.object)).toEqual(['s1', 's1.operands'])
+    expect(labelText(scene)).toContain('comp_v u = 0.3742 · θ = 0')
+  })
+})

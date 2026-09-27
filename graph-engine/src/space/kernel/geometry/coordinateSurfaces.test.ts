@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
-import { marksOf, sceneOf, vertices } from '../../testing/kernel'
+import { marksOf, sceneOf, vertexOf, vertices } from '../../testing/kernel'
 import { coordinateRow } from './coordinateSurfaces'
 
 function surface(spec: string): MeshMark {
@@ -115,4 +115,47 @@ describe('the coordinate readout', () => {
     if (mesh.pick?.kind !== 'parametric') throw new Error('not parametric')
     expect(mesh.pick.coordinates?.([0, 0, 2])).toEqual({ label: '(ρ, θ, φ)', value: '(2, 0°, 0°)' })
   })
+})
+
+describe('fix round 1: every coordinate surface faces its increasing solved coordinate', () => {
+  // The direction the solved coordinate increases in, at p (unnormalised);
+  // null where the coordinate is degenerate (on the axis, at the origin).
+  const increasing: Record<string, (p: [number, number, number]) => [number, number, number] | null> = {
+    'cylindrical r': ([x, y]) => (Math.hypot(x, y) > 1e-9 ? [x, y, 0] : null),
+    'cylindrical theta': ([x, y]) => (Math.hypot(x, y) > 1e-9 ? [-y, x, 0] : null),
+    'cylindrical z': () => [0, 0, 1],
+    'spherical rho': (p) => (Math.hypot(...p) > 1e-9 ? p : null),
+    'spherical theta': ([x, y]) => (Math.hypot(x, y) > 1e-9 ? [-y, x, 0] : null),
+    'spherical phi': ([x, y, z]) => (Math.hypot(x, y) > 1e-9 ? [x * z, y * z, -(x * x + y * y)] : null),
+  }
+  const forms: [string, string][] = [
+    ['cylindrical r', 'cylindrical: r = 2'],
+    ['cylindrical theta', 'cylindrical: theta = pi/3'],
+    ['cylindrical z', 'cylindrical: z = 4 - r'],
+    ['spherical rho', 'spherical: rho = 2'],
+    ['spherical theta', 'spherical: theta = pi/3'],
+    ['spherical phi', 'spherical: phi = pi/4'],
+  ]
+  for (const [which, spec] of forms) {
+    it(`${spec}: normals point toward increasing ${which.split(' ')[1]}, and the winding agrees`, () => {
+      const mesh = surface(`${spec} res: 12`)
+      let checked = 0
+      for (let v = 0; v < mesh.positions.length / 3; v++) {
+        const e = increasing[which](vertexOf(mesh.positions, v))
+        if (!e) continue
+        const n = vertexOf(mesh.normals, v)
+        expect(n[0] * e[0] + n[1] * e[1] + n[2] * e[2]).toBeGreaterThan(0)
+        checked++
+      }
+      expect(checked).toBeGreaterThan(50)
+      for (let t = 0; t < mesh.indices.length / 3; t++) {
+        const [a, b, c] = [0, 1, 2].map((i) => vertexOf(mesh.positions, mesh.indices[3 * t + i]))
+        const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+        const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+        const face = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]
+        const sum = [0, 1, 2].map((k) => [0, 1, 2].reduce((acc, i) => acc + mesh.normals[3 * mesh.indices[3 * t + i] + k], 0))
+        expect(face[0] * sum[0] + face[1] * sum[1] + face[2] * sum[2]).toBeGreaterThan(0)
+      }
+    })
+  }
 })

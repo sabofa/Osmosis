@@ -69,6 +69,18 @@ export function checkImplicitRes(n: number): void {
   }
 }
 
+// The cubes per axis an implicit surface or a level surface is sampled at:
+// a res: clause as written (refused above the limit), else the spec-wide
+// @resolution clamped to the limit (it is written for every form, and 400
+// suits z = f), else the default.
+export function implicitRes(res: number | null, spec: number | null, fallback: number): number {
+  if (res !== null) {
+    checkImplicitRes(res)
+    return res
+  }
+  return Math.min(spec ?? fallback, MAX_IMPLICIT_RES)
+}
+
 export function sampleGrid(F: Field, box: Box3, n: number): Grid {
   const xs = coordinates(box.x, n)
   const ys = coordinates(box.y, n)
@@ -96,6 +108,48 @@ export function sampledRange(F: Field, box: Box3, samples: number): Range | null
     if (v > max) max = v
   }
   return min <= max ? { min, max } : null
+}
+
+// How many triangles marchingTets emits for this level, from the samples
+// alone (no bisection, no allocation), so a statement over the triangle
+// budget is refused before anything is meshed. It classifies as
+// marchingTets does, and leaves out exactly the triangles that collapse onto
+// a grid point where F - level is 0: a tetrahedron with one inside corner
+// always gives one; with three, one unless its outside corner is such a
+// point; with two, one per outside corner that is not.
+export function countTriangles(grid: Grid, level: number): number {
+  const { n, values } = grid
+  const s = n + 1
+  const cv = new Float64Array(8)
+  let count = 0
+  for (let k = 0; k < n; k++) {
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const base = (k * s + j) * s + i
+        let finite = true
+        let below = 0
+        for (let c = 0; c < 8; c++) {
+          const v = values[base + (c & 1) + ((c >> 1) & 1) * s + ((c >> 2) & 1) * s * s] - level
+          cv[c] = v
+          if (!Number.isFinite(v)) finite = false
+          else if (v < 0) below++
+        }
+        if (!finite || below === 0 || below === 8) continue
+        for (const tet of KUHN_TETS) {
+          let ni = 0
+          let kept = 0
+          for (const c of tet) {
+            if (cv[c] < 0) ni++
+            else if (cv[c] !== 0) kept++
+          }
+          if (ni === 1) count += 1
+          else if (ni === 3) count += kept
+          else if (ni === 2) count += kept
+        }
+      }
+    }
+  }
+  return count
 }
 
 // The level set F = level over the grid's box.

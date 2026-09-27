@@ -19,12 +19,12 @@ import type { MathScope } from '../../../math/scope'
 import { simplify } from '../../../math/simplify'
 import type { ColormapClause, SpaceStyle } from '../../grammar/types'
 import type { ColorScale, MeshMark, SurfacePick, Vec3 } from '../../scene/types'
-import { boundNames, colorScale, Reads, renameBound, resolution } from '../common'
+import { boundNames, checkBudget, colorScale, Reads, renameBound } from '../common'
 import { finishMesh } from '../mesh'
 import { normalizeAt } from '../normals'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { spaceBox } from './box'
-import { checkImplicitRes, marchingTets, sampleGrid, type Field, type Grid } from './marchingTets'
+import { countTriangles, implicitRes, marchingTets, sampleGrid, type Field, type Grid } from './marchingTets'
 
 export const DEFAULT_IMPLICIT_RES = 64
 
@@ -139,8 +139,7 @@ function prepareImplicit(statement: Statement, context: BuildContext): PreparedS
   const { scope, config } = context
   const { left, right, style } = implicitForm(statement)
   refuseMeshLines(style, 'an implicit surface')
-  const n = resolution(style.res, config, DEFAULT_IMPLICIT_RES)
-  checkImplicitRes(n)
+  const n = implicitRes(style.res, config.space.resolution, DEFAULT_IMPLICIT_RES)
   const F = sub(left, right)
   const reads = new Reads(scope).add(F, XYZ)
   const field = compileField(F, scope)
@@ -152,8 +151,10 @@ function prepareImplicit(statement: Statement, context: BuildContext): PreparedS
   }
 
   const build = (): BuildResult => {
-    const box = spaceBox(config)
-    const mesh = levelMesh(field, sampleGrid(field.f, box, n), 0)
+    const grid = sampleGrid(field.f, spaceBox(config), n)
+    // The budget is checked before anything is meshed.
+    checkBudget(countTriangles(grid, 0), n)
+    const mesh = levelMesh(field, grid, 0)
     if (!mesh) {
       return {
         marks: [],

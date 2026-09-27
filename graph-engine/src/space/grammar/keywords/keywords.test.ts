@@ -296,3 +296,15 @@ describe('frame:, osculating: and motion:', () => {
     })
   }
 })
+
+describe('fix round 1: a named curve is r or r(<the at-parameter>)', () => {
+  it('frame: r(t) at t = 1 is the curve r', () => {
+    expect(form('frame: r(t) at t = 1')).toMatchObject({ curve: { kind: 'named', name: 'r' }, param: 't' })
+  })
+
+  for (const line of ['frame: r(2t) at t = 1', 'motion: r(s) at t = 1', 'osculating: r(t, 1) at t = 1']) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseSpaceKeyword(line)).toThrow(/is not the curve r\(t\) — write "r" or "r\(t\)", and put the value after "at"/)
+    })
+  }
+})

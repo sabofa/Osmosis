@@ -170,3 +170,35 @@ describe('motion:', () => {
     expect(labelText(scene)).toContain('|v| = 2.236 · a_T = 1.789 · |a_N| = 0.8944')
   })
 })
+
+describe("fix round 1: r' = 0 is judged against the size of its own terms", () => {
+  // The cycloid's cusp: r'(t) = (1 - cos t, sin t, 0) is (0, 0, 0) at t = 2 pi,
+  // but evaluates to (0, -2.4e-16, 0): 1 - cos(2 pi) cancels terms of size 1.
+  const CYCLOID = 'r(t) = <t - sin(t), 1 - cos(t), 0>'
+  const NO_TANGENT = "r′(6.283) = 0: the curve has no tangent there"
+
+  it('frame: and osculating: refuse the cusp with no tangent, not "zero curvature"', () => {
+    for (const keyword of ['frame', 'osculating']) {
+      const scene = sceneOf(`${CYCLOID}\n${keyword}: r at t = 2*pi`)
+      expect(scene.errors).toEqual([{ line: 2, message: NO_TANGENT }])
+      expect(scene.marks).toEqual([])
+    }
+  })
+
+  it('motion: reads |v| = 0 there, draws a alone, and refuses components', () => {
+    const scene = clean(`${CYCLOID}\nmotion: r at t = 2*pi`)
+    expect(labelText(scene)).toEqual(['a', '|v| = 0'])
+    expect(sceneOf(`${CYCLOID}\nmotion: r at t = 2*pi components`).errors).toEqual([{ line: 2, message: NO_TANGENT }])
+  })
+
+  it('a small speed that is not a cancellation is still a speed', () => {
+    // r' = (1e-12, 2t, 0) at t = 0: 1e-12 is its whole term, not a remainder.
+    // (The expression grammar has no 1e-12: that reads as 1·e - 12.)
+    const scene = sceneOf('r(t) = <10^(-12) t, t^2, 0>\nframe: r at t = 0')
+    expect(scene.errors).toEqual([])
+    expect(labelText(scene)).toEqual(['T', 'N', 'B'])
+    // T is along x, where the whole of the speed is
+    const [T] = vertices((markAt(scene, 's2') as ArrowMark).vectors)
+    close(T, [1.8, 0, 0])
+  })
+})

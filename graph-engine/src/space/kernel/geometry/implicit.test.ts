@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
 import { kernelOf, marksOf, sceneOf, vertexOf, vertices } from '../../testing/kernel'
 import { levelsInside } from './levelSurfaces'
-import { KUHN_TETS, marchingTets, sampleGrid } from './marchingTets'
+import { countTriangles, KUHN_TETS, marchingTets, sampleGrid } from './marchingTets'
 
 const CUBE3 = '@bounds3d: x [-3, 3], y [-3, 3], z [-3, 3]'
 const CUBE2 = '@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]'
@@ -284,5 +284,106 @@ describe('levelsInside', () => {
     // niceStep(1, 10) = 0.1: 0.3, not 0.30000000000000004
     expect(levelsInside({ min: 0, max: 1 }, 10)).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
     expect(levelsInside({ min: -4.5, max: 4.5 }, 4)).toEqual([-4, -2, 0, 2, 4])
+  })
+})
+
+describe('fix round 1: the triangle budget is per statement', () => {
+  const GYROID = 'g(x, y, z) = sin(2x)cos(2y) + sin(2y)cos(2z) + sin(2z)cos(2x)'
+
+  it('refuses a contour whose level surfaces together pass 1,000,000 triangles, before meshing any', () => {
+    // Each level alone is under the limit; 13 of them make about 4.1M.
+    const t0 = performance.now()
+    const scene = sceneOf(`${GYROID}\ncontour: g levels -1.2..1.2 step 0.2`)
+    const elapsed = performance.now() - t0
+    expect(scene.errors).toEqual([
+      {
+        line: 2,
+        message: expect.stringMatching(/^contour: g at res 64 would make [\d,]+ triangles over 13 level surfaces, over the 1,000,000 limit — lower the resolution or give fewer levels$/),
+      },
+    ])
+    expect(scene.marks).toEqual([])
+    // Meshing them took 22 s before this fix; counting takes a fraction of one.
+    expect(elapsed).toBeLessThan(5000)
+  })
+
+  it('refuses an implicit surface over the budget, naming its resolution', () => {
+    const scene = sceneOf('sin(2x)cos(2y) + sin(2y)cos(2z) + sin(2z)cos(2x) = 0 res: 150')
+    expect(scene.errors).toEqual([
+      { line: 1, message: expect.stringMatching(/^res 150 would make [\d,]+ triangles, over the 1,000,000 limit — lower the resolution$/) },
+    ])
+  })
+
+  it('countTriangles is exactly the number marchingTets emits, zero vertices included', () => {
+    const box = { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }
+    const cases: [(x: number, y: number, z: number) => number, number][] = [
+      [(x, y, z) => x * x + y * y + z * z, 0.5],
+      [(x) => x, 0],
+      [(x, y, z) => Math.sin(3 * x) + Math.cos(2 * y) * z, 0.25],
+    ]
+    for (const [F, level] of cases) {
+      const grid = sampleGrid(F, box, 8)
+      const iso = marchingTets(F, grid, level)
+      expect(iso.indices.length).toBeGreaterThan(0)
+      expect(countTriangles(grid, level)).toBe(iso.indices.length / 3)
+    }
+  })
+})
+
+describe('fix round 1: @resolution above 160 is clamped for implicit surfaces; res: above 160 is refused', () => {
+  // A small sphere keeps the meshing cheap; the 161^3 samples are the cost.
+  it('@resolution: 200 samples an implicit surface at 160, with no error', { timeout: 30000 }, () => {
+    const clamped = sceneOf(`${CUBE3}\n@resolution: 200\nx^2 + y^2 + z^2 = 0.04`)
+    expect(clamped.errors).toEqual([])
+    const at160 = sceneOf(`${CUBE3}\nx^2 + y^2 + z^2 = 0.04 res: 160`)
+    expect((clamped.marks[0] as MeshMark).positions).toEqual((at160.marks[0] as MeshMark).positions)
+  })
+
+  it('and a contour of three variables likewise', { timeout: 30000 }, () => {
+    const scene = sceneOf(`${CUBE3}\n@resolution: 200\ng(x, y, z) = x^2 + y^2 + z^2\ncontour: g level 0.04`)
+    expect(scene.errors).toEqual([])
+  })
+
+  it('an explicit res: 200 is refused', () => {
+    expect(sceneOf(`${CUBE3}\nx^2 + y^2 + z^2 = 4 res: 200`).errors).toEqual([{ line: 2, message: expect.stringMatching(/res 200 is over the 160/) }])
+  })
+})
+
+describe('fix round 1: test gaps', () => {
+  it('"levels n" reads the range on 16 samples per axis, where 8 would differ', () => {
+    // A narrow peak at (0.2, 0.2, 0.2) over [-3, 3]^3. On 16 samples per axis
+    // (-3 + 6i/15) 0.2 is a sample, so the range reaches 1 and niceStep(1, 3) = 0.5
+    // gives the one level 0.5. On 8 (-3 + 6i/7) the nearest is 0.4286, the
+    // range tops out at exp(-20 * 3 * 0.2286^2) = 0.0436, and the levels would
+    // be 0.02 and 0.04.
+    const scene = sceneOf(`${CUBE3}\ncontour: exp(-20((x - 0.2)^2 + (y - 0.2)^2 + (z - 0.2)^2)) levels 3`)
+    expect(scene.errors).toEqual([])
+    const meshes = marksOf(scene, 'mesh')
+    expect(meshes).toHaveLength(1)
+    // the level 0.5: a sphere of radius sqrt(ln 2 / 20) about (0.2, 0.2, 0.2)
+    for (const [x, y, z] of vertices(meshes[0].positions)) expect(Math.hypot(x - 0.2, y - 0.2, z - 0.2)).toBeCloseTo(Math.sqrt(Math.LN2 / 20), 8)
+  })
+
+  it('marchingTets on grid vertices where F is exactly 0: F = x meets x = 0 at the grid points themselves', () => {
+    // Over [-1, 1]^3 at n = 4, x = 0 is a grid plane: its 25 grid points are
+    // the vertices, snapped rather than bisected, and the 4 x 4 cubes left of
+    // it each give the two triangles of their x = 0 face: 32 triangles of
+    // total area 4, facing +x (toward increasing F).
+    const box = { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }
+    const F = (x: number) => x
+    const iso = marchingTets(F, sampleGrid(F, box, 4), 0)
+    const verts = vertices(iso.positions)
+    expect(verts).toHaveLength(25)
+    for (const [x] of verts) expect(x).toBe(0)
+    expect(iso.indices.length / 3).toBe(32)
+    let total = 0
+    for (let t = 0; t < 32; t++) {
+      const [a, b, c] = [0, 1, 2].map((i) => vertexOf(iso.positions, iso.indices[3 * t + i]))
+      const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+      const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+      const nx = e1[1] * e2[2] - e1[2] * e2[1]
+      expect(nx).toBeGreaterThan(0)
+      total += nx / 2
+    }
+    expect(total).toBe(4)
   })
 })

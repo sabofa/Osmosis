@@ -24,11 +24,11 @@ import { MAX_LEVELS } from '../../grammar/keywords/contour'
 import type { ContourForm } from '../../grammar/keywords/geometryForms'
 import { formatNumber } from '../../pick/format'
 import type { ColorScale, LabelAnchor, MeshMark, Range, SceneError } from '../../scene/types'
-import { constant, Reads, resolution } from '../common'
+import { constant, MAX_TRIANGLES, Reads } from '../common'
 import { registeredBuilder, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
 import { spaceBox } from './box'
 import { compileField, DEFAULT_IMPLICIT_RES, implicitPick, levelMesh, XYZ } from './implicit'
-import { checkImplicitRes, sampledRange, sampleGrid } from './marchingTets'
+import { countTriangles, implicitRes, sampledRange, sampleGrid } from './marchingTets'
 
 // "levels n" divides the range of F sampled on this many points per axis.
 export const LEVEL_RANGE_SAMPLES = 16
@@ -112,8 +112,7 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
   if (form.floor) throw new Error(`"floor" projects level curves of f(x, y) onto the floor — ${form.text} has three variables and draws level surfaces`)
   if (form.style.width !== null) throw new Error('width: applies to level curves of f(x, y), not to level surfaces')
   if (form.style.dashed) throw new Error('dashed applies to level curves of f(x, y), not to level surfaces')
-  const n = resolution(form.style.res, config, DEFAULT_IMPLICIT_RES)
-  checkImplicitRes(n)
+  const n = implicitRes(form.style.res, config.space.resolution, DEFAULT_IMPLICIT_RES)
   const reads = new Reads(scope).add(F, XYZ)
   const field = compileField(F, scope)
   const levelsOf = prepareLevels(form, scope, reads)
@@ -125,6 +124,15 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
       throw new Error(`contour: ${form.text} would draw ${values.length} level surfaces — at most ${MAX_LEVEL_SURFACES}; give fewer levels`)
     }
     const grid = sampleGrid(field.f, box, n)
+    // The triangle budget is the statement's, not each level's (SP2), and is
+    // checked before any level is meshed.
+    const total = values.reduce((sum, c) => sum + countTriangles(grid, c), 0)
+    if (total > MAX_TRIANGLES) {
+      const surfaces = `${values.length} level surface${values.length === 1 ? '' : 's'}`
+      throw new Error(
+        `contour: ${form.text} at res ${n} would make ${total.toLocaleString('en-US')} triangles over ${surfaces}, over the ${MAX_TRIANGLES.toLocaleString('en-US')} limit — lower the resolution or give fewer levels`
+      )
+    }
     const mapped = values.length > 1 && context.colorScaleId !== null
     let scale: ColorScale | null = null
     if (mapped) {

@@ -169,19 +169,24 @@ function buildProject(form: VectorOpForm, context: BuildContext, U: V3, V: V3, P
   const tip = add(P, proj)
   const marks: Mark[] = []
   // A zero projection (u ⟂ v) or a zero perpendicular part (u ∥ v) draws
-  // nothing of its own.
-  if (norm(proj) > 0) marks.push(arrowMark(context, null, color, P, [proj], BOLD_SHAFT))
+  // nothing of its own. Zero is relative to |u|: (0.1, 0.2, 0.3) onto
+  // (0.3, 0.6, 0.9) leaves a perpendicular part of ~1e-17 from rounding.
+  const projZero = norm(proj) <= PARALLEL_REL * norm(U)
+  const perpZero = norm(perp) <= PARALLEL_REL * norm(U)
+  if (!projZero) marks.push(arrowMark(context, null, color, P, [proj], BOLD_SHAFT))
   marks.push(arrowMark(context, 'operands', grey(color), P, [U, V]))
-  if (norm(perp) > 0) marks.push(polylines(context, 'perpendicular', grey(color), [[tip, add(P, U)]], THIN, true))
-  if (norm(proj) > 0 && norm(perp) > 0) {
+  if (!perpZero) marks.push(polylines(context, 'perpendicular', grey(color), [[tip, add(P, U)]], THIN, true))
+  if (!projZero && !perpZero) {
     const side = rightAngleSide(context, [norm(proj), norm(perp)])
     marks.push(polylines(context, 'right', grey(color), [rightAngle(tip, unit(scale(proj, -1)), unit(perp), side)], THIN, false))
-  } else if (norm(proj) === 0) {
+  } else if (projZero) {
     const side = rightAngleSide(context, [norm(U), norm(V)])
     marks.push(polylines(context, 'right', grey(color), [rightAngle(P, unit(V), unit(U), side)], THIN, false))
   }
-  const cosine = Math.max(-1, Math.min(1, dot(U, V) / (norm(U) * norm(V))))
-  const theta = Math.acos(cosine)
+  // atan2(|u × v|, u·v) keeps a small angle that acos(u·v / |u||v|) rounds
+  // to 0 (<1, 1e-8, 0> onto <1, 0, 0>); |u × v| from rounding alone is 0.
+  const sine = norm(cross(U, V))
+  const theta = Math.atan2(sine <= PARALLEL_REL * norm(U) * norm(V) ? 0 : sine, dot(U, V))
   const angle = context.config.angle === 'degrees' ? `${formatNumber((theta * 180) / Math.PI)}°` : formatNumber(theta)
   const readout = `comp_${v} ${u} = ${formatNumber(dot(U, V) / norm(V))} · θ = ${angle}`
   const labels = [
