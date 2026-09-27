@@ -1,0 +1,174 @@
+import { describe, expect, it } from 'vitest'
+import { parseExprString } from '../../../parser/parseExpr'
+import { parseSpec } from '../../../parser/parseSpec'
+import type { Statement } from '../../../parser/types'
+import type { LineMark } from '../../scene/types'
+import type { BuildContext, BuildResult } from '../registry'
+import { buildScope } from '../scope'
+import { contourCurves, levelCurves, niceLevels, type ContourForm, type ContourLevels } from './contours'
+
+const p = parseExprString
+
+// contourCurves is built against S4a's contour form (its plan, A2), whose
+// grammar S4a owns: these tests construct the form directly.
+function contour(target: string, levels: ContourLevels, options: { floor?: boolean; labels?: boolean; spec?: string; color?: string } = {}): BuildResult {
+  const parsed = parseSpec(options.spec ?? '')
+  expect(parsed.errors).toEqual([])
+  const { scope } = buildScope(parsed.statements, parsed.statementLines, parsed.config.bindings, parsed.config.angle)
+  const form: ContourForm = { form: 'contour', target: p(target), levels, floor: options.floor ?? false, labels: options.labels ?? false }
+  const statement = { kind: 'space', form, color: options.color ?? null, statementName: null } as unknown as Statement
+  const line = parsed.statementLines.length + 1
+  const context: BuildContext = {
+    scope,
+    config: parsed.config,
+    line,
+    source: { line, statement: null, object: `s${line}` },
+    color: { author: options.color ?? null, slot: 0 },
+    colorScaleId: null,
+  }
+  return contourCurves.prepare(statement, context).build()
+}
+
+const list = (...values: string[]): ContourLevels => ({ kind: 'list', values: values.map((v) => p(v)) })
+
+function polylines(mark: LineMark): [number, number, number][][] {
+  const out: [number, number, number][][] = []
+  for (let k = 0; k < mark.starts.length; k++) {
+    const end = k + 1 < mark.starts.length ? mark.starts[k + 1] : mark.positions.length / 3
+    const line: [number, number, number][] = []
+    for (let v = mark.starts[k]; v < end; v++) line.push([mark.positions[3 * v], mark.positions[3 * v + 1], mark.positions[3 * v + 2]])
+    out.push(line)
+  }
+  return out
+}
+
+function byObject(result: BuildResult, object: string): LineMark {
+  const mark = result.marks.find((m) => m.source.object === object)
+  if (!mark || mark.kind !== 'lines') throw new Error(`no line mark ${object}`)
+  return mark
+}
+
+describe('contourCurves: x^2 + y^2 at levels 1 and 4', () => {
+  const result = contour('x^2 + y^2', list('1', '4'))
+
+  it('draws one closed polyline per level, at z = 1 and z = 4 exactly', () => {
+    expect(result.errors).toEqual([])
+    expect(result.marks.map((m) => m.source.object)).toEqual(['s1.level0', 's1.level1'])
+    for (const [object, c] of [
+      ['s1.level0', 1],
+      ['s1.level1', 4],
+    ] as const) {
+      const lines = polylines(byObject(result, object))
+      expect(lines).toHaveLength(1)
+      const [line] = lines
+      expect(line.length).toBeGreaterThan(20)
+      expect(line[0]).toEqual(line[line.length - 1])
+      for (const v of line) expect(v[2]).toBe(c)
+    }
+  })
+
+  it('puts every vertex on the circle of radius 1 or 2 within 1e-8 (bisection on the true f)', () => {
+    // Linear interpolation on the 160-cell grid over [-5, 5]^2 (cell 1/16)
+    // is off by ~1e-3 here; only the bisection reaches 1e-8.
+    for (const [object, r] of [
+      ['s1.level0', 1],
+      ['s1.level1', 2],
+    ] as const) {
+      for (const [x, y] of polylines(byObject(result, object))[0]) expect(Math.abs(Math.hypot(x, y) - r)).toBeLessThanOrEqual(1e-8)
+    }
+  })
+
+  it('has no labels and no floor copies unless asked', () => {
+    expect(result.labels).toEqual([])
+  })
+})
+
+describe('contourCurves with floor', () => {
+  it('adds a dashed 1 px copy of each level at the box floor', () => {
+    // x^2 + y^2 - 3 on [-5, 5]^2 ranges over [-3, 47]; the frame rounds that
+    // out by niceStep(50, 8) = 5, so the floor is -5.
+    const result = contour('x^2 + y^2 - 3', list('1', '6'), { floor: true })
+    expect(result.marks.map((m) => m.source.object)).toEqual(['s1.level0', 's1.floor0', 's1.level1', 's1.floor1'])
+    for (const [object, r] of [
+      ['s1.floor0', 2],
+      ['s1.floor1', 3],
+    ] as const) {
+      const mark = byObject(result, object)
+      expect(mark.style.width).toBe(1)
+      expect(mark.style.dash).not.toBeNull()
+      for (const [x, y, z] of polylines(mark)[0]) {
+        expect(z).toBe(-5)
+        expect(Math.abs(Math.hypot(x, y) - r)).toBeLessThanOrEqual(1e-8)
+      }
+    }
+  })
+
+  it('uses an authored @bounds3d z as the floor', () => {
+    const result = contour('x^2 + y^2', list('1'), { floor: true, spec: '@bounds3d: z [-2, 6]' })
+    for (const v of polylines(byObject(result, 's1.floor0'))[0]) expect(v[2]).toBe(-2)
+  })
+})
+
+describe('contourCurves with labels', () => {
+  it('puts one value label per level on its curve, at z = c', () => {
+    const result = contour('x^2 + y^2', list('1', '4'), { labels: true })
+    expect(result.labels.map((l) => [l.source.object, l.text])).toEqual([
+      ['s1.label0', '1'],
+      ['s1.label1', '4'],
+    ])
+    for (const [label, r, c] of [
+      [result.labels[0], 1, 1],
+      [result.labels[1], 2, 4],
+    ] as const) {
+      expect(Math.abs(Math.hypot(label.position[0], label.position[1]) - r)).toBeLessThanOrEqual(1e-8)
+      expect(label.position[2]).toBe(c)
+    }
+  })
+})
+
+describe('contourCurves levels n', () => {
+  it('levels 4 on x^2 - y^2 over [-2, 2]^2: range [-4, 4], niceStep(8, 4) = 2, strictly inside: -2, 0, 2', () => {
+    const result = contour('x^2 - y^2', { kind: 'count', count: 4 }, { spec: '@bounds3d: x [-2, 2], y [-2, 2]' })
+    expect(result.errors).toEqual([])
+    const levels = result.marks.map((m) => (m.kind === 'lines' ? m.positions[2] : NaN))
+    expect(levels).toEqual([-2, 0, 2])
+    for (const mark of result.marks) {
+      if (mark.kind !== 'lines') continue
+      for (let v = 0; v < mark.positions.length / 3; v++) {
+        const [x, y, z] = [mark.positions[3 * v], mark.positions[3 * v + 1], mark.positions[3 * v + 2]]
+        expect(Math.abs(x * x - y * y - z)).toBeLessThanOrEqual(1e-8)
+      }
+    }
+  })
+
+  it('niceLevels keeps the correctly rounded multiples: (0, 1) at 10 is 0.1, 0.2, …, 0.9', () => {
+    expect(niceLevels(-4, 4, 4)).toEqual([-2, 0, 2])
+    expect(niceLevels(0, 1, 10)).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+    expect(niceLevels(1, 1, 5)).toEqual([])
+  })
+})
+
+describe('contourCurves colours', () => {
+  it("colours each level by its value on the spec's colormap: the ends of viridis at the ends of the height domain", () => {
+    // @bounds3d z [-2, 2] is the height scale's domain: -2 is t = 0, 2 is t = 1.
+    const result = contour('x + y', list('-2', '2'), { spec: '@bounds3d: z [-2, 2]' })
+    expect(result.marks.map((m) => (m.kind === 'lines' ? m.style.color.author : null))).toEqual(['#440154', '#fde725'])
+  })
+
+  it('draws every level in the flat colour color: gives', () => {
+    const result = contour('x + y', list('-2', '2'), { spec: '@bounds3d: z [-2, 2]', color: 'red' })
+    expect(result.marks.map((m) => (m.kind === 'lines' ? m.style.color.author : null))).toEqual(['red', 'red'])
+  })
+})
+
+describe('contourCurves refusals', () => {
+  it('refuses a target of three variables (a level surface, S4a)', () => {
+    expect(() => contour('x^2 + y^2 + z^2', list('1'))).toThrow(/function of x and y/)
+  })
+})
+
+describe('levelCurves', () => {
+  it('returns nothing for a level the function never takes', () => {
+    expect(levelCurves((x, y) => x * x + y * y + 1, { x: { min: -1, max: 1 }, y: { min: -1, max: 1 } }, 20)).toEqual([])
+  })
+})

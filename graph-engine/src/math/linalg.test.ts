@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { det2, det3, solve2, solve3, symEig2, symEig3 } from './linalg'
+import { det2, det3, solve2, solve3, solve4, symEig2, symEig3 } from './linalg'
 
 describe('determinants and solves', () => {
   it('det2 and solve2', () => {
@@ -77,5 +77,61 @@ describe('symmetric eigenvalues, ascending', () => {
     expect(eig[0]).toBeCloseTo(2 - Math.SQRT2, 13)
     expect(eig[1]).toBeCloseTo(2, 13)
     expect(eig[2]).toBeCloseTo(2 + Math.SQRT2, 13)
+  })
+})
+
+describe('solve4', () => {
+  it('solves a regular system: x = (1, 2, 3, 4)', () => {
+    // 2+2 = 4; 1+6+3 = 10; 2+12+4 = 18; 1+3+20 = 24
+    const x = solve4(
+      [
+        [2, 1, 0, 0],
+        [1, 3, 1, 0],
+        [0, 1, 4, 1],
+        [1, 0, 1, 5],
+      ],
+      [4, 10, 18, 24]
+    )!
+    x.forEach((v, i) => expect(v).toBeCloseTo(i + 1, 13))
+  })
+
+  it('pivots past a zero on the diagonal: the all-ones matrix less I (det -3)', () => {
+    // row i sums every x_j but x_i: 2+3+4 = 9, 1+3+4 = 8, 1+2+4 = 7, 1+2+3 = 6
+    const x = solve4(
+      [
+        [0, 1, 1, 1],
+        [1, 0, 1, 1],
+        [1, 1, 0, 1],
+        [1, 1, 1, 0],
+      ],
+      [9, 8, 7, 6]
+    )!
+    x.forEach((v, i) => expect(v).toBeCloseTo(i + 1, 13))
+  })
+
+  it('refuses a singular matrix (two equal rows), and keeps a tiny regular one', () => {
+    expect(
+      solve4(
+        [
+          [1, 2, 3, 4],
+          [0, 1, 0, 1],
+          [1, 2, 3, 4],
+          [2, 0, 1, 1],
+        ],
+        [1, 2, 3, 4]
+      )
+    ).toBeNull()
+    const s = 1e-20
+    expect(
+      solve4(
+        [
+          [s, 0, 0, 0],
+          [0, s, 0, 0],
+          [0, 0, s, 0],
+          [0, 0, 0, s],
+        ],
+        [s, 2 * s, 3 * s, 4 * s]
+      )
+    ).toEqual([1, 2, 3, 4])
   })
 })

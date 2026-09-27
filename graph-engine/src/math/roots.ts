@@ -1,9 +1,9 @@
-// Damped Newton in one to three dimensions, and roots seeded from a grid
+// Damped Newton in one to four dimensions, and roots seeded from a grid
 // (K4). For questions with no closed form: critical points (grad f = 0) and
 // Lagrange systems. Every answer is approximate and flagged as converged or
 // not; a caller shows it with "≈".
 
-import { solve2, solve3 } from './linalg'
+import { solve2, solve3, solve4 } from './linalg'
 import {
   NEWTON_LINEAR_MAX,
   NEWTON_LINEAR_MIN,
@@ -17,7 +17,7 @@ import {
   ROOT_DEDUP_REL,
 } from './tolerance'
 
-// The system F(x) = 0 and its Jacobian, over 1-3 unknowns.
+// The system F(x) = 0 and its Jacobian, over 1-4 unknowns.
 export type SystemFn = (x: Float64Array) => ArrayLike<number>
 export type JacobianFn = (x: Float64Array) => readonly (readonly number[])[]
 
@@ -60,7 +60,8 @@ function newtonStep(j: readonly (readonly number[])[], f: ArrayLike<number>): nu
   }
   if (n === 2) return solve2(j, [-f[0], -f[1]])
   if (n === 3) return solve3(j, [-f[0], -f[1], -f[2]])
-  throw new Error(`newton works in one to three dimensions, got ${n}`)
+  if (n === 4) return solve4(j, [-f[0], -f[1], -f[2], -f[3]])
+  throw new Error(`newton works in one to four dimensions, got ${n}`)
 }
 
 // The largest absolute row sum of a Jacobian.
@@ -201,7 +202,9 @@ function lexicographic(a: Float64Array, b: Float64Array): number {
 }
 
 // Newton from every cell centre of a seedsPerAxis^n grid over the box. Keeps
-// the converged points inside the box, merges any two closer than
+// the converged points inside the box — with the merge distance as slack, so
+// a root on the box's edge that lands a rounding error outside it is kept,
+// clamped onto the edge — merges any two closer than
 // ROOT_DEDUP_REL x the box diagonal (the first found, in seed order, stands),
 // and returns them in lexicographic order, so the result is deterministic.
 export function seededRoots(F: SystemFn, J: JacobianFn, box: SearchBox, seedsPerAxis: number, options: NewtonOptions = {}): Float64Array[] {
@@ -215,8 +218,9 @@ export function seededRoots(F: SystemFn, J: JacobianFn, box: SearchBox, seedsPer
   for (;;) {
     for (let i = 0; i < n; i++) seed[i] = box.min[i] + ((counters[i] + 0.5) * (box.max[i] - box.min[i])) / seedsPerAxis
     const result = newton(F, J, seed, options)
-    const inside = result.x.every((xi, i) => xi >= box.min[i] && xi <= box.max[i])
+    const inside = result.x.every((xi, i) => xi >= box.min[i] - mergeDistance && xi <= box.max[i] + mergeDistance)
     if (result.converged && inside) {
+      for (let i = 0; i < n; i++) result.x[i] = Math.min(box.max[i], Math.max(box.min[i], result.x[i]))
       const duplicate = found.some((r) => Math.hypot(...r.map((ri, i) => ri - result.x[i])) <= mergeDistance)
       if (!duplicate) found.push(result.x)
     }

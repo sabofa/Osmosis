@@ -20,6 +20,7 @@ import { parseLine, parsePlane } from './keywords/geometry'
 import { parseCross, parseProject } from './keywords/vectors'
 import { parseCylindrical, parseSpherical } from './keywords/coordinates'
 import { parseFrame, parseMotion, parseOsculating } from './keywords/curves'
+import { SURFACE_TOOL_KEYWORDS } from './keywords/surfaceTools'
 
 interface KeywordRow {
   keyword: string
@@ -57,16 +58,33 @@ const KEYWORDS: readonly KeywordRow[] = [
   { keyword: 'frame', parse: parseFrame },
   { keyword: 'osculating', parse: parseOsculating },
   { keyword: 'motion', parse: parseMotion },
+  ...SURFACE_TOOL_KEYWORDS,
 ]
 
-// "keyword: A-B-C [dashed | plain]": a solid figure's point list.
-const POINT_LIST = /^[a-z][a-z-]*:\s*[A-Za-z][A-Za-z0-9_']*(-[A-Za-z][A-Za-z0-9_']*)+(\s+(dashed|plain))?\s*$/
+// The uniform ownership rule (agreed with solid figures, 2026-09-26): an
+// operand that is only a hyphenated list of point names ("A-B", "A-B-C-D",
+// "A - B", "a-b"), optionally followed by "dashed" or "plain", belongs to a
+// solid figure whatever the keyword, so "plane: A-B-C" and "path: A-B-C-D" are
+// never claimed here. One rule, the union of S4a's and S4b's spellings.
+const POINT_LIST_TIGHT = /^[A-Za-z][A-Za-z0-9_']*(-[A-Za-z][A-Za-z0-9_']*)+(\s+(dashed|plain))?$/
+const POINT_LIST_SPACED = /^[A-Z][A-Za-z0-9_]*'*(\s*-\s*[A-Z][A-Za-z0-9_]*'*)+(\s+(dashed|plain))?$/
+
+// Lowercase names ("a-b") are only a point list under the keywords where a
+// drawn point list is plausible; elsewhere "f-g" is an expression, as in
+// "critical: f-g".
+const LOWERCASE_POINT_LIST_KEYWORDS: ReadonlySet<string> = new Set(['line', 'plane', 'path'])
+
+function isPointList(keyword: string, operand: string): boolean {
+  if (POINT_LIST_SPACED.test(operand)) return true
+  return LOWERCASE_POINT_LIST_KEYWORDS.has(keyword) && POINT_LIST_TIGHT.test(operand)
+}
 
 export function parseSpaceKeyword(line: string): SpaceStatement | null {
-  if (POINT_LIST.test(line)) return null
   for (const row of KEYWORDS) {
     if (!line.startsWith(`${row.keyword}:`)) continue
-    const form = row.parse(line.slice(row.keyword.length + 1).trim())
+    const operand = line.slice(row.keyword.length + 1).trim()
+    if (isPointList(row.keyword, operand)) return null
+    const form = row.parse(operand)
     return form ? spaceStatement(form) : null
   }
   return null

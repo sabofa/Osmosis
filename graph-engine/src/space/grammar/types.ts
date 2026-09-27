@@ -5,6 +5,7 @@
 import type { Expr } from '../../parser/types'
 import type { ColormapName } from '../scene/types'
 import type { GeometryForm } from './keywords/geometryForms'
+import type { SurfaceToolForm } from './keywords/surfaceTools'
 
 // "t in [a, b]". Bounds are expressions: they may read parameters, and an
 // iterated domain's inner bounds read the outer variable.
@@ -66,6 +67,9 @@ export type SpaceForm =
   | { form: 'implicitSurface'; left: Expr; right: Expr; forced: boolean; style: SpaceStyle }
   // S4a's keyword statements (keywords/geometryForms.ts).
   | GeometryForm
+  // The calculus of a surface (S4b): path:, trace:, tangent-plane:, gradient:,
+  // directional:, critical:, lagrange:.
+  | SurfaceToolForm
 
 // What the two hooks return: the parser/types.ts Statement member for space.
 // The shared wrapper overwrites color and statementName, as for every line.

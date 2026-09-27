@@ -33,6 +33,7 @@ import { PLANE } from './geometry/planes'
 import { VECTOR_OP } from './geometry/vectorOps'
 import { COORDINATE_SURFACE } from './geometry/coordinateSurfaces'
 import { CURVE_FRAME } from './curves/frames'
+import { SURFACE_TOOL_BUILDERS } from './surfaceTools'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -63,6 +64,7 @@ registerBuilder('space:coordinateSurface', COORDINATE_SURFACE)
 registerBuilder('space:frame', CURVE_FRAME)
 registerBuilder('space:osculating', CURVE_FRAME)
 registerBuilder('space:motion', CURVE_FRAME)
+for (const [key, entry] of SURFACE_TOOL_BUILDERS) registerBuilder(key, entry)
 
 interface StatementRecord {
   line: number

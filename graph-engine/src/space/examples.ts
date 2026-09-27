@@ -4,6 +4,7 @@
 // checks that each S3 example exercises what its label promises.
 
 import type { Example } from '../examples'
+import { SURFACE_TOOL_EXAMPLES } from './surfaceToolExamples'
 
 export const SPACE_EXAMPLES: Example[] = [
   {
@@ -149,4 +150,5 @@ motion: r at t = 3*pi/4 components   # slowing down: a_T points back along v`,
 g(x, y, z) = x^2 + 2y^2 + 3z^2
 contour: g levels 1, 4, 9   # three ellipsoids, coloured by value`,
   },
+  ...SURFACE_TOOL_EXAMPLES,
 ]
