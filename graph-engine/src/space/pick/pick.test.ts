@@ -151,13 +151,6 @@ describe('pickAt: thin things before surfaces', () => {
     const k = px * camera.worldPerPixel
     return world.toAuthor([w[0] + right[0] * k + forward[0] * back, w[1] + right[1] * k + forward[1] * back, w[2] + right[2] * k + forward[2] * back])
   }
-  // A short curve through a point, vertical on screen.
-  const verticalThrough = (c: Vec3): LineMark => {
-    const w = world.toWorld(c)
-    const up = camera.basis.up
-    const end = (t: number) => world.toAuthor([w[0] + up[0] * t, w[1] + up[1] * t, w[2] + up[2] * t])
-    return lineMark([[end(-0.1), end(0.1)]], { line: 2 })
-  }
 
   it('picks the surface under the cursor when nothing thin is near', () => {
     const hit = pickAt(scene([saddle()]), camera, world, screenP.x, screenP.y)!
@@ -166,10 +159,86 @@ describe('pickAt: thin things before surfaces', () => {
   })
 
   it('lets a curve 5 px from the cursor win over the surface under it, even though the curve is farther', () => {
-    const curve = verticalThrough(beside(5, 0.3))
-    const hit = pickAt(scene([saddle(), curve]), camera, world, screenP.x, screenP.y)!
+    // The curve lies ON the surface 5 px beside the cursor, on whichever side
+    // the surface falls away from the eye: it is seen (not occluded), and by
+    // depth alone the surface under the cursor would win.
+    // The cursor is on (0, 1, -1), away from the saddle's silhouette from
+    // this view (near it a grazing ray can pass between two march steps).
+    const cursor = project(camera, world.toWorld([0, 1, -1]))
+    const alone = scene([saddle()])
+    const depthOf = (p: Vec3) => project(camera, world.toWorld(p)).depth
+    const here = depthOf(pickAt(alone, camera, world, cursor.x, cursor.y)!.position)
+    const sides = [
+      { dx: 5, dy: 0 },
+      { dx: -5, dy: 0 },
+      { dx: 0, dy: 5 },
+      { dx: 0, dy: -5 },
+    ]
+      .map((o) => ({ ...o, hit: pickAt(alone, camera, world, cursor.x + o.dx, cursor.y + o.dy) }))
+      .filter((o) => o.hit !== null && depthOf(o.hit.position) > here)
+    expect(sides.length).toBeGreaterThan(0)
+    const { dx, hit: side } = sides[0]
+    // A segment through it, across the offset: its closest point to the cursor is on the surface.
+    const w = world.toWorld(side!.position)
+    const across = dx !== 0 ? camera.basis.up : camera.basis.right
+    const end = (t: number) => world.toAuthor([w[0] + across[0] * t, w[1] + across[1] * t, w[2] + across[2] * t])
+    const curve = lineMark([[end(-0.1), end(0.1)]], { line: 2 })
+    const hit = pickAt(scene([saddle(), curve]), camera, world, cursor.x, cursor.y)!
     expect(hit.kind).toBe('curve')
     expect(hit.source.line).toBe(2)
+  })
+
+  it('does not pick a thin thing an opaque surface hides, but does through a translucent one', () => {
+    // The plane z = 0 seen from above, and Q = (0.3, 0.2, -1) under it.
+    const plane = (opacity: number) => graphMesh(() => 0, () => 0, () => 0, -2, 2, -2, 2, 8, { style: { opacity } })
+    const Q: Vec3 = [0.3, 0.2, -1]
+    const q = project(camera, world.toWorld(Q))
+    const under = pickAt(scene([plane(1), pointMark([Q], { line: 5 })]), camera, world, q.x, q.y)!
+    expect(under.kind).toBe('graph')
+    expect(under.position[2]).toBe(0)
+    const through = pickAt(scene([plane(0.5), pointMark([Q], { line: 5 })]), camera, world, q.x, q.y)!
+    expect(through.kind).toBe('point')
+    // A point just under the plane is seen: it is drawn lifted toward the eye
+    // by its radius (4 px, ~0.028 world here), and 0.02 below the plane is
+    // ~0.008 world along the ray.
+    const on: Vec3 = [0.3, 0.2, -0.02]
+    const o = project(camera, world.toWorld(on))
+    expect(pickAt(scene([plane(1), pointMark([on], { line: 5 })]), camera, world, o.x, o.y)!.kind).toBe('point')
+  })
+
+  it('reaches a point on its own curve: a point wins over the curve through it', () => {
+    const parsed = parseSpec('@param a = 0.5 range [-2, 2]\n(t, t^2, 0) for t in [-2, 2]\nP = (a, a^2, 0)')
+    const s = createSpaceKernel(parsed.statements, parsed.config, parsed.statementLines).scene()
+    const at = project(camera, world.toWorld([0.5, 0.25, 0]))
+    expect(pickAt(s, camera, world, at.x, at.y)!.kind).toBe('point')
+    expect(pickAt(s, camera, world, at.x + 3, at.y)!.kind).toBe('point')
+    // Away from P, the curve.
+    const away = project(camera, world.toWorld([-1, 1, 0]))
+    expect(pickAt(s, camera, world, away.x, away.y)!.kind).toBe('curve')
+  })
+
+  it('under a kinds filter picks only those kinds, and marches no surface when none is wanted', () => {
+    let evaluations = 0
+    const counting = graphMesh(
+      (x, y) => {
+        evaluations++
+        return x * x - y * y
+      },
+      (x) => 2 * x,
+      (_x, y) => -2 * y,
+      -2,
+      2,
+      -2,
+      2,
+      16,
+    )
+    // Building the mesh evaluated f at its vertices; count only the picks.
+    evaluations = 0
+    const points = { kinds: new Set(['point'] as const) }
+    expect(pickAt(scene([counting]), camera, world, screenP.x, screenP.y, points)).toBeNull()
+    expect(evaluations).toBe(0)
+    expect(pickAt(scene([counting]), camera, world, screenP.x, screenP.y)!.kind).toBe('graph')
+    expect(evaluations).toBeGreaterThan(0)
   })
 
   it('ignores a point outside its tolerance (size 8: 4 + 4 px) and takes one inside it', () => {

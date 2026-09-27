@@ -147,6 +147,9 @@ function sameView(a: SpaceView, b: SpaceView): boolean {
   )
 }
 
+// @hover: points probes points only (pick/pick.ts filters before choosing).
+const POINTS_ONLY = { kinds: new Set(['point'] as const) }
+
 function hex(color: number): string {
   return `#${color.toString(16).padStart(6, '0')}`
 }
@@ -515,8 +518,7 @@ export class SpaceRenderer {
     const scene = this.scene
     const world = this.world
     if (!scene || !world) return null
-    const hit = pickAt(scene, camera, world, x, y)
-    return hit && (this.hoverMode !== 'points' || hit.kind === 'point') ? hit : null
+    return pickAt(scene, camera, world, x, y, this.hoverMode === 'points' ? POINTS_ONLY : {})
   }
 
   private camera(): CameraMatrices | null {

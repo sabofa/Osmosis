@@ -596,3 +596,36 @@ P = (a, b, a^2 + b^2)`
   })
 })
 
+describe('SpaceRenderer: a point on its own curve', () => {
+  it('hovers and grabs P = (a, a^2, 0) on (t, t^2, 0): the point, not the curve', () => {
+    const SPEC = `@param a = 0.5 range [-2, 2]
+(t, t^2, 0) for t in [-2, 2]
+P = (a, a^2, 0)`
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const events: SpaceEvent[] = []
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light', onEvent: (e) => events.push(e) }, clock.env)
+    const parsed = parseSpec(SPEC)
+    r.setSpec(parsed.statements, parsed.config, parsed.statementLines, SPEC)
+    clock.flush()
+    const camera = r['camera']()!
+    const world = r['world']!
+    const at = project(camera, world.toWorld([0.5, 0.25, 0]))
+    const pointer = (type: string, x: number, y: number, buttons: number) =>
+      canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
+    pointer('pointermove', at.x, at.y, 0)
+    clock.flush()
+    expect(events.at(-1)).toMatchObject({ type: 'hover', hit: { kind: 'point' } })
+    const view = r.getView()
+    const target = project(camera, world.toWorld([1, 1, 0]))
+    pointer('pointerdown', at.x, at.y, 1)
+    pointer('pointermove', target.x, target.y, 1)
+    clock.flush()
+    pointer('pointerup', target.x, target.y, 0)
+    expect(r.getView()).toEqual(view)
+    expect((r['kernel'] as SpaceKernel).values().get('a')).toBeCloseTo(1, 6)
+    r.dispose()
+  })
+})
+

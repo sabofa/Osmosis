@@ -25,6 +25,9 @@ export interface Candidate {
   distance: number
   // NDC depth of the hit.
   depth: number
+  // CSS px a point is lifted toward the eye by for the depth test (its
+  // radius, as the point shader draws it); 0 for everything else.
+  radiusPx: number
   hit: Hit
 }
 
@@ -86,7 +89,7 @@ function lineCandidate(mark: LineMark, screen: Projector, px: number, py: number
     hit = { source: mark.source, kind: 'curve', position, values: curveReadout(position, null, null, null), at: { kind: 'curve', t: null, point: position } }
   }
   if (!inBox(position, box)) return null
-  return { thin: true, distance: d, depth: screen(position).depth, hit }
+  return { thin: true, distance: d, depth: screen(position).depth, radiusPx: 0, hit }
 }
 
 function pointCandidate(scene: SpaceScene, mark: PointMark, screen: Projector, px: number, py: number, box: Box3): Candidate | null {
@@ -107,6 +110,7 @@ function pointCandidate(scene: SpaceScene, mark: PointMark, screen: Projector, p
     thin: true,
     distance: best.d,
     depth: best.depth,
+    radiusPx: mark.style.size / 2,
     hit: { source: mark.source, kind: 'point', position, values: pointReadout(position, label), at: { kind: 'point', index: best.index } },
   }
 }
@@ -133,6 +137,7 @@ function arrowCandidate(mark: ArrowMark, screen: Projector, px: number, py: numb
     thin: true,
     distance: best.d,
     depth: best.depth,
+    radiusPx: 0,
     hit: { source: mark.source, kind: 'arrow', position, values: arrowReadout(tail, vector), at: { kind: 'arrow', index: best.index } },
   }
 }
