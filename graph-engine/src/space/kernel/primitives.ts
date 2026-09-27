@@ -22,6 +22,8 @@ import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from 
 const POINT_SIZE = 8
 const SHAFT_WIDTH = 2
 const HEAD_SIZE = 10
+// S6 plan V5: a draggable point draws 1.5x its size, with a halo.
+const DRAG_POINT_SCALE = 1.5
 
 function coordinates(exprs: readonly (Expr | null)[], context: BuildContext, reads: Reads): CompiledFn[] {
   return exprs.map((e) => {
@@ -75,7 +77,7 @@ function preparePoint(statement: Statement, context: BuildContext): PreparedStat
       kind: 'points',
       source: context.source,
       positions: Float64Array.from(position),
-      style: { color: context.color, size: POINT_SIZE, shape: 'dot' },
+      style: { color: context.color, size: drag ? POINT_SIZE * DRAG_POINT_SCALE : POINT_SIZE, shape: 'dot', ...(drag ? { halo: true } : {}) },
       ...(drag ? { drag } : {}),
     }
     const labels: LabelAnchor[] = statement.label

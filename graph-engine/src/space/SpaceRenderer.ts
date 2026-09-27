@@ -283,6 +283,7 @@ export class SpaceRenderer {
         if (!this.dragging) return
         if (x !== null && y !== null) this.pendingDrag = { x, y }
         this.dragEnding = true
+        this.canvas.style.cursor = ''
         this.scheduler.request()
       },
     })
@@ -510,6 +511,7 @@ export class SpaceRenderer {
     this.pendingHover = null
     this.setProbe(null)
     for (const name of mark.drag.params) this.playing.delete(name)
+    this.canvas.style.cursor = 'grabbing'
     return true
   }
 
@@ -610,6 +612,21 @@ export class SpaceRenderer {
       this.emit({ type: 'hover', hit: probe ? probe.hit : null })
     }
     if (was || probe) this.scheduler.request()
+    this.updateHoverCursor(probe)
+  }
+
+  // S6 plan V5: grab over a draggable point, else the default; a drag under
+  // way owns the cursor itself (grab/release below), so a hover update never
+  // overrides it.
+  private updateHoverCursor(probe: { hit: Hit; x: number; y: number } | null): void {
+    if (this.dragging) return
+    const draggable = probe !== null && probe.hit.kind === 'point' && this.isDraggablePoint(probe.hit.source.object)
+    this.canvas.style.cursor = draggable ? 'grab' : ''
+  }
+
+  private isDraggablePoint(object: string): boolean {
+    const mark = this.scene?.marks.find((m) => m.source.object === object)
+    return mark !== undefined && mark.kind === 'points' && !!mark.drag
   }
 
   private clickAt(x: number, y: number): void {

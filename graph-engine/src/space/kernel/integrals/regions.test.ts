@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
-import { approx, kernelOf, lastDigitUnit, markNamed, meshArea, polylines, readout, sceneOf, vertices } from './testing'
+import { approx, kernelOf, lastDigitUnit, markNamed, meshArea, polylines, readout, readoutFull, sceneOf, vertices } from './testing'
 
 describe('region: type I, x in [0, 1], y in [x^2, x]', () => {
   const scene = sceneOf('region: x in [0, 1], y in [x^2, x]')
 
   it('reads its area ≈ 1/6 (the integral of x - x^2 from 0 to 1) to 1e-10', () => {
     expect(scene.errors).toEqual([])
-    expect(Math.abs(approx(readout(scene, 1).text, 'area') - 1 / 6)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'area') - 1 / 6)).toBeLessThan(1e-10)
   })
 
   it('draws its boundary exactly on y = x^2 and y = x, with points on both', () => {
@@ -41,7 +41,7 @@ describe('region: type I, x in [0, 1], y in [x^2, x]', () => {
     for (const spec of ['region: x in [1, 0], y in [x^2, x]', 'region: x in [0, 1], y in [x, x^2]']) {
       const scene = sceneOf(spec)
       expect(scene.errors).toEqual([])
-      expect(Math.abs(approx(readout(scene, 1).text, 'area') - 1 / 6)).toBeLessThan(1e-10)
+      expect(Math.abs(approx(readoutFull(scene, 1), 'area') - 1 / 6)).toBeLessThan(1e-10)
     }
   })
 
@@ -59,18 +59,18 @@ describe('region: polar and inequality', () => {
   it('r in [0, 2], theta in [0, pi/2]: area ≈ pi', () => {
     const scene = sceneOf('region: r in [0, 2], theta in [0, pi/2]')
     expect(scene.errors).toEqual([])
-    expect(Math.abs(approx(readout(scene, 1).text, 'area') - Math.PI)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'area') - Math.PI)).toBeLessThan(1e-10)
   })
 
   it('r in [0, 1], theta in [0, pi]: area ≈ pi/2, which needs the Jacobian r (without it, pi)', () => {
     // r in [0, 2] cannot tell: the integral of r from 0 to 2 is 2, its length.
     const scene = sceneOf('region: r in [0, 1], theta in [0, pi]')
-    expect(Math.abs(approx(readout(scene, 1).text, 'area') - Math.PI / 2)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'area') - Math.PI / 2)).toBeLessThan(1e-10)
   })
 
   it('theta written first (the outer variable) is the same region', () => {
     const scene = sceneOf('region: theta in [0, pi], r in [0, 1]')
-    expect(Math.abs(approx(readout(scene, 1).text, 'area') - Math.PI / 2)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'area') - Math.PI / 2)).toBeLessThan(1e-10)
   })
 
   it('a full turn drops the theta seam and the centre: its boundary is the circle alone', () => {
@@ -78,7 +78,7 @@ describe('region: polar and inequality', () => {
     const pieces = polylines(markNamed(scene, 's1.boundary', 'lines'))
     expect(pieces).toHaveLength(1)
     for (const p of pieces[0]) expect(Math.hypot(p[0], p[1])).toBeCloseTo(2, 12)
-    expect(Math.abs(approx(readout(scene, 1).text, 'area') - 4 * Math.PI)).toBeLessThan(1e-9)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'area') - 4 * Math.PI)).toBeLessThan(1e-9)
   })
 
   it('x^2 + y^2 <= 4 and y >= 0 at res 128: the mesh area is within 0.5% of 2 pi, and every digit it prints is right', () => {
@@ -165,7 +165,7 @@ describe('named regions and "over R"', () => {
   it('region: R draws the named region', () => {
     const scene = sceneOf('R = region r in [0, 2], theta in [0, pi/2]\nregion: R')
     expect(scene.errors).toEqual([])
-    expect(Math.abs(approx(readout(scene, 2).text, 'area') - Math.PI)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 2), 'area') - Math.PI)).toBeLessThan(1e-10)
   })
 
   it('a region defined as another follows it; a cycle is refused', () => {

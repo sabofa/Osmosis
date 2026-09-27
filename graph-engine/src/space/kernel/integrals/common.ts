@@ -5,7 +5,7 @@
 import type { Statement } from '../../../parser/types'
 import { QuadratureError } from '../../../math/quadrature'
 import { QUAD_BUDGET } from '../../../math/tolerance'
-import { APPROX, formatApprox, formatNumber, supportedDigits, MAX_DIGITS } from '../../pick/format'
+import { APPROX, DISPLAY_DIGITS, formatApprox, formatApproxFull, formatNumber, supportedDigits, MAX_DIGITS } from '../../pick/format'
 import type { LabelAnchor, SceneError, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
 import { boxOf, type BuildContext } from '../registry'
@@ -37,8 +37,20 @@ export function approxText(a: Approx): string {
   return a.error === null ? formatApprox(a.value) : formatApprox(shown(a), a.error)
 }
 
-// "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate supports.
+// approxText, uncapped (S6 plan V3): every digit the error supports.
+export function approxTextFull(a: Approx): string {
+  return a.error === null ? formatApprox(a.value) : formatApproxFull(shown(a), a.error)
+}
+
+// "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate
+// supports, capped at DISPLAY_DIGITS (V3).
 export function approxTupleText(values: readonly Approx[]): string {
+  const parts = values.map((a) => formatNumber(shown(a), a.error === null ? 4 : Math.min(DISPLAY_DIGITS, supportedDigits(shown(a), a.error))))
+  return `${APPROX} (${parts.join(', ')})`
+}
+
+// approxTupleText, uncapped (V3): every digit each coordinate's error supports.
+export function approxTupleTextFull(values: readonly Approx[]): string {
   const parts = values.map((a) => formatNumber(shown(a), a.error === null ? 4 : Math.min(MAX_DIGITS, supportedDigits(shown(a), a.error))))
   return `${APPROX} (${parts.join(', ')})`
 }
@@ -134,9 +146,11 @@ export function part(context: BuildContext, name: string): BuildContext['source'
   return { ...context.source, object: `${context.source.object}.${name}` }
 }
 
-// The statement's readout: an annotation anchored at `position`.
-export function readoutLabel(context: BuildContext, position: Vec3, text: string): LabelAnchor {
-  return { source: part(context, 'readout'), position, text, kind: 'annotation' }
+// The statement's readout: an annotation anchored at `position`. `fullText`
+// (V3), when given, is the same readout with every digit its numeric
+// estimate(s) support, shown on a click.
+export function readoutLabel(context: BuildContext, position: Vec3, text: string, fullText?: string): LabelAnchor {
+  return { source: part(context, 'readout'), position, text, kind: 'annotation', ...(fullText !== undefined && fullText !== text ? { fullText } : {}) }
 }
 
 // The form a builder was registered for.

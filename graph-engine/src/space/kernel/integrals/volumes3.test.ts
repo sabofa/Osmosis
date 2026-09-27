@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../../parser/parseSpec'
 import type { MeshMark, SpaceScene } from '../../scene/types'
-import { approx, dot, kernelOf, markNamed, polylines, readout, sceneOf, vertices, windings } from './testing'
+import { approx, dot, kernelOf, markNamed, polylines, readout, readoutFull, sceneOf, vertices, windings } from './testing'
 
 const faces = (scene: SpaceScene, line = 1) =>
   scene.marks.filter((m) => m.source.object.startsWith(`s${line}.face`)).map((m) => m.source.object.slice(`s${line}.`.length))
@@ -15,7 +15,7 @@ describe('volume: the tetrahedron x in [0, 1], y in [0, 1 - x], z in [0, 1 - x -
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
     expect(text.startsWith('∭ dV ≈ ')).toBe(true)
-    expect(Math.abs(approx(text, 'dV') - 1 / 6)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'dV') - 1 / 6)).toBeLessThan(1e-10)
   })
 
   it('keeps exactly its four faces: x = 0, y = 0, z = 0 and x + y + z = 1 (the x = 1 and y-top faces collapse)', () => {
@@ -80,14 +80,15 @@ describe('volume: the tetrahedron x in [0, 1], y in [0, 1 - x], z in [0, 1 - x -
   })
 
   it('integrand x: ∭ x dV = 1/24', () => {
-    const text = readout(sceneOf('volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y] integrand x'), 1).text
+    const s = sceneOf('volume: x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y] integrand x')
+    const text = readout(s, 1).text
     expect(text.startsWith('∭ x dV ≈ ')).toBe(true)
-    expect(Math.abs(approx(text, 'dV') - 1 / 24)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(s, 1), 'dV') - 1 / 24)).toBeLessThan(1e-10)
   })
 
   it('written in any order, the same solid', () => {
-    const text = readout(sceneOf('volume: z in [0, 1 - x - y], x in [0, 1], y in [0, 1 - x]'), 1).text
-    expect(Math.abs(approx(text, 'dV') - 1 / 6)).toBeLessThan(1e-10)
+    const s = sceneOf('volume: z in [0, 1 - x - y], x in [0, 1], y in [0, 1 - x]')
+    expect(Math.abs(approx(readoutFull(s, 1), 'dV') - 1 / 6)).toBeLessThan(1e-10)
   })
 })
 
@@ -95,7 +96,7 @@ describe('volume: cylindrical and spherical', () => {
   it('r in [0, 2], theta in [0, 2 pi], z in [0, 4 - r^2] cylindrical: ∭ = 8π, the dome and the floor disc alone', () => {
     const scene = sceneOf('volume: r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical')
     expect(scene.errors).toEqual([])
-    expect(Math.abs(approx(readout(scene, 1).text, 'dV') - 8 * Math.PI)).toBeLessThan(1e-8)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'dV') - 8 * Math.PI)).toBeLessThan(1e-8)
     // r = 0 is the axis (no area); the theta = 0 and theta = 2 pi faces coincide (interior); r = 2 has zero height
     expect(faces(scene)).toEqual(['face4', 'face5'])
     for (const [x, y, z] of vertices(face(scene, 'face5'))) expect(z).toBeCloseTo(4 - x * x - y * y, 12)
@@ -112,7 +113,7 @@ describe('volume: cylindrical and spherical', () => {
   it('half a turn keeps both theta faces: five faces, ∭ = π/2', () => {
     const scene = sceneOf('volume: r in [0, 1], theta in [0, pi], z in [0, 1] cylindrical')
     expect(faces(scene)).toEqual(['face1', 'face2', 'face3', 'face4', 'face5'])
-    expect(Math.abs(approx(readout(scene, 1).text, 'dV') - Math.PI / 2)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'dV') - Math.PI / 2)).toBeLessThan(1e-10)
   })
 
   it('the ice-cream cone rho in [0, 2], phi in [0, pi/4], theta in [0, 2 pi]: ∭ = (2π)(1 − cos(π/4))(8/3) ≈ 4.90747', () => {
@@ -121,7 +122,7 @@ describe('volume: cylindrical and spherical', () => {
     // (16π/3)(1 − √2/2) = 16.75516 × 0.29289 = 4.90747 (the plan's "4.90737" drops a digit)
     const expected = ((16 * Math.PI) / 3) * (1 - Math.SQRT2 / 2)
     expect(expected).toBeCloseTo(4.90747, 5)
-    expect(Math.abs(approx(readout(scene, 1).text, 'dV') - expected)).toBeLessThan(1e-9)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'dV') - expected)).toBeLessThan(1e-9)
     // the cap rho = 2 and the cone phi = pi/4; rho = 0 is a point, phi = 0 the axis, the theta faces coincide
     expect(faces(scene)).toEqual(['face1', 'face3'])
     for (const p of vertices(face(scene, 'face1'))) expect(Math.hypot(...p)).toBeCloseTo(2, 12)
@@ -130,7 +131,7 @@ describe('volume: cylindrical and spherical', () => {
 
   it('@angle: degrees reads the angles in degrees, with the Jacobian in radians', () => {
     const scene = sceneOf('@angle: degrees\nvolume: rho in [0, 2], phi in [0, 45], theta in [0, 360] spherical')
-    expect(Math.abs(approx(readout(scene, 2).text, 'dV') - ((16 * Math.PI) / 3) * (1 - Math.SQRT2 / 2))).toBeLessThan(1e-9)
+    expect(Math.abs(approx(readoutFull(scene, 2), 'dV') - ((16 * Math.PI) / 3) * (1 - Math.SQRT2 / 2))).toBeLessThan(1e-9)
   })
 })
 
@@ -151,7 +152,7 @@ describe('volume: refusals, names and parameters', () => {
     expect(scene.marks.every((m) => m.source.line === 2)).toBe(true)
     const text = readout(scene, 2).text
     expect(text.startsWith('∭_V dV ≈ ')).toBe(true)
-    expect(Math.abs(approx(text, 'dV') - 1 / 6)).toBeLessThan(1e-10)
+    expect(Math.abs(approx(readoutFull(scene, 2), 'dV') - 1 / 6)).toBeLessThan(1e-10)
   })
 
   it('a named volume under a surface draws as one', () => {

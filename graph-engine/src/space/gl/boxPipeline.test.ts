@@ -89,6 +89,21 @@ describe('boxEdges', () => {
   })
 })
 
+describe('a translucent box draws its edges at reduced opacity (S6 plan V6)', () => {
+  it('0.35 opacity for a translucent box, full opacity for an opaque one, both 1 px and never hidden-dashed', () => {
+    const fake = createFakeGl()
+    const shared = createSharedQuads(fake.gl)
+    const translucent = uploadBoxes(fake.gl, shared, boxMark(TWO, 0.6), WORLD)
+    const opaque = uploadBoxes(fake.gl, shared, boxMark(TWO, 1), WORLD)
+    expect(translucent?.edges?.look.opacity).toBe(0.35)
+    expect(opaque?.edges?.look.opacity).toBe(1)
+    for (const gpu of [translucent, opaque]) {
+      expect(gpu?.edges?.look.width).toBe(1)
+      expect(gpu?.edges?.look.hidden).toBe(false)
+    }
+  })
+})
+
 describe('GlBackend draws box marks through the box pipeline', () => {
   it('one instanced draw per BoxMark: the 36-vertex cube, one instance per box', () => {
     const { fake, backend } = setup()

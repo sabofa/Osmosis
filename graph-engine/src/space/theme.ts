@@ -30,12 +30,39 @@ export function slotHex(slot: number, palette: Palette, theme: 'light' | 'dark')
   return series[(Math.floor(slot) - 1) % series.length]
 }
 
+// S6 plan V7: the operand/construction grey (project:'s and cross:'s u and
+// v, and their right-angle marks) is the engine's own token, not an author-
+// named colour — parser/colors.ts's NAMED_COLORS.gray is one fixed hex for
+// every theme (an author who writes "color: gray" means it literally, so
+// that table stays theme-blind and is left alone). That fixed grey already
+// clears 3:1 against the background in both themes, but only just in light
+// (3.27:1); the theme-aware token gives a real margin (>= 5:1) in both, per
+// the architecture the rest of the engine follows: colours come from the
+// theme. `author` can never legally hold OPERAND_GREY_TOKEN (a NUL byte,
+// which no spec text can contain), so it is checked first, ahead of the
+// named-colour lookup. WCAG relative luminance; theme.test.ts checks the
+// numbers, including the old grey's, by the same formula.
+export const OPERAND_GREY_TOKEN = '\u0000operand-grey'
+export const OPERAND_GREY: Record<'light' | 'dark', number> = { light: 0x6b6b63, dark: 0xa8a89e }
+
 // An author colour (a name or #rrggbb, through parser/colors.ts) wins;
 // otherwise the slot picks from the series. An author value the parser does
 // not know falls back to the slot rather than to a grey.
 export function resolveSpaceColor(spec: ColorSpec, palette: Palette, theme: 'light' | 'dark'): Rgb {
+  if (spec.author === OPERAND_GREY_TOKEN) return hexToRgb(OPERAND_GREY[theme])
   if (spec.author && isValidColor(spec.author)) return hexToRgb(resolveColor(spec.author))
   return hexToRgb(slotHex(spec.slot, palette, theme))
+}
+
+// WCAG 2.1 relative luminance and contrast ratio, over sRGB 0..1 components.
+export function relativeLuminance([r, g, b]: Rgb): number {
+  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+export function contrastRatio(a: Rgb, b: Rgb): number {
+  const [l1, l2] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x)
+  return (l1 + 0.05) / (l2 + 0.05)
 }
 
 // The resolved palette the GL layer draws with: the frame's colours, the

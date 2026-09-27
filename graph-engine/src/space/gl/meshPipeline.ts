@@ -27,6 +27,12 @@ export const BACK_TINT: Record<'light' | 'dark', Rgb> = {
   dark: hexToRgb(0x8fa2c9),
 }
 
+// V6: mesh lines mix toward the theme's ink in light and its background in
+// dark — a bright ink line would read loud against a dark-theme surface, a
+// darker groove reads calmer — at a strength tuned per theme so they stay
+// "present, not loud" either way.
+export const MESH_LINE_STRENGTH: Record<'light' | 'dark', number> = { light: 0.45, dark: 0.35 }
+
 export const SCALAR_LOCATION = 2
 export const UV_LOCATION = 3
 
@@ -168,7 +174,9 @@ export function bindMeshProgram(gl: WebGL2RenderingContext, program: ProgramInfo
   gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
   const tint = BACK_TINT[colors.theme]
   gl.uniform3f(program.uniform('u_backTint'), tint[0], tint[1], tint[2])
-  gl.uniform3f(program.uniform('u_ink'), colors.axis[0], colors.axis[1], colors.axis[2])
+  const lineColor = colors.theme === 'dark' ? colors.background : colors.axis
+  gl.uniform3f(program.uniform('u_meshLineColor'), lineColor[0], lineColor[1], lineColor[2])
+  gl.uniform1f(program.uniform('u_meshLineStrength'), MESH_LINE_STRENGTH[colors.theme])
   gl.uniform3f(program.uniform('u_noData'), colors.grid[0], colors.grid[1], colors.grid[2])
   gl.uniform1f(program.uniform('u_pixelRatio'), draw.pixelRatio)
   gl.uniform1i(program.uniform('u_lut'), 0)

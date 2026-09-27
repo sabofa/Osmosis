@@ -98,6 +98,11 @@ export interface PointStyle {
   // Diameter, CSS pixels.
   size: number
   shape: PointShape
+  // S6 plan V5: a 2 px background halo plus a thin ink ring beyond the
+  // shape, so a draggable point and the probe's/a pin's marker are findable
+  // on any surface. Every point (halo or not) gets a thinner, 1 px version
+  // of the same background outline (gl/shaders/point.ts).
+  halo?: boolean
 }
 
 export interface ArrowStyle {
@@ -229,6 +234,11 @@ export interface LabelAnchor {
   position: Vec3
   text: string
   kind: LabelKind
+  // S6 plan V3: for an annotation built from a numeric estimate, the same
+  // text with every digit its error supports (formatApproxFull), not capped
+  // at the display cap (formatApprox) — shown on a click, honest either way.
+  // Absent for a label that has no error-bound quantity to uncap.
+  fullText?: string
 }
 
 export interface SceneError {

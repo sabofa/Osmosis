@@ -41,7 +41,7 @@ import type { LineMark, MeshMark, SceneError } from '../../scene/types'
 import { boundNames, checkBudget, constant, lineStyle, Reads, resolution } from '../common'
 import { finishMesh, gridIndices, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, PreparedStatement } from '../registry'
-import { approxText, attempt, COLLAPSED_REL, errorFloor, part, quadrature, readoutLabel, ROUNDING_REL, type Approx } from './common'
+import { approxText, approxTextFull, attempt, COLLAPSED_REL, errorFloor, part, quadrature, readoutLabel, ROUNDING_REL, type Approx } from './common'
 import { exprText } from './exprText'
 import { targetText } from './target'
 
@@ -344,7 +344,8 @@ export function prepareIterated(context: BuildContext, solid: Iterated, style: S
 
     const anchor: [number, number, number] = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2]]
     const marks = edges ? [...faces, edges] : faces
-    return { marks, labels: value ? [readoutLabel(context, anchor, `${label} ${approxText(value)}`)] : [], errors, colorScale: null }
+    const labels = value ? [readoutLabel(context, anchor, `${label} ${approxText(value)}`, `${label} ${approxTextFull(value)}`)] : []
+    return { marks, labels, errors, colorScale: null }
   }
   return { reads: reads.names, build }
 }

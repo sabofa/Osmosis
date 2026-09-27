@@ -76,7 +76,9 @@ export function interactionMarks(points: readonly Vec3[], box: Box3, eye: Vec3, 
     kind: 'points',
     source: { ...SOURCE, object: 'interaction.markers' },
     positions: flat(points),
-    style: { color: { author: colors.marker, slot: 0 }, size: MARKER_SIZE, shape: 'ring' },
+    // S6 plan V5: the same halo as a draggable point, so a hovered or pinned
+    // marker is just as findable.
+    style: { color: { author: colors.marker, slot: 0 }, size: MARKER_SIZE, shape: 'ring', halo: true },
   }
   return [lines, footDots, markers]
 }

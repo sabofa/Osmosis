@@ -47,6 +47,9 @@ export interface LabelItem {
   // An annotation shown through its fallback candidate: a line from the
   // label's centre (x1, y1) back to its anchor (x2, y2), null otherwise.
   leader: Leader | null
+  // S6 plan V3: the same text with every digit its error supports, shown on
+  // a click; present only for an annotation whose scene label carried one.
+  fullText?: string
 }
 
 function inView(camera: CameraMatrices, s: { x: number; y: number; depth: number }): boolean {
@@ -64,6 +67,7 @@ function publicRole(role: PlacedRole): LabelRole {
 export function layoutLabels(frame: FrameModel, sceneLabels: readonly LabelAnchor[], camera: CameraMatrices, world: WorldMap): LabelItem[] {
   const requests: LabelRequest[] = []
   const anchors = new Map<string, { x: number; y: number; visible: boolean }>()
+  const fullTexts = new Map<string, string>()
 
   for (const l of frame.labels) {
     const s = project(camera, world.toWorld(l.position))
@@ -83,6 +87,7 @@ export function layoutLabels(frame: FrameModel, sceneLabels: readonly LabelAncho
     const key = `label:${i}:${l.source.object}`
     const anchor: ScreenPoint = { x: s.x, y: s.y }
     anchors.set(key, { ...anchor, visible: inView(camera, s) })
+    if (l.fullText !== undefined) fullTexts.set(key, l.fullText)
     const role: PlacedRole = l.kind === 'annotation' ? 'annotation' : 'label'
     requests.push({
       key,
@@ -101,13 +106,14 @@ export function layoutLabels(frame: FrameModel, sceneLabels: readonly LabelAncho
   return requests.map((r) => {
     const a = anchors.get(r.key)!
     const role = publicRole(r.role)
-    if (!a.visible) return { key: r.key, text: r.text, x: a.x, y: a.y, role, visible: false, leader: null }
+    const fullText = fullTexts.get(r.key)
+    if (!a.visible) return { key: r.key, text: r.text, x: a.x, y: a.y, role, visible: false, leader: null, fullText }
     const p = placedByKey.get(r.key)!
     if (role === 'tick' || role === 'title') return { key: r.key, text: r.text, x: p.x, y: p.y, role, visible: p.visible, leader: null }
     // 'label' anchors at its bottom-left corner (labelPool.ts labelTransform);
     // the placer works in box-centre coordinates, so convert once here.
     const size = estimateLabelSize(r.text, r.fontSize)
     const leader: Leader | null = p.leader ? { x1: p.x, y1: p.y, x2: p.leader.x, y2: p.leader.y } : null
-    return { key: r.key, text: r.text, x: p.x - size.width / 2, y: p.y + size.height / 2, role, visible: p.visible, leader }
+    return { key: r.key, text: r.text, x: p.x - size.width / 2, y: p.y + size.height / 2, role, visible: p.visible, leader, fullText }
   })
 }

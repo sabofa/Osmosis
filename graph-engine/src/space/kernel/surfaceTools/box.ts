@@ -220,6 +220,9 @@ export function verticalPlane(a: number, b: number, u: readonly [number, number]
   }
 }
 
-export function annotation(source: MarkSource, position: Vec3, text: string): LabelAnchor {
-  return { source, position, text, kind: 'annotation' }
+// `fullText` (S6 plan V3): the same readout with every digit its numeric
+// estimate(s) support, shown on a click; omitted when there is nothing more
+// honest to show than `text` already does.
+export function annotation(source: MarkSource, position: Vec3, text: string, fullText?: string): LabelAnchor {
+  return { source, position, text, kind: 'annotation', ...(fullText !== undefined && fullText !== text ? { fullText } : {}) }
 }

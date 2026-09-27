@@ -59,8 +59,10 @@ export function drawPoints(gl: WebGL2RenderingContext, program: ProgramInfo, poi
   for (const p of points) {
     const [r, g, b] = resolveSpaceColor(p.mark.style.color, colors.palette, colors.theme)
     gl.uniform3f(program.uniform('u_color'), r, g, b)
+    gl.uniform3f(program.uniform('u_ink'), colors.axis[0], colors.axis[1], colors.axis[2])
     gl.uniform1f(program.uniform('u_size'), p.mark.style.size)
     gl.uniform1i(program.uniform('u_shape'), SHAPE_CODE[p.mark.style.shape] ?? 0)
+    gl.uniform1i(program.uniform('u_halo'), p.mark.style.halo ? 1 : 0)
     gl.bindVertexArray(p.vao)
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, p.count)
   }

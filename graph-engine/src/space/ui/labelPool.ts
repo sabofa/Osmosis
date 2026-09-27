@@ -11,6 +11,11 @@ interface PooledSpan {
   role: string
   transform: string
   shown: boolean
+  // S6 plan V3: the readout's full-digit text and whether it is currently
+  // showing (toggled by a click on the span), null for a label with none.
+  fullText: string | undefined
+  expanded: boolean
+  onClick: (() => void) | null
 }
 
 interface PooledLeader {
@@ -59,13 +64,32 @@ export class LabelPool {
       if (!entry) {
         const span = this.container.ownerDocument.createElement('span')
         span.className = 'space-label'
-        entry = { span, text: '', role: '', transform: '', shown: true }
+        entry = { span, text: '', role: '', transform: '', shown: true, fullText: undefined, expanded: false, onClick: null }
         this.container.appendChild(span)
         this.spans.set(item.key, entry)
       }
+      // A new fullText value (a rebuild) resets the toggle: stale expanded
+      // digits from a value that no longer holds are never left showing.
+      if (entry.fullText !== item.fullText) {
+        entry.fullText = item.fullText
+        entry.expanded = false
+        if (item.fullText !== undefined && !entry.onClick) {
+          const e = entry
+          e.onClick = () => {
+            e.expanded = !e.expanded
+            e.span.textContent = e.expanded ? (e.fullText ?? e.text) : e.text
+          }
+          e.span.addEventListener('click', e.onClick)
+        } else if (item.fullText === undefined && entry.onClick) {
+          entry.span.removeEventListener('click', entry.onClick)
+          entry.onClick = null
+        }
+        if (item.fullText !== undefined) entry.span.dataset.expandable = 'true'
+        else delete entry.span.dataset.expandable
+      }
       if (entry.text !== item.text) {
-        entry.span.textContent = item.text
         entry.text = item.text
+        if (!entry.expanded) entry.span.textContent = item.text
       }
       if (entry.role !== item.role) {
         entry.span.dataset.role = item.role

@@ -31,6 +31,16 @@
   font-weight: 600;
 }
 
+/* A readout with more digits than shown (plan V3): the overlay is otherwise
+   pointer-events: none so the canvas gets input, but this one span opts back
+   in, the same way .space-params does. A dotted underline hints it clicks. */
+.space-label[data-expandable] {
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
 /* A dropped annotation's leader (plan V2): a hairline from the label back to
    its data point, drawn as a 1 px div scaled to length and rotated — no SVG
    in the overlay. transform-origin stays the default top-left so rotation

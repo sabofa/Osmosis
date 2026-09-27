@@ -36,10 +36,16 @@ void main() {
 }
 `
 
-// McGuire and Bavoil's weight: alpha * clamp(0.03 / (1e-5 + (z / 200)^4),
-// 1e-2, 3e3), z the view depth (positive in front of the eye).
+// McGuire and Bavoil's weight: alpha * clamp(0.03 / (1e-5 + (z / depthSpan)^4),
+// 1e-2, 3e3), z the view depth (positive in front of the eye). depthSpan
+// (S6 plan V4, S3 parked item M10) is the box's own view-space depth range
+// (u_cueRange.y - u_cueRange.x, look.ts), not a fixed literal: the original
+// constant (200) assumed a view-space scale the normalised world (box
+// half-extents at most 1) never reaches, so every fragment clamped to the
+// same top weight and depth order was lost. Normalising by the box's own
+// span restores it: nearer layers dominate, as the weighting is meant to.
 export const OIT_WEIGHT_GLSL = /* glsl */ `
-float oitWeight(float a, float z) {
-  return a * clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
+float oitWeight(float a, float z, float depthSpan) {
+  return a * clamp(0.03 / (1e-5 + pow(z / depthSpan, 4.0)), 1e-2, 3e3);
 }
 `

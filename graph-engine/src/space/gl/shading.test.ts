@@ -203,6 +203,39 @@ describe('GlBackend: box clipping and the depth cue', () => {
     for (const u of eyeDir) expect(u.values).toEqual([...cam.direction])
   })
 
+  it('sets u_halo per mark, true only for a halo point, and u_ink to the theme axis colour (S6 plan V5)', () => {
+    const s = scene([pointMark([[0, 0, 0]], { line: 1 }), pointMark([[0.5, 0.5, 0.5]], { line: 2, style: { halo: true } })])
+    const { fake, backend } = setup()
+    backend.setScene(s, world, LIGHT)
+    backend.draw(camera(), 1)
+    // Points draw in two AA passes (opaque core, then the blended fringe), so
+    // each mark's u_halo is set once per pass: [pass0: markA, markB, pass1: markA, markB].
+    const halo = uniformValues(fake, 'u_halo').filter((u) => u.program === 'point')
+    expect(halo.map((u) => u.values[0])).toEqual([0, 1, 0, 1])
+    const ink = uniformValues(fake, 'u_ink').filter((u) => u.program === 'point')
+    expect(ink.length).toBeGreaterThan(0)
+    for (const u of ink) expect(u.values).toEqual([...LIGHT.axis])
+  })
+
+  it('mesh lines mix toward ink in light, background in dark, at a per-theme strength (S6 plan V6)', () => {
+    const s = scene([meshMark([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0], [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2])])
+    const { fake: lightFake, backend: lightBackend } = setup()
+    lightBackend.setScene(s, world, LIGHT)
+    lightBackend.draw(camera(), 1)
+    const [lightColor] = uniformValues(lightFake, 'u_meshLineColor').filter((u) => u.program === 'mesh')
+    const [lightStrength] = uniformValues(lightFake, 'u_meshLineStrength').filter((u) => u.program === 'mesh')
+    expect(lightColor.values).toEqual([...LIGHT.axis])
+    expect(lightStrength.values[0]).toBe(0.45)
+
+    const { fake: darkFake, backend: darkBackend } = setup()
+    darkBackend.setScene(s, world, DARK)
+    darkBackend.draw(camera(), 1)
+    const [darkColor] = uniformValues(darkFake, 'u_meshLineColor').filter((u) => u.program === 'mesh')
+    const [darkStrength] = uniformValues(darkFake, 'u_meshLineStrength').filter((u) => u.program === 'mesh')
+    expect(darkColor.values).toEqual([...DARK.background])
+    expect(darkStrength.values[0]).toBe(0.35)
+  })
+
   it('normalises cue depth across the box sphere: the range is the centre depth -/+ |h|', () => {
     const fake = drawn()
     const [range] = uniformValues(fake, 'u_cueRange').filter((u) => u.program === 'mesh')

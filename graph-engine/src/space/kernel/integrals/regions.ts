@@ -41,6 +41,7 @@ import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from 
 import { compileConditions } from '../surface'
 import {
   approxText,
+  approxTextFull,
   attempt,
   COLLAPSED_REL,
   errorFloor,
@@ -591,7 +592,9 @@ function prepareRegion(statement: Statement, context: BuildContext): PreparedSta
     const floor = floorMark(r.samples, z, context, form.style.opacity ?? REGION_OPACITY, context.source.object)
     const boundary = boundaryMark(r.boundary, z, context, part(context, 'boundary').object)
     const marks = [floor, boundary].filter((m) => m !== null)
-    const labels = area ? [readoutLabel(context, boundaryAnchor(r.boundary, z), `area ${approxText(area)}`)] : []
+    const labels = area
+      ? [readoutLabel(context, boundaryAnchor(r.boundary, z), `area ${approxText(area)}`, `area ${approxTextFull(area)}`)]
+      : []
     return { marks, labels, errors, colorScale: null }
   }
   return { reads: reads.names, build }
