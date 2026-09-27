@@ -39,7 +39,7 @@ import { worldMap, type WorldMap } from './camera/world'
 import { defaultSpaceConfig, type SpaceConfig, type SpaceView } from './config'
 import type { SpaceEvent } from './events'
 import { boxHalfExtents } from './frame/aspect'
-import { resolveBox } from './frame/bounds'
+import { flatAxes, resolveBox } from './frame/bounds'
 import { buildFrame } from './frame/build'
 import { frameAxes } from './frame/ticks'
 import type { FrameAxes } from './frame/types'
@@ -336,7 +336,8 @@ export class SpaceRenderer {
     this.config = config
     const space = config.space
     const box = resolveBox(space, scene.extent)
-    const world = worldMap(box, boxHalfExtents(box, space.aspect, scene))
+    const flat = flatAxes(space, scene.extent)
+    const world = worldMap(box, boxHalfExtents(box, space.aspect, scene, flat))
     const authored: SpaceView = { ...space.camera, target: world.centre }
     const first = this.scene === null
     const cameraChanged =
@@ -355,7 +356,7 @@ export class SpaceRenderer {
     this.hoverMode = config.hover ?? 'all'
     this.world = world
     this.authored = sanitizeView(authored, authored)
-    this.axes = frameAxes(space, box)
+    this.axes = frameAxes(space, box, flat)
     this.backend.setScene(scene, world, this.colors, { depthcue: space.depthcue })
     if (fresh) {
       const { hidden } = colorbarScales(scene)

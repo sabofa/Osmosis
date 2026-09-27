@@ -103,7 +103,10 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
   const build = (): BuildResult => {
     const [x0, y0, z0] = point()
     const box = toolBox(context, domain())
-    requireInside('gradient', [x0, y0, z0], [box.x, box.y, box.z], 'the box')
+    // toolBox draws into the tool's own "over" rectangle when one is
+    // authored (S6 carried item): "outside the box" would then be misleading
+    // for a point inside the drawn frame but outside that rectangle.
+    requireInside('gradient', [x0, y0, z0], [box.x, box.y, box.z], form.over ? 'the domain' : 'the box')
     const g: Vec3 = [grad[0](x0, y0, z0), grad[1](x0, y0, z0), grad[2](x0, y0, z0)]
     const length = Math.hypot(...g)
     if (!Number.isFinite(length)) throw new Error(`gradient: ∇F is undefined at ${pointText([x0, y0, z0])}`)

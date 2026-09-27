@@ -231,6 +231,12 @@ export function label(position: Vec3, text: string, line = 1): LabelAnchor {
   return { source: source(line, 'label'), position, text, kind: 'point' }
 }
 
+// An annotation (a readout, or a contour's value label): same shape as
+// `label`, but placed with the higher-priority candidate ring (S6 plan V2).
+export function annotationLabel(position: Vec3, text: string, line = 1): LabelAnchor {
+  return { source: source(line, 'readout'), position, text, kind: 'annotation' }
+}
+
 // The extent of every finite vertex a scene's marks carry. The kernel's own
 // sceneExtent (S1) is robust against poles; fixtures have none, so the plain
 // min/max is what they need.

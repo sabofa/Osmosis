@@ -141,4 +141,10 @@ describe('tangent-plane refusals', () => {
 tangent-plane: f at (1, 2, 3)`).errors.map((e) => e.message)
     ).toEqual(['tangent-plane: a function of x and y takes a point (a, b), got 3 coordinates'])
   })
+
+  it('refuses a point outside an authored over-rectangle, worded "the domain" (S6 carried item)', () => {
+    expect(sceneOf('tangent-plane: x^2 + y^2 + z^2 at (3, 0, 0) over x in [-1, 1], y in [-1, 1]').errors).toEqual([
+      { line: 1, message: 'tangent-plane: (3, 0, 0) is outside the domain' },
+    ])
+  })
 })

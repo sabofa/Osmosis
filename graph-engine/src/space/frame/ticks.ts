@@ -34,17 +34,21 @@ export function tickIndex(value: number, step: number): number {
 }
 
 // The axis steps and titles from the space directives and the resolved box.
-export function frameAxes(space: SpaceConfig, box: Box3): FrameAxes {
-  const axis = (authored: TickStep | null, range: Range, title: string) => ({
+// `flat` (S6 plan V1, frame/bounds.ts flatAxes) marks an axis whose box is
+// the thin one built around a single data value: its FrameAxis.fixed is set
+// to that value (the box's own centre), so the frame draws one tick there.
+export function frameAxes(space: SpaceConfig, box: Box3, flat: { x?: boolean; y?: boolean; z?: boolean } = {}): FrameAxes {
+  const axis = (authored: TickStep | null, range: Range, title: string, isFlat: boolean | undefined) => ({
     scale: 'linear' as const,
     step: stepFor(range.max - range.min, TICK_TARGET, authored && authored.value > 0 ? authored : null),
     authored,
     title,
+    fixed: isFlat ? (range.min + range.max) / 2 : null,
   })
   return {
-    x: axis(space.ticks.x, box.x, space.titles.x),
-    y: axis(space.ticks.y, box.y, space.titles.y),
-    z: axis(space.ticks.z, box.z, space.titles.z),
+    x: axis(space.ticks.x, box.x, space.titles.x, flat.x),
+    y: axis(space.ticks.y, box.y, space.titles.y, flat.y),
+    z: axis(space.ticks.z, box.z, space.titles.z, flat.z),
   }
 }
 

@@ -54,6 +54,10 @@ export interface FrameAxis {
   // The authored step, when there is one (pi multiples label as pi).
   authored: TickStep | null
   title: string
+  // S6 plan V1: set on a flat axis (frame/bounds.ts flatAxes) to the data
+  // value at the box's centre, so the frame shows one tick there instead of
+  // a ladder of ticks across an all-but-empty range. Null on every other axis.
+  fixed: number | null
 }
 
 export interface FrameAxes {

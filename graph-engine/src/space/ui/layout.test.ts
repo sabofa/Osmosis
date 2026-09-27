@@ -6,8 +6,11 @@ import { boxFrame } from '../frame/box'
 import { frameAxes } from '../frame/ticks'
 import type { FrameModel } from '../frame/types'
 import type { Box3 } from '../scene/types'
-import { label } from '../testing/marks'
-import { layoutLabels, POINT_LABEL_OFFSET } from './layout'
+import { annotationLabel, label } from '../testing/marks'
+import { estimateLabelSize, labelsOverlap } from '../frame/labels'
+import { LABEL_FONT_PX } from '../frame/types'
+import { pointCandidates } from './labelPlacer'
+import { layoutLabels } from './layout'
 
 const CUBE: Box3 = { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }
 const WORLD = worldMap(CUBE, [1, 1, 1])
@@ -35,13 +38,63 @@ describe('layoutLabels', () => {
     expect(items.find((i) => i.text === 'near')!.visible).toBe(true)
   })
 
-  it('offsets point labels up-right by (6, -6) px', () => {
-    expect(POINT_LABEL_OFFSET).toEqual([6, -6])
+  it('places an uncontested point label at its first (up-right) candidate (S6 plan V2)', () => {
     const [item] = layoutLabels(EMPTY, [label([0.2, 0.1, 0.3], 'P')], cam(40), WORLD)
     const p = project(cam(40), [0.2, 0.1, 0.3])
+    const [first] = pointCandidates({ x: p.x, y: p.y })
+    const size = estimateLabelSize('P', LABEL_FONT_PX)
     expect(item.role).toBe('label')
-    expect(item.x).toBeCloseTo(p.x + 6, 9)
-    expect(item.y).toBeCloseTo(p.y - 6, 9)
+    expect(item.x).toBeCloseTo(first.x - size.width / 2, 9)
+    expect(item.y).toBeCloseTo(first.y + size.height / 2, 9)
+  })
+
+  it('moves a point label off its first candidate, clear of a higher-priority annotation at the same anchor', () => {
+    // An annotation and a point label share an anchor: the annotation places
+    // first (priority) and claims the up-right candidate both would prefer;
+    // the point label must land somewhere that does not overlap it.
+    const items = layoutLabels(EMPTY, [annotationLabel([0, 0, 0], 'blocker', 9), label([0, 0, 0], 'P')], cam(40), WORLD)
+    const blocker = items.find((i) => i.text === 'blocker')!
+    const point = items.find((i) => i.text === 'P')!
+    expect(blocker.visible).toBe(true)
+    expect(point.visible).toBe(true)
+    const box = (i: typeof blocker) => {
+      const size = estimateLabelSize(i.text, LABEL_FONT_PX)
+      return { x: i.x + size.width / 2, y: i.y - size.height / 2, ...size }
+    }
+    expect(labelsOverlap(box(blocker), box(point))).toBe(false)
+  })
+
+  it('a crowded annotation still shows, with a leader line back to its anchor, never dropped', () => {
+    // Eight annotations at the same point exhaust every ring position at
+    // every radius long before the ninth; it must still show.
+    const jam = Array.from({ length: 40 }, (_, i) => annotationLabel([0, 0, 0], `r${i}`, i + 1))
+    const target = annotationLabel([0, 0, 0], 'last', 100)
+    const items = layoutLabels(EMPTY, [...jam, target], cam(40), WORLD)
+    const last = items.find((i) => i.text === 'last')!
+    expect(last.visible).toBe(true)
+    expect(last.leader).not.toBeNull()
+  })
+
+  it('a crowded point label (no leader) is dropped rather than overlapping', () => {
+    const jam = Array.from({ length: 12 }, (_, i) => label([0, 0, 0], `p${i}`, i + 1))
+    const items = layoutLabels(EMPTY, jam, cam(40), WORLD)
+    expect(items.some((i) => !i.visible)).toBe(true)
+    // No two labels that ARE shown overlap.
+    const shown = items.filter((i) => i.visible)
+    const box = (i: (typeof shown)[number]) => {
+      const size = estimateLabelSize(i.text, LABEL_FONT_PX)
+      return { x: i.x + size.width / 2, y: i.y - size.height / 2, ...size }
+    }
+    for (let i = 0; i < shown.length; i++) {
+      for (let j = i + 1; j < shown.length; j++) expect(labelsOverlap(box(shown[i]), box(shown[j]))).toBe(false)
+    }
+  })
+
+  it('is deterministic: the same input places the same way every time', () => {
+    const labels = [annotationLabel([0, 0, 0], 'A', 1), annotationLabel([0.01, 0, 0], 'B', 2), label([0, 0.01, 0], 'C', 3)]
+    const a = layoutLabels(EMPTY, labels, cam(40), WORLD)
+    const b = layoutLabels(EMPTY, labels, cam(40), WORLD)
+    expect(a).toEqual(b)
   })
 
   it('keeps keys stable across camera positions, so the pool reuses spans', () => {

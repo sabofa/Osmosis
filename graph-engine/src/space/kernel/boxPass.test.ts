@@ -124,12 +124,14 @@ plane: x + y = 0`)
 
   it('a region sizes the box by its x and y, and is drawn on the box floor', () => {
     // The region x in [0, 1], y in [x^2, x] alone: x and y [0, 1]; no z
-    // data, so z is [-5, 5] and the floor -5. With @bounds3d z [-1, 3], -1.
+    // data, so region: gets a thin flat box (S6 plan V1) instead of the old
+    // [-5, 5]: s = 0.05 * max(1, 1) = 0.05, floor -0.05. With @bounds3d z
+    // [-1, 3] (authored, so the flat rule never applies), -1.
     const alone = kernelOf('region: x in [0, 1], y in [x^2, x]')
     const scene = alone.kernel.scene()
     expect(scene.errors).toEqual([])
-    expect(resolveBox(alone.space, scene.extent)).toEqual(box([0, 1], [0, 1], [-5, 5]))
-    for (const [, , z] of positions(markOf(scene, 's1'))) expect(z).toBe(-5)
+    expect(resolveBox(alone.space, scene.extent)).toEqual(box([0, 1], [0, 1], [-0.05, 0.05]))
+    for (const [, , z] of positions(markOf(scene, 's1'))) expect(z).toBe(-0.05)
     const bounded = kernelOf('@bounds3d: z [-1, 3]\nregion: x in [0, 1], y in [x^2, x]').kernel.scene()
     for (const [, , z] of positions(markOf(bounded, 's2'))) expect(z).toBe(-1)
   })

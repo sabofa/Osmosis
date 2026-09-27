@@ -50,4 +50,17 @@ describe('boxHalfExtents', () => {
     expect(boxHalfExtents(box(10, 1, 1), null, SPHERE)).toEqual([1, 1, 0.7])
     expect(boxHalfExtents(box(4, 1, 2), null, SPHERE)).toEqual([1, 0.25, 0.5])
   })
+
+  it('V1: a flat z reads 0.15 under auto, not 0.7', () => {
+    expect(boxHalfExtents(box(4, 2, 0.2), null, EMPTY, { z: true })).toEqual([1, 1, 0.15])
+  })
+
+  it('V1: an unflagged axis keeps 0.7 even when another axis is flat', () => {
+    expect(boxHalfExtents(box(4, 2, 0.2), { kind: 'auto' }, EMPTY, { z: true })).toEqual([1, 1, 0.15])
+  })
+
+  it('V1: flat has no effect on equal or an explicit ratio', () => {
+    expect(boxHalfExtents(box(4, 2, 1), { kind: 'equal' }, EMPTY, { z: true })).toEqual([1, 0.5, 0.25])
+    expect(boxHalfExtents(box(4, 2, 1), { kind: 'ratio', x: 1, y: 1, z: 0.5 }, EMPTY, { z: true })).toEqual([1, 1, 0.5])
+  })
 })
