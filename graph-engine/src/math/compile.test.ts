@@ -3,6 +3,7 @@ import { parseExprString } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
 import { CompileError, compileScalar, compileVector, freeVariablesDeep } from './compile'
 import { makeScope, type MathFunction } from './scope'
+import { evalExpr } from '../parser/evalExpr'
 
 const p = parseExprString
 
@@ -251,5 +252,50 @@ describe('freeVariablesDeep', () => {
   it('leaves out pi and e, and survives a cycle', () => {
     const scope = makeScope({ functions: [['f', fn(['x'], 'g(x) + pi')], ['g', fn(['x'], 'f(x) + e + c')]] })
     expect([...freeVariablesDeep(p('f(1)'), scope)]).toEqual(['c'])
+  })
+})
+
+describe('fast paths compute exactly what the general closures do', () => {
+  // Every operator with every operand shape the compiler reads inline (a
+  // bound variable, a literal, a parameter) and a general node, checked
+  // against the 2D evaluator (parser/evalExpr.ts), which is independent code
+  // doing the same double operations.
+  const operands = ['x', 'y', '2.5', 'a', 'sin(y)', '-x', 'pi']
+  const ops = ['+', '-', '*', '/', '^']
+  const points: [number, number][] = [
+    [0.7, -1.3],
+    [2, 3],
+    [-0.4, 0.9],
+  ]
+  it('on every pair of operand shapes', () => {
+    const scope = makeScope({ params: [['a', 1.7]] })
+    let checked = 0
+    for (const op of ops) {
+      for (const l of operands) {
+        for (const r of operands) {
+          const text = `(${l}) ${op} (${r})`
+          const f = compileScalar(p(text), ['x', 'y'], scope)
+          for (const [x, y] of points) {
+            expect(Object.is(f(x, y), evalExpr(p(text), { x, y, a: 1.7 }))).toBe(true)
+            checked++
+          }
+        }
+      }
+    }
+    expect(checked).toBe(5 * 7 * 7 * 3)
+  })
+
+  it('aliases an argument that is already a slot, in any order', () => {
+    const scope = makeScope({
+      functions: [
+        ['f', fn(['x', 'y'], 'x - y')],
+        ['g', fn(['t'], 'f(t, t + 1) * f(t + 1, t)')],
+      ],
+    })
+    // f(y, x) at (1, 5) = 5 - 1
+    expect(compileScalar(p('f(y, x)'), ['x', 'y'], scope)(1, 5)).toBe(4)
+    // g(3) = f(3, 4) * f(4, 3) = (-1) * 1
+    expect(compileScalar(p('g(3)'), [], scope)()).toBe(-1)
+    expect(compileScalar(p('g(s)'), ['s'], scope)(3)).toBe(-1)
   })
 })

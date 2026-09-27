@@ -28,8 +28,13 @@ export interface FinishedMesh {
 }
 
 // Two triangles per grid cell, (i, j) -> j * (n + 1) + i with i fastest:
-// [a, b, c] and [a, c, d], counter-clockwise in (i, j).
+// [a, b, c] and [a, c, d], counter-clockwise in (i, j). Read-only once made,
+// so one array per resolution is shared.
+const GRIDS = new Map<number, Uint32Array>()
+
 export function gridIndices(n: number): Uint32Array {
+  const cached = GRIDS.get(n)
+  if (cached) return cached
   const indices = new Uint32Array(6 * n * n)
   let k = 0
   for (let j = 0; j < n; j++) {
@@ -46,6 +51,7 @@ export function gridIndices(n: number): Uint32Array {
       indices[k++] = d
     }
   }
+  GRIDS.set(n, indices)
   return indices
 }
 
@@ -89,7 +95,7 @@ export function finishMesh(raw: RawMesh, orientUp: boolean): FinishedMesh {
     kept[k++] = b
     kept[k++] = c
   }
-  const indices = kept.slice(0, k)
+  const indices = k === kept.length ? kept : kept.slice(0, k)
 
   const used = new Uint8Array(n)
   for (let i = 0; i < indices.length; i++) used[indices[i]] = 1

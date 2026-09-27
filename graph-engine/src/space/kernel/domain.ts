@@ -29,34 +29,35 @@ export interface DomainSamples {
   indices: Uint32Array
 }
 
-// (s, t) grid with s fastest: vertex (i, j) is j * (n + 1) + i.
-function grid(n: number, place: (i: number, j: number, out: Float64Array) => void): DomainSamples {
+// (s, t) grid with s fastest: vertex (i, j) is j * (n + 1) + i. Unless the
+// domain is polar, the body is evaluated at (x, y) itself, and a and b are the
+// x and y arrays.
+function grid(n: number, polar: boolean, place: (i: number, j: number, out: Float64Array) => void): DomainSamples {
   const count = (n + 1) * (n + 1)
-  const samples: DomainSamples = {
-    x: new Float64Array(count),
-    y: new Float64Array(count),
-    a: new Float64Array(count),
-    b: new Float64Array(count),
-    indices: gridIndices(n),
-  }
+  const x = new Float64Array(count)
+  const y = new Float64Array(count)
+  const a = polar ? new Float64Array(count) : x
+  const b = polar ? new Float64Array(count) : y
   const out = new Float64Array(4)
   for (let j = 0; j <= n; j++) {
     for (let i = 0; i <= n; i++) {
       place(i, j, out)
       const v = j * (n + 1) + i
-      samples.x[v] = out[0]
-      samples.y[v] = out[1]
-      samples.a[v] = out[2]
-      samples.b[v] = out[3]
+      x[v] = out[0]
+      y[v] = out[1]
+      if (polar) {
+        a[v] = out[2]
+        b[v] = out[3]
+      }
     }
   }
-  return samples
+  return { x, y, a, b, indices: gridIndices(n) }
 }
 
 export function rectSamples(x: Range, y: Range, n: number): DomainSamples {
-  return grid(n, (i, j, out) => {
-    out[0] = out[2] = x.min + (x.max - x.min) * (i / n)
-    out[1] = out[3] = y.min + (y.max - y.min) * (j / n)
+  return grid(n, false, (i, j, out) => {
+    out[0] = x.min + (x.max - x.min) * (i / n)
+    out[1] = y.min + (y.max - y.min) * (j / n)
   })
 }
 
@@ -124,7 +125,7 @@ export function iteratedSamples(spec: IteratedSpec, n: number): DomainSamples {
     g2[i] = hi(us[i])
   }
   checkCrossing(spec.outer, us, lo, hi)
-  return grid(n, (i, j, out) => {
+  return grid(n, polar !== null, (i, j, out) => {
     const u = us[i]
     const w = g1[i] + (g2[i] - g1[i]) * (j / n)
     if (polar) {
@@ -135,8 +136,8 @@ export function iteratedSamples(spec: IteratedSpec, n: number): DomainSamples {
       out[2] = r
       out[3] = theta
     } else {
-      out[0] = out[2] = spec.outerIsX ? u : w
-      out[1] = out[3] = spec.outerIsX ? w : u
+      out[0] = spec.outerIsX ? u : w
+      out[1] = spec.outerIsX ? w : u
     }
   })
 }

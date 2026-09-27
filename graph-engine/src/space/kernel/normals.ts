@@ -32,7 +32,10 @@ export function fallbackNormals(positions: Float64Array, normals: Float64Array, 
   }
   const n = positions.length / 3
   const group = new Int32Array(n).fill(-1)
-  for (let v = 0; v < n; v++) group[v] = groupOfKey.get(key(v)) ?? -1
+  // Only a vertex whose x matches a needy vertex's can share its position, so
+  // the string key is built for those alone.
+  const xs = new Set(needy.map((v) => positions[3 * v]))
+  for (let v = 0; v < n; v++) if (xs.has(positions[3 * v])) group[v] = groupOfKey.get(key(v)) ?? -1
 
   // Sum each face's cross product (twice its area, along its normal) into
   // every distinct group among its corners.

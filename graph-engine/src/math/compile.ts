@@ -38,7 +38,28 @@ export type CompiledFn = (a?: number, b?: number, c?: number) => number
 // Writes x, y, z into `out` (length 3) and returns it: no allocation per call.
 export type CompiledVec = (out: Float64Array, a?: number, b?: number, c?: number) => Float64Array
 
-type Node = (frame: Float64Array) => number
+// A node may say it is a leaf — a frame slot, a literal, or a parameter slot —
+// so the node above it reads the leaf inline instead of calling it. Nothing
+// changes but speed: the same numbers go through the same operations.
+type Node = ((frame: Float64Array) => number) & { slot?: number; constant?: number; param?: number }
+
+function slotLeaf(slot: number): Node {
+  const node: Node = (f) => f[slot]
+  node.slot = slot
+  return node
+}
+
+function constantLeaf(value: number): Node {
+  const node: Node = () => value
+  node.constant = value
+  return node
+}
+
+function paramLeaf(values: Float64Array, index: number): Node {
+  const node: Node = () => values[index]
+  node.param = index
+  return node
+}
 
 const DEG = Math.PI / 180
 const TO_DEG = 180 / Math.PI
@@ -70,7 +91,10 @@ function unary(fn: (v: number) => number): Builtin {
   return {
     min: 1,
     max: 1,
-    make: ([a]) => (f) => fn(a(f)),
+    make: ([a]) => {
+      const s = a.slot
+      return s !== undefined ? (f) => fn(f[s]) : (f) => fn(a(f))
+    },
   }
 }
 
@@ -79,7 +103,11 @@ function trig(fn: (v: number) => number): Builtin {
   return {
     min: 1,
     max: 1,
-    make: ([a], angle) => (angle === 'degrees' ? (f) => fn(a(f) * DEG) : (f) => fn(a(f))),
+    make: ([a], angle) => {
+      const s = a.slot
+      if (angle === 'degrees') return s !== undefined ? (f) => fn(f[s] * DEG) : (f) => fn(a(f) * DEG)
+      return s !== undefined ? (f) => fn(f[s]) : (f) => fn(a(f))
+    },
   }
 }
 
@@ -199,6 +227,68 @@ function arityText(min: number, max: number): string {
 // The compiler
 // ---------------------------------------------------------------------------
 
+// l op r, reading a slot, literal or parameter operand inline. Each branch is
+// the same operation on the same two numbers as the general (f) => l(f) op r(f).
+function binaryNode(op: '+' | '-' | '*' | '/' | '^', l: Node, r: Node, values: Float64Array): Node {
+  const ls = l.slot
+  const rs = r.slot
+  const lc = l.constant
+  const rc = r.constant
+  const lp = l.param
+  const rp = r.param
+  switch (op) {
+    case '+':
+      if (ls !== undefined && rs !== undefined) return (f) => f[ls] + f[rs]
+      if (ls !== undefined && rc !== undefined) return (f) => f[ls] + rc
+      if (lc !== undefined && rs !== undefined) return (f) => lc + f[rs]
+      if (ls !== undefined) return (f) => f[ls] + r(f)
+      if (rs !== undefined) return (f) => l(f) + f[rs]
+      if (lp !== undefined) return (f) => values[lp] + r(f)
+      if (rp !== undefined) return (f) => l(f) + values[rp]
+      if (lc !== undefined) return (f) => lc + r(f)
+      if (rc !== undefined) return (f) => l(f) + rc
+      return (f) => l(f) + r(f)
+    case '-':
+      if (ls !== undefined && rs !== undefined) return (f) => f[ls] - f[rs]
+      if (ls !== undefined && rc !== undefined) return (f) => f[ls] - rc
+      if (lc !== undefined && rs !== undefined) return (f) => lc - f[rs]
+      if (ls !== undefined) return (f) => f[ls] - r(f)
+      if (rs !== undefined) return (f) => l(f) - f[rs]
+      if (lp !== undefined) return (f) => values[lp] - r(f)
+      if (rp !== undefined) return (f) => l(f) - values[rp]
+      if (lc !== undefined) return (f) => lc - r(f)
+      if (rc !== undefined) return (f) => l(f) - rc
+      return (f) => l(f) - r(f)
+    case '*':
+      if (ls !== undefined && rs !== undefined) return (f) => f[ls] * f[rs]
+      if (ls !== undefined && rc !== undefined) return (f) => f[ls] * rc
+      if (lc !== undefined && rs !== undefined) return (f) => lc * f[rs]
+      if (ls !== undefined) return (f) => f[ls] * r(f)
+      if (rs !== undefined) return (f) => l(f) * f[rs]
+      if (lp !== undefined) return (f) => values[lp] * r(f)
+      if (rp !== undefined) return (f) => l(f) * values[rp]
+      if (lc !== undefined) return (f) => lc * r(f)
+      if (rc !== undefined) return (f) => l(f) * rc
+      return (f) => l(f) * r(f)
+    case '/':
+      if (ls !== undefined && rs !== undefined) return (f) => f[ls] / f[rs]
+      if (ls !== undefined && rc !== undefined) return (f) => f[ls] / rc
+      if (lc !== undefined && rs !== undefined) return (f) => lc / f[rs]
+      if (ls !== undefined) return (f) => f[ls] / r(f)
+      if (rs !== undefined) return (f) => l(f) / f[rs]
+      if (lp !== undefined) return (f) => values[lp] / r(f)
+      if (rp !== undefined) return (f) => l(f) / values[rp]
+      if (lc !== undefined) return (f) => lc / r(f)
+      if (rc !== undefined) return (f) => l(f) / rc
+      return (f) => l(f) / r(f)
+    case '^':
+      if (ls !== undefined && rc !== undefined) return (f) => Math.pow(f[ls], rc)
+      if (ls !== undefined) return (f) => Math.pow(f[ls], r(f))
+      if (rc !== undefined) return (f) => Math.pow(l(f), rc)
+      return (f) => Math.pow(l(f), r(f))
+  }
+}
+
 function cycleError(stack: readonly string[], name: string): CompileError {
   const loop = stack.slice(stack.indexOf(name))
   const names = [...new Set(loop)]
@@ -210,17 +300,33 @@ function cycleError(stack: readonly string[], name: string): CompileError {
   return new CompileError(message, names)
 }
 
-function inlineBody(name: string, fn: MathFunction, args: readonly Node[], ctx: Ctx): Node {
+function inlineBody(name: string, fn: MathFunction, args: Node[], ctx: Ctx): Node {
   if (ctx.stack.includes(name)) throw cycleError(ctx.stack, name)
   if (isVectorBody(fn.body)) {
     throw new CompileError(`"${name}" is vector-valued and cannot be used as a number`, [name])
   }
-  const slots = fn.params.map(() => ctx.slots++)
+  // An argument that already lives in a frame slot (a bound variable, or an
+  // outer call's parameter) is aliased: nothing writes that slot while this
+  // body runs, so reading it is reading the argument. Every other argument is
+  // evaluated once into a fresh let-slot.
   const bound = new Map<string, number>()
-  fn.params.forEach((param, i) => bound.set(param, slots[i]))
+  const writes: Node[] = []
+  const slots: number[] = []
+  fn.params.forEach((param, i) => {
+    const alias = args[i]?.slot
+    if (alias !== undefined) {
+      bound.set(param, alias)
+      return
+    }
+    const slot = ctx.slots++
+    bound.set(param, slot)
+    writes.push(args[i])
+    slots.push(slot)
+  })
   ctx.stack.push(name)
   const body = compileNode(fn.body, { bound }, ctx)
   ctx.stack.pop()
+  args = writes
 
   switch (args.length) {
     case 0:
@@ -262,13 +368,10 @@ function inlineBody(name: string, fn: MathFunction, args: readonly Node[], ctx: 
 
 function compileVar(name: string, env: Env, ctx: Ctx): Node {
   const slot = env.bound.get(name)
-  if (slot !== undefined) return (f) => f[slot]
+  if (slot !== undefined) return slotLeaf(slot)
 
   const param = ctx.scope.params.index.get(name)
-  if (param !== undefined) {
-    const values = ctx.scope.params.values
-    return () => values[param]
-  }
+  if (param !== undefined) return paramLeaf(ctx.scope.params.values, param)
 
   const fn = ctx.scope.functions.get(name)
   if (fn) {
@@ -278,8 +381,8 @@ function compileVar(name: string, env: Env, ctx: Ctx): Node {
     return inlineBody(name, fn, [], ctx)
   }
 
-  if (name === 'pi') return () => Math.PI
-  if (name === 'e') return () => Math.E
+  if (name === 'pi') return constantLeaf(Math.PI)
+  if (name === 'e') return constantLeaf(Math.E)
   throw new CompileError(`Unknown variable "${name}"`, [name])
 }
 
@@ -311,33 +414,17 @@ function compileCall(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
 
 function compileNode(expr: Expr, env: Env, ctx: Ctx): Node {
   switch (expr.kind) {
-    case 'num': {
-      const v = expr.value
-      return () => v
-    }
+    case 'num':
+      return constantLeaf(expr.value)
     case 'var':
       return compileVar(expr.name, env, ctx)
     case 'unary': {
       const a = compileNode(expr.arg, env, ctx)
-      return (f) => -a(f)
+      const s = a.slot
+      return s !== undefined ? (f) => -f[s] : (f) => -a(f)
     }
-    case 'binary': {
-      const l = compileNode(expr.left, env, ctx)
-      const r = compileNode(expr.right, env, ctx)
-      switch (expr.op) {
-        case '+':
-          return (f) => l(f) + r(f)
-        case '-':
-          return (f) => l(f) - r(f)
-        case '*':
-          return (f) => l(f) * r(f)
-        case '/':
-          return (f) => l(f) / r(f)
-        case '^':
-          return (f) => Math.pow(l(f), r(f))
-      }
-      break
-    }
+    case 'binary':
+      return binaryNode(expr.op, compileNode(expr.left, env, ctx), compileNode(expr.right, env, ctx), ctx.scope.params.values)
     case 'call':
       return compileCall(expr, env, ctx)
   }
