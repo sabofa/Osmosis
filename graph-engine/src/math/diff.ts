@@ -172,8 +172,12 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       result = substitute(own, back)
     }
     partials.forEach((partial, i) => {
+      // Every argument is differentiated, so an error inside one (a cycle, an
+      // unknown name) is reported even when f ignores it; only the term of a
+      // zero partial is left out.
+      const argument = differentiate(args[i], v, scope, ctx)
       if (partial.kind === 'num' && partial.value === 0) return
-      result = add(result, mul(substitute(partial, back), differentiate(args[i], v, scope, ctx)))
+      result = add(result, mul(substitute(partial, back), argument))
     })
     return result
   }

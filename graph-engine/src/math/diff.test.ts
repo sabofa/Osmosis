@@ -334,3 +334,23 @@ describe('diff stays linear in the nesting when v is not read by the bodies (fix
     expect(fx(1, 2)).toBe(16384)
   }, 30000)
 })
+
+describe('an argument whose partial is 0 is still differentiated (fix round 3, item 2)', () => {
+  // f ignores y, so df/dy = 0; the argument m is a cyclic constant all the
+  // same, and diff must say so rather than skip it.
+  it('diff(f(t, m), t) with f(x, y) = x and m = n + 1, n = m throws the cycle', () => {
+    const scope = makeScope({
+      functions: [
+        ['f', fn(['x', 'y'], 'x')],
+        ['m', fn([], 'n + 1')],
+        ['n', fn([], 'm')],
+      ],
+    })
+    expect(() => diff(p('f(t, m)'), 't', scope)).toThrow(/"m" and "n" are defined in terms of each other/)
+  })
+
+  it('and an unknown function in such an argument', () => {
+    const scope = makeScope({ functions: [['f', fn(['x', 'y'], 'x')]] })
+    expect(() => diff(p('f(t, frob(t))'), 't', scope)).toThrow(/frob/)
+  })
+})
