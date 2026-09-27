@@ -494,6 +494,412 @@ export function compileScalar(expr: Expr, vars: readonly string[], scope: MathSc
 
 // Compiles three component expressions sharing one frame. Bound variables are
 // written once per call; each component's let-slots are its own.
+// ---------------------------------------------------------------------------
+// compileMany: a straight-line register program
+// ---------------------------------------------------------------------------
+//
+// Several expressions over the same variables, compiled to ONE flat program:
+// every node is one instruction writing its own register, so a subexpression
+// that occurs again at the top level (a surface and its partials share cos u,
+// sin v, ...) reuses the register instead of being computed again, and the
+// hot loop is a switch over opcodes with no closure calls — closure trees go
+// megamorphic once a scene holds many of them, which is what kept re-sampling
+// over budget. Every output is exactly what compileScalar gives: each node is
+// the same IEEE operation on the same operands (trig in degrees multiplies by
+// pi/180 first, inverse trig by 180/pi after, as the closures do), and nothing
+// has a side effect to reorder. User functions inline into fresh registers
+// (an argument is evaluated once); parameters are read once per call, at its
+// start; names resolve as in compileScalar, with the same refusals.
+
+// Writes one number per compiled expression into `out` and returns it.
+// `instructions` is the program's length, for tests and profiling.
+export type CompiledMany = ((out: Float64Array, a?: number, b?: number, c?: number) => Float64Array) & { readonly instructions: number }
+
+const OP_ADD = 0
+const OP_SUB = 1
+const OP_MUL = 2
+const OP_DIV = 3
+const OP_POW = 4
+const OP_NEG = 5
+const OP_SIN = 6
+const OP_COS = 7
+const OP_TAN = 8
+const OP_SQRT = 9
+const OP_ABS = 10
+const OP_EXP = 11
+const OP_LN = 12
+const OP_ATAN2 = 13
+const OP_MIN = 14
+const OP_MAX = 15
+const OP_CALL1 = 16
+const OP_CALL2 = 17
+const OP_HYPOT2 = 18
+const OP_HYPOT3 = 19
+const OP_HYPOTN = 20
+const OP_COPY = 21
+
+// The built-ins without an opcode of their own, as the closures compute them.
+const UNARY_TABLE: readonly ((v: number) => number)[] = [
+  (v) => 1 / Math.cos(v),
+  (v) => 1 / Math.sin(v),
+  (v) => 1 / Math.tan(v),
+  Math.asin,
+  Math.acos,
+  Math.atan,
+  Math.sinh,
+  Math.cosh,
+  Math.tanh,
+  Math.asinh,
+  Math.acosh,
+  Math.atanh,
+  Math.floor,
+  Math.ceil,
+  roundHalfAway,
+  Math.sign,
+  Math.log10,
+]
+const UNARY_INDEX: ReadonlyMap<string, number> = new Map(
+  ['sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'floor', 'ceil', 'round', 'sign', 'log10'].map((n, i) => [n, i])
+)
+const BINARY_TABLE: readonly ((x: number, y: number) => number)[] = [(x, y) => Math.log(x) / Math.log(y), floorMod]
+
+// Instruction layout: [op, dst, a, b, c].
+const WIDTH = 5
+
+class ProgramBuilder {
+  readonly code: number[] = []
+  readonly initial: number[] = []
+  readonly params: [number, number][] = []
+  private registers: number
+  private readonly constants = new Map<string, number>()
+  private readonly paramRegister = new Map<number, number>()
+
+  constructor(inputs: number) {
+    this.registers = inputs
+    for (let i = 0; i < inputs; i++) this.initial.push(0)
+  }
+
+  private fresh(value = 0): number {
+    this.initial.push(value)
+    return this.registers++
+  }
+
+  constant(value: number): number {
+    const k = Object.is(value, -0) ? '-0' : String(value)
+    let r = this.constants.get(k)
+    if (r === undefined) {
+      r = this.fresh(value)
+      this.constants.set(k, r)
+    }
+    return r
+  }
+
+  param(index: number): number {
+    let r = this.paramRegister.get(index)
+    if (r === undefined) {
+      r = this.fresh()
+      this.paramRegister.set(index, r)
+      this.params.push([r, index])
+    }
+    return r
+  }
+
+  emit(op: number, a: number, b = 0, c = 0): number {
+    const dst = this.fresh()
+    this.code.push(op, dst, a, b, c)
+    return dst
+  }
+
+  // n consecutive registers, for Math.hypot of more than three arguments.
+  block(n: number): number {
+    const first = this.registers
+    for (let i = 0; i < n; i++) this.fresh()
+    return first
+  }
+
+  copy(dst: number, src: number) {
+    this.code.push(OP_COPY, dst, src, 0, 0)
+  }
+
+  get size(): number {
+    return this.registers
+  }
+}
+
+interface ProgramCtx {
+  scope: MathScope
+  program: ProgramBuilder
+  stack: string[]
+  top: ReadonlyMap<string, number>
+  key: (e: Expr) => string
+  // register of each top-level subexpression already computed
+  seen: Map<string, number>
+}
+
+function programVar(name: string, bound: ReadonlyMap<string, number>, ctx: ProgramCtx): number {
+  const slot = bound.get(name)
+  if (slot !== undefined) return slot
+  const param = ctx.scope.params.index.get(name)
+  if (param !== undefined) return ctx.program.param(param)
+  const fn = ctx.scope.functions.get(name)
+  if (fn) {
+    if (fn.params.length > 0) {
+      throw new CompileError(`"${name}" is a function of ${fn.params.length} variable${fn.params.length === 1 ? '' : 's'} — call it as ${name}(${fn.params.join(', ')})`, [name])
+    }
+    return programInline(name, fn, [], ctx)
+  }
+  if (name === 'pi') return ctx.program.constant(Math.PI)
+  if (name === 'e') return ctx.program.constant(Math.E)
+  throw new CompileError(`Unknown variable "${name}"`, [name])
+}
+
+function programInline(name: string, fn: MathFunction, args: number[], ctx: ProgramCtx): number {
+  if (ctx.stack.includes(name)) throw cycleError(ctx.stack, name)
+  if (isVectorBody(fn.body)) throw new CompileError(`"${name}" is vector-valued and cannot be used as a number`, [name])
+  const bound = new Map<string, number>()
+  fn.params.forEach((param, i) => bound.set(param, args[i]))
+  ctx.stack.push(name)
+  const r = programNode(fn.body, bound, ctx)
+  ctx.stack.pop()
+  return r
+}
+
+function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, number>, ctx: ProgramCtx): number {
+  const { name } = expr
+  const p = ctx.program
+  const fn = ctx.scope.functions.get(name)
+  if (fn) {
+    if (expr.args.length !== fn.params.length) {
+      throw new CompileError(`"${name}" takes ${arityText(fn.params.length, fn.params.length)}, got ${expr.args.length}`, [name])
+    }
+    if (isVectorBody(fn.body)) throw new CompileError(`"${name}" is vector-valued and cannot be used as a number`, [name])
+    if (ctx.stack.includes(name)) throw cycleError(ctx.stack, name)
+    return programInline(
+      name,
+      fn,
+      expr.args.map((arg) => programNode(arg, bound, ctx)),
+      ctx
+    )
+  }
+  const builtin = BUILTINS.get(name)
+  if (!builtin) throw new CompileError(`Unknown function "${name}"`, [name])
+  if (expr.args.length < builtin.min || expr.args.length > builtin.max) {
+    throw new CompileError(`"${name}" takes ${arityText(builtin.min, builtin.max)}, got ${expr.args.length}`, [name])
+  }
+  const args = expr.args.map((arg) => programNode(arg, bound, ctx))
+  const degrees = ctx.scope.angle === 'degrees'
+  const toRadians = (r: number) => (degrees ? p.emit(OP_MUL, r, p.constant(DEG)) : r)
+  const toDegrees = (r: number) => (degrees ? p.emit(OP_MUL, r, p.constant(TO_DEG)) : r)
+  const [a, b] = args
+  switch (name) {
+    case 'sin':
+      return p.emit(OP_SIN, toRadians(a))
+    case 'cos':
+      return p.emit(OP_COS, toRadians(a))
+    case 'tan':
+      return p.emit(OP_TAN, toRadians(a))
+    case 'sec':
+    case 'csc':
+    case 'cot':
+      return p.emit(OP_CALL1, toRadians(a), UNARY_INDEX.get(name)!)
+    case 'asin':
+    case 'acos':
+    case 'atan':
+      return toDegrees(p.emit(OP_CALL1, a, UNARY_INDEX.get(name)!))
+    case 'atan2':
+      return toDegrees(p.emit(OP_ATAN2, a, b))
+    case 'sqrt':
+      return p.emit(OP_SQRT, a)
+    case 'abs':
+      return p.emit(OP_ABS, a)
+    case 'exp':
+      return p.emit(OP_EXP, a)
+    case 'ln':
+      return p.emit(OP_LN, a)
+    case 'log':
+      return args.length === 2 ? p.emit(OP_CALL2, a, b, 0) : p.emit(OP_CALL1, a, UNARY_INDEX.get('log10')!)
+    case 'mod':
+      return p.emit(OP_CALL2, a, b, 1)
+    case 'min':
+    case 'max': {
+      let acc = a
+      for (let i = 1; i < args.length; i++) acc = p.emit(name === 'min' ? OP_MIN : OP_MAX, acc, args[i])
+      return acc
+    }
+    case 'hypot': {
+      if (args.length === 2) return p.emit(OP_HYPOT2, a, b)
+      if (args.length === 3) return p.emit(OP_HYPOT3, a, b, args[2])
+      const first = p.block(args.length)
+      args.forEach((r, i) => p.copy(first + i, r))
+      return p.emit(OP_HYPOTN, first, args.length)
+    }
+    default:
+      return p.emit(OP_CALL1, a, UNARY_INDEX.get(name)!)
+  }
+}
+
+function programNode(expr: Expr, bound: ReadonlyMap<string, number>, ctx: ProgramCtx): number {
+  // A repeated subexpression at the top level reuses its register.
+  const top = bound === ctx.top && expr.kind !== 'num' && expr.kind !== 'var'
+  const k = top ? ctx.key(expr) : ''
+  if (top) {
+    const known = ctx.seen.get(k)
+    if (known !== undefined) return known
+  }
+  let r: number
+  switch (expr.kind) {
+    case 'num':
+      return ctx.program.constant(expr.value)
+    case 'var':
+      return programVar(expr.name, bound, ctx)
+    case 'unary':
+      r = ctx.program.emit(OP_NEG, programNode(expr.arg, bound, ctx))
+      break
+    case 'binary': {
+      const l = programNode(expr.left, bound, ctx)
+      const rr = programNode(expr.right, bound, ctx)
+      const op = expr.op === '+' ? OP_ADD : expr.op === '-' ? OP_SUB : expr.op === '*' ? OP_MUL : expr.op === '/' ? OP_DIV : OP_POW
+      r = ctx.program.emit(op, l, rr)
+      break
+    }
+    case 'call':
+      r = programCall(expr, bound, ctx)
+      break
+  }
+  if (top) ctx.seen.set(k, r)
+  return r
+}
+
+// A structural key per Expr node, memoised; -0 and 0 differ (x*0 and x*-0 do).
+function structuralKeys(): (e: Expr) => string {
+  const memo = new Map<Expr, string>()
+  const key = (e: Expr): string => {
+    const known = memo.get(e)
+    if (known !== undefined) return known
+    let k: string
+    switch (e.kind) {
+      case 'num':
+        k = Object.is(e.value, -0) ? '#-0' : `#${e.value}`
+        break
+      case 'var':
+        k = e.name
+        break
+      case 'unary':
+        k = `-(${key(e.arg)})`
+        break
+      case 'binary':
+        k = `(${key(e.left)}${e.op}${key(e.right)})`
+        break
+      case 'call':
+        k = `${e.name}(${e.args.map(key).join(',')})`
+        break
+    }
+    memo.set(e, k)
+    return k
+  }
+  return key
+}
+
+export function compileMany(exprs: readonly Expr[], vars: readonly string[], scope: MathScope): CompiledMany {
+  const env = bindVars(vars)
+  const program = new ProgramBuilder(vars.length)
+  const ctx: ProgramCtx = { scope, program, stack: [], top: env.bound, key: structuralKeys(), seen: new Map() }
+  const outputs = Int32Array.from(exprs.map((e) => programNode(e, env.bound, ctx)))
+  const code = Int32Array.from(program.code)
+  const reg = Float64Array.from(program.initial)
+  const paramRegs = Int32Array.from(program.params.map(([r]) => r))
+  const paramIndex = Int32Array.from(program.params.map(([, i]) => i))
+  const values = scope.params.values
+  const inputs = vars.length
+  const scratch: number[] = []
+  const run = (out: Float64Array, a?: number, b?: number, c?: number): Float64Array => {
+    if (inputs > 0) reg[0] = a as number
+    if (inputs > 1) reg[1] = b as number
+    if (inputs > 2) reg[2] = c as number
+    for (let i = 0; i < paramRegs.length; i++) reg[paramRegs[i]] = values[paramIndex[i]]
+    for (let pc = 0; pc < code.length; pc += WIDTH) {
+      const d = code[pc + 1]
+      const x = code[pc + 2]
+      const y = code[pc + 3]
+      switch (code[pc]) {
+        case OP_ADD:
+          reg[d] = reg[x] + reg[y]
+          break
+        case OP_SUB:
+          reg[d] = reg[x] - reg[y]
+          break
+        case OP_MUL:
+          reg[d] = reg[x] * reg[y]
+          break
+        case OP_DIV:
+          reg[d] = reg[x] / reg[y]
+          break
+        case OP_POW:
+          reg[d] = Math.pow(reg[x], reg[y])
+          break
+        case OP_NEG:
+          reg[d] = -reg[x]
+          break
+        case OP_SIN:
+          reg[d] = Math.sin(reg[x])
+          break
+        case OP_COS:
+          reg[d] = Math.cos(reg[x])
+          break
+        case OP_TAN:
+          reg[d] = Math.tan(reg[x])
+          break
+        case OP_SQRT:
+          reg[d] = Math.sqrt(reg[x])
+          break
+        case OP_ABS:
+          reg[d] = Math.abs(reg[x])
+          break
+        case OP_EXP:
+          reg[d] = Math.exp(reg[x])
+          break
+        case OP_LN:
+          reg[d] = Math.log(reg[x])
+          break
+        case OP_ATAN2:
+          reg[d] = Math.atan2(reg[x], reg[y])
+          break
+        case OP_MIN:
+          reg[d] = Math.min(reg[x], reg[y])
+          break
+        case OP_MAX:
+          reg[d] = Math.max(reg[x], reg[y])
+          break
+        case OP_CALL1:
+          reg[d] = UNARY_TABLE[y](reg[x])
+          break
+        case OP_CALL2:
+          reg[d] = BINARY_TABLE[code[pc + 4]](reg[x], reg[y])
+          break
+        case OP_HYPOT2:
+          reg[d] = Math.hypot(reg[x], reg[y])
+          break
+        case OP_HYPOT3:
+          reg[d] = Math.hypot(reg[x], reg[y], reg[code[pc + 4]])
+          break
+        case OP_COPY:
+          reg[d] = reg[x]
+          break
+        case OP_HYPOTN: {
+          // Math.hypot over the block of y registers starting at x.
+          scratch.length = y
+          for (let i = 0; i < y; i++) scratch[i] = reg[x + i]
+          reg[d] = Math.hypot(...scratch)
+          break
+        }
+      }
+    }
+    for (let i = 0; i < outputs.length; i++) out[i] = reg[outputs[i]]
+    return out
+  }
+  return Object.assign(run, { instructions: code.length / WIDTH })
+}
+
 export function compileVector(exprs: readonly [Expr, Expr, Expr], vars: readonly string[], scope: MathScope): CompiledVec {
   const env = bindVars(vars)
   const ctx: Ctx = { scope, slots: vars.length, stack: [] }

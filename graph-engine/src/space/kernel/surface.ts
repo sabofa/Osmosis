@@ -12,7 +12,7 @@
 
 import type { GraphConfig } from '../../parser/config'
 import type { Expr, Statement } from '../../parser/types'
-import { compileScalar, type CompiledFn } from '../../math/compile'
+import { compileMany, compileScalar, type CompiledFn, type CompiledMany } from '../../math/compile'
 import { diff } from '../../math/diff'
 import { call, mul, substitute, variable, varNames } from '../../math/expr'
 import type { MathScope } from '../../math/scope'
@@ -46,10 +46,14 @@ function surfaceParts(statement: Statement): { body: Expr; domain: Domain | null
   throw new Error(`not a surface: ${statement.kind}`)
 }
 
-// d/d(bound i) of an expression already renamed to $0, $1, compiled.
+// d/d(bound i) of an expression already renamed to $0, $1: the Expr, and
+// compiled on its own (for a pick).
+function partialExpr(expr: Expr, i: number, scope: MathScope): Expr {
+  return simplify(diff(expr, boundNames(2)[i], scope))
+}
+
 function partial(expr: Expr, i: number, scope: MathScope): CompiledFn {
-  const vars = boundNames(2)
-  return compileScalar(simplify(diff(expr, vars[i], scope)), vars, scope)
+  return compileScalar(partialExpr(expr, i, scope), boundNames(2), scope)
 }
 
 // h(x, y) <= 0 inside, for each comparison of each condition.
@@ -125,9 +129,11 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
   const vars = boundNames(2)
   const sampler = prepareDomain(domain, config, scope, reads, n)
 
-  // z and its normal at a sample (a, b): (x, y) or (r, theta).
-  let height: CompiledFn
-  let normal: (a: number, b: number, out: Float64Array) => void
+  // At a sample (a, b) — (x, y), or (r, theta) — the body and its two
+  // partials, in one frame (they share most of their terms), and the normal
+  // made from them.
+  let sample: CompiledMany
+  let normal: (a: number, b: number, s: Float64Array, out: Float64Array) => void
   let pick: SurfacePick
   const angle = scope.angle === 'degrees' ? Math.PI / 180 : 1
   if (polar) {
@@ -142,14 +148,13 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
       ),
       ['r', 'theta']
     )
-    height = compileScalar(polarBody, vars, scope)
-    const gr = partial(polarBody, 0, scope)
-    const gt = partial(polarBody, 1, scope)
-    normal = (r, theta, out) => {
+    const height = compileScalar(polarBody, vars, scope)
+    sample = compileMany([polarBody, partialExpr(polarBody, 0, scope), partialExpr(polarBody, 1, scope)], vars, scope)
+    normal = (r, theta, g, out) => {
       const c = Math.cos(theta * angle)
       const s = Math.sin(theta * angle)
-      const dr = gr(r, theta)
-      const dt = gt(r, theta) / (r * angle)
+      const dr = g[1]
+      const dt = g[2] / (r * angle)
       out[0] = -(dr * c - dt * s)
       out[1] = -(dr * s + dt * c)
       out[2] = 1
@@ -169,15 +174,16 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
   } else {
     reads.add(body, ['x', 'y'])
     const xyBody = renameBound(body, ['x', 'y'])
-    height = compileScalar(xyBody, vars, scope)
-    const fx = partial(xyBody, 0, scope)
-    const fy = partial(xyBody, 1, scope)
-    normal = (x, y, out) => {
-      out[0] = -fx(x, y)
-      out[1] = -fy(x, y)
+    sample = compileMany([xyBody, partialExpr(xyBody, 0, scope), partialExpr(xyBody, 1, scope)], vars, scope)
+    normal = (_x, _y, g, out) => {
+      out[0] = -g[1]
+      out[1] = -g[2]
       out[2] = 1
     }
-    pick = { kind: 'graph', f: (x, y) => height(x, y), fx: (x, y) => fx(x, y), fy: (x, y) => fy(x, y) }
+    const f = compileScalar(xyBody, vars, scope)
+    const fx = partial(xyBody, 0, scope)
+    const fy = partial(xyBody, 1, scope)
+    pick = { kind: 'graph', f: (x, y) => f(x, y), fx: (x, y) => fx(x, y), fy: (x, y) => fy(x, y) }
   }
 
   const clause = surfaceColormap(statement)
@@ -194,13 +200,17 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
     const normals = new Float64Array(3 * count)
     const uv = new Float64Array(2 * count)
     const out = new Float64Array(3)
+    const g = new Float64Array(3)
     for (let v = 0; v < count; v++) {
       const x = samples.x[v]
       const y = samples.y[v]
+      const a = samples.a[v]
+      const b = samples.b[v]
+      sample(g, a, b)
       positions[3 * v] = x
       positions[3 * v + 1] = y
-      positions[3 * v + 2] = height(samples.a[v], samples.b[v])
-      normal(samples.a[v], samples.b[v], out)
+      positions[3 * v + 2] = g[0]
+      normal(a, b, g, out)
       normals[3 * v] = out[0]
       normals[3 * v + 1] = out[1]
       normals[3 * v + 2] = out[2]

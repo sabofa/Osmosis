@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseExprString } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
-import { CompileError, compileScalar, compileVector, freeVariablesDeep } from './compile'
+import { CompileError, compileMany, compileScalar, compileVector, freeVariablesDeep } from './compile'
 import { makeScope, type MathFunction } from './scope'
 import { evalExpr } from '../parser/evalExpr'
 
@@ -310,5 +310,139 @@ describe('hypot does not overflow (fix round 1, M6)', () => {
   it('and with four arguments: hypot(1, 2, 2, 4) = 5', () => {
     expect(value('hypot(1, 2, 2, 4)')).toBe(5)
     expect(Number.isFinite(value('hypot(10^200, 10^200, 10^200, 10^200)'))).toBe(true)
+  })
+})
+
+describe('compileMany: several outputs in one frame, shared subexpressions once (fix round 1, I2)', () => {
+  it('gives exactly what each compiled alone gives', () => {
+    const scope = makeScope({
+      params: [['a', 1.3]],
+      functions: [['f', fn(['x', 'y'], 'x^2 - y')]],
+    })
+    const texts = ['a cos(u) sin(v)', '-a sin(u) sin(v)', 'a cos(u) cos(v)', 'f(cos(u), sin(v)) + cos(u)', 'hypot(a cos(u), sin(v), 2)', 'cos(u)']
+    const many = compileMany(texts.map(p), ['u', 'v'], scope)
+    const alone = texts.map((t) => compileScalar(p(t), ['u', 'v'], scope))
+    const out = new Float64Array(texts.length)
+    for (const [u, v] of [
+      [0.3, 1.1],
+      [2.9, -0.4],
+      [0, Math.PI],
+    ]) {
+      many(out, u, v)
+      texts.forEach((_, i) => expect(Object.is(out[i], alone[i](u, v))).toBe(true))
+    }
+  })
+
+  it('in degrees too', () => {
+    const scope = makeScope({ angle: 'degrees' })
+    const many = compileMany([p('sin(t)'), p('sin(t) * 2')], ['t'], scope)
+    const out = many(new Float64Array(2), 30)
+    expect(out[1]).toBe(2 * out[0])
+    expect(Math.abs(out[0] - 0.5)).toBeLessThanOrEqual(1e-15)
+  })
+
+  it('computes a subexpression shared across outputs once', () => {
+    // "a*u" appears in all three outputs; with sharing the parameter store is
+    // read once per call, without it three times.
+    let reads = 0
+    const store = new Float64Array([2])
+    const counted = new Proxy(store, {
+      get(target, key) {
+        if (key === '0') reads++
+        return Reflect.get(target, key)
+      },
+    }) as Float64Array
+    const scope = { ...makeScope(), params: { index: new Map([['a', 0]]), values: counted } }
+    const many = compileMany([p('sin(a*u)'), p('cos(a*u)'), p('a*u + 1')], ['u'], scope)
+    const out = new Float64Array(3)
+    reads = 0
+    many(out, 0.5)
+    expect(reads).toBe(1)
+    // a*u once, then sin, cos and + 1: four instructions (six if a*u were
+    // computed for each output)
+    expect(many.instructions).toBe(4)
+    // 2 * 0.5 = 1
+    expect([...out]).toEqual([Math.sin(1), Math.cos(1), 2])
+  })
+
+  it('keeps 0 and -0 apart', () => {
+    const zero: Expr = { kind: 'num', value: 0 }
+    const negativeZero: Expr = { kind: 'num', value: -0 }
+    const x: Expr = { kind: 'var', name: 'x' }
+    const exprs: Expr[] = [
+      { kind: 'binary', op: '*', left: x, right: zero },
+      { kind: 'binary', op: '*', left: x, right: negativeZero },
+    ]
+    const out = compileMany(exprs, ['x'], makeScope())(new Float64Array(2), 3)
+    expect(Object.is(out[0], 0)).toBe(true)
+    expect(Object.is(out[1], -0)).toBe(true)
+  })
+})
+
+describe('compileMany is exact on everything compileScalar compiles (fix round 1, I2)', () => {
+  it('every operator on every operand shape, all in one program, against the 2D evaluator', () => {
+    const operands = ['x', 'y', '2.5', 'a', 'sin(y)', '-x', 'pi']
+    const texts: string[] = []
+    for (const op of ['+', '-', '*', '/', '^']) for (const l of operands) for (const r of operands) texts.push(`(${l}) ${op} (${r})`)
+    const scope = makeScope({ params: [['a', 1.7]] })
+    const many = compileMany(texts.map(p), ['x', 'y'], scope)
+    const out = new Float64Array(texts.length)
+    for (const [x, y] of [
+      [0.7, -1.3],
+      [2, 3],
+      [-0.4, 0.9],
+    ]) {
+      many(out, x, y)
+      texts.forEach((t, i) => expect(Object.is(out[i], evalExpr(p(t), { x, y, a: 1.7 }))).toBe(true))
+    }
+  })
+
+  for (const angle of ['radians', 'degrees'] as const) {
+    it(`every built-in, in ${angle}, against compileScalar`, () => {
+      const scope = makeScope({
+        angle,
+        params: [['a', 0.35]],
+        functions: [
+          ['f', fn(['s', 't'], 's*t - a')],
+          ['k', fn([], '2a')],
+        ],
+      })
+      const texts = [
+        'sin(x)', 'cos(x)', 'tan(x)', 'sec(x)', 'csc(x)', 'cot(x)',
+        'asin(y)', 'acos(y)', 'atan(y)', 'atan2(y, x)',
+        'sinh(x)', 'cosh(x)', 'tanh(x)', 'asinh(x)', 'acosh(x + 2)', 'atanh(y)',
+        'sqrt(x)', 'abs(-x)', 'exp(x)', 'ln(x)', 'log(x)', 'log(x, 3)',
+        'floor(x*7)', 'ceil(x*7)', 'round(x*7)', 'sign(y - 0.5)', 'mod(x*7, 3)', 'mod(-x, 2)',
+        'min(x, y)', 'max(x, y, a)', 'min(x, y, a, k)', 'hypot(x, y)', 'hypot(x, y, a)', 'hypot(x, y, a, k)',
+        'f(x, y) + f(y, x)', 'f(f(x, y), k)', 'k*x', '-(-x)', 'x^y', 'e^x',
+      ]
+      const many = compileMany(texts.map(p), ['x', 'y'], scope)
+      const alone = texts.map((t) => compileScalar(p(t), ['x', 'y'], scope))
+      const out = new Float64Array(texts.length)
+      for (const [x, y] of [
+        [0.3, 0.6],
+        [1.9, -0.25],
+        [0.05, 0.99],
+      ]) {
+        many(out, x, y)
+        texts.forEach((t, i) => {
+          if (!Object.is(out[i], alone[i](x, y))) throw new Error(`${t} at (${x}, ${y}): ${out[i]} vs ${alone[i](x, y)}`)
+        })
+      }
+    })
+  }
+
+  it('refuses what compileScalar refuses', () => {
+    const scope = makeScope({ functions: [['f', fn(['x'], 'g(x)')], ['g', fn(['x'], 'f(x)')]] })
+    expect(() => compileMany([p('w')], ['x'], makeScope())).toThrow(/"w"/)
+    expect(() => compileMany([p('f(x)')], ['x'], scope)).toThrow(CompileError)
+    expect(() => compileMany([p('atan2(x)')], ['x'], makeScope())).toThrow(/atan2/)
+  })
+
+  it('reads a parameter at call time', () => {
+    const scope = makeScope({ params: [['a', 1]] })
+    const many = compileMany([p('a*x')], ['x'], scope)
+    scope.params.values[0] = 4
+    expect(many(new Float64Array(1), 2)[0]).toBe(8)
   })
 })

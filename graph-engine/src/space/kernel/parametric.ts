@@ -5,7 +5,7 @@
 // and a parametric pick.
 
 import type { Expr, Statement } from '../../parser/types'
-import { compileScalar, compileVector, type CompiledFn } from '../../math/compile'
+import { compileMany, compileScalar, compileVector, type CompiledFn } from '../../math/compile'
 import { diff } from '../../math/diff'
 import { simplify } from '../../math/simplify'
 import { niceStep } from '../frame/nice'
@@ -52,10 +52,11 @@ function preparedParametric(statement: Statement, context: BuildContext): Prepar
     reads.add(e, [u.param, v.param])
     return renameBound(e, [u.param, v.param])
   }) as [Expr, Expr, Expr]
+  // r (for the pick), and r, r_u, r_v in one frame for sampling: they share
+  // most of their terms, which compileMany computes once per vertex.
   const r = compileVector(renamed, vars, scope)
-  const derivative = (i: number) => compileVector(renamed.map((e) => simplify(diff(e, vars[i], scope))) as [Expr, Expr, Expr], vars, scope)
-  const ru = derivative(0)
-  const rv = derivative(1)
+  const partial = (i: number) => renamed.map((e) => simplify(diff(e, vars[i], scope)))
+  const sample = compileMany([...renamed, ...partial(0), ...partial(1)], vars, scope)
   const [u0, u1, v0, v1] = [u.from, u.to, v.from, v.to].map((e) => {
     reads.add(e)
     return constant(e, scope)
@@ -74,24 +75,21 @@ function preparedParametric(statement: Statement, context: BuildContext): Prepar
     const positions = new Float64Array(3 * count)
     const normals = new Float64Array(3 * count)
     const uv = new Float64Array(2 * count)
-    const p = new Float64Array(3)
-    const du = new Float64Array(3)
-    const dv = new Float64Array(3)
+    // x y z, then r_u, then r_v
+    const s = new Float64Array(9)
     for (let j = 0; j <= n; j++) {
       const vv = va + (vb - va) * (j / n)
       for (let i = 0; i <= n; i++) {
         const uu = ua + (ub - ua) * (i / n)
         const k = j * (n + 1) + i
-        r(p, uu, vv)
-        ru(du, uu, vv)
-        rv(dv, uu, vv)
-        positions[3 * k] = p[0]
-        positions[3 * k + 1] = p[1]
-        positions[3 * k + 2] = p[2]
+        sample(s, uu, vv)
+        positions[3 * k] = s[0]
+        positions[3 * k + 1] = s[1]
+        positions[3 * k + 2] = s[2]
         // r_u x r_v
-        normals[3 * k] = du[1] * dv[2] - du[2] * dv[1]
-        normals[3 * k + 1] = du[2] * dv[0] - du[0] * dv[2]
-        normals[3 * k + 2] = du[0] * dv[1] - du[1] * dv[0]
+        normals[3 * k] = s[4] * s[8] - s[5] * s[7]
+        normals[3 * k + 1] = s[5] * s[6] - s[3] * s[8]
+        normals[3 * k + 2] = s[3] * s[7] - s[4] * s[6]
         uv[2 * k] = uu
         uv[2 * k + 1] = vv
       }
