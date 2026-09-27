@@ -15,7 +15,7 @@ const AXES = frameAxes(defaultSpaceConfig(), CUBE)
 const cam = (azimuth: number, zoom = 1) =>
   cameraMatrices({ azimuth, elevation: 25, zoom, target: [0, 0, 0] }, WORLD, { width: 800, height: 600 }, 'orthographic')
 
-const EMPTY: FrameModel = { lines: [], labels: [], key: 'none' }
+const EMPTY: FrameModel = { style: 'none', lines: [], labels: [], key: 'none' }
 
 describe('layoutLabels', () => {
   it('places a frame label at its projection plus its screen offset', () => {

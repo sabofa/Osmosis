@@ -153,5 +153,5 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
     zEdge[1] === box.y.min ? 0 : 1,
     zTickAxis,
   ].join(':')
-  return { lines, labels, key }
+  return { style: 'box', lines, labels, key }
 }

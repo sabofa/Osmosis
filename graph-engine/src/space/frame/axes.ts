@@ -89,5 +89,5 @@ export function axesFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAx
     labels.push({ key: `title:${NAMES[axis]}`, position: b, screenOffset: [dir[0] * reach, dir[1] * reach], text: spec.title, role: 'title' })
   }
 
-  return { lines, labels, key: `${frameGeometryKey('axes', world, axes)}|${tickAxes.join('')}` }
+  return { style: 'axes', lines, labels, key: `${frameGeometryKey('axes', world, axes)}|${tickAxes.join('')}` }
 }

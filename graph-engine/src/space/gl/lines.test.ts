@@ -11,7 +11,7 @@ import { arrowMark, curveMark, lineMark, meshMark, pointMark, scene } from '../t
 import { spaceColors } from '../theme'
 import { ARROWHEAD_PROGRAM, arrowHeadKind } from './arrowPipeline'
 import { ARROW_HEAD_GLSL, DOT_DIAMETER_PX } from './arrowHead'
-import { LINE_PROGRAM } from './linePipeline'
+import { FRAME_DEPTH_BIAS, frameDepthBias, LINE_DEPTH_BIAS, LINE_PROGRAM } from './linePipeline'
 import { GlBackend } from './backend'
 import { cumulativeScreenLength, dashUniform } from './dash'
 import { createFakeGl, fakeCanvas, type FakeDraw, type FakeGl } from './fakeGl'
@@ -346,6 +346,34 @@ describe('the frame, drawn', () => {
     }
     // The frame (grid, walls, ticks; core pass then fringe pass), then the curve's two passes.
     expect(atDraw.map(Math.sign)).toEqual([-1, -1, -1, -1, -1, -1, 1, 1])
+  })
+
+  it("draws the axes frame's axes, heads and ticks as content, with the marks' forward bias", () => {
+    // Textbook axes are content: an axis lying in z = 0 or on z = xy must not
+    // lose to the surface.
+    const { fake, backend } = setup()
+    backend.setScene(scene([]), WORLD, LIGHT)
+    backend.setFrame(axesFrame(WORLD, CAMERA, AXES), LIGHT)
+    backend.draw(CAMERA, 1)
+    const bias = new Map<unknown, number>()
+    let program: unknown = null
+    const atDraw: [string, number][] = []
+    for (const c of fake.calls) {
+      if (c.fn === 'useProgram') program = c.args[0]
+      if (c.fn === 'uniform1f' && (c.args[0] as { uniform: string }).uniform === 'u_depthBias') bias.set(program, c.args[1] as number)
+      if (c.fn === 'drawArraysInstanced') atDraw.push([pipeline(fake, { program } as FakeDraw), bias.get(program)!])
+    }
+    expect(atDraw.length).toBeGreaterThan(0)
+    for (const [, b] of atDraw) expect(b).toBe(LINE_DEPTH_BIAS)
+    expect(new Set(atDraw.map(([p]) => p))).toEqual(new Set(['line', 'arrowhead']))
+  })
+
+  it('chooses the frame bias by style: the box behind data, the axes as content', () => {
+    expect(frameDepthBias('box')).toBe(FRAME_DEPTH_BIAS)
+    expect(FRAME_DEPTH_BIAS).toBeLessThan(0)
+    expect(frameDepthBias('axes')).toBe(LINE_DEPTH_BIAS)
+    expect(boxFrame(WORLD, CAMERA, AXES).style).toBe('box')
+    expect(axesFrame(WORLD, CAMERA, AXES).style).toBe('axes')
   })
 
   it('frees everything, frame included, on dispose', () => {

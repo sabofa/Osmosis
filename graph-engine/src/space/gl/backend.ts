@@ -23,7 +23,7 @@ import {
   cameraKey,
   createSharedQuads,
   drawLines,
-  FRAME_DEPTH_BIAS,
+  frameDepthBias,
   LINE_PROGRAM,
   updateDashes,
   uploadLines,
@@ -51,6 +51,7 @@ type MarkGpu =
 type CachedMark = MarkGpu & GpuResource
 
 interface FrameGpu extends GpuResource {
+  style: FrameModel['style']
   lines: LineGpu[]
   arrows: ArrowGpu[]
 }
@@ -219,10 +220,12 @@ export class GlBackend {
         gl.disable(gl.BLEND)
       }
 
-      // The frame, first, biased behind data that meets the walls.
+      // The frame, first: a box frame biased behind data that meets its
+      // walls, the axes frame as content.
       gl.disable(gl.BLEND)
       if (this.frameGpu) {
-        antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [], { ...target, depthBias: FRAME_DEPTH_BIAS })
+        const at = { ...target, depthBias: frameDepthBias(this.frameGpu.style) }
+        antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [], at)
       }
 
       // Opaque meshes.
@@ -372,6 +375,7 @@ export class GlBackend {
         if (gpu) arrows.push(gpu)
       }
       this.frameGpu = {
+        style: frame.style,
         lines,
         arrows,
         destroy(g) {

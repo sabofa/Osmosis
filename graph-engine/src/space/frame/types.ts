@@ -4,7 +4,7 @@
 // every frame, because the walls flip and the labels are pushed in screen
 // space.
 
-import type { TickStep } from '../config'
+import type { FrameStyle, TickStep } from '../config'
 import type { Vec3 } from '../scene/types'
 
 // 'wall': a back wall's outline (gridStrong, 1.5 px).
@@ -33,6 +33,9 @@ export interface FrameLabel {
 }
 
 export interface FrameModel {
+  // Which frame this is: the GL layer draws a box frame behind data and the
+  // axes frame as content (linePipeline.ts frameDepthBias).
+  style: FrameStyle
   lines: FrameLine[]
   labels: FrameLabel[]
   // Identifies the line geometry: two models with the same key over the same
@@ -59,7 +62,7 @@ export interface FrameAxes {
   z: FrameAxis
 }
 
-export const EMPTY_FRAME: FrameModel = { lines: [], labels: [], key: 'none' }
+export const EMPTY_FRAME: FrameModel = { style: 'none', lines: [], labels: [], key: 'none' }
 
 // Font sizes (G10), shared by the frame's label geometry and the overlay CSS.
 export const TICK_FONT_PX = 12

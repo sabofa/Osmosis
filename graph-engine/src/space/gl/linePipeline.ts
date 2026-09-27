@@ -3,6 +3,7 @@
 
 import { project, type CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
+import type { FrameStyle } from '../config'
 import type { Vec3 } from '../scene/types'
 import type { Rgb, SpaceColors } from '../theme'
 import { createBuffer, float32, floatAttribute, type GpuResource } from './buffers'
@@ -13,11 +14,18 @@ import { LINE_FRAGMENT, LINE_VERTEX } from './shaders/line'
 export const LINE_PROGRAM = { name: 'line', vertex: LINE_VERTEX, fragment: LINE_FRAGMENT }
 // NDC z subtracted from lines, points and arrowheads so they win against a surface they lie on.
 export const LINE_DEPTH_BIAS = 1e-5
-// The frame's lines go the other way: they lie on the box's walls, where data
-// often ends exactly (a z = f surface's edges, with automatic bounds), and a
-// wall gridline biased forward would poke through that edge. Pushed back, the
-// data wins.
+// The box frame's lines go the other way: they lie on the box's walls, where
+// data often ends exactly (a z = f surface's edges, with automatic bounds),
+// and a wall gridline biased forward would poke through that edge. Pushed
+// back, the data wins.
 export const FRAME_DEPTH_BIAS = -1e-5
+
+// The bias a frame draws with. The box frame (walls, grid, tick edges) sits
+// behind data; the axes frame is content, like a curve: an axis lying in
+// z = 0, or on z = xy, must not lose to the surface.
+export function frameDepthBias(style: FrameStyle): number {
+  return style === 'box' ? FRAME_DEPTH_BIAS : LINE_DEPTH_BIAS
+}
 
 // The corner buffers every instanced quad shares, created once per context.
 export interface SharedQuads extends GpuResource {
