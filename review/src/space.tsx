@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef, useState } from 'react'
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 // Straight from graph-engine's source, like the other review pages: an edit
 // to space shows up here on save.
@@ -8,7 +8,9 @@ import { parseSpec } from '../../graph-engine/src/parser/parseSpec'
 import type { ParseError } from '../../graph-engine/src/parser/types'
 import { DARK_PALETTE, LIGHT_PALETTE } from '../../graph-engine/src/render/palette'
 import type { SpaceView } from '../../graph-engine/src/space/config'
+import type { SpaceEvent } from '../../graph-engine/src/space/events'
 import { SPACE_EXAMPLES } from '../../graph-engine/src/space/examples'
+import { formatNumber, formatPoint } from '../../graph-engine/src/space/pick/format'
 import { SpaceRenderer } from '../../graph-engine/src/space/SpaceRenderer'
 import { SPACE_FIXTURES, type SpaceFixture } from './spaceFixtures'
 import './space.css'
@@ -24,6 +26,8 @@ type Source = { kind: 'spec' } | { kind: 'fixture'; fixture: SpaceFixture }
 // Space's examples, plus the old 3D example, which now draws through space.
 const SPEC_EXAMPLES: Example[] = [...SPACE_EXAMPLES, ...EXAMPLES.filter((e) => e.label === '3D')]
 const REBUILD_DEBOUNCE_MS = 80
+// How many events the log keeps.
+const EVENT_LOG = 10
 
 const palette = (theme: Theme) => (theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
 
@@ -38,6 +42,18 @@ function slug(label: string): string {
 
 function fmt(v: number): string {
   return (Math.round(v * 100) / 100).toString()
+}
+
+// One line of the event log.
+function eventText(e: SpaceEvent): string {
+  switch (e.type) {
+    case 'hover':
+      return e.hit ? `hover ${e.hit.source.object} (${e.hit.kind}) ${formatPoint(e.hit.position)}` : 'hover —'
+    case 'pin':
+      return e.hit ? `pin ${e.action} ${e.hit.source.object} ${formatPoint(e.hit.position)}` : `pin ${e.action}`
+    case 'param':
+      return `param ${e.name} = ${formatNumber(e.value)} (${e.source})`
+  }
 }
 
 function viewText(v: SpaceView | null): string {
@@ -79,16 +95,19 @@ interface StageProps {
   pick: number
   onErrors: (errors: ParseError[]) => void
   onView: (view: SpaceView | null) => void
+  onEvent: (event: SpaceEvent) => void
 }
 
 // SpaceRenderer on a bare canvas. Specs go through setSpec (the kernel);
 // fixtures through setScene.
-function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps) {
+function SpaceStage({ source, spec, theme, pick, onErrors, onView, onEvent }: StageProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<SpaceRenderer | null>(null)
   const lastPick = useRef(-1)
   const themeRef = useRef(theme)
   themeRef.current = theme
+  const onEventRef = useRef(onEvent)
+  onEventRef.current = onEvent
 
   // The canvas is made here, not rendered by React: dispose() releases the
   // WebGL context, and a released canvas cannot be drawn on again, so each
@@ -104,6 +123,7 @@ function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps)
       theme: themeRef.current,
       onError: (message) => onErrors([{ line: 0, message }]),
       onViewChange: onView,
+      onEvent: (event) => onEventRef.current(event),
     })
     rendererRef.current = renderer
     return () => {
@@ -122,7 +142,7 @@ function SpaceStage({ source, spec, theme, pick, onErrors, onView }: StageProps)
         onErrors([])
       } else {
         const parsed = parseSpec(spec)
-        const errors = renderer.setSpec(parsed.statements, parsed.config, parsed.statementLines)
+        const errors = renderer.setSpec(parsed.statements, parsed.config, parsed.statementLines, spec)
         onErrors([...parsed.errors, ...errors].sort((a, b) => a.line - b.line))
       }
       if (lastPick.current !== pick) {
@@ -168,6 +188,8 @@ export default function SpaceReview() {
   const [pick, setPick] = useState(0)
   const [view, setView] = useState<SpaceView | null>(null)
   const [errors, setErrors] = useState<ParseError[]>([])
+  const [events, setEvents] = useState<string[]>([])
+  const onEvent = useCallback((e: SpaceEvent) => setEvents((list) => [...list, eventText(e)].slice(-EVENT_LOG)), [])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -187,7 +209,7 @@ export default function SpaceReview() {
     setUrl({ fixture: f.id, example: null })
   }
   const selectedExample = source.kind === 'spec' ? SPEC_EXAMPLES.find((e) => e.spec === spec) : undefined
-  const stage: StageProps = { source, spec, theme, pick, onErrors: setErrors, onView: setView }
+  const stage: StageProps = { source, spec, theme, pick, onErrors: setErrors, onView: setView, onEvent }
 
   return (
     <div className="space-review">
@@ -198,7 +220,8 @@ export default function SpaceReview() {
           </h1>
           <p className="space-review-hint">
             Drag to orbit, right- or shift-drag to pan, wheel to zoom about the cursor, double-click to reset. With the view focused:
-            arrows orbit, + and − zoom, 0 resets.
+            arrows orbit, + and − zoom, 0 resets. Hover to read a point; click to pin it (click a pin to unpin, Esc clears); drag a
+            point made of @params; ▶ plays a parameter.
           </p>
         </header>
 
@@ -293,6 +316,21 @@ export default function SpaceReview() {
         <section>
           <h2>View</h2>
           <code className="space-review-view">{host === 'space' ? viewText(view) : 'inside GraphViewer'}</code>
+        </section>
+
+        <section>
+          <h2>Events</h2>
+          {host !== 'space' ? (
+            <p className="space-review-hint">GraphViewer reports no events yet.</p>
+          ) : events.length === 0 ? (
+            <p className="space-review-hint">Hover, pin, play or drag: the last {EVENT_LOG} events appear here.</p>
+          ) : (
+            <ol className="space-review-events" aria-label="Events">
+              {events.map((e, i) => (
+                <li key={`${i}:${e}`}>{e}</li>
+              ))}
+            </ol>
+          )}
         </section>
       </aside>
 

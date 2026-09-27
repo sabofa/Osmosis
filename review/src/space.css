@@ -169,6 +169,14 @@ body {
   word-break: break-word;
 }
 
+.space-review-events {
+  margin: 0;
+  padding-left: 22px;
+  font: 11px/1.5 var(--sr-font-mono);
+  color: var(--sr-muted);
+  word-break: break-word;
+}
+
 .space-review-errors {
   margin: 8px 0 0;
   padding-left: 18px;

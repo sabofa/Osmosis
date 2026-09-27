@@ -1,8 +1,7 @@
-// Space's review-harness examples (S1), one per new capability, concatenated
-// onto EXAMPLES by examples.ts. examples.test.ts builds every one through the
-// space kernel and asserts it draws with no errors. Until S2 swaps the
-// renderer, the harness draws them with the old three.js renderer, which does
-// not know the space forms.
+// Space's review-harness examples, one per capability, concatenated onto
+// EXAMPLES by examples.ts. examples.test.ts builds every one through the
+// space kernel and asserts it draws with no errors; space/examples.test.ts
+// checks that each S3 example exercises what its label promises.
 
 import type { Example } from '../examples'
 
@@ -37,6 +36,36 @@ z = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]`,
     label: 'Space · Ticks in multiples of pi',
     spec: `@ticks3d: x pi/2, y pi/2
 z = sin(x) cos(y) for x in [-2*pi, 2*pi], y in [-2*pi, 2*pi]`,
+  },
+  {
+    label: 'Space · A diverging colormap',
+    spec: `z = x^2 - y^2 for x in [-2, 2], y in [-2, 2] colormap: x*y diverging   # balance: blue below 0, red above; see the colorbar`,
+  },
+  {
+    label: 'Space · Play a parameter',
+    spec: `@param k = 1 range [0.5, 3]   # press ▶ beside k; ⟲ ping-pongs
+z = sin(k x) cos(k y) for x in [-3, 3], y in [-3, 3]`,
+  },
+  {
+    label: 'Space · Drag a point on a paraboloid',
+    spec: `@param a = 0.8 range [-2, 2]
+@param b = 0.6 range [-2, 2]
+z = x^2 + y^2 for x in [-2, 2], y in [-2, 2] opacity: 0.6
+P = (a, b, a^2 + b^2)   # drag P: it stays on the surface, and a and b follow`,
+  },
+  {
+    label: 'Space · A helix through a translucent sphere',
+    spec: `(sin(v) cos(u), sin(v) sin(u), cos(v)) for v in [0, pi], u in [0, 2*pi] opacity: 0.4
+(0.6 cos(6t), 0.6 sin(6t), t) for t in [-1.6, 1.6] width: 3   # inside the sphere it reads through it`,
+  },
+  {
+    label: 'Space · A helix behind a surface',
+    spec: `z = x^2 - y^2 for x in [-1.5, 1.5], y in [-1.5, 1.5]
+(1.2 cos(t), 1.2 sin(t), t/3) for t in [-6, 6] width: 3   # faint and dashed where the saddle hides it`,
+  },
+  {
+    label: 'Space · A pole cut by the box',
+    spec: `z = 1/(x^2 + y^2) for x in [-2, 2], y in [-2, 2]   # the box's ceiling cuts it cleanly; hover to read f and its partials`,
   },
   {
     label: 'Space · Axes, points and vectors',
