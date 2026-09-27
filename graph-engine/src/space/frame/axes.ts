@@ -67,7 +67,7 @@ export function axesFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAx
     const half = AXIS_TICK_HALF / world.scale[along]
 
     const items: EdgeTick[] = []
-    for (const v of ticks(r, spec.step)) {
+    for (const v of ticks(r, spec.step, spec.scale)) {
       if (Math.abs(v - origin[axis]) <= 1e-9 * Math.max(spec.step, Math.abs(v))) continue
       const p = with3(origin, axis, v)
       lines.push({ a: with3(p, along, p[along] - half), b: with3(p, along, p[along] + half), role: 'tick' })

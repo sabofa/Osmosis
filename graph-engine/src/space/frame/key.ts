@@ -21,5 +21,8 @@ export function frameGeometryKey(style: string, world: WorldMap, axes: FrameAxes
     axes.x.step,
     axes.y.step,
     axes.z.step,
+    axes.x.scale,
+    axes.y.scale,
+    axes.z.scale,
   ].join(',')
 }

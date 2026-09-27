@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatTick, niceStep, ticks } from './ticks'
+import { defaultSpaceConfig } from '../config'
+import { formatTick, frameAxes, niceStep, ticks } from './ticks'
 
 const PI_HALF = { value: Math.PI / 2, pi: { num: 1, den: 2 } }
 
@@ -21,20 +22,28 @@ describe('niceStep (temporary, until frame/nice.ts lands with S1)', () => {
 })
 
 describe('ticks', () => {
+  it('takes the axis scale, and only linear exists (SP5: log axes slot in later)', () => {
+    expect(ticks({ min: 0, max: 1 }, 0.5, 'linear')).toEqual([0, 0.5, 1])
+    // @ts-expect-error -- 'log' is not a scale yet; it must not compile.
+    ticks({ min: 1, max: 100 }, 1, 'log')
+    const axes = frameAxes(defaultSpaceConfig(), { x: { min: 0, max: 1 }, y: { min: 0, max: 1 }, z: { min: 0, max: 1 } })
+    expect([axes.x.scale, axes.y.scale, axes.z.scale]).toEqual(['linear', 'linear', 'linear'])
+  })
+
   it('[0, 1] step 0.1 yields 11 values, the last exactly 1 (10 * 0.1, never accumulated)', () => {
-    const t = ticks({ min: 0, max: 1 }, 0.1)
+    const t = ticks({ min: 0, max: 1 }, 0.1, 'linear')
     expect(t).toHaveLength(11)
     expect(t[10]).toBe(1)
     expect(t[3]).toBe(3 * 0.1)
   })
 
   it('[-pi, pi] step pi/2 yields 5 values', () => {
-    expect(ticks({ min: -Math.PI, max: Math.PI }, Math.PI / 2)).toHaveLength(5)
+    expect(ticks({ min: -Math.PI, max: Math.PI }, Math.PI / 2, 'linear')).toHaveLength(5)
   })
 
   it('is inclusive within a 1e-9 relative tolerance and exclusive beyond it', () => {
-    expect(ticks({ min: 0, max: 1 - 1e-12 }, 0.5)).toEqual([0, 0.5, 1])
-    expect(ticks({ min: 0, max: 0.99 }, 0.5)).toEqual([0, 0.5])
+    expect(ticks({ min: 0, max: 1 - 1e-12 }, 0.5, 'linear')).toEqual([0, 0.5, 1])
+    expect(ticks({ min: 0, max: 0.99 }, 0.5, 'linear')).toEqual([0, 0.5])
   })
 })
 

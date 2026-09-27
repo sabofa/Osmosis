@@ -2,7 +2,7 @@
 
 import type { SpaceConfig, TickStep } from '../config'
 import type { Box3, Range } from '../scene/types'
-import type { FrameAxes } from './types'
+import type { AxisScale, FrameAxes } from './types'
 
 // How many intervals the automatic step aims for across a span.
 export const TICK_TARGET = 8
@@ -33,8 +33,11 @@ export function niceStep(span: number, target: number): number {
 }
 
 // Every k * step within the range, inclusive with a 1e-9 tolerance relative
-// to the step, computed as k * step and never by accumulation.
-export function ticks(range: Range, step: number): number[] {
+// to the step, computed as k * step and never by accumulation. `scale` is the
+// axis's scale (SP5); only 'linear' exists, so a log axis is a type error
+// until sub-project 4 adds it here.
+export function ticks(range: Range, step: number, scale: AxisScale): number[] {
+  if (scale !== 'linear') return []
   if (!(step > 0) || !Number.isFinite(step) || !(range.max >= range.min)) return []
   const first = Math.ceil(range.min / step - 1e-9)
   const last = Math.floor(range.max / step + 1e-9)
@@ -53,6 +56,7 @@ export function tickIndex(value: number, step: number): number {
 // The axis steps and titles from the space directives and the resolved box.
 export function frameAxes(space: SpaceConfig, box: Box3): FrameAxes {
   const axis = (authored: TickStep | null, range: Range, title: string) => ({
+    scale: 'linear' as const,
     step: authored && authored.value > 0 ? authored.value : niceStep(range.max - range.min, TICK_TARGET),
     authored,
     title,

@@ -56,7 +56,7 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
   const zFloor = d[2] >= 0 ? box.z.min : box.z.max
 
   const lines: FrameLine[] = []
-  const tickValues = specs.map((s, i) => ticks(ranges[i], s.step))
+  const tickValues = specs.map((s, i) => ticks(ranges[i], s.step, s.scale))
 
   // Wall outlines, each edge once (the three walls share the back corner's edges).
   const seen = new Set<string>()

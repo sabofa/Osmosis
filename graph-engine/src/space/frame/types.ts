@@ -40,8 +40,13 @@ export interface FrameModel {
   key: string
 }
 
+// An axis's scale (spec SP5). Only linear exists; log axes (sub-project 4)
+// are added here, and then every switch over it must handle them.
+export type AxisScale = 'linear'
+
 // One axis's ticks and title, resolved from SpaceConfig.
 export interface FrameAxis {
+  scale: AxisScale
   step: number
   // The authored step, when there is one (pi multiples label as pi).
   authored: TickStep | null
