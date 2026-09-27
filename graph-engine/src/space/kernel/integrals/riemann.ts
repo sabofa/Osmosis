@@ -148,7 +148,7 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
     const integral = attempt(context, errors, () => {
       const levels = (outerIsX ? [rect.outer, rect.inner] : [rect.inner, rect.outer]).map((r) => ({ name: r.param, lower: exprText(r.from), upper: exprText(r.to) }))
       const raw = quadrature(levels, () => integrate2((x, y) => f(x, y), x0, x1, () => y0, () => y1))
-      return determined({ value: raw.value, error: errorFloor(raw.error, raw.absolute, ROUNDING_REL), scale: raw.absolute })
+      return determined({ value: raw.value, error: errorFloor(raw.error, raw.absolute, ROUNDING_REL, raw.singular), scale: raw.absolute, singular: raw.singular })
     })
     const boxes: BoxMark = { kind: 'boxes', source: context.source, mins, maxs, style: { color: context.color, opacity, edges: true } }
     const dots: PointMark = {

@@ -248,7 +248,17 @@ describe('never a wrong confident number (S5 fix round 3)', () => {
     const line = integrate2((x, y) => 1 / Math.sqrt(Math.abs(x - y)), 0, 1, () => 0, () => 1)
     expect(Math.abs(line.value - 8 / 3)).toBeLessThanOrEqual(line.error)
     expect(line.error).toBeLessThan(1e-5)
-    honest((b) => integrate2((x, y) => 1 / Math.hypot(x, y), -1, 1, () => -1, () => 1, undefined, b), 8 * Math.asinh(1), 4)
+    // 1/r: the check pass's single-panel start puts its own outer centre
+    // exactly at x = 0, where 1/hypot(0, y) = 1/|y| genuinely does not
+    // converge in y (unlike the true g(x) = integral, finite for x != 0) —
+    // a measure-zero artifact of the node, not the integral. Since fix
+    // round 4 (I1c), a divergence claim from only one pass is not believed
+    // over the other's value, so this is now an honest "did not settle"
+    // rather than a wrong "diverges"; either is acceptable, never the wrong
+    // number.
+    const r = timed(() => integrate2((x, y) => 1 / Math.hypot(x, y), -1, 1, () => -1, () => 1))
+    if (r.error) expect((r.error as QuadratureError).reason).toBe('slow')
+    else expect(Math.abs((r.value as QuadResult).value - 8 * Math.asinh(1))).toBeLessThanOrEqual((r.value as QuadResult).error)
   }, HEAVY_MS)
 
   it('slow singular ends are never called divergent: x^-0.99, x^-0.999 and 1/(x ln^2 x) — a value, or "did not settle" at 0', () => {
@@ -325,4 +335,33 @@ describe('never a wrong confident number (S5 fix round 3)', () => {
     const e = failure(() => integrate3((x, y, z) => 1 / Math.hypot(x, y, z), -1, 1, ...ballY, ...ballZ))
     expect(e.reason).toBe('budget')
   }, HEAVY_MS)
+})
+
+describe('a singularity narrowed to a float-resolution sliver still reports its tail (S5 fix round 4, C1)', () => {
+  // Hand value: (c^(1-p) + (1-c)^(1-p)) / (1-p). The final panel next to the
+  // anchor (a few floats wide) has all 15 Kronrod nodes clamped onto 1-2
+  // floats, so its own K - G reads near zero and it is never picked as the
+  // worst panel again — the singular tail beyond it must be added at the end
+  // of the level's run, not only for whichever panel happened to be worst.
+  const tr = (c: number, p: number) => (c ** (1 - p) + (1 - c) ** (1 - p)) / (1 - p)
+  for (const [c, p] of [
+    [0.25, 0.8],
+    [0.123, 0.8],
+    [0.25, 0.75],
+  ] as const) {
+    it(`|x - ${c}|^-${p} over [0, 1]: the stated error covers the true error, not just its own qk15 K - G`, () => {
+      const exact = tr(c, p)
+      const r = integrate2((x) => Math.abs(x - c) ** -p, 0, 1, () => 0, () => 1)
+      expect(Math.abs(r.value - exact)).toBeLessThanOrEqual(r.error)
+      expect(r.singular).toBe(true)
+    })
+  }
+})
+
+describe('the inner panel cap never claims the outer evaluation budget (S5 fix round 4, M1)', () => {
+  it('a many-kinked inner integrand that runs out its 200-panel cap is refused honestly, not "within 6,000,000 evaluations"', () => {
+    const e = failure(() => integrate2((_x: number, y: number) => Math.abs(Math.sin(200 * y * Math.PI)), 0, 1, () => 0, () => 1))
+    expect(e.reason).toBe('budget')
+    expect(e.panelCap).toBe(true)
+  })
 })

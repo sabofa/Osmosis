@@ -78,7 +78,9 @@ import {
   QUAD_DECAY,
   QUAD_DIVERGE_NEAR_REL,
   QUAD_ANCHOR_DIGITS,
+  QUAD_ANCHOR_FLOATS,
   QUAD_ANCHOR_STEPS,
+  QUAD_CENTRE_NUDGE_MAX,
   QUAD_DIVERGE_RUN,
 
   QUAD_FIRST_RUNG_SHARE,
@@ -104,6 +106,9 @@ export interface QuadResult {
   error: number
   // The integral of |f|, the scale a value is small or large against.
   absolute: number
+  // Whether this result leaned on a singularity treatment anywhere in its
+  // levels (S5 fix round 4, C1): a caller floors it to fewer digits.
+  singular: boolean
 }
 
 export type QuadFailure = 'diverges' | 'slow' | 'undefined' | 'bound' | 'budget'
@@ -116,6 +121,10 @@ export class QuadratureError extends Error {
   readonly at: (number | null | undefined)[] = []
   // 'bound': the level whose range it is, and which end.
   bound: { level: number; side: 'lower' | 'upper' } | null = null
+  // 'budget': set when a level's own panel cap (QUAD_INNER_MAX_PANELS) was
+  // what ran out, not the whole pass's evaluations — its own few thousand
+  // is not "within 6,000,000 evaluations" (S5 fix round 4, M1).
+  panelCap = false
   constructor(reason: QuadFailure) {
     super(`quadrature: ${reason}`)
     this.name = 'QuadratureError'
@@ -135,13 +144,18 @@ class Pole {
   }
 }
 
-// Evaluations left, shared by every level of one pass.
+// Evaluations left, shared by every level of one pass; `singular` is set once
+// the pass leans on a singularity treatment (the power rule, a frozen panel,
+// a pole nudge, an anchor split, or a decay chain's tail) — carried onto the
+// QuadResult so a caller can print fewer, more conservative digits (S5 fix
+// round 4, C1's belt and braces).
 export interface QuadBudget {
   left: number
+  singular: boolean
 }
 
 export function quadBudget(evaluations: number = QUAD_BUDGET): QuadBudget {
-  return { left: evaluations }
+  return { left: evaluations, singular: false }
 }
 
 // Kronrod nodes on [-1, 1] (non-negative half, largest first), and the
@@ -196,6 +210,17 @@ function nextToward(x: number, toward: number): number {
 // The spacing of floats at x.
 function ulp(x: number): number {
   return Math.abs(nextToward(x, Infinity) - x)
+}
+
+// x moved `steps` floats toward `toward` (steps a small non-negative bigint):
+// nextToward generalised to more than one float at a time, for a retry that
+// may need to move by many orders of magnitude (S5 fix round 4, I1a).
+function nudge(x: number, toward: number, steps: bigint): number {
+  if (x === toward) return x
+  if (x === 0) x = toward > 0 ? Number.MIN_VALUE : -Number.MIN_VALUE
+  F64[0] = x
+  I64[0] += (toward > x === x > 0 ? 1n : -1n) * steps
+  return F64[0]
 }
 
 // The simplest number in [lo, hi] (fewest significant digits): where a
@@ -545,11 +570,39 @@ function rule(
         try {
           evaluate(f, xs[k], level, NODE)
         } catch (err) {
+          if (!(err instanceof Pole) || err.level !== level.index) throw err
           // A node on a pole by coincidence (1/sqrt|x - y| with the inner node
           // at y = x exactly): one float toward the centre is not on it.
-          const x = nextToward(xs[k], centre)
-          if (!(err instanceof Pole) || err.level !== level.index || !(x > lo && x < hi)) throw err
-          evaluate(f, x, level, NODE)
+          if (xs[k] !== centre) {
+            const x = nextToward(xs[k], centre)
+            if (!(x > lo && x < hi)) throw err
+            evaluate(f, x, level, NODE)
+          } else {
+            // The centre node itself (a single-panel start's index 14,
+            // exactly at (a + b) / 2 — a symmetric range's own midpoint,
+            // where a singular integrand often sits) has no "toward the
+            // centre" to move by. It is nudged toward the far end instead,
+            // by a doubling ladder of floats (1, 2, 4, ...) when one is not
+            // enough: some integrands amplify smallness (y^2 in ln(y^2)
+            // underflows to 0 at a y many orders of magnitude above where y
+            // itself would), so a fixed nudge is not always enough (S5 fix
+            // round 4, I1a). Each step stays the smallest perturbation tried
+            // so far that is not itself on the pole.
+            let done = false
+            for (let steps = 1n; steps < QUAD_CENTRE_NUDGE_MAX; steps *= 2n) {
+              const x = nudge(centre, hi, steps)
+              if (!(x > lo && x < hi)) break
+              try {
+                evaluate(f, x, level, NODE)
+                done = true
+                break
+              } catch (e2) {
+                if (!(e2 instanceof Pole) || e2.level !== level.index) throw e2
+              }
+            }
+            if (!done) throw err
+          }
+          level.budget.singular = true
         }
         values[k] = NODE[0] * j
         errors[k] = NODE[1] * Math.abs(j)
@@ -636,13 +689,29 @@ function locate(pa: number, pb: number, a: number, b: number): number | null {
   return simplest(pa, pb)
 }
 
+// Whether [p, q] spans at most `floats` representable doubles: float
+// resolution, where a singular tail can hide entirely inside a panel whose
+// own qk15 nodes have collapsed onto one or two values (S5 fix round 4, C1).
+function narrow(p: number, q: number, floats: number): boolean {
+  let x = p
+  for (let i = 0; i < floats; i++) {
+    if (x === q) return true
+    x = nextToward(x, q)
+  }
+  return x === q
+}
+
 function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel: number, maxPanels: number, level: Level | null): QuadResult {
   let splitting: [number, number] = [a, b]
   // Where a lineage of halvings has narrowed to, for a refusal.
   const pointOf = (pa: number, pb: number) => (level ? divergentAt(simplest(pa, pb), level) : 0)
   // The panels covering [pa, pb]: one, or — where a node is infinite inside
   // it — split there, recursively, up to QUAD_POLE_SPLITS per level. Then it
-  // is divergence, or, when the shells shed there were shrinking, 'slow'.
+  // is divergence, or, when the shells shed there were shrinking, 'slow'. An
+  // inner level's first (unrefined) panels rethrow one of its own poles to
+  // the level outside: it may be that level's variable that is really at
+  // fault (exp(1/x), infinite at every y below x = 0.0014), and it, not this
+  // level, can tell by trying another value.
   const cover = (pa: number, pb: number, chain: Chain | null, ends: End): Panel[] => {
     try {
       return [kronrod(f, pa, pb, level, ends, pa === a || pb === b)]
@@ -687,8 +756,9 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
       // rule's: a bump the plain nodes caught, which the power rule's nodes
       // step over, is kept as error, never dropped.
       const miss = q ? mismatch(p, q, m, onA) : Infinity
-      if (q && q.error - q.fixed + miss < best.error - best.fixed) best = { ...q, error: q.error + miss, chain: p.chain, ends: p.ends }
-      else failed.push(m)
+      if (q && q.error - q.fixed + miss < best.error - best.fixed) {
+        best = { ...q, error: q.error + miss, chain: p.chain, ends: p.ends }
+      } else failed.push(m)
     }
     return best
   }
@@ -702,6 +772,13 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
     if (r !== null && p.chain && level) {
       if (!(r < QUAD_SLOW_RATIO)) throw fail('slow', level.index, pointOf(p.a, p.b))
       error = Math.max(error, tail(p.chain, r))
+      // Its error leans on the lineage's own decay estimate, not a plain
+      // qk15 K - G (C1's belt and braces) — unless the ratio is a regular
+      // point's (a kink sheds about half its last shell each halving, the
+      // same anchoring bookkeeping a true singularity uses, but nothing
+      // like one's slow tail): only a ratio past the regular band names it
+      // singular, the same test exponentOf uses to tell the two apart.
+      if (r > 0.5 + QUAD_REGULAR_BAND) level.budget.singular = true
     }
     return { ...p, frozen: true, error, fixed: error }
   }
@@ -742,7 +819,9 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
       if (panels.length >= maxPanels) {
         if (level && own + fixed > Math.max(tol, QUAD_UNSETTLED_REL * Math.abs(value))) {
           splitting = [panels[worst].a, panels[worst].b]
-          throw new QuadratureError('budget')
+          const err = new QuadratureError('budget')
+          err.panelCap = maxPanels === QUAD_INNER_MAX_PANELS
+          throw err
         }
         break
       }
@@ -805,10 +884,37 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
             const [ca, cb] = [carrier.a, carrier.b]
             const i = children.indexOf(carrier)
             children.splice(i, 1, ...cover(ca, point, null, { ...carrier.ends, fb: Number.NaN, eb: 0 }), ...cover(point, cb, null, { ...carrier.ends, fa: Number.NaN, ea: 0 }))
+            // Only a point whose shells actually decay slowly is singular
+            // (C1's belt and braces) — a kink also narrows onto a simple
+            // number this way, its shells shedding at a regular point's
+            // ordinary rate, not a true singularity's.
+            const r = decay(carrier.chain)
+            if (level && r !== null && r > 0.5 + QUAD_REGULAR_BAND) level.budget.singular = true
           }
         }
       }
       panels.splice(worst, 1, ...children)
+    }
+    // Every panel adjacent to a singular anchor, not only the worst one: a
+    // panel a few floats wide, its nodes collapsed, reads K ≈ G and is never
+    // picked for another split, so its slice of the singular tail is
+    // otherwise dropped (S5 fix round 4, C1). Its error is floored by its
+    // lineage's tail, never trusted at its own (spuriously tiny) K - G.
+    if (level) {
+      for (let i = 0; i < panels.length; i++) {
+        const p = panels[i]
+        if (!p.chain || !narrow(p.a, p.b, QUAD_ANCHOR_FLOATS)) continue
+        const r = decay(p.chain)
+        // A ratio too close to 1 to trust is not this panel's business to
+        // refuse over: it was not worst enough to be split further, so its
+        // slice is likely small beside the rest — floor it by its raw shell
+        // instead of a tail formula that would blow up (r -> 1).
+        const t = r !== null && r < QUAD_SLOW_RATIO ? tail(p.chain, r) : 3 * Math.max(p.chain.shell, p.chain.latest ?? 0)
+        if (t > p.error) {
+          panels[i] = { ...p, error: t, fixed: Math.max(p.fixed, t) }
+          if (r === null || r > 0.5 + QUAD_REGULAR_BAND) level.budget.singular = true
+        }
+      }
     }
     let value = 0
     let error = 0
@@ -818,7 +924,7 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
       error += p.error
       absolute += p.absolute
     }
-    return { value, error, absolute }
+    return { value, error, absolute, singular: level?.budget.singular ?? false }
   } catch (err) {
     if (err instanceof QuadratureError && err.reason === 'budget' && level && err.at[level.index] === undefined) {
       err.at[level.index] = locate(splitting[0], splitting[1], a, b)
@@ -831,7 +937,7 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
 // QUAD_REL of its value). With a budget it is guarded as a nested level is;
 // without, an integrand that is not finite gives a result that is not.
 export function integrate1(f: (x: number) => number, a: number, b: number, tol: number = QUAD_TOL, budget?: QuadBudget): QuadResult {
-  if (a === b) return { value: 0, error: 0, absolute: 0 }
+  if (a === b) return { value: 0, error: 0, absolute: 0, singular: false }
   if (!budget) return adapt(f, a, b, tol, QUAD_REL, QUAD_MAX_PANELS, null)
   const level = newLevel(0, a, b, budget, false)
   return settleOuter(() => adapt(f, a, b, tol, QUAD_REL, QUAD_MAX_PANELS, level), level)
@@ -914,17 +1020,55 @@ function crossChecked(pass: Pass, budget: QuadBudget | undefined): QuadResult {
   throw exhausted ?? new QuadratureError('budget')
 }
 
+// A pass's divergence downgraded to an honest "did not settle": the passes
+// disagreed on whether there is a value at all, so neither claim stands
+// (S5 fix round 4, I1c). Carries whatever location the divergent pass found.
+function unsettled(err: QuadratureError): QuadratureError {
+  const out = new QuadratureError('slow')
+  err.at.forEach((v, i) => {
+    if (typeof v === 'number') out.at[i] = v
+  })
+  return out
+}
+
 // Rule 4: the pass, and the cross-check from one-panel starts at the looser
 // `check` target, from one allowance. The error is at least their
 // difference, and their errors plus it when they disagree. Without the
 // cross-check there is no answer at this rung; any refusal by either is
-// believed over a number.
+// believed over a number — except a claim of divergence, which stands only
+// when both passes make it (I1c): one pass finding a coincidental node on a
+// pole the other's differently-placed nodes miss is not evidence the
+// integral diverges, only that it is not yet settled.
 function reconciled(pass: Pass, rel: number, check: number, allowance: QuadBudget): QuadResult {
-  const main = pass(true, rel, allowance)
-  const other = pass(false, check, allowance)
+  const run = (golden: boolean, r: number): QuadResult | QuadratureError => {
+    try {
+      return pass(golden, r, allowance)
+    } catch (err) {
+      if (err instanceof QuadratureError) return err
+      throw err
+    }
+  }
+  let main: QuadResult
+  try {
+    main = pass(true, rel, allowance)
+  } catch (err) {
+    if (!(err instanceof QuadratureError)) throw err
+    // Any other refusal (budget, slow, undefined, bound) stands on its own —
+    // only a divergence claim needs the check pass's agreement, so it alone
+    // is worth a second, independently placed attempt.
+    if (err.reason !== 'diverges') throw err
+    const other = run(false, check)
+    if (other instanceof QuadratureError && other.reason === 'diverges') throw err
+    throw unsettled(err)
+  }
+  const other = run(false, check)
+  if (other instanceof QuadratureError) {
+    if (other.reason !== 'diverges') throw other
+    throw unsettled(other)
+  }
   const difference = Math.abs(main.value - other.value)
   const error = difference > main.error + other.error ? difference + main.error + other.error : Math.max(main.error, difference)
-  return { value: main.value, error, absolute: main.absolute }
+  return { value: main.value, error, absolute: main.absolute, singular: main.singular || other.singular }
 }
 
 // The iterated integral of f(x, y) for x from a to b and y from c(x) to d(x).
@@ -938,7 +1082,7 @@ export function integrate2(
   budget?: QuadBudget
 ): QuadResult {
   outerRange(a, b)
-  if (a === b) return { value: 0, error: 0, absolute: 0 }
+  if (a === b) return { value: 0, error: 0, absolute: 0, singular: false }
   const inner = innerTolerance(tol, a, b)
   return crossChecked((golden, rel, bud) => {
     const outer = newLevel(0, a, b, bud, golden)
@@ -979,7 +1123,7 @@ export function integrate3(
   budget?: QuadBudget
 ): QuadResult {
   outerRange(a, b)
-  if (a === b) return { value: 0, error: 0, absolute: 0 }
+  if (a === b) return { value: 0, error: 0, absolute: 0, singular: false }
   const middle = innerTolerance(tol, a, b)
   return crossChecked((golden, rel, bud) => {
     const outer = newLevel(0, a, b, bud, golden)

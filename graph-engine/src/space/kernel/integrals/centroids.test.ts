@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SpaceScene } from '../../scene/types'
+import { determined, IntegralRefusal } from './common'
+import { positionOrZero } from './centroids'
 import { approx, approxTuple, kernelOf, markNamed, polylines, readout, sceneOf } from './testing'
 
 function centre(scene: SpaceScene, line: number): number[] {
@@ -154,5 +156,37 @@ describe('centroids over mesh regions and solids (fix round 2)', () => {
     expect([x, y]).toEqual([0, 0])
     const printed = /\(([^,]+), ([^,]+), ([^)]+)\)/.exec(text)!
     expect(Math.abs(z - 0.375)).toBeLessThanOrEqual(10 ** -(printed[3].split('.')[1]?.length ?? 0))
+  })
+})
+
+// S5 fix round 4, M4: a centroid coordinate is a position, not a general
+// integral — it reads 0 when it is within its error and that error is small
+// beside the shape's own size on that axis, even where the general "≈ 0"
+// rule (common.ts, comparing against the integral of |density|) would
+// refuse it as "not determined". The annulus at res 40 was refused with
+// "≈ 6.486×10⁻¹⁸ ± 0.001314" — negligible against its own ~2-wide ring, but
+// not against the integral of |density| the general rule compares to.
+describe('a centroid coordinate reads 0 against its own extent, not the integral of |density| (fix round 4, M4)', () => {
+  it('the annulus centroid at its default resolution reads (0, 0), not refused', () => {
+    const scene = sceneOf('D = region x^2 + y^2 >= 0.95 and x^2 + y^2 <= 1.03\ncentroid: D')
+    expect(scene.errors).toEqual([])
+    const [x, y] = approxTuple(readout(scene, 2).text, 'centroid')
+    expect([x, y]).toEqual([0, 0])
+  })
+
+  it('the rule itself: a value at float noise against a ~2-wide region reads 0; the same error against a tiny region does not', () => {
+    // scale: 1 — small enough that the general "≈ 0" rule (error <= 1e-3 x
+    // the integral of |g|) refuses this on its own, as it did before this
+    // fix: error (1.314e-3) > 1e-3 x 1.
+    const noise = { value: 6.486e-18, error: 1.314e-3, scale: 1 }
+    expect(() => determined(noise)).toThrow(IntegralRefusal)
+    // Reaches the same conclusion the reviewer's probe measured, without
+    // depending on this build's exact mesh error at res 40: negligible
+    // beside a ~2-wide region, so it reads 0.
+    const wide = determined(positionOrZero(noise, 2.08))
+    expect(wide.value).toBe(0)
+    // The same absolute error against a region only 0.01 wide is not
+    // negligible on that scale, and is refused, never silently shown as 0.
+    expect(() => determined(positionOrZero(noise, 0.01))).toThrow(IntegralRefusal)
   })
 })

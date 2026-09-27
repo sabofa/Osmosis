@@ -38,7 +38,19 @@ export const ZERO_MASS_REL = 1e-9
 // the floor (a region). Each carries its method's own error: a mesh region's
 // from two resolutions, which also covers its odd moments' grid asymmetry
 // (the half-disc's x̄ comes out 5×10⁻⁵, inside its error, so it reads 0).
-type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean }
+// `extent`: the shape's own size along each moment's axis, for a coordinate
+// that is negligible against it (M4) — Infinity where not known, inert.
+type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean; extent: number[] }
+
+function span(values: Float64Array): number {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of values) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  return hi >= lo ? hi - lo : Infinity
+}
 
 function prepareMeasure(context: BuildContext, of: string, density: Expr | null, reads: Reads): Measure {
   const { scope, config } = context
@@ -61,6 +73,7 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
         moments: [moment(0), moment(1)],
         total: r.integrate((a, b) => Math.abs(d(a, b))).value,
         floor: true,
+        extent: [span(r.samples.x), span(r.samples.y)],
       }
     }
   }
@@ -69,7 +82,7 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
   const run = solid.integrals(exprs)
   return () => {
     const [mass, mx, my, mz, total] = run()
-    return { mass, moments: [mx, my, mz], total: total.value, floor: false }
+    return { mass, moments: [mx, my, mz], total: total.value, floor: false, extent: [Infinity, Infinity, Infinity] }
   }
 }
 
@@ -82,7 +95,21 @@ function quotient(moment: Approx, mass: Approx): Approx {
     value,
     error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value),
     scale: moment.scale / Math.abs(mass.value),
+    singular: moment.singular || mass.singular,
   }
+}
+
+// A centroid coordinate is a position, not a general integral: it reads 0
+// when it is within its error and that error is at most this fraction of
+// the shape's own extent on that axis (S5 fix round 4, M4) — the general
+// "≈ 0" rule (common.ts) compares against the integral of |density|, which
+// for an annulus's x̄ near a fixed centre can be far larger than the ring's
+// own diameter, so a position at the float noise floor (6×10⁻¹⁸ ± 1.3×10⁻³)
+// was refused as "not determined" instead of read as 0.
+export const POSITION_ZERO_REL = 1e-3
+
+export function positionOrZero(a: Approx, extent: number): Approx {
+  return Math.abs(a.value) <= a.error && a.error <= POSITION_ZERO_REL * extent ? { value: 0, error: 0, scale: 1 } : a
 }
 
 function prepareCentroid(statement: Statement, context: BuildContext): PreparedStatement {
@@ -96,14 +123,14 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
     const errors: SceneError[] = []
     const measured = attempt(context, errors, measure)
     if (!measured) return { marks: [], labels: [], errors, colorScale: null }
-    const { mass, moments, total, floor } = measured
+    const { mass, moments, total, floor, extent } = measured
     if (!(Math.abs(mass.value) > ZERO_MASS_REL * total) || !Number.isFinite(mass.value)) {
       throw new Error('the mass is zero; the centre is undefined')
     }
     let centre: Approx[]
     try {
       determined(mass)
-      centre = moments.map((m) => determined(quotient(m, mass)))
+      centre = moments.map((m, i) => determined(positionOrZero(quotient(m, mass), extent[i])))
     } catch (err) {
       if (!(err instanceof IntegralRefusal)) throw err
       return { marks: [], labels: [], errors: [...errors, { line: context.line, message: err.message }], colorScale: null }

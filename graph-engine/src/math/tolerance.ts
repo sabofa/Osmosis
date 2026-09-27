@@ -110,6 +110,12 @@ export const QUAD_REGULAR_BAND = 0.05
 // a number of at most this many significant digits (0, 0.5), is split there.
 export const QUAD_ANCHOR_STEPS = 8
 export const QUAD_ANCHOR_DIGITS = 3
+// A panel this many floats wide or fewer is float resolution: its qk15 nodes
+// can collapse onto one or two values, so its own K - G says nothing near a
+// singular anchor (S5 fix round 4, C1) — its error is floored by its
+// lineage's tail instead, at the end of every level's run, not only for
+// whichever panel happened to be worst.
+export const QUAD_ANCHOR_FLOATS = 64
 // A divergence found within this fraction of the range of a limit is placed
 // at the limit (exp(1/x) overflows at x = 0.0011, but it is 0 that is wrong).
 export const QUAD_DIVERGE_NEAR_REL = 1e-2
@@ -117,6 +123,16 @@ export const QUAD_DIVERGE_NEAR_REL = 1e-2
 export const QUAD_POLE_SPLITS = 16
 // A NaN at a node whose neighbours agree to this is a removable point.
 export const QUAD_REMOVABLE_REL = 1e-6
+// A single-panel start's own centre node, exactly on a pole by coincidence
+// (a symmetric range's midpoint, where a singular integrand often sits: 1 /
+// sqrt|y| for y in [-1, 1]) has no "one float toward the centre" to move by
+// — it is the centre. It is retried at a doubling ladder of floats from it
+// instead (1, 2, 4, ...), up to this many, until one is finite: some
+// integrands amplify smallness (y^2 in ln(y^2) underflows to 0 at a y many
+// orders of magnitude above where y itself would), so one float is not
+// always enough (S5 fix round 4, I1a). 2^1024 floats from a denormal
+// reaches well past the largest double; no genuine escape needs more.
+export const QUAD_CENTRE_NUDGE_MAX = 2n ** 1024n
 
 // K10 — an inequality domain's boundary crossing is refined by bisection along
 // the grid edge until the bracket is shorter than this fraction of the edge.

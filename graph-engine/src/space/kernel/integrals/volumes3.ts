@@ -152,7 +152,7 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
         const sign = orientation(solid, aa, bb, cc, dd, ee, gg)
         return fs.map(({ f }) => {
           const r = quadrature(levels, () => integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg))
-          return { value: sign * r.value, error: errorFloor(r.error, r.absolute, ROUNDING_REL), scale: r.absolute }
+          return { value: sign * r.value, error: errorFloor(r.error, r.absolute, ROUNDING_REL, r.singular), scale: r.absolute, singular: r.singular }
         })
       }
     },

@@ -6,7 +6,7 @@ import type { GraphConfig } from '../../../parser/config'
 import type { Statement } from '../../../parser/types'
 import { QuadratureError } from '../../../math/quadrature'
 import { QUAD_BUDGET } from '../../../math/tolerance'
-import { APPROX, formatApprox, formatNumber, supportedDigits, MAX_DIGITS } from '../../pick/format'
+import { APPROX, formatNumber, SIGNIFICANT_DIGITS, supportedDigits, MAX_DIGITS } from '../../pick/format'
 import type { LabelAnchor, SceneError, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
 import type { BuildContext } from '../registry'
@@ -14,10 +14,17 @@ import type { BuildContext } from '../registry'
 // A numeric answer. `error` bounds |value - true value|: the method's own
 // honest estimate, never below what the arithmetic can resolve (errorFloor).
 // `scale` is the integral of |g|, what the value is small or large against.
+// `singular` (S5 fix round 4, C1's belt and braces): the run leaned on a
+// singularity treatment somewhere (the power rule, a frozen panel, a pole
+// nudge, an anchor split, or a decay chain's tail) — its error is already
+// multiplied by 10 for this by the caller that set it, and formatters here
+// also floor its digits at SIGNIFICANT_DIGITS, never trusting more from an
+// estimate that leaned on a heuristic.
 export interface Approx {
   value: number
   error: number
   scale: number
+  singular?: boolean
 }
 
 // What floating point can resolve in an integral: this fraction of the
@@ -32,8 +39,13 @@ export const ROUNDING_REL = 1e-13
 // cube, 3 ± 1000, is not "≈ 0").
 export const ZERO_REL = 1e-3
 
-export function errorFloor(error: number, absolute: number, rel: number): number {
-  return Math.max(error, rel * Math.abs(absolute))
+// The floored error; ×10 when the run leaned on a singularity treatment
+// (C1's belt and braces): its own estimate, however carefully tracked, is
+// still built on heuristics (a decay ratio, a substitution's mismatch), so
+// it is trusted to one order of magnitude less than a plain qk15 error.
+export function errorFloor(error: number, absolute: number, rel: number, singular = false): number {
+  const floor = Math.max(error, rel * Math.abs(absolute))
+  return singular ? floor * 10 : floor
 }
 
 function isZero(a: Approx): boolean {
@@ -53,13 +65,20 @@ function shown(a: Approx): number {
   return isZero(a) ? 0 : a.value
 }
 
+// The most digits a singular estimate is shown to (C1's belt and braces):
+// its error already carries the ×10, so this is only the extra floor.
+function digitsOf(a: Approx): number {
+  const cap = a.singular ? SIGNIFICANT_DIGITS : MAX_DIGITS
+  return Math.min(cap, supportedDigits(shown(a), a.error))
+}
+
 export function approxText(a: Approx): string {
-  return formatApprox(shown(a), a.error)
+  return `${APPROX} ${formatNumber(shown(a), digitsOf(a))}`
 }
 
 // "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate supports.
 export function approxTupleText(values: readonly Approx[]): string {
-  const parts = values.map((a) => formatNumber(shown(a), Math.min(MAX_DIGITS, supportedDigits(shown(a), a.error))))
+  const parts = values.map((a) => formatNumber(shown(a), digitsOf(a)))
   return `${APPROX} (${parts.join(', ')})`
 }
 
@@ -117,6 +136,9 @@ export function refusalOf(err: QuadratureError, levels: readonly QuadLevel[]): I
     }
     case 'budget': {
       const where = place(err, levels, levels.length, 'near')
+      // A level's own panel cap ran out, not the whole pass's evaluations
+      // (M1): its own few thousand is not honestly "within 6,000,000".
+      if (err.panelCap) return new IntegralRefusal(`the integral did not settle${where}`)
       return new IntegralRefusal(
         `the integral did not settle within ${QUAD_BUDGET.toLocaleString('en-US')} evaluations${where ? ` (it was still refining${where})` : ''}`,
       )
