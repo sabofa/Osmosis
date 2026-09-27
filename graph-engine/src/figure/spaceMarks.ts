@@ -42,6 +42,15 @@ export interface AngleFrame {
   arm: number
 }
 
+// Whether two arms from one vertex lie in one line: |a x b| = |a||b| sin, so
+// negligible against |a||b| is collinearity whatever the arms' lengths
+// (planeThrough's test). THE one tolerance for a flat mark: the angle frame
+// and the dihedral mark both judge by it, on the same vectors, so they can
+// never disagree about a nearly flat angle (fix round 1).
+export function collinearArms(a: Vec3, b: Vec3): boolean {
+  return length3(cross3(a, b)) <= GEOM_EPS * Math.max(1, length3(a) * length3(b))
+}
+
 // Degenerate angles are refused in the author's names: an arm of zero length
 // (angle3's own message), or three points in a line, which lie on no one
 // plane — a straight angle in space has no side to draw its arc on.
@@ -52,9 +61,7 @@ export function angleFrame(vertex: Vec3, from: Vec3, to: Vec3, names: { from: st
   const [la, lb] = [length3(a), length3(b)]
   const u = scale3(a, 1 / la)
   const w = sub3(b, scale3(u, dot3(b, u)))
-  // |a x b| = |a||b| sin(angle): negligible against |a||b| is collinearity,
-  // whatever the arms' lengths (planeThrough's test).
-  if (length3(cross3(a, b)) <= GEOM_EPS * Math.max(1, la * lb)) {
+  if (collinearArms(a, b)) {
     throw new Error(
       `${names.from}, ${names.vertex} and ${names.to} are collinear, so angle ${names.from}-${names.vertex}-${names.to} has no plane to draw its mark in`
     )
@@ -126,12 +133,13 @@ export function rightAngleCorners(frame: AngleFrame, side = SPACE_SQUARE_FRACTIO
 //
 // l = 0.3 x the edge, **but never longer than either end point's distance
 // from the edge's line** (a correction to the plan, which says 0.3 x the
-// edge alone). Past that distance a segment runs beyond the point that
-// defines its half-plane, out of the face it lies in: in the AIME 2016 I
-// prism, 0.3 |BF| = 6.24 but A is only 6 from BF, so the segment toward A
-// poked 0.24 out of the prism past its vertex A and drew a visible stub
-// outside the solid. Capped, it ends exactly at A. Wherever 0.3 x the edge
-// is short enough — the cube, the regular solids — nothing changes.
+// edge alone). It is a cap on LENGTH, not a guarantee that a segment stays
+// inside its face — a face can be narrower at M than its end point is far
+// from the edge. It is what the AIME 2016 I prism needs: 0.3 |BF| = 6.24 but
+// A is only 6 from BF, so uncapped the segment toward A ran 0.24 past A,
+// out of the prism, as a visible stub; capped, it ends exactly at A.
+// Wherever 0.3 x the edge is short enough — the cube, the regular solids —
+// nothing changes.
 export const DIHEDRAL_SEGMENT_FRACTION = 0.3
 
 export interface DihedralMark {
@@ -140,17 +148,23 @@ export interface DihedralMark {
   arc: SpaceArc
 }
 
-// Two half-planes that make one plane (180) or one half-plane (0) have no
-// plane angle with a side to draw it on, and are refused by name.
+// Two half-planes that make one plane (180) or one half-plane (0) — or so
+// nearly that the two segments are collinear by `collinearArms`, the one
+// tolerance every flat mark is judged by — have no plane angle with a side to
+// draw it on, and are refused by name. The arc is M1's, built from the
+// dihedral's own frame (u, and v made square to u), so no refusal can speak
+// of anything but the author's dihedral.
 export function dihedralMark(dihedral: Dihedral3, edgeLength: number, name = 'the dihedral'): DihedralMark {
   const segment = Math.min(DIHEDRAL_SEGMENT_FRACTION * edgeLength, ...dihedral.reach)
-  const ends: [Vec3, Vec3] = [add3(dihedral.mid, scale3(dihedral.u, segment)), add3(dihedral.mid, scale3(dihedral.v, segment))]
-  if (length3(cross3(dihedral.u, dihedral.v)) <= GEOM_EPS) {
+  const arms = [scale3(dihedral.u, segment), scale3(dihedral.v, segment)]
+  const ends: [Vec3, Vec3] = [add3(dihedral.mid, arms[0]), add3(dihedral.mid, arms[1])]
+  if (collinearArms(arms[0], arms[1])) {
     const degrees = dot3(dihedral.u, dihedral.v) < 0 ? 180 : 0
     throw new Error(`The half-planes of ${name} lie in one plane (it measures ${degrees}°), so it has no plane angle to draw`)
   }
-  const arc = angleArc(angleFrame(dihedral.mid, ends[0], ends[1], { from: 'U', vertex: 'M', to: 'V' }))
-  return { mid: dihedral.mid, ends, arc }
+  const w = sub3(dihedral.v, scale3(dihedral.u, dot3(dihedral.v, dihedral.u)))
+  const frame: AngleFrame = { vertex: dihedral.mid, u: dihedral.u, v: scale3(w, 1 / length3(w)), angle: dihedral.angle, arm: segment }
+  return { mid: dihedral.mid, ends, arc: angleArc(frame) }
 }
 
 // M4 — whether a mark judged at `at` is hidden: the glass rule's ray test,

@@ -1204,7 +1204,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             const frame = angleFrame(space[1], space[0], space[2], { from: statement.from, vertex: statement.vertex, to: statement.to })
             const degrees = (frame.angle * 180) / Math.PI
             if (config.toScale && Math.abs(degrees - 90) > GEOM_EPS * 90) {
-              throw new Error(`${statement.from}-${statement.vertex}-${statement.to} is not a right angle — its true angle is ${formatMeasure(degrees)}°`)
+              throw new Error(`${statement.from}-${statement.vertex}-${statement.to} is not a right angle — its true angle is ${nearRightAngle(degrees)}°`)
             }
             const [vertex, onFrom, corner, onTo] = rightAngleCorners(frame)
             // M4 — judged at the square's centre.
@@ -1620,6 +1620,18 @@ function nearestOnRect(rect: Rect, p: Vec2): Vec2 {
     x: Math.max(rect.x, Math.min(p.x, rect.x + rect.width)),
     y: Math.max(rect.y, Math.min(p.y, rect.y + rect.height)),
   }
+}
+
+// M2 — the true angle of a refused right-angle mark, written to as many
+// places as it takes to differ from 90: an angle 6e-6 degrees short of a
+// right angle would otherwise print "90" in a message saying it is not 90
+// (fix round 1). Three places when those already show the difference.
+function nearRightAngle(degrees: number): string {
+  for (let places = 3; places <= 15; places++) {
+    const text = degrees.toFixed(places).replace(/\.?0+$/, '')
+    if (Number(text) !== 90) return text
+  }
+  return String(degrees)
 }
 
 // M4 — a hidden mark is dashed and faded like a hidden edge.

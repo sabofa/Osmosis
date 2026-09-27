@@ -495,3 +495,79 @@ describe("a dihedral mark is its plane angle at the edge's midpoint (M3)", () =>
     expect(rendered(spec).svg).toBe(rendered(spec).svg)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------
+
+describe('fix round 1: an arc goes the short way round, through its middle', () => {
+  // Angle A-B-K with K = (2, 1, 0): BA = (-1, 0, 0), BK = (1, 1, 0), 135
+  // degrees. Radius 0.2 (the shorter arm is 1). In the angle's plane
+  // (z = 0) the frame is u = -x, v = +y, so the arc's middle, at 67.5
+  // degrees from u, is B + 0.2 (-cos 67.5, sin 67.5, 0).
+  const c = Math.cos((67.5 * Math.PI) / 180)
+  const s = Math.sin((67.5 * Math.PI) / 180)
+  const start = author(0.8, 0, 0)
+  const middle = author(1 - 0.2 * c, 0.2 * s, 0)
+  const end = author(1 + 0.2 / Math.SQRT2, 0.2 / Math.SQRT2, 0)
+
+  // The arc's flags as drawn, and the ones its three points demand: an
+  // interior angle below 180 is the small arc (large-arc 0), and it runs the
+  // way start -> middle -> end turns on the page. In SVG's y-down frame the
+  // positive-angle direction (sweep 1) is the one whose successive chords
+  // turn with a positive cross product.
+  function flags(order: 'A-B-K' | 'K-B-A') {
+    const svg = rendered(`${CUBE}\nK = (2, 1, 0)\nangle: ${order}`).svg
+    const toView = projectionOf(svg, 'A', 'G', POINTS)
+    const path = elements(layer(svg, 'marks'), 'path', MARK + 1)
+    expect(path).toHaveLength(1)
+    const m = / A [-\d.]+ [-\d.]+ [-\d.]+ ([01]) ([01]) /.exec(path[0])!
+    const [p, q, r] = (order === 'A-B-K' ? [start, middle, end] : [end, middle, start]).map(toView)
+    const turn = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x)
+    return { large: m[1], sweep: m[2], wantSweep: turn > 0 ? '1' : '0' }
+  }
+
+  it('draws an obtuse arc as the small arc, turning the way its middle says', () => {
+    const drawn = flags('A-B-K')
+    expect(drawn.large).toBe('0')
+    expect(drawn.sweep).toBe(drawn.wantSweep)
+  })
+
+  it('reverses the sweep, not the arc, when the angle is written the other way', () => {
+    const forward = flags('A-B-K')
+    const backward = flags('K-B-A')
+    expect(backward.large).toBe('0')
+    expect(backward.sweep).toBe(backward.wantSweep)
+    expect(backward.sweep).not.toBe(forward.sweep)
+  })
+})
+
+describe('fix round 1: a nearly flat dihedral is refused in the author\'s words', () => {
+  it('refuses at the one tolerance, never naming a point the author did not write', () => {
+    // D = (0, 1, 0) and K = (0, -1, 5e-9) about the edge A-B: 180 degrees
+    // less 2.9e-7. The segments are 0.3 long, so they are collinear by the
+    // arms' test (|a x b| = 0.09 x 5e-9 <= 1e-9) though |u x v| = 5e-9 is
+    // above a bare GEOM_EPS — the band where two tests used to disagree.
+    const errors = rendered(`${CUBE}\nK = (0, -1, 0.000000005)\ndihedral: D-A-B-K`).errors.map((e) => e.message)
+    expect(errors).toEqual(['The half-planes of dihedral D-A-B-K lie in one plane (it measures 180°), so it has no plane angle to draw'])
+  })
+})
+
+describe('fix round 1: the plane-only refusal, reworded for phase 10', () => {
+  it('names what still does not draw on points in space', () => {
+    const errors = rendered(`${CUBE}\nlabel: triangle ABC`).errors.map((e) => e.message)
+    expect(errors).toEqual([
+      '"A" is a point in space, and this draws only in the plane — polygons, triangles, circles and arcs in space are not drawn',
+    ])
+  })
+})
+
+describe('fix round 1: a refused right angle shows how far from 90 it is', () => {
+  it('writes the true angle to as many places as it takes to differ from 90', () => {
+    // B = (0,0,0), A along x, C = (1e-7, 1, 0): the angle is 90 degrees less
+    // atan(1e-7) = 5.7296e-6 degrees, 89.99999427..., which three places
+    // would print as "90".
+    const spec = '@mode: figure\nA = (1, 0, 0)\nB = (0, 0, 0)\nC = (0.0000001, 1, 0)\nright-angle: A-B-C'
+    expect(rendered(spec).errors.map((e) => e.message)).toEqual(['A-B-C is not a right angle — its true angle is 89.99999°'])
+  })
+})

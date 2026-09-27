@@ -596,8 +596,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                    M: segments M -> M + l u and M -> M + l v, u and v the
 //                                                    unit components of C - M and D - M square to AB, with
 //                                                    l = 0.3 |AB| but no longer than C's or D's distance
-//                                                    from the line AB (so a segment never runs past the
-//                                                    point that fixes its half-plane), and M1's arc between
+//                                                    from the line AB (in the AIME 2016 I prism the one
+//                                                    toward A ends exactly at A), and M1's arc between
 //                                                    them. Refused: A = B, C or D on line AB, half-planes
 //                                                    in one plane (0 or 180). Only points in space; a spec
 //                                                    with one is a solid figure

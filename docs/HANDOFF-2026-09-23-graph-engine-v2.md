@@ -10,7 +10,7 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1702 tests passing**,
+agents" below). Working tree clean. **1707 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-26, after geometry phase 10 (measures and marks in
@@ -652,7 +652,9 @@ catch the deletion instead. The mark's segments are l = 0.3 |AB| long
 **but never longer than either end's distance from the line AB** (plan
 correction): 0.3 |BF| = 6.24 in the AIME prism while A is 6 from BF, so
 the segment toward A ran out of the prism past its vertex A as a visible
-stub. Capped, it ends at A.
+stub. Capped, it ends at A. It caps LENGTH only: it does not keep a
+segment inside its face (a face can be narrower at M than its end point
+is far from the edge).
 
 *Measures between lines and planes are table rows only (M5).* None has
 one point to hang a label on, so `label:` refuses them at parse time,
@@ -818,7 +820,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1702 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1707 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)

@@ -868,10 +868,13 @@ find: S height            # sqrt 108`,
     // Their common perpendicular runs from P = (1/2, 1/2, 1/2), the centre,
     // to Q = (1, 0, 1/2) on BF, square to both (the right-angle marks are
     // asserted in space), and its length is the distance between the lines,
-    // sqrt 2 / 2. It lies inside the cube, so it is dashed.
+    // sqrt 2 / 2. It lies inside the cube, so it is dashed. The table also
+    // measures the angle between the two lines (arccos(1/sqrt 3), 54.74),
+    // P's distance to the line BF (PQ again) and to the face BCG (1/2).
     label: 'Skew lines and their common perpendicular',
     group: 'Measures in space',
     spec: `@mode: figure
+@angle: degrees
 A = (0, 0, 0)
 B = (1, 0, 0)
 C = (1, 1, 0)
@@ -887,7 +890,10 @@ segment: P-Q
 right-angle: G-P-Q
 right-angle: F-Q-P
 label: PQ                              # sqrt 2 / 2
-given: distance between A-G and B-F`,
+given: distance between A-G and B-F
+given: angle between A-G and B-F
+given: distance from P to line B-F
+given: distance from P to plane B-C-G`,
   },
   {
     // Phase 10: angles in a unit cube, true in space and not as drawn. The
@@ -921,14 +927,16 @@ right-angle: C-G-E`,
   {
     // Phase 10: a regular tetrahedron's dihedral angle is arccos(1/3),
     // about 70.53 degrees, along every edge. Marked along AD, between the
-    // faces ADB and ADC, which face the viewer.
+    // faces ADB and ADC, which face the viewer; the table reads the same
+    // value along the base edge AB.
     label: "Tetrahedron's dihedral angle",
     group: 'Measures in space',
     spec: `@mode: figure
 @angle: degrees
 T = solid tetrahedron edge 6 vertices ABCD
 dihedral: B-A-D-C
-label: dihedral B-A-D-C   # arccos(1/3)`,
+label: dihedral B-A-D-C   # arccos(1/3)
+given: dihedral C-A-B-D`,
   },
   {
     // Phase 10: the angle between a line and a plane is the angle between
