@@ -8,6 +8,7 @@ import type { Vec3 } from '../scene/types'
 import type { Rgb, SpaceColors } from '../theme'
 import { createBuffer, float32, floatAttribute, type GpuResource } from './buffers'
 import { cumulativeScreenLength, CUMULATIVE_DASH_LIMIT, dashUniform } from './dash'
+import { applyLook, type MarkLook } from './look'
 import type { ProgramInfo } from './program'
 import { LINE_FRAGMENT, LINE_VERTEX } from './shaders/line'
 
@@ -179,6 +180,8 @@ export interface DrawTarget {
   pixelRatio: number
   // NDC z subtracted from depth; LINE_DEPTH_BIAS unless given.
   depthBias?: number
+  // Clipping and depth cue (look.ts); the frame's has both off.
+  look: MarkLook
 }
 
 export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, lines: readonly LineGpu[], target: DrawTarget, pass: AaPass): void {
@@ -194,6 +197,7 @@ export function drawLines(gl: WebGL2RenderingContext, program: ProgramInfo, line
   gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
   gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])
   gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+  applyLook(gl, program, target.look)
   for (const line of lines) {
     const [r, g, b] = line.look.color(colors)
     const dash = dashUniform(line.look.dash)

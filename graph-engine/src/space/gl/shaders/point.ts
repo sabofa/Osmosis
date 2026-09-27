@@ -1,7 +1,10 @@
 // Shaped points (plan G9 "Points"): instanced screen-aligned quads of `size`
 // CSS px, the shape drawn by a signed distance in the fragment shader and
 // antialiased, depth-tested at the point's own depth (less the line bias).
-// Shapes: 0 dot, 1 ring, 2 cross (+), 3 diamond, 4 square.
+// Shapes: 0 dot, 1 ring, 2 cross (+), 3 diamond, 4 square. A point is
+// clipped and depth-cued by its centre (look.ts).
+
+import { LOOK_FRAGMENT_GLSL, LOOK_VERTEX_GLSL } from '../look'
 
 export const POINT_VERTEX = /* glsl */ `#version 300 es
 // space: point
@@ -14,7 +17,12 @@ uniform float u_pixelRatio;
 uniform float u_size;                   // CSS px diameter
 uniform float u_depthBias;
 out vec2 v_local;                       // backing px from the centre
+flat out vec3 v_rel;
+flat out float v_depth;
+${LOOK_VERTEX_GLSL}
 void main() {
+  v_rel = a_centre;
+  v_depth = viewDepth(a_centre * u_scale);
   vec4 c = u_viewProj * vec4(a_centre * u_scale, 1.0);
   float r = 0.5 * u_size * u_pixelRatio + 1.0;
   v_local = a_corner * r;
@@ -31,11 +39,14 @@ export const POINT_FRAGMENT = /* glsl */ `#version 300 es
 precision highp float;
 precision highp int;
 in vec2 v_local;
+flat in vec3 v_rel;
+flat in float v_depth;
 uniform vec3 u_color;
 uniform float u_pixelRatio;
 uniform float u_size;
 uniform int u_shape;
 uniform int u_pass;        // 0: opaque core, writes depth; 1: antialiased fringe, blended
+${LOOK_FRAGMENT_GLSL}
 out vec4 fragColor;
 
 float box(vec2 p, vec2 b) {
@@ -44,6 +55,7 @@ float box(vec2 p, vec2 b) {
 }
 
 void main() {
+  if (outsideBox(v_rel)) discard;
   float R = 0.5 * u_size * u_pixelRatio;
   vec2 p = v_local;
   float d;
@@ -63,6 +75,6 @@ void main() {
   float alpha = clamp(0.5 - d, 0.0, 1.0);
   bool core = alpha >= 0.999;
   if (u_pass == 0 ? !core : (core || alpha <= 0.0)) discard;
-  fragColor = vec4(u_color, u_pass == 0 ? 1.0 : alpha);
+  fragColor = vec4(depthCue(u_color, v_depth), u_pass == 0 ? 1.0 : alpha);
 }
 `

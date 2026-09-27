@@ -5,7 +5,7 @@ import { createFakeGl, type FakeGl } from './gl/fakeGl'
 import { parseSpec } from '../parser/parseSpec'
 import { SpaceRenderer, type SpaceRendererEnv } from './SpaceRenderer'
 import { FakeDocument, type FakeElement } from './testing/fakeDom'
-import { curveMark, label, scene } from './testing/marks'
+import { curveMark, label, meshMark, scene } from './testing/marks'
 
 // A canvas in a parent, both fake, handing out the recording fake GL.
 function mount(fake: FakeGl | null = createFakeGl()) {
@@ -329,6 +329,43 @@ describe('SpaceRenderer and its host', () => {
     r.setView({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
     canvas.dispatch('dblclick')
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    r.dispose()
+  })
+
+  it('shows a colorbar per referenced colour scale, at most two, with one console note per scene for the rest', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { canvas, parent } = mount()
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const mesh = (colorScale: number) => meshMark([0, 0, 0, 1, 0, 0, 0, 1, 1], [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2], { style: { colorScale } })
+    const scales = [0, 1, 2].map((id) => ({ id, title: `s${id}`, map: 'viridis' as const, domain: { min: 0, max: 1 }, diverging: false }))
+    r.setScene({ ...scene([mesh(0), mesh(1), mesh(2)]), colorScales: scales }, CONFIG)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const bars = overlay.children.find((c) => c.className === 'space-colorbars')!
+    expect(bars.children.map((b) => b.children[0].textContent)).toEqual(['s0', 's1'])
+    expect(info).toHaveBeenCalledTimes(1)
+    expect(String(info.mock.calls[0][0])).toMatch(/1 more colour scale not shown/)
+    // A theme change redraws the bars without a second note.
+    r.setPalette(DARK_PALETTE, 'dark')
+    expect(bars.children).toHaveLength(2)
+    expect(info).toHaveBeenCalledTimes(1)
+    r.setScene(scene([helix]), CONFIG)
+    expect(bars.children).toHaveLength(0)
+    r.dispose()
+    info.mockRestore()
+  })
+
+  it("draws with the spec's @depthcue: off (the cue uniform is 0 for every mark)", () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const parsed = parseSpec('@depthcue: off\n(cos(t), sin(t), t/10) for t in [0, 12]')
+    r.setSpec(parsed.statements, parsed.config, parsed.statementLines)
+    clock.flush()
+    const cues = fake.calls.filter((c) => c.fn === 'uniform1f' && (c.args[0] as { uniform?: string }).uniform === 'u_cue').map((c) => c.args[1])
+    expect(cues.length).toBeGreaterThan(0)
+    expect(new Set(cues)).toEqual(new Set([0]))
     r.dispose()
   })
 })

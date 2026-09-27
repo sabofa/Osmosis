@@ -7,8 +7,10 @@
 // - otherwise a screen-space isosceles triangle along the projected
 //   direction, at most 45% of the projected length;
 // - or a 4 px dot when that triangle would be under 4 px.
+// A head is clipped and depth-cued by its tip (look.ts).
 
 import { ARROW_HEAD_GLSL } from '../arrowHead'
+import { LOOK_FRAGMENT_GLSL, LOOK_VERTEX_GLSL } from '../look'
 
 export const ARROW_VERTEX = /* glsl */ `#version 300 es
 // space: arrowhead
@@ -27,8 +29,13 @@ uniform bool u_perspective;
 out vec2 v_local;                       // backing px in the head's frame: x along, y across, tip at 0
 flat out int v_kind;                    // 0 triangle, 1 ring, 2 dot
 out float v_size;                       // backing px: triangle length, ring or dot diameter
+flat out vec3 v_rel;
+flat out float v_depth;
 ${ARROW_HEAD_GLSL}
+${LOOK_VERTEX_GLSL}
 void main() {
+  v_rel = a_tip;
+  v_depth = viewDepth(a_tip * u_scale);
   vec4 a = u_viewProj * vec4(a_tail * u_scale, 1.0);
   vec4 b = u_viewProj * vec4(a_tip * u_scale, 1.0);
   float h = u_headSize * u_pixelRatio;
@@ -65,14 +72,18 @@ precision highp int;
 in vec2 v_local;
 flat in int v_kind;
 in float v_size;
+flat in vec3 v_rel;
+flat in float v_depth;
 uniform vec3 u_color;
 uniform float u_opacity;
 uniform float u_pixelRatio;
 uniform float u_headSize;
 uniform float u_shaftWidth;
 uniform int u_pass;        // 0: opaque core, writes depth; 1: antialiased fringe, blended
+${LOOK_FRAGMENT_GLSL}
 out vec4 fragColor;
 void main() {
+  if (outsideBox(v_rel)) discard;
   float h = u_headSize * u_pixelRatio;
   vec2 p = v_local;
   float d;
@@ -93,6 +104,6 @@ void main() {
   float alpha = clamp(0.5 - d, 0.0, 1.0);
   bool core = alpha >= 0.999;
   if (u_pass == 0 ? !core : (core || alpha <= 0.0)) discard;
-  fragColor = vec4(u_color, (u_pass == 0 ? 1.0 : alpha) * u_opacity);
+  fragColor = vec4(depthCue(u_color, v_depth), (u_pass == 0 ? 1.0 : alpha) * u_opacity);
 }
 `

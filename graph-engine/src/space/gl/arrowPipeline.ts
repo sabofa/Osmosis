@@ -8,6 +8,7 @@ import type { WorldMap } from '../camera/world'
 import type { Rgb, SpaceColors } from '../theme'
 import { createBuffer, float32, floatAttribute, type GpuResource } from './buffers'
 import { LINE_DEPTH_BIAS, uploadLines, type AaPass, type DrawTarget, type LineGpu, type SharedQuads } from './linePipeline'
+import { applyLook } from './look'
 import type { ProgramInfo } from './program'
 import { ARROW_FRAGMENT, ARROW_VERTEX } from './shaders/arrow'
 
@@ -105,6 +106,7 @@ export function drawArrowHeads(gl: WebGL2RenderingContext, program: ProgramInfo,
   gl.uniform3f(program.uniform('u_eyeDir'), camera.direction[0], camera.direction[1], camera.direction[2])
   gl.uniform3f(program.uniform('u_eye'), camera.eye[0], camera.eye[1], camera.eye[2])
   gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+  applyLook(gl, program, target.look)
   for (const a of arrows) {
     const [r, g, b] = a.look.color(colors)
     gl.uniform3f(program.uniform('u_color'), r, g, b)

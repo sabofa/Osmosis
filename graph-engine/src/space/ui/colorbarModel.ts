@@ -13,11 +13,21 @@
 import { normalise, tableEntry, TABLE_SIZE } from '../colormaps'
 import { niceStep } from '../frame/nice'
 import { formatTick, ticks } from '../frame/ticks'
-import type { ColorScale } from '../scene/types'
+import type { ColorScale, SpaceScene } from '../scene/types'
 import { cssRgb } from '../theme'
 
 export const COLORBAR_STOPS = 16
 export const COLORBAR_TICK_TARGET = 5
+// At most this many colorbars, stacked; a scene with more shows the first.
+export const MAX_COLORBARS = 2
+
+// The scales a colorbar shows: only those some mesh references (a hand-built
+// scene may list others), in scene order, at most MAX_COLORBARS; `hidden`
+// counts the rest.
+export function colorbarScales(scene: SpaceScene): { shown: ColorScale[]; hidden: number } {
+  const referenced = scene.colorScales.filter((_, index) => scene.marks.some((m) => m.kind === 'mesh' && m.style.colorScale === index))
+  return { shown: referenced.slice(0, MAX_COLORBARS), hidden: Math.max(0, referenced.length - MAX_COLORBARS) }
+}
 
 export interface ColorbarTick {
   value: number

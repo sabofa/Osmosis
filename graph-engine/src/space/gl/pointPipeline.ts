@@ -6,6 +6,7 @@ import type { PointMark, PointShape } from '../scene/types'
 import { resolveSpaceColor } from '../theme'
 import { createBuffer, float32, floatAttribute, relativeFloat32, type GpuResource } from './buffers'
 import { LINE_DEPTH_BIAS, type AaPass, type DrawTarget, type SharedQuads } from './linePipeline'
+import { applyLook } from './look'
 import type { ProgramInfo } from './program'
 import { POINT_FRAGMENT, POINT_VERTEX } from './shaders/point'
 
@@ -50,6 +51,7 @@ export function drawPoints(gl: WebGL2RenderingContext, program: ProgramInfo, poi
   gl.uniform1f(program.uniform('u_pixelRatio'), target.pixelRatio)
   gl.uniform1f(program.uniform('u_depthBias'), target.depthBias ?? LINE_DEPTH_BIAS)
   gl.uniform1i(program.uniform('u_pass'), pass)
+  applyLook(gl, program, target.look)
   for (const p of points) {
     const [r, g, b] = resolveSpaceColor(p.mark.style.color, colors.palette, colors.theme)
     gl.uniform3f(program.uniform('u_color'), r, g, b)

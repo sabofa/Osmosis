@@ -17,8 +17,12 @@
 //   space so it ends inside a triangular head (arrowHead() from
 //   gl/arrowHead.ts, the same rule the head uses); a ring or dot head leaves
 //   it whole.
+// - Clipping at the axis box and the depth cue (look.ts) read the author
+//   position and view depth interpolated along the segment; the frame draws
+//   with both off.
 
 import { ARROW_HEAD_GLSL } from '../arrowHead'
+import { LOOK_FRAGMENT_GLSL, LOOK_VERTEX_GLSL } from '../look'
 
 export const LINE_VERTEX = /* glsl */ `#version 300 es
 // space: line
@@ -41,7 +45,10 @@ out vec2 v_local;                       // backing px: x from p0 along the segme
 out float v_length;                     // backing px
 out float v_halfWidth;                  // backing px
 out float v_along;                      // CSS px along the line, for dashes
+out vec3 v_rel;                         // author position, relative to the box centre
+out float v_depth;                      // view depth
 ${ARROW_HEAD_GLSL}
+${LOOK_VERTEX_GLSL}
 void main() {
   vec4 c0 = u_viewProj * vec4(a_p0 * u_scale, 1.0);
   vec4 c1 = u_viewProj * vec4(a_p1 * u_scale, 1.0);
@@ -49,6 +56,8 @@ void main() {
   v_length = 0.0;
   v_halfWidth = 0.0;
   v_along = 0.0;
+  v_rel = a_p0;
+  v_depth = viewDepth(a_p0 * u_scale);
   // Keep only the part in front of the near plane (z >= -w).
   float d0 = c0.z + c0.w;
   float d1 = c1.z + c1.w;
@@ -89,6 +98,10 @@ void main() {
   v_local = vec2(end * len + (end * 2.0 - 1.0) * r, a_corner.y * r);
   v_length = len;
   v_halfWidth = hw;
+  // Where this corner lies along p0 -> p1 (beyond either end for a cap).
+  float along = full > 1e-4 ? v_local.x / full : 0.0;
+  v_rel = mix(a_p0, a_p1, along);
+  v_depth = mix(viewDepth(a_p0 * u_scale), viewDepth(a_p1 * u_scale), along);
   float fraction = v_local.x / max(len, 1e-4);
   if (u_dashMode == 1) {
     v_along = a_len.x + fraction * (a_len.y - a_len.x);
@@ -105,15 +118,19 @@ in vec2 v_local;
 in float v_length;
 in float v_halfWidth;
 in float v_along;
+in vec3 v_rel;
+in float v_depth;
 uniform vec3 u_color;
 uniform float u_opacity;
 uniform int u_dashMode;
 uniform vec4 u_dash;       // on, off, on, off (CSS px)
 uniform float u_dashTotal;
 uniform int u_pass;        // 0: opaque core, writes depth; 1: antialiased fringe, blended
+${LOOK_FRAGMENT_GLSL}
 out vec4 fragColor;
 
 void main() {
+  if (outsideBox(v_rel)) discard;
   float x = clamp(v_local.x, 0.0, v_length);
   float dist = length(vec2(v_local.x - x, v_local.y));
   float alpha = clamp(v_halfWidth + 0.5 - dist, 0.0, 1.0);
@@ -124,6 +141,6 @@ void main() {
   }
   bool core = alpha >= 0.999;
   if (u_pass == 0 ? !core : (core || alpha <= 0.0)) discard;
-  fragColor = vec4(u_color, (u_pass == 0 ? 1.0 : alpha) * u_opacity);
+  fragColor = vec4(depthCue(u_color, v_depth), (u_pass == 0 ? 1.0 : alpha) * u_opacity);
 }
 `

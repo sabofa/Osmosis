@@ -42,3 +42,67 @@
   font-size: 14px;
   line-height: 1.4;
 }
+
+/* The colorbars (plan E5): right edge, inset 16 px, 12 x 160 px strips with
+   their tick labels to the left, at most two stacked. */
+.space-colorbars {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 24px;
+}
+
+.space-colorbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.space-colorbar-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  white-space: nowrap;
+}
+
+.space-colorbar-body {
+  position: relative;
+  width: 12px;
+  height: 160px;
+}
+
+.space-colorbar-strip {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.35);
+}
+
+.space-colorbar-tick {
+  position: absolute;
+  right: 18px;
+  transform: translateY(50%);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* A tick mark from the label to the strip; zero's crosses the strip. */
+.space-colorbar-tick::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 2px);
+  width: 4px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.space-colorbar-tick[data-zero]::after {
+  width: 20px;
+  opacity: 1;
+}

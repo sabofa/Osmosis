@@ -32,7 +32,19 @@ import {
   type LineLook,
   type SharedQuads,
 } from './linePipeline'
-import { drawMeshes, drawTranslucentMeshes, isTranslucent, MESH_PROGRAM, sortBackToFront, uploadMesh, type MeshGpu } from './meshPipeline'
+import { frameLook, markLook } from './look'
+import { LutCache, lutKey } from './lut'
+import {
+  drawMeshes,
+  drawTranslucentMeshes,
+  isTranslucent,
+  mapsUsed,
+  MESH_PROGRAM,
+  sortBackToFront,
+  uploadMesh,
+  type MeshDraw,
+  type MeshGpu,
+} from './meshPipeline'
 import { drawPoints, POINT_PROGRAM, uploadPoints, type PointGpu } from './pointPipeline'
 import { ProgramCache, type ProgramInfo } from './program'
 
@@ -100,6 +112,8 @@ export class GlBackend {
   private readonly gl: WebGL2RenderingContext | null
   private readonly programs = new ProgramCache()
   private readonly marks = new Map<Mark, CachedMark>()
+  private readonly luts = new LutCache()
+  private depthcue = true
   private readonly unwatch: (() => void) | null
   private shared: SharedQuads | null = null
   private scene: SpaceScene | null = null
@@ -138,9 +152,11 @@ export class GlBackend {
   }
 
   // Replace the scene. Marks kept by identity keep their buffers, unless the
-  // box centre or scale changed, which re-uploads everything.
-  setScene(scene: SpaceScene, world: WorldMap, colors: SpaceColors): void {
+  // box centre or scale changed, which re-uploads everything. `depthcue` is
+  // the spec's @depthcue.
+  setScene(scene: SpaceScene, world: WorldMap, colors: SpaceColors, options: { depthcue?: boolean } = {}): void {
     this.scene = scene
+    this.depthcue = options.depthcue ?? true
     this.world = world
     this.colors = colors
     this.sceneGeneration++
@@ -184,7 +200,8 @@ export class GlBackend {
       const point = this.program(POINT_PROGRAM)
       const head = this.program(ARROWHEAD_PROGRAM)
       if (!mesh || !line || !point || !head) return
-      const target: DrawTarget = { camera, world, colors, width: this.canvas.width, height: this.canvas.height, pixelRatio }
+      const look = markLook(camera, world, colors, this.depthcue)
+      const target: DrawTarget = { camera, world, colors, width: this.canvas.width, height: this.canvas.height, pixelRatio, look }
 
       gl.enable(gl.DEPTH_TEST)
       gl.depthFunc(gl.LEQUAL)
@@ -203,6 +220,12 @@ export class GlBackend {
       }
       const key = cameraKey(camera)
       for (const l of lines) updateDashes(gl, l, camera, key, world)
+
+      // One colormap texture per map in use under this theme; the rest go.
+      const scales = this.scene?.colorScales ?? []
+      const maps = mapsUsed(meshes, scales)
+      this.luts.retain(gl, new Set([...maps].map((m) => lutKey(m, colors))))
+      const meshDraw: MeshDraw = { camera, world, colors, look, pixelRatio, scales, lut: (map) => this.luts.get(gl, map, colors) }
 
       // Lines, arrowheads and points in two passes: their opaque cores
       // write depth, then their antialiased fringes blend without writing it.
@@ -224,18 +247,18 @@ export class GlBackend {
       // walls, the axes frame as content.
       gl.disable(gl.BLEND)
       if (this.frameGpu) {
-        const at = { ...target, depthBias: frameDepthBias(this.frameGpu.style) }
+        const at = { ...target, depthBias: frameDepthBias(this.frameGpu.style), look: frameLook(look) }
         antialiased([...this.frameGpu.lines, ...this.frameGpu.arrows.map((a) => a.shaft)], this.frameGpu.arrows, [], at)
       }
 
       // Opaque meshes.
-      drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), camera, world, colors)
+      drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw)
 
       // Lines, arrows and points, with their depth bias.
       antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target)
 
       // Translucent meshes, back to front, blended, back faces then front faces.
-      drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), camera, world, colors)
+      drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), meshDraw)
     } catch (error) {
       this.fail(error)
     }
@@ -251,8 +274,10 @@ export class GlBackend {
       for (const m of this.marks.values()) m.destroy(gl)
       this.frameGpu?.destroy(gl)
       this.shared?.destroy(gl)
+      this.luts.deleteAll(gl)
       this.programs.deleteAll(gl)
     }
+    this.luts.forget()
     this.marks.clear()
     this.frameGpu = null
     this.shared = null
@@ -396,6 +421,7 @@ export class GlBackend {
     this.frameGpu = null
     this.frameKey = ''
     this.shared = null
+    this.luts.forget()
     this.programs.forget()
     this.worldKey = ''
     this.options.onContextLost?.()

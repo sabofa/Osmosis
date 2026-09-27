@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { LIGHT_PALETTE } from '../../render/palette'
 import { colormapTable, tableEntry } from '../colormaps'
 import type { ColorScale } from '../scene/types'
+import { FakeDocument } from '../testing/fakeDom'
+import { meshMark, scene } from '../testing/marks'
 import { cssRgb, spaceColors } from '../theme'
-import { colorbarModel, stopEntry } from './colorbarModel'
+import { Colorbars } from './colorbar'
+import { colorbarModel, colorbarScales, stopEntry } from './colorbarModel'
 
 const LIGHT = spaceColors(LIGHT_PALETTE, 'light')
 
@@ -46,5 +49,45 @@ describe('colorbarModel', () => {
     expect(on.ticks.find((t) => t.text === '−3')?.position).toBe(0)
     const seq = colorbarModel(scale({ domain: { min: -1, max: 1 } }), colormapTable('viridis', LIGHT))
     expect(seq.ticks.some((t) => t.zero)).toBe(false)
+  })
+})
+
+describe('colorbarScales', () => {
+  const mesh = (colorScale: number | null) => meshMark([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2], { style: { colorScale } })
+  const scales = [0, 1, 2, 3].map((id) => scale({ id, title: `s${id}` }))
+
+  it('shows only referenced scales, in scene order, at most two, and counts the rest', () => {
+    // Scale 1 is referenced by no mesh.
+    const s = { ...scene([mesh(0), mesh(2), mesh(3), mesh(null)]), colorScales: scales }
+    const { shown, hidden } = colorbarScales(s)
+    expect(shown.map((x) => x.title)).toEqual(['s0', 's2'])
+    expect(hidden).toBe(1)
+  })
+
+  it('shows nothing for a scene with no referenced scale', () => {
+    expect(colorbarScales({ ...scene([mesh(null)]), colorScales: scales })).toEqual({ shown: [], hidden: 0 })
+  })
+})
+
+describe('Colorbars (DOM)', () => {
+  it('draws a block per model, title above a strip with its ticks, and replaces them on update', () => {
+    const doc = new FakeDocument()
+    const overlay = doc.createElement('div')
+    const bars = new Colorbars(overlay as unknown as HTMLElement)
+    const table = colormapTable('balance', LIGHT)
+    const model = colorbarModel(scale({ title: 'x*y', map: 'balance', domain: { min: -3, max: 3 }, diverging: true }), table)
+    bars.update([model, model])
+    expect(bars.count).toBe(2)
+    const root = overlay.children[0]
+    expect(root.className).toBe('space-colorbars')
+    const [title, body] = root.children[0].children
+    expect(title.textContent).toBe('x*y')
+    const [strip, ...ticks] = body.children
+    expect(strip.style.background).toBe(model.gradient)
+    expect(ticks.map((t) => [t.textContent, t.style.bottom, t.dataset.zero ?? null])).toContainEqual(['0', '50.00%', 'true'])
+    bars.update([model])
+    expect(root.children).toHaveLength(1)
+    bars.dispose()
+    expect(overlay.children).toHaveLength(0)
   })
 })

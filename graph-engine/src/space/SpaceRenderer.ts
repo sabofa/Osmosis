@@ -15,6 +15,7 @@ import type { Statement } from '../parser/types'
 import type { Palette } from '../render/palette'
 import { clampElevation, inertiaStep, sanitizeView, wrapAzimuth, type OrbitVelocity } from './camera/controls'
 import { cameraMatrices, type Viewport } from './camera/projection'
+import { colormapTable } from './colormaps'
 import { worldMap, type WorldMap } from './camera/world'
 import { defaultSpaceConfig, type SpaceConfig, type SpaceView } from './config'
 import { boxHalfExtents } from './frame/aspect'
@@ -28,6 +29,8 @@ import type { SpaceKernel } from './kernel/api'
 import { createSpaceKernel } from './kernel/index'
 import type { SceneError, SpaceScene } from './scene/types'
 import { spaceColors, type SpaceColors } from './theme'
+import { Colorbars } from './ui/colorbar'
+import { colorbarModel, colorbarScales } from './ui/colorbarModel'
 import { attachInput, InputMachine, type AttachedInput, type InputContext } from './ui/input'
 import { layoutLabels } from './ui/layout'
 import { Overlay } from './ui/overlay'
@@ -130,6 +133,7 @@ export class SpaceRenderer {
   private readonly env: SpaceRendererEnv
   private readonly backend: GlBackend
   private readonly overlay: Overlay
+  private readonly colorbars: Colorbars
   private readonly scheduler: FrameScheduler
   private readonly input = new InputMachine()
   private readonly attached: AttachedInput
@@ -160,6 +164,7 @@ export class SpaceRenderer {
     this.view = { ...this.authored, target: [0, 0, 0] }
     this.overlay = new Overlay(canvas)
     this.overlay.setColors(this.colors)
+    this.colorbars = new Colorbars(this.overlay.element)
     this.scheduler = new FrameScheduler(env.requestFrame, env.cancelFrame, (time) => this.frame(time))
     this.backend = new GlBackend(canvas, {
       // A backend failure leaves nothing drawn: say why in the view too.
@@ -226,7 +231,10 @@ export class SpaceRenderer {
     this.world = world
     this.authored = sanitizeView(authored, authored)
     this.axes = frameAxes(space, box)
-    this.backend.setScene(scene, world, this.colors)
+    this.backend.setScene(scene, world, this.colors, { depthcue: space.depthcue })
+    const { hidden } = colorbarScales(scene)
+    if (hidden > 0) console.info(`space: showing the first 2 colorbars; ${hidden} more colour scale${hidden === 1 ? '' : 's'} not shown`)
+    this.updateColorbars()
     this.scheduler.request()
   }
 
@@ -253,6 +261,7 @@ export class SpaceRenderer {
     this.colors = spaceColors(palette, theme)
     this.backend.setColors(this.colors)
     this.overlay.setColors(this.colors)
+    this.updateColorbars()
     this.scheduler.request()
   }
 
@@ -282,9 +291,17 @@ export class SpaceRenderer {
     this.stopObserving()
     this.stopPixelRatio()
     this.backend.dispose()
+    this.colorbars.dispose()
     this.overlay.dispose()
     this.scene = null
     this.kernel = null
+  }
+
+  // The colorbars for the current scene and theme (E5).
+  private updateColorbars(): void {
+    const scene = this.scene
+    const shown = scene ? colorbarScales(scene).shown : []
+    this.colorbars.update(shown.map((scale) => colorbarModel(scale, colormapTable(scale.map, this.colors))))
   }
 
   private redrawNow(): void {
