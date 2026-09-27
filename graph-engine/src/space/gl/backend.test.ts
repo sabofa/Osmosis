@@ -270,20 +270,3 @@ describe('GlBackend: shader failure', () => {
     for (const [kind, n] of Object.entries(balance(fake))) expect([kind, n]).toEqual([kind, 0])
   })
 })
-
-describe('GlBackend: box marks', () => {
-  it('skips box marks with one console warning per scene', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { backend } = setup()
-    const box = {
-      kind: 'boxes' as const,
-      source: { line: 2, statement: null, object: 's2' },
-      mins: new Float64Array([0, 0, 0, 1, 1, 1]),
-      maxs: new Float64Array([0.5, 0.5, 0.5, 1.5, 1.5, 1.5]),
-      style: { color: { author: null, slot: 1 }, opacity: 1, edges: true },
-    }
-    backend.setScene(scene([square(), box, { ...box }]), WORLD, LIGHT)
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toMatch(/box marks/)
-  })
-})

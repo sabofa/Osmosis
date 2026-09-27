@@ -8,8 +8,8 @@
 // context is rebuilt on `webglcontextrestored` by re-uploading them.
 //
 // Draw order: the frame (its lines, then the axes frame's arrows), opaque
-// meshes, the scene's lines, arrows and points, then translucent meshes back
-// to front. Box marks are skipped until S5.
+// meshes, the scene's lines, arrows and points (box edges among the lines),
+// then translucent meshes back to front, then box marks (boxPipeline.ts).
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
@@ -17,6 +17,7 @@ import type { FrameLineRole, FrameModel } from '../frame/types'
 import type { ArrowMark, LineMark, Mark, SpaceScene } from '../scene/types'
 import { resolveSpaceColor, type Rgb, type SpaceColors } from '../theme'
 import { ARROWHEAD_PROGRAM, drawArrowHeads, uploadArrows, type ArrowGpu, type ArrowLook } from './arrowPipeline'
+import { BOX_PROGRAM, drawBoxes, uploadBoxes, type BoxGpu } from './boxPipeline'
 import { syncByIdentity, type GpuResource } from './buffers'
 import { createContext, watchContext, type GlCapabilities } from './context'
 import {
@@ -47,6 +48,7 @@ type MarkGpu =
   | { kind: 'lines'; gpu: LineGpu }
   | { kind: 'points'; gpu: PointGpu }
   | { kind: 'arrows'; gpu: ArrowGpu }
+  | { kind: 'boxes'; gpu: BoxGpu }
 
 type CachedMark = MarkGpu & GpuResource
 
@@ -56,7 +58,7 @@ interface FrameGpu extends GpuResource {
   arrows: ArrowGpu[]
 }
 
-const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM]
+const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM, BOX_PROGRAM]
 
 // The frame's look (plan G9 "Frame drawing"): 1 px grid, 1.5 px walls and
 // ticks; the axes frame's axes as 1.5 px arrows with 10 px heads.
@@ -147,8 +149,6 @@ export class GlBackend {
     // The retained frame belongs to the previous scene's box: drop it, so
     // nothing draws until the caller sets this scene's frame.
     this.dropFrame()
-    const boxes = scene.marks.filter((m) => m.kind === 'boxes').length
-    if (boxes > 0) console.warn(`space: box marks are not drawn until S5; skipped ${boxes}`)
     this.upload()
   }
 
@@ -183,7 +183,8 @@ export class GlBackend {
       const line = this.program(LINE_PROGRAM)
       const point = this.program(POINT_PROGRAM)
       const head = this.program(ARROWHEAD_PROGRAM)
-      if (!mesh || !line || !point || !head) return
+      const box = this.program(BOX_PROGRAM)
+      if (!mesh || !line || !point || !head || !box) return
       const target: DrawTarget = { camera, world, colors, width: this.canvas.width, height: this.canvas.height, pixelRatio }
 
       gl.enable(gl.DEPTH_TEST)
@@ -195,12 +196,15 @@ export class GlBackend {
       const lines: LineGpu[] = []
       const arrows: ArrowGpu[] = []
       const points: PointGpu[] = []
+      const boxes: BoxGpu[] = []
       for (const m of this.marks.values()) {
         if (m.kind === 'mesh') meshes.push(m.gpu)
         else if (m.kind === 'lines') lines.push(m.gpu)
         else if (m.kind === 'arrows') arrows.push(m.gpu)
+        else if (m.kind === 'boxes') boxes.push(m.gpu)
         else points.push(m.gpu)
       }
+      for (const b of boxes) if (b.edges) lines.push(b.edges)
       const key = cameraKey(camera)
       for (const l of lines) updateDashes(gl, l, camera, key, world)
 
@@ -236,6 +240,9 @@ export class GlBackend {
 
       // Translucent meshes, back to front, blended, back faces then front faces.
       drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), camera, world, colors)
+
+      // Box marks (S5): opaque, then translucent back to front.
+      drawBoxes(gl, box, boxes, camera, world, colors, key)
     } catch (error) {
       this.fail(error)
     }
@@ -296,8 +303,7 @@ export class GlBackend {
         this.marks.clear()
         this.worldKey = key
       }
-      const drawable = scene.marks.filter((m) => m.kind !== 'boxes')
-      syncByIdentity(gl, this.marks, drawable, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
+      syncByIdentity(gl, this.marks, scene.marks, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
     } catch (error) {
       this.fail(error)
     }
@@ -320,6 +326,10 @@ export class GlBackend {
       case 'arrows': {
         const gpu = uploadArrows(gl, shared, mark.tails, mark.vectors, world, arrowLook(mark))
         return gpu && { kind: 'arrows', gpu }
+      }
+      case 'boxes': {
+        const gpu = uploadBoxes(gl, shared, mark, world)
+        return gpu && { kind: 'boxes', gpu }
       }
       default:
         return null

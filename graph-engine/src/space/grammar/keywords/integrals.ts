@@ -4,6 +4,8 @@
 //   R = region <domain>                      names it; draws nothing on its own
 //   volume: under f over <domain>            the solid under z = f, with its walls; the double integral
 //   volume: between g and f over <domain>    the solid between z = g (bottom) and z = f (top)
+//   riemann: under f over x in [a, b], y in [c, d], n = 4 [by 3] [sample: mid]
+//                                            Riemann boxes, the sum beside the integral
 //   centroid: R [density <expr>]             the centroid (centre of mass) of a named region or volume
 //
 // <domain> is exactly what follows "over" on a surface (space/grammar/domain.ts):
@@ -20,6 +22,7 @@ import { splitTopLevelComma } from '../../../parser/grammarUtil'
 import { parseExprString } from '../../../parser/parseExpr'
 import type { Expr } from '../../../parser/types'
 import { BUILTIN_NAMES } from '../../../math/compile'
+import { varNames } from '../../../math/expr'
 import { parseOverDomain } from '../domain'
 import { splitStyle, type RawClause, type StyleKey } from '../style'
 import { spaceStatement, type Domain, type SpaceForm, type SpaceStatement, type SpaceStyle } from '../types'
@@ -29,6 +32,10 @@ export interface Target {
   expr: Expr
   text: string
 }
+
+// Where a Riemann box's height is sampled, in its cell.
+export type SampleRule = 'mid' | 'lower-left' | 'upper-right' | 'lower-right' | 'upper-left' | 'random'
+const SAMPLE_RULES: readonly SampleRule[] = ['mid', 'lower-left', 'upper-right', 'lower-right', 'upper-left', 'random']
 
 // What a volume: statement fills. "between" with no bottom is "under" (z = 0).
 export type VolumeSolid = { kind: 'between'; top: Target; bottom: Target | null; region: Domain }
@@ -40,6 +47,8 @@ export type IntegralForm =
   | { form: 'namedRegion'; name: string; domain: Domain }
   // "volume: under f over R", "volume: between g and f over R"
   | { form: 'volume'; solid: VolumeSolid; style: SpaceStyle }
+  // "riemann: under f over x in [a, b], y in [c, d], n = nx [by ny] [sample: <rule>]"
+  | { form: 'riemann'; target: Target; region: Domain; n: [Expr, Expr]; sample: SampleRule; style: SpaceStyle }
   // "centroid: R [density <expr>]"
   | { form: 'centroid'; of: string; density: Expr | null; style: SpaceStyle }
 
@@ -48,10 +57,11 @@ const COORDINATES = new Set(['x', 'y', 'z', 'r', 'theta', 'rho', 'phi'])
 
 // What a clause is being applied to, and the clauses each takes. color: and
 // name: are the shared loop's, stripped before the hooks run.
-type IntegralTarget = 'region' | 'volume' | 'centroid'
+type IntegralTarget = 'region' | 'volume' | 'Riemann sum' | 'centroid'
 const TAKES: Record<IntegralTarget, readonly StyleKey[]> = {
   region: ['opacity', 'res'],
   volume: ['opacity', 'res', 'mesh'],
+  'Riemann sum': ['opacity'],
   centroid: [],
 }
 
@@ -146,6 +156,46 @@ function parseVolume(text: string): SpaceForm {
   throw new Error(`Expected "volume: under f over R" or "volume: between g and f over R", got "volume: ${rest}"`)
 }
 
+export const RIEMANN_RECTANGLE = 'Riemann boxes need a rectangle; use x in [a, b], y in [c, d]'
+
+// Whether an iterated region's inner bounds read its outer variable.
+export function readsOuter(region: Extract<Domain, { kind: 'iterated' }>): boolean {
+  return varNames(region.inner.to, varNames(region.inner.from)).has(region.outer.param)
+}
+
+// "under f over x in [a, b], y in [c, d], n = 4 [by 3] [sample: <rule>]". A
+// named region is checked for being a rectangle where it is resolved.
+function parseRiemann(text: string): SpaceForm {
+  const shape = 'riemann: under f over x in [0, 2], y in [0, 2], n = 4'
+  const { rest: styled, clauses } = splitStyle(text)
+  const style = integralStyle(clauses, 'Riemann sum')
+  let rest = styled
+  let sample: SampleRule = 'mid'
+  const rule = /\s+sample:\s*(\S+)/.exec(rest)
+  if (rule) {
+    if (!(SAMPLE_RULES as readonly string[]).includes(rule[1])) {
+      throw new Error(`sample: mid, lower-left, upper-right, lower-right, upper-left or random, got "${rule[1]}"`)
+    }
+    sample = rule[1] as SampleRule
+    rest = (rest.slice(0, rule.index) + rest.slice(rule.index + rule[0].length)).trim()
+  }
+  const under = /^under\s+(.+)$/.exec(rest)
+  const over = under ? under[1].indexOf(' over ') : -1
+  if (!under || over < 0) throw new Error(`Expected "${shape}", got "riemann: ${text.trim()}"`)
+  const parts = splitTopLevelComma(under[1].slice(over + ' over '.length))
+  const last = /^\s*n\s*=\s*(.+)$/.exec(parts[parts.length - 1])
+  if (parts.length < 2 || !last) throw new Error(`Riemann boxes need a count, n: "${shape}" (or "n = 4 by 3")`)
+  const counts = last[1].split(/\s+by\s+/)
+  if (counts.length > 2) throw new Error(`n takes one count or two, "n = 4" or "n = 4 by 3", got "n = ${last[1].trim()}"`)
+  const nx = parseExprString(counts[0])
+  const ny = counts.length === 2 ? parseExprString(counts[1]) : nx
+  const region = parseOverDomain(parts.slice(0, -1).join(','))
+  if (region.kind === 'inequality' || (region.kind === 'iterated' && (region.coords !== 'cartesian' || readsOuter(region)))) {
+    throw new Error(RIEMANN_RECTANGLE)
+  }
+  return { form: 'riemann', target: target(under[1].slice(0, over), shape), region, n: [nx, ny], sample, style }
+}
+
 // "<expr> density <expr>" or "density: <expr>"
 function splitDensity(text: string): { head: string; density: Expr | null } {
   const match = /\sdensity:?\s+/.exec(` ${text}`)
@@ -168,6 +218,7 @@ export const INTEGRAL_KEYWORDS: readonly { keyword: string; parse(rest: string):
   { keyword: 'region', parse: parseRegion },
   { keyword: 'centroid', parse: parseCentroid },
   { keyword: 'volume', parse: parseVolume },
+  { keyword: 'riemann', parse: parseRiemann },
 ]
 
 function checkName(name: string, what: string): void {

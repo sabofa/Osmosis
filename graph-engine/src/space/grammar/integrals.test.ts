@@ -125,3 +125,39 @@ describe('S5 grammar — volume: under and between', () => {
     expect(() => form('volume: between x and y')).toThrow(/between g and f over R/)
   })
 })
+
+describe('S5 grammar — riemann:', () => {
+  it('under f over a rectangle, n = 2, sample mid by default', () => {
+    expect(form('riemann: under x*y over x in [0, 2], y in [0, 2], n = 2')).toMatchObject({
+      form: 'riemann',
+      target: { text: 'x*y' },
+      region: { kind: 'iterated', coords: 'cartesian', outer: { param: 'x' }, inner: { param: 'y' } },
+      n: [p('2'), p('2')],
+      sample: 'mid',
+    })
+  })
+
+  it('n = 4 by 3, a sample rule and opacity', () => {
+    expect(form('riemann: under f over x in [0, 1], y in [0, 1], n = 4 by 3 sample: upper-right opacity: 0.4')).toMatchObject({
+      n: [p('4'), p('3')],
+      sample: 'upper-right',
+      style: { opacity: 0.4 },
+    })
+  })
+
+  it('n may be a binding', () => {
+    expect(form('riemann: under x*y over x in [0, 2], y in [0, 2], n = n sample: random')).toMatchObject({ n: [p('n'), p('n')], sample: 'random' })
+  })
+
+  it('refuses a region that is not a rectangle', () => {
+    const message = /Riemann boxes need a rectangle; use x in \[a, b\], y in \[c, d\]/
+    expect(() => form('riemann: under x*y over x in [0, 1], y in [0, x], n = 2')).toThrow(message)
+    expect(() => form('riemann: under x*y over r in [0, 1], theta in [0, pi], n = 2')).toThrow(message)
+    expect(() => form('riemann: under x*y over x^2 + y^2 <= 1, n = 2')).toThrow(message)
+  })
+
+  it('refuses a missing n and an unknown sample rule', () => {
+    expect(() => form('riemann: under x*y over x in [0, 2], y in [0, 2]')).toThrow(/n = 4/)
+    expect(() => form('riemann: under x*y over x in [0, 2], y in [0, 2], n = 2 sample: middle')).toThrow(/sample: mid, lower-left, upper-right, lower-right, upper-left or random/)
+  })
+})
