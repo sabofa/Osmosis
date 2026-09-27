@@ -13,6 +13,7 @@ import type { GraphConfig } from '../../parser/config'
 import type { Statement } from '../../parser/types'
 import type { MathScope } from '../../math/scope'
 import type { ColorScale, ColorSpec, LabelAnchor, Mark, MarkSource, SceneError } from '../scene/types'
+import type { NamedPoint } from './geometry/operands'
 
 export interface BuildContext {
   scope: MathScope
@@ -28,6 +29,9 @@ export interface BuildContext {
   // The id reserved for this statement's colour scale, or null when it
   // cannot have one. Stable across setValue for the same reason.
   colorScaleId: number | null
+  // The spec's named points ("P = (1, 2, 3)"), hidden or not, for statements
+  // that take a point by name (S4a: "line: through P and Q").
+  points?: ReadonlyMap<string, NamedPoint>
 }
 
 export interface BuildResult {

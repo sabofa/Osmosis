@@ -16,11 +16,13 @@ import { parseExprString } from '../../parser/parseExpr'
 import { buildStyle, splitStyle } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 import { parseContour } from './keywords/contour'
+import { parseLine, parsePlane } from './keywords/geometry'
 
 interface KeywordRow {
   keyword: string
-  // The text after "keyword:", trimmed. Throws on a malformed statement.
-  parse(rest: string): SpaceForm
+  // The text after "keyword:", trimmed. Throws on a malformed statement;
+  // null leaves the line to the shared grammar (a solid figure's form).
+  parse(rest: string): SpaceForm | null
 }
 
 // "implicit: <equation> [style]": the surface reading of an equation, even one
@@ -43,6 +45,8 @@ function parseImplicit(text: string): SpaceForm {
 const KEYWORDS: readonly KeywordRow[] = [
   { keyword: 'implicit', parse: parseImplicit },
   { keyword: 'contour', parse: parseContour },
+  { keyword: 'line', parse: parseLine },
+  { keyword: 'plane', parse: parsePlane },
 ]
 
 // "keyword: A-B-C [dashed | plain]": a solid figure's point list.
@@ -51,7 +55,9 @@ const POINT_LIST = /^[a-z][a-z-]*:\s*[A-Za-z][A-Za-z0-9_']*(-[A-Za-z][A-Za-z0-9_
 export function parseSpaceKeyword(line: string): SpaceStatement | null {
   if (POINT_LIST.test(line)) return null
   for (const row of KEYWORDS) {
-    if (line.startsWith(`${row.keyword}:`)) return spaceStatement(row.parse(line.slice(row.keyword.length + 1).trim()))
+    if (!line.startsWith(`${row.keyword}:`)) continue
+    const form = row.parse(line.slice(row.keyword.length + 1).trim())
+    return form ? spaceStatement(form) : null
   }
   return null
 }

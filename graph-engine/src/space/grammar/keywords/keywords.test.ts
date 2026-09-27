@@ -78,3 +78,90 @@ describe('contour:', () => {
     })
   }
 })
+
+describe('line:', () => {
+  const tuple = (a: string, b: string, c: string) => ({ kind: 'tuple', coords: [p(a), p(b), p(c)] })
+
+  it('line: through (1, 2, 3) direction <1, -1, 2>', () => {
+    expect(form('line: through (1, 2, 3) direction <1, -1, 2>')).toEqual({
+      form: 'line',
+      through: { ...tuple('1', '2', '3'), text: '(1, 2, 3)' },
+      to: { kind: 'direction', vector: { kind: 'literal', components: [p('1'), p('-1'), p('2')], text: '<1, -1, 2>' } },
+      text: 'through (1, 2, 3) direction <1, -1, 2>',
+      style: NO_STYLE,
+    })
+  })
+
+  it('line: through P and Q; through two tuples', () => {
+    expect(form('line: through P and Q')).toMatchObject({ through: { kind: 'name', name: 'P' }, to: { kind: 'point', point: { kind: 'name', name: 'Q' } } })
+    expect(form('line: through (1, 2, 3) and (0, 0, 1)')).toMatchObject({ through: tuple('1', '2', '3'), to: { kind: 'point', point: tuple('0', '0', '1') } })
+  })
+
+  it('a direction may be a vector constant or a vector function at a point', () => {
+    expect(form('line: through P direction u')).toMatchObject({ to: { kind: 'direction', vector: { kind: 'named', name: 'u', args: null } } })
+    expect(form('line: through P direction F(1, 0, 2)')).toMatchObject({
+      to: { kind: 'direction', vector: { kind: 'named', name: 'F', args: [p('1'), p('0'), p('2')] } },
+    })
+  })
+
+  it('takes width: and dashed', () => {
+    expect(form('line: through P and Q width: 3 dashed')).toMatchObject({ style: { width: 3, dashed: true } })
+  })
+
+  const refusals: [string, RegExp][] = [
+    ['line: (1, 2, 3) direction <1, 0, 0>', /Expected "line: through \(1, 2, 3\) direction <1, -1, 2>" or "line: through P and Q"/],
+    ['line: through (1, 2) direction <1, 0, 0>', /A point in space has three coordinates, got 2 in "\(1, 2\)"/],
+    ['line: through P direction (1, 0, 0)', /a vector is written <1, 0, 0>/],
+    ['line: through P and 3', /Expected a point/],
+    ['line: through P and Q opacity: 0.5', /opacity: does not apply to line: — it takes width:, dashed and color:/],
+  ]
+  for (const [line, message] of refusals) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseSpaceKeyword(line)).toThrow(message)
+    })
+  }
+})
+
+describe('plane:', () => {
+  it('plane: 2x + y - z = 3', () => {
+    expect(form('plane: 2x + y - z = 3')).toEqual({
+      form: 'plane',
+      def: { kind: 'equation', left: p('2x + y - z'), right: p('3') },
+      text: '2x + y - z = 3',
+      style: NO_STYLE,
+    })
+  })
+
+  it('plane: through (1, 2, 3) normal <1, 1, 1>; through three points; through P, Q, R', () => {
+    expect(form('plane: through (1, 2, 3) normal <1, 1, 1>')).toMatchObject({
+      def: { kind: 'pointNormal', point: { kind: 'tuple' }, normal: { kind: 'literal', components: [p('1'), p('1'), p('1')] } },
+    })
+    expect(form('plane: through (1,0,0), (0,1,0), (0,0,1)')).toMatchObject({ def: { kind: 'points', points: [{ kind: 'tuple' }, { kind: 'tuple' }, { kind: 'tuple' }] } })
+    expect(form('plane: through P, Q, R')).toMatchObject({
+      def: { kind: 'points', points: [{ kind: 'name', name: 'P' }, { kind: 'name', name: 'Q' }, { kind: 'name', name: 'R' }] },
+    })
+  })
+
+  it('takes opacity:', () => {
+    expect(form('plane: z = 1 opacity: 0.2')).toMatchObject({ style: { opacity: 0.2 } })
+  })
+
+  it("never claims the solid figures' plane forms, whose refusal still fires", () => {
+    for (const line of ['plane: p', 'plane: through P perpendicular to A-B', 'plane: through P parallel to A-B-C']) {
+      expect(parseSpaceKeyword(line)).toBeNull()
+      expect(() => parseStatement(line)).toThrow(/A plane is not drawn on its own/)
+    }
+  })
+
+  const refusals: [string, RegExp][] = [
+    ['plane: through (1, 2, 3)', /Expected "plane: 2x \+ y - z = 3", "plane: through P normal <1, 1, 1>" or "plane: through P, Q, R"/],
+    ['plane: through P, Q', /Expected "plane: 2x \+ y - z = 3"/],
+    ['plane: x + y = 1 = z', /one "="/],
+    ['plane: z = 1 width: 2', /width: does not apply to plane: — it takes opacity: and color:/],
+  ]
+  for (const [line, message] of refusals) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseSpaceKeyword(line)).toThrow(message)
+    })
+  }
+})

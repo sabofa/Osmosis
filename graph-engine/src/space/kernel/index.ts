@@ -27,6 +27,9 @@ import { buildScope } from './scope'
 import { SURFACE } from './surface'
 import { IMPLICIT_SURFACE } from './geometry/implicit'
 import { CONTOUR } from './geometry/levelSurfaces'
+import { namedPoints } from './geometry/operands'
+import { LINE } from './geometry/lines'
+import { PLANE } from './geometry/planes'
 
 // One row per statement kind or space form. A kind with no row is "not drawn
 // in space".
@@ -49,6 +52,8 @@ for (const key of ['functionDef', 'constantDef', 'space:function', 'space:vector
   registerBuilder(key, DEFINITION)
 }
 registerBuilder('space:contour', CONTOUR)
+registerBuilder('space:line', LINE)
+registerBuilder('space:plane', PLANE)
 
 interface StatementRecord {
   line: number
@@ -89,6 +94,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
   const records: StatementRecord[] = []
   let slots = 0
   let scales = 0
+  const points = namedPoints(statements)
 
   statements.forEach((statement, i) => {
     const line = lines[i] ?? 0
@@ -106,6 +112,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       source: { line, statement: statement.statementName, object: `s${line}` },
       color: { author: statement.color, slot: entry.draws ? slots++ : -1 },
       colorScaleId: wantsScale ? scales : null,
+      points,
     }
     let prepared: PreparedStatement
     try {

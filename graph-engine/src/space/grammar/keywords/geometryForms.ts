@@ -26,4 +26,38 @@ export interface ContourForm {
   style: SpaceStyle
 }
 
-export type GeometryForm = ContourForm
+// A point: "(1, 2, 3)", or the name of a point defined elsewhere in the spec
+// ("P = (1, 2, 3)"). `text` is the operand as written, for messages.
+export type PointOperand = ({ kind: 'tuple'; coords: [Expr, Expr, Expr] } | { kind: 'name'; name: string }) & { text: string }
+
+// A vector: "<1, 2, 3>" (or "⟨1, 2, 3⟩"), a vector constant's name ("u", from
+// "u = <1, 2, 3>"), or a vector function at a point ("F(1, 0, 2)").
+export type VectorOperand = ({ kind: 'literal'; components: [Expr, Expr, Expr] } | { kind: 'named'; name: string; args: Expr[] | null }) & {
+  text: string
+}
+
+// "line: through <point> direction <vector>" | "line: through <point> and <point>".
+export interface LineForm {
+  form: 'line'
+  through: PointOperand
+  to: { kind: 'direction'; vector: VectorOperand } | { kind: 'point'; point: PointOperand }
+  // the operand as written, for messages
+  text: string
+  style: SpaceStyle
+}
+
+// "plane: 2x + y - z = 3" | "plane: through <point> normal <vector>" |
+// "plane: through <point>, <point>, <point>".
+export type PlaneDef =
+  | { kind: 'equation'; left: Expr; right: Expr }
+  | { kind: 'pointNormal'; point: PointOperand; normal: VectorOperand }
+  | { kind: 'points'; points: [PointOperand, PointOperand, PointOperand] }
+
+export interface PlaneForm {
+  form: 'plane'
+  def: PlaneDef
+  text: string
+  style: SpaceStyle
+}
+
+export type GeometryForm = ContourForm | LineForm | PlaneForm
