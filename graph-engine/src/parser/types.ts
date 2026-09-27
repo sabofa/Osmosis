@@ -332,6 +332,9 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     box's corner or side is "@givens:".
 //   right-angle: A-B-C                              -> small square marker at vertex B indicating a
 //                                                     90-degree angle between rays B->A and B->C.
+//                                                     In the plane it is drawn as stated, unchecked,
+//                                                     exactly as before; on points in SPACE it is
+//                                                     asserted (phase 10, M2 — see below).
 //   segment: A-B [dashed | plain]                   -> a segment between two named points, resolved
 //                                                     the same way as angle:/tick:'s points. The
 //                                                     sibling of those marks, and distinct from the
@@ -560,8 +563,82 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //
 //   A plane is an operand, and a named plane binds without drawing. A
 //   planar construction (rotate, reflect, a tangent, a circle...) refuses a
-//   point in space, and so do angle marks, ticks, polygons and inline angle
-//   labels ("label: angle ABC") in space — the givens table takes the angle.
+//   point in space, and so do polygons, triangles, circles and arcs in
+//   space. (Angle marks, right angles, ticks and inline angle labels on
+//   points in space draw since phase 10, below.)
+//
+//   Measures and marks in space (phase 10). Values are closed form, in true
+//   3D; marks are built in space and projected:
+//
+//   angle: A-B-C [label: <text>]                  -> M1: the circle arc centred at B in the plane of A, B
+//                                                    and C, from ray BA to ray BC through the true angle,
+//                                                    radius 0.2 x the shorter arm (world units), drawn as
+//                                                    ONE projected elliptical arc. A, B, C collinear, or
+//                                                    an arm of zero length, is refused by name
+//   label: angle ABC                              -> M7: draws that arc (once, beside an "angle:" for the
+//                                                    same angle) and hangs the TRUE angle on the arc's
+//                                                    middle, pushed out along the bisector in space
+//   right-angle: A-B-C                            -> M1, M2: the square B, B + s u, B + s u + s v, B + s v
+//                                                    (s = 0.15 x the shorter arm) in the angle's plane,
+//                                                    drawn as its projected "L" — and REFUSED unless the
+//                                                    true angle at B is 90: "A-B-D is not a right angle —
+//                                                    its true angle is 45°". A projected square cannot be
+//                                                    checked by eye, so an unchecked one could state
+//                                                    something false. "@scale: false" lifts the check, as
+//                                                    it lifts every measure assertion. In the plane,
+//                                                    right-angle: is unchanged
+//   tick: A-B [count: <n>]                        -> drawn in the PICTURE plane at the projected segment,
+//                                                    square to it at its projected midpoint, by the 2D
+//                                                    convention: a tick annotates the drawing
+//   dihedral: C-A-B-D                             -> M3: the dihedral angle along the edge AB (the middle
+//                                                    two names: "C-AB-D") between the half-planes ABC and
+//                                                    ABD, drawn as its plane angle at the edge's midpoint
+//                                                    M: segments M -> M + l u and M -> M + l v, u and v the
+//                                                    unit components of C - M and D - M square to AB, with
+//                                                    l = 0.3 |AB| but no longer than C's or D's distance
+//                                                    from the line AB (so a segment never runs past the
+//                                                    point that fixes its half-plane), and M1's arc between
+//                                                    them. Refused: A = B, C or D on line AB, half-planes
+//                                                    in one plane (0 or 180). Only points in space; a spec
+//                                                    with one is a solid figure
+//   label: dihedral C-A-B-D                       -> the value, in [0, 180], on the mark (drawn once)
+//   given: dihedral C-A-B-D [= value]             -> ...or in the givens table, written "∠C-AB-D"
+//   given: angle between A-B and C-D              -> M5: the ACUTE angle between the lines' directions,
+//                                                    skew lines allowed — table "∠(AB, CD)"
+//   given: angle between A-B and plane <plane>    -> the line–plane angle, in [0, 90], any plane form —
+//                                                    table "∠(AB, PQR)" (a named plane by its name, an
+//                                                    equation as written)
+//   given: distance between A-B and C-D           -> line to line: skew, parallel, or 0 where they meet —
+//                                                    table "d(AB, CD)"
+//   given: distance from P to plane <plane>       -> table "d(P, PQR)"
+//   given: distance from P to line A-B            -> "line" optional — table "d(P, AB)"
+//     Every M5 form also works as "find:", and "= value" asserts as every
+//     measure does. A plane equation's own "=" is told from the assertion:
+//     with two "=", the last asserts; with one, it is the plane's when an
+//     equation side precedes it ("plane x + y + z = 1", "plane z = 3").
+//     They are TABLE ROWS ONLY: "label: angle between ..." is refused,
+//     pointing at the table, or at drawing the construction (a foot, a
+//     common perpendicular) and labelling its segment.
+//   P, Q = common perpendicular of A-B and C-D    -> M6: P on line AB and Q on line CD with PQ square to
+//                                                    both, closed form; ordinary points in space
+//                                                    ("segment: P-Q", "label: PQ", "right-angle: A-P-Q").
+//                                                    Refused: parallel lines ("not unique"), lines that
+//                                                    meet ("zero length", naming where)
+//
+//   M4 — marks under the glass rule. A construction segment (a dihedral's
+//   two) is split exactly, as every segment in space is. An arc, a right-
+//   angle square and a tick are small, and each is drawn WHOLE — entirely
+//   visible or entirely hidden — decided by one point: the arc's middle,
+//   the square's centre, the tick's point on its segment, tested against
+//   every solid. This is a stated drawing convention, not a geometric
+//   answer; a hidden mark is dashed like a hidden edge. (An arc of a
+//   convex solid's dihedral lies inside the solid, so it is always dashed.)
+//
+//   M8 — not drawn, refused where an author could ask: an angle mark with
+//   no vertex ("angle: between A-B and C-D" — skew lines never meet; for a
+//   line and a plane, drop the foot F and mark "angle: A-P-F"), the angle
+//   between two planes as such (write the dihedral), a line–plane distance,
+//   area and volume measures, exact values, and nets.
 //
 //   Which renderer: a spec with a solid or a cut/section is a solid figure,
 //   even with 3-coordinate points in it. A spec of 3-coordinate points and

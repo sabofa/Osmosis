@@ -1320,3 +1320,12 @@ describe('the dihedral mark (phase 10, M3)', () => {
     expect(() => parseStatement('dihedral: A-B-C')).toThrow(/four point names/)
   })
 })
+
+describe('areas and volumes are refused in words (phase 10, M8)', () => {
+  it('refuses "S volume" and "area of ABC" rather than misreading them as point names', () => {
+    expect(() => parseStatement('label: S volume')).toThrow(/Areas and volumes are not measured yet — "S volume" cannot be labelled/)
+    expect(() => parseStatement('find: area of ABC')).toThrow(/Areas and volumes are not measured yet — "area of ABC" cannot be stated/)
+    // A solid's named dimensions still read as before.
+    expect(parseStatement('label: S height')).toMatchObject({ subject: { kind: 'solidDimension', solid: 'S', dimension: 'height' } })
+  })
+})

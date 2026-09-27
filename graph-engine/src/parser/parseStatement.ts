@@ -1765,6 +1765,12 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
     return { subject: { kind: 'triangle', names: [a, b, c] }, mark: 'none', prefix: '△', explicit: true }
   }
 
+  // M8 (phase 10) — areas and volumes are not measured yet; said so, rather
+  // than misread as a malformed pair of point names.
+  if (/^(?:[a-zA-Z]+\s+(?:volume|area|surface\s+area)|(?:volume|area|surface\s+area)\s+of\s+.+)$/.test(subjectText)) {
+    throw new Error(`Areas and volumes are not measured yet — "${subjectText}" cannot be ${role === 'label' ? 'labelled' : 'stated'}; measure lengths and angles instead`)
+  }
+
   // "dihedral C-A-B-D" (phase 10, M3): the edge is the middle two names.
   const dihedral = /^dihedral\s+(.+)$/.exec(subjectText)
   if (dihedral) {

@@ -17,6 +17,7 @@ export const EXAMPLE_GROUPS = [
   'Points & constructions',
   'Sections',
   'Spheres',
+  'Measures in space',
 ] as const
 
 export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
@@ -504,7 +505,7 @@ given: AD = √89`,
     // A regular hexagonal prism lettered by P5: A the left end of the front
     // edge, ABCDEF counter-clockwise from above, G-L over them. The triangle
     // through A's three neighbours B, F and G is the AIME dihedral-angle
-    // setup (the angle mark itself arrives with build step 10).
+    // setup; "AIME: dihedral in a hexagonal prism" marks its angle.
     label: 'Hexagonal prism',
     group: 'Solids',
     spec: `@mode: figure
@@ -842,6 +843,119 @@ O = solid circumsphere A-B-C-D
 M = center of O
 segment: M-A
 label: MA          # sqrt 3`,
+  },
+  {
+    // Phase 10: AIME 2016 I. A regular hexagonal prism of side
+    // 12; the pyramid on A and its three neighbours B, F and G has the
+    // dihedral angle 60 degrees along BF between face ABF (in the base) and
+    // face GBF. A is 6 from BF, so tan 60 = h / 6 and h^2 = 108. The mark
+    // is the plane angle at the midpoint of BF, both segments dashed: one
+    // lies in the base, which faces away, the other runs through the prism.
+    label: 'AIME: dihedral in a hexagonal prism',
+    group: 'Measures in space',
+    spec: `@mode: figure
+@angle: degrees
+S = solid prism regular 6 side 12, height sqrt(108) vertices ABCDEFGHIJKL
+segment: B-F
+segment: F-G
+segment: G-B
+dihedral: A-B-F-G
+label: dihedral A-B-F-G   # 60
+find: S height            # sqrt 108`,
+  },
+  {
+    // Phase 10: the diagonal AG and the edge BF of a unit cube are skew.
+    // Their common perpendicular runs from P = (1/2, 1/2, 1/2), the centre,
+    // to Q = (1, 0, 1/2) on BF, square to both (the right-angle marks are
+    // asserted in space), and its length is the distance between the lines,
+    // sqrt 2 / 2. It lies inside the cube, so it is dashed.
+    label: 'Skew lines and their common perpendicular',
+    group: 'Measures in space',
+    spec: `@mode: figure
+A = (0, 0, 0)
+B = (1, 0, 0)
+C = (1, 1, 0)
+D = (0, 1, 0)
+E = (0, 0, 1)
+F = (1, 0, 1)
+G = (1, 1, 1)
+H = (0, 1, 1)
+S = solid hull A-B-C-D-E-F-G-H
+segment: A-G
+P, Q = common perpendicular of A-G and B-F
+segment: P-Q
+right-angle: G-P-Q
+right-angle: F-Q-P
+label: PQ                              # sqrt 2 / 2
+given: distance between A-G and B-F`,
+  },
+  {
+    // Phase 10: angles in a unit cube, true in space and not as drawn. The
+    // face diagonals FH, HC and CF are equal (ticked), so FHC is equilateral
+    // and its angle at H is 60 degrees; the arc is in the triangle's own
+    // plane, inside the cube, so it is dashed. GC (an edge) is square to GE
+    // (a diagonal of the top face): a right angle in space that projects to
+    // an obtuse one.
+    label: 'Angles in a cube',
+    group: 'Measures in space',
+    spec: `@mode: figure
+@angle: degrees
+A = (0, 0, 0)
+B = (1, 0, 0)
+C = (1, 1, 0)
+D = (0, 1, 0)
+E = (0, 0, 1)
+F = (1, 0, 1)
+G = (1, 1, 1)
+H = (0, 1, 1)
+S = solid hull A-B-C-D-E-F-G-H
+segment: F-H
+segment: H-C
+segment: C-F
+label: angle FHC       # 60
+tick: C-F
+tick: H-C
+segment: E-G
+right-angle: C-G-E`,
+  },
+  {
+    // Phase 10: a regular tetrahedron's dihedral angle is arccos(1/3),
+    // about 70.53 degrees, along every edge. Marked along AD, between the
+    // faces ADB and ADC, which face the viewer.
+    label: "Tetrahedron's dihedral angle",
+    group: 'Measures in space',
+    spec: `@mode: figure
+@angle: degrees
+T = solid tetrahedron edge 6 vertices ABCD
+dihedral: B-A-D-C
+label: dihedral B-A-D-C   # arccos(1/3)`,
+  },
+  {
+    // Phase 10: the angle between a line and a plane is the angle between
+    // the line and its projection: here AG against the floor ABCD, with F
+    // the foot of G. |AF| = 5 and the height is 5, so both the marked angle
+    // GAF and the table's line-plane angle read 45 degrees.
+    label: 'Line meets a plane',
+    group: 'Measures in space',
+    spec: `@mode: figure
+@angle: degrees
+A = (6, 0, 0)
+B = (6, 5, 0)
+C = (0, 5, 0)
+D = (0, 0, 0)
+G = (3, 4, 5)
+F = foot G to plane A-B-C
+segment: A-B
+segment: B-C
+segment: C-D
+segment: D-A
+segment: A-G
+segment: G-F dashed
+segment: A-F
+angle: G-A-F
+label: angle GAF          # 45
+right-angle: G-F-A
+given: angle between A-G and plane A-B-C`,
   },
   {
     label: 'Right angle',

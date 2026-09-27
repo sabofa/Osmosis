@@ -10,11 +10,11 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1614 tests passing**,
+agents" below). Working tree clean. **1702 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
-*Last updated 2026-09-26, after geometry phase 9 (inscribed and
-circumscribed spheres, and tangency).*
+*Last updated 2026-09-26, after geometry phase 10 (measures and marks in
+space).*
 
 Nothing is merged to `main`. Another agent works on `main` directly, which is
 why this lives in a worktree — their commits were interleaving with mine and
@@ -96,7 +96,7 @@ built.
   (roots by bisection, extrema as roots of f′ classified by f″, intersections
   as roots of f−g), typed and distinctly marked, hover snapping, `@labels` /
   `@label-every`, `@step-mode`, chained inequalities.
-- **Track 2 — geometry, phases 1–8.** Construction core (lines/points/circles
+- **Track 2 — geometry, phases 1–10.** Construction core (lines/points/circles
   as intersectable objects, derived points, triangle solvers, centres with
   their circles); the SVG figure renderer; measures, notation, navigation and
   panels; circle vocabulary and the givens table; solid primitives with
@@ -109,13 +109,16 @@ built.
   solid by any plane, in place with the hidden outline dashed and lifted at
   true shape; inspheres and circumspheres of polyhedra and round solids,
   spheres placed by tangency, and a sphere's centre and radius as a point
-  and a named dimension.
+  and a named dimension; measures and marks in space — angle arcs,
+  asserted right angles and ticks on points in space, dihedral angles
+  with their plane-angle mark, angles and distances between lines and
+  planes in the givens table, and the common perpendicular of two lines.
 
 ### Not started
 
 Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
-All of D1–D5. Track 2 beyond phase 9: build steps 10–11 of the spec's
-"Revised 2026-09-25" section (measures and marks in space, nets),
+All of D1–D5. Track 2 beyond phase 10: build step 11 of the spec's
+"Revised 2026-09-25" section (nets),
 shading and boolean regions, and the competition-specific constructions
 (excircles, nine-point circle, radical axes, cevian concurrency).
 
@@ -133,6 +136,7 @@ shading and boolean regions, and the competition-specific constructions
 | 7 | `df94340`..`d4a3aae`, then the docs commit | Solids are stated the way competition problems state them: on named points (hull, tetrahedron, pyramid, prism, sphere, cylinder, cone, frustum), a tetrahedron from its six edges (AIME 2024 I draws and measures), regular n-gon prisms and pyramids, the octahedron, conical and pyramidal frusta, the cube; round solids at any position and tilt through a placement and a local camera |
 | 8 | `9677aeb`..`2b97c75`, then the docs commit | Planes are objects: through three points, perpendicular to a line, parallel to a plane, by an equation, the axis form, and named (`p = plane ...`, used as `plane p`), all canonicalised to one internal plane. Any solid is cut by any plane: the cube's central hexagon, the tetrahedron's square, the AIME pyramid's pentagon, the log wedge's half ellipse, a sphere's circle through three points. In place, the outline the solid hides is dashed; lifted, the section is true shape, corners nameable |
 | 9 | `ac7c0fd`..`267576c`, then the docs commit | Spheres the figure constructs, each an ordinary sphere solid: the insphere and circumsphere of any polyhedron (a fixed-order linear solve, verified against every face or vertex, refused naming the first that fails) and of a cylinder, cone or frustum (closed form in its own frame, so placed and tilted ones work); a sphere tangent to a plane or externally/internally to another sphere; `M = center of S`; `label: S radius` on every sphere. The AIME 2024 I tetrahedron's insphere measures 20√21/63 |
+| 10 | `b10860b`..`bc9903d`, then the docs commit | Measures and marks in space: `given: angle between A-B and C-D` (skew allowed), `… and plane <any form>`, `distance between A-B and C-D`, `distance from P to plane …` / `to line …` in the givens table; `dihedral C-A-B-D` as a value and as a drawn mark (`dihedral:`) — the AIME 2016 I hexagonal prism reads 60 at height √108; `P, Q = common perpendicular of A-B and C-D`; `angle:`, `right-angle:` (asserted 90), `tick:` and `label: angle ABC` on points in space, the marks built in space and projected, each drawn whole by its middle under the glass rule |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -579,6 +583,106 @@ suite makes (captured by a scratch vitest setup file that wraps
 config and all five views — 2412 keys — before and after each task:
 identical, errors included.
 
+### Phase 10 in detail (measures and marks in space)
+
+Grammar that now works (author frame, z up):
+
+```
+given: angle between A-C and B-G                 # the ACUTE angle between the lines, skew allowed: ∠(AC, BG)
+given: angle between A-G and plane A-B-C         # line–plane, [0, 90], any plane form: ∠(AG, ABC)
+given: distance between A-G and B-F              # skew, parallel, or 0 where they meet: d(AG, BF)
+given: distance from G to plane B-D-E            # d(G, BDE)
+given: distance from G to line A-B               # d(G, AB)
+given: dihedral A-B-C-G = 90                     # edge = the middle two names; ∠A-BC-G; asserts
+P, Q = common perpendicular of A-G and B-F       # P on AG, Q on BF, PQ square to both
+angle: A-B-G [label: θ]                          # an arc in the angle's plane, projected
+label: angle ABG                                 # the arc, and the TRUE angle on it
+right-angle: A-B-G                               # a square in space — refused unless 90 (@scale: false lifts)
+tick: A-G count: 2                               # in the picture plane, at the projected segment
+dihedral: A-B-F-G                                # the plane angle at the edge's midpoint
+label: dihedral A-B-F-G                          # the value on the mark
+```
+
+**The decisions worth not re-litigating:**
+
+*Marks live in the angle's plane in space, then project (M1).* An arc is
+the circle arc centred at the vertex in the plane of the three points,
+radius 0.2 × the shorter arm in WORLD units, drawn through `projectCircle`
+as one elliptical-arc command — never a polyline, and never the 2D sweep of
+the projected rays (which puts the ends in the wrong place wherever the
+camera foreshortens an arm: the test that pins this went red when the arc
+was drawn in the picture plane). A right angle is the square B, B + s u,
+B + s u + s v, B + s v with s = 0.15 × the shorter arm, drawn as its
+projected "L", the plane's convention. A tick is the exception on purpose:
+it annotates the drawing, so it is drawn in the picture plane by the 2D
+convention. All of it is `figure/spaceMarks.ts`.
+
+*Right angles in space are asserted (M2).* A projected square on a
+non-right angle states something false that no reader can check by eye,
+so `right-angle:` on points in space refuses unless the true angle is 90
+("A-B-D is not a right angle — its true angle is 45°", always in degrees).
+`@scale: false` lifts it, as it lifts every measure assertion. The plane's
+`right-angle:` is unchanged and unchecked.
+
+*M4 — why a small mark is decided whole, by its middle.* A construction
+segment is split exactly, as every segment in space is (`segmentSpans`) —
+a dihedral's two segments included, and a test with a second solid in
+front of part of one proves the split (it went red when the segments
+were classified by their midpoints). An arc, a right-angle square and a
+tick are a few millimetres of ink: splitting one where an outline crosses
+it would draw a dash-and-a-half that reads as noise, and where a projected
+elliptical arc crosses a silhouette is not a closed form this code has.
+So each is drawn entirely visible or entirely hidden, decided by ONE
+point — the arc's middle, the square's centre, the tick's point on its
+segment — tested with `hidesPoint` against every solid. It is a stated
+drawing convention, not a geometric answer; the grammar header says so.
+Two consequences to expect: an arc on a hidden face, or inside a solid
+(the angle ABG of a cube, whose plane is a diagonal section), is dashed;
+and **a convex solid's dihedral arc always lies inside the solid, so it is
+always dashed**, while its segments on front faces draw solid.
+
+*The dihedral (M3).* `dihedral C-A-B-D` is the angle in [0°, 180°] between
+the unit components of C − M and D − M square to AB, M its midpoint
+(`construct3d.ts` `dihedral3`). **The perpendicular step is the whole of
+it**, and the plan's proof of it could not work: in the AIME prism A and G
+already lie in the plane through M square to BF (A is on the hexagon's
+axis of symmetry through M), as the regular tetrahedron's and
+octahedron's ends do. The cube's A-B-C-G, and an asymmetric hand case,
+catch the deletion instead. The mark's segments are l = 0.3 |AB| long
+**but never longer than either end's distance from the line AB** (plan
+correction): 0.3 |BF| = 6.24 in the AIME prism while A is 6 from BF, so
+the segment toward A ran out of the prism past its vertex A as a visible
+stub. Capped, it ends at A.
+
+*Measures between lines and planes are table rows only (M5).* None has
+one point to hang a label on, so `label:` refuses them at parse time,
+pointing at the table or at drawing the construction. A measure's plane
+is resolved by the solid-figure walk in source order (`measurePlanes`,
+keyed by the parsed plane form object), so `plane p` follows `p = plane
+…`. A plane equation carries its own "=": with two, the last asserts;
+with one, it belongs to the plane when an equation side precedes it.
+
+*The common perpendicular (M6)* is Cramer's rule on the two normal
+equations (`commonPerpendicular3`), which returns parallel and meeting
+lines as values, not throws: the walk words them, naming the meeting point
+in author coordinates, because `construct3d.ts` knows no frame.
+
+*Out of scope, refused in words (M8):* angle marks between skew lines
+(`angle: between …` — no vertex; for a line and a plane, drop the foot F
+and mark `angle: A-P-F`), the angle between two planes as such (write the
+dihedral), line–plane distance, areas and volumes (`label: S volume`),
+exact values, nets.
+
+**Sanctioned byte changes.** Two phase 6 tests pinned refusals that phase
+10 lifts, and were rewritten, each saying so: `label: angle ABG` on a box
+now draws its arc and prints 90°, and a tick naming a vertex and a plane
+point is now refused for mixing the two (its SVG is byte-identical; only
+the error's words changed). The plane-only refusal no longer lists angle
+marks and ticks. **Byte identity, measured as in phase 9** (a scratch
+vitest setup file wrapping `renderFigure`: 431 distinct suite inputs under
+their own config and the five views, plus the 73 examples under six view
+settings and both palettes): every other digest identical after each
+task, errors included.
 
 ---
 
@@ -658,6 +762,7 @@ hull.ts         the one exact convex-hull builder (P3), and base-polygon checks
 tetrahedron.ts  the tetrahedron from six edges, Cayley-Menger checked (P4)
 regular.ts      regular n-gon solids and the octahedron: P5's rotation and lettering
 spheres.ts      phase 9: in- and circumspheres (fixed-order solves, verified), tangency radii
+spaceMarks.ts   phase 10: arcs, right-angle squares and dihedral marks in space (M1, M3), M4's whole-mark rule
 ```
 
 **Placements and the local camera (P1).** A round solid (cylinder, cone,
@@ -713,7 +818,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1614 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1702 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
@@ -879,7 +984,7 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    in space and `segment: … dashed | plain` are all unreachable to the tutor.
    **As of phase 7 it lags by two**: every solid on points, the six-edge
    tetrahedron, the hull, the frustum and the regular solids are unreachable
-   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. The user has scheduled the tutor reference for much later.
+   too. **As of phase 8, by three**: planes as objects and oblique sections. **As of phase 9, by four**: inspheres, circumspheres, spheres by tangency and `center of`. **As of phase 10, by five**: measures between lines and planes, dihedrals, the common perpendicular, and every mark on points in space. The user has scheduled the tutor reference for much later.
    The house rule "declare `@mode:`" matters doubly for solid figures: under
    S5 a spec of 3-coordinate points with no solid still infers the *space*
    renderer, so a tutor sketching points in space before adding the solid gets
@@ -955,7 +1060,8 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     plane …, plane …` is refused); parabolic and hyperbolic sections of a
     cone or frustum (refused, naming the conic); nets (`net:` is refused,
     build step 11). ~~Inscribed and circumscribed solids are build step 9~~
-    (**done in phase 9**, for spheres); angle and dihedral marks step 10.
+    (**done in phase 9**, for spheres); angle and dihedral marks step 10
+    (**done in phase 10**).
 
 11. **Phase 9's out-of-scope items (R7), left out on purpose.** Build step
     9's "tangency" is scoped to one object at a time (R5). Spheres tangent
@@ -990,6 +1096,17 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     ownership"). After that merge, give it its own message saying a plane is
     drawn through the section it cuts (`cut:`). It can't be done before the
     merge: the `space` statement kind exists only on that branch.
+15. **Phase 10's out-of-scope items (M8), each refused legibly.** Angle
+    marks between skew lines have no vertex (`angle: between A-B and C-D`
+    is refused, pointing at the table and at marking the foot); marks for
+    line–plane angles are the author's to build (`F = foot …`, then
+    `angle: A-P-F`); the angle between two planes is written as the
+    dihedral along their common edge; line–plane distance, areas and
+    volumes (`label: S volume`) are refused in words. Values print as
+    decimals until exact values land (build-order step 3). Two drawing
+    notes from the PNG review: a convex solid's dihedral arc is always
+    dashed (it lies inside the solid, M4), and its radius, 0.2 × 0.3 |AB|,
+    is small — a candidate for a larger fraction if review finds it faint.
 
 ---
 
