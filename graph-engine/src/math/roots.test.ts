@@ -105,3 +105,66 @@ describe('seededRoots', () => {
     expect(a).toHaveLength(6)
   })
 })
+
+describe('Newton convergence is scale-aware (fix round 1, M7)', () => {
+  it('grad(1e6 (x^2 + y^2)) = (2e6 x, 2e6 y) converges at the origin', () => {
+    const r = newton(
+      (v) => [2e6 * v[0], 2e6 * v[1]],
+      () => [
+        [2e6, 0],
+        [0, 2e6],
+      ],
+      [0.3, -0.7]
+    )
+    expect(r.converged).toBe(true)
+    expect(Math.abs(r.x[0])).toBeLessThan(1e-12)
+    expect(Math.abs(r.x[1])).toBeLessThan(1e-12)
+  })
+
+  it('large coefficients: 1e8 (x^2 - 2) converges to sqrt 2 (the residual floor is ~4e-8, above any absolute 1e-12)', () => {
+    const r = newton(
+      (v) => [1e8 * (v[0] * v[0] - 2)],
+      (v) => [[2e8 * v[0]]],
+      [1]
+    )
+    expect(r.converged).toBe(true)
+    expect(r.x[0]).toBeCloseTo(Math.SQRT2, 12)
+  })
+
+  it('small coefficients: 1e-8 (x^2 - 2) is not declared converged early', () => {
+    // An absolute 1e-12 is met at x = 1.4142157 (F = 6e-14), 2e-6 from the root.
+    const r = newton(
+      (v) => [1e-8 * (v[0] * v[0] - 2)],
+      (v) => [[2e-8 * v[0]]],
+      [1]
+    )
+    expect(r.converged).toBe(true)
+    expect(Math.abs(r.x[0] - Math.SQRT2)).toBeLessThan(1e-12)
+  })
+
+  it('seeded roots of grad(1e8 (x^3/3 - 2x + y^2/2)) are (-sqrt 2, 0) and (sqrt 2, 0)', () => {
+    const roots = seededRoots(
+      (v) => [1e8 * (v[0] * v[0] - 2), 1e8 * v[1]],
+      (v) => [
+        [2e8 * v[0], 0],
+        [0, 1e8],
+      ],
+      { min: [-3, -3], max: [3, 3] },
+      6
+    )
+    expect(roots).toHaveLength(2)
+    expect(roots[0][0]).toBeCloseTo(-Math.SQRT2, 12)
+    expect(roots[1][0]).toBeCloseTo(Math.SQRT2, 12)
+    expect(roots[0][1]).toBeCloseTo(0, 12)
+  })
+
+  it('a triple root still converges (x^3 = 0 from 0.5)', () => {
+    const r = newton(
+      (v) => [v[0] ** 3],
+      (v) => [[3 * v[0] ** 2]],
+      [0.5]
+    )
+    expect(r.converged).toBe(true)
+    expect(Math.abs(r.x[0])).toBeLessThan(1e-4)
+  })
+})

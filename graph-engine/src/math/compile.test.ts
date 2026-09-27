@@ -299,3 +299,16 @@ describe('fast paths compute exactly what the general closures do', () => {
     expect(compileScalar(p('g(s)'), ['s'], scope)(3)).toBe(-1)
   })
 })
+
+describe('hypot does not overflow (fix round 1, M6)', () => {
+  it('hypot(1e200, 1e200) = sqrt(2) 1e200, finite', () => {
+    const h = value('hypot(10^200, 10^200)')
+    expect(Number.isFinite(h)).toBe(true)
+    expect(h / 1e200).toBeCloseTo(Math.SQRT2, 14)
+  })
+
+  it('and with four arguments: hypot(1, 2, 2, 4) = 5', () => {
+    expect(value('hypot(1, 2, 2, 4)')).toBe(5)
+    expect(Number.isFinite(value('hypot(10^200, 10^200, 10^200, 10^200)'))).toBe(true)
+  })
+})

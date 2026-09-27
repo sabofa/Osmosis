@@ -59,17 +59,48 @@ function newtonStep(j: readonly (readonly number[])[], f: ArrayLike<number>): nu
   throw new Error(`newton works in one to three dimensions, got ${n}`)
 }
 
+// The largest absolute row sum of a Jacobian.
+function rowNorm(j: readonly (readonly number[])[]): number {
+  let m = 0
+  for (const row of j) {
+    let s = 0
+    for (const v of row) s += Math.abs(v)
+    if (!(s <= m)) m = s
+  }
+  return m
+}
+
 // Newton's method, damped by backtracking: a step is halved until the
 // residual's sum of squares decreases (Armijo, c = 1e-4).
+//
+// Convergence is relative, never an absolute residual, so it does not depend
+// on the equations' scale: the residual must be at most `tol` times the larger
+// of the seed's residual (a reduction by 1e-12; what a multiple root, whose
+// Jacobian vanishes, can reach) and ||J|| (1 + ||x||) (the size of the terms
+// F is made of, which bounds its rounding floor at a simple root). Scaling F
+// by any constant leaves the answer unchanged.
 export function newton(F: SystemFn, J: JacobianFn, x0: ArrayLike<number>, options: NewtonOptions = {}): NewtonResult {
   const maxIterations = options.maxIterations ?? NEWTON_MAX_ITERATIONS
   let x: Float64Array = Float64Array.from(x0)
   let f = Array.from(F(x))
   let phi = sumSquares(f)
+  const seedScale = maxAbs(f)
+  const small = (residual: number[], jacobian: readonly (readonly number[])[], at: Float64Array, tol: number) =>
+    maxAbs(residual) <= tol * Math.max(seedScale, rowNorm(jacobian) * (1 + maxAbs(at)))
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (!Number.isFinite(phi)) return { x, converged: false, iterations: iteration }
-    if (maxAbs(f) <= NEWTON_RESIDUAL) return { x, converged: true, iterations: iteration }
-    const step = newtonStep(J(x), f)
+    const jacobian = J(x)
+    const step = newtonStep(jacobian, f)
+    if (small(f, jacobian, x, NEWTON_RESIDUAL)) {
+      // One full polishing step, kept if it does not raise the residual: a
+      // simple root then lands to rounding, not merely within the tolerance.
+      if (step) {
+        const polished = x.map((xi, i) => xi + step[i])
+        const fp = Array.from(F(polished))
+        if (sumSquares(fp) <= phi) return { x: polished, converged: true, iterations: iteration + 1 }
+      }
+      return { x, converged: true, iterations: iteration }
+    }
     if (!step) return { x, converged: false, iterations: iteration }
 
     let lambda = 1
@@ -84,17 +115,17 @@ export function newton(F: SystemFn, J: JacobianFn, x0: ArrayLike<number>, option
       }
       lambda /= 2
     }
-    if (!accepted) return { x, converged: maxAbs(f) <= NEWTON_RESIDUAL_LOOSE, iterations: iteration + 1 }
+    if (!accepted) return { x, converged: small(f, jacobian, x, NEWTON_RESIDUAL_LOOSE), iterations: iteration + 1 }
 
     const moved = lambda * maxAbs(step)
     x = accepted.x
     f = accepted.f
     phi = accepted.phi
-    if (moved <= NEWTON_STEP_REL * (1 + maxAbs(x)) && maxAbs(f) <= NEWTON_RESIDUAL_LOOSE) {
+    if (moved <= NEWTON_STEP_REL * (1 + maxAbs(x)) && small(f, J(x), x, NEWTON_RESIDUAL_LOOSE)) {
       return { x, converged: true, iterations: iteration + 1 }
     }
   }
-  return { x, converged: maxAbs(f) <= NEWTON_RESIDUAL, iterations: maxIterations }
+  return { x, converged: Number.isFinite(phi) && small(f, J(x), x, NEWTON_RESIDUAL), iterations: maxIterations }
 }
 
 function lexicographic(a: Float64Array, b: Float64Array): number {

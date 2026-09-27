@@ -10,11 +10,14 @@ export const SINGULAR_REL = 1e-12
 // the whole matrix's Frobenius norm.
 export const JACOBI_REL = 1e-15
 
-// newton: converged when the largest residual component is at most this...
+// newton: converged when the largest residual component is at most this
+// fraction of the larger of the seed's residual and ||J|| (1 + ||x||) — a
+// relative test, so scaling the equations changes nothing...
 export const NEWTON_RESIDUAL = 1e-12
 // ...or when the step is below this fraction of (1 + |x|) AND the residual is
-// at most NEWTON_RESIDUAL_LOOSE (a slowly converging multiple root stalls on
-// its step before its residual reaches NEWTON_RESIDUAL).
+// at most NEWTON_RESIDUAL_LOOSE of the same scale (a slowly converging
+// multiple root stalls on its step before its residual reaches
+// NEWTON_RESIDUAL).
 export const NEWTON_STEP_REL = 1e-14
 export const NEWTON_RESIDUAL_LOOSE = 1e-9
 // The damped step is halved at most this many times before Newton gives up.

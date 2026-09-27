@@ -120,24 +120,24 @@ function inverseTrig(fn: (v: number) => number): Builtin {
   }
 }
 
-// min, max and hypot: two or more arguments, folded without an array.
-function variadic(pair: (x: number, y: number) => number, finish: (v: number) => number = (v) => v, lift: (v: number) => number = (v) => v): Builtin {
+// min and max: two or more arguments, folded without an array.
+function variadic(pair: (x: number, y: number) => number): Builtin {
   return {
     min: 2,
     max: Infinity,
     make: (args) => {
       if (args.length === 2) {
         const [a, b] = args
-        return (f) => finish(pair(lift(a(f)), lift(b(f))))
+        return (f) => pair(a(f), b(f))
       }
       if (args.length === 3) {
         const [a, b, c] = args
-        return (f) => finish(pair(pair(lift(a(f)), lift(b(f))), lift(c(f))))
+        return (f) => pair(pair(a(f), b(f)), c(f))
       }
       return (f) => {
-        let acc = lift(args[0](f))
-        for (let i = 1; i < args.length; i++) acc = pair(acc, lift(args[i](f)))
-        return finish(acc)
+        let acc = args[0](f)
+        for (let i = 1; i < args.length; i++) acc = pair(acc, args[i](f))
+        return acc
       }
     },
   }
@@ -204,8 +204,30 @@ const BUILTINS: ReadonlyMap<string, Builtin> = new Map<string, Builtin>([
   ],
   ['min', variadic(Math.min)],
   ['max', variadic(Math.max)],
-  // hypot(a, b, c) = sqrt(a^2 + b^2 + c^2), folded as a running sum of squares.
-  ['hypot', variadic((x, y) => x + y, Math.sqrt, (v) => v * v)],
+  // hypot(a, b, c) = sqrt(a^2 + b^2 + c^2), by Math.hypot, which scales and so
+  // does not overflow at 1e200.
+  [
+    'hypot',
+    {
+      min: 2,
+      max: Infinity,
+      make: (args) => {
+        if (args.length === 2) {
+          const [a, b] = args
+          return (f) => Math.hypot(a(f), b(f))
+        }
+        if (args.length === 3) {
+          const [a, b, c] = args
+          return (f) => Math.hypot(a(f), b(f), c(f))
+        }
+        const values = new Array<number>(args.length)
+        return (f) => {
+          for (let i = 0; i < args.length; i++) values[i] = args[i](f)
+          return Math.hypot(...values)
+        }
+      },
+    },
+  ],
 ])
 
 // The built-in function names, for the grammar's name rules.
