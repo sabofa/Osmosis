@@ -138,6 +138,30 @@ describe('boxFrame at azimuth 40, elevation 25 over [-1, 1]^3', () => {
   })
 })
 
+describe('boxFrame labels never collide', () => {
+  // The x and y tick edges meet at the front corner, where both end labels
+  // sit; thinning within an edge cannot see the other edge.
+  for (const [azimuth, elevation] of [
+    [40, 25],
+    [-50, 30],
+    [130, 20],
+    [220, 15],
+    [40, -30],
+  ]) {
+    it(`no two tick labels overlap, across edges too, at azimuth ${azimuth}, elevation ${elevation}`, () => {
+      const world = worldMap({ x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -4, max: 4 } }, [1, 1, 0.7])
+      const camera = cameraMatrices({ azimuth, elevation, zoom: 1, target: [0, 0, 0] }, world, { width: 700, height: 560 }, 'orthographic')
+      const axes = frameAxes(defaultSpaceConfig(), world.box)
+      const frame = boxFrame(world, camera, axes)
+      const boxes = frame.labels
+        .filter((l) => l.role === 'tick')
+        .map((l) => ({ ...screenOf(world, camera, l), ...estimateLabelSize(l.text, 12), key: l.key }))
+      for (let i = 0; i < boxes.length; i++)
+        for (let j = i + 1; j < boxes.length; j++) expect([boxes[i].key, boxes[j].key, labelsOverlap(boxes[i], boxes[j])]).toEqual([boxes[i].key, boxes[j].key, false])
+    })
+  }
+})
+
 describe('boxFrame flips its walls', () => {
   it('at azimuth 130 the back walls are x = +1 and y = -1', () => {
     const planes = planesOf(setup(130, 25).frame, 'grid')

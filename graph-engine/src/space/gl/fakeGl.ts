@@ -32,7 +32,8 @@ export interface FakeDraw {
   mode: number
   count: number
   instances: number
-  // Whether depth writes and blending were on for this draw.
+  // Whether colour writes, depth writes and blending were on for this draw.
+  colorWrite: boolean
   depthWrite: boolean
   blend: boolean
 }
@@ -120,6 +121,7 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
   const attribs = new Map<number, Map<number, FakeHandle>>()
   let program: FakeHandle | null = null
   let vao: FakeHandle | null = null
+  let colorWrite = true
   let depthWrite = true
   let blend = false
   let arrayBuffer: FakeHandle | null = null
@@ -182,6 +184,9 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
     getProgramParameter: () => true,
     getProgramInfoLog: () => '',
     getUniformLocation: (_p: FakeHandle, name: string) => ({ uniform: name }),
+    colorMask: (r: boolean, g: boolean, b: boolean, a: boolean) => {
+      colorWrite = r || g || b || a
+    },
     depthMask: (flag: boolean) => {
       depthWrite = flag
     },
@@ -221,16 +226,16 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       attribs.set(vao.id, map)
     },
     drawArrays: (mode: number, _first: number, count: number) => {
-      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, depthWrite, blend })
+      draws.push({ fn: 'drawArrays', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend })
     },
     drawElements: (mode: number, count: number) => {
-      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, depthWrite, blend })
+      draws.push({ fn: 'drawElements', program, vao, mode, count, instances: 1, colorWrite, depthWrite, blend })
     },
     drawArraysInstanced: (mode: number, _first: number, count: number, instances: number) => {
-      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, depthWrite, blend })
+      draws.push({ fn: 'drawArraysInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend })
     },
     drawElementsInstanced: (mode: number, count: number, _type: number, _offset: number, instances: number) => {
-      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, depthWrite, blend })
+      draws.push({ fn: 'drawElementsInstanced', program, vao, mode, count, instances, colorWrite, depthWrite, blend })
     },
   }
 
@@ -289,6 +294,7 @@ export function createFakeGl(options: FakeGlOptions = {}): FakeGl {
       for (const k of KINDS) live[k].clear()
       program = null
       vao = null
+      colorWrite = true
       depthWrite = true
       blend = false
       arrayBuffer = null

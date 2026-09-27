@@ -11,12 +11,13 @@
 //   broken toward the front. Each is a silhouette edge of the box.
 // - Tick labels are pushed perpendicular to their edge on screen, away from
 //   the projected box centre, by 10 px plus half their extent, then thinned;
-//   the axis title sits at the edge midpoint beyond them.
+//   the axis title sits at the edge midpoint beyond them. Where two edges
+//   meet (the front corner), a later edge's label gives way to an earlier's.
 
 import type { CameraMatrices } from '../camera/projection'
 import type { WorldMap } from '../camera/world'
 import type { Range, Vec3 } from '../scene/types'
-import { edgeLabels, edgeNormal, screenOf, TICK_LABEL_PUSH_PX, type EdgeTick } from './labels'
+import { dropCrossEdgeCollisions, edgeLabels, edgeNormal, screenOf, TICK_LABEL_PUSH_PX, type EdgeTick } from './labels'
 import { formatTick, tickIndex, ticks } from './ticks'
 import type { FrameAxes, FrameAxis, FrameLabel, FrameLine, FrameModel } from './types'
 
@@ -110,7 +111,7 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
   const zTickSign = zTickAxis === 0 ? xOut : yOut
 
   const markLength = (axis: Axis) => BOX_TICK_LENGTH / world.scale[axis]
-  const labels: FrameLabel[] = []
+  const edges: FrameLabel[][] = []
   const centre = screenOf(world, camera, world.centre)
 
   // One tick edge: the edge line, a mark per tick pointing outward along
@@ -134,13 +135,14 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
     const values = tickValues[axis]
     const keepLast = values.length > 0 && near(values[values.length - 1], r.max, spec.step)
     const title = { key: `title:${NAMES[axis]}`, position: with3(base, axis, (r.min + r.max) / 2), text: spec.title }
-    labels.push(...edgeLabels(world, camera, items, normal, TICK_LABEL_PUSH_PX, keepLast, title))
+    edges.push(edgeLabels(world, camera, items, normal, TICK_LABEL_PUSH_PX, keepLast, title))
   }
   const ySign = yFront === box.y.max ? 1 : -1
   const xSign = xFront === box.x.max ? 1 : -1
   tickEdge(0, [0, yFront, zFloor], 1, ySign)
   tickEdge(1, [xFront, 0, zFloor], 0, xSign)
   tickEdge(2, [zEdge[0], zEdge[1], 0], zTickAxis, zTickSign)
+  const labels = dropCrossEdgeCollisions(world, camera, edges)
 
   const key = [
     'box',

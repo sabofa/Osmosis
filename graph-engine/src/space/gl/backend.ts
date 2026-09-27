@@ -31,7 +31,7 @@ import {
   type LineLook,
   type SharedQuads,
 } from './linePipeline'
-import { drawMeshes, isTranslucent, MESH_PROGRAM, sortBackToFront, uploadMesh, type MeshGpu } from './meshPipeline'
+import { drawMeshes, drawTranslucentMeshes, isTranslucent, MESH_PROGRAM, sortBackToFront, uploadMesh, type MeshGpu } from './meshPipeline'
 import { drawPoints, POINT_PROGRAM, uploadPoints, type PointGpu } from './pointPipeline'
 import { ProgramCache, type ProgramInfo } from './program'
 
@@ -225,15 +225,8 @@ export class GlBackend {
       // Lines, arrows and points, with their depth bias.
       antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points)
 
-      // Translucent meshes, back to front, blended, no depth writes.
-      const translucent = sortBackToFront(meshes.filter(isTranslucent), camera)
-      if (translucent.length > 0) {
-        gl.enable(gl.BLEND)
-        gl.depthMask(false)
-        drawMeshes(gl, mesh, translucent, camera, world, colors)
-        gl.depthMask(true)
-        gl.disable(gl.BLEND)
-      }
+      // Translucent meshes, back to front, blended, each its nearest layer.
+      drawTranslucentMeshes(gl, mesh, sortBackToFront(meshes.filter(isTranslucent), camera), camera, world, colors)
     } catch (error) {
       this.fail(error)
     }

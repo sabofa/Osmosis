@@ -126,3 +126,28 @@ export function edgeLabels(
   }
   return labels
 }
+
+// Across edges: the x and y tick edges meet at the front corner, where both
+// end labels sit, and thinning within one edge cannot see the other. Taking
+// the edges in order, a tick label that would overlap one already kept from
+// an earlier edge is dropped. Titles are left alone.
+export function dropCrossEdgeCollisions(world: WorldMap, camera: CameraMatrices, edges: readonly FrameLabel[][]): FrameLabel[] {
+  const kept: FrameLabel[] = []
+  const placed: LabelBox[] = []
+  for (const edge of edges) {
+    const mine: LabelBox[] = []
+    for (const label of edge) {
+      if (label.role !== 'tick') {
+        kept.push(label)
+        continue
+      }
+      const s = screenOf(world, camera, label.position)
+      const box = { x: s.x + label.screenOffset[0], y: s.y + label.screenOffset[1], ...estimateLabelSize(label.text, TICK_FONT_PX) }
+      if (placed.some((other) => labelsOverlap(other, box))) continue
+      kept.push(label)
+      mine.push(box)
+    }
+    placed.push(...mine)
+  }
+  return kept
+}

@@ -157,7 +157,7 @@ describe('GlBackend: upload', () => {
 })
 
 describe('GlBackend: drawing meshes', () => {
-  it('draws translucent meshes after opaque ones, back to front, with depth writes off', () => {
+  it('draws translucent meshes after opaque ones, back to front, each as its nearest layer only', () => {
     const { fake, backend } = setup()
     // Scene order: near translucent, opaque, far translucent. The camera
     // looks down from +z (elevation 25), so higher z is nearer.
@@ -165,17 +165,19 @@ describe('GlBackend: drawing meshes', () => {
     const opaque = square(0, -0.5, 1, 2)
     const far = square(-0.8, -0.5, 0.5, 3)
     backend.setScene(scene([near, opaque, far]), WORLD, LIGHT)
-    fake.calls.length = 0
     backend.draw(camera(), 1)
     const draws = meshDraws(fake)
-    expect(draws).toHaveLength(3)
-    const heightOf = (d: (typeof draws)[number]) => (attribData(fake, d.vao, 0) as Float32Array)[2]
-    expect(draws.map(heightOf).map((z) => Math.round(z * 10) / 10)).toEqual([0, -0.8, 0.8])
-    // Depth writes go off between the opaque draw and the first translucent one.
-    const drawAt = fake.calls.flatMap((c, i) => (c.fn.startsWith('draw') ? [i] : []))
-    const between = fake.calls.slice(drawAt[0], drawAt[1])
-    expect(between.some((c) => c.fn === 'depthMask' && c.args[0] === false)).toBe(true)
-    expect(between.some((c) => c.fn === 'enable' && c.args[0] === GL_CONSTANTS.BLEND)).toBe(true)
+    const heightOf = (d: (typeof draws)[number]) => Math.round((attribData(fake, d.vao, 0) as Float32Array)[2] * 10) / 10
+    // Each translucent mesh: a depth-only prepass (so an unsorted closed mesh
+    // cannot composite its far side over its near side), then its colour,
+    // blended, without writing depth.
+    expect(draws.map((d) => [heightOf(d), d.colorWrite, d.depthWrite, d.blend])).toEqual([
+      [0, true, true, false],
+      [-0.8, false, true, false],
+      [-0.8, true, false, true],
+      [0.8, false, true, false],
+      [0.8, true, false, true],
+    ])
   })
 
   it('clears to the palette background', () => {

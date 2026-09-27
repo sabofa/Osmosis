@@ -19,6 +19,8 @@ uniform mat4 u_proj;
 uniform vec3 u_scale;                    // k: author units -> world
 out vec3 v_normal;
 out vec3 v_viewPos;
+// The translucent prepass and colour pass must produce identical depths.
+invariant gl_Position;
 void main() {
   vec4 viewPos = u_view * vec4(a_position * u_scale, 1.0);
   v_viewPos = viewPos.xyz;

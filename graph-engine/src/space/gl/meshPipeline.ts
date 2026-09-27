@@ -1,6 +1,7 @@
 // The mesh pipeline (plan G9): lit two-sided triangles, opaque first, then
 // translucent (opacity < 1) in a second pass with depth writes off, blended,
-// sorted back to front by centroid depth. That pass is the fallback S3's
+// sorted back to front by centroid depth, each mesh as its nearest layer
+// (see drawTranslucentMeshes). That pass is the fallback S3's
 // order-independent transparency replaces.
 
 import type { CameraMatrices } from '../camera/projection'
@@ -85,6 +86,22 @@ export function sortBackToFront(meshes: MeshGpu[], camera: CameraMatrices): Mesh
     .map((e) => e.mesh)
 }
 
+function bindMeshProgram(gl: WebGL2RenderingContext, program: ProgramInfo, camera: CameraMatrices, world: WorldMap): void {
+  gl.useProgram(program.program)
+  gl.uniformMatrix4fv(program.uniform('u_view'), false, float32(camera.view))
+  gl.uniformMatrix4fv(program.uniform('u_proj'), false, float32(camera.proj))
+  gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
+  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+}
+
+function drawOne(gl: WebGL2RenderingContext, program: ProgramInfo, mesh: MeshGpu, colors: SpaceColors): void {
+  const [r, g, b] = resolveSpaceColor(mesh.mark.style.color, colors.palette, colors.theme)
+  gl.uniform3f(program.uniform('u_color'), r, g, b)
+  gl.uniform1f(program.uniform('u_opacity'), Math.min(1, Math.max(0, mesh.mark.style.opacity)))
+  gl.bindVertexArray(mesh.vao)
+  gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
+}
+
 export function drawMeshes(
   gl: WebGL2RenderingContext,
   program: ProgramInfo,
@@ -94,17 +111,39 @@ export function drawMeshes(
   colors: SpaceColors,
 ): void {
   if (meshes.length === 0) return
-  gl.useProgram(program.program)
-  gl.uniformMatrix4fv(program.uniform('u_view'), false, float32(camera.view))
-  gl.uniformMatrix4fv(program.uniform('u_proj'), false, float32(camera.proj))
-  gl.uniform3f(program.uniform('u_scale'), world.scale[0], world.scale[1], world.scale[2])
-  gl.uniform1i(program.uniform('u_perspective'), camera.projection === 'perspective' ? 1 : 0)
+  bindMeshProgram(gl, program, camera, world)
+  for (const mesh of meshes) drawOne(gl, program, mesh, colors)
+  gl.bindVertexArray(null)
+}
+
+// Translucent meshes, already sorted back to front. Each is drawn as its
+// nearest layer only: a depth-only prepass, then its colour, blended, where
+// the depth matches, without writing depth. Without the prepass the
+// triangles of one closed mesh composite in index order, so its far side
+// can land over its near side (seen on a translucent sphere). The far
+// layers of a translucent mesh wait for S3's order-independent transparency.
+export function drawTranslucentMeshes(
+  gl: WebGL2RenderingContext,
+  program: ProgramInfo,
+  meshes: readonly MeshGpu[],
+  camera: CameraMatrices,
+  world: WorldMap,
+  colors: SpaceColors,
+): void {
+  if (meshes.length === 0) return
+  bindMeshProgram(gl, program, camera, world)
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
   for (const mesh of meshes) {
-    const [r, g, b] = resolveSpaceColor(mesh.mark.style.color, colors.palette, colors.theme)
-    gl.uniform3f(program.uniform('u_color'), r, g, b)
-    gl.uniform1f(program.uniform('u_opacity'), Math.min(1, Math.max(0, mesh.mark.style.opacity)))
-    gl.bindVertexArray(mesh.vao)
-    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
+    gl.disable(gl.BLEND)
+    gl.colorMask(false, false, false, false)
+    gl.depthMask(true)
+    drawOne(gl, program, mesh, colors)
+    gl.colorMask(true, true, true, true)
+    gl.depthMask(false)
+    gl.enable(gl.BLEND)
+    drawOne(gl, program, mesh, colors)
   }
+  gl.depthMask(true)
+  gl.disable(gl.BLEND)
   gl.bindVertexArray(null)
 }

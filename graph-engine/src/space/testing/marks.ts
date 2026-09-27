@@ -128,14 +128,30 @@ export function parametricMesh(
   }
   const indices = new Uint32Array(nu * nv * 6)
   let k = 0
+  // Each triangle is wound counter-clockwise about the normals passed in,
+  // whichever way r_u x r_v points: the shader's two-sided lighting takes the
+  // front face from the winding, so winding and normals must agree.
+  const agrees = (a: number, b: number, c: number) => {
+    const p = (i: number, t: number) => positions[i * 3 + t]
+    const e1 = [p(b, 0) - p(a, 0), p(b, 1) - p(a, 1), p(b, 2) - p(a, 2)]
+    const e2 = [p(c, 0) - p(a, 0), p(c, 1) - p(a, 1), p(c, 2) - p(a, 2)]
+    const cross = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]
+    let dot = 0
+    for (const v of [a, b, c]) for (let t = 0; t < 3; t++) dot += cross[t] * normals[v * 3 + t]
+    return dot >= 0
+  }
+  const tri = (a: number, b: number, c: number) => {
+    indices.set(agrees(a, b, c) ? [a, b, c] : [a, c, b], k)
+    k += 3
+  }
   for (let j = 0; j < nv; j++) {
     for (let i = 0; i < nu; i++) {
       const a = j * (nu + 1) + i
       const b = a + 1
       const c = a + (nu + 1)
       const d = c + 1
-      indices.set([a, b, d, a, d, c], k)
-      k += 6
+      tri(a, b, d)
+      tri(a, d, c)
     }
   }
   return meshMark(positions, normals, indices, {
