@@ -10,7 +10,7 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1862 tests passing**,
+agents" below). Working tree clean. **1864 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
 *Last updated 2026-09-27, after geometry phase 12 (shading and shaded
@@ -896,7 +896,12 @@ boundary only touches the line: a disk r = 2 minus a disk r = 1 at (1, 0)
 anchors at (0, −1), not (−0.366, −1); the annulus and square-minus-circle
 anchors are unchanged. The lens's and the annulus's exact path strings are
 pinned, so an arc's direction and flags are tested. `area R < area S` says
-relations between areas are not stated yet.
+relations between areas are not stated yet — and, since fix round 2, so
+does `area R = area S` (it printed "area S" as a symbol before). Fix round
+2 also pinned the other half of the F6 merge: when a merged chord's
+midpoint IS the touching point, its parts stand as chords of their own (a
+small disk or a triangle's tip touching a line of a rectangle from above
+anchors on the next line up, never on the hole's boundary).
 
 **Byte identity, measured as in phases 9–11** (a scratch vitest setup
 wrapping `renderFigure` and `parseStatement`: 551 distinct suite inputs
@@ -1043,7 +1048,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1862 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 1864 tests, node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
@@ -1355,12 +1360,26 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
     16 − 4π), a stated decimal asserts at the shared tolerance like every
     measure, and a symbolic `= 16 − 4π` prints as written and is not
     checked. Checking an exact expression against the value is build step
-    3's, for every measure — not a special case for areas. Drawing notes
+    3's, for every measure — not a special case for areas. `area.test.ts`
+    pins the gap as a test named "KNOWN GAP (handoff item 17)", which
+    expects a wrong symbolic area (`= 16 - 3π`) to pass; flip it to a
+    refusal then. Drawing notes
     from the PNG review: a fill's edges are drawn only where the author
     draws them, so a fill with no lines of its own reads as a soft shape;
     and a union's F6 label can land in the overlap of its parts when the
     widest chord runs through it (two overlapping squares do this, which is
     why the "Shaded union" example is a square and a circle).
+
+18. **The measure-refusal wording can read as a contradiction** (engine-wide,
+    not now). When an author states the rounded value the label itself
+    prints — `label: area R = 3.434` for 16 − 4π — the refusal says
+    `"area R = 3.434" disagrees with the figure — the geometry gives 3.434`,
+    two equal-looking numbers. It is correct (the stated value is compared
+    at the shared tolerance, and 3.434 is the rounded 3.43363…), but a
+    later change to `checkMeasure`'s message, for every measure, could say
+    so when the stated value equals the printed one: "that is the rounded
+    value; state it to full precision, write it symbolically, or use
+    `@scale: false`".
 
 ---
 

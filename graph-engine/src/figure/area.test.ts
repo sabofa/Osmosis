@@ -110,35 +110,31 @@ describe('label: area', () => {
   // the printed decimal of an irrational area does NOT assert it. 16 − 4π
   // = 16 − 12.5663706144… = 3.4336293856…
   it('asserts a stated area at the one shared tolerance: the printed 3.434 is refused, the full value holds', () => {
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}
-label: area R = 3.434`)).toEqual([
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 3.434`)).toEqual([
       '"area R = 3.434" disagrees with the figure — the geometry gives 3.434. Fix the construction, write "area R = x" for a symbolic value, or set "@scale: false" if the figure is deliberately not to scale.',
     ])
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}
-label: area R = 4`)).toEqual([
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 4`)).toEqual([
       '"area R = 4" disagrees with the figure — the geometry gives 3.434. Fix the construction, write "area R = x" for a symbolic value, or set "@scale: false" if the figure is deliberately not to scale.',
     ])
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}
-label: area R = 3.4336293856`)).toEqual([])
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 3.4336293856`)).toEqual([])
   })
 
-  it('prints a symbolic area as written, and checks nothing (exact values are build step 3)', () => {
-    const result = rendered(`${SQUARE_AND_CIRCLE}
-label: area R = 16 - 4π`)
+  it('prints a symbolic area as written (exact values are build step 3)', () => {
+    const result = rendered(`${SQUARE_AND_CIRCLE}\nlabel: area R = 16 - 4π`)
     expect(result.errors).toEqual([])
     expect(texts(result.svg).map((t) => t.text)).toContain('16 - 4π')
-    // Unchecked: a wrong symbolic value is not caught today.
-    expect(errorsOf(`${SQUARE_AND_CIRCLE}
-label: area R = 16 - 3π`)).toEqual([])
+  })
+
+  // KNOWN GAP (handoff item 17): symbolic values are printed as written and
+  // never checked, engine-wide — a wrong one passes. Flip this to a refusal
+  // at build step 3 (exact values).
+  it('KNOWN GAP (handoff item 17): a wrong symbolic area is printed as written and not checked', () => {
+    expect(errorsOf(`${SQUARE_AND_CIRCLE}\nlabel: area R = 16 - 3π`)).toEqual([])
   })
 
   it('accepts any stated area under @scale: false, the rounded one included', () => {
-    expect(errorsOf(`@scale: false
-${SQUARE_AND_CIRCLE}
-label: area R = 3.434`)).toEqual([])
-    expect(errorsOf(`@scale: false
-${SQUARE_AND_CIRCLE}
-label: area R = 4`)).toEqual([])
+    expect(errorsOf(`@scale: false\n${SQUARE_AND_CIRCLE}\nlabel: area R = 3.434`)).toEqual([])
+    expect(errorsOf(`@scale: false\n${SQUARE_AND_CIRCLE}\nlabel: area R = 4`)).toEqual([])
   })
 
   it('refuses an unknown region, pointing at name: on a fill', () => {
@@ -169,6 +165,13 @@ label: area R = 4`)).toEqual([])
       'Relations between areas are not stated yet — give each area its own line ("given: area R", "given: area S")'
     )
     expect(() => parseStatement('given: area R congruent area S')).toThrow(/Relations between areas are not stated yet/)
+    // Fix round 2 — an area stated equal to another area is a relation too,
+    // not a symbol to print.
+    expect(() => parseStatement('given: area R = area S')).toThrow(
+      'Relations between areas are not stated yet — give each area its own line ("given: area R", "given: area S")'
+    )
+    expect(() => parseStatement('label: area R = area S')).toThrow(/Relations between areas are not stated yet/)
+    expect(() => parseStatement('find: area R = area S')).toThrow('("find: area R", "find: area S")')
   })
 
   it('measures a region whose fill is hidden', () => {

@@ -245,6 +245,26 @@ describe('F6 — the interior point an area label hangs at', () => {
     expect(p.y).toBeCloseTo(-1, CLOSE)
   })
 
+  // Fix round 2 — when the merged chord's midpoint IS the touching point, its
+  // parts stand as chords of their own. The rectangle [−4, 4] × [0, 8] has
+  // h = 8, lines y = 1 … 7. A hole touching y = 1 at (0, 1) from above —
+  // a disk of radius 0.25 at (0, 1.25), or a triangle with its tip there —
+  // leaves [−4, 0] and [0, 4] on that line, 4 each; merged, [−4, 4] would
+  // be 8 long with its midpoint (0, 1) ON the hole's boundary. Every line
+  // from y = 2 up is clear of the hole (it spans y ≤ 1.5), a full chord of
+  // 8, so the lowest of them wins: (0, 2).
+  it('never hangs a label on a touching point: a small hole touching a line from above', () => {
+    const outer = polygonRegion([P(-4, 0), P(4, 0), P(4, 8), P(-4, 8)])
+    for (const hole of [
+      diskRegion(circle(P(0, 1.25), 0.25)),
+      polygonRegion([P(0, 1), P(0.5, 1.5), P(-0.5, 1.5)]),
+    ]) {
+      const p = interiorLabelPoint(combineRegions('difference', outer, hole))
+      expect(p.x).toBeCloseTo(0, CLOSE)
+      expect(p.y).toBeCloseTo(2, CLOSE)
+    }
+  })
+
   it('the largest component: a unit disk beside a 2×2 square hangs in the square, on its lowest line', () => {
     // π < 4, so the square; every line's chord is the square's width, 2, and
     // the lowest line is y = −1 + 2/8 = −0.75.

@@ -2018,6 +2018,14 @@ function splitRelation(text: string): { left: string; symbol: string; right: str
   return null
 }
 
+// Fix round 2 — "given: area R = area S": the value is another area, a
+// relation between two areas, which is not stated yet. Refused as the
+// relational forms are ("area R < area S"), rather than printed as a symbol.
+function refuseAreaRelation(subject: MeasureSubject, content: MeasureContent | null, role: string): void {
+  if (subject.kind !== 'area' || content?.kind !== 'symbol' || !/^area\s/.test(content.text)) return
+  throw new Error(`Relations between areas are not stated yet — give each area its own line ("${role}: area R", "${role}: area S")`)
+}
+
 // "label: <subject> [= <value>]".
 function parseMeasureLabel(rest: string): StatementShape {
   const body = rest.trim()
@@ -2039,6 +2047,7 @@ function parseMeasureLabel(rest: string): StatementShape {
   const equals = body.indexOf('=')
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
   const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'label')
+  refuseAreaRelation(named.subject, content, 'label')
 
   if (named.explicit) {
     if (content) {
@@ -2086,6 +2095,7 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
   const equals = body.indexOf('=')
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
   const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'given')
+  refuseAreaRelation(named.subject, content, section)
   return { kind: 'given', section, entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
 }
 

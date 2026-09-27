@@ -1197,7 +1197,8 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         try {
           fillRegion(statement)
         } catch {
-          // A hidden statement reports nothing; "area R" then finds no R.
+          // A hidden statement reports nothing itself; its refusal is
+          // recorded under its name, and "area R" reports it (fix round 1, M3).
         }
       }
       continue
