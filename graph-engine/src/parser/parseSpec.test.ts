@@ -58,3 +58,30 @@ describe('statement line numbers (S1, K7)', () => {
     expect(result.config.bindings).toEqual([{ name: 'a', value: 1, min: 0, max: 5, step: null, integer: false, line: 3 }])
   })
 })
+
+describe('space directives read constants in the spec’s angle unit (fix round 1, M4)', () => {
+  // sin(30 degrees) = 1/2; sin(30 radians) = -0.988
+  it('@angle: degrees then @param a = sin(30) gives a = 0.5', () => {
+    const result = parseSpec('@angle: degrees\n@param a = sin(30) range [0, 1]')
+    expect(result.errors).toEqual([])
+    expect(result.config.bindings[0].value).toBeCloseTo(0.5, 15)
+  })
+
+  it('whichever comes first: @param before @angle', () => {
+    const result = parseSpec('@param a = sin(30) range [0, 1]\n@angle: degrees')
+    expect(result.errors).toEqual([])
+    expect(result.config.bindings[0].value).toBeCloseTo(0.5, 15)
+  })
+
+  it('@bounds3d and @camera too', () => {
+    // 2 sin(90 degrees) = 2; atan2(1, 1) = 45 degrees
+    const result = parseSpec('@bounds3d: x [0, 2*sin(90)]\n@camera: azimuth atan2(1, 1)\n@angle: degrees')
+    expect(result.config.space.bounds.x).toEqual({ min: 0, max: 2 })
+    expect(result.config.space.camera.azimuth).toBe(45)
+  })
+
+  it('radians by default', () => {
+    const result = parseSpec('@param a = sin(pi/6) range [0, 1]')
+    expect(result.config.bindings[0].value).toBeCloseTo(0.5, 15)
+  })
+})

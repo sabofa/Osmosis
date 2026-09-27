@@ -10,6 +10,19 @@ import type { ParseResult } from './types'
 export function parseSpec(text: string): ParseResult {
   const result: ParseResult = { statements: [], statementLines: [], errors: [], config: defaultConfig() }
   const lines = text.split('\n')
+  // @angle decides how space's directives read trig in their constants
+  // ("@param a = sin(30) …"), wherever it appears, so it is applied first; the
+  // loop below applies it again in order and reports any error.
+  for (const line of lines) {
+    const trimmed = line.split('#')[0].trim()
+    if (/^@angle\s*:/.test(trimmed)) {
+      try {
+        parseConfigLine(trimmed, result.config)
+      } catch {
+        // reported by the loop below
+      }
+    }
+  }
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].split('#')[0].trim()
     if (trimmed.length === 0) continue

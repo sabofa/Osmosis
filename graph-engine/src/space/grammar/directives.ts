@@ -21,7 +21,7 @@ import { parseExprString } from '../../parser/parseExpr'
 import type { Expr } from '../../parser/types'
 import { DEFAULT_CAMERA, defaultSpaceConfig, type Binding, type SpaceConfig, type TickStep } from '../config'
 import type { Range } from '../scene/types'
-import { constantValue, parseParamLine } from './params'
+import { constantValue, parseParamLine, type Angle } from './params'
 import { isColormapName, unknownColormap } from './style'
 
 // What a directive writes: GraphConfig's two space fields, structurally, so
@@ -29,6 +29,9 @@ import { isColormapName, unknownColormap } from './style'
 export interface SpaceDirectiveTarget {
   space: SpaceConfig
   bindings: Binding[]
+  // @angle, which trig in a directive's constants reads (GraphConfig has it;
+  // parseSpec applies every @angle line before the other lines).
+  angle?: Angle
 }
 
 type Axis = 'x' | 'y' | 'z'
@@ -46,14 +49,14 @@ function perAxis(directive: string, value: string, pattern: RegExp, shape: strin
   return found
 }
 
-function parseBounds(value: string): SpaceConfig['bounds'] {
+function parseBounds(value: string, angle: Angle): SpaceConfig['bounds'] {
   const axes = perAxis('bounds3d', value, /^(\w+)\s*\[(.*)\]$/, '"x [a, b]"')
   const bounds: SpaceConfig['bounds'] = { x: null, y: null, z: null }
   for (const [axis, match] of axes) {
     if (axis !== 'x' && axis !== 'y' && axis !== 'z') throw new Error(`@bounds3d takes x, y or z, got "${axis}"`)
     const ends = splitTopLevelComma(match[2])
     if (ends.length !== 2) throw new Error(`@bounds3d ${axis} expects "[a, b]", got "[${match[2]}]"`)
-    const range: Range = { min: constantValue(ends[0], `@bounds3d ${axis}`), max: constantValue(ends[1], `@bounds3d ${axis}`) }
+    const range: Range = { min: constantValue(ends[0], `@bounds3d ${axis}`, angle), max: constantValue(ends[1], `@bounds3d ${axis}`, angle) }
     if (!(range.min < range.max)) throw new Error(`@bounds3d ${axis}: the minimum must be less than the maximum, got [${range.min}, ${range.max}]`)
     bounds[axis] = range
   }
@@ -72,7 +75,7 @@ function parseAspect(value: string): SpaceConfig['aspect'] {
   return { kind: 'ratio', x, y, z }
 }
 
-function parseCamera(value: string): SpaceConfig['camera'] {
+function parseCamera(value: string, angle: Angle): SpaceConfig['camera'] {
   const camera = { ...DEFAULT_CAMERA }
   const keys = new Set<string>()
   for (const part of splitTopLevelComma(value)) {
@@ -83,7 +86,7 @@ function parseCamera(value: string): SpaceConfig['camera'] {
     }
     if (keys.has(key)) throw new Error(`@camera gives ${key} twice`)
     keys.add(key)
-    camera[key] = constantValue(match[2], `@camera ${key}`)
+    camera[key] = constantValue(match[2], `@camera ${key}`, angle)
   }
   if (Math.abs(camera.elevation) > 89.5) throw new Error(`@camera elevation must be within -89.5 to 89.5 degrees, got ${camera.elevation}`)
   if (!(camera.zoom > 0)) throw new Error(`@camera zoom must be positive, got ${camera.zoom}`)
@@ -132,12 +135,12 @@ export function piMultiple(e: Expr): { num: number; den: number } | null {
   return { num: found.num / g, den: found.den / g }
 }
 
-function parseTicks(value: string): SpaceConfig['ticks'] {
+function parseTicks(value: string, angle: Angle): SpaceConfig['ticks'] {
   const axes = perAxis('ticks3d', value, /^([xyz])\s+(.+)$/, '"x <step>" with x, y or z')
   const ticks: SpaceConfig['ticks'] = { x: null, y: null, z: null }
   for (const [axis, match] of axes) {
     const expr = parseExprString(match[2])
-    const step = constantValue(match[2], `@ticks3d ${axis}`)
+    const step = constantValue(match[2], `@ticks3d ${axis}`, angle)
     if (!(step > 0)) throw new Error(`@ticks3d ${axis}: a step must be positive, got ${step}`)
     const tick: TickStep = { value: step, pi: piMultiple(expr) }
     ticks[axis] = tick
@@ -165,9 +168,10 @@ function parseTitles(value: string): SpaceConfig['titles'] {
 // was. Throws, naming the directive, on a bad value.
 export function parseSpaceDirective(key: string, value: string, target: SpaceDirectiveTarget, line = 0): boolean {
   const space = target.space
+  const angle = target.angle ?? 'radians'
   switch (key) {
     case 'bounds3d':
-      space.bounds = parseBounds(value)
+      space.bounds = parseBounds(value, angle)
       return true
     case 'aspect':
       space.aspect = parseAspect(value)
@@ -179,14 +183,14 @@ export function parseSpaceDirective(key: string, value: string, target: SpaceDir
       space.projection = value
       return true
     case 'camera':
-      space.camera = parseCamera(value)
+      space.camera = parseCamera(value, angle)
       return true
     case 'frame':
       if (value !== 'box' && value !== 'axes' && value !== 'none') throw new Error(`@frame must be box, axes or none, got "${value}"`)
       space.frame = value
       return true
     case 'ticks3d':
-      space.ticks = parseTicks(value)
+      space.ticks = parseTicks(value, angle)
       return true
     case 'titles':
       space.titles = parseTitles(value)
@@ -206,7 +210,7 @@ export function parseSpaceDirective(key: string, value: string, target: SpaceDir
       space.depthcue = value === 'on'
       return true
     case 'param': {
-      const binding = parseParamLine(value, line)
+      const binding = parseParamLine(value, line, angle)
       if (target.bindings.some((b) => b.name === binding.name)) {
         throw new Error(`@param ${binding.name} is defined twice`)
       }
