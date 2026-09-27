@@ -92,6 +92,9 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   // A shortest path over a solid's surface (phase 11) runs between points in
   // space on a solid.
   'shortestPath',
+  // A shaded region (phase 12) is plane geometry: drawn only by the figure
+  // renderer.
+  'fill',
 ])
 
 // The statements that exist only in a solid figure. Either one settles the

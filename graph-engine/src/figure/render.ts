@@ -8,6 +8,7 @@ import type {
   MeasureContent,
   MeasureSubject,
   PlaneForm,
+  RegionExpr,
   Statement,
 } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
@@ -19,6 +20,16 @@ import { type Arc, arcBetween, arcMidpoint, arcPointAt, requireOnCircle } from '
 import type { GeometryCircle, GeometryObject, LineExtent } from '../scene/geometry/objects'
 import type { SceneError, Vec2 } from '../scene/types'
 import { GEOM_EPS } from '../scene/geometry/types'
+import {
+  circularSegmentRegion,
+  combineRegions,
+  diskRegion,
+  polygonRegion,
+  regionExtremes,
+  sectorRegion,
+  sweepOf,
+  type Region,
+} from '../scene/geometry/regions'
 import {
   boundsOf,
   cssColor,
@@ -72,9 +83,12 @@ import { sectionOutline, type OutlinePiece } from './sectionVisibility'
 import { netOf, netSolidWord, type Net, type NetPiece } from './nets'
 import { shortestPath, type SurfacePath } from './shortestPath'
 import {
+  ellipticalArcCommand,
   fmt,
+  lineCommand,
   svgArc,
   svgCircle,
+  svgClosedPaths,
   svgCircularSegment,
   svgEllipse,
   svgLine,
@@ -252,6 +266,10 @@ type FigureItem =
   // the vertex, never a named point — the same letter can sit at three places
   // in one net. `copy` keeps each one's layout identity unique.
   | { kind: 'netLabel'; id: Identity; copy: number; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
+  // Phase 12 (F5) — a shaded region: exact loops of segments and arcs, drawn
+  // as ONE path in the regions layer with no outline of its own (the
+  // author's own lines draw the edges). A backdrop, not a label obstacle.
+  | { kind: 'fill'; id: Identity; region: Region; color: string | null }
 
 export interface FigureResult {
   svg: string
@@ -814,6 +832,82 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     return found
   }
 
+  // Phase 12 (F4) — shaded regions. A region named with "name:" on its
+  // "fill:" line, by that name, for "area R" and for later fills.
+  const namedRegions = new Map<string, Region>()
+
+  // A fill's points are points of the plane: a fill in space would be a face,
+  // which a solid figure draws as a section (F7).
+  function fillPoint(name: string): Vec2 {
+    if (isSpaceName(scope, name)) throw new Error(`"${name}" is a point in space — fills are drawn in the plane`)
+    return resolve(name)
+  }
+
+  // "square" and "rectangle" STATE a shape, so they are asserted, exactly as
+  // a right angle in space is (M2): a figure labelled a square that is not
+  // one states something false. "@scale: false" lifts it.
+  function assertShape(expr: Extract<RegionExpr, { kind: 'polygon' }>, points: readonly Vec2[]): void {
+    if (!config.toScale || (expr.shape !== 'square' && expr.shape !== 'rectangle')) return
+    const names = expr.points
+    const n = points.length
+    const list = (items: string[]) => `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+    const suffix = ' (set "@scale: false" to draw it anyway)'
+    const degrees = points.map((p, i) => angleMeasure(p, points[(i + n - 1) % n], points[(i + 1) % n], 'degrees'))
+    if (degrees.some((d) => Math.abs(d - 90) > GEOM_EPS * 90)) {
+      throw new Error(`${expr.source} is not a ${expr.shape} — its angles are ${list(degrees.map((d, i) => `${names[i]} = ${nearRightAngle(d)}°`))}${suffix}`)
+    }
+    if (expr.shape !== 'square') return
+    const sides = points.map((p, i) => segmentLength(p, points[(i + 1) % n]))
+    const longest = Math.max(...sides)
+    if (sides.every((side) => longest - side <= GEOM_EPS * longest)) return
+    const join = (a: string, b: string) => (a.length === 1 && b.length === 1 ? `${a}${b}` : `${a}-${b}`)
+    throw new Error(
+      `${expr.source} is not a square — its sides are ${list(sides.map((side, i) => `${join(names[i], names[(i + 1) % n])} = ${formatMeasure(side)}`))}${suffix}`
+    )
+  }
+
+  function unknownRegion(name: string): string {
+    const polygon = /^[A-Z]{3,}$/.test(name) ? `; for the polygon through ${[...name].join(', ')}, write "fill: ${[...name].join('-')}"` : ''
+    return `Unknown region "${name}" — name a shaded region with "name:" on its "fill:" line first (e.g. "fill: square ABCD minus circle O name: ${name}")${polygon}`
+  }
+
+  // A region expression, evaluated left to right as it was parsed. Each
+  // boolean refuses an empty result in the author's words.
+  function regionOf(expr: RegionExpr): Region {
+    switch (expr.kind) {
+      case 'named': {
+        const found = namedRegions.get(expr.name)
+        if (!found) throw new Error(unknownRegion(expr.name))
+        return found
+      }
+      case 'disk':
+        return diskRegion(resolveCircle(expr.circle))
+      case 'sector':
+      case 'segment': {
+        const arc = arcOf(expr, fillPoint, resolveCircle)
+        return expr.kind === 'sector' ? sectorRegion(arc) : circularSegmentRegion(arc)
+      }
+      case 'polygon': {
+        const points = expr.points.map(fillPoint)
+        assertShape(expr, points)
+        return polygonRegion(points, expr.points)
+      }
+      case 'combine':
+        return combineRegions(expr.op, regionOf(expr.left), regionOf(expr.right), expr.source)
+    }
+  }
+
+  // A fill's region, named when its statement names it.
+  function fillRegion(statement: Extract<Statement, { kind: 'fill' }>): Region {
+    const region = regionOf(statement.region)
+    const name = statement.statementName
+    if (name) {
+      if (namedRegions.has(name)) throw new Error(`"${name}" already names a shaded region — pick a different name`)
+      namedRegions.set(name, region)
+    }
+    return region
+  }
+
   const resolvers: Resolvers = {
     point: resolve,
     circle: resolveCircle,
@@ -1054,7 +1148,19 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   for (let index = 0; index < statements.length; index++) {
     const statement = statements[index]
-    if (statement.statementName && config.hidden.has(statement.statementName)) continue
+    if (statement.statementName && config.hidden.has(statement.statementName)) {
+      // A hidden fill still names its region, as a hidden construction keeps
+      // its binding: "@hide: R" with "given: area R" shades nothing and
+      // still measures R.
+      if (statement.kind === 'fill') {
+        try {
+          fillRegion(statement)
+        } catch {
+          // A hidden statement reports nothing; "area R" then finds no R.
+        }
+      }
+      continue
+    }
     const id = { statement: index, object: null as string | null }
     try {
       switch (statement.kind) {
@@ -1415,6 +1521,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           spaceDihedralMarks.add(dihedralKey(statement.from, statement.edge, statement.to))
           break
         }
+        case 'fill':
+          items.push({ kind: 'fill', id: { statement: index, object: statement.statementName }, region: fillRegion(statement), color: statement.color })
+          break
         case 'measureLabel':
           measureStatements.push({ statement, index })
           break
@@ -1694,6 +1803,31 @@ function regionInterior(edges: readonly ProjectedEdge[]): Vec2[] {
     .map((entry) => entry.p)
 }
 
+// Phase 12 (F5) — a shaded region as one path: per loop, "M" at its start,
+// "L" per side (the last side back to the start is the loop's "Z"), and one
+// "A" per arc — two for a whole turn, which one "A" cannot draw. Arcs are
+// never polylines. The caller sets the even-odd rule that makes holes holes.
+function fillPath(region: Region, projection: Projection, style: SvgAttrs): string {
+  const to = (p: Vec2) => projection.toView(p)
+  const loops = region.loops.map((loop) => {
+    const commands: string[] = []
+    loop.forEach((piece, i) => {
+      if (piece.kind === 'segment') {
+        if (i < loop.length - 1) commands.push(lineCommand(to(piece.b)))
+        return
+      }
+      const radius = piece.radius * projection.scale
+      // View space flips y, so a world angle t is the view angle -t, and a
+      // counter-clockwise arc sweeps the negative way on the page.
+      for (const [from, end] of splitTurn(piece.from, piece.from + sweepOf(piece))) {
+        commands.push(ellipticalArcCommand(to(piece.center), radius, radius, 0, -from, -end).command)
+      }
+    })
+    return { start: to(loop[0].a), commands }
+  })
+  return svgClosedPaths(loops, style)
+}
+
 // ---------------------------------------------------------------------------
 // Bounds
 // ---------------------------------------------------------------------------
@@ -1774,6 +1908,11 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
         break
       case 'netLabel':
         points.push(item.at)
+        break
+      case 'fill':
+        // F5 — the exact extremes of its pieces: ends, and the cardinal
+        // points its arcs pass through.
+        points.push(...regionExtremes(item.region))
         break
       case 'given':
         // The box is placed against the finished drawing, so it must not be
@@ -2352,6 +2491,17 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       )
       break
     }
+    case 'fill':
+      // E1 — a backdrop, behind every line; no stroke (F5).
+      layers.regions.push(
+        fillPath(item.region, projection, {
+          fill: strokeColor(item.color, palette.region, palette),
+          'fill-opacity': REGION_OPACITY,
+          'fill-rule': 'evenodd',
+          ...identity(item.id),
+        })
+      )
+      break
     case 'region': {
       const stroke = strokeColor(item.color, palette.axis, palette)
       for (const edge of item.edges) {

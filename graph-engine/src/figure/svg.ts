@@ -213,6 +213,15 @@ export function svgClosedPath(start: Vec2, commands: readonly string[], style: S
   return `<path${attrs({ d, ...style })}/>`
 }
 
+// A region of several closed outlines, as ONE path (phase 12, F5): each
+// loop a start point and its line and arc commands, closed by its own "Z".
+// One element so the fill has no seam, and several subpaths so a hole is a
+// hole under the even-odd rule the caller sets.
+export function svgClosedPaths(loops: readonly { start: Vec2; commands: readonly string[] }[], style: SvgAttrs): string {
+  const d = loops.map((loop) => [`M ${fmt(loop.start.x)} ${fmt(loop.start.y)}`, ...loop.commands, 'Z'].join(' ')).join(' ')
+  return `<path${attrs({ d, ...style })}/>`
+}
+
 export function lineCommand(to: Vec2): string {
   return `L ${fmt(to.x)} ${fmt(to.y)}`
 }

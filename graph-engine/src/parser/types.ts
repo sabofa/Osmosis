@@ -190,6 +190,33 @@ export type SolidPrimitive =
 export type SphereTangency = { kind: 'plane'; plane: PlaneForm } | { kind: 'sphere'; sphere: string; side: 'external' | 'internal' }
 
 // --------------------------------------------------------------------------
+// Shaded regions (Geometry v2, phase 12)
+// --------------------------------------------------------------------------
+
+// The three booleans a "fill:" expression combines regions with. The words
+// the author writes map onto them: "minus" is a difference, "and" and
+// "intersect" an intersection, "or" and "union" a union.
+export type RegionOperatorName = 'union' | 'intersection' | 'difference'
+
+// A region to shade, as the author wrote it (F4). Operands are the phase 1/4
+// objects by name; `source` is the author's own text for the node, so a
+// refusal can quote it ("square ABCD minus circle O leaves nothing to
+// shade"). Operators have one precedence and group left to right; a
+// parenthesised operand's source keeps its parentheses.
+export type RegionExpr =
+  // "A-B-C", "polygon A-B-C-D", "triangle ABC", "square ABCD",
+  // "rectangle ABCD". A square or rectangle is ASSERTED to be one.
+  | { kind: 'polygon'; shape: 'polygon' | 'triangle' | 'square' | 'rectangle'; points: string[]; source: string }
+  // "circle O" — the disk of a NAMED circle.
+  | { kind: 'disk'; circle: string; source: string }
+  // "sector P-Q on O <direction>", "segment P-Q on O <direction>" — the
+  // direction is required, exactly as for the drawn sector and segment (G1).
+  | { kind: 'sector' | 'segment'; circle: string; from: string; to: string; direction: GeometryArcDirection; source: string }
+  // A region named earlier with "name:" on its "fill:" line.
+  | { kind: 'named'; name: string; source: string }
+  | { kind: 'combine'; op: RegionOperatorName; left: RegionExpr; right: RegionExpr; source: string }
+
+// --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)
 // --------------------------------------------------------------------------
 
@@ -891,6 +918,12 @@ export type StatementShape =
   // lines dashed, cut edges solid. Its vertex letters are display labels,
   // repeated at every copy, and never named points.
   | { kind: 'net'; solid: string }
+  // "fill: <region>" (phase 12, F4/F5) — a shaded region: a polygon, a disk,
+  // a sector or a circular segment, or a boolean of them ("square ABCD minus
+  // circle O"). Drawn as ONE path in the regions layer, behind every line,
+  // with no outline of its own. A trailing "name: R" names the region for
+  // "area R".
+  | { kind: 'fill'; region: RegionExpr }
   // "shortest: P to Q over S [unfold]" (phase 11, N3/N4) — the shortest path
   // over the surface of S between two points in space on it. On a
   // polyhedron it is drawn on the solid (and, with "unfold", straight across

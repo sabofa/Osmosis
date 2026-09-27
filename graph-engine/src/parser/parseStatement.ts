@@ -11,6 +11,8 @@ import type {
   GivensSection,
   MeasureSubject,
   PlaneForm,
+  RegionExpr,
+  RegionOperatorName,
   SolidPrimitive,
   Statement,
   StatementShape,
@@ -999,6 +1001,134 @@ function parseShortest(text: string): StatementShape {
   return { kind: 'shortestPath', ...parts, unfold: unfold !== null }
 }
 
+// ---------------------------------------------------------------------------
+// Shaded regions (phase 12, F4)
+// ---------------------------------------------------------------------------
+//
+// "fill: <region>", where a region is a shape or a boolean of regions:
+//
+//   A-B-C                  polygon A-B-C-D        triangle ABC
+//   square ABCD            rectangle ABCD         circle O
+//   sector P-Q on O minor  segment P-Q on O cw    R  (a region named with "name:")
+//   <region> minus <region>   <region> and|intersect <region>   <region> or|union <region>
+//
+// One precedence, left to right, with parentheses: "circle O or circle P
+// minus triangle ABC" is "(circle O or circle P) minus triangle ABC".
+
+const REGION_OPERATORS = new Map<string, RegionOperatorName>([
+  ['minus', 'difference'],
+  ['and', 'intersection'],
+  ['intersect', 'intersection'],
+  ['or', 'union'],
+  ['union', 'union'],
+])
+
+const REGION_FORMS =
+  '"A-B-C", "polygon A-B-C-D", "triangle ABC", "square ABCD", "rectangle ABCD", "circle O", ' +
+  '"sector P-Q on O minor", "segment P-Q on O minor", or a region named with "name:"'
+
+// A polygon's points: hyphenated ("A-B-C-D"), or run together when every
+// name is one letter ("ABCD").
+function regionPoints(text: string, count: number | null, role: string): string[] {
+  if (count !== null) return parsePointRun(text, count, role).map((name) => geometryName(name, role))
+  const trimmed = text.trim()
+  const names = trimmed.includes('-') ? trimmed.split('-').map((p) => p.trim()) : [...trimmed]
+  if (names.length < 3) throw new Error(`A polygon needs at least three points — "${role} A-B-C" — got "${trimmed}"`)
+  return names.map((name) => geometryName(name, role))
+}
+
+function parseRegionOperand(text: string): RegionExpr {
+  const source = text
+  // F7 — conics other than circles bound no region the engine can shade.
+  const conic = /^(ellipse|parabola|hyperbola|conic)\b/.exec(text)
+  if (conic) {
+    throw new Error(`A fill is bounded by segments and circle arcs — a region bounded by ${conic[1] === 'ellipse' ? 'an' : 'a'} ${conic[1]} cannot be shaded yet`)
+  }
+
+  const shape = /^(sector|segment)\s+(.+?)\s+on\s+([a-zA-Z]+)(?:\s+(\S+))?$/.exec(text)
+  if (shape) {
+    const kind = shape[1] as 'sector' | 'segment'
+    const [from, to] = parseCirclePair(shape[2], kind)
+    return {
+      kind,
+      circle: geometryName(shape[3], `circle the ${kind} lies on`),
+      from,
+      to,
+      direction: requireArcDirection(shape[4], `${kind} ${shape[2].trim()}`),
+      source,
+    }
+  }
+
+  const disk = /^circle\s+(\S+)$/.exec(text)
+  if (disk) return { kind: 'disk', circle: geometryName(disk[1], 'circle to shade'), source }
+
+  const polygon = /^(polygon|triangle|square|rectangle)\s+(.+)$/.exec(text)
+  if (polygon) {
+    const shapeName = polygon[1] as 'polygon' | 'triangle' | 'square' | 'rectangle'
+    const count = shapeName === 'polygon' ? null : shapeName === 'triangle' ? 3 : 4
+    return { kind: 'polygon', shape: shapeName, points: regionPoints(polygon[2], count, shapeName), source }
+  }
+
+  // The spec's own form: "fill: A-B-C".
+  if (/^[a-zA-Z]+(\s*-\s*[a-zA-Z]+)+$/.test(text)) {
+    return { kind: 'polygon', shape: 'polygon', points: regionPoints(text, null, 'polygon'), source }
+  }
+
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(text)) return { kind: 'named', name: text, source }
+
+  throw new Error(`Expected a region to shade — ${REGION_FORMS} — got "${text}"`)
+}
+
+// A region expression, as a "fill:" or an "area" subject writes it.
+function parseRegionExpr(text: string): RegionExpr {
+  const tokens = text.replace(/[()]/g, ' $& ').trim().split(/\s+/).filter((token) => token !== '')
+  if (tokens.length === 0) throw new Error(`Expected a region to shade — ${REGION_FORMS}`)
+  let at = 0
+
+  const operand = (): RegionExpr => {
+    if (tokens[at] === '(') {
+      at++
+      const inner = expression()
+      if (tokens[at] !== ')') throw new Error(`A "(" in the region "${text.trim()}" is never closed`)
+      at++
+      return { ...inner, source: `(${inner.source})` }
+    }
+    const words: string[] = []
+    while (at < tokens.length && tokens[at] !== '(' && tokens[at] !== ')' && !REGION_OPERATORS.has(tokens[at])) words.push(tokens[at++])
+    if (words.length === 0) {
+      const found = at < tokens.length ? `"${tokens[at]}"` : 'the end of the line'
+      throw new Error(`Expected a region before ${found} in "${text.trim()}" — ${REGION_FORMS}`)
+    }
+    return parseRegionOperand(words.join(' '))
+  }
+
+  const expression = (): RegionExpr => {
+    let left = operand()
+    while (at < tokens.length && tokens[at] !== ')') {
+      const word = tokens[at]
+      const op = REGION_OPERATORS.get(word)
+      if (!op) throw new Error(`Expected "minus", "and", "or", "intersect" or "union" in "${text.trim()}", got "${word}"`)
+      at++
+      const right = operand()
+      left = { kind: 'combine', op, left, right, source: `${left.source} ${word} ${right.source}` }
+    }
+    return left
+  }
+
+  const region = expression()
+  if (at < tokens.length) throw new Error(`A ")" in the region "${text.trim()}" has no "(" to close`)
+  return region
+}
+
+// "fill: <region>" (phase 12, F4).
+function parseFill(text: string): StatementShape {
+  // F7 — hatching is Track 5's styling; a fill is a flat tint.
+  if (/\b(hatch|hatched|hatching)\s*$/.test(text) || /\bpattern:/.test(text)) {
+    throw new Error('Hatching is not drawn yet — a fill is a flat tint; give it a colour with "color:"')
+  }
+  return { kind: 'fill', region: parseRegionExpr(text) }
+}
+
 // The body of a solid statement: the primitive, plus an optional trailing
 // "vertices ABCD" clause naming the projected vertices. `name` comes from the
 // bound form ("S = solid ...") and is null for the drawn-only "solid: ..." one.
@@ -1295,6 +1425,12 @@ function parseStatementCore(rawLine: string): StatementShape {
   // Phase 11 (N3, N5) — "shortest: P to Q over S [unfold]". Only the keyword
   // with its colon: "shortest = 3" and the like read as they always did.
   if (line.startsWith('shortest:')) return parseShortest(line.slice('shortest:'.length))
+  // Phase 12 (F4) — "fill: <region>". Only the keyword with its colon:
+  // "fill = 3", "fill(x) = x^2" and "fill + x = y" read as they always did. A
+  // bare "fill A-B-C" with no relation in it (unrecognised before) points at
+  // the colon, as "net S" does.
+  if (line.startsWith('fill:')) return parseFill(line.slice('fill:'.length))
+  if (/^fill\s+[a-zA-Z][^=<>]*$/.test(line)) throw new Error(`A fill is written with a colon — "fill: ${line.slice('fill'.length).trim()}"`)
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit
