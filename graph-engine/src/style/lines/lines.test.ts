@@ -328,6 +328,26 @@ describe('closing a loop', () => {
   }
 })
 
+// Re-review 1: with wobble, a loop's end still comes back onto the start's
+// track above looseness 0. The wobble is pinned at a loop overlap's ends, so
+// the gap is nothing but rounding.
+describe('closing a wobbly loop', () => {
+  for (const type of ['ink', 'brush', 'pencil', 'marker'] as const) {
+    it(`${type} ends on its start's track`, () => {
+      for (const identity of ['s1/k#0', 's2/k#0', 's3/O#0', 's4/rim#0']) {
+        for (const looseness of [0.25, 0.6]) {
+          const out = draw(type, CIRCLE, { looseness, wobble: 0.8 }, identity)
+          const main = out[0]
+          const points = main.kind === 'stroke' ? [main.start, ...main.pieces.map((p) => pointOn(p, 1))] : main.kind === 'shape' ? main.spine : []
+          const radius = (p: Point) => Math.hypot(p.x - 5, p.y - 5)
+          const gap = Math.abs(radius(points[points.length - 1]) - radius(points[0]))
+          expect(gap, `${type} ${identity} at ${looseness}`).toBeLessThan(0.01 * WIDTH)
+        }
+      }
+    })
+  }
+})
+
 // Technical is clean's line (review 1): it keeps the caller's ends and dashes.
 describe('the technical line', () => {
   it('keeps the cap it is given, and none when it is given none', () => {

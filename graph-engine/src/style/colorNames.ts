@@ -20,3 +20,11 @@ export const COLOR_NAMES: Record<string, number> = {
   grey: 0x888891,
   cyan: 0x22a5c4,
 }
+
+// A name's colour, or null. Looked up as an OWN key only: `in` would also
+// find what every object inherits ("constructor", "__proto__", "toString"),
+// and turn a typo into a function or an object instead of a refusal.
+export function colorByName(name: string): number | null {
+  const key = name.toLowerCase()
+  return Object.hasOwn(COLOR_NAMES, key) ? COLOR_NAMES[key] : null
+}

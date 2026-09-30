@@ -907,8 +907,9 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 // "circle <name>", or a bare name of any kind.
 //
 // Any statement may end with "color: <name>" (see style/colorNames.ts for the
-// palette) or "color: rrggbb" — six hex digits, no "#", since "#" starts a
-// comment — to override its default color, and/or "name: <id>"
+// palette) or "color: rrggbb" — exactly six hex digits (no three-digit short
+// form), no "#", since "#" starts a comment; the "@style-…" colour settings
+// take the same forms — to override its default color, and/or "name: <id>"
 // to give the statement a name that "@hide: <id>" / "@show: <id>" (see
 // parser/config.ts) can target — independent of the identifier a
 // "k(x) = ..." function definition carries, so a plotted statement that

@@ -72,7 +72,10 @@ export function handDrawn(
   const out = points.map((p, i) => {
     const t = lengths[i] / total
     const arch = Math.sin(Math.PI * t)
-    const across = wobbleSize * envelopeAt(t, looseness, loop) * waver(t) + bow * arch
+    // A loop's overlap pins its wobble to nothing at both ends too, so the
+    // end comes back exactly onto the start's track (re-review 1).
+    const envelope = options.onCurve ? arch : envelopeAt(t, looseness, loop)
+    const across = wobbleSize * envelope * waver(t) + bow * arch
     const a = (1 - t) * (1 - t)
     const b = t * t
     let x = p.x + normals[i].x * across + startOffset.x * a + endOffset.x * b

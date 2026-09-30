@@ -119,6 +119,14 @@ describe('refusing a bad directive', () => {
     expect(() => applyStyleDirective({}, 'style-ink', 'navy')).toThrow(/red, orange, yellow/)
   })
 
+  it('refuses the names every object inherits, and three-digit hex, like any unknown colour', () => {
+    for (const value of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'fed']) {
+      expect(() => applyStyleDirective({}, 'style-ink', value), value).toThrow(/must be a colour/)
+      expect(() => applyStyleDirective({}, 'style-tint', value), value).toThrow(/must be a colour/)
+    }
+    expect(resolveStyle([layerOf(['style-tint: ffeedd'])]).paper.tint).toBe('#ffeedd')
+  })
+
   it('explains a colour, and the "#" that starts a comment', () => {
     expect(() => applyStyleDirective({}, 'style-tint', '')).toThrow(/without the "#"/)
   })
