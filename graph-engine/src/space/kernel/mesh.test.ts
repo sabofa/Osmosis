@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../parser/parseSpec'
 import { createSpaceKernel } from './index'
-import { finishMesh, gridIndices, type RawMesh } from './mesh'
+import { finishMesh, gridIndices, pass2Runs, type RawMesh } from './mesh'
 
 function sceneOf(spec: string) {
   const parsed = parseSpec(spec)
@@ -143,10 +143,18 @@ z = f(x, y) opacity: 0.55 res: 120`)
     // No NaN vertex, so no hole edge for pass 2 to filter against — whether
     // parameterized asks for the sliver check makes no difference, since
     // I4's early return means it never actually ran either way.
+    const before = pass2Runs.count
     const withCheck = finishMesh(raw, false, true)
     const without = finishMesh(raw, false, false)
     expect([...withCheck.indices]).toEqual([...without.indices])
     expect(withCheck.indices.length).toBe(raw.indices.length)
+    // S6 fix round 2, item 5b: the two checks above would also pass with
+    // the early return deleted — holeEdges is empty either way, so pass 2's
+    // own body is a no-op that drops nothing and gives the identical
+    // result. This is the one assertion that actually distinguishes "the
+    // fast path ran" from "the filter ran and had nothing to do": the
+    // counter must not move for either call.
+    expect(pass2Runs.count).toBe(before)
   })
 
   it('a 20:1 domain keeps every well-shaped cell at the hole: raw (u, v) units alone would call them slivers', () => {

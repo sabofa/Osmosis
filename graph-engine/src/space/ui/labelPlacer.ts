@@ -99,7 +99,16 @@ export function placeLabels(requests: readonly LabelRequest[], obstacles: readon
   const out = new Map<string, PlacedLabel>()
   const place = (request: LabelRequest, at: ScreenPoint, size: { width: number; height: number }): PlacedLabel => {
     placed.push({ x: at.x, y: at.y, ...size })
-    const leader = request.role === 'annotation' && distance(at, request.anchor) > LEADER_DISTANCE_PX ? request.anchor : null
+    // S6 fix round 2, NB3: the unobstructed first choice is the ring's own
+    // radius-14 point (ANNOTATION_RADII's first entry, matching
+    // LEADER_DISTANCE_PX exactly by construction) — but ring() gets there by
+    // DIRECTIONS' cos/sin times 14, and distance() hypots back through the
+    // anchor, so a clean placement can land at 14.000000000000034, not 14,
+    // and an exact `>` read that as "farther than 14" and drew a leader stub
+    // nothing needed. +0.5 absorbs that noise while a real leader-worthy
+    // placement (the least-overlap fallback, at least 70 px out) still gets
+    // one.
+    const leader = request.role === 'annotation' && distance(at, request.anchor) > LEADER_DISTANCE_PX + 0.5 ? request.anchor : null
     return { key: request.key, text: request.text, role: request.role, x: at.x, y: at.y, visible: true, leader }
   }
   for (const { request } of order) {

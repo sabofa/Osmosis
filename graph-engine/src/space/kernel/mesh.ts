@@ -22,6 +22,13 @@
 import { DEGENERATE_REL } from '../../math/tolerance'
 import { fallbackNormals, normalizeAt } from './normals'
 
+// For tests: how many times finishMesh's pass 2 (the hole/sliver filter,
+// past its own early return) actually ran its body, not just whether the
+// early return's early-return-value happens to match. mesh.test.ts's "no
+// hole" test reads this, not just finishMesh's output — see the S6 fix
+// round 2, item 5b comment at the early return, below.
+export const pass2Runs = { count: 0 }
+
 export interface RawMesh {
   positions: Float64Array
   // analytic, unnormalised; NaN or zero where undefined
@@ -198,28 +205,46 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
     const indices = cn === candidates.length ? candidates : candidates.slice(0, cn)
     return compact(positions, normals, uv, indices, n)
   }
+  // S6 fix round 2, item 5b: when holeEdges really is empty, pass 2's own
+  // body below is a mathematical no-op regardless (onHole can never be
+  // true with nothing in holeEdges to match), so a test comparing outputs
+  // alone cannot tell "the early return fired" from "the filter ran and
+  // dropped nothing" — it would pass either way, even with the early
+  // return deleted. This counts every trip past it, for that test to read.
+  pass2Runs.count++
 
-  // I4: the mesh's own median (u, v) grid step, so a triangle that is a
-  // nice square in grid-index space is not called a sliver just because the
-  // domain's own u and v spans differ a lot (a 20:1 aspect, say) — un-
-  // normalised, its shape only looks that way in raw (u, v) units. Only
-  // candidates that survived pass 1 count, and only nonzero steps (a
-  // pole collapses one to zero).
-  const steps = (axis: 0 | 1): number => {
-    const values: number[] = []
-    for (let t = 0; t < cn; t += 3) {
-      const [a, b, c] = [candidates[t], candidates[t + 1], candidates[t + 2]]
-      for (const [p, q] of [[a, b], [b, c], [c, a]] as const) {
-        const d = Math.abs(uv[2 * p + axis] - uv[2 * q + axis])
-        if (d > 0) values.push(d)
-      }
+
+  // I4 (S6 fix round 2, NB4): the mesh's own (u, v) grid step, so a triangle
+  // that is a nice square in grid-index space is not called a sliver just
+  // because the domain's own u and v spans differ a lot (a 20:1 aspect,
+  // say) — un-normalised, its shape only looks that way in raw (u, v)
+  // units. Round 1 sampled every surviving candidate's edges into an array
+  // and sorted it for a median — at 128^2 with a hole, that cost 12.5-16.8
+  // ms against a 7.9 ms base. The ruling: a parameterized grid takes its du
+  // and dv from its own domain (span / res), not from sorted medians — and
+  // for a regular sampling grid, one cell's own step already is span / res,
+  // so the very first grid cell (raw.indices[0..5], read before pass 1 cuts
+  // anything — uv does not depend on a vertex's position being valid) gives
+  // it directly. `a` is whichever vertex both of the cell's two triangles
+  // share (indices[0] and [3] agree in every caller here, gridIndices'
+  // [a,b,c,a,c,d] winding or reversedWinding's [a,c,b,a,d,c]); among the
+  // other four slots, the pure u-neighbour has du != 0, dv == 0 from `a`
+  // (and the pure v-neighbour the reverse) — the smallest nonzero delta
+  // per axis is that neighbour's, without caring which slot or winding put
+  // it there, so this needs no per-triangle arrays and no sort.
+  const a = raw.indices.length >= 6 ? raw.indices[0] : null
+  const step = (axis: 0 | 1): number => {
+    if (a === null || raw.indices[3] !== a) return 1
+    const at = uv[2 * a + axis]
+    let best = Infinity
+    for (const v of [raw.indices[1], raw.indices[2], raw.indices[4], raw.indices[5]]) {
+      const d = Math.abs(uv[2 * v + axis] - at)
+      if (d > 0 && d < best) best = d
     }
-    if (values.length === 0) return 1
-    values.sort((x, y) => x - y)
-    return values[values.length >> 1]
+    return Number.isFinite(best) ? best : 1
   }
-  const su = 1 / steps(0)
-  const sv = 1 / steps(1)
+  const su = 1 / step(0)
+  const sv = 1 / step(1)
 
   // I4: the median from area alone — uvArea, not the full uvShape (whose
   // angle needs atan2 per edge) — for every candidate; uvShape itself, with

@@ -222,3 +222,32 @@ describe('the box pass: coordinate surfaces, statement by statement', () => {
     expect(range(positions(markOf(scene, 's2')).map((p) => p[2]))).toEqual([0, 1])
   })
 })
+
+// S6 fix round 2, I1: frame/bounds.test.ts's "flatAxes and resolveBox with a
+// box-spanning statement" describe hands flatAxes/resolveBox a synthetic
+// spanning object by hand — it proves the primitive is right, but not that
+// createSpaceKernel (index.ts's own boxSpanning) actually computes and wires
+// one through for a real scene. This drives the identical sphere-plus-
+// two-points-at-z=0 shape through a real spec instead, so a regression in
+// that wiring — boxDependent/flatExempt on the registry entry, or the
+// `records.some((r) => r.flatSpanning)` reduction itself — would show here
+// even if frame/bounds.ts's own tests still passed.
+describe("a real spec's own boxSpanning keeps a box-dependent sphere from flattening its z (S6 fix round 2, I1)", () => {
+  it('a sphere plus two points at z = 0: scene.boxSpanning.z is true, and the box keeps a real depth, not a sliver', () => {
+    // The two points alone put x and y at a real span ([-2, 2], from
+    // (2, 2, 0) and (-2, -2, 0)) but z at a single, degenerate value (0) —
+    // extentOf never sees the sphere itself (it is 'box'-stage, built only
+    // after the box resolves), so read alone this is exactly the shape
+    // frame/bounds.ts's isThin flags. The sphere's only contribution here is
+    // registry.ts's boxDependent: true (not flatExempt), which is what
+    // should keep z from being called flat anyway.
+    const { kernel, space } = kernelOf('x^2 + y^2 + z^2 = 4 res: 8\nP = (2, 2, 0)\nQ = (-2, -2, 0)')
+    const scene = kernel.scene()
+    expect(scene.errors).toEqual([])
+    expect(scene.boxSpanning).toEqual({ x: true, y: true, z: true })
+    // Not a sliver: z gets the same real, symmetric span x and y do — the
+    // exact box frame/bounds.test.ts's synthetic version of this shape
+    // predicts by hand (others = [4, 4], s = 2, v = 0, niceStep keeps it).
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([-2, 2], [-2, 2], [-2, 2]))
+  })
+})

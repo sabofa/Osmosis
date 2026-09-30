@@ -623,11 +623,17 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
   **Corrected in fix round 1 (I1):** the first pass could flatten an axis a
   statement not yet built still needed — an implicit surface, a plane, an
   S4b tool — carving a sliver from geometry that is not flat (a sphere plus
-  two points at z = 0, say). The kernel now reports which axes a fully
-  box-dependent statement occupies (`boxSpanning`, kernel/index.ts) and
-  flatAxes leaves those alone; a centroid's own drop-line decoration is
-  exempted (`flatExempt`), since it adapts to whatever box there is rather
-  than needing it tall.
+  two points at z = 0, say). The kernel now reports, all-or-nothing, whether
+  any fully box-dependent statement is in the scene at all (`boxSpanning`,
+  kernel/index.ts) — not which axes it occupies, since a statement built
+  against the resolved box in full cannot be assumed to leave any one axis
+  alone before it has actually built — and flatAxes leaves every axis alone
+  whenever it is; a centroid's own drop-line decoration is exempted
+  (`flatExempt`), since it adapts to whatever box there is rather than
+  needing it tall. **Confirmed in fix round 2** with a spec-driven kernel
+  test (a sphere plus two points at z = 0, through `createSpaceKernel`
+  itself, not a hand-built `boxSpanning`): `scene.boxSpanning` comes back
+  `{ x: true, y: true, z: true }`, and the resolved box keeps z's real span.
   **Also fixed (M1):** the flat tick's single label used the step ladder's
   own decimals (`0.00` for a value the ladder was never built to show); it
   now uses the value's own digits, up to 4 significant. A lone region's tick
@@ -683,7 +689,11 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
   it replaced. Now normalises the way depthCue() already does: zRel =
   clamp((z − u_cueRange.x) / depthSpan, 0, 1), weight = a · max(floor, peak
   · (1 − zRel)³ ) — a genuine near > mid > far ordering, checked through
-  markLook's real cueRange for both projections.
+  markLook's real cueRange for both projections. **Fix round 2** found that
+  check only ever exercised oitWeight()'s TypeScript mirror of the formula,
+  never the shader source itself — deleting the "− u_cueRange.x" straight
+  out of the GLSL (mesh.ts, box.ts) left every one of those tests green.
+  oit.test.ts now also asserts the shaders' own zRel line contains it.
 - **A draggable point is easy to lose**: a small dot on a dark underside
   (Drag a point on a paraboloid, A tangent plane you can drag). Give
   draggable points a halo.

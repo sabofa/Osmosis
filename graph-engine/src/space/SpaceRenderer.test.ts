@@ -681,8 +681,62 @@ P = (a, b, a^2 + b^2)`
     // — the slider path's equivalent of a drag's one solve at release.
     slider.dispatch('change')
     clock.flush()
-    expect(setValues.mock.calls).toHaveLength(2)
+    // S6 fix round 2, NB2: this release's value (1) is the same one the
+    // held call above already committed, so this second setValues is a
+    // no-op for the kernel (same scene back) and does not itself re-enter
+    // install(). That leaves the hold still needing to end — which is what
+    // advanceValues' pre-existing "held stopped" tail is for: with install()
+    // now genuinely holding through a scrub (NB2), it sees held with
+    // nothing installed this frame and resolves the box once more, unheld.
+    // Before NB2, install() never truly held during a scrub in the first
+    // place, so this third call never fired — but neither had anything
+    // actually been held.
+    expect(setValues.mock.calls).toHaveLength(3)
     expect(setValues.mock.calls[1]).toEqual([new Map([['a', 1]]), undefined])
+    expect(setValues.mock.calls[2]).toEqual([new Map()])
+    r.dispose()
+  })
+
+  it('a scrub that returns to its start value ends the hold on pointerup, not stuck without a `change` (S6 fix round 2, NB1)', () => {
+    const { clock, row, r } = live()
+    const { slider } = row(0)
+    const start = slider.value // '0.5'
+    slider.value = '0.8'
+    slider.dispatch('input')
+    clock.flush()
+    expect(r['held']).toBe(true) // scrubbing: held
+    const heldWorld = r['world']
+    // Back to exactly where the scrub started: a real browser fires no
+    // `change` here (the value has not net-changed since the interaction
+    // began), which is exactly the bug — only pointerup/pointercancel end
+    // the hold in that case.
+    slider.value = start
+    slider.dispatch('input')
+    clock.flush()
+    expect(r['held']).toBe(true) // no change fired yet: still held (the bug, without the fix, forever)
+    expect(r['world']).toBe(heldWorld) // the box has not moved since the scrub began
+    slider.dispatch('pointerup')
+    clock.flush()
+    // pointerup ends it even though the slider's value net-unchanged: one
+    // full-resolution rebuild follows, not stuck held.
+    expect(r['held']).toBe(false)
+    expect(r['world']).not.toBe(heldWorld)
+    r.dispose()
+  })
+
+  it('holds the box (not just the value) while scrubbing, agreeing with advanceValues (S6 fix round 2, NB2)', () => {
+    const { clock, r, row } = live()
+    const before = r['world']
+    const { slider } = row(0)
+    slider.value = '0.8'
+    slider.dispatch('input')
+    clock.flush()
+    // The box stays the one the scrub started with, the same way play and
+    // drag hold it — not resolved fresh every scrubbed frame.
+    expect(r['world']).toBe(before)
+    slider.dispatch('pointerup')
+    clock.flush()
+    expect(r['world']).not.toBe(before)
     r.dispose()
   })
 

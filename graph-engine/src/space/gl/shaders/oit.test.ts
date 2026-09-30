@@ -23,6 +23,8 @@ import { LIGHT_PALETTE } from '../../../render/palette'
 import { spaceColors } from '../../theme'
 import { markLook } from '../look'
 import { OIT_FALLOFF, OIT_FLOOR, OIT_PEAK, OIT_WEIGHT_GLSL, oitWeight } from './oit'
+import { MESH_FRAGMENT } from './mesh'
+import { BOX_FRAGMENT } from './box'
 
 const BOX: Box3 = { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 0.4 } }
 const VIEWPORT = { width: 800, height: 600 }
@@ -77,5 +79,20 @@ describe('oitWeight normalisation through the real cueRange (I2)', () => {
     // same constants oitWeight() itself computes from, so a change to any of
     // them, on only one side, fails this test.
     expect(OIT_WEIGHT_GLSL).toContain(`max(${OIT_FLOOR}, ${OIT_PEAK}.0 * pow(1.0 - zRel, ${OIT_FALLOFF}.0))`)
+  })
+
+  it('the mesh and box shaders normalise zRel against the box\'s own near edge, not raw view depth (S6 fix round 2, item 5a)', () => {
+    // Every test above drives oitWeight() — the TypeScript mirror — through
+    // markLook's real cueRange, or checks OIT_WEIGHT_GLSL's formula
+    // constants; none of them reads a single character of MESH_FRAGMENT or
+    // BOX_FRAGMENT. I2's actual bug lived in the shader's own zRel line
+    // (mesh.ts:169, box.ts:83): deleting just "- u_cueRange.x" there — the
+    // one thing that makes zRel relative to the box's near edge rather than
+    // the raw eye distance — left the TypeScript-side tests above green,
+    // since they never touch this string. This reads the shader source
+    // directly.
+    const zRelLine = 'float zRel = clamp((max(-v_viewPos.z, 0.0) - u_cueRange.x) / depthSpan, 0.0, 1.0);'
+    expect(MESH_FRAGMENT).toContain(zRelLine)
+    expect(BOX_FRAGMENT).toContain(zRelLine)
   })
 })

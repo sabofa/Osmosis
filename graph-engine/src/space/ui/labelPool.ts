@@ -46,9 +46,17 @@ export class LabelPool {
   private readonly container: HTMLElement
   private readonly spans = new Map<string, PooledSpan>()
   private readonly leaders = new Map<string, PooledLeader>()
+  // S6 fix round 2, item 7: expanding or collapsing a readout changes its
+  // own measured width, which the next layoutLabels() needs (isExpanded()
+  // above, M2) to keep it clear of its neighbours — but nothing else was
+  // going to ask for that next draw() on a plain click with no camera move,
+  // play or drag behind it. Optional so a caller with nothing to request
+  // (a fixture, most of this file's own tests) is not made to supply one.
+  private readonly onExpand: (() => void) | undefined
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, onExpand?: () => void) {
     this.container = container
+    this.onExpand = onExpand
   }
 
   get size(): number {
@@ -93,6 +101,7 @@ export class LabelPool {
           e.onClick = () => {
             e.expanded = !e.expanded
             e.span.textContent = e.expanded ? (e.fullText ?? e.text) : e.text
+            this.onExpand?.()
           }
           e.span.addEventListener('click', e.onClick)
         } else if (item.fullText === undefined && entry.onClick) {

@@ -258,7 +258,11 @@ export class SpaceRenderer {
     this.colors = spaceColors(options.palette, options.theme)
     this.authored = { ...this.space.camera, target: [0, 0, 0] }
     this.view = { ...this.authored, target: [0, 0, 0] }
-    this.overlay = new Overlay(canvas)
+    // S6 fix round 2, item 7: a click that expands or collapses a readout's
+    // digits (V3) changes its own measured width — this.scheduler is set a
+    // few lines below, but the closure only reads it when a reader actually
+    // clicks, long after the constructor has returned.
+    this.overlay = new Overlay(canvas, () => this.scheduler.request())
     this.overlay.setColors(this.colors)
     this.colorbars = new Colorbars(this.overlay.element)
     this.readouts = new ReadoutBoxes(this.overlay.element)
@@ -376,9 +380,14 @@ export class SpaceRenderer {
   // `fresh`: a new spec or scene (setSpec, setScene), rather than a value
   // change of the same one.
   private install(scene: SpaceScene, config: SpaceRenderConfig, fresh = false): void {
-    // Playing or dragging: the box and the camera hold still, so the frame
-    // does not slide under the moving surface; resolved once when it stops.
-    if (!fresh && this.world && this.axes && (this.playing.size > 0 || this.dragging !== null)) {
+    // Playing, dragging or scrubbing a slider: the box and the camera hold
+    // still, so the frame does not slide under the moving surface; resolved
+    // once when it stops. S6 fix round 2, NB2: this used to check only
+    // playing/dragging, disagreeing with advanceValues' own `holding` (which
+    // already included scrubbing, S6 fix round 1 I7) — a box-dependent
+    // statement built against kernel.setValues' holdBox while the renderer's
+    // own install() still resolved a fresh box every frame.
+    if (!fresh && this.world && this.axes && (this.playing.size > 0 || this.dragging !== null || this.scrubbing.size > 0)) {
       this.held = true
       this.config = config
       this.scene = scene
@@ -813,12 +822,16 @@ export class SpaceRenderer {
   // layout, so reading it on every draw() is worth avoiding where it is
   // safe to. The panel and the colorbars are genuinely static between draws
   // except on a resize, the panel's own collapse/expand, or a rebuild (a new
-  // scene, a spec edit, a theme swap, a moving colormap domain, a renamed
-  // param) — none of which depend on the camera or the pointer — so their
-  // rectangles are cached until invalidateChrome() (I6) says otherwise:
-  // measure() below on a real resize, updateColorbars() on every call, and
-  // ParamsPanel's chromeChanged handler (setBindings, and a hover/focus
-  // collapse or expand it cannot otherwise tell the renderer about).
+  // scene, a spec edit that renames or adds/removes params, or a moving
+  // colormap domain) — none of which depend on the camera or the pointer —
+  // so their rectangles are cached until invalidateChrome() (I6) says
+  // otherwise: measure() below on a real resize, updateColorbars() on every
+  // call, and ParamsPanel's chromeChanged handler (setBindings, and a
+  // hover/focus collapse or expand it cannot otherwise tell the renderer
+  // about). S6 fix round 2, item 7: a theme swap (setPalette) is not in that
+  // list — it recolors the panel and colorbars through CSS custom
+  // properties in place, never moving or resizing them, so it has nothing
+  // to invalidate here.
   //
   // The colorbar obstacle is the union of .space-colorbars' own rectangle
   // and every one of its tick labels' (I6): a tick's `right: 18px`

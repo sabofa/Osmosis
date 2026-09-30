@@ -155,11 +155,22 @@ export class ParamsPanel {
       this.rows.push(row)
 
       slider.addEventListener('input', () => this.handlers.change(binding.name, Number(slider.value), true))
-      // S6 fix round 1, I7: the native `change` fires once, on release
-      // (mouseup or keyup) — the scrub's end, so the last value goes
-      // through again, this time not scrubbing, for the one full-
-      // resolution rebuild a play or a drag's release also gets.
-      slider.addEventListener('change', () => this.handlers.change(binding.name, Number(slider.value), false))
+      // S6 fix round 1, I7 (round 2, NB1): the scrub's end, so the last
+      // value goes through again, this time not scrubbing, for the one
+      // full-resolution rebuild a play or a drag's release also gets.
+      // The native `change` fires on release, but ONLY when the value
+      // actually differs from where the scrub started — a drag that
+      // wanders off and back to its starting value fires no `change` at
+      // all, so `scrubbing` was never cleared and every later rebuild
+      // stayed held (a coarse mesh, a frozen box) until some other value
+      // happened to change. `pointerup`/`pointercancel` end it
+      // unconditionally, whether or not the value moved; calling this
+      // twice for an ordinary drag (change fires too) is harmless —
+      // queueValue and scrubbing.delete are both idempotent.
+      const endScrub = () => this.handlers.change(binding.name, Number(slider.value), false)
+      slider.addEventListener('change', endScrub)
+      slider.addEventListener('pointerup', endScrub)
+      slider.addEventListener('pointercancel', endScrub)
       const commit = () => {
         const value = Number(number.value)
         if (number.value.trim() !== '' && Number.isFinite(value)) this.handlers.change(binding.name, value, false)

@@ -8,10 +8,10 @@ import type { LabelItem } from './layout'
 
 const base: Omit<LabelItem, 'text' | 'fullText'> = { key: 'label:0:s1.readout', x: 10, y: 20, role: 'label', visible: true, leader: null }
 
-function newPool() {
+function newPool(onExpand?: () => void) {
   const doc = new FakeDocument()
   const container = doc.createElement('div')
-  const pool = new LabelPool(container as unknown as HTMLElement)
+  const pool = new LabelPool(container as unknown as HTMLElement, onExpand)
   return { pool, container }
 }
 
@@ -34,6 +34,22 @@ describe('LabelPool: the V3 click-to-expand readout', () => {
     expect(span.textContent).toBe('area ≈ 1.5707963267')
     span.dispatch('click')
     expect(span.textContent).toBe('area ≈ 1.571')
+  })
+
+  it('a click that expands or collapses a readout asks for a frame (S6 fix round 2, item 7)', () => {
+    // Expanding changes the label's own measured width — layoutLabels()
+    // (isExpanded(), M2) needs to reflow the placer around it on the very
+    // next draw, but nothing else was going to ask for one on a plain click
+    // with no camera move, play or drag behind it.
+    let requests = 0
+    const { pool, container } = newPool(() => requests++)
+    pool.sync([{ ...base, text: 'area ≈ 1.571', fullText: 'area ≈ 1.5707963267' }])
+    const span = container.children[0]
+    expect(requests).toBe(0) // sync alone never asks
+    span.dispatch('click')
+    expect(requests).toBe(1)
+    span.dispatch('click') // collapsing again is just as much a reflow
+    expect(requests).toBe(2)
   })
 
   it('stays expanded across a resync with the same fullText (a camera move), and the span is reused', () => {

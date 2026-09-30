@@ -167,6 +167,23 @@ describe('placeLabels: priority and candidates (unit)', () => {
     expect(placed[0].leader).toEqual(anchor)
   })
 
+  it('an unobstructed readout at its own radius-14 ring point has no leader, despite float noise landing it a hair past 14 px (S6 fix round 2, NB3)', () => {
+    const anchor = { x: 0, y: 0 }
+    // Not built through ring()/annotationCandidates: a real projected anchor
+    // is never exactly (0, 0), and it is that anchor's own float value,
+    // added to a ring offset and then subtracted back off in distance(),
+    // that drifts a genuinely unobstructed radius-14 candidate to just past
+    // 14 px (the controller measured 14.000000000000034). This pins that
+    // exact drift directly, regardless of which anchor produced it — an
+    // exact `> 14` reads it as "farther than 14" and draws a leader stub
+    // nothing needed; the fix's +0.5 slack must absorb it.
+    const candidate = { x: 14.000000000000034, y: 0 }
+    const placed = placeLabels([{ key: 'a', text: 'a', role: 'annotation', fontSize: 13, anchor, candidates: [candidate] }])
+    expect(placed[0].visible).toBe(true)
+    expect(placed[0].x).toBe(candidate.x)
+    expect(placed[0].leader).toBeNull()
+  })
+
   it("M2: a request's sizeText, not its text, is what the placer reserves room for", () => {
     const anchor = { x: 0, y: 0 }
     // 'v' alone (1 char) reaches nowhere near the point label; the much

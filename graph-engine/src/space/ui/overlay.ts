@@ -28,13 +28,17 @@ export class Overlay {
   private reasonEl: HTMLDivElement | null = null
   private nextEl: HTMLDivElement | null = null
 
-  constructor(canvas: HTMLCanvasElement) {
+  // S6 fix round 2, item 7: onExpand, passed straight through to the pool,
+  // is how a click that opens or closes a readout in place (V3) asks for
+  // the frame that reflows the placer around its new, now-different width —
+  // nothing else was going to ask on its behalf.
+  constructor(canvas: HTMLCanvasElement, onExpand?: () => void) {
     const doc = canvas.ownerDocument
     this.element = doc.createElement('div')
     this.element.className = 'space-overlay'
     const parent = canvas.parentElement
     if (parent) parent.appendChild(this.element)
-    this.pool = new LabelPool(this.element)
+    this.pool = new LabelPool(this.element, onExpand)
   }
 
   // S6 plan V10: the whole chrome's one visual language — the message card

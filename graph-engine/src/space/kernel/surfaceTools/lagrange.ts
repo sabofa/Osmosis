@@ -294,6 +294,16 @@ function prepareLagrange(statement: Statement, context: BuildContext): PreparedS
 
   const F = surface3(within3(fTarget), scope)
   const G = surface3(within3(gTarget), scope)
+  // S6 fix round 1 ruling (parked), S6 fix round 2, item 7: unlike an
+  // implicit surface (geometry/implicit.ts's heldRes), this constraint mesh
+  // is never halved while held (context.held is not read here at all). The
+  // candidate points Newton's method converges from below (evenly(points,
+  // MAX_SEEDS)) are seeded from this very mesh's own vertices — a coarser
+  // mesh while a slider is held would seed fewer, or differently placed,
+  // starting points, which can genuinely change which critical points are
+  // found (not just how smooth the surface looks) while the value is still
+  // moving. So this stays at full resolution throughout: a correctness
+  // matter, not a look-and-feel one.
   const res = levelSurfaceRes(form.style.res, config)
   const build = (): BuildResult => {
     const box = toolBox(context, domain())
