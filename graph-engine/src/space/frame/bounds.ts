@@ -29,8 +29,9 @@ const DEFAULT_RANGE: Range = { min: -5, max: 5 }
 // spans.
 export const FLAT_SPAN_RATIO = 0.05
 
-type Axis = 'x' | 'y' | 'z'
+export type Axis = 'x' | 'y' | 'z'
 const AXES: readonly Axis[] = ['x', 'y', 'z']
+const NOTHING_SPANNING: Record<Axis, boolean> = { x: false, y: false, z: false }
 
 function isDegenerate(r: Range): boolean {
   return r.max - r.min < 1e-9 * Math.max(1, Math.abs(r.max), Math.abs(r.min))
@@ -85,12 +86,14 @@ function isThin(r: Range | null): boolean {
 }
 
 // Which axes get V1's flat-box treatment: not authored, thin (see isThin),
-// and at least one other axis with a real span to measure the thinness
-// against. An authored axis never counts (it always wins exactly), and an
-// extent with no qualifying other axis (nothing drawn, or every axis
-// degenerate: a single point) falls back to the generic widening in
-// resolveBox, not this rule.
-export function flatAxes(space: SpaceConfig, extent: Box3 | null): Record<Axis, boolean> {
+// not box-spanning (I1: a statement still to be built — a plane, an
+// implicit surface, any of S4b's tools — will occupy it, so calling it flat
+// now would carve a sliver out of geometry that is not flat), and at least
+// one other axis with a real span to measure the thinness against. An
+// authored axis never counts (it always wins exactly), and an extent with no
+// qualifying other axis (nothing drawn, or every axis degenerate: a single
+// point) falls back to the generic widening in resolveBox, not this rule.
+export function flatAxes(space: SpaceConfig, extent: Box3 | null, spanning: Record<Axis, boolean> = NOTHING_SPANNING): Record<Axis, boolean> {
   const { raw, authored } = collectRaw(space, extent)
   const out: Record<Axis, boolean> = { x: false, y: false, z: false }
   // With no scene extent at all (nothing drawn), an axis with no data of its
@@ -99,15 +102,37 @@ export function flatAxes(space: SpaceConfig, extent: Box3 | null): Record<Axis, 
   // "flat", only an unrelated author-chosen range.
   if (!extent) return out
   for (const axis of AXES) {
-    if (authored[axis] || !isThin(raw[axis])) continue
+    if (authored[axis] || spanning[axis] || !isThin(raw[axis])) continue
     out[axis] = otherSpans(raw, axis).length > 0
   }
   return out
 }
 
-export function resolveBox(space: SpaceConfig, extent: Box3 | null): Box3 {
+// S6 fix round 1, M1: a flat axis's single tick sits at "the data's z" —
+// resolveBox's v, the box's own centre, which is correct whenever there
+// really is data there (even a degenerate point: v is that point's own
+// value, and the box is built symmetrically around it). The one exception
+// is an axis with no data on it at all (raw is null: a lone `region:`,
+// whose z never enters the extent) — resolveBox still has to put the box
+// somewhere, and defaults its centre to 0, but the region itself shades the
+// box's floor (kernel/integrals/common.ts floorHeight), not its centre. For
+// that axis alone, frame/ticks.ts's frameAxes anchors the tick at the floor
+// instead, so it still points at what is actually drawn. Only meaningful
+// where flatAxes is also true; harmless (unused) elsewhere.
+export function flatFloor(space: SpaceConfig, extent: Box3 | null): Record<Axis, boolean> {
+  const out: Record<Axis, boolean> = { x: false, y: false, z: false }
+  // Nothing drawn at all: flatAxes never flags a floor-anchored axis here
+  // either (its own identical guard), so this stays consistent with it,
+  // though unused either way.
+  if (!extent) return out
+  const { raw } = collectRaw(space, extent)
+  for (const axis of AXES) out[axis] = raw[axis] === null
+  return out
+}
+
+export function resolveBox(space: SpaceConfig, extent: Box3 | null, spanning: Record<Axis, boolean> = NOTHING_SPANNING): Box3 {
   const { raw, authored } = collectRaw(space, extent)
-  const flat = flatAxes(space, extent)
+  const flat = flatAxes(space, extent, spanning)
 
   const out = {} as Record<Axis, Range>
   for (const axis of AXES) {

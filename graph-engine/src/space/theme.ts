@@ -34,22 +34,26 @@ export function slotHex(slot: number, palette: Palette, theme: 'light' | 'dark')
 // v, and their right-angle marks) is the engine's own token, not an author-
 // named colour — parser/colors.ts's NAMED_COLORS.gray is one fixed hex for
 // every theme (an author who writes "color: gray" means it literally, so
-// that table stays theme-blind and is left alone). That fixed grey already
-// clears 3:1 against the background in both themes, but only just in light
-// (3.27:1); the theme-aware token gives a real margin (>= 5:1) in both, per
-// the architecture the rest of the engine follows: colours come from the
-// theme. `author` can never legally hold OPERAND_GREY_TOKEN (a NUL byte,
-// which no spec text can contain), so it is checked first, ahead of the
-// named-colour lookup. WCAG relative luminance; theme.test.ts checks the
-// numbers, including the old grey's, by the same formula.
+// that table stays theme-blind and is left alone). `author` can never
+// legally hold OPERAND_GREY_TOKEN (a NUL byte, which no spec text can
+// contain), so it is checked first, ahead of the named-colour lookup.
+//
+// S6 fix round 1, I5: it used to resolve to its own hard-coded hex pair
+// (0x6b6b63 light, 0xa8a89e dark) — a second, undocumented grey alongside
+// the host's own --muted token, and one this engine is meant never to
+// introduce (S6's global constraint: colours come from the theme). It now
+// resolves to palette.muted directly, the same token the chrome's
+// secondary text already uses (theme.ts's SpaceColors, ui/SpaceView.css
+// --space-muted) — one grey, not two. Clears 3:1 against the background in
+// both themes with real margin (WCAG relative luminance; theme.test.ts
+// checks the numbers by the same formula): light 5.39:1, dark 6.17:1.
 export const OPERAND_GREY_TOKEN = '\u0000operand-grey'
-export const OPERAND_GREY: Record<'light' | 'dark', number> = { light: 0x6b6b63, dark: 0xa8a89e }
 
 // An author colour (a name or #rrggbb, through parser/colors.ts) wins;
 // otherwise the slot picks from the series. An author value the parser does
 // not know falls back to the slot rather than to a grey.
 export function resolveSpaceColor(spec: ColorSpec, palette: Palette, theme: 'light' | 'dark'): Rgb {
-  if (spec.author === OPERAND_GREY_TOKEN) return hexToRgb(OPERAND_GREY[theme])
+  if (spec.author === OPERAND_GREY_TOKEN) return hexToRgb(palette.muted)
   if (spec.author && isValidColor(spec.author)) return hexToRgb(resolveColor(spec.author))
   return hexToRgb(slotHex(spec.slot, palette, theme))
 }

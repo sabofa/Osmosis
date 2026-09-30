@@ -73,9 +73,13 @@ uniform int u_pass;        // 0: opaque core, writes depth; 1: antialiased fring
 ${LOOK_FRAGMENT_GLSL}
 out vec4 fragColor;
 
-// V5's bands past the shape's edge, in device px: always a 1 px background
-// outline; u_halo widens it to 2 px and adds a 1 px ink ring beyond that.
-// Kept in sync with the vertex shader's padding by eye.
+// V5's bands past the shape's edge, in device px: every point draws a 1 px
+// background outline (OUTLINE_PX) first; a "halo" point (u_halo) then draws
+// a further 2 px band of background past it (HALO_PX — S6 fix round 1,
+// M3: the halo band is its own 2 px, the 1 px outline already included
+// ahead of it, not a 2 px total the outline is part of), then a 1 px ink
+// ring (RING_PX) beyond that. Kept in sync with the vertex shader's padding
+// by eye.
 const float OUTLINE_PX = 1.0;
 const float HALO_PX = 2.0;
 const float RING_PX = 1.0;

@@ -55,8 +55,10 @@ describe('boxHalfExtents', () => {
     expect(boxHalfExtents(box(4, 2, 0.2), null, EMPTY, { z: true })).toEqual([1, 1, 0.15])
   })
 
-  it('V1: an unflagged axis keeps 0.7 even when another axis is flat', () => {
-    expect(boxHalfExtents(box(4, 2, 0.2), { kind: 'auto' }, EMPTY, { z: true })).toEqual([1, 1, 0.15])
+  it('V1: an unflagged axis keeps 0.7 even when another axis is flat (S6 fix round 1, M5: was asserting 0.15 on every axis, none of them 0.7)', () => {
+    // x is flagged flat here, not z: z is the unflagged one, and it must
+    // still read auto's usual 0.7, not be dragged down by x's 0.15.
+    expect(boxHalfExtents(box(0.2, 2, 1), { kind: 'auto' }, EMPTY, { x: true })).toEqual([0.15, 1, 0.7])
   })
 
   it('V1: flat has no effect on equal or an explicit ratio', () => {

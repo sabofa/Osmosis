@@ -97,6 +97,18 @@ export interface BuilderEntry {
   // per statement (a coordinate surface reads the box only through a
   // defaulted range); false is not box-dependent.
   boxDependent?: BoxDependence | ((statement: Statement) => BoxDependence | false)
+  // S6 fix round 1, I1: whether this statement's own geometry needs a real
+  // (non-degenerate) span on the axes it depends on to look right. Default
+  // false — a fully box-dependent (stage 'box') statement is ordinarily a
+  // genuine 3D object (a plane, an implicit surface, an S4b tool) that would
+  // look broken in a squashed box, so V1's flat rule leaves its axes alone.
+  // true is for a statement whose own marks are exactly the box's own
+  // outline wherever it ends up — a centroid's drop lines to the floor and
+  // walls decorate the box; they do not need it tall to read correctly, the
+  // same way a region's shading does not (region is exempted structurally,
+  // by its 'z' stage; a centroid needs the resolved box's x and y too, so it
+  // stays stage 'box', and is exempted here instead).
+  flatExempt?: boolean
 }
 
 export type BoxDependence = true | 'z'

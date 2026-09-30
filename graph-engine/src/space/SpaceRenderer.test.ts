@@ -389,8 +389,12 @@ describe('SpaceRenderer and its host', () => {
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
     r.setView({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
     canvas.dispatch('dblclick')
-    // Eases, not snaps: right after the click the view has not jumped yet.
-    expect(r.getView()).toEqual({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
+    // S6 fix round 1, M4: getView() reports where the ease is headed right
+    // away, not the transient view a host would otherwise read a moment
+    // before it changed again.
+    expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    // It still eases, not snaps, internally: the drawn view has not jumped yet.
+    expect(r['view']).toEqual({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
     let frames = 0
     while (clock.pending() > 0 && frames < 100) {
       clock.flush()
@@ -399,6 +403,7 @@ describe('SpaceRenderer and its host', () => {
     // 280 ms at 16 ms a frame is about 17-18 frames.
     expect(frames).toBeGreaterThan(10)
     expect(frames).toBeLessThan(30)
+    expect(r['view']).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
     r.dispose()
   })
@@ -428,13 +433,43 @@ describe('SpaceRenderer and its host', () => {
     r.setScene(scene([helix]), { space })
     r.setView({ azimuth: 170, elevation: 10, zoom: 1, target: [2, 0, 1] })
     canvas.dispatch('dblclick')
-    clock.flush()
-    // One 16 ms frame in: azimuth has moved a small step past 170 toward
-    // 180/-180, not backward toward 0 (which the naive -340-degree route would).
-    const view = r.getView()
-    expect(view.azimuth).toBeGreaterThan(170)
-    while (clock.pending() > 0) clock.flush()
+    // M4: getView() already reports the target, not the transient view.
     expect(r.getView().azimuth).toBeCloseTo(-170, 6)
+    clock.flush()
+    // One 16 ms frame in: the drawn view's azimuth has moved a small step
+    // past 170 toward 180/-180, not backward toward 0 (which the naive
+    // -340-degree route would).
+    expect(r['view'].azimuth).toBeGreaterThan(170)
+    while (clock.pending() > 0) clock.flush()
+    expect(r['view'].azimuth).toBeCloseTo(-170, 6)
+    expect(r.getView().azimuth).toBeCloseTo(-170, 6)
+    r.dispose()
+  })
+
+  it('re-targets a reset ease in progress when a value moves the box mid-flight (S6 fix round 1, M4)', () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const parsed = parseSpec('@param a = 1 range [0.5, 4]\nz = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]')
+    r.setSpec(parsed.statements, parsed.config, parsed.statementLines)
+    clock.flush()
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 40 })
+    canvas.dispatch('dblclick')
+    const targetBefore = r.getView().target
+    clock.flush() // one step into the ease
+    // The camera itself is not authored to change, only the box's height —
+    // a value change alone does not stop the ease (only stopInertia() does).
+    r.setValue('a', 4)
+    clock.flush()
+    const targetAfter = r.getView().target
+    // Re-targeted: getView() now points at the new box's centre, not the
+    // one the ease was originally aimed at.
+    expect(targetAfter).not.toEqual(targetBefore)
+    while (clock.pending() > 0) clock.flush()
+    // It still converges exactly on the final (re-targeted) authored view,
+    // not stuck somewhere between the two.
+    expect(r['view']).toEqual(r.getView())
     r.dispose()
   })
 
@@ -623,7 +658,7 @@ P = (a, b, a^2 + b^2)`
     r.dispose()
   })
 
-  it('coalesces 10 slider inputs in one frame into one setValue, with the last value', () => {
+  it('coalesces 10 slider inputs in one frame into one setValue, held while still scrubbing (S6 fix round 1, I7)', () => {
     const { clock, events, row, kernel, r } = live()
     const setValues = vi.spyOn(kernel(), 'setValues')
     const { slider } = row(0)
@@ -633,9 +668,21 @@ P = (a, b, a^2 + b^2)`
     }
     expect(setValues).not.toHaveBeenCalled()
     clock.flush()
-    // a slider is not play or drag: no held box (J1)
-    expect(setValues.mock.calls).toEqual([[new Map([['a', 1]]), undefined]])
+    // I7: every `input` before the matching `change` is still scrubbing —
+    // held the same way a play or a point-drag is, so a box-dependent
+    // statement (an implicit surface, a 3-variable contour:) meshes coarser
+    // while the reader is still moving the slider.
+    expect(setValues.mock.calls).toHaveLength(1)
+    const [values, options] = setValues.mock.calls[0]
+    expect(values).toEqual(new Map([['a', 1]]))
+    expect(options?.holdBox).toBeDefined()
     expect(events.filter((e) => e.type === 'param')).toEqual([{ type: 'param', name: 'a', value: 1, source: 'slider' }])
+    // The native `change` (release) rebuilds once more, this time not held
+    // — the slider path's equivalent of a drag's one solve at release.
+    slider.dispatch('change')
+    clock.flush()
+    expect(setValues.mock.calls).toHaveLength(2)
+    expect(setValues.mock.calls[1]).toEqual([new Map([['a', 1]]), undefined])
     r.dispose()
   })
 
@@ -1079,18 +1126,40 @@ P = (a, 0, 0)`
   })
 
   it('never caches a readout box: its rectangle is measured fresh on every draw that shows it', () => {
+    // A pinned box (I6: only a pinned readout is a chrome obstacle at all —
+    // the hover probe's own box is deliberately excluded, see below), moved
+    // by the camera rather than the pointer across the two later frames.
+    const { clock, r, readouts, pointer } = live()
+    pointer('pointerdown', 400, 300, 1)
+    pointer('pointerup', 400, 300, 0)
+    clock.flush()
+    const [box] = readouts()
+    expect(box).toBeDefined()
+    expect(box.dataset.pinned).toBe('true')
+    const boxSpy = vi.fn(() => ({ left: 0, top: 0, width: 80, height: 24, right: 80, bottom: 24 }))
+    box.getBoundingClientRect = boxSpy
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 5 })
+    clock.flush()
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 5 })
+    clock.flush()
+    expect(boxSpy.mock.calls.length).toBe(2)
+    r.dispose()
+  })
+
+  it('I6: the hover probe box is never a chrome obstacle, pinned or not — only pinned readouts are', () => {
     const { clock, r, readouts, pointer } = live()
     pointer('pointermove', 400, 300, 0)
     clock.flush()
     const [box] = readouts()
     expect(box).toBeDefined()
+    expect(box.dataset.pinned).toBeUndefined()
     const boxSpy = vi.fn(() => ({ left: 0, top: 0, width: 80, height: 24, right: 80, bottom: 24 }))
     box.getBoundingClientRect = boxSpy
     pointer('pointermove', 420, 310, 0)
     clock.flush()
-    pointer('pointermove', 440, 320, 0)
-    clock.flush()
-    expect(boxSpy.mock.calls.length).toBe(2)
+    // A tick label may sit right under the cursor without ever contesting
+    // it: the probe's own box is not measured for chromeRects() at all.
+    expect(boxSpy).not.toHaveBeenCalled()
     r.dispose()
   })
 
@@ -1121,11 +1190,52 @@ P = (a, 0, 0)`
     r.dispose()
   })
 
+  it('I6: the collapse or expand path requests a frame on its own — no manual draw() needed', () => {
+    const { clock, r, panel, panelSpy } = live()
+    expect(panel.dataset.collapsed).toBe('true')
+    expect(clock.pending()).toBe(0)
+    const before = panelSpy.mock.calls.length
+    // A plain DOM event, nothing else: no pointer or camera activity that
+    // would otherwise have scheduled a frame of its own.
+    panel.dispatch('mouseenter')
+    expect(clock.pending()).toBe(1)
+    clock.flush()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+
   it('recomputes when the bindings change the row count', () => {
     const { r, panelSpy, load } = live()
     const before = panelSpy.mock.calls.length
     load('@param a = 1 range [0.5, 2]\nz = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]')
     expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+
+  it("I6: the colorbar obstacle is the union of its own box and its tick labels' — a tick sits outside the body's own box (SpaceView.css's `right: 18px`)", () => {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const mesh = meshMark([0, 0, 0, 1, 0, 0, 0, 1, 1], [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2], { style: { colorScale: 0 } })
+    const scales = [{ id: 0, title: 's0', map: 'viridis' as const, domain: { min: 0, max: 1 }, diverging: false }]
+    r.setScene({ ...scene([mesh]), colorScales: scales }, CONFIG)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const bars = overlay.children.find((c) => c.className === 'space-colorbars')!
+    const body = bars.children[0].children[1]
+    const tick = body.children.find((c) => c.className === 'space-colorbar-tick')!
+    // The container sits well inset from the overlay's left edge; a tick
+    // label's `right: 18px` (SpaceView.css) places it 18 px+ further left
+    // of .space-colorbar-body's own 12 px-wide box — outside the
+    // container's own measured rect, since an absolutely positioned child
+    // never grows its parent's box.
+    bars.getBoundingClientRect = () => ({ left: 700, top: 100, width: 40, height: 180, right: 740, bottom: 280 })
+    tick.getBoundingClientRect = () => ({ left: 650, top: 150, width: 30, height: 14, right: 680, bottom: 164 })
+    const rects = r['chromeRects']() as { x: number; y: number; width: number; height: number }[]
+    // The colorbar obstacle (not the panel, which is empty/hidden here — no
+    // @param) reaches left to the tick, not just the container.
+    const left = (rect: { x: number; width: number }) => rect.x - rect.width / 2
+    expect(rects.some((rect) => left(rect) <= 650)).toBe(true)
     r.dispose()
   })
 })

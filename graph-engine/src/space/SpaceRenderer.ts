@@ -39,7 +39,7 @@ import { worldMap, type WorldMap } from './camera/world'
 import { defaultSpaceConfig, type SpaceConfig, type SpaceView } from './config'
 import type { SpaceEvent } from './events'
 import { boxHalfExtents } from './frame/aspect'
-import { flatAxes, resolveBox } from './frame/bounds'
+import { flatAxes, flatFloor, resolveBox } from './frame/bounds'
 import { buildFrame } from './frame/build'
 import type { LabelBox } from './frame/labels'
 import { frameAxes } from './frame/ticks'
@@ -221,10 +221,14 @@ export class SpaceRenderer {
   private hoverObject: string | null = null
   private pins: PinsState = NO_PINS
   private overlayKey = ''
-  // S6 carried item (b): the panel's and the colorbars' rectangles, cached
-  // until chromeSignature() changes — see chromeRects().
-  private chromeSignature = ''
+  // S6 carried item (b), refined by S6 fix round 1 I6: the panel's and the
+  // colorbars' rectangles, cached until something that can move them says so
+  // — see chromeRects() and invalidateChrome().
+  private chromeDirty = true
   private chromeCache: LabelBox[] = []
+  // The viewport chromeRects() last saw, so measure() can tell a real resize
+  // (which moves the chrome) from every other draw() (which does not).
+  private chromeViewport: Viewport = { width: 0, height: 0 }
   // The config the current scene was set with (a value change rebuilds with it).
   private config: SpaceRenderConfig = { space: defaultSpaceConfig() }
   // Binding values waiting for the next frame, the last per name; `source`
@@ -237,6 +241,12 @@ export class SpaceRenderer {
   private pendingDrag: { x: number; y: number } | null = null
   // The drag was released: solve its last position, then end it.
   private dragEnding = false
+  // S6 fix round 1, I7: bindings whose slider is mid-scrub (an `input`
+  // event has fired, no matching `change` yet) — held the same way a play
+  // or a point-drag is, so a box-dependent statement (an implicit surface,
+  // a 3-variable contour:) meshes coarser while the reader is still moving
+  // the slider, not at full cost on every one of its `input` events.
+  private readonly scrubbing = new Set<string>()
   // The box and camera target are held (a value played or dragged since the
   // last resolve).
   private held = false
@@ -254,9 +264,23 @@ export class SpaceRenderer {
     this.readouts = new ReadoutBoxes(this.overlay.element)
     this.readouts.setColors(this.colors)
     this.params = new ParamsPanel(this.overlay.element, {
-      change: (name, value) => this.queueValue(name, value, 'slider'),
+      change: (name, value, scrubbing) => {
+        // S6 fix round 1, I7: held the same way a play or a point-drag is
+        // (advanceValues' `holding`), from the first `input` event until
+        // the matching `change` (or the number box's own, non-scrubbing
+        // commit) says the interaction ended.
+        if (scrubbing) this.scrubbing.add(name)
+        else this.scrubbing.delete(name)
+        this.queueValue(name, value, 'slider')
+      },
       togglePlay: (name) => this.togglePlay(name),
       toggleLoop: (name) => this.toggleLoop(name),
+      // S6 fix round 1, I6: a hover or focus change collapses or expands
+      // the panel entirely inside ParamsPanel's own DOM listeners — this is
+      // its only way to tell the renderer its rectangle just changed, so
+      // the cache drops and a frame is requested to re-lay the labels out
+      // against it.
+      chromeChanged: () => this.invalidateChrome(),
     })
     this.params.setColors(this.colors)
     this.scheduler = new FrameScheduler(env.requestFrame, env.cancelFrame, (time) => this.frame(time))
@@ -337,6 +361,7 @@ export class SpaceRenderer {
     if (this.disposed) return
     this.dropKernel()
     this.params.setBindings([])
+    this.chromeDirty = true // S6 fix round 1, I6: the panel's own rectangle just changed.
     this.install(scene, config, true)
     this.scheduler.request()
   }
@@ -364,8 +389,8 @@ export class SpaceRenderer {
     this.held = false
     this.config = config
     const space = config.space
-    const box = resolveBox(space, scene.extent)
-    const flat = flatAxes(space, scene.extent)
+    const box = resolveBox(space, scene.extent, scene.boxSpanning)
+    const flat = flatAxes(space, scene.extent, scene.boxSpanning)
     const world = worldMap(box, boxHalfExtents(box, space.aspect, scene, flat))
     const authored: SpaceView = { ...space.camera, target: world.centre }
     const first = this.scene === null
@@ -379,13 +404,18 @@ export class SpaceRenderer {
       this.view = sanitizeView(authored, authored)
     } else if (!sameBox(this.world, world)) {
       this.view = { ...this.view, target: world.centre }
+      // S6 fix round 1, M4: a resetView() ease in progress was headed for
+      // the old box's centre; re-target it to the new one rather than
+      // easing to a point the box has already moved away from. Its
+      // progress (from, startMs) is untouched — only where it ends moves.
+      if (this.easing) this.easing = { ...this.easing, to: { ...this.easing.to, target: world.centre } }
     }
     this.scene = scene
     this.space = space
     this.hoverMode = config.hover ?? 'all'
     this.world = world
     this.authored = sanitizeView(authored, authored)
-    this.axes = frameAxes(space, box, flat)
+    this.axes = frameAxes(space, box, flat, flatFloor(space, scene.extent))
     this.backend.setScene(scene, world, this.colors, { depthcue: space.depthcue })
     this.updateEmptyState()
     if (fresh) {
@@ -439,12 +469,14 @@ export class SpaceRenderer {
     } catch (error) {
       this.kernel = null
       this.params.setBindings([])
+      this.chromeDirty = true // S6 fix round 1, I6.
       return [{ line: 0, message: `space could not build this spec: ${error instanceof Error ? error.message : String(error)}` }]
     }
     // A pin survives the edit only if its statement's line reads the same.
     this.applyPins({ type: 'respec', text: (line) => this.sourceLines?.[line - 1] ?? null })
     this.install(scene, config, true)
     this.params.setBindings(this.kernel.bindings())
+    this.chromeDirty = true // S6 fix round 1, I6: a new spec can rename or add/remove params.
     this.syncParams()
     this.scheduler.request()
     return scene.errors
@@ -476,8 +508,13 @@ export class SpaceRenderer {
     this.scheduler.request()
   }
 
+  // S6 fix round 1, M4: while resetView()'s ease is in progress, this
+  // reports where it is headed, not the transient interpolated view a host
+  // would otherwise read moments before it changes again — the renderer's
+  // own draw() still animates from this.view every frame regardless.
   getView(): SpaceView {
-    return { ...this.view, target: [...this.view.target] }
+    const v = this.easing ? this.easing.to : this.view
+    return { ...v, target: [...v.target] }
   }
 
   setView(view: SpaceView): void {
@@ -514,6 +551,7 @@ export class SpaceRenderer {
     this.dragging = null
     this.pendingDrag = null
     this.dragEnding = false
+    this.scrubbing.clear()
   }
 
   private queueValue(name: string, value: number, source: 'slider' | 'play' | 'drag' | null): void {
@@ -603,7 +641,7 @@ export class SpaceRenderer {
       // Every queued value in one rebuild; while still playing or dragging,
       // against the held box.
       const before = kernel.values()
-      const holding = this.world !== null && (this.playing.size > 0 || this.dragging !== null)
+      const holding = this.world !== null && (this.playing.size > 0 || this.dragging !== null || this.scrubbing.size > 0)
       const values = new Map([...this.pendingValues].map(([name, { value }]) => [name, value]))
       const next = kernel.setValues(values, holding ? { holdBox: this.world!.box } : undefined)
       const after = kernel.values()
@@ -733,7 +771,32 @@ export class SpaceRenderer {
   private updateColorbars(): void {
     const scene = this.scene
     const shown = scene ? colorbarScales(scene).shown : []
-    this.colorbars.update(shown.map((scale) => colorbarModel(scale, colormapTable(scale.map, this.colors))))
+    const rebuilt = this.colorbars.update(shown.map((scale) => colorbarModel(scale, colormapTable(scale.map, this.colors))))
+    // S6 fix round 1, I6: a moving colormap domain re-ticks the same number
+    // of colorbars — Colorbars.update() rebuilds their DOM (a new position
+    // or width for a tick label) without the *count* chromeRects used to key
+    // its cache on ever changing, so the stale rectangle would survive
+    // untouched. Only when it actually rebuilt, though (`rebuilt`): this
+    // runs on every install (every frame of a play or a drag, among
+    // others). Just the flag, not invalidateChrome()'s scheduler.request()
+    // too: this always runs inside a draw() already in progress (or a
+    // caller — setSpec, setScene — that asks for its own frame right
+    // after), so asking for another here as well would keep asking for one
+    // after play legitimately has nothing left to animate, undoing "render
+    // on demand" (unlike the panel's chromeChanged, a plain DOM event with
+    // no other reason for a frame to be coming).
+    if (rebuilt) this.chromeDirty = true
+  }
+
+  // S6 fix round 1, I6: drop the cached chrome rectangles (SpaceRenderer.ts's
+  // chromeRects()) and ask for a frame to re-lay labels out against the new
+  // ones — the panel and the colorbars only change from inside this class or
+  // from ParamsPanel's own DOM listeners (its chromeChanged handler), never
+  // from the camera or the pointer, so nothing before this asked for a
+  // redraw on their behalf.
+  private invalidateChrome(): void {
+    this.chromeDirty = true
+    this.scheduler.request()
   }
 
   // S6 plan V10: "nothing overlaps the frame's tick labels: V2's placer
@@ -748,11 +811,20 @@ export class SpaceRenderer {
   //
   // S6 carried item (b): getBoundingClientRect() forces a synchronous
   // layout, so reading it on every draw() is worth avoiding where it is
-  // safe to. The panel and the colorbars are genuinely static between
-  // draws except on a resize, the panel's own collapse/expand, or a row or
-  // colorbar count change (a new scene, a spec edit, or a theme swap) — none
-  // of which depend on the camera or the pointer — so their rectangles are
-  // cached against a cheap signature of exactly those inputs.
+  // safe to. The panel and the colorbars are genuinely static between draws
+  // except on a resize, the panel's own collapse/expand, or a rebuild (a new
+  // scene, a spec edit, a theme swap, a moving colormap domain, a renamed
+  // param) — none of which depend on the camera or the pointer — so their
+  // rectangles are cached until invalidateChrome() (I6) says otherwise:
+  // measure() below on a real resize, updateColorbars() on every call, and
+  // ParamsPanel's chromeChanged handler (setBindings, and a hover/focus
+  // collapse or expand it cannot otherwise tell the renderer about).
+  //
+  // The colorbar obstacle is the union of .space-colorbars' own rectangle
+  // and every one of its tick labels' (I6): a tick's `right: 18px`
+  // (SpaceView.css) places it outside .space-colorbar-body's box — an
+  // absolutely positioned child never grows its parent's measured rect — so
+  // the container alone under-reports how far left the chrome reaches.
   //
   // The readout boxes are deliberately excluded from that cache: sync()
   // gives the probe's box and every pin's box a fresh CSS transform on
@@ -762,12 +834,10 @@ export class SpaceRenderer {
   // there are. Caching them on an "added or removed" signature alone would
   // serve a stale rectangle for a box that has visibly moved, which is
   // exactly the collision V10 built this placer to prevent. So the readout
-  // rectangles stay live, measured fresh every call.
-  private chromeSignatureOf(): string {
-    const collapsed = this.params.element.dataset.collapsed === 'true'
-    return `${this.viewport.width}x${this.viewport.height}|${collapsed}|${this.params.size}|${this.colorbars.count}`
-  }
-
+  // rectangles stay live, measured fresh every call — and (I6) only the
+  // pinned ones are obstacles at all: the hover probe's own box moving
+  // under the cursor is not chrome, and must not make a tick label blink
+  // in and out as it passes over one.
   private chromeRects(): LabelBox[] {
     const origin = this.overlay.element.getBoundingClientRect()
     const rectOf = (el: { getBoundingClientRect(): { left: number; top: number; width: number; height: number } }): LabelBox | null => {
@@ -775,12 +845,25 @@ export class SpaceRenderer {
       if (r.width <= 0 || r.height <= 0) return null
       return { x: r.left - origin.left + r.width / 2, y: r.top - origin.top + r.height / 2, width: r.width, height: r.height }
     }
-    const signature = this.chromeSignatureOf()
-    if (signature !== this.chromeSignature) {
-      this.chromeSignature = signature
-      this.chromeCache = [this.params.element, this.colorbars.element].map(rectOf).filter((r): r is LabelBox => r !== null)
+    const union = (rects: readonly LabelBox[]): LabelBox | null => {
+      if (rects.length === 0) return null
+      const left = Math.min(...rects.map((r) => r.x - r.width / 2))
+      const right = Math.max(...rects.map((r) => r.x + r.width / 2))
+      const top = Math.min(...rects.map((r) => r.y - r.height / 2))
+      const bottom = Math.max(...rects.map((r) => r.y + r.height / 2))
+      return { x: (left + right) / 2, y: (top + bottom) / 2, width: right - left, height: bottom - top }
     }
-    const readoutRects = this.readouts.elements().map(rectOf).filter((r): r is LabelBox => r !== null)
+    if (this.chromeDirty) {
+      this.chromeDirty = false
+      const panel = rectOf(this.params.element)
+      const colorbars = [this.colorbars.element, ...this.colorbars.tickElements()].map(rectOf).filter((r): r is LabelBox => r !== null)
+      this.chromeCache = [panel, union(colorbars)].filter((r): r is LabelBox => r !== null)
+    }
+    const readoutRects = this.readouts
+      .elements()
+      .filter((el) => el.dataset.pinned === 'true')
+      .map(rectOf)
+      .filter((r): r is LabelBox => r !== null)
     return [...this.chromeCache, ...readoutRects]
   }
 
@@ -864,6 +947,14 @@ export class SpaceRenderer {
     const backingHeight = Math.round(height * ratio)
     if (this.canvas.width !== backingWidth) this.canvas.width = backingWidth
     if (this.canvas.height !== backingHeight) this.canvas.height = backingHeight
+    // S6 fix round 1, I6: a real resize moves the chrome (the panel and the
+    // colorbars sit at a fixed inset from the overlay's own edge), so the
+    // cached rectangles go stale. this.chromeDirty is already true on the
+    // very first measure(), so this only ever fires on a genuine change.
+    if (width !== this.chromeViewport.width || height !== this.chromeViewport.height) {
+      this.chromeViewport = { width, height }
+      this.chromeDirty = true
+    }
   }
 
   private draw(): void {
@@ -889,7 +980,7 @@ export class SpaceRenderer {
       // probe/pin anchor alone, never from layout, so the placer can measure
       // where they landed and keep tick labels off them.
       this.syncReadouts(camera, world)
-      this.overlay.update(layoutLabels(frame, scene.labels, camera, world, this.chromeRects()))
+      this.overlay.update(layoutLabels(frame, scene.labels, camera, world, this.chromeRects(), (key) => this.overlay.isExpanded(key)))
     } catch (error) {
       this.report(error instanceof Error ? error.message : String(error))
     }

@@ -297,7 +297,7 @@ describe('readouts of coordinate surfaces and level surfaces', () => {
     const p = found.hit.position
     expect(Math.hypot(p[0] - 0, p[1] - 2, p[2] - 1)).toBeLessThanOrEqual(1e-9)
     expect(found.hit.values.at(-1)).toEqual({ label: '(r, θ, z)', value: '(2, 1.571, 1)' })
-    const again = reevaluate(found.hit, { marks: [mark], labels: [], colorScales: [], extent: null, errors: [] })!
+    const again = reevaluate(found.hit, { marks: [mark], labels: [], colorScales: [], extent: null, boxSpanning: { x: false, y: false, z: false }, errors: [] })!
     expect(again.values.at(-1)).toEqual({ label: '(r, θ, z)', value: '(2, 1.571, 1)' })
   })
 

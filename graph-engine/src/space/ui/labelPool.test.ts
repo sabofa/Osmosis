@@ -59,6 +59,21 @@ describe('LabelPool: the V3 click-to-expand readout', () => {
     expect(span.dataset.expandable).toBe('true')
   })
 
+  it('C1: a rebuild where only fullText changes still clears stale expanded digits', () => {
+    const { pool, container } = newPool()
+    pool.sync([{ ...base, text: 'area ≈ 1.571', fullText: 'area ≈ 1.5707963267' }])
+    const span = container.children[0]
+    span.dispatch('click')
+    expect(span.textContent).toBe('area ≈ 1.5707963267')
+    // The capped text is unchanged; only the full text moved (a value that
+    // still rounds the same way). The toggle resets and the span must show
+    // the capped text now, not the old expansion.
+    pool.sync([{ ...base, text: 'area ≈ 1.571', fullText: 'area ≈ 1.5719999999' }])
+    expect(span.textContent).toBe('area ≈ 1.571')
+    span.dispatch('click')
+    expect(span.textContent).toBe('area ≈ 1.5719999999')
+  })
+
   it('losing its fullText (no longer error-bounded) drops the expandable marker', () => {
     const { pool, container } = newPool()
     pool.sync([{ ...base, text: 'area ≈ 1.571', fullText: 'area ≈ 1.5707963267' }])

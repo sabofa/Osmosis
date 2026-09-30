@@ -9,9 +9,21 @@ import type { Binding } from '../config'
 import { cssRgb, type SpaceColors } from '../theme'
 
 export interface ParamsHandlers {
-  change(name: string, value: number): void
+  // S6 fix round 1, I7: `scrubbing` is true for every slider `input` event
+  // (still moving) and false for its number-box commit or its final,
+  // native `change` (released) — the renderer holds the box the same way
+  // it does for a play or a point-drag while any binding's is true.
+  change(name: string, value: number, scrubbing: boolean): void
   togglePlay(name: string): void
   toggleLoop(name: string): void
+  // S6 fix round 1, I6: the panel collapses or expands on a plain hover or
+  // focus change (setExpanded below) — a DOM event this class handles
+  // entirely on its own, invisible to SpaceRenderer unless it says so. That
+  // changes the panel's own rectangle, so the label placer's chrome
+  // obstacle is stale until the next draw() — but nothing before this asked
+  // for one. This is the request, and the renderer's own chance to drop its
+  // cached chrome rectangle (SpaceRenderer.ts's chromeRects()) too.
+  chromeChanged(): void
 }
 
 export interface ParamRowState {
@@ -86,8 +98,11 @@ export class ParamsPanel {
 
   private updateCollapsed(): void {
     const collapsed = this.rows.length > 1 && !this.hovered && !this.focused && !this.anyPlaying
+    const was = this.element.dataset.collapsed === 'true'
+    if (collapsed === was) return
     if (collapsed) this.element.dataset.collapsed = 'true'
     else delete this.element.dataset.collapsed
+    this.handlers.chromeChanged()
   }
 
   get size(): number {
@@ -139,10 +154,15 @@ export class ParamsPanel {
       const row: Row = { binding, slider, number, play, loop, editing: false }
       this.rows.push(row)
 
-      slider.addEventListener('input', () => this.handlers.change(binding.name, Number(slider.value)))
+      slider.addEventListener('input', () => this.handlers.change(binding.name, Number(slider.value), true))
+      // S6 fix round 1, I7: the native `change` fires once, on release
+      // (mouseup or keyup) — the scrub's end, so the last value goes
+      // through again, this time not scrubbing, for the one full-
+      // resolution rebuild a play or a drag's release also gets.
+      slider.addEventListener('change', () => this.handlers.change(binding.name, Number(slider.value), false))
       const commit = () => {
         const value = Number(number.value)
-        if (number.value.trim() !== '' && Number.isFinite(value)) this.handlers.change(binding.name, value)
+        if (number.value.trim() !== '' && Number.isFinite(value)) this.handlers.change(binding.name, value, false)
       }
       number.addEventListener('focus', () => (row.editing = true))
       number.addEventListener('blur', () => {

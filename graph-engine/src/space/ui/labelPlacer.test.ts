@@ -5,7 +5,7 @@
 // regression in any layer between the spec and the screen would show here.
 
 import { describe, expect, it } from 'vitest'
-import { cameraMatrices } from '../camera/projection'
+import { cameraMatrices, project } from '../camera/projection'
 import { worldMap } from '../camera/world'
 import { boxHalfExtents } from '../frame/aspect'
 import { flatAxes, resolveBox } from '../frame/bounds'
@@ -27,8 +27,8 @@ function sceneAndLabels(spec: string): LabelItem[] {
   const scene: SpaceScene = kernel.scene()
   expect(scene.errors).toEqual([])
   const space = parsed.config.space
-  const box = resolveBox(space, scene.extent)
-  const flat = flatAxes(space, scene.extent)
+  const box = resolveBox(space, scene.extent, scene.boxSpanning)
+  const flat = flatAxes(space, scene.extent, scene.boxSpanning)
   const world = worldMap(box, boxHalfExtents(box, space.aspect, scene, flat))
   const axes = frameAxes(space, box, flat)
   const camera = cameraMatrices({ ...space.camera, target: world.centre }, world, { width: 900, height: 650 }, space.projection)
@@ -94,6 +94,21 @@ describe('placeLabels: priority and candidates (unit)', () => {
     expect(shown).toHaveLength(1)
   })
 
+  it('I3: a contour value label loses to a point label at the same spot, and is dropped, not force-shown', () => {
+    const anchor = { x: 0, y: 0 }
+    const placed = placeLabels([
+      { key: 'contour', text: 'contour value', role: 'contour', fontSize: 13, anchor, candidates: [anchor] },
+      { key: 'point', text: 'point label', role: 'label', fontSize: 13, anchor, candidates: [anchor] },
+    ])
+    const point = placed.find((p) => p.key === 'point')!
+    const contour = placed.find((p) => p.key === 'contour')!
+    // A point label now outranks a contour value (the old bug: contour
+    // shared 'annotation''s top priority and would have won here instead).
+    expect(point.visible).toBe(true)
+    expect(contour.visible).toBe(false)
+    expect(contour.leader).toBeNull()
+  })
+
   it('an annotation with no candidate free still shows, with a leader back to its anchor', () => {
     const anchor = { x: 0, y: 0 }
     const placed = placeLabels([
@@ -104,13 +119,77 @@ describe('placeLabels: priority and candidates (unit)', () => {
     expect(placed.some((p) => p.leader !== null)).toBe(true)
   })
 
-  it('is deterministic: independent of input order, since priority and index order settle every tie', () => {
+  it('is deterministic under a permuted input: priority and index order settle every tie regardless of array order', () => {
     const a: LabelRequest[] = [
       { key: '1', text: 'one', role: 'annotation', fontSize: 13, anchor: { x: 0, y: 0 }, candidates: annotationCandidates({ x: 0, y: 0 }) },
       { key: '2', text: 'two', role: 'label', fontSize: 13, anchor: { x: 0, y: 0 }, candidates: pointCandidates({ x: 0, y: 0 }) },
+      { key: '3', text: 'three', role: 'contour', fontSize: 13, anchor: { x: 0, y: 0 }, candidates: annotationCandidates({ x: 0, y: 0 }) },
+      { key: '4', text: 'four', role: 'tick', fontSize: 13, anchor: { x: 0, y: 0 }, candidates: [{ x: 0, y: 0 }] },
     ]
-    expect(placeLabels(a)).toEqual(placeLabels(a))
-    expect(placeLabels(a)).toEqual(placeLabels([...a]))
+    // A genuine permutation (reversed), not a same-order copy: the result,
+    // keyed and sorted back for comparison, must be the byte-same regardless
+    // of the order placeLabels was handed the requests in.
+    const byKey = (result: ReturnType<typeof placeLabels>) => new Map(result.map((p) => [p.key, p]))
+    const forward = byKey(placeLabels(a))
+    const reversed = byKey(placeLabels([...a].reverse()))
+    const shuffled = byKey(placeLabels([a[2], a[0], a[3], a[1]]))
+    for (const key of ['1', '2', '3', '4']) {
+      expect(reversed.get(key)).toEqual(forward.get(key))
+      expect(shuffled.get(key)).toEqual(forward.get(key))
+    }
+  })
+
+  it('a placement more than 14 px from its anchor gets a leader, even when nothing blocked the closer candidates (I3)', () => {
+    const anchor = { x: 0, y: 0 }
+    // A single candidate at 30 px: nothing to collide with, so this is a
+    // normal first-try fit, not the total-failure fallback — the leader
+    // comes from distance alone.
+    const placed = placeLabels([{ key: 'a', text: 'a', role: 'annotation', fontSize: 13, anchor, candidates: [{ x: 30, y: 0 }] }])
+    expect(placed[0].visible).toBe(true)
+    expect(placed[0].x).toBe(30)
+    expect(placed[0].leader).toEqual(anchor)
+  })
+
+  it('a readout that fits nowhere within 60 px searches out to 120 px and lands clear of the blocker (I3)', () => {
+    const anchor = { x: 0, y: 0 }
+    // Covers every one of annotationCandidates' rings (14-60 px) but stops
+    // short of 70: the normal search is exhausted, forcing the fallback.
+    const obstacle: LabelBox = { x: 0, y: 0, width: 140, height: 140 }
+    const placed = placeLabels(
+      [{ key: 'a', text: 'a', role: 'annotation', fontSize: 13, anchor, candidates: annotationCandidates(anchor) }],
+      [obstacle]
+    )
+    expect(placed[0].visible).toBe(true)
+    const size = { width: 0.6 * 13, height: 13 }
+    expect(labelsOverlap({ x: placed[0].x, y: placed[0].y, ...size }, obstacle)).toBe(false)
+    // 70 px or more out: well past the 14 px leader threshold.
+    expect(Math.hypot(placed[0].x - anchor.x, placed[0].y - anchor.y)).toBeGreaterThanOrEqual(70)
+    expect(placed[0].leader).toEqual(anchor)
+  })
+
+  it("M2: a request's sizeText, not its text, is what the placer reserves room for", () => {
+    const anchor = { x: 0, y: 0 }
+    // 'v' alone (1 char) reaches nowhere near the point label; the much
+    // longer full text a click-expanded readout would show reaches every
+    // one of its candidates.
+    const pointAnchor = { x: 60, y: -10 }
+    const requests = (sizeText?: string): LabelRequest[] => [
+      { key: 'readout', text: 'v', role: 'annotation', fontSize: 13, anchor, candidates: annotationCandidates(anchor), sizeText },
+      { key: 'point', text: 'Q', role: 'label', fontSize: 13, anchor: pointAnchor, candidates: pointCandidates(pointAnchor) },
+    ]
+    const capped = placeLabels(requests())
+    const expanded = placeLabels(requests('v = 1.234567890123456789'))
+    const at = (placed: ReturnType<typeof placeLabels>) => placed.find((p) => p.key === 'point')!
+    const cappedPoint = at(capped)
+    const expandedPoint = at(expanded)
+    // The short capped text reaches none of the point label's candidates:
+    // it shows normally.
+    expect(cappedPoint.visible).toBe(true)
+    // The much wider box sizeText reserves reaches every one of them
+    // instead (a point label has no leader-line fallback, unlike a
+    // readout): it is dropped once the readout is "expanded", proving the
+    // placer sized its reserved room from sizeText, not text.
+    expect(expandedPoint.visible).toBe(false)
   })
 
   // S6 plan V10: "nothing overlaps the frame's tick labels: V2's placer
@@ -133,15 +212,31 @@ describe('placeLabels: priority and candidates (unit)', () => {
       expect(placed[0].y).toBe(0)
     })
 
-    it('an annotation steps past an obstacle the same way, before ever falling back to a leader', () => {
+    it('an annotation steps past an obstacle to a nearby candidate with no leader (I3: within 14 px)', () => {
+      const anchor = { x: 0, y: 0 }
+      const candidates = [{ x: 0, y: 0 }, { x: 10, y: 0 }]
+      // Small, so the second candidate (10 px away) genuinely clears it —
+      // the point of this test is a short step, not a forced fallback.
+      const obstacle: LabelBox = { x: 0, y: 0, width: 6, height: 6 }
+      const placed = placeLabels([{ key: 'a', text: 'a', role: 'annotation', fontSize: 13, anchor, candidates }], [obstacle])
+      expect(placed[0].visible).toBe(true)
+      expect(placed[0].x).toBe(10)
+      expect(placed[0].y).toBe(0)
+      expect(placed[0].leader).toBeNull()
+    })
+
+    it('an annotation steps past an obstacle to a farther candidate, gaining a leader (I3: over 14 px from its anchor)', () => {
       const anchor = { x: 0, y: 0 }
       const candidates = [{ x: 0, y: 0 }, { x: 100, y: 0 }]
       const obstacle: LabelBox = { x: 0, y: 0, width: 20, height: 20 }
       const placed = placeLabels([{ key: 'a', text: 'readout', role: 'annotation', fontSize: 13, anchor, candidates }], [obstacle])
       expect(placed[0].visible).toBe(true)
-      expect(placed[0].leader).toBeNull()
       expect(placed[0].x).toBe(100)
       expect(placed[0].y).toBe(0)
+      // Not the total-failure fallback (both candidates were tried in order
+      // and the second one simply fit) — the leader comes from distance
+      // alone, whichever way the label got there.
+      expect(placed[0].leader).toEqual(anchor)
     })
 
     it('an obstacle never appears in the output: it is not one of the requests', () => {
@@ -186,7 +281,15 @@ contour: f levels 9 floor labels`)
     const contourLabels = items.filter((i) => /\.label\d+$/.test(i.key.split(':')[2] ?? ''))
     // One label per drawn level (a level whose curve misses the domain gets none).
     expect(contourLabels.length).toBeGreaterThan(0)
-    expect(contourLabels.every((l) => l.visible)).toBe(true)
+    // I3: explicitly at most one VISIBLE label per curve (level) — grouped
+    // by the level index contours.ts encodes in the key (label0, label1,
+    // ...), never more than one showing for the same curve.
+    const perLevel = new Map<string, number>()
+    for (const l of contourLabels.filter((c) => c.visible)) {
+      const level = (l.key.split(':')[2] ?? '').match(/\.label(\d+)$/)![1]
+      perLevel.set(level, (perLevel.get(level) ?? 0) + 1)
+    }
+    for (const count of perLevel.values()) expect(count).toBe(1)
     expectNoOverlap(items)
   })
 
@@ -199,15 +302,22 @@ gradient: f at (0.5, -1) lifted`
     expect(sceneAndLabels(spec)).toEqual(sceneAndLabels(spec))
   })
 
-  it('a readout is always shown, even packed against several point labels at the same anchor', () => {
+  it('a readout is always shown, even packed against several point labels at the same anchor, and reaches the fallback (I3)', () => {
     const jam = Array.from({ length: 10 }, (_, i) => label([1, 1, 1], `p${i}`, i + 1))
     const readout = annotationLabel([1, 1, 1], 'a readout that must always show', 50)
     // layoutLabels needs a FrameModel; an empty one has no lines or labels of its own.
     const box = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -2, max: 2 } }
     const world = worldMap(box, [1, 1, 1])
     const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, { width: 900, height: 650 }, 'orthographic')
-    const items = layoutLabels({ style: 'none', lines: [], labels: [], key: 'none' }, [...jam, readout], camera, world)
+    // M5: this used to place cleanly at its first candidate (14 px out) —
+    // the point labels' own 10 px ring never actually reached it, so the
+    // fallback this test's title claims to prove was never exercised. A
+    // chrome obstacle spanning the whole 60 px search radius forces it.
+    const s = project(camera, world.toWorld([1, 1, 1]))
+    const obstacle: LabelBox = { x: s.x, y: s.y, width: 140, height: 140 }
+    const items = layoutLabels({ style: 'none', lines: [], labels: [], key: 'none' }, [...jam, readout], camera, world, [obstacle])
     const shown = items.find((i) => i.text === readout.text)!
     expect(shown.visible).toBe(true)
+    expect(shown.leader).not.toBeNull()
   })
 })

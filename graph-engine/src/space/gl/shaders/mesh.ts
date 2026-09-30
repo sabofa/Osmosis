@@ -162,11 +162,12 @@ void main() {
 
   color = depthCue(color, v_depth);
   if (u_oit) {
-    // McGuire and Bavoil's weight (shaders/oit.ts), z the view depth,
-    // normalised by the box's own view-space depth span (V4, S3 M10).
+    // The OIT weight (shaders/oit.ts), z the view depth normalised relative
+    // to the box's own near edge (V4, S3 M10; S6 fix round 1 I2).
     float a = u_opacity;
     float depthSpan = max(u_cueRange.y - u_cueRange.x, 1e-3);
-    float w = oitWeight(a, max(-v_viewPos.z, 0.0), depthSpan);
+    float zRel = clamp((max(-v_viewPos.z, 0.0) - u_cueRange.x) / depthSpan, 0.0, 1.0);
+    float w = oitWeight(a, zRel);
     if (!gl_FrontFacing) w *= BACK_WEIGHT_OIT;
     fragColor = vec4(color * a * w, a);
     fragWeight = vec4(a * w, 0.0, 0.0, 0.0);

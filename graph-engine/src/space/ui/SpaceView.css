@@ -165,12 +165,11 @@
   font-size: 12px;
   line-height: 1.35;
   white-space: nowrap;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  /* S6 fix round 1, M6: no drop shadow, a hairline border only, matching
+     the plan's global constraint ("no gradients or drop shadows on chrome
+     beyond a hairline border") — this used to have one, removed only for
+     a pinned box (data-pinned), inconsistent with every other unpinned one. */
   will-change: transform;
-}
-
-.space-readout[data-pinned] {
-  box-shadow: none;
 }
 
 .space-readout-title {

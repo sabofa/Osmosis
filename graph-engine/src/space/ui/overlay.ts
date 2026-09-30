@@ -40,18 +40,28 @@ export class Overlay {
   // S6 plan V10: the whole chrome's one visual language — the message card
   // (V9), the parameter panel, the colorbar and the readout boxes (probe.ts)
   // all read these four custom properties, so a theme change moves every
-  // one of them together. --space-line is gridStrong (a graph's own grid
-  // is grid, too faint to read as a bounded object's edge).
+  // one of them together. --space-line is `grid` (S6 fix round 1, M6: not
+  // gridStrong) — render/palette.ts's TOKEN_FOR maps `grid` to the host's
+  // own --line token and `gridStrong` to --line-strong, so a hairline
+  // chrome border reads as the host's ordinary line weight, not its
+  // emphasised one (gridStrong is for the graph's own axis-adjacent grid,
+  // a different, stronger role).
   setColors(colors: SpaceColors): void {
     this.element.style.color = cssRgb(colors.axis)
     this.element.style.setProperty('--space-ink', cssRgb(colors.axis))
     this.element.style.setProperty('--space-surface', cssRgb(colors.background))
-    this.element.style.setProperty('--space-line', cssRgb(colors.gridStrong))
+    this.element.style.setProperty('--space-line', cssRgb(colors.grid))
     this.element.style.setProperty('--space-muted', cssRgb(colors.muted))
   }
 
   update(items: readonly LabelItem[]): void {
     this.pool.sync(items)
+  }
+
+  // S6 fix round 1, M2: passed to layoutLabels() so the placer can size a
+  // currently expanded readout from its full text.
+  isExpanded(key: string): boolean {
+    return this.pool.isExpanded(key)
   }
 
   // A message in place of the view (no WebGL2, a lost context, a shader

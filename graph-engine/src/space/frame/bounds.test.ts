@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defaultSpaceConfig, type SpaceConfig } from '../config'
 import type { Box3 } from '../scene/types'
-import { flatAxes, resolveBox } from './bounds'
+import { flatAxes, flatFloor, resolveBox } from './bounds'
 
 function config(bounds: Partial<SpaceConfig['bounds']> = {}): SpaceConfig {
   const c = defaultSpaceConfig()
@@ -124,5 +124,75 @@ describe('flatAxes (V1)', () => {
 
   it('flags every degenerate axis when more than one is thin: y and z degenerate, x is not', () => {
     expect(flatAxes(config(), extent([-4, 4], [1, 1], [2, 2]))).toEqual({ x: false, y: true, z: true })
+  })
+})
+
+// S6 fix round 1, I1: a box-dependent statement not yet built (a sphere, a
+// plane) is invisible to `extent`, so flatAxes must be told separately which
+// axes it will occupy once built, or it carves a sliver from geometry that
+// is not flat.
+describe('flatAxes and resolveBox with a box-spanning statement (I1)', () => {
+  it("the sphere case: x^2+y^2+z^2=4 plus two points at z=0 no longer gets a sliver z box", () => {
+    // Two points at z = 0, e.g. (±2, 0, 0): the extent alone reads z as
+    // degenerate, exactly as it would without the sphere. The sphere (an
+    // implicit surface) is a 'box'-stage statement, so it spans every axis.
+    const spanning = { x: true, y: true, z: true }
+    const points = extent([-2, 2], [-2, 2], [0, 0])
+    expect(flatAxes(config(), points, spanning)).toEqual({ x: false, y: false, z: false })
+    const box = resolveBox(config(), points, spanning)
+    expect(box.z).toEqual({ min: -2, max: 2 })
+  })
+
+  it('the plane case: x + y + z = 3 with two intercept points at z = 0 does not become a z sliver', () => {
+    // (3, 0, 0) and (0, 3, 0): both at z = 0 (degenerate), x and y span 3.
+    // The plane is 'box'-stage, so z is box-spanning even though nothing
+    // built so far has put real data on it.
+    const spanning = { x: true, y: true, z: true }
+    const points = extent([0, 3], [0, 3], [0, 0])
+    expect(flatAxes(config(), points, spanning)).toEqual({ x: false, y: false, z: false })
+    const box = resolveBox(config(), points, spanning)
+    // Not a sliver: z gets a real span, symmetric about the data (0).
+    expect(box.z.max - box.z.min).toBeGreaterThan(1)
+    expect(box.z.min).toBeCloseTo(-box.z.max, 12)
+  })
+
+  it('a lone region is still flat: nothing box-spanning sits on its z', () => {
+    // Same shape as the existing "z is wholly absent" case, but explicit
+    // about the new parameter: a region is 'z'-stage, not 'box'-stage, so it
+    // never marks an axis box-spanning.
+    const notSpanning = { x: false, y: false, z: false }
+    const region = extent([-1, 1], [0, 1], [Infinity, -Infinity])
+    expect(flatAxes(config(), region, notSpanning)).toEqual({ x: false, y: false, z: true })
+    const box = resolveBox(config(), region, notSpanning)
+    expect(box.z).toEqual({ min: -0.1, max: 0.1 })
+  })
+})
+
+// S6 fix round 1, M1: a flat axis's tick sits at "the data's z" — the box's
+// centre, resolveBox's v — except when there is no data there at all (raw
+// is null), where a lone region's own shading sits on the box's floor
+// instead (kernel/integrals/common.ts floorHeight), not its centre.
+describe('flatFloor (S6 fix round 1, M1)', () => {
+  it('is false wherever there is real data, even a degenerate point: the centre already is that data', () => {
+    // z degenerate at 3 (two points both at z = 3, say): raw.z is {3, 3},
+    // not null, so the box's centre (resolveBox's v = 3) is where that data
+    // actually is.
+    expect(flatFloor(config(), extent([-2, 2], [0, 4], [3, 3]))).toEqual({ x: false, y: false, z: false })
+  })
+
+  it('is true for an axis with no data at all: the region z sentinel', () => {
+    expect(flatFloor(config(), extent([-1, 1], [0, 1], [Infinity, -Infinity]))).toEqual({ x: false, y: false, z: true })
+  })
+
+  it('is false wherever the axis is authored: an authored range always wins outright, floor or not', () => {
+    expect(flatFloor(config({ z: { min: -1, max: 1 } }), extent([-1, 1], [0, 1], [Infinity, -Infinity]))).toEqual({
+      x: false,
+      y: false,
+      z: false,
+    })
+  })
+
+  it('is false with no extent at all: nothing drawn, nothing to anchor to a floor', () => {
+    expect(flatFloor(config(), null)).toEqual({ x: false, y: false, z: false })
   })
 })

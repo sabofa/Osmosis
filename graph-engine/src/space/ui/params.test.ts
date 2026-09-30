@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Binding } from '../config'
 import { FakeDocument, type FakeElement } from '../testing/fakeDom'
 import { displayValue, ParamsPanel, stepDecimals, type ParamRowState } from './params'
@@ -8,8 +8,9 @@ const binding = (patch: Partial<Binding>): Binding => ({ name: 'a', value: 0, mi
 function newPanel() {
   const doc = new FakeDocument()
   const overlay = doc.createElement('div')
-  const panel = new ParamsPanel(overlay as unknown as HTMLElement, { change: () => {}, togglePlay: () => {}, toggleLoop: () => {} })
-  return { panel, element: panel.element as unknown as FakeElement }
+  const chromeChanged = vi.fn()
+  const panel = new ParamsPanel(overlay as unknown as HTMLElement, { change: () => {}, togglePlay: () => {}, toggleLoop: () => {}, chromeChanged })
+  return { panel, element: panel.element as unknown as FakeElement, chromeChanged }
 }
 
 const idle = (names: readonly string[]): ReadonlyMap<string, ParamRowState> =>
@@ -54,6 +55,25 @@ describe('the panel collapses to a chip (S6 plan V10)', () => {
     expect(element.dataset.collapsed).toBeUndefined()
     element.dispatch('mouseleave')
     expect(element.dataset.collapsed).toBe('true')
+  })
+
+  it('I6: chromeChanged fires once per real collapsed/expanded change, never on a no-op hover', () => {
+    const { panel, element, chromeChanged } = newPanel()
+    panel.setBindings([binding({ name: 'a' }), binding({ name: 'b' })])
+    // setBindings collapses a fresh 2-row panel (false -> true): one real
+    // change, so updateCollapsed's own guard already called chromeChanged
+    // once here — expected, and not what the rest of this test is about.
+    expect(chromeChanged).toHaveBeenCalledTimes(1)
+    chromeChanged.mockClear()
+    element.dispatch('mouseenter')
+    expect(element.dataset.collapsed).toBeUndefined()
+    expect(chromeChanged).toHaveBeenCalledTimes(1)
+    // A second mouseenter (already expanded) is not a real change.
+    element.dispatch('mouseenter')
+    expect(chromeChanged).toHaveBeenCalledTimes(1)
+    element.dispatch('mouseleave')
+    expect(element.dataset.collapsed).toBe('true')
+    expect(chromeChanged).toHaveBeenCalledTimes(2)
   })
 
   it('focusing a control inside it expands it; focus leaving collapses it again', () => {

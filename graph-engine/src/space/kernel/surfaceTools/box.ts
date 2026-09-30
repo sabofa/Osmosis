@@ -226,3 +226,9 @@ export function verticalPlane(a: number, b: number, u: readonly [number, number]
 export function annotation(source: MarkSource, position: Vec3, text: string, fullText?: string): LabelAnchor {
   return { source, position, text, kind: 'annotation', ...(fullText !== undefined && fullText !== text ? { fullText } : {}) }
 }
+
+// S6 fix round 1, I3: a level curve's value label, not a reading — its own
+// kind, lower priority than a point label and droppable, unlike annotation.
+export function contourLabel(source: MarkSource, position: Vec3, text: string): LabelAnchor {
+  return { source, position, text, kind: 'contour' }
+}

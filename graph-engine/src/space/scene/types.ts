@@ -226,7 +226,12 @@ export interface BoxMark {
 
 export type Mark = MeshMark | LineMark | PointMark | ArrowMark | BoxMark
 
-export type LabelKind = 'point' | 'annotation'
+// S6 fix round 1, I3: 'contour' (a level curve's value label) used to share
+// 'annotation''s kind, which gave it a readout's priority and its "never
+// dropped" guarantee — wrong for a label that is decoration on a curve, not
+// a reading. It is now its own kind: lower priority than a point label, and
+// simply dropped, like one, when nothing fits.
+export type LabelKind = 'point' | 'annotation' | 'contour'
 
 // Text anchored at an author-space point, drawn by the DOM overlay.
 export interface LabelAnchor {
@@ -265,5 +270,13 @@ export interface SpaceScene {
   // geometry — points, segments (lines without a parameter), arrows and
   // labels — then extends z exactly, so it is never clipped.
   extent: Box3 | null
+  // S6 fix round 1 (I1): which axes a fully box-dependent statement (stage
+  // 'box' — a plane, an implicit or level surface, a line, a coordinate
+  // surface, a curve frame, a centroid, every S4b tool) occupies, so
+  // frame/bounds.ts's flatAxes never calls an axis flat when a statement
+  // still to be built will fill it. A `region:` (stage 'z') does not count:
+  // its own z is exactly what V1's flat rule is for. All false when nothing
+  // box-dependent draws.
+  boxSpanning: { x: boolean; y: boolean; z: boolean }
   errors: SceneError[]
 }

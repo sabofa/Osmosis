@@ -111,6 +111,20 @@ describe('layoutLabels', () => {
     expect(withChrome[0].visible).toBe(false)
   })
 
+  it('reads isExpanded, and sizes that readout from its full text instead of its capped display (S6 fix round 1, M2)', () => {
+    // isExpanded is only ever consulted for a label carrying a fullText (a
+    // readout or a contour value); its capped `text` is far shorter here,
+    // so the two runs' rendered box for the very same placement can only
+    // differ if layoutLabels actually read isExpanded and sized from it
+    // (labelPlacer.ts's placeLabels + this module's own final conversion
+    // both use `sizeText ?? text` — labelPlacer.test.ts pins that a
+    // neighbour placed after it moves out of the way of the larger box).
+    const readout = { ...annotationLabel([0, 0, 0], 'v', 1), fullText: 'v = 1.234567890123456' }
+    const capped = layoutLabels(EMPTY, [readout], cam(40), WORLD)
+    const expanded = layoutLabels(EMPTY, [readout], cam(40), WORLD, [], (key) => key === 'label:0:s1.readout')
+    expect(capped[0].x).not.toBeCloseTo(expanded[0].x, 6)
+  })
+
   it('keeps keys stable across camera positions, so the pool reuses spans', () => {
     const labels = [label([0.2, 0.1, 0.3], 'P', 3), label([0.5, 0.5, 0.5], 'Q', 4)]
     const a = layoutLabels(boxFrame(WORLD, cam(40), AXES), labels, cam(40), WORLD)

@@ -57,23 +57,46 @@ function inView(camera: CameraMatrices, s: { x: number; y: number; depth: number
   return s.x >= 0 && s.x <= width && s.y >= 0 && s.y <= height && s.depth >= -1 && s.depth <= 1
 }
 
-// The public LabelRole has no 'annotation': a readout is drawn exactly like
-// a point label (data role: 'label'), differing only in this module's
-// internal priority and candidate ring.
+// The public LabelRole has neither 'annotation' nor 'contour': a readout and
+// a contour value label both draw exactly like a point label (data role:
+// 'label'), differing only in this module's internal priority, candidate
+// ring, and (I3) droppability.
 function publicRole(role: PlacedRole): LabelRole {
-  return role === 'annotation' ? 'label' : role
+  return role === 'annotation' || role === 'contour' ? 'label' : role
+}
+
+// A box-edge point (I3): where the segment from the label's centre toward
+// the anchor first crosses the label's own rectangle, so a leader is drawn
+// from the label's edge, not through its own text. Degenerates to the
+// centre when the anchor is inside the box (should not happen at the
+// leader distances this fires at, but stays finite either way).
+function boxEdgeToward(center: ScreenPoint, size: { width: number; height: number }, anchor: ScreenPoint): ScreenPoint {
+  const dx = anchor.x - center.x
+  const dy = anchor.y - center.y
+  if (dx === 0 && dy === 0) return center
+  const halfW = size.width / 2
+  const halfH = size.height / 2
+  const scaleX = dx !== 0 ? halfW / Math.abs(dx) : Infinity
+  const scaleY = dy !== 0 ? halfH / Math.abs(dy) : Infinity
+  const scale = Math.min(scaleX, scaleY, 1)
+  return { x: center.x + dx * scale, y: center.y + dy * scale }
 }
 
 // `chromeRects` (S6 plan V10): the panel, colorbar and readout boxes'
 // screen-space rectangles, in the same CSS-px viewport frame as everything
 // else here — SpaceRenderer.ts measures them from the live DOM (this module
 // stays pure) and passes them through unchanged.
+// `isExpanded` (S6 fix round 1, M2): whether a label is currently showing
+// its full, clicked-open text (labelPool.ts LabelPool.isExpanded, through
+// SpaceRenderer.ts's overlay) — read only for a label carrying a
+// `fullText`, to size its placement from that instead of its capped text.
 export function layoutLabels(
   frame: FrameModel,
   sceneLabels: readonly LabelAnchor[],
   camera: CameraMatrices,
   world: WorldMap,
   chromeRects: readonly LabelBox[] = [],
+  isExpanded: (key: string) => boolean = () => false,
 ): LabelItem[] {
   const requests: LabelRequest[] = []
   const anchors = new Map<string, { x: number; y: number; visible: boolean }>()
@@ -98,14 +121,18 @@ export function layoutLabels(
     const anchor: ScreenPoint = { x: s.x, y: s.y }
     anchors.set(key, { ...anchor, visible: inView(camera, s) })
     if (l.fullText !== undefined) fullTexts.set(key, l.fullText)
-    const role: PlacedRole = l.kind === 'annotation' ? 'annotation' : 'label'
+    // I3: a contour value label keeps annotation's candidate ring (it is
+    // still text hung beside a point on a curve, at the same scale as a
+    // readout) but not its role — see PRIORITY and placeLabels' fallback.
+    const role: PlacedRole = l.kind === 'annotation' ? 'annotation' : l.kind === 'contour' ? 'contour' : 'label'
     requests.push({
       key,
       text: l.text,
       role,
       fontSize: LABEL_FONT_PX,
       anchor,
-      candidates: role === 'annotation' ? annotationCandidates(anchor) : pointCandidates(anchor),
+      candidates: role === 'annotation' || role === 'contour' ? annotationCandidates(anchor) : pointCandidates(anchor),
+      sizeText: l.fullText !== undefined && isExpanded(key) ? l.fullText : undefined,
     })
   })
 
@@ -122,8 +149,13 @@ export function layoutLabels(
     if (role === 'tick' || role === 'title') return { key: r.key, text: r.text, x: p.x, y: p.y, role, visible: p.visible, leader: null }
     // 'label' anchors at its bottom-left corner (labelPool.ts labelTransform);
     // the placer works in box-centre coordinates, so convert once here.
-    const size = estimateLabelSize(r.text, r.fontSize)
-    const leader: Leader | null = p.leader ? { x1: p.x, y1: p.y, x2: p.leader.x, y2: p.leader.y } : null
+    // M2: the same (possibly expanded) size the placement itself was sized
+    // from, so the geometry here matches what was actually reserved.
+    const size = estimateLabelSize(r.sizeText ?? r.text, r.fontSize)
+    // I3: from the label's own edge (nearest the anchor), not through its
+    // centre and its text.
+    const edge = p.leader ? boxEdgeToward({ x: p.x, y: p.y }, size, p.leader) : null
+    const leader: Leader | null = edge && p.leader ? { x1: edge.x, y1: edge.y, x2: p.leader.x, y2: p.leader.y } : null
     return { key: r.key, text: r.text, x: p.x - size.width / 2, y: p.y + size.height / 2, role, visible: p.visible, leader, fullText }
   })
 }

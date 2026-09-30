@@ -603,8 +603,11 @@ example label without "Space · ", lower-cased, non-alphanumerics to `-`.
 
 **Open, for S6 and after** (from the phase ledgers and the integration pass's
 headless shots of every example, light and dark). **S6 (2026-09-30) closed
-every item below** except where marked still open; see its plan,
-`docs/superpowers/plans/2026-09-27-space-s6-visual-polish.md`, for V1–V11:
+every item below**, then an Opus phase review of the whole diff found real
+bugs in several of the first pass's own fixes — **fix round 1 (2026-09-30)**
+corrected those (marked below); see the plan,
+`docs/superpowers/plans/2026-09-27-space-s6-visual-polish.md`, for V1–V11,
+and its fix-round-1 brief for I1–I7, C1 and M1–M6.
 
 - **Nothing is broken.** Every one of the 50 space examples draws, in light
   and dark (integration pass, 2026-09-27). What follows is ugly, not wrong.
@@ -617,21 +620,50 @@ every item below** except where marked still open; see its plan,
   **Fixed (V1):** a flat scene gets a thin z box (half-extent 0.15x the
   larger x/y span under `auto` aspect) with one z tick at the data's value;
   an authored `@bounds3d z` still wins.
+  **Corrected in fix round 1 (I1):** the first pass could flatten an axis a
+  statement not yet built still needed — an implicit surface, a plane, an
+  S4b tool — carving a sliver from geometry that is not flat (a sphere plus
+  two points at z = 0, say). The kernel now reports which axes a fully
+  box-dependent statement occupies (`boxSpanning`, kernel/index.ts) and
+  flatAxes leaves those alone; a centroid's own drop-line decoration is
+  exempted (`flatExempt`), since it adapts to whatever box there is rather
+  than needing it tall.
+  **Also fixed (M1):** the flat tick's single label used the step ladder's
+  own decimals (`0.00` for a value the ladder was never built to show); it
+  now uses the value's own digits, up to 4 significant. A lone region's tick
+  now sits at the box's floor, where the region actually shades, not the
+  box's arbitrary centre.
 - **Readouts collide** with tick labels and each other: the two gradient
   readouts run into the x ticks; the half-disc's centroid and area readouts
   overlap; level-curve labels crowd a saddle point. Readouts need the same
   collision layout as tick labels.
   **Fixed (V2):** one label placer (`ui/labelPlacer.ts`, pure) places every
-  tick, point, readout and contour label by priority (readouts, then point
-  labels, then contour labels, then tick labels); a label that fits nowhere
-  is dropped, except a readout, which always shows via a leader line up to
-  60 px. The corner tick-label duplicate is resolved here too.
+  tick, point, readout and contour label by priority; a label that fits
+  nowhere is dropped, except a readout.
+  **Corrected in fix round 1 (I3):** the first pass gave a contour's value
+  label the same priority and "never dropped" guarantee as a readout, so it
+  could permanently outrank and block a point label; its own fallback, when
+  every candidate within 60 px was blocked, reused `candidates[0]` — the
+  very spot that had just been rejected; and a readout placed 26–60 px out
+  (a normal fit, not the fallback) got no leader at all. Now: a contour
+  label is its own role, ranked under a point label and dropped like one,
+  never force-shown; an exhausted readout searches out to 120 px for the
+  least-overlapping spot instead of reusing a blocked one; any readout
+  landing more than 14 px from its anchor gets a leader, whichever way it
+  got there. (Also, M2: the placer sizes a currently-expanded readout — one
+  a click opened to its full digits — from that full text, not its capped
+  display, so expanding one in place cannot silently overlap a neighbour.)
 - **S5 readouts print many digits** (`∬ ≈ 25.1327412287`,
   `area ≈ 0.166666666667`): honest to the error estimate, heavy to read.
   **Fixed (V3):** `formatApprox` caps on-figure annotations at 6 significant
   digits (hover readouts stay at 4); the error still bounds the digits from
   above, so this is always a reduction, never a rounding-up. A pinned
   readout's box can be clicked to show the full supported digits on demand.
+  **Corrected in fix round 1 (C1):** a rebuild where the capped text stayed
+  the same but the full digits moved left an expanded box showing the OLD
+  value's digits (labelPool.ts's fullText-changed branch skipped its own
+  text write whenever the capped text hadn't changed); it now always writes
+  the current capped text there, so the toggle can never show stale digits.
 - **A translucent sphere under OIT is a flat tint.** "Lagrange in three
   variables" first showed a flat grey ball: that was a double draw (a
   hand-drawn sphere left from before S4a, coinciding with the tool's own
@@ -640,10 +672,18 @@ every item below** except where marked still open; see its plan,
   showing through; its shading is flat, since OIT averages its front and back
   faces. Not a bug; a look S6 may want to strengthen.
   **Fixed (V4):** back faces contribute at half weight in the OIT
-  accumulate and the back-face tint is reduced under OIT, so a translucent
-  sphere reads as its own colour; the OIT depth weight's z is normalised by
-  the box's own depth range (closing the S3 M10 parked item below), so
-  nearer layers dominate as intended.
+  accumulate, and the OIT depth weight's z is normalised by the box's own
+  depth range, so nearer layers dominate as intended.
+  **Corrected in fix round 1 (I2): the first pass's normalisation had no
+  actual effect.** It divided the raw eye-distance z by the box's own depth
+  span without first making z relative to the box's near edge; at this
+  renderer's scale the eye sits several box radii back, so that ratio never
+  dropped below about 1.5 for any fragment in the box — every one clamped
+  to the same floor weight regardless of depth, same as the literal-200 bug
+  it replaced. Now normalises the way depthCue() already does: zRel =
+  clamp((z − u_cueRange.x) / depthSpan, 0, 1), weight = a · max(floor, peak
+  · (1 − zRel)³ ) — a genuine near > mid > far ordering, checked through
+  markLook's real cueRange for both projections.
 - **A draggable point is easy to lose**: a small dot on a dark underside
   (Drag a point on a paraboloid, A tangent plane you can drag). Give
   draggable points a halo.
@@ -651,33 +691,75 @@ every item below** except where marked still open; see its plan,
   background-colour halo and a thin ink ring, and the cursor becomes
   `grab`/`grabbing` over it; hovered and pinned markers get the same halo,
   and every point gets a 1 px background-coloured outline so it reads on
-  any surface.
+  any surface. (M3: the halo band itself is 2 px, past the 1 px outline
+  every point already draws — the phase review's own comment fix, no
+  behaviour change.)
 - **A hole at a pole leaves sliver triangles** (Limits along two paths, at
   the origin).
   **Fixed (V8):** triangles near a removed (non-finite) vertex whose
   smallest parameter-space angle is below 3 degrees, or whose area is below
   1e-4 of a cell, are dropped after the hole is cut; the mesh stays manifold
   elsewhere ("A pole cut by the box", `z = 1/(x^2+y^2)`).
+  **Corrected in fix round 1 (I4):** the first pass paid the full check
+  (a median, a Set lookup and a trig call per candidate) on every mesh even
+  with no hole to filter (2.56 → 6.65 ms at 128²), and produced false drops
+  on a strongly anisotropic domain — a 20:1 aspect lost 128 well-shaped
+  cells, because angle and area were measured in raw (u, v) units, not the
+  grid's own index space. Now returns early with no hole edges at all;
+  computes its median from area alone (the full angle-and-area shape runs
+  only for candidates actually on the hole's boundary); and measures both
+  normalised by the mesh's own median (u, v) grid step, so a nice square
+  cell in index space is never called a sliver just because the domain's
+  own u and v spans differ.
 - **Riemann boxes' edges seen through translucent boxes make a busy lattice.**
   **Fixed (V6):** translucent Riemann box edges draw at 0.35 opacity and
   1 px and are excluded from the hidden pass, so the lattice quiets down;
   mesh lines generally mix toward the theme's ink (light) or background
-  (dark) at a strength tuned per theme.
+  (dark) at a strength tuned per theme. (No correction in fix round 1.)
 - **Dark theme:** the balance map's neutral centre nearly vanishes (S3,
   parked); grey operands (`project:`, `cross:`) are low-contrast; mesh lines
   mixed toward the light ink are loud.
   **Fixed (V7):** the balance map's neutral centre is theme-aware (Oklab
-  L ~= 0.62 in dark, 0.92 in light), keeping symmetry; operand and
-  construction grey uses a theme token with at least 3:1 contrast against
-  the background in both themes, checked numerically with the WCAG
-  relative-luminance formula.
+  L ~= 0.62 in dark, 0.92 in light), keeping symmetry.
+  **Corrected in fix round 1 (I5):** the operand/construction grey still
+  resolved to its own hard-coded hex pair (0x6b6b63 / 0xa8a89e) — a second,
+  undocumented grey alongside the host's own `--muted` token, exactly what
+  S6's "colours come from the theme" constraint rules out. It now resolves
+  to `palette.muted` directly (5.39:1 light, 6.17:1 dark against the
+  background — a healthier margin than the fixed hex it replaced).
+- **V10 chrome — three more bugs the phase review found (fix round 1, I6),
+  none flagged by the first pass:**
+  - A colorbar's tick labels sit outside `.space-colorbars`' own measured
+    box (SpaceView.css's `right: 18px` places them past
+    `.space-colorbar-body`, and an absolutely positioned child never grows
+    its parent's box), so the label placer's chrome obstacle under-reported
+    how far left the chrome actually reached. Fixed: the obstacle is now the
+    union of the container's rectangle and every one of its tick labels'.
+  - Hovering the parameter panel open or closed happens entirely inside its
+    own DOM listeners, with no way for the renderer to know its rectangle
+    just moved — so the cached chrome rectangle (S6's own carried item b)
+    went stale and no frame was requested to re-lay labels out against it.
+    Fixed: a `chromeChanged` callback drops the cache and asks for a frame,
+    and `updateColorbars()`/`setBindings()` drop it too, so a moving
+    colormap domain or a renamed parameter also re-measures.
+  - The hover probe's own readout box counted as a chrome obstacle, so a
+    tick label could blink in and out as the box passed over it while
+    hovering. Fixed: only a *pinned* readout is an obstacle now.
 - **Parked in the phase ledgers:**
-  - OIT depth-weight normalisation (S3 M10) — **fixed**, see V4 above.
+  - OIT depth-weight normalisation (S3 M10) — **fixed for real in fix round
+    1**; see V4 above (the original "fixed" claim did not hold).
   - corner labels (S3) — **fixed**: V2's placer resolves the corner
     duplicate as part of tick-label thinning.
   - implicit surfaces cost ~0.5 s per setValue at res 64 (S4a) — **fixed
     (V11):** held at res/2 while dragging or playing (~11.5 ms vs.
     59–66 ms at full res), with one full-res rebuild forced on release.
+    **Extended in fix round 1 (I7):** a 3-variable `contour:` (a level
+    surface) marches the same way but had not been given this treatment;
+    it now has. Scrubbing a parameter slider — not only a play or a
+    point-drag — now counts as held too (from the first `input` event to
+    the matching `change`), so a box-dependent statement bound to a slider
+    meshes coarser while the reader is still moving it, not at full cost on
+    every `input` tick.
   - parametric setValue is 10.8–14.5 ms against an 8 ms budget (S1) —
     **fixed (V11):** 7.1–7.8 ms at 128x128 on the review machine, by sharing
     subexpressions across r, r_u and r_v through the existing register
@@ -687,8 +769,27 @@ every item below** except where marked still open; see its plan,
     neither is a look-and-feel item, so S6 did not touch either.
   - **Still open, and out of scope by the S6 plan:** curves of critical
     points, e.g. the ring (x²+y²−1)², want a "critical curves" feature (S4b
-    M4); no committed test of GraphViewer's remount orchestration (S2, needs
-    a jsdom layer).
+    M4) — seeding from the mesh decides which critical points are found, so
+    this is correctness, not look; no committed test of GraphViewer's
+    remount orchestration (S2, needs a jsdom layer).
+- **Two more from fix round 1, not carried from S6's own ledgers:**
+  - **M4:** `resetView()`'s ease (double-click, the `0` key) used to leave
+    `getView()` reporting the transient, still-interpolating view — a host
+    reading it a moment after triggering a reset would see a value already
+    stale. `getView()` now reports where the ease is headed immediately;
+    the renderer's own draw() still animates from the true, interpolating
+    view every frame regardless. If the box moves mid-ease (a value change
+    shifts the resolved box while the camera itself was not re-authored),
+    the ease now re-targets to the new box's centre instead of easing to a
+    point the box has already left.
+  - **M6:** the readout box's drop shadow (removed for a pinned one, still
+    present for the hover probe's — an inconsistency, and itself against
+    the plan's "no gradients or drop shadows on chrome beyond a hairline
+    border") is gone from both. `--space-line` (the chrome's hairline
+    border token) now reads the palette's `grid`, which
+    render/palette.ts's TOKEN_FOR maps to the host's own `--line` token —
+    not `gridStrong` (`--line-strong`, a stronger role meant for the
+    graph's own axis-adjacent grid).
 
 **What remains for track 5, specific to space** (track 5 is customization and
 UI — theming, textures, line treatments, legends — see the graph spec's

@@ -55,6 +55,14 @@ export class LabelPool {
     return this.spans.size
   }
 
+  // S6 fix round 1, M2: whether this label is currently showing its full,
+  // clicked-open text — layoutLabels() (ui/layout.ts) reads this so the
+  // placer can reserve the room the expanded text needs, not just the
+  // capped display text's.
+  isExpanded(key: string): boolean {
+    return this.spans.get(key)?.expanded ?? false
+  }
+
   sync(items: readonly LabelItem[]): void {
     const seen = new Set<string>()
     const leaderKeys = new Set<string>()
@@ -70,9 +78,16 @@ export class LabelPool {
       }
       // A new fullText value (a rebuild) resets the toggle: stale expanded
       // digits from a value that no longer holds are never left showing.
+      // C1: the capped text can be unchanged while only fullText moves (a
+      // value that still rounds the same way), so the text branch below
+      // would see entry.text === item.text and skip its own write — the
+      // span would keep showing the old expansion. Write the capped text
+      // here, unconditionally, whenever fullText changes.
       if (entry.fullText !== item.fullText) {
         entry.fullText = item.fullText
         entry.expanded = false
+        entry.text = item.text
+        entry.span.textContent = item.text
         if (item.fullText !== undefined && !entry.onClick) {
           const e = entry
           e.onClick = () => {

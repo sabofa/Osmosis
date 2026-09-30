@@ -82,15 +82,34 @@ export function reversedWinding(indices: Uint32Array): Uint32Array {
   return out
 }
 
+// I4 (S6 fix round 1): a domain sampled at very different u and v scales
+// (a 20:1 aspect, say) makes every regular grid cell look like a thin sliver
+// in raw (u, v) units even though it is a nice square in grid-index space.
+// su, sv (1 / the mesh's own median u and v step) undo that before angle or
+// area is measured, so only a triangle that is actually irregular in the
+// grid's own index space is called a sliver. Default 1 so a caller that
+// never computes them (no hole to filter, or an un-parameterized mesh) gets
+// plain (u, v) units, unchanged from before I4.
+function uvArea(uv: Float64Array, a: number, b: number, c: number, su = 1, sv = 1): number {
+  const ax = uv[2 * a] * su
+  const ay = uv[2 * a + 1] * sv
+  const bx = uv[2 * b] * su
+  const by = uv[2 * b + 1] * sv
+  const cx = uv[2 * c] * su
+  const cy = uv[2 * c + 1] * sv
+  return Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2
+}
+
 // V8: the smallest angle (degrees) and the area of triangle (a, b, c) in
-// (u, v) space, from their uv coordinates.
-function uvShape(uv: Float64Array, a: number, b: number, c: number): { minAngleDeg: number; area: number } {
-  const ax = uv[2 * a]
-  const ay = uv[2 * a + 1]
-  const bx = uv[2 * b]
-  const by = uv[2 * b + 1]
-  const cx = uv[2 * c]
-  const cy = uv[2 * c + 1]
+// (u, v) space, from their uv coordinates (I4: su, sv normalise the grid's
+// own median spacing first — see uvArea).
+function uvShape(uv: Float64Array, a: number, b: number, c: number, su = 1, sv = 1): { minAngleDeg: number; area: number } {
+  const ax = uv[2 * a] * su
+  const ay = uv[2 * a + 1] * sv
+  const bx = uv[2 * b] * su
+  const by = uv[2 * b + 1] * sv
+  const cx = uv[2 * c] * su
+  const cy = uv[2 * c + 1] * sv
   const angleAt = (ux: number, uy: number, vx: number, vy: number) => {
     const dot = ux * vx + uy * vy
     const cross = ux * vy - uy * vx
@@ -168,21 +187,48 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
     candidates[cn++] = c
   }
 
-  // Pass 2 (V8): drop a candidate sitting on the hole's boundary when it is
-  // a parameter-space sliver. "A cell's" area is the mesh's own median
-  // triangle area there — self-contained, so finishMesh needs no grid
-  // resolution passed in — computed from the candidates once, before this
-  // pass can remove any of them. Skipped entirely when uv is not a real
-  // parameterization (parameterized = false): the mesh still keeps every
-  // hole-cut candidate as before.
-  let areaFloor = 0
-  if (parameterized) {
-    const areas = new Float64Array(cn / 3)
-    for (let i = 0, t = 0; t < cn; i++, t += 3) areas[i] = uvShape(uv, candidates[t], candidates[t + 1], candidates[t + 2]).area
-    const sorted = areas.slice().sort()
-    const medianArea = sorted.length > 0 ? sorted[sorted.length >> 1] : 0
-    areaFloor = SLIVER_MAX_AREA_REL * medianArea
+  // Pass 2 (V8; S6 fix round 1 I4). Drop a candidate sitting on the hole's
+  // boundary when it is a parameter-space sliver. I4's cost fix: a mesh with
+  // no hole at all (the overwhelming common case) has nothing for this pass
+  // to do, so it returns the candidates unchanged rather than paying for a
+  // median, a per-triangle Set lookup and a trig call on every one of them.
+  // Skipped the same way when uv is not a real parameterization
+  // (parameterized = false): the mesh keeps every hole-cut candidate as is.
+  if (!parameterized || holeEdges.size === 0) {
+    const indices = cn === candidates.length ? candidates : candidates.slice(0, cn)
+    return compact(positions, normals, uv, indices, n)
   }
+
+  // I4: the mesh's own median (u, v) grid step, so a triangle that is a
+  // nice square in grid-index space is not called a sliver just because the
+  // domain's own u and v spans differ a lot (a 20:1 aspect, say) — un-
+  // normalised, its shape only looks that way in raw (u, v) units. Only
+  // candidates that survived pass 1 count, and only nonzero steps (a
+  // pole collapses one to zero).
+  const steps = (axis: 0 | 1): number => {
+    const values: number[] = []
+    for (let t = 0; t < cn; t += 3) {
+      const [a, b, c] = [candidates[t], candidates[t + 1], candidates[t + 2]]
+      for (const [p, q] of [[a, b], [b, c], [c, a]] as const) {
+        const d = Math.abs(uv[2 * p + axis] - uv[2 * q + axis])
+        if (d > 0) values.push(d)
+      }
+    }
+    if (values.length === 0) return 1
+    values.sort((x, y) => x - y)
+    return values[values.length >> 1]
+  }
+  const su = 1 / steps(0)
+  const sv = 1 / steps(1)
+
+  // I4: the median from area alone — uvArea, not the full uvShape (whose
+  // angle needs atan2 per edge) — for every candidate; uvShape itself, with
+  // its trig, runs only below, for the ones actually on the hole's boundary.
+  const areas = new Float64Array(cn / 3)
+  for (let i = 0, t = 0; t < cn; i++, t += 3) areas[i] = uvArea(uv, candidates[t], candidates[t + 1], candidates[t + 2], su, sv)
+  const sorted = areas.slice().sort()
+  const medianArea = sorted.length > 0 ? sorted[sorted.length >> 1] : 0
+  const areaFloor = SLIVER_MAX_AREA_REL * medianArea
 
   const kept = new Uint32Array(cn)
   let k = 0
@@ -190,19 +236,23 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
     const a = candidates[t]
     const b = candidates[t + 1]
     const c = candidates[t + 2]
-    if (parameterized) {
-      const onHole = holeEdges.has(edgeKey(a, b)) || holeEdges.has(edgeKey(b, c)) || holeEdges.has(edgeKey(c, a))
-      if (onHole) {
-        const shape = uvShape(uv, a, b, c)
-        if (shape.minAngleDeg < SLIVER_MIN_ANGLE_DEG || shape.area < areaFloor) continue
-      }
+    const onHole = holeEdges.has(edgeKey(a, b)) || holeEdges.has(edgeKey(b, c)) || holeEdges.has(edgeKey(c, a))
+    if (onHole) {
+      const shape = uvShape(uv, a, b, c, su, sv)
+      if (shape.minAngleDeg < SLIVER_MIN_ANGLE_DEG || shape.area < areaFloor) continue
     }
     kept[k++] = a
     kept[k++] = b
     kept[k++] = c
   }
   const indices = k === kept.length ? kept : kept.slice(0, k)
+  return compact(positions, normals, uv, indices, n)
+}
 
+// The tail shared by every path through finishMesh, whatever pass 2 did (or
+// skipped, I4): fill in a missing normal at a surviving vertex, then compact
+// away any vertex no kept triangle uses.
+function compact(positions: Float64Array, normals: Float64Array, uv: Float64Array, indices: Uint32Array, n: number): FinishedMesh {
   const used = new Uint8Array(n)
   for (let i = 0; i < indices.length; i++) used[indices[i]] = 1
   const needy: number[] = []

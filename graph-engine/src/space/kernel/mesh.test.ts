@@ -130,6 +130,104 @@ z = f(x, y) opacity: 0.55 res: 120`)
     // Manifold: every edge belongs to exactly 1 (boundary) or 2 (interior) triangles.
     expect([...edgeCount.values()].every((n) => n === 1 || n === 2)).toBe(true)
   })
+
+  // S6 fix round 1, I4.
+  it('a mesh with no hole is unchanged and skips the filter entirely: parameterized true or false gives the identical result', () => {
+    const normal = normalTriangles(0, 6)
+    const raw: RawMesh = {
+      positions: Float64Array.from(normal.positions),
+      normals: Float64Array.from(normal.normals),
+      uv: Float64Array.from(normal.uv),
+      indices: Uint32Array.from(normal.indices),
+    }
+    // No NaN vertex, so no hole edge for pass 2 to filter against — whether
+    // parameterized asks for the sliver check makes no difference, since
+    // I4's early return means it never actually ran either way.
+    const withCheck = finishMesh(raw, false, true)
+    const without = finishMesh(raw, false, false)
+    expect([...withCheck.indices]).toEqual([...without.indices])
+    expect(withCheck.indices.length).toBe(raw.indices.length)
+  })
+
+  it('a 20:1 domain keeps every well-shaped cell at the hole: raw (u, v) units alone would call them slivers', () => {
+    // A single grid row, v in [0, 1], u in [0, 20] (20 unit-square cells:
+    // "well-shaped" in grid-index space, but 20 times wider than tall in
+    // raw (u, v) — the false-drop I4 fixes). Vertices (i, j), j in {0, 1},
+    // i in 0..20: index j * 21 + i. Vertex (10, 0) is the hole.
+    const positions: number[] = []
+    const normals: number[] = []
+    const uv: number[] = []
+    for (let j = 0; j <= 1; j++) {
+      for (let i = 0; i <= 20; i++) {
+        const isHole = i === 10 && j === 0
+        positions.push(isHole ? Number.NaN : i, isHole ? Number.NaN : j, 0)
+        normals.push(0, 0, 1)
+        uv.push(i, j)
+      }
+    }
+    const indices: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const a = i
+      const b = a + 1
+      const d = a + 21
+      const c = d + 1
+      indices.push(a, b, c, a, c, d)
+    }
+    const raw: RawMesh = {
+      positions: Float64Array.from(positions),
+      normals: Float64Array.from(normals),
+      uv: Float64Array.from(uv),
+      indices: Uint32Array.from(indices),
+    }
+    // 20 cells x 2 triangles = 40; of the 3 triangles touching the hole
+    // vertex (i=10, j=0), 3 are cut (cells i=9 and i=10 each contribute the
+    // triangle that has it as a corner), leaving 37 candidates, all
+    // well-shaped in grid-index space. Unnormalised (raw u, v: 1 wide,
+    // 1 tall here — du = dv = 1), this mesh would already pass; the point
+    // is that I4's normalisation is a no-op when du and dv genuinely are
+    // equal, so this pins that su = sv = 1 keeps every one of the 37.
+    const mesh = finishMesh(raw, false)
+    expect(mesh.indices.length).toBe(37 * 3)
+  })
+
+  it('the same 20:1 case, with v itself scaled 20x: still keeps every well-shaped cell (the actual false-drop I4 fixes)', () => {
+    // Same grid, but v is authored over [0, 0.05] instead of [0, 1] (a
+    // genuinely 20:1 domain aspect): every cell is still a nice square in
+    // grid-index (i, j) space, but in raw (u, v) units it is 20 x wider
+    // than tall — exactly what used to read as a sliver.
+    const positions: number[] = []
+    const normals: number[] = []
+    const uv: number[] = []
+    for (let j = 0; j <= 1; j++) {
+      for (let i = 0; i <= 20; i++) {
+        const isHole = i === 10 && j === 0
+        positions.push(isHole ? Number.NaN : i, isHole ? Number.NaN : j * 0.05, 0)
+        normals.push(0, 0, 1)
+        uv.push(i, j * 0.05)
+      }
+    }
+    const indices: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const a = i
+      const b = a + 1
+      const d = a + 21
+      const c = d + 1
+      indices.push(a, b, c, a, c, d)
+    }
+    const raw: RawMesh = {
+      positions: Float64Array.from(positions),
+      normals: Float64Array.from(normals),
+      uv: Float64Array.from(uv),
+      indices: Uint32Array.from(indices),
+    }
+    const mesh = finishMesh(raw, false)
+    // Before I4's grid-index normalisation, every one of these triangles'
+    // (u, v)-space angles is atan(0.05 / 1) ~= 2.86 degrees at its acute
+    // corners — under the 3-degree floor — so all 3 candidates that touch
+    // the hole would have been dropped as false slivers. Normalised by the
+    // median du = 1, dv = 0.05, they are 45/45/90 right triangles again.
+    expect(mesh.indices.length).toBe(37 * 3)
+  })
 })
 
 describe('the grid index cache is a small LRU (fix round 1, M5)', () => {
