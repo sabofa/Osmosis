@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { randomFor } from '../random'
 import { pointOn, polylineChain, type Chain } from '../path'
-import { FILL_TYPES, type FillSettings, type FillType } from '../tokens'
+import { FILL_TYPES, type FillSettings, type FillType, type Point } from '../tokens'
 import { FILLS } from './index'
 import { insideRegion, MARK_BUDGET, regionPolygons } from './region'
 import type { FillMark } from './types'
