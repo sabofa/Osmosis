@@ -221,6 +221,10 @@ export class SpaceRenderer {
   private hoverObject: string | null = null
   private pins: PinsState = NO_PINS
   private overlayKey = ''
+  // S6 carried item (b): the panel's and the colorbars' rectangles, cached
+  // until chromeSignature() changes — see chromeRects().
+  private chromeSignature = ''
+  private chromeCache: LabelBox[] = []
   // The config the current scene was set with (a value change rebuilds with it).
   private config: SpaceRenderConfig = { space: defaultSpaceConfig() }
   // Binding values waiting for the next frame, the last per name; `source`
@@ -741,16 +745,43 @@ export class SpaceRenderer {
   // the layer boundary between this impure class and layout.ts's pure math.
   // A hidden or empty element (display: none, or no readout boxes yet)
   // measures zero-sized and drops out on its own; no special-casing needed.
+  //
+  // S6 carried item (b): getBoundingClientRect() forces a synchronous
+  // layout, so reading it on every draw() is worth avoiding where it is
+  // safe to. The panel and the colorbars are genuinely static between
+  // draws except on a resize, the panel's own collapse/expand, or a row or
+  // colorbar count change (a new scene, a spec edit, or a theme swap) — none
+  // of which depend on the camera or the pointer — so their rectangles are
+  // cached against a cheap signature of exactly those inputs.
+  //
+  // The readout boxes are deliberately excluded from that cache: sync()
+  // gives the probe's box and every pin's box a fresh CSS transform on
+  // almost every draw — the camera orbiting, easing or coasting on inertia,
+  // a played parameter, or a drag all move a pin's projected anchor, and a
+  // plain mouse hover moves the probe's — with no change to how many boxes
+  // there are. Caching them on an "added or removed" signature alone would
+  // serve a stale rectangle for a box that has visibly moved, which is
+  // exactly the collision V10 built this placer to prevent. So the readout
+  // rectangles stay live, measured fresh every call.
+  private chromeSignatureOf(): string {
+    const collapsed = this.params.element.dataset.collapsed === 'true'
+    return `${this.viewport.width}x${this.viewport.height}|${collapsed}|${this.params.size}|${this.colorbars.count}`
+  }
+
   private chromeRects(): LabelBox[] {
     const origin = this.overlay.element.getBoundingClientRect()
-    const elements = [this.params.element, this.colorbars.element, ...this.readouts.elements()]
-    const rects: LabelBox[] = []
-    for (const el of elements) {
+    const rectOf = (el: { getBoundingClientRect(): { left: number; top: number; width: number; height: number } }): LabelBox | null => {
       const r = el.getBoundingClientRect()
-      if (r.width <= 0 || r.height <= 0) continue
-      rects.push({ x: r.left - origin.left + r.width / 2, y: r.top - origin.top + r.height / 2, width: r.width, height: r.height })
+      if (r.width <= 0 || r.height <= 0) return null
+      return { x: r.left - origin.left + r.width / 2, y: r.top - origin.top + r.height / 2, width: r.width, height: r.height }
     }
-    return rects
+    const signature = this.chromeSignatureOf()
+    if (signature !== this.chromeSignature) {
+      this.chromeSignature = signature
+      this.chromeCache = [this.params.element, this.colorbars.element].map(rectOf).filter((r): r is LabelBox => r !== null)
+    }
+    const readoutRects = this.readouts.elements().map(rectOf).filter((r): r is LabelBox => r !== null)
+    return [...this.chromeCache, ...readoutRects]
   }
 
   private redrawNow(): void {

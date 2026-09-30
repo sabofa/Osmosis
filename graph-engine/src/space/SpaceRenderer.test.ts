@@ -1013,3 +1013,120 @@ P = (a, b, a^2 + b^2)`
   })
 })
 
+// S6 carried item (b): chromeRects() used to call getBoundingClientRect()
+// on the panel, the colorbars and every readout box on every draw. The
+// panel and the colorbars only move on a resize, the panel's own
+// collapse/expand, or a row/colorbar count change, so their rectangles are
+// now cached against a signature of exactly those; the readout boxes are
+// excluded from that cache because they are repositioned on nearly every
+// draw (the camera, a play, a drag, or a plain hover), with no change in
+// how many there are, so a count-only cache would serve a stale rectangle
+// for a box that has visibly moved.
+describe('SpaceRenderer: chromeRects caches the panel and colorbars, never the readouts', () => {
+  const TWO_PARAMS = `@param a = 1 range [0.5, 2]
+@param b = 1 range [0.5, 2]
+z = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]
+P = (a, 0, 0)`
+
+  function live(spec = TWO_PARAMS) {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const panel = overlay.children.find((c) => c.className === 'space-params')!
+    const bars = overlay.children.find((c) => c.className === 'space-colorbars')!
+    // A fixed non-zero rect, so rectOf() keeps it (a zero-sized one drops
+    // out on its own and would hide a caching bug behind that early exit).
+    // Spied before the first load, so the initial computation is counted too.
+    const spyRect = (el: FakeElement, width: number, height: number) => {
+      const spy = vi.fn(() => ({ left: 10, top: 10, width, height, right: 10 + width, bottom: 10 + height }))
+      el.getBoundingClientRect = spy
+      return spy
+    }
+    const panelSpy = spyRect(panel, 200, 40)
+    const barsSpy = spyRect(bars, 12, 160)
+    const load = (text: string) => {
+      const parsed = parseSpec(text)
+      r.setSpec(parsed.statements, parsed.config, parsed.statementLines, text)
+      clock.flush()
+    }
+    load(spec)
+    const readouts = () => overlay.children.filter((c) => c.className === 'space-readout')
+    const pointer = (type: string, x: number, y: number, buttons: number) =>
+      canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
+    return { fake, canvas, clock, r, overlay, panel, bars, readouts, panelSpy, barsSpy, pointer, load }
+  }
+
+  it('reuses the panel and colorbar rectangles across frames where only the camera or a readout changes', () => {
+    const { clock, r, panelSpy, barsSpy, pointer } = live()
+    // The initial draw (inside load()) computed both once.
+    expect(panelSpy).toHaveBeenCalledTimes(1)
+    expect(barsSpy).toHaveBeenCalledTimes(1)
+
+    // A hover brings up a readout and moves it across two frames; a camera
+    // change follows. None of that touches the panel or the colorbars.
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    pointer('pointermove', 420, 310, 0)
+    clock.flush()
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 5 })
+    clock.flush()
+
+    expect(panelSpy).toHaveBeenCalledTimes(1)
+    expect(barsSpy).toHaveBeenCalledTimes(1)
+    r.dispose()
+  })
+
+  it('never caches a readout box: its rectangle is measured fresh on every draw that shows it', () => {
+    const { clock, r, readouts, pointer } = live()
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    const [box] = readouts()
+    expect(box).toBeDefined()
+    const boxSpy = vi.fn(() => ({ left: 0, top: 0, width: 80, height: 24, right: 80, bottom: 24 }))
+    box.getBoundingClientRect = boxSpy
+    pointer('pointermove', 420, 310, 0)
+    clock.flush()
+    pointer('pointermove', 440, 320, 0)
+    clock.flush()
+    expect(boxSpy.mock.calls.length).toBe(2)
+    r.dispose()
+  })
+
+  it('recomputes on a resize', () => {
+    const { canvas, clock, r, panelSpy, barsSpy } = live()
+    const before = panelSpy.mock.calls.length
+    canvas.clientHeight = 700
+    clock.resize()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    expect(barsSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+
+  it('recomputes when the panel expands or collapses', () => {
+    const { r, panel, panelSpy } = live()
+    // Two rows and no interaction yet: the panel starts collapsed to a chip.
+    expect(panel.dataset.collapsed).toBe('true')
+    const before = panelSpy.mock.calls.length
+    panel.dispatch('mouseenter')
+    expect(panel.dataset.collapsed).toBeUndefined()
+    r['draw']()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    const afterExpand = panelSpy.mock.calls.length
+    panel.dispatch('mouseleave')
+    expect(panel.dataset.collapsed).toBe('true')
+    r['draw']()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(afterExpand)
+    r.dispose()
+  })
+
+  it('recomputes when the bindings change the row count', () => {
+    const { r, panelSpy, load } = live()
+    const before = panelSpy.mock.calls.length
+    load('@param a = 1 range [0.5, 2]\nz = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]')
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+})
+
