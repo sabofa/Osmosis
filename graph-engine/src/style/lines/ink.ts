@@ -26,6 +26,8 @@ import type { LineType, Primitive, StrokeInput } from './types'
 //     did not.
 
 const WAVELENGTH = 70
+// How far each ragged edge strays at grain 1, as a fraction of the half-width.
+const RAGGED = 0.45
 
 function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
   const stepSize = step ?? sampleStep(width)
@@ -54,8 +56,8 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     const noiseLeft = smoothNoise(random, knots, closed)
     const noiseRight = smoothNoise(random, knots, closed)
     const at = (i: number) => (n === 1 ? 0 : i / (n - 1))
-    const left = half.map((h, i) => h * (1 + 0.3 * settings.grain * noiseLeft(at(i))))
-    const right = half.map((h, i) => h * (1 + 0.3 * settings.grain * noiseRight(at(i))))
+    const left = half.map((h, i) => h * (1 + RAGGED * settings.grain * noiseLeft(at(i))))
+    const right = half.map((h, i) => h * (1 + RAGGED * settings.grain * noiseRight(at(i))))
 
     if (!loop && n >= 12 && random.next() < 0.25 + 0.6 * settings.grain) {
       dryFrom = drawDryBrush(out, spine, half, left, right, width, settings, random)
@@ -115,7 +117,7 @@ function drawDryBrush(
   random: Random
 ): number {
   const n = spine.length
-  const splitIndex = Math.round(random.range(0.6, 0.85) * (n - 1))
+  const splitIndex = Math.round(random.range(0.5, 0.8) * (n - 1))
   const mainEnd = Math.min(n - 1, splitIndex + 3)
   out.push({
     kind: 'shape',

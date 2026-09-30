@@ -31,12 +31,13 @@ export const PRESETS: Record<PresetName, Look> = {
 
   // A fountain pen on good paper. Blue-black ink; two passes available, of
   // which the ink line uses the second only now and then (its "occasional
-  // doubling"). Hatching at a pen's spacing. Grain 0.55 (raised from the
+  // doubling"). Hatching at a pen's spacing. Grain 0.6 (raised from the
   // first pass's 0.1, Ben's "rough ink brush" note): ragged edges and a dry,
-  // splitting tail, not just a soft bled edge.
+  // splitting tail, not just a soft bled edge. Width 1.4 after the first
+  // look: at width 1 the brush texture was too fine to see.
   ink: {
-    line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 2, width: 1, variation: 0.4, taper: 0.3, grain: 0.55, opacity: 1 },
-    fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65, roughness: 0.35 },
+    line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 2, width: 1.4, variation: 0.4, taper: 0.3, grain: 0.6, opacity: 1 },
+    fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65, roughness: 0.45 },
     paper: { type: 'paper', tint: '#fbf8f0', texture: 0.45, grid: 24 },
     lettering: { face: 'math', size: 1.05, tilt: 0 },
     colour: { ink: '#1f2a44', saturation: 0.9 },
@@ -48,7 +49,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // near-black graphite muted to grey.
   pencil: {
     line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
-    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.45 },
+    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.5 },
     paper: { type: 'rough-paper', tint: '#f6f3ec', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
     colour: { ink: '#232327', saturation: 0.4 },

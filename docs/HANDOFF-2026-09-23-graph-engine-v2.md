@@ -1135,7 +1135,8 @@ texture, and fills generally needed to be a little less perfect. So:
   always reaches the true end, so the faithfulness rule holds even as the
   brush runs dry (`lines/ink.ts`). The `bleed` texture also knocks a few
   pinholes out of the line, rising with strength (`textures.ts`). Ink's
-  preset grain rose from 0.1 to 0.55.
+  preset grain rose from 0.1 to 0.6 and its width to 1.4 (at width 1 the
+  texture was too fine to see); ink and pencil fill roughness are 0.45 and 0.5.
 - The contact sheet's new **"Imperfection"** section shows hatch,
   crosshatch, scribble, stipple and flat at roughness 0/0.5/1, and the ink
   line at grain 0/0.5/1.
