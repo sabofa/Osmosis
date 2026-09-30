@@ -889,11 +889,17 @@ is still open:
   inequality-form regions' readouts (Richardson extrapolation was tried
   there and failed S5's own honesty gate, so those regions still print
   fewer digits than a rectangular one would); a per-statement quadrature
-  budget (today's `QUAD_BUDGET` is one number shared by every integral in
-  the scene, so one expensive statement can starve another's share of
-  patience); the exotic residuals S5's own ledger flagged (a short list of
-  unusual integrands whose error estimate behaved oddly enough to note, but
-  not badly enough to block S5 — never chased down further).
+  budget (today each integral gets its own `QUAD_BUDGET` of 6M evaluations
+  — `quadrature.ts` falls back to `quadBudget()` and no caller passes one —
+  so nothing caps a whole statement or scene: a centroid runs 4–5 integrals,
+  about 15M evaluations for the cone); the exotic residuals S5's ledger
+  flagged (a hand-built narrow spike, bumps narrower than 1e-3 of the range,
+  ∭(xy)^(−2/3) and 3D 1/√|z| refused on budget, the ring |r−1| ≤ 0.01
+  message, |x−0.01|^−0.9 located at x = 0).
+- **A held build over the triangle budget names the halved res** ("res 80
+  would make …" while dragging a `res: 160` implicit or level surface;
+  `implicit.ts`, `levelSurfaces.ts`, `levelSurface.ts`). The message should
+  name the authored res. Minor, from the gate re-review.
 
 **What remains for track 5, specific to space** (track 5 is customization and
 UI — theming, textures, line treatments, legends — see the graph spec's
