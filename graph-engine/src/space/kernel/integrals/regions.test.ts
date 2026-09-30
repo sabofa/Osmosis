@@ -289,30 +289,25 @@ describe('thin regions are summed on a finer grid, or refused (fix round 3)', ()
 // res 40/48 catches only a fragment of it — fittedBox trusted that fragment
 // as the whole region, silently dropping the rest.
 describe('a thin region the coarse mesh only fragments is never a wrong area (fix round 4, C3)', () => {
-  it('a slanted strip 0.04 wide (hand value 0.16), at res 40, res 48 and the default: each prints right digits or refuses — never 0.0253, 0.022 or 0.2', () => {
+  // S5 fix round 5: this build's fit is deterministic (an offset-grid
+  // re-fit, not a probe that could go either way), so each case pins
+  // exactly what it does — never "either a value or a refusal".
+  it('a slanted strip 0.04 wide (hand value 0.16), at res 40, res 48 and the default: each refuses honestly — never 0.0253, 0.022 or 0.2', () => {
     for (const spec of [
       'region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2 res: 40',
       'region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2 res: 48',
       'region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2',
     ]) {
-      const scene = sceneOf(spec)
-      if (scene.errors.length) {
-        expect(scene.errors[0].message).toMatch(/^the region is thinner than the grid at res 400/)
-      } else {
-        const text = readout(scene, 1).text
-        expect(Math.abs(approx(text, 'area') - 0.16)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
-      }
+      expect(sceneOf(spec).errors).toEqual([
+        { line: 1, message: 'the region is thinner than the grid at res 400 (about 0.03795 across) — raise res:, or write it as ranges' },
+      ])
     }
   })
 
-  it('a slanted strip 0.02 wide (hand value 0.08) at res 48: right digits or refuses — never 0.00967', () => {
-    const scene = sceneOf('region: abs(y - 0.3*x) <= 0.01 and abs(x) <= 2 res: 48')
-    if (scene.errors.length) {
-      expect(scene.errors[0].message).toMatch(/^the region is thinner than the grid at res 400/)
-    } else {
-      const text = readout(scene, 1).text
-      expect(Math.abs(approx(text, 'area') - 0.08)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
-    }
+  it('a slanted strip 0.02 wide (hand value 0.08) at res 48 refuses honestly — never 0.00967 (the C3 pin)', () => {
+    expect(sceneOf('region: abs(y - 0.3*x) <= 0.01 and abs(x) <= 2 res: 48').errors).toEqual([
+      { line: 1, message: 'the region is thinner than the grid at res 400 (about 0.01907 across) — raise res:, or write it as ranges' },
+    ])
   })
 
   it('a small round region is unaffected: the disc of radius 0.05 still fits and values, not refused', () => {
@@ -323,22 +318,51 @@ describe('a thin region the coarse mesh only fragments is never a wrong area (fi
   })
 })
 
+// S5 fix round 5: the round-4 stability test (fittedBox trusted only when
+// doubling the resolution found much the same extent) compared nested
+// grids — a 2n grid contains every vertex of the n grid, so a fragment
+// found at n was found again at 2n, and looked stable. These three cases
+// (found by the round-4 re-review) are thin only on one axis (abs(x) <= 2,
+// with y bounded only by the default box) and at a resolution where that
+// nesting coincidence bit: each printed a wrong, truncated area. The fit is
+// now redone from scratch on a grid offset by half a cell, and doubled
+// (with its own fresh offset re-fit each time) until its area agrees with
+// the un-offset fit's — a fragment is crossed differently by an offset
+// grid, so the coincidence cannot repeat.
+describe('offset-grid re-fitting replaces the nested stability check (fix round 5)', () => {
+  it('|y - 0.3x| <= 0.02, |x| <= 2 at res 24 (hand 0.16): refuses honestly, never 0.0386666667', () => {
+    expect(sceneOf('region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2 res: 24').errors).toEqual([
+      { line: 1, message: 'the region is thinner than the grid at res 400 (about 0.03795 across) — raise res:, or write it as ranges' },
+    ])
+  })
+
+  it('|y - 0.6x| <= 0.05, |x| <= 2 at res 40 (hand 0.1 x 4 = 0.4): values exactly, never 0.32', () => {
+    const scene = sceneOf('region: abs(y - 0.6*x) <= 0.05 and abs(x) <= 2 res: 40')
+    expect(scene.errors).toEqual([])
+    expect(readout(scene, 1).text).toBe('area ≈ 0.4')
+  })
+
+  it('|y - 0.1x| <= 0.02, |x| <= 2 at res 64 (hand 0.16): refuses honestly, never 0.1535', () => {
+    expect(sceneOf('region: abs(y - 0.1*x) <= 0.02 and abs(x) <= 2 res: 64').errors).toEqual([
+      { line: 1, message: 'the region is thinner than the grid at res 400 (about 0.03941 across) — raise res:, or write it as ranges' },
+    ])
+  })
+})
+
 // S5 fix round 4, C2: a singular mesh sum's error trusted only the last
 // change (d1), which can be a lucky small middle step in an otherwise slow
 // sequence — the change before it (d2) told the truth. The error is now the
 // larger of the tail and both of the last two changes, as a bounded sum's
 // already was.
 describe("a singular mesh sum's error is not a lucky last change alone (fix round 4, C2)", () => {
-  it('1/sqrt(x^2 + y^2) over an off-centre rectangle containing the origin: right digits or refused — never 6.5448', () => {
+  it('1/sqrt(x^2 + y^2) over an off-centre rectangle containing the origin: ≈ 7, covering the hand value 6.555287 — never 6.5448 (the C2 pin)', () => {
     // Sigma over the four quadrant rectangles of A asinh(B/A) + B asinh(A/B).
     const c = (A: number, B: number) => A * Math.asinh(B / A) + B * Math.asinh(A / B)
     const exact = c(1.55, 1.15) + c(0.45, 1.15) + c(1.55, 0.85) + c(0.45, 0.85)
     const scene = sceneOf('volume: under 1/sqrt(x^2 + y^2) over x >= -0.45 and x <= 1.55 and y >= -0.85 and y <= 1.15')
-    if (scene.errors.length) {
-      expect(scene.errors[0].message).toMatch(/^the integral did not settle|^the integral could not be determined/)
-    } else {
-      const text = readout(scene, 1).text
-      expect(Math.abs(approx(text, 'dA') - exact)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
-    }
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 7')
+    expect(Math.abs(approx(text, 'dA') - exact)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   })
 })

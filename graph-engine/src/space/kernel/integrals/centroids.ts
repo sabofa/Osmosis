@@ -38,8 +38,11 @@ export const ZERO_MASS_REL = 1e-9
 // the floor (a region). Each carries its method's own error: a mesh region's
 // from two resolutions, which also covers its odd moments' grid asymmetry
 // (the half-disc's x̄ comes out 5×10⁻⁵, inside its error, so it reads 0).
-// `extent`: the shape's own size along each moment's axis, for a coordinate
-// that is negligible against it (M4) — Infinity where not known, inert.
+// `extent`: the shape's own finite bounding size along each moment's axis,
+// for a coordinate that is negligible against it (M4) — Infinity only where
+// genuinely unbounded or empty, which leaves positionOrZero inert (S5 fix
+// round 5: a solid's extent used to always read Infinity here, so any
+// coordinate within its own error, however large, printed 0).
 type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean; extent: number[] }
 
 function span(values: Float64Array): number {
@@ -81,8 +84,9 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
   const exprs = [delta, ...['x', 'y', 'z'].map((axis) => mul(variable(axis), delta)), call('abs', delta)]
   const run = solid.integrals(exprs)
   return () => {
-    const [mass, mx, my, mz, total] = run()
-    return { mass, moments: [mx, my, mz], total: total.value, floor: false, extent: [Infinity, Infinity, Infinity] }
+    const { values, extent } = run()
+    const [mass, mx, my, mz, total] = values
+    return { mass, moments: [mx, my, mz], total: total.value, floor: false, extent: [...extent] }
   }
 }
 

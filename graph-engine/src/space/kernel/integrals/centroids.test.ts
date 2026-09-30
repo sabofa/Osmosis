@@ -190,3 +190,59 @@ describe('a centroid coordinate reads 0 against its own extent, not the integral
     expect(() => determined(positionOrZero(noise, 0.01))).toThrow(IntegralRefusal)
   })
 })
+
+// S5 fix round 5: a solid (a volume, not a region) passed positionOrZero an
+// extent of Infinity for every coordinate, so "error <= 1e-3 x extent" was
+// always true — a coordinate within its own error, however large, printed 0
+// regardless of how far off it truly was. Solids now pass the solid's own
+// finite bounding span on that axis (the max minus the min of its x, y or z
+// bounds), computed from the coordinate map (an iterated solid) or the
+// region's mesh and the top/bottom surfaces sampled at it (a "between"
+// solid) — never Infinity unless the solid is genuinely unbounded or empty.
+describe('a solid centroid reads its own finite extent, not Infinity (fix round 5)', () => {
+  // Hand value: mass = area x height = pi x 1^2 x 1 = pi; x̄ = cx = 0.02 (the
+  // moment of x over a disc offset by (cx, cy) is cx x area, so x̄ = cx);
+  // ȳ = cy = 0.015; z̄ = 0.5 (the midpoint of the slab z in [0, 1]).
+  it('a slab (z in [0, 1]) over a disc centred at (0.02, 0.015): (0.02, 0.015, 0.5), M = π', () => {
+    const scene = sceneOf('V = volume under 1 over (x - 0.02)^2 + (y - 0.015)^2 <= 1\ncentroid: V')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 2).text
+    const [x, y, z] = approxTuple(text, 'centroid')
+    expect(Math.abs(x - 0.02)).toBeLessThan(2e-3)
+    expect(Math.abs(y - 0.015)).toBeLessThan(2e-3)
+    expect(z).toBe(0.5)
+    expect(Math.abs(approx(text, 'M') - Math.PI)).toBeLessThan(1e-2)
+  })
+
+  // The re-reviewer's exact probe: at res 8 the mesh is coarse enough that
+  // x̄'s raw value (0.02) is well within its own mesh error (±0.0217) — the
+  // same shape of noise the M4 fix (above) reads as 0 for a region, but
+  // this shape's extent is only ~2 wide (not the disc's own |density|
+  // integral, ~pi), and 0.0217 is not negligible beside 2. Never (0, 0, …):
+  // right digits, or an honest refusal, either acceptable (never a wrong
+  // confident number).
+  it('the same slab at res 8 never prints (0, 0, 0.5): the reviewer’s exact probe', () => {
+    const scene = sceneOf('@resolution: 8\nV = volume under 1 over (x - 0.02)^2 + (y - 0.015)^2 <= 1\ncentroid: V')
+    if (scene.errors.length) {
+      expect(scene.errors[0].message).toMatch(/^the integral could not be determined to one significant digit/)
+    } else {
+      const [x, y] = approxTuple(readout(scene, 3).text, 'centroid')
+      expect([x, y]).not.toEqual([0, 0])
+    }
+  })
+
+  it('the annulus 1 <= r <= 2 at res 40 is unaffected: still (0, 0) — a genuinely negligible coordinate still reads 0', () => {
+    const scene = sceneOf('@resolution: 40\nD = region x^2 + y^2 >= 1 and x^2 + y^2 <= 4\ncentroid: D')
+    expect(scene.errors).toEqual([])
+    const [x, y] = approxTuple(readout(scene, 3).text, 'centroid')
+    expect([x, y]).toEqual([0, 0])
+  })
+
+  it('the cylindrical dome’s centroid (an iterated solid) is unaffected: still (0, 0, 4/3)', () => {
+    const text = readout(sceneOf('V = volume r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical\ncentroid: V'), 2).text
+    const [x, y, z] = approxTuple(text, 'centroid')
+    expect(Math.abs(x)).toBeLessThan(1e-9)
+    expect(Math.abs(y)).toBeLessThan(1e-9)
+    expect(Math.abs(z - 4 / 3)).toBeLessThan(1e-9)
+  })
+})

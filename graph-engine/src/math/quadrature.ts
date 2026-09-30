@@ -16,22 +16,28 @@
 //    is small beside it (1/sqrt(1 - x^2 - y^2): every inner integral ends at
 //    float resolution, 1e-8 from its value). So is a panel whose K - G is
 //    within what its inner errors can move it: it is resolved to its noise.
-// 3. Every level starts from two panels split at the golden section, so no
-//    level's nodes fall on another's dyadic nodes (a kink |x - y| on a node
-//    fools both rules). A panel's ends are sampled too (one float inside a
-//    range's limits, and every split point): where the value there leaves
-//    both the 15-point and the 7-point extrapolations of the panel, beyond
-//    their disagreement and the noise, a kink may sit between the end and
-//    the first node, where both rules see a straight line (|x - y| with the
-//    outer node 0.001 from the inner limit), and the panel keeps that gap
-//    times the miss as error.
-// 4. The outermost result is computed a second time from one-panel starts,
-//    an independently placed partition, at a looser target; the reported
-//    error is at least their difference, and their combined errors plus it
-//    when they disagree: a bump one partition's nodes step over, the other's
-//    may land on. (What no node of either sees, no rule can report.) The
-//    pair is tried at QUAD_REL first; one that runs out of evaluations hands
-//    on to a looser target (QUAD_COARSE_REL), honest to fewer digits.
+// 3. Every level starts from two panels split at a golden-section fraction,
+//    so no level's nodes fall on another's dyadic nodes (a kink |x - y| on a
+//    node fools both rules), and no node falls on a range's own arithmetic
+//    midpoint, where a singular integrand often sits (1/sqrt|y| for y in
+//    [-1, 1]): a single whole-range panel's Kronrod rule always samples its
+//    own centre, by construction, not coincidence. A panel's ends are
+//    sampled too (one float inside a range's limits, and every split
+//    point): where the value there leaves both the 15-point and the
+//    7-point extrapolations of the panel, beyond their disagreement and the
+//    noise, a kink may sit between the end and the first node, where both
+//    rules see a straight line (|x - y| with the outer node 0.001 from the
+//    inner limit), and the panel keeps that gap times the miss as error.
+// 4. The outermost result is computed a second time, at a looser target
+//    (the cross-check); the reported error is at least their difference,
+//    and their combined errors plus it when they disagree. Without it there
+//    is no answer at this rung; any refusal by either is believed over a
+//    number — except a claim of divergence, which stands only when both
+//    make it (a coincidental node on a pole one pass's differently refined
+//    panels miss is not evidence of divergence, only that it is not yet
+//    settled). The pair is tried at QUAD_REL first; one that runs out of
+//    evaluations hands on to a looser target (QUAD_COARSE_REL), honest to
+//    fewer digits.
 // 5. Divergence is found by decay, never by width or exhaustion: halving
 //    toward a singular point, the shell each split sheds (its other half)
 //    must shrink for an integrable singularity (x^-p: a ratio 2^(p-1) < 1).
@@ -80,7 +86,6 @@ import {
   QUAD_ANCHOR_DIGITS,
   QUAD_ANCHOR_FLOATS,
   QUAD_ANCHOR_STEPS,
-  QUAD_CENTRE_NUDGE_MAX,
   QUAD_DIVERGE_RUN,
 
   QUAD_FIRST_RUNG_SHARE,
@@ -125,6 +130,11 @@ export class QuadratureError extends Error {
   // what ran out, not the whole pass's evaluations — its own few thousand
   // is not "within 6,000,000 evaluations" (S5 fix round 4, M1).
   panelCap = false
+  // 'slow': set when this is a divergence claim downgraded to "did not
+  // settle" because the two passes disagreed on it (unsettled(), I1c), not
+  // a genuine decay too slow to judge — its own "the pieces shed there
+  // shrink too slowly" would misstate the reason (S5 fix round 5).
+  downgraded = false
   constructor(reason: QuadFailure) {
     super(`quadrature: ${reason}`)
     this.name = 'QuadratureError'
@@ -210,17 +220,6 @@ function nextToward(x: number, toward: number): number {
 // The spacing of floats at x.
 function ulp(x: number): number {
   return Math.abs(nextToward(x, Infinity) - x)
-}
-
-// x moved `steps` floats toward `toward` (steps a small non-negative bigint):
-// nextToward generalised to more than one float at a time, for a retry that
-// may need to move by many orders of magnitude (S5 fix round 4, I1a).
-function nudge(x: number, toward: number, steps: bigint): number {
-  if (x === toward) return x
-  if (x === 0) x = toward > 0 ? Number.MIN_VALUE : -Number.MIN_VALUE
-  F64[0] = x
-  I64[0] += (toward > x === x > 0 ? 1n : -1n) * steps
-  return F64[0]
 }
 
 // The simplest number in [lo, hi] (fewest significant digits): where a
@@ -320,14 +319,17 @@ interface Level {
   a: number
   b: number
   budget: QuadBudget
-  golden: boolean
+  // The golden-section fraction this level's very first split is at, or
+  // `false` for a single whole-range panel (only integrate1's guarded path,
+  // which has no cross-check to be independent from).
+  cut: number | false
   refining: boolean
   poles: number
   channel: { error: number; absolute: number }
 }
 
-function newLevel(index: number, a: number, b: number, budget: QuadBudget, golden: boolean): Level {
-  return { index, a, b, budget, golden, refining: false, poles: 0, channel: { error: 0, absolute: Number.NaN } }
+function newLevel(index: number, a: number, b: number, budget: QuadBudget, cut: number | false): Level {
+  return { index, a, b, budget, cut, refining: false, poles: 0, channel: { error: 0, absolute: Number.NaN } }
 }
 
 function fail(reason: QuadFailure, index: number, at: number | null): QuadratureError {
@@ -572,36 +574,19 @@ function rule(
         } catch (err) {
           if (!(err instanceof Pole) || err.level !== level.index) throw err
           // A node on a pole by coincidence (1/sqrt|x - y| with the inner node
-          // at y = x exactly): one float toward the centre is not on it.
-          if (xs[k] !== centre) {
-            const x = nextToward(xs[k], centre)
-            if (!(x > lo && x < hi)) throw err
-            evaluate(f, x, level, NODE)
-          } else {
-            // The centre node itself (a single-panel start's index 14,
-            // exactly at (a + b) / 2 — a symmetric range's own midpoint,
-            // where a singular integrand often sits) has no "toward the
-            // centre" to move by. It is nudged toward the far end instead,
-            // by a doubling ladder of floats (1, 2, 4, ...) when one is not
-            // enough: some integrands amplify smallness (y^2 in ln(y^2)
-            // underflows to 0 at a y many orders of magnitude above where y
-            // itself would), so a fixed nudge is not always enough (S5 fix
-            // round 4, I1a). Each step stays the smallest perturbation tried
-            // so far that is not itself on the pole.
-            let done = false
-            for (let steps = 1n; steps < QUAD_CENTRE_NUDGE_MAX; steps *= 2n) {
-              const x = nudge(centre, hi, steps)
-              if (!(x > lo && x < hi)) break
-              try {
-                evaluate(f, x, level, NODE)
-                done = true
-                break
-              } catch (e2) {
-                if (!(e2 instanceof Pole) || e2.level !== level.index) throw e2
-              }
-            }
-            if (!done) throw err
-          }
+          // at y = x exactly): one float toward the centre is not on it. A
+          // pole exactly at the panel's own centre (every panel's k = 14
+          // node) has no "toward the centre" to move by, and is left to
+          // cover()'s own pole handling outside (rule 6, "an infinity that
+          // stays splits the range there"): S5 fix round 5 removed the
+          // doubling-ladder nudge this used to get here (I1a, round 4), once
+          // giving the check pass a golden start at every level (below) meant
+          // no level's initial panel spans a whole symmetric range whose
+          // centre is a singular point by coincidence — the only case the
+          // ladder was for.
+          const x = nextToward(xs[k], centre)
+          if (!(x > lo && x < hi)) throw err
+          evaluate(f, x, level, NODE)
           level.budget.singular = true
         }
         values[k] = NODE[0] * j
@@ -783,13 +768,13 @@ function adapt(f: (x: number) => number, a: number, b: number, tol: number, rel:
     return { ...p, frozen: true, error, fixed: error }
   }
   try {
-    const cut = a + (b - a) * GOLDEN
     const [fa, ea] = sample(f, nextToward(a, b), level)
     const [fb, eb] = sample(f, nextToward(b, a), level)
     let panels: Panel[]
-    if (level?.golden) {
-      const [fc, ec] = sample(f, cut, level)
-      panels = [...cover(a, cut, null, { fa, ea, fb: fc, eb: ec }), ...cover(cut, b, null, { fa: fc, ea: ec, fb, eb })]
+    if (level?.cut) {
+      const splitAt = a + (b - a) * level.cut
+      const [fc, ec] = sample(f, splitAt, level)
+      panels = [...cover(a, splitAt, null, { fa, ea, fb: fc, eb: ec }), ...cover(splitAt, b, null, { fa: fc, ea: ec, fb, eb })]
     } else panels = cover(a, b, null, { fa, ea, fb, eb })
     panels = panels.map((p) => onLimit(p, null))
     if (level) level.refining = true
@@ -992,7 +977,7 @@ function outerRange(a: number, b: number): void {
 }
 
 // The targets a nested integral is tried at, most digits first: each rung
-// a pass from golden starts and its cross-check from one-panel starts, with
+// a pass from a golden start and its cross-check at a looser target, with
 // at most `share` of the evaluations still left. A rung that runs out hands
 // on to the next, looser one, whose answer is honest to fewer digits.
 const RUNGS = [
@@ -1000,7 +985,7 @@ const RUNGS = [
   { rel: QUAD_COARSE_REL, check: QUAD_COARSE_CHECK_REL, share: 1 },
 ]
 
-type Pass = (golden: boolean, rel: number, budget: QuadBudget) => QuadResult
+type Pass = (cut: number | false, rel: number, budget: QuadBudget) => QuadResult
 
 function crossChecked(pass: Pass, budget: QuadBudget | undefined): QuadResult {
   const total = budget ?? quadBudget()
@@ -1025,24 +1010,36 @@ function crossChecked(pass: Pass, budget: QuadBudget | undefined): QuadResult {
 // (S5 fix round 4, I1c). Carries whatever location the divergent pass found.
 function unsettled(err: QuadratureError): QuadratureError {
   const out = new QuadratureError('slow')
+  out.downgraded = true
   err.at.forEach((v, i) => {
     if (typeof v === 'number') out.at[i] = v
   })
   return out
 }
 
-// Rule 4: the pass, and the cross-check from one-panel starts at the looser
-// `check` target, from one allowance. The error is at least their
-// difference, and their errors plus it when they disagree. Without the
-// cross-check there is no answer at this rung; any refusal by either is
-// believed over a number — except a claim of divergence, which stands only
-// when both passes make it (I1c): one pass finding a coincidental node on a
-// pole the other's differently-placed nodes miss is not evidence the
-// integral diverges, only that it is not yet settled.
+// Rule 4: the pass, and the cross-check at the looser `check` target, from
+// one allowance. Both start every level from the same golden section, never
+// a single whole-range panel (S5 fix round 5): a symmetric range's own
+// midpoint is often where a singular integrand sits (1/sqrt|y| for y in
+// [-1, 1]), and a single-panel start's Kronrod rule always samples its own
+// centre, landing exactly there by construction, not coincidence — a golden
+// start places no node at a range's own midpoint, at either pass (an
+// independently placed second golden fraction was tried and reverted: for a
+// range symmetric about its own midpoint, its natural mirror through that
+// midpoint made a *moving* singularity, 1/sqrt|x - y|, land the same number
+// of levels from both passes' splits and stall the decay estimate the same
+// way at both — the risk of any other, unrelated fraction, not spot-checked
+// against every case). The error is at least their difference, and their
+// errors plus it when they disagree. Without the cross-check there is no
+// answer at this rung; any refusal by either is believed over a number —
+// except a claim of divergence, which stands only when both passes make it
+// (I1c): one pass finding a coincidental node on a pole the other's
+// differently refined panels do not confirm is not evidence the integral
+// diverges, only that it is not yet settled.
 function reconciled(pass: Pass, rel: number, check: number, allowance: QuadBudget): QuadResult {
-  const run = (golden: boolean, r: number): QuadResult | QuadratureError => {
+  const run = (cut: number | false, r: number): QuadResult | QuadratureError => {
     try {
-      return pass(golden, r, allowance)
+      return pass(cut, r, allowance)
     } catch (err) {
       if (err instanceof QuadratureError) return err
       throw err
@@ -1050,18 +1047,18 @@ function reconciled(pass: Pass, rel: number, check: number, allowance: QuadBudge
   }
   let main: QuadResult
   try {
-    main = pass(true, rel, allowance)
+    main = pass(GOLDEN, rel, allowance)
   } catch (err) {
     if (!(err instanceof QuadratureError)) throw err
     // Any other refusal (budget, slow, undefined, bound) stands on its own —
     // only a divergence claim needs the check pass's agreement, so it alone
-    // is worth a second, independently placed attempt.
+    // is worth a second attempt at the looser target.
     if (err.reason !== 'diverges') throw err
-    const other = run(false, check)
+    const other = run(GOLDEN, check)
     if (other instanceof QuadratureError && other.reason === 'diverges') throw err
     throw unsettled(err)
   }
-  const other = run(false, check)
+  const other = run(GOLDEN, check)
   if (other instanceof QuadratureError) {
     if (other.reason !== 'diverges') throw other
     throw unsettled(other)
@@ -1084,15 +1081,15 @@ export function integrate2(
   outerRange(a, b)
   if (a === b) return { value: 0, error: 0, absolute: 0, singular: false }
   const inner = innerTolerance(tol, a, b)
-  return crossChecked((golden, rel, bud) => {
-    const outer = newLevel(0, a, b, bud, golden)
+  return crossChecked((cut, rel, bud) => {
+    const outer = newLevel(0, a, b, bud, cut)
     return settleOuter(
       () =>
         adapt(
           (x) => {
             const [lo, hi] = range(c(x), d(x), 1, 0, x)
             if (lo === hi) return 0
-            const r = adapt((y) => f(x, y), lo, hi, inner, rel, QUAD_INNER_MAX_PANELS, newLevel(1, lo, hi, bud, golden))
+            const r = adapt((y) => f(x, y), lo, hi, inner, rel, QUAD_INNER_MAX_PANELS, newLevel(1, lo, hi, bud, cut))
             outer.channel.error = r.error
             outer.channel.absolute = r.absolute
             return r.value
@@ -1125,8 +1122,8 @@ export function integrate3(
   outerRange(a, b)
   if (a === b) return { value: 0, error: 0, absolute: 0, singular: false }
   const middle = innerTolerance(tol, a, b)
-  return crossChecked((golden, rel, bud) => {
-    const outer = newLevel(0, a, b, bud, golden)
+  return crossChecked((cut, rel, bud) => {
+    const outer = newLevel(0, a, b, bud, cut)
     return settleOuter(
       () =>
         adapt(
@@ -1134,12 +1131,12 @@ export function integrate3(
             const [lo, hi] = range(c(x), d(x), 1, 0, x)
             if (lo === hi) return 0
             const inner = innerTolerance(middle, lo, hi)
-            const mid = newLevel(1, lo, hi, bud, golden)
+            const mid = newLevel(1, lo, hi, bud, cut)
             const r = adapt(
               (y) => {
                 const [zlo, zhi] = range(e(x, y), g(x, y), 2, 1, y)
                 if (zlo === zhi) return 0
-                const q = adapt((z) => f(x, y, z), zlo, zhi, inner, rel, QUAD_INNER_MAX_PANELS, newLevel(2, zlo, zhi, bud, golden))
+                const q = adapt((z) => f(x, y, z), zlo, zhi, inner, rel, QUAD_INNER_MAX_PANELS, newLevel(2, zlo, zhi, bud, cut))
                 mid.channel.error = q.error
                 mid.channel.absolute = q.absolute
                 return q.value

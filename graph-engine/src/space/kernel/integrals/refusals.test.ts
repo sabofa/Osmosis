@@ -6,8 +6,9 @@
 
 import { describe, expect, it } from 'vitest'
 import type { SceneError, SpaceScene } from '../../scene/types'
+import { QuadratureError } from '../../../math/quadrature'
 import { QUAD_BUDGET } from '../../../math/tolerance'
-import { approxText, determined, IntegralRefusal } from './common'
+import { approxText, determined, IntegralRefusal, refusalOf } from './common'
 import { approx, approxTuple, lastDigitUnit, markNamed, readout, sceneOf } from './testing'
 
 const GUARD_MS = 15000
@@ -122,10 +123,11 @@ describe('divergent integrals are refused, found directly, with where', () => {
     }
   })
 
-  it('an integrable singularity over an inequality region is not divergence: 1/sqrt(x^2 + y^2) over the disc is 2π', () => {
+  it('an integrable singularity over an inequality region is not divergence: 1/sqrt(x^2 + y^2) over the disc is 2π (one of the two 1/r pins, fix round 5, finding 5)', () => {
     const scene = sceneOf('volume: under 1/sqrt(x^2 + y^2) over x^2 + y^2 <= 1')
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
+    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 6')
     expect(Math.abs(approx(text, 'dA') - 2 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   })
 })
@@ -205,23 +207,31 @@ describe('never a wrong confident number (fix round 3)', () => {
     read('volume: under 1/sqrt(abs(x - y)) over x in [0, 1], y in [0, 1]', 'dA', 8 / 3)
   }, HEAVY_MS)
 
-  it('1/sqrt(x^2 + y^2) over [-1, 1]^2 is 8 asinh(1), or an honest "did not settle" — never "does not converge" (fix round 4, I1c)', () => {
-    // the check pass's single-panel start puts its own outer centre exactly
-    // at x = 0, where 1/hypot(0, y) = 1/|y| genuinely does not converge in y
-    // (unlike the true g(x), finite for x != 0) — a measure-zero artifact of
-    // the node, not the integral; a divergence claim from only one pass is
-    // not believed over the other's value (I1c), so this is now refused
-    // honestly rather than wrongly, when it is refused at all.
+  // S5 fix round 5, finding 3: the check pass's old one-panel start put its
+  // own outer centre exactly at x = 0, where 1/hypot(0, y) = 1/|y| genuinely
+  // does not converge in y (unlike the true g(x), finite for x != 0) — a
+  // measure-zero artifact of that node, not the integral. Removing the
+  // centre-node nudge ladder and giving the check pass the same golden
+  // start as the main pass (so neither ever puts a node at a range's own
+  // midpoint) fixes this at its source: both squares below are now always
+  // valued, never even transiently refused. Pinned exactly, not "either a
+  // value or a refusal" (fix round 5, finding 5).
+  it('1/sqrt(x^2 + y^2) over [-1, 1]^2 is 8 asinh(1) — never "does not converge", and no longer even "did not settle"', () => {
     const { scene, ms } = timedScene('volume: under 1/sqrt(x^2 + y^2) over x in [-1, 1], y in [-1, 1]')
     expect(ms).toBeLessThan(GUARD_MS)
-    const errors = on(scene.errors, 1)
-    if (errors.length) {
-      expect(errors).toEqual([expect.stringMatching(/^the integral did not settle( near y = 0)?: the pieces shed there shrink too slowly to tell a value from divergence in floating point$/)])
-    }
-    else {
-      const text = readout(scene, 1).text
-      expect(Math.abs(approx(text, 'dA') - 8 * Math.asinh(1))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
-    }
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 7.05')
+    expect(Math.abs(approx(text, 'dA') - 8 * Math.asinh(1))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  }, HEAVY_MS)
+
+  it('1/sqrt(x^2 + y^2) over [-2, 2]^2 is 16 asinh(1) — the same fix, a differently scaled square', () => {
+    const { scene, ms } = timedScene('volume: under 1/sqrt(x^2 + y^2) over x in [-2, 2], y in [-2, 2]')
+    expect(ms).toBeLessThan(GUARD_MS)
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 14.1')
+    expect(Math.abs(approx(text, 'dA') - 16 * Math.asinh(1))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   }, HEAVY_MS)
 
   it('slow singular ends never read "does not converge": x^-0.99, x^-0.999, 1/(x ln^2 x) did not settle near x = 0', () => {
@@ -268,23 +278,37 @@ describe('never a wrong confident number (fix round 3)', () => {
 // (y = 0 for y in [-1, 1]) is valued, not falsely "does not converge" — the
 // cross-check's single-panel start used to put a node exactly there.
 describe('a singularity centred on an inner range is valued, not falsely divergent (fix round 4, I1)', () => {
-  const read = (spec: string, name: string, exact: number): string => {
+  // Pins the exact printed string, not just a loose digit-unit bound (fix
+  // round 5, finding 5: these are the four cases refusals.test.ts's own
+  // former line 276 covered).
+  const read = (spec: string, name: string, exact: number, pinned: string): string => {
     const { scene, ms } = timedScene(spec)
     expect(ms).toBeLessThan(GUARD_MS)
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
+    expect(text).toBe(pinned)
     expect(Math.abs(approx(text, name) - exact)).toBeLessThanOrEqual(lastDigitUnit(text, name))
     return text
   }
 
   it('1/sqrt|y|, ln|y| and ln(y^2) over x in [0, 1], y in [-1, 1] are 4, -2 and -4', () => {
-    read('volume: under 1/sqrt(abs(y)) over x in [0, 1], y in [-1, 1]', 'dA', 4)
-    read('volume: under ln(abs(y)) over x in [0, 1], y in [-1, 1]', 'dA', -2)
-    read('volume: under ln(y^2) over x in [0, 1], y in [-1, 1]', 'dA', -4)
+    read('volume: under 1/sqrt(abs(y)) over x in [0, 1], y in [-1, 1]', 'dA', 4, '∬_R (1/sqrt(abs(y))) dA ≈ 4')
+    read(
+      'volume: under ln(abs(y)) over x in [0, 1], y in [-1, 1]',
+      'dA',
+      -2,
+      '∬_R (ln(abs(y))) dA ≈ −2; (ln(abs(y))) < 0 on part of R; the integral counts that part negatively',
+    )
+    read(
+      'volume: under ln(y^2) over x in [0, 1], y in [-1, 1]',
+      'dA',
+      -4,
+      '∬_R (ln(y^2)) dA ≈ −4; (ln(y^2)) < 0 on part of R; the integral counts that part negatively',
+    )
   }, HEAVY_MS)
 
   it('3D ln|z|, z in [-1, 1] is -2', () => {
-    read('volume: x in [0, 1], y in [0, 1], z in [-1, 1] integrand ln(abs(z))', 'dV', -2)
+    read('volume: x in [0, 1], y in [0, 1], z in [-1, 1] integrand ln(abs(z))', 'dV', -2, '∭ (ln(abs(z))) dV ≈ −2')
   }, HEAVY_MS)
 
   it('3D 1/sqrt|z|, z in [-1, 1] (expect 4): the same singularity, nested one level deeper — the node is no longer falsely divergent, but three nested levels of adaptive refinement (x and y both need to sample it fresh at every node) cost more than one integral’s 6,000,000-evaluation budget can buy at full precision; an honest "did not settle" is acceptable, never "does not converge"', () => {
@@ -374,5 +398,59 @@ describe('the zero rule and the one-digit rule (fix round 3)', () => {
   it('a value whose error is half of it or more is refused, with both named; below that, its digits', () => {
     expect(() => determined({ value: 3, error: 1.6, scale: 3 })).toThrow('the integral could not be determined to one significant digit (≈ 3 ± 1.6)')
     expect(approxText(determined({ value: 3.14159, error: 0.004, scale: 3.2 }))).toBe('≈ 3.1')
+  })
+})
+
+// S5 fix round 5, finding 4: the digit count a formatter shows must cover
+// the error by at least half a unit of the *last digit actually printed*,
+// not the raw value's own exponent — rounding a value that carries into the
+// next order of magnitude (9.999994... to 6 figures is 9.99999, but to 5 it
+// is 10.000, one fewer digit's worth of precision than 9.999994's own
+// exponent suggests) can otherwise leave a wrong last digit shown.
+describe('digits print only what the error supports, covering half a unit of the last one shown (fix round 5, finding 4)', () => {
+  it('y^(-0.9) on the inner range: hand value 1 / (1 - 0.9) = 10, raw value 9.999994872133758 ± 5.4449803620800676e-6 prints ≈ 10, not ≈ 9.99999', () => {
+    // Before the fix: supportedDigits alone gave 6 figures (9.99999), whose
+    // last digit (the 1e-5 place) needs error <= 5e-6 to be covered — this
+    // error (5.445e-6) does not cover it. Dropping to 5 figures rounds into
+    // the next order of magnitude (10.000, printed "10" once formatNumber
+    // trims the now-trailing zeros), whose last digit (the 1e-3 place)
+    // needs only <= 5e-4 — comfortably covered.
+    expect(approxText({ value: 9.999994872133758, error: 0.0000054449803620800676, scale: 10 })).toBe('≈ 10')
+    // End to end, through the real quadrature.
+    const scene = sceneOf('volume: under y^(-0.9) over x in [0, 1], y in [0, 1]')
+    expect(scene.errors).toEqual([])
+    expect(readout(scene, 1).text).toBe('∬_R (y^(-0.9)) dA ≈ 10')
+  })
+
+  it('|x - 0.5|^-0.7 (a singular, 4-digit-capped case): hand value 5.415016 still prints ≈ 5.41, unaffected — the half-unit rule already held at 3 figures', () => {
+    // 5.414953129607524 to 3 figures is 5.41 (exponent 0); its last digit (the
+    // 1e-2 place) needs error <= 5e-3 — 4.335e-3 covers it, so the fix does
+    // not drop a digit here: this pins the "no regression" side.
+    expect(approxText({ value: 5.414953129607524, error: 0.00433518985552053, scale: 5.414953129607524, singular: true })).toBe('≈ 5.41')
+    const scene = sceneOf('volume: under abs(x - 0.5)^(-0.7) over x in [0, 1], y in [0, 1]')
+    expect(scene.errors).toEqual([])
+    expect(readout(scene, 1).text).toBe('∬_R (abs(x - 0.5)^(-0.7)) dA ≈ 5.41')
+  })
+})
+
+// S5 fix round 5 (minor): a divergence claim downgraded because the two
+// passes merely disagreed on it (unsettled(), I1c) used to keep the
+// genuine-slow-decay wording ("the pieces shed there shrink too slowly to
+// tell a value from divergence in floating point"), which misstates why —
+// the passes' disagreement says nothing about how fast anything decays.
+describe('a downgraded divergence claim says only that it did not settle, not why (fix round 5, minor)', () => {
+  it('refusalOf on a downgraded QuadratureError drops the "shrink too slowly" reason', () => {
+    const err = new QuadratureError('slow')
+    err.downgraded = true
+    err.at[0] = 0
+    expect(refusalOf(err, [{ name: 'x', lower: '0', upper: '1' }]).message).toBe('the integral did not settle near x = 0')
+  })
+
+  it('a genuine slow-decay refusal (not downgraded) keeps the fuller reason', () => {
+    const err = new QuadratureError('slow')
+    err.at[0] = 0
+    expect(refusalOf(err, [{ name: 'x', lower: '0', upper: '1' }]).message).toBe(
+      'the integral did not settle near x = 0: the pieces shed there shrink too slowly to tell a value from divergence in floating point',
+    )
   })
 })

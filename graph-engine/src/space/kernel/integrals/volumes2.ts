@@ -26,7 +26,7 @@ import { checkBudget, Reads, resolution } from '../common'
 import { finishMesh, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
-import { approxText, attempt, COLLAPSED_REL, determined, formOf, part, readoutLabel, type Approx } from './common'
+import { approxText, attempt, COLLAPSED_REL, determined, formOf, part, readoutLabel } from './common'
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
@@ -180,6 +180,19 @@ function facingDown(mark: Mark): Mark {
   return { ...mark, normals: mark.normals.map((v) => -v), indices: reversedWinding(mark.indices) }
 }
 
+// The span of a sample array (S5 fix round 5): Infinity where empty, never
+// negative — a finite bounding size for a centroid coordinate to be judged
+// negligible against (centroids.ts, positionOrZero).
+function span(values: Float64Array): number {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of values) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  return hi >= lo ? hi - lo : Infinity
+}
+
 // The solid between z = g and z = f over R as something to integrate over
 // (centroid: of a named volume): one triple integral, over R's own ranges
 // then z from g to f, sharing one evaluation budget (or the mesh sum over an
@@ -198,9 +211,25 @@ export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between
         reads.add(expr, ['x', 'y', 'z', 'r', 'theta'])
         return compileScalar(region.coords === 'polar' ? substitute(expr, POLAR_XY) : expr, vars, scope)
       })
-      return (): Approx[] => {
+      return () => {
         const r = region.build(n)
-        return hs.map((h) => r.integrateSolid(h, g, f, [solid.bottom ? solid.bottom.text : '0', solid.top.text]))
+        const values = hs.map((h) => r.integrateSolid(h, g, f, [solid.bottom ? solid.bottom.text : '0', solid.top.text]))
+        // z's own span: the solid runs from g to f at every sample, so its
+        // extreme z is the extreme of both surfaces over every sample point
+        // (the region's own mesh vertices, in its own coordinates).
+        let zlo = Infinity
+        let zhi = -Infinity
+        for (let v = 0; v < r.samples.a.length; v++) {
+          const fz = f(r.samples.a[v], r.samples.b[v])
+          const gz = g(r.samples.a[v], r.samples.b[v])
+          for (const z of [fz, gz]) {
+            if (!Number.isFinite(z)) continue
+            if (z < zlo) zlo = z
+            if (z > zhi) zhi = z
+          }
+        }
+        const extent: [number, number, number] = [span(r.samples.x), span(r.samples.y), zhi >= zlo ? zhi - zlo : Infinity]
+        return { values, extent }
       }
     },
   }

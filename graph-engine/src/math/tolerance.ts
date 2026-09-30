@@ -123,17 +123,6 @@ export const QUAD_DIVERGE_NEAR_REL = 1e-2
 export const QUAD_POLE_SPLITS = 16
 // A NaN at a node whose neighbours agree to this is a removable point.
 export const QUAD_REMOVABLE_REL = 1e-6
-// A single-panel start's own centre node, exactly on a pole by coincidence
-// (a symmetric range's midpoint, where a singular integrand often sits: 1 /
-// sqrt|y| for y in [-1, 1]) has no "one float toward the centre" to move by
-// — it is the centre. It is retried at a doubling ladder of floats from it
-// instead (1, 2, 4, ...), up to this many, until one is finite: some
-// integrands amplify smallness (y^2 in ln(y^2) underflows to 0 at a y many
-// orders of magnitude above where y itself would), so one float is not
-// always enough (S5 fix round 4, I1a). 2^1024 floats from a denormal
-// reaches well past the largest double; no genuine escape needs more.
-export const QUAD_CENTRE_NUDGE_MAX = 2n ** 1024n
-
 // K10 — an inequality domain's boundary crossing is refined by bisection along
 // the grid edge until the bracket is shorter than this fraction of the edge.
 export const BISECTION_REL = 1e-10

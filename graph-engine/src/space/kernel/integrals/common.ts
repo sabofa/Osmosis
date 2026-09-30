@@ -65,11 +65,34 @@ function shown(a: Approx): number {
   return isZero(a) ? 0 : a.value
 }
 
-// The most digits a singular estimate is shown to (C1's belt and braces):
-// its error already carries the ×10, so this is only the extra floor.
+// Whether `error` is covered by half a unit of the last significant digit
+// `formatNumber` would print at `digits` figures. Read off the *rounded*
+// value, not the raw one: rounding can carry into the next order of
+// magnitude (9.999994... to 6 figures is 9.99999, but to 5 it is 10.000 —
+// one fewer digit's worth of precision than the raw value's own exponent
+// would suggest), so a unit taken from the raw value's exponent can be ten
+// times too small (S5 fix round 5, "digits: print only what the error
+// supports").
+function halfUnitCovers(value: number, error: number, digits: number): boolean {
+  const rounded = Number(value.toPrecision(digits))
+  if (rounded === 0) return true
+  const exponent = Math.floor(Math.log10(Math.abs(rounded)))
+  return error <= 10 ** (exponent - digits + 1) / 2
+}
+
+// The most digits an estimate is shown to: what its error supports
+// (supportedDigits), capped at SIGNIFICANT_DIGITS when the run leaned on a
+// singularity treatment (C1's belt and braces) — then dropped further, one
+// at a time, until the error is covered by at most half a unit of the last
+// digit actually printed (S5 fix round 5). This replaces the one-unit
+// convention: a value whose error is between half a unit and a whole one
+// used to keep a last digit that could be wrong; now it is dropped.
 function digitsOf(a: Approx): number {
   const cap = a.singular ? SIGNIFICANT_DIGITS : MAX_DIGITS
-  return Math.min(cap, supportedDigits(shown(a), a.error))
+  const value = shown(a)
+  let digits = Math.min(cap, supportedDigits(value, a.error))
+  while (digits > 1 && !halfUnitCovers(value, a.error, digits)) digits--
+  return digits
 }
 
 export function approxText(a: Approx): string {
@@ -114,7 +137,10 @@ function place(err: QuadratureError, levels: readonly QuadLevel[], upTo: number,
 // - NaN in a bound: "the bound sqrt(x - 0.5) is not a number at x = 0.4";
 // - the budget: "the integral did not settle within 6,000,000 evaluations" (QUAD_BUDGET) — never "does not converge";
 // - a singular point whose pieces shrink too slowly to judge (x^-0.99 at 0):
-//   "the integral did not settle near x = 0: ..." — never "does not converge".
+//   "the integral did not settle near x = 0: ..." — never "does not converge";
+// - a divergence claim only one pass made, downgraded (I1c): "the integral
+//   did not settle near x = 0" alone, without a reason the passes' mere
+//   disagreement does not actually tell (S5 fix round 5).
 export function refusalOf(err: QuadratureError, levels: readonly QuadLevel[]): IntegralRefusal {
   switch (err.reason) {
     case 'diverges': {
@@ -130,6 +156,11 @@ export function refusalOf(err: QuadratureError, levels: readonly QuadLevel[]): I
     }
     case 'slow': {
       const where = place(err, levels, levels.length, 'near')
+      // A divergence claim downgraded because the two passes disagreed on
+      // it (unsettled(), I1c) is not a genuine decay too slow to judge —
+      // "the pieces shed there shrink too slowly" would misstate why
+      // (S5 fix round 5).
+      if (err.downgraded) return new IntegralRefusal(`the integral did not settle${where}`)
       return new IntegralRefusal(
         `the integral did not settle${where}: the pieces shed there shrink too slowly to tell a value from divergence in floating point`,
       )
