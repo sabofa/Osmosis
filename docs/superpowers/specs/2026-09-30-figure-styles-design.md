@@ -164,7 +164,7 @@ Each file is small, commented and independent, so a new line type is a new file,
 
 ### Textures
 
-Grain, bleed, chalk dust and paper textures use SVG filters (`feTurbulence` with displacement or masking) and patterns, defined once per figure in `<defs>`. Their ids are derived from the figure's content, so two figures on one page cannot collide. Filters are used only for **texture**: they never move geometry, which comes from `lines/`.
+Grain, chalk dust, washes and paper textures use SVG filters (`feTurbulence` with displacement or masking) and patterns, defined once per figure in `<defs>`. Their ids are derived from the figure's content, so two figures on one page cannot collide. Filters are used only for **texture**: they never move geometry, which comes from `lines/`.
 
 ## The style lab and contact sheets
 
@@ -218,7 +218,7 @@ Ben, with a reference sheet of brush-pen strokes: *"the pen should not have grai
 - Ink carries no texture: no pinholes, speckle or halo. There are no dry-brush strands, no end blots and no second pass. `grain` is not read by ink.
 - The ink line is one solid outline whose width does the work, all following `variation`:
   - it swells and thins slowly with the hand's pressure, a few fat stretches and thin necks per stroke;
-  - its ends taper to fine points over up to 30% of the stroke at each end (`taper`);
+  - its ends taper to fine points over up to 30% of the stroke at each end, and never more than 14 stroke widths (`taper`); a loop does not taper;
   - each edge has its own small bumps.
 - At variation 0 and taper 0 it is an even ribbon. The spine is still the hand's, so the faithfulness rule is unchanged.
 - The retired pinhole texture (`bleed`) is removed from `textures.ts`.

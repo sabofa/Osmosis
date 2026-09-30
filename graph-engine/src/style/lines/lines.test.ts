@@ -224,6 +224,24 @@ describe('the six line types are six algorithms', () => {
     expect(left[Math.floor(n / 2)]).toBeCloseTo(WIDTH / 2, 9)
   })
 
+  it('a loop has no ends to taper: no neck at the seam, even drawn loose', () => {
+    for (const looseness of [0, 0.25, 0.6]) {
+      const shape = draw('ink', CIRCLE, { taper: 1, variation: 0, looseness })[0]
+      if (shape.kind !== 'shape') throw new Error('ink draws one shape')
+      const n = shape.spine.length
+      // Loose loops overlap and may carry end caps, so read the left edge only.
+      const left = shape.spine.map((p, i) => near(p, shape.outline[i]))
+      expect(Math.min(...left.slice(0, n)), `looseness ${looseness}`).toBeGreaterThan(0.45 * WIDTH)
+    }
+  })
+
+  it('a long line tapers only at its ends, over a few widths', () => {
+    const long = polylineChain([{ x: 0, y: 0 }, { x: 600, y: 0 }])
+    const { n, left } = inkHalves(LINES.ink.draw({ chain: long, width: WIDTH, settings: settingsFor('ink', { taper: 1, variation: 0, looseness: 0 }), random: randomFor('long', 0) }))
+    // 14 widths is 33.6 units of 600: by a tenth of the way in, full width.
+    expect(left[Math.floor(n * 0.1)]).toBeCloseTo(WIDTH / 2, 9)
+  })
+
   it('at variation 0 and taper 0, ink is an even ribbon', () => {
     const { left } = inkHalves(draw('ink', CIRCLE, { taper: 0, variation: 0 }))
     for (const h of left) expect(h).toBeCloseTo(WIDTH / 2, 9)

@@ -1131,7 +1131,8 @@ texture, and fills generally needed to be a little less perfect. So:
 - **Ink has variance, not grain** (Ben's call after the first rough-ink pass, with a
   reference of brush-pen strokes). The ink line (`lines/ink.ts`) is one solid
   outline: its width swells and thins with slow pressure noise, tapers to fine
-  points at both ends, and each edge has its own small bumps (`ribbon2`), all
+  points at both ends (over at most 14 widths, and never on a loop), and each
+  edge has its own small bumps (`ribbon2`), all
   following `variation` and `taper`. There is no texture, no dry brush, no end
   blots and no second pass, and `grain` is not read. The pinhole `bleed`
   texture is gone. Ink preset: width 1.7, variation 0.75, taper 0.8. Fill
@@ -1202,7 +1203,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2443 tests (after visual pass 1, roughness, and ink as variance), node-only, no DOM
+npm run test --workspace=graph-engine          # 2445 tests (after visual pass 1, roughness, and ink as variance), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
