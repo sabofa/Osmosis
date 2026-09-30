@@ -46,11 +46,12 @@ export function textureFilter(texture: Texture, id: string, region: Box): string
       ])
     // Ink: a faint halo where the ink wicks into the paper, under the line,
     // plus — rising gently with strength — a few pinholes knocked out of the
-    // line itself: a nib running dry rather than a break in the stroke. The
-    // cut starts high (little survives past it at low strength, so only the
-    // odd fleck shows) and eases as strength grows.
+    // line itself: a nib running dry rather than a break in the stroke.
+    // Pinholes appear only where the noise falls below cut/6 — about 0.14 of
+    // the range at s = 0.3 (grain 0) and about 0.28 at s = 1, so only a
+    // sliver of the noise ever gets knocked out.
     case 'bleed': {
-      const cut = 6 * (0.66 + 0.5 * s) - 1
+      const cut = 6 * (0.25 + 0.2 * s) - 1
       return tag('filter', frame, [
         tag('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 0.25 + 0.5 * s, result: 'halo' }),
         tag('feComponentTransfer', { in: 'halo', result: 'faint' }, [tag('feFuncA', { type: 'linear', slope: 0.55 })]),
