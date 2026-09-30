@@ -144,8 +144,11 @@ describe('a styled fill', () => {
     it(`${type} clips its marks to the region's exact outline`, () => {
       const spec = example('Square minus its circle')
       const clean = render(spec).svg
+      // Roughness 0: this is about the clip mechanism, not the off-register
+      // shift roughness adds on top of it (fills/wash.ts, fills/flat.ts).
       const styled = render(`@style: ink
 @style-fill: ${type}
+@style-roughness: 0
 ${spec}`).svg
       const found = clips(styled)
       expect(found).toHaveLength(1)
@@ -182,10 +185,21 @@ ${example(label)}`).svg
 
   it('draws flat and none without a clip', () => {
     for (const type of ['flat', 'none']) {
+      // Roughness 0: at roughness > 0, flat's off-register shift needs its
+      // own clip (fills/flat.ts) — a deliberate exception, tested below.
       expect(clips(render(`@style: ink
 @style-fill: ${type}
+@style-roughness: 0
 ${example('Square minus its circle')}`).svg), type).toHaveLength(0)
     }
+  })
+
+  it('flat gets its own clip once roughness gives it an off-register shift', () => {
+    const styled = render(`@style: ink
+@style-fill: flat
+@style-roughness: 1
+${example('Square minus its circle')}`).svg
+    expect(clips(styled)).toHaveLength(1)
   })
 
   it('is deterministic', () => {

@@ -257,18 +257,28 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
       const clipped: string[] = []
       for (const mark of marks) {
         switch (mark.kind) {
-          case 'area':
-            layers[layer].push(
-              cleanFill(region, {
-                fill: paint,
-                'fill-opacity': areaOpacity,
-                'fill-rule': attrs['fill-rule'],
-                stroke: 'none',
-                filter: mark.texture ? textureUrl({ name: mark.texture, strength: 0.5 }) : null,
-                ...identity,
-              })
-            )
+          case 'area': {
+            const areaMarkup = cleanFill(region, {
+              fill: paint,
+              'fill-opacity': areaOpacity,
+              'fill-rule': attrs['fill-rule'],
+              stroke: 'none',
+              filter: mark.texture ? textureUrl({ name: mark.texture, strength: mark.strength ?? 0.5 }) : null,
+              ...identity,
+            })
+            // Off register (roughness): the tint drawn translated, clipped
+            // back to the region's exact outline so it misses the true line
+            // on one side and never spills past it on the other. Today's
+            // behaviour — no shift — draws the area exactly as before.
+            if (mark.shift) {
+              const clip = `${ID}clip-${clipDefs.length}`
+              clipDefs.push(`<clipPath id="${clip}">${cleanFill(region, { 'clip-rule': evenOdd ? 'evenodd' : null })}</clipPath>`)
+              layers[layer].push(`<g clip-path="url(#${clip})"><g transform="translate(${dp(mark.shift.x)} ${dp(mark.shift.y)})">${areaMarkup}</g></g>`)
+            } else {
+              layers[layer].push(areaMarkup)
+            }
             break
+          }
           case 'lines':
             mark.chains.forEach((chain, c) => {
               for (const primitive of drawChain(chain, shadingWidth, `${id}/fill#${c}`, shadingSettings, SHADING_STEP)) clipped.push(write(primitive, shade, opacity, identity))
@@ -277,18 +287,20 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
           case 'dots':
             if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: shade, stroke: 'none', opacity, ...identity })}/>`)
             break
-          case 'edge':
-            clipped.push(
-              cleanFill(region, {
-                fill: 'none',
-                stroke: paint,
-                'stroke-width': mark.width,
-                opacity: Math.min(1, mark.opacity * opacity),
-                filter: textureUrl({ name: 'soften', strength: 0.5 }),
-                ...identity,
-              })
-            )
+          case 'edge': {
+            const edgeMarkup = cleanFill(region, {
+              fill: 'none',
+              stroke: paint,
+              'stroke-width': mark.width,
+              opacity: Math.min(1, mark.opacity * opacity),
+              filter: textureUrl({ name: 'soften', strength: 0.5 }),
+              ...identity,
+            })
+            // Moves with its area's own off-register shift, so the rim and
+            // the tint it darkens stay together.
+            clipped.push(mark.shift ? `<g transform="translate(${dp(mark.shift.x)} ${dp(mark.shift.y)})">${edgeMarkup}</g>` : edgeMarkup)
             break
+          }
         }
       }
       if (clipped.length > 0) {
