@@ -33,7 +33,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // doubling"). Hatching at a pen's spacing.
   ink: {
     line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 2, width: 1, variation: 0.4, taper: 0.3, grain: 0.1, opacity: 1 },
-    fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.55 },
+    fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65 },
     paper: { type: 'paper', tint: '#fbf8f0', texture: 0.45, grid: 24 },
     lettering: { face: 'math', size: 1.05, tilt: 0 },
     colour: { ink: '#1f2a44', saturation: 0.9 },
@@ -43,7 +43,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // base weight, because two light passes read heavier than one.
   pencil: {
     line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 0.9, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
-    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.5 },
+    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.85 },
     paper: { type: 'rough-paper', tint: '#f6f3ec', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
     colour: { ink: '#3a3a3c', saturation: 0.4 },

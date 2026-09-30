@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
 import { LIGHT_PALETTE } from '../render/palette'
+import { EXAMPLES } from '../examples'
 import { renderFigure } from './render'
 
 // The styled pen, end to end: a spec with a style directive renders through
@@ -123,5 +124,71 @@ describe('a styled figure', () => {
     const other = render(`@style: pencil\n${TRIANGLE.replace('C = (1, 4)', 'C = (2, 5)')}`).svg
     const otherIds = [...other.matchAll(/<filter id="([^"]+)"/g)].map((m) => m[1])
     for (const id of otherIds) expect(ids).not.toContain(id)
+  })
+})
+
+// Fills: every filled item draws its marks inside a clip of its EXACT outline
+// (the very path the clean pen fills), so hatching, stipple and scribble
+// never spill over an edge or into a hole.
+describe('a styled fill', () => {
+  const example = (label: string) => EXAMPLES.find((e) => e.label === label)!.spec
+
+  // The clip paths of a figure, by id, and the groups clipped to each.
+  const clips = (svg: string) => [...svg.matchAll(/<clipPath id="([^"]+)">(<[^>]+>)<\/clipPath>/g)].map((m) => ({ id: m[1], outline: m[2] }))
+  const clippedGroups = (svg: string, id: string) => [...svg.matchAll(new RegExp(`<g clip-path="url\\(#${id}\\)"([^>]*)>`, 'g'))].map((m) => m[1])
+  const d = (element: string) => / d="([^"]*)"/.exec(element)?.[1] ?? /points="([^"]*)"/.exec(element)?.[1]
+
+  for (const type of ['hatch', 'crosshatch', 'stipple', 'scribble', 'wash']) {
+    it(`${type} clips its marks to the region's exact outline`, () => {
+      const spec = example('Square minus its circle')
+      const clean = render(spec).svg
+      const styled = render(`@style: ink
+@style-fill: ${type}
+${spec}`).svg
+      const found = clips(styled)
+      expect(found).toHaveLength(1)
+      // The clip IS the region's exact outline: the clean fill's own path.
+      const cleanRegion = /<g data-layer="regions">(<path[^>]*>)/.exec(clean)![1]
+      expect(d(found[0].outline)).toBe(d(cleanRegion))
+      expect(found[0].outline).toContain('clip-rule="evenodd"')
+      const groups = clippedGroups(styled, found[0].id)
+      expect(groups).toHaveLength(1)
+      expect(groups[0]).toContain('data-statement=')
+    })
+  }
+
+  it('keeps the annulus’s hole out of every fill: the clip carries the hole', () => {
+    for (const type of ['hatch', 'stipple', 'scribble', 'wash', 'crosshatch']) {
+      const styled = render(`@style: pencil
+@style-fill: ${type}
+${example('Annulus')}`).svg
+      const [clip] = clips(styled)
+      expect(clip.outline, type).toContain('clip-rule="evenodd"')
+      // Two loops: the outer circle and the hole.
+      expect(d(clip.outline)!.match(/M /g), type).toHaveLength(2)
+    }
+  })
+
+  it('reaches sectors, segments and cut faces as well as shaded regions', () => {
+    for (const label of ['Circle vocabulary', 'Secant and chord', 'Cross-section (cut)']) {
+      const styled = render(`@style: ink
+@style-fill: hatch
+${example(label)}`).svg
+      expect(clips(styled).length, label).toBeGreaterThan(0)
+    }
+  })
+
+  it('draws flat and none without a clip', () => {
+    for (const type of ['flat', 'none']) {
+      expect(clips(render(`@style: ink
+@style-fill: ${type}
+${example('Square minus its circle')}`).svg), type).toHaveLength(0)
+    }
+  })
+
+  it('is deterministic', () => {
+    const spec = `@style: marker
+${example('Lens of two circles')}`
+    expect(render(spec).svg).toBe(render(spec).svg)
   })
 })

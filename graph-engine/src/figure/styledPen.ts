@@ -5,7 +5,8 @@ import { LINES, type Primitive, type Texture } from '../style/lines'
 import { dashPolyline, polylineChain, sampleChain, type Chain, type Piece } from '../style/path'
 import { hashString, randomFor } from '../style/random'
 import { textureFilter } from '../style/textures'
-import type { Style } from '../style/tokens'
+import type { LineSettings, Style } from '../style/tokens'
+import { FILLS } from '../style/fills'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
 import { notationElements } from './notation'
 import { cleanFill, regionChains, strokeChains, type FigurePen, type FillRegion } from './pen'
@@ -146,8 +147,26 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
 
   // A chain through the line type. `key` is the element's identity plus
   // which piece of it this is — the random source's seed string.
-  const drawChain = (chain: Chain, width: number, key: string): Primitive[] =>
-    line.draw({ chain, width, settings: style.line, random: randomFor(key, style.seed) })
+  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line): Primitive[] =>
+    line.draw({ chain, width, settings, random: randomFor(key, style.seed) })
+
+  // Textures a fill asks for (a wash's blotches, its soft rim), and the clip
+  // paths that keep fill marks inside their regions — all written into
+  // <defs> once the document is finished.
+  const fillTextures = new Map<string, Texture>()
+  const clipDefs: string[] = []
+  const textureUrl = (texture: Texture): string => {
+    const name = `${ID}${texture.name}`
+    fillTextures.set(name, texture)
+    return `url(#${name})`
+  }
+
+  // Hatch lines and scribbles are drawn in the current line type, a little
+  // finer than an edge, with half its looseness, a single pass and less
+  // grain: a shading stroke is quicker and lighter than an outline (and a
+  // region of chalk hatching would otherwise be mostly dust).
+  const shadingSettings: LineSettings = { ...style.line, looseness: style.line.looseness * 0.5, passes: 1, grain: style.line.grain * 0.3 }
+  const shadingWidth = 1.1 * style.line.width
 
   // A dashed stroke is cut into dashes first, and each dash drawn in the
   // line type: a sketchy hidden edge is a row of short sketchy strokes. The
@@ -176,19 +195,61 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
       strokeChainsWith(strokeChains(path), attrs, id, layer)
     },
 
-    // Flat for now: the region's own path, in the style's fill opacity, with
-    // its outline (when it has one) drawn in the line type.
+    // A region through the style's fill (style/fills/). An area is the
+    // region's own exact path; every other mark — hatch lines and scribbles
+    // in the line type, stipple dots, a wash's rim — sits in a group clipped
+    // to that same exact path, so nothing spills over an edge or into a hole.
+    // The outline, when the region has one, is drawn in the line type.
     fill(region: FillRegion, attrs, id, layer) {
-      layers[layer].push(
-        cleanFill(region, {
-          fill: colour(attrs.fill),
-          'fill-opacity': style.fill.opacity,
-          'fill-rule': attrs['fill-rule'],
-          stroke: 'none',
-          ...identityOf(attrs),
-        })
-      )
-      if (attrs.stroke !== undefined && attrs.stroke !== 'none') strokeChainsWith(regionChains(region), attrs, `${id}/outline`, layer)
+      const paint = colour(attrs.fill) ?? ink
+      const identity = identityOf(attrs)
+      const opacity = style.fill.opacity
+      const evenOdd = attrs['fill-rule'] === 'evenodd'
+      const outline = regionChains(region)
+      const { marks } = FILLS[style.fill.type].draw({ outline, settings: style.fill, random: randomFor(`${id}/fill`, style.seed) })
+      const clipped: string[] = []
+      for (const mark of marks) {
+        switch (mark.kind) {
+          case 'area':
+            layers[layer].push(
+              cleanFill(region, {
+                fill: paint,
+                'fill-opacity': opacity,
+                'fill-rule': attrs['fill-rule'],
+                stroke: 'none',
+                filter: mark.texture ? textureUrl({ name: mark.texture, strength: 0.5 }) : null,
+                ...identity,
+              })
+            )
+            break
+          case 'lines':
+            mark.chains.forEach((chain, c) => {
+              for (const primitive of drawChain(chain, shadingWidth, `${id}/fill#${c}`, shadingSettings)) clipped.push(write(primitive, paint, opacity, identity))
+            })
+            break
+          case 'dots':
+            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: paint, stroke: 'none', opacity, ...identity })}/>`)
+            break
+          case 'edge':
+            clipped.push(
+              cleanFill(region, {
+                fill: 'none',
+                stroke: paint,
+                'stroke-width': mark.width,
+                opacity: Math.min(1, mark.opacity * opacity * 2),
+                filter: textureUrl({ name: 'soften', strength: 0.5 }),
+                ...identity,
+              })
+            )
+            break
+        }
+      }
+      if (clipped.length > 0) {
+        const clip = `${ID}clip-${clipDefs.length}`
+        clipDefs.push(`<clipPath id="${clip}">${cleanFill(region, { 'clip-rule': evenOdd ? 'evenodd' : null })}</clipPath>`)
+        layers[layer].push(`<g clip-path="url(#${clip})"${attributes(identity)}>${clipped.join('')}</g>`)
+      }
+      if (attrs.stroke !== undefined && attrs.stroke !== 'none') strokeChainsWith(outline, attrs, `${id}/outline`, layer)
     },
 
     mark(at, radius, attrs, _id, layer) {
@@ -234,7 +295,11 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
       )
       const box = `${fmt(viewBox.x)} ${fmt(viewBox.y)} ${fmt(viewBox.width)} ${fmt(viewBox.height)}`
       const region = { x: viewBox.x - viewBox.width, y: viewBox.y - viewBox.height, width: 3 * viewBox.width, height: 3 * viewBox.height }
-      const defs = texture && textureId ? [textureFilter(texture, textureId, region)] : []
+      const defs = [
+        ...(texture && textureId ? [textureFilter(texture, textureId, region)] : []),
+        ...[...fillTextures].map(([name, used]) => textureFilter(used, name, region)),
+        ...clipDefs,
+      ]
       const body = (defs.length > 0 ? `<defs>${defs.join('')}</defs>` : '') + paperMarkup + groups.join('')
       // The content hash that names this figure's ids: of the body, with the
       // placeholders still in it, so it depends on nothing but the figure.

@@ -51,5 +51,16 @@ export function textureFilter(texture: Texture, id: string, region: Box): string
         tag('feComponentTransfer', { in: 'halo', result: 'faint' }, [tag('feFuncA', { type: 'linear', slope: 0.55 })]),
         tag('feMerge', {}, [tag('feMergeNode', { in: 'faint' }), tag('feMergeNode', { in: 'SourceGraphic' })]),
       ])
+    // Watercolour: broad, slow noise varying how strongly the tint covers,
+    // so a wash is blotchy rather than flat.
+    case 'wash':
+      return tag('filter', frame, [
+        tag('feTurbulence', { type: 'fractalNoise', baseFrequency: 0.012, numOctaves: 3, seed: NOISE_SEED, result: 'noise' }),
+        tag('feColorMatrix', { in: 'noise', type: 'matrix', values: `0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ${0.6 + 1.4 * s} 0 0 0 ${0.7 - 1.1 * s}`, result: 'blotch' }),
+        tag('feComposite', { in: 'SourceGraphic', in2: 'blotch', operator: 'in' }),
+      ])
+    // A plain blur: a wash's pooled rim, soft on the inside.
+    case 'soften':
+      return tag('filter', frame, [tag('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 1 + 2 * s })])
   }
 }

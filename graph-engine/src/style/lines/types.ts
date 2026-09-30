@@ -48,7 +48,9 @@ export type Primitive =
 // broken into graphite, dust into chalk. Texture only: it changes how ink
 // covers the page, never where the lines are. `strength` is 0 to 1.
 export interface Texture {
-  name: 'grain' | 'chalk' | 'bleed'
+  // grain, chalk and bleed belong to line types; wash (an uneven tint) and
+  // soften (a blur for a wash's pooled edge) to the fills.
+  name: 'grain' | 'chalk' | 'bleed' | 'wash' | 'soften'
   strength: number
 }
 
