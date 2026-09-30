@@ -20,19 +20,28 @@ import type { FillInput, FillType } from './types'
 // At `roughness` 0 this is exactly the above, byte for byte. Above 0
 // (roughenFamily) every line strays a little in place, angle and where it
 // ends, and now and then is skipped or broken — a hand's hatching, not a
-// plotter's. The pen clips the result to the region's exact outline, so an
-// end that runs past the edge never spills (rule 4).
+// plotter's — and the family is no longer anchored to the page: bunching
+// accumulates along it, so a line's offset drifts from its whole-spacing
+// spot the further it is from the first. The pen clips the result to the
+// region's exact outline, so an end that runs past the edge never spills
+// (rule 4).
 export function hatchFamily({ outline, settings, random }: Pick<FillInput, 'outline' | 'settings' | 'random'>, angle: number, budget = MARK_BUDGET.length): Chain[] {
   const polygons = regionPolygons(outline)
-  const spacing = spacingWithin(polygons, angle, settings.spacing, budget)
-  if (settings.roughness <= 0) {
+  const r = settings.roughness
+  if (r <= 0) {
+    const spacing = spacingWithin(polygons, angle, settings.spacing, budget)
     const chains: Chain[] = []
     for (const line of scanlines(polygons, angle, spacing)) {
       for (const [from, to] of line.intervals) chains.push(polylineChain([scanPoint(angle, line.offset, from), scanPoint(angle, line.offset, to)]))
     }
     return chains
   }
-  return roughenFamily(polygons, angle, spacing, settings.roughness, random)
+  // Bunching can shrink a step to 3/4 of the spacing, and the end offsets
+  // overrun on top of that: fit the CLEAN family to a share of the budget
+  // that leaves room for the rough one's inflation, rather than the budget
+  // itself (review round 1 — the rough family was going over).
+  const spacing = spacingWithin(polygons, angle, settings.spacing, (budget * (1 - 0.25 * r)) / (1 + 0.1 * r))
+  return roughenFamily(polygons, angle, spacing, r, random)
 }
 
 // A stretch's ends move independently, short of the edge or past it; a

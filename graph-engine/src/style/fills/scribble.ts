@@ -159,9 +159,14 @@ export const scribble: FillType = {
     const polygons = regionPolygons(outline)
     const angle = settings.angle
     const r = settings.roughness
-    // A second, sparser pass (below) shares the budget: the main family
-    // keeps two thirds of it when there will be one.
-    const mainBudget = r > 0.3 ? (2 / 3) * MARK_BUDGET.length : MARK_BUDGET.length
+    // A second, sparser pass (below) shares the budget with the main
+    // family. Its share ramps in smoothly from 0 at r = 0.3 to a third at
+    // r = 0.4, rather than jumping straight to a third — and the main
+    // family's own share is cut a little further still, (1 − 0.1r), since
+    // roughening (turn jitter, bends) inflates a run's own length a little
+    // on top of whatever the second pass takes (review round 1).
+    const secondShare = r <= 0.3 ? 0 : r >= 0.4 ? 1 / 3 : (1 / 3) * ((r - 0.3) / 0.1)
+    const mainBudget = MARK_BUDGET.length * (1 - 0.1 * r) * (1 - secondShare)
     const step = spacingWithin(polygons, angle, settings.spacing, mainBudget)
     const box = boundsOfPolygons(polygons)
     const centre = { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }
@@ -173,9 +178,9 @@ export const scribble: FillType = {
     // At higher roughness, a second, sparser scribble goes over a patch of
     // the first — another angle, wider spacing, split where it leaves a
     // random disc so it reads as a patch rather than a second whole fill.
-    if (r > 0.3) {
+    if (secondShare > 0) {
       const angle2 = angle + random.range(25, 60)
-      const step2 = spacingWithin(polygons, angle2, settings.spacing * 1.6, MARK_BUDGET.length / 3)
+      const step2 = spacingWithin(polygons, angle2, settings.spacing * 1.6, MARK_BUDGET.length * secondShare)
       const discCentre = { x: box.minX + random.next() * (box.maxX - box.minX), y: box.minY + random.next() * (box.maxY - box.minY) }
       const discRadius = random.range(0.3, 0.6) * Math.max(box.maxX - box.minX, box.maxY - box.minY)
       const inDisc = (p: Point) => Math.hypot(p.x - discCentre.x, p.y - discCentre.y) <= discRadius

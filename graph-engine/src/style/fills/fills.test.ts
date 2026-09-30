@@ -209,6 +209,36 @@ describe('the mark budget', () => {
     const total = length(fill('scribble', BIG, { spacing: 3, roughness: 1 }))
     expect(total).toBeLessThanOrEqual(MARK_BUDGET.length * 1.05)
   })
+
+  // Review round 1: scribble's second pass used to jump straight in at
+  // roughness 0.3 (no second pass at 0.3, a full third-of-the-budget one at
+  // 0.31) rather than ramping. A jump would show up as one 0.01 step in
+  // roughness changing the drawn length by close to a third of the budget;
+  // ramping in over [0.3, 0.4] keeps every step small.
+  it('scribble’s second pass fades in smoothly across roughness, not a jump at 0.3', () => {
+    const at = (r: number) => length(fill('scribble', BIG, { spacing: 3, roughness: r }, 'ramp-seed'))
+    const steps = [0.29, 0.3, 0.31, 0.32, 0.35, 0.38, 0.4, 0.41]
+    for (let i = 1; i < steps.length; i++) {
+      const delta = Math.abs(at(steps[i]) - at(steps[i - 1]))
+      expect(delta, `${steps[i - 1]} -> ${steps[i]}`).toBeLessThan(MARK_BUDGET.length * 0.12)
+    }
+  })
+
+  // Review round 1: rough hatch and crosshatch went over the budget by as
+  // much as 17.5% at roughness 1 — bunching can shrink a step to 3/4 of the
+  // spacing, and the end offsets overrun on top of that. A large region at a
+  // fine spacing, across seeds and roughnesses, is what caught it.
+  it('keeps rough hatch, crosshatch and scribble within the budget on a large region', () => {
+    const HUGE: Chain[] = [polylineChain([{ x: 0, y: 0 }, { x: 1200, y: 0 }, { x: 1200, y: 900 }, { x: 0, y: 900 }, { x: 0, y: 0 }], true)]
+    for (const type of ['hatch', 'crosshatch', 'scribble'] as const) {
+      for (const roughness of [0.1, 0.35, 0.45, 1]) {
+        for (let seed = 0; seed < 8; seed++) {
+          const total = length(fill(type, HUGE, { spacing: 3, roughness }, `budget-${type}-${roughness}-${seed}`))
+          expect(total, `${type} r=${roughness} seed=${seed}`).toBeLessThanOrEqual(MARK_BUDGET.length * 1.02)
+        }
+      }
+    }
+  })
 })
 
 // Ben's first-look note: fills should be "a little less perfect" — roughness
@@ -221,15 +251,29 @@ describe('roughness', () => {
     }
   })
 
-  it('hatch strays from its clean family once roughness rises, and may run an end past the region — only the pen’s clip keeps it inside (rule 4)', () => {
+  it('hatch strays from its clean family once roughness rises', () => {
     const clean = fill('hatch', SQUARE, { roughness: 0, spacing: 6 })
     const rough = fill('hatch', SQUARE, { roughness: 1, spacing: 6 })
     expect(rough).not.toEqual(clean)
-    const polygons = regionPolygons(SQUARE)
-    const ends: { x: number; y: number }[] = []
-    for (const mark of rough) if (mark.kind === 'lines') for (const chain of mark.chains) for (const piece of chain.pieces) if (piece.kind === 'line') ends.push(piece.from, piece.to)
-    expect(ends.length).toBeGreaterThan(0)
-    expect(ends.some((p) => !insideRegion(p, polygons))).toBe(true)
+  })
+
+  // Review round 1: the previous version of this test mixed end offsets,
+  // angle and place together and still passed with both end offsets
+  // deleted — angle and place alone can also push a point outside. At
+  // angle 0 a clean stretch runs the full width (x from 0 to 200) and both
+  // its ends share one y, so the end offsets (roughEnds, hatch.ts) are the
+  // only thing that moves an end along x by a meaningful amount: turning a
+  // stretch about its own midpoint (the angle jitter) barely shifts x when
+  // its two ends already share a y before the turn.
+  it('hatch’s ends move along the line once roughness rises — running past the true edge on one side, falling short of it on the other (rule 4)', () => {
+    const rough = fill('hatch', SQUARE, { roughness: 1, spacing: 6, angle: 0 })
+    const xs: number[] = []
+    for (const mark of rough) if (mark.kind === 'lines') for (const chain of mark.chains) for (const piece of chain.pieces) if (piece.kind === 'line') xs.push(piece.from.x, piece.to.x)
+    expect(xs.length).toBeGreaterThan(0)
+    // The pen's clip is what keeps a run-past end from spilling out of the
+    // region — the fill itself may draw past it.
+    expect(xs.some((x) => x < -1e-6 || x > 200 + 1e-6), 'some end overruns the true edge').toBe(true)
+    expect(xs.some((x) => x > 1 && x < 199), 'some end falls short of the true edge').toBe(true)
   })
 
   it('crosshatch’s second family strays from a quarter turn by more than one stretch’s own rotation can, once roughness rises', () => {
