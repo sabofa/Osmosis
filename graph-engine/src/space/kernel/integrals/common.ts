@@ -20,11 +20,19 @@ import type { BuildContext } from '../registry'
 // multiplied by 10 for this by the caller that set it, and formatters here
 // also floor its digits at SIGNIFICANT_DIGITS, never trusting more from an
 // estimate that leaned on a heuristic.
+// `mesh` (S5 breaker follow-up, F1a): a bounded inequality-region mesh sum's
+// own error (the larger of the last two changes, plus the boundary gap and
+// rounding) is a direct measurement of that sum's own behaviour across
+// resolutions, not an adaptive quadrature's heuristic decay estimate — the
+// kind SAFETY exists to cover for. It skips SAFETY. A singular mesh sum
+// (already floored ×10, C1's belt and braces) still leans on the same kind
+// of heuristic tail estimate as quadrature does, so it keeps SAFETY.
 export interface Approx {
   value: number
   error: number
   scale: number
   singular?: boolean
+  mesh?: boolean
 }
 
 // What floating point can resolve in an integral: this fraction of the
@@ -99,26 +107,45 @@ function digitsAt(rounded: number, p: number): number {
   return rounded === 0 ? 1 : Math.max(1, Math.floor(Math.log10(Math.abs(rounded))) - p + 1)
 }
 
+// S5 breaker follow-up, F1c: SAFETY's own search (chosenDisplay, below) can
+// fail every unit, all the way to 0, even when the RAW (unscaled) error
+// honestly supports one significant digit — or one unit coarser than
+// that — on its own: SAFETY is a conservatism margin against a heuristic
+// error estimate being wrong by a wide margin, not a claim that a small,
+// already-honest error somehow is not. Tried only as this last resort,
+// after SAFETY's own search finds no unit at all (the pin: |x-0.5|^-0.7,
+// whose singular ×10-floored error is tiny beside SAFETY but plenty tiny
+// on its own, prints a correct one-digit prefix, not a refusal).
+function honestFallback(raw: number, error: number, leading: number): { value: number; digits: number } | null {
+  for (const p of [leading, leading + 1]) {
+    const rounded = roundToUnit(raw, p)
+    if (rounded !== 0 && honestAt(raw, error, p)) return { value: rounded, digits: digitsAt(rounded, p) }
+  }
+  return null
+}
+
 // The value and digit count a readout shows an estimate to (S5 breaker
 // ruling, F1): coarsened, one unit at a time, from what SAFETY times the
 // stated error supports (supportedDigits), capped at SIGNIFICANT_DIGITS
 // for a singularity treatment (C1's belt and braces), until showing it
 // there is honest (honestAt) — possibly past the leading digit, to a unit
-// larger than the value itself. Never coarsens as far as showing 0 this
-// way: a value that would take that (F1b, "when no unit works") is left to
-// the caller's own half-value refusal instead, which judges the raw,
-// unscaled error, not this one. Adaptive error estimates are heuristic and
-// were measured up to 29x short of the truth on some kinks (S5_SAFETY).
+// larger than the value itself. A bounded mesh sum's own error (`mesh`,
+// F1a) is a direct measurement, not a heuristic decay estimate, and skips
+// SAFETY. Failing that entirely falls back to `honestFallback` (F1c)
+// before finally giving up: a value that fails even that is left to the
+// caller's own half-value refusal instead, which judges the raw, unscaled
+// error, not this one. Adaptive error estimates are heuristic and were
+// measured up to 29x short of the truth on some kinks (S5_SAFETY).
 function chosenDisplay(a: Approx): { value: number; digits: number } | null {
   const raw = shown(a)
   if (raw === 0) return { value: 0, digits: 1 }
   const cap = a.singular ? SIGNIFICANT_DIGITS : MAX_DIGITS
-  const error = S5_SAFETY * a.error
+  const error = (a.mesh ? 1 : S5_SAFETY) * a.error
   const leading = Math.floor(Math.log10(Math.abs(raw)))
   let p = leading - Math.min(cap, supportedDigits(raw, error)) + 1
   for (;;) {
     const rounded = roundToUnit(raw, p)
-    if (rounded === 0) return null
+    if (rounded === 0) return honestFallback(raw, a.error, leading)
     if (honestAt(raw, error, p)) return { value: rounded, digits: digitsAt(rounded, p) }
     p++
   }

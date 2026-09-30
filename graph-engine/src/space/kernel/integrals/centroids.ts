@@ -92,7 +92,10 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
 
 // moment / mass, with the error of a quotient, and the moment's scale
 // carried over, so a coordinate that is negligible reads ≈ 0 and one known to
-// no digit is refused (common.ts).
+// no digit is refused (common.ts). `mesh` (S5 breaker follow-up, F1a) only
+// when both operands are: a quotient with a quadrature-derived (singular or
+// not) operand still leans on that operand's own heuristic estimate, so it
+// keeps SAFETY, same as `singular` already conservatively ORs the other way.
 function quotient(moment: Approx, mass: Approx): Approx {
   const value = moment.value / mass.value
   return {
@@ -100,6 +103,7 @@ function quotient(moment: Approx, mass: Approx): Approx {
     error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value),
     scale: moment.scale / Math.abs(mass.value),
     singular: moment.singular || mass.singular,
+    mesh: moment.mesh === true && mass.mesh === true,
   }
 }
 

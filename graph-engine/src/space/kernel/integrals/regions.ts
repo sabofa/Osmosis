@@ -618,8 +618,19 @@ function inequalityRegion(conditions: readonly Condition[], box: { x: Range; y: 
     // A bounded integrand (its largest sample no longer growing): the mesh's
     // error is its cells' and its boundary's, no long tail to guess — the
     // larger of the last two changes. Sums that wander (under-resolved
-    // rings) are a value with a wide error, never a refusal.
-    if (!(A.peak > PEAK_GROWTH * B.peak)) return { value: A.value, error: Math.max(d1, d2, floor), scale: A.absolute }
+    // rings) are a value with a wide error, never a refusal. `mesh: true`
+    // (S5 breaker follow-up, F1a): this error is a direct measurement of
+    // this sum's own behaviour across resolutions, not a heuristic decay
+    // estimate — it skips SAFETY (common.ts).
+    //
+    // S5 breaker follow-up, F1d (tried, not shipped): an O(h^2) Richardson
+    // extrapolation over the last three resolutions raised several textbook
+    // cases to 3+ correct digits (the disc, the ellipse, the cardioid), but
+    // the 432-strip sweep then found 3 genuinely wrong digits — the model
+    // does not hold for every thin band (e.g. abs(x + 0.3y - 0.7) <= 0.01,
+    // |y| <= 1.5, res 48: printed "0.01" against a hand area of 0.06). Honesty
+    // comes before digits: reverted to the plain last-two-changes error.
+    if (!(A.peak > PEAK_GROWTH * B.peak)) return { value: A.value, error: Math.max(d1, d2, floor), scale: A.absolute, mesh: true }
     // A singular one (x^2 + y^2)^-0.9 converges slowly: the changes shrink by
     // ρ per halving of the cell — over two halvings when the n/8 mesh counts,
     // ρ = sqrt(d1/d3), so a lucky small middle change says nothing about the

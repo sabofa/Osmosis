@@ -142,17 +142,17 @@ describe('readouts: a value that is zero within its error shows as ≈ 0, never 
 })
 
 describe('centroids over mesh regions and solids (fix round 2)', () => {
-  it('the half-disc at @resolution: 64 is not refused, and every printed digit is right — or an honest refusal under SAFETY (F1, breaker ruling)', () => {
+  // S5 breaker follow-up, F1a: mass and each moment here are bounded mesh
+  // sums (mesh: true), and quotient (centroids.ts) passes that through, so
+  // this coordinate skips SAFETY and is never refused.
+  it('the half-disc at @resolution: 64 is not refused, and every printed digit is right', () => {
     const scene = sceneOf('@resolution: 64\nD = region x^2 + y^2 <= 1 and y >= 0\ncentroid: D')
-    if (scene.errors.length) {
-      expect(scene.errors[0].message).toMatch(/^the integral could not be determined to one significant digit/)
-    } else {
-      const text = readout(scene, 3).text
-      const [x, y] = approxTuple(text, 'centroid')
-      expect(x).toBe(0)
-      const printed = /\(([^,]+), ([^)]+)\)/.exec(text)!
-      expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThanOrEqual(10 ** -(printed[2].split('.')[1]?.length ?? 0))
-    }
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 3).text
+    const [x, y] = approxTuple(text, 'centroid')
+    expect(x).toBe(0)
+    const printed = /\(([^,]+), ([^)]+)\)/.exec(text)!
+    expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThanOrEqual(10 ** -(printed[2].split('.')[1]?.length ?? 0))
   })
 
   it('the dome over the unit disc (a mesh solid): x̄ and ȳ read ≈ 0, z̄ = 3/8 to its digits', () => {
@@ -174,14 +174,13 @@ describe('centroids over mesh regions and solids (fix round 2)', () => {
 // "≈ 6.486×10⁻¹⁸ ± 0.001314" — negligible against its own ~2-wide ring, but
 // not against the integral of |density| the general rule compares to.
 describe('a centroid coordinate reads 0 against its own extent, not the integral of |density| (fix round 4, M4)', () => {
-  it('the annulus centroid at its default resolution reads (0, 0), or an honest refusal under SAFETY (F1, breaker ruling) if even its mass cannot be', () => {
+  // S5 breaker follow-up, F1a: a bounded mesh sum, so mass and the moments
+  // skip SAFETY and never refuse.
+  it('the annulus centroid at its default resolution reads (0, 0)', () => {
     const scene = sceneOf('D = region x^2 + y^2 >= 0.95 and x^2 + y^2 <= 1.03\ncentroid: D')
-    if (scene.errors.length) {
-      expect(scene.errors[0].message).toMatch(/^the integral could not be determined to one significant digit/)
-    } else {
-      const [x, y] = approxTuple(readout(scene, 2).text, 'centroid')
-      expect([x, y]).toEqual([0, 0])
-    }
+    expect(scene.errors).toEqual([])
+    const [x, y] = approxTuple(readout(scene, 2).text, 'centroid')
+    expect([x, y]).toEqual([0, 0])
   })
 
   it('the rule itself: a value at float noise against a ~2-wide region reads 0; the same error against a tiny region does not', () => {
@@ -213,18 +212,17 @@ describe('a solid centroid reads its own finite extent, not Infinity (fix round 
   // Hand value: mass = area x height = pi x 1^2 x 1 = pi; x̄ = cx = 0.02 (the
   // moment of x over a disc offset by (cx, cy) is cx x area, so x̄ = cx);
   // ȳ = cy = 0.015; z̄ = 0.5 (the midpoint of the slab z in [0, 1]).
-  it('a slab (z in [0, 1]) over a disc centred at (0.02, 0.015): (0.02, 0.015, 0.5), M = π — or an honest refusal under SAFETY (F1, breaker ruling)', () => {
+  // S5 breaker follow-up, F1a: a bounded mesh sum, so mass and the moments
+  // skip SAFETY and never refuse.
+  it('a slab (z in [0, 1]) over a disc centred at (0.02, 0.015): (0.02, 0.015, 0.5), M = π', () => {
     const scene = sceneOf('V = volume under 1 over (x - 0.02)^2 + (y - 0.015)^2 <= 1\ncentroid: V')
-    if (scene.errors.length) {
-      expect(scene.errors[0].message).toMatch(/^the integral could not be determined to one significant digit/)
-    } else {
-      const text = readout(scene, 2).text
-      const [x, y, z] = approxTuple(text, 'centroid')
-      expect(Math.abs(x - 0.02)).toBeLessThan(2e-3)
-      expect(Math.abs(y - 0.015)).toBeLessThan(2e-3)
-      expect(z).toBe(0.5)
-      expect(Math.abs(approx(text, 'M') - Math.PI)).toBeLessThan(1e-2)
-    }
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 2).text
+    const [x, y, z] = approxTuple(text, 'centroid')
+    expect(Math.abs(x - 0.02)).toBeLessThan(2e-3)
+    expect(Math.abs(y - 0.015)).toBeLessThan(2e-3)
+    expect(z).toBe(0.5)
+    expect(Math.abs(approx(text, 'M') - Math.PI)).toBeLessThan(1e-2)
   })
 
   // The re-reviewer's exact probe: at res 8 the mesh is coarse enough that
