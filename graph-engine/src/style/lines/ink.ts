@@ -58,7 +58,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     const right = half.map((h, i) => h * (1 + 0.3 * settings.grain * noiseRight(at(i))))
 
     if (!loop && n >= 12 && random.next() < 0.25 + 0.6 * settings.grain) {
-      dryFrom = drawDryBrush(out, spine, left, right, width, settings, random)
+      dryFrom = drawDryBrush(out, spine, half, left, right, width, settings, random)
     } else {
       out.push({ kind: 'shape', outline: ribbon2(spine, left, right, closed), spine, opacity: settings.opacity })
     }
@@ -96,15 +96,18 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
 
 // The dry-brush tail: the main ribbon cut short a little past the split, and
 // a few thin bristle strands carrying on from there, spread across the
-// stroke's nominal width (not the pressure-swollen one, so a strand never
-// strays past the faithfulness bound every line type keeps). One strand,
-// chosen at random, always runs to the stroke's true end, its offset faded
-// to nothing over its last few samples — the faithfulness rule, kept even
-// though the brush is running dry. Returns the spine index the main ribbon
-// stopped at.
+// stroke's width. Each strand's offset and its own width follow the
+// ribbon's taper and pressure at that point (`half[i]`), capped at the
+// stroke's nominal half-width (`width / 2`) so a strand never strays past
+// the faithfulness bound every line type keeps, even where pressure has
+// swollen `half[i]` past it. One strand, chosen at random, always runs to
+// the stroke's true end, its offset faded to nothing over its last few
+// samples — the faithfulness rule, kept even though the brush is running
+// dry. Returns the spine index the main ribbon stopped at.
 function drawDryBrush(
   out: Primitive[],
   spine: readonly Point[],
+  half: readonly number[],
   left: readonly number[],
   right: readonly number[],
   width: number,
@@ -122,22 +125,23 @@ function drawDryBrush(
   })
 
   const normals = normalsOf(spine, false)
-  const baseHalf = width / 2
+  const bounded = (i: number) => Math.min(half[i], width / 2)
   const k = random.int(3, 5)
   const chosen = random.int(0, k - 1)
   for (let j = 0; j < k; j++) {
     const offsetFactor = (-1 + (2 * j + 1) / k) * 0.9
-    const strandHalf = (baseHalf / k) * random.range(0.55, 0.95)
+    const widthFactor = random.range(0.55, 0.95)
     const endIndex = j === chosen ? n - 1 : Math.max(splitIndex + 1, Math.round(random.range(splitIndex + 0.3 * (n - 1 - splitIndex), n - 1)))
     const strandSpine: Point[] = []
+    const strandWidths: number[] = []
     for (let i = splitIndex; i <= endIndex; i++) {
       // The chosen strand's offset fades to zero over its last three
       // samples, so its spine lands exactly on the true end.
       const fade = j === chosen ? Math.min(1, Math.max(0, (endIndex - i) / 3)) : 1
-      const offset = baseHalf * offsetFactor * fade
-      strandSpine.push({ x: spine[i].x + normals[i].x * offset, y: spine[i].y + normals[i].y * offset })
+      const h = bounded(i)
+      strandSpine.push({ x: spine[i].x + normals[i].x * h * offsetFactor * fade, y: spine[i].y + normals[i].y * h * offsetFactor * fade })
+      strandWidths.push((h / k) * widthFactor)
     }
-    const strandWidths = strandSpine.map(() => strandHalf)
     out.push({ kind: 'shape', outline: ribbon(strandSpine, strandWidths, false), spine: strandSpine, opacity: settings.opacity })
   }
   return mainEnd

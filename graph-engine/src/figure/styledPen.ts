@@ -187,8 +187,12 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
   // <defs> once the document is finished.
   const fillTextures = new Map<string, Texture>()
   const clipDefs: string[] = []
+  // Keyed by name AND strength: a wash's own texture is always the same
+  // strength, but the mark carries its own now (mottle's is the fill's own
+  // roughness), so two different strengths of one name must not collide on
+  // one id.
   const textureUrl = (texture: Texture): string => {
-    const name = `${ID}${texture.name}`
+    const name = `${ID}${texture.name}-${dp(texture.strength)}`
     fillTextures.set(name, texture)
     return `url(#${name})`
   }

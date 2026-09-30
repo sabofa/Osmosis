@@ -142,12 +142,21 @@ export function sampleStep(width: number): number {
 // Half a turn from one side of a ribbon to the other about the spine's end,
 // bulging along the direction of travel there. In y-down coordinates the
 // travel direction is the left normal turned a quarter turn the positive way.
-function cap(centre: Point, from: Point, radius: number): Point[] {
-  if (radius <= 1e-9) return []
+//
+// The two sides may meet the cap at different radii (a ragged ribbon2's
+// ends): `nearRadius` is the side at `from` itself (k = 0, not drawn — the
+// side's own last point already sits there), `farRadius` the other side
+// (k = 6, likewise not drawn). The radius in between is interpolated,
+// `nearRadius + (farRadius - nearRadius)·k/6`, not averaged, so the cap
+// actually meets each side at its own width instead of a compromise bulge.
+// Reduces to the old single-radius cap exactly when the two are equal.
+function cap(centre: Point, from: Point, nearRadius: number, farRadius: number): Point[] {
+  if (nearRadius <= 1e-9 && farRadius <= 1e-9) return []
   const out: Point[] = []
   const base = Math.atan2(from.y, from.x)
   for (let k = 1; k < 6; k++) {
     const angle = base + (Math.PI * k) / 6
+    const radius = nearRadius + (farRadius - nearRadius) * (k / 6)
     out.push({ x: centre.x + radius * Math.cos(angle), y: centre.y + radius * Math.sin(angle) })
   }
   return out
@@ -180,8 +189,12 @@ export function ribbon2(spine: readonly Point[], left: readonly number[], right:
   const startNormal = normals[0]
   return [
     ...leftSide,
-    ...cap(spine[n - 1], endNormal, (left[n - 1] + right[n - 1]) / 2),
+    // The end cap sweeps from the left side (aligned with `endNormal`) to
+    // the right.
+    ...cap(spine[n - 1], endNormal, left[n - 1], right[n - 1]),
     ...rightSide.reverse(),
-    ...cap(spine[0], { x: -startNormal.x, y: -startNormal.y }, (left[0] + right[0]) / 2),
+    // The start cap sweeps from the right side (aligned with the negated
+    // normal) back to the left, the opposite order.
+    ...cap(spine[0], { x: -startNormal.x, y: -startNormal.y }, right[0], left[0]),
   ]
 }
