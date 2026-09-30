@@ -76,6 +76,12 @@ export interface FillSettings {
   // geometry is fitted into 640 of them).
   spacing: number
   opacity: number
+  // 0 to 1: how far a fill's marks may stray from perfect placement — a
+  // hatch line off its spot or angle, a scribble's uneven turns, stipple
+  // clumping, a flat tint off register. At 0 every fill draws exactly as
+  // before roughness existed, byte for byte; roughness only adds
+  // imperfection on top.
+  roughness: number
 }
 
 export interface PaperSettings {
@@ -196,6 +202,7 @@ export const TOKENS: readonly Token[] = [
   number('fill', 'angle', 'fill-angle', -180, 180, 1, 'Angle', ['angle']),
   number('fill', 'spacing', 'fill-spacing', 3, 40, 0.5, 'Spacing', ['spacing']),
   number('fill', 'opacity', 'fill-opacity', 0, 1, 0.01, 'Opacity'),
+  number('fill', 'roughness', 'fill-roughness', 0, 1, 0.01, 'Roughness', ['roughness']),
 
   choice('paper', 'type', 'paper', PAPER_TYPES, 'Paper'),
   colour('paper', 'tint', 'tint', 'Tint'),

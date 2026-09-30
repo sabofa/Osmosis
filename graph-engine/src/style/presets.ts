@@ -23,7 +23,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // 0.22 — the same backdrop.
   clean: {
     line: { type: 'technical', looseness: 0, wobble: 0, passes: 1, width: 1, variation: 0, taper: 0, grain: 0, opacity: 1 },
-    fill: { type: 'flat', angle: 45, spacing: 9, opacity: 0.44 },
+    fill: { type: 'flat', angle: 45, spacing: 9, opacity: 0.44, roughness: 0 },
     paper: { type: 'clean', tint: 'theme', texture: 0, grid: 24 },
     lettering: { face: 'textbook', size: 1, tilt: 0 },
     colour: { ink: 'theme', saturation: 1 },
@@ -31,10 +31,12 @@ export const PRESETS: Record<PresetName, Look> = {
 
   // A fountain pen on good paper. Blue-black ink; two passes available, of
   // which the ink line uses the second only now and then (its "occasional
-  // doubling"). Hatching at a pen's spacing.
+  // doubling"). Hatching at a pen's spacing. Grain 0.55 (raised from the
+  // first pass's 0.1, Ben's "rough ink brush" note): ragged edges and a dry,
+  // splitting tail, not just a soft bled edge.
   ink: {
-    line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 2, width: 1, variation: 0.4, taper: 0.3, grain: 0.1, opacity: 1 },
-    fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65 },
+    line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 2, width: 1, variation: 0.4, taper: 0.3, grain: 0.55, opacity: 1 },
+    fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65, roughness: 0.35 },
     paper: { type: 'paper', tint: '#fbf8f0', texture: 0.45, grid: 24 },
     lettering: { face: 'math', size: 1.05, tilt: 0 },
     colour: { ink: '#1f2a44', saturation: 0.9 },
@@ -46,7 +48,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // near-black graphite muted to grey.
   pencil: {
     line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
-    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9 },
+    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.45 },
     paper: { type: 'rough-paper', tint: '#f6f3ec', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
     colour: { ink: '#232327', saturation: 0.4 },
@@ -56,7 +58,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // hand lettering a size up (markers write big).
   marker: {
     line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 0.85 },
-    fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45 },
+    fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
     paper: { type: 'ruled', tint: '#fdfdf8', texture: 0.2, grid: 26 },
     lettering: { face: 'hand', size: 1.25, tilt: 0.4 },
     colour: { ink: '#1b3f8f', saturation: 1.1 },
