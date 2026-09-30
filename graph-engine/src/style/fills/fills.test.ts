@@ -16,8 +16,18 @@ const circle = (r: number, clockwise: boolean): Chain => ({
 })
 // An annulus: outer radius 90, a hole of radius 45.
 const ANNULUS: Chain[] = [circle(90, false), circle(45, true)]
+// A region with two separate loops, neither a hole in the other.
+const TWO_LOOPS: Chain[] = [
+  polylineChain([{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 80 }, { x: 0, y: 80 }, { x: 0, y: 0 }], true),
+  polylineChain([{ x: 150, y: 0 }, { x: 230, y: 0 }, { x: 230, y: 80 }, { x: 150, y: 80 }, { x: 150, y: 0 }], true),
+]
 
-const settingsFor = (type: FillType, overrides: Partial<FillSettings> = {}): FillSettings => ({ type, angle: 30, spacing: 10, opacity: 0.5, ...overrides })
+async function sha(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 20)
+}
+
+const settingsFor = (type: FillType, overrides: Partial<FillSettings> = {}): FillSettings => ({ type, angle: 30, spacing: 10, opacity: 0.5, roughness: 0, ...overrides })
 
 const fill = (type: FillType, outline: Chain[], overrides: Partial<FillSettings> = {}, identity = 's1/R') =>
   FILLS[type].draw({ outline, settings: settingsFor(type, overrides), random: randomFor(identity, 0) }).marks
@@ -31,6 +41,52 @@ function inkPoints(marks: readonly FillMark[]): { x: number; y: number }[] {
   }
   return out
 }
+
+// Rule: "roughness 0 is byte-identical for every fill". Pinned at the
+// commit fill roughness was added on (scratch-hashfills.ts, run against the
+// pre-roughness code, this session) — the proof that the fills below still
+// draw exactly as they did before roughness existed. A change to any fill's
+// roughness-0 output turns one of these red.
+const ROUGHNESS_ZERO_HASHES: Record<string, string> = {
+  'flat square': 'ea44c71c4cb542debf08',
+  'flat annulus': 'ea44c71c4cb542debf08',
+  'flat two-loops': 'ea44c71c4cb542debf08',
+  'hatch square': '556b13dbdf06f202e3be',
+  'hatch annulus': 'a41e588b964a6e6bf712',
+  'hatch two-loops': 'a8a9726872230c587181',
+  'crosshatch square': 'b0610b79c3c48d286766',
+  'crosshatch annulus': 'a97ecb5ae64ed2339964',
+  'crosshatch two-loops': '8f8207adc1cd4ffc941f',
+  'stipple square': '89581b1a20792eba1b2e',
+  'stipple annulus': 'c95c4ec87849eb3fa5cf',
+  'stipple two-loops': '12a34186fad0b98b2936',
+  'scribble square': '692c9aa1d614dc26217d',
+  'scribble annulus': 'f2b86d788fc4ad7fc0d1',
+  'scribble two-loops': 'e3588f0f008f382aade0',
+  'wash square': 'e765943ee720f8d25706',
+  'wash annulus': 'e765943ee720f8d25706',
+  'wash two-loops': 'e765943ee720f8d25706',
+  'none square': '9ae37bfe3cc0d2ed80d5',
+  'none annulus': '9ae37bfe3cc0d2ed80d5',
+  'none two-loops': '9ae37bfe3cc0d2ed80d5',
+}
+
+describe('roughness 0 is byte-identical to before roughness existed', () => {
+  const shapes: [string, Chain[]][] = [
+    ['square', SQUARE],
+    ['annulus', ANNULUS],
+    ['two-loops', TWO_LOOPS],
+  ]
+  for (const type of FILL_TYPES) {
+    for (const [shapeName, outline] of shapes) {
+      it(`${type} on ${shapeName}`, async () => {
+        const random = randomFor(`s1/${type}/${shapeName}`, 0)
+        const out = FILLS[type].draw({ outline, settings: settingsFor(type, { roughness: 0 }), random })
+        expect(await sha(JSON.stringify(out))).toBe(ROUGHNESS_ZERO_HASHES[`${type} ${shapeName}`])
+      })
+    }
+  }
+})
 
 describe('every fill', () => {
   for (const type of FILL_TYPES) {
@@ -147,5 +203,100 @@ describe('the mark budget', () => {
     const dots = marks[0].kind === 'dots' ? marks[0].dots.length : 0
     expect(dots).toBeLessThanOrEqual(MARK_BUDGET.dots * 1.1)
     expect(dots).toBeGreaterThan(MARK_BUDGET.dots * 0.7)
+  })
+
+  it('a rough scribble’s second pass still shares the budget, not a whole one of its own', () => {
+    const total = length(fill('scribble', BIG, { spacing: 3, roughness: 1 }))
+    expect(total).toBeLessThanOrEqual(MARK_BUDGET.length * 1.05)
+  })
+})
+
+// Ben's first-look note: fills should be "a little less perfect" — roughness
+// (2026-09-30 revision). Below 0 none of this runs (the hash-pinned suite
+// above is that proof); above 0 every fill strays on purpose.
+describe('roughness', () => {
+  it('hatch, crosshatch, scribble and stipple draw exactly their roughness-0 output when roughness is left out', () => {
+    for (const type of ['hatch', 'crosshatch', 'scribble', 'stipple'] as const) {
+      expect(fill(type, SQUARE, { roughness: 0 })).toEqual(fill(type, SQUARE, {}))
+    }
+  })
+
+  it('hatch strays from its clean family once roughness rises, and may run an end past the region — only the pen’s clip keeps it inside (rule 4)', () => {
+    const clean = fill('hatch', SQUARE, { roughness: 0, spacing: 6 })
+    const rough = fill('hatch', SQUARE, { roughness: 1, spacing: 6 })
+    expect(rough).not.toEqual(clean)
+    const polygons = regionPolygons(SQUARE)
+    const ends: { x: number; y: number }[] = []
+    for (const mark of rough) if (mark.kind === 'lines') for (const chain of mark.chains) for (const piece of chain.pieces) if (piece.kind === 'line') ends.push(piece.from, piece.to)
+    expect(ends.length).toBeGreaterThan(0)
+    expect(ends.some((p) => !insideRegion(p, polygons))).toBe(true)
+  })
+
+  it('crosshatch’s second family strays from a quarter turn by more than one stretch’s own rotation can, once roughness rises', () => {
+    // hatch.ts rotates each stretch about its own midpoint by at most 6° at
+    // roughness 1 (a stretch belonging to either family). Any stretch
+    // further than that from BOTH 30 and 120 can only be explained by
+    // crosshatch's own extra draw, nudging the second family's angle by up
+    // to 10° (crosshatch.ts) — the behaviour this test is for.
+    let maxDeviation = 0
+    for (let seed = 0; seed < 30; seed++) {
+      const marks = FILLS.crosshatch.draw({ outline: SQUARE, settings: settingsFor('crosshatch', { angle: 30, roughness: 1 }), random: randomFor(`seed-${seed}`, 0) }).marks
+      for (const m of marks) {
+        if (m.kind !== 'lines') continue
+        for (const c of m.chains) {
+          const dir = directionOf(c)
+          const devFrom30 = Math.min(Math.abs(dir - 30), 180 - Math.abs(dir - 30))
+          const devFrom120 = Math.min(Math.abs(dir - 120), 180 - Math.abs(dir - 120))
+          maxDeviation = Math.max(maxDeviation, Math.min(devFrom30, devFrom120))
+        }
+      }
+    }
+    expect(maxDeviation).toBeGreaterThan(6)
+  })
+
+  it('scribble turns leave their clean spots and round off, and a second pass thickens the fill past 0.3', () => {
+    const clean = fill('scribble', SQUARE, { roughness: 0 })
+    const rough = fill('scribble', SQUARE, { roughness: 0.6 })
+    expect(rough).not.toEqual(clean)
+    expect(rough[0].kind === 'lines' && rough[0].chains.some((c) => c.pieces.some((p) => p.kind === 'cubic'))).toBe(true)
+    const lineCount = (marks: FillMark[]) => marks.reduce((n, m) => n + (m.kind === 'lines' ? m.chains.length : 0), 0)
+    expect(lineCount(fill('scribble', SQUARE, { roughness: 0.6 }))).toBeGreaterThan(lineCount(fill('scribble', SQUARE, { roughness: 0.2 })))
+  })
+
+  it('stipple varies its size much more once roughness rises, every centre still inside the annulus’s hole', () => {
+    const polygons = regionPolygons(ANNULUS)
+    const rough = fill('stipple', ANNULUS, { roughness: 1 })
+    const dots = rough[0].kind === 'dots' ? rough[0].dots : []
+    expect(dots.length).toBeGreaterThan(0)
+    for (const p of inkPoints(rough)) {
+      const r = Math.hypot(p.x - 100, p.y - 100)
+      expect(insideRegion(p, polygons) || Math.abs(r - 45) < 1e-6 || Math.abs(r - 90) < 1e-6).toBe(true)
+    }
+    // The base radius alone (0.1 to 0.18 of a spacing) never spreads more
+    // than about 1.8x; roughness's own size multiplier (0.6x to 1.8x on top
+    // of that) pushes it well past that on a big enough sample.
+    const spread = (marks: FillMark[]) => {
+      const radii = marks[0].kind === 'dots' ? marks[0].dots.map((d) => d.r) : []
+      return Math.max(...radii) / Math.min(...radii)
+    }
+    expect(spread(rough)).toBeGreaterThan(3)
+    expect(spread(rough)).toBeGreaterThan(spread(fill('stipple', ANNULUS, { roughness: 0 })))
+  })
+
+  it('flat is untouched at roughness 0, off register with a faint mottle above it', () => {
+    expect(fill('flat', SQUARE, { roughness: 0 })).toEqual([{ kind: 'area' }])
+    const rough = fill('flat', SQUARE, { roughness: 1 })
+    expect(rough).toHaveLength(1)
+    expect(rough[0]).toMatchObject({ kind: 'area', texture: 'mottle', strength: 1 })
+    expect(rough[0].kind === 'area' && rough[0].shift).toBeDefined()
+  })
+
+  it('wash keeps its tint and rim off register together, above roughness 0', () => {
+    const rough = fill('wash', SQUARE, { roughness: 1 })
+    const area = rough.find((m) => m.kind === 'area')
+    const edge = rough.find((m) => m.kind === 'edge')
+    expect(area?.kind === 'area' ? area.shift : undefined).toBeDefined()
+    expect(edge?.kind === 'edge' ? edge.shift : undefined).toEqual(area?.kind === 'area' ? area.shift : undefined)
+    expect(fill('wash', SQUARE, { roughness: 0 })).toEqual([{ kind: 'area', texture: 'wash' }, expect.objectContaining({ kind: 'edge' })])
   })
 })

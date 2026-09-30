@@ -1,4 +1,5 @@
 import { sampleChain, type Chain } from '../path'
+import type { Random } from '../random'
 import type { Point } from '../tokens'
 
 // Regions for the fills: an outline flattened to polygons, the even-odd
@@ -60,8 +61,10 @@ export interface Scanline {
   intervals: [number, number][]
 }
 
-export function scanlines(polygons: readonly Point[][], angle: number, spacing: number): Scanline[] {
-  const { along, across } = hatchFrame(angle)
+// How far the region reaches across the family's direction, at `angle`: a
+// line's `offset` only ever needs to run from `lo` to `hi`.
+export function acrossSpan(polygons: readonly Point[][], angle: number): { lo: number; hi: number } {
+  const { across } = hatchFrame(angle)
   const dot = (p: Point, u: Point) => p.x * u.x + p.y * u.y
   let lo = Infinity
   let hi = -Infinity
@@ -71,25 +74,41 @@ export function scanlines(polygons: readonly Point[][], angle: number, spacing: 
       hi = Math.max(hi, dot(p, across))
     }
   }
+  return { lo, hi }
+}
+
+// One line of the family, at any `offset` (not only a multiple of a
+// spacing) — the stretches where it crosses the region, as [from, to] along
+// it. Pulled out of `scanlines` so a rough hatch (hatch.ts) can place a line
+// off its anchored spot without recomputing the whole family.
+export function scanlineAt(polygons: readonly Point[][], angle: number, offset: number): [number, number][] {
+  const { along, across } = hatchFrame(angle)
+  const dot = (p: Point, u: Point) => p.x * u.x + p.y * u.y
+  const hits: number[] = []
+  for (const polygon of polygons) {
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const ca = dot(polygon[j], across)
+      const cb = dot(polygon[i], across)
+      // Half-open, so a line through a vertex counts it once.
+      if ((ca <= offset && offset < cb) || (cb <= offset && offset < ca)) {
+        const f = (offset - ca) / (cb - ca)
+        hits.push(dot(polygon[j], along) + f * (dot(polygon[i], along) - dot(polygon[j], along)))
+      }
+    }
+  }
+  hits.sort((a, b) => a - b)
+  const intervals: [number, number][] = []
+  for (let i = 0; i + 1 < hits.length; i += 2) if (hits[i + 1] > hits[i]) intervals.push([hits[i], hits[i + 1]])
+  return intervals
+}
+
+export function scanlines(polygons: readonly Point[][], angle: number, spacing: number): Scanline[] {
+  const { lo, hi } = acrossSpan(polygons, angle)
   const out: Scanline[] = []
   if (!Number.isFinite(lo) || spacing <= 0) return out
   for (let k = Math.ceil(lo / spacing); k * spacing <= hi; k++) {
     const offset = k * spacing
-    const hits: number[] = []
-    for (const polygon of polygons) {
-      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const ca = dot(polygon[j], across)
-        const cb = dot(polygon[i], across)
-        // Half-open, so a line through a vertex counts it once.
-        if ((ca <= offset && offset < cb) || (cb <= offset && offset < ca)) {
-          const f = (offset - ca) / (cb - ca)
-          hits.push(dot(polygon[j], along) + f * (dot(polygon[i], along) - dot(polygon[j], along)))
-        }
-      }
-    }
-    hits.sort((a, b) => a - b)
-    const intervals: [number, number][] = []
-    for (let i = 0; i + 1 < hits.length; i += 2) if (hits[i + 1] > hits[i]) intervals.push([hits[i], hits[i + 1]])
+    const intervals = scanlineAt(polygons, angle, offset)
     if (intervals.length > 0) out.push({ offset, intervals })
   }
   return out
@@ -126,4 +145,19 @@ export function hatchLength(polygons: readonly Point[][], angle: number, spacing
 export function spacingWithin(polygons: readonly Point[][], angle: number, spacing: number, budget: number): number {
   const length = hatchLength(polygons, angle, spacing)
   return length > budget ? spacing * (length / budget) : spacing
+}
+
+// ---------------------------------------------------------------------------
+// Roughness
+// ---------------------------------------------------------------------------
+
+// A flat fill's or a wash's "off register" nudge: a short seeded step in a
+// random direction, `random.range(1, 3)` drawing units long at roughness 1,
+// scaled down with it. `undefined` at roughness 0, so a fill with no
+// roughness draws exactly as before — no shift, no extra random draw.
+export function offRegister(random: Random, roughness: number): Point | undefined {
+  if (roughness <= 0) return undefined
+  const length = random.range(1, 3) * roughness
+  const angle = random.range(0, 2 * Math.PI)
+  return { x: Math.cos(angle) * length, y: Math.sin(angle) * length }
 }

@@ -59,6 +59,15 @@ export function textureFilter(texture: Texture, id: string, region: Box): string
         tag('feColorMatrix', { in: 'noise', type: 'matrix', values: `0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ${0.6 + 1.4 * s} 0 0 0 ${0.7 - 1.1 * s}`, result: 'blotch' }),
         tag('feComposite', { in: 'SourceGraphic', in2: 'blotch', operator: 'in' }),
       ])
+    // Flat's fainter cousin: the same idea as wash, higher-frequency noise
+    // and a much smaller swing, so a flat tint looks laid by hand without
+    // reading as watercolour.
+    case 'mottle':
+      return tag('filter', frame, [
+        tag('feTurbulence', { type: 'fractalNoise', baseFrequency: 0.04, numOctaves: 2, seed: NOISE_SEED, result: 'noise' }),
+        tag('feColorMatrix', { in: 'noise', type: 'matrix', values: `0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ${0.6 * s} 0 0 0 ${1 - 0.3 * s}`, result: 'blotch' }),
+        tag('feComposite', { in: 'SourceGraphic', in2: 'blotch', operator: 'in' }),
+      ])
     // A plain blur: a wash's pooled rim, soft on the inside.
     case 'soften':
       return tag('filter', frame, [tag('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 1 + 2 * s })])
