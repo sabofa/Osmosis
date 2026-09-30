@@ -1154,7 +1154,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2261 tests (after visual pass 1), node-only, no DOM
+npm run test --workspace=graph-engine          # 2395 tests (after visual pass 1 and its fix rounds), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
