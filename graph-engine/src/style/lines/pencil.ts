@@ -1,0 +1,48 @@
+import { normalsOf, sampleChain, smoothThrough } from '../path'
+import { handDrawn, sampleStep } from './hand'
+import type { LineType, Primitive, StrokeInput } from './types'
+
+// PENCIL — graphite. Two or three light passes laid over one another, each a
+// little off the last, each quick and slightly nervous (a short wobble
+// wavelength), none of them solid: the grain of the paper breaks every pass,
+// and where passes overlap the line reads darker.
+//
+// Built as `passes` separate thin, translucent STROKES, each its own
+// hand-drawn line with its own seeded offset to one side — pinned to the
+// true ends at looseness 0, drifting off them as looseness grows. The grain
+// is a texture over everything drawn in pencil (textures.ts): noise that
+// knocks out specks of each stroke, stronger with `grain`.
+
+const WAVELENGTH = 24
+
+function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
+  const samples = sampleChain(chain, sampleStep(width))
+  const out: Primitive[] = []
+  for (let pass = 0; pass < settings.passes; pass++) {
+    const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.25 })
+    // Each pass sits a seeded distance to one side, along the whole stroke
+    // but easing to nothing at the ends when the hand is tight.
+    const side = random.range(-0.22, 0.22) * width * (1 + 2 * settings.looseness)
+    const normals = normalsOf(line)
+    const n = line.length
+    const shifted = line.map((p, i) => {
+      const t = n === 1 ? 0 : i / (n - 1)
+      const ease = (1 - settings.looseness) * Math.sin(Math.PI * t) + settings.looseness
+      return { x: p.x + normals[i].x * side * ease, y: p.y + normals[i].y * side * ease }
+    })
+    out.push({
+      kind: 'stroke',
+      start: shifted[0],
+      pieces: smoothThrough(shifted),
+      width: width * (0.62 + 0.2 * settings.variation * random.range(-1, 1)),
+      opacity: settings.opacity * (0.55 + 0.15 * random.next()),
+      cap: 'round',
+    })
+  }
+  return out
+}
+
+export const pencil: LineType = {
+  draw,
+  texture: (settings) => (settings.grain > 0 ? { name: 'grain', strength: settings.grain } : null),
+}

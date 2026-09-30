@@ -1,11 +1,10 @@
 import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
-import type { Chain, Piece } from '../style/path'
+import { pieceEnd, type Chain, type Piece } from '../style/path'
 import { emptyFigureLayers, figureDocument, figureTheme, type FigureLayer, type Rect } from './document'
 import { notationElements, type NotationLayout, type NotationStyle } from './notation'
 import {
   ellipticalArcCommand,
-  ellipsePoint,
   lineCommand,
   svgArc,
   svgCircle,
@@ -219,18 +218,6 @@ export function regionChains(region: FillRegion): Chain[] {
     }
     case 'loops':
       return region.loops.map((loop) => closeChain(loop.pieces, loop.start))
-  }
-}
-
-export function pieceEnd(piece: Piece): Vec2 {
-  switch (piece.kind) {
-    case 'line':
-    case 'cubic':
-      return piece.to
-    case 'arc':
-      return circlePoint(piece.center, piece.radius, piece.end)
-    case 'ellipticalArc':
-      return ellipsePoint(piece.center, piece.rx, piece.ry, piece.rotation, piece.end)
   }
 }
 

@@ -31,3 +31,17 @@ describe('no stray randomness', () => {
     })
   }
 })
+
+// The style module is renderer-independent, so the graphing engine can adopt
+// it: it imports nothing from the figure renderer, the scene or the plot
+// renderer.
+describe('style/ stands alone', () => {
+  const own = Object.keys(SOURCES).filter((path) => path.startsWith('./') && !path.endsWith('.test.ts'))
+
+  for (const path of own) {
+    it(`${path} imports only from style/`, () => {
+      const imports = [...SOURCES[path].matchAll(/from '([^']+)'/g)].map((m) => m[1])
+      for (const target of imports) expect(target, path).not.toMatch(/(^|\/)(figure|scene|render|parser)(\/|$)/)
+    })
+  }
+})

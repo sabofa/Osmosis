@@ -83,6 +83,7 @@ import { netOf, netSolidWord, type Net, type NetPiece } from './nets'
 import { shortestPath, type SurfacePath } from './shortestPath'
 import { ellipsePoint, type SvgAttrs } from './svg'
 import { cleanPen, type FigurePen, type FillRegion, type StrokePath } from './pen'
+import { styledPen } from './styledPen'
 import type { Piece } from '../style/path'
 import { checkLayer, isClean, resolveStyle, type StyleLayer } from '../style/resolve'
 import type { Style } from '../style/tokens'
@@ -2111,11 +2112,10 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
 }
 
-// Clean resolves to the clean pen, with no exceptions. The styled pen, which
-// draws every other look, arrives with the line types.
+// Clean resolves to the clean pen, with no exceptions; every other look is
+// drawn by the styled pen.
 function choosePen(style: Style, palette: Palette): FigurePen {
-  if (isClean(style)) return cleanPen(palette)
-  return cleanPen(palette)
+  return isClean(style) ? cleanPen(palette) : styledPen(style, palette)
 }
 
 // The whole figure, drawn through `pen`: every element it draws is one pen
