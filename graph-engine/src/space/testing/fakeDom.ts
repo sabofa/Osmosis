@@ -6,20 +6,31 @@
 // getPropertyValue added as non-enumerable methods, so overlay.ts's real
 // CSSStyleDeclaration calls (custom properties: --space-surface and the
 // like) work here too, without changing how every existing test reads a
-// style property.
-function fakeStyle(): Record<string, string> {
+// style property. FakeStyle's own type is an intersection, not one
+// interface trying to declare both the string index signature and these
+// three methods: TypeScript refuses that combination outright (a method's
+// function type is never assignable to a plain `string` index type,
+// TS2411) even though the two are perfectly fine held apart and merged —
+// which is exactly this object's real runtime shape.
+export type FakeStyle = Record<string, string> & {
+  getPropertyValue(prop: string): string
+  setProperty(prop: string, value: string): void
+  removeProperty(prop: string): void
+}
+
+function fakeStyle(): FakeStyle {
   const style: Record<string, string> = {}
   Object.defineProperties(style, {
     setProperty: { value: (prop: string, value: string) => { style[prop] = value }, enumerable: false },
     removeProperty: { value: (prop: string) => { delete style[prop] }, enumerable: false },
     getPropertyValue: { value: (prop: string) => style[prop] ?? '', enumerable: false },
   })
-  return style
+  return style as FakeStyle
 }
 
 export class FakeElement {
   readonly tagName: string
-  readonly style: Record<string, string> = fakeStyle()
+  readonly style: FakeStyle = fakeStyle()
   readonly dataset: Record<string, string> = {}
   readonly children: FakeElement[] = []
   readonly ownerDocument: FakeDocument

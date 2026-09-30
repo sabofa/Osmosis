@@ -147,11 +147,16 @@ export function easeStep(easing: Easing, nowMs: number): SpaceView | null {
   if (t >= 1) return null
   const e = easeOutCubic(Math.max(0, t))
   const { from, to } = easing
+  // A 3-element array literal, not `.map()` over one: TypeScript loses the
+  // fixed length through `.map()` (a plain number[] out), which used to
+  // need an `as` cast into the 3-tuple target really is — this needs none,
+  // since a literal with exactly 3 elements is a real tuple already.
+  const targetAt = (i: 0 | 1 | 2) => from.target[i] + (to.target[i] - from.target[i]) * e
   return {
     azimuth: wrapAzimuth(from.azimuth + easing.azimuthDelta * e),
     elevation: from.elevation + (to.elevation - from.elevation) * e,
     zoom: from.zoom + (to.zoom - from.zoom) * e,
-    target: [0, 1, 2].map((i) => from.target[i] + (to.target[i] - from.target[i]) * e) as SpaceView['target'],
+    target: [targetAt(0), targetAt(1), targetAt(2)],
   }
 }
 
