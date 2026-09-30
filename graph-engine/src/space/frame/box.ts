@@ -19,7 +19,7 @@ import type { WorldMap } from '../camera/world'
 import type { Range, Vec3 } from '../scene/types'
 import { dropCrossEdgeCollisions, edgeLabels, edgeNormal, screenOf, TICK_LABEL_PUSH_PX, type EdgeTick } from './labels'
 import { frameGeometryKey } from './key'
-import { formatTick, tickIndex, ticks } from './ticks'
+import { formatFixedTick, formatTick, tickIndex, ticks } from './ticks'
 import type { FrameAxes, FrameAxis, FrameLabel, FrameLine, FrameModel } from './types'
 
 // A tick mark's length, in world units (the box's longest half-extent is 1).
@@ -56,7 +56,10 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
   const zFloor = d[2] >= 0 ? box.z.min : box.z.max
 
   const lines: FrameLine[] = []
-  const tickValues = specs.map((s, i) => ticks(ranges[i], s.step, s.scale))
+  // V1: a flat axis shows one tick, at its data value, instead of the
+  // regular step ladder (which over a near-zero span would show none, or
+  // several crowded ones).
+  const tickValues = specs.map((s, i) => (s.fixed !== null ? [s.fixed] : ticks(ranges[i], s.step, s.scale)))
 
   // Wall outlines, each edge once (the three walls share the back corner's edges).
   const seen = new Set<string>()
@@ -128,7 +131,10 @@ export function boxFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAxe
       const p = with3(base, axis, v)
       lines.push({ a: p, b: with3(p, outAxis, p[outAxis] + outSign * markLength(outAxis)), role: 'tick' })
       const index = tickIndex(v, spec.step)
-      items.push({ key: `tick:${NAMES[axis]}:${index}`, position: p, text: formatTick(v, spec.authored, spec.step), index })
+      // S6 fix round 1, M1: the flat axis's single tick (spec.fixed) is
+      // labelled with the value's own digits, never the step's.
+      const text = spec.fixed !== null ? formatFixedTick(v) : formatTick(v, spec.authored, spec.step)
+      items.push({ key: `tick:${NAMES[axis]}:${index}`, position: p, text, index })
     }
     const sa = screenOf(world, camera, a)
     const sb = screenOf(world, camera, b)

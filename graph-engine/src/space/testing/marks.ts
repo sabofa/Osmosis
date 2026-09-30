@@ -231,6 +231,13 @@ export function label(position: Vec3, text: string, line = 1): LabelAnchor {
   return { source: source(line, 'label'), position, text, kind: 'point' }
 }
 
+// A readout: same shape as `label`, but placed with the highest priority and
+// never dropped (S6 plan V2; S6 fix round 1 I3 split a contour's value label
+// off this kind — it is lower-priority and droppable, like a point label).
+export function annotationLabel(position: Vec3, text: string, line = 1): LabelAnchor {
+  return { source: source(line, 'readout'), position, text, kind: 'annotation' }
+}
+
 // The extent of every finite vertex a scene's marks carry. The kernel's own
 // sceneExtent (S1) is robust against poles; fixtures have none, so the plain
 // min/max is what they need.
@@ -262,12 +269,16 @@ export function plainExtent(marks: readonly Mark[]): Box3 | null {
   return { x: { min: lo[0], max: hi[0] }, y: { min: lo[1], max: hi[1] }, z: { min: lo[2], max: hi[2] } }
 }
 
-export function scene(marks: Mark[], options: { labels?: LabelAnchor[]; extent?: Box3 | null } = {}): SpaceScene {
+export function scene(
+  marks: Mark[],
+  options: { labels?: LabelAnchor[]; extent?: Box3 | null; boxSpanning?: { x: boolean; y: boolean; z: boolean } } = {}
+): SpaceScene {
   return {
     marks,
     labels: options.labels ?? [],
     colorScales: [],
     extent: options.extent === undefined ? plainExtent(marks) : options.extent,
+    boxSpanning: options.boxSpanning ?? { x: false, y: false, z: false },
     errors: [],
   }
 }

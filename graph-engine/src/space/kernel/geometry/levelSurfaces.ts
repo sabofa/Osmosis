@@ -28,7 +28,7 @@ import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type Pre
 import { contourCurves } from '../surfaceTools/contours'
 import { targetArity } from '../surfaceTools/target'
 import { compileField, DEFAULT_IMPLICIT_RES, implicitPick, levelMesh, XYZ } from './implicit'
-import { countTriangles, implicitRes, sampledRange, sampleGrid } from './marchingTets'
+import { countTriangles, heldRes, implicitRes, sampledRange, sampleGrid } from './marchingTets'
 
 // "levels n" divides the range of F sampled on this many points per axis.
 export const LEVEL_RANGE_SAMPLES = 16
@@ -124,14 +124,21 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
     if (values.length > MAX_LEVEL_SURFACES) {
       throw new Error(`contour: ${form.text} would draw ${values.length} level surfaces — at most ${MAX_LEVEL_SURFACES}; give fewer levels`)
     }
-    const grid = sampleGrid(field.f, box, n)
+    // S6 fix round 1, I7: 3-variable contour: draws level surfaces the same
+    // way an implicit surface does (implicit.ts), so it is owed the same
+    // fix — a play or a drag can trigger this every frame; while held
+    // (context.held), mesh at half the resolution, then once more at the
+    // full one on release (kernel/index.ts's builtHeld forces that rebuild
+    // even if the box itself never moved).
+    const activeRes = heldRes(n, context.held)
+    const grid = sampleGrid(field.f, box, activeRes)
     // The triangle budget is the statement's, not each level's (SP2), and is
     // checked before any level is meshed.
     const total = values.reduce((sum, c) => sum + countTriangles(grid, c), 0)
     if (total > MAX_TRIANGLES) {
       const surfaces = `${values.length} level surface${values.length === 1 ? '' : 's'}`
       throw new Error(
-        `contour: ${form.text} at res ${n} would make ${total.toLocaleString('en-US')} triangles over ${surfaces}, over the ${MAX_TRIANGLES.toLocaleString('en-US')} limit — lower the resolution or give fewer levels`
+        `contour: ${form.text} at res ${activeRes} would make ${total.toLocaleString('en-US')} triangles over ${surfaces}, over the ${MAX_TRIANGLES.toLocaleString('en-US')} limit — lower the resolution or give fewer levels`
       )
     }
     const mapped = values.length > 1 && context.colorScaleId !== null

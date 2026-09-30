@@ -25,7 +25,7 @@ import type { BoxMark, PointMark, SceneError } from '../../scene/types'
 import { RIEMANN_RECTANGLE, readsOuter, type SampleRule } from '../../grammar/keywords/integrals'
 import { constant, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { approxText, attempt, determined, errorFloor, formOf, part, quadrature, readoutLabel, ROUNDING_REL } from './common'
+import { approxText, approxTextFull, attempt, determined, errorFloor, formOf, part, quadrature, readoutLabel, ROUNDING_REL } from './common'
 import { exprText } from './exprText'
 import { resolveDomain } from './named'
 import { compileOnRegion, targetExpr, targetName, targetText } from './target'
@@ -163,7 +163,13 @@ function prepareRiemann(statement: Statement, context: BuildContext): PreparedSt
     // that cancels to rounding noise shows as 0.
     const shownSum = Math.abs(riemann) <= ROUNDING_REL * absolute * dx * dy ? 0 : riemann
     const text = `Σ ${summand} ΔA ${formatApprox(shownSum)}${integral ? `; ∬_${R} ${integrand} dA ${approxText(integral)}` : ''}`
-    return { marks: [boxes, dots], labels: [readoutLabel(context, [(x0 + x1) / 2, (y0 + y1) / 2, top], text)], errors, colorScale: null }
+    const fullText = `Σ ${summand} ΔA ${formatApprox(shownSum)}${integral ? `; ∬_${R} ${integrand} dA ${approxTextFull(integral)}` : ''}`
+    return {
+      marks: [boxes, dots],
+      labels: [readoutLabel(context, [(x0 + x1) / 2, (y0 + y1) / 2, top], text, fullText)],
+      errors,
+      colorScale: null,
+    }
   }
   return { reads: reads.names, build }
 }

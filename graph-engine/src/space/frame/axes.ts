@@ -15,7 +15,7 @@ import type { WorldMap } from '../camera/world'
 import type { Range, Vec3 } from '../scene/types'
 import { edgeLabels, edgeNormal, estimateLabelSize, halfExtentAlong, screenOf, type EdgeTick } from './labels'
 import { frameGeometryKey } from './key'
-import { formatTick, tickIndex, ticks } from './ticks'
+import { formatFixedTick, formatTick, tickIndex, ticks } from './ticks'
 import { TITLE_FONT_PX, type FrameAxes, type FrameAxis, type FrameLabel, type FrameLine, type FrameModel } from './types'
 
 export const AXIS_OVERSHOOT = 0.08
@@ -67,12 +67,17 @@ export function axesFrame(world: WorldMap, camera: CameraMatrices, axes: FrameAx
     const half = AXIS_TICK_HALF / world.scale[along]
 
     const items: EdgeTick[] = []
-    for (const v of ticks(r, spec.step, spec.scale)) {
+    // V1: a flat axis shows one tick, at its data value, in place of the step ladder.
+    const values = spec.fixed !== null ? [spec.fixed] : ticks(r, spec.step, spec.scale)
+    for (const v of values) {
       if (Math.abs(v - origin[axis]) <= 1e-9 * Math.max(spec.step, Math.abs(v))) continue
       const p = with3(origin, axis, v)
       lines.push({ a: with3(p, along, p[along] - half), b: with3(p, along, p[along] + half), role: 'tick' })
       const index = tickIndex(v, spec.step)
-      items.push({ key: `tick:${NAMES[axis]}:${index}`, position: p, text: formatTick(v, spec.authored, spec.step), index })
+      // S6 fix round 1, M1: the flat axis's single tick (spec.fixed) is
+      // labelled with the value's own digits, never the step's.
+      const text = spec.fixed !== null ? formatFixedTick(v) : formatTick(v, spec.authored, spec.step)
+      items.push({ key: `tick:${NAMES[axis]}:${index}`, position: p, text, index })
     }
     const sa = screenOf(world, camera, a)
     const sb = screenOf(world, camera, b)

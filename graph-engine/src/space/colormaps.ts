@@ -30,9 +30,14 @@ export const SEQUENTIAL_ANCHORS: Record<Exclude<ColormapName, 'balance'>, readon
 // balance: blue, a neutral centre, red.
 export const BALANCE_BLUE = 0x2f5aa8
 export const BALANCE_RED = 0xb8322a
-// The neutral centre's Oklab lightness: the background, lightened or darkened
-// to this.
-export const BALANCE_NEUTRAL_L: Record<'light' | 'dark', number> = { light: 0.92, dark: 0.3 }
+// The neutral centre's Oklab lightness: the background, lightened or
+// darkened to this. S6 plan V7: dark was 0.3, close enough to the dark
+// background's own lightness (render/palette.ts DARK_PALETTE.background is
+// Oklab L ~0.23) that the centre nearly vanished against it (S3, parked);
+// 0.62 lightens it well clear. Light darkens only slightly, 0.975 (the
+// light background) to 0.92, since the warm paper background already sits
+// near the top of the scale.
+export const BALANCE_NEUTRAL_L: Record<'light' | 'dark', number> = { light: 0.92, dark: 0.62 }
 
 export const TABLE_SIZE = 256
 

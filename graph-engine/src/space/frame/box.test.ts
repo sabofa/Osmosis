@@ -260,3 +260,60 @@ describe('label thinning', () => {
     expect(marks.length).toBeGreaterThanOrEqual(41)
   })
 })
+
+describe('a flat axis shows one tick at its data value (S6 plan V1)', () => {
+  it('draws exactly one z tick, at the box centre, when z.fixed is set', () => {
+    const box: Box3 = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: 2.8, max: 3.2 } }
+    const world = worldMap(box, [1, 1, 0.15])
+    const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, VIEWPORT, 'orthographic')
+    const space = defaultSpaceConfig()
+    const axes = frameAxes(space, box, { z: true })
+    expect(axes.z.fixed).toBeCloseTo(3, 12)
+    const frame = boxFrame(world, camera, axes)
+    const z = tickLabels(frame, 'z')
+    expect(z).toHaveLength(1)
+    expect(z[0].position[2]).toBeCloseTo(3, 12)
+    // Only one z tick mark on the vertical edge, too (not a ladder).
+    const zTickMarks = frame.lines.filter((l) => l.role === 'tick' && l.a[2] !== l.b[2])
+    expect(zTickMarks).toHaveLength(1)
+  })
+
+  it('an unflagged axis is unaffected: x keeps its regular ladder beside a flat z', () => {
+    const box: Box3 = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: 2.8, max: 3.2 } }
+    const world = worldMap(box, [1, 1, 0.15])
+    const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, VIEWPORT, 'orthographic')
+    const axes = frameAxes(defaultSpaceConfig(), box, { z: true })
+    expect(axes.x.fixed).toBeNull()
+    const frame = boxFrame(world, camera, axes)
+    expect(tickLabels(frame, 'x').length).toBeGreaterThan(1)
+  })
+
+  it('is labelled with the value\'s own digits (up to 4 significant), never the step\'s decimals (S6 fix round 1, M1)', () => {
+    // A value the step ladder was never built to show: 1/3 has no clean
+    // decimal expansion at any step, so formatTick's own decimalsOf(step)
+    // would print something like "0.33" or "0.333" — never the value's own
+    // 4 significant digits.
+    const box: Box3 = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: 1 / 3 - 0.1, max: 1 / 3 + 0.1 } }
+    const world = worldMap(box, [1, 1, 0.15])
+    const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, VIEWPORT, 'orthographic')
+    const axes = frameAxes(defaultSpaceConfig(), box, { z: true })
+    const frame = boxFrame(world, camera, axes)
+    const [z] = tickLabels(frame, 'z')
+    expect(z.text).toBe('0.3333')
+  })
+
+  it("a lone region's tick is at the floor where the region lies, not the box's centre (S6 fix round 1, M1)", () => {
+    // No data at all on z (flatFloor's case): resolveBox centres an empty
+    // axis at 0 with a thin span either side, but a region shades the box's
+    // floor (kernel/integrals/common.ts floorHeight), z.min here.
+    const box: Box3 = { x: { min: -2, max: 2 }, y: { min: -2, max: 2 }, z: { min: -0.1, max: 0.1 } }
+    const world = worldMap(box, [1, 1, 0.15])
+    const camera = cameraMatrices({ azimuth: 40, elevation: 25, zoom: 1, target: world.centre }, world, VIEWPORT, 'orthographic')
+    const axes = frameAxes(defaultSpaceConfig(), box, { z: true }, { z: true })
+    expect(axes.z.fixed).toBeCloseTo(-0.1, 12)
+    const frame = boxFrame(world, camera, axes)
+    const [z] = tickLabels(frame, 'z')
+    expect(z.position[2]).toBeCloseTo(-0.1, 12)
+    expect(z.text).toBe('−0.1')
+  })
+})

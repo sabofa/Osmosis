@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ArrowMark, LineMark, MeshMark, SpaceScene } from '../../scene/types'
+import { OPERAND_GREY_TOKEN } from '../../theme'
 import { labelText, markAt, sceneOf, vertices } from '../../testing/kernel'
 
 function clean(spec: string): SpaceScene {
@@ -31,7 +32,7 @@ describe('cross:', () => {
     expect(labelText(scene)).toContain('area = |u × v| = 7.348')
   })
 
-  it('draws u and v from P in grey, and the parallelogram P, P+u, P+u+v, P+v with its outline', () => {
+  it('draws u and v from P in grey (S6 plan V7: the theme-aware operand token, not the author-facing "gray"), and the parallelogram P, P+u, P+u+v, P+v with its outline', () => {
     const scene = clean('cross: <1,2,3> x <4,5,6>')
     const operands = arrows(scene, 's1.operands')
     expect(operands.tails).toEqual([
@@ -42,7 +43,7 @@ describe('cross:', () => {
       [1, 2, 3],
       [4, 5, 6],
     ])
-    expect(operands.mark.style.color).toEqual({ author: 'gray', slot: 0 })
+    expect(operands.mark.style.color).toEqual({ author: OPERAND_GREY_TOKEN, slot: 0 })
     const face = markAt(scene, 's1.parallelogram') as MeshMark
     expect(vertices(face.positions)).toEqual([
       [0, 0, 0],

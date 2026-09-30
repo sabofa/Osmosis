@@ -13,7 +13,7 @@ import {
 } from './colormaps'
 import { mixLab, oklabToSrgb, srgbToOklab } from './oklab'
 import type { ColormapName } from './scene/types'
-import { hexToRgb, spaceColors } from './theme'
+import { contrastRatio, hexToRgb, spaceColors } from './theme'
 
 const LIGHT: ColormapTheme = spaceColors(LIGHT_PALETTE, 'light')
 const DARK: ColormapTheme = spaceColors(DARK_PALETTE, 'dark')
@@ -69,12 +69,18 @@ describe('colormap tables', () => {
     expect(worst).toBeLessThanOrEqual(0.01)
   })
 
-  it('balance has a neutral centre at L 0.92 in light and 0.30 in dark, blue below and red above', () => {
+  it('balance has a neutral centre at L 0.92 in light and 0.62 in dark (S6 plan V7: visible against the dark background), blue below and red above', () => {
     const light = colormapTable('balance', LIGHT)
     const dark = colormapTable('balance', DARK)
     // The centre lies between entries 127 and 128.
     expect((lightness(light, 127) + lightness(light, 128)) / 2).toBeCloseTo(0.92, 2)
-    expect((lightness(dark, 127) + lightness(dark, 128)) / 2).toBeCloseTo(0.3, 2)
+    expect((lightness(dark, 127) + lightness(dark, 128)) / 2).toBeCloseTo(0.62, 2)
+    // At L 0.3 (the old value) the centre was close enough to the dark
+    // background's own L ~0.23 (theme.test.ts) to nearly vanish; at 0.62 it
+    // clears 3:1 against the background, computed the same WCAG way as the
+    // operand grey (theme.test.ts).
+    const centreRgb = tableEntry(dark, 127)
+    expect(contrastRatio(centreRgb, hexToRgb(DARK_PALETTE.background))).toBeGreaterThanOrEqual(3)
     const [r0, , b0] = tableEntry(light, 0)
     const [r1, , b1] = tableEntry(light, 255)
     expect(b0).toBeGreaterThan(r0)

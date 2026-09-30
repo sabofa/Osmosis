@@ -279,6 +279,59 @@ describe('SpaceRenderer and context loss', () => {
     expect(fake.draws.length).toBeGreaterThan(draws)
     r.dispose()
   })
+
+  it('shows "restoring…" while the context is lost, S6 plan V9, and clears it once restored', () => {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const message = () => overlay.children.find((c) => c.className === 'space-message')
+    expect(message()).toBeUndefined()
+    fake.lose()
+    canvas.dispatch('webglcontextlost')
+    expect(message()?.textContent).toBe('restoring…')
+    fake.restore()
+    canvas.dispatch('webglcontextrestored')
+    expect(message()).toBeUndefined()
+    r.dispose()
+  })
+})
+
+describe('SpaceRenderer and the empty-scene state (S6 plan V9)', () => {
+  it('shows "nothing to draw yet: add a statement" for a scene with no marks and no errors, and clears it once the scene has marks', () => {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const message = () => overlay.children.find((c) => c.className === 'space-message')
+    r.setScene(scene([]), CONFIG)
+    clock.flush()
+    expect(message()?.textContent).toBe('nothing to draw yet: add a statement')
+    r.setScene(scene([helix]), CONFIG)
+    clock.flush()
+    expect(message()).toBeUndefined()
+    r.dispose()
+  })
+
+  it('does not show the empty-scene message over a shader failure, and never without WebGL2', () => {
+    const noGl = mount(null)
+    const noGlR = new SpaceRenderer(noGl.canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, fakeEnv().env)
+    noGlR.setScene(scene([]), CONFIG)
+    const noGlOverlay = noGl.parent.children.find((c) => c.className === 'space-overlay')!
+    expect(noGlOverlay.children.find((c) => c.className === 'space-message')?.textContent).toMatch(/WebGL2/)
+    noGlR.dispose()
+
+    const { canvas, parent } = mount(createFakeGl({ failCompile: true }))
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, fakeEnv().env)
+    r.setScene(scene([]), CONFIG)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    expect(overlay.children.find((c) => c.className === 'space-message')?.textContent).toMatch(/shader failed to compile/)
+    r.dispose()
+  })
 })
 
 describe('SpaceRenderer and its host', () => {
@@ -327,7 +380,7 @@ describe('SpaceRenderer and its host', () => {
     r.dispose()
   })
 
-  it('starts from the authored camera aimed at the box centre, and double-click returns there', () => {
+  it('starts from the authored camera aimed at the box centre, and double-click eases back there over 280 ms (S6 plan V9)', () => {
     const { canvas } = mount()
     const clock = fakeEnv()
     const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
@@ -336,7 +389,87 @@ describe('SpaceRenderer and its host', () => {
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
     r.setView({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
     canvas.dispatch('dblclick')
+    // S6 fix round 1, M4: getView() reports where the ease is headed right
+    // away, not the transient view a host would otherwise read a moment
+    // before it changed again.
     expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    // It still eases, not snaps, internally: the drawn view has not jumped yet.
+    expect(r['view']).toEqual({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
+    let frames = 0
+    while (clock.pending() > 0 && frames < 100) {
+      clock.flush()
+      frames++
+    }
+    // 280 ms at 16 ms a frame is about 17-18 frames.
+    expect(frames).toBeGreaterThan(10)
+    expect(frames).toBeLessThan(30)
+    expect(r['view']).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    r.dispose()
+  })
+
+  it('reduced motion snaps double-click back to the authored view instead of easing (S6 plan V9)', () => {
+    const { canvas } = mount()
+    const clock = fakeEnv({ prefersReducedMotion: () => true })
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const space: SpaceConfig = { ...defaultSpaceConfig(), camera: { azimuth: -30, elevation: 10, zoom: 2 }, bounds: { x: { min: 0, max: 4 }, y: { min: -1, max: 1 }, z: { min: 0, max: 2 } } }
+    r.setScene(scene([helix]), { space })
+    r.setView({ azimuth: 100, elevation: 45, zoom: 0.5, target: [0, 0, 0] })
+    canvas.dispatch('dblclick')
+    expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    // A snap still schedules its one redraw, but no animation loop: flushing
+    // it asks for no further frame.
+    clock.flush()
+    expect(clock.pending()).toBe(0)
+    expect(r.getView()).toEqual({ azimuth: -30, elevation: 10, zoom: 2, target: [2, 0, 1] })
+    r.dispose()
+  })
+
+  it('azimuth takes the shortest way round when easing (S6 plan V9): 170 -> -170 turns 20 degrees, not 340', () => {
+    const { canvas } = mount()
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const space: SpaceConfig = { ...defaultSpaceConfig(), camera: { azimuth: -170, elevation: 10, zoom: 1 }, bounds: { x: { min: 0, max: 4 }, y: { min: -1, max: 1 }, z: { min: 0, max: 2 } } }
+    r.setScene(scene([helix]), { space })
+    r.setView({ azimuth: 170, elevation: 10, zoom: 1, target: [2, 0, 1] })
+    canvas.dispatch('dblclick')
+    // M4: getView() already reports the target, not the transient view.
+    expect(r.getView().azimuth).toBeCloseTo(-170, 6)
+    clock.flush()
+    // One 16 ms frame in: the drawn view's azimuth has moved a small step
+    // past 170 toward 180/-180, not backward toward 0 (which the naive
+    // -340-degree route would).
+    expect(r['view'].azimuth).toBeGreaterThan(170)
+    while (clock.pending() > 0) clock.flush()
+    expect(r['view'].azimuth).toBeCloseTo(-170, 6)
+    expect(r.getView().azimuth).toBeCloseTo(-170, 6)
+    r.dispose()
+  })
+
+  it('re-targets a reset ease in progress when a value moves the box mid-flight (S6 fix round 1, M4)', () => {
+    const fake = createFakeGl()
+    const { canvas } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const parsed = parseSpec('@param a = 1 range [0.5, 4]\nz = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]')
+    r.setSpec(parsed.statements, parsed.config, parsed.statementLines)
+    clock.flush()
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 40 })
+    canvas.dispatch('dblclick')
+    const targetBefore = r.getView().target
+    clock.flush() // one step into the ease
+    // The camera itself is not authored to change, only the box's height —
+    // a value change alone does not stop the ease (only stopInertia() does).
+    r.setValue('a', 4)
+    clock.flush()
+    const targetAfter = r.getView().target
+    // Re-targeted: getView() now points at the new box's centre, not the
+    // one the ease was originally aimed at.
+    expect(targetAfter).not.toEqual(targetBefore)
+    while (clock.pending() > 0) clock.flush()
+    // It still converges exactly on the final (re-targeted) authored view,
+    // not stuck somewhere between the two.
+    expect(r['view']).toEqual(r.getView())
     r.dispose()
   })
 
@@ -525,7 +658,7 @@ P = (a, b, a^2 + b^2)`
     r.dispose()
   })
 
-  it('coalesces 10 slider inputs in one frame into one setValue, with the last value', () => {
+  it('coalesces 10 slider inputs in one frame into one setValue, held while still scrubbing (S6 fix round 1, I7)', () => {
     const { clock, events, row, kernel, r } = live()
     const setValues = vi.spyOn(kernel(), 'setValues')
     const { slider } = row(0)
@@ -535,9 +668,99 @@ P = (a, b, a^2 + b^2)`
     }
     expect(setValues).not.toHaveBeenCalled()
     clock.flush()
-    // a slider is not play or drag: no held box (J1)
-    expect(setValues.mock.calls).toEqual([[new Map([['a', 1]]), undefined]])
+    // I7: every `input` before the matching `change` is still scrubbing —
+    // held the same way a play or a point-drag is, so a box-dependent
+    // statement (an implicit surface, a 3-variable contour:) meshes coarser
+    // while the reader is still moving the slider.
+    expect(setValues.mock.calls).toHaveLength(1)
+    const [values, options] = setValues.mock.calls[0]
+    expect(values).toEqual(new Map([['a', 1]]))
+    expect(options?.holdBox).toBeDefined()
     expect(events.filter((e) => e.type === 'param')).toEqual([{ type: 'param', name: 'a', value: 1, source: 'slider' }])
+    // The native `change` (release) rebuilds once more, this time not held
+    // — the slider path's equivalent of a drag's one solve at release.
+    slider.dispatch('change')
+    clock.flush()
+    // S6 fix round 2, NB2: this release's value (1) is the same one the
+    // held call above already committed, so this second setValues is a
+    // no-op for the kernel (same scene back) and does not itself re-enter
+    // install(). That leaves the hold still needing to end — which is what
+    // advanceValues' pre-existing "held stopped" tail is for: with install()
+    // now genuinely holding through a scrub (NB2), it sees held with
+    // nothing installed this frame and resolves the box once more, unheld.
+    // Before NB2, install() never truly held during a scrub in the first
+    // place, so this third call never fired — but neither had anything
+    // actually been held.
+    expect(setValues.mock.calls).toHaveLength(3)
+    expect(setValues.mock.calls[1]).toEqual([new Map([['a', 1]]), undefined])
+    expect(setValues.mock.calls[2]).toEqual([new Map()])
+    r.dispose()
+  })
+
+  it('a scrub that returns to its start value ends the hold on pointerup, not stuck without a `change` (S6 fix round 2, NB1)', () => {
+    const { clock, row, r } = live()
+    const { slider } = row(0)
+    const start = slider.value // '0.5'
+    slider.value = '0.8'
+    slider.dispatch('input')
+    clock.flush()
+    expect(r['held']).toBe(true) // scrubbing: held
+    const heldWorld = r['world']
+    // Back to exactly where the scrub started: a real browser fires no
+    // `change` here (the value has not net-changed since the interaction
+    // began), which is exactly the bug — only pointerup/pointercancel end
+    // the hold in that case.
+    slider.value = start
+    slider.dispatch('input')
+    clock.flush()
+    expect(r['held']).toBe(true) // no change fired yet: still held (the bug, without the fix, forever)
+    expect(r['world']).toBe(heldWorld) // the box has not moved since the scrub began
+    slider.dispatch('pointerup')
+    clock.flush()
+    // pointerup ends it even though the slider's value net-unchanged: one
+    // full-resolution rebuild follows, not stuck held.
+    expect(r['held']).toBe(false)
+    expect(r['world']).not.toBe(heldWorld)
+    r.dispose()
+  })
+
+  it('holds the box (not just the value) while scrubbing, agreeing with advanceValues (S6 fix round 2, NB2)', () => {
+    const { clock, r, row } = live()
+    const before = r['world']
+    const { slider } = row(0)
+    slider.value = '0.8'
+    slider.dispatch('input')
+    clock.flush()
+    // The box stays the one the scrub started with, the same way play and
+    // drag hold it — not resolved fresh every scrubbed frame.
+    expect(r['world']).toBe(before)
+    slider.dispatch('pointerup')
+    clock.flush()
+    expect(r['world']).not.toBe(before)
+    r.dispose()
+  })
+
+  it('a frame with no new value mid-scrub runs no unheld setValues call (S6 fix round 3)', () => {
+    // `still` (advanceValues' "held stopped" tail) used to leave scrubbing
+    // out, so a frame with nothing queued mid-scrub — a camera ease, a
+    // resize, a readout click, or (here) a plain extra frame request —
+    // still ran the tail: an unheld, full-resolution setValues(new Map())
+    // against a freshly resolved box, even though the scrub had not
+    // actually ended.
+    const { clock, r, row, kernel } = live()
+    const setValues = vi.spyOn(kernel(), 'setValues')
+    const { slider } = row(0)
+    slider.value = '0.8'
+    slider.dispatch('input')
+    clock.flush()
+    setValues.mockClear()
+    r['scheduler'].request()
+    clock.flush()
+    expect(setValues).not.toHaveBeenCalled()
+    expect(r['held']).toBe(true)
+    slider.dispatch('pointerup')
+    clock.flush()
+    expect(setValues).toHaveBeenCalled()
     r.dispose()
   })
 
@@ -586,10 +809,13 @@ P = (a, b, a^2 + b^2)`
     const pointer = (type: string, x: number, y: number, buttons: number) =>
       canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
     pointer('pointerdown', start.x, start.y, 1)
+    // S6 plan V5: grabbing a draggable point sets the cursor.
+    expect(canvas.style.cursor).toBe('grabbing')
     const target = at([0.8, 1.2, 0.8 ** 2 + 1.2 ** 2])
     pointer('pointermove', target.x, target.y, 1)
     clock.flush()
     pointer('pointerup', target.x, target.y, 0)
+    expect(canvas.style.cursor).toBe('')
     expect(r.getView()).toEqual(view)
     expect(kernel().values().get('a')).toBeCloseTo(0.8, 6)
     expect(kernel().values().get('b')).toBeCloseTo(1.2, 6)
@@ -619,12 +845,16 @@ P = (a, a^2, 0)`
     pointer('pointermove', at.x, at.y, 0)
     clock.flush()
     expect(events.at(-1)).toMatchObject({ type: 'hover', hit: { kind: 'point' } })
+    // S6 plan V5: hovering a draggable point shows the grab cursor.
+    expect(canvas.style.cursor).toBe('grab')
     const view = r.getView()
     const target = project(camera, world.toWorld([1, 1, 0]))
     pointer('pointerdown', at.x, at.y, 1)
+    expect(canvas.style.cursor).toBe('grabbing')
     pointer('pointermove', target.x, target.y, 1)
     clock.flush()
     pointer('pointerup', target.x, target.y, 0)
+    expect(canvas.style.cursor).toBe('')
     expect(r.getView()).toEqual(view)
     expect((r['kernel'] as SpaceKernel).values().get('a')).toBeCloseTo(1, 6)
     r.dispose()
@@ -905,6 +1135,186 @@ P = (a, b, a^2 + b^2)`
     } finally {
       registerBuilder('point', POINT)
     }
+  })
+})
+
+// S6 carried item (b): chromeRects() used to call getBoundingClientRect()
+// on the panel, the colorbars and every readout box on every draw. The
+// panel and the colorbars only move on a resize, the panel's own
+// collapse/expand, or a row/colorbar count change, so their rectangles are
+// now cached against a signature of exactly those; the readout boxes are
+// excluded from that cache because they are repositioned on nearly every
+// draw (the camera, a play, a drag, or a plain hover), with no change in
+// how many there are, so a count-only cache would serve a stale rectangle
+// for a box that has visibly moved.
+describe('SpaceRenderer: chromeRects caches the panel and colorbars, never the readouts', () => {
+  const TWO_PARAMS = `@param a = 1 range [0.5, 2]
+@param b = 1 range [0.5, 2]
+z = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]
+P = (a, 0, 0)`
+
+  function live(spec = TWO_PARAMS) {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const panel = overlay.children.find((c) => c.className === 'space-params')!
+    const bars = overlay.children.find((c) => c.className === 'space-colorbars')!
+    // A fixed non-zero rect, so rectOf() keeps it (a zero-sized one drops
+    // out on its own and would hide a caching bug behind that early exit).
+    // Spied before the first load, so the initial computation is counted too.
+    const spyRect = (el: FakeElement, width: number, height: number) => {
+      const spy = vi.fn(() => ({ left: 10, top: 10, width, height, right: 10 + width, bottom: 10 + height }))
+      el.getBoundingClientRect = spy
+      return spy
+    }
+    const panelSpy = spyRect(panel, 200, 40)
+    const barsSpy = spyRect(bars, 12, 160)
+    const load = (text: string) => {
+      const parsed = parseSpec(text)
+      r.setSpec(parsed.statements, parsed.config, parsed.statementLines, text)
+      clock.flush()
+    }
+    load(spec)
+    const readouts = () => overlay.children.filter((c) => c.className === 'space-readout')
+    const pointer = (type: string, x: number, y: number, buttons: number) =>
+      canvas.dispatch(type, { pointerId: 1, clientX: x, clientY: y, button: type === 'pointermove' ? -1 : 0, buttons, shiftKey: false })
+    return { fake, canvas, clock, r, overlay, panel, bars, readouts, panelSpy, barsSpy, pointer, load }
+  }
+
+  it('reuses the panel and colorbar rectangles across frames where only the camera or a readout changes', () => {
+    const { clock, r, panelSpy, barsSpy, pointer } = live()
+    // The initial draw (inside load()) computed both once.
+    expect(panelSpy).toHaveBeenCalledTimes(1)
+    expect(barsSpy).toHaveBeenCalledTimes(1)
+
+    // A hover brings up a readout and moves it across two frames; a camera
+    // change follows. None of that touches the panel or the colorbars.
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    pointer('pointermove', 420, 310, 0)
+    clock.flush()
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 5 })
+    clock.flush()
+
+    expect(panelSpy).toHaveBeenCalledTimes(1)
+    expect(barsSpy).toHaveBeenCalledTimes(1)
+    r.dispose()
+  })
+
+  it('never caches a readout box: its rectangle is measured fresh on every draw that shows it', () => {
+    // A pinned box (I6: only a pinned readout is a chrome obstacle at all —
+    // the hover probe's own box is deliberately excluded, see below), moved
+    // by the camera rather than the pointer across the two later frames.
+    const { clock, r, readouts, pointer } = live()
+    pointer('pointerdown', 400, 300, 1)
+    pointer('pointerup', 400, 300, 0)
+    clock.flush()
+    const [box] = readouts()
+    expect(box).toBeDefined()
+    expect(box.dataset.pinned).toBe('true')
+    const boxSpy = vi.fn(() => ({ left: 0, top: 0, width: 80, height: 24, right: 80, bottom: 24 }))
+    box.getBoundingClientRect = boxSpy
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 5 })
+    clock.flush()
+    r.setView({ ...r.getView(), azimuth: r.getView().azimuth + 5 })
+    clock.flush()
+    expect(boxSpy.mock.calls.length).toBe(2)
+    r.dispose()
+  })
+
+  it('I6: the hover probe box is never a chrome obstacle, pinned or not — only pinned readouts are', () => {
+    const { clock, r, readouts, pointer } = live()
+    pointer('pointermove', 400, 300, 0)
+    clock.flush()
+    const [box] = readouts()
+    expect(box).toBeDefined()
+    expect(box.dataset.pinned).toBeUndefined()
+    const boxSpy = vi.fn(() => ({ left: 0, top: 0, width: 80, height: 24, right: 80, bottom: 24 }))
+    box.getBoundingClientRect = boxSpy
+    pointer('pointermove', 420, 310, 0)
+    clock.flush()
+    // A tick label may sit right under the cursor without ever contesting
+    // it: the probe's own box is not measured for chromeRects() at all.
+    expect(boxSpy).not.toHaveBeenCalled()
+    r.dispose()
+  })
+
+  it('recomputes on a resize', () => {
+    const { canvas, clock, r, panelSpy, barsSpy } = live()
+    const before = panelSpy.mock.calls.length
+    canvas.clientHeight = 700
+    clock.resize()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    expect(barsSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+
+  it('recomputes when the panel expands or collapses', () => {
+    const { r, panel, panelSpy } = live()
+    // Two rows and no interaction yet: the panel starts collapsed to a chip.
+    expect(panel.dataset.collapsed).toBe('true')
+    const before = panelSpy.mock.calls.length
+    panel.dispatch('mouseenter')
+    expect(panel.dataset.collapsed).toBeUndefined()
+    r['draw']()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    const afterExpand = panelSpy.mock.calls.length
+    panel.dispatch('mouseleave')
+    expect(panel.dataset.collapsed).toBe('true')
+    r['draw']()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(afterExpand)
+    r.dispose()
+  })
+
+  it('I6: the collapse or expand path requests a frame on its own — no manual draw() needed', () => {
+    const { clock, r, panel, panelSpy } = live()
+    expect(panel.dataset.collapsed).toBe('true')
+    expect(clock.pending()).toBe(0)
+    const before = panelSpy.mock.calls.length
+    // A plain DOM event, nothing else: no pointer or camera activity that
+    // would otherwise have scheduled a frame of its own.
+    panel.dispatch('mouseenter')
+    expect(clock.pending()).toBe(1)
+    clock.flush()
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+
+  it('recomputes when the bindings change the row count', () => {
+    const { r, panelSpy, load } = live()
+    const before = panelSpy.mock.calls.length
+    load('@param a = 1 range [0.5, 2]\nz = a*x^2 + y^2 for x in [-2, 2], y in [-2, 2]')
+    expect(panelSpy.mock.calls.length).toBeGreaterThan(before)
+    r.dispose()
+  })
+
+  it("I6: the colorbar obstacle is the union of its own box and its tick labels' — a tick sits outside the body's own box (SpaceView.css's `right: 18px`)", () => {
+    const fake = createFakeGl()
+    const { canvas, parent } = mount(fake)
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const mesh = meshMark([0, 0, 0, 1, 0, 0, 0, 1, 1], [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2], { style: { colorScale: 0 } })
+    const scales = [{ id: 0, title: 's0', map: 'viridis' as const, domain: { min: 0, max: 1 }, diverging: false }]
+    r.setScene({ ...scene([mesh]), colorScales: scales }, CONFIG)
+    const overlay = parent.children.find((c) => c.className === 'space-overlay')!
+    const bars = overlay.children.find((c) => c.className === 'space-colorbars')!
+    const body = bars.children[0].children[1]
+    const tick = body.children.find((c) => c.className === 'space-colorbar-tick')!
+    // The container sits well inset from the overlay's left edge; a tick
+    // label's `right: 18px` (SpaceView.css) places it 18 px+ further left
+    // of .space-colorbar-body's own 12 px-wide box — outside the
+    // container's own measured rect, since an absolutely positioned child
+    // never grows its parent's box.
+    bars.getBoundingClientRect = () => ({ left: 700, top: 100, width: 40, height: 180, right: 740, bottom: 280 })
+    tick.getBoundingClientRect = () => ({ left: 650, top: 150, width: 30, height: 14, right: 680, bottom: 164 })
+    const rects = r['chromeRects']() as { x: number; y: number; width: number; height: number }[]
+    // The colorbar obstacle (not the panel, which is empty/hidden here — no
+    // @param) reaches left to the tick, not just the container.
+    const left = (rect: { x: number; width: number }) => rect.x - rect.width / 2
+    expect(rects.some((rect) => left(rect) <= 650)).toBe(true)
+    r.dispose()
   })
 })
 

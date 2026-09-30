@@ -9,9 +9,21 @@ import type { Binding } from '../config'
 import { cssRgb, type SpaceColors } from '../theme'
 
 export interface ParamsHandlers {
-  change(name: string, value: number): void
+  // S6 fix round 1, I7: `scrubbing` is true for every slider `input` event
+  // (still moving) and false for its number-box commit or its final,
+  // native `change` (released) — the renderer holds the box the same way
+  // it does for a play or a point-drag while any binding's is true.
+  change(name: string, value: number, scrubbing: boolean): void
   togglePlay(name: string): void
   toggleLoop(name: string): void
+  // S6 fix round 1, I6: the panel collapses or expands on a plain hover or
+  // focus change (setExpanded below) — a DOM event this class handles
+  // entirely on its own, invisible to SpaceRenderer unless it says so. That
+  // changes the panel's own rectangle, so the label placer's chrome
+  // obstacle is stale until the next draw() — but nothing before this asked
+  // for one. This is the request, and the renderer's own chance to drop its
+  // cached chrome rectangle (SpaceRenderer.ts's chromeRects()) too.
+  chromeChanged(): void
 }
 
 export interface ParamRowState {
@@ -58,13 +70,39 @@ export class ParamsPanel {
   readonly element: HTMLDivElement
   private readonly handlers: ParamsHandlers
   private rows: Row[] = []
+  // S6 plan V10: collapsed to a chip unless hovered, focused, or a
+  // parameter is playing.
+  private hovered = false
+  private focused = false
+  private anyPlaying = false
 
   constructor(overlay: HTMLElement, handlers: ParamsHandlers) {
     this.handlers = handlers
     this.element = overlay.ownerDocument.createElement('div')
     this.element.className = 'space-params'
     this.element.style.display = 'none'
+    this.element.addEventListener('mouseenter', () => this.setExpanded('hovered', true))
+    this.element.addEventListener('mouseleave', () => this.setExpanded('hovered', false))
+    // A hidden collapsed row cannot hold focus, so this only ever fires
+    // from the one row the chip already shows — but it also has to clear
+    // when focus leaves the panel for anywhere else on the page.
+    this.element.addEventListener('focusin', () => this.setExpanded('focused', true))
+    this.element.addEventListener('focusout', () => this.setExpanded('focused', false))
     overlay.appendChild(this.element)
+  }
+
+  private setExpanded(which: 'hovered' | 'focused', value: boolean): void {
+    this[which] = value
+    this.updateCollapsed()
+  }
+
+  private updateCollapsed(): void {
+    const collapsed = this.rows.length > 1 && !this.hovered && !this.focused && !this.anyPlaying
+    const was = this.element.dataset.collapsed === 'true'
+    if (collapsed === was) return
+    if (collapsed) this.element.dataset.collapsed = 'true'
+    else delete this.element.dataset.collapsed
+    this.handlers.chromeChanged()
   }
 
   get size(): number {
@@ -116,10 +154,26 @@ export class ParamsPanel {
       const row: Row = { binding, slider, number, play, loop, editing: false }
       this.rows.push(row)
 
-      slider.addEventListener('input', () => this.handlers.change(binding.name, Number(slider.value)))
+      slider.addEventListener('input', () => this.handlers.change(binding.name, Number(slider.value), true))
+      // S6 fix round 1, I7 (round 2, NB1): the scrub's end, so the last
+      // value goes through again, this time not scrubbing, for the one
+      // full-resolution rebuild a play or a drag's release also gets.
+      // The native `change` fires on release, but ONLY when the value
+      // actually differs from where the scrub started — a drag that
+      // wanders off and back to its starting value fires no `change` at
+      // all, so `scrubbing` was never cleared and every later rebuild
+      // stayed held (a coarse mesh, a frozen box) until some other value
+      // happened to change. `pointerup`/`pointercancel` end it
+      // unconditionally, whether or not the value moved; calling this
+      // twice for an ordinary drag (change fires too) is harmless —
+      // queueValue and scrubbing.delete are both idempotent.
+      const endScrub = () => this.handlers.change(binding.name, Number(slider.value), false)
+      slider.addEventListener('change', endScrub)
+      slider.addEventListener('pointerup', endScrub)
+      slider.addEventListener('pointercancel', endScrub)
       const commit = () => {
         const value = Number(number.value)
-        if (number.value.trim() !== '' && Number.isFinite(value)) this.handlers.change(binding.name, value)
+        if (number.value.trim() !== '' && Number.isFinite(value)) this.handlers.change(binding.name, value, false)
       }
       number.addEventListener('focus', () => (row.editing = true))
       number.addEventListener('blur', () => {
@@ -133,14 +187,20 @@ export class ParamsPanel {
       loop.addEventListener('click', () => this.handlers.toggleLoop(binding.name))
     }
     this.element.style.display = bindings.length > 0 ? '' : 'none'
+    this.hovered = false
+    this.focused = false
+    this.anyPlaying = false
+    this.updateCollapsed()
   }
 
   // Reflect the live values and play state. The number box a reader is
   // typing into keeps what they typed until they commit.
   sync(state: ReadonlyMap<string, ParamRowState>): void {
+    let anyPlaying = false
     for (const row of this.rows) {
       const s = state.get(row.binding.name)
       if (!s) continue
+      if (s.playing) anyPlaying = true
       const slide = String(s.value)
       const text = displayValue(row.binding, s.value)
       if (row.slider.value !== slide) row.slider.value = slide
@@ -149,6 +209,10 @@ export class ParamsPanel {
       if (row.play.textContent !== play) row.play.textContent = play
       row.play.setAttribute('aria-pressed', String(s.playing))
       row.loop.setAttribute('aria-pressed', String(s.loop))
+    }
+    if (anyPlaying !== this.anyPlaying) {
+      this.anyPlaying = anyPlaying
+      this.updateCollapsed()
     }
   }
 

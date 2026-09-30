@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
-import { approx, dot, lastDigitUnit, markNamed, meshArea, readout, sceneOf, vertices, windings } from './testing'
+import { approx, dot, lastDigitUnit, markNamed, meshArea, readout, readoutFull, sceneOf, vertices, windings } from './testing'
 
 const walls = (scene: ReturnType<typeof sceneOf>) => scene.marks.filter((m) => /\.wall\d+$/.test(m.source.object)) as MeshMark[]
 
@@ -11,7 +11,7 @@ describe('volume: under 4 - x^2 - y^2 over r in [0, 2], theta in [0, 2 pi] (the 
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
     expect(text.startsWith('∬_R (4 - x^2 - y^2) dA ≈ ')).toBe(true)
-    expect(Math.abs(approx(text, 'dA') - 8 * Math.PI)).toBeLessThan(1e-8)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'dA') - 8 * Math.PI)).toBeLessThan(1e-8)
   })
 
   it('has no wall: the side r = 2 runs from z = 0 to 0, and the theta seam is interior', () => {
@@ -38,7 +38,7 @@ describe('volume: between x^2 + y^2 and 2 over x in [-1, 1], y in [-1, 1]', () =
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
     expect(text.startsWith('∬_R (2 − (x^2 + y^2)) dA ≈ ')).toBe(true)
-    expect(Math.abs(approx(text, 'dA') - 16 / 3)).toBeLessThan(1e-9)
+    expect(Math.abs(approx(readoutFull(scene, 1), 'dA') - 16 / 3)).toBeLessThan(1e-9)
     expect(text).not.toMatch(/on part of/)
   })
 
@@ -94,7 +94,7 @@ describe('volume: the readout and its note', () => {
     expect(scene.errors).toEqual([])
     const text = readout(scene, 3).text
     expect(text.startsWith('∬_D f dA ≈ ')).toBe(true)
-    expect(Math.abs(approx(text, 'dA') - 8 * Math.PI)).toBeLessThan(1e-8)
+    expect(Math.abs(approx(readoutFull(scene, 3), 'dA') - 8 * Math.PI)).toBeLessThan(1e-8)
   })
 
   it('over an inequality region: the mesh sum, with only the digits its error supports', () => {

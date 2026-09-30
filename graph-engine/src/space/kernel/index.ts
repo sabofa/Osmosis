@@ -95,7 +95,11 @@ registerBuilder('space:motion', CURVE_FRAME)
 for (const [key, entry] of SURFACE_TOOL_BUILDERS) registerBuilder(key, onBox(entry))
 registerBuilder('space:region', onBox(REGION, 'z'))
 registerBuilder('space:namedRegion', NAMED_REGION)
-registerBuilder('space:centroid', onBox(CENTROID))
+// flatExempt (I1): a centroid's drop lines to the floor and walls decorate
+// whatever box there is; unlike a plane or a surface, they do not need real
+// depth on an axis the rest of the scene left flat (e.g. the centroid of a
+// 2D region, which draws fine on a thin box).
+registerBuilder('space:centroid', { ...onBox(CENTROID), flatExempt: true })
 registerBuilder('space:volume', VOLUME)
 registerBuilder('space:riemann', RIEMANN)
 registerBuilder('space:namedVolume', NAMED_VOLUME)
@@ -108,10 +112,19 @@ type Stage = 'data' | 'box' | 'z'
 interface StatementRecord {
   line: number
   stage: Stage
+  // S6 fix round 1, I1: whether a stage 'box' record's own geometry needs a
+  // real span on the axes it depends on (registry.ts's flatExempt, negated).
+  flatSpanning: boolean
   // The context its builds read; the kernel sets context.box before each.
   context: BuildContext
   // The box its last build read (undefined for a 'data' statement).
   builtWith: Box3 | undefined
+  // S6 plan V11: whether its last build was held (context.held) — a box
+  // that has not moved never goes stale on release (sameBox), so this is
+  // what makes a held→released transition rebuild once on its own, giving a
+  // resolution-sensitive builder (an implicit surface) its one full-res
+  // rebuild even when the box itself never changed.
+  builtHeld: boolean
   prepared: PreparedStatement
   // the bindings it reads
   reads: ReadonlySet<string>
@@ -215,8 +228,10 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     records.push({
       line,
       stage: dependence === true ? 'box' : dependence === 'z' ? 'z' : 'data',
+      flatSpanning: dependence === true && !entry.flatExempt,
       context,
       builtWith: undefined,
+      builtHeld: false,
       prepared,
       reads: new Set([...prepared.reads].filter((name) => bindingNames.has(name))),
       scaleId: context.colorScaleId,
@@ -225,9 +240,13 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     })
   })
 
-  const build = (record: StatementRecord, box: Box3 | undefined) => {
+  // S6 plan V11: `held` mirrors whether this build carries a frozen box (a
+  // play or a drag in progress) — set alongside it, for the same reason.
+  const build = (record: StatementRecord, box: Box3 | undefined, held = false) => {
     record.context.box = box
+    record.context.held = held
     record.builtWith = box
+    record.builtHeld = held
     record.result = run(record.prepared, record.line)
     record.moved.clear()
   }
@@ -241,12 +260,27 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     return !sameBox(was, box)
   }
 
+  // I1: which axes a fully box-dependent statement occupies, for
+  // frame/bounds.ts's flatAxes — every axis, for any record whose stage
+  // 'box' geometry is not flatExempt (registry.ts): it reads context.box in
+  // full, so calling any of x, y or z "flat" ahead of building it would
+  // carve a sliver from geometry that fills the box. A 'z'-stage region does
+  // not count (its own z is exactly what the flat rule is for), and neither
+  // does a flatExempt 'box'-stage one (a centroid's drop lines decorate
+  // whatever box there is; they do not need it tall). Fixed at parse time (a
+  // record's stage and flatSpanning never change), so this is computed once
+  // and reused across every resolveBox call below.
+  const boxSpanning: { x: boolean; y: boolean; z: boolean } = (() => {
+    const any = records.some((r) => r.flatSpanning)
+    return { x: any, y: any, z: any }
+  })()
+
   // Pass 1: what sizes the box; a 'z' statement against the provisional box.
-  const provisional = resolveBox(config.space, null)
+  const provisional = resolveBox(config.space, null, boxSpanning)
   for (const record of records) if (record.stage !== 'box') build(record, record.stage === 'z' ? provisional : undefined)
   let extent = extentOf(records)
   // The box the box-dependent statements are built against.
-  let builtBox = resolveBox(config.space, extent)
+  let builtBox = resolveBox(config.space, extent, boxSpanning)
   // Pass 2: what needs the box (a 'z' statement only when its z moved).
   for (const record of records) if (record.stage !== 'data' && stale(record, builtBox)) build(record, builtBox)
 
@@ -278,7 +312,7 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
     const labels = records.flatMap((r) => r.result.labels)
     const errors = [...scopeErrors, ...namedErrors, ...setupErrors, ...records.flatMap((r) => r.result.errors)].sort((a, b) => a.line - b.line)
     // Pass 1's extent, not every mark's: the renderer resolves the same box.
-    return { marks, labels, colorScales, extent, errors }
+    return { marks, labels, colorScales, extent, boxSpanning, errors }
   }
 
   let current = assemble()
@@ -314,12 +348,20 @@ export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], co
       if (rebuilt) extent = extentOf(records)
       // Pass 2, against the held box or the one the data resolves to now:
       // every box-dependent statement whose last build that box outdates,
-      // and those that read a changed binding.
-      const target = options.holdBox ?? resolveBox(config.space, extent)
+      // and those that read a changed binding. S6 plan V11: `held` is
+      // exactly "a holdBox was given" — the box is frozen for the same
+      // reason a slow box-dependent builder (an implicit surface) should
+      // mesh coarser: a play or a drag is in progress.
+      const held = options.holdBox != null
+      const target = options.holdBox ?? resolveBox(config.space, extent, boxSpanning)
       for (const record of records) {
         if (record.stage === 'data') continue
-        if (stale(record, target) || (record.stage === 'box' && reads(record))) {
-          build(record, target)
+        // A held→released transition rebuilds even an unmoved box: a
+        // resolution-sensitive builder (an implicit surface) is owed its
+        // one full-res rebuild on release (V11), and `stale` alone would
+        // miss it whenever the box happens not to move.
+        if (stale(record, target) || (record.stage === 'box' && reads(record)) || (record.builtHeld && !held)) {
+          build(record, target, held)
           rebuilt = true
         }
       }

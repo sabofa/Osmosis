@@ -327,7 +327,16 @@ describe('points, segments, rays and vectors', () => {
     const point: PointMark = only(scene, 'points')
     expect([...point.positions]).toEqual([1, 2, 3])
     expect(point.style.size).toBe(8)
+    expect(point.style.halo).toBeUndefined()
     expect(scene.labels).toEqual([{ source: { line: 1, statement: null, object: 's1.label' }, position: [1, 2, 3], text: 'A', kind: 'point' }])
+  })
+
+  it('a draggable point draws 1.5x its size, with a halo (S6 plan V5)', () => {
+    const scene = sceneOf('@param a = 1 range [0, 2]\nP = (a, 2, 3)')
+    const point: PointMark = only(scene, 'points')
+    expect(point.drag).toBeDefined()
+    expect(point.style.size).toBe(12)
+    expect(point.style.halo).toBe(true)
   })
 
   it('a vector is an arrow with its magnitude, as 2D labels it', () => {

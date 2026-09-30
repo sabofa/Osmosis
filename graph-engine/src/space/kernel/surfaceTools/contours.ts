@@ -38,7 +38,7 @@ import type { ColorSpec, LabelAnchor, LineMark, SceneError } from '../../scene/t
 import { colorScale, constant, Reads, resolution } from '../common'
 import { chain } from '../curves'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
-import { annotation, lineMark, part, toolBox } from './box'
+import { contourLabel, lineMark, part, toolBox } from './box'
 import { compileOver, prepareDomain, requireArity, resolveTarget, type Rect } from './target'
 
 export const LEVEL_RES = 160
@@ -267,7 +267,7 @@ function prepareContourCurves(statement: Statement, context: BuildContext): Prep
         marks.push(lineMark(part(context, `floor${k}`), lines.map((l) => lift(l, () => floor)), context, { width: FLOOR_WIDTH, dashed: true, color }))
       }
       const mid = form.labels ? midpointOf(lines) : null
-      if (mid) labels.push(annotation(part(context, `label${k}`), [mid[0], mid[1], c], formatNumber(c)))
+      if (mid) labels.push(contourLabel(part(context, `label${k}`), [mid[0], mid[1], c], formatNumber(c)))
     })
     return { marks, labels, errors, colorScale: null }
   }

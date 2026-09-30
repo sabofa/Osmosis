@@ -79,7 +79,9 @@ void main() {
   vec3 color = depthCue(min(lit, vec3(1.0)), v_depth);
   if (u_oit) {
     float a = u_opacity;
-    float w = oitWeight(a, max(-v_viewPos.z, 0.0));
+    float depthSpan = max(u_cueRange.y - u_cueRange.x, 1e-3);
+    float zRel = clamp((max(-v_viewPos.z, 0.0) - u_cueRange.x) / depthSpan, 0.0, 1.0);
+    float w = oitWeight(a, zRel);
     fragColor = vec4(color * a * w, a);
     fragWeight = vec4(a * w, 0.0, 0.0, 0.0);
   } else {

@@ -17,12 +17,17 @@
 //    a non-finite scalar.
 // 3. Lit, both sides: a back face flips its normal (gl_FrontFacing).
 // 4. A back face is then mixed 30% toward a cool tint and darkened x0.85, so
-//    a surface's orientation shows.
+//    a surface's orientation shows — half as much under OIT (V4), and its
+//    accumulate weight is halved too, so a translucent closed surface (a
+//    sphere) reads as its own colour, not the front/back average's grey.
 // 5. Mesh lines, from the (u, v) attribute, at the integers of uv / step (the
 //    upload shifts uv so the lines u0 + k du land there): 1 CSS px wide,
-//    antialiased by fwidth, the colour mixed 45% toward the axis ink. A
-//    family of lines fades out as its on-screen spacing falls from 5 CSS px
-//    to 2.5, so a zoomed-out surface is not all lines.
+//    antialiased by fwidth, the colour mixed toward the theme's ink in light
+//    and its background in dark (V6: "present, not loud" — a bright ink
+//    line would read loud against a dark-theme surface), at a strength the
+//    CPU side picks per theme. A family of lines fades out as its on-screen
+//    spacing falls from 5 CSS px to 2.5, so a zoomed-out surface is not all
+//    lines.
 // 6. Depth cue (look.ts).
 // 7. Output: the colour at the mesh's opacity; or, accumulating for
 //    order-independent transparency (u_oit), the weighted pair shaders/oit.ts
@@ -81,7 +86,8 @@ uniform vec3 u_noData;
 uniform vec3 u_backTint;
 uniform bool u_meshLines;
 uniform vec2 u_meshStep;
-uniform vec3 u_ink;
+uniform vec3 u_meshLineColor;   // V6: the theme's ink in light, its background in dark
+uniform float u_meshLineStrength;
 uniform float u_pixelRatio;
 uniform bool u_oit;
 ${LOOK_FRAGMENT_GLSL}
@@ -99,7 +105,10 @@ const float SPECULAR = 0.15;
 const float SHININESS = 24.0;
 const float BACK_TINT = 0.3;
 const float BACK_DARKEN = 0.85;
-const float MESH_INK = 0.45;
+// V4: half the tint and darkening under OIT, and half the accumulate weight.
+const float BACK_TINT_OIT = 0.15;
+const float BACK_DARKEN_OIT = 0.925;
+const float BACK_WEIGHT_OIT = 0.5;
 const float MESH_FADE_FROM = 2.5;  // CSS px between lines: gone
 const float MESH_FADE_TO = 5.0;    // CSS px between lines: full
 
@@ -137,7 +146,9 @@ void main() {
   float spec = key > 0.0 ? pow(max(dot(n, halfway), 0.0), SHININESS) : 0.0;
   vec3 color = min(base * (AMBIENT + DIFFUSE * key + FILL_SHARE * DIFFUSE * fill) + SPECULAR * spec, vec3(1.0));
 
-  if (!gl_FrontFacing) color = mix(color, u_backTint, BACK_TINT) * BACK_DARKEN;
+  if (!gl_FrontFacing) {
+    color = u_oit ? mix(color, u_backTint, BACK_TINT_OIT) * BACK_DARKEN_OIT : mix(color, u_backTint, BACK_TINT) * BACK_DARKEN;
+  }
 
   if (u_meshLines) {
     // Backing px from the nearest line of each family, and the spacing of
@@ -146,14 +157,18 @@ void main() {
     vec2 on = clamp(0.5 * u_pixelRatio + 0.5 - dist, 0.0, 1.0);
     vec2 fade = smoothstep(MESH_FADE_FROM, MESH_FADE_TO, 1.0 / (perPixel * u_pixelRatio));
     float ink = max(on.x * fade.x, on.y * fade.y);
-    color = mix(color, u_ink, MESH_INK * ink);
+    color = mix(color, u_meshLineColor, u_meshLineStrength * ink);
   }
 
   color = depthCue(color, v_depth);
   if (u_oit) {
-    // McGuire and Bavoil's weight (shaders/oit.ts), z the view depth.
+    // The OIT weight (shaders/oit.ts), z the view depth normalised relative
+    // to the box's own near edge (V4, S3 M10; S6 fix round 1 I2).
     float a = u_opacity;
-    float w = oitWeight(a, max(-v_viewPos.z, 0.0));
+    float depthSpan = max(u_cueRange.y - u_cueRange.x, 1e-3);
+    float zRel = clamp((max(-v_viewPos.z, 0.0) - u_cueRange.x) / depthSpan, 0.0, 1.0);
+    float w = oitWeight(a, zRel);
+    if (!gl_FrontFacing) w *= BACK_WEIGHT_OIT;
     fragColor = vec4(color * a * w, a);
     fragWeight = vec4(a * w, 0.0, 0.0, 0.0);
   } else {

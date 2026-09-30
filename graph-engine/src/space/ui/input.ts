@@ -203,6 +203,11 @@ export interface InputHandlers {
   apply(view: SpaceView): void
   startInertia(velocity: OrbitVelocity): void
   stopInertia(): void
+  // Double-click and 0 (S6 plan V9): eases to `view` over 280 ms instead of
+  // snapping, unless the host prefers reduced motion. Optional so a test
+  // harness that only exercises `apply` keeps working; attachInput falls
+  // back to apply() when it is not given.
+  resetView?(view: SpaceView): void
   now(): number
   prefersReducedMotion(): boolean
   // The pointer moved with no gesture under way (CSS px in the canvas).
@@ -336,7 +341,9 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     if (!ctx) return
     e.preventDefault()
     handlers.stopInertia()
-    handlers.apply(machine.doubleClick(ctx))
+    const view = machine.doubleClick(ctx)
+    if (handlers.resetView) handlers.resetView(view)
+    else handlers.apply(view)
   }
   const keydown = (e: KeyboardEvent) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return
@@ -350,7 +357,8 @@ export function attachInput(canvas: HTMLCanvasElement, machine: InputMachine, ha
     if (!view) return
     e.preventDefault()
     handlers.stopInertia()
-    handlers.apply(view)
+    if (e.key === '0' && handlers.resetView) handlers.resetView(view)
+    else handlers.apply(view)
   }
   // Right-drag pans; keep the context menu out of its way.
   const contextmenu = (e: Event) => e.preventDefault()

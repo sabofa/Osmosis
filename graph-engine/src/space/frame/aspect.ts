@@ -1,9 +1,16 @@
-// The box's proportions in world (plan G4). Pure.
+// The box's proportions in world (plan G4, S6 plan V1). Pure.
 
 import type { Aspect } from '../config'
 import type { Box3, SpaceScene, Vec3 } from '../scene/types'
 
 const AUTO: Vec3 = [1, 1, 0.7]
+
+// V1: a flat axis (frame/bounds.ts flatAxes) reads thin under `auto`, not the
+// usual 0.7 — a region on the floor should look like a floor, not a box
+// three-quarters as tall as it is wide.
+export const FLAT_HALF_EXTENT = 0.15
+
+type Axis = 'x' | 'y' | 'z'
 
 // The SP5 default rule, applied when the spec has no @aspect: `equal` when
 // the scene has no z = f surface (no MeshMark whose pick is a graph) and the
@@ -23,8 +30,9 @@ function normalise(v: Vec3): Vec3 {
 }
 
 // The half-extents h of the box in world, max(h) = 1: `equal` is
-// proportional to the spans, `auto` is (1, 1, 0.7), a ratio is itself.
-export function boxHalfExtents(box: Box3, aspect: Aspect | null, scene: SpaceScene): Vec3 {
+// proportional to the spans, `auto` is (1, 1, 0.7) except a flat axis, which
+// is 0.15 (V1), a ratio is itself.
+export function boxHalfExtents(box: Box3, aspect: Aspect | null, scene: SpaceScene, flat: Partial<Record<Axis, boolean>> = {}): Vec3 {
   const chosen = aspect ?? defaultAspect(box, scene)
   if (chosen.kind === 'equal') {
     const spans: Vec3 = [box.x.max - box.x.min, box.y.max - box.y.min, box.z.max - box.z.min]
@@ -34,5 +42,5 @@ export function boxHalfExtents(box: Box3, aspect: Aspect | null, scene: SpaceSce
     const r: Vec3 = [chosen.x, chosen.y, chosen.z]
     return r.every((s) => s > 0 && Number.isFinite(s)) ? normalise(r) : AUTO
   }
-  return AUTO
+  return [flat.x ? FLAT_HALF_EXTENT : AUTO[0], flat.y ? FLAT_HALF_EXTENT : AUTO[1], flat.z ? FLAT_HALF_EXTENT : AUTO[2]]
 }

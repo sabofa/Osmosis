@@ -55,7 +55,7 @@ z = -x^2 - y^2
 gradient: x^2 + y^2 at (1, 1)`)
     const scene = kernel.scene()
     expect(scene.errors).toEqual([])
-    expect(resolveBox(space, scene.extent)).toEqual(box([-5, 5], [-5, 5], [-50, 50]))
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([-5, 5], [-5, 5], [-50, 50]))
     const arrow = markOf(scene, 's3')
     if (arrow.kind !== 'arrows') throw new Error('not an arrow')
     expect(Array.from(arrow.tails)).toEqual([1, 1, -50])
@@ -70,7 +70,7 @@ gradient: x^2 + y^2 at (1, 1)`)
 trace: x^2 - y^2 at y = 0`)
     const scene = kernel.scene()
     expect(scene.errors).toEqual([])
-    expect(resolveBox(space, scene.extent)).toEqual(box([-1, 2], [-1, 1], [-1, 4]))
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([-1, 2], [-1, 1], [-1, 4]))
     const curve = positions(markOf(scene, 's2'))
     expect(range(curve.map((p) => p[0]))).toEqual([-1, 2])
     for (const [x, y, z] of curve) {
@@ -85,7 +85,7 @@ trace: x^2 - y^2 at y = 0`)
 plane: z = 1`)
     const scene = kernel.scene()
     expect(scene.errors).toEqual([])
-    expect(resolveBox(space, scene.extent)).toEqual(box([0, 2], [0, 2], [0, 4]))
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([0, 2], [0, 2], [0, 4]))
     const corners = positions(markOf(scene, 's2')).map((p) => p.join(','))
     expect(new Set(corners)).toEqual(new Set(['0,0,1', '2,0,1', '2,2,1', '0,2,1']))
   })
@@ -103,7 +103,7 @@ describe('the box pass: the renderer’s box is the kernel’s, by construction'
 plane: z = 0.5`)
     const scene = kernel.scene()
     expect(scene.errors).toEqual([])
-    const resolved = resolveBox(space, scene.extent)
+    const resolved = resolveBox(space, scene.extent, scene.boxSpanning)
     expect(resolved).toEqual(box([0, 14 * 0.2], [0, 1], [0, 1]))
     const plane = positions(markOf(scene, 's2'))
     expect(range(plane.map((p) => p[0]))).toEqual([0, 14 * 0.2])
@@ -118,18 +118,20 @@ plane: x + y = 0`)
     const scene = kernel.scene()
     expect(scene.errors).toEqual([])
     expect(scene.extent).toBeNull()
-    expect(resolveBox(space, scene.extent)).toEqual(box([-5, 5], [-5, 5], [0, 2]))
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([-5, 5], [-5, 5], [0, 2]))
     expect(range(positions(markOf(scene, 's2')).map((p) => p[2]))).toEqual([0, 2])
   })
 
   it('a region sizes the box by its x and y, and is drawn on the box floor', () => {
     // The region x in [0, 1], y in [x^2, x] alone: x and y [0, 1]; no z
-    // data, so z is [-5, 5] and the floor -5. With @bounds3d z [-1, 3], -1.
+    // data, so region: gets a thin flat box (S6 plan V1) instead of the old
+    // [-5, 5]: s = 0.05 * max(1, 1) = 0.05, floor -0.05. With @bounds3d z
+    // [-1, 3] (authored, so the flat rule never applies), -1.
     const alone = kernelOf('region: x in [0, 1], y in [x^2, x]')
     const scene = alone.kernel.scene()
     expect(scene.errors).toEqual([])
-    expect(resolveBox(alone.space, scene.extent)).toEqual(box([0, 1], [0, 1], [-5, 5]))
-    for (const [, , z] of positions(markOf(scene, 's1'))) expect(z).toBe(-5)
+    expect(resolveBox(alone.space, scene.extent, scene.boxSpanning)).toEqual(box([0, 1], [0, 1], [-0.05, 0.05]))
+    for (const [, , z] of positions(markOf(scene, 's1'))) expect(z).toBe(-0.05)
     const bounded = kernelOf('@bounds3d: z [-1, 3]\nregion: x in [0, 1], y in [x^2, x]').kernel.scene()
     for (const [, , z] of positions(markOf(bounded, 's2'))) expect(z).toBe(-1)
   })
@@ -163,10 +165,10 @@ plane: x = 1`
 
   it('holdBox: during play or drag the dependent statements use the renderer’s frozen box; released, the resolved one', () => {
     const { kernel, space } = kernelOf(SPEC)
-    const frozen = resolveBox(space, kernel.scene().extent)
+    const frozen = resolveBox(space, kernel.scene().extent, kernel.scene().boxSpanning)
     const held = kernel.setValue('a', 2, { holdBox: frozen })
     // The data moved (the extent reaches z = 8), the plane did not.
-    expect(resolveBox(space, held.extent).z).toEqual({ min: 0, max: 8 })
+    expect(resolveBox(space, held.extent, held.boxSpanning).z).toEqual({ min: 0, max: 8 })
     expect(range(positions(markOf(held, 's5')).map((p) => p[2]))).toEqual([0, 4])
     // Released: no value changes, but the plane rebuilds in the resolved box.
     const released = kernel.setValues(new Map())
@@ -205,7 +207,7 @@ describe('the box pass: coordinate surfaces, statement by statement', () => {
       const scene = kernel.scene()
       expect(scene.errors).toEqual([])
       // ±2 on each axis; niceStep(4, 8) = 0.5 keeps it
-      expect(resolveBox(space, scene.extent)).toEqual(box([-2, 2], [-2, 2], [-2, 2]))
+      expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([-2, 2], [-2, 2], [-2, 2]))
       const sphere = scene.marks.find((m) => m.kind === 'mesh')!
       for (const p of positions(sphere)) expect(Math.abs(Math.hypot(...p) - 2)).toBeLessThanOrEqual(1e-12)
     }
@@ -216,7 +218,36 @@ describe('the box pass: coordinate surfaces, statement by statement', () => {
     const { kernel, space } = kernelOf('(0, 0, 0) -- (1, 1, 1)' + '\n' + 'cylindrical: r = 2')
     const scene = kernel.scene()
     expect(scene.errors).toEqual([])
-    expect(resolveBox(space, scene.extent)).toEqual(box([0, 1], [0, 1], [0, 1]))
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([0, 1], [0, 1], [0, 1]))
     expect(range(positions(markOf(scene, 's2')).map((p) => p[2]))).toEqual([0, 1])
+  })
+})
+
+// S6 fix round 2, I1: frame/bounds.test.ts's "flatAxes and resolveBox with a
+// box-spanning statement" describe hands flatAxes/resolveBox a synthetic
+// spanning object by hand — it proves the primitive is right, but not that
+// createSpaceKernel (index.ts's own boxSpanning) actually computes and wires
+// one through for a real scene. This drives the identical sphere-plus-
+// two-points-at-z=0 shape through a real spec instead, so a regression in
+// that wiring — boxDependent/flatExempt on the registry entry, or the
+// `records.some((r) => r.flatSpanning)` reduction itself — would show here
+// even if frame/bounds.ts's own tests still passed.
+describe("a real spec's own boxSpanning keeps a box-dependent sphere from flattening its z (S6 fix round 2, I1)", () => {
+  it('a sphere plus two points at z = 0: scene.boxSpanning.z is true, and the box keeps a real depth, not a sliver', () => {
+    // The two points alone put x and y at a real span ([-2, 2], from
+    // (2, 2, 0) and (-2, -2, 0)) but z at a single, degenerate value (0) —
+    // extentOf never sees the sphere itself (it is 'box'-stage, built only
+    // after the box resolves), so read alone this is exactly the shape
+    // frame/bounds.ts's isThin flags. The sphere's only contribution here is
+    // registry.ts's boxDependent: true (not flatExempt), which is what
+    // should keep z from being called flat anyway.
+    const { kernel, space } = kernelOf('x^2 + y^2 + z^2 = 4 res: 8\nP = (2, 2, 0)\nQ = (-2, -2, 0)')
+    const scene = kernel.scene()
+    expect(scene.errors).toEqual([])
+    expect(scene.boxSpanning).toEqual({ x: true, y: true, z: true })
+    // Not a sliver: z gets the same real, symmetric span x and y do — the
+    // exact box frame/bounds.test.ts's synthetic version of this shape
+    // predicts by hand (others = [4, 4], s = 2, v = 0, niceStep keeps it).
+    expect(resolveBox(space, scene.extent, scene.boxSpanning)).toEqual(box([-2, 2], [-2, 2], [-2, 2]))
   })
 })

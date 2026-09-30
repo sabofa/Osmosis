@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SpaceScene } from '../../scene/types'
 import { determined, IntegralRefusal } from './common'
 import { positionOrZero, quotient } from './centroids'
-import { approx, approxTuple, kernelOf, markNamed, polylines, readout, sceneOf } from './testing'
+import { approx, approxTuple, kernelOf, markNamed, polylines, readout, readoutFull, sceneOf } from './testing'
 
 function centre(scene: SpaceScene, line: number): number[] {
   return Array.from(markNamed(scene, `s${line}`, 'points').positions)
@@ -14,10 +14,11 @@ describe('centroid: of regions', () => {
     expect(scene.errors).toEqual([])
     const text = readout(scene, 2).text
     expect(text.startsWith('centroid ≈ (')).toBe(true)
-    const [x, y] = approxTuple(text, 'centroid')
+    const full = readoutFull(scene, 2)
+    const [x, y] = approxTuple(full, 'centroid')
     expect(Math.abs(x - 2 / 3)).toBeLessThan(1e-10)
     expect(Math.abs(y - 1 / 3)).toBeLessThan(1e-10)
-    expect(Math.abs(approx(text, 'M') - 1 / 2)).toBeLessThan(1e-12)
+    expect(Math.abs(approx(full, 'M') - 1 / 2)).toBeLessThan(1e-12)
     const [px, py, pz] = centre(scene, 2)
     expect(px).toBeCloseTo(2 / 3, 12)
     expect(py).toBeCloseTo(1 / 3, 12)
@@ -28,7 +29,7 @@ describe('centroid: of regions', () => {
 
   it('the upper half-disc r in [0, 1], theta in [0, pi]: (0, 4/(3π)) ≈ (0, 0.42441)', () => {
     const scene = sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D')
-    const [x, y] = approxTuple(readout(scene, 2).text, 'centroid')
+    const [x, y] = approxTuple(readoutFull(scene, 2), 'centroid')
     expect(Math.abs(x)).toBeLessThan(1e-12)
     expect(4 / (3 * Math.PI)).toBeCloseTo(0.42441, 5)
     expect(Math.abs(y - 4 / (3 * Math.PI))).toBeLessThan(1e-10)
@@ -49,10 +50,13 @@ describe('centroid: of regions', () => {
     const scene = sceneOf('R = region x in [0, 1], y in [0, x]\ncentroid: R density x')
     const text = readout(scene, 2).text
     expect(text.startsWith('centre of mass ≈ (')).toBe(true)
-    // SAFETY (breaker ruling, F1) trims a digit or two from the tightest checks below.
-    expect(Math.abs(approx(text, 'M') - 1 / 3)).toBeLessThan(1e-10)
+    // SAFETY (breaker ruling, F1) trims a digit or two from the tightest
+    // checks below. The capped text only shows DISPLAY_DIGITS (S6 plan V3),
+    // so the tight tolerance checks read the full, uncapped text.
+    const full = readoutFull(scene, 2)
+    expect(Math.abs(approx(full, 'M') - 1 / 3)).toBeLessThan(1e-10)
     // ȳ = (∫∫ x y dA) / M = (1/8) / (1/3) = 3/8
-    const [x, y] = approxTuple(text, 'centre of mass')
+    const [x, y] = approxTuple(full, 'centre of mass')
     expect(Math.abs(x - 3 / 4)).toBeLessThan(1e-9)
     expect(Math.abs(y - 3 / 8)).toBeLessThan(1e-9)
   })
@@ -67,17 +71,19 @@ describe('centroid: of volumes', () => {
   it('the tetrahedron: (1/4, 1/4, 1/4), M = 1/6', () => {
     const scene = sceneOf('V = volume x in [0, 1], y in [0, 1 - x], z in [0, 1 - x - y]\ncentroid: V')
     expect(scene.errors).toEqual([])
-    const text = readout(scene, 2).text
-    for (const c of approxTuple(text, 'centroid')) expect(Math.abs(c - 1 / 4)).toBeLessThan(1e-10)
+    // Capped text only shows DISPLAY_DIGITS (S6 plan V3); the full text has
+    // every digit chosenDisplay's honest rounding supports.
+    const full = readoutFull(scene, 2)
+    for (const c of approxTuple(full, 'centroid')) expect(Math.abs(c - 1 / 4)).toBeLessThan(1e-10)
     // SAFETY (breaker ruling, F1) trims a digit from the tightest check below.
-    expect(Math.abs(approx(text, 'M') - 1 / 6)).toBeLessThan(1e-11)
+    expect(Math.abs(approx(full, 'M') - 1 / 6)).toBeLessThan(1e-11)
     for (const c of centre(scene, 2)) expect(c).toBeCloseTo(1 / 4, 10)
   })
 
   it('the cylindrical dome r in [0, 2], theta in [0, 2 pi], z in [0, 4 - r^2]: (0, 0, 4/3)', () => {
     // M = 8π; ∭ z dV = ∫∫ (4 - r^2)^2 / 2 r dr dθ = π ∫0^4 u^2 / 2 du... = 32π/3, so z̄ = 4/3
-    const text = readout(sceneOf('V = volume r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical\ncentroid: V'), 2).text
-    const [x, y, z] = approxTuple(text, 'centroid')
+    const scene = sceneOf('V = volume r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical\ncentroid: V')
+    const [x, y, z] = approxTuple(readoutFull(scene, 2), 'centroid')
     expect(Math.abs(x)).toBeLessThan(1e-9)
     expect(Math.abs(y)).toBeLessThan(1e-9)
     expect(Math.abs(z - 4 / 3)).toBeLessThan(1e-9)
@@ -125,9 +131,11 @@ describe('centroid: the drawing', () => {
   it('an unknown name, and a density that reads a parameter', () => {
     expect(sceneOf('centroid: Q').errors).toEqual([{ line: 1, message: expect.stringMatching(/no region or volume named "Q"/) }])
     const kernel = kernelOf('@param k = 0 range [0, 2]\nR = region x in [0, 1], y in [0, 1]\ncentroid: R density 1 + k*x')
-    expect(approxTuple(readout(kernel.scene(), 3).text, 'centre of mass')[0]).toBeCloseTo(0.5, 9)
+    // The capped text may not carry 9 digits of precision (DISPLAY_DIGITS,
+    // S6 plan V3), so these tight checks read the full, uncapped text.
+    expect(approxTuple(readoutFull(kernel.scene(), 3), 'centre of mass')[0]).toBeCloseTo(0.5, 9)
     // density 1 + x: M = 3/2, ∫∫ x (1 + x) = 1/2 + 1/3 = 5/6, x̄ = 5/9
-    expect(approxTuple(readout(kernel.setValue('k', 1), 3).text, 'centre of mass')[0]).toBeCloseTo(5 / 9, 9)
+    expect(approxTuple(readoutFull(kernel.setValue('k', 1), 3), 'centre of mass')[0]).toBeCloseTo(5 / 9, 9)
   })
 })
 
@@ -136,9 +144,14 @@ describe('readouts: a value that is zero within its error shows as ≈ 0, never 
     expect(readout(sceneOf('volume: x in [-1, 1], y in [0, 1], z in [0, 1] integrand x'), 1).text).toBe('∭ x dV ≈ 0')
     expect(readout(sceneOf('volume: under x over x^2 + y^2 <= 1'), 1).text.startsWith('∬_R x dA ≈ 0;')).toBe(true)
     expect(readout(sceneOf('riemann: under x over x in [-1, 1], y in [0, 1], n = 4'), 1).text).toBe('Σ x ΔA ≈ 0; ∬_R x dA ≈ 0')
-    // SAFETY (breaker ruling, F1) shows one fewer reliable digit, which
-    // rounds the last one shown up (…815783… to 10 figures is …1816).
-    expect(readout(sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D'), 2).text).toMatch(/^centroid ≈ \(0, 0\.424413181\d\);/)
+    const halfDisc = sceneOf('D = region r in [0, 1], theta in [0, pi]\ncentroid: D')
+    // Capped at DISPLAY_DIGITS (S6 plan V3): 6 significant digits, not the
+    // error's full precision.
+    expect(readout(halfDisc, 2).text).toMatch(/^centroid ≈ \(0, 0\.424413\);/)
+    // SAFETY (breaker ruling, F1) shows one fewer reliable digit in the full
+    // text, which rounds the last one shown up (…815783… to 10 figures is
+    // …1816).
+    expect(readoutFull(halfDisc, 2)).toMatch(/^centroid ≈ \(0, 0\.424413181\d\);/)
   })
 
   it('a mesh region’s x̄ of 5×10⁻⁵ (the grid’s asymmetry) lies inside its error (the changes between resolutions), so it reads 0', () => {
@@ -273,8 +286,10 @@ describe('a solid centroid reads its own finite extent, not Infinity (fix round 
   })
 
   it('the cylindrical dome’s centroid (an iterated solid) is unaffected: still (0, 0, 4/3)', () => {
-    const text = readout(sceneOf('V = volume r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical\ncentroid: V'), 2).text
-    const [x, y, z] = approxTuple(text, 'centroid')
+    // Full text (S6 plan V3): the capped `.text` may not carry 1e-9 of
+    // precision (DISPLAY_DIGITS caps it at 6 significant digits).
+    const full = readoutFull(sceneOf('V = volume r in [0, 2], theta in [0, 2*pi], z in [0, 4 - r^2] cylindrical\ncentroid: V'), 2)
+    const [x, y, z] = approxTuple(full, 'centroid')
     expect(Math.abs(x)).toBeLessThan(1e-9)
     expect(Math.abs(y)).toBeLessThan(1e-9)
     expect(Math.abs(z - 4 / 3)).toBeLessThan(1e-9)

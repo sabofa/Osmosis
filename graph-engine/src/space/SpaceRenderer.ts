@@ -32,19 +32,20 @@
 import type { GraphConfig, HoverMode } from '../parser/config'
 import type { Statement } from '../parser/types'
 import type { Palette } from '../render/palette'
-import { clampElevation, inertiaStep, sanitizeView, wrapAzimuth, type OrbitVelocity } from './camera/controls'
+import { clampElevation, easeStep, inertiaStep, sanitizeView, startEase, wrapAzimuth, type Easing, type OrbitVelocity } from './camera/controls'
 import { cameraMatrices, project, type CameraMatrices, type Viewport } from './camera/projection'
 import { colormapTable } from './colormaps'
 import { worldMap, type WorldMap } from './camera/world'
 import { defaultSpaceConfig, type SpaceConfig, type SpaceView } from './config'
 import type { SpaceEvent } from './events'
 import { boxHalfExtents } from './frame/aspect'
-import { resolveBox } from './frame/bounds'
+import { flatAxes, flatFloor, resolveBox } from './frame/bounds'
 import { buildFrame } from './frame/build'
+import type { LabelBox } from './frame/labels'
 import { frameAxes } from './frame/ticks'
 import type { FrameAxes } from './frame/types'
 import { GlBackend } from './gl/backend'
-import { NO_WEBGL2_MESSAGE } from './gl/context'
+import { CONTEXT_LOST_MESSAGE, NO_WEBGL2_STATE } from './gl/context'
 import type { SpaceKernel } from './kernel/api'
 import { createSpaceKernel } from './kernel/index'
 import { solveDrag } from './pick/drag'
@@ -144,6 +145,10 @@ export function browserEnv(): SpaceRendererEnv {
 // The backing store is CSS size x min(devicePixelRatio, 2).
 export const MAX_PIXEL_RATIO = 2
 
+// S6 plan V9: the empty-scene state — a spec with no marks (and no errors:
+// an errored spec is not "empty", it already has its own report).
+export const EMPTY_SCENE_MESSAGE = 'nothing to draw yet: add a statement'
+
 function sameView(a: SpaceView, b: SpaceView): boolean {
   return (
     a.azimuth === b.azimuth &&
@@ -197,6 +202,13 @@ export class SpaceRenderer {
   private pixelRatio = 1
   private inertia: OrbitVelocity | null = null
   private lastInertiaTime: number | null = null
+  // S6 plan V9: the double-click / 0 ease back to the authored view.
+  private easing: Easing | null = null
+  // S6 plan V9 states: a lost context or a backend failure (typically a
+  // shader compile failure) each own the message overlay while active, so
+  // an empty scene never overwrites them, and the reverse.
+  private contextLost = false
+  private backendFailed = false
   private disposed = false
   // The spec's source lines, for readout titles (setSpec's `source`).
   private sourceLines: readonly string[] | null = null
@@ -209,6 +221,14 @@ export class SpaceRenderer {
   private hoverObject: string | null = null
   private pins: PinsState = NO_PINS
   private overlayKey = ''
+  // S6 carried item (b), refined by S6 fix round 1 I6: the panel's and the
+  // colorbars' rectangles, cached until something that can move them says so
+  // — see chromeRects() and invalidateChrome().
+  private chromeDirty = true
+  private chromeCache: LabelBox[] = []
+  // The viewport chromeRects() last saw, so measure() can tell a real resize
+  // (which moves the chrome) from every other draw() (which does not).
+  private chromeViewport: Viewport = { width: 0, height: 0 }
   // The config the current scene was set with (a value change rebuilds with it).
   private config: SpaceRenderConfig = { space: defaultSpaceConfig() }
   // Binding values waiting for the next frame, the last per name; `source`
@@ -221,6 +241,12 @@ export class SpaceRenderer {
   private pendingDrag: { x: number; y: number } | null = null
   // The drag was released: solve its last position, then end it.
   private dragEnding = false
+  // S6 fix round 1, I7: bindings whose slider is mid-scrub (an `input`
+  // event has fired, no matching `change` yet) — held the same way a play
+  // or a point-drag is, so a box-dependent statement (an implicit surface,
+  // a 3-variable contour:) meshes coarser while the reader is still moving
+  // the slider, not at full cost on every one of its `input` events.
+  private readonly scrubbing = new Set<string>()
   // The box and camera target are held (a value played or dragged since the
   // last resolve).
   private held = false
@@ -232,40 +258,70 @@ export class SpaceRenderer {
     this.colors = spaceColors(options.palette, options.theme)
     this.authored = { ...this.space.camera, target: [0, 0, 0] }
     this.view = { ...this.authored, target: [0, 0, 0] }
-    this.overlay = new Overlay(canvas)
+    // S6 fix round 2, item 7: a click that expands or collapses a readout's
+    // digits (V3) changes its own measured width — this.scheduler is set a
+    // few lines below, but the closure only reads it when a reader actually
+    // clicks, long after the constructor has returned.
+    this.overlay = new Overlay(canvas, () => this.scheduler.request())
     this.overlay.setColors(this.colors)
     this.colorbars = new Colorbars(this.overlay.element)
     this.readouts = new ReadoutBoxes(this.overlay.element)
     this.readouts.setColors(this.colors)
     this.params = new ParamsPanel(this.overlay.element, {
-      change: (name, value) => this.queueValue(name, value, 'slider'),
+      change: (name, value, scrubbing) => {
+        // S6 fix round 1, I7: held the same way a play or a point-drag is
+        // (advanceValues' `holding`), from the first `input` event until
+        // the matching `change` (or the number box's own, non-scrubbing
+        // commit) says the interaction ended.
+        if (scrubbing) this.scrubbing.add(name)
+        else this.scrubbing.delete(name)
+        this.queueValue(name, value, 'slider')
+      },
       togglePlay: (name) => this.togglePlay(name),
       toggleLoop: (name) => this.toggleLoop(name),
+      // S6 fix round 1, I6: a hover or focus change collapses or expands
+      // the panel entirely inside ParamsPanel's own DOM listeners — this is
+      // its only way to tell the renderer its rectangle just changed, so
+      // the cache drops and a frame is requested to re-lay the labels out
+      // against it.
+      chromeChanged: () => this.invalidateChrome(),
     })
     this.params.setColors(this.colors)
     this.scheduler = new FrameScheduler(env.requestFrame, env.cancelFrame, (time) => this.frame(time))
     this.backend = new GlBackend(canvas, {
       // A backend failure leaves nothing drawn: say why in the view too.
       onError: (message) => {
+        this.backendFailed = true
         this.overlay?.showMessage(`Space could not draw this view. ${message}`)
         this.report(message)
       },
       onContextLost: () => {
+        this.contextLost = true
+        this.overlay?.showMessage(CONTEXT_LOST_MESSAGE)
         this.scheduler.cancel()
         options.onContextLost?.()
       },
       onContextRestored: () => {
+        this.contextLost = false
+        // A restored context is a fresh one: shaders recompile from
+        // scratch, so a prior compile failure no longer applies.
+        this.backendFailed = false
+        // The empty-scene state (or nothing, for a real one) replaces
+        // "restoring…" once that draw happens.
+        this.overlay?.showMessage(null)
+        this.updateEmptyState()
         this.scheduler.request()
         options.onContextRestored?.()
       },
     })
-    if (!this.backend.available) this.overlay.showMessage(NO_WEBGL2_MESSAGE)
+    if (!this.backend.available) this.overlay.showMessage(NO_WEBGL2_STATE)
     canvas.tabIndex = 0
     this.attached = attachInput(canvas, this.input, {
       context: () => this.inputContext(),
       apply: (view) => this.applyUserView(view),
       startInertia: (velocity) => this.startInertia(velocity),
       stopInertia: () => this.stopInertia(),
+      resetView: () => this.resetView(),
       now: () => env.now(),
       prefersReducedMotion: () => env.prefersReducedMotion(),
       hover: (x, y) => this.hoverAt(x, y),
@@ -283,6 +339,7 @@ export class SpaceRenderer {
         if (!this.dragging) return
         if (x !== null && y !== null) this.pendingDrag = { x, y }
         this.dragEnding = true
+        this.canvas.style.cursor = ''
         this.scheduler.request()
       },
     })
@@ -308,6 +365,7 @@ export class SpaceRenderer {
     if (this.disposed) return
     this.dropKernel()
     this.params.setBindings([])
+    this.chromeDirty = true // S6 fix round 1, I6: the panel's own rectangle just changed.
     this.install(scene, config, true)
     this.scheduler.request()
   }
@@ -322,9 +380,14 @@ export class SpaceRenderer {
   // `fresh`: a new spec or scene (setSpec, setScene), rather than a value
   // change of the same one.
   private install(scene: SpaceScene, config: SpaceRenderConfig, fresh = false): void {
-    // Playing or dragging: the box and the camera hold still, so the frame
-    // does not slide under the moving surface; resolved once when it stops.
-    if (!fresh && this.world && this.axes && (this.playing.size > 0 || this.dragging !== null)) {
+    // Playing, dragging or scrubbing a slider: the box and the camera hold
+    // still, so the frame does not slide under the moving surface; resolved
+    // once when it stops. S6 fix round 2, NB2: this used to check only
+    // playing/dragging, disagreeing with advanceValues' own `holding` (which
+    // already included scrubbing, S6 fix round 1 I7) — a box-dependent
+    // statement built against kernel.setValues' holdBox while the renderer's
+    // own install() still resolved a fresh box every frame.
+    if (!fresh && this.world && this.axes && (this.playing.size > 0 || this.dragging !== null || this.scrubbing.size > 0)) {
       this.held = true
       this.config = config
       this.scene = scene
@@ -335,8 +398,9 @@ export class SpaceRenderer {
     this.held = false
     this.config = config
     const space = config.space
-    const box = resolveBox(space, scene.extent)
-    const world = worldMap(box, boxHalfExtents(box, space.aspect, scene))
+    const box = resolveBox(space, scene.extent, scene.boxSpanning)
+    const flat = flatAxes(space, scene.extent, scene.boxSpanning)
+    const world = worldMap(box, boxHalfExtents(box, space.aspect, scene, flat))
     const authored: SpaceView = { ...space.camera, target: world.centre }
     const first = this.scene === null
     const cameraChanged =
@@ -349,19 +413,36 @@ export class SpaceRenderer {
       this.view = sanitizeView(authored, authored)
     } else if (!sameBox(this.world, world)) {
       this.view = { ...this.view, target: world.centre }
+      // S6 fix round 1, M4: a resetView() ease in progress was headed for
+      // the old box's centre; re-target it to the new one rather than
+      // easing to a point the box has already moved away from. Its
+      // progress (from, startMs) is untouched — only where it ends moves.
+      if (this.easing) this.easing = { ...this.easing, to: { ...this.easing.to, target: world.centre } }
     }
     this.scene = scene
     this.space = space
     this.hoverMode = config.hover ?? 'all'
     this.world = world
     this.authored = sanitizeView(authored, authored)
-    this.axes = frameAxes(space, box)
+    this.axes = frameAxes(space, box, flat, flatFloor(space, scene.extent))
     this.backend.setScene(scene, world, this.colors, { depthcue: space.depthcue })
+    this.updateEmptyState()
     if (fresh) {
       const { hidden } = colorbarScales(scene)
       if (hidden > 0) console.info(`space: showing the first 2 colorbars; ${hidden} more colour scale${hidden === 1 ? '' : 's'} not shown`)
     }
     this.follow(scene, fresh)
+  }
+
+  // S6 plan V9: the empty-scene state, shown only while nothing else (no
+  // WebGL2, a lost context, a backend failure) already owns the message —
+  // an empty spec is not a failure, so it never overwrites a real one, and a
+  // scene that gains marks clears it, but only if it was the one showing.
+  private updateEmptyState(): void {
+    if (!this.backend.available || this.contextLost || this.backendFailed) return
+    const scene = this.scene
+    const empty = scene !== null && scene.marks.length === 0 && scene.errors.length === 0
+    this.overlay.showMessage(empty ? EMPTY_SCENE_MESSAGE : null)
   }
 
   // The colorbars, pins and probe follow a new scene. Pins and the probe are
@@ -397,12 +478,14 @@ export class SpaceRenderer {
     } catch (error) {
       this.kernel = null
       this.params.setBindings([])
+      this.chromeDirty = true // S6 fix round 1, I6.
       return [{ line: 0, message: `space could not build this spec: ${error instanceof Error ? error.message : String(error)}` }]
     }
     // A pin survives the edit only if its statement's line reads the same.
     this.applyPins({ type: 'respec', text: (line) => this.sourceLines?.[line - 1] ?? null })
     this.install(scene, config, true)
     this.params.setBindings(this.kernel.bindings())
+    this.chromeDirty = true // S6 fix round 1, I6: a new spec can rename or add/remove params.
     this.syncParams()
     this.scheduler.request()
     return scene.errors
@@ -420,13 +503,27 @@ export class SpaceRenderer {
     this.scheduler.request()
   }
 
-  // Back to the authored view (what double-click and the 0 key do).
+  // Back to the authored view (what double-click and the 0 key do): eases
+  // over 280 ms, ease-out cubic, azimuth the shortest way round (S6 plan
+  // V9), or snaps instantly under prefers-reduced-motion.
   resetView(): void {
-    this.setView(this.authored)
+    if (this.disposed) return
+    if (this.env.prefersReducedMotion()) {
+      this.easing = null
+      this.setView(this.authored)
+      return
+    }
+    this.easing = startEase(this.view, sanitizeView(this.authored, this.view), this.env.now())
+    this.scheduler.request()
   }
 
+  // S6 fix round 1, M4: while resetView()'s ease is in progress, this
+  // reports where it is headed, not the transient interpolated view a host
+  // would otherwise read moments before it changes again — the renderer's
+  // own draw() still animates from this.view every frame regardless.
   getView(): SpaceView {
-    return { ...this.view, target: [...this.view.target] }
+    const v = this.easing ? this.easing.to : this.view
+    return { ...v, target: [...v.target] }
   }
 
   setView(view: SpaceView): void {
@@ -463,6 +560,7 @@ export class SpaceRenderer {
     this.dragging = null
     this.pendingDrag = null
     this.dragEnding = false
+    this.scrubbing.clear()
   }
 
   private queueValue(name: string, value: number, source: 'slider' | 'play' | 'drag' | null): void {
@@ -509,6 +607,7 @@ export class SpaceRenderer {
     this.pendingHover = null
     this.setProbe(null)
     for (const name of mark.drag.params) this.playing.delete(name)
+    this.canvas.style.cursor = 'grabbing'
     return true
   }
 
@@ -551,7 +650,7 @@ export class SpaceRenderer {
       // Every queued value in one rebuild; while still playing or dragging,
       // against the held box.
       const before = kernel.values()
-      const holding = this.world !== null && (this.playing.size > 0 || this.dragging !== null)
+      const holding = this.world !== null && (this.playing.size > 0 || this.dragging !== null || this.scrubbing.size > 0)
       const values = new Map([...this.pendingValues].map(([name, { value }]) => [name, value]))
       const next = kernel.setValues(values, holding ? { holdBox: this.world!.box } : undefined)
       const after = kernel.values()
@@ -567,9 +666,14 @@ export class SpaceRenderer {
       }
       this.syncParams()
     }
-    // Play stopped or the drag ended: the held box is resolved now, once, and
-    // the kernel's box-dependent statements follow it.
-    const still = this.playing.size > 0 || this.dragging !== null
+    // Play stopped, the drag ended, or the scrub released: the held box is
+    // resolved now, once, and the kernel's box-dependent statements follow
+    // it. S6 fix round 3: `still` left out scrubbing, so a frame with no
+    // queued value mid-scrub (a camera ease, a resize, a readout click) ran
+    // this "held stopped" tail anyway — an unheld, full-resolution
+    // setValues(new Map()) against a freshly resolved box, every such
+    // frame, though nothing about the scrub had actually ended.
+    const still = this.playing.size > 0 || this.dragging !== null || this.scrubbing.size > 0
     if (this.held && !still && !installed && this.scene) this.install(kernel.setValues(new Map()), this.config)
     return again
   }
@@ -609,6 +713,21 @@ export class SpaceRenderer {
       this.emit({ type: 'hover', hit: probe ? probe.hit : null })
     }
     if (was || probe) this.scheduler.request()
+    this.updateHoverCursor(probe)
+  }
+
+  // S6 plan V5: grab over a draggable point, else the default; a drag under
+  // way owns the cursor itself (grab/release below), so a hover update never
+  // overrides it.
+  private updateHoverCursor(probe: { hit: Hit; x: number; y: number } | null): void {
+    if (this.dragging) return
+    const draggable = probe !== null && probe.hit.kind === 'point' && this.isDraggablePoint(probe.hit.source.object)
+    this.canvas.style.cursor = draggable ? 'grab' : ''
+  }
+
+  private isDraggablePoint(object: string): boolean {
+    const mark = this.scene?.marks.find((m) => m.source.object === object)
+    return mark !== undefined && mark.kind === 'points' && !!mark.drag
   }
 
   private clickAt(x: number, y: number): void {
@@ -666,7 +785,104 @@ export class SpaceRenderer {
   private updateColorbars(): void {
     const scene = this.scene
     const shown = scene ? colorbarScales(scene).shown : []
-    this.colorbars.update(shown.map((scale) => colorbarModel(scale, colormapTable(scale.map, this.colors))))
+    const rebuilt = this.colorbars.update(shown.map((scale) => colorbarModel(scale, colormapTable(scale.map, this.colors))))
+    // S6 fix round 1, I6: a moving colormap domain re-ticks the same number
+    // of colorbars — Colorbars.update() rebuilds their DOM (a new position
+    // or width for a tick label) without the *count* chromeRects used to key
+    // its cache on ever changing, so the stale rectangle would survive
+    // untouched. Only when it actually rebuilt, though (`rebuilt`): this
+    // runs on every install (every frame of a play or a drag, among
+    // others). Just the flag, not invalidateChrome()'s scheduler.request()
+    // too: this always runs inside a draw() already in progress (or a
+    // caller — setSpec, setScene — that asks for its own frame right
+    // after), so asking for another here as well would keep asking for one
+    // after play legitimately has nothing left to animate, undoing "render
+    // on demand" (unlike the panel's chromeChanged, a plain DOM event with
+    // no other reason for a frame to be coming).
+    if (rebuilt) this.chromeDirty = true
+  }
+
+  // S6 fix round 1, I6: drop the cached chrome rectangles (SpaceRenderer.ts's
+  // chromeRects()) and ask for a frame to re-lay labels out against the new
+  // ones — the panel and the colorbars only change from inside this class or
+  // from ParamsPanel's own DOM listeners (its chromeChanged handler), never
+  // from the camera or the pointer, so nothing before this asked for a
+  // redraw on their behalf.
+  private invalidateChrome(): void {
+    this.chromeDirty = true
+    this.scheduler.request()
+  }
+
+  // S6 plan V10: "nothing overlaps the frame's tick labels: V2's placer
+  // knows the chrome's rectangles." The panel, the colorbars and the live
+  // readout boxes are ordinary DOM already positioned by the time this
+  // runs (syncReadouts just ran; the panel and colorbars only move on a
+  // bindings, scene or theme change, all earlier than draw()) — their real
+  // rectangles, measured here and converted to the overlay's own origin, are
+  // the layer boundary between this impure class and layout.ts's pure math.
+  // A hidden or empty element (display: none, or no readout boxes yet)
+  // measures zero-sized and drops out on its own; no special-casing needed.
+  //
+  // S6 carried item (b): getBoundingClientRect() forces a synchronous
+  // layout, so reading it on every draw() is worth avoiding where it is
+  // safe to. The panel and the colorbars are genuinely static between draws
+  // except on a resize, the panel's own collapse/expand, or a rebuild (a new
+  // scene, a spec edit that renames or adds/removes params, or a moving
+  // colormap domain) — none of which depend on the camera or the pointer —
+  // so their rectangles are cached until invalidateChrome() (I6) says
+  // otherwise: measure() below on a real resize, updateColorbars() on every
+  // call, and ParamsPanel's chromeChanged handler (setBindings, and a
+  // hover/focus collapse or expand it cannot otherwise tell the renderer
+  // about). S6 fix round 2, item 7: a theme swap (setPalette) is not in that
+  // list — it recolors the panel and colorbars through CSS custom
+  // properties in place, never moving or resizing them, so it has nothing
+  // to invalidate here.
+  //
+  // The colorbar obstacle is the union of .space-colorbars' own rectangle
+  // and every one of its tick labels' (I6): a tick's `right: 18px`
+  // (SpaceView.css) places it outside .space-colorbar-body's box — an
+  // absolutely positioned child never grows its parent's measured rect — so
+  // the container alone under-reports how far left the chrome reaches.
+  //
+  // The readout boxes are deliberately excluded from that cache: sync()
+  // gives the probe's box and every pin's box a fresh CSS transform on
+  // almost every draw — the camera orbiting, easing or coasting on inertia,
+  // a played parameter, or a drag all move a pin's projected anchor, and a
+  // plain mouse hover moves the probe's — with no change to how many boxes
+  // there are. Caching them on an "added or removed" signature alone would
+  // serve a stale rectangle for a box that has visibly moved, which is
+  // exactly the collision V10 built this placer to prevent. So the readout
+  // rectangles stay live, measured fresh every call — and (I6) only the
+  // pinned ones are obstacles at all: the hover probe's own box moving
+  // under the cursor is not chrome, and must not make a tick label blink
+  // in and out as it passes over one.
+  private chromeRects(): LabelBox[] {
+    const origin = this.overlay.element.getBoundingClientRect()
+    const rectOf = (el: { getBoundingClientRect(): { left: number; top: number; width: number; height: number } }): LabelBox | null => {
+      const r = el.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) return null
+      return { x: r.left - origin.left + r.width / 2, y: r.top - origin.top + r.height / 2, width: r.width, height: r.height }
+    }
+    const union = (rects: readonly LabelBox[]): LabelBox | null => {
+      if (rects.length === 0) return null
+      const left = Math.min(...rects.map((r) => r.x - r.width / 2))
+      const right = Math.max(...rects.map((r) => r.x + r.width / 2))
+      const top = Math.min(...rects.map((r) => r.y - r.height / 2))
+      const bottom = Math.max(...rects.map((r) => r.y + r.height / 2))
+      return { x: (left + right) / 2, y: (top + bottom) / 2, width: right - left, height: bottom - top }
+    }
+    if (this.chromeDirty) {
+      this.chromeDirty = false
+      const panel = rectOf(this.params.element)
+      const colorbars = [this.colorbars.element, ...this.colorbars.tickElements()].map(rectOf).filter((r): r is LabelBox => r !== null)
+      this.chromeCache = [panel, union(colorbars)].filter((r): r is LabelBox => r !== null)
+    }
+    const readoutRects = this.readouts
+      .elements()
+      .filter((el) => el.dataset.pinned === 'true')
+      .map(rectOf)
+      .filter((r): r is LabelBox => r !== null)
+    return [...this.chromeCache, ...readoutRects]
   }
 
   private redrawNow(): void {
@@ -697,13 +913,29 @@ export class SpaceRenderer {
   private stopInertia(): void {
     this.inertia = null
     this.lastInertiaTime = null
+    // Any other automatic camera motion is interrupted the same way a new
+    // gesture interrupts inertia: every caller of stopInertia() means "the
+    // viewer is taking the camera back".
+    this.easing = null
   }
 
-  // One frame: advance inertia, then draw. Returns true to run again.
+  // One frame: advance inertia and any camera ease, then draw. Returns true
+  // to run again.
   private frame(time: number): boolean {
     if (this.disposed) return false
     const playing = this.advanceValues(time)
     let again = false
+    if (this.easing) {
+      const next = easeStep(this.easing, time)
+      if (next) {
+        this.view = next
+        again = true
+      } else {
+        this.view = this.easing.to
+        this.easing = null
+      }
+      this.options.onViewChange?.(this.getView())
+    }
     if (this.inertia) {
       const dt = this.lastInertiaTime === null ? 1000 / 60 : Math.min(64, Math.max(0, time - this.lastInertiaTime))
       const v = this.inertia
@@ -733,6 +965,14 @@ export class SpaceRenderer {
     const backingHeight = Math.round(height * ratio)
     if (this.canvas.width !== backingWidth) this.canvas.width = backingWidth
     if (this.canvas.height !== backingHeight) this.canvas.height = backingHeight
+    // S6 fix round 1, I6: a real resize moves the chrome (the panel and the
+    // colorbars sit at a fixed inset from the overlay's own edge), so the
+    // cached rectangles go stale. this.chromeDirty is already true on the
+    // very first measure(), so this only ever fires on a genuine change.
+    if (width !== this.chromeViewport.width || height !== this.chromeViewport.height) {
+      this.chromeViewport = { width, height }
+      this.chromeDirty = true
+    }
   }
 
   private draw(): void {
@@ -754,8 +994,11 @@ export class SpaceRenderer {
       this.backend.setFrame(frame, this.colors)
       this.syncInteraction(camera, world)
       this.backend.draw(camera, this.pixelRatio)
-      this.overlay.update(layoutLabels(frame, scene.labels, camera, world))
+      // The readout boxes go up first (V10): their transform is set from the
+      // probe/pin anchor alone, never from layout, so the placer can measure
+      // where they landed and keep tick labels off them.
       this.syncReadouts(camera, world)
+      this.overlay.update(layoutLabels(frame, scene.labels, camera, world, this.chromeRects(), (key) => this.overlay.isExpanded(key)))
     } catch (error) {
       this.report(error instanceof Error ? error.message : String(error))
     }

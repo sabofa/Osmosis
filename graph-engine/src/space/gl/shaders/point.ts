@@ -5,6 +5,14 @@
 // surface is not half-buried in it where the surface tilts toward the viewer.
 // Shapes: 0 dot, 1 ring, 2 cross (+), 3 diamond, 4 square. A point is
 // clipped and depth-cued by its centre (look.ts).
+//
+// S6 plan V5, findable affordances: every point draws a 1 px background-
+// coloured outline just past its shape, so it reads against any surface
+// behind it. A "halo" point (u_halo: a draggable point, or the probe's/a
+// pin's marker) draws a wider 2 px background band there instead, and a
+// thin 1 px ink ring past that. These bands are opaque but carry no depth
+// (drawn in the antialiased fringe pass, u_pass == 1): the core shape alone
+// writes depth, exactly as before.
 
 import { LOOK_FRAGMENT_GLSL, LOOK_VERTEX_GLSL } from '../look'
 
@@ -17,6 +25,7 @@ uniform vec3 u_scale;
 uniform vec2 u_viewport;
 uniform float u_pixelRatio;
 uniform float u_size;                   // CSS px diameter
+uniform bool u_halo;                    // V5: room for the wider halo bands
 uniform float u_depthBias;
 uniform vec3 u_eyeDir;                  // world, toward the eye (orthographic)
 uniform vec3 u_eye;                     // world eye position (perspective)
@@ -30,7 +39,10 @@ void main() {
   v_rel = a_centre;
   v_depth = viewDepth(a_centre * u_scale);
   vec4 c = u_viewProj * vec4(a_centre * u_scale, 1.0);
-  float r = 0.5 * u_size * u_pixelRatio + 1.0;
+  // Padding for the outline (always) and, past it, the halo band and ring
+  // (u_halo): must reach at least as far as the fragment shader's bands.
+  float pad = (u_halo ? 4.5 : 1.5) * u_pixelRatio + 1.0;
+  float r = 0.5 * u_size * u_pixelRatio + pad;
   v_local = a_corner * r;
   if (c.w <= 0.0 || c.z < -c.w) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -52,12 +64,25 @@ in vec2 v_local;
 flat in vec3 v_rel;
 flat in float v_depth;
 uniform vec3 u_color;
+uniform vec3 u_ink;
 uniform float u_pixelRatio;
 uniform float u_size;
 uniform int u_shape;
+uniform bool u_halo;
 uniform int u_pass;        // 0: opaque core, writes depth; 1: antialiased fringe, blended
 ${LOOK_FRAGMENT_GLSL}
 out vec4 fragColor;
+
+// V5's bands past the shape's edge, in device px: every point draws a 1 px
+// background outline (OUTLINE_PX) first; a "halo" point (u_halo) then draws
+// a further 2 px band of background past it (HALO_PX — S6 fix round 1,
+// M3: the halo band is its own 2 px, the 1 px outline already included
+// ahead of it, not a 2 px total the outline is part of), then a 1 px ink
+// ring (RING_PX) beyond that. Kept in sync with the vertex shader's padding
+// by eye.
+const float OUTLINE_PX = 1.0;
+const float HALO_PX = 2.0;
+const float RING_PX = 1.0;
 
 float box(vec2 p, vec2 b) {
   vec2 q = abs(p) - b;
@@ -84,7 +109,35 @@ void main() {
   }
   float alpha = clamp(0.5 - d, 0.0, 1.0);
   bool core = alpha >= 0.999;
-  if (u_pass == 0 ? !core : (core || alpha <= 0.0)) discard;
-  fragColor = vec4(depthCue(u_color, v_depth), u_pass == 0 ? 1.0 : alpha);
+  if (u_pass == 0) {
+    if (!core) discard;
+    fragColor = vec4(depthCue(u_color, v_depth), 1.0);
+    return;
+  }
+  // Pass 1: the shape's own antialiased fringe, then — past it — the
+  // outline, halo and ring bands (V5), each opaque but depth-less.
+  if (core) discard;
+  if (alpha > 0.0) {
+    fragColor = vec4(depthCue(u_color, v_depth), alpha);
+    return;
+  }
+  float beyond = d - 0.5; // device px past the fringe's outer edge (d = 0.5 there)
+  float outlineEnd = OUTLINE_PX * u_pixelRatio;
+  if (beyond < outlineEnd) {
+    fragColor = vec4(depthCue(u_background, v_depth), 1.0);
+    return;
+  }
+  if (u_halo) {
+    float haloEnd = outlineEnd + HALO_PX * u_pixelRatio;
+    if (beyond < haloEnd) {
+      fragColor = vec4(depthCue(u_background, v_depth), 1.0);
+      return;
+    }
+    if (beyond < haloEnd + RING_PX * u_pixelRatio) {
+      fragColor = vec4(depthCue(u_ink, v_depth), 1.0);
+      return;
+    }
+  }
+  discard;
 }
 `

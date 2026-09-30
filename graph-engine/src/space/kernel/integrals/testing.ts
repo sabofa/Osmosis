@@ -30,6 +30,15 @@ export function readout(scene: SpaceScene, line: number): LabelAnchor {
   return label
 }
 
+// The readout's full-precision text (S6 plan V3: formatApprox's display cap
+// shows fewer digits than the error supports; fullText, the pinned click-to-
+// expand text, has every one of them), for tests that check the underlying
+// computation rather than what a reader sees.
+export function readoutFull(scene: SpaceScene, line: number): string {
+  const label = readout(scene, line)
+  return label.fullText ?? label.text
+}
+
 function parseNumber(text: string): number {
   return Number(text.replace(MINUS, '-'))
 }

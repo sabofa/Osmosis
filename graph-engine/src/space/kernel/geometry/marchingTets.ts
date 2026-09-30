@@ -81,6 +81,15 @@ export function implicitRes(res: number | null, spec: number | null, fallback: n
   return Math.min(spec ?? fallback, MAX_IMPLICIT_RES)
 }
 
+// S6 plan V11: half the cubes per axis while BuildContext.held is set — a
+// play or a drag holds the box, and marching tetrahedra costs ~n^3 (a full
+// grid re-sample every rebuild), so this cuts each hold-time rebuild about
+// 8x, an implicit surface's whole reason to be interactive while dragged.
+// Never below 1. Released (or never held), the resolution is unchanged.
+export function heldRes(res: number, held: boolean | undefined): number {
+  return held ? Math.max(1, Math.floor(res / 2)) : res
+}
+
 export function sampleGrid(F: Field, box: Box3, n: number): Grid {
   const xs = coordinates(box.x, n)
   const ys = coordinates(box.y, n)

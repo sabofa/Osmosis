@@ -1,6 +1,7 @@
 // Tick values and their text (plan G7). Pure.
 
 import type { SpaceConfig, TickStep } from '../config'
+import { formatNumber } from '../pick/format'
 import type { Box3, Range } from '../scene/types'
 import { stepFor } from './nice'
 import type { AxisScale, FrameAxes } from './types'
@@ -34,17 +35,29 @@ export function tickIndex(value: number, step: number): number {
 }
 
 // The axis steps and titles from the space directives and the resolved box.
-export function frameAxes(space: SpaceConfig, box: Box3): FrameAxes {
-  const axis = (authored: TickStep | null, range: Range, title: string) => ({
+// `flat` (S6 plan V1, frame/bounds.ts flatAxes) marks an axis whose box is
+// the thin one built around a single data value: its FrameAxis.fixed is set
+// to that value (the box's own centre) — except (S6 fix round 1, M1) where
+// `floor` (frame/bounds.ts flatFloor) says there was no data there at all,
+// only a region shading the box's floor, in which case fixed is the floor
+// instead, so the tick still points at what is actually drawn.
+export function frameAxes(
+  space: SpaceConfig,
+  box: Box3,
+  flat: { x?: boolean; y?: boolean; z?: boolean } = {},
+  floor: { x?: boolean; y?: boolean; z?: boolean } = {}
+): FrameAxes {
+  const axis = (authored: TickStep | null, range: Range, title: string, isFlat: boolean | undefined, useFloor: boolean | undefined) => ({
     scale: 'linear' as const,
     step: stepFor(range.max - range.min, TICK_TARGET, authored && authored.value > 0 ? authored : null),
     authored,
     title,
+    fixed: isFlat ? (useFloor ? range.min : (range.min + range.max) / 2) : null,
   })
   return {
-    x: axis(space.ticks.x, box.x, space.titles.x),
-    y: axis(space.ticks.y, box.y, space.titles.y),
-    z: axis(space.ticks.z, box.z, space.titles.z),
+    x: axis(space.ticks.x, box.x, space.titles.x, flat.x, floor.x),
+    y: axis(space.ticks.y, box.y, space.titles.y, flat.y, floor.y),
+    z: axis(space.ticks.z, box.z, space.titles.z, flat.z, floor.z),
   }
 }
 
@@ -125,4 +138,15 @@ export function formatTick(value: number, step: TickStep | null, stepValue: numb
   const magnitude = Math.abs(stepValue)
   if (magnitude >= 1e5 || magnitude < 1e-4) return nearZero ? '0' : scientific(value)
   return withMinus((nearZero ? 0 : value).toFixed(decimalsOf(stepValue)))
+}
+
+// S6 fix round 1, M1: a flat axis's single tick (FrameAxis.fixed) is not one
+// rung of the step ladder — it is the data's own z (or, flatFloor's case,
+// the floor where a lone region's shading sits) — so it is labelled with
+// that value's own digits, up to 4 significant, never the step's decimals
+// (formatTick's `0.00` for a value the step ladder was never built to show)
+// or a pi multiple (structurally tied to the step, meaningless for a value
+// that is not one of its multiples).
+export function formatFixedTick(value: number): string {
+  return formatNumber(value)
 }

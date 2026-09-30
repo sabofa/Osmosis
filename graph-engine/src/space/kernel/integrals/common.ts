@@ -5,7 +5,7 @@
 import type { Statement } from '../../../parser/types'
 import { QuadratureError } from '../../../math/quadrature'
 import { QUAD_BUDGET, S5_SAFETY } from '../../../math/tolerance'
-import { APPROX, formatNumber, SIGNIFICANT_DIGITS, supportedDigits, MAX_DIGITS } from '../../pick/format'
+import { APPROX, DISPLAY_DIGITS, formatNumber, SIGNIFICANT_DIGITS, supportedDigits, MAX_DIGITS } from '../../pick/format'
 import type { LabelAnchor, SceneError, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
 import { boxOf, type BuildContext } from '../registry'
@@ -150,14 +150,39 @@ function chosenDisplay(a: Approx): { value: number; digits: number } | null {
   }
 }
 
+// S6 plan V3: the on-figure text is capped at DISPLAY_DIGITS even when
+// chosenDisplay's honest digit count (S5 breaker ruling) supports more;
+// rounding to fewer digits is always honest, so this never shows a digit
+// approxTextFull would not.
 export function approxText(a: Approx): string {
+  const d = chosenDisplay(a)
+  if (!d) return refusedDisplay(a)
+  return `${APPROX} ${formatNumber(d.value, Math.min(DISPLAY_DIGITS, d.digits))}`
+}
+
+// approxText, uncapped (S6 plan V3): every digit chosenDisplay's own honest
+// rounding supports. A refusal prints the same text as approxText (both go
+// through refusedDisplay), so a refusal never carries a distinct fullText.
+export function approxTextFull(a: Approx): string {
   const d = chosenDisplay(a)
   if (!d) return refusedDisplay(a)
   return `${APPROX} ${formatNumber(d.value, d.digits)}`
 }
 
-// "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate supports.
+// "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate
+// supports, capped at DISPLAY_DIGITS (V3).
 export function approxTupleText(values: readonly Approx[]): string {
+  const parts = values.map((a) => {
+    const d = chosenDisplay(a)
+    return d ? formatNumber(d.value, Math.min(DISPLAY_DIGITS, d.digits)) : '?'
+  })
+  return `${APPROX} (${parts.join(', ')})`
+}
+
+// approxTupleText, uncapped (V3): every digit each coordinate's estimate
+// honestly supports (chosenDisplay) — the same S5 breaker-ruling rounding as
+// approxText/approxTextFull, never merely what supportedDigits alone allows.
+export function approxTupleTextFull(values: readonly Approx[]): string {
   const parts = values.map((a) => {
     const d = chosenDisplay(a)
     return d ? formatNumber(d.value, d.digits) : '?'
@@ -283,9 +308,11 @@ export function part(context: BuildContext, name: string): BuildContext['source'
   return { ...context.source, object: `${context.source.object}.${name}` }
 }
 
-// The statement's readout: an annotation anchored at `position`.
-export function readoutLabel(context: BuildContext, position: Vec3, text: string): LabelAnchor {
-  return { source: part(context, 'readout'), position, text, kind: 'annotation' }
+// The statement's readout: an annotation anchored at `position`. `fullText`
+// (V3), when given, is the same readout with every digit its numeric
+// estimate(s) support, shown on a click.
+export function readoutLabel(context: BuildContext, position: Vec3, text: string, fullText?: string): LabelAnchor {
+  return { source: part(context, 'readout'), position, text, kind: 'annotation', ...(fullText !== undefined && fullText !== text ? { fullText } : {}) }
 }
 
 // The form a builder was registered for.

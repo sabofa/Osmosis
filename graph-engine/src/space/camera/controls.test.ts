@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SpaceView } from '../config'
 import type { Box3, Vec3 } from '../scene/types'
-import { INERTIA_TAU_MS, inertiaStep, orbit, pan, reset, wrapAzimuth, zoomAt } from './controls'
+import { EASE_MS, INERTIA_TAU_MS, easeOutCubic, easeStep, inertiaStep, orbit, pan, reset, startEase, wrapAzimuth, zoomAt } from './controls'
 import { cameraMatrices, project } from './projection'
 import { screenBasis } from './turntable'
 import { worldMap } from './world'
@@ -136,5 +136,61 @@ describe('reset and inertia', () => {
     expect(inertiaStep({ azimuth: 0.001, elevation: 0 }, 1)).toBeNull()
     // 0.0015 deg/ms decays for 1 ms to about 0.0249 deg per frame: still moving.
     expect(inertiaStep({ azimuth: 0.0015, elevation: 0 }, 1)).not.toBeNull()
+  })
+})
+
+describe('startEase / easeStep (S6 plan V9: double-click and 0 ease over 280 ms)', () => {
+  it('EASE_MS is 280', () => {
+    expect(EASE_MS).toBe(280)
+  })
+
+  it('easeOutCubic: 1 - (1 - t)^3, hand-computed at t = 0, 0.5, 1', () => {
+    expect(easeOutCubic(0)).toBe(0)
+    // 1 - 0.5^3 = 1 - 0.125 = 0.875
+    expect(easeOutCubic(0.5)).toBeCloseTo(0.875, 12)
+    expect(easeOutCubic(1)).toBe(1)
+  })
+
+  it('the eased view at t = 0, 0.5 and 1 (hand-computed from easeOutCubic): elevation, zoom and target interpolate by the same eased fraction', () => {
+    const from: SpaceView = { azimuth: 0, elevation: 0, zoom: 1, target: [0, 0, 0] }
+    const to: SpaceView = { azimuth: 0, elevation: 40, zoom: 3, target: [10, -20, 4] }
+    const easing = startEase(from, to, 1000)
+    // t = 0: exactly `from`.
+    const at0 = easeStep(easing, 1000)!
+    expect(at0).toEqual({ azimuth: 0, elevation: 0, zoom: 1, target: [0, 0, 0] })
+    // t = 0.5 of 280 ms is 140 ms in; e = easeOutCubic(0.5) = 0.875.
+    const at140 = easeStep(easing, 1140)!
+    expect(at140.elevation).toBeCloseTo(40 * 0.875, 9)
+    expect(at140.zoom).toBeCloseTo(1 + (3 - 1) * 0.875, 9)
+    expect(at140.target[0]).toBeCloseTo(10 * 0.875, 9)
+    expect(at140.target[1]).toBeCloseTo(-20 * 0.875, 9)
+    expect(at140.target[2]).toBeCloseTo(4 * 0.875, 9)
+    // t >= 1 (280 ms or later): null — the caller applies `to` exactly.
+    expect(easeStep(easing, 1280)).toBeNull()
+    expect(easeStep(easing, 2000)).toBeNull()
+  })
+
+  it('azimuth takes the shortest way round: 170 -> -170 is a +20 degree turn, not -340', () => {
+    const from: SpaceView = { azimuth: 170, elevation: 0, zoom: 1, target: [0, 0, 0] }
+    const to: SpaceView = { azimuth: -170, elevation: 0, zoom: 1, target: [0, 0, 0] }
+    const easing = startEase(from, to, 0)
+    expect(easing.azimuthDelta).toBe(20)
+    // Half way: 170 + 20 * 0.875 = 187.5, wrapped into (-180, 180] is -172.5.
+    const at140 = easeStep(easing, 140)!
+    expect(at140.azimuth).toBeCloseTo(-172.5, 9)
+  })
+
+  it('the reverse turn is the shortest way round too: -170 -> 170 is -20 degrees, not +340', () => {
+    const from: SpaceView = { azimuth: -170, elevation: 0, zoom: 1, target: [0, 0, 0] }
+    const to: SpaceView = { azimuth: 170, elevation: 0, zoom: 1, target: [0, 0, 0] }
+    expect(startEase(from, to, 0).azimuthDelta).toBe(-20)
+  })
+
+  it('a full 280 ms (or more) is done: easeStep returns null at and after t = 1', () => {
+    const from: SpaceView = { azimuth: 0, elevation: 0, zoom: 1, target: [0, 0, 0] }
+    const to: SpaceView = { azimuth: 90, elevation: 10, zoom: 2, target: [1, 1, 1] }
+    const easing = startEase(from, to, 500)
+    expect(easeStep(easing, 500 + EASE_MS - 1)).not.toBeNull()
+    expect(easeStep(easing, 500 + EASE_MS)).toBeNull()
   })
 })

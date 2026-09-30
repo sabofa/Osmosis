@@ -31,6 +31,30 @@
   font-weight: 600;
 }
 
+/* A readout with more digits than shown (plan V3): the overlay is otherwise
+   pointer-events: none so the canvas gets input, but this one span opts back
+   in, the same way .space-params does. A dotted underline hints it clicks. */
+.space-label[data-expandable] {
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+/* A dropped annotation's leader (plan V2): a hairline from the label back to
+   its data point, drawn as a 1 px div scaled to length and rotated — no SVG
+   in the overlay. transform-origin stays the default top-left so rotation
+   pivots at the anchor end (x1, y1). */
+.space-leader {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.35;
+  will-change: transform;
+}
+
 .space-message {
   position: absolute;
   inset: 0;
@@ -39,8 +63,28 @@
   justify-content: center;
   padding: 24px;
   text-align: center;
+}
+
+/* S6 plan V9: the message's own card, legible over whatever the canvas
+   shows (black on a failed clear, a stale frame). One line for the reason,
+   a second, quieter one for the next step, where there is one. V10: the
+   chrome's one visual language — hairline --space-line, --space-surface,
+   --space-ink (inherited as currentColor from .space-overlay's own color),
+   radius 6, the 8/12 px spacing rhythm. */
+.space-message-card {
+  max-width: 32em;
+  padding: 12px 16px;
+  border: 1px solid var(--space-line, currentColor);
+  border-radius: 6px;
+  background: var(--space-surface, transparent);
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
+}
+
+.space-message-next {
+  margin-top: 4px;
+  color: var(--space-muted, currentColor);
+  font-size: 13px;
 }
 
 /* The colorbars (plan E5): right edge, inset 16 px, 12 x 160 px strips with
@@ -108,28 +152,29 @@
 }
 
 /* Readout boxes (plan E9, E10): the probe's beside the cursor, each pin's
-   beside its marker. Colours come from the palette, set inline. */
+   beside its marker. Colours come from the palette, set inline (probe.ts
+   paints background/border/ink to match --space-surface/--space-line/
+   --space-ink; V10 keeps the radius and spacing the same rhythm). */
 .space-readout {
   position: absolute;
   left: 0;
   top: 0;
-  padding: 6px 8px;
+  padding: 8px 12px;
   border: 1px solid;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 12px;
   line-height: 1.35;
   white-space: nowrap;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  /* S6 fix round 1, M6: no drop shadow, a hairline border only, matching
+     the plan's global constraint ("no gradients or drop shadows on chrome
+     beyond a hairline border") — this used to have one, removed only for
+     a pinned box (data-pinned), inconsistent with every other unpinned one. */
   will-change: transform;
-}
-
-.space-readout[data-pinned] {
-  box-shadow: none;
 }
 
 .space-readout-title {
   font-weight: 600;
-  margin-bottom: 3px;
+  margin-bottom: 4px;
   max-width: 28em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -138,11 +183,11 @@
 .space-readout-rows {
   display: grid;
   grid-template-columns: auto auto;
-  column-gap: 10px;
+  column-gap: 12px;
 }
 
 .space-readout-label {
-  opacity: 0.75;
+  color: var(--space-muted, currentColor);
 }
 
 .space-readout-value {
@@ -150,20 +195,49 @@
 }
 
 /* The parameter panel (plan E11): top left, one row per @param. The only
-   part of the overlay that takes pointer events. */
+   part of the overlay that takes pointer events. V9's expandable label and
+   this panel are the same rule: pointer-events opt in per element, so the
+   canvas keeps every event neither one claims. */
 .space-params {
   position: absolute;
   left: 12px;
   top: 12px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: 8px;
+  padding: 8px 12px;
   border: 1px solid;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 12px;
   pointer-events: auto;
   user-select: none;
+  transition: opacity 120ms ease-out;
+}
+
+/* S6 plan V10: collapsed to a chip — no parameter is playing, and the panel
+   is not hovered or focused — so it stays out of the reader's way until
+   they want it. prefers-reduced-motion turns off the transition, not the
+   collapse itself (there is no motion to speak of, only an opacity change,
+   but a reduced-motion reader gets the plain jump either way). */
+.space-params[data-collapsed] {
+  gap: 0;
+  padding: 6px 10px;
+  opacity: 0.55;
+}
+
+.space-params[data-collapsed] .space-param:not(:first-child) {
+  display: none;
+}
+
+.space-params[data-collapsed] .space-param-name::after {
+  content: ' ⋯';
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-params {
+    transition: none;
+  }
 }
 
 .space-param {

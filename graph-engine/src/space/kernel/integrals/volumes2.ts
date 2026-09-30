@@ -26,7 +26,7 @@ import { checkBudget, Reads, resolution } from '../common'
 import { finishMesh, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
-import { approxText, attempt, COLLAPSED_REL, determined, formOf, part, readoutLabel } from './common'
+import { approxText, approxTextFull, attempt, COLLAPSED_REL, determined, formOf, part, readoutLabel } from './common'
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
@@ -180,7 +180,16 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
       }
       anchor = [(3 * sx) / p.length, (3 * sy) / p.length, zmax]
     }
-    const labels = value ? [readoutLabel(context, anchor, `∬_${R} ${integrand} dA ${approxText(value)}${crosses ? `; ${note}` : ''}`)] : []
+    const labels = value
+      ? [
+          readoutLabel(
+            context,
+            anchor,
+            `∬_${R} ${integrand} dA ${approxText(value)}${crosses ? `; ${note}` : ''}`,
+            `∬_${R} ${integrand} dA ${approxTextFull(value)}${crosses ? `; ${note}` : ''}`,
+          ),
+        ]
+      : []
     return { marks, labels, errors, colorScale: null }
   }
   return { reads: reads.names, build }

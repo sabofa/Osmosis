@@ -114,6 +114,52 @@ export function reset(authored: SpaceView): SpaceView {
   return { ...authored, target: [...authored.target] }
 }
 
+// S6 plan V9: double-click and 0 animate back to the authored view over 280
+// ms, ease-out cubic, azimuth the shortest way round; none of this under
+// prefers-reduced-motion (the caller checks that and calls reset() plainly
+// instead of starting an Easing).
+export const EASE_MS = 280
+
+// 1 - (1 - t)^3.
+export function easeOutCubic(t: number): number {
+  const u = 1 - t
+  return 1 - u * u * u
+}
+
+export interface Easing {
+  from: SpaceView
+  to: SpaceView
+  // The shortest signed azimuth turn from `from` to `to`, in (-180, 180]:
+  // wrapAzimuth applied to a difference gives the shortest delta the same
+  // way it gives the shortest absolute angle.
+  azimuthDelta: number
+  startMs: number
+}
+
+export function startEase(from: SpaceView, to: SpaceView, startMs: number): Easing {
+  return { from, to, azimuthDelta: wrapAzimuth(to.azimuth - from.azimuth), startMs }
+}
+
+// The eased view at `nowMs`, or null once it is done (t >= 1) — the caller
+// then applies `easing.to` exactly and drops the Easing.
+export function easeStep(easing: Easing, nowMs: number): SpaceView | null {
+  const t = (nowMs - easing.startMs) / EASE_MS
+  if (t >= 1) return null
+  const e = easeOutCubic(Math.max(0, t))
+  const { from, to } = easing
+  // A 3-element array literal, not `.map()` over one: TypeScript loses the
+  // fixed length through `.map()` (a plain number[] out), which used to
+  // need an `as` cast into the 3-tuple target really is — this needs none,
+  // since a literal with exactly 3 elements is a real tuple already.
+  const targetAt = (i: 0 | 1 | 2) => from.target[i] + (to.target[i] - from.target[i]) * e
+  return {
+    azimuth: wrapAzimuth(from.azimuth + easing.azimuthDelta * e),
+    elevation: from.elevation + (to.elevation - from.elevation) * e,
+    zoom: from.zoom + (to.zoom - from.zoom) * e,
+    target: [targetAt(0), targetAt(1), targetAt(2)],
+  }
+}
+
 // Degrees per millisecond, as measured from the last moves of an orbit drag.
 export interface OrbitVelocity {
   azimuth: number

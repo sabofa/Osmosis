@@ -36,7 +36,7 @@ import type { LabelAnchor, LineMark, Mark, SceneError, Vec3 } from '../../scene/
 import { boundNames, constant, CURVE_WIDTH, Reads, renameBound, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, clipToZ, lineMark, part, pointMark, toolBox } from './box'
-import { approxWithin } from './readout'
+import { approxWithin, approxWithinFull } from './readout'
 import { preparePoint, prepareDomain, requireArity, resolveTarget } from './target'
 
 const DEFAULT_SEGMENTS = 512
@@ -217,7 +217,7 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
       }
       const found: { name: string; value: number; error: number }[] = []
       for (const { name, side } of sides) if (side.kind === 'value') found.push({ name, value: side.value, error: side.error })
-      const readout = (position: Vec3, text: string) => labels.push(annotation(part(context, 'readout'), position, text))
+      const readout = (position: Vec3, text: string, fullText?: string) => labels.push(annotation(part(context, 'readout'), position, text, fullText))
       if (sides.some((s) => s.side.kind === 'unbounded')) {
         readout(target, 'f grows without bound along this path')
       } else if (sides.some((s) => s.side.kind === 'unsettled')) {
@@ -230,11 +230,12 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
         if (two && Math.abs(one.value - two.value) > one.error + two.error + slack) {
           marks.push(pointMark(part(context, 'limit'), found.map((s): Vec3 => [x0, y0, s.value]), context, 'ring', 12))
           const text = `along this path, f → ${approxWithin(one.value, one.error)} ${one.name} ${here} and ${approxWithin(two.value, two.error)} ${two.name} it: no limit along this path`
-          readout([x0, y0, one.value], text)
+          const fullText = `along this path, f → ${approxWithinFull(one.value, one.error)} ${one.name} ${here} and ${approxWithinFull(two.value, two.error)} ${two.name} it: no limit along this path`
+          readout([x0, y0, one.value], text, fullText)
         } else {
           const best = two && two.error < one.error ? two : one
           marks.push(pointMark(part(context, 'limit'), [[x0, y0, best.value]], context, 'ring', 12))
-          readout([x0, y0, best.value], `along this path, f → ${approxWithin(best.value, best.error)}`)
+          readout([x0, y0, best.value], `along this path, f → ${approxWithin(best.value, best.error)}`, `along this path, f → ${approxWithinFull(best.value, best.error)}`)
         }
       }
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatApprox, formatNumber, formatPoint, supportedDigits } from './format'
+import { DISPLAY_DIGITS, formatApprox, formatApproxFull, formatNumber, formatPoint, supportedDigits } from './format'
 
 describe('formatNumber (E8)', () => {
   it.each([
@@ -47,5 +47,33 @@ describe('formatApprox and formatPoint', () => {
 
   it('prints a point with U+2212 minus signs', () => {
     expect(formatPoint([0.3, -0.7, -0.4])).toBe('(0.3, −0.7, −0.4)')
+  })
+})
+
+describe('formatApprox display cap (S6 plan V3)', () => {
+  it('caps an on-figure annotation at DISPLAY_DIGITS even when the error supports more: ∬ ≈ 25.1327412287 becomes ≈ 25.1327', () => {
+    expect(DISPLAY_DIGITS).toBe(6)
+    const value = 25.132741228718345
+    const error = 1e-10
+    expect(supportedDigits(value, error)).toBeGreaterThan(DISPLAY_DIGITS)
+    expect(formatApprox(value, error)).toBe('≈ 25.1327')
+  })
+
+  it('formatApproxFull is never capped: it prints every digit the error supports', () => {
+    const value = 25.132741228718345
+    const error = 1e-10
+    expect(formatApproxFull(value, error)).toBe(`≈ ${formatNumber(value, supportedDigits(value, error))}`)
+    expect(formatApproxFull(value, error)).not.toBe(formatApprox(value, error))
+  })
+
+  it('the cap never adds digits the error does not support: fewer than 6 stays fewer than 6', () => {
+    // Only 3 digits supported: the cap must not round up to 6.
+    expect(supportedDigits(1.2345, 1e-3)).toBe(3)
+    expect(formatApprox(1.2345, 1e-3)).toBe(formatApproxFull(1.2345, 1e-3))
+  })
+
+  it('with no error estimate, both print the default 4 digits (unaffected by the cap)', () => {
+    expect(formatApprox(1 / 3)).toBe(formatApproxFull(1 / 3))
+    expect(formatApprox(1 / 3)).toBe('≈ 0.3333')
   })
 })

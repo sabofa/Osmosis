@@ -3,7 +3,7 @@
 // ≈. A readout is an annotation label: the scene has no other channel for a
 // statement's numbers (SpaceScene carries marks, labels and errors).
 
-import { APPROX, formatApprox, formatNumber, MINUS } from '../../pick/format'
+import { APPROX, formatApprox, formatApproxFull, formatNumber, MINUS } from '../../pick/format'
 
 export interface AffineTerm {
   coef: number
@@ -60,8 +60,14 @@ export function approx(v: number, floor: number): string {
   return `${APPROX} ${formatNumber(Math.abs(v) <= floor ? 0 : v)}`
 }
 
-// A numeric estimate with its error: digits as the error supports
-// (formatApprox), and ≈ 0 for a value within its error of zero.
+// A numeric estimate with its error: digits as the error supports, capped
+// at DISPLAY_DIGITS (formatApprox), and ≈ 0 for a value within its error of
+// zero.
 export function approxWithin(v: number, error: number): string {
   return Math.abs(v) <= error ? `${APPROX} 0` : formatApprox(v, error)
+}
+
+// approxWithin, uncapped (S6 plan V3): every digit the error supports.
+export function approxWithinFull(v: number, error: number): string {
+  return Math.abs(v) <= error ? `${APPROX} 0` : formatApproxFull(v, error)
 }

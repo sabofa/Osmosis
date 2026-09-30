@@ -23,7 +23,20 @@ import { call, mul, num, variable } from '../../../math/expr'
 import type { LineMark, PointMark, SceneError } from '../../scene/types'
 import { DASH, Reads, resolution } from '../common'
 import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
-import { approxText, approxTupleText, attempt, determined, floorHeight, formOf, IntegralRefusal, part, readoutLabel, type Approx } from './common'
+import {
+  approxText,
+  approxTextFull,
+  approxTupleText,
+  approxTupleTextFull,
+  attempt,
+  determined,
+  floorHeight,
+  formOf,
+  IntegralRefusal,
+  part,
+  readoutLabel,
+  type Approx,
+} from './common'
 import { namedShape } from './named'
 import { prepareRegion2 } from './regions'
 import { compileOnRegion } from './target'
@@ -179,7 +192,8 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
       })
     }
     const text = `${name} ${approxTupleText(centre)}; M ${approxText(mass)}`
-    return { marks, labels: [readoutLabel(context, p, text)], errors: [], colorScale: null }
+    const fullText = `${name} ${approxTupleTextFull(centre)}; M ${approxTextFull(mass)}`
+    return { marks, labels: [readoutLabel(context, p, text, fullText)], errors: [], colorScale: null }
   }
   return { reads: reads.names, build }
 }

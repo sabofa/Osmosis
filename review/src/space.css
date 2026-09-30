@@ -165,14 +165,21 @@ body {
 .space-review-view {
   display: block;
   font: 11px/1.5 var(--sr-font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--sr-muted);
   word-break: break-word;
 }
 
+/* S6 plan V10 names the event log among the chrome getting "one visual
+   language"; a monospace font already columns its numbers, but tabular
+   numerals is the one part of that language (border/radius/8-12px spacing
+   are the review scaffold's own, deliberately distinct, dev-tool look) that
+   applies here too. */
 .space-review-events {
   margin: 0;
   padding-left: 22px;
   font: 11px/1.5 var(--sr-font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--sr-muted);
   word-break: break-word;
 }

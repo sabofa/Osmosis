@@ -33,6 +33,10 @@ import { BOX_FRAGMENT, BOX_VERTEX } from './shaders/box'
 export const BOX_PROGRAM = { name: 'box', vertex: BOX_VERTEX, fragment: BOX_FRAGMENT }
 export const BOX_EDGE_WIDTH = 1
 export const CUBE_VERTICES = 36
+// V6: a translucent box's edges (a Riemann sum, seen through the boxes in
+// front) draw at reduced opacity, so a dense lattice quiets down instead of
+// compounding into a busy tangle of full-opacity lines.
+export const TRANSLUCENT_BOX_EDGE_OPACITY = 0.35
 
 // The unit cube as 12 triangles: (corner xyz, outward normal xyz) per vertex,
 // each triangle counter-clockwise seen from outside (the front face).
@@ -142,9 +146,11 @@ export function uploadBoxes(gl: WebGL2RenderingContext, shared: SharedQuads, mar
     edges = uploadLines(gl, shared, positions, starts, world, {
       width: BOX_EDGE_WIDTH,
       dash: null,
-      // A box's own edges are not redrawn dashed where a surface hides them.
+      // A box's own edges are not redrawn dashed where a surface hides them,
+      // and never go through the hidden-part pass at all (V6): excluding
+      // them is what keeps a dense translucent lattice from compounding.
       hidden: false,
-      opacity: 1,
+      opacity: mark.style.opacity < 1 ? TRANSLUCENT_BOX_EDGE_OPACITY : 1,
       headSize: 0,
       color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
     })

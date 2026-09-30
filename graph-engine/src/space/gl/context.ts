@@ -10,7 +10,23 @@ export const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
   preserveDrawingBuffer: false,
 }
 
+// The plain-text reason: the GlBackendOptions.onError / report() pathway
+// (a host callback and console.error both take a string, never a
+// structured message) and NO_WEBGL2_STATE below share this one wording.
 export const NO_WEBGL2_MESSAGE = 'Space needs WebGL2, which this browser or device does not provide, so this view cannot be drawn.'
+
+// S6 plan V9: a state message is a one-line reason and, where useful, a
+// next step, as its own, quieter line (ui/overlay.ts StateMessage; a plain
+// string there is the reason alone). No WebGL2 and a lost context are
+// drawing states the view itself can name (SpaceRenderer.ts shows these
+// through Overlay.showMessage; a shader compile failure's own message comes
+// from the GL driver, and an empty scene's from SpaceRenderer.ts).
+export const NO_WEBGL2_STATE = { reason: NO_WEBGL2_MESSAGE, next: 'Try a different browser, or turn on hardware acceleration.' }
+
+// A context loss is always temporary (the browser drops and later restores
+// it); the message clears itself when handleRestored fires, so it needs no
+// next step of its own.
+export const CONTEXT_LOST_MESSAGE = 'restoring…'
 
 export interface GlCapabilities {
   // Float colour targets: order-independent transparency (frameLoop.ts);

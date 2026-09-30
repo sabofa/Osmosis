@@ -25,6 +25,7 @@ import { Reads, resolution } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { annotation, arrowMark, lineMark, part, pointMark, toolBox } from './box'
 import { LEVEL_RES, levelCurves, lift } from './contours'
+import { heldRes } from '../geometry/marchingTets'
 import { levelSurfaceRes, MESH_LEVEL_SURFACE } from './levelSurface'
 import { pointText } from './readout'
 import { preparePoint, prepareDomain, requireInside, resolveTarget, surface2, surface3 } from './target'
@@ -103,7 +104,10 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
   const build = (): BuildResult => {
     const [x0, y0, z0] = point()
     const box = toolBox(context, domain())
-    requireInside('gradient', [x0, y0, z0], [box.x, box.y, box.z], 'the box')
+    // toolBox draws into the tool's own "over" rectangle when one is
+    // authored (S6 carried item): "outside the box" would then be misleading
+    // for a point inside the drawn frame but outside that rectangle.
+    requireInside('gradient', [x0, y0, z0], [box.x, box.y, box.z], form.over ? 'the domain' : 'the box')
     const g: Vec3 = [grad[0](x0, y0, z0), grad[1](x0, y0, z0), grad[2](x0, y0, z0)]
     const length = Math.hypot(...g)
     if (!Number.isFinite(length)) throw new Error(`gradient: ∇F is undefined at ${pointText([x0, y0, z0])}`)
@@ -118,11 +122,15 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
       labels.push(annotation(part(context, 'readout'), at, `∇F = ${pointText(g)}, |∇F| = ${formatNumber(length)}`))
     }
     if (form.surface) {
-      const mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, surfaceRes)
+      // S6 plan V11: the same half-resolution-while-held as an implicit
+      // surface (implicit.ts) — this mesh is built through the same marching
+      // tetrahedra, at the same cost.
+      const activeRes = heldRes(surfaceRes, context.held)
+      const mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, activeRes)
       if (!mesh) {
         errors.push({
           line: context.line,
-          message: `gradient: the level set through ${pointText(at)} meets no cell at res ${surfaceRes} — at an extremum of F it is a single point; otherwise raise res:`,
+          message: `gradient: the level set through ${pointText(at)} meets no cell at res ${activeRes} — at an extremum of F it is a single point; otherwise raise res:`,
         })
       } else {
         const surface: MeshMark = {

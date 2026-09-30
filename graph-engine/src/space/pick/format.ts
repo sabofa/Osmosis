@@ -11,6 +11,12 @@
 // - Exactness is never inferred: 1/3 prints 0.3333, never 1/3, and nothing
 //   prints as a multiple of π. A value that comes from a numeric method (a
 //   root, an integral) is marked approximate with ≈ (formatApprox).
+// - S6 plan V3: an on-figure annotation shows at most DISPLAY_DIGITS
+//   significant digits even when its error supports more — heavy to read
+//   otherwise (∬ ≈ 25.1327412287). formatApproxFull, the pinned readout's
+//   click-to-expand text, prints every digit the error supports; the error
+//   still bounds both from above, so neither ever prints a prettier number
+//   than it can stand behind.
 
 import type { Vec3 } from '../scene/types'
 
@@ -23,6 +29,9 @@ export const SCIENTIFIC_MAX_NEGATIVE_EXPONENT = -4
 // A numeric method's error estimate can support more digits than the default
 // 4; never more than this.
 export const MAX_DIGITS = 12
+// S6 plan V3: the display cap for an on-figure annotation — fewer than
+// MAX_DIGITS is always allowed, however many the error supports.
+export const DISPLAY_DIGITS = 6
 
 const SUPERSCRIPT = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹']
 const SUPERSCRIPT_MINUS = '⁻'
@@ -66,8 +75,17 @@ export function supportedDigits(value: number, error: number): number {
 }
 
 // A value from a numeric method: "≈ 0.3333". With an error estimate, as many
-// digits as it supports; otherwise the default 4.
+// digits as it supports, capped at DISPLAY_DIGITS (S6 plan V3: an on-figure
+// annotation is never asked to print 12 digits of a quadrature); otherwise
+// the default 4.
 export function formatApprox(value: number, error?: number): string {
+  const digits = error === undefined ? SIGNIFICANT_DIGITS : Math.min(DISPLAY_DIGITS, supportedDigits(value, error))
+  return `${APPROX} ${formatNumber(value, digits)}`
+}
+
+// The same value, uncapped: every digit the error supports (still at most
+// MAX_DIGITS). The pinned readout's click-to-expand text (V3).
+export function formatApproxFull(value: number, error?: number): string {
   const digits = error === undefined ? SIGNIFICANT_DIGITS : supportedDigits(value, error)
   return `${APPROX} ${formatNumber(value, digits)}`
 }

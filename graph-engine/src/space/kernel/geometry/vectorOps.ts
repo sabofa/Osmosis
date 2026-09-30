@@ -35,6 +35,7 @@ import type { Statement } from '../../../parser/types'
 import type { VectorOpForm, VectorOperand } from '../../grammar/keywords/geometryForms'
 import { formatNumber } from '../../pick/format'
 import type { ArrowMark, ColorSpec, LabelAnchor, LineMark, Mark, MeshMark } from '../../scene/types'
+import { OPERAND_GREY_TOKEN } from '../../theme'
 import { DASH, Reads } from '../common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { largestSpan, spaceBox } from './box'
@@ -51,10 +52,11 @@ const THIN = 1.5
 // u and v are parallel when |u × v| is below this fraction of |u||v|.
 const PARALLEL_REL = 1e-12
 
-export const GREY = 'gray'
-
+// S6 plan V7: the engine's own theme-aware token (theme.ts OPERAND_GREY),
+// not the author-facing named colour "gray" (parser/colors.ts), which is one
+// fixed hex for every theme.
 function grey(color: ColorSpec): ColorSpec {
-  return { author: GREY, slot: color.slot }
+  return { author: OPERAND_GREY_TOKEN, slot: color.slot }
 }
 
 function vectorOpForm(statement: Statement): VectorOpForm {

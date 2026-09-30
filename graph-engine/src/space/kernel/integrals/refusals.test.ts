@@ -9,7 +9,7 @@ import type { SceneError, SpaceScene } from '../../scene/types'
 import { QuadratureError } from '../../../math/quadrature'
 import { QUAD_BUDGET } from '../../../math/tolerance'
 import { approxText, determined, IntegralRefusal, refusalOf } from './common'
-import { approx, approxTuple, lastDigitUnit, markNamed, readout, sceneOf } from './testing'
+import { approx, approxTuple, lastDigitUnit, markNamed, readout, readoutFull, sceneOf } from './testing'
 
 const GUARD_MS = 15000
 // A test reading several heavy integrals may take longer than vitest's 5 s on a loaded machine.
@@ -151,11 +151,14 @@ describe('what is not a number, and whose fault it is', () => {
 // S5 fix round 3: every readout is right to its last digit, or the integral
 // is refused; divergence is claimed only on evidence and placed where it is.
 describe('never a wrong confident number (fix round 3)', () => {
+  // Reads the full, uncapped text (S6 plan V3 caps the on-figure `.text` at
+  // DISPLAY_DIGITS, unrelated to what this describe block checks): this is
+  // about how many digits the quadrature's own error honestly supports.
   const read = (spec: string, name: string, exact: number): string => {
     const { scene, ms } = timedScene(spec)
     expect(ms).toBeLessThan(GUARD_MS)
     expect(scene.errors).toEqual([])
-    const text = readout(scene, 1).text
+    const text = readoutFull(scene, 1)
     expect(Math.abs(approx(text, name) - exact)).toBeLessThanOrEqual(lastDigitUnit(text, name))
     return text
   }
@@ -435,7 +438,9 @@ describe('digits print only what the error supports, with a SAFETY margin on the
   it('the kink-rectangle motivating case: ∬|x-y| over [0,4]x[0,1] is 19/3 = 6.333333333…; the stated error (2.55e-11) missed the true one (7.38e-10) by 29x, SAFETY covers it', () => {
     const scene = sceneOf('volume: under abs(x - y) over x in [0, 4], y in [0, 1]')
     expect(scene.errors).toEqual([])
-    const text = readout(scene, 1).text
+    // The full text (S6 plan V3): the on-figure `.text` caps at DISPLAY_DIGITS,
+    // fewer than the 8 digits this pin checks.
+    const text = readoutFull(scene, 1)
     expect(text).toBe('∬_R (abs(x - y)) dA ≈ 6.3333333')
     expect(Math.abs(approx(text, 'dA') - 19 / 3)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   })

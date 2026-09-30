@@ -8,6 +8,34 @@
 // - normals are normalised, with the face fallback where the analytic one is
 //   missing (normals.ts);
 // - vertices no triangle uses are compacted away, keeping their order.
+//
+// S6 fix round 4: plan V8 (a triangle on the hole's boundary also dropped
+// when it read as a sliver — small angle or area — in whatever coordinates
+// the pass had) is withdrawn. Three rounds each corrected a different way
+// of measuring that "sliver": round 1 (I4) normalised raw (u, v) units by a
+// sampled-and-sorted median grid step; round 2 (NB4) replaced that with one
+// first-cell (u, v) delta for speed; round 3 replaced (u, v) with
+// grid-index (i, j) integers read off the mesh's own topology, so no
+// domain curvature could ever be read as a false skew. Round 4's re-review
+// found grid-index measurement itself unsound on an inequality-clipped
+// mesh (its re-triangulated boundary cells do not carry the topology the
+// row-width reader assumed, misreading it as an enormous row width that
+// collapsed every hole-edge triangle onto one row — "every triangle
+// becomes collinear and is dropped") and, more fundamentally, that no
+// coordinate system needed measuring at all: every candidate a
+// rectangular or iterated grid ever hands this pass is one of gridIndices'
+// own two canonical cell triangles, always exactly 45/45/90 in grid-index
+// terms — there pass 2 could only ever misfire, never actually catch a
+// real sliver. That does not hold for an inequality-clipped cell
+// (`over ...`), which is re-triangulated and is not one of those two
+// canonical shapes: there V8's original filter did drop one real, genuine
+// clipped triangle, not only slivers (549 triangles fell to 548 under
+// it) — at a real per-mesh cost too (~3.7 ms at 128^2 with a hole).
+// Dropping a genuinely clipped boundary triangle also opens a gap in the
+// surface, which no "sliver" reading is worth. The one artefact this
+// filter ever addressed — "Limits along two paths" at the origin — is
+// shading near a removed vertex (parked for track 5), not a needle this
+// pass was catching.
 
 import { DEGENERATE_REL } from '../../math/tolerance'
 import { fallbackNormals, normalizeAt } from './normals'
@@ -80,8 +108,14 @@ export function finishMesh(raw: RawMesh, orientUp: boolean): FinishedMesh {
     valid[v] = Number.isFinite(positions[3 * v]) && Number.isFinite(positions[3 * v + 1]) && Number.isFinite(positions[3 * v + 2]) ? 1 : 0
   }
 
-  const kept = new Uint32Array(raw.indices.length)
-  let k = 0
+  // The hole cut (an invalid vertex removes every triangle touching it) and
+  // the degenerate check (collapsed where inner bounds meet, or at a pole).
+  // S6 fix round 4: this used to also record which edges the hole cut
+  // exposed, for a second pass (V8) that dropped a further triangle on that
+  // boundary when it read as a sliver — withdrawn (see the file header);
+  // nothing downstream of this loop reads that bookkeeping any more.
+  const candidates = new Uint32Array(raw.indices.length)
+  let cn = 0
   const limit = DEGENERATE_REL * DEGENERATE_REL
   for (let t = 0; t < raw.indices.length; t += 3) {
     const a = raw.indices[t]
@@ -108,12 +142,17 @@ export function finishMesh(raw: RawMesh, orientUp: boolean): FinishedMesh {
       b = c
       c = swap
     }
-    kept[k++] = a
-    kept[k++] = b
-    kept[k++] = c
+    candidates[cn++] = a
+    candidates[cn++] = b
+    candidates[cn++] = c
   }
-  const indices = k === kept.length ? kept : kept.slice(0, k)
+  const indices = cn === candidates.length ? candidates : candidates.slice(0, cn)
+  return compact(positions, normals, uv, indices, n)
+}
 
+// The tail shared by every finishMesh call: fill in a missing normal at a
+// surviving vertex, then compact away any vertex no kept triangle uses.
+function compact(positions: Float64Array, normals: Float64Array, uv: Float64Array, indices: Uint32Array, n: number): FinishedMesh {
   const used = new Uint8Array(n)
   for (let i = 0; i < indices.length; i++) used[indices[i]] = 1
   const needy: number[] = []

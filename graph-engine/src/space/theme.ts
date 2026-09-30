@@ -30,12 +30,43 @@ export function slotHex(slot: number, palette: Palette, theme: 'light' | 'dark')
   return series[(Math.floor(slot) - 1) % series.length]
 }
 
+// S6 plan V7: the operand/construction grey (project:'s and cross:'s u and
+// v, and their right-angle marks) is the engine's own token, not an author-
+// named colour — parser/colors.ts's NAMED_COLORS.gray is one fixed hex for
+// every theme (an author who writes "color: gray" means it literally, so
+// that table stays theme-blind and is left alone). `author` can never
+// legally hold OPERAND_GREY_TOKEN (a NUL byte, which no spec text can
+// contain), so it is checked first, ahead of the named-colour lookup.
+//
+// S6 fix round 1, I5: it used to resolve to its own hard-coded hex pair
+// (0x6b6b63 light, 0xa8a89e dark) — a second, undocumented grey alongside
+// the host's own --muted token, and one this engine is meant never to
+// introduce (S6's global constraint: colours come from the theme). It now
+// resolves to palette.muted directly, the same token the chrome's
+// secondary text already uses (theme.ts's SpaceColors, ui/SpaceView.css
+// --space-muted) — one grey, not two. Clears 3:1 against the background in
+// both themes with real margin (WCAG relative luminance; theme.test.ts
+// checks the numbers by the same formula): light 5.39:1, dark 6.17:1.
+export const OPERAND_GREY_TOKEN = '\u0000operand-grey'
+
 // An author colour (a name or #rrggbb, through parser/colors.ts) wins;
 // otherwise the slot picks from the series. An author value the parser does
 // not know falls back to the slot rather than to a grey.
 export function resolveSpaceColor(spec: ColorSpec, palette: Palette, theme: 'light' | 'dark'): Rgb {
+  if (spec.author === OPERAND_GREY_TOKEN) return hexToRgb(palette.muted)
   if (spec.author && isValidColor(spec.author)) return hexToRgb(resolveColor(spec.author))
   return hexToRgb(slotHex(spec.slot, palette, theme))
+}
+
+// WCAG 2.1 relative luminance and contrast ratio, over sRGB 0..1 components.
+export function relativeLuminance([r, g, b]: Rgb): number {
+  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+export function contrastRatio(a: Rgb, b: Rgb): number {
+  const [l1, l2] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x)
+  return (l1 + 0.05) / (l2 + 0.05)
 }
 
 // The resolved palette the GL layer draws with: the frame's colours, the
@@ -47,6 +78,8 @@ export interface SpaceColors {
   axis: Rgb
   grid: Rgb
   gridStrong: Rgb
+  // S6 plan V10: the chrome's secondary text (ui/SpaceView.css --space-muted).
+  muted: Rgb
 }
 
 export function spaceColors(palette: Palette, theme: 'light' | 'dark'): SpaceColors {
@@ -57,6 +90,7 @@ export function spaceColors(palette: Palette, theme: 'light' | 'dark'): SpaceCol
     axis: hexToRgb(palette.axis),
     grid: hexToRgb(palette.grid),
     gridStrong: hexToRgb(palette.gridStrong),
+    muted: hexToRgb(palette.muted),
   }
 }
 
