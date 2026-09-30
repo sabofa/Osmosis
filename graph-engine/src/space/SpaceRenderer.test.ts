@@ -740,6 +740,30 @@ P = (a, b, a^2 + b^2)`
     r.dispose()
   })
 
+  it('a frame with no new value mid-scrub runs no unheld setValues call (S6 fix round 3)', () => {
+    // `still` (advanceValues' "held stopped" tail) used to leave scrubbing
+    // out, so a frame with nothing queued mid-scrub — a camera ease, a
+    // resize, a readout click, or (here) a plain extra frame request —
+    // still ran the tail: an unheld, full-resolution setValues(new Map())
+    // against a freshly resolved box, even though the scrub had not
+    // actually ended.
+    const { clock, r, row, kernel } = live()
+    const setValues = vi.spyOn(kernel(), 'setValues')
+    const { slider } = row(0)
+    slider.value = '0.8'
+    slider.dispatch('input')
+    clock.flush()
+    setValues.mockClear()
+    r['scheduler'].request()
+    clock.flush()
+    expect(setValues).not.toHaveBeenCalled()
+    expect(r['held']).toBe(true)
+    slider.dispatch('pointerup')
+    clock.flush()
+    expect(setValues).toHaveBeenCalled()
+    r.dispose()
+  })
+
   it('commits the number box on Enter, and reports nothing for a host setValue', () => {
     const { clock, events, row, kernel, r } = live()
     const { number } = row(1)

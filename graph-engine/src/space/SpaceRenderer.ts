@@ -666,9 +666,14 @@ export class SpaceRenderer {
       }
       this.syncParams()
     }
-    // Play stopped or the drag ended: the held box is resolved now, once, and
-    // the kernel's box-dependent statements follow it.
-    const still = this.playing.size > 0 || this.dragging !== null
+    // Play stopped, the drag ended, or the scrub released: the held box is
+    // resolved now, once, and the kernel's box-dependent statements follow
+    // it. S6 fix round 3: `still` left out scrubbing, so a frame with no
+    // queued value mid-scrub (a camera ease, a resize, a readout click) ran
+    // this "held stopped" tail anyway — an unheld, full-resolution
+    // setValues(new Map()) against a freshly resolved box, every such
+    // frame, though nothing about the scrub had actually ended.
+    const still = this.playing.size > 0 || this.dragging !== null || this.scrubbing.size > 0
     if (this.held && !still && !installed && this.scene) this.install(kernel.setValues(new Map()), this.config)
     return again
   }

@@ -715,12 +715,26 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
   with no hole to filter (2.56 → 6.65 ms at 128²), and produced false drops
   on a strongly anisotropic domain — a 20:1 aspect lost 128 well-shaped
   cells, because angle and area were measured in raw (u, v) units, not the
-  grid's own index space. Now returns early with no hole edges at all;
+  grid's own index space. Now returns early with no hole edges at all, and
   computes its median from area alone (the full angle-and-area shape runs
-  only for candidates actually on the hole's boundary); and measures both
-  normalised by the mesh's own median (u, v) grid step, so a nice square
-  cell in index space is never called a sliver just because the domain's
-  own u and v spans differ.
+  only for candidates actually on the hole's boundary).
+  **Corrected again in fix round 2 (NB4):** that median was a per-candidate
+  edge sample sorted with a boxed comparator — at 128² with a hole, 12.5–
+  16.8 ms against a 7.9 ms base. Replaced with one first-cell (u, v) delta,
+  read directly off the mesh's own topology instead of sorted from every
+  candidate — but that delta is a genuine (u, v) value, and on a domain
+  that is not a plain rectangle (a polar one; a "type I" region whose
+  y-span closes to nothing at one x) it can be almost entirely a cross
+  term, inflating the estimated scale 77x or more and dropping good
+  triangles at a hole's edge.
+  **Corrected again in fix round 3:** angle and area are no longer measured
+  in (u, v) at all, nor by any estimated step from it. Every parameterized
+  mesh here comes from `gridIndices`' one two-triangle-per-cell topology
+  (`mesh.ts` `rowWidthOf`), so each vertex's own (i, j) is read off its flat
+  index directly — a uniform integer lattice by construction, so its shape
+  never depends on how the domain curves. A mesh whose topology does not
+  fit that convention (a hand-built fixture) falls back to raw (u, v)
+  units, unchanged from before any grid-step normalisation existed.
 - **Riemann boxes' edges seen through translucent boxes make a busy lattice.**
   **Fixed (V6):** translucent Riemann box edges draw at 0.35 opacity and
   1 px and are excluded from the hidden pass, so the lattice quiets down;
@@ -766,10 +780,15 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
     **Extended in fix round 1 (I7):** a 3-variable `contour:` (a level
     surface) marches the same way but had not been given this treatment;
     it now has. Scrubbing a parameter slider — not only a play or a
-    point-drag — now counts as held too (from the first `input` event to
-    the matching `change`), so a box-dependent statement bound to a slider
-    meshes coarser while the reader is still moving it, not at full cost on
-    every `input` tick.
+    point-drag — now counts as held too (from the first `input` event
+    until the interaction ends), so a box-dependent statement bound to a
+    slider meshes coarser while the reader is still moving it, not at full
+    cost on every `input` tick. **Corrected in fix round 2 (NB1):** it ends
+    on the native `change`, but `change` only fires when the slider's
+    value nets out different from where the scrub began — a scrub that
+    wanders off and back to its start fires no `change` at all, so the
+    hold never ended. `pointerup`/`pointercancel` now end it too,
+    unconditionally, whether or not the value moved.
   - parametric setValue is 10.8–14.5 ms against an 8 ms budget (S1) —
     **fixed (V11):** 7.1–7.8 ms at 128x128 on the review machine, by sharing
     subexpressions across r, r_u and r_v through the existing register

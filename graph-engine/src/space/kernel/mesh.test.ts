@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../parser/parseSpec'
 import { createSpaceKernel } from './index'
+import { iteratedSamples, rectSamples } from './domain'
 import { finishMesh, gridIndices, pass2Runs, type RawMesh } from './mesh'
 
 function sceneOf(spec: string) {
@@ -235,6 +236,93 @@ z = f(x, y) opacity: 0.55 res: 120`)
     // the hole would have been dropped as false slivers. Normalised by the
     // median du = 1, dv = 0.05, they are 45/45/90 right triangles again.
     expect(mesh.indices.length).toBe(37 * 3)
+  })
+})
+
+// S6 fix round 3: round 2's first-cell (u, v) delta estimate read genuine
+// (u, v) deltas — fine on a plain rectangle, but a domain that is not one
+// (polar; a "type I" region whose y-span closes to nothing at one x) can
+// put a tiny cross-term into what looked like one axis's pure step,
+// inflating su or sv 77x or more and dropping good triangles at a hole's
+// edge that round 1 (the boxed-sort median) and the pre-I4 base (raw
+// (u, v), no normalisation at all) both correctly left alone. Grid-index
+// (i, j) coordinates sidestep this rather than estimating it away.
+describe('finishMesh: region domains with a hole, measured in grid-index space (S6 fix round 3)', () => {
+  const N = 96
+
+  function rawFrom(samples: ReturnType<typeof rectSamples>, hole: (x: number, y: number) => boolean): RawMesh {
+    const count = samples.x.length
+    const positions = new Float64Array(3 * count)
+    const normals = new Float64Array(3 * count)
+    const uv = new Float64Array(2 * count)
+    for (let v = 0; v < count; v++) {
+      const x = samples.x[v]
+      const y = samples.y[v]
+      const inHole = hole(x, y)
+      positions[3 * v] = inHole ? Number.NaN : x
+      positions[3 * v + 1] = inHole ? Number.NaN : y
+      positions[3 * v + 2] = inHole ? Number.NaN : 1 + x * y
+      normals[3 * v + 2] = 1
+      uv[2 * v] = x
+      uv[2 * v + 1] = y
+    }
+    return { positions, normals, uv, indices: samples.indices }
+  }
+
+  const disk = (cx: number, cy: number, r: number) => (x: number, y: number) => (x - cx) ** 2 + (y - cy) ** 2 < r * r
+
+  // Round 2's bug reproduced exactly: nothing dropped past what pass 1's
+  // hole cut alone removes (parameterized = false skips pass 2 entirely,
+  // so it is the honest "candidates before any sliver check" baseline).
+  function dropsNothingExtra(samples: ReturnType<typeof rectSamples>, hole: (x: number, y: number) => boolean) {
+    const raw = rawFrom(samples, hole)
+    const before = finishMesh(raw, true, false).indices.length
+    const after = finishMesh(raw, true, true).indices.length
+    expect(after).toBe(before)
+  }
+
+  it('type I region y in [0, x], x in [0, 1]: a hole near the closing corner drops nothing extra', () => {
+    const samples = iteratedSamples({ outer: 'x', outerRange: { min: 0, max: 1 }, lo: () => 0, hi: (x) => x, polar: null, outerIsX: true }, N)
+    dropsNothingExtra(samples, disk(0.6, 0.3, 0.12))
+  })
+
+  it('type I region y in [x^2, x], x in [0, 1]: a hole near the closing corner drops nothing extra', () => {
+    const samples = iteratedSamples({ outer: 'x', outerRange: { min: 0, max: 1 }, lo: (x) => x * x, hi: (x) => x, polar: null, outerIsX: true }, N)
+    dropsNothingExtra(samples, disk(0.5, 0.35, 0.06))
+  })
+
+  it('polar r in [0, 2], theta in [0, 2pi]: a hole near the pole drops nothing extra', () => {
+    const samples = iteratedSamples(
+      { outer: 'r', outerRange: { min: 0, max: 2 }, lo: () => 0, hi: () => 2 * Math.PI, polar: { outerIsR: true, angle: 1 }, outerIsX: false },
+      N
+    )
+    dropsNothingExtra(samples, disk(0.8, 0.5, 0.35))
+  })
+
+  it('the quarter annulus, r in [1, 2], theta in [0, pi/2]: a hole drops nothing extra', () => {
+    const samples = iteratedSamples(
+      { outer: 'r', outerRange: { min: 1, max: 2 }, lo: () => 0, hi: () => Math.PI / 2, polar: { outerIsR: true, angle: 1 }, outerIsX: false },
+      N
+    )
+    dropsNothingExtra(samples, disk(1, 1, 0.2))
+  })
+})
+
+// S6 fix round 3: the same regression, end to end through the real kernel
+// (parseSpec -> createSpaceKernel -> scene) — round 1's own triangle count
+// is the one honest reference (round 2 dropped extra good triangles below
+// it; the fix must restore exactly it, not just "some" count).
+describe("finishMesh: end-to-end region specs keep round 1's triangle count (S6 fix round 3)", () => {
+  it('z = sqrt(r - 1.5) over r in [1, 2], theta in [0, pi/2] gives 9216 triangles', () => {
+    const scene = sceneOf('z = sqrt(r - 1.5) over r in [1, 2], theta in [0, pi/2] res: 96')
+    const mesh = scene.marks.find((m) => m.kind === 'mesh')!
+    expect(mesh.indices.length / 3).toBe(9216)
+  })
+
+  it('z = 1 / sqrt(x - 0.5) over x in [0, 1], y in [0, x] gives 9024 triangles', () => {
+    const scene = sceneOf('z = 1 / sqrt(x - 0.5) over x in [0, 1], y in [0, x] res: 96')
+    const mesh = scene.marks.find((m) => m.kind === 'mesh')!
+    expect(mesh.indices.length / 3).toBe(9024)
   })
 })
 

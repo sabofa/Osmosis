@@ -5,13 +5,16 @@
 //   is dropped;
 // - S6 plan V8: a triangle that survives the hole cut but shares an edge with
 //   one the cut removed — so it sits on the hole's boundary — is also
-//   dropped when it is a sliver in parameter (u, v) space: its smallest
-//   angle under 3 degrees, or its area under 1e-4 of the mesh's typical
-//   (median) triangle area there. A hole rarely lands exactly on a grid
-//   line, so the last sliver of a cut cell is otherwise a needle;
-//   (u, v) is the domain's own space, so this does not depend on how a
-//   parametric surface curves in world space (kernel/parametric.test.ts,
-//   kernel/geometry/implicit.test.ts). A triangle away from any hole is
+//   dropped when it is a sliver: its smallest angle under 3 degrees, or its
+//   area under 1e-4 of the mesh's typical (median) triangle area there. A
+//   hole rarely lands exactly on a grid line, so the last sliver of a cut
+//   cell is otherwise a needle. S6 fix round 3: measured in grid-index
+//   (i, j) space (rowWidthOf), not parameter (u, v) — (i, j) is a uniform
+//   integer lattice by construction, so this does not depend on how a
+//   domain curves in (u, v) or world space either (a polar or "type I"
+//   region can put a tiny cross-term into what looks like one (u, v) axis's
+//   pure step, which an earlier, (u, v)-based version of this normalised
+//   by was liable to inflate 77x or more). A triangle away from any hole is
 //   never touched by this rule, degenerate-at-a-pole ones included.
 // - on a graph z = f, every triangle is wound counter-clockwise seen from
 //   above, the side its analytic normal points to;
@@ -89,34 +92,25 @@ export function reversedWinding(indices: Uint32Array): Uint32Array {
   return out
 }
 
-// I4 (S6 fix round 1): a domain sampled at very different u and v scales
-// (a 20:1 aspect, say) makes every regular grid cell look like a thin sliver
-// in raw (u, v) units even though it is a nice square in grid-index space.
-// su, sv (1 / the mesh's own median u and v step) undo that before angle or
-// area is measured, so only a triangle that is actually irregular in the
-// grid's own index space is called a sliver. Default 1 so a caller that
-// never computes them (no hole to filter, or an un-parameterized mesh) gets
-// plain (u, v) units, unchanged from before I4.
-function uvArea(uv: Float64Array, a: number, b: number, c: number, su = 1, sv = 1): number {
-  const ax = uv[2 * a] * su
-  const ay = uv[2 * a + 1] * sv
-  const bx = uv[2 * b] * su
-  const by = uv[2 * b + 1] * sv
-  const cx = uv[2 * c] * su
-  const cy = uv[2 * c + 1] * sv
+// S6 fix round 3: the smallest angle (degrees) and the area of a triangle
+// from any (x, y) coordinate pair per vertex — grid-index (i, j) integers
+// when rowWidthOf below can find them, raw (u, v) otherwise. No su/sv scale
+// factor: round 1 and round 2 each tried to normalise raw (u, v) units by
+// an estimated grid step (a global median of every candidate's edges, then
+// a single first-cell sample) so a nice square cell would not be misread as
+// a sliver just because the domain's own u and v spans differ — both
+// estimates read genuine (u, v) deltas, which is exactly where a domain
+// that is not a plain rectangle (polar; a "type I" region whose y-span
+// closes to nothing at one x) puts a tiny cross-term into what looks like
+// one axis's pure step, inflating its scale 77x or more and dropping good
+// triangles at the hole's edge. Grid-index space sidesteps this rather than
+// estimating it away: (i, j) is a uniform integer lattice by construction,
+// so its own shape never depends on how the domain curves.
+function triangleArea(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
   return Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2
 }
 
-// V8: the smallest angle (degrees) and the area of triangle (a, b, c) in
-// (u, v) space, from their uv coordinates (I4: su, sv normalise the grid's
-// own median spacing first — see uvArea).
-function uvShape(uv: Float64Array, a: number, b: number, c: number, su = 1, sv = 1): { minAngleDeg: number; area: number } {
-  const ax = uv[2 * a] * su
-  const ay = uv[2 * a + 1] * sv
-  const bx = uv[2 * b] * su
-  const by = uv[2 * b + 1] * sv
-  const cx = uv[2 * c] * su
-  const cy = uv[2 * c + 1] * sv
+function triangleShape(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): { minAngleDeg: number; area: number } {
   const angleAt = (ux: number, uy: number, vx: number, vy: number) => {
     const dot = ux * vx + uy * vy
     const cross = ux * vy - uy * vx
@@ -125,8 +119,44 @@ function uvShape(uv: Float64Array, a: number, b: number, c: number, su = 1, sv =
   const angleA = angleAt(bx - ax, by - ay, cx - ax, cy - ay)
   const angleB = angleAt(ax - bx, ay - by, cx - bx, cy - by)
   const angleC = 180 - angleA - angleB
-  const area = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2
-  return { minAngleDeg: Math.min(angleA, angleB, angleC), area }
+  return { minAngleDeg: Math.min(angleA, angleB, angleC), area: triangleArea(ax, ay, bx, by, cx, cy) }
+}
+
+// S6 fix round 3: the grid's row width (i's own span, resU + 1), read from
+// raw.indices' own topology — pure integer arithmetic on vertex indices,
+// never uv or position, so no cross-term can ever enter it. Every
+// parameterized caller here meshes a grid via gridIndices' one convention
+// (domain.ts's rectSamples/iteratedSamples share it too): cell (i, j)'s two
+// triangles are [a, b, c] and [a, c, d] with a = j*rowWidth+i, b = a+1
+// (the pure i-neighbour), d = a+rowWidth (the pure j-neighbour), c = d+1
+// (the diagonal) — or the same with b and c swapped, reversedWinding's
+// [a, c, b, a, d, c]. `a` is whichever vertex both triangles share
+// (indices[0] and [3] agree); among the other four slots, the one
+// appearing twice is the diagonal, and of the two singles, whichever
+// equals a + 1 is b — the other is d, giving rowWidth = d - a directly.
+// A mesh whose first two triangles do not fit this shape at all (a
+// hand-built fixture, not a real gridIndices() grid; an inequality
+// region's own re-triangulated boundary cells) returns null, and its
+// candidates measure in raw (u, v) units instead — the filter's original
+// form, before any grid-step normalisation existed.
+function rowWidthOf(indices: Uint32Array): number | null {
+  if (indices.length < 6) return null
+  const a = indices[0]
+  if (indices[3] !== a) return null
+  const others = [indices[1], indices[2], indices[4], indices[5]]
+  const counts = new Map<number, number>()
+  for (const v of others) counts.set(v, (counts.get(v) ?? 0) + 1)
+  let diagonal: number | null = null
+  const singles: number[] = []
+  for (const [v, count] of counts) {
+    if (count === 2) diagonal = v
+    else if (count === 1) singles.push(v)
+  }
+  if (diagonal === null || singles.length !== 2) return null
+  const b = singles[0] === a + 1 ? singles[0] : singles[1] === a + 1 ? singles[1] : null
+  if (b === null) return null
+  const d = singles[0] === b ? singles[1] : singles[0]
+  return d > a ? d - a : null
 }
 
 // A stable, order-independent key for the undirected edge (u, v). Vertex
@@ -213,44 +243,37 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
   // return deleted. This counts every trip past it, for that test to read.
   pass2Runs.count++
 
+  // S6 fix round 3: rowWidthOf, above, turns each vertex's flat index into
+  // its own (i, j) — pure topology, computed once. `hasGrid`/`rw` fall back
+  // to raw (u, v) when the topology does not fit (rowWidth null): the
+  // filter's original, pre-normalisation form (mesh.base.ts) for whatever
+  // does not look like a real parameterized grid. A flag and a plain
+  // number, inlined at each read below, not a pair of closures: this is
+  // read up to six times per candidate (three vertices, x and y each), for
+  // every triangle in the mesh, so a direct branch beats a function-call
+  // indirection whose target varies per finishMesh call and so cannot be
+  // inlined the way a fixed one could.
+  const rowWidth = rowWidthOf(raw.indices)
+  const hasGrid = rowWidth !== null
+  const rw = rowWidth ?? 1
 
-  // I4 (S6 fix round 2, NB4): the mesh's own (u, v) grid step, so a triangle
-  // that is a nice square in grid-index space is not called a sliver just
-  // because the domain's own u and v spans differ a lot (a 20:1 aspect,
-  // say) — un-normalised, its shape only looks that way in raw (u, v)
-  // units. Round 1 sampled every surviving candidate's edges into an array
-  // and sorted it for a median — at 128^2 with a hole, that cost 12.5-16.8
-  // ms against a 7.9 ms base. The ruling: a parameterized grid takes its du
-  // and dv from its own domain (span / res), not from sorted medians — and
-  // for a regular sampling grid, one cell's own step already is span / res,
-  // so the very first grid cell (raw.indices[0..5], read before pass 1 cuts
-  // anything — uv does not depend on a vertex's position being valid) gives
-  // it directly. `a` is whichever vertex both of the cell's two triangles
-  // share (indices[0] and [3] agree in every caller here, gridIndices'
-  // [a,b,c,a,c,d] winding or reversedWinding's [a,c,b,a,d,c]); among the
-  // other four slots, the pure u-neighbour has du != 0, dv == 0 from `a`
-  // (and the pure v-neighbour the reverse) — the smallest nonzero delta
-  // per axis is that neighbour's, without caring which slot or winding put
-  // it there, so this needs no per-triangle arrays and no sort.
-  const a = raw.indices.length >= 6 ? raw.indices[0] : null
-  const step = (axis: 0 | 1): number => {
-    if (a === null || raw.indices[3] !== a) return 1
-    const at = uv[2 * a + axis]
-    let best = Infinity
-    for (const v of [raw.indices[1], raw.indices[2], raw.indices[4], raw.indices[5]]) {
-      const d = Math.abs(uv[2 * v + axis] - at)
-      if (d > 0 && d < best) best = d
-    }
-    return Number.isFinite(best) ? best : 1
-  }
-  const su = 1 / step(0)
-  const sv = 1 / step(1)
-
-  // I4: the median from area alone — uvArea, not the full uvShape (whose
-  // angle needs atan2 per edge) — for every candidate; uvShape itself, with
-  // its trig, runs only below, for the ones actually on the hole's boundary.
+  // The median from area alone — triangleArea(), not the full
+  // triangleShape() (whose angle needs atan2 per edge) — for every
+  // candidate; triangleShape itself runs only below, for the ones actually
+  // on the hole's boundary.
   const areas = new Float64Array(cn / 3)
-  for (let i = 0, t = 0; t < cn; i++, t += 3) areas[i] = uvArea(uv, candidates[t], candidates[t + 1], candidates[t + 2], su, sv)
+  for (let i = 0, t = 0; t < cn; i++, t += 3) {
+    const a = candidates[t]
+    const b = candidates[t + 1]
+    const c = candidates[t + 2]
+    const ax = hasGrid ? a % rw : uv[2 * a]
+    const ay = hasGrid ? Math.floor(a / rw) : uv[2 * a + 1]
+    const bx = hasGrid ? b % rw : uv[2 * b]
+    const by = hasGrid ? Math.floor(b / rw) : uv[2 * b + 1]
+    const cx = hasGrid ? c % rw : uv[2 * c]
+    const cy = hasGrid ? Math.floor(c / rw) : uv[2 * c + 1]
+    areas[i] = triangleArea(ax, ay, bx, by, cx, cy)
+  }
   const sorted = areas.slice().sort()
   const medianArea = sorted.length > 0 ? sorted[sorted.length >> 1] : 0
   const areaFloor = SLIVER_MAX_AREA_REL * medianArea
@@ -263,7 +286,13 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
     const c = candidates[t + 2]
     const onHole = holeEdges.has(edgeKey(a, b)) || holeEdges.has(edgeKey(b, c)) || holeEdges.has(edgeKey(c, a))
     if (onHole) {
-      const shape = uvShape(uv, a, b, c, su, sv)
+      const ax = hasGrid ? a % rw : uv[2 * a]
+      const ay = hasGrid ? Math.floor(a / rw) : uv[2 * a + 1]
+      const bx = hasGrid ? b % rw : uv[2 * b]
+      const by = hasGrid ? Math.floor(b / rw) : uv[2 * b + 1]
+      const cx = hasGrid ? c % rw : uv[2 * c]
+      const cy = hasGrid ? Math.floor(c / rw) : uv[2 * c + 1]
+      const shape = triangleShape(ax, ay, bx, by, cx, cy)
       if (shape.minAngleDeg < SLIVER_MIN_ANGLE_DEG || shape.area < areaFloor) continue
     }
     kept[k++] = a
