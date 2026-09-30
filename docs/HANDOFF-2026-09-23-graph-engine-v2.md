@@ -1140,6 +1140,23 @@ texture, and fills generally needed to be a little less perfect. So:
   crosshatch, scribble, stipple and flat at roughness 0/0.5/1, and the ink
   line at grain 0/0.5/1.
 
+**Roughness's own fix round 1.** An independent review of the above caught,
+critically, that the `bleed` pinhole mask (`textures.ts`) was inverted —
+`speckle`'s cut left positive alpha only above noise ~0.64, so most of
+every ink line and every ink-preset fill vanished, even at grain 0.
+Corrected, and pinned by reading the gain/cut straight out of the filter
+markup (`style/textures.test.ts`). Also fixed: rough hatch and crosshatch
+could go 17.5% over `MARK_BUDGET` (the clean family is now fit to a share
+of the budget that leaves room for the rough inflation); scribble's second
+pass now ramps in over roughness 0.3–0.4 rather than jumping; dry-brush
+strands now follow the ribbon's own taper and pressure
+(`Math.min(half[i], width/2)`), not a flat nominal width; `ribbon2`'s end
+caps interpolate between the two ragged sides rather than averaging them;
+fill textures are keyed by name AND strength in `styledPen.ts`. Scribble's
+roughening moved to `fills/scribbleRough.ts` and `offRegister` to
+`fills/offRegister.ts`, so `scribble.ts` and `region.ts` stay one idea
+each.
+
 **Rules added in review round 1 (worth knowing before you edit).**
 - Clean byte identity is guarded in the repo by `figure/cleanGolden.test.ts`
   (288 hashes of every figure example, computed by the code at `1951e6a`).
@@ -1185,7 +1202,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2428 tests (after visual pass 1, its fix rounds, and roughness), node-only, no DOM
+npm run test --workspace=graph-engine          # 2445 tests (after visual pass 1, its fix rounds, roughness, and its own fix round 1), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
