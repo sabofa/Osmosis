@@ -13,6 +13,9 @@ already been tried and failed, and which traps cost real time.
 agents" below). Working tree clean. **1864 tests passing**,
 `tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
 
+*2026-09-30: the visual pass, part 1 (figure styles and the style lab) landed
+on this branch — see "Figure styles: `style/` and the pen" below; 2261 tests.*
+
 *Last updated 2026-09-27, after geometry phase 12 (shading and shaded
 regions — "find the area of the shaded region"). Phase 11 completed the
 solids build order of the spec's "Revised 2026-09-25" section; phase 12
@@ -150,6 +153,7 @@ step 3).
 | 10 | `b10860b`..`bc9903d`, then the docs commit | Measures and marks in space: `given: angle between A-B and C-D` (skew allowed), `… and plane <any form>`, `distance between A-B and C-D`, `distance from P to plane …` / `to line …` in the givens table; `dihedral C-A-B-D` as a value and as a drawn mark (`dihedral:`) — the AIME 2016 I hexagonal prism reads 60 at height √108; `P, Q = common perpendicular of A-B and C-D`; `angle:`, `right-angle:` (asserted 90), `tick:` and `label: angle ABC` on points in space, the marks built in space and projected, each drawn whole by its middle under the glass rule |
 | 11 | `5c33aa4`..`c078df9`, then the docs commit | Nets and shortest paths over a surface: `net: S` unfolds every polyhedral primitive by its template (the cube's cross, a prism's strip, a pyramid's or tetrahedron's star, the octahedron's strip, the frustum's star) and every round one (rectangle, sector, annular sector, rims tangent), true size, lifted and stacked, folds dashed, letters repeated as display labels; `shortest: P to Q over S [unfold]` — Dudeney's spider reads 40 over five faces, the cube's corner path √5, the AIME fly on a cone 625 on the unrolling |
 | 12 | `f565063`..`0e453f9`, then the docs commit | Shaded regions: `fill: square ABCD minus circle O`, `circle O and circle P` (the lens), `circle O minus circle P` (the annulus), sectors, circular segments and polygons, booleans with parentheses, drawn as ONE path (arcs as `A`, holes even-odd, no outline of its own) behind every line; `label: area R` prints the exact area inside the region (16 − 4π → 3.434), and a stated area asserts at the one shared tolerance, like every measure; `square`/`rectangle` are asserted shapes |
+| Visual pass 1 | `c3b206b`..`e5481ea`, then the docs commit | Figure styles: `@style: clean \| ink \| pencil \| marker` and `@style-<setting>` for every token (six line types, seven fills, nine papers, three lettering faces, saturation, a seed); a renderer-independent `style/` module; figures draw through a pen (the clean pen is today's output, byte for byte); the style lab (`review/style-lab.html`) and contact sheets (`scripts/contact-sheet.ts`). Spec `2026-09-30-figure-styles-design.md`, plan `2026-09-30-figure-styles-part-1.md` |
 
 Track 1 is `961471d`..`38cb2a6`, plus follow-ups through `17249eb`.
 
@@ -1031,10 +1035,93 @@ overlap is normal, so this is correctness rather than style.
 track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 `featureMarker.ts` for the per-kind marker shapes).
 
+### Figure styles: `style/` and the pen (visual pass, part 1)
+
+A figure can be drawn in a look. Two halves, split so the graphing engine can
+adopt the first later:
+
+**`graph-engine/src/style/` — the style model, renderer-independent.** It
+imports nothing from `figure/`, `scene/`, `render/` or `parser/` (a test in
+`style/determinism.test.ts` reads the imports), and no `Math.random` or clock
+anywhere in `style/` or `figure/` (same test).
+
+```
+tokens.ts      the five groups (line, fill, paper, lettering, colour) + seed, and TOKENS:
+               the ONE table that validates directives, names valid values in refusals,
+               writes a style back out (directivesFor), and builds the lab's controls
+presets.ts     clean, ink, pencil, marker — complete looks
+resolve.ts     layers: clean -> base (host) -> figure directives; applyStyleDirective,
+               checkLayer (a host's base style, errors returned), isClean, directivesFor
+random.ts      FNV-1a of "identity|seed" into mulberry32; smoothNoise
+color.ts       OKLCH: saturate (chroma x s, gamut-fit by chroma), deepen (lightness)
+path.ts        abstract chains (line / arc / ellipticalArc / cubic), exact sampling,
+               Catmull-Rom smoothing through samples, dashing
+lines/         one file per line type + hand.ts (the shared hand: wobble pinned at the ends
+               at looseness 0; bowing, end offsets, overshoot scale with looseness)
+fills/         one file per fill + region.ts (flattening, even-odd inside, scanlines)
+papers/        one file per paper + common.ts (the 7-view cover, grain tiles)
+lettering.ts   font stacks (textbook IS clean's sans stack) and tiltFor (<= 4 degrees)
+textures.ts    the SVG filters for grain/chalk/bleed/wash/soften — texture only, never geometry
+markup.ts      a few lines of SVG writing for textures and papers (same 3-decimal rule)
+```
+
+**The pen — `figure/pen.ts`, `figure/styledPen.ts`.** `render.ts` decides WHAT
+to draw and calls a `FigurePen` (`stroke`, `fill`, `mark`, `text`,
+`notation`, `panel`, `paper`, `svg`); every call carries an identity key
+(`"<statement>/<object>"`, plus a piece index) and a layer. `render.ts`
+imports no SVG emitter (`pen.test.ts` reads its imports).
+- **The clean pen** forwards each call to the emitter render.ts used to call,
+  same arguments, same order — that is how clean stays byte-identical.
+  `renderFigure(statements, config, palette, baseStyle?)` resolves the style
+  and a style that is clean (seed aside) ALWAYS gets the clean pen.
+- **The styled pen** turns each call into chains (`strokeChains`,
+  `regionChains`), draws them through the line type seeded by the identity,
+  fills regions through the fill with every non-area mark clipped to a
+  `<clipPath>` of the region's EXACT outline, lays the paper under a
+  `data-layer="paper"` group, sets labels in the face and turns them about
+  their own anchor. Texture filters sit on the stroke layers, once per figure.
+  Ids in `<defs>` come from a hash of the finished document (a private-use
+  placeholder is swapped for the prefix), so two figures on a page never
+  collide.
+
+**Adding a line type, fill or paper is one file plus one registry entry:**
+1. Add its name to the kind list in `style/tokens.ts` (`LINE_TYPES`,
+   `FILL_TYPES` or `PAPER_TYPES`). TOKENS picks it up, so the directive, the
+   refusal message and the lab's picker follow.
+2. Write `style/lines/<name>.ts` (a `LineType`: `draw(StrokeInput) ->
+   Primitive[]` and `texture(settings)`), `style/fills/<name>.ts` (a
+   `FillType`: `draw(FillInput) -> { marks }`) or `style/papers/<name>.ts` (a
+   `PaperType`: `draw(PaperInput) -> { defs, background }`). Open it with a
+   comment saying what the look is and how it is built.
+3. Register it in that folder's `index.ts`.
+4. The suites then hold it to the rules without new tests: `lines.test.ts`
+   (determinism, ends exact and within half a width at looseness 0, strays at
+   1, finite, a structural signature distinct from the others), `fills.test.ts`
+   (marks inside, the annulus's hole empty), `papers.test.ts` (covers 3 view
+   boxes each way, ids defined). Add a character test of its own, and look at
+   it on the contact sheet.
+
+**Seeing it.** `npx vite-node graph-engine/scripts/contact-sheet.ts <out.html>`
+writes the sheet; screenshot it with headless Edge (the script's header has
+the command; keep each page under ~4000 px tall or Edge paints it blank — the
+scratch `sheets.ts` of part 1 split it by section). The lab is
+`http://100.90.203.2:5181/style-lab.html` on the geometry review server, and a
+tab of the harness.
+
+**Known limits (part 1).** Styled SVGs are heavy: ~100 KB on average, a large
+hatched region in chalk up to ~1 MB (hatching is drawn line by line in the
+line type). Filled outlines (ink, brush) scale with zoom while stroked lines
+keep their width (`vector-effect` in FigureView.css) — movement is part 2.
+A preset's paper is its own tint in the dark theme too; only `clean`/`theme`
+papers follow the theme. `#` starts a comment in a spec, so colour settings
+are written as bare hex (`@style-tint: fdf6e3`).
+
 ### Contracts worth knowing before you edit
 
-- **`renderFigure(statements, config, palette) → { svg, errors }`.** Errors are
-  returned, not thrown — one bad statement must not blank the figure.
+- **`renderFigure(statements, config, palette, baseStyle?) → { svg, errors }`.**
+  Errors are returned, not thrown — one bad statement must not blank the
+  figure, and a bad base style is reported the same way. A style that
+  resolves to clean draws through the clean pen, byte for byte.
 - **Byte-identical output** for the same input at the same view state. Every
   number goes through one formatter in `svg.ts`. Break that and caching,
   diffing and the tests all go with it.
@@ -1048,7 +1135,7 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 1864 tests, node-only, no DOM
+npm run test --workspace=graph-engine          # 2261 tests (after visual pass 1), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)

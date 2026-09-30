@@ -808,6 +808,42 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   no solid is a *space* plot, as it always was — so declare "@mode: figure"
 //   for points in space with no solid, and declare the mode anyway.
 //
+//   Figure styles (visual pass, part 1 — style/, figure/pen.ts,
+//   figure/styledPen.ts). A figure can be drawn in a LOOK; with no style
+//   directive and no base style from the host it is drawn clean, today's
+//   output byte for byte. Directives, in any order (the preset first, then
+//   each setting over it; last value wins for a repeated setting):
+//
+//   @style: clean | ink | pencil | marker          -> start from a preset (a complete look)
+//   @style-line: technical | ink | brush | pencil | marker | chalk
+//   @style-looseness: 0..1                         -> how far strokes stray (0 = ends exact)
+//   @style-wobble: 0..1                            -> small waviness along a stroke
+//   @style-passes: 1..3                            -> strokes drawn over themselves
+//   @style-line-width: 0.25..4                     -> a multiplier on the stroke weights
+//   @style-variation: 0..1  |  @style-taper: 0..1  |  @style-grain: 0..1
+//   @style-line-opacity: 0.05..1
+//   @style-fill: flat | hatch | crosshatch | stipple | scribble | wash | none
+//   @style-fill-angle: -180..180                   -> hatch direction, degrees anticlockwise
+//   @style-fill-spacing: 3..40  |  @style-fill-opacity: 0..1
+//   @style-paper: none | clean | paper | rough-paper | canvas | graph | rough-graph | dotted | ruled
+//   @style-tint: fdf6e3 | theme                    -> the paper colour; six hex digits WITHOUT
+//                                                     the "#", which starts a comment here
+//   @style-texture: 0..1  |  @style-grid: 6..80    -> grain strength; grid, dot or rule spacing
+//   @style-lettering: math | textbook | hand       -> the labels' face (font stacks with fallbacks)
+//   @style-lettering-size: 0.6..1.6  |  @style-tilt: 0..1 (at most 4 degrees, about the anchor)
+//   @style-ink: 1f2a44 | theme                     -> the main line colour
+//   @style-saturation: 0..1.5                      -> OKLCH chroma on every colour; 1 is identity
+//   @style-seed: 0..9999                           -> rerolls every random choice, deterministically
+//
+//   Every setting also answers to "@style-<group>-<setting>" (style-line-type,
+//   style-paper-grid, style-lettering-face, ...), and the short forms
+//   "@style-width", "@style-angle", "@style-spacing", "@style-size" where they
+//   are unambiguous. An unknown preset, setting or value is refused, naming
+//   the valid ones, and the figure draws in the style resolved without it.
+//   The host's base style (renderFigure's `baseStyle`) sits under these.
+//   Hatching and the other fills are a STYLE's, drawn through "fill:"
+//   regions, sectors, segments and cut faces; "fill:" itself stays a region.
+//
 // Geometry constructions (v2) — every one of these BINDS its left-hand name
 // into the geometry namespace and DRAWS its result. Names are letters only
 // (A, P, m, AB), the same rule point labels already follow, which keeps them
