@@ -826,12 +826,13 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   @style-fill-angle: -180..180                   -> hatch direction, degrees anticlockwise
 //   @style-fill-spacing: 3..40  |  @style-fill-opacity: 0..1
 //   @style-paper: none | clean | paper | rough-paper | canvas | graph | rough-graph | dotted | ruled
-//   @style-tint: fdf6e3 | theme                    -> the paper colour; six hex digits WITHOUT
-//                                                     the "#", which starts a comment here
+//   @style-tint: fdf6e3 | teal | theme             -> the paper colour: six hex digits WITHOUT the
+//                                                     "#" (which starts a comment here), a colour
+//                                                     name (the same names as "color:"), or theme
 //   @style-texture: 0..1  |  @style-grid: 6..80    -> grain strength; grid, dot or rule spacing
 //   @style-lettering: math | textbook | hand       -> the labels' face (font stacks with fallbacks)
 //   @style-lettering-size: 0.6..1.6  |  @style-tilt: 0..1 (at most 4 degrees, about the anchor)
-//   @style-ink: 1f2a44 | theme                     -> the main line colour
+//   @style-ink: 1f2a44 | blue | theme              -> the main line colour
 //   @style-saturation: 0..1.5                      -> OKLCH chroma on every colour; 1 is identity
 //   @style-seed: 0..9999                           -> rerolls every random choice, deterministically
 //
@@ -905,8 +906,9 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 // the name of a line bound earlier. An <obj> operand is any of those, a
 // "circle <name>", or a bare name of any kind.
 //
-// Any statement may end with "color: <name>" (see parser/colors.ts for the
-// palette, or "#rrggbb") to override its default color, and/or "name: <id>"
+// Any statement may end with "color: <name>" (see style/colorNames.ts for the
+// palette) or "color: rrggbb" — six hex digits, no "#", since "#" starts a
+// comment — to override its default color, and/or "name: <id>"
 // to give the statement a name that "@hide: <id>" / "@show: <id>" (see
 // parser/config.ts) can target — independent of the identifier a
 // "k(x) = ..." function definition carries, so a plotted statement that

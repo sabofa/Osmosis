@@ -1101,20 +1101,39 @@ imports no SVG emitter (`pen.test.ts` reads its imports).
    boxes each way, ids defined). Add a character test of its own, and look at
    it on the contact sheet.
 
-**Seeing it.** `npx vite-node graph-engine/scripts/contact-sheet.ts <out.html>`
-writes the sheet; screenshot it with headless Edge (the script's header has
-the command; keep each page under ~4000 px tall or Edge paints it blank — the
-scratch `sheets.ts` of part 1 split it by section). The lab is
+**Seeing it.** `npx vite-node graph-engine/scripts/contact-sheet.ts <out dir>`
+writes the sheet as one HTML page per section (the presets in two halves),
+each short enough for headless Edge to paint whole; the script's header has
+the screenshot command. (One page of the whole sheet is ~13 000 px, and Edge
+paints nothing past ~8 000.) The lab is
 `http://100.90.203.2:5181/style-lab.html` on the geometry review server, and a
 tab of the harness.
 
-**Known limits (part 1).** Styled SVGs are heavy: ~100 KB on average, a large
-hatched region in chalk up to ~1 MB (hatching is drawn line by line in the
-line type). Filled outlines (ink, brush) scale with zoom while stroked lines
-keep their width (`vector-effect` in FigureView.css) — movement is part 2.
-A preset's paper is its own tint in the dark theme too; only `clean`/`theme`
-papers follow the theme. `#` starts a comment in a spec, so colour settings
-are written as bare hex (`@style-tint: fdf6e3`).
+**Rules added in review round 1 (worth knowing before you edit).**
+- Clean byte identity is guarded in the repo by `figure/cleanGolden.test.ts`
+  (288 hashes of every figure example, computed by the code at `1951e6a`).
+- Loops (circles, rims) close exactly at looseness 0 and overlap along their
+  own curve above it — `lines/hand.ts`'s `handChain`; no caps, blots or
+  tangent overshoot at a loop's seam.
+- Technical keeps the caller's line cap and dashes natively
+  (`LineType.nativeDash`), so clean plus one setting keeps clean's ends.
+- A region's fill has a mark budget (`fills/region.ts` `MARK_BUDGET`: 40k
+  units of line, 6k dots); past it the spacing opens out.
+- Labels are laid out at the style's lettering size
+  (`drawFigure(..., letteringSize)`), not just drawn at it.
+- A styled `<svg>` carries `data-style`; FigureView.css keeps strokes
+  non-scaling only for clean figures, so every mark of a styled figure scales
+  with the zoom together.
+- A preset's own paper decides its palette: a light paper in a dark app
+  resolves ink and author colours against the light palette
+  (`render.ts` `paperPalette`); `none` and `theme` papers follow the host.
+- Colour settings take the shared names (`style/colorNames.ts`) and bare hex;
+  `color:` takes bare hex too (`color: d03030`), since `#` starts a comment.
+
+**Known limits (part 1).** Styled SVGs are heavier than clean: ~100 KB on
+average, under 1 MB at the finest spacing thanks to the budget. A preset's
+paper keeps its own tint in the dark theme (by design, above). `#` starts a
+comment in a spec, so colours are written as names or bare hex.
 
 ### Contracts worth knowing before you edit
 

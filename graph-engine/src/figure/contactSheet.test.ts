@@ -3,7 +3,7 @@ import { EXAMPLES } from '../examples'
 import { parseSpec } from '../parser/parseSpec'
 import { resolvePanels } from '../scene/mode'
 import { PRESET_NAMES } from '../style/presets'
-import { contactSheet, contactSheetHtml, SHEET_EXAMPLES, sheetCell } from './contactSheet'
+import { contactSheet, contactSheetHtml, contactSheetPages, SHEET_EXAMPLES, sheetCell } from './contactSheet'
 
 // The contact sheet — the style lab's Sheet tab and the headless script draw
 // the same one — and the promise behind it: every figure example draws in
@@ -59,6 +59,14 @@ describe('the contact sheet', () => {
         }
       }
     }
+  })
+
+  it('splits into pages short enough to screenshot, together holding every figure', () => {
+    const pages = contactSheetPages(sections)
+    expect(pages.map((p) => p.name)).toEqual(['presets-1', 'presets-2', 'line-types', 'fills', 'papers', 'lettering', 'looseness'])
+    const total = pages.reduce((n, p) => n + (p.html.match(/<svg /g)?.length ?? 0), 0)
+    expect(total).toBe(sections.reduce((n, s) => n + s.rows.length * s.columns.length, 0))
+    for (const page of pages) expect(page.html.startsWith('<!doctype html>')).toBe(true)
   })
 
   it('writes a standalone page with its fonts', () => {

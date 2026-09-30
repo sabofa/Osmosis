@@ -210,3 +210,21 @@ export function contactSheetHtml(sections: readonly SheetSection[]): string {
     '</div></body></html>',
   ].join('')
 }
+
+// The sheet as several pages, one per section and the presets in two halves,
+// each short enough for headless Edge to paint whole: a single page of the
+// whole sheet is some 13 000 px tall, and Edge paints nothing past about
+// 8 000. The script writes these; the style lab shows the whole sheet.
+export function contactSheetPages(sections: readonly SheetSection[]): { name: string; html: string }[] {
+  const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  return sections.flatMap((section) => {
+    if (section.rows.length <= 4) return [{ name: slug(section.title), html: contactSheetHtml([section]) }]
+    const pages: { name: string; html: string }[] = []
+    for (let start = 0; start < section.rows.length; start += 4) {
+      const part = start / 4 + 1
+      const title = part === 1 ? section.title : `${section.title} (continued)`
+      pages.push({ name: `${slug(section.title)}-${part}`, html: contactSheetHtml([{ ...section, title, rows: section.rows.slice(start, start + 4) }]) })
+    }
+    return pages
+  })
+}
