@@ -1,3 +1,5 @@
+import type { StyleLayer } from '../style/resolve'
+
 // Per-spec configuration, set via "@key: value" directive lines anywhere in
 // the spec text (order doesn't matter; last value for a repeated key wins).
 // Threaded from parseSpec -> GraphViewer -> the renderers/scene builders, so
@@ -121,6 +123,12 @@ export interface GraphConfig {
   // the same until asked for; header/row-only tables have no formula to show
   // regardless of this setting.
   tableFormulas: boolean
+  // The figure's own style layer, from its "@style…" directives (see
+  // style/resolve.ts). A LAYER, not a resolved style: the renderer resolves
+  // it over the host's base style (the viewer's theme, a document's pinned
+  // look), and that base is not known here. Empty when the spec says nothing,
+  // which draws clean — today's figure, byte for byte.
+  style: StyleLayer
 }
 
 export function defaultConfig(): GraphConfig {
@@ -147,5 +155,6 @@ export function defaultConfig(): GraphConfig {
     hidden: new Set(),
     view: 'standard',
     tableFormulas: false,
+    style: {},
   }
 }

@@ -1,3 +1,4 @@
+import { applyStyleDirective } from '../style/resolve'
 import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
 
 export function isConfigLine(rawLine: string): boolean {
@@ -20,6 +21,16 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
 
   const key = body.slice(0, colonIdx).trim()
   const value = body.slice(colonIdx + 1).trim()
+
+  // Figure styles — "@style: <preset>" and "@style-<setting>: <value>", in a
+  // block of their own (the figure-styles design, D2). Validation and the
+  // refusals naming the valid presets, settings and values live with the
+  // style model in style/resolve.ts; a refused directive throws before it
+  // touches the layer, so the figure draws in the style resolved without it.
+  if (key === 'style' || key.startsWith('style-')) {
+    applyStyleDirective(config.style, key, value)
+    return
+  }
 
   switch (key) {
     case 'theme': {
