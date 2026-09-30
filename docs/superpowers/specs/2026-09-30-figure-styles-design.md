@@ -191,3 +191,23 @@ Grain, bleed, chalk dust and paper textures use SVG filters (`feTurbulence` with
 - Styling the space engine or the graphing engine. The shared module is built for them, but adoption is later.
 - Exporting to PNG or PDF, and the print theme. Clean already serves print.
 - Legends.
+
+## Revised 2026-09-30 — imperfection (Ben's first look)
+
+Ben's notes on the first contact sheets: *scribble is far too clean, it should be a little wild and unpredictable; ink looks fine but should have texture of its own, like a rough ink brush; and hatching, filling, basically everything should be a little less perfect.*
+
+What changes:
+
+1. **Fills get their own looseness: `roughness`** (fill group, 0 to 1, directive `@style-fill-roughness`, alias `@style-roughness`). Lines already have looseness; fills had nothing, which is why a hand-drawn outline sat around machine-perfect shading. At roughness 0 every fill draws exactly as before, byte for byte. Roughness only adds imperfection on top.
+   - **Hatch and crosshatch:** each line strays a little from its place and its angle. Its ends fall short of the edge or run past it (the pen clips the overrun, so nothing leaves the region). Now and then a line is skipped or broken, and the spacing bunches and opens slowly across the family. Crosshatch's second family is not quite a quarter turn from the first.
+   - **Scribble** is the wild one. Its turns overshoot and fall short unevenly, and its legs are uneven in spacing and bend. The turns are rounded, sometimes with a small loop, and the direction drifts across the region. At higher roughness, a second, sparser scribble at another angle goes over a patch of it.
+   - **Stipple** clumps: its density varies in slow patches, and dot sizes vary more widely.
+   - **Flat and wash** are laid slightly off register: the colour misses the line on one side and runs under it on the other. Flat also takes a faint mottle.
+2. **Ink gets its rough-brush texture from `grain`,** which the ink line did not use before.
+   - Its edges are ragged, each side independently.
+   - Many strokes run dry toward their end: the tail splits into a few bristle strands with gaps between them, some running out early.
+   - The ink texture knocks a few pinholes out of the line.
+   - At least one strand always reaches the true end, so the faithfulness rule holds.
+3. **Presets:** ink `grain` 0.55 and fill roughness 0.35; pencil fill roughness 0.45; marker fill roughness 0.6; clean 0 (not read; clean stays byte-identical).
+4. **Rule 4 (faithful at the exact end) for fills:** at roughness 0, hatch and scribble marks lie inside the region as before. Above 0 they may run past its edge, and the pen's clip keeps what is drawn inside. Stipple centres are always inside.
+5. **The contact sheet gains an "Imperfection" page:** hatch, crosshatch, scribble, stipple and flat at roughness 0, 0.5 and 1, and the ink line at grain 0, 0.5 and 1.
