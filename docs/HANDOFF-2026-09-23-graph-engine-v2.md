@@ -1109,6 +1109,37 @@ paints nothing past ~8 000.) The lab is
 `http://100.90.203.2:5181/style-lab.html` on the geometry review server, and a
 tab of the harness.
 
+**Roughness (2026-09-30 revision — "imperfection").** Ben's first look at the
+contact sheets: scribble was too clean, ink wanted its own rough-brush
+texture, and fills generally needed to be a little less perfect. So:
+- **`fill.roughness`** (`@style-fill-roughness`, alias `@style-roughness`), a
+  new token alongside line's `looseness`. At 0 every fill draws exactly as
+  before — pinned by hash in `fills/fills.test.ts` for all seven fills, on a
+  square, an annulus and a two-loop region — and the rough code paths never
+  run (no extra random draw to shift what follows). Above 0: hatch and
+  crosshatch stray in place, angle and where they end, and skip or break a
+  line now and then (`fills/hatch.ts`); scribble's turns wander, its legs
+  bend, turns sometimes loop, the whole run is a smooth curve rather than a
+  zig-zag, and past 0.3 a second sparser scribble goes over a patch of it
+  (`fills/scribble.ts`, `path.ts`'s `smoothThrough`); stipple clumps into
+  slow patches and varies its dot size more (`fills/stipple.ts`); flat and
+  wash sit a little off register — translated and clipped back to the exact
+  outline, so the tint misses the true line on one side and never spills on
+  the other (`fills/region.ts`'s `offRegister`) — and flat takes a faint
+  `mottle` texture (`textures.ts`). Presets: ink 0.35, pencil 0.45, marker
+  0.6, clean 0 (unread).
+- **Ink's `grain`** now drives a rough brush, not just paper-grain texture:
+  ragged edges (the ribbon's two sides straying independently,
+  `lines/hand.ts`'s `ribbon2`) and, on a long enough open stroke, a dry-brush
+  tail that splits into a few bristle strands with gaps — one of which
+  always reaches the true end, so the faithfulness rule holds even as the
+  brush runs dry (`lines/ink.ts`). The `bleed` texture also knocks a few
+  pinholes out of the line, rising with strength (`textures.ts`). Ink's
+  preset grain rose from 0.1 to 0.55.
+- The contact sheet's new **"Imperfection"** section shows hatch,
+  crosshatch, scribble, stipple and flat at roughness 0/0.5/1, and the ink
+  line at grain 0/0.5/1.
+
 **Rules added in review round 1 (worth knowing before you edit).**
 - Clean byte identity is guarded in the repo by `figure/cleanGolden.test.ts`
   (288 hashes of every figure example, computed by the code at `1951e6a`).
@@ -1154,7 +1185,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2395 tests (after visual pass 1 and its fix rounds), node-only, no DOM
+npm run test --workspace=graph-engine          # 2428 tests (after visual pass 1, its fix rounds, and roughness), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
