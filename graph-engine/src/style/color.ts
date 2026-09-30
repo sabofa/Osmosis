@@ -83,6 +83,16 @@ export function fromOklch(colour: Oklch): string {
   )
 }
 
+// A colour made deeper: its OKLCH lightness scaled by `factor` (below 1 is
+// darker), hue and chroma held. Shading drawn in LINES uses it, since a
+// hatch line in the region's own tint is far fainter than the same tint laid
+// as an area.
+export function deepen(colour: string, factor: number): string {
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(colour)) return colour
+  const oklch = toOklch(colour.toLowerCase())
+  return fromOklch({ ...oklch, l: oklch.l * factor })
+}
+
 // A colour's chroma scaled by `saturation`. "#rgb" and "#rrggbb" in, always
 // "#rrggbb" out; anything else (a pattern reference, "none") passes through.
 export function saturate(colour: string, saturation: number): string {

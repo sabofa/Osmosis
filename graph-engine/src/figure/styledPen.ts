@@ -1,6 +1,6 @@
 import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
-import { saturate } from '../style/color'
+import { deepen, saturate } from '../style/color'
 import { LINES, type Primitive, type Texture } from '../style/lines'
 import { dashPolyline, polylineChain, sampleChain, type Chain, type Piece } from '../style/path'
 import { hashString, randomFor } from '../style/random'
@@ -12,7 +12,7 @@ import { PAPERS } from '../style/papers'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
 import { notationElements } from './notation'
 import { cleanFill, regionChains, strokeChains, type FigurePen, type FillRegion } from './pen'
-import { fmt, svgCircle, svgEscape, svgGroup, svgPolygon, svgText, type SvgAttrs } from './svg'
+import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './svg'
 
 // The STYLED pen: the same calls the clean pen gets, drawn in a look.
 //
@@ -39,6 +39,15 @@ const ID = ''
 // Points and labels stay crisp.
 const TEXTURED: readonly FigureLayer[] = ['regions', 'auxiliary', 'primary', 'marks']
 
+// Fill weights (see the pen's fill): shading lines and dots are this much
+// darker than the region's colour, and a solid area is drawn at this
+// fraction of the fill opacity.
+const SHADE_DEPTH = 0.78
+const AREA_WEIGHT = 0.5
+// Shading lines are sampled this far apart (drawing units): they are many and
+// straight, and a figure of hatching would otherwise weigh megabytes.
+const SHADING_STEP = 14
+
 const numberOf = (value: SvgAttrs[string], fallback: number): number => {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
   return Number.isFinite(n) ? n : fallback
@@ -61,16 +70,28 @@ function attributes(a: SvgAttrs): string {
 // Pieces as path data
 // ---------------------------------------------------------------------------
 
+// Styled geometry is written to two decimals: a hundredth of a drawing unit
+// is far below a pixel, and a hand-drawn figure has thousands of points, so
+// the third decimal clean keeps would only add weight. Still fixed precision,
+// so still byte-stable.
+function dp(n: number): string {
+  return fmt(Math.round(n * 100) / 100)
+}
+
+function points(list: readonly Vec2[]): string {
+  return list.map((p) => `${dp(p.x)},${dp(p.y)}`).join(' ')
+}
+
 function arcCommand(rx: number, ry: number, degrees: number, delta: number, to: Vec2): string {
-  return `A ${fmt(rx)} ${fmt(ry)} ${fmt(degrees)} ${Math.abs(delta) > Math.PI ? 1 : 0} ${delta >= 0 ? 1 : 0} ${fmt(to.x)} ${fmt(to.y)}`
+  return `A ${dp(rx)} ${dp(ry)} ${dp(degrees)} ${Math.abs(delta) > Math.PI ? 1 : 0} ${delta >= 0 ? 1 : 0} ${dp(to.x)} ${dp(to.y)}`
 }
 
 function pieceData(piece: Piece): string {
   switch (piece.kind) {
     case 'line':
-      return `L ${fmt(piece.to.x)} ${fmt(piece.to.y)}`
+      return `L ${dp(piece.to.x)} ${dp(piece.to.y)}`
     case 'cubic':
-      return `C ${fmt(piece.c1.x)} ${fmt(piece.c1.y)} ${fmt(piece.c2.x)} ${fmt(piece.c2.y)} ${fmt(piece.to.x)} ${fmt(piece.to.y)}`
+      return `C ${dp(piece.c1.x)} ${dp(piece.c1.y)} ${dp(piece.c2.x)} ${dp(piece.c2.y)} ${dp(piece.to.x)} ${dp(piece.to.y)}`
     case 'arc':
     case 'ellipticalArc': {
       // A sweep of more than half a turn is written as two commands, since
@@ -93,13 +114,13 @@ function pieceData(piece: Piece): string {
 }
 
 function pathData(start: Vec2, pieces: readonly Piece[]): string {
-  return [`M ${fmt(start.x)} ${fmt(start.y)}`, ...pieces.map(pieceData)].join(' ')
+  return [`M ${dp(start.x)} ${dp(start.y)}`, ...pieces.map(pieceData)].join(' ')
 }
 
 // Many dots as one path: each a circle drawn as two half-turn arcs.
 function dotsData(dots: readonly { at: Vec2; r: number }[]): string {
   return dots
-    .map(({ at, r }) => `M ${fmt(at.x - r)} ${fmt(at.y)} a ${fmt(r)} ${fmt(r)} 0 1 0 ${fmt(2 * r)} 0 a ${fmt(r)} ${fmt(r)} 0 1 0 ${fmt(-2 * r)} 0`)
+    .map(({ at, r }) => `M ${dp(at.x - r)} ${dp(at.y)} a ${dp(r)} ${dp(r)} 0 1 0 ${dp(2 * r)} 0 a ${dp(r)} ${dp(r)} 0 1 0 ${dp(-2 * r)} 0`)
     .join(' ')
 }
 
@@ -152,7 +173,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
           ...identity,
         })}/>`
       case 'shape':
-        return svgPolygon(primitive.outline, { fill: paint, stroke: 'none', opacity: Math.min(1, primitive.opacity * opacity), ...identity })
+        return `<polygon${attributes({ points: points(primitive.outline), fill: paint, stroke: 'none', opacity: Math.min(1, primitive.opacity * opacity), ...identity })}/>`
       case 'dots':
         return `<path${attributes({ d: dotsData(primitive.dots), fill: paint, stroke: 'none', opacity: Math.min(1, primitive.opacity * opacity), ...identity })}/>`
     }
@@ -160,8 +181,8 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
 
   // A chain through the line type. `key` is the element's identity plus
   // which piece of it this is — the random source's seed string.
-  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line): Primitive[] =>
-    line.draw({ chain, width, settings, random: randomFor(key, style.seed) })
+  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line, step?: number): Primitive[] =>
+    line.draw({ chain, width, settings, random: randomFor(key, style.seed), step })
 
   // Textures a fill asks for (a wash's blotches, its soft rim), and the clip
   // paths that keep fill marks inside their regions — all written into
@@ -215,8 +236,13 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     // The outline, when the region has one, is drawn in the line type.
     fill(region: FillRegion, attrs, id, layer) {
       const paint = colour(attrs.fill) ?? ink
+      // Shading in lines and dots is drawn a deeper shade of the region's
+      // colour, and a solid area at half the fill opacity: at the same
+      // opacity a filled area reads about twice as heavy as hatching.
+      const shade = deepen(paint, SHADE_DEPTH)
       const identity = identityOf(attrs)
       const opacity = style.fill.opacity
+      const areaOpacity = opacity * AREA_WEIGHT
       const evenOdd = attrs['fill-rule'] === 'evenodd'
       const outline = regionChains(region)
       const { marks } = FILLS[style.fill.type].draw({ outline, settings: style.fill, random: randomFor(`${id}/fill`, style.seed) })
@@ -227,7 +253,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
             layers[layer].push(
               cleanFill(region, {
                 fill: paint,
-                'fill-opacity': opacity,
+                'fill-opacity': areaOpacity,
                 'fill-rule': attrs['fill-rule'],
                 stroke: 'none',
                 filter: mark.texture ? textureUrl({ name: mark.texture, strength: 0.5 }) : null,
@@ -237,11 +263,11 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
             break
           case 'lines':
             mark.chains.forEach((chain, c) => {
-              for (const primitive of drawChain(chain, shadingWidth, `${id}/fill#${c}`, shadingSettings)) clipped.push(write(primitive, paint, opacity, identity))
+              for (const primitive of drawChain(chain, shadingWidth, `${id}/fill#${c}`, shadingSettings, SHADING_STEP)) clipped.push(write(primitive, shade, opacity, identity))
             })
             break
           case 'dots':
-            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: paint, stroke: 'none', opacity, ...identity })}/>`)
+            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: shade, stroke: 'none', opacity, ...identity })}/>`)
             break
           case 'edge':
             clipped.push(
@@ -249,7 +275,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
                 fill: 'none',
                 stroke: paint,
                 'stroke-width': mark.width,
-                opacity: Math.min(1, mark.opacity * opacity * 2),
+                opacity: Math.min(1, mark.opacity * opacity),
                 filter: textureUrl({ name: 'soften', strength: 0.5 }),
                 ...identity,
               })

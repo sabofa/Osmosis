@@ -15,8 +15,8 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 24
 
-function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, sampleStep(width))
+function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+  const samples = sampleChain(chain, step ?? sampleStep(width))
   const out: Primitive[] = []
   for (let pass = 0; pass < settings.passes; pass++) {
     const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.25 })
@@ -35,7 +35,7 @@ function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
       start: shifted[0],
       pieces: smoothThrough(shifted),
       width: width * (0.62 + 0.2 * settings.variation * random.range(-1, 1)),
-      opacity: settings.opacity * (0.55 + 0.15 * random.next()),
+      opacity: settings.opacity * (0.72 + 0.18 * random.next()),
       cap: 'round',
     })
   }

@@ -22,6 +22,10 @@ export interface StrokeInput {
   width: number
   settings: LineSettings
   random: Random
+  // The sample spacing, when the caller wants coarser detail than the line
+  // type's own (hand.ts's sampleStep): shading lines, which are many, long
+  // and straight, are drawn with fewer samples to keep a figure's markup small.
+  step?: number
 }
 
 export type Primitive =

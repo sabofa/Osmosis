@@ -17,8 +17,8 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 70
 
-function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, sampleStep(width))
+function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+  const samples = sampleChain(chain, step ?? sampleStep(width))
   const spine = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.35 })
   const pressure = smoothNoise(random, Math.max(2, samples.length / 6))
   const n = spine.length

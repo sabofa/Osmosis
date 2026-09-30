@@ -230,7 +230,7 @@ describe('a styled page', () => {
   it('applies saturation to ink, fills, paper and an author’s own colour', () => {
     // Named colours: "#" starts a comment in a spec.
     const figure = ['@mode: figure', 'polygon: A(0,0), B(4,0), C(1,3) color: red', 'fill: A-B-C color: blue', 'segment: A-C']
-    const spec = ['@style: ink', '@style-saturation: 0', ...figure].join('\n')
+    const spec = ['@style: ink', '@style-fill: flat', '@style-saturation: 0', ...figure].join('\n')
     const svg = render(spec).svg
     const colours = [...svg.matchAll(/(?:fill|stroke)="(#[0-9a-f]{6})"/g)].map((m) => m[1])
     expect(colours.length).toBeGreaterThan(3)

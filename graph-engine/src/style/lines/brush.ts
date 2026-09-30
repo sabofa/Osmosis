@@ -20,8 +20,8 @@ const NIB = -Math.PI / 6
 const PEAK = 1.3
 const WAVELENGTH = 55
 
-function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, sampleStep(width))
+function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+  const samples = sampleChain(chain, step ?? sampleStep(width))
   const spine = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.3 })
   const lengths = cumulative(spine)
   const total = lengths[lengths.length - 1] || 1

@@ -18,11 +18,12 @@ export const PRESETS: Record<PresetName, Look> = {
   //
   // Lettering is "textbook", not the design table's "math": clean is today's
   // output, and today's labels are set in a sans, which is textbook's stack.
-  // Fill opacity 0.22 is today's REGION_OPACITY, so a flat fill in a styled
-  // figure is the same backdrop.
+  // Fill opacity 0.44: a styled pen lays a solid area at half the fill
+  // opacity, so a flat fill in a styled figure is today's REGION_OPACITY,
+  // 0.22 — the same backdrop.
   clean: {
     line: { type: 'technical', looseness: 0, wobble: 0, passes: 1, width: 1, variation: 0, taper: 0, grain: 0, opacity: 1 },
-    fill: { type: 'flat', angle: 45, spacing: 9, opacity: 0.22 },
+    fill: { type: 'flat', angle: 45, spacing: 9, opacity: 0.44 },
     paper: { type: 'clean', tint: 'theme', texture: 0, grid: 24 },
     lettering: { face: 'textbook', size: 1, tilt: 0 },
     colour: { ink: 'theme', saturation: 1 },
@@ -39,10 +40,10 @@ export const PRESETS: Record<PresetName, Look> = {
     colour: { ink: '#1f2a44', saturation: 0.9 },
   },
 
-  // Graphite on rough paper, lettered by hand. Slightly thinner than the
-  // base weight, because two light passes read heavier than one.
+  // Graphite on rough paper, lettered by hand: two light passes at the base
+  // weight (each pass is thinner than the line, and translucent).
   pencil: {
-    line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 0.9, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
+    line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
     fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.85 },
     paper: { type: 'rough-paper', tint: '#f6f3ec', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },

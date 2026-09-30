@@ -14,8 +14,8 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 30
 
-function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, sampleStep(width) * 0.7)
+function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+  const samples = sampleChain(chain, (step ?? sampleStep(width)) * 0.7)
   const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
   const lengths = cumulative(line)
   const total = lengths[lengths.length - 1]

@@ -34,7 +34,7 @@ export function textureFilter(texture: Texture, id: string, region: Box): string
     // knocks out more.
     case 'grain':
       return tag('filter', frame, [
-        ...speckle(0.9, 2, 7, 7 * (0.36 + 0.16 * s) - 1),
+        ...speckle(0.9, 2, 7, 7 * (0.3 + 0.14 * s) - 1),
         tag('feComposite', { in: 'SourceGraphic', in2: 'speck', operator: 'in' }),
       ])
     // Chalk: coarser, patchier breaks, and a soft, dusty edge.

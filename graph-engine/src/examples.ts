@@ -20,6 +20,7 @@ export const EXAMPLE_GROUPS = [
   'Spheres',
   'Measures in space',
   'Nets and paths',
+  'Styles',
 ] as const
 
 export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
@@ -1213,6 +1214,93 @@ M = (2, 4)
 O = circle M, 2
 fill: square ABCD or circle O name: U color: teal
 label: area U                 # computed: 22.283, which is 16 + 2π`,
+  },
+  // Figure styles, part 1: figures pinned to a look with "@style…" lines.
+  // The style lab (review/style-lab.html) tunes every setting live; these are
+  // the looks as a spec writes them.
+  {
+    label: 'Ink: centres and circles',
+    group: 'Styles',
+    spec: `@style: ink
+@mode: figure
+@angle: degrees
+triangle ABC: AB = 9, BC = 8, AC = 7
+O = circumcenter ABC
+H = orthocenter ABC
+I = incenter ABC
+incircle of ABC
+circumcircle of ABC
+segment: O-H dashed   # the Euler line`,
+  },
+  {
+    label: 'Pencil: a square less its circle',
+    group: 'Styles',
+    spec: `@style: pencil
+@mode: figure
+polygon: A(0,0), B(4,0), C(4,4), D(0,4)
+M = (2, 2)
+O = circle M, 2
+fill: square ABCD minus circle O name: R
+label: area R`,
+  },
+  {
+    label: 'Marker: a cube and its net',
+    group: 'Styles',
+    spec: `@style: marker
+@mode: figure
+S = solid cube edge 4 vertices ABCDEFGH
+net: S`,
+  },
+  {
+    label: 'Brush on canvas',
+    group: 'Styles',
+    spec: `@style: ink
+@style-line: brush
+@style-paper: canvas
+@style-fill: wash
+@style-lettering: hand
+@mode: figure
+O = (0, 0)
+k = circle O, 5
+P = (-3, 4)
+Q = (4, 3)
+chord P-Q on k
+sector P-Q on k minor
+t = tangent at P on k
+radius k to Q`,
+  },
+  {
+    label: 'Chalk on rough graph paper',
+    group: 'Styles',
+    spec: `@style: pencil
+@style-line: chalk
+@style-paper: rough-graph
+@style-fill: crosshatch
+@style-saturation: 0.8
+@mode: figure
+M = (0, 0)
+O = circle M, 3
+P = circle M, 2
+T = (0, 3)
+fill: circle O minus circle P name: R
+radius O to T
+label: area R`,
+  },
+  {
+    label: 'Stipple, dotted paper, seed 7',
+    group: 'Styles',
+    spec: `@style: ink
+@style-fill: stipple
+@style-paper: dotted
+@style-looseness: 0.45
+@style-seed: 7
+@mode: figure
+A = (0, 0)
+B = (1, 0)
+j = circle A, 1
+k = circle B, 1
+fill: circle j and circle k name: L
+label: area L`,
   },
   {
     label: 'Hyperbola',

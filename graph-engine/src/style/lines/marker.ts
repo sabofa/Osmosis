@@ -13,8 +13,8 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 60
 
-function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, sampleStep(width))
+function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+  const samples = sampleChain(chain, step ?? sampleStep(width))
   const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
   // Markers write wide: the base weight, made felt-tip thick.
   const thick = width * 1.45 * (1 + 0.15 * settings.variation * random.range(-1, 1))

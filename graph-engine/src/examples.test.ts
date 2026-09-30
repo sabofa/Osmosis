@@ -169,3 +169,24 @@ describe('the phase 9 sphere examples', () => {
     for (const c of [m.x, m.y, m.z]) expect(c).toBeCloseTo(1, 12)
   })
 })
+
+// The Styles group exists to show the looks; an example there that drew
+// clean would be a button that shows nothing it promises.
+describe('the Styles examples', () => {
+  const styles = EXAMPLES.filter((e) => e.group === 'Styles')
+
+  it('are several, each pinned to a look', () => {
+    expect(styles.length).toBeGreaterThanOrEqual(5)
+    for (const example of styles) expect(example.spec, example.label).toMatch(/^@style: /m)
+  })
+
+  for (const example of styles) {
+    it(`${example.label} draws styled, not clean`, () => {
+      const parsed = parseSpec(example.spec)
+      const styled = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).svg
+      const clean = renderFigure(parsed.statements, { ...parsed.config, style: {} }, LIGHT_PALETTE).svg
+      expect(styled).not.toBe(clean)
+      expect(styled).toMatch(/data-layer="paper"/)
+    })
+  }
+})

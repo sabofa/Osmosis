@@ -11,7 +11,7 @@ import type { PaperType } from './types'
 export const roughPaper: PaperType = {
   draw(input) {
     const t = input.settings.texture
-    const tooth = grain(input, 'rough-paper', '0.22', 4, 1.1 * t, 0.45, 23)
+    const tooth = grain(input, 'rough-paper', '0.22', 4, 0.75 * t, 0.45, 23)
     const fibres = grain(input, 'rough-paper-fibres', '0.008 0.4', 1, 2.4 * t, 0.66, 31)
     return {
       defs: [...tooth.defs, ...fibres.defs],
