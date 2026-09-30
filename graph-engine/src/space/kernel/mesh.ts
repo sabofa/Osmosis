@@ -3,34 +3,37 @@
 //   (an honest hole; no zero is invented);
 // - a degenerate triangle (collapsed where inner bounds meet, or at a pole)
 //   is dropped;
-// - S6 plan V8: a triangle that survives the hole cut but shares an edge with
-//   one the cut removed — so it sits on the hole's boundary — is also
-//   dropped when it is a sliver: its smallest angle under 3 degrees, or its
-//   area under 1e-4 of the mesh's typical (median) triangle area there. A
-//   hole rarely lands exactly on a grid line, so the last sliver of a cut
-//   cell is otherwise a needle. S6 fix round 3: measured in grid-index
-//   (i, j) space (rowWidthOf), not parameter (u, v) — (i, j) is a uniform
-//   integer lattice by construction, so this does not depend on how a
-//   domain curves in (u, v) or world space either (a polar or "type I"
-//   region can put a tiny cross-term into what looks like one (u, v) axis's
-//   pure step, which an earlier, (u, v)-based version of this normalised
-//   by was liable to inflate 77x or more). A triangle away from any hole is
-//   never touched by this rule, degenerate-at-a-pole ones included.
 // - on a graph z = f, every triangle is wound counter-clockwise seen from
 //   above, the side its analytic normal points to;
 // - normals are normalised, with the face fallback where the analytic one is
 //   missing (normals.ts);
 // - vertices no triangle uses are compacted away, keeping their order.
+//
+// S6 fix round 4: plan V8 (a triangle on the hole's boundary also dropped
+// when it read as a sliver — small angle or area — in whatever coordinates
+// the pass had) is withdrawn. Three rounds each corrected a different way
+// of measuring that "sliver": round 1 (I4) normalised raw (u, v) units by a
+// sampled-and-sorted median grid step; round 2 (NB4) replaced that with one
+// first-cell (u, v) delta for speed; round 3 replaced (u, v) with
+// grid-index (i, j) integers read off the mesh's own topology, so no
+// domain curvature could ever be read as a false skew. Round 4's re-review
+// found grid-index measurement itself unsound on an inequality-clipped
+// mesh (its re-triangulated boundary cells do not carry the topology the
+// row-width reader assumed, misreading it as an enormous row width that
+// collapsed every hole-edge triangle onto one row — "every triangle
+// becomes collinear and is dropped") and, more fundamentally, that no
+// coordinate system needed measuring at all: every candidate a real
+// parameterized grid ever hands this pass is one of gridIndices' own two
+// canonical cell triangles, always exactly 45/45/90 in grid-index terms —
+// pass 2 could only ever misfire, never actually catch a real sliver, at a
+// real per-mesh cost (~3.7 ms at 128^2 with a hole). Dropping a genuinely
+// clipped boundary triangle also opens a gap in the surface, which no
+// "sliver" reading is worth. The one artefact this filter ever addressed —
+// "Limits along two paths" at the origin — is shading near a removed
+// vertex (parked for track 5), not a needle this pass was catching.
 
 import { DEGENERATE_REL } from '../../math/tolerance'
 import { fallbackNormals, normalizeAt } from './normals'
-
-// For tests: how many times finishMesh's pass 2 (the hole/sliver filter,
-// past its own early return) actually ran its body, not just whether the
-// early return's early-return-value happens to match. mesh.test.ts's "no
-// hole" test reads this, not just finishMesh's output — see the S6 fix
-// round 2, item 5b comment at the early return, below.
-export const pass2Runs = { count: 0 }
 
 export interface RawMesh {
   positions: Float64Array
@@ -92,88 +95,7 @@ export function reversedWinding(indices: Uint32Array): Uint32Array {
   return out
 }
 
-// S6 fix round 3: the smallest angle (degrees) and the area of a triangle
-// from any (x, y) coordinate pair per vertex — grid-index (i, j) integers
-// when rowWidthOf below can find them, raw (u, v) otherwise. No su/sv scale
-// factor: round 1 and round 2 each tried to normalise raw (u, v) units by
-// an estimated grid step (a global median of every candidate's edges, then
-// a single first-cell sample) so a nice square cell would not be misread as
-// a sliver just because the domain's own u and v spans differ — both
-// estimates read genuine (u, v) deltas, which is exactly where a domain
-// that is not a plain rectangle (polar; a "type I" region whose y-span
-// closes to nothing at one x) puts a tiny cross-term into what looks like
-// one axis's pure step, inflating its scale 77x or more and dropping good
-// triangles at the hole's edge. Grid-index space sidesteps this rather than
-// estimating it away: (i, j) is a uniform integer lattice by construction,
-// so its own shape never depends on how the domain curves.
-function triangleArea(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
-  return Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2
-}
-
-function triangleShape(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): { minAngleDeg: number; area: number } {
-  const angleAt = (ux: number, uy: number, vx: number, vy: number) => {
-    const dot = ux * vx + uy * vy
-    const cross = ux * vy - uy * vx
-    return (Math.atan2(Math.abs(cross), dot) * 180) / Math.PI
-  }
-  const angleA = angleAt(bx - ax, by - ay, cx - ax, cy - ay)
-  const angleB = angleAt(ax - bx, ay - by, cx - bx, cy - by)
-  const angleC = 180 - angleA - angleB
-  return { minAngleDeg: Math.min(angleA, angleB, angleC), area: triangleArea(ax, ay, bx, by, cx, cy) }
-}
-
-// S6 fix round 3: the grid's row width (i's own span, resU + 1), read from
-// raw.indices' own topology — pure integer arithmetic on vertex indices,
-// never uv or position, so no cross-term can ever enter it. Every
-// parameterized caller here meshes a grid via gridIndices' one convention
-// (domain.ts's rectSamples/iteratedSamples share it too): cell (i, j)'s two
-// triangles are [a, b, c] and [a, c, d] with a = j*rowWidth+i, b = a+1
-// (the pure i-neighbour), d = a+rowWidth (the pure j-neighbour), c = d+1
-// (the diagonal) — or the same with b and c swapped, reversedWinding's
-// [a, c, b, a, d, c]. `a` is whichever vertex both triangles share
-// (indices[0] and [3] agree); among the other four slots, the one
-// appearing twice is the diagonal, and of the two singles, whichever
-// equals a + 1 is b — the other is d, giving rowWidth = d - a directly.
-// A mesh whose first two triangles do not fit this shape at all (a
-// hand-built fixture, not a real gridIndices() grid; an inequality
-// region's own re-triangulated boundary cells) returns null, and its
-// candidates measure in raw (u, v) units instead — the filter's original
-// form, before any grid-step normalisation existed.
-function rowWidthOf(indices: Uint32Array): number | null {
-  if (indices.length < 6) return null
-  const a = indices[0]
-  if (indices[3] !== a) return null
-  const others = [indices[1], indices[2], indices[4], indices[5]]
-  const counts = new Map<number, number>()
-  for (const v of others) counts.set(v, (counts.get(v) ?? 0) + 1)
-  let diagonal: number | null = null
-  const singles: number[] = []
-  for (const [v, count] of counts) {
-    if (count === 2) diagonal = v
-    else if (count === 1) singles.push(v)
-  }
-  if (diagonal === null || singles.length !== 2) return null
-  const b = singles[0] === a + 1 ? singles[0] : singles[1] === a + 1 ? singles[1] : null
-  if (b === null) return null
-  const d = singles[0] === b ? singles[1] : singles[0]
-  return d > a ? d - a : null
-}
-
-// A stable, order-independent key for the undirected edge (u, v). Vertex
-// counts here are well under 2^20 (resolution budgets cap far lower).
-function edgeKey(u: number, v: number): number {
-  return u < v ? u * 2 ** 20 + v : v * 2 ** 20 + u
-}
-
-const SLIVER_MIN_ANGLE_DEG = 3
-const SLIVER_MAX_AREA_REL = 1e-4
-
-// `parameterized`: false for a mesh whose uv is a placeholder, not a real
-// (u, v) domain (geometry/implicit.ts's marching-tetrahedra surfaces have no
-// 2D parameterization) — V8's sliver check needs a real one, so it is
-// skipped there; every other caller samples a genuine rectangular domain and
-// leaves this at its default.
-export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true): FinishedMesh {
+export function finishMesh(raw: RawMesh, orientUp: boolean): FinishedMesh {
   const { positions, normals, uv } = raw
   const n = positions.length / 3
   const valid = new Uint8Array(n)
@@ -181,24 +103,20 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
     valid[v] = Number.isFinite(positions[3 * v]) && Number.isFinite(positions[3 * v + 1]) && Number.isFinite(positions[3 * v + 2]) ? 1 : 0
   }
 
-  // Pass 1: the hole cut and the existing (world-space) degenerate check.
-  // Survivors are candidates for V8's sliver check below; a hole-cut
-  // triangle's edges mark the hole's boundary, so V8 knows which survivors
-  // sit on it.
+  // The hole cut (an invalid vertex removes every triangle touching it) and
+  // the degenerate check (collapsed where inner bounds meet, or at a pole).
+  // S6 fix round 4: this used to also record which edges the hole cut
+  // exposed, for a second pass (V8) that dropped a further triangle on that
+  // boundary when it read as a sliver — withdrawn (see the file header);
+  // nothing downstream of this loop reads that bookkeeping any more.
   const candidates = new Uint32Array(raw.indices.length)
   let cn = 0
-  const holeEdges = new Set<number>()
   const limit = DEGENERATE_REL * DEGENERATE_REL
   for (let t = 0; t < raw.indices.length; t += 3) {
     const a = raw.indices[t]
     let b = raw.indices[t + 1]
     let c = raw.indices[t + 2]
-    if (!valid[a] || !valid[b] || !valid[c]) {
-      holeEdges.add(edgeKey(a, b))
-      holeEdges.add(edgeKey(b, c))
-      holeEdges.add(edgeKey(c, a))
-      continue
-    }
+    if (!valid[a] || !valid[b] || !valid[c]) continue
     const e1x = positions[3 * b] - positions[3 * a]
     const e1y = positions[3 * b + 1] - positions[3 * a + 1]
     const e1z = positions[3 * b + 2] - positions[3 * a + 2]
@@ -223,89 +141,12 @@ export function finishMesh(raw: RawMesh, orientUp: boolean, parameterized = true
     candidates[cn++] = b
     candidates[cn++] = c
   }
-
-  // Pass 2 (V8; S6 fix round 1 I4). Drop a candidate sitting on the hole's
-  // boundary when it is a parameter-space sliver. I4's cost fix: a mesh with
-  // no hole at all (the overwhelming common case) has nothing for this pass
-  // to do, so it returns the candidates unchanged rather than paying for a
-  // median, a per-triangle Set lookup and a trig call on every one of them.
-  // Skipped the same way when uv is not a real parameterization
-  // (parameterized = false): the mesh keeps every hole-cut candidate as is.
-  if (!parameterized || holeEdges.size === 0) {
-    const indices = cn === candidates.length ? candidates : candidates.slice(0, cn)
-    return compact(positions, normals, uv, indices, n)
-  }
-  // S6 fix round 2, item 5b: when holeEdges really is empty, pass 2's own
-  // body below is a mathematical no-op regardless (onHole can never be
-  // true with nothing in holeEdges to match), so a test comparing outputs
-  // alone cannot tell "the early return fired" from "the filter ran and
-  // dropped nothing" — it would pass either way, even with the early
-  // return deleted. This counts every trip past it, for that test to read.
-  pass2Runs.count++
-
-  // S6 fix round 3: rowWidthOf, above, turns each vertex's flat index into
-  // its own (i, j) — pure topology, computed once. `hasGrid`/`rw` fall back
-  // to raw (u, v) when the topology does not fit (rowWidth null): the
-  // filter's original, pre-normalisation form (mesh.base.ts) for whatever
-  // does not look like a real parameterized grid. A flag and a plain
-  // number, inlined at each read below, not a pair of closures: this is
-  // read up to six times per candidate (three vertices, x and y each), for
-  // every triangle in the mesh, so a direct branch beats a function-call
-  // indirection whose target varies per finishMesh call and so cannot be
-  // inlined the way a fixed one could.
-  const rowWidth = rowWidthOf(raw.indices)
-  const hasGrid = rowWidth !== null
-  const rw = rowWidth ?? 1
-
-  // The median from area alone — triangleArea(), not the full
-  // triangleShape() (whose angle needs atan2 per edge) — for every
-  // candidate; triangleShape itself runs only below, for the ones actually
-  // on the hole's boundary.
-  const areas = new Float64Array(cn / 3)
-  for (let i = 0, t = 0; t < cn; i++, t += 3) {
-    const a = candidates[t]
-    const b = candidates[t + 1]
-    const c = candidates[t + 2]
-    const ax = hasGrid ? a % rw : uv[2 * a]
-    const ay = hasGrid ? Math.floor(a / rw) : uv[2 * a + 1]
-    const bx = hasGrid ? b % rw : uv[2 * b]
-    const by = hasGrid ? Math.floor(b / rw) : uv[2 * b + 1]
-    const cx = hasGrid ? c % rw : uv[2 * c]
-    const cy = hasGrid ? Math.floor(c / rw) : uv[2 * c + 1]
-    areas[i] = triangleArea(ax, ay, bx, by, cx, cy)
-  }
-  const sorted = areas.slice().sort()
-  const medianArea = sorted.length > 0 ? sorted[sorted.length >> 1] : 0
-  const areaFloor = SLIVER_MAX_AREA_REL * medianArea
-
-  const kept = new Uint32Array(cn)
-  let k = 0
-  for (let t = 0; t < cn; t += 3) {
-    const a = candidates[t]
-    const b = candidates[t + 1]
-    const c = candidates[t + 2]
-    const onHole = holeEdges.has(edgeKey(a, b)) || holeEdges.has(edgeKey(b, c)) || holeEdges.has(edgeKey(c, a))
-    if (onHole) {
-      const ax = hasGrid ? a % rw : uv[2 * a]
-      const ay = hasGrid ? Math.floor(a / rw) : uv[2 * a + 1]
-      const bx = hasGrid ? b % rw : uv[2 * b]
-      const by = hasGrid ? Math.floor(b / rw) : uv[2 * b + 1]
-      const cx = hasGrid ? c % rw : uv[2 * c]
-      const cy = hasGrid ? Math.floor(c / rw) : uv[2 * c + 1]
-      const shape = triangleShape(ax, ay, bx, by, cx, cy)
-      if (shape.minAngleDeg < SLIVER_MIN_ANGLE_DEG || shape.area < areaFloor) continue
-    }
-    kept[k++] = a
-    kept[k++] = b
-    kept[k++] = c
-  }
-  const indices = k === kept.length ? kept : kept.slice(0, k)
+  const indices = cn === candidates.length ? candidates : candidates.slice(0, cn)
   return compact(positions, normals, uv, indices, n)
 }
 
-// The tail shared by every path through finishMesh, whatever pass 2 did (or
-// skipped, I4): fill in a missing normal at a surviving vertex, then compact
-// away any vertex no kept triangle uses.
+// The tail shared by every finishMesh call: fill in a missing normal at a
+// surviving vertex, then compact away any vertex no kept triangle uses.
 function compact(positions: Float64Array, normals: Float64Array, uv: Float64Array, indices: Uint32Array, n: number): FinishedMesh {
   const used = new Uint8Array(n)
   for (let i = 0; i < indices.length; i++) used[indices[i]] = 1

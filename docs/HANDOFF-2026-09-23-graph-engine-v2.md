@@ -735,6 +735,25 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
   never depends on how the domain curves. A mesh whose topology does not
   fit that convention (a hand-built fixture) falls back to raw (u, v)
   units, unchanged from before any grid-step normalisation existed.
+  **Withdrawn in fix round 4.** Round 3's own grid-index reading turned out
+  unsound too, on a mesh an inequality condition (`over ...`) clips: its
+  re-triangulated boundary cells do not carry the two-triangle-per-cell
+  topology the row-width reader assumed, misread as an enormous row width
+  that collapsed every hole-edge triangle onto one row — every one
+  "collinear", so every one dropped (`z = sqrt(x^2+y^2-1) over y <= x` fell
+  from 8890 triangles to 8856). Rather than a fourth reading, the filter
+  itself is gone: `finishMesh` once again only ever drops a triangle
+  touching an invalid vertex or one genuinely degenerate in world space,
+  as it did before V8, at every resolution and on every domain. The
+  reasoning: a real parameterized mesh only ever hands this pass one of
+  `gridIndices`' own two canonical cell triangles, which is always exactly
+  45°/45°/90° in grid-index terms — the filter could only ever misfire on
+  real specs, never actually catch a sliver, at a real cost (~3.7 ms per
+  holed mesh at 128²); and dropping a genuinely clipped boundary triangle
+  opens a gap in the surface, which is worse than the needle it was
+  removing. The origin artefact in "Limits along two paths" that V8 was
+  first written for is now understood as shading near a removed vertex,
+  not a needle — parked for track 5, not fixed here.
 - **Riemann boxes' edges seen through translucent boxes make a busy lattice.**
   **Fixed (V6):** translucent Riemann box edges draw at 0.35 opacity and
   1 px and are excluded from the hidden pass, so the lattice quiets down;
@@ -796,6 +815,14 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
   - **Still open:** a grazing pick ray can pass between march steps near a
     silhouette (S3); a drag could jump behind a surface in rare views (S3) —
     neither is a look-and-feel item, so S6 did not touch either.
+  - **Still open, parked for track 5:** the origin artefact in "Limits along
+    two paths" (V8's own named example) is shading near a removed vertex,
+    not a needle triangle — V8 (dropping a further "sliver" triangle at a
+    hole's boundary) was withdrawn in fix round 4 rather than fixed a
+    fourth time (three rounds of false drops on real specs, and no real
+    spec it ever needed to fire on; see the V8 entry above). Whatever look
+    this example still wants at the origin is a shading question for
+    track 5, not a meshing one.
   - **Still open, and out of scope by the S6 plan:** curves of critical
     points, e.g. the ring (x²+y²−1)², want a "critical curves" feature (S4b
     M4) — seeding from the mesh decides which critical points are found, so

@@ -77,8 +77,10 @@ export function levelMesh(field: LevelField, grid: Grid, level: number): LevelMe
     normals[3 * v + 1] = g[1]
     normals[3 * v + 2] = g[2]
   }
-  // uv is a placeholder (marching tetrahedra has no 2D domain): parameterized: false.
-  const mesh = finishMesh({ positions: iso.positions, normals, uv: new Float64Array(2 * count), indices: iso.indices }, false, false)
+  // uv is a placeholder (marching tetrahedra has no 2D domain) — finishMesh
+  // no longer reads it for anything (S6 fix round 4 withdrew the one pass
+  // that did), so an empty array is simply never touched.
+  const mesh = finishMesh({ positions: iso.positions, normals, uv: new Float64Array(2 * count), indices: iso.indices }, false)
   if (mesh.indices.length === 0) return null
   foldedNormals(mesh.positions, mesh.normals, mesh.indices)
   return { positions: mesh.positions, normals: mesh.normals, indices: mesh.indices }
