@@ -602,7 +602,9 @@ example label without "Space · ", lower-cased, non-alphanumerics to `-`.
   figure example under every `@view`) found only test titles changed.
 
 **Open, for S6 and after** (from the phase ledgers and the integration pass's
-headless shots of every example, light and dark):
+headless shots of every example, light and dark). **S6 (2026-09-30) closed
+every item below** except where marked still open; see its plan,
+`docs/superpowers/plans/2026-09-27-space-s6-visual-polish.md`, for V1–V11:
 
 - **Nothing is broken.** Every one of the 50 space examples draws, in light
   and dark (integration pass, 2026-09-27). What follows is ugly, not wrong.
@@ -612,12 +614,24 @@ headless shots of every example, light and dark):
   a tall empty box with meaningless z ticks. Flat vectors (Projection of u
   onto v) get the opposite: a thin [0, 1] z. S6 should decide what a flat
   scene's box is (a flat box, or no z ticks).
+  **Fixed (V1):** a flat scene gets a thin z box (half-extent 0.15x the
+  larger x/y span under `auto` aspect) with one z tick at the data's value;
+  an authored `@bounds3d z` still wins.
 - **Readouts collide** with tick labels and each other: the two gradient
   readouts run into the x ticks; the half-disc's centroid and area readouts
   overlap; level-curve labels crowd a saddle point. Readouts need the same
   collision layout as tick labels.
+  **Fixed (V2):** one label placer (`ui/labelPlacer.ts`, pure) places every
+  tick, point, readout and contour label by priority (readouts, then point
+  labels, then contour labels, then tick labels); a label that fits nowhere
+  is dropped, except a readout, which always shows via a leader line up to
+  60 px. The corner tick-label duplicate is resolved here too.
 - **S5 readouts print many digits** (`∬ ≈ 25.1327412287`,
   `area ≈ 0.166666666667`): honest to the error estimate, heavy to read.
+  **Fixed (V3):** `formatApprox` caps on-figure annotations at 6 significant
+  digits (hover readouts stay at 4); the error still bounds the digits from
+  above, so this is always a reduction, never a rounding-up. A pinned
+  readout's box can be clicked to show the full supported digits on demand.
 - **A translucent sphere under OIT is a flat tint.** "Lagrange in three
   variables" first showed a flat grey ball: that was a double draw (a
   hand-drawn sphere left from before S4a, coinciding with the tool's own
@@ -625,23 +639,91 @@ headless shots of every example, light and dark):
   (`x^2 + y^2 + z^2 = 9 opacity: 0.35`) reads as a tinted ball with the walls
   showing through; its shading is flat, since OIT averages its front and back
   faces. Not a bug; a look S6 may want to strengthen.
+  **Fixed (V4):** back faces contribute at half weight in the OIT
+  accumulate and the back-face tint is reduced under OIT, so a translucent
+  sphere reads as its own colour; the OIT depth weight's z is normalised by
+  the box's own depth range (closing the S3 M10 parked item below), so
+  nearer layers dominate as intended.
 - **A draggable point is easy to lose**: a small dot on a dark underside
   (Drag a point on a paraboloid, A tangent plane you can drag). Give
   draggable points a halo.
+  **Fixed (V5):** a draggable point draws at 1.5x size with a 2 px
+  background-colour halo and a thin ink ring, and the cursor becomes
+  `grab`/`grabbing` over it; hovered and pinned markers get the same halo,
+  and every point gets a 1 px background-coloured outline so it reads on
+  any surface.
 - **A hole at a pole leaves sliver triangles** (Limits along two paths, at
   the origin).
+  **Fixed (V8):** triangles near a removed (non-finite) vertex whose
+  smallest parameter-space angle is below 3 degrees, or whose area is below
+  1e-4 of a cell, are dropped after the hole is cut; the mesh stays manifold
+  elsewhere ("A pole cut by the box", `z = 1/(x^2+y^2)`).
 - **Riemann boxes' edges seen through translucent boxes make a busy lattice.**
+  **Fixed (V6):** translucent Riemann box edges draw at 0.35 opacity and
+  1 px and are excluded from the hidden pass, so the lattice quiets down;
+  mesh lines generally mix toward the theme's ink (light) or background
+  (dark) at a strength tuned per theme.
 - **Dark theme:** the balance map's neutral centre nearly vanishes (S3,
   parked); grey operands (`project:`, `cross:`) are low-contrast; mesh lines
   mixed toward the light ink are loud.
-- **Parked in the phase ledgers:** OIT depth-weight normalisation (S3 M10); a
-  grazing pick ray can pass between march steps near a silhouette (S3);
-  corner labels (S3); a drag could jump behind a surface in rare views (S3);
-  implicit surfaces cost ~0.5 s per setValue at res 64 (S4a); parametric
-  setValue is 10.8–14.5 ms against an 8 ms budget (S1); curves of critical
-  points, e.g. the ring (x²+y²−1)², want a "critical curves" feature (S4b
-  M4); no committed test of GraphViewer's remount orchestration (S2, needs a
-  jsdom layer).
+  **Fixed (V7):** the balance map's neutral centre is theme-aware (Oklab
+  L ~= 0.62 in dark, 0.92 in light), keeping symmetry; operand and
+  construction grey uses a theme token with at least 3:1 contrast against
+  the background in both themes, checked numerically with the WCAG
+  relative-luminance formula.
+- **Parked in the phase ledgers:**
+  - OIT depth-weight normalisation (S3 M10) — **fixed**, see V4 above.
+  - corner labels (S3) — **fixed**: V2's placer resolves the corner
+    duplicate as part of tick-label thinning.
+  - implicit surfaces cost ~0.5 s per setValue at res 64 (S4a) — **fixed
+    (V11):** held at res/2 while dragging or playing (~11.5 ms vs.
+    59–66 ms at full res), with one full-res rebuild forced on release.
+  - parametric setValue is 10.8–14.5 ms against an 8 ms budget (S1) —
+    **fixed (V11):** 7.1–7.8 ms at 128x128 on the review machine, by sharing
+    subexpressions across r, r_u and r_v through the existing register
+    program (`compileMany`).
+  - **Still open:** a grazing pick ray can pass between march steps near a
+    silhouette (S3); a drag could jump behind a surface in rare views (S3) —
+    neither is a look-and-feel item, so S6 did not touch either.
+  - **Still open, and out of scope by the S6 plan:** curves of critical
+    points, e.g. the ring (x²+y²−1)², want a "critical curves" feature (S4b
+    M4); no committed test of GraphViewer's remount orchestration (S2, needs
+    a jsdom layer).
+
+**What remains for track 5, specific to space** (track 5 is customization and
+UI — theming, textures, line treatments, legends — see the graph spec's
+Track 5 section; S6 only carried space's existing look to a finished state on
+the tokens it already had):
+
+- **The foundation is already there.** Every space colour comes from the
+  host's theme tokens (`resolvePalette`, `space/theme.ts`); no hard-coded hex
+  outside the documented categorical and colormap tables (SP11's S6 row).
+  A theme editor built for the 2D and figure renderers should reach space for
+  free through those same tokens — track 5 should confirm that rather than
+  build a second path.
+- **No legend.** A scene with several coloured curves or marks (The TNB frame
+  of a helix, Velocity and acceleration with components) has no on-figure key
+  tying colour to name. The spec already calls this out as a general gap;
+  space needs it as much as the 2D engine does.
+- **No line treatments.** Space's `gl/` lines are flat-shaded quads; sketch,
+  chalk, tapered or variable-width strokes (track 5's line-treatment
+  candidate scope) have no shader hook yet in `space/gl/`.
+  Same for paper/grid background textures: space draws a plain themed
+  background, with no texture layer.
+  Colormap presets are similarly fixed today (viridis, diverging, etc.);
+  track 5's "series palette control" would need a way to pick or pin one per
+  document.
+- **No marker-style variety.** Every space point is the same disc (S6 gave it
+  a halo and an outline, not a shape); "marker styles per feature kind" would
+  need a new attribute on point marks and a renderer path to draw it.
+- **Categorical colours are contrast-checked, not colorblind-audited.** V7
+  tested contrast for construction grey and the balance map's neutral centre
+  only; the categorical series used for curves, points and vectors has not
+  been audited for a colorblind-safe ordering.
+- **No print/export theme or per-document theme pinning for space.** Space
+  always draws from the live host theme; there is no snapshot or export path
+  that would let a figure look identical wherever it is embedded, the way
+  track 5's per-document pinning intends.
 
 ---
 
