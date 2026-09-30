@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
-import { LIGHT_PALETTE } from '../render/palette'
+import { DARK_PALETTE, LIGHT_PALETTE } from '../render/palette'
 import { EXAMPLES } from '../examples'
+import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { renderFigure } from './render'
 
 // The styled pen, end to end: a spec with a style directive renders through
@@ -204,12 +206,43 @@ describe('a styled page', () => {
     }))
   const LABELLED = EXAMPLES.find((e) => e.label === 'Measured + notation')!.spec
 
+  // A face and a tilt never move a label: at the clean size, every label is
+  // written exactly where clean writes it.
   it('writes labels in the handwriting stack, at exactly their clean anchors', () => {
     const clean = texts(render(LABELLED).svg)
-    const hand = texts(render(`@style: pencil\n@style-tilt: 1\n${LABELLED}`).svg)
+    const hand = texts(render(`@style: pencil\n@style-lettering-size: 1\n@style-tilt: 1\n${LABELLED}`).svg)
     expect(hand.length).toBe(clean.length)
     for (const label of hand) expect(label.family).toMatch(/^Caveat/)
     expect(hand.map(({ text, x, y }) => `${text}@${x},${y}`).sort()).toEqual(clean.map(({ text, x, y }) => `${text}@${x},${y}`).sort())
+  })
+
+  // A lettering SIZE is laid out, not just drawn (review 1): labels are
+  // placed at the size they are written, so a big hand keeps its labels
+  // apart.
+  it('lays labels out at the size it letters them', () => {
+    for (const label of ['Solids on points', 'AIME: a fly on a cone', 'Cube and its net']) {
+      const spec = EXAMPLES.find((e) => e.label === label)!.spec
+      const svg = render(`@style: pencil\n@style-lettering-size: 1.6\n@style-tilt: 0\n${spec}`).svg
+      const boxes = [...svg.matchAll(/<text([^>]*)>([^<]*)<\/text>/g)]
+        .filter((m) => m[1].includes('text-anchor="middle"'))
+        .map((m) => {
+          const size = Number(/font-size="([^"]*)"/.exec(m[1])![1])
+          const x = Number(/\bx="([^"]*)"/.exec(m[1])![1])
+          const y = Number(/\by="([^"]*)"/.exec(m[1])![1])
+          const { width, height } = estimateTextSize(m[2], size)
+          return { size, x0: x - width / 2, x1: x + width / 2, y0: y - height / 2, y1: y + height / 2, text: m[2] }
+        })
+      expect(boxes.length, label).toBeGreaterThan(2)
+      for (const box of boxes) expect(box.size, label).toBeCloseTo(LABEL_FONT_SIZE * 1.6, 9)
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i]
+          const b = boxes[j]
+          const overlap = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 0.5 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 0.5
+          expect(overlap, `${label}: "${a.text}" and "${b.text}"`).toBe(false)
+        }
+      }
+    }
   })
 
   it('tilts each label about its own anchor, by at most four degrees', () => {
@@ -305,4 +338,37 @@ describe('clean with one setting changed', () => {
       expect(clean.some((e) => e.endsWith('9 7'))).toBe(true)
     })
   }
+})
+
+// Review 1, rulings 8 and 10.
+describe('a styled figure in its host', () => {
+  // Read from disk: vitest hands a stylesheet import back empty.
+  const CSS = readFileSync(new URL('../FigureView.css', import.meta.url), 'utf8') as string
+
+  it('marks its root so the view scales every stroke with the zoom; clean is unmarked', () => {
+    expect(render(`@style: pencil\n${TRIANGLE}`).svg).toMatch(/^<svg [^>]*data-style="pencil"/)
+    expect(render(TRIANGLE).svg).not.toMatch(/data-style/)
+    // The non-scaling rule is scoped to unmarked (clean) figures.
+    expect(CSS).toMatch(/svg:not\(\[data-style\]\) \[data-layer\] \*\s*\{\s*vector-effect: non-scaling-stroke;/)
+    expect(CSS).not.toMatch(/\.figure-view-surface svg \[data-layer\] \*/)
+  })
+
+  const figure = (head: string, palette: typeof LIGHT_PALETTE) => {
+    const parsed = parseSpec(`${head}\n@mode: figure\npolygon: A(0,0), B(4,0), C(1,3) color: black\nfill: A-B-C color: blue\nsegment: A-C`)
+    return renderFigure(parsed.statements, parsed.config, palette).svg
+  }
+
+  it('resolves colours against its own light paper in a dark theme', () => {
+    // The ink preset lays off-white paper in either theme, so it draws the
+    // same figure in either: a dark-theme black is not drawn mid-grey on it.
+    for (const preset of ['ink', 'pencil', 'marker']) {
+      expect(figure(`@style: ${preset}`, DARK_PALETTE), preset).toBe(figure(`@style: ${preset}`, LIGHT_PALETTE))
+    }
+  })
+
+  it('follows the host theme when its paper does', () => {
+    for (const paper of ['@style-paper: none', '@style-tint: theme']) {
+      expect(figure(`@style: ink\n${paper}`, DARK_PALETTE), paper).not.toBe(figure(`@style: ink\n${paper}`, LIGHT_PALETTE))
+    }
+  })
 })

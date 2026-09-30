@@ -13,7 +13,8 @@ import type {
 } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
-import { type Palette, themedColor } from '../render/palette'
+import { DARK_PALETTE, LIGHT_PALETTE, type Palette, themedColor } from '../render/palette'
+import { toOklch } from '../style/color'
 import { buildConstructions } from '../scene/geometry/buildConstructions'
 import { isPlotted, isSolidFigureStatement } from '../scene/mode'
 import { type Arc, arcBetween, arcMidpoint, arcPointAt, requireOnCircle } from '../scene/geometry/circles'
@@ -2106,10 +2107,28 @@ export function figureLabelObstacles(statements: Statement[], config: GraphConfi
 export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer): FigureResult {
   const base = baseStyle ? checkLayer(baseStyle) : { layer: {}, errors: [] }
   const style = resolveStyle([base.layer, config.style])
-  const pen = choosePen(style, palette)
-  const { viewBox, errors } = drawFigure(statements, config, palette, pen)
+  const clean = isClean(style)
+  const drawn = clean ? palette : paperPalette(style, palette)
+  const pen = choosePen(style, drawn)
+  const { viewBox, errors } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)
   pen.paper(viewBox)
   return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
+}
+
+// The palette a styled figure's colours resolve against: the one that suits
+// its PAPER. A preset lays its own paper — pencil's is off-white in a dark app
+// as in a light one — so ink, the theme's roles and an author's harmonised
+// "color:" are resolved for a light page on a light paper (a dark-theme
+// "black" would otherwise be drawn mid-grey on off-white), and for a dark page
+// on a dark one. A paper that follows the theme ("none", or a "theme" tint)
+// follows the host's palette, and so does any paper that already suits it —
+// which keeps a light-theme figure exactly as it was.
+function paperPalette(style: Style, palette: Palette): Palette {
+  if (style.paper.type === 'none' || style.paper.tint === 'theme') return palette
+  const light = (hex: string) => toOklch(hex).l >= 0.6
+  const paperIsLight = light(style.paper.tint)
+  if (paperIsLight === light(cssColor(palette.background))) return palette
+  return paperIsLight ? LIGHT_PALETTE : DARK_PALETTE
 }
 
 // Clean resolves to the clean pen, with no exceptions; every other look is
@@ -2122,7 +2141,19 @@ function choosePen(style: Style, palette: Palette): FigurePen {
 // call carrying its identity and layer, in painting order. Returns the
 // viewBox the pen's document should use, and the errors. Exported so a test
 // can watch the calls a figure makes.
-export function drawFigure(statements: Statement[], config: GraphConfig, palette: Palette, pen: FigurePen): { viewBox: Rect; errors: SceneError[] } {
+//
+// `letteringSize` scales every label the figure letters — points, measures,
+// angle captions — and they are LAID OUT at that size, so a style's larger
+// hand lettering keeps its distance from the lines. The givens table keeps
+// its size (a style changes only its face). Clean is 1, which multiplies to
+// exactly the old numbers.
+export function drawFigure(
+  statements: Statement[],
+  config: GraphConfig,
+  palette: Palette,
+  pen: FigurePen,
+  letteringSize = 1
+): { viewBox: Rect; errors: SceneError[] } {
   const { items, errors } = buildItems(statements, config)
   const theme = figureTheme(palette)
 
@@ -2133,7 +2164,8 @@ export function drawFigure(statements: Statement[], config: GraphConfig, palette
   // this, then the viewBox is grown to contain both (E3).
   const geometryRect = geometryBounds(items, projection)
   const obstacles = labelObstacles(items, projection, geometryRect)
-  const { anchors, sources } = labelAnchors(items, projection)
+  const fontSize = LABEL_FONT_SIZE * letteringSize
+  const { anchors, sources } = labelAnchors(items, projection, fontSize)
   const placed = layoutLabels(anchors, obstacles)
 
   const contentRect = unionRects([geometryRect, ...placed.map((label) => label.rect)])
@@ -2158,7 +2190,7 @@ export function drawFigure(statements: Statement[], config: GraphConfig, palette
   // Pass 2 — emit. Infinite lines and rays are clipped here, against the
   // *final* viewBox, because how much of a locus to draw is a fact about the
   // view and not about the figure.
-  for (const item of items) emit(item, projection, viewBox, theme, palette, pen)
+  for (const item of items) emit(item, projection, viewBox, theme, palette, pen, fontSize)
   for (const label of placed) {
     // The anchor id is "<name>#<statement index>" (see labelAnchors), and the
     // source map carries E4's identity through the layout and back out.
@@ -2380,7 +2412,11 @@ interface LabelSource {
 
 function labelAnchors(
   items: readonly FigureItem[],
-  projection: Projection
+  projection: Projection,
+  // The label size the figure is lettered at: LABEL_FONT_SIZE times the
+  // style's lettering size (1 for clean), so a label is laid out at the size
+  // it is drawn.
+  fontSize: number
 ): { anchors: LabelAnchor[]; sources: Map<string, LabelSource> } {
   const anchors: LabelAnchor[] = []
   const sources = new Map<string, LabelSource>()
@@ -2393,7 +2429,7 @@ function labelAnchors(
         id,
         text: item.label,
         at: projection.toView(item.at),
-        fontSize: LABEL_FONT_SIZE,
+        fontSize,
         prefer: item.prefer,
       })
       sources.set(id, { id: item.id, notation: null, color: item.color })
@@ -2401,21 +2437,21 @@ function labelAnchors(
       // One letter at several copies in one statement: the copy keeps the id
       // unique, and the statement stays after the last "#".
       const id = `${item.label}.${item.copy}#${item.id.statement}`
-      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize: LABEL_FONT_SIZE, prefer: item.prefer })
+      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize, prefer: item.prefer })
       sources.set(id, { id: item.id, notation: null, color: item.color })
     } else if (item.kind === 'solidVertex') {
       const id = `${item.label}#${item.id.statement}`
-      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize: LABEL_FONT_SIZE, prefer: item.prefer })
+      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize, prefer: item.prefer })
       sources.set(id, { id: item.id, notation: null, color: item.color })
     } else if (item.kind === 'measureLabel') {
-      const layout = layoutNotation(item.runs, LABEL_FONT_SIZE)
+      const layout = layoutNotation(item.runs, fontSize)
       const at = projection.toView(item.at)
       const id = `${item.id.object ?? ''}#${item.id.statement}`
       anchors.push({
         id,
         text: item.runs.map((run) => run.text).join(''),
         at,
-        fontSize: LABEL_FONT_SIZE,
+        fontSize,
         prefer: item.push,
         // Notation is taller than its own glyphs, and the layout must keep
         // other labels off the overbar, not just off the letters.
@@ -2429,7 +2465,7 @@ function labelAnchors(
   return { anchors, sources }
 }
 
-function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, pen: FigurePen): void {
+function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, pen: FigurePen, fontSize: number): void {
   const to = (p: Vec2) => projection.toView(p)
   const id = key(item.id)
   switch (item.kind) {
@@ -2526,12 +2562,12 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const stroke = strokeColor(item.color, palette.axis, palette)
       pen.stroke({ kind: 'arc', center: vertex, radius, start, end }, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }, id, 'marks')
       const mid = (start + end) / 2
-      const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
+      const at = { x: vertex.x + (radius + fontSize) * Math.cos(mid), y: vertex.y + (radius + fontSize) * Math.sin(mid) }
       pen.text(
         at,
         item.label,
         {
-          'font-size': LABEL_FONT_SIZE,
+          'font-size': fontSize,
           'font-family': FONT_FAMILY,
           fill: theme.label,
           'text-anchor': 'middle',
@@ -2684,12 +2720,12 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       pen.stroke({ kind: 'arc', center: vertex, radius, start, end: start + delta }, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }, id, 'marks')
       if (item.label) {
         const mid = start + delta / 2
-        const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
+        const at = { x: vertex.x + (radius + fontSize) * Math.cos(mid), y: vertex.y + (radius + fontSize) * Math.sin(mid) }
         pen.text(
           at,
           item.label,
           {
-            'font-size': LABEL_FONT_SIZE,
+            'font-size': fontSize,
             'font-family': FONT_FAMILY,
             fill: theme.label,
             'text-anchor': 'middle',
@@ -2730,12 +2766,12 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         // from the arc, along the bisector.
         const anchor = to(item.text.at)
         const push = item.text.push ?? { x: 0, y: 0 }
-        const at = { x: anchor.x + LABEL_FONT_SIZE * push.x, y: anchor.y + LABEL_FONT_SIZE * push.y }
+        const at = { x: anchor.x + fontSize * push.x, y: anchor.y + fontSize * push.y }
         pen.text(
           at,
           item.text.label,
           {
-            'font-size': LABEL_FONT_SIZE,
+            'font-size': fontSize,
             'font-family': FONT_FAMILY,
             fill: theme.label,
             'text-anchor': 'middle',

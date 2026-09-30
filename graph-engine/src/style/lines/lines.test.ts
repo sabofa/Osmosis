@@ -318,6 +318,12 @@ describe('closing a loop', () => {
         swept += Math.atan2(Math.sin(b - a), Math.cos(b - a))
       }
       expect(Math.abs(swept), type).toBeGreaterThan(2 * Math.PI)
+      // The end comes back onto the start's own track (the circle, or a
+      // pencil pass's concentric one), not beside it: an end set off the
+      // track next to the start reads as a tick.
+      const radius = (p: Point) => Math.hypot(p.x - 5, p.y - 5)
+      expect(Math.abs(radius(main[main.length - 1]) - radius(main[0])), type).toBeLessThan(0.05)
+      expect(Math.abs(radius(main[0]) - 60), type).toBeLessThan(0.3 * WIDTH)
     })
   }
 })

@@ -51,7 +51,12 @@
    arithmetic (they are attributes the renderer wrote, and a test can reach
    the numbers); strokes need no bookkeeping at all, because the browser will
    do it given this one declaration. */
-.figure-view-surface svg [data-layer] * {
+/* Only CLEAN figures, though. A styled figure (its <svg> carries data-style,
+   see figure/styledPen.ts) draws many of its lines as filled outlines — ink,
+   brush, dots — which scale with the view whatever this rule says, so its
+   stroked lines scale too: every mark in a styled figure keeps its
+   proportion to every other at any zoom. */
+.figure-view-surface svg:not([data-style]) [data-layer] * {
   vector-effect: non-scaling-stroke;
 }
 

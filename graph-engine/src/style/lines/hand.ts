@@ -44,9 +44,11 @@ export function handDrawn(
   random: Random,
   character: HandCharacter,
   // A loop at looseness 0: the points go round and end where they began, and
-  // stay closed. `runOn: false` drops the overshoot along the end tangents
-  // (a loop continues along its own curve instead; see handChain).
-  options: { loop?: boolean; runOn?: boolean } = {}
+  // stay closed. `onCurve` keeps both ends ON the curve — no overshoot along
+  // the end tangents and no end offsets — for a loop that carries on along
+  // its own curve instead (see handChain): an end set off the curve beside
+  // the start reads as a tick.
+  options: { loop?: boolean; onCurve?: boolean } = {}
 ): Point[] {
   const n = points.length
   if (n < 2) return points.slice()
@@ -60,10 +62,10 @@ export function handDrawn(
   const waver = smoothNoise(random, Math.max(2, Math.min(80, total / character.wavelength)), loop)
   const wobbleSize = wobble * width * (character.budget + 1.6 * looseness)
   const bow = looseness * random.range(-1, 1) * Math.min(0.03 * total, 5 * width)
-  const reach = looseness * (0.9 * width + 0.012 * total)
+  const reach = options.onCurve ? 0 : looseness * (0.9 * width + 0.012 * total)
   const startOffset = { x: random.range(-1, 1) * reach, y: random.range(-1, 1) * reach }
   const endOffset = { x: random.range(-1, 1) * reach, y: random.range(-1, 1) * reach }
-  const run = options.runOn === false ? 0 : looseness * (1.2 * width + 0.02 * total)
+  const run = options.onCurve ? 0 : looseness * (1.2 * width + 0.02 * total)
   const startRun = random.range(-0.35, 1) * run
   const endRun = random.range(-0.35, 1) * run
 
@@ -101,8 +103,9 @@ export function handDrawn(
 //     the caller draws it without ends (no caps, no blots) and it closes
 //     exactly and smoothly;
 //   - above 0 the hand carries on PAST the start, following the curve, for a
-//     short overlap (as a hand closing a circle does), with no overshoot along
-//     a tangent; the run is open and its ends land a little off, as any other.
+//     short overlap (as a hand closing a circle does), both ends on the curve
+//     and no overshoot along a tangent: the looseness shows in the bowing and
+//     the wobble, and the overlap reads as the ink going over itself.
 // `loop` says the chain was closed either way: its ends, where it has any,
 // lie on the curve itself, so a line type does not blot or cap them into a
 // bump at the seam.
@@ -123,7 +126,7 @@ export function handChain(
   const overlap = Math.min(0.2 * total, looseness * (2 * width + 0.06 * total))
   const extended = samples.slice()
   for (let i = 1; i < samples.length && lengths[i] <= overlap; i++) extended.push(samples[i])
-  return { points: handDrawn(extended, width, looseness, wobble, random, character, { runOn: false }), closed: false, loop: true }
+  return { points: handDrawn(extended, width, looseness, wobble, random, character, { onCurve: true }), closed: false, loop: true }
 }
 
 // The sample spacing a line type uses for a stroke of `width`: fine enough

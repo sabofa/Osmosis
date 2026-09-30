@@ -40,14 +40,16 @@ export const PRESETS: Record<PresetName, Look> = {
     colour: { ink: '#1f2a44', saturation: 0.9 },
   },
 
-  // Graphite on rough paper, lettered by hand: two light passes at the base
-  // weight (each pass is thinner than the line, and translucent).
+  // Graphite on rough paper, lettered by hand: two soft passes, a little
+  // heavier than the base weight (each pass is thinner than the line and
+  // translucent, so two of them at 1.25 still read lighter than ink), in a
+  // near-black graphite muted to grey.
   pencil: {
-    line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
-    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.85 },
+    line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
+    fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9 },
     paper: { type: 'rough-paper', tint: '#f6f3ec', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
-    colour: { ink: '#3a3a3c', saturation: 0.4 },
+    colour: { ink: '#232327', saturation: 0.4 },
   },
 
   // A felt-tip on a ruled notebook page: blue marker, scribbled shading,

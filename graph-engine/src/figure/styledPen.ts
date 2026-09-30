@@ -42,7 +42,7 @@ const TEXTURED: readonly FigureLayer[] = ['regions', 'auxiliary', 'primary', 'ma
 // Fill weights (see the pen's fill): shading lines and dots are this much
 // darker than the region's colour, and a solid area is drawn at this
 // fraction of the fill opacity.
-const SHADE_DEPTH = 0.78
+const SHADE_DEPTH = 0.7
 const AREA_WEIGHT = 0.5
 // Shading lines are sampled this far apart (drawing units): they are many and
 // straight, and a figure of hatching would otherwise weigh megabytes.
@@ -138,14 +138,11 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
   let paperMarkup = ''
   let paperDefs: string[] = []
 
-  // A label's group: turned by its seeded tilt (at most 4 degrees) and
-  // scaled by `scale`, both about `anchor`. Neither moves the anchor.
-  const turned = (markup: string, anchor: Vec2, scale: number, id: string): string => {
+  // A label's group, turned by its seeded tilt (at most 4 degrees) about
+  // `anchor`, which the turn does not move.
+  const turned = (markup: string, anchor: Vec2, id: string): string => {
     const tilt = tiltFor(style.lettering.tilt, randomFor(`${id}/tilt`, style.seed))
-    const transforms: string[] = []
-    if (tilt !== 0) transforms.push(`rotate(${fmt(tilt)} ${fmt(anchor.x)} ${fmt(anchor.y)})`)
-    if (scale !== 1) transforms.push(`translate(${fmt(anchor.x)} ${fmt(anchor.y)}) scale(${fmt(scale)}) translate(${fmt(-anchor.x)} ${fmt(-anchor.y)})`)
-    return transforms.length === 0 ? markup : `<g transform="${transforms.join(' ')}">${markup}</g>`
+    return tilt === 0 ? markup : `<g transform="rotate(${fmt(tilt)} ${fmt(anchor.x)} ${fmt(anchor.y)})">${markup}</g>`
   }
 
   // A colour as the style draws it. The theme's ink becomes the style's ink,
@@ -309,16 +306,17 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     // A label in the style's face and size, turned by its seeded tilt about
     // its own anchor — the point the label layout placed it at, which stays
     // exactly where it was.
+    // (Its size is already the style's: render.ts lays labels out at the
+    // lettering size and asks for them at it.)
     text(at, text, attrs, id, layer) {
-      const size = numberOf(attrs['font-size'], 0) * style.lettering.size
-      const element = svgText(at, text, { ...attrs, 'font-size': size || attrs['font-size'], 'font-family': FACES[style.lettering.face], fill: colour(attrs.fill) })
-      layers[layer].push(turned(element, at, 1, id))
+      const element = svgText(at, text, { ...attrs, 'font-family': FACES[style.lettering.face], fill: colour(attrs.fill) })
+      layers[layer].push(turned(element, at, id))
     },
 
-    // A label with notation: the same face, and the same tilt and size about
-    // the middle of its glyph row. The givens table's rows keep their size
-    // (the table was measured at it), so they only change face; their ids
-    // are "givens/…" and "…/cell-N" (render.ts).
+    // A label with notation: the same face, and the same tilt, about the
+    // middle of its glyph row. The givens table's rows are not tilted (a
+    // table is set straight); their ids are "givens/…" and "…/cell-N"
+    // (render.ts).
     notation(layout, origin, notationStyle, id, layer) {
       const inTable = /^givens\/|\/cell-\d+$/.test(id)
       const elements = notationElements(layout, origin, {
@@ -328,7 +326,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
         stroke: notationStyle.stroke === undefined ? undefined : (colour(notationStyle.stroke) ?? notationStyle.stroke),
       })
       if (inTable) layers[layer].push(...elements)
-      else layers[layer].push(turned(elements.join(''), { x: origin.x + layout.width / 2, y: origin.y }, style.lettering.size, id))
+      else layers[layer].push(turned(elements.join(''), { x: origin.x + layout.width / 2, y: origin.y }, id))
     },
 
     // The givens table's box: paper-coloured, its edge drawn in the line type.
@@ -376,7 +374,10 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
       // The content hash that names this figure's ids: of the body, with the
       // placeholders still in it, so it depends on nothing but the figure.
       const prefix = `f${hashString(body).toString(36)}-`
-      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}" preserveAspectRatio="xMidYMid meet">${body.split(ID).join(prefix)}</svg>`
+      // `data-style` marks a styled figure: FigureView scales its strokes
+      // with the zoom, as its filled outlines already do (a clean figure's
+      // strokes keep their width).
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}" preserveAspectRatio="xMidYMid meet" data-style="${style.line.type}">${body.split(ID).join(prefix)}</svg>`
     },
   }
 }
