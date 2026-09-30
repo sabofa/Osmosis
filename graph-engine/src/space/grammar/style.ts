@@ -15,10 +15,6 @@ import { parseExprString } from '../../parser/parseExpr'
 import type { ColormapName } from '../scene/types'
 import type { ColormapClause, SpaceStyle } from './types'
 
-// color and name are the shared clauses; one read here was written before a
-// style clause, where the shared loop cannot strip it, and is refused.
-export type StyleKey = 'opacity' | 'colormap' | 'mesh' | 'res' | 'width' | 'dashed' | 'color' | 'name'
-
 export interface RawClause {
   key: StyleKey
   value: string
@@ -37,6 +33,10 @@ export function unknownColormap(name: string): Error {
 // The keyed clauses (every one but the bare "dashed"), and where one starts
 // in a line: the single list the space grammar reads clauses by.
 export const STYLE_KEYS = ['opacity', 'colormap', 'mesh', 'res', 'width', 'color', 'name'] as const
+// A clause's key: one of STYLE_KEYS, or the bare "dashed". color and name
+// are the shared clauses; one read here was written before a style clause,
+// where the shared loop cannot strip it, and is refused.
+export type StyleKey = (typeof STYLE_KEYS)[number] | 'dashed'
 export const STYLE_CLAUSE_START = new RegExp(String.raw`\s(?:${STYLE_KEYS.join('|')}):|\sdashed(?=\s|$)`)
 
 // Reads the trailing style clauses off `line`, last first, and returns what is

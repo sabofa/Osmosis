@@ -33,7 +33,7 @@ import type { Expr } from '../../../parser/types'
 import { compileMany, compileScalar } from '../../../math/compile'
 import { diff } from '../../../math/diff'
 import { add, call, mul, num, pow, sub, substitute, variable } from '../../../math/expr'
-import { coarse3, integrate3 } from '../../../math/quadrature'
+import { integrate3 } from '../../../math/quadrature'
 import { simplify } from '../../../math/simplify'
 import type { Coordinates3, VolumeSolid } from '../../grammar/keywords/integrals'
 import type { SpaceStyle } from '../../grammar/types'
@@ -41,13 +41,15 @@ import type { LineMark, MeshMark, SceneError } from '../../scene/types'
 import { boundNames, checkBudget, constant, lineStyle, Reads, resolution } from '../common'
 import { finishMesh, gridIndices, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, PreparedStatement } from '../registry'
-import { approxText, attempt, COLLAPSED_REL, errorFloor, part, quadrature, readoutLabel, ROUNDING_REL, type Approx } from './common'
+import { approxText, attempt, COLLAPSED_REL, determined, errorFloor, part, quadrature, readoutLabel, ROUNDING_REL, type Approx } from './common'
 import { exprText } from './exprText'
 import { targetText } from './target'
 
 type Iterated = Extract<VolumeSolid, { kind: 'iterated' }>
 
 export const SOLID_OPACITY = 0.4
+// Two bounds within this fraction of their size of each other meet.
+const MEET_REL = 1e-9
 const FACE_RES = 48
 const EDGE_SEGMENTS = 128
 const EDGE_WIDTH = 1.5
@@ -82,9 +84,14 @@ const XYZ = ['x', 'y', 'z']
 
 // Something that integrates over a solid: every expression compiled once,
 // all integrated together with the current parameter values, each error
-// floored by the integral of |expr| (common.ts).
+// floored by the integral of |expr| (common.ts). Each run also reports the
+// solid's own finite bounding span on x, y and z — never Infinity (S5 fix
+// round 5): a centroid coordinate reads 0 only when it is negligible beside
+// the shape's own size on that axis (centroids.ts, positionOrZero), and an
+// infinite span made that comparison vacuous, printing 0 for a coordinate
+// however far from it the true value actually was.
 export interface PreparedSolid {
-  integrals(exprs: readonly Expr[]): () => Approx[]
+  integrals(exprs: readonly Expr[]): () => { values: Approx[]; extent: readonly [number, number, number] }
 }
 
 // Whether an integrand is written so it cannot be negative (1, or |...|), so
@@ -101,12 +108,15 @@ function orientation(solid: Iterated, a: number, b: number, c: (u: number) => nu
   for (let i = 0; i <= n; i++) {
     const u = a + ((b - a) * i) / n
     const [lo, hi] = [c(u), d(u)]
-    const dm = Math.sign(hi - lo)
-    if (dm !== 0 && Number.isFinite(hi - lo)) signs.middle.add(dm)
+    // Bounds that meet (within rounding of their size) are not crossing: at
+    // the rim of a cone in a sphere, sqrt(x^2 + y^2) and sqrt(2 - x^2 - y^2)
+    // meet, and rounding gives either sign.
+    const meets = (p: number, q: number) => Math.abs(q - p) <= MEET_REL * Math.max(Math.abs(p), Math.abs(q), 1)
+    if (Number.isFinite(hi - lo) && !meets(lo, hi)) signs.middle.add(Math.sign(hi - lo))
     for (let j = 0; j <= n; j++) {
       const v = lo + ((hi - lo) * j) / n
-      const di = g(u, v) - e(u, v)
-      if (Number.isFinite(di) && di !== 0) signs.inner.add(Math.sign(di))
+      const [zlo, zhi] = [e(u, v), g(u, v)]
+      if (Number.isFinite(zhi - zlo) && !meets(zlo, zhi)) signs.inner.add(Math.sign(zhi - zlo))
     }
   }
   if (signs.middle.size > 1) throw new Error(`the bounds of ${middle.param} cross as ${outer.param} runs over its range — split the region where they meet`)
@@ -131,6 +141,10 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
   const jac = jacobian(solid.coords, k)
   const vars = [O.param, M.param, I.param]
   const levels = solid.order.map((r) => ({ name: r.param, lower: exprText(r.from), upper: exprText(r.to) }))
+  // The solid's own coordinate map (compileMap, below): sampled only when a
+  // caller actually reads `extent` (centroids.ts), never for a plain
+  // "volume: ..." readout, which has no use for it.
+  const map = compileMap(solid, context)
   return {
     integrals(exprs) {
       const fs = exprs.map((expr) => {
@@ -145,12 +159,16 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
         const ee = (u: number, v: number) => e(u, v)
         const gg = (u: number, v: number) => g(u, v)
         const sign = orientation(solid, aa, bb, cc, dd, ee, gg)
-        return fs.map(({ f, positive }) => {
+        const values = fs.map(({ f }) => {
           const r = quadrature(levels, () => integrate3((u, v, w) => f(u, v, w), aa, bb, cc, dd, ee, gg))
-          // The scale of the error floor, coarsely (common.ts).
-          const coarse = positive ? r.value : coarse3((u, v, w) => Math.abs(f(u, v, w)), aa, bb, cc, dd, ee, gg)
-          return { value: sign * r.value, error: errorFloor(r.error, Number.isFinite(coarse) ? coarse : 0, ROUNDING_REL) }
+          return { value: sign * r.value, error: errorFloor(r.error, r.absolute, ROUNDING_REL, r.singular), scale: r.absolute, singular: r.singular }
         })
+        return {
+          values,
+          get extent(): [number, number, number] {
+            return mapExtent(map)
+          },
+        }
       }
     },
   }
@@ -186,6 +204,40 @@ const FREE: readonly [number, number][] = [
   [2, 0],
   [0, 1],
 ]
+
+// A cheap finite bounding box for an iterated solid (S5 fix round 5): the
+// six faces of its parameter cube, each sampled at a coarse EXTENT_RES cells
+// a side (as prepareIterated's own drawing bounds are, at its finer FACE_RES
+// — the solid's boundary is where its extreme coordinates lie, so the
+// interior need not be sampled). Only x, y and z's spans are kept; the
+// partials compileMap also returns are unused here.
+const EXTENT_RES = 12
+function mapExtent(map: ReturnType<typeof compileMap>): [number, number, number] {
+  const out = new Float64Array(12)
+  const params = [0, 0, 0]
+  const lo = [Infinity, Infinity, Infinity]
+  const hi = [-Infinity, -Infinity, -Infinity]
+  for (let face = 0; face < 6; face++) {
+    const p = Math.floor(face / 2)
+    const v = face % 2
+    const [q1, q2] = FREE[p]
+    for (let j = 0; j <= EXTENT_RES; j++) {
+      for (let i = 0; i <= EXTENT_RES; i++) {
+        params[p] = v
+        params[q1] = i / EXTENT_RES
+        params[q2] = j / EXTENT_RES
+        map(out, params[0], params[1], params[2])
+        for (let c = 0; c < 3; c++) {
+          const x = out[c]
+          if (!Number.isFinite(x)) continue
+          if (x < lo[c]) lo[c] = x
+          if (x > hi[c]) hi[c] = x
+        }
+      }
+    }
+  }
+  return [0, 1, 2].map((c) => (hi[c] >= lo[c] ? hi[c] - lo[c] : Infinity)) as [number, number, number]
+}
 
 function area(positions: Float64Array, indices: Uint32Array): number {
   let sum = 0
@@ -231,7 +283,7 @@ export function prepareIterated(context: BuildContext, solid: Iterated, style: S
 
   const build = (): BuildResult => {
     const errors: SceneError[] = []
-    const value = attempt(context, errors, () => measure()[0])
+    const value = attempt(context, errors, () => determined(measure().values[0]))
     const out = new Float64Array(12)
     const params = [0, 0, 0]
 

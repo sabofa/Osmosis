@@ -26,7 +26,7 @@ import { checkBudget, Reads, resolution } from '../common'
 import { finishMesh, reversedWinding } from '../mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from '../registry'
 import { SURFACE } from '../surface'
-import { approxText, attempt, COLLAPSED_REL, formOf, part, readoutLabel, type Approx } from './common'
+import { approxText, attempt, COLLAPSED_REL, determined, formOf, part, readoutLabel } from './common'
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
@@ -137,7 +137,7 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     // vertex for vertex.
     const r = region.build(n, n)
     const errors: SceneError[] = []
-    const value = attempt(context, errors, () => r.integrate((a, b) => f(a, b) - g(a, b)))
+    const value = attempt(context, errors, () => determined(r.integrate((a, b) => f(a, b) - g(a, b))))
     if (r.box) {
       surfaceConfig.space.bounds.x = r.box.x
       surfaceConfig.space.bounds.y = r.box.y
@@ -148,11 +148,24 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     const walls = candidates.filter((w): w is MeshMark => w !== null && area(w) > COLLAPSED_REL * size * size)
 
     // f < g anywhere on the floor samples or the boundary, beyond rounding.
+    // S5 breaker follow-up 2: an inequality region's own `samples` array
+    // keeps every grid vertex the box was meshed at, including ones a
+    // clipped-away triangle left behind (a box corner well outside the
+    // curve, never part of any surviving triangle) — scanning those too
+    // could add a large, genuine-looking negative gap from a point that
+    // was never part of the region at all (the dome over x^2+y^2<=4: a
+    // corner (-2.104, -2.104) reads 4 - x^2 - y^2 = -4.86, swamping the
+    // true ~1e-15 floating noise at the actual boundary). Only vertices a
+    // surviving triangle actually references are real samples of the
+    // region; an iterated region's own samples are already every vertex of
+    // its rectangle, all of them used, so this changes nothing there.
+    const used = new Set<number>()
+    for (const idx of r.samples.indices) used.add(idx)
     const gaps: number[] = []
-    for (let v = 0; v < r.samples.a.length; v++) gaps.push(f(r.samples.a[v], r.samples.b[v]) - g(r.samples.a[v], r.samples.b[v]))
+    for (const v of used) gaps.push(f(r.samples.a[v], r.samples.b[v]) - g(r.samples.a[v], r.samples.b[v]))
     for (const piece of r.boundary) for (let k = 0; k < piece.ab.length; k += 2) gaps.push(f(piece.ab[k], piece.ab[k + 1]) - g(piece.ab[k], piece.ab[k + 1]))
     const scale = gaps.reduce((m, d) => (Number.isFinite(d) ? Math.max(m, Math.abs(d)) : m), 0)
-    const crosses = gaps.some((d) => d < -1e-12 * scale)
+    const crosses = gaps.some((d) => d < -1e-9 * scale)
 
     const marks: Mark[] = [...surfaces, ...walls]
     const topMark = surfaces.find((m) => m.source.object === context.source.object)
@@ -180,6 +193,19 @@ function facingDown(mark: Mark): Mark {
   return { ...mark, normals: mark.normals.map((v) => -v), indices: reversedWinding(mark.indices) }
 }
 
+// The span of a sample array (S5 fix round 5): Infinity where empty, never
+// negative — a finite bounding size for a centroid coordinate to be judged
+// negligible against (centroids.ts, positionOrZero).
+function span(values: Float64Array): number {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of values) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  return hi >= lo ? hi - lo : Infinity
+}
+
 // The solid between z = g and z = f over R as something to integrate over
 // (centroid: of a named volume): one triple integral, over R's own ranges
 // then z from g to f, sharing one evaluation budget (or the mesh sum over an
@@ -198,9 +224,25 @@ export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between
         reads.add(expr, ['x', 'y', 'z', 'r', 'theta'])
         return compileScalar(region.coords === 'polar' ? substitute(expr, POLAR_XY) : expr, vars, scope)
       })
-      return (): Approx[] => {
+      return () => {
         const r = region.build(n)
-        return hs.map((h) => r.integrateSolid(h, g, f, [solid.bottom ? solid.bottom.text : '0', solid.top.text]))
+        const values = hs.map((h) => r.integrateSolid(h, g, f, [solid.bottom ? solid.bottom.text : '0', solid.top.text]))
+        // z's own span: the solid runs from g to f at every sample, so its
+        // extreme z is the extreme of both surfaces over every sample point
+        // (the region's own mesh vertices, in its own coordinates).
+        let zlo = Infinity
+        let zhi = -Infinity
+        for (let v = 0; v < r.samples.a.length; v++) {
+          const fz = f(r.samples.a[v], r.samples.b[v])
+          const gz = g(r.samples.a[v], r.samples.b[v])
+          for (const z of [fz, gz]) {
+            if (!Number.isFinite(z)) continue
+            if (z < zlo) zlo = z
+            if (z > zhi) zhi = z
+          }
+        }
+        const extent: [number, number, number] = [span(r.samples.x), span(r.samples.y), zhi >= zlo ? zhi - zlo : Infinity]
+        return { values, extent }
       }
     },
   }

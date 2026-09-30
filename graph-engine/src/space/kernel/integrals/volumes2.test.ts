@@ -74,6 +74,21 @@ describe('volume: the readout and its note', () => {
     expect(text).toMatch(/x < 0 on part of R/)
   })
 
+  // S5 breaker follow-up 2: an inequality region's own mesh keeps every grid
+  // vertex the box was meshed at, not only the ones a surviving (clipped)
+  // triangle actually references — a box corner well outside the curve
+  // (never part of any triangle) reads 4 - x^2 - y^2 far below zero, which
+  // used to be scanned for the sign note alongside the real samples, even
+  // though the integrand is >= 0 everywhere on the actual disc. Restricting
+  // the scan to vertices a surviving triangle references (never a discarded
+  // corner) fixes it; the note is still shown wherever a surface genuinely
+  // dips below its floor.
+  it('never a false "< 0" note from a discarded, out-of-region grid corner (the dome over an inequality disc)', () => {
+    const text = readout(sceneOf('volume: under 4 - x^2 - y^2 over x^2 + y^2 <= 4'), 1).text
+    expect(text).not.toMatch(/< 0 on part of/)
+    expect(Math.abs(approx(text, 'dA') - 8 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  })
+
   it('names a defined function and a named region by their names', () => {
     const scene = sceneOf('f(x, y) = 4 - x^2 - y^2\nD = region r in [0, 2], theta in [0, 2*pi]\nvolume: under f over D')
     expect(scene.errors).toEqual([])

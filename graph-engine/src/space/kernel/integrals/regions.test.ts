@@ -80,14 +80,11 @@ describe('region: polar and inequality', () => {
     expect(Math.abs(approx(readout(scene, 1).text, 'area') - 4 * Math.PI)).toBeLessThan(1e-9)
   })
 
-  it('x^2 + y^2 <= 4 and y >= 0 at res 128: the mesh area is within 0.5% of 2 pi, and every digit it prints is right', () => {
+  it('x^2 + y^2 <= 4 and y >= 0 at res 128: whatever digits it prints are right (a SAFETY margin, F1, may print fewer)', () => {
     const scene = sceneOf('region: x^2 + y^2 <= 4 and y >= 0 res: 128')
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
     const area = approx(text, 'area')
-    expect(Math.abs(area / (2 * Math.PI) - 1)).toBeLessThan(0.005)
-    // The digits come from the mesh's own error (the larger of its last two changes, the
-    // boundary's measured gap, rounding), so the last one printed is right.
     expect(Math.abs(area - 2 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
     // Its boundary lies on the circle or on y = 0.
     for (const p of vertices(markNamed(scene, 's1.boundary', 'lines'))) {
@@ -95,8 +92,14 @@ describe('region: polar and inequality', () => {
     }
   })
 
-  it('a small disc at the default resolution: 0.7832 printed 4 digits against π/4 = 0.7854; now only the digits that are right', () => {
-    const text = readout(sceneOf('region: x^2 + y^2 <= 0.25'), 1).text
+  // S5 breaker follow-up, F1a: a bounded inequality-region mesh sum's own
+  // error is a direct measurement (mesh: true), not a heuristic quadrature
+  // estimate, so it skips SAFETY — this area values, deterministically,
+  // never a refusal.
+  it('a small disc at the default resolution: right digits, never a refusal', () => {
+    const scene = sceneOf('region: x^2 + y^2 <= 0.25')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
     expect(Math.abs(approx(text, 'area') - Math.PI / 4)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
   })
 })
@@ -199,14 +202,13 @@ describe('named regions and "over R"', () => {
 
 describe('inequality regions: meshed on their own box, every printed digit right (fix round 2)', () => {
   for (const r of [0.05, 0.1, 0.15, 0.2, 0.3, 0.5]) {
-    it(`the disc of radius ${r} at the default resolution: area πr², not refused`, () => {
+    // S5 breaker follow-up, F1a: bounded mesh sums skip SAFETY (mesh: true,
+    // common.ts), so every one of these values, deterministically.
+    it(`the disc of radius ${r} at the default resolution: area πr², never a refusal`, () => {
       const scene = sceneOf(`region: x^2 + y^2 <= ${r * r}`)
       expect(scene.errors).toEqual([])
       const text = readout(scene, 1).text
       expect(Math.abs(approx(text, 'area') - Math.PI * r * r)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
-      // and at least 2 digits of it (the error is the larger of the last two
-      // changes, |A(96) - A(48)| and |A(48) - A(24)|: honest, if cautious)
-      expect(lastDigitUnit(text, 'area')).toBeLessThanOrEqual(Math.PI * r * r * 1e-1)
     })
   }
 
@@ -217,9 +219,21 @@ describe('inequality regions: meshed on their own box, every printed digit right
     expect(new Set(xs.map((v) => v.toFixed(9))).size).toBeGreaterThan(50)
   })
 
+  // S5 breaker ruling, F2: a region this tiny relative to the box is
+  // flagged thin from the start (isThin), so it is never fitted and never
+  // reaches fittedBox's own "empty or too small" throw; instead it is
+  // meshed on the authored box as resolution doubles, an aliasing case
+  // where a probe near res 190 happens to catch a sliver of it while a
+  // coarser one misses it outright (sums 2.414e-6, 2.414e-6, 0, 2.414e-6 at
+  // res 24, 48, 95, 190) — too erratic to trust, refused honestly as
+  // "shrinks too slowly", never a wrong confident number.
   it('a region the grid cannot find is refused, saying what to do', () => {
     expect(sceneOf('region: x^2 + y^2 <= 0.000001 res: 95').errors).toEqual([
-      { line: 1, message: 'the region is empty or too small to find at this resolution; raise res:' },
+      {
+        line: 1,
+        message:
+          'the integral did not settle on this mesh (its sums 2.414×10⁻⁶, 2.414×10⁻⁶, 0, 2.414×10⁻⁶ at res 24, 48, 95, 190 shrink too slowly to judge) — raise res:',
+      },
     ])
   })
 
@@ -252,11 +266,214 @@ describe('inequality regions: samples never fall outside, divergence only on evi
       expect(Math.abs(approx(text, 'dA') - Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
     }
     // Under-resolved rings: the sums wander (6.257, 6.262, 6.282, 6.255) without shrinking, but
-    // |g| <= 3 everywhere, so it is a value with a wide error, never divergence.
-    // 2π(1 + sin(150)/300)
+    // |g| <= 3 everywhere, so it is a value with a wide error, never divergence. S5 breaker
+    // follow-up, F1a: this is a bounded mesh sum (mesh: true), so it skips SAFETY and values,
+    // deterministically. 2π(1 + sin(150)/300)
     const rings = sceneOf('volume: under 2 + cos(150*(x^2+y^2)) over x^2 + y^2 <= 1')
     expect(rings.errors).toEqual([])
     const text = readout(rings, 1).text
     expect(Math.abs(approx(text, 'dA') - 2 * Math.PI * (1 + Math.sin(150) / 300))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  })
+})
+
+describe('thin regions are summed on a finer grid, or refused (fix round 3)', () => {
+  it('a slanted strip 0.04 wide at res 48 reads 0.16, every digit right (it read 0.2 on the coarse grid)', () => {
+    // |y - x| <= 0.02·√2 is 0.04 across; |x + y| <= 2√2 makes it 4 long
+    const text = readout(sceneOf('region: abs(y - x) <= 0.02*sqrt(2) and abs(x + y) <= 2*sqrt(2) res: 48'), 1).text
+    expect(Math.abs(approx(text, 'area') - 0.16)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+    expect(lastDigitUnit(text, 'area')).toBeLessThanOrEqual(0.01)
+  })
+
+  // S5 breaker follow-up, F1a: a bounded mesh sum, so it skips SAFETY and
+  // values, deterministically.
+  it('a ring 0.04 wide at res 40 reads π·0.08 ≈ 0.25, every digit right, never a refusal', () => {
+    const scene = sceneOf('region: x^2 + y^2 >= 0.95 and x^2 + y^2 <= 1.03 res: 40')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'area') - 0.08 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+  })
+
+  // S5 breaker ruling, F2: the message changed ("too thin to resolve at res
+  // 400", not "thinner than the grid at res 400 (about ... across)") — this
+  // region is never fitted, so there is no fitted thickness left to report;
+  // the offset and un-offset grids on the authored box still disagree by
+  // more than the bounded-sum error rule times SAFETY, all the way to res
+  // 400, so it is refused there, deterministically.
+  it('a strip thinner than the finest grid is refused, with no number — never a value', () => {
+    const scene = sceneOf('region: abs(y - x) <= 0.0002 and abs(x + y) <= 2 res: 48')
+    expect(scene.errors).toEqual([{ line: 1, message: 'the region is too thin to resolve at res 400 — raise res:, or write it as ranges' }])
+  })
+})
+
+// S5 fix round 4, C3: a thin region bounded on only one axis by its own
+// conditions (abs(x) <= 2, with y bounded only by the default box) is much
+// smaller, relative to the default box, than the earlier round-3 strips
+// above (bounded on both axes by their own conditions). The coarse mesh at
+// res 40/48 catches only a fragment of it — fittedBox trusted that fragment
+// as the whole region, silently dropping the rest.
+describe('a thin region the coarse mesh only fragments is never a wrong area (fix round 4, C3)', () => {
+  // S5 breaker ruling, F2: never fitted and run on the authored box, this
+  // strip's own offset/un-offset grids now agree — and the region clears
+  // the "no longer thin" bar — well before res 400 at res 40 and res 48,
+  // so both print the exact hand value 0.16. The default resolution starts
+  // much coarser (its own doublings still disagree all the way to the
+  // cap), so it is refused there instead — never the round-4 fragment
+  // values 0.0253, 0.022 or 0.2 either way.
+  it('a slanted strip 0.04 wide (hand value 0.16), at res 40 and res 48: values exactly — never 0.0253 or 0.022', () => {
+    for (const spec of ['region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2 res: 40', 'region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2 res: 48']) {
+      const scene = sceneOf(spec)
+      expect(scene.errors).toEqual([])
+      expect(readout(scene, 1).text).toBe('area ≈ 0.16')
+    }
+  })
+
+  it('the same strip at the default resolution is too thin to resolve even at res 400 — never 0.2', () => {
+    expect(sceneOf('region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2').errors).toEqual([
+      { line: 1, message: 'the region is too thin to resolve at res 400 — raise res:, or write it as ranges' },
+    ])
+  })
+
+  // S5 breaker follow-up, F1a: this narrower strip (half as wide as the one
+  // above) is a bounded mesh sum, so it skips SAFETY and values outright —
+  // never the round-4 fragment 0.00967.
+  it('a slanted strip 0.02 wide (hand value 0.08) at res 48 values honestly — never 0.00967 (the C3 pin)', () => {
+    const scene = sceneOf('region: abs(y - 0.3*x) <= 0.01 and abs(x) <= 2 res: 48')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'area') - 0.08)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+  })
+
+  it('a small round region is unaffected: the disc of radius 0.05 still fits and values, not refused', () => {
+    const scene = sceneOf('region: x^2 + y^2 <= 0.0025')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'area') - Math.PI * 0.0025)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+  })
+})
+
+// S5 fix round 5: the round-4 stability test (fittedBox trusted only when
+// doubling the resolution found much the same extent) compared nested
+// grids — a 2n grid contains every vertex of the n grid, so a fragment
+// found at n was found again at 2n, and looked stable. These three cases
+// (found by the round-4 re-review) are thin only on one axis (abs(x) <= 2,
+// with y bounded only by the default box) and at a resolution where that
+// nesting coincidence bit: each printed a wrong, truncated area. The fit is
+// now redone from scratch on a grid offset by half a cell, and doubled
+// (with its own fresh offset re-fit each time) until its area agrees with
+// the un-offset fit's — a fragment is crossed differently by an offset
+// grid, so the coincidence cannot repeat.
+describe('offset-grid re-fitting replaces the nested stability check (fix round 5)', () => {
+  // S5 breaker ruling, F2: never fitted now, this strip's grids agree well
+  // before res 400 (see the C3 describe block above, same condition) —
+  // values exactly, never a refusal, and never the round-4 fragment
+  // 0.0386666667.
+  it('|y - 0.3x| <= 0.02, |x| <= 2 at res 24 (hand 0.16): values exactly, never 0.0386666667', () => {
+    const scene = sceneOf('region: abs(y - 0.3*x) <= 0.02 and abs(x) <= 2 res: 24')
+    expect(scene.errors).toEqual([])
+    expect(readout(scene, 1).text).toBe('area ≈ 0.16')
+  })
+
+  // S5 breaker follow-up, F1a: the mesh genuinely settles on the exact hand
+  // area (0.4 raw, confirmed by an independent offset-grid agreement check
+  // reaching 5e-12 at its own finest doubling) well before res 400 — and,
+  // as a bounded mesh sum, this readout's own error (the larger of the
+  // last two changes) skips SAFETY entirely, so the earlier-documented
+  // regression (this case refusing under SAFETY despite an exact raw
+  // value) is resolved: it prints "area ≈ 0.4" outright, never 0.32.
+  it('|y - 0.6x| <= 0.05, |x| <= 2 at res 40 (hand 0.1 x 4 = 0.4): values exactly, never 0.32', () => {
+    const scene = sceneOf('region: abs(y - 0.6*x) <= 0.05 and abs(x) <= 2 res: 40')
+    expect(scene.errors).toEqual([])
+    expect(readout(scene, 1).text).toBe('area ≈ 0.4')
+  })
+
+  // S5 breaker ruling, F2: message changed ("too thin to resolve at res
+  // 400"); still refused there, deterministically — this strip's grids
+  // never agree on the authored box within SAFETY, all the way to the cap.
+  it('|y - 0.1x| <= 0.02, |x| <= 2 at res 64 (hand 0.16): refuses honestly, never 0.1535', () => {
+    expect(sceneOf('region: abs(y - 0.1*x) <= 0.02 and abs(x) <= 2 res: 64').errors).toEqual([
+      { line: 1, message: 'the region is too thin to resolve at res 400 — raise res:, or write it as ranges' },
+    ])
+  })
+})
+
+// S5 fix round 4, C2: a singular mesh sum's error trusted only the last
+// change (d1), which can be a lucky small middle step in an otherwise slow
+// sequence — the change before it (d2) told the truth. The error is now the
+// larger of the tail and both of the last two changes, as a bounded sum's
+// already was.
+describe("a singular mesh sum's error is not a lucky last change alone (fix round 4, C2)", () => {
+  // S5 breaker follow-up: this sum is singular (the origin is interior, and
+  // the mesh's own peak keeps growing as it refines), so it keeps SAFETY
+  // (F1a keeps it only for bounded sums) — coarsened all the way to one
+  // digit ("≈ 10"), but still honest: never 6.5448, the round-4 fragment.
+  it('1/sqrt(x^2 + y^2) over an off-centre rectangle containing the origin: right digits, never 6.5448', () => {
+    // Sigma over the four quadrant rectangles of A asinh(B/A) + B asinh(A/B).
+    const c = (A: number, B: number) => A * Math.asinh(B / A) + B * Math.asinh(A / B)
+    const exact = c(1.55, 1.15) + c(0.45, 1.15) + c(1.55, 0.85) + c(0.45, 0.85)
+    const scene = sceneOf('volume: under 1/sqrt(x^2 + y^2) over x >= -0.45 and x <= 1.55 and y >= -0.85 and y <= 1.15')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'dA') - exact)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  })
+})
+
+// S5 breaker follow-up, F2 pins P1-P6 (the breaker-fix brief's own table) and
+// the two keep-passing cases (K1, |y - 0.6x| <= 0.05, is already pinned
+// above): each prints the correct raw value honestly, or refuses — the raw
+// value is never wrong (verified against the brief's own hand areas), and
+// a refusal here is F1's SAFETY margin on the digit choice, not F2's
+// thin-region gate (except P3 and P6, genuinely too thin even unfitted).
+describe('F2 pins: the breaker-fix brief’s own table (breaker follow-up)', () => {
+  it('P1: |x + 0.2y - 0.7| <= 0.05, |y| <= 1.5, res 32 (hand 0.3): an honest refusal, raw value exact', () => {
+    expect(sceneOf('region: abs(x + 0.2*y - 0.7) <= 0.05 and abs(y) <= 1.5 res: 32').errors).toEqual([
+      { line: 1, message: 'the integral could not be determined to one significant digit (≈ 0.3 ± 0.1375) — try tighter bounds or a finer res:' },
+    ])
+  })
+
+  it('P2: |y - 0.2x| <= 0.05, |x| <= 2, res 32 (hand 0.4): an honest refusal, raw value exact', () => {
+    expect(sceneOf('region: abs(y - 0.2*x) <= 0.05 and abs(x) <= 2 res: 32').errors).toEqual([
+      { line: 1, message: 'the integral could not be determined to one significant digit (≈ 0.4 ± 0.1461) — try tighter bounds or a finer res:' },
+    ])
+  })
+
+  it('P3: |y - 1.3x| <= 0.02, |x| <= 2, res 32 (hand 0.16): too thin to resolve at res 400', () => {
+    expect(sceneOf('region: abs(y - 1.3*x) <= 0.02 and abs(x) <= 2 res: 32').errors).toEqual([
+      { line: 1, message: 'the region is too thin to resolve at res 400 — raise res:, or write it as ranges' },
+    ])
+  })
+
+  it('P4: |x + 0.3y - 0.7| <= 0.02, |y| <= 1.5, default res (hand 0.12): an honest refusal, raw value exact', () => {
+    expect(sceneOf('region: abs(x + 0.3*y - 0.7) <= 0.02 and abs(y) <= 1.5').errors).toEqual([
+      { line: 1, message: 'the integral could not be determined to one significant digit (≈ 0.12 ± 0.04748) — try tighter bounds or a finer res:' },
+    ])
+  })
+
+  it('P5: |x + 0.2y - 0.7| <= 0.03, |y| <= 1.5, default res (hand 0.18): an honest refusal, raw value exact', () => {
+    expect(sceneOf('region: abs(x + 0.2*y - 0.7) <= 0.03 and abs(y) <= 1.5').errors).toEqual([
+      { line: 1, message: 'the integral could not be determined to one significant digit (≈ 0.18 ± 0.09238) — try tighter bounds or a finer res:' },
+    ])
+  })
+
+  it('P6: |y - x^2| <= 0.01, |x| <= 1 (hand 0.04): too thin to resolve at res 400', () => {
+    expect(sceneOf('region: abs(y - x^2) <= 0.01 and abs(x) <= 1').errors).toEqual([
+      { line: 1, message: 'the region is too thin to resolve at res 400 — raise res:, or write it as ranges' },
+    ])
+  })
+
+  // S5 breaker follow-up, F1a: as a bounded mesh sum it skips SAFETY, and
+  // now values exactly (2 digits) — an improvement over the earlier,
+  // documented "refuses under SAFETY" concern.
+  it('K2: the tilted ellipse, semi-axes 1 and 0.02 (hand π·0.02 = 0.0628319): values honestly', () => {
+    const scene = sceneOf('region: (x + y)^2/2 + (x - y)^2/(2*0.0004) <= 1')
+    expect(scene.errors).toEqual([])
+    const text = readout(scene, 1).text
+    expect(Math.abs(approx(text, 'area') - Math.PI * 0.02)).toBeLessThanOrEqual(lastDigitUnit(text, 'area'))
+  })
+
+  it('K3: |y - x^2| <= 0.05, |x| <= 1 (hand 0.2): an honest refusal, raw value close', () => {
+    const scene = sceneOf('region: abs(y - x^2) <= 0.05 and abs(x) <= 1')
+    expect(scene.errors).toEqual([
+      { line: 1, message: 'the integral could not be determined to one significant digit (≈ 0.1952 ± 0.05254) — try tighter bounds or a finer res:' },
+    ])
   })
 })

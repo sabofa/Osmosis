@@ -23,7 +23,7 @@ import { call, mul, num, variable } from '../../../math/expr'
 import type { LineMark, PointMark, SceneError } from '../../scene/types'
 import { DASH, Reads, resolution } from '../common'
 import { boxOf, type BuildContext, type BuildResult, type BuilderEntry, type PreparedStatement } from '../registry'
-import { approxText, approxTupleText, attempt, floorHeight, formOf, part, readoutLabel, type Approx } from './common'
+import { approxText, approxTupleText, attempt, determined, floorHeight, formOf, IntegralRefusal, part, readoutLabel, type Approx } from './common'
 import { namedShape } from './named'
 import { prepareRegion2 } from './regions'
 import { compileOnRegion } from './target'
@@ -39,7 +39,22 @@ export const ZERO_MASS_REL = 1e-9
 // the floor (a region). Each carries its method's own error: a mesh region's
 // from two resolutions, which also covers its odd moments' grid asymmetry
 // (the half-disc's x̄ comes out 5×10⁻⁵, inside its error, so it reads 0).
-type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean }
+// `extent`: the shape's own finite bounding size along each moment's axis,
+// for a coordinate that is negligible against it (M4) — Infinity only where
+// genuinely unbounded or empty, which leaves positionOrZero inert (S5 fix
+// round 5: a solid's extent used to always read Infinity here, so any
+// coordinate within its own error, however large, printed 0).
+type Measure = () => { mass: Approx; moments: Approx[]; total: number; floor: boolean; extent: number[] }
+
+function span(values: Float64Array): number {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of values) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  return hi >= lo ? hi - lo : Infinity
+}
 
 function prepareMeasure(context: BuildContext, of: string, density: Expr | null, reads: Reads): Measure {
   const { scope, config } = context
@@ -60,8 +75,9 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
       return {
         mass: r.integrate(d),
         moments: [moment(0), moment(1)],
-        total: r.integrate((a, b) => Math.abs(d(a, b)), true).value,
+        total: r.integrate((a, b) => Math.abs(d(a, b))).value,
         floor: true,
+        extent: [span(r.samples.x), span(r.samples.y)],
       }
     }
   }
@@ -69,16 +85,44 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
   const exprs = [delta, ...['x', 'y', 'z'].map((axis) => mul(variable(axis), delta)), call('abs', delta)]
   const run = solid.integrals(exprs)
   return () => {
-    const [mass, mx, my, mz, total] = run()
-    return { mass, moments: [mx, my, mz], total: total.value, floor: false }
+    const { values, extent } = run()
+    const [mass, mx, my, mz, total] = values
+    return { mass, moments: [mx, my, mz], total: total.value, floor: false, extent: [...extent] }
   }
 }
 
-// moment / mass, with the error of a quotient.
-function quotient(moment: Approx, mass: Approx): Approx {
+// moment / mass, with the error of a quotient, and the moment's scale
+// carried over, so a coordinate that is negligible reads ≈ 0 and one known to
+// no digit is refused (common.ts). `mesh` (S5 breaker follow-up 2, matching
+// the check's own reference) ORs, same as `singular`: mass and a moment are
+// built from the same region or solid, each its own settle() call, so in
+// practice they already agree on mesh-ness — but where one leans on a
+// heuristic (singular) and the other does not, this still favours SAFETY on
+// the singular side and the direct measurement on the other, the same
+// asymmetric bias `singular` already has, not a stricter AND that would
+// needlessly re-apply SAFETY to an otherwise-direct mesh error.
+export function quotient(moment: Approx, mass: Approx): Approx {
   const value = moment.value / mass.value
-  if (moment.error === null || mass.error === null) return { value, error: null }
-  return { value, error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value) }
+  return {
+    value,
+    error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value),
+    scale: moment.scale / Math.abs(mass.value),
+    singular: moment.singular || mass.singular,
+    mesh: moment.mesh || mass.mesh,
+  }
+}
+
+// A centroid coordinate is a position, not a general integral: it reads 0
+// when it is within its error and that error is at most this fraction of
+// the shape's own extent on that axis (S5 fix round 4, M4) — the general
+// "≈ 0" rule (common.ts) compares against the integral of |density|, which
+// for an annulus's x̄ near a fixed centre can be far larger than the ring's
+// own diameter, so a position at the float noise floor (6×10⁻¹⁸ ± 1.3×10⁻³)
+// was refused as "not determined" instead of read as 0.
+export const POSITION_ZERO_REL = 1e-3
+
+export function positionOrZero(a: Approx, extent: number): Approx {
+  return Math.abs(a.value) <= a.error && a.error <= POSITION_ZERO_REL * extent ? { value: 0, error: 0, scale: 1 } : a
 }
 
 function prepareCentroid(statement: Statement, context: BuildContext): PreparedStatement {
@@ -95,11 +139,18 @@ function prepareCentroid(statement: Statement, context: BuildContext): PreparedS
     const errors: SceneError[] = []
     const measured = attempt(context, errors, measure)
     if (!measured) return { marks: [], labels: [], errors, colorScale: null }
-    const { mass, moments, total, floor } = measured
+    const { mass, moments, total, floor, extent } = measured
     if (!(Math.abs(mass.value) > ZERO_MASS_REL * total) || !Number.isFinite(mass.value)) {
       throw new Error('the mass is zero; the centre is undefined')
     }
-    const centre = moments.map((m) => quotient(m, mass))
+    let centre: Approx[]
+    try {
+      determined(mass)
+      centre = moments.map((m, i) => determined(positionOrZero(quotient(m, mass), extent[i])))
+    } catch (err) {
+      if (!(err instanceof IntegralRefusal)) throw err
+      return { marks: [], labels: [], errors: [...errors, { line: context.line, message: err.message }], colorScale: null }
+    }
     const p: [number, number, number] = [centre[0].value, centre[1].value, floor ? z0 : centre[2].value]
     const point: PointMark = {
       kind: 'points',

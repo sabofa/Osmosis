@@ -51,14 +51,21 @@ export const QUAD_INNER_MAX_PANELS = 200
 // own value (an inner level chases the digits its value has, not an absolute
 // 1e-12), and never below rounding (QUAD_ROUNDING).
 export const QUAD_REL = 1e-10
-// integrate2 and integrate3: the most integrand evaluations one nested
-// integral may spend, every level included. Running out is "did not settle",
-// never divergence. A smooth triple integral spends tens of thousands; a
-// unit ball in rectangular coordinates, with sqrt at every rim, 430,000; a
-// cone z from sqrt(x^2 + y^2) to 1, 2.7 million; z from 0 to 1/x, found
-// divergent, 1.3 million. Spent in full on compiled integrands it takes
-// about half a second, the most a refusal may cost.
-export const QUAD_BUDGET = 3_000_000
+// The cross-check pass (quadrature.ts, rule 4) runs from one-panel starts to
+// this looser relative target.
+export const QUAD_CHECK_REL = 1e-9
+// integrate2 and integrate3: the most evaluations one integral may spend (a
+// node at any level counts one), every level, pass and rung included.
+// Running out is "did not settle", never divergence. Measured costs are in
+// the S5 fix-round-3 commit.
+export const QUAD_BUDGET = 6_000_000
+// The first rung (QUAD_REL) may spend this share of it; what is left goes to
+// the second, looser rung, whose pass and cross-check run to these targets
+// (a triple integral with two nested kinks, max(x, y, z) over the cube, runs
+// the first rung's 4 million out and settles on the second in 1.2 million).
+export const QUAD_FIRST_RUNG_SHARE = 2 / 3
+export const QUAD_COARSE_REL = 1e-5
+export const QUAD_COARSE_CHECK_REL = 1e-4
 // Where a level that did not settle was refining: its worst panel is reported
 // when at most this fraction of the level's range wide.
 export const QUAD_NARROW_REL = 1e-3
@@ -69,20 +76,53 @@ export const QUAD_ROUNDING = 50 * Number.EPSILON
 // A guarded level that spends its panels with its error still above this
 // fraction of |value| has not settled, and is refused as such.
 export const QUAD_UNSETTLED_REL = 1e-6
-// Divergence, found directly: a panel narrowed to rounding width (this many
-// ulps of the range's magnitude) whose value did not shrink over the last
-// QUAD_DIVERGE_RUN halvings down its line (each keeping at least
-// QUAD_DIVERGE_KEEP of its parent's value) belongs to a singularity that is
-// not integrable. 1/x keeps exactly its value at every halving; an integrable
-// 1/sqrt(x) keeps 0.71 of it; a narrow spike keeps it only until the panel is
-// as narrow as the spike.
-export const QUAD_ROUNDING_WIDTH = 64 * Number.EPSILON
+// Divergence, by decay: halving toward a singular point, each shell shed
+// ([h/2, h]) must shrink for an integrable singularity (x^-p sheds 2^(p-1) of
+// the last, below 1 for p < 1). QUAD_DIVERGE_RUN shells in a row each at
+// least QUAD_DECAY of the one before (1/x sheds exactly ln 2 each time) is
+// divergence. x^-0.999 sheds 0.9993 of the last: not divergence.
 export const QUAD_DIVERGE_RUN = 30
-export const QUAD_DIVERGE_KEEP = 0.999
+export const QUAD_DECAY = 1 - 1e-6
+// A shell's value is only as exact as its nodes: near x, nodes sit within an
+// ulp of x of where they belong, so a shell h wide is noisy to about
+// ulp(x)/h. Shrinking by less than this many times that is not shrinking
+// (sec to the float pi/2: at h = 1e-12 the noise is 1e-4).
+export const QUAD_NODE_NOISE = 64
+// A singular point still unsettled when its panel reaches float resolution
+// (or its integrand overflows) is judged by its shells' ratio: below this,
+// the rest is a geometric tail at most shell * r / (1 - r), its error; at or
+// above it, the rest is too large to judge and the integral is refused as
+// not settling (x^-0.99: 0.993; 1/(x ln^2 x): about 0.998).
+export const QUAD_SLOW_RATIO = 0.9
+// A singular end whose last two shell ratios agree to this fraction has a
+// steady ratio q = 2^(p-1), naming its exponent p; the power rule on a limit
+// (quadrature.ts, rule 7) is then also tried with the m that makes x^-p
+// smooth, m = 1 / (1 - p), up to QUAD_POWER_MAX (x^(-2/3) at 0: m = 3, where
+// halving to 1e-10 would take 100 steps; nearer p = 1 the substitution
+// crowds every node against the limit, and the lineage judges instead).
+export const QUAD_STEADY_REL = 0.1
+export const QUAD_POWER_MAX = 8
+// A shell ratio within this of 1/2 is a regular function's (a constant sheds
+// half of the last shell, a kink or a jump about as much), not a singular
+// end's: x^-p sheds 2^(p-1) > 1/2.
+export const QUAD_REGULAR_BAND = 0.05
+// A lineage around a point inside a panel, narrowed this many halvings onto
+// a number of at most this many significant digits (0, 0.5), is split there.
+export const QUAD_ANCHOR_STEPS = 8
+export const QUAD_ANCHOR_DIGITS = 3
+// A panel this many floats wide or fewer is float resolution: its qk15 nodes
+// can collapse onto one or two values, so its own K - G says nothing near a
+// singular anchor (S5 fix round 4, C1) — its error is floored by its
+// lineage's tail instead, at the end of every level's run, not only for
+// whichever panel happened to be worst.
+export const QUAD_ANCHOR_FLOATS = 64
 // A divergence found within this fraction of the range of a limit is placed
 // at the limit (exp(1/x) overflows at x = 0.0011, but it is 0 that is wrong).
 export const QUAD_DIVERGE_NEAR_REL = 1e-2
-
+// At most this many splits at infinite interior nodes per level.
+export const QUAD_POLE_SPLITS = 16
+// A NaN at a node whose neighbours agree to this is a removable point.
+export const QUAD_REMOVABLE_REL = 1e-6
 // K10 — an inequality domain's boundary crossing is refined by bisection along
 // the grid edge until the bracket is shorter than this fraction of the edge.
 export const BISECTION_REL = 1e-10
@@ -91,3 +131,15 @@ export const BISECTION_REL = 1e-10
 // fraction of its longest edge squared: two coincident vertices give exactly
 // zero, and a real sliver is many orders above it.
 export const DEGENERATE_REL = 1e-14
+
+// S5 breaker ruling — space/kernel/integrals/common.ts (digits) and
+// regions.ts (thin-region agreement): an adaptive quadrature or mesh-sum
+// error estimate is heuristic (a decay ratio, a mismatch measure, the
+// spread between two partitions), not a certified bound, and five review
+// rounds of narrower rules kept finding new kinks it still missed by a
+// wide margin depending on how the domain happened to partition — measured
+// up to 29x short of the true error (∬|x−y| over [0,4]×[0,1]: the stated
+// error was 2.55e-11, the true error 7.38e-10). Rather than chase another
+// specific rule, every place that reads an error to decide what to show,
+// or whether two meshes agree, multiplies it by this margin first.
+export const S5_SAFETY = 100

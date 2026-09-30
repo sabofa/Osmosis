@@ -78,12 +78,16 @@ export function polylines(mark: LineMark): [number, number, number][][] {
 }
 
 // The unit of the last digit of the number after "<name> ≈ " in a readout:
-// "area ≈ 6.28" gives 0.01, "≈ 0.8" gives 0.1, "≈ 4" gives 1.
+// "area ≈ 6.28" gives 0.01, "≈ 0.8" gives 0.1, "≈ 4" gives 1, and "≈ 30" 10
+// (a whole number's trailing zeros are not digits it claims: 3×10¹).
+// S5 breaker ruling, F3: half the full unit, matching common.ts's own rule
+// that the error must cover at most half a unit of the last digit shown —
+// a tighter, more honest tolerance for tests that use this as a bound.
 export function lastDigitUnit(text: string, name: string): number {
   const at = text.indexOf(`${name} ${APPROX} `)
   const match = /^[−-]?(\d+)(?:\.(\d+))?/.exec(text.slice(at + name.length + 3))
   if (at < 0 || !match) throw new Error(`no number after "${name} ${APPROX}" in "${text}"`)
-  return match[2] ? 10 ** -match[2].length : 1
+  return (match[2] ? 10 ** -match[2].length : 10 ** (/[1-9](0*)$/.exec(match[1])?.[1].length ?? 0)) / 2
 }
 
 // Each triangle's winding normal, (b - a) x (c - a), with its centroid.
