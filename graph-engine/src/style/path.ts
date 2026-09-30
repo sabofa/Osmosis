@@ -134,11 +134,14 @@ export function cumulative(points: readonly Point[]): number[] {
 }
 
 // The unit normal at each point, to the LEFT of travel (in y-down drawing
-// coordinates that is (dy, -dx)), from the neighbours on either side.
-export function normalsOf(points: readonly Point[]): Point[] {
+// coordinates that is (dy, -dx)), from the neighbours on either side. A
+// CLOSED run (its last point repeating its first) wraps round the seam, so
+// the normal there is the same from both sides.
+export function normalsOf(points: readonly Point[], closed = false): Point[] {
+  const n = points.length
   return points.map((_, i) => {
-    const a = points[Math.max(0, i - 1)]
-    const b = points[Math.min(points.length - 1, i + 1)]
+    const a = closed && n > 2 && i === 0 ? points[n - 2] : points[Math.max(0, i - 1)]
+    const b = closed && n > 2 && i === n - 1 ? points[1] : points[Math.min(n - 1, i + 1)]
     const dx = b.x - a.x
     const dy = b.y - a.y
     const length = Math.hypot(dx, dy)
@@ -164,13 +167,19 @@ export function endTangents(points: readonly Point[]): { start: Point; end: Poin
 // written as cubic Béziers. It passes through each sample, so a curve through
 // samples of an arc stays on the arc at every sample; between them it bows by
 // far less than a stroke width at the spacings the line types use.
-export function smoothThrough(points: readonly Point[]): Piece[] {
+//
+// A CLOSED run (its last point repeating its first) takes its neighbours
+// across the seam, so the curve leaves the start in the direction it arrives
+// at the end: no corner where a loop closes.
+export function smoothThrough(points: readonly Point[], closed = false): Piece[] {
   const pieces: Piece[] = []
-  for (let i = 0; i + 1 < points.length; i++) {
-    const p0 = points[Math.max(0, i - 1)]
+  const n = points.length
+  const wrap = closed && n > 3
+  for (let i = 0; i + 1 < n; i++) {
+    const p0 = wrap && i === 0 ? points[n - 2] : points[Math.max(0, i - 1)]
     const p1 = points[i]
     const p2 = points[i + 1]
-    const p3 = points[Math.min(points.length - 1, i + 2)]
+    const p3 = wrap && i + 2 > n - 1 ? points[1] : points[Math.min(n - 1, i + 2)]
     pieces.push({
       kind: 'cubic',
       from: p1,

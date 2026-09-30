@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { randomFor } from '../random'
-import { pointOn, polylineChain, type Chain } from '../path'
+import { pieceLength, pointOn, polylineChain, type Chain } from '../path'
 import { LINE_TYPES, type LineSettings, type LineType, type Point } from '../tokens'
 import { LINES } from './index'
 import type { Primitive } from './types'
@@ -33,23 +33,35 @@ const settingsFor = (type: LineType, overrides: Partial<LineSettings> = {}): Lin
 const draw = (type: LineType, chain: Chain, overrides: Partial<LineSettings> = {}, identity = 's1/AB/0') =>
   LINES[type].draw({ chain, width: WIDTH, settings: settingsFor(type, overrides), random: randomFor(identity, 0) })
 
-// Every point the output puts on the page's centre lines: a stroke's start and
-// each piece's end (and, for an exact arc, points along it), a shape's spine,
-// a dot's centre.
+// Every point the output puts on the page's centre lines, sampled DENSELY: a
+// stroke's start and eight points along every piece (the curve between
+// samples, not only its ends — review 1), a shape's spine and the midpoint of
+// each spine step, a dot's centre.
 function points(primitives: readonly Primitive[]): Point[] {
   const out: Point[] = []
   for (const p of primitives) {
     if (p.kind === 'stroke') {
       out.push(p.start)
-      for (const piece of p.pieces) {
-        if (piece.kind === 'arc' || piece.kind === 'ellipticalArc') for (let i = 1; i <= 8; i++) out.push(pointOn(piece, i / 8))
-        else out.push(piece.to)
-      }
-    } else if (p.kind === 'shape') out.push(...p.spine)
-    else out.push(...p.dots.map((d) => d.at))
+      for (const piece of p.pieces) for (let i = 1; i <= 8; i++) out.push(pointOn(piece, i / 8))
+    } else if (p.kind === 'shape') {
+      p.spine.forEach((s, i) => {
+        out.push(s)
+        if (i > 0) out.push({ x: (s.x + p.spine[i - 1].x) / 2, y: (s.y + p.spine[i - 1].y) / 2 })
+      })
+    } else out.push(...p.dots.map((d) => d.at))
   }
   return out
 }
+
+// Distance to an ellipse (or an arc of one), by a fine sampling of the true
+// curve: 4000 points is far finer than any tolerance tested here.
+function distanceToEllipse(p: Point, piece: Extract<Chain['pieces'][number], { kind: 'ellipticalArc' }>): number {
+  let best = Infinity
+  for (let i = 0; i <= 4000; i++) best = Math.min(best, near(p, pointOn(piece, i / 4000)))
+  return best
+}
+
+const ELLIPSE: Chain = { pieces: [{ kind: 'ellipticalArc', center: { x: 10, y: -5 }, rx: 110, ry: 45, rotation: -0.35, start: 0, end: 2 * Math.PI }], closed: true }
 
 const near = (p: Point, q: Point) => Math.hypot(p.x - q.x, p.y - q.y)
 
@@ -106,6 +118,21 @@ describe('every line type', () => {
       it('keeps a whole circle on its circle at looseness 0', () => {
         const out = points(draw(type, CIRCLE))
         for (const p of out) expect(Math.abs(Math.hypot(p.x - 5, p.y - 5) - 60)).toBeLessThanOrEqual(WIDTH / 2)
+      })
+
+      it('keeps an elliptical arc (a rim) on its ellipse at looseness 0', () => {
+        const piece = RIM.pieces[0]
+        if (piece.kind !== 'ellipticalArc') throw new Error('rim')
+        const out = points(draw(type, RIM))
+        expect(Math.min(...out.map((p) => near(p, pointOn(piece, 0))))).toBeLessThanOrEqual(EPS)
+        expect(Math.min(...out.map((p) => near(p, pointOn(piece, 1))))).toBeLessThanOrEqual(EPS)
+        for (const p of out) expect(distanceToEllipse(p, piece)).toBeLessThanOrEqual(WIDTH / 2)
+      })
+
+      it('keeps a whole ellipse on its ellipse at looseness 0', () => {
+        const piece = ELLIPSE.pieces[0]
+        if (piece.kind !== 'ellipticalArc') throw new Error('ellipse')
+        for (const p of points(draw(type, ELLIPSE))) expect(distanceToEllipse(p, piece)).toBeLessThanOrEqual(WIDTH / 2)
       })
 
       it('strays measurably at looseness 1', () => {
@@ -220,5 +247,102 @@ describe('the six line types are six algorithms', () => {
     const dust = out.find((p) => p.kind === 'dots')
     expect(dust?.kind === 'dots' && dust.dots.length).toBeGreaterThan(10)
     expect(LINES.chalk.texture(settingsFor('chalk'))?.name).toBe('chalk')
+  })
+})
+
+// Closing a loop (controller's visual finding V2): a circle drawn by hand
+// must not show a notch or tick where the stroke's start meets its end.
+describe('closing a loop', () => {
+  // The centre-line runs of a line type's output, densely sampled: each
+  // stroke on its own, each shape's spine.
+  const runs = (primitives: readonly Primitive[]): { points: Point[]; closed: boolean }[] =>
+    primitives.flatMap((p) => {
+      if (p.kind === 'stroke') {
+        const out = [p.start]
+        for (const piece of p.pieces) {
+          const count = Math.max(8, Math.ceil(pieceLength(piece) / 2))
+          for (let i = 1; i <= count; i++) out.push(pointOn(piece, i / count))
+        }
+        return [{ points: out, closed: p.closed === true }]
+      }
+      if (p.kind === 'shape') return [{ points: p.spine, closed: near(p.spine[0], p.spine[p.spine.length - 1]) <= EPS }]
+      return []
+    })
+  const direction = (a: Point, b: Point) => Math.atan2(b.y - a.y, b.x - a.x)
+  const turn = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)))
+  // The turns between consecutive steps of a run, and — for a closed run —
+  // the turn across its seam.
+  const turns = (run: { points: Point[]; closed: boolean }) => {
+    const steps = run.points.slice(1).map((p, i) => direction(run.points[i], p)).filter((_, i) => near(run.points[i], run.points[i + 1]) > 1e-6)
+    const along: number[] = []
+    for (let i = 1; i < steps.length; i++) along.push(turn(steps[i - 1], steps[i]))
+    const seam = run.closed && steps.length > 1 ? turn(steps[steps.length - 1], steps[0]) : 0
+    return { along, seam }
+  }
+  const sharpest = (run: { points: Point[]; closed: boolean }) => {
+    const { along, seam } = turns(run)
+    return Math.max(seam, ...along)
+  }
+
+  for (const type of LINE_TYPES) {
+    it(`${type} closes a circle and an ellipse exactly and smoothly at looseness 0`, () => {
+      for (const chain of [CIRCLE, ELLIPSE]) {
+        const out = draw(type, chain)
+        // No ends at all: no blots, no caps, every whole stroke closed.
+        if (type !== 'chalk') expect(out.filter((p) => p.kind === 'dots'), type).toEqual([])
+        for (const p of out) {
+          if (p.kind === 'shape') expect(p.outline.length, `${type}: a closed ribbon has no end caps`).toBe(2 * p.spine.length)
+        }
+        const closedRuns = runs(out).filter((r) => r.closed)
+        if (type !== 'chalk') expect(closedRuns.length, type).toBeGreaterThan(0)
+        for (const run of closedRuns) {
+          // The seam turns no more sharply than the curve does anywhere else.
+          const { along, seam } = turns(run)
+          expect(seam, `${type}: the seam is no corner`).toBeLessThanOrEqual(1.25 * Math.max(...along) + 0.01)
+        }
+        if (chain === CIRCLE) for (const run of runs(out)) expect(sharpest(run), `${type}: no corner anywhere on a circle`).toBeLessThan(0.12)
+      }
+    })
+
+    it(`${type} closes a circle above looseness 0 by overlapping along the curve, not with a tick`, () => {
+      const out = draw(type, CIRCLE, { looseness: 0.6, wobble: 0 })
+      expect(out.filter((p) => p.kind === 'dots' && type !== 'chalk')).toEqual([])
+      for (const run of runs(out)) expect(sharpest(run), type).toBeLessThan(0.2)
+      if (type === 'technical' || type === 'chalk') return
+      // The main run goes all the way round and on past its start.
+      const main = runs(out)[0].points
+      let swept = 0
+      for (let i = 1; i < main.length; i++) {
+        const a = Math.atan2(main[i - 1].y - 5, main[i - 1].x - 5)
+        const b = Math.atan2(main[i].y - 5, main[i].x - 5)
+        swept += Math.atan2(Math.sin(b - a), Math.cos(b - a))
+      }
+      expect(Math.abs(swept), type).toBeGreaterThan(2 * Math.PI)
+    })
+  }
+})
+
+// Technical is clean's line (review 1): it keeps the caller's ends and dashes.
+describe('the technical line', () => {
+  it('keeps the cap it is given, and none when it is given none', () => {
+    const capOf = (cap?: 'round' | 'butt' | 'square') => {
+      const [out] = LINES.technical.draw({ chain: SEGMENT, width: WIDTH, settings: settingsFor('technical'), random: randomFor('t', 0), ...(cap ? { cap } : {}) })
+      return out.kind === 'stroke' ? (out.cap ?? 'none') : 'not a stroke'
+    }
+    expect(capOf('round')).toBe('round')
+    expect(capOf('square')).toBe('square')
+    expect(capOf()).toBe('none')
+  })
+
+  it('dashes natively, as one stroke with the pattern', () => {
+    expect(LINES.technical.nativeDash).toBe(true)
+    const out = LINES.technical.draw({ chain: SEGMENT, width: WIDTH, settings: settingsFor('technical'), random: randomFor('t', 0), dash: [9, 7] })
+    expect(out).toHaveLength(1)
+    expect(out[0].kind === 'stroke' && out[0].dash).toEqual([9, 7])
+  })
+
+  it('closes a loop with the path itself', () => {
+    const out = LINES.technical.draw({ chain: CIRCLE, width: WIDTH, settings: settingsFor('technical'), random: randomFor('t', 0) })
+    expect(out[0].kind === 'stroke' && out[0].closed).toBe(true)
   })
 })

@@ -1,6 +1,6 @@
 import { smoothNoise } from '../random'
-import { cumulative, sampleChain } from '../path'
-import { handDrawn, ribbon, sampleStep } from './hand'
+import { cumulative } from '../path'
+import { handChain, ribbon, sampleStep } from './hand'
 import type { LineType, Primitive, StrokeInput } from './types'
 
 // BRUSH — a calligraphic stroke. A broad nib held at a fixed angle: the
@@ -21,22 +21,25 @@ const PEAK = 1.3
 const WAVELENGTH = 55
 
 function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, step ?? sampleStep(width))
-  const spine = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.3 })
+  const { points: spine, closed } = handChain(chain, step ?? sampleStep(width), width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.3 })
+  const n = spine.length
   const lengths = cumulative(spine)
-  const total = lengths[lengths.length - 1] || 1
-  const pressure = smoothNoise(random, Math.max(2, spine.length / 8))
+  const total = lengths[n - 1] || 1
+  const pressure = smoothNoise(random, Math.max(2, n / 8), closed)
   const exponent = 0.25 + 1.25 * settings.taper
   const half = spine.map((_, i) => {
-    const a = spine[Math.max(0, i - 1)]
-    const b = spine[Math.min(spine.length - 1, i + 1)]
+    // A loop's neighbours wrap round the seam, so its width does not jump there.
+    const a = closed && i === 0 ? spine[n - 2] : spine[Math.max(0, i - 1)]
+    const b = closed && i === n - 1 ? spine[1] : spine[Math.min(n - 1, i + 1)]
     const direction = Math.atan2(b.y - a.y, b.x - a.x)
     const nib = 0.15 + 0.85 * Math.abs(Math.sin(direction - NIB))
     const t = lengths[i] / total
-    const swell = Math.pow(Math.max(0, Math.sin(Math.PI * t)), exponent)
+    // A loop at looseness 0 has no ends to taper to points: its width is the
+    // nib's alone, all the way round.
+    const swell = closed ? 1 : Math.pow(Math.max(0, Math.sin(Math.PI * t)), exponent)
     return width * PEAK * nib * swell * (1 + 0.35 * settings.variation * pressure(t))
   })
-  return [{ kind: 'shape', outline: ribbon(spine, half), spine, opacity: settings.opacity }]
+  return [{ kind: 'shape', outline: ribbon(spine, half, closed), spine, opacity: settings.opacity }]
 }
 
 export const brush: LineType = {

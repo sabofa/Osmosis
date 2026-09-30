@@ -260,3 +260,49 @@ describe('a styled page', () => {
     expect(svg).not.toMatch(/data-layer="paper"/)
   })
 })
+
+// Review 1: an author can ask for the finest spacing over the whole figure.
+// Each region has a mark budget (style/fills/region.ts), so the reviewer's
+// worst cases — which were 3 to 4.5 MB — stay under a megabyte.
+describe('the mark budget', () => {
+  const SQUARE = '@mode: figure\npolygon: A(0,0), B(4,0), C(4,4), D(0,4)\nfill: A-B-C-D'
+  const DISK = '@mode: figure\nM = (0, 0)\nO = circle M, 2\nfill: circle O'
+  const CASES: [string, string][] = [
+    ['chalk crosshatch on a square', `@style: pencil\n@style-line: chalk\n@style-fill: crosshatch\n@style-fill-spacing: 3\n${SQUARE}`],
+    ['chalk crosshatch on a disk', `@style: pencil\n@style-line: chalk\n@style-fill: crosshatch\n@style-fill-spacing: 3\n${DISK}`],
+    ['ink stipple on a square', `@style: ink\n@style-fill: stipple\n@style-fill-spacing: 3\n${SQUARE}`],
+    ['pencil, three passes, crosshatch', `@style: pencil\n@style-passes: 3\n@style-fill: crosshatch\n@style-fill-spacing: 3\n${SQUARE}`],
+    ['ink scribble on a square', `@style: ink\n@style-fill: scribble\n@style-fill-spacing: 3\n${SQUARE}`],
+  ]
+
+  for (const [name, spec] of CASES) {
+    it(`keeps ${name} at spacing 3 under a megabyte`, () => {
+      const result = render(spec)
+      expect(result.errors).toEqual([])
+      expect(result.svg.length, name).toBeLessThan(1024 * 1024)
+    })
+  }
+})
+
+// Review 1: technical is clean's line. Clean with one other setting changed
+// keeps clean's line ends and its native dashes, element for element.
+describe('clean with one setting changed', () => {
+  const ends = (svg: string) =>
+    elements(svg, ['auxiliary', 'primary', 'marks']).length > 0
+      ? [...svg.slice(svg.indexOf('data-layer="regions"')).matchAll(/<(line|path|polyline|circle)\b([^>]*)>/g)]
+          .filter((m) => /\bstroke="#/.test(m[2]))
+          .map((m) => `${/stroke-linecap="([^"]*)"/.exec(m[2])?.[1] ?? '-'} ${/stroke-dasharray="([^"]*)"/.exec(m[2])?.[1] ?? '-'}`)
+          .sort()
+      : []
+
+  for (const label of ['Constructions', 'Cylinder and cone', 'Solved triangle']) {
+    it(`keeps every line end and dash of ${label}`, () => {
+      const spec = EXAMPLES.find((e) => e.label === label)!.spec
+      const clean = ends(render(spec).svg)
+      const graph = ends(render(`@style-paper: graph\n${spec}`).svg)
+      expect(clean.length).toBeGreaterThan(3)
+      expect(graph).toEqual(clean)
+      expect(clean.some((e) => e.endsWith('9 7'))).toBe(true)
+    })
+  }
+})

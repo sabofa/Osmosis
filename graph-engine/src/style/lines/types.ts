@@ -26,6 +26,12 @@ export interface StrokeInput {
   // type's own (hand.ts's sampleStep): shading lines, which are many, long
   // and straight, are drawn with fewer samples to keep a figure's markup small.
   step?: number
+  // The caller's line cap, for a line type that keeps the caller's ends
+  // (technical); the sketchy types choose their own.
+  cap?: 'round' | 'butt' | 'square'
+  // A dash pattern, given only to a line type that dashes natively
+  // (LineType.nativeDash); every other type is handed its dashes one by one.
+  dash?: readonly number[]
 }
 
 export type Primitive =
@@ -37,7 +43,14 @@ export type Primitive =
       pieces: Piece[]
       width: number
       opacity: number
-      cap: 'round' | 'butt' | 'square'
+      // Absent: the renderer's default (butt).
+      cap?: 'round' | 'butt' | 'square'
+      // Round joins for a hand-drawn line; absent keeps the default.
+      join?: 'round'
+      // A native dash pattern (technical).
+      dash?: readonly number[]
+      // The path closes on its start (a loop at looseness 0): no ends.
+      closed?: boolean
       // Overlaps darken, as felt-tip ink does where two strokes cross.
       blend?: 'multiply'
     }
@@ -61,4 +74,7 @@ export interface Texture {
 export interface LineType {
   draw(input: StrokeInput): Primitive[]
   texture(settings: LineSettings): Texture | null
+  // Whether it dashes itself from a pattern (StrokeInput.dash) rather than
+  // being handed each dash as its own stroke.
+  nativeDash?: boolean
 }

@@ -1,4 +1,4 @@
-import { boundsOfPolygons, insideRegion, regionPolygons } from './region'
+import { boundsOfPolygons, hatchLength, insideRegion, MARK_BUDGET, regionPolygons } from './region'
 import type { FillType } from './types'
 
 // STIPPLE — the region shaded with dots, the engraver's way.
@@ -12,7 +12,11 @@ export const stipple: FillType = {
   draw({ outline, settings, random }) {
     const polygons = regionPolygons(outline)
     const box = boundsOfPolygons(polygons)
-    const step = settings.spacing
+    // About one dot per spacing squared of area (the area is the hatch
+    // length at that spacing times the spacing); past the budget the grid
+    // opens out until the count fits.
+    const expected = hatchLength(polygons, 0, settings.spacing) / settings.spacing
+    const step = expected > MARK_BUDGET.dots ? settings.spacing * Math.sqrt(expected / MARK_BUDGET.dots) : settings.spacing
     const dots: { at: { x: number; y: number }; r: number }[] = []
     for (let y = Math.floor(box.minY / step) * step; y <= box.maxY + step; y += step) {
       for (let x = Math.floor(box.minX / step) * step; x <= box.maxX + step; x += step) {

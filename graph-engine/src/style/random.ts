@@ -60,10 +60,13 @@ export function randomFor(identity: string, seed = 0): Random {
 
 // Smooth value noise over [0, 1]: `knots` random values in [-1, 1], evenly
 // spaced, joined by cosine interpolation. Continuous, bounded by 1, and cheap —
-// the long, gentle waver of a hand-drawn line rather than jitter.
-export function smoothNoise(random: Random, knots: number): (t: number) => number {
+// the long, gentle waver of a hand-drawn line rather than jitter. PERIODIC
+// noise ends where it began (and, cosine-joined, flat there), for a line that
+// goes round a loop and meets itself.
+export function smoothNoise(random: Random, knots: number, periodic = false): (t: number) => number {
   const count = Math.max(2, Math.round(knots))
   const values = Array.from({ length: count + 1 }, () => random.range(-1, 1))
+  if (periodic) values[count] = values[0]
   return (t: number) => {
     const x = Math.min(1, Math.max(0, t)) * count
     const i = Math.min(count - 1, Math.floor(x))

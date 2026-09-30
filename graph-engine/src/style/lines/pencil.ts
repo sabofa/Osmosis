@@ -1,5 +1,5 @@
-import { normalsOf, sampleChain, smoothThrough } from '../path'
-import { handDrawn, sampleStep } from './hand'
+import { normalsOf, smoothThrough } from '../path'
+import { handChain, sampleStep } from './hand'
 import type { LineType, Primitive, StrokeInput } from './types'
 
 // PENCIL — graphite. Two or three light passes laid over one another, each a
@@ -16,27 +16,30 @@ import type { LineType, Primitive, StrokeInput } from './types'
 const WAVELENGTH = 24
 
 function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, step ?? sampleStep(width))
   const out: Primitive[] = []
   for (let pass = 0; pass < settings.passes; pass++) {
-    const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.25 })
+    const { points: line, closed } = handChain(chain, step ?? sampleStep(width), width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.25 })
     // Each pass sits a seeded distance to one side, along the whole stroke
-    // but easing to nothing at the ends when the hand is tight.
+    // but easing to nothing at the ends when the hand is tight. A closed loop
+    // has no ends: its pass keeps its distance all the way round.
     const side = random.range(-0.22, 0.22) * width * (1 + 2 * settings.looseness)
-    const normals = normalsOf(line)
+    const normals = normalsOf(line, closed)
     const n = line.length
     const shifted = line.map((p, i) => {
       const t = n === 1 ? 0 : i / (n - 1)
-      const ease = (1 - settings.looseness) * Math.sin(Math.PI * t) + settings.looseness
+      const ease = closed ? 1 : (1 - settings.looseness) * Math.sin(Math.PI * t) + settings.looseness
       return { x: p.x + normals[i].x * side * ease, y: p.y + normals[i].y * side * ease }
     })
+    if (closed) shifted[n - 1] = shifted[0]
     out.push({
       kind: 'stroke',
       start: shifted[0],
-      pieces: smoothThrough(shifted),
+      pieces: smoothThrough(shifted, closed),
       width: width * (0.62 + 0.2 * settings.variation * random.range(-1, 1)),
       opacity: settings.opacity * (0.72 + 0.18 * random.next()),
       cap: 'round',
+      join: 'round',
+      ...(closed ? { closed: true } : {}),
     })
   }
   return out

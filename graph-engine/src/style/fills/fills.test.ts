@@ -3,7 +3,7 @@ import { randomFor } from '../random'
 import { pointOn, polylineChain, type Chain } from '../path'
 import { FILL_TYPES, type FillSettings, type FillType } from '../tokens'
 import { FILLS } from './index'
-import { insideRegion, regionPolygons } from './region'
+import { insideRegion, MARK_BUDGET, regionPolygons } from './region'
 import type { FillMark } from './types'
 
 // The seven fills, held to their rules: marks inside the region (the hole of
@@ -119,5 +119,33 @@ describe('hatching', () => {
     const count = (marks: FillMark[]) => (marks[0].kind === 'dots' ? marks[0].dots.length : 0)
     expect(count(dense) / count(sparse)).toBeGreaterThan(3)
     expect(count(dense) / count(sparse)).toBeLessThan(5)
+  })
+})
+
+// The mark budget (review 1): a region may hold at most MARK_BUDGET of
+// shading, whatever spacing is asked for; past it the spacing opens out.
+describe('the mark budget', () => {
+  const BIG: Chain[] = [polylineChain([{ x: 0, y: 0 }, { x: 640, y: 0 }, { x: 640, y: 640 }, { x: 0, y: 640 }, { x: 0, y: 0 }], true)]
+  const length = (marks: FillMark[]) =>
+    marks.reduce((sum, m) => sum + (m.kind === 'lines' ? m.chains.reduce((s, c) => s + c.pieces.reduce((t, p) => t + Math.hypot(pointOn(p, 1).x - pointOn(p, 0).x, pointOn(p, 1).y - pointOn(p, 0).y), 0), 0) : 0), 0)
+
+  it('opens a hatch out to the budget, and no further', () => {
+    for (const type of ['hatch', 'crosshatch', 'scribble'] as const) {
+      const total = length(fill(type, BIG, { spacing: 3 }))
+      expect(total, type).toBeLessThanOrEqual(MARK_BUDGET.length * 1.02)
+      expect(total, type).toBeGreaterThan(MARK_BUDGET.length * 0.8)
+    }
+  })
+
+  it('leaves a region inside the budget at its own spacing', () => {
+    // 200 x 200 at spacing 10 is twenty lines, 4000 units: untouched.
+    expect(length(fill('hatch', SQUARE, { spacing: 10, angle: 0 }))).toBeCloseTo(200 * 20, 6)
+  })
+
+  it('caps stipple dots', () => {
+    const marks = fill('stipple', BIG, { spacing: 3 })
+    const dots = marks[0].kind === 'dots' ? marks[0].dots.length : 0
+    expect(dots).toBeLessThanOrEqual(MARK_BUDGET.dots * 1.1)
+    expect(dots).toBeGreaterThan(MARK_BUDGET.dots * 0.7)
   })
 })

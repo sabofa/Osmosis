@@ -1,8 +1,8 @@
 import { chainLength, chainStart, type Chain, type Piece } from '../path'
 import type { LineType, Primitive, StrokeInput } from './types'
 
-// TECHNICAL — the draughtsman's line: uniform width, crisp, square-ended, and
-// never wobbly. It is clean's line, and it lets any other look keep precise
+// TECHNICAL — the draughtsman's line: uniform width, crisp, with the ends
+// and dashes the figure asked for, and never wobbly. It is clean's line, and it lets any other look keep precise
 // lines (pencil shading with technical outlines, say).
 //
 // Built as the exact geometry itself: straight pieces stay straight and arcs
@@ -36,9 +36,24 @@ function extend(pieces: readonly Piece[], startBy: number, endBy: number): Piece
   return out
 }
 
-function draw({ chain, width, settings, random }: StrokeInput): Primitive[] {
+// The caller's ends and dashes are kept (review 1): technical is clean's line,
+// so clean with one other setting changed — graph paper, say — keeps clean's
+// round ends and its native "9 7" dashes rather than turning square and being
+// re-cut. A loop closes on itself.
+function draw({ chain, width, settings, random, cap, dash }: StrokeInput): Primitive[] {
   const pieces = runOn(chain, width, settings.looseness, random)
-  return [{ kind: 'stroke', start: chainStart({ pieces, closed: chain.closed }), pieces, width, opacity: settings.opacity, cap: 'square' }]
+  return [
+    {
+      kind: 'stroke',
+      start: chainStart({ pieces, closed: chain.closed }),
+      pieces,
+      width,
+      opacity: settings.opacity,
+      ...(cap ? { cap } : {}),
+      ...(dash && dash.length > 0 ? { dash } : {}),
+      ...(chain.closed ? { closed: true } : {}),
+    },
+  ]
 }
 
 // Each end's overshoot: always forward, never short, so a technical line
@@ -52,4 +67,5 @@ function runOn(chain: Chain, width: number, looseness: number, random: StrokeInp
 export const technical: LineType = {
   draw,
   texture: () => null,
+  nativeDash: true,
 }

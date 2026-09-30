@@ -1,5 +1,5 @@
 import { smoothNoise, type Random } from '../random'
-import { cumulative, endTangents, normalsOf } from '../path'
+import { cumulative, endTangents, normalsOf, sampleChain, type Chain } from '../path'
 import type { Point } from '../tokens'
 
 // The hand: how a drawn line strays from the true one. Shared by the sketchy
@@ -26,31 +26,51 @@ export interface HandCharacter {
   budget: number
 }
 
-export function handDrawn(points: readonly Point[], width: number, looseness: number, wobble: number, random: Random, character: HandCharacter): Point[] {
+// How far along a run a point is allowed to move, 0 to 1. On an open run at
+// looseness 0 it is pinned at both ends (sin πt) and free as looseness grows.
+// On a LOOP at looseness 0 it is sin² πt: zero at the seam AND flat there, so
+// the two sides of the seam meet with one tangent — no corner, no notch.
+export function envelopeAt(t: number, looseness: number, loop: boolean): number {
+  const arch = Math.sin(Math.PI * t)
+  if (loop) return arch * arch
+  return (1 - looseness) * arch + looseness
+}
+
+export function handDrawn(
+  points: readonly Point[],
+  width: number,
+  looseness: number,
+  wobble: number,
+  random: Random,
+  character: HandCharacter,
+  // A loop at looseness 0: the points go round and end where they began, and
+  // stay closed. `runOn: false` drops the overshoot along the end tangents
+  // (a loop continues along its own curve instead; see handChain).
+  options: { loop?: boolean; runOn?: boolean } = {}
+): Point[] {
   const n = points.length
   if (n < 2) return points.slice()
   const lengths = cumulative(points)
   const total = lengths[n - 1]
   if (total === 0) return points.slice()
-  const normals = normalsOf(points)
+  const loop = options.loop === true
+  const normals = normalsOf(points, loop)
   const tangents = endTangents(points)
 
-  const waver = smoothNoise(random, Math.max(2, Math.min(80, total / character.wavelength)))
+  const waver = smoothNoise(random, Math.max(2, Math.min(80, total / character.wavelength)), loop)
   const wobbleSize = wobble * width * (character.budget + 1.6 * looseness)
   const bow = looseness * random.range(-1, 1) * Math.min(0.03 * total, 5 * width)
   const reach = looseness * (0.9 * width + 0.012 * total)
   const startOffset = { x: random.range(-1, 1) * reach, y: random.range(-1, 1) * reach }
   const endOffset = { x: random.range(-1, 1) * reach, y: random.range(-1, 1) * reach }
-  const run = looseness * (1.2 * width + 0.02 * total)
+  const run = options.runOn === false ? 0 : looseness * (1.2 * width + 0.02 * total)
   const startRun = random.range(-0.35, 1) * run
   const endRun = random.range(-0.35, 1) * run
 
-  return points.map((p, i) => {
+  const out = points.map((p, i) => {
     const t = lengths[i] / total
     const arch = Math.sin(Math.PI * t)
-    // Pinned at the ends at looseness 0; free to move there as it grows.
-    const envelope = (1 - looseness) * arch + looseness
-    const across = wobbleSize * envelope * waver(t) + bow * arch
+    const across = wobbleSize * envelopeAt(t, looseness, loop) * waver(t) + bow * arch
     const a = (1 - t) * (1 - t)
     const b = t * t
     let x = p.x + normals[i].x * across + startOffset.x * a + endOffset.x * b
@@ -65,6 +85,45 @@ export function handDrawn(points: readonly Point[], width: number, looseness: nu
     }
     return { x, y }
   })
+  // A loop closes on its first point exactly, not on a rounding of it.
+  if (loop) out[n - 1] = out[0]
+  return out
+}
+
+// A whole chain drawn by hand, sampled every `step`.
+//
+// An open chain is handDrawn as it is. A CLOSED chain (a circle, a rim) is
+// where a naive hand leaves a notch: the stroke's two ends meet at the seam
+// with different tangents, and an overshoot along the end tangent pokes out
+// as a tick. So:
+//   - at looseness 0 the loop is drawn as a loop — wobble flat at the seam,
+//     normals and smoothing wrapped round it — and `closed` comes back true:
+//     the caller draws it without ends (no caps, no blots) and it closes
+//     exactly and smoothly;
+//   - above 0 the hand carries on PAST the start, following the curve, for a
+//     short overlap (as a hand closing a circle does), with no overshoot along
+//     a tangent; the run is open and its ends land a little off, as any other.
+// `loop` says the chain was closed either way: its ends, where it has any,
+// lie on the curve itself, so a line type does not blot or cap them into a
+// bump at the seam.
+export function handChain(
+  chain: Chain,
+  step: number,
+  width: number,
+  looseness: number,
+  wobble: number,
+  random: Random,
+  character: HandCharacter
+): { points: Point[]; closed: boolean; loop: boolean } {
+  const samples = sampleChain(chain, step)
+  if (!chain.closed) return { points: handDrawn(samples, width, looseness, wobble, random, character), closed: false, loop: false }
+  if (looseness === 0) return { points: handDrawn(samples, width, 0, wobble, random, character, { loop: true }), closed: true, loop: true }
+  const lengths = cumulative(samples)
+  const total = lengths[lengths.length - 1]
+  const overlap = Math.min(0.2 * total, looseness * (2 * width + 0.06 * total))
+  const extended = samples.slice()
+  for (let i = 1; i < samples.length && lengths[i] <= overlap; i++) extended.push(samples[i])
+  return { points: handDrawn(extended, width, looseness, wobble, random, character, { runOn: false }), closed: false, loop: true }
 }
 
 // The sample spacing a line type uses for a stroke of `width`: fine enough
@@ -79,11 +138,16 @@ export function sampleStep(width: number): number {
 // Laid out as the left side forward, the end cap, the right side back, the
 // start cap — so `outline[i]` is the left edge beside `spine[i]` for every i,
 // and a zero half-width at an end makes that end a point.
-export function ribbon(spine: readonly Point[], half: readonly number[]): Point[] {
-  const normals = normalsOf(spine)
+//
+// A CLOSED spine (a loop, its last point its first) has no ends: no caps, and
+// normals wrapped round the seam. Its left side forward and right side back
+// make one ring, which the nonzero fill rule fills as a band with a hole.
+export function ribbon(spine: readonly Point[], half: readonly number[], closed = false): Point[] {
+  const normals = normalsOf(spine, closed)
   const n = spine.length
   const left = spine.map((p, i) => ({ x: p.x + normals[i].x * half[i], y: p.y + normals[i].y * half[i] }))
   const right = spine.map((p, i) => ({ x: p.x - normals[i].x * half[i], y: p.y - normals[i].y * half[i] }))
+  if (closed) return [...left, ...right.reverse()]
   // Half a turn from one side to the other about the spine's end, bulging
   // along the direction of travel there. In y-down coordinates the travel
   // direction is the left normal turned a quarter turn the positive way.

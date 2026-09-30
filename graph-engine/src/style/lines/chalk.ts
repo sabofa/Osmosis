@@ -1,5 +1,5 @@
-import { cumulative, normalsOf, sampleChain, smoothThrough } from '../path'
-import { handDrawn, sampleStep } from './hand'
+import { cumulative, normalsOf, smoothThrough } from '../path'
+import { handChain, sampleStep } from './hand'
 import type { LineType, Primitive, StrokeInput } from './types'
 
 // CHALK — a stick of chalk dragged across a board. The line skips: it breaks
@@ -15,8 +15,7 @@ import type { LineType, Primitive, StrokeInput } from './types'
 const WAVELENGTH = 30
 
 function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, (step ?? sampleStep(width)) * 0.7)
-  const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
+  const { points: line, closed } = handChain(chain, (step ?? sampleStep(width)) * 0.7, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
   const lengths = cumulative(line)
   const total = lengths[lengths.length - 1]
   const n = line.length
@@ -44,16 +43,33 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
   }
   if (runs.length === 0) runs.push([0, n - 1])
 
-  const out: Primitive[] = runs
-    .filter(([a, b]) => b > a)
-    .map(([a, b]) => {
-      const run = line.slice(a, b + 1)
-      return { kind: 'stroke' as const, start: run[0], pieces: smoothThrough(run), width: width * (1.15 + 0.25 * random.next()), opacity: settings.opacity * 0.85, cap: 'round' as const }
-    })
+  // A closed loop has no ends, so its seam must not be one: the run ending
+  // at the seam carries straight on into the run starting there (or, with
+  // no lift at all, the loop is one closed stroke).
+  const kept = runs.filter(([a, b]) => b > a)
+  const points = kept.map(([a, b]) => line.slice(a, b + 1))
+  let whole = false
+  if (closed && kept.length === 1 && kept[0][0] === 0 && kept[0][1] === n - 1) whole = true
+  else if (closed && kept.length > 1 && kept[0][0] === 0 && kept[kept.length - 1][1] === n - 1) {
+    const last = points.pop()!
+    points[0] = [...last, ...points[0].slice(1)]
+  }
+  const out: Primitive[] = points.map((run) => ({
+    kind: 'stroke' as const,
+    start: run[0],
+    pieces: smoothThrough(run, whole),
+    width: width * (1.15 + 0.25 * random.next()),
+    opacity: settings.opacity * 0.85,
+    cap: 'round' as const,
+    join: 'round' as const,
+    ...(whole ? { closed: true } : {}),
+  }))
 
   // Dust: specks within the stroke's own width, more of them with grain.
-  const normals = normalsOf(line)
-  const count = Math.max(12, Math.round((total / 4) * (0.3 + settings.grain)))
+  const normals = normalsOf(line, closed)
+  // A few specks at least, and more with length and grain — no fixed floor,
+  // which on a region of short hatch lines would be mostly dust.
+  const count = Math.max(3, Math.round((total / 4) * (0.3 + settings.grain)))
   const dots: { at: { x: number; y: number }; r: number }[] = []
   for (let d = 0; d < count; d++) {
     const at = random.range(0, total)

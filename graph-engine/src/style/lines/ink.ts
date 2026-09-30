@@ -1,6 +1,6 @@
 import { smoothNoise } from '../random'
 import { sampleChain, smoothThrough } from '../path'
-import { handDrawn, ribbon, sampleStep } from './hand'
+import { handChain, handDrawn, ribbon, sampleStep } from './hand'
 import type { LineType, Primitive, StrokeInput } from './types'
 
 // INK — a fountain pen. The line wavers slowly (a long wavelength: the hand,
@@ -18,21 +18,26 @@ import type { LineType, Primitive, StrokeInput } from './types'
 const WAVELENGTH = 70
 
 function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, step ?? sampleStep(width))
-  const spine = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.35 })
-  const pressure = smoothNoise(random, Math.max(2, samples.length / 6))
+  const stepSize = step ?? sampleStep(width)
+  const samples = sampleChain(chain, stepSize)
+  const { points: spine, closed, loop } = handChain(chain, stepSize, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.35 })
+  // A closed loop's pressure comes round to where it started, and it has no
+  // ends to thin or to blot.
+  const pressure = smoothNoise(random, Math.max(2, samples.length / 6), closed)
   const n = spine.length
   const half = spine.map((_, i) => {
     const t = n === 1 ? 0 : i / (n - 1)
-    const ends = Math.min(1, Math.min(t, 1 - t) * 6)
+    const ends = closed ? 1 : Math.min(1, Math.min(t, 1 - t) * 6)
     const thinning = 1 - 0.6 * settings.taper * (1 - ends)
     return (width / 2) * (1 + 0.55 * settings.variation * pressure(t)) * thinning
   })
-  const out: Primitive[] = [{ kind: 'shape', outline: ribbon(spine, half), spine, opacity: settings.opacity }]
+  const out: Primitive[] = [{ kind: 'shape', outline: ribbon(spine, half, closed), spine, opacity: settings.opacity }]
 
   // The pool where the nib landed and lifted: a touch wider than the line.
-  const blot = (i: number) => ({ at: spine[i], r: half[i] * (1.05 + 0.25 * settings.grain) })
-  out.push({ kind: 'dots', dots: [blot(0), blot(n - 1)], opacity: settings.opacity * 0.85 })
+  if (!loop) {
+    const blot = (i: number) => ({ at: spine[i], r: half[i] * (1.05 + 0.25 * settings.grain) })
+    out.push({ kind: 'dots', dots: [blot(0), blot(n - 1)], opacity: settings.opacity * 0.85 })
+  }
 
   // The occasional second pass: likelier the tighter the hand, never on a
   // stroke too short to go over.
@@ -48,7 +53,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
       const length = Math.hypot(b.x - a.x, b.y - a.y) || 1
       return { x: p.x + ((b.y - a.y) / length) * side, y: p.y - ((b.x - a.x) / length) * side }
     })
-    out.push({ kind: 'stroke', start: offset[0], pieces: smoothThrough(offset), width: width * 0.45, opacity: settings.opacity * 0.7, cap: 'round' })
+    out.push({ kind: 'stroke', start: offset[0], pieces: smoothThrough(offset), width: width * 0.45, opacity: settings.opacity * 0.7, cap: 'round', join: 'round' })
   }
   return out
 }

@@ -1,5 +1,5 @@
-import { sampleChain, smoothThrough } from '../path'
-import { handDrawn, sampleStep } from './hand'
+import { smoothThrough } from '../path'
+import { handChain, sampleStep } from './hand'
 import type { LineType, Primitive, StrokeInput } from './types'
 
 // MARKER — a felt-tip. A thick, round-ended, slightly see-through line: where
@@ -14,13 +14,26 @@ import type { LineType, Primitive, StrokeInput } from './types'
 const WAVELENGTH = 60
 
 function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
-  const samples = sampleChain(chain, step ?? sampleStep(width))
-  const line = handDrawn(samples, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
+  const { points: line, closed, loop } = handChain(chain, step ?? sampleStep(width), width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
   // Markers write wide: the base weight, made felt-tip thick.
   const thick = width * 1.45 * (1 + 0.15 * settings.variation * random.range(-1, 1))
   const n = line.length
+  const stroke: Primitive = {
+    kind: 'stroke',
+    start: line[0],
+    pieces: smoothThrough(line, closed),
+    width: thick,
+    opacity: settings.opacity * 0.82,
+    cap: 'round',
+    join: 'round',
+    blend: 'multiply',
+    ...(closed ? { closed: true } : {}),
+  }
+  // A loop has no ends to blot: at looseness 0 it closes on itself, and above
+  // it its ends overlap on the curve, where the doubled ink already darkens.
+  if (loop) return [stroke]
   return [
-    { kind: 'stroke', start: line[0], pieces: smoothThrough(line), width: thick, opacity: settings.opacity * 0.82, cap: 'round', blend: 'multiply' },
+    stroke,
     {
       kind: 'dots',
       dots: [

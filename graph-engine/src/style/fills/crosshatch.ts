@@ -1,4 +1,5 @@
 import { hatchFamily } from './hatch'
+import { MARK_BUDGET } from './region'
 import type { FillType } from './types'
 
 // CROSSHATCH — two hatch families a quarter turn apart: `angle`, then
@@ -6,6 +7,12 @@ import type { FillType } from './types'
 
 export const crosshatch: FillType = {
   draw: (input) => ({
-    marks: [{ kind: 'lines', chains: [...hatchFamily(input, input.settings.angle), ...hatchFamily(input, input.settings.angle + 90)] }],
+    // Two families, each with half the region's mark budget.
+    marks: [
+      {
+        kind: 'lines',
+        chains: [...hatchFamily(input, input.settings.angle, MARK_BUDGET.length / 2), ...hatchFamily(input, input.settings.angle + 90, MARK_BUDGET.length / 2)],
+      },
+    ],
   }),
 }

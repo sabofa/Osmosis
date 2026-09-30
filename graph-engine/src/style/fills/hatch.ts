@@ -1,5 +1,5 @@
 import { polylineChain, type Chain } from '../path'
-import { regionPolygons, scanlines, scanPoint } from './region'
+import { MARK_BUDGET, regionPolygons, scanlines, scanPoint, spacingWithin } from './region'
 import type { FillInput, FillType } from './types'
 
 // HATCH — parallel lines at `angle`, `spacing` apart, drawn in the current
@@ -12,9 +12,14 @@ import type { FillInput, FillType } from './types'
 // line a whole number of spacings from the origin), so two touching regions
 // hatch as one.
 
-export function hatchFamily({ outline, settings }: Pick<FillInput, 'outline' | 'settings'>, angle: number): Chain[] {
+//
+// `budget` is this family's share of the region's mark budget (region.ts):
+// past it the spacing opens out until the family fits.
+export function hatchFamily({ outline, settings }: Pick<FillInput, 'outline' | 'settings'>, angle: number, budget = MARK_BUDGET.length): Chain[] {
   const chains: Chain[] = []
-  for (const line of scanlines(regionPolygons(outline), angle, settings.spacing)) {
+  const polygons = regionPolygons(outline)
+  const spacing = spacingWithin(polygons, angle, settings.spacing, budget)
+  for (const line of scanlines(polygons, angle, spacing)) {
     for (const [from, to] of line.intervals) chains.push(polylineChain([scanPoint(angle, line.offset, from), scanPoint(angle, line.offset, to)]))
   }
   return chains

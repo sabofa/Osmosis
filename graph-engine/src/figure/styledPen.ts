@@ -1,7 +1,7 @@
 import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
 import { deepen, saturate } from '../style/color'
-import { LINES, type Primitive, type Texture } from '../style/lines'
+import { LINES, type Primitive, type StrokeInput, type Texture } from '../style/lines'
 import { dashPolyline, polylineChain, sampleChain, type Chain, type Piece } from '../style/path'
 import { hashString, randomFor } from '../style/random'
 import { textureFilter } from '../style/textures'
@@ -162,12 +162,13 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     switch (primitive.kind) {
       case 'stroke':
         return `<path${attributes({
-          d: pathData(primitive.start, primitive.pieces),
+          d: pathData(primitive.start, primitive.pieces) + (primitive.closed ? ' Z' : ''),
           fill: 'none',
           stroke: paint,
           'stroke-width': primitive.width,
           'stroke-linecap': primitive.cap,
-          'stroke-linejoin': 'round',
+          'stroke-linejoin': primitive.join,
+          'stroke-dasharray': primitive.dash ? primitive.dash.map(dp).join(' ') : null,
           opacity: Math.min(1, primitive.opacity * opacity),
           style: primitive.blend ? `mix-blend-mode:${primitive.blend}` : null,
           ...identity,
@@ -181,8 +182,8 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
 
   // A chain through the line type. `key` is the element's identity plus
   // which piece of it this is — the random source's seed string.
-  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line, step?: number): Primitive[] =>
-    line.draw({ chain, width, settings, random: randomFor(key, style.seed), step })
+  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line, step?: number, extra: Pick<StrokeInput, 'cap' | 'dash'> = {}): Primitive[] =>
+    line.draw({ chain, width, settings, random: randomFor(key, style.seed), step, ...extra })
 
   // Textures a fill asks for (a wash's blotches, its soft rim), and the clip
   // paths that keep fill marks inside their regions — all written into
@@ -216,10 +217,20 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     const opacity = numberOf(attrs.opacity, 1)
     const pattern = typeof attrs['stroke-dasharray'] === 'string' ? attrs['stroke-dasharray'].split(/[\s,]+/).map(Number).filter(Number.isFinite) : []
     const identity = identityOf(attrs)
+    const linecap = attrs['stroke-linecap']
+    const cap = linecap === 'round' || linecap === 'butt' || linecap === 'square' ? linecap : undefined
     chains.forEach((chain, c) => {
+      // A line type that dashes natively (technical) gets the whole chain and
+      // the pattern, and keeps the caller's ends; every other is handed its
+      // dashes one by one.
+      if (line.nativeDash) {
+        const dash = pattern.length > 0 ? pattern.map((p) => p * Math.max(1, style.line.width)) : undefined
+        for (const primitive of drawChain(chain, width, `${id}#${c}`, style.line, undefined, { cap, dash })) layers[layer].push(write(primitive, paint, opacity, identity))
+        return
+      }
       const parts = pattern.length > 0 ? dashes(chain, pattern) : [chain]
       parts.forEach((part, d) => {
-        for (const primitive of drawChain(part, width, `${id}#${c}.${d}`)) layers[layer].push(write(primitive, paint, opacity, identity))
+        for (const primitive of drawChain(part, width, `${id}#${c}.${d}`, style.line, undefined, { cap })) layers[layer].push(write(primitive, paint, opacity, identity))
       })
     })
   }

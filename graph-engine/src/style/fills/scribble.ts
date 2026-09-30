@@ -1,6 +1,6 @@
 import { polylineChain, type Chain } from '../path'
 import type { Point } from '../tokens'
-import { insideRegion, regionPolygons, scanlines, scanPoint } from './region'
+import { insideRegion, MARK_BUDGET, regionPolygons, scanlines, scanPoint, spacingWithin } from './region'
 import type { FillType } from './types'
 
 // SCRIBBLE — shading by hand: one continuous zig-zag going back and forth
@@ -24,7 +24,7 @@ export const scribble: FillType = {
   draw({ outline, settings, random }) {
     const polygons = regionPolygons(outline)
     const angle = settings.angle
-    const step = settings.spacing
+    const step = spacingWithin(polygons, angle, settings.spacing, MARK_BUDGET.length)
     const legInside = (a: Point, b: Point) =>
       [0.25, 0.5, 0.75].every((f) => insideRegion({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f }, polygons))
 

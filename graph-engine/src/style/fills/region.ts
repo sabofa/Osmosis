@@ -100,3 +100,30 @@ export function scanPoint(angle: number, offset: number, s: number): Point {
   const { along, across } = hatchFrame(angle)
   return { x: along.x * s + across.x * offset, y: along.y * s + across.y * offset }
 }
+
+// ---------------------------------------------------------------------------
+// The mark budget
+// ---------------------------------------------------------------------------
+
+// How much a fill may draw in ONE region, whatever its spacing: at most this
+// many drawing units of shading line (a figure is fitted into 640, so a full
+// square of hatching at spacing 8 is about 51k), and at most this many
+// stipple dots. Past it the spacing opens out just enough to fit, so an
+// author who asks for spacing 3 over a whole figure gets dense shading, not
+// megabytes of SVG and a figure that stutters when panned.
+export const MARK_BUDGET = { length: 40000, dots: 6000 }
+
+// The total length of a hatch family's lines inside the region.
+export function hatchLength(polygons: readonly Point[][], angle: number, spacing: number): number {
+  let total = 0
+  for (const line of scanlines(polygons, angle, spacing)) for (const [from, to] of line.intervals) total += to - from
+  return total
+}
+
+// The spacing to draw a family of lines at so its length fits `budget`:
+// line length goes as 1 / spacing, so an overrun opens the spacing by the
+// same factor.
+export function spacingWithin(polygons: readonly Point[][], angle: number, spacing: number, budget: number): number {
+  const length = hatchLength(polygons, angle, spacing)
+  return length > budget ? spacing * (length / budget) : spacing
+}
