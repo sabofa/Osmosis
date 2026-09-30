@@ -327,6 +327,61 @@ describe('roughness', () => {
     expect(spread(rough)).toBeGreaterThan(spread(fill('stipple', ANNULUS, { roughness: 0 })))
   })
 
+  // Review round 1, test gap: the size spread test above doesn't touch the
+  // CLUMPING itself — a slow 2D density that thins dots into patches. A
+  // coarse grid of cells over the region, counting dots per cell, is more
+  // uneven (a higher standard deviation) at roughness 1 than at 0.
+  it('stipple clumps into patches once roughness rises: dot counts vary much more across a coarse grid', () => {
+    const GRID = 6
+    const cellCounts = (marks: FillMark[]) => {
+      const dots = marks[0].kind === 'dots' ? marks[0].dots : []
+      const counts = new Array(GRID * GRID).fill(0)
+      for (const dot of dots) {
+        const cx = Math.min(GRID - 1, Math.max(0, Math.floor((dot.at.x / 200) * GRID)))
+        const cy = Math.min(GRID - 1, Math.max(0, Math.floor((dot.at.y / 200) * GRID)))
+        counts[cy * GRID + cx]++
+      }
+      return counts
+    }
+    const spread = (counts: number[]) => {
+      const mean = counts.reduce((a, b) => a + b, 0) / counts.length
+      return Math.sqrt(counts.reduce((a, b) => a + (b - mean) ** 2, 0) / counts.length)
+    }
+    const clean = spread(cellCounts(fill('stipple', SQUARE, { roughness: 0, spacing: 3 })))
+    const rough = spread(cellCounts(fill('stipple', SQUARE, { roughness: 1, spacing: 3 })))
+    // Jitter and the occasional satellite dot (both tested above and below)
+    // already spread the count out a little on their own — to about 1.7x
+    // clean's spread, measured against the pre-fix code. Density clumping
+    // is what pushes it much further than that, past 3x.
+    expect(rough).toBeGreaterThan(clean * 3)
+  })
+
+  // Review round 1, test gap: a satellite dot, "with probability 0.05·r",
+  // at 1 to 2 radii from its parent and 0.7 of its radius (stipple.ts).
+  it('stipple adds a satellite dot beside some, now and then, once roughness rises', () => {
+    const rough = fill('stipple', SQUARE, { roughness: 1, spacing: 10 })
+    const dots = rough[0].kind === 'dots' ? rough[0].dots : []
+    expect(dots.length).toBeGreaterThan(0)
+    // Radius exactly 0.7 of its parent's (stipple.ts): a tight tolerance on
+    // that ratio, so two regular dots near each other by chance don't read
+    // as a satellite pair.
+    const isSatelliteOf = (a: { at: Point; r: number }, b: { at: Point; r: number }) => {
+      const d = Math.hypot(a.at.x - b.at.x, a.at.y - b.at.y)
+      return d > 1e-6 && d <= 2.1 * b.r && Math.abs(a.r / b.r - 0.7) < 1e-6
+    }
+    let found = false
+    for (const a of dots) {
+      for (const b of dots) {
+        if (a !== b && isSatelliteOf(a, b)) {
+          found = true
+          break
+        }
+      }
+      if (found) break
+    }
+    expect(found).toBe(true)
+  })
+
   it('flat is untouched at roughness 0, off register with a faint mottle above it', () => {
     expect(fill('flat', SQUARE, { roughness: 0 })).toEqual([{ kind: 'area' }])
     const rough = fill('flat', SQUARE, { roughness: 1 })

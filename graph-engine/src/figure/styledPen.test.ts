@@ -202,6 +202,21 @@ ${example('Square minus its circle')}`).svg
     expect(clips(styled)).toHaveLength(1)
   })
 
+  // Review round 1, test gap: a shifted flat fill on a region with a hole
+  // (not just the plain square above) still clips to the exact outline,
+  // hole included.
+  it('a shifted flat fill on the annulus clips to its exact outline, hole and all', () => {
+    const styled = render(`@style: ink
+@style-fill: flat
+@style-roughness: 1
+${example('Annulus')}`).svg
+    const found = clips(styled)
+    expect(found).toHaveLength(1)
+    expect(found[0].outline).toContain('clip-rule="evenodd"')
+    // Two loops: the outer circle and the hole.
+    expect(d(found[0].outline)!.match(/M /g)).toHaveLength(2)
+  })
+
   it('is deterministic', () => {
     const spec = `@style: marker
 ${example('Lens of two circles')}`
