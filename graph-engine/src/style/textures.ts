@@ -44,13 +44,21 @@ export function textureFilter(texture: Texture, id: string, region: Box): string
         ...speckle(0.55, 3, 6, 6 * (0.3 + 0.2 * s) - 1),
         tag('feComposite', { in: 'soft', in2: 'speck', operator: 'in' }),
       ])
-    // Ink: a faint halo where the ink wicks into the paper, under the line.
-    case 'bleed':
+    // Ink: a faint halo where the ink wicks into the paper, under the line,
+    // plus — rising gently with strength — a few pinholes knocked out of the
+    // line itself: a nib running dry rather than a break in the stroke. The
+    // cut starts high (little survives past it at low strength, so only the
+    // odd fleck shows) and eases as strength grows.
+    case 'bleed': {
+      const cut = 6 * (0.66 + 0.5 * s) - 1
       return tag('filter', frame, [
         tag('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 0.25 + 0.5 * s, result: 'halo' }),
         tag('feComponentTransfer', { in: 'halo', result: 'faint' }, [tag('feFuncA', { type: 'linear', slope: 0.55 })]),
-        tag('feMerge', {}, [tag('feMergeNode', { in: 'faint' }), tag('feMergeNode', { in: 'SourceGraphic' })]),
+        tag('feMerge', { result: 'merged' }, [tag('feMergeNode', { in: 'faint' }), tag('feMergeNode', { in: 'SourceGraphic' })]),
+        ...speckle(0.7, 2, 6, cut),
+        tag('feComposite', { in: 'merged', in2: 'speck', operator: 'in' }),
       ])
+    }
     // Watercolour: broad, slow noise varying how strongly the tint covers,
     // so a wash is blotchy rather than flat.
     case 'wash':

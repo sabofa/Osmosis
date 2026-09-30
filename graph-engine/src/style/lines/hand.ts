@@ -139,6 +139,20 @@ export function sampleStep(width: number): number {
   return Math.max(4, Math.min(9, 2.5 * width))
 }
 
+// Half a turn from one side of a ribbon to the other about the spine's end,
+// bulging along the direction of travel there. In y-down coordinates the
+// travel direction is the left normal turned a quarter turn the positive way.
+function cap(centre: Point, from: Point, radius: number): Point[] {
+  if (radius <= 1e-9) return []
+  const out: Point[] = []
+  const base = Math.atan2(from.y, from.x)
+  for (let k = 1; k < 6; k++) {
+    const angle = base + (Math.PI * k) / 6
+    out.push({ x: centre.x + radius * Math.cos(angle), y: centre.y + radius * Math.sin(angle) })
+  }
+  return out
+}
+
 // A ribbon around a spine: the outline of a stroke whose half-width at each
 // spine point is `half[i]`, with round caps where the half-width is not zero.
 // Laid out as the left side forward, the end cap, the right side back, the
@@ -149,30 +163,25 @@ export function sampleStep(width: number): number {
 // normals wrapped round the seam. Its left side forward and right side back
 // make one ring, which the nonzero fill rule fills as a band with a hole.
 export function ribbon(spine: readonly Point[], half: readonly number[], closed = false): Point[] {
+  return ribbon2(spine, half, half, closed)
+}
+
+// `ribbon`, but the two sides may stray by their own amount — a rough
+// brush's edges, each catching the paper unevenly. Same layout: `left[i]`
+// and `right[i]` are the two sides' half-widths at `spine[i]`, and passing
+// the same array for both is exactly `ribbon`.
+export function ribbon2(spine: readonly Point[], left: readonly number[], right: readonly number[], closed = false): Point[] {
   const normals = normalsOf(spine, closed)
   const n = spine.length
-  const left = spine.map((p, i) => ({ x: p.x + normals[i].x * half[i], y: p.y + normals[i].y * half[i] }))
-  const right = spine.map((p, i) => ({ x: p.x - normals[i].x * half[i], y: p.y - normals[i].y * half[i] }))
-  if (closed) return [...left, ...right.reverse()]
-  // Half a turn from one side to the other about the spine's end, bulging
-  // along the direction of travel there. In y-down coordinates the travel
-  // direction is the left normal turned a quarter turn the positive way.
-  const cap = (centre: Point, from: Point, radius: number): Point[] => {
-    if (radius <= 1e-9) return []
-    const out: Point[] = []
-    const base = Math.atan2(from.y, from.x)
-    for (let k = 1; k < 6; k++) {
-      const angle = base + (Math.PI * k) / 6
-      out.push({ x: centre.x + radius * Math.cos(angle), y: centre.y + radius * Math.sin(angle) })
-    }
-    return out
-  }
+  const leftSide = spine.map((p, i) => ({ x: p.x + normals[i].x * left[i], y: p.y + normals[i].y * left[i] }))
+  const rightSide = spine.map((p, i) => ({ x: p.x - normals[i].x * right[i], y: p.y - normals[i].y * right[i] }))
+  if (closed) return [...leftSide, ...rightSide.reverse()]
   const endNormal = normals[n - 1]
   const startNormal = normals[0]
   return [
-    ...left,
-    ...cap(spine[n - 1], endNormal, half[n - 1]),
-    ...right.reverse(),
-    ...cap(spine[0], { x: -startNormal.x, y: -startNormal.y }, half[0]),
+    ...leftSide,
+    ...cap(spine[n - 1], endNormal, (left[n - 1] + right[n - 1]) / 2),
+    ...rightSide.reverse(),
+    ...cap(spine[0], { x: -startNormal.x, y: -startNormal.y }, (left[0] + right[0]) / 2),
   ]
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { randomFor } from '../random'
-import { pieceLength, pointOn, polylineChain, type Chain } from '../path'
+import { chainEnd, pieceLength, pointOn, polylineChain, type Chain } from '../path'
 import { LINE_TYPES, type LineSettings, type LineType, type Point } from '../tokens'
 import { LINES } from './index'
 import type { Primitive } from './types'
@@ -193,6 +193,48 @@ describe('the six line types are six algorithms', () => {
       const halfWidths = shape.spine.map((s, i) => near(s, shape.outline[i]))
       expect(Math.max(...halfWidths.slice(1, n - 1)) - Math.min(...halfWidths.slice(1, n - 1))).toBeGreaterThan(0.15 * WIDTH)
     }
+  })
+
+  it('ragged edges differ per side once grain rises', () => {
+    // A closed loop's ribbon has no end caps — outline is exactly [left,
+    // right.reversed] (hand.ts's ribbon2) — so the two sides can be read
+    // back by position alone, with no cap length to account for.
+    const out = draw('ink', CIRCLE, { grain: 0.8, passes: 1 })
+    const shape = out.find((p) => p.kind === 'shape')
+    expect(shape?.kind === 'shape').toBe(true)
+    if (shape?.kind === 'shape') {
+      const n = shape.spine.length
+      expect(shape.outline).toHaveLength(2 * n)
+      const leftHalf = shape.spine.map((s, i) => near(s, shape.outline[i]))
+      const rightHalf = shape.spine.map((s, i) => near(s, shape.outline[2 * n - 1 - i]))
+      expect(leftHalf.some((h, i) => Math.abs(h - rightHalf[i]) > 1e-6)).toBe(true)
+    }
+  })
+
+  it('a long, open ink stroke sometimes runs dry: several shapes, one strand reaching the true end at looseness 0', () => {
+    const long = polylineChain(Array.from({ length: 20 }, (_, i) => ({ x: i * 20, y: Math.sin(i) * 10 })))
+    let sawDryBrush = false
+    for (let seed = 0; seed < 30; seed++) {
+      const out = LINES.ink.draw({ chain: long, width: WIDTH, settings: settingsFor('ink', { grain: 0.9, looseness: 0 }), random: randomFor(`dry-${seed}`, 0) })
+      const shapes = out.filter((p) => p.kind === 'shape')
+      if (shapes.length > 1) {
+        sawDryBrush = true
+        const end = chainEnd(long)
+        expect(shapes.some((s) => s.kind === 'shape' && near(s.spine[s.spine.length - 1], end) <= EPS)).toBe(true)
+      }
+    }
+    expect(sawDryBrush, 'expected at least one of 30 seeds to run the brush dry').toBe(true)
+  })
+
+  it('grain 0 gives the old output — a pinned hash, so no extra random draw sneaks in at grain 0', async () => {
+    const sha = async (text: string) => {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 20)
+    }
+    // Pinned against the ink line before grain drove anything (this session).
+    expect(await sha(JSON.stringify(draw('ink', SEGMENT, { grain: 0 })))).toBe('5d04a728f651fad34d80')
+    expect(await sha(JSON.stringify(draw('ink', ARC, { grain: 0, looseness: 0.6 })))).toBe('e7418edd7371235dca19')
+    expect(await sha(JSON.stringify(draw('ink', CIRCLE, { grain: 0 })))).toBe('2122418bc6e1a5a637c0')
   })
 
   it('brush is one calligraphic outline: pointed tips, width set by direction', () => {

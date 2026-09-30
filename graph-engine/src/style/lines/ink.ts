@@ -1,6 +1,7 @@
-import { smoothNoise } from '../random'
-import { sampleChain, smoothThrough } from '../path'
-import { handChain, handDrawn, ribbon, sampleStep } from './hand'
+import { smoothNoise, type Random } from '../random'
+import { normalsOf, sampleChain, smoothThrough } from '../path'
+import type { Point } from '../tokens'
+import { handChain, handDrawn, ribbon, ribbon2, sampleStep } from './hand'
 import type { LineType, Primitive, StrokeInput } from './types'
 
 // INK — a fountain pen. The line wavers slowly (a long wavelength: the hand,
@@ -14,6 +15,15 @@ import type { LineType, Primitive, StrokeInput } from './types'
 // drawn line, and the half-width at each point is the base width scaled by
 // smooth pressure noise and thinned toward the ends by `taper`. The bleed is
 // two soft dots at the ends; the doubled pass is a thin stroke.
+//
+// `grain` drives a rough brush on top, entirely skipped at grain 0 (same
+// outline, same random draws, byte for byte):
+//   - ragged edges: the two sides of the ribbon stray independently, each
+//     its own smooth noise (ribbon2, hand.ts);
+//   - dry brush: on a long enough open stroke, the tail sometimes splits
+//     into a few bristle strands with gaps, one of which always reaches the
+//     true end (the faithfulness rule) — the end blot only applies when it
+//     did not.
 
 const WAVELENGTH = 70
 
@@ -31,12 +41,38 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     const thinning = 1 - 0.6 * settings.taper * (1 - ends)
     return (width / 2) * (1 + 0.55 * settings.variation * pressure(t)) * thinning
   })
-  const out: Primitive[] = [{ kind: 'shape', outline: ribbon(spine, half, closed), spine, opacity: settings.opacity }]
+
+  const out: Primitive[] = []
+  // The spine index the main ribbon stops at when the brush ran dry: no end
+  // blot there (the strands carry the tail instead).
+  let dryFrom = -1
+
+  if (settings.grain > 0) {
+    // Ragged edges: each side of the ribbon strays by its own smooth noise,
+    // a rough brush catching the paper unevenly.
+    const knots = Math.max(4, samples.length / 1.5)
+    const noiseLeft = smoothNoise(random, knots, closed)
+    const noiseRight = smoothNoise(random, knots, closed)
+    const at = (i: number) => (n === 1 ? 0 : i / (n - 1))
+    const left = half.map((h, i) => h * (1 + 0.3 * settings.grain * noiseLeft(at(i))))
+    const right = half.map((h, i) => h * (1 + 0.3 * settings.grain * noiseRight(at(i))))
+
+    if (!loop && n >= 12 && random.next() < 0.25 + 0.6 * settings.grain) {
+      dryFrom = drawDryBrush(out, spine, left, right, width, settings, random)
+    } else {
+      out.push({ kind: 'shape', outline: ribbon2(spine, left, right, closed), spine, opacity: settings.opacity })
+    }
+  } else {
+    out.push({ kind: 'shape', outline: ribbon(spine, half, closed), spine, opacity: settings.opacity })
+  }
 
   // The pool where the nib landed and lifted: a touch wider than the line.
+  // Only at the end when the brush did not already run dry there.
   if (!loop) {
     const blot = (i: number) => ({ at: spine[i], r: half[i] * (1.05 + 0.25 * settings.grain) })
-    out.push({ kind: 'dots', dots: [blot(0), blot(n - 1)], opacity: settings.opacity * 0.85 })
+    const dots = [blot(0)]
+    if (dryFrom < 0) dots.push(blot(n - 1))
+    out.push({ kind: 'dots', dots, opacity: settings.opacity * 0.85 })
   }
 
   // The occasional second pass: likelier the tighter the hand, never on a
@@ -58,8 +94,58 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
   return out
 }
 
+// The dry-brush tail: the main ribbon cut short a little past the split, and
+// a few thin bristle strands carrying on from there, spread across the
+// stroke's nominal width (not the pressure-swollen one, so a strand never
+// strays past the faithfulness bound every line type keeps). One strand,
+// chosen at random, always runs to the stroke's true end, its offset faded
+// to nothing over its last few samples — the faithfulness rule, kept even
+// though the brush is running dry. Returns the spine index the main ribbon
+// stopped at.
+function drawDryBrush(
+  out: Primitive[],
+  spine: readonly Point[],
+  left: readonly number[],
+  right: readonly number[],
+  width: number,
+  settings: StrokeInput['settings'],
+  random: Random
+): number {
+  const n = spine.length
+  const splitIndex = Math.round(random.range(0.6, 0.85) * (n - 1))
+  const mainEnd = Math.min(n - 1, splitIndex + 3)
+  out.push({
+    kind: 'shape',
+    outline: ribbon2(spine.slice(0, mainEnd + 1), left.slice(0, mainEnd + 1), right.slice(0, mainEnd + 1), false),
+    spine: spine.slice(0, mainEnd + 1),
+    opacity: settings.opacity,
+  })
+
+  const normals = normalsOf(spine, false)
+  const baseHalf = width / 2
+  const k = random.int(3, 5)
+  const chosen = random.int(0, k - 1)
+  for (let j = 0; j < k; j++) {
+    const offsetFactor = (-1 + (2 * j + 1) / k) * 0.9
+    const strandHalf = (baseHalf / k) * random.range(0.55, 0.95)
+    const endIndex = j === chosen ? n - 1 : Math.max(splitIndex + 1, Math.round(random.range(splitIndex + 0.3 * (n - 1 - splitIndex), n - 1)))
+    const strandSpine: Point[] = []
+    for (let i = splitIndex; i <= endIndex; i++) {
+      // The chosen strand's offset fades to zero over its last three
+      // samples, so its spine lands exactly on the true end.
+      const fade = j === chosen ? Math.min(1, Math.max(0, (endIndex - i) / 3)) : 1
+      const offset = baseHalf * offsetFactor * fade
+      strandSpine.push({ x: spine[i].x + normals[i].x * offset, y: spine[i].y + normals[i].y * offset })
+    }
+    const strandWidths = strandSpine.map(() => strandHalf)
+    out.push({ kind: 'shape', outline: ribbon(strandSpine, strandWidths, false), spine: strandSpine, opacity: settings.opacity })
+  }
+  return mainEnd
+}
+
 export const ink: LineType = {
   draw,
-  // A faint softening at the edges, as ink wicks into paper.
+  // A faint softening at the edges, as ink wicks into paper, plus — the same
+  // strength — a few pinholes knocked out of the line itself (textures.ts).
   texture: (settings) => ({ name: 'bleed', strength: 0.3 + 0.7 * settings.grain }),
 }
