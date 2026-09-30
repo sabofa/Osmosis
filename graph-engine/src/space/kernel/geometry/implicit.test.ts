@@ -230,6 +230,39 @@ describe('S6 plan V11: progressive resolution while held', () => {
   })
 })
 
+// Gate fix M1: the halved held-resolution grid can legitimately find no
+// cell where the full resolution would — a surface smaller than the
+// halved grid's own cells (here, a sphere of radius 0.121 in a box whose
+// held cell is 0.3125 across) fell entirely between its sample points and
+// vanished, refused, on every dragged, scrubbed or played frame, snapping
+// back only on release. It is rebuilt once at the full resolution
+// instead, before ever being reported missing.
+describe('gate fix M1: a small surface never vanishes while held', () => {
+  const BOX5 = { x: { min: -5, max: 5 }, y: { min: -5, max: 5 }, z: { min: -5, max: 5 } }
+  // Default res (64, no res: clause): held halves it to 32, a 0.3125 cell —
+  // wider than the sphere's 0.242 diameter, so the held grid's corners can
+  // all land outside it; the full 64 grid (0.15625 cell) still finds it.
+  const TINY_SPHERE = '@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\n@param a = 0.12 range [0.05, 1]\n(x-0.15)^2 + (y-0.15)^2 + (z-0.15)^2 = a^2'
+
+  it('a sphere the halved (32) grid entirely misses still draws while held, rebuilt at the full 64 — never "no points in the box"', () => {
+    const kernel = kernelOf(TINY_SPHERE)
+    const held = kernel.setValue('a', 0.121, { holdBox: BOX5 })
+    expect(held.errors).toEqual([])
+    const mesh = held.marks[0] as MeshMark
+    expect(mesh.indices.length).toBeGreaterThan(0)
+    for (const [x, y, z] of vertices(mesh.positions)) expect(Math.hypot(x - 0.15, y - 0.15, z - 0.15)).toBeCloseTo(0.121, 2)
+  })
+
+  it('a surface missing at every resolution is still refused, its message never quoting the halved res', () => {
+    // No sphere of this radius exists (a^2 negative) at any resolution:
+    // the fallback must not turn a genuine miss into a silent success, and
+    // the generic refusal here never names a resolution to get wrong.
+    const kernel = kernelOf('@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\n@param a = 0.12 range [0.05, 1]\n(x-0.15)^2 + (y-0.15)^2 + (z-0.15)^2 = -a^2 - 1')
+    const held = kernel.setValue('a', 0.121, { holdBox: BOX5 })
+    expect(held.errors).toEqual([{ line: 3, message: 'The implicit surface has no points in the box — check the equation, or widen @bounds3d' }])
+  })
+})
+
 describe('marchingTets on its own', () => {
   it('meets a plane x + y + z = 0.5 in a flat sheet, every vertex on it', () => {
     const box = { x: { min: 0, max: 1 }, y: { min: 0, max: 1 }, z: { min: 0, max: 1 } }

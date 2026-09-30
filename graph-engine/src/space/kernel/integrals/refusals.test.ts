@@ -151,16 +151,24 @@ describe('what is not a number, and whose fault it is', () => {
 // S5 fix round 3: every readout is right to its last digit, or the integral
 // is refused; divergence is claimed only on evidence and placed where it is.
 describe('never a wrong confident number (fix round 3)', () => {
-  // Reads the full, uncapped text (S6 plan V3 caps the on-figure `.text` at
-  // DISPLAY_DIGITS, unrelated to what this describe block checks): this is
-  // about how many digits the quadrature's own error honestly supports.
+  // Gate fix I1: checks the half-unit rule on BOTH the on-figure `.text`
+  // (S6 plan V3 caps it at DISPLAY_DIGITS) and the full, uncapped text —
+  // a regression of the C1 kind (a capped digit the truth contradicts)
+  // shows up only in `.text`, and the merge that switched this helper to
+  // read only the full text let 23 cases pass right past it. Returns the
+  // full text: the digit-count pin below (:183 as first written) judges
+  // how many digits the quadrature's own error honestly supports, which
+  // only the uncapped text speaks to directly.
   const read = (spec: string, name: string, exact: number): string => {
     const { scene, ms } = timedScene(spec)
     expect(ms).toBeLessThan(GUARD_MS)
     expect(scene.errors).toEqual([])
-    const text = readoutFull(scene, 1)
-    expect(Math.abs(approx(text, name) - exact)).toBeLessThanOrEqual(lastDigitUnit(text, name))
-    return text
+    const capped = readout(scene, 1).text
+    const full = readoutFull(scene, 1)
+    for (const text of [capped, full]) {
+      expect(Math.abs(approx(text, name) - exact)).toBeLessThanOrEqual(lastDigitUnit(text, name))
+    }
+    return full
   }
   const refused = (spec: string): string[] => {
     const { scene, ms } = timedScene(spec)

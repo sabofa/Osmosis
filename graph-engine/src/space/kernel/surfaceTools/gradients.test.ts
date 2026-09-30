@@ -163,6 +163,41 @@ describe('gradient of a function of three variables', () => {
     expect(releasedMesh).not.toBe(heldMesh)
     expect(heldMesh.positions.length).toBeLessThan(releasedMesh.positions.length * 0.5)
   })
+
+  // Gate fix M1: the same shared mechanism, for the case implicit.test.ts's
+  // "gate fix M1" describe block names directly — a level set small enough
+  // that the halved held-resolution grid finds no cell at all must not be
+  // reported missing; it is rebuilt once at the full resolution first.
+  describe('gate fix M1: a small level set never vanishes while held', () => {
+    const BOX5 = { x: { min: -5, max: 5 }, y: { min: -5, max: 5 }, z: { min: -5, max: 5 } }
+    const F = '(x-0.15)^2 + (y-0.15)^2 + (z-0.15)^2'
+
+    it('a sphere of radius 0.121 the halved (32) grid entirely misses still draws while held, rebuilt at the full 64', () => {
+      // No res: clause: S4a's default 64, halved to 32 while held — the
+      // same box and radius implicit.test.ts's own gate fix M1 test proves
+      // the halved grid misses and the full one finds.
+      const spec = `@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\n@param a = 0.12 range [0.05, 1]\ngradient: ${F} at (0.15 + a, 0.15, 0.15) surface`
+      const kernel = kernelOf(spec)
+      const held = kernel.setValue('a', 0.121, { holdBox: BOX5 })
+      expect(held.errors).toEqual([])
+      const mesh = meshOf(held, 's3.surface')
+      expect(mesh.positions.length).toBeGreaterThan(0)
+      for (const [x, y, z] of vertices(mesh.positions)) expect(Math.hypot(x - 0.15, y - 0.15, z - 0.15)).toBeCloseTo(0.121, 2)
+    })
+
+    it('a level set missing at every resolution tried is still refused, its message naming the full res it fell back to, never the halved one', () => {
+      // a = 1e-7: the level set is a sphere far smaller than even the full
+      // 64 grid's cells (0.15625), centred at (0.15 + a, 0.15, 0.15), which
+      // sits on no grid point at res 32 or 64 (the box is [-5, 5]^3, 0.15
+      // is not a multiple of 10/32 or 10/64) — genuinely missing at both.
+      const spec = `@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\n@param a = 0.0000001 range [0.00000001, 1]\ngradient: ${F} at (0.15 + a, 0.15, 0.15) surface`
+      const kernel = kernelOf(spec)
+      const held = kernel.setValue('a', 1e-7, { holdBox: BOX5 })
+      expect(held.errors).toHaveLength(1)
+      expect(held.errors[0].message).toMatch(/meets no cell at res 64 — at an extremum of F it is a single point; otherwise raise res:$/)
+      expect(held.errors[0].message).not.toMatch(/res 32/)
+    })
+  })
 })
 
 describe('gradient: points outside, and parameters', () => {

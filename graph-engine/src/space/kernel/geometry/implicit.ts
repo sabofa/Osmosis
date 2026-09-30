@@ -166,11 +166,17 @@ function prepareImplicit(statement: Statement, context: BuildContext): PreparedS
     // reason), mesh at half the resolution (heldRes), then once more at the
     // full one when it releases (kernel/index.ts's builtHeld forces that
     // rebuild even if the box itself never moved).
-    const activeRes = heldRes(n, context.held)
-    const grid = sampleGrid(field.f, boxOf(context), activeRes)
-    // The budget is checked before anything is meshed.
-    checkBudget(countTriangles(grid, 0), activeRes)
-    const mesh = levelMesh(field, grid, 0)
+    const meshAt = (res: number) => {
+      const grid = sampleGrid(field.f, boxOf(context), res)
+      // The budget is checked before anything is meshed.
+      checkBudget(countTriangles(grid, 0), res)
+      return levelMesh(field, grid, 0)
+    }
+    // Gate fix M1: a small surface can fall entirely within the gaps of the
+    // halved held-time grid even though the full grid would find it —
+    // rebuilding once at the full resolution recovers it instead of letting
+    // it flash away, refused, until release.
+    const mesh = meshAt(heldRes(n, context.held)) ?? (context.held ? meshAt(n) : null)
     if (!mesh) {
       return {
         marks: [],

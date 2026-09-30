@@ -39,3 +39,37 @@ describe('S6 fix round 1, I7: progressive resolution while held (3-variable cont
     expect(b).toBe(a)
   })
 })
+
+// Gate fix M1: level surfaces mesh through the same grid as an implicit
+// surface (implicit.ts), and are owed the same fix — the halved
+// held-resolution grid can legitimately find no cell for a surface
+// smaller than its own cells, where the full resolution would. It is
+// rebuilt once at the full resolution instead, before ever being reported
+// missing (implicit.test.ts proves the shared mechanism; this proves
+// levelSurfaces.ts actually wires it in).
+describe('gate fix M1: a small level surface never vanishes while held', () => {
+  const BOX5 = { x: { min: -5, max: 5 }, y: { min: -5, max: 5 }, z: { min: -5, max: 5 } }
+  const F = '(x-0.15)^2 + (y-0.15)^2 + (z-0.15)^2'
+  // Default res (64, no res: clause): held halves it to 32, a 0.3125 cell —
+  // wider than the sphere's 0.242 diameter (a = 0.121), so the held grid's
+  // corners can all land outside it; the full 64 grid still finds it.
+  const TINY_LEVEL = `@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\n@param a = 0.12 range [0.05, 1]\ncontour: ${F} level a^2`
+
+  it('a level surface the halved (32) grid entirely misses still draws while held, rebuilt at the full 64', () => {
+    const kernel = kernelOf(TINY_LEVEL)
+    const held = kernel.setValue('a', 0.121, { holdBox: BOX5 })
+    expect(held.errors).toEqual([])
+    const mesh = held.marks[0] as MeshMark
+    expect(mesh.indices.length).toBeGreaterThan(0)
+    for (const [x, y, z] of vertices(mesh.positions)) expect(Math.hypot(x - 0.15, y - 0.15, z - 0.15)).toBeCloseTo(0.121, 2)
+  })
+
+  it('a level missing at every resolution is still refused, its message never quoting the halved res', () => {
+    const kernel = kernelOf(`@bounds3d: x [-5, 5], y [-5, 5], z [-5, 5]\n@param a = 0.12 range [0.05, 1]\ncontour: ${F} level -a^2 - 1`)
+    const held = kernel.setValue('a', 0.121, { holdBox: BOX5 })
+    expect(held.errors).toHaveLength(1)
+    expect(held.errors[0].line).toBe(3)
+    expect(held.errors[0].message).toMatch(/does not meet the box$/)
+    expect(held.errors[0].message).not.toMatch(/res 32|res 16/)
+  })
+})

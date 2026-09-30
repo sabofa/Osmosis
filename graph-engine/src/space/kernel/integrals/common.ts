@@ -135,10 +135,26 @@ function honestFallback(raw: number, error: number, leading: number): { value: n
 // caller's own half-value refusal instead, which judges the raw, unscaled
 // error, not this one. Adaptive error estimates are heuristic and were
 // measured up to 29x short of the truth on some kinks (S5_SAFETY).
-function chosenDisplay(a: Approx): { value: number; digits: number } | null {
+//
+// `maxDigits` (gate fix C1): the on-figure display cap (DISPLAY_DIGITS) is
+// enforced HERE, inside the search itself, not by truncating its result
+// afterward. The search starts no finer than `maxDigits` and only ever
+// walks coarser (honestAt), re-rounding the RAW value at each unit it
+// tries — so a capped result is honestAt its own, coarser unit, exactly
+// like an uncapped one. The bug this replaced rounded chosenDisplay's
+// already-rounded value a second time, to fewer digits, without ever
+// re-checking honestAt at that coarser unit: rounding an already-rounded
+// number again is not the same as rounding the raw value there, and can
+// carry a digit the truth contradicts (25.13274995 ± 1e-8 rounds once to
+// 25.13275, correctly; rounding THAT again to 6 digits gives 25.1328,
+// which the truth — anywhere in [25.13274994, 25.13274996] — refutes; the
+// honest 6-digit answer, found by re-rounding the raw value, is 25.1327,
+// itself not honest at that unit either, so the search keeps walking
+// coarser to "≈ 25.133").
+function chosenDisplay(a: Approx, maxDigits: number = MAX_DIGITS): { value: number; digits: number } | null {
   const raw = shown(a)
   if (raw === 0) return { value: 0, digits: 1 }
-  const cap = a.singular ? SIGNIFICANT_DIGITS : MAX_DIGITS
+  const cap = Math.min(maxDigits, a.singular ? SIGNIFICANT_DIGITS : MAX_DIGITS)
   const error = (a.mesh ? 1 : S5_SAFETY) * a.error
   const leading = Math.floor(Math.log10(Math.abs(raw)))
   let p = leading - Math.min(cap, supportedDigits(raw, error)) + 1
@@ -150,14 +166,17 @@ function chosenDisplay(a: Approx): { value: number; digits: number } | null {
   }
 }
 
-// S6 plan V3: the on-figure text is capped at DISPLAY_DIGITS even when
-// chosenDisplay's honest digit count (S5 breaker ruling) supports more;
-// rounding to fewer digits is always honest, so this never shows a digit
-// approxTextFull would not.
+// S6 plan V3 (gate fix C1): the on-figure text is capped at DISPLAY_DIGITS
+// by asking chosenDisplay itself to search no finer than that many digits
+// — never by rounding its result a second time. Truncating an
+// already-rounded value's digit count is NOT automatically honest: it can
+// show a digit the truth, re-rounded fresh at that coarser unit, actually
+// contradicts (the hand-worked case above). `d.digits` is printed
+// unchanged because chosenDisplay's own search already enforced the cap.
 export function approxText(a: Approx): string {
-  const d = chosenDisplay(a)
+  const d = chosenDisplay(a, DISPLAY_DIGITS)
   if (!d) return refusedDisplay(a)
-  return `${APPROX} ${formatNumber(d.value, Math.min(DISPLAY_DIGITS, d.digits))}`
+  return `${APPROX} ${formatNumber(d.value, d.digits)}`
 }
 
 // approxText, uncapped (S6 plan V3): every digit chosenDisplay's own honest
@@ -170,11 +189,13 @@ export function approxTextFull(a: Approx): string {
 }
 
 // "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate
-// supports, capped at DISPLAY_DIGITS (V3).
+// supports, capped at DISPLAY_DIGITS (V3) — the same per-coordinate cap
+// approxText applies (gate fix C1: enforced inside chosenDisplay's own
+// search, never by re-rounding its result).
 export function approxTupleText(values: readonly Approx[]): string {
   const parts = values.map((a) => {
-    const d = chosenDisplay(a)
-    return d ? formatNumber(d.value, Math.min(DISPLAY_DIGITS, d.digits)) : '?'
+    const d = chosenDisplay(a, DISPLAY_DIGITS)
+    return d ? formatNumber(d.value, d.digits) : '?'
   })
   return `${APPROX} (${parts.join(', ')})`
 }

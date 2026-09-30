@@ -14,9 +14,18 @@
 // - S6 plan V3: an on-figure annotation shows at most DISPLAY_DIGITS
 //   significant digits even when its error supports more — heavy to read
 //   otherwise (∬ ≈ 25.1327412287). formatApproxFull, the pinned readout's
-//   click-to-expand text, prints every digit the error supports; the error
-//   still bounds both from above, so neither ever prints a prettier number
-//   than it can stand behind.
+//   click-to-expand text, prints every digit the error supports.
+//   Gate fix C1: capping to fewer digits is NOT automatically honest —
+//   rounding an already-rounded value again, at a coarser unit, can carry
+//   and show a digit the truth contradicts (kernel/integrals/common.ts had
+//   exactly this bug: chosenDisplay's own rounding, re-rounded a second
+//   time to DISPLAY_DIGITS, without ever re-checking the half-unit rule at
+//   that coarser unit). formatApprox/formatApproxFull below round the raw
+//   value fresh at each call, so they do not double-round, but the digit
+//   count itself (supportedDigits) is a cruder estimate than the honestAt
+//   half-unit search kernel/integrals/common.ts's chosenDisplay runs, and
+//   is not re-verified against that rule either — a caller after that
+//   stronger guarantee wants chosenDisplay, not this pair.
 
 import type { Vec3 } from '../scene/types'
 

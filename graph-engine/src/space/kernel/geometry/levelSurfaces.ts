@@ -141,6 +141,27 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
         `contour: ${form.text} at res ${activeRes} would make ${total.toLocaleString('en-US')} triangles over ${surfaces}, over the ${MAX_TRIANGLES.toLocaleString('en-US')} limit — lower the resolution or give fewer levels`
       )
     }
+    // Gate fix M1: the same held-halved grid can miss a level entirely where
+    // the full grid would find it. The full grid (and its own budget check,
+    // the same one the un-held path above always runs) is built lazily, at
+    // most once, only if some level actually needs it — most held rebuilds
+    // never pay for it.
+    let fullGrid: ReturnType<typeof sampleGrid> | null = null
+    const meshAt = (c: number) => {
+      const mesh = levelMesh(field, grid, c)
+      if (mesh || !context.held) return mesh
+      if (!fullGrid) {
+        fullGrid = sampleGrid(field.f, box, n)
+        const fullTotal = values.reduce((sum, v) => sum + countTriangles(fullGrid!, v), 0)
+        if (fullTotal > MAX_TRIANGLES) {
+          const surfaces = `${values.length} level surface${values.length === 1 ? '' : 's'}`
+          throw new Error(
+            `contour: ${form.text} at res ${n} would make ${fullTotal.toLocaleString('en-US')} triangles over ${surfaces}, over the ${MAX_TRIANGLES.toLocaleString('en-US')} limit — lower the resolution or give fewer levels`
+          )
+        }
+      }
+      return levelMesh(field, fullGrid, c)
+    }
     const mapped = values.length > 1 && context.colorScaleId !== null
     let scale: ColorScale | null = null
     if (mapped) {
@@ -155,7 +176,7 @@ function prepareLevelSurfaces(form: ContourForm, F: Expr, context: BuildContext)
     const errors: SceneError[] = []
     values.forEach((c, i) => {
       const object = `${context.source.object}.level${i + 1}`
-      const mesh = levelMesh(field, grid, c)
+      const mesh = meshAt(c)
       if (!mesh) {
         errors.push({ line: context.line, message: `The level ${formatNumber(c)} of ${form.text} does not meet the box` })
         return

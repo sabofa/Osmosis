@@ -11,7 +11,11 @@ already been tried and failed, and which traps cost real time.
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
 agents" below). Working tree clean. **1528 tests passing**,
-`tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
+`npx tsc -p tsconfig.app.json --noEmit` and `npx tsc -p tsconfig.node.json
+--noEmit` (both, from `graph-engine/`) clean, `oxlint` clean. (Not bare
+`npx tsc --noEmit`: `graph-engine/tsconfig.json` is a solution file — `"files":
+[]` plus `references` — so that invocation type-checks nothing at all and
+exits clean regardless of what is broken.)
 
 *Last updated 2026-09-26, after geometry phase 8 (planes as objects, and
 oblique sections) and its two fix rounds.*
@@ -113,10 +117,10 @@ built.
 
 ### Not started
 
-Track 4 (calc-proofing). Track 3's sub-projects 1–2 are built (space S1–S5
-and the integration pass, see "Track 3 — space" below); its S6 (visual
-polish), sub-project 3 (vector calculus, Physics C) and sub-project 4 (quant)
-are not.
+Track 4 (calc-proofing). Track 3's sub-projects 1–2 are built (space S1–S6,
+the integration pass, and the milestone gate fix on top of S6 — see "Track 3
+— space" below); sub-project 3 (vector calculus, Physics C) and sub-project 4
+(quant) are not.
 All of D1–D5. Track 2 beyond phase 8: build steps 9–11 of the spec's
 "Revised 2026-09-25" section (inscribed/circumscribed solids, measures and
 marks in space, nets),
@@ -505,7 +509,7 @@ collinearity refusal, which keeps phase 6's wording ("A, M and G are
 collinear") so no existing message moved.
 
 
-### Track 3 — space (S1–S5 and the integration pass, 2026-09-26/27)
+### Track 3 — space (S1–S6, the integration pass, and the milestone gate fix, 2026-09-26/30)
 
 *Written after the integration pass. Branch `milestone-a/space`, worktree
 `.claude/worktrees/milestone-a-space`, review server on **5182**.*
@@ -542,6 +546,8 @@ fix rounds until clean):
 | S4b | `8498899`..`d81fa5c` (merge `c9482c3`) | level curves, paths, traces, tangent planes, gradients, directional derivatives, classified critical points, Lagrange (2 and 3 variables) |
 | S5 | `a0207ca`..`95ea254` (merge `eed87a1`) | regions (type I/II, polar, inequality, named), volumes under and between surfaces, Riemann boxes (the box pipeline), triple integrals in three coordinate systems, centroids. **Its fix round 3 (honest quadrature error by construction) merges over this later.** |
 | Integration | `fe4cc5b`..`daccc28`, then the docs commit | contour dispatch by arity and level surfaces for S4b; coordinate and gradient readouts; scientific notation in the shared tokenizer (open item 4); boxes in the frame loop (opaque pass, OIT); the box pass |
+| S5 fix rounds 3–5, breaker ruling | merge `59bdf64` | Honest quadrature error by construction; `S5_SAFETY` = 100 on the digits a readout shows (1 for a bounded mesh sum's own error, a direct measurement across resolutions rather than a heuristic decay estimate); thin inequality regions resolved where honest or refused where not; the one-honest-digit fallback for when SAFETY's own search finds no unit at all. |
+| S6, visual polish | merge `64b076b` | V1–V11 (flat-scene z boxes, label collision layout, the on-figure display-digit cap, OIT depth weight, draggable-point halos, quieter Riemann-box lattices, dark-theme contrast, held-resolution meshing while dragged/scrubbed/played, chrome fixes) and fix round 1's I1–I7/C1/M1–M6 corrections — see "Open, for S6 and after" below. **The milestone gate review then found three real bugs in S6's own work (the display cap could show a digit the true value contradicted; a small held-resolution surface could vanish entirely rather than mesh coarser; a test helper had stopped checking the on-figure text) — fixed in the same commit as this handoff update; see "Open after the milestone gate fix" below.** |
 
 **The box pass (integration J1) is the contract most likely to bite.** The
 kernel builds in two passes: statements that define the scene first; then the
@@ -609,7 +615,8 @@ corrected those (marked below); see the plan,
 `docs/superpowers/plans/2026-09-27-space-s6-visual-polish.md`, for V1–V11,
 and its fix-round-1 brief for I1–I7, C1 and M1–M6.
 
-- **Nothing is broken.** Every one of the 50 space examples draws, in light
+- **Nothing is broken.** Every one of the 49 space examples (40 in
+  `examples.ts` + 9 in `surfaceToolExamples.ts`) draws, in light
   and dark (integration pass, 2026-09-27). What follows is ugly, not wrong.
 - **A scene whose only data is flat has an empty z axis.** A lone `region:`
   (A polar region, The centroid of a half-disc) sizes x and y, and z falls
@@ -661,12 +668,19 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
   display, so expanding one in place cannot silently overlap a neighbour.)
 - **S5 readouts print many digits** (`∬ ≈ 25.1327412287`,
   `area ≈ 0.166666666667`): honest to the error estimate, heavy to read.
-  **Fixed (V3):** `formatApprox` caps on-figure annotations at 6 significant
-  digits (hover readouts stay at 4); the error still bounds the digits from
-  above, so this is always a reduction, never a rounding-up. A pinned
-  readout's box can be clicked to show the full supported digits on demand.
+  **Fixed (V3):** integral readouts are capped at 6 significant digits
+  (hover readouts stay at 4) in `kernel/integrals/common.ts`, through
+  `chosenDisplay` — the same function that picks the honest, SAFETY-checked
+  digit count in the first place, asked to search no finer than the cap; the
+  cap is a display choice enforced by re-checking S5's own half-unit rule at
+  whatever coarser unit it settles on, not a claim that truncating an
+  already-rounded value's digits is automatically honest (an earlier draft
+  of this note made exactly that claim, and it was false — see the gate
+  fix's C1 below). What a click expands is the on-figure annotation label
+  itself, to every digit its estimate supports, not a separate "pinned
+  readout's box".
   **Corrected in fix round 1 (C1):** a rebuild where the capped text stayed
-  the same but the full digits moved left an expanded box showing the OLD
+  the same but the full digits moved left an expanded label showing the OLD
   value's digits (labelPool.ts's fullText-changed branch skipped its own
   text write whenever the capped text hadn't changed); it now always writes
   the current capped text there, so the toggle can never show stale digits.
@@ -852,6 +866,35 @@ and its fix-round-1 brief for I1–I7, C1 and M1–M6.
     not `gridStrong` (`--line-strong`, a stronger role meant for the
     graph's own axis-adjacent grid).
 
+**Open after the milestone gate fix (2026-09-30).** The gate review found
+three real bugs in S6's own work — the fixes are in this same commit; what
+is still open:
+
+- **M2:** releasing a held value rebuilds every record that was built while
+  held, not only the ones that read `held` themselves. `kernel/index.ts`'s
+  release check (`record.builtHeld && !held`) exists so a resolution-
+  sensitive builder (an implicit or level surface, S4b's `gradient: ...
+  surface`) gets its one full-res rebuild on release even when the box
+  never moved — but it fires for every held-built record, including
+  `centroid:` and `plane:`, which never mesh differently while held and
+  gain nothing from rebuilding (confirmed directly: releasing an unchanged
+  parameter changes both marks' identity even though neither reads `held`).
+  A triple-integral centroid's own quadrature is expensive enough that this
+  shows up as a real hitch, on the order of 0.4–1.4 s, on every release.
+  Suggested fix: a `heldSensitive` flag on a builder's registry entry
+  (`registry.ts`), set only by the handful of builders the half-resolution
+  fix (V11) actually touches, so `kernel/index.ts`'s release-rebuild check
+  can skip everything else.
+- **Parked from S5, still open:** at least 3 significant digits for
+  inequality-form regions' readouts (Richardson extrapolation was tried
+  there and failed S5's own honesty gate, so those regions still print
+  fewer digits than a rectangular one would); a per-statement quadrature
+  budget (today's `QUAD_BUDGET` is one number shared by every integral in
+  the scene, so one expensive statement can starve another's share of
+  patience); the exotic residuals S5's own ledger flagged (a short list of
+  unusual integrands whose error estimate behaved oddly enough to note, but
+  not badly enough to block S5 — never chased down further).
+
 **What remains for track 5, specific to space** (track 5 is customization and
 UI — theming, textures, line treatments, legends — see the graph spec's
 Track 5 section; S6 only carried space's existing look to a finished state on
@@ -1021,7 +1064,12 @@ track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 
 ```
 npm run test --workspace=graph-engine          # 1493 tests, node-only, no DOM
-npx tsc -b graph-engine/tsconfig.json --noEmit
+npx tsc -p tsconfig.app.json --noEmit          # from graph-engine/; NOT bare
+npx tsc -p tsconfig.node.json --noEmit         # `npx tsc --noEmit` — the root
+                                                # tsconfig.json is a solution
+                                                # file ("files": [] plus
+                                                # references) and that bare
+                                                # form checks nothing
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
 ```

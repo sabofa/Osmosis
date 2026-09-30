@@ -125,12 +125,20 @@ function prepareGradient(statement: Statement, context: BuildContext): PreparedS
       // S6 plan V11: the same half-resolution-while-held as an implicit
       // surface (implicit.ts) — this mesh is built through the same marching
       // tetrahedra, at the same cost.
-      const activeRes = heldRes(surfaceRes, context.held)
-      const mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, activeRes)
+      // Gate fix M1: a level set that fits in the gaps of the halved
+      // held-time grid is rebuilt once at the full resolution before it is
+      // ever reported missing; if it is still missing, the error names the
+      // resolution actually tried, never the halved one nobody asked for.
+      let usedRes = heldRes(surfaceRes, context.held)
+      let mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, usedRes)
+      if (!mesh && context.held && usedRes !== surfaceRes) {
+        usedRes = surfaceRes
+        mesh = MESH_LEVEL_SURFACE({ F, grad }, F(x0, y0, z0), box, usedRes)
+      }
       if (!mesh) {
         errors.push({
           line: context.line,
-          message: `gradient: the level set through ${pointText(at)} meets no cell at res ${activeRes} — at an extremum of F it is a single point; otherwise raise res:`,
+          message: `gradient: the level set through ${pointText(at)} meets no cell at res ${usedRes} — at an extremum of F it is a single point; otherwise raise res:`,
         })
       } else {
         const surface: MeshMark = {
