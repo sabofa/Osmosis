@@ -1,4 +1,4 @@
-import { offRegister } from './region'
+import { offRegister } from './offRegister'
 import type { FillType } from './types'
 
 // WASH — watercolour: a soft, uneven tint, a little darker at its edges
@@ -10,7 +10,7 @@ import type { FillType } from './types'
 // clipped to the inside, which is the darker rim.
 //
 // At roughness > 0 the whole patch — the tint and its rim together — sits a
-// touch off register (offRegister, region.ts): the wash misses the true line
+// touch off register (offRegister.ts): the wash misses the true line
 // on one side and runs under it on the other, both clipped to the exact
 // outline so nothing spills past it.
 

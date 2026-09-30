@@ -242,7 +242,7 @@ describe('the mark budget', () => {
 })
 
 // Ben's first-look note: fills should be "a little less perfect" — roughness
-// (2026-09-30 revision). Below 0 none of this runs (the hash-pinned suite
+// (2026-09-30 revision). At 0 none of this runs (the hash-pinned suite
 // above is that proof); above 0 every fill strays on purpose.
 describe('roughness', () => {
   it('hatch, crosshatch, scribble and stipple draw exactly their roughness-0 output when roughness is left out', () => {

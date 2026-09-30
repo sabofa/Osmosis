@@ -1,5 +1,4 @@
 import { sampleChain, type Chain } from '../path'
-import type { Random } from '../random'
 import type { Point } from '../tokens'
 
 // Regions for the fills: an outline flattened to polygons, the even-odd
@@ -145,19 +144,4 @@ export function hatchLength(polygons: readonly Point[][], angle: number, spacing
 export function spacingWithin(polygons: readonly Point[][], angle: number, spacing: number, budget: number): number {
   const length = hatchLength(polygons, angle, spacing)
   return length > budget ? spacing * (length / budget) : spacing
-}
-
-// ---------------------------------------------------------------------------
-// Roughness
-// ---------------------------------------------------------------------------
-
-// A flat fill's or a wash's "off register" nudge: a short seeded step in a
-// random direction, `random.range(1, 3)` drawing units long at roughness 1,
-// scaled down with it. `undefined` at roughness 0, so a fill with no
-// roughness draws exactly as before — no shift, no extra random draw.
-export function offRegister(random: Random, roughness: number): Point | undefined {
-  if (roughness <= 0) return undefined
-  const length = random.range(1, 3) * roughness
-  const angle = random.range(0, 2 * Math.PI)
-  return { x: Math.cos(angle) * length, y: Math.sin(angle) * length }
 }
