@@ -12,6 +12,8 @@
 // refusal, what writes a style back out as directives, and what the style lab
 // builds its controls from — one list, so the four can never disagree.
 
+import { COLOR_NAMES } from './colorNames'
+
 // A point in drawing coordinates. Structurally the same as the engine's Vec2,
 // declared here so this module imports nothing from the rest of the engine.
 export interface Point {
@@ -217,11 +219,13 @@ export function readToken(style: Look | Style, token: Token): string | number | 
 }
 
 // A colour setting's value, normalised: "theme", or "#rrggbb" in lower case.
-// Accepts "#rgb", "#rrggbb" and the same without the "#" — which a spec needs,
-// because "#" starts a comment there.
+// Accepts the shared colour names (colorNames.ts), "#rgb", "#rrggbb" and the
+// same without the "#" — which a spec needs, because "#" starts a comment
+// there.
 export function parseColourSetting(value: string): string | null {
   const text = value.trim().toLowerCase()
   if (text === THEME_COLOUR) return THEME_COLOUR
+  if (text in COLOR_NAMES) return `#${COLOR_NAMES[text].toString(16).padStart(6, '0')}`
   const hex = text.startsWith('#') ? text.slice(1) : text
   if (/^[0-9a-f]{6}$/.test(hex)) return `#${hex}`
   if (/^[0-9a-f]{3}$/.test(hex)) return `#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`

@@ -1,26 +1,24 @@
-// Named colors accepted by a statement's trailing "color: <value>" clause
-// (see parseStatement.ts), plus "#rrggbb" hex. Kept intentionally small — a
-// short, memorable palette an LLM (or a person) can name without guessing.
-const NAMED_COLORS: Record<string, number> = {
-  red: 0xd23f38,
-  orange: 0xe07b28,
-  yellow: 0xd4b21e,
-  green: 0x1f8f5f,
-  teal: 0x1f9a92,
-  blue: 0x2f5fd0,
-  purple: 0x7a4fd1,
-  pink: 0xd1509d,
-  brown: 0x8a5a34,
-  black: 0x1c1c22,
-  gray: 0x888891,
-  grey: 0x888891,
-  cyan: 0x22a5c4,
-}
+import { COLOR_NAMES as NAMED_COLORS } from '../style/colorNames'
 
+// Named colors accepted by a statement's trailing "color: <value>" clause
+// (see parseStatement.ts), plus hex. The names live in style/colorNames.ts,
+// shared with the style's colour settings.
+//
+// Hex is "#rrggbb" — which a spec cannot actually carry, since "#" starts a
+// comment there — or, since figure styles part 1, the same six digits bare
+// ("color: d03030"). parseStatement normalises the bare form to "#rrggbb", so
+// everything downstream sees one spelling.
 const HEX_PATTERN = /^#[0-9a-fA-F]{6}$/
+const BARE_HEX_PATTERN = /^[0-9a-fA-F]{6}$/
 
 export function isValidColor(value: string): boolean {
-  return value.toLowerCase() in NAMED_COLORS || HEX_PATTERN.test(value)
+  return value.toLowerCase() in NAMED_COLORS || HEX_PATTERN.test(value) || BARE_HEX_PATTERN.test(value)
+}
+
+// A colour as the rest of the engine reads it: a name as written, hex as
+// "#rrggbb" whichever way it was written.
+export function normaliseColor(value: string): string {
+  return BARE_HEX_PATTERN.test(value) ? `#${value.toLowerCase()}` : value
 }
 
 export function resolveColor(value: string): number {

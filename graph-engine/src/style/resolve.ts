@@ -1,3 +1,4 @@
+import { COLOR_NAMES } from './colorNames'
 import { isPresetName, PRESET_NAMES, PRESETS, type PresetName } from './presets'
 import {
   parseColourSetting,
@@ -88,7 +89,9 @@ function parseValue(token: Token, text: string, name: string): string | number {
     case 'colour': {
       const colour = parseColourSetting(value)
       if (colour === null) {
-        throw new Error(`${name} must be a colour written as six hex digits without the "#" (which starts a comment in a spec), like fdf6e3, or "theme", got "${value}"`)
+        throw new Error(
+          `${name} must be a colour: a name (${Object.keys(COLOR_NAMES).join(', ')}), six hex digits without the "#" (which starts a comment in a spec) like fdf6e3, or "theme"; got "${value}"`
+        )
       }
       return colour
     }
@@ -170,6 +173,15 @@ export function directivesFor(style: Style): string[] {
 export function checkLayer(input: StyleLayer): { layer: StyleLayer; errors: string[] } {
   const layer: StyleLayer = {}
   const errors: string[] = []
+  // The whole thing must be an object of groups. A bare preset name, an
+  // array or null is refused in one sentence, not group by group.
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    const got = input === null ? 'null' : Array.isArray(input) ? 'an array' : `the ${typeof input} ${JSON.stringify(input)}`
+    return {
+      layer,
+      errors: [`The base style must be an object such as { preset: 'ink', line: { looseness: 0.3 } }, got ${got}`],
+    }
+  }
   const source = input as unknown as Record<string, unknown>
   for (const key of Object.keys(source)) {
     const value = source[key]

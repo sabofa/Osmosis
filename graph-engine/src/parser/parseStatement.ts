@@ -1,4 +1,4 @@
-import { isValidColor } from './colors'
+import { isValidColor, normaliseColor } from './colors'
 import { parseExprString } from './parseExpr'
 import type {
   Condition,
@@ -1122,9 +1122,10 @@ function parseRegionExpr(text: string): RegionExpr {
 
 // "fill: <region>" (phase 12, F4).
 function parseFill(text: string): StatementShape {
-  // F7 — hatching is Track 5's styling; a fill is a flat tint.
+  // F7 — hatching belongs to the figure's style ("@style-fill"), not to the
+  // fill statement, which names a region.
   if (/\b(hatch|hatched|hatching)\s*$/.test(text) || /\bpattern:/.test(text)) {
-    throw new Error('Hatching is not drawn yet — a fill is a flat tint; give it a colour with "color:"')
+    throw new Error('Hatching is not drawn yet as part of a fill statement — a fill is a region; shade it with the figure style ("@style-fill: hatch") and colour it with "color:"')
   }
   return { kind: 'fill', region: parseRegionExpr(text) }
 }
@@ -2118,9 +2119,9 @@ export function parseStatement(rawLine: string): Statement {
       const stripped = stripTrailingClause(line, COLOR_CLAUSE)
       if (stripped) {
         if (!isValidColor(stripped.value)) {
-          throw new Error(`Unknown color "${stripped.value}" — use a name (red, orange, yellow, green, teal, blue, purple, pink, brown, black, gray, cyan) or "#rrggbb"`)
+          throw new Error(`Unknown color "${stripped.value}" — use a name (red, orange, yellow, green, teal, blue, purple, pink, brown, black, gray, cyan) or six hex digits without the "#" (which starts a comment), like d03030`)
         }
-        color = stripped.value
+        color = normaliseColor(stripped.value)
         line = stripped.line
         continue
       }

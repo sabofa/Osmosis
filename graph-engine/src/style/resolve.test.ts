@@ -112,6 +112,13 @@ describe('refusing a bad directive', () => {
     expect(() => applyStyleDirective({}, 'style-passes', '2.5')).toThrow(/whole number/)
   })
 
+  it('reads the shared colour names in colour settings', () => {
+    const style = resolveStyle([layerOf(['style-ink: blue', 'style-tint: Teal'])])
+    expect(style.colour.ink).toBe('#2f5fd0')
+    expect(style.paper.tint).toBe('#1f9a92')
+    expect(() => applyStyleDirective({}, 'style-ink', 'navy')).toThrow(/red, orange, yellow/)
+  })
+
   it('explains a colour, and the "#" that starts a comment', () => {
     expect(() => applyStyleDirective({}, 'style-tint', '')).toThrow(/without the "#"/)
   })
@@ -138,6 +145,15 @@ describe('checking a base style from the host', () => {
     expect(errors).toHaveLength(3)
     expect(errors.join('\n')).toMatch(/looseness/)
     expect(errors.join('\n')).toMatch(/technical, ink, brush/)
+  })
+
+  it('refuses a base style that is not an object in one legible sentence', () => {
+    for (const bad of ['ink', ['ink'], null, 3]) {
+      const { layer, errors } = checkLayer(bad as never)
+      expect(layer).toEqual({})
+      expect(errors).toHaveLength(1)
+      expect(errors[0]).toMatch(/must be an object such as \{ preset: 'ink'/)
+    }
   })
 
   it('refuses an unknown preset and an unknown group', () => {

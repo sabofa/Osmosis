@@ -42,9 +42,11 @@ describe('the seeded random source', () => {
     expect(hashString('')).toBe(0x811c9dc5)
     expect(hashString('a')).toBe(0xe40c292c)
     expect(hashString('foobar')).toBe(0xbf9cf968)
-    const first = randomFor('', 0).next()
-    expect(first).toBeCloseTo(randomFor('', 0).next(), 15)
-    expect(take('pin', 0, 3).map((v) => Math.round(v * 1e6))).toEqual(take('pin', 0, 3).map((v) => Math.round(v * 1e6)))
+    // Literal first values, checked against the reference mulberry32 (the
+    // widely published 32-bit version) seeded with FNV-1a of "<identity>|<seed>".
+    expect(take('pin', 0, 3)).toEqual([0.9235711765941232, 0.7601895884145051, 0.632674649823457])
+    expect(randomFor('', 0).next()).toBe(0.5122980382293463)
+    expect(randomFor('s3/AB#0.0', 7).next()).toBe(0.2291505872271955)
   })
 
   it('helps with ranges, integers and signs', () => {
