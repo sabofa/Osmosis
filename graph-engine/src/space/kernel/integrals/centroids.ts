@@ -92,18 +92,22 @@ function prepareMeasure(context: BuildContext, of: string, density: Expr | null,
 
 // moment / mass, with the error of a quotient, and the moment's scale
 // carried over, so a coordinate that is negligible reads ≈ 0 and one known to
-// no digit is refused (common.ts). `mesh` (S5 breaker follow-up, F1a) only
-// when both operands are: a quotient with a quadrature-derived (singular or
-// not) operand still leans on that operand's own heuristic estimate, so it
-// keeps SAFETY, same as `singular` already conservatively ORs the other way.
-function quotient(moment: Approx, mass: Approx): Approx {
+// no digit is refused (common.ts). `mesh` (S5 breaker follow-up 2, matching
+// the check's own reference) ORs, same as `singular`: mass and a moment are
+// built from the same region or solid, each its own settle() call, so in
+// practice they already agree on mesh-ness — but where one leans on a
+// heuristic (singular) and the other does not, this still favours SAFETY on
+// the singular side and the direct measurement on the other, the same
+// asymmetric bias `singular` already has, not a stricter AND that would
+// needlessly re-apply SAFETY to an otherwise-direct mesh error.
+export function quotient(moment: Approx, mass: Approx): Approx {
   const value = moment.value / mass.value
   return {
     value,
     error: (moment.error + Math.abs(value) * mass.error) / Math.abs(mass.value),
     scale: moment.scale / Math.abs(mass.value),
     singular: moment.singular || mass.singular,
-    mesh: moment.mesh === true && mass.mesh === true,
+    mesh: moment.mesh || mass.mesh,
   }
 }
 

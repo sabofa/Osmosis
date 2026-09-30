@@ -148,11 +148,24 @@ function prepareBetween(statement: Statement, context: BuildContext, solid: Extr
     const walls = candidates.filter((w): w is MeshMark => w !== null && area(w) > COLLAPSED_REL * size * size)
 
     // f < g anywhere on the floor samples or the boundary, beyond rounding.
+    // S5 breaker follow-up 2: an inequality region's own `samples` array
+    // keeps every grid vertex the box was meshed at, including ones a
+    // clipped-away triangle left behind (a box corner well outside the
+    // curve, never part of any surviving triangle) — scanning those too
+    // could add a large, genuine-looking negative gap from a point that
+    // was never part of the region at all (the dome over x^2+y^2<=4: a
+    // corner (-2.104, -2.104) reads 4 - x^2 - y^2 = -4.86, swamping the
+    // true ~1e-15 floating noise at the actual boundary). Only vertices a
+    // surviving triangle actually references are real samples of the
+    // region; an iterated region's own samples are already every vertex of
+    // its rectangle, all of them used, so this changes nothing there.
+    const used = new Set<number>()
+    for (const idx of r.samples.indices) used.add(idx)
     const gaps: number[] = []
-    for (let v = 0; v < r.samples.a.length; v++) gaps.push(f(r.samples.a[v], r.samples.b[v]) - g(r.samples.a[v], r.samples.b[v]))
+    for (const v of used) gaps.push(f(r.samples.a[v], r.samples.b[v]) - g(r.samples.a[v], r.samples.b[v]))
     for (const piece of r.boundary) for (let k = 0; k < piece.ab.length; k += 2) gaps.push(f(piece.ab[k], piece.ab[k + 1]) - g(piece.ab[k], piece.ab[k + 1]))
     const scale = gaps.reduce((m, d) => (Number.isFinite(d) ? Math.max(m, Math.abs(d)) : m), 0)
-    const crosses = gaps.some((d) => d < -1e-12 * scale)
+    const crosses = gaps.some((d) => d < -1e-9 * scale)
 
     const marks: Mark[] = [...surfaces, ...walls]
     const topMark = surfaces.find((m) => m.source.object === context.source.object)

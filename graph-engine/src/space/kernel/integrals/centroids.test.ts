@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SpaceScene } from '../../scene/types'
 import { determined, IntegralRefusal } from './common'
-import { positionOrZero } from './centroids'
+import { positionOrZero, quotient } from './centroids'
 import { approx, approxTuple, kernelOf, markNamed, polylines, readout, sceneOf } from './testing'
 
 function centre(scene: SpaceScene, line: number): number[] {
@@ -197,6 +197,23 @@ describe('a centroid coordinate reads 0 against its own extent, not the integral
     // The same absolute error against a region only 0.01 wide is not
     // negligible on that scale, and is refused, never silently shown as 0.
     expect(() => determined(positionOrZero(noise, 0.01))).toThrow(IntegralRefusal)
+  })
+})
+
+// S5 breaker follow-up 2: quotient's `mesh` ORs its two operands, matching
+// `singular`'s own asymmetric bias — a mass and a moment usually agree on
+// mesh-ness in practice (the same region, the same settle() call, just a
+// different integrand), but where only one is a direct mesh measurement,
+// the combined coordinate should still get that benefit rather than being
+// forced back onto SAFETY by the other operand.
+describe('quotient (fix follow-up 2): mesh ORs, not ANDs', () => {
+  it('mesh true on either operand makes the quotient mesh true', () => {
+    const meshy = { value: 1, error: 0.01, scale: 1, mesh: true as const }
+    const notMeshy = { value: 2, error: 0.01, scale: 1 }
+    expect(quotient(meshy, notMeshy).mesh).toBe(true)
+    expect(quotient(notMeshy, meshy).mesh).toBe(true)
+    expect(quotient(meshy, meshy).mesh).toBe(true)
+    expect(quotient(notMeshy, notMeshy).mesh).toBeFalsy()
   })
 })
 
