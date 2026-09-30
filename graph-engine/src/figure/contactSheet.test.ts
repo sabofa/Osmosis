@@ -42,11 +42,14 @@ describe('the contact sheet', () => {
 
   it('shows every line type, fill, paper and face', () => {
     const titles = sections.map((s) => s.title)
-    expect(titles).toEqual(['Presets', 'Line types', 'Fills', 'Papers', 'Lettering', 'Looseness'])
+    expect(titles).toEqual(['Presets', 'Line types', 'Fills', 'Papers', 'Lettering', 'Looseness', 'Imperfection'])
     expect(sections[1].columns).toHaveLength(6)
     expect(sections[2].columns).toHaveLength(7)
     expect(sections[3].columns).toHaveLength(9)
     expect(sections[4].columns).toHaveLength(3)
+    // Roughness 0, 0.5 and 1, mirroring the Looseness section.
+    expect(sections[6].columns).toEqual(['0', '0.5', '1'])
+    expect(sections[6].rows.map((r) => r.label)).toEqual(['hatch', 'crosshatch', 'scribble', 'stipple', 'flat', 'ink line · grain'])
   })
 
   it('draws every cell without errors or non-finite numbers', () => {
@@ -63,7 +66,7 @@ describe('the contact sheet', () => {
 
   it('splits into pages short enough to screenshot, together holding every figure', () => {
     const pages = contactSheetPages(sections)
-    expect(pages.map((p) => p.name)).toEqual(['presets-1', 'presets-2', 'line-types', 'fills', 'papers', 'lettering', 'looseness'])
+    expect(pages.map((p) => p.name)).toEqual(['presets-1', 'presets-2', 'line-types', 'fills', 'papers', 'lettering', 'looseness', 'imperfection-1', 'imperfection-2'])
     const total = pages.reduce((n, p) => n + (p.html.match(/<svg /g)?.length ?? 0), 0)
     expect(total).toBe(sections.reduce((n, s) => n + s.rows.length * s.columns.length, 0))
     for (const page of pages) expect(page.html.startsWith('<!doctype html>')).toBe(true)
