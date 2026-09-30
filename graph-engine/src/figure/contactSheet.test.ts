@@ -49,7 +49,7 @@ describe('the contact sheet', () => {
     expect(sections[4].columns).toHaveLength(3)
     // Roughness 0, 0.5 and 1, mirroring the Looseness section.
     expect(sections[6].columns).toEqual(['0', '0.5', '1'])
-    expect(sections[6].rows.map((r) => r.label)).toEqual(['hatch', 'crosshatch', 'scribble', 'stipple', 'flat', 'ink line · grain'])
+    expect(sections[6].rows.map((r) => r.label)).toEqual(['hatch', 'crosshatch', 'scribble', 'stipple', 'flat', 'ink line · variation'])
   })
 
   it('draws every cell without errors or non-finite numbers', () => {

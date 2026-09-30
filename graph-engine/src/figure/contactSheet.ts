@@ -140,7 +140,7 @@ export function contactSheet(palette: Palette = LIGHT_PALETTE): SheetSection[] {
     },
     {
       title: 'Imperfection',
-      note: 'Fill roughness (the ink preset, "Square minus its circle") and the ink line’s grain (ink, "Measured + notation"), exact (0) to rough (1).',
+      note: 'Fill roughness (the ink preset, "Square minus its circle") and the ink line’s variation (ink, "Measured + notation"), exact (0) to rough (1).',
       columns: ['0', '0.5', '1'],
       rows: [
         ...(['hatch', 'crosshatch', 'scribble', 'stipple', 'flat'] as const).map((fillType) =>
@@ -148,8 +148,8 @@ export function contactSheet(palette: Palette = LIGHT_PALETTE): SheetSection[] {
             sheetCell(`${fillType} · roughness ${value}`, exampleSpec('Square minus its circle'), ['@style: ink', `@style-fill: ${fillType}`, `@style-roughness: ${value}`], palette)
           )
         ),
-        row('ink line · grain', ['0', '0.5', '1'], (value) =>
-          sheetCell(`ink · grain ${value}`, exampleSpec('Measured + notation'), ['@style: ink', `@style-grain: ${value}`], palette)
+        row('ink line · variation', ['0', '0.5', '1'], (value) =>
+          sheetCell(`ink · variation ${value}`, exampleSpec('Measured + notation'), ['@style: ink', `@style-variation: ${value}`], palette)
         ),
       ],
     },

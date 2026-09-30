@@ -1,7 +1,7 @@
 import type { Texture } from './lines/types'
 import { tag, type Box } from './markup'
 
-// Textures: the grain in graphite, the dust in chalk, the soft edge of ink.
+// Textures: the grain in graphite, the dust in chalk, the tint of a wash.
 //
 // Each is an SVG filter laid over EVERYTHING drawn in one line type (the pen
 // puts it on the stroke layers), so it is computed once per figure rather
@@ -44,22 +44,6 @@ export function textureFilter(texture: Texture, id: string, region: Box): string
         ...speckle(0.55, 3, 6, 6 * (0.3 + 0.2 * s) - 1),
         tag('feComposite', { in: 'soft', in2: 'speck', operator: 'in' }),
       ])
-    // Ink: a faint halo where the ink wicks into the paper, under the line,
-    // plus — rising gently with strength — a few pinholes knocked out of the
-    // line itself: a nib running dry rather than a break in the stroke.
-    // Pinholes appear only where the noise falls below cut/6 — about 0.14 of
-    // the range at s = 0.3 (grain 0) and about 0.33 at s = 1, so only a
-    // sliver of the noise ever gets knocked out.
-    case 'bleed': {
-      const cut = 6 * (0.25 + 0.25 * s) - 1
-      return tag('filter', frame, [
-        tag('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: 0.25 + 0.5 * s, result: 'halo' }),
-        tag('feComponentTransfer', { in: 'halo', result: 'faint' }, [tag('feFuncA', { type: 'linear', slope: 0.55 })]),
-        tag('feMerge', { result: 'merged' }, [tag('feMergeNode', { in: 'faint' }), tag('feMergeNode', { in: 'SourceGraphic' })]),
-        ...speckle(0.45, 2, 6, cut),
-        tag('feComposite', { in: 'merged', in2: 'speck', operator: 'in' }),
-      ])
-    }
     // Watercolour: broad, slow noise varying how strongly the tint covers,
     // so a wash is blotchy rather than flat.
     case 'wash':

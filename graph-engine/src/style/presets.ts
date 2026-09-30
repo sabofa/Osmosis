@@ -29,14 +29,13 @@ export const PRESETS: Record<PresetName, Look> = {
     colour: { ink: 'theme', saturation: 1 },
   },
 
-  // A fountain pen on good paper. Blue-black ink; two passes available, of
-  // which the ink line uses the second only now and then (its "occasional
-  // doubling"). Hatching at a pen's spacing. Grain 0.6 (raised from the
-  // first pass's 0.1, Ben's "rough ink brush" note): ragged edges and a dry,
-  // splitting tail, not just a soft bled edge. Width 1.4 after the first
-  // look: at width 1 the brush texture was too fine to see.
+  // A brush pen on good paper, in blue-black ink. The line is solid and
+  // lives in its width (Ben's reference, 2026-09-30: "the pen should not
+  // have grain, it should have variance"): strong pressure variation, fine
+  // tapered ends, slightly bumpy edges. Grain is not read by ink. Hatching
+  // at a pen's spacing, a little loose.
   ink: {
-    line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 2, width: 1.4, variation: 0.4, taper: 0.3, grain: 0.6, opacity: 1 },
+    line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 1, width: 1.7, variation: 0.75, taper: 0.8, grain: 0, opacity: 1 },
     fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65, roughness: 0.45 },
     paper: { type: 'paper', tint: '#fbf8f0', texture: 0.45, grid: 24 },
     lettering: { face: 'math', size: 1.05, tilt: 0 },

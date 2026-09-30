@@ -305,7 +305,8 @@ describe('a styled page', () => {
     const clean = render(figure.join('\n')).svg
     const polygon = /<line[^>]*stroke="(#[0-9a-f]{6})"[^>]*data-statement="0"/.exec(clean)![1]
     const region = /<path[^>]*fill="(#[0-9a-f]{6})"[^>]*data-statement="1"/.exec(clean)![1]
-    expect(vivid).toContain(`stroke="${polygon}"`)
+    // Ink draws every line as a filled outline, so the polygon's colour is a fill.
+    expect(vivid).toMatch(new RegExp(`<polygon[^>]*fill="${polygon}"[^>]*data-statement="0"`))
     expect(vivid).toContain(`fill="${region}"`)
   })
 

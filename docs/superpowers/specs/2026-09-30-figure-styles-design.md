@@ -49,7 +49,7 @@ A **style** is five groups of settings. A **preset** is a named, complete set of
 
 **The six line types are genuinely different**, not the same line with different numbers:
 - **technical:** a uniform-width, crisp line with square-ish ends and no wobble. It is clean's line, and it lets other presets keep precise lines.
-- **ink:** a pen line with slight long-wavelength wobble, gentle pressure variation, occasional doubling at low looseness, and a hint of bleed at the ends.
+- **ink:** a brush-pen line in solid ink: its width swells and thins with the hand's pressure, it tapers to fine points at both ends, and its edges are slightly bumpy, each side in its own way. No grain and no texture (revised 2026-09-30, below).
 - **brush:** a calligraphic stroke drawn as a filled outline. It swells in the middle, tapers to points, and its width depends on direction.
 - **pencil:** two or three light, slightly offset graphite passes, broken by grain, grey, and lower opacity.
 - **marker:** a thick felt-tip line with round ends and slight translucency. Overlaps darken where strokes cross, and the ends blot slightly.
@@ -112,7 +112,7 @@ Fonts are named with fallbacks: a font the page has not loaded degrades to a sys
 | Preset | Line | Fill | Paper | Lettering | Colour |
 |---|---|---|---|---|---|
 | **clean** | technical, exact | flat | clean | math | as today |
-| **ink** | ink, looseness 0.25, wobble 0.3, passes 1–2, variation 0.4 | hatch | paper | math | blue-black ink, saturation 0.9 |
+| **ink** | ink, looseness 0.25, wobble 0.3, variation 0.75, taper 0.8, width 1.7 | hatch | paper | math | blue-black ink, saturation 0.9 |
 | **pencil** | pencil, looseness 0.3, passes 2, grain 0.6, opacity 0.85 | hatch (pencil) | rough-paper | hand | graphite, saturation 0.4 |
 | **marker** | marker, looseness 0.2, width 1.8, variation 0.2 | scribble | ruled | hand | marker colours, saturation 1.1 |
 
@@ -208,6 +208,17 @@ What changes:
    - Many strokes run dry toward their end: the tail splits into a few bristle strands with gaps between them, some running out early.
    - The ink texture knocks a few pinholes out of the line.
    - At least one strand always reaches the true end, so the faithfulness rule holds.
-3. **Presets:** ink `grain` 0.55 and fill roughness 0.35; pencil fill roughness 0.45; marker fill roughness 0.6; clean 0 (not read; clean stays byte-identical).
+3. **Presets:** fill roughness ink 0.45, pencil 0.5, marker 0.6, clean 0 (not read; clean stays byte-identical).
 4. **Rule 4 (faithful at the exact end) for fills:** at roughness 0, hatch and scribble marks lie inside the region as before. Above 0 they may run past its edge, and the pen's clip keeps what is drawn inside. Stipple centres are always inside.
-5. **The contact sheet gains an "Imperfection" page:** hatch, crosshatch, scribble, stipple and flat at roughness 0, 0.5 and 1, and the ink line at grain 0, 0.5 and 1.
+5. **The contact sheet gains an "Imperfection" page:** hatch, crosshatch, scribble, stipple and flat at roughness 0, 0.5 and 1, and the ink line at variation 0, 0.5 and 1.
+
+### Revised again, same day: ink has variance, not grain
+
+Ben, with a reference sheet of brush-pen strokes: *"the pen should not have grain, it should have varience."* Item 2 above is withdrawn.
+- Ink carries no texture: no pinholes, speckle or halo. There are no dry-brush strands, no end blots and no second pass. `grain` is not read by ink.
+- The ink line is one solid outline whose width does the work, all following `variation`:
+  - it swells and thins slowly with the hand's pressure, a few fat stretches and thin necks per stroke;
+  - its ends taper to fine points over up to 30% of the stroke at each end (`taper`);
+  - each edge has its own small bumps.
+- At variation 0 and taper 0 it is an even ribbon. The spine is still the hand's, so the faithfulness rule is unchanged.
+- The retired pinhole texture (`bleed`) is removed from `textures.ts`.

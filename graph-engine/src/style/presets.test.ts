@@ -46,7 +46,7 @@ describe('presets', () => {
     // rule wins: clean letters in "textbook", whose stack IS today's.
     expect(PRESETS.clean.lettering).toEqual({ face: 'textbook', size: 1, tilt: 0 })
 
-    expect(PRESETS.ink.line).toMatchObject({ type: 'ink', looseness: 0.25, wobble: 0.3, variation: 0.4 })
+    expect(PRESETS.ink.line).toMatchObject({ type: 'ink', looseness: 0.25, wobble: 0.3, variation: 0.75, taper: 0.8 })
     expect(PRESETS.ink.line.passes).toBeLessThanOrEqual(2)
     expect(PRESETS.ink.fill.type).toBe('hatch')
     expect(PRESETS.ink.paper.type).toBe('paper')

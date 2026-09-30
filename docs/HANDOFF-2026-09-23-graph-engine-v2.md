@@ -1128,18 +1128,17 @@ texture, and fills generally needed to be a little less perfect. So:
   the other (`fills/region.ts`'s `offRegister`) — and flat takes a faint
   `mottle` texture (`textures.ts`). Presets: ink 0.35, pencil 0.45, marker
   0.6, clean 0 (unread).
-- **Ink's `grain`** now drives a rough brush, not just paper-grain texture:
-  ragged edges (the ribbon's two sides straying independently,
-  `lines/hand.ts`'s `ribbon2`) and, on a long enough open stroke, a dry-brush
-  tail that splits into a few bristle strands with gaps — one of which
-  always reaches the true end, so the faithfulness rule holds even as the
-  brush runs dry (`lines/ink.ts`). The `bleed` texture also knocks a few
-  pinholes out of the line, rising with strength (`textures.ts`). Ink's
-  preset grain rose from 0.1 to 0.6 and its width to 1.4 (at width 1 the
-  texture was too fine to see); ink and pencil fill roughness are 0.45 and 0.5.
+- **Ink has variance, not grain** (Ben's call after the first rough-ink pass, with a
+  reference of brush-pen strokes). The ink line (`lines/ink.ts`) is one solid
+  outline: its width swells and thins with slow pressure noise, tapers to fine
+  points at both ends, and each edge has its own small bumps (`ribbon2`), all
+  following `variation` and `taper`. There is no texture, no dry brush, no end
+  blots and no second pass, and `grain` is not read. The pinhole `bleed`
+  texture is gone. Ink preset: width 1.7, variation 0.75, taper 0.8. Fill
+  roughness: ink 0.45, pencil 0.5, marker 0.6.
 - The contact sheet's new **"Imperfection"** section shows hatch,
   crosshatch, scribble, stipple and flat at roughness 0/0.5/1, and the ink
-  line at grain 0/0.5/1.
+  line at variation 0/0.5/1.
 
 **Roughness's own fix round 1.** An independent review of the above caught,
 critically, that the `bleed` pinhole mask (`textures.ts`) was inverted —
@@ -1203,7 +1202,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2445 tests (after visual pass 1, its fix rounds, roughness, and its own fix round 1), node-only, no DOM
+npm run test --workspace=graph-engine          # 2443 tests (after visual pass 1, roughness, and ink as variance), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
