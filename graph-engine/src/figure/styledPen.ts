@@ -7,6 +7,8 @@ import { hashString, randomFor } from '../style/random'
 import { textureFilter } from '../style/textures'
 import type { LineSettings, Style } from '../style/tokens'
 import { FILLS } from '../style/fills'
+import { FACES, tiltFor } from '../style/lettering'
+import { PAPERS } from '../style/papers'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
 import { notationElements } from './notation'
 import { cleanFill, regionChains, strokeChains, type FigurePen, type FillRegion } from './pen'
@@ -113,6 +115,17 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
   const ink = style.colour.ink === 'theme' ? theme.ink : style.colour.ink
   const tint = style.paper.tint === 'theme' ? theme.background : style.paper.tint
   let paperMarkup = ''
+  let paperDefs: string[] = []
+
+  // A label's group: turned by its seeded tilt (at most 4 degrees) and
+  // scaled by `scale`, both about `anchor`. Neither moves the anchor.
+  const turned = (markup: string, anchor: Vec2, scale: number, id: string): string => {
+    const tilt = tiltFor(style.lettering.tilt, randomFor(`${id}/tilt`, style.seed))
+    const transforms: string[] = []
+    if (tilt !== 0) transforms.push(`rotate(${fmt(tilt)} ${fmt(anchor.x)} ${fmt(anchor.y)})`)
+    if (scale !== 1) transforms.push(`translate(${fmt(anchor.x)} ${fmt(anchor.y)}) scale(${fmt(scale)}) translate(${fmt(-anchor.x)} ${fmt(-anchor.y)})`)
+    return transforms.length === 0 ? markup : `<g transform="${transforms.join(' ')}">${markup}</g>`
+  }
 
   // A colour as the style draws it. The theme's ink becomes the style's ink,
   // the theme's paper the style's paper, and every colour — an author's own
@@ -256,18 +269,29 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
       layers[layer].push(svgCircle(at, radius, { ...attrs, fill: colour(attrs.fill) }))
     },
 
-    text(at, text, attrs, _id, layer) {
-      layers[layer].push(svgText(at, text, { ...attrs, fill: colour(attrs.fill) }))
+    // A label in the style's face and size, turned by its seeded tilt about
+    // its own anchor — the point the label layout placed it at, which stays
+    // exactly where it was.
+    text(at, text, attrs, id, layer) {
+      const size = numberOf(attrs['font-size'], 0) * style.lettering.size
+      const element = svgText(at, text, { ...attrs, 'font-size': size || attrs['font-size'], 'font-family': FACES[style.lettering.face], fill: colour(attrs.fill) })
+      layers[layer].push(turned(element, at, 1, id))
     },
 
-    notation(layout, origin, notationStyle, _id, layer) {
-      layers[layer].push(
-        ...notationElements(layout, origin, {
-          ...notationStyle,
-          fill: colour(notationStyle.fill) ?? notationStyle.fill,
-          stroke: notationStyle.stroke === undefined ? undefined : (colour(notationStyle.stroke) ?? notationStyle.stroke),
-        })
-      )
+    // A label with notation: the same face, and the same tilt and size about
+    // the middle of its glyph row. The givens table's rows keep their size
+    // (the table was measured at it), so they only change face; their ids
+    // are "givens/…" and "…/cell-N" (render.ts).
+    notation(layout, origin, notationStyle, id, layer) {
+      const inTable = /^givens\/|\/cell-\d+$/.test(id)
+      const elements = notationElements(layout, origin, {
+        ...notationStyle,
+        fontFamily: FACES[style.lettering.face],
+        fill: colour(notationStyle.fill) ?? notationStyle.fill,
+        stroke: notationStyle.stroke === undefined ? undefined : (colour(notationStyle.stroke) ?? notationStyle.stroke),
+      })
+      if (inTable) layers[layer].push(...elements)
+      else layers[layer].push(turned(elements.join(''), { x: origin.x + layout.width / 2, y: origin.y }, style.lettering.size, id))
     },
 
     // The givens table's box: paper-coloured, its edge drawn in the line type.
@@ -283,9 +307,19 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
       strokeChainsWith(sides, attrs, id, layer)
     },
 
-    // Clean paper for now: the style's tint over the view.
+    // The style's paper (style/papers/), under everything, covering three
+    // view boxes beyond the figure on every side.
     paper(viewBox) {
-      paperMarkup = `<rect${attributes({ x: viewBox.x, y: viewBox.y, width: viewBox.width, height: viewBox.height, fill: tint, 'data-layer': 'paper' })}/>`
+      const laid = PAPERS[style.paper.type].draw({
+        settings: style.paper,
+        tint: colour(tint) ?? tint,
+        view: viewBox,
+        id: (name) => `${ID}paper-${name}`,
+        colour: (hex) => saturate(hex, style.colour.saturation),
+        random: randomFor('paper', style.seed),
+      })
+      paperDefs = laid.defs
+      paperMarkup = laid.background.length > 0 ? `<g data-layer="paper">${laid.background.join('')}</g>` : ''
     },
 
     svg(viewBox) {
@@ -299,6 +333,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
         ...(texture && textureId ? [textureFilter(texture, textureId, region)] : []),
         ...[...fillTextures].map(([name, used]) => textureFilter(used, name, region)),
         ...clipDefs,
+        ...paperDefs,
       ]
       const body = (defs.length > 0 ? `<defs>${defs.join('')}</defs>` : '') + paperMarkup + groups.join('')
       // The content hash that names this figure's ids: of the body, with the

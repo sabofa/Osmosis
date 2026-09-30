@@ -192,3 +192,71 @@ ${example('Lens of two circles')}`
     expect(render(spec).svg).toBe(render(spec).svg)
   })
 })
+
+// Papers, lettering and colour, end to end.
+describe('a styled page', () => {
+  const texts = (svg: string) =>
+    [...svg.matchAll(/<text([^>]*)>([^<]*)<\/text>/g)].map((m) => ({
+      text: m[2],
+      x: /\bx="([^"]*)"/.exec(m[1])![1],
+      y: /\by="([^"]*)"/.exec(m[1])![1],
+      family: /font-family="([^"]*)"/.exec(m[1])?.[1],
+    }))
+  const LABELLED = EXAMPLES.find((e) => e.label === 'Measured + notation')!.spec
+
+  it('writes labels in the handwriting stack, at exactly their clean anchors', () => {
+    const clean = texts(render(LABELLED).svg)
+    const hand = texts(render(`@style: pencil\n@style-tilt: 1\n${LABELLED}`).svg)
+    expect(hand.length).toBe(clean.length)
+    for (const label of hand) expect(label.family).toMatch(/^Caveat/)
+    expect(hand.map(({ text, x, y }) => `${text}@${x},${y}`).sort()).toEqual(clean.map(({ text, x, y }) => `${text}@${x},${y}`).sort())
+  })
+
+  it('tilts each label about its own anchor, by at most four degrees', () => {
+    const svg = render(`@style: pencil\n@style-tilt: 1\n${LABELLED}`).svg
+    const rotations = [...svg.matchAll(/<g transform="rotate\(([^ ]+) ([^ ]+) ([^)]+)\)"[^>]*>(<text[^>]*>)/g)]
+    expect(rotations.length).toBeGreaterThanOrEqual(3)
+    for (const [, degrees, cx, cy, text] of rotations) {
+      expect(Math.abs(Number(degrees))).toBeLessThanOrEqual(4)
+      // A plain label is written centred on its anchor, so it turns about it.
+      if (text.includes('text-anchor="middle"')) {
+        expect(cx).toBe(/\bx="([^"]*)"/.exec(text)![1])
+        expect(cy).toBe(/\by="([^"]*)"/.exec(text)![1])
+      }
+    }
+    expect(render(`@style: pencil\n@style-tilt: 0\n${LABELLED}`).svg).not.toMatch(/rotate\(/)
+  })
+
+  it('applies saturation to ink, fills, paper and an author’s own colour', () => {
+    // Named colours: "#" starts a comment in a spec.
+    const figure = ['@mode: figure', 'polygon: A(0,0), B(4,0), C(1,3) color: red', 'fill: A-B-C color: blue', 'segment: A-C']
+    const spec = ['@style: ink', '@style-saturation: 0', ...figure].join('\n')
+    const svg = render(spec).svg
+    const colours = [...svg.matchAll(/(?:fill|stroke)="(#[0-9a-f]{6})"/g)].map((m) => m[1])
+    expect(colours.length).toBeGreaterThan(3)
+    for (const hex of colours) {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+      expect(Math.max(r, g, b) - Math.min(r, g, b), hex).toBeLessThanOrEqual(1)
+    }
+    // At 1 the author's colours stand exactly as the clean figure draws them.
+    const vivid = render(spec.replace('@style-saturation: 0', '@style-saturation: 1')).svg
+    const clean = render(figure.join('\n')).svg
+    const polygon = /<line[^>]*stroke="(#[0-9a-f]{6})"[^>]*data-statement="0"/.exec(clean)![1]
+    const region = /<path[^>]*fill="(#[0-9a-f]{6})"[^>]*data-statement="1"/.exec(clean)![1]
+    expect(vivid).toContain(`stroke="${polygon}"`)
+    expect(vivid).toContain(`fill="${region}"`)
+  })
+
+  it('lays the paper under everything, generously', () => {
+    const svg = render(`@style: ink\n@style-paper: graph\n${TRIANGLE}`).svg
+    const paper = svg.indexOf('data-layer="paper"')
+    expect(paper).toBeGreaterThan(0)
+    expect(paper).toBeLessThan(svg.indexOf('data-layer="regions"'))
+    expect(svg).toMatch(/<pattern id="[^"]+graph"/)
+  })
+
+  it('lays no paper at all for none', () => {
+    const svg = render(`@style: ink\n@style-paper: none\n${TRIANGLE}`).svg
+    expect(svg).not.toMatch(/data-layer="paper"/)
+  })
+})
