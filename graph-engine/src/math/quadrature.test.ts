@@ -186,9 +186,13 @@ describe('divergence, refusals and the budget (S5 fix rounds 1 and 2)', () => {
   })
 
   it('1/(x^2 + y^2 + z^2) over the unit cube converges: a value or, at worst, "did not settle" — never divergence', () => {
+    // S5 breaker ruling, F3: pinned to the deterministic result — the corner
+    // singularity at the origin drives every level toward finer panels near
+    // it until the shared budget runs out first, so this always throws
+    // "budget", never a value and never "does not converge".
     const r = timed(() => integrate3((x, y, z) => 1 / (x * x + y * y + z * z), 0, 1, () => 0, () => 1, () => 0, () => 1))
     expect(r.ms).toBeLessThan(GUARD_MS)
-    if (r.error) expect((r.error as QuadratureError).reason).toBe('budget')
+    expect((r.error as QuadratureError).reason).toBe('budget')
   }, HEAVY_MS)
 
   it('a budget is shared by every level, pass and rung: a small one is spent by one smooth triple integral, as "budget"', () => {
@@ -250,30 +254,32 @@ describe('never a wrong confident number (S5 fix round 3)', () => {
     const line = integrate2((x, y) => 1 / Math.sqrt(Math.abs(x - y)), 0, 1, () => 0, () => 1)
     expect(Math.abs(line.value - 8 / 3)).toBeLessThanOrEqual(line.error)
     expect(line.error).toBeLessThan(1e-5)
-    // 1/r: the check pass's single-panel start puts its own outer centre
-    // exactly at x = 0, where 1/hypot(0, y) = 1/|y| genuinely does not
-    // converge in y (unlike the true g(x) = integral, finite for x != 0) —
-    // a measure-zero artifact of the node, not the integral. Since fix
-    // round 4 (I1c), a divergence claim from only one pass is not believed
-    // over the other's value, so this is now an honest "did not settle"
-    // rather than a wrong "diverges"; either is acceptable, never the wrong
-    // number.
-    const r = timed(() => integrate2((x, y) => 1 / Math.hypot(x, y), -1, 1, () => -1, () => 1))
-    if (r.error) expect((r.error as QuadratureError).reason).toBe('slow')
-    else expect(Math.abs((r.value as QuadResult).value - 8 * Math.asinh(1))).toBeLessThanOrEqual((r.value as QuadResult).error)
+    // 1/r: round 4's check-pass single-panel start used to put its own
+    // outer centre exactly at x = 0, where 1/hypot(0, y) = 1/|y| genuinely
+    // does not converge in y (unlike the true g(x) = integral, finite for
+    // x != 0) — a measure-zero artifact of that node, not the integral.
+    // Round 5 removed the single-panel start (the check pass now begins
+    // from the same golden section as the main pass, finding 3), so no
+    // node of either pass ever lands on a range's own midpoint: this is
+    // always valued now, never even transiently "did not settle" (S5
+    // breaker ruling, F3 — pinned to the deterministic result).
+    const r = integrate2((x, y) => 1 / Math.hypot(x, y), -1, 1, () => -1, () => 1)
+    expect(Math.abs(r.value - 8 * Math.asinh(1))).toBeLessThanOrEqual(r.error)
   }, HEAVY_MS)
 
-  it('slow singular ends are never called divergent: x^-0.99, x^-0.999 and 1/(x ln^2 x) — a value, or "did not settle" at 0', () => {
-    const cases: [(x: number) => number, number, number][] = [
-      [(x) => x ** -0.99, 1, 100],
-      [(x) => x ** -0.999, 1, 1000],
-      [(x) => 1 / (x * Math.log(x) ** 2), 0.5, 1 / Math.LN2],
+  // S5 breaker ruling, F3: pinned to the deterministic result — all three
+  // shrink too slowly (their shell ratio at or past QUAD_SLOW_RATIO) to
+  // trust a geometric-tail estimate, so all three "did not settle", never
+  // a value; quadrature.ts's own rules are unchanged this round.
+  it('slow singular ends are never called divergent: x^-0.99, x^-0.999 and 1/(x ln^2 x) — "did not settle" at 0, never "does not converge"', () => {
+    const cases: [(x: number) => number, number][] = [
+      [(x) => x ** -0.99, 1],
+      [(x) => x ** -0.999, 1],
+      [(x) => 1 / (x * Math.log(x) ** 2), 0.5],
     ]
-    for (const [f, hi, exact] of cases) {
-      const r = timed(() => integrate2(f, 0, hi, () => 0, () => 1))
-      expect(r.ms).toBeLessThan(GUARD_MS)
-      if (r.error) expect([(r.error as QuadratureError).reason, (r.error as QuadratureError).at[0]]).toEqual(['slow', 0])
-      else expect(Math.abs((r.value as QuadResult).value - exact)).toBeLessThanOrEqual((r.value as QuadResult).error)
+    for (const [f, hi] of cases) {
+      const e = failure(() => integrate2(f, 0, hi, () => 0, () => 1))
+      expect([e.reason, e.at[0]]).toEqual(['slow', 0])
     }
   })
 
@@ -332,8 +338,10 @@ describe('never a wrong confident number (S5 fix round 3)', () => {
     expect(honest((b) => integrate3((_x, _y, z) => Math.abs(z), -1, 1, ...ballY, ...ballZ, undefined, b), Math.PI / 2, 10)).toBeLessThan(2_500_000)
   }, HEAVY_MS)
   it('D: the pyramid z <= 1 - max(|x|, |y|) — kinks at y = ±x and x = 0', () => {
+    // 2.5M, not 2M (S5 breaker ruling, F3): this case costs ~1,965,572, under 2% headroom below
+    // the old 2,000,000 ceiling — too close for a stable regression bound.
     const pyramid = (x: number, y: number) => 1 - Math.max(Math.abs(x), Math.abs(y))
-    expect(honest((b) => integrate3(() => 1, -1, 1, () => -1, () => 1, () => 0, pyramid, undefined, b), 4 / 3, 10)).toBeLessThan(2_000_000)
+    expect(honest((b) => integrate3(() => 1, -1, 1, () => -1, () => 1, () => 0, pyramid, undefined, b), 4 / 3, 10)).toBeLessThan(2_500_000)
   }, HEAVY_MS)
   it('D: |y - z| and min(y, z) over the cube — a kink in z', () => {
     expect(honest(cube((_x, y, z) => Math.abs(y - z)), 1 / 3, 10)).toBeLessThan(1_000_000)

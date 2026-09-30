@@ -31,6 +31,7 @@
 import type { Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
 import { gaussLegendre7, integrate2, integrate3 } from '../../../math/quadrature'
+import { S5_SAFETY } from '../../../math/tolerance'
 import { formatNumber, formatPoint } from '../../pick/format'
 import type { Domain } from '../../grammar/types'
 import type { LineMark, MeshMark, Range, SceneError } from '../../scene/types'
@@ -317,6 +318,13 @@ const THIN_CAP = 400
 // 4, C3), whose finer grid contains every vertex of the coarser one, and so
 // can repeat the exact same fragment — a missed fragment is missed
 // differently, and a real disagreement shows up as one.
+//
+// S5 breaker ruling, F2: a fixed 2% no longer covers every case — the
+// review found thin strips at res 32 and the default res still printing
+// truncated areas within it. This fraction is now used only for regions
+// findExtent already found comfortably wide (never flagged thin below);
+// a thin region uses the SAFETY-scaled bounded-sum error rule instead (see
+// inequalityRegion).
 const FIT_AGREE_REL = 0.02
 
 // The degree-2 rule at interior points (barycentric 2/3, 1/6, 1/6), so a
@@ -425,12 +433,12 @@ function offsetBox(box: { x: Range; y: Range }, res: number): { x: Range; y: Ran
   return { x: { min: box.x.min + cx / 2, max: box.x.max + cx / 2 }, y: { min: box.y.min + cy / 2, max: box.y.max + cy / 2 } }
 }
 
-// The region's own box on the grid of `box`: the extent of what a first
-// meshing at n finds, one cell wider each way, within the box. A small region
-// then gets the full resolution. Nothing found is refused.
-function fittedBox(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): { x: Range; y: Range } {
+// What a first meshing at n finds of the region within `box`: its own
+// bounding box, in (x, y). Null when nothing is found (empty, or too thin
+// for this resolution to catch at all).
+function findExtent(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): { x0: number; x1: number; y0: number; y1: number } | null {
   const probe = inequalitySamples(conditions, box.x, box.y, n)
-  if (probe.indices.length === 0) throw new Error('the region is empty or too small to find at this resolution; raise res:')
+  if (probe.indices.length === 0) return null
   let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity]
   for (const v of probe.indices) {
     x0 = Math.min(x0, probe.x[v])
@@ -438,12 +446,53 @@ function fittedBox(conditions: readonly Condition[], box: { x: Range; y: Range }
     y0 = Math.min(y0, probe.y[v])
     y1 = Math.max(y1, probe.y[v])
   }
+  return { x0, x1, y0, y1 }
+}
+
+// The region's own box on the grid of `box`: the extent of what a first
+// meshing at n finds, one cell wider each way, within the box. A small region
+// then gets the full resolution. Nothing found is refused.
+function fittedBox(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): { x: Range; y: Range } {
+  const ext = findExtent(conditions, box, n)
+  if (!ext) throw new Error('the region is empty or too small to find at this resolution; raise res:')
   const cx = (box.x.max - box.x.min) / n
   const cy = (box.y.max - box.y.min) / n
   return {
-    x: { min: Math.max(box.x.min, x0 - cx), max: Math.min(box.x.max, x1 + cx) },
-    y: { min: Math.max(box.y.min, y0 - cy), max: Math.min(box.y.max, y1 + cy) },
+    x: { min: Math.max(box.x.min, ext.x0 - cx), max: Math.min(box.x.max, ext.x1 + cx) },
+    y: { min: Math.max(box.y.min, ext.y0 - cy), max: Math.min(box.y.max, ext.y1 + cy) },
   }
+}
+
+// S5 breaker ruling, F2: a region whose coarse mesh at n finds fewer than
+// THIN_CELLS interior cells across — its thickness 2·area/perimeter, in
+// units of a cell sized to the region's own found extent at n (its natural
+// scale, not the far larger authored box: a small region in a wide default
+// box would otherwise never clear the threshold at any resolution this
+// side of THIN_CAP) — is flagged thin before any fitting is attempted. A
+// bounding-box extent alone would miss a diagonal strip: it can span most
+// of the box in both x and y (a long sliver, not a narrow one) while still
+// being only a fraction of a cell wide across its own thin direction,
+// which the isoperimetric thickness catches regardless of the strip's
+// angle. A coarse fit can truncate a thin region to whatever fragment it
+// happened to catch; fitting hides that from the agreement check below,
+// so a thin region is never fitted — see inequalityRegion (the mesh itself
+// still samples the full authored box, uncropped; only this threshold's
+// own cell reference uses the region's found extent).
+function isThin(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): boolean {
+  const samples = inequalitySamples(conditions, box.x, box.y, n)
+  if (samples.indices.length === 0) return true
+  let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity]
+  for (const v of samples.indices) {
+    x0 = Math.min(x0, samples.x[v])
+    x1 = Math.max(x1, samples.x[v])
+    y0 = Math.min(y0, samples.y[v])
+    y1 = Math.max(y1, samples.y[v])
+  }
+  const area = meshArea(samples)
+  const perimeter = meshBoundary(samples).reduce((m, p) => m + length(p.xy), 0)
+  const thickness = perimeter > 0 ? (2 * area) / perimeter : Infinity
+  const cell = Math.max(x1 - x0, y1 - y0) / n
+  return thickness < THIN_CELLS * cell
 }
 
 // A mesh's area alone.
@@ -455,11 +504,6 @@ function meshArea(samples: DomainSamples): number {
     area += Math.abs((x[j] - x[i]) * (y[k] - y[i]) - (x[k] - x[i]) * (y[j] - y[i])) / 2
   }
   return area
-}
-
-// A mesh's area and the length of its boundary.
-function areaAndPerimeter(samples: DomainSamples, pieces: readonly BoundaryPiece[]): [number, number] {
-  return [meshArea(samples), pieces.reduce((m, p) => m + length(p.xy), 0)]
 }
 
 // fittedBox's own area at `res`, refit from scratch (not carried from any
@@ -478,69 +522,85 @@ function fittedArea(conditions: readonly Condition[], box: { x: Range; y: Range 
 }
 
 function inequalityRegion(conditions: readonly Condition[], box: { x: Range; y: Range }, n: number): RegionSample {
-  // fittedBox trusts the extent of whatever the coarse meshing at n found —
-  // for a region much thinner than a cell of `box`, that meshing can catch
-  // only a fragment (a diagonal strip 0.04 wide, cells 0.25 on a side),
-  // wrongly truncating the fitted box to that fragment (S5 fix round 4, C3).
-  // Doubling the resolution cannot catch this (fix round 5): a 2n grid
-  // contains every vertex of the n grid, so the same fragment is found
-  // again, looking stable. Instead, the fit is redone from scratch (never
-  // carried forward) on a grid offset by half a cell in x and y — not
-  // nested with the original, so a fragment is crossed differently — and
-  // its area compared with the un-offset fit's: a genuine fit's area barely
-  // moves; a fragment's does. Resolution is doubled, both fits redone, until
-  // they agree (FIT_AGREE_REL) or res THIN_CAP; the resolution where they
-  // agree becomes this region's own working resolution from here on,
-  // replacing the author's n. (Still-thin, at even that resolution, is the
-  // separate test below.)
   let r = n
-  let fitted = fittedBox(conditions, box, r)
-  let area = meshArea(inequalitySamples(conditions, fitted.x, fitted.y, r))
-  for (;;) {
-    const offArea = fittedArea(conditions, offsetBox(box, r), r)
-    if (Math.abs(area - offArea) <= FIT_AGREE_REL * Math.max(area, offArea, Number.MIN_VALUE) || r >= THIN_CAP) break
-    r = Math.min(THIN_CAP, 2 * r)
+  let fitted: { x: Range; y: Range }
+  // S5 breaker ruling, F2: a region flagged thin (isThin, above) is never
+  // fitted — a coarse fit can truncate it to whatever fragment it happened
+  // to catch, which then agrees with itself at every later resolution (fix
+  // round 4, C3's own failure mode). Instead both grids — the authored box,
+  // and the same box offset by half a cell — are meshed at the author's own
+  // box, uncropped, and their area sums compared by the bounded-sum error
+  // rule (the larger of the last two changes between successive doublings)
+  // times SAFETY: a fixed 2% (below, for non-thin regions) let some of
+  // these truncated fits through. Resolution doubles — both grids remeshed,
+  // and the still-thin test itself re-run, since the mesh at m, m/2, m/4
+  // and m/8 later (settle, below) needs even its coarsest quarter to see
+  // the region, not just its finest — until the grids agree and the region
+  // is no longer thin at the working resolution, or res THIN_CAP. Still
+  // thin or disagreeing there is refused outright — it must never fall
+  // through to printing a fragment, or an under-resolved noise floor, as
+  // the whole area.
+  if (isThin(conditions, box, r)) {
+    const areaAt = (res: number) => meshArea(inequalitySamples(conditions, box.x, box.y, res))
+    const half = Math.max(2, Math.round(r / 2))
+    const hist = [areaAt(half), areaAt(r)]
+    for (;;) {
+      const off = offsetBox(box, r)
+      const offArea = meshArea(inequalitySamples(conditions, off.x, off.y, r))
+      const last = hist.length - 1
+      const d1 = Math.abs(hist[last] - hist[last - 1])
+      const d2 = last >= 2 ? Math.abs(hist[last - 1] - hist[last - 2]) : d1
+      const agrees = Math.abs(hist[last] - offArea) <= S5_SAFETY * Math.max(d1, d2)
+      if (agrees && !isThin(conditions, box, r)) break
+      if (r >= THIN_CAP) throw new IntegralRefusal(`the region is too thin to resolve at res ${THIN_CAP} — raise res:, or write it as ranges`)
+      r = Math.min(THIN_CAP, 2 * r)
+      hist.push(areaAt(r))
+    }
+    fitted = box
+  } else {
+    // fittedBox trusts the extent of whatever the coarse meshing at n
+    // found — for a region much thinner than a cell of `box`, that meshing
+    // can catch only a fragment (a diagonal strip 0.04 wide, cells 0.25 on
+    // a side), wrongly truncating the fitted box to that fragment (S5 fix
+    // round 4, C3); isThin (above) now catches that case before it reaches
+    // here. Doubling the resolution alone cannot catch it (fix round 5): a
+    // 2n grid contains every vertex of the n grid, so the same fragment is
+    // found again, looking stable. Instead, the fit is redone from scratch
+    // (never carried forward) on a grid offset by half a cell in x and y —
+    // not nested with the original, so a fragment is crossed differently —
+    // and its area compared with the un-offset fit's: a genuine fit's area
+    // barely moves; a fragment's does. Resolution is doubled, both fits
+    // redone, until they agree (FIT_AGREE_REL) or res THIN_CAP; the
+    // resolution where they agree becomes this region's own working
+    // resolution from here on, replacing the author's n.
     fitted = fittedBox(conditions, box, r)
-    area = meshArea(inequalitySamples(conditions, fitted.x, fitted.y, r))
+    let area = meshArea(inequalitySamples(conditions, fitted.x, fitted.y, r))
+    for (;;) {
+      const offArea = fittedArea(conditions, offsetBox(box, r), r)
+      if (Math.abs(area - offArea) <= FIT_AGREE_REL * Math.max(area, offArea, Number.MIN_VALUE) || r >= THIN_CAP) break
+      r = Math.min(THIN_CAP, 2 * r)
+      fitted = fittedBox(conditions, box, r)
+      area = meshArea(inequalitySamples(conditions, fitted.x, fitted.y, r))
+    }
   }
   n = r
   const samplesAt = (res: number) => inequalitySamples(conditions, fitted.x, fitted.y, res)
   const samples = samplesAt(n)
   const boundary = meshBoundary(samples)
   const inside = (px: number, py: number) => conditions.every((c) => c.h(px, py) <= 0)
-  // A thin region (a strip, a ring) is summed on a finer grid: at least
-  // THIN_CELLS cells across its thickness 2·area/perimeter. The thickness is
-  // re-measured at each resolution tried, not just the first (fix round 4,
-  // C3): a stale estimate from a badly under-resolved mesh — the same
-  // problem fittedBox had — cannot be trusted to decide when to stop.
-  const cellAt = (res: number) => Math.max(fitted.x.max - fitted.x.min, fitted.y.max - fitted.y.min) / res
-  let m = n
-  let mSamples = samples
-  let mBoundary = boundary
-  let [mArea, mPerimeter] = areaAndPerimeter(mSamples, mBoundary)
-  let thickness = mPerimeter > 0 ? (2 * mArea) / mPerimeter : Infinity
-  while (thickness < THIN_CELLS * cellAt(m) && m < THIN_CAP) {
-    m = Math.min(THIN_CAP, 2 * m)
-    mSamples = samplesAt(m)
-    mBoundary = meshBoundary(mSamples)
-    ;[mArea, mPerimeter] = areaAndPerimeter(mSamples, mBoundary)
-    thickness = mPerimeter > 0 ? (2 * mArea) / mPerimeter : Infinity
-  }
-  const thin = thickness < THIN_CELLS * cellAt(m)
-  // The mesh at m, m/2, m/4 and m/8 on the fitted grid. The value is the sum
-  // at m plus the geometric tail of its changes; the error that tail, the
-  // boundary's measured gap, lost area and rounding. A sum is refused as
-  // divergent only on evidence, and as too slow when its changes barely
-  // shrink.
-  const resolutions = [m, m / 2, m / 4, m / 8].map((r) => Math.max(2, Math.round(r)))
-  // resolutions[0] is m itself: mSamples, already computed above, is its mesh.
-  const meshes: DomainSamples[] = [mSamples]
+  // The mesh at n, n/2, n/4 and n/8 on the fitted (or, for a thin region,
+  // authored) grid. The value is the sum at n plus the geometric tail of
+  // its changes; the error that tail, the boundary's measured gap, lost
+  // area and rounding. A sum is refused as divergent only on evidence, and
+  // as too slow when its changes barely shrink. A thin region's own
+  // resolution and box are already settled above — never refused again
+  // here for being thin.
+  const resolutions = [n, n / 2, n / 4, n / 8].map((r) => Math.max(2, Math.round(r)))
+  // resolutions[0] is n itself: samples, already computed above, is its mesh.
+  const meshes: DomainSamples[] = [samples]
   const meshAt = (i: number) => (meshes[i] ??= samplesAt(resolutions[i]))
   let gap: number | null = null
   const settle = (at: (x: number, y: number) => number): Approx => {
-    if (thin) {
-      throw new IntegralRefusal(`the region is thinner than the grid at res ${m} (about ${formatNumber(thickness)} across) — raise res:, or write it as ranges`)
-    }
     const sums = [0, 1, 2, 3].map((i) => meshSum(meshAt(i), at, inside))
     const [A, B, C, D] = sums
     const [s1, s2, s3] = [A.value - B.value, B.value - C.value, C.value - D.value]

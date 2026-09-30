@@ -123,12 +123,9 @@ describe('divergent integrals are refused, found directly, with where', () => {
     }
   })
 
-  it('an integrable singularity over an inequality region is not divergence: 1/sqrt(x^2 + y^2) over the disc is 2π (one of the two 1/r pins, fix round 5, finding 5)', () => {
+  it('an integrable singularity over an inequality region is not divergence: 1/sqrt(x^2 + y^2) over the disc is 2π — now an honest refusal under SAFETY (F1, breaker ruling), never "does not converge"', () => {
     const scene = sceneOf('volume: under 1/sqrt(x^2 + y^2) over x^2 + y^2 <= 1')
-    expect(scene.errors).toEqual([])
-    const text = readout(scene, 1).text
-    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 6')
-    expect(Math.abs(approx(text, 'dA') - 2 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+    expect(on(scene.errors, 1)).toEqual(['the integral could not be determined to one significant digit (≈ 6.282 ± 0.229) — try tighter bounds or a finer res:'])
   })
 })
 
@@ -168,9 +165,13 @@ describe('never a wrong confident number (fix round 3)', () => {
   })
 
   it('kinks read every digit right: |x - y| over [0, 2]^2, [-1, 1]^2, [0, 3]^2; max and min over [0, 2]^2', () => {
+    // SAFETY (F1, breaker ruling) on the quadrature's own error — measured up
+    // to 29x short on kinks like these — trims a couple of digits from
+    // round 5's own count; `read` itself still checks every digit shown
+    // against the hand value.
     for (const square of ['[0, 2]', '[-1, 1]']) {
       const text = read(`volume: under abs(x - y) over x in ${square}, y in ${square}`, 'dA', 8 / 3)
-      expect(lastDigitUnit(text, 'dA')).toBeLessThanOrEqual(1e-8)
+      expect(lastDigitUnit(text, 'dA')).toBeLessThanOrEqual(1e-6)
     }
     read('volume: under abs(x - y) over x in [0, 3], y in [0, 3]', 'dA', 9)
     read('volume: under max(x, y) over x in [0, 2], y in [0, 2]', 'dA', 16 / 3)
@@ -182,13 +183,12 @@ describe('never a wrong confident number (fix round 3)', () => {
     expect(read('volume: x in [0, 1], y in [0, 1], z in [0, x^(-2/3)]', 'dV', 3)).toBe('∭ dV ≈ 3')
   }, HEAVY_MS)
 
-  it('1/(x^2 + y^2)^0.9 over the disc (10π ≈ 31.4) reads its right digits or is refused — never ≈ 20', () => {
+  // S5 breaker ruling, F3: pinned to the deterministic result, not "either
+  // outcome" — SAFETY (F1) on the mesh's own wide error here (this sum
+  // never settles better than roughly 3x the value) refuses it outright.
+  it('1/(x^2 + y^2)^0.9 over the disc (10π ≈ 31.4) refuses honestly — never ≈ 20', () => {
     const { scene } = timedScene('volume: under 1/(x^2 + y^2)^0.9 over x^2 + y^2 <= 1')
-    if (scene.errors.length) expect(on(scene.errors, 1)[0]).toMatch(/^the integral did not settle|^the integral could not be determined to one significant digit/)
-    else {
-      const text = readout(scene, 1).text
-      expect(Math.abs(approx(text, 'dA') - 10 * Math.PI)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
-    }
+    expect(on(scene.errors, 1)).toEqual(['the integral could not be determined to one significant digit (≈ 31.3 ± 92.19) — try tighter bounds or a finer res:'])
   })
 
   it('convergent singular ends are valued: 1/sqrt(1 - x^2 - y^2) (rectangular and polar), 1/sqrt(1 - x^2), 1/sqrt(1 - x), y <= 1/sqrt(1 - x^2)', () => {
@@ -221,7 +221,8 @@ describe('never a wrong confident number (fix round 3)', () => {
     expect(ms).toBeLessThan(GUARD_MS)
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
-    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 7.05')
+    // SAFETY (breaker ruling, F1) drops this to 1 digit from round 5's 3.
+    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 7')
     expect(Math.abs(approx(text, 'dA') - 8 * Math.asinh(1))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   }, HEAVY_MS)
 
@@ -230,7 +231,8 @@ describe('never a wrong confident number (fix round 3)', () => {
     expect(ms).toBeLessThan(GUARD_MS)
     expect(scene.errors).toEqual([])
     const text = readout(scene, 1).text
-    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 14.1')
+    // SAFETY (F1, breaker ruling) drops this to 2 digits from round 5's 3.
+    expect(text).toBe('∬_R (1/sqrt(x^2 + y^2)) dA ≈ 14')
     expect(Math.abs(approx(text, 'dA') - 16 * Math.asinh(1))).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
   }, HEAVY_MS)
 
@@ -311,16 +313,15 @@ describe('a singularity centred on an inner range is valued, not falsely diverge
     read('volume: x in [0, 1], y in [0, 1], z in [-1, 1] integrand ln(abs(z))', 'dV', -2, '∭ (ln(abs(z))) dV ≈ −2')
   }, HEAVY_MS)
 
-  it('3D 1/sqrt|z|, z in [-1, 1] (expect 4): the same singularity, nested one level deeper — the node is no longer falsely divergent, but three nested levels of adaptive refinement (x and y both need to sample it fresh at every node) cost more than one integral’s 6,000,000-evaluation budget can buy at full precision; an honest "did not settle" is acceptable, never "does not converge"', () => {
+  // S5 breaker ruling, F3: pinned to the deterministic result, not "either
+  // outcome" — three nested levels of adaptive refinement near z = 0 (x and
+  // y both need to sample it fresh at every node) cost more than one
+  // integral's 6,000,000-evaluation budget can buy, so this always "did not
+  // settle", never a value and never "does not converge".
+  it('3D 1/sqrt|z|, z in [-1, 1] (expect 4): the same singularity, nested one level deeper, never settles within budget — "did not settle", never "does not converge"', () => {
     const { scene, ms } = timedScene('volume: x in [0, 1], y in [0, 1], z in [-1, 1] integrand 1/sqrt(abs(z))')
     expect(ms).toBeLessThan(GUARD_MS)
-    const errors = on(scene.errors, 1)
-    if (errors.length === 0) {
-      const text = readout(scene, 1).text
-      expect(Math.abs(approx(text, 'dV') - 4)).toBeLessThanOrEqual(lastDigitUnit(text, 'dV'))
-    } else {
-      expect(errors).toEqual([expect.stringMatching(new RegExp(`^the integral did not settle within ${BUDGET} evaluations`))])
-    }
+    expect(on(scene.errors, 1)).toEqual([expect.stringMatching(new RegExp(`^the integral did not settle within ${BUDGET} evaluations`))])
   }, HEAVY_MS)
 
   it('a genuinely divergent inner singularity is still found, and placed at its own level: 1/y over x in [0, 1], y in [-1, 1] near y = 0', () => {
@@ -337,40 +338,35 @@ describe('a singularity centred on an inner range is valued, not falsely diverge
 // silently dropped. Fixed at the end of every level's run, not only for the
 // worst panel; a singular result also prints at most 4 digits with its
 // error floored ×10 (belt and braces).
+// S5 breaker ruling, F1: a singular result's error already carries C1's own
+// ×10 belt-and-braces; SAFETY (×100 more) makes it ×1000 against the raw
+// qk15 estimate, which every case below now exceeds half the value itself —
+// so all now refuse honestly, rather than show a heavily-floored 1-2 digit
+// estimate. Never a wrong confident number; a refusal is always acceptable.
 describe('an interior singularity narrowed to a sliver still reports its tail (fix round 4, C1)', () => {
-  // Hand value: (0.25^0.2 + 0.75^0.2) / 0.2.
-  const tr = (c: number, p: number) => (c ** (1 - p) + (1 - c) ** (1 - p)) / (1 - p)
-  const digitsOk = (spec: string, exact: number, name: string, line = 1): void => {
-    const { scene, ms } = timedScene(spec)
-    expect(ms).toBeLessThan(GUARD_MS)
-    expect(scene.errors).toEqual([])
-    const text = readout(scene, line).text
-    expect(Math.abs(approx(text, name) - exact)).toBeLessThanOrEqual(lastDigitUnit(text, name))
-  }
-
   it('|x - 0.25|^-0.8 over the unit square, as an outer and as an inner variable — hand value 8.509729', () => {
-    digitsOk('volume: under abs(x - 0.25)^(-0.8) over x in [0, 1], y in [0, 1]', tr(0.25, 0.8), 'dA')
-    digitsOk('volume: under abs(y - 0.25)^(-0.8) over x in [0, 1], y in [0, 1]', tr(0.25, 0.8), 'dA')
+    for (const spec of ['volume: under abs(x - 0.25)^(-0.8) over x in [0, 1], y in [0, 1]', 'volume: under abs(y - 0.25)^(-0.8) over x in [0, 1], y in [0, 1]']) {
+      const { scene, ms } = timedScene(spec)
+      expect(ms).toBeLessThan(GUARD_MS)
+      expect(on(scene.errors, 1)[0]).toMatch(/^the integral could not be determined to one significant digit/)
+    }
   })
 
   it('|x - 0.123|^-0.8 (an off-centre anchor) — hand value 8.158605', () => {
-    digitsOk('volume: under abs(x - 0.123)^(-0.8) over x in [0, 1], y in [0, 1]', tr(0.123, 0.8), 'dA')
+    const { scene, ms } = timedScene('volume: under abs(x - 0.123)^(-0.8) over x in [0, 1], y in [0, 1]')
+    expect(ms).toBeLessThan(GUARD_MS)
+    expect(on(scene.errors, 1)[0]).toMatch(/^the integral could not be determined to one significant digit/)
   })
 
   it('|x - 0.25|^-0.75 (a milder exponent) — hand value 6.550847', () => {
-    digitsOk('volume: under abs(x - 0.25)^(-0.75) over x in [0, 1], y in [0, 1]', tr(0.25, 0.75), 'dA')
+    const { scene, ms } = timedScene('volume: under abs(x - 0.25)^(-0.75) over x in [0, 1], y in [0, 1]')
+    expect(ms).toBeLessThan(GUARD_MS)
+    expect(on(scene.errors, 1)[0]).toMatch(/^the integral could not be determined to one significant digit/)
   })
 
   it('a region bounded by y <= |x - 0.25|^-0.8 reads the same hand value', () => {
-    digitsOk('region: x in [0, 1], y in [0, abs(x - 0.25)^(-0.8)]', tr(0.25, 0.8), 'area')
-  })
-
-  it('a singular result prints at most 4 significant digits and never fewer than a wrong one', () => {
-    const scene = sceneOf('volume: under abs(x - 0.25)^(-0.8) over x in [0, 1], y in [0, 1]')
-    expect(scene.errors).toEqual([])
-    const text = readout(scene, 1).text
-    const digits = /≈ [−-]?(\d[\d.]*)/.exec(text)![1].replace(/[.\-−]/g, '').replace(/^0+/, '')
-    expect(digits.length).toBeLessThanOrEqual(4)
+    const scene = sceneOf('region: x in [0, 1], y in [0, abs(x - 0.25)^(-0.8)]')
+    expect(on(scene.errors, 1)[0]).toMatch(/^the integral could not be determined to one significant digit/)
   })
 })
 
@@ -397,39 +393,63 @@ describe('the zero rule and the one-digit rule (fix round 3)', () => {
 
   it('a value whose error is half of it or more is refused, with both named; below that, its digits', () => {
     expect(() => determined({ value: 3, error: 1.6, scale: 3 })).toThrow('the integral could not be determined to one significant digit (≈ 3 ± 1.6)')
-    expect(approxText(determined({ value: 3.14159, error: 0.004, scale: 3.2 }))).toBe('≈ 3.1')
+    // SAFETY (breaker ruling, F1) means the stated error must now be small
+    // enough that even 100x it still covers the rounding gap.
+    expect(approxText(determined({ value: 3.14159, error: 0.00005, scale: 3.2 }))).toBe('≈ 3.1')
   })
 })
 
-// S5 fix round 5, finding 4: the digit count a formatter shows must cover
-// the error by at least half a unit of the *last digit actually printed*,
-// not the raw value's own exponent — rounding a value that carries into the
-// next order of magnitude (9.999994... to 6 figures is 9.99999, but to 5 it
-// is 10.000, one fewer digit's worth of precision than 9.999994's own
-// exponent suggests) can otherwise leave a wrong last digit shown.
-describe('digits print only what the error supports, covering half a unit of the last one shown (fix round 5, finding 4)', () => {
+// S5 fix round 5, finding 4, then the breaker ruling's F1: the digit count a
+// formatter shows must cover the error by at least half a unit of the *last
+// digit actually printed*, read off the rounded value (round 5) — and, since
+// adaptive error estimates measured up to 29x short of the truth on some
+// kinks, that error is SAFETY (100x) times the stated one before the check,
+// dropping digits past the leading one to a coarser unit where even that
+// is not enough (S5_SAFETY, tolerance.ts). When no unit at all covers it,
+// the existing half-value refusal applies.
+describe('digits print only what the error supports, with a SAFETY margin on the stated error (fix round 5 / breaker ruling, F1)', () => {
   it('y^(-0.9) on the inner range: hand value 1 / (1 - 0.9) = 10, raw value 9.999994872133758 ± 5.4449803620800676e-6 prints ≈ 10, not ≈ 9.99999', () => {
-    // Before the fix: supportedDigits alone gave 6 figures (9.99999), whose
-    // last digit (the 1e-5 place) needs error <= 5e-6 to be covered — this
-    // error (5.445e-6) does not cover it. Dropping to 5 figures rounds into
-    // the next order of magnitude (10.000, printed "10" once formatNumber
-    // trims the now-trailing zeros), whose last digit (the 1e-3 place)
-    // needs only <= 5e-4 — comfortably covered.
     expect(approxText({ value: 9.999994872133758, error: 0.0000054449803620800676, scale: 10 })).toBe('≈ 10')
-    // End to end, through the real quadrature.
     const scene = sceneOf('volume: under y^(-0.9) over x in [0, 1], y in [0, 1]')
     expect(scene.errors).toEqual([])
     expect(readout(scene, 1).text).toBe('∬_R (y^(-0.9)) dA ≈ 10')
   })
 
-  it('|x - 0.5|^-0.7 (a singular, 4-digit-capped case): hand value 5.415016 still prints ≈ 5.41, unaffected — the half-unit rule already held at 3 figures', () => {
-    // 5.414953129607524 to 3 figures is 5.41 (exponent 0); its last digit (the
-    // 1e-2 place) needs error <= 5e-3 — 4.335e-3 covers it, so the fix does
-    // not drop a digit here: this pins the "no regression" side.
-    expect(approxText({ value: 5.414953129607524, error: 0.00433518985552053, scale: 5.414953129607524, singular: true })).toBe('≈ 5.41')
-    const scene = sceneOf('volume: under abs(x - 0.5)^(-0.7) over x in [0, 1], y in [0, 1]')
+  it('the brief’s own worked example: 9.4 ± 0.04 (SAFETY-scaled to 4) prints ≈ 10: |10 - 9.4| + 4 = 4.6 <= 5', () => {
+    expect(approxText({ value: 9.4, error: 0.04, scale: 9.4 })).toBe('≈ 10')
+  })
+
+  it('the kink-rectangle motivating case: ∬|x-y| over [0,4]x[0,1] is 19/3 = 6.333333333…; the stated error (2.55e-11) missed the true one (7.38e-10) by 29x, SAFETY covers it', () => {
+    const scene = sceneOf('volume: under abs(x - y) over x in [0, 4], y in [0, 1]')
     expect(scene.errors).toEqual([])
-    expect(readout(scene, 1).text).toBe('∬_R (abs(x - 0.5)^(-0.7)) dA ≈ 5.41')
+    const text = readout(scene, 1).text
+    expect(text).toBe('∬_R (abs(x - y)) dA ≈ 6.3333333')
+    expect(Math.abs(approx(text, 'dA') - 19 / 3)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+  })
+
+  it('max(x, y) over [0,4]x[0,1] is 49/6, over [0,2]x[0,1] is 13/6, over [0,1]x[0,1.2] is 0.88666666…67 — all digits correct', () => {
+    for (const [spec, exact] of [
+      ['volume: under max(x, y) over x in [0, 4], y in [0, 1]', 49 / 6],
+      ['volume: under max(x, y) over x in [0, 2], y in [0, 1]', 13 / 6],
+      ['volume: under max(x, y) over x in [0, 1], y in [0, 1.2]', 0.8866666666666667],
+    ] as const) {
+      const scene = sceneOf(spec)
+      expect(scene.errors).toEqual([])
+      const text = readout(scene, 1).text
+      expect(Math.abs(approx(text, 'dA') - exact)).toBeLessThanOrEqual(lastDigitUnit(text, 'dA'))
+    }
+  })
+
+  it('|x - 0.5|^-0.7 (a singular, ×1000-total case): hand value 5.415016 now refuses — SAFETY on top of C1’s own ×10 belt-and-braces no longer covers even one coarse digit honestly', () => {
+    // 5.414953129607524 ± 0.00433518985552053 (already ×10-floored, singular):
+    // SAFETY makes the effective error 0.4335 — 2 sig figs ("5.4") needs
+    // |5.4 - 5.414953| + 0.4335 = 0.448 <= 0.05 (fails); 1 sig fig ("5")
+    // needs 0.848 <= 0.5 (fails); the next coarser unit rounds to 0, which
+    // is never shown this way (common.ts, chosenDisplay) — refused instead.
+    const scene = sceneOf('volume: under abs(x - 0.5)^(-0.7) over x in [0, 1], y in [0, 1]')
+    expect(on(scene.errors, 1)).toEqual([
+      'the integral could not be determined to one significant digit (≈ 5.415 ± 0.004335) — try tighter bounds or a finer res:',
+    ])
   })
 })
 

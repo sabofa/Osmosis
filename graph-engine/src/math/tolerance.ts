@@ -131,3 +131,15 @@ export const BISECTION_REL = 1e-10
 // fraction of its longest edge squared: two coincident vertices give exactly
 // zero, and a real sliver is many orders above it.
 export const DEGENERATE_REL = 1e-14
+
+// S5 breaker ruling — space/kernel/integrals/common.ts (digits) and
+// regions.ts (thin-region agreement): an adaptive quadrature or mesh-sum
+// error estimate is heuristic (a decay ratio, a mismatch measure, the
+// spread between two partitions), not a certified bound, and five review
+// rounds of narrower rules kept finding new kinks it still missed by a
+// wide margin depending on how the domain happened to partition — measured
+// up to 29x short of the true error (∬|x−y| over [0,4]×[0,1]: the stated
+// error was 2.55e-11, the true error 7.38e-10). Rather than chase another
+// specific rule, every place that reads an error to decide what to show,
+// or whether two meshes agree, multiplies it by this margin first.
+export const S5_SAFETY = 100

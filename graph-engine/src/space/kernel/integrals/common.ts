@@ -5,7 +5,7 @@
 import type { GraphConfig } from '../../../parser/config'
 import type { Statement } from '../../../parser/types'
 import { QuadratureError } from '../../../math/quadrature'
-import { QUAD_BUDGET } from '../../../math/tolerance'
+import { QUAD_BUDGET, S5_SAFETY } from '../../../math/tolerance'
 import { APPROX, formatNumber, SIGNIFICANT_DIGITS, supportedDigits, MAX_DIGITS } from '../../pick/format'
 import type { LabelAnchor, SceneError, Vec3 } from '../../scene/types'
 import type { SpaceForm } from '../../grammar/types'
@@ -53,9 +53,15 @@ function isZero(a: Approx): boolean {
 }
 
 // A value may be shown when it is negligible (≈ 0) or known to at least one
-// significant digit; anything less is refused, never printed.
+// significant digit; anything less is refused, never printed. The half-value
+// test itself keeps the raw, unscaled error (S5 breaker ruling, F1c: values
+// do not start refusing that are honestly shown at one coarse digit under
+// SAFETY) — but a value that clears it can still fail to find any honest
+// nonzero unit to show under SAFETY (chosenDisplay returning null, F1b,
+// "when no unit works"), and is refused here too, before any caller
+// formats it.
 export function determined(a: Approx): Approx {
-  if (isZero(a) || a.error < Math.abs(a.value) / 2) return a
+  if (isZero(a) || (a.error < Math.abs(a.value) / 2 && chosenDisplay(a) !== null)) return a
   throw new IntegralRefusal(
     `the integral could not be determined to one significant digit (≈ ${formatNumber(a.value)} ± ${formatNumber(a.error)}) — try tighter bounds or a finer res:`,
   )
@@ -65,44 +71,80 @@ function shown(a: Approx): number {
   return isZero(a) ? 0 : a.value
 }
 
-// Whether `error` is covered by half a unit of the last significant digit
-// `formatNumber` would print at `digits` figures. Read off the *rounded*
-// value, not the raw one: rounding can carry into the next order of
-// magnitude (9.999994... to 6 figures is 9.99999, but to 5 it is 10.000 —
-// one fewer digit's worth of precision than the raw value's own exponent
-// would suggest), so a unit taken from the raw value's exponent can be ten
-// times too small (S5 fix round 5, "digits: print only what the error
-// supports").
-function halfUnitCovers(value: number, error: number, digits: number): boolean {
-  const rounded = Number(value.toPrecision(digits))
-  if (rounded === 0) return true
-  const exponent = Math.floor(Math.log10(Math.abs(rounded)))
-  return error <= 10 ** (exponent - digits + 1) / 2
+// `value` rounded to the nearest multiple of 10^p — p may be larger than
+// value's own leading exponent (a unit coarser than its leading digit: nine
+// point four rounded to the nearest ten is 10, not 9).
+function roundToUnit(value: number, p: number): number {
+  const unit = 10 ** p
+  return Math.round(value / unit) * unit
 }
 
-// The most digits an estimate is shown to: what its error supports
-// (supportedDigits), capped at SIGNIFICANT_DIGITS when the run leaned on a
-// singularity treatment (C1's belt and braces) — then dropped further, one
-// at a time, until the error is covered by at most half a unit of the last
-// digit actually printed (S5 fix round 5). This replaces the one-unit
-// convention: a value whose error is between half a unit and a whole one
-// used to keep a last digit that could be wrong; now it is dropped.
-function digitsOf(a: Approx): number {
+// Whether showing `value` rounded to the unit 10^p is honest (S5 breaker
+// ruling, F1b): the gap rounding itself introduces, plus SAFETY times the
+// stated error, must fit within half that unit — not the error alone
+// (round 5's rule), since at the worst rounding position the gap alone can
+// already claim most of a unit. `error` is already SAFETY-scaled by the
+// caller (digitsOf): a singular result's error already carries C1's own
+// ×10 belt-and-braces, so this is ×1000 in total for one.
+function honestAt(value: number, error: number, p: number): boolean {
+  const rounded = roundToUnit(value, p)
+  return Math.abs(rounded - value) + error <= 10 ** p / 2
+}
+
+// The digits `formatNumber` needs to reproduce `rounded` (itself already a
+// multiple of 10^p) without rounding it any further — read off ITS OWN
+// exponent, not the pre-rounding value's, since rounding can carry into the
+// next order of magnitude.
+function digitsAt(rounded: number, p: number): number {
+  return rounded === 0 ? 1 : Math.max(1, Math.floor(Math.log10(Math.abs(rounded))) - p + 1)
+}
+
+// The value and digit count a readout shows an estimate to (S5 breaker
+// ruling, F1): coarsened, one unit at a time, from what SAFETY times the
+// stated error supports (supportedDigits), capped at SIGNIFICANT_DIGITS
+// for a singularity treatment (C1's belt and braces), until showing it
+// there is honest (honestAt) — possibly past the leading digit, to a unit
+// larger than the value itself. Never coarsens as far as showing 0 this
+// way: a value that would take that (F1b, "when no unit works") is left to
+// the caller's own half-value refusal instead, which judges the raw,
+// unscaled error, not this one. Adaptive error estimates are heuristic and
+// were measured up to 29x short of the truth on some kinks (S5_SAFETY).
+function chosenDisplay(a: Approx): { value: number; digits: number } | null {
+  const raw = shown(a)
+  if (raw === 0) return { value: 0, digits: 1 }
   const cap = a.singular ? SIGNIFICANT_DIGITS : MAX_DIGITS
-  const value = shown(a)
-  let digits = Math.min(cap, supportedDigits(value, a.error))
-  while (digits > 1 && !halfUnitCovers(value, a.error, digits)) digits--
-  return digits
+  const error = S5_SAFETY * a.error
+  const leading = Math.floor(Math.log10(Math.abs(raw)))
+  let p = leading - Math.min(cap, supportedDigits(raw, error)) + 1
+  for (;;) {
+    const rounded = roundToUnit(raw, p)
+    if (rounded === 0) return null
+    if (honestAt(raw, error, p)) return { value: rounded, digits: digitsAt(rounded, p) }
+    p++
+  }
 }
 
 export function approxText(a: Approx): string {
-  return `${APPROX} ${formatNumber(shown(a), digitsOf(a))}`
+  const d = chosenDisplay(a)
+  if (!d) return refusedDisplay(a)
+  return `${APPROX} ${formatNumber(d.value, d.digits)}`
 }
 
 // "≈ (0.6667, 0.3333)": each coordinate to the digits its own estimate supports.
 export function approxTupleText(values: readonly Approx[]): string {
-  const parts = values.map((a) => formatNumber(shown(a), digitsOf(a)))
+  const parts = values.map((a) => {
+    const d = chosenDisplay(a)
+    return d ? formatNumber(d.value, d.digits) : '?'
+  })
   return `${APPROX} (${parts.join(', ')})`
+}
+
+// Text for a value chosenDisplay could not honestly show at any nonzero
+// unit — reached only if a caller formats without going through determined
+// first (determined refuses this same case, F1b, "the existing half-value
+// refusal applies"), kept here so approxText itself never throws.
+function refusedDisplay(a: Approx): string {
+  return `${APPROX} ${formatNumber(a.value)} (undetermined)`
 }
 
 // An integral with no value, in words an author can act on: returned as an
