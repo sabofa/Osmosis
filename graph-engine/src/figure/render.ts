@@ -35,14 +35,13 @@ import {
 import {
   boundsOf,
   cssColor,
-  emptyFigureLayers,
   FIGURE_PADDING,
-  figureDocument,
   figureTheme,
   fitProjection,
   growRect,
   layoutGivensTable,
   unionRects,
+  type FigureLayer,
   type FigureTheme,
   type Projection,
   type Rect,
@@ -50,7 +49,7 @@ import {
 } from './document'
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
-import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
+import { layoutNotation, type NotationLayout, notationOrigin, type NotationRun } from './notation'
 import {
   angle3,
   dihedral3,
@@ -66,8 +65,6 @@ import {
 import { segmentSpans, type Span } from './occlusion'
 import {
   cameraFor,
-  drawClosedEdges,
-  drawEdge,
   edgeExtremes,
   edgeObject,
   type Camera,
@@ -84,22 +81,11 @@ import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden,
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
 import { netOf, netSolidWord, type Net, type NetPiece } from './nets'
 import { shortestPath, type SurfacePath } from './shortestPath'
-import {
-  ellipticalArcCommand,
-  fmt,
-  lineCommand,
-  svgArc,
-  svgCircle,
-  svgClosedPaths,
-  svgCircularSegment,
-  svgEllipse,
-  svgLine,
-  svgPolygon,
-  svgPolyline,
-  svgSector,
-  svgText,
-  type SvgAttrs,
-} from './svg'
+import { ellipsePoint, type SvgAttrs } from './svg'
+import { cleanPen, type FigurePen, type FillRegion, type StrokePath } from './pen'
+import type { Piece } from '../style/path'
+import { checkLayer, isClean, resolveStyle, type StyleLayer } from '../style/resolve'
+import type { Style } from '../style/tokens'
 
 // The figure renderer: statements in, one SVG document out.
 //
@@ -1859,25 +1845,70 @@ function regionInterior(edges: readonly ProjectedEdge[]): Vec2[] {
 // "L" per side (the last side back to the start is the loop's "Z"), and one
 // "A" per arc — two for a whole turn, which one "A" cannot draw. Arcs are
 // never polylines. The caller sets the even-odd rule that makes holes holes.
-function fillPath(region: Region, projection: Projection, style: SvgAttrs): string {
+function fillPath(region: Region, projection: Projection): FillRegion {
   const to = (p: Vec2) => projection.toView(p)
   const loops = region.loops.map((loop) => {
-    const commands: string[] = []
+    const pieces: Piece[] = []
     loop.forEach((piece, i) => {
       if (piece.kind === 'segment') {
-        if (i < loop.length - 1) commands.push(lineCommand(to(piece.b)))
+        if (i < loop.length - 1) pieces.push({ kind: 'line', from: to(piece.a), to: to(piece.b) })
         return
       }
       const radius = piece.radius * projection.scale
       // View space flips y, so a world angle t is the view angle -t, and a
       // counter-clockwise arc sweeps the negative way on the page.
       for (const [from, end] of splitTurn(piece.from, piece.from + sweepOf(piece))) {
-        commands.push(ellipticalArcCommand(to(piece.center), radius, radius, 0, -from, -end).command)
+        pieces.push({ kind: 'ellipticalArc', center: to(piece.center), rx: radius, ry: radius, rotation: 0, start: -from, end: -end })
       }
     })
-    return { start: to(loop[0].a), commands }
+    return { start: to(loop[0].a), pieces }
   })
-  return svgClosedPaths(loops, style)
+  return { kind: 'loops', loops }
+}
+
+// A drawn edge as a pen stroke — the two members of the drawn-edge union, as
+// project3d.ts's drawEdge writes them: an arc's radii scale with the figure
+// and its rotation and parameters negate, because view space flips y; and an
+// arc's `fill: none` comes first, ahead of the caller's style, because a
+// `<path>` fills by default and a `<line>` has nothing to fill.
+function strokeEdge(pen: FigurePen, edge: ProjectedEdge, projection: Projection, style: SvgAttrs, id: string, layer: FigureLayer): void {
+  if (edge.kind === 'segment') {
+    pen.stroke({ kind: 'line', a: projection.toView(edge.a), b: projection.toView(edge.b) }, style, id, layer)
+    return
+  }
+  pen.stroke(edgeArc(edge, projection), { fill: 'none', ...style }, id, layer)
+}
+
+function edgeArc(edge: Extract<ProjectedEdge, { kind: 'arc' }>, projection: Projection): Extract<StrokePath, { kind: 'ellipticalArc' }> {
+  return {
+    kind: 'ellipticalArc',
+    center: projection.toView(edge.center),
+    rx: edge.rx * projection.scale,
+    ry: edge.ry * projection.scale,
+    rotation: -edge.rotation,
+    start: -edge.startAngle,
+    end: -edge.endAngle,
+  }
+}
+
+// A closed chain of drawn edges — a section's region (phase 8) — as ONE
+// filled path, through the same conversions strokeEdge makes (project3d.ts's
+// drawClosedEdges, as a pen region).
+function closedEdges(edges: readonly ProjectedEdge[], projection: Projection): FillRegion {
+  let start: Vec2 | null = null
+  const pieces: Piece[] = []
+  for (const edge of edges) {
+    if (edge.kind === 'segment') {
+      const from = projection.toView(edge.a)
+      start ??= from
+      pieces.push({ kind: 'line', from, to: projection.toView(edge.b) })
+      continue
+    }
+    const arc = edgeArc(edge, projection)
+    start ??= ellipsePoint(arc.center, arc.rx, arc.ry, arc.rotation, arc.start)
+    pieces.push(arc)
+  }
+  return { kind: 'loops', loops: [{ start: start ?? { x: 0, y: 0 }, pieces }] }
 }
 
 // ---------------------------------------------------------------------------
@@ -2040,6 +2071,12 @@ function identity(id: Identity): SvgAttrs {
   return { 'data-statement': id.statement, 'data-object': id.object }
 }
 
+// The key a pen call carries: which statement, which object. A styled pen
+// seeds its randomness from it, so two strokes never share a wobble.
+function key(id: Identity): string {
+  return `${id.statement}/${id.object}`
+}
+
 function strokeColor(color: string | null, fallback: number, palette: Palette): string {
   return cssColor(themedColor(color, fallback, palette))
 }
@@ -2059,7 +2096,33 @@ export function figureLabelObstacles(statements: Statement[], config: GraphConfi
   return labelObstacles(items, projection, geometryBounds(items, projection))
 }
 
-export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette): FigureResult {
+// `baseStyle` is the host's look — the viewer's theme, or a document's pinned
+// style — which the figure's own "@style…" directives layer over (see
+// style/resolve.ts). A style that resolves to clean draws through the clean
+// pen, always: that is what keeps every figure without a style byte for byte
+// what it was. A bad base style is reported, not thrown, and the figure draws
+// with what was valid in it.
+export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer): FigureResult {
+  const base = baseStyle ? checkLayer(baseStyle) : { layer: {}, errors: [] }
+  const style = resolveStyle([base.layer, config.style])
+  const pen = choosePen(style, palette)
+  const { viewBox, errors } = drawFigure(statements, config, palette, pen)
+  pen.paper(viewBox)
+  return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
+}
+
+// Clean resolves to the clean pen, with no exceptions. The styled pen, which
+// draws every other look, arrives with the line types.
+function choosePen(style: Style, palette: Palette): FigurePen {
+  if (isClean(style)) return cleanPen(palette)
+  return cleanPen(palette)
+}
+
+// The whole figure, drawn through `pen`: every element it draws is one pen
+// call carrying its identity and layer, in painting order. Returns the
+// viewBox the pen's document should use, and the errors. Exported so a test
+// can watch the calls a figure makes.
+export function drawFigure(statements: Statement[], config: GraphConfig, palette: Palette, pen: FigurePen): { viewBox: Rect; errors: SceneError[] } {
   const { items, errors } = buildItems(statements, config)
   const theme = figureTheme(palette)
 
@@ -2095,8 +2158,7 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   // Pass 2 — emit. Infinite lines and rays are clipped here, against the
   // *final* viewBox, because how much of a locus to draw is a fact about the
   // view and not about the figure.
-  const layers = emptyFigureLayers()
-  for (const item of items) emit(item, projection, viewBox, theme, palette, layers)
+  for (const item of items) emit(item, projection, viewBox, theme, palette, pen)
   for (const label of placed) {
     // The anchor id is "<name>#<statement index>" (see labelAnchors), and the
     // source map carries E4's identity through the layout and back out.
@@ -2110,76 +2172,81 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
     // other edges naming none of them. The layout decides, because only it
     // can tell a label that chose its place from one that was moved.
     if (source?.leader && label.displaced) {
-      layers.marks.push(
-        svgLine(nearestOnRect(label.rect, label.anchor), label.anchor, {
+      const leader = { statement: id.statement, object: `leader-${id.object ?? ''}` }
+      pen.stroke(
+        { kind: 'line', a: nearestOnRect(label.rect, label.anchor), b: label.anchor },
+        {
           stroke: strokeColor(source.color, palette.axis, palette),
           'stroke-width': STROKE_MARK,
           'stroke-linecap': 'round',
-          ...identity({ statement: id.statement, object: `leader-${id.object ?? ''}` }),
-        })
+          ...identity(leader),
+        },
+        key(leader),
+        'marks'
       )
     }
     if (source?.notation) {
       const layout = layoutNotation(source.notation, label.fontSize)
       const origin = notationOrigin(layout, label.at)
-      layers.labels.push(
-        ...notationElements(layout, origin, {
+      pen.notation(
+        layout,
+        origin,
+        {
           fill: strokeColor(source.color, palette.axis, palette),
           fontFamily: FONT_FAMILY,
           identity: identity(id),
-        })
+        },
+        key(id),
+        'labels'
       )
       continue
     }
-    layers.labels.push(
-      svgText(label.at, label.text, {
+    pen.text(
+      label.at,
+      label.text,
+      {
         'font-size': label.fontSize,
         'font-family': FONT_FAMILY,
         fill: theme.label,
         'text-anchor': 'middle',
         'dominant-baseline': 'central',
         ...identity(id),
-      })
+      },
+      key(id),
+      'labels'
     )
   }
 
   if (table) {
-    layers.labels.push(
-      `<rect${[
-        ` x="${fmt(table.box.x)}"`,
-        ` y="${fmt(table.box.y)}"`,
-        ` width="${fmt(table.box.width)}"`,
-        ` height="${fmt(table.box.height)}"`,
-        ` fill="${theme.background}"`,
-        ` stroke="${theme.ink}"`,
-        ` stroke-width="${fmt(STROKE_MARK)}"`,
-        ' data-object="givens"',
-      ].join('')}/>`
-    )
+    pen.panel(table.box, { fill: theme.background, stroke: theme.ink, 'stroke-width': STROKE_MARK, 'data-object': 'givens' }, 'givens', 'labels')
     // The title and the section headings carry no data-object: they belong to
     // the table rather than to any statement or any drawn object, and E4's
     // identity is for things the tutor layer can point at.
     if (title && table.title) {
-      layers.labels.push(...notationElements(title, table.title, { fill: theme.label, fontFamily: FONT_FAMILY }))
+      pen.notation(title, table.title, { fill: theme.label, fontFamily: FONT_FAMILY }, 'givens/title', 'labels')
     }
     for (const [s, section] of sections.entries()) {
       const placed = table.sections[s]
-      layers.labels.push(...notationElements(section.heading, placed.heading, { fill: theme.label, fontFamily: FONT_FAMILY }))
+      pen.notation(section.heading, placed.heading, { fill: theme.label, fontFamily: FONT_FAMILY }, `givens/section-${s}`, 'labels')
       for (const [r, row] of section.rows.entries()) {
         for (const [c, cell] of row.cells.entries()) {
-          layers.labels.push(
-            ...notationElements(cell, placed.rows[r][c], {
+          pen.notation(
+            cell,
+            placed.rows[r][c],
+            {
               fill: strokeColor(row.color, palette.axis, palette),
               fontFamily: FONT_FAMILY,
               identity: identity(row.id),
-            })
+            },
+            `${key(row.id)}/cell-${c}`,
+            'labels'
           )
         }
       }
     }
   }
 
-  return { svg: figureDocument(layers, viewBox, theme), errors }
+  return { viewBox, errors }
 }
 
 // The table's sections, in a fixed order and with their rows laid out.
@@ -2362,26 +2429,28 @@ function labelAnchors(
   return { anchors, sources }
 }
 
-function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, layers: ReturnType<typeof emptyFigureLayers>): void {
+function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, pen: FigurePen): void {
   const to = (p: Vec2) => projection.toView(p)
+  const id = key(item.id)
   switch (item.kind) {
     case 'point': {
-      layers.points.push(
-        svgCircle(to(item.at), POINT_RADIUS, { fill: strokeColor(item.color, palette.point, palette), stroke: 'none', ...identity(item.id) })
-      )
+      pen.mark(to(item.at), POINT_RADIUS, { fill: strokeColor(item.color, palette.point, palette), stroke: 'none', ...identity(item.id) }, id, 'points')
       break
     }
     case 'dimensionReference':
       // Thin, in the auxiliary layer, dashed only where the solid hides it.
-      layers.auxiliary.push(
-        svgLine(to(item.a), to(item.b), {
+      pen.stroke(
+        { kind: 'line', a: to(item.a), b: to(item.b) },
+        {
           stroke: strokeColor(item.color, palette.axis, palette),
           'stroke-width': STROKE_AUXILIARY,
           'stroke-linecap': 'round',
           'stroke-dasharray': item.hidden ? AUXILIARY_DASH : null,
           opacity: item.hidden ? AUXILIARY_OPACITY : null,
           ...identity(item.id),
-        })
+        },
+        id,
+        'auxiliary'
       )
       break
     case 'line': {
@@ -2395,22 +2464,26 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         opacity: item.auxiliary ? AUXILIARY_OPACITY : null,
         ...identity(item.id),
       }
+      const layer = item.auxiliary ? 'auxiliary' : 'primary'
       if (item.extent === 'segment') {
-        layers[item.auxiliary ? 'auxiliary' : 'primary'].push(svgLine(a, b, style))
+        pen.stroke({ kind: 'line', a, b }, style, id, layer)
         break
       }
       const clipped = clipToBox(a, { x: b.x - a.x, y: b.y - a.y }, item.extent, viewBox)
-      if (clipped) layers[item.auxiliary ? 'auxiliary' : 'primary'].push(svgLine(clipped[0], clipped[1], style))
+      if (clipped) pen.stroke({ kind: 'line', a: clipped[0], b: clipped[1] }, style, id, layer)
       break
     }
     case 'circle': {
-      layers.primary.push(
-        svgCircle(to(item.center), item.radius * projection.scale, {
+      pen.stroke(
+        { kind: 'circle', center: to(item.center), radius: item.radius * projection.scale },
+        {
           fill: 'none',
           stroke: strokeColor(item.color, palette.axis, palette),
           'stroke-width': STROKE_PRIMARY,
           ...identity(item.id),
-        })
+        },
+        id,
+        'primary'
       )
       break
     }
@@ -2425,8 +2498,11 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const end = -(item.arc.start + item.arc.sweep)
       const stroke = strokeColor(item.color, palette.axis, palette)
       if (item.fill === 'none') {
-        layers.primary.push(
-          svgArc(center, radius, start, end, { fill: 'none', stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) })
+        pen.stroke(
+          { kind: 'arc', center, radius, start, end },
+          { fill: 'none', stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) },
+          id,
+          'primary'
         )
         break
       }
@@ -2439,9 +2515,7 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       }
       // E1 — a fill is a backdrop, so both regions go in the regions layer,
       // behind every line and mark the figure draws over them.
-      layers.regions.push(
-        item.fill === 'sector' ? svgSector(center, radius, start, end, fill) : svgCircularSegment(center, radius, start, end, fill)
-      )
+      pen.fill({ kind: item.fill === 'sector' ? 'sector' : 'circularSegment', center, radius, start, end }, fill, id, 'regions')
       break
     }
     case 'centralAngle': {
@@ -2450,18 +2524,22 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const start = -item.arc.start
       const end = -(item.arc.start + item.arc.sweep)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers.marks.push(svgArc(vertex, radius, start, end, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }))
+      pen.stroke({ kind: 'arc', center: vertex, radius, start, end }, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }, id, 'marks')
       const mid = (start + end) / 2
       const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
-      layers.labels.push(
-        svgText(at, item.label, {
+      pen.text(
+        at,
+        item.label,
+        {
           'font-size': LABEL_FONT_SIZE,
           'font-family': FONT_FAMILY,
           fill: theme.label,
           'text-anchor': 'middle',
           'dominant-baseline': 'central',
           ...identity(item.id),
-        })
+        },
+        id,
+        'labels'
       )
       break
     }
@@ -2480,8 +2558,8 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         // E1 — a hidden edge goes BEHIND every visible one, so the solid
         // stroke covers the dashes where they cross rather than the other
         // way round. Both members of the drawn-edge union go through
-        // drawEdge, which is the one place either becomes markup.
-        layers[edge.hidden ? 'auxiliary' : 'primary'].push(drawEdge(edge, projection.toView, projection.scale, style))
+        // strokeEdge, which is the one place either becomes a pen call.
+        strokeEdge(pen, edge, projection, style, `${item.id.statement}/${edgeObject(edge)}`, edge.hidden ? 'auxiliary' : 'primary')
       }
       break
     }
@@ -2493,15 +2571,20 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       // N1 — a fold is dashed and drawn beneath; a cut edge is solid.
       const stroke = strokeColor(item.color, palette.axis, palette)
       for (const { edge, fold } of item.lines) {
-        layers[fold ? 'auxiliary' : 'primary'].push(
-          drawEdge(edge, projection.toView, projection.scale, {
+        strokeEdge(
+          pen,
+          edge,
+          projection,
+          {
             stroke,
             'stroke-width': fold ? STROKE_AUXILIARY : STROKE_PRIMARY,
             'stroke-linecap': 'round',
             'stroke-dasharray': fold ? AUXILIARY_DASH : null,
             'data-statement': item.id.statement,
             'data-object': edgeObject(edge),
-          })
+          },
+          `${item.id.statement}/${edgeObject(edge)}`,
+          fold ? 'auxiliary' : 'primary'
         )
       }
       break
@@ -2515,66 +2598,78 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         'fill-opacity': REGION_OPACITY,
         ...identity(item.id),
       }
-      for (const edge of item.edges) {
-        layers[edge.hidden ? 'auxiliary' : 'primary'].push(
-          drawEdge(edge, projection.toView, projection.scale, {
+      item.edges.forEach((edge, i) => {
+        strokeEdge(
+          pen,
+          edge,
+          projection,
+          {
             stroke,
             'stroke-width': edge.hidden ? STROKE_AUXILIARY : STROKE_PRIMARY,
             'stroke-linecap': 'round',
             'stroke-dasharray': edge.hidden ? AUXILIARY_DASH : null,
             opacity: edge.hidden ? AUXILIARY_OPACITY : null,
             ...identity(item.id),
-          })
+          },
+          `${id}/${i}`,
+          edge.hidden ? 'auxiliary' : 'primary'
         )
-      }
+      })
       // E1 — a fill is a backdrop, so the shaded face goes in the regions
       // layer, behind every edge of the solid it cuts. A cut drawn over the
       // solid's own lines would hide the thing it is a section OF.
       if (item.outline.kind === 'polygon') {
-        layers.regions.push(svgPolygon(item.outline.vertices.map(to), fill))
+        pen.fill({ kind: 'polygon', points: item.outline.vertices.map(to) }, fill, id, 'regions')
         break
       }
       if (item.outline.kind === 'region') {
-        layers.regions.push(drawClosedEdges(item.outline.edges, projection.toView, projection.scale, fill))
+        pen.fill(closedEdges(item.outline.edges, projection), fill, id, 'regions')
         break
       }
       const circle = item.outline.circle
-      layers.regions.push(
-        svgEllipse(to(circle.center), circle.rx * projection.scale, circle.ry * projection.scale, -circle.rotation, fill)
+      pen.fill(
+        { kind: 'ellipse', center: to(circle.center), rx: circle.rx * projection.scale, ry: circle.ry * projection.scale, rotation: -circle.rotation },
+        fill,
+        id,
+        'regions'
       )
       break
     }
     case 'fill':
       // E1 — a backdrop, behind every line; no stroke (F5).
-      layers.regions.push(
-        fillPath(item.region, projection, {
+      pen.fill(
+        fillPath(item.region, projection),
+        {
           fill: strokeColor(item.color, palette.region, palette),
           'fill-opacity': REGION_OPACITY,
           'fill-rule': 'evenodd',
           ...identity(item.id),
-        })
+        },
+        id,
+        'regions'
       )
       break
     case 'region': {
       const stroke = strokeColor(item.color, palette.axis, palette)
-      for (const edge of item.edges) {
-        layers.primary.push(
-          drawEdge(edge, projection.toView, projection.scale, { stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) })
-        )
-      }
+      item.edges.forEach((edge, i) => {
+        strokeEdge(pen, edge, projection, { stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) }, `${id}/${i}`, 'primary')
+      })
       break
     }
     case 'polygon': {
       const vertices = item.vertices.map(to)
       const stroke = strokeColor(item.color, palette.axis, palette)
       for (let i = 0; i < vertices.length; i++) {
-        layers.primary.push(
-          svgLine(vertices[i], vertices[(i + 1) % vertices.length], {
+        pen.stroke(
+          { kind: 'line', a: vertices[i], b: vertices[(i + 1) % vertices.length] },
+          {
             stroke,
             'stroke-width': STROKE_PRIMARY,
             'stroke-linecap': 'round',
             ...identity(item.id),
-          })
+          },
+          `${id}/${i}`,
+          'primary'
         )
       }
       break
@@ -2586,19 +2681,23 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const radius = angleArcRadius(item, projection)
       const { start, delta } = angleSweep(vertex, from, to2)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers.marks.push(svgArc(vertex, radius, start, start + delta, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }))
+      pen.stroke({ kind: 'arc', center: vertex, radius, start, end: start + delta }, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }, id, 'marks')
       if (item.label) {
         const mid = start + delta / 2
         const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
-        layers.labels.push(
-          svgText(at, item.label, {
+        pen.text(
+          at,
+          item.label,
+          {
             'font-size': LABEL_FONT_SIZE,
             'font-family': FONT_FAMILY,
             fill: theme.label,
             'text-anchor': 'middle',
             'dominant-baseline': 'central',
             ...identity(item.id),
-          })
+          },
+          id,
+          'labels'
         )
       }
       break
@@ -2610,45 +2709,52 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const length = Math.min(TICK_LENGTH, segLength * TICK_MAX_FRACTION)
       const gap = Math.min(TICK_GAP, segLength * TICK_MAX_FRACTION)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      for (const [a, b] of tickMarkSegments(from, target, item.count, length, gap)) {
+      tickMarkSegments(from, target, item.count, length, gap).forEach(([a, b], i) => {
         // M4 — a tick on a hidden stretch of a segment in space is dashed
         // like a hidden edge, beneath the visible lines. Plane ticks carry no
         // `hidden` and keep their bytes.
         if (item.hidden) {
-          layers.auxiliary.push(svgLine(a, b, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...hiddenMark(), ...identity(item.id) }))
-          continue
+          pen.stroke({ kind: 'line', a, b }, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...hiddenMark(), ...identity(item.id) }, `${id}/${i}`, 'auxiliary')
+          return
         }
-        layers.marks.push(svgLine(a, b, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...identity(item.id) }))
-      }
+        pen.stroke({ kind: 'line', a, b }, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...identity(item.id) }, `${id}/${i}`, 'marks')
+      })
       break
     }
     case 'spaceArc': {
       const stroke = strokeColor(item.color, palette.axis, palette)
       const style: SvgAttrs = { stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) }
-      layers[item.hidden ? 'auxiliary' : 'marks'].push(drawEdge(item.edge, projection.toView, projection.scale, style))
+      strokeEdge(pen, item.edge, projection, style, id, item.hidden ? 'auxiliary' : 'marks')
       if (item.text) {
         // As the plane writes an "angle: … label:" caption: a font size out
         // from the arc, along the bisector.
         const anchor = to(item.text.at)
         const push = item.text.push ?? { x: 0, y: 0 }
         const at = { x: anchor.x + LABEL_FONT_SIZE * push.x, y: anchor.y + LABEL_FONT_SIZE * push.y }
-        layers.labels.push(
-          svgText(at, item.text.label, {
+        pen.text(
+          at,
+          item.text.label,
+          {
             'font-size': LABEL_FONT_SIZE,
             'font-family': FONT_FAMILY,
             fill: theme.label,
             'text-anchor': 'middle',
             'dominant-baseline': 'central',
             ...identity(item.id),
-          })
+          },
+          id,
+          'labels'
         )
       }
       break
     }
     case 'spaceRightAngle': {
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers[item.hidden ? 'auxiliary' : 'marks'].push(
-        svgPolyline(item.points.map(to), { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) })
+      pen.stroke(
+        { kind: 'polyline', points: item.points.map(to) },
+        { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) },
+        id,
+        item.hidden ? 'auxiliary' : 'marks'
       )
       break
     }
@@ -2665,16 +2771,18 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const legLength = Math.min(Math.hypot(from.x - vertex.x, from.y - vertex.y), Math.hypot(target.x - vertex.x, target.y - vertex.y))
       const size = Math.min(RIGHT_ANGLE_SIZE, legLength * RIGHT_ANGLE_MAX_FRACTION)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers.marks.push(
-        svgPolyline(rightAngleSquarePoints(vertex, from, target, size), {
+      pen.stroke(
+        { kind: 'polyline', points: rightAngleSquarePoints(vertex, from, target, size) },
+        {
           fill: 'none',
           stroke,
           'stroke-width': STROKE_MARK,
           ...identity(item.id),
-        })
+        },
+        id,
+        'marks'
       )
       break
     }
   }
 }
-

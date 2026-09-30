@@ -267,6 +267,11 @@ export function svgEllipse(center: Vec2, rx: number, ry: number, rotation: numbe
   return `<ellipse${attrs({ cx: center.x, cy: center.y, rx, ry, transform, ...style })}/>`
 }
 
+// A plain rectangle: the givens table's box.
+export function svgRect(rect: { x: number; y: number; width: number; height: number }, style: SvgAttrs): string {
+  return `<rect${attrs({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, ...style })}/>`
+}
+
 export function svgText(at: Vec2, text: string, style: SvgAttrs): string {
   return `<text${attrs({ x: at.x, y: at.y, ...style })}>${svgEscape(text)}</text>`
 }
