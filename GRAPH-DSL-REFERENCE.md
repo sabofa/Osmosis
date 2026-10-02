@@ -104,8 +104,11 @@ start over: in `|(2|x|)|` the inner pair multiplies.
 **Factorial.** `n!` is postfix and means `gamma(n + 1)`: exact at whole numbers,
 undefined at the negative integers. It binds tighter than `^` and than unary
 minus, so `-3!` is `-(3!)` = -6 and `2^3!` is `2^(3!)` = 64. Parenthesise to
-take the factorial of a sum: `(2k + 1)!`. `!=` is "not equal", so write
-`n! = 5` with a space when you mean the factorial.
+take the factorial of a sum: `(2k + 1)!`. `!=` is "not equal", so `n!=5` is the
+condition `n != 5`; write `n! = 5` with a space when you mean the factorial
+equation. A statement that has a bare `!=` outside any bracket (`y != 2`,
+`x^2 + y^2 != 1`) is refused, not read as an equation: `!=` is a condition, and
+belongs in a piecewise `{…}` (see "Conditions").
 
 **Derivatives by name.** `f'(x)`, `f''(x + 1)`, up to five primes: the exact
 derivative of a function the document defines, at that point. Only a user
@@ -157,7 +160,8 @@ not x = 0
 ```
 
 Parentheses do not group conditions (they start an expression). A comparison
-is only valid as a condition: `x < 1` on its own, outside braces, is an error.
+is only valid as a condition: `x < 1` on its own, outside braces, is an error,
+and a statement such as `y != 2` is refused rather than read as `y! = 2`.
 `and`, `or` and `not` are keywords only inside a condition, and `to` only inside
 a sum, product or integral; anywhere else they are ordinary names.
 

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { num, variable } from '../math/expr'
+import { compare, factorialOf, piecewise } from '../math/reserved'
+import { parseExprString } from './parseExpr'
 import { parseStatement } from './parseStatement'
 
 describe('parseStatement', () => {
@@ -1490,5 +1493,70 @@ describe('a color: or name: left before a style clause gets a legible error (fix
 
   it('after the other clauses they still work', () => {
     expect(parseStatement('z = x opacity: 0.5 color: red name: s')).toMatchObject({ kind: 'space', color: 'red', statementName: 's' })
+  })
+})
+
+// calc P1 fix round 1. "!" is a token now, so a line that is split at its first
+// "=" by string ("y != 2" -> "y!" and "2") would parse as the factorial equation
+// "y! = 2" instead of failing. parseStatement refuses a "!=" that sits outside
+// every bracket and before any "if" clause, before any grammar (space's keyword
+// and unkeyed hooks included) can split the line.
+describe('a bare "!=" is a condition, not an equation', () => {
+  const NOT_AN_EQUATION = /"!=" is a condition, not an equation: use it inside an "if" clause or a piecewise \{…\}; for a factorial equation write "n! = 5" with a space/
+
+  const REFUSED = [
+    'y != 2',
+    'y!=2',
+    'n!=5',
+    'x^2 + y^2 != 1',
+    'x^2 + z^2 != 1',
+    'implicit: x^2 + y^2 != 4',
+    // space keyword operands: a region's condition, a contour's target and levels, a constraint
+    'region: x^2 + y^2 <= 4 and x != 0',
+    'contour: x^2 + y^2 != 4 level 1',
+    'contour: x^2 + y^2 level 1 != 2',
+    'lagrange: max x + y subject to x^2 + y^2 != 1',
+    // before an "if" clause it is still bare; with a style clause after it too
+    'y != 2 if x > 0',
+    'y != 2 color: red',
+    'z = x != 2',
+  ]
+  for (const line of REFUSED) {
+    it(`refuses ${line}`, () => {
+      expect(() => parseStatement(line)).toThrow(NOT_AN_EQUATION)
+    })
+  }
+
+  it('leaves a "!=" inside an "if" clause to the clause', () => {
+    // the guard does not fire; whether the clause itself reads "!=" is the "if" grammar's affair
+    expect(() => parseStatement('y = x if x != 0')).not.toThrow(NOT_AN_EQUATION)
+    expect(() => parseStatement('y = x^2 if 0 != x and x < 3')).not.toThrow(NOT_AN_EQUATION)
+  })
+
+  it('accepts a "!=" inside braces, parentheses or brackets', () => {
+    expect(parseStatement('y = {x != 0: 1, 2}')).toMatchObject({ kind: 'explicit', body: parseExprString('{x != 0: 1, 2}') })
+    expect(() => parseStatement('y = {x < 0: 1, x != 3: 2, 0}')).not.toThrow()
+    expect(() => parseStatement('y = f({x != 0: 1, 2})')).not.toThrow(NOT_AN_EQUATION)
+  })
+
+  it('still reads "n! = 5", with a space, as the factorial equation', () => {
+    expect(parseStatement('n! = 5')).toMatchObject({ kind: 'implicit', left: factorialOf(variable('n')), right: num(5) })
+    expect(parseStatement('x! + y! = 7')).toMatchObject({ kind: 'implicit' })
+  })
+
+  it('does not touch the text of a table cell, a label or a given', () => {
+    expect(parseStatement('row: a | x != 0')).toMatchObject({ kind: 'tableRow', cells: ['a', 'x != 0'] })
+    expect(parseStatement('header: x != 0 | y')).toMatchObject({ kind: 'tableHeader', cells: ['x != 0', 'y'] })
+    expect(parseStatement('t.row: a | x != 0')).toMatchObject({ kind: 'tableRow', tableName: 't', cells: ['a', 'x != 0'] })
+    expect(() => parseStatement('label: AB = x != 3')).not.toThrow()
+    expect(() => parseStatement('angle: A-B-C label: x != y')).not.toThrow()
+  })
+
+  it('at the expression level n! = 5 and n != 5 are different conditions', () => {
+    const factorialEquals = parseExprString('{n! = 5: 1, 0}')
+    const notEqual = parseExprString('{n != 5: 1, 0}')
+    expect(factorialEquals).toEqual(piecewise([[compare('=', factorialOf(variable('n')), num(5)), num(1)]], num(0)))
+    expect(notEqual).toEqual(piecewise([[compare('!=', variable('n'), num(5)), num(1)]], num(0)))
+    expect(factorialEquals).not.toEqual(notEqual)
   })
 })

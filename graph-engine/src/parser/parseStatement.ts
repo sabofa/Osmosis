@@ -2068,6 +2068,39 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
   return { kind: 'given', section, entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
 }
 
+// "!" is a token (the factorial, calc P1), and several grammars split a line at
+// its first "=" by string, so "y != 2" would read as the equation "y! = 2" and
+// "x^2 + y^2 != 1" as a circle. "!=" is a condition, never an equation, so it is
+// refused where an equation could be read, before any grammar (space's keyword
+// and unkeyed hooks included) sees the line.
+const NOT_EQUAL_IS_A_CONDITION =
+  '"!=" is a condition, not an equation: use it inside an "if" clause or a piecewise {…}; for a factorial equation write "n! = 5" with a space'
+
+// Statements whose text after the keyword is words, not an expression — a
+// table's cells, a measure's label or symbol — where "!=" is only characters.
+const FREE_TEXT_STATEMENT = /^(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?(?:header|row):|^(?:label|given|find):/
+
+// Throws when `line` has a "!=" outside every bracket and before any "if"
+// clause (what follows "if" is a condition, where "!=" is the comparison). It
+// scans on its own, not through the splitters the grammars use.
+function refuseBareNotEqual(line: string): void {
+  const text = line.trim()
+  if (FREE_TEXT_STATEMENT.test(text)) return
+  // "angle: A-B-C label: text": the label is text.
+  const labelAt = text.startsWith('angle:') ? text.indexOf('label:') : -1
+  const scanned = labelAt === -1 ? text : text.slice(0, labelAt)
+  let depth = 0
+  for (let i = 0; i < scanned.length; i++) {
+    const c = scanned[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0) {
+      if (c === '!' && scanned[i + 1] === '=') throw new Error(NOT_EQUAL_IS_A_CONDITION)
+      if (c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
+    }
+  }
+}
+
 // Parses one non-empty, comment-stripped line into a Statement. Splices off
 // trailing "color: <value>" and/or "name: <id>" clauses (see
 // parser/types.ts's grammar comment) — in either order — before handing the
@@ -2108,5 +2141,6 @@ export function parseStatement(rawLine: string): Statement {
     break
   }
 
+  refuseBareNotEqual(line)
   return { ...parseStatementCore(line), color, statementName }
 }
