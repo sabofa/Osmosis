@@ -106,6 +106,8 @@ interface Ctx {
 interface Budget {
   used: number
   depth: number
+  // Compile time: how many loops this expression has compiled so far.
+  loops: number
 }
 
 // Compile time: `factor` is the product of the ranges of the enclosing loops whose
@@ -118,7 +120,7 @@ interface LoopNest {
 }
 
 function newCtx(scope: MathScope, slots: number, stack: string[]): Ctx {
-  return { scope, slots, stack, budget: { used: 0, depth: 0 }, loops: { factor: 1, charged: 0 } }
+  return { scope, slots, stack, budget: { used: 0, depth: 0, loops: 0 }, loops: { factor: 1, charged: 0 } }
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +591,7 @@ function closedBound(expr: Expr, node: Node, env: Env, ctx: Ctx): number | null 
 
 function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product: boolean): Node {
   const word = LOOP_WORD[expr.name]
+  ctx.budget.loops++
   const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'index', (loNode, hiNode) => {
     // Bounds known now are checked now; one that reads a variable or a @param is
     // checked per evaluation, giving NaN. A bound must be a whole number a float
@@ -651,13 +654,40 @@ function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product:
 }
 
 function compileIntegral(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
-  const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'variable of integration')
+  // The integrand runs as often as the quadrature asks, under the integral's own
+  // budget (math/binders.ts), so the loops in it are not multiplied by the loops
+  // around the integral: a nest is counted inside the integrand alone, at compile
+  // time and at run time, and each evaluation of it starts a count of its own.
+  const budget = ctx.budget
+  const loopsBefore = budget.loops
+  const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'variable of integration', () => {
+    const outer = ctx.loops
+    ctx.loops = { factor: 1, charged: 0 }
+    return () => {
+      ctx.loops = outer
+    }
+  })
   // One frame per compiled function, so the integrand can be made once.
   let frame: Float64Array = new Float64Array(0)
-  const g = (t: number) => {
-    frame[slot] = t
-    return body(frame)
-  }
+  const g =
+    budget.loops === loopsBefore
+      ? (t: number) => {
+          frame[slot] = t
+          return body(frame)
+        }
+      : (t: number) => {
+          frame[slot] = t
+          // The count of the loop this integral is inside (if any) is put back after.
+          const { used, depth } = budget
+          budget.used = 0
+          budget.depth = 0
+          try {
+            return body(frame)
+          } finally {
+            budget.used = used
+            budget.depth = depth
+          }
+        }
   return (f) => {
     frame = f
     return integrateValue(g, lo(f), hi(f))

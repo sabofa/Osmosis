@@ -275,6 +275,7 @@ describe('the term limit counts across nested loops', () => {
   const nest = (outerHi: Expr, innerHi: Expr) => sum('i', num(1), outerHi, inner(innerHi))
   const n = variable('n')
   const m = variable('m')
+  const nestOf = (outer: number, innerCount: number) => nest(num(outer), num(innerCount))
 
   it('sum(i = 1 to 1000, sum(j = 1 to 1000, 1)) is a CompileError at compile, on both paths', () => {
     const err = bothRefuse(nest(num(1000), num(1000)), makeScope(), [])
@@ -364,6 +365,21 @@ describe('the term limit counts across nested loops', () => {
     let harmonic = 0
     for (let k = 2; k <= 41; k++) harmonic += 1 / k
     expect(Math.abs(both(e, [], []) - harmonic)).toBeLessThan(1e-9)
+  })
+
+  it('nor does a loop around the integral: the integrand of each of 2000 integrals counts afresh', () => {
+    // sum(i = 1 to 2000, integral(t = 0 to 1, sum(k = 1 to 60, t^k))): every integral is H(61) - 1, and
+    // its integrand runs at least 15 times a pass, 60 terms each, so the 2000 together far exceed the
+    // limit if they all counted into the outer loop; each integrand evaluation is its own count.
+    const e = sum('i', num(1), num(2000), integral('t', num(0), num(1), sum('k', num(1), num(60), p('t^k'))))
+    let harmonic = 0
+    for (let k = 2; k <= 61; k++) harmonic += 1 / k
+    expect(Math.abs(both(e, [], []) - 2000 * harmonic)).toBeLessThan(1e-6)
+    // and the nest a loop and an integral's integrand make is counted in the integrand alone, at compile time too:
+    // 1000 x (an integrand loop of 1000) is not a literal nest
+    expect(both(sum('i', num(1), num(2), integral('t', num(0), num(1), sum('k', num(1), num(1000), num(1)))), [], [])).toBeCloseTo(2000, 6)
+    // inside the integrand a nest is still a nest
+    expect(bothRefuse(integral('t', num(0), num(1), nestOf(1000, 1000)), makeScope(), []).message).toMatch(/nested/)
   })
 })
 
