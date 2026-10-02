@@ -4,6 +4,8 @@ import type { StyleLayer } from '../style/resolve'
 // the spec text (order doesn't matter; last value for a repeated key wins).
 // Threaded from parseSpec -> GraphViewer -> the renderers/scene builders, so
 // a test writer controls presentation without touching code.
+
+import { defaultSpaceConfig, type Binding, type SpaceConfig } from '../space/config'
 export interface GraphBounds {
   xMin: number
   xMax: number
@@ -129,6 +131,12 @@ export interface GraphConfig {
   // look), and that base is not known here. Empty when the spec says nothing,
   // which draws clean — today's figure, byte for byte.
   style: StyleLayer
+  // Space's own directives (@bounds3d, @camera, @ticks3d, ...; SP7), parsed by
+  // space/grammar/directives.ts. @view above stays the solid-figure camera.
+  space: SpaceConfig
+  // The spec's @param bindings, in source order (SP6). Space-only for now:
+  // the 2D renderer ignores bindings until track 4 adopts them.
+  bindings: Binding[]
 }
 
 export function defaultConfig(): GraphConfig {
@@ -156,5 +164,7 @@ export function defaultConfig(): GraphConfig {
     view: 'standard',
     tableFormulas: false,
     style: {},
+    space: defaultSpaceConfig(),
+    bindings: [],
   }
 }

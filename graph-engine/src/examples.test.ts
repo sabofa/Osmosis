@@ -4,7 +4,8 @@ import { parseSpec } from './parser/parseSpec'
 import { renderFigure } from './figure/render'
 import { buildScene } from './scene/buildScene'
 import { buildTable } from './scene/buildTable'
-import { resolvePanels } from './scene/mode'
+import { isThreeD, resolvePanels } from './scene/mode'
+import { createSpaceKernel } from './space/kernel/index'
 import { LIGHT_PALETTE } from './render/palette'
 import { evalExpr } from './parser/evalExpr'
 import { authorToWorld } from './figure/authorFrame'
@@ -60,7 +61,13 @@ describe('review harness examples', () => {
           expect(drawn).toBeGreaterThan(0)
         }
 
-        if (panels.drawable === 'graph') {
+        if (panels.drawable === 'graph' && isThreeD(parsed.statements)) {
+          // Space: the kernel builds it (track 3), with no errors and at
+          // least one mark.
+          const scene = createSpaceKernel(parsed.statements, parsed.config, parsed.statementLines).scene()
+          expect(scene.errors.map((e) => `line ${e.line}: ${e.message}`)).toEqual([])
+          expect(scene.marks.length).toBeGreaterThan(0)
+        } else if (panels.drawable === 'graph') {
           const scene = buildScene(parsed.statements, BOUNDS, parsed.config)
           expect(scene.errors.map((e) => e.message)).toEqual([])
           expect(scene.objects.length).toBeGreaterThan(0)

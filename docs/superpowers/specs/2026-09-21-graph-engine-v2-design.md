@@ -361,6 +361,11 @@ rasterizer. The look being complained about comes from stock
 `MeshLambertMaterial` plus a missing frame; both are addressed without giving
 up the parts three.js does well.
 
+*Revised 2026-09-26, for space:* the paragraph above no longer holds for space,
+which is now a hand-made WebGL2 engine with no three.js. See Track 3,
+"Revised 2026-09-26 — space is a hand-made engine". The 2D plot renderer is
+unaffected.
+
 **Test-style solids are 2D drawings, not 3D scenes.** A cylinder in a test
 figure is an ellipse, two verticals and a dashed back-arc: an axonometric
 projection with hidden-line convention, deterministic, no camera, no lighting.
@@ -1229,6 +1234,599 @@ retrofit:
 Also reserved, cheap once data input exists: 2D distribution primitives
 (histogram, density, empirical CDF) and linear-transformation visualization
 (unit circle to ellipse under A, with eigenvectors marked).
+
+### Revised 2026-09-26 — space is a hand-made engine
+
+This section **supersedes the cross-cutting decision "3D keeps three.js"** for
+space, and turns the sketch above into a build. The vocabulary table above
+still states intent. Where this section and the table disagree, this section
+wins.
+
+#### Why the three.js decision is reversed
+
+The earlier decision reasoned that "custom made" meant owning the chart layer
+and the shading, not the rasterizer. On 2026-09-26 the user reversed it: space
+is to be hand-made, customisable without limit, and compatible with whatever
+the courses bring. The reason is the target. What is being built is an
+instrument meant to last, not a demo reached quickly.
+
+The technical case agrees. What space needs is the part three.js does not
+provide or provides badly:
+
+- lines with a real pixel width, and dashes;
+- contour and colormap shading, and clipping to the axis box;
+- order-independent transparency;
+- picking that reads the formula rather than a triangle;
+- text that can be typeset;
+- a draw list that is plain data.
+
+What three.js does provide (a scene graph, a material zoo, loaders) space does
+not use. Owning the pipeline also makes the draw list a backend-agnostic value.
+That is what lets a WebGPU backend, or the document-format session's export
+path, arrive later by replacing one directory.
+
+**Scope of the reversal.** It covers space only. The 2D plot renderer (tracks 1
+and 4) stays on three.js. Moving it onto space's backend is possible later and
+is not planned here. Solid figures are unaffected: they are SVG and share no
+code with space.
+
+#### Sub-projects
+
+Track 3 is four sub-projects. Each gets its own phase plans:
+
+| # | Sub-project | Phases | Coverage |
+|---|---|---|---|
+| 1 | **Core**: kernel, backend, camera, frame, encoding, interaction | S1–S3 | everything below builds on it |
+| 2 | **Multivariable calculus** | S4–S5 | OpenStax *Calculus Vol. 3* ch. 2–5 |
+| 3 | **Vector calculus + Physics C** | specced after S5 | ch. 6; fields, flux, Gauss/Ampère, trajectories |
+| 4 | **Quant / data** | specced after 3 | the "Reserved for quantitative work" list above |
+
+Sub-projects 1 and 2 are built first, together. The courses this serves are
+hand-made with their own syllabi, so **OpenStax Vol. 3 is a coverage checklist,
+not a corpus**. Every *kind* of figure in chapters 2–5 must be authorable. No
+figure is reproduced. The checklist is at the end of this section.
+
+#### SP1 — Architecture and boundaries
+
+```
+graph-engine/src/
+  math/               pure and engine-agnostic; track 4 reuses it for 2D calculus
+    compile.ts        Expr -> slot-indexed closures; built-ins; multi-parameter and vector functions
+    diff.ts           symbolic d/dv on the Expr tree
+    simplify.ts       deterministic folding and identities (never algebraic cleverness)
+    roots.ts          damped Newton in 1-3 dimensions, grid-seeded, deduplicated
+    quadrature.ts     adaptive Gauss-Kronrod (7-15), nested for iterated integrals
+    linalg.ts         2x2 / 3x3 dense: det, solve, symmetric eigenvalues
+  space/
+    grammar/          space statements, clauses and directives (pure; the server parses specs)
+    kernel/           statement -> typed-array geometry, one builder per form, via a registry
+    scene/            SpaceScene and Mark: the backend-agnostic draw list
+    frame/            bounds, aspect, ticks, walls, edge choice, label anchors (pure)
+    camera/           turntable, orthographic/perspective, serialisable view state (pure)
+    pick/             CPU ray casting, readouts re-evaluated from the formula (pure)
+    gl/               the WebGL2 backend: the only code that touches a GL context
+    ui/               DOM overlay: tick labels, readouts, colorbar, parameter panel, input
+    SpaceRenderer.ts  the class GraphViewer mounts, replacing SceneRenderer3D
+```
+
+**Flow.**
+1. Spec text goes through `parseSpec`, which yields statements, config and
+   bindings.
+2. The kernel builds one `SpaceScene`. When a binding changes, only the
+   statements that depend on it are rebuilt.
+3. The backend uploads the marks and draws them.
+4. The frame and the overlay are recomputed from the camera every frame.
+5. Picking reads the CPU geometry and re-evaluates the true function at the
+   hit.
+
+**Boundaries, enforced by a test** that walks the import graph:
+- `space/` and `math/` never import `three`, `figure/` or React. `ui/` and
+  `SpaceRenderer.ts` may touch the DOM.
+- `math/` never imports `space/`.
+- `space/grammar/` imports nothing outside `parser/` and `math/`, because the
+  server bundles the parser. It never imports `parseStatement.ts`, whose
+  hook imports it.
+- Only `space/gl/` touches WebGL.
+
+**Shared files are touched additively, at named hook points.** These are
+coordinated with the solid-figure side before editing:
+- `parser/parseStatement.ts`: two hooks, both returning `null` for any line
+  space does not own. Agreed with the solid-figure side on 2026-09-26.
+  - **`parseSpaceKeyword(line)` runs first** in `parseStatementCore`. It claims
+    only keyword-led space statements (`contour:`, `trace:`, `plane:`, …; SP9).
+    It returns `null` for `plane: A-B-C` and other point-list plane forms, so
+    solid figures' refusal of drawn plane patches still catches them.
+  - **`parseSpaceUnkeyed(line)` runs immediately before the earliest existing
+    branch that would misread an unkeyed space form.** Each claim needs an
+    unmistakable space signal (the S1 plan lists them). It never claims a line
+    whose left side is a bare name and whose right side is a solid-figure form
+    (`solid …`, a coordinate tuple, `midpoint`, `divide`, `foot`, `intersect`,
+    `centroid`, `center of`, `plane …`, `circumsphere`, `insphere`). An
+    equation without `z` (such as `x^2 + y^2 = 25`) stays the 2D implicit
+    curve.
+  - **Style clauses (SP8) are stripped only inside a line space has already
+    claimed**, never in the shared trailing-clause loop. `dashed` and `width`
+    are solid-figure words there too.
+- `parser/types.ts`: one union member `{ kind: 'space'; form: SpaceForm }`,
+  where `SpaceForm` is defined in `space/grammar/types.ts`. Style lives inside
+  the form.
+- `parser/config.ts` and `parseConfig.ts`: one `space: SpaceConfig` field and
+  one `bindings: Binding[]` field, and one delegation for space's directives
+  and `@param`.
+- `scene/mode.ts`: `isThreeD` and `PLOTTED` learn `space`. **The solid check
+  still runs first, and nothing is reordered.**
+- `examples.ts`: concatenates `space/examples.ts`.
+- `GraphViewer.tsx`: swaps the renderer class.
+
+**Existing syntax keeps its statement kinds.** Written without space clauses
+or domains, these all parse exactly as before:
+- `z = f(x, y)`
+- `(fx, fy, fz) for t in [a, b]`
+- `(fx, fy, fz) for u in [..], v in [..]`
+- 3-coordinate points, segments, rays and vectors
+
+The space grammar claims only new forms, and one of these lines once it
+carries a space clause or a domain: `z = x^2 opacity: 0.5` becomes a space
+form. The existing kinds are consumed by space's kernel. Before any merge into
+`milestone-a/main`, a byte-identity sweep compares two things between the
+merge base and the head: the parse output of every spec string in the
+examples and the existing test files, and the rendered output of every figure
+spec under every `@view`. Every difference must be one a plan names. The one sanctioned change to pre-existing output is that
+**every space spec renders through the new renderer**, which is the point of
+the track.
+
+`SceneRenderer3D.ts`, `buildScene3d.ts`, `types3d.ts` and their tests are
+deleted in S2, once every old form has been ported.
+
+#### SP2 — The math kernel
+
+**Expressions.** Space compiles the shared `Expr` tree with its own compiler,
+`math/compile.ts`, and leaves the 2D evaluator (`parser/evalExpr.ts`)
+untouched. The new compiler adds:
+
+- **Built-ins:** `asin acos atan atan2 sinh cosh tanh asinh acosh atanh sec
+  csc cot floor ceil round sign min max hypot mod`, on top of the existing
+  eight. `@angle: degrees` applies to every trig function and inverse.
+- **Multi-parameter functions:** `f(x, y) = x^2 - y^2` and
+  `g(x, y, z) = x y z`.
+- **Vector-valued functions:** `r(t) = <cos(t), sin(t), t>` and
+  `F(x, y, z) = <-y, x, 0>`. The Unicode brackets `⟨ ⟩` and a plain
+  `(a, b, c)` tuple are accepted too.
+- **Where vectors are recognised.** Vector literals are recognised by the space
+  grammar only where a vector is expected: a definition's right-hand side, and
+  a clause such as `direction <1, 2, 3>`. They never reach the shared
+  expression parser, so the inequality grammar is untouched.
+- **A tuple still means a point.** `u = (1, 2, 3)` stays a labelled point, as it
+  always has. A vector constant is written `u = <1, 2, 3>`.
+- **What stays with the old statement.** Single-parameter definitions
+  (`k(x) = …`) remain the existing `functionDef`. Space's function table reads
+  both kinds.
+- **Evaluation:** slot-indexed closures (`(args: Float64Array) => number`)
+  with no per-sample object allocation.
+- **No `new Function`.** Code generation stays out, for safety and
+  determinism. It can be added behind the same interface if a profile ever
+  demands it.
+
+**Symbolic differentiation (`diff.ts`)** covers every built-in, inlines user
+functions through the chain rule, and returns an `Expr`.
+- Gradients, Hessians, tangent planes, surface normals, curve frames and
+  curvature all evaluate derivative *expressions*. **Space never
+  finite-differences a formula it has.**
+- Non-smooth built-ins differentiate almost everywhere: `abs` gives `sign`, and
+  `floor`, `ceil`, `round` and `sign` give 0.
+- `simplify.ts` is deterministic: constant folding and the 0/1 identities, so
+  the output of `diff` stays small. It never factors or expands.
+
+**Numerics** (`roots`, `quadrature`, `linalg`) are for questions with no closed
+form:
+- critical points: ∇f = 0, seeded on a grid, then Newton, then deduplicated;
+- Lagrange systems;
+- integral values.
+
+Every numeric answer is shown as **approximate** (`≈`), with its digits bounded
+by the method's own error estimate. **An exact form is never inferred from a
+float** (the cross-cutting exactness rule).
+
+**Geometry is typed arrays.** The kernel emits `Float64Array` positions,
+normals, scalars and parameters, with `Uint32Array` indices. Float64 on the CPU
+keeps readouts and tests exact.
+- **Upload.** The backend converts to `Float32Array` **relative to the box
+  centre**, so a surface at x ≈ 4500 (an index level, say) keeps its precision.
+  This refines the reserved item "`Vec3[]` becomes `Float32Array`": typed end
+  to end, with Float32 reserved for the GPU.
+- **Holes.** A non-finite sample drops the triangles that touch it, which
+  leaves an honest hole. No zero is invented.
+- **Normals.** Surface normals are analytic: `(-f_x, -f_y, 1)` for `z = f`,
+  `r_u × r_v` for a parametric surface, and `∇F` for an implicit surface.
+
+**Domains.** An explicit surface takes a domain:
+
+```
+z = f(x, y)                                   # the box's x/y extent
+z = f(x, y) for x in [a, b], y in [c, d]      # a rectangle
+z = f(x, y) over x in [0, 1], y in [x^2, x]   # type I: inner bounds depend on the outer variable
+z = f(x, y) over y in [0, 2], x in [0, y/2]   # type II
+z = f(x, y) over r in [0, 2], theta in [0, pi] # polar (r's bounds may depend on theta and vice versa)
+z = f(x, y) over x^2 + y^2 <= 4               # an inequality
+z = f(x, y) over R                            # a named region (SP9)
+```
+
+- **Iterated domains** (rectangle, type I, type II, polar) are the image of the
+  unit square under an exact map. Their boundary edges lie exactly on the
+  bounding curves, and the grid follows the region.
+- **An inequality domain** is sampled on the box grid. Triangles are clipped
+  against the boundary, and each boundary crossing is refined by bisection on
+  the true inequality, so the edge lies on the curve to within tolerance.
+
+**Resolution.** Defaults: 96×96 for surfaces, 512 segments for curves, 64³ for
+implicit surfaces. `@resolution: <n>` sets the spec's default, and a `res: <n>`
+clause sets one statement's. Adaptive refinement is not in scope. A statement
+that would exceed 1M triangles is refused with a message naming the
+resolution.
+
+**Registry.** Each space form's builder registers in
+`kernel/registry.ts`. Sub-projects 3 and 4 add builders without editing a
+switch.
+
+#### SP3 — The scene: marks
+
+`SpaceScene` is the whole contract between the kernel and every backend:
+
+```ts
+interface SpaceScene {
+  marks: Mark[]                 // the backend orders them into passes
+  labels: LabelAnchor[]         // text anchored at author-space points, drawn by the DOM overlay
+  colorScales: ColorScale[]     // what the colorbar shows
+  extent: Box3 | null           // the data extent, for automatic bounds
+  errors: SceneError[]          // { line, message }: returned, never thrown
+}
+
+type Mark =
+  | MeshMark     // triangles: positions, normals, optional scalars and (u,v), indices, MeshStyle
+  | LineMark     // polylines: positions, polyline starts, LineStyle (width px, dash, hidden-part style)
+  | PointMark    // markers: positions, size px, shape
+  | ArrowMark    // tails + vectors, instanced shaft and head, ArrowStyle
+  | BoxMark      // instanced axis-aligned boxes (Riemann sums, S5)
+```
+
+- **Source.** Every mark carries `source: { line, statement, object }`, which
+  is the equivalent of the figure renderer's `data-statement` and
+  `data-object`. Track 7's tools address a mark by it.
+- **Pick.** Every pickable mark carries a `pick` descriptor: the compiled
+  function (or functions) and the parameter map. SP6 reads the true value
+  through it.
+- **Determinism.** The same spec, bindings and resolution always give the same
+  scene, typed arrays included, so tests can assert on the scene. Pixels are
+  GPU-dependent and never asserted.
+
+#### SP4 — The WebGL2 backend
+
+- **Requirements.** WebGL2 is required. Without it, the view shows a legible
+  message instead of a blank canvas. `EXT_color_buffer_float` enables
+  order-independent transparency. Without it, transparency falls back to
+  per-mark sorted alpha, and the fallback is tested.
+- **Frame loop.**
+  1. Opaque meshes.
+  2. Lines, points and arrows, with a small depth bias so a curve lying on a
+     surface does not z-fight.
+  3. Hidden parts of lines, drawn faint and dashed wherever the depth test
+     fails (the textbook convention for a curve passing behind a surface; per
+     mark, on by default for curves drawn on surfaces).
+  4. Transparent meshes, by weighted blended OIT.
+  5. Composite, with 4× MSAA through a multisampled framebuffer and a blit.
+  6. Frames render on demand, never in a standing 60 fps loop.
+- **Lines** are screen-space quads, instanced per segment, with round joins
+  and caps. The width is in CSS pixels, and dashes run on cumulative length.
+  WebGL's 1-pixel `LINES` are never used.
+- **Surfaces.**
+  - **Lighting:** a view-space key light and a fill light, Blinn–Phong with low
+    specular.
+  - **Two-sided:** back faces take a darker, hue-shifted tint of the front
+    colour, so a surface's orientation is visible. Sub-project 3's flux
+    depends on this.
+  - **Colormaps** are sampled from a 256×1 texture (SP5).
+  - **Mesh lines** are drawn in the fragment shader from the (u, v) or (x, y)
+    attributes, with `fwidth` antialiasing. For `z = f`, mesh lines fall on the
+    x and y tick values, so every mesh line is a readable trace at a nice
+    value.
+- **Clipping.** Every fragment outside the axis box is discarded in the shader.
+  A surface that runs to infinity (a pole) is cut cleanly at the box, as in
+  Mathematica, and never stretches the box.
+- **Depth cueing:** a subtle fade toward the background with view depth. On by
+  default; `@depthcue: off` turns it off.
+- **Pixels.** The canvas is sized by `devicePixelRatio`, capped at 2.
+- **Context loss.** Every GPU resource derives from the retained `SpaceScene`,
+  so on `webglcontextrestored` the backend re-uploads and redraws. Loss
+  mid-session is survivable, and a test covers it.
+- **Resource lifecycle is tested without a GPU.** A recording fake
+  `WebGL2RenderingContext` asserts that every `create*` has a matching
+  `delete*` after `dispose()`, and that a scene swap frees the previous
+  scene's buffers.
+
+#### SP5 — Camera and frame
+
+**Camera.**
+- **Turntable, z always up:** azimuth, elevation (clamped to ±89.5°), target,
+  and zoom.
+- **Projection:** orthographic by default, with `@projection: perspective`
+  opt-in. Perspective converges parallel lines, which defeats reading values
+  off a plot.
+- **Input:**
+  - drag to orbit;
+  - right-drag or shift-drag to pan;
+  - wheel or pinch to zoom about the cursor;
+  - double-click to return to the authored view;
+  - arrow keys and `+`/`-` orbit and zoom when the canvas has focus.
+- **Authored view:** `@camera: azimuth 40, elevation 25, zoom 1`, with every
+  key optional. Azimuth is the camera's horizontal direction measured from +x
+  toward +y. The default of 40° looks from the author's (+, +, +) octant, as
+  solid figures do: x comes toward the viewer and left, y runs right, z runs
+  up. That is the textbook drawing, kept just off the symmetric 45°. This is
+  space's own directive; `@view` belongs to solid figures.
+- **Saved view.** `getView()` and `setView()` expose exactly these fields plus
+  the target. That is the page `view` the document model saves (step 7). There
+  are **no snap views and no export in this track**: the document-format work
+  owns both.
+
+**The frame is a real chart.**
+- `@frame: box` (the default). Three back walls carry gridlines at the tick
+  values. As the camera orbits, the walls flip so they stay behind the data.
+  Tick marks and labels sit on three near edges:
+  - x and y on the two front-bottom edges;
+  - z on the vertical edge nearest the left of the screen.
+
+  Labels are pushed outward, perpendicular to their edge on screen. When
+  labels would collide, every other one is dropped.
+- `@frame: axes`. The textbook style: axes through the origin with arrowheads,
+  tick marks and the letters x, y, z. OpenStax and Stewart draw most of their
+  figures this way.
+- `@frame: none`.
+
+**Bounds.**
+- `@bounds3d: x [-3, 3], y [-3, 3], z [0, 10]`, with any axis optional.
+- **Unstated x and y** come from the data extent, or [-5, 5] when there is none.
+- **Unstated z** comes from the sampled range, made robust against poles. If
+  the span from the 1st to the 99th percentile is under a fifth of the full
+  span, that percentile span is used instead. The clip at the box does the
+  rest.
+- All automatic bounds are rounded out to nice steps.
+
+**Aspect.**
+- `@aspect: equal` gives true proportions, so a sphere is round.
+- `@aspect: auto` gives box ratios 1 : 1 : 0.7.
+- `@aspect: 1:1:0.5` sets explicit ratios.
+- **Default:** `equal` when the spec has no `z = f` surface and the three data
+  spans agree within a factor of 4; otherwise `auto`. The rule is deterministic
+  and documented where it is implemented.
+
+**Ticks.**
+- The 1-2-5 ladder.
+- `@ticks3d: x pi/2, z 0.5` fixes a step. A step authored as a rational
+  multiple of π labels its ticks as multiples of π (`π/2`, `π`, `3π/2`), exact
+  **by construction**, which the exactness rule permits. This moves into the
+  shared exact-value formatter when that lands (build step 3).
+- The tick module takes an axis `scale` enum (`linear` only for now), so log
+  axes (sub-project 4) slot in.
+
+**Axis titles.** `@titles: x "t (s)", y "x (m)", z "E (J)"`. Physics needs
+units on its axes.
+
+**Colorbar.** An overlay on the right, shown whenever a mark uses a colormap.
+It has ticks from the same module and is titled with the colour source.
+
+**Colormaps.**
+- Sequential: `viridis` (the default), `cividis`, `magma`, `plasma`, `gray`,
+  as embedded 256-entry tables.
+- Diverging: `balance`, blue–neutral–red, interpolated in Oklab so its halves
+  are perceptually symmetric about zero.
+
+#### SP6 — Interaction
+
+- **Probe.** Hovering picks the nearest object under the cursor.
+  - **Surfaces:** a CPU ray against the mesh (a uniform-grid walk for `z = f`,
+    a BVH otherwise), refined by Newton on the **true function** along the ray.
+  - **Curves, points and arrows:** screen-space distance.
+  - **Readout:**
+    - for `z = f`, `(x, y, z)`, `f` and the partials `f_x`, `f_y`, evaluated
+      from symbolic derivatives;
+    - for parametric surfaces, the point and (u, v);
+    - for curves, the point, `t` and speed `|r'(t)|`.
+  - **Drop lines** are dashed, from the probed point to the floor and the two
+    back walls, with the projections marked.
+- **Pins.** Clicking pins a readout, with its marker and drop lines. Clicking a
+  pin removes it, and Esc clears all pins. Pins are view state, not source.
+  They are emitted as events, and the document model can later hold them as
+  overlays.
+- **Parameters (the spec's bindings).**
+  - **Syntax:** `@param a = 1 range [0, 5] step 0.1` and
+    `@param n = 8 range [1, 30] integer`, written exactly as the document model
+    specifies, with no colon after `@param`.
+  - **What a parameter is:** a name usable in every expression in the spec.
+    The kernel records which statements read which parameters, and a change
+    rebuilds only those.
+  - **Panel:** a slider, a number box, and play/loop for each parameter.
+    Animation is a timeline over bindings (the document model's definition),
+    and play is its minimal form, needed by Physics C.
+  - **Name rules.** `x`, `y`, `z`, built-in names and defined names are
+    refused. A statement's own bound variable (`t` in `for t in`) shadows a
+    parameter inside that statement.
+  - **Scope today.** The 2D renderer ignores parameters until track 4 adopts
+    them.
+  - **Budget:** re-sampling and re-uploading a 128×128 surface takes 8 ms or
+    less on the review machine, so a drag stays smooth.
+- **Drag.** A point whose coordinates reference parameters directly
+  (`P = (a, b, f(a, b))`) is draggable.
+  - **What moves:** dragging solves for those one or two parameters, by damped
+    Newton in parameter space from their current values, minimising screen
+    distance to the cursor. With one parameter the point runs along a curve;
+    with two, across a surface.
+  - **What follows:** dragging writes the bindings, so everything that depends
+    on them follows. A tangent plane follows its point with no special case.
+- **Events.** `onEvent({ type: 'hover' | 'pin' | 'param', … })` reports
+  exposure. The engine never decides what an event means (cross-cutting rule).
+
+#### SP7 — Directives (space-owned)
+
+| Directive | Values | Default |
+|---|---|---|
+| `@bounds3d` | `x [a, b], y [c, d], z [e, f]`, any subset | data-derived |
+| `@aspect` | `equal`, `auto`, `a:b:c` | SP5 rule |
+| `@projection` | `orthographic`, `perspective` | `orthographic` |
+| `@camera` | `azimuth <deg>, elevation <deg>, zoom <k>` | `azimuth 40, elevation 25, zoom 1` |
+| `@frame` | `box`, `axes`, `none` | `box` |
+| `@ticks3d` | `x <step>, y <step>, z <step>`, any subset | 1-2-5 ladder |
+| `@titles` | `x "…", y "…", z "…"` | `x`, `y`, `z` |
+| `@colormap` | a map name | `viridis` |
+| `@resolution` | integer 8–400 | per SP2 |
+| `@depthcue` | `on`, `off` | `on` |
+| `@param` | SP6 syntax, once per parameter | none |
+
+`@theme`, `@hover`, `@angle` and `@hide`/`@show` keep their meanings in space.
+
+#### SP8 — Style clauses
+
+These are trailing clauses on a line the space grammar has claimed. They are
+never stripped in the shared loop. `color:` and `name:` keep their shared
+handling. The style clauses are:
+
+```
+opacity: 0.5
+colormap: height | none | <expr> [map <name>] [diverging]
+mesh: on | off
+res: 120
+width: 3            # line width, px
+dashed              # a bare flag
+```
+
+- **`colormap:` default.** It defaults to `height` for `z = f` and to `none`
+  when `color:` is given.
+- **When the map diverges.** A colormap by an expression diverges when its
+  sampled range straddles zero. `height` is always sequential unless the
+  statement says `diverging`.
+- **Refusals.** A clause on a statement it cannot apply to is refused by name.
+
+#### SP9 — Vocabulary
+
+Every statement below is a space form and routes the spec to space. Every one
+has an example.
+
+**Core (S2, S3).** The existing forms carry over, with domains (SP2) and style
+clauses (SP8). The new forms:
+
+```
+f(x, y) = x^2 - y^2                   # multi-parameter definitions (SP2)
+r(t) = <cos(t), sin(t), t/4>          # vector-valued definitions
+x^2 + y^2 - z^2 = 1                   # implicit surface: an equation whose free variables include z
+                                      #   (and is not z = f(x, y)); marching cubes, normals from the gradient
+z = f(x, y) over R                    # (SP2 domains)
+```
+
+The implicit surface is claimed here and built in S4. An equation that omits a
+variable is ambiguous. `x^2 + y^2 = 4` has always been a circle lifted onto
+the floor, and it stays one. `implicit: x^2 + y^2 = 4` forces the surface
+reading, which gives a cylinder.
+
+**Multivariable calculus: differential (S4).**
+
+| OpenStax | Concept | Statement |
+|---|---|---|
+| 2.2–2.4 | vectors, dot, cross | `vector: (0,0,0) -> (1,2,3)` (exists); `cross: u x v` (parallelogram, result, right-angle marks); `project: u onto v` (projection plus perpendicular part) |
+| 2.5 | lines, planes | `line: through (1,2,3) direction <1,-1,2>`, `line: through P and Q`; `plane: 2x + y - z = 3`, `plane: through P normal <1,1,1>`, `plane: through P, Q, R`. A plane is a patch clipped to the box. `p = plane …` and `plane: A-B-C` belong to solid figures and are not space forms |
+| 2.6 | quadric surfaces | implicit equations (above) |
+| 2.7 | cylindrical, spherical | `cylindrical: r = 2`, `cylindrical: z = r`, `spherical: rho = 2 sin(phi)`, `spherical: phi = pi/4`: one coordinate as a function of the other two, with default ranges and optional `for` clauses |
+| 3.1–3.4 | space curves, TNB, curvature, motion | `frame: r at t = 1` (T, N, B); `osculating: r at t = 1` (circle, κ in the readout); `motion: r at t = 1` (v, a, and optionally `components` for the tangential and normal parts of a) |
+| 4.1 | graphs, level curves, level surfaces | `contour: f levels 12` or `levels -4..4 step 1`; `floor` projects the curves onto the floor. `contour:` of a three-variable F draws **level surfaces** |
+| 4.2 | limits along paths | `path: on f along (t, t^2) for t in [-1, 1]`, a curve lifted onto a surface |
+| 4.3 | partial derivatives | `trace: f at x = 2` (the curve and its slicing plane); `trace: f at x = 2 tangent at y = 1` (the tangent line, slope `f_y(2, 1)`) |
+| 4.4 | tangent planes, linearization | `tangent-plane: f at (1, 2)`, optionally with `normal`; L(x, y) in the readout |
+| 4.6 | gradient, directional derivative | `gradient: f at (1, 2)` (on the floor with its level curve; `lifted` puts it on the surface); `gradient: F at (1, 1, 1)` (normal to the level surface); `directional: f at (1, 2) toward <3, 4>` (vertical plane, trace, tangent of slope D_u f) |
+| 4.7 | extrema | `critical: f`: every critical point in the domain, marked and labelled max, min, saddle or degenerate by the Hessian |
+| 4.8 | Lagrange multipliers | `lagrange: max f subject to g = c` (also `min`, and three variables): the constraint, f's level curves, extremal points with ∇f ∥ ∇g drawn |
+
+Throughout, `f` may be a defined name or an inline expression.
+
+**Multivariable calculus: integral (S5).**
+
+| OpenStax | Concept | Statement |
+|---|---|---|
+| 5.1 | double integrals over rectangles, Riemann | `riemann: under f over x in [0,2], y in [0,2], n = 4` (also `n = 4 by 3`, `sample: mid`, `lower-left`, `upper-right`, `random`). Readout: the sum next to the integral's value |
+| 5.2 | general regions | `region: x in [0, 1], y in [x^2, x]` (type I; type II by variable order), shaded on the floor with its boundary; `R = region …` names it |
+| 5.3 | polar | `region: r in [0, 2], theta in [0, pi/2]` |
+| 5.1–5.3 | volume under a surface | `volume: under f over R` and `volume: between g and f over R`: top, bottom and side walls, translucent, with ∬ in the readout |
+| 5.4–5.5 | triple integrals, cylindrical, spherical | `volume: x in [0,1], y in [0, 1-x], z in [0, 1-x-y]` (any order; bounds may depend on outer variables); `… cylindrical` / `… spherical` suffix. The region is the image of the unit cube, and its six faces are drawn exactly, with degenerate faces dropped. `integrand: <expr>` computes ∭ g dV |
+| 5.6 | centre of mass | `centroid: V` or `centroid: V density <expr>` marks the centre of a named region or volume, computed by quadrature |
+
+Change of variables (5.7) is a 2D mapping of regions and belongs to track 4.
+
+#### SP10 — Verification
+
+- **Node tests.** `math/`, `space/grammar`, `kernel`, `scene`, `frame`,
+  `camera` and `pick` are pure and tested in node. Expected values are computed
+  by hand: for `f = x² − y²` at (1, 2), ∇f = (2, −4), `L = −3 + 2(x−1) − 4(y−2)`,
+  and the origin is a saddle.
+- **Proof.** Proving a test means deleting the behaviour it covers.
+- **The GL layer** is covered by the recording fake context (SP4) for lifecycle
+  and state, and by **looking at it**.
+- **The review page.** `review/space.html` (entry `review/src/space.tsx`) is a
+  full-size space view with the parameter panel and every space example,
+  grouped by the checklist below. It is served by the same review server,
+  from this worktree, on port **5182**, and linked from `review/index.html`.
+  Screenshots only; no page scripts.
+- **Examples.** `examples.test.ts` asserts that every space example parses and
+  builds a scene with no errors.
+
+#### SP11 — Build order
+
+| Phase | Delivers |
+|---|---|
+| **S1** | `math/` (compile, diff, simplify, roots, quadrature, linalg); the space grammar hook with multi-parameter and vector definitions, domains, style clauses, directives and `@param`; the `SpaceScene` contract; kernel builders for the existing forms plus domains, emitting typed arrays; the boundary test. **No renderer change.** |
+| **S2** | `gl/` backend, `camera/`, `frame/` (box, axes, none), DOM overlay, ticks and titles, `@bounds3d` / `@aspect` / `@projection` / `@camera` / `@frame` / `@ticks3d` / `@titles`; `SpaceRenderer` replaces `SceneRenderer3D` in `GraphViewer`, and the old files are deleted; `review/space.html` |
+| **S3** | colormaps and colorbar, mesh lines, two-sided tint, box clipping, hidden-line dashes, OIT, depth cue; probe, pins and drop lines; `@param` panel, play and drag; events |
+| **S4** | the differential vocabulary above, and implicit surfaces |
+| **S5** | the integral vocabulary above |
+| **S6** | Visual polish (the user asked for it on 2026-09-26: "a nice to have"). It runs after S5, on the real examples rather than fixtures. It covers: lighting and material feel; the categorical colour series against both themes; frame and gridline weights; label typography and spacing; the readout, pin, colorbar and parameter-panel styling; camera easing (an animated return to the authored view, honouring `prefers-reduced-motion`); empty, error and no-WebGL2 states; and a light-and-dark pass over every example. Colours come from the host's theme tokens (`resolvePalette`), never hard-coded, so track 5's customization builds on it rather than redoing it. |
+
+S1 and S2 may run in parallel once S1's first task has committed the
+`SpaceScene` contract. S4 splits into S4a (surfaces in space, vectors,
+curve frames) and S4b (the calculus of a surface). S4a, S4b and S5 may run in
+parallel after S3. Each phase:
+one implementer, then an independent review, fix rounds until the review is
+clean, then a scoped re-review and a look in the browser.
+
+#### Coverage checklist — OpenStax *Calculus Volume 3*
+
+Ch. 1 (parametric and polar) is 2D and belongs to track 4. Ch. 6 is
+sub-project 3.
+
+| Section | Figure kinds that must be authorable | Phase |
+|---|---|---|
+| 2.1 Vectors in the plane | (2D) | — |
+| 2.2 Vectors in three dimensions | points, octants, vectors, spheres | S2, S4 |
+| 2.3 The dot product | projection, angle between vectors | S4 |
+| 2.4 The cross product | parallelogram, orthogonal result, torque (r × F) | S4 |
+| 2.5 Equations of lines and planes | lines, planes, intersections, distances | S4 |
+| 2.6 Quadric surfaces | the six quadrics, cylinders, traces | S4 |
+| 2.7 Cylindrical and spherical coordinates | coordinate surfaces, points in each system | S4 |
+| 3.1 Vector-valued functions and space curves | helices, curves on surfaces | S2 |
+| 3.2 Calculus of vector-valued functions | tangent vectors | S4 |
+| 3.3 Arc length and curvature | TNB, osculating circle | S4 |
+| 3.4 Motion in space | velocity and acceleration, components | S4 |
+| 4.1 Functions of several variables | graphs, level curves, level surfaces | S3, S4 |
+| 4.2 Limits and continuity | approach along paths | S4 |
+| 4.3 Partial derivatives | traces with tangent lines | S4 |
+| 4.4 Tangent planes and linear approximations | tangent plane, normal | S4 |
+| 4.5 The chain rule | (symbolic; figures reuse 4.3) | S4 |
+| 4.6 Directional derivatives and the gradient | gradient on level curves, directional slice | S4 |
+| 4.7 Maxima/minima problems | classified critical points | S4 |
+| 4.8 Lagrange multipliers | constraint with level curves | S4 |
+| 5.1 Double integrals over rectangular regions | Riemann boxes, volume under | S5 |
+| 5.2 Double integrals over general regions | type I/II regions | S5 |
+| 5.3 Double integrals in polar coordinates | polar regions and volumes | S5 |
+| 5.4 Triple integrals | iterated regions | S5 |
+| 5.5 Triple integrals in cylindrical and spherical coordinates | cylindrical and spherical regions | S5 |
+| 5.6 Calculating centers of mass | centroid | S5 |
+| 5.7 Change of variables | (2D, track 4) | — |
+
 
 ## Track 4 — Calc-proofing the 2D engine
 

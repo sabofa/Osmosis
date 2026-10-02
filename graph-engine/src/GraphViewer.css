@@ -70,6 +70,9 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* Its own stacking context: the space overlay's and the stats' z-indices
+     below order them against each other, never against the host page. */
+  isolation: isolate;
 }
 
 .graph-viewer-split {
@@ -101,6 +104,20 @@
     border-left: none;
     border-top: 1px solid var(--line-strong, #c9c6b3);
   }
+}
+
+/* Space (3D specs) puts its text in a DOM overlay beside the canvas in this
+   panel (space/ui/SpaceView.css), which is why the panel is position:
+   relative. The panel's own overlays (stats, the context-lost notice, the
+   hover label) stack above it. */
+.graph-viewer-panel > .space-overlay {
+  z-index: 1;
+}
+
+.graph-viewer-stats,
+.graph-viewer-context-lost,
+.graph-viewer-hover-label {
+  z-index: 2;
 }
 
 .graph-viewer-canvas {

@@ -10,8 +10,13 @@ already been tried and failed, and which traps cost real time.
 **Branch `milestone-a/geometry`**, in the worktree
 `.claude/worktrees/milestone-a-geometry` (renamed 2026-09-26 from
 `graph-engine-track-1` / `graph-track-1`; see "Worktrees, milestones and parallel
-agents" below). Working tree clean. **1864 tests passing**,
-`tsc -b graph-engine/tsconfig.json --noEmit` clean, `oxlint` clean.
+agents" below). Working tree clean. **4050 tests passing** after the
+Milestone A integration merge of geometry and space (2026-10-01),
+`npx tsc -p tsconfig.app.json --noEmit` and `npx tsc -p tsconfig.node.json
+--noEmit` (both, from `graph-engine/`) clean, `oxlint` clean. (Not bare
+`npx tsc --noEmit`: `graph-engine/tsconfig.json` is a solution file — `"files":
+[]` plus `references` — so that invocation type-checks nothing at all and
+exits clean regardless of what is broken.)
 
 *2026-09-30: the visual pass, part 1 (figure styles and the style lab) landed
 on this branch — see "Figure styles: `style/` and the pen" below; 2261 tests.*
@@ -36,7 +41,7 @@ git cannot hold both `milestone-a` and `milestone-a/…`.
 |---|---|---|
 | `milestone-a/main` | `.claude/worktrees/milestone-a` | Integration only. Sides merge in at phase boundaries; it merges to `main` when Milestone A is done |
 | `milestone-a/geometry` | `.claude/worktrees/milestone-a-geometry` | Tracks 1–2: reading the graph, geometry, **solid figures** |
-| `milestone-a/space` | `.claude/worktrees/milestone-a-space` | Track 3: **space** (three.js, Calc 3, Physics C) — a separate agent |
+| `milestone-a/space` | `.claude/worktrees/milestone-a-space` | Track 3: **space**, a hand-made WebGL2 engine (Calc 3 now; Physics C is sub-project 3) — a separate agent; phase branches `milestone-a/space-s…` merge into it |
 | `milestone-a/calc` | later | Track 4: calc-proofing the 2D engine |
 
 **More than one agent works at once.** Expect branches, worktrees, stash
@@ -49,9 +54,11 @@ report it.
 **Review servers, one port per side,** all on the Tailscale IP:
 `milestone-a/geometry` on **5181**, `milestone-a/space` on **5182**.
 
-**The two 3D engines share no code.** *Space* is `scene/buildScene3d.ts`,
-`render/SceneRenderer3D.ts`; *solid figures* is everything under
-`graph-engine/src/figure/`. Never write "3D engine" alone. Fixed between them
+**The two 3D engines share no code.** *Space* is everything under
+`graph-engine/src/space/`, a hand-made WebGL2 engine with no three.js (the
+old `scene/buildScene3d.ts` and `render/SceneRenderer3D.ts` were deleted in
+space S2); *solid figures* is everything under `graph-engine/src/figure/`.
+Never write "3D engine" alone. Fixed between them
 (spec, Track 2 "Revised 2026-09-25"):
 
 - **One author frame, z-up, in both.** Coordinates mean the same place either way.
@@ -128,13 +135,17 @@ built.
 
 ### Not started
 
-Tracks 3 (3D/multivariable) and 4 (calc-proofing) — the bulk of Milestone A.
+Track 4 (calc-proofing). Track 3's sub-projects 1–2 are built (space S1–S6,
+the integration pass, and the milestone gate fix on top of S6 — see "Track 3
+— space" below); sub-project 3 (vector calculus, Physics C) and sub-project 4
+(quant) are not.
 All of D1–D5. **The solids build order is complete** (phase 11 was its
 build step 11), and shading and boolean regions followed as phase 12.
 What remains of Track 2: the competition-specific constructions
 (excircles, nine-point circle, radical axes, cevian concurrency — the next
 phase), and the unit circle, which is gated on exact values (build-order
-step 3).
+step 3). Figure styles: part 1 is built; part 2 (movement) and part 3 (the
+written guideline) are not.
 
 ### What each track-2 phase actually delivered
 
@@ -914,6 +925,433 @@ both palettes, 1652 parsed lines plus `fill = 3`, `fill(x) = x^2`,
 `fill + x = y` and similar, and three graph specs using `fill` as a
 constant): 5384 keys, 0 differ after every task.
 
+### Track 3 — space (S1–S6, the integration pass, and the milestone gate fix, 2026-09-26/30)
+
+*Written after the integration pass. Branch `milestone-a/space`, worktree
+`.claude/worktrees/milestone-a-space`, review server on **5182**.*
+
+**Space is a hand-made WebGL2 engine** (spec, Track 3 "Revised 2026-09-26":
+the three.js decision was reversed for space only; the 2D plot renderer keeps
+three.js, and solid figures are SVG). What an author writes goes:
+
+```
+parseSpec ── space/grammar/ (keyword rows, unkeyed forms, directives, @param)
+   │           claims only space lines; returns null for anything else
+   ▼
+space/kernel/  createSpaceKernel: one builder per form via registry.ts,
+   │           typed arrays, two passes (the box pass, below), setValue
+   ▼           rebuilds only what a binding touches
+SpaceScene     marks (mesh, lines, points, arrows, boxes), labels, colour
+   │           scales, extent, errors: plain data, backend-agnostic
+   ▼
+SpaceRenderer  frame/ (box, aspect, ticks, walls), camera/ (turntable),
+   │           pick/ (CPU rays re-evaluated on the true function), ui/ (DOM
+   ▼           overlay, readouts, pins, parameter panel)
+space/gl/      the only WebGL: frame loop, MSAA, OIT, lines as quads
+```
+
+**What each phase delivered** (each: one implementer, an independent review,
+fix rounds until clean):
+
+| Phase | Commits | Delivered |
+|---|---|---|
+| S1 | `bbed1b7`..`0bce803` | `math/` (compile, diff, simplify, roots, quadrature, linalg), the space grammar hook, domains and style clauses, `@param`, the `SpaceScene` contract, kernel builders for the old forms, the boundary test |
+| S2 | `dd737c3`..`f023bea` | `gl/` backend, camera, frame (box, axes, none), DOM overlay; `SpaceRenderer` replaced `SceneRenderer3D`; `review/space.html` |
+| S3 | `a45e5dc`..`bec5d12` | colormaps and colorbar, mesh lines, back-face tint, box clipping, hidden-line dashes, weighted blended OIT, depth cue, MSAA; probe, pins, drop lines; parameter panel, play, drag; events |
+| S4a | `174ca39`..`b1f32c3` (merge `de551e2`) | implicit and level surfaces by marching tetrahedra, lines, planes, cross and projection, cylindrical and spherical coordinate surfaces, TNB frames, osculating circle, motion |
+| S4b | `8498899`..`d81fa5c` (merge `c9482c3`) | level curves, paths, traces, tangent planes, gradients, directional derivatives, classified critical points, Lagrange (2 and 3 variables) |
+| S5 | `a0207ca`..`95ea254` (merge `eed87a1`) | regions (type I/II, polar, inequality, named), volumes under and between surfaces, Riemann boxes (the box pipeline), triple integrals in three coordinate systems, centroids. **Its fix round 3 (honest quadrature error by construction) merges over this later.** |
+| Integration | `fe4cc5b`..`daccc28`, then the docs commit | contour dispatch by arity and level surfaces for S4b; coordinate and gradient readouts; scientific notation in the shared tokenizer (open item 4); boxes in the frame loop (opaque pass, OIT); the box pass |
+| S5 fix rounds 3–5, breaker ruling | merge `59bdf64` | Honest quadrature error by construction; `S5_SAFETY` = 100 on the digits a readout shows (1 for a bounded mesh sum's own error, a direct measurement across resolutions rather than a heuristic decay estimate); thin inequality regions resolved where honest or refused where not; the one-honest-digit fallback for when SAFETY's own search finds no unit at all. |
+| S6, visual polish | merge `64b076b` | V1–V11 (flat-scene z boxes, label collision layout, the on-figure display-digit cap, OIT depth weight, draggable-point halos, quieter Riemann-box lattices, dark-theme contrast, held-resolution meshing while dragged/scrubbed/played, chrome fixes) and fix round 1's I1–I7/C1/M1–M6 corrections — see "Open, for S6 and after" below. **The milestone gate review then found three real bugs in S6's own work (the display cap could show a digit the true value contradicted; a small held-resolution surface could vanish entirely rather than mesh coarser; a test helper had stopped checking the on-figure text) — fixed in the same commit as this handoff update; see "Open after the milestone gate fix" below.** |
+
+**The box pass (integration J1) is the contract most likely to bite.** The
+kernel builds in two passes: statements that define the scene first; then the
+box is resolved from their extent with `frame/bounds.ts` `resolveBox` (the
+renderer's own function), and box-dependent statements build against
+`context.box` (`registry.ts`: `boxDependent`, `boxOf`; the list is at
+registration in `kernel/index.ts`). Box-dependent: implicit and level
+surfaces, contours, `line:`, `plane:`, coordinate surfaces, `frame:`, every
+S4b tool, `centroid:`; `region:` by its z only; and a coordinate surface
+only when a defaulted r, ρ or z range reads the box (`spherical: rho = 2`
+sizes the box itself). A tool draws into `toolBox(context, rect)`: its `over`
+rectangle (else the box's x and y) by the box's z; back-wall copies go on the
+frame's own wall. `scene.extent` is the first pass's extent, so the
+renderer draws the same box **by construction** — clipping dependent marks
+would not be enough, because rounding a wider extent can pick a coarser step
+(pinned in `kernel/boxPass.test.ts`). During play and drag the renderer passes
+its frozen box (`setValues(values, { holdBox })`). Consequences worth knowing:
+a tool drawn alone gets `@bounds3d` or [-5, 5]³, so tools are meant to sit
+beside the surface they describe (every example does); Riemann boxes and
+volume bottoms start at z = 0, the integral's zero, not the floor.
+
+**How to verify space.** Node tests cover everything but pixels (the GL layer
+through a recording fake context, `gl/fakeGl.ts`). Pixels are checked by
+**headless Edge screenshots from PowerShell**, never the browser pane (each
+load asks the user to approve the site) nor Chrome:
+
+```
+Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -Wait -NoNewWindow -ArgumentList @("--headless=new","--use-angle=swiftshader","--enable-unsafe-swiftshader","--user-data-dir=`"$env:TEMP\claude-headless-x`"","--window-size=1400,900","--virtual-time-budget=7000","--screenshot=`"<out.png>`"",'"http://100.90.203.2:5182/space.html?example=<slug>&theme=dark"')
+```
+
+then Read the PNG. `?spec=<url-encoded spec>` loads any spec. The slug is the
+example label without "Space · ", lower-cased, non-alphanumerics to `-`.
+
+**Lessons from track 3 worth keeping.**
+
+- **Merge seams should be named in the plan, with a named owner.** S4a, S4b
+  and S5 ran in parallel and each left a stub for the others (a registered-by-
+  name contour builder, a null level-surface mesher, an interim box draw);
+  the integration plan listed every one, which is why wiring them took hours,
+  not a redesign. Ledger "merge notes" were the source.
+- **A per-tool box estimate is the wrong seam.** S4b's tools each estimated
+  the frame's box from their own target; with two surfaces the floor was
+  wrong. The fix was structural (the box pass), not per tool.
+- **"The renderer resolves the same box" is only true by construction.** The
+  plan argued clipping would suffice; a hand-worked counterexample (x over
+  [0.19, 2.71]) showed a plane spanning the box would move it. Test the
+  argument, not only the code.
+- **Wall-clock asserts flake on a shared machine.** Other agents' suites and a
+  sync client push a 250 ms test past a 1 s bound (S5's round 3 replaces them
+  with evaluation counts). Prefer counting work.
+- **`Math.max(...array)` throws past ~120k arguments.** A constraint mesh at
+  res 120 crossed it; take extremes in a loop over anything mesh-sized.
+- **Fake-GL tests pass for the wrong reason easily** (S3's I4: extensions not
+  re-enabled after a restore, yet the test passed). The fake now turns
+  extensions off on a loss, as a real context does.
+- **Shared-tokenizer changes need a byte-identity sweep over every literal,
+  not only the examples.** The scientific-notation sweep (5818 literals, every
+  figure example under every `@view`) found only test titles changed.
+
+**Open, for S6 and after** (from the phase ledgers and the integration pass's
+headless shots of every example, light and dark). **S6 (2026-09-30) closed
+every item below**, then an Opus phase review of the whole diff found real
+bugs in several of the first pass's own fixes — **fix round 1 (2026-09-30)**
+corrected those (marked below); see the plan,
+`docs/superpowers/plans/2026-09-27-space-s6-visual-polish.md`, for V1–V11,
+and its fix-round-1 brief for I1–I7, C1 and M1–M6.
+
+- **Nothing is broken.** Every one of the 49 space examples (40 in
+  `examples.ts` + 9 in `surfaceToolExamples.ts`) draws, in light
+  and dark (integration pass, 2026-09-27). What follows is ugly, not wrong.
+- **A scene whose only data is flat has an empty z axis.** A lone `region:`
+  (A polar region, The centroid of a half-disc) sizes x and y, and z falls
+  back to [-5, 5] by the box pass's rule, so the region lies on the floor of
+  a tall empty box with meaningless z ticks. Flat vectors (Projection of u
+  onto v) get the opposite: a thin [0, 1] z. S6 should decide what a flat
+  scene's box is (a flat box, or no z ticks).
+  **Fixed (V1):** a flat scene gets a thin z box (half-extent 0.15x the
+  larger x/y span under `auto` aspect) with one z tick at the data's value;
+  an authored `@bounds3d z` still wins.
+  **Corrected in fix round 1 (I1):** the first pass could flatten an axis a
+  statement not yet built still needed — an implicit surface, a plane, an
+  S4b tool — carving a sliver from geometry that is not flat (a sphere plus
+  two points at z = 0, say). The kernel now reports, all-or-nothing, whether
+  any fully box-dependent statement is in the scene at all (`boxSpanning`,
+  kernel/index.ts) — not which axes it occupies, since a statement built
+  against the resolved box in full cannot be assumed to leave any one axis
+  alone before it has actually built — and flatAxes leaves every axis alone
+  whenever it is; a centroid's own drop-line decoration is exempted
+  (`flatExempt`), since it adapts to whatever box there is rather than
+  needing it tall. **Confirmed in fix round 2** with a spec-driven kernel
+  test (a sphere plus two points at z = 0, through `createSpaceKernel`
+  itself, not a hand-built `boxSpanning`): `scene.boxSpanning` comes back
+  `{ x: true, y: true, z: true }`, and the resolved box keeps z's real span.
+  **Also fixed (M1):** the flat tick's single label used the step ladder's
+  own decimals (`0.00` for a value the ladder was never built to show); it
+  now uses the value's own digits, up to 4 significant. A lone region's tick
+  now sits at the box's floor, where the region actually shades, not the
+  box's arbitrary centre.
+- **Readouts collide** with tick labels and each other: the two gradient
+  readouts run into the x ticks; the half-disc's centroid and area readouts
+  overlap; level-curve labels crowd a saddle point. Readouts need the same
+  collision layout as tick labels.
+  **Fixed (V2):** one label placer (`ui/labelPlacer.ts`, pure) places every
+  tick, point, readout and contour label by priority; a label that fits
+  nowhere is dropped, except a readout.
+  **Corrected in fix round 1 (I3):** the first pass gave a contour's value
+  label the same priority and "never dropped" guarantee as a readout, so it
+  could permanently outrank and block a point label; its own fallback, when
+  every candidate within 60 px was blocked, reused `candidates[0]` — the
+  very spot that had just been rejected; and a readout placed 26–60 px out
+  (a normal fit, not the fallback) got no leader at all. Now: a contour
+  label is its own role, ranked under a point label and dropped like one,
+  never force-shown; an exhausted readout searches out to 120 px for the
+  least-overlapping spot instead of reusing a blocked one; any readout
+  landing more than 14 px from its anchor gets a leader, whichever way it
+  got there. (Also, M2: the placer sizes a currently-expanded readout — one
+  a click opened to its full digits — from that full text, not its capped
+  display, so expanding one in place cannot silently overlap a neighbour.)
+- **S5 readouts print many digits** (`∬ ≈ 25.1327412287`,
+  `area ≈ 0.166666666667`): honest to the error estimate, heavy to read.
+  **Fixed (V3):** integral readouts are capped at 6 significant digits
+  (hover readouts stay at 4) in `kernel/integrals/common.ts`, through
+  `chosenDisplay` — the same function that picks the honest, SAFETY-checked
+  digit count in the first place, asked to search no finer than the cap; the
+  cap is a display choice enforced by re-checking S5's own half-unit rule at
+  whatever coarser unit it settles on, not a claim that truncating an
+  already-rounded value's digits is automatically honest (an earlier draft
+  of this note made exactly that claim, and it was false — see the gate
+  fix's C1 below). What a click expands is the on-figure annotation label
+  itself, to every digit its estimate supports, not a separate "pinned
+  readout's box".
+  **Corrected in fix round 1 (C1):** a rebuild where the capped text stayed
+  the same but the full digits moved left an expanded label showing the OLD
+  value's digits (labelPool.ts's fullText-changed branch skipped its own
+  text write whenever the capped text hadn't changed); it now always writes
+  the current capped text there, so the toggle can never show stale digits.
+- **A translucent sphere under OIT is a flat tint.** "Lagrange in three
+  variables" first showed a flat grey ball: that was a double draw (a
+  hand-drawn sphere left from before S4a, coinciding with the tool's own
+  constraint mesh), since removed. Re-shot alone, a single translucent sphere
+  (`x^2 + y^2 + z^2 = 9 opacity: 0.35`) reads as a tinted ball with the walls
+  showing through; its shading is flat, since OIT averages its front and back
+  faces. Not a bug; a look S6 may want to strengthen.
+  **Fixed (V4):** back faces contribute at half weight in the OIT
+  accumulate, and the OIT depth weight's z is normalised by the box's own
+  depth range, so nearer layers dominate as intended.
+  **Corrected in fix round 1 (I2): the first pass's normalisation had no
+  actual effect.** It divided the raw eye-distance z by the box's own depth
+  span without first making z relative to the box's near edge; at this
+  renderer's scale the eye sits several box radii back, so that ratio never
+  dropped below about 1.5 for any fragment in the box — every one clamped
+  to the same floor weight regardless of depth, same as the literal-200 bug
+  it replaced. Now normalises the way depthCue() already does: zRel =
+  clamp((z − u_cueRange.x) / depthSpan, 0, 1), weight = a · max(floor, peak
+  · (1 − zRel)³ ) — a genuine near > mid > far ordering, checked through
+  markLook's real cueRange for both projections. **Fix round 2** found that
+  check only ever exercised oitWeight()'s TypeScript mirror of the formula,
+  never the shader source itself — deleting the "− u_cueRange.x" straight
+  out of the GLSL (mesh.ts, box.ts) left every one of those tests green.
+  oit.test.ts now also asserts the shaders' own zRel line contains it.
+- **A draggable point is easy to lose**: a small dot on a dark underside
+  (Drag a point on a paraboloid, A tangent plane you can drag). Give
+  draggable points a halo.
+  **Fixed (V5):** a draggable point draws at 1.5x size with a 2 px
+  background-colour halo and a thin ink ring, and the cursor becomes
+  `grab`/`grabbing` over it; hovered and pinned markers get the same halo,
+  and every point gets a 1 px background-coloured outline so it reads on
+  any surface. (M3: the halo band itself is 2 px, past the 1 px outline
+  every point already draws — the phase review's own comment fix, no
+  behaviour change.)
+- **A hole at a pole leaves sliver triangles** (Limits along two paths, at
+  the origin).
+  **Withdrawn (V8; see fix round 4 below).** The first attempt dropped
+  triangles near a removed (non-finite) vertex whose smallest
+  parameter-space angle is below 3 degrees, or whose area is below 1e-4 of
+  a cell, after the hole is cut, keeping the mesh manifold elsewhere ("A
+  pole cut by the box", `z = 1/(x^2+y^2)`).
+  **Corrected in fix round 1 (I4):** the first pass paid the full check
+  (a median, a Set lookup and a trig call per candidate) on every mesh even
+  with no hole to filter (2.56 → 6.65 ms at 128²), and produced false drops
+  on a strongly anisotropic domain — a 20:1 aspect lost 128 well-shaped
+  cells, because angle and area were measured in raw (u, v) units, not the
+  grid's own index space. Now returns early with no hole edges at all, and
+  computes its median from area alone (the full angle-and-area shape runs
+  only for candidates actually on the hole's boundary).
+  **Corrected again in fix round 2 (NB4):** that median was a per-candidate
+  edge sample sorted with a boxed comparator — at 128² with a hole, 12.5–
+  16.8 ms against a 7.9 ms base. Replaced with one first-cell (u, v) delta,
+  read directly off the mesh's own topology instead of sorted from every
+  candidate — but that delta is a genuine (u, v) value, and on a domain
+  that is not a plain rectangle (a polar one; a "type I" region whose
+  y-span closes to nothing at one x) it can be almost entirely a cross
+  term, inflating the estimated scale 77x or more and dropping good
+  triangles at a hole's edge.
+  **Corrected again in fix round 3:** angle and area are no longer measured
+  in (u, v) at all, nor by any estimated step from it. Every parameterized
+  mesh here comes from `gridIndices`' one two-triangle-per-cell topology
+  (`mesh.ts` `rowWidthOf`), so each vertex's own (i, j) is read off its flat
+  index directly — a uniform integer lattice by construction, so its shape
+  never depends on how the domain curves. A mesh whose topology does not
+  fit that convention (a hand-built fixture) falls back to raw (u, v)
+  units, unchanged from before any grid-step normalisation existed.
+  **Withdrawn in fix round 4.** Round 3's own grid-index reading turned out
+  unsound too, on a mesh an inequality condition (`over ...`) clips: its
+  re-triangulated boundary cells do not carry the two-triangle-per-cell
+  topology the row-width reader assumed, misread as an enormous row width
+  that collapsed every hole-edge triangle onto one row — every one
+  "collinear", so every one dropped (`z = sqrt(x^2+y^2-1) over y <= x` fell
+  from 8890 triangles to 8856). Rather than a fourth reading, the filter
+  itself is gone: `finishMesh` once again only ever drops a triangle
+  touching an invalid vertex or one genuinely degenerate in world space,
+  as it did before V8, at every resolution and on every domain. The
+  reasoning: a rectangular or iterated parameterized mesh only ever hands
+  this pass one of `gridIndices`' own two canonical cell triangles, which
+  is always exactly 45°/45°/90° in grid-index terms — there the filter
+  could only ever misfire, never actually catch a sliver, at a real cost
+  (~3.7 ms per holed mesh at 128²). That guarantee holds only for those
+  grids: an inequality-clipped cell (`over ...`) is re-triangulated and is
+  not one of those two canonical shapes, and there V8's original filter did
+  drop one real, genuine clipped triangle, not only slivers — 549 triangles
+  fell to 548 under it. And dropping a genuinely clipped boundary triangle
+  opens a gap in the surface, which is worse than the needle it was
+  removing. The origin artefact in "Limits along two paths" that V8 was
+  first written for is now understood as shading near a removed vertex,
+  not a needle — parked for track 5, not fixed here.
+- **Riemann boxes' edges seen through translucent boxes make a busy lattice.**
+  **Fixed (V6):** translucent Riemann box edges draw at 0.35 opacity and
+  1 px and are excluded from the hidden pass, so the lattice quiets down;
+  mesh lines generally mix toward the theme's ink (light) or background
+  (dark) at a strength tuned per theme. (No correction in fix round 1.)
+- **Dark theme:** the balance map's neutral centre nearly vanishes (S3,
+  parked); grey operands (`project:`, `cross:`) are low-contrast; mesh lines
+  mixed toward the light ink are loud.
+  **Fixed (V7):** the balance map's neutral centre is theme-aware (Oklab
+  L ~= 0.62 in dark, 0.92 in light), keeping symmetry.
+  **Corrected in fix round 1 (I5):** the operand/construction grey still
+  resolved to its own hard-coded hex pair (0x6b6b63 / 0xa8a89e) — a second,
+  undocumented grey alongside the host's own `--muted` token, exactly what
+  S6's "colours come from the theme" constraint rules out. It now resolves
+  to `palette.muted` directly (5.39:1 light, 6.17:1 dark against the
+  background — a healthier margin than the fixed hex it replaced).
+- **V10 chrome — three more bugs the phase review found (fix round 1, I6),
+  none flagged by the first pass:**
+  - A colorbar's tick labels sit outside `.space-colorbars`' own measured
+    box (SpaceView.css's `right: 18px` places them past
+    `.space-colorbar-body`, and an absolutely positioned child never grows
+    its parent's box), so the label placer's chrome obstacle under-reported
+    how far left the chrome actually reached. Fixed: the obstacle is now the
+    union of the container's rectangle and every one of its tick labels'.
+  - Hovering the parameter panel open or closed happens entirely inside its
+    own DOM listeners, with no way for the renderer to know its rectangle
+    just moved — so the cached chrome rectangle (S6's own carried item b)
+    went stale and no frame was requested to re-lay labels out against it.
+    Fixed: a `chromeChanged` callback drops the cache and asks for a frame,
+    and `updateColorbars()`/`setBindings()` drop it too, so a moving
+    colormap domain or a renamed parameter also re-measures.
+  - The hover probe's own readout box counted as a chrome obstacle, so a
+    tick label could blink in and out as the box passed over it while
+    hovering. Fixed: only a *pinned* readout is an obstacle now.
+- **Parked in the phase ledgers:**
+  - OIT depth-weight normalisation (S3 M10) — **fixed for real in fix round
+    1**; see V4 above (the original "fixed" claim did not hold).
+  - corner labels (S3) — **fixed**: V2's placer resolves the corner
+    duplicate as part of tick-label thinning.
+  - implicit surfaces cost ~0.5 s per setValue at res 64 (S4a) — **fixed
+    (V11):** held at res/2 while dragging or playing (~11.5 ms vs.
+    59–66 ms at full res), with one full-res rebuild forced on release.
+    **Extended in fix round 1 (I7):** a 3-variable `contour:` (a level
+    surface) marches the same way but had not been given this treatment;
+    it now has. Scrubbing a parameter slider — not only a play or a
+    point-drag — now counts as held too (from the first `input` event
+    until the interaction ends), so a box-dependent statement bound to a
+    slider meshes coarser while the reader is still moving it, not at full
+    cost on every `input` tick. **Corrected in fix round 2 (NB1):** it ends
+    on the native `change`, but `change` only fires when the slider's
+    value nets out different from where the scrub began — a scrub that
+    wanders off and back to its start fires no `change` at all, so the
+    hold never ended. `pointerup`/`pointercancel` now end it too,
+    unconditionally, whether or not the value moved.
+  - parametric setValue is 10.8–14.5 ms against an 8 ms budget (S1) —
+    **fixed (V11):** 7.1–7.8 ms at 128x128 on the review machine, by sharing
+    subexpressions across r, r_u and r_v through the existing register
+    program (`compileMany`).
+  - **Still open:** a grazing pick ray can pass between march steps near a
+    silhouette (S3); a drag could jump behind a surface in rare views (S3) —
+    neither is a look-and-feel item, so S6 did not touch either.
+  - **Still open, parked for track 5:** the origin artefact in "Limits along
+    two paths" (V8's own named example) is shading near a removed vertex,
+    not a needle triangle — V8 (dropping a further "sliver" triangle at a
+    hole's boundary) was withdrawn in fix round 4 rather than fixed a
+    fourth time (three rounds of false drops on real specs, and no real
+    spec it ever needed to fire on; see the V8 entry above). Whatever look
+    this example still wants at the origin is a shading question for
+    track 5, not a meshing one.
+  - **Still open, and out of scope by the S6 plan:** curves of critical
+    points, e.g. the ring (x²+y²−1)², want a "critical curves" feature (S4b
+    M4) — seeding from the mesh decides which critical points are found, so
+    this is correctness, not look; no committed test of GraphViewer's
+    remount orchestration (S2, needs a jsdom layer).
+- **Two more from fix round 1, not carried from S6's own ledgers:**
+  - **M4:** `resetView()`'s ease (double-click, the `0` key) used to leave
+    `getView()` reporting the transient, still-interpolating view — a host
+    reading it a moment after triggering a reset would see a value already
+    stale. `getView()` now reports where the ease is headed immediately;
+    the renderer's own draw() still animates from the true, interpolating
+    view every frame regardless. If the box moves mid-ease (a value change
+    shifts the resolved box while the camera itself was not re-authored),
+    the ease now re-targets to the new box's centre instead of easing to a
+    point the box has already left.
+  - **M6:** the readout box's drop shadow (removed for a pinned one, still
+    present for the hover probe's — an inconsistency, and itself against
+    the plan's "no gradients or drop shadows on chrome beyond a hairline
+    border") is gone from both. `--space-line` (the chrome's hairline
+    border token) now reads the palette's `grid`, which
+    render/palette.ts's TOKEN_FOR maps to the host's own `--line` token —
+    not `gridStrong` (`--line-strong`, a stronger role meant for the
+    graph's own axis-adjacent grid).
+
+**Open after the milestone gate fix (2026-09-30).** The gate review found
+three real bugs in S6's own work — the fixes are in this same commit; what
+is still open:
+
+- **M2:** releasing a held value rebuilds every record that was built while
+  held, not only the ones that read `held` themselves. `kernel/index.ts`'s
+  release check (`record.builtHeld && !held`) exists so a resolution-
+  sensitive builder (an implicit or level surface, S4b's `gradient: ...
+  surface`) gets its one full-res rebuild on release even when the box
+  never moved — but it fires for every held-built record, including
+  `centroid:` and `plane:`, which never mesh differently while held and
+  gain nothing from rebuilding (confirmed directly: releasing an unchanged
+  parameter changes both marks' identity even though neither reads `held`).
+  A triple-integral centroid's own quadrature is expensive enough that this
+  shows up as a real hitch, on the order of 0.4–1.4 s, on every release.
+  Suggested fix: a `heldSensitive` flag on a builder's registry entry
+  (`registry.ts`), set only by the handful of builders the half-resolution
+  fix (V11) actually touches, so `kernel/index.ts`'s release-rebuild check
+  can skip everything else.
+- **Parked from S5, still open:** at least 3 significant digits for
+  inequality-form regions' readouts (Richardson extrapolation was tried
+  there and failed S5's own honesty gate, so those regions still print
+  fewer digits than a rectangular one would); a per-statement quadrature
+  budget (today each integral gets its own `QUAD_BUDGET` of 6M evaluations
+  — `quadrature.ts` falls back to `quadBudget()` and no caller passes one —
+  so nothing caps a whole statement or scene: a centroid runs 4–5 integrals,
+  about 15M evaluations for the cone); the exotic residuals S5's ledger
+  flagged (a hand-built narrow spike, bumps narrower than 1e-3 of the range,
+  ∭(xy)^(−2/3) and 3D 1/√|z| refused on budget, the ring |r−1| ≤ 0.01
+  message, |x−0.01|^−0.9 located at x = 0).
+- **A held build over the triangle budget names the halved res** ("res 80
+  would make …" while dragging a `res: 160` implicit or level surface;
+  `implicit.ts`, `levelSurfaces.ts`, `levelSurface.ts`). The message should
+  name the authored res. Minor, from the gate re-review.
+
+**What remains for track 5, specific to space** (track 5 is customization and
+UI — theming, textures, line treatments, legends — see the graph spec's
+Track 5 section; S6 only carried space's existing look to a finished state on
+the tokens it already had):
+
+- **The foundation is already there.** Every space colour comes from the
+  host's theme tokens (`resolvePalette`, `space/theme.ts`); no hard-coded hex
+  outside the documented categorical and colormap tables (SP11's S6 row).
+  A theme editor built for the 2D and figure renderers should reach space for
+  free through those same tokens — track 5 should confirm that rather than
+  build a second path.
+- **No legend.** A scene with several coloured curves or marks (The TNB frame
+  of a helix, Velocity and acceleration with components) has no on-figure key
+  tying colour to name. The spec already calls this out as a general gap;
+  space needs it as much as the 2D engine does.
+- **No line treatments.** Space's `gl/` lines are flat-shaded quads; sketch,
+  chalk, tapered or variable-width strokes (track 5's line-treatment
+  candidate scope) have no shader hook yet in `space/gl/`.
+  Same for paper/grid background textures: space draws a plain themed
+  background, with no texture layer.
+  Colormap presets are similarly fixed today (viridis, diverging, etc.);
+  track 5's "series palette control" would need a way to pick or pin one per
+  document.
+- **No marker-style variety.** Every space point is the same disc (S6 gave it
+  a halo and an outline, not a shape); "marker styles per feature kind" would
+  need a new attribute on point marks and a renderer path to draw it.
+- **Categorical colours are contrast-checked, not colorblind-audited.** V7
+  tested contrast for construction grey and the balance map's neutral centre
+  only; the categorical series used for curves, points and vectors has not
+  been audited for a colorblind-safe ordering.
+- **No print/export theme or per-document theme pinning for space.** Space
+  always draws from the live host theme; there is no snapshot or export path
+  that would let a figure look identical wherever it is embedded, the way
+  track 5's per-document pinning intends.
+
 ---
 
 ---
@@ -1018,8 +1456,9 @@ has 3 to 24 sides. A dimension label on a built solid reads its segment off
 and regular tetrahedron keep their hand-built face lists, because their bytes
 are pinned.
 
-**Two 3D engines, and they share no code.** *Space* is track 3 — three.js,
-orbitable, calculus (`scene/buildScene3d.ts`, `render/SceneRenderer3D.ts`).
+**Two 3D engines, and they share no code.** *Space* is track 3 — hand-made
+WebGL2, orbitable, calculus (`graph-engine/src/space/`; see "Track 3 —
+space").
 *Solid figures* are this track — the SVG figure renderer through fixed named
 views (the modules above). Say "space" or "solid figure" in code, tests,
 commits and errors, never "3D engine" alone, and do not name anything in the
@@ -1203,8 +1642,13 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2445 tests (after visual pass 1, roughness, and ink as variance), node-only, no DOM
-npx tsc -b graph-engine/tsconfig.json --noEmit
+npm run test --workspace=graph-engine          # 4050 tests (after the Milestone A integration merge), node-only, no DOM
+npx tsc -p tsconfig.app.json --noEmit          # from graph-engine/; NOT bare
+npx tsc -p tsconfig.node.json --noEmit         # `npx tsc --noEmit` — the root
+                                                # tsconfig.json is a solution
+                                                # file ("files": [] plus
+                                                # references) and that bare
+                                                # form checks nothing
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)
 ```
@@ -1382,9 +1826,17 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    polar grammar claims any `r = <expr>`. Any construction bound to a name the
    plotting grammar reserves is silently misread — no error, wrong figure.
    Pre-existing; the grammar should disambiguate or reject.
-4. **Scientific notation fails silently.** `y = 1e6 * x` lexes `1e6` as
-   `1 * e6` with `e6` unbound, producing **no curve and no error**. Pre-existing,
-   and it will bite quant work.
+4. ~~**Scientific notation fails silently.**~~ **Closed 2026-09-27** by the
+   space integration pass (Task 3, `fix(graph-engine): the tokenizer reads
+   scientific notation; …`). `y = 1e6 * x` used to lex `1e6` as `1 * e6` with
+   `e6` unbound, producing no curve and no error. The rule, agreed with the
+   solid-figure side: a lowercase `e` is an exponent only when it directly
+   follows a numeral and is directly followed by an optional sign and a digit
+   (`1e-12`, `2e3`, `1.5e+6`); an uppercase `E` never is (`2E3` is 2 times
+   `E3`). `2e`, `3e x`, `2e^x`, `2e-x` and `e^(-x)` keep the constant e. The
+   byte-identity sweep over every example, every test literal and every
+   figure example under every `@view` changed only test titles that mention
+   such numbers.
 5. **The `Vector` example now infers figure mode**, so it draws with no axes —
    arguably wrong, since a vector's meaning is its coordinates. A
    classification question about whether `vector:` is plot or figure content.

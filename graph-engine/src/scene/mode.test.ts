@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
-import { resolveMode, resolvePanels } from './mode'
+import { isThreeD, resolveMode, resolvePanels } from './mode'
 
 function mode(spec: string) {
   const parsed = parseSpec(spec)
@@ -192,5 +192,35 @@ describe('a dihedral mark belongs to a solid figure (phase 10)', () => {
     const points = 'A = (0, 0, 0)\nB = (1, 0, 0)\nC = (0, 1, 0)\nD = (0, 0, 1)'
     expect(mode(points)).toBe('graph')
     expect(mode(`${points}\ndihedral: C-A-B-D`)).toBe('figure')
+  })
+})
+
+describe('space statements (S1)', () => {
+  it('a spec of only a space surface resolves graph, and is three-dimensional', () => {
+    const parsed = parseSpec('z = x over x^2 + y^2 <= 1')
+    expect(resolveMode(parsed.statements, parsed.config)).toBe('graph')
+    expect(isThreeD(parsed.statements)).toBe(true)
+  })
+
+  it('every space form routes the spec to space, definitions included', () => {
+    for (const line of ['f(x, y) = x^2 - y^2', 'u = <1, 2, 3>', 'x^2 + y^2 - z^2 = 1', 'implicit: x^2 + y^2 = 4']) {
+      const parsed = parseSpec(line)
+      expect(isThreeD(parsed.statements)).toBe(true)
+      expect(resolveMode(parsed.statements, parsed.config)).toBe('graph')
+    }
+  })
+
+  it('a solid beside a space form still resolves figure: the solid check runs first', () => {
+    expect(mode('S = solid prism 8 by 5 by 6\nz = x over x^2 + y^2 <= 1')).toBe('figure')
+  })
+
+  it('a space form beside geometry resolves graph, as a plot does', () => {
+    expect(mode('polygon: A(0,0), B(4,0), C(2,3)\nz = x^2 opacity: 0.5')).toBe('graph')
+  })
+
+  it('x^2 + y^2 = 25 alone is still a flat graph', () => {
+    const parsed = parseSpec('x^2 + y^2 = 25')
+    expect(resolveMode(parsed.statements, parsed.config)).toBe('graph')
+    expect(isThreeD(parsed.statements)).toBe(false)
   })
 })

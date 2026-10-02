@@ -61,3 +61,23 @@ describe('parseExpr / evalExpr', () => {
     expect(evalStr('e')).toBeCloseTo(Math.E)
   })
 })
+
+// Scientific notation (integration J6): see tokenize.test.ts for the rule.
+describe('parseExpr: scientific notation', () => {
+  it('evaluates 1e6 * x, 1e-12 and 1.5e+6 as numbers', () => {
+    expect(evalStr('1e6 * x', { x: 2 })).toBe(2000000)
+    expect(evalStr('1e-12')).toBe(1e-12)
+    expect(evalStr('1.5e+6')).toBe(1500000)
+  })
+
+  it('keeps e the constant in 2e, 3e x, 2e^x and e^(-x)', () => {
+    expect(evalStr('2e')).toBe(2 * Math.E)
+    expect(evalStr('3e x', { x: 2 })).toBe(3 * Math.E * 2)
+    expect(evalStr('2e^x', { x: 1 })).toBe(2 * Math.E)
+    expect(evalStr('e^(-x)', { x: 1 })).toBe(Math.E ** -1)
+  })
+
+  it('reads 2E3 as 2 times the name E3, as before', () => {
+    expect(evalStr('2E3', { E3: 5 })).toBe(10)
+  })
+})

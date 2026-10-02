@@ -3,6 +3,8 @@
 // that does not parse is a defect a user sees immediately — see
 // examples.test.ts, which renders all of them.
 
+import { SPACE_EXAMPLES } from './space/examples'
+
 // The harness shows one group at a time (plus a search across all of them),
 // because a single wall of seventy-odd buttons stopped being navigable. The
 // order here is the order the group tabs appear in. Every example must name
@@ -1322,4 +1324,6 @@ a = 3
 y = a * k(x - 2) color: teal
 y = k(k(x)) - 5 color: purple`,
   },
+  // Space (track 3): space/examples.ts.
+  ...SPACE_EXAMPLES,
 ]
