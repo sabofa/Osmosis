@@ -29,8 +29,8 @@
 //     surface was, and some of that is now hidden or off the surface. With u_depthTest on, each fragment's view
 //     depth (from the stroke's world path, per vertex) is compared with the scene's depth for the new view
 //     (shaders/depth.ts) and a stroke behind a surface is faded out over a tolerance that grows with the surface's
-//     slope across the stroke (depthVisible below). An edge stroke is also tested once per vertex, at its
-//     centreline, for having left its form (formVisible); gl/depthTest.ts is the numeric twin of both, and
+//     slope across the stroke (depthVisible below). An edge stroke is also tested once per stroke, at its point
+//     nearest the viewer, for having left its form (formVisible); gl/depthTest.ts is the numeric twin of both, and
 //     gl/brush.ts of the bristle loop and the ribbon's cap.
 //
 // Colours accumulate in sRGB-encoded space, as the mockup does, so the mixes

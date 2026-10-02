@@ -268,11 +268,15 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     },
     // A GPU reset, or a tab that slept: the context takes the picture with it and the renderer gives its
     // resources back when it returns; the picture is painted again from the strokes the engine holds.
-    onContextLost: () => events.onError('The graphics context was lost (the GPU reset, or the tab was asleep). It comes back by itself, and the picture with it.'),
-    onContextRestored: () => {
-      // The error the renderer reported before the loss is not this context's.
+    onContextLost: () => {
+      // The error the renderer reported before the loss is not the next context's. Cleared here, at the loss, not at
+      // the restore: the renderer re-uploads the scene and paper before it calls onContextRestored, and a failure it
+      // reports then must survive into the restored context (it would otherwise be wiped and the canvas stay blank).
       failure = null
-      events.onError(null)
+      events.onError('The graphics context was lost (the GPU reset, or the tab was asleep). It comes back by itself, and the picture with it.')
+    },
+    onContextRestored: () => {
+      events.onError(failure)
       if (lastJob && !disposed) {
         // A new request, newer than the picture the lost context took with it: a job that keeps its old seq is skipped
         // (shownSeq says its picture is on screen) when a settle has painted a later one, and the canvas stays blank.
