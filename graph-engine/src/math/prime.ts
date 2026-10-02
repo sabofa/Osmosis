@@ -17,8 +17,11 @@ import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
 // The refusal of a body past the cap. It is raised, and kept, at the order that
-// crosses the cap; derivativeBody words it for the order that was asked for.
+// crosses the cap; derivativeBody words it for the order that was asked for of
+// the function that crossed (`fn`), and passes another function's refusal on as
+// it is (h(x) = g''''(x) asked for h' is g's refusal, not h's).
 class DerivativeTooLarge extends CompileError {
+  readonly fn: string
   readonly crossed: number
   readonly requested: number
 
@@ -27,6 +30,7 @@ class DerivativeTooLarge extends CompileError {
       `"${name}${"'".repeat(requested)}" is too large to differentiate (order ${crossed} passes ${MAX_DERIVATIVE_NODES} nodes); differentiate fewer times, or write the derivative out`,
       [name]
     )
+    this.fn = name
     this.requested = requested
     this.crossed = crossed
   }
@@ -74,7 +78,7 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
   try {
     return buildDerivativeBody(name, fn, order, scope)
   } catch (err) {
-    if (err instanceof DerivativeTooLarge && err.requested !== order) throw new DerivativeTooLarge(name, order, err.crossed)
+    if (err instanceof DerivativeTooLarge && err.fn === name && err.requested !== order) throw new DerivativeTooLarge(name, order, err.crossed)
     throw err
   }
 }

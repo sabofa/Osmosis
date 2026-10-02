@@ -555,6 +555,30 @@ describe('a derivative too large to compute is refused', () => {
     expect(bothRefuse(prime('g', 6, [x]), blowup())).toMatch(/^"g''''''" is too large to differentiate \(order 4 passes /)
   })
 
+  it("another function's refusal is not reworded under the caller: h(x) = g''''(x), asked for h', is g's", () => {
+    // h' needs g'''' (20405 nodes), which crosses the cap; h has no order 4, and "differentiate h fewer
+    // times" would be wrong advice. Both the message and the names are g's.
+    const scope = makeScope({
+      functions: [['f', fn(['x'], 'x^2 / (1 + x^2)')], ['g', fn(['x'], 'f(f(x))')], ['h', { params: ['x'], body: prime('g', 4, [x]) }]],
+    })
+    const message = bothRefuse(prime('h', 1, [x]), scope)
+    expect(message).toBe(
+      `"g''''" is too large to differentiate (order 4 passes ${MAX_DERIVATIVE_NODES} nodes); differentiate fewer times, or write the derivative out`
+    )
+    for (const compile of [() => compileScalar(prime('h', 1, [x]), ['x'], scope), () => compileMany([prime('h', 1, [x])], ['x'], scope)]) {
+      try {
+        compile()
+        throw new Error('compiled without a refusal')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CompileError)
+        expect((err as CompileError).names).toEqual(['g'])
+      }
+    }
+    // written as h'(x) it is the same refusal; and g's own ask is still worded for g
+    expect(bothRefuse(p("h'(x)"), scope)).toBe(message)
+    expect(bothRefuse(prime('g', 5, [x]), scope)).toMatch(/^"g'''''" is too large to differentiate \(order 4 passes /)
+  })
+
   it("the orders below the cap still work, in the same scope that refused a higher one", () => {
     const scope = blowup()
     bothRefuse(prime('g', 5, [x]), scope)
@@ -585,19 +609,21 @@ describe('a derivative too large to compute is refused', () => {
   // calculus that worked before the cap, so it must keep working under it: each compiles on both paths
   // and its value is the slope of the (exact) fourth derivative, taken as a central difference. h = 1e-5
   // puts the truncation error near h^2 f(7) / 6 and the rounding error near eps f(4) / h; the six
-  // agree to a relative 1e-10 to 5e-10 (measured), and the bound is 1e-6.
+  // agree to a relative 7e-11 to 5.3e-10 (measured), and the bound is 1e-6. Each also has its exact
+  // value at that point (sympy, diff(f, x, 5) evaluated at the rational point, 20 digits), pinned to
+  // a relative 1e-9.
   it.each([
-    ['(x^3 - 2*x)/(x^2 + 4)', 0.7],
-    ['(x^2 + 1)/(x^3 - x)', 2.3],
-    ['(x + 1)^2/(x - 1)^3', 2.5],
-    ['x/(x^2 + 1)^2', 0.6],
-    ['sin(x)/(1 + cos(x))', 0.9],
-    ['sin(x)^2/(1 + x^2)', 1.4],
-  ])("the fifth derivative of %s compiles and is the slope of the fourth, at x = %s", (body, at) => {
+    ['(x^3 - 2*x)/(x^2 + 4)', 0.7, 3.454424553528079],
+    ['(x^2 + 1)/(x^3 - x)', 2.3, -24.14344860097665],
+    ['(x + 1)^2/(x - 1)^3', 2.5, -572.400548696845],
+    ['x/(x^2 + 1)^2', 0.6, -98.33483557008043],
+    ['sin(x)/(1 + cos(x))', 0.9, 1.947713007228414],
+    ['sin(x)^2/(1 + x^2)', 1.4, -4.788540322133833],
+  ])("the fifth derivative of %s at x = %s is %s on both paths, and is the slope of the fourth", (body, at, exact) => {
     const scope = makeScope({ functions: [['f', fn(['x'], body)]] })
     const h = 1e-5
     const fifth = both(prime('f', 5, [x]), at, scope)
-    expect(Number.isFinite(fifth)).toBe(true)
+    expect(Math.abs(fifth - exact)).toBeLessThan(1e-9 * Math.abs(exact))
     const fourthScalar = compileScalar(prime('f', 4, [x]), ['x'], scope)
     const fourthMany = compileMany([prime('f', 4, [x])], ['x'], scope)
     const slopes = [
