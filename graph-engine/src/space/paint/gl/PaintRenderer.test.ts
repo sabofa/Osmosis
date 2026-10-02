@@ -653,6 +653,18 @@ describe('a re-projected frame (the orbit): the strokes are put through the new 
     }
   })
 
+  it('gives the stroke shader the pixel ratio, and the size of the targets: its reach is in CSS px and the scene’s depth in backing px', () => {
+    for (const ratio of [1, 2]) {
+      const { paint, renderer } = scene2()
+      renderer.paint(frame([BLOCK, FORM]), view(800, 600, ratio), PARAMS, 'none', reproject())
+      for (const s of timeline(paint).filter((e) => e.kind === 'stroke')) {
+        expect(s.uniforms.u_pixelRatio).toEqual([ratio])
+        expect(s.uniforms.u_resolution).toEqual([800 * ratio, 600 * ratio])
+        expect(s.uniforms.u_cssSize).toEqual([800, 600])
+      }
+    }
+  })
+
   it('draws neither a depth pass nor a test for a frame made for its own view, and the plain underpainting', () => {
     const { paint, renderer } = scene2()
     renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none')
@@ -821,6 +833,24 @@ describe('lifecycle', () => {
     expect(timeline(paint).filter((e) => e.kind === 'gbuffer').length).toBe(2)
     // The extension was asked for again after the restore.
     expect(paint.fake.extensionsQueried.filter((n) => n === 'EXT_color_buffer_float').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('forgets a failure that came before the loss: a restored context draws again', () => {
+    const { paint, renderer, onError } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.setPaper(new Uint8ClampedArray(4 * 4).fill(220), new Float32Array(4).fill(0.5), 2)
+    // an unexpected error while painting (a frame that is not one): reported, and the renderer then draws nothing
+    renderer.paint({ ...frame([BLOCK]), strokes: undefined as never }, view(), PARAMS, 'none')
+    expect(onError).toHaveBeenCalledTimes(1)
+    const draws = paint.fake.draws.length
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none')
+    expect(paint.fake.draws.length).toBe(draws)
+    // the context goes and comes back: a good frame draws
+    paint.canvas.lose()
+    paint.canvas.restore()
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none')
+    expect(paint.fake.draws.length).toBeGreaterThan(draws)
+    expect(onError).toHaveBeenCalledTimes(1)
   })
 
   it('reports a shader failure through onError, draws nothing, and never throws', () => {

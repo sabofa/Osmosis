@@ -29,13 +29,17 @@
 //     surface was, and some of that is now hidden or off the surface. With u_depthTest on, each fragment's view
 //     depth (from the stroke's world path, per vertex) is compared with the scene's depth for the new view
 //     (shaders/depth.ts) and a stroke behind a surface is faded out over a tolerance that grows with the surface's
-//     slope across the stroke (depthVisible below).
+//     slope across the stroke (depthVisible below). An edge stroke is also tested once per vertex, at its
+//     centreline, for having left its form (formVisible); gl/depthTest.ts is the numeric twin of both, and
+//     gl/brush.ts of the bristle loop and the ribbon's cap.
 //
 // Colours accumulate in sRGB-encoded space, as the mockup does, so the mixes
 // look as approved. Output 0 is premultiplied colour with coverage as alpha,
 // output 1 is the height in r with a/2 as alpha; both blend ONE, ONE_MINUS_SRC_ALPHA.
 
 import { MAX_BRISTLES, PATH_POINTS, ROLES } from '../../types'
+import { BRISTLE_REACH, CAP_PAD, MIN_HALF_WIDTH } from '../brush'
+import { DEPTH_SLOPE_CAP, FORM_REACH } from '../depthTest'
 import { COMMON_GLSL } from './common'
 
 // Ribbon tessellation: PATH_POINTS - 1 segments, each split RIBBON_SUBDIV
@@ -48,6 +52,34 @@ export const VERTICES_PER_STROKE = 2 * (RIBBON_SEGMENTS + 1)
 // parameters, the role / edge class / whether there is a world path, and then the
 // world path (x, y, z, 0 per point), which the depth test of a re-projected frame reads.
 export const TEXELS_PER_STROKE = 2 * PATH_POINTS + 4
+
+const ROLE_EDGE_INDEX = ROLES.indexOf('edge')
+
+// What both stages need of the scene's depth: the target, the bias, and the slope (the change of depth over a pixel:
+// the smaller of the two one-sided differences on each axis, so the far side of a silhouette is not mistaken for a
+// slope, and capped).
+const DEPTH_TEST_GLSL = /* glsl */ `
+uniform bool u_depthTest;       // a re-projected frame: hide what the new view's surfaces cover
+uniform sampler2D u_sceneDepth; // the scene's view depth for this view, RG32F, 1e30 where nothing is drawn
+uniform float u_depthBias;      // view-depth units a stroke may lie behind its surface
+uniform vec2 u_resolution;      // backing px
+uniform float u_pixelRatio;     // backing px per CSS px
+
+const int ROLE_EDGE = ${ROLE_EDGE_INDEX};
+
+float sceneDepthAt(ivec2 pix) {
+  return texelFetch(u_sceneDepth, clamp(pix, ivec2(0), ivec2(u_resolution) - 1), 0).r;
+}
+
+float sceneSlope(ivec2 pix) {
+  float zc = sceneDepthAt(pix);
+  float zl = sceneDepthAt(pix + ivec2(-1, 0));
+  float zr = sceneDepthAt(pix + ivec2(1, 0));
+  float zd = sceneDepthAt(pix + ivec2(0, -1));
+  float zu = sceneDepthAt(pix + ivec2(0, 1));
+  return min(max(min(abs(zc - zl), abs(zr - zc)), min(abs(zc - zd), abs(zu - zc))), ${DEPTH_SLOPE_CAP.toFixed(1)} * u_depthBias);
+}
+`
 
 export const STROKE_VERTEX = /* glsl */ `#version 300 es
 // paint: stroke
@@ -62,12 +94,14 @@ uniform vec3 u_viewDir;  // the view's direction, and dot(eye, viewDir): the vie
 uniform float u_eyeDot;
 out vec3 v_geo;          // lateral offset (hw units), arc position (px), half width (px)
 out float v_zs;          // the view depth of the stroke's surface point here (for the depth test)
+flat out float v_form;   // 1 while an edge decal is on its form, 0 when it has left it (formVisible); 1 for every other stroke
 flat out float v_world;  // 1 when the stroke has a world path to test with
 flat out vec4 v_colour;  // sRGB colour, alpha
 flat out vec4 v_p0;      // load, impasto, bristles, bristle variance
 flat out vec4 v_p1;      // dry, wet, end softness, seed
-flat out vec4 v_p2;      // role, edge class, length (px), cap (px)
-
+flat out vec4 v_p2;      // role, edge class, length (px), mean cap (px)
+${COMMON_GLSL}
+${DEPTH_TEST_GLSL}
 const int PTS = ${PATH_POINTS};
 const int SUB = ${RIBBON_SUBDIV};
 const int SEGS = (PTS - 1) * SUB;
@@ -76,6 +110,36 @@ const int WORLD = PTS + 4;  // the first world-path texel
 
 vec4 fetchTexel(int id, int k) {
   return texelFetch(u_strokes, ivec2((id % u_perRow) * TEXELS + k, id / u_perRow), 0);
+}
+
+// How far the ribbon runs past an end of the path: a bristle's round end reaches ${BRISTLE_REACH.toFixed(2)} of its radius
+// past the path (the radius is at most that many spacings of 2 / bristles half widths), and a pixel more keeps the
+// ribbon's own edge, which fwidth cannot soften, clear of the deposit. The width is the stroke's there.
+float ribbonCap(float width, int nB) {
+  return ${BRISTLE_REACH.toFixed(2)} * max(width * 0.5, ${MIN_HALF_WIDTH.toFixed(1)}) * (2.0 / float(nB)) + ${CAP_PAD.toFixed(1)};
+}
+
+// Has an edge decal left its form? pos is a point of its path (CSS px, y down) and vzs the decal's view depth
+// there. It is on its form when some surface within ${FORM_REACH} CSS px lies at its depth (the pixel under an outline is the
+// background's; the decal's own surface is a pixel or two away). The closest depth match is the form, and the decal
+// stays while it is within the bias plus the slope there across that reach (gl/depthTest.ts formVisible is the twin).
+float formVisible(vec2 pos, float vzs) {
+  vec2 c = vec2(pos.x / u_cssSize.x, 1.0 - pos.y / u_cssSize.y) * u_resolution;
+  ivec2 last = ivec2(u_resolution) - 1;
+  float off = 1.0e30;
+  ivec2 at = ivec2(0);
+  for (int dy = -${FORM_REACH}; dy <= ${FORM_REACH}; dy++) {
+    for (int dx = -${FORM_REACH}; dx <= ${FORM_REACH}; dx++) {
+      ivec2 p = clamp(ivec2(floor(c + vec2(float(dx), float(dy)) * u_pixelRatio)), ivec2(0), last);
+      float d = abs(texelFetch(u_sceneDepth, p, 0).r - vzs);
+      if (d < off) {
+        off = d;
+        at = p;
+      }
+    }
+  }
+  float tol = u_depthBias + sceneSlope(at) * ${FORM_REACH}.0 * u_pixelRatio;
+  return 1.0 - sstep(tol, 2.0 * tol, off);
 }
 
 void main() {
@@ -100,7 +164,8 @@ void main() {
   vec4 c1 = fetchTexel(id, PTS + 1);
   vec4 c2 = fetchTexel(id, PTS + 2);
   vec4 c3 = fetchTexel(id, PTS + 3);
-  float cap = clamp(1.6 * (widthSum / float(PTS)) / max(c1.z, 1.0), 1.0, 6.0);
+  int nB = int(clamp(c1.z + 0.5, 2.0, ${MAX_BRISTLES.toFixed(1)}));
+  int role = int(c3.x + 0.5);
 
   float u = float(j) / float(SEGS) * float(PTS - 1);
   int a = min(int(floor(u)), PTS - 2);
@@ -121,10 +186,34 @@ void main() {
   vec3 wb = fetchTexel(id, WORLD + a + 1).xyz;
   v_zs = dot(mix(wa, wb, f), u_viewDir) - u_eyeDot;
   v_world = c3.z;
+  v_form = 1.0;
+  if (u_depthTest && c3.z > 0.5 && role == ROLE_EDGE) {
+    // an edge decal is on its form while the point of it nearest the viewer is: the decal is one mark, which may
+    // cross an occlusion boundary (a pull from the figure into the table behind it) and then has parts on no surface
+    int kn = 0;
+    float zn = 1.0e30;
+    for (int k = 0; k < PTS; k++) {
+      float zk = dot(fetchTexel(id, WORLD + k).xyz, u_viewDir) - u_eyeDot;
+      if (zk < zn) {
+        zn = zk;
+        kn = k;
+      }
+    }
+    v_form = formVisible(pt[kn].xy, zn);
+  }
   float s = mix(cum[a], cum[a + 1], f);
   float w = mix(pt[a].z, pt[a + 1].z, f);
-  if (j == 0) { pos -= tn * cap; s -= cap; }
-  if (j == SEGS) { pos += tn * cap; s += cap; }
+  // the ends: the cap each end needs for ITS width
+  if (j == 0) {
+    float cap0 = ribbonCap(w, nB);
+    pos -= tn * cap0;
+    s -= cap0;
+  }
+  if (j == SEGS) {
+    float cap1 = ribbonCap(w, nB);
+    pos += tn * cap1;
+    s += cap1;
+  }
 
   float hw = max(w * 0.5, 0.6);
   float extent = hw * 1.3 + 1.2;
@@ -133,7 +222,7 @@ void main() {
   v_colour = c0;
   v_p0 = c1;
   v_p1 = c2;
-  v_p2 = vec4(c3.x, c3.y, len, cap);
+  v_p2 = vec4(c3.x, c3.y, len, ribbonCap(widthSum / float(PTS), nB));
   gl_Position = vec4(css.x / u_cssSize.x * 2.0 - 1.0, 1.0 - css.y / u_cssSize.y * 2.0, 0.0, 1.0);
 }
 `
@@ -145,6 +234,7 @@ precision highp int;
 precision highp sampler2D;
 in vec3 v_geo;
 in float v_zs;
+flat in float v_form;
 flat in float v_world;
 flat in vec4 v_colour;
 flat in vec4 v_p0;
@@ -154,43 +244,32 @@ uniform sampler2D u_prev;    // the layers beneath: premultiplied sRGB colour, c
 uniform sampler2D u_paper;   // the canvas, sRGB RGBA8
 uniform sampler2D u_paperH;  // the canvas height, normalised (std 0.2), R32F
 uniform ivec2 u_paperSize;
-uniform vec2 u_resolution;   // backing px
 uniform float u_heightScale; // 1, or 0.5 when the height target is 8 bit
 uniform vec4 u_roleA[8];     // opacity, thin, start boost, wet pickup at the start
 uniform vec4 u_roleB[8];     // end position, end spread, crisp (1) or ragged (0), 0
 uniform bool u_debugRoles;
 uniform vec3 u_roleColour[8];
-uniform bool u_depthTest;      // a re-projected frame: hide what the new view's surfaces cover
-uniform sampler2D u_sceneDepth; // the scene's view depth for this view, R32F, 1e30 where nothing is drawn
-uniform float u_depthBias;     // view-depth units a stroke may lie behind its surface
 ${COMMON_GLSL}
+${DEPTH_TEST_GLSL}
 layout(location = 0) out vec4 o_colour;
 layout(location = 1) out vec4 o_height;
 
 const int ROLE_GLAZE = 3;
-const int ROLE_EDGE = ${ROLES.indexOf('edge')};
 const float START_RAMP = 0.026;
 
 // How much of the stroke is seen at this pixel under the scene's depth: 1 in front of or on the surface, 0 well
-// behind it. The tolerance is the bias plus the surface's slope (the change of depth over a pixel: the smaller of the
-// two one-sided differences on each axis, so the far side of a silhouette is not mistaken for a slope, and capped)
-// across the stroke's half width, because the stroke's depth is its centreline's and its edges lie on a tilted
-// surface at other depths. An edge stroke is a decal: the screen path of a contour lifted to ONE depth, a flat mark
-// on the surface it followed. As the view turns the decal leaves the surface, behind it or in front of it, and it is
-// clipped either way (every other stroke is only hidden by a surface in front of it: a veil or a curve may hover
-// over a surface).
+// behind it. The tolerance is the bias plus the surface's slope (sceneSlope) across the stroke's half width, because the
+// stroke's depth is its centreline's and its edges lie on a tilted surface at other depths. Every role is only hidden by
+// a surface in front of it (a veil or a curve may hover over a surface). An edge stroke is a decal, the screen path of
+// a contour lifted onto the surface it followed, each point at its own depth; whether it has LEFT its form is decided
+// once per stroke, at its point nearest the viewer (v_form), and not here: half the fragments of a ribbon on a
+// silhouette are on the background side of the outline, and that is not the decal leaving.
 float depthVisible(ivec2 pix, float hw, int role) {
   if (!u_depthTest || v_world < 0.5) return 1.0;
-  ivec2 last = ivec2(u_resolution) - 1;
-  float zc = texelFetch(u_sceneDepth, pix, 0).r;
-  float zl = texelFetch(u_sceneDepth, clamp(pix + ivec2(-1, 0), ivec2(0), last), 0).r;
-  float zr = texelFetch(u_sceneDepth, clamp(pix + ivec2(1, 0), ivec2(0), last), 0).r;
-  float zd = texelFetch(u_sceneDepth, clamp(pix + ivec2(0, -1), ivec2(0), last), 0).r;
-  float zu = texelFetch(u_sceneDepth, clamp(pix + ivec2(0, 1), ivec2(0), last), 0).r;
-  float slope = min(max(min(abs(zc - zl), abs(zr - zc)), min(abs(zc - zd), abs(zu - zc))), 8.0 * u_depthBias);
-  float tol = u_depthBias + slope * max(hw, 1.5);
-  float over = role == ROLE_EDGE ? abs(v_zs - zc) : v_zs - zc;
-  return 1.0 - sstep(tol, 2.0 * tol, over);
+  float zc = sceneDepthAt(pix);
+  float tol = u_depthBias + sceneSlope(pix) * max(hw, 1.5);
+  float seen = 1.0 - sstep(tol, 2.0 * tol, v_zs - zc);
+  return role == ROLE_EDGE ? seen * v_form : seen;
 }
 
 void main() {

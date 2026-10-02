@@ -416,6 +416,57 @@ describe('the camera moving: the last frame\'s strokes, re-projected', () => {
   })
 })
 
+describe('the camera dragged after something else changed', () => {
+  // a stroke size: the model's analysis (not a colour, not a renderer-only parameter)
+  const WIDER = setParam(P, 'roles.block.width', 30)
+
+  it('keeps re-projecting while the pointer is down after a slider moved, and runs the model once, at the release', async () => {
+    const { engine, frames, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView(), WIDER) // the slider: a frame for it starts (in a worker it takes 100 to 300 ms) ...
+    for (let k = 1; k <= 4; k++) go(sphereView({ azimuth: 30 + 5 * k, dragging: true }), WIDER) // ... and the user starts orbiting
+    // each move is shown at once, from the strokes the engine holds: no wait for the model, no G-buffer of a drag
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject'])
+    await new Promise((r) => setTimeout(r, 100))
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject']) // (the slider's own frame is older than what is shown: dropped)
+    go(sphereView({ azimuth: 55, dragging: true }), WIDER)
+    expect(kinds(frames).slice(-1)).toEqual(['reproject'])
+    // the release: the model's frame for the view it stopped at, once
+    go(sphereView({ azimuth: 55 }), WIDER)
+    await done(7)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject', 'reproject', 'full'])
+    expect(gbuffers()).toBe(3) // the first frame, the slider's (dropped), the release
+    engine.dispose()
+  })
+
+  it('still asks for the model on a move that is not a drag when a slider moved (the wheel, a key, an eased step)', async () => {
+    const { engine, frames, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView({ zoom: 230 }), WIDER)
+    await done(2)
+    expect(kinds(frames)).toEqual(['full', 'full'])
+    engine.dispose()
+  })
+
+  it('does not re-project strokes onto a figure the renderer was not given: its depth pass is of the other figure', async () => {
+    const { engine, frames, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    // another figure is asked for (the renderer is given it), and the lab goes back before its frame has landed
+    engine.setScene(OTHER, COLOURS)
+    go(sphereView({ azimuth: 40 }), P)
+    engine.setScene(SCENE, COLOURS)
+    go(sphereView({ azimuth: 50, dragging: true }), P)
+    expect(kinds(frames)).toEqual(['full'])
+    await done(2)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(kinds(frames)).not.toContain('reproject')
+    engine.dispose()
+  })
+})
+
 describe('a still picture', () => {
   it('is made once and painted again, not recomputed: nothing runs, nothing is queued, and a repeat request is the same strokes', async () => {
     const { engine, frames, painted, gbuffers, go, done } = withPicture()
@@ -481,6 +532,51 @@ describe('the graphics context', () => {
     expect(frames[1].kind).toBe('repaint')
     expect(gbuffers()).toBe(1)
     expect(errors[errors.length - 1]).toBeNull()
+    engine.dispose()
+  })
+})
+
+describe('the graphics context after the picture was settled', () => {
+  const composites = (gl: ReturnType<typeof setup>['gl']) => timeline(gl).filter((e) => e.kind === 'composite').length
+
+  it('paints the picture again when the context comes back after a wheel step: [full, reproject, full], lost, restored, and a fresh composite', async () => {
+    const { engine, gl, frames, errors, gbuffers, done } = setup()
+    engine.render(view(), P, 'none')
+    await done(1)
+    // a wheel step: re-projected at once, and the model's frame for the view it stopped at after the settle delay
+    engine.render(view({ zoom: 110 }), P, 'none')
+    await done(3)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'full'])
+    const before = composites(gl)
+    gl.canvas.lose()
+    gl.canvas.restore()
+    // (the settled request is the one on screen: a restore that kept the older request skipped it as already shown, and the canvas stayed blank)
+    await done(4)
+    expect(frames[3].kind).toBe('repaint')
+    expect(composites(gl)).toBe(before + 1)
+    expect(gbuffers()).toBe(2) // from the strokes the engine holds: no new G-buffer and no model
+    expect(errors[errors.length - 1]).toBeNull()
+    engine.dispose()
+  })
+
+  it('does not stay silent on a context that comes back after an error: the renderer and the engine both start again', async () => {
+    let failing = true
+    const gl = createPaintFakeGl({ failCompile: (source) => failing && source.includes('// paint: stroke') }, { width: 320, height: 240 })
+    Object.assign(gl.canvas.canvas, { style: {} })
+    const frames: FrameStats[] = []
+    const errors: (string | null)[] = []
+    const engine = createPaintEngine(gl.canvas.canvas, { onFrame: (s) => frames.push(s), onError: (m) => errors.push(m) })
+    engine.setScene(SCENE, COLOURS)
+    engine.render(view(), P, 'none')
+    await vi.waitFor(() => expect(errors.some((m) => m && /compile/.test(m))).toBe(true), { timeout: 60_000, interval: 5 })
+    expect(frames.length).toBe(0)
+    // the shader compiles on the new context
+    failing = false
+    gl.canvas.lose()
+    gl.canvas.restore()
+    await vi.waitFor(() => expect(frames.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(errors[errors.length - 1]).toBeNull()
+    expect(composites(gl)).toBeGreaterThan(0)
     engine.dispose()
   })
 })

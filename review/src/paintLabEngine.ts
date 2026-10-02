@@ -267,9 +267,13 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     // resources back when it returns; the picture is painted again from the strokes the engine holds.
     onContextLost: () => events.onError('The graphics context was lost (the GPU reset, or the tab was asleep). It comes back by itself, and the picture with it.'),
     onContextRestored: () => {
+      // The error the renderer reported before the loss is not this context's.
+      failure = null
       events.onError(null)
       if (lastJob && !disposed) {
-        latest = lastJob
+        // A new request, newer than the picture the lost context took with it: a job that keeps its old seq is skipped
+        // (shownSeq says its picture is on screen) when a settle has painted a later one, and the canvas stays blank.
+        lastJob = latest = { ...lastJob, seq: ++seq }
         pump()
       }
     },
@@ -445,12 +449,24 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     return { strokes: frame.stats.strokes, ms: now - started, gbufferMs, modelMs, particlesMs, paperMs, paintMs: now - t1, kind }
   }
 
-  // The camera moved and nothing else did: the last full frame's strokes through the new view. Synchronous (a few
-  // milliseconds), and whatever the model is doing at the time, which its result then does not replace.
+  // The camera moved: the last full frame's strokes through the new view. Synchronous (a few milliseconds), and
+  // whatever the model is doing at the time, which its result then does not replace.
+  //
+  // While the pointer drags the camera it does not matter what ELSE changed since the strokes were made (a slider
+  // moved, the light): the movement is shown from the strokes the engine holds, the renderer's own parameters (the relief,
+  // the canvas) at once, and the model runs once for the view the camera stops at, on the pointer's release, with all of
+  // it. Asking for the model on the first frames of a drag after a slider had moved froze the view for a frame or two
+  // of the model. A move that is not a drag (the wheel, a key, an eased step) keeps the stricter rule, because a change
+  // of the light changes the view too (PaintView.lightDir) and is no movement of the camera: only parameters that leave
+  // the strokes as they are.
   function reproject(job: Job): boolean {
     const a = analysed
     if (!a || job.target || a.sceneId !== job.sceneId || a.debug !== job.debug || IMAGE_VIEWS.has(job.debug)) return false
-    if (sameFrame(a.view, job.view) || classifyChange(a.strokesParams, job.params) !== 'same') return false
+    // the depth pass is of the scene the renderer holds, and the strokes are of the analysed one: a figure the
+    // renderer was given since (a request for another figure is running) is not the figure these strokes are on
+    if (rendererScene !== job.scene) return false
+    if (sameFrame(a.view, job.view)) return false
+    if (!job.view.dragging && classifyChange(a.strokesParams, job.params) !== 'same') return false
     const started = performance.now()
     try {
       const strokes = reprojectStrokes(a.frame.strokes, a.view, job.view, job.params)
@@ -485,7 +501,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   function settle(): void {
     settleTimer = null
     if (disposed || !lastJob) return
-    latest = { ...lastJob, seq: ++seq }
+    // The settled frame is the request on screen now: a context that is lost after it paints this one again.
+    lastJob = latest = { ...lastJob, seq: ++seq }
     pump()
   }
 

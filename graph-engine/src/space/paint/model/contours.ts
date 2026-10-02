@@ -475,31 +475,62 @@ function meanDepth(an: PaintCtx): number {
   return mean
 }
 
+// How steeply a decal's depth may change along its path, in world units of depth per world unit of screen distance
+// (a surface tilted 63 degrees from the screen has this slope). A surface is continuous; an occlusion boundary is not,
+// and a mark that ran across one (a pull from the figure into the table behind it) must not follow both surfaces: its
+// far part would ride the far surface and the mark would be torn into a streak the moment the camera turned.
+export const DECAL_SLOPE = 2
+
 // The world points of an edge stroke's path, which is traced on the screen, so that it can be put on screen again
 // from another view. An edge lies on the boundary between planes (or at the figure's outline, where one side is
-// background): the stroke is put at ONE depth, the nearest surface under its path (looking a pixel round each point,
-// since an outline's pixels may be the background's), so that it is a flat decal that moves with the object and is
-// never torn along the view ray by points at different depths.
+// background): each point of the stroke is put at its OWN depth, the nearest surface within a G-buffer pixel of it
+// (looking a pixel round each point, since an outline's pixels may be the background's), so that the decal follows the
+// surface it was traced on, up and down its relief, and stays on it as the view turns. (One depth for the whole path,
+// the nearest of all, lifted every point that lay on a farther part of the surface off it, and the re-projected frame
+// then hid or clipped those edges the moment the camera moved.) A point with no surface of its own within a pixel takes
+// the nearest depth of the path, and a path with none the mean depth of what is drawn. Where the path crosses an
+// occlusion boundary the decal is anchored to the nearest surface, the figure's, and the depth may change only by
+// DECAL_SLOPE from one point to the next: the far side of the boundary is flattened toward it, not followed.
 function worldOfPath(an: PaintCtx, path: Float32Array): Float32Array {
   const fc = an.fc
   const g = fc.g
-  let best = Number.POSITIVE_INFINITY
+  const depth = new Float64Array(PATH_POINTS)
+  let nearest = Number.POSITIVE_INFINITY
+  let anchor = 0
   for (let q = 0; q < PATH_POINTS; q++) {
+    let best = Number.POSITIVE_INFINITY
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const gi = gIndex(fc, path[2 * q] + dx * g.scale, path[2 * q + 1] + dy * g.scale)
         if (gi >= 0 && g.depth[gi] < best) best = g.depth[gi]
       }
     }
+    depth[q] = best
+    if (best < nearest) {
+      nearest = best
+      anchor = q
+    }
   }
-  const depth = Number.isFinite(best) ? best : meanDepth(an)
+  const fallback = Number.isFinite(nearest) ? nearest : meanDepth(an)
+  for (let q = 0; q < PATH_POINTS; q++) if (!Number.isFinite(depth[q])) depth[q] = fallback
   const out = new Float32Array(3 * PATH_POINTS)
   const p = [0, 0, 0]
-  for (let q = 0; q < PATH_POINTS; q++) {
-    unproject(fc, path[2 * q], path[2 * q + 1], depth, p)
+  const put = (q: number) => {
+    unproject(fc, path[2 * q], path[2 * q + 1], depth[q], p)
     out[3 * q] = p[0]
     out[3 * q + 1] = p[1]
     out[3 * q + 2] = p[2]
+  }
+  put(anchor)
+  // from the anchor outward, each step's change of depth limited by what a continuous surface could make of it
+  for (const dir of [1, -1]) {
+    for (let q = anchor + dir; q >= 0 && q < PATH_POINTS; q += dir) {
+      const prev = q - dir
+      const step = Math.hypot(path[2 * q] - path[2 * prev], path[2 * q + 1] - path[2 * prev + 1])
+      const limit = (DECAL_SLOPE * step) / Math.max(1e-9, pxPerUnit(fc, out[3 * prev], out[3 * prev + 1], out[3 * prev + 2]))
+      depth[q] = Math.min(Math.max(depth[q], depth[prev] - limit), depth[prev] + limit)
+      put(q)
+    }
   }
   return out
 }

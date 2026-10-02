@@ -363,6 +363,7 @@ export class PaintRenderer {
           targets: accum,
           paper,
           cssSize,
+          pixelRatio: view.pixelRatio,
           debugRoles: roles,
           depthTest: depth
             ? {
@@ -598,6 +599,9 @@ export class PaintRenderer {
   private handleRestored(): void {
     if (this.disposed) return
     this.lost = false
+    // A failure before the loss (an error that surfaced as the context went) must not keep a good context silent:
+    // the restore starts again, and a failure that is real (a shader that will not compile) comes back by itself.
+    this.failed = false
     // Extensions are off on a restored context until asked for again.
     this.caps = queryCapabilities(this.gl)
     this.gbufferFloatFailed = false

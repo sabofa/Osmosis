@@ -9,6 +9,8 @@ import { DEPTH_FRAGMENT, DEPTH_VERTEX } from './shaders/depth'
 import { UNDERPAINT_WARP_FRAGMENT, UNDERPAINT_FRAGMENT as UNDERPAINT_PLAIN } from './shaders/underpaint'
 import { RIBBON_SEGMENTS, RIBBON_SUBDIV, STROKE_FRAGMENT, STROKE_VERTEX, TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
 import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
+import { BRISTLE_REACH, CAP_PAD } from './brush'
+import { DEPTH_SLOPE_CAP, FORM_REACH } from './depthTest'
 
 const ALL = {
   fullscreen: FULLSCREEN_VERTEX,
@@ -64,8 +66,21 @@ describe('the stroke shaders (R3)', () => {
 
   it('draw a Catmull-Rom ribbon through the path points with a round cap at each end', () => {
     expect(STROKE_VERTEX).toContain('2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3')
-    expect(STROKE_VERTEX).toContain('pos -= tn * cap')
-    expect(STROKE_VERTEX).toContain('pos += tn * cap')
+    expect(STROKE_VERTEX).toContain('pos -= tn * cap0')
+    expect(STROKE_VERTEX).toContain('pos += tn * cap1')
+  })
+
+  it('run the ribbon past each end by what a bristle’s round end reaches: 1.85 spacings of the width there, a pixel more, no clamp', () => {
+    // the twin (brush.ts) holds the numbers and the shader is built from them
+    expect(BRISTLE_REACH).toBeCloseTo(1.85, 12)
+    expect(CAP_PAD).toBe(1)
+    expect(STROKE_VERTEX).toContain('float ribbonCap(float width, int nB) {')
+    expect(STROKE_VERTEX).toContain('return 1.85 * max(width * 0.5, 0.6) * (2.0 / float(nB)) + 1.0;')
+    // each end for the width it has, at the bristle count the fragment shader reads
+    expect(STROKE_VERTEX).toContain('int nB = int(clamp(c1.z + 0.5, 2.0, 48.0));')
+    expect(STROKE_VERTEX).toContain('float cap0 = ribbonCap(w, nB);')
+    expect(STROKE_VERTEX).toContain('float cap1 = ribbonCap(w, nB);')
+    expect(STROKE_VERTEX).not.toContain('clamp(1.6')
   })
 
   it('gate a dry tail by the canvas height texture, so paint skips the weave valleys', () => {
@@ -88,23 +103,58 @@ describe('the stroke shaders (R3)', () => {
     expect(STROKE_VERTEX).toContain('v_zs = dot(mix(wa, wb, f), u_viewDir) - u_eyeDot;')
     expect(STROKE_VERTEX).toContain('v_world = c3.z;')
     expect(STROKE_VERTEX).toContain('const int WORLD = PTS + 4;')
+    // both stages read the same scene depth, with the same slope (the smaller of the one-sided differences, so the far
+    // side of a silhouette is no slope, and capped at DEPTH_SLOPE_CAP biases)
+    for (const src of [STROKE_VERTEX, STROKE_FRAGMENT]) {
+      expect(src).toContain('uniform sampler2D u_sceneDepth;')
+      expect(src).toContain('uniform vec2 u_resolution;')
+      expect(src).toContain('uniform float u_pixelRatio;')
+      expect(src).toContain('float sceneSlope(ivec2 pix) {')
+      expect(src).toContain('min(abs(zc - zl), abs(zr - zc))')
+      expect(src).toContain(`${DEPTH_SLOPE_CAP.toFixed(1)} * u_depthBias`)
+    }
+    expect(DEPTH_SLOPE_CAP).toBe(8)
     // the fragment shader fades a stroke behind the surface, over a tolerance that grows with the slope across its half width
     const f = STROKE_FRAGMENT
     expect(f).toContain('float depthVisible(ivec2 pix, float hw, int role)')
     expect(f).toContain('if (!u_depthTest || v_world < 0.5) return 1.0;')
-    expect(f).toContain('float tol = u_depthBias + slope * max(hw, 1.5);')
-    expect(f).toContain('return 1.0 - sstep(tol, 2.0 * tol, over);')
-    // an edge stroke is a decal at one depth: clipped where it leaves the surface in front as well as behind
-    expect(f).toContain('const int ROLE_EDGE = 6;')
-    expect(f).toContain('float over = role == ROLE_EDGE ? abs(v_zs - zc) : v_zs - zc;')
-    // the smaller of the one-sided differences (so the far side of a silhouette is no slope), and capped
-    expect(f).toContain('min(abs(zc - zl), abs(zr - zc))')
-    expect(f).toContain('8.0 * u_depthBias')
+    expect(f).toContain('float tol = u_depthBias + sceneSlope(pix) * max(hw, 1.5);')
+    // every role, the edge too, is hidden only by a surface in front of it: one-sided
+    expect(f).toContain('float seen = 1.0 - sstep(tol, 2.0 * tol, v_zs - zc);')
+    expect(f).not.toContain('abs(v_zs - zc)')
     // both the brush and the flat role view are tested
     expect(f).toContain('float al = gate * min(opac, opac * (0.42 + 1.6 * dep)) * depthVisible(pix, hw, role);')
     expect(f).toContain('float a = 0.9 * m * depthVisible(ivec2(gl_FragCoord.xy), hw, role);')
     // a stroke built on the screen alone has no world path, and is never tested
     expect(f).toContain('v_world < 0.5')
+  })
+
+  it('clip an edge decal that has left its form once per stroke, at its point nearest the viewer, and not at every fragment', () => {
+    const v = STROKE_VERTEX
+    const f = STROKE_FRAGMENT
+    // the vertex shader finds the stroke's nearest world point in this view (the first of equals, as anchorOf does) and
+    // tests its screen position, for an edge stroke that has a world path
+    expect(v).toContain('flat out float v_form;')
+    expect(v).toContain('float formVisible(vec2 pos, float vzs) {')
+    expect(v).toContain('if (u_depthTest && c3.z > 0.5 && role == ROLE_EDGE) {')
+    expect(v).toContain('float zk = dot(fetchTexel(id, WORLD + k).xyz, u_viewDir) - u_eyeDot;')
+    expect(v).toContain('if (zk < zn) {')
+    expect(v).toContain('v_form = formVisible(pt[kn].xy, zn);')
+    // the centreline in CSS px, y down, to the depth's pixels, GL y up (gl/depthTest.ts glPixel)
+    expect(v).toContain('vec2 c = vec2(pos.x / u_cssSize.x, 1.0 - pos.y / u_cssSize.y) * u_resolution;')
+    // a window of FORM_REACH CSS px (a step of one CSS px, whatever the pixel ratio); the closest depth match is the form
+    expect(FORM_REACH).toBe(3)
+    expect(v).toContain('for (int dy = -3; dy <= 3; dy++) {')
+    expect(v).toContain('for (int dx = -3; dx <= 3; dx++) {')
+    expect(v).toContain('vec2(float(dx), float(dy)) * u_pixelRatio')
+    expect(v).toContain('float d = abs(texelFetch(u_sceneDepth, p, 0).r - vzs);')
+    expect(v).toContain('float tol = u_depthBias + sceneSlope(at) * 3.0 * u_pixelRatio;')
+    expect(v).toContain('return 1.0 - sstep(tol, 2.0 * tol, off);')
+    // the fragment only multiplies it in, for an edge
+    expect(f).toContain('flat in float v_form;')
+    expect(f).toContain('return role == ROLE_EDGE ? seen * v_form : seen;')
+    expect(f).toContain('const int ROLE_EDGE = 6;')
+    expect(v).toContain('const int ROLE_EDGE = 6;')
   })
 
   it('draw the scene\u2019s view depth, along the view direction, with the same depth the G-buffer holds', () => {

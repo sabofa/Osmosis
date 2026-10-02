@@ -6,6 +6,7 @@
 import { LAYER_ORDER, PATH_POINTS, ROLES, type StrokeBatch } from '../types'
 import type { PaperGpu } from './composite'
 import type { ProgramInfo } from '../../gl/program'
+import { ROLE_A, ROLE_B } from './brush'
 import { complete, type Resources, type Gl } from './resources'
 import { TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
 
@@ -197,32 +198,8 @@ export function packStrokes(batch: StrokeBatch, plan: StrokePlan, layout: Stroke
 }
 
 // --- per-role brush constants -------------------------------------------------
-// What the batch does not carry, from the mockup's STYLE table, in ROLES order
-// (block, form, scumble, glaze, reflected, dab, edge, line).
-//   A: base opacity, thinning along the stroke, start boost, wet pickup at the start
-//   B: where the bristles end (mean), its spread, 1 for a crisp, exact brush
-// A stroke's opacity is `alpha x base`; for a glaze `alpha` is the absolute
-// opacity, capped at the glaze's base (a veil of 0.26 stays 0.26).
-export const ROLE_A = new Float32Array([
-  0.96, 0.45, 0.35, 0.28, // block
-  0.9, 0.6, 0.3, 0.3, // form
-  0.6, 0.8, 0.2, 0.25, // scumble
-  0.34, 0.3, 0.15, 0.3, // glaze
-  0.5, 0.4, 0.15, 0.3, // reflected
-  0.96, 0, 0.4, 0.1, // dab
-  0.95, 0.5, 0.3, 0.1, // edge
-  0.98, 0, 0, 0.04, // line: no thinning and no loaded start (a line is cut into 21 px strokes, which would then show as beads)
-])
-export const ROLE_B = new Float32Array([
-  0.92, 0.2, 0, 0, // block
-  0.88, 0.3, 0, 0, // form
-  0.7, 0.35, 0, 0, // scumble
-  1.0, 0.1, 0, 0, // glaze
-  0.95, 0.15, 0, 0, // reflected
-  1.05, 0, 0, 0, // dab
-  0.95, 0.15, 0, 0, // edge
-  1.06, 0, 1, 0, // line
-])
+// ROLE_A and ROLE_B (brush.ts) are what the batch does not carry; the shader reads them as uniforms.
+export { ROLE_A, ROLE_B }
 // Flat colours of the roles view (sRGB).
 export const ROLE_DEBUG_COLOURS = new Float32Array([
   0.78, 0.4, 0.3, // block
@@ -317,6 +294,8 @@ export interface StrokePassInput {
   targets: AccumTargets
   paper: PaperGpu
   cssSize: readonly [number, number]
+  // Backing px per CSS px: the depth test's reach is in CSS px and the scene's depth in backing px.
+  pixelRatio: number
   debugRoles: boolean
   // Set for a re-projected frame; left out for a frame made for its own view.
   depthTest?: StrokeDepthTest | null
@@ -449,6 +428,7 @@ export class StrokeRenderer {
       gl.uniform2f(stroke.uniform('u_cssSize'), input.cssSize[0], input.cssSize[1])
       gl.uniform2i(stroke.uniform('u_paperSize'), paper.size, paper.size)
       gl.uniform2f(stroke.uniform('u_resolution'), targets.width, targets.height)
+      gl.uniform1f(stroke.uniform('u_pixelRatio'), input.pixelRatio)
       gl.uniform1f(stroke.uniform('u_heightScale'), targets.heightScale)
       gl.uniform4fv(stroke.uniform('u_roleA'), ROLE_A)
       gl.uniform4fv(stroke.uniform('u_roleB'), ROLE_B)

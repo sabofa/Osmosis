@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../params'
 import { PATH_POINTS, ROLES, type GBuffer, type PaintView } from '../types'
 import { labToLch, lchToLab } from './colour'
-import { contourRuns, edgeStrokes, segmentRun } from './contours'
+import { contourRuns, DECAL_SLOPE, edgeStrokes, segmentRun } from './contours'
 import type { EdgeRun } from './edges'
 import { buildContext } from './index'
 import { buildParticles } from './particles'
@@ -280,6 +280,77 @@ describe('edge strokes (spec §3.7 role 7)', () => {
     expect(strokes(3, resolvePaintParams({ environment: { occlusion: 0 }, detect: { edgeMinContrast: 0.5 } }), 0.6).length).toBe(1)
     // the role's density thins them, by a seeded draw
     expect(strokes(3, resolvePaintParams({ environment: { occlusion: 0 }, roles: { edge: { density: 0 } } })).length).toBe(0)
+  })
+
+  // The world points of an edge's path are what the camera's movement re-projects: each at the depth of the surface under
+  // IT (the nearest of its own 3 x 3 G-buffer pixels), so the decal follows the relief it was traced on. One depth for
+  // the whole path (the nearest of all) lifted every point on a farther part of the surface off it, and the re-projected
+  // frame then hid or clipped those edges the moment the camera moved.
+  describe('the world path of an edge stroke', () => {
+    const viewDepth = (w: Float32Array, q: number) => (w[3 * q] - view.eye[0]) * view.viewDir[0] + (w[3 * q + 1] - view.eye[1]) * view.viewDir[1] + (w[3 * q + 2] - view.eye[2]) * view.viewDir[2]
+    // the same face, its depth growing down the screen by 0.01 a CSS px (a surface tilted away at the bottom)
+    const tilted = (from = 60) => makeGBuffer(view, 2, (x, y) => (x < 80 || x >= 320 || y < from || y >= 240 ? null : { depth: 20 + 0.01 * y, normal: toWorld([-0.5, 0, 0.866]), value: 0, mark: 0 }))
+    const draft = (g: GBuffer) => {
+      const ctx = contextOf(scene, view, g, noOcclusion)
+      edgeStrokes(ctx, [run(3, 0.6)])
+      return ctx.drafts[0]
+    }
+
+    it('puts each point at the nearest depth of its own 3 x 3 G-buffer pixels: here the row above it, a hand-computed 0.01 x 2 CSS px nearer than its own', () => {
+      const g = tilted()
+      const d = draft(g)
+      expect(d.world).toBeDefined()
+      const seen: number[] = []
+      for (let q = 0; q < PATH_POINTS; q++) {
+        const gy = Math.floor(d.path[2 * q + 1] / 2)
+        // the pixel row gy - 1 is the nearest of rows gy - 1 .. gy + 1; its centre is at CSS y (gy - 1 + 0.5) x 2
+        const expected = 20 + 0.01 * ((gy - 1 + 0.5) * 2)
+        expect(viewDepth(d.world!, q), `point ${q}`).toBeCloseTo(expected, 3)
+        seen.push(viewDepth(d.world!, q))
+      }
+      // the path runs 78 px down the surface: a decal of one depth would have all eight the same
+      expect(seen[PATH_POINTS - 1] - seen[0]).toBeGreaterThan(0.5)
+      for (let q = 1; q < PATH_POINTS; q++) expect(seen[q]).toBeGreaterThan(seen[q - 1])
+    })
+
+    it('does not follow an occlusion boundary: across a jump of 5 in depth the decal is anchored to the nearer side and may change by DECAL_SLOPE a step', () => {
+      // a face at depth 20 down to CSS y 120, and the surface behind it at 25 from there (a pull from a figure into the table)
+      const jump = makeGBuffer(view, 2, (x, y) => (x < 80 || x >= 320 || y < 60 || y >= 240 ? null : { depth: y < 120 ? 20 : 25, normal: toWorld([-0.5, 0, 0.866]), value: 0, mark: 0 }))
+      const d = draft(jump)
+      const depths = Array.from({ length: PATH_POINTS }, (_, q) => viewDepth(d.world!, q))
+      expect(DECAL_SLOPE).toBe(2)
+      // the path is 78 px long in 7 steps; the view is orthographic at 100 px a unit: a step of 11.14 px is 0.1114 of a unit,
+      // so the depth may change by 2 x 0.1114 = 0.2229 a step. Points 0 .. 3 lie on the face (CSS y 80 .. 113), the rest in front of the jump.
+      const step = (DECAL_SLOPE * (78 / 7)) / 100
+      for (let q = 0; q < 4; q++) expect(depths[q], `point ${q}`).toBeCloseTo(20, 3)
+      for (let q = 4; q < PATH_POINTS; q++) expect(depths[q], `point ${q}`).toBeCloseTo(20 + (q - 3) * step, 3)
+      // and never the 5 the far surface is at
+      expect(Math.max(...depths)).toBeLessThan(21)
+    })
+
+    it('gives a point with no surface of its own within a pixel the nearest depth of the path, and a path with none the mean depth of what is drawn', () => {
+      // nothing is drawn above CSS y 120: the first points of the path (CSS y 80 ...) have no surface within a pixel
+      const d = draft(tilted(120))
+      const own: number[] = []
+      for (let q = 0; q < PATH_POINTS; q++) own.push(viewDepth(d.world!, q))
+      const nearest = Math.min(...own)
+      // the path's points are at CSS y 80 + 78 q / 7: the first with a surface within a pixel is q = 4 (y 124.6, G row 62, so
+      // its rows 61 .. 63), whose nearest row is 61: CSS y 123, depth 21.23
+      expect(nearest).toBeCloseTo(20 + 0.01 * 123, 3)
+      // the points before it (q 0 .. 3, CSS y under 116) all take that
+      let before = 0
+      for (let q = 0; q < PATH_POINTS; q++) {
+        if (d.path[2 * q + 1] < 116) {
+          before++
+          expect(own[q], `point ${q}`).toBeCloseTo(nearest, 3)
+        }
+      }
+      expect(before).toBe(4)
+      // an edge with no surface anywhere near it: the mean depth of what is drawn (a face far to the right of the edge)
+      const far = makeGBuffer(view, 2, (x, y) => (x < 300 || x >= 320 || y < 60 || y >= 240 ? null : { depth: 25, normal: toWorld([-0.5, 0, 0.866]), value: 0, mark: 0 }))
+      const lost = draft(far)
+      for (let q = 0; q < PATH_POINTS; q++) expect(viewDepth(lost.world!, q), `point ${q}`).toBeCloseTo(25, 3)
+    })
   })
 
   it('takes a silhouette’s outer colour from the canvas, and an internal edge’s from the plane across', () => {
