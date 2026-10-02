@@ -1,0 +1,316 @@
+// The painter's parameters (spec 2026-10-02-painted-figures-design.md, §3).
+// Every number the paint model and the paint renderer read lives here, with
+// the defaults Ben approved in the mockup rounds. The Paint Lab builds its
+// sliders from PARAM_SCHEMA; "Save as defaults" writes the tuned values to
+// tuning.json, which M2 reads as the shipping defaults.
+
+export interface PaintParams {
+  seed: number
+  light: {
+    // Key light relative to the camera: azimuth (deg, + = to the viewer's
+    // left) and elevation (deg, + = above) of the light direction.
+    azimuth: number
+    elevation: number
+    intensity: number
+    ambient: number
+    // Sky term on up-facing normals, bounce term on down-facing normals.
+    sky: number
+    bounce: number
+    // Shadow-map cast and self shadow on (1) or off (0).
+    shadows: number
+  }
+  value: {
+    // Zone boundaries over the raw value u in 0..1 (§3.3).
+    halfLo: number
+    halfHi: number
+    lightLo: number
+    lightHi: number
+    soft: number
+    corePlateau: number
+    reflectedLo: number
+    reflectedHi: number
+    castPlateau: number
+    deviation: number
+  }
+  curve: {
+    lSlope: number
+    lPivot: number
+    cBase: number
+    cPeak: number
+    cCentre: number
+    cWidth: number
+    warmHue: number
+    coolHue: number
+    kWarm: number
+    kCool: number
+    accentHue: number
+    accentMax: number
+    planeStepA: number
+    planeStepB: number
+    tintWarm: number
+    tintCool: number
+    skyTint: number
+    skyHue: number
+    bounceTint: number
+    bounceHue: number
+    reflectedBounceMix: number
+    devL: number
+    devC: number
+    devH: number
+    // Colormapped surfaces keep this fraction of the hue rotation and tints.
+    colormapHue: number
+  }
+  mix: {
+    strength: number
+    hueMin: number
+    hueMax: number
+    chromaMin: number
+    chromaMax: number
+    valueHold: number
+    valueStepFraction: number
+    valueStep: number
+    greyChroma: number
+    greyVecMin: number
+    greyVecMax: number
+    flipHue: number
+    flipChroma: number
+    drift: number
+    loadMin: number
+    loadMax: number
+    loadBreakPx: number
+    loadCell: number
+    colormapScale: number
+    roleBlock: number
+    roleForm: number
+    roleScumble: number
+    roleGlaze: number
+    roleLine: number
+    roleEdge: number
+    roleDab: number
+  }
+  edges: {
+    // Weights per transition kind (§3.6): internal, silhouette, shadow.
+    wContrast: [number, number, number]
+    wCurvature: [number, number, number]
+    wFocal: [number, number, number]
+    wLight: [number, number, number]
+    wDepth: [number, number, number]
+    wShadowDist: number
+    noise: number
+    lostBelow: number
+    softBelow: number
+    firmBelow: number
+    stopAt: number
+    bleedAt: number
+    planeCellDeg: number
+    planeMinPx: number
+    planeGradient: number
+  }
+  // Per-role stroke shape (§3.7). Sizes in CSS px at the default framing.
+  roles: Record<
+    'block' | 'form' | 'scumble' | 'glaze' | 'reflected' | 'dab' | 'edge' | 'line',
+    { density: number; width: number; length: number; curvature: number; load: number; impasto: number; bristles: number; bristleVar: number; dry: number; wet: number }
+  >
+  particles: {
+    maxPerUnit2: number
+    targetPer10kPx: number
+    fadeLo: number
+    fadeHi: number
+    dragDensity: number
+  }
+  impasto: {
+    strength: number
+    lightAzimuth: number
+    lightElevation: number
+  }
+  canvas: {
+    texture: number
+    weave: 'duck' | 'linen'
+    // OKLab of the canvas tone (the theme base by default).
+    tone: [number, number, number]
+  }
+}
+
+const role = (
+  density: number, width: number, length: number, curvature: number, load: number,
+  impasto: number, bristles: number, bristleVar: number, dry: number, wet: number,
+) => ({ density, width, length, curvature, load, impasto, bristles, bristleVar, dry, wet })
+
+export const DEFAULT_PAINT_PARAMS: PaintParams = {
+  seed: 1,
+  light: { azimuth: 35, elevation: 40, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
+  value: {
+    halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, soft: 0.07,
+    corePlateau: 0.24, reflectedLo: 0.34, reflectedHi: 0.48, castPlateau: 0.32, deviation: 0.018,
+  },
+  curve: {
+    lSlope: 0.8, lPivot: 0.62, cBase: 0.42, cPeak: 0.88, cCentre: 0.5, cWidth: 0.25,
+    warmHue: 75, coolHue: 280, kWarm: 0.4, kCool: 0.46, accentHue: 95, accentMax: 18,
+    planeStepA: 10, planeStepB: 6, tintWarm: 0.018, tintCool: 0.022,
+    skyTint: 0.03, skyHue: 250, bounceTint: 0.034, bounceHue: 68, reflectedBounceMix: 0.55,
+    devL: 0.01, devC: 0.06, devH: 2.2, colormapHue: 1 / 3,
+  },
+  mix: {
+    strength: 1, hueMin: 12, hueMax: 25, chromaMin: 0.7, chromaMax: 1.35, valueHold: 0.012,
+    valueStepFraction: 0.25, valueStep: 0.03, greyChroma: 0.05, greyVecMin: 0.012, greyVecMax: 0.026,
+    flipHue: 0.8, flipChroma: 0.75, drift: 0.45, loadMin: 3, loadMax: 8, loadBreakPx: 120, loadCell: 0.5,
+    colormapScale: 1 / 3,
+    roleBlock: 1, roleForm: 0.7, roleScumble: 0.85, roleGlaze: 0.6, roleLine: 0.75, roleEdge: 0.5, roleDab: 0.4,
+  },
+  edges: {
+    wContrast: [0.32, 0.52, 0.36],
+    wCurvature: [0.22, 0.08, 0.08],
+    wFocal: [0.26, 0.14, 0.06],
+    wLight: [0.1, 0.08, 0.08],
+    wDepth: [0.1, 0.18, 0.12],
+    wShadowDist: 0.3,
+    noise: 0.12, lostBelow: 0.24, softBelow: 0.46, firmBelow: 0.68,
+    stopAt: 0.46, bleedAt: 0.24, planeCellDeg: 26, planeMinPx: 70, planeGradient: 0.45,
+  },
+  roles: {
+    block: role(1, 22, 46, 0.15, 0.9, 1, 9, 0.35, 0.25, 0.15),
+    form: role(1, 12, 40, 0.5, 0.8, 0.9, 7, 0.35, 0.3, 0.2),
+    scumble: role(0.8, 9, 22, 0.3, 0.55, 0.6, 6, 0.5, 0.6, 0.35),
+    glaze: role(0.7, 26, 50, 0.15, 0.3, 0.1, 10, 0.25, 0.2, 0.4),
+    reflected: role(0.6, 10, 24, 0.3, 0.5, 0.5, 6, 0.35, 0.35, 0.3),
+    dab: role(0.15, 7, 9, 0.1, 1.2, 1.6, 5, 0.3, 0.1, 0),
+    edge: role(1, 4, 30, 0.2, 0.9, 0.8, 4, 0.25, 0.2, 0.2),
+    line: role(1, 3, 36, 0, 1, 0.7, 4, 0.2, 0.1, 0),
+  },
+  particles: { maxPerUnit2: 900, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1 },
+  impasto: { strength: 1, lightAzimuth: 135, lightElevation: 23 },
+  canvas: { texture: 1, weave: 'duck', tone: [0.93, 0.004, 0.022] },
+}
+
+// One slider in the Paint Lab. `path` is a dotted path into PaintParams; an
+// index suffix addresses a tuple entry ("edges.wContrast.1").
+export interface ParamSpec {
+  path: string
+  label: string
+  group: string
+  min: number
+  max: number
+  step: number
+}
+
+const ROLE_KEYS = ['block', 'form', 'scumble', 'glaze', 'reflected', 'dab', 'edge', 'line'] as const
+const ROLE_FIELDS: [keyof PaintParams['roles']['block'], number, number, number][] = [
+  ['density', 0, 2, 0.01], ['width', 1, 60, 0.5], ['length', 2, 120, 1], ['curvature', 0, 1, 0.01],
+  ['load', 0, 2, 0.01], ['impasto', 0, 3, 0.01], ['bristles', 1, 24, 1], ['bristleVar', 0, 1, 0.01],
+  ['dry', 0, 1, 0.01], ['wet', 0, 1, 0.01],
+]
+const KINDS = ['internal', 'silhouette', 'shadow']
+
+export const PARAM_SCHEMA: ParamSpec[] = [
+  { path: 'seed', label: 'Seed', group: 'General', min: 1, max: 999, step: 1 },
+  { path: 'light.azimuth', label: 'Azimuth (° vs view)', group: 'Light', min: -180, max: 180, step: 1 },
+  { path: 'light.elevation', label: 'Elevation (°)', group: 'Light', min: -10, max: 90, step: 1 },
+  { path: 'light.intensity', label: 'Intensity', group: 'Light', min: 0, max: 2, step: 0.01 },
+  { path: 'light.ambient', label: 'Ambient', group: 'Light', min: 0, max: 1, step: 0.01 },
+  { path: 'light.sky', label: 'Sky', group: 'Light', min: 0, max: 1, step: 0.01 },
+  { path: 'light.bounce', label: 'Bounce', group: 'Light', min: 0, max: 1, step: 0.01 },
+  { path: 'light.shadows', label: 'Shadows', group: 'Light', min: 0, max: 1, step: 1 },
+  ...(
+    [
+      ['halfLo', 'Half-tone from', 0, 1], ['halfHi', 'Half-tone to', 0, 1], ['lightLo', 'Light from', 0, 1],
+      ['lightHi', 'Light to', 0, 1], ['soft', 'Zone softness', 0, 0.3], ['corePlateau', 'Core plateau', 0, 1],
+      ['reflectedLo', 'Reflected from', 0, 1], ['reflectedHi', 'Reflected to', 0, 1],
+      ['castPlateau', 'Cast plateau', 0, 1], ['deviation', 'Deviation', 0, 0.1],
+    ] as const
+  ).map(([k, label, min, max]) => ({ path: `value.${k}`, label, group: 'Value plan', min, max, step: 0.001 })),
+  ...(
+    [
+      ['lSlope', 'L slope', 0, 2, 0.01], ['lPivot', 'L pivot', 0, 1, 0.01], ['cBase', 'C base', 0, 2, 0.01],
+      ['cPeak', 'C peak', 0, 2, 0.01], ['cCentre', 'C centre', 0, 1, 0.01], ['cWidth', 'C width', 0.02, 1, 0.01],
+      ['warmHue', 'Warm hue', 0, 360, 1], ['coolHue', 'Cool hue', 0, 360, 1], ['kWarm', 'Warm pull', 0, 1, 0.01],
+      ['kCool', 'Cool pull', 0, 1, 0.01], ['accentHue', 'Accent hue', 0, 360, 1], ['accentMax', 'Accent max (°)', 0, 60, 0.5],
+      ['planeStepA', 'Plane step A (°)', 0, 40, 0.5], ['planeStepB', 'Plane step B (°)', 0, 40, 0.5],
+      ['tintWarm', 'Warm tint', 0, 0.1, 0.001], ['tintCool', 'Cool tint', 0, 0.1, 0.001],
+      ['skyTint', 'Sky tint', 0, 0.1, 0.001], ['skyHue', 'Sky hue', 0, 360, 1],
+      ['bounceTint', 'Bounce tint', 0, 0.1, 0.001], ['bounceHue', 'Bounce hue', 0, 360, 1],
+      ['reflectedBounceMix', 'Reflected bounce mix', 0, 1, 0.01], ['devL', 'Deviation L', 0, 0.05, 0.001],
+      ['devC', 'Deviation C', 0, 0.3, 0.005], ['devH', 'Deviation H (°)', 0, 10, 0.1],
+      ['colormapHue', 'Colormap hue share', 0, 1, 0.01],
+    ] as const
+  ).map(([k, label, min, max, step]) => ({ path: `curve.${k}`, label, group: 'Lighting curve', min, max, step })),
+  ...(
+    [
+      ['strength', 'Strength', 0, 2, 0.01], ['hueMin', 'Hue min (°)', 0, 60, 0.5], ['hueMax', 'Hue max (°)', 0, 60, 0.5],
+      ['chromaMin', 'Chroma min ×', 0, 2, 0.01], ['chromaMax', 'Chroma max ×', 0, 3, 0.01],
+      ['valueHold', 'Value hold ±', 0, 0.1, 0.001], ['valueStepFraction', 'Value-step loads', 0, 1, 0.01],
+      ['valueStep', 'Value step ±', 0, 0.15, 0.001], ['greyChroma', 'Grey below C', 0, 0.2, 0.005],
+      ['greyVecMin', 'Grey vector min', 0, 0.08, 0.001], ['greyVecMax', 'Grey vector max', 0, 0.08, 0.001],
+      ['flipHue', 'Flip hue p', 0, 1, 0.01], ['flipChroma', 'Flip chroma p', 0, 1, 0.01], ['drift', 'Drift to', 0, 1, 0.01],
+      ['loadMin', 'Load min strokes', 1, 20, 1], ['loadMax', 'Load max strokes', 1, 30, 1],
+      ['loadBreakPx', 'Load break (px)', 10, 400, 1], ['loadCell', 'Load cell (world)', 0.05, 3, 0.01],
+      ['colormapScale', 'Colormap share', 0, 1, 0.01], ['roleBlock', 'Block ×', 0, 2, 0.01], ['roleForm', 'Form ×', 0, 2, 0.01],
+      ['roleScumble', 'Scumble ×', 0, 2, 0.01], ['roleGlaze', 'Glaze ×', 0, 2, 0.01], ['roleLine', 'Line ×', 0, 2, 0.01],
+      ['roleEdge', 'Edge ×', 0, 2, 0.01], ['roleDab', 'Dab ×', 0, 2, 0.01],
+    ] as const
+  ).map(([k, label, min, max, step]) => ({ path: `mix.${k}`, label, group: 'Brush-load mix', min, max, step })),
+  ...(['wContrast', 'wCurvature', 'wFocal', 'wLight', 'wDepth'] as const).flatMap((w) =>
+    KINDS.map((kind, i) => ({ path: `edges.${w}.${i}`, label: `${w.slice(1)} (${kind})`, group: 'Edges', min: 0, max: 1, step: 0.01 })),
+  ),
+  ...(
+    [
+      ['wShadowDist', 'shadow distance (shadow)', 0, 1, 0.01], ['noise', 'Noise', 0, 0.5, 0.01],
+      ['lostBelow', 'Lost below', 0, 1, 0.01], ['softBelow', 'Soft below', 0, 1, 0.01], ['firmBelow', 'Firm below', 0, 1, 0.01],
+      ['stopAt', 'Stroke stops at', 0, 1, 0.01], ['bleedAt', 'Stroke bleeds from', 0, 1, 0.01],
+      ['planeCellDeg', 'Plane cell (°)', 5, 90, 1], ['planeMinPx', 'Plane min (px)', 0, 400, 1],
+      ['planeGradient', 'Plane gradient share', 0, 1, 0.01],
+    ] as const
+  ).map(([k, label, min, max, step]) => ({ path: `edges.${k}`, label, group: 'Edges', min, max, step })),
+  ...ROLE_KEYS.flatMap((r) =>
+    ROLE_FIELDS.map(([f, min, max, step]) => ({ path: `roles.${r}.${f}`, label: f, group: `Stroke: ${r}`, min, max, step })),
+  ),
+  { path: 'particles.maxPerUnit2', label: 'Max per world unit²', group: 'Particles', min: 50, max: 4000, step: 10 },
+  { path: 'particles.targetPer10kPx', label: 'Target per 10k px²', group: 'Particles', min: 10, max: 300, step: 1 },
+  { path: 'particles.fadeLo', label: 'Fade |n·v| from', group: 'Particles', min: 0, max: 1, step: 0.01 },
+  { path: 'particles.fadeHi', label: 'Fade |n·v| to', group: 'Particles', min: 0, max: 1, step: 0.01 },
+  { path: 'particles.dragDensity', label: 'Density while dragging', group: 'Particles', min: 0.1, max: 1, step: 0.01 },
+  { path: 'impasto.strength', label: 'Impasto', group: 'Impasto & canvas', min: 0, max: 3, step: 0.01 },
+  { path: 'impasto.lightAzimuth', label: 'Relief light azimuth', group: 'Impasto & canvas', min: 0, max: 360, step: 1 },
+  { path: 'impasto.lightElevation', label: 'Relief light elevation', group: 'Impasto & canvas', min: 1, max: 89, step: 1 },
+  { path: 'canvas.texture', label: 'Canvas texture', group: 'Impasto & canvas', min: 0, max: 2, step: 0.01 },
+  { path: 'canvas.tone.0', label: 'Canvas L', group: 'Impasto & canvas', min: 0.1, max: 1, step: 0.005 },
+  { path: 'canvas.tone.1', label: 'Canvas a', group: 'Impasto & canvas', min: -0.1, max: 0.1, step: 0.001 },
+  { path: 'canvas.tone.2', label: 'Canvas b', group: 'Impasto & canvas', min: -0.1, max: 0.1, step: 0.001 },
+]
+
+// A partial override (tuning.json, a preset, @style-* later) applied over
+// the defaults, deep, tuples by index. Unknown keys are ignored.
+export type PaintParamsOverride = { [K in keyof PaintParams]?: unknown }
+
+export function resolvePaintParams(...layers: (PaintParamsOverride | null | undefined)[]): PaintParams {
+  const out = structuredClone(DEFAULT_PAINT_PARAMS) as unknown as Record<string, unknown>
+  const merge = (target: Record<string, unknown>, src: Record<string, unknown>) => {
+    for (const [k, v] of Object.entries(src)) {
+      if (!(k in target)) continue
+      const t = target[k]
+      if (Array.isArray(t) && Array.isArray(v)) {
+        v.forEach((x, i) => { if (typeof x === typeof t[i]) t[i] = x })
+      } else if (t !== null && typeof t === 'object' && v !== null && typeof v === 'object') {
+        merge(t as Record<string, unknown>, v as Record<string, unknown>)
+      } else if (typeof v === typeof t) {
+        target[k] = v
+      }
+    }
+  }
+  for (const layer of layers) if (layer) merge(out, layer as Record<string, unknown>)
+  return out as unknown as PaintParams
+}
+
+export function getParam(params: PaintParams, path: string): number {
+  let cur: unknown = params
+  for (const key of path.split('.')) cur = (cur as Record<string, unknown>)[key]
+  return cur as number
+}
+
+export function setParam(params: PaintParams, path: string, value: number): PaintParams {
+  const next = structuredClone(params)
+  const keys = path.split('.')
+  let cur = next as unknown as Record<string, unknown>
+  for (const key of keys.slice(0, -1)) cur = cur[key] as Record<string, unknown>
+  cur[keys[keys.length - 1]] = value
+  return next
+}
