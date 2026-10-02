@@ -5,16 +5,17 @@
 import { parseExprString } from './parseExpr'
 import type { Expr } from './types'
 
-// Splits a comma-separated list at paren/bracket depth 0 (so "cos(t)*3, sin(t)*2"
-// splits into two parts, not three).
+// Splits a comma-separated list at paren/bracket/brace depth 0 (so "cos(t)*3,
+// sin(t)*2" splits into two parts, not three, and a piecewise {x < 0: -t, t}
+// stays whole).
 export function splitTopLevelComma(s: string): string[] {
   const parts: string[] = []
   let depth = 0
   let start = 0
   for (let i = 0; i < s.length; i++) {
     const c = s[i]
-    if (c === '(' || c === '[') depth++
-    else if (c === ')' || c === ']') depth--
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
     else if (c === ',' && depth === 0) {
       parts.push(s.slice(start, i))
       start = i + 1

@@ -927,12 +927,13 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 // z fields are optional on the 2D-shaped statements — present, a statement is
 // 3D; absent, it's plotted at z=0 in a 3D scene and ignored entirely in a 2D one.
 export type StatementShape =
-  | { kind: 'explicit'; independent: 'x' | 'y'; body: Expr; condition: Condition | null }
+  // where: an "if" condition in the calc P1 language (reserved calls, math/reserved.ts) — set only when the clause is new syntax; an old-shape clause sets condition alone.
+  | { kind: 'explicit'; independent: 'x' | 'y'; body: Expr; condition: Condition | null; where?: Expr }
   | { kind: 'surface'; body: Expr }
   | { kind: 'polar'; body: Expr; from: Expr; to: Expr }
-  | { kind: 'implicit'; left: Expr; right: Expr }
-  | { kind: 'region'; left: Expr; op: '<' | '<=' | '>' | '>='; right: Expr }
-  | { kind: 'regionChain'; low: Expr; lowOp: '<' | '<='; mid: Expr; highOp: '<' | '<='; high: Expr }
+  | { kind: 'implicit'; left: Expr; right: Expr; where?: Expr }
+  | { kind: 'region'; left: Expr; op: '<' | '<=' | '>' | '>='; right: Expr; where?: Expr }
+  | { kind: 'regionChain'; low: Expr; lowOp: '<' | '<='; mid: Expr; highOp: '<' | '<='; high: Expr; where?: Expr }
   | { kind: 'field'; body: Expr }
   | { kind: 'scatter'; points: [Expr, Expr][] }
   | { kind: 'point'; label: string | null; x: Expr; y: Expr; z: Expr | null }

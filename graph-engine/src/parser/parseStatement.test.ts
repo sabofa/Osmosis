@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { num, variable } from '../math/expr'
-import { compare, factorialOf, piecewise } from '../math/reserved'
+import { and, compare, factorialOf, or, piecewise } from '../math/reserved'
 import { parseExprString } from './parseExpr'
 import { parseStatement } from './parseStatement'
+import type { Expr } from './types'
 
 describe('parseStatement', () => {
   it('parses an explicit function of x', () => {
@@ -38,17 +39,20 @@ describe('parseStatement', () => {
     expect(piecewise.kind).toBe('explicit')
   })
 
-  // Regression: 2026-08-21 MCP stress test v2 wrote "y > 0 if 0 <= x <= 3",
-  // mistakenly applying the y=/x= piecewise "if" clause to an inequality
-  // region (which doesn't support one). Previously this fell through to the
-  // expression tokenizer, which choked on the leftover "<=" inside the
-  // right-hand expression with an opaque "Unexpected character "<"" error —
-  // accurate but not actionable. Region statements now reject a trailing
-  // "if" explicitly, with a message naming the actual mistake and the fix.
-  it('rejects an "if" clause on an inequality region with an actionable error, not a raw tokenizer error', () => {
-    expect(() => parseStatement('y > 0 if 0 <= x <= 3')).toThrow(/inequality-region/i)
-    expect(() => parseStatement('y > 0 if 0 <= x <= 3')).toThrow(/y = x\^2 if 0 <= x <= 3/)
-    expect(() => parseStatement('y > 0 if 0 <= x <= 3')).not.toThrow(/Unexpected character/)
+  // History: 2026-08-21 MCP stress test v2 wrote "y > 0 if 0 <= x <= 3",
+  // applying an "if" clause to an inequality region, which then had no such
+  // clause and was refused with a message naming the mistake. Calc P1 made it
+  // valid: every plot form takes an "if" clause, so this line is a region that
+  // is shaded only where the condition holds.
+  it('reads an "if" clause on an inequality region as its where (calc P1 made it valid)', () => {
+    const s = parseStatement('y > 0 if 0 <= x <= 3')
+    expect(s).toMatchObject({
+      kind: 'region',
+      op: '>',
+      left: variable('y'),
+      right: num(0),
+      where: and(compare('<=', num(0), variable('x')), compare('<=', variable('x'), num(3))),
+    })
   })
 
   it('parses a polar curve with default and explicit ranges', () => {
@@ -1529,6 +1533,10 @@ describe('a bare "!=" is a condition, not an equation', () => {
     'given: angle between A-B and plane x + y != 1',
     'given: angle between A-B and plane P-Q-R = a != b',
     'given: distance from G to plane P-Q-R = x != 3',
+    // a given or find line has no "if" clause, so its word "if" opens nothing: the "!=" after it is still bare
+    'given: distance from G to plane P-Q-R = 3 if a != 0',
+    'find: distance from G to plane P-Q-R = 3 if a != 0',
+    'given: angle between A-B and plane P-Q-R = 30 if a != 0',
   ]
   for (const line of REFUSED) {
     it(`refuses ${line}`, () => {
@@ -1536,10 +1544,19 @@ describe('a bare "!=" is a condition, not an equation', () => {
     })
   }
 
+  it('a given or find plane measure keeps "if" as text where no "!=" is bare', () => {
+    expect(parseStatement('given: distance from G to plane P-Q-R = 3 if a > 0')).toMatchObject({
+      kind: 'given',
+      entry: { kind: 'measure', content: { kind: 'symbol', text: '3 if a > 0' } },
+    })
+    expect(parseStatement('find: distance from G to plane P-Q-R = 3 if a > 0')).toMatchObject({ kind: 'given', section: 'find' })
+  })
+
   it('leaves a "!=" inside an "if" clause to the clause', () => {
-    // the guard does not fire; whether the clause itself reads "!=" is the "if" grammar's affair
-    expect(() => parseStatement('y = x if x != 0')).not.toThrow(NOT_AN_EQUATION)
-    expect(() => parseStatement('y = x^2 if 0 != x and x < 3')).not.toThrow(NOT_AN_EQUATION)
+    // the guard does not fire, and the clause reads "!=" as the comparison (calc P1 statements, below)
+    expect(parseStatement('y = x if x != 0')).toMatchObject({ kind: 'explicit', condition: null, where: compare('!=', variable('x'), num(0)) })
+    expect(parseStatement('y = x^2 if 0 != x and x < 3')).toMatchObject({ kind: 'explicit', condition: null })
+    expect(parseStatement('x^2 + y^2 < 9 if x != 0')).toMatchObject({ kind: 'region', where: compare('!=', variable('x'), num(0)) })
   })
 
   it('accepts a "!=" inside braces, parentheses or brackets', () => {
@@ -1580,5 +1597,133 @@ describe('a bare "!=" is a condition, not an equation', () => {
     expect(factorialEquals).toEqual(piecewise([[compare('=', factorialOf(variable('n')), num(5)), num(1)]], num(0)))
     expect(notEqual).toEqual(piecewise([[compare('!=', variable('n'), num(5)), num(1)]], num(0)))
     expect(factorialEquals).not.toEqual(notEqual)
+  })
+})
+
+describe('calc P1 statements', () => {
+  const x = variable('x')
+  const y = variable('y')
+  const minus = (n: number): Expr => ({ kind: 'unary', op: '-', arg: num(n) })
+
+  it('an old-shape if clause produces exactly the old statement, with no where', () => {
+    const s = parseStatement('y = x^2 if x < 0')
+    expect(s).toMatchObject({ kind: 'explicit', condition: { kind: 'compare', op: '<' } })
+    expect('where' in s).toBe(false)
+  })
+
+  it('every old shape of an explicit clause stays the old object, key for key', () => {
+    expect(parseStatement('y = x^2 if x < 0')).toStrictEqual({
+      kind: 'explicit',
+      independent: 'x',
+      body: parseExprString('x^2'),
+      condition: { kind: 'compare', op: '<', value: num(0) },
+      color: null,
+      statementName: null,
+    })
+    expect(parseStatement('y = x if -1 <= x < 1')).toStrictEqual({
+      kind: 'explicit',
+      independent: 'x',
+      body: x,
+      condition: { kind: 'range', lowOp: '<=', low: minus(1), highOp: '<', high: num(1) },
+      color: null,
+      statementName: null,
+    })
+    expect(parseStatement('x = y^2 if y >= 2')).toStrictEqual({
+      kind: 'explicit',
+      independent: 'y',
+      body: parseExprString('y^2'),
+      condition: { kind: 'compare', op: '>=', value: num(2) },
+      color: null,
+      statementName: null,
+    })
+    expect(parseStatement('y = x')).toStrictEqual({ kind: 'explicit', independent: 'x', body: x, condition: null, color: null, statementName: null })
+  })
+
+  it('a new-shape clause sets where and leaves condition null', () => {
+    const s = parseStatement('y = x^2 if x < -1 or x > 1')
+    expect(s).toMatchObject({ kind: 'explicit', condition: null, where: or(compare('<', x, minus(1)), compare('>', x, num(1))) })
+  })
+
+  it('a clause the old shape cannot express is a where: !=, the variable on the right, a compound, another variable', () => {
+    expect(parseStatement('y = x^2 if x != 0')).toMatchObject({ kind: 'explicit', condition: null, where: compare('!=', x, num(0)) })
+    expect(parseStatement('y = x if 0 < x')).toMatchObject({ kind: 'explicit', condition: null, where: compare('<', num(0), x) })
+    expect(parseStatement('y = x if x > 0 and x < 3')).toMatchObject({ kind: 'explicit', condition: null, where: and(compare('>', x, num(0)), compare('<', x, num(3))) })
+    expect(parseStatement('x = y if y != 2')).toMatchObject({ kind: 'explicit', independent: 'y', condition: null, where: compare('!=', y, num(2)) })
+    expect(parseStatement('y = x if y > 0')).toMatchObject({ kind: 'explicit', independent: 'x', condition: null, where: compare('>', y, num(0)) })
+    // a clause that is not a condition at all is still refused
+    expect(() => parseStatement('y = x if x + 1')).toThrow(/comparison/)
+  })
+
+  it('if on implicit and region lines', () => {
+    expect(parseStatement('x^2 + y^2 = 4 if y > 0')).toMatchObject({ kind: 'implicit', where: compare('>', y, num(0)) })
+    expect(parseStatement('x^2 + y^2 < 9 if y > 0 and x > -1')).toMatchObject({
+      kind: 'region',
+      op: '<',
+      where: and(compare('>', y, num(0)), compare('>', x, minus(1))),
+    })
+    expect(parseStatement('1 < x^2 + y^2 < 4 if x > 0')).toMatchObject({ kind: 'regionChain', where: compare('>', x, num(0)) })
+  })
+
+  it('a line without an if clause carries no where key, on every plot form', () => {
+    for (const line of ['x^2 + y^2 = 4', 'x^2 + y^2 < 9', '1 < x^2 + y^2 < 4', 'y > x^2']) {
+      expect('where' in parseStatement(line)).toBe(false)
+    }
+  })
+
+  it('the if clause leaves the rest of the line as it would be without it', () => {
+    const region = parseStatement('x^2 + y^2 < 9')
+    const regionIf = parseStatement('x^2 + y^2 < 9 if y > 0')
+    if (region.kind !== 'region' || regionIf.kind !== 'region') throw new Error('unreachable')
+    expect(regionIf.left).toEqual(region.left)
+    expect(regionIf.right).toEqual(region.right)
+    const chain = parseStatement('4 > x^2 + y^2 > 1')
+    const chainIf = parseStatement('4 > x^2 + y^2 > 1 if y > 0')
+    if (chain.kind !== 'regionChain' || chainIf.kind !== 'regionChain') throw new Error('unreachable')
+    expect([chainIf.low, chainIf.lowOp, chainIf.mid, chainIf.highOp, chainIf.high]).toEqual([chain.low, chain.lowOp, chain.mid, chain.highOp, chain.high])
+  })
+
+  it('a comparator or "=" inside brackets is not the statement\'s relation', () => {
+    expect(parseStatement('y = {x < 0: -1, 1}')).toMatchObject({ kind: 'explicit', body: piecewise([[compare('<', x, num(0)), minus(1)]], num(1)) })
+    expect(parseStatement('y < sum(k = 1 to 3, x^k)')).toMatchObject({ kind: 'region', op: '<' })
+    expect(parseStatement('f(x) = {x < 0: x^2, x}')).toMatchObject({ kind: 'functionDef', name: 'f' })
+  })
+
+  it('a piecewise on either side of a region, and in a chain, is read as an expression', () => {
+    expect(parseStatement('y < {x < 0: -1, 1}')).toMatchObject({ kind: 'region', op: '<', right: piecewise([[compare('<', x, num(0)), minus(1)]], num(1)) })
+    expect(parseStatement('{x < 0: -1, 1} < y')).toMatchObject({ kind: 'region', op: '<', left: piecewise([[compare('<', x, num(0)), minus(1)]], num(1)), right: y })
+    expect(parseStatement('0 < y < {x < 0: 2, 3}')).toMatchObject({ kind: 'regionChain', mid: y, high: piecewise([[compare('<', x, num(0)), num(2)]], num(3)) })
+    expect(parseStatement('{x < 0: x, 0} = y')).toMatchObject({ kind: 'implicit', left: piecewise([[compare('<', x, num(0)), x]], num(0)), right: y })
+  })
+
+  it('a piecewise body keeps its if clause apart from its own braces', () => {
+    expect(parseStatement('y = {x < 0: -1, 1} if x != 3')).toMatchObject({
+      kind: 'explicit',
+      body: piecewise([[compare('<', x, num(0)), minus(1)]], num(1)),
+      condition: null,
+      where: compare('!=', x, num(3)),
+    })
+    expect(parseStatement('y < {x < 0: -1, 1} if x > 2')).toMatchObject({ kind: 'region', where: compare('>', x, num(2)) })
+  })
+
+  it('a stray closing bracket before the relation still reports the expression, not "Unrecognized statement"', () => {
+    expect(() => parseStatement('y) < 2')).toThrow()
+    expect(() => parseStatement('y) < 2')).not.toThrow(/Unrecognized statement/)
+    expect(() => parseStatement('y) = 2 if x > 0')).not.toThrow(/Unrecognized statement/)
+  })
+
+  it('the chain refusals still read as before', () => {
+    expect(() => parseStatement('1 < x < 2 < 3')).toThrow(/only two operators/)
+    expect(() => parseStatement('1 < x > 2')).toThrow(/same direction/)
+  })
+
+  it('a tuple with a piecewise component still splits at its top-level comma', () => {
+    expect(parseStatement('({t < 0: -t, t}, t) for t in [-1, 1]')).toMatchObject({ kind: 'parametric', param: 't' })
+  })
+
+  it('a piecewise inside a scatter point or a circle centre does not split it', () => {
+    const scatter = parseStatement('scatter: ({1 < 2: 3, 4}, 5), (6, 7)')
+    if (scatter.kind !== 'scatter') throw new Error('unreachable')
+    expect(scatter.points).toHaveLength(2)
+    expect(parseStatement('circle: ({1 < 2: 3, 4}, 0), 2')).toMatchObject({ kind: 'circle', radius: num(2) })
   })
 })

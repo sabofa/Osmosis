@@ -1,6 +1,6 @@
 import { isValidColor, normaliseColor } from './colors'
 import { parseForRange, parseTuple, splitTopLevelComma } from './grammarUtil'
-import { parseExprString } from './parseExpr'
+import { parseConditionString, parseExprString } from './parseExpr'
 import { parseSpaceKeyword } from '../space/grammar/keyword'
 import { parseSpaceUnkeyed } from '../space/grammar/unkeyed'
 import type {
@@ -45,36 +45,59 @@ function parseArrow(str: string): { x1: Expr; y1: Expr; z1: Expr | null; x2: Exp
   }
 }
 
-// Finds the earliest top-level comparator in a line, preferring the 2-char
-// form ("<=" over "<") when they start at the same position. Comparators
-// never appear inside our expression grammar otherwise, so a plain scan is safe.
+// Finds the earliest comparator at bracket depth 0, preferring "<=" over "<".
+// A comparator inside parentheses, brackets or braces — a piecewise
+// {x < 0: …} — belongs to an expression, not to the statement. (A stray
+// closing bracket does not take the depth below 0: the line stays scannable and
+// the expression parser reports the real mistake.)
 function findComparator(line: string): { op: '<' | '<=' | '>' | '>='; idx: number } | null {
-  const candidates: { op: '<' | '<=' | '>' | '>='; idx: number }[] = []
-  for (const op of ['<=', '>=', '<', '>'] as const) {
-    const idx = line.indexOf(op)
-    if (idx !== -1) candidates.push({ op, idx })
+  let depth = 0
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && (c === '<' || c === '>')) {
+      return { op: (line[i + 1] === '=' ? `${c}=` : c) as '<' | '<=' | '>' | '>=', idx: i }
+    }
   }
-  if (candidates.length === 0) return null
-  candidates.sort((a, b) => a.idx - b.idx || b.op.length - a.op.length)
-  return candidates[0]
+  return null
 }
 
 type Relation = { type: 'equals'; idx: number } | { type: 'comparator'; op: '<' | '<=' | '>' | '>='; idx: number }
 
-// Scans left to right for whichever comes first: a standalone "=" (an
-// assignment/equation) or a comparator ("<", "<=", ">", ">="). Used at the
-// top level of a statement, where it matters which kind of relation the line
-// actually is — see the call site for why this can't be two separate checks.
+// Scans left to right, at bracket depth 0, for whichever comes first: a
+// standalone "=" (an assignment/equation) or a comparator ("<", "<=", ">",
+// ">="). Used at the top level of a statement, where it matters which kind of
+// relation the line actually is — see the call site for why this can't be two
+// separate checks. A "=" inside brackets — sum(k = 0 to n, …) — is not the
+// statement's, and neither is the "=" of a "!=".
 function findTopLevelRelation(line: string): Relation | null {
+  let depth = 0
   for (let i = 0; i < line.length; i++) {
     const c = line[i]
-    if (c === '<' || c === '>') {
-      const twoChar = line[i + 1] === '='
-      return { type: 'comparator', op: (twoChar ? c + '=' : c) as '<' | '<=' | '>' | '>=', idx: i }
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0) {
+      if (c === '<' || c === '>') {
+        const twoChar = line[i + 1] === '='
+        return { type: 'comparator', op: (twoChar ? c + '=' : c) as '<' | '<=' | '>' | '>=', idx: i }
+      }
+      if (c === '=' && line[i - 1] !== '!') return { type: 'equals', idx: i }
     }
-    if (c === '=') return { type: 'equals', idx: i }
   }
   return null
+}
+
+// The index of " if " at bracket depth 0, or -1.
+function topLevelIf(text: string): number {
+  let depth = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && text.startsWith(' if ', i)) return i
+  }
+  return -1
 }
 
 // Parses an "if <condition>" clause's condition text, restricted to the
@@ -1583,28 +1606,22 @@ function parseStatementCore(rawLine: string): StatementShape {
   if (relation?.type === 'comparator') {
     const left = line.slice(0, relation.idx).trim()
     const right = line.slice(relation.idx + relation.op.length).trim()
-    // The "if <condition>" piecewise clause only exists on y=/x= explicit
-    // statements (see the "equals" branch below) — an inequality region has
-    // no such clause in its grammar. Without this check, a stray "if" here
-    // falls through into parseExprString(right), where the tokenizer chokes
-    // on the leftover comparator inside the condition text (e.g. the "<=" in
-    // "0 <= x <= 3") with an opaque "Unexpected character" error that gives
-    // no hint the real mistake was applying "if" to the wrong statement form.
-    if (/\bif\b/.test(right)) {
-      throw new Error(
-        `"if" clauses are only valid on explicit y=/x= function statements, not on inequality-region statements. ` +
-          `To shade over a bounded interval, restrict the function itself instead, e.g. "y = x^2 if 0 <= x <= 3".`
-      )
-    }
+    // An "if" clause restricts where the inequality is shaded (calc P1). It is
+    // split off first, so the comparators inside it ("0 <= x <= 3") are never
+    // mistaken for a chain of the region itself.
+    const ifAt = topLevelIf(right)
+    const where = ifAt === -1 ? undefined : parseConditionString(right.slice(ifAt + ' if '.length))
+    const core = ifAt === -1 ? right : right.slice(0, ifAt).trim()
+    const withWhere = where ? { where } : {}
 
-    // A second top-level comparator inside "right" means this is a chained
-    // comparison ("7 < x < 12"), not a single region — expressions never
-    // contain "<"/">" themselves, so any second comparator here is
-    // unambiguously a chain, not a false positive from the expression text.
-    const second = findComparator(right)
+    // A second comparator at bracket depth 0 inside "core" means this is a
+    // chained comparison ("7 < x < 12"), not a single region — a comparator
+    // inside brackets, a piecewise {x < 0: …}, belongs to an expression and is
+    // not seen here, so any second one is unambiguously a chain.
+    const second = findComparator(core)
     if (second) {
-      const mid = right.slice(0, second.idx).trim()
-      const tail = right.slice(second.idx + second.op.length).trim()
+      const mid = core.slice(0, second.idx).trim()
+      const tail = core.slice(second.idx + second.op.length).trim()
       if (findComparator(tail)) {
         throw new Error(
           `A chained comparison supports only two operators (e.g. "7 < x < 12"), but found a third comparator in "${line.trim()}".`
@@ -1632,10 +1649,11 @@ function parseStatementCore(rawLine: string): StatementShape {
         mid: parseExprString(mid),
         highOp: highOp as '<' | '<=',
         high: parseExprString(high),
+        ...withWhere,
       }
     }
 
-    return { kind: 'region', left: parseExprString(left), op: relation.op, right: parseExprString(right) }
+    return { kind: 'region', left: parseExprString(left), op: relation.op, right: parseExprString(core), ...withWhere }
   }
 
   if (relation?.type === 'equals') {
@@ -1645,11 +1663,18 @@ function parseStatementCore(rawLine: string): StatementShape {
 
     if (lhs === 'y' || lhs === 'x') {
       const independent = lhs === 'y' ? 'x' : 'y'
-      const ifIdx = rhs.indexOf(' if ')
+      const ifIdx = topLevelIf(rhs)
       if (ifIdx === -1) return { kind: 'explicit', independent, body: parseExprString(rhs), condition: null }
       const body = parseExprString(rhs.slice(0, ifIdx).trim())
-      const condition = parseCondition(rhs.slice(ifIdx + ' if '.length).trim(), independent)
-      return { kind: 'explicit', independent, body, condition }
+      const clause = rhs.slice(ifIdx + ' if '.length).trim()
+      // The old shape (x < c, or lo <= x < hi) stays exactly as it was, so
+      // every existing parse result is unchanged; anything else is the calc
+      // P1 condition language.
+      try {
+        return { kind: 'explicit', independent, body, condition: parseCondition(clause, independent) }
+      } catch {
+        return { kind: 'explicit', independent, body, condition: null, where: parseConditionString(clause) }
+      }
     }
     if (lhs === 'z') return { kind: 'surface', body: parseExprString(rhs) }
 
@@ -1689,7 +1714,16 @@ function parseStatementCore(rawLine: string): StatementShape {
       return { kind: 'constantDef', name: lhs, value: parseExprString(rhs) }
     }
 
-    // Implicit curve: "x^2/9 + y^2/4 = 1"
+    // Implicit curve: "x^2/9 + y^2/4 = 1", optionally "… if y > 0"
+    const ifAt = topLevelIf(rhs)
+    if (ifAt !== -1) {
+      return {
+        kind: 'implicit',
+        left: parseExprString(lhs),
+        right: parseExprString(rhs.slice(0, ifAt).trim()),
+        where: parseConditionString(rhs.slice(ifAt + ' if '.length)),
+      }
+    }
     return { kind: 'implicit', left: parseExprString(lhs), right: parseExprString(rhs) }
   }
 
@@ -2096,8 +2130,10 @@ function isPlaneMeasure(body: string): boolean {
 // Throws when `line` has a "!=" outside every bracket and before any "if"
 // clause (what follows an "if" clause is a condition, where "!=" is the
 // comparison). A word "if" opens a clause only after the statement's first "="
-// or comparator, so "if != 2" is not one. It scans on its own, not through the
-// splitters the grammars use.
+// or comparator, so "if != 2" is not one. A "given:" or "find:" line (reaching
+// the scan only as a plane measure) has no "if" clause at all: there the word
+// opens nothing, and every "!=" outside a bracket is bare. It scans on its own,
+// not through the splitters the grammars use.
 function refuseBareNotEqual(line: string): void {
   const text = line.trim()
   if (FREE_TEXT_STATEMENT.test(text)) return
@@ -2115,7 +2151,7 @@ function refuseBareNotEqual(line: string): void {
     else if (depth === 0) {
       if (c === '!' && scanned[i + 1] === '=') throw new Error(NOT_EQUAL_IS_A_CONDITION)
       if (c === '=' || c === '<' || c === '>') relation = true
-      else if (relation && c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
+      else if (!given && relation && c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
     }
   }
 }
