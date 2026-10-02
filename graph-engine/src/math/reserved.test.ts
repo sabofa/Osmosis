@@ -90,8 +90,8 @@ describe('comparisons and logic', () => {
     expect(bothRefuse(call('__piecewise', x))).toMatch(/needs at least one condition/)
   })
 
-  it('a reserved name the kernel has no value for yet is refused', () => {
-    expect(bothRefuse(call('__sum', variable('k'), num(1), num(3), variable('k')))).toBe('"__sum" is reserved and not supported here')
+  it('a binder with the wrong number of arguments is refused', () => {
+    expect(bothRefuse(call('__sum', variable('k'), num(1), num(3)))).toBe('"__sum" takes 4 arguments, got 3')
   })
 })
 

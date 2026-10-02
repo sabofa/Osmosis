@@ -42,13 +42,19 @@
 // written out (math/prime.ts) and differentiated further; __factorial refuses
 // like gamma. A name called with one argument, x(x + 1), is a product when the
 // name is the variable, a parameter, a constant, pi, e or inf.
+//
+// The binders: __sum differentiates term by term when its bounds do not depend on
+// v (it refuses when they do); __integral by Leibniz's rule, the bounds' own
+// motion plus the integral of the integrand's partial; __prod has no rule, so it
+// refuses, but a product that does not read v is constant. As for gamma, a
+// refusal is raised only when the call depends on v.
 
 import type { Expr } from '../parser/types'
 import { builtinArity, builtinShadowError, freeVariablesDeep, paramCallsAsProducts } from './compile'
 import { CompileError } from './errors'
-import { add, call, div, mul, neg, num, pow, sub, substitute, variable } from './expr'
+import { add, call, div, freshName, mul, neg, num, pow, sub, substitute, variable, varNames } from './expr'
 import { expandPrime } from './prime'
-import { comparisonOp, isReserved, piecewise } from './reserved'
+import { comparisonOp, isReserved, nameArgument, piecewise } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
@@ -384,6 +390,50 @@ function differentiateReserved(expr: Expr & { kind: 'call' }, v: string, scope: 
       throw new DerivativeRefusal('No derivative rule for "!": its derivative needs the digamma function, which the kernel does not have yet', ['__factorial'])
     case '__prime':
       return differentiate(expandPrime(expr, scope), v, scope, ctx)
+    case '__sum': {
+      const { binder, lo, hi, body } = openBinder(expr, scope)
+      if (dependsOn(lo, v, scope) || dependsOn(hi, v, scope)) {
+        throw new DerivativeRefusal(`No derivative rule for a sum whose bounds depend on "${v}"`, ['__sum'])
+      }
+      if (binder.name === v) return ZERO
+      return call('__sum', binder, lo, hi, differentiate(body, v, scope, ctx))
+    }
+    case '__prod':
+      // A product of terms has no rule yet, but a product that does not read v
+      // is constant (the same test as for gamma).
+      openBinder(expr, scope)
+      if (!dependsOn(expr, v, scope)) return ZERO
+      throw new DerivativeRefusal('No derivative rule for a product of terms yet', ['__prod'])
+    case '__integral': {
+      // Leibniz: d/dv ∫_a^b g(t) dt = g(b) b' − g(a) a' + ∫_a^b ∂g/∂v dt
+      const { binder, lo, hi, body } = openBinder(expr, scope)
+      const at = (bound: Expr) => substitute(body, new Map([[binder.name, bound]]))
+      let result: Expr = ZERO
+      if (dependsOn(hi, v, scope)) result = add(result, mul(at(hi), differentiate(hi, v, scope, ctx)))
+      if (dependsOn(lo, v, scope)) result = sub(result, mul(at(lo), differentiate(lo, v, scope, ctx)))
+      if (binder.name !== v && freeVariablesDeep(body, scope, new Set([binder.name])).has(v)) {
+        result = add(result, call('__integral', binder, lo, hi, differentiate(body, v, scope, ctx)))
+      }
+      return result
+    }
   }
   throw new CompileError(`No derivative rule for "${name}"`, [name])
+}
+
+// A binder's pieces, as differentiation reads them. A malformed one is refused
+// as compile refuses it. Two things are said outright about the body, because
+// diff and substitute read an Expr without compile's scope of bound names: a
+// call by the bound name, k(x), is the product compile reads it as; and a bound
+// name that a user constant or function also has is given a fresh name, since
+// compile reads the bound variable first and diff would read the definition.
+function openBinder(expr: Expr & { kind: 'call' }, scope: MathScope): { binder: Expr & { kind: 'var' }; lo: Expr; hi: Expr; body: Expr } {
+  if (expr.args.length !== 4) throw new CompileError(`"${expr.name}" takes 4 arguments, got ${expr.args.length}`, [expr.name])
+  let name = nameArgument(expr, expr.name === '__integral' ? 'variable of integration' : 'index')
+  let body = paramCallsAsProducts(expr.args[3], [name], scope)
+  if (scope.functions.has(name)) {
+    const fresh = freshName(name, varNames(body))
+    body = substitute(body, new Map([[name, variable(fresh)]]))
+    name = fresh
+  }
+  return { binder: { kind: 'var', name }, lo: expr.args[1], hi: expr.args[2], body }
 }

@@ -15,6 +15,15 @@
 // and the binders; the document's own @param or constant named like a built-in
 // owns that name, and calling it as the built-in is an error.
 //
+// A binder (sum, prod, integral) binds its first argument inside its body, in a
+// frame slot of its own; its bounds are outside the binding. A sum or product
+// loops over the whole numbers between its bounds (a bound that is not whole is
+// an error at compile time when it is a literal, NaN at run time when it is
+// read from a parameter); an integral calls math/binders.ts with the integrand
+// as a closure over the same frame. The register program (compileMany) has no
+// loop, so it runs a binder as one extern call into this closure compiler: both
+// paths give the same number.
+//
 // A user function's body sees its own parameters, the spec's parameters and
 // constants, never the caller's variables (lexical scope, as v1's evaluator).
 // There is no `new Function`: code generation stays out, for safety and
@@ -23,11 +32,12 @@
 // parser/evalExpr.ts, the 2D evaluator, is untouched.
 
 import type { Expr } from '../parser/types'
+import { integrateValue } from './binders'
 import { CompileError } from './errors'
 import { mul, variable } from './expr'
 import { derivativeFunction, primeFunction } from './prime'
 import { oddRootExponent, realOddPow } from './rational'
-import { andValue, BINDERS, comparisonOp, compareValue, isReserved, notValue, orValue, pick } from './reserved'
+import { andValue, BINDERS, comparisonOp, compareValue, isReserved, MAX_TERMS, nameArgument, notValue, orValue, pick } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { choose, erf, erfc, factorial, gamma, gcd, lcm, perm, root, step } from './special'
 
@@ -466,10 +476,10 @@ function namesValue(name: string, env: Env, ctx: Ctx): boolean {
 // value (or to nothing). A reserved name, a built-in (shadowed by the document
 // or not) and a user function of one or more parameters stay calls. __prime's
 // first argument and a binder's name argument name a function and a bound
-// variable, and are left alone. A binder whose bound name equals a parameter
-// changes nothing: substitute does not know binders, so a call left there would
-// be stranded once the parameter is renamed, and the product's variable reads
-// the innermost binding anyway, as compile's namesValue does.
+// variable, and are left alone. Inside a binder whose bound name equals a
+// parameter, the product's variable is the bound one (compile's namesValue reads
+// the innermost binding), and substitute, which knows binders, leaves it alone
+// when the parameter is renamed.
 export function paramCallsAsProducts(expr: Expr, params: readonly string[], scope: MathScope): Expr {
   const names: ReadonlySet<string> = new Set(params)
   const rewrite = (e: Expr): Expr => {
@@ -493,6 +503,62 @@ export function paramCallsAsProducts(expr: Expr, params: readonly string[], scop
     }
   }
   return rewrite(expr)
+}
+
+// A binder's pieces: its bound name, its bounds compiled outside the binding,
+// and its body compiled with the name bound to a fresh slot.
+function binderParts(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, what: string) {
+  if (expr.args.length !== 4) throw new CompileError(`"${expr.name}" takes 4 arguments, got ${expr.args.length}`, [expr.name])
+  const bound = nameArgument(expr, what)
+  const lo = compileNode(expr.args[1], env, ctx)
+  const hi = compileNode(expr.args[2], env, ctx)
+  const slot = ctx.slots++
+  const inner = new Map(env.bound)
+  inner.set(bound, slot)
+  const body = compileNode(expr.args[3], { bound: inner }, ctx)
+  return { bound, lo, hi, slot, body }
+}
+
+const LOOP_WORD: Record<string, string> = { __sum: 'sum', __prod: 'prod' }
+
+function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product: boolean): Node {
+  const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'index')
+  const word = LOOP_WORD[expr.name]
+  // Constant bounds are checked now; a bound that reads a parameter is checked
+  // per evaluation, giving NaN.
+  for (const [end, node] of [['lower', lo], ['upper', hi]] as const) {
+    if (node.constant !== undefined && !Number.isInteger(node.constant)) {
+      throw new CompileError(`${word}: the ${end} bound ${node.constant} is not a whole number`, [expr.name])
+    }
+  }
+  if (lo.constant !== undefined && hi.constant !== undefined && hi.constant - lo.constant + 1 > MAX_TERMS) {
+    throw new CompileError(`${word}: ${hi.constant - lo.constant + 1} terms is past the limit of ${MAX_TERMS}`, [expr.name])
+  }
+  return (f) => {
+    const a = lo(f)
+    const b = hi(f)
+    if (!Number.isInteger(a) || !Number.isInteger(b) || b - a + 1 > MAX_TERMS) return Number.NaN
+    let acc = product ? 1 : 0
+    for (let i = a; i <= b; i++) {
+      f[slot] = i
+      acc = product ? acc * body(f) : acc + body(f)
+    }
+    return acc
+  }
+}
+
+function compileIntegral(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
+  const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'variable of integration')
+  // One frame per compiled function, so the integrand can be made once.
+  let frame: Float64Array = new Float64Array(0)
+  const g = (t: number) => {
+    frame[slot] = t
+    return body(frame)
+  }
+  return (f) => {
+    frame = f
+    return integrateValue(g, lo(f), hi(f))
+  }
 }
 
 function compileReserved(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
@@ -539,8 +605,18 @@ function compileReserved(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Nod
     }
     case '__prime': {
       const { name: fnName, fn, order } = primeFunction(expr, ctx.scope)
-      return inlineBody(fnName, derivativeFunction(fnName, fn, order, ctx.scope), [compileNode(expr.args[2], env, ctx)], ctx)
+      const derivative = derivativeFunction(fnName, fn, order, ctx.scope)
+      // The derivative never reads f's own body (a name it does not know
+      // differentiates to nothing), so f is compiled once here, as f(u) would
+      // be, and any refusal in it surfaces. The result is discarded.
+      closureOver(fn.body as Expr, fn.params, ctx.scope, [...ctx.stack, fnName])
+      return inlineBody(fnName, derivative, [compileNode(expr.args[2], env, ctx)], ctx)
     }
+    case '__sum':
+    case '__prod':
+      return compileLoop(expr, env, ctx, name === '__prod')
+    case '__integral':
+      return compileIntegral(expr, env, ctx)
   }
   throw new CompileError(`"${name}" is reserved and not supported here`, [name])
 }
@@ -648,6 +724,23 @@ export function compileScalar(expr: Expr, vars: readonly string[], scope: MathSc
   }
 }
 
+// The closure compiler over any number of named variables in slots 0..n-1:
+// what compileMany calls for a construct it runs as a closure (a binder), and
+// what f' calls to compile a function's own body. `stack` is the user functions
+// being inlined around it, so a cycle is named as it would be there.
+export function closureOver(
+  expr: Expr,
+  vars: readonly string[],
+  scope: MathScope,
+  stack: readonly string[] = []
+): { run: (frame: Float64Array) => number; frame: Float64Array } {
+  const bound = new Map<string, number>()
+  vars.forEach((v, i) => bound.set(v, i))
+  const ctx: Ctx = { scope, slots: vars.length, stack: [...stack] }
+  const run = compileNode(expr, { bound }, ctx)
+  return { run, frame: new Float64Array(Math.max(ctx.slots, 1)) }
+}
+
 // Compiles three component expressions sharing one frame. Bound variables are
 // written once per call; each component's let-slots are its own.
 // ---------------------------------------------------------------------------
@@ -696,6 +789,7 @@ const OP_COPY = 21
 const OP_RPOW_ODD = 22
 const OP_RPOW_EVEN = 23
 const OP_PICK = 24
+const OP_EXTERN = 25
 
 // The built-ins without an opcode of their own, as the closures compute them.
 const UNARY_TABLE: readonly ((v: number) => number)[] = [
@@ -796,6 +890,8 @@ class ProgramBuilder {
   readonly code: number[] = []
   readonly initial: number[] = []
   readonly params: [number, number][] = []
+  // Constructs run as closures (binders): their code, and the frame it reads.
+  readonly externs: { run: (frame: Float64Array) => number; frame: Float64Array }[] = []
   private registers: number
   private readonly constants = new Map<string, number>()
   private readonly paramRegister = new Map<number, number>()
@@ -923,7 +1019,26 @@ function programReserved(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<strin
     }
     case '__prime': {
       const { name: fnName, fn, order } = primeFunction(expr, ctx.scope)
-      return programInline(fnName, derivativeFunction(fnName, fn, order, ctx.scope), [programNode(expr.args[2], bound, ctx)], ctx)
+      const derivative = derivativeFunction(fnName, fn, order, ctx.scope)
+      // As compileReserved: f's own body is compiled once and discarded.
+      closureOver(fn.body as Expr, fn.params, ctx.scope, [...ctx.stack, fnName])
+      return programInline(fnName, derivative, [programNode(expr.args[2], bound, ctx)], ctx)
+    }
+    case '__sum':
+    case '__prod':
+    case '__integral': {
+      // Every variable bound here (the top level's inputs, or an inlined
+      // function's parameters) is copied into the closure's frame, not only the
+      // ones the body names as var nodes: a name it merely calls, x(k), is a
+      // product, and an unknown name's hint reads the bound names. User
+      // constants and parameters need nothing copied: the closure resolves them
+      // itself, as compileScalar does.
+      const names = [...bound.keys()]
+      const extern = closureOver(expr, names, ctx.scope, ctx.stack)
+      const first = p.block(names.length)
+      names.forEach((n, i) => p.copy(first + i, bound.get(n) as number))
+      p.externs.push(extern)
+      return p.emit(OP_EXTERN, first, names.length, p.externs.length - 1)
     }
   }
   throw new CompileError(`"${name}" is reserved and not supported here`, [name])
@@ -1097,6 +1212,7 @@ export function compileMany(exprs: readonly Expr[], vars: readonly string[], sco
   const reg = Float64Array.from(program.initial)
   const paramRegs = Int32Array.from(program.params.map(([r]) => r))
   const paramIndex = Int32Array.from(program.params.map(([, i]) => i))
+  const externs = program.externs
   const values = scope.params.values
   const inputs = vars.length
   const scratch: number[] = []
@@ -1182,6 +1298,13 @@ export function compileMany(exprs: readonly Expr[], vars: readonly string[], sco
         case OP_PICK:
           reg[d] = pick(reg[x], reg[y], reg[code[pc + 4]])
           break
+        case OP_EXTERN: {
+          // A binder, run as a closure over the y registers starting at x.
+          const extern = externs[code[pc + 4]]
+          for (let i = 0; i < y; i++) extern.frame[i] = reg[x + i]
+          reg[d] = extern.run(extern.frame)
+          break
+        }
         case OP_HYPOTN: {
           // Math.hypot over the block of y registers starting at x.
           scratch.length = y
@@ -1282,6 +1405,13 @@ export function freeVariablesDeep(expr: Expr, scope: MathScope, bound: ReadonlyS
         walk(e.right, local, into)
         return
       case 'call': {
+        // A binder's bound name is local to its body; its bounds are outside.
+        if (BINDERS.has(e.name) && e.args[0]?.kind === 'var' && e.args.length === 4) {
+          walk(e.args[1], local, into)
+          walk(e.args[2], local, into)
+          walk(e.args[3], new Set([...local, e.args[0].name]), into)
+          return
+        }
         // __prime's first argument names a function, not a variable.
         if (e.name === '__prime') {
           const target = e.args[0]
