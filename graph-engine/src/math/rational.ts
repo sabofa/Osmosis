@@ -35,6 +35,17 @@ function make(p: number, q: number): Rational | null {
   return { p: p / g + 0, q: q / g }
 }
 
+// a ± b over the common denominator a.q*b.q. Each cross product and the
+// denominator must be exact on its own: a sum that lands back in range does not
+// make an inexact term right.
+function combine(a: Rational, b: Rational, sign: 1 | -1): Rational | null {
+  const left = a.p * b.q
+  const right = b.p * a.q
+  const q = a.q * b.q
+  if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(q)) return null
+  return make(left + sign * right, q)
+}
+
 // The largest integer power folded exactly; beyond it the subtree is not read.
 const MAX_POWER = 64
 
@@ -77,9 +88,9 @@ export function rationalLiteral(expr: Expr): Rational | null {
       if (!b) return null
       switch (expr.op) {
         case '+':
-          return make(a.p * b.q + b.p * a.q, a.q * b.q)
+          return combine(a, b, 1)
         case '-':
-          return make(a.p * b.q - b.p * a.q, a.q * b.q)
+          return combine(a, b, -1)
         case '*':
           return make(a.p * b.p, a.q * b.q)
         case '/':
