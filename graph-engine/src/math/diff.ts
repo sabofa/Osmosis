@@ -424,13 +424,16 @@ function differentiateReserved(expr: Expr & { kind: 'call' }, v: string, scope: 
 // as compile refuses it. Two things are said outright about the body, because
 // diff and substitute read an Expr without compile's scope of bound names: a
 // call by the bound name, k(x), is the product compile reads it as; and a bound
-// name that a user constant or function also has is given a fresh name, since
-// compile reads the bound variable first and diff would read the definition.
+// name that the document also has (a user constant or function, a @param, or
+// pi, e or inf) is given a fresh name. Compile reads the bound variable first,
+// so its values are right, but the derivative copies expressions into the body
+// that name those same things free (a partial of g(x) = k x^2 reads the @param
+// k; erf' reads pi), and under the bound name they would be read as the index.
 function openBinder(expr: Expr & { kind: 'call' }, scope: MathScope): { binder: Expr & { kind: 'var' }; lo: Expr; hi: Expr; body: Expr } {
   if (expr.args.length !== 4) throw new CompileError(`"${expr.name}" takes 4 arguments, got ${expr.args.length}`, [expr.name])
   let name = nameArgument(expr, expr.name === '__integral' ? 'variable of integration' : 'index')
   let body = paramCallsAsProducts(expr.args[3], [name], scope)
-  if (scope.functions.has(name)) {
+  if (scope.functions.has(name) || scope.params.index.has(name) || name === 'pi' || name === 'e' || name === 'inf') {
     const fresh = freshName(name, varNames(body))
     body = substitute(body, new Map([[name, variable(fresh)]]))
     name = fresh

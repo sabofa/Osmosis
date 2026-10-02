@@ -391,6 +391,103 @@ describe('binders and the derivative', () => {
   })
 })
 
+// diff copies derivative expressions into a binder's body, and those mention free
+// names (a @param, a constant, pi, e, inf). A binder whose bound name is one of them
+// must not read them as itself: compile resolves the binder first, so the values are
+// right and only the derivative could go wrong. Each check below is the derivative
+// of the compiled function on BOTH compile paths against a closed form, and against
+// central differences of the compiled value (h = 1e-5, tolerance 1e-6).
+describe('a binder named like a document name does not capture it in the derivative', () => {
+  const central = (f: (a: number) => number, at: number, h = 1e-5) => (f(at + h) - f(at - h)) / (2 * h)
+
+  it('@param k, g(x) = k x^2, F(x) = sum(k = 1 to 3, g(x)): F(x) = 15 x^2, so F\'(1) is 30, not 12', () => {
+    const scope = makeScope({
+      params: [['k', 5]],
+      functions: [
+        ['g', { params: ['x'], body: p('k x^2') }],
+        ['F', { params: ['x'], body: sum('k', num(1), num(3), p('g(x)')) }],
+      ],
+    })
+    expect(both(call('F', x), ['x'], [2], scope)).toBe(60)
+    expect(derivativeAt(call('F', x), 'x', scope, 1)).toBeCloseTo(30, 12)
+    expect(derivativeAt(call('F', x), 'x', scope, 3)).toBeCloseTo(90, 12)
+    // f'(x), which compiles the same diff, and the second derivative through it
+    expect(both(prime('F', 1, [num(1)]), [], [], scope)).toBeCloseTo(30, 12)
+    expect(both(prime('F', 2, [num(1)]), [], [], scope)).toBeCloseTo(30, 12)
+    expect(central(compileScalar(call('F', x), ['x'], scope), 1)).toBeCloseTo(30, 6)
+    // the parameter moves with the document: no recompile, the derivative follows it
+    scope.params.values[0] = 2
+    expect(derivativeAt(call('F', x), 'x', scope, 1)).toBeCloseTo(12, 12)
+  })
+
+  it('@param a, f(t) = a t, I(x) = integral(a = 0 to 1, f(x)): I(x) = 10 x, so I\'(x) is 10, not 0.5', () => {
+    const scope = makeScope({
+      params: [['a', 10]],
+      functions: [
+        ['f', { params: ['t'], body: p('a t') }],
+        ['I', { params: ['x'], body: integral('a', num(0), num(1), p('f(x)')) }],
+      ],
+    })
+    expect(Math.abs(both(call('I', x), ['x'], [3], scope) - 30)).toBeLessThan(1e-9)
+    expect(Math.abs(derivativeAt(call('I', x), 'x', scope, 3) - 10)).toBeLessThan(1e-9)
+    expect(Math.abs(both(prime('I', 1, [num(3)]), [], [], scope) - 10)).toBeLessThan(1e-9)
+    expect(Math.abs(central(compileScalar(call('I', x), ['x'], scope), 3) - 10)).toBeLessThan(1e-6)
+  })
+
+  it('a bound pi: d/dx sum(pi = 1 to 2, erf(x)) at 0.5 is 2 (2/sqrt(pi)) e^-0.25 = 1.758, not 2.659', () => {
+    const scope = makeScope()
+    const s = p('sum(pi = 1 to 2, erf(x))')
+    const closed = 2 * (2 / Math.sqrt(Math.PI)) * Math.exp(-0.25)
+    expect(closed).toBeCloseTo(1.758, 3)
+    expect(Math.abs(derivativeAt(s, 'x', scope, 0.5) - closed)).toBeLessThan(1e-9)
+    expect(Math.abs(central(compileScalar(s, ['x'], scope), 0.5) - closed)).toBeLessThan(1e-6)
+    // the integral form of the same name, ∫_1^2 erf(x) dpi = erf(x)
+    const i = integral('pi', num(1), num(2), p('erf(x)'))
+    expect(Math.abs(derivativeAt(i, 'x', scope, 0.5) - closed / 2)).toBeLessThan(1e-9)
+  })
+
+  it('a bound pi under @angle: degrees: d/dx sum(pi = 1 to 2, sin(x)) at 30 is 2 cos(30°) pi/180', () => {
+    const scope = makeScope({ angle: 'degrees' })
+    const closed = (2 * Math.cos(Math.PI / 6) * Math.PI) / 180
+    expect(Math.abs(derivativeAt(p('sum(pi = 1 to 2, sin(x))'), 'x', scope, 30) - closed)).toBeLessThan(1e-12)
+    // inverse trig carries 180/pi
+    const asinClosed = (2 * 180) / Math.PI / Math.sqrt(1 - 0.25)
+    expect(Math.abs(derivativeAt(p('sum(pi = 1 to 2, asin(x))'), 'x', scope, 0.5) - asinClosed)).toBeLessThan(1e-9)
+  })
+
+  it('a bound e: g(x) = e x^2, F(x) = sum(e = 1 to 3, g(x)) = 3 e x^2, so F\'(1) is 6 e', () => {
+    const scope = makeScope({
+      functions: [
+        ['g', { params: ['x'], body: p('e x^2') }],
+        ['F', { params: ['x'], body: sum('e', num(1), num(3), p('g(x)')) }],
+      ],
+    })
+    expect(Math.abs(derivativeAt(call('F', x), 'x', scope, 1) - 6 * Math.E)).toBeLessThan(1e-12)
+    expect(Math.abs(central(compileScalar(call('F', x), ['x'], scope), 1) - 6 * Math.E)).toBeLessThan(1e-6)
+  })
+
+  it('a bound index named like a @param, with f\'(k) in the body: G(x) = sum(k = 1 to 3, f\'(x)) = 30 x', () => {
+    const scope = makeScope({
+      params: [['k', 5]],
+      functions: [
+        ['f', { params: ['x'], body: p('k x^2') }],
+        ['G', { params: ['x'], body: sum('k', num(1), num(3), prime('f', 1, [x])) }],
+      ],
+    })
+    expect(both(call('G', x), ['x'], [2], scope)).toBe(60)
+    expect(derivativeAt(call('G', x), 'x', scope, 2)).toBeCloseTo(30, 12)
+    // and with the bound index itself as the argument: sum(k = 1 to 3, f'(k)) = 10 * 6
+    expect(both(sum('k', num(1), num(3), prime('f', 1, [k])), [], [], scope)).toBe(60)
+    expect(derivativeAt(p('x sum(k = 1 to 3, k)'), 'x', scope, 2)).toBe(6)
+  })
+
+  it('a bound name that is not a document name keeps the name it was written with', () => {
+    const scope = makeScope({ params: [['a', 1]] })
+    const d = diff(sum('j', num(1), num(3), p('j x')), 'x', scope) as Expr & { kind: 'call' }
+    expect((d.args[0] as { name: string }).name).toBe('j')
+  })
+})
+
 describe('substitute and varNames, binder-aware', () => {
   it('the bound name stays a name: never replaced, only renamed away from a capture', () => {
     const s = sum('k', num(0), num(3), p('k x'))
