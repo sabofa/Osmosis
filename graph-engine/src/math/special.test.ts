@@ -247,6 +247,36 @@ describe('a refusal bites only when an argument depends on the variable', () => 
     expect(() => diff(p('gcd(x, 2)'), 'x', scope)).toThrow(/whole numbers/)
   })
 
+  // d/dx pdf(x, a) at x = 1 for a constant a: ((a - 1) - 1) e^-1 / gamma(a)
+  const dPdfAt1 = (a: number) => ((a - 2) * Math.exp(-1)) / gamma(a)
+  const constants = makeScope({
+    params: [
+      ['k', 3],
+      ['m', 2],
+      ['s', 1.5],
+    ],
+    functions: [
+      ['pdf', fn(['x', 'k'], 'x^(k - 1) * exp(-x) / gamma(k)')],
+      ['a', fn([], '1 / k')],
+      ['shape', fn([], 'm^2 / s^2')],
+    ],
+  })
+
+  it('a constant argument, however its own derivative is written, never trips the refused parameter', () => {
+    // The argument's derivative is 0 / u-shaped, which simplify rightly keeps (step's NaN at 0 needs that).
+    expect(atIn('pdf(x, 1 / k)', 'x', constants, 1)).toBeCloseTo(dPdfAt1(1 / 3), 12)
+    expect(atIn('pdf(x, sqrt(k))', 'x', constants, 1)).toBeCloseTo(dPdfAt1(Math.sqrt(3)), 12)
+    expect(atIn('pdf(x, ln(k))', 'x', constants, 1)).toBeCloseTo(dPdfAt1(Math.log(3)), 12)
+    // a constant defined as 1 / k, and one defined as m^2 / s^2 (m, s @params)
+    expect(atIn('pdf(x, a)', 'x', constants, 1)).toBeCloseTo(dPdfAt1(1 / 3), 12)
+    expect(atIn('pdf(x, shape)', 'x', constants, 1)).toBeCloseTo(dPdfAt1(4 / 2.25), 12)
+  })
+
+  it('an argument that depends on the variable refuses, however flat it is, as the built-in does', () => {
+    expect(() => diff(p('gamma(floor(x))'), 'x', constants)).toThrow(/digamma/)
+    expect(() => diff(p('pdf(x, floor(x))'), 'x', constants)).toThrow(/digamma/)
+  })
+
   it('a user function refused in one parameter still differentiates in the others', () => {
     expect(atIn('pdf(x, 3)', 'x', pdf, 1)).toBeCloseTo(E_INV_HALF, 14)
     expect(atIn('pdf(x, 1 + 2)', 'x', pdf, 1)).toBeCloseTo(E_INV_HALF, 14)
@@ -257,6 +287,27 @@ describe('a refusal bites only when an argument depends on the variable', () => 
     expect(() => diff(p('pdf(2, x)'), 'x', pdf)).toThrow(/digamma/)
     expect(() => diff(p('pdf(x, x)'), 'x', pdf)).toThrow(/digamma/)
     expect(() => diff(p('r(x, 8)'), 'x', withRoot)).toThrow(/index/)
+  })
+
+  it('a refusal raised through a user function never prints an internal parameter name', () => {
+    const message = (run: () => unknown): string => {
+      try {
+        run()
+      } catch (err) {
+        return (err as Error).message
+      }
+      return ''
+    }
+    for (const [text, s] of [
+      ['r(x, 8)', withRoot],
+      ['pdf(2, x)', pdf],
+      ['h2(x)', nested],
+    ] as const) {
+      const said = message(() => diff(p(text), 'x', s))
+      expect(said, text).toMatch(/No derivative rule/)
+      expect(said, text).not.toContain('#')
+    }
+    expect(message(() => diff(p('root(x, 8)'), 'x', scope))).not.toContain('"x"')
   })
 
   it('the refusal carries through a user function that calls one', () => {

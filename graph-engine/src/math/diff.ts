@@ -31,8 +31,10 @@
 // CompileError, but only when an argument depends on v: with constant
 // arguments the derivative is 0 (x^2/gamma(3), a @param k in x^(k-1)/gamma(k)).
 // Through a user function the refusal is kept per parameter and raised only
-// for an argument that moves with v, so pdf(x, 3) differentiates in x even
-// though pdf is refused in its second parameter.
+// for an argument that depends on v (the same test as for a built-in, however
+// flat that argument's derivative is), so pdf(x, 3) and pdf(x, 1/k) with k a
+// @param differentiate in x even though pdf is refused in its second parameter,
+// and pdf(x, floor(x)) refuses, as gamma(floor(x)) does.
 
 import type { Expr } from '../parser/types'
 import { builtinArity, CompileError, freeVariablesDeep } from './compile'
@@ -45,7 +47,7 @@ const ONE = num(1)
 const TWO = num(2)
 
 // A derivative the kernel has no rule for. A subclass so that partialsOf can
-// set a refused partial aside (it matters only if an argument moves with v)
+// set a refused partial aside (it matters only if an argument depends on v)
 // without also swallowing a cycle or an unknown name, which must still throw.
 class DerivativeRefusal extends CompileError {}
 
@@ -82,7 +84,7 @@ function cycle(ctx: Ctx, name: string): CompileError {
 // (function, parameter), not once per call site.
 //
 // A partial the kernel refuses (gamma(k) in k, say) is kept as the refusal,
-// and thrown by the caller only for an argument that moves with v.
+// and thrown by the caller only for an argument that depends on v.
 const PARTIALS = new WeakMap<MathScope, Map<string, (Expr | DerivativeRefusal)[]>>()
 
 function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], scope: MathScope, ctx: Ctx): (Expr | DerivativeRefusal)[] {
@@ -206,9 +208,11 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       // zero partial is left out.
       const argument = differentiate(args[i], v, scope, ctx)
       if (partial instanceof DerivativeRefusal) {
-        // Refused in this parameter: fine while the argument is constant in v.
-        const moving = simplify(argument)
-        if (moving.kind === 'num' && moving.value === 0) return
+        // Refused in this parameter: fine exactly when the argument does not
+        // depend on v, as for a built-in (so f(x, floor(x)) refuses, as
+        // gamma(floor(x)) does). Whether the argument's derivative simplifies
+        // to a literal 0 is no test: 0 / u is kept, because step needs its NaN.
+        if (!dependsOn(args[i], v, scope)) return
         throw partial
       }
       if (partial.kind === 'num' && partial.value === 0) return
@@ -305,7 +309,7 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       return div(d(a), mul(num(3), pow(call('cbrt', a), TWO)))
     case 'root': {
       // root(a, b) = b^(1/a), so d/dv = root(a, b) / (a b) · b' for an index a constant in v.
-      if (dependsOn(a, v, scope)) throw new DerivativeRefusal(`No derivative rule for "root" when its index depends on "${v}"`, ['root'])
+      if (dependsOn(a, v, scope)) throw new DerivativeRefusal('No derivative rule for "root" when its index depends on the variable', ['root'])
       if (!dependsOn(b, v, scope)) return ZERO
       return mul(div(expr, mul(a, b)), d(b))
     }
