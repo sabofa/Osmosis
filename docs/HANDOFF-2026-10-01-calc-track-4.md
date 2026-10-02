@@ -94,9 +94,12 @@ engine for graphing"):
   merges that branch before going to `milestone-a/main`. When it lands, 2D
   inherits the new scope rule; `plot/scope.test.ts` deliberately pins only
   "a name defined twice is reported on its line", not the old built-in refusal.
-- **The mode rule** in `scene/mode.ts` is agreed and does not change for any
-  existing spec: a scalar multi-parameter definition alone is 2D, so
-  `g(x, a) = a sin(x)` with `y = g(x, 2)` plots.
+- **The mode rule** in `scene/mode.ts` is agreed with space and changes for
+  exactly one case (2026-10-01): a spec whose only space statements are scalar
+  multi-parameter `function` definitions moves from 3D to 2D, so
+  `g(x, a) = a sin(x)` with `y = g(x, 2)` plots. A scalar `function` form alone
+  no longer routes a spec to space; a vector function still does. Every other
+  spec routes as it always did.
 - **When P4 starts,** space adds the two-ratio `@aspect` and the 2D reading of
   `@titles`; calc requests it of space and does not make it here.
 
@@ -105,10 +108,13 @@ pass part 2 are pending; this track uses them rather than inventing its own.
 
 ## Open items before the merge
 
-- **Must fix (from space):** `simplify` can fold float arithmetic into whole
-  numbers and so create an odd-root exponent (`x^(0.5*2/3)` becomes real-rooted
-  after `simplify`), which breaks "never inferred from a float". Mark folded
-  float results as non-literal for `rationalLiteral`.
+- **Fixed in the final-review wave (from space):** `simplify` folded float
+  arithmetic into whole numbers and so created an odd-root exponent
+  (`x^(0.5*2/3)` became real-rooted after `simplify`), which broke "never
+  inferred from a float". An operation with a non-integer operand and an integer
+  result is now kept as written, and a literal argument that diff or `f'`
+  substitutes into a body is folded to its number, so neither makes a literal
+  ratio the author never wrote.
 - **Interim, replaced in P3:** `where` on an implicit curve, region or chained
   region keeps a segment by its midpoint and a triangle by its centroid, so a
   cut edge follows the grid. P3 replaces it with exact clipping.

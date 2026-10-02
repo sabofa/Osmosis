@@ -736,7 +736,13 @@ outlines and identities, and vocabulary draws only through those.
   new sampler or the interval twin (space's choice, never assumed).
 - **From geometry:** the movement constants of its visual pass part 2, which
   this track uses rather than inventing its own.
-- **The mode rule in `scene/mode.ts` does not change** for any existing spec.
+- **The mode rule in `scene/mode.ts` does not change** for any existing spec,
+  with one exception agreed with space on 2026-10-01: a spec whose only space
+  statements are scalar multi-parameter `function` definitions (`g(x, a) = a
+  sin(x)` beside `y = g(x, 2)`) is 2D, not 3D. Such a definition draws nothing
+  on its own and is as much a 2D helper as a 3D one, so a scalar `function`
+  form alone no longer routes a spec to space; a vector function
+  (`r(t) = <cos t, sin t, t>`) still does.
 
 ## Out of scope
 
