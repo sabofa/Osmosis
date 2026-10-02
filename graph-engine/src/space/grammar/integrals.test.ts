@@ -74,6 +74,13 @@ describe('S5 grammar — named regions (the unkeyed claim)', () => {
     expect(() => form('x = region x in [0, 1], y in [0, x]')).toThrow(/"x" is a coordinate/)
   })
 
+  it('a built-in function\'s name may name a region or a volume (a document\'s own names shadow the built-ins); pi and e may not', () => {
+    expect(form('step = region x in [0, 1], y in [0, x]')).toMatchObject({ form: 'namedRegion', name: 'step' })
+    expect(form('gamma = volume x in [0, 1], y in [0, 1], z in [0, 1]')).toMatchObject({ form: 'namedVolume', name: 'gamma' })
+    expect(() => form('pi = region x in [0, 1], y in [0, x]')).toThrow(/"pi" is a constant, not a name for a region/)
+    expect(() => form('e = volume x in [0, 1], y in [0, 1], z in [0, 1]')).toThrow(/"e" is a constant, not a name for a volume/)
+  })
+
   it('refuses a style clause on a named region, saying where it goes', () => {
     expect(() => form('R = region x in [0, 1], y in [0, x] opacity: 0.5')).toThrow(/a named region draws nothing/)
   })

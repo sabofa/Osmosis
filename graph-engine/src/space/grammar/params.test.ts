@@ -18,6 +18,13 @@ describe('parseParamLine', () => {
     expect(parseParamLine('k = 2 range [0, 10] integer step 2')).toMatchObject({ step: 2, integer: true })
   })
 
+  it('a built-in function\'s name may be a parameter\'s: it shadows the built-in in the document (@param gamma, a Lorentz factor)', () => {
+    expect(parseParamLine('gamma = 2 range [1, 5]', 2)).toEqual({ name: 'gamma', value: 2, min: 1, max: 5, step: null, integer: false, line: 2 })
+    for (const name of ['gamma', 'erf', 'cbrt', 'step', 'choose', 'gcd', 'root', 'sin', 'hypot', 'abs']) {
+      expect(parseParamLine(`${name} = 1 range [0, 5]`), name).toMatchObject({ name, value: 1 })
+    }
+  })
+
   const refusals: [string, RegExp][] = [
     // a malformed range
     ['a = 1', /range/],
@@ -30,12 +37,11 @@ describe('parseParamLine', () => {
     // a non-positive step
     ['a = 1 range [0, 5] step 0', /step/],
     ['a = 1 range [0, 5] step -1', /step/],
-    // reserved names: coordinates, parameters, built-ins, constants
+    // reserved names: coordinates, parameters, constants (a built-in function's
+    // name is not reserved: it is the document's own, below)
     ['x = 1 range [0, 5]', /reserved/],
     ['theta = 1 range [0, 5]', /reserved/],
     ['phi = 1 range [0, 5]', /reserved/],
-    ['sin = 1 range [0, 5]', /built-in/],
-    ['hypot = 1 range [0, 5]', /built-in/],
     ['pi = 1 range [0, 5]', /reserved/],
     ['e = 1 range [0, 5]', /reserved/],
     // an integer parameter needs whole numbers

@@ -66,6 +66,31 @@ describe('K5.3 — vector constants', () => {
   })
 })
 
+describe('K5 — a built-in function\'s name may be a definition\'s (calc ruling, 2026-10-02)', () => {
+  it('a vector constant: gamma = <1, 2, 3>', () => {
+    expect(form('gamma = <1, 2, 3>')).toEqual({ form: 'vectorFunction', name: 'gamma', params: [], body: [p('1'), p('2'), p('3')] })
+  })
+
+  it('a scalar definition whose parameters are not all coordinates: gcd(a, b) = a*b', () => {
+    expect(form('gcd(a, b) = a*b')).toEqual({ form: 'function', name: 'gcd', params: ['a', 'b'], body: p('a*b') })
+    expect(form('root(x, n) = x^(1/n)')).toMatchObject({ form: 'function', name: 'root', params: ['x', 'n'] })
+  })
+
+  it('a vector function, even when its parameter is a coordinate: sin(x) = <x, 0, 0>', () => {
+    expect(form('sin(x) = <x, 0, 0>')).toMatchObject({ form: 'vectorFunction', name: 'sin', params: ['x'] })
+  })
+
+  it('a one-parameter scalar definition stays the shared parser\'s functionDef: step(x) = x^2 is not claimed', () => {
+    expect(parseSpaceUnkeyed('step(x) = x^2')).toBeNull()
+  })
+
+  it('pi and e are never a definition\'s name', () => {
+    expect(parseSpaceUnkeyed('pi(a, b) = a + b')).toBeNull()
+    expect(parseSpaceUnkeyed('e(a, b) = a + b')).toBeNull()
+    expect(parseSpaceUnkeyed('e = <1, 2, 3>')).toBeNull()
+  })
+})
+
 describe('K5.4 — explicit surfaces with a domain', () => {
   it('z = x*y for x in [0, 1], y in [0, 2]: a rectangle', () => {
     expect(form('z = x*y for x in [0, 1], y in [0, 2]')).toEqual({

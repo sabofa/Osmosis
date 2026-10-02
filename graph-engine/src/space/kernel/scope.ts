@@ -5,11 +5,13 @@
 // they are found here, each an error on the definition's line:
 // - a binding that is also a definition's name (the parameter shadows it);
 // - a name defined twice (the later definition is used);
-// - a definition named after a built-in, pi or e (refused, so the built-in
-//   keeps its meaning).
+// - a definition named after pi or e (refused, so they keep their meaning).
+// A built-in function's name may be a definition's: it shadows the built-in in
+// this document (the ruling of 2026-10-02), and calling a constant or a @param
+// of that name as the built-in is compile's error (math/compile.ts), not a
+// second check here.
 
 import type { Statement } from '../../parser/types'
-import { BUILTIN_NAMES } from '../../math/compile'
 import { makeScope, type MathFunction, type MathScope } from '../../math/scope'
 import type { Binding } from '../config'
 import type { SceneError } from '../scene/types'
@@ -46,11 +48,7 @@ export function buildScope(
     if (!entry) return
     const [name, fn] = entry
     const line = lines[i] ?? 0
-    // A built-in, pi and e keep their meaning: the definition is refused.
-    if (BUILTIN_NAMES.has(name)) {
-      errors.push({ line, message: `"${name}" is a built-in function — a definition cannot take its name` })
-      return
-    }
+    // pi and e keep their meaning: the definition is refused.
     if (name === 'pi' || name === 'e') {
       errors.push({ line, message: `"${name}" is a constant — a definition cannot take its name` })
       return

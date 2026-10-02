@@ -525,14 +525,14 @@ describe('compositions build (fix round 1, C1)', () => {
   })
 })
 
-describe('a definition named after a built-in is refused (fix round 1, I1)', () => {
-  it('sin(x) = x^2 is an error on its line, and sin stays the built-in', () => {
-    const scene = sceneOf('sin(x) = x^2\nA = (sin(0), 1, 0)')
-    expect(scene.errors).toEqual([{ line: 1, message: expect.stringMatching(/"sin" is a built-in/) }])
-    // the built-in: sin(0) = 0, not 0^2 via the definition (which is also 0), so
-    // check a point where they differ: sin(pi/2) = 1, (pi/2)^2 = 2.467
-    const other = sceneOf('sin(x) = x^2\nA = (sin(pi/2), 1, 0)')
-    expect([...(other.marks[0] as PointMark).positions]).toEqual([1, 1, 0])
+// A definition named after a built-in function shadows it (calc ruling,
+// 2026-10-02; shadowing.test.ts covers the rest). pi and e stay refused.
+describe('a definition named after pi or e is refused (fix round 1, I1)', () => {
+  it('sin(x) = x^2 is the document\'s own sin, with no error', () => {
+    const scene = sceneOf('sin(x) = x^2\nA = (sin(pi/2), 1, 0)')
+    expect(scene.errors).toEqual([])
+    // the document's: (pi/2)^2 = 2.467, not the built-in's sin(pi/2) = 1
+    expect([...(scene.marks[0] as PointMark).positions]).toEqual([(Math.PI / 2) ** 2, 1, 0])
   })
 
   it('pi = 3 is refused, and pi stays pi', () => {

@@ -2,11 +2,14 @@
 // integer" (SP6): one binding, a name usable in every expression in the spec.
 // The value and the range are expressions over constants only (pi, e and the
 // built-ins). A clash with a defined function or constant needs the whole
-// spec, so the kernel reports it.
+// spec, so the kernel reports it. A built-in function's name may be a
+// parameter's: it shadows the built-in in this document (calling it as the
+// function is compile's error, math/compile.ts); pi, e and the coordinates stay
+// refused.
 
 import { splitTopLevelComma } from '../../parser/grammarUtil'
 import { parseExprString } from '../../parser/parseExpr'
-import { BUILTIN_NAMES, compileScalar } from '../../math/compile'
+import { compileScalar } from '../../math/compile'
 import { makeScope } from '../../math/scope'
 import type { Binding } from '../config'
 
@@ -35,7 +38,6 @@ export function parseParamLine(rest: string, line = 0, angle: Angle = 'radians')
   if (!match) throw new Error(`Expected ${SHAPE}, got "@param ${rest.trim()}"`)
   const [, name, valueText, rangeText, tail] = match
 
-  if (BUILTIN_NAMES.has(name)) throw new Error(`@param ${name}: "${name}" is a built-in function`)
   if (RESERVED.has(name)) throw new Error(`@param ${name}: "${name}" is reserved (a coordinate, a parameter name space binds, or a constant)`)
 
   const bounds = splitTopLevelComma(rangeText)

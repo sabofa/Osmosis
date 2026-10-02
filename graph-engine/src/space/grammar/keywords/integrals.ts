@@ -24,7 +24,6 @@
 import { parseForRange, splitTopLevelComma } from '../../../parser/grammarUtil'
 import { parseExprString } from '../../../parser/parseExpr'
 import type { Expr } from '../../../parser/types'
-import { BUILTIN_NAMES } from '../../../math/compile'
 import { varNames } from '../../../math/expr'
 import { parseOverDomain } from '../domain'
 import { splitStyle, STYLE_CLAUSE_START, type RawClause, type StyleKey } from '../style'
@@ -361,7 +360,7 @@ export const INTEGRAL_KEYWORDS: readonly { keyword: string; parse(rest: string):
 
 function checkName(name: string, what: string): void {
   if (COORDINATES.has(name)) throw new Error(`"${name}" is a coordinate, not a name for a ${what} — write e.g. "R = region ..."`)
-  if (BUILTIN_NAMES.has(name) || name === 'pi' || name === 'e') throw new Error(`"${name}" is a built-in name, not a name for a ${what}`)
+  if (name === 'pi' || name === 'e') throw new Error(`"${name}" is a constant, not a name for a ${what}`)
 }
 
 // "NAME = region <domain>" and "NAME = volume <volume>", claimed by
