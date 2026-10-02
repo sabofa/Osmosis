@@ -37,6 +37,10 @@ export interface FrameCtx {
   rowX: number
   // 1 where a mark is bare table (flat, horizontal, opaque).
   ground: Uint8Array
+  // What the view's zoom asks of every stroke's size: zoom^particles.zoomStrokeScale, never below 1.
+  sizeScale: number
+  // How many times the brush-load cell is halved for this zoom (brush.ts loadCellLevel): 0 at the tuned framing.
+  loadLevel: number
 }
 
 export function makeFrameCtx(scene: SpaceScene, view: PaintView, g: GBuffer, params: PaintParams): FrameCtx {
@@ -55,7 +59,17 @@ export function makeFrameCtx(scene: SpaceScene, view: PaintView, g: GBuffer, par
     scale: g.scale,
     rowX: Math.hypot(vp[0], vp[4], vp[8]),
     ground: groundMarks(scene),
+    sizeScale: zoomSizeScale(view, params),
+    loadLevel: loadCellLevel(view.zoom),
   }
+}
+
+// What the view's zoom asks of the strokes' size (spec addendum: "a bigger brush up close"): the
+// view's zoom (1 when the view says nothing) to the power particles.zoomStrokeScale, and never
+// below 1: zooming out does not shrink the brush under the size the roles were tuned at.
+export function zoomSizeScale(view: PaintView, params: PaintParams): number {
+  const z = view.zoom !== undefined && Number.isFinite(view.zoom) ? Math.max(1, view.zoom) : 1
+  return z ** clamp(params.particles.zoomStrokeScale, 0, 1)
 }
 
 // ---- projection ----
@@ -347,6 +361,28 @@ export function drawChance(fc: FrameCtx, pxArea: number, role: Role): number {
   const p = fc.params
   const drag = fc.view.dragging ? p.particles.dragDensity : 1
   return clamp((p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag, 0, 1)
+}
+
+// A load of paint is a patch of the surface (mix.loadCell world units across), and a painter mixes a new
+// load every few strokes: patches about a brush's reach, on the canvas, whatever the zoom. The cell is in
+// world units, so zoomed in it would swallow the whole view and every stroke would share one mix. Zooming
+// in halves it, in whole steps (a power of two, so a finer cell lies inside a coarser one, and the loads
+// do not drift between zooms): level 0 up to a zoom of 1.41, 1 up to 2.83, 2 up to 5.66, and so on.
+export function loadCellLevel(zoom: number | undefined): number {
+  const z = zoom !== undefined && Number.isFinite(zoom) ? Math.max(1, zoom) : 1
+  return Math.min(6, Math.floor(Math.log2(z) + 0.5))
+}
+
+// How much bigger a stroke of `role` is made where the particles fall short of the screen target. The
+// particles are capped by particles.maxPerUnit2, so zoomed in there are fewer on screen than
+// targetPer10kPx asks for (drawChance would be above 1): the strokes grow, width and length together, by
+// sqrt(target / available) = sqrt(drawChance before its clamp), up to particles.zoomGrowMax, so they
+// still overlap and cover the form. 1 while the particles are plentiful.
+export function zoomGrow(fc: FrameCtx, pxArea: number, role: Role): number {
+  const p = fc.params
+  const drag = fc.view.dragging ? p.particles.dragDensity : 1
+  const need = (p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag
+  return clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, p.particles.zoomGrowMax))
 }
 
 // Is visible entry k drawn for `role`?

@@ -21,6 +21,8 @@ export interface ViewOpts {
   elevation?: number
   // CSS pixels per world unit at the target.
   zoom?: number
+  // PaintView.zoom: how far in the view is against the framing the strokes' sizes were tuned at (absent: 1).
+  magnify?: number
   target?: V3
   // The key light relative to the camera: azimuth (+ = to the viewer's left) and elevation, degrees.
   lightAzimuth?: number
@@ -80,6 +82,7 @@ export function paintView(opts: ViewOpts = {}): PaintView {
     height,
     pixelRatio: opts.pixelRatio ?? 1,
     dragging: opts.dragging ?? false,
+    ...(opts.magnify !== undefined ? { zoom: opts.magnify } : {}),
   }
 }
 

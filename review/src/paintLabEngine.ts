@@ -362,6 +362,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       paperMs = response.timing.paperMs
       frame = {
         strokes: response.strokes,
+        underpaint: response.underpaint,
         // a colour frame's debug views are the last full frame's
         debug: response.kind === 'full' ? debugOf(response.debug) : (a as Analysed).frame.debug,
         stats: response.stats,

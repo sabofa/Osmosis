@@ -55,6 +55,13 @@ const sameBatch = (a: StrokeBatch, b: StrokeBatch) => {
   }
 }
 
+// The first index at which two images differ (NaN, the mark of an empty pixel, equals NaN), or -1.
+const firstDifference = (a: Float32Array, b: Float32Array): number => {
+  if (a.length !== b.length) return 0
+  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return i
+  return -1
+}
+
 const fresh = (): PaintSession => {
   const s = new PaintSession()
   s.setScene(1, plainScene(scene), colourDataOf(scene, SPHERE))
@@ -117,6 +124,10 @@ describe('the paint session', () => {
     sameBatch(r.strokes, direct.strokes)
     expect(r.stats).toEqual(direct.stats)
     expect(Array.from(r.debug!.edgeSegments)).toEqual(Array.from(direct.debug.edgeSegments))
+    // the underpainting comes with it: three floats for every pixel of the G-buffer
+    const g = gbuffer()
+    expect(r.underpaint).toHaveLength(3 * g.width * g.height)
+    expect(firstDifference(r.underpaint, direct.underpaint)).toBe(-1)
   })
 
   it('recolours when only colour parameters changed, giving what a full frame gives, with no G-buffer', () => {
@@ -129,6 +140,8 @@ describe('the paint session', () => {
     expect(again.timing.particlesMs).toBe(0)
     const full = ok(fresh().frame(request({ params: warm, gbuffer: gbuffer(warm) })))
     sameBatch(again.strokes, full.strokes)
+    // a colour frame carries the underpainting made again, as a full frame makes it
+    expect(firstDifference(again.underpaint, full.underpaint)).toBe(-1)
     // and a second colour change is a recolour of the same first frame
     const cool = setParam(P, 'mix.strength', 1.5)
     sameBatch(ok(session.frame(request({ kind: 'colour', params: cool, gbuffer: null }))).strokes, ok(fresh().frame(request({ params: cool, gbuffer: gbuffer(cool) }))).strokes)
@@ -252,6 +265,7 @@ describe('the paint session', () => {
     const buffers = new Set(list)
     expect(buffers.has(r.strokes.path.buffer as ArrayBuffer)).toBe(true)
     expect(buffers.has(r.strokes.colour.buffer as ArrayBuffer)).toBe(true)
+    expect(buffers.has(r.underpaint.buffer as ArrayBuffer)).toBe(true)
     expect(buffers.has(r.debug!.planes!.buffer as ArrayBuffer)).toBe(true)
     expect(buffers.has(r.paper!.rgba.buffer as ArrayBuffer)).toBe(true)
     expect(buffers.has(r.paper!.height.buffer as ArrayBuffer)).toBe(false)

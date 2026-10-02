@@ -45,12 +45,15 @@ export function lightDirection(basis: ScreenBasis, azimuth: number, elevation: n
   ]
 }
 
-// One frame's view for the engine from the space camera's matrices.
+// One frame's view for the engine from the space camera's matrices. `zoom` is how far in the camera is
+// against the figure's authored framing (the camera's zoom over the authored zoom: 1 at the authored view,
+// 3 for a 3x close-up); the painter makes its brush follow it (PaintView.zoom). Left out it means 1.
 export function buildPaintView(
   camera: CameraMatrices,
   light: { azimuth: number; elevation: number },
   pixelRatio: number,
   dragging: boolean,
+  zoom?: number,
 ): PaintView {
   const { forward } = camera.basis
   return {
@@ -63,6 +66,7 @@ export function buildPaintView(
     height: camera.viewport.height,
     pixelRatio,
     dragging,
+    ...(zoom !== undefined && Number.isFinite(zoom) ? { zoom } : {}),
   }
 }
 

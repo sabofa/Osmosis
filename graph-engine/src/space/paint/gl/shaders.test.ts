@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { PATH_POINTS } from '../types'
+import { MAX_BRISTLES, PATH_POINTS } from '../types'
 import { COPY_FRAGMENT, EDGE_FRAGMENT, EDGE_VERTEX, IMAGE_FRAGMENT } from './shaders/blit'
 import { COMMON_GLSL, FULLSCREEN_VERTEX } from './shaders/common'
 import { COMPOSITE_FRAGMENT } from './shaders/composite'
 import { GBUFFER_VERTEX, gbufferFragment } from './shaders/gbuffer'
 import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
 import { RIBBON_SEGMENTS, RIBBON_SUBDIV, STROKE_FRAGMENT, STROKE_VERTEX, TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
+import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
 
 const ALL = {
   fullscreen: FULLSCREEN_VERTEX,
@@ -18,6 +19,7 @@ const ALL = {
   strokeV: STROKE_VERTEX,
   strokeF: STROKE_FRAGMENT,
   compositeF: COMPOSITE_FRAGMENT,
+  underpaintF: UNDERPAINT_FRAGMENT,
   copy: COPY_FRAGMENT,
   image: IMAGE_FRAGMENT,
   edgeV: EDGE_VERTEX,
@@ -51,6 +53,11 @@ describe('the stroke shaders (R3)', () => {
     expect(TEXELS_PER_STROKE).toBe(PATH_POINTS + 4)
     expect(STROKE_VERTEX).toContain(`const int PTS = ${PATH_POINTS};`)
     expect(STROKE_VERTEX).toContain(`const int SUB = ${RIBBON_SUBDIV};`)
+  })
+
+  it('read as many bristles as a stroke can have (MAX_BRISTLES, which the model clamps to)', () => {
+    expect(MAX_BRISTLES).toBe(48)
+    expect(STROKE_FRAGMENT).toContain('int nB = int(clamp(v_p0.z + 0.5, 2.0, 48.0));')
   })
 
   it('draw a Catmull-Rom ribbon through the path points with a round cap at each end', () => {

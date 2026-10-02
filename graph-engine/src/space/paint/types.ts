@@ -60,6 +60,10 @@ export interface PaintView {
   pixelRatio: number
   // 1 while the user drags (density may drop to particles.dragDensity).
   dragging: boolean
+  // How far in the view is, relative to the framing the roles' stroke sizes (CSS px) were tuned at (the
+  // figure's authored camera): 1 there, 3 for a 3x close-up. Absent means 1. The strokes follow it by
+  // particles.zoomStrokeScale. (Contract extension, paint-zoom.)
+  zoom?: number
 }
 
 // The renderer's G-buffer, read back at reduced resolution (§4). Row 0 is the
@@ -85,6 +89,8 @@ export interface GBuffer {
 // One frame's strokes (§3.7, §4), structure-of-arrays, `count` long. Every
 // stroke is a ribbon through PATH_POINTS points in CSS px.
 export const PATH_POINTS = 8
+// The most bristles a stroke can have (StrokeBatch.bristles is clamped to it; the stroke shader reads up to this many).
+export const MAX_BRISTLES = 48
 export interface StrokeBatch {
   count: number
   role: Uint8Array // index into ROLES
@@ -127,6 +133,11 @@ export type PaintDebugMode = 'none' | 'value' | 'zones' | 'planes' | 'edges' | '
 
 export interface PaintFrame {
   strokes: StrokeBatch
+  // The underpainting (contract extension, paint-zoom): the curve colour of every covered pixel of a
+  // form, 3 per G-buffer pixel (same size and row order as the G-buffer), linear-light sRGB, NaN where
+  // nothing is drawn. The renderer lays it first, under the block-in, so a gap between strokes inside
+  // a form shows this colour and never bare canvas.
+  underpaint: Float32Array
   debug: PaintDebug
   // Counts for the lab readout.
   stats: { strokes: number; byRole: Record<Role, number>; loads: number }

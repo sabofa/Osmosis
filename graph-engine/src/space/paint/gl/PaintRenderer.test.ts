@@ -68,6 +68,7 @@ function frame(layers: number[], gw = 400, gh = 300, depths?: number[]): PaintFr
   const n = gw * gh
   return {
     strokes: batch(layers, depths),
+    underpaint: new Float32Array(0),
     debug: {
       value: new Float32Array(n).fill(0.5),
       planes: new Int32Array(n).fill(-1),
@@ -77,6 +78,13 @@ function frame(layers: number[], gw = 400, gh = 300, depths?: number[]): PaintFr
     },
     stats: { strokes: layers.length, byRole: {} as PaintFrame['stats']['byRole'], loads: 0 },
   }
+}
+
+// A frame with an underpainting: the G-buffer's size, the left half painted a warm colour and the right half empty (NaN).
+function withUnder(f: PaintFrame, gw = 400, gh = 300): PaintFrame {
+  const image = new Float32Array(3 * gw * gh).fill(Number.NaN)
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw / 2; x++) image.set([0.6, 0.3, 0.1], 3 * (y * gw + x))
+  return { ...f, underpaint: image }
 }
 
 const PARAMS = DEFAULT_PAINT_PARAMS
@@ -227,6 +235,106 @@ describe('the stroke layers', () => {
     const a = run()
     expect(a.length).toBeGreaterThan(0)
     expect(run()).toEqual(a)
+  })
+})
+
+describe('the underpainting', () => {
+  const uniformsOf = (events: ReturnType<typeof timeline>, kind: string) => events.find((e) => e.kind === kind)?.uniforms ?? {}
+
+  it('is laid first, before the block-in, into the first target; the first layer then copies it forward and draws over it', () => {
+    const { paint, renderer } = setup()
+    renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none')
+    const events = timeline(paint)
+    expect(events.map((e) => e.kind)).toEqual(['underpaint', 'copy', 'stroke', 'copy', 'stroke', 'composite'])
+    const target = (kind: string, nth: number) => events.filter((e) => e.kind === kind)[nth].draw?.framebuffer?.id
+    // underpaint in A, block in B (A copied into it first), form back in A (B copied into it)
+    expect(target('underpaint', 0)).toBeDefined()
+    expect(target('stroke', 0)).not.toBe(target('underpaint', 0))
+    expect(target('copy', 0)).toBe(target('stroke', 0))
+    expect(target('stroke', 1)).toBe(target('underpaint', 0))
+    expect(target('copy', 1)).toBe(target('stroke', 1))
+    // the strokes are still the strokes: a draw per layer with its own range
+    expect(events.filter((e) => e.kind === 'stroke').map((e) => e.uniforms.u_base)).toEqual([[0], [1]])
+    expect(renderer.stats.strokeDraws).toBe(2)
+  })
+
+  it('is laid even when there is not a stroke, and then goes straight to the composite', () => {
+    const { paint, renderer } = setup()
+    renderer.paint(withUnder(frame([])), view(), PARAMS, 'none')
+    expect(timeline(paint).map((e) => e.kind)).toEqual(['underpaint', 'composite'])
+  })
+
+  it('draws with no blending (nothing is under it) and one fullscreen triangle', () => {
+    const { paint, renderer } = setup()
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none')
+    const draw = timeline(paint)[0].draw
+    expect(draw).toMatchObject({ fn: 'drawArrays', count: 3, blend: false })
+  })
+
+  it('is left out of the flat role view, where it would muddy the role colours, and of a frame without one', () => {
+    const roles = setup()
+    roles.renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'roles')
+    expect(timeline(roles.paint).map((e) => e.kind)).toEqual(['stroke', 'composite'])
+    // an image that is empty, the wrong size, or all NaN is not laid
+    for (const image of [new Float32Array(0), new Float32Array(3 * 10 * 10), new Float32Array(3 * 400 * 300).fill(Number.NaN)]) {
+      const { paint, renderer } = setup()
+      renderer.paint({ ...frame([BLOCK]), underpaint: image }, view(), PARAMS, 'none')
+      expect(timeline(paint).map((e) => e.kind), String(image.length)).toEqual(['stroke', 'composite'])
+    }
+  })
+
+  it('is uploaded once for one image, however many times the frame is painted, and again for a new one', () => {
+    const { paint, renderer } = setup()
+    const uploads = () => paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_UNSIGNED_BYTE && c.args[4] === 400 && c.args[5] === 300).length
+    const f = withUnder(frame([BLOCK]))
+    renderer.paint(f, view(), PARAMS, 'none')
+    renderer.paint(f, view(), PARAMS, 'none')
+    expect(uploads()).toBe(1)
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none')
+    expect(uploads()).toBe(2)
+  })
+
+  it('uploads sRGB colour with coverage 255 where the form is and 0 where it is not', () => {
+    const { paint, renderer } = setup()
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none')
+    const upload = paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_UNSIGNED_BYTE && c.args[4] === 400).pop()
+    const rgba = upload?.args[8] as Uint8Array
+    // linear (0.6, 0.3, 0.1) as sRGB bytes: 0.7977, 0.5839, 0.3492 of 255
+    expect(Array.from(rgba.subarray(0, 4))).toEqual([203, 149, 89, 255])
+    // the first empty texel (x = 200) is not covered, but has its neighbour's colour so the filtered edge does not go dark
+    expect(Array.from(rgba.subarray(4 * 200, 4 * 200 + 4))).toEqual([203, 149, 89, 0])
+    // two texels beyond the form's edge there is nothing to take
+    expect(Array.from(rgba.subarray(4 * 203, 4 * 203 + 4))).toEqual([0, 0, 0, 0])
+  })
+
+  it('reads its opacity, streaks and the canvas texture from the parameters, and a seeded direction', () => {
+    const params = resolvePaintParams({ underpaint: { opacity: 0.5, streak: 0.2 }, canvas: { texture: 0.7 }, seed: 7 })
+    const { paint, renderer } = setup()
+    renderer.paint(withUnder(frame([BLOCK])), view(), params, 'none')
+    const u = uniformsOf(timeline(paint), 'underpaint')
+    expect(u.u_opacity).toEqual([0.5])
+    expect(u.u_streak).toEqual([0.2])
+    expect(u.u_texture).toEqual([0.7])
+    const dir = u.u_dir as number[]
+    expect(Math.hypot(dir[0], dir[1])).toBeCloseTo(1, 6)
+    expect(u.u_uvScale).toEqual([1, 1])
+    expect(u.u_resolution).toEqual([800, 600])
+    // another seed brushes another way, the same seed the same way
+    const again = setup()
+    again.renderer.paint(withUnder(frame([BLOCK])), view(), params, 'none')
+    expect(uniformsOf(timeline(again.paint), 'underpaint').u_dir).toEqual(dir)
+    const other = setup()
+    other.renderer.paint(withUnder(frame([BLOCK])), view(), resolvePaintParams({ seed: 8 }), 'none')
+    expect(uniformsOf(timeline(other.paint), 'underpaint').u_dir).not.toEqual(dir)
+  })
+
+  it('draws the same uploads and uniforms for the same frame (no time, no randomness)', () => {
+    const run = () => {
+      const { paint, renderer } = setup()
+      renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none')
+      return JSON.stringify(paint.fake.calls.filter((c) => c.fn.startsWith('uniform') || c.fn === 'texSubImage2D').map((c) => [c.fn, c.args.map((a) => (ArrayBuffer.isView(a) ? Array.from(a as unknown as ArrayLike<number>).slice(0, 64) : a))]))
+    }
+    expect(run()).toBe(run())
   })
 })
 
@@ -425,7 +533,7 @@ describe('lifecycle', () => {
     ctx.renderer.setScene(TWO, COLOURS)
     ctx.renderer.setPaper(new Uint8ClampedArray(4 * 4).fill(220), new Float32Array(4).fill(0.5), 2)
     ctx.renderer.renderGBuffer(view(), PARAMS)
-    for (const mode of ['none', 'edges', 'value', 'roles'] as const) ctx.renderer.paint(frame([BLOCK, FORM, DAB]), view(), PARAMS, mode)
+    for (const mode of ['none', 'edges', 'value', 'roles'] as const) ctx.renderer.paint(withUnder(frame([BLOCK, FORM, DAB])), view(), PARAMS, mode)
     return ctx
   }
 

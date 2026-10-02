@@ -112,7 +112,8 @@ export function Stage(props: StageProps) {
       }
     }
     const camera = cameraMatrices(viewRef.current, p.built.world, { width, height }, p.built.projection)
-    const view = buildPaintView(camera, p.params.light, dpr, draggingRef.current)
+    // the brush follows how far in the camera is against the figure's authored framing
+    const view = buildPaintView(camera, p.params.light, dpr, draggingRef.current, viewRef.current.zoom / p.built.authored.zoom)
     try {
       if (p.injected === 'engine-error') throw new Error('Injected engine failure (?state=engine-error).')
       // The frame's result arrives through the engine's events (onFrame, onError).

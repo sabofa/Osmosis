@@ -3,9 +3,11 @@
 // It owns one WebGL2 context and draws what the paint model decides:
 //   renderGBuffer   the shadow map and the G-buffer, read back at half the CSS
 //                   resolution for the model (value, normal, depth, mark);
-//   paint           the model's strokes, one instanced draw per layer with a
-//                   procedural oil brush and wet pickup, then the canvas and
-//                   impasto composite; or one of the debug views.
+//   paint           the underpainting (the model's image of the colour of every
+//                   pixel of a form, laid first), the model's strokes, one
+//                   instanced draw per layer with a procedural oil brush and wet
+//                   pickup, then the canvas and impasto composite; or one of the
+//                   debug views.
 //
 // Scene positions are used as the scene gives them: PaintView's matrices must
 // map scene space (see meshes.ts). Strokes arrive in CSS px of the view.
@@ -51,7 +53,9 @@ import { FULLSCREEN_VERTEX } from './shaders/common'
 import { GBUFFER_VERTEX, gbufferFragment } from './shaders/gbuffer'
 import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
 import { STROKE_FRAGMENT, STROKE_VERTEX } from './shaders/stroke'
+import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
 import { createAccumTargets, StrokeRenderer, type AccumTargets } from './strokes'
+import { UnderpaintRenderer } from './underpaint'
 
 export interface PaintRendererOptions {
   // A shader failure or unexpected GL error, as a plain-text reason.
@@ -73,6 +77,7 @@ const SHADOW_PROGRAM = { name: 'shadow', vertex: SHADOW_VERTEX, fragment: SHADOW
 const GBUFFER_FLOAT_PROGRAM = { name: 'gbuffer-float', vertex: GBUFFER_VERTEX, fragment: gbufferFragment(true) }
 const GBUFFER_RGBA8_PROGRAM = { name: 'gbuffer-rgba8', vertex: GBUFFER_VERTEX, fragment: gbufferFragment(false) }
 const STROKE_PROGRAM = { name: 'stroke', vertex: STROKE_VERTEX, fragment: STROKE_FRAGMENT }
+const UNDERPAINT_PROGRAM = { name: 'underpaint', vertex: FULLSCREEN_VERTEX, fragment: UNDERPAINT_FRAGMENT }
 const COPY_PROGRAM = { name: 'copy', vertex: FULLSCREEN_VERTEX, fragment: COPY_FRAGMENT }
 const COMPOSITE_PROGRAM = { name: 'composite', vertex: FULLSCREEN_VERTEX, fragment: COMPOSITE_FRAGMENT }
 const IMAGE_PROGRAM = { name: 'image', vertex: FULLSCREEN_VERTEX, fragment: IMAGE_FRAGMENT }
@@ -92,6 +97,7 @@ export class PaintRenderer {
   private readonly res: Resources
   private readonly sceneRes: Resources
   private readonly strokes: StrokeRenderer
+  private readonly underpaint: UnderpaintRenderer
   private readonly debugger: DebugRenderer
   private readonly scratch = new ReadbackScratch()
 
@@ -124,6 +130,7 @@ export class PaintRenderer {
     this.res = new Resources(this.gl)
     this.sceneRes = new Resources(this.gl)
     this.strokes = new StrokeRenderer(this.gl, this.res)
+    this.underpaint = new UnderpaintRenderer(this.gl, this.res)
     this.debugger = new DebugRenderer(this.gl, this.res)
     this.unwatch = watchContext(
       canvas,
@@ -281,10 +288,26 @@ export class PaintRenderer {
       const paper = this.ensurePaperGpu()
       const roles = debug === 'roles'
       const { plan, layout } = this.strokes.upload(frame.strokes)
+      // The underpainting goes first (not into the flat role view, where it would muddy the role colours). An
+      // image that is not the G-buffer's size, or covers nothing, is not laid.
+      const laid = !roles && this.underpaint.prepare(frame.underpaint, size.width, size.height)
+      const first = laid
+        ? () =>
+            this.underpaint.draw({
+              program: this.program(UNDERPAINT_PROGRAM),
+              paper,
+              width: backing.width,
+              height: backing.height,
+              pixelRatio: view.pixelRatio,
+              covered,
+              params,
+            })
+        : null
       const result = this.strokes.run(
         { stroke: this.program(STROKE_PROGRAM), copy: this.program(COPY_PROGRAM), targets: accum, paper, cssSize, debugRoles: roles },
         plan,
         layout,
+        first,
       )
       this.stats.strokes = plan.count
       this.stats.strokeDraws = result.draws
@@ -314,6 +337,7 @@ export class PaintRenderer {
     const gl = this.gl
     if (!this.lost && !gl.isContextLost()) {
       this.strokes.destroy()
+      this.underpaint.destroy()
       this.debugger.destroy()
       this.res.disposeAll()
       this.sceneRes.disposeAll()
@@ -440,6 +464,7 @@ export class PaintRenderer {
     this.sceneRes.forget()
     this.programs.forget()
     this.strokes.forget()
+    this.underpaint.forget()
     this.debugger.forget()
     this.sceneGpu = null
     this.paper = null

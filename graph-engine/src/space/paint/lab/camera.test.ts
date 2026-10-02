@@ -68,6 +68,15 @@ describe('buildPaintView', () => {
     const view = buildPaintView(camera, { azimuth: 35, elevation: 40 }, 1, false)
     near(view.lightDir, [0.627507, -0.439385, 0.642788], 5)
   })
+
+  it('carries how far in the camera is against the authored framing, for the brush to follow, and says nothing when told nothing', () => {
+    // a camera at zoom 4.8 over an authored zoom of 1.6 is a 3x close-up
+    expect(buildPaintView(camera, { azimuth: 0, elevation: 0 }, 1, false, 4.8 / 1.6).zoom).toBeCloseTo(3, 12)
+    expect(buildPaintView(camera, { azimuth: 0, elevation: 0 }, 1, false, 1).zoom).toBe(1)
+    expect('zoom' in buildPaintView(camera, { azimuth: 0, elevation: 0 }, 1, false)).toBe(false)
+    // a zoom that is not a number is left out (the painter reads a missing one as 1)
+    expect('zoom' in buildPaintView(camera, { azimuth: 0, elevation: 0 }, 1, false, Number.NaN)).toBe(false)
+  })
 })
 
 describe('toWorldScene', () => {

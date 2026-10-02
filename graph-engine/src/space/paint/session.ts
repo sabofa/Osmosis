@@ -162,6 +162,8 @@ export interface FrameResponse {
   ok: true
   kind: 'full' | 'colour'
   strokes: StrokeBatch
+  // The underpainting (PaintFrame.underpaint): a colour frame has its colours made again too.
+  underpaint: Float32Array
   // Null for a colour frame: the debug views are the last full frame's.
   debug: WireDebug | null
   stats: PaintFrame['stats']
@@ -195,6 +197,7 @@ export function transferList(res: SessionResponse): ArrayBuffer[] {
   }
   const s = res.strokes
   for (const a of [s.role, s.layer, s.path, s.width, s.depth, s.colour, s.alpha, s.load, s.impasto, s.bristles, s.bristleVar, s.dry, s.wet, s.endSoft, s.edge, s.seed]) add(a)
+  add(res.underpaint)
   if (res.debug) for (const a of [res.debug.value, res.debug.zones, res.debug.planes, res.debug.edgeSegments, res.debug.edgeClass]) add(a)
   if (res.paper) add(res.paper.rgba)
   return out
@@ -296,7 +299,7 @@ export class PaintSession {
           this.analysis = null
           return { id: req.id, ok: false, needFull: true }
         }
-        return { id: req.id, ok: true, kind: 'colour', strokes: frame.strokes, debug: null, stats: frame.stats, paper, timing: { modelMs: performance.now() - t0, particlesMs: 0, paperMs } }
+        return { id: req.id, ok: true, kind: 'colour', strokes: frame.strokes, underpaint: frame.underpaint, debug: null, stats: frame.stats, paper, timing: { modelMs: performance.now() - t0, particlesMs: 0, paperMs } }
       }
 
       if (!req.gbuffer) return { id: req.id, ok: false, error: 'paint session: a full frame needs the G-buffer' }
@@ -313,7 +316,7 @@ export class PaintSession {
       const frame = paintFrame(entry.scene, held.set, req.view, req.gbuffer, req.params)
       const modelMs = performance.now() - t1
       this.analysis = { sceneId: req.sceneId, params: req.params, frame, debug: req.debug }
-      return { id: req.id, ok: true, kind: 'full', strokes: frame.strokes, debug: wireDebug(frame, req.debug), stats: frame.stats, paper, timing: { modelMs, particlesMs, paperMs } }
+      return { id: req.id, ok: true, kind: 'full', strokes: frame.strokes, underpaint: frame.underpaint, debug: wireDebug(frame, req.debug), stats: frame.stats, paper, timing: { modelMs, particlesMs, paperMs } }
     } catch (error) {
       return { id: req.id, ok: false, error: error instanceof Error ? error.message : String(error) }
     }
