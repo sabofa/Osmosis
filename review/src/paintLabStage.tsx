@@ -27,7 +27,7 @@ export interface Readout {
   particlesMs: number
   paperMs: number
   paintMs: number
-  kind: 'full' | 'colour' | 'repaint'
+  kind: 'full' | 'colour' | 'repaint' | 'reproject'
   view: SpaceView
 }
 
@@ -48,6 +48,8 @@ const READOUT_MS = 250
 export function Stage(props: StageProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The picture the camera stopped on (re-projected strokes), laid over the new frame and eased out.
+  const snapRef = useRef<HTMLCanvasElement | null>(null)
   const engineRef = useRef<PaintEngine | null>(null)
   const viewRef = useRef<SpaceView>(props.built.authored)
   const easingRef = useRef<Easing | null>(null)
@@ -126,6 +128,11 @@ export function Stage(props: StageProps) {
   // A painted frame: the meter and the readout.
   const framed = useCallback((stats: FrameStats) => {
     if (canvasRef.current) canvasRef.current.style.opacity = ''
+    // a re-projected frame is on screen again: no easing from an older picture
+    if (stats.kind === 'reproject' && snapRef.current) {
+      snapRef.current.style.transition = 'none'
+      snapRef.current.style.opacity = '0'
+    }
     if (URL_STATE.perf) {
       const w = window as unknown as { __paintFrames?: unknown[] }
       ;(w.__paintFrames ??= []).push({ ...stats, t: performance.now(), dragging: draggingRef.current })
@@ -148,12 +155,31 @@ export function Stage(props: StageProps) {
     canvas.style.opacity = '0'
     host.appendChild(canvas)
     canvasRef.current = canvas
+    // The snapshot of a re-projected frame: the engine copies each into it, and when the camera stops the lab
+    // eases it out over the model's frame (never under prefers-reduced-motion).
+    const snap = document.createElement('canvas')
+    snap.setAttribute('aria-hidden', 'true')
+    snap.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0'
+    host.appendChild(snap)
+    snapRef.current = snap
     let engine: PaintEngine | null = null
     try {
-      engine = createPaintEngine(canvas, {
-        onFrame: framed,
-        onError: (text) => setMessage(text === null ? null : { title: 'The painter hit an error', text }),
-      })
+      engine = createPaintEngine(
+        canvas,
+        {
+          onFrame: framed,
+          onError: (text) => setMessage(text === null ? null : { title: 'The painter hit an error', text }),
+          onCrossfade: () => {
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+            snap.style.transition = 'none'
+            snap.style.opacity = '1'
+            void snap.offsetWidth
+            snap.style.transition = 'opacity 200ms ease-out'
+            snap.style.opacity = '0'
+          },
+        },
+        { snapshot: snap.getContext('2d') },
+      )
     } catch (error) {
       setMessage({ title: 'The painter cannot start', text: error instanceof Error ? error.message : String(error) })
     }
@@ -260,7 +286,9 @@ export function Stage(props: StageProps) {
       engine?.dispose()
       engineRef.current = null
       canvas.remove()
+      snap.remove()
       canvasRef.current = null
+      snapRef.current = null
     }
   }, [request, framed])
 

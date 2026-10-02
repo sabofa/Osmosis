@@ -12,16 +12,22 @@
 // cannot start, the same session (graph-engine/src/space/paint/session.ts) runs
 // on this thread.
 //
+// While the camera moves nothing is recomputed: the strokes of the last full frame are re-projected
+// through the new view (each keeps its world path, StrokeBatch.worldPath), so every stroke stays and
+// the paint rides the object, at the cost of a few milliseconds. The model runs once when the camera
+// stops (at once on the pointer's release; 120 ms after the last wheel turn, key or eased step) and the
+// picture eases from the re-projected frame to the new one. Nothing runs while nothing changes.
+//
 // What a frame costs depends on what changed:
 //   full    the G-buffer and the whole model;
+//   reproject the camera moved and nothing else did: the last full frame's strokes through the new view
+//           (graph-engine/src/space/paint/reproject.ts), painted again; no G-buffer and no model.
 //   repaint only renderer parameters changed (the relief, the canvas's texture or weave: classifyChange),
 //           and the view did not: the strokes are the last frame's, painted again, with no G-buffer
 //           and no model (the paper alone comes from the worker when the texture or the weave moved).
 //   colour  colour parameters changed (and the view did not): no G-buffer, no analysis; the worker
 //           makes the colours and the brush-load mix again from the last frame's recipes. This is
 //           what the colour sliders and the curve editors do.
-//   drag    a full frame at the camera's dragging quality (particles.dragDensity, a coarser analysis)
-//           while the pointer is down; the pointer coming up is a full frame at full quality.
 //
 // The contract the lab keeps:
 //  - setScene receives the scene in WORLD coordinates (paintLabCamera.ts):
@@ -47,6 +53,7 @@
 
 import { PaintRenderer } from '../../graph-engine/src/space/paint/gl/PaintRenderer'
 import { classifyChange } from '../../graph-engine/src/space/paint/model/index'
+import { reprojectStrokes } from '../../graph-engine/src/space/paint/reproject'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
 import {
   colourDataOf,
@@ -79,14 +86,31 @@ export interface FrameStats {
   particlesMs: number
   paperMs: number
   paintMs: number
-  kind: 'full' | 'colour' | 'repaint'
+  kind: 'full' | 'colour' | 'repaint' | 'reproject'
+  // A result that was not shown because a newer picture was (the camera moved on while the model worked).
+  skipped?: boolean
 }
 
 export interface EngineEvents {
   onFrame(stats: FrameStats): void
   // A message to show in the view, or null when the engine is well again.
   onError(message: string | null): void
+  // The frame just painted replaces a re-projected one (the camera stopped): the picture the snapshot holds
+  // is the old one, to ease out over the new.
+  onCrossfade?(): void
+  // Every frame painted, with its strokes (for tests and measuring).
+  onPaint?(frame: PaintFrame, kind: FrameStats['kind']): void
 }
+
+export interface EngineOptions {
+  // A 2D canvas the engine copies each re-projected frame into, in the same task as its paint, so the lab can
+  // ease from that picture to the full-quality frame that follows (a WebGL canvas cannot be read later).
+  snapshot?: CanvasRenderingContext2D | null
+}
+
+// The wait after the camera's last move (the wheel, a key, an eased step; not a pointer drag, which ends
+// at its release) before the model runs for the view it stopped at.
+export const SETTLE_MS = 120
 
 export interface PaintEngine {
   setScene(scene: SpaceScene, colours: SceneColours): void
@@ -185,15 +209,26 @@ const debugOf = (wire: WireDebug | null): PaintDebug => ({
   edgeClass: wire?.edgeClass ?? EMPTY_U8,
 })
 
-// What decides whether a frame's G-buffer and analysis are still the right ones: the view, and its quality.
-function sameFrame(a: PaintView, b: PaintView): boolean {
-  if (a.width !== b.width || a.height !== b.height || a.pixelRatio !== b.pixelRatio || a.dragging !== b.dragging) return false
+// Is `b` the camera `a` was made for (the view, the light, the size)?
+function sameCamera(a: PaintView, b: PaintView): boolean {
+  if (a.width !== b.width || a.height !== b.height || a.pixelRatio !== b.pixelRatio) return false
   for (let i = 0; i < 16; i++) if (a.viewProj[i] !== b.viewProj[i]) return false
   for (let i = 0; i < 3; i++) if (a.lightDir[i] !== b.lightDir[i] || a.eye[i] !== b.eye[i] || a.viewDir[i] !== b.viewDir[i]) return false
   return true
 }
 
+// What decides whether a frame's G-buffer and analysis are still the right ones: the camera, and the quality
+// (an analysis made while dragging, at the coarser stride, is not one for a still view).
+function sameFrame(a: PaintView, b: PaintView): boolean {
+  return sameCamera(a, b) && (!a.dragging || b.dragging)
+}
+
+// The debug views drawn from images of the G-buffer's size, which a re-projection cannot move.
+const IMAGE_VIEWS = new Set<PaintDebugMode>(['value', 'zones', 'planes', 'edges'])
+
 interface Job {
+  // Which request it was: a result never replaces the picture of a newer one.
+  seq: number
   // The scene (and its id and colours) the job was asked for: setScene after the request does not change what it paints.
   sceneId: number
   scene: SpaceScene
@@ -217,7 +252,7 @@ interface Analysed {
   frame: PaintFrame
 }
 
-export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvents): PaintEngine {
+export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvents, options: EngineOptions = {}): PaintEngine {
   let failure: string | null = null
   // new PaintRenderer throws, with a message fit to show, when there is no WebGL2.
   const renderer = new PaintRenderer(canvas, {
@@ -274,6 +309,13 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   let latest: Job | null = null
   // The last request for the view, to paint again after a lost context.
   let lastJob: Job | null = null
+  // Requests are numbered; shownSeq is the newest whose picture is on screen.
+  let seq = 0
+  let shownSeq = 0
+  // The picture on screen is a re-projected one, and the snapshot holds it.
+  let snapshotValid = false
+  let lastDragging = false
+  let settleTimer: ReturnType<typeof setTimeout> | null = null
   const tiles: Job[] = []
 
   const paperFor = (params: PaintParams, view: PaintView): PaperWanted => ({
@@ -354,7 +396,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       if (gone(response)) return run(job)
       if (!isFrame(response)) return failed(response)
       // The scene changed while the model worked: a frame of the view is not the picture any more (a tile is of its own scene).
-      if (!job.target && id !== sceneId) return { strokes: 0, ms: 0, gbufferMs, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: 0, kind: response.kind }
+      if (!job.target && id !== sceneId) return { strokes: 0, ms: 0, gbufferMs, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: 0, kind: response.kind, skipped: true }
       takePaper(response.paper)
       kind = response.kind
       modelMs = response.timing.modelMs
@@ -372,13 +414,68 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         a.strokesParams = params
       }
     }
+    // A newer request has been painted since this one began (the camera moved on while the model worked): this is
+    // not the picture any more. What it made is kept above (its strokes are the freshest to re-project) but not shown.
+    if (!job.target && job.seq < shownSeq) {
+      return { strokes: 0, ms: 0, gbufferMs, modelMs, particlesMs, paperMs, paintMs: 0, kind, skipped: true }
+    }
     const t1 = performance.now()
     renderer.paint(frame, view, params, debug)
     // A renderer that failed says so (it then draws nothing).
     if (failure) throw new Error(failure)
     if (job.target) job.target.drawImage(canvas, 0, 0, job.target.canvas.width, job.target.canvas.height)
+    else {
+      shownSeq = job.seq
+      // the camera stopped and the model has made its frame: ease from the re-projected picture to it
+      if (snapshotValid) {
+        snapshotValid = false
+        events.onCrossfade?.()
+      }
+    }
+    events.onPaint?.(frame, kind)
     const now = performance.now()
     return { strokes: frame.stats.strokes, ms: now - started, gbufferMs, modelMs, particlesMs, paperMs, paintMs: now - t1, kind }
+  }
+
+  // The camera moved and nothing else did: the last full frame's strokes through the new view. Synchronous (a few
+  // milliseconds), and whatever the model is doing at the time, which its result then does not replace.
+  function reproject(job: Job): boolean {
+    const a = analysed
+    if (!a || job.target || a.sceneId !== job.sceneId || a.debug !== job.debug || IMAGE_VIEWS.has(job.debug)) return false
+    if (sameFrame(a.view, job.view) || classifyChange(a.strokesParams, job.params) !== 'same') return false
+    const started = performance.now()
+    try {
+      const strokes = reprojectStrokes(a.frame.strokes, a.view, job.view, job.params)
+      const frame: PaintFrame = { strokes, debug: a.frame.debug, stats: a.frame.stats }
+      const t1 = performance.now()
+      renderer.paint(frame, job.view, job.params, job.debug)
+      if (failure) throw new Error(failure)
+      shownSeq = job.seq
+      const snap = options.snapshot
+      if (snap) {
+        if (snap.canvas.width !== canvas.width || snap.canvas.height !== canvas.height) {
+          snap.canvas.width = canvas.width
+          snap.canvas.height = canvas.height
+        }
+        snap.drawImage(canvas, 0, 0)
+        snapshotValid = true
+      }
+      events.onPaint?.(frame, 'reproject')
+      const now = performance.now()
+      events.onError(null)
+      events.onFrame({ strokes: strokes.count, ms: now - started, gbufferMs: 0, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: now - t1, kind: 'reproject' })
+    } catch (error) {
+      events.onError(error instanceof Error ? error.message : String(error))
+    }
+    return true
+  }
+
+  // The camera has stopped: the model's frame for the view it stopped at.
+  function settle(): void {
+    settleTimer = null
+    if (disposed || !lastJob) return
+    latest = { ...lastJob, seq: ++seq }
+    pump()
   }
 
   // One frame at a time: a Showcase tile in order, else the newest request.
@@ -393,8 +490,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         inFlight = false
         if (disposed) return
         if (!job.target) {
-          events.onError(null)
-          events.onFrame(stats)
+          if (!stats.skipped) {
+            events.onError(null)
+            events.onFrame(stats)
+          }
         } else job.settle?.resolve(stats)
         pump()
       },
@@ -431,15 +530,26 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
 
     render(view, params, debug) {
       if (!sceneNow || !coloursNow) return
-      latest = { sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target: null, settle: null }
-      lastJob = latest
+      const job: Job = { seq: ++seq, sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target: null, settle: null }
+      lastJob = job
+      if (settleTimer !== null) clearTimeout(settleTimer)
+      settleTimer = null
+      // The pointer's release is the model's frame at once; any other move of the camera is shown from the last frame's
+      // strokes and the model runs when it has stopped.
+      const released = lastDragging && !view.dragging
+      lastDragging = view.dragging
+      if (!released && reproject(job)) {
+        if (!view.dragging) settleTimer = setTimeout(settle, SETTLE_MS)
+        return
+      }
+      latest = job
       pump()
     },
 
     renderTo(target, view, params, debug) {
       return new Promise<FrameStats>((resolve, reject) => {
         if (!sceneNow || !coloursNow) return reject(new Error('the engine has no scene'))
-        tiles.push({ sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target, settle: { resolve, reject } })
+        tiles.push({ seq: ++seq, sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target, settle: { resolve, reject } })
         pump()
       })
     },
@@ -448,6 +558,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       disposed = true
       latest = null
       lastJob = null
+      if (settleTimer !== null) clearTimeout(settleTimer)
+      settleTimer = null
       for (const t of tiles.splice(0)) t.settle?.reject(new Error('the engine was disposed'))
       sent.clear()
       sceneNow = null

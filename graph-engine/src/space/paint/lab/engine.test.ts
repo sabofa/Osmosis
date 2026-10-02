@@ -1,8 +1,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, setParam, type PaintParams } from '../params'
 import { createPaintFakeGl, timeline } from '../gl/fakePaintGl'
-import { flatColours, paintView, sceneOf, sphereMesh, tableMesh } from '../model/testing'
-import type { PaintDebugMode, PaintView } from '../types'
+import { encodeFloatTexel } from '../gl/gbuffer'
+import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
+import type { PaintDebugMode, PaintFrame, PaintView, StrokeBatch } from '../types'
 import type { EngineEvents, FrameStats, PaintEngine } from '../../../../../review/src/paintLabEngine'
 
 // The Paint Lab's engine: one frame at a time, newest request wins, a colour-only change is a
@@ -121,7 +122,7 @@ describe('the frames of the engine', () => {
     engine.dispose()
   })
 
-  it('makes a full frame when the view, its quality, the debug view, the light, a stroke size or the scene changed', async () => {
+  it('makes a full frame when the debug view, the light, a stroke size or the scene changed (and a re-projection when only the camera did)', async () => {
     const { engine, frames, gbuffers, done } = setup()
     engine.render(view(), P, 'none')
     await done(1)
@@ -131,13 +132,12 @@ describe('the frames of the engine', () => {
       await done(n + 1)
       return frames[frames.length - 1].kind
     }
-    expect(await next(view({ azimuth: 40 }), P, 'none')).toBe('full') // the camera moved
-    expect(await next(view({ azimuth: 40, dragging: true }), P, 'none')).toBe('full') // the same view, at dragging quality
-    expect(await next(view({ azimuth: 40 }), P, 'none')).toBe('full') // and back at full quality
-    expect(await next(view({ azimuth: 40 }), P, 'edges')).toBe('full') // another debug view
+    // the camera moved (dragging, so that no model frame follows by itself): the strokes are the last frame's
+    expect(await next(view({ azimuth: 40, dragging: true }), P, 'none')).toBe('reproject')
+    expect(await next(view({ azimuth: 40 }), P, 'edges')).toBe('full') // another debug view: images of the G-buffer cannot move
     expect(await next(view({ azimuth: 40 }), setParam(P, 'light.azimuth', 20), 'edges')).toBe('full') // the light
     expect(await next(view({ azimuth: 40 }), setParam(setParam(P, 'light.azimuth', 20), 'roles.block.width', 30), 'edges')).toBe('full') // a stroke size
-    expect(gbuffers()).toBe(7)
+    expect(gbuffers()).toBe(4)
     // the new scene: even with nothing else changed, a colour request would have nothing to recolour
     engine.setScene(OTHER, COLOURS)
     expect(await next(view({ azimuth: 40 }), setParam(setParam(P, 'light.azimuth', 20), 'roles.block.width', 30), 'edges')).toBe('full')
@@ -175,10 +175,10 @@ describe('the frames of the engine', () => {
     // the figure changes in the same task, before the model's answer is taken
     engine.setScene(OTHER, COLOURS)
     await new Promise((r) => setTimeout(r, 50))
-    expect(frames.filter((f) => f.strokes > 0 || f.ms > 0).length).toBe(0)
+    expect(frames.length).toBe(0) // the old figure's frame was made and dropped
     engine.render(view(), P, 'none')
-    await done(2)
-    expect(frames[1].kind).toBe('full')
+    await done(1)
+    expect(frames[0].kind).toBe('full')
     engine.dispose()
   })
 
@@ -192,6 +192,228 @@ describe('the frames of the engine', () => {
     engine.render(view(), P, 'none')
     await done(frames.length + 1)
     expect(errors[errors.length - 1]).toBeNull()
+    engine.dispose()
+  })
+})
+
+// ---- a real picture: the sphere's G-buffer through the fake GL's readback, so the model has strokes to make ----
+
+const sphereView = (opts: Parameters<typeof paintView>[0] = {}): PaintView => paintView({ width: 320, height: 240, azimuth: 30, elevation: 25, zoom: 200, ...opts })
+
+function withPicture() {
+  const painted: { frame: PaintFrame; kind: FrameStats['kind'] }[] = []
+  const crossfades: number[] = []
+  const snapshot = { canvas: { width: 0, height: 0 }, drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
+  const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+  Object.assign(gl.canvas.canvas, { style: {} })
+  const frames: FrameStats[] = []
+  const errors: (string | null)[] = []
+  const engine = createPaintEngine(
+    gl.canvas.canvas,
+    { onFrame: (f) => frames.push(f), onError: (m) => errors.push(m), onCrossfade: () => crossfades.push(frames.length), onPaint: (frame, kind) => painted.push({ frame, kind }) },
+    { snapshot },
+  )
+  engine.setScene(SCENE, COLOURS)
+  // The renderer reads the sphere back as the G-buffer of the view it is about to paint.
+  const go = (v: PaintView, params: PaintParams = P, debug: PaintDebugMode = 'none') => {
+    const g = sphereGBuffer(v.width, v.height, { view: v, params, centre: [0, 0, 0], radius: 0.6, mark: 0, table: { z: -0.6, mark: 1 } })
+    gl.setReadback((_a, _w, _h, dst) => {
+      const out = dst as Float32Array
+      for (let i = 0; i < g.width * g.height; i++) {
+        const t =
+          g.mark[i] < 0
+            ? [0, 0, 1e30, 0]
+            : encodeFloatTexel({ normal: [g.normal[3 * i], g.normal[3 * i + 1], g.normal[3 * i + 2]], depth: g.depth[i], value: g.value[i], shadow: g.shadow[i] === 1, mark: g.mark[i] })
+        out.set(t, 4 * i)
+      }
+    })
+    engine.render(v, params, debug)
+  }
+  const gbuffers = () => timeline(gl).filter((e) => e.kind === 'gbuffer').length / 2
+  const done = (n: number) => vi.waitFor(() => expect(frames.length).toBeGreaterThanOrEqual(n), { timeout: 60_000, interval: 5 })
+  return { engine, frames, errors, painted, crossfades, snapshot, go, gbuffers, done }
+}
+
+const sameStrokes = (a: StrokeBatch, b: StrokeBatch) => {
+  expect(a.count).toBe(b.count)
+  for (const key of Object.keys(a) as (keyof StrokeBatch)[]) if (key !== 'count') expect(Array.from(a[key] as ArrayLike<number>), String(key)).toEqual(Array.from(b[key] as ArrayLike<number>))
+}
+
+describe('the camera moving: the last frame\'s strokes, re-projected', () => {
+  it('re-projects every stroke through the new view while the pointer is down: no G-buffer, no model, nothing thinned', async () => {
+    const { engine, frames, painted, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    const first = painted[0].frame.strokes
+    expect(first.count).toBeGreaterThan(100)
+    for (let k = 1; k <= 5; k++) go(sphereView({ azimuth: 30 + 6 * k, dragging: true }), P)
+    // each one is painted at once, in the same task: the engine re-projects synchronously
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject', 'reproject'])
+    expect(gbuffers()).toBe(1)
+    for (const f of frames.slice(1)) {
+      expect(f.modelMs).toBe(0)
+      expect(f.gbufferMs).toBe(0)
+      expect(f.strokes).toBe(first.count)
+    }
+    // the strokes are the first frame's: its colours, roles, widths, but a path of their own for the view
+    const last = painted[painted.length - 1].frame.strokes
+    expect(last.colour).toBe(first.colour)
+    expect(last.role).toBe(first.role)
+    expect(last.count).toBe(first.count)
+    expect(Array.from(last.path)).not.toEqual(Array.from(first.path))
+    engine.dispose()
+  })
+
+  it('makes the model\'s frame once on the pointer\'s release, and eases from the re-projected picture to it', async () => {
+    const { engine, frames, crossfades, snapshot, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView({ azimuth: 50, dragging: true }), P)
+    go(sphereView({ azimuth: 64, dragging: true }), P)
+    expect(snapshot.drawImage).toHaveBeenCalledTimes(2) // each re-projected frame was copied in its own task
+    expect(crossfades).toEqual([])
+    // the release: a full frame at once, with a G-buffer of its own
+    go(sphereView({ azimuth: 64 }), P)
+    await done(4)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'full'])
+    expect(gbuffers()).toBe(2)
+    expect(crossfades).toEqual([3]) // eased once, as the fourth frame was painted (three had been reported)
+    // and the picture after it is a still one: nothing else is queued
+    await new Promise((r) => setTimeout(r, 250))
+    expect(frames.length).toBe(4)
+    engine.dispose()
+  })
+
+  it('does not run the model while the pointer is down, however long it is held: the picture is the re-projected one until the release', async () => {
+    const { engine, frames, crossfades, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView({ azimuth: 50, dragging: true }), P)
+    // held still, well past the time the model would be asked for after a wheel move
+    await new Promise((r) => setTimeout(r, 400))
+    expect(kinds(frames)).toEqual(['full', 'reproject'])
+    expect(gbuffers()).toBe(1)
+    go(sphereView({ azimuth: 54, dragging: true }), P)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject'])
+    expect(crossfades).toEqual([])
+    // the release is what asks for it
+    go(sphereView({ azimuth: 54 }), P)
+    await done(4)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'full'])
+    expect(gbuffers()).toBe(2)
+    engine.dispose()
+  })
+
+  it('does not ease when nothing was re-projected (a slider\'s full frame replaces a picture that was the model\'s)', async () => {
+    const { engine, frames, crossfades, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView(), setParam(P, 'light.azimuth', 40))
+    await done(2)
+    expect(kinds(frames)).toEqual(['full', 'full'])
+    expect(crossfades).toEqual([])
+    engine.dispose()
+  })
+
+  it('re-projects a move that is not a drag (the wheel, a key, an eased step) and runs the model once it has stopped', async () => {
+    const { engine, frames, crossfades, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    // three moves of the wheel in quick succession: three re-projections, and one model frame after the last
+    go(sphereView({ zoom: 210 }), P)
+    go(sphereView({ zoom: 222 }), P)
+    go(sphereView({ zoom: 235 }), P)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject'])
+    expect(gbuffers()).toBe(1)
+    await done(5)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'full'])
+    expect(gbuffers()).toBe(2)
+    expect(crossfades).toEqual([4])
+    // the model's frame is for the view it stopped at: still, so nothing follows
+    await new Promise((r) => setTimeout(r, 300))
+    expect(frames.length).toBe(5)
+    engine.dispose()
+  })
+
+  it('does not paint a model frame over a newer re-projected picture, and keeps its strokes for the next re-projection', async () => {
+    vi.useFakeTimers()
+    try {
+      const { engine, frames, painted, go } = withPicture()
+      go(sphereView(), P)
+      await vi.waitFor(() => expect(frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+      // a wheel move: re-projected at once, and the model's frame is due in 120 ms
+      go(sphereView({ zoom: 230 }), P)
+      expect(kinds(frames)).toEqual(['full', 'reproject'])
+      // the model's frame starts (its G-buffer is read now) ... and the camera moves again before its answer is taken
+      vi.advanceTimersByTime(130)
+      go(sphereView({ azimuth: 60, dragging: true }), P)
+      expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject'])
+      await Promise.resolve()
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(5)
+      // the model's frame (for zoom 230) was made but is older than the picture on screen: not painted, not reported
+      expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject'])
+      expect(painted.map((p) => p.kind)).toEqual(['full', 'reproject', 'reproject'])
+      // its strokes are the ones the next re-projection starts from
+      go(sphereView({ azimuth: 66, dragging: true }), P)
+      const fromAdopted = painted[painted.length - 1].frame.strokes
+      expect(fromAdopted.colour).not.toBe(painted[0].frame.strokes.colour)
+      engine.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('a still picture', () => {
+  it('is made once and painted again, not recomputed: nothing runs, nothing is queued, and a repeat request is the same strokes', async () => {
+    const { engine, frames, painted, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView(), P)
+    await done(2)
+    expect(kinds(frames)).toEqual(['full', 'repaint'])
+    expect(painted[1].frame.strokes).toBe(painted[0].frame.strokes)
+    expect(gbuffers()).toBe(1)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(frames.length).toBe(2) // no timer, no periodic frame
+    engine.dispose()
+  })
+
+  it('is the same strokes after an orbit away and back to the view it was made for: it is painted again, not made again', async () => {
+    const { engine, frames, painted, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView({ azimuth: 70, dragging: true }), P)
+    go(sphereView({ azimuth: 100, dragging: true }), P)
+    go(sphereView({ azimuth: 30, dragging: true }), P)
+    go(sphereView({ azimuth: 30 }), P)
+    await done(5)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'repaint', 'repaint'])
+    expect(gbuffers()).toBe(1)
+    sameStrokes(painted[painted.length - 1].frame.strokes, painted[0].frame.strokes)
+    engine.dispose()
+  })
+
+  it('is byte-identical when the model makes it again: the same view and parameters, after a slider and back', async () => {
+    const { engine, frames, painted, gbuffers, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView({ lightAzimuth: 40 }), setParam(P, 'light.azimuth', 40))
+    await done(2)
+    go(sphereView(), P)
+    await done(3)
+    expect(kinds(frames)).toEqual(['full', 'full', 'full'])
+    expect(gbuffers()).toBe(3)
+    const a = painted[0].frame
+    const b = painted[2].frame
+    expect(b.strokes).not.toBe(a.strokes) // a frame of its own ...
+    expect(a.strokes.count).toBeGreaterThan(100)
+    sameStrokes(b.strokes, a.strokes) // ... and the same one, to the last byte
+    expect(Array.from(b.debug.edgeSegments)).toEqual(Array.from(a.debug.edgeSegments))
+    // and the one in between was a different frame (the check above would pass for a model that ignored the light)
+    expect(Array.from(painted[1].frame.strokes.colour)).not.toEqual(Array.from(a.strokes.colour))
     engine.dispose()
   })
 })
