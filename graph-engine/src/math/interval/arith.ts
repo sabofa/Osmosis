@@ -163,8 +163,9 @@ export function powReal(out: Iv, a: Iv, e: number): Iv {
   return set(out, down(lo, LIB), up(hi, LIB), v)
 }
 
-// realOddPow for a negative base, p odd and p even: the real root, odd or even
-// in x. Module-level so a twin passes it to `sides` without a closure.
+// The two shapes of realOddPow (rational.ts): for a negative base, -|x|^e when
+// p is odd and |x|^e when p is even; bit for bit the same on a non-negative base.
+// Module-level so powOddRoot passes one to `sides` without a closure.
 function oddRootOdd(x: number, e: number): number {
   return x < 0 ? -Math.pow(-x, e) : Math.pow(x, e)
 }
