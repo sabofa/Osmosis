@@ -8,8 +8,9 @@
 // - a definition named after a classic built-in, pi or e (refused, so they
 //   keep their meaning: space's own coordinate maps and calc's derivatives
 //   call sin, cos, sqrt and the rest by name);
-// - a @param whose value, range or step calls the name of another @param, which
-//   those constant expressions would read as the built-in.
+// - a @param whose value, range or step calls the name of a @param, a constant
+//   or a function of the document, which those constant expressions would read
+//   as the built-in.
 // One of calc's ten new built-in names (shadowable.ts) may be a definition's:
 // it shadows the built-in in this document, and calling a constant or a @param
 // of that name as the built-in is compile's error (math/compile.ts), not a
@@ -75,12 +76,15 @@ export function buildScope(
   })
 
   // A @param's value, range and step were compiled with no scope, so a call of
-  // another @param's name in them reached the built-in of that name.
+  // a name the document also makes a @param, a constant or a function reached
+  // the built-in of that name, while every other line reads the document's own.
   const bound = new Set(bindings.map((b) => b.name))
   for (const b of bindings) {
     for (const called of b.calls ?? []) {
-      if (bound.has(called)) {
-        errors.push({ line: b.line, message: `@param ${b.name}: "${called}" is a parameter in this document; rename it to use the built-in ${called} function` })
+      const fn = functions.get(called)
+      const owner = bound.has(called) ? 'a parameter' : fn ? (fn.params.length === 0 ? 'a constant' : 'a function') : null
+      if (owner) {
+        errors.push({ line: b.line, message: `@param ${b.name}: "${called}" is ${owner} in this document; rename it to use the built-in ${called} function` })
       }
     }
   }

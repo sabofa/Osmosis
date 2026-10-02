@@ -45,11 +45,16 @@ function reserved(name: string): boolean {
   return isClassicBuiltin(name) || name === 'pi' || name === 'e'
 }
 
-// One of those ten, followed by a scalar right side, "choose(x, k) = 3", may be
-// the equation it would always have been, and a document's own @param or
-// constant could be a parameter's name, so it is a definition only when its
-// right side reads every one of its parameters: "gcd(a, b) = a*b" and
-// "root(x, n) = x^(1/n)" are.
+// One of those ten, followed by a scalar right side, may be the equation it
+// would always have been, so it is a definition only when it cannot be one:
+// - its parameters are not all coordinates. "lcm(x, y) = x*y" and
+//   "gcd(x, y) = x + y - 1" are the implicit curves they were at calc's base;
+//   a coordinate-only line is never a definition;
+// - its right side reads every one of its parameters, since a document's own
+//   @param or constant could be an argument: "choose(x, k) = 3" is an equation,
+//   "gcd(a, b) = a*b" and "root(x, n) = x^(1/n)" define.
+const COORDINATES = new Set(['x', 'y', 'z'])
+
 function readsEvery(rhs: string, params: readonly string[]): boolean {
   try {
     const read = readNames(parseExprString(rhs), params)
@@ -70,7 +75,7 @@ function parseDefinition(rest: string, clauses: readonly RawClause[]): SpaceForm
   // whatever its name (the kernel refuses one named after a classic built-in).
   if (params.length === 1 && !vector) return 'unclaimed'
   if (reserved(name)) return null
-  if (!vector && SHADOWABLE_BUILTINS.has(name) && !readsEvery(rhs, params)) return null
+  if (!vector && SHADOWABLE_BUILTINS.has(name) && (params.every((p) => COORDINATES.has(p)) || !readsEvery(rhs, params))) return null
 
   if (vector) {
     buildStyle(clauses, 'vector definition')

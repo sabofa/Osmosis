@@ -221,6 +221,24 @@ describe('a built-in-named line is a definition only when it must be one', () =>
     expect(kindsOf('gcd(a, b) = a')).toEqual(['implicit'])
   })
 
+  // At calc's base 3bef2b7 these drew implicit lines (or gave an error); a
+  // definition of lcm or gcd would draw nothing and say nothing.
+  it('of the ten, a line whose parameters are all coordinates is never a definition: lcm(x, y) = x*y and gcd(x, y) = x + y - 1 are the implicit curves they were', () => {
+    for (const line of ['lcm(x, y) = x*y', 'gcd(x, y) = x + y - 1']) {
+      expect(kindsOf(line), line).toEqual(['implicit'])
+      const scene = sceneOf(line)
+      expect(scene.errors, line).toEqual([])
+      expect(scene.marks.map((m) => m.kind), line).toEqual(['lines'])
+    }
+  })
+
+  it('and with a z, as at base: perm(x, y, z) = x*y*z and root(x, y) = x*y + z are implicit surfaces, with the errors base gave, not silence', () => {
+    expect(kindsOf('perm(x, y, z) = x*y*z')).toEqual(['space:implicitSurface'])
+    expect(sceneOf('perm(x, y, z) = x*y*z').errors).toEqual([{ line: 1, message: expect.stringMatching(/"perm" takes 2 arguments, got 3/) }])
+    expect(kindsOf('root(x, y) = x*y + z')).toEqual(['space:implicitSurface'])
+    expect(sceneOf('root(x, y) = x*y + z').errors).toEqual([{ line: 1, message: expect.stringMatching(/No derivative rule for "root"/) }])
+  })
+
   it('and one that reads every parameter defines: gcd(a, b) = a*b, root(x, n) = x^(1/n)', () => {
     expect(kindsOf('gcd(a, b) = a*b')).toEqual(['space:function'])
     expect(kindsOf('root(x, n) = x^(1/n)')).toEqual(['space:function'])
@@ -240,6 +258,21 @@ describe("a @param's value, range and step may not call another @param's name (t
     expect(sceneOf('@param k = 1 range [0, 5]\n@param k2 = 1 range [0, gamma(3) + 1]\n@param gamma = 2 range [1, 5]').errors).toEqual([{ line: 2, message: NAMED('gamma', 'k2') }])
     expect(sceneOf('@param gamma = 2 range [1, 5]\n@param k = 1 range [0, 5] step sqrt(gamma(1))').errors).toEqual([{ line: 2, message: NAMED('gamma', 'k') }])
     expect(sceneOf('@param gamma = 2 range [1, 5]\n@param k = 1 + 2*sqrt(gamma(1)) range [0, 9]').errors).toEqual([{ line: 2, message: NAMED('gamma', 'k') }])
+  })
+
+  it("a @param calling a function or a constant of the document is refused too: every other line reads the document's gamma, this one read the built-in", () => {
+    const OWNED = (role: string) => `@param k: "gamma" is ${role} in this document; rename it to use the built-in gamma function`
+    // gamma(x) = x^2 gives gamma(3) = 9 on line 3, where the @param read the built-in's 2
+    const fn = sceneOf('gamma(x) = x^2\n@param k = gamma(3) range [0, 10]\nA = (gamma(3), k, 0)')
+    expect(fn.errors).toEqual([{ line: 2, message: OWNED('a function') }])
+    expect(pointOf(fn)[0]).toBe(9)
+    const constant = sceneOf('gamma = 3\n@param k = gamma(3) range [0, 10]')
+    expect(constant.errors).toEqual([{ line: 2, message: OWNED('a constant') }])
+    // the definition may come after the @param
+    expect(sceneOf('@param k = gamma(3) range [0, 10]\ngamma(x) = x^2').errors).toEqual([{ line: 1, message: OWNED('a function') }])
+    expect(sceneOf('@param k = gamma(3) range [0, 10]\ngamma = 3').errors).toEqual([{ line: 1, message: OWNED('a constant') }])
+    // and a definition of another name is no reason: gamma is the built-in
+    expect(sceneOf('step(x) = x^2\n@param k = gamma(3) range [0, 10]').errors).toEqual([])
   })
 
   it('a @param calling its own name is refused too', () => {

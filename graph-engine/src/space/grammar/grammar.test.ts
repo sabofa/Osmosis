@@ -88,6 +88,16 @@ describe("K5 — one of calc's ten new built-in names may be a definition's (cal
     expect(form('perm(x, y, z) = x + y')).toMatchObject({ form: 'implicitSurface', forced: false })
   })
 
+  it('and one whose parameters are all coordinates is never a definition, even when it reads them all: lcm(x, y) = x*y, gcd(x, y) = x + y - 1', () => {
+    for (const line of ['lcm(x, y) = x*y', 'gcd(x, y) = x + y - 1', 'choose(y, x) = x*y']) {
+      expect(parseSpaceUnkeyed(line), line).toBeNull()
+    }
+    expect(form('perm(x, y, z) = x*y*z')).toMatchObject({ form: 'implicitSurface', forced: false })
+    expect(form('root(x, y) = x*y + z')).toMatchObject({ form: 'implicitSurface', forced: false })
+    // but one coordinate among other parameters still defines
+    expect(form('gcd(x, b) = x*b')).toMatchObject({ form: 'function', name: 'gcd', params: ['x', 'b'] })
+  })
+
   it("a classic built-in is never a definition's name, whatever it reads: max(x, a) = 2, log(x, b) = y, min(x, a) = 1", () => {
     for (const line of ['max(x, a) = 2', 'log(x, b) = y', 'min(x, a) = 1', 'hypot(a, b) = a*b', 'mod(a, b) = a + b', 'sin(a, b) = a*b', 'sin(x) = <x, 0, 0>', 'sin(t) = <t, 0, 0>', 'cos = <1, 2, 3>']) {
       expect(parseSpaceUnkeyed(line), line).toBeNull()
