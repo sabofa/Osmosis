@@ -44,7 +44,7 @@
 // name is the variable, a parameter, a constant, pi, e or inf.
 
 import type { Expr } from '../parser/types'
-import { builtinArity, builtinShadowError, freeVariablesDeep } from './compile'
+import { builtinArity, builtinShadowError, freeVariablesDeep, paramCallsAsProducts } from './compile'
 import { CompileError } from './errors'
 import { add, call, div, mul, neg, num, pow, sub, substitute, variable } from './expr'
 import { expandPrime } from './prime'
@@ -97,6 +97,15 @@ function cycle(ctx: Ctx, name: string): CompileError {
 // and thrown by the caller only for an argument that depends on v.
 const PARTIALS = new WeakMap<MathScope, Map<string, (Expr | DerivativeRefusal)[]>>()
 
+// fn's body over the fresh names. A call with one argument by a parameter's name
+// (a(a + 1)) is first written as the product it is inside the body, since
+// substitute leaves call names alone and the call would later resolve to the
+// document's value of that name.
+function freshBody(fn: MathFunction, fresh: readonly string[], scope: MathScope): Expr {
+  const body = paramCallsAsProducts(fn.body as Expr, fn.params, scope)
+  return substitute(body, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
+}
+
 function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], scope: MathScope, ctx: Ctx): (Expr | DerivativeRefusal)[] {
   let cache = PARTIALS.get(scope)
   if (!cache) {
@@ -105,7 +114,7 @@ function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], sc
   }
   const known = cache.get(name)
   if (known) return known
-  const body = substitute(fn.body as Expr, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
+  const body = freshBody(fn, fresh, scope)
   ctx.stack.push(name)
   const depth = ctx.stack.length
   const partials = fresh.map((p) => {
@@ -210,7 +219,7 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
     // The body's own reads of v (v a parameter or constant it reads), only
     // when it has any.
     if (freeVariablesDeep(fn.body, scope, new Set(fn.params)).has(v)) {
-      const body = substitute(fn.body, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
+      const body = freshBody(fn, fresh, scope)
       ctx.stack.push(name)
       const own = simplify(differentiate(body, v, scope, ctx))
       ctx.stack.pop()

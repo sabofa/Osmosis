@@ -24,9 +24,10 @@
 
 import type { Expr } from '../parser/types'
 import { CompileError } from './errors'
+import { mul, variable } from './expr'
 import { derivativeBody, primeFunction } from './prime'
 import { oddRootExponent, realOddPow } from './rational'
-import { andValue, comparisonOp, compareValue, isReserved, notValue, orValue, pick } from './reserved'
+import { andValue, BINDERS, comparisonOp, compareValue, isReserved, notValue, orValue, pick } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { choose, erf, erfc, factorial, gamma, gcd, lcm, perm, root, step } from './special'
 
@@ -454,6 +455,46 @@ function namesValue(name: string, env: Env, ctx: Ctx): boolean {
   const fn = ctx.scope.functions.get(name)
   if (fn) return fn.params.length === 0
   return name === 'pi' || name === 'e' || name === 'inf'
+}
+
+// Inside a function's body its parameters are bound values, and compile reads a
+// call with one argument by a parameter's name as a product, a(a + 1): the
+// parameter comes after a user function or a built-in of that name in the
+// lookup, and before a document's @param or constant. diff and prime rename a
+// body's variables, and a call name is not a variable, so they first say the
+// product outright with this, or the call would later resolve to the document's
+// value (or to nothing). A reserved name, a built-in (shadowed by the document
+// or not) and a user function of one or more parameters stay calls. A binder's
+// bound name shadows the parameter in its body, not in its bounds; __prime's
+// first argument names a function and is left alone.
+export function paramCallsAsProducts(expr: Expr, params: readonly string[], scope: MathScope): Expr {
+  const rewrite = (e: Expr, names: ReadonlySet<string>): Expr => {
+    switch (e.kind) {
+      case 'num':
+      case 'var':
+        return e
+      case 'unary':
+        return { kind: 'unary', op: '-', arg: rewrite(e.arg, names) }
+      case 'binary':
+        return { kind: 'binary', op: e.op, left: rewrite(e.left, names), right: rewrite(e.right, names) }
+      case 'call': {
+        const { name } = e
+        const first = e.args[0]
+        // A binder's body is its last (fourth) argument; its bounds are outside it.
+        const inner = BINDERS.has(name) && first?.kind === 'var' ? new Set([...names].filter((n) => n !== first.name)) : names
+        const args = e.args.map((arg, i) => {
+          if (i === 0 && (name === '__prime' || BINDERS.has(name))) return arg
+          return rewrite(arg, i === 3 && BINDERS.has(name) ? inner : names)
+        })
+        if (args.length === 1 && names.has(name) && !isReserved(name) && !BUILTINS.has(name)) {
+          const fn = scope.functions.get(name)
+          if (!(fn && fn.params.length > 0)) return mul(variable(name), args[0])
+        }
+        return { kind: 'call', name, args }
+      }
+    }
+  }
+  return rewrite(expr, new Set(params))
 }
 
 function compileReserved(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {

@@ -3,6 +3,7 @@
 // per (scope, function, order) by symbolic diff and simplify.
 
 import type { Expr } from '../parser/types'
+import { paramCallsAsProducts } from './compile'
 import { diff } from './diff'
 import { CompileError } from './errors'
 import { substitute } from './expr'
@@ -55,7 +56,9 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
   if (computing.has(key)) throw new CompileError(`"${name}" is defined in terms of its own derivative`, [name])
   computing.add(key)
   try {
-    const below = order === 1 ? (fn.body as Expr) : derivativeBody(name, fn, order - 1, scope)
+    // The body says its parameter's products outright, so that substituting an
+    // argument for the parameter (expandPrime) cannot leave a call named by it.
+    const below = order === 1 ? paramCallsAsProducts(fn.body as Expr, fn.params, scope) : derivativeBody(name, fn, order - 1, scope)
     const result = simplify(diff(below, fn.params[0], scope))
     cache.set(key, result)
     return result

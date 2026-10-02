@@ -22,6 +22,7 @@
 //   __integral(t, lo, hi, body)           ∫ body dt from lo to hi (t bound)
 
 import type { Expr } from '../parser/types'
+import { CompileError } from './errors'
 import { call, num, variable } from './expr'
 
 export type ComparisonOp = '<' | '<=' | '>' | '>=' | '=' | '!='
@@ -136,9 +137,10 @@ export function pick(c: number, v: number, rest: number): number {
 }
 
 // The bound variable's name of a binder call, or of __prime's function: the
-// first argument must be a var node.
+// first argument must be a var node. The parser always builds one, but the name
+// is typeable, so a call without one is a CompileError like any refusal.
 export function nameArgument(expr: Expr & { kind: 'call' }, what: string): string {
   const first = expr.args[0]
-  if (!first || first.kind !== 'var') throw new Error(`${expr.name}: the first argument must name the ${what}`)
+  if (!first || first.kind !== 'var') throw new CompileError(`${expr.name}: the first argument must name the ${what}`, [expr.name])
   return first.name
 }

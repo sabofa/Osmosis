@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { parseExprString as p } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
-import { CompileError, compileMany, compileScalar, freeVariablesDeep } from './compile'
+import { CompileError, compileMany, compileScalar, freeVariablesDeep, paramCallsAsProducts } from './compile'
 import { diff } from './diff'
 import { add, call, mul, num, renameVars, varNames, variable } from './expr'
-import { compare, factorialOf, not, or, and, piecewise, prime } from './reserved'
-import { makeScope, type MathFunction } from './scope'
+import { compare, factorialOf, not, or, and, piecewise, prime, sum } from './reserved'
+import { makeScope, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
 const x = variable('x')
@@ -368,5 +368,101 @@ describe('a document name that is also a built-in', () => {
     expect(message(p('gamma(x)'), constant)).toBe(asConstant)
     expect(compileScalar(simplify(diff(p('gamma(x)'), 'x', userFunction)), ['x'], userFunction)(5)).toBe(1)
     expect(compileScalar(simplify(diff(p('gamma * x'), 'x', parameter)), ['x'], parameter)(5)).toBe(2)
+  })
+})
+
+// Inside a function's body its parameter is the value a one-argument call by that
+// name multiplies, whatever else the document calls that name. diff renames the
+// body's variables, and a call name is not a variable, so the body is first
+// rewritten to say the product outright.
+describe('a function that multiplies by its own parameter', () => {
+  // d/dv of expr at `at`, on both compile paths.
+  function derivativeAt(expr: Expr, v: string, scope: MathScope, at: number): number {
+    const d = simplify(diff(expr, v, scope))
+    const closure = compileScalar(d, [v], scope)(at)
+    const program = compileMany([d], [v], scope)(one, at)[0]
+    expect(Object.is(program, closure), `compileMany ${program} vs compileScalar ${closure}`).toBe(true)
+    return closure
+  }
+
+  it("a @param of the same name does not take the parameter's place", () => {
+    const scope = makeScope({ params: [['a', 10]], functions: [['f', fn(['a'], 'a(a + 1)')]] })
+    expect(both(p('f(x)'), 2, scope)).toBe(6)
+    expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBe(5)
+  })
+
+  it("a constant of the same name does not take the parameter's place", () => {
+    const scope = makeScope({ functions: [['k', fn([], '5')], ['f', fn(['k'], 'k(k + 1)')]] })
+    expect(both(p('f(x)'), 3, scope)).toBe(12)
+    expect(derivativeAt(p('f(t)'), 't', scope, 3)).toBe(7)
+  })
+
+  it('f(x) = x(x + 1) differentiates, also at a constant argument', () => {
+    const scope = makeScope({ functions: [['f', fn(['x'], 'x(x + 1)')]] })
+    expect(both(p('f(x)'), 2, scope)).toBe(6)
+    expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBe(5)
+    expect(derivativeAt(p('t * f(2)'), 't', scope, 3)).toBe(6)
+  })
+
+  it("the body's own reads of the variable see the same product", () => {
+    // f(a) = a(a + 1) c, with a and c both @params of the document: d/dc f(2) = 6, d/dt f(t) at 2 = 5 c = 15
+    const scope = makeScope({ params: [['a', 10], ['c', 3]], functions: [['f', fn(['a'], 'a(a + 1) * c')]] })
+    expect(both(p('f(x)'), 2, scope)).toBe(18)
+    expect(derivativeAt(p('f(2)'), 'c', scope, 3)).toBe(6)
+    expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBe(15)
+  })
+
+  it("f'(2) for f(x) = x(x + 1) is 5", () => {
+    const scope = makeScope({ functions: [['f', fn(['x'], 'x(x + 1)')]] })
+    expect(both(prime('f', 1, [x]), 2, scope)).toBe(5)
+    expect(both(prime('f', 2, [x]), 2, scope)).toBe(2)
+  })
+
+  it("d/du g'(u) for g(x) = sin(x) x(x + 1) keeps x the parameter, not the document's @param x", () => {
+    const scope = makeScope({ params: [['x', 10]], functions: [['g', fn(['x'], 'sin(x) * x(x + 1)')]] })
+    const u = variable('u')
+    const second = (at: number) => -Math.sin(at) * (at * at + at) + 2 * Math.cos(at) * (2 * at + 1) + 2 * Math.sin(at)
+    expect(derivativeAt(prime('g', 1, [u]), 'u', scope, 1.5)).toBeCloseTo(second(1.5), 12)
+    const direct = compileScalar(prime('g', 2, [u]), ['u'], scope)
+    expect(direct(1.5)).toBeCloseTo(second(1.5), 12)
+  })
+
+  it("the rewrite follows compile's lookup order, and respects a binder", () => {
+    const scope = makeScope({ functions: [['g', fn(['t'], 't')], ['k', fn([], '5')]] })
+    const a = variable('a')
+    const two = num(2)
+    const rewrite = (expr: Expr, params: string[]) => paramCallsAsProducts(expr, params, scope)
+    // a parameter's one-argument call is a product; nested calls are reached
+    expect(rewrite(p('a(a + 1)'), ['a'])).toEqual({ kind: 'binary', op: '*', left: a, right: p('a + 1') })
+    expect(rewrite(not(call('a', two)), ['a'])).toEqual(not({ kind: 'binary', op: '*', left: a, right: two }))
+    // a constant of the name is a product of the parameter that shadows it
+    expect(rewrite(call('k', two), ['k'])).toEqual({ kind: 'binary', op: '*', left: variable('k'), right: two })
+    // a built-in, a user function of one or more parameters, a reserved name, two arguments, and a name that is no parameter stay calls
+    expect(rewrite(p('sin(2)'), ['sin'])).toEqual(p('sin(2)'))
+    expect(rewrite(p('g(2)'), ['g'])).toEqual(p('g(2)'))
+    expect(rewrite(p('a(1, 2)'), ['a'])).toEqual(p('a(1, 2)'))
+    expect(rewrite(p('b(2)'), ['a'])).toEqual(p('b(2)'))
+    expect(rewrite(call('__not', two), ['__not'])).toEqual(call('__not', two))
+    // __prime's first argument names a function, never a call to rewrite
+    expect(rewrite(prime('a', 1, [call('a', two)]), ['a'])).toEqual(prime('a', 1, [{ kind: 'binary', op: '*', left: a, right: two }]))
+    // a binder's bound name shadows the parameter inside its body, not in its bounds
+    const bound = sum('a', num(1), call('a', num(3)), call('a', a))
+    expect(rewrite(bound, ['a'])).toEqual(sum('a', num(1), { kind: 'binary', op: '*', left: a, right: num(3) }, call('a', a)))
+  })
+})
+
+describe('a reserved call whose first argument names nothing is a CompileError', () => {
+  const scope = makeScope({ functions: [['f', fn(['t'], 't^2')]] })
+
+  it('a typed __prime(2, 1, x), on both paths and in diff', () => {
+    const message = '__prime: the first argument must name the function'
+    expect(bothRefuse(p('__prime(2, 1, x)'), scope)).toBe(message)
+    expect(bothRefuse(call('__prime'), scope)).toBe(message)
+    expect(() => diff(p('__prime(2, 1, x)'), 'x', scope)).toThrow(CompileError)
+    try {
+      compileScalar(p('__prime(2, 1, x)'), ['x'], scope)
+    } catch (err) {
+      expect((err as CompileError).names).toEqual(['__prime'])
+    }
   })
 })
