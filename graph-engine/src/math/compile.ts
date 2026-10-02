@@ -18,8 +18,8 @@
 // A binder (sum, prod, integral) binds its first argument inside its body, in a
 // frame slot of its own; its bounds are outside the binding. A sum or product
 // loops over the whole numbers between its bounds (a bound that is not whole, or
-// past 2^53, is an error at compile time when it is a literal, NaN at run time
-// when it is read from a parameter); one nest of loops runs at most MAX_TERMS iterations
+// past 2^53, is an error at compile time when it reads no variable or @param, NaN
+// at run time when it does); one nest of loops runs at most MAX_TERMS iterations
 // in all, counted over the nested loops: a nest known to break it from its bounds
 // is an error at compile time, any other is NaN at run time. An integral calls
 // math/binders.ts with the integrand as a closure over the same frame. The
@@ -557,6 +557,36 @@ function binderParts(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, what: st
 
 const LOOP_WORD: Record<string, string> = { __sum: 'sum', __prod: 'prod' }
 
+// Whether `expr` mentions one of `names` as a variable or as the name of a call by
+// one value, x(x + 1): the bound variables of the loops around it.
+function mentionsAny(expr: Expr, names: ReadonlyMap<string, number>): boolean {
+  switch (expr.kind) {
+    case 'num':
+      return false
+    case 'var':
+      return names.has(expr.name)
+    case 'unary':
+      return mentionsAny(expr.arg, names)
+    case 'binary':
+      return mentionsAny(expr.left, names) || mentionsAny(expr.right, names)
+    case 'call':
+      return names.has(expr.name) || expr.args.some((arg) => mentionsAny(arg, names))
+  }
+}
+
+// A loop bound's number when it is known now: a literal, or any expression that
+// reads no variable and no @param (a constant, a function of constants, pi, an
+// arithmetic of those), which is then evaluated at compile time. Null when it
+// reads one, and so can only be checked at run time.
+function closedBound(expr: Expr, node: Node, env: Env, ctx: Ctx): number | null {
+  if (node.constant !== undefined) return node.constant
+  if (freeVariablesDeep(expr, ctx.scope).size > 0 || mentionsAny(expr, env.bound)) return null
+  const value = node(new Float64Array(Math.max(ctx.slots, 1)))
+  ctx.budget.used = 0
+  ctx.budget.depth = 0
+  return value
+}
+
 function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product: boolean): Node {
   const word = LOOP_WORD[expr.name]
   const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'index', (loNode, hiNode) => {
@@ -565,8 +595,8 @@ function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product:
     // counts through exactly: at 2^53 the counter's i++ stops changing i, and a
     // loop there would never end.
     const known: (number | null)[] = []
-    for (const [end, node] of [['lower', loNode], ['upper', hiNode]] as const) {
-      const value = node.constant ?? null
+    for (const [end, bound, node] of [['lower', expr.args[1], loNode], ['upper', expr.args[2], hiNode]] as const) {
+      const value = closedBound(bound, node, env, ctx)
       known.push(value)
       if (value === null) continue
       if (!Number.isInteger(value)) {

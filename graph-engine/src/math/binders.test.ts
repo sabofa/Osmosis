@@ -367,6 +367,56 @@ describe('the term limit counts across nested loops', () => {
   })
 })
 
+describe('a bound that reads no variable is checked when it is compiled (M1)', () => {
+  it('sum(k = -1.5 to 3, k) and a bound of 5/2 are CompileErrors naming the bound, on both paths', () => {
+    const lower = bothRefuse(sum('k', p('-1.5'), num(3), k), makeScope(), [])
+    expect(lower.message).toBe('sum: the lower bound -1.5 is not a whole number')
+    expect(lower.names).toEqual(['__sum'])
+    const upper = bothRefuse(sum('k', num(1), p('5/2'), k), makeScope(), [])
+    expect(upper.message).toBe('sum: the upper bound 2.5 is not a whole number')
+    expect(bothRefuse(prod('k', num(1), p('5/2'), k), makeScope(), []).message).toBe('prod: the upper bound 2.5 is not a whole number')
+  })
+
+  it('through a constant, a function of constants, pi, and a NaN', () => {
+    const scope = makeScope({
+      functions: [
+        ['half', { params: [], body: p('5/2') }],
+        ['up', { params: ['u'], body: p('u + 0.5') }],
+      ],
+    })
+    expect(bothRefuse(sum('k', num(1), variable('half'), k), scope, []).message).toBe('sum: the upper bound 2.5 is not a whole number')
+    expect(bothRefuse(sum('k', num(1), p('up(2)'), k), scope, []).message).toBe('sum: the upper bound 2.5 is not a whole number')
+    expect(bothRefuse(sum('k', num(1), variable('pi'), k), makeScope(), []).message).toMatch(/upper bound 3\.14159.* is not a whole number/)
+    expect(bothRefuse(sum('k', num(1), p('0/0'), k), makeScope(), []).message).toBe('sum: the upper bound NaN is not a whole number')
+  })
+
+  it('a closed bound past the term limit or past 2^53 is a CompileError too', () => {
+    expect(bothRefuse(sum('k', num(1), p('10^6'), num(1)), makeScope(), []).message).toMatch(/1000000 terms is past the limit of 100000/)
+    expect(bothRefuse(sum('k', num(1), p('2^53'), num(1)), makeScope(), []).message).toMatch(/bound 9007199254740992 is past/)
+    expect(bothRefuse(prod('k', p('-(2^53)'), num(1), num(1)), makeScope(), []).message).toMatch(/lower bound -9007199254740992 is past/)
+  })
+
+  it('a closed bound that is whole works, as a literal would', () => {
+    expect(both(sum('k', num(1), p('2*3'), k), [], [])).toBe(21)
+    expect(both(sum('k', p('2^2'), p('10/2'), k), [], [])).toBe(9)
+    expect(both(prod('k', num(1), p('floor(4.7)'), k), [], [])).toBe(24)
+    const scope = makeScope({ functions: [['n', { params: [], body: num(4) }]] })
+    expect(both(sum('k', num(1), variable('n'), k), [], [], scope)).toBe(10)
+  })
+
+  it('a bound that reads a variable, a @param or the bound index of an outer loop is still a run-time check', () => {
+    const scope = makeScope({ params: [['n', 2.5]] })
+    expect(both(sum('k', num(1), variable('n'), k), [], [], scope)).toBeNaN()
+    expect(both(sum('k', num(1), p('x/2'), k), ['x'], [5])).toBeNaN()
+    expect(both(sum('k', num(1), p('x/2'), k), ['x'], [6])).toBe(6)
+    // the inner bound reads the outer index, even when a user constant has the index's name
+    const named = makeScope({ functions: [['i', { params: [], body: p('5/2') }]] })
+    expect(both(sum('i', num(1), num(3), sum('j', num(1), variable('i'), num(1))), [], [], named)).toBe(6)
+    // a call by the index name, i(2), is the product i * 2: 2, 4, 6 as the bound
+    expect(both(sum('i', num(1), num(3), sum('j', num(1), call('i', num(2)), num(1))), [], [], named)).toBe(12)
+  })
+})
+
 describe('binders and the derivative', () => {
   it('a user function with a binder in its body: g(x) = sum(k = 1 to 3, k x), g\'(2) and d/dt g(t) are 6', () => {
     const scope = makeScope({ functions: [['g', { params: ['x'], body: sum('k', num(1), num(3), p('k x')) }]] })
