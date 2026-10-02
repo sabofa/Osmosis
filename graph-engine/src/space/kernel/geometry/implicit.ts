@@ -47,7 +47,7 @@ export interface CompiledField extends LevelField {
 
 export function compileField(F: Expr, scope: MathScope): CompiledField {
   const vars = boundNames(3)
-  const renamed = renameBound(F, XYZ)
+  const renamed = renameBound(F, XYZ, scope)
   const f = compileScalar(renamed, vars, scope)
   const grad = compileMany(
     vars.map((v) => simplify(diff(renamed, v, scope))),

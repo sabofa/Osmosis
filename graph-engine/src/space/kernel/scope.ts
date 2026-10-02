@@ -5,14 +5,22 @@
 // they are found here, each an error on the definition's line:
 // - a binding that is also a definition's name (the parameter shadows it);
 // - a name defined twice (the later definition is used);
-// - a definition named after a built-in, pi or e (refused, so the built-in
-//   keeps its meaning).
+// - a definition named after a classic built-in, pi or e (refused, so they
+//   keep their meaning: space's own coordinate maps and calc's derivatives
+//   call sin, cos, sqrt and the rest by name);
+// - a @param whose value, range or step calls the name of a @param, a constant
+//   or a function of the document, which those constant expressions would read
+//   as the built-in.
+// One of calc's ten new built-in names (shadowable.ts) may be a definition's:
+// it shadows the built-in in this document, and calling a constant or a @param
+// of that name as the built-in is compile's error (math/compile.ts), not a
+// second check here.
 
 import type { Statement } from '../../parser/types'
-import { BUILTIN_NAMES } from '../../math/compile'
 import { makeScope, type MathFunction, type MathScope } from '../../math/scope'
 import type { Binding } from '../config'
 import type { SceneError } from '../scene/types'
+import { isClassicBuiltin } from '../grammar/shadowable'
 
 function definition(statement: Statement): [string, MathFunction] | null {
   switch (statement.kind) {
@@ -46,8 +54,8 @@ export function buildScope(
     if (!entry) return
     const [name, fn] = entry
     const line = lines[i] ?? 0
-    // A built-in, pi and e keep their meaning: the definition is refused.
-    if (BUILTIN_NAMES.has(name)) {
+    // A classic built-in, pi and e keep their meaning: the definition is refused.
+    if (isClassicBuiltin(name)) {
       errors.push({ line, message: `"${name}" is a built-in function — a definition cannot take its name` })
       return
     }
@@ -66,6 +74,20 @@ export function buildScope(
     definedAt.set(name, line)
     functions.set(name, fn)
   })
+
+  // A @param's value, range and step were compiled with no scope, so a call of
+  // a name the document also makes a @param, a constant or a function reached
+  // the built-in of that name, while every other line reads the document's own.
+  const bound = new Set(bindings.map((b) => b.name))
+  for (const b of bindings) {
+    for (const called of b.calls ?? []) {
+      const fn = functions.get(called)
+      const owner = bound.has(called) ? 'a parameter' : fn ? (fn.params.length === 0 ? 'a constant' : 'a function') : null
+      if (owner) {
+        errors.push({ line: b.line, message: `@param ${b.name}: "${called}" is ${owner} in this document; rename it to use the built-in ${called} function` })
+      }
+    }
+  }
 
   const scope = makeScope({ functions, params: bindings.map((b) => [b.name, b.value] as const), angle })
   return { scope, errors }

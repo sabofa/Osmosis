@@ -4,7 +4,7 @@ import type { Expr } from '../parser/types'
 import { BUILTIN_NAMES, builtinArity, CompileError, compileMany, compileScalar, compileVector, freeVariablesDeep } from './compile'
 import { diff } from './diff'
 import { simplify } from './simplify'
-import { makeScope, type MathFunction } from './scope'
+import { makeScope, type MathFunction, type MathScope } from './scope'
 import { evalExpr } from '../parser/evalExpr'
 
 const p = parseExprString
@@ -467,15 +467,29 @@ describe('compileMany is exact on everything compileScalar compiles (fix round 1
 })
 
 describe('freeVariablesDeep walks each function once (fix round 2)', () => {
-  it('a 2-call nesting 20 deep is walked in linear time', () => {
+  it('a 2-call nesting 20 deep is walked in linear work, counted in table lookups, not in time', () => {
     // f_k(s, t) = f_{k+1}(s, t) + f_{k+1}(t, s) + a; walking each call site
-    // would visit 2^20 bodies.
+    // would visit 2^20 bodies. Every call and every free name a walk meets reads
+    // the function table once, so the lookups are the walk's operations: 64 when
+    // each of the 21 bodies is walked once (two calls and a free name in each,
+    // and the top call), and 4,194,304 (3 * (2^20 - 1) + 2^20 + 3) when each
+    // call site is. A wall clock says nothing under load.
     const functions: [string, MathFunction][] = [['f21', fn(['s', 't'], 's * t + b')]]
     for (let k = 20; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s) + a`)])
     const scope = makeScope({ functions })
-    const t0 = performance.now()
-    const names = freeVariablesDeep(p('f1(x, y)'), scope)
-    expect(performance.now() - t0).toBeLessThan(20)
+    let lookups = 0
+    const table = new Map(scope.functions)
+    const counting: MathScope = {
+      ...scope,
+      functions: Object.assign(table, {
+        get: (name: string) => {
+          lookups++
+          return Map.prototype.get.call(table, name)
+        },
+      }),
+    }
+    const names = freeVariablesDeep(p('f1(x, y)'), counting)
+    expect(lookups).toBeLessThan(210)
     expect([...names].sort()).toEqual(['a', 'b', 'x', 'y'])
   }, 30000)
 })

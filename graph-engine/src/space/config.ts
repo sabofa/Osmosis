@@ -63,6 +63,11 @@ export interface Binding {
   integer: boolean
   // 1-based source line, for errors.
   line: number
+  // The names called, as f(...), in its value, range and step; set only when
+  // there are any. Those expressions compile with no scope, so a call of a name
+  // the document also makes a @param would reach the built-in: the kernel
+  // refuses it (kernel/scope.ts).
+  calls?: readonly string[]
 }
 
 export const DEFAULT_CAMERA: CameraSpec = { azimuth: 40, elevation: 25, zoom: 1 }

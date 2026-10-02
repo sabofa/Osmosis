@@ -12,13 +12,13 @@
 
 import { parseForRange, splitTopLevelComma } from '../../parser/grammarUtil'
 import { parseExprString } from '../../parser/parseExpr'
-import { varNames } from '../../math/expr'
+import { readNames } from './reads'
 import type { Domain, ParamRange, RegionCondition } from './types'
 
 type Op = '<' | '<=' | '>' | '>='
 
 function reads(range: ParamRange, name: string): boolean {
-  return varNames(range.from).has(name) || varNames(range.to).has(name)
+  return readNames(range.from, [name]).has(name) || readNames(range.to, [name]).has(name)
 }
 
 function parseRanges(text: string): ParamRange[] {
