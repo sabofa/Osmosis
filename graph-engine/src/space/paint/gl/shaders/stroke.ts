@@ -38,10 +38,9 @@
 // output 1 is the height in r with a/2 as alpha; both blend ONE, ONE_MINUS_SRC_ALPHA.
 
 import { MAX_BRISTLES, PATH_POINTS, ROLES } from '../../types'
-import { BRISTLE_REACH, CAP_PAD, MIN_HALF_WIDTH } from '../brush'
+import { BRISTLE_REACH, CAP_PAD, DRY_TEXTURE_REF, DRY_TEXTURE_SCALE_MAX, MIN_HALF_WIDTH } from '../brush'
 import { DEPTH_SLOPE_CAP, FORM_REACH } from '../depthTest'
 import { COMMON_GLSL } from './common'
-import { UNDERPAINT_TEXTURE_MAX } from './underpaint'
 
 // Ribbon tessellation: PATH_POINTS - 1 segments, each split RIBBON_SUBDIV
 // times along the Catmull-Rom curve so a curved stroke has no visible kinks.
@@ -244,7 +243,7 @@ flat in vec4 v_p2;
 uniform sampler2D u_prev;    // the layers beneath: premultiplied sRGB colour, coverage
 uniform sampler2D u_paper;   // the canvas, sRGB RGBA8
 uniform sampler2D u_paperH;  // the canvas height, normalised (std 0.2), R32F
-uniform float u_texture;     // the canvas texture slider: the tooth the dry gate reads is the height times it
+uniform float u_texture;     // the canvas texture slider: the tooth the dry gate reads is the height times it over the default (0.5), up to twice
 uniform ivec2 u_paperSize;
 uniform float u_heightScale; // 1, or 0.5 when the height target is 8 bit
 uniform vec4 u_roleA[8];     // opacity, thin, start boost, wet pickup at the start
@@ -379,7 +378,7 @@ void main() {
   vec2 fc = gl_FragCoord.xy;
   ivec2 pix = ivec2(fc);
   ivec2 pc = paperCoord(fc, u_resolution, u_paperSize);
-  float hg = texelFetch(u_paperH, pc, 0).r * clamp(u_texture, 0.0, ${UNDERPAINT_TEXTURE_MAX.toFixed(1)});
+  float hg = texelFetch(u_paperH, pc, 0).r * clamp(u_texture / ${DRY_TEXTURE_REF.toFixed(1)}, 0.0, ${DRY_TEXTURE_SCALE_MAX.toFixed(1)});
   float tail = sstep(1.0 - clamp(dry, 0.1, 1.0), 1.0, t);
   float dryEff = dry * (0.5 + 0.5 * tail);
   float g0 = 0.08 + 0.12 * dryEff;

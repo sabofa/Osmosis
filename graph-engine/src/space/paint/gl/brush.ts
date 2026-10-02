@@ -7,7 +7,6 @@
 // only softens an edge by a pixel and needs a screen. The twin has none, so a gate edge here is the sharp one.
 
 import { MAX_BRISTLES } from '../types'
-import { UNDERPAINT_TEXTURE_MAX } from './shaders/underpaint'
 
 // --- per-role brush constants -------------------------------------------------
 // What the batch does not carry, from the mockup's STYLE table, in ROLES order
@@ -83,9 +82,14 @@ const gauss3 = (a: number, b: number, c: number): number => (a + b + c - 1.5) * 
 const ROLE_GLAZE = 3
 
 // The canvas tooth under a fragment as the dry gate reads it: the tile's height, which the paper normalises to a
-// standard deviation of 0.2 whatever the canvas texture (composite.ts), scaled by the texture slider, as the
-// underpainting scales its weave. Without the scale the dry brush catches the same weave at every texture.
-export const toothOf = (height: number, texture: number): number => height * clamp(texture, 0, UNDERPAINT_TEXTURE_MAX)
+// standard deviation of 0.2 whatever the canvas texture (composite.ts), scaled by the texture slider so that the weave a
+// dry stroke catches follows it. The dry gate was tuned at the default texture, DRY_TEXTURE_REF, so the scale is 1
+// there and the default look is exactly what it was before the slider reached the gate; half the texture catches half
+// the weave, up to DRY_TEXTURE_SCALE_MAX times it. (A fixed number, not the default parameter: a retuned default
+// must not move what the brush was tuned against.)
+export const DRY_TEXTURE_REF = 0.5
+export const DRY_TEXTURE_SCALE_MAX = 2
+export const toothOf = (height: number, texture: number): number => height * clamp(texture / DRY_TEXTURE_REF, 0, DRY_TEXTURE_SCALE_MAX)
 
 // What the canvas lets through of a deposit `dep` at arc position t (0..1) of a stroke with this much dry brush: a dry
 // tail catches the tooth's peaks and skips its valleys, and a loaded brush only needs a little paint.

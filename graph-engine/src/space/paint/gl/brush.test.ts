@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PAINT_PARAMS } from '../params'
 import { MAX_BRISTLES, ROLES } from '../types'
-import { bristleCount, brushDeposit, BRISTLE_REACH, CAP_PAD, dryGate, ribbonCap, rnd4, ROLE_A, toothOf, type BrushStroke } from './brush'
+import { bristleCount, brushDeposit, BRISTLE_REACH, CAP_PAD, DRY_TEXTURE_REF, DRY_TEXTURE_SCALE_MAX, dryGate, ribbonCap, rnd4, ROLE_A, toothOf, type BrushStroke } from './brush'
 
 const P = DEFAULT_PAINT_PARAMS
 const roleIndex = (name: string) => ROLES.indexOf(name as (typeof ROLES)[number])
@@ -135,26 +135,78 @@ describe('the start and end of a stroke, row by row, at 1x, 2x and 4x', () => {
 })
 
 // The dry brush catches the canvas's tooth. The paper normalises its height to a standard deviation of 0.2 whatever the
-// canvas texture, so the gate has to scale it by the slider or the weave a dry stroke catches never changes with it.
+// canvas texture, so the gate has to scale it by the slider or the weave a dry stroke catches never changes with it. The
+// gate was tuned with the tooth unscaled, which is the default texture (0.5): there the scale must be exactly 1.
 describe('the dry gate and the canvas texture', () => {
-  it('scales the tooth by the texture, up to the underpainting’s 1.5 and not below 0', () => {
-    expect(toothOf(0.4, 1)).toBeCloseTo(0.4, 12)
-    expect(toothOf(0.4, 0.1)).toBeCloseTo(0.04, 12)
+  // the gate as it was before the slider reached it (fix round 1): the raw tile height, whatever the texture
+  const smooth = (a: number, b: number, x: number) => {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+    return t * t * (3 - 2 * t)
+  }
+  const gateBefore = (dep: number, hg: number, dry: number, t: number) => {
+    const tail = smooth(1 - Math.min(Math.max(dry, 0.1), 1), 1, t)
+    const dryEff = dry * (0.5 + 0.5 * tail)
+    return dryEff > 0 ? smooth(0.08 + 0.12 * dryEff, 0.26 + 0.22 * dryEff, dep + 0.45 * hg) : smooth(0.03, 0.12, dep)
+  }
+
+  it('scales the tooth by the texture over the default, 0.5: exactly 1 at the default, up to twice, and never below 0', () => {
+    expect(DRY_TEXTURE_REF).toBe(0.5)
+    expect(DRY_TEXTURE_SCALE_MAX).toBe(2)
+    for (const h of [-0.5, -0.2, 0, 0.13, 0.4, 0.5]) expect(toothOf(h, 0.5)).toBe(h) // bit for bit
+    expect(toothOf(0.4, 1)).toBeCloseTo(0.8, 12)
+    expect(toothOf(0.4, 0.1)).toBeCloseTo(0.08, 12)
+    expect(toothOf(0.4, 0.25)).toBeCloseTo(0.2, 12)
     expect(toothOf(0.4, 0)).toBe(0)
-    expect(toothOf(0.4, 2)).toBeCloseTo(0.6, 12)
+    // the scale stops at 2: texture 1 and anything past it read the same, and a negative texture is no tooth
+    expect(toothOf(0.4, 1.5)).toBeCloseTo(0.8, 12)
+    expect(toothOf(0.4, 2)).toBeCloseTo(0.8, 12)
     expect(toothOf(0.4, -1)).toBe(0)
   })
 
-  it('lets a deposit of 0.2 through whole over a high tooth at texture 1 and 77% at texture 0.1: dry 0.15, mid-stroke, tooth 0.4', () => {
+  it('keeps the default look: at texture 0.5 the gate is the one before the fix, for every deposit, tooth, dry brush and place on the stroke', () => {
+    for (const dry of [0, 0.15, 0.6, 1]) {
+      for (const t of [0, 0.3, 0.5, 0.9, 1]) {
+        for (let dep = 0; dep <= 0.6; dep += 0.02) {
+          for (const hg of [-0.45, -0.2, 0, 0.2, 0.45]) {
+            expect(dryGate(dep, toothOf(hg, 0.5), dry, t), `dep ${dep} hg ${hg} dry ${dry} t ${t}`).toBe(gateBefore(dep, hg, dry, t))
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps the default look on a real stroke: every point of a block stroke lays what it laid before, at texture 0.5', () => {
+    const rp = P.roles.block
+    const stroke: BrushStroke = { role: roleIndex('block'), alpha: 1, load: rp.load, bristles: rp.bristles, bristleVar: rp.bristleVar, dry: 0.6, endSoft: 0, seed: 777 }
+    const hw = rp.width / 2
+    let compared = 0
+    for (let o = -0.9; o <= 0.9; o += 0.1) {
+      for (let s = 0; s < rp.length; s += 3) {
+        for (const hg of [-0.3, 0.3]) {
+          // hg raw is the tooth as it was read before the fix
+          expect(brushDeposit(stroke, o, s, hw, rp.length, toothOf(hg, 0.5)).alpha).toBe(brushDeposit(stroke, o, s, hw, rp.length, hg).alpha)
+          compared++
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(200)
+  })
+
+  it('differs between a low and a high texture: texture 0.1 and 1 gate the same deposit differently (hand values, dry 0.15, mid-stroke)', () => {
     // dry 0.15 at t = 0.5: the tail is 0, so the effective dry is 0.075, the gate runs g0 = 0.08 + 0.12 x 0.075 = 0.089 to
-    // g1 = 0.26 + 0.22 x 0.075 = 0.2765 over dep + 0.45 x tooth
-    // texture 1: 0.2 + 0.45 x 0.4 = 0.38, past g1: 1
-    expect(dryGate(0.2, toothOf(0.4, 1), 0.15, 0.5)).toBe(1)
-    // texture 0.1: 0.2 + 0.45 x 0.04 = 0.218: x = (0.218 - 0.089) / 0.1875 = 0.688, smoothstep 0.688^2 (3 - 2 x 0.688) = 0.7687
-    expect(dryGate(0.2, toothOf(0.4, 0.1), 0.15, 0.5)).toBeCloseTo(0.7687, 3)
-    // over a low tooth (-0.4) the texture holds paint back instead: 0.2 - 0.18 = 0.02 at 1, 0.182 at 0.1
+    // g1 = 0.26 + 0.22 x 0.075 = 0.2765 over dep + 0.45 x tooth. Tile height 0.4 over a thin deposit of 0.1:
+    //   default (0.5): tooth 0.4, 0.1 + 0.18 = 0.28, past g1: 1
+    expect(dryGate(0.1, toothOf(0.4, 0.5), 0.15, 0.5)).toBe(1)
+    //   texture 1: tooth 0.8, 0.1 + 0.36 = 0.46: 1
+    expect(dryGate(0.1, toothOf(0.4, 1), 0.15, 0.5)).toBe(1)
+    //   texture 0.1: tooth 0.08, 0.1 + 0.036 = 0.136: x = (0.136 - 0.089) / 0.1875 = 0.2507, smoothstep 0.2507^2 (3 - 2 x 0.2507) = 0.1570
+    expect(dryGate(0.1, toothOf(0.4, 0.1), 0.15, 0.5)).toBeCloseTo(0.157, 3)
+    // over a low tile height (-0.4) of a deposit of 0.2 the texture holds paint back instead:
+    //   texture 1: tooth -0.8, 0.2 - 0.36 < 0: 0 (the default's 0.2 - 0.18 = 0.02 is 0 too)
     expect(dryGate(0.2, toothOf(-0.4, 1), 0.15, 0.5)).toBe(0)
-    expect(dryGate(0.2, toothOf(-0.4, 0.1), 0.15, 0.5)).toBeGreaterThan(0.4)
+    expect(dryGate(0.2, toothOf(-0.4, 0.5), 0.15, 0.5)).toBe(0)
+    //   texture 0.1: tooth -0.08, 0.2 - 0.036 = 0.164: x = 0.4, smoothstep 0.16 x 2.2 = 0.352
+    expect(dryGate(0.2, toothOf(-0.4, 0.1), 0.15, 0.5)).toBeCloseTo(0.352, 3)
   })
 
   it('is the loaded brush’s gate, with no tooth in it, for a stroke with no dry brush', () => {
@@ -162,7 +214,7 @@ describe('the dry gate and the canvas texture', () => {
     expect(dryGate(0.075, -0.5, 0, 0.5)).toBeCloseTo(0.5, 12)
   })
 
-  it('changes what a real block stroke lays: a high tooth adds paint at texture 1 that texture 0.1 leaves out, and a low tooth takes it away', () => {
+  it('changes what a real block stroke lays: a high tile height adds paint at texture 1 that texture 0.1 leaves out, and a low one takes it away', () => {
     const rp = P.roles.block
     const stroke: BrushStroke = { role: roleIndex('block'), alpha: 1, load: rp.load, bristles: rp.bristles, bristleVar: rp.bristleVar, dry: 0.6, endSoft: 0, seed: 777 }
     const hw = rp.width / 2

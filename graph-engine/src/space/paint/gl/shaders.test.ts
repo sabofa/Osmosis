@@ -8,7 +8,7 @@ import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
 import { DEPTH_FRAGMENT, DEPTH_VERTEX } from './shaders/depth'
 import { UNDERPAINT_WARP_FRAGMENT, UNDERPAINT_FRAGMENT as UNDERPAINT_PLAIN } from './shaders/underpaint'
 import { RIBBON_SEGMENTS, RIBBON_SUBDIV, STROKE_FRAGMENT, STROKE_VERTEX, TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
-import { UNDERPAINT_FRAGMENT, UNDERPAINT_TEXTURE_MAX } from './shaders/underpaint'
+import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
 import { BRISTLE_REACH, CAP_PAD } from './brush'
 import { DEPTH_SLOPE_CAP, FORM_REACH } from './depthTest'
 
@@ -85,10 +85,10 @@ describe('the stroke shaders (R3)', () => {
 
   it('gate a dry tail by the canvas height texture, so paint skips the weave valleys', () => {
     expect(STROKE_FRAGMENT).toContain('texelFetch(u_paperH')
-    // the paper normalises its height to the same spread whatever the texture, so the gate scales it by the slider, as the underpainting does
+    // the paper normalises its height to the same spread whatever the texture, so the gate scales it by the slider over
+    // the default (0.5, where the scale is 1 and the look is what it was), up to twice
     expect(STROKE_FRAGMENT).toContain('uniform float u_texture;')
-    expect(STROKE_FRAGMENT).toContain('float hg = texelFetch(u_paperH, pc, 0).r * clamp(u_texture, 0.0, 1.5);')
-    expect(UNDERPAINT_TEXTURE_MAX).toBe(1.5)
+    expect(STROKE_FRAGMENT).toContain('float hg = texelFetch(u_paperH, pc, 0).r * clamp(u_texture / 0.5, 0.0, 2.0);')
     expect(STROKE_FRAGMENT).toContain('dep + 0.45 * hg')
     expect(STROKE_FRAGMENT).toContain('sstep(g0 - aa, g1 + aa,')
   })
