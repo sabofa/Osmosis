@@ -18,6 +18,7 @@
 // parser/evalExpr.ts, the 2D evaluator, is untouched.
 
 import type { Expr } from '../parser/types'
+import { oddRootExponent, realOddPow } from './rational'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 
 // A compile-time refusal. `names` carries the offending name(s): the unknown
@@ -445,8 +446,19 @@ function compileNode(expr: Expr, env: Env, ctx: Ctx): Node {
       const s = a.slot
       return s !== undefined ? (f) => -f[s] : (f) => -a(f)
     }
-    case 'binary':
+    case 'binary': {
+      // A literal p/q exponent with q odd takes the real root (math/rational.ts).
+      if (expr.op === '^') {
+        const odd = oddRootExponent(expr.right)
+        if (odd) {
+          const base = compileNode(expr.left, env, ctx)
+          const exponent = compileNode(expr.right, env, ctx)
+          const pOdd = Math.abs(odd.p) % 2 === 1
+          return (f) => realOddPow(base(f), exponent(f), pOdd)
+        }
+      }
       return binaryNode(expr.op, compileNode(expr.left, env, ctx), compileNode(expr.right, env, ctx), ctx.scope.params.values)
+    }
     case 'call':
       return compileCall(expr, env, ctx)
   }
@@ -537,6 +549,8 @@ const OP_HYPOT2 = 18
 const OP_HYPOT3 = 19
 const OP_HYPOTN = 20
 const OP_COPY = 21
+const OP_RPOW_ODD = 22
+const OP_RPOW_EVEN = 23
 
 // The built-ins without an opcode of their own, as the closures compute them.
 const UNARY_TABLE: readonly ((v: number) => number)[] = [
@@ -766,6 +780,11 @@ function programNode(expr: Expr, bound: ReadonlyMap<string, number>, ctx: Progra
     case 'binary': {
       const l = programNode(expr.left, bound, ctx)
       const rr = programNode(expr.right, bound, ctx)
+      const odd = expr.op === '^' ? oddRootExponent(expr.right) : null
+      if (odd) {
+        r = ctx.program.emit(Math.abs(odd.p) % 2 === 1 ? OP_RPOW_ODD : OP_RPOW_EVEN, l, rr)
+        break
+      }
       const op = expr.op === '+' ? OP_ADD : expr.op === '-' ? OP_SUB : expr.op === '*' ? OP_MUL : expr.op === '/' ? OP_DIV : OP_POW
       r = ctx.program.emit(op, l, rr)
       break
@@ -892,6 +911,12 @@ export function compileMany(exprs: readonly Expr[], vars: readonly string[], sco
           break
         case OP_COPY:
           reg[d] = reg[x]
+          break
+        case OP_RPOW_ODD:
+          reg[d] = realOddPow(reg[x], reg[y], true)
+          break
+        case OP_RPOW_EVEN:
+          reg[d] = realOddPow(reg[x], reg[y], false)
           break
         case OP_HYPOTN: {
           // Math.hypot over the block of y registers starting at x.
