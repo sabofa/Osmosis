@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
-import { evalExpr } from '../parser/evalExpr'
 import { buildScene } from './buildScene'
 
 const bounds = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
@@ -65,16 +64,16 @@ describe('buildScene', () => {
     expect(scene.errors).toEqual([])
   })
 
-  it('carries the function table on an animatedPoint scene object so a path referencing a named function still resolves per-frame', () => {
+  it('compiles an animatedPoint path through the kernel, so a path that names a function still resolves on every frame', () => {
     const { scene } = build('k(t) = cos(t) * 2\nanimate: (k(t), sin(t)*2) for t in [0, 6.283]')
+    expect(scene.errors).toEqual([])
     const anim = scene.objects.find((o) => o.kind === 'animatedPoint')
     expect(anim).toBeDefined()
     if (anim?.kind !== 'animatedPoint') throw new Error('unreachable')
-    // The bug this guards against: SceneRenderer's per-frame evalExpr call
-    // used to run without this table at all, so any function reference threw
-    // "Unknown function" on every frame and the point never moved off (0,0).
-    const x = evalExpr(anim.fx, { t: 1 }, 'radians', anim.functions)
-    expect(x).toBeCloseTo(Math.cos(1) * 2)
+    // The renderer calls these every frame: the closures carry the definition of k.
+    expect(anim.fx(1)).toBeCloseTo(Math.cos(1) * 2, 14)
+    expect(anim.fy(1)).toBeCloseTo(Math.sin(1) * 2, 14)
+    expect([anim.from, anim.to]).toEqual([0, 6.283])
   })
 
   it('collects a per-statement error without dropping the rest of the scene', () => {
@@ -907,6 +906,52 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     const scene = sceneOf('@points: roots\ny = x - 1 if x < 5')
     expect(scene.errors).toEqual([])
     expect(scene.objects.filter((o) => o.kind === 'point' && o.feature === 'x-intercept')).toHaveLength(1)
+  })
+
+  // The animate: path is compiled by the kernel when the scene is built and the renderer
+  // calls the closures on every frame, so the whole language works in it and a mistake
+  // is reported on its line, not swallowed per frame.
+  function animatedOf(spec: string) {
+    const scene = sceneOf(spec)
+    expect(scene.errors, spec).toEqual([])
+    const anim = scene.objects.find((o) => o.kind === 'animatedPoint')
+    if (anim?.kind !== 'animatedPoint') throw new Error(`no animated point for ${spec}`)
+    return anim
+  }
+
+  it('animate: (t!, |t|) for t in [0, 3] builds with no error, and its closures evaluate', () => {
+    const anim = animatedOf('animate: (t!, |t|) for t in [0, 3]')
+    expect([anim.param, anim.from, anim.to]).toEqual(['t', 0, 3])
+    // 3! = 6 and 0! = 1 exactly; 2.5! = gamma(3.5) = 15 sqrt(pi) / 8
+    expect(anim.fx(3)).toBeCloseTo(6, 12)
+    expect(anim.fx(0)).toBeCloseTo(1, 12)
+    expect(anim.fx(2.5)).toBeCloseTo((15 * Math.sqrt(Math.PI)) / 8, 12)
+    expect(anim.fy(2.5)).toBe(2.5)
+    expect(anim.fy(-2)).toBe(2)
+  })
+
+  it('animate: takes sums, piecewise, primes, multi-parameter functions and @params', () => {
+    // sum(k = 1 to 3, k t) = 6 t
+    expect(animatedOf('animate: (sum(k = 1 to 3, k t), t) for t in [0, 1]').fx(2)).toBe(12)
+    // a piecewise definition takes the right branch at each t
+    const piecewise = animatedOf('f(x) = {x < 1: x, 5}\nanimate: (f(t), t) for t in [0, 2]')
+    expect([piecewise.fx(0.5), piecewise.fx(1.5)]).toEqual([0.5, 5])
+    // f'(t) for f(x) = x^3 - 3x is 3t^2 - 3
+    expect(animatedOf("f(x) = x^3 - 3x\nanimate: (f'(t), t) for t in [0, 2]").fx(2)).toBeCloseTo(9, 12)
+    // g(x, a) = a sin(x), called with two arguments
+    expect(animatedOf('g(x, a) = a sin(x)\nanimate: (g(t, 2), t) for t in [0, 1]').fx(1)).toBeCloseTo(2 * Math.sin(1), 14)
+    // a @param is read at build, and so is the angle unit
+    expect(animatedOf('@param a = 3 range [0, 5]\nanimate: (a t, t) for t in [0, 1]').fx(2)).toBe(6)
+    expect(animatedOf('@angle: degrees\nanimate: (sin(t), t) for t in [0, 90]').fx(30)).toBeCloseTo(0.5, 14)
+  })
+
+  it('animate: with a typo reports it on its line and adds no point', () => {
+    const scene = sceneOf('y = x\nanimate: (sinn(t), t) for t in [0, 1]')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('Unknown function "sinn"') })])
+    expect(scene.objects.some((o) => o.kind === 'animatedPoint')).toBe(false)
+    // in the second coordinate, and a name no one defined, too
+    expect(sceneOf('animate: (t, sinn(t)) for t in [0, 1]').errors).toEqual([expect.objectContaining({ line: 1, message: expect.stringContaining('Unknown function "sinn"') })])
+    expect(sceneOf('animate: (t, w) for t in [0, 1]').errors).toEqual([expect.objectContaining({ line: 1, message: expect.stringContaining('Unknown variable "w"') })])
   })
 
   it('a definition clash is reported on its own line', () => {

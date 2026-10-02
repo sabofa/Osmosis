@@ -27,10 +27,10 @@ const ASYMPTOTE_JUMP_FACTOR = 3
 // definition into a lookup table, before anything else gets built — a
 // definition can be referenced by a statement anywhere else in the spec,
 // not just ones that come after it textually. This is the evalExpr-side table,
-// kept for the two users that still evaluate through parser/evalExpr.ts
-// (buildConstructions, shared with the figure engine, and the renderer's
-// per-frame "animate:" path); everything else in this file reads the MathScope
-// from plot/scope.ts instead.
+// kept for the one user that still evaluates through parser/evalExpr.ts
+// (buildConstructions, shared with the figure engine); everything else in this
+// file, "animate:" paths included, reads the MathScope from plot/scope.ts
+// instead.
 function collectFunctions(statements: Statement[]): FunctionTable {
   const functions: FunctionTable = {}
   for (const statement of statements) {
@@ -600,15 +600,19 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
         objects.push(...built.objects)
         if (built.regression) regression = built.regression
       } else if (statement.kind === 'animatedPoint') {
+        // Both coordinates compile through the kernel here, so a mistake lands
+        // on this statement's line now rather than failing silently on every
+        // frame, and the whole language (n!, |t|, sums, piecewise, f', multi-
+        // parameter functions, @params) works in the path. The renderer calls
+        // the closures per frame.
         objects.push({
           kind: 'animatedPoint',
-          fx: statement.fx,
-          fy: statement.fy,
+          fx: compileScalar(statement.fx, [statement.param], scope),
+          fy: compileScalar(statement.fy, [statement.param], scope),
           param: statement.param,
           from: constant(statement.from, scope),
           to: constant(statement.to, scope),
           color: statement.color,
-          functions,
         })
       } else if (statement.kind === 'point') {
         objects.push({

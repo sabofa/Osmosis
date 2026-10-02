@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
-import { evalExpr, type FunctionTable } from '../parser/evalExpr'
 import { Camera2D } from './camera2d'
 import { clipLineToBounds } from './clipLine'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
@@ -13,7 +12,6 @@ import { clampedLabelPlacement } from './labelLayout'
 import { makeLabelSprite } from './labelSprite'
 import type { Bounds } from './marchingSquares'
 import type { Scene as GraphScene, SceneObject, Vec2 } from '../scene/types'
-import type { Expr } from '../parser/types'
 
 export type { HoverInfo } from './hover'
 
@@ -120,12 +118,11 @@ export interface SceneRendererOptions {
 
 interface AnimatedEntry {
   mesh: THREE.Object3D
-  fx: Expr
-  fy: Expr
-  param: string
+  // The path's coordinates, compiled by the kernel when the scene was built.
+  fx: (t: number) => number
+  fy: (t: number) => number
   from: number
   to: number
-  functions: FunctionTable
 }
 
 interface MiscEntry {
@@ -792,7 +789,7 @@ export class SceneRenderer {
     if (obj.kind === 'animatedPoint') {
       const color = this.colorOr(obj.color, this.palette.point)
       const mesh = new THREE.Mesh(new THREE.CircleGeometry(this.pixelToWorld(7), 24), new THREE.MeshBasicMaterial({ color }))
-      this.animated.push({ mesh, fx: obj.fx, fy: obj.fy, param: obj.param, from: obj.from, to: obj.to, functions: obj.functions })
+      this.animated.push({ mesh, fx: obj.fx, fy: obj.fy, from: obj.from, to: obj.to })
       return mesh
     }
 
@@ -852,18 +849,14 @@ export class SceneRenderer {
   private updateAnimated() {
     if (this.animated.length === 0) return
     const elapsed = performance.now() - this.startTime
-    const angleMode = this.options.config.angle
     for (const entry of this.animated) {
       const cycle = (elapsed % ANIMATE_DURATION_MS) / ANIMATE_DURATION_MS
       const t = entry.from + (entry.to - entry.from) * cycle
-      try {
-        const bindings = { [entry.param]: t }
-        const x = evalExpr(entry.fx, bindings, angleMode, entry.functions)
-        const y = evalExpr(entry.fy, bindings, angleMode, entry.functions)
-        entry.mesh.position.set(x, y, 0.02)
-      } catch {
-        // leave the point at its last valid position
-      }
+      const x = entry.fx(t)
+      const y = entry.fy(t)
+      // A path undefined at this t (the kernel answers NaN, it does not throw)
+      // leaves the point at its last valid position.
+      if (Number.isFinite(x) && Number.isFinite(y)) entry.mesh.position.set(x, y, 0.02)
     }
   }
 

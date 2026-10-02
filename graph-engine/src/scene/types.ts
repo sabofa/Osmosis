@@ -1,6 +1,4 @@
-import type { FunctionTable } from '../parser/evalExpr'
 import type { FeatureKind } from '../parser/config'
-import type { Expr } from '../parser/types'
 
 export interface Vec2 {
   x: number
@@ -77,13 +75,15 @@ export type SceneObject =
   | { kind: 'line'; through: Vec2; direction: Vec2; extent: 'infinite' | 'ray'; color?: string | null }
   // Flat triangle list (groups of 3 points) for a filled inequality region.
   | { kind: 'region'; triangles: Vec2[]; color?: string | null }
-  // Not pre-evaluated like everything else here — fx/fy stay as expressions
-  // so the renderer can re-evaluate them every frame to animate the point
-  // along the path, cycling `from`..`to` over time. `functions` is carried
-  // along too so a path that calls a "k(t) = ..." definition (see
-  // parser/types.ts) still resolves correctly on every one of those
-  // per-frame re-evaluations, not just the one-off build pass.
-  | { kind: 'animatedPoint'; fx: Expr; fy: Expr; param: string; from: number; to: number; color?: string | null; functions: FunctionTable }
+  // Not pre-evaluated like everything else here — fx/fy are the path's two
+  // coordinates compiled through the shared kernel (math/compile.ts) over the
+  // parameter, so the renderer can call them every frame to animate the point
+  // along the path, cycling `from`..`to` over time. They close over the
+  // document's definitions, @params and angle unit, so a path that calls a
+  // "k(t) = ..." definition, sums, piecewise, primes or n! resolves on every
+  // frame exactly as it did at build, and a mistake in the path is a compile
+  // error on the statement's line at build, never a silent per-frame failure.
+  | { kind: 'animatedPoint'; fx: (t: number) => number; fy: (t: number) => number; param: string; from: number; to: number; color?: string | null }
   // Geometry annotations (see parser/types.ts's angle:/tick:/right-angle:) —
   // circle/polygon reuse 'curve'/'segments'/'point' above instead of adding
   // their own kinds, since a circle is just a closed sampled curve and a
