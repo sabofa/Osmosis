@@ -119,6 +119,24 @@ export function colorScale(clause: ColormapClause, values: Float64Array, config:
   }
 }
 
+// calc P1: an "if" clause the old shape cannot say (and, or, !=, a condition on
+// another variable, an if on an implicit or a region line) rides on the
+// statement as `where`, in reserved calls (math/reserved.ts). Space does not
+// read it yet, and drawing the shape without it would be a wrong picture, so a
+// builder that takes one of these kinds refuses a non-null `where`: a line
+// error, through the builder's own error path.
+export const WHERE_REFUSAL = "this condition isn't supported in a 3D scene yet"
+
+export function refuseWhere(statement: Statement): void {
+  switch (statement.kind) {
+    case 'explicit':
+    case 'implicit':
+    case 'region':
+    case 'regionChain':
+      if (statement.where) throw new Error(WHERE_REFUSAL)
+  }
+}
+
 export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
