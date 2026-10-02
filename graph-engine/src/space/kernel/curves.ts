@@ -95,7 +95,7 @@ function prepareCurve(statement: Statement, context: BuildContext): PreparedStat
   const vars = boundNames(1)
   const renamed = parts.f.map((e) => {
     reads.add(e, [parts.param])
-    return renameBound(e, [parts.param])
+    return renameBound(e, [parts.param], scope)
   }) as [Expr, Expr, Expr]
   const r = compileVector(renamed, vars, scope)
   const dr = compileVector(renamed.map((e) => simplify(diff(e, vars[0], scope))) as [Expr, Expr, Expr], vars, scope)

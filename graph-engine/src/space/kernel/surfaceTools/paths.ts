@@ -82,7 +82,7 @@ function preparePath(statement: Statement, context: BuildContext): PreparedState
   const t = form.t.param
   const [xt, yt] = form.along.map((e) => {
     reads.add(e, [t])
-    return renameBound(e, [t])
+    return renameBound(e, [t], scope)
   })
   const zt = substitute(target.body, new Map<string, Expr>([['$0', xt], ['$1', yt]]))
   const vars = boundNames(1)

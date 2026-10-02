@@ -3,7 +3,7 @@
 
 import type { GraphConfig } from '../../parser/config'
 import type { Expr, Statement } from '../../parser/types'
-import { compileScalar, freeVariablesDeep, type CompiledFn } from '../../math/compile'
+import { compileScalar, freeVariablesDeep, paramCallsAsProducts, type CompiledFn } from '../../math/compile'
 import { renameVars } from '../../math/expr'
 import type { MathScope } from '../../math/scope'
 import type { ColormapClause } from '../grammar/types'
@@ -20,10 +20,17 @@ export function boundNames(count: number): string[] {
   return Array.from({ length: count }, (_, i) => `$${i}`)
 }
 
-export function renameBound(expr: Expr, names: readonly string[]): Expr {
+// A value name followed by a parenthesis is a product, x(x + 1) = x * (x + 1)
+// (calc P1). Compile reads it so while the name is still bound, but a rename or
+// a substitution leaves a call's name alone: x(x + 1) would become
+// $0($0 + 1), "Unknown function". So every pass of space's that renames bound
+// variables or substitutes coordinates first says the product outright with
+// paramCallsAsProducts (math/compile.ts), while the names are still the
+// author's. renameBound does; a site that substitutes calls it itself.
+export function renameBound(expr: Expr, names: readonly string[], scope: MathScope): Expr {
   const map = new Map<string, string>()
   names.forEach((name, i) => map.set(name, `$${i}`))
-  return renameVars(expr, map)
+  return renameVars(paramCallsAsProducts(expr, names, scope), map)
 }
 
 // Collects the free names of several expressions, each with its own bound
