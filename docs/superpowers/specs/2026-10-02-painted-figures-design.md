@@ -226,3 +226,18 @@ Only `space/paint/gl/` touches WebGL. There are no new dependencies, and three.j
 2. **Shared papers.** The shared paper generator covers every paper and follows the Osmosis theme, including custom themes. Geometry wires the SVG side.
 3. **Hand-drawn space.** Phase 1 strokes and Phase 2 surfaces, per the 2026-10-01 research (`scratchpad/handdrawn-research/`).
 4. **2D painter.** The 2D figure painter uses the same model, coordinated with geometry.
+
+## 11. Addendum (Ben, 2026-10-02 01:30): more of the look in his hands
+
+Ben wants to fine-tune "color curves, lighting curves, lighting strength, environment absorption, value curve, ± ratio for colors, brush stroke detection, etc." Added to the contract:
+- `curves.ts` provides monotone-cubic curves, and `params.curves` holds them:
+  - `lightResponse`: N·L → lit;
+  - `value`: raw u → value;
+  - `lAdjust`, `cAdjust`, `hAdjust`: adjustments to L, C and H over value;
+  - `mixAmount`: mix strength over value.
+
+  Their defaults are identity or flat, so the §3 formulas stay the look until he edits them. The lab draws `CURVE_SCHEMA` as draggable curve editors.
+- `params.environment`: hue and chroma of the environment light, `absorption` (how much of the environment colour the object takes in, applied to the ambient share in OKLab with L untouched), and screen-space `occlusion` from the G-buffer depth with `occlusionRadiusPx`.
+- `params.mix.hueBias`, `chromaBias`, `valueBias`: the ± balance of the brush-load mix. A bias b makes the + direction come up (1 + b)/2 of the time.
+- `params.detect`: the thresholds that pick each stroke's role (form band, scumble gradient and width, dab fraction and spacing, glaze threshold, reflected minimum, edge minimum contrast and reach).
+- The model computes its own value from the G-buffer normal and shadow flag, so the curves apply: N·L → `lightResponse` → plus ambient, sky and bounce → minus occlusion → `value`. `PaintDebug.value` carries it for the 'value' debug view. `GBuffer.value` remains the renderer's raw reference.

@@ -72,7 +72,9 @@ export interface GBuffer {
   depth: Float32Array
   // World normal, 3 per pixel (0,0,0 where empty).
   normal: Float32Array
-  // Raw lit value u in 0..1 (key light, ambient, sky, bounce, shadow), -1 where empty.
+  // Raw lit value u in 0..1 (key light, ambient, sky, bounce, shadow), -1 where
+  // empty. The model recomputes its own value from `normal` and `shadow` (so
+  // the curves apply); this one is the renderer's reference.
   value: Float32Array
   // 1 where the pixel is in the key light's cast or self shadow.
   shadow: Uint8Array
@@ -106,6 +108,11 @@ export const EDGE_CLASSES: readonly EdgeClass[] = ['lost', 'soft', 'firm', 'hard
 
 // Debug data the model hands the renderer for the lab's debug views.
 export interface PaintDebug {
+  // The model's final value per G-buffer pixel (0..1, -1 empty): its own
+  // lighting from the G-buffer normal and shadow flag, through the light
+  // response curve, occlusion and the value curve. The 'value' debug view
+  // shows this, not GBuffer.value (the renderer's raw lighting).
+  value: Float32Array
   // Plane id per G-buffer pixel (-1 empty), same size as the G-buffer.
   planes: Int32Array
   // Zone per G-buffer pixel: index into ZONES, 255 empty.

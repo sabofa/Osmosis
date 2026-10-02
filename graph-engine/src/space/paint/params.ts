@@ -4,8 +4,61 @@
 // sliders from PARAM_SCHEMA; "Save as defaults" writes the tuned values to
 // tuning.json, which M2 reads as the shipping defaults.
 
+import type { CurvePoints, CurveSpec } from './curves'
+
 export interface PaintParams {
   seed: number
+  // Editable curves (curves.ts). Defaults are the identity / flat, so the spec
+  // formulas are the look until Ben edits them. The model applies them; the
+  // renderer never reads them.
+  curves: {
+    // Key-light response: Lambert N·L (0..1) → lit fraction (0..1).
+    lightResponse: CurvePoints
+    // Raw value u → the value the plan zones (0..1), applied after occlusion.
+    value: CurvePoints
+    // Over value u: added to the curve's L (−0.2..0.2).
+    lAdjust: CurvePoints
+    // Over value u: multiplier on the curve's C (0..2).
+    cAdjust: CurvePoints
+    // Over value u: degrees added to the curve's H (−60..60).
+    hAdjust: CurvePoints
+    // Over value u: multiplier on the brush-load mix strength (0..2).
+    mixAmount: CurvePoints
+  }
+  // The environment's light colour and how the object takes it in.
+  environment: {
+    // OKLCH hue (deg) and chroma of the ambient/sky/bounce light.
+    hue: number
+    chroma: number
+    // 0 = the object ignores the environment colour, 1 = its ambient share
+    // takes the full environment tint (in OKLab, L untouched).
+    absorption: number
+    // Screen-space ambient occlusion from the G-buffer depth: how much creases
+    // and contact areas darken (0 off).
+    occlusion: number
+    occlusionRadiusPx: number
+  }
+  // How strokes are detected and assigned their role (§3.7).
+  detect: {
+    // Form strokes go on particles whose value is within this band (u units)
+    // of the terminator (the half-tone/core boundary).
+    formBand: number
+    // Scumble goes where |∇u| per CSS px is below this over at least
+    // scumbleMinPx (a wide transition).
+    scumbleGradient: number
+    scumbleMinPx: number
+    // Dabs: the top fraction of value maxima, at least dabMinPx apart.
+    dabTopFraction: number
+    dabMinPx: number
+    // Glaze takes the core/cast zones when the particle's value is below this.
+    glazeBelow: number
+    // Reflected strokes need at least this much bounce in the value.
+    reflectedMin: number
+    // A boundary counts as an edge only above this value contrast.
+    edgeMinContrast: number
+    // A stroke takes its behaviour from an edge within this many px.
+    edgeReachPx: number
+  }
   light: {
     // Key light relative to the camera: azimuth (deg, + = to the viewer's
     // left) and elevation (deg, + = above) of the light direction.
@@ -80,6 +133,12 @@ export interface PaintParams {
     loadBreakPx: number
     loadCell: number
     colormapScale: number
+    // The ± balance of the mix (−1..1, 0 = symmetric): hue toward + (counter-
+    // clockwise) or −, chroma up or down, value steps lighter or darker. A bias
+    // b makes the + direction come up (1 + b)/2 of the time.
+    hueBias: number
+    chromaBias: number
+    valueBias: number
     roleBlock: number
     roleForm: number
     roleScumble: number
@@ -138,6 +197,19 @@ const role = (
 
 export const DEFAULT_PAINT_PARAMS: PaintParams = {
   seed: 1,
+  curves: {
+    lightResponse: [[0, 0], [1, 1]],
+    value: [[0, 0], [1, 1]],
+    lAdjust: [[0, 0], [1, 0]],
+    cAdjust: [[0, 1], [1, 1]],
+    hAdjust: [[0, 0], [1, 0]],
+    mixAmount: [[0, 1], [1, 1]],
+  },
+  environment: { hue: 250, chroma: 0.02, absorption: 0.3, occlusion: 0.35, occlusionRadiusPx: 14 },
+  detect: {
+    formBand: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
+    glazeBelow: 0.4, reflectedMin: 0.04, edgeMinContrast: 0.05, edgeReachPx: 20,
+  },
   light: { azimuth: 35, elevation: 40, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
   value: {
     halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, soft: 0.07,
@@ -155,6 +227,7 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
     valueStepFraction: 0.25, valueStep: 0.03, greyChroma: 0.05, greyVecMin: 0.012, greyVecMax: 0.026,
     flipHue: 0.8, flipChroma: 0.75, drift: 0.45, loadMin: 3, loadMax: 8, loadBreakPx: 120, loadCell: 0.5,
     colormapScale: 1 / 3,
+    hueBias: 0, chromaBias: 0, valueBias: 0,
     roleBlock: 1, roleForm: 0.7, roleScumble: 0.85, roleGlaze: 0.6, roleLine: 0.75, roleEdge: 0.5, roleDab: 0.4,
   },
   edges: {
@@ -210,6 +283,23 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'light.sky', label: 'Sky', group: 'Light', min: 0, max: 1, step: 0.01 },
   { path: 'light.bounce', label: 'Bounce', group: 'Light', min: 0, max: 1, step: 0.01 },
   { path: 'light.shadows', label: 'Shadows', group: 'Light', min: 0, max: 1, step: 1 },
+  { path: 'environment.hue', label: 'Environment hue', group: 'Environment', min: 0, max: 360, step: 1 },
+  { path: 'environment.chroma', label: 'Environment chroma', group: 'Environment', min: 0, max: 0.2, step: 0.001 },
+  { path: 'environment.absorption', label: 'Absorption', group: 'Environment', min: 0, max: 1, step: 0.01 },
+  { path: 'environment.occlusion', label: 'Occlusion', group: 'Environment', min: 0, max: 1, step: 0.01 },
+  { path: 'environment.occlusionRadiusPx', label: 'Occlusion radius (px)', group: 'Environment', min: 2, max: 60, step: 1 },
+  ...(
+    [
+      ['formBand', 'Form band (u)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
+      ['scumbleMinPx', 'Scumble min width (px)', 0, 40, 1], ['dabTopFraction', 'Dab top fraction', 0, 0.2, 0.001],
+      ['dabMinPx', 'Dab min spacing (px)', 0, 80, 1], ['glazeBelow', 'Glaze below u', 0, 1, 0.01],
+      ['reflectedMin', 'Reflected min bounce', 0, 0.3, 0.005], ['edgeMinContrast', 'Edge min contrast', 0, 0.3, 0.005],
+      ['edgeReachPx', 'Edge reach (px)', 0, 80, 1],
+    ] as const
+  ).map(([k, label, min, max, step]) => ({ path: `detect.${k}`, label, group: 'Stroke detection', min, max, step })),
+  { path: 'mix.hueBias', label: 'Hue ± balance', group: 'Brush-load mix', min: -1, max: 1, step: 0.01 },
+  { path: 'mix.chromaBias', label: 'Chroma ± balance', group: 'Brush-load mix', min: -1, max: 1, step: 0.01 },
+  { path: 'mix.valueBias', label: 'Value-step ± balance', group: 'Brush-load mix', min: -1, max: 1, step: 0.01 },
   ...(
     [
       ['halfLo', 'Half-tone from', 0, 1], ['halfHi', 'Half-tone to', 0, 1], ['lightLo', 'Light from', 0, 1],
@@ -277,6 +367,16 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'canvas.tone.2', label: 'Canvas b', group: 'Impasto & canvas', min: -0.1, max: 0.1, step: 0.001 },
 ]
 
+// The curve editors (Paint Lab), one per entry of PaintParams.curves.
+export const CURVE_SCHEMA: CurveSpec[] = [
+  { path: 'curves.lightResponse', label: 'Light response', group: 'Curves', xLabel: 'N·L', yMin: 0, yMax: 1, yLabel: 'lit' },
+  { path: 'curves.value', label: 'Value curve', group: 'Curves', xLabel: 'raw value', yMin: 0, yMax: 1, yLabel: 'value' },
+  { path: 'curves.lAdjust', label: 'Lightness (L) over value', group: 'Curves', xLabel: 'value', yMin: -0.2, yMax: 0.2, yLabel: 'ΔL' },
+  { path: 'curves.cAdjust', label: 'Chroma (C) over value', group: 'Curves', xLabel: 'value', yMin: 0, yMax: 2, yLabel: '×C' },
+  { path: 'curves.hAdjust', label: 'Hue (H) over value', group: 'Curves', xLabel: 'value', yMin: -60, yMax: 60, yLabel: 'ΔH°' },
+  { path: 'curves.mixAmount', label: 'Mix strength over value', group: 'Curves', xLabel: 'value', yMin: 0, yMax: 2, yLabel: '×mix' },
+]
+
 // A partial override (tuning.json, a preset, @style-* later) applied over
 // the defaults, deep, tuples by index. Unknown keys are ignored.
 export type PaintParamsOverride = { [K in keyof PaintParams]?: unknown }
@@ -287,7 +387,14 @@ export function resolvePaintParams(...layers: (PaintParamsOverride | null | unde
     for (const [k, v] of Object.entries(src)) {
       if (!(k in target)) continue
       const t = target[k]
-      if (Array.isArray(t) && Array.isArray(v)) {
+      // A curve (an array of [x, y] points) is replaced whole when the
+      // override is a valid curve: at least 2 points, numbers, x ascending.
+      if (Array.isArray(t) && Array.isArray(t[0])) {
+        const ok = Array.isArray(v) && v.length >= 2 &&
+          v.every((p, i) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number' &&
+            (i === 0 || p[0] > (v[i - 1] as number[])[0]))
+        if (ok) target[k] = (v as number[][]).map((p) => [p[0], p[1]])
+      } else if (Array.isArray(t) && Array.isArray(v)) {
         v.forEach((x, i) => { if (typeof x === typeof t[i]) t[i] = x })
       } else if (t !== null && typeof t === 'object' && v !== null && typeof v === 'object') {
         merge(t as Record<string, unknown>, v as Record<string, unknown>)
