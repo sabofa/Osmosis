@@ -25,13 +25,16 @@
 // Ported from the approved mockup (edges.js extractEdges, buildEdgeRun,
 // strokeEnv, CLS_MODS; paint-math.js contoursOf).
 
-import { randomFor, smoothNoise } from '../../../style/random'
 import type { PaintParams } from '../params'
-import { clamp, hash3, smooth } from './math'
+import { clamp, hash3, mix2, smooth, valueNoise3 } from './math'
 import type { PlaneMap } from './planes'
 import type { PlanMap } from './value'
 import type { FrameCtx } from './view'
 import { unproject } from './view'
+
+// Noise on the edge's hardness runs this many cycles to a world unit: a long, gentle waver (a period of two thirds of a unit,
+// about 130 px at 200 px a unit), not jitter.
+const EDGE_NOISE_FREQ = 1.5
 
 export type EdgeType = 'internal' | 'silhouette' | 'shadow'
 const EDGE_KIND: Record<EdgeType, number> = { internal: 0, silhouette: 1, shadow: 2 }
@@ -63,6 +66,9 @@ export interface EdgeMap {
   reach: number
   dist: Float32Array
   hard: Float32Array
+  // The class (EDGE_CLASSES index) of that nearest edge sample: the MEDIAN-SMOOTHED class, not the class of the raw hardness
+  // (which flickers as the camera moves). A stroke takes its behaviour from this.
+  cls: Uint8Array
   focal: { pts: [number, number][]; R: number } | null
   // The mean hardness of the boundary between two planes, or undefined where they do not meet.
   adjHard(a: number, b: number): number | undefined
@@ -340,16 +346,26 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
   const edges: EdgeRun[] = []
   const params = fc.params
   const world = [0, 0, 0]
-  const posHash = (x: number, y: number): number => {
+  // The world point of the surface under a G-buffer position (written into `out`), false where nothing is drawn.
+  const surfacePoint = (x: number, y: number, out: number[]): boolean => {
     const ix = clamp(Math.round(x), 0, w - 1)
     const iy = clamp(Math.round(y), 0, h - 1)
     const i = iy * w + ix
-    if (!Number.isFinite(g.depth[i])) return 0
-    unproject(fc, (ix + 0.5) * scale, (iy + 0.5) * scale, g.depth[i], world)
+    if (!Number.isFinite(g.depth[i])) return false
+    unproject(fc, (ix + 0.5) * scale, (iy + 0.5) * scale, g.depth[i], out)
+    return true
+  }
+  const posHash = (x: number, y: number): number => {
+    if (!surfacePoint(x, y, world)) return 0
     return hash3(Math.round(world[0] * 7), Math.round(world[1] * 7), Math.round(world[2] * 7))
   }
+  // The seeded noise on an edge's hardness (params.edges.noise): a smooth function of the SURFACE POINT under the sample,
+  // so it is the same whichever way the camera looks at that bit of edge. (It was a noise along the run, keyed on its first
+  // sample and its length, which moves with where the contour tracing starts, so an edge flickered as the camera turned.)
+  const noiseSeed = mix2(params.seed, 0x6ed9eba1)
+  const surfaceNoise = (x: number, y: number): number => (surfacePoint(x, y, world) ? valueNoise3(world[0] * EDGE_NOISE_FREQ, world[1] * EDGE_NOISE_FREQ, world[2] * EDGE_NOISE_FREQ, noiseSeed) : 0)
 
-  const rc: RunCtx = { fc, plan, planes, focal, zN, zR, probeIn, probeOut, posHash, adj }
+  const rc: RunCtx = { fc, plan, planes, focal, zN, zR, probeIn, probeOut, posHash, surfaceNoise, adj }
   for (const pl of list) {
     if (pl.area < minPlane) continue
     const x0 = Math.max(0, pl.x0 - 3)
@@ -425,6 +441,7 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
   const reach2 = reach * reach
   const dist = new Float32Array(w * h).fill(99)
   const hard = new Float32Array(w * h)
+  const clsField = new Uint8Array(w * h)
   for (const e of edges) {
     if (e.contrast < params.detect.edgeMinContrast) continue // no visible transition: the brush just carries on across it
     const n = e.h.length
@@ -453,6 +470,7 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
           if (d < dist[i]) {
             dist[i] = d
             hard[i] = hv
+            clsField[i] = e.cls[k]
           }
         }
       }
@@ -463,6 +481,7 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
     reach,
     dist,
     hard,
+    cls: clsField,
     focal,
     adjHard: (a, b) => {
       const e = adj.get(a < b ? `${a},${b}` : `${b},${a}`)
@@ -482,11 +501,12 @@ interface RunCtx {
   probeIn: number
   probeOut: number
   posHash: (x: number, y: number) => number
+  surfaceNoise: (x: number, y: number) => number
   adj: Map<string, { sum: number; n: number }>
 }
 
 function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
-  const { fc, plan, planes, focal, zN, zR, probeIn, probeOut, posHash, adj } = rc
+  const { fc, plan, planes, focal, zN, zR, probeIn, probeOut, posHash, surfaceNoise, adj } = rc
   const { S, id } = spec
   const params = fc.params
   const g = fc.g
@@ -503,23 +523,15 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
   const uA0 = uAs ? meanOf(uAs, n) : pl ? pl.u : 0
   const uB0 = uBs ? meanOf(uBs, n) : q >= 0 ? planes.planes[q].u : plan.uCanvas
   const contrast = uAs || uBs ? meanAbsDiff(uAs, uBs, uA0, uB0, n) : Math.abs(uA0 - uB0)
-  const first = S[0]
-  const keyHash = posHash(first.p[0] - first.nx * probeIn, first.p[1] - first.ny * probeIn)
-  // arc length in CSS px, for the noise along the edge
-  let total = 0
-  for (let i = 1; i < n; i++) total += Math.hypot(S[i].p[0] - S[i - 1].p[0], S[i].p[1] - S[i - 1].p[1]) * scale
-  const noise = smoothNoise(randomFor(`paint/edgevar/${keyHash}`, params.seed), Math.max(2, Math.round(total * 0.03)))
   const hv = new Float32Array(n)
   const raw = new Uint8Array(n)
   const keys = new Uint32Array(n)
   const pts = new Float32Array(2 * n)
   const nrm = new Float32Array(2 * n)
-  let arc = 0
   for (let i = 0; i < n; i++) {
     const s = S[i]
     const x = s.p[0]
     const y = s.p[1]
-    if (i > 0) arc += Math.hypot(x - S[i - 1].p[0], y - S[i - 1].p[1]) * scale
     const ix = clamp(Math.round(x + s.nx * probeIn), 0, w - 1)
     const iy = clamp(Math.round(y + s.ny * probeIn), 0, h - 1)
     const ox = clamp(Math.round(x - s.nx * probeOut), 0, w - 1)
@@ -552,11 +564,13 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
     if (focal) for (const fp of focal.pts) t.f = Math.max(t.f, Math.exp(-((Math.hypot(x - fp[0], y - fp[1]) / focal.R) ** 2)))
     t.d = Number.isFinite(g.depth[ii]) ? 1 - smooth(0, 1, (g.depth[ii] - zN) / zR) : 0
     t.x = type === 'shadow' ? 1 - smooth(8, 110, planes.dObj[ii] * scale) : 0
-    let hh = edgeHardness(type, t, params) + params.edges.noise * noise(total > 0 ? arc / total : 0) // a long edge can go firm, soft, firm
+    let hh = edgeHardness(type, t, params) + params.edges.noise * surfaceNoise(x + s.nx * probeIn, y + s.ny * probeIn) // a long edge can go firm, soft, firm
     if (con < 0.03) hh = Math.min(hh, params.edges.lostBelow - 0.01) // no visible transition: lost
     hv[i] = clamp(hh, 0, 1)
     raw[i] = edgeClassOf(hv[i], params)
-    keys[i] = posHash(x - s.nx * probeIn, y - s.ny * probeIn)
+    // the surface under the sample, on the figure's side of the edge (the other side of a silhouette is the background, which has no
+    // surface: it was keyed there, and every silhouette sample got the key 0)
+    keys[i] = posHash(x + s.nx * probeIn, y + s.ny * probeIn)
     pts[2 * i] = x
     pts[2 * i + 1] = y
     nrm[2 * i] = s.nx
@@ -618,6 +632,7 @@ export function strokeEdgeClass(
   const g = fc.g
   let bestD = Number.POSITIVE_INFINITY
   let bestH = 0
+  let bestI = 0
   for (let q = 0; q < count; q++) {
     const gx = Math.floor(xs[q] / g.scale)
     const gy = Math.floor(ys[q] / g.scale)
@@ -627,9 +642,11 @@ export function strokeEdgeClass(
     if (d < map.reach && d < bestD) {
       bestD = d
       bestH = map.hard[i]
+      bestI = i
     }
   }
-  if (bestD < map.reach) return { cls: edgeClassOf(bestH, fc.params), hardness: bestH, nearEdge: true }
+  // the class is the nearest sample's smoothed one (the hardness is its raw value)
+  if (bestD < map.reach) return { cls: map.cls[bestI], hardness: bestH, nearEdge: true }
   const interior = clamp(0.52 + 0.26 * light - 0.28 * shadow, 0.1, 0.9)
   return { cls: edgeClassOf(interior, fc.params), hardness: interior, nearEdge: false }
 }

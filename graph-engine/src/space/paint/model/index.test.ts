@@ -460,15 +460,8 @@ describe('data marks are exact and found (spec §7)', () => {
 describe('colormapped surfaces keep their colour (spec §7)', () => {
   // Two saddles of the same colour: one flat colour, one coloured by height through a scale that is that colour everywhere.
   const colour = lchToLab(0.6, 0.12, 150)
-  const huesOf = (mesh: MeshMark, colours: ReturnType<typeof flatColours>): number[] => {
-    const scene = sceneOf([mesh])
-    const view = paintView({ width: 640, height: 480, azimuth: 30, elevation: 35, zoom: 120 })
-    const g = sphereGBuffer(640, 480, { view })
-    // a saddle has no sphere in the G-buffer: build its own from the mesh by ray casting would be heavy, so use the sphere's silhouette
-    void g
-    const set = buildParticles(scene, colours, P)
-    return Array.from(set.colormapped)
-  }
+  // whether each particle of the mesh was coloured by a colour scale
+  const huesOf = (mesh: MeshMark, colours: ReturnType<typeof flatColours>): number[] => Array.from(buildParticles(sceneOf([mesh]), colours, P).colormapped)
 
   it('marks a colour-scaled mesh’s particles as colormapped, and draws their stroke colours within a third of the hue spread', () => {
     const flatMesh = sphereMesh({ radius: 1 })
@@ -502,8 +495,10 @@ describe('colormapped surfaces keep their colour (spec §7)', () => {
     const flatSpread = spread(flatMesh, flat)
     const mappedSpread = spread(scaled, mapped)
     expect(flatSpread).toBeGreaterThan(5)
-    // hue offsets, swings and tints all scale by a third: the spread is about a third (the curve's own seeded deviation does not)
-    expect(mappedSpread / flatSpread).toBeLessThan(0.55)
-    expect(mappedSpread / flatSpread).toBeGreaterThan(0.2)
+    // hue offsets, swings, tints, the curve's own seeded deviation and the strokes' jitter all scale by a third (colormapHue,
+    // and colormapScale for the mix): the spread is a third. (It was accepted from 0.2 to 0.55, and was 0.4: the deviation
+    // and the jitter were left whole.)
+    expect(mappedSpread / flatSpread).toBeLessThan(0.38)
+    expect(mappedSpread / flatSpread).toBeGreaterThan(0.28)
   })
 })

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolvePaintParams, type PaintParams } from '../params'
 import type { Oklab } from '../types'
 import { labToLch, lchToLab } from './colour'
-import { LoadMixer, type MixResult } from './mix'
+import { GREY_FAMILIES, LoadMixer, type MixResult } from './mix'
 
 const TERRACOTTA: Oklab = lchToLab(0.55, 0.12, 40)
 const GREY: Oklab = [0.5, 0, 0]
@@ -132,6 +132,55 @@ describe('brush-load mix', () => {
     const g = groups[0]
     const lastC = Math.hypot(g[g.length - 1].lab[1], g[g.length - 1].lab[2])
     expect(lastC / Math.hypot(g[0].lab[1], g[0].lab[2])).toBeCloseTo(0.45, 6)
+  })
+
+  it('steps a grey to the OPPOSITE family in turn: warm to cool, green-grey to violet-grey', () => {
+    // the list is warm, green-grey, cool, violet-grey, so `fam + 2` is the opposite one (the first order, warm, cool, green,
+    // violet, stepped warm to green-grey, 73 degrees away, and never from warm to cool)
+    expect(GREY_FAMILIES).toEqual([62, 135, 255, 315])
+    for (let i = 0; i < 4; i++) {
+      const turn = Math.abs(GREY_FAMILIES[i] - GREY_FAMILIES[(i + 2) % 4])
+      expect(Math.min(turn, 360 - turn), `family ${i}`).toBeGreaterThanOrEqual(165) // 167 and 180 degrees apart
+    }
+    // and the loads do it: three in five (the other two step to a neighbour) of consecutive loads of a grey point away from
+    // each other, by at least 150 degrees (the family's own turn is +-18 degrees)
+    const groups = byLoad(runLoads(SEQUENTIAL, 300, GREY))
+    const angle = (lab: Oklab) => (Math.atan2(lab[2], lab[1]) * 180) / Math.PI
+    let opposite = 0
+    for (let i = 1; i < groups.length; i++) {
+      const d = Math.abs(angle(groups[i].at(0)!.lab) - angle(groups[i - 1].at(0)!.lab)) % 360
+      if (Math.min(d, 360 - d) >= 150) opposite++
+    }
+    expect(opposite / (groups.length - 1)).toBeGreaterThan(0.5)
+    expect(opposite / (groups.length - 1)).toBeLessThan(0.75)
+  })
+
+  it('keeps every offset inside the sliders even at strength 1.5 with the personal jitter at three sigma: chroma x0.7..x1.35, the value step at most 0.03', () => {
+    const strong = resolvePaintParams({ mix: { roleEdge: 1, strength: 1.5 } })
+    const mixer = new LoadMixer(strong)
+    let chromaMax = 0
+    let chromaMin = Infinity
+    let stepMax = 0
+    for (let i = 0; i < 1500; i++) {
+      for (const [j0, j1] of [[3, 3], [3, -3], [-3, 3], [-3, -3]] as const) {
+        const r = mixer.mix({ role: 'edge', cell: i, u: 0.6, x: 50, y: 50, lab: TERRACOTTA, colormapped: false, seed: i, jit0: j0, jit1: j1 })
+        const lch = labToLch(r.lab)
+        // the first stroke of a load has no drift: the whole offset
+        if (r.index === 0) {
+          chromaMax = Math.max(chromaMax, lch[1] / 0.12)
+          chromaMin = Math.min(chromaMin, lch[1] / 0.12)
+          if (r.step !== 0) stepMax = Math.max(stepMax, Math.abs(r.lab[0] - TERRACOTTA[0]))
+        }
+      }
+    }
+    expect(chromaMax).toBeLessThanOrEqual(1.35 + 1e-6)
+    expect(chromaMin).toBeGreaterThanOrEqual(0.7 - 1e-6)
+    // (it reached them: the clamp is what holds it)
+    expect(chromaMax).toBeGreaterThan(1.3)
+    expect(chromaMin).toBeLessThan(0.75)
+    // a value step is valueStep (0.03) at most, plus the held noise of 0 for a stepped load
+    expect(stepMax).toBeLessThanOrEqual(0.03 + 1e-9)
+    expect(stepMax).toBeGreaterThan(0.025)
   })
 
   it('turns a coloured base by the load’s hue and scales its chroma, never leaving the hue range', () => {

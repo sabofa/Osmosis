@@ -240,11 +240,19 @@ function walkHalf(an: PaintCtx, s: WalkSpec, sign: number, halfWorld: number, pp
   const stopAt = params.edges.stopAt
   const bleedAt = params.edges.bleedAt
   const planeId = s.planeId
-  let bleedLeft = Number.POSITIVE_INFINITY
+  // after a stroke crosses a softer edge it goes on for 60% of the steps it had left, to the fraction of a step
+  // (it was floored to whole steps, which of a stroke of 4 left it 0 or 1)
+  let bleedLeft = 0
   let bled = false
   out.n = 0
   out.end = 0
   for (let k = 1; k <= STEPS; k++) {
+    let stepLen = ds
+    if (bled) {
+      if (bleedLeft <= 1e-9) return
+      stepLen = ds * Math.min(1, bleedLeft)
+      bleedLeft -= 1
+    }
     // 1. the direction here
     let ex = dx, ey = dy, ez = dz
     if (s.mode === 'iso') {
@@ -312,9 +320,9 @@ function walkHalf(an: PaintCtx, s: WalkSpec, sign: number, halfWorld: number, pp
     dy = ey * cb + ky * sb
     dz = ez * cb + kz * sb
     // 3. the step, projected
-    const qx = px + dx * ds
-    const qy = py + dy * ds
-    const qz = pz + dz * ds
+    const qx = px + dx * stepLen
+    const qy = py + dy * stepLen
+    const qz = pz + dz * stepLen
     const cw = vp[3] * qx + vp[7] * qy + vp[11] * qz + vp[15]
     if (cw <= 1e-9) {
       out.end = 2
@@ -390,14 +398,10 @@ function walkHalf(an: PaintCtx, s: WalkSpec, sign: number, halfWorld: number, pp
             }
             if (h >= bleedAt && !bled) {
               bled = true
-              bleedLeft = Math.floor(0.6 * (STEPS - k))
+              bleedLeft = 0.6 * (STEPS - k)
               out.end = 3
             }
           }
-        }
-        if (bled) {
-          if (bleedLeft < 0) return
-          bleedLeft--
         }
       }
       // 5. onto the surface: along the view ray to the depth the G-buffer holds, and its normal

@@ -107,6 +107,11 @@ function splitCorners(pl: PL): PL[] {
   return out
 }
 
+// A line stroke is at most this long on the screen (CSS px): its PATH_POINTS (8) points are then at most 3 px apart, and the
+// ribbon, a Catmull-Rom curve through them, lies on the polyline. A longer stroke strays from a curved one between its points:
+// 0.2 to 0.5 px on a small circle, for strokes of the role's own length (36 px), where a data mark must be exact.
+export const LINE_MAX_PX = 21
+
 // Split into equal pieces no longer than maxLen.
 function splitLength(pl: PL, maxLen: number): PL[] {
   const cum = arcs(pl)
@@ -340,7 +345,7 @@ export function lineStrokes(an: PaintCtx): void {
     } else parts = dash && dash.length ? dashed(pl, dash) : [pl]
     for (const part of parts) {
       for (const c of splitCorners(part)) {
-        for (const piece of splitLength(c, Math.max(8, rp.length))) emit(mark, tag, piece, widthPx, hiddenRun)
+        for (const piece of splitLength(c, Math.min(Math.max(8, rp.length), LINE_MAX_PX))) emit(mark, tag, piece, widthPx, hiddenRun)
       }
     }
   }

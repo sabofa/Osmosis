@@ -43,12 +43,20 @@ import { makeFrameCtx, visibleParticles } from './view'
 
 export { buildParticles } from './particles'
 
-const curves = new WeakMap<PaintParams, Curve>()
-function curveFor(params: PaintParams): Curve {
-  let c = curves.get(params)
+// The lighting curve of a set of parameters, made once for the parameters it reads. The cache is keyed on their VALUES
+// (what makeCurve reads, as a string), not on the identity of the object: a params object edited in place (the lab
+// edits copies, but a caller may not) went on getting the first curve.
+const curves = new Map<string, Curve>()
+const CURVE_CACHE_LIMIT = 8
+export const curveKeyOf = (params: PaintParams): string =>
+  JSON.stringify([params.seed, params.curve, params.value.deviation, params.curves.lAdjust, params.curves.cAdjust, params.curves.hAdjust, params.environment, params.canvas.tone])
+export function curveFor(params: PaintParams): Curve {
+  const key = curveKeyOf(params)
+  let c = curves.get(key)
   if (!c) {
     c = makeCurve(params)
-    curves.set(params, c)
+    if (curves.size >= CURVE_CACHE_LIMIT) curves.clear()
+    curves.set(key, c)
   }
   return c
 }

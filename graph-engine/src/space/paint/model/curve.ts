@@ -18,7 +18,11 @@
 //
 // Ben's editable curves (spec §11) adjust the result over value u: L += lAdjust(u),
 // C *= cAdjust(u), H += hAdjust(u) (scaled by colormapHue on a colormapped
-// colour); their defaults are flat, which leave the formulas bit-identical.
+// colour); their defaults are flat, which leave the formulas bit-identical. The
+// lightness adjustment is added AFTER the soft clamps at the ends of the lightness range
+// (it was added before them, so a +0.1 in the lights was halved by the 0.92 clamp). A
+// colormapped colour's hue deviation and per-stroke jitter are scaled by colormapHue
+// like every other hue term (the colorbar stays true): they were not.
 // Environment absorption adds, in OKLab with L untouched, the environment's
 // colour: (cos hue, sin hue) · chroma · absorption · ambientShare (scaled by
 // colormapHue on a colormapped colour, like every tint).
@@ -126,9 +130,10 @@ export function makeCurve(params: PaintParams): Curve {
     const ls = i.lScale ?? 1
     const nd = i.noDev ? 0 : 1
     const j = i.j ?? [0, 0, 0]
-    let L = local[0] + p.lSlope * ls * (u - p.lPivot) + nd * sumSines(dL, u) + j[0] + lAdj(u)
+    let L = local[0] + p.lSlope * ls * (u - p.lPivot) + nd * sumSines(dL, u) + j[0]
     if (L > 0.92) L = 0.92 + (L - 0.92) * 0.5
     if (L < 0.14) L = 0.14 + (L - 0.14) * 0.4
+    L += lAdj(u)
     const gC = p.cBase + p.cPeak * Math.exp(-(((u - p.cCentre) / p.cWidth) ** 2))
     const C = local[1] * gC * (1 + nd * sumSines(dC, u) + j[1]) * (1 + hs * (i.planeChroma ?? 0)) * cAdj(u)
     const s = clamp((u - 0.5) / 0.4, -1, 1)
@@ -139,8 +144,7 @@ export function makeCurve(params: PaintParams): Curve {
     const h =
       local[2] +
       k * Math.abs(s) * hueArc(local[2], target) +
-      nd * sumSines(dH, u) +
-      j[2] +
+      hs * (nd * sumSines(dH, u) + j[2]) +
       hs * accent * Math.exp(-(((u - ACCENT_U) / ACCENT_SIG) ** 2)) +
       hs * (i.planeHue ?? 0) +
       hs * hAdj(u)

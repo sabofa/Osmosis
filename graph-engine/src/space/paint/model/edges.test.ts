@@ -4,9 +4,10 @@ import type { GBuffer, PaintView } from '../types'
 import { behaviourOf, contoursOf, edgeClassOf, edgeHardness, extractEdges, resample, smoothClasses, strokeEdgeClass } from './edges'
 import { segmentPlanes } from './planes'
 import { makeCurve } from './curve'
+import { valueNoise3 } from './math'
 import { makeGBuffer, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './testing'
 import { buildPlanMap } from './value'
-import { makeFrameCtx } from './view'
+import { makeFrameCtx, unproject } from './view'
 
 // Whole frames of the model are heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 60_000 })
@@ -324,6 +325,157 @@ describe('edge smoothing', () => {
     let steepest = 0
     for (let i = 1; i < noisy.h.length; i++) steepest = Math.max(steepest, Math.abs(noisy.h[i] - noisy.h[i - 1] - (quiet.h[i] - quiet.h[i - 1])))
     expect(steepest).toBeLessThan(0.02) // a long, gentle waver, not jitter
+  })
+})
+
+describe('edge flicker under orbit: the noise and the class are keyed on the surface, not on the tracing', () => {
+  const NOISY = resolvePaintParams({ edges: { noise: 0.5 }, environment: { occlusion: 0 } })
+
+  it('has a value noise that is a pure function of the surface point: in [-1, 1], continuous, seeded', () => {
+    let lo = 1
+    let hi = -1
+    for (let i = 0; i < 4000; i++) {
+      const x = ((i * 0.37) % 11) - 5
+      const y = ((i * 0.61) % 7) - 3
+      const z = ((i * 0.13) % 5) - 2
+      const v = valueNoise3(x, y, z, 7)
+      lo = Math.min(lo, v)
+      hi = Math.max(hi, v)
+      expect(valueNoise3(x, y, z, 7)).toBe(v) // deterministic
+      expect(Math.abs(valueNoise3(x + 0.01, y, z, 7) - v)).toBeLessThan(0.1) // continuous
+    }
+    expect(lo).toBeGreaterThanOrEqual(-1)
+    expect(hi).toBeLessThanOrEqual(1)
+    expect(lo).toBeLessThan(-0.7)
+    expect(hi).toBeGreaterThan(0.7)
+    // a lattice point is its own hash; another seed is another noise
+    expect(valueNoise3(0.3, 0.4, 0.5, 8)).not.toBe(valueNoise3(0.3, 0.4, 0.5, 7))
+  })
+
+  // The noise of each silhouette sample: its score with the noise on less its score with it off (the same edges, the same G-buffer),
+  // at the world point of the surface under the sample's inner probe (2 G-buffer px in along the edge's normal, the figure's side).
+  const QUIET = resolvePaintParams({ edges: { noise: 0 }, environment: { occlusion: 0 } })
+  const LOUD = resolvePaintParams({ edges: { noise: 0.3 }, environment: { occlusion: 0 } })
+  const noiseAt = (azimuth: number, target: [number, number, number] = [0, 0, 0]) => {
+    const view = paintView({ width: 400, height: 300, azimuth, elevation: 25, zoom: 100, target })
+    const g = sphereGBuffer(400, 300, { view, params: QUIET })
+    const a = analyse(g, view, LOUD)
+    const b = analyse(g, view, QUIET).edges.edges.filter((e) => e.type === 'silhouette')
+    const out: { p: number[]; v: number }[] = []
+    a.edges.edges.filter((e) => e.type === 'silhouette').forEach((e, r) => {
+      for (let i = 0; i < e.h.length; i++) {
+        const x = Math.min(199, Math.max(0, Math.round(e.pts[2 * i] + e.nrm[2 * i] * 2)))
+        const y = Math.min(149, Math.max(0, Math.round(e.pts[2 * i + 1] + e.nrm[2 * i + 1] * 2)))
+        const p = [0, 0, 0]
+        unproject(a.fc, (x + 0.5) * 2, (y + 0.5) * 2, g.depth[y * 200 + x], p)
+        out.push({ p, v: e.h[i] - b[r].h[i] })
+      }
+    })
+    return out
+  }
+  // How well the second view's noise matches the first's at the same bit of surface: the nearest sample of the first view to each
+  // sample of the second, if one is within 0.04 of a unit (the limb of a sphere moves on it by 0.0175 a degree).
+  const compare = (first: { p: number[]; v: number }[], second: { p: number[]; v: number }[]) => {
+    let n = 0
+    let diff = 0
+    let size = 0
+    for (const s of second) {
+      let best = Infinity
+      let v = 0
+      for (const f of first) {
+        const d = Math.hypot(f.p[0] - s.p[0], f.p[1] - s.p[1], f.p[2] - s.p[2])
+        if (d < best) {
+          best = d
+          v = f.v
+        }
+      }
+      if (best > 0.04) continue
+      diff += Math.abs(s.v - v)
+      size += Math.abs(s.v)
+      n++
+    }
+    return { n, diff: diff / Math.max(1, n), size: size / Math.max(1, n) }
+  }
+
+  it('gives the same noise at the same bit of surface seen from a view a degree away: it does not flicker', () => {
+    const r = compare(noiseAt(30), noiseAt(31))
+    expect(r.n).toBeGreaterThan(60)
+    // the noise is really there (about 0.1 a sample at an amplitude of 0.3), and the same, to a few hundredths, from the next
+    // view; keyed on where the contour tracing started (as it was) the two views' noises are unrelated, a difference as big as the noise
+    expect(r.size).toBeGreaterThan(0.06)
+    expect(r.diff).toBeLessThan(0.03)
+  })
+
+  it('gives the same noise at the same bit of surface wherever it falls on the screen: the figure moved 50 px across the canvas', () => {
+    // the same direction of view, the camera target moved a third of a unit: the same surface points, thirty and more px elsewhere
+    // on the screen (noise keyed on the pixel, as a lattice over the screen would, is unrelated at the two places)
+    const first = noiseAt(30)
+    const second = noiseAt(30, [0.3, 0.25, 0])
+    const r = compare(first, second)
+    expect(r.n).toBeGreaterThan(60)
+    expect(r.size).toBeGreaterThan(0.06)
+    expect(r.diff).toBeLessThan(0.03)
+  })
+
+  it('takes a stroke’s class from the smoothed class of the nearest edge sample, not from the class of its raw hardness', () => {
+    // a map whose nearest sample has raw hardness 0.70 (HARD) but a smoothed class of FIRM (2), as a median of its neighbours would give
+    const view = paintView({ width: 400, height: 300, azimuth: 0, elevation: 0, zoom: 100 })
+    const g = makeGBuffer(view, 2, () => null)
+    const fc = makeFrameCtx(sceneOf([sphereMesh()]), view, g, NOISY)
+    const map = {
+      reach: 10,
+      dist: new Float32Array(200 * 150).fill(99),
+      hard: new Float32Array(200 * 150),
+      cls: new Uint8Array(200 * 150),
+    } as unknown as Parameters<typeof strokeEdgeClass>[1]
+    const at = 75 * 200 + 100
+    map.dist[at] = 2
+    map.hard[at] = 0.7
+    map.cls[at] = 2
+    const r = strokeEdgeClass(fc, map, [200], [150], 1, 0.5, 0.2)
+    expect(r.cls).toBe(2)
+    expect(r.hardness).toBeCloseTo(0.7, 6)
+    expect(r.nearEdge).toBe(true)
+    expect(edgeClassOf(0.7, NOISY)).toBe(3) // what the raw hardness would have said
+  })
+
+  it('stores, in the map’s class field, the median-smoothed class of each nearest edge sample', () => {
+    const { edges } = twoFaces(LIT_LEFT, CORE_RIGHT, NO_NOISE)
+    const e = edges.edges.find((r) => r.type === 'internal')!
+    // the nearest sample of a pixel on the edge: its class field is that sample's smoothed class (a hard crease: HARD all along)
+    const i = Math.round(e.pts[2 * 10 + 1]) * 200 + Math.round(e.pts[2 * 10])
+    expect(edges.cls[i]).toBe(e.cls[10])
+    expect(e.cls[10]).toBe(3)
+  })
+})
+
+describe('the hardness field keeps the smoothed class', () => {
+  it('stores in the class field, at every pixel on an edge sample, the median-smoothed class of that sample, also where it is not the class of its raw hardness', () => {
+    const NOISY = resolvePaintParams({ edges: { noise: 0.6 }, environment: { occlusion: 0 } })
+    const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 100 })
+    const g = sphereGBuffer(400, 300, { view, params: NO_NOISE })
+    const { edges } = analyse(g, view, NOISY)
+    // the first sample (edge by edge, along each) whose rounded position is the pixel owns it at distance 0
+    const owner = new Map<number, { smoothed: number; raw: number }>()
+    for (const e of edges.edges) {
+      if (e.contrast < NOISY.detect.edgeMinContrast) continue
+      for (let k = 0; k < e.h.length; k++) {
+        const x = Math.round(e.pts[2 * k])
+        const y = Math.round(e.pts[2 * k + 1])
+        if (x < 0 || x >= 200 || y < 0 || y >= 150) continue
+        const i = y * 200 + x
+        if (!owner.has(i)) owner.set(i, { smoothed: e.cls[k], raw: edgeClassOf(e.h[k], NOISY) })
+      }
+    }
+    let differing = 0
+    for (const [i, o] of owner) {
+      expect(edges.dist[i]).toBe(0)
+      expect(edges.cls[i]).toBe(o.smoothed)
+      if (o.smoothed !== o.raw) differing++
+    }
+    expect(owner.size).toBeGreaterThan(300)
+    // the smoothing really changes some classes here, so the field is told apart from one of raw classes
+    expect(differing).toBeGreaterThan(3)
   })
 })
 

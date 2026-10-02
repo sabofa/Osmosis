@@ -211,7 +211,7 @@ export const ROLE_A = new Float32Array([
   0.5, 0.4, 0.15, 0.3, // reflected
   0.96, 0, 0.4, 0.1, // dab
   0.95, 0.5, 0.3, 0.1, // edge
-  0.98, 0.2, 0.25, 0.04, // line
+  0.98, 0, 0, 0.04, // line: no thinning and no loaded start (a line is cut into 21 px strokes, which would then show as beads)
 ])
 export const ROLE_B = new Float32Array([
   0.92, 0.2, 0, 0, // block

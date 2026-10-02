@@ -4,7 +4,8 @@ import { evalCurve } from '../curves'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams } from '../params'
 import { lchToLab, labToLch } from './colour'
 import { makeCurve } from './curve'
-import { compileCurve, isFlatCurve, isIdentityCurve } from './respond'
+import { curveFor } from './index'
+import { compileCurve, curveKey, isFlatCurve, isIdentityCurve } from './respond'
 
 const TERRACOTTA = lchToLab(0.56, 0.14, 38)
 const GREY = lchToLab(0.5, 0, 0)
@@ -33,6 +34,46 @@ describe('editable curves in the lighting curve (spec §11)', () => {
     // and it clamps outside 0..1
     expect(fn(-1)).toBeCloseTo(0, 12)
     expect(fn(2)).toBeCloseTo(1, 12)
+  })
+
+  it('compiles a curve edited IN PLACE again, and lets two lists with the same points share one function (the cache is keyed on values)', () => {
+    const points: [number, number][] = [[0, 0], [0.5, 0.2], [1, 1]]
+    const a = compileCurve(points)
+    expect(a(0.5)).toBeCloseTo(0.2, 4)
+    points[1][1] = 0.8 // edited in place: the identity of the list is unchanged
+    const b = compileCurve(points)
+    expect(b).not.toBe(a)
+    expect(b(0.5)).toBeCloseTo(0.8, 4)
+    // a copy with the same numbers is the same function
+    expect(compileCurve(points.map((p) => [...p] as [number, number]))).toBe(b)
+    expect(curveKey([[0, 0], [1, 1]])).toBe('0,0;1,1;')
+    // a shorter list is not a longer one
+    expect(compileCurve([[0, 0], [0.5, 0.5], [1, 1]])).not.toBe(compileCurve([[0, 0], [1, 1]]))
+  })
+
+  it('makes the lighting curve again for parameters edited in place, and shares one between equal parameters', () => {
+    const p = structuredClone(DEFAULT_PAINT_PARAMS)
+    const first = curveFor(p)
+    const lch = (c: ReturnType<typeof curveFor>) => c.lch({ local: TERRACOTTA, u: 0.9, noDev: true })
+    const before = lch(first)
+    p.curve.lSlope = 1.3 // in place: the same object
+    const second = curveFor(p)
+    expect(second).not.toBe(first)
+    expect(lch(second)[0]).toBeGreaterThan(before[0] + 0.05)
+    // the adjustment curves, the environment, the canvas tone and the seed are what it reads, too
+    for (const edit of [
+      (q: typeof p) => (q.curves.lAdjust[1][1] = 0.1),
+      (q: typeof p) => (q.environment.absorption = 0.9),
+      (q: typeof p) => (q.canvas.tone[0] = 0.6),
+      (q: typeof p) => (q.seed = 7),
+    ]) {
+      const q = structuredClone(p)
+      const a = curveFor(q)
+      edit(q)
+      expect(curveFor(q), String(edit)).not.toBe(a)
+    }
+    // equal numbers, another object: the same curve
+    expect(curveFor(structuredClone(p))).toBe(second)
   })
 
   it('leaves L, C and H bit-identical under the default (flat) adjustment curves', () => {
@@ -85,6 +126,35 @@ describe('editable curves in the lighting curve (spec §11)', () => {
     const low = makeCurve(resolvePaintParams(bare, { curves: { lAdjust: peak } })).lch({ local: TERRACOTTA, u: 0.24, noDev: true })
     const lowRef = base.lch({ local: TERRACOTTA, u: 0.24, noDev: true })
     expect(low[0] - lowRef[0]).toBeCloseTo(evalCurve(peak, 0.24), 5)
+  })
+
+  it('adds lAdjust AFTER the soft clamps at the ends of the lightness range, so a +0.1 in the lights is a whole 0.1', () => {
+    // local L 0.8 at u = 0.9: 0.8 + 0.8 (0.9 - 0.62) = 1.024, softly clamped to 0.92 + 0.104 x 0.5 = 0.972; then + 0.1 = 1.072
+    // (added before the clamp it was 1.124 -> 0.92 + 0.204 x 0.5 = 1.022: only half of the 0.1)
+    const bare = { curve: { tintWarm: 0, tintCool: 0, accentMax: 0 } }
+    const light = lchToLab(0.8, 0.1, 40)
+    const none = makeCurve(resolvePaintParams(bare)).lch({ local: light, u: 0.9, noDev: true })
+    const up = makeCurve(resolvePaintParams(bare, { curves: { lAdjust: [[0, 0.1], [1, 0.1]] } })).lch({ local: light, u: 0.9, noDev: true })
+    expect(none[0]).toBeCloseTo(0.972, 9)
+    expect(up[0]).toBeCloseTo(1.072, 9)
+    // and the dark end: local L 0.2 at u = 0.1: 0.2 + 0.8 (0.1 - 0.62) = -0.216, softly clamped to 0.14 + (-0.356) x 0.4 = -0.0024; then - 0.05
+    const dark = lchToLab(0.2, 0.05, 40)
+    const dn = makeCurve(resolvePaintParams(bare, { curves: { lAdjust: [[0, -0.05], [1, -0.05]] } })).lch({ local: dark, u: 0.1, noDev: true })
+    expect(dn[0]).toBeCloseTo(-0.0024 - 0.05, 9)
+  })
+
+  it('scales a colormapped colour’s hue deviation and per-stroke jitter by colormapHue, like every other hue term', () => {
+    const bare = { curve: { tintWarm: 0, tintCool: 0, accentMax: 0 } }
+    const curve = makeCurve(resolvePaintParams(bare))
+    const hue = (input: Partial<Parameters<typeof curve.lch>[0]>, colormapped: boolean) => curve.lch({ local: TERRACOTTA, u: 0.62, colormapped, ...input })[2]
+    // the jitter: +6 degrees is 6 on a plain colour and a third of that (colormapHue) on a colormapped one
+    expect(hue({ noDev: true, j: [0, 0, 6] }, false) - hue({ noDev: true }, false)).toBeCloseTo(6, 9)
+    expect(hue({ noDev: true, j: [0, 0, 6] }, true) - hue({ noDev: true }, true)).toBeCloseTo(2, 9)
+    // the curve's own seeded deviation of H at u: whole, and a third of it
+    const dev = curve.deviation(0.62)[2]
+    expect(Math.abs(dev)).toBeGreaterThan(0.5)
+    expect(hue({}, false) - hue({ noDev: true }, false)).toBeCloseTo(dev, 9)
+    expect(hue({}, true) - hue({ noDev: true }, true)).toBeCloseTo(dev / 3, 9)
   })
 
   it('absorbs the environment: exactly (cos hue, sin hue) · chroma · absorption · ambientShare in OKLab, L untouched', () => {

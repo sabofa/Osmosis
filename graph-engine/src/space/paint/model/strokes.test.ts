@@ -113,9 +113,25 @@ describe('the surface walk', () => {
     expect(an.edges.adjHard(an.planes.plane[75 * 200 + 95], an.planes.plane[75 * 200 + 110])).toBeDefined()
     const w = walkRight(an, 180, true)
     expect(w.endB).toBe(3)
-    // steps of 13 px: the crossing step is the second (206); 60% of the two steps left, floored, is one more
-    expect(w.n).toBe(4 + 1 + 2 + 1)
+    // steps of 13 px: the crossing step is the second (206); 60% of the two steps left is 1.2: a whole step (219) and a fifth of
+    // one more (it was floored to 1, and the stroke ended there)
+    expect(w.n).toBe(4 + 1 + 2 + 2)
     expect(w.x[4 + 1 + 1]).toBeGreaterThan(200) // the crossing step
+    const stepLen = (i: number) => Math.hypot(w.wx[i] - w.wx[i - 1], w.wy[i] - w.wy[i - 1], w.wz[i] - w.wz[i - 1])
+    expect(stepLen(w.n - 1) / stepLen(w.n - 2)).toBeCloseTo(0.2, 1)
+    // the bleed is continuous in where the edge is crossed: a stroke that crosses at its k-th step goes k + 0.6 (4 - k) steps
+    // forward, to the fraction (k = 1: 2.8, 2: 3.2, 3: 3.6, 4: 4)
+    for (const [x, k] of [[193, 1], [180, 2], [167, 3], [154, 4]] as const) {
+      const c = walkRight(an, x, true)
+      const total = k + 0.6 * (4 - k)
+      expect(c.n - 5, `crossing at step ${k}`).toBe(Math.ceil(total - 1e-9))
+      const frac = total - Math.floor(total + 1e-9)
+      if (frac > 1e-9) {
+        const len = (i: number) => Math.hypot(c.wx[i] - c.wx[i - 1], c.wy[i] - c.wy[i - 1], c.wz[i] - c.wz[i - 1])
+        // (the surface's tilt makes consecutive steps a few percent unequal)
+        expect(Math.abs(len(c.n - 1) / len(c.n - 2) - frac), `crossing at step ${k}`).toBeLessThan(0.1)
+      }
+    }
     // without the plane rule the stroke runs its whole length
     const free = walkRight(an, 180, false)
     expect(free.n).toBe(9)

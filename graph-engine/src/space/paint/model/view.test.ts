@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../params'
 import type { SpaceScene } from '../../scene/types'
+import { ROLES, type StrokeBatch } from '../types'
+import { paintFrame } from './index'
 import { buildParticles } from './particles'
 import { flatColours, paintView, quadMesh, sceneOf, sphereGBuffer, sphereMesh, tableMesh, type ViewOpts } from './testing'
 import { drawChance, drawnEntries, gIndex, groundMarks, makeFrameCtx, pxPerUnit, project, roleRank, slideToDepth, toEye, unproject, visibleParticles } from './view'
@@ -178,25 +180,74 @@ describe('paint view', () => {
     expect(drawChance(base.fc, 0, 'block')).toBe(0)
   })
 
-  it('keeps at least 80% of the strokes between views 12� apart', () => {
-    const select = (azimuth: number, elevation = 25) => {
-      const { fc } = frame(sphereScene, { width: 800, height: 600, azimuth, elevation, zoom: 150 })
-      const vis = visibleParticles(fc, set)
-      return new Set(drawnEntries(fc, vis, set, 'block').map((k) => vis.idx[k]))
-    }
-    for (const az of [0, 30, 100, 200]) {
-      const a = select(az)
-      expect(a.size).toBeGreaterThan(500)
-      for (const b of [select(az + 12), select(az, 37)]) {
-        let kept = 0
-        for (const i of a) if (b.has(i)) kept++
-        expect(kept / a.size).toBeGreaterThanOrEqual(0.8)
+  // The coherence target (spec §3.2) is about STROKES, not about which particles are chosen: measured on the stroke batches
+  // paintFrame makes, matched by particle (the stroke's seed) and role. It applies to the strokes that do not depend on the
+  // light or the view by design: the block-in, the scumbles, the glazes and the reflected light. A form stroke follows the
+  // terminator (a camera-relative light moves it as the camera turns: about half are kept), a highlight dab follows the
+  // value maximum, and an edge is re-traced from the picture each frame: they are left out, on purpose.
+  const STEADY = ['block', 'scumble', 'glaze', 'reflected']
+  const scenes: [string, SpaceScene][] = [
+    ['a sphere', sceneOf([sphereMesh({ radius: 1 })])],
+    ['a sphere on a table', sceneOf([sphereMesh({ radius: 1 }), tableMesh({ z: -1, index: 1 })])],
+  ]
+  const batchAt = (scene: SpaceScene, azimuth: number, elevation: number) => {
+    const view = paintView({ width: 800, height: 600, azimuth, elevation, zoom: 150 })
+    const table = scene.marks.length > 1 ? { z: -1, mark: 1 } : undefined
+    const g = sphereGBuffer(800, 600, { view, params: P, table })
+    return paintFrame(scene, buildParticles(scene, flatColours({ 0: [0.56, 0.12, 0.08], 1: [0.9, 0.01, 0.02] }), P), view, g, P).strokes
+  }
+  const keysOf = (b: StrokeBatch, roles: string[]) => {
+    const out = new Set<string>()
+    for (let i = 0; i < b.count; i++) if (roles.includes(ROLES[b.role[i]])) out.add(`${ROLES[b.role[i]]}:${b.seed[i]}`)
+    return out
+  }
+
+  it('keeps at least 80% of the steady strokes (block, scumble, glaze, reflected) between views 12 degrees apart', () => {
+    for (const [name, scene] of scenes) {
+      for (const az of [0, 100]) {
+        const a = keysOf(batchAt(scene, az, 25), STEADY)
+        expect(a.size, `${name} at ${az}`).toBeGreaterThan(400)
+        for (const [label, other] of [['azimuth + 12', batchAt(scene, az + 12, 25)], ['elevation + 12', batchAt(scene, az, 37)]] as const) {
+          const b = keysOf(other, STEADY)
+          let kept = 0
+          for (const k of a) if (b.has(k)) kept++
+          expect(kept / a.size, `${name} at ${az}, ${label}`).toBeGreaterThanOrEqual(0.8)
+        }
       }
     }
-    // rotating away and back gives the identical selection
-    const a = select(30)
-    const back = select(30)
-    expect([...back].sort((x, y) => x - y)).toEqual([...a].sort((x, y) => x - y))
+  })
+
+  it('does not ask the same of the strokes that follow the light or the view: a form stroke keeps about half, and that is the design', () => {
+    const scene = scenes[0][1]
+    const a = keysOf(batchAt(scene, 30, 25), ['form'])
+    const b = keysOf(batchAt(scene, 42, 25), ['form'])
+    expect(a.size).toBeGreaterThan(40)
+    let kept = 0
+    for (const k of a) if (b.has(k)) kept++
+    // (below the steady 0.8: the terminator, which a form stroke is chosen by, moves with a camera-relative light)
+    expect(kept / a.size).toBeLessThan(0.8)
+    expect(kept / a.size).toBeGreaterThan(0.2)
+  })
+
+  it('gives the identical stroke batch, byte for byte, after turning 30 degrees away and back', () => {
+    const scene = scenes[1][1]
+    const set = buildParticles(scene, flatColours({ 0: [0.56, 0.12, 0.08], 1: [0.9, 0.01, 0.02] }), P)
+    const run = (azimuth: number) => {
+      const view = paintView({ width: 640, height: 480, azimuth, elevation: 25, zoom: 150 })
+      const g = sphereGBuffer(640, 480, { view, params: P, table: { z: -1, mark: 1 } })
+      return paintFrame(scene, set, view, g, P).strokes
+    }
+    const before = run(30)
+    const away = run(60)
+    const back = run(30)
+    // it really turned: the other view is another picture
+    expect(Array.from(away.path)).not.toEqual(Array.from(before.path))
+    expect(back.count).toBe(before.count)
+    const bytes = (a: ArrayBufferView) => Buffer.from(a.buffer, a.byteOffset, a.byteLength)
+    for (const key of Object.keys(before) as (keyof StrokeBatch)[]) {
+      if (key === 'count') continue
+      expect(bytes(back[key] as ArrayBufferView).equals(bytes(before[key] as ArrayBufferView)), String(key)).toBe(true)
+    }
   })
 
   it('reads every visible particle at a pixel of its own mesh, even one that sits a hair outside its pixel at the rim', () => {

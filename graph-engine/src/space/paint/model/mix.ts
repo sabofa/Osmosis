@@ -25,10 +25,15 @@
 //   chroma ×chromaMin..chromaMax, lightness held within ±valueHold of the
 //   target, and valueStepFraction of loads also take a value step of ±valueStep.
 // - A grey (chroma under greyChroma) takes an a/b vector of greyVecMin..Max
-//   toward one of four families instead: warm, cool, green-grey, violet-grey.
+//   toward one of four families instead: warm, green-grey, cool, violet-grey (in that
+//   order, so that two places on the list are opposite).
 // - Anti-correlation: the next load flips the hue sign with probability
 //   flipHue and the chroma direction with flipChroma; the grey family steps to
-//   its opposite. Adjacent patches contrast gently instead of averaging out.
+//   its opposite (warm to cool, green-grey to violet-grey; most of the time, and to its
+//   neighbour otherwise). Adjacent patches contrast gently instead of averaging out.
+// - The offsets stay inside what the sliders say, whatever the strength and the personal
+//   jitter: the chroma factor within chromaMin..chromaMax (of a colormapped colour's
+//   share), the value step within valueStep.
 // - Drift: within a load the offset fades to `drift` of itself by the last stroke.
 // - Strength: mix.strength × the role's own multiplier. A colormapped surface
 //   scales the hue and chroma offsets by colormapScale (a third) and holds
@@ -43,8 +48,11 @@ import { fitLab, fitLch, labToLch } from './colour'
 import { clamp, D2R, hash01, smooth } from './math'
 import { compileCurve, type CurveFn } from './respond'
 
-// Grey families, as an angle in OKLab a/b: warm, cool, green-grey, violet-grey.
-const FAMILIES = [62, 255, 135, 315]
+// Grey families, as an angle in OKLab a/b: warm, green-grey, cool, violet-grey. Two places on the list are opposite
+// (warm 62 and cool 255, green-grey 135 and violet-grey 315), which is what "the next load steps to the opposite family"
+// (`fam + 2`) needs. (The first order, warm, cool, green, violet, stepped warm to green-grey.)
+export const GREY_FAMILIES: readonly number[] = [62, 135, 255, 315]
+const FAMILIES = GREY_FAMILIES
 
 export interface MixInput {
   role: Role
@@ -272,7 +280,7 @@ export class LoadMixer {
     // value: held within ±valueHold; a value step replaces the small noise
     let dL: number
     if (hold) dL = clamp(off.gaussL * 0.003, -0.004, 0.004)
-    else if (off.step !== 0) dL = off.step * m.valueStep * clamp(s, 0.4, 1.5)
+    else if (off.step !== 0) dL = off.step * m.valueStep * clamp(s, 0.4, 1)
     else dL = clamp(off.gaussL * 0.004, -m.valueHold, m.valueHold)
     const dh = off.sign * off.mag * s * hs
     const lc = clamp(off.lc * s, -0.5, 0.45) * hs
@@ -291,13 +299,17 @@ export class LoadMixer {
       }
     }
     const jdh = g0 * 2 * s * hs
-    const jlc = g1 * 0.04 * s * hs
+    // the chroma factor, with the personal jitter, stays inside the sliders' range (a colormapped colour's share of it):
+    // the jitter was added after the clamp and pushed chroma past chromaMax and under chromaMin
+    const lcLo = Math.log(Math.max(0.05, Math.min(1, m.chromaMin))) * hs
+    const lcHi = Math.log(Math.max(1, m.chromaMax)) * hs
+    const lcAll = clamp(lc + g1 * 0.04 * s * hs, lcLo, lcHi)
 
     const lch = labToLch(lab)
     const C0 = lch[1]
     const wl = 1 - smooth(m.greyChroma - 0.02, m.greyChroma + 0.02, C0) // low chroma: offset a/b directly
     const L = lch[0] + dL * kd
-    const l1 = fitLch([L, C0 * Math.exp((lc + jlc) * kd), lch[2] + (dh + jdh) * kd])
+    const l1 = fitLch([L, C0 * Math.exp(lcAll * kd), lch[2] + (dh + jdh) * kd])
     const v = vec * kd
     const a2 = lab[1] + v * Math.cos(off.phi)
     const b2 = lab[2] + v * Math.sin(off.phi)

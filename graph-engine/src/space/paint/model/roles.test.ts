@@ -178,6 +178,30 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
     expect(rightFirst).toBe(0)
   })
 
+  it('gives a stroke the wet pickup its edge class says: a HARD one none at all, a FIRM one 0.6 of the role’s, a SOFT or LOST one at least 0.22 or 0.32', () => {
+    // (edges.test.ts checks the class table; this checks that the strokes carry it)
+    const b = base.frame.strokes
+    const rp = P.roles
+    const seen = [0, 0, 0, 0]
+    for (let i = 0; i < b.count; i++) {
+      const role = ROLES[b.role[i]]
+      if (role !== 'block' && role !== 'form') continue
+      const cls = b.edge[i]
+      if (cls === 255) {
+        expect(b.wet[i], 'no edge: the role’s own').toBeCloseTo(rp[role].wet, 6)
+        continue
+      }
+      seen[cls]++
+      if (cls === 3) expect(b.wet[i], `HARD ${role}`).toBe(0) // no wet pickup at a hard edge
+      if (cls === 2) expect(b.wet[i], `FIRM ${role}`).toBeCloseTo(rp[role].wet * 0.6, 6)
+      if (cls === 1) expect(b.wet[i], `SOFT ${role}`).toBeGreaterThanOrEqual(0.22 - 1e-6)
+      if (cls === 0) expect(b.wet[i], `LOST ${role}`).toBeGreaterThanOrEqual(0.32 - 1e-6)
+    }
+    // the sphere has edges of every class a stroke takes (a hard one at the terminator and the outline), so this is not vacuous
+    expect(seen[3], 'HARD strokes').toBeGreaterThan(5)
+    expect(seen[0] + seen[1] + seen[2], 'strokes of the other classes').toBeGreaterThan(5)
+  })
+
   it('puts dabs on the top fraction of value maxima, at least dabMinPx apart', () => {
     // the default: the top 1.5% of the sphere's one maximum, one dab
     expect(base.frame.stats.byRole.dab).toBe(1)

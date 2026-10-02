@@ -47,6 +47,28 @@ export function mix2(a: number, b: number): number {
   return hash3(a, b, 0x51ed270b)
 }
 
+// Smooth value noise in 3D, in [-1, 1]: a hashed value at each lattice corner, joined by a smoothstep fade. A pure function
+// of the position and the seed, so noise keyed on a point of a SURFACE is the same whichever way the camera looks at it.
+export function valueNoise3(x: number, y: number, z: number, seed: number): number {
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  const iz = Math.floor(z)
+  const fx = x - ix
+  const fy = y - iy
+  const fz = z - iz
+  const ux = fx * fx * (3 - 2 * fx)
+  const uy = fy * fy * (3 - 2 * fy)
+  const uz = fz * fz * (3 - 2 * fz)
+  const corner = (a: number, b: number, c: number): number => hash01(ix + a, iy + b, mix2(iz + c, seed)) * 2 - 1
+  const x00 = corner(0, 0, 0) + (corner(1, 0, 0) - corner(0, 0, 0)) * ux
+  const x10 = corner(0, 1, 0) + (corner(1, 1, 0) - corner(0, 1, 0)) * ux
+  const x01 = corner(0, 0, 1) + (corner(1, 0, 1) - corner(0, 0, 1)) * ux
+  const x11 = corner(0, 1, 1) + (corner(1, 1, 1) - corner(0, 1, 1)) * ux
+  const y0 = x00 + (x10 - x00) * uy
+  const y1 = x01 + (x11 - x01) * uy
+  return y0 + (y1 - y0) * uz
+}
+
 // Rotate d about the unit axis n by `angle` (Rodrigues, d ⟂ n assumed).
 export function rotateAbout(d: readonly number[], n: readonly number[], angle: number): V3 {
   const c = Math.cos(angle)
