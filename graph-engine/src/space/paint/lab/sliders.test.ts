@@ -78,7 +78,7 @@ describe('groupSchema', () => {
     expect(groups.map((g) => g.title)).toEqual([
       'General', 'Light', 'Environment', 'Stroke detection', 'Brush-load mix', 'Value plan', 'Lighting curve', 'Edges',
       'Stroke: block', 'Stroke: form', 'Stroke: scumble', 'Stroke: glaze', 'Stroke: reflected', 'Stroke: dab', 'Stroke: edge', 'Stroke: line',
-      'Particles', 'Impasto & canvas', 'Curves',
+      'Particles', 'Underpainting', 'Impasto & canvas', 'Curves',
     ])
     expect(groups.flatMap((g) => g.specs.map((s) => s.path)).sort()).toEqual(PARAM_SCHEMA.map((s) => s.path).sort())
     expect(groups.flatMap((g) => g.curves.map((c) => c.path)).sort()).toEqual(CURVE_SCHEMA.map((c) => c.path).sort())
@@ -109,7 +109,7 @@ describe('labGroups', () => {
     expect(groups.map((g) => g.title)).toEqual([
       'General', 'Light', 'Environment', 'Curves', 'Value plan', 'Lighting curve', 'Brush-load mix', 'Edges', 'Stroke detection',
       'Stroke: block', 'Stroke: form', 'Stroke: scumble', 'Stroke: glaze', 'Stroke: reflected', 'Stroke: dab', 'Stroke: edge', 'Stroke: line',
-      'Particles', 'Impasto & canvas',
+      'Particles', 'Underpainting', 'Impasto & canvas',
     ])
   })
 

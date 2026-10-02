@@ -176,6 +176,20 @@ export interface PaintParams {
     fadeLo: number
     fadeHi: number
     dragDensity: number
+    // Zoomed in, the particles (capped by maxPerUnit2) fall short of the screen target, and the strokes
+    // grow by min(sqrt(target / available), zoomGrowMax) so they still overlap and cover the form.
+    zoomGrowMax: number
+    // A painter picks a bigger brush up close, not only more of the same dabs: the strokes' size also
+    // follows the zoom, as size x zoom^zoomStrokeScale (0 keeps the size, 1 follows the zoom exactly).
+    zoomStrokeScale: number
+  }
+  // The underpainting: a thin, scumbled imprimatura laid first, in the curve colour of every pixel of a
+  // form, so the gaps between strokes show paint and never bare canvas (spec addendum, Ben 2026-10-02).
+  underpaint: {
+    // How opaque it is (the canvas weave and the streaks thin it a little).
+    opacity: number
+    // How much the seeded, directional brush streaks break its coverage up (0 is a flat wash).
+    streak: number
   }
   impasto: {
     strength: number
@@ -255,7 +269,8 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   // the screen density, set the stroke count). 3000 lets the screen target decide at any zoom, at no
   // cost per frame (the strokes drawn are the screen's, the particles are built once). dragDensity stays
   // 1: an orbit does not thin the strokes (the lab re-projects the last frame's strokes instead).
-  particles: { maxPerUnit2: 3000, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1 },
+  particles: { maxPerUnit2: 3000, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1, zoomGrowMax: 3, zoomStrokeScale: 0.35 },
+  underpaint: { opacity: 0.85, streak: 0.4 },
   impasto: { strength: 1, lightAzimuth: 135, lightElevation: 23 },
   canvas: { texture: 1, weave: 'duck', tone: [0.93, 0.004, 0.022] },
 }
@@ -363,6 +378,10 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'particles.fadeLo', label: 'Fade |n·v| from', group: 'Particles', min: 0, max: 1, step: 0.01 },
   { path: 'particles.fadeHi', label: 'Fade |n·v| to', group: 'Particles', min: 0, max: 1, step: 0.01 },
   { path: 'particles.dragDensity', label: 'Density while dragging', group: 'Particles', min: 0.1, max: 1, step: 0.01 },
+  { path: 'particles.zoomGrowMax', label: 'Zoom growth max (x)', group: 'Particles', min: 1, max: 6, step: 0.1 },
+  { path: 'particles.zoomStrokeScale', label: 'Stroke size follows zoom', group: 'Particles', min: 0, max: 1, step: 0.01 },
+  { path: 'underpaint.opacity', label: 'Opacity', group: 'Underpainting', min: 0, max: 1, step: 0.01 },
+  { path: 'underpaint.streak', label: 'Brush streaks', group: 'Underpainting', min: 0, max: 1, step: 0.01 },
   { path: 'impasto.strength', label: 'Impasto', group: 'Impasto & canvas', min: 0, max: 3, step: 0.01 },
   { path: 'impasto.lightAzimuth', label: 'Relief light azimuth', group: 'Impasto & canvas', min: 0, max: 360, step: 1 },
   { path: 'impasto.lightElevation', label: 'Relief light elevation', group: 'Impasto & canvas', min: 1, max: 89, step: 1 },

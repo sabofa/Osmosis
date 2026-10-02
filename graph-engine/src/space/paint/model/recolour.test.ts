@@ -60,6 +60,13 @@ const batchEqual = (a: StrokeBatch, b: StrokeBatch) => {
   }
 }
 
+// The first index at which two images differ (NaN, the mark of an empty pixel, equals NaN), or -1.
+const firstDifference = (a: Float32Array, b: Float32Array): number => {
+  if (a.length !== b.length) return 0
+  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return i
+  return -1
+}
+
 // The new params for a schema path: its maximum, or its minimum where the default is the maximum.
 const moved = (path: string): PaintParams => {
   const spec = PARAM_SCHEMA.find((s) => s.path === path)!
@@ -105,14 +112,14 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
   it('classifies a change of parameters by what it asks of a frame: same, render, colour or full', () => {
     expect(classifyChange(P, structuredClone(P))).toBe('same')
     // only the renderer reads these: the relief, the canvas's texture and weave
-    for (const path of ['impasto.strength', 'impasto.lightAzimuth', 'impasto.lightElevation', 'canvas.texture']) expect(classifyChange(P, moved(path)), path).toBe('render')
+    for (const path of ['impasto.strength', 'impasto.lightAzimuth', 'impasto.lightElevation', 'canvas.texture', 'underpaint.opacity', 'underpaint.streak']) expect(classifyChange(P, moved(path)), path).toBe('render')
     expect(classifyChange(P, { ...P, canvas: { ...P.canvas, weave: 'linen' } })).toBe('render')
     expect(classifyChange(P, setParam(setParam(P, 'impasto.strength', 2), 'canvas.texture', 0.3))).toBe('render')
     // colour parameters, alone or with a renderer one
     expect(classifyChange(P, moved('curve.lSlope'))).toBe('colour')
     expect(classifyChange(P, setParam(setParam(P, 'curve.lSlope', 0.9), 'impasto.strength', 2))).toBe('colour')
     // anything that moves a stroke or the value plan, however many renderer parameters come with it
-    for (const path of ['light.azimuth', 'roles.block.width', 'seed', 'canvas.tone.0', 'mix.loadCell', 'particles.maxPerUnit2']) expect(classifyChange(P, moved(path)), path).toBe('full')
+    for (const path of ['light.azimuth', 'roles.block.width', 'seed', 'canvas.tone.0', 'mix.loadCell', 'particles.maxPerUnit2', 'particles.zoomGrowMax', 'particles.zoomStrokeScale']) expect(classifyChange(P, moved(path)), path).toBe('full')
     expect(classifyChange(P, setParam(setParam(P, 'light.azimuth', 50), 'impasto.strength', 2))).toBe('full')
     // render-only parameters are not colour-only ones
     expect(isColourOnlyChange(P, moved('impasto.strength'))).toBe(false)
@@ -127,6 +134,8 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
         expect(again, path).not.toBeNull()
         const full = paintFrame(c.scene, bases[k].particles, c.view, c.gbuffer(next), next)
         batchEqual(again!.strokes, full.strokes)
+        // the underpainting is made again with them
+        expect(firstDifference(again!.underpaint, full.underpaint), `${path}: underpaint`).toBe(-1)
         expect(again!.stats, path).toEqual(full.stats)
         expect(again!.debug.edgeSegments, path).toEqual(full.debug.edgeSegments)
       }
@@ -142,12 +151,18 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
       mix: { strength: 1.4, hueBias: 0.3 },
     })
     const first = recolourFrame(frame, edited)!
-    batchEqual(first.strokes, paintFrame(c.scene, particles, c.view, c.gbuffer(edited), edited).strokes)
+    const fullEdited = paintFrame(c.scene, particles, c.view, c.gbuffer(edited), edited)
+    batchEqual(first.strokes, fullEdited.strokes)
+    expect(firstDifference(first.underpaint, fullEdited.underpaint)).toBe(-1)
     // from a recolour, to a further one, and back to the start
     const more = setParam(edited, 'curve.lSlope', 1.2)
     const second = recolourFrame(first, more)!
-    batchEqual(second.strokes, paintFrame(c.scene, particles, c.view, c.gbuffer(more), more).strokes)
-    batchEqual(recolourFrame(second, P)!.strokes, frame.strokes)
+    const fullMore = paintFrame(c.scene, particles, c.view, c.gbuffer(more), more)
+    batchEqual(second.strokes, fullMore.strokes)
+    expect(firstDifference(second.underpaint, fullMore.underpaint)).toBe(-1)
+    const back = recolourFrame(second, P)!
+    batchEqual(back.strokes, frame.strokes)
+    expect(firstDifference(back.underpaint, frame.underpaint)).toBe(-1)
   })
 
   it('shares the debug views, and says no to a frame it did not make', () => {
@@ -163,6 +178,13 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
     let differing = 0
     for (let i = 0; i < frame.strokes.count; i++) if (again.strokes.colour[3 * i] !== frame.strokes.colour[3 * i]) differing++
     expect(differing).toBeGreaterThan(frame.strokes.count / 2)
+    // the underpainting's colours change, and its coverage does not
+    let paintedDiffering = 0
+    for (let i = 0; i < frame.underpaint.length; i++) {
+      expect(Number.isNaN(again.underpaint[i])).toBe(Number.isNaN(frame.underpaint[i]))
+      if (again.underpaint[i] !== frame.underpaint[i]) paintedDiffering++
+    }
+    expect(paintedDiffering).toBeGreaterThan(1000)
     // and leaves every geometry array alone
     expect(Array.from(again.strokes.path)).toEqual(Array.from(frame.strokes.path))
     expect(Array.from(again.strokes.width)).toEqual(Array.from(frame.strokes.width))

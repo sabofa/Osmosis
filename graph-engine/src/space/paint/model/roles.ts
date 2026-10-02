@@ -29,13 +29,14 @@
 import { randomFor } from '../../../style/random'
 import type { MeshMark } from '../../scene/types'
 import { PATH_POINTS, type Oklab, type Role } from '../types'
+import { loadCellOf, sizedBristles, sizedLength, sizedVariance, sizedWidth, reshapeWidths } from './brush'
 import { behaviourOf, strokeEdgeClass, type Behaviour } from './edges'
 import { clamp, scratchU8, vcross, vlen, vnorm, type V3 } from './math'
 import { stepValue, chamferDist } from './planes'
 import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
 import { pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
 import { ambientShare, bounceWeight, modelValue, newZoneSample, terminatorValue, zoneSample } from './value'
-import { drawFade, gIndex, toEye, unproject } from './view'
+import { drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
 import { Z_CAST } from './zones'
 
 // The rotation of the direction field, radians (σ), per role: the hand is never exact.
@@ -291,6 +292,11 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
       widthPx = rp.width * 0.4 * vWid
     }
   }
+  // sized for the view: where the zoom leaves the particles short of the screen target the stroke grows to
+  // still overlap, and the brush follows the zoom (brush.ts); both are 1 at the framing the roles were tuned at
+  const big = zoomGrow(fc, vis.pxArea[k], role) * fc.sizeScale
+  lengthPx = sizedLength(lengthPx, big)
+  widthPx = sizedWidth(widthPx, big)
   const bend = clamp(rng.gauss(), -2, 2) * rp.curvature * 1.2
   const rot = clamp(rng.gauss() * (ROT[role] ?? 0.22), -0.55, 0.55)
 
@@ -415,6 +421,7 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
   const world = new Float32Array(3 * PATH_POINTS)
   const meanW = pathFromWalk(walk, widthPx, reverse, path, width, world)
   if (meanW < 0.6) return false
+  reshapeWidths(width, big)
 
   // the colour: the local colour through the curve at the stroke's value
   let du = 0
@@ -441,15 +448,15 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     lab: col.lab,
     colour: col.colour,
     u: col.u,
-    cell: set.cell[i],
+    cell: loadCellOf(set, i, params.mix.loadCell, fc.loadLevel),
     mx: vis.sx[k],
     my: vis.sy[k],
     colormapped: set.colormapped[i] === 1,
     alpha,
     load: rp.load * vLoad * (beh ? beh.loadMul : 1) * loadLight * (0.9 + 0.2 * rng.next()),
     impasto,
-    bristles: Math.max(1, Math.round(rp.bristles * vBri)),
-    bristleVar: clamp(rp.bristleVar * (beh ? beh.bristleVarMul : 1), 0, 1),
+    bristles: sizedBristles(rp.bristles * vBri, big),
+    bristleVar: sizedVariance(clamp(rp.bristleVar * (beh ? beh.bristleVarMul : 1), 0, 1), big),
     dry: veilPass === 2 ? 0.6 : beh ? Math.max(rp.dry * 0.5, beh.dryMin) : rp.dry,
     wet: beh ? Math.max(rp.wet * beh.wetMul, beh.wetMin) : rp.wet,
     endSoft: clamp((beh ? beh.endSoft : BASE_END[role]) + (walk.endA === 3 || walk.endB === 3 ? 0.2 : 0), 0, 1),
@@ -646,7 +653,7 @@ export function dabStrokes(an: PaintCtx): void {
       dx: dir[0], dy: dir[1], dz: dir[2],
       mode,
       rot: clamp(rng.gauss() * (ROT.dab ?? 0.1), -0.3, 0.3),
-      lengthPx: rp.length * vLen,
+      lengthPx: sizedLength(rp.length * vLen, fc.sizeScale),
       bend: clamp(rng.gauss(), -2, 2) * rp.curvature * 1.2,
       stopBelow: -1,
       planeId: -1,
@@ -658,7 +665,9 @@ export function dabStrokes(an: PaintCtx): void {
     const width = new Float32Array(PATH_POINTS)
     const world = new Float32Array(3 * PATH_POINTS)
     const reverse = walk.x[walk.n - 1] < walk.x[0]
-    if (pathFromWalk(walk, rp.width * vWid, reverse, path, width, world) < 0.6) continue
+    // a highlight dab is a brush too: it follows the zoom (the particle shortfall is not its business: it is one per highlight)
+    if (pathFromWalk(walk, sizedWidth(rp.width * vWid, fc.sizeScale), reverse, path, width, world) < 0.6) continue
+    reshapeWidths(width, fc.sizeScale)
     // the colour: a lighter, bolder value of the local colour
     const k = best
     const sameWhere = whereOfPixel(an, i)
@@ -673,15 +682,15 @@ export function dabStrokes(an: PaintCtx): void {
       lab: col.lab,
       colour: col.colour,
       u: col.u,
-      cell: set.cell[pi],
+      cell: loadCellOf(set, pi, params.mix.loadCell, fc.loadLevel),
       mx: sx,
       my: sy,
       colormapped: set.colormapped[pi] === 1,
       alpha: 1,
       load: rp.load * vLoad * (0.9 + 0.2 * rng.next()),
       impasto: rp.impasto * vImp,
-      bristles: Math.max(1, Math.round(rp.bristles * vBri)),
-      bristleVar: rp.bristleVar,
+      bristles: sizedBristles(rp.bristles * vBri, fc.sizeScale),
+      bristleVar: sizedVariance(rp.bristleVar, fc.sizeScale),
       dry: rp.dry,
       wet: rp.wet,
       endSoft: BASE_END.dab,

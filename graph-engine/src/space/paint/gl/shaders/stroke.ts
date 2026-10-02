@@ -26,7 +26,7 @@
 // look as approved. Output 0 is premultiplied colour with coverage as alpha,
 // output 1 is the height in r with a/2 as alpha; both blend ONE, ONE_MINUS_SRC_ALPHA.
 
-import { PATH_POINTS } from '../../types'
+import { MAX_BRISTLES, PATH_POINTS } from '../../types'
 import { COMMON_GLSL } from './common'
 
 // Ribbon tessellation: PATH_POINTS - 1 segments, each split RIBBON_SUBDIV
@@ -149,7 +149,7 @@ const float START_RAMP = 0.026;
 void main() {
   float load = v_p0.x;
   float kp = v_p0.y;
-  int nB = int(clamp(v_p0.z + 0.5, 2.0, 32.0));
+  int nB = int(clamp(v_p0.z + 0.5, 2.0, ${MAX_BRISTLES.toFixed(1)}));
   float vari = v_p0.w;
   float dry = v_p1.x;
   float wet = v_p1.y;

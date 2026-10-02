@@ -46,4 +46,19 @@ describe('paint params', () => {
     const p = resolvePaintParams(tuning as never)
     expect(p.seed).toBe(typeof (tuning as { seed?: number }).seed === 'number' ? (tuning as { seed: number }).seed : 1)
   })
+
+  it('has the zoom and underpainting parameters, with the defaults the spec gives, in their groups', () => {
+    const p = DEFAULT_PAINT_PARAMS
+    expect([p.particles.zoomGrowMax, p.particles.zoomStrokeScale, p.underpaint.opacity, p.underpaint.streak]).toEqual([3, 0.35, 0.85, 0.4])
+    const spec = (path: string) => PARAM_SCHEMA.find((s) => s.path === path)
+    expect(spec('particles.zoomGrowMax')).toMatchObject({ group: 'Particles', min: 1 })
+    expect(spec('particles.zoomStrokeScale')).toMatchObject({ group: 'Particles', min: 0, max: 1 })
+    expect(spec('underpaint.opacity')).toMatchObject({ group: 'Underpainting', min: 0, max: 1 })
+    expect(spec('underpaint.streak')).toMatchObject({ group: 'Underpainting', min: 0, max: 1 })
+  })
+
+  it('resolves the underpainting from an override, and clamps nothing it was not asked to', () => {
+    const q = resolvePaintParams({ underpaint: { opacity: 0.5 }, particles: { zoomGrowMax: 2 } })
+    expect([q.underpaint.opacity, q.underpaint.streak, q.particles.zoomGrowMax, q.particles.zoomStrokeScale]).toEqual([0.5, 0.4, 2, 0.35])
+  })
 })

@@ -291,6 +291,9 @@ export interface StrokePassResult {
   draws: number
 }
 
+// A pass laid before the first layer, into the target it is given (the underpainting).
+export type FirstPass = (target: AccumTarget) => void
+
 export class StrokeRenderer {
   private data: WebGLTexture | null = null
   private dataWidth = 0
@@ -333,8 +336,9 @@ export class StrokeRenderer {
     return { plan, layout }
   }
 
-  // The layers in order, one draw each.
-  run(input: StrokePassInput, plan: StrokePlan, layout: StrokeLayout): StrokePassResult {
+  // The layers in order, one draw each. `first`, when there is one, is laid before them (the underpainting),
+  // and what it lays is what the first layer's wet pickup finds beneath it.
+  run(input: StrokePassInput, plan: StrokePlan, layout: StrokeLayout, first: FirstPass | null = null): StrokePassResult {
     const gl = this.gl
     const { stroke, copy, targets, paper } = input
     const [A, B] = targets.targets
@@ -350,6 +354,13 @@ export class StrokeRenderer {
     }
     let final = A
     let draws = 0
+    // the passes made so far, the underpainting too: the targets are ping-ponged between them
+    let passes = 0
+    if (first) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, A.fbo)
+      first(A)
+      passes = 1
+    }
     if (plan.count === 0 || !this.data) return { final, draws }
 
     const bind = (unit: number, texture: WebGLTexture | null) => {
@@ -360,10 +371,10 @@ export class StrokeRenderer {
       const first = plan.layerStart[layer]
       const count = plan.layerStart[layer + 1] - first
       if (count === 0) continue
-      const dst = draws % 2 === 0 ? A : B
-      const src = draws % 2 === 0 ? B : A
+      const dst = passes % 2 === 0 ? A : B
+      const src = passes % 2 === 0 ? B : A
       gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo)
-      if (draws > 0) {
+      if (passes > 0) {
         // The paint so far moves into this layer's target.
         gl.disable(gl.BLEND)
         gl.useProgram(copy.program)
@@ -398,6 +409,7 @@ export class StrokeRenderer {
       gl.disable(gl.BLEND)
       final = dst
       draws++
+      passes++
     }
     return { final, draws }
   }

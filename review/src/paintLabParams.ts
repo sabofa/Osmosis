@@ -90,7 +90,7 @@ export function groupSchema(schema: readonly ParamSpec[], curveSchema: readonly 
 export const LAB_GROUP_ORDER: readonly string[] = [
   'General', 'Light', 'Environment', 'Curves', 'Value plan', 'Lighting curve', 'Brush-load mix', 'Edges', 'Stroke detection',
   ...ROLES.map((role) => `Stroke: ${role}`),
-  'Particles', 'Impasto & canvas',
+  'Particles', 'Underpainting', 'Impasto & canvas',
 ]
 
 // Every slider path in the order PaintParams lays its fields out (tuples by

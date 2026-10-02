@@ -404,6 +404,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       paperMs = response.timing.paperMs
       frame = {
         strokes: response.strokes,
+        underpaint: response.underpaint,
         // a colour frame's debug views are the last full frame's
         debug: response.kind === 'full' ? debugOf(response.debug) : (a as Analysed).frame.debug,
         stats: response.stats,
@@ -446,7 +447,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     const started = performance.now()
     try {
       const strokes = reprojectStrokes(a.frame.strokes, a.view, job.view, job.params)
-      const frame: PaintFrame = { strokes, debug: a.frame.debug, stats: a.frame.stats }
+      // The underpaint is an image of the last full frame's view: while dragging it is reused as is (it slides a
+      // little against the re-projected strokes until the release frame). Re-projecting it is a fix-round item.
+      const frame: PaintFrame = { strokes, debug: a.frame.debug, stats: a.frame.stats, underpaint: a.frame.underpaint }
       const t1 = performance.now()
       renderer.paint(frame, job.view, job.params, job.debug)
       if (failure) throw new Error(failure)

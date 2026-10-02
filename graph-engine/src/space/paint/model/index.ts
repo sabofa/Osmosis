@@ -37,6 +37,7 @@ import { colourOfDraft, type RecipeEnv } from './recipe'
 import { segmentPlanes } from './planes'
 import { dabStrokes, particleStrokes, scumbleMask } from './roles'
 import { packStrokes, type PaintCtx, type StrokeDraft } from './strokes'
+import { buildUnderpaintField, underpaintImage, type UnderpaintField } from './underpaint'
 import { buildPlanMap, canvasValue } from './value'
 import { makeFrameCtx, visibleParticles } from './view'
 
@@ -215,6 +216,9 @@ export const paintFrame: PaintFrameFn = (scene: SpaceScene, particles: ParticleS
 
   const drafts = an.drafts
   const { batch, loads, byRole } = packStrokes(drafts, params)
+  // the underpainting: the colour of every pixel of a form, under the strokes (underpaint.ts)
+  const field = buildUnderpaintField(an, gbuffer)
+  const underpaint = underpaintImage(field, params, an.env)
 
   // the debug views
   let segments = 0
@@ -255,14 +259,14 @@ export const paintFrame: PaintFrameFn = (scene: SpaceScene, particles: ParticleS
     edgeSegments,
     edgeClass,
   }
-  const frame: PaintFrame = { strokes: batch, debug, stats: { strokes: batch.count, byRole, loads } }
-  retained.set(frame, drafts)
+  const frame: PaintFrame = { strokes: batch, underpaint, debug, stats: { strokes: batch.count, byRole, loads } }
+  retained.set(frame, { drafts, field })
   return frame
 }
 
-// The strokes of each frame, as drafts with their colour recipes, kept beside
-// the frame so a change of colour parameters can make the colours again.
-const retained = new WeakMap<PaintFrame, StrokeDraft[]>()
+// The strokes of each frame, as drafts with their colour recipes, and what its underpainting is made
+// of, kept beside the frame so a change of colour parameters can make the colours again.
+const retained = new WeakMap<PaintFrame, { drafts: StrokeDraft[]; field: UnderpaintField }>()
 
 // The parameters that change a stroke's COLOUR and nothing else: the curve's own
 // numbers and adjustment curves, the environment's colour, and the brush-load
@@ -292,9 +296,10 @@ export function isColourOnlyChange(prev: PaintParams, next: PaintParams): boolea
 const isColourPath = (p: string): boolean =>
   !NOT_COLOUR_ONLY.some((n) => p === n || p.startsWith(`${n}.`)) && COLOUR_ONLY.some((c) => p === c || p.startsWith(`${c}.`))
 
-// The parameters only the RENDERER reads: the relief light and strength, the canvas's own texture and weave. The
-// model's strokes are the same under any of them, and so are their colours; the picture is made again from them.
-const RENDER_ONLY = ['impasto', 'canvas.texture', 'canvas.weave']
+// The parameters only the RENDERER reads: the relief light and strength, the canvas's own texture and weave, the
+// underpainting's opacity and streaks. The model's strokes are the same under any of them, and so are their
+// colours; the picture is made again from them.
+const RENDER_ONLY = ['impasto', 'canvas.texture', 'canvas.weave', 'underpaint']
 const isRenderPath = (p: string): boolean => RENDER_ONLY.some((r) => p === r || p.startsWith(`${r}.`))
 
 // What going from `prev` (the parameters a frame was analysed under) to `next` asks of a frame:
@@ -313,20 +318,27 @@ export function classifyChange(prev: PaintParams, next: PaintParams): Change {
 
 // The frame again with new colour parameters, without the analysis, the walks or
 // the geometry: only each stroke's colour is made again from its recipe, then
-// the brush-load mix and the packing. It is the frame paintFrame would give for
+// the brush-load mix and the packing, and the underpainting's colours again from
+// its samples. It is the frame paintFrame would give for
 // the same scene, view and G-buffer under `params` (and a test holds it to
 // that), provided `isColourOnlyChange(the params of previous, params)`. The strokes
 // are new arrays; the debug views are previous's. Null when `previous` was not
 // made by paintFrame.
 export function recolourFrame(previous: PaintFrame, params: PaintParams): PaintFrame | null {
-  const drafts = retained.get(previous)
-  if (!drafts) return null
+  const held = retained.get(previous)
+  if (!held) return null
+  const { drafts, field } = held
   const curve = curveFor(params)
   const env = recipeEnv(params, curve, groundLocal(params))
   for (const d of drafts) if (d.colour) d.lab = colourOfDraft(d.colour, env)
   const { batch, loads, byRole } = packStrokes(drafts, params)
-  const frame: PaintFrame = { strokes: batch, debug: previous.debug, stats: { strokes: batch.count, byRole, loads } }
-  retained.set(frame, drafts)
+  const frame: PaintFrame = {
+    strokes: batch,
+    underpaint: underpaintImage(field, params, env),
+    debug: previous.debug,
+    stats: { strokes: batch.count, byRole, loads },
+  }
+  retained.set(frame, held)
   return frame
 }
 
