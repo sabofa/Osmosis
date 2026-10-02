@@ -11,13 +11,18 @@ const LANCZOS = [
   9.9843695780195716e-6, 1.5056327351493116e-7,
 ]
 const SQRT_2PI = Math.sqrt(2 * Math.PI)
+// Γ passes the largest double at 171.6243…; above this nothing finite remains.
+// Past ~739 the Lanczos power overflows while e^-t underflows, and Infinity
+// times 0 would be NaN, so the answer is given here instead.
+const GAMMA_OVERFLOW = 171.7
 
 // Γ(x). Exact products at positive integers (so gamma(5) is 24, not
 // 23.999…); poles (NaN) at 0 and the negative integers; reflection below 1/2;
 // Lanczos elsewhere, with the power split in two so Γ(170.5) does not
 // overflow on the way to a finite answer. Relative error is ~1e-15 below 5,
 // ~1e-14 by 60 and ~1e-13 near 170 (the error of x^t grows with x), and the
-// reflection loses a few more digits next to a pole.
+// reflection loses a few more digits next to a pole. Far below zero the
+// reflection underflows to a signed zero (Γ alternates in sign between poles).
 export function gamma(x: number): number {
   if (Number.isNaN(x) || x === -Infinity) return Number.NaN
   if (x === Infinity) return Infinity
@@ -29,6 +34,7 @@ export function gamma(x: number): number {
     return r
   }
   if (x < 0.5) return Math.PI / (Math.sin(Math.PI * x) * gamma(1 - x))
+  if (x > GAMMA_OVERFLOW) return Infinity
   const z = x - 1
   let a = LANCZOS[0]
   for (let i = 1; i < LANCZOS.length; i++) a += LANCZOS[i] / (z + i)
@@ -98,11 +104,13 @@ function erfcFraction(x: number): number {
   return Math.exp(-x * x) / (Math.sqrt(Math.PI) * f)
 }
 
-// C(n, k). Exact on integers with n ≥ 0 (each partial product is itself a
-// binomial coefficient, so it stays whole) up to 2^53; 0 outside 0 ≤ k ≤ n;
-// through Γ otherwise. The partial products at least double each step, so the
-// loop is over within 1024 steps however large n is: once one overflows, the
-// answer is Infinity.
+// C(n, k). Exact on integers with n ≥ 0 whenever the result is below 2^53: each
+// partial product is itself a binomial coefficient, and the step divides the
+// common factor out of r and i before multiplying, so no intermediate is ever
+// larger than the next partial product. 0 outside 0 ≤ k ≤ n; through Γ
+// otherwise. The partial products at least double each step, so the loop is
+// over within 1024 steps however large n is: once one overflows, the answer is
+// Infinity.
 export function choose(n: number, k: number): number {
   if (Number.isNaN(n) || Number.isNaN(k)) return Number.NaN
   if (Number.isInteger(n) && Number.isInteger(k) && n >= 0) {
@@ -110,7 +118,10 @@ export function choose(n: number, k: number): number {
     const m = Math.min(k, n - k)
     let r = 1
     for (let i = 1; i <= m; i++) {
-      r = (r * (n - m + i)) / i
+      // i divides r (n - m + i); with g = gcd(r, i), i / g is coprime to r / g,
+      // so it divides n - m + i.
+      const g = gcdInt(r, i)
+      r = (r / g) * ((n - m + i) / (i / g))
       if (r === Infinity) return r
     }
     return r
@@ -118,15 +129,17 @@ export function choose(n: number, k: number): number {
   return gamma(n + 1) / (gamma(k + 1) * gamma(n - k + 1))
 }
 
-// P(n, k) = n! / (n − k)!. Exact on integers with n ≥ 0 up to 2^53; 0 outside
-// the range. Stops at the first overflow, as choose does.
+// P(n, k) = n! / (n − k)!. Exact on integers with n ≥ 0 while the result is
+// below 2^53 (and right to rounding beyond, n ≥ 2^53 included: the loop counts
+// factors, it does not step a variable through n, which stops advancing there);
+// 0 outside the range. Stops at the first overflow, as choose does.
 export function perm(n: number, k: number): number {
   if (Number.isNaN(n) || Number.isNaN(k)) return Number.NaN
   if (Number.isInteger(n) && Number.isInteger(k) && n >= 0) {
     if (k < 0 || k > n) return 0
     let r = 1
-    for (let i = n - k + 1; i <= n; i++) {
-      r *= i
+    for (let j = 0; j < k; j++) {
+      r *= n - j
       if (r === Infinity) return r
     }
     return r

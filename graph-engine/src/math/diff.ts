@@ -22,6 +22,17 @@
 // when y is constant in v (so x^2 at 0 never meets ln 0), the exponential
 // rule when x is, and the general rule otherwise. Under @angle: degrees, trig
 // derivatives carry pi/180 and inverse-trig ones 180/pi.
+//
+// step(a) gives (0/a) a': 0 wherever it has a derivative and NaN at its jump,
+// unlike floor, ceil, round and sign, whose derivative is a plain 0. cbrt,
+// root (for an index constant in v), erf and erfc have exact rules. gamma,
+// choose and perm (they need digamma), gcd and lcm (whole numbers only) and
+// root with an index that depends on v have none and are refused with a
+// CompileError, but only when an argument depends on v: with constant
+// arguments the derivative is 0 (x^2/gamma(3), a @param k in x^(k-1)/gamma(k)).
+// Through a user function the refusal is kept per parameter and raised only
+// for an argument that moves with v, so pdf(x, 3) differentiates in x even
+// though pdf is refused in its second parameter.
 
 import type { Expr } from '../parser/types'
 import { builtinArity, CompileError, freeVariablesDeep } from './compile'
@@ -32,6 +43,11 @@ import { simplify } from './simplify'
 const ZERO = num(0)
 const ONE = num(1)
 const TWO = num(2)
+
+// A derivative the kernel has no rule for. A subclass so that partialsOf can
+// set a refused partial aside (it matters only if an argument moves with v)
+// without also swallowing a cycle or an unknown name, which must still throw.
+class DerivativeRefusal extends CompileError {}
 
 // d(angle in the spec's unit)/d(radians) factors.
 const PI_OVER_180 = div(variable('pi'), num(180))
@@ -64,9 +80,12 @@ function cycle(ctx: Ctx, name: string): CompileError {
 // function cannot appear inside its own partial without a cycle), simplified,
 // and computed once per scope: a nested definition is differentiated once per
 // (function, parameter), not once per call site.
-const PARTIALS = new WeakMap<MathScope, Map<string, Expr[]>>()
+//
+// A partial the kernel refuses (gamma(k) in k, say) is kept as the refusal,
+// and thrown by the caller only for an argument that moves with v.
+const PARTIALS = new WeakMap<MathScope, Map<string, (Expr | DerivativeRefusal)[]>>()
 
-function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], scope: MathScope, ctx: Ctx): Expr[] {
+function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], scope: MathScope, ctx: Ctx): (Expr | DerivativeRefusal)[] {
   let cache = PARTIALS.get(scope)
   if (!cache) {
     cache = new Map()
@@ -76,7 +95,17 @@ function partialsOf(name: string, fn: MathFunction, fresh: readonly string[], sc
   if (known) return known
   const body = substitute(fn.body as Expr, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
   ctx.stack.push(name)
-  const partials = fresh.map((p) => simplify(differentiate(body, p, scope, ctx)))
+  const depth = ctx.stack.length
+  const partials = fresh.map((p) => {
+    try {
+      return simplify(differentiate(body, p, scope, ctx))
+    } catch (err) {
+      if (!(err instanceof DerivativeRefusal)) throw err
+      // The throw skipped the pops of the calls it unwound through.
+      ctx.stack.length = depth
+      return err
+    }
+  })
   ctx.stack.pop()
   cache.set(name, partials)
   return partials
@@ -176,6 +205,12 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       // unknown name) is reported even when f ignores it; only the term of a
       // zero partial is left out.
       const argument = differentiate(args[i], v, scope, ctx)
+      if (partial instanceof DerivativeRefusal) {
+        // Refused in this parameter: fine while the argument is constant in v.
+        const moving = simplify(argument)
+        if (moving.kind === 'num' && moving.value === 0) return
+        throw partial
+      }
       if (partial.kind === 'num' && partial.value === 0) return
       result = add(result, mul(substitute(partial, back), argument))
     })
@@ -270,7 +305,8 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       return div(d(a), mul(num(3), pow(call('cbrt', a), TWO)))
     case 'root': {
       // root(a, b) = b^(1/a), so d/dv = root(a, b) / (a b) · b' for an index a constant in v.
-      if (dependsOn(a, v, scope)) throw new CompileError(`No derivative rule for "root" when its index depends on "${v}"`, ['root'])
+      if (dependsOn(a, v, scope)) throw new DerivativeRefusal(`No derivative rule for "root" when its index depends on "${v}"`, ['root'])
+      if (!dependsOn(b, v, scope)) return ZERO
       return mul(div(expr, mul(a, b)), d(b))
     }
     case 'erf':
@@ -284,10 +320,12 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
     case 'gamma':
     case 'choose':
     case 'perm':
-      throw new CompileError(`No derivative rule for "${name}": its derivative needs the digamma function, which the kernel does not have yet`, [name])
+      if (!args.some((arg) => dependsOn(arg, v, scope))) return ZERO
+      throw new DerivativeRefusal(`No derivative rule for "${name}": its derivative needs the digamma function, which the kernel does not have yet`, [name])
     case 'gcd':
     case 'lcm':
-      throw new CompileError(`No derivative rule for "${name}": it is defined on whole numbers only`, [name])
+      if (!args.some((arg) => dependsOn(arg, v, scope))) return ZERO
+      throw new DerivativeRefusal(`No derivative rule for "${name}": it is defined on whole numbers only`, [name])
   }
   throw new CompileError(`No derivative rule for "${name}"`, [name])
 }

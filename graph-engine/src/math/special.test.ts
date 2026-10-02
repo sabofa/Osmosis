@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseExprString as p } from '../parser/parseExpr'
 import { CompileError, compileMany, compileScalar } from './compile'
 import { diff } from './diff'
-import { makeScope } from './scope'
+import { makeScope, type MathFunction } from './scope'
 import { simplify } from './simplify'
 import { choose, erf, erfc, factorial, gamma, gcd, lcm, perm, root, step } from './special'
 
@@ -11,6 +11,10 @@ const scope = makeScope()
 
 function rel(a: number, b: number): number {
   return Math.abs(a - b) / Math.max(Math.abs(b), 1e-300)
+}
+
+function fn(params: string[], body: string): MathFunction {
+  return { params, body: p(body) }
 }
 
 describe('gamma', () => {
@@ -33,6 +37,19 @@ describe('gamma', () => {
     expect(Number.isFinite(gamma(171))).toBe(true)
     expect(gamma(172)).toBe(Infinity)
     expect(Number.isFinite(gamma(170.5))).toBe(true)
+  })
+
+  it('overflows to Infinity, never NaN, however far past 171 a non-integer goes', () => {
+    expect(gamma(171.7)).toBe(Infinity)
+    expect(gamma(739.5)).toBe(Infinity)
+    expect(gamma(1000.5)).toBe(Infinity)
+    expect(1 / gamma(1000.5)).toBe(0)
+  })
+
+  it('underflows through the reflection to a signed zero, never NaN', () => {
+    // Γ alternates in sign between poles: negative on (-1001, -1000), positive on (-1002, -1001).
+    expect(Object.is(gamma(-1000.5), -0)).toBe(true)
+    expect(Object.is(gamma(-1001.5), 0)).toBe(true)
   })
 
   it('factorial is gamma(x + 1)', () => {
@@ -86,11 +103,39 @@ describe('combinatorics, integers and roots', () => {
     expect(perm(5, 6)).toBe(0)
   })
 
-  it('choose and perm answer Infinity at once when they overflow, however long the loop would be', () => {
-    const t0 = performance.now()
-    expect(choose(4e8, 2e8)).toBe(Infinity)
-    expect(perm(4e8, 2e8)).toBe(Infinity)
-    expect(performance.now() - t0).toBeLessThan(200)
+  it('choose is exact whenever its result is below 2^53, even where the running product is not', () => {
+    // r * (n - m + i) passes 2^53 here before the division brings it back.
+    expect(choose(55, 26)).toBe(3560597348629860)
+    // Pascal's triangle by addition is exact while its entries are below 2^53.
+    let row = [1]
+    let checked = 0
+    for (let n = 1; n <= 60; n++) {
+      const next = [1]
+      for (let k = 1; k < n; k++) next.push(row[k - 1] + row[k])
+      next.push(1)
+      row = next
+      row.forEach((value, k) => {
+        if (value >= 2 ** 53) return
+        checked++
+        expect(choose(n, k), `choose(${n}, ${k})`).toBe(value)
+      })
+    }
+    expect(checked).toBeGreaterThan(1500)
+  })
+
+  it('choose and perm answer Infinity when they overflow, however large n is', () => {
+    // A loop over every step up to n would not finish (vitest cannot interrupt
+    // synchronous code, so a regression here hangs); the answer is known at the
+    // first overflow.
+    expect(choose(1e15, 5e14)).toBe(Infinity)
+    expect(perm(1e15, 5e14)).toBe(Infinity)
+  })
+
+  it('perm is right for n at and beyond 2^53', () => {
+    expect(perm(2 ** 53, 0)).toBe(1)
+    expect(perm(2 ** 53, 1)).toBe(2 ** 53)
+    expect(perm(1e20, 0)).toBe(1)
+    expect(perm(1e20, 1)).toBe(1e20)
   })
 
   it('choose of non-integers goes through gamma', () => {
@@ -163,5 +208,68 @@ describe('derivatives of the new built-ins', () => {
 
   it('root refuses an index that depends on the variable', () => {
     expect(() => diff(p('root(x, 8)'), 'x', scope)).toThrow(CompileError)
+  })
+})
+
+describe('a refusal bites only when an argument depends on the variable', () => {
+  const k3 = makeScope({ params: [['k', 3]] })
+  const atIn = (text: string, v: string, s: ReturnType<typeof makeScope>, x: number) => compileScalar(simplify(diff(p(text), v, s)), [v], s)(x)
+  const E_INV_HALF = Math.exp(-1) / 2 // pdf(1, 3) = 1^2 e^-1 / gamma(3), whose x-derivative at 1 is (2x - x^2) e^-x / 2
+
+  const pdf = makeScope({ functions: [['pdf', fn(['x', 'k'], 'x^(k - 1) * exp(-x) / gamma(k)')]] })
+  const withRoot = makeScope({ functions: [['r', fn(['n', 'x'], 'root(n, x) + 1')]] })
+  const nested = makeScope({
+    functions: [
+      ['pdf', fn(['x', 'k'], 'x^(k - 1) * exp(-x) / gamma(k)')],
+      ['h', fn(['x'], 'pdf(x, 3) * 2')],
+      ['h2', fn(['k'], 'pdf(2, k)')],
+    ],
+  })
+
+  it('constant arguments differentiate to 0, in every refused function', () => {
+    expect(atIn('x^2 / gamma(3)', 'x', scope, 4)).toBeCloseTo(4, 14)
+    expect(atIn('choose(10, 3) * x^3 * (1 - x)^7', 'x', scope, 0.5)).toBeCloseTo(-0.9375, 12)
+    expect(atIn('gcd(4, 6) * x', 'x', scope, 5)).toBe(2)
+    expect(atIn('lcm(4, 6) * x', 'x', scope, 5)).toBe(12)
+    expect(atIn('perm(5, 2) * x', 'x', scope, 1)).toBe(20)
+    expect(atIn('root(3, 8)', 'x', scope, 5)).toBe(0)
+  })
+
+  it('a @param is constant in x', () => {
+    // d/dx x^(k-1) / gamma(k) = (k-1) x^(k-2) / gamma(k), which is x at k = 3
+    expect(atIn('x^(k - 1) / gamma(k)', 'x', k3, 2)).toBeCloseTo(2, 14)
+    expect(atIn('root(k, x)', 'x', k3, 8)).toBeCloseTo(1 / 12, 14)
+  })
+
+  it('but differentiating in the param itself is still refused, naming why', () => {
+    expect(() => diff(p('x^(k - 1) / gamma(k)'), 'k', k3)).toThrow(/digamma/)
+    expect(() => diff(p('root(k, x)'), 'k', k3)).toThrow(/index/)
+    expect(() => diff(p('gcd(x, 2)'), 'x', scope)).toThrow(/whole numbers/)
+  })
+
+  it('a user function refused in one parameter still differentiates in the others', () => {
+    expect(atIn('pdf(x, 3)', 'x', pdf, 1)).toBeCloseTo(E_INV_HALF, 14)
+    expect(atIn('pdf(x, 1 + 2)', 'x', pdf, 1)).toBeCloseTo(E_INV_HALF, 14)
+    expect(atIn('r(3, x)', 'x', withRoot, -8)).toBeCloseTo(1 / 12, 14)
+  })
+
+  it('and refuses when the argument that reaches the refused parameter moves with the variable', () => {
+    expect(() => diff(p('pdf(2, x)'), 'x', pdf)).toThrow(/digamma/)
+    expect(() => diff(p('pdf(x, x)'), 'x', pdf)).toThrow(/digamma/)
+    expect(() => diff(p('r(x, 8)'), 'x', withRoot)).toThrow(/index/)
+  })
+
+  it('the refusal carries through a user function that calls one', () => {
+    expect(atIn('h(x)', 'x', nested, 1)).toBeCloseTo(2 * E_INV_HALF, 14)
+    // h2(3) = pdf(2, 3) = 4 e^-2 / 2, constant in x
+    expect(atIn('h2(3) * x', 'x', nested, 2)).toBeCloseTo(2 * Math.exp(-2), 14)
+    expect(() => diff(p('h2(x)'), 'x', nested)).toThrow(/digamma/)
+  })
+
+  it('a cycle or an unknown name inside the function is still reported for constant arguments', () => {
+    const cyclic = makeScope({ functions: [['f', fn(['x'], 'g(x) + 1')], ['g', fn(['x'], 'f(x) * 2')]] })
+    expect(() => diff(p('f(3)'), 'x', cyclic)).toThrow(/defined in terms of each other/)
+    const unknown = makeScope({ functions: [['f', fn(['x'], 'frob(x)')]] })
+    expect(() => diff(p('f(3)'), 'x', unknown)).toThrow(/frob/)
   })
 })
