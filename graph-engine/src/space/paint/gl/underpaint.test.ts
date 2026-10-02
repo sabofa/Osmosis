@@ -51,6 +51,23 @@ describe('the texels of an underpainting', () => {
   })
 })
 
+describe('the underpainting’s mean colour (for a point the last frame did not see)', () => {
+  it('is the mean sRGB colour of the covered texels: red and blue are (0.5, 0, 0.5), and the empty ones do not count', () => {
+    const image = new Float32Array(3 * 4).fill(Number.NaN)
+    image.set([1, 0, 0], 0)
+    image.set([0, 0, 1], 3)
+    const t = underpaintTexels(image, 2, 2)!
+    expect(t.covered).toBe(2)
+    expect(t.mean[0]).toBeCloseTo(0.5, 9)
+    expect(t.mean[1]).toBe(0)
+    expect(t.mean[2]).toBeCloseTo(0.5, 9)
+    // linear 0.5 is sRGB 0.7354 (byte 188), the one covered texel: the mean is that
+    const one = new Float32Array(3 * 4).fill(Number.NaN)
+    one.set([0.5, 0.5, 0.5], 6)
+    expect(underpaintTexels(one, 2, 2)!.mean[0]).toBeCloseTo(188 / 255, 9)
+  })
+})
+
 describe('the least coverage of an underpainting', () => {
   it('is its opacity less what the weave and the streaks can take: 0.85 x (1 - 0.08 x 0.5 - 0.3 x 0.4) = 0.714 at the defaults', () => {
     expect(UNDERPAINT_WEAVE_GATE).toBe(0.08)

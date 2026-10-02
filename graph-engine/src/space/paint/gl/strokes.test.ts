@@ -75,9 +75,10 @@ describe('planStrokes: layers in LAYER_ORDER, back to front within a layer', () 
 })
 
 describe('strokeLayout', () => {
-  it('puts 8 strokes to a row by default: 20 strokes -> 96 texels wide, 3 rows', () => {
+  it('puts 8 strokes to a row by default: 20 strokes -> 160 texels wide, 3 rows', () => {
     expect(strokeLayout(20, 16384)).toEqual({ perRow: 8, width: 8 * TEXELS_PER_STROKE, rows: 3 })
-    expect(TEXELS_PER_STROKE).toBe(PATH_POINTS + 4)
+    // the path, colour, brush, stroke and role texels, and then the world path
+    expect(TEXELS_PER_STROKE).toBe(2 * PATH_POINTS + 4)
   })
 
   it('widens the rows when the texture size would be exceeded: 40000 strokes at 2048 rows -> 20 per row', () => {
@@ -124,6 +125,40 @@ describe('packStrokes', () => {
     expect(Array.from(out.subarray(c + 12, c + 16))).toEqual([3, 2, 0, 0])
   })
 
+  it('packs the world path after the stroke’s own texels, and says whether there is one', () => {
+    const b = batch([0, 0, 0], [3, 2, 1])
+    // stroke 0: a world path, point k at (k + 1, 10 + k, 20 + k); stroke 1: none (all zero); stroke 2: a number that is not one
+    for (let k = 0; k < PATH_POINTS; k++) b.worldPath.set([k + 1, 10 + k, 20 + k], 3 * k)
+    b.worldPath[3 * PATH_POINTS * 2 + 4] = Number.NaN
+    b.worldPath[3 * PATH_POINTS * 2] = 5
+    const plan = planStrokes(b)
+    const layout = strokeLayout(plan.count, 4096)
+    const out = new Float32Array(layout.width * layout.rows * 4)
+    packStrokes(b, plan, layout, out)
+    // planned farthest first: batch 0 (depth 3), then batch 1 (depth 2), then batch 2 (depth 1)
+    const texel = (slot: number, k: number) => Array.from(out.subarray((slot * TEXELS_PER_STROKE + k) * 4, (slot * TEXELS_PER_STROKE + k) * 4 + 4))
+    expect(Array.from(plan.order)).toEqual([0, 1, 2])
+    // the role texel (PATH_POINTS + 3): role, edge class, has a world path
+    expect(texel(0, PATH_POINTS + 3)[2]).toBe(1)
+    expect(texel(1, PATH_POINTS + 3)[2]).toBe(0)
+    expect(texel(2, PATH_POINTS + 3)[2]).toBe(0)
+    // the world texels (PATH_POINTS + 4 + k): x, y, z, 0
+    expect(texel(0, PATH_POINTS + 4)).toEqual([1, 10, 20, 0])
+    expect(texel(0, PATH_POINTS + 4 + 7)).toEqual([8, 17, 27, 0])
+    // a stroke with no world path has nothing in them
+    expect(texel(1, PATH_POINTS + 4)).toEqual([0, 0, 0, 0])
+  })
+
+  it('packs a batch with no world path at all (an older caller) without one, untested', () => {
+    const b = batch([0], [1]) as unknown as { worldPath?: Float32Array }
+    delete b.worldPath
+    const plan = planStrokes(b as never)
+    const layout = strokeLayout(plan.count, 4096)
+    const out = new Float32Array(layout.width * layout.rows * 4)
+    expect(() => packStrokes(b as never, plan, layout, out)).not.toThrow()
+    expect(out[(PATH_POINTS + 3) * 4 + 2]).toBe(0)
+  })
+
   it('puts the model’s linear colour through ONE sRGB encode on its way to a screen byte (no encode missing, none twice)', () => {
     // linear (0.2, 0.1, 0.05): sRGB 1.055 x 0.2^(1/2.4) - 0.055 = 0.4845, 0.3507 and 0.2478, which are the bytes 124, 89 and 63.
     // The first wiring was suspected of washing the paint out by a double or a missing encode: the colour is encoded here once,
@@ -146,7 +181,7 @@ describe('packStrokes', () => {
     expect(Math.round(255 * (out[c] * 0.96 + paper * 0.04))).toBe(128)
   })
 
-  it('places the n-th stroke of the plan in the n-th slot, 12 texels along the row', () => {
+  it('places the n-th stroke of the plan in the n-th slot, 20 texels along the row', () => {
     const b = batch([0, 0], [1, 9])
     b.path.fill(0)
     b.path[0] = 111 // stroke 0, point 0, x

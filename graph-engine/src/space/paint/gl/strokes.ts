@@ -116,10 +116,14 @@ export function srgbEncodeFast(linear: number): number {
 // Fills `out` (RGBA32F texels, width x rows) with the planned strokes. Per
 // stroke: PATH_POINTS texels (x, y, width, 0); colour (sRGB) + alpha; (load,
 // impasto, bristles, bristleVar); (dry, wet, endSoft, seed >>> 8); (role, edge
-// class, 0, 0). A stroke with a non-finite number is packed as an empty one.
+// class, 1 when there is a world path, 0); then PATH_POINTS texels of the world
+// path (x, y, z, 0), which the depth test of a re-projected frame reads. A stroke
+// with a non-finite number is packed as an empty one.
 export function packStrokes(batch: StrokeBatch, plan: StrokePlan, layout: StrokeLayout, out: Float32Array): void {
   const { perRow, width } = layout
   const { path, width: widths, colour } = batch
+  const world = batch.worldPath
+  const haveWorld = world !== undefined && world.length >= 3 * PATH_POINTS * batch.count
   for (let slot = 0; slot < plan.count; slot++) {
     const i = plan.order[slot]
     const row = (slot / perRow) | 0
@@ -166,8 +170,29 @@ export function packStrokes(batch: StrokeBatch, plan: StrokePlan, layout: Stroke
     o += 4
     out[o] = batch.role[i]
     out[o + 1] = batch.edge[i]
-    out[o + 2] = 0
+    // the world path: a stroke with none (all zero, or not a number) is not depth tested
+    let wsum = 0
+    let wany = 0
+    if (haveWorld) {
+      const w0 = i * 3 * PATH_POINTS
+      for (let k = 0; k < 3 * PATH_POINTS; k++) {
+        const v = world[w0 + k]
+        wsum += v
+        if (v !== 0) wany = 1
+      }
+    }
+    const has = Number.isFinite(sum) && Number.isFinite(wsum) && wany === 1
+    out[o + 2] = has ? 1 : 0
     out[o + 3] = 0
+    if (has) {
+      const w0 = i * 3 * PATH_POINTS
+      const wo = base + (PATH_POINTS + 4) * 4
+      for (let k = 0; k < PATH_POINTS; k++) {
+        out[wo + 4 * k] = world[w0 + 3 * k]
+        out[wo + 4 * k + 1] = world[w0 + 3 * k + 1]
+        out[wo + 4 * k + 2] = world[w0 + 3 * k + 2]
+      }
+    }
   }
 }
 
@@ -275,6 +300,17 @@ export function createAccumTargets(
 
 // --- the passes ---------------------------------------------------------------
 
+// The depth test of a re-projected frame: the scene's depth for the view (shaders/depth.ts) and what turns a world
+// point into the view depth stored there.
+export interface StrokeDepthTest {
+  texture: WebGLTexture
+  viewDir: readonly [number, number, number]
+  // dot(eye, viewDir)
+  eyeDot: number
+  // How far behind a surface a stroke may lie, in view depth.
+  bias: number
+}
+
 export interface StrokePassInput {
   stroke: ProgramInfo
   copy: ProgramInfo
@@ -282,6 +318,8 @@ export interface StrokePassInput {
   paper: PaperGpu
   cssSize: readonly [number, number]
   debugRoles: boolean
+  // Set for a re-projected frame; left out for a frame made for its own view.
+  depthTest?: StrokeDepthTest | null
 }
 
 export interface StrokePassResult {
@@ -391,6 +429,17 @@ export class StrokeRenderer {
       bind(1, src.colour)
       bind(2, paper.rgba)
       bind(3, paper.height)
+      // unit 4 is the scene's depth when the frame is tested against it; otherwise the paper's height stands in (a sampler
+      // of the same type, so no unit holds a texture of another type, and the test is off)
+      bind(4, input.depthTest ? input.depthTest.texture : paper.height)
+      gl.uniform1i(stroke.uniform('u_sceneDepth'), 4)
+      gl.uniform1i(stroke.uniform('u_depthTest'), input.depthTest ? 1 : 0)
+      if (input.depthTest) {
+        const t = input.depthTest
+        gl.uniform3f(stroke.uniform('u_viewDir'), t.viewDir[0], t.viewDir[1], t.viewDir[2])
+        gl.uniform1f(stroke.uniform('u_eyeDot'), t.eyeDot)
+        gl.uniform1f(stroke.uniform('u_depthBias'), t.bias)
+      }
       gl.uniform1i(stroke.uniform('u_strokes'), 0)
       gl.uniform1i(stroke.uniform('u_prev'), 1)
       gl.uniform1i(stroke.uniform('u_paper'), 2)

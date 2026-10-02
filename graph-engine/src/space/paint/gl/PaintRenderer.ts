@@ -7,7 +7,11 @@
 //                   pixel of a form, laid first), the model's strokes, one
 //                   instanced draw per layer with a procedural oil brush and wet
 //                   pickup, then the canvas and impasto composite; or one of the
-//                   debug views.
+//                   debug views. A frame that is a RE-PROJECTION (the camera moved and
+//                   the model did not run: PaintReproject) is also put through the new
+//                   view's depth: a depth-only pass of the opaque meshes, which hides
+//                   the strokes the new view's surfaces cover and warps the underpainting
+//                   onto the new view (shaders/depth.ts, warp.ts).
 //
 // Scene positions are used as the scene gives them: PaintView's matrices must
 // map scene space (see meshes.ts). Strokes arrive in CSS px of the view.
@@ -25,6 +29,7 @@ import type { SceneColours, GBuffer, PaintDebugMode, PaintFrame, PaintView } fro
 import type { SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
 import { createPaperGpu, destroyPaperGpu, drawComposite, DEFAULT_TONE, type PaperGpu } from './composite'
+import { createSceneDepthTarget, depthBias, NO_SURFACE, originMatrix, type SceneDepthTarget } from './depth'
 import {
   DebugRenderer,
   planesImage,
@@ -50,18 +55,28 @@ import { createShadowTarget, lightFrame, SHADOW_FIT, SHADOW_SIZE, type ShadowTar
 import { COPY_FRAGMENT, EDGE_FRAGMENT, EDGE_VERTEX, IMAGE_FRAGMENT } from './shaders/blit'
 import { COMPOSITE_FRAGMENT } from './shaders/composite'
 import { FULLSCREEN_VERTEX } from './shaders/common'
+import { DEPTH_FRAGMENT, DEPTH_VERTEX } from './shaders/depth'
 import { GBUFFER_VERTEX, gbufferFragment } from './shaders/gbuffer'
 import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
 import { STROKE_FRAGMENT, STROKE_VERTEX } from './shaders/stroke'
-import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
+import { UNDERPAINT_FRAGMENT, UNDERPAINT_WARP_FRAGMENT } from './shaders/underpaint'
 import { createAccumTargets, StrokeRenderer, type AccumTargets } from './strokes'
 import { UnderpaintRenderer } from './underpaint'
+import { inverseViewProj } from './warp'
 
 export interface PaintRendererOptions {
   // A shader failure or unexpected GL error, as a plain-text reason.
   onError?: (message: string) => void
   onContextLost?: () => void
   onContextRestored?: () => void
+}
+
+// What a re-projected frame needs besides the frame: the view its strokes' world paths and its underpainting were
+// made for, and that view's G-buffer depth (G-buffer size, row 0 the top, +Infinity where nothing is drawn), which
+// the underpainting's warp reads to find which points the old view saw.
+export interface PaintReproject {
+  from: PaintView
+  depth: Float32Array
 }
 
 export interface PaintStats {
@@ -71,6 +86,9 @@ export interface PaintStats {
   // Strokes drawn and instanced draws made by the last paint().
   strokes: number
   strokeDraws: number
+  // Whether the last paint() drew the depth pass and tested the strokes against it, and warped the underpainting.
+  depthTested: boolean
+  underpaintWarped: boolean
 }
 
 const SHADOW_PROGRAM = { name: 'shadow', vertex: SHADOW_VERTEX, fragment: SHADOW_FRAGMENT }
@@ -78,13 +96,15 @@ const GBUFFER_FLOAT_PROGRAM = { name: 'gbuffer-float', vertex: GBUFFER_VERTEX, f
 const GBUFFER_RGBA8_PROGRAM = { name: 'gbuffer-rgba8', vertex: GBUFFER_VERTEX, fragment: gbufferFragment(false) }
 const STROKE_PROGRAM = { name: 'stroke', vertex: STROKE_VERTEX, fragment: STROKE_FRAGMENT }
 const UNDERPAINT_PROGRAM = { name: 'underpaint', vertex: FULLSCREEN_VERTEX, fragment: UNDERPAINT_FRAGMENT }
+const UNDERPAINT_WARP_PROGRAM = { name: 'underpaint-warp', vertex: FULLSCREEN_VERTEX, fragment: UNDERPAINT_WARP_FRAGMENT }
+const DEPTH_PROGRAM = { name: 'depth', vertex: DEPTH_VERTEX, fragment: DEPTH_FRAGMENT }
 const COPY_PROGRAM = { name: 'copy', vertex: FULLSCREEN_VERTEX, fragment: COPY_FRAGMENT }
 const COMPOSITE_PROGRAM = { name: 'composite', vertex: FULLSCREEN_VERTEX, fragment: COMPOSITE_FRAGMENT }
 const IMAGE_PROGRAM = { name: 'image', vertex: FULLSCREEN_VERTEX, fragment: IMAGE_FRAGMENT }
 const EDGE_PROGRAM = { name: 'edges', vertex: EDGE_VERTEX, fragment: EDGE_FRAGMENT }
 
 export class PaintRenderer {
-  readonly stats: PaintStats = { gbuffer: null, accumFloat: null, strokes: 0, strokeDraws: 0 }
+  readonly stats: PaintStats = { gbuffer: null, accumFloat: null, strokes: 0, strokeDraws: 0, depthTested: false, underpaintWarped: false }
 
   private readonly canvas: HTMLCanvasElement
   private readonly options: PaintRendererOptions
@@ -111,6 +131,11 @@ export class PaintRenderer {
   private gbufferKey = ''
   private accum: AccumTargets | null = null
   private accumKey = ''
+  // The scene's depth for the view being painted (a re-projected frame's), at the paint's size; a context that cannot
+  // render to RG32F is not retried.
+  private sceneDepth: SceneDepthTarget | null = null
+  private sceneDepthKey = ''
+  private sceneDepthFailed = false
   // Float targets that proved incomplete on this context are not retried.
   private gbufferFloatFailed = false
   private accumFloatFailed = false
@@ -253,8 +278,10 @@ export class PaintRenderer {
     }
   }
 
-  // Draw a frame to the canvas.
-  paint(frame: PaintFrame, view: PaintView, params: PaintParams, debug: PaintDebugMode): void {
+  // Draw a frame to the canvas. `reproject` is given for a frame whose strokes were made for another view: they are
+  // put through this view's depth (a stroke that a nearer surface covers is hidden, one that has left its surface is
+  // clipped), and the underpainting is warped onto this view, instead of lying on the glass.
+  paint(frame: PaintFrame, view: PaintView, params: PaintParams, debug: PaintDebugMode, reproject?: PaintReproject): void {
     if (!this.usable()) return
     try {
       const gl = this.gl
@@ -267,6 +294,8 @@ export class PaintRenderer {
       }
       this.stats.strokes = 0
       this.stats.strokeDraws = 0
+      this.stats.depthTested = false
+      this.stats.underpaintWarped = false
 
       if (debug === 'value' || debug === 'zones' || debug === 'planes' || debug === 'edges') {
         const image = this.program(IMAGE_PROGRAM)
@@ -288,29 +317,69 @@ export class PaintRenderer {
       const paper = this.ensurePaperGpu()
       const roles = debug === 'roles'
       const { plan, layout } = this.strokes.upload(frame.strokes)
+      // A re-projected frame: the new view's depth, drawn first (it binds a framebuffer of its own).
+      const depth = reproject ? this.renderSceneDepth(view, backing.width, backing.height) : null
       // The underpainting goes first (not into the flat role view, where it would muddy the role colours). An
       // image that is not the G-buffer's size, or covers nothing, is not laid.
       const laid = !roles && this.underpaint.prepare(frame.underpaint, size.width, size.height)
+      const oldView = reproject?.from
+      const inverse = depth && oldView ? inverseViewProj(view) : null
+      const warp =
+        laid && depth && reproject && oldView && inverse && this.underpaint.setOldDepth(reproject.depth, size.width, size.height)
+      this.stats.underpaintWarped = Boolean(warp)
+      const common = {
+        paper,
+        width: backing.width,
+        height: backing.height,
+        pixelRatio: view.pixelRatio,
+        covered,
+        params,
+      }
       const first = laid
-        ? () =>
-            this.underpaint.draw({
-              program: this.program(UNDERPAINT_PROGRAM),
-              paper,
-              width: backing.width,
-              height: backing.height,
-              pixelRatio: view.pixelRatio,
-              covered,
-              params,
-            })
+        ? () => {
+            if (warp && depth && oldView && inverse) {
+              this.underpaint.drawWarped(
+                { program: this.program(UNDERPAINT_WARP_PROGRAM), ...common },
+                {
+                  program: this.program(UNDERPAINT_WARP_PROGRAM),
+                  sceneDepth: depth.target.texture,
+                  bias: depth.bias,
+                  invViewProj: Float32Array.from(inverse),
+                  eye: view.eye,
+                  viewDir: view.viewDir,
+                  oldViewProj: Float32Array.from(oldView.viewProj),
+                  oldEye: oldView.eye,
+                  oldViewDir: oldView.viewDir,
+                  oldCss: [oldView.width, oldView.height],
+                },
+              )
+            } else this.underpaint.draw({ program: this.program(UNDERPAINT_PROGRAM), ...common })
+          }
         : null
       const result = this.strokes.run(
-        { stroke: this.program(STROKE_PROGRAM), copy: this.program(COPY_PROGRAM), targets: accum, paper, cssSize, debugRoles: roles },
+        {
+          stroke: this.program(STROKE_PROGRAM),
+          copy: this.program(COPY_PROGRAM),
+          targets: accum,
+          paper,
+          cssSize,
+          debugRoles: roles,
+          depthTest: depth
+            ? {
+                texture: depth.target.texture,
+                viewDir: view.viewDir,
+                eyeDot: view.eye[0] * view.viewDir[0] + view.eye[1] * view.viewDir[1] + view.eye[2] * view.viewDir[2],
+                bias: depth.bias,
+              }
+            : null,
+        },
         plan,
         layout,
         first,
       )
       this.stats.strokes = plan.count
       this.stats.strokeDraws = result.draws
+      this.stats.depthTested = depth !== null
       drawComposite(gl, {
         program: this.program(COMPOSITE_PROGRAM),
         paint: result.final,
@@ -357,6 +426,7 @@ export class PaintRenderer {
     this.shadow = null
     this.gbuffer = null
     this.accum = null
+    this.sceneDepth = null
     this.paperCpu = null
   }
 
@@ -418,6 +488,52 @@ export class PaintRenderer {
     return made
   }
 
+  // The opaque meshes' view depth for `view`, into a target of the paint's size (the strokes are drawn into
+  // targets of that size, in the same orientation, so a stroke's pixel is the depth's pixel). Null when there is no
+  // scene, or the context cannot render to RG32F: the strokes are then not tested.
+  private renderSceneDepth(view: PaintView, width: number, height: number): { target: SceneDepthTarget; bias: number } | null {
+    const scene = this.sceneGpu
+    if (!scene || scene.meshes.length === 0 || !this.caps.colorBufferFloat || this.sceneDepthFailed) return null
+    const key = `${width}x${height}`
+    if (!this.sceneDepth || this.sceneDepthKey !== key) {
+      this.sceneDepth?.destroy()
+      this.sceneDepth = createSceneDepthTarget(this.gl, this.res, width, height)
+      this.sceneDepthKey = key
+      if (!this.sceneDepth) this.sceneDepthFailed = true
+    }
+    const target = this.sceneDepth
+    if (!target) return null
+    const gl = this.gl
+    const program = this.program(DEPTH_PROGRAM)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo)
+    gl.viewport(0, 0, width, height)
+    gl.disable(gl.BLEND)
+    gl.disable(gl.CULL_FACE)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthFunc(gl.LESS)
+    gl.depthMask(true)
+    gl.clearBufferfv(gl.COLOR, 0, new Float32Array([NO_SURFACE, 0, 0, 0]))
+    gl.clearDepth(1)
+    gl.clear(gl.DEPTH_BUFFER_BIT)
+    gl.useProgram(program.program)
+    const o = scene.origin
+    gl.uniformMatrix4fv(program.uniform('u_viewProj'), false, originMatrix(view.viewProj, o))
+    gl.uniform3f(program.uniform('u_viewDir'), view.viewDir[0], view.viewDir[1], view.viewDir[2])
+    gl.uniform1f(
+      program.uniform('u_depthBase'),
+      (o[0] - view.eye[0]) * view.viewDir[0] + (o[1] - view.eye[1]) * view.viewDir[1] + (o[2] - view.eye[2]) * view.viewDir[2],
+    )
+    for (const mesh of scene.meshes) {
+      gl.uniform1f(program.uniform('u_ground'), mesh.ground ? 1 : 0)
+      gl.bindVertexArray(mesh.vao)
+      gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
+    }
+    gl.bindVertexArray(null)
+    gl.disable(gl.DEPTH_TEST)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    return { target, bias: depthBias(scene.radius) }
+  }
+
   private ensureShadow(): ShadowTarget | null {
     if (!this.shadow) this.shadow = createShadowTarget(this.gl, this.res)
     return this.shadow
@@ -474,6 +590,8 @@ export class PaintRenderer {
     this.gbufferKey = ''
     this.accum = null
     this.accumKey = ''
+    this.sceneDepth = null
+    this.sceneDepthKey = ''
     this.options.onContextLost?.()
   }
 
@@ -484,6 +602,7 @@ export class PaintRenderer {
     this.caps = queryCapabilities(this.gl)
     this.gbufferFloatFailed = false
     this.accumFloatFailed = false
+    this.sceneDepthFailed = false
     this.uploadSceneNow()
     this.uploadPaperNow()
     this.options.onContextRestored?.()

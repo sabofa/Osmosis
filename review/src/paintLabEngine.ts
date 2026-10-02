@@ -18,6 +18,13 @@
 // stops (at once on the pointer's release; 120 ms after the last wheel turn, key or eased step) and the
 // picture eases from the re-projected frame to the new one. Nothing runs while nothing changes.
 //
+// A re-projected frame is put through the new view's depth, so it does not show what the strokes' old view
+// saw: the renderer draws the opaque meshes' depth for the new view (a depth-only pass), hides each stroke
+// a nearer surface covers and clips an edge decal that has left its surface, and warps the underpainting
+// (an image of the old view) back through that depth, so it rides the surface like the strokes and leaves
+// no canvas inside a form. It is given the view and the G-buffer depth the frame was made for (a copy of
+// the depth is kept with the frame: the G-buffer itself goes to the worker).
+//
 // What a frame costs depends on what changed:
 //   full    the G-buffer and the whole model;
 //   reproject the camera moved and nothing else did: the last full frame's strokes through the new view
@@ -239,6 +246,9 @@ interface Job {
 interface Analysed {
   sceneId: number
   view: PaintView
+  // The G-buffer's depth of that frame (a copy: the G-buffer itself goes to the worker): the underpainting's warp reads
+  // it to find which points the frame saw.
+  depth: Float32Array
   // The parameters of the analysis, and of the strokes now held (they differ after a recolour).
   params: PaintParams
   strokesParams: PaintParams
@@ -340,9 +350,12 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     })
 
     let gbufferMs = 0
+    // the G-buffer's depth of the full frame being made, kept for the frame it becomes (see Analysed.depth)
+    let gbufferDepth = null as Float32Array | null
     const full = (): Promise<SessionResponse> => {
       const t0 = performance.now()
       const g = renderer.renderGBuffer(view, params)
+      gbufferDepth = Float32Array.from(g.depth)
       gbufferMs = performance.now() - t0
       return host.frame(request('full', g))
     }
@@ -403,7 +416,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         debug: response.kind === 'full' ? debugOf(response.debug) : (a as Analysed).frame.debug,
         stats: response.stats,
       }
-      if (response.kind === 'full') analysed = { sceneId: id, view, params, strokesParams: params, debug, frame }
+      if (response.kind === 'full') analysed = { sceneId: id, view, depth: gbufferDepth ?? new Float32Array(0), params, strokesParams: params, debug, frame }
       else if (a) {
         a.frame = frame
         a.strokesParams = params
@@ -441,11 +454,12 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     const started = performance.now()
     try {
       const strokes = reprojectStrokes(a.frame.strokes, a.view, job.view, job.params)
-      // The underpaint is an image of the last full frame's view: while dragging it is reused as is (it slides a
-      // little against the re-projected strokes until the release frame). Re-projecting it is a fix-round item.
+      // The underpaint is an image of the last full frame's view: the renderer warps it onto this one through the
+      // scene's depth, and tests the strokes against the same depth (a hidden stroke vanishes, one that has left its
+      // surface is clipped), given the view and the G-buffer depth the frame was made for.
       const frame: PaintFrame = { strokes, debug: a.frame.debug, stats: a.frame.stats, underpaint: a.frame.underpaint }
       const t1 = performance.now()
-      renderer.paint(frame, job.view, job.params, job.debug)
+      renderer.paint(frame, job.view, job.params, job.debug, { from: a.view, depth: a.depth })
       if (failure) throw new Error(failure)
       shownSeq = job.seq
       const snap = options.snapshot

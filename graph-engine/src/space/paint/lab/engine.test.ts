@@ -231,7 +231,7 @@ function withPicture() {
   }
   const gbuffers = () => timeline(gl).filter((e) => e.kind === 'gbuffer').length / 2
   const done = (n: number) => vi.waitFor(() => expect(frames.length).toBeGreaterThanOrEqual(n), { timeout: 60_000, interval: 5 })
-  return { engine, frames, errors, painted, crossfades, snapshot, go, gbuffers, done }
+  return { engine, frames, errors, painted, crossfades, snapshot, go, gbuffers, done, gl }
 }
 
 const sameStrokes = (a: StrokeBatch, b: StrokeBatch) => {
@@ -261,6 +261,56 @@ describe('the camera moving: the last frame\'s strokes, re-projected', () => {
     expect(last.role).toBe(first.role)
     expect(last.count).toBe(first.count)
     expect(Array.from(last.path)).not.toEqual(Array.from(first.path))
+    engine.dispose()
+  })
+
+  it('puts a dragged frame through the new view’s depth: the depth pass, the stroke test and the warped underpainting; a full frame through none', async () => {
+    const { engine, frames, gl, go, done } = withPicture()
+    go(sphereView(), P)
+    await done(1)
+    const events = () => timeline(gl)
+    // the full frame (G-buffer, model, paint): no depth pass, no test, the plain underpainting
+    expect(events().filter((e) => e.kind === 'depth')).toHaveLength(0)
+    for (const s of events().filter((e) => e.kind === 'stroke')) expect(s.uniforms.u_depthTest).toEqual([0])
+    expect(events().filter((e) => e.kind === 'underpaint').every((e) => !gl.fake.programSource(e.draw!.program).fragment.includes('#define WARP'))).toBe(true)
+    const before = events().length
+    // drag: the re-projected frame draws the scene's depth (the sphere and the table), then tests every layer against it
+    go(sphereView({ azimuth: 44, dragging: true }), P)
+    expect(frames[frames.length - 1].kind).toBe('reproject')
+    const dragged = events().slice(before)
+    expect(dragged.filter((e) => e.kind === 'depth')).toHaveLength(2)
+    expect(dragged.filter((e) => e.kind === 'depth').every((e) => e.draw?.depthTest === true)).toBe(true)
+    const strokes = dragged.filter((e) => e.kind === 'stroke')
+    expect(strokes.length).toBeGreaterThan(2)
+    for (const s of strokes) expect(s.uniforms.u_depthTest).toEqual([1])
+    // the depth pass comes before the first stroke, and the underpainting is warped
+    expect(dragged.findIndex((e) => e.kind === 'depth')).toBeLessThan(dragged.findIndex((e) => e.kind === 'stroke'))
+    const under = dragged.find((e) => e.kind === 'underpaint')!
+    expect(gl.fake.programSource(under.draw!.program).fragment).toContain('#define WARP')
+    // and it is the old view that the warp is told: the view the full frame was made for (320 x 240 CSS px)
+    expect(under.uniforms.u_oldCss).toEqual([320, 240])
+    engine.dispose()
+  })
+
+  it('warps from the G-buffer depth of the frame the strokes came from: the last full frame’s, replaced by the release’s', async () => {
+    const { engine, gl, go, done } = withPicture()
+    const depthUploads = () =>
+      gl.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === 0x1903 && c.args[7] === 0x1406 && c.args[4] === 160 && c.args[5] === 120).map((c) => c.args[8] as Float32Array)
+    const expected = (azimuth: number) => sphereGBuffer(320, 240, { view: sphereView({ azimuth }), params: P, centre: [0, 0, 0], radius: 0.6, mark: 0, table: { z: -0.6, mark: 1 } }).depth
+    go(sphereView(), P)
+    await done(1)
+    go(sphereView({ azimuth: 44, dragging: true }), P)
+    go(sphereView({ azimuth: 50, dragging: true }), P)
+    // one upload for the two dragged frames, and it is the first frame's G-buffer depth, pixel for pixel
+    expect(depthUploads()).toHaveLength(1)
+    expect(Array.from(depthUploads()[0])).toEqual(Array.from(expected(30)))
+    // the release makes a frame of its own, and the next drag warps from that one
+    go(sphereView({ azimuth: 50 }), P)
+    await done(4)
+    go(sphereView({ azimuth: 58, dragging: true }), P)
+    expect(depthUploads()).toHaveLength(2)
+    expect(Array.from(depthUploads()[1])).toEqual(Array.from(expected(50)))
+    expect(Array.from(depthUploads()[1])).not.toEqual(Array.from(depthUploads()[0]))
     engine.dispose()
   })
 

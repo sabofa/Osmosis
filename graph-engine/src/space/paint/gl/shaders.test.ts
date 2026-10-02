@@ -5,6 +5,8 @@ import { COMMON_GLSL, FULLSCREEN_VERTEX } from './shaders/common'
 import { COMPOSITE_FRAGMENT } from './shaders/composite'
 import { GBUFFER_VERTEX, gbufferFragment } from './shaders/gbuffer'
 import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
+import { DEPTH_FRAGMENT, DEPTH_VERTEX } from './shaders/depth'
+import { UNDERPAINT_WARP_FRAGMENT, UNDERPAINT_FRAGMENT as UNDERPAINT_PLAIN } from './shaders/underpaint'
 import { RIBBON_SEGMENTS, RIBBON_SUBDIV, STROKE_FRAGMENT, STROKE_VERTEX, TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
 import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
 
@@ -50,7 +52,7 @@ describe('the stroke shaders (R3)', () => {
     expect(PATH_POINTS).toBe(8)
     expect(RIBBON_SEGMENTS).toBe((PATH_POINTS - 1) * RIBBON_SUBDIV)
     expect(VERTICES_PER_STROKE).toBe(2 * (RIBBON_SEGMENTS + 1))
-    expect(TEXELS_PER_STROKE).toBe(PATH_POINTS + 4)
+    expect(TEXELS_PER_STROKE).toBe(2 * PATH_POINTS + 4)
     expect(STROKE_VERTEX).toContain(`const int PTS = ${PATH_POINTS};`)
     expect(STROKE_VERTEX).toContain(`const int SUB = ${RIBBON_SUBDIV};`)
   })
@@ -78,6 +80,64 @@ describe('the stroke shaders (R3)', () => {
     expect(main).not.toMatch(/srgbEncode\(/)
     expect(main).not.toMatch(/srgbDecode\(/)
     expect(main).toContain('o_colour = vec4(col * al, al);')
+  })
+
+  it('test a re-projected frame against the scene\u2019s depth: the stroke\u2019s view depth per vertex, the surface\u2019s slope for the tolerance', () => {
+    // the vertex shader carries each point's depth from the world path (two world texels a segment, mixed along it)
+    expect(STROKE_VERTEX).toContain('vec3 wa = fetchTexel(id, WORLD + a).xyz;')
+    expect(STROKE_VERTEX).toContain('v_zs = dot(mix(wa, wb, f), u_viewDir) - u_eyeDot;')
+    expect(STROKE_VERTEX).toContain('v_world = c3.z;')
+    expect(STROKE_VERTEX).toContain('const int WORLD = PTS + 4;')
+    // the fragment shader fades a stroke behind the surface, over a tolerance that grows with the slope across its half width
+    const f = STROKE_FRAGMENT
+    expect(f).toContain('float depthVisible(ivec2 pix, float hw, int role)')
+    expect(f).toContain('if (!u_depthTest || v_world < 0.5) return 1.0;')
+    expect(f).toContain('float tol = u_depthBias + slope * max(hw, 1.5);')
+    expect(f).toContain('return 1.0 - sstep(tol, 2.0 * tol, over);')
+    // an edge stroke is a decal at one depth: clipped where it leaves the surface in front as well as behind
+    expect(f).toContain('const int ROLE_EDGE = 6;')
+    expect(f).toContain('float over = role == ROLE_EDGE ? abs(v_zs - zc) : v_zs - zc;')
+    // the smaller of the one-sided differences (so the far side of a silhouette is no slope), and capped
+    expect(f).toContain('min(abs(zc - zl), abs(zr - zc))')
+    expect(f).toContain('8.0 * u_depthBias')
+    // both the brush and the flat role view are tested
+    expect(f).toContain('float al = gate * min(opac, opac * (0.42 + 1.6 * dep)) * depthVisible(pix, hw, role);')
+    expect(f).toContain('float a = 0.9 * m * depthVisible(ivec2(gl_FragCoord.xy), hw, role);')
+    // a stroke built on the screen alone has no world path, and is never tested
+    expect(f).toContain('v_world < 0.5')
+  })
+
+  it('draw the scene\u2019s view depth, along the view direction, with the same depth the G-buffer holds', () => {
+    expect(DEPTH_VERTEX).toContain('// paint: depth')
+    expect(DEPTH_VERTEX).toContain('v_depth = dot(a_position, u_viewDir) + u_depthBase;')
+    expect(DEPTH_VERTEX).toContain('gl_Position = u_viewProj * vec4(a_position, 1.0);')
+    // r the depth, g whether the mesh is bare table
+    expect(DEPTH_FRAGMENT).toContain('o_depth = vec4(v_depth, u_ground, 0.0, 1.0);')
+  })
+
+  it('warp the underpainting back through the new view\u2019s depth: unproject, project into the old view, test against the old depth', () => {
+    const w = UNDERPAINT_WARP_FRAGMENT
+    expect(w).toContain('#define WARP')
+    expect(w).toContain('// paint: underpaint (warp)')
+    expect(w).toContain('if (d > 1.0e29) return vec4(0.0);')
+    expect(w).toContain('vec3 p = mix(pn, pf, abs(df - dn) < 1.0e-9 ? 0.0 : (d - dn) / (df - dn));')
+    expect(w).toContain('vec4 o4 = u_oldVP * vec4(p, 1.0);')
+    expect(w).toContain('vec2 css = vec2((on.x * 0.5 + 0.5) * u_oldCss.x, (0.5 - on.y * 0.5) * u_oldCss.y);')
+    expect(w).toContain('vec2 uv = css / u_gridCss;')
+    expect(w).toContain('float seen = abs(dot(p - u_oldEye, u_oldViewDir) - zc);')
+    // a point the old view saw has the image's colour, or none where the image has none (a lit table is bare canvas)
+    expect(w).toContain('if (seen <= 2.0 * u_depthBias + 2.0 * slope) return c.a > 0.5 ? vec4(c.rgb, 1.0) : vec4(0.0);')
+    // a point of a form it did not see takes the form's mean colour, never the bare canvas; one of the table has none
+    expect(w).toContain('return surface.y > 0.5 ? vec4(0.0) : vec4(u_fallback, 1.0);')
+    expect(w).toContain('vec2 surface = texelFetch(u_sceneDepth, pix, 0).rg;')
+    // the silhouette is the new depth's; the mask (weave, streaks) is the plain pass's
+    expect(w).toContain('float inside = c.a;')
+    const mask = (s: string) => s.slice(s.indexOf('  // the weave: paint this thin'))
+    expect(mask(w)).toBe(mask(UNDERPAINT_PLAIN))
+    // the plain pass is untouched by it
+    expect(UNDERPAINT_PLAIN).not.toContain('#define WARP')
+    expect(UNDERPAINT_PLAIN).toContain('// paint: underpaint')
+    expect(UNDERPAINT_PLAIN).toContain('float inside = sstep(0.35, 0.65, c.a);')
   })
 
   it('anti-alias the edges of a stroke: the gate is widened by half the deposit’s change over a pixel, from before any discard', () => {

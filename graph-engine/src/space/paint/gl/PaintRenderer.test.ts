@@ -7,6 +7,7 @@ import { LAYER_ORDER, PATH_POINTS, ROLES, type PaintFrame, type PaintView, type 
 import { encodeFloatTexel } from './gbuffer'
 import { createPaintFakeGl, timeline, type PaintFakeGl } from './fakePaintGl'
 import { PaintRenderer } from './PaintRenderer'
+import { TEXELS_PER_STROKE } from './shaders/stroke'
 
 const COLOURS: SceneColours = { markColour: () => [0.5, 0.1, 0.1], scaleColour: () => null }
 const GL_FLOAT = 0x1406
@@ -224,7 +225,7 @@ describe('the stroke layers', () => {
     renderer.paint(b, view(), PARAMS, 'none')
     const upload = paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_FLOAT).pop()
     const data = upload?.args[8] as Float32Array
-    const slot = (n: number) => data[n * 12 * 4]
+    const slot = (n: number) => data[n * TEXELS_PER_STROKE * 4]
     expect([slot(0), slot(1), slot(2)]).toEqual([333, 111, 222])
   })
 
@@ -578,6 +579,180 @@ describe('the canvas mottle', () => {
     expect(paint.fake.deleted.texture).toBe(3)
     renderer.dispose()
     expect(paint.fake.created.texture - paint.fake.deleted.texture).toBe(0)
+  })
+})
+
+describe('a re-projected frame (the orbit): the strokes are put through the new view’s depth, and the underpainting is warped', () => {
+  // the G-buffer of view() (800 x 600) is 400 x 300; the old frame's depth is a flat 5
+  const OLD_DEPTH = () => new Float32Array(400 * 300).fill(5)
+  const reproject = (depth = OLD_DEPTH()) => ({ from: view(800, 600), depth })
+  const kindsOf = (paint: PaintFakeGl) => timeline(paint).map((e) => e.kind)
+
+  function scene2() {
+    const ctx = setup()
+    ctx.renderer.setScene(TWO, COLOURS)
+    return ctx
+  }
+
+  it('draws the depth pass of the opaque meshes first, into a framebuffer of its own, with the depth test on, then the underpainting and the strokes', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none', reproject())
+    const events = timeline(paint)
+    const kinds = events.map((e) => e.kind)
+    // the two meshes of the scene, then the warped underpainting, then a draw per layer (each copied forward first, the
+    // first layer too: it copies the underpainting), then the composite
+    expect(kinds).toEqual(['depth', 'depth', 'underpaint', 'copy', 'stroke', 'copy', 'stroke', 'composite'])
+    const depth = events.filter((e) => e.kind === 'depth')
+    expect(depth.every((e) => e.draw?.depthTest === true && e.draw.depthWrite === true && e.draw.blend === false)).toBe(true)
+    expect(depth.every((e) => e.draw?.fn === 'drawElements')).toBe(true)
+    // into a framebuffer that is neither a paint target nor the canvas
+    const accum = events.filter((e) => e.kind === 'stroke' || e.kind === 'underpaint').map((e) => e.draw?.framebuffer?.id)
+    expect(depth[0].draw?.framebuffer).toBeTruthy()
+    expect(accum).not.toContain(depth[0].draw?.framebuffer?.id)
+    expect(renderer.stats.depthTested).toBe(true)
+    expect(renderer.stats.underpaintWarped).toBe(true)
+  })
+
+  it('clears the depth target to no surface (1e30) and the depth buffer, and draws with the view’s matrix, direction and base', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none', reproject())
+    const clear = paint.fake.calls.find((c) => c.fn === 'clearBufferfv' && (c.args[2] as Float32Array)[0] > 1e29)
+    expect(clear).toBeDefined()
+    const depth = timeline(paint).find((e) => e.kind === 'depth')!
+    expect(depth.uniforms.u_viewDir).toEqual([0, 0, -1])
+    // the matrix is the view's with the scene's origin folded in (a flat scene: origin (0, 0, -0.5))
+    const m = depth.uniforms.u_viewProj![1] as Float32Array
+    expect(m.length).toBe(16)
+    expect(m[12]).toBeCloseTo(0, 6)
+    expect(depth.uniforms.u_depthBase).toBeDefined()
+  })
+
+  it('tells the depth pass which mesh is bare table (u_ground) for the warp to leave the lit table as canvas', () => {
+    const ctx = setup()
+    const tilted = meshMark([-1, -1, 0, 1, -1, 0, 1, 1, 0.3, -1, 1, 0.3], [0.2, 0, 0.98, 0.2, 0, 0.98, 0.2, 0, 0.98, 0.2, 0, 0.98], [0, 1, 2, 0, 2, 3])
+    ctx.renderer.setScene(scene([square(0), tilted]), COLOURS)
+    ctx.renderer.paint(frame([BLOCK]), view(), PARAMS, 'none', reproject())
+    const grounds = timeline(ctx.paint).filter((e) => e.kind === 'depth').map((e) => e.uniforms.u_ground)
+    expect(grounds).toEqual([[1], [0]])
+  })
+
+  it('tests every stroke draw against the depth: u_depthTest on, with the view direction, eye·direction and a bias of a hundredth of the radius', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(frame([BLOCK, FORM, DAB]), view(), PARAMS, 'none', reproject())
+    const strokes = timeline(paint).filter((e) => e.kind === 'stroke')
+    expect(strokes.length).toBe(3)
+    for (const s of strokes) {
+      expect(s.uniforms.u_depthTest).toEqual([1])
+      expect(s.uniforms.u_viewDir).toEqual([0, 0, -1])
+      // eye (0, 0, 10) . viewDir (0, 0, -1) = -10
+      expect(s.uniforms.u_eyeDot).toEqual([-10])
+      const bias = s.uniforms.u_depthBias![0] as number
+      expect(bias).toBeGreaterThan(0)
+      expect(bias).toBeLessThan(0.1)
+      expect(s.uniforms.u_sceneDepth).toEqual([4])
+    }
+  })
+
+  it('draws neither a depth pass nor a test for a frame made for its own view, and the plain underpainting', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none')
+    const events = timeline(paint)
+    expect(events.some((e) => e.kind === 'depth')).toBe(false)
+    for (const s of events.filter((e) => e.kind === 'stroke')) expect(s.uniforms.u_depthTest).toEqual([0])
+    const under = events.find((e) => e.kind === 'underpaint')!
+    expect(paint.fake.programSource(under.draw!.program).fragment).not.toContain('#define WARP')
+    expect(under.uniforms.u_invVP).toBeUndefined()
+    expect(renderer.stats.depthTested).toBe(false)
+    expect(renderer.stats.underpaintWarped).toBe(false)
+  })
+
+  it('warps the underpainting through the new view’s depth and the old frame’s depth, with both views’ matrices and the mean colour', () => {
+    const { paint, renderer } = scene2()
+    const from = view(800, 600)
+    // the old view is a different one: its viewProj has a different scale, so the warp's matrices differ from the new view's
+    from.viewProj = Float32Array.from([0.25, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, -0.1, 0, 0, 0, 0, 1])
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none', { from, depth: OLD_DEPTH() })
+    const under = timeline(paint).find((e) => e.kind === 'underpaint')!
+    expect(paint.fake.programSource(under.draw!.program).fragment).toContain('#define WARP')
+    expect(under.draw?.blend).toBe(false)
+    const oldVP = under.uniforms.u_oldVP![1] as Float32Array
+    expect(oldVP[0]).toBeCloseTo(0.25, 6)
+    const invVP = under.uniforms.u_invVP![1] as Float32Array
+    expect(invVP.length).toBe(16)
+    // the inverse of the new view's diag(0.5, 0.5, -0.1, 1): diag(2, 2, -10, 1)
+    expect(invVP[0]).toBeCloseTo(2, 5)
+    expect(invVP[10]).toBeCloseTo(-10, 4)
+    expect(under.uniforms.u_oldCss).toEqual([800, 600])
+    // the image is 400 x 300 G-buffer texels of two CSS px
+    expect(under.uniforms.u_gridCss).toEqual([800, 600])
+    // withUnder paints the left half (0.6, 0.3, 0.1): its mean sRGB colour
+    const fallback = under.uniforms.u_fallback as number[]
+    expect(fallback[0]).toBeCloseTo(Math.round(255 * (1.055 * 0.6 ** (1 / 2.4) - 0.055)) / 255, 3)
+    expect(under.uniforms.u_oldViewDir).toEqual([0, 0, -1])
+    expect(under.uniforms.u_depthBias![0]).toBeGreaterThan(0)
+  })
+
+  it('uploads the old frame’s depth once however many times the frame is painted, and again for another one', () => {
+    const { paint, renderer } = scene2()
+    const uploads = () => paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RED && c.args[7] === GL_FLOAT && c.args[4] === 400 && c.args[5] === 300).length
+    const depth = OLD_DEPTH()
+    for (let i = 0; i < 3; i++) renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none', { from: view(800, 600), depth })
+    expect(uploads()).toBe(1)
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none', { from: view(800, 600), depth: OLD_DEPTH() })
+    expect(uploads()).toBe(2)
+  })
+
+  it('tests the strokes and lays no underpainting where the frame has none (an empty image): no warp, no error', () => {
+    const { paint, renderer, onError } = scene2()
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none', reproject())
+    expect(kindsOf(paint)).toEqual(['depth', 'depth', 'stroke', 'composite'])
+    expect(renderer.stats.depthTested).toBe(true)
+    expect(renderer.stats.underpaintWarped).toBe(false)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('tests the flat role view too, and leaves out the underpainting there', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'roles', reproject())
+    expect(kindsOf(paint)).toEqual(['depth', 'depth', 'stroke', 'composite'])
+    expect(timeline(paint).find((e) => e.kind === 'stroke')!.uniforms.u_depthTest).toEqual([1])
+  })
+
+  it('paints the strokes untested, without an error, when the context cannot render to float (no depth pass is possible)', () => {
+    const paint = createPaintFakeGl({ colorBufferFloat: false })
+    const onError = vi.fn()
+    const renderer = new PaintRenderer(paint.canvas.canvas, { onError })
+    renderer.setScene(TWO, COLOURS)
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none', reproject())
+    expect(timeline(paint).some((e) => e.kind === 'depth')).toBe(false)
+    expect(timeline(paint).filter((e) => e.kind === 'stroke').every((e) => e.uniforms.u_depthTest?.[0] === 0)).toBe(true)
+    expect(renderer.stats.depthTested).toBe(false)
+    expect(onError).not.toHaveBeenCalled()
+    renderer.dispose()
+  })
+
+  it('does not test a frame when the renderer has no scene to draw the depth of', () => {
+    const { paint, renderer } = setup()
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none', reproject())
+    expect(timeline(paint).some((e) => e.kind === 'depth')).toBe(false)
+    expect(renderer.stats.depthTested).toBe(false)
+  })
+
+  it('frees the depth target and the old depth with the renderer', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none', reproject())
+    expect(Object.values(balance(paint)).some((n) => n > 0)).toBe(true)
+    renderer.dispose()
+    expect(balance(paint)).toEqual({ buffer: 0, vertexArray: 0, program: 0, shader: 0, texture: 0, framebuffer: 0, renderbuffer: 0 })
+  })
+
+  it('rebuilds the depth target after the context is lost and restored, and draws the depth pass again', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none', reproject())
+    paint.fake.lose()
+    paint.fake.restore()
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none', reproject())
+    expect(timeline(paint).filter((e) => e.kind === 'depth').length).toBe(4)
   })
 })
 

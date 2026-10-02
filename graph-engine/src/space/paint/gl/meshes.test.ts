@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createContext } from '../../gl/context'
 import { meshMark, scene } from '../../testing/marks'
-import { isDrawableMesh, relativePositions, sceneBounds, uploadScene } from './meshes'
+import { isDrawableMesh, isFlatUp, relativePositions, sceneBounds, uploadScene } from './meshes'
 import { createPaintFakeGl } from './fakePaintGl'
 import { Resources } from './resources'
 
@@ -16,6 +16,27 @@ describe('which meshes draw', () => {
 
   it('does not draw a mesh with no triangle', () => {
     expect(isDrawableMesh(meshMark([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0, 0, 1, 0, 0, 1], []))).toBe(false)
+  })
+})
+
+describe('bare table', () => {
+  const tilted = meshMark([0, 0, 0, 2, 0, 0, 2, 2, 1, 0, 2, 1], [0, 0, 1, 0, 0, 1, 0.5, 0, 0.866, 0.5, 0, 0.866], [0, 1, 2, 0, 2, 3])
+
+  it('is a mesh with every normal straight up: a flat horizontal surface (the model’s test, groundMarks)', () => {
+    expect(isFlatUp(square(0))).toBe(true)
+    expect(isFlatUp(tilted)).toBe(false)
+    // a normal tilted by a hair (cos 0.9990 < 0.9995) is not flat
+    const hair = meshMark([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0.0447, 0, 0.9990, 0, 0, 1], [0, 1, 2])
+    expect(isFlatUp(hair)).toBe(false)
+    expect(isFlatUp(meshMark([0, 0, 0, 1, 0, 0, 0, 1, 0], [], [0, 1, 2]))).toBe(false)
+  })
+
+  it('is flagged on the uploaded mesh, which the depth pass hands to the underpainting’s warp', () => {
+    const gl = createPaintFakeGl().canvas.canvas
+    const ctx = createContext(gl)
+    if ('error' in ctx) throw new Error(ctx.error)
+    const up = uploadScene(ctx.gl, new Resources(ctx.gl), scene([square(0), tilted]))
+    expect(up.meshes.map((m) => m.ground)).toEqual([true, false])
   })
 })
 

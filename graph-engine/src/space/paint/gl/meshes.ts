@@ -22,6 +22,9 @@ export interface MeshGpu {
   mark: number
   vao: WebGLVertexArrayObject
   count: number
+  // Bare table: flat, horizontal (every normal straight up). Lit, it is canvas, and the underpainting of a re-projected
+  // frame does not fill it in where the last frame did not see it (the model's rule: model/view.ts groundMarks).
+  ground: boolean
 }
 
 export interface SceneGpu {
@@ -68,6 +71,14 @@ export function sceneBounds(scene: SpaceScene): { origin: [number, number, numbe
   return { origin, radius: Math.max(Math.sqrt(r2), 1e-6) }
 }
 
+// Every normal straight up (a flat horizontal surface): the same test as the model's (model/view.ts).
+export function isFlatUp(mesh: MeshMark): boolean {
+  const n = mesh.normals
+  if (n.length === 0) return false
+  for (let i = 0; i < n.length; i += 3) if (n[i + 2] < 0.9995) return false
+  return true
+}
+
 export function relativePositions(positions: Float64Array, origin: readonly [number, number, number]): Float32Array {
   const out = new Float32Array(positions.length)
   for (let i = 0; i + 2 < positions.length; i += 3) {
@@ -107,7 +118,7 @@ export function uploadScene(gl: Gl, res: Resources, scene: SpaceScene): SceneGpu
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mark.indices, gl.STATIC_DRAW)
     }
     gl.bindVertexArray(null)
-    meshes.push({ mark: index, vao, count: mark.indices.length - (mark.indices.length % 3) })
+    meshes.push({ mark: index, vao, count: mark.indices.length - (mark.indices.length % 3), ground: isFlatUp(mark) })
   })
   return { meshes, origin, radius }
 }

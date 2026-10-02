@@ -9,6 +9,7 @@ import type { PaintParams } from '../params'
 import type { PaperGpu } from './composite'
 import type { Resources, Gl } from './resources'
 import { UNDERPAINT_STREAK_GAIN, UNDERPAINT_TEXTURE_MAX, UNDERPAINT_WEAVE_GATE } from './shaders/underpaint'
+import { GBUFFER_SCALE } from './gbuffer'
 import { srgbEncodeFast } from './strokes'
 
 // The least coverage the underpainting has anywhere inside a form: its opacity less the most the weave
@@ -35,6 +36,9 @@ export interface UnderpaintTexels {
   rgba: Uint8Array
   // How many texels are covered.
   covered: number
+  // The mean sRGB colour of the covered texels (0..1): what a point of the form the last frame did not see is laid in
+  // while the camera moves.
+  mean: [number, number, number]
 }
 
 const BLEED = 2
@@ -46,6 +50,9 @@ export function underpaintTexels(image: Float32Array, width: number, height: num
   if (n === 0 || image.length !== 3 * n) return null
   const rgba = new Uint8Array(4 * n)
   let covered = 0
+  let sr = 0
+  let sg = 0
+  let sb = 0
   for (let i = 0; i < n; i++) {
     const r = image[3 * i]
     if (Number.isNaN(r)) continue
@@ -54,8 +61,12 @@ export function underpaintTexels(image: Float32Array, width: number, height: num
     rgba[4 * i + 1] = Math.round(srgbEncodeFast(image[3 * i + 1]) * 255)
     rgba[4 * i + 2] = Math.round(srgbEncodeFast(image[3 * i + 2]) * 255)
     rgba[4 * i + 3] = 255
+    sr += rgba[4 * i]
+    sg += rgba[4 * i + 1]
+    sb += rgba[4 * i + 2]
   }
   if (covered === 0) return null
+  const mean: [number, number, number] = [sr / covered / 255, sg / covered / 255, sb / covered / 255]
   // the colour of an empty texel within BLEED of a form: the nearest covered one's, across then down (coverage
   // stays 0). `has` marks the texels that have a colour, covered or taken.
   const has = new Uint8Array(n)
@@ -98,7 +109,7 @@ export function underpaintTexels(image: Float32Array, width: number, height: num
       }
     }
   }
-  return { rgba, covered }
+  return { rgba, covered, mean }
 }
 
 export interface UnderpaintDraw {
@@ -113,6 +124,23 @@ export interface UnderpaintDraw {
   params: PaintParams
 }
 
+// The warp of a re-projected frame (shaders/underpaint.ts, gl/warp.ts): the new view's depth and matrices, the old
+// view's, and the old G-buffer's depth.
+export interface UnderpaintWarp {
+  program: ProgramInfo
+  // The new view's depth texture (R32F, the target's size), and how far a point may lie from a stored depth.
+  sceneDepth: WebGLTexture
+  bias: number
+  invViewProj: Float32Array
+  eye: readonly [number, number, number]
+  viewDir: readonly [number, number, number]
+  oldViewProj: Float32Array
+  oldEye: readonly [number, number, number]
+  oldViewDir: readonly [number, number, number]
+  // The old view's size in CSS px.
+  oldCss: readonly [number, number]
+}
+
 export class UnderpaintRenderer {
   private texture: WebGLTexture | null = null
   private width = 0
@@ -120,6 +148,12 @@ export class UnderpaintRenderer {
   // The image the texture holds now: a frame painted again does not make the texels again.
   private held: Float32Array | null = null
   private has = false
+  private mean: [number, number, number] = [0.5, 0.5, 0.5]
+  // The last full frame's G-buffer depth (R32F), for the warp: the array it was made from, and its size.
+  private oldDepth: WebGLTexture | null = null
+  private oldDepthHeld: Float32Array | null = null
+  private oldDepthWidth = 0
+  private oldDepthHeight = 0
 
   private readonly gl: Gl
   private readonly res: Resources
@@ -137,6 +171,7 @@ export class UnderpaintRenderer {
     this.held = image
     this.has = texels !== null
     if (!texels) return false
+    this.mean = texels.mean
     const gl = this.gl
     if (!this.texture || this.width !== width || this.height !== height) {
       this.res.deleteTexture(this.texture)
@@ -157,8 +192,14 @@ export class UnderpaintRenderer {
   // The pass, into the framebuffer bound for drawing (both attachments, no blending: it goes first).
   draw(input: UnderpaintDraw): void {
     if (!this.has || !this.texture) return
+    this.bindCommon(input, input.program)
+    this.gl.drawArrays(this.gl.TRIANGLES, 0, 3)
+  }
+
+  // What both variants need: the program, the image and the paper's height, and the mask's uniforms.
+  private bindCommon(input: UnderpaintDraw, program: ProgramInfo): void {
     const gl = this.gl
-    const { program, paper, params } = input
+    const { paper, params } = input
     gl.disable(gl.BLEND)
     gl.useProgram(program.program)
     gl.activeTexture(gl.TEXTURE0)
@@ -177,11 +218,56 @@ export class UnderpaintRenderer {
     const dir = underpaintDirection(params.seed)
     gl.uniform2f(program.uniform('u_dir'), dir[0], dir[1])
     gl.uniform1ui(program.uniform('u_seed'), (Math.imul(params.seed | 0, 0x9e3779b1) ^ 0x5bd1e995) >>> 0)
+  }
+
+  // The last full frame's G-buffer depth, for the warp: uploaded once for one array (a re-projected frame is painted
+  // again and again with the same one). False when it is not a G-buffer-sized depth, or no texture could be made.
+  setOldDepth(depth: Float32Array, width: number, height: number): boolean {
+    if (depth.length !== width * height || width < 1 || height < 1) return false
+    if (this.oldDepthHeld === depth && this.oldDepth) return true
+    const gl = this.gl
+    if (!this.oldDepth || this.oldDepthWidth !== width || this.oldDepthHeight !== height) {
+      this.res.deleteTexture(this.oldDepth)
+      this.oldDepth = this.res.texture(gl.R32F, width, height)
+      this.oldDepthWidth = width
+      this.oldDepthHeight = height
+    }
+    if (!this.oldDepth) return false
+    gl.bindTexture(gl.TEXTURE_2D, this.oldDepth)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RED, gl.FLOAT, depth)
+    this.oldDepthHeld = depth
+    return true
+  }
+
+  // The pass again, warped onto the new view (see UnderpaintWarp): the same mask and uniforms, and the warp's own.
+  drawWarped(input: UnderpaintDraw, warp: UnderpaintWarp): void {
+    if (!this.has || !this.texture || !this.oldDepth) return
+    const gl = this.gl
+    const { program } = warp
+    this.bindCommon(input, program)
+    gl.activeTexture(gl.TEXTURE0 + 2)
+    gl.bindTexture(gl.TEXTURE_2D, warp.sceneDepth)
+    gl.activeTexture(gl.TEXTURE0 + 3)
+    gl.bindTexture(gl.TEXTURE_2D, this.oldDepth)
+    gl.uniform1i(program.uniform('u_sceneDepth'), 2)
+    gl.uniform1i(program.uniform('u_oldDepth'), 3)
+    gl.uniformMatrix4fv(program.uniform('u_invVP'), false, warp.invViewProj)
+    gl.uniform3f(program.uniform('u_eye'), warp.eye[0], warp.eye[1], warp.eye[2])
+    gl.uniform3f(program.uniform('u_viewDir'), warp.viewDir[0], warp.viewDir[1], warp.viewDir[2])
+    gl.uniformMatrix4fv(program.uniform('u_oldVP'), false, warp.oldViewProj)
+    gl.uniform3f(program.uniform('u_oldEye'), warp.oldEye[0], warp.oldEye[1], warp.oldEye[2])
+    gl.uniform3f(program.uniform('u_oldViewDir'), warp.oldViewDir[0], warp.oldViewDir[1], warp.oldViewDir[2])
+    gl.uniform2f(program.uniform('u_oldCss'), warp.oldCss[0], warp.oldCss[1])
+    gl.uniform2f(program.uniform('u_gridCss'), this.width * GBUFFER_SCALE, this.height * GBUFFER_SCALE)
+    gl.uniform3f(program.uniform('u_fallback'), this.mean[0], this.mean[1], this.mean[2])
+    gl.uniform1f(program.uniform('u_depthBias'), warp.bias)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 
   destroy(): void {
     this.res.deleteTexture(this.texture)
+    this.res.deleteTexture(this.oldDepth)
     this.forget()
   }
 
@@ -192,5 +278,9 @@ export class UnderpaintRenderer {
     this.height = 0
     this.held = null
     this.has = false
+    this.oldDepth = null
+    this.oldDepthHeld = null
+    this.oldDepthWidth = 0
+    this.oldDepthHeight = 0
   }
 }

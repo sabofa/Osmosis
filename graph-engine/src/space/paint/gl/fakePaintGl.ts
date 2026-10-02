@@ -1,6 +1,6 @@
 // A test helper: space/gl/fakeGl.ts's recording fake, widened for the paint
 // renderer. It adds the few constants the paint code reads that the base fake
-// does not know (RGBA32F, R32F, R8, REPEAT, MAX_TEXTURE_SIZE), answers
+// does not know (RGBA32F, R32F, RG32F, R8, REPEAT, MAX_TEXTURE_SIZE), answers
 // getParameter(MAX_TEXTURE_SIZE), and records readPixels, filling the
 // destination from a provider so a test can hand the renderer a known
 // G-buffer. Nothing outside tests imports it.
@@ -11,6 +11,7 @@ import { createFakeGl, fakeCanvas, type FakeCanvas, type FakeGl, type FakeGlOpti
 export const PAINT_CONSTANTS = {
   RGBA32F: 0x8814,
   R32F: 0x822e,
+  RG32F: 0x8230,
   R8: 0x8229,
   REPEAT: 0x2901,
   MAX_TEXTURE_SIZE: 0x0d33,
@@ -78,7 +79,7 @@ export function createPaintFakeGl(options: FakeGlOptions = {}, size = { width: 8
 
 // The kinds of draw the paint renderer makes, told apart by the shader's own
 // header comment.
-export type PaintPass = 'shadow' | 'gbuffer' | 'underpaint' | 'stroke' | 'copy' | 'composite' | 'image' | 'edges' | 'other'
+export type PaintPass = 'shadow' | 'gbuffer' | 'depth' | 'underpaint' | 'stroke' | 'copy' | 'composite' | 'image' | 'edges' | 'other'
 
 export function passOf(fake: FakeGl, draw: FakeGl['draws'][number]): PaintPass {
   const { vertex, fragment } = fake.programSource(draw.program)
@@ -86,6 +87,7 @@ export function passOf(fake: FakeGl, draw: FakeGl['draws'][number]): PaintPass {
   const needles: [PaintPass, string][] = [
     ['shadow', '// paint: shadow'],
     ['gbuffer', '// paint: gbuffer'],
+    ['depth', '// paint: depth'],
     ['underpaint', '// paint: underpaint'],
     ['stroke', '// paint: stroke'],
     ['copy', '// paint: copy'],

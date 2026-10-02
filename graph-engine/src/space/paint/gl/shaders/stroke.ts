@@ -24,13 +24,18 @@
 //     are at least a pixel soft and do not stair-step;
 //   - wet pickup mixes the layers beneath (and the canvas where nothing has
 //     been painted yet) into the stroke's colour, most at its start;
-//   - the paint height accumulates for impasto: h' = h (1 - a/2) + a * dep * kp.
+//   - the paint height accumulates for impasto: h' = h (1 - a/2) + a * dep * kp;
+//   - a re-projected frame's strokes (the camera is moving, the model is not running) lie where the last frame's
+//     surface was, and some of that is now hidden or off the surface. With u_depthTest on, each fragment's view
+//     depth (from the stroke's world path, per vertex) is compared with the scene's depth for the new view
+//     (shaders/depth.ts) and a stroke behind a surface is faded out over a tolerance that grows with the surface's
+//     slope across the stroke (depthVisible below).
 //
 // Colours accumulate in sRGB-encoded space, as the mockup does, so the mixes
 // look as approved. Output 0 is premultiplied colour with coverage as alpha,
 // output 1 is the height in r with a/2 as alpha; both blend ONE, ONE_MINUS_SRC_ALPHA.
 
-import { MAX_BRISTLES, PATH_POINTS } from '../../types'
+import { MAX_BRISTLES, PATH_POINTS, ROLES } from '../../types'
 import { COMMON_GLSL } from './common'
 
 // Ribbon tessellation: PATH_POINTS - 1 segments, each split RIBBON_SUBDIV
@@ -40,8 +45,9 @@ export const RIBBON_SEGMENTS = (PATH_POINTS - 1) * RIBBON_SUBDIV
 export const VERTICES_PER_STROKE = 2 * (RIBBON_SEGMENTS + 1)
 // Texels per stroke in the stroke data texture (RGBA32F): the path points
 // (x, y, width, 0), then colour + alpha, the brush parameters, the stroke
-// parameters and the role / edge class.
-export const TEXELS_PER_STROKE = PATH_POINTS + 4
+// parameters, the role / edge class / whether there is a world path, and then the
+// world path (x, y, z, 0 per point), which the depth test of a re-projected frame reads.
+export const TEXELS_PER_STROKE = 2 * PATH_POINTS + 4
 
 export const STROKE_VERTEX = /* glsl */ `#version 300 es
 // paint: stroke
@@ -52,7 +58,11 @@ uniform sampler2D u_strokes;
 uniform int u_base;      // first stroke of this layer in the sorted order
 uniform int u_perRow;    // strokes per row of the data texture
 uniform vec2 u_cssSize;  // the view's size in CSS px
+uniform vec3 u_viewDir;  // the view's direction, and dot(eye, viewDir): the view depth of a world point
+uniform float u_eyeDot;
 out vec3 v_geo;          // lateral offset (hw units), arc position (px), half width (px)
+out float v_zs;          // the view depth of the stroke's surface point here (for the depth test)
+flat out float v_world;  // 1 when the stroke has a world path to test with
 flat out vec4 v_colour;  // sRGB colour, alpha
 flat out vec4 v_p0;      // load, impasto, bristles, bristle variance
 flat out vec4 v_p1;      // dry, wet, end softness, seed
@@ -62,6 +72,7 @@ const int PTS = ${PATH_POINTS};
 const int SUB = ${RIBBON_SUBDIV};
 const int SEGS = (PTS - 1) * SUB;
 const int TEXELS = ${TEXELS_PER_STROKE};
+const int WORLD = PTS + 4;  // the first world-path texel
 
 vec4 fetchTexel(int id, int k) {
   return texelFetch(u_strokes, ivec2((id % u_perRow) * TEXELS + k, id / u_perRow), 0);
@@ -106,6 +117,10 @@ void main() {
   if (dot(tang, tang) < 1e-8) tang = p2 - p1;
   if (dot(tang, tang) < 1e-8) tang = vec2(1.0, 0.0);
   vec2 tn = normalize(tang);
+  vec3 wa = fetchTexel(id, WORLD + a).xyz;
+  vec3 wb = fetchTexel(id, WORLD + a + 1).xyz;
+  v_zs = dot(mix(wa, wb, f), u_viewDir) - u_eyeDot;
+  v_world = c3.z;
   float s = mix(cum[a], cum[a + 1], f);
   float w = mix(pt[a].z, pt[a + 1].z, f);
   if (j == 0) { pos -= tn * cap; s -= cap; }
@@ -129,6 +144,8 @@ precision highp float;
 precision highp int;
 precision highp sampler2D;
 in vec3 v_geo;
+in float v_zs;
+flat in float v_world;
 flat in vec4 v_colour;
 flat in vec4 v_p0;
 flat in vec4 v_p1;
@@ -143,12 +160,38 @@ uniform vec4 u_roleA[8];     // opacity, thin, start boost, wet pickup at the st
 uniform vec4 u_roleB[8];     // end position, end spread, crisp (1) or ragged (0), 0
 uniform bool u_debugRoles;
 uniform vec3 u_roleColour[8];
+uniform bool u_depthTest;      // a re-projected frame: hide what the new view's surfaces cover
+uniform sampler2D u_sceneDepth; // the scene's view depth for this view, R32F, 1e30 where nothing is drawn
+uniform float u_depthBias;     // view-depth units a stroke may lie behind its surface
 ${COMMON_GLSL}
 layout(location = 0) out vec4 o_colour;
 layout(location = 1) out vec4 o_height;
 
 const int ROLE_GLAZE = 3;
+const int ROLE_EDGE = ${ROLES.indexOf('edge')};
 const float START_RAMP = 0.026;
+
+// How much of the stroke is seen at this pixel under the scene's depth: 1 in front of or on the surface, 0 well
+// behind it. The tolerance is the bias plus the surface's slope (the change of depth over a pixel: the smaller of the
+// two one-sided differences on each axis, so the far side of a silhouette is not mistaken for a slope, and capped)
+// across the stroke's half width, because the stroke's depth is its centreline's and its edges lie on a tilted
+// surface at other depths. An edge stroke is a decal: the screen path of a contour lifted to ONE depth, a flat mark
+// on the surface it followed. As the view turns the decal leaves the surface, behind it or in front of it, and it is
+// clipped either way (every other stroke is only hidden by a surface in front of it: a veil or a curve may hover
+// over a surface).
+float depthVisible(ivec2 pix, float hw, int role) {
+  if (!u_depthTest || v_world < 0.5) return 1.0;
+  ivec2 last = ivec2(u_resolution) - 1;
+  float zc = texelFetch(u_sceneDepth, pix, 0).r;
+  float zl = texelFetch(u_sceneDepth, clamp(pix + ivec2(-1, 0), ivec2(0), last), 0).r;
+  float zr = texelFetch(u_sceneDepth, clamp(pix + ivec2(1, 0), ivec2(0), last), 0).r;
+  float zd = texelFetch(u_sceneDepth, clamp(pix + ivec2(0, -1), ivec2(0), last), 0).r;
+  float zu = texelFetch(u_sceneDepth, clamp(pix + ivec2(0, 1), ivec2(0), last), 0).r;
+  float slope = min(max(min(abs(zc - zl), abs(zr - zc)), min(abs(zc - zd), abs(zu - zc))), 8.0 * u_depthBias);
+  float tol = u_depthBias + slope * max(hw, 1.5);
+  float over = role == ROLE_EDGE ? abs(v_zs - zc) : v_zs - zc;
+  return 1.0 - sstep(tol, 2.0 * tol, over);
+}
 
 void main() {
   float load = v_p0.x;
@@ -174,7 +217,8 @@ void main() {
   if (u_debugRoles) {
     float m = (1.0 - sstep(0.88, 1.0, abs(o))) * (1.0 - sstep(0.0, 1.0, abs(s - sc) / max(cap, 1.0)));
     if (m <= 0.01) discard;
-    float a = 0.9 * m;
+    float a = 0.9 * m * depthVisible(ivec2(gl_FragCoord.xy), hw, role);
+    if (a <= 0.01) discard;
     o_colour = vec4(u_roleColour[role] * a, a);
     o_height = vec4(0.0);
     return;
@@ -262,7 +306,7 @@ void main() {
   if (gate <= 0.001) discard;
 
   float opac = role == ROLE_GLAZE ? min(v_colour.a, ra.x) : v_colour.a * ra.x;
-  float al = gate * min(opac, opac * (0.42 + 1.6 * dep));
+  float al = gate * min(opac, opac * (0.42 + 1.6 * dep)) * depthVisible(pix, hw, role);
   if (al <= 0.001) discard;
 
   // Wet-into-wet: pick up what is beneath, the canvas where nothing is yet.
