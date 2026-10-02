@@ -233,6 +233,40 @@ describe('a binder is a binder wherever it sits', () => {
   })
 })
 
+// A float counter stops changing at 2^53 (i++ is i), so a loop with a bound there
+// would never end: only whole numbers a float steps through exactly are counted.
+describe('a loop is bounded by the whole numbers a float counts exactly', () => {
+  const big = 2 ** 53
+
+  it('a constant bound at or above 2^53 is a CompileError naming it, on both paths', () => {
+    for (const [build, name] of [[sum, '__sum'], [prod, '__prod']] as const) {
+      for (const [lo, hi] of [[big, big], [1, big], [-big, 3], [-1e300, 1e300]] as const) {
+        const err = bothRefuse(build('k', num(lo), num(hi), num(1)), makeScope(), [])
+        expect(err.message).toMatch(/bound .* is past/)
+        expect(err.names).toEqual([name])
+      }
+    }
+    expect(bothRefuse(sum('k', num(big), num(big), num(1)), makeScope(), []).message).toContain('9007199254740992')
+  })
+
+  it('a parameter bound at or above 2^53 is NaN at run time, on both paths, and does not hang', () => {
+    for (const value of [big, -big, 1e16, 1e300]) {
+      const scope = makeScope({ params: [['n', value]] })
+      expect(both(sum('k', variable('n'), variable('n'), num(1)), [], [], scope), `sum at ${value}`).toBeNaN()
+      expect(both(prod('k', variable('n'), variable('n'), num(1)), [], [], scope), `prod at ${value}`).toBeNaN()
+      expect(both(sum('k', num(0), variable('n'), num(1)), [], [], scope), `sum 0 to ${value}`).toBeNaN()
+    }
+  })
+
+  it('the largest bounds a float counts exactly still count', () => {
+    const top = big - 1
+    expect(both(sum('k', num(top - 2), num(top), num(1)), [], [])).toBe(3)
+    expect(both(prod('k', num(-top), num(-top + 2), num(1)), [], [])).toBe(1)
+    const scope = makeScope({ params: [['n', top]] })
+    expect(both(sum('k', variable('n'), variable('n'), num(1)), [], [], scope)).toBe(1)
+  })
+})
+
 describe('binders and the derivative', () => {
   it('a user function with a binder in its body: g(x) = sum(k = 1 to 3, k x), g\'(2) and d/dt g(t) are 6', () => {
     const scope = makeScope({ functions: [['g', { params: ['x'], body: sum('k', num(1), num(3), p('k x')) }]] })
@@ -297,13 +331,40 @@ describe('binders and the derivative', () => {
   })
 
   it('a sum whose bounds depend on the variable has no rule, unless the variable is not read', () => {
-    expect(() => diff(sum('k', num(1), x, k), 'x', makeScope())).toThrow(/bounds depend on "x"/)
+    expect(() => diff(sum('k', num(1), x, k), 'x', makeScope())).toThrow(/bounds depend on the variable/)
     expect(() => diff(sum('k', num(1), x, k), 'x', makeScope())).toThrow(CompileError)
     // a bound that is a @param is constant in x
     const scope = makeScope({ params: [['n', 4]] })
     expect(derivativeAt(sum('k', num(1), variable('n'), p('k x')), 'x', scope, 7)).toBe(10)
     // d/dk of a sum over k is 0: the index is not the variable
     expect(diff(sum('k', num(1), num(3), p('k x')), 'k', makeScope())).toEqual(num(0))
+  })
+
+  it('a refusal raised through a user function never prints an internal parameter name', () => {
+    const message = (run: () => unknown): string => {
+      try {
+        run()
+      } catch (err) {
+        return (err as Error).message
+      }
+      return ''
+    }
+    // h(x, n) = x * sum(k = 1 to n, k) and m(x, a) = x + prod(k = 1 to 3, a + k), each refused in its second parameter
+    const h = { params: ['x', 'n'], body: { kind: 'binary', op: '*', left: variable('x'), right: sum('k', num(1), variable('n'), k) } as Expr }
+    const m = { params: ['x', 'a'], body: { kind: 'binary', op: '+', left: variable('x'), right: prod('k', num(1), num(3), p('a + k')) } as Expr }
+    const scope = makeScope({ functions: [['h', h], ['m', m]] })
+    const t = variable('t')
+    for (const [label, expr, pattern] of [
+      ['sum through h', call('h', num(2), t), /No derivative rule for a sum/],
+      ['prod through m', call('m', num(1), t), /No derivative rule for a product/],
+      ['sum direct', sum('k', num(1), t, k), /No derivative rule for a sum/],
+      ['prod direct', prod('k', num(1), num(3), p('t + k')), /No derivative rule for a product/],
+    ] as const) {
+      const said = message(() => diff(expr, 't', scope))
+      expect(said, label).toMatch(pattern)
+      expect(said, label).not.toContain('#')
+      expect(said, label).not.toContain('"t"')
+    }
   })
 
   it('a bound index that shares a name with a user constant is the index, not the constant', () => {
@@ -344,6 +405,30 @@ describe('substitute and varNames, binder-aware', () => {
     const s = sum('k', variable('n'), variable('m'), k)
     expect(substitute(s, new Map([['n', num(1)], ['m', num(4)]]))).toEqual(sum('k', num(1), num(4), k))
     expect(substitute(s, new Map([['k', num(9)]]))).toEqual(s)
+  })
+
+  it('a binder is renamed only when a replacement of a name FREE in its body mentions the bound name', () => {
+    // zz does not occur in the body, so the k it maps to can capture nothing
+    const s = sum('k', num(1), num(3), k)
+    expect(substitute(s, new Map<string, Expr>([['zz', k]]))).toEqual(s)
+    const i = integral('t', num(0), num(1), p('a t'))
+    expect(substitute(i, new Map<string, Expr>([['b', t]]))).toEqual(i)
+    // ...but a free name of the body that maps to a k does need it
+    const captured = substitute(sum('k', num(1), num(3), p('k x')), new Map<string, Expr>([['x', k]])) as Expr & { kind: 'call' }
+    expect((captured.args[0] as { name: string }).name).toMatch(/^#k\./)
+  })
+
+  it('d/dt F(t) for F(x) = integral(t = 0 to 1, x t) is 1/2, and prints no internal name', () => {
+    // the argument t shares the integral's bound name, but x is the only free name of the body and x -> t is
+    // what the chain rule substitutes into a partial that no longer reads x
+    const scope = makeScope({ functions: [['F', { params: ['x'], body: integral('t', num(0), num(1), p('x t')) }]] })
+    const d = simplify(diff(call('F', t), 't', scope))
+    expect(JSON.stringify(d)).not.toContain('#')
+    expect(Math.abs(derivativeAt(call('F', t), 't', scope, 3) - 0.5)).toBeLessThan(1e-12)
+    // the same for a sum: g(x) = sum(k = 1 to 3, k x) at the argument k
+    const g = makeScope({ functions: [['g', { params: ['x'], body: sum('k', num(1), num(3), p('k x')) }]] })
+    expect(JSON.stringify(simplify(diff(call('g', k), 'k', g)))).not.toContain('#')
+    expect(derivativeAt(call('g', k), 'k', g, 5)).toBe(6)
   })
 
   it('a replacement that does not mention the bound name leaves the binder as written', () => {

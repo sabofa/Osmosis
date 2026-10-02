@@ -51,11 +51,14 @@ export function substitute(expr: Expr, map: ReadonlyMap<string, Expr>): Expr {
         let body = expr.args[3]
         const inner = new Map(map)
         inner.delete(name)
-        // A replacement that mentions the bound name would be captured: rename
-        // the binder first.
-        const mentions = [...inner.values()].some((e) => varNames(e).has(name))
+        // A replacement for a name that is free in the body, and that mentions
+        // the bound name, would be captured: rename the binder first. (A
+        // replacement for a name the body never reads goes nowhere, so it
+        // captures nothing and the binder keeps the name it was written with.)
+        const free = varNames(body)
+        const mentions = [...inner].some(([key, e]) => free.has(key) && varNames(e).has(name))
         if (mentions) {
-          const taken = new Set<string>([...varNames(body), ...inner.keys(), ...[...inner.values()].flatMap((e) => [...varNames(e)])])
+          const taken = new Set<string>([...free, ...inner.keys(), ...[...inner.values()].flatMap((e) => [...varNames(e)])])
           const fresh = freshName(name, taken)
           body = substitute(body, new Map([[name, { kind: 'var', name: fresh }]]))
           name = fresh

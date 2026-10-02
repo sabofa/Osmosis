@@ -17,9 +17,9 @@
 //
 // A binder (sum, prod, integral) binds its first argument inside its body, in a
 // frame slot of its own; its bounds are outside the binding. A sum or product
-// loops over the whole numbers between its bounds (a bound that is not whole is
-// an error at compile time when it is a literal, NaN at run time when it is
-// read from a parameter); an integral calls math/binders.ts with the integrand
+// loops over the whole numbers between its bounds (a bound that is not whole, or
+// past 2^53, is an error at compile time when it is a literal, NaN at run time
+// when it is read from a parameter); an integral calls math/binders.ts with the integrand
 // as a closure over the same frame. The register program (compileMany) has no
 // loop, so it runs a binder as one extern call into this closure compiler: both
 // paths give the same number.
@@ -525,10 +525,16 @@ function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product:
   const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'index')
   const word = LOOP_WORD[expr.name]
   // Constant bounds are checked now; a bound that reads a parameter is checked
-  // per evaluation, giving NaN.
+  // per evaluation, giving NaN. A bound must be a whole number a float counts
+  // through exactly: at 2^53 the counter's i++ stops changing i, and a loop
+  // there would never end.
   for (const [end, node] of [['lower', lo], ['upper', hi]] as const) {
-    if (node.constant !== undefined && !Number.isInteger(node.constant)) {
+    if (node.constant === undefined) continue
+    if (!Number.isInteger(node.constant)) {
       throw new CompileError(`${word}: the ${end} bound ${node.constant} is not a whole number`, [expr.name])
+    }
+    if (!Number.isSafeInteger(node.constant)) {
+      throw new CompileError(`${word}: the ${end} bound ${node.constant} is past ±${Number.MAX_SAFE_INTEGER}, the largest whole number counted exactly`, [expr.name])
     }
   }
   if (lo.constant !== undefined && hi.constant !== undefined && hi.constant - lo.constant + 1 > MAX_TERMS) {
@@ -537,7 +543,7 @@ function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product:
   return (f) => {
     const a = lo(f)
     const b = hi(f)
-    if (!Number.isInteger(a) || !Number.isInteger(b) || b - a + 1 > MAX_TERMS) return Number.NaN
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || b - a + 1 > MAX_TERMS) return Number.NaN
     let acc = product ? 1 : 0
     for (let i = a; i <= b; i++) {
       f[slot] = i

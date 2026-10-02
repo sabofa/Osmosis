@@ -393,7 +393,7 @@ function differentiateReserved(expr: Expr & { kind: 'call' }, v: string, scope: 
     case '__sum': {
       const { binder, lo, hi, body } = openBinder(expr, scope)
       if (dependsOn(lo, v, scope) || dependsOn(hi, v, scope)) {
-        throw new DerivativeRefusal(`No derivative rule for a sum whose bounds depend on "${v}"`, ['__sum'])
+        throw new DerivativeRefusal('No derivative rule for a sum whose bounds depend on the variable', ['__sum'])
       }
       if (binder.name === v) return ZERO
       return call('__sum', binder, lo, hi, differentiate(body, v, scope, ctx))
