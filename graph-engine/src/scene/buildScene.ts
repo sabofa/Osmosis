@@ -276,8 +276,9 @@ function buildFeaturePoints(
     try {
       f = compileScalar(statement.body, ['x'], scope)
       // A statement whose if clause does not compile draws nothing, so it
-      // marks nothing either.
-      if (statement.where) compileScalar(statement.where, ['x'], scope)
+      // marks nothing either: domainTest compiles whichever shape of clause the
+      // statement has, the old condition (x < k) or the new where.
+      domainTest(statement, scope)
     } catch {
       // reported by the statement itself
       continue

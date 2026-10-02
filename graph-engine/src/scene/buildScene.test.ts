@@ -878,19 +878,35 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     expect(line.points[1].y).toBeCloseTo(1 + 2 * (10 - 1), 4)
   })
 
-  it('a statement that does not compile feeds no feature points, whether its body or its if clause is the fault', () => {
+  it('a statement that does not compile feeds no feature points: its body, its new-shape if clause, or its old-shape one', () => {
     // y = 2 - x alone has a root at (2, 0) and a y-intercept at (0, 2). The
     // broken line would add a root and a y-intercept at the origin and an
     // intersection at (1, 1) if it were still used.
     const baseline = sceneOf('@points: roots, intersections\ny = 2 - x')
     const baselineKinds = baseline.objects.flatMap((o) => (o.kind === 'point' && o.feature ? [o.feature] : [])).sort()
     expect(baselineKinds).toEqual(['x-intercept', 'y-intercept'])
-    for (const broken of ['y = x if y > 0', 'y = sinn(x)']) {
+    const cases: [string, string][] = [
+      // the new shape: a condition on the dependent variable
+      ['y = x if y > 0', 'Unknown variable "y"'],
+      // the body
+      ['y = sinn(x)', 'Unknown function "sinn"'],
+      // the old shape (x < c): an unknown name in the bound, which would otherwise mark (1, 0) and (0, -1)
+      ['y = x - 1 if x < k', 'Unknown variable "k"'],
+      ['y = x - 1 if 0 <= x < k', 'Unknown variable "k"'],
+    ]
+    for (const [broken, message] of cases) {
       const scene = sceneOf(`@points: roots, intersections\n${broken}\ny = 2 - x`)
-      expect(scene.errors, broken).toEqual([expect.objectContaining({ line: 2 })])
+      expect(scene.errors, broken).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining(message) })])
       const kinds = scene.objects.flatMap((o) => (o.kind === 'point' && o.feature ? [o.feature] : [])).sort()
       expect(kinds, broken).toEqual(baselineKinds)
     }
+  })
+
+  it('a statement whose old-shape if clause compiles still feeds its feature points', () => {
+    // y = x - 1 if x < 5 is defined where it is read: its root (1, 0) is marked
+    const scene = sceneOf('@points: roots\ny = x - 1 if x < 5')
+    expect(scene.errors).toEqual([])
+    expect(scene.objects.filter((o) => o.kind === 'point' && o.feature === 'x-intercept')).toHaveLength(1)
   })
 
   it('a definition clash is reported on its own line', () => {
