@@ -712,6 +712,14 @@ outlines and identities, and vocabulary draws only through those.
 - **Branch and worktree:** `milestone-a/calc` in
   `.claude/worktrees/milestone-a-calc`, from `milestone-a/main` at `d1a8ef4`.
   It merges into `milestone-a/main` only on Ben's go-ahead.
+- **The 3D engines are off-limits (Ben, 2026-10-01: "do not touch the 3d
+  engines, they are being worked on").** This track edits nothing under
+  `space/` or `figure/`, nor `scene/buildScene3d.ts` or
+  `render/SceneRenderer3D.ts`. It may import from them unchanged (space's
+  parameter panel, its rational-π `TickStep`). Wherever this spec says a
+  change is made "with space's agreement" — the two-ratio `@aspect`, the
+  parameter panel's home — the change is requested of the session that owns
+  the file and made there, never here.
 - **Files shared with the other sides** — edit additively and keep Track 4's
   code in its own modules: `parser/parseStatement.ts`, `parser/types.ts`,
   `parser/config.ts`, `parser/parseConfig.ts`, `parser/tokenize.ts`,
