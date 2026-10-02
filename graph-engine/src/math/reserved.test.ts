@@ -15,10 +15,19 @@ function fn(params: string[], body: string): MathFunction {
   return { params, body: p(body) }
 }
 
-function both(expr: Expr, at: number, scope = makeScope()): number {
-  const closure = compileScalar(expr, ['x'], scope)(at)
-  const program = compileMany([expr], ['x'], scope)(one, at)[0]
+function both(expr: Expr, at: number, scope = makeScope(), v = 'x'): number {
+  const closure = compileScalar(expr, [v], scope)(at)
+  const program = compileMany([expr], [v], scope)(one, at)[0]
   expect(Object.is(program, closure), `compileMany ${program} vs compileScalar ${closure} at ${at}`).toBe(true)
+  return closure
+}
+
+// d/dv of expr at `at`, on both compile paths.
+function derivativeAt(expr: Expr, v: string, scope: MathScope, at: number): number {
+  const d = simplify(diff(expr, v, scope))
+  const closure = compileScalar(d, [v], scope)(at)
+  const program = compileMany([d], [v], scope)(one, at)[0]
+  expect(Object.is(program, closure), `compileMany ${program} vs compileScalar ${closure}`).toBe(true)
   return closure
 }
 
@@ -376,15 +385,6 @@ describe('a document name that is also a built-in', () => {
 // body's variables, and a call name is not a variable, so the body is first
 // rewritten to say the product outright.
 describe('a function that multiplies by its own parameter', () => {
-  // d/dv of expr at `at`, on both compile paths.
-  function derivativeAt(expr: Expr, v: string, scope: MathScope, at: number): number {
-    const d = simplify(diff(expr, v, scope))
-    const closure = compileScalar(d, [v], scope)(at)
-    const program = compileMany([d], [v], scope)(one, at)[0]
-    expect(Object.is(program, closure), `compileMany ${program} vs compileScalar ${closure}`).toBe(true)
-    return closure
-  }
-
   it("a @param of the same name does not take the parameter's place", () => {
     const scope = makeScope({ params: [['a', 10]], functions: [['f', fn(['a'], 'a(a + 1)')]] })
     expect(both(p('f(x)'), 2, scope)).toBe(6)
@@ -427,7 +427,7 @@ describe('a function that multiplies by its own parameter', () => {
     expect(direct(1.5)).toBeCloseTo(second(1.5), 12)
   })
 
-  it("the rewrite follows compile's lookup order, and respects a binder", () => {
+  it("the rewrite follows compile's lookup order, and reaches into a binder", () => {
     const scope = makeScope({ functions: [['g', fn(['t'], 't')], ['k', fn([], '5')]] })
     const a = variable('a')
     const two = num(2)
@@ -445,9 +445,12 @@ describe('a function that multiplies by its own parameter', () => {
     expect(rewrite(call('__not', two), ['__not'])).toEqual(call('__not', two))
     // __prime's first argument names a function, never a call to rewrite
     expect(rewrite(prime('a', 1, [call('a', two)]), ['a'])).toEqual(prime('a', 1, [{ kind: 'binary', op: '*', left: a, right: two }]))
-    // a binder's bound name shadows the parameter inside its body, not in its bounds
+    // a binder's bound name equal to a parameter changes nothing: substitute does not know binders, so
+    // the call is a product there too (the variable then reads the innermost binding, as compile's does)
     const bound = sum('a', num(1), call('a', num(3)), call('a', a))
-    expect(rewrite(bound, ['a'])).toEqual(sum('a', num(1), { kind: 'binary', op: '*', left: a, right: num(3) }, call('a', a)))
+    expect(rewrite(bound, ['a'])).toEqual(sum('a', num(1), mul(a, num(3)), mul(a, a)))
+    // and the binder's own name argument is never rewritten
+    expect(rewrite(sum('k', num(1), num(3), call('k', variable('k'))), ['a'])).toEqual(sum('k', num(1), num(3), call('k', variable('k'))))
   })
 })
 
@@ -464,5 +467,44 @@ describe('a reserved call whose first argument names nothing is a CompileError',
     } catch (err) {
       expect((err as CompileError).names).toEqual(['__prime'])
     }
+  })
+})
+
+// f', f'', ... are bodies over a fresh name for the function's parameter, not the
+// parameter's own name: a document @param or constant of that name, read from
+// inside the derivative (through a constant, or through a call a prime expanded),
+// is the document's value, not the variable being differentiated.
+describe("f', f'' keep the function's parameter apart from a document name equal to it", () => {
+  const u = variable('u')
+
+  it("@param x = 10, c = x, f(x) = x c: f(2) = 20, d/dt f(t) = 10 and f'(2) = 10", () => {
+    const scope = makeScope({ params: [['x', 10]], functions: [['c', fn([], 'x')], ['f', fn(['x'], 'x * c')]] })
+    expect(both(p('f(u)'), 2, scope, 'u')).toBe(20)
+    expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBe(10)
+    expect(both(prime('f', 1, [u]), 2, scope, 'u')).toBe(10)
+  })
+
+  it("f(x) = x x c: f'(2) = 2 c x = 40, f''(2) = 2 c = 20, also as d/du f'(u)", () => {
+    const scope = makeScope({ params: [['x', 10]], functions: [['c', fn([], 'x')], ['f', fn(['x'], 'x * x * c')]] })
+    expect(both(prime('f', 1, [u]), 2, scope, 'u')).toBe(40)
+    expect(both(prime('f', 2, [u]), 2, scope, 'u')).toBe(20)
+    expect(derivativeAt(prime('f', 1, [variable('t')]), 't', scope, 2)).toBe(20)
+    expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBe(40)
+  })
+
+  it("h(t) = sin(t) x(t) reads the document's x = 10; f(x) = h'(x): f'(2) = 20 cos 2 - 20 sin 2, f''(2) = -30 sin 2 - 20 cos 2", () => {
+    // h = 10 t sin t, f(x) = h'(x) = 10 sin x + 10 x cos x
+    const scope = makeScope({
+      params: [['x', 10]],
+      functions: [
+        ['h', fn(['t'], 'sin(t) * x(t)')],
+        ['f', { params: ['x'], body: prime('h', 1, [variable('x')]) }],
+      ],
+    })
+    expect(both(p('f(u)'), 2, scope, 'u')).toBeCloseTo(10 * Math.sin(2) + 20 * Math.cos(2), 12)
+    expect(both(prime('f', 1, [u]), 2, scope, 'u')).toBeCloseTo(20 * Math.cos(2) - 20 * Math.sin(2), 12)
+    expect(both(prime('f', 2, [u]), 2, scope, 'u')).toBeCloseTo(-30 * Math.sin(2) - 20 * Math.cos(2), 12)
+    expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBeCloseTo(20 * Math.cos(2) - 20 * Math.sin(2), 12)
+    expect(derivativeAt(prime('f', 1, [variable('t')]), 't', scope, 2)).toBeCloseTo(-30 * Math.sin(2) - 20 * Math.cos(2), 12)
   })
 })

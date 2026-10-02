@@ -1,10 +1,15 @@
 // f'(x), f''(x), … (calc P1): the k-th derivative of a one-variable user
-// function, as an expression over the function's own parameter, computed once
-// per (scope, function, order) by symbolic diff and simplify.
+// function, as an expression over a fresh name for the function's parameter,
+// computed once per (scope, function, order) by symbolic diff and simplify.
+//
+// The parameter is renamed to a fresh name ("#f.x", as diff's partials do; '#'
+// never reaches an Expr from text) before differentiating. Differentiating in
+// the parameter's own name would treat a document @param or constant of that
+// name, read from inside the body or from a call a prime expanded, as the
+// variable. Whoever uses the result substitutes the argument for the fresh name.
 
 import type { Expr } from '../parser/types'
-import { paramCallsAsProducts } from './compile'
-import { diff } from './diff'
+import { diff, freshBody } from './diff'
 import { CompileError } from './errors'
 import { substitute } from './expr'
 import { MAX_PRIME_ORDER, nameArgument } from './reserved'
@@ -39,6 +44,12 @@ export function primeFunction(expr: Expr & { kind: 'call' }, scope: MathScope): 
   return { name, fn, order: orderArg.value }
 }
 
+// The fresh name f's parameter takes inside f's derivative bodies.
+export function primeParameter(name: string, fn: MathFunction): string {
+  return `#${name}.${fn.params[0]}`
+}
+
+// f^(k)'s body, over primeParameter(name, fn).
 export function derivativeBody(name: string, fn: MathFunction, order: number, scope: MathScope): Expr {
   let cache = CACHE.get(scope)
   if (!cache) {
@@ -56,10 +67,12 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
   if (computing.has(key)) throw new CompileError(`"${name}" is defined in terms of its own derivative`, [name])
   computing.add(key)
   try {
-    // The body says its parameter's products outright, so that substituting an
-    // argument for the parameter (expandPrime) cannot leave a call named by it.
-    const below = order === 1 ? paramCallsAsProducts(fn.body as Expr, fn.params, scope) : derivativeBody(name, fn, order - 1, scope)
-    const result = simplify(diff(below, fn.params[0], scope))
+    // Order 1 starts from the body over the fresh name, with the parameter's
+    // products said outright (freshBody); every higher order builds on the one
+    // below it, which is over the same fresh name.
+    const fresh = primeParameter(name, fn)
+    const below = order === 1 ? freshBody(fn, [fresh], scope) : derivativeBody(name, fn, order - 1, scope)
+    const result = simplify(diff(below, fresh, scope))
     cache.set(key, result)
     return result
   } finally {
@@ -67,8 +80,13 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
   }
 }
 
+// f^(k) as a one-parameter function, for the inline paths of both compilers.
+export function derivativeFunction(name: string, fn: MathFunction, order: number, scope: MathScope): MathFunction {
+  return { params: [primeParameter(name, fn)], body: derivativeBody(name, fn, order, scope) }
+}
+
 // __prime(f, k, a) written out: f^(k)'s body with its parameter replaced by a.
 export function expandPrime(expr: Expr & { kind: 'call' }, scope: MathScope): Expr {
   const { name, fn, order } = primeFunction(expr, scope)
-  return substitute(derivativeBody(name, fn, order, scope), new Map([[fn.params[0], expr.args[2]]]))
+  return substitute(derivativeBody(name, fn, order, scope), new Map([[primeParameter(name, fn), expr.args[2]]]))
 }

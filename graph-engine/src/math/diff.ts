@@ -101,7 +101,7 @@ const PARTIALS = new WeakMap<MathScope, Map<string, (Expr | DerivativeRefusal)[]
 // (a(a + 1)) is first written as the product it is inside the body, since
 // substitute leaves call names alone and the call would later resolve to the
 // document's value of that name.
-function freshBody(fn: MathFunction, fresh: readonly string[], scope: MathScope): Expr {
+export function freshBody(fn: MathFunction, fresh: readonly string[], scope: MathScope): Expr {
   const body = paramCallsAsProducts(fn.body as Expr, fn.params, scope)
   return substitute(body, new Map(fn.params.map((param, i) => [param, variable(fresh[i])])))
 }

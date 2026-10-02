@@ -25,7 +25,7 @@
 import type { Expr } from '../parser/types'
 import { CompileError } from './errors'
 import { mul, variable } from './expr'
-import { derivativeBody, primeFunction } from './prime'
+import { derivativeFunction, primeFunction } from './prime'
 import { oddRootExponent, realOddPow } from './rational'
 import { andValue, BINDERS, comparisonOp, compareValue, isReserved, notValue, orValue, pick } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
@@ -464,28 +464,26 @@ function namesValue(name: string, env: Env, ctx: Ctx): boolean {
 // body's variables, and a call name is not a variable, so they first say the
 // product outright with this, or the call would later resolve to the document's
 // value (or to nothing). A reserved name, a built-in (shadowed by the document
-// or not) and a user function of one or more parameters stay calls. A binder's
-// bound name shadows the parameter in its body, not in its bounds; __prime's
-// first argument names a function and is left alone.
+// or not) and a user function of one or more parameters stay calls. __prime's
+// first argument and a binder's name argument name a function and a bound
+// variable, and are left alone. A binder whose bound name equals a parameter
+// changes nothing: substitute does not know binders, so a call left there would
+// be stranded once the parameter is renamed, and the product's variable reads
+// the innermost binding anyway, as compile's namesValue does.
 export function paramCallsAsProducts(expr: Expr, params: readonly string[], scope: MathScope): Expr {
-  const rewrite = (e: Expr, names: ReadonlySet<string>): Expr => {
+  const names: ReadonlySet<string> = new Set(params)
+  const rewrite = (e: Expr): Expr => {
     switch (e.kind) {
       case 'num':
       case 'var':
         return e
       case 'unary':
-        return { kind: 'unary', op: '-', arg: rewrite(e.arg, names) }
+        return { kind: 'unary', op: '-', arg: rewrite(e.arg) }
       case 'binary':
-        return { kind: 'binary', op: e.op, left: rewrite(e.left, names), right: rewrite(e.right, names) }
+        return { kind: 'binary', op: e.op, left: rewrite(e.left), right: rewrite(e.right) }
       case 'call': {
         const { name } = e
-        const first = e.args[0]
-        // A binder's body is its last (fourth) argument; its bounds are outside it.
-        const inner = BINDERS.has(name) && first?.kind === 'var' ? new Set([...names].filter((n) => n !== first.name)) : names
-        const args = e.args.map((arg, i) => {
-          if (i === 0 && (name === '__prime' || BINDERS.has(name))) return arg
-          return rewrite(arg, i === 3 && BINDERS.has(name) ? inner : names)
-        })
+        const args = e.args.map((arg, i) => (i === 0 && (name === '__prime' || BINDERS.has(name)) ? arg : rewrite(arg)))
         if (args.length === 1 && names.has(name) && !isReserved(name) && !BUILTINS.has(name)) {
           const fn = scope.functions.get(name)
           if (!(fn && fn.params.length > 0)) return mul(variable(name), args[0])
@@ -494,7 +492,7 @@ export function paramCallsAsProducts(expr: Expr, params: readonly string[], scop
       }
     }
   }
-  return rewrite(expr, new Set(params))
+  return rewrite(expr)
 }
 
 function compileReserved(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
@@ -541,8 +539,7 @@ function compileReserved(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Nod
     }
     case '__prime': {
       const { name: fnName, fn, order } = primeFunction(expr, ctx.scope)
-      const body = derivativeBody(fnName, fn, order, ctx.scope)
-      return inlineBody(fnName, { params: fn.params, body }, [compileNode(expr.args[2], env, ctx)], ctx)
+      return inlineBody(fnName, derivativeFunction(fnName, fn, order, ctx.scope), [compileNode(expr.args[2], env, ctx)], ctx)
     }
   }
   throw new CompileError(`"${name}" is reserved and not supported here`, [name])
@@ -926,8 +923,7 @@ function programReserved(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<strin
     }
     case '__prime': {
       const { name: fnName, fn, order } = primeFunction(expr, ctx.scope)
-      const body = derivativeBody(fnName, fn, order, ctx.scope)
-      return programInline(fnName, { params: fn.params, body }, [programNode(expr.args[2], bound, ctx)], ctx)
+      return programInline(fnName, derivativeFunction(fnName, fn, order, ctx.scope), [programNode(expr.args[2], bound, ctx)], ctx)
     }
   }
   throw new CompileError(`"${name}" is reserved and not supported here`, [name])
