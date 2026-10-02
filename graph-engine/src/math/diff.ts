@@ -265,6 +265,29 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       for (let i = 1; i < args.length; i++) sum = add(sum, mul(args[i], d(args[i])))
       return div(sum, expr)
     }
+    case 'cbrt':
+      // d cbrt(a) = a' / (3 cbrt(a)^2)
+      return div(d(a), mul(num(3), pow(call('cbrt', a), TWO)))
+    case 'root': {
+      // root(a, b) = b^(1/a), so d/dv = root(a, b) / (a b) · b' for an index a constant in v.
+      if (dependsOn(a, v, scope)) throw new CompileError(`No derivative rule for "root" when its index depends on "${v}"`, ['root'])
+      return mul(div(expr, mul(a, b)), d(b))
+    }
+    case 'erf':
+      // d erf(a) = (2/√π) e^(-a²) a'
+      return mul(mul(div(TWO, call('sqrt', variable('pi'))), call('exp', neg(pow(a, TWO)))), d(a))
+    case 'erfc':
+      return neg(mul(mul(div(TWO, call('sqrt', variable('pi'))), call('exp', neg(pow(a, TWO)))), d(a)))
+    case 'step':
+      // 0 wherever the step has a derivative, NaN at 0 (0/a is NaN only there).
+      return mul(div(ZERO, a), d(a))
+    case 'gamma':
+    case 'choose':
+    case 'perm':
+      throw new CompileError(`No derivative rule for "${name}": its derivative needs the digamma function, which the kernel does not have yet`, [name])
+    case 'gcd':
+    case 'lcm':
+      throw new CompileError(`No derivative rule for "${name}": it is defined on whole numbers only`, [name])
   }
   throw new CompileError(`No derivative rule for "${name}"`, [name])
 }

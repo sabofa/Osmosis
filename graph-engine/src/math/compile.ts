@@ -20,6 +20,7 @@
 import type { Expr } from '../parser/types'
 import { oddRootExponent, realOddPow } from './rational'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
+import { choose, erf, erfc, gamma, gcd, lcm, perm, root, step } from './special'
 
 // A compile-time refusal. `names` carries the offending name(s): the unknown
 // variable, the function called with the wrong arity, or both ends of a cycle.
@@ -144,6 +145,15 @@ function variadic(pair: (x: number, y: number) => number): Builtin {
   }
 }
 
+// A two-argument built-in that is a plain function of both.
+function binary2(fn: (a: number, b: number) => number): Builtin {
+  return {
+    min: 2,
+    max: 2,
+    make: ([a, b]) => (f) => fn(a(f), b(f)),
+  }
+}
+
 // Rounds half away from zero: round(-2.5) = -3, round(2.5) = 3.
 export function roundHalfAway(v: number): number {
   return v < 0 ? -Math.round(-v) : Math.round(v)
@@ -229,6 +239,17 @@ const BUILTINS: ReadonlyMap<string, Builtin> = new Map<string, Builtin>([
       },
     },
   ],
+  // Special and integer functions (calc P1, math/special.ts).
+  ['gamma', unary(gamma)],
+  ['erf', unary(erf)],
+  ['erfc', unary(erfc)],
+  ['cbrt', unary(Math.cbrt)],
+  ['step', unary(step)],
+  ['choose', binary2(choose)],
+  ['perm', binary2(perm)],
+  ['gcd', binary2(gcd)],
+  ['lcm', binary2(lcm)],
+  ['root', binary2(root)],
 ])
 
 // The built-in function names, for the grammar's name rules.
@@ -571,9 +592,16 @@ const UNARY_TABLE: readonly ((v: number) => number)[] = [
   roundHalfAway,
   Math.sign,
   Math.log10,
+  gamma,
+  erf,
+  erfc,
+  Math.cbrt,
+  step,
 ]
 const UNARY_INDEX: ReadonlyMap<string, number> = new Map(
-  ['sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'floor', 'ceil', 'round', 'sign', 'log10'].map((n, i) => [n, i])
+  ['sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'floor', 'ceil', 'round', 'sign', 'log10', 'gamma', 'erf', 'erfc', 'cbrt', 'step'].map(
+    (n, i) => [n, i]
+  )
 )
 // The table slot of a built-in with no opcode of its own. A built-in that has
 // neither is refused, never silently computed as another (slot 0 is sec).
@@ -583,7 +611,7 @@ function unaryIndex(name: string): number {
   return index
 }
 
-const BINARY_TABLE: readonly ((x: number, y: number) => number)[] = [(x, y) => Math.log(x) / Math.log(y), floorMod]
+const BINARY_TABLE: readonly ((x: number, y: number) => number)[] = [(x, y) => Math.log(x) / Math.log(y), floorMod, choose, perm, gcd, lcm, root]
 
 // Instruction layout: [op, dst, a, b, c].
 const WIDTH = 5
@@ -755,6 +783,16 @@ function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, n
       args.forEach((r, i) => p.copy(first + i, r))
       return p.emit(OP_HYPOTN, first, args.length)
     }
+    case 'choose':
+      return p.emit(OP_CALL2, a, b, 2)
+    case 'perm':
+      return p.emit(OP_CALL2, a, b, 3)
+    case 'gcd':
+      return p.emit(OP_CALL2, a, b, 4)
+    case 'lcm':
+      return p.emit(OP_CALL2, a, b, 5)
+    case 'root':
+      return p.emit(OP_CALL2, a, b, 6)
     default:
       return p.emit(OP_CALL1, a, unaryIndex(name))
   }
