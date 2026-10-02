@@ -79,8 +79,10 @@ describe('space and math import boundaries', () => {
     expect(offenders(grammar, (i) => !allowed(i))).toEqual([])
   })
 
-  it('only space/gl/ touches WebGL', () => {
-    const touching = SPACE.filter((s) => s.file !== SELF && !s.file.startsWith('space/gl/'))
+  // The painter's renderer (space/paint/gl/, spec 2026-10-02 §4) is the one
+  // other WebGL layer: it owns its own context for the paint passes.
+  it('only space/gl/ and space/paint/gl/ touch WebGL', () => {
+    const touching = SPACE.filter((s) => s.file !== SELF && !s.file.startsWith('space/gl/') && !s.file.startsWith('space/paint/gl/'))
       .filter((s) => s.text.includes('WebGL2RenderingContext') || s.text.includes('getContext('))
       .map((s) => s.file)
     expect(touching).toEqual([])
