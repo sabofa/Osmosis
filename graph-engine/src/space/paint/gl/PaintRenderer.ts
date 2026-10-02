@@ -364,6 +364,7 @@ export class PaintRenderer {
           paper,
           cssSize,
           pixelRatio: view.pixelRatio,
+          texture: params.canvas.texture,
           debugRoles: roles,
           depthTest: depth
             ? {

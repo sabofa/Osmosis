@@ -8,7 +8,7 @@ import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
 import { DEPTH_FRAGMENT, DEPTH_VERTEX } from './shaders/depth'
 import { UNDERPAINT_WARP_FRAGMENT, UNDERPAINT_FRAGMENT as UNDERPAINT_PLAIN } from './shaders/underpaint'
 import { RIBBON_SEGMENTS, RIBBON_SUBDIV, STROKE_FRAGMENT, STROKE_VERTEX, TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
-import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
+import { UNDERPAINT_FRAGMENT, UNDERPAINT_TEXTURE_MAX } from './shaders/underpaint'
 import { BRISTLE_REACH, CAP_PAD } from './brush'
 import { DEPTH_SLOPE_CAP, FORM_REACH } from './depthTest'
 
@@ -85,6 +85,10 @@ describe('the stroke shaders (R3)', () => {
 
   it('gate a dry tail by the canvas height texture, so paint skips the weave valleys', () => {
     expect(STROKE_FRAGMENT).toContain('texelFetch(u_paperH')
+    // the paper normalises its height to the same spread whatever the texture, so the gate scales it by the slider, as the underpainting does
+    expect(STROKE_FRAGMENT).toContain('uniform float u_texture;')
+    expect(STROKE_FRAGMENT).toContain('float hg = texelFetch(u_paperH, pc, 0).r * clamp(u_texture, 0.0, 1.5);')
+    expect(UNDERPAINT_TEXTURE_MAX).toBe(1.5)
     expect(STROKE_FRAGMENT).toContain('dep + 0.45 * hg')
     expect(STROKE_FRAGMENT).toContain('sstep(g0 - aa, g1 + aa,')
   })
@@ -118,7 +122,8 @@ describe('the stroke shaders (R3)', () => {
     const f = STROKE_FRAGMENT
     expect(f).toContain('float depthVisible(ivec2 pix, float hw, int role)')
     expect(f).toContain('if (!u_depthTest || v_world < 0.5) return 1.0;')
-    expect(f).toContain('float tol = u_depthBias + sceneSlope(pix) * max(hw, 1.5);')
+    // the half width is CSS px and the slope is per backing px
+    expect(f).toContain('float tol = u_depthBias + sceneSlope(pix) * max(hw * u_pixelRatio, 1.5);')
     // every role, the edge too, is hidden only by a surface in front of it: one-sided
     expect(f).toContain('float seen = 1.0 - sstep(tol, 2.0 * tol, v_zs - zc);')
     expect(f).not.toContain('abs(v_zs - zc)')

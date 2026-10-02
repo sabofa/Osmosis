@@ -35,7 +35,13 @@ export interface PaintFakeGl {
   setReadback(provider: ReadProvider | null): void
 }
 
-export function createPaintFakeGl(options: FakeGlOptions = {}, size = { width: 800, height: 600 }): PaintFakeGl {
+// What the fake reports as its device limits (the real ones vary: a phone's MAX_TEXTURE_SIZE can be 4096, 2048 or less).
+export interface PaintFakeLimits {
+  // MAX_TEXTURE_SIZE (default 4096).
+  maxTextureSize?: number
+}
+
+export function createPaintFakeGl(options: FakeGlOptions = {}, size = { width: 800, height: 600 }, limits: PaintFakeLimits = {}): PaintFakeGl {
   const base = createFakeGl(options)
   const reads: ReadRecord[] = []
   let provider: ReadProvider | null = null
@@ -45,7 +51,7 @@ export function createPaintFakeGl(options: FakeGlOptions = {}, size = { width: 8
       if (typeof prop === 'string') {
         if (prop in PAINT_CONSTANTS) return PAINT_CONSTANTS[prop as keyof typeof PAINT_CONSTANTS]
         if (prop === 'getParameter') {
-          return (name: number) => (name === PAINT_CONSTANTS.MAX_TEXTURE_SIZE ? 4096 : (target.getParameter as (n: number) => unknown)(name))
+          return (name: number) => (name === PAINT_CONSTANTS.MAX_TEXTURE_SIZE ? (limits.maxTextureSize ?? 4096) : (target.getParameter as (n: number) => unknown)(name))
         }
         if (prop === 'readBuffer') {
           return (attachment: number) => {

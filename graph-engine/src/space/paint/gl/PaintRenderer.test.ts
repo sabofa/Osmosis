@@ -229,6 +229,32 @@ describe('the stroke layers', () => {
     expect([slot(0), slot(1), slot(2)]).toEqual([333, 111, 222])
   })
 
+  it('keeps the stroke data texture inside the device’s MAX_TEXTURE_SIZE, and draws the first strokes of a batch that still does not fit', () => {
+    // a device that allows 64 texels: 3 strokes (20 texels each) to a row, 64 rows, 192 strokes at most
+    const paint = createPaintFakeGl({}, { width: 800, height: 600 }, { maxTextureSize: 64 })
+    const renderer = new PaintRenderer(paint.canvas.canvas, { onError: vi.fn() })
+    renderer.setScene(TWO, COLOURS)
+    const sizes = () => paint.fake.calls.filter((c) => c.fn === 'texStorage2D' && c.args[2] === 0x8814).map((c) => [c.args[3], c.args[4]])
+    // 30 strokes fit: 10 rows of 3, allocated with a quarter more rows (13), all within 64
+    renderer.paint(frame(Array(30).fill(BLOCK)), view(), PARAMS, 'none')
+    expect(sizes()).toEqual([[60, 13]])
+    expect(renderer.stats.strokes).toBe(30)
+    // 300 do not: the rows are the limit's (not 25 % more than it), and the first 192 are drawn, in the draw's own instances
+    renderer.paint(frame(Array(300).fill(BLOCK)), view(), PARAMS, 'none')
+    const made = sizes()
+    for (const [w, h] of made) {
+      expect(w).toBeLessThanOrEqual(64)
+      expect(h).toBeLessThanOrEqual(64)
+    }
+    expect(made[made.length - 1]).toEqual([60, 64])
+    expect(renderer.stats.strokes).toBe(192)
+    const draw = timeline(paint).filter((e) => e.kind === 'stroke').pop()!.draw!
+    expect(draw.instances).toBe(192)
+    // the upload is the texture's own size: 60 x 64 texels, not the 100 rows the 300 strokes would want
+    const upload = paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_FLOAT).pop()!
+    expect([upload.args[4], upload.args[5]]).toEqual([60, 64])
+  })
+
   it('uploads identical stroke data for identical input (no time, no randomness)', () => {
     const run = () => {
       const { paint, renderer } = setup()
@@ -491,6 +517,16 @@ describe('debug views', () => {
     expect(light[1]).toBeCloseTo(-Math.SQRT1_2, 6)
     expect(light[2]).toBeCloseTo(Math.SQRT1_2, 6)
   })
+
+  it('passes the canvas texture to every stroke draw, which scales the tooth a dry brush catches', () => {
+    for (const texture of [0.1, 1]) {
+      const { paint, renderer } = setup()
+      renderer.paint(frame([BLOCK, FORM, DAB]), view(), resolvePaintParams({ canvas: { texture } }), 'none')
+      const strokes = timeline(paint).filter((e) => e.kind === 'stroke')
+      expect(strokes.length).toBe(3)
+      for (const s of strokes) expect(s.uniforms.u_texture).toEqual([texture])
+    }
+  })
 })
 
 describe('size and paper', () => {
@@ -636,7 +672,7 @@ describe('a re-projected frame (the orbit): the strokes are put through the new 
     expect(grounds).toEqual([[1], [0]])
   })
 
-  it('tests every stroke draw against the depth: u_depthTest on, with the view direction, eye·direction and a bias of a hundredth of the radius', () => {
+  it('tests every stroke draw against the depth: u_depthTest on, with the view direction, eye·direction and a bias of about a hundredth of the radius (0.012)', () => {
     const { paint, renderer } = scene2()
     renderer.paint(frame([BLOCK, FORM, DAB]), view(), PARAMS, 'none', reproject())
     const strokes = timeline(paint).filter((e) => e.kind === 'stroke')

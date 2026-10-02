@@ -2,7 +2,7 @@ import { memo, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, 
 import { evalCurve, type CurvePoints, type CurveSpec } from '../../graph-engine/src/space/paint/curves'
 import { getParam, type PaintParams, type ParamSpec } from '../../graph-engine/src/space/paint/params'
 import { curveSeries, type Lch } from './paintLabCurve'
-import { addPoint, canRemove, curveX, curveY, MIN_GAP, movePoint, nudgePoint, plotX, plotY, removePoint, type PlotBox, type YRange } from './paintLabCurves'
+import { addPoint, addPointBeside, canRemove, curveX, curveY, MIN_GAP, movePoint, nudgePoint, plotX, plotY, removePoint, type PlotBox, type YRange } from './paintLabCurves'
 import { decimalsFor, getCurve, isToggle, type ParamGroup } from './paintLabParams'
 
 // The panel's parts: one slider row, one curve editor, one collapsible group of
@@ -117,7 +117,7 @@ export interface CurveEditorProps {
 // A curve as a plot: its line (evalCurve, sampled at 100 points), the default
 // for reference, and a handle on every point. Drag a point (an endpoint moves in
 // y only); double-click empty plot to add one, a point to remove it; a focused
-// point takes the arrow keys (Shift for bigger steps) and Delete. Drags reach
+// point takes the arrow keys (Shift for bigger steps), Insert or Enter to add a point beside it, and Delete. Drags reach
 // the params at most once per animation frame, and the pointer is captured.
 const CurveEditor = memo(function CurveEditor({ spec, points, def, onChange, onReset }: CurveEditorProps) {
   const range = useMemo(() => ({ yMin: spec.yMin, yMax: spec.yMax }), [spec])
@@ -202,6 +202,17 @@ const CurveEditor = memo(function CurveEditor({ spec, points, def, onChange, onR
       case 'ArrowRight': apply(nudgePoint(pointsRef.current, index, dx, 0, range)); break
       case 'ArrowUp': apply(nudgePoint(pointsRef.current, index, 0, dy, range)); break
       case 'ArrowDown': apply(nudgePoint(pointsRef.current, index, 0, -dy, range)); break
+      case 'Insert':
+      case 'Enter': {
+        // a point midway to the next one (to the previous one from the last), on the curve where it is
+        const added = addPointBeside(pointsRef.current, index, range)
+        if (added.index >= 0) {
+          apply(added.points)
+          focusAfter.current = added.index
+          setActive(added.index)
+        }
+        break
+      }
       case 'Delete':
       case 'Backspace': removeAt(index); break
       default: return
@@ -245,7 +256,7 @@ const CurveEditor = memo(function CurveEditor({ spec, points, def, onChange, onR
               tabIndex={0}
               role="button"
               aria-roledescription="curve point"
-              aria-label={`Point ${i + 1} of ${points.length}: ${spec.xLabel} ${p[0].toFixed(2)}, ${spec.yLabel} ${p[1].toFixed(3)}. ${end ? 'An endpoint: arrow up and down move it.' : 'Arrow keys move it, Delete removes it.'}`}
+              aria-label={`Point ${i + 1} of ${points.length}: ${spec.xLabel} ${p[0].toFixed(2)}, ${spec.yLabel} ${p[1].toFixed(3)}. ${end ? 'An endpoint: arrow up and down move it, Insert adds a point beside it.' : 'Arrow keys move it, Insert adds a point beside it, Delete removes it.'}`}
               transform={`translate(${plotX(BOX, p[0])} ${plotY(BOX, range, p[1])})`}
               onPointerDown={down(i)}
               onPointerMove={move}
@@ -338,7 +349,7 @@ export function GroupView({ group, params, defaults, open, forceOpen, filter, on
         <div className="pl-group-body" id={bodyId}>
           {!filter && chart}
           {curves.length > 0 && (
-            <p className="pl-hint pl-curve-hint">Drag a point. Double-click empty plot to add one, a point to remove it. Arrow keys nudge a focused point, Delete removes it. The dashed line is the default.</p>
+            <p className="pl-hint pl-curve-hint">Drag a point. Double-click empty plot to add one, a point to remove it. Arrow keys nudge a focused point, Insert or Enter adds one beside it, Delete removes it. The dashed line is the default.</p>
           )}
           {curves.map((spec) => (
             <CurveEditor key={spec.path} spec={spec} points={getCurve(params, spec.path)} def={getCurve(defaults, spec.path)} onChange={onCurve} onReset={onResetCurve} />

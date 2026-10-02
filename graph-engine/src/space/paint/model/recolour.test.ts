@@ -99,9 +99,11 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
   })
 
   it('does not class anything that moves a stroke, or the value plan, as colour-only', () => {
-    for (const path of ['light.azimuth', 'light.intensity', 'light.shadows', 'value.halfLo', 'value.deviation', 'roles.block.width', 'roles.form.length', 'roles.dab.wet', 'edges.stopAt', 'detect.formBand', 'particles.maxPerUnit2', 'particles.dragDensity', 'impasto.strength', 'canvas.tone.0', 'canvas.texture', 'mix.loadCell', 'environment.occlusion', 'seed']) {
+    for (const path of ['light.azimuth', 'light.intensity', 'light.shadows', 'value.halfLo', 'value.deviation', 'roles.block.width', 'roles.form.length', 'roles.dab.wet', 'edges.stopAt', 'detect.formBand', 'particles.maxPerUnit2', 'impasto.strength', 'canvas.tone.0', 'canvas.texture', 'mix.loadCell', 'environment.occlusion', 'seed']) {
       expect(isColourOnlyChange(P, moved(path)), path).toBe(false)
     }
+    // a parameter the model reads and the lab no longer has a slider for (round 2) is still not a colour one
+    expect(isColourOnlyChange(P, setParam(P, 'particles.dragDensity', 0.4))).toBe(false)
     // the curves that shape the value, not the colour
     expect(isColourOnlyChange(P, { ...P, curves: { ...P.curves, lightResponse: [[0, 0], [0.5, 0.7], [1, 1]] } })).toBe(false)
     expect(isColourOnlyChange(P, { ...P, curves: { ...P.curves, value: [[0, 0], [0.5, 0.7], [1, 1]] } })).toBe(false)

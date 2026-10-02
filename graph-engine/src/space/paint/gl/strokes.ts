@@ -85,13 +85,28 @@ export interface StrokeLayout {
   perRow: number
   width: number
   rows: number
+  // How many strokes the texture can hold inside the device's limit: `count` unless that is too many (then the rows
+  // are the limit's, the rows wide as the limit allows, and the strokes beyond are not drawn).
+  capacity: number
 }
 
-// Strokes sit side by side, TEXELS_PER_STROKE texels each, `perRow` to a row.
+// Strokes sit side by side, TEXELS_PER_STROKE texels each, `perRow` to a row: at least 8 to a row (so the width is the
+// same from frame to frame), and no wider than `maxTextureSize` allows; and at most `maxTextureSize` rows.
 export function strokeLayout(count: number, maxTextureSize: number): StrokeLayout {
-  const maxRows = Math.max(1, maxTextureSize)
-  const perRow = Math.max(8, Math.ceil(count / maxRows))
-  return { perRow, width: perRow * TEXELS_PER_STROKE, rows: Math.max(1, Math.ceil(count / perRow)) }
+  const limit = Math.max(1, Math.floor(maxTextureSize))
+  const widest = Math.floor(limit / TEXELS_PER_STROKE)
+  // a device that cannot hold a single stroke's texels in a row draws none
+  if (widest < 1) return { perRow: 1, width: TEXELS_PER_STROKE, rows: 1, capacity: 0 }
+  const perRow = Math.min(widest, Math.max(8, Math.ceil(count / limit)))
+  const rows = Math.min(limit, Math.max(1, Math.ceil(count / perRow)))
+  return { perRow, width: perRow * TEXELS_PER_STROKE, rows, capacity: perRow * rows }
+}
+
+// The plan of the first `n` strokes of `plan` (its order is the layers in order, back to front within a layer).
+export function firstOfPlan(plan: StrokePlan, n: number): StrokePlan {
+  if (n >= plan.count) return plan
+  const count = Math.max(0, n)
+  return { count, order: plan.order.subarray(0, count), layerStart: Int32Array.from(plan.layerStart, (v) => Math.min(v, count)) }
 }
 
 export function srgbEncode(linear: number): number {
@@ -296,6 +311,8 @@ export interface StrokePassInput {
   cssSize: readonly [number, number]
   // Backing px per CSS px: the depth test's reach is in CSS px and the scene's depth in backing px.
   pixelRatio: number
+  // The canvas texture slider (params.canvas.texture): it scales the tooth a dry brush catches.
+  texture: number
   debugRoles: boolean
   // Set for a re-projected frame; left out for a frame made for its own view.
   depthTest?: StrokeDepthTest | null
@@ -325,18 +342,22 @@ export class StrokeRenderer {
     this.res = res
   }
 
-  // Sort, pack and upload the batch. Returns the plan and layout to draw with.
+  // Sort, pack and upload the batch. Returns the plan and layout to draw with. A batch the device's texture limit
+  // cannot hold (MAX_TEXTURE_SIZE) draws its first strokes (the plan's order) and no more: the plan returned is the
+  // one drawn.
   upload(batch: StrokeBatch): { plan: StrokePlan; layout: StrokeLayout } {
     const gl = this.gl
-    const plan = planStrokes(batch)
     const maxSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE))
-    const layout = strokeLayout(plan.count, Number.isFinite(maxSize) && maxSize > 0 ? maxSize : 2048)
+    const limit = Number.isFinite(maxSize) && maxSize > 0 ? maxSize : 2048
+    const whole = planStrokes(batch)
+    const layout = strokeLayout(whole.count, limit)
+    const plan = firstOfPlan(whole, layout.capacity)
     if (plan.count === 0) return { plan, layout }
     if (!this.data || layout.width !== this.dataWidth || layout.rows > this.dataRows) {
       this.res.deleteTexture(this.data)
       // Grow in steps so a batch that varies a little between frames does not
-      // reallocate every frame.
-      const rows = Math.max(layout.rows, Math.ceil(layout.rows * 1.25))
+      // reallocate every frame (never past the device's limit).
+      const rows = Math.min(limit, Math.max(layout.rows, Math.ceil(layout.rows * 1.25)))
       this.data = this.res.texture(gl.RGBA32F, layout.width, rows)
       this.dataWidth = layout.width
       this.dataRows = rows
@@ -429,6 +450,7 @@ export class StrokeRenderer {
       gl.uniform2i(stroke.uniform('u_paperSize'), paper.size, paper.size)
       gl.uniform2f(stroke.uniform('u_resolution'), targets.width, targets.height)
       gl.uniform1f(stroke.uniform('u_pixelRatio'), input.pixelRatio)
+      gl.uniform1f(stroke.uniform('u_texture'), input.texture)
       gl.uniform1f(stroke.uniform('u_heightScale'), targets.heightScale)
       gl.uniform4fv(stroke.uniform('u_roleA'), ROLE_A)
       gl.uniform4fv(stroke.uniform('u_roleB'), ROLE_B)

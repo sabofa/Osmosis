@@ -58,6 +58,7 @@ export function originMatrix(viewProj: ArrayLike<number>, origin: readonly [numb
 }
 
 // How far behind a surface a stroke may lie and still be on it, in view depth: the surface the stroke was walked
-// on is a polyline against the mesh's own facets, and the depth is a float. A hundredth of the scene's radius.
+// on is a polyline against the mesh's own facets, and the depth is a float. About a hundredth of the scene's radius:
+// 0.012 of it.
 export const DEPTH_BIAS_FRACTION = 0.012
 export const depthBias = (radius: number): number => DEPTH_BIAS_FRACTION * Math.max(radius, 1e-6)

@@ -41,33 +41,44 @@ describe('depthVisible: a stroke behind the surface fades, over a tolerance that
   const flat = image(20, 20, () => 10)
 
   it('sees a stroke on the surface, and one in front of it; hides one well behind it', () => {
-    expect(depthVisible(flat, 5, 5, 10, 2, bias)).toBe(1)
-    expect(depthVisible(flat, 5, 5, 7, 2, bias)).toBe(1)
+    expect(depthVisible(flat, 5, 5, 10, 2, bias, 1)).toBe(1)
+    expect(depthVisible(flat, 5, 5, 7, 2, bias, 1)).toBe(1)
     // tolerance 0.1 on flat ground: a stroke 0.2 behind is gone, 0.1 behind is whole, 0.15 is half of the way (smoothstep midpoint)
-    expect(depthVisible(flat, 5, 5, 10.2, 2, bias)).toBe(0)
-    expect(depthVisible(flat, 5, 5, 10.1, 2, bias)).toBe(1)
-    expect(depthVisible(flat, 5, 5, 10.15, 2, bias)).toBeCloseTo(0.5, 12)
+    expect(depthVisible(flat, 5, 5, 10.2, 2, bias, 1)).toBe(0)
+    expect(depthVisible(flat, 5, 5, 10.1, 2, bias, 1)).toBe(1)
+    expect(depthVisible(flat, 5, 5, 10.15, 2, bias, 1)).toBeCloseTo(0.5, 12)
   })
 
   it('widens the tolerance by the slope times the half width (at least 1.5 px): on a 0.05-a-pixel slope a 3 px half width allows 0.1 + 0.15', () => {
     const slope = image(20, 20, (x) => 10 + 0.05 * x)
     // zc at x = 5 is 10.25; the stroke is 0.25 behind it: tol = 0.1 + 0.05 * 3 = 0.25: whole
-    expect(depthVisible(slope, 5, 5, 10.5, 3, bias)).toBe(1)
+    expect(depthVisible(slope, 5, 5, 10.5, 3, bias, 1)).toBe(1)
     // the same stroke with a half width of 1 px (counted as 1.5): tol = 0.1 + 0.075 = 0.175, so 0.25 behind is between tol and 2 tol
-    const v = depthVisible(slope, 5, 5, 10.5, 1, bias)
+    const v = depthVisible(slope, 5, 5, 10.5, 1, bias, 1)
     expect(v).toBeGreaterThan(0)
     expect(v).toBeLessThan(1)
+  })
+
+  it('counts the half width in backing px: at pixel ratio 2 the same stroke allows the slope across twice as many', () => {
+    const slope = image(20, 20, (x) => 10 + 0.05 * x)
+    // zc at x = 5 is 10.25; the stroke is 0.3 behind it, with a half width of 3 CSS px
+    // at ratio 1 the tolerance is 0.1 + 0.05 x 3 = 0.25: 0.3 is past it, a smoothstep of (0.3 - 0.25) / 0.25 = 0.2 of the way out
+    expect(depthVisible(slope, 5, 5, 10.55, 3, bias, 1)).toBeCloseTo(1 - 0.2 * 0.2 * (3 - 2 * 0.2), 12)
+    // at ratio 2 it is 6 backing px: 0.1 + 0.05 x 6 = 0.4, and the stroke is whole
+    expect(depthVisible(slope, 5, 5, 10.55, 3, bias, 2)).toBe(1)
+    // a hair of a stroke (0.3 CSS px) is no narrower than 1.5 backing px, at either ratio
+    expect(depthVisible(slope, 5, 5, 10.55, 0.3, bias, 2)).toBe(depthVisible(slope, 5, 5, 10.55, 0.3, bias, 1))
   })
 
   it('hides a stroke behind a nearer surface of a different object, whatever the slope there', () => {
     // a wall at depth 3 in front of the stroke at depth 10
     const wall = image(20, 20, () => 3)
-    expect(depthVisible(wall, 5, 5, 10, 4, bias)).toBe(0)
+    expect(depthVisible(wall, 5, 5, 10, 4, bias, 1)).toBe(0)
   })
 
   it('treats a stroke over nothing (NO_SURFACE) as in front of it: one-sided, nothing hides it', () => {
     const none = image(20, 20, () => NO_SURFACE)
-    expect(depthVisible(none, 5, 5, 10, 2, bias)).toBe(1)
+    expect(depthVisible(none, 5, 5, 10, 2, bias, 1)).toBe(1)
   })
 })
 
@@ -200,7 +211,7 @@ describe('the edge strokes of a sphere on a table, at the view they were made fo
   // what the shader shows of a sample's centreline: the fragment test at its pixel, and for an edge the form test of its stroke
   const seen = (s: ReturnType<typeof samples>[number], edge: boolean) => {
     const [cx, cy] = glPixel(s.x, s.y, W, H, W, H)
-    const fragment = depthVisible(scenery, Math.floor(cx), Math.floor(cy), s.vz, s.hw, bias)
+    const fragment = depthVisible(scenery, Math.floor(cx), Math.floor(cy), s.vz, s.hw, bias, 1)
     return edge ? fragment * form(s.i) : fragment
   }
 
@@ -232,7 +243,7 @@ describe('the edge strokes of a sphere on a table, at the view they were made fo
         const [cx, cy] = glPixel(s.x + s.nx * s.hw * side, s.y + s.ny * s.hw * side, W, H, W, H)
         if (cx < 0 || cy < 0 || cx >= W || cy >= H) continue
         n++
-        if (depthVisible(scenery, Math.floor(cx), Math.floor(cy), s.vz, s.hw, bias) < 0.5) hidden++
+        if (depthVisible(scenery, Math.floor(cx), Math.floor(cy), s.vz, s.hw, bias, 1) < 0.5) hidden++
       }
     }
     expect(n).toBeGreaterThan(800)
@@ -268,7 +279,7 @@ describe('the edge strokes of a sphere on a table, at the view they were made fo
           if (x < 0 || y < 0 || x >= W || y >= H) continue
           const [cx, cy] = glPixel(x, y, W, H, W, H)
           n++
-          if (depthVisible(depthNow, Math.floor(cx), Math.floor(cy), depths[q], Math.max(turned.width[PATH_POINTS * i + q] * 0.5, 0.6), bias) * form < 0.5) hidden++
+          if (depthVisible(depthNow, Math.floor(cx), Math.floor(cy), depths[q], Math.max(turned.width[PATH_POINTS * i + q] * 0.5, 0.6), bias, 1) * form < 0.5) hidden++
         }
       }
       expect(n, `turn ${turn}`).toBeGreaterThan(550)

@@ -27,7 +27,8 @@
 //
 // What a frame costs depends on what changed:
 //   full    the G-buffer and the whole model;
-//   reproject the camera moved and nothing else did: the last full frame's strokes through the new view
+//   reproject the camera moved (and nothing else did, unless the pointer is dragging it: then whatever else changed
+//           waits for the release): the last full frame's strokes through the new view
 //           (graph-engine/src/space/paint/reproject.ts), painted again; no G-buffer and no model.
 //   repaint only renderer parameters changed (the relief, the canvas's texture or weave: classifyChange),
 //           and the view did not: the strokes are the last frame's, painted again, with no G-buffer
@@ -53,9 +54,11 @@
 //    (so a WebGL canvas can be copied without preserveDrawingBuffer). It returns
 //    when the tile is copied. The engine sizes its own canvas for it. The
 //    Showcase has ONE engine and canvas for all its tiles and calls setScene for
-//    each figure in turn, so what the engine keeps per scene (its scene and
-//    particles in the session, its GPU upload) is keyed by the scene, and
-//    alternating between figures redoes none of it.
+//    each figure in turn. What the model keeps per scene (the scene, its colours
+//    and its particles, in the session) is keyed by the scene, so alternating
+//    between figures builds none of that again. The renderer's GPU upload is not:
+//    it holds ONE scene's meshes, and a tile of another figure uploads its own
+//    (buffers only, small beside the model's work).
 //  - dispose frees everything the engine made.
 
 import { PaintRenderer } from '../../graph-engine/src/space/paint/gl/PaintRenderer'

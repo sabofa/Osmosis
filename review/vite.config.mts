@@ -14,8 +14,10 @@ const here = fileURLToPath(new URL('.', import.meta.url))
 // params to graph-engine/src/space/paint/tuning.json, which M2 reads as the
 // shipping defaults. Dev server only (apply: 'serve'), a fixed path, and a body
 // that must be a JSON object of painter params (paintLabTuning.ts validates and
-// formats it). It asks for application/json, which a cross-site form cannot
-// send without a CORS preflight this server never grants.
+// formats it). A request is first checked by refuseTuningRequest (method, the
+// browser's Sec-Fetch-Site, the Origin against this server's own host and port,
+// the exact media type): a page on another site cannot make the browser write
+// the file.
 const TUNING_FILE = fileURLToPath(new URL('../graph-engine/src/space/paint/tuning.json', import.meta.url))
 const TUNING_BODY_LIMIT = 1_000_000
 const posix = (path: string) => path.replaceAll('\\', '/')
@@ -28,16 +30,24 @@ function paintTuning(): Plugin {
     name: 'osmosis-paint-tuning',
     apply: 'serve',
     configureServer(server) {
-      server.middlewares.use('/__paint/tuning', (req, res) => {
+      server.middlewares.use('/__paint/tuning', async (req, res) => {
         const reply = (status: number, body: unknown, headers: Record<string, string> = {}) => {
           res.statusCode = status
           res.setHeader('Content-Type', 'application/json')
           for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
           res.end(JSON.stringify(body))
         }
-        if (req.method !== 'POST') return reply(405, { ok: false, error: 'POST the params as JSON.' }, { Allow: 'POST' })
-        if (!String(req.headers['content-type'] ?? '').includes('application/json')) {
-          return reply(415, { ok: false, error: 'Send Content-Type: application/json.' })
+        let tuning: TuningModule
+        try {
+          tuning = (await server.ssrLoadModule('/src/paintLabTuning.ts')) as TuningModule
+        } catch (error) {
+          req.resume()
+          return reply(500, { ok: false, error: `The tuning handler failed to load: ${error instanceof Error ? error.message : String(error)}` })
+        }
+        const refusal = tuning.refuseTuningRequest(req.method, req.headers)
+        if (refusal) {
+          req.resume()
+          return reply(refusal.status, refusal.body, refusal.headers)
         }
         const chunks: Buffer[] = []
         let size = 0
@@ -54,8 +64,7 @@ function paintTuning(): Plugin {
         req.on('end', async () => {
           if (refused) return
           try {
-            const { handleTuningPost } = (await server.ssrLoadModule('/src/paintLabTuning.ts')) as TuningModule
-            const result = handleTuningPost(Buffer.concat(chunks).toString('utf8'), (text) => writeFileSync(TUNING_FILE, text, 'utf8'))
+            const result = tuning.handleTuningPost(Buffer.concat(chunks).toString('utf8'), (text) => writeFileSync(TUNING_FILE, text, 'utf8'))
             reply(result.status, result.body)
           } catch (error) {
             reply(500, { ok: false, error: `The tuning handler failed: ${error instanceof Error ? error.message : String(error)}` })

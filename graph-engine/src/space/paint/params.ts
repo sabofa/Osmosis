@@ -181,6 +181,10 @@ export interface PaintParams {
     targetPer10kPx: number
     fadeLo: number
     fadeHi: number
+    // The share of the strokes drawn in a frame made while the camera is dragged. It has no slider (round 2): the lab
+    // no longer makes frames while dragging, it re-projects the last frame's strokes (nothing is thinned), so the
+    // slider moved nothing. The model still reads it for a frame made for a dragged view (the debug views, which the
+    // lab runs on every drag frame), and the field stays so that a preset saved with it resolves to it.
     dragDensity: number
     // Zoomed in, the particles (capped by maxPerUnit2) fall short of the screen target, and the strokes
     // grow by min(sqrt(target / available), zoomGrowMax) so they still overlap and cover the form.
@@ -395,7 +399,6 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'particles.targetPer10kPx', label: 'Target per 10k px²', group: 'Particles', min: 10, max: 300, step: 1 },
   { path: 'particles.fadeLo', label: 'Fade |n·v| from', group: 'Particles', min: 0, max: 1, step: 0.01 },
   { path: 'particles.fadeHi', label: 'Fade |n·v| to', group: 'Particles', min: 0, max: 1, step: 0.01 },
-  { path: 'particles.dragDensity', label: 'Density while dragging', group: 'Particles', min: 0.1, max: 1, step: 0.01 },
   { path: 'particles.zoomGrowMax', label: 'Zoom growth max (x)', group: 'Particles', min: 1, max: 6, step: 0.1 },
   { path: 'particles.zoomStrokeScale', label: 'Stroke size follows zoom', group: 'Particles', min: 0, max: 1, step: 0.01 },
   { path: 'particles.zoomBigMax', label: 'Zoom size cap, both together (x)', group: 'Particles', min: 1, max: 8, step: 0.1 },

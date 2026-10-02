@@ -54,11 +54,12 @@ export function sceneSlope(depth: SceneDepthImage, x: number, y: number, bias: n
 }
 
 // How much of a stroke is seen at pixel (x, y), whose view depth there is `vz` and half width `hw` CSS px: 1 in front
-// of or on the surface, 0 well behind it. The tolerance is the bias plus the slope across the half width, because the
-// stroke's depth is its centreline's and its edges lie on a tilted surface at other depths.
-export function depthVisible(depth: SceneDepthImage, x: number, y: number, vz: number, hw: number, bias: number): number {
+// of or on the surface, 0 well behind it. The tolerance is the bias plus the slope (per backing px) across the half
+// width in backing px (at least 1.5), because the stroke's depth is its centreline's and its edges lie on a tilted
+// surface at other depths.
+export function depthVisible(depth: SceneDepthImage, x: number, y: number, vz: number, hw: number, bias: number, pixelRatio: number): number {
   const slope = sceneSlope(depth, x, y, bias)
-  const tol = bias + slope * Math.max(hw, 1.5)
+  const tol = bias + slope * Math.max(hw * pixelRatio, 1.5)
   return 1 - sstep(tol, 2 * tol, vz - texel(depth, x, y))
 }
 

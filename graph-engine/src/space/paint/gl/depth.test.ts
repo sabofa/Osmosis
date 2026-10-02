@@ -26,7 +26,7 @@ describe('the depth pass helpers', () => {
     expect(apply(m, [0, 0.5, 0])[1]).toBe(0.5)
   })
 
-  it('has a bias of a hundredth of the scene radius, and a no-surface depth far past any scene', () => {
+  it('has a bias of about a hundredth of the scene radius (0.012), and a no-surface depth far past any scene', () => {
     expect(DEPTH_BIAS_FRACTION).toBe(0.012)
     expect(depthBias(2)).toBeCloseTo(0.024, 12)
     expect(depthBias(0)).toBeGreaterThan(0)

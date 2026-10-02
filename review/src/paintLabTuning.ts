@@ -11,6 +11,54 @@ import { sanitiseParams } from './paintLabParams'
 // Repo-relative, for the reply (the middleware knows the absolute path).
 export const TUNING_PATH = 'graph-engine/src/space/paint/tuning.json'
 
+// What the dev middleware checks of a request to /__paint/tuning before it reads the body: the pure core of
+// review/vite.config.mts. The endpoint rewrites a file in the repo, so a page on another site must not be able to
+// make the person's browser POST to it (the dev server is on localhost, and a browser will send a form or a
+// no-cors fetch there from anywhere):
+//   - the method is POST;
+//   - the request is not marked cross-site by the browser (Sec-Fetch-Site), and when it names its Origin that is
+//     this server's own host and port (a page on another port of localhost is another origin, and so is "null",
+//     which a sandboxed frame or a data: page sends);
+//   - the body is declared as JSON, exactly: the media type application/json, with at most a UTF-8 charset (a
+//     substring match let "text/plain; x=application/json" through, and text/plain is what a cross-site form can send).
+// A request with no Origin and no Sec-Fetch-Site (curl, a script) is not a browser's page and is let through.
+export interface TuningRefusal {
+  status: 403 | 405 | 415
+  body: { ok: false; error: string }
+  headers?: Record<string, string>
+}
+
+type Headers = Record<string, string | string[] | undefined>
+
+const JSON_TYPE = /^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i
+
+export function refuseTuningRequest(method: string | undefined, headers: Headers): TuningRefusal | null {
+  // a header sent twice is ambiguous: joined, it matches nothing below
+  const one = (name: string): string | undefined => {
+    const v = headers[name]
+    return Array.isArray(v) ? v.join(', ') : v
+  }
+  if (method !== 'POST') return { status: 405, body: { ok: false, error: 'POST the params as JSON.' }, headers: { Allow: 'POST' } }
+  if (one('sec-fetch-site')?.trim().toLowerCase() === 'cross-site') {
+    return { status: 403, body: { ok: false, error: 'This page is not the lab: a request from another site is refused.' } }
+  }
+  const origin = one('origin')
+  if (origin !== undefined) {
+    let own = false
+    try {
+      const host = one('host')
+      own = host !== undefined && new URL(origin).host === host
+    } catch {
+      // not a URL ("null"): not ours
+    }
+    if (!own) return { status: 403, body: { ok: false, error: 'This request comes from another origin than the lab’s own, and is refused.' } }
+  }
+  if (!JSON_TYPE.test((one('content-type') ?? '').trim())) {
+    return { status: 415, body: { ok: false, error: 'Send Content-Type: application/json.' } }
+  }
+  return null
+}
+
 export interface TuningResult {
   status: 200 | 400 | 500
   body: { ok: true; path: string } | { ok: false; error: string }

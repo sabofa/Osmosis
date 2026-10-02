@@ -41,6 +41,7 @@ import { MAX_BRISTLES, PATH_POINTS, ROLES } from '../../types'
 import { BRISTLE_REACH, CAP_PAD, MIN_HALF_WIDTH } from '../brush'
 import { DEPTH_SLOPE_CAP, FORM_REACH } from '../depthTest'
 import { COMMON_GLSL } from './common'
+import { UNDERPAINT_TEXTURE_MAX } from './underpaint'
 
 // Ribbon tessellation: PATH_POINTS - 1 segments, each split RIBBON_SUBDIV
 // times along the Catmull-Rom curve so a curved stroke has no visible kinks.
@@ -243,6 +244,7 @@ flat in vec4 v_p2;
 uniform sampler2D u_prev;    // the layers beneath: premultiplied sRGB colour, coverage
 uniform sampler2D u_paper;   // the canvas, sRGB RGBA8
 uniform sampler2D u_paperH;  // the canvas height, normalised (std 0.2), R32F
+uniform float u_texture;     // the canvas texture slider: the tooth the dry gate reads is the height times it
 uniform ivec2 u_paperSize;
 uniform float u_heightScale; // 1, or 0.5 when the height target is 8 bit
 uniform vec4 u_roleA[8];     // opacity, thin, start boost, wet pickup at the start
@@ -258,8 +260,9 @@ const int ROLE_GLAZE = 3;
 const float START_RAMP = 0.026;
 
 // How much of the stroke is seen at this pixel under the scene's depth: 1 in front of or on the surface, 0 well
-// behind it. The tolerance is the bias plus the surface's slope (sceneSlope) across the stroke's half width, because the
-// stroke's depth is its centreline's and its edges lie on a tilted surface at other depths. Every role is only hidden by
+// behind it. The tolerance is the bias plus the surface's slope (sceneSlope, per backing px) across the stroke's half
+// width in backing px (hw is CSS px), because the stroke's depth is its centreline's and its edges lie on a tilted
+// surface at other depths. Every role is only hidden by
 // a surface in front of it (a veil or a curve may hover over a surface). An edge stroke is a decal, the screen path of
 // a contour lifted onto the surface it followed, each point at its own depth; whether it has LEFT its form is decided
 // once per stroke, at its point nearest the viewer (v_form), and not here: half the fragments of a ribbon on a
@@ -267,7 +270,7 @@ const float START_RAMP = 0.026;
 float depthVisible(ivec2 pix, float hw, int role) {
   if (!u_depthTest || v_world < 0.5) return 1.0;
   float zc = sceneDepthAt(pix);
-  float tol = u_depthBias + sceneSlope(pix) * max(hw, 1.5);
+  float tol = u_depthBias + sceneSlope(pix) * max(hw * u_pixelRatio, 1.5);
   float seen = 1.0 - sstep(tol, 2.0 * tol, v_zs - zc);
   return role == ROLE_EDGE ? seen * v_form : seen;
 }
@@ -376,7 +379,7 @@ void main() {
   vec2 fc = gl_FragCoord.xy;
   ivec2 pix = ivec2(fc);
   ivec2 pc = paperCoord(fc, u_resolution, u_paperSize);
-  float hg = texelFetch(u_paperH, pc, 0).r;
+  float hg = texelFetch(u_paperH, pc, 0).r * clamp(u_texture, 0.0, ${UNDERPAINT_TEXTURE_MAX.toFixed(1)});
   float tail = sstep(1.0 - clamp(dry, 0.1, 1.0), 1.0, t);
   float dryEff = dry * (0.5 + 0.5 * tail);
   float g0 = 0.08 + 0.12 * dryEff;

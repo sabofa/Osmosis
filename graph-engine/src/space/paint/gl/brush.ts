@@ -7,6 +7,7 @@
 // only softens an edge by a pixel and needs a screen. The twin has none, so a gate edge here is the sharp one.
 
 import { MAX_BRISTLES } from '../types'
+import { UNDERPAINT_TEXTURE_MAX } from './shaders/underpaint'
 
 // --- per-role brush constants -------------------------------------------------
 // What the batch does not carry, from the mockup's STYLE table, in ROLES order
@@ -81,6 +82,21 @@ const gauss3 = (a: number, b: number, c: number): number => (a + b + c - 1.5) * 
 
 const ROLE_GLAZE = 3
 
+// The canvas tooth under a fragment as the dry gate reads it: the tile's height, which the paper normalises to a
+// standard deviation of 0.2 whatever the canvas texture (composite.ts), scaled by the texture slider, as the
+// underpainting scales its weave. Without the scale the dry brush catches the same weave at every texture.
+export const toothOf = (height: number, texture: number): number => height * clamp(texture, 0, UNDERPAINT_TEXTURE_MAX)
+
+// What the canvas lets through of a deposit `dep` at arc position t (0..1) of a stroke with this much dry brush: a dry
+// tail catches the tooth's peaks and skips its valleys, and a loaded brush only needs a little paint.
+export function dryGate(dep: number, tooth: number, dry: number, t: number): number {
+  const tail = sstep(1 - clamp(dry, 0.1, 1), 1, t)
+  const dryEff = dry * (0.5 + 0.5 * tail)
+  const g0 = 0.08 + 0.12 * dryEff
+  const g1 = 0.26 + 0.22 * dryEff
+  return dryEff > 0 ? sstep(g0, g1, dep + 0.45 * tooth) : sstep(0.03, 0.12, dep)
+}
+
 // What the shader reads of a stroke: the batch's numbers as packStrokes writes them (the seed already >>> 8).
 export interface BrushStroke {
   role: number
@@ -105,7 +121,7 @@ export interface Deposit {
 
 // The deposit at lateral offset `o` (in half widths, -1..1 across the brush) and arc position `s` (px along the
 // stroke, from the path's start; negative before it) of a stroke `len` px long with half width `hw` px, over canvas
-// tooth `tooth` (the canvas height as the shader reads it: normalised, and scaled by the canvas texture).
+// tooth `tooth` (toothOf: the canvas height as the shader reads it, scaled by the canvas texture).
 export function brushDeposit(stroke: BrushStroke, o: number, s: number, hw: number, len: number, tooth = 0): Deposit {
   const { role, seed } = stroke
   const nB = bristleCount(stroke.bristles)
@@ -167,11 +183,7 @@ export function brushDeposit(stroke: BrushStroke, o: number, s: number, hw: numb
   if (best <= 0) return { dep: 0, gate: 0, alpha: 0 }
 
   // the canvas tooth decides what a dry brush catches
-  const tail = sstep(1 - clamp(stroke.dry, 0.1, 1), 1, t)
-  const dryEff = stroke.dry * (0.5 + 0.5 * tail)
-  const g0 = 0.08 + 0.12 * dryEff
-  const g1 = 0.26 + 0.22 * dryEff
-  const gate = dryEff > 0 ? sstep(g0, g1, best + 0.45 * tooth) : sstep(0.03, 0.12, best)
+  const gate = dryGate(best, tooth, stroke.dry, t)
   const opac = role === ROLE_GLAZE ? Math.min(stroke.alpha, ra[0]) : stroke.alpha * ra[0]
   return { dep: best, gate, alpha: gate * Math.min(opac, opac * (0.42 + 1.6 * best)) }
 }

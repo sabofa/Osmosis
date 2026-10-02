@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type StrokeBatch } from '../types'
-import { packStrokes, planStrokes, ROLE_A, ROLE_B, srgbEncode, srgbEncodeFast, strokeLayout } from './strokes'
+import { firstOfPlan, packStrokes, planStrokes, ROLE_A, ROLE_B, srgbEncode, srgbEncodeFast, strokeLayout } from './strokes'
 import { TEXELS_PER_STROKE } from './shaders/stroke'
 
 // A batch of `n` strokes with the given layers and depths; everything else plain.
@@ -76,7 +76,7 @@ describe('planStrokes: layers in LAYER_ORDER, back to front within a layer', () 
 
 describe('strokeLayout', () => {
   it('puts 8 strokes to a row by default: 20 strokes -> 160 texels wide, 3 rows', () => {
-    expect(strokeLayout(20, 16384)).toEqual({ perRow: 8, width: 8 * TEXELS_PER_STROKE, rows: 3 })
+    expect(strokeLayout(20, 16384)).toEqual({ perRow: 8, width: 8 * TEXELS_PER_STROKE, rows: 3, capacity: 24 })
     // the path, colour, brush, stroke and role texels, and then the world path
     expect(TEXELS_PER_STROKE).toBe(2 * PATH_POINTS + 4)
   })
@@ -86,6 +86,31 @@ describe('strokeLayout', () => {
     expect(l.perRow).toBe(20)
     expect(l.rows).toBe(2000)
     expect(l.rows).toBeLessThanOrEqual(2048)
+    expect(l.capacity).toBeGreaterThanOrEqual(40000)
+  })
+
+  it('never goes past the device’s limit: a row is as many whole strokes as fit (64 texels: 3 strokes of 20), and the rows are at most 64', () => {
+    // 10 strokes fit: 8 a row would be 160 texels, past 64, so 3 to a row, 4 rows
+    expect(strokeLayout(10, 64)).toEqual({ perRow: 3, width: 60, rows: 4, capacity: 12 })
+    // 300 strokes do not fit in 3 x 64: the rows are the limit's, and the capacity is what they hold
+    expect(strokeLayout(300, 64)).toEqual({ perRow: 3, width: 60, rows: 64, capacity: 192 })
+    // a limit that cannot hold a stroke's texels in a row holds none
+    expect(strokeLayout(10, 19).capacity).toBe(0)
+    expect(strokeLayout(10, 20)).toEqual({ perRow: 1, width: 20, rows: 10, capacity: 10 })
+  })
+})
+
+describe('firstOfPlan: the strokes that fit', () => {
+  it('keeps the first n of the plan, layer by layer: 5 strokes in layers {2, 2, 1} cut to 3 leave layers {2, 1, 0}', () => {
+    const plan = planStrokes(batch([0, 0, 1, 1, 2], [5, 1, 7, 3, 2]))
+    expect(Array.from(plan.layerStart.slice(0, 4))).toEqual([0, 2, 4, 5])
+    const cut = firstOfPlan(plan, 3)
+    expect(cut.count).toBe(3)
+    expect(Array.from(cut.order)).toEqual(Array.from(plan.order.slice(0, 3)))
+    expect(Array.from(cut.layerStart.slice(0, 4))).toEqual([0, 2, 3, 3])
+    // nothing to cut: the same plan; nothing to keep: an empty one
+    expect(firstOfPlan(plan, 9)).toBe(plan)
+    expect(firstOfPlan(plan, 0).count).toBe(0)
   })
 })
 

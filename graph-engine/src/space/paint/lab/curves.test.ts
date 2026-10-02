@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CurvePoints } from '../curves'
 import {
-  addPoint, canRemove, curveX, curveY, MIN_GAP, movePoint, nudgePoint, plotX, plotY, removePoint,
+  addPoint, addPointBeside, canRemove, curveX, curveY, MIN_GAP, movePoint, nudgePoint, plotX, plotY, removePoint,
 } from '../../../../../review/src/paintLabCurves'
 
 // The point maths behind the curve editors: pure, so every constraint is a hand
@@ -86,6 +86,66 @@ describe('addPoint', () => {
 
   it('keeps the new point\'s y inside the range', () => {
     expect(addPoint(P(), 0.5, 5, UNIT).points[2]).toEqual([0.5, 1])
+  })
+})
+
+describe('addPointBeside (Insert or Enter on a focused point)', () => {
+  it('puts a point midway to the next one, on the curve: the middle of a straight line stays on it', () => {
+    const line: CurvePoints = [[0, 0], [1, 1]]
+    expect(addPointBeside(line, 0, UNIT)).toEqual({ points: [[0, 0], [0.5, 0.5], [1, 1]], index: 1 })
+    // from an interior point: between 0.3 and 0.7 is 0.5, and it keeps the order
+    const added = addPointBeside(P(), 1, UNIT)
+    expect(added.index).toBe(2)
+    expect(added.points.map((p) => p[0])).toEqual([0, 0.3, 0.5, 0.7, 1])
+    expect(added.points[2][1]).toBeGreaterThan(0.4) // between its neighbours' heights, as the curve is monotone there
+    expect(added.points[2][1]).toBeLessThan(0.6)
+    // the old points are untouched, and it is a new array
+    expect(P()).toEqual([[0, 0], [0.3, 0.4], [0.7, 0.6], [1, 1]])
+    expect(added.points).not.toBe(P())
+  })
+
+  it('goes toward the previous point from the last one: a last point has no next', () => {
+    const line: CurvePoints = [[0, 0], [1, 1]]
+    expect(addPointBeside(line, 1, UNIT)).toEqual({ points: [[0, 0], [0.5, 0.5], [1, 1]], index: 1 })
+    const added = addPointBeside(P(), 3, UNIT)
+    expect(added.points.map((p) => p[0])).toEqual([0, 0.3, 0.7, 0.85, 1])
+    expect(added.index).toBe(3)
+  })
+
+  it('puts the new point on the curve where the line is not straight: its y is what evalCurve says there, to four decimals', () => {
+    const bend: CurvePoints = [[0, 0], [0.5, 0.2], [1, 1]]
+    const added = addPointBeside(bend, 1, UNIT)
+    expect(added.points[2][0]).toBe(0.75)
+    // the monotone cubic between (0.5, 0.2) and (1, 1) at 0.75, by hand: the secants are 0.4 and 1.6, so the tangent at
+    // 0.5 is their mean, 1, and the end takes its secant, 1.6; h = 0.5, t = 0.5, so the Hermite weights are
+    // h00 = 0.5, h10 = 0.125, h01 = 0.5, h11 = -0.125:
+    //   y = 0.5 x 0.2 + 0.125 x 0.5 x 1 + 0.5 x 1 - 0.125 x 0.5 x 1.6 = 0.1 + 0.0625 + 0.5 - 0.1 = 0.5625
+    expect(added.points[2][1]).toBeCloseTo(0.5625, 4)
+  })
+
+  it('refuses where there is no room (less than twice MIN_GAP apart), and for an index the curve does not have', () => {
+    const close: CurvePoints = [[0, 0], [0.015, 0.5], [1, 1]]
+    expect(addPointBeside(close, 0, UNIT)).toEqual({ points: close, index: -1 })
+    expect(addPointBeside(close, 0, UNIT).points).toBe(close)
+    expect(addPointBeside(P(), 4, UNIT).index).toBe(-1)
+    expect(addPointBeside(P(), -1, UNIT).index).toBe(-1)
+    expect(addPointBeside(P(), 1.5, UNIT).index).toBe(-1)
+    expect(addPointBeside([[0, 0]], 0, UNIT).index).toBe(-1)
+  })
+
+  it('can be asked again of the new point, until the room runs out', () => {
+    let points: CurvePoints = [[0, 0], [1, 1]]
+    let index = 0
+    for (let k = 0; k < 20; k++) {
+      const next = addPointBeside(points, index, UNIT)
+      if (next.index < 0) break
+      points = next.points
+      index = next.index - 1 // stay on the first point of the pair: the gap halves each time
+    }
+    // 1, 0.5, 0.25 ... until half a gap would sit within MIN_GAP (0.01) of a point: x = 0.0078125 is the last that fits
+    expect(points.length).toBeGreaterThan(5)
+    expect(points.length).toBeLessThan(12)
+    for (let i = 1; i < points.length; i++) expect(points[i][0] - points[i - 1][0]).toBeGreaterThanOrEqual(MIN_GAP - 1e-9)
   })
 })
 

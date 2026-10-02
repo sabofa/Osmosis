@@ -7,7 +7,7 @@
 // points are its endpoints: they move in y only, and are never removed, since
 // an endpoint fixes the span and nothing could put it back.
 
-import type { CurvePoints } from '../../graph-engine/src/space/paint/curves'
+import { evalCurve, type CurvePoints } from '../../graph-engine/src/space/paint/curves'
 
 // The closest two neighbouring points may come in x.
 export const MIN_GAP = 0.01
@@ -50,6 +50,17 @@ export function addPoint(points: CurvePoints, x: number, y: number, range: YRang
   const next = points.map((p) => [p[0], p[1]] as [number, number])
   next.splice(index, 0, [round(x), round(clamp(y, range.yMin, range.yMax))])
   return { points: next, index }
+}
+
+// A new point beside point `index`, for the keyboard (Insert or Enter on a focused point): midway in x to the next
+// point, or, from the last point, to the previous one. Its y is the curve's own value there, so the line does not move
+// and the point is ready to be nudged. Refused (index -1, the same points) as addPoint refuses: where the two are
+// less than twice MIN_GAP apart, and for an index the curve does not have.
+export function addPointBeside(points: CurvePoints, index: number, range: YRange): { points: CurvePoints; index: number } {
+  if (!Number.isInteger(index) || index < 0 || index >= points.length || points.length < 2) return { points, index: -1 }
+  const [a, b] = index === points.length - 1 ? [points[index - 1], points[index]] : [points[index], points[index + 1]]
+  const x = (a[0] + b[0]) / 2
+  return addPoint(points, x, evalCurve(points, x), range)
 }
 
 // An interior point of a curve that keeps at least two points.

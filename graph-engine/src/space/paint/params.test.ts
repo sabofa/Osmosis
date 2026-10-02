@@ -12,6 +12,24 @@ describe('paint params', () => {
     }
   })
 
+  it('has a slider for every number the painter has but one: particles.dragDensity, which moved nothing', () => {
+    const leaves: string[] = []
+    const walk = (v: unknown, path: string) => {
+      if (typeof v === 'number') leaves.push(path)
+      else if (Array.isArray(v)) {
+        if (!Array.isArray(v[0])) v.forEach((x, i) => walk(x, `${path}.${i}`))
+      } else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k)
+    }
+    walk(DEFAULT_PAINT_PARAMS, '')
+    const sliders = new Set(PARAM_SCHEMA.map((s) => s.path))
+    expect(leaves.filter((l) => !sliders.has(l))).toEqual(['particles.dragDensity'])
+    // the lab re-projects while dragging (nothing is thinned), so there is no "Density while dragging" to offer ...
+    expect(PARAM_SCHEMA.some((s) => /drag/i.test(s.path) || /drag/i.test(s.label))).toBe(false)
+    // ... but a preset saved when there was one still resolves to the value it held
+    expect(resolvePaintParams({ particles: { dragDensity: 0.4 } }).particles.dragDensity).toBe(0.4)
+    expect(DEFAULT_PAINT_PARAMS.particles.dragDensity).toBe(1)
+  })
+
   it('slider paths are unique', () => {
     const paths = PARAM_SCHEMA.map((s) => s.path)
     expect(new Set(paths).size).toBe(paths.length)
