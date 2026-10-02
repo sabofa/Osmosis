@@ -13,7 +13,9 @@ const noAo = resolvePaintParams({ environment: { occlusion: 0 } })
 
 // A view straight on (az 0, el 0): right is +y, up is +z, back is +x, so a
 // view-space normal (a, b, c) is the world normal (c, a, b).
-const FLAT_VIEW = paintView({ width: 400, height: 300, azimuth: 0, elevation: 0, zoom: 100 })
+// (The key light is a fixed one, not the default, so that the creased test pixels stay below the clip at v = 1, where the
+// occlusion would be partly lost.)
+const FLAT_VIEW = paintView({ width: 400, height: 300, azimuth: 0, elevation: 0, zoom: 100, lightAzimuth: 35, lightElevation: 40 })
 const SPHERE_SCENE = sceneOf([sphereMesh()])
 const TABLE_SCENE = sceneOf([sphereMesh(), tableMesh({ z: -1, index: 1 })])
 
@@ -66,20 +68,20 @@ describe('the model’s own value (spec §11)', () => {
   })
 
   it('applies the value curve last, so it shifts where the zones start', () => {
-    // v = raw / 2: the core | half-tone boundary (v = 0.485) moves to raw 0.97
+    // v = raw / 2: the core | half-tone boundary (v = 0.37) moves to raw 0.74
     const squash = resolvePaintParams({ environment: { occlusion: 0 }, curves: { value: [[0, 0], [1, 0.5]] } })
     const curves = compileCurves(squash)
-    // raw 0.97 = 0.67 lit + 0.30 up-facing ambient: v = 0.485, half on half weight
-    const v = modelValue(squash, curves, 0.67, false, 1, 0)
-    expect(v).toBeCloseTo(0.485, 6)
+    // raw 0.74 = 0.44 lit + 0.30 up-facing ambient: v = 0.37, half on half weight
+    const v = modelValue(squash, curves, 0.44, false, 1, 0)
+    expect(v).toBeCloseTo(0.37, 6)
     const s = zoneSample(squash, v, 0, false, newZoneSample())
     expect(s.w[1]).toBeCloseTo(0.5, 5)
     expect(s.w[2]).toBeCloseTo(0.5, 5)
     expect(s.u).toBeCloseTo(0.38, 5)
-    // under the identity curve the same raw value is deep in the light
+    // under the identity curve a raw value of 0.97 (0.67 lit + the ambient 0.30) is deep in the light
     const id = zoneSample(noAo, modelValue(noAo, compileCurves(noAo), 0.67, false, 1, 0), 0, false, newZoneSample())
     expect(id.zone).toBe(Z_LIGHT)
-    // and over a whole sphere the lights vanish: v never reaches 0.5
+    // and over a whole sphere the lights vanish: v never reaches 0.5, and the light zone starts at 0.93
     const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 75 })
     const g = sphereGBuffer(400, 300, { view, params: noAo })
     // (a plan map's arrays are scratch: read each before the next is built)

@@ -36,7 +36,7 @@ import { stepValue, chamferDist } from './planes'
 import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
 import { pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
 import { ambientShare, bounceWeight, modelValue, newZoneSample, terminatorValue, zoneSample } from './value'
-import { drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
+import { bigMax, drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
 import { Z_CAST } from './zones'
 
 // The rotation of the direction field, radians (σ), per role: the hand is never exact.
@@ -50,8 +50,22 @@ const VEIL_SCALE = 2
 // The renderer takes a glaze's alpha as its ABSOLUTE opacity (capped at 0.34) and
 // multiplies every other role's alpha by that role's own base opacity.
 const GLAZE_ALPHA = 0.34
-const VEIL_ALPHA = 0.26
-const VEIL_BORDER_ALPHA = 0.3
+const VEIL_ALPHA = 0.3
+const VEIL_BORDER_ALPHA = 0.34
+// The end of a veil's stroke is a dry brush lifting, not a cut: 0..1 of the dissolve a class gives an edge.
+const VEIL_END_SOFT = 0.5
+// A veil is a film, and it must read as one: tinted and brushy, with the surface behind it still showing.
+// What a film shows is how much of each pixel its strokes cover, 1 - exp(-tau), tau the sum over the strokes
+// over the pixel of -ln(1 - alpha x efficacy). The first calibration had two faults. A veil stroke was thin:
+// the glaze role's load of 0.3 gave the brush a deposit of about 0.15, which the shader turns into 60% of the
+// stroke's alpha (min(alpha, alpha (0.42 + 1.6 deposit))), so a veil was faint wherever its strokes were few.
+// And the strokes were plentiful where it was seen face on (13 on a pixel, a film of 0.9 and more: the magenta
+// plane that hid the hill). Now a veil stroke carries a load three times the role's (a deposit past 0.36 is all
+// the alpha), and a veil's strokes are 0.1 of the glaze role's screen density: about 5 to 10k px² (of 80 x 160 px
+// close up, 40 x 80 at the lab's framing), 3 on a pixel, a film of about 0.6 face on and 0.45 at a graze, mottled
+// where the strokes' ends and the brush's gaps let the surface through (veil.test.ts holds the numbers).
+const VEIL_LOAD = 3
+const VEIL_DENSITY = 0.1
 // The soft clamp of the direction field's degeneracy (n ∥ L).
 const ISO_MIN = 0.12
 // Scratch for the hot loop of a stroke (one stroke is built at a time).
@@ -294,7 +308,7 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
   }
   // sized for the view: where the zoom leaves the particles short of the screen target the stroke grows to
   // still overlap, and the brush follows the zoom (brush.ts); both are 1 at the framing the roles were tuned at
-  const big = zoomGrow(fc, vis.pxArea[k], role) * fc.sizeScale
+  const big = Math.min(zoomGrow(fc, vis.pxArea[k], role) * fc.sizeScale, bigMax(params))
   lengthPx = sizedLength(lengthPx, big)
   widthPx = sizedWidth(widthPx, big)
   const bend = clamp(rng.gauss(), -2, 2) * rp.curvature * 1.2
@@ -453,13 +467,13 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     my: vis.sy[k],
     colormapped: set.colormapped[i] === 1,
     alpha,
-    load: rp.load * vLoad * (beh ? beh.loadMul : 1) * loadLight * (0.9 + 0.2 * rng.next()),
+    load: rp.load * vLoad * (beh ? beh.loadMul : 1) * loadLight * (0.9 + 0.2 * rng.next()) * (veil && veilPass !== 2 ? VEIL_LOAD : 1),
     impasto,
     bristles: sizedBristles(rp.bristles * vBri, big),
     bristleVar: sizedVariance(clamp(rp.bristleVar * (beh ? beh.bristleVarMul : 1), 0, 1), big),
     dry: veilPass === 2 ? 0.6 : beh ? Math.max(rp.dry * 0.5, beh.dryMin) : rp.dry,
     wet: beh ? Math.max(rp.wet * beh.wetMul, beh.wetMin) : rp.wet,
-    endSoft: clamp((beh ? beh.endSoft : BASE_END[role]) + (walk.endA === 3 || walk.endB === 3 ? 0.2 : 0), 0, 1),
+    endSoft: clamp((beh ? beh.endSoft : veil && veilPass !== 2 ? VEIL_END_SOFT : BASE_END[role]) + (walk.endA === 3 || walk.endB === 3 ? 0.2 : 0), 0, 1),
     edge: cls >= 0 ? cls : 255,
     seed: set.seed[i],
     jit0: rng.gauss(),
@@ -485,7 +499,7 @@ export function particleStrokes(an: PaintCtx): void {
     const ground = fc.ground[set.mark[i]] === 1
     if (veil) {
       // a mesh with opacity under 1 is glazed and nothing else
-      const f = drawFade(fc, vis, set, k, 'glaze')
+      const f = drawFade(fc, vis, set, k, 'glaze', VEIL_DENSITY)
       if (f > MIN) {
         buildParticleStroke(an, k, 'glaze', f, 0)
         // the dry strokes near the border of a sheet

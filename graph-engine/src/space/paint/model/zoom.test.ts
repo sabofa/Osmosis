@@ -167,10 +167,14 @@ describe('strokes sized for the view', () => {
     expect(stats[2].width).toBeGreaterThanOrEqual(stats[1].width)
     expect(stats[1].length).toBeGreaterThanOrEqual(stats[0].length)
     expect(stats[2].length).toBeGreaterThanOrEqual(stats[1].length)
-    // 3x: the brush follows the zoom (3^0.35 = 1.47) and the particles begin to fall short; 8x: 8^0.35 = 2.07 times the full growth of 3
-    expect(stats[1].width / stats[0].width).toBeGreaterThan(1.6)
-    expect(stats[2].width / stats[0].width).toBeGreaterThan(4)
+    // 3x: the brush follows the zoom (3^0.35 = 1.47) and the particles begin to fall short
+    expect(stats[1].width / stats[0].width).toBeGreaterThan(1.45)
+    // 8x: the growth (up to 3) and the brush following the zoom (2.07) would multiply to 6.2 and make leaves; the
+    // two together stop at particles.zoomBigMax = 4, and the strokes get longer for their width instead
+    expect(stats[2].width / stats[0].width).toBeGreaterThan(3)
+    expect(stats[2].width / stats[0].width).toBeLessThan(4.3)
     expect(stats[2].length / stats[0].length).toBeGreaterThan(4)
+    expect(stats[2].length / stats[0].length).toBeLessThan(8)
   })
 
   it('leave their size to the roles when growth and the brush following the zoom are both off', () => {
@@ -256,7 +260,9 @@ describe('the sizes the view asks for', () => {
     expect(zoomSizeScale({ ...view, zoom: 8 }, P)).toBeCloseTo(8 ** 0.35, 12)
     expect(zoomSizeScale({ ...view, zoom: 8 }, P)).toBeCloseTo(2.0705, 4)
     expect(zoomSizeScale({ ...view, zoom: 8 }, setParam(P, 'particles.zoomStrokeScale', 0))).toBe(1)
-    expect(zoomSizeScale({ ...view, zoom: 8 }, setParam(P, 'particles.zoomStrokeScale', 1))).toBe(8)
+    // (the brush alone is held at zoomBigMax too: 8 would be 4)
+    expect(zoomSizeScale({ ...view, zoom: 8 }, setParam(P, 'particles.zoomStrokeScale', 1))).toBe(4)
+    expect(zoomSizeScale({ ...view, zoom: 8 }, setParam(setParam(P, 'particles.zoomStrokeScale', 1), 'particles.zoomBigMax', 10))).toBe(8)
     expect(zoomSizeScale({ ...view, zoom: 0.25 }, P)).toBe(1)
     expect(zoomSizeScale(view, P)).toBe(1)
     expect(zoomSizeScale({ ...view, zoom: Number.NaN }, P)).toBe(1)

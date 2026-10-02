@@ -73,11 +73,17 @@ export interface PaintParams {
     shadows: number
   }
   value: {
-    // Zone boundaries over the raw value u in 0..1 (§3.3).
+    // The half-tone ramp (halfLo, halfHi) and the light ramp (lightLo, lightHi): the PLAN value u a stroke is
+    // painted at, from the dark end of a zone to the light end of it (§3.3, the mockup's 0.52..0.72 and 0.85..0.94).
     halfLo: number
     halfHi: number
     lightLo: number
     lightHi: number
+    // Where the zones begin, over the model's value v (the key light, the fill light and the curves): the centre
+    // of the soft step from core shadow into half-tone, and from half-tone into light (the mockup's 0.17 and 0.66
+    // of N·L, taken over v with the fill light on top of them). `soft` is how wide each step is.
+    halfAt: number
+    lightAt: number
     soft: number
     corePlateau: number
     reflectedLo: number
@@ -182,6 +188,10 @@ export interface PaintParams {
     // A painter picks a bigger brush up close, not only more of the same dabs: the strokes' size also
     // follows the zoom, as size x zoom^zoomStrokeScale (0 keeps the size, 1 follows the zoom exactly).
     zoomStrokeScale: number
+    // The two multiply, and a brush six times the size it was tuned at is not a brush but a leaf: the
+    // combined factor never goes past this (the strokes stay long and brushy, and the underpainting
+    // carries the form).
+    zoomBigMax: number
   }
   // The underpainting: a thin, scumbled imprimatura laid first, in the curve colour of every pixel of a
   // form, so the gaps between strokes show paint and never bare canvas (spec addendum, Ben 2026-10-02).
@@ -224,9 +234,12 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
     formBand: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
     glazeBelow: 0.4, reflectedMin: 0.04, edgeMinContrast: 0.05, edgeReachPx: 20,
   },
-  light: { azimuth: 35, elevation: 40, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
+  // The key light is the mockup's, camera-relative: from 56 degrees to the viewer's left and 27 up (its CAMLIGHT
+  // (-0.74, 0.45, 0.50) in screen right, up and toward-the-viewer). A light higher and nearer the view than that
+  // puts most of a form in the light zone, and the picture reads pale.
+  light: { azimuth: 56, elevation: 27, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
   value: {
-    halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, soft: 0.07,
+    halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, halfAt: 0.37, lightAt: 0.93, soft: 0.07,
     corePlateau: 0.24, reflectedLo: 0.34, reflectedHi: 0.48, castPlateau: 0.32, deviation: 0.018,
   },
   curve: {
@@ -269,10 +282,14 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   // the screen density, set the stroke count). 3000 lets the screen target decide at any zoom, at no
   // cost per frame (the strokes drawn are the screen's, the particles are built once). dragDensity stays
   // 1: an orbit does not thin the strokes (the lab re-projects the last frame's strokes instead).
-  particles: { maxPerUnit2: 3000, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1, zoomGrowMax: 3, zoomStrokeScale: 0.35 },
+  particles: { maxPerUnit2: 3000, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1, zoomGrowMax: 3, zoomStrokeScale: 0.35, zoomBigMax: 4 },
   underpaint: { opacity: 0.85, streak: 0.4 },
   impasto: { strength: 1, lightAzimuth: 135, lightElevation: 23 },
-  canvas: { texture: 1, weave: 'duck', tone: [0.93, 0.004, 0.022] },
+  // The mockup painted every figure on fine primed linen (its Painter's default), not on cotton duck, whose threads are
+  // half again as coarse and whose relief is stronger. Half the generator's default texture (1) is what its canvas
+  // reads as: measured on a bare patch, the weave's grey standard deviation is 2.9 of 255 in the mockup, 3.3 here
+  // at texture 0.5, and was 16 at 1 with the relief lit into the tile as well as by the composite.
+  canvas: { texture: 0.5, weave: 'linen', tone: [0.93, 0.004, 0.022] },
 }
 
 // One slider in the Paint Lab. `path` is a dotted path into PaintParams; an
@@ -323,7 +340,8 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   ...(
     [
       ['halfLo', 'Half-tone from', 0, 1], ['halfHi', 'Half-tone to', 0, 1], ['lightLo', 'Light from', 0, 1],
-      ['lightHi', 'Light to', 0, 1], ['soft', 'Zone softness', 0, 0.3], ['corePlateau', 'Core plateau', 0, 1],
+      ['lightHi', 'Light to', 0, 1], ['halfAt', 'Half-tone begins (v)', 0, 1], ['lightAt', 'Light begins (v)', 0, 1],
+      ['soft', 'Zone softness', 0, 0.3], ['corePlateau', 'Core plateau', 0, 1],
       ['reflectedLo', 'Reflected from', 0, 1], ['reflectedHi', 'Reflected to', 0, 1],
       ['castPlateau', 'Cast plateau', 0, 1], ['deviation', 'Deviation', 0, 0.1],
     ] as const
@@ -380,6 +398,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'particles.dragDensity', label: 'Density while dragging', group: 'Particles', min: 0.1, max: 1, step: 0.01 },
   { path: 'particles.zoomGrowMax', label: 'Zoom growth max (x)', group: 'Particles', min: 1, max: 6, step: 0.1 },
   { path: 'particles.zoomStrokeScale', label: 'Stroke size follows zoom', group: 'Particles', min: 0, max: 1, step: 0.01 },
+  { path: 'particles.zoomBigMax', label: 'Zoom size cap, both together (x)', group: 'Particles', min: 1, max: 8, step: 0.1 },
   { path: 'underpaint.opacity', label: 'Opacity', group: 'Underpainting', min: 0, max: 1, step: 0.01 },
   { path: 'underpaint.streak', label: 'Brush streaks', group: 'Underpainting', min: 0, max: 1, step: 0.01 },
   { path: 'impasto.strength', label: 'Impasto', group: 'Impasto & canvas', min: 0, max: 3, step: 0.01 },

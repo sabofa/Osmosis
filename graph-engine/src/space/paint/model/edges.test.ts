@@ -25,9 +25,10 @@ function analyse(g: GBuffer, view: PaintView, params: PaintParams, table = false
 
 // Two faces side by side in a block of the screen, camera straight on (az 0, el 0: a
 // view-space normal (x, y, z) is the world normal (z, x, y)). The model lights them itself
-// from their normals: the key light is up and to the left of the camera, so a face turned
-// left (-0.5, 0, 0.866) is lit to 0.94 (plan value 0.905, the light) and one turned well to
-// the right (0.9, 0, 0.436) is turned from the light entirely: ambient only, the core, 0.24.
+// from their normals: the key light is up and to the left of the camera (-0.739, 0.454, 0.498),
+// so a face turned left (-0.5, 0, 0.866) has N·L 0.801, value 0.801 + 0.18 = 0.981 and is in the light
+// (plan value 0.85 + 0.09·(0.981 - 0.93)/0.07 = 0.915), and one turned well to the right
+// (0.9, 0, 0.436) is turned from the light entirely: ambient only, the core, 0.24.
 const LIT_LEFT: [number, number, number] = [-0.5, 0, 0.866]
 const CORE_RIGHT: [number, number, number] = [0.9, 0, 0.436]
 const CORE_RIGHT_2: [number, number, number] = [0.95, 0, 0.312]
@@ -66,12 +67,12 @@ describe('edge control', () => {
   })
 
   it('calls a sharp normal crease with high contrast HARD', () => {
-    // a lit face (plan value 0.905) against one turned from the light (the core, 0.24): contrast 0.665
+    // a lit face (plan value 0.915) against one turned from the light (the core, 0.24): contrast 0.675
     const { edges, planes } = twoFaces(LIT_LEFT, CORE_RIGHT, NO_NOISE)
     const crease = edges.edges.filter((e) => e.type === 'internal')
     expect(crease.length).toBe(1)
     const e = crease[0]
-    expect(e.contrast).toBeCloseTo(0.665, 2)
+    expect(e.contrast).toBeCloseTo(0.675, 2)
     expect(planes.planes[e.a].mark).toBe(0)
     // c = 1 (contrast 0.67 > 0.60), k = 1 (60° between the normals), d = 1 (flat in depth), s = 0.600:
     // H = .32 + .22 + .10 + .10·0.600 = 0.70 before the focal term

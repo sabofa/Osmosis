@@ -13,6 +13,7 @@ const GL_FLOAT = 0x1406
 const GL_UNSIGNED_BYTE = 0x1401
 const GL_RGBA = 0x1908
 const GL_RED = 0x1903
+const GL_TEXTURE0 = 0x84c0
 
 const square = (z: number, opacity = 1) =>
   meshMark([-1, -1, z, 1, -1, z, 1, 1, z, -1, 1, z], [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2, 0, 2, 3], { style: { opacity } })
@@ -525,6 +526,58 @@ describe('size and paper', () => {
     expect(onError).toHaveBeenCalledTimes(1)
     renderer.paint(frame([BLOCK]), view(), PARAMS, 'none')
     expect(timeline(paint).some((e) => e.kind === 'composite')).toBe(true)
+  })
+})
+
+describe('the canvas mottle', () => {
+  it('makes a blurred copy of the tile, repeating, and gives it to the composite with the copy’s turn, scale and shift', () => {
+    const { paint, renderer } = setup()
+    const size = 128
+    const rgba = new Uint8ClampedArray(size * size * 4).fill(200)
+    renderer.setPaper(rgba, new Float32Array(size * size).fill(0.5), size)
+    // three textures: the tile, its height, and the blur (MOTTLE_SIZE across)
+    const uploads = paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_UNSIGNED_BYTE)
+    expect(uploads.map((c) => [c.args[4], c.args[5]])).toEqual([[128, 128], [64, 64]])
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none')
+    const composite = timeline(paint).filter((e) => e.kind === 'composite').pop()!
+    expect(composite.uniforms.u_paperLow).toEqual([4])
+    const m = composite.uniforms.u_mottle as number[]
+    expect(m[0]).toBeCloseTo(Math.cos((31 * Math.PI) / 180), 6)
+    expect(m[1]).toBeCloseTo(Math.sin((31 * Math.PI) / 180), 6)
+    expect(m[2]).toBeCloseTo(0.73, 6)
+    expect(composite.uniforms.u_mottleShift).toEqual([0.37, 0.61])
+    // the blur is bound to the unit it was told (4) before the composite draws
+    const draws = paint.fake.calls.map((c, i) => ({ c, i }))
+    const lastComposite = draws.filter((d) => d.c.fn === 'drawArrays').pop()!.i
+    const bindUnit4 = draws.filter((d) => d.i < lastComposite && d.c.fn === 'activeTexture' && d.c.args[0] === GL_TEXTURE0 + 4)
+    expect(bindUnit4.length).toBeGreaterThan(0)
+  })
+
+  it('blurs the tile with an area average: a checker of 0 and 200 is 100 everywhere in the blur', () => {
+    const { paint, renderer } = setup()
+    const size = 128
+    const rgba = new Uint8ClampedArray(size * size * 4)
+    for (let i = 0; i < size * size; i++) rgba.set([(i + Math.floor(i / size)) % 2 === 0 ? 0 : 200, 100, 50, 255], 4 * i)
+    renderer.setPaper(rgba, new Float32Array(size * size).fill(0.5), size)
+    const blur = paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_UNSIGNED_BYTE && c.args[4] === 64).pop()!
+    const data = blur.args[8] as Uint8Array
+    expect(data[0]).toBe(100)
+    expect(data[1]).toBe(100)
+    expect(data[2]).toBe(50)
+    expect(data[3]).toBe(255)
+    expect(data[4 * 1000]).toBe(100)
+  })
+
+  it('frees the blur with the tile when the paper is replaced and on dispose', () => {
+    const { paint, renderer } = setup()
+    renderer.setPaper(new Uint8ClampedArray(64 * 64 * 4).fill(200), new Float32Array(64 * 64).fill(0.5), 64)
+    const made = paint.fake.created.texture
+    renderer.setPaper(new Uint8ClampedArray(64 * 64 * 4).fill(180), new Float32Array(64 * 64).fill(0.5), 64)
+    // the first paper's three textures are gone, a new three made
+    expect(paint.fake.created.texture).toBe(made + 3)
+    expect(paint.fake.deleted.texture).toBe(3)
+    renderer.dispose()
+    expect(paint.fake.created.texture - paint.fake.deleted.texture).toBe(0)
   })
 })
 

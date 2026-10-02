@@ -7,6 +7,7 @@
 
 import type { PaintParams } from '../params'
 import type { ProgramInfo } from '../../gl/program'
+import { resampleTile } from '../paperScale'
 import type { AccumTarget } from './strokes'
 import type { Resources, Gl } from './resources'
 
@@ -15,8 +16,35 @@ export interface PaperGpu {
   rgba: WebGLTexture
   // Normalised weave height, R32F.
   height: WebGLTexture
+  // The tile's tone and mottle, blurred to MOTTLE_SIZE texels across (RGBA8, repeating, bilinear): the composite
+  // reads it twice, for the mottle's second copy (below).
+  low: WebGLTexture
   // The tile's mean colour (sRGB 0..1), the flat tone of the no-canvas view.
   flatTone: [number, number, number]
+}
+
+// The tile repeats every 512 CSS px, and its soft mottle (the cloth's cloudy brightness and tone) is the part the
+// eye finds repeating: the weave itself is too fine to. So the composite reads the tile's colour as its weave (the
+// tile less its own blur) plus its mottle (the blur) from a SECOND, turned, scaled and shifted copy of the tile:
+// the weave repeats on the tile's lattice and the mottle on another, which fits no whole number of tiles, so the
+// two together never repeat. With the copy the same as the tile (no turn, scale 1, no shift) the colour is the
+// tile's exactly (weave + blur = tile).
+export const MOTTLE_SIZE = 64
+export const MOTTLE_TURN = (31 * Math.PI) / 180
+export const MOTTLE_SCALE = 0.73
+export const MOTTLE_SHIFT: readonly [number, number] = [0.37, 0.61]
+
+// Where the second copy is read, in tile units, for a point at `p` tiles over the screen (not wrapped): the point
+// turned by `turn`, scaled by `scale` and shifted by `shift`. The shader does the same.
+export function mottleCoord(
+  p: readonly [number, number],
+  turn = MOTTLE_TURN,
+  scale = MOTTLE_SCALE,
+  shift: readonly [number, number] = MOTTLE_SHIFT,
+): [number, number] {
+  const c = Math.cos(turn)
+  const s = Math.sin(turn)
+  return [(c * p[0] - s * p[1]) * scale + shift[0], (s * p[0] + c * p[1]) * scale + shift[1]]
 }
 
 // The standard deviation the mockup's canvas height has after normStd x 0.2.
@@ -66,9 +94,13 @@ export function createPaperGpu(
 ): PaperGpu | null {
   const rgbaTexture = res.texture(gl.RGBA8, size, size)
   const heightTexture = res.texture(gl.R32F, size, size)
-  if (!rgbaTexture || !heightTexture) {
+  // the tile, blurred (an area average) to a small one that repeats and filters
+  const lowSize = Math.max(1, Math.min(MOTTLE_SIZE, size))
+  const lowTexture = res.texture(gl.RGBA8, lowSize, lowSize, gl.LINEAR)
+  if (!rgbaTexture || !heightTexture || !lowTexture) {
     res.deleteTexture(rgbaTexture)
     res.deleteTexture(heightTexture)
+    res.deleteTexture(lowTexture)
     return null
   }
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
@@ -76,13 +108,19 @@ export function createPaperGpu(
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(rgba.buffer, rgba.byteOffset, size * size * 4))
   gl.bindTexture(gl.TEXTURE_2D, heightTexture)
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RED, gl.FLOAT, normaliseHeight(height))
-  return { size, rgba: rgbaTexture, height: heightTexture, flatTone: meanColour(rgba) }
+  const low = resampleTile(rgba instanceof Uint8ClampedArray ? rgba : new Uint8ClampedArray(rgba), new Float32Array(0), size, lowSize, false)
+  gl.bindTexture(gl.TEXTURE_2D, lowTexture)
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, lowSize, lowSize, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(low.rgba.buffer, low.rgba.byteOffset, lowSize * lowSize * 4))
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
+  return { size, rgba: rgbaTexture, height: heightTexture, low: lowTexture, flatTone: meanColour(rgba) }
 }
 
 export function destroyPaperGpu(res: Resources, paper: PaperGpu | null): void {
   if (!paper) return
   res.deleteTexture(paper.rgba)
   res.deleteTexture(paper.height)
+  res.deleteTexture(paper.low)
 }
 
 // The unit light vector of the relief, in image coordinates (y down): the
@@ -134,10 +172,14 @@ export function drawComposite(gl: Gl, input: CompositeInput): void {
   bind(1, paint.height)
   bind(2, paper.rgba)
   bind(3, paper.height)
+  bind(4, paper.low)
   gl.uniform1i(program.uniform('u_paint0'), 0)
   gl.uniform1i(program.uniform('u_paint1'), 1)
   gl.uniform1i(program.uniform('u_paper'), 2)
   gl.uniform1i(program.uniform('u_paperH'), 3)
+  gl.uniform1i(program.uniform('u_paperLow'), 4)
+  gl.uniform4f(program.uniform('u_mottle'), Math.cos(MOTTLE_TURN), Math.sin(MOTTLE_TURN), MOTTLE_SCALE, 0)
+  gl.uniform2f(program.uniform('u_mottleShift'), MOTTLE_SHIFT[0], MOTTLE_SHIFT[1])
   gl.uniform2i(program.uniform('u_paperSize'), paper.size, paper.size)
   gl.uniform2f(program.uniform('u_resolution'), input.width, input.height)
   gl.uniform3f(program.uniform('u_flatTone'), paper.flatTone[0], paper.flatTone[1], paper.flatTone[2])

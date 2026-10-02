@@ -38,7 +38,7 @@ describe('applySlider', () => {
   })
 
   it('returns the same object when the value ends up unchanged, so nothing re-renders for nothing', () => {
-    expect(applySlider(DEFAULT_PAINT_PARAMS, 'light.azimuth', 35)).toBe(DEFAULT_PAINT_PARAMS)
+    expect(applySlider(DEFAULT_PAINT_PARAMS, 'light.azimuth', DEFAULT_PAINT_PARAMS.light.azimuth)).toBe(DEFAULT_PAINT_PARAMS)
     // 0.181 snaps to the 0.18 the ambient already is.
     expect(applySlider(DEFAULT_PAINT_PARAMS, 'light.ambient', 0.181)).toBe(DEFAULT_PAINT_PARAMS)
   })
@@ -52,7 +52,7 @@ describe('applySlider', () => {
   it('returns a new object and never mutates its input', () => {
     const next = applySlider(DEFAULT_PAINT_PARAMS, 'light.azimuth', -42)
     expect(next).not.toBe(DEFAULT_PAINT_PARAMS)
-    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(35)
+    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(56)
     expect(next.light.azimuth).toBe(-42)
   })
 })

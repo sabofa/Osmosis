@@ -37,7 +37,8 @@ export interface FrameCtx {
   rowX: number
   // 1 where a mark is bare table (flat, horizontal, opaque).
   ground: Uint8Array
-  // What the view's zoom asks of every stroke's size: zoom^particles.zoomStrokeScale, never below 1.
+  // What the view's zoom asks of every stroke's size: zoom^particles.zoomStrokeScale, never below 1 and never past
+  // particles.zoomBigMax.
   sizeScale: number
   // How many times the brush-load cell is halved for this zoom (brush.ts loadCellLevel): 0 at the tuned framing.
   loadLevel: number
@@ -65,12 +66,18 @@ export function makeFrameCtx(scene: SpaceScene, view: PaintView, g: GBuffer, par
 }
 
 // What the view's zoom asks of the strokes' size (spec addendum: "a bigger brush up close"): the
-// view's zoom (1 when the view says nothing) to the power particles.zoomStrokeScale, and never
-// below 1: zooming out does not shrink the brush under the size the roles were tuned at.
+// view's zoom (1 when the view says nothing) to the power particles.zoomStrokeScale, never
+// below 1 (zooming out does not shrink the brush under the size the roles were tuned at) and never
+// past particles.zoomBigMax.
 export function zoomSizeScale(view: PaintView, params: PaintParams): number {
   const z = view.zoom !== undefined && Number.isFinite(view.zoom) ? Math.max(1, view.zoom) : 1
-  return z ** clamp(params.particles.zoomStrokeScale, 0, 1)
+  return Math.min(z ** clamp(params.particles.zoomStrokeScale, 0, 1), bigMax(params))
 }
+
+// The most a stroke is made bigger than the size the roles were tuned at, by the growth that keeps the
+// strokes overlapping and the brush that follows the zoom together (at 8x they would multiply to 6.2, and a
+// stroke that size is a leaf, not a brush stroke).
+export const bigMax = (params: PaintParams): number => Math.max(1, params.particles.zoomBigMax)
 
 // ---- projection ----
 
@@ -231,6 +238,10 @@ export function meshArea(mesh: MeshMark): number {
 
 // The particles that are visible in this view, with what the model needs to
 // know about each. Arrays are scratch: valid until the next call.
+// How much of the surfaces' fade band (particles.fadeLo..fadeHi of |n·v|) a veil fades over.
+const VEIL_FADE_LO = 0.25
+const VEIL_FADE_HI = 0.5
+
 export interface Visible {
   count: number
   // Index into the ParticleSet.
@@ -324,7 +335,10 @@ export function visibleParticles(fc: FrameCtx, set: ParticleSet): Visible {
       }
     }
     if (!seen) continue
-    const fade = smooth(p.fadeLo, p.fadeHi, facing)
+    // A veil is a thin film, seen through at any angle and with no limb of its own to turn away at: it fades
+    // over a quarter and a half of the surface's band (a form's strokes fade as it turns from the viewer).
+    const veil = set.opacity[i] < 1
+    const fade = veil ? smooth(p.fadeLo * VEIL_FADE_LO, p.fadeHi * VEIL_FADE_HI, facing) : smooth(p.fadeLo, p.fadeHi, facing)
     // right at the limb a stroke is invisible, and a particle just behind it can pass the depth test
     if (fade < 0.02) continue
     idx[k] = i
@@ -356,11 +370,12 @@ const ROLE_SHIFT: Record<Role, number> = (() => {
 
 export const roleRank = (rank: number, role: Role): number => (rank + ROLE_SHIFT[role]) % 1
 
-// The chance a visible particle is drawn for a role: the screen-density rule.
-export function drawChance(fc: FrameCtx, pxArea: number, role: Role): number {
+// The chance a visible particle is drawn for a role: the screen-density rule. `scale` thins the role further
+// (a veil's glazes: roles.ts VEIL_DENSITY).
+export function drawChance(fc: FrameCtx, pxArea: number, role: Role, scale = 1): number {
   const p = fc.params
   const drag = fc.view.dragging ? p.particles.dragDensity : 1
-  return clamp((p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag, 0, 1)
+  return clamp((p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag * scale, 0, 1)
 }
 
 // A load of paint is a patch of the surface (mix.loadCell world units across), and a painter mixes a new
@@ -393,8 +408,8 @@ export function drawn(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, r
 // How much of its alpha a drawn particle has: whole, except within a fifth of
 // its threshold, where it fades in (or out) as the camera moves and the
 // threshold crosses it, so strokes do not pop. 0 when it is not drawn.
-export function drawFade(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, role: Role): number {
-  const chance = drawChance(fc, vis.pxArea[k], role)
+export function drawFade(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, role: Role, scale = 1): number {
+  const chance = drawChance(fc, vis.pxArea[k], role, scale)
   const r = roleRank(set.rank[vis.idx[k]], role)
   if (r >= chance) return 0
   return chance >= 1 ? 1 : smooth(0, 0.2, 1 - r / chance)

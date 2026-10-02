@@ -113,7 +113,7 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
     expect(classifyChange(P, structuredClone(P))).toBe('same')
     // only the renderer reads these: the relief, the canvas's texture and weave
     for (const path of ['impasto.strength', 'impasto.lightAzimuth', 'impasto.lightElevation', 'canvas.texture', 'underpaint.opacity', 'underpaint.streak']) expect(classifyChange(P, moved(path)), path).toBe('render')
-    expect(classifyChange(P, { ...P, canvas: { ...P.canvas, weave: 'linen' } })).toBe('render')
+    expect(classifyChange(P, { ...P, canvas: { ...P.canvas, weave: 'duck' } })).toBe('render')
     expect(classifyChange(P, setParam(setParam(P, 'impasto.strength', 2), 'canvas.texture', 0.3))).toBe('render')
     // colour parameters, alone or with a renderer one
     expect(classifyChange(P, moved('curve.lSlope'))).toBe('colour')

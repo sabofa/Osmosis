@@ -17,7 +17,11 @@
 //     start and end, the way the stamped discs are;
 //   - the deposit plus 0.45 of the canvas height must clear a threshold that
 //     rises with the dry-brush amount, so a dry tail catches the weave's
-//     peaks and skips its valleys;
+//     peaks and skips its valleys. The threshold is a smoothstep widened by
+//     half the deposit's own change over a pixel (fwidth of the deposit, not of
+//     the tooth: the weave's grain is meant to be crisp), so a stroke's side and
+//     end edges, where the deposit falls off faster than the smoothstep is wide,
+//     are at least a pixel soft and do not stair-step;
 //   - wet pickup mixes the layers beneath (and the canvas where nothing has
 //     been painted yet) into the stroke's colour, most at its start;
 //   - the paint height accumulates for impasto: h' = h (1 - a/2) + a * dep * kp.
@@ -239,6 +243,9 @@ void main() {
       bestJit = vec3(1.0) + vec3(jl * 5.0 + ja * 3.0, jl * 5.0 - ja * 2.0 + jb, jl * 5.0 - jb * 3.0);
     }
   }
+  // How fast the deposit changes over a pixel, taken before any pixel of the quad is discarded: the
+  // gate below is widened by half of it, so an edge is never sharper than one pixel.
+  float aa = 0.5 * fwidth(bestDep);
   if (bestDep <= 0.0) discard;
   float dep = bestDep;
 
@@ -251,7 +258,7 @@ void main() {
   float dryEff = dry * (0.5 + 0.5 * tail);
   float g0 = 0.08 + 0.12 * dryEff;
   float g1 = 0.26 + 0.22 * dryEff;
-  float gate = dryEff > 0.0 ? sstep(g0, g1, dep + 0.45 * hg) : sstep(0.03, 0.12, dep);
+  float gate = dryEff > 0.0 ? sstep(g0 - aa, g1 + aa, dep + 0.45 * hg) : sstep(0.03 - aa, 0.12 + aa, dep);
   if (gate <= 0.001) discard;
 
   float opac = role == ROLE_GLAZE ? min(v_colour.a, ra.x) : v_colour.a * ra.x;

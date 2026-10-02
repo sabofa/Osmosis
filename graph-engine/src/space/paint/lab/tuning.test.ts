@@ -32,7 +32,7 @@ describe('handleTuningPost', () => {
     expect(handleTuningPost('{"light":{"azimuth":-12},"bogus":1}', write).status).toBe(200)
     const written = JSON.parse(writes[0])
     expect(written.light.azimuth).toBe(-12)
-    expect(written.light.elevation).toBe(40)
+    expect(written.light.elevation).toBe(DEFAULT_PAINT_PARAMS.light.elevation)
     expect(written.mix).toEqual(DEFAULT_PAINT_PARAMS.mix)
     expect(written.bogus).toBeUndefined()
   })

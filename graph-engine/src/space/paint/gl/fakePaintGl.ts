@@ -1,6 +1,6 @@
 // A test helper: space/gl/fakeGl.ts's recording fake, widened for the paint
 // renderer. It adds the few constants the paint code reads that the base fake
-// does not know (RGBA32F, R32F, R8, MAX_TEXTURE_SIZE), answers
+// does not know (RGBA32F, R32F, R8, REPEAT, MAX_TEXTURE_SIZE), answers
 // getParameter(MAX_TEXTURE_SIZE), and records readPixels, filling the
 // destination from a provider so a test can hand the renderer a known
 // G-buffer. Nothing outside tests imports it.
@@ -12,6 +12,7 @@ export const PAINT_CONSTANTS = {
   RGBA32F: 0x8814,
   R32F: 0x822e,
   R8: 0x8229,
+  REPEAT: 0x2901,
   MAX_TEXTURE_SIZE: 0x0d33,
 } as const
 

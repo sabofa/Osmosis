@@ -16,19 +16,25 @@
 // A painter does not paint that continuous ramp; she paints a few zones, each
 // with its own value, and the steps between them: light, half-tone, core
 // shadow, reflected light, cast shadow. zoneSample() maps v to the PLAN value
-// the lighting curve consumes. Boundaries are over v and soft (value.soft wide):
-//   core side | half-tone ramp | light ramp
-//   a boundary centred just under halfLo, so the half-tone is fully on at halfLo
-//   a boundary centred between halfHi and lightLo
+// the lighting curve consumes. The zones are chosen over v, by two soft steps
+// (value.soft wide), centred where the mockup's are (it took them over the key light alone,
+// N·L at 0.17 and 0.66; here v has the fill light on top, so they sit higher):
+//   core | half-tone    centred at value.halfAt
+//   half-tone | light   centred at value.lightAt
 // Inside a zone the plan value is
-//   half-tone   lerp(halfLo, halfHi) over v in halfLo..halfHi
-//   light       lerp(lightLo, lightHi) over v in lightLo..1
+//   half-tone   lerp(halfLo, halfHi) over v from halfAt to lightAt
+//   light       lerp(lightLo, lightHi) over v from lightAt to 1
 //   core        the plateau corePlateau
 //   reflected   reflectedLo..reflectedHi by the bounce weight
 //   cast        the plateau castPlateau
 // (the mockup's outputs: half-tone 0.52–0.72, light 0.85–0.94, plateaus 0.24,
-// 0.34–0.48 and 0.32). Zone weights blend across the soft boundaries, so
-// there is a step in value at a terminator, not a smooth ramp.
+// 0.34–0.48 and 0.32). Zone weights blend across the soft steps, so there is
+// a step in value at a terminator, not a smooth ramp.
+//
+// Where the steps sit decides how much of a form is in the light and how much in the half-tones,
+// where the colour is richest: the first version of this took them from the plateau values (0.485 and
+// 0.785 over v), which with the fill light on top put twice the mockup's share of a saddle in the
+// light zone (0.68, against 0.35) and the lights washed out. value.test.ts pins the shares.
 //
 // A cast shadow is a surface that FACES the light but is occluded (the shadow
 // flag with n·L > 0); a self-shadowed side is the core.
@@ -113,8 +119,8 @@ export function zoneSample(params: PaintParams, v: number, b: number, cast: bool
     return out
   }
   const s = Math.max(1e-4, vp.soft)
-  const cA = vp.halfLo - s / 2
-  const cB = (vp.halfHi + vp.lightLo) / 2
+  const cA = vp.halfAt
+  const cB = Math.max(vp.lightAt, cA)
   const sHt = smooth(cA - s / 2, cA + s / 2, v)
   const sL = Math.min(sHt, smooth(cB - s / 2, cB + s / 2, v))
   const rest = 1 - sHt
@@ -124,8 +130,8 @@ export function zoneSample(params: PaintParams, v: number, b: number, cast: bool
   w[3] = rest * rb
   w[2] = rest - w[3]
   w[4] = 0
-  const uHalf = lerp(vp.halfLo, vp.halfHi, clamp((v - vp.halfLo) / Math.max(1e-6, vp.halfHi - vp.halfLo), 0, 1))
-  const uLight = lerp(vp.lightLo, vp.lightHi, clamp((v - vp.lightLo) / Math.max(1e-6, 1 - vp.lightLo), 0, 1))
+  const uHalf = lerp(vp.halfLo, vp.halfHi, clamp((v - cA) / Math.max(1e-6, cB - cA), 0, 1))
+  const uLight = lerp(vp.lightLo, vp.lightHi, clamp((v - cB) / Math.max(1e-6, 1 - cB), 0, 1))
   const uRefl = lerp(vp.reflectedLo, vp.reflectedHi, clamp(b / 0.5, 0, 1))
   out.u = w[0] * uLight + w[1] * uHalf + w[2] * vp.corePlateau + w[3] * uRefl
   let best = 0
@@ -136,7 +142,7 @@ export function zoneSample(params: PaintParams, v: number, b: number, cast: bool
 }
 
 // The value, in v units, of the terminator: the centre of the core | half-tone boundary.
-export const terminatorValue = (params: PaintParams): number => params.value.halfLo - params.value.soft / 2
+export const terminatorValue = (params: PaintParams): number => params.value.halfAt
 
 // ---- screen-space occlusion ----
 

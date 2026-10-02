@@ -33,7 +33,7 @@ describe('paint params', () => {
 
   it('resolve never mutates the defaults', () => {
     resolvePaintParams({ light: { azimuth: 99 } })
-    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(35)
+    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(56)
   })
 
   it('setParam returns a new object and addresses tuple entries', () => {
@@ -49,16 +49,36 @@ describe('paint params', () => {
 
   it('has the zoom and underpainting parameters, with the defaults the spec gives, in their groups', () => {
     const p = DEFAULT_PAINT_PARAMS
-    expect([p.particles.zoomGrowMax, p.particles.zoomStrokeScale, p.underpaint.opacity, p.underpaint.streak]).toEqual([3, 0.35, 0.85, 0.4])
+    expect([p.particles.zoomGrowMax, p.particles.zoomStrokeScale, p.particles.zoomBigMax, p.underpaint.opacity, p.underpaint.streak]).toEqual([3, 0.35, 4, 0.85, 0.4])
     const spec = (path: string) => PARAM_SCHEMA.find((s) => s.path === path)
     expect(spec('particles.zoomGrowMax')).toMatchObject({ group: 'Particles', min: 1 })
     expect(spec('particles.zoomStrokeScale')).toMatchObject({ group: 'Particles', min: 0, max: 1 })
+    expect(spec('particles.zoomBigMax')).toMatchObject({ group: 'Particles', min: 1 })
     expect(spec('underpaint.opacity')).toMatchObject({ group: 'Underpainting', min: 0, max: 1 })
     expect(spec('underpaint.streak')).toMatchObject({ group: 'Underpainting', min: 0, max: 1 })
   })
 
+  it('has the defaults that make the lab look like the approved mockup: its key light, its zone steps, its linen at half texture', () => {
+    const p = DEFAULT_PAINT_PARAMS
+    // the mockup's CAMLIGHT (-0.74, 0.45, 0.50) in screen right, up and toward the viewer: 56 degrees to the left, 27 up
+    expect([p.light.azimuth, p.light.elevation]).toEqual([56, 27])
+    const lx = -Math.sin((56 * Math.PI) / 180) * Math.cos((27 * Math.PI) / 180)
+    const ly = Math.sin((27 * Math.PI) / 180)
+    const lz = Math.cos((56 * Math.PI) / 180) * Math.cos((27 * Math.PI) / 180)
+    expect([lx, ly, lz].map((v) => Math.round(v * 100) / 100)).toEqual([-0.74, 0.45, 0.5])
+    // where the half-tone and the light begin, over the model's value (the fill light on top of the mockup's 0.17 and 0.66 of N.L)
+    expect([p.value.halfAt, p.value.lightAt]).toEqual([0.37, 0.93])
+    const spec = (path: string) => PARAM_SCHEMA.find((s) => s.path === path)
+    expect(spec('value.halfAt')).toMatchObject({ group: 'Value plan', min: 0, max: 1 })
+    expect(spec('value.lightAt')).toMatchObject({ group: 'Value plan', min: 0, max: 1 })
+    // the mockup painted on fine primed linen, and the weave reads at half the generator's default texture
+    expect([p.canvas.weave, p.canvas.texture]).toEqual(['linen', 0.5])
+    // and a brush never more than 4 times the size it was tuned at
+    expect(p.particles.zoomBigMax).toBe(4)
+  })
+
   it('resolves the underpainting from an override, and clamps nothing it was not asked to', () => {
     const q = resolvePaintParams({ underpaint: { opacity: 0.5 }, particles: { zoomGrowMax: 2 } })
-    expect([q.underpaint.opacity, q.underpaint.streak, q.particles.zoomGrowMax, q.particles.zoomStrokeScale]).toEqual([0.5, 0.4, 2, 0.35])
+    expect([q.underpaint.opacity, q.underpaint.streak, q.particles.zoomGrowMax, q.particles.zoomStrokeScale, q.particles.zoomBigMax]).toEqual([0.5, 0.4, 2, 0.35, 4])
   })
 })

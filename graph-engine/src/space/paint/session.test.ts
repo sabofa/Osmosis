@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { normalise, TABLE_SIZE } from '../colormaps'
+import { colourisePaper, generatePaper } from '../../style/papers/generate/index'
 import type { SceneColours, Oklab, StrokeBatch } from './types'
 import { buildParticles, paintFrame } from './model/index'
 import { lchToLab } from './model/colour'
@@ -27,7 +28,7 @@ const SPHERE = flatColours({ 0: lchToLab(0.56, 0.14, 38), 1: lchToLab(0.9, 0.01,
 const scene = sceneOf([sphereMesh({ radius: 1 }), tableMesh({ z: -1, half: 3, index: 1 })])
 const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 90 })
 const gbuffer = (params: PaintParams = P) => sphereGBuffer(400, 300, { view, params, table: { z: -1, mark: 1 } })
-const WANT: PaperWanted = { weave: 'duck', seed: 1, tone: [0.93, 0.004, 0.022], texture: 1, halve: true }
+const WANT: PaperWanted = { weave: 'duck', seed: 1, tone: [0.93, 0.004, 0.022], texture: 1, ratio: 1 }
 
 let ids = 0
 const request = (overrides: Partial<SessionRequest> = {}): SessionRequest => ({
@@ -214,7 +215,7 @@ describe('the paint session', () => {
     expect(ok(session.frame(request({ sceneId: 2 }))).timing.particlesMs).toBe(0)
   })
 
-  it('sends the paper when the page does not hold the one wanted, halved or whole, and not otherwise', () => {
+  it('sends the paper when the page does not hold the one wanted, at two texels to the CSS px, and not otherwise', () => {
     const session = fresh()
     expect(ok(session.frame(request())).paper).toBe(null)
     const first = ok(session.frame(request({ havePaper: '' }))).paper!
@@ -222,9 +223,14 @@ describe('the paint session', () => {
     expect(first.size).toBe(512)
     expect(first.rgba.length).toBe(512 * 512 * 4)
     expect(first.height.length).toBe(512 * 512)
-    // the full tile for a display with more device pixels
-    const whole = ok(session.frame(request({ havePaper: '', paper: { ...WANT, halve: false } }))).paper!
+    // the whole 1024 tile at two device px to the CSS px, and 512 x ratio texels between: a tile always has two texels to the CSS px
+    const whole = ok(session.frame(request({ havePaper: '', paper: { ...WANT, ratio: 2 } }))).paper!
     expect(whole.size).toBe(1024)
+    expect(ok(session.frame(request({ havePaper: '', paper: { ...WANT, ratio: 1.25 } }))).paper!.size).toBe(640)
+    expect(ok(session.frame(request({ havePaper: '', paper: { ...WANT, ratio: 1.5 } }))).paper!.size).toBe(768)
+    // (a tile of another size is another paper)
+    expect(paperKey({ ...WANT, ratio: 1.25 })).not.toBe(paperKey(WANT))
+    expect(paperKey({ ...WANT, ratio: 1.0001 })).toBe(paperKey(WANT))
     // a new tone is a new colouring of the same weave: its key differs, and so do its texels
     const toned: PaperWanted = { ...WANT, tone: [0.7, 0.02, 0.05] }
     const second = ok(session.frame(request({ havePaper: paperKey(WANT), paper: toned }))).paper!
@@ -232,6 +238,40 @@ describe('the paint session', () => {
     expect(Array.from(second.rgba.subarray(0, 64))).not.toEqual(Array.from(first.rgba.subarray(0, 64)))
     // a recolour carries the paper too
     expect(ok(session.frame(request({ kind: 'colour', gbuffer: null, havePaper: paperKey(WANT), paper: toned }))).paper?.key).toBe(paperKey(toned))
+  })
+
+  it('makes the paper as the weave’s own colour with no relief lit into it: the renderer lights the weave once', () => {
+    // A tile colourised with its own grazing light (the paper module's pictures are) and then lit again by the
+    // composite showed the weave's shading twice and read as burlap (a grey standard deviation of 16 of 255, against the
+    // mockup canvas's 3). The session's tile is the flat colour: exactly colourisePaper at texture 0.
+    const session = fresh()
+    const paper = ok(session.frame(request({ havePaper: '', paper: { ...WANT, weave: 'linen', ratio: 2 } }))).paper!
+    const tile = generatePaper('linen', { texture: WANT.texture, seed: String(WANT.seed), size: 1024 })
+    const flat = colourisePaper(tile, WANT.tone, 0)
+    expect(Array.from(paper.rgba.subarray(0, 4096))).toEqual(Array.from(flat.subarray(0, 4096)))
+    const lit = colourisePaper(tile, WANT.tone, 1)
+    expect(Array.from(lit.subarray(0, 4096))).not.toEqual(Array.from(flat.subarray(0, 4096)))
+    // and the cloth's own brightness is a few levels (8 of 255), not the lit weave's sixteen
+    const grey = (rgba: Uint8ClampedArray) => {
+      let s = 0
+      let s2 = 0
+      const n = rgba.length / 4
+      for (let i = 0; i < n; i++) {
+        const g = (rgba[4 * i] + rgba[4 * i + 1] + rgba[4 * i + 2]) / 3
+        s += g
+        s2 += g * g
+      }
+      return Math.sqrt(s2 / n - (s / n) ** 2)
+    }
+    expect(grey(paper.rgba)).toBeLessThan(10)
+    expect(grey(lit)).toBeGreaterThan(14)
+  })
+
+  it('scales the texture as the cloth’s contrast: no texture is a flat tone, and the height is flat too', () => {
+    const session = fresh()
+    const flat = ok(session.frame(request({ havePaper: '', paper: { ...WANT, texture: 0 } }))).paper!
+    expect(new Set(Array.from(flat.rgba.subarray(0, 4000))).size).toBeLessThan(5)
+    expect(Math.max(...flat.height.subarray(0, 1000))).toBe(Math.min(...flat.height.subarray(0, 1000)))
   })
 
   it('builds only the debug arrays the view in use reads', () => {
@@ -260,7 +300,7 @@ describe('the paint session', () => {
 
   it('hands back the arrays it made, but not the generator’s cached paper height', () => {
     const session = fresh()
-    const r = ok(session.frame(request({ havePaper: '', debug: 'edges', paper: { ...WANT, halve: false } })))
+    const r = ok(session.frame(request({ havePaper: '', debug: 'edges', paper: { ...WANT, ratio: 2 } })))
     const list = transferList(r)
     const buffers = new Set(list)
     expect(buffers.has(r.strokes.path.buffer as ArrayBuffer)).toBe(true)

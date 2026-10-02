@@ -27,8 +27,8 @@
 import { normalise, TABLE_SIZE } from '../colormaps'
 import type { Mark, Range, SpaceScene } from '../scene/types'
 import { colourisePaper, generatePaper } from '../../style/papers/generate/index'
-import type { PaperTile } from '../../style/papers/generate/types'
 import { buildParticles, classifyChange, paintFrame, recolourFrame } from './model/index'
+import { paperTileSize, resampleTile } from './paperScale'
 import type { PaintParams } from './params'
 import type { GBuffer, Oklab, PaintDebugMode, PaintFrame, PaintView, ParticleSet, SceneColours, StrokeBatch } from './types'
 
@@ -113,11 +113,12 @@ export interface PaperWanted {
   seed: number
   tone: [number, number, number]
   texture: number
-  // Average the 1024 tile 2x2 (a display with under 1.5 device px to the CSS px).
-  halve: boolean
+  // Device px to the CSS px of the view: the tile is made at 512 x ratio texels, two to the CSS px at any ratio
+  // (paperScale.ts), so the weave is the mockup's size on any display.
+  ratio: number
 }
 
-export const paperKey = (p: PaperWanted): string => `${p.weave}|${p.seed}|${p.tone.join(',')}|${p.texture}|${p.halve}`
+export const paperKey = (p: PaperWanted): string => `${p.weave}|${p.seed}|${p.tone.join(',')}|${p.texture}|${paperTileSize(p.ratio)}`
 
 export interface PaperData {
   key: string
@@ -208,21 +209,6 @@ export function transferList(res: SessionResponse): ArrayBuffer[] {
 const WEAVE_TYPE = { duck: 'canvas', linen: 'linen' } as const
 const PAPER_SIZE = 1024
 
-function halve(rgba: Uint8ClampedArray, height: Float32Array, size: number): { rgba: Uint8ClampedArray; height: Float32Array; size: number } {
-  const half = size >> 1
-  const out = new Uint8ClampedArray(half * half * 4)
-  const h = new Float32Array(half * half)
-  for (let y = 0; y < half; y++) {
-    for (let x = 0; x < half; x++) {
-      const a = 2 * y * size + 2 * x
-      const b = a + size
-      for (let c = 0; c < 4; c++) out[4 * (y * half + x) + c] = (rgba[4 * a + c] + rgba[4 * (a + 1) + c] + rgba[4 * b + c] + rgba[4 * (b + 1) + c] + 2) >> 2
-      h[y * half + x] = (height[a] + height[a + 1] + height[b] + height[b + 1]) / 4
-    }
-  }
-  return { rgba: out, height: h, size: half }
-}
-
 // ---- the session ----
 
 interface SceneEntry {
@@ -241,9 +227,6 @@ export class PaintSession {
   private readonly scenes = new Map<number, SceneEntry>()
   // The last full frame: what a colour request recolours.
   private analysis: { sceneId: number; params: PaintParams; frame: PaintFrame; debug: PaintDebugMode } | null = null
-  // The generated paper (the 1024 tile of a weave and seed), and its current colouring.
-  private tile: { weave: string; seed: number; tile: PaperTile } | null = null
-
   // A scene (plain, see plainScene) and its colours. The same id again replaces both.
   setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData): void {
     const have = this.scenes.get(sceneId)
@@ -322,17 +305,17 @@ export class PaintSession {
     }
   }
 
+  // The paper tile: the weave's own colour (the tone, and the cloth's brightness and mottle) and its height,
+  // and no lighting of the weave. The renderer lights the weave itself, once, with the relief light it lights the
+  // paint with (the way the mockup does); a tile colourised with its own grazing light as well, as the paper
+  // module's own pictures are, was lit twice and read as burlap. The structure is the generator's cached one
+  // (a texture is a scale of it), so a change of texture or tone is a cheap pass; the tile is then made the size
+  // the view needs (paperScale.ts).
   private makePaper(want: PaperWanted, key: string): PaperData {
-    if (!this.tile || this.tile.weave !== want.weave || this.tile.seed !== want.seed) {
-      this.tile = { weave: want.weave, seed: want.seed, tile: generatePaper(WEAVE_TYPE[want.weave], { texture: 1, seed: String(want.seed), size: PAPER_SIZE }) }
-    }
-    const tile = this.tile.tile
-    const rgba = colourisePaper(tile, want.tone, want.texture)
-    if (want.halve) {
-      const small = halve(rgba, tile.height, tile.size)
-      return { key, rgba: small.rgba, height: small.height, size: small.size }
-    }
-    return { key, rgba, height: tile.height, size: tile.size }
+    const tile = generatePaper(WEAVE_TYPE[want.weave], { texture: want.texture, seed: String(want.seed), size: PAPER_SIZE })
+    const flat = colourisePaper(tile, want.tone, 0)
+    const sized = resampleTile(flat, tile.height, tile.size, paperTileSize(want.ratio))
+    return { key, rgba: sized.rgba, height: sized.height, size: sized.size }
   }
 }
 

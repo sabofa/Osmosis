@@ -93,7 +93,7 @@ describe('the frames of the engine', () => {
     expect(frames[1].paperMs).toBe(0) // the paper is the same
     expect(gbuffers()).toBe(1)
     // the canvas texture and weave move the paper (made by the model's thread), not a stroke
-    engine.render(view(), setParam(P, 'canvas.texture', 0.5), 'none')
+    engine.render(view(), setParam(P, 'canvas.texture', 0.8), 'none')
     await done(4)
     expect(frames[3].kind).toBe('repaint')
     expect(frames[3].paperMs).toBeGreaterThan(0)

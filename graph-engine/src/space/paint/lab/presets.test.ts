@@ -52,7 +52,7 @@ describe('serialiseParams / parseParams', () => {
   it('reads a partial object over the defaults', () => {
     const result = parseParams('{"light":{"azimuth":-10}}')
     expect(result.ok && result.params.light.azimuth).toBe(-10)
-    expect(result.ok && result.params.light.elevation).toBe(40)
+    expect(result.ok && result.params.light.elevation).toBe(DEFAULT_PAINT_PARAMS.light.elevation)
     expect(result.ok && result.params.edges.wFocal).toEqual([0.26, 0.14, 0.06])
   })
 
@@ -71,7 +71,7 @@ describe('serialiseParams / parseParams', () => {
       expect(result.params.light.azimuth).toBe(180)
       expect(result.params.light.intensity).toBe(0)
       expect(result.params.seed).toBe(999)
-      expect(result.params.canvas.weave).toBe('duck')
+      expect(result.params.canvas.weave).toBe(DEFAULT_PAINT_PARAMS.canvas.weave)
     }
   })
 
@@ -147,6 +147,6 @@ describe('the preset store', () => {
     const old = readPresets(fakeStorage({ [PRESETS_KEY]: '{"old":{"light":{"azimuth":-5}},"junk":3}' }))
     expect(Object.keys(old)).toEqual(['old'])
     expect(old.old.light.azimuth).toBe(-5)
-    expect(old.old.light.elevation).toBe(40)
+    expect(old.old.light.elevation).toBe(DEFAULT_PAINT_PARAMS.light.elevation)
   })
 })

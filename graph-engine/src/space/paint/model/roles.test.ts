@@ -77,17 +77,17 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
   })
 
   it('puts form strokes within formBand of the terminator, and none with a zero band', () => {
-    const term = terminatorValue(P) // 0.485
+    const term = terminatorValue(P) // 0.37
     const forms = strokesOf(base, 'form')
     expect(forms.length).toBeGreaterThan(30)
-    // the model's own value at the stroke is inside 0.485 ± 0.18 (give the stroke's own extent a little slack)
+    // the model's own value at the stroke is inside 0.37 ± 0.18 (give the stroke's own extent a little slack)
     const inside = forms.filter((s) => Math.abs(s.value - term) <= 0.18 + 0.06).length
     expect(inside / forms.length).toBeGreaterThan(0.9)
     expect(sphereRun(resolvePaintParams({ detect: { formBand: 0 } })).frame.stats.byRole.form).toBe(0)
     const wide = sphereRun(resolvePaintParams({ detect: { formBand: 0.5 } })).frame.stats.byRole.form
     expect(wide).toBeGreaterThan(base.frame.stats.byRole.form)
     // the band is centred on the terminator: moving the terminator moves the strokes
-    const moved = sphereRun(resolvePaintParams({ value: { halfLo: 0.8, halfHi: 0.9, lightLo: 0.92 } }))
+    const moved = sphereRun(resolvePaintParams({ value: { halfAt: 0.6 } }))
     expect(moved.frame.stats.byRole.form).not.toBe(base.frame.stats.byRole.form)
   })
 
@@ -119,9 +119,9 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
     const gentleParams = { detect: { scumbleGradient: 0.05 }, value: { soft: 0.2 } }
     const gentle = sphereRun(resolvePaintParams(gentleParams))
     expect(gentle.frame.stats.byRole.scumble).toBeGreaterThan(10)
-    // every scumble stroke lies in a transition between zones: the value there is near a zone boundary (0.42 or 0.785)
+    // every scumble stroke lies in a transition between zones: the value there is near a zone boundary (halfAt 0.37 or lightAt 0.93)
     for (const s of strokesOf(gentle, 'scumble')) {
-      const near = Math.min(Math.abs(s.value - 0.42), Math.abs(s.value - 0.785))
+      const near = Math.min(Math.abs(s.value - 0.37), Math.abs(s.value - 0.93))
       expect(near).toBeLessThan(0.15)
     }
     // and a wider required width (more than the transition is across) leaves none
@@ -172,7 +172,7 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
     // a form stroke runs across the terminator, so its two ends differ in value: the loaded start is on the light side
     expect(lightFirst).toBeGreaterThan(30)
     // (the plan value is not strictly increasing in the model's value everywhere: at a zone edge a stroke can read the other way)
-    expect(darkFirst).toBeLessThan(0.05 * lightFirst)
+    expect(darkFirst).toBeLessThan(0.1 * lightFirst)
     // the others start at their left end
     expect(leftFirst).toBeGreaterThan(300)
     expect(rightFirst).toBe(0)
@@ -248,23 +248,23 @@ describe('veils: a mesh with opacity under 1 is glazed and nothing else', () => 
   const run = (params: PaintParams) => paintFrame(scene, buildParticles(scene, flatColours({ 0: lchToLab(0.72, 0.055, 232) }), params), view, g, params)
   const frame = run(P)
 
-  it('paints only glazes, at alpha 0.26, with no impasto', () => {
+  it('paints only glazes, at alpha 0.3, with no impasto', () => {
     const by = frame.stats.byRole
     expect(by.glaze).toBeGreaterThan(20)
     for (const r of ROLES) if (r !== 'glaze') expect(by[r], r).toBe(0)
     const b = frame.strokes
     let main = 0
     for (let i = 0; i < b.count; i++) {
-      // a glaze's alpha is its own absolute opacity, never over 0.34: 0.26 for the veil (0.30 for its dry border strokes), faded at the limb
-      expect(b.alpha[i]).toBeLessThanOrEqual(0.3 + 1e-6)
+      // a glaze's alpha is its own absolute opacity, never over 0.34: 0.30 for the veil (0.34 for its dry border strokes), faded at the limb
+      expect(b.alpha[i]).toBeLessThanOrEqual(0.34 + 1e-6)
       if (b.alpha[i] > 0.2) main++
       expect(b.impasto[i]).toBe(0)
       // wide strokes, heavily overlapped
       expect(b.width[PATH_POINTS * i + 3]).toBeGreaterThan(20)
     }
     expect(main).toBeGreaterThan(b.count * 0.4)
-    // the veil's own strokes carry exactly 0.26 where nothing fades them
-    expect(Math.max(...Array.from(b.alpha).filter((a) => a < 0.29))).toBeCloseTo(0.26, 6)
+    // the veil's own strokes carry exactly 0.30 where nothing fades them
+    expect(Math.max(...Array.from(b.alpha).filter((a) => a < 0.32))).toBeCloseTo(0.3, 6)
   })
 
   it('lays them in two crossing directions, so the veil is woven', () => {

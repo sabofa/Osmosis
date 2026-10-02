@@ -40,6 +40,9 @@ uniform sampler2D u_paint0;  // premultiplied sRGB colour, coverage
 uniform sampler2D u_paint1;  // paint height (r)
 uniform sampler2D u_paper;   // sRGB RGBA8
 uniform sampler2D u_paperH;  // normalised weave height, R32F
+uniform sampler2D u_paperLow;// the tile blurred to a few texels across: RGBA8, repeating, bilinear
+uniform vec4 u_mottle;       // the mottle's second copy: cos and sin of its turn, its scale
+uniform vec2 u_mottleShift;  // ... and its shift, in tiles
 uniform ivec2 u_paperSize;
 uniform vec2 u_resolution;
 uniform vec3 u_flatTone;     // sRGB tone for the no-canvas view
@@ -66,11 +69,24 @@ float heightAt(ivec2 g) {
   return pt * u_impasto + weave;
 }
 
+// The canvas colour here: the tile's weave (the tile less its own blur, where the tile repeats) plus its mottle (the
+// blur) read from a second, turned, scaled and shifted copy, so that the mottle does not repeat at the tile's period
+// (see MOTTLE_* in gl/composite.ts). With the copy the same as the tile this is the tile's own colour.
+vec3 paperColour(vec2 fragCoord) {
+  ivec2 pc = paperCoord(fragCoord, u_resolution, u_paperSize);
+  vec3 tile = texelFetch(u_paper, pc, 0).rgb;
+  // the pixel's place over the screen in tiles, not wrapped (the low texture repeats by itself)
+  vec2 p = (vec2(float(int(fragCoord.x)), float(int(u_resolution.y - fragCoord.y))) + 0.5) / vec2(u_paperSize);
+  vec3 lowHere = texture(u_paperLow, p).rgb;
+  vec2 q = vec2(u_mottle.x * p.x - u_mottle.y * p.y, u_mottle.y * p.x + u_mottle.x * p.y) * u_mottle.z + u_mottleShift;
+  return tile - lowHere + texture(u_paperLow, q).rgb;
+}
+
 void main() {
   ivec2 px = ivec2(gl_FragCoord.xy);
   int rows = int(u_resolution.y);
   vec4 paint = texelFetch(u_paint0, px, 0);
-  vec3 paper = u_noCanvas ? u_flatTone : texelFetch(u_paper, paperCoord(gl_FragCoord.xy, u_resolution, u_paperSize), 0).rgb;
+  vec3 paper = u_noCanvas ? u_flatTone : paperColour(gl_FragCoord.xy);
   vec3 col = paint.rgb + paper * (1.0 - paint.a);
 
   if (u_relief) {

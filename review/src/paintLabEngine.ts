@@ -119,12 +119,6 @@ export interface PaintEngine {
   dispose(): void
 }
 
-// The generated tile has two texels to a CSS px (the mockup's scale: it is 512 CSS px
-// square), and the renderer lays one texel on one device px. Below a pixel ratio of 1.5
-// the tile is halved (a 2x2 average, in the session) so that its weave is the size the
-// mockup's is, and not twice that.
-const HALVE_BELOW_RATIO = 1.5
-
 // ---- where the model runs ----
 
 interface ModelHost {
@@ -323,7 +317,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     seed: params.seed,
     tone: [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]],
     texture: params.canvas.texture,
-    halve: view.pixelRatio < HALVE_BELOW_RATIO,
+    ratio: view.pixelRatio,
   })
 
   async function run(job: Job): Promise<FrameStats> {

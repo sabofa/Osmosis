@@ -69,7 +69,25 @@ describe('the stroke shaders (R3)', () => {
   it('gate a dry tail by the canvas height texture, so paint skips the weave valleys', () => {
     expect(STROKE_FRAGMENT).toContain('texelFetch(u_paperH')
     expect(STROKE_FRAGMENT).toContain('dep + 0.45 * hg')
-    expect(STROKE_FRAGMENT).toContain('sstep(g0, g1,')
+    expect(STROKE_FRAGMENT).toContain('sstep(g0 - aa, g1 + aa,')
+  })
+
+  it('blend in sRGB without encoding or decoding the colour again: the model’s colour is encoded once, in packStrokes', () => {
+    // (the shared GLSL defines the two functions; main() must not call them)
+    const main = STROKE_FRAGMENT.slice(STROKE_FRAGMENT.indexOf('void main()'))
+    expect(main).not.toMatch(/srgbEncode\(/)
+    expect(main).not.toMatch(/srgbDecode\(/)
+    expect(main).toContain('o_colour = vec4(col * al, al);')
+  })
+
+  it('anti-alias the edges of a stroke: the gate is widened by half the deposit’s change over a pixel, from before any discard', () => {
+    // the deposit's derivative, not the tooth's (the weave's grain stays crisp), and taken before the first discard
+    expect(STROKE_FRAGMENT).toContain('float aa = 0.5 * fwidth(bestDep);')
+    expect(STROKE_FRAGMENT.indexOf('fwidth(bestDep)')).toBeLessThan(STROKE_FRAGMENT.indexOf('if (bestDep <= 0.0) discard;'))
+    expect(STROKE_FRAGMENT).not.toContain('fwidth(hg)')
+    // both gates (dry, and loaded) use it
+    expect(STROKE_FRAGMENT).toContain('sstep(0.03 - aa, 0.12 + aa, dep)')
+    expect(STROKE_FRAGMENT).toContain('sstep(g0 - aa, g1 + aa, dep + 0.45 * hg)')
   })
 
   it('load the start, thin the body and dissolve the end (endSoft pulls the end in to 0.6)', () => {
@@ -175,6 +193,14 @@ describe('the composite shader (R4)', () => {
     expect(c).toContain('exp(-2.4 * pt) * u_texture')
     expect(c).toContain('tanh(f0 * 1.4)')
     expect(c).toContain('u_pixelRatio')
+  })
+
+  it('writes the sum as it is: the encode appears only in the grey view, which decodes to lightness and encodes the grey', () => {
+    expect(c).toContain('fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);')
+    const main = c.slice(c.indexOf('void main()'))
+    expect(main.split('srgbEncode(').length - 1).toBe(1)
+    expect(main.indexOf('srgbEncode(vec3(L * L * L))')).toBeGreaterThan(main.indexOf('if (u_grey)'))
+    expect(main.split('srgbDecode(').length - 1).toBe(1)
   })
 
   it('has a grey view (OKLab lightness) and a flat-tone view without the canvas', () => {

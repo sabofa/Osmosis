@@ -124,6 +124,28 @@ describe('packStrokes', () => {
     expect(Array.from(out.subarray(c + 12, c + 16))).toEqual([3, 2, 0, 0])
   })
 
+  it('puts the model’s linear colour through ONE sRGB encode on its way to a screen byte (no encode missing, none twice)', () => {
+    // linear (0.2, 0.1, 0.05): sRGB 1.055 x 0.2^(1/2.4) - 0.055 = 0.4845, 0.3507 and 0.2478, which are the bytes 124, 89 and 63.
+    // The first wiring was suspected of washing the paint out by a double or a missing encode: the colour is encoded here once,
+    // the stroke shader blends in sRGB without encoding or decoding (shaders.test.ts), and the composite writes the sum.
+    const b = batch([0], [1])
+    b.colour.set([0.2, 0.1, 0.05], 0)
+    const plan = planStrokes(b)
+    const layout = strokeLayout(plan.count, 4096)
+    const out = new Float32Array(layout.width * layout.rows * 4)
+    packStrokes(b, plan, layout, out)
+    const c = 8 * 4
+    expect(Array.from(out.subarray(c, c + 3)).map((v) => Math.round(v * 255))).toEqual([124, 89, 63])
+    expect(out[c]).toBeCloseTo(0.4845, 3)
+    // a stroke that covers its pixel whole (alpha 1, no wet pickup, flat canvas under it of byte 235) is the encoded byte
+    // by the composite's own arithmetic: paint + canvas (1 - coverage)
+    const al = 1
+    const paper = 235 / 255
+    expect(Math.round(255 * (out[c] * al + paper * (1 - al)))).toBe(124)
+    // and at the brush's top opacity (0.96) the canvas shows through by 4%: 0.96 x 124 + 0.04 x 235 = 128.4
+    expect(Math.round(255 * (out[c] * 0.96 + paper * 0.04))).toBe(128)
+  })
+
   it('places the n-th stroke of the plan in the n-th slot, 12 texels along the row', () => {
     const b = batch([0, 0], [1, 9])
     b.path.fill(0)

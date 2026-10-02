@@ -52,10 +52,12 @@ describe('the texels of an underpainting', () => {
 })
 
 describe('the least coverage of an underpainting', () => {
-  it('is its opacity less what the weave and the streaks can take: 0.85 x (1 - 0.08 - 0.3 x 0.4) = 0.68 at the defaults', () => {
+  it('is its opacity less what the weave and the streaks can take: 0.85 x (1 - 0.08 x 0.5 - 0.3 x 0.4) = 0.714 at the defaults', () => {
     expect(UNDERPAINT_WEAVE_GATE).toBe(0.08)
     expect(UNDERPAINT_STREAK_GAIN).toBe(0.3)
-    expect(underpaintFloor(DEFAULT_PAINT_PARAMS)).toBeCloseTo(0.85 * (1 - 0.08 * 1 - 0.3 * 0.4), 12)
+    // (the canvas texture is 0.5 by default)
+    expect(DEFAULT_PAINT_PARAMS.canvas.texture).toBe(0.5)
+    expect(underpaintFloor(DEFAULT_PAINT_PARAMS)).toBeCloseTo(0.85 * (1 - 0.08 * 0.5 - 0.3 * 0.4), 12)
     expect(underpaintFloor(DEFAULT_PAINT_PARAMS)).toBeGreaterThan(0.6)
   })
 

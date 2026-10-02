@@ -27,59 +27,66 @@ const P = DEFAULT_PAINT_PARAMS
 const sample = (raw: number, b = 0, cast = false, params = P) => zoneSample(params, raw, b, cast, newZoneSample())
 
 describe('value plan', () => {
-  // Defaults: soft 0.07, half-tone 0.52..0.72, light 0.85..0.94, core 0.24, reflected 0.34..0.48, cast 0.32.
-  // The core | half-tone boundary is centred at halfLo − soft/2 = 0.485 and spans 0.45..0.52.
-  // The half-tone | light boundary is centred at (halfHi + lightLo)/2 = 0.785 and spans 0.75..0.82.
+  // The zones are chosen by two soft steps over v, centred at value.halfAt (core | half-tone) and value.lightAt
+  // (half-tone | light), value.soft wide; the half-tone u ramps from halfLo to halfHi over v from halfAt to lightAt, the
+  // light u from lightLo to lightHi over v from lightAt to 1. These tests move the steps to round numbers (halfAt 0.3,
+  // lightAt 0.7, soft 0.1: the steps span 0.25..0.35 and 0.65..0.75) so the expected values are hand-computable;
+  // the defaults are pinned below, against the mockup's own plan.
+  const R = resolvePaintParams({ value: { halfAt: 0.3, lightAt: 0.7, soft: 0.1 } })
+  const at = (raw: number, b = 0, cast = false) => sample(raw, b, cast, R)
+
   it('holds a plateau in the core: 0.24 across the whole shadow side', () => {
-    for (const raw of [0.18, 0.25, 0.4, 0.449]) {
-      const s = sample(raw)
+    for (const raw of [0.05, 0.18, 0.25]) {
+      const s = at(raw)
       expect(s.u).toBeCloseTo(0.24, 9)
       expect(s.zone).toBe(Z_CORE)
       expect(ZONES[s.zone]).toBe('core')
     }
   })
 
-  it('ramps the half-tone from 0.52 to 0.72 over raw u 0.52..0.72', () => {
-    expect(sample(0.52).u).toBeCloseTo(0.52, 9)
-    // raw 0.60: 0.52 + 0.20·(0.08/0.20) = 0.60
-    expect(sample(0.6).u).toBeCloseTo(0.6, 9)
-    expect(sample(0.6).zone).toBe(Z_HALF)
-    expect(sample(0.72).u).toBeCloseTo(0.72, 9)
-    expect(sample(0.74).u).toBeCloseTo(0.72, 9) // clamped at the top of the ramp, still half
-    expect(sample(0.74).zone).toBe(Z_HALF)
+  it('ramps the half-tone from 0.52 to 0.72 over v from halfAt to lightAt', () => {
+    // v = 0.5 is half-way from 0.3 to 0.7: 0.52 + 0.20·0.5 = 0.62, and wholly half-tone
+    const mid = at(0.5)
+    expect(mid.u).toBeCloseTo(0.62, 9)
+    expect(mid.zone).toBe(Z_HALF)
+    // a quarter of the way (v = 0.4): 0.52 + 0.20·0.25 = 0.57
+    expect(at(0.4).u).toBeCloseTo(0.57, 9)
+    // three quarters (v = 0.6): 0.67
+    expect(at(0.6).u).toBeCloseTo(0.67, 9)
   })
 
-  it('ramps the light from 0.85 to 0.94 over raw u 0.85..1', () => {
-    expect(sample(0.85).u).toBeCloseTo(0.85, 9)
-    // raw 0.95: 0.85 + 0.09·(0.10/0.15) = 0.91
-    expect(sample(0.95).u).toBeCloseTo(0.91, 9)
-    expect(sample(1).u).toBeCloseTo(0.94, 9)
-    expect(sample(0.95).zone).toBe(Z_LIGHT)
+  it('ramps the light from 0.85 to 0.94 over v from lightAt to 1', () => {
+    // v = 0.85 is half-way from 0.7 to 1: 0.85 + 0.09·0.5 = 0.895
+    expect(at(0.85).u).toBeCloseTo(0.895, 9)
+    expect(at(0.85).zone).toBe(Z_LIGHT)
+    expect(at(1).u).toBeCloseTo(0.94, 9)
+    // one fifth of the way up (v = 0.76): 0.85 + 0.09·0.2 = 0.868
+    expect(at(0.76).u).toBeCloseTo(0.868, 9)
   })
 
-  it('steps between zones across a soft boundary of width value.soft', () => {
-    // core | half: at 0.485 the two weigh half each: 0.5·0.52 + 0.5·0.24 = 0.38
-    const mid = sample(0.485)
+  it('steps between zones across a soft step of width value.soft, centred on the boundary', () => {
+    // core | half-tone: at v = halfAt the two weigh half each; the half-tone is at the bottom of its ramp (0.52)
+    const mid = at(0.3)
     expect(mid.w[1]).toBeCloseTo(0.5, 9)
     expect(mid.w[2]).toBeCloseTo(0.5, 9)
-    expect(mid.u).toBeCloseTo(0.38, 9)
+    expect(mid.u).toBeCloseTo(0.5 * 0.52 + 0.5 * 0.24, 9)
     expect(mid.trans).toBeCloseTo(0.5, 9)
-    // the boundary is exactly 0.07 wide: fully core at 0.45, fully half at 0.52
-    expect(sample(0.45).w[2]).toBeCloseTo(1, 9)
-    expect(sample(0.52).w[1]).toBeCloseTo(1, 9)
-    expect(sample(0.5).w[1]).toBeGreaterThan(0.5)
-    expect(sample(0.47).w[1]).toBeLessThan(0.5)
-    // half | light: at 0.785 each weighs half, between the half-tone's top (0.72) and the light's bottom (0.85)
-    const hl = sample(0.785)
+    // the step is exactly 0.1 wide: fully core at 0.25, fully half-tone at 0.35
+    expect(at(0.25).w[2]).toBeCloseTo(1, 9)
+    expect(at(0.35).w[1]).toBeCloseTo(1, 9)
+    expect(at(0.33).w[1]).toBeGreaterThan(0.5)
+    expect(at(0.27).w[1]).toBeLessThan(0.5)
+    // half-tone | light: at lightAt each weighs half; the half-tone is at the top of its ramp (0.72), the light at the bottom (0.85)
+    const hl = at(0.7)
     expect(hl.w[0]).toBeCloseTo(0.5, 9)
     expect(hl.w[1]).toBeCloseTo(0.5, 9)
     expect(hl.u).toBeCloseTo(0.5 * 0.85 + 0.5 * 0.72, 9)
-    expect(sample(0.75).w[1]).toBeCloseTo(1, 9)
-    expect(sample(0.82).w[0]).toBeCloseTo(1, 9)
-    // a wider soft widens the boundary: 0.14 puts 0.45 at only a quarter-ish through
-    const wide = resolvePaintParams({ value: { soft: 0.14 } })
-    expect(sample(0.45, 0, false, wide).w[1]).toBeGreaterThan(0.1)
-    expect(sample(0.45).w[1]).toBeCloseTo(0, 9)
+    expect(at(0.65).w[1]).toBeCloseTo(1, 9)
+    expect(at(0.75).w[0]).toBeCloseTo(1, 9)
+    // a wider soft widens the step: soft 0.3 spans 0.15..0.45, and v = 0.2 is a sixth in: t²(3 − 2t) = 2/27 = 0.0741
+    const wide = resolvePaintParams({ value: { halfAt: 0.3, lightAt: 0.7, soft: 0.3 } })
+    expect(sample(0.2, 0, false, wide).w[1]).toBeCloseTo(2 / 27, 9)
+    expect(at(0.2).w[1]).toBeCloseTo(0, 9)
   })
 
   it('weights always sum to one', () => {
@@ -203,6 +210,39 @@ describe('value plan', () => {
     expect(plan.shadowW[top]).toBeCloseTo(0, 6)
   })
 
+  it('puts the mockup’s share of a sphere in the light, the half-tones and the core: the lights do not wash out', () => {
+    // The approved mockup's plan (figures.js plan()), over the key light alone: light on at N·L 0.62..0.70,
+    // half-tone from 0.14..0.20, the rest core (and reflected light, left out here). The defaults here must give a lit
+    // sphere about the same share of each: with the plateau values (0.485 and 0.785) as the steps, and the fill light
+    // on top of v, the light took 44% of a sphere against the mockup's 30% and the half-tones 21% against 35%, and the
+    // paint read pale.
+    const smooth = (a: number, b: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+      return t * t * (3 - 2 * t)
+    }
+    const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 80 })
+    const g = sphereGBuffer(400, 300, { view })
+    const plan = buildPlanMap(makeFrameCtx(sceneOf([sphereMesh()]), view, g, P))
+    const L = view.lightDir
+    const model = [0, 0, 0]
+    const mockup = [0, 0, 0]
+    let n = 0
+    for (let i = 0; i < g.width * g.height; i++) {
+      if (g.mark[i] < 0) continue
+      n++
+      const key = Math.max(0, g.normal[3 * i] * L[0] + g.normal[3 * i + 1] * L[1] + g.normal[3 * i + 2] * L[2])
+      const wLight = smooth(0.62, 0.7, key)
+      const wHalf = smooth(0.14, 0.2, key) - wLight
+      const wCore = 1 - smooth(0.14, 0.2, key)
+      mockup[wLight >= wHalf && wLight >= wCore ? 0 : wHalf >= wCore ? 1 : 2]++
+      model[plan.zone[i] === Z_LIGHT ? 0 : plan.zone[i] === Z_HALF ? 1 : 2]++
+    }
+    for (let k = 0; k < 3; k++) expect(Math.abs(model[k] / n - mockup[k] / n), ['light', 'half-tone', 'core'][k]).toBeLessThan(0.07)
+    // and the half-tones, where the chroma peaks, are the biggest zone, as in the mockup
+    expect(model[1]).toBeGreaterThan(model[0])
+    expect(model[1]).toBeGreaterThan(model[2])
+  })
+
   it('gives scumble its test: the value gradient per CSS px, small across a wide transition', () => {
     const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 80 })
     const g = sphereGBuffer(400, 300, { view })
@@ -224,9 +264,11 @@ describe('value plan', () => {
     expect(rim).toBeGreaterThan(20)
   })
 
-  it('puts the terminator at the centre of the core | half-tone boundary: halfLo - soft/2', () => {
-    expect(terminatorValue(P)).toBeCloseTo(0.485, 9)
-    expect(terminatorValue(resolvePaintParams({ value: { halfLo: 0.6, soft: 0.1 } }))).toBeCloseTo(0.55, 9)
+  it('puts the terminator at the centre of the core | half-tone step: halfAt', () => {
+    expect(terminatorValue(P)).toBeCloseTo(0.37, 9)
+    expect(terminatorValue(resolvePaintParams({ value: { halfAt: 0.55, soft: 0.1 } }))).toBeCloseTo(0.55, 9)
+    // moving the plateau values does not move it
+    expect(terminatorValue(resolvePaintParams({ value: { halfLo: 0.6 } }))).toBeCloseTo(0.37, 9)
   })
 
   it('shares the light between key and environment: ambient terms over the value', () => {
