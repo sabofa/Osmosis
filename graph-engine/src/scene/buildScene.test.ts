@@ -878,6 +878,21 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     expect(line.points[1].y).toBeCloseTo(1 + 2 * (10 - 1), 4)
   })
 
+  it('a statement that does not compile feeds no feature points, whether its body or its if clause is the fault', () => {
+    // y = 2 - x alone has a root at (2, 0) and a y-intercept at (0, 2). The
+    // broken line would add a root and a y-intercept at the origin and an
+    // intersection at (1, 1) if it were still used.
+    const baseline = sceneOf('@points: roots, intersections\ny = 2 - x')
+    const baselineKinds = baseline.objects.flatMap((o) => (o.kind === 'point' && o.feature ? [o.feature] : [])).sort()
+    expect(baselineKinds).toEqual(['x-intercept', 'y-intercept'])
+    for (const broken of ['y = x if y > 0', 'y = sinn(x)']) {
+      const scene = sceneOf(`@points: roots, intersections\n${broken}\ny = 2 - x`)
+      expect(scene.errors, broken).toEqual([expect.objectContaining({ line: 2 })])
+      const kinds = scene.objects.flatMap((o) => (o.kind === 'point' && o.feature ? [o.feature] : [])).sort()
+      expect(kinds, broken).toEqual(baselineKinds)
+    }
+  })
+
   it('a definition clash is reported on its own line', () => {
     const scene = sceneOf('f(x) = x\nf(x) = x + 1\ny = f(x)')
     expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('"f" is defined twice') })])

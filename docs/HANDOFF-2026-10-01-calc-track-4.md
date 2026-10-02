@@ -59,6 +59,12 @@ unchanged (the same IEEE operations): every pre-existing example and a set of
 other specs were compared old engine against new, identical but for those
 changes.
 
+A 2D scene's errors depend on the view ("this curve is undefined everywhere in
+view" for `y = ln(x)` once the view is left of 0), so `GraphViewer` delivers the
+error list on a pan/zoom rebuild too, but only when it differs from the last list
+delivered (`viewerErrors.ts`, `createErrorReporter`); a text or theme rebuild
+always delivers.
+
 What still evaluates through `parser/evalExpr.ts`, on purpose:
 `scene/geometry/buildConstructions.ts` (shared with the figure engine) and the
 renderer's per-frame `animate:` evaluation. A construction error still comes

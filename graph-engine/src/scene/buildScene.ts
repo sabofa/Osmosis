@@ -275,6 +275,9 @@ function buildFeaturePoints(
     let f: (x: number) => number
     try {
       f = compileScalar(statement.body, ['x'], scope)
+      // A statement whose if clause does not compile draws nothing, so it
+      // marks nothing either.
+      if (statement.where) compileScalar(statement.where, ['x'], scope)
     } catch {
       // reported by the statement itself
       continue
