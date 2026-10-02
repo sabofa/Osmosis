@@ -63,26 +63,38 @@ export function div(out: Iv, a: Iv, b: Iv): Iv {
     if (q1 !== q1 || q2 !== q2 || q3 !== q3 || q4 !== q4) return set(out, -Infinity, Infinity, worst(v, PARTIAL))
     return set(out, down(Math.min(q1, q2, q3, q4)), up(Math.max(q1, q2, q3, q4)), v)
   }
-  // The divisor reaches zero: undefined there.
+  // The divisor reaches zero: a pole (or 0 / 0, NaN) there. The scalar compile
+  // still gives a value at the zero, +-infinity, and a later twin may map it back
+  // to a finite one (1 / (1 / 0) is 0), so the answer must hold that infinity.
   const p = worst(v, PARTIAL)
-  if (b.lo === 0 && b.hi === 0) return setEmpty(out)
+  // a divisor that is exactly zero: nothing but 0 / 0 is empty
+  if (b.lo === 0 && b.hi === 0) return a.lo === 0 && a.hi === 0 ? setEmpty(out) : set(out, -Infinity, Infinity, p)
   if (hasZero(a) || (b.lo < 0 && b.hi > 0)) return set(out, -Infinity, Infinity, p)
+  // The zero end is a point of the box and a / +0, a / -0 are infinities of opposite
+  // sign: the one-sided answer holds only when the zero has the sign of the side the
+  // rest of the box lies on (a +0 end with the rest positive, a -0 end with the rest
+  // negative); a zero of the other sign also reaches the other infinity.
+  if (b.lo === 0 ? 1 / b.lo < 0 : 1 / b.hi > 0) return set(out, -Infinity, Infinity, p)
   if (b.lo === 0) return a.lo > 0 ? set(out, down(a.lo / b.hi), Infinity, p) : set(out, -Infinity, up(a.hi / b.hi), p)
   return a.lo > 0 ? set(out, -Infinity, up(a.lo / b.lo), p) : set(out, down(a.hi / b.lo), Infinity, p)
 }
 
 // f monotone on (-inf, 0] and on [0, inf) (either direction on each side), with
 // f(0) = at0, or at0 NaN for a pole or a hole at 0. Bounds come from the ends
-// and, when 0 is strictly inside, from f(0). A non-finite end value marks the
-// result partial (a pole or an overflow at that end). `p` is handed to f, so a
-// parameterised f (x^n) is a module-level function and not a closure.
+// and, when 0 is strictly inside, from f(0). A NaN end value marks the result
+// partial with no bound on that side; an infinite one (an overflow) keeps the
+// verdict: PARTIAL means a NaN or a pole, and overflow is neither.
 //
-// With at0 NaN and 0 in the box the result is partial, and f(0) itself is not
-// read: the scalar value at 0 is infinite or NaN, which a partial verdict allows,
-// and the sign of an infinity at 0 depends on the sign of the zero. Each side
-// that reaches 0 is bounded by f at the double nearest 0 on that side (monotone,
-// so nothing between that double and 0 exists to exceed it), which keeps the
-// side's real limit and its true sign.
+// `p` (default 0) is handed to every call of f as its second argument, so a
+// parameterised f (x^n) is a module-level function and not a closure. A function
+// with a meaningful optional second argument must therefore not be passed bare:
+// wrap it in a module-level function that ignores `p`.
+//
+// With at0 NaN and 0 in the box the result is partial, and each side that reaches
+// 0 is bounded by f at the double nearest 0 on that side (monotone, so nothing
+// between that double and 0 exists to exceed it), which keeps the side's real
+// limit and its true sign. The scalar's own value at each zero the box holds is
+// hulled in as well (see sidesPole).
 export function sides(out: Iv, a: Iv, f: (x: number, p: number) => number, at0: number, rel: number = LIB, p = 0): Iv {
   if (isEmpty(a)) return setEmpty(out)
   if (Number.isNaN(at0) && a.lo <= 0 && 0 <= a.hi) return sidesPole(out, a, f, rel, p)
@@ -94,13 +106,21 @@ export function sides(out: Iv, a: Iv, f: (x: number, p: number) => number, at0: 
     lo = Math.min(lo, at0)
     hi = Math.max(hi, at0)
   }
-  const v: Verdict = lo > -Infinity && hi < Infinity ? a.v : worst(a.v, PARTIAL)
+  const v: Verdict = lo !== lo || hi !== hi ? worst(a.v, PARTIAL) : a.v
   // A NaN end (f undefined there) is no bound; `set` turns it into -inf / +inf.
   return set(out, down(lo, rel), up(hi, rel), v)
 }
 
 // `sides` for a pole or hole at 0 that the box reaches (see above): always
 // partial. Kept apart so the common case stays small.
+//
+// The scalar compile still gives a value at a zero the box holds, and that value
+// (usually an infinity) is a point of the answer: a later twin may map it back to
+// a finite one (1 / (x^-1) is 0 at 0), so an answer that left it out would make
+// the next twin wrong. A box end that is a zero is that signed zero; a zero
+// strictly inside may be either sign, so f(+0) and f(-0) both count (they differ:
+// Math.pow(-0, -1) is -Infinity). A NaN value at a zero adds nothing (a partial
+// verdict covers it), and an answer is empty only when every value is NaN.
 function sidesPole(out: Iv, a: Iv, f: (x: number, p: number) => number, rel: number, p: number): Iv {
   const v = worst(a.v, PARTIAL)
   let lo: number
@@ -123,15 +143,46 @@ function sidesPole(out: Iv, a: Iv, f: (x: number, p: number) => number, rel: num
     lo = Math.min(x, y)
     hi = Math.max(x, y)
   } else {
-    return setEmpty(out)
+    lo = Infinity
+    hi = -Infinity
   }
+  if (a.lo < 0 && a.hi > 0) {
+    const z0 = f(0, p)
+    const z1 = f(-0, p)
+    if (z0 === z0) {
+      lo = Math.min(lo, z0)
+      hi = Math.max(hi, z0)
+    }
+    if (z1 === z1) {
+      lo = Math.min(lo, z1)
+      hi = Math.max(hi, z1)
+    }
+  } else {
+    if (a.lo === 0) {
+      const z = f(a.lo, p)
+      if (z === z) {
+        lo = Math.min(lo, z)
+        hi = Math.max(hi, z)
+      }
+    }
+    if (a.hi === 0) {
+      const z = f(a.hi, p)
+      if (z === z) {
+        lo = Math.min(lo, z)
+        hi = Math.max(hi, z)
+      }
+    }
+  }
+  if (lo > hi) return setEmpty(out)
   return set(out, down(lo, rel), up(hi, rel), v)
 }
 
 // x^n for a whole n (the scalar compile's Math.pow).
 export function powInt(out: Iv, a: Iv, n: number): Iv {
-  if (isEmpty(a)) return setEmpty(out)
+  // Math.pow(NaN, 0) is 1: x^0 is 1 even where x is undefined, so an empty base
+  // still gives [1, 1] (a.v is partial then)
   if (n === 0) return set(out, 1, 1, a.v)
+  if (isEmpty(a)) return setEmpty(out)
   return sides(out, a, Math.pow, n > 0 ? 0 : Number.NaN, LIB, n)
 }
 
@@ -139,7 +190,8 @@ export function powInt(out: Iv, a: Iv, n: number): Iv {
 // x >= 0 only (a finite negative base is NaN). The scalar compile still gives a
 // value at a base of -inf (+inf for e > 0, +0 for e < 0), so a box that reaches
 // it keeps that value; and an infinite e makes every negative base 0, inf or NaN,
-// which no bound narrower than [0, inf] holds.
+// which no bound narrower than [0, inf] holds. Partial means a NaN (a negative
+// base) or a pole (e < 0 with 0 in the box); an overflow keeps the verdict.
 export function powReal(out: Iv, a: Iv, e: number): Iv {
   if (isEmpty(a)) return setEmpty(out)
   if (!Number.isFinite(e)) return set(out, 0, Infinity, worst(a.v, PARTIAL))
@@ -153,9 +205,9 @@ export function powReal(out: Iv, a: Iv, e: number): Iv {
     hi = z
   }
   if (a.hi >= 0) {
+    if (e < 0 && a.lo <= 0) v = worst(v, PARTIAL)
     const x = Math.pow(a.lo > 0 ? a.lo : 0, e)
     const y = Math.pow(a.hi, e)
-    if (!Number.isFinite(x) || !Number.isFinite(y)) v = worst(v, PARTIAL)
     lo = Math.min(lo, x, y)
     hi = Math.max(hi, x, y)
   }
@@ -181,9 +233,10 @@ export function powOddRoot(out: Iv, a: Iv, e: number, pOdd: boolean): Iv {
 
 // x^y with an interval exponent. For x > 0, x^y is monotone in each variable,
 // so the four corners bound it; otherwise it is not defined everywhere and no
-// cheap enclosure is attempted.
+// cheap enclosure is attempted. An empty base is NaN, and Math.pow(NaN, 0) is 1.
 export function powGeneral(out: Iv, a: Iv, b: Iv): Iv {
-  if (isEmpty(a) || isEmpty(b)) return setEmpty(out)
+  if (isEmpty(b)) return setEmpty(out)
+  if (isEmpty(a)) return hasZero(b) ? set(out, 1, 1, worst(PARTIAL, b.v)) : setEmpty(out)
   if (b.lo === b.hi) {
     const e = b.lo
     const v0 = worst(a.v, b.v)
@@ -196,7 +249,10 @@ export function powGeneral(out: Iv, a: Iv, b: Iv): Iv {
   const c3 = Math.pow(a.hi, b.lo)
   const c4 = Math.pow(a.hi, b.hi)
   let v = worst(a.v, b.v)
-  if (!Number.isFinite(c1) || !Number.isFinite(c2) || !Number.isFinite(c3) || !Number.isFinite(c4)) v = worst(v, PARTIAL)
+  // Over a positive base only a base of 1 under an infinite exponent is NaN (in
+  // JavaScript), and no corner shows it when 1 is strictly inside the base.
+  // Overflow to 0 or infinity is not undefinedness: the verdict stays.
+  if ((a.lo <= 1 && 1 <= a.hi && (b.lo === -Infinity || b.hi === Infinity)) || c1 !== c1 || c2 !== c2 || c3 !== c3 || c4 !== c4) v = worst(v, PARTIAL)
   return set(out, down(Math.min(c1, c2, c3, c4), LIB), up(Math.max(c1, c2, c3, c4), LIB), v)
 }
 

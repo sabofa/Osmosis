@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { CONTINUOUS, DEFINED, iv, PARTIAL, setBox, type Iv } from './core'
 import { add, div, mul, neg, powGeneral, powInt, powOddRoot, powReal, sides, sub } from './arith'
 import { realOddPow } from '../rational'
-import { admits, mulberry32, pointsIn, randomBox } from './testkit'
+import { admits, mulberry32, pointsIn, randomBox, zerosIn } from './testkit'
 
 const box = (lo: number, hi: number): Iv => setBox(iv(), lo, hi)
 const near = (a: number, b: number) => Math.abs(a - b) <= 1e-12 * Math.max(1, Math.abs(b))
-const show = (r: Iv) => `[${r.lo}, ${r.hi}] v${r.v}`
+const fmt = (x: number): string => (Object.is(x, -0) ? '-0' : String(x))
+const show = (r: Iv): string => `[${fmt(r.lo)}, ${fmt(r.hi)}] v${r.v}`
 
 describe('arithmetic is tight on simple boxes', () => {
   it('add, sub, neg, mul', () => {
@@ -167,21 +168,39 @@ describe('infinities and zero are flagged', () => {
 
   it('infinity over infinity is not a number, and a zero divisor is undefined', () => {
     expect(div(iv(), inf(1, Infinity), inf(2, Infinity)).v).toBe(PARTIAL)
-    const z = div(iv(), box(1, 2), box(0, 0))
-    expect(z.lo > z.hi && z.v === PARTIAL).toBe(true)
-    // a pole at the divisor's zero end sends the quotient to infinity on one side
+    // a divisor of exactly zero is +-infinity (or NaN for 0 / 0), never "nothing":
+    // 1 / (1 / 0) is 0 downstream
+    expect(div(iv(), box(1, 2), box(0, 0))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    expect(div(iv(), box(1, 2), box(-0, -0))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    expect(div(iv(), box(-1, 1), box(0, 0))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    const zeroOverZero = div(iv(), box(0, 0), box(0, 0))
+    expect(zeroOverZero.lo > zeroOverZero.hi && zeroOverZero.v === PARTIAL).toBe(true)
+    // a pole at the divisor's zero end sends the quotient to infinity on one side,
+    // when the zero has the sign of the side the rest of the box lies on
     const negOverPos = div(iv(), box(-2, -1), box(0, 4))
     expect(negOverPos.lo).toBe(-Infinity)
     expect(near(negOverPos.hi, -0.25)).toBe(true)
     expect(negOverPos.v).toBe(PARTIAL)
-    const negOverNeg = div(iv(), box(-2, -1), box(-4, 0))
+    const negOverNeg = div(iv(), box(-2, -1), box(-4, -0))
     expect(near(negOverNeg.lo, 0.25)).toBe(true)
     expect(negOverNeg.hi).toBe(Infinity)
     expect(negOverNeg.v).toBe(PARTIAL)
-    const posOverNeg = div(iv(), box(1, 2), box(-4, 0))
+    const posOverNeg = div(iv(), box(1, 2), box(-4, -0))
     expect(posOverNeg.lo).toBe(-Infinity)
     expect(near(posOverNeg.hi, -0.25)).toBe(true)
     expect(posOverNeg.v).toBe(PARTIAL)
+  })
+
+  it('a divisor zero of the wrong sign for its side reaches the other infinity too', () => {
+    // 1 / -0 is -infinity, but the rest of [-0, 4] lies on the positive side
+    expect(div(iv(), box(1, 2), box(-0, 4))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    // 1 / +0 is +infinity, but the rest of [-4, +0] lies on the negative side
+    expect(div(iv(), box(1, 2), box(-4, 0))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    expect(div(iv(), box(-2, -1), box(-0, 4))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    expect(div(iv(), box(-2, -1), box(-4, 0))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    // a signed zero of the right sign keeps the one-sided answer
+    const keep = div(iv(), box(1, 2), box(0, 1))
+    expect(near(keep.lo, 1) && keep.hi === Infinity && keep.v === PARTIAL).toBe(true)
   })
 
   it('a base of -infinity is not NaN for a real exponent, and an infinite exponent is not either', () => {
@@ -207,28 +226,52 @@ describe('infinities and zero are flagged', () => {
   it('an overflow lands on the infinite side', () => {
     expect(mul(iv(), box(1e200, 1e201), box(1e200, 1e201)).hi).toBe(Infinity)
     expect(add(iv(), box(1.7e308, 1.7e308), box(1.7e308, 1.7e308)).hi).toBe(Infinity)
-    expect(powInt(iv(), box(1e200, 1e201), 3)).toMatchObject({ hi: Infinity, v: PARTIAL })
+  })
+
+  it('overflow is not undefinedness: the verdict stays, the bound becomes infinite', () => {
+    const cube = powInt(iv(), box(1e200, 1e201), 3)
+    expect(cube.hi).toBe(Infinity)
+    expect(cube.v).toBe(CONTINUOUS)
+    expect(mul(iv(), box(1e200, 1e201), box(1e200, 1e201)).v).toBe(CONTINUOUS)
+    expect(powInt(iv(), box(1e200, 1e201), 2).v).toBe(mul(iv(), box(1e200, 1e201), box(1e200, 1e201)).v)
+    expect(powInt(iv(), box(1e-200, 1e-100), -3)).toMatchObject({ hi: Infinity, v: CONTINUOUS })
+    expect(powInt(iv(), iv(1e200, 1e201, DEFINED), 2).v).toBe(DEFINED)
+    expect(powReal(iv(), box(1e100, 1e210), 1.5)).toMatchObject({ hi: Infinity, v: CONTINUOUS })
+    expect(powOddRoot(iv(), box(-1e200, 1e201), 5 / 3, true)).toMatchObject({ lo: -Infinity, hi: Infinity, v: CONTINUOUS })
+    expect(powGeneral(iv(), box(1e100, 1e101), box(5, 6))).toMatchObject({ hi: Infinity, v: CONTINUOUS })
+    expect(powGeneral(iv(), box(2, 3), box(1000, 2000))).toMatchObject({ hi: Infinity, v: CONTINUOUS })
+    expect(sides(iv(), box(1, 800), Math.cosh, 1)).toMatchObject({ hi: Infinity, v: CONTINUOUS })
+  })
+
+  it('a base of 1 under an infinite exponent is NaN', () => {
+    // Math.pow(1, Infinity) is NaN in JavaScript, and no corner of [0.5, 2] x [1, Infinity] shows it
+    expect(powGeneral(iv(), box(0.5, 2), box(1, Infinity)).v).toBe(PARTIAL)
+    expect(powGeneral(iv(), box(0.5, 2), box(-Infinity, 3)).v).toBe(PARTIAL)
+    expect(powGeneral(iv(), box(1.5, 2), box(1, Infinity)).v).toBe(CONTINUOUS)
+    expect(powGeneral(iv(), box(2, 3), box(1, 2)).v).toBe(CONTINUOUS)
   })
 })
 
 describe('poles and holes at zero', () => {
-  it('a negative integer power approaches its pole from each side', () => {
-    const left = powInt(iv(), box(-2, 0), -1)
+  it('a negative integer power approaches its pole from the side its zero shows', () => {
+    // [-2, -0]: the zero end is -0 and 1 / -0 is -infinity, the side of the rest
+    const left = powInt(iv(), box(-2, -0), -1)
     expect(left.lo).toBe(-Infinity)
     expect(near(left.hi, -0.5)).toBe(true)
     expect(left.v).toBe(PARTIAL)
+    // [0, 2]: +0, and 1 / +0 is +infinity
     const right = powInt(iv(), box(0, 2), -1)
     expect(near(right.lo, 0.5)).toBe(true)
     expect(right.hi).toBe(Infinity)
     expect(right.v).toBe(PARTIAL)
-    // -0 is a point of [-0, 2]: 1 / -0 is -infinity there, and the rest of the box
-    // still reaches only 0.5 and up
-    const negZero = powInt(iv(), box(-0, 2), -1)
-    expect(near(negZero.lo, 0.5)).toBe(true)
-    expect(negZero.hi).toBe(Infinity)
-    expect(negZero.v).toBe(PARTIAL)
-    const both = powInt(iv(), box(-1, 1), -1)
-    expect(both).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+  })
+
+  it('a zero end of the other sign reaches the other infinity too', () => {
+    // 1 / -0 is -infinity: [-0, 2] holds a value below every positive one
+    expect(powInt(iv(), box(-0, 2), -1)).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    // 1 / +0 is +infinity: [-2, +0] holds a value above every negative one
+    expect(powInt(iv(), box(-2, 0), -1)).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    expect(powInt(iv(), box(-1, 1), -1)).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
   })
 
   it('an even negative power across zero is bounded below', () => {
@@ -238,31 +281,55 @@ describe('poles and holes at zero', () => {
     expect(r.v).toBe(PARTIAL)
   })
 
-  it('the point zero under a pole is empty', () => {
-    const r = powInt(iv(), box(0, 0), -1)
+  it('the point zero under a pole is the infinity the scalar gives there, not empty', () => {
+    expect(powInt(iv(), box(0, 0), -1)).toMatchObject({ lo: Infinity, hi: Infinity, v: PARTIAL })
+    expect(powInt(iv(), box(-0, -0), -1)).toMatchObject({ lo: -Infinity, hi: -Infinity, v: PARTIAL })
+    expect(powInt(iv(), box(0, 0), -2)).toMatchObject({ lo: Infinity, hi: Infinity, v: PARTIAL })
+    expect(powInt(iv(), box(-0, -0), -2)).toMatchObject({ lo: Infinity, hi: Infinity, v: PARTIAL })
+    // Math.pow(-0, -1/3) is +Infinity: realOddPow reads -0 as not negative
+    expect(powOddRoot(iv(), box(-0, 0), -1 / 3, true)).toMatchObject({ lo: Infinity, hi: Infinity, v: PARTIAL })
+    // only a hole (NaN at zero) leaves nothing
+    const hole = (x: number): number => (x === 0 ? Number.NaN : 1 / x)
+    const r = sides(iv(), box(0, 0), hole, Number.NaN)
     expect(r.lo > r.hi && r.v === PARTIAL).toBe(true)
-    const s = powOddRoot(iv(), box(-0, 0), -1 / 3, true)
-    expect(s.lo > s.hi && s.v === PARTIAL).toBe(true)
+    const across = sides(iv(), box(-1, 1), hole, Number.NaN)
+    expect(across.v).toBe(PARTIAL)
+    expect(across.lo).toBeLessThanOrEqual(-1)
+    expect(across.hi).toBeGreaterThanOrEqual(1)
   })
 
-  it('a negative odd root keeps both sides of its pole', () => {
+  it('a negative odd root keeps both sides of its pole and the infinity at zero', () => {
+    // the zero end is +0 and the scalar value there is +Infinity
     const left = powOddRoot(iv(), box(-8, 0), -1 / 3, true)
-    expect(near(left.hi, -0.5)).toBe(true)
+    expect(left.hi).toBe(Infinity)
     expect(left.lo).toBeLessThan(-1e100)
     expect(left.v).toBe(PARTIAL)
     const right = powOddRoot(iv(), box(0, 8), -1 / 3, true)
     expect(near(right.lo, 0.5)).toBe(true)
-    expect(right.hi).toBeGreaterThan(1e100)
+    expect(right.hi).toBe(Infinity)
     expect(right.v).toBe(PARTIAL)
     const even = powOddRoot(iv(), box(-8, 8), -2 / 3, false)
     expect(near(even.lo, 0.25)).toBe(true)
-    expect(even.hi).toBeGreaterThan(1e100)
+    expect(even.hi).toBe(Infinity)
     expect(even.v).toBe(PARTIAL)
   })
 
   it('a pole away from the box changes nothing', () => {
     const r = powInt(iv(), box(-4, -2), -1)
     expect(near(r.lo, -0.5) && near(r.hi, -0.25) && r.v === CONTINUOUS).toBe(true)
+  })
+
+  it('a zero exponent is 1 even when the base is undefined', () => {
+    const empty = iv(Infinity, -Infinity, PARTIAL)
+    // Math.pow(NaN, 0) is 1
+    expect(powInt(iv(), empty, 0)).toMatchObject({ lo: 1, hi: 1, v: PARTIAL })
+    expect(powGeneral(iv(), empty, box(0, 0))).toMatchObject({ lo: 1, hi: 1, v: PARTIAL })
+    expect(powGeneral(iv(), empty, box(-1, 1))).toMatchObject({ lo: 1, hi: 1, v: PARTIAL })
+    expect(powGeneral(iv(), empty, box(-0, -0))).toMatchObject({ lo: 1, hi: 1, v: PARTIAL })
+    // any other exponent leaves NaN
+    for (const r of [powGeneral(iv(), empty, box(1, 2)), powGeneral(iv(), empty, box(2, 2)), powInt(iv(), empty, 2), powGeneral(iv(), box(1, 2), empty)]) {
+      expect(r.lo > r.hi && r.v === PARTIAL).toBe(true)
+    }
   })
 })
 
@@ -276,8 +343,14 @@ describe('sides', () => {
     expect(near(one.lo, 2) && near(one.hi, 3)).toBe(true)
   })
 
-  it('a non-finite end value makes it partial', () => {
-    expect(sides(iv(), box(1, 800), Math.cosh, 1).v).toBe(PARTIAL)
+  it('a NaN end value makes it partial, with no bound on that side', () => {
+    const r = sides(iv(), box(1, 2), (x) => (x > 1.5 ? Number.NaN : x), 0)
+    expect(r.v).toBe(PARTIAL)
+    expect(r.hi).toBe(Infinity)
+  })
+
+  it('an overflowing end value keeps the verdict', () => {
+    expect(sides(iv(), box(1, 800), Math.cosh, 1)).toMatchObject({ hi: Infinity, v: CONTINUOUS })
   })
 
   it('a function argument is passed through', () => {
@@ -303,7 +376,7 @@ describe('arithmetic is sound over random boxes', () => {
         const r = twin(box(al, ah), box(bl, bh))
         for (const x of pointsIn(al, ah, rand, 4)) {
           for (const y of pointsIn(bl, bh, rand, 4)) {
-            expect(admits(r, scalar(x, y)), `${name} [${al}, ${ah}] [${bl}, ${bh}] at (${x}, ${y}) gives ${scalar(x, y)} outside ${show(r)}`).toBe(true)
+            expect(admits(r, scalar(x, y)), `${name} [${fmt(al)}, ${fmt(ah)}] [${fmt(bl)}, ${fmt(bh)}] at (${fmt(x)}, ${fmt(y)}) gives ${fmt(scalar(x, y))} outside ${show(r)}`).toBe(true)
           }
         }
       }
@@ -321,9 +394,9 @@ describe('arithmetic is sound over random boxes', () => {
       const rr = powReal(iv(), box(lo, hi), e)
       const ro = powOddRoot(iv(), box(lo, hi), p / q, Math.abs(p) % 2 === 1)
       for (const x of pointsIn(lo, hi, rand, 8)) {
-        expect(admits(ri, Math.pow(x, n)), `x^${n} at ${x} over [${lo}, ${hi}] outside ${show(ri)}`).toBe(true)
-        expect(admits(rr, Math.pow(x, e)), `x^${e} at ${x} over [${lo}, ${hi}] outside ${show(rr)}`).toBe(true)
-        expect(admits(ro, realOddPow(x, p / q, Math.abs(p) % 2 === 1)), `x^(${p}/${q}) at ${x} over [${lo}, ${hi}] outside ${show(ro)}`).toBe(true)
+        expect(admits(ri, Math.pow(x, n)), `x^${n} at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(ri)}`).toBe(true)
+        expect(admits(rr, Math.pow(x, e)), `x^${e} at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(rr)}`).toBe(true)
+        expect(admits(ro, realOddPow(x, p / q, Math.abs(p) % 2 === 1)), `x^(${p}/${q}) at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(ro)}`).toBe(true)
       }
     }
   })
@@ -346,6 +419,11 @@ describe('arithmetic is sound on the edge boxes', () => {
     [0, 2],
     [-2, 0],
     [-2, -0],
+    [-0, -0],
+    [-0, Infinity],
+    [-Infinity, -0],
+    [0, 1e-300],
+    [-1e-300, -0],
     [-1, 1],
     [-1e-300, 1e-300],
     [5e-324, 1e-300],
@@ -357,8 +435,12 @@ describe('arithmetic is sound on the edge boxes', () => {
     [-3, -1],
     [1, 1],
   ]
-  const CANDIDATES = [-Infinity, -1e300, -1e154, -2, -1, -0.5, -5e-324, -0, 0, 5e-324, 0.5, 1, 2, 1e154, 1e300, Infinity]
-  const pointsOf = (lo: number, hi: number): number[] => [lo, hi, (lo + hi) / 2, ...CANDIDATES].filter((x) => lo <= x && x <= hi)
+  const CANDIDATES = [-Infinity, -1e300, -1e154, -2, -1, -0.5, -5e-324, 5e-324, 0.5, 1, 2, 1e154, 1e300, Infinity]
+  // the signed zeros a box holds come from zerosIn (an end that is a zero is that signed
+  // zero; a zero strictly inside may be either); no other candidate is a zero, so a
+  // midpoint that rounds to +0 in a box that starts at -0 is not a point of the box
+  const pointsOf = (lo: number, hi: number): number[] =>
+    [lo, hi, (lo + hi) / 2, ...CANDIDATES].filter((x) => x !== 0 && lo <= x && x <= hi).concat(zerosIn(lo, hi))
 
   const binary: [string, (a: Iv, b: Iv) => Iv, (x: number, y: number) => number][] = [
     ['add', (a, b) => add(iv(), a, b), (x, y) => x + y],
@@ -374,7 +456,7 @@ describe('arithmetic is sound on the edge boxes', () => {
           const r = twin(box(al, ah), box(bl, bh))
           for (const x of pointsOf(al, ah)) {
             for (const y of pointsOf(bl, bh)) {
-              expect(admits(r, scalar(x, y)), `${name} [${al}, ${ah}] [${bl}, ${bh}] at (${x}, ${y}) gives ${scalar(x, y)} outside ${show(r)}`).toBe(true)
+              expect(admits(r, scalar(x, y)), `${name} [${fmt(al)}, ${fmt(ah)}] [${fmt(bl)}, ${fmt(bh)}] at (${fmt(x)}, ${fmt(y)}) gives ${fmt(scalar(x, y))} outside ${show(r)}`).toBe(true)
             }
           }
         }
@@ -387,16 +469,16 @@ describe('arithmetic is sound on the edge boxes', () => {
       const pts = pointsOf(lo, hi)
       for (const n of [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]) {
         const r = powInt(iv(), box(lo, hi), n)
-        for (const x of pts) expect(admits(r, Math.pow(x, n)), `x^${n} at ${x} over [${lo}, ${hi}] outside ${show(r)}`).toBe(true)
+        for (const x of pts) expect(admits(r, Math.pow(x, n)), `x^${n} at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(r)}`).toBe(true)
       }
       for (const e of [-2.5, -1.5, -0.5, 0.25, 0.5, 1.5, 2.5]) {
         const r = powReal(iv(), box(lo, hi), e)
-        for (const x of pts) expect(admits(r, Math.pow(x, e)), `x^${e} at ${x} over [${lo}, ${hi}] outside ${show(r)}`).toBe(true)
+        for (const x of pts) expect(admits(r, Math.pow(x, e)), `x^${e} at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(r)}`).toBe(true)
       }
       for (const [p, q] of [[1, 3], [2, 3], [4, 3], [5, 3], [-1, 3], [-2, 3], [-5, 3], [1, 5], [-3, 5]]) {
         const pOdd = Math.abs(p) % 2 === 1
         const r = powOddRoot(iv(), box(lo, hi), p / q, pOdd)
-        for (const x of pts) expect(admits(r, realOddPow(x, p / q, pOdd)), `x^(${p}/${q}) at ${x} over [${lo}, ${hi}] outside ${show(r)}`).toBe(true)
+        for (const x of pts) expect(admits(r, realOddPow(x, p / q, pOdd)), `x^(${p}/${q}) at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(r)}`).toBe(true)
       }
     }
   })
@@ -407,9 +489,152 @@ describe('arithmetic is sound on the edge boxes', () => {
       const cosh = sides(iv(), box(lo, hi), Math.cosh, 1)
       const abs = sides(iv(), box(lo, hi), Math.abs, 0)
       for (const x of pts) {
-        expect(admits(cosh, Math.cosh(x)), `cosh at ${x} over [${lo}, ${hi}] outside ${show(cosh)}`).toBe(true)
-        expect(admits(abs, Math.abs(x)), `abs at ${x} over [${lo}, ${hi}] outside ${show(abs)}`).toBe(true)
+        expect(admits(cosh, Math.cosh(x)), `cosh at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(cosh)}`).toBe(true)
+        expect(admits(abs, Math.abs(x)), `abs at ${fmt(x)} over [${fmt(lo)}, ${fmt(hi)}] outside ${show(abs)}`).toBe(true)
       }
     }
+  })
+})
+
+// A twin is only as sound as the twins that consume its answer: an infinity that
+// one twin leaves out becomes a wrong finite value in the next (c / inf is 0,
+// e^-inf is 0, 1 / (1 / 0) is 0). Each case below chains twins over a box and
+// checks the scalar chain at the box's ends, the signed zeros it holds and a few
+// interior points, for every sign a zero end can have.
+describe('composed twins stay sound', () => {
+  const pt = (x: number): Iv => setBox(iv(), x, x)
+  const INTERIOR = [-8, -2, -1.5, -1, -0.5, -0.25, -1e-3, -1e-300, 1e-300, 1e-3, 0.25, 0.5, 1, 2, 8]
+  const samples = (lo: number, hi: number): number[] =>
+    [lo, hi, ...INTERIOR].filter((x) => lo <= x && x <= hi).concat(zerosIn(lo, hi))
+  // the boxes a zero end allows: each zero end as +0 and as -0
+  const withZeroSigns = (lo: number, hi: number): [number, number][] => {
+    const los = lo === 0 ? [0, -0] : [lo]
+    const his = hi === 0 ? [0, -0] : [hi]
+    const out: [number, number][] = []
+    for (const l of los) for (const h of his) out.push([l, h])
+    return out
+  }
+
+  function sound(name: string, lo: number, hi: number, twin: (a: Iv) => Iv, scalar: (x: number) => number): void {
+    for (const [l, h] of withZeroSigns(lo, hi)) {
+      const r = twin(box(l, h))
+      for (const x of samples(l, h)) {
+        expect(admits(r, scalar(x)), `${name} over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)} gives ${fmt(scalar(x))}, twin ${show(r)}`).toBe(true)
+      }
+    }
+  }
+
+  it('an infinity at a zero is mapped back to a finite value by the next twin', () => {
+    sound('1/x^(-2/3)', -1, 1, (a) => div(iv(), pt(1), powOddRoot(iv(), a, -2 / 3, false)), (x) => 1 / realOddPow(x, -2 / 3, false))
+    sound('1/x^(-1/3)', -8, 0, (a) => div(iv(), pt(1), powOddRoot(iv(), a, -1 / 3, true)), (x) => 1 / realOddPow(x, -1 / 3, true))
+    sound('1/(1 + x^(-2/3))', -1, 1, (a) => div(iv(), pt(1), add(iv(), pt(1), powOddRoot(iv(), a, -2 / 3, false))), (x) => 1 / (1 + realOddPow(x, -2 / 3, false)))
+    sound('(x^(-1/3))^-2', -1, 1, (a) => powInt(iv(), powOddRoot(iv(), a, -1 / 3, true), -2), (x) => Math.pow(realOddPow(x, -1 / 3, true), -2))
+    sound('1/(1 + x^-2)', 0, 0, (a) => div(iv(), pt(1), add(iv(), pt(1), powInt(iv(), a, -2))), (x) => 1 / (1 + Math.pow(x, -2)))
+    sound('1/(1 + x^-2) across zero', -1, 1, (a) => div(iv(), pt(1), add(iv(), pt(1), powInt(iv(), a, -2))), (x) => 1 / (1 + Math.pow(x, -2)))
+  })
+
+  it('an infinite exponent from a quotient reaches the base as a finite value', () => {
+    sound('e^(-1/x)', -1, 0, (a) => powGeneral(iv(), pt(Math.E), div(iv(), pt(-1), a)), (x) => Math.pow(Math.E, -1 / x))
+    sound('2^(-1/x)', -0.25, 0, (a) => powGeneral(iv(), pt(2), div(iv(), pt(-1), a)), (x) => Math.pow(2, -1 / x))
+    sound('e^(-(x^-1))', -2, 0, (a) => powGeneral(iv(), pt(Math.E), neg(iv(), powInt(iv(), a, -1))), (x) => Math.pow(Math.E, -Math.pow(x, -1)))
+    sound('e^(-1/x) across zero', -1, 1, (a) => powGeneral(iv(), pt(Math.E), div(iv(), pt(-1), a)), (x) => Math.pow(Math.E, -1 / x))
+  })
+
+  it('a quotient of a quotient by exactly zero', () => {
+    sound('1/(1/x)', 0, 0, (a) => div(iv(), pt(1), div(iv(), pt(1), a)), (x) => 1 / (1 / x))
+    sound('1/(1/x) on [-1, 0]', -1, 0, (a) => div(iv(), pt(1), div(iv(), pt(1), a)), (x) => 1 / (1 / x))
+    sound('1/(1/x) on [0, 1]', 0, 1, (a) => div(iv(), pt(1), div(iv(), pt(1), a)), (x) => 1 / (1 / x))
+    sound('1/(1/x) across zero', -1, 1, (a) => div(iv(), pt(1), div(iv(), pt(1), a)), (x) => 1 / (1 / x))
+    sound('x/(x/x)', 0, 0, (a) => div(iv(), a, div(iv(), a, a)), (x) => x / (x / x))
+  })
+
+  it('a zero exponent is 1 even when the base is NaN', () => {
+    sound('(x^0.5)^0', -2, -1, (a) => powGeneral(iv(), powReal(iv(), a, 0.5), pt(0)), (x) => Math.pow(Math.pow(x, 0.5), 0))
+    const r = powGeneral(iv(), powReal(iv(), box(-2, -1), 0.5), box(-1, 1))
+    expect(admits(r, Math.pow(Math.pow(-1.5, 0.5), 0))).toBe(true)
+    expect(admits(r, Math.pow(Math.pow(-1.5, 0.5), 0.3))).toBe(true)
+    expect(r.v).toBe(PARTIAL)
+  })
+
+  // Random chains of two or three twins, each against the chained scalar ops, over
+  // the edge boxes (infinite ends, signed zeros, subnormals) and random boxes.
+  describe('random chains', () => {
+    interface Expr {
+      src: string
+      twin: (x: Iv) => Iv
+      scalar: (x: number) => number
+    }
+    const CONSTANTS = [0, 1, -1, 2, 0.5, -0.5, 3, Math.E]
+    function leaf(rand: () => number): Expr {
+      if (rand() < 0.6) return { src: 'x', twin: (x) => x, scalar: (x) => x }
+      const c = CONSTANTS[Math.floor(rand() * CONSTANTS.length)]
+      return { src: String(c), twin: () => pt(c), scalar: () => c }
+    }
+    function build(rand: () => number, depth: number): Expr {
+      if (depth === 0) return leaf(rand)
+      const k = Math.floor(rand() * 9)
+      const a = build(rand, depth - 1)
+      if (k < 4) {
+        if (k === 0) return { src: `-(${a.src})`, twin: (x) => neg(iv(), a.twin(x)), scalar: (x) => -a.scalar(x) }
+        if (k === 1) {
+          const n = [-3, -2, -1, 0, 2, 3, 4][Math.floor(rand() * 7)]
+          return { src: `(${a.src})^${n}`, twin: (x) => powInt(iv(), a.twin(x), n), scalar: (x) => Math.pow(a.scalar(x), n) }
+        }
+        if (k === 2) {
+          const e = [0.5, -0.5, 1.5, -1.5, 2.5][Math.floor(rand() * 5)]
+          return { src: `(${a.src})^${e}`, twin: (x) => powReal(iv(), a.twin(x), e), scalar: (x) => Math.pow(a.scalar(x), e) }
+        }
+        const [p, q] = [[1, 3], [2, 3], [-1, 3], [-2, 3], [4, 3], [-3, 5]][Math.floor(rand() * 6)]
+        const pOdd = Math.abs(p) % 2 === 1
+        return { src: `(${a.src})^(${p}/${q})`, twin: (x) => powOddRoot(iv(), a.twin(x), p / q, pOdd), scalar: (x) => realOddPow(a.scalar(x), p / q, pOdd) }
+      }
+      const b = build(rand, depth - 1)
+      const ops: [string, (l: Iv, r: Iv) => Iv, (l: number, r: number) => number][] = [
+        ['+', (l, r) => add(iv(), l, r), (l, r) => l + r],
+        ['-', (l, r) => sub(iv(), l, r), (l, r) => l - r],
+        ['*', (l, r) => mul(iv(), l, r), (l, r) => l * r],
+        ['/', (l, r) => div(iv(), l, r), (l, r) => l / r],
+        ['^', (l, r) => powGeneral(iv(), l, r), (l, r) => Math.pow(l, r)],
+      ]
+      const [sym, t, sc] = ops[k - 4]
+      return { src: `(${a.src} ${sym} ${b.src})`, twin: (x) => t(a.twin(x), b.twin(x)), scalar: (x) => sc(a.scalar(x), b.scalar(x)) }
+    }
+
+    const EDGE: [number, number][] = [
+      [-Infinity, Infinity], [0, Infinity], [-Infinity, 0], [1, Infinity], [-Infinity, -1], [0, 0], [-0, 0], [-0, -0],
+      [-0, 2], [0, 2], [-2, 0], [-2, -0], [-1, 1], [-1e-300, 1e-300], [-5e-324, 5e-324], [0, 1e-300], [-1e-300, -0],
+      [1e154, 1e155], [-1e154, 1e155], [0.5, 2], [-3, -1], [1, 1], [-1, 0], [-0.25, 0], [-8, 0], [-8, 8], [-2, -0.5],
+    ]
+    const pointsOf = (lo: number, hi: number): number[] =>
+      [lo, hi, (lo + hi) / 2, -Infinity, -1e154, -2, -1, -0.5, -5e-324, 5e-324, 0.5, 1, 2, 1e154, Infinity].filter((x) => x !== 0 && lo <= x && x <= hi).concat(zerosIn(lo, hi))
+
+    it('depth 2 and 3 over the edge boxes', () => {
+      const rand = mulberry32(20261003)
+      for (let i = 0; i < 700; i++) {
+        const e = build(rand, 2 + (i % 2))
+        for (const [lo, hi] of EDGE) {
+          const r = e.twin(box(lo, hi))
+          for (const x of pointsOf(lo, hi)) {
+            const y = e.scalar(x)
+            expect(admits(r, y), `${e.src} over [${fmt(lo)}, ${fmt(hi)}] at ${fmt(x)} gives ${fmt(y)}, twin ${show(r)}`).toBe(true)
+          }
+        }
+      }
+    })
+
+    it('depth 2 and 3 over random boxes', () => {
+      const rand = mulberry32(20261004)
+      for (let i = 0; i < 500; i++) {
+        const e = build(rand, 2 + (i % 2))
+        for (let j = 0; j < 12; j++) {
+          const [lo, hi] = randomBox(rand)
+          const r = e.twin(box(lo, hi))
+          for (const x of pointsIn(lo, hi, rand, 4)) {
+            const y = e.scalar(x)
+            expect(admits(r, y), `${e.src} over [${fmt(lo)}, ${fmt(hi)}] at ${fmt(x)} gives ${fmt(y)}, twin ${show(r)}`).toBe(true)
+          }
+        }
+      }
+    })
   })
 })

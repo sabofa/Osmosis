@@ -19,7 +19,7 @@ import {
   up,
   worst,
 } from './core'
-import { admits, mulberry32, pointsIn, randomBox } from './testkit'
+import { admits, mulberry32, pointsIn, randomBox, zerosIn } from './testkit'
 
 describe('verdicts and widening', () => {
   it('verdicts order from unknown to continuous, and combine by the weakest', () => {
@@ -183,7 +183,31 @@ describe('testkit', () => {
     }
   })
 
-  it('admits holds the contract: finite inside, NaN and infinity only where allowed', () => {
+  it('zerosIn: an end that is a zero is that signed zero, a zero strictly inside is either', () => {
+    expect(zerosIn(-1, 1)).toEqual([0, -0])
+    expect(Object.is(zerosIn(-1, 1)[0], 0) && Object.is(zerosIn(-1, 1)[1], -0)).toBe(true)
+    expect(zerosIn(0, 2).map((z) => Object.is(z, 0))).toEqual([true])
+    expect(zerosIn(-0, 2).map((z) => Object.is(z, -0))).toEqual([true])
+    expect(zerosIn(-2, 0).map((z) => Object.is(z, 0))).toEqual([true])
+    expect(zerosIn(-2, -0).map((z) => Object.is(z, -0))).toEqual([true])
+    expect(zerosIn(0, 0).map((z) => Object.is(z, 0))).toEqual([true])
+    expect(zerosIn(-0, -0).map((z) => Object.is(z, -0))).toEqual([true])
+    expect(zerosIn(-0, 0).map((z) => Object.is(z, -0) || Object.is(z, 0))).toEqual([true, true])
+    expect(zerosIn(1, 2)).toEqual([])
+    expect(zerosIn(-3, -1)).toEqual([])
+  })
+
+  it('pointsIn includes the signed zeros a box holds, and survives a width that overflows', () => {
+    const rand = mulberry32(3)
+    const across = pointsIn(-1, 1, rand, 4)
+    expect(across.some((x) => Object.is(x, 0)) && across.some((x) => Object.is(x, -0))).toBe(true)
+    const wide = pointsIn(-1.5e308, 1.5e308, rand, 20)
+    expect(wide.every((x) => Number.isFinite(x) && -1.5e308 <= x && x <= 1.5e308)).toBe(true)
+    const end = pointsIn(-0, 2, rand, 4)
+    expect(end.some((x) => Object.is(x, 0))).toBe(false)
+  })
+
+  it('admits holds the contract: finite inside, NaN only under a partial verdict, an infinity only by an infinite bound', () => {
     const cont = iv(0, 1, CONTINUOUS)
     expect(admits(cont, 0.5)).toBe(true)
     expect(admits(cont, 1.5)).toBe(false)
@@ -195,9 +219,17 @@ describe('testkit', () => {
     expect(admits(iv(-Infinity, 0, DEFINED), -Infinity)).toBe(true)
     const part = iv(0, 1, PARTIAL)
     expect(admits(part, NaN)).toBe(true)
-    expect(admits(part, Infinity)).toBe(true)
-    expect(admits(part, -Infinity)).toBe(true)
     expect(admits(part, 2)).toBe(false)
     expect(admits(iv(0, 1, UNKNOWN), NaN)).toBe(true)
+    // strict infinities: a partial verdict does not excuse one, and neither does an empty answer
+    expect(admits(part, Infinity)).toBe(false)
+    expect(admits(part, -Infinity)).toBe(false)
+    expect(admits(iv(0, Infinity, PARTIAL), Infinity)).toBe(true)
+    expect(admits(iv(-Infinity, 1, PARTIAL), -Infinity)).toBe(true)
+    expect(admits(iv(Infinity, -Infinity, PARTIAL), Infinity)).toBe(false)
+    expect(admits(iv(Infinity, -Infinity, PARTIAL), -Infinity)).toBe(false)
+    expect(admits(iv(Infinity, -Infinity, PARTIAL), 3)).toBe(false)
+    expect(admits(iv(Infinity, -Infinity, PARTIAL), NaN)).toBe(true)
+    expect(admits(iv(Infinity, Infinity, PARTIAL), Infinity)).toBe(true)
   })
 })
