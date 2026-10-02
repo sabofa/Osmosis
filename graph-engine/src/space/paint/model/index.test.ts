@@ -24,12 +24,12 @@ interface Frame {
 }
 
 // A sphere on a table, as the renderer would hand it over: view, G-buffer, particles, then the frame.
-function sphereFrame(opts: { params?: PaintParams; width?: number; height?: number; zoom?: number; azimuth?: number; extra?: SpaceScene['marks'] } = {}): Frame {
+function sphereFrame(opts: { params?: PaintParams; width?: number; height?: number; zoom?: number; azimuth?: number; elevation?: number; extra?: SpaceScene['marks'] } = {}): Frame {
   const params = opts.params ?? P
   const width = opts.width ?? 640
   const height = opts.height ?? 480
   const scene = sceneOf([sphereMesh({ radius: 1 }), tableMesh({ z: -1, half: 3, index: 1 }), ...(opts.extra ?? [])])
-  const view = paintView({ width, height, azimuth: opts.azimuth ?? 30, elevation: 25, zoom: opts.zoom ?? 120 })
+  const view = paintView({ width, height, azimuth: opts.azimuth ?? 30, elevation: opts.elevation ?? 25, zoom: opts.zoom ?? 120 })
   const g = sphereGBuffer(width, height, { view, params, table: { z: -1, mark: 1 } })
   const set = buildParticles(scene, COLOURS, params)
   return { frame: paintFrame(scene, set, view, g, params), view, g, scene }
@@ -45,10 +45,12 @@ describe('paintFrame', () => {
 
   it('gives a lit sphere on a table strokes in block, form, glaze, edge and dab (and reflected light)', () => {
     const by = base.frame.stats.byRole
-    for (const role of ['block', 'form', 'glaze', 'edge', 'dab', 'reflected'] as const) expect(by[role], role).toBeGreaterThan(0)
-    // no data marks, no scumble on a form this small (its transitions are too tight)
+    for (const role of ['block', 'form', 'glaze', 'edge', 'dab'] as const) expect(by[role], role).toBeGreaterThan(0)
+    // reflected light faces the table: seen from a low camera (from above, the sphere hides most of what faces down)
+    expect(sphereFrame({ elevation: 4 }).frame.stats.byRole.reflected).toBeGreaterThan(0)
+    // no data marks; and scumble, where the value turns softly over a width (the turn from half-tone to light is wide)
     expect(by.line).toBe(0)
-    expect(by.scumble).toBe(0)
+    expect(by.scumble).toBeGreaterThan(0)
     // the stats add up, and so do the loads
     const sum = ROLES.reduce((n, r) => n + by[r], 0)
     expect(sum).toBe(base.frame.stats.strokes)
@@ -270,7 +272,8 @@ describe('paintFrame', () => {
     let maxBase = 0
     for (const v of dark.frame.debug.value) maxDark = Math.max(maxDark, v)
     for (const v of base.frame.debug.value) maxBase = Math.max(maxBase, v)
-    expect(maxBase).toBeGreaterThan(0.95)
+    // the plan's highlight (lightHi 0.94) against the same plan through a value curve that halves it
+    expect(maxBase).toBeGreaterThan(0.9)
     expect(maxDark).toBeLessThanOrEqual(0.5 + 1e-6)
   })
 })

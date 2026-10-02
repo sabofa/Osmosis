@@ -5,7 +5,6 @@ import { PATH_POINTS, ROLES, type GBuffer, type PaintFrame, type PaintView, type
 import { labToLch, lchToLab } from './colour'
 import { buildParticles, paintFrame } from './index'
 import { flatColours, graphMesh, makeGBuffer, meshGBuffer, paintView, quadMesh, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './testing'
-import { terminatorValue } from './value'
 
 // Whole frames of the model are heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 60_000 })
@@ -20,11 +19,11 @@ interface Run {
   scene: SpaceScene
 }
 
-function sphereRun(params: PaintParams = P, opts: { zoom?: number; width?: number; height?: number } = {}): Run {
+function sphereRun(params: PaintParams = P, opts: { zoom?: number; width?: number; height?: number; elevation?: number } = {}): Run {
   const width = opts.width ?? 640
   const height = opts.height ?? 480
   const scene = sceneOf([sphereMesh({ radius: 1 }), tableMesh({ z: -1, half: 3, index: 1 })])
-  const view = paintView({ width, height, azimuth: 30, elevation: 25, zoom: opts.zoom ?? 120 })
+  const view = paintView({ width, height, azimuth: 30, elevation: opts.elevation ?? 25, zoom: opts.zoom ?? 120 })
   const g = sphereGBuffer(width, height, { view, params, table: { z: -1, mark: 1 } })
   return { frame: paintFrame(scene, buildParticles(scene, COLOURS, params), view, g, params), g, view, scene }
 }
@@ -33,13 +32,17 @@ function sphereRun(params: PaintParams = P, opts: { zoom?: number; width?: numbe
 function strokesOf(run: Run, role: Role) {
   const b = run.frame.strokes
   const d = run.frame.debug
-  const out: { i: number; x: number; y: number; value: number; zone: number }[] = []
+  const L = run.view.lightDir
+  const out: { i: number; x: number; y: number; value: number; zone: number; nl: number }[] = []
   for (let i = 0; i < b.count; i++) {
     if (ROLES[b.role[i]] !== role) continue
     const x = (b.path[2 * PATH_POINTS * i + 6] + b.path[2 * PATH_POINTS * i + 8]) / 2
     const y = (b.path[2 * PATH_POINTS * i + 7] + b.path[2 * PATH_POINTS * i + 9]) / 2
     const gi = Math.floor(y / run.g.scale) * run.g.width + Math.floor(x / run.g.scale)
-    out.push({ i, x, y, value: gi >= 0 && gi < d.value.length ? d.value[gi] : -1, zone: gi >= 0 && gi < d.zones.length ? d.zones[gi] : 255 })
+    const ok = gi >= 0 && gi < d.value.length
+    // the signed N·L at the stroke's pixel (the model's own: the terminator is 0)
+    const nl = ok ? run.g.normal[3 * gi] * L[0] + run.g.normal[3 * gi + 1] * L[1] + run.g.normal[3 * gi + 2] * L[2] : 0
+    out.push({ i, x, y, value: ok ? d.value[gi] : -1, zone: gi >= 0 && gi < d.zones.length ? d.zones[gi] : 255, nl })
   }
   return out
 }
@@ -65,30 +68,34 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
   })
 
   it('puts reflected light where the zone is reflected and the bounce in the value is at least reflectedMin', () => {
-    const refl = strokesOf(base, 'reflected')
+    // reflected light faces the table: it is seen from a low camera (from above, the sphere hides most of what faces down)
+    const low = sphereRun(P, { elevation: 4 })
+    const refl = strokesOf(low, 'reflected')
     expect(refl.length).toBeGreaterThan(5)
     // the reflected zone (3), or the core it grades into
     expect(refl.filter((s) => s.zone === 3 || s.zone === 2).length / refl.length).toBeGreaterThan(0.8)
+    // reflected light is shadow: every one of them lies in the shadow family (N·L under the terminator's edge)
+    for (const s of refl) expect(s.nl).toBeLessThan(P.value.terminatorSoftness)
     // a minimum above the whole bounce term (0.10·max(−nz, 0) ≤ 0.10): none; no bounce light: none
-    expect(sphereRun(resolvePaintParams({ detect: { reflectedMin: 0.2 } })).frame.stats.byRole.reflected).toBe(0)
-    expect(sphereRun(resolvePaintParams({ light: { bounce: 0 } })).frame.stats.byRole.reflected).toBe(0)
+    expect(sphereRun(resolvePaintParams({ detect: { reflectedMin: 0.2 } }), { elevation: 4 }).frame.stats.byRole.reflected).toBe(0)
+    expect(sphereRun(resolvePaintParams({ light: { bounce: 0 } }), { elevation: 4 }).frame.stats.byRole.reflected).toBe(0)
     // a minimum of 0 lets in every strongly reflected stroke
-    expect(sphereRun(resolvePaintParams({ detect: { reflectedMin: 0 } })).frame.stats.byRole.reflected).toBeGreaterThanOrEqual(base.frame.stats.byRole.reflected)
+    expect(sphereRun(resolvePaintParams({ detect: { reflectedMin: 0 } }), { elevation: 4 }).frame.stats.byRole.reflected).toBeGreaterThanOrEqual(low.frame.stats.byRole.reflected)
   })
 
-  it('puts form strokes within formBand of the terminator, and none with a zero band', () => {
-    const term = terminatorValue(P) // 0.37
+  it('puts form strokes within formBand of the terminator (N·L = 0), and none with a zero band', () => {
     const forms = strokesOf(base, 'form')
     expect(forms.length).toBeGreaterThan(30)
-    // the model's own value at the stroke is inside 0.37 ± 0.18 (give the stroke's own extent a little slack)
-    const inside = forms.filter((s) => Math.abs(s.value - term) <= 0.18 + 0.06).length
+    // N·L at the stroke is inside 0 ± 0.18 (give the stroke's own extent a little slack)
+    const inside = forms.filter((s) => Math.abs(s.nl) <= 0.18 + 0.06).length
     expect(inside / forms.length).toBeGreaterThan(0.9)
     expect(sphereRun(resolvePaintParams({ detect: { formBand: 0 } })).frame.stats.byRole.form).toBe(0)
     const wide = sphereRun(resolvePaintParams({ detect: { formBand: 0.5 } })).frame.stats.byRole.form
     expect(wide).toBeGreaterThan(base.frame.stats.byRole.form)
-    // the band is centred on the terminator: moving the terminator moves the strokes
-    const moved = sphereRun(resolvePaintParams({ value: { halfAt: 0.6 } }))
-    expect(moved.frame.stats.byRole.form).not.toBe(base.frame.stats.byRole.form)
+    // the band is about the terminator and nothing else: a narrow band keeps strokes close to it
+    const narrow = sphereRun(resolvePaintParams({ detect: { formBand: 0.06 } }))
+    expect(narrow.frame.stats.byRole.form).toBeLessThan(base.frame.stats.byRole.form)
+    for (const s of strokesOf(narrow, 'form')) expect(Math.abs(s.nl)).toBeLessThan(0.06 + 0.1)
   })
 
   it('stops a form stroke below the core: none of its path lies in the core shadow', () => {
@@ -112,24 +119,33 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
     expect(inCore / points).toBeLessThan(0.04)
   })
 
-  it('scumbles only where a transition is wide: none on a small sphere, some where the gradient allows', () => {
-    // the sphere's value changes by ~0.0075 per CSS px at its terminator: far above the default 0.004
-    expect(base.frame.stats.byRole.scumble).toBe(0)
-    // soft zone boundaries (0.20 wide) make the transition ~13 px across on this sphere, wider than the 6 px asked for
-    const gentleParams = { detect: { scumbleGradient: 0.05 }, value: { soft: 0.2 } }
-    const gentle = sphereRun(resolvePaintParams(gentleParams))
-    expect(gentle.frame.stats.byRole.scumble).toBeGreaterThan(10)
-    // every scumble stroke lies in a transition between zones: the value there is near a zone boundary (halfAt 0.37 or lightAt 0.93)
-    for (const s of strokesOf(gentle, 'scumble')) {
-      const near = Math.min(Math.abs(s.value - 0.37), Math.abs(s.value - 0.93))
-      expect(near).toBeLessThan(0.15)
+  it('scumbles where a transition is wide: the turn to light and the lift to reflected light, not the terminator', () => {
+    // the value turns softly over a width at the default softnesses (0.5 of N·L from half-tone to light, 0.35 from core to
+    // reflected light), more than the 6 px a scumble asks for, and gently (the default 0.004 per px)
+    const scumble = strokesOf(base, 'scumble')
+    expect(base.frame.stats.byRole.scumble).toBeGreaterThan(10)
+    const v = P.value
+    const turn = (nl: number) => Math.abs(nl - v.lightTurn) <= v.lightSoftness / 2 + 0.05
+    const lift = (nl: number) => -nl >= v.coreWidth - 0.05 && -nl <= v.coreWidth + v.reflectedSoftness + 0.05
+    // every scumble stroke lies in a transition of the plan (the weights between two zones), never in the terminator's crisp edge
+    for (const s of scumble) {
+      expect(turn(s.nl) || lift(s.nl), `N·L ${s.nl}`).toBe(true)
+      expect(Math.abs(s.nl)).toBeGreaterThan(v.terminatorSoftness / 2)
     }
-    // and a wider required width (more than the transition is across) leaves none
-    expect(sphereRun(resolvePaintParams(gentleParams, { detect: { scumbleMinPx: 60 } })).frame.stats.byRole.scumble).toBe(0)
-    // a gradient limit under the sphere's own (~0.0075 per px at its terminator) leaves none either
-    expect(sphereRun(resolvePaintParams(gentleParams, { detect: { scumbleGradient: 0.002 } })).frame.stats.byRole.scumble).toBe(0)
+    // crisp transitions (0.02 wide) leave fewer: the gradient across them is far past the limit (what is left lies in the
+    // reflected light's own gradation, which follows the way the form faces the table and the sky, not a softness slider)
+    const crisp = resolvePaintParams({ value: { lightSoftness: 0.02, reflectedSoftness: 0.02, terminatorSoftness: 0.02 } })
+    const crispRun = sphereRun(crisp)
+    expect(crispRun.frame.stats.byRole.scumble).toBeLessThan(0.6 * base.frame.stats.byRole.scumble)
+    for (const s of strokesOf(crispRun, 'scumble')) expect(turn(s.nl), `N·L ${s.nl}`).toBe(false)
+    // a wider required width (more than the transition is across) leaves none
+    expect(sphereRun(resolvePaintParams({ detect: { scumbleMinPx: 600 } })).frame.stats.byRole.scumble).toBe(0)
+    // a gradient limit under the gentlest of them leaves none either
+    expect(sphereRun(resolvePaintParams({ detect: { scumbleGradient: 0.0005 } })).frame.stats.byRole.scumble).toBe(0)
+    // a gentler limit takes in more of the transitions
+    expect(sphereRun(resolvePaintParams({ detect: { scumbleGradient: 0.05 } })).frame.stats.byRole.scumble).toBeGreaterThan(base.frame.stats.byRole.scumble)
     // the strokes alternate: a lighter neighbour and a darker one, by parity
-    const b = gentle.frame.strokes
+    const b = base.frame.strokes
     const lightness = (i: number) => {
       const l = Math.cbrt(0.4122214708 * b.colour[3 * i] + 0.5363325363 * b.colour[3 * i + 1] + 0.0514459929 * b.colour[3 * i + 2])
       const m = Math.cbrt(0.2119034982 * b.colour[3 * i] + 0.6806995451 * b.colour[3 * i + 1] + 0.1073969566 * b.colour[3 * i + 2])
@@ -138,11 +154,11 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
     }
     const even: number[] = []
     const odd: number[] = []
-    for (const s of strokesOf(gentle, 'scumble')) (b.seed[s.i] & 1 ? odd : even).push(lightness(s.i))
+    for (const s of scumble) (b.seed[s.i] & 1 ? odd : even).push(lightness(s.i))
     expect(even.length).toBeGreaterThan(3)
     expect(odd.length).toBeGreaterThan(3)
     const mean = (xs: number[]) => xs.reduce((a, c) => a + c, 0) / xs.length
-    // u ± 0.10 is L ± 0.08 through the 0.8 slope: the two parities differ by about 0.16 (the zones differ too, so only the sign is firm)
+    // u ± 0.10 is L ± 0.08 through the 0.8 slope (the zones differ too, so only the sign is firm)
     expect(Math.abs(mean(odd) - mean(even))).toBeGreaterThan(0.03)
   })
 

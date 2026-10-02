@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../params'
 import { compileCurves } from './respond'
 import { makeGBuffer, paintView, planeGBuffer, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './testing'
-import { buildPlanMap, modelValue, newZoneSample, rawLitValue, Z_LIGHT, zoneSample } from './value'
+import { buildPlanMap, newZoneSample, planSample, reflectedMax, Z_CAST } from './value'
 import { makeFrameCtx } from './view'
 
 // Whole frames of the model are heavy and the test machine is shared: give every test room.
@@ -13,131 +13,160 @@ const noAo = resolvePaintParams({ environment: { occlusion: 0 } })
 
 // A view straight on (az 0, el 0): right is +y, up is +z, back is +x, so a
 // view-space normal (a, b, c) is the world normal (c, a, b).
-// (The key light is a fixed one, not the default, so that the creased test pixels stay below the clip at v = 1, where the
-// occlusion would be partly lost.)
 const FLAT_VIEW = paintView({ width: 400, height: 300, azimuth: 0, elevation: 0, zoom: 100, lightAzimuth: 35, lightElevation: 40 })
 const SPHERE_SCENE = sceneOf([sphereMesh()])
 const TABLE_SCENE = sceneOf([sphereMesh(), tableMesh({ z: -1, index: 1 })])
 
-describe('the model’s own value (spec §11)', () => {
-  it('equals the renderer’s raw lit value bit for bit under the default curves, with occlusion off', () => {
+describe('the model’s own value (spec §11, §12)', () => {
+  it('is the plan, not the renderer’s raw lit value: the shadow side does not follow the fill light', () => {
     const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 75 })
     const g = sphereGBuffer(400, 300, { view, params: noAo, table: { z: -1, mark: 1 } })
     const plan = buildPlanMap(makeFrameCtx(TABLE_SCENE, view, g, noAo))
+    const curves = compileCurves(noAo)
     let checked = 0
-    let differing = 0
+    let shadowSide = 0
     for (let i = 0; i < g.width * g.height; i++) {
       if (g.mark[i] < 0) {
         expect(plan.value[i]).toBe(-1)
         continue
       }
       checked++
-      // the renderer's formula on the very (Float32) normal the model reads, stored as Float32
+      // the plan value is planSample's at this pixel's own normal, on the very (Float32) numbers the model reads
       const n = [g.normal[3 * i], g.normal[3 * i + 1], g.normal[3 * i + 2]]
-      if (plan.value[i] !== Math.fround(rawLitValue(noAo, n, view.lightDir, g.shadow[i] === 1))) differing++
+      const L = view.lightDir
+      const nl = n[0] * L[0] + n[1] * L[1] + n[2] * L[2]
+      const isGround = g.mark[i] === 1 && g.shadow[i] === 0
+      if (!isGround) {
+        const s = planSample(noAo, curves, nl, g.shadow[i] === 1, n[0], n[1], n[2], 0, newZoneSample())
+        expect(plan.value[i]).toBe(Math.fround(s.u))
+      }
+      // the renderer's raw value on the form shadow side is the fill light alone (ambient, sky, bounce): the plan
+      // keeps those pixels in the shadow family, whatever the fill is
+      if (g.mark[i] === 0 && nl < -P.value.terminatorSoftness) {
+        shadowSide++
+        expect(plan.value[i]).toBeLessThanOrEqual(reflectedMax(noAo) + 1e-6)
+      }
     }
     expect(checked).toBeGreaterThan(5000)
-    expect(differing).toBe(0)
-    // and the formula itself, in doubles: the same expression as rawLitValue
-    const curves = compileCurves(noAo)
-    const len = Math.hypot(0.3, 0.4, 0.8660254037844386)
-    const n = [0.3 / len, -0.4 / len, 0.8660254037844386 / len]
-    const L = view.lightDir
-    const nl = n[0] * L[0] + n[1] * L[1] + n[2] * L[2]
-    for (const shadow of [false, true]) {
-      expect(modelValue(noAo, curves, nl, shadow, n[2], 0)).toBe(rawLitValue(noAo, n, L, shadow))
+    expect(shadowSide).toBeGreaterThan(300)
+    // and with every light slider at its maximum the shadow side is still under the half-tones
+    const flood = resolvePaintParams({ environment: { occlusion: 0 }, light: { ambient: 1, sky: 1, bounce: 1 } })
+    const g2 = sphereGBuffer(400, 300, { view, params: flood })
+    const map2 = buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g2, flood))
+    let seen = 0
+    for (let i = 0; i < g2.width * g2.height; i++) {
+      if (g2.mark[i] < 0 || map2.nl[i] > -P.value.terminatorSoftness / 2) continue
+      seen++
+      expect(map2.value[i]).toBeLessThanOrEqual(reflectedMax(flood) + 1e-6)
     }
+    expect(seen).toBeGreaterThan(300)
   })
 
-  it('applies the light response curve to N·L before intensity and shadow', () => {
-    // a flat response of 0.5: every lit point gets 0.5 whatever its N·L; a shadowed one gets none of it
-    const half = resolvePaintParams({ environment: { occlusion: 0 }, curves: { lightResponse: [[0, 0.5], [1, 0.5]] } })
-    const curves = compileCurves(half)
-    // up-facing: 0.5 + ambient 0.18 + sky 0.12 = 0.80, even at N·L = 0
-    expect(modelValue(half, curves, 0, false, 1, 0)).toBeCloseTo(0.8, 12)
-    expect(modelValue(half, curves, 0.9, false, 1, 0)).toBeCloseTo(0.8, 12)
-    expect(modelValue(half, curves, 0.9, true, 1, 0)).toBeCloseTo(0.3, 12)
-    // intensity scales the response: 1.2 x 0.5 + 0.30 = 0.90
-    const bright = resolvePaintParams({ environment: { occlusion: 0 }, light: { intensity: 1.2 }, curves: { lightResponse: [[0, 0.5], [1, 0.5]] } })
-    expect(modelValue(bright, compileCurves(bright), 0.5, false, 1, 0)).toBeCloseTo(0.6 + 0.3, 12)
-    // a negative N·L reads as zero
-    expect(modelValue(P, compileCurves(P), -0.7, false, 0, 0)).toBeCloseTo(0.18, 12)
-    // a sloped response is read between its points: [0,0],[1,0.5] halves a Lambert of 0.8 to 0.4
-    const slope = resolvePaintParams({ environment: { occlusion: 0 }, curves: { lightResponse: [[0, 0], [1, 0.5]] } })
-    expect(modelValue(slope, compileCurves(slope), 0.8, false, 0, 0)).toBeCloseTo(0.4 + 0.18, 6)
-  })
-
-  it('applies the value curve last, so it shifts where the zones start', () => {
-    // v = raw / 2: the core | half-tone boundary (v = 0.37) moves to raw 0.74
-    const squash = resolvePaintParams({ environment: { occlusion: 0 }, curves: { value: [[0, 0], [1, 0.5]] } })
-    const curves = compileCurves(squash)
-    // raw 0.74 = 0.44 lit + 0.30 up-facing ambient: v = 0.37, half on half weight
-    const v = modelValue(squash, curves, 0.44, false, 1, 0)
-    expect(v).toBeCloseTo(0.37, 6)
-    const s = zoneSample(squash, v, 0, false, newZoneSample())
-    expect(s.w[1]).toBeCloseTo(0.5, 5)
-    expect(s.w[2]).toBeCloseTo(0.5, 5)
-    expect(s.u).toBeCloseTo(0.38, 5)
-    // under the identity curve a raw value of 0.97 (0.67 lit + the ambient 0.30) is deep in the light
-    const id = zoneSample(noAo, modelValue(noAo, compileCurves(noAo), 0.67, false, 1, 0), 0, false, newZoneSample())
-    expect(id.zone).toBe(Z_LIGHT)
-    // and over a whole sphere the lights vanish: v never reaches 0.5, and the light zone starts at 0.93
+  it('applies the light response curve to the lit side: a response of zero leaves it at the darkest half-tone, and the shadow alone', () => {
     const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 75 })
     const g = sphereGBuffer(400, 300, { view, params: noAo })
     // (a plan map's arrays are scratch: read each before the next is built)
-    const base = buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g, noAo))
-    let rawMax = 0
-    for (let i = 0; i < g.width * g.height; i++) if (g.mark[i] >= 0) rawMax = Math.max(rawMax, base.value[i])
+    const base = Float32Array.from(buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g, noAo)).value)
+    const none = resolvePaintParams({ environment: { occlusion: 0 }, curves: { lightResponse: [[0, 0], [1, 0]] } })
+    const plan = buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g, none))
+    let lit = 0
+    for (let i = 0; i < g.width * g.height; i++) {
+      if (g.mark[i] < 0) continue
+      if (plan.nl[i] > 0.1) {
+        lit++
+        expect(plan.value[i]).toBeCloseTo(none.value.halfLo, 5)
+      } else if (plan.nl[i] < -0.1) {
+        expect(plan.value[i]).toBe(base[i])
+      }
+    }
+    expect(lit).toBeGreaterThan(1000)
+  })
+
+  it('applies the value curve last, to the finished plan: halved, every value is halved, and no pixel reaches a light', () => {
+    const squash = resolvePaintParams({ environment: { occlusion: 0 }, curves: { value: [[0, 0], [1, 0.5]] } })
+    const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 75 })
+    const g = sphereGBuffer(400, 300, { view, params: noAo })
+    const base = Float32Array.from(buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g, noAo)).value)
     const plan = buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g, squash))
-    let light = 0
     let maxV = 0
     for (let i = 0; i < g.width * g.height; i++) {
       if (g.mark[i] < 0) continue
-      if (plan.zone[i] === Z_LIGHT) light++
+      expect(plan.value[i]).toBeCloseTo(base[i] / 2, 5)
       maxV = Math.max(maxV, plan.value[i])
     }
-    expect(light).toBe(0)
     expect(maxV).toBeLessThanOrEqual(0.5 + 1e-6)
-    expect(maxV).toBeCloseTo(rawMax / 2, 5)
+    expect(maxV).toBeGreaterThan(0.4)
   })
 
-  it('darkens a creased pixel by occlusion·ao, and leaves a tilted plane alone', () => {
-    // a V-shaped valley down the middle of the screen: depth = 20 - |X| (X in world units, 100 px each)
-    const valley = (params: PaintParams) => {
+  it('takes a cast shadow to its contact value at a crease, and leaves a crease the key light reaches lit', () => {
+    // a V-shaped valley down the middle of the screen: depth = 20 - |X| (X in world units, 100 px each), every
+    // normal facing the key light (so every pixel has N·L > 0); `cast` flags them occluded by the key light
+    const valley = (params: PaintParams, cast: boolean) => {
       const g = makeGBuffer(FLAT_VIEW, 2, (x, y) => {
         if (x < 40 || x >= 360 || y < 40 || y >= 260) return null
         const X = (x - 200) / 100
         const nv = X >= 0 ? [-0.7071, 0, 0.7071] : [0.7071, 0, 0.7071]
-        return { depth: 20 - Math.abs(X), normal: [nv[2], nv[0], nv[1]], value: 0.5, mark: 0 }
+        return { depth: 20 - Math.abs(X), normal: [nv[2], nv[0], nv[1]], value: 0.5, mark: 0, shadow: cast }
       })
       const plan = buildPlanMap(makeFrameCtx(SPHERE_SCENE, FLAT_VIEW, g, params))
       // copies: the next call reuses the arrays
-      return { ao: Float32Array.from(plan.ao), value: Float32Array.from(plan.value) }
+      return { u: Float32Array.from(plan.value), nl: Float32Array.from(plan.nl), ao: Float32Array.from(plan.ao), zone: Uint8Array.from(plan.zone) }
     }
-    const withAo = valley(resolvePaintParams({ environment: { occlusion: 0.35, occlusionRadiusPx: 14 } }))
-    const without = valley(noAo)
+    const at = (gx: number, gy = 75) => gy * 200 + gx
+    const withAo = resolvePaintParams({ environment: { occlusion: 0.35, occlusionRadiusPx: 14 } })
+    const cast = valley(withAo, true)
+    // a facing normal, in the key light's occlusion: the cast shadow
+    expect(cast.nl[at(100)]).toBeGreaterThan(0.3)
+    expect(cast.zone[at(100)]).toBe(Z_CAST)
+    expect(cast.zone[at(60)]).toBe(Z_CAST)
+    // at the crease: the contact value; 40 CSS px from it every sample is on the same wall: the plateau
+    expect(cast.ao[at(100)]).toBeGreaterThan(0.2)
+    expect(cast.u[at(100)]).toBeCloseTo(withAo.value.castContact, 4)
+    expect(cast.ao[at(60)]).toBe(0)
+    expect(cast.u[at(60)]).toBeCloseTo(withAo.value.castPlateau, 5)
+    expect(cast.u[at(140)]).toBeCloseTo(withAo.value.castPlateau, 5)
+    // darkest at the contact and lighter the farther from it, never lighter than the plateau
+    let prev = 0
+    for (let gx = 100; gx >= 60; gx--) {
+      expect(cast.u[at(gx)]).toBeGreaterThanOrEqual(prev - 1e-6)
+      expect(cast.u[at(gx)]).toBeLessThanOrEqual(withAo.value.castPlateau + 1e-6)
+      prev = cast.u[at(gx)]
+    }
+    // the occlusion slider off: no contact darkening
+    const flat = valley(noAo, true)
+    expect(Math.max(...flat.ao)).toBe(0)
+    expect(flat.u[at(100)]).toBeCloseTo(noAo.value.castPlateau, 5)
+    // and the same valley, lit (no cast): the light family is not darkened by the occlusion
+    const lit = valley(withAo, false)
+    expect(lit.u[at(100)]).toBeCloseTo(valley(noAo, false).u[at(100)], 6)
+    expect(lit.u[at(100)]).toBeGreaterThan(noAo.value.halfLo)
+  })
+
+  it('computes occlusion from the depth: a creased pixel is occluded, a tilted plane is not', () => {
+    // the same V-shaped valley, with the occlusion measured: at the crease the valley walls close in
+    const g = makeGBuffer(FLAT_VIEW, 2, (x, y) => {
+      if (x < 40 || x >= 360 || y < 40 || y >= 260) return null
+      const X = (x - 200) / 100
+      const nv = X >= 0 ? [-0.7071, 0, 0.7071] : [0.7071, 0, 0.7071]
+      return { depth: 20 - Math.abs(X), normal: [nv[2], nv[0], nv[1]], value: 0.5, mark: 0 }
+    })
+    const ao = Float32Array.from(buildPlanMap(makeFrameCtx(SPHERE_SCENE, FLAT_VIEW, g, resolvePaintParams({ environment: { occlusion: 0.35, occlusionRadiusPx: 14 } }))).ao)
     const at = (gx: number, gy = 75) => gy * 200 + gx
     // right at the crease (x = 200 CSS px, G pixel 100) the valley walls close in: heavily occluded
-    expect(withAo.ao[at(100)]).toBeGreaterThan(0.2)
-    expect(withAo.ao[at(99)]).toBeGreaterThan(0.2)
+    expect(ao[at(100)]).toBeGreaterThan(0.2)
+    expect(ao[at(99)]).toBeGreaterThan(0.2)
     // 20 G px (40 CSS px) from the crease every sample is on the same wall: nothing
-    expect(withAo.ao[at(60)]).toBe(0)
-    expect(withAo.ao[at(140)]).toBe(0)
-    // the value drops by occlusion · ao (identity curves); occlusion 0 changes nothing
-    const d = without.value[at(100)] - withAo.value[at(100)]
-    expect(d).toBeCloseTo(0.35 * withAo.ao[at(100)], 5)
-    expect(d).toBeGreaterThan(0.07)
-    expect(without.value[at(60)]).toBe(withAo.value[at(60)])
-    expect(Math.max(...without.ao)).toBe(0)
+    expect(ao[at(60)]).toBe(0)
+    expect(ao[at(140)]).toBe(0)
     // a plane tilted 40 degrees has no occlusion anywhere: its extension is its own surface
     const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 100 })
     const tilt: [number, number, number] = [Math.sin(0.7), 0, Math.cos(0.7)]
-    const g = planeGBuffer(400, 300, { view, normal: tilt, point: [0, 0, 0], extent: 1.2 })
-    const plan = buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, g, resolvePaintParams({ environment: { occlusion: 0.5 } })))
+    const gp = planeGBuffer(400, 300, { view, normal: tilt, point: [0, 0, 0], extent: 1.2 })
+    const plan = buildPlanMap(makeFrameCtx(SPHERE_SCENE, view, gp, resolvePaintParams({ environment: { occlusion: 0.5 } })))
     let filled = 0
     let maxAo = 0
-    for (let i = 0; i < g.width * g.height; i++) {
-      if (g.mark[i] < 0) continue
+    for (let i = 0; i < gp.width * gp.height; i++) {
+      if (gp.mark[i] < 0) continue
       filled++
       maxAo = Math.max(maxAo, plan.ao[i])
     }

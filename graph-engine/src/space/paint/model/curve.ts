@@ -12,7 +12,9 @@
 //        + the plane's hue step
 //   then, in OKLab and never touching L: a warm/cool tint, a sky tint on
 //   up-facing normals and a bounce tint on down-facing ones.
-// Reflected light mixes the bounce colour in by up to reflectedBounceMix.
+// Reflected light mixes the bounce colour's hue and chroma in by up to reflectedBounceMix, in OKLab and
+// NEVER touching L (value plan, spec §12): the value of reflected light is the plan's (it is kept below the
+// darkest half-tone there), and a lift here would put the bounce back among the half-tones.
 // Colormapped surfaces scale the hue rotation, the accent, the plane steps
 // and every tint by curve.colormapHue (a third), so the colorbar stays true.
 //
@@ -168,12 +170,12 @@ export function makeCurve(params: PaintParams): Curve {
       lab[1] += k * Math.cos(env.hue * D2R)
       lab[2] += k * Math.sin(env.hue * D2R)
     }
-    // reflected light: the bounce colour mixed in (this one does lift L)
+    // reflected light: the bounce colour's hue and chroma mixed in; L stays where the value plan put it, so the
+    // bounce can never lift a shadow past the ceiling the plan keeps below the half-tones
     const b = i.bounce ?? 0
     if (b > 0) {
       const w = p.reflectedBounceMix * clamp(b / 0.45, 0, 1)
       const bl = lchToLab(bounceLch[0], bounceLch[1], bounceLch[2])
-      lab[0] += (bl[0] - lab[0]) * w * 0.6 + 0.03 * w
       lab[1] += (bl[1] - lab[1]) * w
       lab[2] += (bl[2] - lab[2]) * w
     }

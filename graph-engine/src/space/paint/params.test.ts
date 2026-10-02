@@ -66,11 +66,8 @@ describe('paint params', () => {
     const ly = Math.sin((27 * Math.PI) / 180)
     const lz = Math.cos((56 * Math.PI) / 180) * Math.cos((27 * Math.PI) / 180)
     expect([lx, ly, lz].map((v) => Math.round(v * 100) / 100)).toEqual([-0.74, 0.45, 0.5])
-    // where the half-tone and the light begin, over the model's value (the fill light on top of the mockup's 0.17 and 0.66 of N.L)
-    expect([p.value.halfAt, p.value.lightAt]).toEqual([0.37, 0.93])
-    const spec = (path: string) => PARAM_SCHEMA.find((s) => s.path === path)
-    expect(spec('value.halfAt')).toMatchObject({ group: 'Value plan', min: 0, max: 1 })
-    expect(spec('value.lightAt')).toMatchObject({ group: 'Value plan', min: 0, max: 1 })
+    // the mockup's plan values: the half-tone ramp 0.52..0.72, the light ramp 0.85..0.94, the core 0.24, the cast shadow 0.32
+    expect([p.value.halfLo, p.value.halfHi, p.value.lightLo, p.value.lightHi, p.value.corePlateau, p.value.castPlateau]).toEqual([0.52, 0.72, 0.85, 0.94, 0.24, 0.32])
     // the mockup painted on fine primed linen, and the weave reads at half the generator's default texture
     expect([p.canvas.weave, p.canvas.texture]).toEqual(['linen', 0.5])
     // and a brush never more than 4 times the size it was tuned at
@@ -80,5 +77,40 @@ describe('paint params', () => {
   it('resolves the underpainting from an override, and clamps nothing it was not asked to', () => {
     const q = resolvePaintParams({ underpaint: { opacity: 0.5 }, particles: { zoomGrowMax: 2 } })
     expect([q.underpaint.opacity, q.underpaint.streak, q.particles.zoomGrowMax, q.particles.zoomStrokeScale, q.particles.zoomBigMax]).toEqual([0.5, 0.4, 2, 0.35, 4])
+  })
+  it('has the value plan of the classical form-shadow model (spec §12), in the Value plan group, with defaults in painter order', () => {
+    const v = DEFAULT_PAINT_PARAMS.value
+    const spec = (path: string) => PARAM_SCHEMA.find((s) => s.path === path)
+    for (const k of ['lightTurn', 'lightSoftness', 'terminatorSoftness', 'coreWidth', 'corePlateau', 'reflectedShare', 'reflectedSoftness', 'castPlateau', 'castContact']) {
+      expect(spec(`value.${k}`), k).toMatchObject({ group: 'Value plan' })
+    }
+    expect(spec('value.reflectedShare')).toMatchObject({ min: 0, max: 0.9 })
+    // the reflected light is a share of the way from the core to the darkest half-tone, about 0.4
+    expect(v.reflectedShare).toBeCloseTo(0.4, 12)
+    // the terminator is the crispest of the three transitions, the turn to light the widest
+    expect(v.terminatorSoftness).toBeLessThan(v.reflectedSoftness)
+    expect(v.reflectedSoftness).toBeLessThan(v.lightSoftness)
+    // the shadow family sits under the half-tones by construction: core < cast <= reflectedMax < halfLo, contact below the plateau
+    expect(v.castContact).toBeLessThanOrEqual(v.castPlateau)
+    expect(v.corePlateau + v.reflectedShare * (v.halfLo - v.corePlateau)).toBeLessThan(v.halfLo)
+    expect(v.castPlateau).toBeLessThanOrEqual(v.corePlateau + v.reflectedShare * (v.halfLo - v.corePlateau))
+    // the old reflected ramp and the old zone steps are gone from the contract
+    for (const gone of ['reflectedLo', 'reflectedHi', 'halfAt', 'lightAt', 'soft']) {
+      expect(gone in v, gone).toBe(false)
+      expect(spec(`value.${gone}`), gone).toBeUndefined()
+    }
+  })
+
+  it('resolves a saved preset that still carries the old value parameters: the unknown keys are ignored, the rest applies', () => {
+    const old = { value: { reflectedLo: 0.34, reflectedHi: 0.48, halfAt: 0.37, lightAt: 0.93, soft: 0.07, corePlateau: 0.2, castPlateau: 0.3 }, light: { azimuth: 10 } }
+    const p = resolvePaintParams(old as never)
+    expect(p.value.corePlateau).toBe(0.2)
+    expect(p.value.castPlateau).toBe(0.3)
+    expect(p.light.azimuth).toBe(10)
+    // the new parameters keep their defaults, and the old keys do not come back
+    expect(p.value.reflectedShare).toBe(DEFAULT_PAINT_PARAMS.value.reflectedShare)
+    expect(p.value.lightTurn).toBe(DEFAULT_PAINT_PARAMS.value.lightTurn)
+    for (const gone of ['reflectedLo', 'reflectedHi', 'halfAt', 'lightAt', 'soft']) expect(gone in p.value, gone).toBe(false)
+    expect(p.value).toEqual({ ...DEFAULT_PAINT_PARAMS.value, corePlateau: 0.2, castPlateau: 0.3 })
   })
 })

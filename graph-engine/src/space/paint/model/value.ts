@@ -1,47 +1,44 @@
-// The value plan (spec §3.3, §11): "find the values of the figure".
+// The value plan (spec §3.3, §11, §12): "find the values of the figure", as a painter builds them.
 //
-// The model computes its OWN value at every G-buffer pixel from the normal and
-// the shadow flag, so Ben's curves apply (the renderer's GBuffer.value is a
-// reference only):
-//   lit  = lightResponse(max(0, n·L)) · intensity · (shadowed ? 0 : 1)
-//   raw  = clamp(lit + ambient + sky·max(n.z, 0) + bounce·max(−n.z, 0) − occlusion·ao, 0, 1)
-//   v    = valueCurve(raw)
-// ao is screen-space ambient occlusion from the G-buffer depth: a small seeded
-// kernel of 8 samples over occlusionRadiusPx at G-buffer resolution, a sample
-// counting only where it stands NEARER than the tangent plane extended to it
-// (so a tilted plane does not occlude itself) and within range. The default
-// curves are the identity, so with occlusion 0 the value is bit-identical to
-// the renderer's own raw lit value (rawLitValue).
+// THE STRUCTURE (Ben, 2026-10-02: the classical form-shadow model). Two families, divided by the terminator, where
+// the surface turns from the key light (N·L = 0):
+//   LIGHT family   N·L > 0 and not in cast shadow:  highlight, light, half-tone (bright to dark)
+//   SHADOW family  N·L <= 0, plus the cast shadow:  core shadow, reflected light, cast shadow
+// and every value of the shadow family is darker than every value of the light family. The plan is a function of
+// the signed N·L (and of the bounce, the cast flag and the occlusion), not of a lit value with the fill light on
+// top of it: the fill light could lift the shadows into the half-tones, and it did (the bounce read as a half-tone).
 //
-// A painter does not paint that continuous ramp; she paints a few zones, each
-// with its own value, and the steps between them: light, half-tone, core
-// shadow, reflected light, cast shadow. zoneSample() maps v to the PLAN value
-// the lighting curve consumes. The zones are chosen over v, by two soft steps
-// (value.soft wide), centred where the mockup's are (it took them over the key light alone,
-// N·L at 0.17 and 0.66; here v has the fill light on top, so they sit higher):
-//   core | half-tone    centred at value.halfAt
-//   half-tone | light   centred at value.lightAt
-// Inside a zone the plan value is
-//   half-tone   lerp(halfLo, halfHi) over v from halfAt to lightAt
-//   light       lerp(lightLo, lightHi) over v from lightAt to 1
-//   core        the plateau corePlateau
-//   reflected   reflectedLo..reflectedHi by the bounce weight
-//   cast        the plateau castPlateau
-// (the mockup's outputs: half-tone 0.52–0.72, light 0.85–0.94, plateaus 0.24,
-// 0.34–0.48 and 0.32). Zone weights blend across the soft steps, so there is
-// a step in value at a terminator, not a smooth ramp.
+//   light family  u = halfLo + (halfHi - halfLo)·S(0, lightTurn, n)             the half-tone ramp
+//                      + (lightLo - halfHi)·S(lightTurn ± lightSoftness/2, n)   the SOFT turn to light
+//                      + (lightHi - lightLo)·S(lightTurn, 1, n)                 the light ramp to the highlight
+//                 with n = N·L through the light response curve and the intensity, S the smoothstep. Every term is
+//                 a smoothstep, so the gradation is smooth (its derivative is continuous) everywhere.
+//   shadow family u = corePlateau + (reflectedMax - corePlateau)·bounceAmount·S(coreWidth, coreWidth + reflectedSoftness, -N·L)
+//                 the core band from the terminator to -coreWidth, then a SOFT lift to the reflected light. The
+//                 bounce amount (0..1: the bounce, sky and ambient light the normal takes, less the occlusion) can
+//                 only choose a place between the core and reflectedMax: nothing can lift the shadow past the cap
+//                   reflectedMax = corePlateau + reflectedShare·(halfLo - corePlateau),   reflectedShare <= 0.9.
+//   terminator    the two meet in an edge centred on N·L = 0, terminatorSoftness wide: clearly defined, and
+//                 crisper than the turn to light and the lift to reflected light.
+//   cast shadow   castPlateau (never lighter than reflectedMax) away from the contact, castContact at it: the
+//                 occlusion, over its radius in px, takes it down. It takes over from the form where the key
+//                 light is occluded on a surface that faces it.
+// The value curve (Ben's) is applied last, to the finished plan value; it keeps the families in order for any
+// curve that does not decrease.
 //
-// Where the steps sit decides how much of a form is in the light and how much in the half-tones,
-// where the colour is richest: the first version of this took them from the plateau values (0.485 and
-// 0.785 over v), which with the fill light on top put twice the mockup's share of a saddle in the
-// light zone (0.68, against 0.35) and the lights washed out. value.test.ts pins the shares.
+// Occlusion (screen space, from the G-buffer depth: a small seeded kernel of 8 samples over occlusionRadiusPx, a
+// sample counting only where it stands NEARER than the tangent plane extended to it, so a tilted plane does not
+// occlude itself, and within range) takes the cast shadow to its contact value and the bounce away from the form
+// shadow near a contact. It does not darken the light family: that is the key light's, and a crease it reaches
+// is lit.
 //
-// A cast shadow is a surface that FACES the light but is occluded (the shadow
-// flag with n·L > 0); a self-shadowed side is the core.
+// The PLAN value is what the lighting curve consumes (the strokes' lightness, curve.ts). Zone weights (light,
+// half-tone, core, reflected, cast; they sum to 1) classify each pixel for the roles, the planes and the zones
+// debug view; a pixel's zone is the heaviest weight.
 
 import { randomFor } from '../../../style/random'
 import type { PaintParams } from '../params'
-import { Z_CAST, Z_CORE, Z_LIGHT } from './zones'
+import { Z_CORE, Z_LIGHT } from './zones'
 import { clamp, lerp, scratchF32, scratchU8, smooth, TAU, vnorm, type V3 } from './math'
 import { compileCurves, type CompiledCurves } from './respond'
 import type { FrameCtx } from './view'
@@ -52,22 +49,13 @@ export { Z_CAST, Z_CORE, Z_HALF, Z_LIGHT, Z_REFLECTED } from './zones'
 export const BOUNCE_DIR: V3 = vnorm([-0.1, -0.5, -0.86])
 
 // The raw lit value the renderer writes (§3.3, R1): the contract's formula,
-// used by the synthetic G-buffers of the tests and as the reference the
-// model's own value matches under identity curves.
+// used by the synthetic G-buffers of the tests as the renderer's reference
+// (GBuffer.value). The model's own value is the plan below.
 export function rawLitValue(params: PaintParams, n: readonly number[], lightDir: readonly number[], shadow: boolean): number {
   const l = params.light
   const lambert = Math.max(0, n[0] * lightDir[0] + n[1] * lightDir[1] + n[2] * lightDir[2])
   const u = lambert * l.intensity * (shadow ? 0 : 1) + l.ambient + l.sky * Math.max(n[2], 0) + l.bounce * Math.max(-n[2], 0)
   return clamp(u, 0, 1)
-}
-
-// The model's own value at a point (curves and occlusion applied). `nl` is the
-// unclamped n·L; `ao` the occlusion 0..1.
-export function modelValue(params: PaintParams, curves: CompiledCurves, nl: number, shadow: boolean, nz: number, ao: number): number {
-  const l = params.light
-  const lit = curves.lightResponse(Math.max(0, nl)) * l.intensity * (shadow ? 0 : 1)
-  const raw = clamp(lit + l.ambient + l.sky * Math.max(nz, 0) + l.bounce * Math.max(-nz, 0) - params.environment.occlusion * ao, 0, 1)
-  return curves.value(raw)
 }
 
 // The share of the light at a point that is environment light (ambient, sky
@@ -93,6 +81,28 @@ export function bounceWeight(params: PaintParams, nx: number, ny: number, nz: nu
   return facing * 0.85 * (1 - smooth(0, 0.3, key)) * clamp(params.light.bounce / 0.1, 0, 1.5)
 }
 
+// How much of its reflected light a form-shadow normal takes, 0..1: the bounce off the table (bounceWeight, for
+// a normal the key does not reach), the sky on up-facing normals and the ambient, each against the slider's
+// default (bounce 0.1, sky 0.12, ambient 0.18). It chooses a place between the core and reflectedMax and nothing
+// more: the clamp is what keeps the sliders from lifting a shadow into the half-tones.
+const SKY_GAIN = 0.4
+const AMBIENT_GAIN = 0.25
+export function bounceAmount(params: PaintParams, nx: number, ny: number, nz: number): number {
+  const l = params.light
+  const sky = SKY_GAIN * clamp(l.sky / 0.12, 0, 2.5) * Math.max(nz, 0)
+  const ambient = AMBIENT_GAIN * clamp(l.ambient / 0.18, 0, 2.5)
+  return clamp(bounceWeight(params, nx, ny, nz, 0) + sky + ambient, 0, 1)
+}
+
+// The lightest the reflected light gets: the core, and reflectedShare of the way from it to the darkest half-tone.
+export function reflectedMax(params: PaintParams): number {
+  const v = params.value
+  return v.corePlateau + clamp(v.reflectedShare, 0, 0.9) * Math.max(0, v.halfLo - v.corePlateau)
+}
+
+// The darkest half-tone: the light family's floor, the value at the terminator.
+export const halfToneLowest = (params: PaintParams): number => params.value.halfLo
+
 export interface ZoneSample {
   // Weights of light, half-tone, core, reflected, cast; they sum to 1.
   w: [number, number, number, number, number]
@@ -102,47 +112,76 @@ export interface ZoneSample {
   zone: number
   // How far into a zone boundary: 0 inside a zone, up to ~0.5 on a boundary.
   trans: number
+  // How much of the reflected-light range the form shadow has taken here, 0..1 (the lift): the bounce mix of the
+  // colour reads it. 0 in the light family, in the core and in the cast shadow.
+  lift: number
 }
 
-export const newZoneSample = (): ZoneSample => ({ w: [0, 0, 0, 0, 0], u: 0, zone: Z_CORE, trans: 0 })
+export const newZoneSample = (): ZoneSample => ({ w: [0, 0, 0, 0, 0], u: 0, zone: Z_CORE, trans: 0, lift: 0 })
 
-// v: the model's value; b: the bounce weight; cast: occluded while facing the light.
-export function zoneSample(params: PaintParams, v: number, b: number, cast: boolean, out: ZoneSample): ZoneSample {
+// The occlusion·ao at which a contact is fully dark (the default occlusion 0.35 reaches it at ao 0.23: the kernel's
+// occlusion is a fraction of 8 samples, and a surface beside a form seldom has more than a quarter of them nearer).
+export const CONTACT_FULL = 0.08
+// A cast shadow is told from the terminator by its N·L: past the soft edge, then this much more to take over (the
+// renderer flags N·L <= 0 as shadow, and the shadow map's bias at a graze must not paint a ragged edge).
+export const CAST_FADE = 0.08
+
+// The plan at one point. nl: the unclamped N·L; shadow: the G-buffer's shadow flag (set for every N·L <= 0 and for
+// the key light's occlusion); n: the world normal; ao: the occlusion 0..1.
+export function planSample(
+  params: PaintParams, curves: CompiledCurves, nl: number, shadow: boolean, nx: number, ny: number, nz: number, ao: number, out: ZoneSample,
+): ZoneSample {
   const vp = params.value
   const w = out.w
-  if (cast) {
-    w[0] = w[1] = w[2] = w[3] = 0
-    w[4] = 1
-    out.u = vp.castPlateau
-    out.zone = Z_CAST
-    out.trans = 0
-    return out
-  }
-  const s = Math.max(1e-4, vp.soft)
-  const cA = vp.halfAt
-  const cB = Math.max(vp.lightAt, cA)
-  const sHt = smooth(cA - s / 2, cA + s / 2, v)
-  const sL = Math.min(sHt, smooth(cB - s / 2, cB + s / 2, v))
-  const rest = 1 - sHt
-  const rb = smooth(0.1, 0.2, b)
-  w[0] = sL
-  w[1] = sHt - sL
-  w[3] = rest * rb
-  w[2] = rest - w[3]
-  w[4] = 0
-  const uHalf = lerp(vp.halfLo, vp.halfHi, clamp((v - cA) / Math.max(1e-6, cB - cA), 0, 1))
-  const uLight = lerp(vp.lightLo, vp.lightHi, clamp((v - cB) / Math.max(1e-6, 1 - cB), 0, 1))
-  const uRefl = lerp(vp.reflectedLo, vp.reflectedHi, clamp(b / 0.5, 0, 1))
-  out.u = w[0] * uLight + w[1] * uHalf + w[2] * vp.corePlateau + w[3] * uRefl
+  const ts = Math.max(1e-4, vp.terminatorSoftness)
+  const ls = Math.max(1e-4, vp.lightSoftness)
+  const rs = Math.max(1e-4, vp.reflectedSoftness)
+  const core = vp.corePlateau
+  const rMax = reflectedMax(params)
+  // the occlusion at this point: 0 free .. 1 a contact
+  const contact = clamp((params.environment.occlusion * ao) / CONTACT_FULL, 0, 1)
+
+  // -- the shadow family: the core, then the reflected light --
+  const into = Math.max(0, -nl)
+  const reflect = smooth(vp.coreWidth, vp.coreWidth + rs, into)
+  const amount = bounceAmount(params, nx, ny, nz) * (1 - contact)
+  const lift = amount * reflect
+  const uForm = core + (rMax - core) * lift
+  // -- the cast shadow, darkest at the contact --
+  const far = Math.min(vp.castPlateau, rMax)
+  const uCast = lerp(far, Math.min(vp.castContact, far), contact)
+  const wCast = shadow ? smooth(ts / 2, ts / 2 + CAST_FADE, nl) : 0
+
+  // -- the light family: the half-tone ramp, the soft turn to light, the light ramp --
+  const n = clamp(curves.lightResponse(Math.max(0, nl)) * params.light.intensity, 0, 1)
+  const turn = vp.lightTurn
+  const rise = smooth(turn - ls / 2, turn + ls / 2, n)
+  const uLight =
+    vp.halfLo +
+    (vp.halfHi - vp.halfLo) * smooth(0, Math.max(0.05, turn), n) +
+    (vp.lightLo - vp.halfHi) * rise +
+    (vp.lightHi - vp.lightLo) * smooth(turn, 1, n)
+
+  // -- the terminator: the form shadow gives way to the light family across an edge centred on N·L = 0 --
+  const wT = smooth(-ts / 2, ts / 2, nl)
+  const uFormed = lerp(uForm, uLight, wT)
+  out.u = clamp(curves.value(clamp(lerp(uFormed, uCast, wCast), 0, 1)), 0, 1)
+
+  const lit = (1 - wCast) * wT
+  const dark = (1 - wCast) * (1 - wT)
+  w[0] = lit * rise
+  w[1] = lit - w[0]
+  // (a pixel is reflected light only where the bounce, or the sky, really reaches it: the ambient alone, 0.25, is not)
+  w[3] = dark * reflect * smooth(0.2, 0.5, amount)
+  w[2] = dark - w[3]
+  w[4] = wCast
+  out.lift = dark * lift
   let best = 0
-  for (let k = 1; k < 4; k++) if (w[k] > w[best]) best = k
+  for (let k = 1; k < 5; k++) if (w[k] > w[best]) best = k
   out.zone = best
   out.trans = 1 - w[best]
   return out
 }
-
-// The value, in v units, of the terminator: the centre of the core | half-tone boundary.
-export const terminatorValue = (params: PaintParams): number => params.value.halfAt
 
 // ---- screen-space occlusion ----
 
@@ -226,7 +265,9 @@ export interface PlanMap {
   width: number
   height: number
   scale: number
-  // The model's value v (curves and occlusion applied), 0..1, and the occlusion.
+  // The model's value (the plan value, before the deviation: the 'value' debug view), 0..1, -1 where empty; and
+  // the occlusion. `u` is the plan value too (0 where empty): the strokes' value reads it. They differ only on lit
+  // canvas, whose u is the canvas value and whose value has the value curve applied.
   value: Float32Array
   ao: Float32Array
   // The plan value, and its zone (255 where empty).
@@ -234,8 +275,10 @@ export interface PlanMap {
   zone: Uint8Array
   // How far into a zone boundary (0 inside a zone).
   trans: Float32Array
-  // Key Lambert × shadow, and the bounce weight.
+  // Key Lambert × shadow, the signed N·L (0 where empty: the form strokes' distance from the terminator), and
+  // the reflected light the form shadow has taken (0..1, the colour's bounce mix).
   key: Float32Array
+  nl: Float32Array
   bounce: Float32Array
   // Light weight (light + 0.6·half), shadow weight (core + cast), reflected weight.
   lightW: Float32Array
@@ -257,6 +300,7 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
   const zone = scratchU8('plan.zone', n)
   const trans = scratchF32('plan.trans', n)
   const keyA = scratchF32('plan.key', n)
+  const nlA = scratchF32('plan.nl', n)
   const bounceA = scratchF32('plan.bounce', n)
   const lightW = scratchF32('plan.lightW', n)
   const shadowW = scratchF32('plan.shadowW', n)
@@ -276,6 +320,7 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
       zone[i] = 255
       trans[i] = 0
       keyA[i] = 0
+      nlA[i] = 0
       bounceA[i] = 0
       lightW[i] = 0
       shadowW[i] = 0
@@ -287,26 +332,27 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
     const nz = g.normal[3 * i + 2]
     const ndl = nx * L[0] + ny * L[1] + nz * L[2]
     const shadow = g.shadow[i] === 1
-    const key = shadow ? 0 : Math.max(0, ndl)
-    const b = bounceWeight(params, nx, ny, nz, key)
-    keyA[i] = key
-    bounceA[i] = b
-    const v = modelValue(params, curves, ndl, shadow, nz, ao[i])
-    value[i] = v
+    keyA[i] = shadow ? 0 : Math.max(0, ndl)
+    nlA[i] = ndl
     if (fc.ground[m] === 1 && !shadow) {
-      // bare canvas in the light
+      // bare canvas in the light: the canvas value (the strokes' u stays the canvas, so a value curve never repaints
+      // the ground; the value plan shows what the curve would make of it)
+      value[i] = clamp(curves.value(uCanvas), 0, 1)
       u[i] = uCanvas
       zone[i] = Z_LIGHT
       trans[i] = 0
+      bounceA[i] = 0
       lightW[i] = 1
       shadowW[i] = 0
       reflW[i] = 0
       continue
     }
-    zoneSample(params, v, b, shadow && ndl > 0.02, zs)
+    planSample(params, curves, ndl, shadow, nx, ny, nz, ao[i], zs)
+    value[i] = zs.u
     u[i] = zs.u
     zone[i] = zs.zone
     trans[i] = zs.trans
+    bounceA[i] = zs.lift
     lightW[i] = zs.w[0] + 0.6 * zs.w[1]
     shadowW[i] = zs.w[2] + zs.w[4]
     reflW[i] = zs.w[3]
@@ -335,5 +381,5 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
       grad[i] = Math.hypot(gx, gy)
     }
   }
-  return { width: W, height: H, scale: g.scale, value, ao, u, zone, trans, key: keyA, bounce: bounceA, lightW, shadowW, reflW, grad, uCanvas, curves }
+  return { width: W, height: H, scale: g.scale, value, ao, u, zone, trans, key: keyA, nl: nlA, bounce: bounceA, lightW, shadowW, reflW, grad, uCanvas, curves }
 }
