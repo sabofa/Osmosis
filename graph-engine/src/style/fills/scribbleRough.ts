@@ -1,0 +1,153 @@
+import { smoothNoise, type Random } from '../random'
+import { polylineChain, smoothThrough, type Chain } from '../path'
+import type { Point } from '../tokens'
+import { hatchFrame, MARK_BUDGET, spacingWithin, scanPoint } from './region'
+import type { Run } from './scribble'
+
+// SCRIBBLE'S ROUGHENING — everything that only happens above roughness 0: a
+// turn straying off its scanline spot, loops spliced in for a hand's
+// flourish, a bend on every leg, the whole run drawn as a smooth curve, the
+// angle drifting across the region, and — past 0.3 — a second, sparser pass
+// over a patch of the first. Kept apart from scribble.ts, whose run-building
+// (going round a hole, touching alternate stretch ends) is the same at every
+// roughness: this file is what roughness actually DOES to a run once it has
+// one, not how the run got built.
+
+// A turn point on a scanline, at `offset` and `s` along it — moved, above
+// roughness 0, along the scan direction and across it, a hand's turn never
+// landing quite where it meant to. Nothing at roughness 0: the plain point.
+export function turnPoint(angle: number, offset: number, s: number, spacing: number, r: number, random: Random): Point {
+  if (r <= 0) return scanPoint(angle, offset, s)
+  const across = random.range(-0.45, 0.45) * r * spacing
+  const along = random.range(-0.8, 0.8) * r * spacing
+  return scanPoint(angle, offset + across, s + along)
+}
+
+// A turn replaced by a small loop, now and then — a hand's flourish. Each
+// loop is 3 or 4 points on a small circle, spliced in before the turn itself.
+function withLoops(points: readonly Point[], spacing: number, r: number, random: Random): Point[] {
+  const out: Point[] = []
+  for (const p of points) {
+    if (random.next() < 0.2 * r) {
+      const radius = random.range(0.3, 0.6) * spacing
+      const count = random.int(3, 4)
+      const start = random.range(0, 2 * Math.PI)
+      for (let i = 0; i < count; i++) {
+        const a = start + (i / count) * 2 * Math.PI
+        out.push({ x: p.x + Math.cos(a) * radius, y: p.y + Math.sin(a) * radius })
+      }
+    }
+    out.push(p)
+  }
+  return out
+}
+
+// A midpoint pushed sideways on every leg between consecutive turns — the
+// unevenness of a hand's own zig-zag, capped so it never bends further than
+// about a spacing.
+function withLegBends(points: readonly Point[], spacing: number, r: number, random: Random): Point[] {
+  if (points.length < 2) return points.slice()
+  const out: Point[] = [points[0]]
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]
+    const b = points[i]
+    const legLength = Math.hypot(b.x - a.x, b.y - a.y)
+    if (legLength > 1e-6) {
+      const push = Math.max(-1.2 * spacing, Math.min(1.2 * spacing, random.gauss() * 0.18 * r * legLength))
+      out.push({ x: (a.x + b.x) / 2 - ((b.y - a.y) / legLength) * push, y: (a.y + b.y) / 2 + ((b.x - a.x) / legLength) * push })
+    }
+    out.push(b)
+  }
+  return out
+}
+
+// A run's points, roughened: loops spliced in, then a bend on every
+// resulting leg. Nothing at roughness 0.
+export function roughenRun(points: readonly Point[], spacing: number, r: number, random: Random): Point[] {
+  if (r <= 0) return points.slice()
+  return withLegBends(withLoops(points, spacing, r, random), spacing, r, random)
+}
+
+// The drift: a smooth, seeded field turning every point a little about the
+// region's centre, the angle varying with how far along the family's own
+// direction the point sits — so the hand's angle wanders across the region
+// rather than jittering point to point. `null` at roughness 0 (no field, no
+// random draw).
+export function driftField(polygons: readonly Point[][], angle: number, r: number, random: Random): ((p: Point) => number) | null {
+  if (r <= 0) return null
+  const { along } = hatchFrame(angle)
+  const project = (p: Point) => p.x * along.x + p.y * along.y
+  let lo = Infinity
+  let hi = -Infinity
+  for (const polygon of polygons) for (const p of polygon) {
+    lo = Math.min(lo, project(p))
+    hi = Math.max(hi, project(p))
+  }
+  const span = Math.max(1e-6, hi - lo)
+  const noise = smoothNoise(random, 4)
+  const swing = (15 * Math.PI) / 180
+  return (p) => swing * r * noise(Math.min(1, Math.max(0, (project(p) - lo) / span)))
+}
+
+export function drift(points: readonly Point[], centre: Point, field: ((p: Point) => number) | null): Point[] {
+  if (!field) return points.slice()
+  return points.map((p) => {
+    const theta = field(p)
+    const dx = p.x - centre.x
+    const dy = p.y - centre.y
+    return { x: centre.x + dx * Math.cos(theta) - dy * Math.sin(theta), y: centre.y + dx * Math.sin(theta) + dy * Math.cos(theta) }
+  })
+}
+
+// A run's points as a chain: a smooth curve through them above roughness 0
+// (rounded turns, a hand's flourish rather than a zig-zag's sharp V), the
+// plain polyline at 0.
+export function toChain(points: readonly Point[], r: number): Chain {
+  return r > 0 ? { pieces: smoothThrough(points, false), closed: false } : polylineChain(points)
+}
+
+// The second pass's share of the region's mark budget: 0 up to roughness
+// 0.3, ramping in smoothly to a third by 0.4, rather than jumping straight
+// there (review round 1 — a sudden jump showed up as a big change in drawn
+// length over one small step of roughness).
+export function secondPassShare(r: number): number {
+  return r <= 0.3 ? 0 : r >= 0.4 ? 1 / 3 : (1 / 3) * ((r - 0.3) / 0.1)
+}
+
+// The second, sparser scribble that goes over a patch of the first, past
+// roughness 0.3: another angle, wider spacing, split where it leaves a
+// random disc so it reads as a patch rather than a second whole fill.
+// `buildRuns` is scribble.ts's own run-building pass, passed in rather than
+// imported, so the two files don't import each other.
+export function secondPassChains(
+  polygons: readonly Point[][],
+  angle: number,
+  spacing: number,
+  r: number,
+  random: Random,
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+  finish: (points: readonly Point[], spacing: number) => Point[],
+  buildRuns: (polygons: readonly Point[][], angle: number, step: number, r: number, random: Random) => Run[]
+): Chain[] {
+  const share = secondPassShare(r)
+  if (share <= 0) return []
+  const angle2 = angle + random.range(25, 60)
+  const step2 = spacingWithin(polygons, angle2, spacing * 1.6, MARK_BUDGET.length * share)
+  const discCentre = { x: box.minX + random.next() * (box.maxX - box.minX), y: box.minY + random.next() * (box.maxY - box.minY) }
+  const discRadius = random.range(0.3, 0.6) * Math.max(box.maxX - box.minX, box.maxY - box.minY)
+  const inDisc = (p: Point) => Math.hypot(p.x - discCentre.x, p.y - discCentre.y) <= discRadius
+  const chains: Chain[] = []
+  for (const run of buildRuns(polygons, angle2, step2, r, random)) {
+    const points = finish(run.points, step2)
+    let segment: Point[] = []
+    for (const p of points) {
+      if (inDisc(p)) segment.push(p)
+      else {
+        if (segment.length > 1) chains.push(toChain(segment, r))
+        segment = []
+      }
+    }
+    if (segment.length > 1) chains.push(toChain(segment, r))
+  }
+  return chains
+}

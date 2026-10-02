@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EXAMPLES } from './examples'
+import { EXAMPLE_GROUPS, EXAMPLES } from './examples'
 import { parseSpec } from './parser/parseSpec'
 import { renderFigure } from './figure/render'
 import { buildScene } from './scene/buildScene'
@@ -24,6 +24,13 @@ describe('review harness examples', () => {
     const labels = EXAMPLES.map((e) => e.label)
     expect(labels.length).toBeGreaterThan(20)
     expect(new Set(labels).size).toBe(labels.length)
+  })
+
+  // The harness shows one group at a time, so an example outside every group
+  // is an example nobody can reach — the failure this file exists to prevent.
+  it('puts every example in a known group, and leaves no group empty', () => {
+    for (const example of EXAMPLES) expect(EXAMPLE_GROUPS, example.label).toContain(example.group)
+    for (const group of EXAMPLE_GROUPS) expect(EXAMPLES.some((e) => e.group === group), group).toBe(true)
   })
 
   for (const example of EXAMPLES) {
@@ -103,6 +110,83 @@ describe('the "Two cones and a sphere" example is tangent', () => {
       const distance = Math.hypot(cross.x, cross.y, cross.z) / Math.hypot(d.x, d.y, d.z)
       expect(distance).toBeCloseTo(15 / Math.sqrt(73), 12)
       expect(sphere.spec.kind === 'sphere' && sphere.spec.radius).toBeCloseTo(distance, 12)
+    })
+  }
+})
+
+// Phase 9's examples construct their spheres; the numbers they print are
+// checked here against hand values, so an example cannot quietly draw a
+// sphere that is not the one its comment promises.
+describe('the phase 9 sphere examples', () => {
+  const walkOf = (label: string) => {
+    const parsed = parseSpec(EXAMPLES.find((e) => e.label === label)!.spec)
+    return buildSolidFigure(parsed.statements, (e) => evalExpr(e, {}, 'radians', {}))
+  }
+  const radius = (scope: ReturnType<typeof walkOf>, name: string) => {
+    const body = scope.solids.get(name)!
+    return body.spec.kind === 'sphere' ? body.spec.radius : NaN
+  }
+
+  it('gives the AIME tetrahedron an insphere of radius 20 sqrt 21 / 63', () => {
+    expect(radius(walkOf('AIME tetrahedron and its insphere'), 'I')).toBeCloseTo((20 * Math.sqrt(21)) / 63, 12)
+  })
+
+  it('puts the cube of edge 4 between spheres of radius 2 and 2 sqrt 3', () => {
+    const scope = walkOf('Cube between two spheres')
+    expect(radius(scope, 'I')).toBeCloseTo(2, 12)
+    expect(radius(scope, 'O')).toBeCloseTo(2 * Math.sqrt(3), 12)
+  })
+
+  it('puts a sphere of radius 1.5 in the cone and of radius 2 in the frustum', () => {
+    expect(radius(walkOf('Sphere in a cone'), 'I')).toBeCloseTo(1.5, 12)
+    expect(radius(walkOf('Frustum with an insphere'), 'I')).toBeCloseTo(2, 12)
+  })
+
+  it('makes PQ, between the tangent spheres, the sum of their radii', () => {
+    const scope = walkOf('Spheres by tangency')
+    const [p, q] = [scope.points.get('P')!, scope.points.get('Q')!]
+    const pq = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z)
+    // P = (0, 0, 2) over z = 0: radius 2. PQ = |(4, 1, 1)| = sqrt 18.
+    expect(radius(scope, 'S')).toBeCloseTo(2, 12)
+    expect(pq).toBeCloseTo(Math.sqrt(18), 12)
+    expect(radius(scope, 'S') + radius(scope, 'T')).toBeCloseTo(pq, 12)
+    // U is centred 1 from Q, inside T, and internally tangent to it.
+    expect(radius(scope, 'U')).toBeCloseTo(Math.sqrt(18) - 2 - 1, 12)
+  })
+
+  it("circumscribes the cone: 7/8 above its base, radius 25/8", () => {
+    const scope = walkOf('Sphere in a cone')
+    expect(radius(scope, 'O')).toBeCloseTo(25 / 8, 12)
+    // Internal y is author z; the base is at z = -2.
+    expect(scope.solids.get('O')!.placement.origin.y).toBeCloseTo(-2 + 7 / 8, 12)
+  })
+
+  it('puts the four points on a sphere of radius sqrt 3 about (1, 1, 1)', () => {
+    const scope = walkOf('Sphere through four points')
+    expect(radius(scope, 'O')).toBeCloseTo(Math.sqrt(3), 12)
+    // (1, 1, 1) is fixed by the author-to-internal map.
+    const m = scope.points.get('M')!
+    for (const c of [m.x, m.y, m.z]) expect(c).toBeCloseTo(1, 12)
+  })
+})
+
+// The Styles group exists to show the looks; an example there that drew
+// clean would be a button that shows nothing it promises.
+describe('the Styles examples', () => {
+  const styles = EXAMPLES.filter((e) => e.group === 'Styles')
+
+  it('are several, each pinned to a look', () => {
+    expect(styles.length).toBeGreaterThanOrEqual(5)
+    for (const example of styles) expect(example.spec, example.label).toMatch(/^@style: /m)
+  })
+
+  for (const example of styles) {
+    it(`${example.label} draws styled, not clean`, () => {
+      const parsed = parseSpec(example.spec)
+      const styled = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE).svg
+      const clean = renderFigure(parsed.statements, { ...parsed.config, style: {} }, LIGHT_PALETTE).svg
+      expect(styled).not.toBe(clean)
+      expect(styled).toMatch(/data-layer="paper"/)
     })
   }
 })

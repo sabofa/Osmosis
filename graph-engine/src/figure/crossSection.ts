@@ -3,9 +3,8 @@ import type { Vec2 } from '../scene/types'
 import type { Solid3D, Vec3 } from './project3d'
 import { dot3, scale3, sub3 } from './construct3d'
 import { frustumRadii, type SolidBody, type SolidSpec } from './solids'
-import { describeAuthorPlane, worldToAuthor } from './authorFrame'
+import { authorText, describeAuthorPlane } from './authorFrame'
 import { planeOfSection, signedDistance } from './plane'
-import { fmt } from './svg'
 import { isIdentityPlacement, rotateToLocal, rotateToWorld, toLocal, toWorld, type Placement } from './silhouette'
 import { localSection, type LocalSection, type SectionPiece } from './conicSection'
 
@@ -230,12 +229,6 @@ function windingAngle(plane: SectionPlane, dy: number, dx: number): number {
 // without cutting through: there is no section to draw.
 function touches(plane: SectionPlane, name: string, where: string): Error {
   return new Error(`The plane ${describeAuthorPlane(plane)} meets "${name}" only ${where} — it does not cut through it`)
-}
-
-// A point in the author's frame, for a message.
-function authorText(p: Vec3): string {
-  const a = worldToAuthor(p)
-  return `(${fmt(a.x)}, ${fmt(a.y)}, ${fmt(a.z)})`
 }
 
 function missesSolid(plane: SectionPlane, name: string): Error {
@@ -554,12 +547,41 @@ export function pieceStart2(piece: TrueShapePiece): Vec2 {
 // so it stays deterministic: the section's bounding box is placed with its
 // left edge one quarter of the solid's own width clear of the solid's right
 // edge, and its vertical centre level with the solid's.
+//
+// **Several lifts stack (phase 11, N1).** Sections, nets and path unfoldings
+// are all lifted, left to right in statement order, each clear of the one
+// before: `rightEdge` is the running right edge of everything lifted so far,
+// and the gap is taken from the larger of it and the solid's own right edge.
+// With no earlier lift it is absent, and the arithmetic is exactly phase 5's
+// (the max of a number with itself), so a single lift keeps its bytes.
 export const SECTION_GAP_FRACTION = 0.25
 
-export function liftOffset(solid: { minX: number; minY: number; maxX: number; maxY: number }, shape: { minX: number; minY: number; maxX: number; maxY: number }): Vec2 {
-  const gap = (solid.maxX - solid.minX) * SECTION_GAP_FRACTION
+// The clearance a net or a path's strip reserves in the gap before it: 10% of
+// the figure's width is about 64 view units at FIGURE_SIZE 640 — a label a
+// side (15-unit type, a few units off its vertex) and air between them.
+export const NET_LABEL_CLEARANCE = 0.1
+
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+
+export function liftOffset(solid: Bounds, shape: Bounds, rightEdge: number | null = null, clearance?: number): Vec2 {
+  const quarter = (solid.maxX - solid.minX) * SECTION_GAP_FRACTION
+  // A net's letters face the drawing (fix rounds 1 and 2): with a clearance
+  // c, the gap is also at least the fraction c of the size the figure is
+  // FITTED to — the larger of its width and its height (document.ts's
+  // fitProjection) — which the fit then maps to c x FIGURE_SIZE view units:
+  // room for a letter on each side of the gap, at any scale and any aspect.
+  // The width is the span so far, the gap and the shape (solved for the
+  // gap); the height is the taller of the solid and the shape, which sits
+  // level with it. Absent (every section), the gap is phase 5's quarter, bit
+  // for bit.
+  const span = Math.max(solid.maxX, rightEdge ?? solid.maxX) - solid.minX
+  const tall = Math.max(solid.maxY - solid.minY, shape.maxY - shape.minY)
+  const gap =
+    clearance === undefined
+      ? quarter
+      : Math.max(quarter, (clearance * (span + shape.maxX - shape.minX)) / (1 - clearance), clearance * tall)
   return {
-    x: solid.maxX + gap - shape.minX,
+    x: Math.max(solid.maxX, rightEdge ?? solid.maxX) + gap - shape.minX,
     y: (solid.minY + solid.maxY) / 2 - (shape.minY + shape.maxY) / 2,
   }
 }

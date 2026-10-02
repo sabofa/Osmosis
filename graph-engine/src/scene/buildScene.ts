@@ -608,6 +608,10 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
         // the problem is about.
         const what = statement.kind === 'circleShape' ? statement.shape : statement.kind === 'centralAngle' ? 'central angle' : 'inscribed angle'
         throw new Error(`"${what}" draws in figure mode — add "@mode: figure", or remove the plotted statement that made this a graph`)
+      } else if (statement.kind === 'fill') {
+        // Phase 12 (F4) — a shaded region is drawn as one exact path of
+        // segments and arcs, which only the figure renderer draws.
+        throw new Error('fill: draws in figures — declare @mode: figure')
       } else if (statement.kind === 'tick') {
         objects.push({ kind: 'tickMark', from: resolvePoint(statement.from), to: resolvePoint(statement.to), count: statement.count, color: statement.color })
       } else if (statement.kind === 'rightAngle') {

@@ -213,6 +213,15 @@ export function svgClosedPath(start: Vec2, commands: readonly string[], style: S
   return `<path${attrs({ d, ...style })}/>`
 }
 
+// A region of several closed outlines, as ONE path (phase 12, F5): each
+// loop a start point and its line and arc commands, closed by its own "Z".
+// One element so the fill has no seam, and several subpaths so a hole is a
+// hole under the even-odd rule the caller sets.
+export function svgClosedPaths(loops: readonly { start: Vec2; commands: readonly string[] }[], style: SvgAttrs): string {
+  const d = loops.map((loop) => [`M ${fmt(loop.start.x)} ${fmt(loop.start.y)}`, ...loop.commands, 'Z'].join(' ')).join(' ')
+  return `<path${attrs({ d, ...style })}/>`
+}
+
 export function lineCommand(to: Vec2): string {
   return `L ${fmt(to.x)} ${fmt(to.y)}`
 }
@@ -256,6 +265,11 @@ export function svgEllipse(center: Vec2, rx: number, ry: number, rotation: numbe
   const degrees = (rotation * 180) / Math.PI
   const transform = Math.abs(degrees) < 1e-9 ? null : `rotate(${fmt(degrees)} ${fmt(center.x)} ${fmt(center.y)})`
   return `<ellipse${attrs({ cx: center.x, cy: center.y, rx, ry, transform, ...style })}/>`
+}
+
+// A plain rectangle: the givens table's box.
+export function svgRect(rect: { x: number; y: number; width: number; height: number }, style: SvgAttrs): string {
+  return `<rect${attrs({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, ...style })}/>`
 }
 
 export function svgText(at: Vec2, text: string, style: SvgAttrs): string {

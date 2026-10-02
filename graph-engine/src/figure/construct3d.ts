@@ -164,8 +164,8 @@ export function footToLine3(p: Vec3, a: Vec3, b: Vec3, label = 'the line'): Vec3
   return add3(a, scale3(d, t))
 }
 
-export function pointLineDistance(p: Vec3, a: Vec3, b: Vec3): number {
-  return distance3(p, footToLine3(p, a, b))
+export function pointLineDistance(p: Vec3, a: Vec3, b: Vec3, label = 'the line'): number {
+  return distance3(p, footToLine3(p, a, b, label))
 }
 
 // The distance between the infinite lines a-b and c-d.
@@ -175,12 +175,12 @@ export function pointLineDistance(p: Vec3, a: Vec3, b: Vec3): number {
 // distance from a point of one to the other, rather than by dividing by a
 // cross product that is zero or nearly so — which would be NaN for exactly
 // parallel lines and noise for nearly parallel ones.
-export function lineLineDistance(a: Vec3, b: Vec3, c: Vec3, d: Vec3): number {
-  const d1 = direction(a, b, 'the first line')
-  const d2 = direction(c, d, 'the second line')
+export function lineLineDistance(a: Vec3, b: Vec3, c: Vec3, d: Vec3, first = 'the first line', second = 'the second line'): number {
+  const d1 = direction(a, b, first)
+  const d2 = direction(c, d, second)
   const n = cross3(d1, d2)
   const size = length3(n)
-  if (size <= GEOM_EPS * length3(d1) * length3(d2)) return pointLineDistance(c, a, b)
+  if (size <= GEOM_EPS * length3(d1) * length3(d2)) return pointLineDistance(c, a, b, first)
   return Math.abs(dot3(sub3(c, a), n)) / size
 }
 
@@ -203,6 +203,118 @@ export function angle3(vertex: Vec3, from: Vec3, to: Vec3, label = 'the angle'):
     throw new Error(`An arm of ${label} has zero length: its end and the vertex coincide`)
   }
   return Math.atan2(length3(cross3(u, v)), dot3(u, v))
+}
+
+// ---------------------------------------------------------------------------
+// Measures between lines and planes, and the dihedral (phase 10)
+// ---------------------------------------------------------------------------
+
+// The ACUTE angle between the infinite lines a-b and c-d, in radians, in
+// [0, pi/2]: the angle between their directions, whichever way each is
+// written. Skew lines have one too (M5). atan2 of |d1 x d2| and |d1 . d2|,
+// for the precision reason angle3 gives.
+export function lineAngle3(a: Vec3, b: Vec3, c: Vec3, d: Vec3, first = 'the first line', second = 'the second line'): number {
+  const d1 = direction(a, b, first)
+  const d2 = direction(c, d, second)
+  return Math.atan2(length3(cross3(d1, d2)), Math.abs(dot3(d1, d2)))
+}
+
+// The angle between the line a-b and a plane, in radians, in [0, pi/2]: the
+// complement of the angle between the line and the plane's normal, which is
+// atan2(|d . n|, |d x n|) with n unit — 0 for a line parallel to the plane,
+// pi/2 for one square to it.
+export function linePlaneAngle3(a: Vec3, b: Vec3, plane: Plane3, label = 'the line'): number {
+  const d = direction(a, b, label)
+  return Math.atan2(Math.abs(dot3(d, plane.normal)), length3(cross3(d, plane.normal)))
+}
+
+// M3 — the dihedral angle along the edge a-b between the half-plane through
+// `from` and the half-plane through `to` ("dihedral C-A-B-D": from = C, the
+// edge A-B, to = D).
+//
+// `u` and `v` are the UNIT components of (from - m) and (to - m) square to
+// the edge, m its midpoint: the plane angle of the dihedral, at m. **The
+// perpendicular step is the whole of it**: an end point that is not in the
+// plane through m square to the edge (a cube's A against the edge BC) gives
+// a raw angle that is not the dihedral. `angle` is between u and v, in
+// [0, pi].
+//
+// The names are the author's, for the refusals: the edge a single point, or
+// an end point on the edge's line, where no half-plane is fixed.
+export interface Dihedral3 {
+  mid: Vec3
+  u: Vec3
+  v: Vec3
+  angle: number
+  // How far `from` and `to` are from the edge's line: the lengths of the
+  // square components before they were made unit.
+  reach: [number, number]
+}
+
+export function dihedral3(
+  from: Vec3,
+  a: Vec3,
+  b: Vec3,
+  to: Vec3,
+  names: { from: string; a: string; b: string; to: string }
+): Dihedral3 {
+  const edge = sub3(b, a)
+  if (negligible(length3(edge), a, b)) {
+    throw new Error(`${names.a} and ${names.b} are the same point, so ${names.a}-${names.b} is no edge for a dihedral angle`)
+  }
+  const mid = midpoint3(a, b)
+  const along = scale3(edge, 1 / length3(edge))
+  const square = (p: Vec3, name: string): { unit: Vec3; size: number } => {
+    const offset = sub3(p, mid)
+    const perpendicular = sub3(offset, scale3(along, dot3(offset, along)))
+    const size = length3(perpendicular)
+    if (negligible(size, p, a, b)) {
+      throw new Error(`${name} lies on the line ${names.a}-${names.b}, so it fixes no half-plane at the edge ${names.a}${names.b}`)
+    }
+    return { unit: scale3(perpendicular, 1 / size), size }
+  }
+  const u = square(from, names.from)
+  const v = square(to, names.to)
+  return { mid, u: u.unit, v: v.unit, angle: Math.atan2(length3(cross3(u.unit, v.unit)), dot3(u.unit, v.unit)), reach: [u.size, v.size] }
+}
+
+// ---------------------------------------------------------------------------
+// The common perpendicular (phase 10, M6)
+// ---------------------------------------------------------------------------
+
+// The feet of the common perpendicular of the infinite lines a-b and c-d:
+// p on a-b, q on c-d, with p - q square to both. Closed form — minimising
+// |a + s d1 - c - t d2| is two linear equations in s and t, solved by
+// Cramer's rule:
+//
+//   s = (b e - c' d) / (a' c' - b^2),  t = (a' e - b d) / (a' c' - b^2)
+//
+// with a' = d1.d1, b = d1.d2, c' = d2.d2, d = d1.r, e = d2.r, r = a - c.
+//
+// Parallel lines have no unique common perpendicular (the denominator is
+// |d1 x d2|^2), and lines that meet have one of zero length. Both are
+// returned as what they are, not thrown: which words an author needs — the
+// meeting point in the author's frame — is the walk's to write, and this
+// file knows no frame.
+export type CommonPerpendicular = { kind: 'feet'; p: Vec3; q: Vec3 } | { kind: 'parallel' } | { kind: 'meet'; at: Vec3 }
+
+export function commonPerpendicular3(a: Vec3, b: Vec3, c: Vec3, d: Vec3, first = 'the first line', second = 'the second line'): CommonPerpendicular {
+  const d1 = direction(a, b, first)
+  const d2 = direction(c, d, second)
+  if (length3(cross3(d1, d2)) <= GEOM_EPS * length3(d1) * length3(d2)) return { kind: 'parallel' }
+  const r = sub3(a, c)
+  const aa = dot3(d1, d1)
+  const bb = dot3(d1, d2)
+  const cc = dot3(d2, d2)
+  const dd = dot3(d1, r)
+  const ee = dot3(d2, r)
+  const denominator = aa * cc - bb * bb
+  const s = (bb * ee - cc * dd) / denominator
+  const t = (aa * ee - bb * dd) / denominator
+  const p = add3(a, scale3(d1, s))
+  const q = add3(c, scale3(d2, t))
+  if (negligible(distance3(p, q), a, b, c, d)) return { kind: 'meet', at: midpoint3(p, q) }
+  return { kind: 'feet', p, q }
 }
 
 function capitalise(text: string): string {

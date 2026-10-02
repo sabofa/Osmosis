@@ -85,11 +85,21 @@ const GEOMETRY: ReadonlySet<Statement['kind']> = new Set([
   // A named plane (phase 8) draws nothing, but it exists only among points
   // in space, so it belongs to a solid figure.
   'planeDef',
+  // A dihedral angle's mark (phase 10) exists only among points in space.
+  'dihedral',
+  // A net (phase 11) is a solid unfolded flat: a plane figure of a solid.
+  'net',
+  // A shortest path over a solid's surface (phase 11) runs between points in
+  // space on a solid.
+  'shortestPath',
+  // A shaded region (phase 12) is plane geometry: drawn only by the figure
+  // renderer.
+  'fill',
 ])
 
 // The statements that exist only in a solid figure. Either one settles the
 // renderer on its own (S5).
-const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef'])
+const SOLID_FIGURE: ReadonlySet<Statement['kind']> = new Set(['solid', 'crossSection', 'planeDef', 'dihedral', 'net', 'shortestPath'])
 
 // Which renderer a spec gets.
 //

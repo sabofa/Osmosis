@@ -2183,10 +2183,15 @@ describe('named points in solid figures', () => {
     expect(svg).toContain('data-object="givens"')
   })
 
-  it('refuses an inline angle label in space, pointing at the givens form', () => {
-    const errors = result(`${NAMED}\nlabel: angle ABG`).errors
-    expect(errors).toHaveLength(1)
-    expect(errors[0].message).toMatch(/given: angle ABG/)
+  // Rewritten in phase 10 (M7): phase 6 refused this label, pointing at the
+  // givens table, because there was no arc in space to hang it on. It now
+  // draws the arc and prints the TRUE angle on it.
+  it('draws an inline angle label in space on its arc, printing the true angle (phase 10, M7)', () => {
+    // AB is an edge and BG a diagonal of the face BCGF square to it: 90.
+    const drawn = result(`@angle: degrees\n${NAMED}\nlabel: angle ABG`)
+    expect(drawn.errors).toEqual([])
+    expect(layer(drawn.svg, 'labels')).toContain('>90°</text>')
+    expect(countTags(layer(drawn.svg, 'marks'), 'path') + countTags(layer(drawn.svg, 'auxiliary'), 'path')).toBe(1)
   })
 
   it('refuses a length between a space point and a plane point, naming both', () => {
@@ -2371,11 +2376,16 @@ describe('source order decides a rebinding in a solid figure', () => {
   it('does not draw or register a later plane point that reuses a vertex name', () => {
     // The tick names A in the plane: had the refused literal been registered,
     // the tick would draw there instead of refusing.
+    //
+    // Rewritten in phase 10: phase 6 refused every tick on a point in space
+    // ("A" is a point in space ...). A tick in space now draws, so the tick
+    // is refused for mixing A, the tetrahedron's vertex, with the plane point
+    // P — which still proves A was never re-registered in the plane.
     const parsed = parseSpec('@mode: figure\nT = solid tetrahedron edge 5 vertices ABCD\nA = (1, 2)\nP = (4, 4)\nlabel: AB = 5\ntick: A-P')
     const result = renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
     expect(result.errors.map((e) => e.message)).toEqual([
       '"A" is already bound to a vertex of solid "T" on an earlier line — the later point "A" cannot rebind it',
-      expect.stringMatching(/^"A" is a point in space/),
+      '"tick: A-P" mixes a point in space (A) with a point in the plane (P)',
     ])
     expect(layer(result.svg, 'points')).not.toContain('data-object="A"')
   })

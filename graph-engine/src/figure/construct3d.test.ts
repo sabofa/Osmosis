@@ -3,15 +3,19 @@ import {
   add3,
   angle3,
   centroid3,
+  commonPerpendicular3,
   cross3,
+  dihedral3,
   distance3,
   divide3,
   dot3,
   footToLine3,
   footToPlane,
   length3,
+  lineAngle3,
   lineLineDistance,
   lineMeetsPlane,
+  linePlaneAngle3,
   midpoint3,
   planeThrough,
   pointLineDistance,
@@ -172,5 +176,67 @@ describe('angles', () => {
 
   it('refuses an arm of zero length', () => {
     expect(() => angle3(v(1, 2, 3), v(1, 2, 3), v(0, 0, 0))).toThrow(/coincide/)
+  })
+})
+
+describe('measures between lines and planes (phase 10, M5)', () => {
+  it('takes the acute angle between two lines, skew or not, either way round', () => {
+    // (1,1,0) against (0,1,1): 60 degrees; reversing one line does not make it 120.
+    expect(lineAngle3(v(0, 0, 0), v(1, 1, 0), v(1, 0, 0), v(1, 1, 1))).toBeCloseTo(Math.PI / 3, 14)
+    expect(lineAngle3(v(1, 1, 0), v(0, 0, 0), v(1, 0, 0), v(1, 1, 1))).toBeCloseTo(Math.PI / 3, 14)
+    expect(() => lineAngle3(v(1, 1, 1), v(1, 1, 1), v(0, 0, 0), v(1, 0, 0), 'line A-B')).toThrow(/line A-B coincide/)
+  })
+
+  it('takes a line–plane angle in [0, 90]: 0 along the plane, 90 along its normal', () => {
+    const base = planeThrough(v(0, 0, 0), v(1, 0, 0), v(0, 1, 0))
+    expect(linePlaneAngle3(v(0, 0, 0), v(1, 1, 1), base)).toBeCloseTo(Math.asin(1 / Math.sqrt(3)), 14)
+    expect(linePlaneAngle3(v(0, 0, 5), v(3, 1, 5), base)).toBe(0)
+    expect(linePlaneAngle3(v(2, 3, 0), v(2, 3, -4), base)).toBeCloseTo(Math.PI / 2, 14)
+  })
+})
+
+describe('the dihedral angle (phase 10, M3)', () => {
+  const names = { from: 'C', a: 'A', b: 'B', to: 'D' }
+
+  it('uses the components square to the edge, not the raw offsets', () => {
+    // Edge A-B along x; C in the xy-plane, D in the xz-plane: 90 degrees.
+    // The raw offsets from the midpoint (2,1,0) and (-2,0,1) meet at
+    // arccos(-4/5), which is what dropping the perpendicular step gives.
+    const d = dihedral3(v(3, 1, 0), v(0, 0, 0), v(2, 0, 0), v(-1, 0, 1), names)
+    expect(d.angle).toBeCloseTo(Math.PI / 2, 14)
+    expect(d.mid).toEqual(v(1, 0, 0))
+    expectClose(d.u, v(0, 1, 0))
+    expectClose(d.v, v(0, 0, 1))
+  })
+
+  it('reads 180 for two half-planes that make one plane, and 0 for one half-plane', () => {
+    expect(dihedral3(v(0, 1, 0), v(0, 0, 0), v(1, 0, 0), v(0, -1, 0), names).angle).toBeCloseTo(Math.PI, 14)
+    expect(dihedral3(v(0, 1, 0), v(0, 0, 0), v(1, 0, 0), v(5, 3, 0), names).angle).toBe(0)
+  })
+
+  it('refuses an edge of one point and an end on the edge line, by name', () => {
+    expect(() => dihedral3(v(0, 1, 0), v(1, 1, 1), v(1, 1, 1), v(0, 0, 1), names)).toThrow('A and B are the same point')
+    expect(() => dihedral3(v(3, 0, 0), v(0, 0, 0), v(1, 0, 0), v(0, 0, 1), names)).toThrow('C lies on the line A-B')
+  })
+})
+
+describe('the common perpendicular (phase 10, M6)', () => {
+  it('finds the feet of two skew lines, closed form', () => {
+    // The x-axis and the line through (0,1,2) along (0,1,1): minimising
+    // |(s, -1 - t, -2 - t)| gives s = 0, t = -3/2, so the feet are the
+    // origin and (0, -1/2, 1/2).
+    const found = commonPerpendicular3(v(0, 0, 0), v(1, 0, 0), v(0, 1, 2), v(0, 2, 3))
+    if (found.kind !== 'feet') throw new Error(`expected feet, got ${found.kind}`)
+    expectClose(found.p, v(0, 0, 0))
+    expectClose(found.q, v(0, -0.5, 0.5))
+    const pq = sub3(found.q, found.p)
+    expect(dot3(pq, v(1, 0, 0))).toBeCloseTo(0, 14)
+    expect(dot3(pq, v(0, 1, 1))).toBeCloseTo(0, 14)
+  })
+
+  it('reports parallel lines and lines that meet, without throwing', () => {
+    expect(commonPerpendicular3(v(0, 0, 0), v(1, 0, 0), v(0, 1, 0), v(3, 1, 0)).kind).toBe('parallel')
+    const meet = commonPerpendicular3(v(0, 0, 0), v(2, 0, 0), v(1, -1, 0), v(1, 1, 0))
+    expect(meet).toEqual({ kind: 'meet', at: v(1, 0, 0) })
   })
 })

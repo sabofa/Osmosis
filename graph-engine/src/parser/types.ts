@@ -110,6 +110,16 @@ export type Construction =
   | { kind: 'secant'; circle: string; from: string; to: string }
   | { kind: 'radiusTo'; circle: string; point: string }
   | { kind: 'diameter'; circle: string; from: string; to: string }
+  // "M = center of S" (phase 9, R1) — the centre of a SPHERE solid, as a
+  // point in space. It exists only in a solid figure: the solid-figure walk
+  // owns it, and the 2D pass refuses it (a circle's centre is the point it
+  // was drawn around, already named).
+  | { kind: 'centerOf'; solid: string }
+  // "P, Q = common perpendicular of A-B and C-D" (phase 10, M6) — the feet of
+  // the common perpendicular of two lines in space: P on line AB, Q on line
+  // CD, PQ square to both. Closed form; parallel lines (not unique) and
+  // lines that meet (zero length) are refused. Only a solid figure has it.
+  | { kind: 'commonPerpendicular'; first: [string, string]; second: [string, string] }
 
 // --------------------------------------------------------------------------
 // Solids (Geometry v2, phase 5)
@@ -162,6 +172,49 @@ export type SolidPrimitive =
   // the parser, which knows the names). `edges` is as written; the builder
   // reads it by pair, so order and letter order do not matter.
   | { kind: 'tetrahedronEdges'; vertices: [string, string, string, string]; edges: { from: string; to: string; length: Expr }[] }
+  // Phase 9 (R5) — a sphere placed by its centre, its radius following from
+  // a tangency: to a plane (any Q2 form), or externally or internally to
+  // another sphere solid. "sphere center P tangent to plane A-B-C",
+  // "sphere center P externally tangent to T".
+  | { kind: 'sphereTangent'; center: string; to: SphereTangency }
+  // Phase 9 (R3, R4) — the sphere through every vertex of a named solid (a
+  // polyhedron's, verified against each one) or through a round solid's rims
+  // and apex; and the sphere through four named points.
+  | { kind: 'circumsphere'; of: string }
+  // Phase 9 (R3, R4) — the sphere tangent to every face of a named solid (a
+  // polyhedron's, verified against each), or to a round solid's ends and side.
+  | { kind: 'insphere'; of: string }
+  | { kind: 'circumsphereOn'; points: [string, string, string, string] }
+
+// What a sphere placed by tangency touches (R5).
+export type SphereTangency = { kind: 'plane'; plane: PlaneForm } | { kind: 'sphere'; sphere: string; side: 'external' | 'internal' }
+
+// --------------------------------------------------------------------------
+// Shaded regions (Geometry v2, phase 12)
+// --------------------------------------------------------------------------
+
+// The three booleans a "fill:" expression combines regions with. The words
+// the author writes map onto them: "minus" is a difference, "and" and
+// "intersect" an intersection, "or" and "union" a union.
+export type RegionOperatorName = 'union' | 'intersection' | 'difference'
+
+// A region to shade, as the author wrote it (F4). Operands are the phase 1/4
+// objects by name; `source` is the author's own text for the node, so a
+// refusal can quote it ("square ABCD minus circle O leaves nothing to
+// shade"). Operators have one precedence and group left to right; a
+// parenthesised operand's source keeps its parentheses.
+export type RegionExpr =
+  // "A-B-C", "polygon A-B-C-D", "triangle ABC", "square ABCD",
+  // "rectangle ABCD". A square or rectangle is ASSERTED to be one.
+  | { kind: 'polygon'; shape: 'polygon' | 'triangle' | 'square' | 'rectangle'; points: string[]; source: string }
+  // "circle O" — the disk of a NAMED circle.
+  | { kind: 'disk'; circle: string; source: string }
+  // "sector P-Q on O <direction>", "segment P-Q on O <direction>" — the
+  // direction is required, exactly as for the drawn sector and segment (G1).
+  | { kind: 'sector' | 'segment'; circle: string; from: string; to: string; direction: GeometryArcDirection; source: string }
+  // A region named earlier with "name:" on its "fill:" line.
+  | { kind: 'named'; name: string; source: string }
+  | { kind: 'combine'; op: RegionOperatorName; left: RegionExpr; right: RegionExpr; source: string }
 
 // --------------------------------------------------------------------------
 // Measure labels (Geometry v2, phase 3)
@@ -181,6 +234,30 @@ export type MeasureSubject =
   // An arc names the circle it lies on and the way round it goes, because
   // without both it names neither one arc nor one measure (G1).
   | { kind: 'arc'; circle: string; from: string; to: string; direction: GeometryArcDirection }
+  // Phase 10 (M3) — the dihedral angle along edge AB between the half-plane
+  // ABC and the half-plane ABD, written "dihedral C-A-B-D": the edge is the
+  // middle two names. In [0, 180] degrees.
+  | { kind: 'dihedral'; from: string; edge: [string, string]; to: string }
+  // Phase 10 (M5) — measures between lines and planes in space. Table rows
+  // only ("given:" / "find:"): none has a single point an inline label could
+  // hang on, so "label:" refuses them at parse time.
+  //   angle between A-B and C-D          -> the acute angle between the lines' directions (skew allowed)
+  //   angle between A-B and plane <form> -> the line–plane angle, in [0, 90] degrees
+  //   distance between A-B and C-D       -> line to line (skew or parallel; 0 if they meet)
+  //   distance from P to plane <form>
+  //   distance from P to line A-B
+  | { kind: 'lineAngle'; first: [string, string]; second: [string, string] }
+  | { kind: 'linePlaneAngle'; line: [string, string]; plane: PlaneForm }
+  | { kind: 'lineDistance'; first: [string, string]; second: [string, string] }
+  | { kind: 'pointPlaneDistance'; point: string; plane: PlaneForm }
+  | { kind: 'pointLineDistance'; point: string; line: [string, string] }
+  // Phase 11 (N5) — "shortest P to Q over S": the length of the shortest
+  // path over the surface of S, printed on the path.
+  | { kind: 'shortestPath'; from: string; to: string; solid: string }
+  // Phase 12 (F3) — "area R" or "area <region expression>": the exact area
+  // of a shaded region, named with "name:" on its "fill:" line or written
+  // inline ("area circle O and circle P").
+  | { kind: 'area'; region: RegionExpr }
 
 // The overmark a notation form carries. Mirrors figure/notation.ts's
 // Overmark; duplicated rather than imported so the parser stays standalone,
@@ -289,6 +366,9 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                     box's corner or side is "@givens:".
 //   right-angle: A-B-C                              -> small square marker at vertex B indicating a
 //                                                     90-degree angle between rays B->A and B->C.
+//                                                     In the plane it is drawn as stated, unchecked,
+//                                                     exactly as before; on points in SPACE it is
+//                                                     asserted (phase 10, M2 — see below).
 //   segment: A-B [dashed | plain]                   -> a segment between two named points, resolved
 //                                                     the same way as angle:/tick:'s points. The
 //                                                     sibling of those marks, and distinct from the
@@ -352,7 +432,8 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //                                                    the reason, when a face or the whole cannot close
 //     A solid on named points takes no "vertices" (its points name them),
 //     except a prism's new top, and has no named dimensions: measure between
-//     its points ("label: AB") instead.
+//     its points ("label: AB") instead. The exception is a sphere's radius
+//     (phase 9): every sphere has "label: S radius".
 //
 //   label: S width | height | depth | base | edge | radius | top | side [= <value>]
 //                                                 -> a dimension read off the SOLID, never the drawing. A
@@ -430,8 +511,57 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //     any round solid placed by points, tilted or not, is cut in its own frame
 //
 //   Not drawn (refused where an author could ask): a plane on its own
-//   ("plane: A-B-C"), the line where two planes meet, parabolic and
-//   hyperbolic sections, and nets.
+//   ("plane: A-B-C"), the line where two planes meet, and parabolic and
+//   hyperbolic sections. (Nets were refused here until phase 11.)
+//
+//   Spheres a figure constructs (phase 9). Each is an ORDINARY sphere solid,
+//   placed exactly as "sphere center M radius r" places one: it draws,
+//   hides segments and is cut like one, and it is glass to every other solid
+//   (solids never hide each other). Closed form, never a solver; a sphere
+//   that does not exist is refused, saying why, and never approximated.
+//
+//   [I =] solid insphere of T                     -> tangent to every face of T
+//   [O =] solid circumsphere of T                 -> through every vertex of T
+//   [O =] solid circumsphere A-B-C-D              -> through four named points, not in one plane
+//                                                    (so nearly in one plane that the sphere cannot be
+//                                                    fixed to within tolerance is refused too)
+//   [S =] solid sphere center P tangent to plane <plane>
+//                                                 -> radius = the distance from P to the plane (any
+//                                                    plane form, named planes included)
+//   [S =] solid sphere center P externally tangent to T
+//                                                 -> T a sphere: radius |PT| - r_T (P outside T)
+//   [S =] solid sphere center P internally tangent to T
+//                                                 -> radius r_T - |PT| (P inside T, not its centre)
+//   M = center of S  |  M = centre of S           -> a sphere's centre as a point in space (any
+//                                                    sphere; only a sphere, in this phase)
+//   label: S radius                               -> works for EVERY sphere, however it was placed
+//
+//   A polyhedron's circumsphere is the sphere through its first four
+//   vertices (in vertex order) not in one plane, and EVERY vertex is then
+//   checked against it; its insphere is fixed by its first four faces whose
+//   planes determine a centre and radius, and EVERY face is then checked
+//   (the centre strictly inside, at the radius from each). A polyhedron that
+//   fails is refused, naming the first vertex the sphere misses or the first
+//   face that fails: a box that is not a cube has no insphere, a pyramid on a
+//   kite no circumsphere. Round solids, in their own frame (so placed and
+//   tilted ones work), r the radius, h the height, a frustum's r1 its wider
+//   rim and r2 its narrower:
+//     cylinder  insphere only when h = 2r (radius r, at the middle);
+//               circumsphere always, at the middle, sqrt(r^2 + (h/2)^2)
+//     cone      insphere always, radius r h / (r + sqrt(r^2 + h^2)), that far
+//               above the base; circumsphere always, through the apex and the
+//               base rim, x = (h^2 - r^2) / (2h) above the base, radius h - x
+//     frustum   insphere only when h = 2 sqrt(r1 r2) (radius h/2, at mid-
+//               height); circumsphere always, y = (h^2 + r2^2 - r1^2) / (2h)
+//               from the wider rim, radius sqrt(y^2 + r1^2)
+//     sphere    refused: it is already a sphere
+//   Refused: a tangent sphere whose centre is on the plane, on T, inside T
+//   (externally) or outside T (internally), or at T's centre (internally);
+//   "tangent to T" with no side; a sphere tangent to several objects at once
+//   (a solver: place it by its computed centre); "center of" anything but a
+//   sphere. Not drawn: contact circles on a cone or cylinder, inscribed
+//   cubes and other inscribed polyhedra, tangency assertions in the givens
+//   table, and opaque stacking.
 //   @view: standard | isometric | front | top | side
 //                                                 -> which fixed viewpoint draws the solid. standard
 //                                                    (the default) is in general position; isometric
@@ -467,13 +597,253 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //
 //   A plane is an operand, and a named plane binds without drawing. A
 //   planar construction (rotate, reflect, a tangent, a circle...) refuses a
-//   point in space, and so do angle marks, ticks, polygons and inline angle
-//   labels ("label: angle ABC") in space — the givens table takes the angle.
+//   point in space, and so do polygons, triangles, circles and arcs in
+//   space. (Angle marks, right angles, ticks and inline angle labels on
+//   points in space draw since phase 10, below.)
+//
+//   Measures and marks in space (phase 10). Values are closed form, in true
+//   3D; marks are built in space and projected:
+//
+//   angle: A-B-C [label: <text>]                  -> M1: the circle arc centred at B in the plane of A, B
+//                                                    and C, from ray BA to ray BC through the true angle,
+//                                                    radius 0.2 x the shorter arm (world units), drawn as
+//                                                    ONE projected elliptical arc. A, B, C collinear, or
+//                                                    an arm of zero length, is refused by name
+//   label: angle ABC                              -> M7: draws that arc (once, beside an "angle:" for the
+//                                                    same angle) and hangs the TRUE angle on the arc's
+//                                                    middle, pushed out along the bisector in space
+//   right-angle: A-B-C                            -> M1, M2: the square B, B + s u, B + s u + s v, B + s v
+//                                                    (s = 0.15 x the shorter arm) in the angle's plane,
+//                                                    drawn as its projected "L" — and REFUSED unless the
+//                                                    true angle at B is 90: "A-B-D is not a right angle —
+//                                                    its true angle is 45°". A projected square cannot be
+//                                                    checked by eye, so an unchecked one could state
+//                                                    something false. "@scale: false" lifts the check, as
+//                                                    it lifts every measure assertion. In the plane,
+//                                                    right-angle: is unchanged
+//   tick: A-B [count: <n>]                        -> drawn in the PICTURE plane at the projected segment,
+//                                                    square to it at its projected midpoint, by the 2D
+//                                                    convention: a tick annotates the drawing
+//   dihedral: C-A-B-D                             -> M3: the dihedral angle along the edge AB (the middle
+//                                                    two names: "C-AB-D") between the half-planes ABC and
+//                                                    ABD, drawn as its plane angle at the edge's midpoint
+//                                                    M: segments M -> M + l u and M -> M + l v, u and v the
+//                                                    unit components of C - M and D - M square to AB, with
+//                                                    l = 0.3 |AB| but no longer than C's or D's distance
+//                                                    from the line AB (in the AIME 2016 I prism the one
+//                                                    toward A ends exactly at A), and M1's arc between
+//                                                    them. Refused: A = B, C or D on line AB, half-planes
+//                                                    in one plane (0 or 180). Only points in space; a spec
+//                                                    with one is a solid figure
+//   label: dihedral C-A-B-D                       -> the value, in [0, 180], on the mark (drawn once)
+//   given: dihedral C-A-B-D [= value]             -> ...or in the givens table, written "∠C-AB-D"
+//   given: angle between A-B and C-D              -> M5: the ACUTE angle between the lines' directions,
+//                                                    skew lines allowed — table "∠(AB, CD)"
+//   given: angle between A-B and plane <plane>    -> the line–plane angle, in [0, 90], any plane form —
+//                                                    table "∠(AB, PQR)" (a named plane by its name, an
+//                                                    equation as written)
+//   given: distance between A-B and C-D           -> line to line: skew, parallel, or 0 where they meet —
+//                                                    table "d(AB, CD)"
+//   given: distance from P to plane <plane>       -> table "d(P, PQR)"
+//   given: distance from P to line A-B            -> "line" optional — table "d(P, AB)"
+//     Every M5 form also works as "find:", and "= value" asserts as every
+//     measure does. A plane equation's own "=" is told from the assertion:
+//     with two "=", the last asserts; with one, it is the plane's when an
+//     equation side precedes it ("plane x + y + z = 1", "plane z = 3").
+//     They are TABLE ROWS ONLY: "label: angle between ..." is refused,
+//     pointing at the table, or at drawing the construction (a foot, a
+//     common perpendicular) and labelling its segment.
+//   P, Q = common perpendicular of A-B and C-D    -> M6: P on line AB and Q on line CD with PQ square to
+//                                                    both, closed form; ordinary points in space
+//                                                    ("segment: P-Q", "label: PQ", "right-angle: A-P-Q").
+//                                                    Refused: parallel lines ("not unique"), lines that
+//                                                    meet ("zero length", naming where)
+//
+//   M4 — marks under the glass rule. A construction segment (a dihedral's
+//   two) is split exactly, as every segment in space is. An arc, a right-
+//   angle square and a tick are small, and each is drawn WHOLE — entirely
+//   visible or entirely hidden — decided by one point: the arc's middle,
+//   the square's centre, the tick's point on its segment, tested against
+//   every solid. This is a stated drawing convention, not a geometric
+//   answer; a hidden mark is dashed like a hidden edge. (An arc of a
+//   convex solid's dihedral lies inside the solid, so it is always dashed.)
+//
+//   M8 — not drawn, refused where an author could ask: an angle mark with
+//   no vertex ("angle: between A-B and C-D" — skew lines never meet; for a
+//   line and a plane, drop the foot F and mark "angle: A-P-F"), the angle
+//   between two planes as such (write the dihedral), a line–plane distance,
+//   area and volume measures, and exact values.
+//
+//   Nets and shortest paths over a surface (phase 11). Build step 11, the
+//   last of the solids build order.
+//
+//   net: S                                        -> S unfolded flat, lifted beside it
+//   shortest: P to Q over S                       -> the shortest path over S's surface
+//   shortest: P to Q over S unfold                -> polyhedra: also lift the strip it crosses
+//   label: shortest P to Q over S [= value]       -> its length, on the path; "= value" asserts
+//   given: shortest P to Q over S [= value]       -> ...or a givens-table row (and "find:")
+//
+//   N1 — a net is 2D geometry, like a lifted section: true size, lifted
+//   beside the solid, never turning with "@view:". Several lifts (sections,
+//   nets, path unfoldings) stack left to right in statement order, each
+//   clear of the one before. Fold lines are dashed, cut edges solid. Every
+//   net is drawn SEEN FROM OUTSIDE. Its vertex letters are DISPLAY LABELS,
+//   repeated at every copy of a vertex (a cube's cross shows A three
+//   times), and are never named points: "label: AB" still measures the
+//   solid's edge.
+//   N2 — one template per primitive, never a search: a prism (box, cube,
+//   regular, on points) is its side faces in one strip from face AB, both
+//   ends on side face ceil(n/2) - 1 (the cube's cross); a pyramid or
+//   tetrahedron (every form) the base with each side folded out about its
+//   base edge (the star); a pyramidal frustum the star of trapezoids, its
+//   top on trapezoid ceil(n/2) - 1; the octahedron a strip of eight round
+//   the equator; a cylinder a 2 pi r by h rectangle, a cone a sector of
+//   radius l and angle 2 pi r / l, a conical frustum an annular sector, each
+//   with its rim circles tangent at the middles of the edges they fold on,
+//   the seam cut along the generator directly away from the default camera.
+//   No template net can overlap itself, so none is checked at run time: the
+//   invariant is pinned by the tests instead, with an exact test-only
+//   predicate. A sphere and a hull of named points have no net.
+//   N3 — over a polyhedron (at most 12 faces), both ends in space ON its
+//   surface: an exact enumeration of simple face sequences, each unfolded
+//   in closed form and valid only when the straight line crosses every
+//   shared edge in order within it; the least valid length wins. Drawn on
+//   the solid as its per-face segments (dashed where a face hides them),
+//   and with "unfold" straight across the lifted strip of faces it crosses.
+//   N4 — over a cylinder, cone or conical frustum, both ends on the CURVED
+//   side (a rim counts; a flat end is refused): closed form on the unrolled
+//   side. A geodesic on a curved surface is not a conic in projection, so it
+//   is drawn ONLY on the lifted unrolling — the net's, cut behind, so P and
+//   Q sit where the net puts them; a path crossing that seam is drawn as its
+//   two straight pieces (a tie, exactly half a turn round, goes the way that
+//   stays inside); P and Q are drawn on the solid by their own statements.
+//   A second "shortest:" of the same path with "unfold" lifts the strip
+//   then; a polyhedron path lifts nothing unless asked. A path from a
+//   cone's apex runs straight down one generator. A frustum path that would
+//   run inside the top rim is refused ("would run along the top rim — not
+//   drawn").
+//   N6 — not drawn, refused where an author could ask: general polyhedron
+//   unfolding (hulls), nets of spheres, paths over flat ends of round solids
+//   or over solids of more than 12 faces, geodesics drawn on a curved
+//   surface in space, and areas.
+//
+//   Shaded regions (phase 12). "Find the area of the shaded region": a
+//   region of the PLANE, bounded by segments and circle arcs, shaded, and
+//   its exact area measured.
+//
+//   fill: A-B-C                                   -> a polygon through named points (the spec's form)
+//   fill: polygon A-B-C-D                         -> the same, spelled out
+//   fill: triangle ABC                            -> three points
+//   fill: square ABCD                             -> four points, ASSERTED a square
+//   fill: rectangle ABCD                          -> four points, ASSERTED a rectangle
+//   fill: circle O                                -> the disk of a NAMED circle
+//   fill: sector P-Q on O <direction>             -> a sector (direction required, as for "sector")
+//   fill: segment P-Q on O <direction>            -> a circular segment
+//   fill: <region> minus <region>                 -> difference
+//   fill: <region> and|intersect <region>         -> intersection
+//   fill: <region> or|union <region>              -> union
+//   fill: (circle O or circle P) minus triangle ABC   -> parentheses group
+//   fill: ... name: R                             -> names the region; later "R" is a region too
+//   label: area R [= value]                       -> its area, inside it; "= value" asserts
+//   given: area R [= value]                       -> ...or a givens-table row (and "find:")
+//   given: area square ABCD minus circle O        -> any region expression works inline
+//
+//   F1 — a region is closed loops of segments and arcs, outer loops
+//   counter-clockwise and holes clockwise; a polygon must be simple (one
+//   that crosses itself is refused naming the two sides). A disk is its
+//   circle; a sector or circular segment resolves its arc direction exactly
+//   as the drawn "sector"/"segment" do.
+//   F2 — booleans are exact: both boundaries split at every closed-form
+//   meeting point, each piece kept or dropped by its midpoint (inside,
+//   outside, or on a coincident boundary), the kept pieces chained back
+//   into loops. The operators have ONE precedence and group left to right:
+//   "circle O or circle P minus triangle ABC" is "(circle O or circle P)
+//   minus triangle ABC"; parenthesise to say otherwise. A result with
+//   nothing left is refused: "square ABCD minus circle O leaves nothing to
+//   shade"; so are two boundaries a rounding error or two apart that do not
+//   meet ("... has boundaries too close to tell apart").
+//   F3 — the area is exact given the pieces: the shoelace sum over each
+//   piece's chord plus each arc's circular segment, 1/2 r^2 (t - sin t). It
+//   PRINTS as a decimal until exact values land (build-order step 3 turns
+//   3.434 into 16 - 4 pi). A stated "= value" asserts at the ONE tolerance
+//   every measure uses (GEOM_EPS, relative), so the printed decimal of an
+//   irrational area does not assert it: "area R = 3.434" is refused for
+//   16 - 4 pi, naming 3.434. Write "label: area R" to print the computed
+//   value, a full-precision decimal to assert it, or a symbolic value
+//   ("= 16 - 4π"), which prints as written and is NOT checked — asserting an
+//   exact expression against the value is build step 3's, for every
+//   measure, not areas alone. "@scale: false" lifts the check, and lifts the
+//   square and rectangle assertions (refused otherwise with the true sides
+//   or angles), as it lifts every assertion.
+//   Names: a region is named with the "name:" clause, never "R = region
+//   ...": that unkeyed form belongs to space (keyword ownership, in the
+//   graph spec). "name:" stays a GROUP name, as it is for "@hide": several
+//   fills may share one and all draw, but "area R" (or R inside a later
+//   fill) is then refused as ambiguous, naming the fills. A hidden fill
+//   still names its region, so its area can be stated with nothing shaded;
+//   when R's one fill was refused, "area R" says so and why, rather than
+//   calling R unknown. Relations between areas ("area R < area S") are not
+//   stated yet, and are refused as such.
+//   F5 — a fill is ONE path in the regions layer, behind every line: "L"
+//   per side, "A" per arc (a whole turn as two), never a polyline, holes
+//   by the even-odd rule, in its "color:" (the theme's region colour
+//   otherwise), faint. It draws NO outline: the author's own polygons,
+//   circles, arcs and segments draw the lines, as a textbook figure does,
+//   so no edge is ever doubled. It counts toward the figure's size and is
+//   not a label obstacle.
+//   F6 — "label: area R" sits ON a point inside the region: on its largest
+//   component, the midpoint of the longest chord inside it among seven
+//   horizontal lines at i/8 of its height (ties to the lowest line, then
+//   the leftmost chord). A chord runs on through a point where the boundary
+//   only touches the line (a tangency, or a vertex on it). An annulus's
+//   label sits in the ring.
+//   F7 — refused where an author could ask: fills in a graph ("fill: draws
+//   in figures — declare @mode: figure"), fills on points in space ("fills
+//   are drawn in the plane"), regions bounded by an ellipse, parabola or
+//   hyperbola, and hatching (a fill is a flat tint). "fill = 3",
+//   "fill(x) = x^2" and the like read as they always did.
 //
 //   Which renderer: a spec with a solid or a cut/section is a solid figure,
 //   even with 3-coordinate points in it. A spec of 3-coordinate points and
 //   no solid is a *space* plot, as it always was — so declare "@mode: figure"
 //   for points in space with no solid, and declare the mode anyway.
+//
+//   Figure styles (visual pass, part 1 — style/, figure/pen.ts,
+//   figure/styledPen.ts). A figure can be drawn in a LOOK; with no style
+//   directive and no base style from the host it is drawn clean, today's
+//   output byte for byte. Directives, in any order (the preset first, then
+//   each setting over it; last value wins for a repeated setting):
+//
+//   @style: clean | ink | pencil | marker          -> start from a preset (a complete look)
+//   @style-line: technical | ink | brush | pencil | marker | chalk
+//   @style-looseness: 0..1                         -> how far strokes stray (0 = ends exact)
+//   @style-wobble: 0..1                            -> small waviness along a stroke
+//   @style-passes: 1..3                            -> strokes drawn over themselves
+//   @style-line-width: 0.25..4                     -> a multiplier on the stroke weights
+//   @style-variation: 0..1  |  @style-taper: 0..1  |  @style-grain: 0..1
+//   @style-line-opacity: 0.05..1
+//   @style-fill: flat | hatch | crosshatch | stipple | scribble | wash | none
+//   @style-fill-angle: -180..180                   -> hatch direction, degrees anticlockwise
+//   @style-fill-spacing: 3..40  |  @style-fill-opacity: 0..1
+//   @style-paper: none | clean | paper | rough-paper | canvas | graph | rough-graph | dotted | ruled
+//   @style-tint: fdf6e3 | teal | theme             -> the paper colour: six hex digits WITHOUT the
+//                                                     "#" (which starts a comment here), a colour
+//                                                     name (the same names as "color:"), or theme
+//   @style-texture: 0..1  |  @style-grid: 6..80    -> grain strength; grid, dot or rule spacing
+//   @style-lettering: math | textbook | hand       -> the labels' face (font stacks with fallbacks)
+//   @style-lettering-size: 0.6..1.6  |  @style-tilt: 0..1 (at most 4 degrees, about the anchor)
+//   @style-ink: 1f2a44 | blue | theme              -> the main line colour
+//   @style-saturation: 0..1.5                      -> OKLCH chroma on every colour; 1 is identity
+//   @style-seed: 0..9999                           -> rerolls every random choice, deterministically
+//
+//   Every setting also answers to "@style-<group>-<setting>" (style-line-type,
+//   style-paper-grid, style-lettering-face, ...), and the short forms
+//   "@style-width", "@style-angle", "@style-spacing", "@style-size" where they
+//   are unambiguous. An unknown preset, setting or value is refused, naming
+//   the valid ones, and the figure draws in the style resolved without it.
+//   The host's base style (renderFigure's `baseStyle`) sits under these.
+//   Hatching and the other fills are a STYLE's, drawn through "fill:"
+//   regions, sectors, segments and cut faces; "fill:" itself stays a region.
 //
 // Geometry constructions (v2) — every one of these BINDS its left-hand name
 // into the geometry namespace and DRAWS its result. Names are letters only
@@ -536,8 +906,10 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 // the name of a line bound earlier. An <obj> operand is any of those, a
 // "circle <name>", or a bare name of any kind.
 //
-// Any statement may end with "color: <name>" (see parser/colors.ts for the
-// palette, or "#rrggbb") to override its default color, and/or "name: <id>"
+// Any statement may end with "color: <name>" (see style/colorNames.ts for the
+// palette) or "color: rrggbb" — exactly six hex digits (no three-digit short
+// form), no "#", since "#" starts a comment; the "@style-…" colour settings
+// take the same forms — to override its default color, and/or "name: <id>"
 // to give the statement a name that "@hide: <id>" / "@show: <id>" (see
 // parser/config.ts) can target — independent of the identifier a
 // "k(x) = ..." function definition carries, so a plotted statement that
@@ -615,6 +987,10 @@ export type StatementShape =
   | { kind: 'inscribedAngle'; circle: string; from: string; vertex: string; to: string }
   | { kind: 'tick'; from: string; to: string; count: number }
   | { kind: 'rightAngle'; from: string; vertex: string; to: string }
+  // "dihedral: C-A-B-D" (phase 10, M3) — the dihedral angle along the edge
+  // AB (the middle two names) between the half-planes ABC and ABD, drawn as
+  // its plane angle at the edge's midpoint. Only among points in space.
+  | { kind: 'dihedral'; from: string; edge: [string, string]; to: string }
   // "segment: A-B [dashed | plain]" — a segment between two *named* points,
   // the sibling of tick:/angle:/right-angle:. Distinct from the coordinate
   // form ("(x1,y1) -- (x2,y2)"), which cannot reference a constructed point.
@@ -656,6 +1032,23 @@ export type StatementShape =
   // is drawn only through the section it cuts. Later lines use it as
   // "plane p".
   | { kind: 'planeDef'; name: string; plane: PlaneForm }
+  // "net: S" (phase 11, N1) — the solid S unfolded flat by its primitive's
+  // template, at true size, lifted beside the drawing like a section: fold
+  // lines dashed, cut edges solid. Its vertex letters are display labels,
+  // repeated at every copy, and never named points.
+  | { kind: 'net'; solid: string }
+  // "fill: <region>" (phase 12, F4/F5) — a shaded region: a polygon, a disk,
+  // a sector or a circular segment, or a boolean of them ("square ABCD minus
+  // circle O"). Drawn as ONE path in the regions layer, behind every line,
+  // with no outline of its own. A trailing "name: R" names the region for
+  // "area R".
+  | { kind: 'fill'; region: RegionExpr }
+  // "shortest: P to Q over S [unfold]" (phase 11, N3/N4) — the shortest path
+  // over the surface of S between two points in space on it. On a
+  // polyhedron it is drawn on the solid (and, with "unfold", straight across
+  // the lifted strip of faces it crosses); on a round solid, straight on the
+  // lifted unrolling of the curved side only.
+  | { kind: 'shortestPath'; from: string; to: string; solid: string; unfold: boolean }
   // "triangle ABC: AB = 8, angle A = 90, AC = 6" — solved in closed form and
   // placed by the D5 convention. Measurements arrive already mapped onto the
   // canonical a/b/c slots, since the parser knows the vertex names and can

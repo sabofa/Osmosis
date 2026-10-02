@@ -174,6 +174,18 @@ function evaluate(scope: GeometryScope, body: Construction, evaluateExpr: (e: Ex
           to: body.to,
         }),
       ]
+    // Phase 9 (R1): a sphere solid's centre. The solid-figure walk owns every
+    // one it can see, so this is reached only where no solid is drawn — the
+    // plot renderer — and a circle's centre is already the point it was
+    // drawn around.
+    case 'centerOf':
+      throw new Error(`"center of ${body.solid}" is the centre of a sphere solid, which exists only in a solid figure`)
+    // Phase 10 (M6): two lines in the plane meet or are parallel, so the
+    // common perpendicular exists only between lines in space.
+    case 'commonPerpendicular':
+      throw new Error(
+        `"common perpendicular of ${body.first.join('-')} and ${body.second.join('-')}" joins two lines in space, and exists only among points in space (a solid figure)`
+      )
     case 'triangleCentre': {
       const [a, b, c] = triangleVertices(scope, body.vertices, body.centre)
       switch (body.centre) {

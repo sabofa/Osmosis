@@ -1,4 +1,4 @@
-import { isValidColor } from './colors'
+import { isValidColor, normaliseColor } from './colors'
 import { parseExprString } from './parseExpr'
 import type {
   Condition,
@@ -11,6 +11,8 @@ import type {
   GivensSection,
   MeasureSubject,
   PlaneForm,
+  RegionExpr,
+  RegionOperatorName,
   SolidPrimitive,
   Statement,
   StatementShape,
@@ -180,6 +182,12 @@ function parseNamePair(text: string, role: string): [string, string] {
   const parts = text.split('-')
   if (parts.length !== 2) throw new Error(`Expected "A-B" (two point names) for the ${role}, got "${text.trim()}"`)
   return [geometryName(parts[0], role), geometryName(parts[1], role)]
+}
+
+// A LINE through two named points, as a measure or the common perpendicular
+// takes it (phase 10): "A-B", or "line A-B". Always the infinite line.
+function parseLineOperand(text: string, role: string): [string, string] {
+  return parseNamePair(text.trim().replace(/^line\s+/, ''), role)
 }
 
 function parseNameTriple(text: string, role: string): [string, string, string] {
@@ -486,6 +494,25 @@ function parseConstructionBody(rhs: string): Construction | null {
     return { kind: 'angleBisector', from, vertex, to }
   }
 
+  // "M = center of S" (phase 9, R1): a sphere solid's centre, as a point in
+  // space. Exactly this shape — one name after "of" — so nothing else an
+  // author writes is read as it. "centre of S" is the same construction
+  // (fix round 1): the engine's own prose spells it that way.
+  const centerOf = /^cent(?:er|re)\s+of\s+([a-zA-Z]+)$/.exec(text)
+  if (centerOf) return { kind: 'centerOf', solid: geometryName(centerOf[1], 'sphere whose centre it is') }
+
+  // "P, Q = common perpendicular of A-B and C-D" (phase 10, M6): the feet of
+  // the common perpendicular of two lines in space. "line" before either
+  // line is optional, as in "distance between".
+  const common = /^common\s+perpendicular\s+(?:of\s+)?(.+?)\s+and\s+(.+)$/.exec(text)
+  if (common) {
+    return {
+      kind: 'commonPerpendicular',
+      first: parseLineOperand(common[1], 'first line of the common perpendicular'),
+      second: parseLineOperand(common[2], 'second line of the common perpendicular'),
+    }
+  }
+
   const mid = /^midpoint\s+(?:of\s+)?(.+)$/.exec(text)
   if (mid) {
     const [from, to] = parseNamePair(mid[1], 'segment')
@@ -597,6 +624,11 @@ function parseConstructionBody(rhs: string): Construction | null {
 // z = 3", "plane z = 1", "plane p") wherever a plane is taken, and named
 // planes, "p = plane ..." (see parsePlaneForm).
 //
+// Phase 9 added spheres the figure constructs: "insphere of T",
+// "circumsphere of T", "circumsphere A-B-C-D", "sphere center P tangent to
+// plane ...", "... externally | internally tangent to T" (see
+// parseSphereTangency), and the construction "M = center of S".
+//
 // Nothing here knows which names are points in space: that is decided by
 // the solid-figure walk (figure/solidScope.ts), after parsing. The full
 // surface, and the mode rule for solid figures, is documented in
@@ -607,7 +639,7 @@ function parseConstructionBody(rhs: string): Construction | null {
 // lists them. Kept here rather than imported from figure/solids.ts because
 // parser/index.ts is a renderer-free entry point — the same reason
 // GeometryExtent is duplicated rather than imported.
-const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron']
+const SOLID_PRIMITIVE_NAMES = ['prism', 'pyramid', 'tetrahedron', 'cylinder', 'cone', 'sphere', 'frustum', 'hull', 'cube', 'octahedron', 'insphere', 'circumsphere']
 
 // The dimension words "label: S height" can name. The renderer decides which
 // of these a given primitive actually HAS (a tetrahedron has no height to
@@ -671,6 +703,50 @@ function regularParts(tail: string, keys: string[], form: string, rest: string):
   const values = keys.map((key, i) => (parts.length === keys.length + 1 ? new RegExp(`^${key}\\s+(.+)$`, 'i').exec(parts[i + 1]) : null))
   if (!head || values.some((v) => !v)) throw new Error(`Expected "${form}", got "${rest}"`)
   return [parseExprString(head[1]), parseExprString(head[2]), ...values.map((v) => parseExprString(v![1]))]
+}
+
+// Phase 9, R5 — "sphere center P tangent to plane <any form>", "sphere
+// center P externally tangent to T", "... internally tangent to T". The
+// centre is given and the radius follows from the one thing it touches. Null
+// when the text is not a tangency, so the other sphere forms read it.
+//
+// Refused here, where the words are: a sphere "tangent to T" with no side (a
+// sphere touches another from outside or from inside, and guessing which is
+// how a figure becomes quietly wrong); a plane "externally" tangent; several
+// objects at once, which is a solver (R7); and a tangent sphere with no
+// centre, which is the same solver.
+function parseSphereTangency(tail: string): SolidPrimitive | null {
+  if (!/\btangent\s+to\b/i.test(tail)) return null
+  const form = /^center\s+(\S+)\s+(?:(externally|internally)\s+)?tangent\s+to\s+(.+)$/i.exec(tail)
+  if (!form) {
+    throw new Error(
+      'A sphere by tangency is placed by its centre — write "sphere center P tangent to plane A-B-C" or ' +
+        '"sphere center P externally tangent to T"; a sphere tangent to several objects at once needs a solver, ' +
+        'so place it by its computed centre'
+    )
+  }
+  const center = geometryName(form[1], 'centre of the sphere')
+  const side = form[2]?.toLowerCase() as 'externally' | 'internally' | undefined
+  const target = form[3].trim()
+  if (/\s+and\s+/i.test(target) || splitTopLevelComma(target).length > 1) {
+    throw new Error(
+      `"tangent to ${target}" names more than one object — a sphere is placed by tangency to one object at a time; ` +
+        'several at once needs a solver, so place it by its computed centre and check each tangency with a label'
+    )
+  }
+  const plane = /^plane\s+(.+)$/i.exec(target)
+  if (plane) {
+    if (side) throw new Error(`A plane has no inside — write "tangent to plane ${plane[1].trim()}", without "${side}"`)
+    return { kind: 'sphereTangent', center, to: { kind: 'plane', plane: parsePlaneForm(plane[1], 'plane the sphere is tangent to') } }
+  }
+  const sphere = geometryName(target, 'sphere it is tangent to')
+  if (!side) {
+    throw new Error(
+      `A sphere touches another from outside or from inside — write "externally tangent to ${sphere}" or "internally tangent to ${sphere}"; ` +
+        `if ${sphere} is a plane, write "tangent to plane ${sphere}"`
+    )
+  }
+  return { kind: 'sphereTangent', center, to: { kind: 'sphere', sphere, side: side === 'externally' ? 'external' : 'internal' } }
 }
 
 // "prism 8 by 5 by 6", "pyramid square base 6, height 9", "tetrahedron edge 5".
@@ -775,11 +851,35 @@ function parseSolidPrimitive(text: string): SolidPrimitive {
   }
 
   if (head === 'sphere') {
+    const tangent = parseSphereTangency(tail)
+    if (tangent) return tangent
     const placed = /^center\s+(\S+)\s+radius\s+(.+)$/i.exec(tail)
     if (placed) return { kind: 'sphereOn', center: geometryName(placed[1], 'centre of the sphere'), radius: parseExprString(placed[2]) }
     const radius = /^radius\s+(.+)$/i.exec(tail)
     if (!radius) throw new Error(`Expected "sphere radius <r>", got "${rest}"`)
     return { kind: 'sphere', radius: parseExprString(radius[1]) }
+  }
+
+  // Phase 9 (R3, R6) — the sphere tangent to every face of a solid.
+  if (head === 'insphere') {
+    const of = /^of\s+(\S+)$/i.exec(tail)
+    if (!of) throw new Error(`Expected "insphere of <solid>", got "${rest}" — an inscribed sphere is a solid's, named by the solid`)
+    return { kind: 'insphere', of: geometryName(of[1], 'solid the sphere is inscribed in') }
+  }
+
+  // Phase 9 (R3, R6) — the sphere through a solid's vertices, or through
+  // four named points.
+  if (head === 'circumsphere') {
+    const of = /^of\s+(\S+)$/i.exec(tail)
+    if (of) return { kind: 'circumsphere', of: geometryName(of[1], 'solid the sphere is circumscribed about') }
+    if (/^[a-zA-Z]+(?:\s*-\s*[a-zA-Z]+){3}$/.test(tail)) {
+      const [a, b, c, d] = parsePointList(tail, 'circumsphere A-B-C-D', 'circumsphere')
+      return { kind: 'circumsphereOn', points: [a, b, c, d] }
+    }
+    throw new Error(
+      `Expected "circumsphere of <solid>" or "circumsphere A-B-C-D" (four points), got "${rest}" — ` +
+        'for more points, build the solid ("hull A-B-C-D-E") and take its circumsphere'
+    )
   }
 
   if (head === 'hull') {
@@ -875,6 +975,159 @@ function parseCrossSection(text: string, lift: boolean): StatementShape {
     plane: parsePlaneForm(shape[2], `plane the ${keyword} is made by`),
     vertices,
   }
+}
+
+// "net: S" (phase 11, N1): one solid, by name.
+function parseNet(text: string): StatementShape {
+  const rest = text.trim()
+  if (!/^[a-zA-Z]+$/.test(rest)) throw new Error(`Expected "net: <solid>" — the name of a solid defined earlier — got "${rest}"`)
+  return { kind: 'net', solid: rest }
+}
+
+// "P to Q over S" — the ends of a shortest path and the solid it runs over,
+// shared by the statement and the measure subject (N5).
+const SHORTEST_PATH = /^([a-zA-Z_][a-zA-Z0-9_]*)\s+to\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+over\s+([a-zA-Z]+)$/
+
+function shortestParts(text: string, form: string): { from: string; to: string; solid: string } {
+  const found = SHORTEST_PATH.exec(text.trim())
+  if (!found) throw new Error(`Expected "${form}" — two point names and a solid — got "${text.trim()}"`)
+  return { from: found[1], to: found[2], solid: found[3] }
+}
+
+// "shortest: P to Q over S [unfold]" (phase 11, N3).
+function parseShortest(text: string): StatementShape {
+  const unfold = /\s+unfold\s*$/.exec(text)
+  const parts = shortestParts(unfold ? text.slice(0, unfold.index) : text, 'shortest: P to Q over S')
+  return { kind: 'shortestPath', ...parts, unfold: unfold !== null }
+}
+
+// ---------------------------------------------------------------------------
+// Shaded regions (phase 12, F4)
+// ---------------------------------------------------------------------------
+//
+// "fill: <region>", where a region is a shape or a boolean of regions:
+//
+//   A-B-C                  polygon A-B-C-D        triangle ABC
+//   square ABCD            rectangle ABCD         circle O
+//   sector P-Q on O minor  segment P-Q on O cw    R  (a region named with "name:")
+//   <region> minus <region>   <region> and|intersect <region>   <region> or|union <region>
+//
+// One precedence, left to right, with parentheses: "circle O or circle P
+// minus triangle ABC" is "(circle O or circle P) minus triangle ABC".
+
+const REGION_OPERATORS = new Map<string, RegionOperatorName>([
+  ['minus', 'difference'],
+  ['and', 'intersection'],
+  ['intersect', 'intersection'],
+  ['or', 'union'],
+  ['union', 'union'],
+])
+
+const REGION_FORMS =
+  '"A-B-C", "polygon A-B-C-D", "triangle ABC", "square ABCD", "rectangle ABCD", "circle O", ' +
+  '"sector P-Q on O minor", "segment P-Q on O minor", or a region named with "name:"'
+
+// A polygon's points: hyphenated ("A-B-C-D"), or run together when every
+// name is one letter ("ABCD").
+function regionPoints(text: string, count: number | null, role: string): string[] {
+  if (count !== null) return parsePointRun(text, count, role).map((name) => geometryName(name, role))
+  const trimmed = text.trim()
+  const names = trimmed.includes('-') ? trimmed.split('-').map((p) => p.trim()) : [...trimmed]
+  if (names.length < 3) throw new Error(`A polygon needs at least three points — "${role} A-B-C" — got "${trimmed}"`)
+  return names.map((name) => geometryName(name, role))
+}
+
+function parseRegionOperand(text: string): RegionExpr {
+  const source = text
+  // F7 — conics other than circles bound no region the engine can shade.
+  const conic = /^(ellipse|parabola|hyperbola|conic)\b/.exec(text)
+  if (conic) {
+    throw new Error(`A fill is bounded by segments and circle arcs — a region bounded by ${conic[1] === 'ellipse' ? 'an' : 'a'} ${conic[1]} cannot be shaded yet`)
+  }
+
+  const shape = /^(sector|segment)\s+(.+?)\s+on\s+([a-zA-Z]+)(?:\s+(\S+))?$/.exec(text)
+  if (shape) {
+    const kind = shape[1] as 'sector' | 'segment'
+    const [from, to] = parseCirclePair(shape[2], kind)
+    return {
+      kind,
+      circle: geometryName(shape[3], `circle the ${kind} lies on`),
+      from,
+      to,
+      direction: requireArcDirection(shape[4], `${kind} ${shape[2].trim()}`),
+      source,
+    }
+  }
+
+  const disk = /^circle\s+(\S+)$/.exec(text)
+  if (disk) return { kind: 'disk', circle: geometryName(disk[1], 'circle to shade'), source }
+
+  const polygon = /^(polygon|triangle|square|rectangle)\s+(.+)$/.exec(text)
+  if (polygon) {
+    const shapeName = polygon[1] as 'polygon' | 'triangle' | 'square' | 'rectangle'
+    const count = shapeName === 'polygon' ? null : shapeName === 'triangle' ? 3 : 4
+    return { kind: 'polygon', shape: shapeName, points: regionPoints(polygon[2], count, shapeName), source }
+  }
+
+  // The spec's own form: "fill: A-B-C".
+  if (/^[a-zA-Z]+(\s*-\s*[a-zA-Z]+)+$/.test(text)) {
+    return { kind: 'polygon', shape: 'polygon', points: regionPoints(text, null, 'polygon'), source }
+  }
+
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(text)) return { kind: 'named', name: text, source }
+
+  throw new Error(`Expected a region to shade — ${REGION_FORMS} — got "${text}"`)
+}
+
+// A region expression, as a "fill:" or an "area" subject writes it.
+function parseRegionExpr(text: string): RegionExpr {
+  const tokens = text.replace(/[()]/g, ' $& ').trim().split(/\s+/).filter((token) => token !== '')
+  if (tokens.length === 0) throw new Error(`Expected a region to shade — ${REGION_FORMS}`)
+  let at = 0
+
+  const operand = (): RegionExpr => {
+    if (tokens[at] === '(') {
+      at++
+      const inner = expression()
+      if (tokens[at] !== ')') throw new Error(`A "(" in the region "${text.trim()}" is never closed`)
+      at++
+      return { ...inner, source: `(${inner.source})` }
+    }
+    const words: string[] = []
+    while (at < tokens.length && tokens[at] !== '(' && tokens[at] !== ')' && !REGION_OPERATORS.has(tokens[at])) words.push(tokens[at++])
+    if (words.length === 0) {
+      const found = at < tokens.length ? `"${tokens[at]}"` : 'the end of the line'
+      throw new Error(`Expected a region before ${found} in "${text.trim()}" — ${REGION_FORMS}`)
+    }
+    return parseRegionOperand(words.join(' '))
+  }
+
+  const expression = (): RegionExpr => {
+    let left = operand()
+    while (at < tokens.length && tokens[at] !== ')') {
+      const word = tokens[at]
+      const op = REGION_OPERATORS.get(word)
+      if (!op) throw new Error(`Expected "minus", "and", "or", "intersect" or "union" in "${text.trim()}", got "${word}"`)
+      at++
+      const right = operand()
+      left = { kind: 'combine', op, left, right, source: `${left.source} ${word} ${right.source}` }
+    }
+    return left
+  }
+
+  const region = expression()
+  if (at < tokens.length) throw new Error(`A ")" in the region "${text.trim()}" has no "(" to close`)
+  return region
+}
+
+// "fill: <region>" (phase 12, F4).
+function parseFill(text: string): StatementShape {
+  // F7 — hatching belongs to the figure's style ("@style-fill"), not to the
+  // fill statement, which names a region.
+  if (/\b(hatch|hatched|hatching)\s*$/.test(text) || /\bpattern:/.test(text)) {
+    throw new Error('Hatching is not drawn yet as part of a fill statement — a fill is a region; shade it with the figure style ("@style-fill: hatch") and colour it with "color:"')
+  }
+  return { kind: 'fill', region: parseRegionExpr(text) }
 }
 
 // The body of a solid statement: the primitive, plus an optional trailing
@@ -1047,6 +1300,16 @@ function parseStatementCore(rawLine: string): StatementShape {
     const labelIdx = rest.indexOf('label:')
     const spec = (labelIdx === -1 ? rest : rest.slice(0, labelIdx)).trim()
     const label = labelIdx === -1 ? null : rest.slice(labelIdx + 'label:'.length).trim()
+    // M8 (phase 10) — an angle between two lines, or a line and a plane, has
+    // no vertex: skew lines never meet, and a line meets a plane where the
+    // angle is not drawn. Its value belongs in the table; its mark, on a
+    // construction that has a vertex.
+    if (/^between\s/.test(spec)) {
+      throw new Error(
+        `An angle between two lines, or a line and a plane, has no vertex to draw its mark at — put its measure in the givens table ` +
+          `("given: angle ${spec}"), or draw the construction that has one (drop the foot F and mark "angle: A-P-F")`
+      )
+    }
     const parts = spec.split('-').map((p) => p.trim())
     const namePattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/
     if (parts.length !== 3 || parts.some((p) => !namePattern.test(p))) {
@@ -1127,13 +1390,21 @@ function parseStatementCore(rawLine: string): StatementShape {
     return { kind: 'rightAngle', from: parts[0], vertex: parts[1], to: parts[2] }
   }
 
+  // The dihedral angle's mark (phase 10, M3): "dihedral: C-A-B-D", the edge
+  // in the middle ("C-AB-D"). "CABD" works too, as in a label.
+  if (line.startsWith('dihedral:')) {
+    const [from, a, b, to] = parsePointRun(line.slice('dihedral:'.length), 4, 'dihedral')
+    return { kind: 'dihedral', from, edge: [a, b], to }
+  }
+
   // A solid: "solid: prism 8 by 5 by 6". The bound form, "S = solid prism
   // 8 by 5 by 6", is handled with the other "=" statements below.
   if (line.startsWith('solid:')) return parseSolidBody(line.slice('solid:'.length), null)
 
   // Q7 (phase 8) — what an author might ask for that is not drawn: a plane on
-  // its own (a plane is drawn only through the section it cuts), and a net
-  // (build step 11). Refused in words, rather than as an unrecognised line.
+  // its own (a plane is drawn only through the section it cuts), and — until
+  // phase 11 made "net:" a statement — a net. Refused in words, rather than
+  // as an unrecognised line.
   // They catch ONLY those shapes (fix rounds 1 and 2): "plane:" / "net:", or
   // "plane <operand>" / "net <solid>" — the keyword, a space, a letter — on a
   // line with no relation in it (no "=", "<" or ">"). Every such line was an
@@ -1146,7 +1417,21 @@ function parseStatementCore(rawLine: string): StatementShape {
       'A plane is not drawn on its own — it is drawn through the section it cuts ("cut: S by plane A-B-C"), and named with "p = plane A-B-C"'
     )
   }
-  if (/^net(:|\s+[a-zA-Z][^=<>]*$)/.test(line)) throw new Error('Nets of solids are not drawn yet (build step 11)')
+  // Phase 11 (N1) — "net: S" is the statement now. A bare "net S" with no
+  // relation in it (refused since phase 8) stays refused, pointing at the
+  // colon; every other line starting with the word ("net = 5", "net(x) =
+  // x^2", "net + x = y") falls through exactly as it always did.
+  if (line.startsWith('net:')) return parseNet(line.slice('net:'.length))
+  if (/^net\s+[a-zA-Z][^=<>]*$/.test(line)) throw new Error(`A net is written with a colon — "net: ${line.slice('net'.length).trim()}"`)
+  // Phase 11 (N3, N5) — "shortest: P to Q over S [unfold]". Only the keyword
+  // with its colon: "shortest = 3" and the like read as they always did.
+  if (line.startsWith('shortest:')) return parseShortest(line.slice('shortest:'.length))
+  // Phase 12 (F4) — "fill: <region>". Only the keyword with its colon:
+  // "fill = 3", "fill(x) = x^2" and "fill + x = y" read as they always did. A
+  // bare "fill A-B-C" with no relation in it (unrecognised before) points at
+  // the colon, as "net S" does.
+  if (line.startsWith('fill:')) return parseFill(line.slice('fill:'.length))
+  if (/^fill\s+[a-zA-Z][^=<>]*$/.test(line)) throw new Error(`A fill is written with a colon — "fill: ${line.slice('fill'.length).trim()}"`)
 
   // The two forms of a cross-section. Checked before the generic "=" handling
   // below, which would otherwise read "cut: S by plane z = 3" as an implicit
@@ -1471,11 +1756,111 @@ const POINT_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 function parsePointRun(text: string, count: number, role: string): string[] {
   const trimmed = text.trim()
   const names = trimmed.includes('-') ? trimmed.split('-').map((p) => p.trim()) : [...trimmed]
-  const plural = count === 2 ? 'two point names' : 'three point names'
+  const plural = `${['', 'one', 'two', 'three', 'four'][count]} point names`
+  const letters = 'ABCD'.slice(0, count)
   if (names.length !== count || names.some((n) => !POINT_NAME.test(n))) {
-    throw new Error(`Expected ${plural} for the ${role} — "${count === 2 ? 'AB' : 'ABC'}" or "${count === 2 ? 'A-B' : 'A-B-C'}" — got "${trimmed}"`)
+    throw new Error(`Expected ${plural} for the ${role} — "${letters}" or "${[...letters].join('-')}" — got "${trimmed}"`)
   }
   return names
+}
+
+// ---------------------------------------------------------------------------
+// Measures between lines and planes (phase 10, M5)
+// ---------------------------------------------------------------------------
+//
+// "angle between A-B and C-D", "angle between A-B and plane P-Q-R",
+// "distance between A-B and C-D", "distance from P to plane P-Q-R",
+// "distance from P to line A-B". Each reads its own "= value", because a
+// plane written as an equation carries an "=" of its own:
+// "distance from G to plane x + y + z = 1" names a plane and asserts
+// nothing, "distance from G to plane x + y + z = 1 = 0.577" asserts.
+
+interface SpaceMeasure {
+  subject: MeasureSubject
+  // The subject as the author wrote it, before any "= value".
+  text: string
+  value: string | null
+}
+
+// Splits "<plane>[ = value]" where the plane may be an equation. Two "=":
+// the last is the assertion. One: it is the plane's own when what precedes
+// it is an equation side (an axis letter, or anything that is not a list of
+// point names, "through ..." or a plane's name), else the assertion.
+function splitPlaneValue(text: string): { plane: string; value: string | null } {
+  const first = text.indexOf('=')
+  if (first === -1) return { plane: text, value: null }
+  const last = text.lastIndexOf('=')
+  if (last !== first) return { plane: text.slice(0, last), value: text.slice(last + 1) }
+  const before = text.slice(0, first).trim()
+  const named = /^[a-zA-Z]+(\s*-\s*[a-zA-Z]+){2}$/.test(before) || /^through\s/.test(before) || (GEOMETRY_NAME.test(before) && !/^[xyzXYZ]$/.test(before))
+  return named ? { plane: before, value: text.slice(first + 1) } : { plane: text, value: null }
+}
+
+function splitValue(text: string): { rest: string; value: string | null } {
+  const equals = text.indexOf('=')
+  return equals === -1 ? { rest: text, value: null } : { rest: text.slice(0, equals), value: text.slice(equals + 1) }
+}
+
+function parseSpaceMeasure(body: string): SpaceMeasure | null {
+  const between = /^(angle|distance)\s+between\s+(.+?)\s+and\s+(.+)$/.exec(body)
+  if (between) {
+    const [, what, firstText, tail] = between
+    if (/^plane\s/.test(firstText.trim()) || /^plane\s/.test(tail.trim())) {
+      if (/^plane\s/.test(firstText.trim())) {
+        throw new Error(
+          what === 'angle'
+            ? `The angle between two planes is a dihedral angle — write "dihedral C-A-B-D" along the edge A-B they share; "angle between" takes a line first ("angle between A-B and plane P-Q-R")`
+            : `"distance between" takes two lines — for a plane, measure from a point: "distance from P to plane P-Q-R"`
+        )
+      }
+      if (what === 'distance') {
+        throw new Error(`"distance between" takes two lines — for a line and a plane, measure from a point of the line: "distance from P to plane P-Q-R"`)
+      }
+      const { plane, value } = splitPlaneValue(tail.trim().slice('plane'.length))
+      const line = parseLineOperand(firstText, 'line of the angle')
+      return {
+        subject: { kind: 'linePlaneAngle', line, plane: parsePlaneForm(plane, 'plane of the angle') },
+        text: `angle between ${firstText.trim()} and plane ${plane.trim()}`,
+        value,
+      }
+    }
+    const { rest, value } = splitValue(tail)
+    const first = parseLineOperand(firstText, `first line of the ${what}`)
+    const second = parseLineOperand(rest, `second line of the ${what}`)
+    return {
+      subject: what === 'angle' ? { kind: 'lineAngle', first, second } : { kind: 'lineDistance', first, second },
+      text: `${what} between ${firstText.trim()} and ${rest.trim()}`,
+      value,
+    }
+  }
+
+  const from = /^distance\s+from\s+(\S+)\s+to\s+(.+)$/.exec(body)
+  if (from) {
+    const point = geometryName(from[1], 'point the distance is measured from')
+    const target = from[2].trim()
+    if (/^plane\s/.test(target)) {
+      const { plane, value } = splitPlaneValue(target.slice('plane'.length))
+      return {
+        subject: { kind: 'pointPlaneDistance', point, plane: parsePlaneForm(plane, 'plane the distance is measured to') },
+        text: `distance from ${point} to plane ${plane.trim()}`,
+        value,
+      }
+    }
+    const { rest, value } = splitValue(target)
+    return {
+      subject: { kind: 'pointLineDistance', point, line: parseLineOperand(rest, 'line the distance is measured to') },
+      text: `distance from ${point} to ${rest.trim()}`,
+      value,
+    }
+  }
+
+  if (/^(angle|distance)\s+(between|from)\s/.test(body)) {
+    throw new Error(
+      `Expected "angle between A-B and C-D", "angle between A-B and plane P-Q-R", "distance between A-B and C-D", ` +
+        `"distance from P to plane P-Q-R" or "distance from P to line A-B", got "${body}"`
+    )
+  }
+  return null
 }
 
 // A stated value asserts, so it has to be a value and not an expression: the
@@ -1550,6 +1935,37 @@ function parseLabelSubject(text: string, role: string): LabelSubject {
     return { subject: { kind: 'triangle', names: [a, b, c] }, mark: 'none', prefix: '△', explicit: true }
   }
 
+  // Phase 12 (F3) — "area R", "area square ABCD minus circle O": the area
+  // of a shaded region. "area of S" stays with the refusal below.
+  const area = /^area\s+(.+)$/.exec(subjectText)
+  if (area && !/^of\s/.test(area[1])) {
+    // Fix round 1 (M6) — "area R < area S" and the like: a relation between
+    // two areas is not a region, and is not stated yet.
+    if (/[<>≤≥≅~∥⊥]|\barea\s/.test(area[1])) {
+      throw new Error(`Relations between areas are not stated yet — give each area its own line ("${role}: area R", "${role}: area S")`)
+    }
+    return { subject: { kind: 'area', region: parseRegionExpr(area[1]) }, mark: 'none', prefix: '', explicit: false }
+  }
+
+  // M8 (phase 10) — areas and volumes are not measured yet; said so, rather
+  // than misread as a malformed pair of point names.
+  if (/^(?:[a-zA-Z]+\s+(?:volume|area|surface\s+area)|(?:volume|area|surface\s+area)\s+of\s+.+)$/.test(subjectText)) {
+    throw new Error(`Areas and volumes are not measured yet — "${subjectText}" cannot be ${role === 'label' ? 'labelled' : 'stated'}; measure lengths and angles instead`)
+  }
+
+  // "shortest P to Q over S" (phase 11, N5): the length of the path.
+  const shortest = /^shortest\s+(.+)$/.exec(subjectText)
+  if (shortest) {
+    return { subject: { kind: 'shortestPath', ...shortestParts(shortest[1], 'shortest P to Q over S') }, mark: 'none', prefix: '', explicit: false }
+  }
+
+  // "dihedral C-A-B-D" (phase 10, M3): the edge is the middle two names.
+  const dihedral = /^dihedral\s+(.+)$/.exec(subjectText)
+  if (dihedral) {
+    const [from, a, b, to] = parsePointRun(dihedral[1], 4, `dihedral ${role}`)
+    return { subject: { kind: 'dihedral', from, edge: [a, b], to }, mark: 'none', prefix: '', explicit: false }
+  }
+
   const angle = /^angle\s+(.+)$/.exec(subjectText)
   if (angle) {
     const [from, vertex, to] = parsePointRun(angle[1], 3, `angle ${role}`)
@@ -1603,6 +2019,14 @@ function splitRelation(text: string): { left: string; symbol: string; right: str
   return null
 }
 
+// Fix round 2 — "given: area R = area S": the value is another area, a
+// relation between two areas, which is not stated yet. Refused as the
+// relational forms are ("area R < area S"), rather than printed as a symbol.
+function refuseAreaRelation(subject: MeasureSubject, content: MeasureContent | null, role: string): void {
+  if (subject.kind !== 'area' || content?.kind !== 'symbol' || !/^area\s/.test(content.text)) return
+  throw new Error(`Relations between areas are not stated yet — give each area its own line ("${role}: area R", "${role}: area S")`)
+}
+
 // "label: <subject> [= <value>]".
 function parseMeasureLabel(rest: string): StatementShape {
   const body = rest.trim()
@@ -1610,9 +2034,21 @@ function parseMeasureLabel(rest: string): StatementShape {
     throw new Error('Expected something to label, e.g. "label: AB", "label: AB = 8" or "label: angle A-B-C"')
   }
 
+  // M5 — an angle or a distance between lines and planes has no one point to
+  // hang an inline label on: its place is the givens table, or the author
+  // draws the construction (a foot, a common perpendicular) and labels that.
+  const space = parseSpaceMeasure(body)
+  if (space) {
+    throw new Error(
+      `"label: ${space.text}" has no single point to hang a label on — write "given: ${space.text}" to put it in the givens table, ` +
+        'or draw the construction (a foot, or a common perpendicular) and label its segment'
+    )
+  }
+
   const equals = body.indexOf('=')
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
   const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'label')
+  refuseAreaRelation(named.subject, content, 'label')
 
   if (named.explicit) {
     if (content) {
@@ -1634,7 +2070,16 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
     )
   }
 
-  const relation = splitRelation(body)
+  // M5 first: a plane written "through P perpendicular to A-B" holds a
+  // relation word, and an equation holds an "=" of its own.
+  const space = parseSpaceMeasure(body)
+  if (space) {
+    const content = space.value === null ? { kind: 'computed' as const } : parseMeasureContent(space.value)
+    return { kind: 'given', section, entry: { kind: 'measure', subject: space.subject, content } }
+  }
+
+  // An area's region is a boolean of shapes, never a relation (phase 12).
+  const relation = /^area\s/.test(body) ? null : splitRelation(body)
   if (relation) {
     return {
       kind: 'given',
@@ -1651,6 +2096,7 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
   const equals = body.indexOf('=')
   const content: MeasureContent | null = equals === -1 ? null : parseMeasureContent(body.slice(equals + 1))
   const named = parseLabelSubject(equals === -1 ? body : body.slice(0, equals), 'given')
+  refuseAreaRelation(named.subject, content, section)
   return { kind: 'given', section, entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
 }
 
@@ -1673,9 +2119,9 @@ export function parseStatement(rawLine: string): Statement {
       const stripped = stripTrailingClause(line, COLOR_CLAUSE)
       if (stripped) {
         if (!isValidColor(stripped.value)) {
-          throw new Error(`Unknown color "${stripped.value}" — use a name (red, orange, yellow, green, teal, blue, purple, pink, brown, black, gray, cyan) or "#rrggbb"`)
+          throw new Error(`Unknown color "${stripped.value}" — use a name (red, orange, yellow, green, teal, blue, purple, pink, brown, black, gray, cyan) or six hex digits without the "#" (which starts a comment), like d03030`)
         }
-        color = stripped.value
+        color = normaliseColor(stripped.value)
         line = stripped.line
         continue
       }

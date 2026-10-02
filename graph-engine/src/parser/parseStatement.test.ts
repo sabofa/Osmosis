@@ -1093,8 +1093,10 @@ describe('what phase 8 does not draw (Q7)', () => {
     }
   })
 
-  it('refuses a net', () => {
-    expect(() => parseStatement('net: S')).toThrow('Nets of solids are not drawn yet (build step 11)')
+  // Rewritten in phase 11 (sanctioned): "net: S" was refused here until
+  // build step 11 made it the net statement (N1). It now reads the solid.
+  it('reads a net (phase 11: no longer refused)', () => {
+    expect(parseStatement('net: S')).toEqual({ kind: 'net', solid: 'S', color: null, statementName: null })
   })
 })
 
@@ -1111,11 +1113,13 @@ describe('the Q7 refusals never catch an assignment (fix round 1)', () => {
     }
   })
 
-  it('still refuses a plane or a net written as a statement', () => {
+  // Rewritten in phase 11 (sanctioned): "net: S" is the net statement now,
+  // and a bare "net S" is still refused, pointing at the colon.
+  it('still refuses a plane written as a statement, and a net with no colon', () => {
     expect(() => parseStatement('plane: A-B-C')).toThrow(/A plane is not drawn on its own/)
     expect(() => parseStatement('plane A-B-C')).toThrow(/A plane is not drawn on its own/)
-    expect(() => parseStatement('net: S')).toThrow(/Nets of solids are not drawn yet/)
-    expect(() => parseStatement('net S')).toThrow(/Nets of solids are not drawn yet/)
+    expect(parseStatement('net: S')).toMatchObject({ kind: 'net', solid: 'S' })
+    expect(() => parseStatement('net S')).toThrow('A net is written with a colon — "net: S"')
   })
 })
 
@@ -1134,10 +1138,202 @@ describe('the Q7 refusals never catch a line the base grammar read (fix round 2)
     ["plane (t) = t + 1", {"kind": "implicit", "left": {"kind": "call", "name": "plane", "args": [{"kind": "var", "name": "t"}]}, "right": {"kind": "binary", "op": "+", "left": {"kind": "var", "name": "t"}, "right": {"kind": "num", "value": 1}}, "color": null, "statementName": null}],
     ["plane x = 1", {"kind": "implicit", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "plane"}, "right": {"kind": "var", "name": "x"}}, "right": {"kind": "num", "value": 1}, "color": null, "statementName": null}],
     ["net x > y", {"kind": "region", "left": {"kind": "binary", "op": "*", "left": {"kind": "var", "name": "net"}, "right": {"kind": "var", "name": "x"}}, "op": ">", "right": {"kind": "var", "name": "y"}, "color": null, "statementName": null}],
+    // Phase 11 — the net and shortest-path keywords take only "net:" and
+    // "shortest:"; these read exactly as the base commit d2b91e8 read them.
+    ["net(x) = x^2", {"kind": "functionDef", "name": "net", "param": "x", "body": {"kind": "binary", "op": "^", "left": {"kind": "var", "name": "x"}, "right": {"kind": "num", "value": 2}}, "color": null, "statementName": null}],
+    ["net = 5", {"kind": "constantDef", "name": "net", "value": {"kind": "num", "value": 5}, "color": null, "statementName": null}],
   ]
   for (const [line, statement] of BASE) {
     it(`parses "${line}" exactly as the base commit did`, () => {
       expect(parseStatement(line)).toEqual(statement)
     })
   }
+})
+
+describe('spheres by tangency, and a sphere\'s centre (phase 9, R5 and R1)', () => {
+  const primitive = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    return s.primitive
+  }
+
+  it('reads a sphere tangent to a plane, in any plane form', () => {
+    expect(primitive('S = solid sphere center P tangent to plane A-B-C')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'plane', plane: { kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' } },
+    })
+    expect(primitive('S = solid sphere center P tangent to plane p')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'plane', plane: { kind: 'named', name: 'p', source: 'p' } },
+    })
+    const tilted = primitive('S = solid sphere center P tangent to plane x + y + z = 3')
+    if (tilted.kind !== 'sphereTangent' || tilted.to.kind !== 'plane') throw new Error('expected a plane tangency')
+    expect(tilted.to.plane.kind).toBe('equation')
+  })
+
+  it('reads a sphere externally or internally tangent to another', () => {
+    expect(primitive('S = solid sphere center P externally tangent to T')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'sphere', sphere: 'T', side: 'external' },
+    })
+    expect(primitive('S = solid sphere center P internally tangent to T')).toEqual({
+      kind: 'sphereTangent',
+      center: 'P',
+      to: { kind: 'sphere', sphere: 'T', side: 'internal' },
+    })
+  })
+
+  it('refuses a tangency it cannot read, saying which forms there are', () => {
+    // Tangent to a sphere is one of two things, and guessing is refused.
+    expect(() => parseStatement('S = solid sphere center P tangent to T')).toThrow(/externally tangent to T" or "internally tangent to T/)
+    // A plane is tangent, full stop.
+    expect(() => parseStatement('S = solid sphere center P externally tangent to plane z = 1')).toThrow(/tangent to plane z = 1/)
+    // Several objects at once is a solver (R7).
+    expect(() => parseStatement('S = solid sphere center P tangent to plane z = 0 and T')).toThrow(/one object at a time/)
+    expect(() => parseStatement('S = solid sphere center P externally tangent to T, U')).toThrow(/one object at a time/)
+    expect(() => parseStatement('S = solid sphere tangent to plane z = 0')).toThrow(/placed by its centre/)
+  })
+
+  it('keeps the sphere forms it had', () => {
+    expect(primitive('O = solid sphere center M radius 5').kind).toBe('sphereOn')
+    expect(primitive('solid: sphere radius 4').kind).toBe('sphere')
+  })
+
+  it('reads "center of S" as a construction binding a point', () => {
+    const s = parseStatement('M = center of S')
+    expect(s).toMatchObject({ kind: 'construction', names: ['M'], body: { kind: 'centerOf', solid: 'S' } })
+  })
+
+  it('reads "centre of S" as the same construction (fix round 1)', () => {
+    expect(parseStatement('M = centre of S')).toMatchObject({ kind: 'construction', names: ['M'], body: { kind: 'centerOf', solid: 'S' } })
+  })
+
+  it('points "tangent to p" at a named plane too, since the parser cannot tell p is one (fix round 1)', () => {
+    expect(() => parseStatement('S = solid sphere center P tangent to p')).toThrow(
+      'A sphere touches another from outside or from inside — write "externally tangent to p" or "internally tangent to p"; ' +
+        'if p is a plane, write "tangent to plane p"'
+    )
+  })
+})
+
+describe('circumspheres (phase 9, R3 and R6)', () => {
+  const primitive = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'solid') throw new Error('expected a solid')
+    return s.primitive
+  }
+
+  it('reads the insphere of a solid, and nothing else', () => {
+    expect(primitive('I = solid insphere of T')).toEqual({ kind: 'insphere', of: 'T' })
+    expect(() => parseStatement('I = solid insphere A-B-C-D')).toThrow(/"insphere of <solid>"/)
+  })
+
+  it('reads the circumsphere of a solid, and of four points', () => {
+    expect(primitive('O = solid circumsphere of T')).toEqual({ kind: 'circumsphere', of: 'T' })
+    expect(primitive('O = solid circumsphere A-B-C-D')).toEqual({ kind: 'circumsphereOn', points: ['A', 'B', 'C', 'D'] })
+  })
+
+  it('refuses any other count of points, pointing at the hull', () => {
+    expect(() => parseStatement('O = solid circumsphere A-B-C')).toThrow(/"circumsphere A-B-C-D" \(four points\).*hull A-B-C-D-E/)
+    expect(() => parseStatement('O = solid circumsphere A-B-C-D-E')).toThrow(/four points/)
+    expect(() => parseStatement('O = solid circumsphere A-B-C-A')).toThrow(/"A" is named twice/)
+  })
+})
+
+describe('measures in space (phase 10, M3, M5 and M6)', () => {
+  const given = (line: string) => {
+    const s = parseStatement(line)
+    if (s.kind !== 'given' || s.entry.kind !== 'measure') throw new Error('expected a measure row')
+    return s.entry
+  }
+
+  it('reads the angle and the distance between two lines, "line" optional', () => {
+    expect(given('given: angle between A-C and B-G').subject).toEqual({ kind: 'lineAngle', first: ['A', 'C'], second: ['B', 'G'] })
+    expect(given('find: distance between line A-G and line B-F').subject).toEqual({ kind: 'lineDistance', first: ['A', 'G'], second: ['B', 'F'] })
+    expect(given('given: angle between A-C and B-G = 60').content).toEqual({ kind: 'stated', value: 60 })
+  })
+
+  it('reads a line against a plane, and a point against a plane or a line', () => {
+    expect(given('given: angle between A-G and plane A-B-C').subject).toEqual({
+      kind: 'linePlaneAngle',
+      line: ['A', 'G'],
+      plane: { kind: 'points', points: ['A', 'B', 'C'], source: 'A-B-C' },
+    })
+    expect(given('given: distance from G to plane p').subject).toEqual({ kind: 'pointPlaneDistance', point: 'G', plane: { kind: 'named', name: 'p', source: 'p' } })
+    expect(given('given: distance from G to line A-B').subject).toEqual({ kind: 'pointLineDistance', point: 'G', line: ['A', 'B'] })
+    expect(given('given: distance from G to A-B = 1.5').content).toEqual({ kind: 'stated', value: 1.5 })
+  })
+
+  it('tells a plane equation\'s own "=" from the assertion', () => {
+    // One "=" after an equation side: the plane's.
+    const plain = given('given: distance from G to plane x + y + z = 1')
+    expect(plain.subject).toMatchObject({ plane: { kind: 'equation', source: 'x + y + z = 1' } })
+    expect(plain.content).toEqual({ kind: 'computed' })
+    const axis = given('given: angle between A-B and plane z = 3')
+    expect(axis.subject).toMatchObject({ plane: { kind: 'axis', axis: 'z', source: 'z = 3' } })
+    expect(axis.content).toEqual({ kind: 'computed' })
+    // Two: the last is the assertion.
+    const asserted = given('given: distance from G to plane x + y + z = 1 = 0.577')
+    expect(asserted.subject).toMatchObject({ plane: { kind: 'equation', source: 'x + y + z = 1' } })
+    expect(asserted.content).toEqual({ kind: 'stated', value: 0.577 })
+    // One after three names, "through ..." or a name: the assertion.
+    expect(given('given: angle between A-G and plane A-B-C = 35').content).toEqual({ kind: 'stated', value: 35 })
+    expect(given('given: distance from G to plane p = 2').content).toEqual({ kind: 'stated', value: 2 })
+    expect(given('given: distance from G to plane through A perpendicular to A-G = 2').subject).toMatchObject({
+      plane: { kind: 'perpendicular', through: 'A', line: ['A', 'G'] },
+    })
+  })
+
+  it('reads a dihedral with its edge in the middle, as a label or a row', () => {
+    expect(given('given: dihedral C-A-B-D = 90').subject).toEqual({ kind: 'dihedral', from: 'C', edge: ['A', 'B'], to: 'D' })
+    expect(given('given: dihedral CABD').subject).toEqual({ kind: 'dihedral', from: 'C', edge: ['A', 'B'], to: 'D' })
+    const label = parseStatement('label: dihedral A-B-F-G')
+    expect(label).toMatchObject({ kind: 'measureLabel', subject: { kind: 'dihedral', from: 'A', edge: ['B', 'F'], to: 'G' }, content: { kind: 'computed' } })
+    expect(() => parseStatement('given: dihedral A-B-C')).toThrow(/four point names/)
+  })
+
+  it('refuses an inline label on the between and from forms, pointing at the table', () => {
+    expect(() => parseStatement('label: angle between A-C and B-G')).toThrow(/write "given: angle between A-C and B-G"/)
+    expect(() => parseStatement('label: distance from P to line A-B = 3')).toThrow(/write "given: distance from P to line A-B"/)
+  })
+
+  it('refuses the angle between two planes, pointing at the dihedral, and a line–plane distance', () => {
+    expect(() => parseStatement('given: angle between plane A-B-C and plane A-B-D')).toThrow(/dihedral C-A-B-D/)
+    expect(() => parseStatement('given: distance between A-B and plane P-Q-R')).toThrow(/distance from P to plane P-Q-R/)
+    expect(() => parseStatement('given: distance between A-B')).toThrow(/Expected "angle between A-B and C-D"/)
+  })
+
+  it('reads the common perpendicular of two lines as a two-name construction', () => {
+    const s = parseStatement('P, Q = common perpendicular of A-G and B-F')
+    expect(s).toMatchObject({ kind: 'construction', names: ['P', 'Q'], body: { kind: 'commonPerpendicular', first: ['A', 'G'], second: ['B', 'F'] } })
+    expect(parseStatement('P, Q = common perpendicular line A-G and line B-F')).toMatchObject({ body: { first: ['A', 'G'], second: ['B', 'F'] } })
+  })
+})
+
+describe('marks with no vertex are refused (phase 10, M8)', () => {
+  it('refuses an angle mark between two lines, pointing at the table and at the foot', () => {
+    expect(() => parseStatement('angle: between A-B and C-D')).toThrow(/no vertex to draw its mark at.*"given: angle between A-B and C-D".*"angle: A-P-F"/)
+    // The ordinary mark still parses.
+    expect(parseStatement('angle: A-B-C label: 30°')).toMatchObject({ kind: 'angle', from: 'A', vertex: 'B', to: 'C', label: '30°' })
+  })
+})
+
+describe('the dihedral mark (phase 10, M3)', () => {
+  it('reads "dihedral: C-A-B-D" with its edge in the middle, and the run form', () => {
+    expect(parseStatement('dihedral: A-B-F-G')).toMatchObject({ kind: 'dihedral', from: 'A', edge: ['B', 'F'], to: 'G' })
+    expect(parseStatement('dihedral: ABFG color: red')).toMatchObject({ kind: 'dihedral', from: 'A', edge: ['B', 'F'], to: 'G', color: 'red' })
+    expect(() => parseStatement('dihedral: A-B-C')).toThrow(/four point names/)
+  })
+})
+
+describe('areas and volumes are refused in words (phase 10, M8)', () => {
+  it('refuses "S volume" and "area of ABC" rather than misreading them as point names', () => {
+    expect(() => parseStatement('label: S volume')).toThrow(/Areas and volumes are not measured yet — "S volume" cannot be labelled/)
+    expect(() => parseStatement('find: area of ABC')).toThrow(/Areas and volumes are not measured yet — "area of ABC" cannot be stated/)
+    // A solid's named dimensions still read as before.
+    expect(parseStatement('label: S height')).toMatchObject({ subject: { kind: 'solidDimension', solid: 'S', dimension: 'height' } })
+  })
 })

@@ -7,11 +7,14 @@ import type {
   GivensSection,
   MeasureContent,
   MeasureSubject,
+  PlaneForm,
+  RegionExpr,
   Statement,
 } from '../parser/types'
 import { angleSweep, rightAngleSquarePoints, tickMarkSegments } from '../render/geometryMarks'
 import { clipLineToBounds } from '../render/clipLine'
-import { type Palette, themedColor } from '../render/palette'
+import { DARK_PALETTE, LIGHT_PALETTE, type Palette, themedColor } from '../render/palette'
+import { toOklch } from '../style/color'
 import { buildConstructions } from '../scene/geometry/buildConstructions'
 import { isPlotted, isSolidFigureStatement } from '../scene/mode'
 import { type Arc, arcBetween, arcMidpoint, arcPointAt, requireOnCircle } from '../scene/geometry/circles'
@@ -19,16 +22,27 @@ import type { GeometryCircle, GeometryObject, LineExtent } from '../scene/geomet
 import type { SceneError, Vec2 } from '../scene/types'
 import { GEOM_EPS } from '../scene/geometry/types'
 import {
+  circularSegmentRegion,
+  combineRegions,
+  diskRegion,
+  interiorLabelPoint,
+  polygonRegion,
+  regionArea,
+  regionExtremes,
+  sectorRegion,
+  sweepOf,
+  type Region,
+} from '../scene/geometry/regions'
+import {
   boundsOf,
   cssColor,
-  emptyFigureLayers,
   FIGURE_PADDING,
-  figureDocument,
   figureTheme,
   fitProjection,
   growRect,
   layoutGivensTable,
   unionRects,
+  type FigureLayer,
   type FigureTheme,
   type Projection,
   type Rect,
@@ -36,29 +50,44 @@ import {
 } from './document'
 import { LABEL_FONT_SIZE, layoutLabels, noObstacles, type LabelAnchor, type LabelObstacles } from './labels'
 import { angleMeasure, arcMeasure, checkMeasure, formatAngleMeasure, formatMeasure, segmentLength } from './measure'
-import { layoutNotation, type NotationLayout, notationElements, notationOrigin, type NotationRun } from './notation'
-import { angle3, distance3 } from './construct3d'
+import { layoutNotation, type NotationLayout, notationOrigin, type NotationRun } from './notation'
+import {
+  angle3,
+  dihedral3,
+  distance3,
+  midpoint3,
+  lineAngle3,
+  lineLineDistance,
+  linePlaneAngle3,
+  pointLineDistance,
+  pointPlaneDistance,
+  type Plane3,
+} from './construct3d'
 import { segmentSpans, type Span } from './occlusion'
-import { cameraFor, drawClosedEdges, drawEdge, edgeExtremes, edgeObject, type Camera, type ProjectedEdge, type Vec3 } from './project3d'
+import {
+  cameraFor,
+  edgeExtremes,
+  edgeObject,
+  type Camera,
+  type ProjectedArc,
+  type ProjectedEdge,
+  type Vec3,
+} from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
 import { authorToWorld, describeAuthorPlane } from './authorFrame'
-import { liftOffset, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
-import { ellipseFromConjugates, projectCircle, type ProjectedCircle } from './silhouette'
+import { liftOffset, NET_LABEL_CLEARANCE, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
+import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
+import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden, projectArc, rightAngleCorners, type SpaceArc } from './spaceMarks'
 import { sectionOutline, type OutlinePiece } from './sectionVisibility'
-import {
-  fmt,
-  svgArc,
-  svgCircle,
-  svgCircularSegment,
-  svgEllipse,
-  svgLine,
-  svgPolygon,
-  svgPolyline,
-  svgSector,
-  svgText,
-  type SvgAttrs,
-} from './svg'
+import { netOf, netSolidWord, type Net, type NetPiece } from './nets'
+import { shortestPath, type SurfacePath } from './shortestPath'
+import { ellipsePoint, type SvgAttrs } from './svg'
+import { cleanPen, type FigurePen, type FillRegion, type StrokePath } from './pen'
+import { styledPen } from './styledPen'
+import type { Piece } from '../style/path'
+import { checkLayer, isClean, resolveStyle, type StyleLayer } from '../style/resolve'
+import type { Style } from '../style/tokens'
 
 // The figure renderer: statements in, one SVG document out.
 //
@@ -171,8 +200,26 @@ type FigureItem =
   // avoidance.
   | { kind: 'region'; id: Identity; edges: ProjectedEdge[]; color: string | null }
   | { kind: 'angleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; label: string | null; color: string | null }
-  | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; color: string | null }
+  // `hidden` only for a tick on a segment in space (phase 10, M4): the
+  // endpoints are then the segment's projected ends, and the tick is drawn
+  // in the picture plane by the 2D convention.
+  | { kind: 'tickMark'; id: Identity; from: Vec2; to: Vec2; count: number; hidden?: boolean; color: string | null }
   | { kind: 'rightAngleMark'; id: Identity; vertex: Vec2; from: Vec2; to: Vec2; color: string | null }
+  // Phase 10 (M1) — an angle's arc on points in space: a circle arc in the
+  // angle's own plane, already projected to an elliptical arc. `hidden` is
+  // M4's whole-mark decision. `text` is an "angle: … label:" caption, hung
+  // on the arc's middle (projected) and pushed along the projected bisector.
+  | {
+      kind: 'spaceArc'
+      id: Identity
+      edge: ProjectedArc
+      hidden: boolean
+      text: { at: Vec2; push: Vec2 | null; label: string } | null
+      color: string | null
+    }
+  // Phase 10 (M1) — a right angle's square in space, projected: its three
+  // outer corners, the "L" the plane draws.
+  | { kind: 'spaceRightAngle'; id: Identity; points: [Vec2, Vec2, Vec2]; hidden: boolean; color: string | null }
   // A measure label draws no geometry of its own: it is text (possibly
   // carrying notation) hung off a piece of geometry that is already drawn.
   // `at` is where it belongs in world space and `push` is the direction it
@@ -189,6 +236,8 @@ type FigureItem =
       // See the `leader` local in buildItems: only a solid's dimension label
       // grows a line back to what it names.
       leader: boolean
+      // Phase 12 (F6) — an area's label sits ON its anchor when it can.
+      centred?: boolean
       runs: NotationRun[]
       color: string | null
     }
@@ -200,6 +249,19 @@ type FigureItem =
   // of givens IS, and columns that share an edge are what makes a long list
   // scannable (G4).
   | { kind: 'given'; id: Identity; section: GivensSection; cells: NotationRun[][]; color: string | null }
+  // Phase 11 (N1) — a lifted net, or a lifted unfolding of a shortest path:
+  // plane geometry at true size, already moved beside the drawing. Each line
+  // is a fold (dashed) or a cut (solid); `faces` are the flat faces, kept so
+  // labels stay out of them as they stay out of a lifted polygon.
+  | { kind: 'net'; id: Identity; lines: { edge: ProjectedEdge; fold: boolean }[]; faces: Vec2[][]; color: string | null }
+  // A net's vertex letter (N1): a DISPLAY label, repeated at every copy of
+  // the vertex, never a named point — the same letter can sit at three places
+  // in one net. `copy` keeps each one's layout identity unique.
+  | { kind: 'netLabel'; id: Identity; copy: number; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
+  // Phase 12 (F5) — a shaded region: exact loops of segments and arcs, drawn
+  // as ONE path in the regions layer with no outline of its own (the
+  // author's own lines draw the edges). A backdrop, not a label obstacle.
+  | { kind: 'fill'; id: Identity; region: Region; color: string | null }
 
 export interface FigureResult {
   svg: string
@@ -335,7 +397,40 @@ function subjectName(subject: MeasureSubject): string {
       return `arc ${subject.from}${subject.to}`
     case 'solidDimension':
       return `${subject.solid} ${subject.dimension}`
+    // Phase 10 — the author's own words, so an assertion's message quotes
+    // the row they wrote.
+    case 'dihedral':
+      return `dihedral ${subject.from}-${subject.edge.join('-')}-${subject.to}`
+    case 'lineAngle':
+      return `angle between ${subject.first.join('-')} and ${subject.second.join('-')}`
+    case 'linePlaneAngle':
+      return `angle between ${subject.line.join('-')} and plane ${subject.plane.source}`
+    case 'lineDistance':
+      return `distance between ${subject.first.join('-')} and ${subject.second.join('-')}`
+    case 'pointPlaneDistance':
+      return `distance from ${subject.point} to plane ${subject.plane.source}`
+    case 'pointLineDistance':
+      return `distance from ${subject.point} to line ${subject.line.join('-')}`
+    case 'shortestPath':
+      return `shortest ${subject.from} to ${subject.to} over ${subject.solid}`
+    // Phase 12 — the author's own words.
+    case 'area':
+      return `area ${subject.region.source}`
   }
+}
+
+// Whether a subject measures an ANGLE: it prints with the degree sign and
+// honours "@angle".
+function isAngleSubject(subject: MeasureSubject): boolean {
+  return subject.kind === 'angle' || subject.kind === 'arc' || subject.kind === 'dihedral' || subject.kind === 'lineAngle' || subject.kind === 'linePlaneAngle'
+}
+
+// A plane as the givens table writes it (M5): three points run together as
+// a face is ("ABC"), a named plane by its name, any other form as written.
+function planeNotation(plane: PlaneForm): string {
+  if (plane.kind === 'points') return plane.points.join('')
+  if (plane.kind === 'named') return plane.name
+  return plane.source
 }
 
 // A unit vector in *view* space (y flipped) bisecting the angle at `vertex`.
@@ -395,6 +490,28 @@ function subjectRuns(subject: MeasureSubject): NotationRun[] {
       // No overmark: "S height" is a phrase naming a measurement, not a
       // piece of geometry with a notation of its own.
       return [{ text: `${subject.solid} ${subject.dimension}`, mark: 'none' }]
+    // Phase 10 — the table's notation (M3, M5): the dihedral as its edge
+    // between its two ends, "∠C-AB-D"; the angle between two lines or a line
+    // and a plane as "∠(AB, CD)" and "∠(AB, PQR)"; a distance as
+    // "d(AB, CD)", "d(P, PQR)", "d(P, AB)".
+    case 'dihedral':
+      return [{ text: `\u2220${subject.from}-${subject.edge.join('')}-${subject.to}`, mark: 'none' }]
+    case 'lineAngle':
+      return [{ text: `\u2220(${subject.first.join('')}, ${subject.second.join('')})`, mark: 'none' }]
+    case 'linePlaneAngle':
+      return [{ text: `\u2220(${subject.line.join('')}, ${planeNotation(subject.plane)})`, mark: 'none' }]
+    case 'lineDistance':
+      return [{ text: `d(${subject.first.join('')}, ${subject.second.join('')})`, mark: 'none' }]
+    case 'pointPlaneDistance':
+      return [{ text: `d(${subject.point}, ${planeNotation(subject.plane)})`, mark: 'none' }]
+    case 'pointLineDistance':
+      return [{ text: `d(${subject.point}, ${subject.line.join('')})`, mark: 'none' }]
+    // Phase 11 (N5) — the path's length, in words: there is no notation for it.
+    case 'shortestPath':
+      return [{ text: `shortest ${subject.from}${subject.to} over ${subject.solid}`, mark: 'none' }]
+    // Phase 12 — in words, as written: a region has no notation.
+    case 'area':
+      return [{ text: `area ${subject.region.source}`, mark: 'none' }]
   }
 }
 
@@ -413,8 +530,7 @@ function measureRuns(
 ): { runs: NotationRun[]; error: string | null } {
   // An arc's measure is an angle, so it carries the degree sign and honours
   // @angle exactly as an angle does.
-  const asText = (value: number) =>
-    subject.kind === 'angle' || subject.kind === 'arc' ? formatAngleMeasure(value, config.angle) : formatMeasure(value)
+  const asText = (value: number) => (isAngleSubject(subject) ? formatAngleMeasure(value, config.angle) : formatMeasure(value))
 
   switch (content.kind) {
     case 'computed':
@@ -435,7 +551,9 @@ function measureRuns(
             ? `${subject.from}${subject.vertex}${subject.to}`
             : subject.kind === 'solidDimension'
               ? `${subject.solid} ${subject.dimension}`
-              : subject.names.join('')
+              : subject.kind === 'triangle'
+                ? subject.names.join('')
+                : subjectName(subject)
       // The prefix is a character (△), not a mark: it is set beside the name
       // rather than drawn over it, so it belongs in the same run.
       return { runs: [{ text: content.prefix + names, mark: content.mark }], error: null }
@@ -459,6 +577,25 @@ interface Resolvers {
   circle(name: string): GeometryCircle
   solid(name: string): SolidBody
   space(names: readonly string[], what: string): Vec3[] | null
+  // M5 — a measure's plane, as the solid-figure walk resolved it.
+  plane(form: PlaneForm): Plane3
+  // Phase 11 (N3, N4) — the shortest path over a solid between two points.
+  path(subject: Extract<MeasureSubject, { kind: 'shortestPath' }>): SurfacePath
+  // Phase 12 (F3) — a shaded region, by name or written inline.
+  region(expr: RegionExpr): Region
+}
+
+// M5 — names that must all be points in space: a measure between lines and
+// planes means nothing in the plane. An unknown name is refused as unknown.
+function spaceOnly(resolvers: Resolvers, names: readonly string[], what: string): Vec3[] {
+  const space = resolvers.space(names, what)
+  if (space) return space
+  for (const name of names) resolvers.point(name)
+  throw new Error(`"${what}" is measured in space, and ${names[0]} is a point in the plane`)
+}
+
+function inAngleUnit(radians: number, config: GraphConfig): number {
+  return config.angle === 'degrees' ? (radians * 180) / Math.PI : radians
 }
 
 function givenCells(entry: GivenEntry, resolvers: Resolvers, config: GraphConfig): { cells: NotationRun[][]; error: string | null } {
@@ -508,6 +645,38 @@ function measureOf(subject: MeasureSubject, resolvers: Resolvers, config: GraphC
       return arcMeasure(arcOf(subject, resolvers.point, resolvers.circle), config.angle)
     case 'solidDimension':
       return solidDimensionValue(resolvers.solid(subject.solid), subject.dimension, subject.solid)
+    // Phase 10 — true values in space, closed form (construct3d.ts).
+    case 'dihedral': {
+      const [from, a, b, to] = spaceOnly(resolvers, [subject.from, ...subject.edge, subject.to], subjectName(subject))
+      const names = { from: subject.from, a: subject.edge[0], b: subject.edge[1], to: subject.to }
+      return inAngleUnit(dihedral3(from, a, b, to, names).angle, config)
+    }
+    case 'lineAngle': {
+      const [a, b, c, d] = spaceOnly(resolvers, [...subject.first, ...subject.second], subjectName(subject))
+      return inAngleUnit(lineAngle3(a, b, c, d, `line ${subject.first.join('-')}`, `line ${subject.second.join('-')}`), config)
+    }
+    case 'linePlaneAngle': {
+      const [a, b] = spaceOnly(resolvers, subject.line, subjectName(subject))
+      return inAngleUnit(linePlaneAngle3(a, b, resolvers.plane(subject.plane), `line ${subject.line.join('-')}`), config)
+    }
+    case 'lineDistance': {
+      const [a, b, c, d] = spaceOnly(resolvers, [...subject.first, ...subject.second], subjectName(subject))
+      return lineLineDistance(a, b, c, d, `line ${subject.first.join('-')}`, `line ${subject.second.join('-')}`)
+    }
+    case 'pointPlaneDistance': {
+      const [p] = spaceOnly(resolvers, [subject.point], subjectName(subject))
+      return pointPlaneDistance(p, resolvers.plane(subject.plane))
+    }
+    case 'pointLineDistance': {
+      const [p, a, b] = spaceOnly(resolvers, [subject.point, ...subject.line], subjectName(subject))
+      return pointLineDistance(p, a, b, `line ${subject.line.join('-')}`)
+    }
+    case 'shortestPath':
+      return resolvers.path(subject).length
+    // Phase 12 (F3) — exact: the shoelace over chords plus each arc's
+    // circular segment.
+    case 'area':
+      return regionArea(resolvers.region(subject.region))
   }
 }
 
@@ -527,8 +696,11 @@ function hangsOffAxis(spec: SolidSpec, dimension: string): boolean {
 // asked for — the opposite of what an asserting label is for.
 function solidDimensionValue(body: SolidBody, dimension: string, name: string): number {
   // P6 — a solid on named points has no named dimensions; its points name
-  // every length worth measuring.
-  if (body.byPoints) {
+  // every length worth measuring. Except a sphere's radius (phase 9, R2):
+  // however a sphere was placed — by its centre, by tangency, inscribed or
+  // circumscribed — its radius is a named dimension, and no two of its
+  // points name it.
+  if (body.byPoints && body.spec.kind !== 'sphere') {
     throw new Error(
       `"${name}" is built on named points, so it has no "${dimension}" to label — measure between its points instead (e.g. "label: AB")`
     )
@@ -582,6 +754,11 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
   // The walk has already built every solid; this map is filled as the loop
   // passes each one, which keeps "cut: S" before "S = solid ..." an error.
   const solids = new Map<string, SolidBody>()
+  // N1 — the right edge of everything lifted so far (sections, nets, path
+  // unfoldings), so each lift sits clear of the one before, in statement
+  // order. Null until the first lift, which then sits exactly where phase 5
+  // put a section.
+  let liftRight: number | null = null
 
   // A circle has to be *named* to be talked about: "circle: (0,0), 3" draws
   // one and binds nothing, so an arc or a central angle needs the
@@ -611,7 +788,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       // S7 — the refusal is legible, not "unknown": the point exists, in
       // space, and this statement only draws in the plane.
       throw new Error(
-        `"${name}" is a point in space, and this draws only in the plane — angle marks, ticks, polygons and circles in space are not drawn yet`
+        `"${name}" is a point in space, and this draws only in the plane — polygons, triangles, circles and arcs in space are not drawn`
       )
     }
     if (!point) throw new Error(`Unknown point "${name}" — define it with a point statement (e.g. "${name} = (x, y)") or as a polygon vertex first`)
@@ -630,7 +807,144 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     return names.map((name) => scope.points.get(name) as Vec3)
   }
 
-  const resolvers: Resolvers = { point: resolve, circle: resolveCircle, solid: resolveSolid, space: resolveSpace }
+  // M5 — the walk resolved every measure's plane in source order (a named
+  // plane must come first); this reads the answer, or its refusal.
+  function resolveMeasurePlane(form: PlaneForm): Plane3 {
+    const resolved = scope.measurePlanes.get(form)
+    if (!resolved) throw new Error(`The plane ${form.source} was never resolved`)
+    if ('error' in resolved) throw new Error(resolved.error)
+    return resolved.plane
+  }
+
+  // N3 / N4 — a shortest path, found once per (P, Q, S) and shared by the
+  // statement that draws it and a label or row that measures it.
+  const paths = new Map<string, SurfacePath>()
+  function resolvePath(subject: { from: string; to: string; solid: string }): SurfacePath {
+    const key = `${subject.from}|${subject.to}|${subject.solid}`
+    const known = paths.get(key)
+    if (known) return known
+    const body = resolveSolid(subject.solid)
+    const what = `shortest ${subject.from} to ${subject.to} over ${subject.solid}`
+    const ends = resolveSpace([subject.from, subject.to], what)
+    if (!ends) {
+      resolve(subject.from)
+      resolve(subject.to)
+      throw new Error(`"${what}": ${subject.from} and ${subject.to} are points in the plane — a shortest path runs over a solid, between points in space on it`)
+    }
+    const found = shortestPath(body, subject.solid, netSolidWord(body), [ends[0], ends[1]], [subject.from, subject.to], scope.vertexNames.get(body) ?? [])
+    paths.set(key, found)
+    return found
+  }
+
+  // Phase 12 (F4) — shaded regions. A region named with "name:" on its
+  // "fill:" line, by that name, for "area R" and for later fills.
+  //
+  // "name:" is a GROUP name — it also serves "@hide", and several statements
+  // may share one — so several fills may carry the same name (fix round 1,
+  // M4). Each is recorded in source order with its region, or with why it
+  // was refused, so that measuring the name can say which of three things
+  // is wrong: no fill carries it, more than one does, or its one fill was
+  // refused (M3).
+  const namedFills = new Map<string, { source: string; region: Region | null; refused: string | null }[]>()
+
+  // A fill's points are points of the plane: a fill in space would be a face,
+  // which a solid figure draws as a section (F7).
+  function fillPoint(name: string): Vec2 {
+    if (isSpaceName(scope, name)) throw new Error(`"${name}" is a point in space — fills are drawn in the plane`)
+    return resolve(name)
+  }
+
+  // "square" and "rectangle" STATE a shape, so they are asserted, exactly as
+  // a right angle in space is (M2): a figure labelled a square that is not
+  // one states something false. "@scale: false" lifts it.
+  function assertShape(expr: Extract<RegionExpr, { kind: 'polygon' }>, points: readonly Vec2[]): void {
+    if (!config.toScale || (expr.shape !== 'square' && expr.shape !== 'rectangle')) return
+    const names = expr.points
+    const n = points.length
+    const list = (items: string[]) => `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+    const suffix = ' (set "@scale: false" to draw it anyway)'
+    const degrees = points.map((p, i) => angleMeasure(p, points[(i + n - 1) % n], points[(i + 1) % n], 'degrees'))
+    if (degrees.some((d) => Math.abs(d - 90) > GEOM_EPS * 90)) {
+      throw new Error(`${expr.source} is not a ${expr.shape} — its angles are ${list(degrees.map((d, i) => `${names[i]} = ${nearRightAngle(d)}°`))}${suffix}`)
+    }
+    if (expr.shape !== 'square') return
+    const sides = points.map((p, i) => segmentLength(p, points[(i + 1) % n]))
+    const longest = Math.max(...sides)
+    if (sides.every((side) => longest - side <= GEOM_EPS * longest)) return
+    const join = (a: string, b: string) => (a.length === 1 && b.length === 1 ? `${a}${b}` : `${a}-${b}`)
+    throw new Error(
+      `${expr.source} is not a square — its sides are ${list(sides.map((side, i) => `${join(names[i], names[(i + 1) % n])} = ${formatMeasure(side)}`))}${suffix}`
+    )
+  }
+
+  function unknownRegion(name: string): string {
+    const polygon = /^[A-Z]{3,}$/.test(name) ? `; for the polygon through ${[...name].join(', ')}, write "fill: ${[...name].join('-')}"` : ''
+    return `Unknown region "${name}" — name a shaded region with "name:" on its "fill:" line first (e.g. "fill: square ABCD minus circle O name: ${name}")${polygon}`
+  }
+
+  // A region expression, evaluated left to right as it was parsed. Each
+  // boolean refuses an empty result in the author's words.
+  function regionOf(expr: RegionExpr): Region {
+    switch (expr.kind) {
+      case 'named': {
+        const fills = namedFills.get(expr.name) ?? []
+        if (fills.length === 0) throw new Error(unknownRegion(expr.name))
+        if (fills.length > 1) {
+          throw new Error(
+            `"${expr.name}" names ${fills.length} fills (${fills.map((fill) => `"fill: ${fill.source}"`).join(', ')}), so which region it means is ambiguous — ` +
+              'give the one to measure a name of its own'
+          )
+        }
+        const [fill] = fills
+        if (!fill.region) throw new Error(`"${expr.name}" was named, but its fill was refused: ${fill.refused}`)
+        return fill.region
+      }
+      case 'disk':
+        return diskRegion(resolveCircle(expr.circle))
+      case 'sector':
+      case 'segment': {
+        const arc = arcOf(expr, fillPoint, resolveCircle)
+        return expr.kind === 'sector' ? sectorRegion(arc) : circularSegmentRegion(arc)
+      }
+      case 'polygon': {
+        const points = expr.points.map(fillPoint)
+        assertShape(expr, points)
+        return polygonRegion(points, expr.points)
+      }
+      case 'combine':
+        return combineRegions(expr.op, regionOf(expr.left), regionOf(expr.right), expr.source)
+    }
+  }
+
+  // A fill's region, named when its statement names it.
+  function fillRegion(statement: Extract<Statement, { kind: 'fill' }>): Region {
+    const name = statement.statementName
+    const record = (region: Region | null, refused: string | null) => {
+      if (!name) return
+      const fills = namedFills.get(name) ?? []
+      fills.push({ source: statement.region.source, region, refused })
+      namedFills.set(name, fills)
+    }
+    let region: Region
+    try {
+      region = regionOf(statement.region)
+    } catch (err) {
+      record(null, err instanceof Error ? err.message : String(err))
+      throw err
+    }
+    record(region, null)
+    return region
+  }
+
+  const resolvers: Resolvers = {
+    point: resolve,
+    circle: resolveCircle,
+    solid: resolveSolid,
+    space: resolveSpace,
+    plane: resolveMeasurePlane,
+    path: resolvePath,
+    region: regionOf,
+  }
 
   // S6 — every solid the figure draws occludes a construction segment, in
   // source order (the order does not change the answer, only the order the
@@ -688,6 +1002,174 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
     }
   }
 
+  // Phase 10 (M1, M4) — the arc of angle from-vertex-to on points in space,
+  // as an item: built in the angle's plane, projected, and hidden or not as
+  // a whole by its middle. `names` are the author's, for the refusals.
+  function spaceArcItem(
+    index: number,
+    [from, vertex, to]: Vec3[],
+    names: { from: string; vertex: string; to: string },
+    label: string | null,
+    color: string | null
+  ): Extract<FigureItem, { kind: 'spaceArc' }> {
+    const arc = angleArc(angleFrame(vertex, from, to, names))
+    const hidden = markHidden(arcMiddle(arc), occluders, camera)
+    return {
+      kind: 'spaceArc',
+      id: { statement: index, object: names.vertex },
+      edge: projectArc(arc, camera, names.vertex, hidden),
+      hidden,
+      text: label === null ? null : { at: camera.project(arcMiddle(arc)), push: viewDirection(arcBisector(arc)), label },
+      color,
+    }
+  }
+
+  // A direction in space as the label layout wants it: projected, unit, in
+  // VIEW space (y flipped, as awayFrom does). Null when the camera looks
+  // along it.
+  function viewDirection(direction: Vec3): Vec2 | null {
+    const p = projectVector(camera, direction)
+    const length = Math.hypot(p.x, p.y)
+    if (length <= GEOM_EPS) return null
+    return { x: p.x / length, y: -p.y / length }
+  }
+
+  // M7 / the dedupe below: an angle mark in space, keyed by its vertex and
+  // its unordered arms, so "label: angle GBA" beside "angle: A-B-G" does not
+  // draw the arc twice.
+  const spaceAngleMarks = new Set<string>()
+  const angleKey = (from: string, vertex: string, to: string) => `${vertex}:${[from, to].sort().join(',')}`
+
+  // M3 — a dihedral's mark as items: its two construction segments, each
+  // split exactly by the glass rule (segmentSpans, never M4's midpoint
+  // rule), and M1's arc between them, hidden or not whole by its middle.
+  // Returns the arc so a label can hang on it. `names` are the author's.
+  const spaceDihedralMarks = new Set<string>()
+  const dihedralKey = (from: string, [a, b]: [string, string], to: string) => `${[a, b].sort().join(',')}|${[from, to].sort().join(',')}`
+
+  function dihedralItems(
+    index: number,
+    [from, a, b, to]: Vec3[],
+    names: { from: string; edge: [string, string]; to: string },
+    color: string | null
+  ): { items: FigureItem[]; arc: SpaceArc } {
+    const title = `dihedral ${names.from}-${names.edge.join('-')}-${names.to}`
+    const found = dihedral3(from, a, b, to, { from: names.from, a: names.edge[0], b: names.edge[1], to: names.to })
+    const mark = dihedralMark(found, distance3(a, b), title)
+    const object = `${names.from}-${names.edge.join('')}-${names.to}`
+    const hidden = markHidden(arcMiddle(mark.arc), occluders, camera)
+    return {
+      arc: mark.arc,
+      items: [
+        ...spaceSegmentItems(index, mark.mid, mark.ends[0], 'auto', `${object}:${names.from}`, color),
+        ...spaceSegmentItems(index, mark.mid, mark.ends[1], 'auto', `${object}:${names.to}`, color),
+        { kind: 'spaceArc', id: { statement: index, object }, edge: projectArc(mark.arc, camera, object, hidden), hidden, text: null, color },
+      ],
+    }
+  }
+
+  // N1 — a flat net (or a path's unfolding) lifted beside its solid, stacked
+  // after every earlier lift, with its letters as display labels. Returns the
+  // move that placed it, for anything drawn on it.
+  function liftNet(index: number, object: string, body: SolidBody, net: Net, names: readonly (string | undefined)[], color: string | null): (p: Vec2) => Vec2 {
+    const flat = net.lines.flatMap((line) => netEdges(line.piece, line.object))
+    const solidBounds = boundsOf(solidOutline(body, camera).flatMap(edgeExtremes))
+    const shapeBounds = boundsOf(flat.flatMap(edgeExtremes))
+    // A net's letters face the drawing it is lifted beside, so it reserves
+    // label clearance in the gap (fix round 1); a section keeps phase 5's.
+    const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight, NET_LABEL_CLEARANCE) : { x: 0, y: 0 }
+    if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
+    const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
+    const lines = net.lines.flatMap((line) => netEdges(movePiece(line.piece, move), line.object).map((edge) => ({ edge, fold: line.fold })))
+    items.push({ kind: 'net', id: { statement: index, object }, lines, faces: net.faces.map((f) => f.corners.map(move)), color })
+    net.letters.forEach((letter, copy) => {
+      const label = names[letter.vertex]
+      if (!label) return
+      const at = move(letter.at)
+      items.push({ kind: 'netLabel', id: { statement: index, object: label }, copy, at, label, prefer: awayFrom(at, move(letter.toward)), color })
+    })
+    return move
+  }
+
+  // N3 / N4 — a shortest path, drawn: on a polyhedron as its per-face
+  // segments on the solid, split by the glass rule, and — only when some
+  // statement asks for "unfold" — straight across the lifted strip; on a
+  // round solid, always and only on the lifted unrolling (the net's, cut
+  // behind), in one or two straight pieces. Its ends are dotted and
+  // lettered on the lift (unless a vertex copy already letters the spot).
+  // Each part is drawn once per (P, Q, S): a later "unfold" of a path
+  // already drawn lifts its strip then (fix round 1), and a label reuses
+  // what was drawn. Returns where the path's middle is, for a label.
+  type PathAnchor = { at: Vec2; along: [Vec2, Vec2]; onSolid: boolean }
+  const pathsOnSolid = new Map<string, PathAnchor>()
+  const pathsLifted = new Map<string, PathAnchor>()
+  function drawPath(index: number, subject: { from: string; to: string; solid: string }, unfold: boolean, color: string | null): PathAnchor {
+    const key = `${subject.from}|${subject.to}|${subject.solid}`
+    const path = resolvePath(subject)
+    const body = resolveSolid(subject.solid)
+    const object = `path-${subject.from}${subject.to}`
+    if (!body.polyhedron) {
+      if (!pathsLifted.has(key)) pathsLifted.set(key, liftPath(index, subject, path, body, object, color))
+      return pathsLifted.get(key)!
+    }
+    let anchor = pathsOnSolid.get(key)
+    if (!anchor) {
+      for (let i = 0; i + 1 < path.onSolid.length; i++) items.push(...spaceSegmentItems(index, path.onSolid[i], path.onSolid[i + 1], 'auto', object, color))
+      anchor = { ...middleOf(path.onSolid), onSolid: true }
+      pathsOnSolid.set(key, anchor)
+    }
+    if (unfold && !pathsLifted.has(key)) pathsLifted.set(key, liftPath(index, subject, path, body, object, color))
+    return anchor
+  }
+
+  // The flat picture of a path, lifted: the strip or unrolling in the
+  // figure's ink, the path's pieces in its colour, its ends dotted.
+  function liftPath(index: number, subject: { from: string; to: string }, path: SurfacePath, body: SolidBody, object: string, color: string | null): PathAnchor {
+    const names = scope.vertexNames.get(body) ?? []
+    const move = liftNet(index, `unfold-${subject.from}${subject.to}`, body, path.flat.net, names, null)
+    const pieces = path.flat.pieces.map(([a, b]): [Vec2, Vec2] => [move(a), move(b)])
+    for (const [a, b] of pieces) items.push({ kind: 'line', id: { statement: index, object }, a, b, extent: 'segment', auxiliary: false, color })
+    for (const [name, at] of [
+      [subject.from, move(path.flat.from)],
+      [subject.to, move(path.flat.to)],
+    ] as const) {
+      const lettered = path.flat.net.letters.some((letter) => names[letter.vertex] === name && Math.hypot(move(letter.at).x - at.x, move(letter.at).y - at.y) <= GEOM_EPS * Math.max(1, Math.hypot(at.x, at.y)))
+      items.push({ kind: 'point', id: { statement: index, object: name }, at, label: lettered ? null : name, prefer: null, color })
+    }
+    // Halfway along the drawn pieces.
+    const lengths = pieces.map(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y))
+    let half = lengths.reduce((sum, l) => sum + l, 0) / 2
+    for (let i = 0; i < pieces.length; i++) {
+      if (half <= lengths[i] || i === pieces.length - 1) {
+        const [a, b] = pieces[i]
+        const u = lengths[i] === 0 ? 0 : Math.min(1, half / lengths[i])
+        return { at: { x: a.x + u * (b.x - a.x), y: a.y + u * (b.y - a.y) }, along: [a, b], onSolid: false }
+      }
+      half -= lengths[i]
+    }
+    const at = move(path.flat.from)
+    return { at, along: [at, at], onSolid: false }
+  }
+
+  // The point halfway along a path on the solid, projected, and the drawn
+  // piece it lies on (for the side a label goes).
+  function middleOf(points: readonly Vec3[]): { at: Vec2; along: [Vec2, Vec2] } {
+    const lengths = points.slice(1).map((p, i) => distance3(points[i], p))
+    let half = lengths.reduce((sum, l) => sum + l, 0) / 2
+    for (let i = 0; i < lengths.length; i++) {
+      if (half <= lengths[i] || i === lengths.length - 1) {
+        const u = lengths[i] === 0 ? 0 : Math.min(1, half / lengths[i])
+        const [a, b] = [points[i], points[i + 1]]
+        return {
+          at: camera.project({ x: a.x + u * (b.x - a.x), y: a.y + u * (b.y - a.y), z: a.z + u * (b.z - a.z) }),
+          along: [camera.project(a), camera.project(b)],
+        }
+      }
+      half -= lengths[i]
+    }
+    return { at: camera.project(points[0]), along: [camera.project(points[0]), camera.project(points[0])] }
+  }
+
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
     return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
@@ -695,7 +1177,20 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   for (let index = 0; index < statements.length; index++) {
     const statement = statements[index]
-    if (statement.statementName && config.hidden.has(statement.statementName)) continue
+    if (statement.statementName && config.hidden.has(statement.statementName)) {
+      // A hidden fill still names its region, as a hidden construction keeps
+      // its binding: "@hide: R" with "given: area R" shades nothing and
+      // still measures R.
+      if (statement.kind === 'fill') {
+        try {
+          fillRegion(statement)
+        } catch {
+          // A hidden statement reports nothing itself; its refusal is
+          // recorded under its name, and "area R" reports it (fix round 1, M3).
+        }
+      }
+      continue
+    }
     const id = { statement: index, object: null as string | null }
     try {
       switch (statement.kind) {
@@ -858,11 +1353,17 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
                     { x: shape.center.x + shape.radius, y: shape.center.y + shape.radius },
                   ]
           )
-          const offset = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds) : { x: 0, y: 0 }
+          const offset: Vec2 = solidBounds && shapeBounds ? liftOffset(solidBounds, shapeBounds, liftRight) : { x: 0, y: 0 }
           const move = (p: Vec2): Vec2 => ({ x: p.x + offset.x, y: p.y + offset.y })
+          // The running edge moves only once the section is drawn (fix round
+          // 1): one refused before it is drawn leaves no gap behind it.
+          const lifted = () => {
+            if (shapeBounds) liftRight = shapeBounds.maxX + offset.x
+          }
 
           if (shape.kind === 'region') {
             items.push({ kind: 'region', id: { statement: index, object: statement.solid }, edges: liftedRegion(shape.boundary, move), color: statement.color })
+            lifted()
             if (statement.vertices.length === 0) break
             // Q5 — a region's CORNERS, where an arc meets a chord, in boundary
             // order from the first chord's start. A whole ellipse has none.
@@ -885,11 +1386,13 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
               throw new Error(`The section of "${statement.solid}" by ${describeAuthorPlane(plane)} is a circle, which has no vertices to name`)
             }
             items.push({ kind: 'circle', id: { statement: index, object: statement.solid }, center: move(shape.center), radius: shape.radius, color: statement.color })
+            lifted()
             break
           }
 
           const vertices = shape.vertices.map(move)
           items.push({ kind: 'polygon', id: { statement: index, object: statement.solid }, vertices, color: statement.color })
+          lifted()
           if (statement.vertices.length > 0) {
             if (statement.vertices.length !== vertices.length) {
               throw new Error(
@@ -901,6 +1404,18 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           }
           break
         }
+        case 'net': {
+          // N1 — the solid unfolded by its template, lifted beside it like a
+          // section, at true size. Refusals (a sphere, a hull, an overlap)
+          // come back in the author's names.
+          const body = resolveSolid(statement.solid)
+          const names = scope.vertexNames.get(body) ?? []
+          liftNet(index, statement.solid, body, netOf(body, statement.solid, names), names, statement.color)
+          break
+        }
+        case 'shortestPath':
+          drawPath(index, statement, statement.unfold, statement.color)
+          break
         case 'construction': {
           if (scope.ownedStatements.has(index)) {
             for (const p of scope.byStatement.get(index)?.points ?? []) items.push(spacePointItem(index, p.name, p.at, statement.color))
@@ -911,7 +1426,15 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           }
           break
         }
-        case 'angle':
+        case 'angle': {
+          // Phase 10 (M1) — on points in space, the arc in the angle's plane.
+          const names = { from: statement.from, vertex: statement.vertex, to: statement.to }
+          const space = resolveSpace([statement.from, statement.vertex, statement.to], `angle: ${statement.from}-${statement.vertex}-${statement.to}`)
+          if (space) {
+            items.push(spaceArcItem(index, space, names, statement.label, statement.color))
+            spaceAngleMarks.add(angleKey(statement.from, statement.vertex, statement.to))
+            break
+          }
           items.push({
             kind: 'angleMark',
             id: { statement: index, object: statement.vertex },
@@ -922,6 +1445,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             color: statement.color,
           })
           break
+        }
         case 'circleShape': {
           const arc = arcOf(statement, resolve, resolveCircle)
           items.push({
@@ -968,10 +1492,42 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
           })
           break
         }
-        case 'tick':
+        case 'tick': {
+          // Phase 10 (M1, M4) — on a segment in space, drawn in the picture
+          // plane at the projected segment, hidden or not by its midpoint.
+          const space = resolveSpace([statement.from, statement.to], `tick: ${statement.from}-${statement.to}`)
+          if (space) {
+            const hidden = markHidden(midpoint3(space[0], space[1]), occluders, camera)
+            items.push({ kind: 'tickMark', id, from: camera.project(space[0]), to: camera.project(space[1]), count: statement.count, hidden, color: statement.color })
+            break
+          }
           items.push({ kind: 'tickMark', id, from: resolve(statement.from), to: resolve(statement.to), count: statement.count, color: statement.color })
           break
-        case 'rightAngle':
+        }
+        case 'rightAngle': {
+          // Phase 10 (M1, M2) — on points in space, a square in the angle's
+          // plane, and only on an angle that IS right: a projected square
+          // cannot be checked by eye, so it would state something false.
+          // "@scale: false" lifts the check, as it lifts every assertion.
+          const space = resolveSpace([statement.from, statement.vertex, statement.to], `right-angle: ${statement.from}-${statement.vertex}-${statement.to}`)
+          if (space) {
+            const frame = angleFrame(space[1], space[0], space[2], { from: statement.from, vertex: statement.vertex, to: statement.to })
+            const degrees = (frame.angle * 180) / Math.PI
+            if (config.toScale && Math.abs(degrees - 90) > GEOM_EPS * 90) {
+              throw new Error(`${statement.from}-${statement.vertex}-${statement.to} is not a right angle — its true angle is ${nearRightAngle(degrees)}°`)
+            }
+            const [vertex, onFrom, corner, onTo] = rightAngleCorners(frame)
+            // M4 — judged at the square's centre.
+            const hidden = markHidden(midpoint3(vertex, corner), occluders, camera)
+            items.push({
+              kind: 'spaceRightAngle',
+              id: { statement: index, object: statement.vertex },
+              points: [camera.project(onFrom), camera.project(corner), camera.project(onTo)],
+              hidden,
+              color: statement.color,
+            })
+            break
+          }
           items.push({
             kind: 'rightAngleMark',
             id: { statement: index, object: statement.vertex },
@@ -980,6 +1536,23 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             to: resolve(statement.to),
             color: statement.color,
           })
+          break
+        }
+        case 'dihedral': {
+          // M3 — only among points in space.
+          const names = [statement.from, ...statement.edge, statement.to]
+          const what = `dihedral: ${names.join('-')}`
+          const space = resolveSpace(names, what)
+          if (!space) {
+            for (const name of names) resolve(name)
+            throw new Error(`"${what}" is a dihedral angle, which exists only among points in space — ${statement.from} is a point in the plane`)
+          }
+          items.push(...dihedralItems(index, space, statement, statement.color).items)
+          spaceDihedralMarks.add(dihedralKey(statement.from, statement.edge, statement.to))
+          break
+        }
+        case 'fill':
+          items.push({ kind: 'fill', id: { statement: index, object: statement.statementName }, region: fillRegion(statement), color: statement.color })
           break
         case 'measureLabel':
           measureStatements.push({ statement, index })
@@ -1025,7 +1598,9 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
       // dimension on a projected solid sits beside an edge among eleven
       // others, and a displaced one names nothing without a line back.
       let leader = false
-      const inside = subject.kind === 'angle'
+      // F6 — an area's label sits inside its region, centred on its anchor.
+      const inside = subject.kind === 'angle' || subject.kind === 'dihedral' || subject.kind === 'area'
+      const centred = subject.kind === 'area'
       const space =
         subject.kind === 'length'
           ? resolveSpace([subject.from, subject.to], subjectName(subject))
@@ -1033,15 +1608,20 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             ? resolveSpace([subject.from, subject.vertex, subject.to], subjectName(subject))
             : null
       if (space && subject.kind === 'angle') {
-        // An angle label with no drawn arc floats. Angle marks in space are
-        // build step 10; until then the true angle lives in the givens table.
-        const names = `${subject.from}${subject.vertex}${subject.to}`
-        throw new Error(
-          `"label: angle ${names}" names points in space, where there is no angle mark to hang a label on yet — ` +
-            `write "given: angle ${names}" to put its true measure in the givens table`
-        )
-      }
-      if (space) {
+        // M7 — the label draws M1's arc (once: not again beside an "angle:"
+        // statement for the same angle) and hangs on the arc's middle,
+        // pushed outward along the bisector in space, then projected.
+        const arc = spaceArcItem(index, space, { from: subject.from, vertex: subject.vertex, to: subject.to }, null, statement.color)
+        const key = angleKey(subject.from, subject.vertex, subject.to)
+        if (!spaceAngleMarks.has(key)) {
+          items.push(arc)
+          spaceAngleMarks.add(key)
+        }
+        const frame = angleArc(angleFrame(space[1], space[0], space[2], { from: subject.from, vertex: subject.vertex, to: subject.to }))
+        at = camera.project(arcMiddle(frame))
+        push = viewDirection(arcBisector(frame))
+        computed = inAngleUnit(angle3(space[1], space[0], space[2], subjectName(subject)), config)
+      } else if (space) {
         // S4 — a segment between points in space prints its TRUE length, and
         // its label is placed by the solid-dimension path (leader-capable),
         // fed the projected endpoints: it sits among a solid's edges exactly
@@ -1105,10 +1685,44 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
             })
           }
         }
-      } else {
+      } else if (subject.kind === 'triangle') {
         const vertices = subject.names.map((name) => resolve(name))
         at = centroidOf(vertices)
         push = null
+      } else if (subject.kind === 'shortestPath') {
+        // N5 — the length, on the path: drawn here when no "shortest:" drew
+        // it (as a label draws its angle's arc, M7), at the path's middle.
+        const drawn = drawPath(index, subject, false, statement.color)
+        at = drawn.at
+        push = outwardPerpendicular(drawn.along[0], drawn.along[1], centre)
+        computed = resolvePath(subject).length
+        // Among a solid's edges a displaced label needs its line back, as a
+        // dimension does; on a lifted unrolling the path stands alone.
+        leader = drawn.onSolid
+      } else if (subject.kind === 'area') {
+        // F6 — at the region's interior point: on the largest component, the
+        // midpoint of the longest inside chord of seven horizontal lines.
+        const region = regionOf(subject.region)
+        at = interiorLabelPoint(region)
+        push = null
+        computed = regionArea(region)
+      } else if (subject.kind === 'dihedral') {
+        // M3 — the value, on the mark: drawn here (once — not again beside a
+        // "dihedral:" for the same angle), the label on the arc's middle,
+        // pushed along its bisector in space, then projected (M7's rule).
+        const space = spaceOnly(resolvers, [subject.from, ...subject.edge, subject.to], subjectName(subject))
+        const mark = dihedralItems(index, space, subject, statement.color)
+        const key = dihedralKey(subject.from, subject.edge, subject.to)
+        if (!spaceDihedralMarks.has(key)) {
+          items.push(...mark.items)
+          spaceDihedralMarks.add(key)
+        }
+        at = camera.project(arcMiddle(mark.arc))
+        push = viewDirection(arcBisector(mark.arc))
+        computed = measureOf(subject, resolvers, config)
+      } else {
+        // Refused at parse time (M5); the table is where these belong.
+        throw new Error(`"label: ${subjectName(subject)}" has no single point to hang a label on — write "given: ${subjectName(subject)}"`)
       }
       const { runs, error } = measureRuns(subject, content, computed, config)
       if (error) errors.push({ line: 0, message: error })
@@ -1119,6 +1733,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
         push,
         inside,
         leader,
+        ...(centred ? { centred } : {}),
         runs,
         color: statement.color,
       })
@@ -1170,6 +1785,19 @@ function liftedRegion(boundary: readonly TrueShapePiece[], move: (p: Vec2) => Ve
   })
 }
 
+// N1 — a net's flat piece as drawn edges: a segment as it is, an arc of a
+// circle through the one ellipse closed form (a circle is the ellipse with
+// equal conjugate semi-diameters), a whole turn as two halves.
+function netEdges(piece: NetPiece, object: string): ProjectedEdge[] {
+  if (piece.kind === 'segment') return [{ kind: 'segment', a: piece.a, b: piece.b, hidden: false, vertices: [0, 0], object }]
+  const circle = ellipseFromConjugates(piece.center, { x: piece.radius, y: 0 }, { x: 0, y: piece.radius })
+  return splitTurn(piece.from, piece.to).map(([from, to]) => arcEdge(circle, from, to, object))
+}
+
+function movePiece(piece: NetPiece, move: (p: Vec2) => Vec2): NetPiece {
+  return piece.kind === 'segment' ? { kind: 'segment', a: move(piece.a), b: move(piece.b) } : { ...piece, center: move(piece.center) }
+}
+
 // Q6 — a cut's outline through the camera, each piece keeping whether the
 // solid hides it.
 //
@@ -1213,6 +1841,76 @@ function regionInterior(edges: readonly ProjectedEdge[]): Vec2[] {
     .map((p) => ({ p, angle: Math.atan2(p.y - centre.y, p.x - centre.x) }))
     .sort((a, b) => a.angle - b.angle)
     .map((entry) => entry.p)
+}
+
+// Phase 12 (F5) — a shaded region as one path: per loop, "M" at its start,
+// "L" per side (the last side back to the start is the loop's "Z"), and one
+// "A" per arc — two for a whole turn, which one "A" cannot draw. Arcs are
+// never polylines. The caller sets the even-odd rule that makes holes holes.
+function fillPath(region: Region, projection: Projection): FillRegion {
+  const to = (p: Vec2) => projection.toView(p)
+  const loops = region.loops.map((loop) => {
+    const pieces: Piece[] = []
+    loop.forEach((piece, i) => {
+      if (piece.kind === 'segment') {
+        if (i < loop.length - 1) pieces.push({ kind: 'line', from: to(piece.a), to: to(piece.b) })
+        return
+      }
+      const radius = piece.radius * projection.scale
+      // View space flips y, so a world angle t is the view angle -t, and a
+      // counter-clockwise arc sweeps the negative way on the page.
+      for (const [from, end] of splitTurn(piece.from, piece.from + sweepOf(piece))) {
+        pieces.push({ kind: 'ellipticalArc', center: to(piece.center), rx: radius, ry: radius, rotation: 0, start: -from, end: -end })
+      }
+    })
+    return { start: to(loop[0].a), pieces }
+  })
+  return { kind: 'loops', loops }
+}
+
+// A drawn edge as a pen stroke — the two members of the drawn-edge union, as
+// project3d.ts's drawEdge writes them: an arc's radii scale with the figure
+// and its rotation and parameters negate, because view space flips y; and an
+// arc's `fill: none` comes first, ahead of the caller's style, because a
+// `<path>` fills by default and a `<line>` has nothing to fill.
+function strokeEdge(pen: FigurePen, edge: ProjectedEdge, projection: Projection, style: SvgAttrs, id: string, layer: FigureLayer): void {
+  if (edge.kind === 'segment') {
+    pen.stroke({ kind: 'line', a: projection.toView(edge.a), b: projection.toView(edge.b) }, style, id, layer)
+    return
+  }
+  pen.stroke(edgeArc(edge, projection), { fill: 'none', ...style }, id, layer)
+}
+
+function edgeArc(edge: Extract<ProjectedEdge, { kind: 'arc' }>, projection: Projection): Extract<StrokePath, { kind: 'ellipticalArc' }> {
+  return {
+    kind: 'ellipticalArc',
+    center: projection.toView(edge.center),
+    rx: edge.rx * projection.scale,
+    ry: edge.ry * projection.scale,
+    rotation: -edge.rotation,
+    start: -edge.startAngle,
+    end: -edge.endAngle,
+  }
+}
+
+// A closed chain of drawn edges — a section's region (phase 8) — as ONE
+// filled path, through the same conversions strokeEdge makes (project3d.ts's
+// drawClosedEdges, as a pen region).
+function closedEdges(edges: readonly ProjectedEdge[], projection: Projection): FillRegion {
+  let start: Vec2 | null = null
+  const pieces: Piece[] = []
+  for (const edge of edges) {
+    if (edge.kind === 'segment') {
+      const from = projection.toView(edge.a)
+      start ??= from
+      pieces.push({ kind: 'line', from, to: projection.toView(edge.b) })
+      continue
+    }
+    const arc = edgeArc(edge, projection)
+    start ??= ellipsePoint(arc.center, arc.rx, arc.ry, arc.rotation, arc.start)
+    pieces.push(arc)
+  }
+  return { kind: 'loops', loops: [{ start: start ?? { x: 0, y: 0 }, pieces }] }
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,8 +1979,25 @@ function anchorPoints(items: readonly FigureItem[]): Vec2[] {
       case 'rightAngleMark':
         points.push(item.vertex)
         break
+      case 'spaceArc':
+        points.push(...edgeExtremes(item.edge))
+        break
+      case 'spaceRightAngle':
+        points.push(...item.points)
+        break
       case 'tickMark':
         points.push(item.from, item.to)
+        break
+      case 'net':
+        for (const line of item.lines) points.push(...edgeExtremes(line.edge))
+        break
+      case 'netLabel':
+        points.push(item.at)
+        break
+      case 'fill':
+        // F5 — the exact extremes of its pieces: ends, and the cardinal
+        // points its arcs pass through.
+        points.push(...regionExtremes(item.region))
         break
       case 'given':
         // The box is placed against the finished drawing, so it must not be
@@ -1334,11 +2049,34 @@ function nearestOnRect(rect: Rect, p: Vec2): Vec2 {
   }
 }
 
+// M2 — the true angle of a refused right-angle mark, written to as many
+// places as it takes to differ from 90: an angle 6e-6 degrees short of a
+// right angle would otherwise print "90" in a message saying it is not 90
+// (fix round 1). Three places when those already show the difference.
+function nearRightAngle(degrees: number): string {
+  for (let places = 3; places <= 15; places++) {
+    const text = degrees.toFixed(places).replace(/\.?0+$/, '')
+    if (Number(text) !== 90) return text
+  }
+  return String(degrees)
+}
+
+// M4 — a hidden mark is dashed and faded like a hidden edge.
+function hiddenMark(): SvgAttrs {
+  return { 'stroke-dasharray': AUXILIARY_DASH, opacity: AUXILIARY_OPACITY }
+}
+
 function identity(id: Identity): SvgAttrs {
   // E4 — every element says which statement and which named object produced
   // it, so the tutor layer can address it directly rather than inventing a
   // second lookup mechanism.
   return { 'data-statement': id.statement, 'data-object': id.object }
+}
+
+// The key a pen call carries: which statement, which object. A styled pen
+// seeds its randomness from it, so two strokes never share a wobble.
+function key(id: Identity): string {
+  return `${id.statement}/${id.object}`
 }
 
 function strokeColor(color: string | null, fallback: number, palette: Palette): string {
@@ -1360,7 +2098,62 @@ export function figureLabelObstacles(statements: Statement[], config: GraphConfi
   return labelObstacles(items, projection, geometryBounds(items, projection))
 }
 
-export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette): FigureResult {
+// `baseStyle` is the host's look — the viewer's theme, or a document's pinned
+// style — which the figure's own "@style…" directives layer over (see
+// style/resolve.ts). A style that resolves to clean draws through the clean
+// pen, always: that is what keeps every figure without a style byte for byte
+// what it was. A bad base style is reported, not thrown, and the figure draws
+// with what was valid in it.
+export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer): FigureResult {
+  const base = baseStyle ? checkLayer(baseStyle) : { layer: {}, errors: [] }
+  const style = resolveStyle([base.layer, config.style])
+  const clean = isClean(style)
+  const drawn = clean ? palette : paperPalette(style, palette)
+  const pen = choosePen(style, drawn)
+  const { viewBox, errors } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)
+  pen.paper(viewBox)
+  return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
+}
+
+// The palette a styled figure's colours resolve against: the one that suits
+// its PAPER. A preset lays its own paper — pencil's is off-white in a dark app
+// as in a light one — so ink, the theme's roles and an author's harmonised
+// "color:" are resolved for a light page on a light paper (a dark-theme
+// "black" would otherwise be drawn mid-grey on off-white), and for a dark page
+// on a dark one. A paper that follows the theme ("none", or a "theme" tint)
+// follows the host's palette, and so does any paper that already suits it —
+// which keeps a light-theme figure exactly as it was.
+function paperPalette(style: Style, palette: Palette): Palette {
+  if (style.paper.type === 'none' || style.paper.tint === 'theme') return palette
+  const light = (hex: string) => toOklch(hex).l >= 0.6
+  const paperIsLight = light(style.paper.tint)
+  if (paperIsLight === light(cssColor(palette.background))) return palette
+  return paperIsLight ? LIGHT_PALETTE : DARK_PALETTE
+}
+
+// Clean resolves to the clean pen, with no exceptions; every other look is
+// drawn by the styled pen.
+function choosePen(style: Style, palette: Palette): FigurePen {
+  return isClean(style) ? cleanPen(palette) : styledPen(style, palette)
+}
+
+// The whole figure, drawn through `pen`: every element it draws is one pen
+// call carrying its identity and layer, in painting order. Returns the
+// viewBox the pen's document should use, and the errors. Exported so a test
+// can watch the calls a figure makes.
+//
+// `letteringSize` scales every label the figure letters — points, measures,
+// angle captions — and they are LAID OUT at that size, so a style's larger
+// hand lettering keeps its distance from the lines. The givens table keeps
+// its size (a style changes only its face). Clean is 1, which multiplies to
+// exactly the old numbers.
+export function drawFigure(
+  statements: Statement[],
+  config: GraphConfig,
+  palette: Palette,
+  pen: FigurePen,
+  letteringSize = 1
+): { viewBox: Rect; errors: SceneError[] } {
   const { items, errors } = buildItems(statements, config)
   const theme = figureTheme(palette)
 
@@ -1371,7 +2164,8 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   // this, then the viewBox is grown to contain both (E3).
   const geometryRect = geometryBounds(items, projection)
   const obstacles = labelObstacles(items, projection, geometryRect)
-  const { anchors, sources } = labelAnchors(items, projection)
+  const fontSize = LABEL_FONT_SIZE * letteringSize
+  const { anchors, sources } = labelAnchors(items, projection, fontSize)
   const placed = layoutLabels(anchors, obstacles)
 
   const contentRect = unionRects([geometryRect, ...placed.map((label) => label.rect)])
@@ -1396,8 +2190,7 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   // Pass 2 — emit. Infinite lines and rays are clipped here, against the
   // *final* viewBox, because how much of a locus to draw is a fact about the
   // view and not about the figure.
-  const layers = emptyFigureLayers()
-  for (const item of items) emit(item, projection, viewBox, theme, palette, layers)
+  for (const item of items) emit(item, projection, viewBox, theme, palette, pen, fontSize)
   for (const label of placed) {
     // The anchor id is "<name>#<statement index>" (see labelAnchors), and the
     // source map carries E4's identity through the layout and back out.
@@ -1411,76 +2204,81 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
     // other edges naming none of them. The layout decides, because only it
     // can tell a label that chose its place from one that was moved.
     if (source?.leader && label.displaced) {
-      layers.marks.push(
-        svgLine(nearestOnRect(label.rect, label.anchor), label.anchor, {
+      const leader = { statement: id.statement, object: `leader-${id.object ?? ''}` }
+      pen.stroke(
+        { kind: 'line', a: nearestOnRect(label.rect, label.anchor), b: label.anchor },
+        {
           stroke: strokeColor(source.color, palette.axis, palette),
           'stroke-width': STROKE_MARK,
           'stroke-linecap': 'round',
-          ...identity({ statement: id.statement, object: `leader-${id.object ?? ''}` }),
-        })
+          ...identity(leader),
+        },
+        key(leader),
+        'marks'
       )
     }
     if (source?.notation) {
       const layout = layoutNotation(source.notation, label.fontSize)
       const origin = notationOrigin(layout, label.at)
-      layers.labels.push(
-        ...notationElements(layout, origin, {
+      pen.notation(
+        layout,
+        origin,
+        {
           fill: strokeColor(source.color, palette.axis, palette),
           fontFamily: FONT_FAMILY,
           identity: identity(id),
-        })
+        },
+        key(id),
+        'labels'
       )
       continue
     }
-    layers.labels.push(
-      svgText(label.at, label.text, {
+    pen.text(
+      label.at,
+      label.text,
+      {
         'font-size': label.fontSize,
         'font-family': FONT_FAMILY,
         fill: theme.label,
         'text-anchor': 'middle',
         'dominant-baseline': 'central',
         ...identity(id),
-      })
+      },
+      key(id),
+      'labels'
     )
   }
 
   if (table) {
-    layers.labels.push(
-      `<rect${[
-        ` x="${fmt(table.box.x)}"`,
-        ` y="${fmt(table.box.y)}"`,
-        ` width="${fmt(table.box.width)}"`,
-        ` height="${fmt(table.box.height)}"`,
-        ` fill="${theme.background}"`,
-        ` stroke="${theme.ink}"`,
-        ` stroke-width="${fmt(STROKE_MARK)}"`,
-        ' data-object="givens"',
-      ].join('')}/>`
-    )
+    pen.panel(table.box, { fill: theme.background, stroke: theme.ink, 'stroke-width': STROKE_MARK, 'data-object': 'givens' }, 'givens', 'labels')
     // The title and the section headings carry no data-object: they belong to
     // the table rather than to any statement or any drawn object, and E4's
     // identity is for things the tutor layer can point at.
     if (title && table.title) {
-      layers.labels.push(...notationElements(title, table.title, { fill: theme.label, fontFamily: FONT_FAMILY }))
+      pen.notation(title, table.title, { fill: theme.label, fontFamily: FONT_FAMILY }, 'givens/title', 'labels')
     }
     for (const [s, section] of sections.entries()) {
       const placed = table.sections[s]
-      layers.labels.push(...notationElements(section.heading, placed.heading, { fill: theme.label, fontFamily: FONT_FAMILY }))
+      pen.notation(section.heading, placed.heading, { fill: theme.label, fontFamily: FONT_FAMILY }, `givens/section-${s}`, 'labels')
       for (const [r, row] of section.rows.entries()) {
         for (const [c, cell] of row.cells.entries()) {
-          layers.labels.push(
-            ...notationElements(cell, placed.rows[r][c], {
+          pen.notation(
+            cell,
+            placed.rows[r][c],
+            {
               fill: strokeColor(row.color, palette.axis, palette),
               fontFamily: FONT_FAMILY,
               identity: identity(row.id),
-            })
+            },
+            `${key(row.id)}/cell-${c}`,
+            'labels'
           )
         }
       }
     }
   }
 
-  return { svg: figureDocument(layers, viewBox, theme), errors }
+  return { viewBox, errors }
 }
 
 // The table's sections, in a fixed order and with their rows laid out.
@@ -1561,6 +2359,13 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // across its own angle arc is unreadable. Pushing sets where the label
       // starts looking; this is what stops it landing on the ink.
       obstacles.circles.push({ center: projection.toView(item.vertex), radius: angleArcRadius(item, projection) })
+    } else if (item.kind === 'spaceArc') {
+      // Bounded by the chords between its exact extremes, as a solid's arc.
+      const points = edgeExtremes(item.edge).map((point) => projection.toView(point))
+      for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
+    } else if (item.kind === 'spaceRightAngle') {
+      const [a, b, c] = item.points.map((point) => projection.toView(point))
+      obstacles.segments.push([a, b], [b, c])
     } else if (item.kind === 'solid' || item.kind === 'region' || (item.kind === 'sectionFace' && item.outline.kind === 'region')) {
       // An arc is an obstacle too, approximated for the label layout by the
       // chords between its exact extremes — a bound on where the ink is, not
@@ -1573,6 +2378,15 @@ function labelObstacles(items: readonly FigureItem[], projection: Projection, ge
       // A LIFTED region keeps labels out of its interior, as a lifted
       // polygon does (fix round 1): the convex polygon of its exact extremes.
       if (item.kind === 'region') obstacles.polygons.push(regionInterior(edges).map((point) => projection.toView(point)))
+    } else if (item.kind === 'net') {
+      // Its lines are strokes a label keeps off. Its faces are NOT shapes a
+      // label is kept out of, unlike a lifted polygon's: a path's ends sit
+      // inside faces, and their letters belong beside them. A vertex letter
+      // is pointed outward by its own preference instead.
+      for (const { edge } of item.lines) {
+        const points = edgeExtremes(edge).map((point) => projection.toView(point))
+        for (let i = 0; i + 1 < points.length; i++) obstacles.segments.push([points[i], points[i + 1]])
+      }
     } else if (item.kind === 'sectionFace' && item.outline.kind === 'polygon') {
       const vertices = item.outline.vertices.map((v) => projection.toView(v))
       for (let i = 0; i < vertices.length; i++) obstacles.segments.push([vertices[i], vertices[(i + 1) % vertices.length]])
@@ -1598,7 +2412,11 @@ interface LabelSource {
 
 function labelAnchors(
   items: readonly FigureItem[],
-  projection: Projection
+  projection: Projection,
+  // The label size the figure is lettered at: LABEL_FONT_SIZE times the
+  // style's lettering size (1 for clean), so a label is laid out at the size
+  // it is drawn.
+  fontSize: number
 ): { anchors: LabelAnchor[]; sources: Map<string, LabelSource> } {
   const anchors: LabelAnchor[] = []
   const sources = new Map<string, LabelSource>()
@@ -1611,28 +2429,35 @@ function labelAnchors(
         id,
         text: item.label,
         at: projection.toView(item.at),
-        fontSize: LABEL_FONT_SIZE,
+        fontSize,
         prefer: item.prefer,
       })
       sources.set(id, { id: item.id, notation: null, color: item.color })
+    } else if (item.kind === 'netLabel') {
+      // One letter at several copies in one statement: the copy keeps the id
+      // unique, and the statement stays after the last "#".
+      const id = `${item.label}.${item.copy}#${item.id.statement}`
+      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize, prefer: item.prefer })
+      sources.set(id, { id: item.id, notation: null, color: item.color })
     } else if (item.kind === 'solidVertex') {
       const id = `${item.label}#${item.id.statement}`
-      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize: LABEL_FONT_SIZE, prefer: item.prefer })
+      anchors.push({ id, text: item.label, at: projection.toView(item.at), fontSize, prefer: item.prefer })
       sources.set(id, { id: item.id, notation: null, color: item.color })
     } else if (item.kind === 'measureLabel') {
-      const layout = layoutNotation(item.runs, LABEL_FONT_SIZE)
+      const layout = layoutNotation(item.runs, fontSize)
       const at = projection.toView(item.at)
       const id = `${item.id.object ?? ''}#${item.id.statement}`
       anchors.push({
         id,
         text: item.runs.map((run) => run.text).join(''),
         at,
-        fontSize: LABEL_FONT_SIZE,
+        fontSize,
         prefer: item.push,
         // Notation is taller than its own glyphs, and the layout must keep
         // other labels off the overbar, not just off the letters.
         size: { width: layout.width, height: layout.height },
         mayEnterShapes: item.inside,
+        ...(item.centred ? { centred: true } : {}),
       })
       sources.set(id, { id: item.id, notation: item.runs, color: item.color, leader: item.leader })
     }
@@ -1640,26 +2465,28 @@ function labelAnchors(
   return { anchors, sources }
 }
 
-function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, layers: ReturnType<typeof emptyFigureLayers>): void {
+function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: FigureTheme, palette: Palette, pen: FigurePen, fontSize: number): void {
   const to = (p: Vec2) => projection.toView(p)
+  const id = key(item.id)
   switch (item.kind) {
     case 'point': {
-      layers.points.push(
-        svgCircle(to(item.at), POINT_RADIUS, { fill: strokeColor(item.color, palette.point, palette), stroke: 'none', ...identity(item.id) })
-      )
+      pen.mark(to(item.at), POINT_RADIUS, { fill: strokeColor(item.color, palette.point, palette), stroke: 'none', ...identity(item.id) }, id, 'points')
       break
     }
     case 'dimensionReference':
       // Thin, in the auxiliary layer, dashed only where the solid hides it.
-      layers.auxiliary.push(
-        svgLine(to(item.a), to(item.b), {
+      pen.stroke(
+        { kind: 'line', a: to(item.a), b: to(item.b) },
+        {
           stroke: strokeColor(item.color, palette.axis, palette),
           'stroke-width': STROKE_AUXILIARY,
           'stroke-linecap': 'round',
           'stroke-dasharray': item.hidden ? AUXILIARY_DASH : null,
           opacity: item.hidden ? AUXILIARY_OPACITY : null,
           ...identity(item.id),
-        })
+        },
+        id,
+        'auxiliary'
       )
       break
     case 'line': {
@@ -1673,22 +2500,26 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         opacity: item.auxiliary ? AUXILIARY_OPACITY : null,
         ...identity(item.id),
       }
+      const layer = item.auxiliary ? 'auxiliary' : 'primary'
       if (item.extent === 'segment') {
-        layers[item.auxiliary ? 'auxiliary' : 'primary'].push(svgLine(a, b, style))
+        pen.stroke({ kind: 'line', a, b }, style, id, layer)
         break
       }
       const clipped = clipToBox(a, { x: b.x - a.x, y: b.y - a.y }, item.extent, viewBox)
-      if (clipped) layers[item.auxiliary ? 'auxiliary' : 'primary'].push(svgLine(clipped[0], clipped[1], style))
+      if (clipped) pen.stroke({ kind: 'line', a: clipped[0], b: clipped[1] }, style, id, layer)
       break
     }
     case 'circle': {
-      layers.primary.push(
-        svgCircle(to(item.center), item.radius * projection.scale, {
+      pen.stroke(
+        { kind: 'circle', center: to(item.center), radius: item.radius * projection.scale },
+        {
           fill: 'none',
           stroke: strokeColor(item.color, palette.axis, palette),
           'stroke-width': STROKE_PRIMARY,
           ...identity(item.id),
-        })
+        },
+        id,
+        'primary'
       )
       break
     }
@@ -1703,8 +2534,11 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const end = -(item.arc.start + item.arc.sweep)
       const stroke = strokeColor(item.color, palette.axis, palette)
       if (item.fill === 'none') {
-        layers.primary.push(
-          svgArc(center, radius, start, end, { fill: 'none', stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) })
+        pen.stroke(
+          { kind: 'arc', center, radius, start, end },
+          { fill: 'none', stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) },
+          id,
+          'primary'
         )
         break
       }
@@ -1717,9 +2551,7 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       }
       // E1 — a fill is a backdrop, so both regions go in the regions layer,
       // behind every line and mark the figure draws over them.
-      layers.regions.push(
-        item.fill === 'sector' ? svgSector(center, radius, start, end, fill) : svgCircularSegment(center, radius, start, end, fill)
-      )
+      pen.fill({ kind: item.fill === 'sector' ? 'sector' : 'circularSegment', center, radius, start, end }, fill, id, 'regions')
       break
     }
     case 'centralAngle': {
@@ -1728,18 +2560,22 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const start = -item.arc.start
       const end = -(item.arc.start + item.arc.sweep)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers.marks.push(svgArc(vertex, radius, start, end, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }))
+      pen.stroke({ kind: 'arc', center: vertex, radius, start, end }, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }, id, 'marks')
       const mid = (start + end) / 2
-      const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
-      layers.labels.push(
-        svgText(at, item.label, {
-          'font-size': LABEL_FONT_SIZE,
+      const at = { x: vertex.x + (radius + fontSize) * Math.cos(mid), y: vertex.y + (radius + fontSize) * Math.sin(mid) }
+      pen.text(
+        at,
+        item.label,
+        {
+          'font-size': fontSize,
           'font-family': FONT_FAMILY,
           fill: theme.label,
           'text-anchor': 'middle',
           'dominant-baseline': 'central',
           ...identity(item.id),
-        })
+        },
+        id,
+        'labels'
       )
       break
     }
@@ -1758,14 +2594,37 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         // E1 — a hidden edge goes BEHIND every visible one, so the solid
         // stroke covers the dashes where they cross rather than the other
         // way round. Both members of the drawn-edge union go through
-        // drawEdge, which is the one place either becomes markup.
-        layers[edge.hidden ? 'auxiliary' : 'primary'].push(drawEdge(edge, projection.toView, projection.scale, style))
+        // strokeEdge, which is the one place either becomes a pen call.
+        strokeEdge(pen, edge, projection, style, `${item.id.statement}/${edgeObject(edge)}`, edge.hidden ? 'auxiliary' : 'primary')
       }
       break
     }
     case 'solidVertex':
+    case 'netLabel':
       // Emitted with the other labels, after the layout has placed them.
       break
+    case 'net': {
+      // N1 — a fold is dashed and drawn beneath; a cut edge is solid.
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      for (const { edge, fold } of item.lines) {
+        strokeEdge(
+          pen,
+          edge,
+          projection,
+          {
+            stroke,
+            'stroke-width': fold ? STROKE_AUXILIARY : STROKE_PRIMARY,
+            'stroke-linecap': 'round',
+            'stroke-dasharray': fold ? AUXILIARY_DASH : null,
+            'data-statement': item.id.statement,
+            'data-object': edgeObject(edge),
+          },
+          `${item.id.statement}/${edgeObject(edge)}`,
+          fold ? 'auxiliary' : 'primary'
+        )
+      }
+      break
+    }
     case 'sectionFace': {
       const stroke = strokeColor(item.color, palette.axis, palette)
       // The fill is unstroked: its outline is drawn below, piece by piece,
@@ -1775,55 +2634,78 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
         'fill-opacity': REGION_OPACITY,
         ...identity(item.id),
       }
-      for (const edge of item.edges) {
-        layers[edge.hidden ? 'auxiliary' : 'primary'].push(
-          drawEdge(edge, projection.toView, projection.scale, {
+      item.edges.forEach((edge, i) => {
+        strokeEdge(
+          pen,
+          edge,
+          projection,
+          {
             stroke,
             'stroke-width': edge.hidden ? STROKE_AUXILIARY : STROKE_PRIMARY,
             'stroke-linecap': 'round',
             'stroke-dasharray': edge.hidden ? AUXILIARY_DASH : null,
             opacity: edge.hidden ? AUXILIARY_OPACITY : null,
             ...identity(item.id),
-          })
+          },
+          `${id}/${i}`,
+          edge.hidden ? 'auxiliary' : 'primary'
         )
-      }
+      })
       // E1 — a fill is a backdrop, so the shaded face goes in the regions
       // layer, behind every edge of the solid it cuts. A cut drawn over the
       // solid's own lines would hide the thing it is a section OF.
       if (item.outline.kind === 'polygon') {
-        layers.regions.push(svgPolygon(item.outline.vertices.map(to), fill))
+        pen.fill({ kind: 'polygon', points: item.outline.vertices.map(to) }, fill, id, 'regions')
         break
       }
       if (item.outline.kind === 'region') {
-        layers.regions.push(drawClosedEdges(item.outline.edges, projection.toView, projection.scale, fill))
+        pen.fill(closedEdges(item.outline.edges, projection), fill, id, 'regions')
         break
       }
       const circle = item.outline.circle
-      layers.regions.push(
-        svgEllipse(to(circle.center), circle.rx * projection.scale, circle.ry * projection.scale, -circle.rotation, fill)
+      pen.fill(
+        { kind: 'ellipse', center: to(circle.center), rx: circle.rx * projection.scale, ry: circle.ry * projection.scale, rotation: -circle.rotation },
+        fill,
+        id,
+        'regions'
       )
       break
     }
+    case 'fill':
+      // E1 — a backdrop, behind every line; no stroke (F5).
+      pen.fill(
+        fillPath(item.region, projection),
+        {
+          fill: strokeColor(item.color, palette.region, palette),
+          'fill-opacity': REGION_OPACITY,
+          'fill-rule': 'evenodd',
+          ...identity(item.id),
+        },
+        id,
+        'regions'
+      )
+      break
     case 'region': {
       const stroke = strokeColor(item.color, palette.axis, palette)
-      for (const edge of item.edges) {
-        layers.primary.push(
-          drawEdge(edge, projection.toView, projection.scale, { stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) })
-        )
-      }
+      item.edges.forEach((edge, i) => {
+        strokeEdge(pen, edge, projection, { stroke, 'stroke-width': STROKE_PRIMARY, 'stroke-linecap': 'round', ...identity(item.id) }, `${id}/${i}`, 'primary')
+      })
       break
     }
     case 'polygon': {
       const vertices = item.vertices.map(to)
       const stroke = strokeColor(item.color, palette.axis, palette)
       for (let i = 0; i < vertices.length; i++) {
-        layers.primary.push(
-          svgLine(vertices[i], vertices[(i + 1) % vertices.length], {
+        pen.stroke(
+          { kind: 'line', a: vertices[i], b: vertices[(i + 1) % vertices.length] },
+          {
             stroke,
             'stroke-width': STROKE_PRIMARY,
             'stroke-linecap': 'round',
             ...identity(item.id),
-          })
+          },
+          `${id}/${i}`,
+          'primary'
         )
       }
       break
@@ -1835,19 +2717,23 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const radius = angleArcRadius(item, projection)
       const { start, delta } = angleSweep(vertex, from, to2)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers.marks.push(svgArc(vertex, radius, start, start + delta, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }))
+      pen.stroke({ kind: 'arc', center: vertex, radius, start, end: start + delta }, { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...identity(item.id) }, id, 'marks')
       if (item.label) {
         const mid = start + delta / 2
-        const at = { x: vertex.x + (radius + LABEL_FONT_SIZE) * Math.cos(mid), y: vertex.y + (radius + LABEL_FONT_SIZE) * Math.sin(mid) }
-        layers.labels.push(
-          svgText(at, item.label, {
-            'font-size': LABEL_FONT_SIZE,
+        const at = { x: vertex.x + (radius + fontSize) * Math.cos(mid), y: vertex.y + (radius + fontSize) * Math.sin(mid) }
+        pen.text(
+          at,
+          item.label,
+          {
+            'font-size': fontSize,
             'font-family': FONT_FAMILY,
             fill: theme.label,
             'text-anchor': 'middle',
             'dominant-baseline': 'central',
             ...identity(item.id),
-          })
+          },
+          id,
+          'labels'
         )
       }
       break
@@ -1859,9 +2745,53 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const length = Math.min(TICK_LENGTH, segLength * TICK_MAX_FRACTION)
       const gap = Math.min(TICK_GAP, segLength * TICK_MAX_FRACTION)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      for (const [a, b] of tickMarkSegments(from, target, item.count, length, gap)) {
-        layers.marks.push(svgLine(a, b, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...identity(item.id) }))
+      tickMarkSegments(from, target, item.count, length, gap).forEach(([a, b], i) => {
+        // M4 — a tick on a hidden stretch of a segment in space is dashed
+        // like a hidden edge, beneath the visible lines. Plane ticks carry no
+        // `hidden` and keep their bytes.
+        if (item.hidden) {
+          pen.stroke({ kind: 'line', a, b }, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...hiddenMark(), ...identity(item.id) }, `${id}/${i}`, 'auxiliary')
+          return
+        }
+        pen.stroke({ kind: 'line', a, b }, { stroke, 'stroke-width': STROKE_MARK, 'stroke-linecap': 'round', ...identity(item.id) }, `${id}/${i}`, 'marks')
+      })
+      break
+    }
+    case 'spaceArc': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      const style: SvgAttrs = { stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) }
+      strokeEdge(pen, item.edge, projection, style, id, item.hidden ? 'auxiliary' : 'marks')
+      if (item.text) {
+        // As the plane writes an "angle: … label:" caption: a font size out
+        // from the arc, along the bisector.
+        const anchor = to(item.text.at)
+        const push = item.text.push ?? { x: 0, y: 0 }
+        const at = { x: anchor.x + fontSize * push.x, y: anchor.y + fontSize * push.y }
+        pen.text(
+          at,
+          item.text.label,
+          {
+            'font-size': fontSize,
+            'font-family': FONT_FAMILY,
+            fill: theme.label,
+            'text-anchor': 'middle',
+            'dominant-baseline': 'central',
+            ...identity(item.id),
+          },
+          id,
+          'labels'
+        )
       }
+      break
+    }
+    case 'spaceRightAngle': {
+      const stroke = strokeColor(item.color, palette.axis, palette)
+      pen.stroke(
+        { kind: 'polyline', points: item.points.map(to) },
+        { fill: 'none', stroke, 'stroke-width': STROKE_MARK, ...(item.hidden ? hiddenMark() : {}), ...identity(item.id) },
+        id,
+        item.hidden ? 'auxiliary' : 'marks'
+      )
       break
     }
     case 'measureLabel':
@@ -1877,16 +2807,18 @@ function emit(item: FigureItem, projection: Projection, viewBox: Rect, theme: Fi
       const legLength = Math.min(Math.hypot(from.x - vertex.x, from.y - vertex.y), Math.hypot(target.x - vertex.x, target.y - vertex.y))
       const size = Math.min(RIGHT_ANGLE_SIZE, legLength * RIGHT_ANGLE_MAX_FRACTION)
       const stroke = strokeColor(item.color, palette.axis, palette)
-      layers.marks.push(
-        svgPolyline(rightAngleSquarePoints(vertex, from, target, size), {
+      pen.stroke(
+        { kind: 'polyline', points: rightAngleSquarePoints(vertex, from, target, size) },
+        {
           fill: 'none',
           stroke,
           'stroke-width': STROKE_MARK,
           ...identity(item.id),
-        })
+        },
+        id,
+        'marks'
       )
       break
     }
   }
 }
-

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import GraphViewer from './GraphViewer'
 import { parseSpec } from './parser/parseSpec'
-import { EXAMPLES } from './examples'
+import { EXAMPLE_GROUPS, EXAMPLES, type ExampleGroup } from './examples'
 import type { HoverMode } from './parser/config'
 import type { ParseError } from './parser/types'
 import './App.css'
@@ -68,6 +68,75 @@ function ToggleGroup<T extends string>({
   )
 }
 
+// The example picker. Seventy-odd buttons in one wrap had stopped being
+// navigable, so the harness shows one group at a time, with a search box that
+// cuts across every group. The chosen group is remembered per browser — a
+// convenience only, so any storage failure just falls back to the first group.
+const GROUP_KEY = 'graph-engine.review.example-group'
+
+function readStoredGroup(): ExampleGroup {
+  try {
+    const stored = window.localStorage.getItem(GROUP_KEY)
+    return (EXAMPLE_GROUPS as readonly string[]).includes(stored ?? '') ? (stored as ExampleGroup) : EXAMPLE_GROUPS[0]
+  } catch {
+    return EXAMPLE_GROUPS[0]
+  }
+}
+
+function ExamplePicker({ current, onPick }: { current: string; onPick: (spec: string) => void }) {
+  const [group, setGroup] = useState<ExampleGroup>(readStoredGroup)
+  const [query, setQuery] = useState('')
+
+  function chooseGroup(next: ExampleGroup) {
+    setGroup(next)
+    setQuery('')
+    try {
+      window.localStorage.setItem(GROUP_KEY, next)
+    } catch {
+      // Remembering the group is a nicety; the picker works without it.
+    }
+  }
+
+  const needle = query.trim().toLowerCase()
+  const shown = needle
+    ? EXAMPLES.filter((e) => e.label.toLowerCase().includes(needle) || e.group.toLowerCase().includes(needle))
+    : EXAMPLES.filter((e) => e.group === group)
+
+  return (
+    <div className="app-picker">
+      <div className="app-picker-groups" role="tablist" aria-label="Example groups">
+        {EXAMPLE_GROUPS.map((g) => {
+          const count = EXAMPLES.filter((e) => e.group === g).length
+          const active = !needle && g === group
+          return (
+            <button key={g} role="tab" aria-selected={active} className={active ? 'active' : ''} onClick={() => chooseGroup(g)}>
+              {g}
+              <span className="app-picker-count">{count}</span>
+            </button>
+          )
+        })}
+      </div>
+      <input
+        className="app-picker-search"
+        type="search"
+        placeholder={`Search all ${EXAMPLES.length} examples`}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        aria-label="Search examples"
+      />
+      <div className="app-examples">
+        {shown.map((ex) => (
+          <button key={ex.label} className={ex.spec === current ? 'current' : ''} onClick={() => onPick(ex.spec)}>
+            {ex.label}
+            {needle && <span className="app-example-group">{ex.group}</span>}
+          </button>
+        ))}
+        {shown.length === 0 && <p className="app-picker-empty">No example matches “{query.trim()}”.</p>}
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [spec, setSpec] = useState(EXAMPLES[0].spec)
   const [errors, setErrors] = useState<ParseError[]>([])
@@ -100,13 +169,7 @@ export default function App() {
         </p>
         <ToggleGroup label="Hover" options={HOVER_MODES} active={hoverMode} onSelect={(m) => setSpec((s) => withHoverMode(s, m))} />
         <ToggleGroup label="Points" options={POINTS_MODES} active={pointsMode} onSelect={(m) => setSpec((s) => withPointsMode(s, m))} />
-        <div className="app-examples">
-          {EXAMPLES.map((ex) => (
-            <button key={ex.label} onClick={() => setSpec(ex.spec)}>
-              {ex.label}
-            </button>
-          ))}
-        </div>
+        <ExamplePicker current={spec} onPick={setSpec} />
         <textarea
           className="app-textarea"
           value={spec}

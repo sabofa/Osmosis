@@ -1001,6 +1001,33 @@ region`. A 3-coordinate point is a *space* point by default and a *figure*
 point in any spec that contains a solid or declares `@mode: figure` — the same
 coordinates mean the same place either way, because the frame is shared.
 
+**Keyword ownership, agreed 2026-09-26 between the two sides.** A line-start
+`word:` keyword belongs to exactly one engine:
+
+- **Space** (track 3, as built on `milestone-a/space`): `line:`, `plane:`,
+  `cross:`, `project:`, `cylindrical:`, `spherical:`, `implicit:`, `contour:`,
+  `frame:`, `osculating:`, `motion:`, `path:`, `trace:`, `tangent-plane:`,
+  `gradient:`, `directional:`, `critical:`, `lagrange:`, `region:`, `volume:`,
+  `riemann:`, `centroid:`. Space also claims these unkeyed forms: `NAME = region …`,
+  `NAME = volume …`, the vector constant `NAME = <a, b, c>`, and multi-parameter
+  and vector function definitions.
+- **Solid figures and 2D geometry** (track 2): `solid:`, `segment:`, `angle:`,
+  `right-angle:`, `tick:`, `cut:`, `section:`, and every existing geometry
+  statement. Reserved for later phases: `fill:`, `net:`, `shortest:`, `dihedral:`.
+- **The point-list rule.** No space keyword claims a statement whose operand is
+  only a hyphenated list of point names (`A-B`, `A-B-C`, …), optionally followed
+  by `dashed` / `plain`. Those stay with solid figures, so a drawn line, plane or
+  polyline between named points can arrive there without renaming anything.
+- **Plane operands stay geometry's:** `plane A-B-C`, named `p = plane …` and
+  `by plane …` are unaffected by space owning the `plane:` statement.
+- **Space never claims** `NAME = <solid-figure form>` (`solid`, point tuples,
+  `midpoint`, `divide`, `foot`, `intersect`, `centroid`, `center of`, `plane`,
+  `circumsphere`, `insphere`), nor an equation without `z`, so
+  `x^2 + y^2 = 25` stays the 2D implicit curve.
+- **Style clauses** (`opacity:`, `colormap:`, `mesh:`, `res:`, `width:`,
+  `dashed`) are stripped only inside lines space has already claimed, never in
+  the shared trailing-clause loop.
+
 ##### The missing layer is constructions, not features
 
 Solids today are primitives with dimensions. There are no points in space, no

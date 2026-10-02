@@ -3,10 +3,11 @@ import type { Construction, Expr, GeometryRef, PlaneForm, SolidPrimitive, Statem
 import { centroid, circumcenter, incenter, orthocenter } from '../scene/geometry/centres'
 import { GEOM_EPS } from '../scene/geometry/types'
 import type { SceneError, Vec2 } from '../scene/types'
-import { authorPlane, authorToWorld } from './authorFrame'
+import { authorPlane, authorText, authorToWorld } from './authorFrame'
 import {
   add3,
   centroid3,
+  commonPerpendicular3,
   cross3,
   divide3,
   dot3,
@@ -28,6 +29,7 @@ import { basePolygonNormal, hullOf, MAX_HULL_POINTS } from './hull'
 import { tetrahedronFromEdges } from './tetrahedron'
 import { placementAlong } from './silhouette'
 import { buildSolid, type PointSolidShape, type SolidBody, type SolidSpec } from './solids'
+import { circumsphereOf, circumsphereOfPoints, insphereOf, radiusTangentToPlane, radiusTangentToSphere, type SphereFit } from './spheres'
 
 // Names in space: the solid-figure walk (S3).
 //
@@ -83,6 +85,14 @@ export interface SolidFigureScope {
   // A plane that cannot be resolved keeps its message here, and the renderer
   // reports it where it reports the rest of the statement's errors.
   sectionPlanes: Map<number, { plane: SectionPlane } | { error: string }>
+  // Phase 10 (M5) — the plane each measure names ("angle between A-G and
+  // plane A-B-C", "distance from G to plane p"), keyed by the parsed plane
+  // form itself and resolved in source order like a cut's. The renderer
+  // reports a plane that failed, where it reports the measure.
+  measurePlanes: Map<PlaneForm, { plane: Plane3 } | { error: string }>
+  // The author's letter for each vertex of a polyhedron, by vertex index,
+  // where the figure named it (phase 11: a net's letters, a path's messages).
+  vertexNames: Map<SolidBody, (string | undefined)[]>
   errors: SceneError[]
 }
 
@@ -182,7 +192,18 @@ type PointPrimitive = Extract<
   SolidPrimitive,
   { kind: 'hull' | 'tetrahedronOn' | 'pyramidOn' | 'prismOn' | 'sphereOn' | 'cylinderOn' | 'coneOn' | 'frustumOn' }
 >
-type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive | { kind: 'tetrahedronEdges' }>
+type DimensionPrimitive = Exclude<SolidPrimitive, PointPrimitive | SphereConstruction | { kind: 'tetrahedronEdges' }>
+
+// A sphere the figure CONSTRUCTS (phase 9): placed by its centre, its radius
+// following from what it touches (R5), inscribed in a solid, or circumscribed
+// about a solid or four points (R3, R4). Built by the walk, which can look up the names.
+type SphereConstruction = Extract<SolidPrimitive, { kind: 'sphereTangent' | 'circumsphere' | 'circumsphereOn' | 'insphere' }>
+
+const SPHERE_CONSTRUCTIONS: ReadonlySet<SolidPrimitive['kind']> = new Set(['sphereTangent', 'circumsphere', 'circumsphereOn', 'insphere'])
+
+function isSphereConstruction(primitive: SolidPrimitive): primitive is SphereConstruction {
+  return SPHERE_CONSTRUCTIONS.has(primitive.kind)
+}
 
 const POINT_PRIMITIVES: ReadonlySet<SolidPrimitive['kind']> = new Set([
   'hull',
@@ -317,6 +338,10 @@ function operandNames(body: Construction): string[] {
     case 'tangentFrom':
     case 'radiusTo':
       return [body.circle, body.point]
+    case 'centerOf':
+      return [body.solid]
+    case 'commonPerpendicular':
+      return [...body.first, ...body.second]
   }
 }
 
@@ -389,6 +414,10 @@ function bodyText(body: Construction): string {
       return `tangent from ${body.point} to ${body.circle}`
     case 'radiusTo':
       return `radius ${body.circle} to ${body.point}`
+    case 'centerOf':
+      return `center of ${body.solid}`
+    case 'commonPerpendicular':
+      return `common perpendicular of ${body.first.join('-')} and ${body.second.join('-')}`
   }
 }
 
@@ -488,6 +517,23 @@ function pointShapeWord(primitive: PointPrimitive): string {
   return primitive.kind === 'hull' ? 'hull' : primitive.kind.slice(0, -'On'.length)
 }
 
+// What an author calls a built solid, for a message: the word they wrote it
+// with ("cube", "prism", a point-built solid's shape), never an internal kind.
+const SOLID_WORDS: Partial<Record<SolidSpec['kind'], string>> = {
+  regularPrism: 'prism',
+  regularPyramid: 'pyramid',
+  rectanglePyramid: 'pyramid',
+  regularFrustum: 'frustum',
+}
+
+function solidWord(body: SolidBody): string {
+  return body.spec.kind === 'hull' ? body.spec.shape : (SOLID_WORDS[body.spec.kind] ?? body.spec.kind)
+}
+
+function article(word: string): string {
+  return `${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word}`
+}
+
 // Whether a height is negligible next to the points it was measured among —
 // GEOM_EPS is relative (see construct3d.ts's `negligible`) — measured against
 // their spread about their own centroid, not their distance from the origin
@@ -528,8 +574,13 @@ export function buildSolidFigure(
 ): SolidFigureScope {
   const solids = new Map<string, SolidBody>()
   const points = new Map<string, Vec3>()
+  // The author's name for each vertex of a polyhedron, by vertex index, where
+  // the figure named it — so a phase 9 refusal can say "misses G" rather
+  // than print a coordinate.
+  const vertexNames = new Map<SolidBody, (string | undefined)[]>()
   const planes = new Map<string, Plane3>()
   const sectionPlanes: SolidFigureScope['sectionPlanes'] = new Map()
+  const measurePlanes: SolidFigureScope['measurePlanes'] = new Map()
   const ownedStatements = new Set<number>()
   const byStatement: SolidFigureScope['byStatement'] = new Map()
   const errors: SceneError[] = []
@@ -692,11 +743,18 @@ export function buildSolidFigure(
             edgeTetrahedron(index, statement.name, primitive, statement.vertices)
             break
           }
-          const body = isPointPrimitive(primitive) ? buildOnPoints(primitive, statement.vertices) : buildSolid(solidSpecOf(primitive, value))
+          const body = isSphereConstruction(primitive)
+            ? constructSphere(primitive)
+            : isPointPrimitive(primitive)
+              ? buildOnPoints(primitive, statement.vertices)
+              : buildSolid(solidSpecOf(primitive, value))
           if (statement.name) solids.set(statement.name, body)
           const entry: { solid: SolidBody; points: { name: string; at: Vec3; drawn: boolean }[] } = { solid: body, points: [] }
           byStatement.set(index, entry)
           if (statement.vertices.length === 0) break
+          if (isSphereConstruction(primitive)) {
+            throw new Error(`${statement.name ? `"${statement.name}"` : 'This sphere'} is a sphere and has no vertices to name — drop "vertices ${statement.vertices.join('')}"`)
+          }
           // The solid stands whatever is wrong with its lettering: an error
           // in the vertex list costs the letters, not the drawing.
           let order = body.labelOrder
@@ -733,11 +791,14 @@ export function buildSolidFigure(
           for (const name of statement.vertices) checkClaim(name, index)
           // S4 — a solid's named vertices are real points.
           const what = statement.name ? `a vertex of solid "${statement.name}"` : `a vertex of a ${body.spec.kind}`
+          const named = vertexNames.get(body) ?? []
           statement.vertices.forEach((name, v) => {
             const at = polyhedron.vertices[order[v]]
             bindSpace(name, at, what)
             entry.points.push({ name, at, drawn: false })
+            named[order[v]] = name
           })
+          vertexNames.set(body, named)
           break
         }
         case 'construction':
@@ -772,6 +833,27 @@ export function buildSolidFigure(
           const plane = resolvePlane(statement.plane)
           takeName(statement.name, 'a plane')
           planes.set(statement.name, plane)
+          break
+        }
+        case 'given':
+        case 'measureLabel': {
+          // M5 — a measure's plane, resolved here so "plane p" follows
+          // "p = plane ..." in source order. Not owned: the renderer draws
+          // the row, and reports a plane that failed.
+          const subjects =
+            statement.kind === 'measureLabel'
+              ? [statement.subject]
+              : statement.entry.kind === 'measure'
+                ? [statement.entry.subject]
+                : [statement.entry.left, statement.entry.right]
+          for (const subject of subjects) {
+            if (subject.kind !== 'linePlaneAngle' && subject.kind !== 'pointPlaneDistance') continue
+            try {
+              measurePlanes.set(subject.plane, { plane: resolvePlane(subject.plane) })
+            } catch (err) {
+              measurePlanes.set(subject.plane, { error: err instanceof Error ? err.message : String(err) })
+            }
+          }
           break
         }
         default:
@@ -914,14 +996,96 @@ export function buildSolidFigure(
     if (shape !== 'hull' && at.length > MAX_HULL_POINTS) {
       throw new Error(`A ${shape} on a ${baseCorners}-corner base has ${at.length} vertices — at most ${MAX_HULL_POINTS}`)
     }
-    return buildSolid({ kind: 'hull', shape, polyhedron: hullOf(at, names) })
+    const body = buildSolid({ kind: 'hull', shape, polyhedron: hullOf(at, names) })
+    // The hull keeps the input order, so the names ARE the vertices (P3).
+    vertexNames.set(body, [...names])
+    return body
   }
 
   function placed(spec: SolidSpec, origin: Vec3, axis: Vec3): SolidBody {
     return { ...buildSolid(spec, placementAlong(origin, axis)), byPoints: true }
   }
 
+  // Phase 9 (R1) — a constructed sphere is an ordinary sphere solid, placed
+  // exactly as "sphere center M radius r" places one: same placement, same
+  // drawing, same occlusion, same sections.
+  function sphereAt(fit: SphereFit): SolidBody {
+    return placed({ kind: 'sphere', radius: fit.radius }, fit.center, { x: 0, y: 1, z: 0 })
+  }
+
+  // The solid a name is bound to, refusing a name that is something else
+  // (in its own words) or nothing yet. `use` says what the solid is wanted
+  // for, as the example a message offers.
+  function solidNamed(name: string, example: string): SolidBody {
+    const body = solids.get(name)
+    if (body) return body
+    if (points.has(name)) throw new Error(`"${name}" is a point in space, not a solid`)
+    if (planes.has(name)) throw new Error(`"${name}" is a plane, not a solid`)
+    if (planeNames.has(name)) throw new Error(`"${name}" is ${describePlane(name)}, not a solid`)
+    throw new Error(`Unknown solid "${name}" — define it before this line (e.g. "${name} = ${example}")`)
+  }
+
+  // A sphere solid as a SphereFit, or a refusal naming what `name` is.
+  // `refusal` completes "... is a cube — " with what the construction takes.
+  function sphereNamed(name: string, refusal: string): SphereFit {
+    const body = solidNamed(name, 'solid sphere center M radius 5')
+    if (body.spec.kind !== 'sphere') throw new Error(`"${name}" is ${article(solidWord(body))} — ${refusal}`)
+    return { center: body.placement.origin, radius: body.spec.radius }
+  }
+
+  function constructSphere(primitive: SphereConstruction): SolidBody {
+    switch (primitive.kind) {
+      case 'sphereTangent':
+        return tangentSphere(primitive)
+      case 'circumsphere': {
+        // R3 / R4 — through every vertex of a polyhedron (verified against
+        // each), or through a round solid's rims and apex.
+        const body = solidNamed(primitive.of, 'solid tetrahedron A-B-C-D')
+        return sphereAt(circumsphereOf(body, primitive.of, vertexNames.get(body)))
+      }
+      case 'circumsphereOn':
+        return sphereAt(circumsphereOfPoints(primitive.points.map(lookup), primitive.points))
+      case 'insphere': {
+        // R3 / R4 — tangent to every face of a polyhedron (verified against
+        // each), or to a round solid's ends and side.
+        const body = solidNamed(primitive.of, 'solid tetrahedron A-B-C-D')
+        return sphereAt(insphereOf(body, primitive.of, vertexNames.get(body)))
+      }
+    }
+  }
+
+  // R5 — a sphere placed by its centre, its radius from what it touches.
+  function tangentSphere(primitive: Extract<SphereConstruction, { kind: 'sphereTangent' }>): SolidBody {
+    const center = lookup(primitive.center)
+    const to = primitive.to
+    if (to.kind === 'plane') {
+      const radius = radiusTangentToPlane(center, resolvePlane(to.plane), primitive.center, planeText(to.plane))
+      return sphereAt({ center, radius })
+    }
+    const other = sphereNamed(to.sphere, 'a sphere is tangent to a plane or to another sphere in this phase')
+    return sphereAt({ center, radius: radiusTangentToSphere(center, other, to.side, primitive.center, to.sphere) })
+  }
+
+  // R1 — "M = center of S": a sphere's centre, bound as a point in space and
+  // drawn as one. Only a sphere has a named centre in this phase.
+  function centerOf(index: number, names: string[], body: Extract<Construction, { kind: 'centerOf' }>): void {
+    ownedStatements.add(index)
+    if (names.length !== 1) {
+      throw new Error(`${statementText(names, body)}: a sphere has one centre, so "center of" binds one name, not ${names.length}`)
+    }
+    const only = 'only a sphere has a named centre in this phase'
+    if (!solids.has(body.solid) && planeNames.has(body.solid)) throw new Error(`"${body.solid}" is ${describePlane(body.solid)} — ${only}`)
+    const { center } = sphereNamed(body.solid, only)
+    checkClaim(names[0], index)
+    bindSpace(names[0], center, 'a point in space')
+    byStatement.set(index, { points: [{ name: names[0], at: center, drawn: true }] })
+  }
+
   function walkConstruction(index: number, names: string[], body: Construction): void {
+    if (body.kind === 'centerOf') {
+      centerOf(index, names, body)
+      return
+    }
     const operands = operandNames(body)
     const space = operands.filter((name) => points.has(name))
     // A named plane is not a point or a line: it may be bound only once, and
@@ -959,6 +1123,13 @@ export function buildSolidFigure(
     }
 
     ownedStatements.add(index)
+    // M6 — a common perpendicular has two feet, and a name for each.
+    if (body.kind === 'commonPerpendicular' && names.length !== 2) {
+      throw new Error(
+        `${statementText(names, body)}: a common perpendicular has two feet, one on each line, so it binds two names ` +
+          `("P, Q = common perpendicular of ${body.first.join('-')} and ${body.second.join('-')}")`
+      )
+    }
     const plane = operands.find((name) => planeNames.has(name))
     if (plane && space.length > 0) {
       throw new Error(`${statementText(names, body)} mixes a point in space (${space[0]}) with ${describePlane(plane)} (${plane})`)
@@ -1028,6 +1199,23 @@ export function buildSolidFigure(
         const [a, b, c] = vertices
         return [centreInSpace(body.centre, a, b, c, nameList(body.vertices))]
       }
+      case 'commonPerpendicular': {
+        // M6 — closed form (construct3d.ts); the two refusals are worded
+        // here, where the author's frame is known.
+        const [first, second] = [body.first.join('-'), body.second.join('-')]
+        const [a, b] = body.first.map(lookup)
+        const [c, d] = body.second.map(lookup)
+        const found = commonPerpendicular3(a, b, c, d, `line ${first}`, `line ${second}`)
+        if (found.kind === 'parallel') {
+          throw new Error(`${statementText(names, body)}: ${first} and ${second} are parallel, so their common perpendicular is not unique`)
+        }
+        if (found.kind === 'meet') {
+          throw new Error(
+            `${statementText(names, body)}: ${first} and ${second} meet at a point, ${authorText(found.at)}, so their common perpendicular has zero length`
+          )
+        }
+        return [found.p, found.q]
+      }
       default:
         // Unreachable for a planar construction (refused above); what is
         // left is a line construction on a plane operand.
@@ -1035,7 +1223,7 @@ export function buildSolidFigure(
     }
   }
 
-  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, errors }
+  return { solids, points, ownedStatements, byStatement, planes, sectionPlanes, measurePlanes, vertexNames, errors }
 }
 
 function planeAsPoint(name: string): Error {
