@@ -267,6 +267,106 @@ describe('a loop is bounded by the whole numbers a float counts exactly', () => 
   })
 })
 
+// The term limit bounds one nest of loops, counted over the nest: sum(i, sum(j, ...)) runs
+// the product of the two ranges, not the larger of them. Bounds known at compile time that
+// break it are a CompileError; any other nest that runs past it is NaN, never a long freeze.
+describe('the term limit counts across nested loops', () => {
+  const inner = (hi: Expr, lo: Expr = num(1)) => sum('j', lo, hi, num(1))
+  const nest = (outerHi: Expr, innerHi: Expr) => sum('i', num(1), outerHi, inner(innerHi))
+  const n = variable('n')
+  const m = variable('m')
+
+  it('sum(i = 1 to 1000, sum(j = 1 to 1000, 1)) is a CompileError at compile, on both paths', () => {
+    const err = bothRefuse(nest(num(1000), num(1000)), makeScope(), [])
+    expect(err.message).toMatch(/100000/)
+    expect(err.message).toMatch(/nested/)
+    expect(err.names).toEqual(['__sum'])
+    // a product nest, a sum in a product, and the loop in a user function the outer loop calls
+    expect(bothRefuse(prod('i', num(1), num(1000), prod('j', num(1), num(1000), num(1))), makeScope(), []).message).toMatch(/100000/)
+    expect(bothRefuse(prod('i', num(1), num(1000), inner(num(1000))), makeScope(), []).message).toMatch(/100000/)
+    const scope = makeScope({ functions: [['f', { params: ['u'], body: sum('j', num(1), num(1000), variable('u')) }]] })
+    expect(bothRefuse(sum('i', num(1), num(1000), p('f(i)')), scope, []).message).toMatch(/100000/)
+    // three deep: 50 x 50 x 50 = 125000
+    expect(bothRefuse(sum('i', num(1), num(50), sum('j', num(1), num(50), sum('l', num(1), num(50), num(1)))), makeScope(), []).message).toMatch(/100000/)
+  })
+
+  it('a nest inside a larger expression or a function body is checked where it is compiled', () => {
+    const big = nest(num(1000), num(1000))
+    expect(bothRefuse({ kind: 'binary', op: '+', left: num(1), right: big } as Expr, makeScope(), []).message).toMatch(/nested/)
+    const scope = makeScope({ functions: [['g', { params: ['x'], body: big }]] })
+    expect(bothRefuse(p('g(1)'), scope, []).message).toMatch(/nested/)
+  })
+
+  it('sum(i = 1 to 100, sum(j = 1 to 100, 1)) is 10000, and a triple nest of 40 is 64000', () => {
+    expect(both(nest(num(100), num(100)), [], [])).toBe(10000)
+    expect(both(sum('i', num(1), num(40), sum('j', num(1), num(40), sum('l', num(1), num(40), num(1)))), [], [])).toBe(64000)
+  })
+
+  it('a nest that runs exactly the limit is allowed, and one more term is not', () => {
+    // 1 + 99999 = 100000: an outer loop of 1 term running an inner loop of 99999
+    expect(both(sum('i', num(1), num(1), inner(num(99999))), [], [])).toBe(99999)
+    expect(bothRefuse(sum('i', num(1), num(1), inner(num(100000))), makeScope(), []).message).toMatch(/100000/)
+  })
+
+  it('with @param bounds of 1000 and 1000 it is NaN on both paths, and returns promptly', () => {
+    const scope = makeScope({ params: [['n', 1000], ['m', 1000]] })
+    expect(both(nest(n, m), [], [], scope)).toBeNaN()
+    // the parameters move with no recompile: the same compiled nest, in range, is a number
+    const closure = compileScalar(nest(n, m), [], scope)
+    const program = compileMany([nest(n, m)], [], scope)
+    scope.params.values[0] = 100
+    scope.params.values[1] = 100
+    expect(closure()).toBe(10000)
+    expect(program(one)[0]).toBe(10000)
+    scope.params.values[0] = 1000
+    expect(closure()).toBeNaN()
+    expect(program(one)[0]).toBeNaN()
+  })
+
+  it('a triangle sum counts what it runs: n(n + 1)/2 for n = 400, NaN for n = 500', () => {
+    // sum(i = 1 to n, sum(j = 1 to i, 1)): 400 + 80200 iterations, then 500 + 125250
+    const triangle = sum('i', num(1), n, sum('j', num(1), variable('i'), num(1)))
+    const scope = makeScope({ params: [['n', 400]] })
+    expect(both(triangle, [], [], scope)).toBe(80200)
+    scope.params.values[0] = 500
+    expect(both(triangle, [], [], scope)).toBeNaN()
+  })
+
+  it('a loop beside another is its own count, and a second evaluation counts afresh', () => {
+    const scope = makeScope({ params: [['n', 60000]] })
+    // two sums in a row of 60000: each is under the limit, and each is its own nest
+    const twice = { kind: 'binary', op: '+', left: sum('i', num(1), n, num(1)), right: sum('j', num(1), n, num(1)) } as Expr
+    expect(both(twice, [], [], scope)).toBe(120000)
+    const closure = compileScalar(twice, [], scope)
+    expect(closure()).toBe(120000)
+    expect(closure()).toBe(120000)
+  })
+
+  it('the same compiled nest is NaN for one input and a number for another, on both paths', () => {
+    // sum(i = 1 to x, sum(j = 1 to 500, 1)): x = 100 runs 100 + 50000, x = 300 is past the limit
+    const e = sum('i', num(1), x, sum('j', num(1), num(500), num(1)))
+    expect(both(e, ['x'], [100])).toBe(50000)
+    expect(both(e, ['x'], [300])).toBeNaN()
+    expect(both(e, ['x'], [100])).toBe(50000)
+  })
+
+  it('a loop in a piecewise branch that is not taken is not counted, on either path', () => {
+    // compileMany evaluates both loops and compileScalar one: the value is the same
+    const big = sum('j', num(1), num(60000), num(1))
+    const pieces = { kind: 'call', name: '__piecewise', args: [p('__gt(x, 0)'), big, big] } as Expr
+    expect(both(pieces, ['x'], [1])).toBe(60000)
+    expect(both(pieces, ['x'], [-1])).toBe(60000)
+  })
+
+  it('an integral does not hand its terms to the loops in its integrand: each evaluation counts its own', () => {
+    // integral(t = 0 to 1, sum(k = 1 to 40, t^k)) = sum of 1/(k+1) for k = 1..40
+    const e = integral('t', num(0), num(1), sum('k', num(1), num(40), p('t^k')))
+    let harmonic = 0
+    for (let k = 2; k <= 41; k++) harmonic += 1 / k
+    expect(Math.abs(both(e, [], []) - harmonic)).toBeLessThan(1e-9)
+  })
+})
+
 describe('binders and the derivative', () => {
   it('a user function with a binder in its body: g(x) = sum(k = 1 to 3, k x), g\'(2) and d/dt g(t) are 6', () => {
     const scope = makeScope({ functions: [['g', { params: ['x'], body: sum('k', num(1), num(3), p('k x')) }]] })

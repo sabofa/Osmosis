@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { parseExprString as p } from '../parser/parseExpr'
 import type { Expr } from '../parser/types'
 import { CompileError, compileMany, compileScalar, freeVariablesDeep, paramCallsAsProducts } from './compile'
-import { diff } from './diff'
+import { diff, differentiationSteps } from './diff'
 import { add, call, mul, num, renameVars, varNames, variable } from './expr'
-import { compare, factorialOf, not, or, and, piecewise, prime, sum } from './reserved'
+import { compare, factorialOf, MAX_DERIVATIVE_NODES, not, or, and, piecewise, prime, sum } from './reserved'
 import { makeScope, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
@@ -506,5 +506,74 @@ describe("f', f'' keep the function's parameter apart from a document name equal
     expect(both(prime('f', 2, [u]), 2, scope, 'u')).toBeCloseTo(-30 * Math.sin(2) - 20 * Math.cos(2), 12)
     expect(derivativeAt(p('f(t)'), 't', scope, 2)).toBeCloseTo(20 * Math.cos(2) - 20 * Math.sin(2), 12)
     expect(derivativeAt(prime('f', 1, [variable('t')]), 't', scope, 2)).toBeCloseTo(-30 * Math.sin(2) - 20 * Math.cos(2), 12)
+  })
+})
+
+// A derivative's body can grow tenfold with every order (a composition of two quotients:
+// 190279 nodes at order 5, 6.5 s for one 401-sample pass of the viewer, which rebuilds on
+// every pan frame). Exact or refuse: past the cap it is a CompileError, raised at the
+// order that crosses it, before the larger one is built.
+describe('a derivative too large to compute is refused', () => {
+  // g(x) = f(f(x)) with f(x) = x^2 / (1 + x^2): g'''' has 20405 nodes, g''''' 190279
+  const blowup = () => makeScope({ functions: [['f', fn(['x'], 'x^2 / (1 + x^2)')], ['g', fn(['x'], 'f(f(x))')]] })
+
+  it("g'''''(x) refuses on both paths with a message naming the cap, and does little work to say so", () => {
+    const scope = blowup()
+    const before = differentiationSteps()
+    const message = bothRefuse(prime('g', 5, [x]), scope)
+    const steps = differentiationSteps() - before
+    expect(message).toContain(String(MAX_DERIVATIVE_NODES))
+    expect(message).toMatch(/limit/)
+    expect(message).toContain('"g"')
+    // The refusal is raised where the body first crosses the cap (g'''' at 20405 nodes), so diff has
+    // visited a few thousand nodes of g''' and no more; building g''''' would visit over 20000 more.
+    expect(steps).toBeLessThan(20000)
+    // a refusal is a CompileError that names the function
+    try {
+      compileScalar(prime('g', 5, [x]), ['x'], scope)
+    } catch (err) {
+      expect((err as CompileError).names).toEqual(['g'])
+    }
+  })
+
+  it('the refusal is remembered: asking again in the same scope does no more differentiating', () => {
+    const scope = blowup()
+    bothRefuse(prime('g', 5, [x]), scope)
+    const before = differentiationSteps()
+    bothRefuse(prime('g', 5, [x]), scope)
+    bothRefuse(prime('g', 4, [x]), scope)
+    expect(differentiationSteps() - before).toBe(0)
+  })
+
+  it("the orders below the cap still work, in the same scope that refused a higher one", () => {
+    const scope = blowup()
+    bothRefuse(prime('g', 5, [x]), scope)
+    // g(x) = f(f(x)); g'(0) = f'(f(0)) f'(0) = f'(0) f'(0) = 0 (f'(x) = 2x / (1 + x^2)^2)
+    expect(both(prime('g', 1, [x]), 0, scope)).toBeCloseTo(0, 14)
+    // g'(1): f(1) = 1/2, f'(1) = 1/2, f'(1/2) = 1 / (5/4)^2 = 16/25: 16/25 * 1/2 = 8/25
+    expect(both(prime('g', 1, [x]), 1, scope)).toBeCloseTo(8 / 25, 14)
+    expect(Number.isFinite(both(prime('g', 3, [x]), 1, scope))).toBe(true)
+  })
+
+  it("an ordinary f''''' still works, to the largest the cap allows", () => {
+    // exp(-x^2): d^5/dx^5 = -H5(x) exp(-x^2), H5 = 32x^5 - 160x^3 + 120x; at 1 that is 8/e
+    const gauss = makeScope({ functions: [['f', fn(['x'], 'exp(-x^2)')]] })
+    expect(both(prime('f', 5, [x]), 1, gauss)).toBeCloseTo(8 / Math.E, 12)
+    // 1/(1 + x^2): d^5/dx^5 = -120 sin(6 arccot x) / (1 + x^2)^3, which is 15 at 1
+    const witch = makeScope({ functions: [['f', fn(['x'], '1/(1 + x^2)')]] })
+    expect(both(prime('f', 5, [x]), 1, witch)).toBeCloseTo(15, 11)
+    // sqrt(1 + x^2) has a 6010-node fifth derivative: under the cap, and equal to the central
+    // difference of the (exact) fourth
+    const root = makeScope({ functions: [['f', fn(['x'], 'sqrt(1 + x^2)')]] })
+    const fourth = compileScalar(prime('f', 4, [x]), ['x'], root)
+    const h = 1e-4
+    const fifth = both(prime('f', 5, [x]), 0.7, root)
+    expect(Math.abs(fifth - (fourth(0.7 + h) - fourth(0.7 - h)) / (2 * h))).toBeLessThan(1e-6)
+  })
+
+  it('a high power is fine: its derivatives are small however large the exponent', () => {
+    // x^30 differentiated five times is 30 29 28 27 26 x^25: a handful of nodes
+    const power = makeScope({ functions: [['f', fn(['x'], 'x^30')]] })
+    expect(both(prime('f', 5, [x]), 2, power)).toBeCloseTo(30 * 29 * 28 * 27 * 26 * 2 ** 25, -3)
   })
 })

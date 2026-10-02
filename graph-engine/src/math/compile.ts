@@ -19,10 +19,12 @@
 // frame slot of its own; its bounds are outside the binding. A sum or product
 // loops over the whole numbers between its bounds (a bound that is not whole, or
 // past 2^53, is an error at compile time when it is a literal, NaN at run time
-// when it is read from a parameter); an integral calls math/binders.ts with the integrand
-// as a closure over the same frame. The register program (compileMany) has no
-// loop, so it runs a binder as one extern call into this closure compiler: both
-// paths give the same number.
+// when it is read from a parameter); one nest of loops runs at most MAX_TERMS iterations
+// in all, counted over the nested loops: a nest known to break it from its bounds
+// is an error at compile time, any other is NaN at run time. An integral calls
+// math/binders.ts with the integrand as a closure over the same frame. The
+// register program (compileMany) has no loop, so it runs a binder as one extern
+// call into this closure compiler: both paths give the same number.
 //
 // A user function's body sees its own parameters, the spec's parameters and
 // constants, never the caller's variables (lexical scope, as v1's evaluator).
@@ -87,6 +89,36 @@ interface Ctx {
   slots: number
   // user functions being inlined, outermost first (cycle detection)
   stack: string[]
+  // What the sums and products compiled so far in this expression share: at run
+  // time the iterations the nest being run has used and how deep in it we are
+  // (every loop closure of one compiled function reads this object); at compile
+  // time the literal ranges of the loops around the point being compiled.
+  budget: Budget
+  loops: LoopNest
+}
+
+// Run time. `used` counts the iterations the outermost loop running now, and the
+// loops nested in it, have been charged; it starts again at 0 whenever a loop
+// is entered with `depth` 0, so a loop beside another, or a second evaluation,
+// is its own count. (A count per evaluation would add the loops a lazy
+// piecewise skips on the closure path to those compileMany runs eagerly, and
+// the two paths would disagree.)
+interface Budget {
+  used: number
+  depth: number
+}
+
+// Compile time: `factor` is the product of the ranges of the enclosing loops whose
+// bounds are known, and `charged` the iterations they and the loops around them
+// are charged along this chain. Exactly the run-time count of a nest whose bounds
+// are all known: a loop of c terms inside factor f is entered f times, c each.
+interface LoopNest {
+  factor: number
+  charged: number
+}
+
+function newCtx(scope: MathScope, slots: number, stack: string[]): Ctx {
+  return { scope, slots, stack, budget: { used: 0, depth: 0 }, loops: { factor: 1, charged: 0 } }
 }
 
 // ---------------------------------------------------------------------------
@@ -506,50 +538,85 @@ export function paramCallsAsProducts(expr: Expr, params: readonly string[], scop
 }
 
 // A binder's pieces: its bound name, its bounds compiled outside the binding,
-// and its body compiled with the name bound to a fresh slot.
-function binderParts(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, what: string) {
+// and its body compiled with the name bound to a fresh slot. `enter` is told the
+// compiled bounds before the body is compiled, and returns what to run once the
+// body is done.
+function binderParts(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, what: string, enter?: (lo: Node, hi: Node) => () => void) {
   if (expr.args.length !== 4) throw new CompileError(`"${expr.name}" takes 4 arguments, got ${expr.args.length}`, [expr.name])
   const bound = nameArgument(expr, what)
   const lo = compileNode(expr.args[1], env, ctx)
   const hi = compileNode(expr.args[2], env, ctx)
+  const leave = enter?.(lo, hi)
   const slot = ctx.slots++
   const inner = new Map(env.bound)
   inner.set(bound, slot)
   const body = compileNode(expr.args[3], { bound: inner }, ctx)
+  leave?.()
   return { bound, lo, hi, slot, body }
 }
 
 const LOOP_WORD: Record<string, string> = { __sum: 'sum', __prod: 'prod' }
 
 function compileLoop(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx, product: boolean): Node {
-  const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'index')
   const word = LOOP_WORD[expr.name]
-  // Constant bounds are checked now; a bound that reads a parameter is checked
-  // per evaluation, giving NaN. A bound must be a whole number a float counts
-  // through exactly: at 2^53 the counter's i++ stops changing i, and a loop
-  // there would never end.
-  for (const [end, node] of [['lower', lo], ['upper', hi]] as const) {
-    if (node.constant === undefined) continue
-    if (!Number.isInteger(node.constant)) {
-      throw new CompileError(`${word}: the ${end} bound ${node.constant} is not a whole number`, [expr.name])
+  const { lo, hi, slot, body } = binderParts(expr, env, ctx, 'index', (loNode, hiNode) => {
+    // Bounds known now are checked now; one that reads a variable or a @param is
+    // checked per evaluation, giving NaN. A bound must be a whole number a float
+    // counts through exactly: at 2^53 the counter's i++ stops changing i, and a
+    // loop there would never end.
+    const known: (number | null)[] = []
+    for (const [end, node] of [['lower', loNode], ['upper', hiNode]] as const) {
+      const value = node.constant ?? null
+      known.push(value)
+      if (value === null) continue
+      if (!Number.isInteger(value)) {
+        throw new CompileError(`${word}: the ${end} bound ${value} is not a whole number`, [expr.name])
+      }
+      if (!Number.isSafeInteger(value)) {
+        throw new CompileError(`${word}: the ${end} bound ${value} is past ±${Number.MAX_SAFE_INTEGER}, the largest whole number counted exactly`, [expr.name])
+      }
     }
-    if (!Number.isSafeInteger(node.constant)) {
-      throw new CompileError(`${word}: the ${end} bound ${node.constant} is past ±${Number.MAX_SAFE_INTEGER}, the largest whole number counted exactly`, [expr.name])
+    const outer = ctx.loops
+    const [from, to] = known
+    if (from === null || to === null) return () => {}
+    const terms = Math.max(0, to - from + 1)
+    // The iterations this loop is charged each time it is entered, over every
+    // entry; and along the chain with the loops around it.
+    const charge = outer.factor * terms
+    const chain = outer.charged + charge
+    if (terms > MAX_TERMS) throw new CompileError(`${word}: ${terms} terms is past the limit of ${MAX_TERMS}`, [expr.name])
+    if (chain > MAX_TERMS) {
+      throw new CompileError(`${word}: nested loops run ${chain} terms in all, past the limit of ${MAX_TERMS}`, [expr.name])
     }
-  }
-  if (lo.constant !== undefined && hi.constant !== undefined && hi.constant - lo.constant + 1 > MAX_TERMS) {
-    throw new CompileError(`${word}: ${hi.constant - lo.constant + 1} terms is past the limit of ${MAX_TERMS}`, [expr.name])
-  }
+    ctx.loops = { factor: charge, charged: chain }
+    return () => {
+      ctx.loops = outer
+    }
+  })
+  const budget = ctx.budget
   return (f) => {
     const a = lo(f)
     const b = hi(f)
-    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || b - a + 1 > MAX_TERMS) return Number.NaN
-    let acc = product ? 1 : 0
-    for (let i = a; i <= b; i++) {
-      f[slot] = i
-      acc = product ? acc * body(f) : acc + body(f)
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) return Number.NaN
+    const terms = b - a + 1
+    if (terms > MAX_TERMS) return Number.NaN
+    if (terms < 1) return product ? 1 : 0
+    // Entering a loop with none running starts a count; a loop inside another
+    // adds its terms to the nest's, and a nest past the limit is NaN.
+    if (budget.depth === 0) budget.used = 0
+    if (budget.used + terms > MAX_TERMS) return Number.NaN
+    budget.used += terms
+    budget.depth++
+    try {
+      let acc = product ? 1 : 0
+      for (let i = a; i <= b; i++) {
+        f[slot] = i
+        acc = product ? acc * body(f) : acc + body(f)
+      }
+      return acc
+    } finally {
+      budget.depth--
     }
-    return acc
   }
 }
 
@@ -703,7 +770,7 @@ function bindVars(vars: readonly string[]): Env {
 // as a number.
 export function compileScalar(expr: Expr, vars: readonly string[], scope: MathScope): CompiledFn {
   const env = bindVars(vars)
-  const ctx: Ctx = { scope, slots: vars.length, stack: [] }
+  const ctx = newCtx(scope, vars.length, [])
   const root = compileNode(expr, env, ctx)
   const frame = new Float64Array(Math.max(ctx.slots, 1))
   switch (vars.length) {
@@ -742,7 +809,7 @@ export function closureOver(
 ): { run: (frame: Float64Array) => number; frame: Float64Array } {
   const bound = new Map<string, number>()
   vars.forEach((v, i) => bound.set(v, i))
-  const ctx: Ctx = { scope, slots: vars.length, stack: [...stack] }
+  const ctx = newCtx(scope, vars.length, [...stack])
   const run = compileNode(expr, { bound }, ctx)
   return { run, frame: new Float64Array(Math.max(ctx.slots, 1)) }
 }
@@ -1328,7 +1395,7 @@ export function compileMany(exprs: readonly Expr[], vars: readonly string[], sco
 
 export function compileVector(exprs: readonly [Expr, Expr, Expr], vars: readonly string[], scope: MathScope): CompiledVec {
   const env = bindVars(vars)
-  const ctx: Ctx = { scope, slots: vars.length, stack: [] }
+  const ctx = newCtx(scope, vars.length, [])
   const [nx, ny, nz] = exprs.map((e) => compileNode(e, env, ctx))
   const frame = new Float64Array(Math.max(ctx.slots, 1))
   return (out, a, b, c) => {

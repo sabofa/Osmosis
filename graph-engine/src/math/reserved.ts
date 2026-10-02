@@ -52,7 +52,19 @@ const RESERVED: ReadonlySet<string> = new Set([
 ])
 
 export const MAX_PRIME_ORDER = 5
+// The most loop iterations one sum or product nest runs, counted over its nested
+// loops (sum(i, sum(j, ...)) is the product of the two ranges); more is NaN at run
+// time and, for bounds known at compile time, a CompileError.
 export const MAX_TERMS = 100_000
+// The most nodes a derivative body (simplified) may have. Every order of f^(k)
+// can be several times larger than the one below (a composition of two quotients:
+// 20405 nodes at order 4, 190279 at order 5), and the 2D viewer rebuilds, and so
+// re-evaluates, on every pan frame, 401 samples at a time. A body this size costs
+// about 20 ns a node a sample: the fifth derivatives of sqrt(1 + x^2) (6010 nodes)
+// and x^2 exp(-x^2) sin(x) (7055) run a pass in 50 to 60 ms, the cap sets the
+// ceiling near 70 ms, and 190279 nodes took over 4 s. Past it the derivative is
+// refused, exact or refuse, never approximated.
+export const MAX_DERIVATIVE_NODES = 8000
 
 export function isReserved(name: string): boolean {
   return RESERVED.has(name)

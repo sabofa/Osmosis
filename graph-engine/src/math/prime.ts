@@ -11,12 +11,13 @@
 import type { Expr } from '../parser/types'
 import { diff, freshBody } from './diff'
 import { CompileError } from './errors'
-import { substituteArguments } from './expr'
-import { MAX_PRIME_ORDER, nameArgument } from './reserved'
+import { countNodes, substituteArguments } from './expr'
+import { MAX_DERIVATIVE_NODES, MAX_PRIME_ORDER, nameArgument } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
-const CACHE = new WeakMap<MathScope, Map<string, Expr>>()
+// A refusal is kept as the refusal, so asking again in the scope does no more differentiating.
+const CACHE = new WeakMap<MathScope, Map<string, Expr | CompileError>>()
 // The (function, order) pairs being computed, per scope: a function whose body
 // uses its own derivative (f(t) = f'(t), or two that use each other's) would
 // otherwise recurse here until the stack gave out.
@@ -49,7 +50,9 @@ export function primeParameter(name: string, fn: MathFunction): string {
   return `#${name}.${fn.params[0]}`
 }
 
-// f^(k)'s body, over primeParameter(name, fn).
+// f^(k)'s body, over primeParameter(name, fn). A body of more than
+// MAX_DERIVATIVE_NODES nodes (simplified) is a CompileError raised at the order
+// that crosses the cap, before the order above it is built.
 export function derivativeBody(name: string, fn: MathFunction, order: number, scope: MathScope): Expr {
   let cache = CACHE.get(scope)
   if (!cache) {
@@ -58,6 +61,7 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
   }
   const key = `${name}#${order}`
   const known = cache.get(key)
+  if (known instanceof CompileError) throw known
   if (known) return known
   let computing = COMPUTING.get(scope)
   if (!computing) {
@@ -73,6 +77,15 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
     const fresh = primeParameter(name, fn)
     const below = order === 1 ? freshBody(fn, [fresh], scope) : derivativeBody(name, fn, order - 1, scope)
     const result = simplify(diff(below, fresh, scope))
+    const size = countNodes(result)
+    if (size > MAX_DERIVATIVE_NODES) {
+      const refusal = new CompileError(
+        `The derivative of order ${order} of "${name}" is too large to compute exactly: ${size} nodes, past the limit of ${MAX_DERIVATIVE_NODES} (differentiate fewer times, or write the derivative out)`,
+        [name]
+      )
+      cache.set(key, refusal)
+      throw refusal
+    }
     cache.set(key, result)
     return result
   } finally {
