@@ -120,4 +120,31 @@ describe('paint colour', () => {
     const g = oklabToLinear([0.59818, 0, 0])
     expect(g[0]).toBeCloseTo(0.214041, 4)
   })
+
+  it('keeps the lightness of a dark, saturated colour: what is fitted is what is drawn (value hold, ±0.012)', () => {
+    // the gamut test once let a linear channel through at -0.002, and the clamp of the renderer's conversion then
+    // moved a dark saturated colour's lightness by up to 0.09 (L 0.15, C 0.2, h 265 arrived as L 0.167)
+    let worst = 0
+    let count = 0
+    for (let L = 0.14; L <= 0.3001; L += 0.01) {
+      for (let h = 0; h < 360; h += 7.5) {
+        for (const C of [0.12, 0.2, 0.3]) {
+          const fitted = fitLch([L, C, h])
+          const drawn = oklabToLinear(fitted)
+          const back = linearToOklab(drawn[0], drawn[1], drawn[2])
+          worst = Math.max(worst, Math.abs(back[0] - L))
+          count++
+        }
+      }
+    }
+    expect(count).toBeGreaterThan(2000)
+    expect(worst).toBeLessThanOrEqual(0.012)
+    // in fact the fit is exact: no tolerance to be clamped away
+    expect(worst).toBeLessThan(1e-6)
+    expect(oklabToLinear(lchToLab(0.15, 0.2, 265))[2]).toBeLessThanOrEqual(1)
+    const dark = linearToOklab(...oklabToLinear(fitLch([0.15, 0.2, 265])))
+    expect(dark[0]).toBeCloseTo(0.15, 6)
+    // and the colour on the edge of the gamut is still in it, with every channel inside 0..1 untouched by the clamp
+    for (const c of oklabToLinear(fitLch([0.2, 0.4, 265]))) expect(c).toBeGreaterThanOrEqual(0)
+  })
 })

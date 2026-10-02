@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../params'
+import { resolvePaintParams, type PaintParams } from '../params'
 import type { Oklab } from '../types'
 import { labToLch, lchToLab } from './colour'
 import { LoadMixer, type MixResult } from './mix'
@@ -7,12 +7,17 @@ import { LoadMixer, type MixResult } from './mix'
 const TERRACOTTA: Oklab = lchToLab(0.55, 0.12, 40)
 const GREY: Oklab = [0.5, 0, 0]
 
+// The sequential mixer (loads in painting order) serves the roles that are re-traced
+// as the camera moves, the edges and the lines; an edge is damped to half, so these
+// tests run it at full strength, as a block stroke would be.
+const SEQUENTIAL = resolvePaintParams({ mix: { roleEdge: 1 } })
+
 // Feed strokes of one role to a fresh mixer until it has opened `loads` loads.
-function runLoads(params: PaintParams, loads: number, base: Oklab = TERRACOTTA, opts: { colormapped?: boolean; jitter?: number; role?: 'block' | 'dab' } = {}) {
+function runLoads(params: PaintParams, loads: number, base: Oklab = TERRACOTTA, opts: { colormapped?: boolean; jitter?: number; role?: 'edge' | 'line' } = {}) {
   const mixer = new LoadMixer(params)
   const out: { r: MixResult; lab: Oklab }[] = []
   for (let i = 0; ; i++) {
-    const r = mixer.mix({ role: opts.role ?? 'block', cell: i, u: 0.6, x: 50, y: 50, lab: base, colormapped: !!opts.colormapped, seed: i, jitter: opts.jitter })
+    const r = mixer.mix({ role: opts.role ?? 'edge', cell: i, u: 0.6, x: 50, y: 50, lab: base, colormapped: !!opts.colormapped, seed: i, jitter: opts.jitter })
     // the stroke that opens load number `loads` + 1 ends the run: every load kept is complete
     if (mixer.loads > loads) break
     out.push({ r, lab: r.lab })
@@ -32,7 +37,7 @@ const byLoad = (xs: ReturnType<typeof runLoads>): ReturnType<typeof runLoads>[] 
 
 describe('brush-load mix', () => {
   it('holds lightness within ±0.012 of the target, and a value-step load within 0.012 + 0.03', () => {
-    const xs = runLoads(DEFAULT_PAINT_PARAMS, 600)
+    const xs = runLoads(SEQUENTIAL, 600)
     let plainMax = 0
     let stepMax = 0
     let steps = 0
@@ -55,7 +60,7 @@ describe('brush-load mix', () => {
   })
 
   it('takes a value step in about 25% of 2,000 loads (±3%)', () => {
-    const xs = runLoads(DEFAULT_PAINT_PARAMS, 2000)
+    const xs = runLoads(SEQUENTIAL, 2000)
     const groups = byLoad(xs)
     expect(groups.length).toBe(2000)
     const stepped = groups.filter((g) => g[0].r.step !== 0).length
@@ -76,7 +81,7 @@ describe('brush-load mix', () => {
   })
 
   it('flips the hue sign between neighbouring loads 80% of the time (±3%), the chroma direction 75%', () => {
-    const groups = byLoad(runLoads(DEFAULT_PAINT_PARAMS, 2000))
+    const groups = byLoad(runLoads(SEQUENTIAL, 2000))
     let hueFlips = 0
     let chromaFlips = 0
     for (let i = 1; i < groups.length; i++) {
@@ -91,7 +96,7 @@ describe('brush-load mix', () => {
   })
 
   it('sizes a load 3..8 strokes and fades the offset to 45% by its last stroke', () => {
-    const groups = byLoad(runLoads(DEFAULT_PAINT_PARAMS, 400, TERRACOTTA, { jitter: 0 }))
+    const groups = byLoad(runLoads(SEQUENTIAL, 400, TERRACOTTA, { jitter: 0 }))
     const sizes = new Set<number>()
     for (const g of groups) {
       sizes.add(g.length)
@@ -110,7 +115,7 @@ describe('brush-load mix', () => {
   })
 
   it('gives a grey an a/b offset of 0.012–0.026 toward one of four families', () => {
-    const groups = byLoad(runLoads(DEFAULT_PAINT_PARAMS, 500, GREY))
+    const groups = byLoad(runLoads(SEQUENTIAL, 500, GREY))
     const famAngles = new Set<number>()
     for (const g of groups) {
       const lab = g[0].lab // first stroke: no drift
@@ -130,7 +135,7 @@ describe('brush-load mix', () => {
   })
 
   it('turns a coloured base by the load’s hue and scales its chroma, never leaving the hue range', () => {
-    const groups = byLoad(runLoads(DEFAULT_PAINT_PARAMS, 400, TERRACOTTA, { jitter: 0 }))
+    const groups = byLoad(runLoads(SEQUENTIAL, 400, TERRACOTTA, { jitter: 0 }))
     let up = 0
     let down = 0
     for (const g of groups) {
@@ -152,8 +157,8 @@ describe('brush-load mix', () => {
   })
 
   it('keeps a colormapped surface true: a third of the hue and chroma offsets, lightness within 0.004', () => {
-    const plain = runLoads(DEFAULT_PAINT_PARAMS, 100, TERRACOTTA, { jitter: 0 })
-    const cm = runLoads(DEFAULT_PAINT_PARAMS, 100, TERRACOTTA, { jitter: 0, colormapped: true })
+    const plain = runLoads(SEQUENTIAL, 100, TERRACOTTA, { jitter: 0 })
+    const cm = runLoads(SEQUENTIAL, 100, TERRACOTTA, { jitter: 0, colormapped: true })
     for (let i = 0; i < Math.min(plain.length, cm.length); i++) {
       expect(cm[i].r.hueOffset).toBeCloseTo(plain[i].r.hueOffset / 3, 9)
       expect(cm[i].r.chromaOffset).toBeCloseTo(plain[i].r.chromaOffset / 3, 9)
@@ -163,20 +168,20 @@ describe('brush-load mix', () => {
   })
 
   it('scales with the master strength and the role multiplier, and a strength of zero is no mix', () => {
-    const one = runLoads(DEFAULT_PAINT_PARAMS, 20, TERRACOTTA, { jitter: 0 })
-    const two = runLoads(resolvePaintParams({ mix: { strength: 2 } }), 20, TERRACOTTA, { jitter: 0 })
+    const one = runLoads(SEQUENTIAL, 20, TERRACOTTA, { jitter: 0 })
+    const two = runLoads(resolvePaintParams({ mix: { strength: 2, roleEdge: 1 } }), 20, TERRACOTTA, { jitter: 0 })
     for (let i = 0; i < 30; i++) expect(two[i].r.hueOffset).toBeCloseTo(2 * one[i].r.hueOffset, 9)
-    const half = runLoads(resolvePaintParams({ mix: { roleBlock: 0.5 } }), 20, TERRACOTTA, { jitter: 0 })
+    const half = runLoads(resolvePaintParams({ mix: { roleEdge: 0.5 } }), 20, TERRACOTTA, { jitter: 0 })
     for (let i = 0; i < 30; i++) expect(half[i].r.hueOffset).toBeCloseTo(0.5 * one[i].r.hueOffset, 9)
     const off = new LoadMixer(resolvePaintParams({ mix: { strength: 0 } }))
-    const r = off.mix({ role: 'block', cell: 1, u: 0.6, x: 0, y: 0, lab: TERRACOTTA, colormapped: false, seed: 1 })
+    const r = off.mix({ role: 'edge', cell: 1, u: 0.6, x: 0, y: 0, lab: TERRACOTTA, colormapped: false, seed: 1 })
     expect(r.lab).toEqual(TERRACOTTA)
     expect(off.loads).toBe(0)
   })
 
   it('starts a new load when the next stroke is more than loadBreakPx away', () => {
-    const m = new LoadMixer(DEFAULT_PAINT_PARAMS)
-    const at = (x: number, cell: number) => m.mix({ role: 'form', cell, u: 0.6, x, y: 0, lab: TERRACOTTA, colormapped: false, seed: cell, jitter: 0 })
+    const m = new LoadMixer(SEQUENTIAL)
+    const at = (x: number, cell: number) => m.mix({ role: 'edge', cell, u: 0.6, x, y: 0, lab: TERRACOTTA, colormapped: false, seed: cell, jitter: 0 })
     const a = at(0, 1)
     const b = at(100, 2) // 100 px: same load
     const c = at(300, 3) // 200 px on: a jump, a new load
@@ -184,14 +189,14 @@ describe('brush-load mix', () => {
     expect(c.load).not.toBe(a.load)
     expect(c.index).toBe(0)
     // roles keep separate loads
-    const d = m.mix({ role: 'block', cell: 9, u: 0.6, x: 300, y: 0, lab: TERRACOTTA, colormapped: false, seed: 9, jitter: 0 })
+    const d = m.mix({ role: 'line', cell: 9, u: 0.6, x: 300, y: 0, lab: TERRACOTTA, colormapped: false, seed: 9, jitter: 0 })
     expect(d.index).toBe(0)
     expect(m.loads).toBe(3)
   })
 
-  it('keys a load to the cell of its first stroke, so it keeps its mix as the camera orbits', () => {
-    const first = (cell: number, x: number, seed: number, p: PaintParams = DEFAULT_PAINT_PARAMS) =>
-      new LoadMixer(p).mix({ role: 'block', cell, u: 0.6, x, y: 7, lab: TERRACOTTA, colormapped: false, seed, jitter: 0 })
+  it('keys a load to the cell of its first stroke', () => {
+    const first = (cell: number, x: number, seed: number, p: PaintParams = SEQUENTIAL) =>
+      new LoadMixer(p).mix({ role: 'edge', cell, u: 0.6, x, y: 7, lab: TERRACOTTA, colormapped: false, seed, jitter: 0 })
     const a = first(77, 10, 1)
     const b = first(77, 400, 99)
     expect(b.lab).toEqual(a.lab) // same cell: same offset, wherever it lands on screen
@@ -201,14 +206,14 @@ describe('brush-load mix', () => {
   })
 
   it('is deterministic: the same strokes in the same order give the same colours', () => {
-    const a = runLoads(DEFAULT_PAINT_PARAMS, 50)
-    const b = runLoads(DEFAULT_PAINT_PARAMS, 50)
+    const a = runLoads(SEQUENTIAL, 50)
+    const b = runLoads(SEQUENTIAL, 50)
     expect(a.map((x) => x.lab)).toEqual(b.map((x) => x.lab))
   })
 
   it('gives each stroke its own small jitter on top of the load', () => {
-    const jittered = runLoads(DEFAULT_PAINT_PARAMS, 20)
-    const clean = runLoads(DEFAULT_PAINT_PARAMS, 20, TERRACOTTA, { jitter: 0 })
+    const jittered = runLoads(SEQUENTIAL, 20)
+    const clean = runLoads(SEQUENTIAL, 20, TERRACOTTA, { jitter: 0 })
     let differing = 0
     for (let i = 0; i < 30; i++) if (jittered[i].lab[1] !== clean[i].lab[1]) differing++
     expect(differing).toBeGreaterThan(25)

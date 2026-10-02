@@ -33,9 +33,10 @@ import { makeCurve, type Curve } from './curve'
 import { extractEdges, type EdgeRun } from './edges'
 import { lineStrokes } from './lines'
 import { sideOf } from './particles'
+import { colourOfDraft, type RecipeEnv } from './recipe'
 import { segmentPlanes } from './planes'
 import { dabStrokes, particleStrokes, scumbleMask } from './roles'
-import { packStrokes, type PaintCtx } from './strokes'
+import { packStrokes, type PaintCtx, type StrokeDraft } from './strokes'
 import { buildPlanMap, canvasValue } from './value'
 import { makeFrameCtx, visibleParticles } from './view'
 
@@ -62,14 +63,24 @@ export function groundLocal(params: PaintParams): Oklab {
   return lchToLab(tone[0] - p.lSlope * (uC - p.lPivot), tone[1] / bell, tone[2])
 }
 
+// What a stroke's colour recipe reads from the parameters of the moment.
+function recipeEnv(params: PaintParams, curve: Curve, ground: Oklab): RecipeEnv {
+  return { curve, ground, devL: params.curve.devL, devC: params.curve.devC, devH: params.curve.devH }
+}
+
 // The analysis (value plan, occlusion, planes, edges, scumble and dab detection)
 // is per G-buffer pixel, and a 1280×800 view reads back 256k of them. A G-buffer
 // over ANALYSIS_PIXELS is decimated by whole pixels (nearest) before the
 // analysis, so it runs on at most about 64k pixels; the strokes are still walked
 // and drawn in CSS px. The debug views are handed back at the full size.
 export const ANALYSIS_PIXELS = 100_000
-export function analysisStride(g: GBuffer): number {
+// While the camera is being dragged the analysis is coarser still: about 28k pixels (a 1280x800 view
+// reads back 256k, so a stride of 3, 6 CSS px a pixel), because the picture is only a sketch of the
+// frame that follows on release.
+export const DRAG_ANALYSIS_PIXELS = 40_000
+export function analysisStride(g: GBuffer, dragging = false): number {
   const n = g.width * g.height
+  if (dragging) return n > DRAG_ANALYSIS_PIXELS ? Math.ceil(Math.sqrt(n / 28_000)) : 1
   return n > ANALYSIS_PIXELS ? Math.ceil(Math.sqrt(n / 64_000)) : 1
 }
 
@@ -111,7 +122,7 @@ function decimate(g: GBuffer, stride: number): GBuffer {
 // value plan, planes, edges and the visible particles (exported for the model's
 // own tests; the arrays inside are scratch, valid until the next call).
 export function buildContext(scene: SpaceScene, particles: ParticleSet, view: PaintView, full: GBuffer, params: PaintParams): PaintCtx {
-  const stride = analysisStride(full)
+  const stride = analysisStride(full, view.dragging)
   const gbuffer = stride > 1 ? decimate(full, stride) : full
   const fc = makeFrameCtx(scene, view, gbuffer, params)
   const plan = buildPlanMap(fc)
@@ -152,6 +163,7 @@ export function buildContext(scene: SpaceScene, particles: ParticleSet, view: Pa
     if (markCount[m] > 0) for (let c = 0; c < 3; c++) markColour[3 * m + c] /= markCount[m]
     else for (let c = 0; c < 3; c++) markColour[3 * m + c] = side.markColour[m]?.[c] ?? 0.5
   }
+  const ground = groundLocal(params)
   return {
     fc,
     set: particles,
@@ -161,7 +173,8 @@ export function buildContext(scene: SpaceScene, particles: ParticleSet, view: Pa
     edges,
     curve,
     vis,
-    groundLocal: groundLocal(params),
+    groundLocal: ground,
+    env: recipeEnv(params, curve, ground),
     planeColour,
     planeHasColour,
     markColour,
@@ -200,7 +213,8 @@ export const paintFrame: PaintFrameFn = (scene: SpaceScene, particles: ParticleS
   edgeStrokes(an, edgeRuns)
   lineStrokes(an)
 
-  const { batch, loads, byRole } = packStrokes(an.drafts, params)
+  const drafts = an.drafts
+  const { batch, loads, byRole } = packStrokes(drafts, params)
 
   // the debug views
   let segments = 0
@@ -241,6 +255,78 @@ export const paintFrame: PaintFrameFn = (scene: SpaceScene, particles: ParticleS
     edgeSegments,
     edgeClass,
   }
-  return { strokes: batch, debug, stats: { strokes: batch.count, byRole, loads } }
+  const frame: PaintFrame = { strokes: batch, debug, stats: { strokes: batch.count, byRole, loads } }
+  retained.set(frame, drafts)
+  return frame
+}
+
+// The strokes of each frame, as drafts with their colour recipes, kept beside
+// the frame so a change of colour parameters can make the colours again.
+const retained = new WeakMap<PaintFrame, StrokeDraft[]>()
+
+// The parameters that change a stroke's COLOUR and nothing else: the curve's own
+// numbers and adjustment curves, the environment's colour, and the brush-load
+// mix (but not the size of its cell, which is the particles'). Everything else
+// (the light, the value plan, the strokes' shape, the edges, the particles, the
+// canvas tone) changes where strokes go or how they are made, and needs a full frame.
+const COLOUR_ONLY = ['curve', 'curves.lAdjust', 'curves.cAdjust', 'curves.hAdjust', 'curves.mixAmount', 'environment.hue', 'environment.chroma', 'environment.absorption', 'mix']
+const NOT_COLOUR_ONLY = ['mix.loadCell']
+
+const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+// The dotted paths at which a and b differ; an array (a tuple, a curve) is one leaf.
+function differingPaths(a: unknown, b: unknown, path: string, out: string[]): void {
+  if (isPlain(a) && isPlain(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+    for (const k of keys) differingPaths(a[k], b[k], path === '' ? k : `${path}.${k}`, out)
+  } else if (JSON.stringify(a) !== JSON.stringify(b)) out.push(path)
+}
+
+// Does going from `prev` to `next` change colour parameters only? (True also when nothing changed.)
+export function isColourOnlyChange(prev: PaintParams, next: PaintParams): boolean {
+  const paths: string[] = []
+  differingPaths(prev, next, '', paths)
+  return paths.every((p) => isColourPath(p))
+}
+
+const isColourPath = (p: string): boolean =>
+  !NOT_COLOUR_ONLY.some((n) => p === n || p.startsWith(`${n}.`)) && COLOUR_ONLY.some((c) => p === c || p.startsWith(`${c}.`))
+
+// The parameters only the RENDERER reads: the relief light and strength, the canvas's own texture and weave. The
+// model's strokes are the same under any of them, and so are their colours; the picture is made again from them.
+const RENDER_ONLY = ['impasto', 'canvas.texture', 'canvas.weave']
+const isRenderPath = (p: string): boolean => RENDER_ONLY.some((r) => p === r || p.startsWith(`${r}.`))
+
+// What going from `prev` (the parameters a frame was analysed under) to `next` asks of a frame:
+//   same     nothing that matters;
+//   render   only renderer parameters changed: the strokes are the frame's own, paint them again;
+//   colour   colour parameters (and perhaps renderer ones): the strokes' colours again, no analysis;
+//   full     anything else: the whole model.
+export type Change = 'same' | 'render' | 'colour' | 'full'
+export function classifyChange(prev: PaintParams, next: PaintParams): Change {
+  const paths: string[] = []
+  differingPaths(prev, next, '', paths)
+  if (paths.length === 0) return 'same'
+  if (paths.every(isRenderPath)) return 'render'
+  return paths.every((p) => isColourPath(p) || isRenderPath(p)) ? 'colour' : 'full'
+}
+
+// The frame again with new colour parameters, without the analysis, the walks or
+// the geometry: only each stroke's colour is made again from its recipe, then
+// the brush-load mix and the packing. It is the frame paintFrame would give for
+// the same scene, view and G-buffer under `params` (and a test holds it to
+// that), provided `isColourOnlyChange(the params of previous, params)`. The strokes
+// are new arrays; the debug views are previous's. Null when `previous` was not
+// made by paintFrame.
+export function recolourFrame(previous: PaintFrame, params: PaintParams): PaintFrame | null {
+  const drafts = retained.get(previous)
+  if (!drafts) return null
+  const curve = curveFor(params)
+  const env = recipeEnv(params, curve, groundLocal(params))
+  for (const d of drafts) if (d.colour) d.lab = colourOfDraft(d.colour, env)
+  const { batch, loads, byRole } = packStrokes(drafts, params)
+  const frame: PaintFrame = { strokes: batch, debug: previous.debug, stats: { strokes: batch.count, byRole, loads } }
+  retained.set(frame, drafts)
+  return frame
 }
 

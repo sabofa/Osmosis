@@ -2,15 +2,17 @@
 // against value for the figure's local colour, redrawn as the curve sliders
 // and the adjustment curves move.
 //
-// It draws the BASE curve of spec §3.4 (the L line, the C bell, the warm/cool
-// hue swing) with the lightness, chroma and hue adjustment curves of §11 on
-// top, and nothing else the model adds: not the half-tone accent, the plane
-// steps, the tints or the seeded deviation. Those live in the model
-// (space/paint/model/curve.ts); when it lands, the lab should chart its curve
-// instead and this file goes. Until then the chart says what it shows.
+// It draws the MODEL'S curve (space/paint/model/curve.ts), the very function a
+// stroke's colour comes from (makeCurve(params).lab), fitted to sRGB, so the
+// chart shows exactly what the strokes use: the base curve of §3.4 with the
+// half-tone accent, the lightness, chroma and hue adjustment curves of §11 and
+// the curve's own seeded deviation. What differs from stroke to stroke comes on
+// top and is not drawn: a stroke's personal jitter, its plane's hue step, and
+// the colour of the sky, the ground and the environment on its normal.
 
-import { evalCurve, type CurvePoints } from '../../graph-engine/src/space/paint/curves'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
+import { labToLch as modelLabToLch, lchToLab } from '../../graph-engine/src/space/paint/model/colour'
+import { makeCurve } from '../../graph-engine/src/space/paint/model/curve'
 
 export interface Lch {
   L: number
@@ -20,41 +22,8 @@ export interface Lch {
 }
 
 export function labToLch(lab: readonly number[]): Lch {
-  const h = (Math.atan2(lab[2], lab[1]) * 180) / Math.PI
-  return { L: lab[0], C: Math.hypot(lab[1], lab[2]), h: (h + 360) % 360 }
-}
-
-// The signed shortest turn from hue a to hue b, in [-180, 180).
-const arc = (a: number, b: number) => ((b - a + 540) % 360) - 180
-
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-
-// §3.4, with local colour (lc, cc, hc) and value u:
-//   L = lc + lSlope (u - lPivot)
-//   C = cc (cBase + cPeak exp(-((u - cCentre) / cWidth)^2))
-//   H = hc + k |s| arc(hc -> warm if s > 0, cool if s < 0), s = clamp((u - 0.5) / 0.4, -1, 1)
-// `hueShare` is the share of the hue swing kept (colormapHue for a colormapped
-// surface, 1 otherwise). `adjust` is §11's curves over value: L gets lAdjust(u)
-// added, C is multiplied by cAdjust(u) (never below 0), H gets hAdjust(u)
-// degrees added.
-export interface Adjustments {
-  lAdjust: CurvePoints
-  cAdjust: CurvePoints
-  hAdjust: CurvePoints
-}
-
-export function baseCurve(c: PaintParams['curve'], local: Lch, u: number, hueShare = 1, adjust?: Adjustments): { L: number; C: number; H: number } {
-  let L = local.L + c.lSlope * (u - c.lPivot)
-  let C = local.C * (c.cBase + c.cPeak * Math.exp(-(((u - c.cCentre) / c.cWidth) ** 2)))
-  const s = clamp((u - 0.5) / 0.4, -1, 1)
-  const warm = s > 0
-  let swing = (warm ? c.kWarm : c.kCool) * Math.abs(s) * arc(local.h, warm ? c.warmHue : c.coolHue) * hueShare
-  if (adjust) {
-    L += evalCurve(adjust.lAdjust, u)
-    C = Math.max(0, C * evalCurve(adjust.cAdjust, u))
-    swing += evalCurve(adjust.hAdjust, u)
-  }
-  return { L, C, H: (((local.h + swing) % 360) + 360) % 360 }
+  const [L, C, h] = modelLabToLch(lab)
+  return { L, C, h }
 }
 
 export interface CurveSeries {
@@ -65,17 +34,21 @@ export interface CurveSeries {
   H: number[]
 }
 
-export function curveSeries(c: PaintParams['curve'], local: Lch, n: number, hueShare = 1, adjust?: Adjustments): CurveSeries {
+// The curve's colour at n values of u from 0 to 1, for `local` (a colormapped
+// colour keeps a third of the hue swing, as its strokes do).
+export function curveSeries(params: PaintParams, local: Lch, n: number, colormapped = false): CurveSeries {
+  const curve = makeCurve(params)
+  const lab = lchToLab(local.L, local.C, local.h)
   const out: CurveSeries = { u: [], L: [], C: [], H: [] }
   for (let i = 0; i < n; i++) {
     const u = i / (n - 1)
-    const p = baseCurve(c, local, u, hueShare, adjust)
-    let H = p.H
+    const [L, C, h] = modelLabToLch(curve.lab({ local: lab, u, colormapped }))
+    let H = h
     const prev = out.H[i - 1]
     if (prev !== undefined) H += 360 * Math.round((prev - H) / 360)
     out.u.push(u)
-    out.L.push(p.L)
-    out.C.push(p.C)
+    out.L.push(L)
+    out.C.push(C)
     out.H.push(H)
   }
   return out

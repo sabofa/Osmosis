@@ -1,18 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { randomFor } from '../../../style/random'
-import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../params'
+import { resolvePaintParams, type PaintParams, type PaintParamsOverride } from '../params'
 import type { Oklab } from '../types'
 import { lchToLab } from './colour'
 import { LoadMixer, nextSign, type MixResult } from './mix'
 
 const TERRACOTTA: Oklab = lchToLab(0.55, 0.12, 40)
 
+// The balance of the sequential mixer (lines and edges): an edge is damped to half, so these
+// run it at full strength, as the block stroke the numbers were first written for.
+const edgeParams = (...layers: PaintParamsOverride[]): PaintParams => resolvePaintParams({ mix: { roleEdge: 1 } }, ...layers)
+
 // One result per load (the first stroke of each).
 function firstOfEachLoad(params: PaintParams, loads: number, u = 0.6): MixResult[] {
   const mixer = new LoadMixer(params)
   const out: MixResult[] = []
   for (let i = 0; out.length < loads; i++) {
-    const r = mixer.mix({ role: 'block', cell: i, u, x: 0, y: 0, lab: TERRACOTTA, colormapped: false, seed: i, jitter: 0 })
+    const r = mixer.mix({ role: 'edge', cell: i, u, x: 0, y: 0, lab: TERRACOTTA, colormapped: false, seed: i, jitter: 0 })
     if (r.index === 0) out.push(r)
   }
   return out
@@ -21,7 +25,7 @@ const share = (xs: number[]): number => xs.filter((x) => x > 0).length / xs.leng
 
 describe('the ± balance of the brush-load mix (spec §11)', () => {
   it('has the + direction come up (1 + bias)/2 of the time: 75% at bias 0.5, for hue, chroma and value steps', () => {
-    const p = resolvePaintParams({ mix: { hueBias: 0.5, chromaBias: 0.5, valueBias: 0.5 } })
+    const p = edgeParams({ mix: { hueBias: 0.5, chromaBias: 0.5, valueBias: 0.5 } })
     const loads = firstOfEachLoad(p, 3000)
     // hue: + is counter-clockwise
     expect(share(loads.map((l) => l.hueOffset))).toBeGreaterThan(0.72)
@@ -37,17 +41,17 @@ describe('the ± balance of the brush-load mix (spec §11)', () => {
   })
 
   it('is symmetric at bias 0, mirrored at a negative bias, and one-sided at ±1', () => {
-    const sym = firstOfEachLoad(DEFAULT_PAINT_PARAMS, 3000)
+    const sym = firstOfEachLoad(edgeParams(), 3000)
     expect(share(sym.map((l) => l.hueOffset))).toBeGreaterThan(0.47)
     expect(share(sym.map((l) => l.hueOffset))).toBeLessThan(0.53)
-    const neg = firstOfEachLoad(resolvePaintParams({ mix: { hueBias: -0.5, chromaBias: -0.5 } }), 3000)
+    const neg = firstOfEachLoad(edgeParams({ mix: { hueBias: -0.5, chromaBias: -0.5 } }), 3000)
     expect(share(neg.map((l) => l.hueOffset))).toBeGreaterThan(0.22)
     expect(share(neg.map((l) => l.hueOffset))).toBeLessThan(0.28)
     expect(share(neg.map((l) => l.chromaOffset))).toBeGreaterThan(0.22)
     expect(share(neg.map((l) => l.chromaOffset))).toBeLessThan(0.28)
-    const up = firstOfEachLoad(resolvePaintParams({ mix: { hueBias: 1, chromaBias: 1, valueBias: 1 } }), 500)
+    const up = firstOfEachLoad(edgeParams({ mix: { hueBias: 1, chromaBias: 1, valueBias: 1 } }), 500)
     expect(up.every((l) => l.hueOffset > 0 && l.chromaOffset > 0 && l.step >= 0)).toBe(true)
-    const down = firstOfEachLoad(resolvePaintParams({ mix: { hueBias: -1, chromaBias: -1, valueBias: -1 } }), 500)
+    const down = firstOfEachLoad(edgeParams({ mix: { hueBias: -1, chromaBias: -1, valueBias: -1 } }), 500)
     expect(down.every((l) => l.hueOffset < 0 && l.chromaOffset < 0 && l.step <= 0)).toBe(true)
   })
 
@@ -58,10 +62,10 @@ describe('the ± balance of the brush-load mix (spec §11)', () => {
       for (let i = 1; i < loads.length; i++) if (Math.sign(loads[i].hueOffset) !== Math.sign(loads[i - 1].hueOffset)) n++
       return n / (loads.length - 1)
     }
-    expect(flips(DEFAULT_PAINT_PARAMS)).toBeGreaterThan(0.77)
-    expect(flips(DEFAULT_PAINT_PARAMS)).toBeLessThan(0.83)
+    expect(flips(edgeParams())).toBeGreaterThan(0.77)
+    expect(flips(edgeParams())).toBeLessThan(0.83)
     // at 0.75 + the chain flips 2·0.75·0.25·λ with λ = min(1.6, 1/0.75) = 4/3: half the time
-    const biased = flips(resolvePaintParams({ mix: { hueBias: 0.5 } }))
+    const biased = flips(edgeParams({ mix: { hueBias: 0.5 } }))
     expect(biased).toBeGreaterThan(0.46)
     expect(biased).toBeLessThan(0.54)
   })
@@ -97,8 +101,8 @@ describe('the ± balance of the brush-load mix (spec §11)', () => {
   })
 
   it('leaves the offset magnitudes alone: the bias only chooses the sign', () => {
-    const plain = firstOfEachLoad(DEFAULT_PAINT_PARAMS, 400)
-    const biased = firstOfEachLoad(resolvePaintParams({ mix: { hueBias: 0.5 } }), 400)
+    const plain = firstOfEachLoad(edgeParams(), 400)
+    const biased = firstOfEachLoad(edgeParams({ mix: { hueBias: 0.5 } }), 400)
     for (const l of [...plain, ...biased]) {
       expect(Math.abs(l.hueOffset)).toBeGreaterThanOrEqual(12 - 1e-6)
       expect(Math.abs(l.hueOffset)).toBeLessThanOrEqual(25 + 1e-6)
@@ -111,20 +115,20 @@ describe('the mix strength over value (spec §11)', () => {
 
   it('multiplies the strength by curves.mixAmount at the stroke’s value', () => {
     // the identity-to-flat default is 1 everywhere: the offset is the same at any value
-    expect(hue(DEFAULT_PAINT_PARAMS, 0.2)).toBe(hue(DEFAULT_PAINT_PARAMS, 0.9))
-    const full = hue(DEFAULT_PAINT_PARAMS, 0.5)
+    expect(hue(edgeParams(), 0.2)).toBe(hue(edgeParams(), 0.9))
+    const full = hue(edgeParams(), 0.5)
     // a rising curve: mixAmount(u) = u, so the offset at u = 0.5 is half of full, at u = 0.25 a quarter
-    const ramp = resolvePaintParams({ curves: { mixAmount: [[0, 0], [1, 1]] } })
+    const ramp = edgeParams({ curves: { mixAmount: [[0, 0], [1, 1]] } })
     expect(hue(ramp, 0.5)).toBeCloseTo(0.5 * full, 12)
     expect(hue(ramp, 0.25)).toBeCloseTo(0.25 * full, 12)
     // a flat 2 doubles it; a flat 0 is no mix at all
-    expect(hue(resolvePaintParams({ curves: { mixAmount: [[0, 2], [1, 2]] } }), 0.5)).toBeCloseTo(2 * full, 12)
-    const mixer = new LoadMixer(resolvePaintParams({ curves: { mixAmount: [[0, 0], [1, 0]] } }))
-    const r = mixer.mix({ role: 'block', cell: 1, u: 0.5, x: 0, y: 0, lab: TERRACOTTA, colormapped: false, seed: 1 })
+    expect(hue(edgeParams({ curves: { mixAmount: [[0, 2], [1, 2]] } }), 0.5)).toBeCloseTo(2 * full, 12)
+    const mixer = new LoadMixer(edgeParams({ curves: { mixAmount: [[0, 0], [1, 0]] } }))
+    const r = mixer.mix({ role: 'edge', cell: 1, u: 0.5, x: 0, y: 0, lab: TERRACOTTA, colormapped: false, seed: 1 })
     expect(r.lab).toEqual(TERRACOTTA)
     expect(mixer.loads).toBe(0)
     // it multiplies with the master strength and the role's own scale
-    const both = resolvePaintParams({ mix: { strength: 2, roleBlock: 0.5 }, curves: { mixAmount: [[0, 0.5], [1, 0.5]] } })
+    const both = edgeParams({ mix: { strength: 2, roleEdge: 0.5 }, curves: { mixAmount: [[0, 0.5], [1, 0.5]] } })
     expect(hue(both, 0.5)).toBeCloseTo(0.5 * full, 12) // 2 x 0.5 x 0.5 = 0.5
   })
 })

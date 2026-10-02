@@ -182,7 +182,7 @@ describe('the debug views are built when read, from the frame they belong to', (
 describe('a stroke’s personal jitter of the mix', () => {
   const lab = lchToLab(0.55, 0.12, 40)
   const first = (jit?: { jit0: number; jit1: number }, jitter?: number) =>
-    new LoadMixer(P).mix({ role: 'block', cell: 5, u: 0.6, x: 0, y: 0, lab, colormapped: false, seed: 5, jitter, ...jit })
+    new LoadMixer(resolvePaintParams({ mix: { roleEdge: 1 } })).mix({ role: 'edge', cell: 5, u: 0.6, x: 0, y: 0, lab, colormapped: false, seed: 5, jitter, ...jit })
 
   it('takes the two draws it is given, or draws them from its seed', () => {
     const none = first(undefined, 0)

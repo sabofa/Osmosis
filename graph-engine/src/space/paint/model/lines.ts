@@ -19,9 +19,11 @@
 
 import { randomFor } from '../../../style/random'
 import type { Mark } from '../../scene/types'
-import { PATH_POINTS, type Oklab } from '../types'
+import { PATH_POINTS } from '../types'
 import { clamp, hash3 } from './math'
-import { polylinePath, roleIndex, type PaintCtx } from './strokes'
+import { colourOfDraft, newRecipe, type ColourRecipe, type DraftColour } from './recipe'
+import { veilOf, type Veil } from './roles'
+import { BEHIND_VEIL_LAYER, polylinePath, roleIndex, type PaintCtx } from './strokes'
 import { project, pxPerUnit } from './view'
 
 // The default dash of a hidden stretch drawn dashed, CSS px.
@@ -134,6 +136,39 @@ function dashed(pl: PL, pattern: readonly number[]): PL[] {
   return out
 }
 
+// Is a flat veil between the eye and the world point p? The segment from the point toward the eye
+// (along the view direction for an orthographic camera) crosses the sheet's plane, inside its edges.
+export function behindVeil(fc: PaintCtx['fc'], veils: readonly Veil[], p: readonly number[]): boolean {
+  const view = fc.view
+  for (const v of veils) {
+    if (!v.plane) continue
+    const { n, d } = v.plane
+    const sp = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - d
+    let x: number
+    let y: number
+    let z: number
+    if (fc.ortho) {
+      // toward the eye is -viewDir: p - viewDir s meets the plane at s = sp / (n . viewDir), in front of p when s > 0
+      const nd = n[0] * view.viewDir[0] + n[1] * view.viewDir[1] + n[2] * view.viewDir[2]
+      if (Math.abs(nd) < 1e-6) continue
+      const s = sp / nd
+      if (s <= 1e-9) continue
+      x = p[0] - view.viewDir[0] * s
+      y = p[1] - view.viewDir[1] * s
+      z = p[2] - view.viewDir[2] * s
+    } else {
+      const se = n[0] * view.eye[0] + n[1] * view.eye[1] + n[2] * view.eye[2] - d
+      if (sp * se >= 0) continue
+      const s = sp / (sp - se)
+      x = p[0] + (view.eye[0] - p[0]) * s
+      y = p[1] + (view.eye[1] - p[1]) * s
+      z = p[2] + (view.eye[2] - p[2]) * s
+    }
+    if (v.inside(x, y, z)) return true
+  }
+  return false
+}
+
 export function lineStrokes(an: PaintCtx): void {
   const { fc, side } = an
   const params = fc.params
@@ -229,15 +264,26 @@ export function lineStrokes(an: PaintCtx): void {
   }
 
   // the mark's colour through the curve at u = 0.6, with a small seeded jitter per stroke
-  const colourOf = (mark: number, rng: ReturnType<typeof randomFor>): Oklab => {
+  const recipeOf = (mark: number, rng: ReturnType<typeof randomFor>): ColourRecipe => {
     const local = side.markColour[mark] ?? [0.4, 0.04, 0.035]
-    return an.curve.lab({
-      local,
-      u: 0.6,
-      lScale: 0.55,
-      j: [rng.gauss() * 0.4 * params.curve.devL, rng.gauss() * (1 / 3) * params.curve.devC, rng.gauss() * 0.36 * params.curve.devH],
-    })
+    const r = newRecipe()
+    r.lx = local[0]
+    r.ly = local[1]
+    r.lz = local[2]
+    r.u = 0.6
+    r.lScale = 0.55
+    r.g0 = rng.gauss()
+    r.g1 = rng.gauss()
+    r.g2 = rng.gauss()
+    r.c0 = 0.4
+    r.c1 = 1 / 3
+    r.c2 = 0.36
+    return r
   }
+
+  // the flat translucent sheets of the scene (a curved veil's lines lie on it, not behind it)
+  const veilSheets: Veil[] = []
+  for (const m of fc.scene.marks) if (m.kind === 'mesh' && m.style.opacity < 1) veilSheets.push(veilOf(m))
 
   const emit = (mark: number, tag: string, pl: PL, widthPx: number, hiddenRun: boolean) => {
     if (pl.x.length < 2) return
@@ -251,12 +297,17 @@ export function lineStrokes(an: PaintCtx): void {
     const path = new Float32Array(2 * PATH_POINTS)
     const width = new Float32Array(PATH_POINTS)
     polylinePath(pl.x, pl.y, pl.x.length, widthPx, false, false, path, width)
+    const colour: DraftColour = { a: recipeOf(mark, rng), b: null, t: 0 }
+    // seen through a flat veil: painted before the glaze, so the veil tints it
+    const behind = veilSheets.length > 0 && behindVeil(fc, veilSheets, w)
     an.drafts.push({
+      ...(behind ? { layer: BEHIND_VEIL_LAYER } : {}),
       role: roleIndex('line'),
       path,
       width,
       depth: pl.d[mid],
-      lab: colourOf(mark, rng),
+      lab: colourOfDraft(colour, an.env),
+      colour,
       u: 0.6,
       cell,
       mx: pl.x[mid],

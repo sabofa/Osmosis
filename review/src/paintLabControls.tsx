@@ -356,17 +356,18 @@ export function GroupView({ group, params, defaults, open, forceOpen, filter, on
 // The lighting-curve chart
 // ---------------------------------------------------------------------------
 
-// L, C and H against value for the figure's local colour, from the curve
-// sliders and the lightness, chroma and hue adjustment curves (paintLabCurve.ts:
-// the base curve, without the model's extras).
+// L, C and H against value for the figure's local colour: the model's own curve
+// (paintLabCurve.ts), as the strokes use it, with the sliders and the adjustment
+// curves applied.
 export function CurveChart({ params, local }: { params: PaintParams; local: Lch }) {
   const W = 300
   const TRACK = 40
   const GAP = 8
-  const { curve, value, curves } = params
+  const { value } = params
+  // Everything the curve reads: its numbers, the adjustment curves, the seed of its deviation.
   const series = useMemo(
-    () => curveSeries(curve, local, 41, 1, { lAdjust: curves.lAdjust, cAdjust: curves.cAdjust, hAdjust: curves.hAdjust }),
-    [curve, local, curves.lAdjust, curves.cAdjust, curves.hAdjust],
+    () => curveSeries(params, local, 41),
+    [params.curve, params.curves, params.environment, params.seed, params.canvas.tone, local],
   )
   const tracks: { name: string; values: number[]; className: string; unit: string; digits: number }[] = [
     { name: 'L', values: series.L, className: 'is-l', unit: '', digits: 2 },
@@ -408,7 +409,7 @@ export function CurveChart({ params, local }: { params: PaintParams; local: Lch 
           </text>
         ))}
       </svg>
-      <figcaption>The curve against value u, with your lightness, chroma and hue adjustments and the half-tone and light ramps shaded. The model adds its accent, plane steps, tints and deviation on top.</figcaption>
+      <figcaption>The model’s curve against value u, as the strokes use it, with your adjustments and the half-tone and light ramps shaded. Each stroke adds its own jitter, its plane’s hue step and the sky’s and ground’s colour.</figcaption>
     </figure>
   )
 }

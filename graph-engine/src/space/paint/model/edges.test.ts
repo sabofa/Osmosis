@@ -363,6 +363,51 @@ describe('edge geometry helpers', () => {
   })
 })
 
+describe('the hardness field', () => {
+  // what is the nearest edge, how hard, how far: the definition, by brute force over every edge sample
+  it('is, at every pixel, the nearest sample of a visible edge within edgeReachPx, and its hardness', () => {
+    const { edges, fc } = twoFaces(LIT_LEFT, CORE_RIGHT, NO_NOISE)
+    const g = fc.g
+    const w = g.width
+    const h = g.height
+    const minContrast = NO_NOISE.detect.edgeMinContrast
+    const reach = edges.reach
+    expect(reach).toBeCloseTo(NO_NOISE.detect.edgeReachPx / g.scale, 9)
+    let covered = 0
+    const seen = new Set<number>()
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        // the nearest distance, and the hardness of every sample at that distance (a tie may be taken either way)
+        let best = 99
+        let hardnesses: number[] = []
+        for (const e of edges.edges) {
+          if (e.contrast < minContrast) continue
+          for (let k = 0; k < e.h.length; k++) {
+            const d = Math.hypot(x - Math.round(e.pts[2 * k]), y - Math.round(e.pts[2 * k + 1]))
+            if (d >= reach) continue
+            if (d < best - 1e-9) {
+              best = d
+              hardnesses = [e.h[k]]
+            } else if (Math.abs(d - best) <= 1e-9) hardnesses.push(e.h[k])
+          }
+        }
+        const i = y * w + x
+        expect(edges.dist[i], `dist at ${x},${y}`).toBeCloseTo(Math.fround(best), 5)
+        if (best === 99) expect(edges.hard[i], `hardness at ${x},${y}`).toBe(0)
+        else {
+          expect(hardnesses.map((v) => Math.fround(v)), `hardness at ${x},${y}`).toContain(edges.hard[i])
+          covered++
+          seen.add(Math.round(best * 10))
+        }
+      }
+    }
+    // the field is not trivial: a band round the boundary between the faces, with a range of distances
+    expect(covered).toBeGreaterThan(200)
+    expect(seen.size).toBeGreaterThan(8)
+    expect(Math.max(...edges.dist.filter((d) => d < 99))).toBeLessThan(reach)
+  })
+})
+
 function clampInt(v: number, a: number, b: number): number {
   return v < a ? a : v > b ? b : v
 }

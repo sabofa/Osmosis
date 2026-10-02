@@ -38,6 +38,7 @@ function startingParams(): { saved: PaintParams; params: PaintParams; tones: Ton
   const read = paramsFromData(tuning)
   const saved = read.ok ? read.params : DEFAULT_PAINT_PARAMS
   let params = URL_STATE.seed === null ? saved : applySlider(saved, 'seed', URL_STATE.seed)
+  for (const [path, value] of URL_STATE.set) params = applySlider(params, path, value)
   const tones: Tones = { light: null, dark: null }
   if (URL_STATE.theme === 'dark') {
     const moved = switchTheme(params, tones, 'light', 'dark')
@@ -114,6 +115,10 @@ export function PaintLab() {
   }, [figure])
 
   const onChange = useCallback((path: string, raw: number | string) => setParams((p) => applySlider(p, path, raw)), [])
+  useEffect(() => {
+    // For measuring from a script (?perf=1): move a slider as the controls do.
+    if (URL_STATE.perf) (window as unknown as { __paintLab?: unknown }).__paintLab = { set: onChange }
+  }, [onChange])
   const onReset = useCallback((path: string) => setParams((p) => setParam(p, path, getParam(defaults, path))), [defaults])
   const onCurve = useCallback((path: string, points: CurvePoints) => setParams((p) => setCurve(p, path, points)), [])
   const onResetCurve = useCallback((path: string) => setParams((p) => setCurve(p, path, structuredClone(getCurve(defaults, path)))), [defaults])
@@ -285,7 +290,7 @@ export function PaintLab() {
         </button>
         <div className="pl-spacer" />
         {tab === 'tune' ? (
-          <output className="pl-readout" aria-label="Frame rate and stroke count">
+          <output className="pl-readout" aria-label="Frame rate and stroke count" title={readout ? `${readout.kind === 'colour' ? 'Colour-only frame' : readout.kind === 'repaint' ? 'Repainted frame (the same strokes)' : 'Full frame'}: G-buffer ${readout.gbufferMs.toFixed(0)} ms · model ${readout.modelMs.toFixed(0)} ms (in a worker) · particles ${readout.particlesMs.toFixed(0)} ms · paper ${readout.paperMs.toFixed(0)} ms · paint ${readout.paintMs.toFixed(0)} ms. The first number is the whole frame, request to picture.` : undefined}>
             {readout ? (
               <>
                 <b>{Math.round(readout.fps)}</b> fps · {readout.ms.toFixed(1)} ms · <b>{readout.strokes.toLocaleString('en-US')}</b> strokes

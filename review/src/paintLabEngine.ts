@@ -1,269 +1,460 @@
-// The Paint Lab's engine adapter. The lab talks to the painter only through
-// this interface, so the model (space/paint/model), the renderer
-// (space/paint/gl) and the paper (style/papers/generate) can land behind it
-// without the lab changing.
+// The Paint Lab's engine adapter: the real painter behind the interface the lab
+// was built against. One frame is
 //
-// THIS FILE IS A STUB (Task 5). It clears the canvas to the canvas tone and
-// draws the scene's meshes as flat-shaded triangles with Canvas 2D, lit by the
-// key light (through the light-response and value curves, so the curve editors
-// show an effect), plus its lines, points and arrows, and says so on the canvas. It
-// exists so the lab runs, and can be judged, on its own. Task 6 replaces this
-// file with the real thing: for each frame, renderer.renderGBuffer, then
-// paintFrame (rebuilding particles only when the scene, seed or particle
-// parameters change), then renderer.paint; and the paper, generated once per
-// weave, texture and seed.
+//   renderer.renderGBuffer(view, params)          the shadow map and the G-buffer, read back   (this thread, the GPU)
+//   session.frame(...)                            the model: strokes from the G-buffer         (a worker, or this thread)
+//   renderer.paint(frame, view, params, debug)    the brush, the canvas and the relief         (this thread, the GPU)
 //
-// The contract the lab keeps (and Task 6 may rely on):
-//  - setScene receives the scene in WORLD coordinates (see paintLabCamera.ts):
+// The model is the long part (50 to 150 ms for a figure), so it runs in a Web
+// Worker (paintLabWorker.ts) and the controls never wait for it: while one frame
+// is in the worker the newest request waits behind it (newest wins), and the
+// picture on screen is the last one painted. With ?worker=0, or when the worker
+// cannot start, the same session (graph-engine/src/space/paint/session.ts) runs
+// on this thread.
+//
+// What a frame costs depends on what changed:
+//   full    the G-buffer and the whole model;
+//   repaint only renderer parameters changed (the relief, the canvas's texture or weave: classifyChange),
+//           and the view did not: the strokes are the last frame's, painted again, with no G-buffer
+//           and no model (the paper alone comes from the worker when the texture or the weave moved).
+//   colour  colour parameters changed (and the view did not): no G-buffer, no analysis; the worker
+//           makes the colours and the brush-load mix again from the last frame's recipes. This is
+//           what the colour sliders and the curve editors do.
+//   drag    a full frame at the camera's dragging quality (particles.dragDensity, a coarser analysis)
+//           while the pointer is down; the pointer coming up is a full frame at full quality.
+//
+// The contract the lab keeps:
+//  - setScene receives the scene in WORLD coordinates (paintLabCamera.ts):
 //    box-normalised, the same space as the PaintView's matrices and lightDir.
-//  - render receives the PaintView for this frame at the canvas's CSS size and
-//    pixelRatio, the live params, and the debug mode; it returns the stroke
-//    count and its own time. The lab sizes the canvas (CSS size x pixelRatio).
+//    The renderer takes no WorldMap, so the camera is built over an identity
+//    one and the model and renderer see the same numbers.
+//  - render asks for a frame: the PaintView for this frame at the canvas's CSS
+//    size and pixelRatio, the live params and the debug view. The result arrives
+//    through events.onFrame; an engine error through events.onError (the lab
+//    shows it in the view; nothing here throws out of a frame).
 //  - createPaintEngine throws, with a message fit to show, when it cannot run
-//    (no WebGL2); render may throw too. The lab catches both and shows them in
-//    the view; the controls keep working.
+//    (no WebGL2).
 //  - renderTo is render-then-copy, for the Showcase's grid of tiles: it paints
 //    one view at view.width x view.height CSS px (x view.pixelRatio) and, in
-//    the same task, copies the result into the 2D context `target` (drawImage,
-//    scaled to the target canvas's own pixel size). The same task is what lets a
-//    WebGL canvas be copied without preserveDrawingBuffer. The engine sizes its
-//    own canvas for it; it must not depend on that canvas's client size. The
-//    Showcase has ONE engine and canvas for all its tiles, calling setScene for
-//    each figure in turn, so setScene should be cheap to alternate: cache
-//    per-scene work (particles) on the scene object and the particle params,
-//    not on the last call.
+//    the same task as the paint, copies the result into the 2D context `target`
+//    (so a WebGL canvas can be copied without preserveDrawingBuffer). It returns
+//    when the tile is copied. The engine sizes its own canvas for it. The
+//    Showcase has ONE engine and canvas for all its tiles and calls setScene for
+//    each figure in turn, so what the engine keeps per scene (its scene and
+//    particles in the session, its GPU upload) is keyed by the scene, and
+//    alternating between figures redoes none of it.
 //  - dispose frees everything the engine made.
-// Like the real engine will, the stub needs WebGL2, so the lab's no-WebGL2
-// state is real today and not a promise.
 
-import { oklabToSrgb } from '../../graph-engine/src/space/oklab'
-import { evalCurve } from '../../graph-engine/src/space/paint/curves'
+import { PaintRenderer } from '../../graph-engine/src/space/paint/gl/PaintRenderer'
+import { classifyChange } from '../../graph-engine/src/space/paint/model/index'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
-import type { PaintDebugMode, PaintView, SceneColours } from '../../graph-engine/src/space/paint/types'
+import {
+  colourDataOf,
+  PaintSession,
+  paperKey,
+  plainScene,
+  type FrameResponse,
+  type PaperData,
+  type PaperWanted,
+  type SceneColourData,
+  type SessionRequest,
+  type SessionResponse,
+  type WireDebug,
+} from '../../graph-engine/src/space/paint/session'
+import type { GBuffer, PaintDebug, PaintDebugMode, PaintFrame, PaintView, SceneColours } from '../../graph-engine/src/space/paint/types'
 import type { SpaceScene } from '../../graph-engine/src/space/scene/types'
+import { URL_STATE } from './paintLabState'
+import type { WorkerIn, WorkerOut } from './paintLabWorker'
+
+// What one frame cost, in ms. `ms` is the whole of it, from the request to the
+// picture (a worker frame includes the wait), and the rest is where it went:
+// the G-buffer pass and readback, the model (in the worker or here), the
+// particles the model had to build first, the paper, and the paint's CPU side
+// (the GPU's own time overlaps the next frame).
+export interface FrameStats {
+  strokes: number
+  ms: number
+  gbufferMs: number
+  modelMs: number
+  particlesMs: number
+  paperMs: number
+  paintMs: number
+  kind: 'full' | 'colour' | 'repaint'
+}
+
+export interface EngineEvents {
+  onFrame(stats: FrameStats): void
+  // A message to show in the view, or null when the engine is well again.
+  onError(message: string | null): void
+}
 
 export interface PaintEngine {
   setScene(scene: SpaceScene, colours: SceneColours): void
-  render(view: PaintView, params: PaintParams, debug: PaintDebugMode): { strokes: number; ms: number }
-  renderTo(target: CanvasRenderingContext2D, view: PaintView, params: PaintParams, debug: PaintDebugMode): { strokes: number; ms: number }
+  render(view: PaintView, params: PaintParams, debug: PaintDebugMode): void
+  renderTo(target: CanvasRenderingContext2D, view: PaintView, params: PaintParams, debug: PaintDebugMode): Promise<FrameStats>
   dispose(): void
 }
 
-type Rgb = readonly [number, number, number]
+// The generated tile has two texels to a CSS px (the mockup's scale: it is 512 CSS px
+// square), and the renderer lays one texel on one device px. Below a pixel ratio of 1.5
+// the tile is halved (a 2x2 average, in the session) so that its weave is the size the
+// mockup's is, and not twice that.
+const HALVE_BELOW_RATIO = 1.5
 
-interface FlatMesh { kind: 'mesh'; positions: Float64Array; normals: Float64Array; indices: Uint32Array; rgb: Rgb; alpha: number; vertexRgb: Float32Array | null }
-interface FlatLines { kind: 'lines'; positions: Float64Array; starts: Uint32Array; rgb: Rgb; width: number; dash: readonly number[] | null }
-interface FlatPoints { kind: 'points'; positions: Float64Array; rgb: Rgb; size: number }
-interface FlatArrows { kind: 'arrows'; tails: Float64Array; vectors: Float64Array; rgb: Rgb; width: number; head: number }
-type Flat = FlatMesh | FlatLines | FlatPoints | FlatArrows
+// ---- where the model runs ----
 
-const css = (c: Rgb, a = 1) => `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)}, ${a})`
-
-// The probe leaves no context behind: it is released at once.
-function requireWebGL2(): void {
-  const gl = document.createElement('canvas').getContext('webgl2')
-  if (!gl) throw new Error('WebGL2 is not available in this browser, so the painter cannot draw. The controls still work; open the lab in a browser with WebGL2.')
-  gl.getExtension('WEBGL_lose_context')?.loseContext()
+interface ModelHost {
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData): void
+  setColours(sceneId: number, colours: SceneColourData): void
+  frame(request: SessionRequest): Promise<SessionResponse>
+  dispose(): void
 }
 
-export function createPaintEngine(canvas: HTMLCanvasElement): PaintEngine {
-  requireWebGL2()
-  const context = canvas.getContext('2d')
-  if (!context) throw new Error('The canvas would not give a 2D context.')
-  const ctx: CanvasRenderingContext2D = context
-  let flat: Flat[] = []
+// On this thread: the session itself.
+class ThreadHost implements ModelHost {
+  private readonly session = new PaintSession()
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
+    this.session.setScene(sceneId, scene, colours)
+  }
+  setColours(sceneId: number, colours: SceneColourData) {
+    this.session.setColours(sceneId, colours)
+  }
+  frame(request: SessionRequest) {
+    return Promise.resolve(this.session.frame(request))
+  }
+  dispose() {}
+}
 
-  const engine: PaintEngine = {
-    setScene(scene, colours) {
-      flat = scene.marks.flatMap((mark, i): Flat[] => {
-        const lab = colours.markColour(i)
-        const rgb = oklabToSrgb(lab)
-        switch (mark.kind) {
-          case 'mesh': {
-            // A colormapped surface takes each vertex's colour from the colormap at its scalar.
-            const scale = mark.style.colorScale
-            let vertexRgb: Float32Array | null = null
-            if (scale !== null && mark.scalars) {
-              vertexRgb = new Float32Array(mark.scalars.length * 3)
-              mark.scalars.forEach((value, v) => {
-                const mapped = colours.scaleColour(scale, value)
-                vertexRgb!.set(mapped ? oklabToSrgb(mapped) : rgb, 3 * v)
-              })
-            }
-            return [{ kind: 'mesh', positions: mark.positions, normals: mark.normals, indices: mark.indices, rgb, alpha: mark.style.opacity, vertexRgb }]
-          }
-          case 'lines':
-            return [{ kind: 'lines', positions: mark.positions, starts: mark.starts, rgb, width: mark.style.width, dash: mark.style.dash }]
-          case 'points':
-            return [{ kind: 'points', positions: mark.positions, rgb, size: mark.style.size }]
-          case 'arrows':
-            return [{ kind: 'arrows', tails: mark.tails, vectors: mark.vectors, rgb, width: mark.style.shaftWidth, head: mark.style.headSize }]
-          default:
-            return []
-        }
-      })
+// In a Web Worker. `failed` is called once if the worker dies or cannot start.
+class WorkerHost implements ModelHost {
+  private readonly worker: Worker
+  private readonly waiting = new Map<number, (r: SessionResponse) => void>()
+  private dead = false
+
+  constructor(failed: (reason: string) => void) {
+    this.worker = new Worker(new URL('./paintLabWorker.ts', import.meta.url), { type: 'module' })
+    this.worker.onmessage = (event: MessageEvent<WorkerOut>) => {
+      const { response } = event.data
+      const done = this.waiting.get(response.id)
+      this.waiting.delete(response.id)
+      done?.(response)
+    }
+    this.worker.onerror = (event) => {
+      if (this.dead) return
+      this.dead = true
+      failed(event.message || 'the model worker stopped')
+    }
+  }
+
+  private send(message: WorkerIn, transfer: ArrayBuffer[] = []) {
+    this.worker.postMessage(message, transfer)
+  }
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
+    this.send({ type: 'scene', sceneId, scene, colours })
+  }
+  setColours(sceneId: number, colours: SceneColourData) {
+    this.send({ type: 'colours', sceneId, colours })
+  }
+  frame(request: SessionRequest) {
+    return new Promise<SessionResponse>((resolve) => {
+      this.waiting.set(request.id, resolve)
+      const g = request.gbuffer
+      this.send({ type: 'frame', request }, g ? ([g.depth.buffer, g.normal.buffer, g.value.buffer, g.shadow.buffer, g.mark.buffer] as ArrayBuffer[]) : [])
+    })
+  }
+  dispose() {
+    this.dead = true
+    this.worker.terminate()
+    for (const done of this.waiting.values()) done({ id: -1, ok: false, error: 'the engine was disposed' })
+    this.waiting.clear()
+  }
+}
+
+// ---- the engine ----
+
+const EMPTY_F32 = new Float32Array(0)
+const EMPTY_I32 = new Int32Array(0)
+const EMPTY_U8 = new Uint8Array(0)
+
+// The debug views of a frame from what the model sent (only the arrays the view in use reads).
+const debugOf = (wire: WireDebug | null): PaintDebug => ({
+  value: wire?.value ?? EMPTY_F32,
+  zones: wire?.zones ?? EMPTY_U8,
+  planes: wire?.planes ?? EMPTY_I32,
+  edgeSegments: wire?.edgeSegments ?? EMPTY_F32,
+  edgeClass: wire?.edgeClass ?? EMPTY_U8,
+})
+
+// What decides whether a frame's G-buffer and analysis are still the right ones: the view, and its quality.
+function sameFrame(a: PaintView, b: PaintView): boolean {
+  if (a.width !== b.width || a.height !== b.height || a.pixelRatio !== b.pixelRatio || a.dragging !== b.dragging) return false
+  for (let i = 0; i < 16; i++) if (a.viewProj[i] !== b.viewProj[i]) return false
+  for (let i = 0; i < 3; i++) if (a.lightDir[i] !== b.lightDir[i] || a.eye[i] !== b.eye[i] || a.viewDir[i] !== b.viewDir[i]) return false
+  return true
+}
+
+interface Job {
+  // The scene (and its id and colours) the job was asked for: setScene after the request does not change what it paints.
+  sceneId: number
+  scene: SpaceScene
+  colours: SceneColours
+  view: PaintView
+  params: PaintParams
+  debug: PaintDebugMode
+  // renderTo: the 2D context to copy into, and how to answer.
+  target: CanvasRenderingContext2D | null
+  settle: { resolve(stats: FrameStats): void; reject(error: Error): void } | null
+}
+
+// What the model's last full frame was made from (the session holds the same), and the strokes on screen now.
+interface Analysed {
+  sceneId: number
+  view: PaintView
+  // The parameters of the analysis, and of the strokes now held (they differ after a recolour).
+  params: PaintParams
+  strokesParams: PaintParams
+  debug: PaintDebugMode
+  frame: PaintFrame
+}
+
+export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvents): PaintEngine {
+  let failure: string | null = null
+  // new PaintRenderer throws, with a message fit to show, when there is no WebGL2.
+  const renderer = new PaintRenderer(canvas, {
+    onError: (message) => {
+      failure = message
+    },
+    // A GPU reset, or a tab that slept: the context takes the picture with it and the renderer gives its
+    // resources back when it returns; the picture is painted again from the strokes the engine holds.
+    onContextLost: () => events.onError('The graphics context was lost (the GPU reset, or the tab was asleep). It comes back by itself, and the picture with it.'),
+    onContextRestored: () => {
+      events.onError(null)
+      if (lastJob && !disposed) {
+        latest = lastJob
+        pump()
+      }
+    },
+  })
+
+  // Scenes get ids; a scene (and the colours it was given) is sent to the model once.
+  const ids = new WeakMap<SpaceScene, number>()
+  const sent = new Map<number, { scene: SpaceScene; colours: SceneColours }>()
+  let nextSceneId = 1
+  // The scene the lab last set: what the next request is for.
+  let sceneId = 0
+  let sceneNow: SpaceScene | null = null
+  let coloursNow: SceneColours | null = null
+
+  // The scene the renderer holds (its meshes are uploaded for the G-buffer pass).
+  let rendererScene: SpaceScene | null = null
+
+  let host: ModelHost
+  const fallBack = (reason: string) => {
+    if (disposed) return
+    console.warn(`The model worker could not run (${reason}); the model runs on this thread.`)
+    host.dispose()
+    host = new ThreadHost()
+    // The session on this thread knows nothing yet: give it every scene again and forget what it was holding.
+    for (const [id, s] of sent) host.setScene(id, plainScene(s.scene), colourDataOf(s.scene, s.colours))
+    analysed = null
+    paperHeld = ''
+  }
+  let disposed = false
+  try {
+    host = URL_STATE.worker && typeof Worker !== 'undefined' ? new WorkerHost(fallBack) : new ThreadHost()
+  } catch {
+    host = new ThreadHost()
+  }
+
+  let analysed: Analysed | null = null
+  let paperHeld = ''
+  let nextRequest = 1
+
+  let inFlight = false
+  let latest: Job | null = null
+  // The last request for the view, to paint again after a lost context.
+  let lastJob: Job | null = null
+  const tiles: Job[] = []
+
+  const paperFor = (params: PaintParams, view: PaintView): PaperWanted => ({
+    weave: params.canvas.weave,
+    seed: params.seed,
+    tone: [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]],
+    texture: params.canvas.texture,
+    halve: view.pixelRatio < HALVE_BELOW_RATIO,
+  })
+
+  async function run(job: Job): Promise<FrameStats> {
+    const started = performance.now()
+    const { view, params, debug } = job
+    const id = job.sceneId
+    if (!id || !sent.has(id)) return { strokes: 0, ms: 0, gbufferMs: 0, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: 0, kind: 'full' }
+    if (rendererScene !== job.scene) {
+      renderer.setScene(job.scene, job.colours)
+      rendererScene = job.scene
+    }
+    if (job.target) {
+      // The renderer sizes its canvas to the canvas's client size times the pixel ratio.
+      canvas.style.width = `${view.width}px`
+      canvas.style.height = `${view.height}px`
+    }
+    const want = paperFor(params, view)
+    const request = (kind: 'full' | 'colour' | 'paper', gbuffer: GBuffer | null): SessionRequest => ({
+      id: nextRequest++, sceneId: id, kind, params, view, gbuffer, debug, havePaper: paperHeld, paper: want,
+    })
+
+    let gbufferMs = 0
+    const full = (): Promise<SessionResponse> => {
+      const t0 = performance.now()
+      const g = renderer.renderGBuffer(view, params)
+      gbufferMs = performance.now() - t0
+      return host.frame(request('full', g))
+    }
+    // What the last frame lets this one skip.
+    const a = analysed
+    const same = a !== null && a.sceneId === id && a.debug === debug && sameFrame(a.view, view)
+    const sinceStrokes = same ? classifyChange(a.strokesParams, params) : 'full'
+    const sinceAnalysis = same ? classifyChange(a.params, params) : 'full'
+    let kind: FrameStats['kind']
+    let modelMs = 0
+    let particlesMs = 0
+    let paperMs = 0
+    let frame: PaintFrame
+    const takePaper = (paper: PaperData | null) => {
+      if (!paper) return
+      renderer.setPaper(paper.rgba, paper.height, paper.size)
+      paperHeld = paper.key
+    }
+    const failed = (response: SessionResponse): never => {
+      if (!response.ok && 'needFull' in response) throw new Error('the model would not recolour or paint the frame')
+      throw new Error(response.ok ? 'the model sent a frame that is not one' : response.error)
+    }
+    const isFrame = (r: SessionResponse): r is FrameResponse => r.ok && r.kind !== 'paper'
+    // The worker went away under this frame and the model moved to this thread: make the frame again there.
+    const gone = (r: SessionResponse) => !r.ok && 'error' in r && r.id === -1 && !disposed
+
+    if ((sinceStrokes === 'same' || sinceStrokes === 'render') && a) {
+      // The strokes are the frame's own: paint them again (the paper from the worker if it changed).
+      kind = 'repaint'
+      frame = a.frame
+      if (paperKey(want) !== paperHeld) {
+        const r = await host.frame(request('paper', null))
+        if (gone(r)) return run(job)
+        if (!r.ok || r.kind !== 'paper') return failed(r)
+        takePaper(r.paper)
+        paperMs = r.timing.paperMs
+      }
+      a.strokesParams = params
+    } else {
+      let response: SessionResponse
+      if (sinceAnalysis !== 'full' && a) {
+        response = await host.frame(request('colour', null))
+        if (!response.ok && 'needFull' in response) response = await full()
+      } else response = await full()
+      if (gone(response)) return run(job)
+      if (!isFrame(response)) return failed(response)
+      // The scene changed while the model worked: a frame of the view is not the picture any more (a tile is of its own scene).
+      if (!job.target && id !== sceneId) return { strokes: 0, ms: 0, gbufferMs, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: 0, kind: response.kind }
+      takePaper(response.paper)
+      kind = response.kind
+      modelMs = response.timing.modelMs
+      particlesMs = response.timing.particlesMs
+      paperMs = response.timing.paperMs
+      frame = {
+        strokes: response.strokes,
+        // a colour frame's debug views are the last full frame's
+        debug: response.kind === 'full' ? debugOf(response.debug) : (a as Analysed).frame.debug,
+        stats: response.stats,
+      }
+      if (response.kind === 'full') analysed = { sceneId: id, view, params, strokesParams: params, debug, frame }
+      else if (a) {
+        a.frame = frame
+        a.strokesParams = params
+      }
+    }
+    const t1 = performance.now()
+    renderer.paint(frame, view, params, debug)
+    // A renderer that failed says so (it then draws nothing).
+    if (failure) throw new Error(failure)
+    if (job.target) job.target.drawImage(canvas, 0, 0, job.target.canvas.width, job.target.canvas.height)
+    const now = performance.now()
+    return { strokes: frame.stats.strokes, ms: now - started, gbufferMs, modelMs, particlesMs, paperMs, paintMs: now - t1, kind }
+  }
+
+  // One frame at a time: a Showcase tile in order, else the newest request.
+  function pump(): void {
+    if (inFlight || disposed) return
+    const job = tiles.shift() ?? latest
+    if (!job) return
+    if (job === latest) latest = null
+    inFlight = true
+    run(job).then(
+      (stats) => {
+        inFlight = false
+        if (disposed) return
+        if (!job.target) {
+          events.onError(null)
+          events.onFrame(stats)
+        } else job.settle?.resolve(stats)
+        pump()
+      },
+      (error: unknown) => {
+        inFlight = false
+        const message = error instanceof Error ? error.message : String(error)
+        if (job.target) job.settle?.reject(new Error(message))
+        else events.onError(message)
+        if (!disposed) pump()
+      },
+    )
+  }
+
+  return {
+    setScene(sc, co) {
+      let id = ids.get(sc)
+      const known = id !== undefined ? sent.get(id) : undefined
+      if (id === undefined) {
+        id = nextSceneId++
+        ids.set(sc, id)
+      }
+      if (!known) {
+        sent.set(id, { scene: sc, colours: co })
+        host.setScene(id, plainScene(sc), colourDataOf(sc, co))
+      } else if (known.colours !== co) {
+        known.colours = co
+        host.setColours(id, colourDataOf(sc, co))
+        if (analysed?.sceneId === id) analysed = null
+      }
+      sceneId = id
+      sceneNow = sc
+      coloursNow = co
     },
 
     render(view, params, debug) {
-      return draw(view, params, debug, true)
+      if (!sceneNow || !coloursNow) return
+      latest = { sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target: null, settle: null }
+      lastJob = latest
+      pump()
     },
 
     renderTo(target, view, params, debug) {
-      // The engine's canvas takes the view's size, then the picture is copied
-      // out before the task ends (a tile has its own caption, so no stub label).
-      const w = Math.max(1, Math.round(view.width * view.pixelRatio))
-      const h = Math.max(1, Math.round(view.height * view.pixelRatio))
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w
-        canvas.height = h
-      }
-      const result = draw(view, params, debug, false)
-      target.drawImage(canvas, 0, 0, target.canvas.width, target.canvas.height)
-      return result
+      return new Promise<FrameStats>((resolve, reject) => {
+        if (!sceneNow || !coloursNow) return reject(new Error('the engine has no scene'))
+        tiles.push({ sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target, settle: { resolve, reject } })
+        pump()
+      })
     },
 
     dispose() {
-      flat = []
+      disposed = true
+      latest = null
+      lastJob = null
+      for (const t of tiles.splice(0)) t.settle?.reject(new Error('the engine was disposed'))
+      sent.clear()
+      sceneNow = null
+      coloursNow = null
+      analysed = null
+      host.dispose()
+      renderer.dispose()
     },
-  }
-  return engine
-
-  function draw(view: PaintView, params: PaintParams, debug: PaintDebugMode, label: boolean): { strokes: number; ms: number } {
-    const t0 = performance.now()
-    const { width, height, pixelRatio } = view
-    ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
-    ctx.globalAlpha = 1
-    ctx.setLineDash([])
-    const tone = oklabToSrgb(params.canvas.tone)
-    ctx.fillStyle = css(tone)
-    ctx.fillRect(0, 0, width, height)
-
-    const m = view.viewProj
-    // World -> CSS px (x, y) and NDC depth (z: larger is farther).
-    const screen = (p: Float64Array, i: number): [number, number, number] => {
-      const x = p[i], y = p[i + 1], z = p[i + 2]
-      const w = m[3] * x + m[7] * y + m[11] * z + m[15]
-      return [
-        ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * 0.5 * width,
-        (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * 0.5 * height,
-        (m[2] * x + m[6] * y + m[10] * z + m[14]) / w,
-      ]
-    }
-
-    // Every triangle of every mesh, far to near.
-    const tris: { depth: number; mesh: FlatMesh; a: number; b: number; c: number }[] = []
-    const projected = new Map<FlatMesh, Float32Array>()
-    for (const f of flat) {
-      if (f.kind !== 'mesh') continue
-      const n = f.positions.length / 3
-      const pts = new Float32Array(n * 3)
-      for (let v = 0; v < n; v++) pts.set(screen(f.positions, 3 * v), 3 * v)
-      projected.set(f, pts)
-      for (let t = 0; t + 2 < f.indices.length; t += 3) {
-        const a = f.indices[t], b = f.indices[t + 1], c = f.indices[t + 2]
-        tris.push({ depth: (pts[3 * a + 2] + pts[3 * b + 2] + pts[3 * c + 2]) / 3, mesh: f, a, b, c })
-      }
-    }
-    tris.sort((p, q) => q.depth - p.depth)
-
-    const { light } = params
-    const [lx, ly, lz] = view.lightDir
-    const [vx, vy, vz] = view.viewDir
-    const grey = debug === 'value' || debug === 'grey'
-    const dragging = view.dragging
-    for (const { mesh, a, b, c } of tris) {
-      const pts = projected.get(mesh)!
-      const nm = mesh.normals
-      let nx = nm[3 * a] + nm[3 * b] + nm[3 * c]
-      let ny = nm[3 * a + 1] + nm[3 * b + 1] + nm[3 * c + 1]
-      let nz = nm[3 * a + 2] + nm[3 * b + 2] + nm[3 * c + 2]
-      const len = Math.hypot(nx, ny, nz) || 1
-      nx /= len; ny /= len; nz /= len
-      // Both sides are lit: a normal facing away from the eye turns round.
-      if (nx * vx + ny * vy + nz * vz > 0) { nx = -nx; ny = -ny; nz = -nz }
-      // The light response curve shapes N·L, and the value curve shapes the value that results (§11).
-      const lambert = evalCurve(params.curves.lightResponse, Math.max(0, nx * lx + ny * ly + nz * lz))
-      const raw = Math.min(1, light.ambient + (1 - light.ambient) * light.intensity * lambert + light.sky * Math.max(nz, 0) + light.bounce * Math.max(-nz, 0))
-      const v = Math.min(1, Math.max(0, evalCurve(params.curves.value, raw)))
-      const k = 0.22 + 0.95 * v
-      const vc = mesh.vertexRgb
-      const base: Rgb = vc
-        ? [(vc[3 * a] + vc[3 * b] + vc[3 * c]) / 3, (vc[3 * a + 1] + vc[3 * b + 1] + vc[3 * c + 1]) / 3, (vc[3 * a + 2] + vc[3 * b + 2] + vc[3 * c + 2]) / 3]
-        : mesh.rgb
-      const rgb: Rgb = grey ? [v, v, v] : [Math.min(1, base[0] * k), Math.min(1, base[1] * k), Math.min(1, base[2] * k)]
-      const fill = css(rgb, mesh.alpha)
-      ctx.beginPath()
-      ctx.moveTo(pts[3 * a], pts[3 * a + 1])
-      ctx.lineTo(pts[3 * b], pts[3 * b + 1])
-      ctx.lineTo(pts[3 * c], pts[3 * c + 1])
-      ctx.closePath()
-      ctx.fillStyle = fill
-      ctx.fill()
-      if (!dragging && mesh.alpha === 1) {
-        // A hairline of the same colour closes the antialiasing seams between triangles.
-        ctx.strokeStyle = fill
-        ctx.lineWidth = 0.6
-        ctx.stroke()
-      }
-    }
-
-    for (const f of flat) {
-      if (f.kind === 'lines') {
-        ctx.strokeStyle = css(f.rgb)
-        ctx.lineWidth = f.width
-        ctx.lineJoin = 'round'
-        ctx.setLineDash(f.dash ? [...f.dash] : [])
-        const n = f.positions.length / 3
-        for (let s = 0; s < f.starts.length; s++) {
-          const end = s + 1 < f.starts.length ? f.starts[s + 1] : n
-          ctx.beginPath()
-          for (let v = f.starts[s]; v < end; v++) {
-            const [x, y] = screen(f.positions, 3 * v)
-            if (v === f.starts[s]) ctx.moveTo(x, y)
-            else ctx.lineTo(x, y)
-          }
-          ctx.stroke()
-        }
-        ctx.setLineDash([])
-      } else if (f.kind === 'points') {
-        for (let v = 0; v + 2 < f.positions.length; v += 3) {
-          const [x, y] = screen(f.positions, v)
-          ctx.beginPath()
-          ctx.arc(x, y, f.size / 2, 0, Math.PI * 2)
-          ctx.fillStyle = css(f.rgb)
-          ctx.fill()
-          ctx.strokeStyle = css(tone)
-          ctx.lineWidth = 1.5
-          ctx.stroke()
-        }
-      } else if (f.kind === 'arrows') {
-        for (let v = 0; v + 2 < f.tails.length; v += 3) {
-          const tip = new Float64Array([f.tails[v] + f.vectors[v], f.tails[v + 1] + f.vectors[v + 1], f.tails[v + 2] + f.vectors[v + 2]])
-          const [x0, y0] = screen(f.tails, v)
-          const [x1, y1] = screen(tip, 0)
-          const angle = Math.atan2(y1 - y0, x1 - x0)
-          ctx.strokeStyle = css(f.rgb)
-          ctx.fillStyle = css(f.rgb)
-          ctx.lineWidth = f.width
-          ctx.beginPath()
-          ctx.moveTo(x0, y0)
-          ctx.lineTo(x1, y1)
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(x1, y1)
-          ctx.lineTo(x1 - f.head * Math.cos(angle - 0.4), y1 - f.head * Math.sin(angle - 0.4))
-          ctx.lineTo(x1 - f.head * Math.cos(angle + 0.4), y1 - f.head * Math.sin(angle + 0.4))
-          ctx.closePath()
-          ctx.fill()
-        }
-      }
-    }
-
-    if (label) {
-      ctx.font = '12px ui-monospace, "Cascadia Code", Menlo, monospace'
-      ctx.fillStyle = tone[0] * 0.3 + tone[1] * 0.59 + tone[2] * 0.11 > 0.5 ? 'rgba(23, 23, 15, 0.62)' : 'rgba(242, 239, 226, 0.7)'
-      ctx.fillText('stub engine: Canvas 2D flat shading, not the painter. The engine arrives in Task 6.', 14, height - 14)
-    }
-    return { strokes: 0, ms: performance.now() - t0 }
   }
 }

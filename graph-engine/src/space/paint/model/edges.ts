@@ -422,6 +422,7 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
 
   // the hardness field: what is the nearest edge, how hard, how far
   const reach = params.detect.edgeReachPx / scale
+  const reach2 = reach * reach
   const dist = new Float32Array(w * h).fill(99)
   const hard = new Float32Array(w * h)
   for (const e of edges) {
@@ -432,14 +433,23 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
       const y = e.pts[2 * k + 1]
       const hv = e.h[k]
       const r = Math.ceil(reach)
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const xx = Math.round(x) + dx
-          const yy = Math.round(y) + dy
-          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue
-          const d = Math.hypot(dx, dy)
-          if (d >= reach) continue
-          const i = yy * w + xx
+      const cx = Math.round(x)
+      const cy = Math.round(y)
+      // the square of the reach, clipped to the image once, and a square root only for a cell that is inside it
+      const xa = Math.max(0, cx - r)
+      const xb = Math.min(w - 1, cx + r)
+      const ya = Math.max(0, cy - r)
+      const yb = Math.min(h - 1, cy + r)
+      for (let yy = ya; yy <= yb; yy++) {
+        const dy = yy - cy
+        const dy2 = dy * dy
+        const row = yy * w
+        for (let xx = xa; xx <= xb; xx++) {
+          const dx = xx - cx
+          const d2 = dx * dx + dy2
+          if (d2 >= reach2) continue
+          const d = Math.sqrt(d2)
+          const i = row + xx
           if (d < dist[i]) {
             dist[i] = d
             hard[i] = hv

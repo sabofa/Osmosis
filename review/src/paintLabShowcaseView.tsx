@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { cameraMatrices } from '../../graph-engine/src/space/camera/projection'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
-import type { PaintDebugMode } from '../../graph-engine/src/space/paint/types'
+import type { PaintDebugMode, SceneColours } from '../../graph-engine/src/space/paint/types'
 import { buildPaintView, prepareFigure } from './paintLabCamera'
 import { hexToOklab, makeSceneColours, oklabToHex, type Theme } from './paintLabColours'
 import { createPaintEngine, type PaintEngine } from './paintLabEngine'
@@ -9,6 +9,11 @@ import { figureById, PAINT_FIGURES } from './paintLabFigures'
 import { showcaseKey, showcaseLayout, TileQueue, type ShowcaseLayout } from './paintLabShowcase'
 
 const FIGURE_IDS = PAINT_FIGURES.map((f) => f.id)
+
+// A tile is painted at this many CSS px across (at a pixel ratio of 1) and scaled down into its canvas, so
+// it is the picture Tune shows, with the same stroke detail, only smaller: painted at the size of a tile the
+// brush would be as big as a fifth of the figure.
+const RENDER_WIDTH = 1000
 
 export interface ShowcaseProps {
   active: boolean
@@ -24,9 +29,9 @@ export interface ShowcaseProps {
 
 // A grid of every figure, each at its own authored camera and painted with the
 // params the Tune tab edits. It has ONE engine and canvas for all the tiles (a
-// browser caps WebGL contexts): for each tile in turn, one per animation frame,
-// the scene is set, the engine paints at the tile's size, and the picture is
-// copied into the tile's 2D canvas in the same task (engine.renderTo). Tiles
+// browser caps WebGL contexts): for each tile in turn, one at a time, the scene
+// is set, the engine paints a view RENDER_WIDTH px across, and the picture is
+// scaled into the tile's 2D canvas in the same task (engine.renderTo). Tiles
 // are cached: a tile is painted again only when the params, the debug view, the
 // theme, a local colour or the tile's size change (paintLabShowcase.ts).
 export function Showcase(props: ShowcaseProps) {
@@ -35,6 +40,8 @@ export function Showcase(props: ShowcaseProps) {
   const holderRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<PaintEngine | null>(null)
   const tiles = useRef(new Map<string, HTMLCanvasElement>())
+  // One colours object per figure, theme and local colour, so the engine's particles for a figure stay cached.
+  const coloursOf = useRef(new Map<string, SceneColours>())
   const [queue] = useState(() => new TileQueue(FIGURE_IDS))
   const [layout, setLayout] = useState<ShowcaseLayout>(() => showcaseLayout(1200))
   const [, setPainted] = useState(0)
@@ -72,7 +79,10 @@ export function Showcase(props: ShowcaseProps) {
     holder.appendChild(canvas)
     let engine: PaintEngine | null = null
     try {
-      engine = createPaintEngine(canvas)
+      engine = createPaintEngine(canvas, {
+        onFrame: () => {},
+        onError: (text) => text !== null && setMessage({ title: 'The painter hit an error', text }),
+      })
     } catch (error) {
       setMessage({ title: 'The painter cannot start', text: error instanceof Error ? error.message : String(error) })
     }
@@ -95,33 +105,57 @@ export function Showcase(props: ShowcaseProps) {
     live.current.onProgress(queue.progress())
     setPainted((n) => n + 1)
     let frame = 0
+    let running = true
     const step = () => {
       frame = 0
       const engine = engineRef.current
       const id = queue.next()
       if (!engine || id === null) return
+      let painting: Promise<unknown>
       try {
         const target = tiles.current.get(id)?.getContext('2d')
         if (!target) return
         const p = live.current
         const { built, worldScene } = prepareFigure(figureById(id)!)
-        const camera = cameraMatrices(built.authored, built.world, { width: tileW, height: tileH }, built.projection)
-        const view = buildPaintView(camera, p.params.light, dpr, false)
-        engine.setScene(worldScene, makeSceneColours(built.scene, p.theme, p.localHex ? hexToOklab(p.localHex) : null))
-        engine.renderTo(target, view, p.params, p.debug)
-        queue.done(id, key)
-        setMessage(null)
+        const renderW = RENDER_WIDTH
+        const renderH = Math.round((tileH * RENDER_WIDTH) / tileW)
+        const camera = cameraMatrices(built.authored, built.world, { width: renderW, height: renderH }, built.projection)
+        const view = buildPaintView(camera, p.params.light, 1, false)
+        target.imageSmoothingEnabled = true
+        target.imageSmoothingQuality = 'high'
+        const coloursKey = `${id}|${p.theme}|${p.localHex ?? ''}`
+        let colours = coloursOf.current.get(coloursKey)
+        if (!colours) {
+          colours = makeSceneColours(built.scene, p.theme, p.localHex ? hexToOklab(p.localHex) : null)
+          coloursOf.current.set(coloursKey, colours)
+        }
+        engine.setScene(worldScene, colours)
+        // The model works in a worker: the tile is copied when it is painted, and the next one starts then.
+        painting = engine.renderTo(target, view, p.params, p.debug)
       } catch (error) {
         // Stop here: the next change of params or size tries again.
         setMessage({ title: 'The painter hit an error', text: error instanceof Error ? error.message : String(error) })
         return
       }
-      live.current.onProgress(queue.progress())
-      setPainted((n) => n + 1)
-      frame = requestAnimationFrame(step)
+      painting.then(
+        () => {
+          if (!running) return
+          queue.done(id, key)
+          setMessage(null)
+          live.current.onProgress(queue.progress())
+          setPainted((n) => n + 1)
+          frame = requestAnimationFrame(step)
+        },
+        (error: unknown) => {
+          if (running) setMessage({ title: 'The painter hit an error', text: error instanceof Error ? error.message : String(error) })
+        },
+      )
     }
     frame = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(frame)
+    return () => {
+      running = false
+      cancelAnimationFrame(frame)
+    }
     // The key already holds the params, the debug view, the theme, the local colour and the tile size.
   }, [active, key, queue, tileW, tileH, dpr])
 

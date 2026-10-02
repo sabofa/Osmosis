@@ -76,14 +76,14 @@ export function labToLch(lab: readonly number[]): Oklch {
 // The signed shortest arc from hue h to hue t, in degrees (-180..180].
 export const hueArc = (h: number, t: number): number => ((t - h + 540) % 360) - 180
 
+// Inside sRGB exactly: no tolerance. (A tolerance of 0.002 once let a dark,
+// saturated colour through with a linear channel at -0.002, and the clamp that
+// the renderer's conversion then does moved its lightness by up to 0.09, far
+// past the value hold.) A fitted colour is therefore the colour that is drawn.
 export function lchInGamut(L: number, C: number, h: number): boolean {
   const lab = lchToLab(L, C, h)
   const lin = oklabToLinearRaw(lab[0], lab[1], lab[2])
-  return (
-    lin[0] >= -0.002 && lin[0] <= 1.002 &&
-    lin[1] >= -0.002 && lin[1] <= 1.002 &&
-    lin[2] >= -0.002 && lin[2] <= 1.002
-  )
+  return lin[0] >= 0 && lin[0] <= 1 && lin[1] >= 0 && lin[1] <= 1 && lin[2] >= 0 && lin[2] <= 1
 }
 
 // Lightness is kept (inside 0.03..0.985), and so is hue: chroma shrinks until
@@ -110,11 +110,15 @@ export function fitLab(lab: readonly number[]): Oklab {
 }
 
 // The renderer's colour: an OKLab colour fitted to the gamut and converted to
-// linear-light sRGB, each channel in 0..1.
+// linear-light sRGB, each channel in 0..1. A colour that is already inside the
+// gamut (and inside the lightness limits) is only converted; it is the same
+// colour either way.
 export function oklabToLinear(lab: readonly number[]): V3 {
+  const lin = oklabToLinearRaw(lab[0], lab[1], lab[2])
+  if (lab[0] >= 0.03 && lab[0] <= 0.985 && lin[0] >= 0 && lin[0] <= 1 && lin[1] >= 0 && lin[1] <= 1 && lin[2] >= 0 && lin[2] <= 1) return lin
   const f = fitLab(lab)
-  const lin = oklabToLinearRaw(f[0], f[1], f[2])
-  return [clamp(lin[0], 0, 1), clamp(lin[1], 0, 1), clamp(lin[2], 0, 1)]
+  const out = oklabToLinearRaw(f[0], f[1], f[2])
+  return [clamp(out[0], 0, 1), clamp(out[1], 0, 1), clamp(out[2], 0, 1)]
 }
 
 // A straight mix of two OKLab colours.

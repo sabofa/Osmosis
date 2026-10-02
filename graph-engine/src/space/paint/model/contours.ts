@@ -21,10 +21,10 @@
 
 import { randomFor } from '../../../style/random'
 import type { MeshMark } from '../../scene/types'
-import { PATH_POINTS, type Oklab } from '../types'
-import { mixLab as mixLabs } from './colour'
+import { PATH_POINTS } from '../types'
 import { behaviourOf, resample, type EdgeRun, type Sample } from './edges'
 import { clamp, vcross, vdot, vlen, type V3 } from './math'
+import { colourOfDraft, newRecipe, type ColourRecipe, type ColourSource, type DraftColour } from './recipe'
 import { polylinePath, roleIndex, type PaintCtx, type StrokeDraft } from './strokes'
 import { project, pxPerUnit, toEye } from './view'
 
@@ -397,26 +397,39 @@ function transition(an: PaintCtx, mark: number, poly: Float64Array, a: number, b
 
 // ---- edge strokes ----
 
-// The colour of one side of an edge: the curve at that side's value over its
-// local colour (the plane's mean particle colour, the mesh's, or bare canvas).
-function sideColour(an: PaintCtx, plane: number, mark: number, u: number, rng: ReturnType<typeof randomFor>, lScale?: number): Oklab {
-  const { fc, curve, planes } = an
+// The recipe of one side of an edge's colour: the curve at that side's value
+// over its local colour (the plane's mean particle colour, the mesh's, or bare canvas).
+function sideRecipe(an: PaintCtx, plane: number, mark: number, u: number, rng: ReturnType<typeof randomFor>, lScale?: number): ColourRecipe {
+  const { fc, planes } = an
   const pl = plane >= 0 ? planes.planes[plane] : null
-  let local: Oklab
-  if (pl && pl.ground) local = an.groundLocal
-  else if (pl && an.planeHasColour[plane] === 1) local = [an.planeColour[3 * plane], an.planeColour[3 * plane + 1], an.planeColour[3 * plane + 2]]
-  else if (fc.ground[mark] === 1) local = an.groundLocal
-  else local = [an.markColour[3 * mark], an.markColour[3 * mark + 1], an.markColour[3 * mark + 2]]
-  const cp = fc.params.curve
-  return curve.lab({
-    local,
-    u: clamp(u, 0.05, 0.98),
-    nz: pl ? pl.nz : undefined,
-    planeHue: pl && !pl.ground ? pl.hOff : 0,
-    planeChroma: pl && !pl.ground ? pl.cOff : 0,
-    lScale,
-    j: [rng.gauss() * 0.5 * cp.devL, rng.gauss() * (5 / 12) * cp.devC, rng.gauss() * (6 / 11) * cp.devH],
-  })
+  const r = newRecipe()
+  if (pl && pl.ground) r.ground = true
+  else if (pl && an.planeHasColour[plane] === 1) {
+    r.lx = an.planeColour[3 * plane]
+    r.ly = an.planeColour[3 * plane + 1]
+    r.lz = an.planeColour[3 * plane + 2]
+  } else if (fc.ground[mark] === 1) r.ground = true
+  else {
+    r.lx = an.markColour[3 * mark]
+    r.ly = an.markColour[3 * mark + 1]
+    r.lz = an.markColour[3 * mark + 2]
+  }
+  r.u = clamp(u, 0.05, 0.98)
+  if (pl) r.nz = pl.nz
+  if (pl && !pl.ground) {
+    r.hasPlane = true
+    r.pnx = pl.nx
+    r.pny = pl.ny
+    r.pnz = pl.nz
+  }
+  r.lScale = lScale ?? Number.NaN
+  r.g0 = rng.gauss()
+  r.g1 = rng.gauss()
+  r.g2 = rng.gauss()
+  r.c0 = 0.5
+  r.c1 = 5 / 12
+  r.c2 = 6 / 11
+  return r
 }
 
 // Cut a run of edge samples into the stretches that each become strokes: at
@@ -468,16 +481,15 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
       const my = e.pts[2 * mid + 1] * scale
       const gi = clamp(Math.round(e.pts[2 * mid + 1]), 0, g.height - 1) * g.width + clamp(Math.round(e.pts[2 * mid]), 0, g.width - 1)
       const depth = Number.isFinite(g.depth[gi]) ? g.depth[gi] : 0
-      // the two sides' colours
+      // the two sides' colours (a silhouette's other side is the bare canvas)
       const planeA = e.a
       const uLo = Math.min(e.uA, e.uB)
-      const labA = sideColour(an, planeA, e.mark, e.uA, rng)
-      const labB: Oklab =
-        e.type === 'silhouette' ? [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]] : sideColour(an, e.b, e.mark, e.uB, rng)
+      const recA = sideRecipe(an, planeA, e.mark, e.uA, rng)
+      const srcB: ColourSource = e.type === 'silhouette' ? [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]] : sideRecipe(an, e.b, e.mark, e.uB, rng)
       const lighterIsA = e.uA >= e.uB
-      const lighter = lighterIsA ? labA : labB
-      const darker = lighterIsA ? labB : labA
-      const baseDraft = (): Omit<StrokeDraft, 'path' | 'width' | 'lab' | 'alpha' | 'order' | 'jit0' | 'jit1'> => ({
+      const lighter = lighterIsA ? recA : srcB
+      const darker = lighterIsA ? srcB : recA
+      const baseDraft = (): Omit<StrokeDraft, 'path' | 'width' | 'lab' | 'colour' | 'alpha' | 'order' | 'jit0' | 'jit1'> => ({
         role: roleIndex('edge'),
         depth,
         u: e.uA,
@@ -495,13 +507,13 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         edge: cl,
         seed: (e.keys[mid] ^ (a * 0x9e3779b1)) >>> 0,
       })
-      const push = (path: Float32Array, width: Float32Array, lab: Oklab, alpha: number) => {
-        an.drafts.push({ ...baseDraft(), path, width, lab, alpha, jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++ })
+      const push = (path: Float32Array, width: Float32Array, colour: DraftColour, alpha: number) => {
+        an.drafts.push({ ...baseDraft(), path, width, lab: colourOfDraft(colour, an.env), colour, alpha, jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++ })
       }
       if (cl >= 2) {
         // distinct: a crisp, loaded stroke along the edge, darker than the darker side
         const uE = clamp(uLo - (cl === 3 ? 0.12 : 0.06), 0.1, 0.8)
-        const lab = sideColour(an, planeA, e.mark, uE, rng, 0.9)
+        const colour: DraftColour = { a: sideRecipe(an, planeA, e.mark, uE, rng, 0.9), b: null, t: 0 }
         const off = rng.range(-1, 1)
         const xs: number[] = []
         const ys: number[] = []
@@ -512,7 +524,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         const path = new Float32Array(2 * PATH_POINTS)
         const width = new Float32Array(PATH_POINTS)
         polylinePath(xs, ys, xs.length, rp.width * (cl === 3 ? 0.7 : 0.475) * rng.range(0.88, 1.12), true, false, path, width)
-        push(path, width, lab, cl === 3 ? 1 : 0.85)
+        push(path, width, colour, cl === 3 ? 1 : 0.85)
       } else if (cl === 1) {
         // blended: a wide dragged stroke along the boundary, and short scumbled pulls from the lighter side into the darker
         const xs: number[] = []
@@ -524,7 +536,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         const path = new Float32Array(2 * PATH_POINTS)
         const width = new Float32Array(PATH_POINTS)
         polylinePath(xs, ys, xs.length, rp.width * 2.6 * rng.range(0.88, 1.12), true, false, path, width)
-        push(path, width, mixLabs(labA, labB, 0.5), 0.8)
+        push(path, width, { a: recA, b: srcB, t: 0.5 }, 0.8)
         const nd = Math.max(1, Math.round(((b - a) * stepCss) / 34))
         for (let d = 0; d < nd; d++) {
           const ii = a + Math.floor(((d + 0.5) / nd) * (b - a))
@@ -538,7 +550,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
           const p2 = new Float32Array(2 * PATH_POINTS)
           const w2 = new Float32Array(PATH_POINTS)
           polylinePath([cx - dx * len * 0.45, cx + dx * len * 0.55], [cy - dy * len * 0.45, cy + dy * len * 0.55], 2, rp.width * 1.9 * rng.range(0.88, 1.12), true, false, p2, w2)
-          push(p2, w2, mixLabs(lighter, darker, 0.3), 0.75)
+          push(p2, w2, { a: lighter, b: darker, t: 0.3 }, 0.75)
         }
       } else {
         // lost: a few strokes that bridge both sides, carrying one colour into the other
@@ -554,7 +566,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
           const p2 = new Float32Array(2 * PATH_POINTS)
           const w2 = new Float32Array(PATH_POINTS)
           polylinePath([cx - dx * len * 0.5, cx + dx * len * 0.5], [cy - dy * len * 0.5, cy + dy * len * 0.5], 2, rp.width * 1.8 * rng.range(0.88, 1.12), true, false, p2, w2)
-          push(p2, w2, mixLabs(labA, labB, 0.5), 0.6)
+          push(p2, w2, { a: recA, b: srcB, t: 0.5 }, 0.6)
         }
       }
     }

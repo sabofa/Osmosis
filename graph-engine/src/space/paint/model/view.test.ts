@@ -165,7 +165,7 @@ describe('paint view', () => {
     }
     const ratio = (x: number) => x / n
     expect(ratio(count(resolvePaintParams({ particles: { targetPer10kPx: 180 } })))).toBeGreaterThan(1.85)
-    expect(ratio(count(resolvePaintParams({ particles: { targetPer10kPx: 180 } })))).toBeLessThan(2.05)
+    expect(ratio(count(resolvePaintParams({ particles: { targetPer10kPx: 180 } })))).toBeLessThan(2.1)
     expect(ratio(count(resolvePaintParams({ roles: { block: { density: 0.5 } } })))).toBeGreaterThan(0.44)
     expect(ratio(count(resolvePaintParams({ roles: { block: { density: 0.5 } } })))).toBeLessThan(0.56)
     // dragging drops to dragDensity

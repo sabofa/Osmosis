@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MeshMark } from '../../scene/types'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams } from '../params'
-import { hash3 } from './math'
-import { buildParticles } from './particles'
+import { buildParticles, cellId } from './particles'
 import { flatColours, graphMesh, sceneOf, sphereMesh, tableMesh } from './testing'
 
 // Whole frames of the model are heavy and the test machine is shared: give every test room.
@@ -43,7 +42,7 @@ describe('paint particles', () => {
   const set = buildParticles(scene, COLOURS, P)
 
   it('thins to a Poisson disc: no two particles are closer than 1/√maxPerUnit2', () => {
-    const r = 1 / Math.sqrt(900)
+    const r = 1 / Math.sqrt(P.particles.maxPerUnit2)
     let closest = Infinity
     const cell = r
     const grid = new Map<string, number[]>()
@@ -73,9 +72,9 @@ describe('paint particles', () => {
   })
 
   it('fills the surface at roughly the Poisson-disc packing of the radius', () => {
-    // area of the sphere 4π·0.36 = 4.52; r = 1/30; a disc packing holds ≈ 0.7·area/r² ≈ 2.85k
+    // area of the sphere 4π·0.36 = 4.52; a disc packing of radius r holds ≈ 0.7·area/r² = 0.7·area·maxPerUnit2
     const area = 4 * Math.PI * 0.36
-    const nominal = area * 900
+    const nominal = area * P.particles.maxPerUnit2
     expect(set.count).toBeGreaterThan(0.55 * nominal)
     expect(set.count).toBeLessThan(0.85 * nominal)
     // every particle is on this sphere (chord error only)
@@ -235,7 +234,7 @@ describe('paint particles', () => {
       const q = [set.position[3 * i], set.position[3 * i + 1], set.position[3 * i + 2]].map((v) => v / 0.5)
       // Float32 positions can land across a cell edge from the Float64 ones the cell was hashed from
       if (q.some((v) => Math.abs(v - Math.round(v)) < 1e-4)) continue
-      expect(set.cell[i]).toBe(hash3(Math.floor(q[0]), Math.floor(q[1]), Math.floor(q[2])))
+      expect(set.cell[i]).toBe(cellId(Math.floor(q[0]), Math.floor(q[1]), Math.floor(q[2])))
       checked++
     }
     expect(checked).toBeGreaterThan(300)

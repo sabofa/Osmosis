@@ -4,8 +4,12 @@
 // authored camera (@camera), so double-click returns to a view that frames it.
 //
 // A statement named `table` is a support surface: the lab's local-colour
-// override leaves it alone, so a recoloured sphere still sits on a table.
-// Hex colours are written without the "#" (which starts a comment in the grammar).
+// override leaves it alone, so a recoloured sphere still sits on a table. It is
+// bare canvas where it is lit and is painted only where a shadow falls on it, so
+// a figure's camera frames what stands on it and lets the table run off the view.
+// Hex colours are written without the "#" (which starts a comment in the grammar). The sphere, the
+// saddle, the torus and the ridges are the approved mockup's local colours (OKLCH L, C, h: .56 .14 38,
+// .52 .11 232, .70 .12 88 and .60 .085 150), so the lab starts from what Ben approved.
 // `@frame: none` is the honest header for a painted figure: the ground is
 // primed canvas, and the box is never drawn.
 //
@@ -28,9 +32,9 @@ export const PAINT_FIGURES: readonly PaintFigure[] = [
     spec: `@frame: none
 @bounds3d: x [-2.5, 2.5], y [-2.5, 2.5], z [0, 2.2]
 @aspect: equal
-@camera: azimuth 32, elevation 24, zoom 1.6
+@camera: azimuth 32, elevation 24, zoom 2.5
 z = 0 for x in [-2.5, 2.5], y in [-2.5, 2.5] res: 12 color: a39c88 name: table
-(sin(v) cos(u), sin(v) sin(u), 1 + cos(v)) for v in [0, pi], u in [0, 2*pi] color: b7603a name: sphere`,
+(sin(v) cos(u), sin(v) sin(u), 1 + cos(v)) for v in [0, pi], u in [0, 2*pi] color: b75131 name: sphere`,
   },
   {
     id: 'saddle',
@@ -39,7 +43,7 @@ z = 0 for x in [-2.5, 2.5], y in [-2.5, 2.5] res: 12 color: a39c88 name: table
     spec: `@frame: none
 @bounds3d: x [-1.5, 1.5], y [-1.5, 1.5], z [-2.3, 2.3]
 @camera: azimuth 38, elevation 28, zoom 1.65
-z = x^2 - y^2 for x in [-1.5, 1.5], y in [-1.5, 1.5] res: 72 color: 6f8f7e name: saddle`,
+z = x^2 - y^2 for x in [-1.5, 1.5], y in [-1.5, 1.5] res: 72 color: 00739d name: saddle`,
   },
   {
     id: 'saddle-height',
@@ -58,7 +62,7 @@ z = x^2 - y^2 for x in [-1.5, 1.5], y in [-1.5, 1.5] res: 72 colormap: height na
 @bounds3d: x [-3, 3], y [-3, 3], z [-1, 1]
 @aspect: equal
 @camera: azimuth 35, elevation 38, zoom 2.0
-((2 + 0.8 cos(v)) cos(u), (2 + 0.8 cos(v)) sin(u), 0.8 sin(v)) for u in [0, 2*pi], v in [0, 2*pi] res: 96 color: b5533c name: torus`,
+((2 + 0.8 cos(v)) cos(u), (2 + 0.8 cos(v)) sin(u), 0.8 sin(v)) for u in [0, 2*pi], v in [0, 2*pi] res: 96 color: bd9939 name: torus`,
   },
   {
     id: 'ridges',
@@ -67,7 +71,7 @@ z = x^2 - y^2 for x in [-1.5, 1.5], y in [-1.5, 1.5] res: 72 colormap: height na
     spec: `@frame: none
 @bounds3d: x [-1.2, 1.2], y [-1.2, 1.2]
 @camera: azimuth 30, elevation 32, zoom 1.45
-z = 0.2 sin(5.4 x) cos(5.4 y) for x in [-1.2, 1.2], y in [-1.2, 1.2] res: 120 color: c9a56a name: ridges`,
+z = 0.2 sin(5.4 x) cos(5.4 y) for x in [-1.2, 1.2], y in [-1.2, 1.2] res: 120 color: 5a8f65 name: ridges`,
   },
   {
     id: 'tangent-plane',

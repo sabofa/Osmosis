@@ -25,6 +25,7 @@ import { clamp, smooth } from './math'
 import { LoadMixer } from './mix'
 import type { ParticleSide } from './particles'
 import type { PlaneMap } from './planes'
+import type { DraftColour, RecipeEnv } from './recipe'
 import type { PlanMap } from './value'
 import { Z_CAST } from './zones'
 import { pxPerUnit, projectedLength, type FrameCtx, type Visible } from './view'
@@ -38,7 +39,13 @@ export interface StrokeDraft {
   depth: number
   // The colour before the mix (fitted OKLab), and the value it was made at.
   lab: Oklab
+  // What the colour is made of, so it can be made again when a colour parameter
+  // changes (recipe.ts); null for a colour that is not made from the curve.
+  colour?: DraftColour | null
   u: number
+  // The layer to paint in, when it is not the role's own (a line seen through a veil is painted before the
+  // glaze, so the veil tints it; the role stays `line`, which is what shapes the brush).
+  layer?: number
   // The surface cell of the start, and where the stroke sits on screen, for the mix's loads.
   cell: number
   mx: number
@@ -82,6 +89,8 @@ export interface PaintCtx {
   scumbleOk: Uint8Array
   drafts: StrokeDraft[]
   nextOrder: number
+  // What a colour recipe reads from the parameters of the moment (the curve, the ground's colour).
+  env: RecipeEnv
   // The analysis stride: the G-buffer the analysis ran on is every stride-th pixel of the one the renderer read back.
   stride: number
 }
@@ -520,11 +529,14 @@ export function pathFromWalk(w: Walk, baseWidth: number, reverse: boolean, path:
 const ROLE_INDEX: Record<Role, number> = Object.fromEntries(ROLES.map((r, i) => [r, i])) as Record<Role, number>
 export const roleIndex = (r: Role): number => ROLE_INDEX[r]
 const LAYER_OF_ROLE = ROLES.map((r) => LAYER_ORDER.indexOf(r))
+// Where a line seen through a veil goes: after the block-in and the form, before the glaze, so the glaze (a veil's own strokes) lies over it.
+export const BEHIND_VEIL_LAYER = LAYER_ORDER.indexOf('scumble')
 
 // Painting order: layer by layer, back to front by depth (the larger the
 // distance the earlier), then creation order; every load's mix in that order.
 export function packStrokes(drafts: StrokeDraft[], params: PaintParams): { batch: StrokeBatch; loads: number; byRole: Record<Role, number> } {
-  drafts.sort((a, b) => LAYER_OF_ROLE[a.role] - LAYER_OF_ROLE[b.role] || b.depth - a.depth || a.order - b.order)
+  const layerOf = (d: StrokeDraft): number => d.layer ?? LAYER_OF_ROLE[d.role]
+  drafts.sort((a, b) => layerOf(a) - layerOf(b) || b.depth - a.depth || a.order - b.order)
   const count = drafts.length
   const batch: StrokeBatch = {
     count,
@@ -554,7 +566,7 @@ export function packStrokes(drafts: StrokeDraft[], params: PaintParams): { batch
     const mixed = mixer.mix({ role, cell: d.cell, u: d.u, x: d.mx, y: d.my, lab: d.lab, colormapped: d.colormapped, seed: d.seed, jit0: d.jit0, jit1: d.jit1 })
     const lin = oklabToLinear(mixed.lab)
     batch.role[i] = d.role
-    batch.layer[i] = LAYER_OF_ROLE[d.role]
+    batch.layer[i] = layerOf(d)
     batch.path.set(d.path, 2 * PATH_POINTS * i)
     batch.width.set(d.width, PATH_POINTS * i)
     batch.depth[i] = d.depth

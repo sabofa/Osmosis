@@ -320,8 +320,9 @@ describe('packing the strokes', () => {
 
   it('mixes loads in that order, one role at a time, and writes linear-light colour', () => {
     const drafts: StrokeDraft[] = []
-    for (let i = 0; i < 40; i++) drafts.push(draft('block', 100 - i, i, [0.6, 0.1, 0.05], i))
-    for (let i = 0; i < 10; i++) drafts.push(draft('form', 100 - i, 100 + i, [0.6, 0.1, 0.05], 100 + i))
+    // lines and edges take the sequential mixer (surface strokes take their cell's mix, one per cell)
+    for (let i = 0; i < 40; i++) drafts.push(draft('edge', 100 - i, i, [0.6, 0.1, 0.05], i))
+    for (let i = 0; i < 10; i++) drafts.push(draft('line', 100 - i, 100 + i, [0.6, 0.1, 0.05], 100 + i))
     const { batch, loads } = packStrokes(drafts, P)
     // 40 + 10 strokes in loads of 3..8: between 7 and 17 loads
     expect(loads).toBeGreaterThanOrEqual(7)

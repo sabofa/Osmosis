@@ -250,7 +250,12 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
     edge: role(1, 4, 30, 0.2, 0.9, 0.8, 4, 0.25, 0.2, 0.2),
     line: role(1, 3, 36, 0, 1, 0.7, 4, 0.2, 0.1, 0),
   },
-  particles: { maxPerUnit2: 900, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1 },
+  // Task 6 tuning (performance, not look): the world is box-normalised, so a figure's surface is a few
+  // world units² and 900 particles a unit left a zoomed-in view short of particles (the supply, not
+  // the screen density, set the stroke count). 3000 lets the screen target decide at any zoom, at no
+  // cost per frame (the strokes drawn are the screen's, the particles are built once). dragDensity stays
+  // 1: an orbit does not thin the strokes (the lab re-projects the last frame's strokes instead).
+  particles: { maxPerUnit2: 3000, targetPer10kPx: 90, fadeLo: 0.08, fadeHi: 0.25, dragDensity: 1 },
   impasto: { strength: 1, lightAzimuth: 135, lightElevation: 23 },
   canvas: { texture: 1, weave: 'duck', tone: [0.93, 0.004, 0.022] },
 }

@@ -66,11 +66,17 @@ export interface UrlState {
   panel: boolean | null
   open: string[] | null
   view: { azimuth?: number; elevation?: number; zoom?: number }
+  // &set=path:value,path:value starts with those sliders moved (clamped to their ranges), e.g. set=particles.maxPerUnit2:3000.
+  set: [string, number][]
+  // &worker=0 runs the model on the page's own thread (the default is a worker, so the controls never wait for a frame).
+  worker: boolean
+  // &perf=1 keeps every frame's timings in window.__paintFrames and gives the page window.__paintLab (a handle to move sliders from a script), for measuring.
+  perf: boolean
   injected: InjectedState
 }
 
 // The page's state lives in the URL (?tab=showcase, &figure=, &debug=,
-// &theme=, &seed=, &az=, &el=, &zoom=), so a link or a headless shot lands on exactly what was
+// &theme=, &seed=, &set=, &worker=, &az=, &el=, &zoom=), so a link or a headless shot lands on exactly what was
 // being looked at. &panel=0 starts with the panel folded; &open=Light,Edges
 // starts with those groups open.
 function readUrl(): UrlState {
@@ -89,6 +95,15 @@ function readUrl(): UrlState {
     panel: q.get('panel') === '0' ? false : q.get('panel') === '1' ? true : null,
     open: q.has('open') ? (q.get('open') ?? '').split(',').filter(Boolean) : null,
     view: { azimuth: number('az'), elevation: number('el'), zoom: number('zoom') },
+    set: (q.get('set') ?? '')
+      .split(',')
+      .map((pair): [string, number] => {
+        const [path, value] = pair.split(':')
+        return [path?.trim() ?? '', Number(value)]
+      })
+      .filter(([path, value]) => path !== '' && Number.isFinite(value)),
+    worker: q.get('worker') !== '0',
+    perf: q.get('perf') === '1',
     injected: state === 'no-webgl2' || state === 'engine-error' ? state : null,
   }
 }

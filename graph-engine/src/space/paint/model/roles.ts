@@ -32,6 +32,7 @@ import { PATH_POINTS, type Oklab, type Role } from '../types'
 import { behaviourOf, strokeEdgeClass, type Behaviour } from './edges'
 import { clamp, scratchU8, vcross, vlen, vnorm, type V3 } from './math'
 import { stepValue, chamferDist } from './planes'
+import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
 import { pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
 import { ambientShare, bounceWeight, modelValue, newZoneSample, terminatorValue, zoneSample } from './value'
 import { drawFade, gIndex, toEye, unproject } from './view'
@@ -113,14 +114,16 @@ function whereOf(an: PaintCtx, k: number): Where {
 
 // ---- veils ----
 
-interface Veil {
+export interface Veil {
   inside(x: number, y: number, z: number): boolean
+  // A flat sheet's plane (n · x = d, n a unit normal); null for anything else.
+  plane: { n: V3; d: number } | null
   // 0 at the centre .. 1 at the border (a flat sheet), 0 for anything else.
   border(x: number, y: number, z: number): number
 }
 const veils = new WeakMap<MeshMark, Veil>()
 
-function veilOf(mesh: MeshMark): Veil {
+export function veilOf(mesh: MeshMark): Veil {
   const have = veils.get(mesh)
   if (have) return have
   const p = mesh.positions
@@ -156,6 +159,7 @@ function veilOf(mesh: MeshMark): Veil {
       (x * e2[0] + y * e2[1] + z * e2[2] - cb) / hb,
     ]
     v = {
+      plane: { n: nm, d: nm[0] * p[0] + nm[1] * p[1] + nm[2] * p[2] },
       inside: (x, y, z) => {
         const [a, b] = at(x, y, z)
         return Math.abs(a) <= 1.02 && Math.abs(b) <= 1.02
@@ -174,6 +178,7 @@ function veilOf(mesh: MeshMark): Veil {
     }
     const m = 0.02 * Math.max(x1 - x0, y1 - y0, z1 - z0)
     v = {
+      plane: null,
       inside: (x, y, z) => x >= x0 - m && x <= x1 + m && y >= y0 - m && y <= y1 + m && z >= z0 - m && z <= z1 + m,
       border: () => 0,
     }
@@ -191,40 +196,52 @@ interface ColourOpts {
   bounceBoost?: number
 }
 
-// The curve colour of the stroke at particle k (fitted OKLab) and the value it was made at.
-function strokeColour(an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>, w: Where, opts: ColourOpts): { lab: Oklab; u: number } {
+// The curve colour of the stroke at particle k (fitted OKLab) and the value it
+// was made at, with the recipe it was made from (so a colour parameter can make
+// it again without this stroke's geometry being redone).
+function strokeColour(an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>, w: Where, opts: ColourOpts): { lab: Oklab; u: number; colour: DraftColour } {
   const { set, vis, fc, curve } = an
   const params = fc.params
   const i = vis.idx[k]
   const ground = fc.ground[set.mark[i]] === 1
-  const local: Oklab = ground ? an.groundLocal : [set.colour[3 * i], set.colour[3 * i + 1], set.colour[3 * i + 2]]
   const px = set.position[3 * i], py = set.position[3 * i + 1], pz = set.position[3 * i + 2]
-  const cp = params.curve
-  const dj = curve.devJ(px, py, pz)
-  const j: [number, number, number] = [
-    dj[0] + rng.gauss() * 0.5 * cp.devL,
-    dj[1] + rng.gauss() * (5 / 12) * cp.devC + (opts.dC ?? 0),
-    dj[2] + rng.gauss() * (6 / 11) * cp.devH,
-  ]
   // the plane's own short gradient: its mean plus planeGradient of the particle's own value
   const dev = curve.devU(px, py, pz)
   const stepped = w.plane >= 0 ? stepValue(an.planes, w.plane, w.u + dev, params.edges.planeGradient) : w.u + dev
   const u = clamp(stepped + (opts.du ?? 0), 0.02, 0.99)
   const nz = vis.normal[3 * k + 2]
   const plane = w.plane >= 0 && !ground ? an.planes.planes[w.plane] : null
-  const lab = curve.lab({
-    local,
-    u,
-    nz,
-    bounce: opts.bounceBoost !== undefined ? Math.max(w.b, opts.bounceBoost) : w.b,
-    ambientShare: ambientShare(params, nz, w.v),
-    planeHue: plane ? plane.hOff : 0,
-    planeChroma: plane ? plane.cOff : 0,
-    colormapped: set.colormapped[i] === 1,
-    lScale: opts.lScale,
-    j,
-  })
-  return { lab, u }
+  const r = newRecipe()
+  r.ground = ground
+  r.lx = set.colour[3 * i]
+  r.ly = set.colour[3 * i + 1]
+  r.lz = set.colour[3 * i + 2]
+  r.u = u
+  r.nz = nz
+  r.bounce = opts.bounceBoost !== undefined ? Math.max(w.b, opts.bounceBoost) : w.b
+  r.ambientShare = ambientShare(params, nz, w.v)
+  if (plane) {
+    r.hasPlane = true
+    r.pnx = plane.nx
+    r.pny = plane.ny
+    r.pnz = plane.nz
+  }
+  r.colormapped = set.colormapped[i] === 1
+  r.lScale = opts.lScale ?? Number.NaN
+  // the stroke's own jitter on top of the curve's smooth field at the particle
+  r.g0 = rng.gauss()
+  r.g1 = rng.gauss()
+  r.g2 = rng.gauss()
+  r.c0 = 0.5
+  r.c1 = 5 / 12
+  r.c2 = 6 / 11
+  r.dC = opts.dC ?? 0
+  r.field = true
+  r.px = px
+  r.py = py
+  r.pz = pz
+  const colour: DraftColour = { a: r, b: null, t: 0 }
+  return { lab: colourOfDraft(colour, an.env), u, colour }
 }
 
 // ---- the stroke ----
@@ -419,6 +436,7 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     width,
     depth: vis.depth[k],
     lab: col.lab,
+    colour: col.colour,
     u: col.u,
     cell: set.cell[i],
     mx: vis.sx[k],
@@ -647,6 +665,7 @@ export function dabStrokes(an: PaintCtx): void {
       width,
       depth,
       lab: col.lab,
+      colour: col.colour,
       u: col.u,
       cell: set.cell[pi],
       mx: sx,

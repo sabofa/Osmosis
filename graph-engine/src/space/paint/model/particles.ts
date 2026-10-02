@@ -24,7 +24,7 @@ import { randomFor } from '../../../style/random'
 import type { MeshMark, SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
 import type { BuildParticles, Oklab, ParticleSet, SceneColours } from '../types'
-import { hash3, vcross, vdot, vlen, vnorm, type V3 } from './math'
+import { hash3, mix2, vcross, vdot, vlen, vnorm, type V3 } from './math'
 
 // Total particles across the scene: the radius grows when a scene would need more.
 const MAX_PARTICLES = 120_000
@@ -42,6 +42,17 @@ interface Draft {
   x: number
   y: number
   z: number
+}
+
+// The id of the surface cell (ci, cj, ck): a hash of the integer cell, whose low
+// four bits carry what the spatial brush-load mix needs of the cell itself
+// (mix.ts): bit 0 the parity of ci + cj + ck (neighbouring cells differ), bit 1
+// the parity of cj, bits 2 and 3 (ci + 2 cj + 3 ck) mod 4. The rest is the hash,
+// so every cell still has its own id.
+export function cellId(ci: number, cj: number, ck: number): number {
+  const bits = ((ci + cj + ck) & 1) | ((cj & 1) << 1) | (((ci + 2 * cj + 3 * ck) & 3) << 2)
+  // two chained mixes, not one hash3: hash3 of three small integers collides (xor of three products), and a collision is two cells with one mix
+  return ((mix2(mix2(ci, cj), ck) & 0xfffffff0) | bits) >>> 0
 }
 
 // What paintFrame needs from the scene's colours but the contract hands it no
@@ -124,7 +135,7 @@ export const buildParticles: BuildParticles = (scene: SpaceScene, colours: Scene
     set.colormapped[i] = mapped
     set.opacity[i] = mesh.style.opacity
     set.rank[i] = rng.next()
-    set.cell[i] = hash3(Math.floor(d.x / cell), Math.floor(d.y / cell), Math.floor(d.z / cell))
+    set.cell[i] = cellId(Math.floor(d.x / cell), Math.floor(d.y / cell), Math.floor(d.z / cell))
     set.seed[i] = Math.floor(rng.next() * 4294967296) >>> 0
   }
   return set

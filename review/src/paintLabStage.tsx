@@ -6,7 +6,8 @@ import type { PaintParams } from '../../graph-engine/src/space/paint/params'
 import type { PaintDebugMode, SceneColours } from '../../graph-engine/src/space/paint/types'
 import type { SpaceScene } from '../../graph-engine/src/space/scene/types'
 import { buildPaintView, type BuiltFigure } from './paintLabCamera'
-import { createPaintEngine, type PaintEngine } from './paintLabEngine'
+import { oklabToHex } from './paintLabColours'
+import { createPaintEngine, type FrameStats, type PaintEngine } from './paintLabEngine'
 import { FpsMeter } from './paintLabMeter'
 import { URL_STATE, type InjectedState } from './paintLabState'
 
@@ -20,6 +21,13 @@ export interface Readout {
   fps: number
   ms: number
   strokes: number
+  // Where the frame's time went, ms, and what kind of frame it was.
+  gbufferMs: number
+  modelMs: number
+  particlesMs: number
+  paperMs: number
+  paintMs: number
+  kind: 'full' | 'colour' | 'repaint'
   view: SpaceView
 }
 
@@ -88,6 +96,8 @@ export function Stage(props: StageProps) {
     if (canvas.width !== bw || canvas.height !== bh) {
       canvas.width = bw
       canvas.height = bh
+      // A resized canvas is cleared (to black): it shows the stage's paper tone until the frame for its new size arrives.
+      canvas.style.opacity = '0'
     }
     let again = false
     const ease = easingRef.current
@@ -105,16 +115,25 @@ export function Stage(props: StageProps) {
     const view = buildPaintView(camera, p.params.light, dpr, draggingRef.current)
     try {
       if (p.injected === 'engine-error') throw new Error('Injected engine failure (?state=engine-error).')
-      const result = engine.render(view, p.params, p.debug)
-      const fps = meterRef.current.tick(performance.now(), result.ms)
-      pendingReadout.current = { fps, ms: result.ms, strokes: result.strokes, view: viewRef.current }
-      if (!readoutTimer.current) readoutTimer.current = window.setTimeout(flushReadout, READOUT_MS)
-      setMessage(null)
+      // The frame's result arrives through the engine's events (onFrame, onError).
+      engine.render(view, p.params, p.debug)
     } catch (error) {
       setMessage({ title: 'The painter hit an error', text: error instanceof Error ? error.message : String(error) })
     }
     if (again) request()
   }
+
+  // A painted frame: the meter and the readout.
+  const framed = useCallback((stats: FrameStats) => {
+    if (canvasRef.current) canvasRef.current.style.opacity = ''
+    if (URL_STATE.perf) {
+      const w = window as unknown as { __paintFrames?: unknown[] }
+      ;(w.__paintFrames ??= []).push({ ...stats, t: performance.now(), dragging: draggingRef.current })
+    }
+    const fps = meterRef.current.tick(performance.now(), stats.ms)
+    pendingReadout.current = { fps, ...stats, view: viewRef.current }
+    if (!readoutTimer.current) readoutTimer.current = window.setTimeout(flushReadout, READOUT_MS)
+  }, [flushReadout])
 
   // The canvas, the engine and the pointer, wheel and key input. The canvas is
   // made here, not rendered by React: dispose() releases the engine's context,
@@ -125,11 +144,16 @@ export function Stage(props: StageProps) {
     if (!host) return
     const canvas = document.createElement('canvas')
     canvas.setAttribute('aria-label', 'Painted figure')
+    // Hidden until the first frame is painted: a new WebGL canvas is black.
+    canvas.style.opacity = '0'
     host.appendChild(canvas)
     canvasRef.current = canvas
     let engine: PaintEngine | null = null
     try {
-      engine = createPaintEngine(canvas)
+      engine = createPaintEngine(canvas, {
+        onFrame: framed,
+        onError: (text) => setMessage(text === null ? null : { title: 'The painter hit an error', text }),
+      })
     } catch (error) {
       setMessage({ title: 'The painter cannot start', text: error instanceof Error ? error.message : String(error) })
     }
@@ -238,7 +262,7 @@ export function Stage(props: StageProps) {
       canvas.remove()
       canvasRef.current = null
     }
-  }, [request])
+  }, [request, framed])
 
   // A new scene or new colours (a theme, a local colour): the engine takes the
   // scene again. A new figure also returns the camera to its authored view.
@@ -269,7 +293,7 @@ export function Stage(props: StageProps) {
   useEffect(() => request(), [props.params, props.debug, request])
 
   return (
-    <div className="pl-stage" ref={hostRef} tabIndex={0} aria-label="Painted figure: drag to orbit, right-drag to pan, wheel to zoom, double-click to reset">
+    <div className="pl-stage" ref={hostRef} style={{ background: oklabToHex(props.params.canvas.tone) }} tabIndex={0} aria-label="Painted figure: drag to orbit, right-drag to pan, wheel to zoom, double-click to reset">
       <div className="pl-caption" aria-hidden="true">
         <strong>{props.caption.label}</strong>
         <span>{props.caption.text}</span>

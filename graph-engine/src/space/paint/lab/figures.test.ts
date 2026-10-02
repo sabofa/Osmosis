@@ -60,6 +60,9 @@ describe('the figures', () => {
         const camera = cameraMatrices(built.authored, built.world, { width, height }, built.projection)
         let seen = 0
         for (const mark of built.scene.marks) {
+          // A support surface (a statement named `table`) is bare canvas where it is lit and is painted only where
+          // a shadow falls on it, so the camera frames what stands on it, and the table runs off the view.
+          if (mark.source.statement === 'table') continue
           const arrays = mark.kind === 'mesh' || mark.kind === 'lines' || mark.kind === 'points' ? [mark.positions] : mark.kind === 'arrows' ? [mark.tails] : []
           for (const a of arrays) {
             for (let i = 0; i + 2 < a.length; i += 3) {

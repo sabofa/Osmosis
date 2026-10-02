@@ -3,11 +3,24 @@
 // patches of "the same" colour are quite the same paint: a different hue at
 // the same value, or a different hue and lightness at about the same value.
 //
-// - A load is a run of loadMin..loadMax consecutive strokes of one role, in
+// - STROKES ON A SURFACE (block, form, scumble, glaze, reflected, dab) take a
+//   SPATIAL mix: the offset is a pure function of (role, surface cell, seed), so
+//   a stroke keeps its colour as the camera orbits (spec §3.8: same view, same
+//   image; strokes ride the surface). The cell is the integer cell of the
+//   stroke's start (ParticleSet.cell: a hash of floor(position / loadCell) whose
+//   low four bits carry the cell's parities). The hue sign comes from the cell's
+//   parity, so neighbouring cells take opposite signs (anti-correlation); the
+//   chroma direction from a second parity; the value step and the grey family
+//   from the cell's own seeded draws. The mix balance (hueBias, chromaBias,
+//   valueBias) is a cell-hash threshold on the parity's choice, so a bias of b
+//   makes the + direction come up (1 + b)/2 of the time. The drift is a seeded
+//   fraction per stroke (its place in the cell). (mockup mix.js applySpatial)
+// - LINES AND EDGES (they are re-traced as the camera moves, so they have no
+//   surface to hold a colour) keep the SEQUENTIAL mixer, which follows:
+//   a load is a run of loadMin..loadMax consecutive strokes of one role, in
 //   painting order. It breaks when the next stroke is more than loadBreakPx
 //   away. Its offset is seeded by randomFor('paint/load/' + role + '/' + cell,
-//   seed), where cell is the surface cell of the load's first stroke, so a
-//   load keeps its mix as the camera orbits.
+//   seed), where cell is the surface cell of the load's first stroke.
 // - The offset around the curve colour: hue ±hueMin..hueMax degrees (OKLCH),
 //   chroma ×chromaMin..chromaMax, lightness held within ±valueHold of the
 //   target, and valueStepFraction of loads also take a value step of ±valueStep.
@@ -27,7 +40,7 @@ import { randomFor } from '../../../style/random'
 import type { PaintParams } from '../params'
 import type { Oklab, Role } from '../types'
 import { fitLab, fitLch, labToLch } from './colour'
-import { clamp, D2R, smooth } from './math'
+import { clamp, D2R, hash01, smooth } from './math'
 import { compileCurve, type CurveFn } from './respond'
 
 // Grey families, as an angle in OKLab a/b: warm, cool, green-grey, violet-grey.
@@ -115,11 +128,27 @@ export function nextSign(prev: number, pi: number, f: number, draw: number): num
   return draw < lambda * pi ? 1 : -1
 }
 
+// The roles whose strokes lie on a surface and take the spatial mix.
+const SPATIAL: Record<Role, boolean> = {
+  block: true, form: true, scumble: true, glaze: true, reflected: true, dab: true, edge: false, line: false,
+}
+export const isSpatialRole = (role: Role): boolean => SPATIAL[role]
+
+// The choice `base` (+1 or -1) of a cell, moved by a balance in -1..1: a bias b > 0
+// turns a - into a + with probability b (and b < 0 a + into a - with probability -b),
+// by the cell's own hash draw `u`, so the long-run share of + is (1 + b)/2.
+export function biased(base: number, bias: number, u: number): number {
+  if (bias > 0 && base < 0) return u < bias ? 1 : -1
+  if (bias < 0 && base > 0) return u < -bias ? -1 : 1
+  return base
+}
+
 export class LoadMixer {
-  // How many loads have been started.
+  // How many loads have been started (a spatial cell counts once per role).
   loads = 0
   private readonly params: PaintParams
   private readonly state = new Map<Role, RoleState>()
+  private readonly cells = new Map<Role, Map<number, { off: Offset; id: number }>>()
   private readonly amount: CurveFn
 
   constructor(params: PaintParams) {
@@ -168,17 +197,59 @@ export class LoadMixer {
     st.load = this.loads - 1
   }
 
-  // Mix one stroke. Strokes must arrive in painting order, one role's strokes
-  // consecutively, for loads to be what they are.
+  // The offset of a surface cell for a role: a pure function of (role, cell, seed).
+  private cellOffset(role: Role, cell: number): { off: Offset; id: number } {
+    let byCell = this.cells.get(role)
+    if (!byCell) {
+      byCell = new Map()
+      this.cells.set(role, byCell)
+    }
+    const have = byCell.get(cell)
+    if (have) return have
+    const m = this.params.mix
+    const r = randomFor(`paint/cell/${role}/${cell}`, this.params.seed)
+    const bits = cell & 15
+    // the hue sign: the cell's parity (neighbours opposite), then the balance by a cell draw
+    const sign = biased(bits & 1 ? 1 : -1, m.hueBias, r.next())
+    const lo = Math.min(m.hueMin, m.hueMax)
+    const span = Math.abs(m.hueMax - m.hueMin)
+    const mag = r.range(lo, lo + span)
+    // the chroma direction: a second parity
+    const lcSign = biased(bits & 2 ? 1 : -1, m.chromaBias, r.next())
+    const up = Math.log(Math.max(1, m.chromaMax))
+    const down = -Math.log(Math.min(1, Math.max(0.05, m.chromaMin)))
+    const lc = lcSign > 0 ? r.range(Math.min(0.08, up), up) : -r.range(Math.min(0.08, down), down)
+    const gaussL = r.gauss()
+    // about a quarter of cells also take a value step, its direction from the cell's draw
+    let step = 0
+    if (r.next() < m.valueStepFraction) step = r.next() < (1 + m.valueBias) / 2 ? 1 : -1
+    // the grey family: the cell's own (neighbours step to another)
+    const fam = (cell >> 2) & 3
+    const phi = (FAMILIES[fam] + r.range(-18, 18)) * D2R
+    const vec = r.range(Math.min(m.greyVecMin, m.greyVecMax), Math.max(m.greyVecMin, m.greyVecMax))
+    const made = { off: { sign, mag, lc, lcSign, fam, gaussL, step, phi, vec }, id: this.loads++ }
+    byCell.set(cell, made)
+    return made
+  }
+
+  // Mix one stroke. A surface stroke takes its cell's offset; a line or an edge
+  // stroke takes its load's, and those must arrive in painting order, one role's
+  // strokes consecutively, for loads to be what they are.
   mix(input: MixInput): MixResult {
     const params = this.params
     const m = params.mix
     const s = m.strength * roleScale(params, input.role) * this.amount(input.u)
-    const st = this.stateOf(input.role)
     const lab = input.lab
     if (s <= 0) {
       return { lab: [lab[0], lab[1], lab[2]], load: -1, index: 0, size: 0, kd: 0, hueOffset: 0, chromaOffset: 0, step: 0 }
     }
+    if (SPATIAL[input.role]) {
+      const c = this.cellOffset(input.role, input.cell)
+      // the drift: a seeded place in the cell, from the stroke's own seed
+      const kd = 1 - (1 - m.drift) * hash01(input.seed, input.cell, 0x2f6e2b1)
+      return this.apply(input, s, c.off, kd, c.id, 0, 1)
+    }
+    const st = this.stateOf(input.role)
     if (!st.off || st.left <= 0 || (st.pos && Math.hypot(input.x - st.pos[0], input.y - st.pos[1]) > m.loadBreakPx)) {
       this.newLoad(st, input.role, input.cell)
     }
@@ -188,7 +259,14 @@ export class LoadMixer {
     st.idx++
     st.left--
     st.pos = [input.x, input.y]
+    return this.apply(input, s, off, kd, st.load, index, st.size)
+  }
 
+  // The stroke's colour: the curve colour moved by an offset, scaled by the drift.
+  private apply(input: MixInput, s: number, off: Offset, kd: number, load: number, index: number, size: number): MixResult {
+    const params = this.params
+    const m = params.mix
+    const lab = input.lab
     const hs = input.colormapped ? m.colormapScale : 1
     const hold = input.colormapped
     // value: held within ±valueHold; a value step replaces the small noise
@@ -224,6 +302,6 @@ export class LoadMixer {
     const a2 = lab[1] + v * Math.cos(off.phi)
     const b2 = lab[2] + v * Math.sin(off.phi)
     const out = fitLab([L, l1[1] * (1 - wl) + a2 * wl, l1[2] * (1 - wl) + b2 * wl])
-    return { lab: out, load: st.load, index, size: st.size, kd, hueOffset: dh, chromaOffset: lc, step: hold ? 0 : off.step }
+    return { lab: out, load, index, size, kd, hueOffset: dh, chromaOffset: lc, step: hold ? 0 : off.step }
   }
 }
