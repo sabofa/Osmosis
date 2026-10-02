@@ -14,6 +14,9 @@ vi.setConfig({ testTimeout: 60_000 })
 
 // no noise along the edge and no occlusion: these constructed G-buffers have normals and depths that do not agree
 const NO_NOISE = resolvePaintParams({ edges: { noise: 0 }, environment: { occlusion: 0 } })
+// ... and, where two faces turned from the light must have EXACTLY the same value, no fill light either: the core
+// is a plateau, and the reflected light beyond it takes more or less of the lift with the way a face turns
+const NO_FILL = resolvePaintParams({ edges: { noise: 0 }, environment: { occlusion: 0 }, light: { ambient: 0, sky: 0, bounce: 0 } })
 
 function analyse(g: GBuffer, view: PaintView, params: PaintParams, table = false) {
   const scene = table ? sceneOf([sphereMesh(), tableMesh({ z: -1, index: 1 })]) : sceneOf([sphereMesh()])
@@ -27,9 +30,9 @@ function analyse(g: GBuffer, view: PaintView, params: PaintParams, table = false
 // Two faces side by side in a block of the screen, camera straight on (az 0, el 0: a
 // view-space normal (x, y, z) is the world normal (z, x, y)). The model lights them itself
 // from their normals: the key light is up and to the left of the camera (-0.739, 0.454, 0.498),
-// so a face turned left (-0.5, 0, 0.866) has N·L 0.801, value 0.801 + 0.18 = 0.981 and is in the light
-// (plan value 0.85 + 0.09·(0.981 - 0.93)/0.07 = 0.915), and one turned well to the right
-// (0.9, 0, 0.436) is turned from the light entirely: ambient only, the core, 0.24.
+// so a face turned left (-0.5, 0, 0.866) has N·L 0.801 and is in the light (plan value 0.52 + 0.2 + 0.13·0.973 +
+// 0.09·0.504 = 0.892), and one turned well to the right (0.9, 0, 0.436) is turned from the light entirely (N·L -0.448):
+// the core, lifted by a quarter (the ambient) of the 0.79 of the way up the reflected lift it has taken, 0.262.
 const LIT_LEFT: [number, number, number] = [-0.5, 0, 0.866]
 const CORE_RIGHT: [number, number, number] = [0.9, 0, 0.436]
 const CORE_RIGHT_2: [number, number, number] = [0.95, 0, 0.312]
@@ -68,14 +71,14 @@ describe('edge control', () => {
   })
 
   it('calls a sharp normal crease with high contrast HARD', () => {
-    // a lit face (plan value 0.915) against one turned from the light (the core, 0.24): contrast 0.675
+    // a lit face (plan value 0.892) against one turned from the light (0.262): contrast 0.630
     const { edges, planes } = twoFaces(LIT_LEFT, CORE_RIGHT, NO_NOISE)
     const crease = edges.edges.filter((e) => e.type === 'internal')
     expect(crease.length).toBe(1)
     const e = crease[0]
-    expect(e.contrast).toBeCloseTo(0.675, 2)
+    expect(e.contrast).toBeCloseTo(0.63, 2)
     expect(planes.planes[e.a].mark).toBe(0)
-    // c = 1 (contrast 0.67 > 0.60), k = 1 (60° between the normals), d = 1 (flat in depth), s = 0.600:
+    // c = 1 (contrast 0.63 > 0.60), k = 1 (60° between the normals), d = 1 (flat in depth), s = 0.600:
     // H = .32 + .22 + .10 + .10·0.600 = 0.70 before the focal term
     expect(e.h.length).toBeGreaterThan(40)
     for (let i = 0; i < e.h.length; i++) {
@@ -88,7 +91,7 @@ describe('edge control', () => {
   })
 
   it('calls two adjacent planes of equal value LOST: both turned from the light, in different planes', () => {
-    const { edges } = twoFaces(CORE_RIGHT, CORE_RIGHT_2, NO_NOISE)
+    const { edges } = twoFaces(CORE_RIGHT, CORE_RIGHT_2, NO_FILL)
     const seam = edges.edges.filter((e) => e.type === 'internal')
     expect(seam.length).toBe(1)
     expect(seam[0].contrast).toBeCloseTo(0, 6)
@@ -107,13 +110,13 @@ describe('edge control', () => {
   })
 
   it('forces LOST where there is no value contrast, however sharply the form turns', () => {
-    // two faces turned well from the light, 37 degrees apart, with the same up component, so the same value (the core):
-    // the contrast is exactly 0. The curvature term is whole (37 degrees over a few px is far past 0.06 rad/px) and the
+    // two faces turned well from the light, 37 degrees apart, both in the core (no fill light: a plateau): the
+    // contrast is exactly 0. The curvature term is whole (37 degrees over a few px is far past 0.06 rad/px) and the
     // surface is flat in depth, so the weighted sum would be .22 + .10 = 0.32, SOFT. With nothing to see across the
     // seam it is held under the LOST line: lostBelow - 0.01 = 0.23.
     const n1: [number, number, number] = [0.8494, -0.4997, 0.1699]
     const n2: [number, number, number] = [0.5, -0.5, 0.7071]
-    const { edges } = twoFaces(n1, n2, NO_NOISE)
+    const { edges } = twoFaces(n1, n2, NO_FILL)
     const seam = edges.edges.filter((e) => e.type === 'internal')
     expect(seam.length).toBe(1)
     expect(seam[0].contrast).toBeCloseTo(0, 6)
@@ -123,7 +126,7 @@ describe('edge control', () => {
       expect(seam[0].cls[i]).toBe(0)
     }
     // the rule follows the parameter
-    const moved = resolvePaintParams({ edges: { noise: 0, lostBelow: 0.3, softBelow: 0.5, firmBelow: 0.7 }, environment: { occlusion: 0 } })
+    const moved = resolvePaintParams({ edges: { noise: 0, lostBelow: 0.3, softBelow: 0.5, firmBelow: 0.7 }, environment: { occlusion: 0 }, light: { ambient: 0, sky: 0, bounce: 0 } })
     const m = twoFaces(n1, n2, moved).edges.edges.filter((e) => e.type === 'internal')[0]
     for (let i = 0; i < m.h.length; i++) expect(m.h[i]).toBeCloseTo(0.29, 6)
   })

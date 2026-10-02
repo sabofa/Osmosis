@@ -107,8 +107,12 @@ describe('planes', () => {
     const lit = map.planes.filter((p) => p.ground && !p.cast)
     expect(cast.length).toBeGreaterThanOrEqual(2)
     expect(lit.length).toBe(1)
-    // the nearer band is darker on average (the plateau is the same, but there is no gradient: equal)
-    for (const p of cast) expect(p.u).toBeCloseTo(0.32, 4)
+    // every band is the cast plateau, darkened toward castContact only where the occlusion of a figure at hand reaches
+    // it (the nearer band, at a contact)
+    for (const p of cast) {
+      expect(p.u).toBeLessThanOrEqual(0.32 + 1e-6)
+      expect(p.u).toBeGreaterThan(0.25)
+    }
     expect(lit[0].u).toBeCloseTo(plan.uCanvas, 4)
     // distance from the figure is 0 on the sphere and grows across the table
     let onSphere = 0

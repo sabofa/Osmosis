@@ -35,7 +35,7 @@ import { clamp, scratchU8, vcross, vlen, vnorm, type V3 } from './math'
 import { stepValue, chamferDist } from './planes'
 import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
 import { pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
-import { ambientShare, bounceWeight, modelValue, newZoneSample, terminatorValue, zoneSample } from './value'
+import { ambientShare, newZoneSample, planSample } from './value'
 import { bigMax, drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
 import { Z_CAST } from './zones'
 
@@ -112,12 +112,10 @@ function whereOf(an: PaintCtx, k: number): Where {
   const nx = an.vis.normal[3 * k], ny = an.vis.normal[3 * k + 1], nz = an.vis.normal[3 * k + 2]
   const L = an.fc.view.lightDir
   const nl = nx * L[0] + ny * L[1] + nz * L[2]
-  const v = modelValue(params, an.plan.curves, nl, false, nz, 0)
-  const b = bounceWeight(params, nx, ny, nz, Math.max(0, nl))
-  zoneSample(params, v, b, false, ZS)
+  planSample(params, an.plan.curves, nl, false, nx, ny, nz, 0, ZS)
   w.u = ZS.u
-  w.v = v
-  w.b = b
+  w.v = ZS.u
+  w.b = ZS.lift
   w.lightW = ZS.w[0] + 0.6 * ZS.w[1]
   w.shadowW = ZS.w[2] + ZS.w[4]
   w.reflW = ZS.w[3]
@@ -261,6 +259,9 @@ function strokeColour(an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>
 
 // ---- the stroke ----
 
+// A stroke that stops at the terminator (stopBelow) stops where the plan value falls under the middle of the soft edge
+// between the core and the darkest half-tone: the plan value at N·L = 0.
+const TERMINATOR = -2
 interface RoleCfg {
   dir: 'block' | 'form'
   classed: 'full' | 'soft' | 'none'
@@ -269,7 +270,7 @@ interface RoleCfg {
 }
 const CFG: Record<'block' | 'form' | 'scumble' | 'glaze' | 'reflected', RoleCfg> = {
   block: { dir: 'block', classed: 'full', start: 'hand', stopBelow: -1 },
-  form: { dir: 'form', classed: 'full', start: 'light', stopBelow: 0.36 },
+  form: { dir: 'form', classed: 'full', start: 'light', stopBelow: TERMINATOR },
   scumble: { dir: 'block', classed: 'soft', start: 'hand', stopBelow: -1 },
   glaze: { dir: 'block', classed: 'none', start: 'hand', stopBelow: -1 },
   reflected: { dir: 'form', classed: 'none', start: 'hand', stopBelow: -1 },
@@ -393,7 +394,7 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     rot: mode === 'iso' ? rot : 0,
     lengthPx,
     bend,
-    stopBelow: cfg.stopBelow,
+    stopBelow: cfg.stopBelow === TERMINATOR ? 0.5 * (params.value.corePlateau + params.value.halfLo) : cfg.stopBelow,
     planeId: !veil && cfg.classed !== 'none' && role !== 'scumble' ? w.plane : -1,
     castOnly: ground,
     inside: veil ? veilOf(fc.scene.marks[set.mark[i]] as MeshMark).inside : undefined,
@@ -490,7 +491,6 @@ export function particleStrokes(an: PaintCtx): void {
   const { set, vis, fc } = an
   const params = fc.params
   const d = params.detect
-  const term = terminatorValue(params)
   // a stroke whose density fade is under this is left out (it has all but faded away)
   const MIN = 0.02
   for (let k = 0; k < vis.count; k++) {
@@ -520,7 +520,7 @@ export function particleStrokes(an: PaintCtx): void {
       continue
     }
     f = drawFade(fc, vis, set, k, 'form')
-    if (f > MIN && plan.shadowW[gi] < 0.85 && Math.abs(plan.value[gi] - term) <= d.formBand) buildParticleStroke(an, k, 'form', f)
+    if (f > MIN && plan.shadowW[gi] < 0.85 && Math.abs(plan.nl[gi]) <= d.formBand) buildParticleStroke(an, k, 'form', f)
     f = drawFade(fc, vis, set, k, 'scumble')
     if (f > MIN && an.scumbleOk[gi] === 1) buildParticleStroke(an, k, 'scumble', f)
     f = drawFade(fc, vis, set, k, 'glaze')

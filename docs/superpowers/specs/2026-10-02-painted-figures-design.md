@@ -52,11 +52,11 @@ The model is pure TypeScript in `graph-engine/src/space/paint/model/` and is ren
   - The key light is camera-relative: `light.azimuth` and `light.elevation` relative to the view direction. The mockup uses upper left.
   - Ambient, plus a sky term on up-facing normals and a bounce term on down-facing normals.
   - A shadow map from the key light gives cast and self shadow.
-- **Value.** `u` is in 0..1 and is grouped into five zones with soft boundaries `value.soft` (0.06–0.08): light, half-tone, core shadow, reflected light and cast shadow.
+- **Value.** `u` is in 0..1 and is grouped into five zones: light, half-tone, core shadow, reflected light and cast shadow. The structure of the plan (two families, the terminator, the soft turns) is §12, which supersedes the soft boundaries `value.soft` and the reflected ramp below.
 - **Mockup defaults:**
   - half-tone ramp at u 0.52–0.72;
   - light ramp at 0.85–0.94;
-  - plateaus: core 0.24, reflected 0.34–0.48, cast 0.32;
+  - plateaus: core 0.24, cast 0.32 (the reflected light is capped by §12);
   - a smooth seeded deviation of up to ±0.018.
 
 ### 3.4 Lighting curve (OKLCH)
@@ -240,4 +240,33 @@ Ben wants to fine-tune "color curves, lighting curves, lighting strength, enviro
 - `params.environment`: hue and chroma of the environment light, `absorption` (how much of the environment colour the object takes in, applied to the ambient share in OKLab with L untouched), and screen-space `occlusion` from the G-buffer depth with `occlusionRadiusPx`.
 - `params.mix.hueBias`, `chromaBias`, `valueBias`: the ± balance of the brush-load mix. A bias b makes the + direction come up (1 + b)/2 of the time.
 - `params.detect`: the thresholds that pick each stroke's role (form band, scumble gradient and width, dab fraction and spacing, glaze threshold, reflected minimum, edge minimum contrast and reach).
-- The model computes its own value from the G-buffer normal and shadow flag, so the curves apply: N·L → `lightResponse` → plus ambient, sky and bounce → minus occlusion → `value`. `PaintDebug.value` carries it for the 'value' debug view. `GBuffer.value` remains the renderer's raw reference.
+- The model computes its own value from the G-buffer normal and shadow flag, so the curves apply: N·L → `lightResponse` → the value plan (§12) → `value`, with the occlusion in the plan. (It first read: N·L → `lightResponse` → plus ambient, sky and bounce → minus occlusion → `value`; §12 replaced that.) `PaintDebug.value` carries it for the 'value' debug view. `GBuffer.value` remains the renderer's raw reference.
+
+## 12. Value plan (Ben, 2026-10-02)
+
+Ben, on the painted figures: "bounce light is way too light. bounce light is only supposed to be darker than midtones but its the same value. and another thing, youre missing the terminal and the softness of the transition between midtone and light and also bounce light and shadow." This replaces the value plan of §3.3 (and the zone steps of §11: `value.halfAt`, `value.lightAt`, `value.soft`, `value.reflectedLo` and `value.reflectedHi` are gone). The painter's value structure is the classical form-shadow model.
+
+- **Two families, divided by the terminator (N·L = 0).** Every value of the shadow family is darker than every value of the light family.
+  - The LIGHT family is where the surface faces the key light (N·L > 0) and is not in cast shadow. From bright to dark: highlight, light, half-tone.
+  - The SHADOW family is the form shadow (N·L ≤ 0) plus the cast shadow. The core shadow is its darkest band, and the reflected light lifts beyond it.
+- **The plan is a function of the signed N·L**, not of a lit value with the fill light on top: `u = planSample(N·L, shadow flag, normal, occlusion)` in `model/value.ts`. `lightResponse` and the intensity scale N·L on the lit side; the `value` curve is applied last, to the finished plan value.
+- **Light family.** The half-tone ramp runs from `halfLo` (its darkest value, at the terminator) to `halfHi`, then the light ramp from `lightLo` to `lightHi` (the highlight). They are joined by a SOFT turn:
+  - `value.lightTurn`: the N·L where the half-tone turns to light (default 0.6);
+  - `value.lightSoftness`: the width of that turn in N·L units (default 0.5: a wide, smooth gradation, not a step).
+- **Terminator and core shadow.**
+  - `value.terminatorSoftness`: the light-to-core edge, centred on N·L = 0 (default 0.1). It is softer on round forms but clearly defined, and crisper than the two other transitions.
+  - `value.coreWidth`: how far into the shadow the core band extends, from 0 down to −coreWidth (default 0.2).
+  - `value.corePlateau`: the core's value (default 0.24).
+- **Reflected (bounce) light.** Beyond the core the form shadow lightens with the bounce, but always stays darker than the darkest half-tone:
+  - `reflectedMax = corePlateau + value.reflectedShare × (halfLo − corePlateau)`, with `reflectedShare` in 0..0.9 (default 0.4);
+  - value = core + `bounceAmount` × (reflectedMax − core), where `bounceAmount` is 0..1, from the bounce light (normals facing the table), the sky (up-facing) and the ambient, less the occlusion;
+  - the transition from the core to the reflected light is SOFT: `value.reflectedSoftness` (default 0.35, starting at −coreWidth).
+
+  `light.bounce`, `light.sky`, `light.ambient` and the curve's `reflectedBounceMix` can never lift a shadow-family value above `reflectedMax`: the bounce tints the colour's hue and chroma (OKLab a and b), and never its L (`model/curve.ts`).
+- **Cast shadow.** It belongs to the shadow family. `value.castPlateau` is its value away from a contact, `value.castContact` at the contact (the occlusion, over `environment.occlusionRadiusPx`); neither is ever lighter than `reflectedMax`. The occlusion also takes the bounce away from the form shadow near a contact. It does not darken the light family.
+- **The terminator edge is the one place where the families meet.** The strict ordering holds outside it (the edge is the width `terminatorSoftness` centred on the terminator), and a cast shadow is told from the terminator by its N·L (past the edge, then `CAST_FADE` more).
+- **Detection follows.**
+  - `detect.formBand` is in N·L units from the terminator;
+  - the zone weights classify a pixel for the roles, the planes and the zones view (a pixel is reflected light only where the bounce or sky really reaches it);
+  - scumble now exists on a lit sphere, on the wide soft turns, and so follows the light as form strokes do (the coherence target of §3.2 covers the steady roles: block, glaze, reflected).
+- **Old saved presets** that still carry `reflectedLo`, `reflectedHi`, `halfAt`, `lightAt` or `soft` resolve without errors: `resolvePaintParams` ignores unknown keys.

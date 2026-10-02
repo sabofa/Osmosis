@@ -124,10 +124,12 @@ export const EDGE_CLASSES: readonly EdgeClass[] = ['lost', 'soft', 'firm', 'hard
 
 // Debug data the model hands the renderer for the lab's debug views.
 export interface PaintDebug {
-  // The model's final value per G-buffer pixel (0..1, -1 empty): its own
-  // lighting from the G-buffer normal and shadow flag, through the light
-  // response curve, occlusion and the value curve. The 'value' debug view
-  // shows this, not GBuffer.value (the renderer's raw lighting).
+  // The model's value plan per G-buffer pixel (0..1, -1 empty): the painter's
+  // plan from the G-buffer normal (N·L) and shadow flag (spec §12: two
+  // families divided by the terminator, a core shadow, reflected light kept
+  // under the half-tones), through the light response curve, occlusion and
+  // the value curve. The 'value' debug view shows this, not GBuffer.value
+  // (the renderer's raw lighting).
   value: Float32Array
   // Plane id per G-buffer pixel (-1 empty), same size as the G-buffer.
   planes: Int32Array

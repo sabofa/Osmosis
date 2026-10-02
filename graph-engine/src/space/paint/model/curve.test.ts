@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams } from '../params'
 import { labToLch, lchInGamut, lchToLab } from './colour'
 import { makeCurve } from './curve'
+import { halfToneLowest, reflectedMax } from './value'
 
 // A terracotta local colour: L 0.56, C 0.14, h 38°.
 const TERRACOTTA = lchToLab(0.56, 0.14, 38)
@@ -70,20 +71,59 @@ describe('lighting curve', () => {
     expect(under[2]).toBeCloseTo(44.393, 2)
   })
 
-  it('mixes the bounce colour into reflected light, up to 0.55, and that one lifts L', () => {
+  it('mixes the bounce colour’s hue and chroma into reflected light, up to 0.55, and never touches L', () => {
     const grey = lchToLab(0.5, 0, 0)
     const curve = makeCurve(DEFAULT_PAINT_PARAMS)
-    // b = 0.45 gives w = 0.55; the bounce colour is the canvas tone at L − 0.04 = 0.89:
-    // L' = 0.5 + (0.89 − 0.5)·0.55·0.6 + 0.03·0.55 = 0.6452
+    const bare = curve.lch({ local: grey, u: 0.62, noDev: true })
+    // b = 0.45 gives w = 0.55: a and b move that far toward the bounce colour (the canvas tone at L − 0.04, ×2.1 its chroma)
+    const [bl, ba, bb] = lchToLab(curve.bounceLch[0], curve.bounceLch[1], curve.bounceLch[2])
+    expect(bl).toBeGreaterThan(0.85)
+    const [l0, a0, b0] = lchToLab(...bare)
     const refl = curve.lch({ local: grey, u: 0.62, bounce: 0.45, noDev: true })
-    expect(refl[0]).toBeCloseTo(0.6452, 6)
-    // the mix saturates there: b = 0.9 changes nothing more
-    expect(curve.lch({ local: grey, u: 0.62, bounce: 0.9, noDev: true })[0]).toBeCloseTo(0.6452, 6)
-    // and a smaller b mixes proportionally less: w = 0.55·0.225/0.45 = 0.275
-    expect(curve.lch({ local: grey, u: 0.62, bounce: 0.225, noDev: true })[0]).toBeCloseTo(
-      0.5 + 0.39 * 0.275 * 0.6 + 0.03 * 0.275,
-      6,
-    )
+    const [l1, a1, b1] = lchToLab(...refl)
+    expect(a1).toBeCloseTo(a0 + (ba - a0) * 0.55, 9)
+    expect(b1).toBeCloseTo(b0 + (bb - b0) * 0.55, 9)
+    // the value is the plan's: the bounce colour is a light one, and the mix does not lift L toward it
+    expect(l1).toBeCloseTo(l0, 12)
+    expect(refl[0]).toBeCloseTo(bare[0], 12)
+    // the mix saturates there: b = 0.9 changes nothing more; a smaller b mixes proportionally less (w = 0.275)
+    const [, a2, b2] = lchToLab(...curve.lch({ local: grey, u: 0.62, bounce: 0.9, noDev: true }))
+    expect([a2, b2]).toEqual([a1, b1])
+    const [, a3] = lchToLab(...curve.lch({ local: grey, u: 0.62, bounce: 0.225, noDev: true }))
+    expect(a3).toBeCloseTo(a0 + (ba - a0) * 0.275, 9)
+  })
+
+  it('keeps reflected light under the shadow ceiling: no bounce tint or bounce mix lifts L past the lightness the plan’s cap gives', () => {
+    // every colour term that could lift a shadow, at its slider maximum
+    const loud = resolvePaintParams({
+      curve: { reflectedBounceMix: 1, bounceTint: 0.1, skyTint: 0.1 },
+      environment: { chroma: 0.2, absorption: 1 },
+      light: { bounce: 1, sky: 1, ambient: 1 },
+    })
+    const ceilingU = reflectedMax(loud)
+    const floorU = halfToneLowest(loud)
+    const curve = makeCurve(loud)
+    for (const local of [lchToLab(0.3, 0.05, 20), lchToLab(0.56, 0.14, 38), lchToLab(0.8, 0.1, 200), lchToLab(0.95, 0.02, 90), lchToLab(0.5, 0, 0)]) {
+      // the lightness the curve gives the cap, with the bounce off: the shadow family's ceiling for this colour
+      const ceiling = curve.lch({ local, u: ceilingU, noDev: true })[0]
+      const halfTone = curve.lch({ local, u: floorU, noDev: true })[0]
+      for (const nz of [-1, -0.5, 0, 0.5, 1]) {
+        for (const bounce of [0, 0.1, 0.45, 0.85, 1.275]) {
+          for (let k = 0; k <= 20; k++) {
+            const u = (k / 20) * ceilingU
+            const L = curve.lch({ local, u, nz, bounce, ambientShare: 1, noDev: true })[0]
+            expect(L, `u ${u}, bounce ${bounce}, nz ${nz}`).toBeLessThanOrEqual(ceiling + 1e-9)
+          }
+        }
+      }
+      // and the ceiling is well under the darkest half-tone: what the plan keeps apart, the colour keeps apart (for a
+      // colour whose lightness is away from the soft clamps at the ends of the range, which squeeze the gap)
+      const mid = labToLch(local)[0]
+      if (mid > 0.45 && mid < 0.7) {
+        expect(halfTone - ceiling).toBeGreaterThanOrEqual(loud.curve.lSlope * (1 - loud.value.reflectedShare) * (floorU - loud.value.corePlateau) - 1e-9)
+      }
+      expect(halfTone).toBeGreaterThan(ceiling)
+    }
   })
 
   it('rotates a colormapped colour by a third, and scales its tints by a third', () => {

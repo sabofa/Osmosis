@@ -73,22 +73,33 @@ export interface PaintParams {
     shadows: number
   }
   value: {
-    // The half-tone ramp (halfLo, halfHi) and the light ramp (lightLo, lightHi): the PLAN value u a stroke is
-    // painted at, from the dark end of a zone to the light end of it (§3.3, the mockup's 0.52..0.72 and 0.85..0.94).
+    // The value plan (spec §3.3, §12: Ben's classical form-shadow model). Two families, divided by the
+    // terminator (N·L = 0); every value of the shadow family is darker than every value of the light family.
+    //
+    // The LIGHT family (facing the key light, not in cast shadow), from dark to bright: the half-tone ramp from
+    // halfLo (its darkest value, at the terminator) to halfHi, then the light ramp from lightLo to lightHi (the
+    // highlight, at N·L = 1). The PLAN value u a stroke is painted at (the mockup's 0.52..0.72 and 0.85..0.94).
     halfLo: number
     halfHi: number
     lightLo: number
     lightHi: number
-    // Where the zones begin, over the model's value v (the key light, the fill light and the curves): the centre
-    // of the soft step from core shadow into half-tone, and from half-tone into light (the mockup's 0.17 and 0.66
-    // of N·L, taken over v with the fill light on top of them). `soft` is how wide each step is.
-    halfAt: number
-    lightAt: number
-    soft: number
+    // Where the half-tone turns to light, in N·L, and how wide that turn is (N·L units): a wide, smooth gradation.
+    lightTurn: number
+    lightSoftness: number
+    // The terminator: the light-to-core edge, centred on N·L = 0, this wide. Crisper than the two other turns.
+    terminatorSoftness: number
+    // The SHADOW family. Just past the terminator is the core shadow, its darkest band: corePlateau, from N·L 0 to
+    // -coreWidth. Beyond it the form shadow lightens with the reflected (bounce) light, softly over reflectedSoftness
+    // (N·L units), but never past reflectedMax = corePlateau + reflectedShare (0..0.9) x (halfLo - corePlateau):
+    // always darker than the darkest half-tone.
+    coreWidth: number
     corePlateau: number
-    reflectedLo: number
-    reflectedHi: number
+    reflectedShare: number
+    reflectedSoftness: number
+    // The cast shadow: castPlateau away from the contact, castContact at it (the occlusion, over
+    // environment.occlusionRadiusPx). Never lighter than reflectedMax.
     castPlateau: number
+    castContact: number
     deviation: number
   }
   curve: {
@@ -243,8 +254,9 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   // puts most of a form in the light zone, and the picture reads pale.
   light: { azimuth: 56, elevation: 27, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
   value: {
-    halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, halfAt: 0.37, lightAt: 0.93, soft: 0.07,
-    corePlateau: 0.24, reflectedLo: 0.34, reflectedHi: 0.48, castPlateau: 0.32, deviation: 0.018,
+    halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, lightTurn: 0.6, lightSoftness: 0.5,
+    terminatorSoftness: 0.1, coreWidth: 0.2, corePlateau: 0.24, reflectedShare: 0.4, reflectedSoftness: 0.35,
+    castPlateau: 0.32, castContact: 0.2, deviation: 0.018,
   },
   curve: {
     lSlope: 0.8, lPivot: 0.62, cBase: 0.42, cPeak: 0.88, cCentre: 0.5, cWidth: 0.25,
@@ -331,7 +343,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'environment.occlusionRadiusPx', label: 'Occlusion radius (px)', group: 'Environment', min: 2, max: 60, step: 1 },
   ...(
     [
-      ['formBand', 'Form band (u)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
+      ['formBand', 'Form band (N·L)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
       ['scumbleMinPx', 'Scumble min width (px)', 0, 40, 1], ['dabTopFraction', 'Dab top fraction', 0, 0.2, 0.001],
       ['dabMinPx', 'Dab min spacing (px)', 0, 80, 1], ['glazeBelow', 'Glaze below u', 0, 1, 0.01],
       ['reflectedMin', 'Reflected min bounce', 0, 0.3, 0.005], ['edgeMinContrast', 'Edge min contrast', 0, 0.3, 0.005],
@@ -343,13 +355,15 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'mix.valueBias', label: 'Value-step ± balance', group: 'Brush-load mix', min: -1, max: 1, step: 0.01 },
   ...(
     [
-      ['halfLo', 'Half-tone from', 0, 1], ['halfHi', 'Half-tone to', 0, 1], ['lightLo', 'Light from', 0, 1],
-      ['lightHi', 'Light to', 0, 1], ['halfAt', 'Half-tone begins (v)', 0, 1], ['lightAt', 'Light begins (v)', 0, 1],
-      ['soft', 'Zone softness', 0, 0.3], ['corePlateau', 'Core plateau', 0, 1],
-      ['reflectedLo', 'Reflected from', 0, 1], ['reflectedHi', 'Reflected to', 0, 1],
-      ['castPlateau', 'Cast plateau', 0, 1], ['deviation', 'Deviation', 0, 0.1],
+      ['halfLo', 'Half-tone, darkest (at terminator)', 0, 1, 0.001], ['halfHi', 'Half-tone, lightest', 0, 1, 0.001],
+      ['lightLo', 'Light from', 0, 1, 0.001], ['lightHi', 'Light to (highlight)', 0, 1, 0.001],
+      ['lightTurn', 'Half-tone turns to light (N·L)', 0, 1, 0.005], ['lightSoftness', 'Light / half-tone softness (N·L)', 0, 1, 0.005],
+      ['terminatorSoftness', 'Terminator softness (N·L)', 0, 0.4, 0.005], ['coreWidth', 'Core shadow width (N·L)', 0, 0.8, 0.005],
+      ['corePlateau', 'Core shadow value', 0, 1, 0.001], ['reflectedShare', 'Reflected share (core to half-tone)', 0, 0.9, 0.005],
+      ['reflectedSoftness', 'Reflected / core softness (N·L)', 0, 1, 0.005], ['castPlateau', 'Cast shadow value', 0, 1, 0.001],
+      ['castContact', 'Cast shadow at the contact', 0, 1, 0.001], ['deviation', 'Deviation', 0, 0.1, 0.001],
     ] as const
-  ).map(([k, label, min, max]) => ({ path: `value.${k}`, label, group: 'Value plan', min, max, step: 0.001 })),
+  ).map(([k, label, min, max, step]) => ({ path: `value.${k}`, label, group: 'Value plan', min, max, step })),
   ...(
     [
       ['lSlope', 'L slope', 0, 2, 0.01], ['lPivot', 'L pivot', 0, 1, 0.01], ['cBase', 'C base', 0, 2, 0.01],
