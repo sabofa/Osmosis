@@ -50,6 +50,140 @@ statement anywhere in the spec (see below) makes `<name>` callable/referenceable
 in every other statement, regardless of where in the spec the definition sits
 relative to its use.
 
+## Expressions: the calculus kernel (calc P1)
+
+The syntax below is read by `parseExprString` and `parseConditionString`
+(`graph-engine/src/parser/parseExpr.ts`) and evaluated by the shared calculus
+kernel (`graph-engine/src/math/`, shared with the 3D space engine). Everything
+the "Expression grammar" section describes still parses to the same tree it
+always did, with one exception under "Powers of a function" below. The new
+forms (bars, factorial, primes, braces, conditions, and the sum, product and
+integral forms) each used to be a syntax error.
+
+**Real odd roots.** A power whose exponent is a ratio of integer literals that
+reduces to `p/q` with `q` odd takes the real root, so it is defined for a
+negative base:
+
+```
+x^(1/3)      # real cube root: -2 at x = -8
+x^(2/3)      # the cube root, squared: 4 at x = -8
+```
+
+The rule reads the exponent's shape, never a float: `x^0.333`, `x^0.5` and
+`x^(1/2)` stay the principal power (undefined for negative `x`).
+
+**More built-ins.** The trig functions read their angle, and the inverse trig
+functions return theirs, in the spec's `@angle` unit; the hyperbolic functions
+take plain numbers.
+
+| Function | Meaning | Example |
+|---|---|---|
+| `gamma(x)` | the gamma function; `gamma(n + 1)` is `n!` | `gamma(5)` is 24 |
+| `erf(x)`, `erfc(x)` | the error function and `1 - erf(x)` | `erf(1)` is 0.8427 |
+| `cbrt(x)` | real cube root, negative `x` included | `cbrt(-8)` is -2 |
+| `root(n, x)` | real `n`-th root for a whole `n`; an even root of a negative is undefined | `root(4, 16)` is 2 |
+| `step(x)` | Heaviside step: 0 below zero, 1 from zero up | `step(0)` is 1 |
+| `choose(n, k)` | binomial coefficient | `choose(5, 2)` is 10 |
+| `perm(n, k)` | `n!/(n - k)!`, the ordered selections | `perm(5, 2)` is 20 |
+| `gcd(a, b)`, `lcm(a, b)` | greatest common divisor, least common multiple, of whole numbers | `gcd(12, 18)` is 6 |
+| `asin`, `acos`, `atan`, `atan2(y, x)` | inverse trig | `atan2(1, 1)` is `pi/4` in radians |
+| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` | hyperbolic and their inverses | `asinh(1)` is 0.8814 |
+| `sec`, `csc`, `cot` | reciprocals of `cos`, `sin`, `tan` | `sec(0)` is 1 |
+| `floor`, `ceil`, `round`, `sign` | `round` takes halves away from zero | `round(-2.5)` is -3 |
+| `mod(a, b)` | remainder with the sign of `b` | `mod(-1, 3)` is 2 |
+| `min(a, b, …)`, `max(a, b, …)` | two or more arguments | `max(1, 2, 3)` is 3 |
+| `hypot(a, b, …)` | square root of the sum of squares, two or more arguments | `hypot(3, 4)` is 5 |
+
+`inf` is a constant like `pi` and `e` (∞), meant for the bounds of an integral.
+
+**Absolute value.** `|x - 1|`. A bar where an operand is expected opens a pair;
+a bar after an operand closes the open pair, or multiplies when none is open. So
+`2|x|` is `2·|x|`, `|x||y|` is `|x|·|y|`, and `||x| - 1|` nests. Parentheses
+start over: in `|(2|x|)|` the inner pair multiplies.
+
+**Factorial.** `n!` is postfix and means `gamma(n + 1)`: exact at whole numbers,
+undefined at the negative integers. It binds tighter than `^` and than unary
+minus, so `-3!` is `-(3!)` = -6 and `2^3!` is `2^(3!)` = 64. Parenthesise to
+take the factorial of a sum: `(2k + 1)!`. `!=` is "not equal", so write
+`n! = 5` with a space when you mean the factorial.
+
+**Derivatives by name.** `f'(x)`, `f''(x + 1)`, up to five primes: the exact
+derivative of a function the document defines, at that point. Only a user
+function can be primed (`sin'(x)` is an error), a function the kernel cannot
+differentiate exactly is refused rather than approximated, and six primes is an
+error.
+
+**Powers of a function.** `sin^2(x)` is `(sin(x))^2`. `sin^-1(x)` is the
+inverse, `asin(x)`, as textbooks write it; the same goes for `cos`, `tan`,
+`sinh`, `cosh` and `tanh`. `sec^-1`, `csc^-1` and `cot^-1` have no built-in and
+are refused with the spelling to use (`acos(1/x)`, `asin(1/x)`, `atan(1/x)`).
+This reads only a built-in's name directly followed by `^`; `x^2(x + 1)` is
+still `x^2·(x + 1)`, and a built-in name raised to a power with no parenthesised
+argument (`gamma^2`) is the name to a power. The one input that read differently
+before is a built-in's name, `^`, an exponent and a parenthesised argument
+(`sin^2(x)`), which used to parse as `sin^2·(x)` with `sin` an unknown variable.
+
+**A name before parentheses.** A name that is a value (a variable, a parameter
+or a constant) and is called with one argument is a product: `x(x + 1)` is
+`x·(x + 1)`, and with `k = 2` defined, `k(x + 1)` is `2·(x + 1)`. Built-in names
+are the exception: `sin(x)` is always the function. A document's own value (a
+`@param` or a constant) takes its name over a built-in function of the same
+name: after `@param gamma = 2`, `gamma` is the parameter, and calling
+`gamma(3)` is the error `"gamma" is a parameter in this document; rename it to
+use the built-in gamma function`. (A *function* the document defines,
+`sin(z) = z^2`, replaces the built-in quietly, as it always has.)
+
+**Piecewise.** `{condition: value, condition: value, …, otherwise}`:
+
+```
+{x < 0: x^2, x <= 2: 2x + 1, 5}
+```
+
+The value is that of the first piece whose condition holds. A final bare value
+is the "otherwise"; without one the expression is undefined where no condition
+holds, and an undefined condition reached before any true one makes the whole
+value undefined. A bare value anywhere but last, a condition that is not a
+comparison (`{x: 1}`) and a missing `:` are errors. Braces multiply like
+parentheses (`2{x < 0: 1, 0}`) and may nest.
+
+**Conditions.** The comparisons are `<`, `<=`, `>`, `>=`, `=` and `!=`; a chain
+`0 < x <= 1` tests each link and requires all of them; `and`, `or` and `not`
+combine them, with `not` binding tightest, then `and`, then `or`:
+
+```
+0 < x < 1
+x < 0 or x > 1 and y != 2      # x < 0, or both x > 1 and y != 2
+not x = 0
+```
+
+Parentheses do not group conditions (they start an expression). A comparison
+is only valid as a condition: `x < 1` on its own, outside braces, is an error.
+`and`, `or` and `not` are keywords only inside a condition, and `to` only inside
+a sum, product or integral; anywhere else they are ordinary names.
+
+**Sums, products and integrals.**
+
+```
+sum(k = 0 to n, x^k)
+prod(k = 1 to n, k)
+integral(t = 0 to x, sin(t)/t)
+integral(t = 0 to inf, exp(-t))
+```
+
+The variable (`k`, `t`) exists only inside the body; the bounds are outside it.
+A sum or product runs over the whole numbers between its bounds: a literal
+bound that is not whole is an error (a bound read from a parameter gives an
+undefined value), at most 100000 terms are allowed, and `inf` is not a sum
+bound. An integral may have infinite bounds (`inf`, `-inf`) and is computed
+numerically; a variable upper bound is differentiable (if the document defines
+`F(x) = integral(t = 0 to x, sin(t)/t)`, then `F'(x)` is `sin(x)/x`). `sum(x)`,
+with no `=`, is still an ordinary call to a function named `sum`.
+
+**Reserved names.** Names that start with `__` are reserved for the kernel. The
+forms above are stored as calls to them (`__piecewise`, `__lt`, `__and`,
+`__factorial`, `__prime`, `__sum`, `__prod`, `__integral` and the like) so that
+no new expression node was needed; do not define or call one yourself.
+
 ## Statement catalog
 
 Every entry is a full line (or, for parametric forms, the shape before the

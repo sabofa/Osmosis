@@ -1,7 +1,9 @@
 export type Token =
   | { kind: 'num'; value: number }
   | { kind: 'ident'; name: string }
-  | { kind: 'op'; value: '+' | '-' | '*' | '/' | '^' | '=' | ',' | '(' | ')' | '[' | ']' }
+  | { kind: 'op'; value: '+' | '-' | '*' | '/' | '^' | '=' | ',' | '(' | ')' | '[' | ']' | '{' | '}' | ':' | '|' | '!' | "'" | '<' | '<=' | '>' | '>=' | '!=' }
+
+type OpValue = (Token & { kind: 'op' })['value']
 
 const FUNCTION_NAMES = new Set(['sin', 'cos', 'tan', 'sqrt', 'abs', 'log', 'ln', 'exp'])
 
@@ -54,8 +56,20 @@ export function tokenize(input: string): Token[] {
       i = j
       continue
     }
-    if ('+-*/^=,()[]'.includes(c)) {
-      tokens.push({ kind: 'op', value: c as '+' | '-' | '*' | '/' | '^' | '=' | ',' | '(' | ')' | '[' | ']' })
+    // Comparators and "!": two characters when followed by "=" ("<=", ">=",
+    // "!="); a lone "!" is the factorial (calc P1).
+    if (c === '<' || c === '>' || c === '!') {
+      if (input[i + 1] === '=') {
+        tokens.push({ kind: 'op', value: `${c}=` as '<=' | '>=' | '!=' })
+        i += 2
+        continue
+      }
+      tokens.push({ kind: 'op', value: c })
+      i++
+      continue
+    }
+    if ("+-*/^=,()[]{}:|'".includes(c)) {
+      tokens.push({ kind: 'op', value: c as OpValue })
       i++
       continue
     }

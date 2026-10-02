@@ -1460,7 +1460,9 @@ describe('space leaves built-in names and solid-figure words alone (fix round 1,
     ],
     // "label" with no colon is not the label statement: an implicit product
     ['label z = 3', { kind: 'implicit', left: bin('*', v('label'), v('z')), right: n(3), ...plain }],
-    ['pi = <1, 2, 3>', { threw: 'Unexpected character "<" at position 0' }],
+    // Still an error, in 2D. "<" is now a token (comparisons, calc P1), so the
+    // refusal comes from the parser, not the tokenizer.
+    ['pi = <1, 2, 3>', { threw: 'Unexpected token in expression' }],
     ['sin(z) = z^2', { kind: 'functionDef', name: 'sin', param: 'z', body: bin('^', v('z'), n(2)), ...plain }],
   ]
   for (const [line, statement] of BEFORE) {
