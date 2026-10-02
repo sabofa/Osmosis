@@ -11,7 +11,7 @@
 import type { Expr } from '../parser/types'
 import { diff, freshBody } from './diff'
 import { CompileError } from './errors'
-import { substitute } from './expr'
+import { substituteArguments } from './expr'
 import { MAX_PRIME_ORDER, nameArgument } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
@@ -88,5 +88,5 @@ export function derivativeFunction(name: string, fn: MathFunction, order: number
 // __prime(f, k, a) written out: f^(k)'s body with its parameter replaced by a.
 export function expandPrime(expr: Expr & { kind: 'call' }, scope: MathScope): Expr {
   const { name, fn, order } = primeFunction(expr, scope)
-  return substitute(derivativeBody(name, fn, order, scope), new Map([[primeParameter(name, fn), expr.args[2]]]))
+  return substituteArguments(derivativeBody(name, fn, order, scope), new Map([[primeParameter(name, fn), expr.args[2]]]))
 }

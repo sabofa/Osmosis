@@ -103,6 +103,27 @@ export function rationalLiteral(expr: Expr): Rational | null {
   }
 }
 
+// One arithmetic operator on two numbers, as the compiled code does it at run
+// time (a node is exactly this IEEE operation). simplify's folding and the folding
+// of substituted arguments (math/expr.ts) both go through it, so a folded number
+// is bit for bit the one the unfolded expression computes. (It is not always the
+// exact quotient p/q of the rational a subtree reads as: 1/3 - 1 is
+// -0.6666666666666667 at run time and -2/3 is -0.6666666666666666.)
+export function applyOperator(op: '+' | '-' | '*' | '/' | '^', a: number, b: number): number {
+  switch (op) {
+    case '+':
+      return a + b
+    case '-':
+      return a - b
+    case '*':
+      return a * b
+    case '/':
+      return a / b
+    case '^':
+      return Math.pow(a, b)
+  }
+}
+
 // The exponent's rational when it calls for a real root: lowest terms with an
 // odd denominator above 1. An integer exponent needs no rule (Math.pow already
 // takes a negative base to an integer power); an even denominator is the

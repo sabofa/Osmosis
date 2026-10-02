@@ -52,7 +52,7 @@
 import type { Expr } from '../parser/types'
 import { builtinArity, builtinShadowError, freeVariablesDeep, paramCallsAsProducts } from './compile'
 import { CompileError } from './errors'
-import { add, call, div, freshName, mul, neg, num, pow, sub, substitute, variable, varNames } from './expr'
+import { add, call, div, freshName, mul, neg, num, pow, sub, substitute, substituteArguments, variable, varNames } from './expr'
 import { expandPrime } from './prime'
 import { comparisonOp, isReserved, nameArgument, piecewise } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
@@ -229,7 +229,7 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
       ctx.stack.push(name)
       const own = simplify(differentiate(body, v, scope, ctx))
       ctx.stack.pop()
-      result = substitute(own, back)
+      result = substituteArguments(own, back)
     }
     partials.forEach((partial, i) => {
       // Every argument is differentiated, so an error inside one (a cycle, an
@@ -245,7 +245,7 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
         throw partial
       }
       if (partial.kind === 'num' && partial.value === 0) return
-      result = add(result, mul(substitute(partial, back), argument))
+      result = add(result, mul(substituteArguments(partial, back), argument))
     })
     return result
   }
@@ -407,7 +407,7 @@ function differentiateReserved(expr: Expr & { kind: 'call' }, v: string, scope: 
     case '__integral': {
       // Leibniz: d/dv ∫_a^b g(t) dt = g(b) b' − g(a) a' + ∫_a^b ∂g/∂v dt
       const { binder, lo, hi, body } = openBinder(expr, scope)
-      const at = (bound: Expr) => substitute(body, new Map([[binder.name, bound]]))
+      const at = (bound: Expr) => substituteArguments(body, new Map([[binder.name, bound]]))
       let result: Expr = ZERO
       if (dependsOn(hi, v, scope)) result = add(result, mul(at(hi), differentiate(hi, v, scope, ctx)))
       if (dependsOn(lo, v, scope)) result = sub(result, mul(at(lo), differentiate(lo, v, scope, ctx)))

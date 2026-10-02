@@ -1,6 +1,7 @@
 // A deterministic, structural simplifier (K3). It folds arithmetic on numeric
 // literals, except a non-integer result of two integers (a quotient 1/3, a
-// power 3^-1), which stays as written (calc P1), and applies the 0/1
+// power 3^-1) and an integer result of an operation with a non-integer operand
+// (0.5*2), which stay as written (calc P1), and applies the 0/1
 // identities, bottom-up, so the output of diff stays small. It never factors, expands or reorders, and it never folds pi
 // or e (they are variables, so a subtree holding one is not numeric) or a
 // function call (trig depends on the angle unit, which is not known here).
@@ -9,6 +10,7 @@
 // same constructors, so simplify(simplify(e)) equals simplify(e).
 
 import type { Expr } from '../parser/types'
+import { applyOperator } from './rational'
 
 function isNum(e: Expr, value?: number): e is Expr & { kind: 'num' } {
   return e.kind === 'num' && (value === undefined || e.value === value)
@@ -21,30 +23,20 @@ function negate(arg: Expr): Expr {
   return { kind: 'unary', op: '-', arg }
 }
 
-function fold(op: '+' | '-' | '*' | '/' | '^', a: number, b: number): number {
-  switch (op) {
-    case '+':
-      return a + b
-    case '-':
-      return a - b
-    case '*':
-      return a * b
-    case '/':
-      return a / b
-    case '^':
-      return Math.pow(a, b)
-  }
-}
-
 function binary(op: '+' | '-' | '*' | '/' | '^', left: Expr, right: Expr): Expr {
   if (isNum(left) && isNum(right)) {
-    const value = fold(op, left.value, right.value)
+    const value = applyOperator(op, left.value, right.value)
     // A non-integer result of two integers (a quotient 1/3, or a power with a
     // negative exponent 3^-1) stays as written, so a literal exponent keeps its
     // shape through diff and simplify and the real-odd-root rule
-    // (math/rational.ts) still sees it. The value does not change: the compiled
-    // node is the same IEEE operation, done at run time.
-    const keep = Number.isInteger(left.value) && Number.isInteger(right.value) && Number.isFinite(value) && !Number.isInteger(value)
+    // (math/rational.ts) still sees it. The other way round, an integer result of
+    // an operation with a non-integer operand (0.5*2) stays as written too: folded,
+    // the float's 1 would be read as the integer literal 1, and 0.5*2/3 would turn
+    // into a literal ratio that its author never wrote (and that compile does not
+    // read). The value does not change either way: the compiled node is the same
+    // IEEE operation, done at run time.
+    const integerOperands = Number.isInteger(left.value) && Number.isInteger(right.value)
+    const keep = Number.isFinite(value) && (integerOperands ? !Number.isInteger(value) : Number.isInteger(value))
     // A non-finite result stays as written, so it fails where it is used.
     if (!keep && Number.isFinite(value)) return { kind: 'num', value }
   }
