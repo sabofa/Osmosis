@@ -35,10 +35,20 @@
 // flat that argument's derivative is), so pdf(x, 3) and pdf(x, 1/k) with k a
 // @param differentiate in x even though pdf is refused in its second parameter,
 // and pdf(x, floor(x)) refuses, as gamma(floor(x)) does.
+//
+// The reserved constructs (math/reserved.ts): a comparison or logic call is a
+// condition, constant between its jumps, so 0; __piecewise differentiates piece
+// by piece under the same conditions; __prime(f, k, a) is f's k-th derivative
+// written out (math/prime.ts) and differentiated further; __factorial refuses
+// like gamma. A name called with one argument, x(x + 1), is a product when the
+// name is the variable, a parameter, a constant, pi, e or inf.
 
 import type { Expr } from '../parser/types'
-import { builtinArity, CompileError, freeVariablesDeep } from './compile'
+import { builtinArity, builtinShadowError, freeVariablesDeep } from './compile'
+import { CompileError } from './errors'
 import { add, call, div, mul, neg, num, pow, sub, substitute, variable } from './expr'
+import { expandPrime } from './prime'
+import { comparisonOp, isReserved, piecewise } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
@@ -181,8 +191,12 @@ function differentiate(expr: Expr, v: string, scope: MathScope, ctx: Ctx): Expr 
 
 function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: MathScope, ctx: Ctx): Expr {
   const { name, args } = expr
+  if (isReserved(name)) return differentiateReserved(expr, v, scope, ctx)
+  const shadowed = builtinShadowError(name, scope)
+  if (shadowed) throw shadowed
   const fn = scope.functions.get(name)
-  if (fn) {
+  // A constant called with one argument is a product, k(x + 1), as in compile.
+  if (fn && !(fn.params.length === 0 && args.length === 1)) {
     if (isVectorBody(fn.body)) throw new CompileError(`"${name}" is vector-valued and cannot be used as a number`, [name])
     if (args.length !== fn.params.length) {
       throw new CompileError(`"${name}" takes ${fn.params.length} argument${fn.params.length === 1 ? '' : 's'}, got ${args.length}`, [name])
@@ -222,7 +236,15 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
   }
 
   const arity = builtinArity(name)
-  if (!arity) throw new CompileError(`Unknown function "${name}"`, [name])
+  if (!arity) {
+    // name(arg) with name a value is a product, x(x + 1). Only a name diff can
+    // see to be a value qualifies: the variable itself, a parameter, a constant
+    // (the user-function branch above took every other user function), pi, e or
+    // inf. Any other name stays an unknown function, as it always was.
+    const isValue = name === v || scope.params.index.has(name) || fn !== undefined || name === 'pi' || name === 'e' || name === 'inf'
+    if (args.length === 1 && isValue) return differentiate(mul(variable(name), args[0]), v, scope, ctx)
+    throw new CompileError(`Unknown function "${name}"`, [name])
+  }
   if (args.length < arity.min || args.length > arity.max) {
     throw new CompileError(`"${name}" takes ${arity.min === arity.max ? arity.min : `${arity.min} or more`} arguments, got ${args.length}`, [name])
   }
@@ -330,6 +352,29 @@ function differentiateCall(expr: Expr & { kind: 'call' }, v: string, scope: Math
     case 'lcm':
       if (!args.some((arg) => dependsOn(arg, v, scope))) return ZERO
       throw new DerivativeRefusal(`No derivative rule for "${name}": it is defined on whole numbers only`, [name])
+  }
+  throw new CompileError(`No derivative rule for "${name}"`, [name])
+}
+
+function differentiateReserved(expr: Expr & { kind: 'call' }, v: string, scope: MathScope, ctx: Ctx): Expr {
+  const { name, args } = expr
+  // Conditions are piecewise constant: 0 wherever they have a derivative.
+  if (comparisonOp(name) || name === '__and' || name === '__or' || name === '__not') return ZERO
+  switch (name) {
+    case '__piecewise': {
+      const pieces = Math.floor(args.length / 2)
+      const parts: [Expr, Expr][] = []
+      for (let i = 0; i < pieces; i++) parts.push([args[2 * i], differentiate(args[2 * i + 1], v, scope, ctx)])
+      const otherwise = args.length % 2 === 1 ? differentiate(args[args.length - 1], v, scope, ctx) : null
+      return piecewise(parts, otherwise)
+    }
+    case '__factorial':
+      if (args.length !== 1) throw new CompileError(`"__factorial" takes 1 argument, got ${args.length}`, [name])
+      // Like gamma: 0 for an argument that does not depend on v, a refusal otherwise.
+      if (!dependsOn(args[0], v, scope)) return ZERO
+      throw new DerivativeRefusal('No derivative rule for "!": its derivative needs the digamma function, which the kernel does not have yet', ['__factorial'])
+    case '__prime':
+      return differentiate(expandPrime(expr, scope), v, scope, ctx)
   }
   throw new CompileError(`No derivative rule for "${name}"`, [name])
 }

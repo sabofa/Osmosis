@@ -13,7 +13,8 @@ export const pow = (left: Expr, right: Expr): Expr => ({ kind: 'binary', op: '^'
 export const call = (name: string, ...args: Expr[]): Expr => ({ kind: 'call', name, args })
 
 // Replaces every `var` node whose name is in `map` (an Expr has no binders, so
-// every var node is free). Call names are never replaced.
+// every var node is free). Call names are never replaced, nor is the function
+// named by __prime's first argument.
 export function substitute(expr: Expr, map: ReadonlyMap<string, Expr>): Expr {
   switch (expr.kind) {
     case 'num':
@@ -25,6 +26,8 @@ export function substitute(expr: Expr, map: ReadonlyMap<string, Expr>): Expr {
     case 'binary':
       return { kind: 'binary', op: expr.op, left: substitute(expr.left, map), right: substitute(expr.right, map) }
     case 'call':
+      // __prime(f, k, …): f names a function, never a variable.
+      if (expr.name === '__prime') return { kind: 'call', name: expr.name, args: expr.args.map((a, i) => (i === 0 ? a : substitute(a, map))) }
       return { kind: 'call', name: expr.name, args: expr.args.map((a) => substitute(a, map)) }
   }
 }
@@ -36,7 +39,8 @@ export function renameVars(expr: Expr, names: ReadonlyMap<string, string>): Expr
   return substitute(expr, map)
 }
 
-// The names of every `var` node, call arguments included, call names not.
+// The names of every `var` node, call arguments included, call names not
+// (nor the function named by __prime's first argument).
 export function varNames(expr: Expr, into: Set<string> = new Set()): Set<string> {
   switch (expr.kind) {
     case 'num':
@@ -52,7 +56,7 @@ export function varNames(expr: Expr, into: Set<string> = new Set()): Set<string>
       varNames(expr.right, into)
       break
     case 'call':
-      for (const a of expr.args) varNames(a, into)
+      for (const [i, a] of expr.args.entries()) if (!(expr.name === '__prime' && i === 0)) varNames(a, into)
       break
   }
   return into

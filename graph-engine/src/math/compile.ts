@@ -8,7 +8,12 @@
 // evaluated once however often the body uses it. A node is a closure
 // (frame) => number. Names resolve, in order: a bound variable, a parameter
 // slot (read from scope.params.values at call time, so a parameter change needs
-// no recompile), a user constant, a user function, `pi` or `e`.
+// no recompile), a user constant, a user function, `pi`, `e` or `inf`.
+//
+// A call whose name is not a function but a value, x(x + 1), is a product. The
+// reserved call names (math/reserved.ts) carry conditions, piecewise, a!, f'(x)
+// and the binders; the document's own @param or constant named like a built-in
+// owns that name, and calling it as the built-in is an error.
 //
 // A user function's body sees its own parameters, the spec's parameters and
 // constants, never the caller's variables (lexical scope, as v1's evaluator).
@@ -18,21 +23,15 @@
 // parser/evalExpr.ts, the 2D evaluator, is untouched.
 
 import type { Expr } from '../parser/types'
+import { CompileError } from './errors'
+import { derivativeBody, primeFunction } from './prime'
 import { oddRootExponent, realOddPow } from './rational'
+import { andValue, comparisonOp, compareValue, isReserved, notValue, orValue, pick } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
-import { choose, erf, erfc, gamma, gcd, lcm, perm, root, step } from './special'
+import { choose, erf, erfc, factorial, gamma, gcd, lcm, perm, root, step } from './special'
 
-// A compile-time refusal. `names` carries the offending name(s): the unknown
-// variable, the function called with the wrong arity, or both ends of a cycle.
-export class CompileError extends Error {
-  readonly names: readonly string[]
-
-  constructor(message: string, names: readonly string[]) {
-    super(message)
-    this.name = 'CompileError'
-    this.names = names
-  }
-}
+// A compile-time refusal (math/errors.ts, re-exported here for its importers).
+export { CompileError }
 
 // Called with as many numbers as the compile's `vars` (at most three).
 export type CompiledFn = (a?: number, b?: number, c?: number) => number
@@ -427,13 +426,94 @@ function compileVar(name: string, env: Env, ctx: Ctx): Node {
 
   if (name === 'pi') return constantLeaf(Math.PI)
   if (name === 'e') return constantLeaf(Math.E)
-  throw new CompileError(`Unknown variable "${name}"`, [name])
+  if (name === 'inf') return constantLeaf(Infinity)
+  throw new CompileError(`Unknown variable "${name}"${productHint(name, env)}`, [name])
+}
+
+// "xy" with x and y both bound reads as a product the author forgot to mark.
+function productHint(name: string, env: { readonly bound: ReadonlyMap<string, number> }): string {
+  if (name.length < 2 || ![...name].every((c) => env.bound.has(c))) return ''
+  return ` — did you mean ${[...name].join('*')}?`
+}
+
+// A built-in's name that the document also defines as a value, a @param or a
+// constant, belongs to that value here: called like the built-in it is an
+// error, never read as a product (ruling agreed with space, 2026-10-02). A
+// user function of the name shadows the built-in quietly, as it always has.
+export function builtinShadowError(name: string, scope: MathScope): CompileError | null {
+  if (!BUILTINS.has(name)) return null
+  const role = scope.params.index.has(name) ? 'a parameter' : scope.functions.get(name)?.params.length === 0 ? 'a constant' : null
+  if (!role) return null
+  return new CompileError(`"${name}" is ${role} in this document; rename it to use the built-in ${name} function`, [name])
+}
+
+// Whether `name` denotes a value here — a bound variable, a parameter, a user
+// constant, pi, e or inf — so that "name(arg)" is a product, x(x + 1).
+function namesValue(name: string, env: Env, ctx: Ctx): boolean {
+  if (env.bound.has(name) || ctx.scope.params.index.has(name)) return true
+  const fn = ctx.scope.functions.get(name)
+  if (fn) return fn.params.length === 0
+  return name === 'pi' || name === 'e' || name === 'inf'
+}
+
+function compileReserved(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
+  const { name } = expr
+  const args = () => expr.args.map((arg) => compileNode(arg, env, ctx))
+  const op = comparisonOp(name)
+  if (op) {
+    if (expr.args.length !== 2) throw new CompileError(`"${name}" takes 2 arguments, got ${expr.args.length}`, [name])
+    const [a, b] = args()
+    return (f) => compareValue(op, a(f), b(f))
+  }
+  switch (name) {
+    case '__and':
+    case '__or': {
+      if (expr.args.length !== 2) throw new CompileError(`"${name}" takes 2 arguments, got ${expr.args.length}`, [name])
+      const [a, b] = args()
+      return name === '__and' ? (f) => andValue(a(f), b(f)) : (f) => orValue(a(f), b(f))
+    }
+    case '__not': {
+      if (expr.args.length !== 1) throw new CompileError(`"__not" takes 1 argument, got ${expr.args.length}`, [name])
+      const [a] = args()
+      return (f) => notValue(a(f))
+    }
+    case '__factorial': {
+      if (expr.args.length !== 1) throw new CompileError(`"__factorial" takes 1 argument, got ${expr.args.length}`, [name])
+      const [a] = args()
+      return (f) => factorial(a(f))
+    }
+    case '__piecewise': {
+      if (expr.args.length < 2) throw new CompileError('A piecewise definition needs at least one condition and its value', [name])
+      const nodes = args()
+      const pieces = Math.floor(nodes.length / 2)
+      const conditions = nodes.filter((_, i) => i < pieces * 2 && i % 2 === 0)
+      const values = nodes.filter((_, i) => i < pieces * 2 && i % 2 === 1)
+      const otherwise = nodes.length % 2 === 1 ? nodes[nodes.length - 1] : null
+      return (f) => {
+        for (let i = 0; i < conditions.length; i++) {
+          const c = conditions[i](f)
+          if (c !== c) return Number.NaN
+          if (c !== 0) return values[i](f)
+        }
+        return otherwise ? otherwise(f) : Number.NaN
+      }
+    }
+    case '__prime': {
+      const { name: fnName, fn, order } = primeFunction(expr, ctx.scope)
+      const body = derivativeBody(fnName, fn, order, ctx.scope)
+      return inlineBody(fnName, { params: fn.params, body }, [compileNode(expr.args[2], env, ctx)], ctx)
+    }
+  }
+  throw new CompileError(`"${name}" is reserved and not supported here`, [name])
 }
 
 function compileCall(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
   const { name } = expr
+  if (isReserved(name)) return compileReserved(expr, env, ctx)
+  const shadowed = builtinShadowError(name, ctx.scope)
+  if (shadowed) throw shadowed
   const fn = ctx.scope.functions.get(name)
-  if (fn) {
+  if (fn && !(fn.params.length === 0 && expr.args.length === 1)) {
     if (expr.args.length !== fn.params.length) {
       throw new CompileError(`"${name}" takes ${arityText(fn.params.length, fn.params.length)}, got ${expr.args.length}`, [name])
     }
@@ -446,7 +526,12 @@ function compileCall(expr: Expr & { kind: 'call' }, env: Env, ctx: Ctx): Node {
   }
 
   const builtin = BUILTINS.get(name)
-  if (!builtin) throw new CompileError(`Unknown function "${name}"`, [name])
+  if (!builtin) {
+    if (expr.args.length === 1 && namesValue(name, env, ctx)) {
+      return binaryNode('*', compileVar(name, env, ctx), compileNode(expr.args[0], env, ctx), ctx.scope.params.values)
+    }
+    throw new CompileError(`Unknown function "${name}"`, [name])
+  }
   if (expr.args.length < builtin.min || expr.args.length > builtin.max) {
     throw new CompileError(`"${name}" takes ${arityText(builtin.min, builtin.max)}, got ${expr.args.length}`, [name])
   }
@@ -572,6 +657,7 @@ const OP_HYPOTN = 20
 const OP_COPY = 21
 const OP_RPOW_ODD = 22
 const OP_RPOW_EVEN = 23
+const OP_PICK = 24
 
 // The built-ins without an opcode of their own, as the closures compute them.
 const UNARY_TABLE: readonly ((v: number) => number)[] = [
@@ -597,11 +683,36 @@ const UNARY_TABLE: readonly ((v: number) => number)[] = [
   erfc,
   Math.cbrt,
   step,
+  notValue,
+  factorial,
 ]
 const UNARY_INDEX: ReadonlyMap<string, number> = new Map(
-  ['sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'floor', 'ceil', 'round', 'sign', 'log10', 'gamma', 'erf', 'erfc', 'cbrt', 'step'].map(
-    (n, i) => [n, i]
-  )
+  [
+    'sec',
+    'csc',
+    'cot',
+    'asin',
+    'acos',
+    'atan',
+    'sinh',
+    'cosh',
+    'tanh',
+    'asinh',
+    'acosh',
+    'atanh',
+    'floor',
+    'ceil',
+    'round',
+    'sign',
+    'log10',
+    'gamma',
+    'erf',
+    'erfc',
+    'cbrt',
+    'step',
+    '__not',
+    '__factorial',
+  ].map((n, i) => [n, i])
 )
 // The table slot of a built-in with no opcode of its own. A built-in that has
 // neither is refused, never silently computed as another (slot 0 is sec).
@@ -611,7 +722,34 @@ function unaryIndex(name: string): number {
   return index
 }
 
-const BINARY_TABLE: readonly ((x: number, y: number) => number)[] = [(x, y) => Math.log(x) / Math.log(y), floorMod, choose, perm, gcd, lcm, root]
+const BINARY_TABLE: readonly ((x: number, y: number) => number)[] = [
+  (x, y) => Math.log(x) / Math.log(y),
+  floorMod,
+  choose,
+  perm,
+  gcd,
+  lcm,
+  root,
+  (a, b) => compareValue('<', a, b),
+  (a, b) => compareValue('<=', a, b),
+  (a, b) => compareValue('>', a, b),
+  (a, b) => compareValue('>=', a, b),
+  (a, b) => compareValue('=', a, b),
+  (a, b) => compareValue('!=', a, b),
+  andValue,
+  orValue,
+]
+// The table slots of the reserved two-argument names (indices 7-14 above).
+const BINARY_INDEX: ReadonlyMap<string, number> = new Map([
+  ['__lt', 7],
+  ['__le', 8],
+  ['__gt', 9],
+  ['__ge', 10],
+  ['__eq', 11],
+  ['__ne', 12],
+  ['__and', 13],
+  ['__or', 14],
+])
 
 // Instruction layout: [op, dst, a, b, c].
 const WIDTH = 5
@@ -700,7 +838,8 @@ function programVar(name: string, bound: ReadonlyMap<string, number>, ctx: Progr
   }
   if (name === 'pi') return ctx.program.constant(Math.PI)
   if (name === 'e') return ctx.program.constant(Math.E)
-  throw new CompileError(`Unknown variable "${name}"`, [name])
+  if (name === 'inf') return ctx.program.constant(Infinity)
+  throw new CompileError(`Unknown variable "${name}"${productHint(name, { bound })}`, [name])
 }
 
 function programInline(name: string, fn: MathFunction, args: number[], ctx: ProgramCtx): number {
@@ -714,11 +853,53 @@ function programInline(name: string, fn: MathFunction, args: number[], ctx: Prog
   return r
 }
 
+function programNamesValue(name: string, bound: ReadonlyMap<string, number>, ctx: ProgramCtx): boolean {
+  if (bound.has(name) || ctx.scope.params.index.has(name)) return true
+  const fn = ctx.scope.functions.get(name)
+  if (fn) return fn.params.length === 0
+  return name === 'pi' || name === 'e' || name === 'inf'
+}
+
+function programReserved(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, number>, ctx: ProgramCtx): number {
+  const { name } = expr
+  const p = ctx.program
+  const binaryIndex = BINARY_INDEX.get(name)
+  if (binaryIndex !== undefined) {
+    if (expr.args.length !== 2) throw new CompileError(`"${name}" takes 2 arguments, got ${expr.args.length}`, [name])
+    const [a, b] = expr.args.map((arg) => programNode(arg, bound, ctx))
+    return p.emit(OP_CALL2, a, b, binaryIndex)
+  }
+  switch (name) {
+    case '__not':
+    case '__factorial': {
+      if (expr.args.length !== 1) throw new CompileError(`"${name}" takes 1 argument, got ${expr.args.length}`, [name])
+      return p.emit(OP_CALL1, programNode(expr.args[0], bound, ctx), unaryIndex(name))
+    }
+    case '__piecewise': {
+      if (expr.args.length < 2) throw new CompileError('A piecewise definition needs at least one condition and its value', [name])
+      const regs = expr.args.map((arg) => programNode(arg, bound, ctx))
+      const pieces = Math.floor(regs.length / 2)
+      let rest = regs.length % 2 === 1 ? regs[regs.length - 1] : p.constant(Number.NaN)
+      for (let i = pieces - 1; i >= 0; i--) rest = p.emit(OP_PICK, regs[2 * i], regs[2 * i + 1], rest)
+      return rest
+    }
+    case '__prime': {
+      const { name: fnName, fn, order } = primeFunction(expr, ctx.scope)
+      const body = derivativeBody(fnName, fn, order, ctx.scope)
+      return programInline(fnName, { params: fn.params, body }, [programNode(expr.args[2], bound, ctx)], ctx)
+    }
+  }
+  throw new CompileError(`"${name}" is reserved and not supported here`, [name])
+}
+
 function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, number>, ctx: ProgramCtx): number {
   const { name } = expr
   const p = ctx.program
+  if (isReserved(name)) return programReserved(expr, bound, ctx)
+  const shadowed = builtinShadowError(name, ctx.scope)
+  if (shadowed) throw shadowed
   const fn = ctx.scope.functions.get(name)
-  if (fn) {
+  if (fn && !(fn.params.length === 0 && expr.args.length === 1)) {
     if (expr.args.length !== fn.params.length) {
       throw new CompileError(`"${name}" takes ${arityText(fn.params.length, fn.params.length)}, got ${expr.args.length}`, [name])
     }
@@ -732,7 +913,12 @@ function programCall(expr: Expr & { kind: 'call' }, bound: ReadonlyMap<string, n
     )
   }
   const builtin = BUILTINS.get(name)
-  if (!builtin) throw new CompileError(`Unknown function "${name}"`, [name])
+  if (!builtin) {
+    if (expr.args.length === 1 && programNamesValue(name, bound, ctx)) {
+      return p.emit(OP_MUL, programVar(name, bound, ctx), programNode(expr.args[0], bound, ctx))
+    }
+    throw new CompileError(`Unknown function "${name}"`, [name])
+  }
   if (expr.args.length < builtin.min || expr.args.length > builtin.max) {
     throw new CompileError(`"${name}" takes ${arityText(builtin.min, builtin.max)}, got ${expr.args.length}`, [name])
   }
@@ -956,6 +1142,9 @@ export function compileMany(exprs: readonly Expr[], vars: readonly string[], sco
         case OP_RPOW_EVEN:
           reg[d] = realOddPow(reg[x], reg[y], false)
           break
+        case OP_PICK:
+          reg[d] = pick(reg[x], reg[y], reg[code[pc + 4]])
+          break
         case OP_HYPOTN: {
           // Math.hypot over the block of y registers starting at x.
           scratch.length = y
@@ -1044,7 +1233,7 @@ export function freeVariablesDeep(expr: Expr, scope: MathScope, bound: ReadonlyS
           follow(e.name, fn, into)
           return
         }
-        if (!fn && (e.name === 'pi' || e.name === 'e') && !scope.params.index.has(e.name)) return
+        if (!fn && (e.name === 'pi' || e.name === 'e' || e.name === 'inf') && !scope.params.index.has(e.name)) return
         into.add(e.name)
         return
       }
@@ -1056,9 +1245,22 @@ export function freeVariablesDeep(expr: Expr, scope: MathScope, bound: ReadonlyS
         walk(e.right, local, into)
         return
       case 'call': {
+        // __prime's first argument names a function, not a variable.
+        if (e.name === '__prime') {
+          const target = e.args[0]
+          const fn = target?.kind === 'var' ? scope.functions.get(target.name) : undefined
+          if (target?.kind === 'var' && fn) follow(target.name, fn, into)
+          for (const arg of e.args.slice(2)) walk(arg, local, into)
+          return
+        }
         for (const arg of e.args) walk(arg, local, into)
         const fn = scope.functions.get(e.name)
-        if (fn) follow(e.name, fn, into)
+        if (fn && !(fn.params.length === 0 && e.args.length === 1)) {
+          follow(e.name, fn, into)
+          return
+        }
+        // A name used as a factor, x(x + 1), is read like a variable.
+        if (e.args.length === 1 && !BUILTINS.has(e.name) && !isReserved(e.name)) walk({ kind: 'var', name: e.name }, local, into)
         return
       }
     }
