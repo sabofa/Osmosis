@@ -66,8 +66,11 @@ delivered (`viewerErrors.ts`, `createErrorReporter`); a text or theme rebuild
 always delivers.
 
 What still evaluates through `parser/evalExpr.ts`, on purpose:
-`scene/geometry/buildConstructions.ts` (shared with the figure engine) and the
-renderer's per-frame `animate:` evaluation. A construction error still comes
+`scene/geometry/buildConstructions.ts` (shared with the figure engine). `animate:`
+no longer does: `buildScene` compiles both coordinates through the kernel
+(`compileScalar`, so a mistake lands on its statement's line at build time and the
+whole language works in the path), the scene's `animatedPoint` object carries the
+two closures, and the renderer calls them per frame. A construction error still comes
 out of `buildConstructions` with line 0; `buildScene` maps it to its statement's
 line by order (the failed constructions are the ones with no
 `objectsByStatement` entry), and keeps line 0 if the counts ever disagree.

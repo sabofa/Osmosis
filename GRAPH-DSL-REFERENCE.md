@@ -887,7 +887,7 @@ hypothetical edge cases — worth knowing before authoring around them:
 ## Where the source of truth lives
 
 - Grammar: `graph-engine/src/parser/types.ts`'s top comment, `parseStatement.ts`
-- Expression grammar: `graph-engine/src/parser/parseExpr.ts`; evaluation: `graph-engine/src/math/compile.ts` (the shared kernel) through `graph-engine/src/plot/scope.ts` for 2D plots and tables. `parser/evalExpr.ts` (builtins/constants) still serves geometry constructions and `animate:`
+- Expression grammar: `graph-engine/src/parser/parseExpr.ts`; evaluation: `graph-engine/src/math/compile.ts` (the shared kernel) through `graph-engine/src/plot/scope.ts` for 2D plots and tables. `parser/evalExpr.ts` (builtins/constants) still serves geometry constructions; `animate:` compiles through the kernel (`compileScalar`) and the renderer calls the resulting closures per frame
 - Config directives: `graph-engine/src/parser/parseConfig.ts`, `config.ts`
 - Feature point / intersection detection: `graph-engine/src/scene/featurePoints.ts`,
   `graph-engine/src/scene/roots.ts` (the old `detectFeaturePoints.ts` sampled-array

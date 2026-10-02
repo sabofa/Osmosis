@@ -56,15 +56,21 @@ export const MAX_PRIME_ORDER = 5
 // loops (sum(i, sum(j, ...)) is the product of the two ranges); more is NaN at run
 // time and, for bounds known at compile time, a CompileError.
 export const MAX_TERMS = 100_000
-// The most nodes a derivative body (simplified) may have. Every order of f^(k)
-// can be several times larger than the one below (a composition of two quotients:
-// 20405 nodes at order 4, 190279 at order 5), and the 2D viewer rebuilds, and so
-// re-evaluates, on every pan frame, 401 samples at a time. A body this size costs
-// about 20 ns a node a sample: the fifth derivatives of sqrt(1 + x^2) (6010 nodes)
-// and x^2 exp(-x^2) sin(x) (7055) run a pass in 50 to 60 ms, the cap sets the
-// ceiling near 70 ms, and 190279 nodes took over 4 s. Past it the derivative is
-// refused, exact or refuse, never approximated.
-export const MAX_DERIVATIVE_NODES = 8000
+// The most nodes a derivative body (simplified) may have, at each order. Every order
+// of f^(k) can be several times larger than the one below (a composition of two
+// quotients: 20405 nodes at order 4, 190279 at order 5), and the 2D viewer rebuilds,
+// and so re-evaluates, on every pan frame, 401 samples at a time. Cost follows the
+// node count only roughly (a sin or cos node is dearer than a +): a pass over the
+// 6010-node fifth derivative of sqrt(1 + x^2) takes 50 to 60 ms, the largest ordinary
+// ones take about 0.1 s (x/(x^2 + 1)^2, 13595 nodes) to 0.35 s (sin(x)^2/(1 + x^2),
+// 15244 nodes), and 190279 nodes took over 4 s. The fifth derivatives of ordinary
+// rational and trig-over-rational functions run past 8000 nodes, the first cap, and
+// were refused by it: (x^3 - 2x)/(x^2 + 4) 8829 nodes, sin(x)/(1 + cos(x)) 8341,
+// (x^2 + 1)/(x^3 - x) 10039, (x + 1)^2/(x - 1)^3 11175, x/(x^2 + 1)^2 13595 and
+// sin(x)^2/(1 + x^2) 15244. 16000 admits all six and still refuses the composition
+// above, whose order 4 alone is 20405 nodes. Past the cap the derivative is refused,
+// exact or refuse, never approximated.
+export const MAX_DERIVATIVE_NODES = 16000
 
 export function isReserved(name: string): boolean {
   return RESERVED.has(name)

@@ -517,14 +517,15 @@ describe('a derivative too large to compute is refused', () => {
   // g(x) = f(f(x)) with f(x) = x^2 / (1 + x^2): g'''' has 20405 nodes, g''''' 190279
   const blowup = () => makeScope({ functions: [['f', fn(['x'], 'x^2 / (1 + x^2)')], ['g', fn(['x'], 'f(f(x))')]] })
 
-  it("g'''''(x) refuses on both paths with a message naming the cap, and does little work to say so", () => {
+  it("g'''''(x) refuses on both paths with a message naming the order asked for, the order that crossed and the cap, and does little work to say so", () => {
     const scope = blowup()
     const before = differentiationSteps()
     const message = bothRefuse(prime('g', 5, [x]), scope)
     const steps = differentiationSteps() - before
-    expect(message).toContain(String(MAX_DERIVATIVE_NODES))
-    expect(message).toMatch(/limit/)
-    expect(message).toContain('"g"')
+    expect(MAX_DERIVATIVE_NODES).toBe(16000)
+    expect(message).toBe(
+      `"g'''''" is too large to differentiate (order 4 passes ${MAX_DERIVATIVE_NODES} nodes); differentiate fewer times, or write the derivative out`
+    )
     // The refusal is raised where the body first crosses the cap (g'''' at 20405 nodes), so diff has
     // visited a few thousand nodes of g''' and no more; building g''''' would visit over 20000 more.
     expect(steps).toBeLessThan(20000)
@@ -541,8 +542,17 @@ describe('a derivative too large to compute is refused', () => {
     bothRefuse(prime('g', 5, [x]), scope)
     const before = differentiationSteps()
     bothRefuse(prime('g', 5, [x]), scope)
-    bothRefuse(prime('g', 4, [x]), scope)
+    const fourth = bothRefuse(prime('g', 4, [x]), scope)
     expect(differentiationSteps() - before).toBe(0)
+    // each ask names the order it asked for; both name the order that crossed
+    expect(fourth).toMatch(/^"g''''" is too large to differentiate \(order 4 passes /)
+  })
+
+  it("a refusal names the order that crossed the cap, whichever order was asked for", () => {
+    // g''''(x) crosses (20405 nodes); the kernel goes three orders past MAX_PRIME_ORDER, so a g''''''
+    // (asked for by diff of g''''') still names order 4
+    expect(bothRefuse(prime('g', 4, [x]), blowup())).toMatch(/^"g''''" is too large to differentiate \(order 4 passes /)
+    expect(bothRefuse(prime('g', 6, [x]), blowup())).toMatch(/^"g''''''" is too large to differentiate \(order 4 passes /)
   })
 
   it("the orders below the cap still work, in the same scope that refused a higher one", () => {
@@ -569,6 +579,32 @@ describe('a derivative too large to compute is refused', () => {
     const h = 1e-4
     const fifth = both(prime('f', 5, [x]), 0.7, root)
     expect(Math.abs(fifth - (fourth(0.7 + h) - fourth(0.7 - h)) / (2 * h))).toBeLessThan(1e-6)
+  })
+
+  // The fifth derivatives a review measured, in nodes: 8829, 10039, 11175, 13595, 8341, 15244. Ordinary
+  // calculus that worked before the cap, so it must keep working under it: each compiles on both paths
+  // and its value is the slope of the (exact) fourth derivative, taken as a central difference. h = 1e-5
+  // puts the truncation error near h^2 f(7) / 6 and the rounding error near eps f(4) / h; the six
+  // agree to a relative 1e-10 to 5e-10 (measured), and the bound is 1e-6.
+  it.each([
+    ['(x^3 - 2*x)/(x^2 + 4)', 0.7],
+    ['(x^2 + 1)/(x^3 - x)', 2.3],
+    ['(x + 1)^2/(x - 1)^3', 2.5],
+    ['x/(x^2 + 1)^2', 0.6],
+    ['sin(x)/(1 + cos(x))', 0.9],
+    ['sin(x)^2/(1 + x^2)', 1.4],
+  ])("the fifth derivative of %s compiles and is the slope of the fourth, at x = %s", (body, at) => {
+    const scope = makeScope({ functions: [['f', fn(['x'], body)]] })
+    const h = 1e-5
+    const fifth = both(prime('f', 5, [x]), at, scope)
+    expect(Number.isFinite(fifth)).toBe(true)
+    const fourthScalar = compileScalar(prime('f', 4, [x]), ['x'], scope)
+    const fourthMany = compileMany([prime('f', 4, [x])], ['x'], scope)
+    const slopes = [
+      (fourthScalar(at + h) - fourthScalar(at - h)) / (2 * h),
+      (fourthMany(one, at + h)[0] - fourthMany(one, at - h)[0]) / (2 * h),
+    ]
+    for (const slope of slopes) expect(Math.abs(fifth - slope)).toBeLessThan(1e-6 * Math.max(1, Math.abs(fifth)))
   })
 
   it('a high power is fine: its derivatives are small however large the exponent', () => {

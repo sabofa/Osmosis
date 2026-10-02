@@ -16,6 +16,22 @@ import { MAX_DERIVATIVE_NODES, MAX_PRIME_ORDER, nameArgument } from './reserved'
 import { isVectorBody, type MathFunction, type MathScope } from './scope'
 import { simplify } from './simplify'
 
+// The refusal of a body past the cap. It is raised, and kept, at the order that
+// crosses the cap; derivativeBody words it for the order that was asked for.
+class DerivativeTooLarge extends CompileError {
+  readonly crossed: number
+  readonly requested: number
+
+  constructor(name: string, requested: number, crossed: number) {
+    super(
+      `"${name}${"'".repeat(requested)}" is too large to differentiate (order ${crossed} passes ${MAX_DERIVATIVE_NODES} nodes); differentiate fewer times, or write the derivative out`,
+      [name]
+    )
+    this.requested = requested
+    this.crossed = crossed
+  }
+}
+
 // A refusal is kept as the refusal, so asking again in the scope does no more differentiating.
 const CACHE = new WeakMap<MathScope, Map<string, Expr | CompileError>>()
 // The (function, order) pairs being computed, per scope: a function whose body
@@ -52,8 +68,18 @@ export function primeParameter(name: string, fn: MathFunction): string {
 
 // f^(k)'s body, over primeParameter(name, fn). A body of more than
 // MAX_DERIVATIVE_NODES nodes (simplified) is a CompileError raised at the order
-// that crosses the cap, before the order above it is built.
+// that crosses the cap, before the order above it is built; its message names
+// the order asked for and the order that crossed.
 export function derivativeBody(name: string, fn: MathFunction, order: number, scope: MathScope): Expr {
+  try {
+    return buildDerivativeBody(name, fn, order, scope)
+  } catch (err) {
+    if (err instanceof DerivativeTooLarge && err.requested !== order) throw new DerivativeTooLarge(name, order, err.crossed)
+    throw err
+  }
+}
+
+function buildDerivativeBody(name: string, fn: MathFunction, order: number, scope: MathScope): Expr {
   let cache = CACHE.get(scope)
   if (!cache) {
     cache = new Map()
@@ -75,14 +101,11 @@ export function derivativeBody(name: string, fn: MathFunction, order: number, sc
     // products said outright (freshBody); every higher order builds on the one
     // below it, which is over the same fresh name.
     const fresh = primeParameter(name, fn)
-    const below = order === 1 ? freshBody(fn, [fresh], scope) : derivativeBody(name, fn, order - 1, scope)
+    const below = order === 1 ? freshBody(fn, [fresh], scope) : buildDerivativeBody(name, fn, order - 1, scope)
     const result = simplify(diff(below, fresh, scope))
     const size = countNodes(result)
     if (size > MAX_DERIVATIVE_NODES) {
-      const refusal = new CompileError(
-        `The derivative of order ${order} of "${name}" is too large to compute exactly: ${size} nodes, past the limit of ${MAX_DERIVATIVE_NODES} (differentiate fewer times, or write the derivative out)`,
-        [name]
-      )
+      const refusal = new DerivativeTooLarge(name, order, order)
       cache.set(key, refusal)
       throw refusal
     }
