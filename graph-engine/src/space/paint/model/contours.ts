@@ -26,7 +26,7 @@ import { behaviourOf, resample, type EdgeRun, type Sample } from './edges'
 import { clamp, vcross, vdot, vlen, type V3 } from './math'
 import { colourOfDraft, newRecipe, type ColourRecipe, type ColourSource, type DraftColour } from './recipe'
 import { polylinePath, roleIndex, type PaintCtx, type StrokeDraft } from './strokes'
-import { project, pxPerUnit, toEye } from './view'
+import { gIndex, project, pxPerUnit, toEye, unproject } from './view'
 
 // ---- the meshes' own lines ----
 
@@ -456,6 +456,54 @@ export function segmentRun(cls: Uint8Array, keys: Uint32Array, maxSamples: numbe
   return segs
 }
 
+// The depth an edge stroke lies at when nothing in the G-buffer says: the mean of what is drawn.
+const meanDepths = new WeakMap<PaintCtx, number>()
+function meanDepth(an: PaintCtx): number {
+  const have = meanDepths.get(an)
+  if (have !== undefined) return have
+  const d = an.fc.g.depth
+  let sum = 0
+  let n = 0
+  for (let i = 0; i < d.length; i += 7) {
+    if (Number.isFinite(d[i])) {
+      sum += d[i]
+      n++
+    }
+  }
+  const mean = n > 0 ? sum / n : 1
+  meanDepths.set(an, mean)
+  return mean
+}
+
+// The world points of an edge stroke's path, which is traced on the screen, so that it can be put on screen again
+// from another view. An edge lies on the boundary between planes (or at the figure's outline, where one side is
+// background): the stroke is put at ONE depth, the nearest surface under its path (looking a pixel round each point,
+// since an outline's pixels may be the background's), so that it is a flat decal that moves with the object and is
+// never torn along the view ray by points at different depths.
+function worldOfPath(an: PaintCtx, path: Float32Array): Float32Array {
+  const fc = an.fc
+  const g = fc.g
+  let best = Number.POSITIVE_INFINITY
+  for (let q = 0; q < PATH_POINTS; q++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const gi = gIndex(fc, path[2 * q] + dx * g.scale, path[2 * q + 1] + dy * g.scale)
+        if (gi >= 0 && g.depth[gi] < best) best = g.depth[gi]
+      }
+    }
+  }
+  const depth = Number.isFinite(best) ? best : meanDepth(an)
+  const out = new Float32Array(3 * PATH_POINTS)
+  const p = [0, 0, 0]
+  for (let q = 0; q < PATH_POINTS; q++) {
+    unproject(fc, path[2 * q], path[2 * q + 1], depth, p)
+    out[3 * q] = p[0]
+    out[3 * q + 1] = p[1]
+    out[3 * q + 2] = p[2]
+  }
+  return out
+}
+
 // Paint every run as edge strokes (an 'edge'-role layer: after reflected light, before the lines).
 export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
   const { fc } = an
@@ -489,7 +537,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
       const lighterIsA = e.uA >= e.uB
       const lighter = lighterIsA ? recA : srcB
       const darker = lighterIsA ? srcB : recA
-      const baseDraft = (): Omit<StrokeDraft, 'path' | 'width' | 'lab' | 'colour' | 'alpha' | 'order' | 'jit0' | 'jit1'> => ({
+      const baseDraft = (): Omit<StrokeDraft, 'path' | 'width' | 'world' | 'lab' | 'colour' | 'alpha' | 'order' | 'jit0' | 'jit1'> => ({
         role: roleIndex('edge'),
         depth,
         u: e.uA,
@@ -508,7 +556,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         seed: (e.keys[mid] ^ (a * 0x9e3779b1)) >>> 0,
       })
       const push = (path: Float32Array, width: Float32Array, colour: DraftColour, alpha: number) => {
-        an.drafts.push({ ...baseDraft(), path, width, lab: colourOfDraft(colour, an.env), colour, alpha, jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++ })
+        an.drafts.push({ ...baseDraft(), path, width, world: worldOfPath(an, path), lab: colourOfDraft(colour, an.env), colour, alpha, jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++ })
       }
       if (cl >= 2) {
         // distinct: a crisp, loaded stroke along the edge, darker than the darker side

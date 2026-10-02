@@ -103,6 +103,16 @@ export interface StrokeBatch {
   endSoft: Float32Array // 0 crisp end .. 1 dissolved end (edge class)
   edge: Uint8Array // index into EDGE_CLASSES of the governing edge, 255 if none
   seed: Uint32Array
+  // The stroke's path before it was projected, in world space (3 per path point, 3·PATH_POINTS per stroke), so a
+  // new view can put the same stroke on screen without the model: project each point through the view's viewProj
+  // and the path is `path` again, under the view the batch was made for. A line's points are exactly on its 3D
+  // polyline; a surface stroke's are on the walked surface; an edge's are the screen path lifted to one depth (a
+  // flat decal on the surface it follows). A stroke built on screen alone (an arrowhead's barbs, a point's dab)
+  // repeats its anchor for every point: it moves with it and does not turn.
+  worldPath: Float32Array
+  // The unit world normal at the stroke's anchor, turned toward the viewer the stroke was made for, 3 per stroke;
+  // (0, 0, 0) for a stroke that has none (lines, edges). A view turned away from it fades the stroke out.
+  worldNormal: Float32Array
 }
 export const EDGE_CLASSES: readonly EdgeClass[] = ['lost', 'soft', 'firm', 'hard']
 

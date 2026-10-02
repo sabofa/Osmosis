@@ -412,7 +412,8 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
 
   const path = new Float32Array(2 * PATH_POINTS)
   const width = new Float32Array(PATH_POINTS)
-  const meanW = pathFromWalk(walk, widthPx, reverse, path, width)
+  const world = new Float32Array(3 * PATH_POINTS)
+  const meanW = pathFromWalk(walk, widthPx, reverse, path, width, world)
   if (meanW < 0.6) return false
 
   // the colour: the local colour through the curve at the stroke's value
@@ -434,6 +435,8 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     role: roleIndex(role),
     path,
     width,
+    world,
+    normal: [nx, ny, nz],
     depth: vis.depth[k],
     lab: col.lab,
     colour: col.colour,
@@ -653,8 +656,9 @@ export function dabStrokes(an: PaintCtx): void {
     if (walk.n < 3) continue
     const path = new Float32Array(2 * PATH_POINTS)
     const width = new Float32Array(PATH_POINTS)
+    const world = new Float32Array(3 * PATH_POINTS)
     const reverse = walk.x[walk.n - 1] < walk.x[0]
-    if (pathFromWalk(walk, rp.width * vWid, reverse, path, width) < 0.6) continue
+    if (pathFromWalk(walk, rp.width * vWid, reverse, path, width, world) < 0.6) continue
     // the colour: a lighter, bolder value of the local colour
     const k = best
     const sameWhere = whereOfPixel(an, i)
@@ -663,6 +667,8 @@ export function dabStrokes(an: PaintCtx): void {
       role: roleIndex('dab'),
       path,
       width,
+      world,
+      normal: [nx, ny, nz],
       depth,
       lab: col.lab,
       colour: col.colour,

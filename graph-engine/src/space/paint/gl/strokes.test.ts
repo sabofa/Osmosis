@@ -24,6 +24,8 @@ function batch(layers: number[], depths: number[]): StrokeBatch {
     endSoft: new Float32Array(n),
     edge: new Uint8Array(n).fill(255),
     seed: new Uint32Array(n),
+    worldPath: new Float32Array(n * 3 * PATH_POINTS),
+    worldNormal: new Float32Array(n * 3),
   }
   for (let i = 0; i < n; i++) for (let k = 0; k < PATH_POINTS; k++) b.path[i * 2 * PATH_POINTS + 2 * k] = k * 10
   return b

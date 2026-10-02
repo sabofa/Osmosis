@@ -3,7 +3,7 @@ import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../p
 import { PATH_POINTS, ROLES } from '../types'
 import { buildContext } from './index'
 import { buildParticles } from './particles'
-import { packStrokes, pathFromWalk, polylinePath, pressure, roleIndex, walkStroke, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
+import { packStrokes, pathFromWalk, polylinePath, pressure, roleIndex, walkStroke, type PaintCtx, type StrokeDraft, type Walk, type WalkSpec } from './strokes'
 import { flatColours, makeGBuffer, paintView, sceneOf, sphereGBuffer, sphereMesh } from './testing'
 import { unproject } from './view'
 
@@ -244,6 +244,91 @@ describe('strokes: pressure and paths', () => {
     polylinePath(xs, ys, 3, 3, true, false, path, width)
     expect(width[0]).toBeCloseTo(3 * pressure(0), 5)
     expect(width[PATH_POINTS - 1]).toBeCloseTo(3 * pressure(1), 5)
+  })
+
+  it('carries the world path: the world points of a polyline are interpolated where its screen points are', () => {
+    // the screen polyline (0,0) (10,0) (10,6); its world points (0,0,0) (4,0,2) (4,3,5): the same fractions along each leg
+    const xs = [0, 10, 10]
+    const ys = [0, 0, 6]
+    const ws = [[0, 0, 0], [4, 0, 2], [4, 3, 5]]
+    const path = new Float32Array(2 * PATH_POINTS)
+    const width = new Float32Array(PATH_POINTS)
+    const world = new Float32Array(3 * PATH_POINTS)
+    polylinePath(xs, ys, 3, 3, false, false, path, width, world, ws)
+    expect(Array.from(world.subarray(0, 3))).toEqual([0, 0, 0])
+    expect(Array.from(world.subarray(3 * (PATH_POINTS - 1)))).toEqual([4, 3, 5])
+    // the point 4/7 of the way (9.14 of 16: on the first leg at 0.914 of it) is at the same fraction of the first world leg
+    expect(world[12]).toBeCloseTo(4 * 0.9142857, 4)
+    expect(world[13]).toBeCloseTo(0, 6)
+    expect(world[14]).toBeCloseTo(2 * 0.9142857, 4)
+    // 5/7 of the way (11.43): 1.43 up the second leg, at 0.238 of it
+    expect(world[15]).toBeCloseTo(4, 6)
+    expect(world[16]).toBeCloseTo(3 * (1.4285714 / 6), 4)
+    expect(world[17]).toBeCloseTo(2 + 3 * (1.4285714 / 6), 4)
+    // reversed, it runs from the other end
+    const rev = new Float32Array(3 * PATH_POINTS)
+    polylinePath(xs, ys, 3, 3, false, true, new Float32Array(2 * PATH_POINTS), width, rev, ws)
+    expect(Array.from(rev.subarray(0, 3))).toEqual([4, 3, 5])
+    expect(Array.from(rev.subarray(3 * (PATH_POINTS - 1)))).toEqual([0, 0, 0])
+  })
+
+  it('carries the world path of a walk: each path point is on the walk where its screen point is, and projects back to it', () => {
+    const an = facesContext(LIT_LEFT, LIT_LEFT, resolvePaintParams({ environment: { occlusion: 0 } }))
+    const w = walkRight(an, 200, true)
+    const path = new Float32Array(2 * PATH_POINTS)
+    const width = new Float32Array(PATH_POINTS)
+    const world = new Float32Array(3 * PATH_POINTS)
+    pathFromWalk(w, 10, false, path, width, world)
+    // the ends are the walk's own world points, and the world points project back to the path (an orthographic view: affine)
+    expect(world[0]).toBeCloseTo(w.wx[0], 4)
+    expect(world[3 * (PATH_POINTS - 1) + 2]).toBeCloseTo(w.wz[w.n - 1], 4)
+    const m = an.fc.vp
+    for (let q = 0; q < PATH_POINTS; q++) {
+      const x = world[3 * q], y = world[3 * q + 1], z = world[3 * q + 2]
+      const sx = (((m[0] * x + m[4] * y + m[8] * z + m[12]) / (m[3] * x + m[7] * y + m[11] * z + m[15]) + 1) / 2) * an.fc.W
+      const sy = ((1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / (m[3] * x + m[7] * y + m[11] * z + m[15])) / 2) * an.fc.H
+      expect(sx).toBeCloseTo(path[2 * q], 2)
+      expect(sy).toBeCloseTo(path[2 * q + 1], 2)
+    }
+    // reversed, the world path runs the other way
+    const back = new Float32Array(3 * PATH_POINTS)
+    pathFromWalk(w, 10, true, new Float32Array(2 * PATH_POINTS), width, back)
+    expect(back[0]).toBeCloseTo(world[3 * (PATH_POINTS - 1)], 4)
+  })
+
+  it('interpolates each world coordinate of a walk by the same fraction as its screen point, either way round', () => {
+    // a bent walk whose three world coordinates all change, and not in step with each other, so a coordinate
+    // read from the wrong end of a leg (or one that is never interpolated) cannot pass
+    const xs = [0, 10, 10, 30]
+    const ys = [0, 0, 6, 6]
+    const wx = [0, 4, 4, 9]
+    const wy = [0, 0, 3, 3]
+    const wz = [0, 2, 5, 11]
+    const w = { n: 4, x: Float64Array.from(xs), y: Float64Array.from(ys), depth: new Float64Array(4), fore: Float64Array.from([1, 1, 1, 1]), wx: Float64Array.from(wx), wy: Float64Array.from(wy), wz: Float64Array.from(wz), endA: 0, endB: 0 } as Walk
+    const legs = [10, 6, 20]
+    const total = 36
+    const expectAt = (s: number) => {
+      let leg = 0
+      let from = 0
+      while (leg < 2 && from + legs[leg] < s) from += legs[leg++]
+      const f = (s - from) / legs[leg]
+      const at = (a: number[]) => a[leg] + (a[leg + 1] - a[leg]) * f
+      return [at(xs), at(ys), at(wx), at(wy), at(wz)]
+    }
+    for (const reverse of [false, true]) {
+      const path = new Float32Array(2 * PATH_POINTS)
+      const world = new Float32Array(3 * PATH_POINTS)
+      pathFromWalk(w, 10, reverse, path, new Float32Array(PATH_POINTS), world)
+      for (let q = 0; q < PATH_POINTS; q++) {
+        const k = reverse ? PATH_POINTS - 1 - q : q
+        const [sx, sy, x, y, z] = expectAt((k / (PATH_POINTS - 1)) * total)
+        expect(path[2 * q]).toBeCloseTo(sx, 4)
+        expect(path[2 * q + 1]).toBeCloseTo(sy, 4)
+        expect(world[3 * q]).toBeCloseTo(x, 4)
+        expect(world[3 * q + 1]).toBeCloseTo(y, 4)
+        expect(world[3 * q + 2]).toBeCloseTo(z, 4)
+      }
+    }
   })
 
   it('resamples a walk to PATH_POINTS with the width times the foreshortening', () => {

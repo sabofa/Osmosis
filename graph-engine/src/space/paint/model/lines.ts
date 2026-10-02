@@ -296,7 +296,8 @@ export function lineStrokes(an: PaintCtx): void {
     const rng = randomFor(`paint/line/${mark}/${tag}/${cell}`, params.seed)
     const path = new Float32Array(2 * PATH_POINTS)
     const width = new Float32Array(PATH_POINTS)
-    polylinePath(pl.x, pl.y, pl.x.length, widthPx, false, false, path, width)
+    const world = new Float32Array(3 * PATH_POINTS)
+    polylinePath(pl.x, pl.y, pl.x.length, widthPx, false, false, path, width, world, pl.w)
     const colour: DraftColour = { a: recipeOf(mark, rng), b: null, t: 0 }
     // seen through a flat veil: painted before the glaze, so the veil tints it
     const behind = veilSheets.length > 0 && behindVeil(fc, veilSheets, w)
@@ -305,6 +306,7 @@ export function lineStrokes(an: PaintCtx): void {
       role: roleIndex('line'),
       path,
       width,
+      world,
       depth: pl.d[mid],
       lab: colourOfDraft(colour, an.env),
       colour,

@@ -54,6 +54,8 @@ function batch(layers: number[], depths: number[] = layers.map((_, i) => i)): St
     endSoft: new Float32Array(n),
     edge: new Uint8Array(n).fill(255),
     seed: Uint32Array.from(layers.map((_, i) => 1000 + i)),
+    worldPath: new Float32Array(n * 3 * PATH_POINTS),
+    worldNormal: new Float32Array(n * 3),
   }
   for (let i = 0; i < n; i++) {
     for (let k = 0; k < PATH_POINTS; k++) {

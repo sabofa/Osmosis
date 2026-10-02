@@ -43,6 +43,10 @@ export interface StrokeDraft {
   // changes (recipe.ts); null for a colour that is not made from the curve.
   colour?: DraftColour | null
   u: number
+  // The path in world space (3 per path point) and the world normal at the anchor, for re-projecting the stroke in
+  // another view without the model (StrokeBatch.worldPath, worldNormal). Left out of a hand-made draft: zeros.
+  world?: Float32Array
+  normal?: readonly number[]
   // The layer to paint in, when it is not the role's own (a line seen through a veil is painted before the
   // glaze, so the veil tints it; the role stays `line`, which is what shapes the brush).
   layer?: number
@@ -107,6 +111,10 @@ export interface Walk {
   depth: Float64Array
   // The foreshortening of the stroke's width at each point (1 = across the view).
   fore: Float64Array
+  // The world point each screen point is the projection of (the step in the tangent plane, not snapped to the surface).
+  wx: Float64Array
+  wy: Float64Array
+  wz: Float64Array
   // Why each end stopped: 0 ran its length, 1 stopped at an edge, 2 left the surface, 3 bled.
   endA: number
   endB: number
@@ -118,6 +126,9 @@ const newWalk = (): Walk => ({
   y: new Float64Array(MAXW),
   depth: new Float64Array(MAXW),
   fore: new Float64Array(MAXW),
+  wx: new Float64Array(MAXW),
+  wy: new Float64Array(MAXW),
+  wz: new Float64Array(MAXW),
   endA: 0,
   endB: 0,
 })
@@ -166,6 +177,9 @@ interface Half {
   sy: Float64Array
   depth: Float64Array
   fore: Float64Array
+  wx: Float64Array
+  wy: Float64Array
+  wz: Float64Array
   end: number
 }
 const newHalf = (): Half => ({
@@ -174,6 +188,9 @@ const newHalf = (): Half => ({
   sy: new Float64Array(STEPS),
   depth: new Float64Array(STEPS),
   fore: new Float64Array(STEPS),
+  wx: new Float64Array(STEPS),
+  wy: new Float64Array(STEPS),
+  wz: new Float64Array(STEPS),
   end: 0,
 })
 
@@ -420,6 +437,9 @@ function walkHalf(an: PaintCtx, s: WalkSpec, sign: number, halfWorld: number, pp
     out.sx[idx] = sx
     out.sy[idx] = sy
     out.depth[idx] = depth
+    out.wx[idx] = qx
+    out.wy[idx] = qy
+    out.wz[idx] = qz
     // foreshortening of the width: the lateral direction n × d, projected
     let bx = nny * dz - nnz * dy
     let by = nnz * dx - nnx * dz
@@ -460,18 +480,27 @@ export function walkStroke(an: PaintCtx, s: WalkSpec): Walk {
     W.y[n] = BWD.sy[k]
     W.depth[n] = BWD.depth[k]
     W.fore[n] = BWD.fore[k]
+    W.wx[n] = BWD.wx[k]
+    W.wy[n] = BWD.wy[k]
+    W.wz[n] = BWD.wz[k]
     n++
   }
   W.x[n] = s.sx
   W.y[n] = s.sy
   W.depth[n] = s.depth
   W.fore[n] = f0
+  W.wx[n] = s.px
+  W.wy[n] = s.py
+  W.wz[n] = s.pz
   n++
   for (let k = 0; k < FWD.n; k++) {
     W.x[n] = FWD.sx[k]
     W.y[n] = FWD.sy[k]
     W.depth[n] = FWD.depth[k]
     W.fore[n] = FWD.fore[k]
+    W.wx[n] = FWD.wx[k]
+    W.wy[n] = FWD.wy[k]
+    W.wz[n] = FWD.wz[k]
     n++
   }
   W.n = n
@@ -493,7 +522,7 @@ const CUM = new Float64Array(MAXW)
 
 // Resample the walk to PATH_POINTS points at equal arc length, with the width
 // at each: baseWidth · pressure · foreshortening, interpolated.
-export function pathFromWalk(w: Walk, baseWidth: number, reverse: boolean, path: Float32Array, width: Float32Array): number {
+export function pathFromWalk(w: Walk, baseWidth: number, reverse: boolean, path: Float32Array, width: Float32Array, world?: Float32Array): number {
   const n = w.n
   // cumulative arc length
   let total = 0
@@ -518,6 +547,11 @@ export function pathFromWalk(w: Walk, baseWidth: number, reverse: boolean, path:
     path[2 * q] = w.x[seg - 1] + (w.x[seg] - w.x[seg - 1]) * f
     path[2 * q + 1] = w.y[seg - 1] + (w.y[seg] - w.y[seg - 1]) * f
     const fore = w.fore[seg - 1] + (w.fore[seg] - w.fore[seg - 1]) * f
+    if (world) {
+      world[3 * q] = w.wx[seg - 1] + (w.wx[seg] - w.wx[seg - 1]) * f
+      world[3 * q + 1] = w.wy[seg - 1] + (w.wy[seg] - w.wy[seg - 1]) * f
+      world[3 * q + 2] = w.wz[seg - 1] + (w.wz[seg] - w.wz[seg - 1]) * f
+    }
     width[q] = Math.max(0.35, baseWidth * PRESSURE[q] * fore)
     mean += width[q]
   }
@@ -556,6 +590,8 @@ export function packStrokes(drafts: StrokeDraft[], params: PaintParams): { batch
     endSoft: new Float32Array(count),
     edge: new Uint8Array(count),
     seed: new Uint32Array(count),
+    worldPath: new Float32Array(3 * PATH_POINTS * count),
+    worldNormal: new Float32Array(3 * count),
   }
   const mixer = new LoadMixer(params)
   const byRole = Object.fromEntries(ROLES.map((r) => [r, 0])) as Record<Role, number>
@@ -583,6 +619,12 @@ export function packStrokes(drafts: StrokeDraft[], params: PaintParams): { batch
     batch.endSoft[i] = d.endSoft
     batch.edge[i] = d.edge
     batch.seed[i] = d.seed
+    if (d.world) batch.worldPath.set(d.world, 3 * PATH_POINTS * i)
+    if (d.normal) {
+      batch.worldNormal[3 * i] = d.normal[0]
+      batch.worldNormal[3 * i + 1] = d.normal[1]
+      batch.worldNormal[3 * i + 2] = d.normal[2]
+    }
   }
   return { batch, loads: mixer.loads, byRole }
 }
@@ -600,6 +642,10 @@ export function polylinePath(
   reverse: boolean,
   path: Float32Array,
   width: Float32Array,
+  // The world points of the polyline's vertices (and where to write the path's world points): each path point's
+  // world point is on the 3D polyline at the same place its screen point is on the screen one.
+  world?: Float32Array,
+  ws?: ArrayLike<readonly number[]>,
 ): number {
   const cum = new Float64Array(n)
   for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
@@ -613,6 +659,9 @@ export function polylinePath(
     const f = span > 0 ? clamp((s - cum[seg - 1]) / span, 0, 1) : 0
     path[2 * k] = xs[seg - 1] + (xs[seg] - xs[seg - 1]) * f
     path[2 * k + 1] = ys[seg - 1] + (ys[seg] - ys[seg - 1]) * f
+    if (world && ws) {
+      for (let c = 0; c < 3; c++) world[3 * k + c] = ws[seg - 1][c] + (ws[seg][c] - ws[seg - 1][c]) * f
+    }
     width[k] = taper ? Math.max(0.35, baseWidth * pressure(t)) : baseWidth
   }
   return total
