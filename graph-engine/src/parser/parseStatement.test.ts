@@ -1520,6 +1520,15 @@ describe('a bare "!=" is a condition, not an equation', () => {
     'y != 2 if x > 0',
     'y != 2 color: red',
     'z = x != 2',
+    // a bare word "if" is not an "if" clause: a clause comes after the statement's first "=" or comparator
+    'if != 2',
+    'a + if != 3',
+    // a plane measure splits the plane at its first "=" and parses the left side as an expression
+    'given: distance from G to plane x + y + z != 1',
+    'find: distance from G to plane x != 1',
+    'given: angle between A-B and plane x + y != 1',
+    'given: angle between A-B and plane P-Q-R = a != b',
+    'given: distance from G to plane P-Q-R = x != 3',
   ]
   for (const line of REFUSED) {
     it(`refuses ${line}`, () => {
@@ -1550,6 +1559,19 @@ describe('a bare "!=" is a condition, not an equation', () => {
     expect(parseStatement('t.row: a | x != 0')).toMatchObject({ kind: 'tableRow', tableName: 't', cells: ['a', 'x != 0'] })
     expect(() => parseStatement('label: AB = x != 3')).not.toThrow()
     expect(() => parseStatement('angle: A-B-C label: x != y')).not.toThrow()
+    // a given or find that is not about a plane keeps its text, "!=" and all
+    expect(parseStatement('given: AB = x != 3')).toMatchObject({ kind: 'given', entry: { kind: 'measure', content: { kind: 'symbol', text: 'x != 3' } } })
+    expect(parseStatement('given: distance from G to line A-B = x != 3')).toMatchObject({ kind: 'given', entry: { kind: 'measure', content: { kind: 'symbol', text: 'x != 3' } } })
+    expect(parseStatement('find: distance from G to line A-B = x != 3')).toMatchObject({ kind: 'given', section: 'find' })
+  })
+
+  it('counts an "if" only after the first "=" or comparator of the statement', () => {
+    expect(() => parseStatement('y = x if x != 0')).not.toThrow(NOT_AN_EQUATION)
+    expect(() => parseStatement('y > x if x != 0')).not.toThrow(NOT_AN_EQUATION)
+    // an identifier that merely contains "if", or a bracketed one, is not a clause
+    expect(() => parseStatement('diff != 2')).toThrow(NOT_AN_EQUATION)
+    expect(() => parseStatement('y = f(if) != 2')).toThrow(NOT_AN_EQUATION)
+    expect(parseStatement('y = {x != 0: 1, 2}')).toMatchObject({ kind: 'explicit' })
   })
 
   it('at the expression level n! = 5 and n != 5 are different conditions', () => {

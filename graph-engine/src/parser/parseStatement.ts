@@ -2077,26 +2077,45 @@ const NOT_EQUAL_IS_A_CONDITION =
   '"!=" is a condition, not an equation: use it inside an "if" clause or a piecewise {…}; for a factorial equation write "n! = 5" with a space'
 
 // Statements whose text after the keyword is words, not an expression — a
-// table's cells, a measure's label or symbol — where "!=" is only characters.
-const FREE_TEXT_STATEMENT = /^(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?(?:header|row):|^(?:label|given|find):/
+// table's cells, a measure label's symbol — where "!=" is only characters.
+const FREE_TEXT_STATEMENT = /^(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?(?:header|row):|^label:/
+
+// "given:" and "find:" state a measure whose value is text ("given: AB = x != 3"),
+// except where the measure names a plane: parseSpaceMeasure splits that at its
+// first "=" and reads the left side as an expression, so a bare "!=" there is
+// the same misparse as in an equation. The same two shapes it reads.
+const GIVEN_OR_FIND = /^(?:given|find):(.*)$/
+
+function isPlaneMeasure(body: string): boolean {
+  const between = /^(?:angle|distance)\s+between\s+(.+?)\s+and\s+(.+)$/.exec(body.trim())
+  if (between) return /^plane\s/.test(between[1].trim()) || /^plane\s/.test(between[2].trim())
+  const from = /^distance\s+from\s+\S+\s+to\s+(.+)$/.exec(body.trim())
+  return !!from && /^plane\s/.test(from[1].trim())
+}
 
 // Throws when `line` has a "!=" outside every bracket and before any "if"
-// clause (what follows "if" is a condition, where "!=" is the comparison). It
-// scans on its own, not through the splitters the grammars use.
+// clause (what follows an "if" clause is a condition, where "!=" is the
+// comparison). A word "if" opens a clause only after the statement's first "="
+// or comparator, so "if != 2" is not one. It scans on its own, not through the
+// splitters the grammars use.
 function refuseBareNotEqual(line: string): void {
   const text = line.trim()
   if (FREE_TEXT_STATEMENT.test(text)) return
+  const given = GIVEN_OR_FIND.exec(text)
+  if (given && !isPlaneMeasure(given[1])) return
   // "angle: A-B-C label: text": the label is text.
   const labelAt = text.startsWith('angle:') ? text.indexOf('label:') : -1
   const scanned = labelAt === -1 ? text : text.slice(0, labelAt)
   let depth = 0
+  let relation = false
   for (let i = 0; i < scanned.length; i++) {
     const c = scanned[i]
     if (c === '(' || c === '[' || c === '{') depth++
     else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
     else if (depth === 0) {
       if (c === '!' && scanned[i + 1] === '=') throw new Error(NOT_EQUAL_IS_A_CONDITION)
-      if (c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
+      if (c === '=' || c === '<' || c === '>') relation = true
+      else if (relation && c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
     }
   }
 }
