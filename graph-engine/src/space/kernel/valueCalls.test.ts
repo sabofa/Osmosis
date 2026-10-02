@@ -235,6 +235,23 @@ describe('integrals: a value call is a product in the integrand and in the bound
     expect(Math.abs(approx(readoutFull(scene, 1), 'dV') - 1 / 6)).toBeLessThan(1e-9)
   })
 
+  it('a bound that writes the other variable as a factor puts it outside, in either order: y in [0, x(1)] is y in [0, x], volume 1/2', () => {
+    // the integral of x dx over [0, 1] is 1/2 (z is [0, 1]); the grammar sees the call's name as a read of x
+    for (const spec of ['volume: y in [0, x(1)], x in [0, 1], z in [0, 1]', 'volume: x in [0, 1], y in [0, x(1)], z in [0, 1]', 'volume: y in [0, x*1], x in [0, 1], z in [0, 1]']) {
+      const scene = sceneOf(spec)
+      expect(scene.errors, spec).toEqual([])
+      expect(Math.abs(approx(readoutFull(scene, 1), 'dV') - 1 / 2), spec).toBeLessThan(1e-9)
+    }
+  })
+
+  it('and over a region of two variables, in either order: the area under y in [0, x(1)], x in [0, 1] is 1/2', () => {
+    for (const spec of ['volume: under 1 over y in [0, x(1)], x in [0, 1]', 'volume: under 1 over x in [0, 1], y in [0, x(1)]']) {
+      const scene = sceneOf(spec)
+      expect(scene.errors, spec).toEqual([])
+      expect(Math.abs(approx(readoutFull(scene, 1), 'dA') - 1 / 2), spec).toBeLessThan(1e-9)
+    }
+  })
+
   it('a cylindrical integrand x(x + 1) over the unit cylinder reads pi/4', () => {
     // the integral of (r^2 cos^2 + r cos) r dr dtheta dz = pi/4
     const scene = sceneOf('volume: r in [0, 1], theta in [0, 2*pi], z in [0, 1] cylindrical integrand x(x + 1)')

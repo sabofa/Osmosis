@@ -472,8 +472,8 @@ describe('freeVariablesDeep walks each function once (fix round 2)', () => {
     // would visit 2^20 bodies. Every call and every free name a walk meets reads
     // the function table once, so the lookups are the walk's operations: 64 when
     // each of the 21 bodies is walked once (two calls and a free name in each,
-    // and the top call), and about 3 million when each call site is. A wall
-    // clock says nothing under load.
+    // and the top call), and 4,194,304 (3 * (2^20 - 1) + 2^20 + 3) when each
+    // call site is. A wall clock says nothing under load.
     const functions: [string, MathFunction][] = [['f21', fn(['s', 't'], 's * t + b')]]
     for (let k = 20; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s) + a`)])
     const scope = makeScope({ functions })

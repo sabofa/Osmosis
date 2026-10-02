@@ -18,11 +18,24 @@ describe('parseParamLine', () => {
     expect(parseParamLine('k = 2 range [0, 10] integer step 2')).toMatchObject({ step: 2, integer: true })
   })
 
-  it('a built-in function\'s name may be a parameter\'s: it shadows the built-in in the document (@param gamma, a Lorentz factor)', () => {
+  it("one of calc's ten new built-in names may be a parameter's: it shadows the built-in (@param gamma, a Lorentz factor)", () => {
     expect(parseParamLine('gamma = 2 range [1, 5]', 2)).toEqual({ name: 'gamma', value: 2, min: 1, max: 5, step: null, integer: false, line: 2 })
-    for (const name of ['gamma', 'erf', 'cbrt', 'step', 'choose', 'gcd', 'root', 'sin', 'hypot', 'abs']) {
+    for (const name of ['gamma', 'erf', 'erfc', 'cbrt', 'step', 'choose', 'perm', 'gcd', 'lcm', 'root']) {
       expect(parseParamLine(`${name} = 1 range [0, 5]`), name).toMatchObject({ name, value: 1 })
     }
+  })
+
+  it("every classic built-in stays refused as a parameter: space's coordinate maps and calc's derivatives call them by name", () => {
+    for (const name of ['sin', 'cos', 'tan', 'sqrt', 'abs', 'exp', 'ln', 'log', 'min', 'max', 'atan2', 'hypot', 'floor', 'sign', 'mod', 'sinh']) {
+      expect(() => parseParamLine(`${name} = 1 range [0, 5]`), name).toThrow(`@param ${name}: "${name}" is a built-in function`)
+    }
+  })
+
+  it('records the names its value, range and step call, for the kernel to check against the other parameters', () => {
+    expect(parseParamLine('k = gamma(3) range [0, sqrt(25)] step abs(1)').calls).toEqual(['gamma', 'sqrt', 'abs'])
+    expect(parseParamLine('k = 1 + 2*sqrt(gamma(1)) range [0, 9]').calls).toEqual(['sqrt', 'gamma'])
+    // and says nothing when they call nothing
+    expect('calls' in parseParamLine('k = 1 range [0, 5]')).toBe(false)
   })
 
   const refusals: [string, RegExp][] = [
@@ -37,11 +50,12 @@ describe('parseParamLine', () => {
     // a non-positive step
     ['a = 1 range [0, 5] step 0', /step/],
     ['a = 1 range [0, 5] step -1', /step/],
-    // reserved names: coordinates, parameters, constants (a built-in function's
-    // name is not reserved: it is the document's own, below)
+    // reserved names: coordinates, parameters, built-ins, constants
     ['x = 1 range [0, 5]', /reserved/],
     ['theta = 1 range [0, 5]', /reserved/],
     ['phi = 1 range [0, 5]', /reserved/],
+    ['sin = 1 range [0, 5]', /built-in/],
+    ['hypot = 1 range [0, 5]', /built-in/],
     ['pi = 1 range [0, 5]', /reserved/],
     ['e = 1 range [0, 5]', /reserved/],
     // an integer parameter needs whole numbers

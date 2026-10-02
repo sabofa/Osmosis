@@ -66,18 +66,34 @@ describe('K5.3 — vector constants', () => {
   })
 })
 
-describe('K5 — a built-in function\'s name may be a definition\'s (calc ruling, 2026-10-02)', () => {
-  it('a vector constant: gamma = <1, 2, 3>', () => {
+describe("K5 — one of calc's ten new built-in names may be a definition's (calc ruling, 2026-10-02)", () => {
+  it('a vector constant and a vector function: gamma = <1, 2, 3>, step(x) = <x, 0, 0>', () => {
     expect(form('gamma = <1, 2, 3>')).toEqual({ form: 'vectorFunction', name: 'gamma', params: [], body: [p('1'), p('2'), p('3')] })
+    expect(form('step(x) = <x, 0, 0>')).toMatchObject({ form: 'vectorFunction', name: 'step', params: ['x'] })
   })
 
-  it('a scalar definition whose parameters are not all coordinates: gcd(a, b) = a*b', () => {
+  it('a scalar definition whose right side reads every parameter: gcd(a, b) = a*b, root(x, n) = x^(1/n)', () => {
     expect(form('gcd(a, b) = a*b')).toEqual({ form: 'function', name: 'gcd', params: ['a', 'b'], body: p('a*b') })
     expect(form('root(x, n) = x^(1/n)')).toMatchObject({ form: 'function', name: 'root', params: ['x', 'n'] })
+    expect(form('choose(x, k) = x*k')).toMatchObject({ form: 'function', name: 'choose' })
+    // a one-argument call of a parameter is a product, so it is a read
+    expect(form('lcm(a, b) = a(2) + b')).toMatchObject({ form: 'function', name: 'lcm' })
   })
 
-  it('a vector function, even when its parameter is a coordinate: sin(x) = <x, 0, 0>', () => {
-    expect(form('sin(x) = <x, 0, 0>')).toMatchObject({ form: 'vectorFunction', name: 'sin', params: ['x'] })
+  it('but one whose right side leaves a parameter unread is an equation, as it always was: choose(x, k) = 3', () => {
+    for (const line of ['choose(x, k) = 3', 'root(x, n) = 1', 'choose(x, k) = k', 'gcd(a, b) = a']) {
+      expect(parseSpaceUnkeyed(line), line).toBeNull()
+    }
+    // with a z it is the implicit surface it always was, not a definition of perm
+    expect(form('perm(x, y, z) = x + y')).toMatchObject({ form: 'implicitSurface', forced: false })
+  })
+
+  it("a classic built-in is never a definition's name, whatever it reads: max(x, a) = 2, log(x, b) = y, min(x, a) = 1", () => {
+    for (const line of ['max(x, a) = 2', 'log(x, b) = y', 'min(x, a) = 1', 'hypot(a, b) = a*b', 'mod(a, b) = a + b', 'sin(a, b) = a*b', 'sin(x) = <x, 0, 0>', 'sin(t) = <t, 0, 0>', 'cos = <1, 2, 3>']) {
+      expect(parseSpaceUnkeyed(line), line).toBeNull()
+    }
+    // an equation with a z is claimed, as the implicit surface it is
+    expect(form('atan2(y, k) = z')).toMatchObject({ form: 'implicitSurface', forced: false })
   })
 
   it('a one-parameter scalar definition stays the shared parser\'s functionDef: step(x) = x^2 is not claimed', () => {

@@ -24,7 +24,8 @@
 import { parseForRange, splitTopLevelComma } from '../../../parser/grammarUtil'
 import { parseExprString } from '../../../parser/parseExpr'
 import type { Expr } from '../../../parser/types'
-import { varNames } from '../../../math/expr'
+import { isClassicBuiltin } from '../shadowable'
+import { readNames } from '../reads'
 import { parseOverDomain } from '../domain'
 import { splitStyle, STYLE_CLAUSE_START, type RawClause, type StyleKey } from '../style'
 import { spaceStatement, type Domain, type ParamRange, type SpaceForm, type SpaceStatement, type SpaceStyle } from '../types'
@@ -171,7 +172,7 @@ function describe(names: readonly string[]): string {
 function chainOrder(ranges: readonly ParamRange[]): [ParamRange, ParamRange, ParamRange] {
   const names = ranges.map((r) => r.param)
   const reads = ranges.map((r) => {
-    const used = varNames(r.to, varNames(r.from))
+    const used = readNames(r.to, names, readNames(r.from, names))
     return names.filter((n) => used.has(n))
   })
   ranges.forEach((r, i) => {
@@ -247,7 +248,7 @@ function parseIterated(text: string, integrand: Target | null, system: Coordinat
   }
   if (coords !== 'rectangular') {
     for (const r of ranges) {
-      const foreign = ['x', 'y', 'z'].find((v) => !SYSTEMS[coords].includes(v) && varNames(r.to, varNames(r.from)).has(v))
+      const foreign = ['x', 'y', 'z'].find((v) => !SYSTEMS[coords].includes(v) && readNames(r.to, ['x', 'y', 'z'], readNames(r.from, ['x', 'y', 'z'])).has(v))
       if (foreign) {
         throw new Error(`bounds in ${coords} coordinates may use ${describe(SYSTEMS[coords])}, not ${foreign} — the bounds of ${r.param} read ${foreign}`)
       }
@@ -298,7 +299,8 @@ export const RIEMANN_RECTANGLE = 'Riemann boxes need a rectangle; use x in [a, b
 
 // Whether an iterated region's inner bounds read its outer variable.
 export function readsOuter(region: Extract<Domain, { kind: 'iterated' }>): boolean {
-  return varNames(region.inner.to, varNames(region.inner.from)).has(region.outer.param)
+  const outer = [region.outer.param]
+  return readNames(region.inner.to, outer, readNames(region.inner.from, outer)).has(region.outer.param)
 }
 
 // "under f over x in [a, b], y in [c, d], n = 4 [by 3] [sample: <rule>]". A
@@ -360,7 +362,7 @@ export const INTEGRAL_KEYWORDS: readonly { keyword: string; parse(rest: string):
 
 function checkName(name: string, what: string): void {
   if (COORDINATES.has(name)) throw new Error(`"${name}" is a coordinate, not a name for a ${what} — write e.g. "R = region ..."`)
-  if (name === 'pi' || name === 'e') throw new Error(`"${name}" is a constant, not a name for a ${what}`)
+  if (isClassicBuiltin(name) || name === 'pi' || name === 'e') throw new Error(`"${name}" is a built-in name, not a name for a ${what}`)
 }
 
 // "NAME = region <domain>" and "NAME = volume <volume>", claimed by

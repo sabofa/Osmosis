@@ -5,9 +5,13 @@
 // they are found here, each an error on the definition's line:
 // - a binding that is also a definition's name (the parameter shadows it);
 // - a name defined twice (the later definition is used);
-// - a definition named after pi or e (refused, so they keep their meaning).
-// A built-in function's name may be a definition's: it shadows the built-in in
-// this document (the ruling of 2026-10-02), and calling a constant or a @param
+// - a definition named after a classic built-in, pi or e (refused, so they
+//   keep their meaning: space's own coordinate maps and calc's derivatives
+//   call sin, cos, sqrt and the rest by name);
+// - a @param whose value, range or step calls the name of another @param, which
+//   those constant expressions would read as the built-in.
+// One of calc's ten new built-in names (shadowable.ts) may be a definition's:
+// it shadows the built-in in this document, and calling a constant or a @param
 // of that name as the built-in is compile's error (math/compile.ts), not a
 // second check here.
 
@@ -15,6 +19,7 @@ import type { Statement } from '../../parser/types'
 import { makeScope, type MathFunction, type MathScope } from '../../math/scope'
 import type { Binding } from '../config'
 import type { SceneError } from '../scene/types'
+import { isClassicBuiltin } from '../grammar/shadowable'
 
 function definition(statement: Statement): [string, MathFunction] | null {
   switch (statement.kind) {
@@ -48,7 +53,11 @@ export function buildScope(
     if (!entry) return
     const [name, fn] = entry
     const line = lines[i] ?? 0
-    // pi and e keep their meaning: the definition is refused.
+    // A classic built-in, pi and e keep their meaning: the definition is refused.
+    if (isClassicBuiltin(name)) {
+      errors.push({ line, message: `"${name}" is a built-in function — a definition cannot take its name` })
+      return
+    }
     if (name === 'pi' || name === 'e') {
       errors.push({ line, message: `"${name}" is a constant — a definition cannot take its name` })
       return
@@ -64,6 +73,17 @@ export function buildScope(
     definedAt.set(name, line)
     functions.set(name, fn)
   })
+
+  // A @param's value, range and step were compiled with no scope, so a call of
+  // another @param's name in them reached the built-in of that name.
+  const bound = new Set(bindings.map((b) => b.name))
+  for (const b of bindings) {
+    for (const called of b.calls ?? []) {
+      if (bound.has(called)) {
+        errors.push({ line: b.line, message: `@param ${b.name}: "${called}" is a parameter in this document; rename it to use the built-in ${called} function` })
+      }
+    }
+  }
 
   const scope = makeScope({ functions, params: bindings.map((b) => [b.name, b.value] as const), angle })
   return { scope, errors }

@@ -24,10 +24,11 @@
 import { parseTuple, parseForRange, splitTopLevelComma } from '../../parser/grammarUtil'
 import { parseExprString } from '../../parser/parseExpr'
 import type { Expr } from '../../parser/types'
-import { BUILTIN_NAMES } from '../../math/compile'
 import { varNames } from '../../math/expr'
+import { isClassicBuiltin, SHADOWABLE_BUILTINS } from './shadowable'
 import { parseForDomain, parseOverDomain } from './domain'
 import { parseNamedIntegral } from './keywords/integrals'
+import { readNames } from './reads'
 import { buildStyle, splitStyle, type RawClause } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 import { parseVectorLiteral } from './vector'
@@ -37,21 +38,25 @@ const NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 // "NAME(p1, ...) = rhs": a name, then a parenthesised parameter list.
 const DEFINITION = /^([a-zA-Z_][a-zA-Z0-9_]*)\(([^()]*)\)\s*=(.*)$/
 
-// pi and e are never a definition's or a vector constant's name.
-function core(name: string): boolean {
-  return name === 'pi' || name === 'e'
+// A classic built-in's name, pi or e is never a definition's: "log(y, x) = 2" is
+// an equation calling log, as it always was. Only calc's ten new names are a
+// document's to use (shadowable.ts).
+function reserved(name: string): boolean {
+  return isClassicBuiltin(name) || name === 'pi' || name === 'e'
 }
 
-// A built-in's name is a document's to use (the ruling of 2026-10-02: a
-// document's own @param, constant or function shadows the built-in), with one
-// reading kept as it always was: a built-in's name followed by only
-// coordinates, "log(y, x) = 2" or "hypot(x, y, z) = 1", is an equation calling
-// the built-in. With any other parameter, "gcd(a, b) = a*b", it cannot be that
-// equation (a and b are unknown in a scene), so it is a definition.
-const COORDINATES = new Set(['x', 'y', 'z'])
-
-function callsBuiltin(name: string, params: readonly string[]): boolean {
-  return BUILTIN_NAMES.has(name) && params.every((p) => COORDINATES.has(p))
+// One of those ten, followed by a scalar right side, "choose(x, k) = 3", may be
+// the equation it would always have been, and a document's own @param or
+// constant could be a parameter's name, so it is a definition only when its
+// right side reads every one of its parameters: "gcd(a, b) = a*b" and
+// "root(x, n) = x^(1/n)" are.
+function readsEvery(rhs: string, params: readonly string[]): boolean {
+  try {
+    const read = readNames(parseExprString(rhs), params)
+    return params.every((p) => read.has(p))
+  } catch {
+    return false
+  }
 }
 
 function parseDefinition(rest: string, clauses: readonly RawClause[]): SpaceForm | 'unclaimed' | null {
@@ -62,10 +67,10 @@ function parseDefinition(rest: string, clauses: readonly RawClause[]): SpaceForm
   if (params.some((p) => !NAME.test(p))) return null
   const vector = parseVectorLiteral(rhs, true)
   // A one-parameter scalar definition is the shared parser's functionDef,
-  // whatever its name (a built-in's name is the document's own then, and the
-  // kernel's scope lets it shadow the built-in).
+  // whatever its name (the kernel refuses one named after a classic built-in).
   if (params.length === 1 && !vector) return 'unclaimed'
-  if (core(name) || (!vector && callsBuiltin(name, params))) return null
+  if (reserved(name)) return null
+  if (!vector && SHADOWABLE_BUILTINS.has(name) && !readsEvery(rhs, params)) return null
 
   if (vector) {
     buildStyle(clauses, 'vector definition')
@@ -89,7 +94,7 @@ function parseVectorConstant(rest: string, clauses: readonly RawClause[]): Space
   const eq = rest.indexOf('=')
   if (eq === -1) return null
   const name = rest.slice(0, eq).trim()
-  if (!NAME.test(name) || core(name)) return null
+  if (!NAME.test(name) || reserved(name)) return null
   // The tuple exclusion: "A = (1, 2, 3)" is a labelled point, never a vector.
   const vector = parseVectorLiteral(rest.slice(eq + 1), false)
   if (!vector) return null
