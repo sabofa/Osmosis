@@ -60,4 +60,26 @@ describe('buildTable', () => {
     const tables = table('@hide: scores\nscores.header: a\nscores.row: 1\ntimes.header: t\ntimes.row: 5')
     expect(tables.map((t) => t.name)).toEqual(['times'])
   })
+
+  // calc P1: the generator compiles through the shared kernel, so the new
+  // language reaches tables as well.
+  it('evaluates a generator through definitions, a @param and the new syntax', () => {
+    const tables = table('@param a = 3 range [0, 9]\ng(x, b) = b x\nf(x) = {x < 2: x^2, a}\ntable: y = g(x, 2) + f(x) for x in [0, 3] step 1')
+    expect(tables[0].rows).toEqual([
+      ['0', '0'],
+      ['1', '3'],
+      ['2', '7'],
+      ['3', '9'],
+    ])
+  })
+
+  it('takes a bound and a step from definitions and constants', () => {
+    const tables = table('n = 2\nh = 0.5\ntable: y = 2x for x in [0, n] step h')
+    expect(tables[0].rows.map((row) => row[0])).toEqual(['0', '0.5', '1', '1.5', '2'])
+  })
+
+  it('marks every cell undefined when the generator body does not compile', () => {
+    const tables = table('table: y = sinn(x) for x in [0, 2] step 1')
+    expect(tables[0].rows.map((row) => row[1])).toEqual(['undefined', 'undefined', 'undefined'])
+  })
 })

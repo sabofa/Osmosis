@@ -26,6 +26,15 @@ Empty/whitespace-only lines and `#`-comment lines are skipped. Everything
 else must parse as exactly one of the statement forms below, optionally
 followed by a same-line `color:`/`name:` clause (see "Color and name").
 
+**Errors name their line.** A statement that parses but cannot be drawn is
+reported on its own line — in a 2D plot too, since calc P1: a typo in a function name (`y = sinn(x)` is `Unknown
+function "sinn"`), an unknown variable, a bad definition (a name defined twice)
+and a curve that is undefined across the whole view or range ("this curve is
+undefined everywhere in view") are each an error on that statement's line and
+leave the other statements drawn. Before calc P1 these in a plot statement
+(`y =`, `r =`, a parametric curve) drew nothing and said nothing, and a 2D error
+that did appear had no line number.
+
 ## Expression grammar
 
 Every `<expr>` placeholder below is a small recursive-descent arithmetic
@@ -198,22 +207,31 @@ Every entry is a full line (or, for parametric forms, the shape before the
 ```
 y = <expr(x)> [if <condition>]
 ```
-Explicit function of `x`. The optional `if <condition>` makes it piecewise —
-`x < 0`, `x >= 2`, or a two-sided range `-1 <= x < 1` (both bounds must use
-`<`/`<=`, never `>`/`>=`).
+Explicit function of `x`. The optional `if <condition>` restricts where it is
+drawn — `x < 0`, `x >= 2`, a chain `-1 <= x < 1`, or any combination with
+`and`, `or`, `not` and `!=` (see "Conditions" above). The condition may test
+only the independent variable (`x` here): `y = x if y > 0` is an error on its
+line (`Unknown variable "y"`), because a test on the value being drawn is a
+region, not a domain — shade it with `y > 0` instead. A domain that is not one
+interval draws as separate pieces and never joins them across the gap, so
+`y = 1 if x < -1 or x > 1` is two half-lines. The bounds in a condition may be
+any constant expression, including your own definitions and `@param` values.
 ```
 y = x^2 - 4
 y = 1/x if x > 0
 y = -x + 1 if -2 <= x < 3
+y = 1 if x < -1 or x > 1
+y = x if x != 0
 ```
 
 ```
 x = <expr(y)> [if <condition>]
 ```
 Explicit function of `y` — same condition grammar as above, mirrored to the
-`y` axis.
+`y` axis (so the condition tests `y`).
 ```
 x = y^2
+x = y^2 if y > 0
 ```
 
 ```
@@ -226,27 +244,36 @@ r = theta for theta in [0, 4*pi]
 ```
 
 ```
-<expr(x,y)> = <expr(x,y)>
+<expr(x,y)> = <expr(x,y)> [if <condition>]
 ```
 Implicit curve — anything that isn't `y = ...`, `x = ...`, `z = ...`, or a
-labeled point falls here. Covers conics, circles-by-equation, etc.
+labeled point falls here. Covers conics, circles-by-equation, etc. An optional
+`if <condition>` keeps only the part of the curve where the condition holds;
+unlike an explicit statement's, it may test both `x` and `y`.
 ```
 x^2/9 + y^2/4 = 1
+x^2 + y^2 = 9 if y > 0
 ```
 
 ```
-<expr(x,y)> <|<=|>|>= <expr(x,y)>
+<expr(x,y)> <|<=|>|>= <expr(x,y)> [if <condition>]
+<expr> <|<= <expr(x,y)> <|<= <expr> [if <condition>]
 ```
-Shaded inequality region. **No `if <condition>` clause here** — that's only
-valid on `y=`/`x=` explicit function statements (see above), not on a
-region. To shade a function over a bounded interval, restrict the function
-itself instead: `y = x^2 if 0 <= x <= 3`, not `y > 0 if 0 <= x <= 3`. Writing
-`if` on a region statement is rejected with an explicit error naming this
-mistake.
+Shaded inequality region, or a chained region (`-2 < x < 4`) between two
+bounds. An optional `if <condition>` restricts the shading (and its edge) to
+where the condition holds, with the same grammar as above over both `x` and `y`:
+`and`, `or`, `not`, `!=` and chains all work. The `if` belongs to the whole
+statement, so `y > 0 if 0 <= x <= 3` shades `y > 0` for `x` between 0 and 3.
 ```
 y > x^2 - 1
 x^2 + y^2 <= 4
+x^2 + y^2 < 9 if y > 0 and x > -1
+y > 0 if 0 <= x <= 3
 ```
+The restriction is applied after the region is traced: each piece of shading
+is kept when the condition holds at its centre, and each stretch of edge when
+it holds at its midpoint, so the cut edge follows the plotting grid rather
+than being exact. Exact clipping to the condition comes later.
 
 ```
 field: dy/dx = <expr(x,y)>
@@ -362,10 +389,17 @@ tangent: x^2 - 1 at x = 2
 <name>(<param>) = <expr(param)>
 ```
 Named, reusable function — usable in later statements as `<name>(...)`,
-including composed with itself or other named functions.
+including composed with itself or other named functions. A definition may take
+several parameters, `g(x, a) = a sin(x)`, and is then called with all of them,
+`g(x, 2)`. A function the document defines can be primed, `f'(x)`, and used
+inside piecewise braces, sums and integrals (see "Expressions: the calculus
+kernel" above). A name defined twice is an error on the later line (`"f" is
+defined twice (lines 1 and 2) — the later definition is used`).
 ```
 k(x) = x^2 + 1
 y = k(k(x))
+g(x, a) = a sin(x)
+y = g(x, 2)
 ```
 
 ```
@@ -751,6 +785,7 @@ different keys; for a repeated key, the last one wins.
 | `@hover` | `all`\|`points`\|`features`\|`none` | `all` | `features` restricts hover snapping to detected feature points only (skipping curves, segments, and plain plotted points); a snapped feature reports its exact analytic value, not an interpolated sample |
 | `@hide` | `<name>[,<name>...]` | — | hide specific named statements/tables (by their `name:` clause) |
 | `@show` | `<name>[,<name>...]` | — | un-hide — a later directive always wins for that specific name, regardless of order |
+| `@param` | `<name> = <value> range [<min>, <max>] [step <s>] [integer]` | — | a named constant with a range, usable in every expression: `@param n = 3 range [0, 12] step 1 integer`. In a 2D graph every expression sees the authored value (there is no slider in the 2D viewer yet). A definition with the same name is an error on its line, and the `@param` is used |
 
 ## Declare `@mode`. Always. Including `@mode: graph`.
 
@@ -812,10 +847,13 @@ of discoverable only via a validator error:
 3. **Assuming the tag/taxonomy conventions apply here too.** They don't —
    `graph_spec` has its own grammar, entirely separate from tag slugs. See
    `readme()`'s `tag_conventions` for that one.
-4. **An `if <condition>` clause on an inequality region.** `y > 0 if 0 <= x
-   <= 3` is rejected with an explicit error — `if` only exists on `y=`/`x=`
-   explicit statements. Restrict the function itself instead: `y = x^2 if 0
-   <= x <= 3`. See "Shaded inequality region" above.
+4. **An `if <condition>` on the value being drawn.** An explicit statement's
+   `if` may test only its independent variable: `y = x if y > 0` is an error on
+   its line (`Unknown variable "y"`). A test on the dependent variable is a
+   region — write `y > 0 if …`, or restrict the function by `x`: `y = x^2 if 0
+   <= x <= 3`. See "2D functions and curves" above. (An `if` on a region or an
+   implicit curve is fine: it was rejected before calc P1 and now restricts the
+   drawing.)
 5. **Expecting `@xstep` to survive a zoom.** By default it does not — outside
    3 to 14 visible divisions the step falls back to the universal 1-2-5 ladder,
    so a spec written in 8s shows 10s when zoomed out. Use
@@ -849,7 +887,7 @@ hypothetical edge cases — worth knowing before authoring around them:
 ## Where the source of truth lives
 
 - Grammar: `graph-engine/src/parser/types.ts`'s top comment, `parseStatement.ts`
-- Expression grammar: `graph-engine/src/parser/parseExpr.ts`, `evalExpr.ts` (builtins/constants)
+- Expression grammar: `graph-engine/src/parser/parseExpr.ts`; evaluation: `graph-engine/src/math/compile.ts` (the shared kernel) through `graph-engine/src/plot/scope.ts` for 2D plots and tables. `parser/evalExpr.ts` (builtins/constants) still serves geometry constructions and `animate:`
 - Config directives: `graph-engine/src/parser/parseConfig.ts`, `config.ts`
 - Feature point / intersection detection: `graph-engine/src/scene/featurePoints.ts`,
   `graph-engine/src/scene/roots.ts` (the old `detectFeaturePoints.ts` sampled-array

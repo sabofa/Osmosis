@@ -23,6 +23,7 @@ export const EXAMPLE_GROUPS = [
   'Measures in space',
   'Nets and paths',
   'Styles',
+  'Calculus',
 ] as const
 
 export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
@@ -1326,4 +1327,60 @@ y = k(k(x)) - 5 color: purple`,
   },
   // Space (track 3): space/examples.ts.
   ...SPACE_EXAMPLES,
+  // Calculus (track 4, calc P1): the language the 2D engine now compiles
+  // through the shared kernel.
+  {
+    label: 'Cube roots, both halves',
+    group: 'Calculus',
+    spec: `y = x^(1/3)
+y = x^(2/3) color: blue`,
+  },
+  {
+    label: 'Piecewise in braces',
+    group: 'Calculus',
+    spec: `f(x) = {x < 0: x^2, x <= 2: 2x + 1, 5}
+y = f(x)`,
+  },
+  {
+    label: 'Taylor partial sums of sin',
+    group: 'Calculus',
+    spec: `@param n = 3 range [0, 12] step 1 integer
+y = sin(x)
+y = sum(k = 0 to n, (-1)^k x^(2k+1)/(2k+1)!) color: red`,
+  },
+  {
+    label: 'Accumulation: the sine integral',
+    group: 'Calculus',
+    spec: `F(x) = integral(t = 0 to x, sin(t)/t)
+y = F(x)
+y = sin(x)/x color: gray`,
+  },
+  {
+    label: 'Derivatives by primes',
+    group: 'Calculus',
+    spec: `f(x) = x^3 - 3x
+y = f(x)
+y = f'(x) color: red
+y = f''(x) color: blue`,
+  },
+  {
+    label: 'Special functions',
+    group: 'Calculus',
+    spec: `@bounds: -4, 6, -4, 6
+y = gamma(x)
+y = erf(x) color: blue
+y = |x - 1| - 2 color: gray`,
+  },
+  {
+    label: 'Conditions on a region',
+    group: 'Calculus',
+    spec: `x^2 + y^2 < 9 if y > 0 and x > -1`,
+  },
+  {
+    label: 'A two-argument helper',
+    group: 'Calculus',
+    spec: `g(x, a) = a sin(x)
+y = g(x, 2)
+y = g(x, 0.5) color: blue`,
+  },
 ]

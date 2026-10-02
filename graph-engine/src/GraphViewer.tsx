@@ -218,7 +218,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
       } else {
         const renderer2d = renderer as SceneRenderer
         const resolution = renderer2d.isDragging() ? DRAG_RESOLUTION : undefined
-        const scene = buildScene(parsed.statements, renderer2d.getBounds(), parsed.config, resolution)
+        const scene = buildScene(parsed.statements, renderer2d.getBounds(), parsed.config, resolution, parsed.statementLines)
         renderer2d.setGraphScene(scene)
         if (reportState) {
           setRegression(scene.regression)

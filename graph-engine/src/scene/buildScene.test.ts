@@ -662,3 +662,230 @@ describe('a plane in a figure in the plane (phase 8, fix round 1)', () => {
     }
   })
 })
+
+// calc P1: the 2D engine compiles through the shared kernel (math/compile), so
+// the new syntax plots and every error names its own line.
+function sceneOf(spec: string) {
+  const parsed = parseSpec(spec)
+  return buildScene(parsed.statements, { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }, parsed.config, 140, parsed.statementLines)
+}
+
+type SceneOfResult = ReturnType<typeof sceneOf>
+
+function curvePoints(scene: SceneOfResult) {
+  return scene.objects.flatMap((o) => (o.kind === 'curve' ? o.points : []))
+}
+
+function regionTriangles(scene: SceneOfResult) {
+  return scene.objects.flatMap((o) => (o.kind === 'region' ? o.triangles : []))
+}
+
+function segmentPairs(scene: SceneOfResult) {
+  return scene.objects.flatMap((o) => (o.kind === 'segments' ? o.pairs : []))
+}
+
+describe('the 2D engine on the kernel (calc P1)', () => {
+  it('reports a typo as a compile error on its line, not a blank plot', () => {
+    const scene = sceneOf('y = x\ny = sinn(x)')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('Unknown function "sinn"') })])
+  })
+
+  it('names the line of an error in a polar, a parametric and an implicit statement', () => {
+    const scene = sceneOf('y = x\nr = 1 + cosz(theta)\n(cos(q), sin(t)) for t in [0, 6]\nx^2 + w = 1')
+    expect(scene.errors.map((e) => e.line)).toEqual([2, 3, 4])
+  })
+
+  it('x^(1/3) draws both halves', () => {
+    const xs = curvePoints(sceneOf('y = x^(1/3)')).map((pt) => pt.x)
+    expect(Math.min(...xs)).toBeLessThan(-9)
+    expect(Math.max(...xs)).toBeGreaterThan(9)
+  })
+
+  it('a bound variable wins over a user constant of the same name', () => {
+    const cardioid = curvePoints(sceneOf('theta = 1\nr = 1 + cos(theta)'))
+    const radii = cardioid.map((pt) => Math.hypot(pt.x, pt.y))
+    expect(Math.max(...radii) - Math.min(...radii)).toBeGreaterThan(1.5)
+  })
+
+  it('piecewise, sums, integrals, primes and multi-parameter functions plot', () => {
+    for (const spec of [
+      'f(x) = {x < 0: x^2, x <= 2: 2x + 1, 5}\ny = f(x)',
+      '@param n = 4 range [0, 12] integer\ny = sum(k = 0 to n, (-1)^k x^(2k+1)/(2k+1)!)',
+      'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)',
+      "f(x) = x^3 - 3x\ny = f'(x)",
+      'g(x, a) = a sin(x)\ny = g(x, 2)',
+    ]) {
+      const scene = sceneOf(spec)
+      expect(scene.errors, spec).toEqual([])
+      expect(curvePoints(scene).length, spec).toBeGreaterThan(10)
+    }
+  })
+
+  it('a piecewise function takes the right branch at each x', () => {
+    const points = curvePoints(sceneOf('f(x) = {x < 0: x^2, x <= 2: 2x + 1, 5}\ny = f(x)'))
+    const at = (x: number) => points.find((pt) => Math.abs(pt.x - x) < 1e-9)?.y
+    expect(at(-4)).toBeCloseTo(16, 9)
+    expect(at(1)).toBeCloseTo(3, 9)
+    expect(at(4)).toBe(5)
+  })
+
+  it('a two-interval if domain does not bridge its gap', () => {
+    const scene = sceneOf('y = 1 if x < -1 or x > 1')
+    const curves = scene.objects.filter((o) => o.kind === 'curve')
+    expect(curves.length).toBe(2)
+    for (const c of curves) if (c.kind === 'curve') for (const pt of c.points) expect(Math.abs(pt.x)).toBeGreaterThanOrEqual(1)
+  })
+
+  it('an if clause takes not, !=, and, or and chains on the independent variable', () => {
+    const negated = sceneOf('y = x if not x > 2 or x > 5')
+    const pieces = negated.objects.flatMap((o) => (o.kind === 'curve' ? [o.points.map((pt) => pt.x)] : []))
+    expect(pieces).toHaveLength(2)
+    expect(Math.max(...pieces[0])).toBeLessThanOrEqual(2)
+    expect(Math.min(...pieces[1])).toBeGreaterThan(5)
+
+    const apart = sceneOf('y = x if x != 0')
+    expect(apart.objects.filter((o) => o.kind === 'curve')).toHaveLength(2)
+    expect(curvePoints(apart).some((pt) => pt.x === 0)).toBe(false)
+
+    const chained = sceneOf('y = x if -3 <= x < 3 and x != 0')
+    expect(chained.errors).toEqual([])
+    const points = curvePoints(chained)
+    expect(points.length).toBeGreaterThan(10)
+    for (const pt of points) {
+      expect(pt.x).toBeGreaterThanOrEqual(-3)
+      expect(pt.x).toBeLessThan(3)
+      expect(pt.x).not.toBe(0)
+    }
+  })
+
+  it('an old-shape if clause draws as it always did', () => {
+    const left = curvePoints(sceneOf('y = x^2 if x <= 1'))
+    expect(Math.max(...left.map((pt) => pt.x))).toBeLessThanOrEqual(1)
+    const mid = curvePoints(sceneOf('y = x^2 if -2 < x <= 2'))
+    expect(Math.min(...mid.map((pt) => pt.x))).toBeGreaterThan(-2)
+    expect(Math.max(...mid.map((pt) => pt.x))).toBeLessThanOrEqual(2)
+  })
+
+  it('an if clause on x = f(y) tests y', () => {
+    const scene = sceneOf('x = y^2 if y > 0')
+    expect(scene.errors).toEqual([])
+    const points = curvePoints(scene)
+    expect(points.length).toBeGreaterThan(10)
+    for (const pt of points) expect(pt.y).toBeGreaterThan(0)
+  })
+
+  it('an if clause on the dependent variable is a compile error on its line', () => {
+    const scene = sceneOf('y = x\ny = x if y > 0')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('Unknown variable "y"') })])
+  })
+
+  it('an if clause may use a definition, a constant or a @param in its bounds', () => {
+    // limit(1) = c + 1 = 2: the old shape (one bound), then the same bound
+    // through the new condition language.
+    for (const clause of ['x < limit(1)', 'x < limit(1) or x > 8']) {
+      const scene = sceneOf(`@param c = 1 range [0, 5]\nlimit(u) = c + u\ny = x if ${clause}`)
+      expect(scene.errors, clause).toEqual([])
+      const pieces = scene.objects.flatMap((o) => (o.kind === 'curve' ? [o.points.map((pt) => pt.x)] : []))
+      expect(Math.max(...pieces[0]), clause).toBeLessThan(2)
+    }
+  })
+
+  it('a curve undefined across the whole view says so', () => {
+    const scene = sceneOf('y = ln(-x^2 - 1)')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 1, message: expect.stringContaining('undefined everywhere in view') })])
+  })
+
+  it('a polar curve undefined across its whole range says so', () => {
+    const scene = sceneOf('r = ln(-1 - cos(theta)^2)')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 1, message: expect.stringContaining('undefined everywhere in view') })])
+  })
+
+  it('a parametric curve undefined across its whole range says so', () => {
+    const scene = sceneOf('(ln(-1 - t^2), t) for t in [0, 5]')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 1, message: expect.stringContaining('undefined everywhere in view') })])
+  })
+
+  it('an explicit curve whose domain excludes the whole view draws nothing and reports nothing', () => {
+    const scene = sceneOf('y = x if x > 100')
+    expect(scene.errors).toEqual([])
+    expect(curvePoints(scene)).toEqual([])
+  })
+
+  it('an if clause on a region keeps the shading inside it', () => {
+    const scene = sceneOf('x^2 + y^2 < 9 if y > 0')
+    const tris = regionTriangles(scene)
+    expect(tris.length).toBeGreaterThan(0)
+    for (let i = 0; i < tris.length; i += 3) expect((tris[i].y + tris[i + 1].y + tris[i + 2].y) / 3).toBeGreaterThan(0)
+  })
+
+  it('an if clause on an implicit curve keeps the strokes inside it', () => {
+    const scene = sceneOf('x^2 + y^2 = 9 if y > 0')
+    const pairs = segmentPairs(scene)
+    expect(pairs.length).toBeGreaterThan(10)
+    for (const [from, to] of pairs) expect((from.y + to.y) / 2).toBeGreaterThan(0)
+  })
+
+  it('an if clause on a chained region keeps the shading and its edge inside it', () => {
+    const scene = sceneOf('-2 < x < 4 if y >= 0 and x != 3')
+    expect(scene.errors).toEqual([])
+    const tris = regionTriangles(scene)
+    expect(tris.length).toBeGreaterThan(0)
+    for (let i = 0; i < tris.length; i += 3) expect((tris[i].y + tris[i + 1].y + tris[i + 2].y) / 3).toBeGreaterThanOrEqual(0)
+    for (const [from, to] of segmentPairs(scene)) expect((from.y + to.y) / 2).toBeGreaterThanOrEqual(0)
+  })
+
+  it('a region with two conditions joined by and keeps only the corner they share', () => {
+    const tris = regionTriangles(sceneOf('x^2 + y^2 < 9 if y > 0 and x > -1'))
+    expect(tris.length).toBeGreaterThan(0)
+    for (let i = 0; i < tris.length; i += 3) {
+      expect((tris[i].y + tris[i + 1].y + tris[i + 2].y) / 3).toBeGreaterThan(0)
+      expect((tris[i].x + tris[i + 1].x + tris[i + 2].x) / 3).toBeGreaterThan(-1)
+    }
+  })
+
+  it('an if clause that names a missing variable on a region is a compile error on its line', () => {
+    const scene = sceneOf('y = x\nx^2 + y^2 < 9 if z > 0')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('Unknown variable "z"') })])
+  })
+
+  it('a field tick at an undefined slope is skipped, not drawn with NaN vertices', () => {
+    const scene = sceneOf('field: dy/dx = ln(x)')
+    const pairs = segmentPairs(scene)
+    expect(pairs.length).toBeGreaterThan(10)
+    for (const [from, to] of pairs) for (const v of [from.x, from.y, to.x, to.y]) expect(Number.isFinite(v)).toBe(true)
+  })
+
+  it('a field tick at an infinite slope is still a vertical tick', () => {
+    // x = 0 is a grid column for these bounds, where 1/x is infinite.
+    const parsed = parseSpec('field: dy/dx = 1/x')
+    const scene = buildScene(parsed.statements, { xMin: -9, xMax: 9, yMin: -9, yMax: 9 }, parsed.config)
+    const vertical = segmentPairs(scene).filter(([from, to]) => Math.abs(from.x - to.x) < 1e-9 && Math.abs(from.x) < 1e-9)
+    expect(vertical.length).toBeGreaterThan(10)
+  })
+
+  it('a construction that fails is reported on its own line', () => {
+    const scene = sceneOf('A = (0, 0)\nB = (4, 0)\nM = midpoint A-Z\nN = midpoint A-B')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 3, message: expect.stringMatching(/"Z"/) })])
+  })
+
+  it('a tangent line through a defined function uses the kernel', () => {
+    const scene = sceneOf('f(x) = x^2\ntangent: f(x) at x = 1')
+    expect(scene.errors).toEqual([])
+    const line = scene.objects.find((o) => o.kind === 'curve')
+    if (line?.kind !== 'curve') throw new Error('expected the tangent line')
+    // y = 1 + 2(x - 1) at the window's left and right edges.
+    expect(line.points[0].y).toBeCloseTo(1 + 2 * (-10 - 1), 4)
+    expect(line.points[1].y).toBeCloseTo(1 + 2 * (10 - 1), 4)
+  })
+
+  it('a definition clash is reported on its own line', () => {
+    const scene = sceneOf('f(x) = x\nf(x) = x + 1\ny = f(x)')
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('"f" is defined twice') })])
+  })
+
+  it('without statement lines an error still names line 0', () => {
+    const parsed = parseSpec('y = sinn(x)')
+    const scene = buildScene(parsed.statements, { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }, parsed.config)
+    expect(scene.errors).toEqual([expect.objectContaining({ line: 0 })])
+  })
+})
