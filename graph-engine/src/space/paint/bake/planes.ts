@@ -153,7 +153,7 @@ function planesOfSide(
   const nt = s.indices.length / 3
   const perPx = plan.referenceWorldPerPx
   const e = params.edges
-  const cell = Math.max(1e-3, e.planeCellDeg) * D2R
+  const cell = Math.max(1, e.planeCellDeg) * D2R // (a cell under a degree would crowd the key's longitude field; the slider stops at 5)
   const idx = s.indices
 
   // the key of every triangle
