@@ -303,12 +303,18 @@ function oddRootEven(x: number, e: number): number {
   return x < 0 ? Math.pow(-x, e) : Math.pow(x, e)
 }
 
-// What zero oddRootEven and oddRootOdd give (see keepZeros): oddRootEven is never below +0 and gives +0; for a
-// negative exponent both give a zero only at an infinity, where oddRootOdd has the sign of the input; for
-// 0 < e < 1 oddRootOdd gives a zero only at +-0, which Math.pow(-0, e) makes +0; for e >= 1 it gives -0 for a
-// tiny negative that underflows and +0 at -0 (and -0 at -0 for e = 1), so there it is neither and is widened.
+// What zero oddRootEven and oddRootOdd give (see keepZeros), from the exponent DOUBLE the scalar uses, not from
+// the rational the literal denotes (and so not from pOdd alone: 8153783306384/3*1046 is the rational
+// 8528857338477664/3, an even numerator, and the double 2842952446159221, an odd whole number):
+//   - oddRootEven is never below +0 and its zero is +0, except that Math.pow(-0, e) is -0 for an odd whole e (x < 0
+//     is false at -0, so -0 goes straight to Math.pow): then it is widened;
+//   - for a negative exponent both give a zero only at an infinity (at +-0 they give an infinity), where oddRootOdd
+//     has the sign of the input, and oddRootEven's zero is +0 (still widened for an odd whole e, as above);
+//   - for 0 < e < 1 oddRootOdd gives a zero only at +-0, which Math.pow(-0, e) makes +0 (e is no whole number);
+//   - for e >= 1 oddRootOdd gives -0 for a tiny negative that underflows and +0 at -0 (-0 at -0 for an odd whole
+//     e), so there it is neither and is widened.
 function oddRootZeros(pOdd: boolean, e: number): number {
-  if (!pOdd) return ZERO_EVEN
+  if (!pOdd) return Number.isInteger(e) && e % 2 !== 0 ? ZERO_WIDEN : ZERO_EVEN
   if (e < 0) return ZERO_ODD
   return e < 1 ? ZERO_EVEN : ZERO_WIDEN
 }

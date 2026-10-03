@@ -688,6 +688,55 @@ describe('an extreme that is exactly zero is kept where the function never gives
     expect(checks).toBeGreaterThan(20_000)
   })
 
+  // The exponent the scalar uses is the double its expression gives at run time, and the flag pOdd is read from the
+  // exact rational the literal denotes; the two can disagree. 8153783306384/3*1046 is the rational 8528857338477664/3
+  // (even numerator, so pOdd is false) and the double 2842952446159221, an odd whole number, for which
+  // Math.pow(-0, e) is -0: a zero the even-root rule (+0 only) would deny. 3391128647215/3*2119 is the other way
+  // (an odd numerator, and the even whole number 2395267201149528). So powOddRoot is held to every pair of an
+  // exponent double and a flag, whole or not, not only to the pairs a literal p/q can make.
+  const E_ODD = 2842952446159221
+  const E_EVEN = 2395267201149528
+  const ROOT_EXPONENTS = [1 / 3, 2 / 3, 4 / 3, 5 / 3, -1 / 3, -2 / 3, -5 / 3, 1 / 5, 3 / 5, 7 / 5, -3 / 5, 0.999, 1, 2, 3, 4, 5, -1, -2, -3, -4, E_ODD, E_EVEN, -E_ODD, -E_EVEN, 2 ** 52 + 1, 2 ** 53]
+
+  it('powOddRoot with an exponent that is a whole number at run time keeps the zeros the scalar gives', () => {
+    // x^E at -0 is -0 for the odd E (and +0 at +0), whichever way the flag says
+    for (const pOdd of [false, true]) {
+      expect(Object.is(realOddPow(-0, E_ODD, pOdd), -0)).toBe(true)
+      expect(Object.is(realOddPow(0, E_ODD, pOdd), 0)).toBe(true)
+      expect(Object.is(realOddPow(-0, E_EVEN, pOdd), 0)).toBe(true)
+    }
+    // the boxes the review named: [-0, 1], [-1, -0], [-0, -0]: the answer holds -0, so it is not pinned to +0
+    for (const [lo, hi] of [[-0, 1], [-1, -0], [-0, -0], [-0, 0], [0, -0], [-1e-200, 1], [-1, 1]]) {
+      const r = powOddRoot(iv(), box(lo, hi), E_ODD, false)
+      expect(admits(r, -0), `[${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
+      expect(r.lo < 0 || Object.is(r.lo, -0), `bottom of [${fmt(lo)}, ${fmt(hi)}]^E: ${show(r)}`).toBe(true)
+    }
+    const point = powOddRoot(iv(), box(-0, -0), E_ODD, false)
+    expect(point.lo < 0 && point.hi > 0).toBe(true)
+    // and the even numerator with an even whole number, and an odd numerator either way, are still sound
+    expect(powOddRoot(iv(), box(-0, 1), E_EVEN, true).hi).toBeGreaterThanOrEqual(1)
+  })
+
+  it('powOddRoot for every exponent and both flags, whole or not', () => {
+    let checks = 0
+    for (const [lo, hi] of ZERO_BOXES) {
+      for (const [l, h] of withZeroSigns(lo, hi)) {
+        const pts = pointsOf(l, h, mulberry32(14))
+        for (const e of ROOT_EXPONENTS) {
+          for (const pOdd of [false, true]) {
+            const r = powOddRoot(iv(), box(l, h), e, pOdd)
+            for (const x of pts) {
+              const y = realOddPow(x, e, pOdd)
+              checks++
+              must(r, y, () => `x^(${e}) pOdd ${pOdd} over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)} gives ${fmt(y)}, twin ${show(r)}`)
+            }
+          }
+        }
+      }
+    }
+    expect(checks).toBeGreaterThan(30_000)
+  })
+
   it('add and sub over every pair of boxes, each zero end as both signs', () => {
     let checks = 0
     const rand = mulberry32(13)

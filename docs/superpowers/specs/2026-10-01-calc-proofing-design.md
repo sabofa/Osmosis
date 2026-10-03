@@ -258,7 +258,8 @@ rounding: the twin is robust, not formally rigorous, and the property tests (see
 "both" piecewise result is the union of the live branches with verdict at
 most `defined`, and a condition that is decided over the box (`floor(x) < 5`
 over [1.5, 2.5]) caps nothing, while one that may be NaN makes the result
-`partial`. `sum` and `prod` enclose term by term. `integral` returns
+`partial` and one that is `unknown` (an integral that varies with the box)
+makes it `unknown`. `sum` and `prod` enclose term by term. `integral` returns
 `unknown` with bounds `[-inf, inf]` (sampled bounds are not an enclosure, and
 P3's culling relies on enclosures) except a **constant** integral, one with no
 variable, no `@param` and no loop in a bound, which is its number: computed once,
@@ -278,8 +279,9 @@ The rules a consumer relies on, each held by a test against the scalar compile:
   an infinite bound under `continuous` is overflow, and a consumer must not
   certify a stretch as flat when a bound or a sample is infinite. (A floating
   point step where an overflowed or saturated intermediate is absorbed
-  downstream, `log(x, x!)` at x = 170.62, is no jump of the real function and is
-  not reported.)
+  downstream, `log(x, x!)` at x = 170.62, or a steep curve at the scale of the
+  subnormals, `x^0.001` from 0 at 0 to 0.47 at 5e-324, is no jump of the real
+  function and is not reported.)
 - **Empty.** An empty interval (`lo > hi`) always carries `partial` and means
   NaN at every point of the box: skip it, never bisect it.
 - **Signed zeros.** A box end that is a zero is that signed zero; a zero

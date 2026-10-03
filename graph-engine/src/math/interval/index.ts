@@ -14,7 +14,9 @@
 //     it make the compiled values step-free to the last bit: it is a claim about the real function, and
 //     where an intermediate overflows or saturates and the next operation absorbs it, the scalar's own
 //     floating point steps (log(x, x!) goes from 0.0072 to 0 at x = 170.62, where x! becomes Infinity;
-//     atanh(tanh(x)) is a staircase of 1e-4 steps near -15) with no verdict to show it.
+//     atanh(tanh(x)) is a staircase of 1e-4 steps near -15), and so does a steep curve at the scale of the
+//     subnormals, which have one double between their two sides (x^0.001 goes from 0 at 0 to 0.47 at
+//     5e-324, over a box [0, 5e-324] that is CONTINUOUS), with no verdict to show it.
 //  2. Empty (lo > hi, always PARTIAL; isEmpty tests it) means NaN at every point of the box: skip it,
 //     do not bisect it.
 //  3. PARTIAL does not mean "a pole is here". It also appears at defined points: gamma near its poles (a
@@ -25,13 +27,15 @@
 //     structure and one-sided limits, or by bisection: a sign change whose sub-edge stays PARTIAL with an
 //     infinite bound down to machine width is a pole, one whose sub-edge becomes CONTINUOUS is a root.
 //  4. UNKNOWN, with bounds [-inf, inf], is: an integral that is not constant (a constant one, with no
-//     variable and no @param, is its number); a loop whose bounds depend on the variable, exceed the loop
+//     variable, no @param and no loop in a bound, is its number: with a loop in a bound it is UNKNOWN too);
+//     a loop whose bounds depend on the variable, exceed the loop
 //     budget or use a loop as a bound; choose, perm, gcd or lcm with a variable argument on a box that is
 //     not a point; root with an index that is not one number.
 //  5. A piecewise whose condition is not decided over the box is at most DEFINED, even where its pieces
 //     agree at the seam ({x < 1: x, 1} is continuous and is DEFINED over a box holding 1). A condition
 //     that is decided over the box (floor(x) < 5 over [1.5, 2.5]) caps nothing; one that may be NaN
-//     makes the answer PARTIAL.
+//     makes the answer PARTIAL, and one that is UNKNOWN makes it UNKNOWN ({integral(t = 0 to x, t) > 1:
+//     1, 2} over [1, 2] is UNKNOWN).
 //  6. Bounds are loose where an expression repeats its variable: a polynomial that cancels is 1 to 2
 //     times wider than its range, and much worse where the true range is tiny (x^3 - 2x + 1 over
 //     [1, 1.01] is 4.9 times). Use scalar samples to judge flatness and the twin for the verdict and for
@@ -44,7 +48,9 @@
 //     || lo > hi` to discard a cell, which is valid even under PARTIAL.
 //  8. The twin is proven against compileScalar and holds the same names, errors and loop budget. The
 //     budget is module-level (one evaluation at a time). Pass every declared variable's box: a variable
-//     with none is an empty box, so the answer is empty and PARTIAL, not a quiet point at 0. Compiling
+//     with none is an empty box, so what reads it is empty and PARTIAL, not a quiet point at 0. (A
+//     variable the expression does not read does not matter, and y^0 is [1, 1], PARTIAL, for
+//     Math.pow(NaN, 0) is 1.) Compiling
 //     folds constants; a constant that reads no @param is computed by the first evaluation that reaches it
 //     (so a constant integral in a branch no box reaches costs nothing), one that reads a @param is read
 //     at call time, and evaluation makes no object or closure of its own (a few scalar functions box a

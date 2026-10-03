@@ -152,6 +152,11 @@ describe('names resolve as the scalar compile resolves them', () => {
     expect(g(iv(), 1, 2, 3, 4)).toMatchObject({ v: CONTINUOUS })
     expect(within(g(iv(), 1, 2, 3, 4), 4, 6)).toBe(true)
     expect(g(iv())).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
+    // only a variable the expression reads makes the answer empty: y^0 is 1 whatever y is (Math.pow(NaN, 0) is 1), so it
+    // is [1, 1], partial, and an unread variable does not matter
+    expect(compileInterval(p('x + y^0'), ['x', 'y'], plain)(iv(), 1, 2)).toMatchObject({ v: PARTIAL })
+    expect(compileInterval(p('y^0'), ['y'], plain)(iv())).toEqual({ lo: 1, hi: 1, v: PARTIAL })
+    expect(compileInterval(p('x + 1'), ['x', 'y'], plain)(iv(), 1, 2).v).toBe(CONTINUOUS)
     // one end given is not a box either
     expect(g(iv(), 1, 2, 3)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
     expect(g(iv(), 1, 2, undefined, 4)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
@@ -224,6 +229,27 @@ describe('tight verdicts on simple boxes', () => {
     expect(at('sqrt(x^2 - 1)', ['x'], plain, -1, 1).v).toBe(PARTIAL)
   })
 
+  it('an exponent that is a whole number at run time is read as one, whatever the rational it was written as says', () => {
+    // 8153783306384/3*1046 is the rational 8528857338477664/3 and the double 2842952446159221 (odd): at x = -0 the scalar
+    // gives -0 for x^e, -Infinity for 1/x^e and -pi for atan2(x^e, -1); the twin said +0, [~1, Infinity] and [2.36, pi]
+    const E = '8153783306384/3*1046'
+    const scalar = (src: string): ((x: number) => number) => compileScalar(p(src), ['x'], plain)
+    expect(Object.is(scalar(`x^(${E})`)(-0), -0)).toBe(true)
+    expect(scalar(`1/x^(${E})`)(-0)).toBe(-Infinity)
+    expect(scalar(`atan2(x^(${E}), -1)`)(-0)).toBe(-Math.PI)
+    for (const [lo, hi] of [[-0, 1], [-1, -0], [-0, -0], [-0, 0], [0, -0], [-1, 0]]) {
+      for (const src of [`x^(${E})`, `1/x^(${E})`, `atan2(x^(${E}), -1)`, `sqrt(x^(${E}))`]) {
+        const f = scalar(src)
+        const r = at(src, ['x'], plain, lo, hi)
+        for (const x of [lo, hi, -0, 0, 0.5, -0.5, 1e-300, -1e-300, 1]) if (lo <= x && x <= hi && (x !== 0 || Object.is(x, lo) || Object.is(x, hi) || (lo < 0 && hi > 0))) must(r, f(x), () => `${src} over [${fmt(lo)}, ${fmt(hi)}] at ${fmt(x)} gives ${fmt(f(x))}, twin ${show(r)}`)
+      }
+    }
+    // the same for the exponents that make a whole number the other way, and for negative ones
+    for (const e of ['8153783306384/3*1046', '3391128647215/3*2119', '-8153783306384/3*1046', '-3391128647215/3*2119', '1904761218361/3*3683', '2968095572449/3*2891']) {
+      for (const src of [`x^(${e})`, `1/x^(${e})`, `atan2(x^(${e}), -1)`, `atan2(-1, x^(${e}))`, `x^(${e}) + 0`]) sweep1(src)
+    }
+  })
+
   it('degrees, a parameter, a user function and a constant product', () => {
     const r = at('sin(x)', ['x'], makeScope({ angle: 'degrees' }), 0, 90)
     expect(within(r, 0, 1)).toBe(true)
@@ -250,6 +276,17 @@ describe('tight verdicts on simple boxes', () => {
     expect(at('0/0', [], plain)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
     // -0 keeps its sign
     expect(Object.is(at('-0', [], plain).lo, -0)).toBe(true)
+  })
+
+  it('a CONTINUOUS verdict can sit over a steep floating-point step at the scale of the subnormals', () => {
+    // x^0.001 is continuous on [0, 5e-324], but the scalar goes from 0 at 0 to 0.47 at the next double (index.ts, item 1)
+    const f = compileScalar(p('x^0.001'), ['x'], plain)
+    expect(f(0)).toBe(0)
+    expect(f(5e-324)).toBeGreaterThan(0.47)
+    expect(f(5e-324)).toBeLessThan(0.48)
+    const r = at('x^0.001', ['x'], plain, 0, 5e-324)
+    expect(r.v).toBe(CONTINUOUS)
+    expect(r.lo <= 0 && r.hi >= f(5e-324)).toBe(true)
   })
 
   it('a literal odd root at 1e300 is the real root to within the library bound, not shifted by a widened exponent', () => {
@@ -307,6 +344,9 @@ describe('reserved constructs', () => {
     // and a decided condition over an operand that may be NaN still makes the piecewise partial
     expect(at('{sqrt(x) < 5: 1, 2}', ['x'], plain, -1, 1).v).toBe(PARTIAL)
     expect(at('{floor(sqrt(x)) < 5: x, 0}', ['x'], plain, -1, 1.5).v).toBe(PARTIAL)
+    // a condition that is UNKNOWN makes the answer UNKNOWN, and one that may be NaN makes it PARTIAL
+    expect(at('{integral(t = 0 to x, t) > 1: 1, 2}', ['x'], plain, 1, 2).v).toBe(UNKNOWN)
+    expect(at('{sqrt(x) > 1: 1, 2}', ['x'], plain, -1, 4).v).toBe(PARTIAL)
     // a decided condition whose operand is DEFINED and a piece that may jump: the weaker of the two
     expect(at('{floor(x) < 5: floor(2x), 0}', ['x'], plain, 1.2, 2.5).v).toBe(DEFINED)
   })
