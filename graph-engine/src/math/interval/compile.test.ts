@@ -135,6 +135,25 @@ describe('names resolve as the scalar compile resolves them', () => {
     expect(g(iv(), 2, 1)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
   })
 
+  it('a variable the call gives no box for is an empty box, not [0, 0]', () => {
+    // a forgotten y would otherwise be the single point 0, and x/y a quiet pole, x + y a quiet x
+    const g = compileInterval(p('x + y'), ['x', 'y'], plain)
+    expect(g(iv(), 1, 2)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
+    expect(g(iv(), 1, 2, 3, 4)).toMatchObject({ v: CONTINUOUS })
+    expect(within(g(iv(), 1, 2, 3, 4), 4, 6)).toBe(true)
+    expect(g(iv())).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
+    // one end given is not a box either
+    expect(g(iv(), 1, 2, 3)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
+    expect(g(iv(), 1, 2, undefined, 4)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
+    // each of three
+    const h = compileInterval(p('x + y + z'), ['x', 'y', 'z'], plain)
+    expect(h(iv(), 1, 2, 3, 4).v).toBe(PARTIAL)
+    expect(h(iv(), 1, 2, 3, 4, 5, 6).v).toBe(CONTINUOUS)
+    // a variable the expression never reads is still declared: its box is still asked for
+    expect(compileInterval(p('x'), ['x', 'y'], plain)(iv(), 1, 2).v).toBe(CONTINUOUS)
+    expect(at('2 + 3', [], plain)).toEqual({ lo: 5, hi: 5, v: CONTINUOUS })
+  })
+
   it('the output may be any Iv, and a compiled function can be called again and again', () => {
     const g = compileInterval(p('x^2'), ['x'], plain)
     const out = iv()

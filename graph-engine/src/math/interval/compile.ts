@@ -734,7 +734,10 @@ export function compileInterval(expr: Expr, vars: readonly string[], scope: Math
   const root = build(expr, bindVars(bound, 0), ctx)
   settle(root, ctx)
   const [x, y, z] = inputs
-  return (out, xLo = 0, xHi = 0, yLo = 0, yHi = 0, zLo = 0, zHi = 0) => {
+  // A declared variable the call gives no box for is an empty box (NaN ends, which setBox turns into
+  // the empty interval, PARTIAL), so a forgotten one shows in the answer; defaulting it to [0, 0] made
+  // x / y a pole and x + y a quiet x, with nothing to say a box was missing.
+  return (out, xLo = NaN, xHi = NaN, yLo = NaN, yHi = NaN, zLo = NaN, zHi = NaN) => {
     budget.used = 0
     budget.depth = 0
     if (x) setBox(x, xLo, xHi)
