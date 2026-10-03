@@ -112,9 +112,18 @@ export function div(out: Iv, a: Iv, b: Iv): Iv {
 // between that double and 0 exists to exceed it), which keeps the side's real
 // limit and its true sign. The scalar's own value at each zero the box holds is
 // hulled in as well (see sidesPole).
-export function sides(out: Iv, a: Iv, f: (x: number, p: number) => number, at0: number, rel: number = LIB, p = 0): Iv {
+//
+// `zeros` says what zero f can give, so that an extreme that is exactly 0 is not widened past it (see
+// keepZeros): ZERO_WIDEN (the default) widens it like any other; ZERO_EVEN is an f that is never below +0 and
+// whose zero is +0 (x^2, |x|, an even root); ZERO_ODD is an f whose zero has the sign of the input (x^3, 1/x^3,
+// an odd root, whose underflow keeps it).
+export const ZERO_WIDEN = 0
+export const ZERO_EVEN = 1
+export const ZERO_ODD = 2
+
+export function sides(out: Iv, a: Iv, f: (x: number, p: number) => number, at0: number, rel: number = LIB, p = 0, zeros = ZERO_WIDEN): Iv {
   if (isEmpty(a)) return setEmpty(out)
-  if (Number.isNaN(at0) && a.lo <= 0 && 0 <= a.hi) return sidesPole(out, a, f, rel, p)
+  if (Number.isNaN(at0) && a.lo <= 0 && 0 <= a.hi) return sidesPole(out, a, f, rel, p, zeros)
   const x = f(a.lo, p)
   const y = f(a.hi, p)
   let lo = Math.min(x, y)
@@ -124,54 +133,55 @@ export function sides(out: Iv, a: Iv, f: (x: number, p: number) => number, at0: 
     hi = Math.max(hi, at0)
   }
   const v: Verdict = lo !== lo || hi !== hi ? worst(a.v, PARTIAL) : a.v
+  // what the box says about the zeros, read before `out` (which may be `a`) is written
+  const ends = zeros !== ZERO_WIDEN && (lo === 0 || hi === 0) ? boxEnds(a) : -1
   // A NaN end (f undefined there) is no bound; `set` turns it into -inf / +inf.
-  return widen(out, a, f, p, lo, hi, v, rel)
+  set(out, down(lo, rel), up(hi, rel), v)
+  if (ends >= 0) keepZeros(out, zeros, ends, lo === 0, hi === 0)
+  return out
 }
 
-// The signed zeros f gives over the box a, as bits (1: +0, 2: -0), from the values at the ends, at the doubles
-// nearest 0 on each side the box reaches, and at +0 and -0 where it holds both. f is monotone on each side, so
-// the values between those points lie between theirs, and the sign of a zero that underflow makes (x^3 for a
-// tiny x has the sign of x) is the sign at the nearest point.
-function zerosOf(a: Iv, f: (x: number, p: number) => number, p: number): number {
+// Which side of zero the box a lies wholly on, as bits: 1 when it holds no -0 and nothing below (a >= +0), 2
+// when it holds no +0 and nothing above (a <= -0). A box whose ends are +0 and -0 holds both zeros: neither.
+function boxEnds(a: Iv): number {
   const lo = a.lo
   const hi = a.hi
-  let z = zeroSign(f(lo, p)) | zeroSign(f(hi, p))
-  if (lo < 0 && hi >= 0) z |= zeroSign(f(-Number.MIN_VALUE, p))
-  if (hi > 0 && lo <= 0) z |= zeroSign(f(Number.MIN_VALUE, p))
-  if (lo < 0 && hi > 0) z |= zeroSign(f(0, p)) | zeroSign(f(-0, p))
-  return z
+  return (lo > 0 || (Object.is(lo, 0) && !Object.is(hi, -0)) ? 1 : 0) | (hi < 0 || (Object.is(hi, -0) && !Object.is(lo, 0)) ? 2 : 0)
 }
 
-function zeroSign(x: number): number {
-  return x !== 0 ? 0 : 1 / x > 0 ? 1 : 2
-}
-
-// [lo, hi], the extremes of f over a, widened outward by `rel` (the library's own non-monotonicity), except
-// that an extreme that is exactly 0 is kept. Widening has nothing to cover there: a zero extreme is a value f
-// gives, not a rounding of one (and f never goes below +0 for an even power, abs or an even root, whose
-// floor is 0). A floor of -5e-324 under x^2 takes sqrt(x^2) out of its domain over a box where the scalar is
-// defined at every point; one is moved off zero only where the zero is not alone.
+// An extreme of f that is exactly 0 is not widened (`out` was written widened, and this takes the zero back).
+// Widening has nothing to cover there: 0 is a value f gives, not a rounding of one, and a floor of -5e-324
+// under x^2 takes sqrt(x^2) out of its domain over a box where the scalar is defined at every point.
 //
 // The zero extreme claims its sign (the zero-bound invariant, compose.testkit `must`): a bottom of +0 says no
 // -0 occurs, a top of -0 says no +0 occurs, a bottom of -0 under a positive top says no +0 and a top of +0 over
-// a negative bottom says no -0 (1 / the box, sqrt and atan2 read it). So an extreme that is zero is kept only
-// when f gives one signed zero over the box: that zero, whichever sign of zero the extreme came from. When f
-// gives both (x^3 over [-0, 2]: -0 at the end, +0 for a tiny positive), a bottom or top that is a zero moves to
-// the nearest double past it, which holds both; a box whose two extremes are zeros is the pair -0, +0.
-function widen(out: Iv, a: Iv, f: (x: number, p: number) => number, p: number, lo: number, hi: number, v: Verdict, rel: number): Iv {
-  let l = down(lo, rel)
-  let h = up(hi, rel)
-  if (lo === 0 || hi === 0) {
-    const z = zerosOf(a, f, p)
-    if (z === 1 || z === 2) {
-      if (lo === 0) l = z === 1 ? 0 : -0
-      if (hi === 0) h = z === 1 ? 0 : -0
-    } else if (z === 3 && lo === 0 && hi === 0) {
-      l = -0
-      h = 0
-    }
+// a negative bottom says no -0 (1 / the box, sqrt and atan2 read it). So it is kept only where f does not give
+// the other zero. An even f gives +0 and nothing else, so a zero extreme is +0 (and a zero top means f is +0
+// everywhere). An odd f gives the zero of the input's sign, so the bottom is +0 only over a box that holds
+// nothing below +0 (ends bit 1), the top is -0 only over one that holds nothing above -0 (ends bit 2), a box
+// that gives only zeros is the zero it gives or, when it holds both signs, the pair -0, +0; otherwise
+// (x^3 over [-0, 2]: -0 at the end, +0 for a tiny positive) the extreme stays widened past zero, which
+// holds both.
+function keepZeros(out: Iv, zeros: number, ends: number, loZero: boolean, hiZero: boolean): void {
+  if (zeros === ZERO_EVEN) {
+    if (loZero) out.lo = 0
+    if (hiZero) out.hi = 0
+    return
   }
-  return set(out, l, h, v)
+  if (loZero && hiZero) {
+    if ((ends & 1) !== 0) {
+      out.lo = 0
+      out.hi = 0
+    } else if ((ends & 2) !== 0) {
+      out.lo = -0
+      out.hi = -0
+    } else {
+      out.lo = -0
+      out.hi = 0
+    }
+  } else if (loZero) {
+    if ((ends & 1) !== 0) out.lo = 0
+  } else if ((ends & 2) !== 0) out.hi = -0
 }
 
 // `sides` for a pole or hole at 0 that the box reaches (see above): always
@@ -184,7 +194,7 @@ function widen(out: Iv, a: Iv, f: (x: number, p: number) => number, p: number, l
 // strictly inside may be either sign, so f(+0) and f(-0) both count (they differ:
 // Math.pow(-0, -1) is -Infinity). A NaN value at a zero adds nothing (a partial
 // verdict covers it), and an answer is empty only when every value is NaN.
-function sidesPole(out: Iv, a: Iv, f: (x: number, p: number) => number, rel: number, p: number): Iv {
+function sidesPole(out: Iv, a: Iv, f: (x: number, p: number) => number, rel: number, p: number, zeros: number): Iv {
   const v = worst(a.v, PARTIAL)
   let lo: number
   let hi: number
@@ -237,7 +247,10 @@ function sidesPole(out: Iv, a: Iv, f: (x: number, p: number) => number, rel: num
     }
   }
   if (lo > hi) return setEmpty(out)
-  return widen(out, a, f, p, lo, hi, v, rel)
+  const ends = zeros !== ZERO_WIDEN && (lo === 0 || hi === 0) ? boxEnds(a) : -1
+  set(out, down(lo, rel), up(hi, rel), v)
+  if (ends >= 0) keepZeros(out, zeros, ends, lo === 0, hi === 0)
+  return out
 }
 
 // x^n for a whole n (the scalar compile's Math.pow).
@@ -246,7 +259,7 @@ export function powInt(out: Iv, a: Iv, n: number): Iv {
   // still gives [1, 1] (a.v is partial then)
   if (n === 0) return set(out, 1, 1, a.v)
   if (isEmpty(a)) return setEmpty(out)
-  return sides(out, a, Math.pow, n > 0 ? 0 : Number.NaN, LIB, n)
+  return sides(out, a, Math.pow, n > 0 ? 0 : Number.NaN, LIB, n, n % 2 === 0 ? ZERO_EVEN : ZERO_ODD)
 }
 
 // x^e for a real, non-integer e that is not a literal odd root: defined for
@@ -289,22 +302,35 @@ function oddRootEven(x: number, e: number): number {
   return x < 0 ? Math.pow(-x, e) : Math.pow(x, e)
 }
 
+// What zero oddRootEven and oddRootOdd give (see keepZeros): oddRootEven is never below +0 and gives +0; for a
+// negative exponent both give a zero only at an infinity, where oddRootOdd has the sign of the input; for
+// 0 < e < 1 oddRootOdd gives a zero only at +-0, which Math.pow(-0, e) makes +0; for e >= 1 it gives -0 for a
+// tiny negative that underflows and +0 at -0 (and -0 at -0 for e = 1), so there it is neither and is widened.
+function oddRootZeros(pOdd: boolean, e: number): number {
+  if (!pOdd) return ZERO_EVEN
+  if (e < 0) return ZERO_ODD
+  return e < 1 ? ZERO_EVEN : ZERO_WIDEN
+}
+
 // x^(p/q) for a literal ratio with q odd: realOddPow, monotone on each side of 0.
 export function powOddRoot(out: Iv, a: Iv, e: number, pOdd: boolean): Iv {
-  return sides(out, a, pOdd ? oddRootOdd : oddRootEven, e > 0 ? 0 : Number.NaN, LIB, e)
+  return sides(out, a, pOdd ? oddRootOdd : oddRootEven, e > 0 ? 0 : Number.NaN, LIB, e, oddRootZeros(pOdd, e))
 }
 
 // Scratch for the one-whole-number path of powGeneral: the negative part of the base and its power.
 const NEG_BASE = iv()
 const NEG_POW = iv()
 
-// x^y over a base x in [0, top] (top >= +0, possibly Infinity) and an exponent box b with finite ends.
+// x^y over a base x in [0, top] (top is a.hi, or +0 when that is -0; possibly Infinity) and an exponent box b with
+// finite ends. (It takes the boxes, not their ends: a double passed to a function that is not inlined is boxed,
+// an allocation per call.)
 // On x > 0 the power is monotone in each variable, so its extremes are at the corners, and the corners
 // at the base 0 are the values Math.pow(+0, y) takes: 0 for y > 0, Infinity for y < 0, 1 at y = 0 (inside
 // the range the corners span). The power is never negative, so a floor that the widening takes below 0
 // is 0, and a ceiling that is exactly 0 is a value (every corner underflowed or is 0): a bound that is a
 // zero here is +0, which is what Math.pow gives. Reads b before it writes out.
-function powFromZero(out: Iv, top: number, b: Iv, v: Verdict): Iv {
+function powFromZero(out: Iv, a: Iv, b: Iv, v: Verdict): Iv {
+  const top = a.hi > 0 ? a.hi : 0
   const c1 = Math.pow(0, b.lo)
   const c2 = Math.pow(0, b.hi)
   const c3 = Math.pow(top, b.lo)
@@ -321,7 +347,7 @@ function powFromZero(out: Iv, top: number, b: Iv, v: Verdict): Iv {
 function powNoWhole(out: Iv, a: Iv, b: Iv): Iv {
   if (a.hi < 0) return setEmpty(out)
   const v = worst(a.v, b.v)
-  return powFromZero(out, a.hi > 0 ? a.hi : 0, b, a.lo < 0 || b.hi < 0 ? worst(v, PARTIAL) : v)
+  return powFromZero(out, a, b, a.lo < 0 || b.hi < 0 ? worst(v, PARTIAL) : v)
 }
 
 // ... and with exactly one whole number n in the exponent box (n = ceil(b.lo), and n + 1 is past b.hi),
@@ -331,21 +357,19 @@ function powNoWhole(out: Iv, a: Iv, b: Iv): Iv {
 // would put a zero bound beside values of the other sign of zero (a bottom -0 under a positive top denies
 // the +0 the part from zero gives, and a top +0 over a negative bottom denies a -0), so it moves such a
 // bound to the nearest double past zero, as piecewise's union does. Reads a and b before it writes out.
-function powOneWhole(out: Iv, a: Iv, b: Iv, n: number): Iv {
-  const lo = a.lo
-  const hi = a.hi
+function powOneWhole(out: Iv, a: Iv, b: Iv): Iv {
   const v = worst(worst(a.v, b.v), PARTIAL)
-  NEG_BASE.lo = lo
-  NEG_BASE.hi = hi < 0 ? hi : -0
+  NEG_BASE.lo = a.lo
+  NEG_BASE.hi = a.hi < 0 ? a.hi : -0
   NEG_BASE.v = a.v
-  powInt(NEG_POW, NEG_BASE, n)
-  if (hi < 0) {
+  powInt(NEG_POW, NEG_BASE, Math.ceil(b.lo))
+  if (a.hi < 0) {
     out.lo = NEG_POW.lo
     out.hi = NEG_POW.hi
     out.v = worst(NEG_POW.v, v)
     return out
   }
-  powFromZero(out, hi > 0 ? hi : 0, b, v)
+  powFromZero(out, a, b, v)
   hull(out, NEG_POW)
   if (Object.is(out.lo, -0) && out.hi > 0) out.lo = -Number.MIN_VALUE
   if (Object.is(out.hi, 0) && out.lo < 0) out.hi = Number.MIN_VALUE
@@ -372,7 +396,7 @@ export function powGeneral(out: Iv, a: Iv, b: Iv): Iv {
     if (a.lo > -Infinity) {
       const n = Math.ceil(b.lo)
       if (n > b.hi) return powNoWhole(out, a, b)
-      if (a.lo < 0 && n + 1 > b.hi) return powOneWhole(out, a, b, n)
+      if (a.lo < 0 && n + 1 > b.hi) return powOneWhole(out, a, b)
     }
     return set(out, -Infinity, Infinity, worst(worst(a.v, b.v), PARTIAL))
   }

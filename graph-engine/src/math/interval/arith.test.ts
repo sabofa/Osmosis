@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CONTINUOUS, DEFINED, iv, PARTIAL, setBox, type Iv } from './core'
-import { add, div, mul, neg, powGeneral, powInt, powOddRoot, powReal, sides, sub } from './arith'
+import { add, div, mul, neg, powGeneral, powInt, powOddRoot, powReal, sides, sub, ZERO_EVEN } from './arith'
 import { realOddPow } from '../rational'
 import { must, pointsOf, withZeroSigns } from './compose.testkit'
 import { admits, mulberry32, pointsIn, randomBox, zerosIn } from './testkit'
@@ -587,7 +587,7 @@ describe('an extreme that is exactly zero is kept where the function never gives
     for (const [lo, hi] of [[-1, 1], [0, 2], [-0, 2], [-3, 0], [-3, -0], [-1e-300, 1e-300], [-5e-324, 5e-324], [-3, 3]]) {
       expect(plus(powInt(iv(), box(lo, hi), 2).lo), `x^2 over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
       expect(plus(powInt(iv(), box(lo, hi), 4).lo), `x^4 over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
-      expect(plus(sides(iv(), box(lo, hi), Math.abs, 0).lo), `abs over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
+      expect(plus(sides(iv(), box(lo, hi), Math.abs, 0, undefined, 0, ZERO_EVEN).lo), `abs over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
       expect(plus(powOddRoot(iv(), box(lo, hi), 2 / 3, false).lo), `x^(2/3) over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
     }
     // the floor is the least value, so a box that has no zero is as it was
@@ -676,7 +676,7 @@ describe('an extreme that is exactly zero is kept where the function never gives
             must(r, realOddPow(x, p / q, pOdd), () => `x^(${p}/${q}) over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)} gives ${fmt(realOddPow(x, p / q, pOdd))}, twin ${show(r)}`)
           }
         }
-        const abs = sides(iv(), box(l, h), Math.abs, 0)
+        const abs = sides(iv(), box(l, h), Math.abs, 0, undefined, 0, ZERO_EVEN)
         const cosh = sides(iv(), box(l, h), Math.cosh, 1)
         for (const x of pts) {
           checks += 2
@@ -731,6 +731,12 @@ describe('sides', () => {
 
   it('an overflowing end value keeps the verdict', () => {
     expect(sides(iv(), box(1, 800), Math.cosh, 1)).toMatchObject({ hi: Infinity, v: CONTINUOUS })
+  })
+
+  it('a zero extreme is widened past zero unless the caller says what zero f gives', () => {
+    // abs over [-1, 1] is [0, 1]; by default the floor 0 is widened like any other bound, and ZERO_EVEN keeps it
+    expect(sides(iv(), box(-1, 1), Math.abs, 0).lo).toBeLessThan(0)
+    expect(Object.is(sides(iv(), box(-1, 1), Math.abs, 0, undefined, 0, ZERO_EVEN).lo, 0)).toBe(true)
   })
 
   it('a function argument is passed through', () => {
