@@ -250,6 +250,63 @@ describe('lighting curve', () => {
       expect(half).toBeGreaterThan(15)
     })
 
+    it('is continuous in its inputs through the hold’s fade: chroma 0.004 to 0.022 and u 0.1 to 0.5, no step over 0.01 in OKLab a and b between neighbours (chroma 0.0005 and u 0.002 apart)', () => {
+      // The fade blended the held and unheld hue by ANGLE, which flips side where the tints point at the colour's opposite hue: a warm grey
+      // (0.6 / 0.012 / 80°) in a cast shadow went from 336° to 187° between two values of u 0.002 apart, a step of 0.067 in a and b.
+      const curve = makeCurve(resolvePaintParams({ seed: 1 }))
+      const ab = (lch: number[]) => {
+        const lab = lchToLab(lch[0], lch[1], lch[2])
+        return [lab[1], lab[2]]
+      }
+      const chromas: number[] = []
+      for (let k = 0; k <= 37; k++) chromas.push(0.004 + 0.0005 * k)
+      const us: number[] = []
+      for (let k = 0; k <= 200; k++) us.push(0.1 + 0.002 * k)
+      let worst = 0
+      let at = ''
+      let pairs = 0
+      for (const hue of [38, 80, 130, 260]) {
+        for (const nz of [-1, -0.5, 0, 0.5, 1]) {
+          for (const bounce of [0, 0.5]) {
+            for (const ambientShare of [0.25, 1]) {
+              const grid = chromas.map((c) => us.map((u) => ab(curve.lch({ local: lchToLab(0.6, c, hue), u, nz, bounce, ambientShare, noDev: true }))))
+              for (let i = 0; i < chromas.length; i++) {
+                for (let j = 0; j < us.length; j++) {
+                  for (const [di, dj] of [[1, 0], [0, 1]]) {
+                    if (i + di >= chromas.length || j + dj >= us.length) continue
+                    const step = Math.hypot(grid[i][j][0] - grid[i + di][j + dj][0], grid[i][j][1] - grid[i + di][j + dj][1])
+                    pairs++
+                    if (step > worst) {
+                      worst = step
+                      at = `hue ${hue}, nz ${nz}, bounce ${bounce}, ambient ${ambientShare}, chroma ${chromas[i].toFixed(4)}, u ${us[j].toFixed(3)}, ${di ? 'chroma' : 'u'} step`
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      expect(pairs).toBeGreaterThan(500_000)
+      expect(worst, at).toBeLessThanOrEqual(0.01)
+    })
+
+    it('still turns a hue that the tints point away from the colour’s own back toward it, from either side, to the capped arc (no flip at the opposite hue)', () => {
+      // a muted colour (chroma 0.02: held in full) whose tints and sky point almost opposite to it: the held hue is within shiftMax + 3 of its own
+      // hue at every u, and moves a little at a time (never a jump of more than 8° between u 0.002 apart)
+      const curve = makeCurve(DEFAULT_PAINT_PARAMS)
+      let prev = NaN
+      let worstJump = 0
+      for (let k = 0; k <= 400; k++) {
+        const u = 0.1 + 0.001 * k
+        const h = curve.lch({ local: lchToLab(0.5, 0.02, 80), u, nz: 1, ambientShare: 1, noDev: true })[2]
+        expect(Math.abs(arc(80, h)), `u ${u.toFixed(3)}: hue ${h.toFixed(1)}`).toBeLessThanOrEqual(15 + 7.5 + 1e-6) // (the half-tone accent adds up to 0.5 x the arc to 95°, 7.5°, to this colour's hue)
+        if (Number.isFinite(prev)) worstJump = Math.max(worstJump, Math.abs(arc(prev, h)))
+        prev = h
+      }
+      expect(worstJump).toBeLessThan(8)
+    })
+
     it('never touches lightness, however loud the colour terms: the swing and the hold turn the hue only', () => {
       const loud = resolvePaintParams({ curve: { tintCool: 0.1, skyTint: 0.1, accentMax: 0 }, environment: { chroma: 0.2, absorption: 1 } })
       const held = makeCurve(loud).lch({ local: TERRACOTTA, u: 0.24, nz: 1, ambientShare: 1, noDev: true })

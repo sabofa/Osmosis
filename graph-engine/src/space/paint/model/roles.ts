@@ -36,7 +36,7 @@ import { clamp, scratchU8, vcross, vlen, vnorm, type V3 } from './math'
 import { stepValue, chamferDist } from './planes'
 import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
 import { holdOf, pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
-import { ambientShare, effectiveValues, familyBound, holdFamily, newZoneSample, planSample } from './value'
+import { ambientShare, bandFollow, effectiveValues, familyBound, holdFamily, newZoneSample, planSample } from './value'
 import { bigMax, drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
 import { Z_CAST } from './zones'
 
@@ -228,8 +228,11 @@ function strokeColour(
   const px = set.position[3 * i], py = set.position[3 * i + 1], pz = set.position[3 * i + 2]
   // the plane's own short gradient: its mean plus planeGradient of the particle's own value
   const dev = curve.devU(px, py, pz)
-  const stepped = w.plane >= 0 ? stepValue(an.planes, w.plane, w.u + dev, params.edges.planeGradient) : w.u + dev
-  const lifted = stepped + (opts.du ?? 0)
+  // (inside the terminator's soft edge the stroke follows the plan's own value, the plane's step outside it: bandFollow)
+  const follow = w.gi >= 0 ? bandFollow(params.value.terminatorSoftness, an.plan.nl[w.gi], fc.g.shadow[w.gi] === 1, ground) : 0
+  const stepped = w.plane >= 0 ? stepValue(an.planes, w.plane, w.u + dev, params.edges.planeGradient, follow) : w.u + dev
+  // (and a role's own lightening or darkening, the scumble's ±0.1, fades with it: held to the family on one side only, it would put a step across the edge)
+  const lifted = stepped + (opts.du ?? 0) * (1 - follow)
   const u = clamp(w.gi >= 0 ? holdFamily(an.plan, w.gi, lifted) : lifted, 0.02, 0.99)
   const nz = vis.normal[3 * k + 2]
   const plane = w.plane >= 0 && !ground ? an.planes.planes[w.plane] : null

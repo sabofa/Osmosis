@@ -28,6 +28,9 @@ describe('the final picture of a sphere on a table, with the mix at its maxima',
   })
 
   it('had both families to compare, in strokes and in pixels: the totals of the grid above', () => {
+    // (the totals are over the tests above: with none of them run, or every frame filtered out, they would be Infinity, which passes every bound)
+    expect(total.frames, 'frames made').toBe(frames.length * GRID_VIEWS.length)
+    for (const n of [total.fewestShadow, total.fewestLight, total.fewestUnderShadow, total.fewestUnderLight]) expect(Number.isFinite(n)).toBe(true)
     expect(total.fewestShadow).toBeGreaterThanOrEqual(5)
     expect(total.fewestLight).toBeGreaterThanOrEqual(5)
     expect(total.fewestUnderShadow).toBeGreaterThanOrEqual(50)

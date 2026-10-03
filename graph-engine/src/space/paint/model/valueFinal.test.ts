@@ -553,23 +553,22 @@ describe('the value plan’s structure', () => {
     const zs = newZoneSample()
     const up = [0, 0, 1] as const
     const at = (nl: number, shadow: boolean) => planSample(P, curves, nl, shadow, up[0], up[1], up[2], 0, zs).u
-    // the middle of the fade (N·L 0.09: the cast weight is a half): the light end is the cap, the shadow end the plateau 0.32
-    expect(at(TS / 2 + CAST_FADE / 2, true)).toBeCloseTo((rMax + 0.32) / 2, 9)
+    // the middle of the fade (N·L 0.04: the cast weight is a half): the light end is the cap, the shadow end the plateau 0.32
+    expect(at(CAST_FADE / 2, true)).toBeCloseTo((rMax + 0.32) / 2, 9)
     // past the fade it is the plateau
-    expect(at(TS / 2 + CAST_FADE, true)).toBeCloseTo(0.32, 9)
+    expect(at(CAST_FADE, true)).toBeCloseTo(0.32, 9)
     expect(at(0.5, true)).toBeCloseTo(0.32, 9)
     // every fade step from the middle on is no lighter than the cap
-    for (let k = 0; k <= 20; k++) expect(at(TS / 2 + CAST_FADE / 2 + (k / 20) * (CAST_FADE / 2), true)).toBeLessThanOrEqual(rMax + 1e-9)
-    // at the start of the fade the shadow flag changes nothing, and no flag changes anything inside the terminator's edge
-    expect(at(TS / 2, true)).toBe(at(TS / 2, false))
+    for (let k = 0; k <= 20; k++) expect(at(CAST_FADE / 2 + (k / 20) * (CAST_FADE / 2), true)).toBeLessThanOrEqual(rMax + 1e-9)
+    // at the start of the fade (N·L 0) the shadow flag changes nothing, and nor does it on the shadow side of the terminator
     expect(at(0.0, true)).toBe(at(0.0, false))
     expect(at(-TS / 4, true)).toBe(at(-TS / 4, false))
     // the family of a pixel: the light family is where the weight of the light is over a half
     expect(isLightFamily(P, 0.2, false)).toBe(true)
     expect(isLightFamily(P, 0.2, true)).toBe(false)
     expect(isLightFamily(P, 0.0, false)).toBe(false)
-    expect(isLightFamily(P, TS / 2 + 0.6 * CAST_FADE, true)).toBe(false)
-    expect(isLightFamily(P, TS / 2 + 0.4 * CAST_FADE, true)).toBe(true)
+    expect(isLightFamily(P, 0.6 * CAST_FADE, true)).toBe(false)
+    expect(isLightFamily(P, 0.4 * CAST_FADE, true)).toBe(true)
   })
 
   it('names the saved preset’s old form band as ignored: the key is formBandNL now, in N·L units', () => {

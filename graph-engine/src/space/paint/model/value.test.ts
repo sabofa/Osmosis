@@ -12,6 +12,7 @@ import {
   CAST_FADE,
   canvasValue,
   CONTACT_FULL,
+  FAM_SHADOW,
   halfToneLowest,
   newZoneSample,
   planSample,
@@ -293,14 +294,35 @@ describe('the value plan: two families, divided by the terminator', () => {
     expect(cast(resolvePaintParams({ value: { castContact: 0.1 } }), 1).u).toBeCloseTo(0.1, 12)
   })
 
-  it('keeps the form shadow off the cast shadow near the terminator: the renderer flags N·L <= 0, and a graze is not a cast', () => {
-    const ts = P.value.terminatorSoftness
-    // inside the soft edge the shadow flag changes nothing: the edge is the form's
-    for (const nl of [-0.2, -0.04, 0, 0.02, ts / 2]) expect(plan(P, nl, { cast: true }).u).toBeCloseTo(plan(P, nl, { cast: false }).u, 12)
+  it('keeps the form shadow off the cast shadow: the renderer flags N·L <= 0, and the flag counts for something only past N·L 0', () => {
+    // on the shadow side of the terminator the shadow flag changes nothing: it is the form's
+    for (const nl of [-0.2, -0.04, 0]) expect(plan(P, nl, { cast: true }).u).toBeCloseTo(plan(P, nl, { cast: false }).u, 12)
     // past the fade it is the cast shadow, wholly
-    expect(plan(P, ts / 2 + CAST_FADE, { n: UP, cast: true }).u).toBeCloseTo(0.32, 12)
-    expect(plan(P, ts / 2 + CAST_FADE / 2, { n: UP, cast: true }).u).toBeGreaterThan(0.32)
-    expect(plan(P, ts / 2 + CAST_FADE / 2, { n: UP, cast: true }).u).toBeLessThan(plan(P, ts / 2 + CAST_FADE / 2, { n: UP, cast: false }).u)
+    expect(plan(P, CAST_FADE, { n: UP, cast: true }).u).toBeCloseTo(0.32, 12)
+    expect(plan(P, CAST_FADE / 2, { n: UP, cast: true }).u).toBeGreaterThan(0.32)
+    expect(plan(P, CAST_FADE / 2, { n: UP, cast: true }).u).toBeLessThan(plan(P, CAST_FADE / 2, { n: UP, cast: false }).u)
+  })
+
+  it('never softens a cast shadow with the terminator’s band: the gate is N·L 0 whatever the softness, and a ground has no terminator at all', () => {
+    const curves = (p: PaintParams) => compileCurves(p)
+    const at = (p: PaintParams, nl: number, shadow: boolean, ground: boolean) => planSample(p, curves(p), nl, shadow, 0, 0, 1, 0, newZoneSample(), ground)
+    // (a figure's pixel flagged as shadow at N·L 0.2: past the fade, so the cast plateau, at every softness, and nowhere near a half-tone)
+    for (const ts of [0.02, 0.1, 0.3, 0.6, 1]) {
+      const p = resolvePaintParams({ value: { terminatorSoftness: ts } })
+      const lit = at(p, 0.2, false, false)
+      const cast = at(p, 0.2, true, false)
+      expect(cast.u, `softness ${ts}`).toBeCloseTo(0.32, 12)
+      expect(cast.fam, `softness ${ts}`).toBe(FAM_SHADOW)
+      expect(cast.w[4], `softness ${ts}`).toBe(1)
+      expect(lit.u, `softness ${ts}`).toBeGreaterThan(0.45)
+      // a ground, flagged: wholly cast at ANY N·L (a flat table's N·L is the light's own elevation), even a graze, even the light under the horizon
+      for (const nl of [-0.3, 0, 0.02, 0.087, 0.174, 0.6]) {
+        const g = at(p, nl, true, true)
+        expect(g.u, `softness ${ts}, ground N·L ${nl}`).toBeCloseTo(0.32, 12)
+        expect(g.fam).toBe(FAM_SHADOW)
+        expect(g.w[4]).toBe(1)
+      }
+    }
   })
 
   it('takes the bounce away from the form shadow at a contact: the occlusion blocks the reflected light', () => {

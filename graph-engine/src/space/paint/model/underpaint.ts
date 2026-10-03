@@ -43,7 +43,7 @@ import { chamferDist, stepValue } from './planes'
 import { colourOfRecipe, newRecipe, type RecipeEnv } from './recipe'
 import { clamp, smooth } from './math'
 import type { PaintCtx } from './strokes'
-import { ambientShare, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, lightWeight, newZoneSample, planSample } from './value'
+import { ambientShare, castWeight, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, lightWeight, newZoneSample, planSample } from './value'
 import { toEye, unproject } from './view'
 
 // The strength of the brush-load mix on the underpainting, against a block-in stroke's (the spec's "reduced").
@@ -132,10 +132,15 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     owner[i] = m < 0 || (fc.ground[m] === 1 && full.shadow[i] !== 1) ? -1 : m
     if (owner[i] < 0) continue
     const nl = full.normal[3 * i] * lightDir[0] + full.normal[3 * i + 1] * lightDir[1] + full.normal[3 * i + 2] * lightDir[2]
-    // (the family a band pixel keeps if it ends with no recipe to be made from: its side of the terminator)
-    ownerFam[i] = Math.abs(nl) < ts / 2 ? FAM_BAND : lightWeight(ts, nl, full.shadow[i] === 1) > 0.5 ? FAM_LIGHT : FAM_SHADOW
+    // (the family a band pixel keeps if it ends with no recipe to be made from: its side of the terminator.) A cast shadow, and a
+    // ground (which has no terminator), is never in the band: it is the shadow family's, as the plan makes it
+    const shadow = full.shadow[i] === 1
+    const ground = fc.ground[m] === 1
+    const cast = castWeight(nl, shadow, ground) >= 0.5
+    ownerFam[i] = !cast && !ground && Math.abs(nl) < ts / 2 ? FAM_BAND : lightWeight(ts, nl, shadow, ground) > 0.5 ? FAM_LIGHT : FAM_SHADOW
   }
-  const inBand = (i: number): boolean => Math.abs(plan.nl[i]) < ts / 2
+  const inBand = (i: number): boolean =>
+    Math.abs(plan.nl[i]) < ts / 2 && fc.ground[a.mark[i]] !== 1 && castWeight(plan.nl[i], a.shadow[i] === 1) < 0.5
   const paints = (i: number): number => {
     const m = a.mark[i]
     return m < 0 || (fc.ground[m] === 1 && a.shadow[i] !== 1) ? -1 : m
@@ -314,7 +319,7 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     // the plan at the pixel's own normal, at the full G-buffer's resolution (the occlusion is the analysis'), and the surface
     // point's deviation: the value the strokes' plan gives it, before the plane's own step
     const ai = Math.min(ah - 1, Math.floor(y / stride)) * aw + Math.min(aw - 1, Math.floor(x / stride))
-    planSample(params, plan.curves, nl, full.shadow[i] === 1, nx, ny, nz, plan.ao[ai], zs)
+    planSample(params, plan.curves, nl, full.shadow[i] === 1, nx, ny, nz, plan.ao[ai], zs, fc.ground[owner[i]] === 1)
     unproject(fc, (x + 0.5) * full.scale, (y + 0.5) * full.scale, full.depth[i], pt)
     // (the plan's value itself, with the surface point's seeded deviation: no plane step, which would put the planes' own step
     // across the terminator back; the ring blends it into the lattice's)
