@@ -58,6 +58,7 @@ const BASE_FUNCS: [string, MathFunction][] = [
   ['cn', fn([], 'n')],
 ]
 const PRIMEABLE = ['f', 'w', 'sq', 'kk', 'pw', 'tr', 'dv', 'fl', 'ex']
+const PRIMEABLE_TAME = ['f', 'w', 'sq', 'kk', 'pw', 'tr', 'dv', 'fl']
 const A_VALUES = [2, -0, 0, Number.NaN, Infinity, -3, 0.5, 1e300, -1]
 // loop counts: the budget has tests of its own (compile.test.ts), so no loop here runs long
 const N_VALUES = [0, 1, 2, 3, 2.5, -4, Number.NaN, -0, 100001]
@@ -102,6 +103,13 @@ export function fuzzScope(rand: Rand, tame = false): FuzzScope {
 // ---------------------------------------------------------------------------
 
 const UNARY = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'sqrt', 'abs', 'exp', 'ln', 'log', 'floor', 'ceil', 'round', 'sign', 'gamma', 'erf', 'erfc', 'cbrt', 'step']
+// Without the functions that saturate or grow so fast that the scalar's rounding is a step function of x where
+// they meet an inverse or a trig function (atanh of tanh near 1: steps of 1e-16 amplified a thousandfold; sin of
+// sinh of -27, whose argument moves a thousandth of a radian per ulp): for a continuity sweep, whose search
+// cannot tell such a staircase from a jump.
+const UNARY_TAME = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'asinh', 'acosh', 'sqrt', 'abs', 'ln', 'log', 'floor', 'ceil', 'round', 'sign', 'cbrt', 'step']
+const USER_FUNCTIONS = ['f', 'g', 'drop', 'w', 'sq', 'kk', 'pw', 'lp', 'tr', 'dv', 'fl', 'ex']
+const USER_FUNCTIONS_TAME = ['f', 'g', 'drop', 'w', 'sq', 'kk', 'pw', 'lp', 'tr', 'dv', 'fl']
 const BINARY = ['atan2', 'log', 'mod', 'min', 'max', 'hypot', 'choose', 'perm', 'gcd', 'lcm', 'root']
 const CMP = ['__lt', '__le', '__gt', '__ge', '__eq', '__ne']
 const LITS = [0, 1, -1, 2, 3, 0.5, -0.5, 10, 1e-300, 1e300, 5e-324, 4, 6, 0.25]
@@ -111,7 +119,7 @@ const LOOPVARS = ['i', 'j', 'k', 'm']
 const bin = (op: '+' | '-' | '*' | '/' | '^', left: Expr, right: Expr): Expr => ({ kind: 'binary', op, left, right })
 
 // What a generated expression may read: the input variables, the loop variables in scope, how many
-// loops it may still open, and whether its literals are the tame ones (see A_TAME).
+// loops it may still open, and whether it is a tame one (the literals of A_TAME, and the functions of UNARY_TAME).
 interface Ctx {
   vars: string[]
   bound: string[]
@@ -193,7 +201,7 @@ function gen(rand: Rand, d: number, c: Ctx): Expr {
     return bin('^', base, gen(rand, d - 1, c))
   }
   if (r < 27) return neg(gen(rand, d - 1, c))
-  if (r < 43) return call(pick(rand, UNARY), gen(rand, d - 1, c))
+  if (r < 43) return call(pick(rand, c.tame ? UNARY_TAME : UNARY), gen(rand, d - 1, c))
   if (r < 50) {
     const name = pick(rand, BINARY)
     if (name === 'root') return call('root', rand() < 0.7 ? num(pick(rand, [-3, -2, 1, 2, 3, 4, 5])) : gen(rand, d - 1, c), gen(rand, d - 1, c))
@@ -201,7 +209,7 @@ function gen(rand: Rand, d: number, c: Ctx): Expr {
     return call(name, gen(rand, d - 1, c), gen(rand, d - 1, c))
   }
   if (r < 52) return call(pick(rand, ['min', 'max', 'hypot']), gen(rand, d - 1, c), gen(rand, d - 1, c), gen(rand, d - 1, c))
-  if (r < 54) return call('__factorial', gen(rand, d - 1, c))
+  if (r < 54 && !c.tame) return call('__factorial', gen(rand, d - 1, c))
   if (r < 57) return rand() < 0.7 ? call(pick(rand, CMP), gen(rand, d - 1, c), gen(rand, d - 1, c)) : condition(rand, d, c)
   if (r < 67) {
     const pieces = 1 + Math.floor(rand() * 3)
@@ -211,7 +219,7 @@ function gen(rand: Rand, d: number, c: Ctx): Expr {
     return call('__piecewise', ...args)
   }
   if (r < 76) {
-    const which = pick(rand, ['f', 'g', 'drop', 'w', 'sq', 'kk', 'pw', 'lp', 'tr', 'dv', 'fl', 'ex'])
+    const which = pick(rand, c.tame ? USER_FUNCTIONS_TAME : USER_FUNCTIONS)
     if (which === 'g' || which === 'drop') return call(which, gen(rand, d - 1, c), gen(rand, d - 1, c))
     return call(which, gen(rand, d - 1, c))
   }
@@ -219,7 +227,7 @@ function gen(rand: Rand, d: number, c: Ctx): Expr {
     // a value called with one argument: a product
     return call(pick(rand, ['k', 'a', 'pi', 'cp', 'cl', ...c.vars, ...c.bound]), gen(rand, d - 1, c))
   }
-  if (r < 84) return call('__prime', variable(pick(rand, PRIMEABLE)), num(rand() < 0.75 ? 1 : 2), gen(rand, d - 1, c))
+  if (r < 84) return call('__prime', variable(pick(rand, c.tame ? PRIMEABLE_TAME : PRIMEABLE)), num(rand() < 0.75 ? 1 : 2), gen(rand, d - 1, c))
   if (r < 93 && c.loops > 0) {
     const [lo, hi] = loopBounds(rand, c)
     const k = pick(rand, LOOPVARS)
