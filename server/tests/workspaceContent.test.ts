@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { openTestDb } from "./helpers.js";
 import { DomainError } from "../src/domain/errors.js";
 import { registerFileType } from "../src/domain/workspace/fileTypes.js";
-import { createNode, destroyNode, placeNode } from "../src/domain/workspace/graph.js";
+import { createNode, destroyNode, placeNode, purgeNode, restoreNode } from "../src/domain/workspace/graph.js";
 import { readContent, saveContent, appendContent, listRevisions } from "../src/domain/workspace/content.js";
 import { syncAssetFiles } from "../src/domain/workspace/assetFiles.js";
 import { listRoots, listTrash, getNodeDetail } from "../src/domain/workspace/reads.js";
@@ -255,6 +255,46 @@ describe("asset files in depth", () => {
     // each title works as the default placement name
     const folder = createNode(db, { kind: "folder", title: "inbox" }).node;
     for (const id of Object.keys(titles)) placeNode(db, { container_id: folder.id, child_id: id });
+  });
+
+  it("refuses to purge the wrapper of an upload that still exists, and the upload stays listed", () => {
+    const db = openTestDb();
+    addAsset(db, "a1", "Ebbing ch3");
+    syncAssetFiles(db);
+    destroyNode(db, "asset:a1");
+    const err = failure(() => purgeNode(db, "asset:a1"));
+    expect(err.code).toBe("asset_in_use");
+    expect(err.message).toMatch(/delete the upload/i);
+    expect(count(db, "ws_node")).toBe(1);
+    expect(count(db, "ws_file")).toBe(1);
+    expect(listTrash(db).map((n) => n.id)).toEqual(["asset:a1"]);
+    expect(restoreNode(db, "asset:a1").restored).toBe("asset:a1");
+    expect(listRoots(db).unplaced.map((n) => n.id)).toEqual(["asset:a1"]);
+  });
+
+  it("purges an upload's wrapper once the upload is deleted, and a later sync does not bring it back", () => {
+    const db = openTestDb();
+    addAsset(db, "a1", "one");
+    addAsset(db, "a2", "two");
+    syncAssetFiles(db);
+    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
+    syncAssetFiles(db);
+    expect(nodeRow(db, "asset:a1").trashed_at).not.toBeNull();
+    expect(purgeNode(db, "asset:a1")).toEqual({ purged: "asset:a1" });
+    expect(db.prepare("SELECT 1 FROM ws_node WHERE id = 'asset:a1'").get()).toBeUndefined();
+    expect(listRoots(db).unplaced.map((n) => n.id)).toEqual(["asset:a2"]);
+    syncAssetFiles(db);
+    expect(count(db, "ws_node")).toBe(1);
+    expect(listTrash(db)).toEqual([]);
+  });
+
+  it("only the canonical wrapper is protected: a file that merely points at a live asset can be purged", () => {
+    const db = openTestDb();
+    addAsset(db, "a1", "one");
+    const n = createNode(db, { kind: "file", title: "scan", file: { type: "asset", asset_id: "a1" } }).node;
+    destroyNode(db, n.id);
+    expect(purgeNode(db, n.id)).toEqual({ purged: n.id });
+    expect(db.prepare("SELECT 1 FROM asset WHERE id = 'a1'").get()).toBeDefined();
   });
 
   it("runs inside a caller's transaction and rolls back with it", () => {

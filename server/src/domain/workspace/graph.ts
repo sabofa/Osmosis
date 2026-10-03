@@ -357,11 +357,26 @@ export function restoreNode(db: DatabaseSync, nodeId: string): { restored: strin
 
 // Deletes a trashed node for good. Its placements, file and revisions go with
 // it (ON DELETE CASCADE); a child placed only in it is left unplaced, not
-// destroyed.
+// destroyed. The one refusal beyond "must be trashed" is an upload's wrapper
+// while the upload exists (asset_in_use).
 export function purgeNode(db: DatabaseSync, nodeId: string): { purged: string } {
   return inSavepoint(db, "ws_purge_node", () => {
     const node = getNode(db, nodeId);
     if (!node.trashed_at) throw new DomainError("not_trashed", `"${node.title}" must be in the trash before it is purged.`);
+    // Every upload has one wrapper (`asset:<id>`, assetFiles.ts) for as long as
+    // the upload exists, and the next sync would only make it again. Purging
+    // it would break that relation, so it waits for the upload to be deleted
+    // (which unlinks the wrapper and trashes it). A file that merely points at
+    // an asset is not the wrapper and purges as usual.
+    const wraps = db
+      .prepare("SELECT 1 FROM ws_file f JOIN asset a ON a.id = f.asset_id WHERE f.node_id = ? AND f.node_id = 'asset:' || a.id")
+      .get(node.id);
+    if (wraps) {
+      throw new DomainError(
+        "asset_in_use",
+        `"${node.title}" is an upload that still exists, so it can't be purged. Delete the upload (Settings → Documents) to remove it for good.`
+      );
+    }
     const containers = db.prepare("SELECT container_id FROM ws_placement WHERE child_id = ?").all(node.id) as { container_id: string }[];
     stamp(db, ...containers.map((c) => c.container_id));
     db.prepare("DELETE FROM ws_node WHERE id = ?").run(node.id);
