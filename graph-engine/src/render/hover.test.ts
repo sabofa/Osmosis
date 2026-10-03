@@ -2,12 +2,18 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { HoverResolver } from './hover'
 import { Camera2D } from './camera2d'
-import type { Scene } from '../scene/types'
+import { chainOf } from '../scene/chains'
+import type { Scene, SceneObject, Vec2 } from '../scene/types'
 
 const HOVER_COLOR = 0xc65d22
 const BG_COLOR = 0xffffff
 const pixelToWorld = (px: number) => px * 0.01
 const CANVAS = 800
+
+// A one-chain curve through `points`, parametrised by position along them.
+function curveThrough(...points: Vec2[]): SceneObject {
+  return { kind: 'curve', id: { statement: 0, object: 'curve' }, breaks: [], chains: [chainOf(points, points.map((_, i) => i))] }
+}
 
 function resolveAt(resolver: HoverResolver, scene: Scene, camera: Camera2D, worldX: number, worldY: number) {
   const cursorScreen = camera.worldToScreen(worldX, worldY, CANVAS, CANVAS)
@@ -19,7 +25,7 @@ describe('HoverResolver', () => {
   it('draws a guide line down to the current bottom of the view', () => {
     const camera = new Camera2D(CANVAS, CANVAS) // default viewHeight=12, centered (0,0) -> bounds -6..6
     const scene: Scene = {
-      objects: [{ kind: 'curve', points: [{ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 }] }],
+      objects: [curveThrough({ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 })],
       errors: [],
       regression: null,
     }
@@ -44,7 +50,7 @@ describe('HoverResolver', () => {
   it('refreshGuideLine extends the line to new bounds without a full re-resolve', () => {
     const camera = new Camera2D(CANVAS, CANVAS)
     const scene: Scene = {
-      objects: [{ kind: 'curve', points: [{ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 }] }],
+      objects: [curveThrough({ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 })],
       errors: [],
       regression: null,
     }
@@ -79,7 +85,7 @@ describe('feature snapping', () => {
     const camera = new Camera2D(CANVAS, CANVAS)
     const scene: Scene = {
       objects: [
-        { kind: 'curve', points: [{ x: 0.9, y: 0.81 }, { x: 1.1, y: 1.21 }] },
+        curveThrough({ x: 0.9, y: 0.81 }, { x: 1.1, y: 1.21 }),
         { kind: 'point', label: null, position: { x: 1, y: 1 }, feature: 'local-min', exact: true },
       ],
       errors: [],
@@ -97,7 +103,7 @@ describe('feature snapping', () => {
   it('reports a plain curve reading as inexact', () => {
     const camera = new Camera2D(CANVAS, CANVAS)
     const scene: Scene = {
-      objects: [{ kind: 'curve', points: [{ x: -5, y: 2 }, { x: 5, y: 2 }] }],
+      objects: [curveThrough({ x: -5, y: 2 }, { x: 5, y: 2 })],
       errors: [],
       regression: null,
     }
@@ -125,7 +131,7 @@ describe('feature snapping', () => {
     const camera = new Camera2D(CANVAS, CANVAS)
     const scene: Scene = {
       objects: [
-        { kind: 'curve', points: [{ x: -5, y: -0.375 }, { x: 5, y: -0.375 }] },
+        curveThrough({ x: -5, y: -0.375 }, { x: 5, y: -0.375 }),
         { kind: 'point', label: null, position: { x: 0, y: 0.525 }, feature: 'local-max', exact: true },
       ],
       errors: [],
@@ -136,5 +142,63 @@ describe('feature snapping', () => {
     expect(info?.exact).toBe(false)
     expect(info?.feature).toBeFalsy()
     expect(info?.worldY).toBeCloseTo(-0.375, 6)
+  })
+})
+
+describe('chains and marks', () => {
+  // The end of one chain and the start of the next are separated by a break:
+  // nothing is drawn across it, so hovering the empty gap must not read a point
+  // on an invisible bridge.
+  it('does not scan across the gap between two chains', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        {
+          kind: 'curve', id: { statement: 0, object: 'curve' }, breaks: [{ at: 0, kind: 'pole' }],
+          chains: [chainOf([{ x: -5, y: 2 }, { x: -2, y: 2 }], [-5, -2]), chainOf([{ x: 2, y: 2 }, { x: 5, y: 2 }], [2, 5])],
+        },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    expect(resolveAt(resolver, scene, camera, 0, 2)).toBeNull()
+    const onChain = resolveAt(resolver, scene, camera, -3, 2)
+    expect(onChain?.worldX).toBeCloseTo(-3, 6)
+  })
+
+  it('scans the closing edge of a closed chain', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const square = chainOf([{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }], [0, 1, 2, 3], true)
+    const scene: Scene = {
+      objects: [{ kind: 'curve', id: { statement: 0, object: 'curve' }, breaks: [], chains: [square] }],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    // The left edge, from (0, 4) back to (0, 0), exists only because the chain is closed.
+    const info = resolveAt(resolver, scene, camera, 0, 2)
+    expect(info?.worldX).toBeCloseTo(0, 6)
+    expect(info?.worldY).toBeCloseTo(2, 6)
+  })
+
+  it('reads a mark like a point, exact when its position is analytic, with no guide line', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        curveThrough({ x: -5, y: 2 }, { x: 5, y: 2 }),
+        { kind: 'mark', id: { statement: 0, object: 'hole.0' }, at: { x: 1, y: 2.3 }, role: 'hole', fill: 'open', exact: true },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 1, 2.3)
+    expect(info?.exact).toBe(true)
+    expect(info?.worldX).toBeCloseTo(1, 10)
+    expect(info?.worldY).toBeCloseTo(2.3, 10)
+    expect(info?.feature).toBeNull()
+    // No guide line: a mark is read in place, so nothing but the hover dot is drawn.
+    expect(resolver.group.children.some((c) => c instanceof THREE.Line)).toBe(false)
   })
 })

@@ -1,9 +1,8 @@
 import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
 import { Camera2D } from './camera2d'
-import { clipLineToBounds } from './clipLine'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
-import { GeometryGroupManager, isGeometryKind, type GeometryKind } from './geometryGroup'
+import { GeometryGroupManager } from './geometryGroup'
 import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSegments } from './geometryMarks'
 import { GridRenderer } from './grid'
 import { markerShape, type MarkerShape } from './featureMarker'
@@ -11,6 +10,7 @@ import { HoverResolver, type HoverInfo } from './hover'
 import { clampedLabelPlacement } from './labelLayout'
 import { makeLabelSprite } from './labelSprite'
 import type { Bounds } from './marchingSquares'
+import { toRenderItems } from './renderItems'
 import type { Scene as GraphScene, SceneObject, Vec2 } from '../scene/types'
 
 export type { HoverInfo } from './hover'
@@ -103,6 +103,30 @@ function markerGeometry(shape: MarkerShape): THREE.CircleGeometry {
   }
 }
 
+// A 'mark' draws exactly as a label-less point: one Group of [background disc-
+// or-halo, coloured ring-or-fill] at the object's position, so the two share
+// build, in-place update and sizing code. They differ only in where the
+// position and the shape come from, and in the fallback colour (a mark belongs
+// to its curve, so it takes the curve colour, not the point colour).
+type PointLike = Extract<SceneObject, { kind: 'point' | 'mark' }>
+
+function isPointLike(obj: SceneObject): obj is PointLike {
+  return obj.kind === 'point' || obj.kind === 'mark'
+}
+
+function pointPosition(obj: PointLike): Vec2 {
+  return obj.kind === 'mark' ? obj.at : obj.position
+}
+
+// A feature point's appearance comes from its kind; an ordinary plotted point
+// still honours its own `style`; an open mark is a ring (its background disc
+// hides the curve under its centre) and a filled one a dot. 'ring' and
+// "outline" are the same picture, so they share a branch.
+function pointShape(obj: PointLike): MarkerShape {
+  if (obj.kind === 'mark') return obj.fill === 'open' ? 'ring' : 'dot'
+  return obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+}
+
 export interface SceneRendererOptions {
   // Colours to use instead of the theme's built-in palette (see palette.ts).
   palette?: Palette
@@ -173,12 +197,12 @@ export class SceneRenderer {
   private scene = new THREE.Scene()
   private camera2d: Camera2D
   private gridRenderer: GridRenderer
-  // curve/segment/segments/region: updated in place rather than disposed and
-  // rebuilt every rebuild, since those are the objects with real vertex
-  // counts and rebuild every frame during a drag — see geometryGroup.ts.
+  // curve/segment/segments/region render items: updated in place rather than
+  // disposed and rebuilt every rebuild, since those are the objects with real
+  // vertex counts and rebuild every frame during a drag — see geometryGroup.ts.
   private geometryGroupManager: GeometryGroupManager
-  // point/ray/animatedPoint — see the class comment above for the update
-  // strategy (points reused in place, ray/animatedPoint rebuilt).
+  // point/mark/ray/animatedPoint — see the class comment above for the update
+  // strategy (points and marks reused in place, ray/animatedPoint rebuilt).
   private miscGroup = new THREE.Group()
   private miscEntries: MiscEntry[] = []
   private hoverResolver: HoverResolver
@@ -435,63 +459,41 @@ export class SceneRenderer {
     this.needsRender = true
   }
 
-  // A constructed 'line' object is stored unclipped — it is a locus, true
-  // everywhere along itself, and how much of it to draw is a fact about the
-  // current view rather than about the figure. Clipping it here, against the
-  // camera's live bounds, is what keeps it correct under pan and zoom: the
-  // same stored object yields a different drawn segment each time the view
-  // moves, instead of a fixed-length stick sliding around the screen. A line
-  // that misses the view entirely simply drops out.
-  private clipConstructionLines(objects: SceneObject[]): SceneObject[] {
-    if (!objects.some((o) => o.kind === 'line')) return objects
-    const bounds = this.camera2d.getBounds()
-    const clipped: SceneObject[] = []
-    for (const obj of objects) {
-      if (obj.kind !== 'line') {
-        clipped.push(obj)
-        continue
-      }
-      const span = clipLineToBounds(obj.through, obj.direction, obj.extent, bounds)
-      if (span) clipped.push({ kind: 'segment', from: span[0], to: span[1], color: obj.color })
-    }
-    return clipped
-  }
-
+  // toRenderItems turns the scene into what this renderer draws: ribbons,
+  // regions, segments — and clips every unclipped 'line' against the camera's
+  // live bounds, which is what keeps a construction line or an asymptote
+  // correct under pan and zoom (see its comment). Everything it leaves in
+  // `misc` is point-like or annotation and is built by updateMiscGroup.
   setGraphScene(scene: GraphScene) {
     this.lastScene = scene
-    const objects = this.clipConstructionLines(scene.objects)
-    this.geometryGroupManager.update(
-      objects.filter((o): o is Extract<SceneObject, { kind: GeometryKind }> => isGeometryKind(o.kind)),
-      this.palette,
-      (px) => this.pixelToWorld(px)
-    )
-    this.updateMiscGroup(objects.filter((o) => !isGeometryKind(o.kind)))
+    const { geometry, misc } = toRenderItems(scene.objects, this.camera2d.getBounds())
+    this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px))
+    this.updateMiscGroup(misc)
     this.needsRender = true
   }
 
-  // See the class comment for the reuse policy per kind: 'point' updates its
-  // existing Group in place, everything contentKey knows how to key (ray,
-  // and the geometry-annotation marks below) skips rebuilding entirely when
-  // that key says nothing that matters changed, and 'animatedPoint' always
-  // rebuilds. Same index-match-by-position idea as geometryGroupManager
-  // .update, just over whole objects instead of vertex buffers.
+  // See the class comment for the reuse policy per kind: 'point' and 'mark'
+  // update their existing Group in place, everything contentKey knows how to
+  // key (ray, and the geometry-annotation marks below) skips rebuilding
+  // entirely when that key says nothing that matters changed, and
+  // 'animatedPoint' always rebuilds. Same index-match-by-position idea as
+  // geometryGroupManager.update, just over whole objects instead of vertex
+  // buffers.
   private updateMiscGroup(objects: SceneObject[]) {
     const next: MiscEntry[] = []
     this.animated = []
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i]
-      // A feature point's appearance comes from its kind; an ordinary plotted
-      // point still honours its own `style`. 'ring' and "outline" are the same
-      // picture, so they share a branch.
-      const shape: MarkerShape =
-        obj.kind !== 'point' ? 'dot' : obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
-      const outline = obj.kind === 'point' && shape === 'ring'
+      const shape: MarkerShape = isPointLike(obj) ? pointShape(obj) : 'dot'
+      const outline = isPointLike(obj) && shape === 'ring'
       const hasLabel = obj.kind === 'point' && !!obj.label
       const prev = this.miscEntries[i]
+      // A mark and a point build the same Group, so either can be updated in
+      // place from the other: a pan moves nothing, and a zoom only rescales.
       if (
-        obj.kind === 'point' &&
+        isPointLike(obj) &&
         prev &&
-        prev.kind === 'point' &&
+        (prev.kind === 'point' || prev.kind === 'mark') &&
         prev.outline === outline &&
         prev.hasLabel === hasLabel &&
         prev.shape === shape
@@ -572,19 +574,20 @@ export class SceneRenderer {
   // and the point-colored mesh second, at z = 0.01, so it renders in front),
   // with the group itself carrying the world position — that's what makes
   // "just move the group" a correct, complete update.
-  private updatePointObject(group: THREE.Group, obj: Extract<SceneObject, { kind: 'point' }>) {
-    group.position.set(obj.position.x, obj.position.y, 0)
-    // Must mirror buildObject's own shape/outline derivation exactly: a
-    // feature point (e.g. an x-/y-intercept) gets its 'ring' shape from
-    // `obj.feature`, never from `obj.style` (buildScene never sets `style`
-    // on a feature point — see its comment). Reusing `obj.style === 'outline'`
-    // alone here would compute `outline = false` for such a point even
-    // though the group it's reusing was actually built as a ring, which
-    // flips its ring/fill colors and sizes to the wrong (non-outline) pair
-    // on every reuse after the first build.
-    const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+  private updatePointObject(group: THREE.Group, obj: PointLike) {
+    const position = pointPosition(obj)
+    group.position.set(position.x, position.y, 0)
+    // Must mirror buildObject's own shape/outline derivation exactly — both go
+    // through pointShape. A feature point (e.g. an x-/y-intercept) gets its
+    // 'ring' shape from `obj.feature`, never from `obj.style` (buildScene never
+    // sets `style` on a feature point — see its comment). Reusing
+    // `obj.style === 'outline'` alone here would compute `outline = false` for
+    // such a point even though the group it's reusing was actually built as a
+    // ring, which flips its ring/fill colors and sizes to the wrong
+    // (non-outline) pair on every reuse after the first build.
+    const shape = pointShape(obj)
     const outline = shape === 'ring'
-    const pointColor = this.colorOr(obj.color, this.palette.point)
+    const pointColor = this.pointLikeColor(obj)
     // child[0] (background disc / halo) is always background-colored and
     // child[1] (ring / fill) is always point-colored — true in both the
     // outline and non-outline shapes, so no outline check is needed here.
@@ -602,7 +605,7 @@ export class SceneRenderer {
     // zoomed in instead of holding its apparent size like every other
     // pixelToWorld-driven marker does.
     this.applyPointSizes(group, outline)
-    if (obj.label) {
+    if (obj.kind === 'point' && obj.label) {
       const label = group.children[2] as THREE.Sprite | undefined
       if (label && label.userData.labelText !== obj.label) {
         group.remove(label)
@@ -640,6 +643,13 @@ export class SceneRenderer {
 
   private colorOr(color: string | null | undefined, fallback: number): number {
     return themedColor(color, fallback, this.palette)
+  }
+
+  // The colour of a point-like's coloured mesh: its own, else the palette's
+  // point colour for a point and the curve colour for a mark (a mark belongs to
+  // its curve, so it must read as part of it).
+  private pointLikeColor(obj: PointLike): number {
+    return this.colorOr(obj.color, obj.kind === 'mark' ? this.palette.curve : this.palette.point)
   }
 
   // A label sprite sized/offset in screen pixels rather than world units —
@@ -710,8 +720,9 @@ export class SceneRenderer {
     return group
   }
 
-  // Only the point/ray/animatedPoint kinds — curve/segment/segments/region
-  // are built and updated by geometryGroupManager instead (see setGraphScene).
+  // Only the point/mark/ray/animatedPoint kinds and the annotation marks —
+  // curve/segment/segments/region render items are built and updated by
+  // geometryGroupManager instead (see setGraphScene).
   private buildObject(obj: SceneObject): THREE.Object3D | null {
     if (obj.kind === 'ray') {
       const origin = new THREE.Vector3(obj.from.x, obj.from.y, 0)
@@ -728,19 +739,17 @@ export class SceneRenderer {
       return arrow
     }
 
-    if (obj.kind === 'point') {
+    if (isPointLike(obj)) {
       // Group-relative: every child sits at the group's local origin, and
       // the group itself carries the world position — required so
       // updatePointObject's in-place reuse can move the whole point with a
       // single group.position.set(...) instead of touching each child.
       const group = new THREE.Group()
-      group.position.set(obj.position.x, obj.position.y, 0)
-      // A feature point's appearance comes from its kind; an ordinary plotted
-      // point still honours its own `style`. 'ring' and "outline" are the same
-      // picture, so they share a branch.
-      const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+      const position = pointPosition(obj)
+      group.position.set(position.x, position.y, 0)
+      const shape = pointShape(obj)
       const outline = shape === 'ring'
-      const pointColor = this.colorOr(obj.color, this.palette.point)
+      const pointColor = this.pointLikeColor(obj)
       if (outline) {
         // Unit radius (1) — applyPointSizes below scales this via a
         // transform, not by rebuilding the geometry, so the same mesh works
@@ -778,7 +787,8 @@ export class SceneRenderer {
         group.add(circle)
       }
       this.applyPointSizes(group, outline)
-      if (obj.label) {
+      // A mark carries no label.
+      if (obj.kind === 'point' && obj.label) {
         const label = this.buildLabel(obj.label, { x: 0, y: 0 }, obj.labelDirection ?? undefined, obj.maxLabelOffset)
         label.userData.labelText = obj.label
         group.add(label)

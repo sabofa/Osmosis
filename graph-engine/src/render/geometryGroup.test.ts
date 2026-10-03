@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
-import { GeometryGroupManager, isGeometryKind } from './geometryGroup'
-import type { SceneObject, Vec2 } from '../scene/types'
+import { GeometryGroupManager } from './geometryGroup'
+import type { GeometryItem } from './renderItems'
+import type { Vec2 } from '../scene/types'
 
 const palette = { curve: 0x2f5fd0, segment: 0x1f8f5f, region: 0x2f5fd0, background: 0xfdf6ea, axis: 0x17170f }
 // A simple, non-zoom-dependent stand-in for SceneRenderer's real
@@ -9,18 +10,6 @@ const palette = { curve: 0x2f5fd0, segment: 0x1f8f5f, region: 0x2f5fd0, backgrou
 // doesn't matter for these tests, only that widths come out positive and
 // comparable to each other.
 const pixelToWorld = (px: number) => px * 0.01
-
-describe('isGeometryKind', () => {
-  it('classifies curve/segment/segments/region as geometry kinds and everything else as not', () => {
-    expect(isGeometryKind('curve')).toBe(true)
-    expect(isGeometryKind('segment')).toBe(true)
-    expect(isGeometryKind('segments')).toBe(true)
-    expect(isGeometryKind('region')).toBe(true)
-    expect(isGeometryKind('point')).toBe(false)
-    expect(isGeometryKind('ray')).toBe(false)
-    expect(isGeometryKind('animatedPoint')).toBe(false)
-  })
-})
 
 describe('GeometryGroupManager', () => {
   // Regression test for a real bug found while splitting SceneRenderer.ts
@@ -35,11 +24,11 @@ describe('GeometryGroupManager', () => {
   // a big jump in vertex count for a region/implicit curve).
   it('reflects new point data after a curve object grows past its initial buffer size', () => {
     const mgr = new GeometryGroupManager()
-    const small: SceneObject = { kind: 'curve', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 4 }], color: null }
+    const small: GeometryItem = { kind: 'curve', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 4 }], color: null }
     mgr.update([small], palette, pixelToWorld)
     const objectBefore = mgr.group.children[0]
 
-    const grown: SceneObject = {
+    const grown: GeometryItem = {
       kind: 'curve',
       points: [{ x: 0, y: 0 }, { x: 0.5, y: 0.25 }, { x: 1, y: 1 }, { x: 1.5, y: 2.25 }, { x: 2, y: 4 }],
       color: null,
@@ -74,7 +63,7 @@ describe('GeometryGroupManager', () => {
     const points: Vec2[] = []
     for (let i = 0; i <= 20; i++) points.push({ x: i, y: 0 })
     for (let i = 1; i <= 20; i++) points.push({ x: 20 + i * Math.cos(2.5), y: i * Math.sin(2.5) })
-    const obj: SceneObject = { kind: 'curve', points, color: null }
+    const obj: GeometryItem = { kind: 'curve', points, color: null }
     mgr.update([obj], palette, pixelToWorld)
     const mesh = mgr.group.children[0] as THREE.Mesh
     const positions = mesh.geometry.getAttribute('position').array
@@ -101,7 +90,7 @@ describe('GeometryGroupManager', () => {
   // zero-curvature run should get.
   it('renders a 2-point straight line at minimum width, not maximum', () => {
     const mgr = new GeometryGroupManager()
-    const obj: SceneObject = { kind: 'curve', points: [{ x: 0, y: 0 }, { x: 10, y: 5 }], color: null }
+    const obj: GeometryItem = { kind: 'curve', points: [{ x: 0, y: 0 }, { x: 10, y: 5 }], color: null }
     mgr.update([obj], palette, pixelToWorld)
     const mesh = mgr.group.children[0] as THREE.Mesh
     const positions = mesh.geometry.getAttribute('position').array
@@ -162,13 +151,13 @@ describe('GeometryGroupManager', () => {
   // of the segment it belongs to.
   it('also reflects grown data for a dashed segments batch (the region-boundary case)', () => {
     const mgr = new GeometryGroupManager()
-    const small: SceneObject = { kind: 'segments', pairs: [[{ x: 0, y: 0 }, { x: 1, y: 0 }]], dashed: true, color: null }
+    const small: GeometryItem = { kind: 'segments', pairs: [[{ x: 0, y: 0 }, { x: 1, y: 0 }]], dashed: true, color: null }
     mgr.update([small], palette, pixelToWorld)
 
     // Geometrically disjoint from "small" (far away) so any stale leftover
     // vertices from the smaller buffer would clearly fail this check instead
     // of coincidentally passing because the paths overlap.
-    const grown: SceneObject = {
+    const grown: GeometryItem = {
       kind: 'segments',
       pairs: [
         [{ x: 100, y: 100 }, { x: 101, y: 100 }],
@@ -205,7 +194,7 @@ describe('GeometryGroupManager', () => {
     const mgr = new GeometryGroupManager()
     // Long enough (5 world units, vs. a 0.12+0.09 dash+gap period) to produce
     // several dash chunks with real gaps between them.
-    const obj: SceneObject = { kind: 'segment', from: { x: 0, y: 0 }, to: { x: 5, y: 0 }, dashed: true, color: null }
+    const obj: GeometryItem = { kind: 'segment', from: { x: 0, y: 0 }, to: { x: 5, y: 0 }, dashed: true, color: null }
     mgr.update([obj], palette, pixelToWorld)
     const mesh = mgr.group.children[0] as THREE.Mesh
     const quadCount = mesh.geometry.drawRange.count / 6
@@ -242,7 +231,7 @@ describe('GeometryGroupManager', () => {
   it('bounds a dashed segment spanning thousands of world units instead of scaling chunk count with world length', () => {
     const mgr = new GeometryGroupManager()
     const far = 5000
-    const obj: SceneObject = { kind: 'segment', from: { x: 0, y: 0 }, to: { x: 0, y: far }, dashed: true, color: null }
+    const obj: GeometryItem = { kind: 'segment', from: { x: 0, y: 0 }, to: { x: 0, y: far }, dashed: true, color: null }
 
     const t0 = performance.now()
     mgr.update([obj], palette, pixelToWorld)
@@ -269,7 +258,7 @@ describe('GeometryGroupManager', () => {
 
   it('renders a non-dashed segments batch as one quad per pair with no gap-splitting', () => {
     const mgr = new GeometryGroupManager()
-    const obj: SceneObject = {
+    const obj: GeometryItem = {
       kind: 'segments',
       pairs: [
         [{ x: 0, y: 0 }, { x: 5, y: 0 }],

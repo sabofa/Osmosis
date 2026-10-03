@@ -5,11 +5,58 @@ export interface Vec2 {
   y: number
 }
 
+export interface Bounds {
+  xMin: number
+  xMax: number
+  yMin: number
+  yMax: number
+}
+
+// The identity of a plotted thing: which statement it came from and what it is
+// within that statement ('curve', 'hole.0', 'asymptote.1', ...). Stable across
+// rebuilds, so a pan keeps a mark's identity and later work (the pen's wobble,
+// a hover readout) can key on it instead of on a list position.
+export interface MarkId {
+  statement: number
+  object: string
+}
+
+// A run of connected vertices: x, y interleaved in Float64 world coordinates,
+// and the curve's parameter (x, y, θ or t) at each vertex. `closed` means the
+// last vertex joins back to the first; the first vertex is not repeated.
+export interface Chain {
+  xy: Float64Array
+  param: Float64Array
+  closed: boolean
+}
+
+// How a curve is interrupted. `at` is in the curve's own parameter, not in x.
+export type BreakKind = 'pole' | 'jump' | 'edge'
+export interface Break {
+  at: number
+  kind: BreakKind
+}
+
+export type MarkRole = 'hole' | 'endpoint' | 'value' // P5 adds 'feature'
+
 // Every drawable kind carries an optional `color` (a resolved name/hex string
 // from the statement, see parser/colors.ts) — `null`/absent means "use the
 // renderer's default for this kind".
 export type SceneObject =
-  | { kind: 'curve'; points: Vec2[]; color?: string | null }
+  // A plotted curve as chains of Float64 world-coordinate vertices, each with
+  // its parameter. `breaks` are where the curve is mathematically interrupted
+  // (a pole, a jump, the edge of its domain) — the chains stop there, and the
+  // list says why, so a gap is never silent. One object per statement; a
+  // circle is the same shape with one closed chain and no breaks.
+  | { kind: 'curve'; id: MarkId; chains: Chain[]; breaks: Break[]; dashed?: boolean; color?: string | null }
+  // A typed point on a curve: a hole or an endpoint (or a plain value), open or
+  // filled. Open means the curve does not take the value there, so the renderer
+  // draws it as a ring whose centre hides the curve beneath. `exact` is the
+  // same claim a point's is: the position is analytic, not read off samples.
+  | { kind: 'mark'; id: MarkId; at: Vec2; role: MarkRole; fill: 'open' | 'filled'; exact: boolean; color?: string | null }
+  // The filled outline of the stretch of a curve where it oscillates faster
+  // than a pixel resolves: instead of a smear of ink, the extent it sweeps.
+  | { kind: 'band'; id: MarkId; outline: Chain[]; color?: string | null }
   // labelDirection is a unit vector suggesting which way the label should
   // sit from the point — used for a polygon vertex (buildScene.ts's
   // buildPolygon sets it pointing away from the polygon's own centroid) so
@@ -72,7 +119,10 @@ export type SceneObject =
   // from whatever the bounds happened to be when the scene was built.
   // `direction` need not be a unit vector; `extent` 'ray' draws only forward
   // from `through`.
-  | { kind: 'line'; through: Vec2; direction: Vec2; extent: 'infinite' | 'ray'; color?: string | null }
+  // `role: 'asymptote'` marks a guide rather than a construction: it is drawn
+  // dashed, so it reads as "the curve approaches this" and not as part of the
+  // curve. A tangent or a regression line is a plain solid `line` with an id.
+  | { kind: 'line'; id?: MarkId; through: Vec2; direction: Vec2; extent: 'infinite' | 'ray'; role?: 'asymptote'; color?: string | null }
   // Flat triangle list (groups of 3 points) for a filled inequality region.
   | { kind: 'region'; triangles: Vec2[]; color?: string | null }
   // Not pre-evaluated like everything else here — fx/fy are the path's two
@@ -114,4 +164,7 @@ export interface Scene {
   objects: SceneObject[]
   errors: SceneError[]
   regression: Regression | null
+  // How much work the curve sampler did, for a status line or a test; absent
+  // until a sampler reports it.
+  stats?: { points: number; intervals: number }
 }

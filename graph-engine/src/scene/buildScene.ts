@@ -4,12 +4,13 @@ import type { GraphConfig } from '../parser/config'
 import type { FunctionTable } from '../parser/evalExpr'
 import type { Condition, Expr, Statement } from '../parser/types'
 import { buildPlotScope } from '../plot/scope'
-import { traceImplicitCurve, traceImplicitRegion, type Bounds } from '../render/marchingSquares'
+import { traceImplicitCurve, traceImplicitRegion } from '../render/marchingSquares'
+import { chainOf } from './chains'
 import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './featurePoints'
 import { buildConstructions } from './geometry/buildConstructions'
 import { circleCurve, polygonObjects } from './geometry/sceneObjects'
 import { formatCoord } from './format'
-import type { Scene, SceneObject, Vec2 } from './types'
+import type { Bounds, Break, Chain, Scene, SceneObject, Vec2 } from './types'
 
 const SAMPLES = 400
 // Full-quality marching-squares resolution for a settled view; buildScene's
@@ -122,9 +123,10 @@ function satisfiesCondition(condition: CompiledCondition | null, t: number): boo
 }
 
 // Features are no longer derived from a curve's sampled points (see
-// featurePoints.ts for why), so this is now just "wrap the samples".
-function curveObject(points: Vec2[], color: string | null): SceneObject {
-  return { kind: 'curve', points, color }
+// featurePoints.ts for why), so this is now just "wrap the samples": one curve
+// per statement, its chains and the breaks between them.
+function curveObject(statementIndex: number, chains: Chain[], breaks: Break[], color: string | null): SceneObject {
+  return { kind: 'curve', id: { statement: statementIndex, object: 'curve' }, chains, breaks, color }
 }
 
 // Whether t is inside the statement's own domain: its calc P1 "where"
@@ -140,26 +142,41 @@ function domainTest(statement: Statement & { kind: 'explicit' }, scope: MathScop
   return (t) => satisfiesCondition(condition, t)
 }
 
-function sampleExplicit(statement: Statement & { kind: 'explicit' }, bounds: Bounds, config: GraphConfig, scope: MathScope): SceneObject[] {
+function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, bounds: Bounds, config: GraphConfig, scope: MathScope): SceneObject[] {
   const [lo, hi] = statement.independent === 'x' ? [bounds.xMin, bounds.xMax] : [bounds.yMin, bounds.yMax]
   const viewSpan = statement.independent === 'x' ? bounds.yMax - bounds.yMin : bounds.xMax - bounds.xMin
   const body = compileScalar(statement.body, [statement.independent], scope)
   const inDomain = domainTest(statement, scope)
 
-  // Segments split apart wherever the function is undefined, leaves its
+  // Chains split apart wherever the function is undefined, leaves its
   // domain, OR jumps by a blow-up-sized amount between adjacent samples —
   // without this, a vertical asymptote (1/x, tan(x), ...) draws a fake
   // near-vertical line connecting +infinity to -infinity across the gap
   // instead of an open break. (The window-relative jump rule is what P2
-  // replaces with certified continuity.)
-  const segments: Vec2[][] = [[]]
+  // replaces with certified continuity.) Each split is also recorded in
+  // `breaks`, in the curve's own parameter: a jump as a 'pole' at the midpoint
+  // of the two samples, an undefined or out-of-domain sample as an 'edge' at
+  // that sample. A run of undefined samples is one break, and a run that has
+  // not started yet is none.
+  const chains: Chain[] = []
+  const breaks: Break[] = []
+  let points: Vec2[] = []
+  let params: number[] = []
   const asymptoteXs: number[] = []
   let lastOther: number | null = null
   let lastT: number | null = null
   let tested = 0
   let finite = 0
-  const breakHere = () => {
-    if (segments[segments.length - 1].length > 0) segments.push([])
+  const finishRun = () => {
+    if (points.length >= 2) chains.push(chainOf(points, params))
+    points = []
+    params = []
+  }
+  const breakHere = (at: number) => {
+    if (points.length > 0) {
+      breaks.push({ at, kind: 'edge' })
+      finishRun()
+    }
     lastOther = null
     lastT = null
   }
@@ -169,34 +186,36 @@ function sampleExplicit(statement: Statement & { kind: 'explicit' }, bounds: Bou
     // Outside the statement's own domain is a break, never a bridge: an
     // "x < -1 or x > 1" domain must not join its two pieces.
     if (!inDomain(t)) {
-      breakHere()
+      breakHere(t)
       continue
     }
     tested++
     const other = body(t)
     if (!Number.isFinite(other)) {
-      breakHere()
+      breakHere(t)
       continue
     }
     finite++
 
-    if (lastOther !== null && Math.abs(other - lastOther) > viewSpan * ASYMPTOTE_JUMP_FACTOR) {
-      if (segments[segments.length - 1].length > 0) segments.push([])
-      if (statement.independent === 'x' && lastT !== null) asymptoteXs.push((lastT + t) / 2)
+    if (lastOther !== null && lastT !== null && Math.abs(other - lastOther) > viewSpan * ASYMPTOTE_JUMP_FACTOR) {
+      const mid = (lastT + t) / 2
+      breaks.push({ at: mid, kind: 'pole' })
+      finishRun()
+      if (statement.independent === 'x') asymptoteXs.push(mid)
     }
 
-    const point = statement.independent === 'x' ? { x: t, y: other } : { x: other, y: t }
-    segments[segments.length - 1].push(point)
+    points.push(statement.independent === 'x' ? { x: t, y: other } : { x: other, y: t })
+    params.push(t)
     lastOther = other
     lastT = t
   }
+  finishRun()
   if (tested > 0 && finite === 0) throw new Error('this curve is undefined everywhere in view')
 
+  // A statement with nothing to draw in view (its domain excludes the window,
+  // or every run is a single sample) has no curve, as it never had.
   const objects: SceneObject[] = []
-  for (const segment of segments) {
-    if (segment.length < 2) continue
-    objects.push(curveObject(segment, statement.color))
-  }
+  if (chains.length > 0) objects.push(curveObject(statementIndex, chains, breaks, statement.color))
   if (config.asymptotes) {
     // A pole's approach can itself jump by more than the threshold across
     // 2-3 adjacent samples (value swings from very-negative to very-positive
@@ -210,43 +229,62 @@ function sampleExplicit(statement: Statement & { kind: 'explicit' }, bounds: Bou
       if (last !== undefined && Math.abs(x - last) < dt * 3) merged[merged.length - 1] = (last + x) / 2
       else merged.push(x)
     }
-    if (merged.length > 0) {
-      const pairs: [Vec2, Vec2][] = merged.map((x) => [{ x, y: bounds.yMin }, { x, y: bounds.yMax }])
-      objects.push({ kind: 'segments', pairs, dashed: true, color: statement.color ?? 'gray' })
-    }
+    // One unclipped vertical guide per pole; the renderer clips it to the live
+    // view and draws it dashed (see render/renderItems.ts).
+    merged.forEach((x, k) => {
+      objects.push({
+        kind: 'line',
+        id: { statement: statementIndex, object: `asymptote.${k}` },
+        through: { x, y: 0 },
+        direction: { x: 0, y: 1 },
+        extent: 'infinite',
+        role: 'asymptote',
+        color: statement.color ?? 'gray',
+      })
+    })
   }
   return objects
 }
 
-function samplePolar(statement: Statement & { kind: 'polar' }, config: GraphConfig, scope: MathScope): SceneObject[] {
+// One chain, parametrised by theta in the statement's own angle unit (the
+// variable the body is written in, not the radians it is plotted at).
+function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: number, config: GraphConfig, scope: MathScope): SceneObject[] {
   const from = constant(statement.from, scope)
   const to = constant(statement.to, scope)
   const body = compileScalar(statement.body, ['theta'], scope)
   const points: Vec2[] = []
+  const params: number[] = []
   for (let i = 0; i <= SAMPLES; i++) {
     const theta = from + ((to - from) * i) / SAMPLES
     const thetaRad = config.angle === 'degrees' ? (theta * Math.PI) / 180 : theta
     const r = body(theta)
     const point = { x: r * Math.cos(thetaRad), y: r * Math.sin(thetaRad) }
-    if (Number.isFinite(point.x) && Number.isFinite(point.y)) points.push(point)
+    if (Number.isFinite(point.x) && Number.isFinite(point.y)) {
+      points.push(point)
+      params.push(theta)
+    }
   }
   if (points.length === 0) throw new Error('this curve is undefined everywhere in view')
-  return [curveObject(points, statement.color)]
+  return [curveObject(statementIndex, [chainOf(points, params)], [], statement.color)]
 }
 
-function sampleParametric(statement: Statement & { kind: 'parametric' }, scope: MathScope): SceneObject[] {
+function sampleParametric(statement: Statement & { kind: 'parametric' }, statementIndex: number, scope: MathScope): SceneObject[] {
   const from = constant(statement.from, scope)
   const to = constant(statement.to, scope)
   const fx = compileScalar(statement.fx, [statement.param], scope)
   const fy = compileScalar(statement.fy, [statement.param], scope)
   const points: Vec2[] = []
+  const params: number[] = []
   for (let i = 0; i <= SAMPLES; i++) {
     const t = from + ((to - from) * i) / SAMPLES
     const point = { x: fx(t), y: fy(t) }
-    if (Number.isFinite(point.x) && Number.isFinite(point.y)) points.push(point)
+    if (Number.isFinite(point.x) && Number.isFinite(point.y)) {
+      points.push(point)
+      params.push(t)
+    }
   }
   if (points.length === 0) throw new Error('this curve is undefined everywhere in view')
-  return [curveObject(points, statement.color)]
+  return [curveObject(statementIndex, [chainOf(points, params)], [], statement.color)]
 }
 
 function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
@@ -440,37 +478,39 @@ function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, sc
   return pairs.length > 0 ? [{ kind: 'segments', pairs, color: statement.color }] : []
 }
 
-// Numeric tangent (central difference) to `body` at x = at, drawn across the
-// visible domain.
-function buildTangent(statement: Statement & { kind: 'tangent' }, bounds: Bounds, scope: MathScope): SceneObject[] {
+// Numeric tangent (central difference) to `body` at x = at: an unclipped line
+// through (a, f(a)), which the renderer clips to whatever is in view.
+function buildTangent(statement: Statement & { kind: 'tangent' }, statementIndex: number, scope: MathScope): SceneObject[] {
   const a = constant(statement.at, scope)
   const f = compileScalar(statement.body, ['x'], scope)
   const fa = f(a)
   const h = 1e-4
   const slope = (f(a + h) - f(a - h)) / (2 * h)
   const color = statement.color ?? 'orange'
-  const line: Vec2[] = [
-    { x: bounds.xMin, y: fa + slope * (bounds.xMin - a) },
-    { x: bounds.xMax, y: fa + slope * (bounds.xMax - a) },
-  ]
   return [
-    { kind: 'curve', points: line, color },
+    {
+      kind: 'line',
+      id: { statement: statementIndex, object: 'tangent' },
+      through: { x: a, y: fa },
+      direction: { x: 1, y: slope },
+      extent: 'infinite',
+      color,
+    },
     { kind: 'point', label: null, position: { x: a, y: fa }, color },
   ]
 }
 
-// A circle by center + radius, sampled as a closed loop (the last sample at
-// t=2*pi coincides with the first at t=0) and reused as a plain 'curve'
-// SceneObject — the existing ribbon renderer already draws a closed shape
-// correctly as long as the point list closes on itself, so no new render
-// path is needed just for this. The sampling itself lives in
-// geometry/sceneObjects.ts so an incircle/circumcircle draws identically.
-function buildCircle(statement: Statement & { kind: 'circle' }, scope: MathScope): SceneObject[] {
+// A circle by center + radius, sampled as one closed chain and reused as a
+// plain 'curve' SceneObject — the ribbon renderer draws a closed chain as a
+// loop (renderItems.ts closes it), so no new render path is needed just for
+// this. The sampling itself lives in geometry/sceneObjects.ts so an
+// incircle/circumcircle draws identically.
+function buildCircle(statement: Statement & { kind: 'circle' }, statementIndex: number, scope: MathScope): SceneObject[] {
   const cx = constant(statement.cx, scope)
   const cy = constant(statement.cy, scope)
   const radius = constant(statement.radius, scope)
   if (radius <= 0) throw new Error('circle radius must be positive')
-  return [circleCurve({ x: cx, y: cy }, radius, statement.color)]
+  return [circleCurve({ x: cx, y: cy }, radius, statement.color, { statement: statementIndex, object: 'curve' })]
 }
 
 // A closed shape from >= 3 labeled vertices — the edges reuse 'segments'
@@ -514,7 +554,7 @@ function linearRegression(points: Vec2[]) {
   return { slope, intercept, r }
 }
 
-function buildScatter(statement: Statement & { kind: 'scatter' }, bounds: Bounds, scope: MathScope): { objects: SceneObject[]; regression: Scene['regression'] } {
+function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex: number, scope: MathScope): { objects: SceneObject[]; regression: Scene['regression'] } {
   const points: Vec2[] = statement.points.map(([xExpr, yExpr]) => ({
     x: constant(xExpr, scope),
     y: constant(yExpr, scope),
@@ -522,12 +562,16 @@ function buildScatter(statement: Statement & { kind: 'scatter' }, bounds: Bounds
   const objects: SceneObject[] = points.map((p) => ({ kind: 'point', label: null, position: p, color: statement.color }))
   if (points.length < 2) return { objects, regression: null }
 
+  // The fitted line is unclipped, like a tangent: the renderer clips it to the view.
   const regression = linearRegression(points)
-  const line: Vec2[] = [
-    { x: bounds.xMin, y: regression.slope * bounds.xMin + regression.intercept },
-    { x: bounds.xMax, y: regression.slope * bounds.xMax + regression.intercept },
-  ]
-  objects.push({ kind: 'curve', points: line, color: statement.color })
+  objects.push({
+    kind: 'line',
+    id: { statement: statementIndex, object: 'regression' },
+    through: { x: 0, y: regression.intercept },
+    direction: { x: 1, y: regression.slope },
+    extent: 'infinite',
+    color: statement.color,
+  })
   return { objects, regression }
 }
 
@@ -580,11 +624,11 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
     if (statement.statementName && config.hidden.has(statement.statementName)) continue
     try {
       if (statement.kind === 'explicit') {
-        objects.push(...sampleExplicit(statement, bounds, config, scope))
+        objects.push(...sampleExplicit(statement, statementIndex, bounds, config, scope))
       } else if (statement.kind === 'polar') {
-        objects.push(...samplePolar(statement, config, scope))
+        objects.push(...samplePolar(statement, statementIndex, config, scope))
       } else if (statement.kind === 'parametric') {
-        objects.push(...sampleParametric(statement, scope))
+        objects.push(...sampleParametric(statement, statementIndex, scope))
       } else if (statement.kind === 'implicit') {
         objects.push(...traceImplicit(statement, bounds, resolution, scope))
       } else if (statement.kind === 'region') {
@@ -594,9 +638,9 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
       } else if (statement.kind === 'field') {
         objects.push(...buildField(statement, bounds, scope))
       } else if (statement.kind === 'tangent') {
-        objects.push(...buildTangent(statement, bounds, scope))
+        objects.push(...buildTangent(statement, statementIndex, scope))
       } else if (statement.kind === 'scatter') {
-        const built = buildScatter(statement, bounds, scope)
+        const built = buildScatter(statement, statementIndex, scope)
         objects.push(...built.objects)
         if (built.regression) regression = built.regression
       } else if (statement.kind === 'animatedPoint') {
@@ -645,7 +689,7 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
         const magnitude = Math.hypot(to.x - from.x, to.y - from.y)
         objects.push({ kind: 'ray', from, to, label: `|v| = ${formatCoord(magnitude)}`, color: statement.color })
       } else if (statement.kind === 'circle') {
-        objects.push(...buildCircle(statement, scope))
+        objects.push(...buildCircle(statement, statementIndex, scope))
       } else if (statement.kind === 'polygon') {
         objects.push(...buildPolygon(statement, scope))
       } else if (statement.kind === 'construction' || statement.kind === 'triangle') {

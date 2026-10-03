@@ -1,4 +1,5 @@
-import type { SceneObject, Vec2 } from '../types'
+import { chainOf } from '../chains'
+import type { MarkId, SceneObject, Vec2 } from '../types'
 import type { GeometryObject } from './objects'
 
 // Turning geometry values into drawable scene objects. Shared by the existing
@@ -13,13 +14,19 @@ export const CIRCLE_SAMPLES = 96
 // original comment for the reasoning.
 const POLYGON_LABEL_MAX_FRACTION = 0.35
 
-export function circleCurve(center: Vec2, radius: number, color: string | null): SceneObject {
+// A circle is one closed chain, parametrised by angle. The chain holds the
+// CIRCLE_SAMPLES vertices around the loop without repeating the first at the
+// end: `closed` is what joins the last back to it, so the loop closes exactly
+// instead of to within the rounding of cos(2*pi).
+export function circleCurve(center: Vec2, radius: number, color: string | null, id: MarkId): SceneObject {
   const points: Vec2[] = []
-  for (let i = 0; i <= CIRCLE_SAMPLES; i++) {
+  const angles: number[] = []
+  for (let i = 0; i < CIRCLE_SAMPLES; i++) {
     const t = (i / CIRCLE_SAMPLES) * 2 * Math.PI
+    angles.push(t)
     points.push({ x: center.x + radius * Math.cos(t), y: center.y + radius * Math.sin(t) })
   }
-  return { kind: 'curve', points, color }
+  return { kind: 'curve', id, chains: [chainOf(points, angles, true)], breaks: [], color }
 }
 
 // A closed shape from labelled vertices: one batched 'segments' object for the
@@ -53,15 +60,17 @@ export function polygonObjects(vertices: { label: string; position: Vec2 }[], co
 
 // One geometry value as scene objects. A segment is already finite so it
 // draws as a plain segment; an infinite line or a ray is emitted UNCLIPPED for
-// the renderer to clip against the live view (see render/clipLine.ts).
-export function geometryObjectToScene(object: GeometryObject, label: string | null, color: string | null): SceneObject[] {
+// the renderer to clip against the live view (see render/clipLine.ts). `id` is
+// the identity a circle's curve carries: the statement it came from and the
+// name it is bound to.
+export function geometryObjectToScene(object: GeometryObject, label: string | null, color: string | null, id: MarkId): SceneObject[] {
   switch (object.kind) {
     case 'point':
       // Analytically resolved, not read off a sampled curve, so hover can
       // report these digit for digit (see `exact` in scene/types.ts).
       return [{ kind: 'point', label, position: object.at, color, exact: true }]
     case 'circle':
-      return [circleCurve(object.center, object.radius, color)]
+      return [circleCurve(object.center, object.radius, color, id)]
     case 'line':
       if (object.extent === 'segment') return [{ kind: 'segment', from: object.a, to: object.b, color }]
       return [

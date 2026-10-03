@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
 import { buildScene } from './buildScene'
+import { chainPoints } from './chains'
+import type { SceneObject, Vec2 } from './types'
 
 const bounds = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+
+// Every vertex of a curve's chains, in order.
+function vertices(curve: Extract<SceneObject, { kind: 'curve' }>): Vec2[] {
+  return curve.chains.flatMap(chainPoints)
+}
 
 function build(spec: string) {
   const parsed = parseSpec(spec)
@@ -44,7 +51,7 @@ describe('buildScene', () => {
     const curve = scene.objects.find((o) => o.kind === 'curve')
     expect(curve).toBeDefined()
     if (curve?.kind !== 'curve') throw new Error('unreachable')
-    expect(curve.points.length).toBeGreaterThan(10)
+    expect(vertices(curve).length).toBeGreaterThan(10)
   })
 
   it('resolves a named function referenced before its own definition line', () => {
@@ -55,7 +62,7 @@ describe('buildScene', () => {
     const curve = scene.objects.find((o) => o.kind === 'curve')
     if (curve?.kind !== 'curve') throw new Error('unreachable')
     // y = k(2) = 5
-    const p = curve.points.find((pt) => Math.abs(pt.x - 2) < 0.1)
+    const p = vertices(curve).find((pt) => Math.abs(pt.x - 2) < 0.1)
     expect(p?.y).toBeCloseTo(5, 0)
   })
 
@@ -106,7 +113,7 @@ describe('buildScene', () => {
     expect(scene.errors).toEqual([])
     const curves = scene.objects.filter((o) => o.kind === 'curve')
     expect(curves.length).toBe(1)
-    const p = curves[0].kind === 'curve' ? curves[0].points.find((pt) => Math.abs(pt.x - 2) < 0.1) : undefined
+    const p = curves[0].kind === 'curve' ? vertices(curves[0]).find((pt) => Math.abs(pt.x - 2) < 0.1) : undefined
     expect(p?.y).toBeCloseTo(5, 0)
   })
 
@@ -127,13 +134,15 @@ describe('buildScene', () => {
     const { scene } = build('circle: (2, 3), 5')
     const curve = scene.objects.find((o) => o.kind === 'curve')
     if (curve?.kind !== 'curve') throw new Error('unreachable')
-    // Closed loop: last point coincides with the first.
-    const first = curve.points[0]
-    const last = curve.points[curve.points.length - 1]
-    expect(first.x).toBeCloseTo(last.x, 5)
-    expect(first.y).toBeCloseTo(last.y, 5)
+    // Closed loop: one closed chain, whose last vertex joins the first by
+    // `closed` rather than by repeating it.
+    expect(curve.id).toEqual({ statement: 0, object: 'curve' })
+    expect(curve.chains).toHaveLength(1)
+    expect(curve.chains[0].closed).toBe(true)
+    const points = vertices(curve)
+    expect(points[points.length - 1]).not.toEqual(points[0])
     // Every sampled point sits exactly `radius` from the center.
-    for (const p of curve.points) {
+    for (const p of points) {
       expect(Math.hypot(p.x - 2, p.y - 3)).toBeCloseTo(5, 5)
     }
   })
@@ -525,9 +534,10 @@ describe('geometry constructions', () => {
     // 3-4-5: r = Area/s = 6/6 = 1 about (1,1); R = 2.5 about the hypotenuse
     // midpoint (2, 1.5).
     const radii = curves.map((c) => {
-      const cx = (Math.min(...c.points.map((p) => p.x)) + Math.max(...c.points.map((p) => p.x))) / 2
-      const cy = (Math.min(...c.points.map((p) => p.y)) + Math.max(...c.points.map((p) => p.y))) / 2
-      return { cx, cy, r: Math.max(...c.points.map((p) => Math.hypot(p.x - cx, p.y - cy))) }
+      const pts = vertices(c)
+      const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2
+      const cy = (Math.min(...pts.map((p) => p.y)) + Math.max(...pts.map((p) => p.y))) / 2
+      return { cx, cy, r: Math.max(...pts.map((p) => Math.hypot(p.x - cx, p.y - cy))) }
     })
     expect(radii[0].r).toBeCloseTo(1, 6)
     expect(radii[0].cx).toBeCloseTo(1, 6)
@@ -672,7 +682,12 @@ function sceneOf(spec: string) {
 type SceneOfResult = ReturnType<typeof sceneOf>
 
 function curvePoints(scene: SceneOfResult) {
-  return scene.objects.flatMap((o) => (o.kind === 'curve' ? o.points : []))
+  return scene.objects.flatMap((o) => (o.kind === 'curve' ? vertices(o) : []))
+}
+
+// Each chain of each curve, as its own list of x values.
+function chainXs(scene: SceneOfResult) {
+  return scene.objects.flatMap((o) => (o.kind === 'curve' ? o.chains.map((chain) => chainPoints(chain).map((pt) => pt.x)) : []))
 }
 
 function regionTriangles(scene: SceneOfResult) {
@@ -731,19 +746,24 @@ describe('the 2D engine on the kernel (calc P1)', () => {
   it('a two-interval if domain does not bridge its gap', () => {
     const scene = sceneOf('y = 1 if x < -1 or x > 1')
     const curves = scene.objects.filter((o) => o.kind === 'curve')
-    expect(curves.length).toBe(2)
-    for (const c of curves) if (c.kind === 'curve') for (const pt of c.points) expect(Math.abs(pt.x)).toBeGreaterThanOrEqual(1)
+    expect(curves.length).toBe(1)
+    const pieces = chainXs(scene)
+    expect(pieces).toHaveLength(2)
+    for (const piece of pieces) for (const x of piece) expect(Math.abs(x)).toBeGreaterThanOrEqual(1)
+    // Each chain stays on its own side of the gap.
+    expect(Math.max(...pieces[0])).toBeLessThan(0)
+    expect(Math.min(...pieces[1])).toBeGreaterThan(0)
   })
 
   it('an if clause takes not, !=, and, or and chains on the independent variable', () => {
     const negated = sceneOf('y = x if not x > 2 or x > 5')
-    const pieces = negated.objects.flatMap((o) => (o.kind === 'curve' ? [o.points.map((pt) => pt.x)] : []))
+    const pieces = chainXs(negated)
     expect(pieces).toHaveLength(2)
     expect(Math.max(...pieces[0])).toBeLessThanOrEqual(2)
     expect(Math.min(...pieces[1])).toBeGreaterThan(5)
 
     const apart = sceneOf('y = x if x != 0')
-    expect(apart.objects.filter((o) => o.kind === 'curve')).toHaveLength(2)
+    expect(chainXs(apart)).toHaveLength(2)
     expect(curvePoints(apart).some((pt) => pt.x === 0)).toBe(false)
 
     const chained = sceneOf('y = x if -3 <= x < 3 and x != 0')
@@ -784,7 +804,7 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     for (const clause of ['x < limit(1)', 'x < limit(1) or x > 8']) {
       const scene = sceneOf(`@param c = 1 range [0, 5]\nlimit(u) = c + u\ny = x if ${clause}`)
       expect(scene.errors, clause).toEqual([])
-      const pieces = scene.objects.flatMap((o) => (o.kind === 'curve' ? [o.points.map((pt) => pt.x)] : []))
+      const pieces = chainXs(scene)
       expect(Math.max(...pieces[0]), clause).toBeLessThan(2)
     }
   })
@@ -870,11 +890,13 @@ describe('the 2D engine on the kernel (calc P1)', () => {
   it('a tangent line through a defined function uses the kernel', () => {
     const scene = sceneOf('f(x) = x^2\ntangent: f(x) at x = 1')
     expect(scene.errors).toEqual([])
-    const line = scene.objects.find((o) => o.kind === 'curve')
-    if (line?.kind !== 'curve') throw new Error('expected the tangent line')
+    const line = scene.objects.find((o) => o.kind === 'line')
+    if (line?.kind !== 'line') throw new Error('expected the tangent line')
+    expect(line.id).toEqual({ statement: 1, object: 'tangent' })
     // y = 1 + 2(x - 1) at the window's left and right edges.
-    expect(line.points[0].y).toBeCloseTo(1 + 2 * (-10 - 1), 4)
-    expect(line.points[1].y).toBeCloseTo(1 + 2 * (10 - 1), 4)
+    const at = (x: number) => line.through.y + ((x - line.through.x) * line.direction.y) / line.direction.x
+    expect(at(-10)).toBeCloseTo(1 + 2 * (-10 - 1), 4)
+    expect(at(10)).toBeCloseTo(1 + 2 * (10 - 1), 4)
   })
 
   it('a statement that does not compile feeds no feature points: its body, its new-shape if clause, or its old-shape one', () => {
@@ -963,5 +985,95 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     const parsed = parseSpec('y = sinn(x)')
     const scene = buildScene(parsed.statements, { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }, parsed.config)
     expect(scene.errors).toEqual([expect.objectContaining({ line: 0 })])
+  })
+})
+
+// calc P2 task 1: the scene contract. The sampler is still the uniform one, but
+// it speaks chains with parameters, typed breaks, guide lines and identities.
+describe('the plot contract (calc P2)', () => {
+  it('gives a curve its identity, and each chain the parameter at every vertex', () => {
+    const scene = sceneOf('y = 0.5x\ny = x^2')
+    const curves = scene.objects.filter((o) => o.kind === 'curve')
+    expect(curves.map((c) => (c.kind === 'curve' ? c.id : null))).toEqual([
+      { statement: 0, object: 'curve' },
+      { statement: 1, object: 'curve' },
+    ])
+    const first = curves[0]
+    if (first.kind !== 'curve') throw new Error('unreachable')
+    expect(first.breaks).toEqual([])
+    const chain = first.chains[0]
+    // For y = f(x) the parameter is x itself.
+    for (let i = 0; i < chain.param.length; i++) expect(chain.xy[2 * i]).toBe(chain.param[i])
+  })
+
+  it('records the parameter of a parametric curve and of a polar one at each vertex', () => {
+    const parametric = sceneOf('(cos(t), sin(t)) for t in [0, 6]')
+    const curve = parametric.objects.find((o) => o.kind === 'curve')
+    if (curve?.kind !== 'curve') throw new Error('unreachable')
+    expect(curve.chains).toHaveLength(1)
+    expect(curve.chains[0].param[0]).toBe(0)
+    expect(curve.chains[0].param[curve.chains[0].param.length - 1]).toBeCloseTo(6, 12)
+  })
+
+  it('records an out-of-domain split as an edge break at the first sample outside', () => {
+    const scene = sceneOf('y = x if x != 0')
+    const curve = scene.objects.find((o) => o.kind === 'curve')
+    if (curve?.kind !== 'curve') throw new Error('unreachable')
+    expect(curve.chains).toHaveLength(2)
+    expect(curve.breaks).toEqual([{ at: 0, kind: 'edge' }])
+  })
+
+  it('records a blow-up split as a pole break, and draws an unclipped asymptote guide at it', () => {
+    // A pole at 0.025 sits between two samples (the spacing is 0.05), so the
+    // jump rule fires there.
+    const scene = sceneOf('y = 1 / (x - 0.025)')
+    expect(scene.errors).toEqual([])
+    const curve = scene.objects.find((o) => o.kind === 'curve')
+    if (curve?.kind !== 'curve') throw new Error('unreachable')
+    expect(curve.chains).toHaveLength(2)
+    expect(curve.breaks).toHaveLength(1)
+    expect(curve.breaks[0].kind).toBe('pole')
+    expect(curve.breaks[0].at).toBeCloseTo(0.025, 9)
+
+    const guides = scene.objects.filter((o) => o.kind === 'line')
+    expect(guides).toHaveLength(1)
+    const guide = guides[0]
+    if (guide.kind !== 'line') throw new Error('unreachable')
+    expect(guide.id).toEqual({ statement: 0, object: 'asymptote.0' })
+    expect(guide.role).toBe('asymptote')
+    expect(guide.extent).toBe('infinite')
+    expect(guide.through.x).toBeCloseTo(0.025, 9)
+    expect(guide.direction).toEqual({ x: 0, y: 1 })
+    expect(scene.objects.some((o) => o.kind === 'segments')).toBe(false)
+  })
+
+  it('draws no asymptote guide when @asymptotes is off, but still records the break', () => {
+    const scene = sceneOf('@asymptotes: off\ny = 1 / (x - 0.025)')
+    expect(scene.objects.some((o) => o.kind === 'line')).toBe(false)
+    const curve = scene.objects.find((o) => o.kind === 'curve')
+    if (curve?.kind !== 'curve') throw new Error('unreachable')
+    expect(curve.breaks.map((b) => b.kind)).toEqual(['pole'])
+  })
+
+  it("draws a scatter's regression as an unclipped line through its intercept", () => {
+    const scene = sceneOf('scatter: (1, 2), (2, 4), (3, 6)')
+    const line = scene.objects.find((o) => o.kind === 'line')
+    if (line?.kind !== 'line') throw new Error('expected the regression line')
+    expect(line.id).toEqual({ statement: 0, object: 'regression' })
+    expect(line.through.x).toBe(0)
+    expect(line.through.y).toBeCloseTo(0, 9)
+    expect(line.direction.y / line.direction.x).toBeCloseTo(2, 9)
+    expect(scene.objects.some((o) => o.kind === 'curve')).toBe(false)
+  })
+
+  it("names a construction circle's curve by its bound name, else by its place among the results", () => {
+    const named = sceneOf('A = (0, 0)\nO = circle A, 2')
+    const bound = named.objects.find((o) => o.kind === 'curve')
+    if (bound?.kind !== 'curve') throw new Error('unreachable')
+    expect(bound.id).toEqual({ statement: 1, object: 'O' })
+    const anonymous = sceneOf('@angle: degrees\ntriangle ABC: angle A = 90, AB = 4, AC = 3\nincircle of ABC')
+    const unbound = anonymous.objects.find((o) => o.kind === 'curve')
+    if (unbound?.kind !== 'curve') throw new Error('unreachable')
+    expect(unbound.id).toEqual({ statement: 1, object: 'circle.0' })
   })
 })

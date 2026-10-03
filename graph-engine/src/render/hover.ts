@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { FeatureKind, HoverMode } from '../parser/config'
 import type { Camera2D } from './camera2d'
+import { vertexCount } from '../scene/chains'
 import { clearAndDispose } from './disposeObject3D'
 import type { Scene as GraphScene, Vec2 } from '../scene/types'
 
@@ -92,14 +93,32 @@ export class HoverResolver {
       if (obj.kind === 'point') {
         if (mode === 'features' && !obj.feature) continue
         consider(obj.position, obj.label ?? undefined, false, obj.exact ?? false, obj.feature ?? null)
+      } else if (obj.kind === 'mark') {
+        // A hole or an endpoint is a point with a typed claim, not a detected
+        // feature, so it is read like a plain point: exact when the position is
+        // analytic, with no snap bias and no guide line.
+        if (mode === 'features') continue
+        consider(obj.at, undefined, false, obj.exact)
       } else if (mode === 'all' && obj.kind === 'curve') {
         // True nearest-point-on-segment per sub-segment, not "interpolate y at
         // the cursor's x" — that breaks down on steep/near-vertical stretches
         // (a steep exponential, an asymptote) where a tiny x-range covers a
         // huge y-range, so the interpolated point can be screen-distant from
         // the cursor even when the cursor is sitting right on the curve.
-        for (let i = 0; i < obj.points.length - 1; i++) {
-          consider(nearestPointOnSegment(obj.points[i], obj.points[i + 1], cursorWorld), undefined, true)
+        //
+        // Chain by chain: the end of one chain and the start of the next are
+        // separated by a break, and nothing is drawn between them, so nothing
+        // may be hoverable there. A closed chain's last vertex joins its first.
+        for (const chain of obj.chains) {
+          const n = vertexCount(chain)
+          if (n < 2) continue
+          const pairs = chain.closed ? n : n - 1
+          for (let i = 0; i < pairs; i++) {
+            const j = (i + 1) % n
+            const from = { x: chain.xy[2 * i], y: chain.xy[2 * i + 1] }
+            const to = { x: chain.xy[2 * j], y: chain.xy[2 * j + 1] }
+            consider(nearestPointOnSegment(from, to, cursorWorld), undefined, true)
+          }
         }
       } else if (mode === 'all' && (obj.kind === 'segment' || obj.kind === 'ray')) {
         consider(nearestPointOnSegment(obj.from, obj.to, cursorWorld), undefined, true)

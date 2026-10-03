@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import { themedColor, type Palette } from './palette'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
-import type { SceneObject, Vec2 } from '../scene/types'
+import type { GeometryItem } from './renderItems'
+import type { Vec2 } from '../scene/types'
 
 // Grows (never shrinks) a geometry attribute's buffer in place instead of
 // allocating a fresh Float32Array/BufferGeometry every call. This matters far
@@ -257,23 +258,16 @@ function buildQuadIndices(quadCount: number): number[] {
   return indices
 }
 
-export type GeometryKind = 'curve' | 'segment' | 'segments' | 'region'
-
 interface GeometryEntry {
-  kind: GeometryKind
+  kind: GeometryItem['kind']
   dashed: boolean
   object3d: THREE.Line | THREE.LineSegments | THREE.Mesh
 }
 
-export function isGeometryKind(kind: SceneObject['kind']): kind is GeometryKind {
-  return kind === 'curve' || kind === 'segment' || kind === 'segments' || kind === 'region'
-}
-
 export type GeometryPalette = Pick<Palette, 'curve' | 'segment' | 'region' | 'background' | 'axis'>
 
-type GeometrySceneObject = Extract<SceneObject, { kind: GeometryKind }>
-
-// Owns the curve/segment/segments/region scene objects — the ones with real
+// Owns the curve/segment/segments/region render items (see renderItems.ts for
+// how the scene's chains, bands and lines become them) — the ones with real
 // vertex counts that rebuild every frame during a drag. Matched by position
 // across rebuilds and updated in place (buffer reused), rather than disposed
 // and rebuilt every time the way point/ray/animatedPoint are in
@@ -301,7 +295,7 @@ export class GeometryGroupManager {
   // matches, the existing buffer is updated in place; only a genuine
   // structural change (spec edited, curve split by a newly-detected
   // asymptote, etc.) falls back to disposing and building fresh.
-  update(objects: GeometrySceneObject[], palette: GeometryPalette, pixelToWorld: (px: number) => number) {
+  update(objects: GeometryItem[], palette: GeometryPalette, pixelToWorld: (px: number) => number) {
     const next: GeometryEntry[] = []
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i]
@@ -329,7 +323,7 @@ export class GeometryGroupManager {
     this.entries = next
   }
 
-  private updateObject(object3d: THREE.Line | THREE.LineSegments | THREE.Mesh, obj: GeometrySceneObject, palette: GeometryPalette, pixelToWorld: (px: number) => number) {
+  private updateObject(object3d: THREE.Line | THREE.LineSegments | THREE.Mesh, obj: GeometryItem, palette: GeometryPalette, pixelToWorld: (px: number) => number) {
     const material = object3d.material as THREE.Material & { color?: THREE.Color }
     const geometry = object3d.geometry
 
@@ -390,7 +384,7 @@ export class GeometryGroupManager {
     }
   }
 
-  private buildObject(obj: GeometrySceneObject, palette: GeometryPalette, pixelToWorld: (px: number) => number): THREE.Object3D | null {
+  private buildObject(obj: GeometryItem, palette: GeometryPalette, pixelToWorld: (px: number) => number): THREE.Object3D | null {
     if (obj.kind === 'curve') {
       const n = obj.points.length
       if (n < 2) return null

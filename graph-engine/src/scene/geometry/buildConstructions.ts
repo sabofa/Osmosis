@@ -293,7 +293,12 @@ export function buildConstructions(
           scope.bind(name, result)
           if (result.kind === 'point') points.set(name, result.at)
         }
-        objects.push(...geometryObjectToScene(result, result.kind === 'point' ? name : null, statement.color))
+        // The identity is for a circle's curve: this statement, and the name it
+        // is bound to (or its place among the statement's results). Only the
+        // scene objects carry it — geometryByStatement, which the figure
+        // renderer reads, is unchanged.
+        const id = { statement: index, object: name ?? `circle.${i}` }
+        objects.push(...geometryObjectToScene(result, result.kind === 'point' ? name : null, statement.color, id))
         values.push({ name, object: result })
       })
       objectsByStatement.set(index, objects)
