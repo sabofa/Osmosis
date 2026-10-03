@@ -31,7 +31,11 @@
 //     (shaders/depth.ts) and a stroke behind a surface is faded out over a tolerance that grows with the surface's
 //     slope across the stroke (depthVisible below). An edge stroke is also tested once per stroke, at its point
 //     nearest the viewer, for having left its form (formVisible); gl/depthTest.ts is the numeric twin of both, and
-//     gl/brush.ts of the bristle loop and the ribbon's cap.
+//     gl/brush.ts of the bristle loop and the ribbon's cap;
+//   - a baked frame's data lines whose style is 'dashed' are drawn a second time (u_hiddenPass), right after the line layer:
+//     only where a surface is nearer than the stroke (the complement of the depth test above, so the two passes cover each
+//     point once between them), dashed by the stroke's arc length in CSS px and at half strength, as the per-frame model
+//     draws a hidden run (depthVisible and dashMask below; gl/depthTest.ts hiddenShare and dashMask are the numeric twins).
 //
 // Colours accumulate in sRGB-encoded space, as the mockup does, so the mixes
 // look as approved. Output 0 is premultiplied colour with coverage as alpha,
@@ -39,7 +43,7 @@
 
 import { MAX_BRISTLES, PATH_POINTS, ROLES } from '../../types'
 import { BRISTLE_REACH, CAP_PAD, DRY_TEXTURE_REF, DRY_TEXTURE_SCALE_MAX, MIN_HALF_WIDTH } from '../brush'
-import { DEPTH_SLOPE_CAP, FORM_REACH } from '../depthTest'
+import { DASH_EDGE, DASH_OFF, DASH_ON, DEPTH_SLOPE_CAP, FORM_REACH, HIDDEN_ALPHA } from '../depthTest'
 import { COMMON_GLSL } from './common'
 
 // Ribbon tessellation: PATH_POINTS - 1 segments, each split RIBBON_SUBDIV
@@ -250,6 +254,7 @@ uniform vec4 u_roleA[8];     // opacity, thin, start boost, wet pickup at the st
 uniform vec4 u_roleB[8];     // end position, end spread, crisp (1) or ragged (0), 0
 uniform bool u_debugRoles;
 uniform vec3 u_roleColour[8];
+uniform bool u_hiddenPass;   // the hidden pass: only where a surface is nearer, dashed and faint (see above)
 ${COMMON_GLSL}
 ${DEPTH_TEST_GLSL}
 layout(location = 0) out vec4 o_colour;
@@ -257,6 +262,18 @@ layout(location = 1) out vec4 o_height;
 
 const int ROLE_GLAZE = 3;
 const float START_RAMP = 0.026;
+
+// The dash mask at arc length s (CSS px) along the stroke: 1 in a dash, 0 in a gap, ${DASH_EDGE} px wide at each end of a dash;
+// a dash starts at the stroke's start and the pattern repeats (gl/depthTest.ts dashMask is the twin).
+const float DASH_ON = ${DASH_ON.toFixed(1)};
+const float DASH_OFF = ${DASH_OFF.toFixed(1)};
+const float DASH_EDGE = ${DASH_EDGE.toFixed(1)};
+float dashMask(float s) {
+  float period = DASH_ON + DASH_OFF;
+  float p = s - floor(s / period) * period;
+  float d = p > DASH_ON + 0.5 * DASH_OFF ? p - period : p;
+  return clamp((d + 0.5 * DASH_EDGE) / DASH_EDGE, 0.0, 1.0) * clamp((DASH_ON - d + 0.5 * DASH_EDGE) / DASH_EDGE, 0.0, 1.0);
+}
 
 // How much of the stroke is seen at this pixel under the scene's depth: 1 in front of or on the surface, 0 well
 // behind it. The tolerance is the bias plus the surface's slope (sceneSlope, per backing px) across the stroke's half
@@ -267,10 +284,15 @@ const float START_RAMP = 0.026;
 // once per stroke, at its point nearest the viewer (v_form), and not here: half the fragments of a ribbon on a
 // silhouette are on the background side of the outline, and that is not the decal leaving.
 float depthVisible(ivec2 pix, float hw, int role) {
+  // The hidden pass has nothing to draw where there is no depth to test against (or the stroke has no world path).
+  if (u_hiddenPass && (!u_depthTest || v_world < 0.5)) return 0.0;
   if (!u_depthTest || v_world < 0.5) return 1.0;
   float zc = sceneDepthAt(pix);
   float tol = u_depthBias + sceneSlope(pix) * max(hw * u_pixelRatio, 1.5);
   float seen = 1.0 - sstep(tol, 2.0 * tol, v_zs - zc);
+  // The hidden pass draws what the normal pass does not: where a surface is nearer (1 - seen), dashed by the stroke's
+  // arc length (v_geo.y, CSS px), and faint (gl/depthTest.ts hiddenShare is the twin).
+  if (u_hiddenPass) return (1.0 - seen) * dashMask(v_geo.y) * ${HIDDEN_ALPHA.toFixed(2)};
   return role == ROLE_EDGE ? seen * v_form : seen;
 }
 

@@ -5,7 +5,24 @@ import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh }
 import { reprojectStrokes } from '../reproject'
 import { PATH_POINTS, ROLES } from '../types'
 import { depthBias, NO_SURFACE } from './depth'
-import { anchorOf, DEPTH_SLOPE_CAP, depthVisible, FORM_REACH, formVisible, glPixel, sceneSlope, type SceneDepthImage } from './depthTest'
+import { readFileSync } from 'node:fs'
+import { HIDDEN_DASH } from '../model/lines'
+import {
+  anchorOf,
+  DASH_EDGE,
+  DASH_OFF,
+  DASH_ON,
+  dashMask,
+  DEPTH_SLOPE_CAP,
+  depthVisible,
+  FORM_REACH,
+  formVisible,
+  glPixel,
+  HIDDEN_ALPHA,
+  hiddenShare,
+  sceneSlope,
+  type SceneDepthImage,
+} from './depthTest'
 import { sceneBounds } from './meshes'
 
 vi.setConfig({ testTimeout: 60_000 })
@@ -285,5 +302,97 @@ describe('the edge strokes of a sphere on a table, at the view they were made fo
       expect(n, `turn ${turn}`).toBeGreaterThan(550)
       expect(hidden / n, `turn ${turn}`).toBeLessThanOrEqual(most)
     }
+  })
+})
+
+describe('the hidden pass: the dash mask and the depth test turned the other way', () => {
+  it('uses the per-frame model’s hidden dash (5 px on, 4 px off) and its faintness (alpha 0.5)', () => {
+    expect(HIDDEN_DASH).toEqual([5, 4])
+    expect([DASH_ON, DASH_OFF]).toEqual([5, 4])
+    expect(HIDDEN_ALPHA).toBe(0.5)
+    // the model's hidden run is a stroke of alpha 0.5 (lines.ts): the number has no export to import, so read it
+    const lines = readFileSync(new URL('../model/lines.ts', import.meta.url), 'utf8')
+    expect(lines).toContain('alpha: hiddenRun ? 0.5 : 1,')
+  })
+
+  describe('dashMask', () => {
+    it('is 1 inside a dash and 0 in a gap, a dash starting at the stroke’s start: 5 px on, 4 px off', () => {
+      for (const s of [1, 2.5, 4]) expect(dashMask(s), `s ${s}`).toBe(1)
+      for (const s of [6, 7, 8]) expect(dashMask(s), `s ${s}`).toBe(0)
+      // the next dash
+      for (const s of [10, 11.5, 13]) expect(dashMask(s), `s ${s}`).toBe(1)
+      for (const s of [15, 16.5, 17]) expect(dashMask(s), `s ${s}`).toBe(0)
+    })
+
+    it('has an edge DASH_EDGE (1 px) wide, centred on the end of a dash: half at the start and at the end, whole and nothing half a pixel in and out', () => {
+      expect(DASH_EDGE).toBe(1)
+      expect(dashMask(0)).toBeCloseTo(0.5, 12)
+      expect(dashMask(5)).toBeCloseTo(0.5, 12)
+      expect(dashMask(9)).toBeCloseTo(0.5, 12)
+      expect(dashMask(-0.5)).toBe(0)
+      expect(dashMask(0.5)).toBe(1)
+      expect(dashMask(4.5)).toBe(1)
+      expect(dashMask(5.5)).toBe(0)
+      expect(dashMask(8.5)).toBe(0)
+      expect(dashMask(9.5)).toBe(1)
+      expect(dashMask(0.25)).toBeCloseTo(0.75, 12)
+      expect(dashMask(5.25)).toBeCloseTo(0.25, 12)
+    })
+
+    it('repeats every 9 px, before the start of the stroke too (its cap)', () => {
+      for (const s of [-3.3, -0.2, 0.1, 2, 4.9, 5.2, 7, 8.8]) {
+        for (const k of [-3, -1, 1, 4]) expect(dashMask(s + 9 * k), `s ${s} k ${k}`).toBeCloseTo(dashMask(s), 9)
+      }
+    })
+
+    it('covers 5 px of every 9: the edges lose and gain the same, and the share on is 5/9', () => {
+      let sum = 0
+      let on = 0
+      const steps = 9000
+      for (let i = 0; i < steps; i++) {
+        const v = dashMask((i + 0.5) / 1000)
+        sum += v / 1000
+        if (v >= 0.5) on++
+      }
+      expect(sum).toBeCloseTo(5, 2)
+      expect(on / steps).toBeCloseTo(5 / 9, 2)
+    })
+
+    it('takes another pattern too: 2 on, 2 off', () => {
+      expect(dashMask(1, 2, 2)).toBe(1)
+      expect(dashMask(3, 2, 2)).toBe(0)
+      expect(dashMask(5, 2, 2)).toBe(1)
+    })
+  })
+
+  describe('hiddenShare', () => {
+    const bias = 0.1
+    const flat = image(20, 20, () => 10)
+
+    it('draws nothing where the stroke is on or in front of the surface, and the dashed faint stroke where a surface is nearer', () => {
+      expect(hiddenShare(flat, 5, 5, 7, 2, bias, 1, 2)).toBe(0)
+      expect(hiddenShare(flat, 5, 5, 10, 2, bias, 1, 2)).toBe(0)
+      // well behind: the mask and the faintness
+      expect(hiddenShare(flat, 5, 5, 10.5, 2, bias, 1, 2)).toBe(HIDDEN_ALPHA)
+      expect(hiddenShare(flat, 5, 5, 10.5, 2, bias, 1, 6)).toBe(0)
+      expect(hiddenShare(flat, 5, 5, 10.5, 2, bias, 1, 5)).toBeCloseTo(HIDDEN_ALPHA * 0.5, 12)
+    })
+
+    it('is the other half of the normal pass at every depth: where the normal pass draws a share v of the stroke, the hidden pass draws 1 - v, so the stroke is whole once between them', () => {
+      for (let vz = 9; vz <= 10.5; vz += 0.013) {
+        const seen = depthVisible(flat, 5, 5, vz, 2, bias, 1)
+        const hidden = hiddenShare(flat, 5, 5, vz, 2, bias, 1, 2) / (dashMask(2) * HIDDEN_ALPHA)
+        expect(seen + hidden, `vz ${vz}`).toBeCloseTo(1, 12)
+      }
+    })
+
+    it('uses the same tolerance as the normal pass, slope included', () => {
+      const slope = image(20, 20, (x) => 10 + 0.05 * x)
+      for (const vz of [10.2, 10.5, 10.7]) {
+        const seen = depthVisible(slope, 5, 5, vz, 3, bias, 1)
+        const hidden = hiddenShare(slope, 5, 5, vz, 3, bias, 1, 2) / HIDDEN_ALPHA
+        expect(seen + hidden, `vz ${vz}`).toBeCloseTo(1, 12)
+      }
+    })
   })
 })

@@ -7,7 +7,7 @@ import { randomFor } from '../../../style/random'
 import type { ProgramInfo } from '../../gl/program'
 import type { PaintParams } from '../params'
 import type { PaperGpu } from './composite'
-import type { Resources, Gl } from './resources'
+import { complete, type Resources, type Gl } from './resources'
 import { UNDERPAINT_STREAK_GAIN, UNDERPAINT_TEXTURE_MAX, UNDERPAINT_WEAVE_GATE } from './shaders/underpaint'
 import { GBUFFER_SCALE } from './gbuffer'
 import { srgbEncodeFast } from './strokes'
@@ -41,7 +41,10 @@ export interface UnderpaintTexels {
   mean: [number, number, number]
 }
 
-const BLEED = 2
+// How far an empty texel next to a form takes the form's colour, in texels (the baked pass dilates its image the same
+// distance, shaders/bakedUnderpaint.ts).
+export const UNDERPAINT_BLEED = 2
+const BLEED = UNDERPAINT_BLEED
 
 // The texels of an underpainting image (3 floats per pixel, linear-light sRGB, NaN where empty) of
 // `width` x `height`; null when the image is not that size or covers nothing.
@@ -143,6 +146,9 @@ export interface UnderpaintWarp {
 
 export class UnderpaintRenderer {
   private texture: WebGLTexture | null = null
+  // A framebuffer on the texture, made when a pass draws the underpainting (the baked surfaces) instead of an image
+  // being uploaded.
+  private fbo: WebGLFramebuffer | null = null
   private width = 0
   private height = 0
   // The image the texture holds now: a frame painted again does not make the texels again.
@@ -173,12 +179,7 @@ export class UnderpaintRenderer {
     if (!texels) return false
     this.mean = texels.mean
     const gl = this.gl
-    if (!this.texture || this.width !== width || this.height !== height) {
-      this.res.deleteTexture(this.texture)
-      this.texture = this.res.texture(gl.RGBA8, width, height, gl.LINEAR)
-      this.width = width
-      this.height = height
-    }
+    this.ensureTexture(width, height)
     if (!this.texture) {
       this.has = false
       return false
@@ -187,6 +188,50 @@ export class UnderpaintRenderer {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, texels.rgba)
     return true
+  }
+
+  // The texture, `width` x `height` texels: the one that is there, or a new one (and then it has no framebuffer yet).
+  private ensureTexture(width: number, height: number): void {
+    const gl = this.gl
+    if (!this.texture || this.width !== width || this.height !== height) {
+      this.res.deleteFramebuffer(this.fbo)
+      this.fbo = null
+      this.res.deleteTexture(this.texture)
+      this.texture = this.res.texture(gl.RGBA8, width, height, gl.LINEAR)
+      this.width = width
+      this.height = height
+    }
+  }
+
+  // The framebuffer of the underpainting texture, for a pass that draws the underpainting (the baked surfaces, gl/bakedSurfaces.ts)
+  // in place of an image uploaded from the model: the texture is made `width` x `height` texels if it is not that. Null when no
+  // texture or framebuffer can be made. The caller draws every texel and then calls drawn().
+  renderTarget(width: number, height: number): WebGLFramebuffer | null {
+    const gl = this.gl
+    this.ensureTexture(width, height)
+    if (!this.texture) return null
+    if (!this.fbo) {
+      const fbo = this.res.framebuffer()
+      if (!fbo) return null
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texture, 0)
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0])
+      const good = complete(gl)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      if (!good) {
+        this.res.deleteFramebuffer(fbo)
+        return null
+      }
+      this.fbo = fbo
+    }
+    return this.fbo
+  }
+
+  // A pass has drawn the underpainting into the texture (renderTarget): draw() lays it, and an image uploaded before it is
+  // not what the texture holds any more.
+  drawn(): void {
+    this.held = null
+    this.has = true
   }
 
   // The pass, into the framebuffer bound for drawing (both attachments, no blending: it goes first).
@@ -266,6 +311,7 @@ export class UnderpaintRenderer {
   }
 
   destroy(): void {
+    this.res.deleteFramebuffer(this.fbo)
     this.res.deleteTexture(this.texture)
     this.res.deleteTexture(this.oldDepth)
     this.forget()
@@ -274,6 +320,7 @@ export class UnderpaintRenderer {
   // After a context loss the texture is already dead.
   forget(): void {
     this.texture = null
+    this.fbo = null
     this.width = 0
     this.height = 0
     this.held = null

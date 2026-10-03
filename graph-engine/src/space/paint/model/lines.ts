@@ -26,8 +26,9 @@ import { veilOf, type Veil } from './roles'
 import { BEHIND_VEIL_LAYER, polylinePath, roleIndex, type PaintCtx } from './strokes'
 import { project, pxPerUnit } from './view'
 
-// The default dash of a hidden stretch drawn dashed, CSS px.
-const HIDDEN_DASH = [5, 4]
+// The default dash of a hidden stretch drawn dashed, CSS px: on, off. (Exported: the renderer's hidden pass, gl/depthTest.ts,
+// dashes the hidden parts of a baked frame's data lines the same way.)
+export const HIDDEN_DASH: readonly number[] = [5, 4]
 // A corner sharper than this ends a stroke (the corner is its end, exactly).
 const CORNER = (30 * Math.PI) / 180
 // The head of an arrow opens ±26 degrees from the shaft.

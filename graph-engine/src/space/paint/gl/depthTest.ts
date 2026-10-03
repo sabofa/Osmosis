@@ -16,6 +16,7 @@
 //                 point either: a mark may cross an occlusion boundary (a pull from the figure into the table behind
 //                 it), and then part of it lies on no surface at all.
 
+import { HIDDEN_DASH } from '../model/lines'
 import { NO_SURFACE } from './depth'
 
 // The most the surface may change in depth over one pixel, in biases, for the slope that widens the tolerance.
@@ -61,6 +62,35 @@ export function depthVisible(depth: SceneDepthImage, x: number, y: number, vz: n
   const slope = sceneSlope(depth, x, y, bias)
   const tol = bias + slope * Math.max(hw * pixelRatio, 1.5)
   return 1 - sstep(tol, 2 * tol, vz - texel(depth, x, y))
+}
+
+// The hidden pass of a baked frame (shaders/stroke.ts, strokes.ts): a data line whose style is 'dashed' (StrokeBatch.hidden
+// HIDDEN_DASHED) is drawn twice. The normal pass shows it where it is on or in front of a surface (depthVisible, above); the
+// hidden pass shows it where a surface is nearer (the same tolerance, inverted, so the two passes cover each point once
+// between them), dashed by the screen arc length of the stroke and faint, as the per-frame model draws a hidden run
+// (model/lines.ts: the dash HIDDEN_DASH, alpha 0.5).
+export const DASH_ON = HIDDEN_DASH[0]
+export const DASH_OFF = HIDDEN_DASH[1]
+export const HIDDEN_ALPHA = 0.5
+// How wide the edge of a dash is, CSS px: coverage goes from 0 to 1 over this much arc length, centred on the dash's end.
+export const DASH_EDGE = 1
+
+// The dash mask at arc length `s` CSS px along the stroke: 1 inside a dash, 0 in a gap, DASH_EDGE wide at each end. A dash
+// starts at the stroke's start (s = 0) and the pattern repeats every DASH_ON + DASH_OFF; the stroke's caps (s < 0 and past
+// its end) continue the pattern. The shader's dashMask is this arithmetic.
+export function dashMask(s: number, on = DASH_ON, off = DASH_OFF, edge = DASH_EDGE): number {
+  const period = on + off
+  const p = s - Math.floor(s / period) * period
+  // the distance past the start of the nearest dash: negative in the last half of a gap, before the next dash
+  const d = p > on + 0.5 * off ? p - period : p
+  const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
+  return clamp01((d + 0.5 * edge) / edge) * clamp01((on - d + 0.5 * edge) / edge)
+}
+
+// How much of a stroke the hidden pass draws at pixel (x, y), `s` CSS px along it: where a surface is nearer (depthVisible's
+// complement), dashed, and at HIDDEN_ALPHA. 0 where the frame has no depth to test against (the pass is not drawn then).
+export function hiddenShare(depth: SceneDepthImage, x: number, y: number, vz: number, hw: number, bias: number, pixelRatio: number, s: number): number {
+  return (1 - depthVisible(depth, x, y, vz, hw, bias, pixelRatio)) * dashMask(s) * HIDDEN_ALPHA
 }
 
 // Where a CSS px position of the view lies in the depth image (GL's y up, so y is flipped), as continuous pixels.

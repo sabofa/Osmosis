@@ -159,6 +159,11 @@ export interface PaintFrame {
   stats: { strokes: number; byRole: Record<Role, number>; loads: number }
 }
 
+// What the renderer paints: a PaintFrame, or a baked frame (the baked painting's, bake/types.ts FrameFromBake), which has no
+// underpainting image (null, or empty): the renderer draws its underpainting from the baked surfaces it was given
+// (PaintRenderer.setBakedSurfaces), and lays none when it has none. A PaintFrame is one.
+export type PaintFrameInput = Omit<PaintFrame, 'underpaint'> & { underpaint: Float32Array | null }
+
 // The model's two entry points (implemented in space/paint/model/index.ts).
 export type BuildParticles = (scene: SpaceScene, colours: SceneColours, params: PaintParams) => ParticleSet
 export type PaintFrameFn = (

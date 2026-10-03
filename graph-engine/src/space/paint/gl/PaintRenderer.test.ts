@@ -3,7 +3,8 @@ import { NO_WEBGL2_MESSAGE } from '../../gl/context'
 import { fakeCanvas } from '../../gl/fakeGl'
 import { meshMark, scene } from '../../testing/marks'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams } from '../params'
-import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type PaintFrame, type PaintView, type SceneColours, type StrokeBatch } from '../types'
+import { HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, type BakedSurface } from '../bake/types'
+import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type PaintFrame, type PaintFrameInput, type PaintView, type SceneColours, type StrokeBatch } from '../types'
 import { encodeFloatTexel } from './gbuffer'
 import { createPaintFakeGl, timeline, type PaintFakeGl } from './fakePaintGl'
 import { PaintRenderer } from './PaintRenderer'
@@ -1090,5 +1091,563 @@ describe('lifecycle', () => {
     expect(onError).toHaveBeenCalled()
     expect(onError.mock.calls[0][0]).toContain('failed to compile')
     expect(paint.fake.draws.length).toBe(0)
+  })
+})
+
+// --- the baked painting (Task 5) -------------------------------------------------------------------------------------------
+
+describe('the baked underpainting: the surfaces drawn for the view into the image the composite reads', () => {
+  // a unit-ish square of baked surface at height z over the scene's squares (which span [-1, 1]²)
+  const bakedSquare = (z: number, mark: number, options: { closed?: boolean; alpha?: number; front?: [number, number, number]; back?: [number, number, number] } = {}): BakedSurface => {
+    const closed = options.closed ?? false
+    const alpha = options.alpha ?? 1
+    const front = options.front ?? [0.2, 0.4, 0.8]
+    const back = options.back ?? [0.9, 0.5, 0.1]
+    const rep = (c: [number, number, number]) => Float32Array.from([...c, ...c, ...c, ...c])
+    return {
+      mark,
+      positions: Float32Array.from([-1, -1, z, 1, -1, z, 1, 1, z, -1, 1, z]),
+      normals: Float32Array.from([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      closed,
+      underFront: rep(front),
+      underBack: closed ? null : rep(back),
+      alphaFront: new Float32Array(4).fill(alpha),
+      alphaBack: closed ? null : new Float32Array(4).fill(alpha),
+      uFront: new Float32Array(4),
+      uBack: closed ? null : new Float32Array(4),
+      famFront: new Uint8Array(4),
+      famBack: closed ? null : new Uint8Array(4),
+      local: new Float32Array(12),
+    }
+  }
+  const SURFACES = () => [bakedSquare(0, 0), bakedSquare(-1, 1, { closed: true })]
+
+  // A baked frame: no underpainting image, and a `hidden` array (the baked frames' mark).
+  function bakedFrame(layers: number[], hidden?: number[]): PaintFrameInput {
+    const f = frame(layers)
+    f.strokes.hidden = Uint8Array.from(hidden ?? layers.map(() => HIDDEN_NA))
+    return { ...f, underpaint: null }
+  }
+
+  const kinds = (paint: PaintFakeGl) => timeline(paint).map((e) => e.kind)
+
+  function bakedSetup(options: Parameters<typeof createPaintFakeGl>[0] = {}) {
+    const ctx = setup(options)
+    ctx.renderer.setScene(TWO, COLOURS)
+    ctx.renderer.setBakedSurfaces(SURFACES())
+    return ctx
+  }
+
+  // The texture bound to `unit` when the n-th draw (0-based) happened, by replaying the calls.
+  function textureAt(paint: PaintFakeGl, drawIndex: number, unit: number): unknown {
+    const draws = new Set(['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced'])
+    let active = 0
+    const bound: Record<number, unknown> = {}
+    let seen = 0
+    for (const call of paint.fake.calls) {
+      if (call.fn === 'activeTexture') active = (call.args[0] as number) - GL_TEXTURE0
+      else if (call.fn === 'bindTexture') bound[active] = call.args[1]
+      else if (draws.has(call.fn)) {
+        if (seen === drawIndex) return bound[unit]
+        seen++
+      }
+    }
+    return undefined
+  }
+
+  // The texture attached to a framebuffer (COLOR_ATTACHMENT0).
+  const attachedTexture = (paint: PaintFakeGl, fbo: unknown): unknown => {
+    let bound: unknown = null
+    let found: unknown
+    for (const call of paint.fake.calls) {
+      if (call.fn === 'bindFramebuffer') bound = call.args[1]
+      else if (call.fn === 'framebufferTexture2D' && bound === fbo && call.args[1] === 0x8ce0) found = call.args[3]
+    }
+    return found
+  }
+
+  it('draws the scene’s depth for the view, then each surface, then the rim, and lays the image first: no image is uploaded', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    // the baked frame is tested against the depth (two meshes), the surfaces against the depth at the G-buffer's size (two
+    // meshes again), the two surfaces, the rim, the underpainting laid, the layer, the composite
+    expect(kinds(paint)).toEqual(['depth', 'depth', 'depth', 'depth', 'surfaces', 'surfaces', 'dilate', 'underpaint', 'copy', 'stroke', 'composite'])
+    // no image went up: the texels came from the pass
+    const uploads = paint.fake.calls.filter((c) => c.fn === 'texSubImage2D' && c.args[6] === GL_RGBA && c.args[7] === GL_UNSIGNED_BYTE && c.args[4] === 400 && c.args[5] === 300)
+    expect(uploads.length).toBe(0)
+    expect(renderer.stats.underpaintBaked).toBe(true)
+    expect(renderer.stats.bakedSurfaces).toBe(2)
+    expect(renderer.stats.underpaintWarped).toBe(false)
+  })
+
+  it('fills the very texture the composite reads: the rim pass draws into a framebuffer whose texture is the one the underpainting pass samples', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const events = timeline(paint)
+    const dilate = events.find((e) => e.kind === 'dilate')!
+    const fbo = dilate.draw?.framebuffer
+    expect(fbo).toBeTruthy()
+    const target = attachedTexture(paint, fbo)
+    expect(target).toBeTruthy()
+    const index = paint.fake.draws.indexOf(events.find((e) => e.kind === 'underpaint')!.draw!)
+    expect(textureAt(paint, index, 0)).toBe(target)
+    // it is the same kind of texture the image path makes: RGBA8, bilinear
+    const storage = paint.fake.calls.filter((c) => c.fn === 'texStorage2D' && c.args[2] === 0x8058 && c.args[3] === 400 && c.args[4] === 300)
+    expect(storage.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('draws every surface into a target of the G-buffer’s size with the depth test on, no blending, one draw each of its triangles', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const surfaces = timeline(paint).filter((e) => e.kind === 'surfaces')
+    expect(surfaces.length).toBe(2)
+    for (const e of surfaces) {
+      expect(e.draw).toMatchObject({ fn: 'drawElements', count: 6, depthTest: true, depthWrite: true, blend: false, cull: 'none', depthFunc: 0x0201 })
+    }
+    // the first is open, the second closed
+    expect(surfaces.map((e) => e.uniforms.u_closed)).toEqual([[0], [1]])
+    // into one framebuffer that is neither the canvas nor a paint target
+    const fbo = surfaces[0].draw?.framebuffer
+    expect(fbo).toBeTruthy()
+    expect(surfaces[1].draw?.framebuffer).toBe(fbo)
+    // the viewport is the G-buffer's: 400 x 300 for an 800 x 600 view
+    const viewports = paint.fake.calls.filter((c) => c.fn === 'viewport').map((c) => c.args)
+    expect(viewports).toContainEqual([0, 0, 400, 300])
+  })
+
+  it('draws with the view’s matrix put on the G-buffer’s grid (row 0 the top), the eye and the depth base, tested against the scene’s depth', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const surface = timeline(paint).find((e) => e.kind === 'surfaces')!
+    const u = surface.uniforms
+    const m = u.u_viewProj![1] as Float32Array
+    // view()'s diag(0.5, 0.5, -0.1, 1) on the grid of 400 x 300 texels of two CSS px for an 800 x 600 view: x kept, y flipped
+    expect(m[0]).toBeCloseTo(0.5, 6)
+    expect(m[5]).toBeCloseTo(-0.5, 6)
+    expect(m[10]).toBeCloseTo(-0.1, 6)
+    expect(u.u_viewDir).toEqual([0, 0, -1])
+    expect(u.u_perspective).toEqual([0])
+    expect(u.u_sceneTest).toEqual([1])
+    expect((u.u_depthBias![0] as number)).toBeGreaterThan(0)
+    // the origin of the surfaces is the middle of their box: (0, 0, -0.5); the eye (0, 0, 10) relative to it
+    expect(u.u_relEye).toEqual([0, 0, 10.5])
+    // dot(origin - eye, viewDir) = dot((0, 0, -10.5), (0, 0, -1))
+    expect(u.u_depthBase).toEqual([10.5])
+  })
+
+  it('tests the surfaces against the scene’s depth drawn again at the G-buffer’s size, in its orientation (y flipped), after the strokes’ own', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const depths = timeline(paint).filter((e) => e.kind === 'depth')
+    expect(depths.length).toBe(4)
+    // the strokes' (backing size, GL's y up) then the surfaces' (G-buffer grid, y flipped)
+    expect((depths[0].uniforms.u_viewProj![1] as Float32Array)[5]).toBeCloseTo(0.5, 6)
+    expect((depths[2].uniforms.u_viewProj![1] as Float32Array)[5]).toBeCloseTo(-0.5, 6)
+    expect(depths[2].draw?.framebuffer?.id).not.toBe(depths[0].draw?.framebuffer?.id)
+    // the surfaces sample that depth, not the strokes'
+    const surface = timeline(paint).find((e) => e.kind === 'surfaces')!
+    const index = paint.fake.draws.indexOf(surface.draw!)
+    expect(textureAt(paint, index, 0)).toBe(attachedTexture(paint, depths[2].draw?.framebuffer))
+    // a target of each size: RG32F 800 x 600 and 400 x 300
+    const rg = paint.fake.calls.filter((c) => c.fn === 'texStorage2D' && c.args[2] === 0x8230).map((c) => [c.args[3], c.args[4]])
+    expect(rg).toContainEqual([800, 600])
+    expect(rg).toContainEqual([400, 300])
+  })
+
+  it('does the same for a perspective view: the eye per fragment', () => {
+    const { paint, renderer } = bakedSetup()
+    const v = view()
+    v.viewProj = Float32Array.from([0.5, 0, 0, 0, 0, 0.5, 0, 0, 0, 0, -0.1, -1, 0, 0, 0, 10])
+    renderer.paint(bakedFrame([BLOCK]), v, PARAMS, 'none')
+    expect(timeline(paint).find((e) => e.kind === 'surfaces')!.uniforms.u_perspective).toEqual([1])
+  })
+
+  it('lays the image of a frame that has one, and not the surfaces', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none')
+    expect(kinds(paint)).toEqual(['underpaint', 'copy', 'stroke', 'composite'])
+    expect(renderer.stats.underpaintBaked).toBe(false)
+  })
+
+  it('takes a null and an empty image alike for no image', () => {
+    for (const underpaint of [null, new Float32Array(0)]) {
+      const { paint, renderer } = bakedSetup()
+      renderer.paint({ ...frame([BLOCK]), underpaint }, view(), PARAMS, 'none')
+      expect(kinds(paint).includes('surfaces'), String(underpaint)).toBe(true)
+      expect(renderer.stats.underpaintBaked).toBe(true)
+    }
+  })
+
+  it('lays no underpainting when the frame has none and no surfaces are set: nothing, and no error', () => {
+    const { paint, renderer, onError } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.paint({ ...frame([BLOCK]), underpaint: null }, view(), PARAMS, 'none')
+    expect(kinds(paint)).toEqual(['stroke', 'composite'])
+    expect(renderer.stats.underpaintBaked).toBe(false)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('goes back to the image path when the surfaces are taken away (null), and frees them', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const before = balance(paint)
+    renderer.setBakedSurfaces(null)
+    expect(balance(paint).buffer).toBeLessThan(before.buffer)
+    const draws = paint.fake.draws.length
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none')
+    expect(timeline(paint).slice(-4).map((e) => e.kind)).toEqual(['underpaint', 'copy', 'stroke', 'composite'])
+    expect(paint.fake.draws.length).toBeGreaterThan(draws)
+    // and a frame with no image then has none
+    renderer.paint({ ...frame([BLOCK]), underpaint: null }, view(), PARAMS, 'none')
+    expect(renderer.stats.underpaintBaked).toBe(false)
+  })
+
+  it('is left out of the flat role view, as the image is', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'roles')
+    expect(kinds(paint).includes('surfaces')).toBe(false)
+    expect(kinds(paint).includes('underpaint')).toBe(false)
+  })
+
+  it('draws no surface that has no coverage anywhere (a veil, a lit bare table)', () => {
+    const { paint, renderer } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.setBakedSurfaces([bakedSquare(0, 0), bakedSquare(-1, 1, { alpha: 0 })])
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    expect(timeline(paint).filter((e) => e.kind === 'surfaces').length).toBe(1)
+    expect(renderer.stats.bakedSurfaces).toBe(1)
+    // and with none that has any, nothing is laid
+    const none = setup()
+    none.renderer.setScene(TWO, COLOURS)
+    none.renderer.setBakedSurfaces([bakedSquare(0, 0, { alpha: 0 }), null])
+    none.renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    expect(timeline(none.paint).some((e) => e.kind === 'surfaces' || e.kind === 'dilate' || e.kind === 'underpaint')).toBe(false)
+  })
+
+  it('does not warp: a baked frame that is also re-projected has its underpainting drawn for this very view', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none', { from: view(), depth: new Float32Array(400 * 300).fill(5) })
+    const under = timeline(paint).find((e) => e.kind === 'underpaint')!
+    expect(paint.fake.programSource(under.draw!.program).fragment).not.toContain('#define WARP')
+    expect(renderer.stats.underpaintWarped).toBe(false)
+    expect(renderer.stats.underpaintBaked).toBe(true)
+  })
+
+  it('makes no scene-depth pass and does not test the surfaces against it where the context cannot render to float: they are tested against each other', () => {
+    const { paint, renderer, onError } = bakedSetup({ colorBufferFloat: false })
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const events = timeline(paint)
+    expect(events.some((e) => e.kind === 'depth')).toBe(false)
+    expect(events.filter((e) => e.kind === 'surfaces').map((e) => e.uniforms.u_sceneTest)).toEqual([[0], [0]])
+    expect(renderer.stats.underpaintBaked).toBe(true)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('draws the same calls for the same frame and surfaces (no time, no randomness)', () => {
+    const run = () => {
+      const { paint, renderer } = bakedSetup()
+      renderer.paint(bakedFrame([BLOCK, FORM]), view(), PARAMS, 'none')
+      return JSON.stringify(paint.fake.calls.filter((c) => c.fn.startsWith('uniform') || c.fn === 'bufferData').map((c) => [c.fn, c.args.map((a) => (ArrayBuffer.isView(a) ? Array.from(a as unknown as ArrayLike<number>).slice(0, 64) : a))]))
+    }
+    expect(run()).toBe(run())
+  })
+
+  it('reports a surface it cannot draw through onError and draws the rest', () => {
+    const { paint, renderer, onError } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.setBakedSurfaces([bakedSquare(0, 0), { ...bakedSquare(-1, 7), normals: new Float32Array(3) }])
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][0]).toMatch(/mark 7/)
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    expect(timeline(paint).filter((e) => e.kind === 'surfaces').length).toBe(1)
+    // a surface that cannot be drawn is not a failure of the renderer: it keeps painting
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    expect(timeline(paint).filter((e) => e.kind === 'surfaces').length).toBe(2)
+  })
+
+  it('frees every buffer, target and framebuffer it made with the renderer', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    expect(Object.values(balance(paint)).some((n) => n > 0)).toBe(true)
+    renderer.dispose()
+    expect(balance(paint)).toEqual({ buffer: 0, vertexArray: 0, program: 0, shader: 0, texture: 0, framebuffer: 0, renderbuffer: 0 })
+  })
+})
+
+describe('uploading and recolouring the baked surfaces', () => {
+  const GL_ARRAY_BUFFER = 0x8892
+  const quad = (z: number, mark: number, fill = 0.5): BakedSurface => ({
+    mark,
+    positions: Float32Array.from([-1, -1, z, 1, -1, z, 1, 1, z, -1, 1, z]),
+    normals: Float32Array.from([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+    closed: false,
+    underFront: new Float32Array(12).fill(fill),
+    underBack: new Float32Array(12).fill(1 - fill),
+    alphaFront: new Float32Array(4).fill(1),
+    alphaBack: new Float32Array(4).fill(1),
+    uFront: new Float32Array(4),
+    uBack: new Float32Array(4),
+    famFront: new Uint8Array(4),
+    famBack: new Uint8Array(4),
+    local: new Float32Array(12),
+  })
+
+  it('uploads once per bake: positions, normals, colours (8 floats a vertex) and the triangles, and the same arrays again uploads nothing', () => {
+    const { paint, renderer } = setup()
+    const surfaces = [quad(0, 0), quad(-1, 1)]
+    renderer.setBakedSurfaces(surfaces)
+    const uploads = paint.fake.uploads
+    // per surface: 12 + 12 + 32 floats and 6 indices
+    expect(uploads.filter((u) => u.target === GL_ARRAY_BUFFER).map((u) => u.data?.length)).toEqual([12, 12, 32, 12, 12, 32])
+    expect(uploads.filter((u) => u.target !== GL_ARRAY_BUFFER).map((u) => u.data?.length)).toEqual([6, 6])
+    renderer.setBakedSurfaces(surfaces)
+    expect(paint.fake.uploads.length).toBe(uploads.length)
+    // another bake replaces them, and frees the first's buffers
+    const created = paint.fake.created.buffer
+    renderer.setBakedSurfaces([quad(0, 0)])
+    expect(paint.fake.created.buffer).toBe(created + 4)
+    expect(paint.fake.deleted.buffer).toBe(8)
+  })
+
+  it('recolours by writing only the colour buffers: under front, under back and the coverage, and nothing else', () => {
+    const { paint, renderer } = setup()
+    renderer.setBakedSurfaces([quad(0, 0), quad(-1, 1)])
+    const uploads = paint.fake.uploads.length
+    const created = { ...paint.fake.created }
+    paint.fake.calls.length = 0
+    const recoloured = [quad(0, 0, 0.1), quad(-1, 1, 0.9)]
+    recoloured[1].alphaFront.fill(0.25)
+    renderer.updateBakedColours(recoloured)
+    expect(paint.fake.uploads.length).toBe(uploads)
+    expect(paint.fake.created).toEqual(created)
+    const subs = paint.fake.calls.filter((c) => c.fn === 'bufferSubData')
+    expect(subs.length).toBe(2)
+    expect(subs.every((c) => c.args[0] === GL_ARRAY_BUFFER && c.args[1] === 0 && (c.args[2] as Float32Array).length === 32)).toBe(true)
+    const first = subs[0].args[2] as Float32Array
+    // under front 0.1 (3), under back 0.9 (3), coverage 1 and 1
+    expect(Array.from(first.subarray(0, 8)).map((v) => +v.toFixed(3))).toEqual([0.1, 0.1, 0.1, 0.9, 0.9, 0.9, 1, 1])
+    const second = subs[1].args[2] as Float32Array
+    expect(Array.from(second.subarray(6, 8))).toEqual([0.25, 1])
+    // no buffer, vertex array, framebuffer or texture was made, and no pointer set again
+    expect(paint.fake.calls.filter((c) => c.fn === 'vertexAttribPointer' || c.fn === 'bufferData').length).toBe(0)
+  })
+
+  it('uploads in full surfaces that are not the ones set (another vertex count)', () => {
+    const { paint, renderer } = setup()
+    renderer.setBakedSurfaces([quad(0, 0)])
+    const bigger = quad(0, 0)
+    bigger.positions = new Float32Array(15)
+    bigger.normals = new Float32Array(15)
+    bigger.underFront = new Float32Array(15)
+    bigger.underBack = new Float32Array(15)
+    bigger.alphaFront = new Float32Array(5).fill(1)
+    bigger.alphaBack = new Float32Array(5).fill(1)
+    paint.fake.calls.length = 0
+    renderer.updateBakedColours([bigger])
+    expect(paint.fake.calls.filter((c) => c.fn === 'bufferSubData').length).toBe(0)
+    expect(paint.fake.calls.filter((c) => c.fn === 'bufferData').length).toBeGreaterThan(0)
+  })
+
+  it('takes recoloured surfaces as the first when none were set', () => {
+    const { paint, renderer, onError } = setup()
+    renderer.updateBakedColours([quad(0, 0)])
+    expect(paint.fake.uploads.filter((u) => u.target === GL_ARRAY_BUFFER).length).toBe(3)
+    expect(onError).not.toHaveBeenCalled()
+  })
+})
+
+describe('the baked surfaces and a lost context', () => {
+  const quad = (z: number, mark: number, fill: number): BakedSurface => ({
+    mark,
+    positions: Float32Array.from([-1, -1, z, 1, -1, z, 1, 1, z, -1, 1, z]),
+    normals: Float32Array.from([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+    closed: false,
+    underFront: new Float32Array(12).fill(fill),
+    underBack: new Float32Array(12).fill(1 - fill),
+    alphaFront: new Float32Array(4).fill(1),
+    alphaBack: new Float32Array(4).fill(1),
+    uFront: new Float32Array(4),
+    uBack: new Float32Array(4),
+    famFront: new Uint8Array(4),
+    famBack: new Uint8Array(4),
+    local: new Float32Array(12),
+  })
+  const bakedFrame = (): PaintFrameInput => {
+    const f = frame([BLOCK])
+    f.strokes.hidden = Uint8Array.from([HIDDEN_NA])
+    return { ...f, underpaint: null }
+  }
+  const surfaceDraws = (paint: PaintFakeGl) => timeline(paint).filter((e) => e.kind === 'surfaces').length
+  const colourUploads = (paint: PaintFakeGl) => paint.fake.uploads.filter((u) => u.target === 0x8892 && u.data?.length === 32)
+
+  it('uploads them again when the context comes back, and draws them: a lost context never paints the baked surfaces blank', () => {
+    const { paint, renderer, onContextRestored } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.setBakedSurfaces([quad(0, 0, 0.2), quad(-1, 1, 0.4)])
+    renderer.paint(bakedFrame(), view(), PARAMS, 'none')
+    expect(surfaceDraws(paint)).toBe(2)
+    expect(colourUploads(paint).length).toBe(2)
+    paint.canvas.lose()
+    // while it is lost: painting issues no call that errors, and draws nothing
+    const errors = paint.fake.errors.length
+    const draws = paint.fake.draws.length
+    renderer.paint(bakedFrame(), view(), PARAMS, 'none')
+    expect(paint.fake.errors.length).toBe(errors)
+    expect(paint.fake.draws.length).toBe(draws)
+    paint.canvas.restore()
+    expect(onContextRestored).toHaveBeenCalledTimes(1)
+    // the surfaces last given are uploaded again, the same data
+    const ups = colourUploads(paint)
+    expect(ups.length).toBe(4)
+    expect(Array.from(ups[2].data as Float32Array)).toEqual(Array.from(ups[0].data as Float32Array))
+    expect(Array.from(ups[3].data as Float32Array)).toEqual(Array.from(ups[1].data as Float32Array))
+    renderer.paint(bakedFrame(), view(), PARAMS, 'none')
+    expect(surfaceDraws(paint)).toBe(4)
+    expect(renderer.stats.underpaintBaked).toBe(true)
+  })
+
+  it('takes a recolour made while it is lost into the upload on restore, and surfaces set while it is lost the same', () => {
+    const { paint, renderer } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.setBakedSurfaces([quad(0, 0, 0.2)])
+    paint.canvas.lose()
+    renderer.updateBakedColours([quad(0, 0, 0.7)])
+    const errors = paint.fake.errors.length
+    renderer.setBakedSurfaces([quad(0, 0, 0.8), quad(-1, 1, 0.3)])
+    expect(paint.fake.errors.length).toBe(errors)
+    paint.canvas.restore()
+    const ups = colourUploads(paint)
+    // the first upload (before the loss), then the two surfaces set during it
+    expect(ups.length).toBe(3)
+    expect(ups[1].data?.[0]).toBeCloseTo(0.8, 6)
+    expect(ups[2].data?.[0]).toBeCloseTo(0.3, 6)
+    renderer.paint(bakedFrame(), view(), PARAMS, 'none')
+    expect(surfaceDraws(paint)).toBe(2)
+  })
+
+  it('has nothing to upload again when none were set, and does not fail', () => {
+    const { paint, renderer, onError } = setup()
+    renderer.setScene(TWO, COLOURS)
+    paint.canvas.lose()
+    paint.canvas.restore()
+    renderer.paint({ ...frame([BLOCK]), underpaint: null }, view(), PARAMS, 'none')
+    expect(onError).not.toHaveBeenCalled()
+    expect(surfaceDraws(paint)).toBe(0)
+  })
+
+  it('forgets nothing it was given when a failure came before the loss', () => {
+    const { paint, renderer } = setup()
+    renderer.setScene(TWO, COLOURS)
+    renderer.setBakedSurfaces([quad(0, 0, 0.2)])
+    renderer.paint({ ...bakedFrame(), strokes: undefined as never }, view(), PARAMS, 'none')
+    paint.canvas.lose()
+    paint.canvas.restore()
+    renderer.paint(bakedFrame(), view(), PARAMS, 'none')
+    expect(surfaceDraws(paint)).toBe(1)
+  })
+})
+
+describe('the hidden pass: a baked frame’s dashed data lines, drawn again where a surface hides them', () => {
+  const LINE = LAYER_ORDER.indexOf('line')
+  const kinds = (paint: PaintFakeGl) => timeline(paint).map((e) => e.kind)
+  const strokeEvents = (paint: PaintFakeGl) => timeline(paint).filter((e) => e.kind === 'stroke')
+
+  function bakedFrame(layers: number[], hidden: number[]): PaintFrameInput {
+    const f = frame(layers)
+    f.strokes.hidden = Uint8Array.from(hidden)
+    return { ...f, underpaint: null }
+  }
+
+  function scene2() {
+    const ctx = setup()
+    ctx.renderer.setScene(TWO, COLOURS)
+    return ctx
+  }
+
+  it('draws them once more right after the line layer, before the layers after it, in one instanced draw from the slots after the planned ones', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(bakedFrame([BLOCK, LINE, DAB], [HIDDEN_NA, HIDDEN_DASHED, HIDDEN_NA]), view(), PARAMS, 'none')
+    // the depth of the two meshes; block; the line layer (copied forward) and its hidden pass (copied forward); the dab layer; composite
+    expect(kinds(paint)).toEqual(['depth', 'depth', 'stroke', 'copy', 'stroke', 'copy', 'stroke', 'copy', 'stroke', 'composite'])
+    const strokes = strokeEvents(paint)
+    // u_base: the block 0, the line 1, the hidden pass after the 3 planned slots, the dab 2
+    expect(strokes.map((e) => e.uniforms.u_base)).toEqual([[0], [1], [3], [2]])
+    expect(strokes.map((e) => e.draw?.instances)).toEqual([1, 1, 1, 1])
+    // the uniform is set for the hidden draw alone: the other draws never set it, and the dab after it has it back at 0
+    expect(strokes.map((e) => e.uniforms.u_hiddenPass)).toEqual([undefined, undefined, [1], [0]])
+    expect(renderer.stats.strokeDraws).toBe(4)
+    // the strokes planned are three: the hidden pass draws copies, not more strokes
+    expect(renderer.stats.strokes).toBe(3)
+  })
+
+  it('draws every dashed stroke of the frame in that one draw, and only the dashed', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(bakedFrame([LINE, LINE, LINE, FORM], [HIDDEN_DASHED, HIDDEN_NONE, HIDDEN_DASHED, HIDDEN_NA]), view(), PARAMS, 'none')
+    const strokes = strokeEvents(paint)
+    // the form layer first (one stroke), then the line layer (three), then the hidden pass (two, after the four planned)
+    expect(strokes.map((e) => e.uniforms.u_base)).toEqual([[0], [1], [4]])
+    // the instances of each draw are its strokes: one, three, and the two dashed
+    expect(strokes.map((e) => e.draw?.instances)).toEqual([1, 3, 2])
+    expect(strokes[2].uniforms.u_hiddenPass).toEqual([1])
+  })
+
+  it('tests every stroke against the scene’s depth, a baked frame being one: with no re-projection given', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(bakedFrame([BLOCK, LINE], [HIDDEN_NA, HIDDEN_DASHED]), view(), PARAMS, 'none')
+    for (const e of strokeEvents(paint)) expect(e.uniforms.u_depthTest).toEqual([1])
+    expect(renderer.stats.depthTested).toBe(true)
+  })
+
+  it('draws no hidden pass for a frame with nothing dashed, nor for a frame with no hidden array (the per-frame model’s)', () => {
+    const none = scene2()
+    none.renderer.paint(bakedFrame([BLOCK, LINE], [HIDDEN_NA, HIDDEN_NONE]), view(), PARAMS, 'none')
+    expect(strokeEvents(none.paint).map((e) => e.uniforms.u_base)).toEqual([[0], [1]])
+    expect(strokeEvents(none.paint).some((e) => e.uniforms.u_hiddenPass !== undefined)).toBe(false)
+    const model = scene2()
+    model.renderer.paint(frame([BLOCK, LINE]), view(), PARAMS, 'none')
+    expect(strokeEvents(model.paint).length).toBe(2)
+    expect(model.renderer.stats.depthTested).toBe(false)
+  })
+
+  it('draws no hidden pass where there is no depth to say where a surface is nearer: no float targets, or no scene', () => {
+    const noFloat = setup({ colorBufferFloat: false })
+    noFloat.renderer.setScene(TWO, COLOURS)
+    noFloat.renderer.paint(bakedFrame([BLOCK, LINE], [HIDDEN_NA, HIDDEN_DASHED]), view(), PARAMS, 'none')
+    expect(strokeEvents(noFloat.paint).length).toBe(2)
+    const noScene = setup()
+    noScene.renderer.paint(bakedFrame([BLOCK, LINE], [HIDDEN_NA, HIDDEN_DASHED]), view(), PARAMS, 'none')
+    expect(strokeEvents(noScene.paint).length).toBe(2)
+    expect(noScene.onError).not.toHaveBeenCalled()
+  })
+
+  it('packs the dashed strokes again into the data texture, after the planned ones', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(bakedFrame([BLOCK, LINE, DAB], [HIDDEN_NA, HIDDEN_DASHED, HIDDEN_NA]), view(), PARAMS, 'none')
+    const upload = paint.fake.calls.find((c) => c.fn === 'texSubImage2D' && c.args[7] === GL_FLOAT && c.args[6] === GL_RGBA && c.args[4] !== 400)
+    const texels = upload?.args[8] as Float32Array
+    expect(texels).toBeDefined()
+    const at = (slot: number) => Array.from(texels.subarray(slot * TEXELS_PER_STROKE * 4, (slot + 1) * TEXELS_PER_STROKE * 4))
+    // planned: block (slot 0), line (slot 1), dab (slot 2); the hidden copy of the line is slot 3
+    expect(at(3)).toEqual(at(1))
+    expect(at(3).some((v) => v !== 0)).toBe(true)
+    expect(at(3)).not.toEqual(at(0))
+  })
+
+  it('draws the same calls for the same frame (no time, no randomness)', () => {
+    const run = () => {
+      const { paint, renderer } = scene2()
+      renderer.paint(bakedFrame([BLOCK, LINE, DAB], [HIDDEN_NA, HIDDEN_DASHED, HIDDEN_NA]), view(), PARAMS, 'none')
+      return JSON.stringify(paint.fake.calls.filter((c) => c.fn.startsWith('uniform') || c.fn === 'texSubImage2D').map((c) => [c.fn, c.args.map((a) => (ArrayBuffer.isView(a) ? Array.from(a as unknown as ArrayLike<number>).slice(0, 64) : a))]))
+    }
+    expect(run()).toBe(run())
+  })
+
+  it('draws them in the flat role view too', () => {
+    const { paint, renderer } = scene2()
+    renderer.paint(bakedFrame([LINE], [HIDDEN_DASHED]), view(), PARAMS, 'roles')
+    expect(strokeEvents(paint).map((e) => e.uniforms.u_hiddenPass)).toEqual([undefined, [1]])
   })
 })
