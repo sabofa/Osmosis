@@ -372,12 +372,15 @@ export interface PendingRead {
   sync: WebGLSync
   width: number
   height: number
+  // Which context the read was started on (the renderer counts a restore): a read that is polled after the context went, even
+  // one that has come back since, is of a context that is no more and is dropped (dropRead).
+  generation: number
 }
 
 // Starts the readback of a float G-buffer: into `pack` (the buffer, made on first use and grown when the view grows), a
 // fence behind it, and the commands flushed so the fence is on its way. Null when there is no buffer or no fence (read it
-// the plain way then).
-export function beginFloatRead(gl: Gl, res: Resources, target: GBufferTarget, pack: PackBuffer): PendingRead | null {
+// the plain way then). `generation` is the context's, kept with the read (PendingRead.generation).
+export function beginFloatRead(gl: Gl, res: Resources, target: GBufferTarget, pack: PackBuffer, generation = 0): PendingRead | null {
   const { width, height } = target
   const bytes = width * height * 16
   if (!pack.buffer) pack.buffer = res.buffer()
@@ -394,7 +397,17 @@ export function beginFloatRead(gl: Gl, res: Resources, target: GBufferTarget, pa
   gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
   const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
   gl.flush()
-  return sync ? { sync, width, height } : null
+  return sync ? { sync, width, height, generation } : null
+}
+
+// A read that will not be finished (the context went, the renderer was disposed, the fence or the copy failed): its fence is
+// deleted, which on a context that is lost, or one that has come back and never made it, is a call that does nothing.
+export function dropRead(gl: Gl, pending: PendingRead): void {
+  try {
+    gl.deleteSync(pending.sync)
+  } catch {
+    // (nothing to give back)
+  }
 }
 
 // Has the fence passed? Never waits.

@@ -410,6 +410,7 @@ describe('the G-buffer readback that does not wait', () => {
     const started = renderer.startGBuffer(view(4, 4), PARAMS)
     expect(started).toBeInstanceOf(Promise) // the G-buffer comes later, when the fence has passed
     const g = await started
+    if (g === null) throw new Error('a context that is there gives a G-buffer')
     expect(renderer.stats.gbufferRead).toBe('async')
     for (const key of ['width', 'height', 'scale'] as const) expect(g[key]).toBe(expected[key])
     for (const key of ['depth', 'normal', 'value', 'shadow', 'mark'] as const) expect(Array.from(g[key])).toEqual(Array.from(expected[key]))
@@ -453,7 +454,7 @@ describe('the G-buffer readback that does not wait', () => {
     const g = none.renderer.startGBuffer(view(4, 4), PARAMS)
     // (the G-buffer itself, in the same task, as the plain read always gave it)
     expect(g).not.toBeInstanceOf(Promise)
-    if (g instanceof Promise) throw new Error('unreachable')
+    if (g instanceof Promise || g === null) throw new Error('unreachable')
     expect(none.renderer.stats.gbufferRead).toBe('sync')
     expect(none.paint.fences.created).toBe(0)
     expect(none.paint.reads.every((r) => r.pack !== true)).toBe(true)
@@ -462,7 +463,7 @@ describe('the G-buffer readback that does not wait', () => {
     const bytes = asyncSetup({ asyncReadback: true }, { colorBufferFloat: false })
     bytes.paint.setReadback(null) // (all-zero readbacks: an empty G-buffer)
     const g8 = bytes.renderer.startGBuffer(view(4, 4), PARAMS)
-    if (g8 instanceof Promise) throw new Error('the rgba8 layout is read the plain way')
+    if (g8 instanceof Promise || g8 === null) throw new Error('the rgba8 layout is read the plain way')
     expect(bytes.renderer.stats.gbuffer).toBe('rgba8')
     expect(bytes.renderer.stats.gbufferRead).toBe('sync')
     expect(bytes.paint.reads.map((r) => r.type)).toEqual([GL_UNSIGNED_BYTE, GL_UNSIGNED_BYTE, GL_UNSIGNED_BYTE])
@@ -483,12 +484,12 @@ describe('the G-buffer readback that does not wait', () => {
     expect(paint.fake.created.buffer).toBe(before)
   })
 
-  it('gives an empty G-buffer, and no error, when the renderer is disposed while the GPU works', async () => {
-    const { renderer, onError } = asyncSetup({ asyncReadback: true, fenceDelayPolls: 50 })
+  it('gives no G-buffer at all (null), and no error, when the renderer is disposed while the GPU works, and polls no more', async () => {
+    const { paint, renderer, onError } = asyncSetup({ asyncReadback: true, fenceDelayPolls: 50 })
     const pending = renderer.startGBuffer(view(4, 4), PARAMS)
     renderer.dispose()
-    const g = await pending
-    expect(g.mark.every((m) => m === -1)).toBe(true)
+    expect(await pending).toBeNull()
+    expect(paint.fences.polls).toBe(1) // (the first, as it was begun)
     expect(onError).not.toHaveBeenCalled()
   })
 
@@ -496,8 +497,79 @@ describe('the G-buffer readback that does not wait', () => {
     const paint = createPaintFakeGl({}, { width: 800, height: 600 }, { asyncReadback: true })
     const renderer = new PaintRenderer(paint.canvas.canvas, {})
     const g = await renderer.startGBuffer(view(4, 4), PARAMS)
+    if (g === null) throw new Error('a scene with no meshes is an empty G-buffer, not a lost context')
     expect(g.mark.every((m) => m === -1)).toBe(true)
     expect(paint.fences.created).toBe(0)
+  })
+
+  it('gives no G-buffer (null), not an empty one, while the context is lost: the caller must not take it for a scene with nothing in it', async () => {
+    const { paint, renderer, onError } = asyncSetup()
+    paint.canvas.lose()
+    expect(renderer.startGBuffer(view(4, 4), PARAMS)).toBeNull()
+    expect(paint.reads).toEqual([])
+    // and a plain read (no fence) says the same
+    const plain = asyncSetup({})
+    plain.paint.canvas.lose()
+    expect(plain.renderer.startGBuffer(view(4, 4), PARAMS)).toBeNull()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('gives no G-buffer (null) when the context is lost while the GPU works on it, reads nothing, and gives the fence back', async () => {
+    const { paint, renderer, onError } = asyncSetup({ asyncReadback: true, fenceDelayPolls: 6 })
+    const pending = renderer.startGBuffer(view(4, 4), PARAMS)
+    await Promise.resolve()
+    paint.canvas.lose()
+    expect(await pending).toBeNull()
+    // (the fence was not polled to the end, nothing was read from the pack buffer, and nothing is left undeleted)
+    expect(paint.fences.polls).toBe(1)
+    expect(paint.fences.subDataReads).toBe(0)
+    expect(paint.fences.deleted).toBe(paint.fences.created)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('takes what GL threw as the context went for a loss, not a failure: nothing is reported, and the answer is null', async () => {
+    // the context goes as the fence is polled, and the call fails (a fence that broke with it)
+    let lose = () => {}
+    const { renderer, onError, paint } = asyncSetup({ asyncReadback: true, failFence: true, onPoll: () => lose() })
+    lose = () => paint.canvas.lose()
+    expect(await renderer.startGBuffer(view(4, 4), PARAMS)).toBeNull()
+    expect(onError).not.toHaveBeenCalled()
+    // and as the passes are drawn: the readback throws, the context is gone
+    const drawn = asyncSetup()
+    drawn.paint.setReadback(() => {
+      drawn.paint.canvas.lose()
+      throw new Error('the context went mid-read')
+    })
+    expect(drawn.renderer.startGBuffer(view(4, 4), PARAMS)).toBeNull()
+    expect(drawn.onError).not.toHaveBeenCalled()
+    // (a failure that is not a loss is reported, and the G-buffer is empty: the next test)
+  })
+
+  it('does not finish a read on a context that has come back since it began: lost and restored between two polls, it is dropped', async () => {
+    const { paint, renderer, onError } = asyncSetup({ asyncReadback: true, fenceDelayPolls: 6 })
+    const pending = renderer.startGBuffer(view(4, 4), PARAMS)
+    // lost and restored in the one task: the next poll finds a context that is lost no more, and a fence and a buffer that are not its
+    paint.canvas.lose()
+    paint.canvas.restore()
+    expect(await pending).toBeNull()
+    expect(paint.fences.polls).toBe(1) // (not polled again: the fence is of a context that is gone)
+    expect(paint.fences.subDataReads).toBe(0)
+    expect(paint.fences.deleted).toBe(paint.fences.created)
+    expect(onError).not.toHaveBeenCalled()
+    // the next read on the restored context is its own, and finishes
+    paint.setReadback((_a, _w, _h, dst) => (dst as Float32Array).set(texels.flat()))
+    renderer.setScene(TWO, COLOURS)
+    const g = await renderer.startGBuffer(view(4, 4), PARAMS)
+    expect(g && Array.from(g.mark)).toEqual([1, -1, 0, 1])
+  })
+
+  it('gives the fence back when the read fails: a fence that broke is reported, the G-buffer is empty and nothing is left undeleted', async () => {
+    const { paint, renderer, onError } = asyncSetup({ asyncReadback: true, failFence: true })
+    const g = await renderer.startGBuffer(view(4, 4), PARAMS)
+    if (g === null) throw new Error('a failure is not a lost context')
+    expect(g.mark.every((m) => m === -1)).toBe(true)
+    expect(onError).toHaveBeenCalledWith(expect.stringMatching(/readback failed/))
+    expect(paint.fences.deleted).toBe(paint.fences.created)
   })
 })
 

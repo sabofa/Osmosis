@@ -1408,6 +1408,50 @@ describe('the G-buffer of a request is read without the page waiting', () => {
     expect(errors.filter((m) => m !== null)).toEqual([])
   })
 
+  it('asks the model for nothing when the context is lost while the G-buffer is read, and never shows a blank picture: the restore asks again and the picture comes back whole', async () => {
+    const host = new SlowHost()
+    const { engine, painted, gl, go, done } = withPicture({ host, reducedMotion: () => true }, { asyncReadback: true, fenceDelayPolls: 6 })
+    go(sphereView(), P)
+    await vi.waitFor(() => expect(host.requests.length).toBe(1), { timeout: 5000, interval: 2 })
+    host.finish()
+    await done(1)
+    expect(painted[painted.length - 1].frame.strokes.count).toBeGreaterThan(0)
+    // a slider: a full frame, its G-buffer still with the GPU when the context goes
+    go(sphereView(), setParam(P, 'roles.block.width', 30))
+    gl.canvas.lose()
+    await new Promise((r) => setTimeout(r, 60)) // (the poll finds the context gone)
+    expect(host.requests.length).toBe(1) // no G-buffer, so no request: an empty one would have made a frame with nothing in it
+    gl.canvas.restore()
+    await vi.waitFor(() => expect(host.requests.length).toBe(2), { timeout: 5000, interval: 2 })
+    host.finish()
+    await done(2)
+    const last = painted[painted.length - 1]
+    expect(last.kind).toBe('full')
+    expect(last.frame.strokes.count).toBe(host.responses[1].strokes.count)
+    expect(last.frame.strokes.count).toBeGreaterThan(0)
+    // no picture on screen at any time had no strokes
+    expect(painted.every((p) => p.frame.strokes.count > 0)).toBe(true)
+    engine.dispose()
+  })
+
+  it('drops a read that was begun on a context that has come back since: lost and restored in one task, the picture is asked for again, whole, and no error comes of the stale fence', async () => {
+    const host = new SlowHost()
+    const { engine, errors, painted, gl, go, done } = withPicture({ host, reducedMotion: () => true }, { asyncReadback: true, fenceDelayPolls: 3 })
+    go(sphereView(), P)
+    gl.canvas.lose()
+    gl.canvas.restore()
+    await vi.waitFor(() => expect(host.requests.length).toBe(1), { timeout: 5000, interval: 2 })
+    host.finish()
+    await done(1)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(host.requests.length).toBe(1) // the read of the context that went never reached the model
+    expect(painted.length).toBe(1)
+    expect(painted[0].frame.strokes.count).toBeGreaterThan(0)
+    // the loss was said once; nothing else
+    expect(errors.filter((m) => m !== null)).toEqual([expect.stringMatching(/graphics context was lost/)])
+    engine.dispose()
+  })
+
   it('still runs a drag: the model’s frames are adopted, one at a time, through the fence', async () => {
     const host = new SlowHost()
     const clock = { t: 0 }
@@ -1535,6 +1579,83 @@ describe('an answer that comes while a fade runs', () => {
     // the base after both fades is the newest answer's
     expect(painted[painted.length - 1].frame.strokes.count).toBe(host.responses[3].strokes.count)
     expect(frames.filter((f) => f.adopted)).toHaveLength(2)
+    engine.dispose()
+  })
+
+  // the picture a still view gets from a fresh engine: the model's own frame for it, as it made it
+  const stillFrameOf = async (v: PaintView) => {
+    const fresh = withPicture({ reducedMotion: () => true })
+    fresh.go(v, P)
+    await fresh.done(1)
+    const strokes = fresh.painted[0].frame.strokes
+    fresh.engine.dispose()
+    return strokes
+  }
+
+  it('paints the frame of a release at once when it lands mid-fade, and the picture ends as the still frame: not as a re-projection that nothing replaces', async () => {
+    const { host, clock, engine, painted, go } = await midFade()
+    // (t = 130: the model works on a frame for az 52, and the fade from the first answer runs to t = 240)
+    clock.t = 150
+    go(sphereView({ azimuth: 52 }), P) // the pointer is let go: the release's frame is asked for, behind the one that runs
+    clock.t = 160
+    host.finish() // the drag's frame, for the view the camera is at: taken in, and a fade of its own begins
+    await flush()
+    expect(host.requests.length).toBe(4) // the release's, started
+    clock.t = 170
+    host.finish() // the release's frame lands, in the middle of that fade
+    await flush()
+    const last = painted[painted.length - 1]
+    expect(last.kind).toBe('full')
+    sameStrokes(last.frame.strokes, await stillFrameOf(sphereView({ azimuth: 52 })))
+    // and nothing paints over it afterwards: no tick, no take-over
+    const count = painted.length
+    await new Promise((r) => setTimeout(r, 60))
+    expect(painted.length).toBe(count)
+    engine.dispose()
+  })
+
+  it('paints the release’s frame at once when an answer is being held too: the held one is dropped, the still frame is the last picture', async () => {
+    const { host, clock, now, engine, painted, go } = await midFade()
+    clock.t = 160
+    go(now, P)
+    host.finish() // an answer for the view the camera is at, mid-fade: held
+    await flush()
+    clock.t = 170
+    go(sphereView({ azimuth: 52 }), P) // the pointer is let go: the release's frame, asked for at once
+    expect(host.requests.length).toBe(4)
+    clock.t = 180
+    host.finish() // it lands while the first fade still has 60 ms to run
+    await flush()
+    const last = painted[painted.length - 1]
+    expect(last.kind).toBe('full')
+    sameStrokes(last.frame.strokes, await stillFrameOf(sphereView({ azimuth: 52 })))
+    // the answer that was held does not take over after it, whenever the fade would have ended
+    const count = painted.length
+    clock.t = 400
+    await new Promise((r) => setTimeout(r, 60))
+    expect(painted.length).toBe(count)
+    engine.dispose()
+  })
+
+  it('ages the edges of the answer it holds from the turn of the camera, not from the take-over', async () => {
+    const { host, clock, now, engine, painted, go } = await midFade()
+    clock.t = 160
+    go(now, P)
+    host.finish() // an answer for az 52, held (the camera is at its view)
+    await flush()
+    const turned = sphereView({ azimuth: 60, dragging: true })
+    clock.t = 180
+    go(turned, P) // the camera turns from the view of the answer that waits
+    clock.t = 241
+    go(turned, P) // the fade is over: the held answer takes over
+    expect(painted[painted.length - 1].frame.strokes.count).toBeGreaterThan(host.responses[2].strokes.count) // (its own fade has begun)
+    // 205 ms after the turn (144 after the take-over) its edges are gone; the fade between the bases is over by then
+    clock.t = 385
+    go(turned, P)
+    const shown = painted[painted.length - 1].frame.strokes
+    const edge = ROLES.indexOf('edge')
+    expect(shown.count).toBe(host.responses[2].strokes.count)
+    for (let i = 0; i < shown.count; i++) if (shown.role[i] === edge) expect(shown.alpha[i], `edge ${i}`).toBe(0)
     engine.dispose()
   })
 })

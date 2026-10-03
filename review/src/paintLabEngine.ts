@@ -454,6 +454,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     let gbufferMs = 0
     // the G-buffer's depth of the full frame being made, kept for the frame it becomes (see Analysed.depth)
     let gbufferDepth = null as Float32Array | null
+    // The context was lost before the G-buffer could be read (or while the GPU worked on it): there is none to give the model.
+    // Nothing is made of the request; the restore asks again (onContextRestored).
+    let contextLost = false as boolean
     const full = async (): Promise<SessionResponse> => {
       const t0 = performance.now()
       // The G-buffer is drawn now, and read back when the GPU has done it, the page free in between (a paint of a drag goes
@@ -461,6 +464,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       const read = renderer.startGBuffer(view, params)
       const g = read instanceof Promise ? await read : read
       if (disposed) return { id: -1, ok: false, error: 'the engine was disposed' }
+      if (g === null) {
+        contextLost = true
+        return { id: -1, ok: false, error: 'the graphics context was lost' }
+      }
       gbufferDepth = Float32Array.from(g.depth)
       gbufferMs = performance.now() - t0
       return host.frame(request('full', g))
@@ -522,6 +529,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       }
       // the engine was disposed while the model (or the GPU) worked: nothing to show, and nothing to say
       if (disposed) return notShown('full')
+      // (no G-buffer, so no request: the picture comes back with the context)
+      if (contextLost) return notShown('full')
       if (gone(response)) return run(job)
       if (!isFrame(response)) return failed(response)
       kind = response.kind
@@ -548,8 +557,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         const departed = lastJob && turned(view, lastJob.view) ? (movedAt ?? clock()) : null
         // (a tile of the Showcase is no base for a view's frames: it never outranks a request of the lab's own)
         const candidate: Analysed = { sceneId: id, view, depth: gbufferDepth ?? new Float32Array(0), params, strokesParams: params, debug, frame, seq: job.target ? 0 : job.seq, departedAt: departed, scratch: new Scratch() }
-        if (!job.target && fadeRunning()) {
-          // A fade is running: the answer waits for it to end and then takes over.
+        if (!job.target && fadeRunning() && lastJob?.view.dragging) {
+          // A fade is running and the camera is still being dragged: the answer waits for the fade to end and then takes over
+          // (its strokes are re-projected, as the picture is). One for a camera that has stopped (a release's frame, a
+          // settle's, a slider's) is the picture itself and is painted at once, the snapshot's crossfade easing the switch.
           held = { base: candidate, stats: { ms: performance.now() - started, gbufferMs, modelMs, particlesMs, paperMs } }
           scheduleTick()
           return notShown(response.kind)
@@ -862,6 +873,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       lastJob = job
       // the model is running for a view the camera has now left: its answer's strokes are stale from here
       if (flight && flight.movedAt === null && turned(flight.job.view, view)) flight.movedAt = clock()
+      // (so is an answer that waits for a fade to end: its edges age from this turn, not from when it takes over)
+      if (held && held.base.departedAt === null && turned(held.base.view, view)) held.base.departedAt = clock()
       if (settleTimer !== null) clearTimeout(settleTimer)
       settleTimer = null
       // The pointer's release is the model's frame at once. While the pointer drags, the picture is the newest base's

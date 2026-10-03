@@ -48,6 +48,7 @@ import {
   ReadbackScratch,
   beginFloatRead,
   canReadAsync,
+  dropRead,
   finishFloatRead,
   pollRead,
   readGBuffer,
@@ -134,6 +135,9 @@ export class PaintRenderer {
   // The buffer an asynchronous G-buffer readback goes to, and whether the context can do one (asked once).
   private pack: PackBuffer = { buffer: null, bytes: 0 }
   private asyncRead: boolean | null = null
+  // Counts the contexts the renderer has had (a restore makes a new one): a read that was started on one is not finished on
+  // another, even when the loss and the restore both came between two polls.
+  private contextGeneration = 0
 
   private scene: SpaceScene | null = null
   private sceneGpu: SceneGpu | null = null
@@ -224,15 +228,19 @@ export class PaintRenderer {
   // waiting, between the page's other tasks, a paint of a drag among them). A context that cannot do that (no fence, the
   // rgba8 layout, a test's fake) reads it the plain way at once and gives the G-buffer itself, not a promise: the caller
   // takes it in the same task, as it always did. Never rejects: a failure is reported through onError and the G-buffer is empty.
-  startGBuffer(view: PaintView, params: PaintParams): GBuffer | Promise<GBuffer> {
+  // Null (or a promise of null) is no G-buffer at all: the context is lost, or went while the GPU worked (or the renderer was
+  // disposed). It is not an empty scene and must not go to the model as one (the frame it made would be blank, and become
+  // the base): the caller asks again when the context is back.
+  startGBuffer(view: PaintView, params: PaintParams): GBuffer | null | Promise<GBuffer | null> {
     const size = gbufferSize(view.width, view.height)
     const empty = () => emptyGBuffer(size.width, size.height)
+    if (this.gone()) return null
     if (!this.usable()) return empty()
     try {
       const pass = this.gbufferPass(view, params)
       if (!pass) return empty()
       if (this.asyncRead === null) this.asyncRead = canReadAsync(this.gl)
-      const pending: PendingRead | null = pass.target.mode === 'float' && this.asyncRead ? beginFloatRead(this.gl, this.res, pass.target, this.pack) : null
+      const pending: PendingRead | null = pass.target.mode === 'float' && this.asyncRead ? beginFloatRead(this.gl, this.res, pass.target, this.pack, this.contextGeneration) : null
       if (!pending) {
         this.stats.gbufferRead = 'sync'
         return readGBuffer(this.gl, pass.target, this.scratch, pass.depthRange)
@@ -240,25 +248,36 @@ export class PaintRenderer {
       this.stats.gbufferRead = 'async'
       return this.finishRead(pending, empty)
     } catch (error) {
+      // (a context that went while the passes were drawn is a loss, not a failure of the renderer)
+      if (this.gone()) return null
       this.fail(error)
       return empty()
     }
   }
 
-  private async finishRead(pending: PendingRead, empty: () => GBuffer): Promise<GBuffer> {
+  private async finishRead(pending: PendingRead, empty: () => GBuffer): Promise<GBuffer | null> {
+    let finished = false
     try {
       for (;;) {
+        // the context went while the GPU worked, even if another has come back since (the fence and the buffer are of the
+        // one that went), or the renderer was disposed: nothing to read
+        if (this.gone() || pending.generation !== this.contextGeneration) return null
         const status = pollRead(this.gl, pending)
         if (status === 'ready') break
         if (status === 'failed') throw new Error('paint: the G-buffer readback failed')
         await pause()
-        // the context went (or the renderer was disposed) while the GPU worked: nothing to read
-        if (!this.usable()) return empty()
       }
-      return finishFloatRead(this.gl, pending, this.pack, this.scratch)
+      const g = finishFloatRead(this.gl, pending, this.pack, this.scratch)
+      finished = true
+      return g
     } catch (error) {
+      // (what GL threw as the context went)
+      if (this.gone()) return null
       this.fail(error)
       return empty()
+    } finally {
+      // (finishFloatRead deletes the fence of a read that was finished; every other way out gives it back here)
+      if (!finished) dropRead(this.gl, pending)
     }
   }
 
@@ -500,7 +519,12 @@ export class PaintRenderer {
   // --- internals ----------------------------------------------------------
 
   private usable(): boolean {
-    return !this.failed && !this.lost && !this.disposed && !this.gl.isContextLost()
+    return !this.failed && !this.gone()
+  }
+
+  // The context is lost, or the renderer is disposed: there is nothing to draw on and nothing to read from.
+  private gone(): boolean {
+    return this.lost || this.disposed || this.gl.isContextLost()
   }
 
   private program(spec: { name: string; vertex: string; fragment: string }): ProgramInfo {
@@ -667,6 +691,7 @@ export class PaintRenderer {
   private handleRestored(): void {
     if (this.disposed) return
     this.lost = false
+    this.contextGeneration++
     // A failure before the loss (an error that surfaced as the context went) must not keep a good context silent:
     // the restore starts again, and a failure that is real (a shader that will not compile) comes back by itself.
     this.failed = false

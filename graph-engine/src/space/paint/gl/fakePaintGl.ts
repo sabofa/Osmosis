@@ -64,6 +64,10 @@ export interface PaintFakeLimits {
   asyncReadback?: boolean
   // With asyncReadback: how many times clientWaitSync says the fence has not passed yet, before it says it has (default 0).
   fenceDelayPolls?: number
+  // With asyncReadback: clientWaitSync answers WAIT_FAILED (a fence that broke).
+  failFence?: boolean
+  // With asyncReadback: called at every clientWaitSync, before it answers (a test that has the context go while a read polls).
+  onPoll?: () => void
   // MAX_TEXTURE_SIZE (default 4096).
   maxTextureSize?: number
 }
@@ -132,6 +136,8 @@ export function createPaintFakeGl(options: FakeGlOptions = {}, size = { width: 8
               base.calls.push({ fn: 'clientWaitSync', args: [] })
               fences.polls++
               sync.polls++
+              limits.onPoll?.()
+              if (limits.failFence) return PAINT_CONSTANTS.WAIT_FAILED
               if (sync.polls > (limits.fenceDelayPolls ?? 0)) return PAINT_CONSTANTS.ALREADY_SIGNALED
               fences.pending++
               return PAINT_CONSTANTS.TIMEOUT_EXPIRED
