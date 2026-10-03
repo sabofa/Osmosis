@@ -217,6 +217,39 @@ describe('lighting curve', () => {
       expect(freeWorst).toBeGreaterThan(40)
     })
 
+    it('keeps a muted terracotta’s shadows within its own hue ± (shiftMax + 3°): chroma 0.04 (#8a6d64, which went to 341°, plum) and 0.03 (#856f68, 302°, purple)', () => {
+      const curve = makeCurve(DEFAULT_PAINT_PARAMS)
+      // (the half-tone accent moves the hue by 0.2° at u 0.2, 2.4° at the cast and 4° at the cap: a deliberate offset, and the hold is around the
+      // colour's own hue with it: 38° + accent)
+      const accentAt = (u: number) => Math.min(18, 0.5 * arc(38, 95)) * Math.exp(-(((u - 0.56) / 0.17) ** 2))
+      for (const c of [0.05, 0.04, 0.03, 0.025, 0.02]) {
+        const local = lchToLab(0.56, c, 38)
+        for (const u of [0.2, 0.24, 0.32]) {
+          for (const nz of [-1, -0.5, 0, 0.5, 1]) {
+            for (const bounce of [0, 0.5]) {
+              for (const ambientShare of [0, 0.5, 1]) {
+                const h = curve.lch({ local, u, nz, bounce, ambientShare, noDev: true })[2]
+                expect(Math.abs(arc(38 + accentAt(u), h)), `chroma ${c}, u ${u}, nz ${nz}, bounce ${bounce}, ambient ${ambientShare}: hue ${h.toFixed(1)}`).toBeLessThanOrEqual(15 + 1e-6)
+              }
+            }
+          }
+        }
+      }
+    })
+
+    it('takes the tints whole where there is no hue to keep (local chroma 0.003, under the 0.005 where the hold starts), and holds fully from 0.02', () => {
+      const curve = makeCurve(DEFAULT_PAINT_PARAMS)
+      const shade = (c: number) => curve.lch({ local: lchToLab(0.5, c, 38), u: 0.2, nz: 1, noDev: true })[2]
+      // the cool tint and the sky are the only hue a colour of chroma 0.003 has: 260°, nowhere near its own 38°
+      expect(Math.abs(arc(38, shade(0.003)))).toBeGreaterThan(100)
+      // the hold is full by 0.02: the hue is the colour's own ± 15° (the accent is 0.2° at u 0.2)
+      expect(Math.abs(arc(38.2, shade(0.02)))).toBeLessThanOrEqual(15 + 1e-6)
+      // and it fades in between: half-held at 0.0125 (the middle of the fade), the hue is between the two
+      const half = Math.abs(arc(38, shade(0.0125)))
+      expect(half).toBeLessThan(Math.abs(arc(38, shade(0.003))))
+      expect(half).toBeGreaterThan(15)
+    })
+
     it('never touches lightness, however loud the colour terms: the swing and the hold turn the hue only', () => {
       const loud = resolvePaintParams({ curve: { tintCool: 0.1, skyTint: 0.1, accentMax: 0 }, environment: { chroma: 0.2, absorption: 1 } })
       const held = makeCurve(loud).lch({ local: TERRACOTTA, u: 0.24, nz: 1, ambientShare: 1, noDev: true })

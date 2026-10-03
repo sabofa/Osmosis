@@ -320,16 +320,40 @@ export interface GridResult {
   comparedPerView: number[]
 }
 
-// The smallest margins of the grid (seeds x views x local colours): the surface and shadow-edge strokes, and the underpainting.
-export function gridMargin(overrides: Partial<PaintParams>, seeds: number[], views: GridView[] = GRID_VIEWS): GridResult {
-  const r: GridResult = {
+// A result with nothing in it yet, and the sum of two (the least of the margins and counts, the sum of the compared frames): a grid cut into one test
+// per frame (the frames are heavy; a test that is one synchronous stretch of minutes starves the worker's reply to the runner) adds them up.
+export function emptyGrid(): GridResult {
+  return {
     strokeMargin: Infinity, strokeAt: '', underMargin: Infinity, underAt: '', fewestShadow: Infinity, fewestLight: Infinity,
     fewestUnderShadow: Infinity, fewestUnderLight: Infinity, canvasReach: 9, fewestEdgeShadow: Infinity, fewestLines: Infinity, comparedPerView: [],
   }
+}
+export function mergeGrid(into: GridResult, r: GridResult): void {
+  if (r.strokeMargin < into.strokeMargin) { into.strokeMargin = r.strokeMargin; into.strokeAt = r.strokeAt }
+  if (r.underMargin < into.underMargin) { into.underMargin = r.underMargin; into.underAt = r.underAt }
+  into.fewestShadow = Math.min(into.fewestShadow, r.fewestShadow)
+  into.fewestLight = Math.min(into.fewestLight, r.fewestLight)
+  into.fewestUnderShadow = Math.min(into.fewestUnderShadow, r.fewestUnderShadow)
+  into.fewestUnderLight = Math.min(into.fewestUnderLight, r.fewestUnderLight)
+  into.canvasReach = Math.min(into.canvasReach, r.canvasReach)
+  into.fewestEdgeShadow = Math.min(into.fewestEdgeShadow, r.fewestEdgeShadow)
+  into.fewestLines = Math.min(into.fewestLines, r.fewestLines)
+  r.comparedPerView.forEach((n, vi) => { into.comparedPerView[vi] = (into.comparedPerView[vi] ?? 0) + (n ?? 0) })
+}
+
+// Let the worker's event loop turn: the runner's replies reach a worker only between its synchronous stretches, and a worker that has run frames
+// back to back for a minute reports "Timeout calling onTaskUpdate". The heavy files call this after every test.
+export const breathe = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+// The smallest margins of the grid (seeds x views x local colours): the surface and shadow-edge strokes, and the underpainting. `views` and `locals`
+// pick part of the grid (comparedPerView counts by the view's place in GRID_VIEWS).
+export function gridMargin(overrides: Partial<PaintParams>, seeds: number[], views: GridView[] = GRID_VIEWS, locals: [string, Oklab][] = LOCALS): GridResult {
+  const r = emptyGrid()
   for (const seed of seeds) {
     const params = resolvePaintParams({ ...overrides, seed })
-    for (const [name, local] of LOCALS) {
-      views.forEach((v, vi) => {
+    for (const [name, local] of locals) {
+      views.forEach((v, vj) => {
+        const vi = GRID_VIEWS.indexOf(v) >= 0 ? GRID_VIEWS.indexOf(v) : vj
         const m = made(params, local, v.opts, true)
         const s = spreadOf(m, params)
         const u = underpaintSpread(m, params)
