@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { oklabToLinear } from '../model/colour'
 import { curveFor, groundLocal, recipeEnv } from '../model/index'
-import { LINE_MAX_PX } from '../model/lines'
+import { LINE_MAX_PX, lineRecipeOf } from '../model/lines'
 import { hash3 } from '../model/math'
 import { LoadMixer } from '../model/mix'
 import { colourOfRecipe } from '../model/recipe'
@@ -12,7 +12,7 @@ import type { Oklab } from '../types'
 import { LAYER_ORDER, ROLES } from '../types'
 import { CHAIN_BREAK, NO_PARTICLE, preMixLab } from './draft'
 import { bakePainting, bakeStats, bakedRecipes, recolourBake } from './index'
-import { dashed, dataColourOf, finiteRuns, lineRecipe, splitCorners, splitLength } from './lines'
+import { dashed, dataColourOf, finiteRuns, splitCorners, splitLength } from './lines'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, SIZING_FIXED } from './types'
 import { FRONT, fixture, P, PX, type Fixture } from './bakeFixture'
 
@@ -303,7 +303,7 @@ describe('the data marks’ colours', () => {
   it('fills dataColour for every mark that is not a mesh (the line recipe of its colour before the mix, no jitter, linear sRGB) and leaves a mesh’s zero', () => {
     const e = env()
     for (const m of [0, 1, 2, 3]) {
-      const expected = Float32Array.from(oklabToLinear(colourOfRecipe(lineRecipe(COLOURS[m]), e)))
+      const expected = Float32Array.from(oklabToLinear(colourOfRecipe(lineRecipeOf(COLOURS[m]), e)))
       expect([...f.baked.dataColour.slice(3 * m, 3 * m + 3)]).toEqual([...expected])
       expect(expected.every((v) => v >= 0 && v <= 1)).toBe(true)
       expect([...dataColourOf(COLOURS[m], e)].map(Math.fround)).toEqual([...expected])

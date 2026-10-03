@@ -31,11 +31,12 @@
 // border here reads the value of its own side at the sample).
 
 import { randomFor } from '../../../style/random'
-import { segmentRun } from '../model/contours'
+import { groundRecipe, segmentRun, sideRecipeOf } from '../model/contours'
 import { behaviourOf } from '../model/edges'
 import { clamp, rotateAbout, type V3 } from '../model/math'
-import { newRecipe, type ColourRecipe, type ColourSource, type DraftColour } from '../model/recipe'
+import type { ColourRecipe, ColourSource, DraftColour } from '../model/recipe'
 import { FAM_SHADOW } from '../model/value'
+import type { SceneColours } from '../types'
 import { fnvInts, layerOfRole, LoadChain, NO_PARTICLE, pathMid, StrokeSink } from './draft'
 import { EDGE_STEP_PX, type WorldEdgeRun } from './edges'
 import { ROLE_INDEX, walkSideOf, type StrokeCtx } from './strokes'
@@ -71,8 +72,9 @@ const meanOver = (a: ArrayLike<number>, from: number, to: number): number => {
   return s / (to - from + 1)
 }
 
-// The mean local colour (OKLab) of each mark's particles, for a side with no plane (the model's `markColour`: 0.5 each where a mark has no particle).
-function markMeans(c: StrokeCtx, nMarks: number): Float64Array {
+// The mean local colour (OKLab) of each mark's particles, for a side with no plane (the model's `markColour`); a mark with no particle has its own flat colour.
+export function markMeans(c: Pick<StrokeCtx, 'scene' | 'set'>, colours: SceneColours): Float64Array {
+  const nMarks = c.scene.marks.length
   const sum = new Float64Array(3 * nMarks)
   const count = new Uint32Array(nMarks)
   const set = c.set
@@ -83,7 +85,13 @@ function markMeans(c: StrokeCtx, nMarks: number): Float64Array {
     sum[3 * m + 2] += set.colour[3 * i + 2]
     count[m]++
   }
-  for (let m = 0; m < nMarks; m++) for (let k = 0; k < 3; k++) sum[3 * m + k] = count[m] > 0 ? sum[3 * m + k] / count[m] : 0.5
+  for (let m = 0; m < nMarks; m++) {
+    if (count[m] > 0) for (let k = 0; k < 3; k++) sum[3 * m + k] /= count[m]
+    else {
+      const own = colours.markColour(m)
+      for (let k = 0; k < 3; k++) sum[3 * m + k] = own[k]
+    }
+  }
   return sum
 }
 
@@ -91,53 +99,11 @@ function markMeans(c: StrokeCtx, nMarks: number): Float64Array {
 
 type Rng = ReturnType<typeof randomFor>
 
-// The recipe of one side of an edge's colour (model/contours.ts sideRecipe): the curve at that side's value over its local colour (the plane's mean
-// particle colour, bare table, or the mesh's mean colour where the side has no plane).
+// The recipe of one side of an edge's colour (model/contours.ts sideRecipeOf, the model's own builder): the curve at that side's value over its local colour
+// (the plane's mean particle colour, bare table, or the mesh's mean colour where the side has no plane).
 function sideRecipe(c: StrokeCtx, means: Float64Array, plane: number, mark: number, u: number, rng: Rng, lScale?: number): ColourRecipe {
   const pl = plane >= 0 ? c.planes.planes[plane] : null
-  const r = newRecipe()
-  if (pl && pl.ground) r.ground = true
-  else if (pl) {
-    r.lx = pl.colour[0]
-    r.ly = pl.colour[1]
-    r.lz = pl.colour[2]
-  } else if (c.plan.ground[mark] === 1) r.ground = true
-  else {
-    r.lx = means[3 * mark]
-    r.ly = means[3 * mark + 1]
-    r.lz = means[3 * mark + 2]
-  }
-  r.u = clamp(u, 0.05, 0.98)
-  if (pl) r.nz = pl.nz
-  if (pl && !pl.ground) {
-    r.hasPlane = true
-    r.pnx = pl.nx
-    r.pny = pl.ny
-    r.pnz = pl.nz
-  }
-  r.lScale = lScale ?? Number.NaN
-  r.g0 = rng.gauss()
-  r.g1 = rng.gauss()
-  r.g2 = rng.gauss()
-  r.c0 = 0.5
-  r.c1 = 5 / 12
-  r.c2 = 6 / 11
-  return r
-}
-
-// The recipe of bare table at plan value u: what lies across an outline where the table is in shadow (model groundRecipe).
-function groundRecipe(u: number, rng: Rng): ColourRecipe {
-  const r = newRecipe()
-  r.ground = true
-  r.u = clamp(u, 0.05, 0.98)
-  r.nz = 1
-  r.g0 = rng.gauss()
-  r.g1 = rng.gauss()
-  r.g2 = rng.gauss()
-  r.c0 = 0.5
-  r.c1 = 5 / 12
-  r.c2 = 6 / 11
-  return r
+  return sideRecipeOf(pl, pl ? pl.colour : null, c.plan.ground[mark] === 1, [means[3 * mark], means[3 * mark + 1], means[3 * mark + 2]], u, rng, lScale)
 }
 
 // ---- the paths ----
@@ -305,7 +271,7 @@ function foldWalk(ws: WalkSide, s: RefinedSurface, side: 1 | -1, hit: SurfacePoi
 
 // ---- all of the edge strokes ----
 
-export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStats {
+export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink, colours: SceneColours): EdgeStrokeStats {
   const { params, plan, edges, perPx } = c
   const rp = params.roles.edge
   const minContrast = params.detect.edgeMinContrast
@@ -316,7 +282,7 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
   const roleIdx = ROLE_INDEX.edge
   const layer = layerOfRole('edge')
   const stats: EdgeStrokeStats = { runs: 0, stretches: 0, strokes: 0, byClass: [0, 0, 0, 0], crisp: 0, drags: 0, pulls: 0, bridges: 0, skipped: 0, dropped: 0 }
-  const means = markMeans(c, c.scene.marks.length)
+  const means = markMeans(c, colours)
   const canvas: ColourSource = [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]]
   const chain = new LoadChain(perPx)
   const mid3 = [0, 0, 0]
@@ -381,7 +347,7 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
       const cell = run.keys[mid]
 
       // one stroke made: its brush, colour and place in the mix, given the path already in the sink at `idx`
-      const finish = (idx: number, kk: number, length: number, anchor: number, widthPx: number, colour: DraftColour, alpha: number, ownHold: DraftColour | undefined): void => {
+      const finish = (idx: number, kk: number, length: number, anchor: number, widthPx: number, colour: DraftColour, alpha: number, ownHold: DraftColour | undefined, held: boolean): void => {
         const load = rp.load * beh.loadMul * (0.9 + 0.2 * rng.next())
         const bristles = Math.max(1, Math.round(rp.bristles * rng.range(0.88, 1.12)))
         const jit0 = rng.gauss()
@@ -397,7 +363,7 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
           endSoft: beh.endSoft, edge: cl, seed, key: fnvInts(run.mark, runIndex, roleIdx, bakedSide, a * 16 + kk),
         })
         sink.setRecipe(idx, {
-          draft: colour, ...(shadowSide ? { hold: ownHold, fam: FAM_SHADOW, uBound: capU } : {}), mixRole: roleIdx, u: uA, colormapped: false, seed, jit0, jit1,
+          draft: colour, ...(held ? { hold: ownHold, fam: FAM_SHADOW, uBound: capU } : {}), mixRole: roleIdx, u: uA, colormapped: false, seed, jit0, jit1,
           cells: null, cell, mx: dist,
         })
         stats.strokes++
@@ -405,7 +371,7 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
       }
 
       // a stroke ALONG the stretch (the run's own samples)
-      const along = (kk: number, widthPx: number, colour: DraftColour, alpha: number, ownHold: DraftColour | undefined): boolean => {
+      const along = (kk: number, widthPx: number, colour: DraftColour, alpha: number, ownHold: DraftColour | undefined, held = shadowSide): boolean => {
         const idx = sink.alloc()
         const length = alongPath(sink, idx, run, a, b, s, side, snapReach)
         if (!(length > MIN_LENGTH)) {
@@ -413,7 +379,7 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
           stats.dropped++
           return false
         }
-        finish(idx, kk, length, 0.5, widthPx, colour, alpha, ownHold)
+        finish(idx, kk, length, 0.5, widthPx, colour, alpha, ownHold, held)
         return true
       }
 
@@ -444,7 +410,7 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
           stats.dropped++
           return false
         }
-        finish(idx, kk, meta.length, meta.anchor, widthPx, colour, alpha, ownHold)
+        finish(idx, kk, meta.length, meta.anchor, widthPx, colour, alpha, ownHold, shadowSide)
         return true
       }
       // the sample's across direction (from side A to side B), turned about the side's normal
@@ -458,7 +424,10 @@ export function buildEdgeStrokes(c: StrokeCtx, sink: StrokeSink): EdgeStrokeStat
         const uE = Math.min(clamp(uLo - (cl === 3 ? 0.12 : 0.06), 0.1, 0.8), shadowEdge ? capU : 1)
         const colour: DraftColour = { a: sideRecipe(c, means, planeA, run.mark, uE, rng, 0.9), b: null, t: 0 }
         const width = rp.width * (cl === 3 ? 0.7 : 0.475) * rng.range(0.88, 1.12)
-        if (along(0, width, colour, cl === 3 ? 1 : 0.85, undefined)) stats.crisp++
+        // (a crease’s two faces are alike, and which is A is the run’s direction: a crisp stroke in the shadow family by its value is held to the cap
+        // whichever face is A, as it is where A is the face in shadow)
+        const held = shadowSide || (run.type === 'crease' && uE <= capU)
+        if (along(0, width, colour, cl === 3 ? 1 : 0.85, undefined, held)) stats.crisp++
       } else if (cl === 1) {
         // blended: a wide dragged stroke along the boundary, and short scumbled pulls from the lighter side into the darker
         if (along(0, rp.width * 2.6 * rng.range(0.88, 1.12), { a: recA, b: srcB, t: 0.5 }, 0.8, own)) stats.drags++

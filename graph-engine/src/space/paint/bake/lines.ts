@@ -23,9 +23,9 @@
 import { randomFor } from '../../../style/random'
 import type { SpaceScene } from '../../scene/types'
 import { oklabToLinear } from '../model/colour'
-import { LINE_MAX_PX } from '../model/lines'
+import { LINE_MAX_PX, LINE_U, lineRecipeOf } from '../model/lines'
 import { clamp, hash3 } from '../model/math'
-import { colourOfRecipe, newRecipe, type ColourRecipe, type DraftColour, type RecipeEnv } from '../model/recipe'
+import { colourOfRecipe, type DraftColour, type RecipeEnv } from '../model/recipe'
 import type { PaintParams } from '../params'
 import type { Oklab, SceneColours } from '../types'
 import { fnvInts, layerOfRole, LoadChain, NO_PARTICLE, pathMid, StrokeSink } from './draft'
@@ -35,34 +35,12 @@ import { BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, SIZING_FIXED } from './ty
 const P3 = 3 * BAKE_PATH_POINTS
 // A corner sharper than this ends a stroke (the corner is its end, exactly): the world turn between two segments of a polyline.
 const CORNER = (30 * Math.PI) / 180
-// The line recipe's u and lightness scale: the mark's colour through the curve at u = 0.6, its own value kept.
-export const LINE_U = 0.6
 
-// ---- the colour ----
-
-// The recipe of a line stroke (model/lines.ts recipeOf): the mark's colour through the curve at u = 0.6. `rng` gives the small seeded jitter of a stroke;
-// without it the jitter is zero (the mark's own colour: `dataColour`).
-export function lineRecipe(local: Oklab, rng?: ReturnType<typeof randomFor>): ColourRecipe {
-  const r = newRecipe()
-  r.lx = local[0]
-  r.ly = local[1]
-  r.lz = local[2]
-  r.u = LINE_U
-  r.lScale = 0.55
-  if (rng) {
-    r.g0 = rng.gauss()
-    r.g1 = rng.gauss()
-    r.g2 = rng.gauss()
-  }
-  r.c0 = 0.4
-  r.c1 = 1 / 3
-  r.c2 = 0.36
-  return r
-}
+// ---- the colour (the recipe is the model's: model/lines.ts lineRecipeOf) ----
 
 // A data mark's colour, linear sRGB: the line recipe of its local colour before the mix, without the jitter.
 export function dataColourOf(local: Oklab, env: RecipeEnv): [number, number, number] {
-  return oklabToLinear(colourOfRecipe(lineRecipe(local), env)) as [number, number, number]
+  return oklabToLinear(colourOfRecipe(lineRecipeOf(local), env)) as [number, number, number]
 }
 
 // The local colour of each data mark (OKLab; null for a mesh), kept beside the painting for the recolour.
@@ -256,7 +234,7 @@ export function buildDataStrokes(scene: SpaceScene, locals: (Oklab | null)[], pa
       )
     }
     const local = locals[m] ?? [0.4, 0.04, 0.035]
-    const colour: DraftColour = { a: lineRecipe(local, rng), b: null, t: 0 }
+    const colour: DraftColour = { a: lineRecipeOf(local, rng), b: null, t: 0 }
     const jit0 = rng.gauss()
     const jit1 = rng.gauss()
     pathMid(sink, idx, mid3)

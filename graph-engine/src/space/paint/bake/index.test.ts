@@ -194,6 +194,13 @@ describe('the key sees the scene’s colours (the theme)', () => {
     expect(bakeKey(line, LIGHT, P, SPHERE.authored, SPHERE.particles, a)).not.toBe(bakeKey(line, LIGHT, P, SPHERE.authored, SPHERE.particles, b))
   })
 
+  it('gives +1e-8 and -1e-8 in a colour channel one key (Math.round of a tiny negative is -0, whose bytes are not 0’s)', () => {
+    const at = (v: number) => flatColours({ 0: TERRACOTTA, 1: [0.9, v, -v] })
+    expect(key(at(1e-8))).toBe(key(at(-1e-8)))
+    expect(key(at(1e-8))).toBe(key(at(0)))
+    expect(key(at(2e-6))).not.toBe(key(at(-2e-6)))
+  })
+
   it('samples a colour scale at 17 points along its length and for no data, on the scale’s own domain (a diverging one about zero), and moves with a change at any of them', () => {
     const asked: number[] = []
     const record: SceneColours = { markColour: SADDLE.colours.markColour, scaleColour: (id, v) => { asked.push(v); return SADDLE.colours.scaleColour(id, 0.5) } }

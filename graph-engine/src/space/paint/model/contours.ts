@@ -412,17 +412,27 @@ function transition(an: PaintCtx, mark: number, poly: Float64Array, a: number, b
 function sideRecipe(an: PaintCtx, plane: number, mark: number, u: number, rng: ReturnType<typeof randomFor>, lScale?: number): ColourRecipe {
   const { fc, planes } = an
   const pl = plane >= 0 ? planes.planes[plane] : null
+  const planeColour = pl && an.planeHasColour[plane] === 1 ? [an.planeColour[3 * plane], an.planeColour[3 * plane + 1], an.planeColour[3 * plane + 2]] : null
+  return sideRecipeOf(pl, planeColour, fc.ground[mark] === 1, [an.markColour[3 * mark], an.markColour[3 * mark + 1], an.markColour[3 * mark + 2]], u, rng, lScale)
+}
+
+// The same, from what it reads (pure: the baked painting's edge strokes build theirs with it too): the plane (null: none), the mean local colour of
+// the particles on it (null: it has none), whether the mark is bare table, and the mark's mean local colour.
+export function sideRecipeOf(
+  pl: { ground: boolean; nx: number; ny: number; nz: number } | null, planeColour: ArrayLike<number> | null, markIsGround: boolean, markColour: ArrayLike<number>,
+  u: number, rng: ReturnType<typeof randomFor>, lScale?: number,
+): ColourRecipe {
   const r = newRecipe()
   if (pl && pl.ground) r.ground = true
-  else if (pl && an.planeHasColour[plane] === 1) {
-    r.lx = an.planeColour[3 * plane]
-    r.ly = an.planeColour[3 * plane + 1]
-    r.lz = an.planeColour[3 * plane + 2]
-  } else if (fc.ground[mark] === 1) r.ground = true
+  else if (pl && planeColour) {
+    r.lx = planeColour[0]
+    r.ly = planeColour[1]
+    r.lz = planeColour[2]
+  } else if (markIsGround) r.ground = true
   else {
-    r.lx = an.markColour[3 * mark]
-    r.ly = an.markColour[3 * mark + 1]
-    r.lz = an.markColour[3 * mark + 2]
+    r.lx = markColour[0]
+    r.ly = markColour[1]
+    r.lz = markColour[2]
   }
   r.u = clamp(u, 0.05, 0.98)
   if (pl) r.nz = pl.nz
@@ -444,7 +454,7 @@ function sideRecipe(an: PaintCtx, plane: number, mark: number, u: number, rng: R
 
 // The recipe of bare table at plan value u: what lies across an outline where the table is in shadow (the figure's own
 // cast shadow), as the table is painted there.
-function groundRecipe(u: number, rng: ReturnType<typeof randomFor>): ColourRecipe {
+export function groundRecipe(u: number, rng: ReturnType<typeof randomFor>): ColourRecipe {
   const r = newRecipe()
   r.ground = true
   r.u = clamp(u, 0.05, 0.98)

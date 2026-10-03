@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import { linearToOklab } from '../model/colour'
+import { lchToLab, linearToOklab } from '../model/colour'
 import { curveFor, groundLocal, recipeEnv } from '../model/index'
 import { LoadMixer } from '../model/mix'
 import { holdLightness, oklabToLinear } from '../model/colour'
 import { flatColours, sceneOf, tableMesh } from '../model/testing'
+import type { ColourRecipe } from '../model/recipe'
+import { worldLight } from '../model/valueFinalFixture'
 import { FAM_SHADOW } from '../model/value'
 import { resolvePaintParams, setParam, type PaintParams } from '../params'
 import { LAYER_ORDER, ROLES } from '../types'
 import { CHAIN_BREAK, NO_PARTICLE, boundLightness, preMixLab } from './draft'
+import { markMeans } from './edgeStrokes'
 import { bakedRecipes, bakePainting, bakeStats, recolourBake } from './index'
+import { newPlanAt, planAt } from './plan'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_FIXED } from './types'
 import type { WorldEdgeRun } from './edges'
 import { locate, type SurfacePoint } from './surface'
@@ -20,8 +24,10 @@ vi.setConfig({ testTimeout: 300_000 })
 
 const SPHERE = fixture(sphereScene(), sphereColours(), sparse(250))
 const SADDLE = fixture(saddleScene(), saddleColours(), sparse(600))
-const BOX = fixture(sceneOf([boxMesh([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], 0), tableMesh({ z: -0.5, half: 2, index: 1 })]), flatColours({ 0: TERRACOTTA, 1: CANVAS }), sparse(250))
+const boxScene = () => sceneOf([boxMesh([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], 0), tableMesh({ z: -0.5, half: 2, index: 1 })])
+const BOX = fixture(boxScene(), flatColours({ 0: TERRACOTTA, 1: CANVAS }), sparse(250))
 const EDGE = ROLES.indexOf('edge')
+const env = (params: PaintParams) => recipeEnv(params, curveFor(params), groundLocal(params))
 const PX = SPHERE.authored.worldPerPx
 
 // The edge strokes of a fixture, as indices into its painting order.
@@ -320,7 +326,6 @@ describe('the edge strokes: their paths', () => {
 })
 
 describe('the edge strokes: their colours', () => {
-  const env = (params: PaintParams) => recipeEnv(params, curveFor(params), groundLocal(params))
 
   it('are the same at every brush-load level (the sequential mix, made once)', () => {
     for (const f of [SPHERE, SADDLE, BOX]) {
@@ -538,5 +543,96 @@ describe('the edge strokes: the density, the contrast floor and the ranks', () =
     const base = edgeStrokes(SPHERE).length
     expect(count(setParam(SPHERE.params, 'detect.edgeMinContrast', 0.3))).toBeLessThan(base)
     expect(count(setParam(SPHERE.params, 'detect.edgeMinContrast', 0))).toBeGreaterThan(base)
+  })
+})
+
+describe('the edge strokes: a crisp stroke’s value, the fold’s direction, and the crease’s hold (review fix round 1)', () => {
+  it('sits below the darker side by 0.06 (a firm stroke) or 0.12 (a hard one): within 0.04 of the model’s rule at the sample it lies on, never held back from it but by the shadow cap', () => {
+    let n = 0
+    let firm = 0
+    let hard = 0
+    for (const f of [SPHERE, SADDLE, BOX]) {
+      const rec = bakedRecipes(f.baked)!
+      const runs = bakeStats(f.baked)!.edges.runs
+      const capU = bakeStats(f.baked)!.plan.capU
+      for (const i of edgeStrokes(f)) {
+        if (kindOf(f, i) !== 'crisp') continue
+        const u = (rec.recipes.draft[rec.perm[i]]!.a as ColourRecipe).u
+        const c = mid(f, i)
+        const near = nearest(runs, f.baked.mark[i], f.baked.side[i], c[0], c[1], c[2])!
+        if (near.d > PX) continue
+        const lo = Math.min(near.run.uA[near.i], near.run.uB[near.i])
+        const hardEdge = f.baked.edge[i] === 3
+        const want = Math.min(1, Math.max(0.1, Math.min(0.8, lo - (hardEdge ? 0.12 : 0.06))))
+        // (the cap holds a shadow outline's stroke under it: a stroke under the rule is on the cap)
+        if (u < want - 0.04) expect(Math.abs(u - capU), 'a stroke under the rule is on the cap').toBeLessThan(1e-6)
+        else expect(Math.abs(u - want)).toBeLessThan(0.04)
+        n++
+        if (hardEdge) hard++
+        else firm++
+      }
+    }
+    expect(n).toBeGreaterThan(20)
+    expect(firm).toBeGreaterThan(5)
+    expect(hard).toBeGreaterThan(5)
+  })
+
+  it('starts a pull over a box’s crease on the lighter face and ends it on the darker, by the plan (the fold joins the face on the stroke’s -dir side first), in two lights', () => {
+    let n = 0
+    let right = 0
+    for (const f of [BOX, fixture(boxScene(), flatColours({ 0: TERRACOTTA, 1: CANVAS }), sparse(250), worldLight(-60, 45))]) {
+      const plan = bakeStats(f.baked)!.plan
+      const s = plan.surfaces[0]!
+      const uAt = (k: number, q: number): number => {
+        const o = 3 * (BAKE_PATH_POINTS * k + q)
+        const p: SurfacePoint = { tri: 0, b1: 0, b2: 0 }
+        if (!locate(s, f.baked.worldPath[o], f.baked.worldPath[o + 1], f.baked.worldPath[o + 2], 0, 0, 0, 1e-4, p)) return Number.NaN
+        return planAt(plan, 0, 1, p, newPlanAt()).u
+      }
+      for (const i of edgeStrokes(f)) {
+        if (f.baked.mark[i] !== 0 || kindOf(f, i) !== 'pull') continue
+        const u0 = (uAt(i, 0) + uAt(i, 1)) / 2
+        const u1 = (uAt(i, BAKE_PATH_POINTS - 2) + uAt(i, BAKE_PATH_POINTS - 1)) / 2
+        if (!(Math.abs(u0 - u1) > 0.01)) continue
+        n++
+        if (u0 > u1) right++
+      }
+    }
+    expect(n).toBeGreaterThan(20)
+    expect(right).toBe(n)
+  })
+
+  it('holds a crisp stroke on a crease whose value is in the shadow family to the cap whichever face is A, at every level, under the loudest mix (a dark box lit from two sides)', () => {
+    const loud = resolvePaintParams({ particles: { maxPerUnit2: 250 }, mix: { strength: 2, valueStep: 0.15, valueStepFraction: 1, valueBias: 1 } })
+    let n = 0
+    for (const light of [worldLight(100, 10), worldLight(200, 20)] as [number, number, number][]) {
+      const f = fixture(boxScene(), flatColours({ 0: lchToLab(0.35, 0.12, 260), 1: CANVAS }), loud, light)
+      const rec = bakedRecipes(f.baked)!
+      const capU = bakeStats(f.baked)!.plan.capU
+      const e = env(loud)
+      for (const i of edgeStrokes(f)) {
+        if (f.baked.mark[i] !== 0 || kindOf(f, i) !== 'crisp') continue
+        const c = rec.perm[i]
+        if ((rec.recipes.draft[c]!.a as ColourRecipe).u > capU) continue
+        n++
+        expect(rec.recipes.fam[c]).toBe(FAM_SHADOW)
+        const bound = boundLightness(rec.recipes, c, e)
+        for (let l = 0; l < BAKE_MIX_LEVELS; l++) {
+          const o = 3 * (BAKE_MIX_LEVELS * i + l)
+          expect(bound - linearToOklab(f.baked.colour[o], f.baked.colour[o + 1], f.baked.colour[o + 2])[0]).toBeGreaterThanOrEqual(-5e-5)
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(5)
+  })
+
+  it('falls back to a mark’s own flat colour, not a grey, for a mark with no particle (the model’s mean colour of a mark that has none)', () => {
+    const own = lchToLab(0.5, 0.15, 30)
+    const scene = sceneOf([boxMesh([0, 0, 0], [1, 1, 1], 0), boxMesh([2, 0, 0], [3, 1, 1], 1)])
+    const set = { count: 2, mark: Uint32Array.from([0, 0]), colour: Float32Array.from([0.4, 0.1, 0.05, 0.6, 0.0, 0.1]) }
+    const means = markMeans({ scene, set } as never, flatColours({ 0: [0.1, 0.1, 0.1], 1: own }))
+    // a mark with particles: their mean; one without: its own colour
+    expect(Array.from(means.slice(0, 3))).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.05, 6), expect.closeTo(0.075, 6)])
+    expect(Array.from(means.slice(3, 6))).toEqual([own[0], own[1], own[2]])
   })
 })

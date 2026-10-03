@@ -144,7 +144,8 @@ export const SCALE_SAMPLES = 17
 // SCALE_SAMPLES positions along its length (the value there, as the lab's own tables are sampled: a diverging scale about zero) and for no data;
 // every number rounded to 1e-6.
 function coloursFingerprint(h: Fnv, scene: SpaceScene, colours: SceneColours): void {
-  const q = (v: number): number => Math.round(v * 1e6)
+  // (+ 0: Math.round gives -0 for a tiny negative, whose bytes are not 0's)
+  const q = (v: number): number => Math.round(v * 1e6) + 0
   const lab = (c: Oklab | null): void => {
     if (!c) h.text('null')
     else h.number(q(c[0])).number(q(c[1])).number(q(c[2]))
@@ -234,7 +235,7 @@ export function bakePaintingWithProgress(
   const ctx = strokeCtx(scene, particles, params, curve, env, plan, planes, edges)
   const strokeStats = buildSurfaceStrokes(ctx, sink, (d) => phase('strokes', Math.min(0.97, d)))
   phase('strokes', 0.98)
-  const edgeStats = buildEdgeStrokes(ctx, sink)
+  const edgeStats = buildEdgeStrokes(ctx, sink, colours)
   phase('strokes', 0.99)
   const locals = dataLocals(scene, colours)
   const dataStats = buildDataStrokes(scene, locals, params, authored.worldPerPx, sink)
