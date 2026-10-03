@@ -28,7 +28,7 @@
 import type { PaintParams } from '../params'
 import { clamp, hash3, mix2, smooth, valueNoise3 } from './math'
 import type { PlaneMap } from './planes'
-import type { PlanMap } from './value'
+import { Z_CORE, Z_HALF, Z_LIGHT, Z_REFLECTED, type PlanMap } from './value'
 import type { FrameCtx } from './view'
 import { unproject } from './view'
 
@@ -52,11 +52,19 @@ export interface EdgeRun {
   cls: Uint8Array
   // A hash of the surface position under each sample, for seeding.
   keys: Uint32Array
-  // The two sides' plan values, their contrast, and the mesh the edge lies on.
+  // The two sides' plan values (the means over the run), their contrast, and the mesh the edge lies on.
   uA: number
   uB: number
   contrast: number
   mark: number
+  // A contour's sides are pixels, not planes: the value of each side at every sample (the means above are over these).
+  // The edge strokes take their colours from the stretch they lie on, not from the whole outline's mean: the shadow side
+  // of an outline is a dark edge and its lit side a light one.
+  uAs?: Float32Array
+  uBs?: Float32Array
+  // The lowest value on the figure's side along the way in from the outline (the pixel 3 px inside is uAs): at a limb the normal turns
+  // fast, so the pixel inside can be lit where the outline itself is already in the shadow. The family of a stretch is read from this.
+  uAmin?: Float32Array
 }
 
 export interface EdgeMap {
@@ -96,6 +104,7 @@ export interface RunSpec {
   // Per-sample plan values of the two sides (a contour, whose sides are pixels, not planes).
   uA?: ArrayLike<number>
   uB?: ArrayLike<number>
+  uMin?: ArrayLike<number>
 }
 
 export const edgeClassOf = (h: number, p: PaintParams): number =>
@@ -108,6 +117,20 @@ export interface EdgeTerms {
   s: number
   d: number
   x: number
+}
+
+// THE TERMINATOR'S EDGES GO SOFT WITH THE TERMINATOR. A softer terminator (value.terminatorSoftness, up to N·L 1) is a gentler turn of the plan's
+// value; the brushwork that follows it has to turn as gently: an edge between a light-family plane (light, half-tone) and a form-shadow plane
+// (core, reflected light) is scored as before and then scaled by 0.1 / terminatorSoftness, to no less than 0.2 (an edge of the score 1 is then
+// 0.2: lost) and to no more than 1 (at the default 0.1, and for any crisper terminator, the score is exactly as it was). A cast shadow on the
+// figure is no terminator, and neither is a turn within one family.
+export function terminatorEdgeScale(terminatorSoftness: number): number {
+  return clamp(0.1 / Math.max(terminatorSoftness, 1e-4), 0.2, 1)
+}
+const isTerminatorPair = (a: number, b: number): boolean => {
+  const lit = (z: number) => z === Z_LIGHT || z === Z_HALF
+  const form = (z: number) => z === Z_CORE || z === Z_REFLECTED
+  return (lit(a) && form(b)) || (form(a) && lit(b))
 }
 
 export function edgeHardness(type: EdgeType, t: EdgeTerms, p: PaintParams): number {
@@ -517,6 +540,8 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
   const n = S.length
   const type = spec.type
   const q = S[0].q
+  // an edge between the light and the form shadow is the terminator's: it goes soft with it (terminatorEdgeScale)
+  const tScale = type === 'internal' && pl && q >= 0 && isTerminatorPair(pl.zone, planes.planes[q].zone) ? terminatorEdgeScale(params.value.terminatorSoftness) : 1
   // the two sides' values: the planes' means, or (a contour) the pixels' own
   const uAs = spec.uA
   const uBs = spec.uB
@@ -564,8 +589,11 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
     if (focal) for (const fp of focal.pts) t.f = Math.max(t.f, Math.exp(-((Math.hypot(x - fp[0], y - fp[1]) / focal.R) ** 2)))
     t.d = Number.isFinite(g.depth[ii]) ? 1 - smooth(0, 1, (g.depth[ii] - zN) / zR) : 0
     t.x = type === 'shadow' ? 1 - smooth(8, 110, planes.dObj[ii] * scale) : 0
-    let hh = edgeHardness(type, t, params) + params.edges.noise * surfaceNoise(x + s.nx * probeIn, y + s.ny * probeIn) // a long edge can go firm, soft, firm
+    let hh = (edgeHardness(type, t, params) + params.edges.noise * surfaceNoise(x + s.nx * probeIn, y + s.ny * probeIn)) * tScale // a long edge can go firm, soft, firm
     if (con < 0.03) hh = Math.min(hh, params.edges.lostBelow - 0.01) // no visible transition: lost
+    // the outline of a form in shadow, against light canvas, is where two families meet: a FOUND edge (the depth and
+    // the focal weights can make a far limb read soft, and a soft one is blended with the canvas)
+    else if (type === 'silhouette' && uAs && (spec.uMin ? Math.min(uA, spec.uMin[i]) : uA) <= plan.capU && uB >= plan.floorU) hh = Math.max(hh, params.edges.softBelow + 0.01)
     hv[i] = clamp(hh, 0, 1)
     raw[i] = edgeClassOf(hv[i], params)
     // the surface under the sample, on the figure's side of the edge (the other side of a silhouette is the background, which has no
@@ -586,7 +614,12 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
     }
     adj.set(key, a)
   }
-  return { a: id, b: q, type, pts, nrm, h: hv, cls, keys, uA: uA0, uB: uB0, contrast, mark: spec.mark }
+  return {
+    a: id, b: q, type, pts, nrm, h: hv, cls, keys, uA: uA0, uB: uB0, contrast, mark: spec.mark,
+    uAs: uAs ? Float32Array.from({ length: n }, (_, i) => uAs[i]) : undefined,
+    uBs: uBs ? Float32Array.from({ length: n }, (_, i) => uBs[i]) : undefined,
+    uAmin: spec.uMin ? Float32Array.from({ length: n }, (_, i) => Math.min((uAs ? uAs[i] : uA0), (spec.uMin as ArrayLike<number>)[i])) : undefined,
+  }
 }
 
 // The class of each sample as the median of the 7 samples about it (the ends

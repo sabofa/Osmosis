@@ -7,11 +7,24 @@
 // brightest light):
 //   L = lc + lSlope·(u − lPivot) + dL(u)
 //   C = cc · (cBase + cPeak·exp(−((u − cCentre)/cWidth)²)) · (1 + dC(u))
-//   H = hc + k·|s|·arc(hc → warm if s > 0, cool if s < 0)        s = clamp((u − 0.5)/0.4, −1, 1)
+//   H = hc + clamp(k·|s|·arc(hc → warm if s > 0, cool if s < 0), ±shiftMax)   s = clamp((u − 0.5)/0.4, −1, 1)
 //        + a clamped arc toward accentHue in the half-tones
 //        + the plane's hue step
 //   then, in OKLab and never touching L: a warm/cool tint, a sky tint on
 //   up-facing normals and a bounce tint on down-facing ones.
+// THE SWING IS RELATIVE TO THE LOCAL COLOUR AND CAPPED (Ben: "a terracotta should have dark reds but nothing close to
+// purple"). The swing used to pull the hue toward an ABSOLUTE target (280° cool), which turned a terracotta (38°) to
+// 345° in its shadows. A colour now moves toward its own warmer or cooler neighbour by at most curve.shiftMax degrees,
+// and everything additive after the swing (the tints, the sky and the bounce, the environment, the reflected-light
+// mix) is held so that the final hue stays within shiftMax + 3° of where the colour's own hue and its deliberate
+// offsets (accent, plane step, deviation, the hue curve) put it, at every value. A grey (local chroma under 0.005) has no
+// hue to keep and takes the tints whole, as before; the hold fades in from there to full strength by local chroma 0.02 (a muted
+// terracotta of chroma 0.04 or 0.03 has a hue to keep: with the fade at 0.02 to 0.06 its core went to plum, 341°, and to purple,
+// 302°). The cap bounds the light-to-shadow swing; the brush-load mix (mix.hueMin to hueMax, 12 to 25°) and the planes' hue steps
+// (±16°) vary hue on top of it, by design: that is the colour distortion, and a terracotta's lowest painted hue is crimson.
+// In the fade (chroma 0.005 to 0.02) the held and the unheld colour are blended as OKLab a/b vectors, by the fade's weight, never by hue
+// angle (the angle's blend flips side where the tints point at the colour's opposite hue, and sweeps through hues that belong to neither):
+// the colour is continuous in its inputs.
 // Reflected light mixes the bounce colour's hue and chroma in by up to reflectedBounceMix, in OKLab and
 // NEVER touching L (value plan, spec §12): the value of reflected light is the plan's (it is kept below the
 // darkest half-tone there), and a lift here would put the bounce back among the half-tones.
@@ -42,6 +55,9 @@ import { compileCurve } from './respond'
 // The mockup's own constants, not exposed as sliders: where the half-tone
 // accent sits on the value axis and how wide it is, the plane chroma step,
 // and the soft clamps at the ends of the lightness range.
+// How far from the colour's own hue (degrees) a hue that the hold turns back is 'nearly opposite': the turn-back fades to none there, so it
+// never flips from one side to the other (curveLch).
+const OPPOSITE = 60
 const ACCENT_U = 0.56
 const ACCENT_SIG = 0.17
 const PLANE_CHROMA_STEP = 0.05
@@ -53,7 +69,8 @@ export interface CurveInput {
   u: number
   // World normal z (for the sky and bounce tints), when known.
   nz?: number
-  // Reflected-light weight b (0 none .. ~0.85), when known.
+  // The lift b of the form shadow toward reflected light, 0 none .. 1 (value.ts ZoneSample.lift: the share of the
+  // reflected-light range the plan has taken here), when known: it mixes the bounce colour's hue and chroma in, never L.
   bounce?: number
   // The share of the light here that is environment light, 0..1 (value.ts
   // ambientShare), when known: how much of the environment colour it takes in.
@@ -143,13 +160,16 @@ export function makeCurve(params: PaintParams): Curve {
     const target = warm ? p.warmHue : p.coolHue
     const k = (warm ? p.kWarm : p.kCool) * hs
     const accent = clamp(0.5 * hueArc(local[2], p.accentHue), -p.accentMax, p.accentMax)
-    const h =
-      local[2] +
-      k * Math.abs(s) * hueArc(local[2], target) +
+    // the swing: toward the colour's own warmer or cooler neighbour, by at most shiftMax (a colormapped colour: a third of it)
+    const swingMax = Math.max(0, p.shiftMax) * hs
+    const swing = clamp(k * Math.abs(s) * hueArc(local[2], target), -swingMax, swingMax)
+    // the deliberate offsets besides the swing: the deviation, the half-tone accent, the plane's step, Ben's hue curve
+    const offsets =
       hs * (nd * sumSines(dH, u) + j[2]) +
       hs * accent * Math.exp(-(((u - ACCENT_U) / ACCENT_SIG) ** 2)) +
       hs * (i.planeHue ?? 0) +
       hs * hAdj(u)
+    const h = local[2] + swing + offsets
     const lab = lchToLab(L, C, h)
     // greys still lean warm in the light and cool in the shadow
     const tint = (warm ? p.tintWarm : p.tintCool) * Math.abs(s) * hs
@@ -179,7 +199,31 @@ export function makeCurve(params: PaintParams): Curve {
       lab[1] += (bl[1] - lab[1]) * w
       lab[2] += (bl[2] - lab[2]) * w
     }
-    return labToLch(lab)
+    const out = labToLch(lab)
+    // the hold: the tints, the sky, the bounce, the environment and the reflected-light mix may not carry the hue more than
+    // 3 degrees past the capped swing (a colormapped colour: a third of that), from where the colour's own hue and its
+    // offsets put it. Chroma and lightness are kept: the hue is turned back.
+    const holdFor = smooth(0.005, 0.02, local[1])
+    if (holdFor > 0) {
+      const reach = (Math.max(0, p.shiftMax) + 3) * hs
+      const own = local[2] + offsets
+      const away = hueArc(own, out[2])
+      if (Math.abs(away) > reach) {
+        // the hue the hold turns it to: the capped arc, which comes back to the colour's own where the tints point at its opposite hue
+        // (a hue exactly opposite has no side to be turned toward: the capped arc there would flip from one side to the other)
+        const held = clamp(away, -reach, reach) * (1 - smooth(180 - OPPOSITE, 180, Math.abs(away)))
+        const heldHue = (((own + held) % 360) + 360) % 360
+        if (holdFor >= 1) out[2] = heldHue
+        else {
+          // in the fade (a muted colour has a little hue to keep) the held and the unheld are blended as OKLab a/b VECTORS, by the fade's
+          // weight, never by hue angle: the angle's blend flips side where the tints point at the colour's opposite hue, and sweeps through
+          // hues that belong to neither
+          const full = lchToLab(out[0], out[1], heldHue)
+          return labToLch([out[0], lab[1] + (full[1] - lab[1]) * holdFor, lab[2] + (full[2] - lab[2]) * holdFor])
+        }
+      }
+    }
+    return out
   }
 
   return {

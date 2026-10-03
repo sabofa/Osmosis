@@ -18,13 +18,24 @@
 //                 bounce amount (0..1: the bounce, sky and ambient light the normal takes, less the occlusion) can
 //                 only choose a place between the core and reflectedMax: nothing can lift the shadow past the cap
 //                   reflectedMax = corePlateau + reflectedShare·(halfLo - corePlateau),   reflectedShare <= 0.9.
+//                 (A terminator softer than the default's pushes the lift out by the edge's extra half-width, so the
+//                 edge's foot does not run into it: the core is the darkest band of the form shadow at every softness.)
 //   terminator    the two meet in an edge centred on N·L = 0, terminatorSoftness wide: clearly defined, and
 //                 crisper than the turn to light and the lift to reflected light.
 //   cast shadow   castPlateau (never lighter than reflectedMax) away from the contact, castContact at it: the
 //                 occlusion, over its radius in px, takes it down. It takes over from the form where the key
-//                 light is occluded on a surface that faces it.
+//                 light is occluded on a surface that faces it, from N·L 0 over CAST_FADE, and NEVER softened by
+//                 the terminator's band (a ground has no terminator at all: a flagged ground pixel is cast whole).
+//                 A pixel that is mostly cast (the light weight under a half) is never lighter than
+//                 reflectedMax: the fade blends the light end toward the cap, not toward the half-tone it lifted
+//                 a cast shadow into.
 // The value curve (Ben's) is applied last, to the finished plan value; it keeps the families in order for any
-// curve that does not decrease.
+// curve that does not decrease (a curve that rises and falls can reorder them: that is his own choice).
+//
+// STRUCTURAL GUARD. Whatever the sliders say, the model keeps the families apart: corePlateau is held
+// CORE_GAP under halfLo, the half-tone and light ramps rise (halfHi >= halfLo, lightLo >= halfHi, lightHi >=
+// lightLo), and the cast plateau and contact are never lighter than reflectedMax, which is below halfLo.
+// effectiveValues() is what the model reads, and what a UI that shows the numbers should show.
 //
 // Occlusion (screen space, from the G-buffer depth: a small seeded kernel of 8 samples over occlusionRadiusPx, a
 // sample counting only where it stands NEARER than the tangent plane extended to it, so a tilted plane does not
@@ -38,7 +49,7 @@
 
 import { randomFor } from '../../../style/random'
 import type { PaintParams } from '../params'
-import { Z_CORE, Z_LIGHT } from './zones'
+import { Z_CORE, Z_HALF, Z_LIGHT } from './zones'
 import { clamp, lerp, scratchF32, scratchU8, smooth, TAU, vnorm, type V3 } from './math'
 import { compileCurves, type CompiledCurves } from './respond'
 import type { FrameCtx } from './view'
@@ -94,14 +105,97 @@ export function bounceAmount(params: PaintParams, nx: number, ny: number, nz: nu
   return clamp(bounceWeight(params, nx, ny, nz, 0) + sky + ambient, 0, 1)
 }
 
-// The lightest the reflected light gets: the core, and reflectedShare of the way from it to the darkest half-tone.
-export function reflectedMax(params: PaintParams): number {
-  const v = params.value
-  return v.corePlateau + clamp(v.reflectedShare, 0, 0.9) * Math.max(0, v.halfLo - v.corePlateau)
+// How far under halfLo the core shadow is held, at the most: the core and the darkest half-tone are never the same value.
+export const CORE_GAP = 0.02
+
+// The value plan's numbers as the model reads them: the sliders, held to the structure (see the header). Every
+// field is the slider's own value unless the structure moved it.
+export interface EffectiveValues {
+  halfLo: number
+  halfHi: number
+  lightLo: number
+  lightHi: number
+  corePlateau: number
+  // The lightest the reflected light gets: the core, and reflectedShare of the way from it to halfLo.
+  reflectedMax: number
+  castPlateau: number
+  castContact: number
 }
 
+// effectiveValues into a given object (the plan is sampled per pixel: nothing is allocated).
+export function effectiveValuesInto(params: PaintParams, out: EffectiveValues): EffectiveValues {
+  const v = params.value
+  const halfLo = Math.max(v.halfLo, CORE_GAP)
+  const halfHi = Math.max(v.halfHi, halfLo)
+  const lightLo = Math.max(v.lightLo, halfHi)
+  const core = Math.max(0, Math.min(v.corePlateau, halfLo - CORE_GAP))
+  const rMax = core + clamp(v.reflectedShare, 0, 0.9) * (halfLo - core)
+  const castPlateau = Math.min(v.castPlateau, rMax)
+  out.halfLo = halfLo
+  out.halfHi = halfHi
+  out.lightLo = lightLo
+  out.lightHi = Math.max(v.lightHi, lightLo)
+  out.corePlateau = core
+  out.reflectedMax = rMax
+  out.castPlateau = castPlateau
+  out.castContact = Math.min(v.castContact, castPlateau)
+  return out
+}
+
+export const effectiveValues = (params: PaintParams): EffectiveValues =>
+  effectiveValuesInto(params, { halfLo: 0, halfHi: 0, lightLo: 0, lightHi: 0, corePlateau: 0, reflectedMax: 0, castPlateau: 0, castContact: 0 })
+
+// The lightest the reflected light gets, and the lightest any shadow-family value gets: the core, and reflectedShare of
+// the way from it to the darkest half-tone, always darker than the darkest half-tone.
+export const reflectedMax = (params: PaintParams): number => effectiveValues(params).reflectedMax
+
 // The darkest half-tone: the light family's floor, the value at the terminator.
-export const halfToneLowest = (params: PaintParams): number => params.value.halfLo
+export const halfToneLowest = (params: PaintParams): number => effectiveValues(params).halfLo
+
+// ---- the two families ----
+
+export const FAM_LIGHT = 0
+export const FAM_SHADOW = 1
+
+// The family of a zone: light, half-tone (and the highlight, which is the light zone) against core, reflected, cast.
+export const zoneFamily = (zone: number): number => (zone === Z_LIGHT || zone === Z_HALF ? FAM_LIGHT : FAM_SHADOW)
+
+// A cast shadow is told from the terminator by its N·L: from N·L 0 up, this much more to take over (the renderer flags N·L <= 0 as
+// shadow, and the shadow map's bias at a graze must not paint a ragged edge). The start is FIXED at 0, whatever the terminator's softness:
+// a cast shadow is never softened by the terminator's band (it is a shadow where the key light is occluded, on a surface that faces the
+// light, and it is as dark at N·L 0.2 under a wide terminator as under a narrow one). Only the N·L <= 0 side is the terminator's.
+export const CAST_FADE = 0.08
+
+// The half-width of the default terminator's edge (terminatorSoftness 0.1): a softer edge than that pushes the reflected light's lift out by the
+// extra (planSample), and the figure's core band starts where the edge ends.
+const DEFAULT_EDGE_HALF = 0.05
+
+// The weight of the cast shadow at a point (the renderer's shadow flag is set for every N·L <= 0 and for the key light's occlusion). A
+// GROUND has no terminator (it is flat: its N·L is the light's own elevation), so a flagged ground pixel is cast at full weight. On a
+// figure the flag counts for something only past N·L 0, where it fades in over CAST_FADE.
+export function castWeight(nl: number, shadow: boolean, ground = false): number {
+  if (!shadow) return 0
+  return ground ? 1 : smooth(0, CAST_FADE, nl)
+}
+
+// The weight of the light family at a point: the light side of the terminator edge (centred on N·L = 0, ts wide), less
+// the cast shadow, which takes over from N·L 0 (castWeight).
+export function lightWeight(ts: number, nl: number, shadow: boolean, ground = false): number {
+  const wT = smooth(-ts / 2, ts / 2, nl)
+  return (1 - castWeight(nl, shadow, ground)) * wT
+}
+// Is the point in the light family: the weight of the light is over a half. (N·L <= 0 is the shadow family, and so is
+// a cast shadow, past the middle of its fade.)
+export const isLightFamily = (params: PaintParams, nl: number, shadow: boolean, ground = false): boolean =>
+  lightWeight(Math.max(1e-4, params.value.terminatorSoftness), nl, shadow, ground) > 0.5
+
+// The weight of the terminator's band at a point on a surface: 1 where the plan's own soft edge is at its middle, 0 at its edges
+// (|N·L| = ts / 2) and outside it. A surface stroke follows the plan's own value in the band, the plane's step outside it, and blends
+// between them across it (the underpainting's lattice samples do not: its band pixels are made at the plan's own value already). A ground has no terminator, and a cast shadow is never softened by the band.
+export function bandFollow(ts: number, nl: number, shadow = false, ground = false): number {
+  if (ground) return 0
+  return (1 - smooth(0, Math.max(1e-4, ts) / 2, Math.abs(nl))) * (1 - castWeight(nl, shadow))
+}
 
 export interface ZoneSample {
   // Weights of light, half-tone, core, reflected, cast; they sum to 1.
@@ -115,57 +209,69 @@ export interface ZoneSample {
   // How much of the reflected-light range the form shadow has taken here, 0..1 (the lift): the bounce mix of the
   // colour reads it. 0 in the light family, in the core and in the cast shadow.
   lift: number
+  // The family: FAM_LIGHT where the weight of the light is over a half (highlight, light, half-tone), else FAM_SHADOW.
+  fam: number
 }
 
-export const newZoneSample = (): ZoneSample => ({ w: [0, 0, 0, 0, 0], u: 0, zone: Z_CORE, trans: 0, lift: 0 })
+export const newZoneSample = (): ZoneSample => ({ w: [0, 0, 0, 0, 0], u: 0, zone: Z_CORE, trans: 0, lift: 0, fam: FAM_SHADOW })
+
+// The value plan's numbers as the model reads them, for planSample (one pixel at a time, so nothing is allocated).
+const EV: EffectiveValues = { halfLo: 0, halfHi: 0, lightLo: 0, lightHi: 0, corePlateau: 0, reflectedMax: 0, castPlateau: 0, castContact: 0 }
 
 // The occlusion·ao at which a contact is fully dark (the default occlusion 0.35 reaches it at ao 0.23: the kernel's
 // occlusion is a fraction of 8 samples, and a surface beside a form seldom has more than a quarter of them nearer).
 export const CONTACT_FULL = 0.08
-// A cast shadow is told from the terminator by its N·L: past the soft edge, then this much more to take over (the
-// renderer flags N·L <= 0 as shadow, and the shadow map's bias at a graze must not paint a ragged edge).
-export const CAST_FADE = 0.08
-
 // The plan at one point. nl: the unclamped N·L; shadow: the G-buffer's shadow flag (set for every N·L <= 0 and for
 // the key light's occlusion); n: the world normal; ao: the occlusion 0..1.
 export function planSample(
   params: PaintParams, curves: CompiledCurves, nl: number, shadow: boolean, nx: number, ny: number, nz: number, ao: number, out: ZoneSample,
+  ground = false,
 ): ZoneSample {
   const vp = params.value
+  const ev = effectiveValuesInto(params, EV)
   const w = out.w
   const ts = Math.max(1e-4, vp.terminatorSoftness)
   const ls = Math.max(1e-4, vp.lightSoftness)
   const rs = Math.max(1e-4, vp.reflectedSoftness)
-  const core = vp.corePlateau
-  const rMax = reflectedMax(params)
+  const core = ev.corePlateau
+  const rMax = ev.reflectedMax
   // the occlusion at this point: 0 free .. 1 a contact
   const contact = clamp((params.environment.occlusion * ao) / CONTACT_FULL, 0, 1)
 
   // -- the shadow family: the core, then the reflected light --
-  const into = Math.max(0, -nl)
+  // (the core band starts where the terminator's edge ends on the shadow side: a softer terminator than the default's pushes the
+  // reflected light's lift out by the extra half-width, or the lift would reach the edge's own foot and wash the core out)
+  const into = Math.max(0, -nl - Math.max(0, ts / 2 - DEFAULT_EDGE_HALF))
   const reflect = smooth(vp.coreWidth, vp.coreWidth + rs, into)
   const amount = bounceAmount(params, nx, ny, nz) * (1 - contact)
   const lift = amount * reflect
   const uForm = core + (rMax - core) * lift
   // -- the cast shadow, darkest at the contact --
-  const far = Math.min(vp.castPlateau, rMax)
-  const uCast = lerp(far, Math.min(vp.castContact, far), contact)
-  const wCast = shadow ? smooth(ts / 2, ts / 2 + CAST_FADE, nl) : 0
+  const uCast = lerp(ev.castPlateau, ev.castContact, contact)
+  const wCast = castWeight(nl, shadow, ground)
 
   // -- the light family: the half-tone ramp, the soft turn to light, the light ramp --
   const n = clamp(curves.lightResponse(Math.max(0, nl)) * params.light.intensity, 0, 1)
   const turn = vp.lightTurn
   const rise = smooth(turn - ls / 2, turn + ls / 2, n)
   const uLight =
-    vp.halfLo +
-    (vp.halfHi - vp.halfLo) * smooth(0, Math.max(0.05, turn), n) +
-    (vp.lightLo - vp.halfHi) * rise +
-    (vp.lightHi - vp.lightLo) * smooth(turn, 1, n)
+    ev.halfLo +
+    (ev.halfHi - ev.halfLo) * smooth(0, Math.max(0.05, turn), n) +
+    (ev.lightLo - ev.halfHi) * rise +
+    (ev.lightHi - ev.lightLo) * smooth(turn, 1, n)
 
   // -- the terminator: the form shadow gives way to the light family across an edge centred on N·L = 0 --
   const wT = smooth(-ts / 2, ts / 2, nl)
   const uFormed = lerp(uForm, uLight, wT)
-  out.u = clamp(curves.value(clamp(lerp(uFormed, uCast, wCast), 0, 1)), 0, 1)
+  // -- the cast shadow takes over from the form from N·L 0. Over its fade the light end of the blend moves to the
+  // cap (a cast shadow is a shadow-family value: it never rises above reflectedMax, which the half-tone it fades
+  // from would have lifted it to), fully by the middle of the fade, where the cast shadow is the dominant zone: where
+  // the terminator's edge is crisp that is a cast weight of a half, and where it is wide (the light weight is the
+  // edge's less the cast's) it is the cast weight that takes the light weight under a half, which is where a pixel
+  // changes family --
+  const toCap = wCast > 0 ? Math.min(1, wCast / Math.max(1e-9, 1 - 0.5 / Math.max(wT, 0.5))) : 0
+  const uFrom = lerp(uFormed, Math.min(uFormed, rMax), toCap)
+  out.u = clamp(curves.value(clamp(lerp(uFrom, uCast, wCast), 0, 1)), 0, 1)
 
   const lit = (1 - wCast) * wT
   const dark = (1 - wCast) * (1 - wT)
@@ -176,6 +282,7 @@ export function planSample(
   w[2] = dark - w[3]
   w[4] = wCast
   out.lift = dark * lift
+  out.fam = lit > 0.5 ? FAM_LIGHT : FAM_SHADOW
   let best = 0
   for (let k = 1; k < 5; k++) if (w[k] > w[best]) best = k
   out.zone = best
@@ -286,9 +393,30 @@ export interface PlanMap {
   reflW: Float32Array
   // |∇v| per CSS px (a large number at an edge of the figure).
   grad: Float32Array
+  // The family of each pixel (FAM_LIGHT or FAM_SHADOW; FAM_SHADOW where empty): the light family is where the weight
+  // of the light is over a half (N·L > 0 and not cast). The zones, planes and strokes' value bounds follow it.
+  fam: Uint8Array
   // The value of lit canvas.
   uCanvas: number
+  // The family's value bounds as plan values (the value curve applied to the cap and to the darkest half-tone): no
+  // shadow-family stroke is made lighter than capU, and no light-family stroke darker than floorU (familyBound).
+  capU: number
+  floorU: number
   curves: CompiledCurves
+}
+
+// The bound on a stroke's value at pixel i, in plan values: a shadow-family pixel's strokes are at most capU (or the
+// plan's own value there, where it is higher: the terminator's edge, where the families meet), a light-family pixel's
+// at least floorU (or the plan's own, where it is lower). The bound is what the plan gave the pixel, never more
+// than the family's own range.
+export function familyBound(plan: PlanMap, i: number): number {
+  return plan.fam[i] === FAM_SHADOW ? Math.max(plan.capU, plan.u[i]) : Math.min(plan.floorU, plan.u[i])
+}
+
+// A stroke's value held inside its family's range at pixel i: the plane steps, the seeded deviation and a role's own
+// lightening or darkening (the scumble's ±0.1) cannot carry a stroke from one family into the other.
+export function holdFamily(plan: PlanMap, i: number, u: number): number {
+  return plan.fam[i] === FAM_SHADOW ? Math.min(u, familyBound(plan, i)) : Math.max(u, familyBound(plan, i))
 }
 
 export function buildPlanMap(fc: FrameCtx): PlanMap {
@@ -306,8 +434,10 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
   const shadowW = scratchF32('plan.shadowW', n)
   const reflW = scratchF32('plan.reflW', n)
   const grad = scratchF32('plan.grad', n)
+  const fam = scratchU8('plan.fam', n)
   const uCanvas = canvasValue(params)
   const curves = compileCurves(params)
+  const ev = effectiveValues(params)
   if (params.environment.occlusion > 0) computeOcclusion(fc, ao)
   else ao.fill(0)
   const L = view.lightDir
@@ -325,6 +455,7 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
       lightW[i] = 0
       shadowW[i] = 0
       reflW[i] = 0
+      fam[i] = FAM_SHADOW
       continue
     }
     const nx = g.normal[3 * i]
@@ -345,9 +476,10 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
       lightW[i] = 1
       shadowW[i] = 0
       reflW[i] = 0
+      fam[i] = FAM_LIGHT
       continue
     }
-    planSample(params, curves, ndl, shadow, nx, ny, nz, ao[i], zs)
+    planSample(params, curves, ndl, shadow, nx, ny, nz, ao[i], zs, fc.ground[m] === 1)
     value[i] = zs.u
     u[i] = zs.u
     zone[i] = zs.zone
@@ -356,6 +488,7 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
     lightW[i] = zs.w[0] + 0.6 * zs.w[1]
     shadowW[i] = zs.w[2] + zs.w[4]
     reflW[i] = zs.w[3]
+    fam[i] = zs.fam
   }
   // the gradient of the value, per CSS px; 999 beside an edge of the figure
   const W = g.width
@@ -381,5 +514,8 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
       grad[i] = Math.hypot(gx, gy)
     }
   }
-  return { width: W, height: H, scale: g.scale, value, ao, u, zone, trans, key: keyA, nl: nlA, bounce: bounceA, lightW, shadowW, reflW, grad, uCanvas, curves }
+  return {
+    width: W, height: H, scale: g.scale, value, ao, u, zone, trans, key: keyA, nl: nlA, bounce: bounceA, lightW, shadowW, reflW, grad, fam, uCanvas,
+    capU: curves.value(ev.reflectedMax), floorU: curves.value(ev.halfLo), curves,
+  }
 }

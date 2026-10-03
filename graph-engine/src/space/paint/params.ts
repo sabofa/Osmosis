@@ -40,9 +40,9 @@ export interface PaintParams {
   }
   // How strokes are detected and assigned their role (§3.7).
   detect: {
-    // Form strokes go on particles whose value is within this band (u units)
-    // of the terminator (the half-tone/core boundary).
-    formBand: number
+    // Form strokes go on particles within this band of the terminator, in N·L units (the surface turns from
+    // the key light at N·L = 0). It was `formBand` in u units: a saved preset's old key is ignored.
+    formBandNL: number
     // Scumble goes where |∇u| per CSS px is below this over at least
     // scumbleMinPx (a wide transition).
     scumbleGradient: number
@@ -120,6 +120,14 @@ export interface PaintParams {
     coolHue: number
     kWarm: number
     kCool: number
+    // The most the warm or cool swing may turn a colour's hue away from its own, in degrees (both sides). The swing is
+    // relative to the local colour (toward its warmer or cooler neighbour, by kWarm or kCool of the arc to warmHue or
+    // coolHue) and capped here, so a terracotta's shadow is a dark red and never a purple. The tints, the sky and the
+    // bounce, the environment and the reflected-light mix keep the final hue within shiftMax + 3 degrees of the colour's
+    // own (a grey, local chroma under 0.005, has no hue to keep and takes them whole; the hold is full by chroma 0.02).
+    // This bounds the light-to-shadow swing only: the brush-load mix (mix.hueMin to hueMax) and the planes' hue steps vary
+    // hue on top of it, by design (Ben's colour distortion).
+    shiftMax: number
     accentHue: number
     accentMax: number
     planeStepA: number
@@ -253,7 +261,7 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   },
   environment: { hue: 250, chroma: 0.02, absorption: 0.3, occlusion: 0.35, occlusionRadiusPx: 14 },
   detect: {
-    formBand: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
+    formBandNL: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
     glazeBelow: 0.4, reflectedMin: 0.04, edgeMinContrast: 0.05, edgeReachPx: 20,
   },
   // The key light is the mockup's: from 56 degrees to the viewer's left and 27 up (its CAMLIGHT (-0.74, 0.45, 0.50) in
@@ -270,7 +278,7 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   },
   curve: {
     lSlope: 0.8, lPivot: 0.62, cBase: 0.42, cPeak: 0.88, cCentre: 0.5, cWidth: 0.25,
-    warmHue: 75, coolHue: 280, kWarm: 0.4, kCool: 0.46, accentHue: 95, accentMax: 18,
+    warmHue: 75, coolHue: 280, kWarm: 0.4, kCool: 0.46, shiftMax: 12, accentHue: 95, accentMax: 18,
     planeStepA: 10, planeStepB: 6, tintWarm: 0.018, tintCool: 0.022,
     skyTint: 0.03, skyHue: 250, bounceTint: 0.034, bounceHue: 68, reflectedBounceMix: 0.55,
     devL: 0.01, devC: 0.06, devH: 2.2, colormapHue: 1 / 3,
@@ -354,7 +362,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'environment.occlusionRadiusPx', label: 'Occlusion radius (px)', group: 'Environment', min: 2, max: 60, step: 1 },
   ...(
     [
-      ['formBand', 'Form band (N·L)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
+      ['formBandNL', 'Form band (N·L)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
       ['scumbleMinPx', 'Scumble min width (px)', 0, 40, 1], ['dabTopFraction', 'Dab top fraction', 0, 0.2, 0.001],
       ['dabMinPx', 'Dab min spacing (px)', 0, 80, 1], ['glazeBelow', 'Glaze below u', 0, 1, 0.01],
       ['reflectedMin', 'Reflected min bounce', 0, 0.3, 0.005], ['edgeMinContrast', 'Edge min contrast', 0, 0.3, 0.005],
@@ -369,7 +377,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
       ['halfLo', 'Half-tone, darkest (at terminator)', 0, 1, 0.001], ['halfHi', 'Half-tone, lightest', 0, 1, 0.001],
       ['lightLo', 'Light from', 0, 1, 0.001], ['lightHi', 'Light to (highlight)', 0, 1, 0.001],
       ['lightTurn', 'Half-tone turns to light (N·L)', 0, 1, 0.005], ['lightSoftness', 'Light / half-tone softness (N·L)', 0, 1, 0.005],
-      ['terminatorSoftness', 'Terminator softness (N·L)', 0, 0.4, 0.005], ['coreWidth', 'Core shadow width (N·L)', 0, 0.8, 0.005],
+      ['terminatorSoftness', 'Terminator softness (N·L)', 0, 1, 0.005], ['coreWidth', 'Core shadow width (N·L)', 0, 0.8, 0.005],
       ['corePlateau', 'Core shadow value', 0, 1, 0.001], ['reflectedShare', 'Reflected share (core to half-tone)', 0, 0.9, 0.005],
       ['reflectedSoftness', 'Reflected / core softness (N·L)', 0, 1, 0.005], ['castPlateau', 'Cast shadow value', 0, 1, 0.001],
       ['castContact', 'Cast shadow at the contact', 0, 1, 0.001], ['deviation', 'Deviation', 0, 0.1, 0.001],
@@ -380,7 +388,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
       ['lSlope', 'L slope', 0, 2, 0.01], ['lPivot', 'L pivot', 0, 1, 0.01], ['cBase', 'C base', 0, 2, 0.01],
       ['cPeak', 'C peak', 0, 2, 0.01], ['cCentre', 'C centre', 0, 1, 0.01], ['cWidth', 'C width', 0.02, 1, 0.01],
       ['warmHue', 'Warm hue', 0, 360, 1], ['coolHue', 'Cool hue', 0, 360, 1], ['kWarm', 'Warm pull', 0, 1, 0.01],
-      ['kCool', 'Cool pull', 0, 1, 0.01], ['accentHue', 'Accent hue', 0, 360, 1], ['accentMax', 'Accent max (°)', 0, 60, 0.5],
+      ['kCool', 'Cool pull', 0, 1, 0.01], ['shiftMax', 'Max hue shift (°)', 0, 60, 0.5], ['accentHue', 'Accent hue', 0, 360, 1], ['accentMax', 'Accent max (°)', 0, 60, 0.5],
       ['planeStepA', 'Plane step A (°)', 0, 40, 0.5], ['planeStepB', 'Plane step B (°)', 0, 40, 0.5],
       ['tintWarm', 'Warm tint', 0, 0.1, 0.001], ['tintCool', 'Cool tint', 0, 0.1, 0.001],
       ['skyTint', 'Sky tint', 0, 0.1, 0.001], ['skyHue', 'Sky hue', 0, 360, 1],

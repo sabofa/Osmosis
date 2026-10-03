@@ -146,3 +146,14 @@ export function colourOfDraft(c: DraftColour, env: RecipeEnv): Oklab {
   const b = sourceColour(c.b, env)
   return [a[0] + (b[0] - a[0]) * c.t, a[1] + (b[1] - a[1]) * c.t, a[2] + (b[2] - a[2]) * c.t]
 }
+
+// The lightness the colour would have if it were made at value `u` instead: the same recipe in every other respect (the
+// local colour, the jitters, the plane, the lighting curve, the gamut fit), so it is what "the cap's lightness" or
+// "the darkest half-tone's lightness" is FOR THIS STROKE. The mix's value step is held against it (strokes.ts).
+export function lightnessAtValue(c: DraftColour, u: number, env: RecipeEnv): number {
+  const at = (s: ColourSource): number => (Array.isArray(s) ? s[0] : colourOfRecipe({ ...(s as ColourRecipe), u }, env)[0])
+  const a = at(c.a)
+  if (c.b === null) return a
+  const b = at(c.b)
+  return a + (b - a) * c.t
+}

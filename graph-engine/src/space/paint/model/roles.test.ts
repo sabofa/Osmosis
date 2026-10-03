@@ -83,17 +83,17 @@ describe('stroke roles by detection (spec §3.7, §11)', () => {
     expect(sphereRun(resolvePaintParams({ detect: { reflectedMin: 0 } }), { elevation: 4 }).frame.stats.byRole.reflected).toBeGreaterThanOrEqual(low.frame.stats.byRole.reflected)
   })
 
-  it('puts form strokes within formBand of the terminator (N·L = 0), and none with a zero band', () => {
+  it('puts form strokes within formBandNL of the terminator (N·L = 0), and none with a zero band', () => {
     const forms = strokesOf(base, 'form')
     expect(forms.length).toBeGreaterThan(30)
     // N·L at the stroke is inside 0 ± 0.18 (give the stroke's own extent a little slack)
     const inside = forms.filter((s) => Math.abs(s.nl) <= 0.18 + 0.06).length
     expect(inside / forms.length).toBeGreaterThan(0.9)
-    expect(sphereRun(resolvePaintParams({ detect: { formBand: 0 } })).frame.stats.byRole.form).toBe(0)
-    const wide = sphereRun(resolvePaintParams({ detect: { formBand: 0.5 } })).frame.stats.byRole.form
+    expect(sphereRun(resolvePaintParams({ detect: { formBandNL: 0 } })).frame.stats.byRole.form).toBe(0)
+    const wide = sphereRun(resolvePaintParams({ detect: { formBandNL: 0.5 } })).frame.stats.byRole.form
     expect(wide).toBeGreaterThan(base.frame.stats.byRole.form)
     // the band is about the terminator and nothing else: a narrow band keeps strokes close to it
-    const narrow = sphereRun(resolvePaintParams({ detect: { formBand: 0.06 } }))
+    const narrow = sphereRun(resolvePaintParams({ detect: { formBandNL: 0.06 } }))
     expect(narrow.frame.stats.byRole.form).toBeLessThan(base.frame.stats.byRole.form)
     for (const s of strokesOf(narrow, 'form')) expect(Math.abs(s.nl)).toBeLessThan(0.06 + 0.1)
   })

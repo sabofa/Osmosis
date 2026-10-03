@@ -5,10 +5,11 @@
 //   block      every visible particle (subsampled by the role's density): broad,
 //              flat strokes round the light, laid along the planes. On the table
 //              only where the shadow falls.
-//   form       particles within detect.formBand of the terminator and not in the
+//   form       particles within detect.formBandNL (N·L) of the terminator and not in the
 //              deep core: curved strokes along the surface direction that crosses
 //              the terminator most (the uv direction of the two the light crosses
-//              more), loaded at the lighter end, stopping below the core (0.36).
+//              more), loaded at the lighter end, stopping where the plan value falls under the
+//              middle of the terminator's soft edge (the value at N·L = 0).
 //   scumble    where the transition between zones is wide (|∇v| per CSS px under
 //              detect.scumbleGradient over at least scumbleMinPx), semi-dry,
 //              alternating the lighter and the darker neighbour by parity.
@@ -34,8 +35,8 @@ import { behaviourOf, strokeEdgeClass, type Behaviour } from './edges'
 import { clamp, scratchU8, vcross, vlen, vnorm, type V3 } from './math'
 import { stepValue, chamferDist } from './planes'
 import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
-import { pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
-import { ambientShare, newZoneSample, planSample } from './value'
+import { holdOf, pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
+import { ambientShare, bandFollow, effectiveValues, familyBound, holdFamily, newZoneSample, planSample } from './value'
 import { bigMax, drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
 import { Z_CAST } from './zones'
 
@@ -211,8 +212,15 @@ interface ColourOpts {
 
 // The curve colour of the stroke at particle k (fitted OKLab) and the value it
 // was made at, with the recipe it was made from (so a colour parameter can make
-// it again without this stroke's geometry being redone).
-function strokeColour(an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>, w: Where, opts: ColourOpts): { lab: Oklab; u: number; colour: DraftColour } {
+// it again without this stroke's geometry being redone). The value is held inside
+// the family of the pixel it stands on (value.ts holdFamily): the plane's step, the
+// seeded deviation and a role's own lightening (the scumble's ±0.1) never carry a
+// shadow-family stroke past the cap or a light-family one under the darkest half-tone.
+// `hold` is the draft's family, bound and lightness bound for the brush-load mix's own
+// hold (strokes.ts packStrokes); empty for a veil, which stands on no pixel.
+function strokeColour(
+  an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>, w: Where, opts: ColourOpts,
+): { lab: Oklab; u: number; colour: DraftColour; hold: Pick<StrokeDraft, 'fam' | 'uBound' | 'lBound'> } {
   const { set, vis, fc, curve } = an
   const params = fc.params
   const i = vis.idx[k]
@@ -220,8 +228,12 @@ function strokeColour(an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>
   const px = set.position[3 * i], py = set.position[3 * i + 1], pz = set.position[3 * i + 2]
   // the plane's own short gradient: its mean plus planeGradient of the particle's own value
   const dev = curve.devU(px, py, pz)
-  const stepped = w.plane >= 0 ? stepValue(an.planes, w.plane, w.u + dev, params.edges.planeGradient) : w.u + dev
-  const u = clamp(stepped + (opts.du ?? 0), 0.02, 0.99)
+  // (inside the terminator's soft edge the stroke follows the plan's own value, the plane's step outside it: bandFollow)
+  const follow = w.gi >= 0 ? bandFollow(params.value.terminatorSoftness, an.plan.nl[w.gi], fc.g.shadow[w.gi] === 1, ground) : 0
+  const stepped = w.plane >= 0 ? stepValue(an.planes, w.plane, w.u + dev, params.edges.planeGradient, follow) : w.u + dev
+  // (and a role's own lightening or darkening, the scumble's ±0.1, fades with it: held to the family on one side only, it would put a step across the edge)
+  const lifted = stepped + (opts.du ?? 0) * (1 - follow)
+  const u = clamp(w.gi >= 0 ? holdFamily(an.plan, w.gi, lifted) : lifted, 0.02, 0.99)
   const nz = vis.normal[3 * k + 2]
   const plane = w.plane >= 0 && !ground ? an.planes.planes[w.plane] : null
   const r = newRecipe()
@@ -254,14 +266,25 @@ function strokeColour(an: PaintCtx, k: number, rng: ReturnType<typeof randomFor>
   r.py = py
   r.pz = pz
   const colour: DraftColour = { a: r, b: null, t: 0 }
-  return { lab: colourOfDraft(colour, an.env), u, colour }
+  const onPixel = w.gi >= 0
+  return {
+    lab: colourOfDraft(colour, an.env),
+    u,
+    colour,
+    hold: holdOf(colour, onPixel ? an.plan.fam[w.gi] : undefined, onPixel ? familyBound(an.plan, w.gi) : undefined, an.env),
+  }
 }
 
 // ---- the stroke ----
 
 // A stroke that stops at the terminator (stopBelow) stops where the plan value falls under the middle of the soft edge
-// between the core and the darkest half-tone: the plan value at N·L = 0.
+// between the core and the darkest half-tone: the plan value at N·L = 0. The plan value has the value curve applied, so
+// the stop is the middle of the two plateaus (the model's own, held to the structure) through the same curve.
 const TERMINATOR = -2
+export function terminatorValue(an: PaintCtx): number {
+  const ev = effectiveValues(an.fc.params)
+  return an.plan.curves.value(0.5 * (ev.corePlateau + ev.halfLo))
+}
 interface RoleCfg {
   dir: 'block' | 'form'
   classed: 'full' | 'soft' | 'none'
@@ -394,7 +417,7 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     rot: mode === 'iso' ? rot : 0,
     lengthPx,
     bend,
-    stopBelow: cfg.stopBelow === TERMINATOR ? 0.5 * (params.value.corePlateau + params.value.halfLo) : cfg.stopBelow,
+    stopBelow: cfg.stopBelow === TERMINATOR ? terminatorValue(an) : cfg.stopBelow,
     planeId: !veil && cfg.classed !== 'none' && role !== 'scumble' ? w.plane : -1,
     castOnly: ground,
     inside: veil ? veilOf(fc.scene.marks[set.mark[i]] as MeshMark).inside : undefined,
@@ -463,6 +486,7 @@ function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: 
     lab: col.lab,
     colour: col.colour,
     u: col.u,
+    ...col.hold,
     cell: loadCellOf(set, i, params.mix.loadCell, fc.loadLevel),
     mx: vis.sx[k],
     my: vis.sy[k],
@@ -520,7 +544,7 @@ export function particleStrokes(an: PaintCtx): void {
       continue
     }
     f = drawFade(fc, vis, set, k, 'form')
-    if (f > MIN && plan.shadowW[gi] < 0.85 && Math.abs(plan.nl[gi]) <= d.formBand) buildParticleStroke(an, k, 'form', f)
+    if (f > MIN && plan.shadowW[gi] < 0.85 && Math.abs(plan.nl[gi]) <= d.formBandNL) buildParticleStroke(an, k, 'form', f)
     f = drawFade(fc, vis, set, k, 'scumble')
     if (f > MIN && an.scumbleOk[gi] === 1) buildParticleStroke(an, k, 'scumble', f)
     f = drawFade(fc, vis, set, k, 'glaze')
@@ -696,6 +720,7 @@ export function dabStrokes(an: PaintCtx): void {
       lab: col.lab,
       colour: col.colour,
       u: col.u,
+      ...col.hold,
       cell: loadCellOf(set, pi, params.mix.loadCell, fc.loadLevel),
       mx: sx,
       my: sy,
