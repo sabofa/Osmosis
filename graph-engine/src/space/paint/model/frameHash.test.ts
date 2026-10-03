@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parametricMesh } from '../../testing/marks'
-import { DEFAULT_PAINT_PARAMS } from '../params'
+import { DEFAULT_PAINT_PARAMS, resolvePaintParams } from '../params'
 import type { GBuffer, PaintFrame, ParticleSet, StrokeBatch } from '../types'
 import { lchToLab } from './colour'
-import { buildParticles, paintFrame } from './index'
+import { buildParticles, paintFrame, recolourFrame } from './index'
 import { flatColours, paintView, planeGBuffer, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './testing'
 import { buildUnderpaintField, underpaintImage } from './underpaint'
 import { GRID_VIEWS, LOCALS, made } from './valueFinalFixture'
@@ -94,6 +94,19 @@ describe('the frame-hash guard', () => {
     expect(pick('sphere.')).toEqual(PINNED_SPHERE)
   })
 
+  it('pins recolourFrame: fixture 1 after one colour-only change (the warm hue 75 to 85), strokes and underpainting', () => {
+    const { frame } = sphereFrame()
+    const recoloured = recolourFrame(frame, resolvePaintParams({ curve: { warmHue: DEFAULT_PAINT_PARAMS.curve.warmHue + 10 } }))
+    expect(recoloured).not.toBeNull()
+    hashBatch('recolour', recoloured!.strokes, computed)
+    computed['recolour.underpaint'] = fnv(recoloured!.underpaint)
+    // it is a recolour: the same strokes as the frame it came from, in other colours
+    expect(recoloured!.strokes.count).toBe(frame.strokes.count)
+    expect(fnv(recoloured!.strokes.path)).toBe(fnv(frame.strokes.path))
+    expect(fnv(recoloured!.strokes.colour)).not.toBe(fnv(frame.strokes.colour))
+    expect(pick('recolour.')).toEqual(PINNED_RECOLOUR)
+  })
+
   it('pins the stroke batch and underpainting of a plane-and-cast-shadow frame', () => {
     const { frame } = planeFrame()
     hashBatch('plane', frame.strokes, computed)
@@ -153,6 +166,28 @@ const PINNED_SPHERE: Record<string, string> = {
   'sphere.worldPath': 'ff9b8b65:59232',
   'sphere.worldNormal': '807d7201:7404',
   'sphere.underpaint': '9145bb34:360000',
+}
+const PINNED_RECOLOUR: Record<string, string> = {
+  'recolour.count': '617',
+  'recolour.role': '36cfd667:617',
+  'recolour.layer': '70a97ef9:617',
+  'recolour.path': '09588581:39488',
+  'recolour.width': 'd90ee071:19744',
+  'recolour.depth': 'b8f57f55:2468',
+  'recolour.colour': '23699514:7404',
+  'recolour.alpha': 'ca2f9572:2468',
+  'recolour.load': 'ad300dff:2468',
+  'recolour.impasto': 'acb141b7:2468',
+  'recolour.bristles': '8eb77f42:2468',
+  'recolour.bristleVar': '63fe092a:2468',
+  'recolour.dry': 'fe0fa382:2468',
+  'recolour.wet': 'e43395d2:2468',
+  'recolour.endSoft': '22091a1d:2468',
+  'recolour.edge': 'd2b7b71c:617',
+  'recolour.seed': '06b9de90:2468',
+  'recolour.worldPath': 'ff9b8b65:59232',
+  'recolour.worldNormal': '807d7201:7404',
+  'recolour.underpaint': 'e0ea194a:360000',
 }
 const PINNED_PLANE: Record<string, string> = {
   'plane.count': '130',
