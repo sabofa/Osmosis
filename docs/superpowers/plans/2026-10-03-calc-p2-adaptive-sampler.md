@@ -36,7 +36,7 @@ P1 and P1b are complete on this branch.
   - `parser/types.ts`, `parser/parseStatement.ts`
   - `examples.ts` and its test
   - `GraphViewer.tsx`
-  - `docs/HANDOFF-2026-10-01-calc-track-4.md`, `graph-engine/GRAPH-DSL-REFERENCE.md`
+  - `docs/HANDOFF-2026-10-01-calc-track-4.md`, `GRAPH-DSL-REFERENCE.md`
 
 **The rules that don't bend** (spec, verbatim in substance)
 1. Nothing is connected unless certified. A curve is joined across an interval only when:
@@ -435,7 +435,7 @@ describe('troubleGenerators', () => {
     expect(whys).toEqual(expect.arrayContaining(['seam:condition', 'natural:ln domain', 'natural:denominator']))
   })
   it('drops generators that do not depend on the parameter', () => {
-    expect(troubleGenerators(expr('x / a'), 'x', scopeOf('@param a = 2'))).toEqual([])
+    expect(troubleGenerators(expr('x / a'), 'x', scopeOf('@param a = 2 range [0, 5]'))).toEqual([])
   })
   it('sees through a user function and a derivative', () => {
     expect(troubleGenerators(expr('f(x)'), 'x', scopeOf('f(x) = 1/(x - 3)')).length).toBeGreaterThan(0)
@@ -489,7 +489,7 @@ describe('locateZeros', () => {
     expect(r.zeros.every((z) => z.origin === 'seam')).toBe(true)
   })
   it('resolves parameters and user functions', () => {
-    near(zerosOf('f(x)', -5, 5, 'f(x) = 1/(x - a)\n@param a = 2').zeros, [2])
+    near(zerosOf('f(x)', -5, 5, 'f(x) = 1/(x - a)\n@param a = 2 range [0, 5]').zeros, [2])
   })
   it('gives both ends of a stretch where a generator is zero (1/floor(x))', () => {
     const ts = zerosOf('1/floor(x)', -0.5, 1.5).zeros.map((z) => z.t)
@@ -757,9 +757,13 @@ Screen-space subdivision of one parameter range into chains. An interval is conn
 - Coordinates in chains are therefore always finite and inside `clip`.
 
 **The core**, written as the header comment of `adaptive.ts`:
-1. **Start:** the initial grid has `n = max(8, ceil((t1 − t0)·pxPerT / startPx))` intervals. An `anchor` end uses its point instead of evaluating there. A `singular` end evaluates at `t ± floorPx/pxPerT`, nudged inward, never at the end itself.
+1. **Start:**
+   - First enclose the whole range `[t0, t1]` once. If the enclosure is empty or disjoint from `clip`, return with nothing drawn: a curve wholly off screen costs one evaluation.
+   - Otherwise the initial grid has `n = max(8, ceil((t1 − t0)·pxPerT / startPx))` intervals.
+   - An `anchor` end uses its point instead of evaluating there. A `singular` end evaluates at `t ± floorPx/pxPerT`, nudged inward, never at the end itself.
+   - **The start grid is always evaluated** (its points and each interval's enclosure); it is the coarse floor. The budget governs refinement only.
 2. **Each interval `[ta, tb]`**, with points `Pa` and `Pb`, is handled depth-first in parameter order:
-   - **Budget:** if the counter has reached the budget, connect only when the parent interval was certified and both points are finite; otherwise `lift()`. Mark `capped`.
+   - **Budget:** once the counter has reached the budget, refinement stops. Connect only when the interval (or, below the grid, its parent) was certified CONTINUOUS and both points are finite; otherwise `lift()`. Mark `capped`.
    - **Cull:** `enclose(ta, tb)` (count it). An empty enclosure, or one disjoint from `clip`, means nothing visible is here: `lift()` and return. This is valid under any verdict.
    - `widthPx = (tb − ta)·pxPerT`.
    - **Certified** (verdict CONTINUOUS and both points finite): evaluate the midpoint `Pm`. Accept, with `segment(Pa → Pb)`, when:
@@ -908,7 +912,7 @@ Put the pieces together for one statement: locate and classify its trouble spots
     | { kind: 'polar'; body: Expr; from: number; to: number }
     | { kind: 'parametric'; param: string; fx: Expr; fy: Expr; from: number; to: number }
   export interface View { bounds: Bounds; widthPx: number; heightPx: number }
-  export interface CurveOptions { statement: number; color: string | null; asymptotes: boolean; quality: 'full' | 'coarse' }
+  export interface CurveOptions { statement: number; color: string | null; asymptotes: boolean; quality: 'full' | 'coarse'; budget?: { points: number; intervals: number } }  // budget: overrides the tuning's, for tests
   export interface SampledCurve {
     objects: SceneObject[]        // the curve first, then its marks in parameter order, then its asymptote lines
     capped: boolean
@@ -991,7 +995,7 @@ describe('sampleCurve — poles', () => {
   it('poles in degrees, and through a parameter', () => {
     const d = run(explicit('tan(x)'), '', 'degrees', { ...view, bounds: { xMin: -200, xMax: 200, yMin: -10, yMax: 10 } })
     expect(curveOf(d.objects).breaks.filter((b) => b.kind === 'pole').map((b) => Math.round(b.at))).toEqual(expect.arrayContaining([-270, -90, 90, 270]))
-    const p = run(explicit('f(x)'), 'f(x) = 1/(x - a)\n@param a = 2')
+    const p = run(explicit('f(x)'), 'f(x) = 1/(x - a)\n@param a = 2 range [0, 5]')
     expect(curveOf(p.objects).breaks).toContainEqual({ at: expect.closeTo(2, 12), kind: 'pole' })
   })
 })
@@ -1210,7 +1214,7 @@ The corpus is P2's acceptance test and every later phase adds to it. The contact
 - Create: `graph-engine/src/plot/testing/corpus.ts`, `graph-engine/src/plot/testing/corpus.test.ts`
 - Create: `graph-engine/src/plot/testing/svgScene.ts`, `graph-engine/src/plot/testing/svgScene.test.ts`
 - Create: `graph-engine/scripts/calc-contact-sheet.ts`
-- Modify: `graph-engine/src/examples.ts` (and `examples.test.ts` if it pins counts), `graph-engine/GRAPH-DSL-REFERENCE.md`, `docs/HANDOFF-2026-10-01-calc-track-4.md`
+- Modify: `graph-engine/src/examples.ts` (and `examples.test.ts` if it pins counts), `GRAPH-DSL-REFERENCE.md`, `docs/HANDOFF-2026-10-01-calc-track-4.md`
 
 **Interfaces:**
 - Produces (`corpus.ts`):
@@ -1272,7 +1276,7 @@ The corpus is P2's acceptance test and every later phase adds to it. The contact
 - [ ] **Step 7: Commit.**
 
 ```bash
-git add graph-engine/src/plot/testing graph-engine/scripts/calc-contact-sheet.ts graph-engine/src/examples.ts graph-engine/src/examples.test.ts graph-engine/GRAPH-DSL-REFERENCE.md docs/HANDOFF-2026-10-01-calc-track-4.md
+git add graph-engine/src/plot/testing graph-engine/scripts/calc-contact-sheet.ts graph-engine/src/examples.ts graph-engine/src/examples.test.ts GRAPH-DSL-REFERENCE.md docs/HANDOFF-2026-10-01-calc-track-4.md
 git commit -m "test(plot): the torture corpus with pinned evaluation ceilings, an SVG contact sheet, P2 examples and docs
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
