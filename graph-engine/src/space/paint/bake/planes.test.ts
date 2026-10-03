@@ -8,7 +8,7 @@ import { worldLight } from '../model/valueFinalFixture'
 import { zoneFamily, Z_CAST, Z_CORE, Z_HALF, Z_LIGHT, Z_REFLECTED } from '../model/value'
 import type { Oklab, ParticleSet } from '../types'
 import { buildWorldPlan } from './plan'
-import { buildWorldPlanes, lonCell, PLANE_MIN_TRIANGLES, stepValueWorld, triangleZone, GROUND_BAND_PX, type WorldPlanes } from './planes'
+import { buildWorldPlanes, latBands, lonCell, PLANE_MIN_TRIANGLES, stepValueWorld, triangleZone, GROUND_BAND_PX, type WorldPlanes } from './planes'
 import { parametricMesh } from '../../testing/marks'
 import { locate, type SurfacePoint } from './surface'
 
@@ -193,10 +193,11 @@ describe('the longitude cells', () => {
   // a sweep of longitudes: the cell of each, per latitude band
   const sweep = (latI: number, cell: number): number[] => Array.from({ length: 7200 }, (_, k) => lonCell(latI, -Math.PI + ((k + 0.5) / 7200) * 2 * Math.PI, cell))
 
-  for (const deg of [26, 10, 45, 30]) {
+  for (const deg of [26, 10, 45, 30, 22, 25, 28, 35]) {
     it(`give every latitude band of ${deg} degrees a whole number of equal cells, none partial at ±π, and the bands that reach a pole one cell`, () => {
-      const cell = (deg * Math.PI) / 180
-      const bands = Math.ceil(Math.PI / cell - 1e-9)
+      // (a whole number of equal bands: the last is no remainder, so no thin polar cap)
+      const { nBands: bands, band: cell } = latBands((deg * Math.PI) / 180)
+      expect(cell * bands).toBeCloseTo(Math.PI, 12)
       for (let latI = 0; latI < bands; latI++) {
         const cells = sweep(latI, cell)
         const n = Math.max(...cells) + 1
@@ -239,7 +240,8 @@ describe('buildWorldPlanes: the lat/lon binning leaves no seam sliver and no pin
   const torus = (() => {
     const scene = sceneOf([torusMesh(1, 0.4, 40, 20)])
     const plan = buildWorldPlan(scene, LIGHT, P, PX)
-    return { plan, planes: buildWorldPlanes(plan, buildParticles(scene, COLOURS, P), COLOURS, CURVE, P) }
+    const set = buildParticles(scene, COLOURS, P)
+    return { plan, set, planes: buildWorldPlanes(plan, set, COLOURS, CURVE, P) }
   })()
 
   for (const [name, get] of [['the sphere', () => ({ plan: PLAN, planes: PLANES })], ['the torus', () => torus]] as const) {
@@ -259,6 +261,19 @@ describe('buildWorldPlanes: the lat/lon binning leaves no seam sliver and no pin
     expect(trianglesNear(PLANES, PLAN, 0, (_x, _y, _z, nz) => nz > cap).size).toBeLessThanOrEqual(2)
     expect(trianglesNear(torus.planes, torus.plan, 0, (_x, _y, _z, nz) => nz > cap).size).toBeLessThanOrEqual(4)
   })
+
+  // a cell that does not divide π (22, 25, 35 degrees) left a partial band at the pole: a thin cap the longitude cells pinwheeled in
+  for (const deg of [22, 25, 26, 28, 35]) {
+    it(`has no pole pinwheel at a ${deg} degree plane cell: at most 2 planes within 10 degrees of the sphere's pole, and none of the torus's crest's`, () => {
+      const p: PaintParams = { ...P, edges: { ...P.edges, planeCellDeg: deg } }
+      const cap = Math.cos((10 * Math.PI) / 180)
+      // (the plan and the particles do not read the plane cell: only the binning does)
+      const sphere = buildWorldPlanes(PLAN, SET, COLOURS, CURVE, p)
+      expect(trianglesNear(sphere, PLAN, 0, (_x, _y, _z, nz) => nz > cap).size).toBeLessThanOrEqual(2)
+      const tor = buildWorldPlanes(torus.plan, torus.set, COLOURS, CURVE, p)
+      expect(trianglesNear(tor, torus.plan, 0, (_x, _y, _z, nz) => nz > cap).size).toBeLessThanOrEqual(4)
+    })
+  }
 
   it('merges the slivers of a cell’s jag into their neighbours: no plane under three triangles of the plan’s cells that has a neighbour of its family', () => {
     const minArea = PLANE_MIN_TRIANGLES * 72 * PX * PX

@@ -83,7 +83,14 @@ export interface WorldPlanes {
   planes: WorldPlane[]
 }
 
-// The longitude cell of a normal in latitude band `latI` (of `cell` radians): each band has a WHOLE number of longitude cells, so there is no
+// The latitude bands of a plane cell of `cell` radians: a WHOLE number of equal bands, round(π / cell) of them (at least 1), each π / nBands
+// wide, so the last band is no partial one (a remainder of a few degrees at the pole would be a thin cap the longitude cells pinwheel in).
+export function latBands(cell: number): { nBands: number; band: number } {
+  const nBands = Math.max(1, Math.round(Math.PI / cell))
+  return { nBands, band: Math.PI / nBands }
+}
+
+// The longitude cell of a normal in latitude band `latI` (of `cell` radians, a latBands band): each band has a WHOLE number of longitude cells, so there is no
 // partial cell at +-pi to make slivers, and the bands that reach a pole are one cell (the pole is not a pinwheel of wedges). The number of
 // cells in a band follows the model's widening toward the poles: 2π·max(0.35, cos of the band's centre) / cell, at least 1.
 export function lonCell(latI: number, lon: number, cell: number): number {
@@ -172,7 +179,7 @@ function planesOfSide(
   const perPx = plan.referenceWorldPerPx
   const e = params.edges
   const cell = Math.max(1, e.planeCellDeg) * D2R // (a cell under a degree would crowd the key's longitude field; the slider stops at 5)
-  const nBands = Math.max(1, Math.ceil(Math.PI / cell - 1e-9))
+  const { nBands, band } = latBands(cell)
   const idx = s.indices
 
   // the key of every triangle
@@ -208,8 +215,8 @@ function planesOfSide(
       normalOf(s, at, side, n)
       const lat = Math.asin(clamp(n[2], -1, 1))
       const lon = Math.atan2(n[1], n[0])
-      const latI = Math.min(nBands - 1, Math.floor((lat + Math.PI / 2) / cell))
-      key[t] = (latI * 4096 + lonCell(latI, lon, cell)) * 8 + zone
+      const latI = Math.min(nBands - 1, Math.floor((lat + Math.PI / 2) / band))
+      key[t] = (latI * 4096 + lonCell(latI, lon, band)) * 8 + zone
     }
   }
 
