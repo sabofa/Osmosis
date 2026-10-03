@@ -13,17 +13,27 @@ const P = DEFAULT_PAINT_PARAMS
 
 // ---- the image fill, with a field made by hand ----
 
-// 4 x 1 G-buffer pixels, a lattice cell 2 pixels wide: two cells, each with one sample of mark 0, red and blue.
-const field = (owner: number[], marks: number[] = [0, 0]): UnderpaintField => ({
+// 4 x 1 G-buffer pixels, a lattice cell 2 pixels wide: two cells, each with one sample of mark 0, red and blue. Every pixel
+// and sample is of the light family unless `ownerFams` and `fams` say otherwise.
+const field = (owner: number[], marks: number[] = [0, 0], ownerFams: number[] = [0, 0, 0, 0], fams: number[] = [0, 0]): UnderpaintField => ({
   width: 4,
   height: 1,
   owner: Int32Array.from(owner),
+  ownerFam: Uint8Array.from(ownerFams),
+  bandPix: new Int32Array(0),
+  bandDonor: new Int32Array(0),
+  bandU: new Float32Array(0),
+  bandW: new Float32Array(0),
+  bandFam: new Uint8Array(0),
+  bandBound: new Float32Array(0),
   lw: 2,
   lh: 1,
   cell: 2,
   cellStart: Int32Array.from([0, 1, 2]),
   count: 2,
   mark: Int32Array.from(marks),
+  fam: Uint8Array.from(fams),
+  bound: new Float32Array(2),
   lab: new Float32Array(6),
   u: new Float32Array(2),
   nz: new Float32Array(2),
@@ -208,6 +218,7 @@ describe('the underpainting of a frame', () => {
   it('is smooth: made on a lattice of UNDERPAINT_CELL_PX px and filled bilinearly, so a neighbour is never far in colour inside a cell of the mix', () => {
     expect(UNDERPAINT_CELL_PX).toBe(12)
     // along a row through the middle of the sphere, the largest step between neighbouring pixels (2 px) is small in linear sRGB
+    // (the terminator included: it turns as the plan's soft edge does, it is not a step)
     const { g, frame } = shot
     const y = Math.floor(g.height * 0.45)
     let steps = 0
@@ -254,7 +265,8 @@ describe('the underpainting of a colour-mapped surface', () => {
     const flat = flatColours({ 0: lchToLab(0.6, 0.1, 150) })
     const mappedSpread = spread(saddle, mapped)
     const flatSpread = spread(flatSaddle, flat)
-    expect(mappedSpread).toBeGreaterThan(25)
+    // (the swing and the tints turn a colormapped colour by at most a third of curve.shiftMax + 3 degrees: the data's own hues are what spreads)
+    expect(mappedSpread).toBeGreaterThan(20)
     expect(flatSpread).toBeLessThan(12)
   })
 })

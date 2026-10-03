@@ -7,11 +7,18 @@
 // brightest light):
 //   L = lc + lSlope·(u − lPivot) + dL(u)
 //   C = cc · (cBase + cPeak·exp(−((u − cCentre)/cWidth)²)) · (1 + dC(u))
-//   H = hc + k·|s|·arc(hc → warm if s > 0, cool if s < 0)        s = clamp((u − 0.5)/0.4, −1, 1)
+//   H = hc + clamp(k·|s|·arc(hc → warm if s > 0, cool if s < 0), ±shiftMax)   s = clamp((u − 0.5)/0.4, −1, 1)
 //        + a clamped arc toward accentHue in the half-tones
 //        + the plane's hue step
 //   then, in OKLab and never touching L: a warm/cool tint, a sky tint on
 //   up-facing normals and a bounce tint on down-facing ones.
+// THE SWING IS RELATIVE TO THE LOCAL COLOUR AND CAPPED (Ben: "a terracotta should have dark reds but nothing close to
+// purple"). The swing used to pull the hue toward an ABSOLUTE target (280° cool), which turned a terracotta (38°) to
+// 345° in its shadows. A colour now moves toward its own warmer or cooler neighbour by at most curve.shiftMax degrees,
+// and everything additive after the swing (the tints, the sky and the bounce, the environment, the reflected-light
+// mix) is held so that the final hue stays within shiftMax + 3° of where the colour's own hue and its deliberate
+// offsets (accent, plane step, deviation, the hue curve) put it, at every value. A grey (local chroma under 0.02) has no
+// hue to keep and takes the tints whole, as before; the hold fades in to full strength by local chroma 0.06.
 // Reflected light mixes the bounce colour's hue and chroma in by up to reflectedBounceMix, in OKLab and
 // NEVER touching L (value plan, spec §12): the value of reflected light is the plan's (it is kept below the
 // darkest half-tone there), and a lift here would put the bounce back among the half-tones.
@@ -53,7 +60,8 @@ export interface CurveInput {
   u: number
   // World normal z (for the sky and bounce tints), when known.
   nz?: number
-  // Reflected-light weight b (0 none .. ~0.85), when known.
+  // The lift b of the form shadow toward reflected light, 0 none .. 1 (value.ts ZoneSample.lift: the share of the
+  // reflected-light range the plan has taken here), when known: it mixes the bounce colour's hue and chroma in, never L.
   bounce?: number
   // The share of the light here that is environment light, 0..1 (value.ts
   // ambientShare), when known: how much of the environment colour it takes in.
@@ -143,13 +151,16 @@ export function makeCurve(params: PaintParams): Curve {
     const target = warm ? p.warmHue : p.coolHue
     const k = (warm ? p.kWarm : p.kCool) * hs
     const accent = clamp(0.5 * hueArc(local[2], p.accentHue), -p.accentMax, p.accentMax)
-    const h =
-      local[2] +
-      k * Math.abs(s) * hueArc(local[2], target) +
+    // the swing: toward the colour's own warmer or cooler neighbour, by at most shiftMax (a colormapped colour: a third of it)
+    const swingMax = Math.max(0, p.shiftMax) * hs
+    const swing = clamp(k * Math.abs(s) * hueArc(local[2], target), -swingMax, swingMax)
+    // the deliberate offsets besides the swing: the deviation, the half-tone accent, the plane's step, Ben's hue curve
+    const offsets =
       hs * (nd * sumSines(dH, u) + j[2]) +
       hs * accent * Math.exp(-(((u - ACCENT_U) / ACCENT_SIG) ** 2)) +
       hs * (i.planeHue ?? 0) +
       hs * hAdj(u)
+    const h = local[2] + swing + offsets
     const lab = lchToLab(L, C, h)
     // greys still lean warm in the light and cool in the shadow
     const tint = (warm ? p.tintWarm : p.tintCool) * Math.abs(s) * hs
@@ -179,7 +190,20 @@ export function makeCurve(params: PaintParams): Curve {
       lab[1] += (bl[1] - lab[1]) * w
       lab[2] += (bl[2] - lab[2]) * w
     }
-    return labToLch(lab)
+    const out = labToLch(lab)
+    // the hold: the tints, the sky, the bounce, the environment and the reflected-light mix may not carry the hue more than
+    // 3 degrees past the capped swing (a colormapped colour: a third of that), from where the colour's own hue and its
+    // offsets put it. Chroma and lightness are kept: the hue is turned back.
+    const holdFor = smooth(0.02, 0.06, local[1])
+    if (holdFor > 0) {
+      const reach = (Math.max(0, p.shiftMax) + 3) * hs
+      const away = hueArc(local[2] + offsets, out[2])
+      if (Math.abs(away) > reach) {
+        const held = away + (clamp(away, -reach, reach) - away) * holdFor
+        out[2] = (((local[2] + offsets + held) % 360) + 360) % 360
+      }
+    }
+    return out
   }
 
   return {
