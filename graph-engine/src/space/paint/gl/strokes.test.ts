@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE } from '../bake/types'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type StrokeBatch } from '../types'
 import { firstOfPlan, packStrokes, planStrokes, ROLE_A, ROLE_B, srgbEncode, srgbEncodeFast, strokeLayout } from './strokes'
 import { TEXELS_PER_STROKE } from './shaders/stroke'
@@ -265,5 +266,84 @@ describe('per-role brush constants', () => {
 
   it('marks only the line role as crisp (exact data marks)', () => {
     ROLES.forEach((role, r) => expect(ROLE_B[r * 4 + 2]).toBe(role === 'line' ? 1 : 0))
+  })
+})
+
+describe('the strokes of the hidden pass (a baked frame’s dashed data lines)', () => {
+  // five strokes: batch index 0..4, layers 1 0 1 0 2, depths 3 5 7 1 2, planned in the order 1 3 2 0 4
+  const hiddenBatch = (style: number[]): StrokeBatch => {
+    const b = batch([1, 0, 1, 0, 2], [3, 5, 7, 1, 2])
+    b.hidden = Uint8Array.from(style)
+    return b
+  }
+
+  it('lists the dashed strokes in drawing order after the planned ones, and leaves the layers alone', () => {
+    const plan = planStrokes(hiddenBatch([HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, HIDDEN_DASHED, HIDDEN_DASHED]))
+    expect(Array.from(plan.order)).toEqual([1, 3, 2, 0, 4])
+    expect(Array.from(plan.layerStart)).toEqual([0, 2, 4, 5, 5, 5, 5, 5, 5])
+    // 3, 0 and 4 in the order they are planned
+    expect(Array.from(plan.hidden ?? [])).toEqual([3, 0, 4])
+  })
+
+  it('has no list for a batch with no hidden array (the per-frame model’s), or one with nothing dashed', () => {
+    expect(planStrokes(batch([1, 0], [1, 2])).hidden).toBeUndefined()
+    expect('hidden' in planStrokes(batch([1, 0], [1, 2]))).toBe(false)
+    expect(planStrokes(hiddenBatch([HIDDEN_NONE, HIDDEN_NA, HIDDEN_NONE, HIDDEN_NONE, HIDDEN_NA])).hidden).toBeUndefined()
+    // a hidden array shorter than the batch is no hidden array
+    const short = batch([1, 0], [1, 2])
+    short.hidden = Uint8Array.from([HIDDEN_DASHED])
+    expect(planStrokes(short).hidden).toBeUndefined()
+  })
+
+  it('does not list a stroke that is not drawn (a layer outside LAYER_ORDER)', () => {
+    const b = batch([0, 200, 1], [1, 2, 3])
+    b.hidden = Uint8Array.from([HIDDEN_DASHED, HIDDEN_DASHED, HIDDEN_NA])
+    expect(Array.from(planStrokes(b).hidden ?? [])).toEqual([0])
+  })
+
+  it('packs them again in the slots after the planned ones: slot count + k holds the same texels as the stroke does in its own slot', () => {
+    const b = hiddenBatch([HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, HIDDEN_DASHED, HIDDEN_DASHED])
+    for (let i = 0; i < 5; i++) {
+      b.colour.set([0.1 * (i + 1), 0.2, 0.3], 3 * i)
+      b.seed[i] = 100 + i
+      for (let k = 0; k < PATH_POINTS; k++) b.worldPath.set([i + 1, k + 1, 7], 3 * PATH_POINTS * i + 3 * k)
+    }
+    const whole = planStrokes(b)
+    const layout = strokeLayout(whole.count + (whole.hidden?.length ?? 0), 4096)
+    const out = new Float32Array(layout.width * layout.rows * 4)
+    packStrokes(b, whole, layout, out)
+    const slot = (n: number) => Array.from(out.subarray(n * TEXELS_PER_STROKE * 4, (n + 1) * TEXELS_PER_STROKE * 4))
+    // planned order 1 3 2 0 4, then the dashed 3 0 4
+    const slotOf = (batchIndex: number) => Array.from(whole.order).indexOf(batchIndex)
+    expect(slot(5)).toEqual(slot(slotOf(3)))
+    expect(slot(6)).toEqual(slot(slotOf(0)))
+    expect(slot(7)).toEqual(slot(slotOf(4)))
+    // and they are real: stroke 3's world path is in them
+    expect(slot(5).slice((PATH_POINTS + 4) * 4, (PATH_POINTS + 4) * 4 + 4)).toEqual([4, 1, 7, 0])
+  })
+
+  it('packs a batch with none exactly as before: the texels of the planned slots only', () => {
+    const b = batch([1, 0], [1, 2])
+    const plan = planStrokes(b)
+    const layout = strokeLayout(plan.count, 4096)
+    const out = new Float32Array(layout.width * layout.rows * 4)
+    packStrokes(b, plan, layout, out)
+    // slot 2 (no stroke) is untouched
+    expect(Array.from(out.subarray(2 * TEXELS_PER_STROKE * 4, 3 * TEXELS_PER_STROKE * 4)).every((v) => v === 0)).toBe(true)
+  })
+
+  it('drops them first when the texture is short: firstOfPlan keeps the planned strokes before the hidden ones', () => {
+    const plan = planStrokes(hiddenBatch([HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, HIDDEN_DASHED, HIDDEN_DASHED]))
+    // room for everything: the same plan; room for 6 of the 8 slots: the five planned and one hidden
+    expect(firstOfPlan(plan, 8)).toBe(plan)
+    const six = firstOfPlan(plan, 6)
+    expect(six.count).toBe(5)
+    expect(Array.from(six.hidden ?? [])).toEqual([3])
+    // room for 5: all planned, no hidden; for 3: three planned, none hidden
+    expect(firstOfPlan(plan, 5).hidden).toBeUndefined()
+    expect(firstOfPlan(plan, 5).count).toBe(5)
+    const three = firstOfPlan(plan, 3)
+    expect(three.count).toBe(3)
+    expect(three.hidden).toBeUndefined()
   })
 })

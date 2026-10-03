@@ -49,6 +49,10 @@ export const SIZING_FIXED = 1 // CSS px whatever the zoom (edge strokes, data-ma
 export const HIDDEN_NONE = 0 // hidden parts are not drawn (the depth pre-pass)
 export const HIDDEN_DASHED = 1 // hidden parts are drawn dashed (the renderer's hidden pass)
 export const HIDDEN_NA = 255 // not a data mark
+// The dash of a hidden stretch drawn dashed, CSS px: on, off. The per-frame model dashes its hidden runs with it
+// (model/lines.ts) and the renderer's hidden pass dashes the hidden parts of a baked frame's data lines the same way
+// (gl/depthTest.ts), so both read it from here.
+export const HIDDEN_DASH: readonly number[] = [5, 4]
 
 // One mesh mark's surface as the bake refined it (finer than the scene mesh
 // where the value plan needs it: the cast shadow on a two-triangle table, the
@@ -57,9 +61,13 @@ export const HIDDEN_NA = 255 // not a data mark
 export interface BakedSurface {
   mark: number
   positions: Float32Array // 3 per vertex, world
-  normals: Float32Array // 3 per vertex, unit, the surface's own (side +1)
+  // 3 per vertex, unit, side +1's normal: the mesh's own times the surface's orientation (bake/surface.ts orient), so
+  // side +1 of a closed mesh is its OUTSIDE whatever way the kernel's normals point.
+  normals: Float32Array
   indices: Uint32Array
-  closed: boolean // no border edges: seen from side +1 only
+  // Seen from side +1 only: a closed OPAQUE mesh (bake/surface.ts outsideOnly). A closed veil is seen from both sides
+  // (its far half through its near half), so it is not `closed` here.
+  closed: boolean
   // The underpainting, linear sRGB, 3 per vertex, as seen from side +1 and from
   // side -1 (null when closed); alpha per vertex per side (0 where nothing is
   // underpainted, e.g. lit bare table).

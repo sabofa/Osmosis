@@ -19,6 +19,7 @@
 
 import { randomFor } from '../../../style/random'
 import type { Mark } from '../../scene/types'
+import { HIDDEN_DASH } from '../bake/types'
 import { PATH_POINTS } from '../types'
 import { clamp, hash3 } from './math'
 import { colourOfDraft, newRecipe, type ColourRecipe, type DraftColour } from './recipe'
@@ -26,8 +27,7 @@ import { veilOf, type Veil } from './roles'
 import { BEHIND_VEIL_LAYER, polylinePath, roleIndex, type PaintCtx } from './strokes'
 import { project, pxPerUnit } from './view'
 
-// The default dash of a hidden stretch drawn dashed, CSS px.
-const HIDDEN_DASH = [5, 4]
+// (The default dash of a hidden stretch drawn dashed, HIDDEN_DASH, is bake/types.ts's: the renderer shares it.)
 // A corner sharper than this ends a stroke (the corner is its end, exactly).
 const CORNER = (30 * Math.PI) / 180
 // The head of an arrow opens ±26 degrees from the shaft.

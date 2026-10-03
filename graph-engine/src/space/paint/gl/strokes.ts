@@ -3,6 +3,7 @@
 // an accumulation framebuffer, with two targets ping-ponged between layers so
 // a layer's strokes can pick up what the layers beneath it already painted.
 
+import { HIDDEN_DASHED } from '../bake/types'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type StrokeBatch } from '../types'
 import type { PaperGpu } from './composite'
 import type { ProgramInfo } from '../../gl/program'
@@ -20,7 +21,14 @@ export interface StrokePlan {
   order: Uint32Array
   // Slot range of layer i: [layerStart[i], layerStart[i + 1]).
   layerStart: Int32Array
+  // The strokes the hidden pass draws again (a baked frame's data lines whose hidden style is HIDDEN_DASHED), as batch
+  // indices in drawing order: the data texture holds them in the slots after the planned ones (slot `count + k` is
+  // hidden[k]), and run() draws them in one instanced draw right after the line layer. Absent (not just empty) for a batch
+  // with none, which is every batch the per-frame model makes.
+  hidden?: Uint32Array
 }
+
+const LINE_LAYER = LAYER_ORDER.indexOf('line')
 
 export function planStrokes(batch: StrokeBatch): StrokePlan {
   const layers = LAYER_ORDER.length
@@ -39,7 +47,14 @@ export function planStrokes(batch: StrokeBatch): StrokePlan {
   }
   const depth = batch.depth
   for (let l = 0; l < layers; l++) sortFarthestFirst(order.subarray(layerStart[l], layerStart[l + 1]), depth)
-  return { count: order.length, order, layerStart }
+  const plan: StrokePlan = { count: order.length, order, layerStart }
+  const style = batch.hidden
+  if (style && style.length >= batch.count) {
+    const dashed: number[] = []
+    for (let slot = 0; slot < order.length; slot++) if (style[order[slot]] === HIDDEN_DASHED) dashed.push(order[slot])
+    if (dashed.length > 0) plan.hidden = Uint32Array.from(dashed)
+  }
+  return plan
 }
 
 const INDEX_BITS = 2 ** 21
@@ -102,11 +117,18 @@ export function strokeLayout(count: number, maxTextureSize: number): StrokeLayou
   return { perRow, width: perRow * TEXELS_PER_STROKE, rows, capacity: perRow * rows }
 }
 
-// The plan of the first `n` strokes of `plan` (its order is the layers in order, back to front within a layer).
+// The plan of the first `n` slots of `plan` (its order is the layers in order, back to front within a layer; the strokes of
+// the hidden pass come after them and are the first to go).
 export function firstOfPlan(plan: StrokePlan, n: number): StrokePlan {
-  if (n >= plan.count) return plan
-  const count = Math.max(0, n)
-  return { count, order: plan.order.subarray(0, count), layerStart: Int32Array.from(plan.layerStart, (v) => Math.min(v, count)) }
+  const extra = plan.hidden ? plan.hidden.length : 0
+  if (n >= plan.count + extra) return plan
+  const count = Math.max(0, Math.min(plan.count, n))
+  const cut: StrokePlan = { count, order: plan.order.subarray(0, count), layerStart: Int32Array.from(plan.layerStart, (v) => Math.min(v, count)) }
+  if (plan.hidden) {
+    const kept = Math.max(0, n - count)
+    if (kept > 0) cut.hidden = plan.hidden.subarray(0, kept)
+  }
+  return cut
 }
 
 export function srgbEncode(linear: number): number {
@@ -140,8 +162,7 @@ export function packStrokes(batch: StrokeBatch, plan: StrokePlan, layout: Stroke
   const { path, width: widths, colour } = batch
   const world = batch.worldPath
   const haveWorld = world !== undefined && world.length >= 3 * PATH_POINTS * batch.count
-  for (let slot = 0; slot < plan.count; slot++) {
-    const i = plan.order[slot]
+  const pack = (slot: number, i: number): void => {
     const row = (slot / perRow) | 0
     const base = (row * width + (slot - row * perRow) * TEXELS_PER_STROKE) * 4
     const pBase = i * 2 * PATH_POINTS
@@ -210,6 +231,10 @@ export function packStrokes(batch: StrokeBatch, plan: StrokePlan, layout: Stroke
       }
     }
   }
+  for (let slot = 0; slot < plan.count; slot++) pack(slot, plan.order[slot])
+  // the strokes of the hidden pass: the same texels again, in the slots after the planned ones
+  const again = plan.hidden
+  if (again) for (let k = 0; k < again.length; k++) pack(plan.count + k, again[k])
 }
 
 // --- per-role brush constants -------------------------------------------------
@@ -344,13 +369,13 @@ export class StrokeRenderer {
 
   // Sort, pack and upload the batch. Returns the plan and layout to draw with. A batch the device's texture limit
   // cannot hold (MAX_TEXTURE_SIZE) draws its first strokes (the plan's order) and no more: the plan returned is the
-  // one drawn.
+  // one drawn. The strokes of the hidden pass (plan.hidden) take slots after the planned ones.
   upload(batch: StrokeBatch): { plan: StrokePlan; layout: StrokeLayout } {
     const gl = this.gl
     const maxSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE))
     const limit = Number.isFinite(maxSize) && maxSize > 0 ? maxSize : 2048
     const whole = planStrokes(batch)
-    const layout = strokeLayout(whole.count, limit)
+    const layout = strokeLayout(whole.count + (whole.hidden ? whole.hidden.length : 0), limit)
     const plan = firstOfPlan(whole, layout.capacity)
     if (plan.count === 0) return { plan, layout }
     if (!this.data || layout.width !== this.dataWidth || layout.rows > this.dataRows) {
@@ -405,10 +430,9 @@ export class StrokeRenderer {
       gl.activeTexture(gl.TEXTURE0 + unit)
       gl.bindTexture(gl.TEXTURE_2D, texture)
     }
-    for (let layer = 0; layer < LAYER_ORDER.length; layer++) {
-      const first = plan.layerStart[layer]
-      const count = plan.layerStart[layer + 1] - first
-      if (count === 0) continue
+    // One draw of `count` strokes from slot `first`, into the target after the last one, with the paint so far copied into
+    // it. The hidden pass is one too: the same strokes as the line layer's dashed ones, tested the other way round.
+    const drawRange = (first: number, count: number, hiddenPass: boolean): void => {
       const dst = passes % 2 === 0 ? A : B
       const src = passes % 2 === 0 ? B : A
       gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo)
@@ -456,11 +480,24 @@ export class StrokeRenderer {
       gl.uniform4fv(stroke.uniform('u_roleB'), ROLE_B)
       gl.uniform1i(stroke.uniform('u_debugRoles'), input.debugRoles ? 1 : 0)
       gl.uniform3fv(stroke.uniform('u_roleColour'), ROLE_DEBUG_COLOURS)
+      // (the uniform is 0 until a hidden pass sets it, and a hidden pass puts it back)
+      if (hiddenPass) gl.uniform1i(stroke.uniform('u_hiddenPass'), 1)
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, VERTICES_PER_STROKE, count)
+      if (hiddenPass) gl.uniform1i(stroke.uniform('u_hiddenPass'), 0)
       gl.disable(gl.BLEND)
       final = dst
       draws++
       passes++
+    }
+    // The hidden pass needs the scene's depth to say where a surface is nearer: without it (no float targets, no scene) the
+    // dashed lines show where they are visible and nothing more, which is what a line with no hidden style does.
+    const hiddenCount = input.depthTest && plan.hidden ? plan.hidden.length : 0
+    for (let layer = 0; layer < LAYER_ORDER.length; layer++) {
+      const first = plan.layerStart[layer]
+      const count = plan.layerStart[layer + 1] - first
+      if (count > 0) drawRange(first, count, false)
+      // right after the normal line strokes
+      if (layer === LINE_LAYER && hiddenCount > 0) drawRange(plan.count, hiddenCount, true)
     }
     return { final, draws }
   }
