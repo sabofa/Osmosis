@@ -128,6 +128,12 @@ export interface BakedPainting {
   // per-frame px area of a particle (density and zoom growth); 0 for non-meshes.
   areaPerParticle: Float32Array
   surfaces: (BakedSurface | null)[] // per scene mark; null for non-meshes
+  // The focal points of each mark (the brightest highlights, spec §14): 2 per mark, x, y, z and radius R each
+  // (8 per mark), NaN where a mark has fewer; the silhouette strokes' focal term reads them.
+  focal: Float64Array
+  // The colour of each data mark's strokes before the brush-load mix (linear sRGB, 3 per mark, 0 for marks
+  // without lines), for the shapes a frame builds on screen (a point's dab, an arrowhead's barbs).
+  dataColour: Float32Array
   // A key of everything the bake read (scene identity, params except view-only
   // and colour-only ones, light direction, seed): equal keys, equal paintings.
   key: string
