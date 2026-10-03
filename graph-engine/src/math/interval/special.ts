@@ -12,6 +12,11 @@
 // exp(-x^2) and of the series), and erfc's continued-fraction branch by 1.8e-15 relative.
 // (The scalar's error against the true function is larger, 1e-13 near 170, but that is not
 // what a box of the scalar's values needs.) The widenings below are 7x, 4.5x and 4.5x those.
+//
+// The twins keep their scratch at module level and allocate no object, array or closure per
+// call. A call of the scalar gamma, erf or erfc is not inlined into them, and V8 returns a
+// double from a JS function boxed (one heap number per scalar call; erfc's own `1 - erf(x)`
+// and gamma's recursion box more inside the scalar), which these twins cannot avoid.
 
 import { choose, erf, erfc, gamma, gcd, lcm, perm } from '../special'
 import { div, mul, sub } from './arith'
