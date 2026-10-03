@@ -131,7 +131,7 @@ function pick(prefix: string): Record<string, string> {
   return out
 }
 
-// ---- the pinned hashes (taken at 55ce20c, before any change; the same on every run) ----
+// ---- the pinned hashes (taken at paint's ea5ba5c, values rounds 2-4, in a scratch export of it with no bake, and equal at the merged head; the same on every run) ----
 const PINNED_SPHERE: Record<string, string> = {
   'sphere.count': '617',
   'sphere.role': '36cfd667:617',
@@ -139,7 +139,7 @@ const PINNED_SPHERE: Record<string, string> = {
   'sphere.path': '09588581:39488',
   'sphere.width': 'd90ee071:19744',
   'sphere.depth': 'b8f57f55:2468',
-  'sphere.colour': '588976de:7404',
+  'sphere.colour': 'dfc046e4:7404',
   'sphere.alpha': 'ca2f9572:2468',
   'sphere.load': 'ad300dff:2468',
   'sphere.impasto': 'acb141b7:2468',
@@ -152,7 +152,7 @@ const PINNED_SPHERE: Record<string, string> = {
   'sphere.seed': '06b9de90:2468',
   'sphere.worldPath': 'ff9b8b65:59232',
   'sphere.worldNormal': '807d7201:7404',
-  'sphere.underpaint': 'ba781f43:360000',
+  'sphere.underpaint': '9145bb34:360000',
 }
 const PINNED_PLANE: Record<string, string> = {
   'plane.count': '130',
@@ -161,7 +161,7 @@ const PINNED_PLANE: Record<string, string> = {
   'plane.path': '4fe9b3fe:8320',
   'plane.width': '0d3cd828:4160',
   'plane.depth': '74cc5c2a:520',
-  'plane.colour': 'b324bfec:1560',
+  'plane.colour': '64430537:1560',
   'plane.alpha': 'b0de849d:520',
   'plane.load': '90c6d799:520',
   'plane.impasto': '93a6cf1b:520',
@@ -174,7 +174,7 @@ const PINNED_PLANE: Record<string, string> = {
   'plane.seed': '9ceaf9fe:520',
   'plane.worldPath': 'abb56423:12480',
   'plane.worldNormal': 'c7d5e8a8:1560',
-  'plane.underpaint': '24d2ce64:360000',
+  'plane.underpaint': '0443a7ab:360000',
 }
 const PINNED_FINAL: Record<string, string> = {
   'final.count': '279',
@@ -183,7 +183,7 @@ const PINNED_FINAL: Record<string, string> = {
   'final.path': '8dc1e0d7:17856',
   'final.width': '75754d23:8928',
   'final.depth': '9fea166d:1116',
-  'final.colour': '486eee9a:3348',
+  'final.colour': '76c14638:3348',
   'final.alpha': '882a756e:1116',
   'final.load': 'ec1ff336:1116',
   'final.impasto': '8e5de564:1116',
@@ -196,7 +196,7 @@ const PINNED_FINAL: Record<string, string> = {
   'final.seed': '7bf1d5fe:1116',
   'final.worldPath': '8e38bbd8:26784',
   'final.worldNormal': 'b859a138:3348',
-  'final.underpaint': 'd634accb:230400',
+  'final.underpaint': 'b26f80eb:230400',
 }
 const PINNED_PARTICLES: Record<string, string> = {
   'particles.count': '96540',
