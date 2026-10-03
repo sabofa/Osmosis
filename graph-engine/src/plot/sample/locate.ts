@@ -43,12 +43,18 @@
 // pole at 0.5.
 import { compileScalar } from '../../math/compile'
 import { type CompiledInterval, compileInterval, isEmpty, iv } from '../../math/interval'
+import type { ComparisonOp } from '../../math/reserved'
 import type { MathScope } from '../../math/scope'
+import type { Expr } from '../../parser/types'
 import type { Generator, Origin } from './structure'
 import { LOCATE } from './tuning'
 import type { EvalCounter } from './types'
 
-export interface Zero { t: number; origin: Origin; why: string }
+// `cmp` and `cmpExpr`, together or neither: the comparison this zero is the boundary of, and its
+// a - b (the generator's expression), so the side where the comparison holds can be read from
+// the sign of a - b either side of t. Present only for a zero that came from exactly ONE
+// comparison generator: a zero two generators share has neither.
+export interface Zero { t: number; origin: Origin; why: string; cmp?: ComparisonOp; cmpExpr?: Expr }
 // `truncated`: the result may be missing zeros, and not by a known amount. A budget
 // or a cap ended the search before it was done; or a cluster was too crowded for its
 // samples to count (cos(1/x) near 0); or there are more zeros than maxZeros and the
@@ -101,7 +107,7 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
     for (const [lo, hi] of found.clusters) {
       const here = resolve(g, confirm, lo, hi, coarse, counter)
       if (here.unresolved) truncated = true
-      for (const t of here.zeros) all.push({ t, origin: gen.origin, why: gen.why })
+      for (const t of here.zeros) all.push(gen.cmp ? { t, origin: gen.origin, why: gen.why, cmp: gen.cmp, cmpExpr: gen.expr } : { t, origin: gen.origin, why: gen.why })
     }
   }
   return merge(all, t0, t1, truncated)
@@ -313,6 +319,12 @@ function merge(all: Zero[], t0: number, t1: number, truncated: boolean): LocateR
     if (!(z.t - t0 > tolAt(z.t) && t1 - z.t > tolAt(z.t))) continue
     const last = out[out.length - 1]
     if (last && z.t - last.t <= tolAt(z.t)) {
+      // two generators share the zero: it is no one comparison's (one generator finding it twice,
+      // by a sign change and by a minimum, is still one)
+      if (last.cmpExpr !== z.cmpExpr) {
+        delete last.cmp
+        delete last.cmpExpr
+      }
       if (z.origin === 'seam') last.origin = 'seam'
       if (!last.why.split('+').includes(z.why)) last.why += `+${z.why}`
       continue

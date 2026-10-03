@@ -138,9 +138,24 @@ describe('the generator rules', () => {
     ])
   })
   it('the six comparisons give a - b, as seams', () => {
-    for (const name of ['__lt', '__le', '__gt', '__ge', '__eq', '__ne']) {
-      expect(troubleGenerators(call(name, x, num(1)), 'x', scopeOf()), name).toEqual([{ expr: sub(x, num(1)), origin: 'seam', why: 'condition' }])
+    const ops = { __lt: '<', __le: '<=', __gt: '>', __ge: '>=', __eq: '=', __ne: '!=' }
+    for (const [name, cmp] of Object.entries(ops)) {
+      // each says which comparison it is the difference of (curve.ts reads the side that holds, and whether the zero is in it)
+      expect(troubleGenerators(call(name, x, num(1)), 'x', scopeOf()), name).toEqual([{ expr: sub(x, num(1)), origin: 'seam', why: 'condition', cmp }])
     }
+  })
+  it('keeps the comparison only where one comparison made the generator', () => {
+    const cmps = (text: string) => troubleGenerators(expr(text), 'x', scopeOf()).map((g) => g.cmp)
+    // the same comparison twice is still that comparison
+    expect(cmps('{x < 1: 1, x < 1: 2, 3}')).toEqual(['<'])
+    // < and <= of one expression do not agree on who owns the zero, and a natural spot is not a comparison
+    expect(cmps('{x < 1: 1, x <= 1: 2, 3}')).toEqual([undefined])
+    expect(cmps('{x < 1: 1/(x - 1), 3}')).toEqual([undefined])
+    expect(cmps('1/(x - 1) + {x < 1: 1, 3}')).toEqual([undefined])
+    // a chain is two comparisons, one each
+    expect(cmps('{0 < x <= 3: 1}')).toEqual(['<', '<='])
+    // and the walk through a sum's unrolled terms keeps it
+    expect(cmps('sum(k = 1 to 2, {x < k: 1, 0})')).toEqual(['<', '<'])
   })
   it('and, or, not and piecewise give nothing of their own, and walk every argument', () => {
     const lt = call('__lt', x, num(0))

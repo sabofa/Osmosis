@@ -28,7 +28,9 @@
 // Each generator says where it came from. A SEAM is a condition the author wrote
 // (a piecewise or domain condition): the curve is built to change there, so a
 // jump at a seam is the author's, not a defect. A NATURAL spot is the function's
-// own domain, pole or step. When one expression is both, the seam wins.
+// own domain, pole or step. When one expression is both, the seam wins. A comparison's
+// generator also says which operator it came from (`cmp`), when it is only that, so a
+// zero that is not an exact double still knows whether the author's condition includes it.
 //
 // The walk does not validate the expression: a call with the wrong number of
 // arguments gets no rule, a binder bound the compile refuses is no constant, and the
@@ -41,7 +43,7 @@ import { builtinArity, compileScalar, freeVariablesDeep } from '../../math/compi
 import { CompileError } from '../../math/errors'
 import { add, call, div, mul, num, sub, substitute, varNames } from '../../math/expr'
 import { expandPrime } from '../../math/prime'
-import { BINDERS, comparisonOp, isReserved } from '../../math/reserved'
+import { BINDERS, type ComparisonOp, comparisonOp, isReserved } from '../../math/reserved'
 import { isVectorBody, type MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
 
@@ -50,6 +52,12 @@ export interface Generator {
   expr: Expr
   origin: Origin
   why: string
+  // The operator of the comparison whose a - b this is, when it is exactly that: the operator
+  // says which side of a zero the author's condition holds on and whether the zero itself is
+  // in it (< against <=), which no sample can tell where the seam is not an exact double
+  // (x^2 < 2). Absent for every other generator, and for an expression that a natural spot, or
+  // a comparison with another operator, also produced.
+  cmp?: ComparisonOp
 }
 
 // How many user functions (or derivatives) deep a walk goes, and how many it
@@ -65,7 +73,7 @@ const MAX_EXPANSIONS = 4096
 // The most terms of a sum or product that are unrolled, one generator each.
 const MAX_UNROLLED_TERMS = 64
 
-type Emit = (expr: Expr, origin: Origin, why: string) => void
+type Emit = (expr: Expr, origin: Origin, why: string, cmp?: ComparisonOp) => void
 // A built-in's rule: its own generators from its arguments (already checked to be
 // in the built-in's arity). `k` is the angle unit's half turn: Math.PI in radians,
 // 180 in degrees, so sin(k u) is zero exactly at whole u in the user's own unit.
@@ -159,9 +167,21 @@ const isPositiveWhole = (e: Expr): boolean => e.kind === 'num' && Number.isInteg
 // The reserved names that carry a rule of their own. __and, __or, __not and
 // __piecewise have none: their conditions and values are walked as arguments.
 function reservedRule(name: string, argc: number): Rule | null {
-  if (comparisonOp(name) && argc === 2) return ([a, b], _k, emit) => emit(sub(a, b), 'seam', 'condition')
+  const op = comparisonOp(name)
+  if (op && argc === 2) return ([a, b], _k, emit) => emit(sub(a, b), 'seam', 'condition', op)
   if (name === '__factorial' && argc === 1) return ([u], k, emit) => emit(call('sin', mul(num(k), add(u, num(1)))), 'natural', 'factorial pole')
   return null
+}
+
+// Two generators of the same expression as one: the seam's origin and reason win (the first
+// seam, if both are), as they always have. The comparison survives only if both are that one
+// comparison: a zero that a natural spot, or a comparison with another operator, also
+// produced is not one comparison's to say who owns.
+export function joinGenerators(a: Generator, b: Generator): Generator {
+  const keep = a.origin === 'seam' || b.origin !== 'seam' ? a : b
+  const joined: Generator = { expr: keep.expr, origin: keep.origin, why: keep.why }
+  if (a.cmp !== undefined && a.cmp === b.cmp) joined.cmp = a.cmp
+  return joined
 }
 
 // The generators of `expr` over `param`, in the order the walk finds them. A
@@ -171,12 +191,12 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
   const k = scope.angle === 'degrees' ? 180 : Math.PI
   const found = new Map<string, Generator>()
 
-  const emit: Emit = (generator, origin, why) => {
+  const emit: Emit = (generator, origin, why, cmp) => {
+    if (!freeVariablesDeep(generator, scope).has(param)) return
     const key = JSON.stringify(generator)
     const known = found.get(key)
-    if (known && (known.origin === 'seam' || origin !== 'seam')) return
-    if (!freeVariablesDeep(generator, scope).has(param)) return
-    found.set(key, { expr: generator, origin, why })
+    const g: Generator = cmp ? { expr: generator, origin, why, cmp } : { expr: generator, origin, why }
+    found.set(key, known ? joinGenerators(known, g) : g)
   }
 
   let expansions = 0
@@ -253,10 +273,10 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
     // in the body is a function of the curve's.
     if (bound === param) return
     let terms: readonly number[] | null | undefined
-    walk(body, depth, (generator, origin, why) => {
+    walk(body, depth, (generator, origin, why, cmp) => {
       // Syntactically: a document constant of the bound name is shadowed in the body.
       if (!varNames(generator).has(bound)) {
-        out(generator, origin, why)
+        out(generator, origin, why, cmp)
         return
       }
       if (e.name === '__integral') return
@@ -264,7 +284,7 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
       if (terms === null) return
       for (const n of terms) {
         if (++expansions > MAX_EXPANSIONS) return
-        out(substitute(generator, new Map([[bound, num(n)]])), origin, why)
+        out(substitute(generator, new Map([[bound, num(n)]])), origin, why, cmp)
       }
     })
   }

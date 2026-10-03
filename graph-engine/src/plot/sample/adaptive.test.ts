@@ -165,6 +165,17 @@ describe('sampleRange — ends', () => {
     const ps = chainPoints(sink.chains()[0])
     expect(ps[ps.length - 1]).toEqual({ x: 1, y: 0 })
   })
+  // The anchor says where the curve arrives, not that nothing is in the way: a pole the walk did
+  // not find (a built-in with no rule, a zero classified unknown) in the last floor interval opens
+  // the gap, and the stretch is lifted with its jump break, not drawn as a stroke through it.
+  it('does not draw the stretch to an anchor when its gap does not close', () => {
+    // 1/x + 5 has a pole at 0, and the anchor claims the curve arrives at (0, 5)
+    const fns = fnsOf('1/x + 5', scopeOf())
+    const sink = new ChainSink(view.clip)
+    sampleRange(fns, -3, 0, { left: free, right: { kind: 'anchor', at: { x: 0, y: 5 } } }, view, FULL, { points: 0, intervals: 0 }, sink)
+    expect(sink.breaks().some((b) => b.kind === 'jump')).toBe(true)
+    for (const c of sink.chains()) expect(chainPoints(c).some((p) => p.x === 0)).toBe(false)
+  })
   it('a jump is still a jump where no anchor says the curve arrives', () => {
     // the same arc, the same floor interval at its tip, with no anchor: the core lifts and records it
     const fns = fnsOf('sqrt(1 - x^2)', scopeOf(), 400)

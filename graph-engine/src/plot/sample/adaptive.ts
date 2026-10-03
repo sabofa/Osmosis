@@ -203,9 +203,14 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     // An interval that ends at an anchor is the last stretch to a limit the structure walk has
     // read (limits.ts: a hole's, a jump's side, a domain edge's), and the anchor is where the
     // curve is known to arrive. The twin cannot say so (next to a hole its enclosure is
-    // unbounded; at an arc's tip it dips under the domain), and a gap there is not a jump: the
-    // stretch is drawn, or the chain would stop a floor short of the very point it was anchored at.
-    if (ta === c.anchorLo || tb === c.anchorHi) {
+    // unbounded; at an arc's tip it dips under the domain), so the stretch is certified the way
+    // any uncertified one is, by what the samples show, minus the two preconditions the jump test
+    // has for a stretch about which nothing is known (a gap under gapPx, a bounded enclosure): the
+    // ends are within flatPx, or the gaps close (anchorShrink, looser: it is a tip). A singularity
+    // the walk never located (a built-in with no rule, a sum whose bound is a @param, a zero the
+    // classifier called unknown) between the sample and the anchor opens the gap instead, and
+    // then the stretch is lifted with its jump break like any other.
+    if ((ta === c.anchorLo || tb === c.anchorHi) && (pxDistance(c, xa, ya, xb, yb) <= c.tune.flatPx || gapCloses(c, ta, tb, xa, ya, xb, yb, c.tune.anchorShrink))) {
       c.sink.segment(xa, ya, ta, xb, yb, tb)
       return
     }
@@ -255,8 +260,9 @@ function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: num
   return encW <= c.tune.spikeFactor * spanX + c.tune.spikeSlackPx && encH <= c.tune.spikeFactor * spanY + c.tune.spikeSlackPx
 }
 
-// The jump test: do the gaps between samples close as the interval is halved?
-function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, xb0: number, yb0: number): boolean {
+// The jump test: do the gaps between samples close as the interval is halved? Each gap must be at
+// most `shrink` times the one before.
+function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, xb0: number, yb0: number, shrink: number = c.tune.halvingShrink): boolean {
   let ta = ta0
   let tb = tb0
   let xa = xa0
@@ -275,7 +281,7 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
     const right = pxDistance(c, xm, ym, xb, yb)
     const next = left >= right ? left : right
     // (written so that a NaN fails it)
-    if (!(next <= c.tune.halvingShrink * gap)) return false
+    if (!(next <= shrink * gap)) return false
     if (left >= right) {
       tb = tm
       xb = xm

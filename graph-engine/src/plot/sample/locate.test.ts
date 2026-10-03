@@ -86,6 +86,22 @@ describe('locateZeros, beyond the table', () => {
     expect(r.zeros[0].origin).toBe('seam')
     expect(r.zeros[0].why.split('+').sort()).toEqual(['condition', 'denominator'])
   })
+  it('keeps the comparison on a zero that is exactly one comparison\'s, and drops it from a shared one', () => {
+    const cmps = (text: string, t0 = -3, t1 = 3) => zerosOf(text, t0, t1).zeros.map((z) => z.cmp)
+    // one comparison, one zero; and both zeros of x^2 - 4 are that comparison's
+    expect(cmps('{x < 1: 1, 0}')).toEqual(['<'])
+    expect(cmps('{x^2 < 4: 1, 0}')).toEqual(['<', '<'])
+    // the zero comes with the a - b it is the zero of, to read the side that holds from
+    const [z] = zerosOf('{x <= 1: 1, 0}', -3, 3).zeros
+    expect(z.cmpExpr).toBeDefined()
+    // 2x - 2 and x - 1 are two generators with one zero: it is neither comparison's alone
+    expect(cmps('{x < 1: 1/(2x - 2), 0}')).toEqual([undefined])
+    expect(zerosOf('{x < 1: 1/(2x - 2), 0}', -3, 3).zeros[0]).not.toHaveProperty('cmpExpr')
+    // a natural spot is not a comparison
+    expect(cmps('floor(x)', -2.5, 2.5)).toEqual([undefined, undefined, undefined, undefined, undefined])
+    // two comparisons that are one expression with different operators agree on nothing
+    expect(cmps('{x < 1: 1, x <= 1: 2, 0}')).toEqual([undefined])
+  })
   it('keeps a natural origin when no seam shares the zero', () => {
     const r = zerosOf('1/(x - 1) + ln(x - 2)', 0, 4)
     near(r.zeros, [1, 2])

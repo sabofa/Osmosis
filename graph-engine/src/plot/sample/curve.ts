@@ -28,19 +28,29 @@
 //    - pole: both ends are singular (the core never evaluates at them), a pole break, and
 //      for an explicit curve a guide line.
 //    - jump: the left piece ends anchored at the left limit and the right begins anchored
-//      at the right limit; a jump break; an endpoint mark at each limit.
+//      at the right limit; a jump break; an endpoint mark at each limit, filled or open
+//      (below), and a filled value mark when the curve's own value there is neither limit.
 //    - hole: both facing ends are anchored at the same limit and the chain is NOT lifted, so
 //      the sink carries it through (tc, limit). The pieces meet at exactly tc, which the core
 //      never sees as interior: left whole, a removable hole is split by the core with a 1/16 px
 //      gap and a jump break (next to it the twin's enclosure is unbounded, so the last floor
-//      interval is uncertified). The core draws the stretch that ends at an anchor, which is
-//      what lets the chain run through.
+//      interval is uncertified). The core draws the stretch that ends at an anchor, if what
+//      the samples show certifies it (adaptive.ts), which is what lets the chain run through.
 //    - edge: the defined side's end is anchored at the limit when it converged (sqrt, an
 //      arc's tip: the core alone stops a floor short of it), else singular (a limit that
 //      diverges, or one that did not converge, is never reached for); the undefined side's
 //      end is singular, so it culls itself or draws nothing. An edge break; and an endpoint
 //      mark only when the edge is a SEAM, the author's own condition (a natural sqrt or ln
 //      edge is not marked).
+//    - FILLED OR OPEN. An end is filled when the curve takes its value there. Where the zero
+//      is one comparison's (Zero.cmp) that is the comparison's to say, since no sample can
+//      tell x^2 < 2 from x^2 <= 2 at an irrational seam: the side the comparison holds on owns
+//      the zero when the operator is inclusive. A jump fills the owning side's end and opens the
+//      other; with a strict operator the holding side's end is open and the other fills only if
+//      the curve's own value there is that limit. A seam edge is filled when the defined side
+//      owns it. Without a comparison (a seam two generators share, a jump that is natural, a
+//      comparison with no one side that holds) the curve's own value at the spot decides: filled
+//      where it equals the limit on screen.
 // 5. SAMPLING. The pieces go, in order, into ONE ChainSink, which continues a chain only where
 //    one piece ends at exactly the parameter and point the next begins at. It is lifted
 //    between pieces at a pole, jump or edge, never at a hole.
@@ -49,8 +59,9 @@
 //    are exact: they are read from limits, not from samples. A jump's side and an edge's
 //    limit are read once more close in to the spot (CURVE.settleTols), because limits.ts
 //    stops at 6e-9, and for an explicit curve the independent coordinate of a limit is the
-//    located parameter itself, not the sample the limit was read at.
-import { compileScalar } from '../../math/compile'
+//    located parameter itself, not the sample the limit was read at. `tested` and `defined`
+//    are read off the whole range's start grid (startGrid), drawn or not.
+import { type CompiledFn, compileScalar } from '../../math/compile'
 import { call, mul, variable } from '../../math/expr'
 import { compileInterval, CONTINUOUS, iv, type Verdict } from '../../math/interval'
 import { piecewise } from '../../math/reserved'
@@ -59,9 +70,9 @@ import type { Expr } from '../../parser/types'
 import type { Bounds, Break, Chain, SceneObject, Vec2 } from '../../scene/types'
 import { sampleRange } from './adaptive'
 import { classify, type Classification } from './limits'
-import { locateZeros } from './locate'
+import { locateZeros, type Zero } from './locate'
 import { ChainSink } from './sink'
-import { type Generator, type Origin, troubleGenerators } from './structure'
+import { type Generator, joinGenerators, troubleGenerators } from './structure'
 import { COARSE, CORE, CURVE, FULL, LIMITS, LOCATE, type Tuning } from './tuning'
 import type { Box, CurveFns, End, EvalCounter, PointFn, PxScale, Screen } from './types'
 
@@ -90,9 +101,10 @@ export interface SampledCurve {
   objects: SceneObject[]
   capped: boolean
   stats: { points: number; intervals: number }
-  // some start sample lay inside the domain
+  // some start-grid sample lay inside the domain
   tested: boolean
-  // some vertex was drawn
+  // some start-grid sample inside the domain was finite, whether or not it is visible: a curve
+  // wholly off screen (y = x + 100 in a view of [-10, 10]) is defined, with no chains
   defined: boolean
 }
 
@@ -135,6 +147,18 @@ interface Walk {
   marks: PendingMark[]
   poles: number[]
   pt: Float64Array
+  // what reading a comparison's side needs: the curve's parameter and scope, and the compiled
+  // a - b of each comparison generator (one compile per generator, not per zero)
+  param: string
+  scope: MathScope
+  differences: Map<Expr, CompiledFn>
+}
+
+// Where an author's comparison holds, as the walk reads it at one of its zeros: `side` is the one
+// side of the zero it holds on, and `inclusive` says that the zero itself is in it (<= and >=).
+interface Holding {
+  side: 'left' | 'right'
+  inclusive: boolean
 }
 
 // What the pieces on either side of a spot meet there: the piece before it ends in `before`,
@@ -171,7 +195,19 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const located = locateZeros(generatorsOf(co, scope), co.param, scope, co.from, co.to, counter)
   const h0 = tuning.startPx / co.pxPerT
   const sink = new ChainSink(clip)
-  const walk: Walk = { fns, px, counter, sink, independent: spec.kind === 'explicit' ? spec.independent : null, marks: [], poles: [], pt: new Float64Array(2) }
+  const walk: Walk = {
+    fns,
+    px,
+    counter,
+    sink,
+    independent: spec.kind === 'explicit' ? spec.independent : null,
+    marks: [],
+    poles: [],
+    pt: new Float64Array(2),
+    param: co.param,
+    scope,
+    differences: new Map(),
+  }
   let capped = false
   const piece = (ta: number, tb: number, left: End, right: End) => {
     if (!(tb > ta)) return
@@ -181,7 +217,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   let from = co.from
   let leftEnd: End = FREE
   for (const zero of located.zeros) {
-    const meeting = meet(walk, classify(fns.point, zero.t, h0, px, counter), zero.t, zero.origin)
+    const meeting = meet(walk, classify(fns.point, zero.t, h0, px, counter), zero)
     if (meeting === null) continue
     piece(from, zero.t, leftEnd, meeting.before)
     if (meeting.lift) sink.lift()
@@ -193,13 +229,14 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const chains = sink.chains()
   const breaks: Break[] = sink.breaks().sort((a, b) => a.at - b.at)
   const objects: SceneObject[] = [curveObject(options, chains, breaks), ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
-  const tested = spec.kind === 'explicit' && spec.domain !== null ? domainTested(spec.domain, co, scope, tuning, counter) : true
-  return { objects, capped, stats: { points: counter.points, intervals: counter.intervals }, tested, defined: chains.length > 0 }
+  const grid = startGrid(spec.kind === 'explicit' ? spec.domain : null, co, fns, scope, tuning, counter, chains.length > 0)
+  return { objects, capped, stats: { points: counter.points, intervals: counter.intervals }, tested: grid.tested, defined: grid.defined }
 }
 
 // What one classified spot is to the pieces beside it (step 4 of the header), and the typed
 // breaks and marks it leaves. Null for a spot that is not a cut.
-function meet(w: Walk, c: Classification, tc: number, origin: Origin): Meeting | null {
+function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
+  const tc = zero.t
   switch (c.kind) {
     case 'regular':
     case 'unknown':
@@ -212,7 +249,22 @@ function meet(w: Walk, c: Classification, tc: number, origin: Origin): Meeting |
       const left = onAxis(w, settle(w, c.left, tc, -1), tc)
       const right = onAxis(w, settle(w, c.right, tc, 1), tc)
       w.sink.addBreak(tc, 'jump')
-      w.marks.push({ at: left, role: 'endpoint', fill: fillOf(w, left, c.value) }, { at: right, role: 'endpoint', fill: fillOf(w, right, c.value) })
+      const holding = holdingAt(w, zero)
+      // the comparison, when there is one, says which ends the curve takes; else its value does
+      let leftFill = fillOf(w, left, c.value)
+      let rightFill = fillOf(w, right, c.value)
+      if (holding) {
+        const holdsLeft = holding.side === 'left'
+        if (holding.inclusive) {
+          leftFill = holdsLeft ? 'filled' : 'open'
+          rightFill = holdsLeft ? 'open' : 'filled'
+        } else {
+          // a strict comparison leaves its own side's end open; the other side's is the value's to say
+          if (holdsLeft) leftFill = 'open'
+          else rightFill = 'open'
+        }
+      }
+      w.marks.push({ at: left, role: 'endpoint', fill: leftFill }, { at: right, role: 'endpoint', fill: rightFill })
       // a value that is neither limit is a point of its own
       if (c.value !== null && !same(w, left, c.value) && !same(w, right, c.value)) w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
       return { before: { kind: 'anchor', at: left }, after: { kind: 'anchor', at: right }, lift: true }
@@ -230,7 +282,12 @@ function meet(w: Walk, c: Classification, tc: number, origin: Origin): Meeting |
       const reach: End = limit === null ? SINGULAR : { kind: 'anchor', at: limit }
       w.sink.addBreak(tc, 'edge')
       // only an edge the author wrote is marked, and only with a limit to mark
-      if (limit !== null && origin === 'seam') w.marks.push({ at: limit, role: 'endpoint', fill: fillOf(w, limit, valueAt(w, tc)) })
+      if (limit !== null && zero.origin === 'seam') {
+        const holding = holdingAt(w, zero)
+        // filled when the defined side owns the edge, if the comparison says; else by the value
+        const fill = holding ? (holding.inclusive && holding.side === c.defined ? 'filled' : 'open') : fillOf(w, limit, valueAt(w, tc))
+        w.marks.push({ at: limit, role: 'endpoint', fill })
+      }
       return { before: c.defined === 'left' ? reach : SINGULAR, after: c.defined === 'right' ? reach : SINGULAR, lift: true }
     }
   }
@@ -256,15 +313,45 @@ function fillOf(w: Walk, limit: Vec2, value: Vec2 | null): MarkObject['fill'] {
   return value !== null && same(w, limit, value) ? 'filled' : 'open'
 }
 
+// The offset from a spot at which a one-sided reading is on the side it is meant for.
+function offsetAt(tc: number): number {
+  return CURVE.settleTols * LOCATE.tolRel * Math.max(1, Math.abs(tc))
+}
+
 // A one-sided limit read again close in to the spot (CURVE.settleTols), if the new reading
-// agrees with the old one.
+// agrees with the old one to CURVE.settleAgreePx.
 function settle(w: Walk, limit: Vec2, tc: number, side: -1 | 1): Vec2 {
-  w.fns.point(tc + side * CURVE.settleTols * LOCATE.tolRel * Math.max(1, Math.abs(tc)), w.pt)
+  w.fns.point(tc + side * offsetAt(tc), w.pt)
   w.counter.points++
   const p = { x: w.pt[0], y: w.pt[1] }
-  // (a limit read from a retried tail carries noise of up to retriedEqualFactor times convergePx)
-  const agrees = Number.isFinite(p.x) && Number.isFinite(p.y) && distancePx(w, p, limit) <= LIMITS.retriedEqualFactor * LIMITS.convergePx
+  const agrees = Number.isFinite(p.x) && Number.isFinite(p.y) && distancePx(w, p, limit) <= CURVE.settleAgreePx
   return agrees ? p : limit
+}
+
+// Which side of the zero the author's comparison holds on, and whether it includes the zero, or
+// null where the zero is no one comparison's, or the comparison has no one side that holds:
+// = holds at the point only, != on both sides, and a zero that g touches without crossing (an
+// even one) has the same sign either side. The sign is that of a - b a locator tolerance
+// or so off the zero, where the operator's side is read from.
+function holdingAt(w: Walk, zero: Zero): Holding | null {
+  const { cmp, cmpExpr } = zero
+  if (cmp === undefined || cmpExpr === undefined || cmp === '=' || cmp === '!=') return null
+  let g = w.differences.get(cmpExpr)
+  if (!g) {
+    g = compileScalar(cmpExpr, [w.param], w.scope)
+    w.differences.set(cmpExpr, g)
+  }
+  const h = offsetAt(zero.t)
+  const left = g(zero.t - h)
+  const right = g(zero.t + h)
+  w.counter.points += 2
+  // a NaN or a 0 on either side says nothing
+  if (Number.isNaN(left) || Number.isNaN(right) || left === 0 || right === 0) return null
+  const wantsPositive = cmp === '>' || cmp === '>='
+  const holdsLeft = left > 0 === wantsPositive
+  const holdsRight = right > 0 === wantsPositive
+  if (holdsLeft === holdsRight) return null
+  return { side: holdsLeft ? 'left' : 'right', inclusive: cmp === '<=' || cmp === '>=' }
 }
 
 // The curve's own value at the spot, or null where it is not defined there.
@@ -389,33 +476,51 @@ function compileCurve(co: Coordinates, scope: MathScope): CurveFns {
 }
 
 // The generators of every varying expression, one of each: fx and fy often share a
-// denominator, and a repeated generator is only repeated work. A seam wins over a natural
-// spot of the same expression, as the walk itself has it.
+// denominator, and a repeated generator is only repeated work. Joined as the walk joins them
+// (a seam wins over a natural spot of the same expression; the comparison survives only if
+// both are the one comparison).
 function generatorsOf(co: Coordinates, scope: MathScope): Generator[] {
   const found = new Map<string, Generator>()
   for (const e of co.varying) {
     for (const g of troubleGenerators(e, co.param, scope)) {
       const key = JSON.stringify(g.expr)
       const known = found.get(key)
-      if (!known || (known.origin !== 'seam' && g.origin === 'seam')) found.set(key, g)
+      found.set(key, known ? joinGenerators(known, g) : g)
     }
   }
   return [...found.values()]
 }
 
-// Whether some parameter of the start grid satisfies the domain, so the curve was tested
-// against something. A condition holds where it is neither 0 nor NaN. (The grid is the
-// whole range's, as the core would lay it: the pieces the structure walk cuts have grids
-// of their own, and a domain narrower than the whole grid's spacing is "tested" by nothing.)
-function domainTested(domain: Expr, co: Coordinates, scope: MathScope, tuning: Tuning, counter: EvalCounter): boolean {
-  const holds = compileScalar(domain, [co.param], scope)
+// What the start grid says of the curve as a whole, for the caller's two messages.
+//  - tested: some parameter of the grid satisfies the domain (a condition holds where it is
+//    neither 0 nor NaN), so the curve was tested against something. True with no domain.
+//  - defined: some parameter of the grid gave a finite point, drawn or not. A curve that was
+//    drawn is defined, and costs nothing to say so; one that was not may be wholly off screen
+//    (culled by one enclosure, with no sample taken), so the grid is read for it. Outside a
+//    domain the piecewise is NaN, so a finite point is one inside it.
+// (The grid is the whole range's, as the core would lay it: the pieces the structure walk cuts
+// have grids of their own, and a domain narrower than the whole grid's spacing is "tested" by
+// nothing, which says nothing: that is the safe way for the message to go.)
+function startGrid(domain: Expr | null, co: Coordinates, fns: CurveFns, scope: MathScope, tuning: Tuning, counter: EvalCounter, drawn: boolean): { tested: boolean; defined: boolean } {
+  const holds = domain ? compileScalar(domain, [co.param], scope) : null
+  let tested = holds === null
+  let defined = drawn
+  if (tested && defined) return { tested, defined }
   let n = Math.max(CORE.minStartIntervals, Math.ceil(((co.to - co.from) * co.pxPerT) / tuning.startPx))
   n = Math.max(1, Math.min(n, Math.floor(tuning.budget.points)))
-  for (let i = 0; i <= n; i++) {
+  const pt = new Float64Array(2)
+  for (let i = 0; i <= n && !(tested && defined); i++) {
     const t = i === 0 ? co.from : i === n ? co.to : co.from + ((co.to - co.from) * i) / n
-    const v = holds(t)
-    counter.points++
-    if (v === v && v !== 0) return true
+    if (holds && !tested) {
+      const v = holds(t)
+      counter.points++
+      if (v === v && v !== 0) tested = true
+    }
+    if (!defined) {
+      fns.point(t, pt)
+      counter.points++
+      defined = Number.isFinite(pt[0]) && Number.isFinite(pt[1])
+    }
   }
-  return false
+  return { tested, defined }
 }

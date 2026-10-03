@@ -184,6 +184,121 @@ describe('sampleCurve — holes, jumps and edges are anchored, not approached', 
   })
 })
 
+// An anchor says where a curve arrives, not that nothing is in the way: a singularity the walk
+// never located (a built-in with no structure rule, a sum whose bound is a @param, a zero the
+// classifier called unknown) can sit in the last floor interval before it.
+describe('sampleCurve — an anchor is not a licence to connect', () => {
+  it.each([
+    ['a hole', 'sin(x)/x + 0.001 perm(x - 0.9999, 0.5)', '', -1e-4],
+    ['a jump', 'floor(x) + 0.001 perm(x - 1.9999, 0.5)', '', 1 - 1e-4],
+    ['a sqrt edge', 'sqrt(x) + 0.001 perm(x - 1.0001, 0.5)', '', 1e-4],
+    ['floor jumps, and a sum whose bound is a @param', 'floor(x) + sum(k = 1 to n, 0.01/(x - k - 0.001))', '@param n = 3 range [1, 5]', 1.001],
+    ['a sqrt edge, and a one-sided pole the classifier cannot name', 'sqrt(x) + exp(0.001/(x - 0.001))', '', 0.001],
+    ['a hole, and a one-sided pole the classifier cannot name', 'sin(x)/x + exp(0.001/(-x - 0.001))', '', -0.001],
+  ])('a pole the walk does not find, next to %s, is not bridged', (_name, body, defs, at) => {
+    // (the false connectors were 120 to 960 px strokes straight through the pole)
+    noChainCrosses(run(explicit(body), defs).objects, at)
+  })
+  it('still reaches a root tip that closes slowly, (1 - x^2)^0.4, with no break but the edge', () => {
+    // (at an anchorShrink of 0.75 the gaps of this tip, which close by 0.76 a halving, were refused)
+    for (const half of [10, 5]) {
+      const r = sampleCurve(explicit('(1 - x^2)^0.4'), viewOf(half), scopeOf(), opts)
+      expect(nearestPx(r.objects, 1, 0, 400 / half), `half ${half}`).toBeLessThan(0.5)
+      expect(nearestPx(r.objects, -1, 0, 400 / half), `half ${half}`).toBeLessThan(0.5)
+      expect(curveOf(r.objects).breaks.map((b) => b.kind), `half ${half}`).toEqual(['edge', 'edge'])
+    }
+  })
+})
+
+// The limit a mark is at is read again close in to the spot, but not so far from what limits.ts
+// read that the fill (which compares it with the curve's own value at 0.05 px) changes its mind.
+describe('sampleCurve — a re-read limit does not change a fill', () => {
+  it('{x < 7: (x^2 - 49)/(x - 7), x > 7: x + 5, 14}: left end filled, right open, no stray value mark, at every zoom', () => {
+    for (const half of [0.3, 0.35, 0.5, 1, 2, 5]) {
+      const v = { bounds: { xMin: 7 - half, xMax: 7 + half, yMin: 14 - half, yMax: 14 + half }, widthPx: 800, heightPx: 800 }
+      const r = sampleCurve(explicit('{x < 7: (x^2 - 49)/(x - 7), x > 7: x + 5, 14}'), v, scopeOf(), opts)
+      expect(marksOf(r.objects).map((m) => [m.id.object, m.fill, Math.round(m.at.y)]), `half ${half}`).toEqual([['end.0', 'filled', 14], ['end.1', 'open', 12]])
+    }
+  })
+})
+
+// "<" against "<=" is the author's, and no sample can tell it where the seam is not an exact double.
+describe('sampleCurve — a comparison says who owns its seam', () => {
+  // the mark at the seam whose end has the given y (the piece the comparison holds on)
+  const endAt = (objs: SceneObject[], x: number, y: number) => marksOf(objs).find((m) => Math.abs(m.at.x - x) < 1e-9 && Math.abs(m.at.y - y) < 1e-6)
+  it.each([
+    ['x^2', 2, Math.SQRT2],
+    ['x^3', 5, Math.cbrt(5)],
+  ])('{%s < %i: 0, 1} is open on its own side and its <= twin is filled', (lhs, rhs, seam) => {
+    // the comparison holds to the left of the positive seam: that piece is 0
+    const strict = run(explicit(`{${lhs} < ${rhs}: 0, 1}`))
+    const inclusive = run(explicit(`{${lhs} <= ${rhs}: 0, 1}`))
+    expect(endAt(strict.objects, seam, 0)?.fill).toBe('open')
+    expect(endAt(inclusive.objects, seam, 0)?.fill).toBe('filled')
+    // the other piece does not own the seam when the comparison is inclusive
+    expect(endAt(inclusive.objects, seam, 1)?.fill).toBe('open')
+  })
+  it('sin(x) >= 0 against sin(x) > 0 at pi', () => {
+    const inclusive = run(explicit('{sin(x) >= 0: 0, 1}'))
+    const strict = run(explicit('{sin(x) > 0: 0, 1}'))
+    // sin is positive to the left of pi, so that is the piece whose end is the comparison's
+    expect(endAt(inclusive.objects, Math.PI, 0)?.fill).toBe('filled')
+    expect(endAt(inclusive.objects, Math.PI, 1)?.fill).toBe('open')
+    expect(endAt(strict.objects, Math.PI, 0)?.fill).toBe('open')
+  })
+  it('the exact seams keep their fills, whichever way the comparison faces', () => {
+    const fills = (body: string) => marksOf(run(explicit(body)).objects).filter((m) => Math.abs(m.at.x - 1) < 1e-9).map((m) => [m.at.y, m.fill])
+    expect(fills('{x > 1: 0, 1}')).toEqual([[expect.closeTo(1, 9), 'filled'], [expect.closeTo(0, 9), 'open']])
+    expect(fills('{x >= 1: 0, 1}')).toEqual([[expect.closeTo(1, 9), 'open'], [expect.closeTo(0, 9), 'filled']])
+  })
+  it.each([
+    ['x^2 < 2', 'open', 'open'],
+    ['x^2 <= 2', 'filled', 'filled'],
+  ])('a domain %s: its two edges are %s', (domain, left, right) => {
+    const r = run(explicit('x', domain))
+    expect(marksOf(r.objects).map((m) => [Math.round(m.at.x * 100), m.fill])).toEqual([[-141, left], [141, right]])
+  })
+  it.each([
+    ['x^3 < 5', 'open'],
+    ['x^3 <= 5', 'filled'],
+  ])('a domain %s: its one edge is %s', (domain, fill) => {
+    expect(marksOf(run(explicit('x', domain)).objects).map((m) => [m.at.x, m.fill])).toEqual([[expect.closeTo(Math.cbrt(5), 9), fill]])
+  })
+  it('the chain of 0 <= x < 3 is filled at its closed end and open at its open one', () => {
+    const r = run(explicit('2', '0 <= x < 3'))
+    expect(marksOf(r.objects).map((m) => [Math.round(m.at.x), m.fill])).toEqual([[0, 'filled'], [3, 'open']])
+  })
+  it('1 < x^2 <= 2: each edge follows its own operator', () => {
+    const r = run(explicit('2', '1 < x^2 <= 2'))
+    expect(marksOf(r.objects).map((m) => [Math.round(m.at.x * 100), m.fill])).toEqual([[-141, 'filled'], [-100, 'open'], [100, 'open'], [141, 'filled']])
+  })
+  it('a zero two comparisons share has no comparison to follow, and the value decides, as before', () => {
+    // != is both sides: the point is out, and the value mark says what is there
+    const r = run(explicit('{x != 1: x, 5}'))
+    expect(marksOf(r.objects).map((m) => [m.role, m.fill])).toEqual([['hole', 'open'], ['value', 'filled']])
+  })
+})
+
+describe('sampleCurve — defined is the curve, not what is visible', () => {
+  it('a curve wholly off screen is defined, with no chains', () => {
+    const r = run(explicit('x + 100'))
+    expect(curveOf(r.objects).chains).toHaveLength(0)
+    expect(r.defined).toBe(true)
+    expect(r.tested).toBe(true)
+  })
+  it('a curve undefined everywhere is not, with or without a domain, and a domain it misses is untested', () => {
+    expect(run(explicit('sqrt(-1 - x^2)')).defined).toBe(false)
+    expect(run(explicit('x', 'x > 100'))).toMatchObject({ defined: false, tested: false })
+    // tested, and defined nowhere in it: this is the one the message is for
+    expect(run(explicit('sqrt(-x^2 - 1)', 'x > 0'))).toMatchObject({ defined: false, tested: true })
+  })
+  it('an off-screen parametric curve is defined too', () => {
+    const r = run({ kind: 'parametric', param: 't', fx: expr('t + 100'), fy: expr('t'), from: -5, to: 5 })
+    expect(curveOf(r.objects).chains).toHaveLength(0)
+    expect(r.defined).toBe(true)
+  })
+})
+
 describe('sampleCurve — assembly', () => {
   it('x = f(y): a pole breaks the curve and gets a horizontal guide', () => {
     const r = run({ kind: 'explicit', independent: 'y', body: expr('1/(y - 1)'), domain: null })

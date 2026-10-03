@@ -152,9 +152,17 @@ export const CURVE = {
   // locator tolerances (LOCATE.tolRel) from the spot: the located zero is within one tolerance of
   // the real one, so a sample 4 away is on the side it is meant for, and its error (the curve's
   // slope times 4e-12) is under any digit a mark is read to. The new reading is taken only if it
-  // agrees with the old one, so a function whose rounding noise is loud that close in keeps the
-  // limit it had.
+  // agrees with the old one to settleAgreePx, so a function whose rounding noise is loud that close
+  // in keeps the limit it had.
   settleTols: 4,
+  // A twentieth of convergePx, in px: a re-reading may move a limit this far and no more. The
+  // marks' fills compare a limit with the curve's own value at LIMITS.convergePx (0.05), and a
+  // limit read from a retried tail is already within about that of the truth, so a re-reading
+  // that was let move it by twice that (0.1) could carry a limit that equals the value across the
+  // line the fill draws at (the left end of {x < 7: (x^2 - 49)/(x - 7), x > 7: x + 5, 14} at 1333
+  // px per unit moved 0.085 px and its end read open). 0.005 corrects what it should (the 6e-9
+  // that limits.ts stops at is a millionth of a pixel) and no more.
+  settleAgreePx: 0.005,
   // A polar or parametric curve has no view span to lay a start grid along: its parameter range
   // is the author's. The grid is sized as if the path were this many view widths long (so
   // 1.5 widths of start-grid intervals, and never fewer than CORE.minStartIntervals): a circle
@@ -189,6 +197,13 @@ export interface Tuning {
   // one before. A continuous seam halves its gap (0.5 to 0.71); a jump keeps it (1.0).
   halvings: number
   halvingShrink: number
+  // The same test, as it is asked of the floor interval that ends at an anchor (a limit the
+  // structure walk read: curve.ts). There the curve is known to arrive, and what is asked is only
+  // that nothing in the stretch is hiding: the ends within flatPx of each other, or gaps that close.
+  // Looser than halvingShrink because that stretch is a tip: a root's gaps close by 2^-p a halving
+  // (0.76 for p = 0.4, (1 - x^2)^0.4 at its ends, which 0.75 refused and drew short), and
+  // 0.9 takes a root down to p = 0.15. A gap that does not close at all keeps its 1.0.
+  anchorShrink: number
   // The spike test: a certified interval is flat only if the twin's enclosure of it is
   // no taller or wider than spikeFactor times the span the three samples cover, plus
   // spikeSlackPx. A spike narrower than the sample spacing shows in the enclosure and
@@ -209,7 +224,7 @@ export interface Tuning {
   budget: { points: number; intervals: number }
 }
 
-export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, spikeFactor: 2, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
 // COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
 // cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
 export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, spikeFactor: 8, budget: { points: 15000, intervals: 7500 } }
