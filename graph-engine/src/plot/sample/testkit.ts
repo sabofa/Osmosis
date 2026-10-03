@@ -47,9 +47,9 @@ export function trueY(text: string, scope: MathScope): (x: number) => number {
 // do not overlap.
 const scratch = iv()
 
-// The CurveFns of y = f(x) at 40 px per unit: the parameter is x, x is enclosed by
-// [tLo, tHi] itself, y by the twin of the expression.
-export function fnsOf(text: string, scope: MathScope): CurveFns {
+// The CurveFns of y = f(x), at 40 px per unit unless told otherwise: the parameter is x, x is
+// enclosed by [tLo, tHi] itself, y by the twin of the expression.
+export function fnsOf(text: string, scope: MathScope, pxPerT = 40): CurveFns {
   const twin = compileInterval(expr(text), ['x'], scope)
   return {
     point: pointFnOf(text, 'x', scope),
@@ -62,7 +62,7 @@ export function fnsOf(text: string, scope: MathScope): CurveFns {
       // x is CONTINUOUS, the top verdict, so the worse of the two is y's
       return scratch.v
     },
-    pxPerT: 40,
+    pxPerT,
     oscillationAxis: 'y',
   }
 }
@@ -76,4 +76,15 @@ export function run(text: string, tuning: Tuning = FULL) {
   const counter: EvalCounter = { points: 0, intervals: 0 }
   const { capped } = sampleRange(fnsOf(text, scopeOf()), -15, 15, { left: { kind: 'free' }, right: { kind: 'free' } }, view, tuning, counter, sink)
   return { chains: sink.chains(), breaks: sink.breaks(), capped, counter }
+}
+
+// The same over the square view [-half, half]^2 at 800 px, 25 % overscan: for a test that
+// needs the curve far from the 40 px per unit of `view`. Returns the screen as well.
+export function runView(text: string, half: number, tuning: Tuning = FULL) {
+  const px = 800 / (2 * half)
+  const screen: Screen = { px: { x: px, y: px }, clip: { xMin: -1.25 * half, xMax: 1.25 * half, yMin: -1.25 * half, yMax: 1.25 * half } }
+  const sink = new ChainSink(screen.clip)
+  const counter: EvalCounter = { points: 0, intervals: 0 }
+  const { capped } = sampleRange(fnsOf(text, scopeOf(), px), screen.clip.xMin, screen.clip.xMax, { left: { kind: 'free' }, right: { kind: 'free' } }, screen, tuning, counter, sink)
+  return { chains: sink.chains(), breaks: sink.breaks(), capped, counter, screen }
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { chainPoints } from '../../scene/chains'
 import { sampleRange } from './adaptive'
 import { ChainSink } from './sink'
-import { fnsOf, run, scopeOf, trueY, view } from './testkit'
+import { fnsOf, run, runView, scopeOf, trueY, view } from './testkit'
 import { COARSE, FULL } from './tuning'
 import type { CurveFns, End, EvalCounter } from './types'
 
@@ -51,6 +51,9 @@ describe('sampleRange', () => {
     expect(Math.min(...p.map((q) => q.y))).toBeCloseTo(-15, 9)
     expect(p.every((q) => q.x > 0)).toBe(true)
   })
+  // This one is met at 0.1234 and not at every offset: the peak is 0.04 px wide, under the
+  // 1/16 px floor, so only a sample that happens to land within 1e-4 of it reaches 0.99.
+  // The sweep over a peak 10 times wider, further down, is the test that holds anywhere.
   it('finds a narrow spike the midpoint test alone would miss', () => {
     const p = run('1/(1 + 10^6 (x - 0.1234)^2)').chains.flatMap(chainPoints)
     expect(Math.max(...p.map((q) => q.y))).toBeGreaterThan(0.99)
@@ -161,8 +164,8 @@ describe('sampleRange — edges and the coarse preset', () => {
 })
 
 describe('sampleRange — the budget', () => {
-  it('always evaluates the whole start grid, however small the budget', () => {
-    const r = run('x^2', { ...FULL, budget: { points: 1, intervals: 1 } })
+  it('always evaluates the whole start grid, however small the interval budget', () => {
+    const r = run('x^2', { ...FULL, budget: { points: 400, intervals: 1 } })
     expect(r.capped).toBe(true)
     // grid of 300 intervals: connected where the twin certified, so the parabola is still one chain
     expect(r.counter.intervals).toBeGreaterThanOrEqual(300)
@@ -170,5 +173,96 @@ describe('sampleRange — the budget', () => {
   })
   it('does not say capped when the budget was never reached', () => {
     expect(run('x^2').capped).toBe(false)
+  })
+  it('never lets the start grid itself outgrow the point budget', () => {
+    // 4000 px per unit over 30 units would be a grid of 30000 intervals
+    const sink = new ChainSink(view.clip)
+    const counter = { points: 0, intervals: 0 }
+    const fns = fnsOf('x^2', scopeOf(), 4000)
+    sampleRange(fns, -15, 15, { left: { kind: 'free' }, right: { kind: 'free' } }, view, { ...FULL, budget: { points: 1000, intervals: 1e9 } }, counter, sink)
+    expect(counter.points).toBeLessThanOrEqual(1001)
+  })
+})
+
+// Two steps the rule prescribes draw a stretch no one has certified, unless they ask the twin
+// first: the edge refine, and the jump test.
+const offsets = (n: number, from = 0.3, step = 0.0123457) => Array.from({ length: n }, (_, k) => from + k * step)
+const verts = (chains: ReturnType<typeof run>['chains']) => chains.map(chainPoints)
+// segments between consecutive vertices of a chain, with their length on screen
+function segmentsOf(chains: ReturnType<typeof run>['chains'], px = 40) {
+  const out: { a: { x: number; y: number }; b: { x: number; y: number }; len: number; rise: number }[] = []
+  for (const p of verts(chains)) {
+    for (let i = 1; i < p.length; i++) out.push({ a: p[i - 1], b: p[i], len: Math.hypot((p[i].x - p[i - 1].x) * px, (p[i].y - p[i - 1].y) * px), rise: Math.abs(p[i].y - p[i - 1].y) * px })
+  }
+  return out
+}
+
+describe('sampleRange — the stretch to an edge is certified before it is drawn', () => {
+  it('tan(1/x) draws no long stroke down the accumulation point', () => {
+    const r = run('tan(1/x)')
+    const near = segmentsOf(r.chains).filter((s) => Math.abs(s.a.x) < 0.01 && Math.abs(s.b.x) < 0.01)
+    expect(near.filter((s) => s.len > 8)).toEqual([])
+  })
+  it('a closed floor step has no riser at its edge, at any offset', () => {
+    for (const c of offsets(20)) {
+      const r = run(`{x <= ${c}: floor(x - ${c} + 1)}`)
+      const risers = segmentsOf(r.chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 4)
+      expect(risers, `riser at ${c}`).toEqual([])
+      expect(r.breaks.some((b) => b.kind === 'edge' && Math.abs(b.at - c) < 0.002), `edge break at ${c}`).toBe(true)
+    }
+  })
+  it('an open-ended ceiling step has none either', () => {
+    for (const c of offsets(20)) {
+      const risers = segmentsOf(run(`{x >= ${c}: ceil(x - ${c})}`).chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 4)
+      expect(risers, `riser at ${c}`).toEqual([])
+    }
+  })
+  it('does not draw across a pole inside the last floor width of an edge', () => {
+    for (const e of offsets(20)) {
+      const p = e + 0.0008
+      const across = segmentsOf(run(`sqrt(x - ${e})/(x - ${p})`).chains).filter((s) => Math.min(s.a.x, s.b.x) <= p && Math.max(s.a.x, s.b.x) >= p && s.len > 4)
+      expect(across, `pole at ${p}`).toEqual([])
+    }
+  })
+  it('still reaches a closed semicircle tip, and ln, sqrt remain one chain', () => {
+    const r = 2.3456
+    const xs = run(`sqrt(${r * r} - x^2)`).chains.flatMap(chainPoints).map((p) => p.x)
+    // the tips are within a pixel of the circle's ends
+    expect(Math.min(...xs)).toBeLessThan(-r + 1 / 40)
+    expect(Math.max(...xs)).toBeGreaterThan(r - 1 / 40)
+    expect(run('ln(x)').chains).toHaveLength(1)
+    expect(run('sqrt(x)').chains).toHaveLength(1)
+  })
+})
+
+describe('sampleRange — the jump test respects what the twin reported', () => {
+  it('does not bridge the pole of 1/(x - c) in a view of +-1e5, at any offset', () => {
+    for (const k of Array.from({ length: 20 }, (_, i) => i)) {
+      const c = 1e5 * (0.0123 + k * 0.0371)
+      const r = runView(`1/(x - ${c})`, 1e5)
+      for (const p of verts(r.chains)) expect(p.some((q) => q.x < c) && p.some((q) => q.x > c), `a chain spans ${c}`).toBe(false)
+      // a break within the floor width (1/16 px is 16 units here)
+      expect(r.breaks.some((b) => Math.abs(b.at - c) <= 16), `no break at ${c}`).toBe(true)
+    }
+  })
+  it('nor the double pole of 1/(x - c)^2 in a view of +-1e4', () => {
+    for (const k of Array.from({ length: 20 }, (_, i) => i)) {
+      const c = 1e4 * (0.0123 + k * 0.0371)
+      const r = runView(`1/(x - ${c})^2`, 1e4)
+      for (const p of verts(r.chains)) expect(p.some((q) => q.x < c) && p.some((q) => q.x > c), `a chain spans ${c}`).toBe(false)
+    }
+  })
+  it('still joins a curve the twin could not bound at all (an integral)', () => {
+    expect(run('integral(t = 0 to x, cos(t))').chains).toHaveLength(1)
+  })
+})
+
+describe('sampleRange — the spike test', () => {
+  it('draws the peak of a spike 1 px wide to within 1 px of its height, wherever it falls', () => {
+    // (at spikeFactor 8, one of these offsets draws the peak 32.6 px short)
+    for (const c of offsets(50)) {
+      const m = Math.max(...run(`1/(1 + 10^4 (x - ${c})^2)`).chains.flatMap(chainPoints).map((p) => p.y))
+      expect((1 - m) * 40, `peak at ${c}`).toBeLessThanOrEqual(1)
+    }
   })
 })

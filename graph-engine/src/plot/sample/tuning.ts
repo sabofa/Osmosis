@@ -174,6 +174,11 @@ export interface Tuning {
   // no taller or wider than spikeFactor times the span the three samples cover, plus
   // spikeSlackPx. A spike narrower than the sample spacing shows in the enclosure and
   // nowhere in the samples; the slack is for the twin's looseness over a flat interval.
+  // 2, not 8: with 8 a spike a pixel wide (1/(1 + 10^4 (x - c)^2)) hid behind samples
+  // that all sat on its flank, drawn 32.6 px short at one offset of 50, because the
+  // enclosure (40 px) was within 8 times the samples' span (5 px) plus the slack. At 2
+  // the worst of the same offsets is 0.24 px short. A peak narrower than the floor
+  // (1/16 px) cannot be promised at any factor: only a sample that lands on it shows it.
   spikeFactor: number
   spikeSlackPx: number
   // The clip box is the view widened by this fraction of its size on each side: a curve
@@ -185,7 +190,7 @@ export interface Tuning {
   budget: { points: number; intervals: number }
 }
 
-export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, spikeFactor: 8, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, spikeFactor: 2, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
 export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, budget: { points: 15000, intervals: 7500 } }
 
 // The parts of the core that are not a quality knob, so not in Tuning but still numbers

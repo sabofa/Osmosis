@@ -47,7 +47,7 @@
 //
 // bandColumn is where Task 6 will recognise a column of a band (an oscillation faster than a
 // pixel); it is called at the two points that make that decision, and does nothing yet.
-import { CONTINUOUS } from '../../math/interval'
+import { CONTINUOUS, PARTIAL, UNKNOWN } from '../../math/interval'
 import type { Bounds } from '../../scene/types'
 import type { ChainSink } from './sink'
 import { CORE, type Tuning } from './tuning'
@@ -80,6 +80,8 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
 
   let n = Math.ceil(((b - a) * fns.pxPerT) / tuning.startPx)
   if (!(n >= CORE.minStartIntervals)) n = CORE.minStartIntervals
+  // The grid is always drawn, so it must not be able to outgrow the budget it is part of.
+  n = Math.max(1, Math.min(n, Math.floor(tuning.budget.points)))
   const ts = new Float64Array(n + 1)
   const xs = new Float64Array(n + 1)
   const ys = new Float64Array(n + 1)
@@ -171,8 +173,12 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     return
   }
 
-  // both finite, and the twin cannot say the curve is continuous between them
-  if (pxDistance(c, xa, ya, xb, yb) < c.tune.gapPx && gapCloses(c, ta, tb, xa, ya, xb, yb)) {
+  // Both finite, and the twin cannot say the curve is continuous between them. Closing gaps
+  // is the jump test's to show, but not across a stretch the twin could not bound: an
+  // enclosure with an infinite bound is where a pole may sit, and three samples that happen to
+  // shrink are no certificate against that. (UNKNOWN has no bounds at all, by construction.)
+  const bounded = verdict === UNKNOWN || isBounded(c.box)
+  if (bounded && pxDistance(c, xa, ya, xb, yb) < c.tune.gapPx && gapCloses(c, ta, tb, xa, ya, xb, yb)) {
     c.sink.segment(xa, ya, ta, xb, yb, tb)
     return
   }
@@ -264,6 +270,13 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
 // reaches its edge, and the edge is recorded. Drawn in parameter order, and lifted after
 // only when the defined stretch is the left one: when the undefined end is the left, the chain
 // starts at the edge and carries on into the next interval.
+//
+// The stretch itself is certified first. The bisection knows that its two ends are finite and
+// nothing about what lies between, and a step with a closed edge (floor(x - c + 1) for x <= c),
+// or a pole within a floor's width of the edge, would be drawn as a stroke across it. So the twin
+// is asked about the stretch, and it is drawn only when it is CONTINUOUS, or PARTIAL with bounds
+// (the domain ends inside it, as at the tip of a semicircle, but nothing blows up). Otherwise
+// the chain is lifted and the edge is still recorded.
 function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb: number, yb: number, aDefined: boolean): void {
   let td = aDefined ? ta : tb
   let xd = aDefined ? xa : xb
@@ -281,11 +294,20 @@ function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb:
       tu = tm
     }
   }
+  // (a stretch of no extent has nothing between its ends to certify)
+  let certified = true
+  if (td !== (aDefined ? ta : tb)) {
+    c.counter.intervals++
+    const verdict = c.fns.enclose(aDefined ? ta : td, aDefined ? td : tb, c.box)
+    certified = verdict === CONTINUOUS || (verdict === PARTIAL && isBounded(c.box))
+  }
   if (aDefined) {
-    c.sink.segment(xa, ya, ta, xd, yd, td)
+    if (certified) c.sink.segment(xa, ya, ta, xd, yd, td)
     c.sink.lift()
-  } else {
+  } else if (certified) {
     c.sink.segment(xd, yd, td, xb, yb, tb)
+  } else {
+    c.sink.lift()
   }
   c.sink.addBreak(td, 'edge')
 }
@@ -304,6 +326,11 @@ function evalAt(c: Core, t: number): void {
 
 function isFinite2(x: number, y: number): boolean {
   return Number.isFinite(x) && Number.isFinite(y)
+}
+
+// An enclosure with all four bounds finite: nothing in it blows up.
+function isBounded(b: Box): boolean {
+  return Number.isFinite(b.xLo) && Number.isFinite(b.xHi) && Number.isFinite(b.yLo) && Number.isFinite(b.yHi)
 }
 
 function pxDistance(c: Core, xa: number, ya: number, xb: number, yb: number): number {
