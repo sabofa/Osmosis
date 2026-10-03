@@ -1,0 +1,198 @@
+import { describe, expect, it } from 'vitest'
+import { BUILTIN_NAMES } from '../../math/compile'
+import { add, call, div, mul, num, sub, variable } from '../../math/expr'
+import type { Expr } from '../../parser/types'
+import { expr, scopeOf } from './testkit'
+import { SMOOTH_BUILTINS, TROUBLE_BUILTINS, troubleGenerators } from './structure'
+
+const x = variable('x')
+const sinK = (u: Expr, k = Math.PI) => call('sin', mul(num(k), u))
+const cosK = (u: Expr, k = Math.PI) => call('cos', mul(num(k), u))
+
+// What a call of the walk gives, as [origin, why, expr] rows in the order found.
+function rows(text: string, defs = '', angle: 'radians' | 'degrees' = 'radians') {
+  return troubleGenerators(expr(text), 'x', scopeOf(defs, angle)).map((g) => [g.origin, g.why, g.expr])
+}
+
+describe('troubleGenerators', () => {
+  it('classifies every built-in as troubled or smooth, never both', () => {
+    for (const name of BUILTIN_NAMES) expect(TROUBLE_BUILTINS.has(name) !== SMOOTH_BUILTINS.has(name), name).toBe(true)
+  })
+  it('names a denominator, a log domain and a condition seam', () => {
+    const whys = troubleGenerators(expr('{x < 1: ln(x), 1/(x - 2)}'), 'x', scopeOf()).map((g) => `${g.origin}:${g.why}`)
+    expect(whys).toEqual(expect.arrayContaining(['seam:condition', 'natural:ln domain', 'natural:denominator']))
+  })
+  it('drops generators that do not depend on the parameter', () => {
+    expect(troubleGenerators(expr('x / a'), 'x', scopeOf('@param a = 2 range [0, 5]'))).toEqual([])
+  })
+  it('sees through a user function and a derivative', () => {
+    expect(troubleGenerators(expr('f(x)'), 'x', scopeOf('f(x) = 1/(x - 3)')).length).toBeGreaterThan(0)
+    expect(troubleGenerators(expr("f'(x)"), 'x', scopeOf('f(x) = 1/x')).length).toBeGreaterThan(0)
+  })
+  it('never walks into a binder body', () => {
+    expect(troubleGenerators(expr('sum(k = 1 to 5, 1/(x - k))'), 'x', scopeOf())).toEqual([])
+  })
+  it('leaves x^2 and x^3 alone but not x^-1 or x^(1/2)', () => {
+    expect(troubleGenerators(expr('x^2 + x^3'), 'x', scopeOf())).toEqual([])
+    expect(troubleGenerators(expr('x^(-1)'), 'x', scopeOf())).toHaveLength(1)
+    expect(troubleGenerators(expr('x^(1/2)'), 'x', scopeOf())).toHaveLength(1)
+  })
+})
+
+describe('the built-in lists', () => {
+  it('hold only built-ins that exist', () => {
+    for (const name of [...TROUBLE_BUILTINS, ...SMOOTH_BUILTINS]) expect(BUILTIN_NAMES.has(name), name).toBe(true)
+  })
+  it('keep the troubled four with no rule of their own on the list', () => {
+    expect([...TROUBLE_BUILTINS].sort()).toEqual(
+      'acos acosh asin atan2 atanh ceil choose cot csc floor gamma gcd lcm ln log mod perm root round sec sign sqrt step tan'.split(' ').sort()
+    )
+    for (const name of 'choose perm gcd lcm'.split(' ')) expect(rows(`${name}(x, 2)`), name).toEqual([])
+  })
+  it('give a smooth built-in no generators of its own, only its arguments', () => {
+    for (const name of SMOOTH_BUILTINS) {
+      const text = ['min', 'max', 'hypot'].includes(name) ? `${name}(x, 1)` : `${name}(x)`
+      expect(rows(text), name).toEqual([])
+    }
+    expect(rows('sin(1/(x - 1))')).toEqual([['natural', 'denominator', sub(x, num(1))]])
+  })
+})
+
+// Every row of the rules table (structure.ts), one by one.
+describe('the generator rules', () => {
+  it('a / b gives b', () => expect(rows('1/(x + 2)')).toEqual([['natural', 'denominator', add(x, num(2))]]))
+  it('b ^ e gives b unless e is a positive whole literal', () => {
+    expect(rows('x^(-2)')).toEqual([['natural', 'power base', x]])
+    expect(rows('x^0.5')).toEqual([['natural', 'power base', x]])
+    expect(rows('x^x')).toEqual([['natural', 'power base', x]])
+    expect(rows('x^4')).toEqual([])
+    expect(rows('2^x')).toEqual([])
+  })
+  it('sqrt, ln and log (one argument) give u', () => {
+    expect(rows('sqrt(x)')).toEqual([['natural', 'sqrt domain', x]])
+    expect(rows('ln(x)')).toEqual([['natural', 'ln domain', x]])
+    expect(rows('log(x)')).toEqual([['natural', 'log domain', x]])
+  })
+  it('log(a, b) gives a, b and b - 1', () => {
+    expect(rows('log(x, 2)')).toEqual([['natural', 'log domain', x]])
+    expect(rows('log(2, x)')).toEqual([
+      ['natural', 'log base', x],
+      ['natural', 'log base', sub(x, num(1))],
+    ])
+    expect(rows('log(x, x + 3)')).toEqual([
+      ['natural', 'log domain', x],
+      ['natural', 'log base', add(x, num(3))],
+      ['natural', 'log base', sub(add(x, num(3)), num(1))],
+    ])
+  })
+  it('root(n, u) gives u, not the index', () => {
+    expect(rows('root(3, x)')).toEqual([['natural', 'root domain', x]])
+    expect(rows('root(x, 8)')).toEqual([])
+  })
+  it('asin, acos and atanh give u - 1 and u + 1; acosh gives u - 1', () => {
+    for (const name of ['asin', 'acos', 'atanh']) {
+      expect(rows(`${name}(x)`), name).toEqual([
+        ['natural', `${name} edge`, sub(x, num(1))],
+        ['natural', `${name} edge`, add(x, num(1))],
+      ])
+    }
+    expect(rows('acosh(x)')).toEqual([['natural', 'acosh edge', sub(x, num(1))]])
+  })
+  it('tan and sec give cos(u); csc and cot give sin(u)', () => {
+    expect(rows('tan(x)')).toEqual([['natural', 'tan pole', call('cos', x)]])
+    expect(rows('sec(x)')).toEqual([['natural', 'sec pole', call('cos', x)]])
+    expect(rows('csc(x)')).toEqual([['natural', 'csc pole', call('sin', x)]])
+    expect(rows('cot(x)')).toEqual([['natural', 'cot pole', call('sin', x)]])
+  })
+  it('gamma and factorial give sin(k u) and sin(k (u + 1)), k the angle unit', () => {
+    expect(rows('gamma(x)')).toEqual([['natural', 'gamma pole', sinK(x)]])
+    expect(rows('x!')).toEqual([['natural', 'factorial pole', sinK(add(x, num(1)))]])
+    expect(rows('gamma(x)', '', 'degrees')).toEqual([['natural', 'gamma pole', sinK(x, 180)]])
+    expect(rows('x!', '', 'degrees')).toEqual([['natural', 'factorial pole', sinK(add(x, num(1)), 180)]])
+  })
+  it('floor and ceil give sin(k u); round gives cos(k u)', () => {
+    expect(rows('floor(x)')).toEqual([['natural', 'floor step', sinK(x)]])
+    expect(rows('ceil(x)')).toEqual([['natural', 'ceil step', sinK(x)]])
+    expect(rows('round(x)')).toEqual([['natural', 'round step', cosK(x)]])
+    expect(rows('floor(x)', '', 'degrees')).toEqual([['natural', 'floor step', sinK(x, 180)]])
+    expect(rows('round(x)', '', 'degrees')).toEqual([['natural', 'round step', cosK(x, 180)]])
+  })
+  it('sign and step give u', () => {
+    expect(rows('sign(x)')).toEqual([['natural', 'sign step', x]])
+    expect(rows('step(x)')).toEqual([['natural', 'step edge', x]])
+  })
+  it('mod(a, b) gives b and sin(k a / b)', () => {
+    expect(rows('mod(x, 3)')).toEqual([['natural', 'mod step', sinK(div(x, num(3)))]])
+    expect(rows('mod(5, x)')).toEqual([
+      ['natural', 'mod divisor', x],
+      ['natural', 'mod step', sinK(div(num(5), x))],
+    ])
+  })
+  it('atan2(y, x) gives y and x', () => {
+    expect(rows('atan2(x, x + 1)')).toEqual([
+      ['natural', 'atan2 cut', x],
+      ['natural', 'atan2 axis', add(x, num(1))],
+    ])
+  })
+  it('the six comparisons give a - b, as seams', () => {
+    for (const name of ['__lt', '__le', '__gt', '__ge', '__eq', '__ne']) {
+      expect(troubleGenerators(call(name, x, num(1)), 'x', scopeOf()), name).toEqual([{ expr: sub(x, num(1)), origin: 'seam', why: 'condition' }])
+    }
+  })
+  it('and, or, not and piecewise give nothing of their own, and walk every argument', () => {
+    const lt = call('__lt', x, num(0))
+    const gt = call('__gt', x, num(2))
+    expect(troubleGenerators(call('__and', lt, gt), 'x', scopeOf()).map((g) => g.expr)).toEqual([sub(x, num(0)), sub(x, num(2))])
+    expect(troubleGenerators(call('__or', lt, gt), 'x', scopeOf())).toHaveLength(2)
+    expect(troubleGenerators(call('__not', lt), 'x', scopeOf())).toHaveLength(1)
+    expect(rows('{x < 1: 1/(x - 5), x > 3: 1/(x - 7), 0}').map((r) => r[1])).toEqual(['condition', 'denominator', 'condition', 'denominator'])
+  })
+  it('a binder gives its bounds and never its body', () => {
+    expect(rows('sum(k = 1 to 1/(x - 1), 1/(x - k))')).toEqual([['natural', 'denominator', sub(x, num(1))]])
+    expect(rows('prod(k = 1/(x - 2) to 4, 1/(x - k))')).toEqual([['natural', 'denominator', sub(x, num(2))]])
+    expect(rows('integral(t = 0 to 1/(x - 3), 1/t)')).toEqual([['natural', 'denominator', sub(x, num(3))]])
+  })
+  it('a derivative walks the expanded body at its argument', () => {
+    const gens = troubleGenerators(expr("f'(x - 4)"), 'x', scopeOf('f(x) = 1/x'))
+    expect(gens.length).toBeGreaterThan(0)
+    for (const g of gens) expect(JSON.stringify(g.expr)).toContain(JSON.stringify(sub(x, num(4))))
+  })
+  it('a user function is inlined with its arguments substituted', () => {
+    expect(rows('f(2x)', 'f(u) = 1/(u - 3)')).toEqual([['natural', 'denominator', sub(mul(num(2), x), num(3))]])
+    expect(rows('g(x, 1)', 'g(u, v) = ln(u - v)')).toEqual([['natural', 'ln domain', sub(x, num(1))]])
+  })
+  it('does not inline a vector-bodied function, but still walks its arguments', () => {
+    expect(rows('r(1/(x - 1))', 'r(t) = <1/t, t, 0>')).toEqual([['natural', 'denominator', sub(x, num(1))]])
+  })
+  it('stops at a function that calls itself', () => {
+    const r = rows('f(x)', 'f(u) = 1/u + f(u)')
+    expect(r).toEqual([['natural', 'denominator', x]])
+  })
+  it('ends on a function that calls itself twice, which the compile refuses but a caller may walk first', () => {
+    // Two branches a level over 32 levels would be 2^32 walks without the cap on expansions.
+    const gens = troubleGenerators(expr('fib(x)'), 'x', scopeOf('fib(n) = 1/n + fib(n - 1) + fib(n - 2)'))
+    expect(gens.length).toBeGreaterThan(0)
+    expect(gens[0].expr).toEqual(x)
+  })
+  it('inlines a function called inside its own argument (f(f(x))) all the way', () => {
+    const gens = troubleGenerators(expr('f(f(x))'), 'x', scopeOf('f(u) = 1/(u - 1)'))
+    // The outer call's denominator is f(x) - 1 (a call the compile resolves itself),
+    // and the walk then reaches the inner f(x).
+    expect(gens.map((g) => g.expr)).toEqual([sub(call('f', x), num(1)), sub(x, num(1))])
+  })
+  it('keeps value names as names (a parameter stays a var node)', () => {
+    expect(rows('1/(x - a)', '@param a = 2 range [0, 5]')).toEqual([['natural', 'denominator', sub(x, variable('a'))]])
+  })
+})
+
+describe('deduplication', () => {
+  it('keeps one of two generators that are the same expression', () => {
+    expect(troubleGenerators(expr('1/(x - 1) + 1/(x - 1)'), 'x', scopeOf())).toHaveLength(1)
+  })
+  it('lets a seam win over a natural one, taking its reason', () => {
+    const gens = troubleGenerators(expr('{x < 1: 1/(x - 1), 0}'), 'x', scopeOf())
+    expect(gens).toEqual([{ expr: sub(x, num(1)), origin: 'seam', why: 'condition' }])
+    const reversed = troubleGenerators(expr('1/(x - 1) + {x < 1: 1, 0}'), 'x', scopeOf())
+    expect(reversed).toEqual([{ expr: sub(x, num(1)), origin: 'seam', why: 'condition' }])
+  })
+})
