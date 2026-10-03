@@ -43,14 +43,17 @@
 //      mark only when the edge is a SEAM, the author's own condition (a natural sqrt or ln
 //      edge is not marked).
 //    - FILLED OR OPEN. An end is filled when the curve takes its value there. Where the zero
-//      is one comparison's (Zero.cmp) that is the comparison's to say, since no sample can
-//      tell x^2 < 2 from x^2 <= 2 at an irrational seam: the side the comparison holds on owns
-//      the zero when the operator is inclusive. A jump fills the owning side's end and opens the
-//      other; with a strict operator the holding side's end is open and the other fills only if
-//      the curve's own value there is that limit. A seam edge is filled when the defined side
-//      owns it. Without a comparison (a seam two generators share, a jump that is natural, a
-//      comparison with no one side that holds) the curve's own value at the spot decides: filled
-//      where it equals the limit on screen.
+//      is one comparison's (Zero.cmp) that is the comparison's to say, and the curve's own value
+//      at the spot is not asked: no sample can tell x^2 < 2 from x^2 <= 2 at an irrational seam.
+//      One side of the zero is where the comparison holds. With an inclusive operator (<=, >=)
+//      that side owns the zero; with a strict one (<, >) the comparison is false AT the zero, so
+//      the piecewise falls through to the branch that carries on from the other side, and that
+//      side owns it. A jump fills the owner's end and opens the other; a seam edge is filled
+//      when the defined side is the owner. = and != hold at a point and not on a side: both ends
+//      are open, and the curve's own value at the spot, if it has one, is a filled value mark.
+//      Without a comparison (a seam two generators share, a jump that is natural, a comparison
+//      with no one side that holds) the curve's own value at the spot decides: filled where it
+//      equals the limit on screen.
 // 5. SAMPLING. The pieces go, in order, into ONE ChainSink, which continues a chain only where
 //    one piece ends at exactly the parameter and point the next begins at. It is lifted
 //    between pieces at a pole, jump or edge, never at a hole.
@@ -154,11 +157,10 @@ interface Walk {
   differences: Map<Expr, CompiledFn>
 }
 
-// Where an author's comparison holds, as the walk reads it at one of its zeros: `side` is the one
-// side of the zero it holds on, and `inclusive` says that the zero itself is in it (<= and >=).
-interface Holding {
-  side: 'left' | 'right'
-  inclusive: boolean
+// Which side of a zero owns it, by the author's comparison: the side whose end is filled. null
+// for = and !=, which hold at a point and not on a side: neither side's end is.
+interface Ownership {
+  owner: 'left' | 'right' | null
 }
 
 // What the pieces on either side of a spot meet there: the piece before it ends in `before`,
@@ -249,24 +251,16 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
       const left = onAxis(w, settle(w, c.left, tc, -1), tc)
       const right = onAxis(w, settle(w, c.right, tc, 1), tc)
       w.sink.addBreak(tc, 'jump')
-      const holding = holdingAt(w, zero)
-      // the comparison, when there is one, says which ends the curve takes; else its value does
-      let leftFill = fillOf(w, left, c.value)
-      let rightFill = fillOf(w, right, c.value)
-      if (holding) {
-        const holdsLeft = holding.side === 'left'
-        if (holding.inclusive) {
-          leftFill = holdsLeft ? 'filled' : 'open'
-          rightFill = holdsLeft ? 'open' : 'filled'
-        } else {
-          // a strict comparison leaves its own side's end open; the other side's is the value's to say
-          if (holdsLeft) leftFill = 'open'
-          else rightFill = 'open'
-        }
+      const own = ownerAt(w, zero)
+      if (own) {
+        // the comparison says which end the curve takes, and the value at the spot is not asked
+        w.marks.push({ at: left, role: 'endpoint', fill: own.owner === 'left' ? 'filled' : 'open' }, { at: right, role: 'endpoint', fill: own.owner === 'right' ? 'filled' : 'open' })
+        if (own.owner === null && c.value !== null) w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
+      } else {
+        w.marks.push({ at: left, role: 'endpoint', fill: fillOf(w, left, c.value) }, { at: right, role: 'endpoint', fill: fillOf(w, right, c.value) })
+        // a value that is neither limit is a point of its own
+        if (c.value !== null && !same(w, left, c.value) && !same(w, right, c.value)) w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
       }
-      w.marks.push({ at: left, role: 'endpoint', fill: leftFill }, { at: right, role: 'endpoint', fill: rightFill })
-      // a value that is neither limit is a point of its own
-      if (c.value !== null && !same(w, left, c.value) && !same(w, right, c.value)) w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
       return { before: { kind: 'anchor', at: left }, after: { kind: 'anchor', at: right }, lift: true }
     }
     case 'hole': {
@@ -283,10 +277,13 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
       w.sink.addBreak(tc, 'edge')
       // only an edge the author wrote is marked, and only with a limit to mark
       if (limit !== null && zero.origin === 'seam') {
-        const holding = holdingAt(w, zero)
+        const own = ownerAt(w, zero)
         // filled when the defined side owns the edge, if the comparison says; else by the value
-        const fill = holding ? (holding.inclusive && holding.side === c.defined ? 'filled' : 'open') : fillOf(w, limit, valueAt(w, tc))
-        w.marks.push({ at: limit, role: 'endpoint', fill })
+        w.marks.push({ at: limit, role: 'endpoint', fill: own ? (own.owner === c.defined ? 'filled' : 'open') : fillOf(w, limit, valueAt(w, tc)) })
+        if (own && own.owner === null) {
+          const value = valueAt(w, tc)
+          if (value !== null) w.marks.push({ at: value, role: 'value', fill: 'filled' })
+        }
       }
       return { before: c.defined === 'left' ? reach : SINGULAR, after: c.defined === 'right' ? reach : SINGULAR, lift: true }
     }
@@ -328,14 +325,19 @@ function settle(w: Walk, limit: Vec2, tc: number, side: -1 | 1): Vec2 {
   return agrees ? p : limit
 }
 
-// Which side of the zero the author's comparison holds on, and whether it includes the zero, or
-// null where the zero is no one comparison's, or the comparison has no one side that holds:
-// = holds at the point only, != on both sides, and a zero that g touches without crossing (an
-// even one) has the same sign either side. The sign is that of a - b a locator tolerance
-// or so off the zero, where the operator's side is read from.
-function holdingAt(w: Walk, zero: Zero): Holding | null {
+// Which side of the zero owns it by the author's comparison, or null where the zero is no one
+// comparison's, or its comparison has no one side that holds (a zero that a - b touches without
+// crossing has the same sign either side, and a NaN or a 0 says nothing).
+//  - The comparison holds on the side where a - b has the sign its operator wants, read a locator
+//    tolerance or so off the zero.
+//  - An inclusive operator (<=, >=) is true at the zero, so the side it holds on owns it. A strict
+//    one (<, >) is false at the zero, which then belongs to the other side: the piecewise falls
+//    through to the branch that carries on from there.
+//  - = holds at the point alone and != on both sides with the point out: neither side owns it.
+function ownerAt(w: Walk, zero: Zero): Ownership | null {
   const { cmp, cmpExpr } = zero
-  if (cmp === undefined || cmpExpr === undefined || cmp === '=' || cmp === '!=') return null
+  if (cmp === undefined || cmpExpr === undefined) return null
+  if (cmp === '=' || cmp === '!=') return { owner: null }
   let g = w.differences.get(cmpExpr)
   if (!g) {
     g = compileScalar(cmpExpr, [w.param], w.scope)
@@ -345,13 +347,14 @@ function holdingAt(w: Walk, zero: Zero): Holding | null {
   const left = g(zero.t - h)
   const right = g(zero.t + h)
   w.counter.points += 2
-  // a NaN or a 0 on either side says nothing
   if (Number.isNaN(left) || Number.isNaN(right) || left === 0 || right === 0) return null
   const wantsPositive = cmp === '>' || cmp === '>='
   const holdsLeft = left > 0 === wantsPositive
   const holdsRight = right > 0 === wantsPositive
   if (holdsLeft === holdsRight) return null
-  return { side: holdsLeft ? 'left' : 'right', inclusive: cmp === '<=' || cmp === '>=' }
+  const holds = holdsLeft ? 'left' : 'right'
+  const inclusive = cmp === '<=' || cmp === '>='
+  return { owner: inclusive ? holds : holds === 'left' ? 'right' : 'left' }
 }
 
 // The curve's own value at the spot, or null where it is not defined there.

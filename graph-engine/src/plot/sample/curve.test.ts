@@ -229,22 +229,30 @@ describe('sampleCurve — a comparison says who owns its seam', () => {
   it.each([
     ['x^2', 2, Math.SQRT2],
     ['x^3', 5, Math.cbrt(5)],
-  ])('{%s < %i: 0, 1} is open on its own side and its <= twin is filled', (lhs, rhs, seam) => {
-    // the comparison holds to the left of the positive seam: that piece is 0
+  ])('{%s < %i: 0, 1}: the piece it holds on is open, the other filled; with <= the other way round', (lhs, rhs, seam) => {
+    // the comparison holds to the left of the positive seam: that piece is 0. Strict, it is false AT the
+    // seam, so the seam belongs to the 1 that carries on from the right; inclusive, it is the 0's.
     const strict = run(explicit(`{${lhs} < ${rhs}: 0, 1}`))
     const inclusive = run(explicit(`{${lhs} <= ${rhs}: 0, 1}`))
-    expect(endAt(strict.objects, seam, 0)?.fill).toBe('open')
-    expect(endAt(inclusive.objects, seam, 0)?.fill).toBe('filled')
-    // the other piece does not own the seam when the comparison is inclusive
-    expect(endAt(inclusive.objects, seam, 1)?.fill).toBe('open')
+    expect([endAt(strict.objects, seam, 0)?.fill, endAt(strict.objects, seam, 1)?.fill]).toEqual(['open', 'filled'])
+    expect([endAt(inclusive.objects, seam, 0)?.fill, endAt(inclusive.objects, seam, 1)?.fill]).toEqual(['filled', 'open'])
+    // and no mark of a value of its own: what the curve computes AT an irrational seam is not asked
+    expect(marksOf(strict.objects).filter((m) => m.role === 'value')).toEqual([])
+    expect(marksOf(inclusive.objects).filter((m) => m.role === 'value')).toEqual([])
   })
   it('sin(x) >= 0 against sin(x) > 0 at pi', () => {
     const inclusive = run(explicit('{sin(x) >= 0: 0, 1}'))
     const strict = run(explicit('{sin(x) > 0: 0, 1}'))
-    // sin is positive to the left of pi, so that is the piece whose end is the comparison's
-    expect(endAt(inclusive.objects, Math.PI, 0)?.fill).toBe('filled')
-    expect(endAt(inclusive.objects, Math.PI, 1)?.fill).toBe('open')
-    expect(endAt(strict.objects, Math.PI, 0)?.fill).toBe('open')
+    // sin is positive to the left of pi, so that is the piece the comparison holds on
+    expect([endAt(inclusive.objects, Math.PI, 0)?.fill, endAt(inclusive.objects, Math.PI, 1)?.fill]).toEqual(['filled', 'open'])
+    expect([endAt(strict.objects, Math.PI, 0)?.fill, endAt(strict.objects, Math.PI, 1)?.fill]).toEqual(['open', 'filled'])
+  })
+  it('a comparison facing the other way: {x^2 > 2: 1, 0} owns its seam from the other side', () => {
+    // x^2 > 2 holds to the RIGHT of the positive root, where the piece is 1; strict, the seam is the 0's
+    const strict = run(explicit('{x^2 > 2: 1, 0}'))
+    const inclusive = run(explicit('{x^2 >= 2: 1, 0}'))
+    expect([endAt(strict.objects, Math.SQRT2, 0)?.fill, endAt(strict.objects, Math.SQRT2, 1)?.fill]).toEqual(['filled', 'open'])
+    expect([endAt(inclusive.objects, Math.SQRT2, 0)?.fill, endAt(inclusive.objects, Math.SQRT2, 1)?.fill]).toEqual(['open', 'filled'])
   })
   it('the exact seams keep their fills, whichever way the comparison faces', () => {
     const fills = (body: string) => marksOf(run(explicit(body)).objects).filter((m) => Math.abs(m.at.x - 1) < 1e-9).map((m) => [m.at.y, m.fill])
@@ -272,10 +280,16 @@ describe('sampleCurve — a comparison says who owns its seam', () => {
     const r = run(explicit('2', '1 < x^2 <= 2'))
     expect(marksOf(r.objects).map((m) => [Math.round(m.at.x * 100), m.fill])).toEqual([[-141, 'filled'], [-100, 'open'], [100, 'open'], [141, 'filled']])
   })
+  it('= and != hold at a point and not on a side: an open hole, and a filled value mark where the curve has a value', () => {
+    for (const body of ['{x != 1: x, 5}', '{x = 1: 5, x}']) {
+      const r = run(explicit(body))
+      expect(marksOf(r.objects).map((m) => [m.role, m.fill, m.at.y]), body).toEqual([['hole', 'open', expect.closeTo(1, 6)], ['value', 'filled', 5]])
+    }
+  })
   it('a zero two comparisons share has no comparison to follow, and the value decides, as before', () => {
-    // != is both sides: the point is out, and the value mark says what is there
-    const r = run(explicit('{x != 1: x, 5}'))
-    expect(marksOf(r.objects).map((m) => [m.role, m.fill])).toEqual([['hole', 'open'], ['value', 'filled']])
+    // < and > of the one expression: neither owns the 0, and the curve is not defined there (no value, no filled end)
+    const r = run(explicit('{x < 0: 0, x > 0: 1}'))
+    expect(marksOf(r.objects).map((m) => [m.role, m.fill])).toEqual([['endpoint', 'open'], ['endpoint', 'open']])
   })
 })
 
