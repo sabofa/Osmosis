@@ -257,6 +257,8 @@ export class PaintRenderer {
     if (surfaces === this.bakedSource && (this.baked || surfaces === null)) return
     this.bakedSource = surfaces
     this.uploadBakedNow()
+    // none set: what only the surface pass used goes too (its image, its depth, the framebuffer on the underpainting)
+    if (surfaces === null) this.freeBakedTargets()
   }
 
   // The same surfaces recoloured (a colour-only change of the parameters, bake/types.ts RecolourBake): only the colour buffers
@@ -765,6 +767,19 @@ export class PaintRenderer {
     this.underpaint.drawn()
     this.stats.bakedSurfaces = drawn
     return true
+  }
+
+  // Frees the targets the baked surface pass draws with. The next baked frame makes them again.
+  private freeBakedTargets(): void {
+    this.bakedTarget?.destroy()
+    this.bakedTarget = null
+    this.bakedTargetKey = ''
+    this.bakedTargetFailed = false
+    this.underDepth?.destroy()
+    this.underDepth = null
+    this.underDepthKey = ''
+    this.underDepthFailed = false
+    this.underpaint.releaseTarget()
   }
 
   private ensureBakedTarget(width: number, height: number): BakedTarget | null {

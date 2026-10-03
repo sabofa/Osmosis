@@ -227,6 +227,13 @@ export class UnderpaintRenderer {
     return this.fbo
   }
 
+  // The framebuffer made for renderTarget is no longer needed (no baked surfaces are set): the texture stays, an uploaded image is
+  // laid through it as ever.
+  releaseTarget(): void {
+    this.res.deleteFramebuffer(this.fbo)
+    this.fbo = null
+  }
+
   // A pass has drawn the underpainting into the texture (renderTarget): draw() lays it, and an image uploaded before it is
   // not what the texture holds any more.
   drawn(): void {

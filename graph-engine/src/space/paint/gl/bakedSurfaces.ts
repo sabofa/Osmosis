@@ -39,10 +39,18 @@ export function sideColour(surface: BakedSurface, v: number, back: boolean): { c
 
 // Whether any vertex of the surface has coverage on either side: a surface with none draws nothing, whatever the view.
 export function hasCoverage(surface: BakedSurface): boolean {
-  for (let v = 0; v < surface.alphaFront.length; v++) if (surface.alphaFront[v] > 0) return true
+  const front = surface.alphaFront
+  for (let v = 0; v < front.length; v++) if (front[v] > 0 && sideFinite(surface.underFront, front, v)) return true
   const back = surface.alphaBack
-  if (back && !surface.closed) for (let v = 0; v < back.length; v++) if (back[v] > 0) return true
+  const under = surface.underBack ?? surface.underFront
+  if (back && !surface.closed) for (let v = 0; v < back.length; v++) if (back[v] > 0 && sideFinite(under, back, v)) return true
   return false
+}
+
+// Whether one side of vertex v has a finite colour and alpha. A side that has not is no underpainting there (coverage 0),
+// as a NaN pixel of the model's image is (gl/underpaint.ts underpaintTexels).
+export function sideFinite(under: ArrayLike<number>, alpha: ArrayLike<number>, v: number): boolean {
+  return Number.isFinite(alpha[v]) && Number.isFinite(under[3 * v]) && Number.isFinite(under[3 * v + 1]) && Number.isFinite(under[3 * v + 2])
 }
 
 // Why a surface cannot be drawn, or null: its arrays must agree on the vertex count, and its triangles must point at vertices.
@@ -68,14 +76,17 @@ export function colourData(surface: BakedSurface, into?: Float32Array): Float32A
   const backAlpha = surface.alphaBack ?? surface.alphaFront
   for (let v = 0; v < n; v++) {
     const o = v * COLOUR_STRIDE
-    out[o] = surface.underFront[3 * v]
-    out[o + 1] = surface.underFront[3 * v + 1]
-    out[o + 2] = surface.underFront[3 * v + 2]
-    out[o + 3] = backUnder[3 * v]
-    out[o + 4] = backUnder[3 * v + 1]
-    out[o + 5] = backUnder[3 * v + 2]
-    out[o + 6] = surface.alphaFront[v]
-    out[o + 7] = backAlpha[v]
+    // a side whose colour or alpha is not finite (NaN) is no underpainting there: colour 0, coverage 0
+    const front = sideFinite(surface.underFront, surface.alphaFront, v)
+    const back = sideFinite(backUnder, backAlpha, v)
+    out[o] = front ? surface.underFront[3 * v] : 0
+    out[o + 1] = front ? surface.underFront[3 * v + 1] : 0
+    out[o + 2] = front ? surface.underFront[3 * v + 2] : 0
+    out[o + 3] = back ? backUnder[3 * v] : 0
+    out[o + 4] = back ? backUnder[3 * v + 1] : 0
+    out[o + 5] = back ? backUnder[3 * v + 2] : 0
+    out[o + 6] = front ? surface.alphaFront[v] : 0
+    out[o + 7] = back ? backAlpha[v] : 0
   }
   return out
 }

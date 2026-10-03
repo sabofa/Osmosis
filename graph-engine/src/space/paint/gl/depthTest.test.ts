@@ -6,7 +6,7 @@ import { reprojectStrokes } from '../reproject'
 import { PATH_POINTS, ROLES } from '../types'
 import { depthBias, NO_SURFACE } from './depth'
 import { readFileSync } from 'node:fs'
-import { HIDDEN_DASH } from '../model/lines'
+import { HIDDEN_DASH } from '../bake/types'
 import {
   anchorOf,
   DASH_EDGE,
@@ -313,6 +313,17 @@ describe('the hidden pass: the dash mask and the depth test turned the other way
     // the model's hidden run is a stroke of alpha 0.5 (lines.ts): the number has no export to import, so read it
     const lines = readFileSync(new URL('../model/lines.ts', import.meta.url), 'utf8')
     expect(lines).toContain('alpha: hiddenRun ? 0.5 : 1,')
+  })
+
+  it('reads the dash from the contract (bake/types.ts) on both sides: the model dashes its hidden runs with it, and the renderer’s depth test does not import the model', () => {
+    const model = readFileSync(new URL('../model/lines.ts', import.meta.url), 'utf8')
+    expect(model).toContain("import { HIDDEN_DASH } from '../bake/types'")
+    expect(model).toContain('dash && dash.length ? dash : HIDDEN_DASH')
+    // the model no longer defines its own
+    expect(model).not.toMatch(/(?:const|let)\s+HIDDEN_DASH\b/)
+    const renderer = readFileSync(new URL('./depthTest.ts', import.meta.url), 'utf8')
+    expect(renderer).toContain("import { HIDDEN_DASH } from '../bake/types'")
+    expect(renderer).not.toMatch(/from '\.\.\/model\//)
   })
 
   describe('dashMask', () => {

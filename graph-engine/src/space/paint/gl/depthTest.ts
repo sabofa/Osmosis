@@ -16,7 +16,7 @@
 //                 point either: a mark may cross an occlusion boundary (a pull from the figure into the table behind
 //                 it), and then part of it lies on no surface at all.
 
-import { HIDDEN_DASH } from '../model/lines'
+import { HIDDEN_DASH } from '../bake/types'
 import { NO_SURFACE } from './depth'
 
 // The most the surface may change in depth over one pixel, in biases, for the slope that widens the tolerance.
@@ -68,7 +68,7 @@ export function depthVisible(depth: SceneDepthImage, x: number, y: number, vz: n
 // HIDDEN_DASHED) is drawn twice. The normal pass shows it where it is on or in front of a surface (depthVisible, above); the
 // hidden pass shows it where a surface is nearer (the same tolerance, inverted, so the two passes cover each point once
 // between them), dashed by the screen arc length of the stroke and faint, as the per-frame model draws a hidden run
-// (model/lines.ts: the dash HIDDEN_DASH, alpha 0.5).
+// (bake/types.ts HIDDEN_DASH, the per-frame model's dash; its hidden run is a stroke of alpha 0.5, model/lines.ts).
 export const DASH_ON = HIDDEN_DASH[0]
 export const DASH_OFF = HIDDEN_DASH[1]
 export const HIDDEN_ALPHA = 0.5

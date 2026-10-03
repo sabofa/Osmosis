@@ -132,6 +132,23 @@ describe('what a surface needs to be drawn', () => {
     expect(Array.from(closed.subarray(0, 8)).map((v) => +v.toFixed(3))).toEqual([0.1, 0.2, 0.3, 0.1, 0.2, 0.3, 1, 1])
   })
 
+  it('takes a NaN colour or alpha for no underpainting there: colour 0 and coverage 0 on that side only (the image path’s NaN)', () => {
+    const s = square({ alphaBack: [0.1, 0.2, 0.3, 0.4] })
+    s.underFront[3 * 1 + 2] = Number.NaN
+    s.alphaFront[2] = Number.NaN
+    const data = colourData(s)
+    expect(data.every((x) => Number.isFinite(x))).toBe(true)
+    // vertex 1: the front is none, the back is kept
+    expect(Array.from(data.subarray(8, 16)).map((v) => +v.toFixed(3))).toEqual([0, 0, 0, 0.6, 0.5, 0.4, 0, 0.2])
+    // vertex 2: the front's alpha is NaN, so is the front
+    expect(data[2 * COLOUR_STRIDE + 6]).toBe(0)
+    expect(data[2 * COLOUR_STRIDE + 7]).toBeCloseTo(0.3, 6)
+    // a surface whose only covered vertices have a NaN colour has no coverage
+    const bad = square({ alphaFront: [0, 1, 0, 0], alphaBack: [0, 0, 0, 0] })
+    bad.underFront[3] = Number.NaN
+    expect(hasCoverage(bad)).toBe(false)
+  })
+
   it('puts the origin at the middle of the surfaces’ bounding box, in 64 bits', () => {
     expect(bakedOrigin([])).toEqual([0, 0, 0])
     expect(bakedOrigin([square({ y: 4 }), square({ y: 8 })])).toEqual([0.5, 6, 0.5])

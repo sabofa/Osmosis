@@ -1303,6 +1303,42 @@ describe('the baked underpainting: the surfaces drawn for the view into the imag
     expect(renderer.stats.underpaintBaked).toBe(false)
   })
 
+  it('frees the surface pass’s targets when the surfaces are taken away: its image, its depth and the framebuffer on the underpainting, not only the vertex buffers', () => {
+    const { paint, renderer } = bakedSetup()
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    const live = balance(paint)
+    const deleted = { ...paint.fake.deleted }
+    renderer.setBakedSurfaces(null)
+    const after = balance(paint)
+    // the image of the surfaces and the scene's depth at the G-buffer's size: two textures and two renderbuffers, each with a
+    // framebuffer, and the framebuffer that was on the underpainting texture (the texture stays: an image is laid through it)
+    expect(paint.fake.deleted.texture - deleted.texture).toBe(2)
+    expect(paint.fake.deleted.renderbuffer - deleted.renderbuffer).toBe(2)
+    expect(paint.fake.deleted.framebuffer - deleted.framebuffer).toBe(3)
+    expect(live.texture - after.texture).toBe(2)
+    expect(live.renderbuffer - after.renderbuffer).toBe(2)
+    expect(live.framebuffer - after.framebuffer).toBe(3)
+    // and the vertex buffers, as before
+    expect(live.buffer - after.buffer).toBe(8)
+    // an image frame lays as ever, and a bake set again makes the targets again
+    renderer.paint(withUnder(frame([BLOCK])), view(), PARAMS, 'none')
+    expect(timeline(paint).slice(-4).map((e) => e.kind)).toEqual(['underpaint', 'copy', 'stroke', 'composite'])
+    renderer.setBakedSurfaces(SURFACES())
+    renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'none')
+    expect(renderer.stats.underpaintBaked).toBe(true)
+    expect(renderer.stats.bakedSurfaces).toBe(2)
+    renderer.dispose()
+    expect(balance(paint)).toEqual({ buffer: 0, vertexArray: 0, program: 0, shader: 0, texture: 0, framebuffer: 0, renderbuffer: 0 })
+  })
+
+  it('has nothing to free when no surfaces were ever set: setting null again makes no GL call', () => {
+    const { paint, renderer } = setup()
+    renderer.setScene(TWO, COLOURS)
+    paint.fake.calls.length = 0
+    renderer.setBakedSurfaces(null)
+    expect(paint.fake.calls.length).toBe(0)
+  })
+
   it('is left out of the flat role view, as the image is', () => {
     const { paint, renderer } = bakedSetup()
     renderer.paint(bakedFrame([BLOCK]), view(), PARAMS, 'roles')
@@ -1448,6 +1484,35 @@ describe('uploading and recolouring the baked surfaces', () => {
     renderer.updateBakedColours([bigger])
     expect(paint.fake.calls.filter((c) => c.fn === 'bufferSubData').length).toBe(0)
     expect(paint.fake.calls.filter((c) => c.fn === 'bufferData').length).toBeGreaterThan(0)
+  })
+
+  it('uploads a NaN colour or alpha as no underpainting (colour 0, coverage 0), at upload and on a recolour, and leaves out a surface that has only NaN', () => {
+    const { paint, renderer } = setup()
+    const nan = quad(0, 0)
+    nan.underFront[4] = Number.NaN
+    nan.alphaBack![2] = Number.NaN
+    renderer.setBakedSurfaces([nan])
+    const colours = () => paint.fake.uploads.filter((u) => u.target === GL_ARRAY_BUFFER && u.data?.length === 32).map((u) => u.data as Float32Array)
+    expect(colours().length).toBe(1)
+    expect(colours()[0].every((v) => Number.isFinite(v))).toBe(true)
+    // vertex 1: the front is none (its green is NaN), the back is kept; vertex 2: the back's alpha is NaN, the front is kept
+    expect(Array.from(colours()[0].subarray(8, 16))).toEqual([0, 0, 0, 0.5, 0.5, 0.5, 0, 1])
+    expect(Array.from(colours()[0].subarray(16, 24))).toEqual([0.5, 0.5, 0.5, 0, 0, 0, 1, 0])
+    // a recolour is held to the same rule
+    const again = quad(0, 0, 0.3)
+    again.alphaFront[0] = Number.NaN
+    paint.fake.calls.length = 0
+    renderer.updateBakedColours([again])
+    const sub = paint.fake.calls.find((c) => c.fn === 'bufferSubData')?.args[2] as Float32Array
+    expect(sub.every((v) => Number.isFinite(v))).toBe(true)
+    expect(sub[6]).toBe(0)
+    // a surface whose only coverage is NaN has none: nothing is uploaded for it
+    const only = quad(1, 1)
+    only.alphaFront.fill(Number.NaN)
+    only.alphaBack!.fill(0)
+    const before = paint.fake.uploads.length
+    renderer.setBakedSurfaces([only])
+    expect(paint.fake.uploads.length).toBe(before)
   })
 
   it('takes recoloured surfaces as the first when none were set', () => {
