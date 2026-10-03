@@ -19,7 +19,7 @@ import { packStrokes, roleIndex, type PaintCtx, type StrokeDraft } from './strok
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, type ViewOpts } from './testing'
 import { edgeStrokes } from './contours'
 import type { EdgeRun } from './edges'
-import { buildUnderpaintField, fillUnderpaint, underpaintImage } from './underpaint'
+import { buildUnderpaintField, FAM_BAND, fillUnderpaint, underpaintImage } from './underpaint'
 import { CANVAS, LOCALS, lightnessOf, made, SCENARIO, SCENE } from './valueFinalFixture'
 import {
   buildPlanMap, CAST_FADE, effectiveValues, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, isLightFamily, newZoneSample, planSample, reflectedMax,
@@ -241,9 +241,61 @@ describe('the underpainting', () => {
     }
   })
 
+  it('turns through the terminator as the plan does: its value across the plan’s soft edge is the plan’s within 0.02, neither crisper nor blurrier (radius 120 and 60)', () => {
+    // the plan alone: no brush-load mix, none of the curve's own deviation or the seeded one, and planes that keep the whole of
+    // a pixel's gradient (a stroke's plane step is not the plan's). A grey of local lightness 0.6 reads L = 0.6 + 0.8 (u - 0.62).
+    const params = resolvePaintParams({ seed: 1, mix: { strength: 0 }, curve: { devL: 0, devC: 0, devH: 0 }, value: { deviation: 0 }, edges: { planeGradient: 1 } })
+    for (const radius of [120, 60]) {
+      const m = made(params, LOCALS[3][1], { azimuth: 30, elevation: 25 }, false, [640, 480, radius])
+      expect(m.an.stride).toBe(1) // (the plan is at the image's own resolution)
+      const under = underpaintImage(buildUnderpaintField(m.an, m.g), params, m.an.env)
+      const L = m.view.lightDir
+      const valueAt = (i: number) => 0.62 + (linearToOklab(under[3 * i], under[3 * i + 1], under[3 * i + 2])[0] - 0.6) / 0.8
+      const inBand = (i: number) => m.g.mark[i] === 0 && Math.abs(m.an.plan.nl[i]) < TS / 2
+      let band = 0
+      let worst = 0
+      let crisper = 0
+      let across = 0
+      for (let i = 0; i < m.g.width * m.g.height; i++) {
+        if (!inBand(i)) continue
+        band++
+        worst = Math.max(worst, Math.abs(valueAt(i) - m.an.plan.u[i]))
+        if (inBand(i + 1)) crisper = Math.max(crisper, Math.abs(valueAt(i + 1) - valueAt(i)) - Math.abs(m.an.plan.u[i + 1] - m.an.plan.u[i]))
+        // the plan's rise through the band, as the underpainting sees it: from the shadow side of the terminator to the light side
+        const nl = m.g.normal[3 * i] * L[0] + m.g.normal[3 * i + 1] * L[1] + m.g.normal[3 * i + 2] * L[2]
+        if (Math.abs(nl) < 0.01) across += valueAt(i) > 0.3 && valueAt(i) < 0.46 ? 1 : 0
+      }
+      expect(band, `radius ${radius}`).toBeGreaterThan(radius * 2)
+      expect(worst, `radius ${radius}: the largest gap between the underpainting's value and the plan's in the band`).toBeLessThanOrEqual(0.02)
+      expect(crisper, `radius ${radius}: a step between neighbours steeper than the plan's`).toBeLessThanOrEqual(0.02)
+      // the middle of the edge (N·L 0) is the middle of the plan's rise (0.24 core to 0.52 half-tone: about 0.38), not a plateau of either family
+      expect(across, `radius ${radius}`).toBeGreaterThan(radius / 6)
+    }
+  })
+
+  it('takes its lattice samples from outside the band where a cell has any pixel of the family there (a few in a hundred lie inside it)', () => {
+    for (const radius of [120, 60]) {
+      const params = resolvePaintParams({ seed: 1 })
+      const m = made(params, LOCALS[3][1], { azimuth: 30, elevation: 25 }, false, [640, 480, radius])
+      const f = buildUnderpaintField(m.an, m.g)
+      const L = m.view.lightDir
+      let sphere = 0
+      let inside = 0
+      for (let k = 0; k < f.count; k++) {
+        if (f.mark[k] !== 0) continue
+        sphere++
+        // (the sphere's normal is its position)
+        if (Math.abs(f.pos[3 * k] * L[0] + f.pos[3 * k + 1] * L[1] + f.pos[3 * k + 2] * L[2]) < TS / 2) inside++
+      }
+      // 18 of 373 at radius 120 and 3 of 107 at 60; without the preference 44 and 14
+      expect(sphere).toBeGreaterThan(90)
+      expect(inside, `radius ${radius}: ${inside} of ${sphere} samples inside the band`).toBeLessThanOrEqual(0.08 * sphere)
+    }
+  })
+
   // a 4 x 1 image, cells 2 pixels wide; sample 0 (cell 0) is light red, sample 1 (cell 1) is dark blue
   const fieldOf = (ownerFam: number[], fam: number[]) => ({
-    width: 4, height: 1, owner: Int32Array.from([0, 0, 0, 0]), ownerFam: Uint8Array.from(ownerFam), lw: 2, lh: 1, cell: 2,
+    width: 4, height: 1, owner: Int32Array.from([0, 0, 0, 0]), ownerFam: Uint8Array.from(ownerFam), bandPix: new Int32Array(0), bandDonor: new Int32Array(0), bandU: new Float32Array(0), lw: 2, lh: 1, cell: 2,
     cellStart: Int32Array.from([0, 1, 2]), count: 2, mark: Int32Array.from([0, 0]), fam: Uint8Array.from(fam), bound: new Float32Array(2),
     lab: new Float32Array(6), u: new Float32Array(2), nz: new Float32Array(2), bounce: new Float32Array(2), amb: new Float32Array(2),
     plane: new Float32Array(6), pos: new Float32Array(6), flags: new Uint8Array(2), cellOf: new Uint32Array(2),
@@ -260,6 +312,18 @@ describe('the underpainting', () => {
     const joined = fillUnderpaint(fieldOf([FAM_LIGHT, FAM_LIGHT, FAM_LIGHT, FAM_LIGHT], [FAM_LIGHT, FAM_LIGHT]), LIGHT_RED_DARK_BLUE)
     expect(joined[3]).toBeCloseTo(0.75, 6)
     expect(joined[6]).toBeCloseTo(0.25, 6)
+  })
+
+  it('fills the pixels of the band from their own colours, not from either family: the colour made at the plan’s value, or the donor sample’s', () => {
+    // pixel 1 is in the band (made from donor sample 1, the shadow side's blue); its own colour is a dark green
+    const field = { ...fieldOf([FAM_LIGHT, FAM_BAND, FAM_SHADOW, FAM_SHADOW], [FAM_LIGHT, FAM_SHADOW]), bandPix: Int32Array.from([1]), bandDonor: Int32Array.from([1]), bandU: Float32Array.from([0.4]) }
+    const own = fillUnderpaint(field, LIGHT_RED_DARK_BLUE, Float32Array.from([0, 0.5, 0]))
+    expect(Array.from(own.slice(3, 6))).toEqual([0, 0.5, 0])
+    // the pixels beside it keep their families' samples
+    expect(Array.from(own.slice(0, 3))).toEqual([1, 0, 0])
+    expect(Array.from(own.slice(6, 9))).toEqual([0, 0, 0.25])
+    // without colours of its own the pixel takes its donor's
+    expect(Array.from(fillUnderpaint(field, LIGHT_RED_DARK_BLUE).slice(3, 6))).toEqual([0, 0, 0.25])
   })
 
   it('takes a sample of the other family only where its own has none within reach, so no pixel of a form is left bare', () => {

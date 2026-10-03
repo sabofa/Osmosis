@@ -4,7 +4,6 @@ import type { GBuffer, PaintFrame, PaintView, SceneColours } from '../types'
 import type { SpaceScene } from '../../scene/types'
 import { labToLch, lchToLab, linearToOklab } from './colour'
 import { buildParticles, paintFrame } from './index'
-import { isLightFamily } from './value'
 import { flatColours, graphMesh, meshGBuffer, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './testing'
 import { fillUnderpaint, UNDERPAINT_CELL_PX, UNDERPAINT_MIX, type UnderpaintField } from './underpaint'
 
@@ -21,6 +20,9 @@ const field = (owner: number[], marks: number[] = [0, 0], ownerFams: number[] = 
   height: 1,
   owner: Int32Array.from(owner),
   ownerFam: Uint8Array.from(ownerFams),
+  bandPix: new Int32Array(0),
+  bandDonor: new Int32Array(0),
+  bandU: new Float32Array(0),
   lw: 2,
   lh: 1,
   cell: 2,
@@ -212,12 +214,9 @@ describe('the underpainting of a frame', () => {
 
   it('is smooth: made on a lattice of UNDERPAINT_CELL_PX px and filled bilinearly, so a neighbour is never far in colour inside a cell of the mix', () => {
     expect(UNDERPAINT_CELL_PX).toBe(12)
-    // along a row through the middle of the sphere, the largest step between neighbouring pixels (2 px) is small in linear sRGB.
-    // (The terminator is the one edge the fill keeps: the two value families are not blended, so a step across it is the
-    // form's own, and the next test holds it.)
-    const { g, frame, view } = shot
-    const L = view.lightDir
-    const familyAt = (i: number) => isLightFamily(P, g.normal[3 * i] * L[0] + g.normal[3 * i + 1] * L[1] + g.normal[3 * i + 2] * L[2], g.shadow[i] === 1)
+    // along a row through the middle of the sphere, the largest step between neighbouring pixels (2 px) is small in linear sRGB
+    // (the terminator included: it turns as the plan's soft edge does, it is not a step)
+    const { g, frame } = shot
     const y = Math.floor(g.height * 0.45)
     let steps = 0
     let largest = 0
@@ -225,7 +224,6 @@ describe('the underpainting of a frame', () => {
       const a = y * g.width + x - 1
       const b = a + 1
       if (g.mark[a] !== 0 || g.mark[b] !== 0 || g.depth[a] > 1e9) continue
-      if (familyAt(a) !== familyAt(b)) continue
       steps++
       largest = Math.max(largest, ...pixel(frame.underpaint, a).map((v, c) => Math.abs(v - frame.underpaint[3 * b + c])))
     }

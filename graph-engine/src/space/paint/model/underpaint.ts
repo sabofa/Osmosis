@@ -20,6 +20,14 @@
 // sample's colour is made of is kept (a field), so a colour parameter changes the image with no analysis, as
 // it does the strokes (recolourFrame). A sample's lightness is held on its family's side of the cap (shadow)
 // or of the darkest half-tone (light), after the brush-load mix, as the strokes' is (strokes.ts packStrokes).
+//
+// THE TERMINATOR TURNS AS THE PLAN'S DOES. The plan has a soft edge there, terminatorSoftness wide and centred on
+// N·L = 0 (the one place the two families meet, and the ordering rule exempts it): the pixels inside it (the BAND)
+// are not blended from the lattice at all. Each is made at its own plan value (planSample at the pixel's own normal,
+// at the full G-buffer's resolution), from the recipe of the nearest lattice sample on its own side of the
+// terminator (its local colour, plane hue step, mix cell), so the underpainting's value runs through the band as the
+// plan's does: neither crisper (a step at N·L = 0, where the families are keyed apart) nor blurrier (a 12 px
+// blend). The samples themselves are taken from outside the band where a cell has any such pixel of the family.
 
 import type { PaintParams } from '../params'
 import type { GBuffer, Oklab } from '../types'
@@ -30,24 +38,34 @@ import { stepValue } from './planes'
 import { colourOfRecipe, newRecipe, type RecipeEnv } from './recipe'
 import { clamp } from './math'
 import type { PaintCtx } from './strokes'
-import { ambientShare, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, lightWeight } from './value'
+import { ambientShare, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, lightWeight, newZoneSample, planSample } from './value'
 import { toEye, unproject } from './view'
 
 // The strength of the brush-load mix on the underpainting, against a block-in stroke's (the spec's "reduced").
 export const UNDERPAINT_MIX = 0.5
 // One colour sample per this many CSS px square.
 export const UNDERPAINT_CELL_PX = 12
+// The value of `ownerFam` for a pixel inside the plan's terminator band: made at its own plan value, not from the lattice.
+export const FAM_BAND = 2
+// A lattice sample is taken from a pixel of the band only where its cell has no other pixel of the mark and family.
+const BAND_PENALTY = 1e9
 // Distinct (mark, family) pairs sampled in one lattice cell (a cell holds a boundary of a few meshes at most, each
 // with its terminator or shadow edge).
 const MAX_KEYS_PER_CELL = 16
 
 export interface UnderpaintField {
   // The full G-buffer's size, and its owner: the mark painted at each pixel, -1 where nothing is (the
-  // table in the light is not painted: it is the canvas); and its value family (FAM_LIGHT or FAM_SHADOW).
+  // table in the light is not painted: it is the canvas); and its value family (FAM_LIGHT or FAM_SHADOW), or
+  // FAM_BAND for a pixel inside the plan's terminator band.
   width: number
   height: number
   owner: Int32Array
   ownerFam: Uint8Array
+  // The pixels of the band (indices into the image), the lattice sample whose recipe each is made from, and the plan
+  // value it is made at (the plan's, at the pixel's own normal, with the seeded deviation of the surface point).
+  bandPix: Int32Array
+  bandDonor: Int32Array
+  bandU: Float32Array
   // The lattice: cells over the full G-buffer, `cell` full pixels on a side. The samples of cell c are
   // [cellStart[c], cellStart[c + 1]), each of one mark.
   lw: number
@@ -99,8 +117,10 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     owner[i] = m < 0 || (fc.ground[m] === 1 && full.shadow[i] !== 1) ? -1 : m
     if (owner[i] < 0) continue
     const nl = full.normal[3 * i] * lightDir[0] + full.normal[3 * i + 1] * lightDir[1] + full.normal[3 * i + 2] * lightDir[2]
-    ownerFam[i] = lightWeight(ts, nl, full.shadow[i] === 1) > 0.5 ? FAM_LIGHT : FAM_SHADOW
+    // (the family a band pixel keeps if it ends with no recipe to be made from: its side of the terminator)
+    ownerFam[i] = Math.abs(nl) < ts / 2 ? FAM_BAND : lightWeight(ts, nl, full.shadow[i] === 1) > 0.5 ? FAM_LIGHT : FAM_SHADOW
   }
+  const inBand = (i: number): boolean => Math.abs(plan.nl[i]) < ts / 2
   const paints = (i: number): number => {
     const m = a.mark[i]
     return m < 0 || (fc.ground[m] === 1 && a.shadow[i] !== 1) ? -1 : m
@@ -129,7 +149,7 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
           if (m < 0) continue
           // the key: the mark, and its family here
           const key = 2 * m + plan.fam[i]
-          const d = (x - centreX) ** 2 + (y - centreY) ** 2
+          const d = (x - centreX) ** 2 + (y - centreY) ** 2 + (inBand(i) ? BAND_PENALTY : 0)
           let s = -1
           for (let q = 0; q < n; q++) if (markIn[q] === key) s = q
           if (s < 0) {
@@ -156,6 +176,9 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     height: full.height,
     owner,
     ownerFam,
+    bandPix: new Int32Array(0),
+    bandDonor: new Int32Array(0),
+    bandU: new Float32Array(0),
     lw,
     lh,
     cell: step * stride,
@@ -234,6 +257,44 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     f.lab[3 * s + 1] = local[1]
     f.lab[3 * s + 2] = local[2]
   }
+
+  // the band: each pixel inside the plan's terminator edge, at its own plan value, from the nearest sample on its side
+  const pix: number[] = []
+  const donors: number[] = []
+  const values: number[] = []
+  const zs = newZoneSample()
+  const inv = 1 / f.cell
+  const W = full.width
+  for (let i = 0; i < owner.length; i++) {
+    if (ownerFam[i] !== FAM_BAND) continue
+    const x = i % W
+    const y = (i - x) / W
+    const nx = full.normal[3 * i]
+    const ny = full.normal[3 * i + 1]
+    const nz = full.normal[3 * i + 2]
+    const nl = nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]
+    const side = nl > 0 ? FAM_LIGHT : FAM_SHADOW
+    const fx = (x + 0.5) * inv - 0.5
+    const fy = (y + 0.5) * inv - 0.5
+    let donor = nearestSample(f, fx, fy, owner[i], side)
+    if (donor < 0) donor = nearestSample(f, fx, fy, owner[i], -1)
+    if (donor < 0) {
+      // nothing of this mark within reach: the pixel is filled from the lattice, as a pixel of its side
+      ownerFam[i] = side
+      continue
+    }
+    // the plan at the pixel's own normal, at the full G-buffer's resolution (the occlusion is the analysis'), and the surface
+    // point's deviation: the value the strokes' plan gives it, before the plane's own step
+    const ai = Math.min(ah - 1, Math.floor(y / stride)) * aw + Math.min(aw - 1, Math.floor(x / stride))
+    planSample(params, plan.curves, nl, full.shadow[i] === 1, nx, ny, nz, plan.ao[ai], zs)
+    unproject(fc, (x + 0.5) * full.scale, (y + 0.5) * full.scale, full.depth[i], pt)
+    pix.push(i)
+    donors.push(donor)
+    values.push(clamp(zs.u + curve.devU(pt[0], pt[1], pt[2]), 0.02, 0.99))
+  }
+  f.bandPix = Int32Array.from(pix)
+  f.bandDonor = Int32Array.from(donors)
+  f.bandU = Float32Array.from(values)
   return f
 }
 
@@ -297,28 +358,56 @@ class MappedGrid {
 
 // The colour (linear-light sRGB, 3 per sample) of every sample under `params`: the curve colour of what
 // it is made of, then the cell's brush-load mix at UNDERPAINT_MIX of its strength.
+// What sample s is made of, as a recipe (written into r).
+function readSample(f: UnderpaintField, s: number, r: ReturnType<typeof newRecipe>): void {
+  r.ground = (f.flags[s] & FLAG_GROUND) !== 0
+  r.lx = f.lab[3 * s]
+  r.ly = f.lab[3 * s + 1]
+  r.lz = f.lab[3 * s + 2]
+  r.u = f.u[s]
+  r.nz = f.nz[s]
+  r.bounce = f.bounce[s]
+  r.ambientShare = f.amb[s]
+  r.hasPlane = !Number.isNaN(f.plane[3 * s])
+  r.pnx = r.hasPlane ? f.plane[3 * s] : 0
+  r.pny = r.hasPlane ? f.plane[3 * s + 1] : 0
+  r.pnz = r.hasPlane ? f.plane[3 * s + 2] : 0
+  r.colormapped = (f.flags[s] & FLAG_MAPPED) !== 0
+  r.field = true
+  r.px = f.pos[3 * s]
+  r.py = f.pos[3 * s + 1]
+  r.pz = f.pos[3 * s + 2]
+}
+
+const mixerOf = (params: PaintParams): LoadMixer => new LoadMixer({ ...params, mix: { ...params.mix, strength: params.mix.strength * UNDERPAINT_MIX } })
+
+// The colour (linear-light sRGB, 3 per band pixel) of every pixel of the plan's terminator band: the recipe of its donor
+// sample made at the pixel's own plan value, then the donor cell's brush-load mix. Not held to a family: the band is
+// where the two meet, and its value is the plan's.
+export function underpaintBandColours(f: UnderpaintField, params: PaintParams, env: RecipeEnv): Float32Array {
+  const out = new Float32Array(3 * f.bandPix.length)
+  const mixer = mixerOf(params)
+  const r = newRecipe()
+  for (let k = 0; k < f.bandPix.length; k++) {
+    const s = f.bandDonor[k]
+    readSample(f, s, r)
+    r.u = f.bandU[k]
+    const lab = colourOfRecipe(r, env)
+    const mixed = mixer.mix({ role: 'block', cell: f.cellOf[s], u: r.u, x: 0, y: 0, lab, colormapped: r.colormapped, seed: f.cellOf[s], jitter: 0 })
+    const lin = oklabToLinear(mixed.lab as Oklab)
+    out[3 * k] = lin[0]
+    out[3 * k + 1] = lin[1]
+    out[3 * k + 2] = lin[2]
+  }
+  return out
+}
+
 export function underpaintColours(f: UnderpaintField, params: PaintParams, env: RecipeEnv): Float32Array {
   const out = new Float32Array(3 * f.count)
-  const mixer = new LoadMixer({ ...params, mix: { ...params.mix, strength: params.mix.strength * UNDERPAINT_MIX } })
+  const mixer = mixerOf(params)
   const r = newRecipe()
   for (let s = 0; s < f.count; s++) {
-    r.ground = (f.flags[s] & FLAG_GROUND) !== 0
-    r.lx = f.lab[3 * s]
-    r.ly = f.lab[3 * s + 1]
-    r.lz = f.lab[3 * s + 2]
-    r.u = f.u[s]
-    r.nz = f.nz[s]
-    r.bounce = f.bounce[s]
-    r.ambientShare = f.amb[s]
-    r.hasPlane = !Number.isNaN(f.plane[3 * s])
-    r.pnx = r.hasPlane ? f.plane[3 * s] : 0
-    r.pny = r.hasPlane ? f.plane[3 * s + 1] : 0
-    r.pnz = r.hasPlane ? f.plane[3 * s + 2] : 0
-    r.colormapped = (f.flags[s] & FLAG_MAPPED) !== 0
-    r.field = true
-    r.px = f.pos[3 * s]
-    r.py = f.pos[3 * s + 1]
-    r.pz = f.pos[3 * s + 2]
+    readSample(f, s, r)
     const lab = colourOfRecipe(r, env)
     // the mix is keyed to the surface cell, so the underpainting keeps its patches as the camera orbits
     const mixed = mixer.mix({ role: 'block', cell: f.cellOf[s], u: f.u[s], x: 0, y: 0, lab, colormapped: r.colormapped, seed: f.cellOf[s], jitter: 0 })
@@ -345,7 +434,7 @@ function sampleOf(f: UnderpaintField, c: number, m: number, fam: number): number
 // The image: per G-buffer pixel the colour of the samples of its own mark and family about it (bilinear on the
 // lattice: the light family and the shadow family are never blended into one another, as two meshes are not), NaN
 // where nothing is painted.
-export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float32Array {
+export function fillUnderpaint(f: UnderpaintField, colours: Float32Array, bandColours?: Float32Array): Float32Array {
   const { width: W, height: H, owner, lw, lh, cell } = f
   const out = new Float32Array(3 * W * H).fill(Number.NaN)
   const inv = 1 / cell
@@ -357,6 +446,7 @@ export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float
       const m = owner[y * W + x]
       if (m < 0) continue
       const fam = f.ownerFam[y * W + x]
+      if (fam === FAM_BAND) continue // (the band is filled below)
       const fx = (x + 0.5) * inv - 0.5
       const x0 = Math.floor(fx)
       const tx = fx - x0
@@ -397,6 +487,16 @@ export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float
       }
     }
   }
+  // the pixels of the plan's terminator band: made at their own plan value (underpaintBandColours), or, without those,
+  // the colour of the sample they are made from
+  for (let k = 0; k < f.bandPix.length; k++) {
+    const o = 3 * f.bandPix[k]
+    const src = bandColours ?? colours
+    const at = bandColours ? 3 * k : 3 * f.bandDonor[k]
+    out[o] = src[at]
+    out[o + 1] = src[at + 1]
+    out[o + 2] = src[at + 2]
+  }
   return out
 }
 
@@ -423,5 +523,5 @@ function nearestSample(f: UnderpaintField, fx: number, fy: number, m: number, fa
 
 // The whole underpainting of a field under `params`.
 export function underpaintImage(f: UnderpaintField, params: PaintParams, env: RecipeEnv): Float32Array {
-  return fillUnderpaint(f, underpaintColours(f, params, env))
+  return fillUnderpaint(f, underpaintColours(f, params, env), underpaintBandColours(f, params, env))
 }
