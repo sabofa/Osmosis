@@ -75,7 +75,7 @@
 
 import { PaintRenderer } from '../../graph-engine/src/space/paint/gl/PaintRenderer'
 import { classifyChange } from '../../graph-engine/src/space/paint/model/index'
-import { blendStrokes, crossfadeWeight, edgeFade, matchStrokes, shouldAdopt, type StrokeMatch } from '../../graph-engine/src/space/paint/liveOrbit'
+import { blendStrokes, crossfadeWeight, edgeFade, matchStrokes, refineMatch, shouldAdopt, type StrokeMatch } from '../../graph-engine/src/space/paint/liveOrbit'
 import { reprojectStrokes } from '../../graph-engine/src/space/paint/reproject'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
 import {
@@ -588,6 +588,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       return own
     }
     const before = reprojectStrokes(fade.from.frame.strokes, fade.from.view, job.view, job.params, edgeFade(ageOf(fade.from, at)))
+    // with both bases in one view, which pairs are one stroke, which run the other way (once, at the first frame of the fade)
+    if (!fade.match.refined) refineMatch(fade.match, before, own)
     return blendStrokes(before, own, fade.match, weight)
   }
 

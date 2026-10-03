@@ -7,10 +7,14 @@ import {
   EDGE_FADE_MS,
   EDGE_ROLE,
   matchStrokes,
+  PAIR_KEEP_LENGTH,
+  PAIR_MIN_PX,
+  refineMatch,
   shouldAdopt,
 } from './liveOrbit'
+import { worldLightDirection } from '../../../../review/src/paintLabCamera'
 import { buildParticles, paintFrame } from './model/index'
-import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './model/testing'
+import { flatColours, graphMesh, meshGBuffer, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './model/testing'
 import { DEFAULT_PAINT_PARAMS } from './params'
 import { reprojectStrokes } from './reproject'
 import { PATH_POINTS, ROLES, type StrokeBatch } from './types'
@@ -26,10 +30,18 @@ interface Spec {
   x?: number
   colour?: [number, number, number]
   alpha?: number
-  width?: number
+  // one width for every point, or one for each
+  width?: number | number[]
+  y?: number
+  // a zigzag of this amplitude on the line: below it at even points, above at odd (the opposite for a negative amplitude)
+  wave?: number
+  // the stroke runs from x + PATH_POINTS - 1 down to x (its points and widths in that order)
+  reverse?: boolean
+  // a world path of points (wx + q, wy, wz); none (all zero) when left out
+  world?: [number, number, number]
 }
 
-// A batch of strokes made by hand: each a horizontal line of PATH_POINTS points at x, y = 0.
+// A batch of strokes made by hand: each a horizontal line of PATH_POINTS points at x, y = 0 (or y).
 function batchOf(strokes: Spec[]): StrokeBatch {
   const n = strokes.length
   const b: StrokeBatch = {
@@ -57,9 +69,11 @@ function batchOf(strokes: Spec[]): StrokeBatch {
     b.role[i] = s.role ?? BLOCK
     b.seed[i] = s.seed
     for (let q = 0; q < P; q++) {
-      b.path[2 * P * i + 2 * q] = (s.x ?? 0) + q
-      b.path[2 * P * i + 2 * q + 1] = 0
-      b.width[P * i + q] = s.width ?? 4
+      const at = s.reverse ? P - 1 - q : q
+      b.path[2 * P * i + 2 * q] = (s.x ?? 0) + at
+      b.path[2 * P * i + 2 * q + 1] = (s.y ?? 0) + (s.wave ?? 0) * (at % 2 === 1 ? 1 : -1)
+      b.width[P * i + q] = Array.isArray(s.width) ? s.width[q] : (s.width ?? 4)
+      if (s.world) b.worldPath.set([s.world[0] + at, s.world[1], s.world[2]], 3 * P * i + 3 * q)
     }
     const c = s.colour ?? [0.2, 0.3, 0.4]
     b.colour.set(c, 3 * i)
@@ -136,6 +150,90 @@ describe('matching the strokes of two bases', () => {
   })
 })
 
+describe('refining a match with both bases in one view', () => {
+  it('keeps a pair within max(3 px, half the width) of each other and unpairs one further apart: the old stroke goes, the new one appears', () => {
+    expect(PAIR_MIN_PX).toBe(3)
+    const old = batchOf([{ seed: 1 }, { seed: 2 }, { seed: 3 }, { seed: 4 }])
+    // 2 px apart (width 4: the limit is 3); 5 px (the limit 3); 8 px with a width of 20 (the limit 10); 3.5 px with a width of 6 (the limit 3)
+    const neu = batchOf([{ seed: 1, y: 2 }, { seed: 2, y: 5 }, { seed: 3, y: 8, width: 20 }, { seed: 4, y: 3.5, width: 6 }])
+    const m = matchStrokes(old, neu)
+    expect(Array.from(m.pair)).toEqual([0, 1, 2, 3])
+    refineMatch(m, old, neu)
+    expect(Array.from(m.pair)).toEqual([0, -1, 2, -1])
+    expect(Array.from(m.gone)).toEqual([1, 3])
+    expect(m.refined).toBe(true)
+    // the stroke that appeared fades in where it is, and the one that went fades out where it was
+    const half = blendStrokes(old, neu, m, 0.5)
+    expect(half.count).toBe(4 + 2)
+    expect(half.alpha[1]).toBeCloseTo(0.5, 6)
+    expect(half.path[2 * P * 1 + 1]).toBeCloseTo(5, 6) // the new stroke, where it is
+    expect(half.alpha[4]).toBeCloseTo(0.5, 6)
+    expect(half.path[2 * P * 4 + 1]).toBeCloseTo(0, 6) // the old one, where it was
+  })
+
+  it('unpairs a pair whose half-way stroke would be squeezed below 0.8 of the shorter end: two zigzags in opposite phase', () => {
+    expect(PAIR_KEEP_LENGTH).toBe(0.8)
+    // within a pixel and a half of each other, but one is above where the other is below: half way is a straight line of 7,
+    // against zigzags of 7 x sqrt(1 + 4) = 15.7
+    const old = batchOf([{ seed: 1, wave: 1 }, { seed: 2, wave: 1 }])
+    const neu = batchOf([{ seed: 1, wave: -1 }, { seed: 2, wave: 1, y: 1 }])
+    const m = matchStrokes(old, neu)
+    refineMatch(m, old, neu)
+    // the zigzag in the other phase goes; the same zigzag a pixel over stays (half way is the same zigzag)
+    expect(Array.from(m.pair)).toEqual([-1, 1])
+    expect(Array.from(m.gone)).toEqual([0])
+  })
+
+  it('finds a stroke that runs the other way and eases it against its reversed points, widths and all: the two do not collapse to a point', () => {
+    const widths = [1, 2, 3, 4, 5, 6, 7, 8]
+    const old = batchOf([{ seed: 1, width: widths }])
+    // the same stroke, 2 px over, walked from its far end: its first point is the old stroke's last
+    const neu = batchOf([{ seed: 1, y: 2, reverse: true, width: widths.slice().reverse() }])
+    const plain = matchStrokes(old, neu)
+    // eased point to point, as it was (the model's own order), the pair collapses to the middle at mid-fade
+    const collapsed = blendStrokes(old, neu, plain, 0.5)
+    for (let q = 0; q < P; q++) expect(collapsed.path[2 * q]).toBeCloseTo(3.5, 6)
+    const m = matchStrokes(old, neu)
+    refineMatch(m, old, neu)
+    expect(Array.from(m.pair)).toEqual([0])
+    expect(Array.from(m.reversed)).toEqual([1])
+    const half = blendStrokes(old, neu, m, 0.5)
+    for (let q = 0; q < P; q++) {
+      expect(half.path[2 * q]).toBeCloseTo(P - 1 - q, 6) // the stroke, still from x 7 down to x 0
+      expect(half.path[2 * q + 1]).toBeCloseTo(1, 6) // half way over
+      expect(half.width[q]).toBeCloseTo(P - q, 6) // 8 down to 1
+    }
+    const start = blendStrokes(old, neu, m, 0)
+    for (let q = 0; q < P; q++) {
+      expect(start.path[2 * q]).toBeCloseTo(P - 1 - q, 6)
+      expect(start.path[2 * q + 1]).toBeCloseTo(0, 6) // the old stroke, in the new one's order
+    }
+  })
+
+  it('does not call a stroke reversed that is not: a pair at the same place keeps its order', () => {
+    const old = batchOf([{ seed: 1 }])
+    const neu = batchOf([{ seed: 1, y: 1 }])
+    const m = matchStrokes(old, neu)
+    refineMatch(m, old, neu)
+    expect(Array.from(m.reversed)).toEqual([0])
+  })
+
+  it('eases the world path where both strokes have one, so the depth test reads the stroke that is drawn, and keeps the new stroke’s where one has none', () => {
+    const old = batchOf([{ seed: 1, world: [10, 2, 3] }, { seed: 2 }, { seed: 3, world: [1, 1, 1] }])
+    const neu = batchOf([{ seed: 1, y: 1, world: [20, 4, 5] }, { seed: 2, y: 1, world: [30, 0, 0] }, { seed: 3, y: 1 }])
+    const m = matchStrokes(old, neu)
+    refineMatch(m, old, neu)
+    expect(Array.from(m.world)).toEqual([1, 0, 0])
+    const half = blendStrokes(old, neu, m, 0.5)
+    // both have it: half way, point by point
+    expect(Array.from(half.worldPath.subarray(0, 3))).toEqual([15, 3, 4])
+    expect(Array.from(half.worldPath.subarray(3 * (P - 1), 3 * P))).toEqual([15 + P - 1, 3, 4])
+    // only the new has it: the new one's; only the old has it: none (the new stroke has none)
+    expect(Array.from(half.worldPath.subarray(3 * P, 3 * P + 3))).toEqual([30, 0, 0])
+    expect(Array.from(half.worldPath.subarray(6 * P, 6 * P + 3))).toEqual([0, 0, 0])
+  })
+})
+
 describe('easing one base into another', () => {
   // old: A (block 1, at x 0), B (block 2, at x 10), E (an edge); new: A' (the same stroke, 4 px along), C (block 3), E' (an edge).
   const old = batchOf([{ seed: 1, x: 0, alpha: 0.8 }, { seed: 2, x: 10, alpha: 0.6 }, { seed: 7, role: EDGE_ROLE, x: 20, alpha: 1 }])
@@ -184,6 +282,118 @@ describe('easing one base into another', () => {
   })
 })
 
+describe('on real frames, the pairs that are eased lie on the same bit of the picture', () => {
+  const COLOURS = flatColours({ 0: [0.56, 0.12, 0.08], 1: [0.9, 0.01, 0.02] })
+  const sphereScene = sceneOf([sphereMesh({ radius: 0.6 }), tableMesh({ z: -0.6, half: 1.5, index: 1 })])
+  const saddleMesh = graphMesh((x: number, y: number) => 0.4 * (x * x - y * y), { half: 0.8, n: 40, index: 0 })
+  const saddleScene = sceneOf([saddleMesh])
+  const params = DEFAULT_PAINT_PARAMS
+  const viewAt = (azimuth: number) => {
+    const view = paintView({ width: 640, height: 480, azimuth, elevation: 25, zoom: 400 })
+    view.lightDir = [...worldLightDirection(-35, 39)] as [number, number, number]
+    return view
+  }
+  const sphereFrame = (particles: ReturnType<typeof buildParticles>, azimuth: number) => {
+    const view = viewAt(azimuth)
+    const g = sphereGBuffer(640, 480, { view, params, centre: [0, 0, 0], radius: 0.6, mark: 0, table: { z: -0.6, mark: 1 } })
+    return { view, strokes: paintFrame(sphereScene, particles, view, g, params).strokes }
+  }
+  const saddleFrame = (particles: ReturnType<typeof buildParticles>, azimuth: number) => {
+    const view = viewAt(azimuth)
+    const g = meshGBuffer(640, 480, [{ mesh: saddleMesh, mark: 0 }], { view, params })
+    return { view, strokes: paintFrame(saddleScene, particles, view, g, params).strokes }
+  }
+  const pathLength = (b: StrokeBatch, j: number) => {
+    let l = 0
+    for (let k = 1; k < P; k++) l += Math.hypot(b.path[2 * P * j + 2 * k] - b.path[2 * P * j + 2 * k - 2], b.path[2 * P * j + 2 * k + 1] - b.path[2 * P * j + 2 * k - 1])
+    return l
+  }
+  // the mean distance of stroke i of `a` from stroke j of `b`, point to point and against the reversed points
+  const distances = (a: StrokeBatch, i: number, b: StrokeBatch, j: number) => {
+    let direct = 0
+    let flipped = 0
+    for (let k = 0; k < P; k++) {
+      const ox = a.path[2 * P * i + 2 * k]
+      const oy = a.path[2 * P * i + 2 * k + 1]
+      direct += Math.hypot(ox - b.path[2 * P * j + 2 * k], oy - b.path[2 * P * j + 2 * k + 1])
+      flipped += Math.hypot(ox - b.path[2 * P * j + 2 * (P - 1 - k)], oy - b.path[2 * P * j + 2 * (P - 1 - k) + 1])
+    }
+    return { direct: direct / P, flipped: flipped / P }
+  }
+
+  // The sphere turned 6 degrees and the saddle 12: raw, 149 of the sphere's 2,439 pairs lie more than 8 px apart (p99 22 px,
+  // the farthest 31) and 75 are reversed; the saddle's 12-degree pairs are worse (323 and 335).
+  it.each([
+    ['the sphere turned 6 degrees', 6, 'sphere', 30, 60],
+    ['the saddle turned 12 degrees', 12, 'saddle', 150, 150],
+  ] as const)('%s: the pairs kept are near, none runs the other way unnoticed, and at mid-fade nothing collapses', (_name, turn, which, farMin, reversedMin) => {
+    const scene = which === 'sphere' ? sphereScene : saddleScene
+    const particles = buildParticles(scene, COLOURS, params)
+    const frame = which === 'sphere' ? sphereFrame : saddleFrame
+    const a = frame(particles, 30)
+    const b = frame(particles, 30 + turn)
+    const there = reprojectStrokes(a.strokes, a.view, b.view, params)
+    const raw = matchStrokes(a.strokes, b.strokes)
+    // the measure is not vacuous: before refining there are far pairs and reversed ones
+    let far = 0
+    let reversedRaw = 0
+    let rawPairs = 0
+    for (let j = 0; j < b.strokes.count; j++) {
+      const i = raw.pair[j]
+      if (i < 0 || (there.alpha[i] <= 0.01 && b.strokes.alpha[j] <= 0.01)) continue
+      rawPairs++
+      const d = distances(there, i, b.strokes, j)
+      if (d.direct > 8) far++
+      if (d.flipped < 0.5 * d.direct && d.direct > 2) reversedRaw++
+    }
+    expect(far).toBeGreaterThan(farMin)
+    expect(reversedRaw).toBeGreaterThan(reversedMin)
+
+    const m = matchStrokes(a.strokes, b.strokes)
+    refineMatch(m, there, b.strokes)
+    const aligned: number[] = []
+    let kept = 0
+    let turned = 0
+    for (let j = 0; j < b.strokes.count; j++) {
+      const i = m.pair[j]
+      if (i < 0) continue
+      kept++
+      const d = distances(there, i, b.strokes, j)
+      // the alignment used is the nearer one, so no pair that runs the other way is eased point to point
+      const used = m.reversed[j] === 1 ? d.flipped : d.direct
+      const other = m.reversed[j] === 1 ? d.direct : d.flipped
+      expect(used).toBeLessThanOrEqual(other)
+      if (m.reversed[j] === 1) turned++
+      let width = 0
+      for (let k = 0; k < P; k++) width += b.strokes.width[P * j + k]
+      expect(used).toBeLessThanOrEqual(Math.max(PAIR_MIN_PX, (0.5 * width) / P) + 1e-6)
+      aligned.push(used)
+    }
+    aligned.sort((x, y) => x - y)
+    // the 99th percentile of what is eased (raw: 22 px) and the farthest are bounded by the rule
+    expect(aligned[Math.floor(0.99 * (aligned.length - 1))]).toBeLessThan(9)
+    expect(aligned[aligned.length - 1]).toBeLessThan(13)
+    // the ones that were pairs by seed and are not strokes of one place any more are a small share
+    expect((rawPairs - kept) / rawPairs).toBeLessThan(0.3)
+    expect(turned).toBeGreaterThan(reversedMin / 2) // and the ones that run the other way are found, and eased in their order
+
+    // at mid-fade a stroke that is eased keeps its length: none falls below 0.8 of the shorter of its two ends
+    const half = blendStrokes(there, b.strokes, m, 0.5)
+    let eased = 0
+    let shrunk = 0
+    for (let j = 0; j < b.strokes.count; j++) {
+      const i = m.pair[j]
+      if (i < 0) continue
+      const shortest = Math.min(pathLength(there, i), pathLength(b.strokes, j))
+      if (shortest < 2) continue
+      eased++
+      if (pathLength(half, j) < 0.8 * shortest) shrunk++
+    }
+    expect(eased).toBeGreaterThan(200)
+    expect(shrunk).toBe(0)
+  })
+})
+
 describe('on real frames of a sphere turned a few degrees', () => {
   const COLOURS = flatColours({ 0: [0.56, 0.12, 0.08], 1: [0.9, 0.01, 0.02] })
   const scene = sceneOf([sphereMesh({ radius: 0.6 }), tableMesh({ z: -0.6, half: 1.5, index: 1 })])
@@ -201,7 +411,7 @@ describe('on real frames of a sphere turned a few degrees', () => {
     const surface = Array.from({ length: b.strokes.count }, (_, j) => j).filter((j) => b.strokes.role[j] !== EDGE_ROLE)
     const paired = surface.filter((j) => m.pair[j] >= 0)
     expect(paired.length / surface.length).toBeGreaterThan(0.8)
-    // the old frame re-projected into the new view, against the new frame: the median pair is within two pixels (a 320 px picture: the median stroke is 0.2 px off in a figure of 900)
+    // the old frame re-projected into the new view, against the new frame: the median pair is within two pixels
     const there = reprojectStrokes(a.strokes, a.view, b.view, DEFAULT_PAINT_PARAMS)
     const moved = paired
       .map((j) => {

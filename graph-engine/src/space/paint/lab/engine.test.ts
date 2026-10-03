@@ -2,11 +2,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, setParam, type PaintParams } from '../params'
 import { createPaintFakeGl, timeline } from '../gl/fakePaintGl'
 import { encodeFloatTexel } from '../gl/gbuffer'
-import { edgeFade } from '../liveOrbit'
+import { edgeFade, matchStrokes } from '../liveOrbit'
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
 import { reprojectStrokes } from '../reproject'
 import { PaintSession, type FrameResponse, type SceneColourData, type SessionRequest, type SessionResponse } from '../session'
-import { ROLES, type PaintDebugMode, type PaintFrame, type PaintView, type StrokeBatch } from '../types'
+import { PATH_POINTS, ROLES, type PaintDebugMode, type PaintFrame, type PaintView, type StrokeBatch } from '../types'
 import type { SpaceScene } from '../../scene/types'
 import type { EngineEvents, EngineOptions, FrameStats, ModelHost, PaintEngine } from '../../../../../review/src/paintLabEngine'
 
@@ -899,6 +899,29 @@ describe('the model keeps painting while the camera drags', () => {
     s = shown()
     for (const [k, v] of appeared.slice(0, 40)) expect(alphaOf(s, k), `appeared ${k}`).toBeCloseTo(0.5 * newShown(1160).alpha[v[0]], 6)
     for (const [k, v] of went.slice(0, 40)) expect(alphaOf(s, k), `went ${k}`).toBeCloseTo(0.5 * oldShown(1160).alpha[v[0]], 6)
+
+    // and nothing is squeezed on the way: a stroke the two bases share keeps its length at mid-fade (the ones that run the other
+    // way are eased in their own order, not point to opposite point, which would draw them to a point)
+    const lengthOf = (b: StrokeBatch, j: number) => {
+      let l = 0
+      for (let k = 1; k < PATH_POINTS; k++) l += Math.hypot(b.path[2 * PATH_POINTS * j + 2 * k] - b.path[2 * PATH_POINTS * j + 2 * k - 2], b.path[2 * PATH_POINTS * j + 2 * k + 1] - b.path[2 * PATH_POINTS * j + 2 * k - 1])
+      return l
+    }
+    const shared = matchStrokes(first, next)
+    const oldNow = oldShown(1160)
+    const newNow = newShown(1160)
+    let checked = 0
+    let squeezed = 0
+    for (let j = 0; j < next.count; j++) {
+      const i = shared.pair[j]
+      if (i < 0 || next.role[j] === edge) continue
+      const shortest = Math.min(lengthOf(oldNow, i), lengthOf(newNow, j))
+      if (shortest < 2) continue
+      checked++
+      if (lengthOf(s, j) < 0.8 * shortest) squeezed++
+    }
+    expect(checked).toBeGreaterThan(50)
+    expect(squeezed).toBe(0)
 
     // 120 ms on: the new base's strokes, and nothing of the old one
     clock.t = 1220
