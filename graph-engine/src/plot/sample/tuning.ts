@@ -83,4 +83,15 @@ export const LIMITS = {
   // function defined on a scatter of points (sqrt(sin(1/x)) near 0) is NaN at some
   // offsets and finite at others, and a stray NaN at the end is not a domain edge.
   undefinedRun: 3,
+  // The confirming sample of a converging side is taken at this multiple of the last
+  // offset, between it and the one before (1 < factor < shrink). It has to be off the
+  // lattice h0 / shrink^k, and irrational is how: every offset has 1/x = shrink^k / h0,
+  // so a function periodic in 1/x with a period that divides that (sin(pi/x), cos(pi/x),
+  // 1/x - floor(1/x), at h0 = 0.1 and 0.08 from k = 2) reads the same everywhere on the
+  // lattice and looks like a hole. A rational factor can land on it again: at f = 2 the
+  // sample sits at 1/x = shrink^k / (2 h0), which for sin(pi/x) at h0 = 0.1 is
+  // pi * 5 * 4^k, a whole number of periods again, so it reads 0 like the lattice. With
+  // sqrt 2 the step from the lattice, (1/f - 1) shrink^k / h0, is irrational, so it is
+  // never a whole number of periods of any rational period.
+  confirmFactor: Math.SQRT2,
 }

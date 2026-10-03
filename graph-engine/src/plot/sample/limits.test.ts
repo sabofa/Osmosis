@@ -112,3 +112,36 @@ describe('classify, accounting', () => {
     expect(result).toMatchObject({ kind: 'hole', limit: { x: expect.closeTo(1, 12) } })
   })
 })
+
+describe('classify, functions periodic in 1/x', () => {
+  // The offsets are h0 / 4^k, so 1/x sits at 4^k / h0 on every one of them. At h0 = 0.1
+  // and 0.08, pi / x is a whole number of pi from k = 2 on: sin(pi/x) reads 0 at every
+  // sample and the lattice alone would call 0 a hole. The sample off the lattice that a
+  // converging side takes (h sqrt 2) must agree, and does not.
+  const aliased = (text: string, h0: number) =>
+    classify(pointFnOf(text, 'x', scopeOf()), 0, h0, { x: 40, y: 40 }, { points: 0, intervals: 0 })
+  for (const h0 of [0.1, 0.08]) {
+    for (const text of ['sin(pi/x)', 'cos(pi/x)', 'tan(pi/x)', '1/x - floor(1/x)']) {
+      it(`${text} at 0 is not a hole (h0 = ${h0})`, () => {
+        expect(aliased(text, h0).kind).toBe('unknown')
+      })
+    }
+  }
+  it('a real limit still passes the off-lattice sample, and the sample is counted', () => {
+    const run = (text: string, tc: number) => {
+      const counter = { points: 0, intervals: 0 }
+      const result = classify(pointFnOf(text, 'x', scopeOf()), tc, 0.1, { x: 40, y: 40 }, counter)
+      return { kind: result.kind, points: counter.points }
+    }
+    // 13 offsets a side, one confirming sample on each converging side, and the point
+    expect(run('sin(x)/x', 0)).toEqual({ kind: 'hole', points: 13 + 13 + 2 + 1 })
+    expect(run('sqrt(x)', 0)).toEqual({ kind: 'edge', points: 13 + 13 + 1 + 1 })
+    expect(run('1/x', 0)).toEqual({ kind: 'pole', points: 27 }) // a divergence is not confirmed
+  })
+})
+
+describe('classify, distances that overflow when squared', () => {
+  it('1/x^30 is a pole: 1e247 px squared is not Infinity', () => {
+    expect(c('1/x^30', 0).kind).toBe('pole')
+  })
+})

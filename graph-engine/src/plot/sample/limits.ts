@@ -22,6 +22,11 @@
 //        times the one before, and the tail estimate d r / (1 - r) (d the last
 //        difference, r its ratio to the one before) is under `convergePx`. The limit is
 //        the last sample plus that tail along the last difference;
+//      and then CONFIRMED, or the side is unknown: one more sample, off the lattice of
+//        offsets, at `confirmFactor` times the offset of the last finite sample, must lie
+//        within (the distance of the previous finite sample from the limit) + `convergePx`
+//        of the limit. Without it sin(pi/x), periodic in 1/x, reads as a hole at 0: every
+//        offset lands on a whole number of periods;
 //  - diverge: over the last `divergeRun` steps the screen distance from the first
 //    sample grows monotonically, each step's growth at least `divergeRatio` times the
 //    previous. That catches ln(x) (constant steps) as well as 1/x (growing ones). The
@@ -72,10 +77,10 @@ const wx = new Float64Array(CAPACITY)
 const wy = new Float64Array(CAPACITY)
 const finite = new Int32Array(CAPACITY)
 
+// hypot, not sqrt(a * a + b * b): the square of a distance past 1e154 px is Infinity,
+// and 1/x^30 at the last offsets is 1e247 px out. A pole is still a pole there.
 function screenDist(dx: number, dy: number, px: PxScale): number {
-  const a = dx * px.x
-  const b = dy * px.y
-  return Math.sqrt(a * a + b * b)
+  return Math.hypot(dx * px.x, dy * px.y)
 }
 
 // The screen distance between samples i and j.
@@ -136,6 +141,25 @@ function divergence(nf: number, px: PxScale): 1 | -1 | 0 {
   return wx[last] - wx[first] > 0 ? 1 : -1
 }
 
+// The offsets are a lattice: every sample sits at 1/h = shrink^k / h0. A function
+// periodic in 1/x whose period divides that, sin(pi/x) at h0 = 0.1 from k = 2 on,
+// reads the same at every sample, and the lattice alone would call its limit at 0 a
+// hole. So a side that looks convergent takes ONE sample more, off the lattice, at
+// h * confirmFactor (h the offset of the last finite sample), and must agree: it has
+// to lie within the distance the previous sample was from the limit, plus convergePx,
+// of the limit. A real limit has that sample between the last two and passes; an
+// aliased one lands elsewhere on its period, and the side is unknown.
+function confirmed(point: PointFn, tc: number, side: -1 | 1, h0: number, nf: number, limit: Vec2, px: PxScale, counter: EvalCounter): boolean {
+  // A sample's index is its k: the offsets run without gaps from k = 0.
+  const h = (h0 / LIMITS.shrink ** finite[nf - 1]) * LIMITS.confirmFactor
+  point(tc + side * h, out)
+  counter.points++
+  if (!(Number.isFinite(out[0]) && Number.isFinite(out[1]))) return false
+  const prev = finite[nf - 2]
+  const reach = screenDist(wx[prev] - limit.x, wy[prev] - limit.y, px) + LIMITS.convergePx
+  return screenDist(out[0] - limit.x, out[1] - limit.y, px) <= reach
+}
+
 // What the curve does on one side of tc, from h0 (the parameter step worth 4 px)
 // inwards. Every evaluation is counted in counter.points.
 export function oneSided(point: PointFn, tc: number, side: -1 | 1, h0: number, px: PxScale, counter: EvalCounter): Side {
@@ -158,9 +182,9 @@ export function oneSided(point: PointFn, tc: number, side: -1 | 1, h0: number, p
     for (let i = n - LIMITS.undefinedRun; i < n; i++) if (!(Number.isNaN(wx[i]) || Number.isNaN(wy[i]))) allNaN = false
     if (allNaN) return { kind: 'undefined' }
   }
-  if (windowConverges(nf, px)) return { kind: 'converge', at: { x: wx[finite[nf - 1]], y: wy[finite[nf - 1]] } }
-  const geometric = geometricLimit(nf, px)
-  if (geometric) return { kind: 'converge', at: geometric }
+  // Either test needs 4 finite samples, so `confirmed` has a last and a previous one.
+  const limit = windowConverges(nf, px) ? { x: wx[finite[nf - 1]], y: wy[finite[nf - 1]] } : geometricLimit(nf, px)
+  if (limit) return confirmed(point, tc, side, h0, nf, limit, px, counter) ? { kind: 'converge', at: limit } : UNKNOWN
   const sign = divergence(nf, px)
   if (sign !== 0) return { kind: 'diverge', sign }
   return UNKNOWN
