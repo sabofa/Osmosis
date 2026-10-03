@@ -1,6 +1,7 @@
 // Interval arithmetic for the twin (calc P1b). Each operation reads its
 // operands before writing `out`, so `out` may alias either. Nothing here
-// allocates per call: no closures, no arrays, no scratch objects.
+// allocates per call: no closures, no arrays, no objects (powGeneral keeps two
+// module-level scratch Ivs of its own, made once).
 
 import { DEFINED, down, hull, isEmpty, type Iv, iv, LIB, PARTIAL, set, setEmpty, up, type Verdict, worst } from './core'
 

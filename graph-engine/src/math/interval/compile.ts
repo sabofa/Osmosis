@@ -44,8 +44,10 @@
 // [0, 0] where decided false, [0, 1] otherwise. A decided answer is never better than its
 // operands' verdict (a partial operand is NaN somewhere, and andValue(0, NaN) is NaN), an
 // undecided one is at most DEFINED. A piecewise walks its pieces in order, runs only the nodes a
-// point of the box can reach, and takes the union of the values it may give; a union of bounds
-// that are zeros is sealed to keep the zero-bound invariant (sealZeros).
+// point of the box can reach, and takes the union of the values it may give; a condition caps its
+// verdict only when it may be NaN (PARTIAL or UNKNOWN: a decided one is one truth value over the
+// whole box, whatever jumps in its operands, and an undecided one makes the result DEFINED); a union
+// of bounds that are zeros is sealed to keep the zero-bound invariant (sealZeros).
 
 import type { Expr } from '../../parser/types'
 import { builtinArity, builtinShadowError, compileScalar, namesValueIn } from '../compile'
@@ -82,8 +84,8 @@ interface INode {
   // Whether it must not be folded: it holds a loop, or an integral that reads a @param or has a
   // loop in a bound (see the header).
   readonly keep: boolean
-  // Whether `out` is a single value that nothing writes but this node (a constant that is folded:
-  // once it has run, if it is a constant that reads no @param).
+  // Whether `out` is a single value that nothing writes but this node: a constant that is folded. One
+  // that reads no @param holds that value from its first run on (the fold is that run), not from compile.
   point: boolean
 }
 

@@ -543,7 +543,7 @@ describe('an interval exponent over a base that reaches zero or below', () => {
   // The case that found it: a P3 certifier of x^y = y^x bisects x^y - y^x over a window of both signs,
   // and discards a cell when the difference's box excludes 0. With the whole line for every base that
   // reaches below 0, 203,051 of the 262,144 cells of the last level at 512 px survived (the true curve
-  // crosses a few hundred); with the scalar's NaN left out, 9,000.
+  // crosses a few hundred); with the scalar's NaN left out, 5,951.
   it('x^y - y^x over a window of both signs: the NaN half is discarded, not bisected to the pixel', () => {
     const X = iv()
     const Y = iv()
@@ -570,8 +570,8 @@ describe('an interval exponent over a base that reaches zero or below', () => {
       visit(xm, x1, ym, y1, depth + 1)
     }
     visit(-5.0001, 4.9999, -5.0002, 4.9998, 0)
-    // 65,536 cells at this depth; the whole-line answer kept 80% of them
-    expect(kept).toBeLessThan(6500)
+    // 65,536 cells at this depth: the whole-line answer kept 51,971 of them (79%), this one keeps 2,583
+    expect(kept).toBeLessThan(4000)
   })
 })
 
