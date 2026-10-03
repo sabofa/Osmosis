@@ -22,6 +22,7 @@ import type { ShadowCaster } from './shadow'
 
 export const AO_RAYS = 8
 const GOLDEN = 0.61803398875
+const JITTER = new Float64Array(2 * AO_RAYS)
 
 // Occlusion 0..1 at (x, y, z) on a surface whose (side) unit normal is (nx, ny, nz). `caster` holds the opaque meshes'
 // BVHs; `radius` is R, world units; `rng` yields uniform numbers in [0, 1) (17 are drawn).
@@ -51,12 +52,17 @@ export function occlusionAt(
   const ix = nx + 0.0131 * t1x + 0.0071 * t2x
   const iy = ny + 0.0131 * t1y + 0.0071 * t2y
   const iz = nz + 0.0131 * t1z + 0.0071 * t2z
-  if (caster.inside(ox, oy, oz, ix, iy, iz)) return 1
+  // (every point draws its 17 numbers, whether or not it goes on to cast: what it draws never depends on what it found)
   const base = rng() * TAU
+  for (let k = 0; k < AO_RAYS; k++) {
+    JITTER[2 * k] = rng()
+    JITTER[2 * k + 1] = rng()
+  }
+  if (caster.inside(ox, oy, oz, ix, iy, iz)) return 1
   let acc = 0
   for (let k = 0; k < AO_RAYS; k++) {
-    const phi = base + (k / AO_RAYS) * TAU + (rng() - 0.5) * 0.4
-    const u = (k * GOLDEN + rng() * 0.1) % 1
+    const phi = base + (k / AO_RAYS) * TAU + (JITTER[2 * k] - 0.5) * 0.4
+    const u = (k * GOLDEN + JITTER[2 * k + 1] * 0.1) % 1
     const sinT = Math.sqrt(u)
     const cosT = Math.sqrt(1 - u)
     const c = Math.cos(phi) * sinT

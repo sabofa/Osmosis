@@ -10,7 +10,10 @@
 // SIDES. The per-frame model turns every normal toward the viewer, so an open sheet is painted from whichever side is
 // seen. The plan is therefore made for both sides of an open mesh: side +1 uses the vertex normal as given, side -1 its
 // negation, and every quantity that reads the normal (N·L, the shadow test's lift, the sky and bounce terms of the plan,
-// the occlusion's hemisphere) reads that side's. A closed mesh has side +1 only. A veil (opacity < 1) is not in the
+// the occlusion's hemisphere) reads that side's. A closed OPAQUE mesh has side +1 only, and its side +1 is the OUTSIDE:
+// the kernel does not orient closed surfaces, so the normal is turned by the surface's `orient` (surface.ts ORIENTATION).
+// A closed VEIL has both sides (the far half of a translucent solid is seen through the near half, lit with the normal
+// turned toward the viewer), side +1 being its outside too. A veil (opacity < 1) is not in the
 // shadow map and casts nothing: its plan is made unshadowed and unoccluded, as roles.ts whereOf makes it.
 //
 // ADAPTIVE REFINEMENT. A plan per vertex blends across a triangle. Where the families meet (the terminator, a cast
@@ -22,7 +25,6 @@
 // A vertex's values are stored as Float32 and the plan is made FROM the stored N·L and occlusion, so `u` is exactly
 // planSample of the stored inputs (the bit-for-bit test).
 
-import { randomFor } from '../../../style/random'
 import type { MeshMark, SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
 import { compileCurves, type CompiledCurves } from '../model/respond'
@@ -73,7 +75,7 @@ export interface WorldPlanStats {
 export interface WorldPlan {
   surfaces: (RefinedSurface | null)[] // per scene mark: opaque meshes and veils (null for non-meshes)
   front: (SidePlan | null)[] // side +1
-  back: (SidePlan | null)[] // side -1 (null for closed meshes)
+  back: (SidePlan | null)[] // side -1 (null for closed opaque meshes: surface.outsideOnly)
   ground: Uint8Array // per mark (view.ts groundMarks)
   veil: Uint8Array // per mark (opacity < 1)
   capU: number
@@ -134,26 +136,69 @@ function grownPlan(old: SidePlan, nv: number, nt: number): SidePlan {
   return out
 }
 
+// The occlusion rays of a vertex come from a stream seeded by WHAT THE VERTEX IS (the seed, the mark, the side, its position),
+// not by how many vertices came before it: a vertex that exists in two bakes of the same mesh (one refined a little more
+// somewhere else, a refinement pass added) gets the same rays, so the same occlusion, bit for bit. The seed is an FNV-1a hash of
+// the integers (seed, mark, side, the position in units of 1e-6 of the mesh's bounding-box diagonal from its corner), the stream
+// is mulberry32 (random.ts's own generator) from it. Every vertex draws the same number of values.
+export interface AoStreams {
+  reset(side: 1 | -1, x: number, y: number, z: number): void
+  next: () => number
+}
+
+export function aoStreams(seed: number, mark: number, lo: readonly number[], diag: number): AoStreams {
+  const q = 1 / (1e-6 * (diag > 0 ? diag : 1))
+  const base = fnvWord(fnvWord(0x811c9dc5, Math.floor(seed) | 0), mark | 0)
+  let state = 0
+  return {
+    reset(side, x, y, z) {
+      let h = fnvWord(base, side === 1 ? 1 : 2)
+      h = fnvWord(h, Math.round((x - lo[0]) * q))
+      h = fnvWord(h, Math.round((y - lo[1]) * q))
+      h = fnvWord(h, Math.round((z - lo[2]) * q))
+      state = h >>> 0
+    },
+    next() {
+      state = (state + 0x6d2b79f5) >>> 0
+      let t = state
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    },
+  }
+}
+
+// FNV-1a over the four bytes of a 32-bit integer.
+function fnvWord(h: number, w: number): number {
+  for (let k = 0; k < 4; k++) {
+    h ^= (w >>> (8 * k)) & 255
+    h = Math.imul(h, 0x01000193)
+  }
+  return h
+}
+
 const ZS = newZoneSample()
 const PF = newPlanFacts()
 const VIS = { vis: 1, dist: Infinity }
 
 // The plan at vertices [from, to) of one side.
 function planVertices(
-  c: Ctx, plan: SidePlan, s: RefinedSurface, side: 1 | -1, from: number, to: number, opaque: boolean, ground: boolean, rng: () => number,
+  c: Ctx, plan: SidePlan, s: RefinedSurface, side: 1 | -1, from: number, to: number, opaque: boolean, ground: boolean, ao: AoStreams,
 ): void {
   const { params, curves, L } = c
   const p = s.positions
   for (let i = from; i < to; i++) {
-    const nx = side * s.normals[3 * i]
-    const ny = side * s.normals[3 * i + 1]
-    const nz = side * s.normals[3 * i + 2]
+    // (the side's normal: the side's sign, and for a closed surface the orientation that makes side +1 the outside)
+    const o = side * s.orient
+    const nx = o * s.normals[3 * i]
+    const ny = o * s.normals[3 * i + 1]
+    const nz = o * s.normals[3 * i + 2]
     // (the stored N·L and occlusion are what the plan is made from)
     const nl = Math.fround(nx * L[0] + ny * L[1] + nz * L[2])
     let vis = 1
     let dist = Infinity
     let shadow = false
-    let ao = 0
+    let occ = 0
     if (opaque) {
       // the renderer looks the shadow map up only where the surface faces the light
       if (nl > 0) {
@@ -162,15 +207,18 @@ function planVertices(
         dist = VIS.dist
       }
       shadow = nl <= 0 || vis < 0.5
-      if (params.environment.occlusion > 0) ao = Math.fround(occlusionAt(c.scene, c.caster, p[3 * i], p[3 * i + 1], p[3 * i + 2], nx, ny, nz, c.aoRadius, rng))
+      if (params.environment.occlusion > 0) {
+        ao.reset(side, p[3 * i], p[3 * i + 1], p[3 * i + 2])
+        occ = Math.fround(occlusionAt(c.scene, c.caster, p[3 * i], p[3 * i + 1], p[3 * i + 2], nx, ny, nz, c.aoRadius, ao.next))
+      }
     }
     plan.nl[i] = nl
     plan.shadow[i] = shadow ? 1 : 0
     plan.vis[i] = vis
     plan.shadowDist[i] = dist
-    plan.ao[i] = ao
+    plan.ao[i] = occ
     // (the plan's numbers from planSample, as the per-pixel plan makes them: value.ts planFacts, with the ground flag of the cast gate)
-    planFacts(params, curves, c.uCanvas, nl, shadow, nx, ny, nz, ao, ground, ZS, PF)
+    planFacts(params, curves, c.uCanvas, nl, shadow, nx, ny, nz, occ, ground, ZS, PF)
     plan.key[i] = PF.key
     plan.value[i] = PF.value
     plan.u[i] = PF.u
@@ -242,7 +290,7 @@ function longestEdge(s: RefinedSurface, t: number): number {
 
 // The plan of every mesh of a scene, for a WORLD light direction (toward the light). `referenceWorldPerPx` is the world
 // size of a CSS px at the authored framing: it turns the px parameters (the 12 px cell, the 3 px ring, the occlusion
-// radius) into world units. Deterministic: the occlusion is drawn from randomFor('paint/bake/ao/' + mark, seed).
+// radius) into world units. Deterministic: a vertex's occlusion rays are seeded by (seed, mark, side, position), see aoStreams.
 export function buildWorldPlan(
   scene: SpaceScene, lightDir: [number, number, number], params: PaintParams, referenceWorldPerPx: number, options: WorldPlanOptions = {},
 ): WorldPlan {
@@ -285,10 +333,18 @@ export function buildWorldPlan(
     const own = Math.floor(mesh.indices.length / 3)
     const maxT = Math.max(own, Math.floor(budget * share))
     let s = refineSurface(mesh, m, cell, maxT)
-    const rng = randomFor(`paint/bake/ao/${m}`, params.seed)
-    const draw = () => rng.next()
+    const lo = [Infinity, Infinity, Infinity]
+    const hi = [-Infinity, -Infinity, -Infinity]
+    for (let i = 0; i < s.positions.length / 3; i++) {
+      for (let k = 0; k < 3; k++) {
+        lo[k] = Math.min(lo[k], s.positions[3 * i + k])
+        hi[k] = Math.max(hi[k], s.positions[3 * i + k])
+      }
+    }
+    // (the box of the first surface: refining only adds midpoints, which are inside it, so it is the box of every later one)
+    const streams = aoStreams(params.seed, m, lo, Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]))
 
-    const sides: (1 | -1)[] = s.closed ? [1] : [1, -1]
+    const sides: (1 | -1)[] = s.outsideOnly ? [1] : [1, -1]
     let plans = sides.map(() => newSidePlan(0, 0))
     let passes = 0
     let done = 0
@@ -296,9 +352,8 @@ export function buildWorldPlan(
       const nv = s.positions.length / 3
       const nt = s.indices.length / 3
       plans = plans.map((p) => grownPlan(p, nv, nt))
-      // (a vertex's front and back are drawn together, in vertex order)
       for (let i = done; i < nv; i++) {
-        sides.forEach((side, k) => planVertices(ctx, plans[k], s, side, i, i + 1, opaque, isGround, draw))
+        sides.forEach((side, k) => planVertices(ctx, plans[k], s, side, i, i + 1, opaque, isGround, streams))
       }
       done = nv
       if (passes >= MAX_PASSES) break
@@ -353,7 +408,7 @@ export const newPlanAt = (): PlanAt => ({ u: 0, value: 0, zone: 0, fam: 0, trans
 
 // The plan at a point of a mark's surface, for one side: the vertex values interpolated barycentrically; the zone and the
 // family from the nearest vertex (they do not blend). A cast shadow's distance is blended over the vertices that have one
-// (a vertex in the light has none: Infinity). A closed mesh has only side +1: side -1 reads it too.
+// (a vertex in the light has none: Infinity). A closed opaque mesh has only side +1: side -1 reads it too.
 export function planAt(plan: WorldPlan, mark: number, side: 1 | -1, p: SurfacePoint, out: PlanAt): PlanAt {
   const s = plan.surfaces[mark]
   const sp = side === -1 && plan.back[mark] ? plan.back[mark] : plan.front[mark]

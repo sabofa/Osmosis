@@ -23,6 +23,16 @@
 //   linear in the source triangle however deep it goes. Where the source normal is undefined (zero) the face
 //   normal stands in.
 //
+//   ORIENTATION. The kernel never orients a closed surface's normals: a u-first parametric sphere and an implicit
+//   1 - x^2 - y^2 - z^2 = 0 point INWARD. The bake's "side +1" of a closed surface must be the OUTSIDE (the side that is
+//   seen, and lit, and painted), so each closed mesh is oriented once: `orient` is +1 where its normals point outward,
+//   -1 where they point inward, from the sign of the sum over its triangles of area * n * (c - centroid) (3 x the
+//   enclosed volume, by the divergence theorem, signed by the normals). EVERY use of a closed surface's side +1 normal
+//   is `orient * n` (`normalOf` does it; the plan, the shadow lift, the occlusion's hemisphere and the caster's inside
+//   test read it through it). An open surface has orient +1: its side +1 is the side its normals point to.
+//   TASK 3: write BakedSurface.normals as orient * n (`normals` and `rawNormals` here are the mesh's own), so that the
+//   contract's "side +1" is outward for a closed mesh; and BakedSurface.closed is `outsideOnly`, not `closed`.
+//
 // A BUDGET (maxTriangles) bounds the work: the surface is refined in levels (every edge at most a factor of √2
 // shorter than the last), and a level that would pass the budget is not taken: the surface stays at the coarser
 // level and says so (`budgetHit`).
@@ -43,7 +53,14 @@ export interface RefinedSurface {
   indices: Uint32Array
   canon: Uint32Array // canonical vertex id per vertex (coincident positions merged at 1e-5 of the bbox diagonal, as contours.ts canonOf)
   adj: Int32Array // 3 per triangle: the triangle across edge (v0v1, v1v2, v2v0), -1 on a border
-  closed: boolean // no border edges
+  closed: boolean // no border edges (the topological fact: seams and poles merged)
+  // For a closed surface, the sign of its normals against the outside: +1 outward, -1 inward (see ORIENTATION above). Side +1 of a
+  // closed surface is the OUTWARD side: use orient * normal wherever its side +1 normal is used. Open surfaces: +1.
+  orient: 1 | -1
+  // Painted from side +1 only: closed AND opaque. A closed VEIL is closed but both sides are painted (the per-frame model shows
+  // the far half of a translucent solid through its near half, lit with the normal turned toward the viewer). This is what the
+  // contract's BakedSurface.closed means ("seen from side +1 only"); the plan has no back plan exactly when it is set.
+  outsideOnly: boolean
   area: Float64Array // per triangle, world
   // buildBvh over positions and indices. Built on first use (a surface that is only refined further never needs it).
   readonly bvh: Bvh
@@ -322,7 +339,7 @@ class Work {
 
   // ---- out ----
 
-  toSurface(mark: number, closed: boolean, budgetHit: boolean): RefinedSurface {
+  toSurface(mark: number, form: Form, budgetHit: boolean): RefinedSurface {
     const { nv, nt } = this
     const positions = this.pos.slice(0, 3 * nv)
     const rawNormals = this.raw.slice(0, 3 * nv)
@@ -380,7 +397,9 @@ class Work {
       indices,
       canon: this.canon.slice(0, nv),
       adj: this.adj.slice(0, 3 * nt),
-      closed,
+      closed: form.closed,
+      orient: form.orient,
+      outsideOnly: form.outsideOnly,
       area,
       get bvh(): Bvh {
         bvh ??= buildBvh(positions, indices)
@@ -390,6 +409,13 @@ class Work {
       budgetHit,
     }
   }
+}
+
+// What a mesh is, as a whole: no border, which way its normals point, and whether it is painted from the outside only.
+interface Form {
+  closed: boolean
+  orient: 1 | -1
+  outsideOnly: boolean
 }
 
 interface Snapshot {
@@ -413,7 +439,7 @@ function grow<T extends Float64Array | Int32Array | Uint32Array | Uint8Array>(a:
 
 // ---- building the working mesh from a scene mesh ----
 
-function fromMesh(mesh: MeshMark): { work: Work; closed: boolean } {
+function fromMesh(mesh: MeshMark): { work: Work; form: Form } {
   const nvSrc = Math.floor(mesh.positions.length / 3)
   const finite = new Uint8Array(nvSrc)
   const lo = [Infinity, Infinity, Infinity]
@@ -501,7 +527,53 @@ function fromMesh(mesh: MeshMark): { work: Work; closed: boolean } {
   })
 
   const closed = linkTriangles(work)
-  return { work, closed }
+  return { work, form: { closed, orient: closed ? orientationOf(work) : 1, outsideOnly: closed && mesh.style.opacity >= 1 } }
+}
+
+// Which way a closed mesh's normals point: the sum over its triangles of area * n * (c - centroid), n the unit mean of the triangle's
+// vertex normals (a triangle whose normals cancel or are undefined is left out), c its centre, centroid the area-weighted centre of
+// the surface. By the divergence theorem that sum is 3 x the enclosed volume where the normals point out, and minus that where they
+// point in: any closed surface, convex or not, a torus included. 0 (nothing to go by) is outward.
+function orientationOf(work: Work): 1 | -1 {
+  const { pos, raw, tv } = work
+  const centre = (t: number): [number, number, number, number] => {
+    const a = 3 * tv[3 * t]
+    const b = 3 * tv[3 * t + 1]
+    const c = 3 * tv[3 * t + 2]
+    const e1x = pos[b] - pos[a], e1y = pos[b + 1] - pos[a + 1], e1z = pos[b + 2] - pos[a + 2]
+    const e2x = pos[c] - pos[a], e2y = pos[c + 1] - pos[a + 1], e2z = pos[c + 2] - pos[a + 2]
+    const area = 0.5 * Math.hypot(e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x)
+    return [area, (pos[a] + pos[b] + pos[c]) / 3, (pos[a + 1] + pos[b + 1] + pos[c + 1]) / 3, (pos[a + 2] + pos[b + 2] + pos[c + 2]) / 3]
+  }
+  let total = 0
+  let cx = 0
+  let cy = 0
+  let cz = 0
+  for (let t = 0; t < work.nt; t++) {
+    const [area, x, y, z] = centre(t)
+    total += area
+    cx += area * x
+    cy += area * y
+    cz += area * z
+  }
+  if (!(total > 0)) return 1
+  cx /= total
+  cy /= total
+  cz /= total
+  let sum = 0
+  for (let t = 0; t < work.nt; t++) {
+    const [area, x, y, z] = centre(t)
+    const a = 3 * tv[3 * t]
+    const b = 3 * tv[3 * t + 1]
+    const c = 3 * tv[3 * t + 2]
+    const nx = raw[a] + raw[b] + raw[c]
+    const ny = raw[a + 1] + raw[b + 1] + raw[c + 1]
+    const nz = raw[a + 2] + raw[b + 2] + raw[c + 2]
+    const l = Math.hypot(nx, ny, nz)
+    if (!(l > 1e-9)) continue
+    sum += (area * (nx * (x - cx) + ny * (y - cy) + nz * (z - cz))) / l
+  }
+  return sum < 0 ? -1 : 1
 }
 
 // Fill the adjacency of a working mesh by canonical edges; true when no edge has a single triangle. An edge with three
@@ -570,13 +642,14 @@ function fromSurface(s: RefinedSurface): Work {
   return work
 }
 
-// Whether a mesh has no border (every edge of its triangles, taken between canonical vertices, is shared by two), cached by mesh.
-const CLOSED = new WeakMap<MeshMark, boolean>()
-export function isClosedMesh(mesh: MeshMark): boolean {
-  let known = CLOSED.get(mesh)
+// Whether a mesh has no border (every edge of its triangles, taken between canonical vertices, is shared by two) and which way
+// its normals point if it has none (see ORIENTATION), cached by mesh: what the shadow caster needs of the meshes it casts from.
+const FORMS = new WeakMap<MeshMark, Form>()
+export function closedForm(mesh: MeshMark): { closed: boolean; orient: 1 | -1 } {
+  let known = FORMS.get(mesh)
   if (known === undefined) {
-    known = fromMesh(mesh).closed
-    CLOSED.set(mesh, known)
+    known = fromMesh(mesh).form
+    FORMS.set(mesh, known)
   }
   return known
 }
@@ -587,23 +660,23 @@ export function isClosedMesh(mesh: MeshMark): boolean {
 // pass `maxTriangles`: then the surface stays at the last level that fit, and `budgetHit` says so. A surface with an
 // edge already short enough is returned as it is (cleaned of degenerate triangles, and with its adjacency).
 export function refineSurface(mesh: MeshMark, mark: number, maxEdge: number, maxTriangles: number): RefinedSurface {
-  const { work, closed } = fromMesh(mesh)
+  const { work, form } = fromMesh(mesh)
   let budgetHit = false
   if (work.nt > 0 && Number.isFinite(maxEdge) && maxEdge > 0) {
     let target = work.maxLen()
     while (target > maxEdge) {
       target = Math.max(maxEdge, target / Math.SQRT2)
-      // a level can roughly double the triangles: take a snapshot only where that could pass the budget
-      const risky = work.nt * 2.2 > maxTriangles
-      const before = risky ? work.snapshot() : null
+      // a level that runs out of budget is taken back, whole: the surface stays at the coarser level (a level of a sliver-heavy mesh
+      // can add many times the triangles it started with, so there is no telling beforehand that it will fit)
+      const before = work.snapshot()
       if (!work.refineTo(target, maxTriangles)) {
-        if (before) work.restore(before)
+        work.restore(before)
         budgetHit = true
         break
       }
     }
   }
-  return work.toSurface(mark, closed, budgetHit)
+  return work.toSurface(mark, form, budgetHit)
 }
 
 // A copy of `s` in which every triangle for which `needs(tri)` holds and whose longest edge is over `minEdge` has been
@@ -626,8 +699,9 @@ export function refineWhere(s: RefinedSurface, needs: (tri: number) => boolean, 
     }
     if (budgetHit && !work.done[t]) break
   }
-  if (work.nt === s.indices.length / 3) return s.budgetHit === budgetHit ? s : work.toSurface(s.mark, s.closed, budgetHit)
-  return work.toSurface(s.mark, s.closed, budgetHit)
+  const form: Form = { closed: s.closed, orient: s.orient, outsideOnly: s.outsideOnly }
+  if (work.nt === s.indices.length / 3) return s.budgetHit === budgetHit ? s : work.toSurface(s.mark, form, budgetHit)
+  return work.toSurface(s.mark, form, budgetHit)
 }
 
 // ---- points on a surface ----
@@ -637,6 +711,9 @@ export interface SurfacePoint {
   // Barycentric weights of the triangle's second and third vertices (the first's is 1 - b1 - b2), as TriangleHit.
   b1: number
   b2: number
+  // Set by `locate`: the world distance from the point asked for to this one (0 for a point on the surface, up to `reach`): a walk that
+  // runs off an open border reads it, and stops, instead of sliding along the border.
+  dist?: number
 }
 
 const HIT = { b1: 0, b2: 0, d2: 0 }
@@ -693,7 +770,9 @@ function closestOnTriangle(
 // The point of the surface that is `p`, found again: the nearest point of any triangle within `reach` of (x, y, z). Where
 // several triangles are as near (the point is on an edge or a vertex, or a self-touching sheet passes through it) the one
 // whose normal there agrees best with (nx, ny, nz) wins. A particle's point is on the surface to rounding, so this is
-// exact for it. False when nothing is within `reach`.
+// exact for it. FALSE when nothing is within `reach` (a point past an open border by more than the reach is not located: it is not
+// slid onto the border); when true, `out.dist` is the distance to the point found, never over `reach`. The normal asked for is in the
+// mesh's own orientation (a particle's normal), not turned by `orient`.
 export function locate(s: RefinedSurface, x: number, y: number, z: number, nx: number, ny: number, nz: number, reach: number, out: SurfacePoint): boolean {
   const bvh = s.bvh
   if (bvh.left.length === 0 || !(reach >= 0)) return false
@@ -738,6 +817,7 @@ export function locate(s: RefinedSurface, x: number, y: number, z: number, nx: n
         out.tri = t
         out.b1 = hit.b1
         out.b2 = hit.b2
+        out.dist = d
         bestCos = cos
         found = true
       }
@@ -756,7 +836,8 @@ export function pointOf(s: RefinedSurface, p: SurfacePoint, out: Float64Array | 
   for (let k = 0; k < 3; k++) out[k] = w0 * s.positions[a + k] + p.b1 * s.positions[b + k] + p.b2 * s.positions[c + k]
 }
 
-// The unit normal of a surface point, for `side` (+1 the normal as the mesh gives it, -1 the opposite): the source
+// The unit normal of a surface point, for `side` (+1 the normal as the mesh gives it, turned by `orient` on a closed mesh so that +1 is
+// the outward side, -1 the opposite): the source
 // normals interpolated and renormalised, as the particles' are; the face normal where they cancel.
 export function normalOf(s: RefinedSurface, p: SurfacePoint, side: 1 | -1, out: Float64Array | number[]): void {
   const ia = 3 * s.indices[3 * p.tri]
@@ -782,7 +863,8 @@ export function normalOf(s: RefinedSurface, p: SurfacePoint, side: 1 | -1, out: 
     z = 1
     l = 1
   }
-  out[0] = (side * x) / l
-  out[1] = (side * y) / l
-  out[2] = (side * z) / l
+  const k = side * s.orient
+  out[0] = (k * x) / l
+  out[1] = (k * y) / l
+  out[2] = (k * z) / l
 }

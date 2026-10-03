@@ -9,6 +9,8 @@ import { gIndex, makeFrameCtx, project } from '../model/view'
 import { occlusionAt } from './occlusion'
 import { makeShadowCaster, type ShadowCaster } from './shadow'
 import { refineSurface } from './surface'
+import { worldLight } from '../model/valueFinalFixture'
+import type { MeshMark } from '../../scene/types'
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -260,5 +262,112 @@ describe('world occlusion against the screen-space version (calibration; the num
     }
     expect(far.screen).toBeLessThan(0.01)
     expect(far.world).toBeLessThan(0.01)
+  })
+})
+
+// The same mesh with its normals the other way: the kernel never orients a closed surface, and half of them point in.
+const inward = (m: MeshMark): MeshMark => ({ ...m, normals: m.normals.map((v) => -v) })
+
+describe('a closed mesh whose normals point inward casts and occludes as one whose normals point out', () => {
+  const outer = sceneOf([SPHERE, TABLE])
+  const inner = sceneOf([inward(SPHERE), TABLE])
+  const L = [0.3, 0.1, 0.9]
+  const a = makeShadowCaster(outer, L)
+  const b = makeShadowCaster(inner, L)
+
+  it('gives the same visibility and shadow distance on the table, under the sphere and far from it', () => {
+    let compared = 0
+    const A = { vis: 0, dist: 0 }
+    const B = { vis: 0, dist: 0 }
+    for (const [x, y] of [[0, 0], [0.3, 0.1], [-0.4, 0.2], [1.2, 0.5], [2.4, -0.3], [3, 0], [0, 3], [-3, -3], [0.6, 0.2], [-1.4, -1.0]]) {
+      a.visibility(x, y, 0, 0, 0, 1, A)
+      b.visibility(x, y, 0, 0, 0, 1, B)
+      expect([x, y, B.vis, B.dist]).toEqual([x, y, A.vis, A.dist])
+      compared++
+    }
+    expect(compared).toBe(10)
+    // under the sphere it is shadowed at the distance to its underside (not 0: the table is not inside it), far from it lit
+    a.visibility(0, 0, 0, 0, 0, 1, A)
+    expect(A.vis).toBeLessThan(0.5)
+    expect(A.dist).toBeGreaterThan(0.3)
+    b.visibility(3, 0, 0, 0, 0, 1, B)
+    expect(B.vis).toBe(1)
+    expect(B.dist).toBe(Infinity)
+  })
+
+  it('knows the inside of the sphere from the outside, whichever way its normals point', () => {
+    for (const c of [a, b]) {
+      expect(c.inside(0.01, 0.02, 1.5, 0.01, 0.013, 1)).toBe(true)
+      expect(c.inside(0.3, 0.2, 1.2, 0.6, 0, 0.8)).toBe(true)
+      expect(c.inside(0.01, 0.02, 3.5, 0.01, 0.013, 1)).toBe(false)
+      expect(c.inside(3, 0.01, 0.5, 0.01, 0.013, 1)).toBe(false)
+      expect(c.inside(1.5, 0.3, 0.05, 0.1, 0.2, 1)).toBe(false) // on the table beside the sphere
+    }
+  })
+
+  it('has the table’s occlusion 0 away from the contact of a resting sphere, and high at it, the same for both', () => {
+    const rest = (m: MeshMark) => sceneOf([m, tableMesh({ z: 0, half: 4, index: 1 })])
+    const out = sphereMesh({ radius: 1, centre: [0, 0, 1], index: 0 })
+    const scenes = [rest(out), rest(inward(out))]
+    const values = scenes.map((sc) => {
+      const c = makeShadowCaster(sc, [0, 0, 1])
+      return [[1.5, 0, 0], [2.5, 0.4, 0], [0.4, 0, 0], [0.01, 0.02, 0]].map(([x, y, z]) => {
+        const rng = randomFor('test/ao', 5)
+        return occlusionAt(sc, c, x, y, z, 0, 0, 1, 0.3, () => rng.next())
+      })
+    })
+    expect(values[1]).toEqual(values[0])
+    expect(values[1][0]).toBe(0)
+    expect(values[1][1]).toBe(0)
+    expect(values[1][2]).toBeGreaterThan(0.2)
+    expect(values[1][3]).toBe(1)
+  })
+})
+
+describe('the occlusion reads the side’s normal', () => {
+  // an opaque sheet 0.1 over a table: its underside faces the table, its top faces the sky
+  const sheet = quadMesh({ origin: [-2, -2, 0.1], e1: [4, 0, 0], e2: [0, 4, 0], n: 4, index: 0 })
+  const scene = sceneOf([sheet, tableMesh({ z: 0, half: 4, index: 1 })])
+  const caster = makeShadowCaster(scene, [0, 0, 1])
+  const ao = (nz: number, seed = 1): number => {
+    const rng = randomFor('test/ao-side', seed)
+    return occlusionAt(scene, caster, 0.3, 0.2, 0.1, 0, 0, nz, 0.3, () => rng.next())
+  }
+
+  it('is high on the side that faces the table, and 0 on the side that faces the sky', () => {
+    for (const seed of [1, 2, 3]) {
+      expect(ao(-1, seed)).toBeGreaterThan(0.3)
+      expect(ao(1, seed)).toBe(0)
+    }
+  })
+})
+
+describe('the shadow bias lift is what keeps a surface from shadowing itself', () => {
+  // a coarse sphere (12 x 8) refined at its edge midpoints, which are on its facets, under the sphere's smooth normals: the places a ray
+  // that starts exactly on the surface runs into the facet beside it
+  const mesh = sphereMesh({ radius: 1, nu: 12, nv: 8, index: 0 })
+  const scene = sceneOf([mesh])
+  const s = refineSurface(mesh, 0, 0.12, 100_000)
+  const selfShadowed = (L: number[], biasScale: number): number => {
+    const caster = makeShadowCaster(scene, L, { biasScale })
+    let near = 0
+    let shadowed = 0
+    for (let i = 0; i < s.positions.length / 3; i++) {
+      const nl = s.normals[3 * i] * L[0] + s.normals[3 * i + 1] * L[1] + s.normals[3 * i + 2] * L[2]
+      if (nl < 0.05 || nl > 0.3) continue
+      near++
+      caster.visibility(s.positions[3 * i], s.positions[3 * i + 1], s.positions[3 * i + 2], s.normals[3 * i], s.normals[3 * i + 1], s.normals[3 * i + 2], V)
+      if (V.vis < 0.5) shadowed++
+    }
+    expect(near).toBeGreaterThan(250)
+    return shadowed
+  }
+
+  it('has no lit vertex near the terminator (N.L 0.05 to 0.3) in its own shadow with the bias, and many without it', () => {
+    for (const [azimuth, elevation] of [[30, 40], [100, 15], [210, 60]]) {
+      const L = worldLight(azimuth, elevation)
+      expect(selfShadowed(L, 1), `light ${azimuth}/${elevation} with the bias`).toBe(0)
+      expect(selfShadowed(L, 0), `light ${azimuth}/${elevation} without it`).toBeGreaterThan(10)
+    }
   })
 })

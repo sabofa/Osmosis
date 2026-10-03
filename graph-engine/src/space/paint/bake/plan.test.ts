@@ -6,7 +6,10 @@ import { RING_PX } from '../model/underpaint'
 import { worldLight } from '../model/valueFinalFixture'
 import { FAM_LIGHT, FAM_SHADOW, familyBound, holdFamily, newPlanFacts, newZoneSample, planFacts, planSample, type PlanMap } from '../model/value'
 import { buildWorldPlan, familyBoundAt, holdFamilyAt, newPlanAt, planAt, triangleGradients, type SidePlan, type WorldPlan } from './plan'
-import { locate, normalOf, refineSurface, type SurfacePoint } from './surface'
+import { closedForm, locate, normalOf, refineSurface, type SurfacePoint } from './surface'
+import { parseSpec } from '../../../parser/parseSpec'
+import { createSpaceKernel } from '../../kernel/index'
+import type { MeshMark } from '../../scene/types'
 
 // A plan over a refined surface is heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 120_000 })
@@ -443,5 +446,212 @@ describe('the plan at a point, and for the particles', () => {
     }
     expect(worstN).toBeLessThan(1e-5)
     expect(close / compared).toBeGreaterThan(0.9)
+  })
+})
+
+// The same mesh with its normals the other way: the kernel never orients a closed surface, and half of them point in.
+const inward = (m: MeshMark): MeshMark => ({ ...m, normals: m.normals.map((v) => -v) })
+
+describe('a closed veil is painted from both sides', () => {
+  // a translucent sphere (the volumes of the space engine are 0.4-opacity solids), lit from above
+  const veil = sphereMesh({ radius: 1, opacity: 0.4, nu: 24, nv: 16, index: 0 })
+  const L: [number, number, number] = [0.1, 0.05, 1]
+  const plan = buildWorldPlan(sceneOf([veil]), L, P, PX)
+
+  it('has a back plan, and the far half seen through the near half is the inside of the shell, lit with the normal turned toward the viewer', () => {
+    const s = plan.surfaces[0]!
+    expect(s.closed).toBe(true)
+    expect(s.outsideOnly).toBe(false)
+    expect(plan.veil[0]).toBe(1)
+    expect(plan.back[0]).not.toBeNull()
+    const front = plan.front[0]!
+    const back = plan.back[0]!
+    const zs = newZoneSample()
+    let cap = 0
+    for (let i = 0; i < s.positions.length / 3; i++) {
+      // the top cap: its outward normal faces the light, its inward one (the back, side -1) does not
+      if (s.positions[3 * i + 2] < 0.6) continue
+      cap++
+      expect(front.nl[i]).toBeGreaterThan(0.5)
+      expect(front.fam[i]).toBe(FAM_LIGHT)
+      expect(back.nl[i]).toBeLessThan(-0.5)
+      expect(back.fam[i]).toBe(FAM_SHADOW)
+      expect(back.u[i]).toBeLessThanOrEqual(plan.capU + 1e-6)
+      expect(back.shadow[i]).toBe(0) // a veil is unshadowed: it is the form shadow, not the cast one
+      // and it is planSample with the normal turned the other way
+      planSample(P, plan.curves, back.nl[i], false, -s.normals[3 * i], -s.normals[3 * i + 1], -s.normals[3 * i + 2], 0, zs)
+      expect(back.u[i]).toBe(Math.fround(zs.u))
+    }
+    expect(cap).toBeGreaterThan(30)
+  })
+
+  it('a closed OPAQUE sphere still has one side only', () => {
+    const solid = buildWorldPlan(sceneOf([sphereMesh({ radius: 1, nu: 24, nv: 16, index: 0 })]), L, P, PX)
+    expect(solid.surfaces[0]!.outsideOnly).toBe(true)
+    expect(solid.back[0]).toBeNull()
+  })
+})
+
+describe('a closed mesh with its normals pointing in is the same as one with them out', () => {
+  const outer = SPHERE
+  const scene = (sphere: MeshMark) => sceneOf([sphere, TABLE])
+  const a = buildWorldPlan(scene(outer), LIGHT, P, PX)
+  const b = buildWorldPlan(scene(inward(outer)), LIGHT, P, PX)
+
+  it('is oriented once: side +1 of its surface is the outside', () => {
+    expect(a.surfaces[0]!.orient).toBe(1)
+    expect(b.surfaces[0]!.orient).toBe(-1)
+    expect(b.back[0]).toBeNull()
+  })
+
+  it('gives the same plan on the sphere and on the table, to 1e-6: u, family, shadow, occlusion, the signed N.L', () => {
+    for (const m of [0, 1]) {
+      const sa = a.surfaces[m]!
+      const sb = b.surfaces[m]!
+      expect(sb.positions.length).toBe(sa.positions.length)
+      expect(Array.from(sb.positions)).toEqual(Array.from(sa.positions))
+      for (const [side, pa] of sides(a, m)) {
+        const pb = side === 1 ? b.front[m]! : b.back[m]!
+        for (const k of ['u', 'nl', 'ao', 'vis', 'lightW', 'shadowW', 'reflW', 'lift'] as const) {
+          for (let i = 0; i < pa[k].length; i++) expect(Math.abs(pb[k][i] - pa[k][i]), `mark ${m} side ${side} ${k}[${i}]`).toBeLessThan(1e-6)
+        }
+        expect(Array.from(pb.fam)).toEqual(Array.from(pa.fam))
+        expect(Array.from(pb.shadow)).toEqual(Array.from(pa.shadow))
+        expect(Array.from(pb.zone)).toEqual(Array.from(pa.zone))
+      }
+    }
+  })
+
+  it('has the light-facing vertices of the inward sphere in the light family, and the table’s occlusion 0 away from the contact', () => {
+    const s = b.surfaces[0]!
+    const f = b.front[0]!
+    let facing = 0
+    let light = 0
+    for (let i = 0; i < s.positions.length / 3; i++) {
+      // the outward direction is the position (the sphere is about the origin)
+      const out = s.positions[3 * i] * LIGHT[0] + s.positions[3 * i + 1] * LIGHT[1] + s.positions[3 * i + 2] * LIGHT[2]
+      if (out > 0.5) {
+        facing++
+        if (f.fam[i] === FAM_LIGHT) light++
+      }
+    }
+    expect(facing).toBeGreaterThan(300)
+    expect(light).toBe(facing)
+    const t = b.surfaces[1]!
+    const tf = b.front[1]!
+    let farHigh = 0
+    let far = 0
+    let shadowDist0 = 0
+    let castUnder = 0
+    for (let i = 0; i < t.positions.length / 3; i++) {
+      const r = Math.hypot(t.positions[3 * i], t.positions[3 * i + 1])
+      // (the sphere hangs over the table, within the occlusion's 2R = 0.19 of it, out to about 0.7 from the contact)
+      if (r > 1.0) {
+        far++
+        if (tf.ao[i] > 0) farHigh++
+      }
+      if (r > 0.4 && tf.shadow[i] === 1) {
+        castUnder++
+        if (tf.shadowDist[i] === 0) shadowDist0++
+      }
+    }
+    expect(far).toBeGreaterThan(5000)
+    expect(farHigh).toBe(0)
+    expect(castUnder).toBeGreaterThan(300)
+    expect(shadowDist0).toBe(0)
+  })
+
+  it('does the same for the real kernel’s sphere, whose parametric normals point inward when written (v first), light-facing vertices in the light family', () => {
+    const spec = '@bounds3d: x [-2, 2], y [-2, 2], z [-2, 2]\n(sin(v) cos(u), sin(v) sin(u), cos(v)) for u in [0, 2*pi], v in [0, pi]'
+    const parsed = parseSpec(spec)
+    const sc = createSpaceKernel(parsed.statements, parsed.config, parsed.statementLines).scene()
+    const mesh = sc.marks.find((m) => m.kind === 'mesh') as MeshMark
+    expect(closedForm(mesh).orient).toBe(-1) // the kernel does not orient it
+    const plan = buildWorldPlan(sc, LIGHT, P, 1 / 80)
+    const s = plan.surfaces[sc.marks.indexOf(mesh)]!
+    const f = plan.front[sc.marks.indexOf(mesh)]!
+    expect(plan.back[sc.marks.indexOf(mesh)]).toBeNull()
+    let facing = 0
+    let light = 0
+    for (let i = 0; i < s.positions.length / 3; i++) {
+      const out = s.positions[3 * i] * LIGHT[0] + s.positions[3 * i + 1] * LIGHT[1] + s.positions[3 * i + 2] * LIGHT[2]
+      if (out > 0.5) {
+        facing++
+        if (f.fam[i] === FAM_LIGHT) light++
+      }
+    }
+    expect(facing).toBeGreaterThan(300)
+    expect(light).toBe(facing)
+  })
+})
+
+describe('the occlusion of a vertex does not depend on the other vertices', () => {
+  // the table with one more source vertex at its far corner (a triangle of the last quad cut in three about it): the bake of the
+  // same table, with a vertex more somewhere else
+  const n = 8
+  const base = tableMesh({ z: -1, half: 3, index: 1 })
+  const withCorner = (): MeshMark => {
+    const k = n * n - 1 // the last quad, (i, j) = (7, 7)
+    const a = (n - 1) * (n + 1) + (n - 1)
+    // a vertex 30% of the way along its diagonal a to a + n + 2, in its lower-left triangle (a, a + 1, a + n + 1), which becomes three
+    const f = 0.3
+    const x = base.positions[3 * a] + f * (base.positions[3 * (a + n + 2)] - base.positions[3 * a])
+    const y = base.positions[3 * a + 1] + f * (base.positions[3 * (a + n + 2) + 1] - base.positions[3 * a + 1])
+    const positions = new Float64Array(base.positions.length + 3)
+    positions.set(base.positions)
+    positions.set([x, y, -1], base.positions.length)
+    const normals = new Float64Array(base.normals.length + 3)
+    normals.set(base.normals)
+    normals.set([0, 0, 1], base.normals.length)
+    const c = base.positions.length / 3
+    const old = Array.from(base.indices)
+    // the quad's two triangles are [a, a+1, a+n+1] and [a+1, a+n+2, a+n+1]: the first is cut about the new vertex
+    const cut = [a, a + 1, c, a + 1, a + n + 1, c, a + n + 1, a, c, a + 1, a + n + 2, a + n + 1]
+    return { ...base, positions, normals, uv: null, indices: Uint32Array.from(old.slice(0, 6 * k).concat(cut)) }
+  }
+  const sphere = sphereMesh({ radius: 1, index: 0, nu: 36, nv: 24 })
+  const a = buildWorldPlan(sceneOf([sphere, base]), LIGHT, P, PX)
+  const b = buildWorldPlan(sceneOf([sphere, withCorner()]), LIGHT, P, PX)
+
+  it('gives every vertex that two bakes share the same occlusion, bit for bit, on both sides', () => {
+    const key = (s: { positions: Float64Array }, i: number) => `${Math.round(s.positions[3 * i] * 1e9)},${Math.round(s.positions[3 * i + 1] * 1e9)},${Math.round(s.positions[3 * i + 2] * 1e9)}`
+    for (const m of [0, 1]) {
+      const sa = a.surfaces[m]!
+      const sb = b.surfaces[m]!
+      const where = new Map<string, number>()
+      for (let i = 0; i < sb.positions.length / 3; i++) where.set(key(sb, i), i)
+      for (const [side, pa] of sides(a, m)) {
+        const pb = side === 1 ? b.front[m]! : b.back[m]!
+        let shared = 0
+        let withAo = 0
+        for (let i = 0; i < sa.positions.length / 3; i++) {
+          const j = where.get(key(sa, i))
+          if (j === undefined) continue
+          shared++
+          expect(pb.ao[j], `mark ${m} side ${side} vertex ${i}`).toBe(pa.ao[i])
+          if (pa.ao[i] > 0) withAo++
+        }
+        expect(shared).toBeGreaterThan(0.9 * (sa.positions.length / 3))
+        if (m === 1 && side === 1) expect(withAo).toBeGreaterThan(20)
+      }
+    }
+    // (and the table's surface did change: more triangles near the corner)
+    expect(b.surfaces[1]!.indices.length).not.toBe(a.surfaces[1]!.indices.length)
+  })
+})
+
+describe('the occlusion reads the side’s normal, in the plan', () => {
+  it('has the back of a sheet over a table occluded and its front in the open', () => {
+    const sheet = quadMesh({ origin: [-1, -1, 0.1], e1: [2, 0, 0], e2: [0, 2, 0], n: 6, index: 0 })
+    const plan = buildWorldPlan(sceneOf([sheet, tableMesh({ z: 0, half: 3, index: 1 })]), [0.1, 0.05, 1], P, PX)
+    expect(plan.back[0]).not.toBeNull()
+    const f = plan.front[0]!
+    const b = plan.back[0]!
+    let backOccluded = 0
+    for (let i = 0; i < f.ao.length; i++) {
+      expect(f.ao[i]).toBe(0)
+      if (b.ao[i] > 0.2) backOccluded++
+    }
+    expect(backOccluded).toBeGreaterThan(f.ao.length * 0.8)
   })
 })

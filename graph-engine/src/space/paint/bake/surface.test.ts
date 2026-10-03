@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshMark } from '../../scene/types'
 import { parametricMesh } from '../../testing/marks'
-import { graphMesh, sphereMesh } from '../model/testing'
-import { locate, normalOf, pointOf, refineSurface, refineWhere, type RefinedSurface, type SurfacePoint } from './surface'
+import { graphMesh, quadMesh, sphereMesh } from '../model/testing'
+import { closedForm, locate, normalOf, pointOf, refineSurface, refineWhere, type RefinedSurface, type SurfacePoint } from './surface'
 
 // A flat quad [-2, 2]² as two triangles (normal +z), with a scalar x + 2y.
 function quad(zeroNormals = false): MeshMark {
@@ -335,5 +335,124 @@ describe('locate, pointOf, normalOf', () => {
     const radial = [p[0] - 0.2, p[1] + 0.1, p[2] - 0.4]
     const rl = Math.hypot(...radial)
     expect(n1[0] * (radial[0] / rl) + n1[1] * (radial[1] / rl) + n1[2] * (radial[2] / rl)).toBeGreaterThan(0.98)
+  })
+})
+
+// The same mesh with its normals the other way.
+const inward = (m: MeshMark): MeshMark => ({ ...m, normals: m.normals.map((v) => -v) })
+
+describe('orientation: which way a closed mesh’s normals point', () => {
+  const sphere = sphereMesh({ radius: 1.2, centre: [0.3, -0.2, 0.5], nu: 24, nv: 16 })
+  const torus = parametricMesh(
+    (u, v) => [(2 + 0.7 * Math.cos(v)) * Math.cos(u), (2 + 0.7 * Math.cos(v)) * Math.sin(u), 0.7 * Math.sin(v)],
+    (u, v) => [Math.cos(v) * Math.cos(u), Math.cos(v) * Math.sin(u), Math.sin(v)],
+    0, 2 * Math.PI, 0, 2 * Math.PI, 20, 12,
+  )
+
+  it('is +1 for outward normals and -1 for inward ones, on a sphere and on a torus, and +1 on an open surface', () => {
+    expect(refineSurface(sphere, 0, 100, 100_000).orient).toBe(1)
+    expect(refineSurface(inward(sphere), 0, 100, 100_000).orient).toBe(-1)
+    expect(refineSurface(torus, 0, 100, 100_000).orient).toBe(1)
+    expect(refineSurface(inward(torus), 0, 100, 100_000).orient).toBe(-1)
+    expect(refineSurface(quad(), 0, 100, 100_000).orient).toBe(1)
+    expect(refineSurface(inward(quad()), 0, 100, 100_000).orient).toBe(1) // an open sheet has no outside: side +1 is where its normals point
+    // the form the caster reads is the same
+    expect(closedForm(inward(sphere))).toMatchObject({ closed: true, orient: -1 })
+  })
+
+  it('keeps the orientation through refinement, and normalOf side +1 is the outward normal either way, side -1 the inward one', () => {
+    for (const [mesh, orient] of [[sphere, 1], [inward(sphere), -1]] as const) {
+      const s = refineSurface(mesh, 0, 0.3, 100_000)
+      expect(s.orient).toBe(orient)
+      const refined = refineWhere(s, (t) => t % 7 === 0, 0.05, 100_000)
+      expect(refined.orient).toBe(orient)
+      const out: SurfacePoint = { tri: 40, b1: 0.3, b2: 0.3 }
+      const p = [0, 0, 0]
+      const n = [0, 0, 0]
+      pointOf(refined, out, p)
+      const radial = [p[0] - 0.3, p[1] + 0.2, p[2] - 0.5]
+      const rl = Math.hypot(...radial)
+      normalOf(refined, out, 1, n)
+      expect(n[0] * (radial[0] / rl) + n[1] * (radial[1] / rl) + n[2] * (radial[2] / rl)).toBeGreaterThan(0.95)
+      normalOf(refined, out, -1, n)
+      expect(n[0] * (radial[0] / rl) + n[1] * (radial[1] / rl) + n[2] * (radial[2] / rl)).toBeLessThan(-0.95)
+    }
+  })
+
+  it('is outsideOnly for a closed opaque mesh and not for a closed veil (both its sides are seen), whatever its orientation', () => {
+    const veil = sphereMesh({ radius: 1, opacity: 0.4, nu: 24, nv: 16 })
+    const v = refineSurface(veil, 0, 100, 100_000)
+    expect(v.closed).toBe(true)
+    expect(v.outsideOnly).toBe(false)
+    const o = refineSurface(sphere, 0, 100, 100_000)
+    expect(o.closed).toBe(true)
+    expect(o.outsideOnly).toBe(true)
+    expect(refineSurface(quad(), 0, 100, 100_000).outsideOnly).toBe(false)
+    expect(refineSurface(inward(veil), 0, 100, 100_000).orient).toBe(-1)
+  })
+})
+
+describe('refineSurface: a level is never left half done', () => {
+  // a sliver of a quad, 60 x 0.6: each level of bisection can add many times its triangles
+  const sliver = quadMesh({ origin: [0, 0, 0], e1: [60, 0, 0], e2: [0, 0.6, 0], n: 1 })
+
+  it('ends at the state of a whole number of levels for every budget, with budgetHit set', () => {
+    const length = (a: RefinedSurface) => {
+      let m = 0
+      for (let t = 0; t < a.indices.length / 3; t++) {
+        for (let e = 0; e < 3; e++) {
+          const p = a.indices[3 * t + e]
+          const q = a.indices[3 * t + ((e + 1) % 3)]
+          m = Math.max(m, Math.sqrt((a.positions[3 * p] - a.positions[3 * q]) ** 2 + (a.positions[3 * p + 1] - a.positions[3 * q + 1]) ** 2 + (a.positions[3 * p + 2] - a.positions[3 * q + 2]) ** 2))
+        }
+      }
+      return m
+    }
+    const bytes = (a: Float64Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString('base64')
+    // the state after each whole level, from a budget that is never reached
+    const levels = new Map<number, string>()
+    let target = length(refineSurface(sliver, 0, Infinity, 10_000_000))
+    levels.set(2, bytes(refineSurface(sliver, 0, Infinity, 10_000_000).positions))
+    for (let k = 0; k < 40 && target > 0.5; k++) {
+      target = Math.max(0.5, target / Math.SQRT2)
+      const state = refineSurface(sliver, 0, target, 10_000_000)
+      expect(state.budgetHit).toBe(false)
+      levels.set(state.indices.length / 3, bytes(state.positions))
+    }
+    expect(levels.size).toBeGreaterThan(8)
+    for (const budget of [30, 60, 100, 150, 200, 400, 1000, 2000]) {
+      const s = refineSurface(sliver, 0, 0.5, budget)
+      const n = s.indices.length / 3
+      expect(s.budgetHit, `budget ${budget}`).toBe(true)
+      expect(n, `budget ${budget}`).toBeLessThanOrEqual(budget)
+      expect(levels.has(n), `budget ${budget}: ${n} triangles is not a whole level`).toBe(true)
+      expect(bytes(s.positions), `budget ${budget}`).toBe(levels.get(n))
+    }
+  })
+})
+
+describe('locate: how far the point found is', () => {
+  const sheet = refineSurface(quad(), 0, 0.5, 100_000) // [-2, 2]², open
+  const out: SurfacePoint = { tri: 0, b1: 0, b2: 0 }
+
+  it('reports the distance to the point found: 0 on the surface, the height above it off it', () => {
+    expect(locate(sheet, 0.3, 0.2, 0, 0, 0, 1, 0.1, out)).toBe(true)
+    expect(out.dist).toBeCloseTo(0, 12)
+    expect(locate(sheet, 0.3, 0.2, 0.05, 0, 0, 1, 0.1, out)).toBe(true)
+    expect(out.dist).toBeCloseTo(0.05, 12)
+    const p = [0, 0, 0]
+    pointOf(sheet, out, p)
+    expect(p[0]).toBeCloseTo(0.3, 12)
+    expect(p[2]).toBeCloseTo(0, 12)
+  })
+
+  it('does not slide a point that is past an open border onto the border: beyond the reach it is not found, and one just inside the reach is, at its distance', () => {
+    const reach = 0.1
+    // 2 x the reach past the edge x = 2 (in the plane of the sheet)
+    expect(locate(sheet, 2 + 2 * reach, 0.2, 0, 0, 0, 1, reach, out)).toBe(false)
+    // 0.5 x the reach past it: found, on the border, at 0.5 x the reach
+    expect(locate(sheet, 2 + 0.5 * reach, 0.2, 0, 0, 0, 1, reach, out)).toBe(true)
+    expect(out.dist).toBeCloseTo(0.5 * reach, 12)
+    expect(out.dist!).toBeLessThanOrEqual(reach)
   })
 })

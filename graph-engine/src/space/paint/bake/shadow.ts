@@ -14,8 +14,9 @@
 //   * `vis` is the fraction of rays not blocked; `dist`, the mean distance to the occluder over the rays that were
 //     blocked (Infinity when none), for the cast-shadow edge's hardness;
 //   * a point INSIDE a closed mesh (a table point under a sphere that rests on it, lifted into the sphere by the bias) is
-//     in its shadow at distance 0: a ray whose first hit is the BACK of a closed mesh (by the mesh's own normals) started
-//     inside it. An open sheet has no inside, and is hit from either side.
+//     in its shadow at distance 0: a ray whose first hit is the BACK of a closed mesh started inside it. The back is told by
+//     the mesh's own normals turned by the mesh's orientation (surface.ts ORIENTATION: the kernel's closed meshes may have
+//     their normals pointing in, and then "the back" is the side they point to). An open sheet has no inside, and is hit from either side.
 //
 // The renderer's flag is `nl <= 0 || visible < 0.5`; the caller makes it from `vis` the same way, and asks for a
 // visibility only where nl > 0 (the shader does not look the map up elsewhere).
@@ -25,7 +26,7 @@ import { bvhOf, intersectBvh, type Bvh, type TriangleHit } from '../../pick/bvh'
 import type { Ray } from '../../pick/types'
 import { isDrawableMesh, sceneBounds } from '../gl/meshes'
 import { lightFrame, SHADOW_FIT, SHADOW_SIZE } from '../gl/shadow'
-import { isClosedMesh } from './surface'
+import { closedForm } from './surface'
 
 export interface ShadowCaster {
   // The fraction of the five rays toward the light that are not blocked, and the mean distance to what blocked the others.
@@ -44,10 +45,12 @@ interface Caster {
   mesh: MeshMark
   bvh: Bvh
   closed: boolean
+  // For a closed mesh: +1 where its normals point outward, -1 inward (surface.ts closedForm).
+  orient: 1 | -1
 }
 
-// Whether a ray (direction d) meets a triangle from behind, by the mesh's own normals there: it travels along them.
-function fromBehind(mesh: MeshMark, hit: TriangleHit, dx: number, dy: number, dz: number): boolean {
+// Whether a ray (direction d) meets a triangle from behind, by the mesh's own normals there (turned by its orientation): it travels along them.
+function fromBehind(mesh: MeshMark, orient: 1 | -1, hit: TriangleHit, dx: number, dy: number, dz: number): boolean {
   const n = mesh.normals
   const a = 3 * mesh.indices[3 * hit.triangle]
   const b = 3 * mesh.indices[3 * hit.triangle + 1]
@@ -56,15 +59,23 @@ function fromBehind(mesh: MeshMark, hit: TriangleHit, dx: number, dy: number, dz
   const x = w0 * n[a] + hit.b1 * n[b] + hit.b2 * n[c]
   const y = w0 * n[a + 1] + hit.b1 * n[b + 1] + hit.b2 * n[c + 1]
   const z = w0 * n[a + 2] + hit.b1 * n[b + 2] + hit.b2 * n[c + 2]
-  return x * dx + y * dy + z * dz > 1e-12
+  return orient * (x * dx + y * dy + z * dz) > 1e-12
 }
 
 // The rays' starts are displaced across the light by these multiples of a texel (the centre, then +x, -x, +y, -y).
 const PCF = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] as const
 
-export function makeShadowCaster(scene: SpaceScene, lightDir: readonly number[]): ShadowCaster {
+export interface ShadowCasterOptions {
+  // A multiple of the bias that lifts a ray's start off the surface (1: the G-buffer shader's). A test turns it to 0 to show what the bias is for.
+  biasScale?: number
+}
+
+export function makeShadowCaster(scene: SpaceScene, lightDir: readonly number[], options: ShadowCasterOptions = {}): ShadowCaster {
   const casters: Caster[] = []
-  for (const mark of scene.marks) if (isDrawableMesh(mark)) casters.push({ mesh: mark, bvh: bvhOf(mark), closed: isClosedMesh(mark) })
+  for (const mark of scene.marks) if (isDrawableMesh(mark)) {
+    const form = closedForm(mark)
+    casters.push({ mesh: mark, bvh: bvhOf(mark), closed: form.closed, orient: form.orient })
+  }
   const radius = sceneBounds(scene).radius
   const texel = (2 * radius * SHADOW_FIT) / SHADOW_SIZE
   // (a ray with a component of exactly 0, along an axis, can slip between the triangles of a pole's fan, where the BVH's boxes
@@ -102,7 +113,7 @@ export function makeShadowCaster(scene: SpaceScene, lightDir: readonly number[])
         bestCaster = c
       }
     }
-    behind = bestCaster !== null && bestHit !== null && bestCaster.closed && fromBehind(bestCaster.mesh, bestHit, dx, dy, dz)
+    behind = bestCaster !== null && bestHit !== null && bestCaster.closed && fromBehind(bestCaster.mesh, bestCaster.orient, bestHit, dx, dy, dz)
     return best
   }
   const nearest = (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, sMax: number): number => cast(ox, oy, oz, dx, dy, dz, sMax)
@@ -112,7 +123,7 @@ export function makeShadowCaster(scene: SpaceScene, lightDir: readonly number[])
     const cos = nx * L[0] + ny * L[1] + nz * L[2]
     const sin = Math.sqrt(Math.max(1 - cos * cos, 0))
     const slope = Math.min(sin / Math.max(cos, 0.1), 6)
-    const lift = texel * (1.2 + 1.6 * slope)
+    const lift = (options.biasScale ?? 1) * texel * (1.2 + 1.6 * slope)
     const bx = x + nx * lift
     const by = y + ny * lift
     const bz = z + nz * lift
