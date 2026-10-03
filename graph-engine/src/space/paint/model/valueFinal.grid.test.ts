@@ -41,6 +41,9 @@ describe('the final picture of a sphere on a table, at the defaults', () => {
   })
 
   it('had both families to compare in every frame it was made to: the totals of the grid above', () => {
+    // (the totals are over the tests above: with none of them run, or every frame filtered out, they would be Infinity, which passes every bound)
+    expect(total.frames, 'frames made').toBe(frames.length * GRID_VIEWS.length)
+    for (const n of [total.fewestShadow, total.fewestLight, total.fewestUnderShadow, total.fewestUnderLight, total.fewestEdgeShadow, total.fewestLines]) expect(Number.isFinite(n)).toBe(true)
     // the five views with a terminator had both families to compare, in some frames of each (the sixth is lit all over: it is there for its outline)
     expect(total.comparedPerView.slice(0, 5).every((n) => n >= 8), String(total.comparedPerView)).toBe(true)
     expect(total.fewestShadow).toBeGreaterThanOrEqual(5)
