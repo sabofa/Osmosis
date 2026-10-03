@@ -8,7 +8,7 @@ import { buildWorldEdges, edgeClassAlong, EDGE_STEP_PX, type WorldEdgeRun, type 
 import { buildWorldPlan } from './plan'
 import { buildWorldPlanes } from './planes'
 import { locate, type SurfacePoint } from './surface'
-import { at, bake, boxMesh, bytes, classes, framing, FRONT, LIGHT, meanH, P, PX, runsOf, SPHERE_SCENE } from './edgesFixture'
+import { at, bake, bakeFigure, boxMesh, bytes, classes, framing, FRONT, LIGHT, meanH, P, PX, runsOf, SPHERE_SCENE } from './edgesFixture'
 
 // A plan over a refined surface is heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 120_000 })
@@ -369,47 +369,89 @@ describe('the focal points: the AUTHORED view’s, fixed in the world', () => {
     expect(keyOf(f3, 1)).toBeGreaterThan(0.95)
   })
 
-  it('makes the terminator firmer where the authored eye looks at it: the samples within R of s1 are soft (and nowhere else), the rest lost', () => {
+  // Whether the authored view sees the side a run's sample is on (its normal toward the eye).
+  const seenBy = (a: ReturnType<typeof framing>, r: WorldEdgeRun, i: number): boolean => {
+    let tx = -a.viewDir[0]
+    let ty = -a.viewDir[1]
+    let tz = -a.viewDir[2]
+    if (!a.ortho) {
+      tx = a.eye[0] - r.pts[3 * i]
+      ty = a.eye[1] - r.pts[3 * i + 1]
+      tz = a.eye[2] - r.pts[3 * i + 2]
+    }
+    return r.nrm[3 * i] * tx + r.nrm[3 * i + 1] * ty + r.nrm[3 * i + 2] * tz > 0
+  }
+  // The mean hardness of the terminator samples the authored view sees and of those it does not.
+  const seenMeans = (e: WorldEdges, a: ReturnType<typeof framing>): { seen: number; unseen: number } => {
+    const s = [0, 0]
+    const n = [0, 0]
+    for (const r of runsOf(e, 'terminator')) for (let i = 0; i < r.h.length; i++) {
+      const k = seenBy(a, r, i) ? 0 : 1
+      s[k] += r.h[i]
+      n[k]++
+    }
+    return { seen: s[0] / n[0], unseen: s[1] / n[1] }
+  }
+
+  it('makes the terminator firmer where the authored eye looks at it: soft within R of s1, and the samples the authored view sees are harder than those it does not (the focal point and the depth term)', () => {
     const t = runsOf(BASE.edges, 'terminator')[0]
     const f = BASE.edges.focal
     const R = f[3]
     let near = 0
     let nearSoft = 0
-    let far = 0
-    let farSoft = 0
-    let nearH = 0
-    let farH = 0
     for (let i = 0; i < t.h.length; i++) {
       const d = Math.hypot(t.pts[3 * i] - f[0], t.pts[3 * i + 1] - f[1], t.pts[3 * i + 2] - f[2])
-      if (d < R) {
-        near++
-        nearH += t.h[i]
-        if (t.cls[i] >= 1) nearSoft++
-      } else if (d > 2 * R) {
-        far++
-        farH += t.h[i]
-        if (t.cls[i] >= 1) farSoft++
-      }
+      if (d >= R) continue
+      near++
+      if (t.cls[i] >= 1) nearSoft++
     }
     expect(near).toBeGreaterThan(40)
-    expect(far).toBeGreaterThan(100)
     expect(nearSoft).toBeGreaterThanOrEqual(0.9 * near)
-    expect(farSoft).toBe(0)
-    expect(nearH / near).toBeGreaterThan(2 * (farH / far))
-    // the histogram at the default softness (the task report's): soft samples where the eye looks, no firm or hard ones
+    const m = seenMeans(BASE.edges, FRONT)
+    expect(m.seen).toBeGreaterThan(1.4 * m.unseen)
+    // a smooth sphere's terminator is soft: soft where the eye looks, lost elsewhere, a few firm accents at most (the histogram is in the task report)
     const h = classes([t])
-    expect(h[1]).toBeGreaterThan(0.1 * t.h.length)
-    // the depth term of the authored view is the way to firm samples: with it the terminator has some, all of them near s1
-    const deep = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, FRONT, { authoredDepth: true })
-    const td = runsOf(deep, 'terminator')[0]
-    let firm = 0
-    for (let i = 0; i < td.h.length; i++) {
-      if (td.cls[i] < 2) continue
-      firm++
-      expect(Math.hypot(td.pts[3 * i] - f[0], td.pts[3 * i + 1] - f[1], td.pts[3 * i + 2] - f[2])).toBeLessThan(1.5 * R)
+    expect(h[1]).toBeGreaterThan(0.2 * t.h.length)
+    expect(h[2] + h[3]).toBeLessThan(0.1 * t.h.length)
+    // the focal point alone (no depth term): the same stretch soft and nothing else, the far side all lost
+    const flat = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, FRONT, { authoredDepth: false })
+    const tf = runsOf(flat, 'terminator')[0]
+    let farSoft = 0
+    for (let i = 0; i < tf.h.length; i++) {
+      if (Math.hypot(tf.pts[3 * i] - f[0], tf.pts[3 * i + 1] - f[1], tf.pts[3 * i + 2] - f[2]) > 2 * R && tf.cls[i] >= 1) farSoft++
     }
-    expect(firm).toBeGreaterThan(2)
-    expect(meanH([td])).toBeGreaterThan(meanH([t]))
+    expect(farSoft).toBe(0)
+    expect(classes([tf])[2] + classes([tf])[3]).toBe(0)
+    expect(meanH([t])).toBeGreaterThan(meanH([tf])) // the depth term only makes the terminator harder (it is added)
+  })
+
+  it('has firm samples on the torus (a turning form), the authored view’s depth term on by default: 67 of 1,534 on the lab’s torus, none without it, and the samples the view sees are harder', () => {
+    const b = bakeFigure('torus')
+    const h = classes(runsOf(b.edges, 'terminator'))
+    expect(h[2] + h[3]).toBeGreaterThan(20)
+    const off = buildWorldEdges(b.plan, b.planes, P, b.scene, b.authored, { authoredDepth: false })
+    expect(classes(runsOf(off, 'terminator'))[2] + classes(runsOf(off, 'terminator'))[3]).toBe(0)
+    const m = seenMeans(b.edges, b.authored)
+    expect(m.seen).toBeGreaterThan(1.2 * m.unseen)
+    // the depth term is the model's: nearer to the authored eye is harder, so it is the near stretch of the terminator that is firm
+    const firmSeen = runsOf(b.edges, 'terminator').reduce((n, r) => n + Array.from(r.cls).filter((c, i) => c >= 2 && seenBy(b.authored, r, i)).length, 0)
+    expect(firmSeen).toBe(h[2] + h[3])
+  })
+
+  it('keeps the edges.wDepth slider meaningful: the depth weight at 0 is the term taken out, and a higher weight makes the terminator harder where it is nearer the authored eye', () => {
+    const noDepth: PaintParams = { ...P, edges: { ...P.edges, wDepth: [0, 0, 0] } }
+    const w0 = buildWorldEdges(BASE.plan, BASE.planes, noDepth, BASE.scene, FRONT)
+    const off = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, FRONT, { authoredDepth: false })
+    expect(w0.runs.length).toBe(off.runs.length)
+    w0.runs.forEach((r, k) => {
+      expect(bytes(r.h), `run ${k}`).toBe(bytes(off.runs[k].h))
+    })
+    const more: PaintParams = { ...P, edges: { ...P.edges, wDepth: [0.4, 0.4, 0.4] } }
+    const w4 = buildWorldEdges(BASE.plan, BASE.planes, more, BASE.scene, FRONT)
+    const m1 = seenMeans(BASE.edges, FRONT)
+    const m4 = seenMeans(w4, FRONT)
+    expect(m4.seen - m1.seen).toBeGreaterThan(0.04)
+    expect(meanH(runsOf(BASE.edges, 'terminator'))).toBeGreaterThan(meanH(runsOf(w0, 'terminator')))
   })
 
   it('has R = 0.55·√(A/π) with A the area the authored view sees: 0.55 on a unit sphere (within 5%) for an orthographic eye or a distant one, less for a near perspective eye', () => {

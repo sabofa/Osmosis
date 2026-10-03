@@ -100,8 +100,8 @@ for (const id of IDS) {
     }
     return n > 0 ? (s / n).toFixed(3) : '-'
   }
-  // (and with the model's depth term measured from the authored eye: WorldEdgeOptions.authoredDepth)
-  const deep = buildWorldEdges(last.plan, last.planes, DEFAULT_PAINT_PARAMS, worldScene, authored, { authoredDepth: true })
+  // (and without the model's depth term, which is measured from the authored eye and on by default: WorldEdgeOptions.authoredDepth)
+  const deep = buildWorldEdges(last.plan, last.planes, DEFAULT_PAINT_PARAMS, worldScene, authored, { authoredDepth: false })
   histRows.push([id, h0.join('/'), h1.join('/'), terminatorClasses(deep).join('/'), terminatorClasses(probes).join('/'), planeContrast(last.edges), planeContrast(probes)])
 }
 
@@ -113,5 +113,5 @@ const print = (head: string[], body: string[][]) => {
 }
 print(['scene', 'particles', 'plan tris', 'planes', 'of ground', 'runs/samples: term shadow plane crease border', 'plan ms', 'planes ms', 'edges ms', 'planes+edges ms'], rows)
 console.log('')
-print(['scene', 'terminator lost/soft/firm/hard at ts 0.1', 'at ts 1.0', 'at ts 0.1, authoredDepth', 'at ts 0.1, probes', 'plane contrast, planes', 'plane contrast, probes'], histRows)
+print(['scene', 'terminator lost/soft/firm/hard at ts 0.1', 'at ts 1.0', 'at ts 0.1, authoredDepth off', 'at ts 0.1, probes', 'plane contrast, planes', 'plane contrast, probes'], histRows)
 console.log(`(${RUNS} runs each after a warm-up, medians; the bench's own particles are made outside the timing)`)

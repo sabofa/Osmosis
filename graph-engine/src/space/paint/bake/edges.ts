@@ -39,8 +39,9 @@
 // about the two focal points of the figure, below), s (light side) and, for a table's cast edge, x (the distance from the occluder, in px
 // at the reference scale), plus the seeded noise, times the terminator's softness scale, lost where the contrast is under 0.03; for a crease
 // or border, raised to a found edge where the outline of a form in shadow meets light (the model's floor); then the class and the median
-// of 7. The depth term is 0: a world edge has no view depth, so edges.wDepth does nothing under the bake (WorldEdgeOptions.authoredDepth
-// measures it from the authored eye instead, off by default).
+// of 7. The depth term d (edges.wDepth: nearer is harder) is measured from the AUTHORED eye, as the focal points are (the bake composes for
+// the authored framing, and the slider stays meaningful): fixed in the world, so it does not move as the camera orbits. WorldEdgeOptions.authoredDepth
+// = false takes it out (d = 0).
 //
 // THE FOCAL POINTS are the per-frame model's two (findFocal), taken from the AUTHORED framing (the view the picture is composed for, the
 // buildWorldEdges `authored` argument) and then fixed in the world: the terminator nearest the authored eye and the brightest highlight,
@@ -130,8 +131,9 @@ export interface WorldEdgeOptions {
   sideValues?: 'planes' | 'probes'
   // The model's depth term (edges.wDepth: nearer is harder) measured from the AUTHORED eye, fixed in the world: d = 1 - smooth(0, 1, (depth - zN) / zR),
   // depth along the authored view direction, zN and zR the near end and the span of the depth of what the authored view sees of the figures (and of
-  // the cast shadows on the ground), as the per-frame model's. Off by default (ruling 2026-10-03: a world edge has no view depth term, so
-  // edges.wDepth does nothing under the bake): with it on the terminator is harder where it is nearer the authored eye, as the model's focal point is.
+  // the cast shadows on the ground), as the per-frame model's. ON by default (ruled 2026-10-03: the bake composes for the authored framing, so the
+  // depth term belongs there as the focal points do, and the edges.wDepth slider stays meaningful): the terminator is harder where it is nearer the
+  // authored eye. `false` takes it out (d = 0).
   authoredDepth?: boolean
 }
 
@@ -410,7 +412,7 @@ interface Ctx {
   focal: Float64Array
   nMarks: number
   sideValues: 'planes' | 'probes'
-  // The authored view's depth range (options.authoredDepth), else null: the eye, the unit view direction, the nearest depth and the span.
+  // The authored view's depth range (null where options.authoredDepth is false): the eye, the unit view direction, the nearest depth and the span.
   depth: { eye: number[]; dir: number[]; zN: number; zR: number } | null
 }
 
@@ -1031,7 +1033,7 @@ export function buildWorldEdges(plan: WorldPlan, planes: WorldPlanes, params: Pa
   const nMarks = plan.surfaces.length
   const ctx: Ctx = {
     plan, planes, params, perPx, step: EDGE_STEP_PX * perPx, delta: PROBE_PX * perPx, snap: 6 * perPx,
-    noiseSeed: edgeNoiseSeed(params), focal: focalPoints(plan, authored), nMarks, sideValues: options.sideValues ?? 'planes', depth: options.authoredDepth ? authoredDepthRange(plan, authored) : null,
+    noiseSeed: edgeNoiseSeed(params), focal: focalPoints(plan, authored), nMarks, sideValues: options.sideValues ?? 'planes', depth: options.authoredDepth === false ? null : authoredDepthRange(plan, authored),
   }
   const scored: Scored[] = []
   const sideMarks: SideCtx[] = []

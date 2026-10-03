@@ -131,6 +131,19 @@ describe('buildWorldPlanes: the sphere under the lab’s light', () => {
     expect(planesOn(none, 0, 0).length).toBeGreaterThanOrEqual(sphere.length)
   })
 
+  it('keeps the planeMinPx slider working above the floor of three triangles (216 px²): 400 merges more than the default, 4,000 more again, and under the floor it changes nothing', () => {
+    const count = (planeMinPx: number) => {
+      const params: PaintParams = { ...P, edges: { ...P.edges, planeMinPx } }
+      return planesOn(buildWorldPlanes(PLAN, SET, COLOURS, CURVE, params), 0, 0).length
+    }
+    const base = sphere.length
+    expect(count(0)).toBe(base)
+    expect(count(70)).toBe(base)
+    expect(count(200)).toBe(base) // (under the floor of 216)
+    expect(count(400)).toBeLessThan(base)
+    expect(count(4000)).toBeLessThan(count(400))
+  })
+
   it('gives each plane its statistics: the area sums to the surface’s, the mean normal is a unit vector at the centroid’s direction, the mean value is between its triangles’', () => {
     const s = PLAN.surfaces[0]!
     let total = 0
