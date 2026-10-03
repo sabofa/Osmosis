@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CONTINUOUS, DEFINED, iv, PARTIAL, setBox, type Iv } from './core'
 import { add, div, mul, neg, powGeneral, powInt, powOddRoot, powReal, sides, sub } from './arith'
 import { realOddPow } from '../rational'
+import { must, withZeroSigns } from './compose.testkit'
 import { admits, mulberry32, pointsIn, randomBox, zerosIn } from './testkit'
 
 const box = (lo: number, hi: number): Iv => setBox(iv(), lo, hi)
@@ -330,6 +331,222 @@ describe('poles and holes at zero', () => {
     for (const r of [powGeneral(iv(), empty, box(1, 2)), powGeneral(iv(), empty, box(2, 2)), powInt(iv(), empty, 2), powGeneral(iv(), box(1, 2), empty)]) {
       expect(r.lo > r.hi && r.v === PARTIAL).toBe(true)
     }
+  })
+})
+
+// x^y over a base that reaches zero or below, under an exponent box that is not one number. Math.pow is
+// NaN for a finite negative base at every y that is not a whole number, so an exponent box holding no
+// whole number leaves nothing of the negative part of the base, and one holding exactly one leaves
+// that one power of it. (The whole line, answered before, kept every cell of x^y = y^x whose base or
+// exponent is negative alive to the bottom of the bisection.)
+describe('an interval exponent over a base that reaches zero or below', () => {
+  const isEmptyIv = (r: Iv): boolean => r.lo > r.hi
+
+  it('a negative base under an exponent box with no whole number is NaN everywhere: empty', () => {
+    const exponents: [number, number][] = [[0.2, 0.8], [-0.8, -0.2], [1.1, 1.9], [-1.9, -1.1], [0.5, 0.5000001], [2.5, 2.5000000001], [-1e-300, -5e-324], [5e-324, 1e-300], [1e-300, 0.999]]
+    for (const [al, ah] of [[-2, -1], [-1e300, -1e-300], [-5e-324, -5e-324], [-3, -0.5], [-1, -1], [-2, -1e-300]]) {
+      for (const [bl, bh] of exponents) {
+        const r = powGeneral(iv(), box(al, ah), box(bl, bh))
+        expect(isEmptyIv(r) && r.v === PARTIAL, `[${al}, ${ah}]^[${bl}, ${bh}]: ${show(r)}`).toBe(true)
+        // the scalar agrees: NaN at the ends and in the middle
+        for (const x of [al, ah]) for (const y of [bl, bh, (bl + bh) / 2]) expect(Math.pow(x, y), `${x}^${y}`).toBeNaN()
+      }
+    }
+  })
+
+  it('a base that reaches zero from below keeps its non-negative part, partial where the rest is NaN', () => {
+    // [-1, 2]^[0.2, 0.8]: the values at 0 (0) and 2 (2^0.2 .. 2^0.8), and NaN below 0
+    const up = powGeneral(iv(), box(-1, 2), box(0.2, 0.8))
+    expect(Object.is(up.lo, 0)).toBe(true)
+    expect(up.hi).toBeGreaterThanOrEqual(Math.pow(2, 0.8))
+    expect(up.hi).toBeLessThan(Math.pow(2, 0.8) * (1 + 1e-14))
+    expect(up.v).toBe(PARTIAL)
+    // a negative exponent: a pole at 0 (+Infinity either sign of zero), 2^-0.8 at the other end
+    const down = powGeneral(iv(), box(-1, 2), box(-0.8, -0.2))
+    expect(down.lo).toBeLessThanOrEqual(Math.pow(2, -0.8))
+    expect(down.lo).toBeGreaterThan(Math.pow(2, -0.8) * (1 - 1e-14))
+    expect(down.hi).toBe(Infinity)
+    expect(down.v).toBe(PARTIAL)
+    // [-3, -0] reaches only the zero -0, and Math.pow(-0, y) is +0 (y > 0) or +Infinity (y < 0)
+    expect(powGeneral(iv(), box(-3, -0), box(0.2, 0.8))).toMatchObject({ lo: 0, hi: 0, v: PARTIAL })
+    expect(Object.is(powGeneral(iv(), box(-3, -0), box(0.2, 0.8)).lo, 0)).toBe(true)
+    expect(powGeneral(iv(), box(-3, -0), box(-0.8, -0.2))).toMatchObject({ lo: Infinity, hi: Infinity, v: PARTIAL })
+    // a base that is a zero and nothing else: +0 under a positive exponent, no NaN, so continuous
+    const zero = powGeneral(iv(), box(-0, 0), box(0.2, 0.8))
+    expect(zero).toMatchObject({ lo: 0, hi: 0, v: CONTINUOUS })
+    expect(Object.is(zero.lo, 0) && Object.is(zero.hi, 0)).toBe(true)
+    // with a whole number in the exponent box the base zero keeps the whole line (no cheap enclosure)
+    expect(powGeneral(iv(), box(-0, 0), box(0.5, 1.5))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+  })
+
+  it('a base that starts at zero has no NaN under a positive exponent box, and a pole under a negative one', () => {
+    for (const lo of [0, -0]) {
+      const r = powGeneral(iv(), box(lo, 2), box(0.2, 0.8))
+      expect(Object.is(r.lo, 0)).toBe(true)
+      expect(r.hi).toBeGreaterThanOrEqual(Math.pow(2, 0.8))
+      expect(r.hi).toBeLessThan(Math.pow(2, 0.8) * (1 + 1e-14))
+      expect(r.v).toBe(CONTINUOUS)
+      const pole = powGeneral(iv(), box(lo, 2), box(-0.8, -0.2))
+      expect(near(pole.lo, Math.pow(2, -0.8))).toBe(true)
+      expect(pole.hi).toBe(Infinity)
+      expect(pole.v).toBe(PARTIAL)
+    }
+    // a verdict below the operands' is kept
+    expect(powGeneral(iv(), iv(0, 2, DEFINED), box(0.2, 0.8)).v).toBe(DEFINED)
+    // over a positive base nothing changed
+    expect(powGeneral(iv(), box(1, 2), box(0.2, 0.8))).toMatchObject({ v: CONTINUOUS })
+  })
+
+  it('an unbounded base below keeps the whole-line answer: its scalar value is an infinity or 0, not NaN', () => {
+    for (const [lo, hi] of [[-Infinity, -1], [-Infinity, 2], [-Infinity, -Infinity], [-Infinity, 0]]) {
+      const r = powGeneral(iv(), box(lo, hi), box(0.2, 0.8))
+      expect(isEmptyIv(r)).toBe(false)
+      expect(r.v).toBe(PARTIAL)
+      // Math.pow(-Infinity, 0.5) is Infinity, and Math.pow(-Infinity, -0.5) is 0
+      expect(admits(r, Math.pow(-Infinity, 0.5))).toBe(true)
+      expect(admits(powGeneral(iv(), box(lo, hi), box(-0.8, -0.2)), Math.pow(-Infinity, -0.5))).toBe(true)
+    }
+  })
+
+  it('an exponent box holding exactly one whole number leaves that power of the negative part', () => {
+    // x^2 over [-3, -2]: 4 .. 9, and NaN at every other exponent
+    const sq = powGeneral(iv(), box(-3, -2), box(1.9, 2.1))
+    expect(near(sq.lo, 4) && near(sq.hi, 9) && sq.v === PARTIAL).toBe(true)
+    // x^x near -2 and -1.5: the first holds one whole number, the second none
+    const near2 = powGeneral(iv(), box(-2.1, -1.9), box(-2.1, -1.9))
+    expect(near(near2.lo, Math.pow(-2.1, -2)) && near(near2.hi, Math.pow(-1.9, -2)) && near2.v === PARTIAL).toBe(true)
+    expect(isEmptyIv(powGeneral(iv(), box(-1.6, -1.4), box(-1.6, -1.4)))).toBe(true)
+    // the exponent 0 is the one whole number: 1 whatever the base
+    const zero = powGeneral(iv(), box(-3, -2), box(-0.5, 0.5))
+    expect(zero).toMatchObject({ lo: 1, hi: 1, v: PARTIAL })
+    // a base across zero: the powers of the negative part and the values from zero up, hulled
+    const across = powGeneral(iv(), box(-3, 2), box(1.9, 2.1))
+    expect(across.lo).toBeLessThanOrEqual(0)
+    expect(across.lo).toBeGreaterThan(-1e-300)
+    expect(across.hi).toBeGreaterThanOrEqual(9)
+    expect(across.hi).toBeLessThan(9 * (1 + 1e-12))
+    expect(across.v).toBe(PARTIAL)
+    // two whole numbers: the negative part's values at both, no cheap enclosure
+    expect(powGeneral(iv(), box(-2, -1), box(1.5, 3.5))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+    expect(powGeneral(iv(), box(-2, -1), box(2, 3))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
+  })
+
+  it('out may alias either operand on these paths', () => {
+    const cases: [[number, number], [number, number]][] = [[[-1, 2], [0.2, 0.8]], [[-2, -1], [0.2, 0.8]], [[-3, 2], [1.9, 2.1]], [[0, 2], [-0.8, -0.2]]]
+    for (const [a, b] of cases) {
+      const want = powGeneral(iv(), box(a[0], a[1]), box(b[0], b[1]))
+      const i = box(a[0], a[1])
+      powGeneral(i, i, box(b[0], b[1]))
+      expect(i, `${a} ^ ${b} into a`).toEqual(want)
+      const j = box(b[0], b[1])
+      powGeneral(j, box(a[0], a[1]), j)
+      expect(j, `${a} ^ ${b} into b`).toEqual(want)
+    }
+  })
+
+  // The bases and exponents are the shapes the paths above split on: a base wholly negative, across 0,
+  // ending at either zero, infinite; an exponent box with no whole number, one, several, 0, infinite ends,
+  // beyond 2^53 (all whole). Each pair is held strictly (an infinity needs its bound, a NaN a partial
+  // verdict, a zero its sign) at the ends, the signed zeros, the whole numbers of the exponent box and
+  // random points.
+  const BASES: [number, number][] = [
+    [-2, -1], [-2, 0], [-2, -0], [-0, 0], [-0, 2], [0, 2], [-1, 1], [-1e-300, 1e-300], [-3, 2], [-0.5, 0.5], [-5e-324, 0], [-5e-324, -5e-324], [-1e300, -1e-300],
+    [-Infinity, -1], [-Infinity, 0], [-Infinity, Infinity], [-1, Infinity], [0, Infinity], [-0, Infinity], [0.5, 2], [-1e-300, 0], [-4, -0.5], [-2.5, 3.5], [-1, -1], [0, 0], [-5e-324, 5e-324],
+  ]
+  const EXPONENTS: [number, number][] = [
+    [0.2, 0.8], [-0.8, -0.2], [1.1, 1.9], [-1.9, -1.1], [0.5, 0.5000001], [-Infinity, -0.5], [2.5, Infinity], [1e300, 1e301], [1.5, 2.5], [-0.5, 0.5], [1.9, 2.1], [-2.1, -1.9],
+    [2, 2.5], [2.5, 3], [-3, -2.5], [0, 0.5], [-0.5, -0], [-0, 0.5], [1, 2], [-1, 1], [2 ** 53, 2 ** 53 + 4], [3, 3], [-2, -2], [0.5, 1.5], [-1.5, -0.5], [1.5, 3.5], [-Infinity, Infinity],
+    [-1e-300, -5e-324], [5e-324, 1e-300], [2.9, 3.1], [-1.1, -0.9], [0.9, 1.1], [-5e-324, 5e-324],
+  ]
+
+  // the whole numbers of a box (a few), which a random point never is
+  const wholes = (lo: number, hi: number): number[] => {
+    const out: number[] = []
+    if (!Number.isFinite(lo) && !Number.isFinite(hi)) return [0, 1, -1, 2, -2]
+    const from = Number.isFinite(lo) ? Math.ceil(lo) : Math.floor(hi) - 3
+    for (let k = from, i = 0; k <= hi && i < 4; k++, i++) if (k !== 0) out.push(k)
+    return out
+  }
+  const pointsOfBox = (lo: number, hi: number, rand: () => number): number[] => {
+    const pts = [lo, hi, (lo + hi) / 2, ...wholes(lo, hi), -5e-324, 5e-324, -1, 1, 0.5, -0.5, 2, -2, -Infinity, Infinity]
+    if (Number.isFinite(lo) && Number.isFinite(hi)) pts.push(...pointsIn(lo, hi, rand, 4))
+    return [...pts.filter((x) => x !== 0 && lo <= x && x <= hi), ...zerosIn(lo, hi)]
+  }
+
+  it('is sound over the edge boxes, each zero end as both signs', () => {
+    const rand = mulberry32(60601)
+    let checks = 0
+    for (const [al, ah] of BASES) {
+      for (const [a0, a1] of withZeroSigns(al, ah)) {
+        for (const [bl, bh] of EXPONENTS) {
+          for (const [b0, b1] of withZeroSigns(bl, bh)) {
+            const r = powGeneral(iv(), box(a0, a1), box(b0, b1))
+            for (const x of pointsOfBox(a0, a1, rand)) {
+              for (const y of pointsOfBox(b0, b1, rand)) {
+                checks++
+                must(r, Math.pow(x, y), () => `[${fmt(a0)}, ${fmt(a1)}]^[${fmt(b0)}, ${fmt(b1)}] at (${fmt(x)}, ${fmt(y)}) gives ${fmt(Math.pow(x, y))}, twin ${show(r)}`)
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checks).toBeGreaterThan(100_000)
+  })
+
+  it('is sound over random boxes, and over random bases against the exponents that are the hard shapes', () => {
+    const rand = mulberry32(60602)
+    let checks = 0
+    for (let t = 0; t < 4000; t++) {
+      const A = t % 4 === 0 ? BASES[t % BASES.length] : randomBox(rand)
+      const B = t % 3 === 0 ? EXPONENTS[t % EXPONENTS.length] : randomBox(rand)
+      for (const [a0, a1] of withZeroSigns(A[0], A[1])) {
+        for (const [b0, b1] of withZeroSigns(B[0], B[1])) {
+          const r = powGeneral(iv(), box(a0, a1), box(b0, b1))
+          for (const x of pointsOfBox(a0, a1, rand)) {
+            for (const y of pointsOfBox(b0, b1, rand)) {
+              checks++
+              must(r, Math.pow(x, y), () => `[${fmt(a0)}, ${fmt(a1)}]^[${fmt(b0)}, ${fmt(b1)}] at (${fmt(x)}, ${fmt(y)}) gives ${fmt(Math.pow(x, y))}, twin ${show(r)}`)
+            }
+          }
+        }
+      }
+    }
+    expect(checks).toBeGreaterThan(100_000)
+  })
+
+  // The case that found it: a P3 certifier of x^y = y^x bisects x^y - y^x over a window of both signs,
+  // and discards a cell when the difference's box excludes 0. With the whole line for every base that
+  // reaches below 0, 203,051 of the 262,144 cells of the last level at 512 px survived (the true curve
+  // crosses a few hundred); with the scalar's NaN left out, 9,000.
+  it('x^y - y^x over a window of both signs: the NaN half is discarded, not bisected to the pixel', () => {
+    const X = iv()
+    const Y = iv()
+    const A = iv()
+    const B = iv()
+    const d = iv()
+    let kept = 0
+    const visit = (x0: number, x1: number, y0: number, y1: number, depth: number): void => {
+      setBox(X, x0, x1)
+      setBox(Y, y0, y1)
+      powGeneral(A, X, Y)
+      powGeneral(B, Y, X)
+      sub(d, A, B)
+      if (d.lo > d.hi || d.lo > 0 || d.hi < 0) return
+      if (depth === 8) {
+        kept++
+        return
+      }
+      const xm = (x0 + x1) / 2
+      const ym = (y0 + y1) / 2
+      visit(x0, xm, y0, ym, depth + 1)
+      visit(xm, x1, y0, ym, depth + 1)
+      visit(x0, xm, ym, y1, depth + 1)
+      visit(xm, x1, ym, y1, depth + 1)
+    }
+    visit(-5.0001, 4.9999, -5.0002, 4.9998, 0)
+    // 65,536 cells at this depth; the whole-line answer kept 80% of them
+    expect(kept).toBeLessThan(6500)
   })
 })
 

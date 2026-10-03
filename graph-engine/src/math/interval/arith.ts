@@ -2,7 +2,7 @@
 // operands before writing `out`, so `out` may alias either. Nothing here
 // allocates per call: no closures, no arrays, no scratch objects.
 
-import { down, isEmpty, type Iv, LIB, PARTIAL, set, setEmpty, up, type Verdict, worst } from './core'
+import { down, hull, isEmpty, type Iv, iv, LIB, PARTIAL, set, setEmpty, up, type Verdict, worst } from './core'
 
 function unbounded(a: Iv): boolean {
   return a.lo === -Infinity || a.hi === Infinity
@@ -231,9 +231,70 @@ export function powOddRoot(out: Iv, a: Iv, e: number, pOdd: boolean): Iv {
   return sides(out, a, pOdd ? oddRootOdd : oddRootEven, e > 0 ? 0 : Number.NaN, LIB, e)
 }
 
+// Scratch for the one-whole-number path of powGeneral: the negative part of the base and its power.
+const NEG_BASE = iv()
+const NEG_POW = iv()
+
+// x^y over a base x in [0, top] (top >= +0, possibly Infinity) and an exponent box b with finite ends.
+// On x > 0 the power is monotone in each variable, so its extremes are at the corners, and the corners
+// at the base 0 are the values Math.pow(+0, y) takes: 0 for y > 0, Infinity for y < 0, 1 at y = 0 (inside
+// the range the corners span). The power is never negative, so a floor that the widening takes below 0
+// is 0, and a ceiling that is exactly 0 is a value (every corner underflowed or is 0): a bound that is a
+// zero here is +0, which is what Math.pow gives. Reads b before it writes out.
+function powFromZero(out: Iv, top: number, b: Iv, v: Verdict): Iv {
+  const c1 = Math.pow(0, b.lo)
+  const c2 = Math.pow(0, b.hi)
+  const c3 = Math.pow(top, b.lo)
+  const c4 = Math.pow(top, b.hi)
+  const hi = Math.max(c1, c2, c3, c4)
+  return set(out, Math.max(0, down(Math.min(c1, c2, c3, c4), LIB)), hi === 0 ? 0 : up(hi, LIB), v)
+}
+
+// x^y over a base box that reaches 0 or below (a.lo finite) under an exponent box with no whole
+// number. Math.pow is NaN for a finite negative base at every other y, so a base wholly below 0 is
+// NaN at every point (empty), and a base that reaches 0 keeps its part from 0 up, with Math.pow(+-0, y)
+// the same either sign of zero (+0 for y > 0, +Infinity for y < 0). A base below 0 anywhere is a NaN
+// (partial), and so is a negative exponent, which is a pole at the zero the box holds.
+function powNoWhole(out: Iv, a: Iv, b: Iv): Iv {
+  if (a.hi < 0) return setEmpty(out)
+  const v = worst(a.v, b.v)
+  return powFromZero(out, a.hi > 0 ? a.hi : 0, b, a.lo < 0 || b.hi < 0 ? worst(v, PARTIAL) : v)
+}
+
+// ... and with exactly one whole number n in the exponent box (n = ceil(b.lo), and n + 1 is past b.hi),
+// and a base reaching below 0: the negative part is a number only at y = n, where it is its n-th power,
+// and NaN at every other y (partial); the part from 0 up is as above. The negative part's top is -0
+// (the box holds -0 whenever it reaches 0 from below, and a +0 top is only looser). The hull of the two
+// would put a zero bound beside values of the other sign of zero (a bottom -0 under a positive top denies
+// the +0 the part from zero gives, and a top +0 over a negative bottom denies a -0), so it moves such a
+// bound to the nearest double past zero, as piecewise's union does. Reads a and b before it writes out.
+function powOneWhole(out: Iv, a: Iv, b: Iv, n: number): Iv {
+  const lo = a.lo
+  const hi = a.hi
+  const v = worst(worst(a.v, b.v), PARTIAL)
+  NEG_BASE.lo = lo
+  NEG_BASE.hi = hi < 0 ? hi : -0
+  NEG_BASE.v = a.v
+  powInt(NEG_POW, NEG_BASE, n)
+  if (hi < 0) {
+    out.lo = NEG_POW.lo
+    out.hi = NEG_POW.hi
+    out.v = worst(NEG_POW.v, v)
+    return out
+  }
+  powFromZero(out, hi > 0 ? hi : 0, b, v)
+  hull(out, NEG_POW)
+  if (Object.is(out.lo, -0) && out.hi > 0) out.lo = -Number.MIN_VALUE
+  if (Object.is(out.hi, 0) && out.lo < 0) out.hi = Number.MIN_VALUE
+  return out
+}
+
 // x^y with an interval exponent. For x > 0, x^y is monotone in each variable,
-// so the four corners bound it; otherwise it is not defined everywhere and no
-// cheap enclosure is attempted. An empty base is NaN, and Math.pow(NaN, 0) is 1.
+// so the four corners bound it. A base that reaches 0 or below has no cheap
+// enclosure in general, but Math.pow is NaN for a finite negative base at every
+// y that is not a whole number, so an exponent box with no whole number (or one)
+// leaves little of the negative part (powNoWhole, powOneWhole). An empty base is
+// NaN, and Math.pow(NaN, 0) is 1.
 export function powGeneral(out: Iv, a: Iv, b: Iv): Iv {
   if (isEmpty(b)) return setEmpty(out)
   if (isEmpty(a)) return hasZero(b) ? set(out, 1, 1, worst(PARTIAL, b.v)) : setEmpty(out)
@@ -243,7 +304,15 @@ export function powGeneral(out: Iv, a: Iv, b: Iv): Iv {
     if (Number.isInteger(e)) return withVerdict(powInt(out, a, e), v0)
     return withVerdict(powReal(out, a, e), v0)
   }
-  if (!(a.lo > 0)) return set(out, -Infinity, Infinity, worst(worst(a.v, b.v), PARTIAL))
+  if (!(a.lo > 0)) {
+    // A base of -Infinity is not NaN for a real exponent (+Infinity or 0), so it keeps the whole line.
+    if (a.lo > -Infinity) {
+      const n = Math.ceil(b.lo)
+      if (n > b.hi) return powNoWhole(out, a, b)
+      if (a.lo < 0 && n + 1 > b.hi) return powOneWhole(out, a, b, n)
+    }
+    return set(out, -Infinity, Infinity, worst(worst(a.v, b.v), PARTIAL))
+  }
   const c1 = Math.pow(a.lo, b.lo)
   const c2 = Math.pow(a.lo, b.hi)
   const c3 = Math.pow(a.hi, b.lo)
