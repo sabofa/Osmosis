@@ -308,8 +308,9 @@ function oddRootEven(x: number, e: number): number {
 // 8528857338477664/3, an even numerator, and the double 2842952446159221, an odd whole number):
 //   - oddRootEven is never below +0 and its zero is +0, except that Math.pow(-0, e) is -0 for an odd whole e (x < 0
 //     is false at -0, so -0 goes straight to Math.pow): then it is widened;
-//   - for a negative exponent both give a zero only at an infinity (at +-0 they give an infinity), where oddRootOdd
-//     has the sign of the input, and oddRootEven's zero is +0 (still widened for an odd whole e, as above);
+//   - for a negative exponent both give a zero only where |x| is infinite or so large that Math.pow underflows (at
+//     +-0 they give an infinity), where oddRootOdd has the sign of the input, and oddRootEven's zero is +0 (still
+//     widened for an odd whole e, as above);
 //   - for 0 < e < 1 oddRootOdd gives a zero only at +-0, which Math.pow(-0, e) makes +0 (e is no whole number);
 //   - for e >= 1 oddRootOdd gives -0 for a tiny negative that underflows and +0 at -0 (-0 at -0 for an odd whole
 //     e), so there it is neither and is widened.
@@ -320,8 +321,34 @@ function oddRootZeros(pOdd: boolean, e: number): number {
 }
 
 // x^(p/q) for a literal ratio with q odd: realOddPow, monotone on each side of 0.
+//
+// `e` is the double the scalar's expression gives at run time, which is not always the rational the literal
+// denotes: ((562949953421312 + 1/3) - (562949953421312 + 2/5)) is the rational -1/15 and, both sums rounding to
+// 2^49 + 0.375, the double 0; 1/3 + 1/(that) is -44/3 and +Infinity; 1/3 + (1/(that) - 1/(that)) is 1/3 and NaN.
+// So 0, an infinity and NaN are exponents here, and `sides` (monotone on each side of 0, finite e) is for none of
+// them:
+//   - e = 0 (either zero): realOddPow is Math.pow(x, 0) = 1 for every x that is not negative, NaN included, and for
+//     a negative x it is 1 (even numerator) or -1 (odd numerator). A box of negative x is that one value (and 1 too
+//     where the base may be NaN: a partial base), a box holding both sorts of x jumps (-1, then 1 from -0 up) for
+//     an odd numerator.
+//   - e = +-Infinity: Math.pow(|x|, +-Infinity) is 0, Infinity, or NaN at |x| = 1 (and +0 or Infinity at +-0), negated
+//     below 0 for an odd numerator: [0, Infinity] or the whole line, partial; a NaN base is NaN.
+//   - e = NaN: NaN for every x (Math.pow(1, NaN) is NaN): empty.
 export function powOddRoot(out: Iv, a: Iv, e: number, pOdd: boolean): Iv {
+  if (e === 0 || !Number.isFinite(e)) return powOddRootEdge(out, a, e, pOdd)
   return sides(out, a, pOdd ? oddRootOdd : oddRootEven, e > 0 ? 0 : Number.NaN, LIB, e, oddRootZeros(pOdd, e))
+}
+
+// The exponents that are not an ordinary finite number (see powOddRoot), kept apart so the common case stays small.
+function powOddRootEdge(out: Iv, a: Iv, e: number, pOdd: boolean): Iv {
+  if (e === 0) {
+    if (!pOdd || a.lo >= 0) return set(out, 1, 1, a.v)
+    // a base that may be NaN somewhere (partial) gives 1 there, beside the -1 of its negative points
+    if (a.hi < 0) return a.v <= PARTIAL ? set(out, -1, 1, a.v) : set(out, -1, -1, a.v)
+    return set(out, -1, 1, worst(a.v, DEFINED))
+  }
+  if (e !== e || isEmpty(a)) return setEmpty(out)
+  return set(out, pOdd ? -Infinity : 0, Infinity, worst(a.v, PARTIAL))
 }
 
 // Scratch for the one-whole-number path of powGeneral: the negative part of the base and its power.

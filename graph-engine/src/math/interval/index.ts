@@ -11,12 +11,14 @@
 //
 //  1. CONTINUOUS does not mean bounded. An infinite bound under CONTINUOUS is overflow (exp(x) over
 //     [700, 800]), not a pole: never certify a stretch flat when a bound or a sample is infinite. Nor does
-//     it make the compiled values step-free to the last bit: it is a claim about the real function, and
-//     where an intermediate overflows or saturates and the next operation absorbs it, the scalar's own
-//     floating point steps (log(x, x!) goes from 0.0072 to 0 at x = 170.62, where x! becomes Infinity;
-//     atanh(tanh(x)) is a staircase of 1e-4 steps near -15), and so does a steep curve at the scale of the
-//     subnormals, which have one double between their two sides (x^0.001 goes from 0 at 0 to 0.47 at
-//     5e-324, over a box [0, 5e-324] that is CONTINUOUS), with no verdict to show it.
+//     it make the compiled values step-free to the last bit: the verdict is about the real function, and
+//     the scalar's sampled values can step. Any curve steeper than the doubles can resolve, at any scale,
+//     may sit under CONTINUOUS (the subnormals are one case: x^0.001 goes from 0 at 0 to 0.47 at 5e-324;
+//     atan(1e20 (x - 1)) over [0.5, 1.5] is CONTINUOUS, and the scalar goes from -pi/2 through 0 to pi/2
+//     within two doubles of x = 1; atan(tr(w(lp(x)))) in degrees, which amplifies by 1e11 and takes the sine
+//     of it, is another), and so may a step where an intermediate overflows or saturates and the next
+//     operation absorbs it (log(x, x!) goes from 0.0072 to 0 at x = 170.62, where x! becomes Infinity;
+//     atanh(tanh(x)) is a staircase of 1e-4 steps near -15), with no verdict to show any of it.
 //  2. Empty (lo > hi, always PARTIAL; isEmpty tests it) means NaN at every point of the box: skip it,
 //     do not bisect it.
 //  3. PARTIAL does not mean "a pole is here". It also appears at defined points: gamma near its poles (a

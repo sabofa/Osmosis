@@ -696,7 +696,7 @@ describe('an extreme that is exactly zero is kept where the function never gives
   // exponent double and a flag, whole or not, not only to the pairs a literal p/q can make.
   const E_ODD = 2842952446159221
   const E_EVEN = 2395267201149528
-  const ROOT_EXPONENTS = [1 / 3, 2 / 3, 4 / 3, 5 / 3, -1 / 3, -2 / 3, -5 / 3, 1 / 5, 3 / 5, 7 / 5, -3 / 5, 0.999, 1, 2, 3, 4, 5, -1, -2, -3, -4, E_ODD, E_EVEN, -E_ODD, -E_EVEN, 2 ** 52 + 1, 2 ** 53]
+  const ROOT_EXPONENTS = [1 / 3, 2 / 3, 4 / 3, 5 / 3, -1 / 3, -2 / 3, -5 / 3, 1 / 5, 3 / 5, 7 / 5, -3 / 5, 0.999, 1, 2, 3, 4, 5, -1, -2, -3, -4, E_ODD, E_EVEN, -E_ODD, -E_EVEN, 2 ** 52 + 1, 2 ** 53, 0, -0, Infinity, -Infinity, Number.NaN]
 
   it('powOddRoot with an exponent that is a whole number at run time keeps the zeros the scalar gives', () => {
     // x^E at -0 is -0 for the odd E (and +0 at +0), whichever way the flag says
@@ -715,6 +715,52 @@ describe('an extreme that is exactly zero is kept where the function never gives
     expect(point.lo < 0 && point.hi > 0).toBe(true)
     // and the even numerator with an even whole number, and an odd numerator either way, are still sound
     expect(powOddRoot(iv(), box(-0, 1), E_EVEN, true).hi).toBeGreaterThanOrEqual(1)
+  })
+
+  // A literal ratio can round to 0, an infinity or NaN: ((562949953421312 + 1/3) - (562949953421312 + 2/5)) is the rational
+  // -1/15 and, both sums rounding to 2^49 + 0.375, the double 0; 1/3 + 1/that is -44/3 and +Infinity; 1/3 + (1/that - 1/that)
+  // is 1/3 and NaN. realOddPow with e = 0 is 1 (Math.pow(x, 0), NaN base too), -1 for a negative x under an odd numerator;
+  // with e infinite, Math.pow(1, Infinity) is NaN; with e NaN, everything is NaN.
+  it('powOddRoot with an exponent that rounds to 0, an infinity or NaN', () => {
+    const empty = iv(Infinity, -Infinity, PARTIAL)
+    for (const e of [0, -0]) {
+      // an even numerator, or a base that is not negative: 1 whatever the base is, NaN included
+      for (const [lo, hi] of [[-3, -1], [-3, 2], [0, 2], [-0, 2], [-1, -0], [-Infinity, Infinity]]) expect(powOddRoot(iv(), box(lo, hi), e, false), `[${fmt(lo)}, ${fmt(hi)}]`).toEqual({ lo: 1, hi: 1, v: CONTINUOUS })
+      expect(powOddRoot(iv(), empty, e, false)).toEqual({ lo: 1, hi: 1, v: PARTIAL })
+      expect(powOddRoot(iv(), empty, e, true)).toEqual({ lo: 1, hi: 1, v: PARTIAL })
+      // an odd numerator: -1 for a negative x, 1 for the rest (-0 included: x < 0 is false at -0), so a jump across 0
+      expect(powOddRoot(iv(), box(-3, -1), e, true)).toEqual({ lo: -1, hi: -1, v: CONTINUOUS })
+      expect(powOddRoot(iv(), box(0, 2), e, true)).toEqual({ lo: 1, hi: 1, v: CONTINUOUS })
+      expect(powOddRoot(iv(), box(-0, 2), e, true)).toEqual({ lo: 1, hi: 1, v: CONTINUOUS })
+      for (const [lo, hi] of [[-3, 2], [-1, -0], [-1e-300, 1e-300], [-Infinity, Infinity]]) expect(powOddRoot(iv(), box(lo, hi), e, true), `[${fmt(lo)}, ${fmt(hi)}]`).toEqual({ lo: -1, hi: 1, v: DEFINED })
+      // a base that may be NaN somewhere (partial) is 1 there, beside the -1 of its negative points
+      expect(powOddRoot(iv(), iv(-3, -1, PARTIAL), e, true)).toEqual({ lo: -1, hi: 1, v: PARTIAL })
+      expect(powOddRoot(iv(), iv(-3, -1, PARTIAL), e, false)).toEqual({ lo: 1, hi: 1, v: PARTIAL })
+      // a verdict below the base's is kept
+      expect(powOddRoot(iv(), iv(-3, 2, PARTIAL), e, true).v).toBe(PARTIAL)
+      expect(powOddRoot(iv(), iv(1, 2, DEFINED), e, true).v).toBe(DEFINED)
+    }
+    // an infinite exponent: Math.pow(1, Infinity) is NaN, so a base box is partial; the values are 0, Infinity (and their negatives
+    // for an odd numerator); a NaN base is NaN
+    for (const e of [Infinity, -Infinity]) {
+      for (const [lo, hi] of [[0.5, 2], [2, 3], [-3, -2], [-2, 3]]) {
+        const even = powOddRoot(iv(), box(lo, hi), e, false)
+        expect(even.v, `[${lo}, ${hi}]^${e}`).toBe(PARTIAL)
+        expect(even.lo <= 0 && even.hi === Infinity).toBe(true)
+        const odd = powOddRoot(iv(), box(lo, hi), e, true)
+        expect(odd.v).toBe(PARTIAL)
+        expect(odd.lo === -Infinity && odd.hi === Infinity).toBe(true)
+      }
+      expect(powOddRoot(iv(), empty, e, false).lo).toBeGreaterThan(-Infinity)
+      expect(powOddRoot(iv(), empty, e, false).lo > powOddRoot(iv(), empty, e, false).hi).toBe(true)
+    }
+    // a NaN exponent is NaN everywhere: empty, whatever the base
+    for (const pOdd of [false, true]) for (const [lo, hi] of [[1, 1], [0.5, 2], [-3, -1], [-0, 0], [-Infinity, Infinity]]) {
+      const r = powOddRoot(iv(), box(lo, hi), Number.NaN, pOdd)
+      expect(r.lo > r.hi && r.v === PARTIAL, `[${fmt(lo)}, ${fmt(hi)}]^NaN pOdd ${pOdd}`).toBe(true)
+    }
+    const r = powOddRoot(iv(), empty, Number.NaN, true)
+    expect(r.lo > r.hi && r.v === PARTIAL).toBe(true)
   })
 
   it('powOddRoot for every exponent and both flags, whole or not', () => {

@@ -250,6 +250,36 @@ describe('tight verdicts on simple boxes', () => {
     }
   })
 
+  it('an odd-root exponent whose double is 0, an infinity or NaN is what the scalar computes with', () => {
+    // D is the rational -1/15 and the double 0: 2^49 + 1/3 and 2^49 + 2/5 both round to 2^49 + 0.375
+    const D = '((562949953421312 + 1/3) - (562949953421312 + 2/5))'
+    const scalar = (src: string): ((x: number) => number) => compileScalar(p(src), ['x'], plain)
+    expect(compileScalar(p(D), [], plain)()).toBe(0)
+    // sqrt(x)^D over [-2, -1]: the base is NaN there, and Math.pow(NaN, 0) is 1
+    expect(scalar(`sqrt(x)^(${D})`)(-1.5)).toBe(1)
+    expect(at(`sqrt(x)^(${D})`, ['x'], plain, -2, -1)).toEqual({ lo: 1, hi: 1, v: PARTIAL })
+    // 1/3 + 1/D is the rational -44/3 and the double Infinity: Math.pow(1, Infinity) is NaN, at x = 1
+    expect(compileScalar(p(`1/3 + 1/${D}`), [], plain)()).toBe(Infinity)
+    expect(scalar(`x^(1/3 + 1/${D})`)(1)).toBeNaN()
+    const inf = at(`x^(1/3 + 1/${D})`, ['x'], plain, 0.5, 2)
+    expect(inf.v).toBeLessThanOrEqual(PARTIAL)
+    expect(inf.hi).toBe(Infinity)
+    // 1/3 + (1/D - 1/D) is the rational 1/3 and the double NaN: NaN everywhere
+    expect(compileScalar(p(`1/3 + (1/${D} - 1/${D})`), [], plain)()).toBeNaN()
+    expect(scalar(`x^(1/3 + (1/${D} - 1/${D}))`)(2.5)).toBeNaN()
+    const nan = at(`x^(1/3 + (1/${D} - 1/${D}))`, ['x'], plain, 2, 3)
+    expect(nan.lo > nan.hi && nan.v === PARTIAL).toBe(true)
+    // these and the review's others (zero, infinite and NaN doubles, whole numbers either parity, a double of the other sign), under
+    // every wrapper that reads a sign or a verdict, over the edge boxes with each zero end as both signs
+    const EXPONENTS = [
+      D, `-${D}`, `2*${D}`, `${D}*3/7`, `1/3 + 1/${D}`, `2/3 + 1/${D}`, `1/3 - 1/${D}`, `2/3 - 1/${D}`, `1/3 + (1/${D} - 1/${D})`, `2/3 + (1/${D} - 1/${D})`,
+      '8153783306384/3*1046', '3391128647215/3*2119', '1/3', '2/3', '-1/3', '-2/3',
+    ]
+    for (const E of EXPONENTS) {
+      for (const w of ['x^(E)', '1/x^(E)', 'atan2(x^(E), -1)', 'atan2(-1, x^(E))', 'sqrt(x^(E))', 'x^(E) + 0', 'sqrt(x)^(E)', 'sqrt(-x)^(E)', '(sqrt(x) - 3)^(E)', 'asin(x)^(E)']) sweep1(w.replace(/E/g, E))
+    }
+  })
+
   it('degrees, a parameter, a user function and a constant product', () => {
     const r = at('sin(x)', ['x'], makeScope({ angle: 'degrees' }), 0, 90)
     expect(within(r, 0, 1)).toBe(true)
@@ -276,6 +306,15 @@ describe('tight verdicts on simple boxes', () => {
     expect(at('0/0', [], plain)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
     // -0 keeps its sign
     expect(Object.is(at('-0', [], plain).lo, -0)).toBe(true)
+  })
+
+  it('a CONTINUOUS verdict can sit over a curve steeper than the doubles resolve, at ordinary scale too', () => {
+    // atan(1e20 (x - 1)) is continuous, and the scalar goes from -pi/2 through 0 to pi/2 within two doubles of x = 1
+    const g = compileScalar(p('atan(1e20 (x - 1))'), ['x'], plain)
+    expect(g(nextDown(1))).toBeLessThan(-1.5707)
+    expect(g(1)).toBe(0)
+    expect(g(nextUp(1))).toBeGreaterThan(1.5707)
+    expect(at('atan(1e20 (x - 1))', ['x'], plain, 0.5, 1.5).v).toBe(CONTINUOUS)
   })
 
   it('a CONTINUOUS verdict can sit over a steep floating-point step at the scale of the subnormals', () => {

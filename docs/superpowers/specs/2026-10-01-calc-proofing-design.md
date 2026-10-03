@@ -277,11 +277,13 @@ The rules a consumer relies on, each held by a test against the scalar compile:
 - **Overflow is not undefinedness.** A finite input whose result overflows keeps
   its verdict and the bound becomes infinite; `partial` means a NaN or a pole. So
   an infinite bound under `continuous` is overflow, and a consumer must not
-  certify a stretch as flat when a bound or a sample is infinite. (A floating
-  point step where an overflowed or saturated intermediate is absorbed
-  downstream, `log(x, x!)` at x = 170.62, or a steep curve at the scale of the
-  subnormals, `x^0.001` from 0 at 0 to 0.47 at 5e-324, is no jump of the real
-  function and is not reported.)
+  certify a stretch as flat when a bound or a sample is infinite. (The verdict is
+  about the real function and the scalar's sampled values can step: any curve
+  steeper than the doubles can resolve, at any scale, may sit under
+  `continuous` — `atan(1e20 (x - 1))` over [0.5, 1.5], or at the scale of the
+  subnormals `x^0.001` from 0 at 0 to 0.47 at 5e-324 — and so may a step where
+  an overflowed or saturated intermediate is absorbed downstream, `log(x, x!)` at
+  x = 170.62. None is a jump of the real function, and none is reported.)
 - **Empty.** An empty interval (`lo > hi`) always carries `partial` and means
   NaN at every point of the box: skip it, never bisect it.
 - **Signed zeros.** A box end that is a zero is that signed zero; a zero

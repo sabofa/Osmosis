@@ -672,7 +672,10 @@ function build(expr: Expr, env: Env, ctx: Ctx): INode {
     case 'binary': {
       // A literal p/q exponent with q odd takes the real root (math/rational.ts). The exponent is
       // made of integer literals, so it is one constant, and the one the scalar computes: the twin
-      // reads exactly that number, not a widened enclosure of it.
+      // reads exactly that number, not a widened enclosure of it. That number is a double and need
+      // not be finite or nonzero (the rational -1/15 can be the double 0, and a quotient by it an
+      // infinity, and a difference of infinities NaN): a NaN exponent is an empty node, which is no
+      // number to read (its lo is +Infinity), and the scalar is NaN everywhere.
       if (expr.op === '^') {
         const odd = oddRootExponent(expr.right)
         if (odd) {
@@ -684,7 +687,8 @@ function build(expr: Expr, env: Env, ctx: Ctx): INode {
           return combine(expr, [base, exponent], ctx, (out) => () => {
             base.run()
             exponent.run()
-            powOddRoot(out, base.out, exponent.out.lo, pOdd)
+            if (isEmpty(exponent.out)) setEmpty(out)
+            else powOddRoot(out, base.out, exponent.out.lo, pOdd)
           })
         }
       }
