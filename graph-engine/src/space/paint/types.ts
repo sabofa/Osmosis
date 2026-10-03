@@ -119,6 +119,10 @@ export interface StrokeBatch {
   // The unit world normal at the stroke's anchor, turned toward the viewer the stroke was made for, 3 per stroke;
   // (0, 0, 0) for a stroke that has none (lines, edges). A view turned away from it fades the stroke out.
   worldNormal: Float32Array
+  // Per stroke, what the renderer does where a surface is nearer (bake/types.ts HIDDEN_*): only a baked frame
+  // fills it (data-mark lines drawn dashed where hidden); the per-frame model leaves it undefined and makes its
+  // own hidden runs.
+  hidden?: Uint8Array
 }
 export const EDGE_CLASSES: readonly EdgeClass[] = ['lost', 'soft', 'firm', 'hard']
 
