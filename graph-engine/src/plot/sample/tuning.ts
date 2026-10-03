@@ -234,12 +234,32 @@ export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, spikeFactor: 8
 export const CORE = {
   // The start grid has at least this many intervals, however short the range is on screen.
   minStartIntervals: 8,
-  // An interval at most this wide (px) that is still unresolved is a column of a band
-  // (the oscillation hook, adaptive.ts bandColumn).
-  bandColumnPx: 1,
   // The most halvings of an edge search, between a defined end and an undefined one. The
   // adjacent doubles are usually reached first; this stops a search towards 0, where
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
   // far under any screen.
   edgeSteps: 64,
+}
+
+// Bands (band.ts, and the hook in adaptive.ts): an oscillation faster than a pixel is drawn as the
+// extent the curve sweeps over each pixel column, instead of as a zig-zag.
+export const BAND = {
+  // The oscillation coordinate is sampled this many times over a column, evenly spaced, the ends
+  // included: what a column costs is these less the two ends, which the core already has. A column
+  // with a couple of periods in it (sin(500x), 2 per pixel at 40 px per unit) reaches 0.993 of the
+  // amplitude on average and 0.975 at worst; one with twenty (sin(5000x)) 0.93 and 0.73. The samples
+  // are inside the curve, so a band is never taller than the curve is, and it is held inside the
+  // twin's enclosure as well.
+  samples: 16,
+  // An interval at most this wide (px) that is still unresolved, because it is not flat or the twin
+  // cannot certify it, is a column to try. Wider, the samples are too far apart to show an
+  // oscillation (they would alias it), and the core bisects instead.
+  columnPx: 1,
+  // Interval widths are halved from the start grid's, so a pixel is a pixel to rounding only: this
+  // much (relative) is allowed over columnPx, which is a billionth.
+  columnSlack: 1e-9,
+  // The column is a band's only if the samples change direction this often. One turn is a peak,
+  // which the polyline draws well; a steep monotone stretch has none, and refines to the floor
+  // instead (steepness never breaks a curve).
+  minTurns: 2,
 }

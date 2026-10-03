@@ -58,9 +58,13 @@
 //      decides: filled where it equals the limit on screen.
 // 5. SAMPLING. The pieces go, in order, into ONE ChainSink, which continues a chain only where
 //    one piece ends at exactly the parameter and point the next begins at. It is lifted
-//    between pieces at a pole, jump or edge, never at a hole.
+//    between pieces at a pole, jump or edge, never at a hole. For an explicit curve (the only
+//    kind with an axis to oscillate along) they also share ONE BandSink, which collects the
+//    pixel columns where the curve oscillates faster than a pixel (band.ts, adaptive.ts): a band
+//    runs on across the seam between two pieces as a chain does, and is no break.
 // 6. OUTPUT. The curve (the sink's chains, its breaks: the classified ones and the core's own,
-//    sorted by parameter), its marks in parameter order, then its asymptote guides. Marks
+//    sorted by parameter), its bands (`band.<k>`, in parameter order, the curve's colour), its
+//    marks in parameter order, then its asymptote guides. Marks
 //    are exact: they are read from limits, not from samples. A jump's side and an edge's
 //    limit are read once more close in to the spot (CURVE.settleTols), because limits.ts
 //    stops at 6e-9, and for an explicit curve the independent coordinate of a limit is the
@@ -74,6 +78,7 @@ import type { MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
 import type { Bounds, Break, Chain, SceneObject, Vec2 } from '../../scene/types'
 import { sampleRange } from './adaptive'
+import { BandSink } from './band'
 import { classify, type Classification } from './limits'
 import { locateZeros, type Zero } from './locate'
 import { ChainSink } from './sink'
@@ -199,6 +204,9 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const located = locateZeros(generatorsOf(co, scope), co.param, scope, co.from, co.to, counter)
   const h0 = tuning.startPx / co.pxPerT
   const sink = new ChainSink(clip)
+  // one sink for every piece: the pieces are walked in parameter order, and a band goes on across the
+  // seam between two of them as a chain does
+  const bandSink = co.oscillationAxis === null ? undefined : new BandSink(co.oscillationAxis, clip)
   const walk: Walk = {
     fns,
     px,
@@ -215,7 +223,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   let capped = false
   const piece = (ta: number, tb: number, left: End, right: End) => {
     if (!(tb > ta)) return
-    if (sampleRange(fns, ta, tb, { left, right }, screen, tuning, counter, sink).capped) capped = true
+    if (sampleRange(fns, ta, tb, { left, right }, screen, tuning, counter, sink, bandSink).capped) capped = true
   }
 
   let from = co.from
@@ -232,8 +240,9 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
 
   const chains = sink.chains()
   const breaks: Break[] = sink.breaks().sort((a, b) => a.at - b.at)
-  const objects: SceneObject[] = [curveObject(options, chains, breaks), ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
-  const grid = startGrid(spec.kind === 'explicit' ? spec.domain : null, co, fns, scope, tuning, counter, chains.length > 0)
+  const bands = bandObjects(bandSink, options)
+  const objects: SceneObject[] = [curveObject(options, chains, breaks), ...bands, ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
+  const grid = startGrid(spec.kind === 'explicit' ? spec.domain : null, co, fns, scope, tuning, counter, chains.length > 0 || bands.length > 0)
   return { objects, capped, stats: { points: counter.points, intervals: counter.intervals }, tested: grid.tested, defined: grid.defined }
 }
 
@@ -387,6 +396,12 @@ function valueAt(w: Walk, tc: number): Vec2 | null {
 
 function curveObject(options: CurveOptions, chains: Chain[], breaks: Break[]): SceneObject {
   return { kind: 'curve', id: { statement: options.statement, object: 'curve' }, chains, breaks, color: options.color }
+}
+
+// The bands, one object each in the order they were found (parameter order), the curve's colour.
+function bandObjects(bandSink: BandSink | undefined, options: CurveOptions): SceneObject[] {
+  if (bandSink === undefined) return []
+  return bandSink.bands().map((outline, k) => ({ kind: 'band', id: { statement: options.statement, object: `band.${k}` }, outline, color: options.color }))
 }
 
 // The marks, with their ids counted per role in parameter order.
