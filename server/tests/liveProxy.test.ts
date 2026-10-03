@@ -31,6 +31,18 @@ describe("shouldForward", () => {
     expect(shouldForward("GET", "/api/attempts", local)).toBe(false);
     expect(shouldForward("GET", "/api/templates", local)).toBe(false);
   });
+
+  it("forwards the whole workspace API to canonical, and only it", () => {
+    // The workspace lives on canonical: the tutor and the planner write it
+    // over MCP, and it never syncs down, so a local node's app reads and
+    // writes it there.
+    expect(shouldForward("GET", "/api/ws/roots", () => false)).toBe(true);
+    expect(shouldForward("PUT", "/api/ws/nodes/abc/content", () => false)).toBe(true);
+    expect(shouldForward("DELETE", "/api/ws/placements/p1?x=1", () => false)).toBe(true);
+    expect(shouldForward("GET", "/api/ws", () => false)).toBe(true);
+    expect(shouldForward("GET", "/api/wsx", () => false)).toBe(false);
+    expect(shouldForward("GET", "/api/wsx/roots", () => false)).toBe(false);
+  });
 });
 
 describe("live sessions through a local node", () => {
@@ -109,5 +121,45 @@ describe("live sessions through a local node", () => {
     const offline = await fetch(`${localUrl}/api/sessions`);
     expect(offline.status).toBe(503);
     expect(((await offline.json()) as { reason: string }).reason).toBe("requires_connection");
+  });
+
+  it("the workspace is canonical's: a local node's app writes and reads it there", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "osmosis-liveproxy-ws-"));
+    dirs.push(dir);
+    const canonicalDb = openFileDb(dir, "c.db");
+    dbs.push(canonicalDb);
+    const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c.db"), remoteUrl: null,
+                   uploadsDir: dir, mcpAuthToken: "t", webDistDir: null };
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
+    apps.push(canonicalApp);
+    const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
+
+    const localDb = openFileDb(dir, "l.db");
+    dbs.push(localDb);
+    const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l.db"), remoteUrl: canonicalUrl,
+                  uploadsDir: dir, mcpAuthToken: null, webDistDir: null };
+    const runtime = createSyncRuntime();
+    runtime.online = true;
+    const app = buildApp({ db: localDb, env, node: bootstrapNode(localDb, env), runtime, logger: false });
+    apps.push(app);
+    const localUrl = await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const created = await fetch(`${localUrl}/api/ws/nodes`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "track", title: "quant" }),
+    });
+    expect(created.status).toBe(201);
+    const { node } = (await created.json()) as { node: { id: string } };
+    // It is on canonical, not in the local database.
+    expect(canonicalDb.prepare("SELECT title FROM ws_node WHERE id = ?").get(node.id)).toEqual({ title: "quant" });
+    expect(localDb.prepare("SELECT COUNT(*) AS n FROM ws_node").get()).toEqual({ n: 0 });
+
+    const roots = (await (await fetch(`${localUrl}/api/ws/roots`)).json()) as { tracks: { id: string }[] };
+    expect(roots.tracks.map((t) => t.id)).toEqual([node.id]);
+
+    // Offline, the same read is the 503 the app understands.
+    runtime.online = false;
+    expect((await fetch(`${localUrl}/api/ws/roots`)).status).toBe(503);
   });
 });

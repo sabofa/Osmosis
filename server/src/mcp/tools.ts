@@ -17,6 +17,7 @@ import { createSession, endSession, listSessions, getSessionDetail } from "../do
 import { presentShow, updateShow, getShowOutcome } from "../domain/shows.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
 import { listThemes, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
+import { registerWorkspaceTools } from "./workspaceTools.js";
 
 // Mirrors web/src/lib/themeTokens.ts TOKEN_FIELDS — the only custom properties
 // a theme's token sets may name. Anything else belongs in custom_css.
@@ -135,6 +136,11 @@ export function trimListTagsForMcp(tags: ReturnType<typeof listTags>) {
 // no template/theme/config/asset surface — so the token that server holds
 // can't reshape the bank even if it is compromised. Task 8's show tools
 // append here; nothing else about registration changes when they do.
+//
+// The ws_* tools are here because the tutor writes into Ben's workspace (its
+// notes about him go into the unit's USERNOTES file) and the planner shares
+// that connection. They read, create, write, append and place; none of them
+// removes or moves anything, so the token still can't tidy the tree away.
 export const PRESENTER_TOOLS: readonly string[] = [
   "readme",
   "create_session",
@@ -148,6 +154,13 @@ export const PRESENTER_TOOLS: readonly string[] = [
   "end_session",
   "grade_response",
   "list_ungraded_written",
+  "ws_list",
+  "ws_read",
+  "ws_search",
+  "ws_create",
+  "ws_write",
+  "ws_append",
+  "ws_place",
 ];
 
 export function registerTools(
@@ -1212,4 +1225,8 @@ export function registerTools(
       }
     }
   );
+
+  // The workspace tools go through the same wrapper, so the presenter
+  // allowlist above decides which of them a scope sees.
+  registerWorkspaceTools(registerTool, db, { ok, fail });
 }

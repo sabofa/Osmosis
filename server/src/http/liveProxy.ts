@@ -3,14 +3,16 @@ import { Readable } from "node:stream";
 import type { AppContext } from "./app.js";
 
 // ----------------------------------------------------------------------------
-// Live sessions on a local node.
+// Live sessions and the workspace on a local node.
 //
 // The tutor creates sessions, items and shows on the canonical node, over
 // MCP, and they never sync down: a live item is answered once, by whoever is
 // looking at the screen right now. So a local node forwards everything the
 // Live pages read and write straight to canonical — sessions, the stream,
 // its SSE events, shows, and any attempt this node does not own — and the
-// app never has to know which node it is talking to.
+// app never has to know which node it is talking to. The workspace (/api/ws)
+// is the same: the tutor and the planner write its files over MCP, so the
+// copy that matters is canonical's.
 //
 // Registered as a preHandler hook: Fastify has parsed the JSON body by then,
 // which is re-sent as JSON, and a forwarded request is answered here and
@@ -29,6 +31,9 @@ export function shouldForward(
   if (path === "/api/sessions" || path.startsWith("/api/sessions/")) return true;
   if (path.startsWith("/api/shows/")) return true;
   if (path === "/api/attempts/live-pending") return true;
+  // The workspace lives on canonical too: the tutor and the planner write it
+  // over MCP and none of it syncs down.
+  if (path === "/api/ws" || path.startsWith("/api/ws/")) return true;
   // An attempt this node does not hold belongs to canonical (a live item);
   // one it does hold is its own and stays local, whatever the method.
   const attempt = /^\/api\/attempts\/([^/]+)(\/|$)/.exec(path);
@@ -47,7 +52,8 @@ export function registerLiveProxy(app: FastifyInstance, ctx: AppContext): void {
     if (!shouldForward(request.method, request.url, attemptIsLocal)) return;
 
     if (!ctx.runtime.online) {
-      reply.code(503).send({ reason: "requires_connection", message: "Live sessions live on the server; this device is offline." });
+      const what = request.url.startsWith("/api/ws") ? "The workspace lives" : "Live sessions live";
+      reply.code(503).send({ reason: "requires_connection", message: `${what} on the server; this device is offline.` });
       return;
     }
 

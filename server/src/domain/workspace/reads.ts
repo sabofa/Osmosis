@@ -334,8 +334,10 @@ export function searchWorkspace(db: DatabaseSync, opts: { q?: string; scope?: st
     .sort((a, b) => natural(a.name, b.name) || natural(a.placement_id ?? "", b.placement_id ?? "") || natural(a.node.id, b.node.id));
 }
 
-// Everything in the trash, most recently trashed first.
+// Everything in the trash, most recently trashed first. Uploads get their asset
+// file first, so an upload deleted behind the graph's back is here already.
 export function listTrash(db: DatabaseSync): NodeSummary[] {
+  syncAssetFiles(db);
   return selectNodes(db, "n.trashed_at IS NOT NULL")
     .map(toSummary)
     .sort((a, b) => natural(b.trashed_at ?? "", a.trashed_at ?? "") || natural(a.title, b.title) || natural(a.id, b.id));

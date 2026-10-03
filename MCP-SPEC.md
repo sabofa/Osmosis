@@ -30,8 +30,8 @@ segment, so `buildApp`'s pino `req` serializer rewrites a logged url of
 
 | Env var | Scope | Inventory |
 |---|---|---|
-| `MCP_AUTH_TOKEN` | `full` | all 41 tools. Required — the canonical node refuses to boot without one set |
-| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`, `list_ungraded_written`. Optional — unset means the presenter surface does not exist |
+| `MCP_AUTH_TOKEN` | `full` | all 48 tools. Required — the canonical node refuses to boot without one set |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `PRESENTER_TOOLS` in `server/src/mcp/tools.ts`: `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`, `list_ungraded_written`, `ws_list`, `ws_read`, `ws_search`, `ws_create`, `ws_write`, `ws_append`, `ws_place` (§3.6). Optional — unset means the presenter surface does not exist |
 
 `registerTools(server, db, uploadsDir, nodeId, scope)` skips any tool outside
 the allowlist when the scope is `presenter`, so a withheld tool is genuinely
@@ -120,14 +120,14 @@ stuff yet."
 
 ## 3. Full tool inventory
 
-41 tools on the full surface, 12 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
+48 tools on the full surface, 19 on the presenter surface (§1). Every schema is sent on every turn a connector is enabled for,
 regardless of whether it's called that turn — tool *count* isn't free, which
 is why `readme`/`bootstrap` were split by call cadence rather than just
 becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 8 — the retention loop changed `set_retention_target`, `get_due_items`, `present_item` and the template tools), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes; `retention_conventions` documents the retention loop (§3.5) |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 9 — the workspace tools, §3.6; 8 was the retention loop changing `set_retention_target`, `get_due_items`, `present_item` and the template tools), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes; `retention_conventions` documents the retention loop (§3.5) |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject. Returns `taxonomy: { seeded, seed_available, tag_count }`; `seed: true` creates the subject's shipped taxonomy (`server/src/domain/taxonomies/`, currently `chemistry` — Ebbing 11e ch. 1-12 plus `tech:mhchem`/`tech:calculator` — and `math`), idempotently, so an empty bank gets standard slugs instead of invented near-duplicates |
 | `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants, cut only at `:` — `_` and `.` are literal, so `a_b` never reaches `a.b`) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
@@ -157,6 +157,8 @@ becoming one larger tool.
 | `await_show_outcome` | Waits for the learner to work through a show, `timeout_s` default 25 clamped 1..25, polling every second and returning early on `acknowledged`. Returns `{ show_id, status: 'pending'/'seen'/'acknowledged', seen_at, dwell_ms, acknowledged_at }` |
 | `set_retention_target` | Attaches a target to a **node key** (a non-node identity is refused `invalid_node_key`); every item carrying the key inherits it. Returns `{ id, node_key, identity_key, retention_target, needs_last_until, first_gap_days, due_at, node_items }` — `due_at` is gap 1, when the node's first probe is drawn. The same label again starts that target over (§3.5) |
 | `get_due_items` | One row per due item (`id` = its `lineage_id`, `question_id` = the live version), most overdue first — overdue measured against the gap the item was meant to survive (`overdue_ratio`). Rows carry `node_key`/`node_keys`, `targets[]` (each with `role` `draw`/`reserve` and the draw's `probe` state), SM2 state (`easiness`, `repetitions`, `interval_days`, `retention_reviews`, `last_quality`), and `reason`: `never_demonstrated` (no retention review yet), `relearn` (reserve a failed draw brought forward, or never passed — go teach it), `lapsed` (failed after passing — resurface sooner), `decayed` (passed, interval run). The identity-keyed fields stay: `identity_key` (primary node key), `retention_target`/`target_source` (nearest open target), `last_result`. Filters `before`, `node_key` (segment-aware); paginated |
+| `ws_list` / `ws_read` / `ws_search` | Read Ben's workspace (§3.6). `ws_list` is the roots with no `container_id`, else that container's live children under their local names; `ws_read` is a node's summary, `appears_in`, parent tracks and, for a file, its `content` (`type`, `body`, `revision`, `saved_at`, `saved_by`); `ws_search` is text (names, titles, file content) with optional `scope` and `kind_tag`, one row per placement |
+| `ws_create` / `ws_write` / `ws_append` / `ws_place` | Write to it (§3.6). Each content write takes `as: tutor` or `planner`, no default, and that is recorded on the revision. `ws_create` makes a track, course, folder or file (a file needs `type`) and places it with `container_id`; `ws_write` replaces a file against the `base_revision` you read (`stale_revision` means Ben edited it since); `ws_append` adds to an appendable file with no revision; `ws_place` puts an existing node in one more container |
 
 Plus one plain (non-JSON-RPC) HTTP route on the same route family, `POST
 /mcp/:token/upload`, which accepts either token — see §5.
@@ -312,6 +314,41 @@ weight). A due item's weight is ×2–4 by how overdue it is.
 draws with its items (`retention_targets_moved`). A reworded version keeps the history (lineage). `retire_question`
 on the live version ends the schedule (`status: ended`) and keeps the history.
 Ephemeral items never schedule.
+
+### 3.6 The workspace (tools_version 9)
+
+Ben's workspace is a graph: tracks, courses, folders and files are nodes, and a
+*placement* says "this node appears in this container under this name", so one
+file can sit in two courses under a name of its own in each. The tutor and the
+planner share it with Ben through seven tools: `ws_list`, `ws_read`,
+`ws_search` (read), `ws_create`, `ws_write`, `ws_append` (write) and `ws_place`
+(file an existing node somewhere else). All seven are on the presenter surface,
+because the tutor server writes its notes there.
+
+**Who wrote it.** Every content write (`ws_create`, `ws_write`, `ws_append`)
+takes `as`: `tutor` or `planner`. There is no default and `ben` is not an
+option; Ben's own edits arrive over HTTP (`/api/ws`) and are always signed as
+him. The author is stored on the revision and `ws_read` returns it as
+`saved_by`.
+
+**Writing without clobbering.** `ws_write` replaces a file and must carry the
+`base_revision` that `ws_read` showed; if the file has been saved since, it is
+refused as `stale_revision` (the message names the current revision) and the
+caller reads again and merges. `ws_append` needs no revision: it adds to the end
+of an appendable file (markdown), after a blank line. That is how the tutor's
+notes about Ben go into a unit's `USERNOTES` file, with specific examples,
+without overwriting anything Ben changed. A file type that is not appendable
+(`graph`, an uploaded document) answers `not_appendable`.
+
+**What is not here.** No remove, move, destroy, rename or purge: rearranging
+the tree is Ben's. An agent can add to it and fill it in, not tidy it away.
+Errors are the usual `{ error, message }` (`not_found`, `name_taken`,
+`containment_not_allowed`, `cycle_rejected`, `already_placed`, `invalid_input`,
+`unknown_file_type`, `not_appendable`, `stale_revision`, ...).
+
+**Uploads.** Every upload (an asset made by `create_asset`, the app, or the CLI)
+gets a file node `asset:<asset id>` in the workspace the moment it is created,
+unplaced, tagged `source`. Deleting the upload sends that file to the trash.
 
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 

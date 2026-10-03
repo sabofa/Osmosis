@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { tmpdir } from "node:os";
 import { openTestDb } from "./helpers.js";
+import { createAsset, deleteAsset } from "../src/domain/assets.js";
 import { DomainError } from "../src/domain/errors.js";
 import { registerFileType } from "../src/domain/workspace/fileTypes.js";
 import { createNode, destroyNode, placeNode, purgeNode, restoreNode } from "../src/domain/workspace/graph.js";
@@ -307,5 +309,37 @@ describe("asset files in depth", () => {
     expect(count(db, "ws_node")).toBe(0);
     syncAssetFiles(db);
     expect(count(db, "ws_node")).toBe(1);
+  });
+});
+
+describe("asset files follow the asset table without anyone asking", () => {
+  const wrapper = (db: Db, id: string) => db.prepare("SELECT kind, kind_tag, trashed_at FROM ws_node WHERE id = ?").get(`asset:${id}`) as { kind: string; kind_tag: string | null; trashed_at: string | null } | undefined;
+
+  it("createAsset makes the wrapper in the same call: unplaced and live before any read has run", async () => {
+    const db = openTestDb();
+    const asset = await createAsset(db, tmpdir(), { title: "Ebbing ch3", type: "text", content: "moles" }, "human");
+    // Straight from the tables: no listRoots, no search, no explicit sync.
+    expect(wrapper(db, asset.id)).toEqual({ kind: "file", kind_tag: "source", trashed_at: null });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM ws_placement").get()).toEqual({ n: 0 });
+    expect(listRoots(db).unplaced.map((n) => n.id)).toEqual([`asset:${asset.id}`]);
+  });
+
+  it("deleteAsset trashes the wrapper in the same call, so deleting the upload and then purging works at once", async () => {
+    const db = openTestDb();
+    const asset = await createAsset(db, tmpdir(), { title: "scan", type: "text", content: "x" }, "claude");
+    expect(failure(() => purgeNode(db, `asset:${asset.id}`)).code).toBe("not_trashed");
+    deleteAsset(db, tmpdir(), asset.id);
+    expect(wrapper(db, asset.id)?.trashed_at).not.toBeNull();
+    expect(purgeNode(db, `asset:${asset.id}`)).toEqual({ purged: `asset:${asset.id}` });
+    expect(wrapper(db, asset.id)).toBeUndefined();
+  });
+
+  it("a deleted upload's wrapper is in the trash even if the delete bypassed the domain", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type) VALUES ('a1', 'one', 'text')").run();
+    syncAssetFiles(db);
+    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
+    // listTrash is what the trash view reads; it brings the wrappers up to date first.
+    expect(listTrash(db).map((n) => n.id)).toEqual(["asset:a1"]);
   });
 });

@@ -80,12 +80,14 @@ anything it doesn't recognise — the same bare 404 a wrong token has always got
 | Env var | Scope | Tools |
 |---|---|---|
 | `MCP_AUTH_TOKEN` | `full` | everything (the authoring connector) |
-| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`, `list_ungraded_written` |
+| `MCP_PRESENTER_TOKEN` | `presenter` | `readme`, `create_session`, `create_questions`, `present_item`, `await_item_outcome`, `present_show`, `update_show`, `await_show_outcome`, `get_attempt`, `end_session`, `grade_response`, `list_ungraded_written`, `ws_list`, `ws_read`, `ws_search`, `ws_create`, `ws_write`, `ws_append`, `ws_place` |
 
 `install.sh` generates both on first run. **The tutor server gets only
-`MCP_PRESENTER_TOKEN`** — it runs the live teaching loop and never needs to
-retire a question, edit a template, rewrite config or touch a theme, so it
-holds a credential that cannot do any of those things. `readme()` reports
+`MCP_PRESENTER_TOKEN`** — it runs the live teaching loop and writes its notes
+into Ben's workspace (the `ws_*` tools read, create, write, append and place;
+none removes or moves anything), and never needs to retire a question, edit a
+template, rewrite config or touch a theme, so it holds a credential that cannot
+do any of those things. `readme()` reports
 `scope` and lists exactly the tools that scope has, so the tutor can assert
 what it is holding rather than discovering it on a refused call.
 

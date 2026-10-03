@@ -12,6 +12,7 @@ import { mountMcp } from "../mcp/server.js";
 import { registerApiRoutes } from "./apiRoutes.js";
 import { registerLiveProxy } from "./liveProxy.js";
 import { registerAuthoringRoutes } from "./authoringRoutes.js";
+import { registerWorkspaceRoutes } from "./workspaceRoutes.js";
 import { registerAdminUpdateRoutes } from "./adminUpdate.js";
 import { buildPullResponse, applyPushRequest, buildQuestionPayloads, fetchTagAncestorClosure, buildTemplateDrawResponse, type PullRequest, type PushRequest } from "../domain/sync.js";
 import { resolveDailyDraw } from "../domain/dailyDraw.js";
@@ -129,6 +130,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
   registerLiveProxy(app, ctx);
   registerApiRoutes(app, ctx);
   registerAuthoringRoutes(app, ctx);
+  registerWorkspaceRoutes(app, ctx);
   registerAdminUpdateRoutes(app, ctx);
 
   // Production only: serve the built web app from the same process. The app

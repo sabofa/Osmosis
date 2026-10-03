@@ -117,11 +117,11 @@ describe("presenter-token MCP scope", () => {
 
 describe("PRESENTER_TOOLS allowlist", () => {
   // The concrete list, not a membership check: DEPLOY.md, MCP-SPEC.md and
-  // server/.env.canonical.example all spell these twelve names out in prose,
-  // and prose has no other way to notice that the allowlist grew. Change the
+  // server/.env.canonical.example all spell these names out in prose, and
+  // prose has no other way to notice that the allowlist grew. Change the
   // allowlist and this test fails; fix this test and the docs are next to it
   // in the diff.
-  it("is exactly the twelve tools the deploy docs name", () => {
+  it("is exactly the nineteen tools the deploy docs name", () => {
     expect([...PRESENTER_TOOLS].sort()).toEqual([
       "await_item_outcome",
       "await_show_outcome",
@@ -135,6 +135,13 @@ describe("PRESENTER_TOOLS allowlist", () => {
       "present_show",
       "readme",
       "update_show",
+      "ws_append",
+      "ws_create",
+      "ws_list",
+      "ws_place",
+      "ws_read",
+      "ws_search",
+      "ws_write",
     ]);
   });
 
