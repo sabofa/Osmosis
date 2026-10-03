@@ -11,7 +11,7 @@
 //   size      big = min(zoomGrow × zoomSizeScale, bigMax) (view.ts, the pure forms); the sub-arc of the baked path the zoom needs, sizedLength(basePx[0],
 //             big) / ppu long about the anchor (clipped at the path's ends, never extrapolated), resampled to PATH_POINTS by linear interpolation
 //             ALONG THE BAKED POLYLINE and projected; widths as pathFromWalk and reshapeWidths make them (pressure × the lateral direction's
-//             foreshortening); the loaded end of a 'hand' stroke by screen x;
+//             foreshortening, read at four points of the path and interpolated between them); the loaded end of a 'hand' stroke by screen x;
 //   colour    the baked colour at the view's brush-load level (loadCellLevel, capped at BAKE_MIX_LEVELS - 1);
 //   order     layer by layer, far to near by the anchor's view depth (a stable counting sort over DEPTH_BUCKETS buckets, ties in bake order).
 // then adds this view's own strokes: the silhouettes (silhouettes.ts), the points and the arrowheads of the data marks (here), which are
@@ -20,22 +20,29 @@
 // THE PATHS. The baked path's BAKE_PATH_POINTS points are at equal world arc length (bake/walk.ts resampleWalk, to the snap's sagitta), so a fraction
 // t of its length is taken at the point t × (BAKE_PATH_POINTS - 1) of them: no arc lengths are summed per frame. (A test holds the deviation.)
 //
+// THE PASSES. A (select): one pass over the baked arrays in their own order, the cheap tests first; what is kept goes to the selection with its alpha, its
+// size, its depth and its layer. B (order): a stable counting sort of the selection by layer and depth bucket gives each selected stroke its place. C (pack):
+// the selected strokes are sized, projected and written, again in the baked painting's order, each to its place in the result (the baked arrays are read
+// sequentially; the result's arrays are the ones just made, warm in the cache); a stroke too thin to see leaves a gap, which a last pass closes.
+//
 // ALLOCATION. The per-stroke work allocates nothing: every temporary is a module-level typed array, and the per-frame arrays (the selection, the
 // sort, the frame's own strokes) are kept in a FrameScratch and grown by doubling. `frameFromBake` keeps one per bake in a WeakMap (keyed by the baked
 // worldPath array, so a recolour of a bake shares it); `frameFromBakeWith` takes the caller's. The OUTPUT arrays are made afresh in every call, for the
-// renderer may keep a batch; the scratch's own are never handed out.
+// renderer may keep a batch; the scratch's own are never handed out, unless the caller asks (FrameScratch.reuseOutput: views of arrays kept in the scratch,
+// good until the next call, for a caller that does not keep the batch). The first frame of a bake also makes, once, the per-stroke anchors and each
+// surface's vertex index (prepareBake does it ahead of the first frame).
 
 import type { SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
-import { PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
-import { reshapeWidths, sizedBristles, sizedLength, sizedVariance } from '../model/brush'
+import { MAX_BRISTLES, PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
+import { CLOSE_UP_FROM, reshapeWidths, sizedBristles, sizedLength, sizedVariance } from '../model/brush'
 import { behindVeil } from '../model/lines'
 import { clamp, hash3, smooth } from '../model/math'
 import { veilOf, VEIL_BORDER_ALPHA, VEIL_DENSITY, type Veil } from '../model/roles'
 import { BEHIND_VEIL_LAYER, pressure } from '../model/strokes'
 import { bigMax, drawFadeAt, loadCellLevel, makeFrameCtx, VEIL_FADE_HI, VEIL_FADE_LO, zoomSizeScaleAt, type FrameCtx } from '../model/view'
 import { fnvInts } from './draft'
-import { addSilhouettes } from './silhouettes'
+import { addSilhouettes, indexOf } from './silhouettes'
 import { StrokeList } from './strokeList'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, SIZING_SURFACE, type BakedPainting, type FrameFromBake } from './types'
 
@@ -65,7 +72,8 @@ const KINDS = 10
 // ---- what a baked painting needs of the scene, once ----
 
 interface Prep {
-  scene: SpaceScene
+  // Which marks are veils (a mesh with opacity under 1) when the kinds were made: a scene that says otherwise makes them again.
+  veilMask: Uint8Array
   // The kind of every stroke.
   kind: Uint8Array
   // The anchor of every stroke (3 each), and the unit normal there (zeros for a data line), interpolated along the baked path.
@@ -76,11 +84,19 @@ interface Prep {
 const preps = new WeakMap<Float32Array, Prep>()
 
 function prepOf(baked: BakedPainting, scene: SpaceScene): Prep {
+  const marks = scene.marks
   const have = preps.get(baked.worldPath)
-  if (have && have.scene === scene && have.kind.length === baked.count) return have
+  if (have && have.kind.length === baked.count && have.veilMask.length === marks.length) {
+    let same = true
+    for (let m = 0; m < marks.length && same; m++) {
+      const mk = marks[m]
+      if ((mk.kind === 'mesh' && mk.style.opacity < 1 ? 1 : 0) !== have.veilMask[m]) same = false
+    }
+    if (same) return have
+  }
   const n = baked.count
-  const veilMark = new Uint8Array(scene.marks.length)
-  scene.marks.forEach((m, i) => {
+  const veilMark = new Uint8Array(marks.length)
+  marks.forEach((m, i) => {
     if (m.kind === 'mesh' && m.style.opacity < 1) veilMark[i] = 1
   })
   const kind = new Uint8Array(n)
@@ -103,7 +119,7 @@ function prepOf(baked: BakedPainting, scene: SpaceScene): Prep {
     const l = Math.hypot(anchorNrm[3 * i], anchorNrm[3 * i + 1], anchorNrm[3 * i + 2])
     if (l > 1e-12) for (let c = 0; c < 3; c++) anchorNrm[3 * i + c] /= l
   }
-  const made: Prep = { scene, kind, anchorPos, anchorNrm }
+  const made: Prep = { veilMask: veilMark, kind, anchorPos, anchorNrm }
   preps.set(baked.worldPath, made)
   return made
 }
@@ -214,13 +230,8 @@ const EMPTY_G: GBuffer = {
 // ---- module-level temporaries (one stroke at a time) ----
 
 const MID = [0, 0, 0]
-const PX = new Float64Array(P)
-const PY = new Float64Array(P)
-const PZ = new Float64Array(P)
 const I0 = new Int32Array(P)
 const F0 = new Float64Array(P)
-const SX = new Float64Array(P)
-const SY = new Float64Array(P)
 const SW = new Float64Array(P)
 const FNODE = new Float64Array(4)
 const WT = new Float32Array(P)
@@ -238,6 +249,7 @@ const KGROW = new Float64Array(KINDS)
 
 // What the view fixes for a whole frame: viewProj's numbers and the like, read in the loops through locals.
 class Consts {
+  ortho = false
   m0 = 0; m1 = 0; m2 = 0; m3 = 0; m4 = 0; m5 = 0; m6 = 0; m7 = 0; m8 = 0; m9 = 0; m10 = 0; m11 = 0; m12 = 0; m13 = 0; m14 = 0; m15 = 0
   W = 0
   H = 0
@@ -246,14 +258,37 @@ const C = new Consts()
 
 // ---- the frame ----
 
-// The sub-arc of a baked stroke [lo, hi] (fractions of its length) as PATH_POINTS world points on the baked polyline, projected: PX..PZ, SX, SY, SW,
-// and where each lies on the baked path (I0, F0). False when a point is behind the eye.
-function samplePath(baked: BakedPainting, i: number, lo: number, hi: number): boolean {
+// The sub-arc of a baked stroke [lo, hi] (fractions of its length) as PATH_POINTS world points on the baked polyline, written to `world` from `wo` and,
+// projected, to `path` from `po`; and, for the widths, each point's clip w (SW) and where it lies on the baked path (I0, F0). False when a point is behind
+// the eye.
+function samplePath(baked: BakedPainting, i: number, lo: number, hi: number, path: Float32Array, po: number, world: Float32Array, wo: number): boolean {
   const wp = baked.worldPath
   const base = BP3 * i
   const { m0, m1, m3, m4, m5, m7, m8, m9, m11, m12, m13, m15, W, H } = C
   const u0 = lo * LAST
   const du = ((hi - lo) * LAST) / (P - 1)
+  if (C.ortho) {
+    // (an orthographic view: clip w is the same everywhere, no divide)
+    const iw = 1 / m15
+    for (let k = 0; k < P; k++) {
+      const u = u0 + du * k
+      let i0 = u | 0
+      if (i0 > LAST - 1) i0 = LAST - 1
+      const f = u - i0
+      const q = base + 3 * i0
+      const x = wp[q] + (wp[q + 3] - wp[q]) * f
+      const y = wp[q + 1] + (wp[q + 4] - wp[q + 1]) * f
+      const z = wp[q + 2] + (wp[q + 5] - wp[q + 2]) * f
+      world[wo + 3 * k] = x
+      world[wo + 3 * k + 1] = y
+      world[wo + 3 * k + 2] = z
+      I0[k] = i0
+      F0[k] = f
+      path[po + 2 * k] = ((((m0 * x + m4 * y + m8 * z + m12) * iw) + 1) * 0.5) * W
+      path[po + 2 * k + 1] = ((1 - (m1 * x + m5 * y + m9 * z + m13) * iw) * 0.5) * H
+    }
+    return m15 > 1e-9
+  }
   for (let k = 0; k < P; k++) {
     const u = u0 + du * k
     let i0 = u | 0
@@ -263,17 +298,17 @@ function samplePath(baked: BakedPainting, i: number, lo: number, hi: number): bo
     const x = wp[q] + (wp[q + 3] - wp[q]) * f
     const y = wp[q + 1] + (wp[q + 4] - wp[q + 1]) * f
     const z = wp[q + 2] + (wp[q + 5] - wp[q + 2]) * f
-    PX[k] = x
-    PY[k] = y
-    PZ[k] = z
+    world[wo + 3 * k] = x
+    world[wo + 3 * k + 1] = y
+    world[wo + 3 * k + 2] = z
     I0[k] = i0
     F0[k] = f
     const w = m3 * x + m7 * y + m11 * z + m15
     if (w <= 1e-9) return false
     SW[k] = w
     const iw = 1 / w
-    SX[k] = ((((m0 * x + m4 * y + m8 * z + m12) * iw) + 1) * 0.5) * W
-    SY[k] = ((1 - (m1 * x + m5 * y + m9 * z + m13) * iw) * 0.5) * H
+    path[po + 2 * k] = ((((m0 * x + m4 * y + m8 * z + m12) * iw) + 1) * 0.5) * W
+    path[po + 2 * k + 1] = ((1 - (m1 * x + m5 * y + m9 * z + m13) * iw) * 0.5) * H
   }
   return true
 }
@@ -293,10 +328,12 @@ export function frameFromBakeWith(
   C.W = W
   C.H = H
   const ortho = m3 === 0 && m7 === 0 && m11 === 0
+  C.ortho = ortho
   const halfW = W / 2
   const halfH = H / 2
   const rowX = Math.hypot(m0, m4, m8)
   const ppuK = halfW * rowX
+  const ppuOrtho = ppuK / Math.max(1e-9, m15)
   const ex = view.eye[0], ey = view.eye[1], ez = view.eye[2]
   const vx = view.viewDir[0], vy = view.viewDir[1], vz = view.viewDir[2]
   const pp = params.particles
@@ -377,8 +414,7 @@ export function frameFromBakeWith(
       }
     } else {
       // a stroke of a surface: sized for the view
-      const w = m3 * ax + m7 * ay + m11 * az + m15
-      ppu = ppuK / Math.max(1e-9, w)
+      ppu = ortho ? ppuOrtho : ppuK / Math.max(1e-9, m3 * ax + m7 * ay + m11 * az + m15)
       if (kind === K_DAB) big = sizeScale
       else {
         const facing = ortho ? Math.abs(dot) : Math.abs(dot) / Math.sqrt(lenSq)
@@ -500,14 +536,17 @@ export function frameFromBakeWith(
       const L = pathLength[i]
       if (!(L > 1e-12)) continue
       const a = anchorF[i]
-      const half = (0.5 * sizedLength(basePx[2 * i], big)) / selPpu[j] / L
+      // (up to CLOSE_UP_FROM the brush is the role's own size times `big`: sizedLength without its close-up lengthening)
+      const half = (0.5 * (big <= CLOSE_UP_FROM ? basePx[2 * i] * big : sizedLength(basePx[2 * i], big))) / selPpu[j] / L
       lo = a - half
       if (lo < 0) lo = 0
       hi = a + half
       if (hi > 1) hi = 1
       if (!(hi - lo > 1e-9)) continue
     }
-    if (!samplePath(baked, i, lo, hi)) continue
+    const po = 2 * P * o
+    const wo = 3 * P * o
+    if (!samplePath(baked, i, lo, hi, path, po, worldPath, wo)) continue
     let reverse = false
     if (!fixed) {
       // the foreshortening of the width: the lateral direction (the normal × the path's tangent), projected, over the px per world unit at the anchor
@@ -517,7 +556,9 @@ export function frameFromBakeWith(
         const q = FNODE_Q[nd]
         const q0 = q > 0 ? q - 1 : 0
         const q1 = q < P - 1 ? q + 1 : P - 1
-        const dx = PX[q1] - PX[q0], dy = PY[q1] - PY[q0], dz = PZ[q1] - PZ[q0]
+        const dx = worldPath[wo + 3 * q1] - worldPath[wo + 3 * q0]
+        const dy = worldPath[wo + 3 * q1 + 1] - worldPath[wo + 3 * q0 + 1]
+        const dz = worldPath[wo + 3 * q1 + 2] - worldPath[wo + 3 * q0 + 2]
         const t = nbase + 3 * I0[q]
         const f = F0[q]
         const nx = wnA[t] + (wnA[t + 3] - wnA[t]) * f
@@ -528,39 +569,53 @@ export function frameFromBakeWith(
         const bz = nx * dy - ny * dx
         const bl = Math.sqrt(bx * bx + by * by + bz * bz)
         if (bl > 1e-12) {
-          const s = 1 / (bl * SW[q])
+          const s = 1 / (bl * (ortho ? m15 : SW[q]))
           const lx = halfW * (m0 * bx + m4 * by + m8 * bz) * s
           const ly = halfH * (m1 * bx + m5 * by + m9 * bz) * s
           FNODE[nd] = Math.sqrt(lx * lx + ly * ly) * ppuInv
         } else FNODE[nd] = 0
       }
-      reverse = hand[i] === 1 && SX[P - 1] < SX[0]
+      reverse = hand[i] === 1 && path[po + 2 * (P - 1)] < path[po]
       const baseW = basePx[2 * i + 1] * big
       let mean = 0
       for (let q = 0; q < P; q++) {
         const kq = reverse ? P - 1 - q : q
         const fa = FNODE[FNODE_A[kq]]
         const fore = fa + (FNODE[FNODE_B[kq]] - fa) * FNODE_T[kq]
-        WT[q] = Math.max(0.35, baseW * PRESSURE[q] * fore)
-        mean += WT[q]
+        const wq = Math.max(0.35, baseW * PRESSURE[q] * fore)
+        width[P * o + q] = wq
+        mean += width[P * o + q]
       }
       if (mean / P < 0.6) continue
-      reshapeWidths(WT, big)
+      if (big > CLOSE_UP_FROM) {
+        for (let q = 0; q < P; q++) WT[q] = width[P * o + q]
+        reshapeWidths(WT, big)
+        for (let q = 0; q < P; q++) width[P * o + q] = WT[q]
+      }
     } else if (rl === R_EDGE) {
       const baseW = basePx[2 * i + 1]
-      for (let q = 0; q < P; q++) WT[q] = Math.max(0.35, baseW * PRESSURE[q])
+      for (let q = 0; q < P; q++) width[P * o + q] = Math.max(0.35, baseW * PRESSURE[q])
     } else {
       const baseW = basePx[2 * i + 1]
-      for (let q = 0; q < P; q++) WT[q] = baseW
+      for (let q = 0; q < P; q++) width[P * o + q] = baseW
     }
-    for (let q = 0; q < P; q++) {
-      const kk = reverse ? P - 1 - q : q
-      path[2 * P * o + 2 * q] = SX[kk]
-      path[2 * P * o + 2 * q + 1] = SY[kk]
-      width[P * o + q] = WT[q]
-      worldPath[3 * P * o + 3 * q] = PX[kk]
-      worldPath[3 * P * o + 3 * q + 1] = PY[kk]
-      worldPath[3 * P * o + 3 * q + 2] = PZ[kk]
+    // a loaded end that is the other one: the path runs the other way
+    if (reverse) {
+      for (let q = 0; q < P / 2; q++) {
+        const r = P - 1 - q
+        const sx = path[po + 2 * q], sy = path[po + 2 * q + 1]
+        path[po + 2 * q] = path[po + 2 * r]
+        path[po + 2 * q + 1] = path[po + 2 * r + 1]
+        path[po + 2 * r] = sx
+        path[po + 2 * r + 1] = sy
+        const wx = worldPath[wo + 3 * q], wy = worldPath[wo + 3 * q + 1], wz = worldPath[wo + 3 * q + 2]
+        worldPath[wo + 3 * q] = worldPath[wo + 3 * r]
+        worldPath[wo + 3 * q + 1] = worldPath[wo + 3 * r + 1]
+        worldPath[wo + 3 * q + 2] = worldPath[wo + 3 * r + 2]
+        worldPath[wo + 3 * r] = wx
+        worldPath[wo + 3 * r + 1] = wy
+        worldPath[wo + 3 * r + 2] = wz
+      }
     }
     role[o] = rl
     layerOut[o] = selLayer[j]
@@ -576,8 +631,8 @@ export function frameFromBakeWith(
       bristles[o] = baked.bristles[i]
       bristleVar[o] = baked.bristleVar[i]
     } else {
-      bristles[o] = sizedBristles(baked.bristles[i], big)
-      bristleVar[o] = sizedVariance(baked.bristleVar[i], big)
+      bristles[o] = big === 1 ? Math.min(MAX_BRISTLES, Math.max(1, Math.round(baked.bristles[i]))) : sizedBristles(baked.bristles[i], big)
+      bristleVar[o] = big <= CLOSE_UP_FROM ? Math.min(1, Math.max(0, baked.bristleVar[i])) : sizedVariance(baked.bristleVar[i], big)
     }
     dry[o] = baked.dry[i]
     wet[o] = baked.wet[i]
@@ -705,6 +760,17 @@ export const frameFromBake: FrameFromBake = (baked, scene, view, params, gbuffer
     scratches.set(baked.worldPath, scr)
   }
   return frameFromBakeWith(scr, baked, scene, view, params, gbuffer)
+}
+
+// What a bake's first frame makes once and every later one reads: the per-stroke anchors and kinds, and the vertex index of each opaque surface that the
+// silhouettes read (tens of milliseconds on a big bake). A caller that wants the first interactive frame to cost what the others do calls this when the
+// bake arrives.
+export function prepareBake(baked: BakedPainting, scene: SpaceScene): void {
+  prepOf(baked, scene)
+  scene.marks.forEach((mark, m) => {
+    const s = baked.surfaces[m]
+    if (s && mark.kind === 'mesh' && mark.style.opacity >= 1) indexOf(s)
+  })
 }
 
 // The scratch `frameFromBake` keeps for a baked painting (the one `frameFromBakeWith` can be given), made when there is none.

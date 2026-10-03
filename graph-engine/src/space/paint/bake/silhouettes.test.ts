@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MeshMark } from '../../scene/types'
 import { lchToLab, linearToOklab } from '../model/colour'
+import { colourOfRecipe, newRecipe } from '../model/recipe'
+import { DEFAULT_PAINT_PARAMS, type PaintParams } from '../params'
 import { silhouettePolylines } from '../model/contours'
 import { smoothClasses } from '../model/edges'
+import { valueNoise3 } from '../model/math'
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
 import { project, makeFrameCtx } from '../model/view'
 import { PATH_POINTS, ROLES, type GBuffer, type PaintView } from '../types'
@@ -10,7 +13,7 @@ import { LIGHT, TERRACOTTA, CANVAS, framing, fixture, sparse, sphereColours, sph
 import { frameFromBakeWith, FrameScratch } from './frame'
 import { HIDDEN_NA } from './types'
 import {
-  focalAt, indexOf, medianClasses, newSilhouetteStats, SILHOUETTE_MIN_SAMPLES, SILHOUETTE_STEP_PX, silhouetteEnv, silhouetteRuns, silhouetteStrokes, VertexGrid,
+  focalAt, indexOf, medianClasses, newSilhouetteStats, NoiseRun, SILHOUETTE_MIN_SAMPLES, SILHOUETTE_STEP_PX, silhouetteEnv, silhouetteRuns, silhouetteStrokes, VertexGrid,
   type SilhouetteRun,
 } from './silhouettes'
 import { StrokeList } from './strokeList'
@@ -190,6 +193,9 @@ describe('the silhouette samples of a view', () => {
     // the sphere has two points; at one the term is 1
     expect(focalAt(f, 0, f[0], f[1], f[2])).toBeCloseTo(1, 12)
     expect(focalAt(f, 0, f[0] + 5 * f[3], f[1], f[2])).toBeLessThan(1e-9)
+    // exp(-(d/R)²) between: a radius away is e^-1, half a radius e^-0.25
+    expect(focalAt(f, 0, f[0] + f[3], f[1], f[2])).toBeCloseTo(Math.exp(-1), 12)
+    expect(focalAt(f, 0, f[0], f[1] + 0.5 * f[3], f[2])).toBeCloseTo(Math.exp(-0.25), 12)
     // a mark with none (a table, which has none: it is bare ground) is 0 everywhere
     expect(Number.isNaN(f[8])).toBe(true)
     expect(focalAt(f, 1, 0, 0, 0)).toBe(0)
@@ -414,6 +420,249 @@ describe('the silhouette strokes', () => {
   })
 })
 
+// ---- strokes from runs made by hand (what a stretch of a given class and sides gives, with nothing else in the way) ----
+
+interface Hand {
+  n: number
+  // The class of each sample, and the two sides' values.
+  cls: number[]
+  uA: number
+  uB: number
+  uMin?: number
+  key?: number
+}
+
+// A straight outline along the screen's x axis at y = 200, 2 px a sample, the figure below it (the inward normal is (0, 1)), at one depth.
+function handRun(h: Hand, view: PaintView, fc: ReturnType<typeof makeFrameCtx>): SilhouetteRun {
+  const n = h.n
+  const run: SilhouetteRun = {
+    mark: 0, n, world: new Float64Array(3 * n), screen: new Float64Array(2 * n), poly: new Float64Array(3 * n), tpos: new Float64Array(n), nrm: new Float64Array(2 * n),
+    uA: new Float32Array(n).fill(h.uA), uB: new Float32Array(n).fill(h.uB), uMin: new Float32Array(n).fill(h.uMin ?? h.uA), local: new Float32Array(3 * n),
+    keys: new Uint32Array(n).fill(h.key ?? 0xf0000000), depth: new Float32Array(n), h: new Float32Array(n), cls: Uint8Array.from(h.cls), contrast: Math.abs(h.uA - h.uB),
+  }
+  const right = [view.view[0], view.view[4], view.view[8]]
+  const up = [view.view[1], view.view[5], view.view[9]]
+  // the world point of the screen point (x, 200) at the depth of the origin: along the camera's right and up
+  const ppu = 150
+  const out = [0, 0, 0]
+  for (let k = 0; k < n; k++) {
+    const x = 100 + 2 * k
+    const sx = (x - view.width / 2) / ppu
+    const sy = -(200 - view.height / 2) / ppu
+    const p = [right[0] * sx + up[0] * sy, right[1] * sx + up[1] * sy, right[2] * sx + up[2] * sy]
+    run.world.set(p, 3 * k)
+    run.poly.set(p, 3 * k)
+    run.tpos[k] = k
+    project(fc, p[0], p[1], p[2], out)
+    run.screen[2 * k] = out[0]
+    run.screen[2 * k + 1] = out[1]
+    run.depth[k] = out[2]
+    run.nrm[2 * k + 1] = 1
+    run.local.set([0.55, 0.08, 0.06], 3 * k)
+  }
+  return run
+}
+
+function strokesOf(runs: SilhouetteRun[], params: PaintParams, view: PaintView): { list: StrokeList; stats: ReturnType<typeof newSilhouetteStats> } {
+  const fc = makeFrameCtx(sphereFx.scene, view, EMPTY_G, params)
+  const senv = silhouetteEnv(params)
+  const list = new StrokeList()
+  const stats = newSilhouetteStats()
+  silhouetteStrokes(list, runs, params, view, fc, senv, stats)
+  return { list, stats }
+}
+
+describe('the strokes of a stretch of the outline, made from runs given by hand', () => {
+  const view = viewAt(20, 25)
+  const fc = makeFrameCtx(sphereFx.scene, view, EMPTY_G, sphereFx.params)
+  const dirOf = (l: StrokeList, e: number): [number, number] => [l.path[2 * PP * e + 2 * (PP - 1)] - l.path[2 * PP * e], l.path[2 * PP * e + 2 * (PP - 1) + 1] - l.path[2 * PP * e + 1]]
+
+  it('pull from the lighter side into the darker: into the figure when it is the darker, out of it when it is the lighter', () => {
+    for (const [uA, uB, want] of [[0.3, 0.8, 1], [0.8, 0.3, -1]] as const) {
+      const { list, stats } = strokesOf([handRun({ n: 60, cls: new Array(60).fill(1), uA, uB, uMin: 0.9 }, view, fc)], sphereFx.params, view)
+      expect(stats.drags).toBeGreaterThan(0)
+      expect(stats.pulls).toBeGreaterThan(0)
+      let pulls = 0
+      for (let e = 0; e < list.count; e++) {
+        const [dx, dy] = dirOf(list, e)
+        // a pull is across the outline (more down or up than along), a drag along it
+        if (Math.abs(dy) > Math.abs(dx)) {
+          pulls++
+          // (turned by up to 0.35 rad from the normal)
+          expect((dy * want) / Math.hypot(dx, dy), `uA ${uA}`).toBeGreaterThan(0.9)
+        } else expect(Math.abs(dx)).toBeGreaterThan(20)
+      }
+      expect(pulls).toBe(stats.pulls)
+    }
+  })
+
+  it('bridge a lost stretch across the outline, from one side to the other, and make a crisp stroke only for a firm or hard one', () => {
+    const lost = strokesOf([handRun({ n: 60, cls: new Array(60).fill(0), uA: 0.5, uB: 0.62 }, view, fc)], sphereFx.params, view)
+    expect(lost.stats.bridges).toBeGreaterThan(0)
+    expect(lost.stats.crisp + lost.stats.drags + lost.stats.pulls).toBe(0)
+    for (let e = 0; e < lost.list.count; e++) {
+      const [dx, dy] = dirOf(lost.list, e)
+      // across, centred on the outline: its ends are on the two sides of y = 200 (to the rotation of up to 0.3 rad)
+      expect(Math.abs(dy)).toBeGreaterThan(Math.abs(dx))
+      const y0 = lost.list.path[2 * PP * e + 1]
+      const y1 = lost.list.path[2 * PP * e + 2 * (PP - 1) + 1]
+      expect((y0 - 200) * (y1 - 200)).toBeLessThan(0)
+    }
+    for (const cls of [2, 3]) {
+      const found = strokesOf([handRun({ n: 60, cls: new Array(60).fill(cls), uA: 0.3, uB: 0.8, uMin: 0.9 }, view, fc)], sphereFx.params, view)
+      expect(found.stats.crisp).toBeGreaterThan(0)
+      expect(found.stats.pulls + found.stats.bridges + found.stats.drags).toBe(0)
+      // the crisp stroke is along the outline: its path is the outline (y = 200)
+      for (let e = 0; e < found.list.count; e++) {
+        for (let q = 0; q < PP; q++) expect(Math.abs(found.list.path[2 * PP * e + 2 * q + 1] - 200)).toBeLessThan(1e-3)
+        // a hard one is wider and fully opaque; a firm one a little thinner
+        expect(found.list.alpha[e]).toBeCloseTo(cls === 3 ? 1 : 0.85, 6)
+      }
+    }
+  })
+
+  it("keeps a stretch's seeds and brushwork where its place in the run changes: only its position gives them", () => {
+    // two runs that are the same outline from the second stretch on, one with three more samples before it
+    const a = handRun({ n: 40, cls: [...new Array(15).fill(0), ...new Array(25).fill(1)], uA: 0.3, uB: 0.8, uMin: 0.9 }, view, fc)
+    const b = handRun({ n: 43, cls: [...new Array(18).fill(0), ...new Array(25).fill(1)], uA: 0.3, uB: 0.8, uMin: 0.9 }, view, fc)
+    const sa = strokesOf([a], sphereFx.params, view)
+    const sb = strokesOf([b], sphereFx.params, view)
+    // the second stretch's strokes: the soft ones (class 1)
+    const soft = (l: StrokeList): number[] => Array.from({ length: l.count }, (_, e) => e).filter((e) => l.edge[e] === 1)
+    const ea = soft(sa.list)
+    const eb = soft(sb.list)
+    expect(ea.length).toBeGreaterThan(1)
+    expect(eb.length).toBe(ea.length)
+    for (let k = 0; k < ea.length; k++) {
+      expect(sb.list.seed[eb[k]]).toBe(sa.list.seed[ea[k]])
+      // (the brush's seeded draws: widths, loads, bristles)
+      for (let q = 0; q < PP; q++) expect(sb.list.width[PP * eb[k] + q]).toBe(sa.list.width[PP * ea[k] + q])
+      expect(sb.list.load[eb[k]]).toBe(sa.list.load[ea[k]])
+      expect(sb.list.bristles[eb[k]]).toBe(sa.list.bristles[ea[k]])
+    }
+  })
+
+  it("hold a stretch of the shadow family to the family's ceiling under the loudest brush-load mix, by the lowest value on the way in, and not one in the light", () => {
+    const loud: PaintParams = { ...sphereFx.params, mix: { ...sphereFx.params.mix, strength: 2, valueStepFraction: 1, valueStep: 0.1, hueMin: 8, hueMax: 22 } }
+    const senv = silhouetteEnv(loud)
+    // the figure's colour at the cap, jitter-free: the lightness a held stroke is under (to the seeded jitters, a hundredth or so)
+    const rec = newRecipe()
+    rec.lx = 0.55
+    rec.ly = 0.08
+    rec.lz = 0.06
+    rec.u = senv.capU
+    const cap = colourOfRecipe(rec, senv.env)[0]
+    const litRec = { ...rec, u: 0.7 }
+    const lit = colourOfRecipe(litRec, senv.env)[0]
+    expect(lit).toBeGreaterThan(cap + 0.15)
+    for (const cls of [1, 2, 0]) {
+      // the figure's side is lit (0.7) at the outline but its lowest value on the way in is under the cap: the stretch is in the shadow family
+      const dark = strokesOf([handRun({ n: 60, cls: new Array(60).fill(cls), uA: 0.7, uB: 0.85, uMin: senv.capU - 0.05 }, view, fc)], loud, view)
+      expect(dark.list.count).toBeGreaterThan(1)
+      for (let e = 0; e < dark.list.count; e++) {
+        const L = linearToOklab(dark.list.colour[3 * e], dark.list.colour[3 * e + 1], dark.list.colour[3 * e + 2])[0]
+        // (a bridge or a pull carries the canvas's colour a share of the way: it is held to its own side's ceiling, which is the figure's colour at the cap)
+        expect(L, `class ${cls}`).toBeLessThan(cap + 0.05)
+      }
+      // where what lies across is dark too (the figure's own cast shadow on the table) the edge is no found edge, and the soft and lost strokes are held to the
+      // figure's own side's ceiling, not to the blend's
+      if (cls < 2) {
+        const across = strokesOf([handRun({ n: 60, cls: new Array(60).fill(cls), uA: 0.7, uB: 0.3, uMin: senv.capU - 0.05 }, view, fc)], loud, view)
+        expect(across.stats.pulls + across.stats.bridges + across.stats.drags).toBeGreaterThan(0)
+        expect(across.stats.crisp).toBe(0)
+        for (let e = 0; e < across.list.count; e++) {
+          const L = linearToOklab(across.list.colour[3 * e], across.list.colour[3 * e + 1], across.list.colour[3 * e + 2])[0]
+          expect(L, `class ${cls}, across a dark table`).toBeLessThan(cap + 0.05)
+        }
+      }
+      // the same in the light family: no hold, the strokes are as light as the figure's side
+      const light = strokesOf([handRun({ n: 60, cls: new Array(60).fill(cls), uA: 0.7, uB: 0.85, uMin: 0.7 }, view, fc)], loud, view)
+      let lightest = 0
+      for (let e = 0; e < light.list.count; e++) lightest = Math.max(lightest, linearToOklab(light.list.colour[3 * e], light.list.colour[3 * e + 1], light.list.colour[3 * e + 2])[0])
+      expect(lightest, `class ${cls}`).toBeGreaterThan(cap + 0.1)
+    }
+  })
+
+  it('score a found edge as the model does: with the weights all but off, only the outline of a form in shadow against light is a found edge', () => {
+    const quiet: PaintParams = {
+      ...DEFAULT_PAINT_PARAMS,
+      edges: { ...DEFAULT_PAINT_PARAMS.edges, wContrast: [0, 0.01, 0], wCurvature: [0, 0, 0], wFocal: [0, 0, 0], wLight: [0, 0, 0], wDepth: [0, 0, 0], noise: 0 },
+    }
+    const fx = { ...sphereFx, params: quiet }
+    const { runs } = make(fx, viewAt(20, 25))
+    const senv = silhouetteEnv(quiet)
+    let family = 0
+    let familyFound = 0
+    let other = 0
+    let otherFound = 0
+    for (const run of runs) {
+      for (let s = 0; s < run.n; s++) {
+        if (run.uMin[s] <= senv.capU && run.uB[s] >= senv.floorU && Math.abs(run.uA[s] - run.uB[s]) >= 0.03) {
+          family++
+          if (run.cls[s] >= 2) familyFound++
+        } else {
+          other++
+          if (run.cls[s] >= 1) otherFound++
+        }
+      }
+    }
+    expect(family).toBeGreaterThan(40)
+    // (the median of seven can move a sample at the end of a stretch)
+    expect(familyFound / family).toBeGreaterThan(0.9)
+    expect(other).toBeGreaterThan(20)
+    expect(otherFound / other).toBeLessThan(0.05)
+  })
+})
+
+describe('the silhouettes of a frame, more', () => {
+  it("has the lowest value on the way in below the outline's own at some samples and never above it", () => {
+    const { runs } = make(sphereFx, viewAt(20, 25))
+    let below = 0
+    let n = 0
+    for (const run of runs) {
+      for (let s = 0; s < run.n; s++) {
+        n++
+        expect(run.uMin[s]).toBeLessThanOrEqual(run.uA[s])
+        if (run.uMin[s] < run.uA[s] - 1e-4) below++
+      }
+    }
+    expect(below / n).toBeGreaterThan(0.02)
+  })
+
+  it('thins its strokes by roles.edge.density, and makes none for a translucent figure', () => {
+    const view = viewAt(20, 25)
+    const full = make(sphereFx, view).list.count
+    const halved = { ...sphereFx.params, roles: { ...sphereFx.params.roles, edge: { ...sphereFx.params.roles.edge, density: 0.4 } } }
+    const half = make({ ...sphereFx, params: halved }, view).list.count
+    expect(full).toBeGreaterThan(15)
+    expect(half).toBeLessThan(full)
+    expect(half).toBeGreaterThan(0)
+    // a sphere with opacity 0.5 is a veil: no outline
+    const veil = fixture(sceneOf([sphereMesh({ radius: 1, index: 0, nu: 24, nv: 16, opacity: 0.5 })]), flatColours({ 0: TERRACOTTA }), sparse(300), LIGHT, ORTHO)
+    const r = make(veil, view)
+    expect(r.runs.length).toBe(0)
+    expect(r.list.count).toBe(0)
+  })
+
+  it('puts the points of a stroke along the outline on the polyline itself, not on the chords between samples', () => {
+    const view = viewAt(40, 30)
+    const { list } = make(sphereFx, view)
+    const fc = makeFrameCtx(sphereFx.scene, view, EMPTY_G, sphereFx.params)
+    const polys = silhouettePolylines(sphereFx.scene.marks[0] as MeshMark, view.eye, fc.ortho, view.viewDir)
+    let worstAlong = 0
+    let along = 0
+    for (let e = 0; e < list.count; e++) {
+      const d = Math.max(...Array.from({ length: PP }, (_, q) => Math.min(...polys.map((p) => distToPolyline(p, list.worldPath[3 * PP * e + 3 * q], list.worldPath[3 * PP * e + 3 * q + 1], list.worldPath[3 * PP * e + 3 * q + 2])))))
+      if (d < 1e-5) {
+        along++
+        worstAlong = Math.max(worstAlong, d)
+      }
+    }
+    expect(along).toBeGreaterThan(3)
+    expect(worstAlong).toBeLessThan(1e-5)
+  })
+})
+
 describe('the helpers of the silhouettes', () => {
   it('finds the nearest vertex of a refined surface by walking from the last one (what a run of samples does) or from the grid (its first): across a seam too, and nearly always the nearest', () => {
     const s = sphereFx.baked.surfaces[0]!
@@ -448,6 +697,26 @@ describe('the helpers of the silhouettes', () => {
     expect(diff / n).toBeLessThan(0.02)
     expect(worse / n).toBeLessThan(0.002)
     expect(new VertexGrid(s.positions, s.indices).cell).toBeGreaterThan(0)
+  })
+
+  it('makes the seeded noise of a run as model/math.ts valueNoise3 does, across the cells of its lattice', () => {
+    let seed = 777
+    const rand = (): number => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296
+    const run = new NoiseRun(0x6ed9eba1)
+    // a walk through the lattice (cells change every few steps), and jumps
+    let x = 0.3, y = 0.2, z = 0.7
+    for (let k = 0; k < 4000; k++) {
+      if (k % 500 === 499) {
+        x = rand() * 40 - 20
+        y = rand() * 40 - 20
+        z = rand() * 40 - 20
+      } else {
+        x += (rand() - 0.5) * 0.2
+        y += (rand() - 0.5) * 0.2
+        z += (rand() - 0.5) * 0.2
+      }
+      expect(run.at(x, y, z)).toBe(valueNoise3(x, y, z, 0x6ed9eba1))
+    }
   })
 
   it('takes the median of seven as model/edges.ts smoothClasses does', () => {

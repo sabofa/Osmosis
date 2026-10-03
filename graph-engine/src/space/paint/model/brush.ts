@@ -15,8 +15,11 @@ import { pressure } from './strokes'
 // How far a stroke is "close-up": 0 at the tuned size, 1 from about twice that on. The strokes change
 // shape over this range, so there is no step between the framings.
 export function closeUp(big: number): number {
-  return smooth(1.15, 2.2, big)
+  return smooth(CLOSE_UP_FROM, 2.2, big)
 }
+
+// Up to this size a stroke is not close-up at all (closeUp is 0): its length is its length times `big`, its widths are not reshaped, its bristles' variance is its own.
+export const CLOSE_UP_FROM = 1.15
 
 // A close-up stroke is up to this much longer for its width.
 const LENGTHEN = 0.9

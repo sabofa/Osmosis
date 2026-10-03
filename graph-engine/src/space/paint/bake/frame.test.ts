@@ -33,6 +33,13 @@ function viewAt(azimuth: number, elevation: number, opts: { zoom?: number; persp
 const sphereFx = fixture(sphereScene(), sphereColours(), sparse(700), LIGHT, FRONT_ORTHO)
 const saddleFx = fixture(saddleScene(), saddleColours(), sparse(700), LIGHT, FRONT_ORTHO)
 
+// a bake whose brushes are so narrow that many strokes are too thin to see (the mean of their widths under 0.6 px: the frame leaves them out)
+const thinFx = (() => {
+  const base = sparse(700)
+  const params = { ...base, roles: { ...base.roles, block: { ...base.roles.block, width: 0.35 }, glaze: { ...base.roles.glaze, width: 0.35 } } }
+  return fixture(sphereScene(), sphereColours(), params, LIGHT, FRONT_ORTHO)
+})()
+
 const dataColours = flatColours({ 0: TERRACOTTA, 1: CANVAS, 2: lchToLab(0.4, 0.05, 55), 3: lchToLab(0.4, 0.05, 200), 4: lchToLab(0.45, 0.1, 300), 5: lchToLab(0.35, 0.1, 20) })
 const dataScene = (): SpaceScene =>
   sceneOf([
@@ -162,17 +169,26 @@ const dist2 = (a: ArrayLike<number>, ai: number, b: ArrayLike<number>, bi: numbe
 
 describe('frameFromBake: the baked strokes of a view', () => {
   it('selects, fades and sizes as the brief says, by the model\'s own pure functions (several views, both projections, zooms)', () => {
-    const views: [string, PaintView][] = [
-      ['front, ortho', viewAt(20, 25)],
-      ['back, ortho', viewAt(200, 25)],
-      ['top, ortho', viewAt(20, 80)],
-      ['front, ortho, zoom 2', viewAt(20, 25, { zoom: 2 })],
-      ['front, ortho, zoom 0.5', viewAt(20, 25, { zoom: 0.5 })],
-      ['front, perspective', viewAt(20, 25, { perspective: true })],
+    const views: [string, Fixture, PaintView][] = [
+      ['front, ortho', sphereFx, viewAt(20, 25)],
+      ['back, ortho', sphereFx, viewAt(200, 25)],
+      ['top, ortho', sphereFx, viewAt(20, 80)],
+      ['front, ortho, zoom 2', sphereFx, viewAt(20, 25, { zoom: 2 })],
+      ['front, ortho, zoom 0.5', sphereFx, viewAt(20, 25, { zoom: 0.5 })],
+      ['front, perspective', sphereFx, viewAt(20, 25, { perspective: true })],
+      // a veil over a sphere: its glazes' own fade, density and border pass, both of its sides
+      ['veil, from above', veilFx, viewAt(30, 50)],
+      ['veil, from below, zoom 2', veilFx, viewAt(30, -50, { zoom: 2 })],
+      ['veil, perspective', veilFx, viewAt(120, 35, { perspective: true })],
+      // (a veil fades over a quarter and a half of the surface's band of |n·v|: only a graze tells it from a surface)
+      ['veil, at a graze', veilFx, viewAt(30, 12)],
+      ['veil, at a graze from below', veilFx, viewAt(200, -9)],
+      // a saddle: open, two sides
+      ['saddle, from below', saddleFx, viewAt(30, -60)],
     ]
-    for (const [name, view] of views) {
-      const ref = reference(sphereFx, view)
-      const { batch, scr } = run(sphereFx, view)
+    for (const [name, fx, view] of views) {
+      const ref = reference(fx, view)
+      const { batch, scr } = run(fx, view)
       const got = sourcesOf(scr, batch)
       let missing = 0
       let extra = 0
@@ -192,11 +208,13 @@ describe('frameFromBake: the baked strokes of a view', () => {
       for (const i of got.keys()) if (!ref.has(i)) extra++
       // (a stroke whose sub-arc is too short to draw is dropped by the frame and not by this reference; the anchor's place along the path is read by
       // chords here and by equal parts there: a stroke right at a threshold can fall either side)
-      expect(ref.size, name).toBeGreaterThan(200)
+      expect(ref.size, name).toBeGreaterThan(name.startsWith('veil') ? 40 : 200)
       expect(missing / ref.size, `${name}: missing`).toBeLessThan(0.01)
       expect(extra / ref.size, `${name}: extra`).toBeLessThan(0.005)
-      expect(alphaBad / ref.size, `${name}: alpha`).toBeLessThan(0.005)
-      expect(bigBad / ref.size, `${name}: big`).toBeLessThan(0.005)
+      // (a veil view has a few hundred strokes: one is half a percent)
+      const slack = name.startsWith('veil') ? 0.02 : 0.005
+      expect(alphaBad / ref.size, `${name}: alpha`).toBeLessThan(slack)
+      expect(bigBad / ref.size, `${name}: big`).toBeLessThan(slack)
     }
   })
 
@@ -259,6 +277,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
             if (Math.min(fwd, rev) < 1e-6) arcsOk++
           }
         }
+        if (process.env.FRAME_PRINT) console.log(`no boiling, ${fx === sphereFx ? 'sphere' : 'saddle'}, el ${el}, 1 degree: drawn ${sa.size} / ${sb.size}, in both ${both} (${(both / Math.max(sa.size, sb.size)).toFixed(4)} of the larger), same seed+colour+role ${same}/${both}, equal size ${equalBig}, sub-arcs within 1e-6 ${arcsOk}/${equalBig}`)
         expect(both, `${el}`).toBeGreaterThan(200)
         expect(same / both).toBeGreaterThanOrEqual(0.9)
         // (in fact all of them: every one of these is a baked number)
@@ -271,6 +290,20 @@ describe('frameFromBake: the baked strokes of a view', () => {
     }
   })
 
+  it('keeps most of the strokes through a wider turn, as the per-frame model keeps 80% through 12 degrees', () => {
+    const a = run(sphereFx, viewAt(20, 25))
+    const sa = sourcesOf(a.scr, a.batch)
+    for (const [turn, least] of [[1, 0.97], [3, 0.9], [6, 0.8], [12, 0.6]] as const) {
+      const b = run(sphereFx, viewAt(20 + turn, 25))
+      const sb = sourcesOf(b.scr, b.batch)
+      let both = 0
+      for (const i of sa.keys()) if (sb.has(i)) both++
+      // (the strokes that stay: those drawn in both over those drawn in the first)
+      if (process.env.FRAME_PRINT) console.log(`turn ${turn} degrees: kept ${(both / sa.size).toFixed(4)} of the first view's baked strokes`)
+      expect(both / sa.size, `${turn}`).toBeGreaterThan(least)
+    }
+  })
+
   it('sizes a stroke by the zoom: its sub-arc lies on its baked path, its length on screen is the brush\'s (within 2% unless the path ends first), its mix level follows the zoom', () => {
     for (const zoom of [0.5, 1, 2, 4]) {
       const view = viewAt(0, SHEET_EL, { zoom })
@@ -280,6 +313,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
       let checked = 0
       let clippedShort = 0
       let unclipped = 0
+      const ratios: number[] = []
       for (let o = 0; o < batch.count; o++) {
         const i = scr.source[o]
         if (i < 0 || b.sizing[i] !== SIZING_SURFACE || ROLES[b.role[i]] === 'dab') continue
@@ -313,6 +347,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
         // centred on the anchor and clipped at the path's ends, with no rebalancing: the part of [a - need/2, a + need/2] that lies on the path
         const lo = Math.max(0, a - need / (2 * L))
         const hi = Math.min(1, a + need / (2 * L))
+        ratios.push(len / want)
         const clipped = a - need / (2 * L) < 0 || a + need / (2 * L) > 1
         if (clipped) {
           clippedShort++
@@ -324,6 +359,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
           expect(Math.abs(len / want - 1), `zoom ${zoom}`).toBeLessThan(0.02)
         }
       }
+      if (process.env.FRAME_PRINT) console.log(`zoom ${zoom}: ${checked} surface strokes, ${unclipped} unclipped (within 2% of the brush's length), ${clippedShort} clipped by the path's end; level ${level}; the length against the brush's: mean ${(ratios.reduce((x, y) => x + y, 0) / ratios.length).toFixed(4)}, 10th percentile ${[...ratios].sort((x, y) => x - y)[Math.floor(0.1 * ratios.length)].toFixed(4)}, minimum ${Math.min(...ratios).toFixed(4)}`)
       expect(checked, `zoom ${zoom}`).toBeGreaterThan(100)
       // (at the most zoomed-out view the baked path is exactly as long as the brush asks, and the walks that stop short are clipped)
       expect(unclipped, `zoom ${zoom}`).toBeGreaterThan(zoom > 0.5 ? 50 : 0)
@@ -357,6 +393,35 @@ describe('frameFromBake: the baked strokes of a view', () => {
     expect(big2).toBeGreaterThan(20)
   })
 
+  it('runs a stroke of the hand from its left end to its right, whatever way it was baked, and leaves a loaded end the bake chose', () => {
+    const b = sphereFx.baked
+    let hand = 0
+    let handBackwards = 0
+    let chosen = 0
+    let chosenLeftward = 0
+    for (const [az, el] of [[20, 25], [110, 40], [200, 10], [290, 60]] as const) {
+      const { batch, scr } = run(sphereFx, viewAt(az, el))
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || b.sizing[i] !== SIZING_SURFACE) continue
+        const left = batch.path[2 * PP * o + 2 * (PP - 1)] < batch.path[2 * PP * o]
+        if (b.handStart[i] === 1) {
+          hand++
+          if (left) handBackwards++
+        } else {
+          chosen++
+          if (left) chosenLeftward++
+        }
+      }
+    }
+    expect(hand).toBeGreaterThan(500)
+    // (the end is never left of the start for a hand stroke: it was turned)
+    expect(handBackwards).toBe(0)
+    // a form stroke starts at its lighter end whichever way that is on screen
+    expect(chosen).toBeGreaterThan(20)
+    expect(chosenLeftward).toBeGreaterThan(0)
+  })
+
   it('draws the side that faces the eye: an open saddle seen from below has only side -1 strokes, from above only side +1, a closed sphere only its outside', () => {
     const b = saddleFx.baked
     // (the saddle's slopes reach 45 degrees: a camera 40 below the horizon still sees the steepest slopes' upper side, at a graze; 70 and more it does not)
@@ -369,6 +434,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
         n++
         expect(b.side[i], `elevation ${el}`).toBe(want)
       }
+      if (process.env.FRAME_PRINT) console.log(`saddle at elevation ${el}: ${n} surface strokes, all side ${want}`)
       expect(n).toBeGreaterThan(200)
     }
     for (const el of [-40, 40]) {
@@ -385,6 +451,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
         expect(dot).toBeGreaterThan(0)
         if (b.side[i] === (el < 0 ? -1 : 1)) own++
       }
+      if (process.env.FRAME_PRINT) console.log(`saddle at elevation ${el}: ${n} surface strokes, ${own} of the side seen from there`)
       expect(own / n).toBeGreaterThan(0.9)
     }
     const s = sphereFx.baked
@@ -483,6 +550,13 @@ describe('frameFromBake: the baked strokes of a view', () => {
     const arrow = marks[5] as { tails: Float64Array; vectors: Float64Array }
     const pts = own.filter((o) => batch.width[PP * o] === 8)
     expect(pts.length).toBe(2)
+    // (points and arrowheads are in the line layer)
+    for (const o of own) {
+      expect(batch.layer[o]).toBe(LAYER_ORDER.indexOf('line'))
+      // (never pre-halved: the renderer's hidden pass draws the hidden parts at half)
+      expect(batch.alpha[o]).toBe(1)
+      expect(batch.edge[o]).toBe(255)
+    }
     for (const o of pts) {
       // the world points are all one point of the mark; the dab is centred on its projection, 4 px long, 8 wide
       const wp = [batch.worldPath[3 * PP * o], batch.worldPath[3 * PP * o + 1], batch.worldPath[3 * PP * o + 2]]
@@ -589,12 +663,89 @@ describe('frameFromBake: the baked strokes of a view', () => {
     expect(c.path.buffer).toBe(d.path.buffer)
   })
 
+  it('gives an empty batch for a scene with nothing to paint, and the points of a scene of points alone', () => {
+    const empty = fixture(sceneOf([]), flatColours({}), sparse(500), LIGHT, FRONT_ORTHO)
+    const a = run(empty, viewAt(20, 25))
+    expect(a.batch.count).toBe(0)
+    expect(a.batch.path.length).toBe(0)
+    const pts = fixture(sceneOf([pointMark([[0, 0, 0], [0.5, 0.5, 0], [0, 0, 5000]], { index: 0, size: 6 })]), flatColours({ 0: lchToLab(0.4, 0.1, 30) }), sparse(500), LIGHT, FRONT_ORTHO)
+    const b = run(pts, viewAt(20, 25))
+    // two on the screen, and the third (far off it) left out
+    expect(b.batch.count).toBe(2)
+    expect(Array.from(b.batch.role)).toEqual([ROLES.indexOf('line'), ROLES.indexOf('line')])
+  })
+
+  it('reads a scene that is another object with the same marks as the same (the bake preparation is kept), and a veil that is not one any more as another bake', () => {
+    const view = viewAt(20, 25)
+    const a = frameFromBakeWith(new FrameScratch(), sphereFx.baked, sphereFx.scene, view, sphereFx.params, null)
+    const copy = { ...sphereFx.scene, marks: [...sphereFx.scene.marks] }
+    const b = frameFromBakeWith(new FrameScratch(), sphereFx.baked, copy, view, sphereFx.params, null)
+    expect(bytes(b.path)).toBe(bytes(a.path))
+    expect(bytes(b.alpha)).toBe(bytes(a.alpha))
+    // the sphere's mark made translucent: its glazes are a veil's now (a different fade and density): the strokes differ
+    const veiled = { ...sphereFx.scene, marks: sphereFx.scene.marks.map((m, i) => (i === 0 && m.kind === 'mesh' ? { ...m, style: { ...m.style, opacity: 0.5 } } : m)) }
+    const c = frameFromBakeWith(new FrameScratch(), sphereFx.baked, veiled, view, sphereFx.params, null)
+    expect(c.count).not.toBe(a.count)
+  })
+
+  it('closes up the gaps left by strokes too thin to see: every array moves with its stroke', () => {
+    const view = viewAt(20, 25)
+    const { batch, scr } = run(thinFx, view)
+    const b = thinFx.baked
+    expect(scr.stats.written).toBeLessThan(scr.stats.selected)
+    expect(batch.count).toBe(scr.stats.written)
+    expect(batch.count).toBeGreaterThan(300)
+    // every stroke of the result is its source's: role, seed, colour, edge class, hidden, layer; in order of layer
+    let last = -1
+    let own = 0
+    for (let o = 0; o < batch.count; o++) {
+      const i = scr.source[o]
+      if (i < 0) {
+        own++
+        continue
+      }
+      expect(batch.role[o]).toBe(b.role[i])
+      expect(batch.seed[o]).toBe(b.seed[i])
+      expect(batch.colour[3 * o]).toBe(b.colour[12 * i])
+      expect(batch.colour[3 * o + 2]).toBe(b.colour[12 * i + 2])
+      expect(batch.edge[o]).toBe(b.edge[i])
+      expect(batch.hidden![o]).toBe(b.hidden[i])
+      expect(batch.alpha[o]).toBeLessThanOrEqual(b.alpha[i] * (1 + 1e-6))
+      expect(batch.layer[o]).toBe(b.layer[i])
+      expect(last).toBeLessThanOrEqual(batch.layer[o])
+      last = batch.layer[o]
+      // its path is its own world path's projection
+      expect(batch.path.length).toBe(2 * PP * batch.count)
+    }
+    expect(own).toBe(scr.stats.own)
+    // the world path of every stroke projects to its path (the same view)
+    const again = reprojectStrokes(batch, view, view, thinFx.params)
+    for (let o = 0; o < batch.count; o++) for (let q = 0; q < 2 * PP; q++) expect(Math.abs(again.path[2 * PP * o + q] - batch.path[2 * PP * o + q])).toBeLessThan(2e-3)
+  })
+
   it('never thins a highlight dab or fades it, draws an edge stroke by roles.edge.density, and a data line always', () => {
     const view = viewAt(20, 25)
     const b = sphereFx.baked
     const { scr, batch } = run(sphereFx, view)
     const drawn = sourcesOf(scr, batch)
-    // a dab facing the eye is drawn whatever the density
+    // a dab facing the eye is drawn whatever the density, whole, and sized by the zoom alone (no growth for a shortage of particles)
+    let dabs = 0
+    for (const zoom of [1, 3]) {
+      for (const [az, el] of [[20, 25], [60, 40], [330, 35], [20, 60]] as const) {
+        const v = viewAt(az, el, { zoom })
+        const r = run(sphereFx, v)
+        const got = sourcesOf(r.scr, r.batch)
+        for (let i = 0; i < b.count; i++) {
+          if (ROLES[b.role[i]] !== 'dab') continue
+          const o = got.get(i)
+          if (o === undefined) continue
+          dabs++
+          expect(r.batch.alpha[o]).toBe(b.alpha[i])
+          expect(r.scr.bigOf[o]).toBeCloseTo(zoomSizeScaleAt(zoom, sphereFx.params), 5)
+        }
+      }
+    }
+    expect(dabs).toBeGreaterThan(2)
     for (let i = 0; i < b.count; i++) {
       if (ROLES[b.role[i]] !== 'dab') continue
       const o = drawn.get(i)

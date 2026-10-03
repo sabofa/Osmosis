@@ -7,7 +7,8 @@
 // of screen arc length (so the world step is 2 / ppu), each sample a point on the 3D polyline. A piece under 8 samples (16 px) makes no stroke.
 //
 // THE SIDES. A sample's inside is the figure's: its value uA and local colour are the baked ones (BakedSurface.uFront, uBack, local) at the
-// nearest refined vertex, found through a spatial hash per surface (cached by the surface's own positions array, which a recolour shares), on the
+// nearest refined vertex, found by walking down the distance over the surface's edges from the last sample's (the first of a piece through a spatial hash;
+// both cached per surface by its own positions array, which a recolour shares), on the
 // side that faces the eye (a closed mesh: side +1, its outside; an open one: the side the mesh is mostly seen from). The lowest value on the way in
 // (the model's uAmin: at a limb the normal turns fast, so a vertex a few px in can be lit where the outline itself is already in the shadow) is the
 // lowest u among the eye-facing vertices within PROBE_PX of the sample. The outside is the canvas (uB = the canvas value), or, where a G-buffer is
@@ -36,7 +37,7 @@ import { holdLightness, oklabToLinear } from '../model/colour'
 import { groundRecipe, segmentRun, silhouettePolylines, sideRecipeOf } from '../model/contours'
 import { behaviourOf, edgeClassOf, edgeHardness, edgeNoiseSeed, EDGE_NOISE_FREQ, type EdgeTerms } from '../model/edges'
 import { curveFor, groundLocal, recipeEnv } from '../model/index'
-import { clamp, hash3, smooth, valueNoise3 } from '../model/math'
+import { clamp, hash01, hash3, mix2, smooth } from '../model/math'
 import { LoadMixer } from '../model/mix'
 import { colourOfDraft, colourOfRecipe, lightnessAtValue, type ColourRecipe, type ColourSource, type DraftColour, type RecipeEnv } from '../model/recipe'
 import { compileCurves, type CompiledCurves } from '../model/respond'
@@ -59,6 +60,9 @@ const R_EDGE = ROLES.indexOf('edge')
 const EDGE_LAYER = LAYER_ORDER.indexOf('edge')
 // A stretch of this many samples or fewer (b - a under it) makes no stroke.
 const MIN_STRETCH = 6
+
+// The length of (dx, dy): Math.hypot is several times the cost of the square root, and a run asks for it a few times a sample.
+const dist2d = (dx: number, dy: number): number => Math.sqrt(dx * dx + dy * dy)
 
 // ---- the nearest refined vertex of a surface ----
 
@@ -153,26 +157,35 @@ export class VertexGrid {
 // nearest the next sample of an outline (consecutive samples are 2 px apart, so the walk is a few steps).
 export class SurfaceIndex {
   readonly grid: VertexGrid
-  // The neighbours of vertex v: nbr[start[v]..start[v + 1]) (an edge shared by two triangles is listed twice).
+  // The neighbours of vertex v: nbr[start[v]..start[v + 1]) (each once).
   readonly start: Int32Array
-  readonly nbr: Int32Array
+  nbr: Int32Array
+  // Half the distance from each vertex to its nearest neighbour: a point nearer than this to a vertex has no nearer vertex (the triangle inequality).
+  readonly gap: Float32Array
 
   constructor(s: BakedSurface) {
     this.grid = new VertexGrid(s.positions, s.indices)
     const nv = s.positions.length / 3
     const idx = s.indices
     // the copies of one position (a seam of a lattice, a pole) are not joined by an edge: link each to the next copy, in a ring, so that a walk crosses the seam
+    // (positions that agree to 1e-5, as the surface's own canonical vertices: a seam's copies differ in the last digits; the vertices of one cell of the
+    // position hash are compared on their rounded numbers, so a collision of the hash only misses a link)
     const ring = new Int32Array(nv).fill(-1)
     {
-      const first = new Map<string, number>()
-      const last = new Map<string, number>()
+      const first = new Map<number, number>()
+      const last = new Map<number, number>()
+      const same = (u: number, v: number): boolean =>
+        Math.round(s.positions[3 * u] * 1e5) === Math.round(s.positions[3 * v] * 1e5) &&
+        Math.round(s.positions[3 * u + 1] * 1e5) === Math.round(s.positions[3 * v + 1] * 1e5) &&
+        Math.round(s.positions[3 * u + 2] * 1e5) === Math.round(s.positions[3 * v + 2] * 1e5)
       for (let v = 0; v < nv; v++) {
-        // (positions that agree to 1e-5, as the surface's own canonical vertices: a seam's copies differ in the last digits)
-        const key = `${Math.round(s.positions[3 * v] * 1e5)},${Math.round(s.positions[3 * v + 1] * 1e5)},${Math.round(s.positions[3 * v + 2] * 1e5)}`
+        const key = hash3(Math.round(s.positions[3 * v] * 1e5), Math.round(s.positions[3 * v + 1] * 1e5), Math.round(s.positions[3 * v + 2] * 1e5))
         const head = first.get(key)
         if (head === undefined) first.set(key, v)
-        else ring[last.get(key) ?? head] = v
-        if (head !== undefined) last.set(key, v)
+        else if (same(head, v)) {
+          ring[last.get(key) ?? head] = v
+          last.set(key, v)
+        }
       }
       // close each ring: the last copy points to the first
       for (const [key, tail] of last) ring[tail] = first.get(key) as number
@@ -185,7 +198,6 @@ export class SurfaceIndex {
     }
     for (let v = 0; v < nv; v++) if (ring[v] >= 0) count[v + 1]++
     for (let v = 0; v < nv; v++) count[v + 1] += count[v]
-    this.start = count
     const cursor = count.slice(0, nv)
     this.nbr = new Int32Array(count[nv])
     for (let t = 0; t + 2 < idx.length; t += 3) {
@@ -198,6 +210,40 @@ export class SurfaceIndex {
       this.nbr[cursor[c]++] = b
     }
     for (let v = 0; v < nv; v++) if (ring[v] >= 0) this.nbr[cursor[v]++] = ring[v]
+    // each neighbour once (an edge of two triangles was listed twice): about six to a vertex, so a walk's two rings are about forty vertices
+    const start = new Int32Array(nv + 1)
+    const seenAt = new Int32Array(nv).fill(-1)
+    let w = 0
+    for (let v = 0; v < nv; v++) {
+      start[v] = w
+      for (let k = count[v]; k < count[v + 1]; k++) {
+        const u = this.nbr[k]
+        if (u !== v && seenAt[u] !== v) {
+          seenAt[u] = v
+          this.nbr[w++] = u
+        }
+      }
+    }
+    start[nv] = w
+    this.start = start
+    this.nbr = this.nbr.slice(0, w)
+    this.gap = new Float32Array(nv)
+    for (let v = 0; v < nv; v++) {
+      let least = Infinity
+      const measure = (u: number): void => {
+        const dx = s.positions[3 * u] - s.positions[3 * v], dy = s.positions[3 * u + 1] - s.positions[3 * v + 1], dz = s.positions[3 * u + 2] - s.positions[3 * v + 2]
+        const d2 = dx * dx + dy * dy + dz * dz
+        if (d2 > 1e-14 && d2 < least) least = d2
+      }
+      for (let k = start[v]; k < start[v + 1]; k++) {
+        const u = this.nbr[k]
+        measure(u)
+        // (a copy of the vertex at the same place, across a seam, has neighbours of its own that are as near to this one's place)
+        const dx = s.positions[3 * u] - s.positions[3 * v], dy = s.positions[3 * u + 1] - s.positions[3 * v + 1], dz = s.positions[3 * u + 2] - s.positions[3 * v + 2]
+        if (dx * dx + dy * dy + dz * dz <= 1e-14) for (let j = start[u]; j < start[u + 1]; j++) measure(this.nbr[j])
+      }
+      this.gap[v] = Number.isFinite(least) ? 0.5 * Math.sqrt(least) : 0
+    }
   }
 
   // The vertex nearest (x, y, z): by walking down the distance from `from` (a vertex near it; -1: look for one in the grid) over the edges.
@@ -220,7 +266,10 @@ export class SurfaceIndex {
         }
       }
       if (next < 0) {
-        // no neighbour is nearer: look one ring further (the vertex across the other diagonal of a quad is not a neighbour, and is the nearest as often)
+        // no neighbour is nearer: when the point is nearer to this vertex than half of its way to the nearest other, none is; else look one ring further
+        // (the vertex across the other diagonal of a quad is not a neighbour, and is the nearest as often)
+        const g = this.gap[cur]
+        if (best < g * g) return cur
         for (let k = this.start[cur]; k < this.start[cur + 1]; k++) {
           const u = this.nbr[k]
           for (let j = this.start[u]; j < this.start[u + 1]; j++) {
@@ -262,10 +311,58 @@ export function focalAt(focal: Float64Array, mark: number, x: number, y: number,
     if (Number.isNaN(fx)) continue
     const R = focal[8 * mark + 4 * k + 3]
     if (!(R > 0)) continue
-    const d = Math.hypot(x - fx, y - focal[8 * mark + 4 * k + 1], z - focal[8 * mark + 4 * k + 2])
-    f = Math.max(f, Math.exp(-((d / R) ** 2)))
+    const dx = x - fx, dy = y - focal[8 * mark + 4 * k + 1], dz = z - focal[8 * mark + 4 * k + 2]
+    const r2 = (dx * dx + dy * dy + dz * dz) / (R * R)
+    // (past 7 radii the term is under 1e-21: no exp)
+    if (r2 < 49) f = Math.max(f, Math.exp(-r2))
   }
   return f
+}
+
+// model/math.ts valueNoise3 for a run of nearby points: the eight corner values of the lattice cell are kept while the points stay in it (a run's samples
+// are 2 px apart and the noise's cell is two thirds of a world unit), so a sample costs the blend and not sixteen hashes. The same numbers.
+export class NoiseRun {
+  private ix = Number.NaN
+  private iy = 0
+  private iz = 0
+  private readonly c = new Float64Array(8)
+  private readonly seed: number
+  constructor(seed: number) {
+    this.seed = seed
+  }
+  at(x: number, y: number, z: number): number {
+    const ix = Math.floor(x)
+    const iy = Math.floor(y)
+    const iz = Math.floor(z)
+    const c = this.c
+    if (ix !== this.ix || iy !== this.iy || iz !== this.iz) {
+      this.ix = ix
+      this.iy = iy
+      this.iz = iz
+      const corner = (a: number, b: number, d: number): number => hash01(ix + a, iy + b, mix2(iz + d, this.seed)) * 2 - 1
+      c[0] = corner(0, 0, 0)
+      c[1] = corner(1, 0, 0)
+      c[2] = corner(0, 1, 0)
+      c[3] = corner(1, 1, 0)
+      c[4] = corner(0, 0, 1)
+      c[5] = corner(1, 0, 1)
+      c[6] = corner(0, 1, 1)
+      c[7] = corner(1, 1, 1)
+    }
+    const fx = x - ix
+    const fy = y - iy
+    const fz = z - iz
+    const ux = fx * fx * (3 - 2 * fx)
+    const uy = fy * fy * (3 - 2 * fy)
+    const uz = fz * fz * (3 - 2 * fz)
+    const x00 = c[0] + (c[1] - c[0]) * ux
+    const x10 = c[2] + (c[3] - c[2]) * ux
+    const x01 = c[4] + (c[5] - c[4]) * ux
+    const x11 = c[6] + (c[7] - c[6]) * ux
+    const y0 = x00 + (x10 - x00) * uy
+    const y1 = x01 + (x11 - x01) * uy
+    return y0 + (y1 - y0) * uz
+  }
 }
 
 // ---- what a frame's silhouettes read of the parameters, once ----
@@ -401,7 +498,7 @@ function polylineRuns(mc: MarkCtx, poly: Float64Array): void {
     for (let c = i + 1; c < j; c++) {
       const ax = px[c] - px[c - 1], ay = py[c] - py[c - 1]
       const bx = px[c + 1] - px[c], by = py[c + 1] - py[c]
-      const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by)
+      const la = Math.sqrt(ax * ax + ay * ay), lb = Math.sqrt(bx * bx + by * by)
       if (la < 1e-9 || lb < 1e-9) continue
       if ((ax * bx + ay * by) / (la * lb) < CORNER_COS) {
         pieceRun(mc, poly, px, py, a, c)
@@ -417,7 +514,7 @@ function polylineRuns(mc: MarkCtx, poly: Float64Array): void {
 function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64Array, a: number, b: number): void {
   if (b - a < 1) return
   let total = 0
-  for (let v = a + 1; v <= b; v++) total += Math.hypot(px[v] - px[v - 1], py[v] - py[v - 1])
+  for (let v = a + 1; v <= b; v++) total += dist2d(px[v] - px[v - 1], py[v] - py[v - 1])
   if (!(total > 0)) return
   const cap = Math.floor(total / SILHOUETTE_STEP_PX) + 2
   const sx = new Float64Array(cap)
@@ -436,7 +533,7 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
   put(a + 1, 0)
   let carry = 0
   for (let v = a + 1; v <= b; v++) {
-    const d = Math.hypot(px[v] - px[v - 1], py[v] - py[v - 1])
+    const d = dist2d(px[v] - px[v - 1], py[v] - py[v - 1])
     if (d === 0) continue
     let pos = SILHOUETTE_STEP_PX - carry
     while (pos <= d && n < cap) {
@@ -445,7 +542,7 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
     }
     carry = d - (pos - SILHOUETTE_STEP_PX)
   }
-  if (n < cap && Math.hypot(px[b] - sx[n - 1], py[b] - sy[n - 1]) > SILHOUETTE_STEP_PX * 0.3) put(b, 1)
+  if (n < cap && dist2d(px[b] - sx[n - 1], py[b] - sy[n - 1]) > SILHOUETTE_STEP_PX * 0.3) put(b, 1)
   if (n < SILHOUETTE_MIN_SAMPLES) return
 
   const { fc, surface, index, sigma, uSide, gbuffer, senv } = mc
@@ -497,7 +594,7 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
     const a0 = Math.max(0, s - 1), a1 = Math.min(n - 1, s + 1)
     let tx = sx[a1] - sx[a0]
     let ty = sy[a1] - sy[a0]
-    const tl = Math.hypot(tx, ty) || 1
+    const tl = dist2d(tx, ty) || 1
     tx /= tl
     ty /= tl
     let nx = -ty
@@ -557,6 +654,7 @@ function scoreRun(mc: MarkCtx, r: SilhouetteRun): void {
   const { capU, floorU } = senv
   const raw = new Uint8Array(r.n)
   const t: EdgeTerms = { c: 0, k: 0.55, f: 0, s: 0, d: 0, x: 0 }
+  const noise = new NoiseRun(mc.noiseSeed)
   let sum = 0
   for (let s = 0; s < r.n; s++) {
     const uA = r.uA[s]
@@ -567,7 +665,7 @@ function scoreRun(mc: MarkCtx, r: SilhouetteRun): void {
     t.c = smooth(0.04, 0.34, con)
     t.f = focalAt(baked.focal, r.mark, x, y, z)
     t.s = smooth(0.28, 0.8, (uA + uB) / 2)
-    let hh = edgeHardness('silhouette', t, params) + ep.noise * valueNoise3(x * EDGE_NOISE_FREQ, y * EDGE_NOISE_FREQ, z * EDGE_NOISE_FREQ, mc.noiseSeed)
+    let hh = edgeHardness('silhouette', t, params) + ep.noise * noise.at(x * EDGE_NOISE_FREQ, y * EDGE_NOISE_FREQ, z * EDGE_NOISE_FREQ)
     if (con < 0.03) hh = Math.min(hh, ep.lostBelow - 0.01)
     // the outline of a form in shadow against light is where two families meet: a FOUND edge, whatever the other terms say
     else if (r.uMin[s] <= capU && uB >= floorU) hh = Math.max(hh, ep.softBelow + 0.01)
@@ -601,7 +699,7 @@ export function medianClasses(raw: Uint8Array, out: Uint8Array): void {
 function alongWorld(run: SilhouetteRun, a: number, b: number, world: Float32Array): void {
   const n = b - a + 1
   const cum = new Float64Array(n)
-  for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(run.screen[2 * (a + i)] - run.screen[2 * (a + i - 1)], run.screen[2 * (a + i) + 1] - run.screen[2 * (a + i - 1) + 1])
+  for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + dist2d(run.screen[2 * (a + i)] - run.screen[2 * (a + i - 1)], run.screen[2 * (a + i) + 1] - run.screen[2 * (a + i - 1) + 1])
   const total = cum[n - 1]
   const poly = run.poly
   const last = poly.length / 3 - 1
