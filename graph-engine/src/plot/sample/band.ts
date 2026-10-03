@@ -19,19 +19,47 @@ import type { Bounds, Chain } from '../../scene/types'
 // defined on half of it), and a stall (equal neighbours) is neither a turn nor the end of a direction,
 // so a plateau cannot hide one. One turn is a peak, which a polyline draws well; two or more are what
 // a pixel cannot hold.
-export function oscillates(values: Float64Array, count: number, minTurns: number): boolean {
+//
+// `largestStepIsAStall` reads the single largest step between neighbours (the first, on a tie) as a
+// stall as well. It is for a column the twin could not certify: one jump or pole in it, against the
+// slope, is up, a step down, up again, which is two turns that no oscillation made. A discontinuity
+// is one step, so without it the column turns once at most; an oscillation is many steps and keeps
+// its turns.
+export function oscillates(values: Float64Array, count: number, minTurns: number, largestStepIsAStall = false): boolean {
+  // which step (counting the steps between finite values) is read as a stall; -1: none
+  let skip = -1
+  if (largestStepIsAStall) {
+    let last = Number.NaN
+    let step = 0
+    let largest = 0
+    for (let i = 0; i < count; i++) {
+      const v = values[i]
+      if (!Number.isFinite(v)) continue
+      if (last === last) {
+        const size = Math.abs(v - last)
+        if (size > largest) {
+          largest = size
+          skip = step
+        }
+        step++
+      }
+      last = v
+    }
+  }
   let turns = 0
   let prev = Number.NaN
   // the last direction that was not a stall: 1 up, -1 down, 0 none yet
   let dir = 0
+  let step = 0
   for (let i = 0; i < count; i++) {
     const v = values[i]
     if (!Number.isFinite(v)) continue
     if (prev === prev) {
-      const step = v > prev ? 1 : v < prev ? -1 : 0
-      if (step !== 0) {
-        if (dir !== 0 && step !== dir) turns++
-        dir = step
+      const way = step === skip ? 0 : v > prev ? 1 : v < prev ? -1 : 0
+      step++
+      if (way !== 0) {
+        if (dir !== 0 && way !== dir) turns++
+        dir = way
       }
     }
     prev = v

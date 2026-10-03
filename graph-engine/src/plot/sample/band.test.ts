@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { compileInterval, iv } from '../../math/interval'
+import { chainPoints } from '../../scene/chains'
 import type { Bounds, Chain, SceneObject } from '../../scene/types'
 import { sampleRange } from './adaptive'
 import { BandSink, oscillates } from './band'
 import { sampleCurve, type CurveSpec } from './curve'
 import { ChainSink } from './sink'
-import { expr, fnsOf, scopeOf, view as wideScreen } from './testkit'
-import { FULL } from './tuning'
+import { expr, fnsOf, scopeOf, trueY, view as wideScreen } from './testkit'
+import { COARSE, FULL, type Tuning } from './tuning'
 import type { EvalCounter } from './types'
 
 type BandObject = Extract<SceneObject, { kind: 'band' }>
@@ -85,6 +86,31 @@ describe('oscillates', () => {
     expect(o([0, 1, 0], 1)).toBe(true)
     expect(o([0, 1, 0, 1], 3)).toBe(false)
     expect(o([0, 1, 0, 1, 0], 3)).toBe(true)
+  })
+})
+
+describe('oscillates, the largest step read as a stall', () => {
+  const o = (values: number[], minTurns = 2) => oscillates(Float64Array.from(values), values.length, minTurns, true)
+  it('a jump against the slope is up, down, up and not an oscillation', () => {
+    const jump = [0, 1, 2, 3, -4, -3, -2, -1]
+    expect(oscillates(Float64Array.from(jump), jump.length, 2)).toBe(true)
+    expect(o(jump)).toBe(false)
+    // a pole is a step too: up to a huge value and back from a hugely negative one
+    expect(o([0, 1, 2, 3, 1e9, -1e9, -3, -2])).toBe(false)
+    // and a jump the other way
+    expect(o([3, 2, 1, 0, 10, 9, 8, 7])).toBe(false)
+  })
+  it('an oscillation is many steps and keeps its turns, though it loses one step', () => {
+    expect(o([0, 1, 0, 1, 0, 1, 0, 1])).toBe(true)
+    expect(o([0, 5, 1, 4, 2, 3, 2, 4, 1])).toBe(true)
+  })
+  it('a short one loses what the step took: one turn after it is one turn', () => {
+    expect(o([0, 1, 0, 1])).toBe(false)
+    expect(o([0, 1, 0, 1], 1)).toBe(true)
+  })
+  it('skips values that are not finite when it looks for the step, and a flat run has no step to skip', () => {
+    expect(o([0, Number.NaN, 5, 0, 5, 0, 5])).toBe(true)
+    expect(o([2, 2, 2, 2])).toBe(false)
   })
 })
 
@@ -239,7 +265,8 @@ describe('bands from sampleCurve', () => {
   it('a band across a view is not cut by columns whose ends happen to sit at its extremes', () => {
     // 363 x is about 9.1 rad over a pixel, near 3 pi: the two ends of a column are close to mirror
     // images, and for some columns both are at the extremes, where the twin's enclosure is no taller
-    // than the ends and the column looks like a steep stroke. Beside a band it is tried anyway.
+    // than the ends and the column looks like a steep stroke (it was 115 bands when a certified column
+    // was left out as one; a certified column is tried now, and its stroke is drawn from its samples).
     for (const w of [363, 370]) {
       const r = sample(explicit(`sin(${w}x)`), wide)
       expect(bandsOf(r.objects), `sin(${w}x)`).toHaveLength(1)
@@ -256,6 +283,85 @@ describe('bands from sampleCurve', () => {
     expect(Math.max(...cols.map((c) => c.hi))).toBeLessThanOrEqual(1)
     expect(Math.max(...cols.map((c) => c.hi))).toBeGreaterThan(0.95)
     expect(curveOf(r.objects).chains).toEqual([])
+  })
+
+  it('a column beside a band needs one turn, not two: a period of 1 to 2 px is one band, not a hundred with chains between', () => {
+    // sin(200x) was 446 bands and 446 chains, capped at FULL (30155 intervals): half the columns hold two turns
+    // of it and half one, and a band that stopped at every one of the second kind was a band and a chain, alternately
+    for (const w of [150, 180, 200, 230]) {
+      const r = sample(explicit(`sin(${w}x)`), wide)
+      expect(bandsOf(r.objects), `sin(${w}x)`).toHaveLength(1)
+      expect(r.capped, `sin(${w}x)`).toBe(false)
+      // what the columns before the first with two turns are: a pixel or three of the overscan, off the view
+      for (const c of curveOf(r.objects).chains) for (let i = 0; i < c.param.length; i++) expect(Math.abs(c.xy[2 * i]) > 10, `sin(${w}x) chain at ${c.xy[2 * i]}`).toBe(true)
+    }
+  })
+
+  it('a period of 2.5 px is not a band, and is not capped either: it is drawn from its samples', () => {
+    const r = sample(explicit('sin(100x)'), wide)
+    expect(bandsOf(r.objects)).toEqual([])
+    expect(r.capped).toBe(false)
+    expect(curveOf(r.objects).chains).toHaveLength(1)
+  })
+
+  it('the steps of a staircase are not tried for a band: round(5 sin(20x)) is not capped by them', () => {
+    // each step is a column the twin cannot certify and whose ends are the span of its enclosure; capped at FULL (60005
+    // points) when each took its samples
+    const r = sample(explicit('round(5 sin(20x))'), wide)
+    expect(bandsOf(r.objects)).toEqual([])
+    expect(r.capped).toBe(false)
+  })
+
+  it('a pole or a jump the structure walk did not find is not swallowed by a band: its break is kept', () => {
+    // a jump against the slope is up, down, up: two turns that no oscillation made. These are sums whose poles and
+    // jumps the walk cannot locate (a loop bounded by a @param); the jump test finds them, and a band over one
+    // would be a full-height bar with no break
+    const at = (breaks: { at: number }[], t: number) => breaks.some((b) => Math.abs(b.at - t) < 0.03)
+    const cases: [string, string, number[]][] = [
+      ['sum(k = 1 to n, 1/(x - k - 0.0123))', '@param n = 5 range [1, 10]', [1.0123, 2.0123, 3.0123, 4.0123, 5.0123]],
+      ['sum(k = 1 to n, -1/(x - k - 0.0123))', '@param n = 5 range [1, 10]', [1.0123, 2.0123, 3.0123, 4.0123, 5.0123]],
+      ['sum(k = 1 to n, sign(x - k - 0.0123)) - 4x', '@param n = 3 range [1, 10]', [1.0123, 2.0123, 3.0123]],
+      ['sum(k = 1 to n, 3 x/n - floor(x - k - 0.0123))', '@param n = 3 range [1, 10]', [1.0123, 2.0123, 3.0123]],
+    ]
+    for (const [body, defs, spots] of cases) {
+      const r = sampleCurve(explicit(body), wide, scopeOf(defs), { statement: 0, color: null, asymptotes: true, quality: 'full' })
+      expect(bandsOf(r.objects), body).toEqual([])
+      for (const t of spots) expect(at(curveOf(r.objects).breaks, t), `${body}: a break at ${t}`).toBe(true)
+    }
+  })
+
+  it('samples that alias an oscillation are not drawn as a curve: an alias is capped, never a line', () => {
+    // sin(w x) with w near a multiple of 2 pi times the samples a pixel takes (16 a px at FULL: 3770 at 40 px per unit,
+    // 8 at COARSE: 1759) steps over whole periods, and its samples read as a slow wave that the twin's enclosure fits
+    for (const [w, quality] of [[3672, 'full'], [3867, 'full'], [1650, 'coarse'], [1676, 'coarse']] as const) {
+      const text = `sin(${w}x)`
+      const r = sample(explicit(text), wide, quality)
+      const f = trueY(text, scopeOf())
+      let worst = 0
+      for (const c of curveOf(r.objects).chains) {
+        const p = chainPoints(c)
+        for (let i = 1; i < p.length; i++) {
+          const mx = (p[i - 1].x + p[i].x) / 2
+          if (Math.abs(mx) <= 10) worst = Math.max(worst, Math.abs(f(mx) - (p[i - 1].y + p[i].y) / 2) * 40)
+        }
+      }
+      expect(r.capped || worst <= 2, `${text} ${quality}: a line ${worst.toFixed(1)} px off the curve, and not capped`).toBe(true)
+    }
+  })
+
+  it('COARSE: a band across the view fits the budget, on 8 samples a column', () => {
+    const r = sample(explicit('sin(500x)'), wide, 'coarse')
+    const bands = bandsOf(r.objects)
+    expect(bands).toHaveLength(1)
+    const cols = columnsOf(bands[0])
+    expect(Math.min(...cols.map((c) => c.t0))).toBeLessThanOrEqual(-10)
+    expect(Math.max(...cols.map((c) => c.t1))).toBeGreaterThanOrEqual(10)
+    expect(Math.min(...cols.map((c) => c.lo))).toBeGreaterThanOrEqual(-1)
+    expect(Math.max(...cols.map((c) => c.hi))).toBeLessThanOrEqual(1)
+    expect(Math.max(...cols.map((c) => c.hi))).toBeGreaterThan(0.95)
+    expect(curveOf(r.objects).chains).toEqual([])
+    expect(r.capped).toBe(false)
+    expect(r.stats.points).toBeLessThan(COARSE.budget.points)
   })
 
   it('a Weierstrass sum: every band column lies inside the twin\'s enclosure over it', () => {
@@ -347,12 +453,12 @@ class Recorder extends BandSink {
 
 describe('sampleRange with a band sink', () => {
   const ends = { left: { kind: 'free' }, right: { kind: 'free' } } as const
-  const range = (text: string, screen = wideScreen) => {
+  const range = (text: string, tune: Tuning = FULL, screen = wideScreen) => {
     const bands = new Recorder('y', screen.clip)
     const sink = new ChainSink(screen.clip)
     const counter: EvalCounter = { points: 0, intervals: 0 }
     const fns = fnsOf(text, scopeOf(), screen.px.x)
-    const { capped } = sampleRange(fns, screen.clip.xMin, screen.clip.xMax, ends, screen, FULL, counter, sink, bands)
+    const { capped } = sampleRange(fns, screen.clip.xMin, screen.clip.xMax, ends, screen, tune, counter, sink, bands)
     return { bands, chains: sink.chains(), breaks: sink.breaks(), capped, counter }
   }
 
@@ -378,36 +484,72 @@ describe('sampleRange with a band sink', () => {
     }
   })
 
-  it('a steep monotone column is not a band: it refines to the floor and connects, as without a sink', () => {
-    const withBands = range('sin(50x)')
-    expect(withBands.bands.seen).toEqual([])
-    const sink = new ChainSink(wideScreen.clip)
+  // the same range with no band sink at all: what the core did before there were bands
+  const without = (text: string, tune: Tuning = FULL, screen = wideScreen) => {
+    const sink = new ChainSink(screen.clip)
     const counter: EvalCounter = { points: 0, intervals: 0 }
-    sampleRange(fnsOf('sin(50x)', scopeOf()), wideScreen.clip.xMin, wideScreen.clip.xMax, ends, wideScreen, FULL, counter, sink)
-    expect(withBands.chains).toEqual(sink.chains())
-    expect(withBands.chains).toHaveLength(1)
+    const { capped } = sampleRange(fnsOf(text, scopeOf(), screen.px.x), screen.clip.xMin, screen.clip.xMax, ends, screen, tune, counter, sink)
+    return { chains: sink.chains(), breaks: sink.breaks(), capped, counter }
+  }
+  // how far a chain's vertices are from the curve (they are samples, so not at all), and its segments' middles, in px
+  const errorsOf = (text: string, chains: Chain[]) => {
+    const f = trueY(text, scopeOf())
+    let vertex = 0
+    let middle = 0
+    for (const c of chains) {
+      const p = chainPoints(c)
+      for (let i = 0; i < p.length; i++) {
+        if (Math.abs(p[i].y) < 14.99) vertex = Math.max(vertex, Math.abs(f(p[i].x) - p[i].y) * 40)
+        if (i > 0) {
+          const mx = (p[i - 1].x + p[i].x) / 2
+          const my = (p[i - 1].y + p[i].y) / 2
+          if (Math.abs(my) < 14.99) middle = Math.max(middle, Math.abs(f(mx) - my) * 40)
+        }
+      }
+    }
+    return { vertex, middle }
+  }
+
+  it('a steep monotone stretch is not a band: it is drawn from its samples, one chain, on the curve', () => {
+    const r = range('sin(50x)')
+    expect(r.bands.seen).toEqual([])
+    expect(r.chains).toHaveLength(1)
+    expect(r.capped).toBe(false)
+    const e = errorsOf('sin(50x)', r.chains)
+    expect(e.vertex).toBeLessThan(1e-9)
+    // (the segments are a fifteenth of a pixel across)
+    expect(e.middle).toBeLessThan(0.1)
   })
 
-  it('a stretch that is only steep costs next to nothing to leave alone: sin(50x) is not capped for it', () => {
-    const withBands = range('sin(50x)')
-    const without = new ChainSink(wideScreen.clip)
-    const counter: EvalCounter = { points: 0, intervals: 0 }
-    sampleRange(fnsOf('sin(50x)', scopeOf()), wideScreen.clip.xMin, wideScreen.clip.xMax, ends, wideScreen, FULL, counter, without)
-    // (what is spent is at the peaks, which are columns that do not flatten and are not strokes)
-    expect(withBands.capped).toBe(false)
-    expect(withBands.counter.points).toBeLessThan(1.25 * counter.points)
-    expect(withBands.counter.intervals).toBe(counter.intervals)
+  it('it costs what leaving a stretch to the core did, and far fewer enclosures: sin(50x)', () => {
+    const r = range('sin(50x)')
+    const before = without('sin(50x)')
+    expect(r.counter.points).toBeLessThan(1.1 * before.counter.points)
+    expect(r.counter.intervals).toBeLessThan(before.counter.intervals / 5)
   })
 
-  it('tries a column once, whatever the twin is like: no more than 14 evaluations a pixel over what it costs without', () => {
-    // sin(40x) cos(40x) is enclosed loosely (a product of two intervals), so no stretch of it is shown to be a stroke
-    const text = 'sin(40x) cos(40x)'
-    const withBands = range(text)
-    const counter: EvalCounter = { points: 0, intervals: 0 }
-    sampleRange(fnsOf(text, scopeOf()), wideScreen.clip.xMin, wideScreen.clip.xMax, ends, wideScreen, FULL, counter, new ChainSink(wideScreen.clip))
-    expect(withBands.bands.seen).toEqual([])
-    expect(withBands.counter.points - counter.points).toBeGreaterThan(0)
-    expect(withBands.counter.points - counter.points).toBeLessThanOrEqual(14 * 1200)
+  it('a curve that is only steep and not an oscillation is not capped for lack of a band: sin(100x), a period of 2.5 px', () => {
+    // capped at FULL (30063 intervals) before its columns were drawn from their samples
+    const r = range('sin(100x)')
+    expect(r.bands.seen).toEqual([])
+    expect(r.capped).toBe(false)
+    expect(r.chains).toHaveLength(1)
+    const e = errorsOf('sin(100x)', r.chains)
+    expect(e.vertex).toBeLessThan(1e-9)
+    expect(e.middle).toBeLessThan(0.25)
+  })
+
+  it('a column is tried once, whatever the twin is like: sin(30x) + sin(31x) is not capped by tries', () => {
+    // its twin is loose (two intervals added), so a column's samples are not always a curve the enclosure vouches
+    // for, and the core refines it as it did; without the rule that the halves of one that was tried are not,
+    // this is capped at FULL (60005 points)
+    const text = 'sin(30x) + sin(31x)'
+    const r = range(text)
+    const before = without(text)
+    expect(r.bands.seen).toEqual([])
+    expect(r.capped).toBe(false)
+    // at most the samples of a column (14, and 1 more to check them) a pixel over what it cost before
+    expect(r.counter.points - before.counter.points).toBeLessThanOrEqual(15 * 1200)
   })
 
   it('a column is about a pixel wide at most, and each is a column of the band: adjacent ones share an end', () => {
@@ -437,6 +579,35 @@ describe('sampleRange with a band sink', () => {
     // columns takes 14 more, its 16 samples having the two ends already
     expect(calls).toBe(301 + 2100 + 14 * 1200)
     expect(bands.seen).toHaveLength(1200)
+  })
+
+  it('COARSE takes 8 samples over a column, 6 new ones, every evaluation counted', () => {
+    const screen = wideScreen
+    const base = fnsOf('sin(500x)', scopeOf(), screen.px.x)
+    let calls = 0
+    const counted = {
+      ...base,
+      point: (t: number, out: Float64Array) => {
+        calls++
+        base.point(t, out)
+      },
+    }
+    const bands = new Recorder('y', screen.clip)
+    const counter: EvalCounter = { points: 0, intervals: 0 }
+    sampleRange(counted, screen.clip.xMin, screen.clip.xMax, ends, screen, COARSE, counter, new ChainSink(screen.clip), bands)
+    expect(counter.points).toBe(calls)
+    // a start grid of 8 px: 151 points; 2250 certified intervals take a midpoint each; 1200 columns take 6 more
+    expect(calls).toBe(151 + 2250 + 6 * 1200)
+    expect(bands.seen).toHaveLength(1200)
+  })
+
+  it('a pole is not a band: tan(x) with a sink keeps every break it has without one', () => {
+    // the column that holds a pole is up, down, up: two turns, and a band over it loses the break
+    const r = range('tan(x)')
+    const before = without('tan(x)')
+    expect(before.breaks).toHaveLength(10)
+    expect(r.bands.seen).toEqual([])
+    expect(r.breaks).toEqual(before.breaks)
   })
 
   it('records no break where a band is', () => {

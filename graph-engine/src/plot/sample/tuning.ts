@@ -170,6 +170,49 @@ export const CURVE = {
   pathPerWidth: 1.5,
 }
 
+// Bands (band.ts, and the hook in adaptive.ts): an oscillation faster than a pixel is drawn as the
+// extent the curve sweeps over each pixel column, instead of as a zig-zag. It is declared before the
+// presets, which take their sample counts from it.
+export const BAND = {
+  // The oscillation coordinate is sampled this many times over a column, evenly spaced, the ends
+  // included: what a column costs is these less the two ends, which the core already has. A column
+  // with a couple of periods in it (sin(500x), 2 per pixel at 40 px per unit) reaches 0.993 of the
+  // amplitude on average and 0.975 at worst; one with twenty (sin(5000x)) 0.93 and 0.73. The samples
+  // are inside the curve, so a band is never taller than the curve is, and it is held inside the
+  // twin's enclosure as well. This is FULL's count; COARSE's is coarseSamples.
+  samples: 16,
+  // COARSE takes these: a band across a 1200 px range is 1200 columns, and 14 evaluations each is
+  // more than COARSE's whole 15000-point budget with the rest of the curve, where 6 are not (sin(500x)
+  // at COARSE: 7200 points for the columns, and the 8 samples still show the turns of a column of two
+  // periods, 3.5 a period).
+  coarseSamples: 8,
+  // An interval at most this wide (px) that is still unresolved, because it is not flat or the twin
+  // cannot certify it, is a column to try. Wider, the samples are too far apart to show an
+  // oscillation (they would alias it), and the core bisects instead.
+  columnPx: 1,
+  // Interval widths are halved from the start grid's, so a pixel is a pixel to rounding only: this
+  // much (relative) is allowed over columnPx, which is a billionth.
+  columnSlack: 1e-9,
+  // The column is a band's only if the samples change direction this often. One turn is a peak,
+  // which the polyline draws well; a steep monotone stretch has none, and is drawn as the samples
+  // when the twin certifies it, and refined to the floor when it does not (steepness never breaks a
+  // curve).
+  minTurns: 2,
+  // A column that starts where a band's last one ended needs only this many turns: at a period of one
+  // to two pixels about half the columns hold two, and the rest one, and a band that stops at each of
+  // those is a hundred bands with a chain between them (sin(200x) was 446 of each and capped).
+  joinTurns: 1,
+  // An interval the twin cannot certify is a steep stroke, and not tried, when its enclosure on the
+  // oscillation axis is within the span of its two ends and this many px: nothing lies between them
+  // for a band to show. The slack is the twin's looseness over an interval (x + sin(20x) is a pixel
+  // looser than it is high), 2 px as spikeSlackPx is for the same thing in the flat test.
+  strokeSlackPx: 2,
+  // Where, as a fraction of a column, the one more sample is taken that checks the polyline of a
+  // certified column that did not turn: (3 - sqrt 5) / 2, irrational so that no lattice of equally
+  // spaced samples, whatever its spacing, is resonant with it (LIMITS.confirmFactors, the same idea).
+  probeAt: (3 - Math.sqrt(5)) / 2,
+}
+
 // The adaptive core (adaptive.ts): every number of the screen-space subdivision. Two
 // presets share the shape: FULL for a settled view, COARSE for one being dragged (the
 // interaction budget), which draws the same curve a little looser and spends a quarter
@@ -215,6 +258,8 @@ export interface Tuning {
   // (1/16 px) cannot be promised at any factor: only a sample that lands on it shows it.
   spikeFactor: number
   spikeSlackPx: number
+  // The samples taken over a column of a band (BAND.samples, and why COARSE takes fewer).
+  bandSamples: number
   // The clip box is the view widened by this fraction of its size on each side: a curve
   // leaves the picture, not the sampled region, at the edge you can see.
   overscan: number
@@ -224,10 +269,10 @@ export interface Tuning {
   budget: { points: number; intervals: number }
 }
 
-export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
 // COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
 // cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
-export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, spikeFactor: 8, budget: { points: 15000, intervals: 7500 } }
+export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, spikeFactor: 8, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }
 
 // The parts of the core that are not a quality knob, so not in Tuning but still numbers
 // that were chosen.
@@ -239,27 +284,4 @@ export const CORE = {
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
   // far under any screen.
   edgeSteps: 64,
-}
-
-// Bands (band.ts, and the hook in adaptive.ts): an oscillation faster than a pixel is drawn as the
-// extent the curve sweeps over each pixel column, instead of as a zig-zag.
-export const BAND = {
-  // The oscillation coordinate is sampled this many times over a column, evenly spaced, the ends
-  // included: what a column costs is these less the two ends, which the core already has. A column
-  // with a couple of periods in it (sin(500x), 2 per pixel at 40 px per unit) reaches 0.993 of the
-  // amplitude on average and 0.975 at worst; one with twenty (sin(5000x)) 0.93 and 0.73. The samples
-  // are inside the curve, so a band is never taller than the curve is, and it is held inside the
-  // twin's enclosure as well.
-  samples: 16,
-  // An interval at most this wide (px) that is still unresolved, because it is not flat or the twin
-  // cannot certify it, is a column to try. Wider, the samples are too far apart to show an
-  // oscillation (they would alias it), and the core bisects instead.
-  columnPx: 1,
-  // Interval widths are halved from the start grid's, so a pixel is a pixel to rounding only: this
-  // much (relative) is allowed over columnPx, which is a billionth.
-  columnSlack: 1e-9,
-  // The column is a band's only if the samples change direction this often. One turn is a peak,
-  // which the polyline draws well; a steep monotone stretch has none, and refines to the floor
-  // instead (steepness never breaks a curve).
-  minTurns: 2,
 }

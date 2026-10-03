@@ -51,18 +51,22 @@
 //    band. That is decided at the two points above that leave an interval unresolved: a certified
 //    interval that is not flat (before it is accepted at the floor or bisected), and an interval the
 //    twin cannot certify (before anything else is asked of it).
-//  - BAND.samples values of the oscillation coordinate are taken over the interval, evenly spaced,
-//    the ends included (they are already known, so they cost nothing). If they turn at least
-//    BAND.minTurns times, the interval is a column: its extent is the least and greatest finite
-//    sample, clamped into the twin's enclosure of the interval (a band never says more than the
-//    enclosure does), and the chain is lifted. The column stops the refinement: it is the picture.
-//    No break is recorded; a band is not a mathematical interruption.
-//  - If they do not, nothing has happened but the evaluations, and the interval is dealt with as
-//    before: a steep monotone stretch is refined to the floor and connected.
-//  - Trying a column costs BAND.samples - 2 evaluations, and most of the intervals that get this far
-//    are steep stretches, not oscillations, so bandColumn spares itself where it can tell: an interval
-//    the twin shows to be a stroke is not tried, and one that is tried once is not tried again at the
-//    halves it is bisected into. See bandColumn.
+//  - tuning.bandSamples (BAND.samples, fewer at COARSE) values of the oscillation coordinate are taken
+//    over the interval, evenly spaced, the ends included (they are already known, so they cost
+//    nothing). If they turn at least BAND.minTurns times (BAND.joinTurns beside a band), the interval
+//    is a column: its extent is the least and greatest finite sample, clamped into the twin's enclosure
+//    of the interval (a band never says more than the enclosure does), and the chain is lifted. The
+//    column stops the refinement: it is the picture. No break is recorded; a band is not a
+//    mathematical interruption. At an interval the twin could not certify, the turns are counted with
+//    the largest step between samples read as a stall: one jump or pole is one step, and a band over
+//    it would hide the break the jump test would have drawn.
+//  - If they do not turn, a certified interval is drawn as its samples joined (they are a fifteenth of
+//    a pixel apart, the floor's spacing, and the twin says the curve is continuous), if they are not an
+//    alias of something faster; any other is dealt with as before, and a steep monotone stretch is
+//    refined to the floor and connected.
+//  - Trying a column costs bandSamples - 2 evaluations, so bandColumn spares itself where it can tell:
+//    an uncertified interval the twin shows to be a stroke is not tried, and one that is tried and
+//    refined is not tried again at the halves it is bisected into. See bandColumn.
 import { CONTINUOUS, PARTIAL, UNKNOWN } from '../../math/interval'
 import type { Bounds } from '../../scene/types'
 import { type BandSink, oscillates } from './band'
@@ -101,14 +105,20 @@ interface Core {
 interface BandState {
   sink: BandSink
   axis: 'y' | 'x'
-  // the scratch a column's values are taken into
-  samples: Float64Array
+  // the scratch a column's samples are taken into: both coordinates and the parameter of each
+  xs: Float64Array
+  ys: Float64Array
+  ts: Float64Array
   // The interval last tried as a column and found not to oscillate: the halves it is bisected into
   // are not tried again (the refinement of an interval comes straight after it, depth first)
   notLo: number
   notHi: number
   // where the last column that was a band's ended (NaN: none yet)
   lastEnd: number
+}
+
+function bandState(sink: BandSink, axis: 'y' | 'x', samples: number): BandState {
+  return { sink, axis, xs: new Float64Array(samples), ys: new Float64Array(samples), ts: new Float64Array(samples), notLo: Number.NaN, notHi: Number.NaN, lastEnd: Number.NaN }
 }
 
 export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left: End; right: End }, screen: Screen, tuning: Tuning, counter: EvalCounter, sink: ChainSink, bands?: BandSink): { capped: boolean } {
@@ -128,7 +138,7 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
     capped: false,
     anchorLo: ends.left.kind === 'anchor' ? a : Number.NaN,
     anchorHi: ends.right.kind === 'anchor' ? b : Number.NaN,
-    bands: bands === undefined || fns.oscillationAxis === null ? undefined : { sink: bands, axis: fns.oscillationAxis, samples: new Float64Array(BAND.samples), notLo: Number.NaN, notHi: Number.NaN, lastEnd: Number.NaN },
+    bands: bands === undefined || fns.oscillationAxis === null ? undefined : bandState(bands, fns.oscillationAxis, tuning.bandSamples),
   }
 
   counter.intervals++
@@ -205,7 +215,7 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
       c.sink.segment(xa, ya, ta, xb, yb, tb)
       return
     }
-    if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb)) return
+    if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, true)) return
     if (atFloor) {
       // steepness never breaks a curve
       c.sink.segment(xa, ya, ta, xb, yb, tb)
@@ -215,7 +225,7 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     return
   }
 
-  if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb)) return
+  if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, false)) return
   const aFinite = isFinite2(xa, ya)
   const bFinite = isFinite2(xb, yb)
 
@@ -435,36 +445,54 @@ function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, 
 //
 // The interval's enclosure is still in c.box, as visit left it, and is read before anything else
 // can touch it. The ends are the values the caller already holds, so a column that is tried costs
-// BAND.samples - 2 evaluations, all counted, whether or not it is a band's. Most are not tried:
-//  - A STROKE is not. When the twin's enclosure of the interval, along the oscillation axis, is no
-//    taller than the span of the two ends (and spikeSlackPx), nothing lies between the ends for a band to
-//    show: the interval is a steep stretch that the core refines to the floor and connects, as it
-//    always has. Steep stretches are what most intervals that get this far are (sin(50x) is made of
-//    them, a thousand a view), and trying each, at every level of its refinement, capped sin(50x) at
-//    its budget (60012 points, 19201 without). Not so beside a band, though: the ends of a column of
-//    an oscillation can sit at its extremes, and a column left out would cut the band in two
-//    (sin(363x) came to 115 bands).
-//  - A second try is not made. An interval that was tried and did not turn is not tried again at the
-//    halves it is bisected into, which follow it at once: the question was asked there.
-function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number): boolean {
+// tuning.bandSamples - 2 evaluations, all counted, whatever comes of it.
+//  - A band's column: the samples turn BAND.minTurns times (BAND.joinTurns when the column starts where
+//    a band's last one ended). At an uncertified interval they must turn that often with their largest
+//    step read as a stall: a jump or a pole the structure walk did not locate, against the slope, is
+//    up, down, up, and a band over it would show a bar where the curve is not, with no break (the
+//    jump test has not been asked, and would not have connected it).
+//  - A certified column whose samples do not turn is drawn as the samples, joined. The twin says the
+//    curve is continuous across it and the samples are a fifteenth of a pixel apart, so what the core
+//    would do for it (refine to the floor, a sixteenth of a pixel) is done, for the same evaluations
+//    and no twin enclosures: sin(50x) was 18901 enclosures and is 2101. Only if the samples are not an
+//    alias of an oscillation (isDrawable). It is not done at an uncertified column, which the twin has
+//    not shown to be continuous, and the jump test (the core's) decides.
+//  - Otherwise the core goes on as it would have, and the interval is not tried again at the halves it
+//    is bisected into, which follow it at once: the question was asked there.
+// And an uncertified interval is not tried at all when it is a STROKE: its enclosure on the oscillation
+// axis is no taller than the span of its two ends (and BAND.strokeSlackPx), so nothing lies between them
+// for a band to show, and it is a steep stretch or a step that the core refines as it always has. That
+// is where the test earns its keep: a certified one is drawn from its samples at the same cost, and a
+// step is what a staircase is made of (round(5 sin(20x)) is capped at FULL without it, 57526 points
+// with it). The ends of a column of an oscillation can sit at its extremes, and then it is taken for a
+// stroke and left out of a band; beside a band that once cut sin(363x) into 115 bands, when the test
+// applied to certified columns too, and an exemption there was needed. For uncertified ones, sqrt(sin(wx))
+// and floor(3 sin(wx)) over w = 300 to 1100, it changes nothing, so there is none.
+function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, certified: boolean): boolean {
   const bands = c.bands
   if (bands === undefined) return false
   if (ta >= bands.notLo && tb <= bands.notHi) return false
   const alongY = bands.axis === 'y'
   const enclosureLo = alongY ? c.box.yLo : c.box.xLo
   const enclosureHi = alongY ? c.box.yHi : c.box.xHi
-  const endA = alongY ? ya : xa
-  const endB = alongY ? yb : xb
-  if (ta !== bands.lastEnd && isStroke(c, enclosureLo, enclosureHi, endA, endB, alongY)) return false
+  const beside = ta === bands.lastEnd
+  if (!certified && isStroke(c, enclosureLo, enclosureHi, alongY ? ya : xa, alongY ? yb : xb, alongY)) return false
 
-  const n = BAND.samples
-  const v = bands.samples
-  v[0] = endA
-  v[n - 1] = endB
+  const { xs, ys, ts } = bands
+  const n = ts.length
+  xs[0] = xa
+  ys[0] = ya
+  ts[0] = ta
+  xs[n - 1] = xb
+  ys[n - 1] = yb
+  ts[n - 1] = tb
   for (let i = 1; i < n - 1; i++) {
-    evalAt(c, ta + ((tb - ta) * i) / (n - 1))
-    v[i] = alongY ? c.pt[1] : c.pt[0]
+    ts[i] = ta + ((tb - ta) * i) / (n - 1)
+    evalAt(c, ts[i])
+    xs[i] = c.pt[0]
+    ys[i] = c.pt[1]
   }
+  const v = alongY ? ys : xs
   let lo = Number.POSITIVE_INFINITY
   let hi = Number.NEGATIVE_INFINITY
   for (let i = 0; i < n; i++) {
@@ -472,32 +500,65 @@ function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb:
     if (v[i] < lo) lo = v[i]
     if (v[i] > hi) hi = v[i]
   }
+  const spanLo = lo
+  const spanHi = hi
   // never beyond the twin's enclosure of this interval (a bound that is NaN clamps nothing)
   if (enclosureLo > lo) lo = enclosureLo
   if (enclosureHi < hi) hi = enclosureHi
-  // And if the samples do not turn, or the enclosure does not hold them at all (the twin and the scalar
-  // disagree about this interval, so neither is trusted with a band), the core goes on as it would have.
-  if (!oscillates(v, n, BAND.minTurns) || lo > hi) {
-    bands.notLo = ta
-    bands.notHi = tb
-    return false
+  // (and if the enclosure does not hold the samples at all, the twin and the scalar disagree about
+  // this interval, and neither is trusted with a band or a polyline)
+  if (lo <= hi) {
+    if (oscillates(v, n, beside ? BAND.joinTurns : BAND.minTurns, !certified)) {
+      bands.sink.column(ta, tb, lo, hi)
+      bands.lastEnd = tb
+      c.sink.lift()
+      return true
+    }
+    if (certified && isDrawable(c, bands, enclosureLo, enclosureHi, spanLo, spanHi, alongY, ta, tb)) {
+      for (let i = 0; i < n - 1; i++) c.sink.segment(xs[i], ys[i], ts[i], xs[i + 1], ys[i + 1], ts[i + 1])
+      return true
+    }
   }
-
-  bands.sink.column(ta, tb, lo, hi)
-  bands.lastEnd = tb
-  c.sink.lift()
-  return true
+  bands.notLo = ta
+  bands.notHi = tb
+  return false
 }
 
 // Whether the enclosure [lo, hi] of an interval on the oscillation axis is within the span of the
-// two ends there and spikeSlackPx (px of that axis), which is what that is for: the twin's looseness
-// over an interval (x + sin(20x) is a pixel looser than it is high). An end that is not finite has no
-// span.
+// two ends there and BAND.strokeSlackPx (px of that axis). An end that is not finite has no span.
 function isStroke(c: Core, lo: number, hi: number, endA: number, endB: number, alongY: boolean): boolean {
   if (!(Number.isFinite(endA) && Number.isFinite(endB))) return false
-  const slack = c.tune.spikeSlackPx / (alongY ? c.screen.px.y : c.screen.px.x)
+  const slack = BAND.strokeSlackPx / (alongY ? c.screen.px.y : c.screen.px.x)
   // (written so that a NaN bound fails it)
   return lo >= Math.min(endA, endB) - slack && hi <= Math.max(endA, endB) + slack
+}
+
+// Whether the samples of a certified column, joined, are the curve there. Their spacing is the floor's,
+// so a segment is no coarser than what the core accepts at the floor, flat or not, and what is asked is
+// that they are not an alias:
+//  - all are finite;
+//  - the twin's enclosure on the oscillation axis is no taller than spikeFactor times the span the
+//    samples cover plus spikeSlackPx (isFlat's spike test: an oscillation that the samples step over is
+//    in the enclosure and not in them);
+//  - one more sample, at BAND.probeAt of the way along (an irrational fraction, so that it is off any
+//    lattice the samples could be resonant with), is within gapPx of the polyline there. Samples that
+//    step over an oscillation by a whole number of periods read as a slow wave with an enclosure to
+//    match, and the polyline is that wave: without this sin(w x) near w = 3770 at 40 px per unit (the
+//    16 samples are 1/15 px apart), and 1759 at COARSE (8 samples), were drawn as a line, 5 to 7 % of
+//    the frequencies above 1800. It costs one evaluation, and only for a column that passed the rest.
+function isDrawable(c: Core, bands: BandState, enclosureLo: number, enclosureHi: number, spanLo: number, spanHi: number, alongY: boolean, ta: number, tb: number): boolean {
+  const { xs, ys, ts } = bands
+  const n = ts.length
+  for (let i = 0; i < n; i++) if (!isFinite2(xs[i], ys[i])) return false
+  const px = alongY ? c.screen.px.y : c.screen.px.x
+  // (written so that a NaN or an infinity fails it)
+  if (!((enclosureHi - enclosureLo) * px <= c.tune.spikeFactor * (spanHi - spanLo) * px + c.tune.spikeSlackPx)) return false
+  const at = ta + (tb - ta) * BAND.probeAt
+  let i = 0
+  while (i < n - 2 && ts[i + 1] < at) i++
+  const u = ts[i + 1] > ts[i] ? (at - ts[i]) / (ts[i + 1] - ts[i]) : 0
+  evalAt(c, at)
+  return pxDistance(c, c.pt[0], c.pt[1], xs[i] + u * (xs[i + 1] - xs[i]), ys[i] + u * (ys[i + 1] - ys[i])) <= c.tune.gapPx
 }
 
 function evalAt(c: Core, t: number): void {
