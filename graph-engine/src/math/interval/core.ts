@@ -17,9 +17,11 @@
 // (LIB). The twin is robust rather than formally rigorous; the property tests
 // hold every twin to soundness against the scalar compile.
 //
-// Nothing in this directory allocates per call: every function writes into an
-// `out` the caller owns, and a twin that needs a temporary keeps a module-level
-// scratch Iv of its own.
+// Nothing in this directory makes an object, array or closure per call: every
+// function writes into an `out` the caller owns, and a twin that needs a temporary
+// keeps a module-level scratch Iv of its own. (The scalar functions a twin calls are
+// the exception: V8 boxes the double that gamma, erf, erfc and the odd roots return,
+// and Math.hypot allocates inside the call. special.ts and stepwise.ts say so.)
 
 export const UNKNOWN = 0
 export const PARTIAL = 1

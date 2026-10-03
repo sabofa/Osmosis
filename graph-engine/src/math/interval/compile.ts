@@ -3,7 +3,12 @@
 // over an input box, with a verdict (core.ts). Names resolve exactly as
 // compileScalar's do, in the same order, and compileScalar runs first, so the
 // compile errors are its own. Nodes and their `out` intervals are allocated once,
-// at compile time; evaluation allocates nothing.
+// at compile time, and evaluation makes no object, array or closure of the compiler's
+// own. It is not true that evaluation allocates nothing: a twin that calls a scalar
+// function gets its double back boxed (gamma, erf, erfc, and the odd-root powers, one
+// heap number per call, more inside gamma and erfc), and Math.hypot allocates inside
+// the call. Measured: 24 to 72 young-generation collections per 3M evaluations of
+// x^(1/3), x! and erf, and none for the other shapes tried.
 //
 // A node is { out, run }: `run` runs the node's children and writes `out`. A
 // bound variable is an interval its node shares (a leaf), and an inlined user

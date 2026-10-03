@@ -173,7 +173,9 @@ export const stepT: Twin = (out, args) => {
 //    analysis is wrong, which must not read as "undefined everywhere".
 //
 // mod never returns -0 (x - x is +0, and -0 - -0 is +0), so a bound that is exactly +0 claims
-// nothing false; the bounds of the composition are widened and are never exactly zero anyway.
+// nothing false. The bounds of the composition are widened, but a widened bound can be a zero:
+// down(5e-324) is +0 (5e-324 less its own ulp rounds to 0), so "never exactly zero" would be wrong.
+// It is harmless here, for that +0 is a zero mod gives, and no -0 occurs for it to deny.
 
 const MOD_Q = iv()
 const MOD_F = iv()
