@@ -216,5 +216,29 @@ describe('reprojectStrokes', () => {
     times.sort((a, b) => a - b)
     expect(times[3]).toBeLessThan(40)
   })
-})
 
+  it('leaves an edge stroke only the share of its alpha the caller says is left (its base’s age), and touches nothing else', () => {
+    const { view, batch } = frame()
+    const to = paintView({ width: 640, height: 480, azimuth: 40, elevation: 25, zoom: 120 })
+    const plain = reprojectStrokes(batch, view, to, P)
+    const half = reprojectStrokes(batch, view, to, P, 0.5)
+    const none = reprojectStrokes(batch, view, to, P, 0)
+    const edges = Array.from({ length: batch.count }, (_, i) => i).filter((i) => ROLES[batch.role[i]] === 'edge')
+    expect(edges.length).toBeGreaterThan(10)
+    expect(edges.some((i) => plain.alpha[i] > 0.3)).toBe(true)
+    for (let i = 0; i < batch.count; i++) {
+      if (ROLES[batch.role[i]] === 'edge') {
+        expect(half.alpha[i]).toBeCloseTo(0.5 * plain.alpha[i], 7)
+        expect(none.alpha[i]).toBe(0)
+      } else {
+        // the strokes of the surface, and the lines, are as they were: they are where the surface is, in any view
+        expect(half.alpha[i]).toBe(plain.alpha[i])
+        expect(none.alpha[i]).toBe(plain.alpha[i])
+      }
+    }
+    // the path is the same: only how much of the edge is shown changes
+    expect(Array.from(none.path)).toEqual(Array.from(plain.path))
+    // and no argument is no fade
+    expect(Array.from(reprojectStrokes(batch, view, to, P, 1).alpha)).toEqual(Array.from(plain.alpha))
+  })
+})

@@ -14,7 +14,9 @@
 //   alpha   a stroke whose anchor turns from the viewer fades out over the model's own fade band
 //           (particles.fadeLo..fadeHi of |n·v|): its alpha is scaled by the new fade over the one it
 //           was made with, never up. A stroke with no normal (a line, an edge) does not fade; one
-//           with a point behind the eye is hidden.
+//           with a point behind the eye is hidden. An edge stroke is the outline of the view it was made for,
+//           and the camera moving does not move the outline with it: the caller says how much of it is left
+//           (`edgeFade`, 1 to 0 as its base ages, liveOrbit.ts edgeFade) and its alpha is scaled by that.
 //
 // A stroke made on the screen alone repeats its anchor for every world point (an arrowhead's barbs, a
 // point's dab): it is moved with its anchor, rigidly, and not turned. A stroke with no world path (all
@@ -22,7 +24,9 @@
 // The result shares those arrays with the batch; path, depth and alpha are new.
 
 import type { PaintParams } from './params'
-import { PATH_POINTS, type PaintView, type StrokeBatch } from './types'
+import { PATH_POINTS, ROLES, type PaintView, type StrokeBatch } from './types'
+
+const EDGE = ROLES.indexOf('edge')
 
 const smooth = (a: number, b: number, x: number): number => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
@@ -48,7 +52,7 @@ function toEye(v: PaintView, ortho: boolean, x: number, y: number, z: number, ou
   out[2] = dz / l
 }
 
-export function reprojectStrokes(batch: StrokeBatch, from: PaintView, to: PaintView, params: PaintParams): StrokeBatch {
+export function reprojectStrokes(batch: StrokeBatch, from: PaintView, to: PaintView, params: PaintParams, edgeFade = 1): StrokeBatch {
   const n = batch.count
   const P = PATH_POINTS
   const path = new Float32Array(2 * P * n)
@@ -67,7 +71,9 @@ export function reprojectStrokes(batch: StrokeBatch, from: PaintView, to: PaintV
     const w0 = 3 * P * i
     const p0 = 2 * P * i
     depth[i] = batch.depth[i]
-    alpha[i] = batch.alpha[i]
+    // what the stroke is made with: an edge's is as much as its base has left of it
+    const made = batch.role[i] === EDGE ? batch.alpha[i] * edgeFade : batch.alpha[i]
+    alpha[i] = made
     // no world path: the stroke as it was
     let any = false
     let rigid = true
@@ -133,7 +139,7 @@ export function reprojectStrokes(batch: StrokeBatch, from: PaintView, to: PaintV
       const was = smooth(lo, hi, nx * ve[0] + ny * ve[1] + nz * ve[2])
       toEye(to, toOrtho, ax, ay, az, ve)
       const now = smooth(lo, hi, nx * ve[0] + ny * ve[1] + nz * ve[2])
-      alpha[i] = batch.alpha[i] * Math.min(1, now / Math.max(was, 1e-3))
+      alpha[i] = made * Math.min(1, now / Math.max(was, 1e-3))
     }
   }
   return { ...batch, path, depth, alpha }

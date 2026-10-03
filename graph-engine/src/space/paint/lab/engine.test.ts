@@ -2,9 +2,13 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, setParam, type PaintParams } from '../params'
 import { createPaintFakeGl, timeline } from '../gl/fakePaintGl'
 import { encodeFloatTexel } from '../gl/gbuffer'
+import { edgeFade } from '../liveOrbit'
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
-import type { PaintDebugMode, PaintFrame, PaintView, StrokeBatch } from '../types'
-import type { EngineEvents, FrameStats, PaintEngine } from '../../../../../review/src/paintLabEngine'
+import { reprojectStrokes } from '../reproject'
+import { PaintSession, type FrameResponse, type SceneColourData, type SessionRequest, type SessionResponse } from '../session'
+import { ROLES, type PaintDebugMode, type PaintFrame, type PaintView, type StrokeBatch } from '../types'
+import type { SpaceScene } from '../../scene/types'
+import type { EngineEvents, EngineOptions, FrameStats, ModelHost, PaintEngine } from '../../../../../review/src/paintLabEngine'
 
 // The Paint Lab's engine: one frame at a time, newest request wins, a colour-only change is a
 // colour frame, a Showcase tile is copied when it is painted. It runs here on the fake GL and on
@@ -200,7 +204,7 @@ describe('the frames of the engine', () => {
 
 const sphereView = (opts: Parameters<typeof paintView>[0] = {}): PaintView => paintView({ width: 320, height: 240, azimuth: 30, elevation: 25, zoom: 200, ...opts })
 
-function withPicture() {
+function withPicture(extra: EngineOptions = {}) {
   const painted: { frame: PaintFrame; kind: FrameStats['kind'] }[] = []
   const crossfades: number[] = []
   const snapshot = { canvas: { width: 0, height: 0 }, drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
@@ -211,7 +215,7 @@ function withPicture() {
   const engine = createPaintEngine(
     gl.canvas.canvas,
     { onFrame: (f) => frames.push(f), onError: (m) => errors.push(m), onCrossfade: () => crossfades.push(frames.length), onPaint: (frame, kind) => painted.push({ frame, kind }) },
-    { snapshot },
+    { snapshot, ...extra },
   )
   engine.setScene(SCENE, COLOURS)
   // The renderer reads the sphere back as the G-buffer of the view it is about to paint.
@@ -386,10 +390,11 @@ describe('the camera moving: the last frame\'s strokes, re-projected', () => {
     engine.dispose()
   })
 
-  it('does not paint a model frame over a newer re-projected picture, and keeps its strokes for the next re-projection', async () => {
+  it('does not paint a model frame as it was made for a view the camera has left: it becomes the base, and the picture is its strokes re-projected into the view the camera has now', async () => {
     vi.useFakeTimers()
     try {
-      const { engine, frames, painted, go } = withPicture()
+      // (no easing: the picture is the new base's strokes alone, so what is painted is what the test reads)
+      const { engine, frames, painted, go } = withPicture({ reducedMotion: () => true })
       go(sphereView(), P)
       await vi.waitFor(() => expect(frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
       // a wheel move: re-projected at once, and the model's frame is due in 120 ms
@@ -402,13 +407,17 @@ describe('the camera moving: the last frame\'s strokes, re-projected', () => {
       await Promise.resolve()
       await Promise.resolve()
       await vi.advanceTimersByTimeAsync(5)
-      // the model's frame (for zoom 230) was made but is older than the picture on screen: not painted, not reported
-      expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject'])
-      expect(painted.map((p) => p.kind)).toEqual(['full', 'reproject', 'reproject'])
-      // its strokes are the ones the next re-projection starts from
+      // the model's frame (for zoom 230) was made for a view the camera has left: it is not painted as it is, but
+      // becomes the base at once, and the picture is its strokes in the view the camera has now (one more picture, adopted)
+      expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject'])
+      expect(frames[3].adopted).toBe(true)
+      expect(painted.map((p) => p.kind)).toEqual(['full', 'reproject', 'reproject', 'reproject'])
+      // the strokes of the one it replaced were another frame's: these are the adopted frame's
+      const adopted = painted[3].frame.strokes
+      expect(adopted.colour).not.toBe(painted[0].frame.strokes.colour)
+      // and they are the ones the next re-projection starts from
       go(sphereView({ azimuth: 66, dragging: true }), P)
-      const fromAdopted = painted[painted.length - 1].frame.strokes
-      expect(fromAdopted.colour).not.toBe(painted[0].frame.strokes.colour)
+      expect(painted[painted.length - 1].frame.strokes.colour).toBe(adopted.colour)
       engine.dispose()
     } finally {
       vi.useRealTimers()
@@ -420,8 +429,8 @@ describe('the camera dragged after something else changed', () => {
   // a stroke size: the model's analysis (not a colour, not a renderer-only parameter)
   const WIDER = setParam(P, 'roles.block.width', 30)
 
-  it('keeps re-projecting while the pointer is down after a slider moved, and runs the model once, at the release', async () => {
-    const { engine, frames, gbuffers, go, done } = withPicture()
+  it('keeps re-projecting while the pointer is down after a slider moved, brings the slider in as a base, and runs the model once, at the release', async () => {
+    const { engine, frames, gbuffers, go, done } = withPicture({ reducedMotion: () => true })
     go(sphereView(), P)
     await done(1)
     go(sphereView(), WIDER) // the slider: a frame for it starts (in a worker it takes 100 to 300 ms) ...
@@ -429,14 +438,16 @@ describe('the camera dragged after something else changed', () => {
     // each move is shown at once, from the strokes the engine holds: no wait for the model, no G-buffer of a drag
     expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject'])
     await new Promise((r) => setTimeout(r, 100))
-    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject']) // (the slider's own frame is older than what is shown: dropped)
+    // (the slider's own frame is for a view the camera has left: it becomes the base and the picture is made of it, once)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject', 'reproject'])
+    expect(frames[5].adopted).toBe(true)
     go(sphereView({ azimuth: 55, dragging: true }), WIDER)
     expect(kinds(frames).slice(-1)).toEqual(['reproject'])
     // the release: the model's frame for the view it stopped at, once
     go(sphereView({ azimuth: 55 }), WIDER)
-    await done(7)
-    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject', 'reproject', 'full'])
-    expect(gbuffers()).toBe(3) // the first frame, the slider's (dropped), the release
+    await done(8)
+    expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject', 'reproject', 'reproject', 'reproject', 'full'])
+    expect(gbuffers()).toBe(3) // the first frame, the slider's (adopted), the release
     engine.dispose()
   })
 
@@ -624,6 +635,19 @@ describe('a tile of the Showcase', () => {
     engine.dispose()
   })
 
+  it('is no base for the lab’s own frames: a tile that runs between a view’s request and its answer does not make the answer stale', async () => {
+    const { engine, frames } = setup()
+    const t = target()
+    engine.render(view({ azimuth: 10 }), P, 'none') // the model starts a frame for it ...
+    engine.render(view({ azimuth: 20 }), P, 'none') // ... and the next view waits behind it
+    const tile = engine.renderTo(t.context, view(), P, 'none') // a tile, made after both, goes first
+    await tile
+    // the first answer is shown re-projected into the newer view (the camera moved on while it ran); the second is the view's own,
+    // painted after the tile and not dropped as older than it
+    await vi.waitFor(() => expect(kinds(frames)).toEqual(['reproject', 'full']), { timeout: 10_000, interval: 10 })
+    engine.dispose()
+  })
+
   it('is refused, not hung, when the engine is disposed before its turn', async () => {
     const { engine } = setup()
     const t = target()
@@ -662,5 +686,332 @@ describe('where the model runs', () => {
     expect(errors.filter((m) => m !== null)).toEqual([])
     engine.dispose()
     await load('?worker=0')
+  })
+})
+
+// ---- the model keeps painting while the camera drags ----
+
+// A model that is slow: a frame is asked for, and answered when the test says so (finish), by the real session. Like the
+// Worker it is off this thread (so the engine runs the model under a drag), and the engine hands it one request at a time.
+class SlowHost implements ModelHost {
+  readonly background = true
+  readonly requests: SessionRequest[] = []
+  readonly responses: FrameResponse[] = []
+  maxRunning = 0
+  private running = 0
+  private readonly waiting: (() => void)[] = []
+  private readonly session = new PaintSession()
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
+    this.session.setScene(sceneId, scene, colours)
+  }
+  setColours(sceneId: number, colours: SceneColourData) {
+    this.session.setColours(sceneId, colours)
+  }
+  frame(request: SessionRequest): Promise<SessionResponse> {
+    this.requests.push(request)
+    this.maxRunning = Math.max(this.maxRunning, ++this.running)
+    return new Promise((resolve) => {
+      this.waiting.push(() => {
+        const response = this.session.frame(request)
+        this.running--
+        if (response.ok && response.kind !== 'paper') this.responses.push(response)
+        resolve(response)
+      })
+    })
+  }
+  // The model finishes the request it is working on (the engine takes the answer when the test next waits).
+  finish(): void {
+    this.waiting.shift()?.()
+  }
+  dispose() {}
+}
+
+const flush = () => new Promise<void>((r) => setTimeout(r, 0))
+
+describe('the model keeps painting while the camera drags', () => {
+  // N frames of a drag, 3 degrees each, with the model finishing what it is doing after every `every`-th.
+  it.each([
+    [24, 6, 4],
+    [30, 5, 6],
+    [12, 4, 3],
+  ])('%i frames, the model finishing every %i-th: %i of its frames are adopted as the base, each made for the newest view, one at a time, and no frame waits for it', async (n, every, adopted) => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, frames, crossfades, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    go(sphereView(), P)
+    host.finish()
+    await done(1)
+    const turned: number[] = []
+    for (let k = 1; k <= n; k++) {
+      clock.t += 16
+      const before = frames.length
+      go(sphereView({ azimuth: 30 + 3 * k, dragging: true }), P)
+      // the picture is on screen as the call returns: it does not wait for the model
+      expect(frames.length).toBe(before + 1)
+      expect(frames[frames.length - 1].kind).toBe('reproject')
+      if (k % every === 0) {
+        turned.push(30 + 3 * k)
+        host.finish()
+        await flush()
+      }
+    }
+    expect(frames.filter((f) => f.adopted)).toHaveLength(adopted)
+    // the model never ran two frames at once, and never a frame for a view that was not the newest when it started:
+    // the first drag frame's, then each the model took up after finishing one (the newest view that came while it worked)
+    expect(host.maxRunning).toBe(1)
+    const live = host.requests.slice(1)
+    const askedFor = [33, ...turned.slice(0, adopted)]
+    expect(live.length).toBe(askedFor.length)
+    live.forEach((r, i) => {
+      expect(r.view.dragging).toBe(true)
+      expect(r.kind).toBe('full')
+      expect(Array.from(r.view.viewProj)).toEqual(Array.from(sphereView({ azimuth: askedFor[i], dragging: true }).viewProj))
+      // the particles are the ones a still view has: only the analysis is coarser (a view that drags, in the model)
+      expect(r.params.particles).toEqual(P.particles)
+    })
+    expect(live.length).toBeLessThan(n / 2) // the views in between were skipped for the newest
+    expect(crossfades).toEqual([]) // an adopted frame is a re-projected picture, not one that eases from the snapshot
+    engine.dispose()
+  })
+
+  it('runs the model once more at the release, at full quality, for the view it stopped at, and its picture is the one a still view gets', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const a = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    a.go(sphereView(), P)
+    host.finish()
+    await a.done(1)
+    for (let k = 1; k <= 12; k++) {
+      clock.t += 16
+      a.go(sphereView({ azimuth: 30 + 3 * k, dragging: true }), P)
+      if (k % 4 === 0) {
+        host.finish()
+        await flush()
+      }
+    }
+    // the model finishes its frame for azimuth 66, the view the pointer is about to be released at: it is the base on screen
+    host.finish()
+    await flush()
+    const before = host.requests.length
+    a.go(sphereView({ azimuth: 66 }), P) // the pointer is released there
+    // that base is for that very view, but it was made as a drag's is (a coarser analysis): the release makes its own frame
+    expect(host.requests.length).toBe(before + 1)
+    host.finish()
+    await vi.waitFor(() => expect(a.painted.filter((p) => p.kind === 'full').length).toBeGreaterThanOrEqual(2), { timeout: 60_000, interval: 5 })
+    const last = host.requests[host.requests.length - 1]
+    expect(last.view.dragging).toBe(false) // full quality: the analysis of a still view
+    expect(host.requests.filter((r) => !r.view.dragging)).toHaveLength(2) // the first frame's, and the release's: once
+    expect(a.crossfades).toHaveLength(1) // and it eases from the re-projected picture, as before
+    const released = a.painted.filter((p) => p.kind === 'full')[1].frame.strokes
+    // a fresh engine that was never dragged makes the same frame of that view, to the last byte
+    const b = withPicture()
+    b.go(sphereView({ azimuth: 66 }), P)
+    await b.done(1)
+    sameStrokes(released, b.painted[0].frame.strokes)
+    a.engine.dispose()
+    b.engine.dispose()
+  })
+
+  it('eases in a frame made for the view the camera is at, when the pointer has stopped: a re-projected picture, not a repaint over a snapshot', async () => {
+    const host = new SlowHost()
+    const { engine, frames, crossfades, go, done } = withPicture({ host, reducedMotion: () => true })
+    go(sphereView(), P)
+    host.finish()
+    await done(1)
+    go(sphereView({ azimuth: 40, dragging: true }), P) // the model starts a frame for az 40, and the pointer stays there
+    host.finish()
+    await flush()
+    expect(frames[frames.length - 1].adopted).toBe(true)
+    expect(frames[frames.length - 1].kind).toBe('reproject')
+    expect(crossfades).toEqual([]) // no picture laid over the picture
+    engine.dispose()
+  })
+
+  it('does not adopt a frame that was made before the figure’s colours changed', async () => {
+    const host = new SlowHost()
+    const { engine, frames, go, done } = withPicture({ host, reducedMotion: () => true })
+    go(sphereView(), P)
+    host.finish()
+    await done(1)
+    go(sphereView({ azimuth: 40, dragging: true }), P) // the model starts a frame for it ...
+    engine.setScene(SCENE, flatColours({ 0: [0.4, 0.1, -0.1], 1: [0.9, 0.01, 0.02] })) // ... and the theme changes
+    host.finish()
+    await flush()
+    expect(frames.some((f) => f.adopted)).toBe(false)
+    expect(kinds(frames)).toEqual(['full', 'reproject'])
+    engine.dispose()
+  })
+
+  it('eases a new base in over 120 ms: the strokes both frames have stay, the ones that appeared fade in, the ones that went fade out', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => false })
+    const v0 = sphereView()
+    go(v0, P)
+    host.finish()
+    await done(1)
+    const first = host.responses[0].strokes
+    clock.t = 1000
+    go(sphereView({ azimuth: 40, dragging: true }), P) // the camera leaves the first frame's view at t = 1000; the model starts a frame for az 40
+    clock.t = 1016
+    const v70 = sphereView({ azimuth: 70, dragging: true })
+    go(v70, P) // and leaves az 40 at t = 1016
+    clock.t = 1100
+    host.finish() // the model's frame for az 40 is adopted at t = 1100
+    await flush()
+    const next = host.responses[1].strokes
+    const askedView = host.requests[1].view
+    // the strokes each base shows in this view: the first's has been leaving its view for 100 ms, the second's for 84 (edges only)
+    const oldShown = (t: number) => reprojectStrokes(first, v0, v70, P, edgeFade(t - 1000))
+    const newShown = (t: number) => reprojectStrokes(next, askedView, v70, P, edgeFade(t - 1016))
+    const key = (b: StrokeBatch, i: number) => `${b.role[i]}/${b.seed[i]}`
+    const index = (b: StrokeBatch) => {
+      const m = new Map<string, number[]>()
+      for (let i = 0; i < b.count; i++) m.set(key(b, i), [...(m.get(key(b, i)) ?? []), i])
+      return m
+    }
+    const edge = ROLES.indexOf('edge')
+    const inOld = index(first)
+    const inNew = index(next)
+    const appeared = [...inNew].filter(([k, v]) => v.length === 1 && !inOld.has(k) && next.role[v[0]] !== edge)
+    const went = [...inOld].filter(([k, v]) => v.length === 1 && !inNew.has(k) && first.role[v[0]] !== edge)
+    expect(appeared.length).toBeGreaterThan(20) // the form turned into view: there are strokes the first frame did not have
+    expect(went.length).toBeGreaterThan(5) // and some it had that are gone
+    const shown = () => painted[painted.length - 1].frame.strokes
+    const alphaOf = (b: StrokeBatch, k: string): number => {
+      const at = index(b).get(k)
+      expect(at, k).toHaveLength(1)
+      return b.alpha[(at as number[])[0]]
+    }
+
+    // adopted: the picture is still the old base's: the new strokes not yet in, the old ones all there
+    let s = shown()
+    expect(painted[painted.length - 1].kind).toBe('reproject')
+    for (const [k] of appeared.slice(0, 40)) expect(alphaOf(s, k), `appeared ${k}`).toBe(0)
+    for (const [k, v] of went.slice(0, 40)) expect(alphaOf(s, k), `went ${k}`).toBeCloseTo(oldShown(1100).alpha[v[0]], 6)
+    // every stroke of either frame is there: the new base's, and the old base's that no new one continues
+    expect(s.count).toBeGreaterThan(next.count)
+    expect(s.count).toBeLessThanOrEqual(next.count + first.count)
+
+    // 60 ms on, half way: the ones that appeared are half there, the ones that went are half gone
+    clock.t = 1160
+    go(v70, P)
+    s = shown()
+    for (const [k, v] of appeared.slice(0, 40)) expect(alphaOf(s, k), `appeared ${k}`).toBeCloseTo(0.5 * newShown(1160).alpha[v[0]], 6)
+    for (const [k, v] of went.slice(0, 40)) expect(alphaOf(s, k), `went ${k}`).toBeCloseTo(0.5 * oldShown(1160).alpha[v[0]], 6)
+
+    // 120 ms on: the new base's strokes, and nothing of the old one
+    clock.t = 1220
+    go(v70, P)
+    s = shown()
+    expect(s.count).toBe(next.count)
+    const expected = newShown(1220)
+    expect(Array.from(s.alpha)).toEqual(Array.from(expected.alpha))
+    expect(Array.from(s.path)).toEqual(Array.from(expected.path))
+    expect(s.colour).toBe(next.colour) // the base's own arrays again
+    engine.dispose()
+  })
+
+  it('shows the new base at once under reduced motion: no old strokes, none faded in', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    const v0 = sphereView()
+    go(v0, P)
+    host.finish()
+    await done(1)
+    clock.t = 1000
+    go(sphereView({ azimuth: 40, dragging: true }), P)
+    const v70 = sphereView({ azimuth: 70, dragging: true })
+    clock.t = 1016
+    go(v70, P)
+    clock.t = 1100
+    host.finish()
+    await flush()
+    const next = host.responses[1].strokes
+    const s = painted[painted.length - 1].frame.strokes
+    const expected = reprojectStrokes(next, host.requests[1].view, v70, P, edgeFade(84))
+    expect(s.count).toBe(next.count)
+    expect(Array.from(s.alpha)).toEqual(Array.from(expected.alpha))
+    expect(Math.max(...Array.from(s.alpha))).toBeGreaterThan(0.5)
+    engine.dispose()
+  })
+})
+
+describe('the edges of a base that the camera has left', () => {
+  it('fade out with its age, over 200 ms from when the camera left its view: none of an outline is left inside a form', async () => {
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ now: () => clock.t })
+    const v0 = sphereView()
+    go(v0, P)
+    await done(1)
+    const first = painted[0].frame.strokes
+    const v1 = sphereView({ azimuth: 34, dragging: true })
+    const plain = reprojectStrokes(first, v0, v1, P) // the base's strokes in the new view, with every edge as it was
+    const edge = ROLES.indexOf('edge')
+    const edges = Array.from({ length: first.count }, (_, i) => i).filter((i) => first.role[i] === edge && plain.alpha[i] > 0.2)
+    expect(edges.length).toBeGreaterThan(5)
+    const shownAt = (t: number) => {
+      clock.t = t
+      go(v1, P)
+      return painted[painted.length - 1].frame.strokes
+    }
+    // the camera leaves the view at t = 5000
+    const at0 = shownAt(5000)
+    for (const i of edges) expect(at0.alpha[i]).toBeCloseTo(plain.alpha[i], 6)
+    const at100 = shownAt(5100)
+    for (const i of edges) expect(at100.alpha[i]).toBeCloseTo(0.5 * plain.alpha[i], 6)
+    const at150 = shownAt(5150)
+    for (const i of edges) expect(at150.alpha[i]).toBeCloseTo(0.25 * plain.alpha[i], 6)
+    for (const t of [5200, 5201, 9000]) {
+      const old = shownAt(t)
+      for (let i = 0; i < first.count; i++) if (first.role[i] === edge) expect(old.alpha[i], `edge ${i} at ${t}`).toBe(0)
+      // the rest of the picture is the strokes as they were
+      for (let i = 0; i < first.count; i++) if (first.role[i] !== edge) expect(old.alpha[i]).toBe(plain.alpha[i])
+    }
+    engine.dispose()
+  })
+})
+
+describe('the crossfade of a camera that has stopped', () => {
+  it('goes on by itself to the end: a new base is eased in with no further request for a frame', async () => {
+    vi.useFakeTimers()
+    try {
+      const host = new SlowHost()
+      const clock = { t: 0 }
+      const { engine, painted, frames, go } = withPicture({ host, now: () => clock.t, reducedMotion: () => false })
+      go(sphereView(), P)
+      host.finish()
+      await vi.waitFor(() => expect(frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+      clock.t = 1000
+      go(sphereView({ azimuth: 40, dragging: true }), P)
+      const v70 = sphereView({ azimuth: 70, dragging: true })
+      clock.t = 1016
+      go(v70, P) // the pointer stops here: nothing asks for a frame from now on
+      clock.t = 1100
+      host.finish()
+      await vi.advanceTimersByTimeAsync(0)
+      const next = host.responses[1].strokes
+      const seen = () => painted[painted.length - 1].frame.strokes
+      // adopted: easing in, the old strokes still there
+      expect(frames[frames.length - 1].adopted).toBe(true)
+      expect(seen().count).toBeGreaterThan(next.count)
+      const after = painted.length
+      // 60 ms on, with no frame asked for: the engine paints the next step itself
+      clock.t = 1160
+      await vi.advanceTimersByTimeAsync(16)
+      expect(painted.length).toBeGreaterThan(after)
+      expect(seen().count).toBeGreaterThan(next.count)
+      // and at 120 ms the last of it: the new base's strokes alone, after which it paints nothing more
+      clock.t = 1230
+      await vi.advanceTimersByTimeAsync(16)
+      expect(seen().count).toBe(next.count)
+      const done = painted.length
+      await vi.advanceTimersByTimeAsync(200)
+      expect(painted.length).toBe(done)
+      engine.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
