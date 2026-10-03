@@ -124,7 +124,7 @@ source → parser → compile (math/) → sample (plot/) → scene marks → ren
 ### Where code lives
 
 - **`math/` — the shared kernel, extended.** New built-ins, the language
-  additions of P1, and `math/interval.ts`: a decorated interval twin of every
+  additions of P1, and `math/interval/`: a decorated interval twin of every
   built-in (see "The kernel"). Space may use the twin as well (empty-cell
   culling for implicit surfaces) but is not required to.
 - **`plot/` — new, the 2D counterpart of `space/`.**
@@ -231,8 +231,9 @@ errors: they are domain, and the sampler draws them as such.
 
 ### The interval twin
 
-`math/interval.ts` compiles the same expression tree, with the same slot
-scheme and no code generation, into closures over intervals. Each evaluation
+`math/interval/` (core, arithmetic, one file per twin family, and the compiler)
+compiles the same expression tree, with the same slot scheme and no code
+generation, into closures over intervals. Each evaluation
 returns bounds `[lo, hi]` (either may be infinite) and a **verdict**:
 
 | Verdict | Meaning | Sampler treats it as |
@@ -242,14 +243,16 @@ returns bounds `[lo, hi]` (either may be infinite) and a **verdict**:
 | `partial` | undefined somewhere inside (ln over [−1, 1], 1/x across 0, gamma near a non-positive integer) | not certified |
 | `unknown` | no cheap enclosure (`integral(…)`) | not certified; jump test |
 
-Verdicts combine by taking the weakest. Every arithmetic result is widened
-outward by 2 ulps per bound, because JavaScript has no directed rounding: the
-twin is robust, not formally rigorous, and the property tests (see
+Verdicts combine by taking the weakest. Every bound is widened
+outward — 2 ulps for IEEE arithmetic, 4 for a library function, a relative 1e-13
+for gamma and what is built on it — because JavaScript has no directed
+rounding: the twin is robust, not formally rigorous, and the property tests (see
 "Testing") hold it to soundness. Comparisons in conditions are three-valued
 (true, false, both) so piecewise and regions evaluate correctly over boxes; a
 "both" piecewise result is the union of the live branches with verdict at
 most `defined`. `sum` and `prod` enclose term by term; `integral` returns
-`unknown` with sampled bounds.
+`unknown` with bounds `[-inf, inf]` (sampled bounds are not an enclosure, and
+P3's culling relies on enclosures).
 
 ### One rule that keeps the kernel lasting
 

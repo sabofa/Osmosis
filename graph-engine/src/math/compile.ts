@@ -501,6 +501,15 @@ function namesValue(name: string, env: Env, ctx: Ctx): boolean {
   return name === 'pi' || name === 'e' || name === 'inf'
 }
 
+// namesValue for a caller that tracks bound names as a set (the interval
+// compiler, math/interval/compile.ts).
+export function namesValueIn(name: string, bound: ReadonlySet<string>, scope: MathScope): boolean {
+  if (bound.has(name) || scope.params.index.has(name)) return true
+  const fn = scope.functions.get(name)
+  if (fn) return fn.params.length === 0
+  return name === 'pi' || name === 'e' || name === 'inf'
+}
+
 // Inside a function's body its parameters are bound values, and compile reads a
 // call with one argument by a parameter's name as a product, a(a + 1): the
 // parameter comes after a user function or a built-in of that name in the
