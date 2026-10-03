@@ -9,10 +9,12 @@ import { FAM_SHADOW } from '../model/value'
 import { PARAM_SCHEMA, setParam, type PaintParams } from '../params'
 import { LAYER_ORDER, ROLES } from '../types'
 import { bakeKey, bakePainting, bakePaintingWithProgress, bakedRecipes, bakeStats, recolourBake, type BakeProgress } from './index'
-import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_SURFACE, type BakedPainting, type BakedSurface } from './types'
+import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_FIXED, SIZING_SURFACE, type BakedPainting, type BakedSurface } from './types'
 import { framing, fixture, LIGHT, P, saddleColours, saddleScene, sparse, sphereColours, sphereScene, TERRACOTTA, type Fixture } from './bakeFixture'
 import { boxMesh } from './edgesFixture'
 import { arrowMark, flatColours, lineMark, pointMark, sceneOf, sphereMesh } from '../model/testing'
+import { lchToLab } from '../model/colour'
+import type { SceneColours } from '../types'
 import { lengthFactorsOf } from './strokes'
 import type { MeshMark } from '../../scene/types'
 
@@ -21,11 +23,25 @@ vi.setConfig({ testTimeout: 300_000 })
 
 const SPHERE = fixture(sphereScene(), sphereColours(), sparse(250))
 const SADDLE = fixture(saddleScene(), saddleColours(), sparse(600))
+// A sphere on a table with the data marks: a curve, an arrow, a box with edges and a point (edge strokes, line strokes, the data colours).
+const MIXED = (() => {
+  const base = sphereScene()
+  const box = { ...lineMark([[0, 0, 0], [1, 1, 1]], { index: 5 }), kind: 'boxes' as const, mins: new Float64Array([1.2, -0.5, -1]), maxs: new Float64Array([1.8, 0.1, -0.4]), style: { color: { author: null, slot: 4 }, opacity: 0.1, edges: true } }
+  const marks = [
+    ...base.marks,
+    lineMark([[-1.8, -1.5, -0.9], [-0.5, -1.2, -0.6], [0.5, -1.4, -0.2], [1.5, -1.6, -0.5]], { index: 2, hidden: 'dashed' }),
+    arrowMark([0, 0, 1.4], [0.8, 0.2, 0.5], { index: 3 }),
+    pointMark([[0.5, 0.5, 1.2]], { index: 4 }),
+    box as unknown as MeshMark,
+  ]
+  const colours = flatColours({ 0: TERRACOTTA, 1: lchToLab(0.9, 0.01, 85), 2: [0.4, 0.04, 0.035], 3: [0.5, 0.1, -0.05], 4: [0.5, 0.12, 0.03], 5: [0.6, -0.08, 0.05] })
+  return fixture(sceneOf(marks as never), colours, sparse(250))
+})()
 
 const bytesEqual = (a: ArrayBufferView, b: ArrayBufferView): boolean => Buffer.compare(Buffer.from(a.buffer, a.byteOffset, a.byteLength), Buffer.from(b.buffer, b.byteOffset, b.byteLength)) === 0
 
 // The arrays of a painting that are colours: the strokes' and each surface's underpainting.
-const COLOUR_KEYS = ['colour'] as const
+const COLOUR_KEYS = ['colour', 'dataColour'] as const
 const SURFACE_COLOUR_KEYS = ['underFront', 'underBack'] as const
 
 // Every typed array of a painting, by path, and the rest.
@@ -89,6 +105,29 @@ describe('recolourBake: a colour-only change makes the colours again and nothing
     })
   }
 
+  it('does so over the edge strokes and the data lines too (a sphere on a table with a curve, an arrow, a box and a point): every colour array, the data colours among them, equals a fresh bake’s, and the rest is shared', () => {
+    const base = MIXED.baked
+    const roles = new Set<string>()
+    for (let i = 0; i < base.count; i++) roles.add(ROLES[base.role[i]])
+    expect(roles.has('edge')).toBe(true)
+    expect(roles.has('line')).toBe(true)
+    expect([...base.dataColour.slice(6, 9)].every((v) => v > 0)).toBe(true)
+    for (const next of [setParam(MIXED.params, 'curve.warmHue', 20), setParam(MIXED.params, 'mix.strength', 1.6), setParam(MIXED.params, 'environment.absorption', 0.9), setParam(MIXED.params, 'mix.loadBreakPx', 30)]) {
+      const again = recolourBake(base, next)!
+      const fresh = bakeAgain(MIXED, next)
+      const a = arraysOf(again)
+      const b = arraysOf(fresh)
+      expect([...a.keys()]).toEqual([...b.keys()])
+      for (const [k, v] of a) expect(bytesEqual(v, b.get(k)!), k).toBe(true)
+      expect(again.key).toBe(fresh.key)
+      const old = arraysOf(base)
+      for (const [k, v] of a) {
+        const isColour = (COLOUR_KEYS as readonly string[]).includes(k) || SURFACE_COLOUR_KEYS.some((c) => k.endsWith(`.${c}`))
+        if (!isColour) expect(v, k).toBe(old.get(k))
+      }
+    }
+  })
+
   it('is a recolour of a recolour too: from one set of colours to a second and back to the first, bit for bit', () => {
     const base = SPHERE.baked
     const first = recolourBake(base, changes[0][1])!
@@ -117,7 +156,7 @@ describe('recolourBake: a colour-only change makes the colours again and nothing
   })
 
   it('classes the same sliders a colour change as the key does: a colour-only, render-only or frame-only change leaves the key, anything else moves it', () => {
-    const key = (p: PaintParams) => bakeKey(SPHERE.scene, LIGHT, p, SPHERE.authored, SPHERE.particles)
+    const key = (p: PaintParams) => bakeKey(SPHERE.scene, LIGHT, p, SPHERE.authored, SPHERE.particles, SPHERE.colours)
     const base = key(P)
     for (const path of ['curve.lSlope', 'curve.warmHue', 'mix.strength', 'mix.hueMax', 'mix.roleBlock', 'environment.hue', 'environment.absorption', 'impasto.strength', 'canvas.texture', 'underpaint.opacity', 'roles.dab.density', 'particles.fadeLo']) {
       expect(key(moved(path)), path).toBe(base)
@@ -138,6 +177,56 @@ describe('recolourBake: a colour-only change makes the colours again and nothing
   })
 })
 
+describe('the key sees the scene’s colours (the theme)', () => {
+  const key = (colours: SceneColours, f: Fixture = SPHERE) => bakeKey(f.scene, LIGHT, f.params, f.authored, f.particles, colours)
+  const shifted = (c: SceneColours, by: number): SceneColours => ({ markColour: (i) => { const v = c.markColour(i); return [v[0] + by, v[1], v[2]] }, scaleColour: c.scaleColour })
+
+  it('is the same for the same colours, and another for a mark’s colour moved by 2e-6 or more (not by 5e-7: the key rounds to 1e-6)', () => {
+    const base = key(SPHERE.colours)
+    expect(key(sphereColours())).toBe(base)
+    expect(key(shifted(SPHERE.colours, 2e-6))).not.toBe(base)
+    expect(key(shifted(SPHERE.colours, 4e-7))).toBe(base)
+    expect(key(flatColours({ 0: lchToLab(0.3, 0.1, 200), 1: lchToLab(0.9, 0.01, 85) }))).not.toBe(base)
+    // (a mark that is not a mesh has a colour too: a line's)
+    const line = { ...SPHERE.scene, marks: [...SPHERE.scene.marks, lineMark([[0, 0, 0], [1, 1, 1]], { index: 2 })] }
+    const a = flatColours({ 0: TERRACOTTA, 1: lchToLab(0.9, 0.01, 85), 2: [0.4, 0.04, 0.035] })
+    const b = flatColours({ 0: TERRACOTTA, 1: lchToLab(0.9, 0.01, 85), 2: [0.5, 0.04, 0.035] })
+    expect(bakeKey(line, LIGHT, P, SPHERE.authored, SPHERE.particles, a)).not.toBe(bakeKey(line, LIGHT, P, SPHERE.authored, SPHERE.particles, b))
+  })
+
+  it('samples a colour scale at 17 points along its length and for no data, on the scale’s own domain (a diverging one about zero), and moves with a change at any of them', () => {
+    const asked: number[] = []
+    const record: SceneColours = { markColour: SADDLE.colours.markColour, scaleColour: (id, v) => { asked.push(v); return SADDLE.colours.scaleColour(id, 0.5) } }
+    const scene = { ...SADDLE.scene, colorScales: [{ id: 0, title: 'h', map: 'viridis' as const, domain: { min: -2, max: 6 }, diverging: false }] }
+    bakeKey(scene, LIGHT, SADDLE.params, SADDLE.authored, SADDLE.particles, record)
+    expect(asked.length).toBe(18)
+    expect(asked[0]).toBeCloseTo(-2, 9)
+    expect(asked[16]).toBeCloseTo(6, 9)
+    expect(asked[8]).toBeCloseTo(2, 9)
+    expect(Number.isNaN(asked[17])).toBe(true)
+    asked.length = 0
+    bakeKey({ ...scene, colorScales: [{ ...scene.colorScales[0], domain: { min: -3, max: 3 }, diverging: true }] }, LIGHT, SADDLE.params, SADDLE.authored, SADDLE.particles, record)
+    expect(asked[0]).toBeCloseTo(-3, 9)
+    expect(asked[8]).toBeCloseTo(0, 9)
+    expect(asked[16]).toBeCloseTo(3, 9)
+    // a change of the scale's colour at one of the sample points (t = 5/16) moves the key, one beyond the rounding does not
+    const base = key(SADDLE.colours, SADDLE)
+    const at = (t: number, by: number): SceneColours => ({
+      markColour: SADDLE.colours.markColour,
+      scaleColour: (id, v) => { const c = SADDLE.colours.scaleColour(id, v)!; return Math.abs(v - t) < 1e-9 ? [c[0] + by, c[1], c[2]] : c },
+    })
+    expect(key(at(5 / 16, 1e-3), SADDLE)).not.toBe(base)
+    expect(key(at(5 / 16, 1e-8), SADDLE)).toBe(base)
+    expect(key(saddleColours(), SADDLE)).toBe(base)
+  })
+
+  it('is what bakePainting puts in the painting: another theme, another key, equal themes equal keys', () => {
+    const other = bakePainting(SPHERE.scene, SPHERE.particles, flatColours({ 0: lchToLab(0.3, 0.1, 200), 1: lchToLab(0.9, 0.01, 85) }), SPHERE.light, SPHERE.params, SPHERE.authored)
+    expect(other.key).not.toBe(SPHERE.baked.key)
+    expect(bakeAgain(SPHERE, SPHERE.params).key).toBe(SPHERE.baked.key)
+  })
+})
+
 describe('the key and determinism', () => {
   it('gives byte-identical arrays and an equal key for two bakes of the same inputs, and the same with a progress callback', () => {
     const first = SPHERE.baked
@@ -155,24 +244,24 @@ describe('the key and determinism', () => {
   })
 
   it('moves the key with the scene’s geometry, the light to 1e-6, and the authored framing; and gives a 16-digit hex string', () => {
-    const base = bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)
+    const base = bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)
     expect(base).toMatch(/^[0-9a-f]{16}$/)
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)).toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)).toBe(base)
     // the light: 2e-6 away is another light, 2e-8 away is the same
-    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-6, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles)).not.toBe(base)
-    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-8, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles)).toBe(base)
+    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-6, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-8, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)).toBe(base)
     // a light of another length but the same direction is the same light
-    expect(bakeKey(SPHERE.scene, [2 * LIGHT[0], 2 * LIGHT[1], 2 * LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles)).toBe(base)
+    expect(bakeKey(SPHERE.scene, [2 * LIGHT[0], 2 * LIGHT[1], 2 * LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)).toBe(base)
     // the authored framing: the eye, the direction, the projection, the world size of a px
     const a = SPHERE.authored
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, worldPerPx: a.worldPerPx * 1.01 }, SPHERE.particles)).not.toBe(base)
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, ortho: !a.ortho }, SPHERE.particles)).not.toBe(base)
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, framing(80, 25), SPHERE.particles)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, worldPerPx: a.worldPerPx * 1.01 }, SPHERE.particles, SPHERE.colours)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, ortho: !a.ortho }, SPHERE.particles, SPHERE.colours)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, framing(80, 25), SPHERE.particles, SPHERE.colours)).not.toBe(base)
     // the scene: a vertex moved, a mark added
     const sphere = SPHERE.scene.marks[0] as MeshMark
     const moved1 = { ...sphere, positions: Float64Array.from(sphere.positions, (v, i) => (i === 7 ? v + 1e-3 : v)) }
-    expect(bakeKey({ ...SPHERE.scene, marks: [moved1, SPHERE.scene.marks[1]] }, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)).not.toBe(base)
-    expect(bakeKey({ ...SPHERE.scene, marks: [SPHERE.scene.marks[0]] }, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)).not.toBe(base)
+    expect(bakeKey({ ...SPHERE.scene, marks: [moved1, SPHERE.scene.marks[1]] }, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)).not.toBe(base)
+    expect(bakeKey({ ...SPHERE.scene, marks: [SPHERE.scene.marks[0]] }, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles, SPHERE.colours)).not.toBe(base)
   })
 
   it('changes the baked painting when a non-colour parameter changes, and does not when a colour-only one does (the geometry, the roles and the values stay)', () => {
@@ -193,7 +282,7 @@ describe('the assembly', () => {
   const { baked, particles, params, scene, authored } = SPHERE
   const stats = bakeStats(baked)!
 
-  it('fills the contract: one entry per stroke in every array, the framing’s world size of a px, a focal pair per mark from the world edges, area per particle, no data colours yet', () => {
+  it('fills the contract: one entry per stroke in every array, the framing’s world size of a px, a focal pair per mark from the world edges, area per particle, no data colours on a scene of meshes', () => {
     const n = baked.count
     expect(n).toBeGreaterThan(2000)
     expect(baked.role.length).toBe(n)
@@ -223,11 +312,12 @@ describe('the assembly', () => {
       const count = particles.mark.reduce((c, mk) => c + (mk === i ? 1 : 0), 0)
       expect(baked.areaPerParticle[i]).toBeCloseTo(meshArea(m as MeshMark) / count, 5)
     })
-    // surface strokes: not data marks, surface-sized, with the particle they grew from (a dab: none)
+    // surface strokes: not data marks, surface-sized, with the particle they grew from (a dab: none); edge strokes: fixed-sized, no particle
     for (let i = 0; i < n; i++) {
-      expect(baked.sizing[i]).toBe(SIZING_SURFACE)
+      expect(baked.sizing[i]).toBe(ROLES[baked.role[i]] === 'edge' ? SIZING_FIXED : SIZING_SURFACE)
       expect(baked.hidden[i]).toBe(HIDDEN_NA)
       if (baked.particle[i] !== 0xffffffff) expect(particles.mark[baked.particle[i]]).toBe(baked.mark[i])
+      else expect(['dab', 'edge']).toContain(ROLES[baked.role[i]])
     }
   })
 
@@ -312,7 +402,7 @@ describe('the assembly', () => {
     expect(s.positions.buffer).not.toBe(refined.positions.buffer)
   })
 
-  it('bakes a scene that has creases (a flat-shaded box), a degenerate mesh, and data marks without throwing, with finite colours and the data marks left to the frame', () => {
+  it('bakes a scene that has creases (a flat-shaded box), a degenerate mesh, and data marks without throwing, with finite colours; the data marks have strokes (a line, an arrow’s shaft) but no surface, and a point none', () => {
     const box = boxMesh([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], 0)
     // a mesh with a non-finite vertex and a triangle that has no area
     const bad: MeshMark = { ...sphereMesh({ radius: 0.2, index: 1, nu: 4, nv: 3 }), positions: Float64Array.from([0, 0, 0, Number.NaN, 0, 0, 1, 0, 0, 0, 1, 0]), normals: new Float64Array(12), indices: Uint32Array.from([0, 1, 2, 0, 0, 3]) }
@@ -322,11 +412,20 @@ describe('the assembly', () => {
     expect(f.baked.count).toBeGreaterThan(300)
     expect(f.baked.colour.every((v) => Number.isFinite(v))).toBe(true)
     expect(f.baked.worldPath.every((v) => Number.isFinite(v))).toBe(true)
-    // the box is closed (painted from outside), the data marks have no surface, no stroke belongs to them in this task
+    // the box is closed (painted from outside), the data marks have no surface; a line and an arrow's shaft have strokes, a point has none (the frame draws it)
     expect(f.baked.surfaces[0]!.closed).toBe(true)
     for (const m of [3, 4, 5]) expect(f.baked.surfaces[m]).toBeNull()
-    for (let i = 0; i < f.baked.count; i++) expect(f.baked.mark[i]).toBe(0)
+    const byMark = [0, 0, 0, 0, 0, 0]
+    for (let i = 0; i < f.baked.count; i++) byMark[f.baked.mark[i]]++
+    expect(byMark[0]).toBeGreaterThan(300)
+    expect(byMark[3]).toBeGreaterThan(0)
+    expect(byMark[5]).toBeGreaterThan(0)
+    expect(byMark[4]).toBe(0)
+    expect(byMark[1] + byMark[2]).toBe(0)
     expect(f.baked.areaPerParticle[3]).toBe(0)
+    // every data mark has a colour for the frame's own shapes, a mesh none
+    for (const m of [3, 4, 5]) expect([...f.baked.dataColour.slice(3 * m, 3 * m + 3)].every((v) => Number.isFinite(v) && v > 0), `data colour ${m}`).toBe(true)
+    expect([...f.baked.dataColour.slice(0, 9)].every((v) => v === 0)).toBe(true)
     for (const s of f.baked.surfaces) if (s) expect([...s.underFront, ...(s.underBack ?? [])].every((v) => Number.isFinite(v))).toBe(true)
   })
 

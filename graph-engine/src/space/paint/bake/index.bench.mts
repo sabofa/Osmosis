@@ -11,9 +11,9 @@ import { prepareFigure, keyLightDirection } from '../../../../../review/src/pain
 import { makeSceneColours } from '../../../../../review/src/paintLabColours'
 import { figureById } from '../../../../../review/src/paintLabFigures'
 import { buildParticles } from '../model/particles'
-import { DEFAULT_PAINT_PARAMS } from '../params'
+import { DEFAULT_PAINT_PARAMS, setParam } from '../params'
 import { ROLES } from '../types'
-import { bakePaintingWithProgress, bakeStats, type BakeProgress } from './index'
+import { bakePaintingWithProgress, bakeStats, recolourBake, type BakeProgress } from './index'
 import type { AuthoredFraming, BakedPainting } from './types'
 
 const IDS = ['sphere', 'torus', 'saddle', 'tangent-plane', 'helix-sheet', 'level-curves'] as const
@@ -40,6 +40,9 @@ const bytesOf = (b: BakedPainting): number => {
 
 const rows: string[][] = []
 const roleRows: string[][] = []
+const edgeRows: string[][] = []
+const dataRows: string[][] = []
+const newRows: string[][] = []
 for (const id of IDS) {
   if (ONLY && id !== ONLY) continue
   const figure = figureById(id)
@@ -62,6 +65,10 @@ for (const id of IDS) {
       const now = performance.now()
       if (p.done === 0) at[p.phase] = now
       else if (p.done === 1) ms[p.phase] = now - at[p.phase]
+      // (the strokes phase marks the end of the surface strokes at 0.98, of the edge strokes at 0.99, of the data lines at 1)
+      if (p.phase === 'strokes' && p.done === 0.98) at.surfaceDone = now
+      if (p.phase === 'strokes' && p.done === 0.99) ms.edgeStrokes = now - at.surfaceDone
+      if (p.phase === 'strokes' && p.done === 1) ms.dataStrokes = now - (at.surfaceDone + (ms.edgeStrokes ?? 0))
     }, { keepStats: true })
     return { baked, ms, total: performance.now() - t0 }
   }
@@ -90,6 +97,17 @@ for (const id of IDS) {
     const c = stats.strokes.byRoleSide[r]
     if (c[0] + c[1] + c[2] > 0) roleRows.push([id, role, String(c[1]), String(c[2]), String(c[0])])
   }
+  const e = stats.edgeStrokes
+  edgeRows.push([id, String(e.runs), String(e.stretches), String(e.strokes), ...e.byClass.map(String), String(e.crisp), String(e.drags), String(e.pulls), String(e.bridges), String(e.skipped), String(e.dropped)])
+  // a colour-only change, made again from the recipes (the curve's warm hue: every colour of every stroke and every surface's underpainting)
+  const recolours = Array.from({ length: RUNS }, (_, k) => {
+    const t = performance.now()
+    recolourBake(last.baked, setParam(params, 'curve.warmHue', 20 + k))
+    return performance.now() - t
+  })
+  newRows.push([id, median(runs.map((r) => r.ms.edgeStrokes ?? 0)).toFixed(1), median(runs.map((r) => r.ms.dataStrokes ?? 0)).toFixed(1), median(runs.map((r) => r.ms.strokes ?? 0)).toFixed(0), median(recolours).toFixed(0)])
+  const d = stats.dataStrokes
+  dataRows.push([id, String(d.strokes), String(d.lines), String(d.arrows), String(d.boxes), String(d.hiddenDashed)])
 }
 
 const print = (head: string[], body: string[][]) => {
@@ -101,4 +119,10 @@ const print = (head: string[], body: string[][]) => {
 print(['scene', 'particles', 'strokes', 'side -1/0/+1', 'dropped', 'vertices', ...PHASES.map((p) => `${p} ms`), 'total ms', 'arrays MB', 'kept MB'], rows)
 console.log('')
 print(['scene', 'role', 'side 0', 'side +1', 'side -1'], roleRows)
+console.log('')
+print(['scene', 'runs', 'stretches', 'edge strokes', 'lost', 'soft', 'firm', 'hard', 'crisp', 'drags', 'pulls', 'bridges', 'short', 'dropped'], edgeRows)
+console.log('')
+print(['scene', 'edge strokes ms', 'data lines ms', 'strokes phase ms', 'recolour ms'], newRows)
+console.log('')
+print(['scene', 'data strokes', 'lines', 'arrow shafts', 'box edges', 'dashed when hidden'], dataRows)
 console.log(`(${RUNS} runs each after a warm-up, medians; arrays MB is the typed arrays of the BakedPainting and its surfaces; kept MB the heap a painting holds with its recipes)`)

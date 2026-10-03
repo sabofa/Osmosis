@@ -96,7 +96,7 @@ export const MIN_PATH_SHARE = 0.25
 // The seed of a stroke on side -1 (the particle's mixed with the side).
 export const SIDE_SEED = 0x9e3779b9
 
-const ROLE_INDEX: Record<Role, number> = Object.fromEntries(ROLES.map((r, i) => [r, i])) as Record<Role, number>
+export const ROLE_INDEX: Record<Role, number> = Object.fromEntries(ROLES.map((r, i) => [r, i])) as Record<Role, number>
 
 // ---- what a stroke's colour reads of the plan at its point ----
 
@@ -603,7 +603,7 @@ const particleNz = (c: StrokeCtx, i: number, m: number, side: 1 | -1): number =>
 // ---- the walk sides ----
 
 const walkSides = new WeakMap<StrokeCtx, WalkSide[][]>()
-function walkSideOf(c: StrokeCtx, m: number, k: 0 | 1, side: 1 | -1): WalkSide {
+export function walkSideOf(c: StrokeCtx, m: number, k: 0 | 1, side: 1 | -1): WalkSide {
   let all = walkSides.get(c)
   if (!all) {
     all = c.scene.marks.map(() => [])

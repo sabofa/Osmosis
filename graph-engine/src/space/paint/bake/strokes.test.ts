@@ -15,7 +15,7 @@ import { stepValueWorld } from './planes'
 import { bakeLengthFactor, LENGTH_BUCKET, lengthFactorsOf, SIDE_SEED, MIN_PATH_SHARE } from './strokes'
 import { locate, type SurfacePoint } from './surface'
 import { boundLightness, NO_PARTICLE, preMixLab, readRecipe } from './draft'
-import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, BAKE_ZOOM_MIN } from './types'
+import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, BAKE_ZOOM_MIN, SIZING_SURFACE } from './types'
 import { fixture, flatSaddleScene, inwardSphere, P, PX, saddleColours, sparse, sphereColours, sphereScene, TERRACOTTA, veilScene, type Fixture } from './bakeFixture'
 
 // Whole bakes are heavy and the test machine is shared: give every test room.
@@ -100,6 +100,8 @@ describe('the roles a particle qualifies for (the model’s conditions, read fro
     for (let i = 0; i < baked.count; i++) {
       if (baked.mark[i] !== 0) continue
       const role = ROLES[baked.role[i]]
+      // (the edge strokes are edgeStrokes.test.ts's)
+      if (role === 'edge' || role === 'line') continue
       if (role === 'dab') {
         counts.dab++
         expect(baked.particle[i]).toBe(NO_PARTICLE)
@@ -138,7 +140,8 @@ describe('the roles a particle qualifies for (the model’s conditions, read fro
   })
 
   it('paints the table only where the shadow falls, as block and glaze, and never scumbles or forms on it', () => {
-    const table = strokesWhere(SPHERE, (i) => baked.mark[i] === 1)
+    // (the surface strokes: the cast shadow's edge strokes are edgeStrokes.test.ts's)
+    const table = strokesWhere(SPHERE, (i) => baked.mark[i] === 1 && baked.sizing[i] === SIZING_SURFACE)
     expect(table.length).toBeGreaterThan(200)
     const roles = new Set(table.map((i) => ROLES[baked.role[i]]))
     expect([...roles].sort()).toEqual(['block', 'glaze'])
@@ -379,13 +382,12 @@ describe('the value rule holds in every baked stroke’s colour', () => {
         if (fam === FAM_SHADOW) shadow = Math.min(shadow, lBound - L)
         else light = Math.min(light, L - lBound)
       }
-      if (fam === FAM_SHADOW) {
-        nShadow++
-        uShadow = Math.min(uShadow, r.uBound[c] - r.u[c])
-      } else {
-        nLight++
-        uLight = Math.min(uLight, r.u[c] - r.uBound[c])
-      }
+      if (fam === FAM_SHADOW) nShadow++
+      else nLight++
+      // (the plan values of a surface stroke: an edge stroke's `u` is its side's value, the mix amount's, not the value it is painted at)
+      if (f.baked.sizing[k] !== SIZING_SURFACE) continue
+      if (fam === FAM_SHADOW) uShadow = Math.min(uShadow, r.uBound[c] - r.u[c])
+      else uLight = Math.min(uLight, r.u[c] - r.uBound[c])
     }
     return { shadow, light, nShadow, nLight, uShadow, uLight }
   }
@@ -564,7 +566,7 @@ describe('the baked length', () => {
     const BASE = sparseScene.params
     const apP = sparseScene.baked.areaPerParticle[0]
     const rebake = (params: PaintParams) => bakePaintingWithProgress(sparseScene.scene, sparseScene.particles, sparseScene.colours, sparseScene.light, params, sparseScene.authored)
-    const keyOf = (params: PaintParams) => bakeKey(sparseScene.scene, sparseScene.light, params, sparseScene.authored, sparseScene.particles)
+    const keyOf = (params: PaintParams) => bakeKey(sparseScene.scene, sparseScene.light, params, sparseScene.authored, sparseScene.particles, sparseScene.colours)
     // the longest baked path in zoom-1 strokes, over the blocks
     const longest = (b: ReturnType<typeof rebake>): number => {
       let m = 0

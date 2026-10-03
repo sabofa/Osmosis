@@ -4,8 +4,8 @@
 //   plan        the value plan per vertex and side of every mesh's refined surface (bake/plan.ts)
 //   planes      the painter's planes on the surfaces (bake/planes.ts)
 //   edges       the edges between them, their hardness and the edge field (bake/edges.ts)
-//   strokes     every particle's strokes per role and per side, walked on the surface (bake/strokes.ts), and, slotted in after them (Task 3b),
-//               the edge strokes (edgeStrokes.ts) and the data marks' lines (lines.ts)
+//   strokes     every particle's strokes per role and per side, walked on the surface (bake/strokes.ts); the edge strokes along the world edges'
+//               runs (edgeStrokes.ts); the data marks' lines (lines.ts)
 //   underpaint  the underpainting per vertex per side (bake/underpaint.ts)
 //   pack        the strokes' colours at each brush-load level, the painting order, and the packed arrays
 //
@@ -14,12 +14,14 @@
 
 import type { SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
-import type { ParticleSet, SceneColours } from '../types'
+import type { Oklab, ParticleSet, SceneColours } from '../types'
 import { ROLES } from '../types'
 import { COLOUR_ONLY, curveFor, groundLocal, NOT_COLOUR_ONLY, recipeEnv, RENDER_ONLY } from '../model/index'
 import { mixerOf } from '../model/underpaint'
 import { colourStrokes, gatherColours, packStrokeArrays, paintingOrder, StrokeSink, type ColourRecipes } from './draft'
+import { buildEdgeStrokes, type EdgeStrokeStats } from './edgeStrokes'
 import { buildWorldEdges, type WorldEdges } from './edges'
+import { buildDataStrokes, dataColours, dataLocals, type DataStrokeStats } from './lines'
 import { buildWorldPlan, type WorldPlan } from './plan'
 import { buildWorldPlanes, type WorldPlanes } from './planes'
 import { buildSurfaceStrokes, lengthFactorsOf, strokeCtx, type SurfaceStrokeStats } from './strokes'
@@ -97,9 +99,9 @@ export function bakedParams(params: PaintParams): unknown {
 
 // A key of everything the bake read: the scene (its marks' kinds, counts, geometry and the style fields that change what is baked), the light direction
 // to 1e-6, the authored framing, the params that are not the frame's or the colours', and the bucketed length factor of every mark (which the
-// frame-only sliders move, a bucket at a time: strokes.ts bakeLengthFactor), so it takes the particle set. Equal keys, equal paintings (for equal particle sets and
-// theme colours, which the lab rebuilds on their own changes).
-export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: PaintParams, authored: AuthoredFraming, particles: ParticleSet): string {
+// frame-only sliders move, a bucket at a time: strokes.ts bakeLengthFactor), so it takes the particle set; and the scene's COLOURS (the theme: every mark's
+// colour, and the colour scales sampled along their length), so a theme change is another key. Equal keys, equal paintings (for equal particle sets).
+export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: PaintParams, authored: AuthoredFraming, particles: ParticleSet, colours: SceneColours): string {
   const h = new Fnv()
   h.number(scene.marks.length)
   for (const m of scene.marks) {
@@ -130,7 +132,40 @@ export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: 
   h.text(JSON.stringify(bakedParams(params)))
   // the baked paths' lengths: the factor of every mark, bucketed (strokes.ts bakeLengthFactor), which the frame-only sliders move
   h.text(JSON.stringify(lengthFactorsOf(scene, particles, params, authored.worldPerPx)))
+  coloursFingerprint(h, scene, colours)
   return h.hex()
+}
+
+// The positions on a colour scale (0 to 1, evenly) the key samples it at.
+export const SCALE_SAMPLES = 17
+
+// What the scene's colours are, for the key (what `colours` hands the bake: the mark colours of the underpainting, the planes and the data marks, and the
+// particles' local colours, which the lab builds from the same colours): each mark's colour and, for each colour scale a mesh uses, its colour at
+// SCALE_SAMPLES positions along its length (the value there, as the lab's own tables are sampled: a diverging scale about zero) and for no data;
+// every number rounded to 1e-6.
+function coloursFingerprint(h: Fnv, scene: SpaceScene, colours: SceneColours): void {
+  const q = (v: number): number => Math.round(v * 1e6)
+  const lab = (c: Oklab | null): void => {
+    if (!c) h.text('null')
+    else h.number(q(c[0])).number(q(c[1])).number(q(c[2]))
+  }
+  scene.marks.forEach((_, i) => lab(colours.markColour(i)))
+  const scales = new Set<number>()
+  for (const m of scene.marks) if (m.kind === 'mesh' && m.style.colorScale !== null) scales.add(m.style.colorScale)
+  for (const id of [...scales].sort((a, b) => a - b)) {
+    h.number(id)
+    const scale = scene.colorScales[id]
+    for (let k = 0; k < SCALE_SAMPLES; k++) {
+      const t = k / (SCALE_SAMPLES - 1)
+      let v = t
+      if (scale) {
+        const { min, max } = scale.domain
+        v = scale.diverging ? (t - 0.5) * 2 * Math.max(Math.abs(min), Math.abs(max), 1e-30) : min + t * Math.max(max - min, 1e-30)
+      }
+      lab(colours.scaleColour(id, v))
+    }
+    lab(colours.scaleColour(id, Number.NaN))
+  }
 }
 
 // ---- the bake ----
@@ -145,6 +180,8 @@ interface Retained {
   recipes: ColourRecipes
   perm: Uint32Array
   unders: (SurfaceUnder | null)[]
+  // The local colour of each data mark (OKLab; null for a mesh): what `dataColour` is made of.
+  locals: (Oklab | null)[]
 }
 const retained = new WeakMap<BakedPainting, Retained>()
 
@@ -155,6 +192,8 @@ export interface BakeStats {
   planes: WorldPlanes
   edges: WorldEdges
   strokes: SurfaceStrokeStats
+  edgeStrokes: EdgeStrokeStats
+  dataStrokes: DataStrokeStats
 }
 const statsOf = new WeakMap<BakedPainting, BakeStats>()
 export const bakeStats = (baked: BakedPainting): BakeStats | undefined => statsOf.get(baked)
@@ -187,13 +226,18 @@ export function bakePaintingWithProgress(
   const edges = buildWorldEdges(plan, planes, params, scene, authored)
   phase('edges', 1)
 
-  // the strokes, in creation order: the surface strokes (every particle, every role it qualifies for, each side), then --- TASK 3b --- the edge
-  // strokes (edgeStrokes.ts, along the world edges' runs) and the data marks' lines (lines.ts, which also fills `dataColour`), appended to the same
-  // sink: their sequential brush-load mix runs in the order they are appended, edges then lines.
+  // the strokes, in creation order: the surface strokes (every particle, every role it qualifies for, each side), then the edge strokes (edgeStrokes.ts,
+  // along the world edges' runs) and the data marks' lines (lines.ts), appended to the same sink: their sequential brush-load mix runs in the order
+  // they are appended, edges then lines
   phase('strokes', 0)
   const sink = new StrokeSink(Math.max(1024, 3 * particles.count))
   const ctx = strokeCtx(scene, particles, params, curve, env, plan, planes, edges)
-  const strokeStats = buildSurfaceStrokes(ctx, sink, (d) => phase('strokes', Math.min(0.99, d)))
+  const strokeStats = buildSurfaceStrokes(ctx, sink, (d) => phase('strokes', Math.min(0.97, d)))
+  phase('strokes', 0.98)
+  const edgeStats = buildEdgeStrokes(ctx, sink)
+  phase('strokes', 0.99)
+  const locals = dataLocals(scene, colours)
+  const dataStats = buildDataStrokes(scene, locals, params, authored.worldPerPx, sink)
   phase('strokes', 1)
 
   // the underpainting of every opaque mesh's surface, per vertex
@@ -222,11 +266,11 @@ export function bakePaintingWithProgress(
     areaPerParticle: ctx.areaPerParticle,
     surfaces,
     focal: edges.focal,
-    dataColour: new Float32Array(3 * nMarks), // TASK 3b: lines.ts fills it (the line recipe's colour before the mix)
-    key: bakeKey(scene, lightDir, params, authored, particles),
+    dataColour: dataColours(locals, env),
+    key: bakeKey(scene, lightDir, params, authored, particles, colours),
   }
-  retained.set(baked, { recipes, perm, unders })
-  if (options.keepStats) statsOf.set(baked, { plan, planes, edges, strokes: strokeStats })
+  retained.set(baked, { recipes, perm, unders, locals })
+  if (options.keepStats) statsOf.set(baked, { plan, planes, edges, strokes: strokeStats, edgeStrokes: edgeStats, dataStrokes: dataStats })
   phase('pack', 1)
   return baked
 }
@@ -248,8 +292,7 @@ export const recolourBake: RecolourBake = (baked: BakedPainting, params: PaintPa
   const colour = gatherColours(colourStrokes(held.recipes, params, env), held.perm)
   const mixer = mixerOf(params)
   const surfaces = baked.surfaces.map((s, m) => (s && held.unders[m] ? withUnderColours(s, held.unders[m]!, params, env, mixer) : s))
-  // TASK 3b: the data marks' colours (lines.ts) are made again here, as `dataColour`
-  const next: BakedPainting = { ...baked, colour, surfaces }
+  const next: BakedPainting = { ...baked, colour, surfaces, dataColour: dataColours(held.locals, env) }
   retained.set(next, held)
   const stats = statsOf.get(baked)
   if (stats) statsOf.set(next, stats)

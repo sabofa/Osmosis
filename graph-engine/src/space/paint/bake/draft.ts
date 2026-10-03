@@ -11,6 +11,12 @@
 // SEQUENTIAL mix (an edge or a data line: loads of consecutive strokes, in creation order, so the order a producer appends in is the order
 // the load runs in). `colourStrokes` is the one place that makes them, for the full bake and for the recolour alike, so the two cannot differ.
 //
+// THE SEQUENTIAL LOAD'S BREAK. The mixer breaks a load where the next stroke is more than `mix.loadBreakPx` from the last (model/mix.ts), measured
+// on a screen. The bake has no screen: a producer keeps a `LoadChain`, which gives each stroke its WORLD distance from the one before it, in px at
+// the reference scale (or `CHAIN_BREAK`, where the chain starts again: another run), and `colourStrokes` unrolls those distances onto one axis
+// (the running sum, per mixing role), where the mixer's own test sees the same distance. The distances are kept, not the decision, so a change of
+// `mix.loadBreakPx` (a colour-only slider) breaks the loads somewhere else without a new bake.
+//
 // THE ORDER. Strokes are packed by layer, then by a seeded key (FNV of mark, particle or run, role, side, piece), so the order never depends on
 // the camera; the packing's permutation is kept for the recolour.
 
@@ -38,6 +44,40 @@ export function fnvInts(...words: number[]): number {
     }
   }
   return h >>> 0
+}
+
+// The distance (px) a chain gives for a stroke that starts it again (another run): far past any `mix.loadBreakPx` (the slider's top is 400).
+export const CHAIN_BREAK = 1e5
+
+// The strokes of one sequential mix chain, in creation order: what the brush-load mix needs of where each lies. `next` gives a stroke's distance
+// in px (world distance over the reference world per px) from the one before it, or CHAIN_BREAK for the first of a chain and where `fresh`.
+export class LoadChain {
+  private have = false
+  private x = 0
+  private y = 0
+  private z = 0
+  private readonly perPx: number
+  constructor(perPx: number) {
+    this.perPx = perPx
+  }
+  next(x: number, y: number, z: number, fresh = false): number {
+    const d = this.have && !fresh ? Math.min(CHAIN_BREAK, Math.hypot(x - this.x, y - this.y, z - this.z) / this.perPx) : CHAIN_BREAK
+    this.have = true
+    this.x = x
+    this.y = y
+    this.z = z
+    return d
+  }
+}
+
+// The middle of stroke `idx`'s baked path (the mean of its two middle points), written to `out`.
+export function pathMid(sink: StrokeSink, idx: number, out: number[]): void {
+  const o = 3 * BAKE_PATH_POINTS * idx
+  const a = o + 3 * (BAKE_PATH_POINTS / 2 - 1)
+  const b = o + 3 * (BAKE_PATH_POINTS / 2)
+  out[0] = (sink.worldPath[a] + sink.worldPath[b]) / 2
+  out[1] = (sink.worldPath[a + 1] + sink.worldPath[b + 1]) / 2
+  out[2] = (sink.worldPath[a + 2] + sink.worldPath[b + 2]) / 2
 }
 
 // The fields of a plain colour recipe (model/recipe.ts ColourRecipe) kept per stroke in one Float32Array, REC_STRIDE to a stroke, in this order. A
@@ -72,12 +112,11 @@ export interface ColourRecipes {
   // stroke's lightness over the colour's lightness at the bound.
   fam: Int8Array
   uBound: Float64Array
-  // 1: the SEQUENTIAL mix (its position `mx`, `my` is the load's break test, in the units of params.mix.loadBreakPx); 0: the SPATIAL mix by
-  // the brush-load cell at each level.
+  // 1: the SEQUENTIAL mix (`mx`, its distance from the stroke before it in its chain, px: the load's break test against params.mix.loadBreakPx);
+  // 0: the SPATIAL mix by the brush-load cell at each level. A sequential stroke's `cells[0]` is the cell that seeds the load it starts.
   sequential: Uint8Array
   cells: Uint32Array // BAKE_MIX_LEVELS per stroke
   mx: Float64Array
-  my: Float64Array
 }
 
 // What a producer gives for the colour of one stroke: a plain recipe, or a DraftColour (and for it, optionally, the colour its bound is made from).
@@ -95,8 +134,10 @@ export interface RecipeInput {
   uBound?: number
   // the cell at each level (spatial) or null (sequential)
   cells: ArrayLike<number> | null
+  // A sequential stroke: the cell that seeds its load if it starts one (model/mix.ts newLoad: the surface cell of the load's first stroke), and
+  // `mx`, its distance in px from the stroke before it in its chain (LoadChain.next).
+  cell?: number
   mx?: number
-  my?: number
 }
 
 // What a producer gives for the geometry and the brush of one stroke (the fields a stroke has that are not its colour recipe or its path).
@@ -197,7 +238,7 @@ export class StrokeSink {
       count: 0, draft: [], hold: [], rec: new Float32Array(REC_STRIDE * n), flags: new Uint8Array(n),
       mixRole: new Uint8Array(n), u: new Float64Array(n), colormapped: new Uint8Array(n), seed: new Uint32Array(n),
       jit0: new Float64Array(n), jit1: new Float64Array(n), fam: new Int8Array(n), uBound: new Float64Array(n),
-      sequential: new Uint8Array(n), cells: new Uint32Array(BAKE_MIX_LEVELS * n), mx: new Float64Array(n), my: new Float64Array(n),
+      sequential: new Uint8Array(n), cells: new Uint32Array(BAKE_MIX_LEVELS * n), mx: new Float64Array(n),
     }
   }
 
@@ -254,7 +295,6 @@ export class StrokeSink {
     r.sequential = growArray(r.sequential, cap)
     r.cells = growArray(r.cells, BAKE_MIX_LEVELS * cap)
     r.mx = growArray(r.mx, cap)
-    r.my = growArray(r.my, cap)
   }
 
   set(i: number, f: StrokeFields): void {
@@ -296,7 +336,7 @@ export class StrokeSink {
       count: n, draft: c.draft, hold: c.hold, rec: c.rec.slice(0, REC_STRIDE * n), flags: c.flags.slice(0, n),
       mixRole: c.mixRole.slice(0, n), u: c.u.slice(0, n), colormapped: c.colormapped.slice(0, n), seed: c.seed.slice(0, n),
       jit0: c.jit0.slice(0, n), jit1: c.jit1.slice(0, n), fam: c.fam.slice(0, n), uBound: c.uBound.slice(0, n),
-      sequential: c.sequential.slice(0, n), cells: c.cells.slice(0, BAKE_MIX_LEVELS * n), mx: c.mx.slice(0, n), my: c.my.slice(0, n),
+      sequential: c.sequential.slice(0, n), cells: c.cells.slice(0, BAKE_MIX_LEVELS * n), mx: c.mx.slice(0, n),
     }
   }
 
@@ -321,13 +361,12 @@ export class StrokeSink {
     c.uBound[i] = r.uBound === undefined ? Number.NaN : r.uBound
     if (r.cells === null) {
       c.sequential[i] = 1
-      for (let l = 0; l < BAKE_MIX_LEVELS; l++) c.cells[BAKE_MIX_LEVELS * i + l] = 0
+      for (let l = 0; l < BAKE_MIX_LEVELS; l++) c.cells[BAKE_MIX_LEVELS * i + l] = l === 0 ? (r.cell ?? 0) >>> 0 : 0
     } else {
       c.sequential[i] = 0
       for (let l = 0; l < BAKE_MIX_LEVELS; l++) c.cells[BAKE_MIX_LEVELS * i + l] = r.cells[l]
     }
     c.mx[i] = r.mx ?? 0
-    c.my[i] = r.my ?? 0
   }
 }
 
@@ -417,6 +456,8 @@ export function colourStrokes(r: ColourRecipes, params: PaintParams, env: Recipe
   const count = r.count
   const out = new Float32Array(3 * BAKE_MIX_LEVELS * count)
   const mixer = new LoadMixer(params)
+  // the sequential strokes' chains unrolled onto one axis per mixing role (the mixer keeps one load per role)
+  const axis = new Float64Array(ROLES.length)
   for (let i = 0; i < count; i++) {
     const lab = preMixLab(r, i, env)
     const fam = r.fam[i]
@@ -426,9 +467,14 @@ export function colourStrokes(r: ColourRecipes, params: PaintParams, env: Recipe
     const role = ROLES[r.mixRole[i]]
     const levels = r.sequential[i] === 1 ? 1 : BAKE_MIX_LEVELS
     let lin: number[] = [0, 0, 0]
+    let x = r.mx[i]
+    if (r.sequential[i] === 1) {
+      axis[r.mixRole[i]] += r.mx[i]
+      x = axis[r.mixRole[i]]
+    }
     for (let l = 0; l < levels; l++) {
       const mixed = mixer.mix({
-        role, cell: r.cells[BAKE_MIX_LEVELS * i + l], u: r.u[i], x: r.mx[i], y: r.my[i], lab, colormapped: r.colormapped[i] === 1,
+        role, cell: r.cells[BAKE_MIX_LEVELS * i + l], u: r.u[i], x, y: 0, lab, colormapped: r.colormapped[i] === 1,
         seed: r.seed[i], jit0: r.jit0[i], jit1: r.jit1[i],
       })
       let m: Oklab = mixed.lab
