@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, resolvePaintParams } from '../params'
-import { applySlider, parseParams, serialiseParams, setCurve } from '../../../../../review/src/paintLabParams'
+import { applySlider, migrateLight, paramsFromData, parseParams, serialiseParams, setCurve } from '../../../../../review/src/paintLabParams'
 import { deletePreset, PRESETS_KEY, readPresets, savePreset } from '../../../../../review/src/paintLabPresets'
 
 // A preset is the params as JSON. It round-trips through resolvePaintParams
@@ -50,7 +50,7 @@ describe('serialiseParams / parseParams', () => {
   })
 
   it('reads a partial object over the defaults', () => {
-    const result = parseParams('{"light":{"azimuth":-10}}')
+    const result = parseParams('{"light":{"azimuth":-10,"worldFixed":1}}')
     expect(result.ok && result.params.light.azimuth).toBe(-10)
     expect(result.ok && result.params.light.elevation).toBe(DEFAULT_PAINT_PARAMS.light.elevation)
     expect(result.ok && result.params.edges.wFocal).toEqual([0.26, 0.14, 0.06])
@@ -146,7 +146,59 @@ describe('the preset store', () => {
     expect(readPresets(fakeStorage({ [PRESETS_KEY]: '[1,2]' }))).toEqual({})
     const old = readPresets(fakeStorage({ [PRESETS_KEY]: '{"old":{"light":{"azimuth":-5}},"junk":3}' }))
     expect(Object.keys(old)).toEqual(['old'])
+    // (a light from before it could be fixed in the world, with its own azimuth: it stays against the view, with the old elevation)
     expect(old.old.light.azimuth).toBe(-5)
-    expect(old.old.light.elevation).toBe(DEFAULT_PAINT_PARAMS.light.elevation)
+    expect(old.old.light.elevation).toBe(27)
+    expect(old.old.light.worldFixed).toBe(0)
+  })
+})
+
+// A preset saved before the light could be fixed in the world has no light.worldFixed, and its angles were against the view.
+// The new defaults fix the light in the world, so such a preset is read so that it keeps its look.
+describe('a preset from before the light could be fixed in the world', () => {
+  const light = (text: string) => {
+    const result = parseParams(text)
+    if (!result.ok) throw new Error(result.error)
+    return result.params.light
+  }
+
+  it('with the old default light (56 to the left, 27 up) is the new default light: the same lamp, fixed in the world', () => {
+    const l = light('{"light":{"azimuth":56,"elevation":27,"intensity":1.3}}')
+    expect([l.azimuth, l.elevation, l.worldFixed]).toEqual([-35, 39, 1])
+    expect(l.intensity).toBe(1.3) // and what else it set is its own
+    // the angles left out are the old default's too
+    expect(light('{"light":{"intensity":0.9}}')).toMatchObject({ azimuth: -35, elevation: 39, worldFixed: 1, intensity: 0.9 })
+    expect(light('{"light":{"azimuth":56}}')).toMatchObject({ azimuth: -35, elevation: 39, worldFixed: 1 })
+    expect(light('{"light":{"elevation":27}}')).toMatchObject({ azimuth: -35, elevation: 39, worldFixed: 1 })
+  })
+
+  it('with any other angles keeps them, and keeps the light against the view (worldFixed 0): an angle left out is the old default’s', () => {
+    expect(light('{"light":{"azimuth":20,"elevation":40}}')).toMatchObject({ azimuth: 20, elevation: 40, worldFixed: 0 })
+    expect(light('{"light":{"azimuth":-5}}')).toMatchObject({ azimuth: -5, elevation: 27, worldFixed: 0 })
+    expect(light('{"light":{"elevation":10}}')).toMatchObject({ azimuth: 56, elevation: 10, worldFixed: 0 })
+    expect(light('{"light":{"azimuth":56,"elevation":28}}')).toMatchObject({ azimuth: 56, elevation: 28, worldFixed: 0 })
+  })
+
+  it('is left alone when it has the key, or no light at all', () => {
+    expect(light('{"light":{"azimuth":56,"elevation":27,"worldFixed":1}}')).toMatchObject({ azimuth: 56, elevation: 27, worldFixed: 1 })
+    expect(light('{"light":{"azimuth":20,"elevation":40,"worldFixed":0}}')).toMatchObject({ azimuth: 20, elevation: 40, worldFixed: 0 })
+    expect(light('{"seed":4}')).toMatchObject({ azimuth: -35, elevation: 39, worldFixed: 1 })
+    expect(migrateLight({ seed: 4 })).toEqual({ seed: 4 })
+    expect(migrateLight({ light: 3 })).toEqual({ light: 3 })
+    expect(migrateLight(null)).toBeNull()
+    expect(migrateLight([1])).toEqual([1])
+  })
+
+  it('is migrated wherever a preset is read: the saved presets, Import, and the saved defaults', () => {
+    // the localStorage store
+    const stored = readPresets(fakeStorage({ [PRESETS_KEY]: JSON.stringify({ 'default light': { light: { azimuth: 56, elevation: 27 } }, 'side light': { light: { azimuth: 90, elevation: 20 } } }) }))
+    expect(stored['default light'].light).toMatchObject({ azimuth: -35, elevation: 39, worldFixed: 1 })
+    expect(stored['side light'].light).toMatchObject({ azimuth: 90, elevation: 20, worldFixed: 0 })
+    // Import, and tuning.json (both are paramsFromData)
+    const imported = paramsFromData({ light: { azimuth: 90, elevation: 20 } })
+    expect(imported.ok && imported.params.light).toMatchObject({ azimuth: 90, elevation: 20, worldFixed: 0 })
+    // what is saved now carries the key, so it is read as it was saved
+    const saved = readPresets(fakeStorage({ [PRESETS_KEY]: JSON.stringify({ now: DEFAULT_PAINT_PARAMS }) }))
+    expect(saved.now.light).toEqual(DEFAULT_PAINT_PARAMS.light)
   })
 })

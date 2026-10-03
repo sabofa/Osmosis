@@ -209,5 +209,29 @@ export function paramsFromData(data: unknown): ParseResult {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return { ok: false, error: 'Expected a JSON object of painter parameters, like the one Export gives.' }
   }
-  return { ok: true, params: sanitiseParams(resolvePaintParams(data as PaintParamsOverride)) }
+  return { ok: true, params: sanitiseParams(resolvePaintParams(migrateLight(data) as PaintParamsOverride)) }
+}
+
+// A preset saved before the light could be fixed in the world has no light.worldFixed, and its azimuth and elevation were
+// against the view (the light turned with the camera): read over the new defaults, which fix it in the world, it would be
+// lit from somewhere else. So a saved light with no worldFixed keeps its look:
+//   the old default (56 to the left of the view, 27 up), as it is or with the angles left out, becomes the light the new
+//     defaults give, the same lamp at a typical camera: azimuth -35, elevation 39, fixed in the world;
+//   any other angles stay as they were and the light stays against the view (worldFixed 0), a missing one being the old
+//     default's, not the new one's.
+// A preset with the key is left alone, and so is one with no light at all (the new defaults are the old look).
+export const OLD_LIGHT = { azimuth: 56, elevation: 27 }
+export function migrateLight(data: unknown): unknown {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return data
+  const light = (data as Record<string, unknown>).light
+  if (light === null || typeof light !== 'object' || Array.isArray(light) || 'worldFixed' in light) return data
+  const saved = light as Record<string, unknown>
+  const angle = (value: unknown, old: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : old)
+  const azimuth = angle(saved.azimuth, OLD_LIGHT.azimuth)
+  const elevation = angle(saved.elevation, OLD_LIGHT.elevation)
+  const lamp =
+    azimuth === OLD_LIGHT.azimuth && elevation === OLD_LIGHT.elevation
+      ? { azimuth: DEFAULT_PAINT_PARAMS.light.azimuth, elevation: DEFAULT_PAINT_PARAMS.light.elevation, worldFixed: 1 }
+      : { azimuth, elevation, worldFixed: 0 }
+  return { ...(data as Record<string, unknown>), light: { ...saved, ...lamp } }
 }

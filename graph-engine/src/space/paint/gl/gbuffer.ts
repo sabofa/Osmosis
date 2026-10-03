@@ -347,6 +347,86 @@ export function readGBuffer(
   return g
 }
 
+// --- the float layout's readback that does not wait --------------------------
+//
+// readGBuffer's readPixels into an array makes the page wait, there and then, for every command the GPU has queued (a
+// paint or two of a drag among them). The float layout can be read the other way: readPixels into a PIXEL_PACK_BUFFER
+// (the GPU copies when it gets there, the call returns at once), a fence behind it, and the page asks
+// clientWaitSync(sync, 0, 0) whether the fence has passed, a call that never waits, until it has; then
+// getBufferSubData takes the bytes from a buffer that is already filled, and the usual decode follows.
+
+export interface PackBuffer {
+  buffer: WebGLBuffer | null
+  bytes: number
+}
+
+// Does the context give a sync object for fenceSync (a context that does not, or a test's fake, answers nothing)?
+export function canReadAsync(gl: Gl): boolean {
+  const probe = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
+  if (!probe) return false
+  gl.deleteSync(probe)
+  return true
+}
+
+export interface PendingRead {
+  sync: WebGLSync
+  width: number
+  height: number
+  // Which context the read was started on (the renderer counts a restore): a read that is polled after the context went, even
+  // one that has come back since, is of a context that is no more and is dropped (dropRead).
+  generation: number
+}
+
+// Starts the readback of a float G-buffer: into `pack` (the buffer, made on first use and grown when the view grows), a
+// fence behind it, and the commands flushed so the fence is on its way. Null when there is no buffer or no fence (read it
+// the plain way then). `generation` is the context's, kept with the read (PendingRead.generation).
+export function beginFloatRead(gl: Gl, res: Resources, target: GBufferTarget, pack: PackBuffer, generation = 0): PendingRead | null {
+  const { width, height } = target
+  const bytes = width * height * 16
+  if (!pack.buffer) pack.buffer = res.buffer()
+  if (!pack.buffer) return null
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack.buffer)
+  if (pack.bytes < bytes) {
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, bytes, gl.STREAM_READ)
+    pack.bytes = bytes
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo)
+  gl.readBuffer(gl.COLOR_ATTACHMENT0)
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, 0)
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+  const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
+  gl.flush()
+  return sync ? { sync, width, height, generation } : null
+}
+
+// A read that will not be finished (the context went, the renderer was disposed, the fence or the copy failed): its fence is
+// deleted, which on a context that is lost, or one that has come back and never made it, is a call that does nothing.
+export function dropRead(gl: Gl, pending: PendingRead): void {
+  try {
+    gl.deleteSync(pending.sync)
+  } catch {
+    // (nothing to give back)
+  }
+}
+
+// Has the fence passed? Never waits.
+export function pollRead(gl: Gl, pending: PendingRead): 'ready' | 'wait' | 'failed' {
+  const status = gl.clientWaitSync(pending.sync, 0, 0)
+  if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) return 'ready'
+  return status === gl.WAIT_FAILED ? 'failed' : 'wait'
+}
+
+// The bytes of a read whose fence has passed, decoded; the fence is deleted.
+export function finishFloatRead(gl: Gl, pending: PendingRead, pack: PackBuffer, scratch: ReadbackScratch): GBuffer {
+  const a = scratch.floats(0, pending.width * pending.height * 4)
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack.buffer)
+  gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, a)
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+  gl.deleteSync(pending.sync)
+  return decodeFloatGBuffer(a, pending.width, pending.height)
+}
+
 // The depth packing range of the rgba8 layout: the scene's bounding sphere
 // along the view direction.
 export function depthRangeFor(view: PaintView, origin: readonly [number, number, number], radius: number): [number, number] {

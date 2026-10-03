@@ -21,9 +21,11 @@
 // A stroke made on the screen alone repeats its anchor for every world point (an arrowhead's barbs, a
 // point's dab): it is moved with its anchor, rigidly, and not turned. A stroke with no world path (all
 // zero) is left as it was. Everything else (colours, widths, roles, layers, edges) is the batch's own.
-// The result shares those arrays with the batch; path, depth and alpha are new.
+// The result shares those arrays with the batch; path, depth and alpha are new (or, given a `scratch`, the ones it keeps for
+// this batch, written afresh: they are the batch's of the last call, so a frame that is to outlive the next call is copied).
 
 import type { PaintParams } from './params'
+import type { Scratch } from './scratch'
 import { PATH_POINTS, ROLES, type PaintView, type StrokeBatch } from './types'
 
 const EDGE = ROLES.indexOf('edge')
@@ -52,12 +54,12 @@ function toEye(v: PaintView, ortho: boolean, x: number, y: number, z: number, ou
   out[2] = dz / l
 }
 
-export function reprojectStrokes(batch: StrokeBatch, from: PaintView, to: PaintView, params: PaintParams, edgeFade = 1): StrokeBatch {
+export function reprojectStrokes(batch: StrokeBatch, from: PaintView, to: PaintView, params: PaintParams, edgeFade = 1, scratch?: Scratch): StrokeBatch {
   const n = batch.count
   const P = PATH_POINTS
-  const path = new Float32Array(2 * P * n)
-  const depth = new Float32Array(n)
-  const alpha = new Float32Array(n)
+  const path = scratch ? scratch.array('path', Float32Array, 2 * P * n) : new Float32Array(2 * P * n)
+  const depth = scratch ? scratch.array('depth', Float32Array, n) : new Float32Array(n)
+  const alpha = scratch ? scratch.array('alpha', Float32Array, n) : new Float32Array(n)
   const m = to.viewProj
   const f = from.viewProj
   const toOrtho = isOrtho(to)

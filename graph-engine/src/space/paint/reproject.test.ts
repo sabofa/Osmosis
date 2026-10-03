@@ -3,6 +3,7 @@ import { buildParticles, paintFrame } from './model/index'
 import { arrowMark, flatColours, lineMark, makeGBuffer, paintView, pointMark, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './model/testing'
 import { DEFAULT_PAINT_PARAMS } from './params'
 import { reprojectStrokes } from './reproject'
+import { Scratch } from './scratch'
 import { PATH_POINTS, ROLES, type StrokeBatch } from './types'
 
 // A frame's strokes in another view, without the model: the paint rides the object while the camera moves.
@@ -240,5 +241,31 @@ describe('reprojectStrokes', () => {
     expect(Array.from(none.path)).toEqual(Array.from(plain.path))
     // and no argument is no fade
     expect(Array.from(reprojectStrokes(batch, view, to, P, 1).alpha)).toEqual(Array.from(plain.alpha))
+  })
+
+  it('given a scratch, makes the same strokes in arrays it keeps, written afresh each call, and never touches the batch’s own', () => {
+    const { view, batch } = frame()
+    const to = paintView({ width: 640, height: 480, azimuth: 40, elevation: 25, zoom: 120 })
+    const to2 = paintView({ width: 640, height: 480, azimuth: 55, elevation: 25, zoom: 120 })
+    const plain = reprojectStrokes(batch, view, to, P, 0.5)
+    const plain2 = reprojectStrokes(batch, view, to2, P, 1)
+    const own = [Array.from(batch.path), Array.from(batch.depth), Array.from(batch.alpha)]
+    const scratch = new Scratch()
+    const a = reprojectStrokes(batch, view, to, P, 0.5, scratch)
+    expect(Array.from(a.path)).toEqual(Array.from(plain.path))
+    expect(Array.from(a.depth)).toEqual(Array.from(plain.depth))
+    expect(Array.from(a.alpha)).toEqual(Array.from(plain.alpha))
+    expect(scratch.allocations).toBe(3)
+    // again, for another view: the same arrays, now holding that view's strokes (every element rewritten)
+    const b = reprojectStrokes(batch, view, to2, P, 1, scratch)
+    expect(b.path).toBe(a.path)
+    expect(b.alpha).toBe(a.alpha)
+    expect(Array.from(b.path)).toEqual(Array.from(plain2.path))
+    expect(Array.from(b.alpha)).toEqual(Array.from(plain2.alpha))
+    expect(scratch.allocations).toBe(3)
+    // what the batch holds is its own
+    expect([Array.from(batch.path), Array.from(batch.depth), Array.from(batch.alpha)]).toEqual(own)
+    expect(b.path).not.toBe(batch.path)
+    expect(b.colour).toBe(batch.colour)
   })
 })
