@@ -15,7 +15,9 @@
 // so it is that value as a single point and not twins' arithmetic on its parts:
 // widening 1/3 by two ulps would shift x^(1/3) at 1e300 by 1e-13 relative, past
 // every bound the twins keep. A subtree that reads no @param either is evaluated
-// once, here; one that does is evaluated by the scalar compile at call time (a
+// once, on the first run that reaches it (not at compile time: a constant integral
+// in a branch no box reaches would cost its quadrature, seconds for a nest of them,
+// for nothing); one that does is evaluated by the scalar compile at call time (a
 // parameter is read when called, so a change needs no recompile). Two things are not
 // folded: a loop, which is charged to the loop budget (below) wherever it runs, and an
 // integral that reads a @param or holds a loop in a bound, which would be a quadrature
@@ -75,7 +77,8 @@ interface INode {
   // Whether it must not be folded: it holds a loop, or an integral that reads a @param or has a
   // loop in a bound (see the header).
   readonly keep: boolean
-  // Whether `out` is already a single value that nothing writes but this node.
+  // Whether `out` is a single value that nothing writes but this node (a constant that is folded:
+  // once it has run, if it is a constant that reads no @param).
   point: boolean
 }
 
@@ -113,8 +116,15 @@ function foldable(n: INode): boolean {
   return n.free === INF && !n.keep
 }
 
+// How many constant subtrees have been evaluated (each once, by the first run that reached it): what a
+// test reads to see that one no box reaches is never computed.
+export const folded = { count: 0 }
+
 // A constant subtree becomes its one value. The node keeps its `out`, so whatever
-// aliases it (an inlined parameter) reads the value; only `run` changes.
+// aliases it (an inlined parameter) reads the value; only `run` changes. One that
+// reads no @param is evaluated by the first run that reaches it and then costs nothing (its
+// `run` is replaced by a no-op: no allocation per evaluation after that); one that does
+// is the scalar's value each time it runs.
 function settle(n: INode, ctx: Ctx): void {
   if (n.point || !foldable(n)) return
   const f = compileScalar(n.expr, [], ctx.scope)
@@ -124,8 +134,11 @@ function settle(n: INode, ctx: Ctx): void {
       setPoint(out, f())
     }
   } else {
-    setPoint(out, f())
-    n.run = NOOP
+    n.run = () => {
+      folded.count++
+      setPoint(out, f())
+      n.run = NOOP
+    }
   }
   n.point = true
 }

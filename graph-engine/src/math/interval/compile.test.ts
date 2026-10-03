@@ -6,7 +6,7 @@ import { call, num, variable } from '../expr'
 import { MAX_TERMS } from '../reserved'
 import { makeScope, type MathFunction, type MathScope } from '../scope'
 import { box, fmt, must, nextDown, nextUp, pointsOf, show, within, withZeroSigns } from './compose.testkit'
-import { type CompiledInterval, compileInterval } from './compile'
+import { type CompiledInterval, compileInterval, folded } from './compile'
 import { CONTINUOUS, DEFINED, iv, type Iv, PARTIAL, UNKNOWN } from './core'
 import { continuitySweep, continuityViolation, findJump, overclaims, samplerBox, soundnessSweep } from './fuzz.testkit'
 import * as surface from './index'
@@ -464,6 +464,37 @@ describe('reserved constructs', () => {
     expect(d.v).toBe(PARTIAL)
     // a loop in a bound is charged to the budget, so it is never folded
     expect(at('integral(t = 0 to sum(k = 1 to 3, 1), t)', [], plain).v).toBe(UNKNOWN)
+  })
+
+  it('a constant integral is computed on the first run that reaches it, once, and never if no box does', () => {
+    // a quadrature of a hundred-thousand-term sum: seconds, if it is computed (compile did, in the branch
+    // the scalar never reaches, for as long as it took)
+    const costly = '{x > 1e9: integral(t = 0 to 1, sum(k = 1 to 100000, t^k / k)), x}'
+    const before = folded.count
+    const g = compileInterval(p(costly), ['x'], plain)
+    expect(folded.count, 'compiling computes nothing').toBe(before)
+    const out = iv()
+    expect(g(out, 0, 1)).toEqual({ lo: 0, hi: 1, v: CONTINUOUS })
+    expect(g(out, -5, 5)).toEqual({ lo: -5, hi: 5, v: CONTINUOUS })
+    expect(folded.count, 'a box that never reaches the branch computes nothing').toBe(before)
+    // one that is reached gives the number the scalar gives, computed once and kept
+    const cheap = compileInterval(p('{x > 1e9: integral(t = 0 to 1, t^2), x}'), ['x'], plain)
+    const scalar = compileScalar(p('{x > 1e9: integral(t = 0 to 1, t^2), x}'), ['x'], plain)
+    expect(cheap(out, 0, 1)).toEqual({ lo: 0, hi: 1, v: CONTINUOUS })
+    expect(folded.count).toBe(before)
+    const reached = { ...cheap(out, 2e9, 3e9) }
+    expect(reached).toEqual({ lo: scalar(2e9), hi: scalar(2e9), v: CONTINUOUS })
+    expect(folded.count, 'reached: computed once').toBe(before + 1)
+    cheap(out, 2e9, 3e9)
+    cheap(out, 0, 5e9)
+    expect(out.lo <= scalar(2e9) && scalar(2e9) <= out.hi && out.v).toBe(DEFINED)
+    expect(folded.count, 'and kept').toBe(before + 1)
+    // the same with the integral as a whole expression
+    const whole = compileInterval(p('integral(t = 0 to pi, sin(t))'), [], plain)
+    expect(folded.count).toBe(before + 1)
+    expect(within(whole(out), 2, 2)).toBe(true)
+    expect(within(whole(out), 2, 2)).toBe(true)
+    expect(folded.count).toBe(before + 2)
   })
 
   it("f'(x) is the derivative's body, inlined", () => {
