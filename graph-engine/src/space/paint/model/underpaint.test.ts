@@ -23,6 +23,9 @@ const field = (owner: number[], marks: number[] = [0, 0], ownerFams: number[] = 
   bandPix: new Int32Array(0),
   bandDonor: new Int32Array(0),
   bandU: new Float32Array(0),
+  bandW: new Float32Array(0),
+  bandFam: new Uint8Array(0),
+  bandBound: new Float32Array(0),
   lw: 2,
   lh: 1,
   cell: 2,
@@ -262,7 +265,8 @@ describe('the underpainting of a colour-mapped surface', () => {
     const flat = flatColours({ 0: lchToLab(0.6, 0.1, 150) })
     const mappedSpread = spread(saddle, mapped)
     const flatSpread = spread(flatSaddle, flat)
-    expect(mappedSpread).toBeGreaterThan(25)
+    // (the swing and the tints turn a colormapped colour by at most a third of curve.shiftMax + 3 degrees: the data's own hues are what spreads)
+    expect(mappedSpread).toBeGreaterThan(20)
     expect(flatSpread).toBeLessThan(12)
   })
 })

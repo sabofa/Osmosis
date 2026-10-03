@@ -20,7 +20,7 @@ import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, type ViewOp
 import { edgeStrokes } from './contours'
 import type { EdgeRun } from './edges'
 import { buildUnderpaintField, FAM_BAND, fillUnderpaint, underpaintImage } from './underpaint'
-import { CANVAS, LOCALS, lightnessOf, made, SCENARIO, SCENE } from './valueFinalFixture'
+import { CANVAS, LOCALS, lightnessOf, made, SCENARIO, SCENE, spreadOf } from './valueFinalFixture'
 import {
   buildPlanMap, CAST_FADE, effectiveValues, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, isLightFamily, newZoneSample, planSample, reflectedMax,
   type PlanMap,
@@ -93,14 +93,30 @@ describe('the final picture of a sphere on a table', () => {
         foundDark++
         // darker than the lightest a shadow of this grey is (the cap's lightness 0.386), the stroke's own jitter apart
         expect(lightnessOf(m.batch, i)).toBeLessThan(0.386 + 0.05)
-        expect(d.edge).toBeGreaterThanOrEqual(2)
+        // (a single dark stroke is a found edge; a bridge to what lies across, held to its own side's ceiling, may be soft or lost)
+        if (d.colour.b === null) expect(d.edge).toBeGreaterThanOrEqual(2)
       }
     }
     // the shadow side is a found, dark edge in several strokes ...
     expect(foundDark).toBeGreaterThanOrEqual(3)
-    // ... and no stroke that carries the canvas's lightness into the form lies in the shadow (the terminator's own stretch apart)
+    // ... and no stroke that carries the canvas's lightness into the form lies in the shadow: the lowest N·L one reaches here is -0.062 (the
+    // terminator's own soft edge is 0.05 either side)
     expect(canvasBridges.length).toBeGreaterThan(5)
-    for (const nl of canvasBridges) expect(nl).toBeGreaterThan(-0.2)
+    for (const nl of canvasBridges) expect(nl).toBeGreaterThan(-0.07)
+  })
+
+  it('does not carry a bridge to the canvas into the shadow where the terminator runs along the limb (the camera at 200/2, the light 30/5): none reaches below -0.07', () => {
+    // the family of a stretch of outline is read from the lowest value on its way in (a limb's normal turns so fast that the pixel 3 px inside can be lit
+    // where the outline is not): a bridge once reached -0.12 here
+    let bridges = 0
+    for (const seed of [1, 2, 3]) {
+      const params = resolvePaintParams({ seed })
+      const m = made(params, lchToLab(0.6, 0, 0), { azimuth: 200, elevation: 2, lightAzimuth: 30, lightElevation: 5 }, true)
+      const spread = spreadOf(m, params)
+      if (spread.canvasReach < 9) bridges++
+      expect(spread.canvasReach, `seed ${seed}`).toBeGreaterThan(-0.07)
+    }
+    expect(bridges).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -197,6 +213,46 @@ describe('the outline of a form against the canvas', () => {
   })
 })
 
+describe('the edges of the figure in shadow', () => {
+  // the reviewer's frames: five cameras and lights (camera-relative), where a dark blue, a terracotta and a grey each had edge strokes lighter than the
+  // cap's lightness in the figure's own colour at the shadow side, bridging the figure to its own cast shadow on the table
+  const frames: ViewOpts[] = [
+    { azimuth: 30, elevation: 25 },
+    { azimuth: 30, elevation: 4 },
+    { azimuth: 200, elevation: 2, lightAzimuth: 30, lightElevation: 5 },
+    { azimuth: 0, elevation: 40, lightAzimuth: -60, lightElevation: 45 },
+    { azimuth: 120, elevation: 10, lightAzimuth: 100, lightElevation: 10 },
+  ]
+  const colours: [string, Oklab][] = [['dark blue', lchToLab(0.35, 0.12, 260)], ['terracotta', lchToLab(0.56, 0.14, 38)], ['grey', lchToLab(0.6, 0, 0)]]
+
+  it('holds every edge stroke on the shadow side to the cap’s lightness in the figure’s own colour, and under its half-tones: a bridge to the table’s shadow is no lighter', () => {
+    let held = 0
+    let worstOver = -1
+    let at = ''
+    for (const seed of [1, 2, 3]) {
+      const params = resolvePaintParams({ seed })
+      const curve = makeCurve(params)
+      for (const [name, local] of colours) {
+        // the lightness the cap gives this colour, with none of the curve's own deviation or a stroke's jitter
+        const capL = curve.lch({ local, u: reflectedMax(params), noDev: true })[0]
+        for (const opts of frames) {
+          const m = made(params, local, opts, true)
+          const spread = spreadOf(m, params)
+          held += spread.nEdgeShadow
+          // (the curve's own deviation and the stroke's jitter, up to 0.04 of lightness, are the colour's: the bound is the same recipe at the cap)
+          if (spread.nEdgeShadow > 0 && spread.maxShadowEdge - capL > worstOver) {
+            worstOver = spread.maxShadowEdge - capL
+            at = `seed ${seed}, ${name}, ${JSON.stringify(opts)}: edge ${spread.maxShadowEdge.toFixed(3)} against the cap's ${capL.toFixed(3)}`
+          }
+          if (spread.nEdgeShadow > 0 && spread.nLight > 0) expect(spread.maxShadowEdge, `${name} seed ${seed} ${JSON.stringify(opts)}`).toBeLessThan(spread.minLight)
+        }
+      }
+    }
+    expect(held).toBeGreaterThan(100)
+    expect(worstOver, at).toBeLessThanOrEqual(0.04)
+  })
+})
+
 // ---- the underpainting ----
 
 describe('the underpainting', () => {
@@ -242,9 +298,9 @@ describe('the underpainting', () => {
   })
 
   it('turns through the terminator as the plan does: its value across the plan’s soft edge is the plan’s within 0.02, neither crisper nor blurrier (radius 120 and 60)', () => {
-    // the plan alone: no brush-load mix, none of the curve's own deviation or the seeded one, and planes that keep the whole of
-    // a pixel's gradient (a stroke's plane step is not the plan's). A grey of local lightness 0.6 reads L = 0.6 + 0.8 (u - 0.62).
-    const params = resolvePaintParams({ seed: 1, mix: { strength: 0 }, curve: { devL: 0, devC: 0, devH: 0 }, value: { deviation: 0 }, edges: { planeGradient: 1 } })
+    // the plan alone: no brush-load mix, none of the curve's own deviation or the seeded one (at the default plane gradient: the band takes no
+    // plane step). A grey of local lightness 0.6 reads L = 0.6 + 0.8 (u - 0.62).
+    const params = resolvePaintParams({ seed: 1, mix: { strength: 0 }, curve: { devL: 0, devC: 0, devH: 0 }, value: { deviation: 0 } })
     for (const radius of [120, 60]) {
       const m = made(params, LOCALS[3][1], { azimuth: 30, elevation: 25 }, false, [640, 480, radius])
       expect(m.an.stride).toBe(1) // (the plan is at the image's own resolution)
@@ -295,7 +351,7 @@ describe('the underpainting', () => {
 
   // a 4 x 1 image, cells 2 pixels wide; sample 0 (cell 0) is light red, sample 1 (cell 1) is dark blue
   const fieldOf = (ownerFam: number[], fam: number[]) => ({
-    width: 4, height: 1, owner: Int32Array.from([0, 0, 0, 0]), ownerFam: Uint8Array.from(ownerFam), bandPix: new Int32Array(0), bandDonor: new Int32Array(0), bandU: new Float32Array(0), lw: 2, lh: 1, cell: 2,
+    width: 4, height: 1, owner: Int32Array.from([0, 0, 0, 0]), ownerFam: Uint8Array.from(ownerFam), bandPix: new Int32Array(0), bandDonor: new Int32Array(0), bandU: new Float32Array(0), bandW: new Float32Array(0), bandFam: new Uint8Array(0), bandBound: new Float32Array(0), lw: 2, lh: 1, cell: 2,
     cellStart: Int32Array.from([0, 1, 2]), count: 2, mark: Int32Array.from([0, 0]), fam: Uint8Array.from(fam), bound: new Float32Array(2),
     lab: new Float32Array(6), u: new Float32Array(2), nz: new Float32Array(2), bounce: new Float32Array(2), amb: new Float32Array(2),
     plane: new Float32Array(6), pos: new Float32Array(6), flags: new Uint8Array(2), cellOf: new Uint32Array(2),
@@ -314,9 +370,45 @@ describe('the underpainting', () => {
     expect(joined[6]).toBeCloseTo(0.25, 6)
   })
 
+  it('has no seam where the band meets the lattice, at the default plane gradient: no step across the band’s edge steeper than the plan’s own', () => {
+    // the plan's value alone (no mix, no deviation of the curve or the seeded one), but the plane gradient at its default 0.45: the lattice
+    // samples beside the band carry the plane's step, and the band meets them through its ring
+    const params = resolvePaintParams({ seed: 1, mix: { strength: 0 }, curve: { devL: 0, devC: 0, devH: 0 }, value: { deviation: 0 } })
+    expect(params.edges.planeGradient).toBe(0.45)
+    // the camera at 200/2 with the key light at 30/5 and a sphere of 60 px is the steepest case there is (the light at the limb: the plan climbs 0.12
+    // in a pixel); the others are the lab's view and a high side light
+    const cases: [ViewOpts, number, number][] = [
+      [{ azimuth: 200, elevation: 2, lightAzimuth: 30, lightElevation: 5 }, 60, 0.04],
+      [{ azimuth: 30, elevation: 25 }, 120, 0.04],
+      [{ azimuth: 0, elevation: 40, lightAzimuth: -60, lightElevation: 45 }, 120, 0.04],
+      [{ azimuth: 30, elevation: 25 }, 60, 0.04],
+    ]
+    for (const [opts, radius, allowed] of cases) {
+      const m = made(params, LOCALS[3][1], opts, false, [640, 480, radius])
+      const field = buildUnderpaintField(m.an, m.g)
+      const under = underpaintImage(field, params, m.an.env)
+      const valueAt = (i: number) => 0.62 + (linearToOklab(under[3 * i], under[3 * i + 1], under[3 * i + 2])[0] - 0.6) / 0.8
+      const live = (i: number) => m.g.mark[i] === 0 && !Number.isNaN(under[3 * i])
+      let pairs = 0
+      let worst = 0
+      for (let y = 1; y < m.g.height; y++) {
+        for (let x = 1; x < m.g.width; x++) {
+          const i = y * m.g.width + x
+          for (const j of [i - 1, i - m.g.width]) {
+            if (!live(i) || !live(j) || (field.ownerFam[i] === FAM_BAND) === (field.ownerFam[j] === FAM_BAND)) continue
+            pairs++
+            worst = Math.max(worst, Math.abs(valueAt(i) - valueAt(j)) - Math.abs(m.an.plan.u[i] - m.an.plan.u[j]))
+          }
+        }
+      }
+      expect(pairs, `radius ${radius}`).toBeGreaterThan(100)
+      expect(worst, `${JSON.stringify(opts)}, radius ${radius}`).toBeLessThanOrEqual(allowed)
+    }
+  })
+
   it('fills the pixels of the band from their own colours, not from either family: the colour made at the plan’s value, or the donor sample’s', () => {
     // pixel 1 is in the band (made from donor sample 1, the shadow side's blue); its own colour is a dark green
-    const field = { ...fieldOf([FAM_LIGHT, FAM_BAND, FAM_SHADOW, FAM_SHADOW], [FAM_LIGHT, FAM_SHADOW]), bandPix: Int32Array.from([1]), bandDonor: Int32Array.from([1]), bandU: Float32Array.from([0.4]) }
+    const field = { ...fieldOf([FAM_LIGHT, FAM_BAND, FAM_SHADOW, FAM_SHADOW], [FAM_LIGHT, FAM_SHADOW]), bandPix: Int32Array.from([1]), bandDonor: Int32Array.from([1]), bandU: Float32Array.from([0.4]), bandW: Float32Array.from([1]) }
     const own = fillUnderpaint(field, LIGHT_RED_DARK_BLUE, Float32Array.from([0, 0.5, 0]))
     expect(Array.from(own.slice(3, 6))).toEqual([0, 0.5, 0])
     // the pixels beside it keep their families' samples

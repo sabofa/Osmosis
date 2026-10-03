@@ -62,6 +62,9 @@ export interface EdgeRun {
   // of an outline is a dark edge and its lit side a light one.
   uAs?: Float32Array
   uBs?: Float32Array
+  // The lowest value on the figure's side along the way in from the outline (the pixel 3 px inside is uAs): at a limb the normal turns
+  // fast, so the pixel inside can be lit where the outline itself is already in the shadow. The family of a stretch is read from this.
+  uAmin?: Float32Array
 }
 
 export interface EdgeMap {
@@ -101,6 +104,7 @@ export interface RunSpec {
   // Per-sample plan values of the two sides (a contour, whose sides are pixels, not planes).
   uA?: ArrayLike<number>
   uB?: ArrayLike<number>
+  uMin?: ArrayLike<number>
 }
 
 export const edgeClassOf = (h: number, p: PaintParams): number =>
@@ -573,7 +577,7 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
     if (con < 0.03) hh = Math.min(hh, params.edges.lostBelow - 0.01) // no visible transition: lost
     // the outline of a form in shadow, against light canvas, is where two families meet: a FOUND edge (the depth and
     // the focal weights can make a far limb read soft, and a soft one is blended with the canvas)
-    else if (type === 'silhouette' && uAs && uA <= plan.capU && uB >= plan.floorU) hh = Math.max(hh, params.edges.softBelow + 0.01)
+    else if (type === 'silhouette' && uAs && (spec.uMin ? Math.min(uA, spec.uMin[i]) : uA) <= plan.capU && uB >= plan.floorU) hh = Math.max(hh, params.edges.softBelow + 0.01)
     hv[i] = clamp(hh, 0, 1)
     raw[i] = edgeClassOf(hv[i], params)
     // the surface under the sample, on the figure's side of the edge (the other side of a silhouette is the background, which has no
@@ -598,6 +602,7 @@ function buildEdgeRun(rc: RunCtx, spec: RunSpec): EdgeRun {
     a: id, b: q, type, pts, nrm, h: hv, cls, keys, uA: uA0, uB: uB0, contrast, mark: spec.mark,
     uAs: uAs ? Float32Array.from({ length: n }, (_, i) => uAs[i]) : undefined,
     uBs: uBs ? Float32Array.from({ length: n }, (_, i) => uBs[i]) : undefined,
+    uAmin: spec.uMin ? Float32Array.from({ length: n }, (_, i) => Math.min((uAs ? uAs[i] : uA0), (spec.uMin as ArrayLike<number>)[i])) : undefined,
   }
 }
 

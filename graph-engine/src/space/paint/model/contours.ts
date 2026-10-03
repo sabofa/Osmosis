@@ -277,13 +277,15 @@ export function contourRuns(an: PaintCtx): EdgeRun[] {
         const S: Sample[] = []
         const uA: number[] = []
         const uB: number[] = []
+        const uMin: number[] = []
         const flushRun = () => {
           if (S.length >= 8) {
-            out.push(edges.makeRun({ type: 'silhouette', mark: m, id: -1, S: S.slice(), uA: uA.slice(), uB: uB.slice() }))
+            out.push(edges.makeRun({ type: 'silhouette', mark: m, id: -1, S: S.slice(), uA: uA.slice(), uB: uB.slice(), uMin: uMin.slice() }))
           }
           S.length = 0
           uA.length = 0
           uB.length = 0
+          uMin.length = 0
         }
         for (let i = 0; i < rs.length; i++) {
           const a = rs[Math.max(0, i - 1)]
@@ -321,6 +323,13 @@ export function contourRuns(an: PaintCtx): EdgeRun[] {
           S.push({ p: [gx, gy], nx, ny, q, type: 'silhouette' })
           uA.push(plan.u[inside])
           uB.push(outside >= 0 && g.mark[outside] >= 0 ? plan.u[outside] : plan.uCanvas)
+          // the lowest value of the figure along the way in (a pixel and two pixels in, and the one 3 px in): a limb's normal turns fast
+          let lowest = plan.u[inside]
+          for (const along of [1, 2]) {
+            const iq = idxOf([Math.round(gx + nx * along), Math.round(gy + ny * along)])
+            if (iq >= 0 && g.mark[iq] === m) lowest = Math.min(lowest, plan.u[iq])
+          }
+          uMin.push(lowest)
         }
         flushRun()
       }
@@ -572,8 +581,13 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
   const maxSamples = Math.max(12, Math.round((3 * rp.length) / stepCss))
   for (const e of runs) {
     if (e.contrast < minContrast) continue
-    const segs = segmentRun(e.cls, e.keys, maxSamples)
-    for (const [a, b, cl0] of segs) {
+    // a stretch is of one family on the figure's side: the cut falls where the outline leaves the shadow family (its own side's
+    // value under the cap), so what a stretch is held to, and what it is bridged to, is true of all of it
+    const side = e.type === 'silhouette' && e.uAs ? (e.uAmin ?? e.uAs) : null
+    const kinds = side ? Uint8Array.from(e.cls, (c, i) => c | (side[i] <= an.plan.capU ? 4 : 0)) : e.cls
+    const segs = segmentRun(kinds, e.keys, maxSamples)
+    for (const [a, b, cl0k] of segs) {
+      const cl0 = cl0k & 3
       if (b - a < 6) continue
       const mid = Math.floor((a + b) / 2)
       let cl = cl0
@@ -590,9 +604,13 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
       const planeA = e.a
       const uA = e.uAs ? meanOver(e.uAs, a, b) : e.uA
       const uB = e.uBs ? meanOver(e.uBs, a, b) : e.uB
-      // the outline of a form in the SHADOW family against light canvas (the two families meet): a found edge, dark as
-      // its own side, never bridged to the canvas and never lighter than the cap
-      const shadowEdge = e.type === 'silhouette' && e.uAs !== undefined && e.uBs !== undefined && e.uAs[mid] <= an.plan.capU && e.uBs[mid] >= an.plan.floorU
+      // the outline of a form in the SHADOW family: held to its own side's family ceiling (the cap's lightness in the figure's
+      // own colour) whatever it is bridged to; and against light canvas (the two families meet) a FOUND edge, dark as its own
+      // side and never bridged to the canvas
+      // (an edge between two planes of the figure that are both in the shadow family is in it too; between a shadow plane and a lit one it is the
+      // terminator's own)
+      const shadowSide = side !== null ? side[mid] <= an.plan.capU : e.type === 'internal' && uA <= an.plan.capU && uB <= an.plan.capU
+      const shadowEdge = shadowSide && e.uBs !== undefined && e.uBs[mid] >= an.plan.floorU
       if (shadowEdge) cl = Math.max(cl, 2)
       const uLo = Math.min(uA, uB)
       const recA = sideRecipe(an, planeA, e.mark, uA, rng)
@@ -626,10 +644,12 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         edge: cl,
         seed: (e.keys[mid] ^ (a * 0x9e3779b1)) >>> 0,
       })
-      const push = (path: Float32Array, width: Float32Array, colour: DraftColour, alpha: number) => {
+      // the colour of the figure's own side alone: what a bridging stroke of this stretch is held to
+      const own: DraftColour = { a: recA, b: null, t: 0 }
+      const push = (path: Float32Array, width: Float32Array, colour: DraftColour, alpha: number, ownSide?: DraftColour) => {
         an.drafts.push({
           ...baseDraft(), path, width, world: worldOfPath(an, path), lab: colourOfDraft(colour, an.env), colour, alpha,
-          ...(shadowEdge ? holdOf(colour, FAM_SHADOW, an.plan.capU, an.env) : {}),
+          ...(shadowSide ? holdOf(colour, FAM_SHADOW, an.plan.capU, an.env, ownSide) : {}),
           jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++,
         })
       }
@@ -659,7 +679,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         const path = new Float32Array(2 * PATH_POINTS)
         const width = new Float32Array(PATH_POINTS)
         polylinePath(xs, ys, xs.length, rp.width * 2.6 * rng.range(0.88, 1.12), true, false, path, width)
-        push(path, width, { a: recA, b: srcB, t: 0.5 }, 0.8)
+        push(path, width, { a: recA, b: srcB, t: 0.5 }, 0.8, own)
         const nd = Math.max(1, Math.round(((b - a) * stepCss) / 34))
         for (let d = 0; d < nd; d++) {
           const ii = a + Math.floor(((d + 0.5) / nd) * (b - a))
@@ -673,7 +693,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
           const p2 = new Float32Array(2 * PATH_POINTS)
           const w2 = new Float32Array(PATH_POINTS)
           polylinePath([cx - dx * len * 0.45, cx + dx * len * 0.55], [cy - dy * len * 0.45, cy + dy * len * 0.55], 2, rp.width * 1.9 * rng.range(0.88, 1.12), true, false, p2, w2)
-          push(p2, w2, { a: lighter, b: darker, t: 0.3 }, 0.75)
+          push(p2, w2, { a: lighter, b: darker, t: 0.3 }, 0.75, own)
         }
       } else {
         // lost: a few strokes that bridge both sides, carrying one colour into the other
@@ -689,7 +709,7 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
           const p2 = new Float32Array(2 * PATH_POINTS)
           const w2 = new Float32Array(PATH_POINTS)
           polylinePath([cx - dx * len * 0.5, cx + dx * len * 0.5], [cy - dy * len * 0.5, cy + dy * len * 0.5], 2, rp.width * 1.8 * rng.range(0.88, 1.12), true, false, p2, w2)
-          push(p2, w2, { a: recA, b: srcB, t: 0.5 }, 0.6)
+          push(p2, w2, { a: recA, b: srcB, t: 0.5 }, 0.6, own)
         }
       }
     }

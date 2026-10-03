@@ -113,6 +113,12 @@ export interface PaintParams {
     coolHue: number
     kWarm: number
     kCool: number
+    // The most the warm or cool swing may turn a colour's hue away from its own, in degrees (both sides). The swing is
+    // relative to the local colour (toward its warmer or cooler neighbour, by kWarm or kCool of the arc to warmHue or
+    // coolHue) and capped here, so a terracotta's shadow is a dark red and never a purple. The tints, the sky and the
+    // bounce, the environment and the reflected-light mix keep the final hue within shiftMax + 3 degrees of the colour's
+    // own (a grey, with no hue to keep, takes them whole).
+    shiftMax: number
     accentHue: number
     accentMax: number
     planeStepA: number
@@ -260,7 +266,7 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   },
   curve: {
     lSlope: 0.8, lPivot: 0.62, cBase: 0.42, cPeak: 0.88, cCentre: 0.5, cWidth: 0.25,
-    warmHue: 75, coolHue: 280, kWarm: 0.4, kCool: 0.46, accentHue: 95, accentMax: 18,
+    warmHue: 75, coolHue: 280, kWarm: 0.4, kCool: 0.46, shiftMax: 12, accentHue: 95, accentMax: 18,
     planeStepA: 10, planeStepB: 6, tintWarm: 0.018, tintCool: 0.022,
     skyTint: 0.03, skyHue: 250, bounceTint: 0.034, bounceHue: 68, reflectedBounceMix: 0.55,
     devL: 0.01, devC: 0.06, devH: 2.2, colormapHue: 1 / 3,
@@ -369,7 +375,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
       ['lSlope', 'L slope', 0, 2, 0.01], ['lPivot', 'L pivot', 0, 1, 0.01], ['cBase', 'C base', 0, 2, 0.01],
       ['cPeak', 'C peak', 0, 2, 0.01], ['cCentre', 'C centre', 0, 1, 0.01], ['cWidth', 'C width', 0.02, 1, 0.01],
       ['warmHue', 'Warm hue', 0, 360, 1], ['coolHue', 'Cool hue', 0, 360, 1], ['kWarm', 'Warm pull', 0, 1, 0.01],
-      ['kCool', 'Cool pull', 0, 1, 0.01], ['accentHue', 'Accent hue', 0, 360, 1], ['accentMax', 'Accent max (°)', 0, 60, 0.5],
+      ['kCool', 'Cool pull', 0, 1, 0.01], ['shiftMax', 'Max hue shift (°)', 0, 60, 0.5], ['accentHue', 'Accent hue', 0, 360, 1], ['accentMax', 'Accent max (°)', 0, 60, 0.5],
       ['planeStepA', 'Plane step A (°)', 0, 40, 0.5], ['planeStepB', 'Plane step B (°)', 0, 40, 0.5],
       ['tintWarm', 'Warm tint', 0, 0.1, 0.001], ['tintCool', 'Cool tint', 0, 0.1, 0.001],
       ['skyTint', 'Sky tint', 0, 0.1, 0.001], ['skyHue', 'Sky hue', 0, 360, 1],

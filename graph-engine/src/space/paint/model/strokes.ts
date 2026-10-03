@@ -51,6 +51,9 @@ export interface StrokeDraft {
   fam?: number
   uBound?: number
   lBound?: number
+  // The colour whose lightness at uBound IS the bound, when it is not the stroke's own: an edge that bridges its own side
+  // to what lies across it (a blend) is held to its OWN side's family ceiling, not to the blend's.
+  holdColour?: DraftColour
   // The path in world space (3 per path point) and the world normal at the anchor, for re-projecting the stroke in
   // another view without the model (StrokeBatch.worldPath, worldNormal). Left out of a hand-made draft: zeros.
   world?: Float32Array
@@ -573,10 +576,13 @@ export function pathFromWalk(w: Walk, baseWidth: number, reverse: boolean, path:
 // ---- packing ----
 
 // The family fields of a draft made from a colour recipe at a pixel of a value family: its family, the bound of its value
-// there (plan values) and the lightness of its colour at that value (undefined where it has no bound: fam undefined).
-export function holdOf(colour: DraftColour, fam: number | undefined, uBound: number | undefined, env: RecipeEnv): Pick<StrokeDraft, 'fam' | 'uBound' | 'lBound'> {
+// there (plan values) and the lightness of its colour (or of `from`, the colour of its own side) at that value (undefined where
+// it has no bound: fam undefined).
+export function holdOf(
+  colour: DraftColour, fam: number | undefined, uBound: number | undefined, env: RecipeEnv, from?: DraftColour,
+): Pick<StrokeDraft, 'fam' | 'uBound' | 'lBound' | 'holdColour'> {
   if (fam === undefined || uBound === undefined) return {}
-  return { fam, uBound, lBound: lightnessAtValue(colour, uBound, env) }
+  return { fam, uBound, lBound: lightnessAtValue(from ?? colour, uBound, env), ...(from ? { holdColour: from } : {}) }
 }
 
 const ROLE_INDEX: Record<Role, number> = Object.fromEntries(ROLES.map((r, i) => [r, i])) as Record<Role, number>

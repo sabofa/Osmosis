@@ -24,8 +24,9 @@ describe('lighting curve', () => {
     [0.5, 0.464, 0.182, 53.8918],
     [0.62, 0.56, 0.161828, 58.8802],
     [0.9, 0.784, 0.085292, 57.6385],
-  ])('a terracotta local colour at u = %f follows the spec formulas', (u, L, C, h) => {
-    const out = makeCurve(DEFAULT_PAINT_PARAMS).lch({ local: TERRACOTTA, u, noDev: true })
+  ])('a terracotta local colour at u = %f follows the spec formulas, with the swing cap off', (u, L, C, h) => {
+    // (curve.shiftMax is the cap on the warm and cool swing and on the tints' hue: at 360 the formulas are the spec's, bit for bit)
+    const out = makeCurve(resolvePaintParams({ curve: { shiftMax: 360 } })).lch({ local: TERRACOTTA, u, noDev: true })
     expect(out[0]).toBeCloseTo(L, 5)
     expect(out[1]).toBeCloseTo(C, 5)
     expect(out[2]).toBeCloseTo(h, 3)
@@ -33,7 +34,7 @@ describe('lighting curve', () => {
 
   it('swings warm in the lights and cool in the shadows, with chroma peaking in the half-tones', () => {
     // tints and accent off, so only the swing moves the hue
-    const swing = resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0 } })
+    const swing = resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, shiftMax: 360 } })
     const at = (u: number) => makeCurve(swing).lch({ local: TERRACOTTA, u, noDev: true })
     // u = 0.9: s = 1, arc(38 -> 75) = +37, H = 38 + 0.40·37 = 52.8 (toward warm)
     expect(at(0.9)[2]).toBeCloseTo(52.8, 6)
@@ -128,7 +129,7 @@ describe('lighting curve', () => {
 
   it('rotates a colormapped colour by a third, and scales its tints by a third', () => {
     // with the accent and the tints off, the swing is exactly k·|s|·arc: a third of it
-    const bare = resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, skyTint: 0, bounceTint: 0 } })
+    const bare = resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, skyTint: 0, bounceTint: 0, shiftMax: 360 } })
     const curve = makeCurve(bare)
     for (const [u, swing] of [[0.24, -35.282], [0.9, 14.8]] as const) {
       // u = 0.24: 0.46·0.65·(−118) = −35.282;  u = 0.9: 0.40·1·37 = 14.8
@@ -145,9 +146,98 @@ describe('lighting curve', () => {
     const d = makeCurve(DEFAULT_PAINT_PARAMS)
     expect(d.lch({ local: grey, u: 0.9, noDev: true })[1]).toBeCloseTo(0.018, 9)
     expect(d.lch({ local: grey, u: 0.9, noDev: true, colormapped: true })[1]).toBeCloseTo(0.006, 9)
+    // the capped swing (12°) is shared the same way: a third of it, 4°
+    const capped = makeCurve(resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, skyTint: 0, bounceTint: 0 } }))
+    expect(capped.lch({ local: TERRACOTTA, u: 0.24, noDev: true })[2] - 38).toBeCloseTo(-12, 9)
+    expect(capped.lch({ local: TERRACOTTA, u: 0.24, noDev: true, colormapped: true })[2] - 38).toBeCloseTo(-4, 9)
     // colormapHue is the slider: 1 gives the whole rotation back
     const whole = makeCurve(resolvePaintParams({ curve: { colormapHue: 1 } }))
     expect(whole.lch({ local: grey, u: 0.9, noDev: true, colormapped: true })[1]).toBeCloseTo(0.018, 9)
+  })
+
+  describe('the swing is relative to the local colour and capped (curve.shiftMax)', () => {
+    const arc = (from: number, to: number) => ((to - from + 540) % 360) - 180
+    const BLUE = lchToLab(0.35, 0.12, 260)
+    // every zone of the shadow family (the contact 0.2, the core 0.24, the cast 0.32, up to the cap 0.352 and a little under), under every
+    // sky and bounce, with and without reflected light and the environment's share of the light
+    const shadows = [0.1, 0.2, 0.24, 0.32, 0.352]
+    const sweep = (curve: ReturnType<typeof makeCurve>, local: readonly number[]) => {
+      const hues: number[] = []
+      for (const u of shadows) for (const nz of [-1, -0.5, 0, 0.5, 1]) for (const bounce of [0, 0.5, 1.275]) for (const ambientShare of [0, 1]) hues.push(curve.lch({ local, u, nz, bounce, ambientShare, noDev: true })[2])
+      return hues
+    }
+
+    it('turns a colour toward its own warmer or cooler neighbour by at most shiftMax: a terracotta’s core is a dark red, a blue stays blue (hand values)', () => {
+      // swing alone: tints, accent, sky and bounce off
+      const bare = makeCurve(resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, skyTint: 0, bounceTint: 0 } }))
+      // terracotta 38°: u 0.24 would pull it 0.46·0.65·(−118) = −35.3° toward 280°, and u 0.9 0.40·37 = +14.8° toward 75°: held to ∓12
+      expect(bare.lch({ local: TERRACOTTA, u: 0.24, noDev: true })[2]).toBeCloseTo(26, 9)
+      expect(bare.lch({ local: TERRACOTTA, u: 0.9, noDev: true })[2]).toBeCloseTo(50, 9)
+      // a blue 260°: its cool target is 20° away, 0.46·0.65·20 = +5.98°: under the cap, as it was; the warm side 0.4·175 = 70°: held to 12
+      expect(bare.lch({ local: BLUE, u: 0.24, noDev: true })[2]).toBeCloseTo(265.98, 9)
+      expect(bare.lch({ local: BLUE, u: 0.9, noDev: true })[2]).toBeCloseTo(272, 9)
+      // the cap is the slider: 6° halves it, and 0 is no swing at all
+      const six = makeCurve(resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, skyTint: 0, bounceTint: 0, shiftMax: 6 } }))
+      expect(six.lch({ local: TERRACOTTA, u: 0.24, noDev: true })[2]).toBeCloseTo(32, 9)
+      const none = makeCurve(resolvePaintParams({ curve: { tintWarm: 0, tintCool: 0, accentMax: 0, skyTint: 0, bounceTint: 0, shiftMax: 0 } }))
+      expect(none.lch({ local: TERRACOTTA, u: 0.24, noDev: true })[2]).toBeCloseTo(38, 9)
+    })
+
+    it('keeps a terracotta’s shadows within 38° ± 15°, never toward purple, under every tint, sky, bounce and the environment', () => {
+      const curve = makeCurve(DEFAULT_PAINT_PARAMS)
+      for (const h of sweep(curve, TERRACOTTA)) expect(Math.abs(arc(38, h)), `hue ${h.toFixed(1)}`).toBeLessThanOrEqual(15 + 1e-6)
+      // the same colours before: a swing to 345° at the core, the purple Ben saw
+      const old = makeCurve(resolvePaintParams({ curve: { shiftMax: 360 } }))
+      expect(Math.max(...sweep(old, TERRACOTTA).map((h) => Math.abs(arc(38, h))))).toBeGreaterThan(45)
+    })
+
+    it('keeps a blue object’s shadows within its own hue ± 15°', () => {
+      for (const h of sweep(makeCurve(DEFAULT_PAINT_PARAMS), BLUE)) expect(Math.abs(arc(260, h)), `hue ${h.toFixed(1)}`).toBeLessThanOrEqual(15 + 1e-6)
+    })
+
+    it('holds the tints, the sky, the bounce and the environment to shiftMax + 3° of the colour’s own hue, at every value, as loud as the sliders go', () => {
+      // every colour term at its slider maximum, accent off: the colour's own hue is 38° and the swing is at its cap
+      const loud = resolvePaintParams({
+        curve: { tintWarm: 0.1, tintCool: 0.1, skyTint: 0.1, bounceTint: 0.1, reflectedBounceMix: 1, accentMax: 0 },
+        environment: { chroma: 0.2, absorption: 1 },
+      })
+      const curve = makeCurve(loud)
+      let worst = 0
+      for (let k = 0; k <= 20; k++) {
+        for (const nz of [-1, 0, 1]) for (const bounce of [0, 0.45]) {
+          const h = curve.lch({ local: TERRACOTTA, u: k / 20, nz, bounce, ambientShare: 1, noDev: true })[2]
+          worst = Math.max(worst, Math.abs(arc(38, h)))
+        }
+      }
+      expect(worst).toBeLessThanOrEqual(15 + 1e-6)
+      // without the hold (the cap off) the same colour terms turn it far past that
+      const free = makeCurve(resolvePaintParams({ ...loud, curve: { ...loud.curve, shiftMax: 360 } }))
+      let freeWorst = 0
+      for (let k = 0; k <= 20; k++) freeWorst = Math.max(freeWorst, Math.abs(arc(38, free.lch({ local: TERRACOTTA, u: k / 20, nz: 1, ambientShare: 1, noDev: true })[2])))
+      expect(freeWorst).toBeGreaterThan(40)
+    })
+
+    it('never touches lightness, however loud the colour terms: the swing and the hold turn the hue only', () => {
+      const loud = resolvePaintParams({ curve: { tintCool: 0.1, skyTint: 0.1, accentMax: 0 }, environment: { chroma: 0.2, absorption: 1 } })
+      const held = makeCurve(loud).lch({ local: TERRACOTTA, u: 0.24, nz: 1, ambientShare: 1, noDev: true })
+      const free = makeCurve(resolvePaintParams({ ...loud, curve: { ...loud.curve, shiftMax: 360 } })).lch({ local: TERRACOTTA, u: 0.24, nz: 1, ambientShare: 1, noDev: true })
+      expect(held[0]).toBeCloseTo(free[0], 12)
+      expect(held[0]).toBeCloseTo(0.56 + 0.8 * (0.24 - 0.62), 12)
+      expect(Math.abs(arc(38, held[2]))).toBeLessThan(Math.abs(arc(38, free[2])))
+    })
+
+    it('restores roughly the old behaviour at shiftMax 60, and takes a grey’s tints whole at any cap', () => {
+      const at = (shiftMax: number) => makeCurve(resolvePaintParams({ curve: { shiftMax } })).lch({ local: TERRACOTTA, u: 0.24, noDev: true })[2]
+      // the core hue at the defaults is the spec's 355.3° (42.7° from the colour's own); a cap of 12 holds it to within 15°, a cap of 60 does not
+      expect(Math.abs(arc(38, at(12)))).toBeLessThanOrEqual(15 + 1e-6)
+      expect(at(60)).toBeCloseTo(at(360), 9)
+      expect(Math.abs(arc(38, at(60)))).toBeGreaterThan(40)
+      // a grey has no hue of its own to keep: the cool tint and the sky are whole, whatever the cap
+      const grey = lchToLab(0.5, 0, 0)
+      const shade = (shiftMax: number) => makeCurve(resolvePaintParams({ curve: { shiftMax } })).lch({ local: grey, u: 0.2, nz: 1, noDev: true })
+      expect(shade(0)[2]).toBeCloseTo(260.552, 2)
+      expect(shade(12)[1]).toBeCloseTo(0.045051, 5)
+    })
   })
 
   it('adds the plane hue and chroma steps, the lightness scale and the per-stroke jitter', () => {

@@ -342,7 +342,7 @@ export function recolourFrame(previous: PaintFrame, params: PaintParams): PaintF
     if (!d.colour) continue
     d.lab = colourOfDraft(d.colour, env)
     // the bound of the value rule is a colour too (the recipe at the family's bound value): made again with the colour
-    if (d.fam !== undefined && d.uBound !== undefined) d.lBound = lightnessAtValue(d.colour, d.uBound, env)
+    if (d.fam !== undefined && d.uBound !== undefined) d.lBound = lightnessAtValue(d.holdColour ?? d.colour, d.uBound, env)
   }
   const { batch, loads, byRole } = packStrokes(drafts, params)
   const frame: PaintFrame = {
