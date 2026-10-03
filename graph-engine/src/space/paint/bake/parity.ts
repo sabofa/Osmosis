@@ -63,6 +63,8 @@ export interface ParityResult {
   bakedVisible: number
   visibleRatio: number
   byRole: Record<Role, RoleCount>
+  // The (particle, role) pairs of the surface roles by role: in the model's frame, in the baked frame (all, and the ones the G-buffer shows), and in both.
+  pairsByRole: Record<string, { model: number; baked: number; bakedVisible: number; both: number }>
   // The underpainting: the pixels both cover (same mark), the mean OKLab distance, and the pixels only one covers.
   underpaintPixels: number
   underpaintDeltaE: number
@@ -232,6 +234,13 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
     r.n++
     r.s += d
   }
+  const pairsByRole: ParityResult['pairsByRole'] = Object.fromEntries(SURFACE_ROLES.map((r) => [r, { model: 0, baked: 0, bakedVisible: 0, both: 0 }]))
+  for (const k of modelPairs.keys()) pairsByRole[ROLES[k % ROLES.length]].model++
+  for (const k of bakedPairs.keys()) {
+    const r = pairsByRole[ROLES[k % ROLES.length]]
+    r.baked++
+    if (modelPairs.has(k)) r.both++
+  }
   const byRole = Object.fromEntries(ROLES.map((r) => [r, { model: 0, baked: 0 }])) as Record<Role, RoleCount>
   for (let i = 0; i < model.count; i++) byRole[ROLES[model.role[i]]].model++
   for (let o = 0; o < frame.count; o++) byRole[ROLES[frame.role[o]]].baked++
@@ -255,7 +264,10 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
       const facing = Math.max(0.1, Math.abs(frame.worldNormal[3 * o] * -view.viewDir[0] + frame.worldNormal[3 * o + 1] * -view.viewDir[1] + frame.worldNormal[3 * o + 2] * -view.viewDir[2]))
       const slope = Math.sqrt(Math.max(0, 1 - facing * facing)) / facing
       const eps = (g.scale / pxPerUnit(fc, x, y, z)) * (1.5 + 1.5 * slope)
-      if (g.mark[gi] === baked.mark[i] && Math.abs(g.depth[gi] - out[2]) <= eps) visible++
+      if (g.mark[gi] === baked.mark[i] && Math.abs(g.depth[gi] - out[2]) <= eps) {
+        visible++
+        pairsByRole[ROLES[frame.role[o]]].bakedVisible++
+      }
     }
   }
 
@@ -295,6 +307,7 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
     bakedVisible: visible,
     visibleRatio: visible / Math.max(1, surfaceModel),
     byRole,
+    pairsByRole,
     underpaintPixels: px,
     underpaintDeltaE: px > 0 ? usum / px : 0,
     underpaintOnlyModel: onlyModel,

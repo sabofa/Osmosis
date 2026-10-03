@@ -11,6 +11,8 @@ vi.setConfig({ testTimeout: 300_000 })
 const show = (name: string, r: ParityResult): void => {
   if (!process.env.PARITY_PRINT) return
   const f = (v: number, d = 3): string => v.toFixed(d)
+  const pairs = Object.entries(r.pairsByRole).map(([k, v]) => `${k} model ${v.model} / baked ${v.baked} (visible ${v.bakedVisible}) / both ${v.both}`).join('; ')
+  console.log(`${name}: (particle, role) pairs: ${pairs}`)
   const roles = Object.entries(r.byRole).filter(([, c]) => c.model + c.baked > 0).map(([k, c]) => `${k} ${c.model}/${c.baked}`).join(', ')
   console.log(
     `${name}: particles drawn by either ${r.particlesEither}, by both ${r.particlesBoth}; role agreement ${f(r.roleAgreement)}; ` +
