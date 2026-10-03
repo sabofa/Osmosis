@@ -679,3 +679,63 @@ describe("updated_at", () => {
     expect([changed(a.id), changed(b.id), changed(z.id)]).toEqual([false, false, true]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The ruling: "unplaced" means a live node with no placement in a live
+// (non-trashed) container. removePlacement and destroyNode use that one
+// definition (listRoots and search in reads.ts use it too).
+// ---------------------------------------------------------------------------
+
+describe("unplaced means no placement in a live container", () => {
+  it("removing a file's last live placement leaves it unplaced even when a placement in a trashed container remains", () => {
+    const db = openTestDb();
+    const course = createNode(db, { kind: "course", title: "micro" }).node;
+    const folder = createNode(db, { kind: "folder", title: "old" }).node;
+    const { node, placement } = md(db, "n", { container_id: course.id });
+    placeNode(db, { container_id: folder.id, child_id: node.id });
+    destroyNode(db, folder.id); // the folder is trashed; node keeps a hidden placement in it
+    expect(removePlacement(db, placement!.id).became_unplaced).toBe(true);
+    expect(count(db, "ws_placement")).toBe(1); // the hidden placement in the trashed folder is still there
+  });
+
+  it("a remaining placement in a live container still means not unplaced", () => {
+    const db = openTestDb();
+    const a = createNode(db, { kind: "folder", title: "a" }).node;
+    const b = createNode(db, { kind: "folder", title: "b" }).node;
+    const dead = createNode(db, { kind: "folder", title: "dead" }).node;
+    const { node, placement } = md(db, "n", { container_id: a.id });
+    placeNode(db, { container_id: b.id, child_id: node.id });
+    placeNode(db, { container_id: dead.id, child_id: node.id });
+    destroyNode(db, dead.id);
+    expect(removePlacement(db, placement!.id).became_unplaced).toBe(false); // still live in b
+  });
+
+  it("destroy with orphans takes a file placed in the course and in its subfolder, but not one placed in another live container", () => {
+    const db = openTestDb();
+    const course = createNode(db, { kind: "course", title: "micro" }).node;
+    const sub = createNode(db, { kind: "folder", title: "unit 1", place_in: { container_id: course.id } }).node;
+    const both = md(db, "in-course-and-sub", { container_id: course.id }).node;
+    placeNode(db, { container_id: sub.id, child_id: both.id });
+    const subOnly = md(db, "sub-only", { container_id: sub.id }).node;
+    const other = createNode(db, { kind: "folder", title: "elsewhere" }).node;
+    const shared = md(db, "also-elsewhere", { container_id: course.id }).node;
+    placeNode(db, { container_id: sub.id, child_id: shared.id });
+    placeNode(db, { container_id: other.id, child_id: shared.id });
+    const stranger = md(db, "unrelated-and-unplaced").node;
+
+    const { trashed } = destroyNode(db, course.id, { withOrphans: true });
+    expect(trashed.sort()).toEqual([course.id, sub.id, both.id, subOnly.id].sort());
+    expect(nodeRow(db, shared.id).trashed_at).toBeNull();
+    expect(nodeRow(db, stranger.id).trashed_at).toBeNull(); // not under the course at all
+  });
+
+  it("a placement in an already-trashed container does not keep a child out of the orphans", () => {
+    const db = openTestDb();
+    const course = createNode(db, { kind: "course", title: "micro" }).node;
+    const gone = createNode(db, { kind: "folder", title: "gone" }).node;
+    const { node } = md(db, "n", { container_id: course.id });
+    placeNode(db, { container_id: gone.id, child_id: node.id });
+    destroyNode(db, gone.id);
+    expect(destroyNode(db, course.id, { withOrphans: true }).trashed.sort()).toEqual([course.id, node.id].sort());
+  });
+});

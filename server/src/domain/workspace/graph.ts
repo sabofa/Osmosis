@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "../errors.js";
 import { getFileType } from "./fileTypes.js";
 import { normalizeName, sameName } from "./names.js";
+import { inSavepoint } from "./savepoint.js";
 import { AUTHORS, CONTAINER_KINDS, KIND_TAGS, MAY_HOLD, NODE_KINDS } from "./types.js";
 import type { Author, KindTag, NodeKind, NodeRow, PlacementRow } from "./types.js";
 
@@ -36,21 +37,6 @@ export interface CreateNodeInput {
 }
 
 const NAME_LIMIT = 200;
-
-// SAVEPOINT / RELEASE / ROLLBACK TO rather than BEGIN: a caller may already be
-// inside a transaction, and a nested BEGIN is an error.
-function inSavepoint<T>(db: DatabaseSync, name: string, fn: () => T): T {
-  db.exec(`SAVEPOINT ${name}`);
-  try {
-    const result = fn();
-    db.exec(`RELEASE ${name}`);
-    return result;
-  } catch (err) {
-    db.exec(`ROLLBACK TO ${name}`);
-    db.exec(`RELEASE ${name}`);
-    throw err;
-  }
-}
 
 export function getNode(db: DatabaseSync, id: string): NodeRow {
   const row = db.prepare("SELECT * FROM ws_node WHERE id = ?").get(id) as NodeRow | undefined;
@@ -195,11 +181,18 @@ export function movePlacement(db: DatabaseSync, placementId: string, containerId
 
 // "Remove" means remove from here: one placement goes, the node stays, and if
 // that was its last placement the node is simply unplaced, not destroyed.
+// Unplaced means no placement in a live container: a placement that remains
+// inside a trashed container is hidden, so it does not count.
 export function removePlacement(db: DatabaseSync, placementId: string): { removed: PlacementRow; became_unplaced: boolean } {
   return inSavepoint(db, "ws_remove_placement", () => {
     const removed = getPlacement(db, placementId);
     db.prepare("DELETE FROM ws_placement WHERE id = ?").run(removed.id);
-    const left = db.prepare("SELECT COUNT(*) AS n FROM ws_placement WHERE child_id = ?").get(removed.child_id) as { n: number };
+    const left = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM ws_placement p JOIN ws_node c ON c.id = p.container_id
+          WHERE p.child_id = ? AND c.trashed_at IS NULL`
+      )
+      .get(removed.child_id) as { n: number };
     stamp(db, removed.container_id);
     return { removed, became_unplaced: left.n === 0 };
   });
@@ -298,33 +291,46 @@ export function setKindTag(db: DatabaseSync, nodeId: string, tag: KindTag | null
 
 // Sends a node to the trash. No placement is deleted: a trashed node keeps
 // its places, hidden, so restore puts everything back. With `withOrphans`,
-// each direct child placed nowhere else goes too — recursively through the
-// containers among them. Children that are shared, or already trashed, stay.
+// the nodes that would be left unplaced go too. That is a fixpoint: start
+// from S = {the node}, and add a live node to S when every one of its
+// placements is in a container that is trashed or in S. So a file placed in a
+// course and in that course's subfolder goes with the course, while a file
+// that is also placed in some other live container stays.
 export function destroyNode(db: DatabaseSync, nodeId: string, opts?: { withOrphans?: boolean }): { trashed: string[] } {
   return inSavepoint(db, "ws_destroy_node", () => {
     const node = getNode(db, nodeId);
     if (node.trashed_at) throw new DomainError("trashed", `"${node.title}" is already in the trash.`);
-    const trashed: string[] = [];
-    const trash = (id: string) => {
-      db.prepare("UPDATE ws_node SET trashed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
-      trashed.push(id);
-    };
-    trash(node.id);
+    const doomed = [node.id];
     if (opts?.withOrphans) {
-      const orphans = db.prepare(
-        `SELECT p.child_id AS id, n.kind AS kind FROM ws_placement p JOIN ws_node n ON n.id = p.child_id
-          WHERE p.container_id = ? AND n.trashed_at IS NULL
-            AND (SELECT COUNT(*) FROM ws_placement q WHERE q.child_id = p.child_id) = 1`
+      const inSet = new Set(doomed);
+      const childrenOf = db.prepare(
+        `SELECT DISTINCT p.child_id AS id FROM ws_placement p JOIN ws_node n ON n.id = p.child_id
+          WHERE p.container_id = ? AND n.trashed_at IS NULL`
       );
-      const queue = [node.id];
-      for (let containerId = queue.shift(); containerId !== undefined; containerId = queue.shift()) {
-        for (const child of orphans.all(containerId) as { id: string; kind: NodeKind }[]) {
-          trash(child.id);
-          if (CONTAINER_KINDS.includes(child.kind)) queue.push(child.id);
+      const placementsOf = db.prepare(
+        `SELECT p.container_id AS container_id, c.trashed_at AS trashed_at FROM ws_placement p
+           JOIN ws_node c ON c.id = p.container_id WHERE p.child_id = ?`
+      );
+      // A candidate is a live child of something in S. Each pass can only grow
+      // S, so it stops when a whole pass adds nothing.
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const containerId of [...inSet]) {
+          for (const { id } of childrenOf.all(containerId) as { id: string }[]) {
+            if (inSet.has(id)) continue;
+            const places = placementsOf.all(id) as { container_id: string; trashed_at: string | null }[];
+            if (places.every((p) => p.trashed_at !== null || inSet.has(p.container_id))) {
+              inSet.add(id);
+              doomed.push(id);
+              grew = true;
+            }
+          }
         }
       }
     }
-    return { trashed };
+    const trash = db.prepare("UPDATE ws_node SET trashed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?");
+    for (const id of doomed) trash.run(id);
+    return { trashed: doomed };
   });
 }
 
