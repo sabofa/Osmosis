@@ -3,12 +3,11 @@
 //   cd graph-engine && npx tsx src/space/paint/bake/plan.bench.mts [runs]
 //
 // The scenes are built as the lab builds them (review/src/paintLabCamera.ts prepareFigure: the figure's space spec through
-// the kernel, then the scene in world coordinates); the light is the lab's default (azimuth and elevation against the
-// authored camera, held fixed in the world); the reference world per px is the authored camera's at the Tune stage's size.
+// the kernel, then the scene in world coordinates); the light is the lab's default (light.worldFixed 1: a direction in the world); the reference world per px is the authored camera's at the Tune stage's size.
 // Each scene is planned `runs` times (default 3) and the median reported, after one warm-up.
 
 import { cameraMatrices } from '../../camera/projection'
-import { prepareFigure, lightDirection } from '../../../../../review/src/paintLabCamera'
+import { prepareFigure, keyLightDirection } from '../../../../../review/src/paintLabCamera'
 import { figureById } from '../../../../../review/src/paintLabFigures'
 import { DEFAULT_PAINT_PARAMS } from '../params'
 import { buildWorldPlan, type WorldPlan } from './plan'
@@ -25,7 +24,7 @@ for (const id of IDS) {
   const { built, worldScene } = prepareFigure(figure)
   const camera = cameraMatrices(built.authored, built.world, VIEWPORT, built.projection)
   const perPx = camera.worldPerPixel
-  const light = lightDirection(camera.basis, params.light.azimuth, params.light.elevation)
+  const light = keyLightDirection(camera.basis, params.light)
   const len = Math.hypot(light[0], light[1], light[2])
   const L: [number, number, number] = [light[0] / len, light[1] / len, light[2] / len]
 
