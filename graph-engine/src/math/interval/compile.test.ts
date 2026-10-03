@@ -77,11 +77,15 @@ describe('the interval compiler validates with the scalar compile', () => {
 })
 
 describe('names resolve as the scalar compile resolves them', () => {
-  it('a bound variable shadows a parameter and a constant; the parameter shadows pi', () => {
-    const scope = makeScope({ params: [['x', 100], ['pi', 7]], functions: [['x2', fn([], '5')]] })
-    expect(at('x', ['x'], scope, 1, 2)).toMatchObject({ lo: 1, hi: 2 })
+  it('a bound variable shadows a parameter and a constant; a parameter shadows pi', () => {
+    const scope = makeScope({ params: [['x', 100], ['pi', 7]], functions: [['y', fn([], '5')]] })
+    // x and y are the inputs, not the parameter 100 or the constant 5
+    expect(within(at('x + y', ['x', 'y'], scope, 1, 2, 10, 20), 11, 22)).toBe(true)
     // pi is a parameter here, read at call time
     expect(at('pi', [], scope)).toEqual({ lo: 7, hi: 7, v: CONTINUOUS })
+    // and with no input called y, y is the constant
+    expect(at('x + y', ['x'], scope, 1, 2)).toMatchObject({ v: CONTINUOUS })
+    expect(within(at('x + y', ['x'], scope, 1, 2), 6, 7)).toBe(true)
   })
 
   it('a user function of that name wins over a built-in and over a bound variable of the call name', () => {
@@ -248,7 +252,8 @@ describe('reserved constructs', () => {
   it('the union of pieces keeps a zero bound honest, also through a piece that is a piecewise', () => {
     // [+0, +0] joined with [-0, 1] holds both zeros: a bottom of exactly -0 would deny +0 (1 / the box reads it)
     const direct = at('{x < 0.5: 0, x}', ['x'], plain, -0, 1)
-    expect(direct.lo < 0 || Object.is(direct.lo, 0) === false).toBe(true)
+    expect(direct.lo).toBeLessThan(0)
+    expect(direct.hi).toBeGreaterThanOrEqual(1)
     const nested = at('{x < 0.5: 0, x < 2: {x < 7: x, 2}, 5}', ['x'], plain, -0, 1)
     expect(nested.lo < 0).toBe(true)
     expect(nested.hi).toBeGreaterThanOrEqual(1)
@@ -501,10 +506,12 @@ describe('the loop budget', () => {
     // inside the first, the second adds its terms every time it is entered
     expect(at('sum(i = 1 to 2, sum(k = 1 to n, 1))', [], scope).v).toBe(UNKNOWN)
     expect(compileScalar(p('sum(i = 1 to 2, sum(k = 1 to n, 1))'), [], scope)()).toBeNaN()
-    // an integrand's loops are counted on their own, and put back after
-    const around = 'sum(i = 1 to 2, integral(t = 0 to 1, sum(k = 1 to n, 1)) * 0 + i)'
+    // an integrand's loops are counted on their own, and put back after: 40000 inside the integral and
+    // 2 around it is no nest of 80000 (the integral reads no variable and no parameter, so it is a number)
+    const around = 'sum(i = 1 to 2, integral(t = 0 to 1, sum(k = 1 to 40000, 1)) * 0 + i)'
     expect(compileScalar(p(around), [], scope)()).toBe(3)
-    expect(at(around, [], scope).v).toBeLessThanOrEqual(PARTIAL)
+    expect(within(at(around, [], scope), 3, 3)).toBe(true)
+    expect(at(around, [], scope).v).toBe(CONTINUOUS)
   })
 
   it('every evaluation starts a new count', () => {
