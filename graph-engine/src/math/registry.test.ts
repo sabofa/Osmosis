@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseExprString as p } from '../parser/parseExpr'
+import type { Expr } from '../parser/types'
 import { BUILTIN_NAMES, builtinArity, CompileError, compileScalar } from './compile'
 import { diff } from './diff'
 import { call, num, variable } from './expr'
@@ -26,10 +27,42 @@ describe('the registry triple', () => {
   })
 
   // Each argument position is differentiated in turn, the others held at
-  // constants; 'refuses' throws a CompileError, 'rule' agrees with a central
-  // difference wherever the function is smooth there.
+  // constants; 'refuses' throws a CompileError saying there is no rule, 'rule' agrees with a
+  // central difference wherever the function is smooth there.
   const scope = makeScope()
   const rand = mulberry32(4242)
+
+  const refusal = (expr: Expr): Error | undefined => {
+    try {
+      diff(expr, 'x', scope)
+    } catch (err) {
+      return err as Error
+    }
+    return undefined
+  }
+  const expectRefusal = (label: string, expr: Expr) => {
+    const err = refusal(expr)
+    expect(err, `${label} should be refused`).toBeInstanceOf(CompileError)
+    expect(err!.message, label).toContain('No derivative rule')
+  }
+  const expectRule = (label: string, expr: Expr) => {
+    const f = compileScalar(expr, ['x'], scope)
+    const d = compileScalar(simplify(diff(expr, 'x', scope)), ['x'], scope)
+    let checked = 0
+    for (let i = 0; i < 200 && checked < 20; i++) {
+      const x = (rand() * 2 - 1) * 3
+      const h = 1e-6 * Math.max(1, Math.abs(x))
+      const fd = (f(x + h) - f(x - h)) / (2 * h)
+      const second = (f(x + h) - 2 * f(x) + f(x - h)) / (h * h)
+      // skip points where f is undefined, jumps, or bends too sharply for
+      // a central difference to judge
+      if (![f(x - h), f(x), f(x + h), d(x)].every(Number.isFinite) || Math.abs(second) * h > 1e-3 * Math.max(1, Math.abs(fd))) continue
+      expect(Math.abs(d(x) - fd), `${label}'(${x}) = ${d(x)} vs ${fd}`).toBeLessThanOrEqual(1e-5 * Math.max(1, Math.abs(fd)))
+      checked++
+    }
+    expect(checked, `${label}: too few smooth points to judge`).toBeGreaterThan(0)
+  }
+
   // root(n, x) is NaN for a non-whole index, so its radicand is tested with a whole one.
   const CONSTANTS: Record<string, number[]> = { root: [3, 2] }
   for (const name of [...BUILTIN_NAMES].sort()) {
@@ -40,31 +73,26 @@ describe('the registry triple', () => {
       const constants = (CONSTANTS[name] ?? [0.7, 2, 3]).slice(0, arity)
       for (let position = 0; position < arity; position++) {
         const args = constants.map((c, i) => (i === position ? variable('x') : p(String(c))))
-        // root's index must be constant in the variable: diff refuses it there.
-        if (name === 'root' && position === 0) {
-          expect(() => diff(call(name, ...args), 'x', scope)).toThrow(CompileError)
-          continue
-        }
         const expr = call(name, ...args)
-        if (entry.derivative === 'refuses') {
-          expect(() => diff(expr, 'x', scope), `${name} position ${position}`).toThrow(CompileError)
-          continue
-        }
-        const f = compileScalar(expr, ['x'], scope)
-        const d = compileScalar(simplify(diff(expr, 'x', scope)), ['x'], scope)
-        let checked = 0
-        for (let i = 0; i < 200 && checked < 20; i++) {
-          const x = (rand() * 2 - 1) * 3
-          const h = 1e-6 * Math.max(1, Math.abs(x))
-          const fd = (f(x + h) - f(x - h)) / (2 * h)
-          const second = (f(x + h) - 2 * f(x) + f(x - h)) / (h * h)
-          // skip points where f is undefined, jumps, or bends too sharply for
-          // a central difference to judge
-          if (![f(x - h), f(x), f(x + h), d(x)].every(Number.isFinite) || Math.abs(second) * h > 1e-3 * Math.max(1, Math.abs(fd))) continue
-          expect(Math.abs(d(x) - fd), `${name}'(${x}) = ${d(x)} vs ${fd}`).toBeLessThanOrEqual(1e-5 * Math.max(1, Math.abs(fd)))
-          checked++
-        }
-        expect(checked, `${name}: too few smooth points to judge`).toBeGreaterThan(0)
+        const label = `${name} position ${position}`
+        // root's index must be constant in the variable: diff refuses it there.
+        if (name === 'root' && position === 0) expectRefusal(label, expr)
+        else if (entry.derivative === 'refuses') expectRefusal(label, expr)
+        else expectRule(label, expr)
+      }
+    })
+  }
+
+  // The arities above the minimum: log(a, b) (the base is differentiated too), and min, max and
+  // hypot of three arguments (diff folds the first two, and hypot sums over every argument).
+  const EXTRA: [string, number[]][] = [['log', [2, 3]], ['min', [0.7, 2, -1]], ['max', [0.7, 2, -1]], ['hypot', [0.7, 2, 3]]]
+  for (const [name, constants] of EXTRA) {
+    it(`${name} of ${constants.length} arguments: its derivative rule holds at every position`, () => {
+      expect(BUILTIN_REGISTRY.get(name)!.derivative).toBe('rule')
+      expect(builtinArity(name)!.max).toBeGreaterThanOrEqual(constants.length)
+      for (let position = 0; position < constants.length; position++) {
+        const args = constants.map((c, i) => (i === position ? variable('x') : p(String(c))))
+        expectRule(`${name}/${constants.length} position ${position}`, call(name, ...args))
       }
     })
   }

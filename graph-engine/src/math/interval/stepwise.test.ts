@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseExprString as p } from '../../parser/parseExpr'
-import { compileScalar, floorMod } from '../compile'
+import { compileScalar, floorMod, roundHalfAway } from '../compile'
 import { makeScope } from '../scope'
-import { CONTINUOUS, DEFINED, iv, PARTIAL, UNKNOWN, type Iv } from './core'
+import { CONTINUOUS, DEFINED, iv, PARTIAL, set, UNKNOWN, type Iv } from './core'
 import type { Twin } from './elementary'
 import {
   box, checkAround, checkComposed, doublesIn, fmt, interval, isEmptyIv, must, nextDown, nextUp, pointsOf, run1, run2, sameIv as same, show, signOf, stepDoubles, within, withZeroSigns,
@@ -390,6 +390,73 @@ describe('hypot and mod over windows of consecutive doubles', () => {
 // that sign, or a side on which no zero is reached (lo === +0 says no -0 is attained, hi === -0
 // says no +0 is). floor, ceil, round and sign produce zeros of their own.
 // ---------------------------------------------------------------------------
+
+// The check every sweep ends in (`must`) reads the zero-bound invariant in both directions: a zero
+// the result holds is a zero strictly inside it or an END of that sign. A check that read only half
+// of it would pass a floor that forgets `seal`: `[-1, +0]` for `[-0.5, 0.5]` holds no -0 by the
+// convention (sqrt reads it as `[+0, +0]`), and the scalar gives -0 at x = -0.
+describe('the zero-bound check reads both directions of the invariant', () => {
+  const holds = (lo: number, hi: number, y: number) => {
+    let ok = true
+    try {
+      must(iv(lo, hi), y, () => 'x')
+    } catch {
+      ok = false
+    }
+    return ok
+  }
+
+  it('rejects a zero the box does not hold, whichever way', () => {
+    expect(holds(-1, 0, -0)).toBe(false) // a +0 top over a negative bottom holds no -0
+    expect(holds(-0, 1, 0)).toBe(false) // a -0 bottom under a positive top holds no +0
+    expect(holds(0, 5, -0)).toBe(false) // a +0 bottom holds no -0
+    expect(holds(-5, -0, 0)).toBe(false) // a -0 top holds no +0
+    expect(holds(0, 0, -0)).toBe(false)
+    expect(holds(-0, -0, 0)).toBe(false)
+  })
+
+  it('accepts a zero the box holds', () => {
+    for (const y of [0, -0]) {
+      expect(holds(-1, 1, y)).toBe(true) // 0 strictly inside: either
+      expect(holds(-Infinity, Infinity, y)).toBe(true)
+      expect(holds(-0, 0, y)).toBe(true) // two zero ends hold both, in either order
+      expect(holds(0, -0, y)).toBe(true)
+      expect(holds(-1e-300, 1e-300, y)).toBe(true)
+    }
+    expect(holds(-1, 0, 0)).toBe(true)
+    expect(holds(-1, -0, -0)).toBe(true)
+    expect(holds(-0, 1, -0)).toBe(true)
+    expect(holds(0, 1, 0)).toBe(true)
+    expect(holds(0, 0, 0)).toBe(true)
+    expect(holds(-0, -0, -0)).toBe(true)
+  })
+
+  it('rejects the unsealed floor, ceil and round, and accepts the sealed ones', () => {
+    const naive = (f: (x: number) => number): Twin => (out, [a]) => void set(out, f(a.lo), f(a.hi), CONTINUOUS)
+    const cases: [string, Twin, Twin, (x: number) => number, number, number][] = [
+      ['floor', naive(Math.floor), S.floorT, Math.floor, -0.5, 0.5],
+      ['floor', naive(Math.floor), S.floorT, Math.floor, -1.5, 0.2],
+      ['ceil', naive(Math.ceil), S.ceilT, Math.ceil, -0.7, 0.3],
+      ['ceil', naive(Math.ceil), S.ceilT, Math.ceil, -1.5, 0],
+      ['round', naive(roundHalfAway), S.roundT, roundHalfAway, -0.3, 2],
+    ]
+    for (const [name, unsealed, sealed, f, lo, hi] of cases) {
+      const bad = run1(unsealed, lo, hi)
+      const good = run1(sealed, lo, hi)
+      // every zero the scalar gives over the box, at the zero inputs the box holds and at small ones
+      const inputs = [lo, hi, (lo + hi) / 2, -1e-300, 1e-300].filter((x) => lo <= x && x <= hi).concat(zerosIn(lo, hi))
+      const values = inputs.map(f).filter((y) => y === 0)
+      const unsealedFails = values.some((y) => !holds(bad.lo, bad.hi, y))
+      expect(unsealedFails, `unsealed ${name} over [${lo}, ${hi}] is ${show(bad)}`).toBe(true)
+      for (const y of values) expect(holds(good.lo, good.hi, y), `${name} over [${lo}, ${hi}] is ${show(good)} at ${fmt(y)}`).toBe(true)
+    }
+    // the case the reviewer named: [-1, +0] checked at -0
+    const hand = iv(-1, 0)
+    expect(() => must(hand, -0, () => 'hand-built floor of [-0.5, 0.5]')).toThrow('zero-bound invariant')
+    expect(() => must(run1(S.floorT, -0.5, 0.5), -0, () => 'floor of [-0.5, 0.5]')).not.toThrow()
+    expect(() => must(run1(S.floorT, -0.5, 0.5), 0, () => 'floor of [-0.5, 0.5]')).not.toThrow()
+  })
+})
 
 describe('a zero bound is the signed zero the box holds', () => {
   const sg = (r: Iv) => signOf(r.lo) + signOf(r.hi)

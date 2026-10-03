@@ -37,18 +37,19 @@ export function run2(t: Twin, a: [number, number], b: [number, number], angle: A
   return out
 }
 
-// The soundness contract (testkit.admits), and the zero-bound invariant on top of it: a bound
-// that is exactly +0 at the bottom claims no -0 value occurs, and one that is exactly -0 at
-// the top claims no +0 occurs (1 / the box reads which infinity it reaches from them, and
-// admits cannot see it: -0 <= 0 <= +0). A box whose two ends are zeros of different sign,
-// [-0, +0] or [+0, -0], holds both and claims nothing. The message is built only when it
-// fails: a sweep makes millions of checks.
+// The soundness contract (testkit.admits), and the zero-bound invariant on top of it, which
+// admits cannot see (-0 <= 0 <= +0) and 1 / the box reads (1 / +0 and 1 / -0 differ, and so do
+// sqrt, atan2 and the rest): by the convention every twin reads, a zero the result holds is a
+// zero strictly inside it (a bottom below 0 and a top above), or a zero END with that sign. So a
+// value of 0 of either sign needs one of those, in both directions: a bottom of exactly +0
+// claims no -0, a top of exactly -0 claims no +0, and also a top of +0 over a negative bottom
+// claims no -0 (sqrt reads `[-1, +0]` as `[+0, +0]`) and a bottom of -0 under a positive top
+// claims no +0. A box whose two ends are zeros, [-0, +0] or [+0, -0], holds both: each end is
+// one of the two. The message is built only when it fails: a sweep makes millions of checks.
 export function must(r: Iv, y: number, why: () => string): void {
   if (!admits(r, y)) throw new Error(why())
-  if (y === 0 && !(r.lo === 0 && r.hi === 0 && !Object.is(r.lo, r.hi))) {
-    if ((Object.is(y, -0) && Object.is(r.lo, 0)) || (Object.is(y, 0) && Object.is(r.hi, -0))) {
-      throw new Error(`zero-bound invariant: value ${fmt(y)} against ${show(r)}: ${why()}`)
-    }
+  if (y === 0 && !((r.lo < 0 && r.hi > 0) || Object.is(r.lo, y) || Object.is(r.hi, y))) {
+    throw new Error(`zero-bound invariant: value ${fmt(y)} against ${show(r)}: ${why()}`)
   }
 }
 

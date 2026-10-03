@@ -78,7 +78,14 @@ function gammaPositive(out: Iv, a: Iv): Iv {
 //     reflection, with the interval arithmetic. The scalar computes Math.PI * x, sin of that,
 //     gamma(1 - x), their product and π over it, each a rounded operation; the twin encloses
 //     each, so it holds the scalar's value whatever its error against the true Γ (which grows
-//     to 1e-10 next to a pole). It is loose where sin and Γ(1 - x) both depend on x.
+//     to 1e-10 next to a pole). It is loose where sin and Γ(1 - x) both depend on x, and in two
+//     places it is looser than "PARTIAL means a NaN or a pole": within a few ulps of a pole
+//     (one to three doubles above -1, -3, -10 and -1000, measured), where the rounding
+//     interval of π·x reaches a multiple of π and so sin's interval holds 0, and
+//     beyond |x| about 333,000 (sinRad's LARGE cutoff, 2^20 radians of π·x), where sin's
+//     interval is [-1, 1]. There the answer is the whole line and PARTIAL at points where
+//     gamma is defined (a huge value, or ±0 past |x| 171). Sound; a caller must not read a
+//     PARTIAL gamma as "a pole is in this box" without looking at the box.
 export function gammaOf(out: Iv, a: Iv): Iv {
   if (isEmpty(a)) return setEmpty(out)
   const lo = a.lo
