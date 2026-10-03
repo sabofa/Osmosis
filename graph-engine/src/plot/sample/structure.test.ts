@@ -29,8 +29,11 @@ describe('troubleGenerators', () => {
     expect(troubleGenerators(expr('f(x)'), 'x', scopeOf('f(x) = 1/(x - 3)')).length).toBeGreaterThan(0)
     expect(troubleGenerators(expr("f'(x)"), 'x', scopeOf('f(x) = 1/x')).length).toBeGreaterThan(0)
   })
-  it('never walks into a binder body', () => {
-    expect(troubleGenerators(expr('sum(k = 1 to 5, 1/(x - k))'), 'x', scopeOf())).toEqual([])
+  it('walks a binder body, unrolling the bound name over constant whole bounds', () => {
+    // The brief's first version of this test expected [] (a body was never walked); the
+    // poles of sum(k = 1 to 5, 1/(x - k)) are at 1 to 5, so now each term gives its own.
+    const gens = troubleGenerators(expr('sum(k = 1 to 5, 1/(x - k))'), 'x', scopeOf())
+    expect(gens.map((g) => g.expr)).toEqual([1, 2, 3, 4, 5].map((n) => sub(x, num(n))))
   })
   it('leaves x^2 and x^3 alone but not x^-1 or x^(1/2)', () => {
     expect(troubleGenerators(expr('x^2 + x^3'), 'x', scopeOf())).toEqual([])
@@ -147,10 +150,13 @@ describe('the generator rules', () => {
     expect(troubleGenerators(call('__not', lt), 'x', scopeOf())).toHaveLength(1)
     expect(rows('{x < 1: 1/(x - 5), x > 3: 1/(x - 7), 0}').map((r) => r[1])).toEqual(['condition', 'denominator', 'condition', 'denominator'])
   })
-  it('a binder gives its bounds and never its body', () => {
+  it('a binder gives its bounds, and a body generator that does not read the bound name', () => {
     expect(rows('sum(k = 1 to 1/(x - 1), 1/(x - k))')).toEqual([['natural', 'denominator', sub(x, num(1))]])
     expect(rows('prod(k = 1/(x - 2) to 4, 1/(x - k))')).toEqual([['natural', 'denominator', sub(x, num(2))]])
     expect(rows('integral(t = 0 to 1/(x - 3), 1/t)')).toEqual([['natural', 'denominator', sub(x, num(3))]])
+    expect(rows('sum(k = 1 to 5, k/x)')).toEqual([['natural', 'denominator', x]])
+    expect(rows('sum(k = 1 to 3, 1/x)')).toEqual([['natural', 'denominator', x]])
+    expect(rows('integral(t = 0 to 1, 1/x)')).toEqual([['natural', 'denominator', x]])
   })
   it('a derivative walks the expanded body at its argument', () => {
     const gens = troubleGenerators(expr("f'(x - 4)"), 'x', scopeOf('f(x) = 1/x'))
@@ -182,6 +188,62 @@ describe('the generator rules', () => {
   })
   it('keeps value names as names (a parameter stays a var node)', () => {
     expect(rows('1/(x - a)', '@param a = 2 range [0, 5]')).toEqual([['natural', 'denominator', sub(x, variable('a'))]])
+  })
+})
+
+describe('binder bodies', () => {
+  const denominators = (...ns: number[]) => ns.map((n) => ['natural', 'denominator', sub(x, num(n))])
+  it('unrolls a sum or a product, one generator per term in order', () => {
+    expect(rows('sum(k = 1 to 3, 1/(x - k))')).toEqual(denominators(1, 2, 3))
+    expect(rows('prod(k = 2 to 4, 1/(x - k))')).toEqual(denominators(2, 3, 4))
+    expect(rows('sum(k = -2 to -1, 1/(x - k))')).toEqual(denominators(-2, -1))
+  })
+  it('takes bounds that are constants of the document, and bounds computed from numbers', () => {
+    expect(rows('sum(k = 1 to n, 1/(x - k))', 'n = 3')).toEqual(denominators(1, 2, 3))
+    expect(rows('sum(k = 1 to 2 + 1, 1/(x - k))')).toEqual(denominators(1, 2, 3))
+  })
+  it('unrolls through a user function called in the body', () => {
+    expect(rows('sum(k = 1 to 2, f(x, k))', 'f(a, b) = 1/(a - b)')).toEqual(denominators(1, 2))
+  })
+  it('unrolls nested binders into every pair of terms', () => {
+    expect(troubleGenerators(expr('sum(i = 1 to 2, sum(j = 1 to 3, 1/(x - i - j)))'), 'x', scopeOf())).toHaveLength(6)
+  })
+  it('drops what reads the bound name when the bounds are not constants', () => {
+    expect(rows('sum(k = 1 to x, 1/(x - k))')).toEqual([])
+    expect(rows('sum(k = 1 to n, 1/(x - k))', '@param n = 3 range [1, 5]')).toEqual([])
+  })
+  it('drops what reads the bound name when a bound is not whole, or the span is over 64 terms', () => {
+    expect(rows('sum(k = 1 to 2.5, 1/(x - k))')).toEqual([])
+    expect(rows('sum(k = 1 to 65, 1/(x - k))')).toEqual([])
+    expect(rows('sum(k = 1 to 64, 1/(x - k))')).toHaveLength(64)
+  })
+  it('gives nothing for an empty range', () => {
+    expect(rows('sum(k = 5 to 1, 1/(x - k))')).toEqual([])
+  })
+  it('never unrolls an integral: a body generator that reads the variable of integration is dropped', () => {
+    expect(rows('integral(t = 0 to x, 1/(t - 2))')).toEqual([])
+    expect(rows('integral(t = 0 to 5, 1/(x - t))')).toEqual([])
+  })
+  it('leaves the body alone when the bound name is the plot variable', () => {
+    expect(rows('sum(x = 1 to 3, 1/(x - 2))')).toEqual([])
+  })
+  it('keeps the bound name of an inner binder from reaching an outer one', () => {
+    // The inner k shadows the outer one: only the inner range is unrolled.
+    expect(troubleGenerators(expr('sum(k = 1 to 5, sum(k = 1 to 2, 1/(x - k)))'), 'x', scopeOf()).map((g) => g.expr)).toEqual([sub(x, num(1)), sub(x, num(2))])
+  })
+  it('does not take a body generator for a document constant that the bound name shadows', () => {
+    // k is a constant of the document and also the bound name: inside the sum it is the bound one.
+    expect(rows('sum(k = 1 to 2, 1/(x - k))', 'k = 7')).toEqual(denominators(1, 2))
+  })
+})
+
+describe('a derivative past the expansion limit', () => {
+  it('is walked by its arguments alone', () => {
+    // g0 calls g1 ... g31 calls h'(1/(u - 1)): 32 functions deep, the derivative is past the limit.
+    const defs = ['h(t) = t']
+    for (let i = 0; i < 31; i++) defs.push(`g${i}(u) = g${i + 1}(u)`)
+    defs.push("g31(u) = h'(1/(u - 1))")
+    expect(rows('g0(x)', defs.join('\n'))).toEqual([['natural', 'denominator', sub(x, num(1))]])
   })
 })
 

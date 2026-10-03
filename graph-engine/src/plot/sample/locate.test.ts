@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { locateZeros } from './locate'
 import { troubleGenerators } from './structure'
 import { expr, scopeOf } from './testkit'
+import { LOCATE } from './tuning'
 
 function zerosOf(text: string, t0: number, t1: number, defs = '', angle: 'radians' | 'degrees' = 'radians') {
   const scope = scopeOf(defs, angle)
@@ -100,6 +101,89 @@ describe('locateZeros, beyond the table', () => {
   it('locates a zero near a large t to the same relative precision', () => {
     near(zerosOf('1/(x - 123456.789)', 123000, 124000).zeros, [123456.789])
   })
+  it('does not trust a box the twin calls zero by its size alone (1/(exp(-700) (x - 0.5)))', () => {
+    // The generator is about 1e-304 everywhere, inside the twin's zero band, and has a
+    // simple zero at 0.5. Only a scalar that is exactly zero (or NaN) makes a box a stretch.
+    near(zerosOf('1/(exp(-700)*(x - 0.5))', 0, 1).zeros, [0.5])
+  })
+  it('does not let that box hide two zeros between its samples (1/(exp(-700) (x - 0.5)(x - 0.52)))', () => {
+    // Both zeros fall between two of a box's 16 samples, and g has the same sign at
+    // both of those: only the bisection the scalar check forces finds them both.
+    near(zerosOf('1/(exp(-700)*(x - 0.5)*(x - 0.52))', 0, 1).zeros, [0.5, 0.52])
+  })
+})
+
+// The zeros of 1 - cos and 1 - sin are double, and flat: cos rounds to 1 within 1e-8 of
+// them, so there is a plateau of exact zeros and no sign change to bisect. A double zero
+// of a flat function is only located to about the square root of the epsilon, which is
+// what the 1e-6 here allows. They are also the zeros the twin cannot exclude close to:
+// the first of them used to use the budget up and drop every later one.
+describe('locateZeros, hard double zeros', () => {
+  const TAU = 2 * Math.PI
+  it('finds the poles of 1/(1 - cos(x)), all three', () => near(zerosOf('1/(1 - cos(x))', -10, 10).zeros, [-TAU, 0, TAU], 1e-6))
+  it('finds the poles of 1/(1 - sin(x)), all three', () => {
+    near(zerosOf('1/(1 - sin(x))', -10, 10).zeros, [-3 * Math.PI / 2, Math.PI / 2, 5 * Math.PI / 2], 1e-6)
+  })
+  it('finds the double zero of an expanded square (1/(x^2 - 2x + 1))', () => near(zerosOf('1/(x^2 - 2*x + 1)', -3, 3).zeros, [1], 1e-6))
+  it('finds both families of tan(x) + 1/(1 - cos(x)), the tan poles to full precision', () => {
+    const { zeros, truncated } = zerosOf('tan(x) + 1/(1 - cos(x))', -10, 10)
+    const half = Math.PI / 2
+    near(zeros, [-5 * half, -TAU, -3 * half, -half, 0, half, 3 * half, TAU, 5 * half], 1e-6)
+    near(zeros.filter((z) => z.why === 'tan pole'), [-5 * half, -3 * half, -half, half, 3 * half, 5 * half])
+    expect(truncated).toBe(false)
+  })
+  it('finds an even zero next to hard ones and in a window not centred on them', () => {
+    near(zerosOf('1/(1 - cos(x)) + 1/(x - 3)^2', 1, 9).zeros, [3, TAU], 1e-6)
+  })
+  it('is not called truncated for one hard zero', () => {
+    expect(zerosOf('1/(x^2 - 2*x + 1)', -3, 3).truncated).toBe(false)
+    expect(zerosOf('1/(1 - cos(x))', -10, 10).truncated).toBe(false)
+  })
+})
+
+describe('locateZeros, budgets', () => {
+  it('never spends more twin evaluations than intervalsTotal, whatever the generators', () => {
+    const scope = scopeOf()
+    const counter = { points: 0, intervals: 0 }
+    // Five generators with zeros that never settle: each would take its whole share.
+    const text = [0, 0.1, 0.2, 0.3, 0.4].map((s) => `tan(1/(x - ${s}))`).join(' + ')
+    const r = locateZeros(troubleGenerators(expr(text), 'x', scope), 'x', scope, -1, 1, counter)
+    expect(counter.intervals).toBeLessThanOrEqual(LOCATE.intervalsTotal)
+    expect(counter.intervals).toBeGreaterThan(LOCATE.intervalsPerGenerator)
+    expect(r.truncated).toBe(true)
+    expect(r.zeros.length).toBeLessThanOrEqual(LOCATE.maxZeros)
+  })
+  it('keeps the zeros nearest the centre of the range when there are too many (floor(x) over 141 steps)', () => {
+    const r = zerosOf('floor(x)', -70.5, 70.5)
+    expect(r.truncated).toBe(true)
+    expect(r.zeros).toHaveLength(LOCATE.maxZeros)
+    expect(Math.max(...r.zeros.map((z) => Math.abs(z.t)))).toBeLessThanOrEqual(32)
+    near(r.zeros.slice(30, 35), [-2, -1, 0, 1, 2])
+  })
+  it('does not drop what a cut search had not reached: the boxes still waiting are looked at with the scalar', () => {
+    // One twin evaluation, then out of budget. The whole range is left, as one cluster,
+    // and its 16 samples still see the four sign changes of cos(x) in [-5, 5].
+    const was = LOCATE.intervalsPerGenerator
+    LOCATE.intervalsPerGenerator = 1
+    try {
+      const r = zerosOf('tan(x)', -5, 5)
+      expect(r.truncated).toBe(true)
+      near(r.zeros, [-3 * Math.PI / 2, -Math.PI / 2, Math.PI / 2, 3 * Math.PI / 2])
+    } finally {
+      LOCATE.intervalsPerGenerator = was
+    }
+  })
+  it('keeps what it found of a generator it ran out of budget on, and flags it', () => {
+    // cos(1/x) has no end of zeros; the zeros it did find are real ones.
+    const r = zerosOf('tan(1/x)', -1, 1)
+    expect(r.truncated).toBe(true)
+    for (const z of r.zeros.filter((q) => Math.abs(q.t) > 1e-3)) {
+      expect(Math.abs(Math.cos(1 / z.t))).toBeLessThan(1e-6)
+    }
+  })
+})
+
+describe('locateZeros, the rest', () => {
   it('spends nothing on no generators', () => {
     const counter = { points: 0, intervals: 0 }
     expect(locateZeros([], 'x', scopeOf(), -1, 1, counter)).toEqual({ zeros: [], truncated: false })

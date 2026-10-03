@@ -13,9 +13,17 @@
 // or a user function inside one resolves exactly as it does in the curve. Value
 // names (constants, @params) stay var nodes for the compile to resolve. A user
 // function's body is walked with the call's arguments substituted for its
-// parameters, so a pole inside f is found where f(x) is called; a binder's body
-// is never walked, because it binds a name no generator could use (its bounds are
-// outside it and are walked).
+// parameters, so a pole inside f is found where f(x) is called.
+//
+// A binder (sum, prod, integral) walks its bounds, which are outside the binding,
+// and its body, which is inside it. A body generator that does not read the bound
+// name is a generator of the whole (k/x in sum(k = 1 to 5, k/x)). One that reads it
+// (x - k in sum(k = 1 to 5, 1/(x - k))) is no expression of the curve until k has a
+// value, so a sum or product whose bounds are constants, whole, and at most 64
+// terms apart is unrolled: one generator per value of k. Any other binder (an
+// integral, bounds that depend on x or a @param, a longer range) cannot say which
+// values k takes, and what reads k is dropped; the curve is then left to the
+// sampler's own detection there.
 //
 // Each generator says where it came from. A SEAM is a condition the author wrote
 // (a piecewise or domain condition): the curve is built to change there, so a
@@ -28,8 +36,8 @@
 // a function that is not there), from expanding it; the sampler compiles the curve
 // first and reports that refusal before it walks.
 
-import { builtinArity, freeVariablesDeep } from '../../math/compile'
-import { add, call, div, mul, num, sub, substitute } from '../../math/expr'
+import { builtinArity, compileScalar, freeVariablesDeep } from '../../math/compile'
+import { add, call, div, mul, num, sub, substitute, varNames } from '../../math/expr'
 import { expandPrime } from '../../math/prime'
 import { BINDERS, comparisonOp, isReserved } from '../../math/reserved'
 import { isVectorBody, type MathScope } from '../../math/scope'
@@ -49,8 +57,11 @@ export interface Generator {
 // caller is free to walk before it compiles, and a walk must not hang on a
 // definition the author is still typing. Past either cap the call is walked by its
 // arguments alone, so the walk ends and the compile's own error stays the report.
+// An unrolled term of a binder counts as an expansion too (nested sums multiply).
 const MAX_INLINE_DEPTH = 32
 const MAX_EXPANSIONS = 4096
+// The most terms of a sum or product that are unrolled, one generator each.
+const MAX_UNROLLED_TERMS = 64
 
 type Emit = (expr: Expr, origin: Origin, why: string) => void
 // A built-in's rule: its own generators from its arguments (already checked to be
@@ -169,41 +180,43 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
   let expansions = 0
   const mayExpand = (depth: number) => depth < MAX_INLINE_DEPTH && ++expansions <= MAX_EXPANSIONS
 
-  // `depth` is how many user functions and derivatives the walk is inside.
-  function walk(e: Expr, depth: number): void {
+  // `depth` is how many user functions and derivatives the walk is inside; `out`
+  // is where the generators found go (`emit`, or a binder's filter in front of it).
+  function walk(e: Expr, depth: number, out: Emit): void {
     switch (e.kind) {
       case 'num':
       case 'var':
         return
       case 'unary':
-        walk(e.arg, depth)
+        walk(e.arg, depth, out)
         return
       case 'binary':
-        if (e.op === '/') emit(e.right, 'natural', 'denominator')
-        else if (e.op === '^' && !isPositiveWhole(e.right)) emit(e.left, 'natural', 'power base')
-        walk(e.left, depth)
-        walk(e.right, depth)
+        if (e.op === '/') out(e.right, 'natural', 'denominator')
+        else if (e.op === '^' && !isPositiveWhole(e.right)) out(e.left, 'natural', 'power base')
+        walk(e.left, depth, out)
+        walk(e.right, depth, out)
         return
       case 'call':
-        walkCall(e, depth)
+        walkCall(e, depth, out)
         return
     }
   }
 
-  function walkCall(e: Expr & { kind: 'call' }, depth: number): void {
+  function walkCall(e: Expr & { kind: 'call' }, depth: number, out: Emit): void {
     const { name, args } = e
     if (name === '__prime') {
-      if (mayExpand(depth)) walk(expandPrime(e, scope), depth + 1)
+      // Past the limit the derivative is not expanded, but what is passed to it is still walked.
+      if (mayExpand(depth)) walk(expandPrime(e, scope), depth + 1, out)
+      else for (const arg of args.slice(2)) walk(arg, depth, out)
       return
     }
     if (BINDERS.has(name)) {
-      // (variable, lo, hi, body): the bounds are outside the binding, the body is inside it.
-      for (const bound of args.slice(1, 3)) walk(bound, depth)
+      walkBinder(e, depth, out)
       return
     }
     if (isReserved(name)) {
-      reservedRule(name, args.length)?.(args, k, emit)
-      for (const arg of args) walk(arg, depth)
+      reservedRule(name, args.length)?.(args, k, out)
+      for (const arg of args) walk(arg, depth, out)
       return
     }
     // A user function shadows a built-in of its name, as in the compile; a constant
@@ -211,17 +224,66 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
     const fn = scope.functions.get(name)
     if (fn && !(fn.params.length === 0 && args.length === 1)) {
       if (!isVectorBody(fn.body) && args.length === fn.params.length && mayExpand(depth)) {
-        walk(substitute(fn.body, new Map(fn.params.map((p, i) => [p, args[i]] as const))), depth + 1)
+        walk(substitute(fn.body, new Map(fn.params.map((p, i) => [p, args[i]] as const))), depth + 1, out)
       } else {
-        for (const arg of args) walk(arg, depth)
+        for (const arg of args) walk(arg, depth, out)
       }
       return
     }
     const arity = builtinArity(name)
-    if (arity && args.length >= arity.min && args.length <= arity.max) BUILTIN_RULES.get(name)?.(args, k, emit)
-    for (const arg of args) walk(arg, depth)
+    if (arity && args.length >= arity.min && args.length <= arity.max) BUILTIN_RULES.get(name)?.(args, k, out)
+    for (const arg of args) walk(arg, depth, out)
   }
 
-  walk(expr, 0)
+  // sum, prod and integral (variable, lo, hi, body).
+  function walkBinder(e: Expr & { kind: 'call' }, depth: number, out: Emit): void {
+    const [variable, lo, hi, body] = e.args
+    // Not the shape the parser builds: the compile reports it. Walk what is there.
+    if (e.args.length !== 4 || variable.kind !== 'var') {
+      for (const arg of e.args.slice(1, 3)) walk(arg, depth, out)
+      return
+    }
+    const bound = variable.name
+    // The bounds are outside the binding.
+    walk(lo, depth, out)
+    walk(hi, depth, out)
+    // The plot variable bound inside its own body is another variable there: nothing
+    // in the body is a function of the curve's.
+    if (bound === param) return
+    let terms: readonly number[] | null | undefined
+    walk(body, depth, (generator, origin, why) => {
+      // Syntactically: a document constant of the bound name is shadowed in the body.
+      if (!varNames(generator).has(bound)) {
+        out(generator, origin, why)
+        return
+      }
+      if (e.name === '__integral') return
+      if (terms === undefined) terms = unrolledTerms(lo, hi)
+      if (terms === null) return
+      for (const n of terms) {
+        if (++expansions > MAX_EXPANSIONS) return
+        out(substitute(generator, new Map([[bound, num(n)]])), origin, why)
+      }
+    })
+  }
+
+  // The values a sum or product's name takes when its bounds are constants and whole
+  // and few; null when they are not. Both bounds must read no name (a @param or the
+  // plot variable would): the document's constants and pi are fine.
+  function unrolledTerms(lo: Expr, hi: Expr): readonly number[] | null {
+    const constant = (bound: Expr): number | null => {
+      if (freeVariablesDeep(bound, scope).size > 0) return null
+      const value = compileScalar(bound, [], scope)()
+      return Number.isInteger(value) ? value : null
+    }
+    const first = constant(lo)
+    const last = constant(hi)
+    if (first === null || last === null || last - first + 1 > MAX_UNROLLED_TERMS) return null
+    const terms: number[] = []
+    for (let n = first; n <= last; n++) terms.push(n)
+    return terms
+  }
+
+  walk(expr, 0, emit)
   return [...found.values()]
 }

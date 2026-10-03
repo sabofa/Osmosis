@@ -1,123 +1,251 @@
 // Isolating the zeros of the trouble-spot generators in the sampled range
-// (calc P2; spec "Singularities from the expression's structure"). Interval
-// branch and bound with the twin: a box whose enclosure excludes zero (lo > 0,
-// hi < 0, or empty — valid under any verdict, per the twin's contract) holds no
-// zero; the rest bisect to a width of tolRel·max(1, |t|). Adjacent surviving
-// leaves form clusters. A narrow cluster is one zero: bisected on the sign of the
-// scalar to adjacent doubles when the sign changes across it (odd zeros), else
-// its midpoint (even zeros, like x^2). A cluster still wide is a stretch where the
-// generator is zero (floor(x) on [0, 1)): both its ends are zeros.
+// (calc P2; spec "Singularities from the expression's structure"), in two phases.
 //
-// A stretch is reached without bisecting it. A box whose enclosure is the point
-// zero holds nothing but zeros (or NaN), so it stops there as a leaf of any
-// width: bisecting [0, 1) to a tolerance of 1e-12 would take 2^40 boxes, spend the
-// whole budget on the left end of it and report the wrong right end. Its
-// neighbours, whose enclosures straddle zero, still bisect to the tolerance, so
-// the cluster's ends are as exact as any zero.
+// PHASE 1, the twin. Interval branch and bound: a box whose enclosure excludes zero
+// (lo > 0, hi < 0, or empty: valid under any verdict, per the twin's contract)
+// holds no zero; the rest bisect, down to a COARSE width, a fraction of the range.
+// Adjacent surviving boxes form clusters. The twin is only asked to say where zeros
+// are not. Asked to pin down a hard zero it fails: near a zero of 1 - cos(x) the
+// enclosure cannot exclude zero until the box is 1e-8 away (cos rounds to 1 there),
+// and an expanded square like x^2 - 2x + 1 keeps a band of 1e-3 around its double
+// root: bisecting those to the tolerance takes every evaluation there is, and a
+// search that stopped there dropped every zero after it. So when a budget (one
+// generator's, or the call's) or the cap on clusters ends the search, nothing is
+// dropped: every box still waiting becomes a cluster too, and the result says the
+// search was cut.
+//
+// PHASE 2, the scalar. Each cluster is sampled at 16 points, ends included, and
+// the samples say what is in it:
+//  - exact zeros: a RUN of them is a stretch where the generator is zero (floor(x)
+//    on [0, 1)), reported by its two ends, each found by bisecting where g stops
+//    being exactly 0; a single exact zero is one zero, at the middle of the flat
+//    spot it sits in (the plateau of exact zeros 1 - cos(x) has around its zero);
+//  - sign changes between neighbouring samples: each is bisected on the sign to
+//    adjacent doubles (odd zeros, poles: tan, 1/x);
+//  - neither: an even zero, if any (x^2), found as the minimum of |g| by golden-
+//    section search over the two intervals next to the lowest sample. A double
+//    zero of a flat function is only as exact as the function is: about the square
+//    root of the epsilon for 1 - cos(x), and exact for a pure square.
+//
+// A stretch is reached in phase 1 without bisecting it. A box whose enclosure is the
+// point zero holds nothing but zeros (or NaN) if the scalar agrees, so then it stops
+// as a leaf of any width: bisecting [0, 1) to the coarse width would take a million
+// boxes. Its neighbours still bisect, so the stretch's ends are found. The scalar is
+// asked (at the box's ends and middle) because the enclosure alone cannot be trusted
+// that small: 1/(exp(-700) (x - 0.5)) has an enclosure of 1e-304 everywhere, and a
+// pole at 0.5.
 import { compileScalar } from '../../math/compile'
-import { compileInterval, isEmpty, iv } from '../../math/interval'
+import { type CompiledInterval, compileInterval, isEmpty, iv } from '../../math/interval'
 import type { MathScope } from '../../math/scope'
 import type { Generator, Origin } from './structure'
 import { LOCATE } from './tuning'
 import type { EvalCounter } from './types'
 
 export interface Zero { t: number; origin: Origin; why: string }
+// `truncated`: a budget or a cap ended the search before it was done, or there are
+// more zeros than maxZeros and the ones farthest from the centre of the range are
+// left out. What was found is real; what is missing is not known.
 export interface LocateResult { zeros: Zero[]; truncated: boolean }
+
+type Scalar = (t: number) => number
+type Cluster = [number, number]
 
 // How close to 0 an enclosure's bounds are to be the point zero. The twin widens
 // every bound outward, an exact 0 by the smallest double (floor(x) - 3 over
 // [3.2, 3.4] is [-5e-324, 5e-324], and each operation after adds its own), so an
-// exact test misses it. No curve a plot can show has values this small over a box
-// as wide as the tolerance.
+// exact test misses it.
 const ZERO_BAND = 1e-300
+// The most steps of a bisection (adjacent doubles are reached in fewer) and of a
+// golden-section search (a range of 1e6 to 1e-12 takes about 70).
+const MAX_BISECTIONS = 64
+const MAX_GOLDEN_STEPS = 200
 
 export function locateZeros(gens: readonly Generator[], param: string, scope: MathScope, t0: number, t1: number, counter: EvalCounter): LocateResult {
   const all: Zero[] = []
   let truncated = false
+  let spent = 0
+  const coarse = (t1 - t0) * LOCATE.coarseRel
   for (const gen of gens) {
-    const g = compileScalar(gen.expr, [param], scope)
+    const g: Scalar = compileScalar(gen.expr, [param], scope)
     const gi = compileInterval(gen.expr, [param], scope)
-    const out = iv()
-    const leaves: [number, number][] = []
-    const stack: [number, number][] = [[t0, t1]]
-    let spent = 0
-    while (stack.length > 0) {
-      if (spent >= LOCATE.intervalsPerGenerator || leaves.length > LOCATE.maxZeros * 8) {
-        truncated = true
-        break
-      }
-      const [lo, hi] = stack.pop()!
-      gi(out, lo, hi)
-      spent++
-      counter.intervals++
-      if (isEmpty(out) || out.lo > 0 || out.hi < 0) continue
-      const mid = lo + (hi - lo) / 2
-      const zeroBox = out.lo >= -ZERO_BAND && out.hi <= ZERO_BAND
-      if (zeroBox || hi - lo <= LOCATE.tolRel * Math.max(1, Math.abs(mid)) || mid <= lo || mid >= hi) {
-        leaves.push([lo, hi])
-        continue
-      }
-      stack.push([mid, hi], [lo, mid]) // left first off the stack: leaves come out in order
-    }
-    for (const [lo, hi] of clusters(leaves)) {
-      const tol = LOCATE.tolRel * Math.max(1, Math.abs(lo), Math.abs(hi))
-      if (hi - lo > 64 * tol) {
-        all.push({ t: lo, origin: gen.origin, why: gen.why }, { t: hi, origin: gen.origin, why: gen.why })
-        continue
-      }
-      all.push({ t: refine(g, lo, hi, counter), origin: gen.origin, why: gen.why })
+    const budget = Math.min(LOCATE.intervalsPerGenerator, LOCATE.intervalsTotal - spent)
+    const found = isolate(g, gi, t0, t1, coarse, budget, counter)
+    spent += found.spent
+    if (found.cut) truncated = true
+    for (const [lo, hi] of found.clusters) {
+      for (const t of resolve(g, lo, hi, counter)) all.push({ t, origin: gen.origin, why: gen.why })
     }
   }
   return merge(all, t0, t1, truncated)
 }
 
-// Leaves (in order) whose ends touch, as one [lo, hi] each.
-function clusters(leaves: readonly (readonly [number, number])[]): [number, number][] {
-  const out: [number, number][] = []
-  for (const [lo, hi] of leaves) {
-    const last = out[out.length - 1]
+// Phase 1: the clusters of boxes over [t0, t1] on which the twin cannot exclude a
+// zero of g, in order, and whether the search was cut. `budget` is the most twin
+// evaluations to spend.
+function isolate(g: Scalar, gi: CompiledInterval, t0: number, t1: number, coarse: number, budget: number, counter: EvalCounter) {
+  const out = iv()
+  const clusters: Cluster[] = []
+  const add = (lo: number, hi: number) => {
+    const last = clusters[clusters.length - 1]
     if (last && lo <= last[1]) last[1] = Math.max(last[1], hi)
-    else out.push([lo, hi])
+    else clusters.push([lo, hi])
   }
-  return out
+  const stack: Cluster[] = [[t0, t1]]
+  let spent = 0
+  let cut = false
+  while (stack.length > 0) {
+    if (spent >= budget || clusters.length > LOCATE.maxZeros * 8) {
+      // What is left was not looked at, and may hold zeros: it is popped left to right
+      // (the stack's order), and kept whole.
+      cut = true
+      while (stack.length > 0) add(...stack.pop()!)
+      break
+    }
+    const [lo, hi] = stack.pop()!
+    gi(out, lo, hi)
+    spent++
+    counter.intervals++
+    if (isEmpty(out) || out.lo > 0 || out.hi < 0) continue
+    const mid = lo + (hi - lo) / 2
+    const small = hi - lo <= Math.max(coarse, LOCATE.tolRel * Math.max(1, Math.abs(mid))) || mid <= lo || mid >= hi
+    if (small || (out.lo >= -ZERO_BAND && out.hi <= ZERO_BAND && zeroAt(g, [lo, mid, hi], counter))) {
+      add(lo, hi)
+      continue
+    }
+    stack.push([mid, hi], [lo, mid]) // left first off the stack: clusters come out in order
+  }
+  return { clusters, cut, spent }
 }
 
-// The zero inside a narrow cluster [lo, hi]. When g changes sign across it, a
-// bisection on the sign closes in on the change to adjacent doubles (or 64 steps);
-// a zero the scalar hits exactly is returned as it is found. Otherwise the zero is
-// even (or the sign is NaN) and the midpoint is as good as any.
-function refine(g: (t: number) => number, lo: number, hi: number, counter: EvalCounter): number {
-  let glo = g(lo)
-  let ghi = g(hi)
-  counter.points += 2
-  if (glo === 0) return lo
-  if (ghi === 0) return hi
-  if (glo * ghi < 0) {
-    for (let step = 0; step < 64; step++) {
-      const mid = lo + (hi - lo) / 2
-      if (mid <= lo || mid >= hi) break
-      const gm = g(mid)
-      counter.points++
-      if (gm === 0) return mid
-      if (gm * glo > 0) {
-        lo = mid
-        glo = gm
-      } else if (gm * ghi > 0) {
-        hi = mid
-        ghi = gm
-      } else break // NaN: no side to take
-    }
+// Whether g is exactly 0, or NaN, at every one of `ts`.
+function zeroAt(g: Scalar, ts: readonly number[], counter: EvalCounter): boolean {
+  counter.points += ts.length
+  return ts.every((t) => {
+    const y = g(t)
+    return y === 0 || y !== y
+  })
+}
+
+// Phase 2: the zeros of g inside one cluster [lo, hi].
+function resolve(g: Scalar, lo: number, hi: number, counter: EvalCounter): number[] {
+  const n = LOCATE.clusterSamples
+  const s: number[] = []
+  const v: number[] = []
+  for (let i = 0; i < n; i++) {
+    s.push(i === 0 ? lo : i === n - 1 ? hi : Math.min(hi, lo + ((hi - lo) * i) / (n - 1)))
+    v.push(g(s[i]))
+  }
+  counter.points += n
+  const zeros: number[] = []
+
+  // Exact zeros. A run of them has an edge on each side, unless it reaches the
+  // cluster's end (which is the range's end: any box beside the cluster that held a
+  // zero would be in it).
+  for (let i = 0; i < n; i++) {
+    if (v[i] !== 0) continue
+    let j = i
+    while (j + 1 < n && v[j + 1] === 0) j++
+    const left = i === 0 ? s[0] : edge(g, s[i], s[i - 1], counter)
+    const right = j === n - 1 ? s[n - 1] : edge(g, s[j], s[j + 1], counter)
+    if (j > i) zeros.push(left, right)
+    else zeros.push(left + (right - left) / 2)
+    i = j
+  }
+
+  // Sign changes between neighbours (a zero sample next to them belongs to its run).
+  for (let i = 0; i + 1 < n; i++) {
+    if (signed(v[i]) && signed(v[i + 1]) && (v[i] < 0) !== (v[i + 1] < 0)) zeros.push(bisectSign(g, s[i], s[i + 1], v[i], counter))
+  }
+  if (zeros.length > 0) return zeros
+
+  // No exact zero and no sign change: an even zero, or none. The lowest |g| sample
+  // is at, or next to, the minimum; |g| is searched over the two intervals around it.
+  let best = -1
+  for (let i = 0; i < n; i++) {
+    if (Number.isFinite(v[i]) && (best < 0 || Math.abs(v[i]) < Math.abs(v[best]))) best = i
+  }
+  if (best < 0) return []
+  return [golden(g, s[Math.max(0, best - 1)], s[Math.min(n - 1, best + 1)], counter)]
+}
+
+// A value with a sign to compare: not NaN, not 0.
+const signed = (y: number) => y === y && y !== 0
+
+// The change of sign of g between lo and hi, whose values there (`glo` at lo) have
+// opposite signs: bisected to adjacent doubles, or 64 steps. A zero the scalar hits
+// exactly is returned as found.
+function bisectSign(g: Scalar, lo: number, hi: number, glo: number, counter: EvalCounter): number {
+  for (let step = 0; step < MAX_BISECTIONS; step++) {
+    const mid = lo + (hi - lo) / 2
+    if (mid <= lo || mid >= hi) break
+    const gm = g(mid)
+    counter.points++
+    if (gm === 0) return mid
+    if (gm !== gm) break // NaN: no side to take
+    if ((gm < 0) === (glo < 0)) {
+      lo = mid
+      glo = gm
+    } else hi = mid
   }
   return lo + (hi - lo) / 2
+}
+
+// The edge of a stretch where g is exactly 0: g is 0 at `inside` and not at
+// `outside`; the point between them where that stops, to adjacent doubles or 64 steps.
+function edge(g: Scalar, inside: number, outside: number, counter: EvalCounter): number {
+  let a = inside
+  let b = outside
+  for (let step = 0; step < MAX_BISECTIONS; step++) {
+    const mid = a + (b - a) / 2
+    if (mid === a || mid === b) break
+    counter.points++
+    if (g(mid) === 0) a = mid
+    else b = mid
+  }
+  return a + (b - a) / 2
+}
+
+const GOLDEN = (Math.sqrt(5) - 1) / 2
+
+// The minimum of |g| over [a, b], which holds one (g is not NaN there, or the NaNs
+// count as infinitely high), by golden-section search, to the tolerance. A tie goes
+// to the left, so a plateau of exact zeros is closed in on and not stepped over.
+function golden(g: Scalar, a: number, b: number, counter: EvalCounter): number {
+  const f = (t: number) => {
+    const y = Math.abs(g(t))
+    counter.points++
+    return y === y ? y : Infinity
+  }
+  let c = b - GOLDEN * (b - a)
+  let d = a + GOLDEN * (b - a)
+  let fc = f(c)
+  let fd = f(d)
+  for (let step = 0; step < MAX_GOLDEN_STEPS && b - a > LOCATE.tolRel * Math.max(1, Math.abs(a), Math.abs(b)); step++) {
+    if (fc <= fd) {
+      b = d
+      d = c
+      fd = fc
+      c = b - GOLDEN * (b - a)
+      fc = f(c)
+    } else {
+      a = c
+      c = d
+      fc = fd
+      d = a + GOLDEN * (b - a)
+      fd = f(d)
+    }
+  }
+  return a + (b - a) / 2
 }
 
 // Sorts the zeros, drops those the range does not hold (outside it, or within 4
 // tolerances of an end: the sampler handles the ends itself), joins those within 4
 // tolerances of each other (a seam wins; the reasons are kept, joined with "+"),
-// and caps the count.
+// and caps the count, keeping the zeros nearest the centre of the range: the
+// ends of a range are what a pan brings in next, and the middle is what is on screen.
 function merge(all: Zero[], t0: number, t1: number, truncated: boolean): LocateResult {
   const tolAt = (t: number) => 4 * LOCATE.tolRel * Math.max(1, Math.abs(t))
-  const out: Zero[] = []
+  let out: Zero[] = []
   for (const z of [...all].sort((a, b) => a.t - b.t)) {
     if (!(z.t - t0 > tolAt(z.t) && t1 - z.t > tolAt(z.t))) continue
     const last = out[out.length - 1]
@@ -129,7 +257,9 @@ function merge(all: Zero[], t0: number, t1: number, truncated: boolean): LocateR
     out.push({ ...z })
   }
   if (out.length > LOCATE.maxZeros) {
-    out.length = LOCATE.maxZeros
+    const centre = t0 + (t1 - t0) / 2
+    out = out.sort((a, b) => Math.abs(a.t - centre) - Math.abs(b.t - centre) || a.t - b.t).slice(0, LOCATE.maxZeros)
+    out.sort((a, b) => a.t - b.t)
     truncated = true
   }
   return { zeros: out, truncated }
