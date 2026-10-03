@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { lchToLab, linearToOklab, labToLch, hueArc } from '../model/colour'
 import { curveFor, groundLocal, recipeEnv } from '../model/index'
 import { sizedLength } from '../model/brush'
-import { colourOfDraft, lightnessAtValue, type ColourRecipe } from '../model/recipe'
+import { newRecipe } from '../model/recipe'
 import { BASE_END, GLAZE_ALPHA, VEIL_ALPHA, VEIL_BORDER_ALPHA, VEIL_SCALE, veilOf } from '../model/roles'
 import { flatColours, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
 import { FAM_SHADOW, Z_CAST } from '../model/value'
@@ -14,7 +14,7 @@ import { newPlanAt, planAt } from './plan'
 import { stepValueWorld } from './planes'
 import { bakeLengthFactor, SIDE_SEED, MIN_PATH_SHARE } from './strokes'
 import { locate, type SurfacePoint } from './surface'
-import { NO_PARTICLE } from './draft'
+import { boundLightness, NO_PARTICLE, preMixLab, readRecipe } from './draft'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, BAKE_ZOOM_MIN } from './types'
 import { fixture, flatSaddleScene, inwardSphere, LIGHT, P, PX, saddleColours, sparse, sphereColours, sphereScene, TERRACOTTA, veilScene, type Fixture } from './bakeFixture'
 
@@ -325,7 +325,7 @@ describe('the value rule holds in every baked stroke’s colour', () => {
       const c = held.perm[k]
       const fam = r.fam[c]
       if (fam < 0) continue
-      const lBound = lightnessAtValue(r.hold[c] ?? r.colour[c], r.uBound[c], e)
+      const lBound = boundLightness(r, c, e)
       for (let l = 0; l < BAKE_MIX_LEVELS; l++) {
         const o = 3 * (BAKE_MIX_LEVELS * k + l)
         const L = linearToOklab(f.baked.colour[o], f.baked.colour[o + 1], f.baked.colour[o + 2])[0]
@@ -409,9 +409,9 @@ describe('the value rule holds in every baked stroke’s colour', () => {
       let n = 0
       for (let c = 0; c < held.recipes.count; c++) {
         if (held.recipes.fam[c] !== FAM_SHADOW) continue
-        const src = held.recipes.colour[c].a as ColourRecipe
+        const src = readRecipe(held.recipes, c, newRecipe())
         if (src.ground) continue
-        const lch = labToLch(colourOfDraft(held.recipes.colour[c], e))
+        const lch = labToLch(preMixLab(held.recipes, c, e))
         worst = Math.max(worst, Math.abs(hueArc(38 + accentAt(src.u), lch[2])))
         n++
       }

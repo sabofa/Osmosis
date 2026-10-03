@@ -2,9 +2,11 @@
 //
 // The per-frame model (model/strokes.ts walkHalf) walks a stroke on the visible surface by reading the G-buffer: each step goes along the
 // tangent plane, is projected, and is slid along the view ray onto the depth the G-buffer holds there. The bake has the surface itself
-// (bake/surface.ts), so each step goes along the tangent plane and is SNAPPED to the nearest point of the surface (`locate`'s own rule, with
-// the triangle the walk is on and its neighbours tried first: a step is a triangle or two long, and the BVH is only asked when the point is
-// not near the ones the walk is already on). The next normal is the surface's at the hit, for the stroke's side.
+// (bake/surface.ts), so each step goes along the tangent plane and is SNAPPED to the surface: `snapNear` walks across the triangle adjacency from
+// the triangle the stroke is on to the one the stepped point lies over (a step is a few triangles long), where `locate`'s BVH would ask the whole
+// mesh. The ruling was `locate` with a reach of 4 steps; the BVH is still what answers when the walk runs out of iterations, and `locate` at the
+// bake's start. The next normal is the surface's at the hit, for the stroke's side. A step that had to be moved by half a step or more has left
+// the surface (an open border): the walk ends there, it does not slide along the border.
 //
 // WHAT STAYS. The direction field (n × L round the light, a fixed direction on the table, the transported parameter direction), the bend, the
 // stops: a stroke that leaves its mark or runs off an open border ends there; one on the table stays where the shadow falls (castOnly); a form

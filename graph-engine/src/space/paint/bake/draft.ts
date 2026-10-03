@@ -16,7 +16,7 @@
 
 import { holdLightness, oklabToLinear } from '../model/colour'
 import { LoadMixer } from '../model/mix'
-import { colourOfDraft, lightnessAtValue, type DraftColour, type RecipeEnv } from '../model/recipe'
+import { colourOfDraft, colourOfRecipe, lightnessAtValue, newRecipe, type ColourRecipe, type DraftColour, type RecipeEnv } from '../model/recipe'
 import { FAM_SHADOW } from '../model/value'
 import type { PaintParams } from '../params'
 import { LAYER_ORDER, ROLES, type Oklab } from '../types'
@@ -40,14 +40,26 @@ export function fnvInts(...words: number[]): number {
   return h >>> 0
 }
 
+// The fields of a plain colour recipe (model/recipe.ts ColourRecipe) kept per stroke in one Float32Array, REC_STRIDE to a stroke, in this order. A
+// surface stroke's recipe is plain: it is most of the strokes of a bake, and a recipe as an object would be most of what a painting keeps.
+// (Float32: the full bake makes its colours from the kept values too, so a recolour and a full bake agree bit for bit.)
+export const REC_STRIDE = 21
+const REC = { lx: 0, ly: 1, lz: 2, u: 3, nz: 4, bounce: 5, amb: 6, pnx: 7, pny: 8, pnz: 9, lScale: 10, g0: 11, g1: 12, g2: 13, c0: 14, c1: 15, c2: 16, dC: 17, px: 18, py: 19, pz: 20 } as const
+const FLAG_GROUND = 1
+const FLAG_PLANE = 2
+const FLAG_FIELD = 4
+
 // What a stroke's colour is made of, per stroke (the arrays of the sink's colour half): kept beside the packed painting so a change of colour
 // parameters can make the colours again (the recolour).
 export interface ColourRecipes {
   count: number
-  // What the colour is made of (a recipe, or two blended: an edge that bridges its own side to what lies across it), and, for a stroke whose
-  // family bound is not its own colour's (the same edge), the colour whose lightness at the bound is the bound.
-  colour: DraftColour[]
+  // A plain recipe is in `rec` and `flags`. What is not plain (an edge that blends two sources, one side's colour into the other, or takes a
+  // fixed colour: model/recipe.ts DraftColour) is an object here, and `hold` is, for a stroke whose family bound is not its own colour's (the same
+  // edge), the colour whose lightness at the bound is the bound. Undefined for a plain recipe.
+  draft: (DraftColour | undefined)[]
   hold: (DraftColour | undefined)[]
+  rec: Float32Array
+  flags: Uint8Array
   // The role the brush-load mix is keyed to (index into ROLES), the value the colour was made at (the mix amount's curve), the colormapped
   // flag, the stroke's own seed and its two personal jitter draws.
   mixRole: Uint8Array
@@ -68,9 +80,10 @@ export interface ColourRecipes {
   my: Float64Array
 }
 
-// What a producer gives for the colour of one stroke.
+// What a producer gives for the colour of one stroke: a plain recipe, or a DraftColour (and for it, optionally, the colour its bound is made from).
 export interface RecipeInput {
-  colour: DraftColour
+  recipe?: ColourRecipe
+  draft?: DraftColour
   hold?: DraftColour
   mixRole: number
   u: number
@@ -181,7 +194,7 @@ export class StrokeSink {
     this.seed = new Uint32Array(n)
     this.key = new Uint32Array(n)
     this.recipes = {
-      count: 0, colour: [], hold: [],
+      count: 0, draft: [], hold: [], rec: new Float32Array(REC_STRIDE * n), flags: new Uint8Array(n),
       mixRole: new Uint8Array(n), u: new Float64Array(n), colormapped: new Uint8Array(n), seed: new Uint32Array(n),
       jit0: new Float64Array(n), jit1: new Float64Array(n), fam: new Int8Array(n), uBound: new Float64Array(n),
       sequential: new Uint8Array(n), cells: new Uint32Array(BAKE_MIX_LEVELS * n), mx: new Float64Array(n), my: new Float64Array(n),
@@ -228,6 +241,8 @@ export class StrokeSink {
     this.seed = growArray(this.seed, cap)
     this.key = growArray(this.key, cap)
     const r = this.recipes
+    r.rec = growArray(r.rec, REC_STRIDE * cap)
+    r.flags = growArray(r.flags, cap)
     r.mixRole = growArray(r.mixRole, cap)
     r.u = growArray(r.u, cap)
     r.colormapped = growArray(r.colormapped, cap)
@@ -275,10 +290,10 @@ export class StrokeSink {
     const c = this.recipes
     const n = this.count
     c.count = n
-    c.colour.length = n
+    c.draft.length = n
     c.hold.length = n
     return {
-      count: n, colour: c.colour, hold: c.hold,
+      count: n, draft: c.draft, hold: c.hold, rec: c.rec.slice(0, REC_STRIDE * n), flags: c.flags.slice(0, n),
       mixRole: c.mixRole.slice(0, n), u: c.u.slice(0, n), colormapped: c.colormapped.slice(0, n), seed: c.seed.slice(0, n),
       jit0: c.jit0.slice(0, n), jit1: c.jit1.slice(0, n), fam: c.fam.slice(0, n), uBound: c.uBound.slice(0, n),
       sequential: c.sequential.slice(0, n), cells: c.cells.slice(0, BAKE_MIX_LEVELS * n), mx: c.mx.slice(0, n), my: c.my.slice(0, n),
@@ -287,7 +302,14 @@ export class StrokeSink {
 
   setRecipe(i: number, r: RecipeInput): void {
     const c = this.recipes
-    c.colour[i] = r.colour
+    if (r.recipe) {
+      packRecipe(r.recipe, c.rec, i)
+      c.flags[i] = (r.recipe.ground ? FLAG_GROUND : 0) | (r.recipe.hasPlane ? FLAG_PLANE : 0) | (r.recipe.field ? FLAG_FIELD : 0)
+      c.draft[i] = undefined
+    } else {
+      c.draft[i] = r.draft
+      c.flags[i] = 0
+    }
     c.hold[i] = r.hold
     c.mixRole[i] = r.mixRole
     c.u[i] = r.u
@@ -311,7 +333,84 @@ export class StrokeSink {
 
 // ---- the colours ----
 
-// The final colours (linear-light sRGB, 3 × BAKE_MIX_LEVELS per stroke: level l at 3·(BAKE_MIX_LEVELS·i + l)) of strokes [0, count) in CREATION
+function packRecipe(r: ColourRecipe, out: Float32Array, i: number): void {
+  const o = REC_STRIDE * i
+  out[o + REC.lx] = r.lx
+  out[o + REC.ly] = r.ly
+  out[o + REC.lz] = r.lz
+  out[o + REC.u] = r.u
+  out[o + REC.nz] = r.nz
+  out[o + REC.bounce] = r.bounce
+  out[o + REC.amb] = r.ambientShare
+  out[o + REC.pnx] = r.pnx
+  out[o + REC.pny] = r.pny
+  out[o + REC.pnz] = r.pnz
+  out[o + REC.lScale] = r.lScale
+  out[o + REC.g0] = r.g0
+  out[o + REC.g1] = r.g1
+  out[o + REC.g2] = r.g2
+  out[o + REC.c0] = r.c0
+  out[o + REC.c1] = r.c1
+  out[o + REC.c2] = r.c2
+  out[o + REC.dC] = r.dC
+  out[o + REC.px] = r.px
+  out[o + REC.py] = r.py
+  out[o + REC.pz] = r.pz
+}
+
+// Stroke i's plain recipe (written into `r`): what `packRecipe` kept of it. `colormapped` is the stroke's own.
+export function readRecipe(c: ColourRecipes, i: number, r: ColourRecipe): ColourRecipe {
+  const o = REC_STRIDE * i
+  const f = c.rec
+  const flags = c.flags[i]
+  r.ground = (flags & FLAG_GROUND) !== 0
+  r.hasPlane = (flags & FLAG_PLANE) !== 0
+  r.field = (flags & FLAG_FIELD) !== 0
+  r.colormapped = c.colormapped[i] === 1
+  r.lx = f[o + REC.lx]
+  r.ly = f[o + REC.ly]
+  r.lz = f[o + REC.lz]
+  r.u = f[o + REC.u]
+  r.nz = f[o + REC.nz]
+  r.bounce = f[o + REC.bounce]
+  r.ambientShare = f[o + REC.amb]
+  r.pnx = f[o + REC.pnx]
+  r.pny = f[o + REC.pny]
+  r.pnz = f[o + REC.pnz]
+  r.lScale = f[o + REC.lScale]
+  r.g0 = f[o + REC.g0]
+  r.g1 = f[o + REC.g1]
+  r.g2 = f[o + REC.g2]
+  r.c0 = f[o + REC.c0]
+  r.c1 = f[o + REC.c1]
+  r.c2 = f[o + REC.c2]
+  r.dC = f[o + REC.dC]
+  r.px = f[o + REC.px]
+  r.py = f[o + REC.py]
+  r.pz = f[o + REC.pz]
+  return r
+}
+
+const SCRATCH = newRecipe()
+
+// The colour of stroke i before the brush-load mix (fitted OKLab): the curve colour of its recipe.
+export function preMixLab(c: ColourRecipes, i: number, env: RecipeEnv): Oklab {
+  const d = c.draft[i]
+  return d ? colourOfDraft(d, env) : colourOfRecipe(readRecipe(c, i, SCRATCH), env)
+}
+
+// The lightness stroke i's colour has at the value `u` (the same recipe in every other respect), or its hold colour's: the lightness the family's
+// bound holds it to. (`u` defaults to the stroke's own bound.)
+export function boundLightness(c: ColourRecipes, i: number, env: RecipeEnv, u = c.uBound[i]): number {
+  const h = c.hold[i]
+  const d = h ?? c.draft[i]
+  if (d) return lightnessAtValue(d, u, env)
+  const r = readRecipe(c, i, SCRATCH)
+  r.u = u
+  return colourOfRecipe(r, env)[0]
+}
+
+// The final colours (linear-light sRGB, 3 x BAKE_MIX_LEVELS per stroke: level l at 3*(BAKE_MIX_LEVELS*i + l)) of strokes [0, count) in CREATION
 // order under `params`: the recipe's colour, each level's cell's brush-load mix (the sequential mix once, in creation order), the lightness held
 // on the family's side of the bound (what the same recipe is at the bound value: packStrokes' rule), linear sRGB.
 export function colourStrokes(r: ColourRecipes, params: PaintParams, env: RecipeEnv): Float32Array {
@@ -319,11 +418,11 @@ export function colourStrokes(r: ColourRecipes, params: PaintParams, env: Recipe
   const out = new Float32Array(3 * BAKE_MIX_LEVELS * count)
   const mixer = new LoadMixer(params)
   for (let i = 0; i < count; i++) {
-    const lab = colourOfDraft(r.colour[i], env)
+    const lab = preMixLab(r, i, env)
     const fam = r.fam[i]
     const uBound = r.uBound[i]
     const held = fam >= 0 && !Number.isNaN(uBound)
-    const lBound = held ? lightnessAtValue(r.hold[i] ?? r.colour[i], uBound, env) : 0
+    const lBound = held ? boundLightness(r, i, env) : 0
     const role = ROLES[r.mixRole[i]]
     const levels = r.sequential[i] === 1 ? 1 : BAKE_MIX_LEVELS
     let lin: number[] = [0, 0, 0]

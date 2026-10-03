@@ -34,7 +34,7 @@ import { ROLES, type Role, type ParticleSet } from '../types'
 import { loadCellOf, sizedLength } from '../model/brush'
 import { behaviourOf, type Behaviour } from '../model/edges'
 import { clamp, vcross, vlen, type V3 } from '../model/math'
-import { newRecipe, type DraftColour, type RecipeEnv } from '../model/recipe'
+import { newRecipe, type ColourRecipe, type RecipeEnv } from '../model/recipe'
 import {
   BASE_END, CFG, GLAZE_ALPHA, ISO_MIN, PLAIN, ROT, TERMINATOR, VEIL_ALPHA, VEIL_BORDER_ALPHA, VEIL_END_SOFT, VEIL_LOAD, VEIL_SCALE, terminatorValueOf, veilOf,
   type ParticleRole,
@@ -143,7 +143,7 @@ interface ColourOpts {
 }
 
 export interface StrokeColour {
-  colour: DraftColour
+  recipe: ColourRecipe
   u: number
   // the family and its bound in plan values, for a stroke on an opaque surface; none for a veil
   fam?: number
@@ -205,8 +205,7 @@ function strokeColour(
   r.px = px
   r.py = py
   r.pz = pz
-  const colour: DraftColour = { a: r, b: null, t: 0 }
-  return w.opaque ? { colour, u, fam: at.fam, uBound: familyBoundAt(c.plan, at) } : { colour, u }
+  return w.opaque ? { recipe: r, u, fam: at.fam, uBound: familyBoundAt(c.plan, at) } : { recipe: r, u }
 }
 
 // ---- the context ----
@@ -474,7 +473,7 @@ function buildParticleStroke(
     key: fnvInts(m, i, roleIdx, bakedSide, veilPass),
   })
   sink.setRecipe(idx, {
-    colour: col.colour,
+    recipe: col.recipe,
     mixRole: roleIdx,
     u: col.u,
     colormapped: set.colormapped[i] === 1,
@@ -583,7 +582,7 @@ function dabStrokes(c: StrokeCtx, sink: StrokeSink, m: number, k: 0 | 1, side: 1
       key: fnvInts(m, site.vertex, roleIdx, bakedSide, 0),
     })
     sink.setRecipe(idx, {
-      colour: col.colour, mixRole: roleIdx, u: col.u, colormapped: set.colormapped[best] === 1, seed, jit0, jit1, fam: col.fam, uBound: col.uBound,
+      recipe: col.recipe, mixRole: roleIdx, u: col.u, colormapped: set.colormapped[best] === 1, seed, jit0, jit1, fam: col.fam, uBound: col.uBound,
       cells: cellsOf(set, best, params.mix.loadCell),
     })
     stats.byRoleSide[roleIdx][bakedSide + 1]++

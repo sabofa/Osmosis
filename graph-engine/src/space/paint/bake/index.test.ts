@@ -3,14 +3,16 @@ import { curveFor, groundLocal, recipeEnv } from '../model/index'
 import { loadCellOf } from '../model/brush'
 import { holdLightness, oklabToLinear } from '../model/colour'
 import { LoadMixer } from '../model/mix'
-import { colourOfDraft, lightnessAtValue } from '../model/recipe'
+import { boundLightness, preMixLab } from './draft'
 import { meshArea } from '../model/view'
 import { FAM_SHADOW } from '../model/value'
 import { PARAM_SCHEMA, setParam, type PaintParams } from '../params'
 import { LAYER_ORDER, ROLES } from '../types'
 import { bakeKey, bakePainting, bakePaintingWithProgress, bakedRecipes, bakeStats, recolourBake, type BakeProgress } from './index'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_SURFACE, type BakedPainting, type BakedSurface } from './types'
-import { framing, fixture, LIGHT, P, saddleColours, saddleScene, sparse, sphereColours, sphereScene, type Fixture } from './bakeFixture'
+import { framing, fixture, LIGHT, P, saddleColours, saddleScene, sparse, sphereColours, sphereScene, TERRACOTTA, type Fixture } from './bakeFixture'
+import { boxMesh } from './edgesFixture'
+import { arrowMark, flatColours, lineMark, pointMark, sceneOf, sphereMesh } from '../model/testing'
 import type { MeshMark } from '../../scene/types'
 
 // Whole bakes are heavy and the test machine is shared: give every test room.
@@ -255,8 +257,8 @@ describe('the assembly', () => {
       const c = held.perm[k]
       const p = baked.particle[k]
       if (p === 0xffffffff) continue
-      const lab = colourOfDraft(held.recipes.colour[c], env)
-      const lBound = held.recipes.fam[c] >= 0 ? lightnessAtValue(held.recipes.hold[c] ?? held.recipes.colour[c], held.recipes.uBound[c], env) : null
+      const lab = preMixLab(held.recipes, c, env)
+      const lBound = held.recipes.fam[c] >= 0 ? boundLightness(held.recipes, c, env) : null
       const out: number[][] = []
       for (let l = 0; l < BAKE_MIX_LEVELS; l++) {
         const cell = loadCellOf(particles, p, params.mix.loadCell, l)
@@ -300,6 +302,24 @@ describe('the assembly', () => {
     const refined = stats.plan.surfaces[0]!
     expect(s.indices).not.toBe(refined.indices)
     expect(s.positions.buffer).not.toBe(refined.positions.buffer)
+  })
+
+  it('bakes a scene that has creases (a flat-shaded box), a degenerate mesh, and data marks without throwing, with finite colours and the data marks left to the frame', () => {
+    const box = boxMesh([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], 0)
+    // a mesh with a non-finite vertex and a triangle that has no area
+    const bad: MeshMark = { ...sphereMesh({ radius: 0.2, index: 1, nu: 4, nv: 3 }), positions: Float64Array.from([0, 0, 0, Number.NaN, 0, 0, 1, 0, 0, 0, 1, 0]), normals: new Float64Array(12), indices: Uint32Array.from([0, 1, 2, 0, 0, 3]) }
+    const empty: MeshMark = { ...sphereMesh({ radius: 0.2, index: 2 }), positions: new Float64Array(0), normals: new Float64Array(0), indices: new Uint32Array(0), uv: null }
+    const marks = [box, bad, empty, lineMark([[-1, -1, 1], [1, 1, 1]], { index: 3 }), pointMark([[0, 0, 1]], { index: 4 }), arrowMark([0, 0, 0], [0, 0, 1], { index: 5 })]
+    const f = fixture(sceneOf(marks), flatColours({ 0: TERRACOTTA }), sparse(300))
+    expect(f.baked.count).toBeGreaterThan(300)
+    expect(f.baked.colour.every((v) => Number.isFinite(v))).toBe(true)
+    expect(f.baked.worldPath.every((v) => Number.isFinite(v))).toBe(true)
+    // the box is closed (painted from outside), the data marks have no surface, no stroke belongs to them in this task
+    expect(f.baked.surfaces[0]!.closed).toBe(true)
+    for (const m of [3, 4, 5]) expect(f.baked.surfaces[m]).toBeNull()
+    for (let i = 0; i < f.baked.count; i++) expect(f.baked.mark[i]).toBe(0)
+    expect(f.baked.areaPerParticle[3]).toBe(0)
+    for (const s of f.baked.surfaces) if (s) expect([...s.underFront, ...(s.underBack ?? [])].every((v) => Number.isFinite(v))).toBe(true)
   })
 
   it('bakes a scene with no mesh at all to an empty painting (a line alone), and a scene with an empty mesh without throwing', () => {

@@ -65,10 +65,7 @@ for (const id of IDS) {
     }, { keepStats: true })
     return { baked, ms, total: performance.now() - t0 }
   }
-  make() // warm-up
-  const runs = Array.from({ length: RUNS }, make)
-  const last = runs[runs.length - 1]
-  // what a painting keeps: the bake made without its plan, planes and edges, held alone
+  // what a painting keeps: the bake made without its plan, planes and edges, held alone, measured before anything else of this scene is made
   let keptMB = Number.NaN
   if (gc) {
     const before = heap()
@@ -76,6 +73,9 @@ for (const id of IDS) {
     keptMB = (heap() - before) / 1e6
     void held.count
   }
+  make() // warm-up
+  const runs = Array.from({ length: RUNS }, make)
+  const last = runs[runs.length - 1]
   const per = PHASES.map((p) => median(runs.map((r) => r.ms[p] ?? 0)))
   const total = median(runs.map((r) => r.total))
   const stats = bakeStats(last.baked)!
