@@ -280,3 +280,35 @@ Ben, on the painted figures: "bounce light is way too light. bounce light is onl
   - the zone weights classify a pixel for the roles, the planes and the zones view (a pixel is reflected light only where the bounce or sky really reaches it);
   - scumble now exists on a lit sphere, on the wide soft turns, and so follows the light as form strokes do (the coherence target of §3.2 covers the steady roles: block, glaze, reflected).
 - **Old saved presets** that still carry `reflectedLo`, `reflectedHi`, `halfAt`, `lightAt` or `soft` resolve without errors: `resolvePaintParams` ignores unknown keys.
+
+## 14. The baked painting (Ben, 2026-10-02 evening)
+
+Ben: "when I move around it's still very slow to update … since it's all seeded maybe it can precompile the full file or painting, then when I move around it's instant."
+
+With the key light fixed in the world (`light.worldFixed` = 1, the default), a stroke's value, colour, role, brush-load mix and path along the surface are all independent of the camera. So **the whole painting is baked once, in world space**, and orbiting only selects, projects and draws it. The contract is `space/paint/bake/types.ts`.
+
+**Bake** (in the worker, per scene, params and world light):
+- every particle at the maximum density gets its stroke;
+- role and colour come from the value plan (§3.3, §12) and the curve and spatial mix (§3.4–§3.5), all evaluated from the WORLD light and the particle's own normal;
+- the path is walked along the surface tangent in world units, and widths are in world units;
+- the underpainting is baked per mesh vertex.
+
+**What moves into world space** (it was screen space):
+- **Planes:** cells of normal direction × value zone on the MESH, merged within a family by world area.
+- **Edge hardness:** contrast between planes, curvature across the edge, light side, and distance from the occluder for cast shadows. The focal point is the brightest highlight, not "nearest the viewer". Terminator, crease, cast-shadow and plane edges are view-independent and are baked.
+
+**Per frame** (milliseconds):
+- select strokes by rank against the screen density (foreshortening);
+- fade by |n·v|;
+- scale widths by the zoom (`zoomStrokeScale`, `zoomGrowMax`);
+- project;
+- draw with the renderer's depth pre-pass, so hidden strokes vanish;
+- recompute the silhouette outline strokes, the only view-dependent edges, with the same colour logic.
+
+**Slider changes:**
+- colour-only params recolour the bake, which must be bit-identical to a re-bake;
+- any other param re-bakes in the worker, with a progress indicator, while the previous bake stays on screen.
+
+**`light.worldFixed` = 0** (camera-relative light) keeps the per-frame path of §13, because nothing can be baked when the light moves with the view.
+
+**Parity:** at the authored view, the baked painting must match the per-frame model closely (mean colour ΔE and role agreement are measured and reported). Look differences from moving analysis into world space are accepted where they read more like a painter's planes of the form.
