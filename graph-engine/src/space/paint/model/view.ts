@@ -70,7 +70,12 @@ export function makeFrameCtx(scene: SpaceScene, view: PaintView, g: GBuffer, par
 // below 1 (zooming out does not shrink the brush under the size the roles were tuned at) and never
 // past particles.zoomBigMax.
 export function zoomSizeScale(view: PaintView, params: PaintParams): number {
-  const z = view.zoom !== undefined && Number.isFinite(view.zoom) ? Math.max(1, view.zoom) : 1
+  return zoomSizeScaleAt(view.zoom, params)
+}
+
+// zoomSizeScale at a zoom (the pure form: the baked painting's length scan reads it too).
+export function zoomSizeScaleAt(zoom: number | undefined, params: PaintParams): number {
+  const z = zoom !== undefined && Number.isFinite(zoom) ? Math.max(1, zoom) : 1
   return Math.min(z ** clamp(params.particles.zoomStrokeScale, 0, 1), bigMax(params))
 }
 
@@ -394,8 +399,12 @@ export function loadCellLevel(zoom: number | undefined): number {
 // sqrt(target / available) = sqrt(drawChance before its clamp), up to particles.zoomGrowMax, so they
 // still overlap and cover the form. 1 while the particles are plentiful.
 export function zoomGrow(fc: FrameCtx, pxArea: number, role: Role): number {
-  const p = fc.params
-  const drag = fc.view.dragging ? p.particles.dragDensity : 1
+  return zoomGrowOf(fc.params, fc.view.dragging, pxArea, role)
+}
+
+// zoomGrow from the params and whether the camera is being dragged (the pure form: the baked painting's length scan reads it too).
+export function zoomGrowOf(p: PaintParams, dragging: boolean, pxArea: number, role: Role): number {
+  const drag = dragging ? p.particles.dragDensity : 1
   const need = (p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag
   return clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, p.particles.zoomGrowMax))
 }

@@ -29,7 +29,6 @@
 import { randomFor } from '../../../style/random'
 import type { MeshMark, SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
-import { DEFAULT_PAINT_PARAMS } from '../params'
 import { ROLES, type Role, type ParticleSet } from '../types'
 import { loadCellOf, sizedLength } from '../model/brush'
 import { behaviourOf, type Behaviour } from '../model/edges'
@@ -41,7 +40,7 @@ import {
 } from '../model/roles'
 import type { Curve } from '../model/curve'
 import { ambientShare, bandFollow, Z_CAST } from '../model/value'
-import { bigMax, meshArea, roleRank } from '../model/view'
+import { bigMax, meshArea, roleRank, zoomGrowOf, zoomSizeScaleAt } from '../model/view'
 import { edgeClassAlong, type WorldEdges } from './edges'
 import { dabSitesOf, ParticleGrid, scumbleMaskOf } from './detect'
 import { fnvInts, layerOfRole, NO_PARTICLE, StrokeSink } from './draft'
@@ -53,32 +52,40 @@ import { walkStroke, resampleWalk, PATH_HITS, type WalkSide, type WalkSpec } fro
 
 // THE LENGTH OF A BAKED PATH, in zoom-1 strokes: the longest any view the bake serves can ask a stroke to be. At view zoom z a stroke is
 // sizedLength(1, big) times its zoom-1 length ON SCREEN, and a CSS px is 1/z of a reference px in the world, so the world length it needs is
-// sizedLength(1, big(z)) / z zoom-1 strokes, big(z) = min(growth(z) × zoomSizeScale(z), zoomBigMax) (view.ts). For z from BAKE_ZOOM_MIN (a view
-// zoomed out to it asks 1/z = 2 with no growth) up, the bake takes the most that is asked, with the growth bounded by what the particles supply
-// (view.ts zoomGrow: sqrt of the stroke target over the particles' px area, which is the mark's area per particle).
+// sizedLength(1, big(z)) / z zoom-1 strokes, big(z) = min(growth(z) x zoomSizeScale(z), zoomBigMax) (view.ts zoomGrowOf, zoomSizeScaleAt: the
+// frame's own formulas). For z from BAKE_ZOOM_MIN (a view zoomed out to it asks 1/z = 2 with no growth) up to 64, the bake takes the most that is
+// asked, with the growth bounded by what the particles supply (the stroke target over the particles' px area, which is the mark's area per
+// particle) at the CURRENT params: the target, the growth cap, the brush's follow of the zoom, and the HIGHEST density of the roles that grow
+// (block, form, scumble, glaze, reflected). The plan's first reading (sizedLength(1, zoomBigMax) whatever the zoom: 7.6 at the defaults) forgets
+// that the zoom divides it, and is the ceiling: a path that long winds 1.5 times round a form (the iso strokes are circles about the light) and 16
+// points cannot follow it. At the lab's showcase scenes and the default brush this is 2 to 2.7 zoom-1 strokes.
 //
-// THE SLIDERS ARE THE DEFAULT BRUSH'S. The frame-only sliders (the density, the target, the growth cap, the brush's follow of the zoom) are not in
-// the bake's key, so the bake must not read them: the bound is taken at the DEFAULT brush (DEFAULT_PAINT_PARAMS), whatever the sliders are, and
-// a frame whose sliders ask for more (a denser target, at the zoom where growth peaks) takes the path it has, clipped (no stroke is extrapolated).
-// The plan's first reading (sizedLength(1, zoomBigMax) whatever the zoom: 7.6 at the defaults) forgets that the zoom divides it, and is
-// the ceiling here: a path that long winds 1.5 times round a form (the iso strokes are circles about the light) and 16 points cannot follow it.
-// At the lab's showcase scenes this is 2 to 3 zoom-1 strokes (the particles are plentiful: only the zoomed-out view asks for more than 1).
+// BUCKETED, SO THAT THE FRAME-ONLY SLIDERS STAY CHEAP. The target, the density, the growth cap and the follow of the zoom are not in the bake's key
+// (a frame reads them), yet they move this factor: it is rounded UP to the next LENGTH_BUCKET, and the per-mark factors are in the key (index.ts
+// bakeKey). A slider move re-bakes only when a mark's bucket changes; within a bucket the baked path is the same and long enough.
+export const LENGTH_BUCKET = 0.5
 const ZOOM_SCAN = 96
+// The roles whose strokes grow with the particles' shortage (view.ts zoomGrow): the dab follows the zoom only.
+const GROWN_ROLES: readonly Role[] = ['block', 'form', 'scumble', 'glaze', 'reflected']
 export function bakeLengthFactor(params: PaintParams, areaPerParticle: number, perPx: number): number {
   const bmax = bigMax(params)
-  const d = DEFAULT_PAINT_PARAMS
-  const target = d.particles.targetPer10kPx / 10000
-  const density = d.roles.block.density
+  // a particle's px area at zoom 1, facing 1 (the largest it is on screen)
+  const px = areaPerParticle / (perPx * perPx)
   let most = 1 / BAKE_ZOOM_MIN
   for (let k = 0; k <= ZOOM_SCAN; k++) {
     const z = BAKE_ZOOM_MIN * 2 ** ((k / ZOOM_SCAN) * 7) // 0.5 .. 64
-    const px = areaPerParticle / (perPx * perPx) // a particle's px area at zoom 1, facing 1
-    const need = target * px * z * z * density
-    const grow = clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, d.particles.zoomGrowMax))
-    const big = Math.min(grow * Math.min(Math.max(1, z) ** clamp(d.particles.zoomStrokeScale, 0, 1), bmax), bmax)
+    let grow = 1
+    for (const role of GROWN_ROLES) grow = Math.max(grow, zoomGrowOf(params, false, px * z * z, role))
+    const big = Math.min(grow * zoomSizeScaleAt(z, params), bmax)
     most = Math.max(most, sizedLength(1, big) / z)
   }
-  return Math.min(most, Math.max(1 / BAKE_ZOOM_MIN, sizedLength(1, bmax)))
+  const capped = Math.min(most, Math.max(1 / BAKE_ZOOM_MIN, sizedLength(1, bmax)))
+  return Math.ceil(capped / LENGTH_BUCKET - 1e-9) * LENGTH_BUCKET
+}
+
+// The factor of every mark (the bucketed bakeLengthFactor of its area per particle): what the bake walks, and what its key holds.
+export function lengthFactorsOf(scene: SpaceScene, set: ParticleSet, params: PaintParams, perPx: number): number[] {
+  return Array.from(areaPerParticleOf(scene, set), (a) => bakeLengthFactor(params, a, perPx))
 }
 // The bend is the model's angle over a zoom-1 stroke; over the longer baked path it is scaled so the CURVATURE at the anchor stays the model's,
 // to at most this many times (a longer path would curl on itself).
@@ -249,7 +256,7 @@ export function strokeCtx(
   return {
     scene, set, params, curve, env, plan, planes, edges, perPx, L: plan.lightDir,
     terminator: terminatorValueOf(params, plan.curves), areaPerParticle,
-    lengthFactor: Array.from(areaPerParticle, (a) => bakeLengthFactor(params, a, perPx)),
+    lengthFactor: lengthFactorsOf(scene, set, params, perPx),
   }
 }
 

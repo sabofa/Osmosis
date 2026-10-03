@@ -162,6 +162,29 @@ describe('the baked surfaces', () => {
   })
 })
 
+describe('the underside’s normal', () => {
+  it('reads minus the lit side’s normal z at every vertex of an open sheet (the sky and bounce terms of the underpainting are the side’s own), and the baked colours are made from it', () => {
+    const stats = bakeStats(SADDLE.baked)!
+    const curve = curveFor(P)
+    const { under } = buildSurfaceUnder(SADDLE.scene, SADDLE.colours, SADDLE.params, curve, stats.plan, stats.planes, 0)
+    expect(under.back).not.toBeNull()
+    let worst = 0
+    let lit = 0
+    for (let v = 0; v < under.nv; v++) {
+      worst = Math.max(worst, Math.abs(under.front.nz[v] + under.back!.nz[v]))
+      if (under.front.nz[v] > 0.2) lit++
+    }
+    expect(lit).toBeGreaterThan(0.5 * under.nv)
+    expect(worst).toBe(0)
+    // the baked underside is the colours of those recipes, and differs from the lit side's where the ambient and bounce shares do
+    const again = underpaintSide(under, under.back!, SADDLE.params, env(SADDLE.params))
+    expect(Array.from(again)).toEqual(Array.from(SADDLE.baked.surfaces[0]!.underBack!))
+    let sharesDiffer = 0
+    for (let v = 0; v < under.nv; v++) if (Math.abs(under.front.amb[v] - under.back!.amb[v]) > 1e-3) sharesDiffer++
+    expect(sharesDiffer).toBeGreaterThan(0.2 * under.nv)
+  })
+})
+
 describe('the underpainting’s colours and the value rule', () => {
   // For every vertex of every opaque surface and side: the colour's lightness against the lightness of the vertex's own recipe at the family's
   // bound. Returns the margins (positive = inside the bound) of the shadow and light families (outside the terminator's band, which is held to

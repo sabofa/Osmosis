@@ -226,7 +226,7 @@ describe('the walk itself', () => {
   // A unit square sheet in the plane z = 0, refined to 0.1 edges: the walk's border and its straight steps.
   const quad = refineSurface(quadMesh({ origin: [0, 0, 0], e1: [1, 0, 0], e2: [0, 1, 0], n: 4 }), 0, 0.1, 100_000)
   const side: WalkSide = {
-    mark: 0, s: quad, side: 1, plan: null as never, planeOf: null, adjHard: () => 0, stopAt: 0.46, bleedAt: 0.24, light: [0, 0, 1],
+    mark: 0, s: quad, side: 1, plan: null as never, planeOf: null, adjHard: () => -1, stopAt: 0.46, bleedAt: 0.24, light: [0, 0, 1],
   }
   const startAt = (x: number, y: number): SurfacePoint => {
     const hit: SurfacePoint = { tri: 0, b1: 0, b2: 0 }
@@ -267,6 +267,38 @@ describe('the walk itself', () => {
     }
   })
 
+  it('stops at an edge of hardness 0 when stopAt is 0, and bleeds at one when bleedAt is 0, as the model’s `h !== undefined` does: -1 is no edge, 0 is an edge', () => {
+    // the sheet's two halves are two planes, x < 0.5 and x >= 0.5
+    const planeOf = new Int32Array(quad.indices.length / 3)
+    for (let t = 0; t < planeOf.length; t++) {
+      const a = quad.indices[3 * t]
+      const b = quad.indices[3 * t + 1]
+      const c = quad.indices[3 * t + 2]
+      planeOf[t] = (quad.positions[3 * a] + quad.positions[3 * b] + quad.positions[3 * c]) / 3 < 0.5 ? 0 : 1
+    }
+    const run = (hardness: number, stopAt: number, bleedAt: number) => {
+      const start = startAt(0.3, 0.5)
+      return walkStroke({ ...side, planeOf, adjHard: () => hardness, stopAt, bleedAt }, spec(start, [0.3, 0.5], [1, 0, 0], 0.5, { planeId: 0 }))
+    }
+    // (the walk is a shared scratch: its numbers are read before the next walk)
+    const none = run(-1, 0, 0)
+    const noEdge = { n: none.n, end: none.endB }
+    // no edge between the planes: nothing stops it, whatever stopAt is
+    expect(noEdge).toEqual({ n: 2 * WALK_STEPS + 1, end: 0 })
+    // an edge of hardness 0, stopAt 0: the walk ends at the plane boundary (the forward half, which crosses it)
+    const hit = run(0, 0, 0)
+    const stopped = { n: hit.n, end: hit.endB }
+    expect(stopped.end).toBe(1)
+    expect(stopped.n).toBeLessThan(2 * WALK_STEPS + 1)
+    // an edge of hardness 0 under stopAt 1 and bleedAt 0: the walk goes on, bled (the forward half's end is marked 3)
+    const through = run(0, 1, 0)
+    const bled = { n: through.n, end: through.endB }
+    expect(bled.end).toBe(3)
+    expect(bled.n).toBeGreaterThan(stopped.n)
+    // an edge of hardness 0 under both thresholds above 0 is no obstacle
+    expect(run(0, 1, 0.5).endB).toBe(0)
+  })
+
   it('bends by the angle it is given over its whole length (the model’s bend, a rotation about the normal)', () => {
     const w = walkStroke(side, spec(startAt(0.5, 0.5), [0.5, 0.5], [1, 0, 0], 0.4, { bend: 0.6 }))
     const dir = (a: number, b: number): number => Math.atan2(w.y[b] - w.y[a], w.x[b] - w.x[a])
@@ -276,7 +308,7 @@ describe('the walk itself', () => {
 
   it('walks across a seam and over a pole as on a surface: every point of a walk over the sphere’s longitude seam, along its equator and across its pole is on the sphere', () => {
     const sphere = SPHERE_PLAN.surfaces[0]!
-    const ws: WalkSide = { mark: 0, s: sphere, side: 1, plan: SPHERE_PLAN, planeOf: null, adjHard: () => 0, stopAt: 1, bleedAt: 1, light: SPHERE_PLAN.lightDir }
+    const ws: WalkSide = { mark: 0, s: sphere, side: 1, plan: SPHERE_PLAN, planeOf: null, adjHard: () => -1, stopAt: 1, bleedAt: 1, light: SPHERE_PLAN.lightDir }
     for (const [p, d] of [[[-1, 0.02, 0], [0, -1, 0]], [[0.02, 0.1, 0.99], [1, 0, 0]], [[0, 0, 1], [1, 0, 0]]] as [number[], number[]][]) {
       const len = Math.hypot(p[0], p[1], p[2])
       const hit: SurfacePoint = { tri: 0, b1: 0, b2: 0 }

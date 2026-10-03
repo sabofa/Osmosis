@@ -13,6 +13,7 @@ import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_SURFACE, type Bake
 import { framing, fixture, LIGHT, P, saddleColours, saddleScene, sparse, sphereColours, sphereScene, TERRACOTTA, type Fixture } from './bakeFixture'
 import { boxMesh } from './edgesFixture'
 import { arrowMark, flatColours, lineMark, pointMark, sceneOf, sphereMesh } from '../model/testing'
+import { lengthFactorsOf } from './strokes'
 import type { MeshMark } from '../../scene/types'
 
 // Whole bakes are heavy and the test machine is shared: give every test room.
@@ -116,10 +117,17 @@ describe('recolourBake: a colour-only change makes the colours again and nothing
   })
 
   it('classes the same sliders a colour change as the key does: a colour-only, render-only or frame-only change leaves the key, anything else moves it', () => {
-    const key = (p: PaintParams) => bakeKey(SPHERE.scene, LIGHT, p, SPHERE.authored)
+    const key = (p: PaintParams) => bakeKey(SPHERE.scene, LIGHT, p, SPHERE.authored, SPHERE.particles)
     const base = key(P)
-    for (const path of ['curve.lSlope', 'curve.warmHue', 'mix.strength', 'mix.hueMax', 'mix.roleBlock', 'environment.hue', 'environment.absorption', 'impasto.strength', 'canvas.texture', 'underpaint.opacity', 'roles.block.density', 'roles.dab.density', 'particles.targetPer10kPx', 'particles.fadeLo', 'particles.zoomGrowMax', 'particles.zoomStrokeScale']) {
+    for (const path of ['curve.lSlope', 'curve.warmHue', 'mix.strength', 'mix.hueMax', 'mix.roleBlock', 'environment.hue', 'environment.absorption', 'impasto.strength', 'canvas.texture', 'underpaint.opacity', 'roles.dab.density', 'particles.fadeLo']) {
       expect(key(moved(path)), path).toBe(base)
+    }
+    // the frame-only sliders that move the baked paths' length (the target, the growth cap, the brush's follow of the zoom, the densities of the roles
+    // that grow) move the key through the bucketed factor of the marks, and only when it moves
+    for (const path of ['particles.targetPer10kPx', 'particles.zoomGrowMax', 'particles.zoomStrokeScale', 'roles.block.density', 'roles.form.density', 'roles.glaze.density']) {
+      const next = moved(path)
+      const factors = (p: PaintParams) => JSON.stringify(lengthFactorsOf(SPHERE.scene, SPHERE.particles, p, SPHERE.authored.worldPerPx))
+      expect(key(next) === base, path).toBe(factors(next) === factors(P))
     }
     for (const path of ['light.intensity', 'value.halfLo', 'value.terminatorSoftness', 'roles.block.length', 'roles.glaze.width', 'edges.stopAt', 'edges.planeCellDeg', 'detect.formBandNL', 'particles.zoomBigMax', 'particles.maxPerUnit2', 'mix.loadCell', 'environment.occlusion', 'seed', 'canvas.tone.0']) {
       expect(key(moved(path)), path).not.toBe(base)
@@ -147,24 +155,24 @@ describe('the key and determinism', () => {
   })
 
   it('moves the key with the scene’s geometry, the light to 1e-6, and the authored framing; and gives a 16-digit hex string', () => {
-    const base = bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored)
+    const base = bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)
     expect(base).toMatch(/^[0-9a-f]{16}$/)
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored)).toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)).toBe(base)
     // the light: 2e-6 away is another light, 2e-8 away is the same
-    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-6, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored)).not.toBe(base)
-    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-8, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored)).toBe(base)
+    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-6, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, [LIGHT[0] + 2e-8, LIGHT[1], LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles)).toBe(base)
     // a light of another length but the same direction is the same light
-    expect(bakeKey(SPHERE.scene, [2 * LIGHT[0], 2 * LIGHT[1], 2 * LIGHT[2]], SPHERE.params, SPHERE.authored)).toBe(base)
+    expect(bakeKey(SPHERE.scene, [2 * LIGHT[0], 2 * LIGHT[1], 2 * LIGHT[2]], SPHERE.params, SPHERE.authored, SPHERE.particles)).toBe(base)
     // the authored framing: the eye, the direction, the projection, the world size of a px
     const a = SPHERE.authored
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, worldPerPx: a.worldPerPx * 1.01 })).not.toBe(base)
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, ortho: !a.ortho })).not.toBe(base)
-    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, framing(80, 25))).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, worldPerPx: a.worldPerPx * 1.01 }, SPHERE.particles)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, { ...a, ortho: !a.ortho }, SPHERE.particles)).not.toBe(base)
+    expect(bakeKey(SPHERE.scene, LIGHT, SPHERE.params, framing(80, 25), SPHERE.particles)).not.toBe(base)
     // the scene: a vertex moved, a mark added
     const sphere = SPHERE.scene.marks[0] as MeshMark
     const moved1 = { ...sphere, positions: Float64Array.from(sphere.positions, (v, i) => (i === 7 ? v + 1e-3 : v)) }
-    expect(bakeKey({ ...SPHERE.scene, marks: [moved1, SPHERE.scene.marks[1]] }, LIGHT, SPHERE.params, SPHERE.authored)).not.toBe(base)
-    expect(bakeKey({ ...SPHERE.scene, marks: [SPHERE.scene.marks[0]] }, LIGHT, SPHERE.params, SPHERE.authored)).not.toBe(base)
+    expect(bakeKey({ ...SPHERE.scene, marks: [moved1, SPHERE.scene.marks[1]] }, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)).not.toBe(base)
+    expect(bakeKey({ ...SPHERE.scene, marks: [SPHERE.scene.marks[0]] }, LIGHT, SPHERE.params, SPHERE.authored, SPHERE.particles)).not.toBe(base)
   })
 
   it('changes the baked painting when a non-colour parameter changes, and does not when a colour-only one does (the geometry, the roles and the values stay)', () => {

@@ -6,17 +6,17 @@ import { newRecipe } from '../model/recipe'
 import { BASE_END, GLAZE_ALPHA, VEIL_ALPHA, VEIL_BORDER_ALPHA, VEIL_SCALE, veilOf } from '../model/roles'
 import { flatColours, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
 import { FAM_SHADOW, Z_CAST } from '../model/value'
-import { bigMax, roleRank } from '../model/view'
-import { resolvePaintParams, type PaintParams } from '../params'
+import { bigMax, roleRank, zoomGrowOf, zoomSizeScaleAt } from '../model/view'
+import { PARAM_SCHEMA, resolvePaintParams, setParam, type PaintParams } from '../params'
 import { ROLES } from '../types'
-import { bakeKey, bakedRecipes, bakeStats } from './index'
+import { bakeKey, bakePaintingWithProgress, bakedRecipes, bakeStats } from './index'
 import { newPlanAt, planAt } from './plan'
 import { stepValueWorld } from './planes'
-import { bakeLengthFactor, SIDE_SEED, MIN_PATH_SHARE } from './strokes'
+import { bakeLengthFactor, LENGTH_BUCKET, lengthFactorsOf, SIDE_SEED, MIN_PATH_SHARE } from './strokes'
 import { locate, type SurfacePoint } from './surface'
 import { boundLightness, NO_PARTICLE, preMixLab, readRecipe } from './draft'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, BAKE_ZOOM_MIN } from './types'
-import { fixture, flatSaddleScene, inwardSphere, LIGHT, P, PX, saddleColours, sparse, sphereColours, sphereScene, TERRACOTTA, veilScene, type Fixture } from './bakeFixture'
+import { fixture, flatSaddleScene, inwardSphere, P, PX, saddleColours, sparse, sphereColours, sphereScene, TERRACOTTA, veilScene, type Fixture } from './bakeFixture'
 
 // Whole bakes are heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 180_000 })
@@ -306,6 +306,53 @@ describe('the sides of a surface', () => {
   })
 })
 
+describe('the underside’s normal: side -1 reads minus the lit side’s z', () => {
+  const { baked, particles, params } = SADDLE
+  const held = bakedRecipes(baked)!
+  const sideOf = (side: 1 | -1) => strokesWhere(SADDLE, (i) => baked.side[i] === side && baked.role[i] === ROLE('reflected'))
+
+  it('makes a reflected stroke on the underside exactly where the bounce reaches its normal (bounce x max(-n z, 0) over detect.reflectedMin, the normal the underside’s, which points down where the sheet points up), and none on the lit side', () => {
+    expect(sideOf(1).length).toBe(0)
+    const expected = new Set<number>()
+    for (let p = 0; p < particles.count; p++) {
+      // (the saddle is open with its normals up: the underside's normal is minus the mesh's, so -n z is the mesh's)
+      const gate = params.light.bounce * Math.max(particles.normal[3 * p + 2], 0) >= D.reflectedMin
+      if (gate && planOfParticle(SADDLE, p, -1).reflW > 0.35) expected.add(p)
+    }
+    const actual = new Set(sideOf(-1).map((i) => baked.particle[i]))
+    expect(expected.size).toBeGreaterThan(200)
+    let outside = 0
+    for (const p of actual) if (!expected.has(p)) outside++
+    expect(outside).toBe(0)
+    // (a few strokes are dropped for a walk too short: the model's rule)
+    expect(actual.size).toBeGreaterThanOrEqual(0.95 * expected.size)
+  })
+
+  it('keeps the side’s own normal z in the colour recipes: a particle’s stroke on the underside has minus the z of its stroke on the lit side', () => {
+    const up = new Map<number, number>()
+    const down = new Map<number, number>()
+    for (let k = 0; k < baked.count; k++) {
+      if (baked.role[k] !== ROLE('block')) continue
+      const nz = readRecipe(held.recipes, held.perm[k], newRecipe()).nz
+      if (baked.side[k] === 1) up.set(baked.particle[k], nz)
+      else down.set(baked.particle[k], nz)
+    }
+    let pairs = 0
+    let worst = 0
+    let flat = 0
+    for (const [p, nz] of up) {
+      const d = down.get(p)
+      if (d === undefined) continue
+      pairs++
+      worst = Math.max(worst, Math.abs(nz + d))
+      if (Math.abs(nz) > 0.2) flat++
+    }
+    expect(pairs).toBeGreaterThan(500)
+    expect(flat).toBeGreaterThan(0.5 * pairs)
+    expect(worst).toBeLessThanOrEqual(1e-6)
+  })
+})
+
 describe('the value rule holds in every baked stroke’s colour', () => {
   const env = (params: PaintParams) => recipeEnv(params, curveFor(params), groundLocal(params))
 
@@ -479,34 +526,101 @@ describe('a stroke too short to be a stroke', () => {
 
 describe('the baked length', () => {
   const dense = 3e-4 // world area per particle at the lab's scale
-  it('is the longest any view asks for: 2 zoom-1 strokes for a view zoomed out to BAKE_ZOOM_MIN, more where the particles are few enough that a zoomed-in view grows its strokes, never past the first reading’s bound', () => {
+  const maxima = (base: PaintParams): PaintParams => {
+    let p = base
+    for (const path of ['particles.targetPer10kPx', 'particles.zoomGrowMax', 'particles.zoomStrokeScale', ...['block', 'form', 'scumble', 'glaze', 'reflected', 'dab'].map((r) => `roles.${r}.density`)]) p = setParam(p, path, PARAM_SCHEMA.find((e) => e.path === path)!.max)
+    return p
+  }
+
+  it('is the longest any view asks for, in whole half zoom-1 strokes: 2 for a view zoomed out to BAKE_ZOOM_MIN, more where the particles are few enough that a zoomed-in view grows its strokes, never past the first reading’s bound (rounded up)', () => {
     const f = bakeLengthFactor(P, dense, PX)
     expect(f).toBeGreaterThanOrEqual(1 / BAKE_ZOOM_MIN)
     expect(f).toBeLessThan(4)
+    expect((f / LENGTH_BUCKET) % 1).toBe(0)
     const scarce = bakeLengthFactor(P, 0.02, PX)
     expect(scarce).toBeGreaterThan(f)
-    const ceiling = Math.max(1 / BAKE_ZOOM_MIN, sizedLength(1, bigMax(P)))
+    const ceiling = Math.ceil(Math.max(1 / BAKE_ZOOM_MIN, sizedLength(1, bigMax(P))) / LENGTH_BUCKET) * LENGTH_BUCKET
     expect(scarce).toBeLessThanOrEqual(ceiling)
-    expect(bakeLengthFactor(P, 100, PX)).toBeCloseTo(ceiling, 6)
+    expect(bakeLengthFactor(P, 100, PX)).toBe(ceiling)
     // the cap of the brush bounds it
-    expect(bakeLengthFactor({ ...P, particles: { ...P.particles, zoomBigMax: 1 } }, 0.02, PX)).toBeCloseTo(1 / BAKE_ZOOM_MIN, 6)
+    expect(bakeLengthFactor({ ...P, particles: { ...P.particles, zoomBigMax: 1 } }, 0.02, PX)).toBe(1 / BAKE_ZOOM_MIN)
   })
 
-  it('does not depend on the sliders only a frame reads (the density, the target, the growth cap, the brush’s follow of the zoom): moving them moves no baked path, and no key', () => {
-    const f = bakeLengthFactor(P, 0.002, PX)
-    for (const next of [
-      { ...P, particles: { ...P.particles, targetPer10kPx: 20 } },
-      { ...P, particles: { ...P.particles, zoomGrowMax: 1.5, zoomStrokeScale: 0.9 } },
-      { ...P, roles: { ...P.roles, block: { ...P.roles.block, density: 0.1 } } },
-    ] as PaintParams[]) {
-      expect(bakeLengthFactor(next, 0.002, PX)).toBe(f)
-      expect(bakeKey(SPHERE.scene, LIGHT, next, SPHERE.authored)).toBe(bakeKey(SPHERE.scene, LIGHT, P, SPHERE.authored))
+  it('reads the current brush: the target, the growth cap, the brush’s follow of the zoom, and the highest density of the roles that grow (the form’s, not only the block’s)', () => {
+    const apP = 0.002
+    const base = bakeLengthFactor(P, apP, PX)
+    expect(bakeLengthFactor(setParam(P, 'particles.targetPer10kPx', 300), apP, PX)).toBeGreaterThan(base)
+    expect(bakeLengthFactor(setParam(P, 'particles.zoomStrokeScale', 1), apP, PX)).toBeGreaterThan(base)
+    expect(bakeLengthFactor(setParam(P, 'roles.form.density', 2), apP, PX)).toBeGreaterThan(base)
+    expect(bakeLengthFactor(setParam(P, 'roles.scumble.density', 2), apP, PX)).toBeGreaterThan(base)
+    // (the dab follows the zoom only: its density does not grow it)
+    expect(bakeLengthFactor(setParam(P, 'roles.dab.density', 2), apP, PX)).toBe(base)
+    // the growth cap bounds the growth: at 1 there is none
+    expect(bakeLengthFactor(setParam(setParam(P, 'particles.targetPer10kPx', 300), 'particles.zoomGrowMax', 1), 0.02, PX)).toBeLessThan(bakeLengthFactor(setParam(P, 'particles.targetPer10kPx', 300), 0.02, PX))
+  })
+
+  describe('on a sparse mark (a flat open sheet of 2 x 2 at 500 particles a world unit²)', () => {
+    const sparseScene = fixture(flatSaddleScene(), saddleColours(), sparse(500))
+    const BASE = sparseScene.params
+    const apP = sparseScene.baked.areaPerParticle[0]
+    const rebake = (params: PaintParams) => bakePaintingWithProgress(sparseScene.scene, sparseScene.particles, sparseScene.colours, sparseScene.light, params, sparseScene.authored)
+    const keyOf = (params: PaintParams) => bakeKey(sparseScene.scene, sparseScene.light, params, sparseScene.authored, sparseScene.particles)
+    // the longest baked path in zoom-1 strokes, over the blocks
+    const longest = (b: ReturnType<typeof rebake>): number => {
+      let m = 0
+      for (let i = 0; i < b.count; i++) if (b.role[i] === ROLE('block')) m = Math.max(m, b.pathLength[i] / (b.basePx[2 * i] * PX))
+      return m
     }
+
+    it('lengthens the paths and changes the key when the target is raised from the default to 300 (the plan: a slider the key does not hold, through the factor it moves)', () => {
+      const high = setParam(BASE, 'particles.targetPer10kPx', 300)
+      expect(bakeLengthFactor(high, apP, PX)).toBeGreaterThan(bakeLengthFactor(BASE, apP, PX))
+      expect(keyOf(high)).not.toBe(keyOf(BASE))
+      const longer = rebake(high)
+      expect(longer.key).toBe(keyOf(high))
+      expect(longest(longer)).toBeGreaterThan(1.2 * longest(sparseScene.baked))
+    })
+
+    it('leaves the key, and every array, alone for a move inside a bucket', () => {
+      const small = setParam(BASE, 'particles.targetPer10kPx', BASE.particles.targetPer10kPx + 6)
+      expect(bakeLengthFactor(small, apP, PX)).toBe(bakeLengthFactor(BASE, apP, PX))
+      expect(keyOf(small)).toBe(keyOf(BASE))
+      const again = rebake(small)
+      expect(again.key).toBe(sparseScene.baked.key)
+      for (const k of ['worldPath', 'pathLength', 'basePx', 'colour', 'role'] as const) expect(Buffer.compare(Buffer.from(again[k].buffer), Buffer.from(sparseScene.baked[k].buffer)), k).toBe(0)
+    })
+
+    it('clips no surface stroke by more than 2% at any zoom from BAKE_ZOOM_MIN to 8 with the sliders at their maxima: the length a frame needs (sizedLength(basePx[0], big) / px per world unit, the frame’s own growth) is at most 1.02 times the length the stroke was walked for', () => {
+      const params = maxima(BASE)
+      const baked = rebake(params)
+      const factors = lengthFactorsOf(sparseScene.scene, sparseScene.particles, params, PX)
+      let worst = 0
+      let full = 0
+      let strokes = 0
+      for (let i = 0; i < baked.count; i++) {
+        if (baked.particle[i] === NO_PARTICLE) continue
+        const role = ROLES[baked.role[i]] as 'block' | 'form' | 'scumble' | 'glaze' | 'reflected'
+        const walked = baked.basePx[2 * i] * PX * factors[baked.mark[i]]
+        for (let k = 0; k <= 30; k++) {
+          const z = BAKE_ZOOM_MIN * 2 ** ((k / 30) * Math.log2(8 / BAKE_ZOOM_MIN))
+          const ppu = z / PX
+          // the frame's pxArea at facing 1, its growth and its size scale
+          const big = Math.min(zoomGrowOf(params, false, baked.areaPerParticle[baked.mark[i]] * ppu * ppu, role) * zoomSizeScaleAt(z, params), bigMax(params))
+          worst = Math.max(worst, sizedLength(baked.basePx[2 * i], big) / ppu / walked)
+        }
+        strokes++
+        if (baked.pathLength[i] >= 0.9 * walked) full++
+      }
+      expect(strokes).toBeGreaterThan(1000)
+      expect(worst).toBeLessThanOrEqual(1.02)
+      // (and the length asked for is walked: a sheet's strokes that meet no border run to it)
+      expect(full).toBeGreaterThan(0.05 * strokes)
+    })
   })
 
   it('makes every baked path at most the factor times its zoom-1 length (a chord is never longer than the arc)', () => {
-    const { baked, particles } = SPHERE
-    const factor = bakeLengthFactor(SPHERE.params, baked.areaPerParticle[0], PX)
+    const { baked, particles, scene, params } = SPHERE
+    const factor = lengthFactorsOf(scene, particles, params, PX)[0]
     for (let i = 0; i < baked.count; i++) {
       if (baked.mark[i] !== 0) continue
       expect(baked.pathLength[i]).toBeLessThanOrEqual(factor * baked.basePx[2 * i] * PX * (1 + 1e-4))
@@ -514,4 +628,3 @@ describe('the baked length', () => {
     expect(particles.count).toBeGreaterThan(1000)
   })
 })
-

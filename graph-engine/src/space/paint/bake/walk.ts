@@ -41,7 +41,7 @@ export interface WalkSide {
   // The side whose normal the stroke follows: +1 or -1 (a closed opaque mesh's outside is +1).
   side: 1 | -1
   plan: WorldPlan
-  // The plane of each refined triangle on this side (null: none, a veil), and the mean hardness between two planes.
+  // The plane of each refined triangle on this side (null: none, a veil), and the mean hardness between two planes (-1: they meet in no edge).
   planeOf: Int32Array | null
   adjHard: (a: number, b: number) => number
   stopAt: number
@@ -345,8 +345,9 @@ function walkHalf(w: WalkSide, sp: WalkSpec, sign: number, half: number, out: Ha
     if (planeId >= 0 && w.planeOf) {
       const label = w.planeOf[HIT.tri]
       if (label >= 0 && label !== planeId) {
+        // (-1: the planes meet in no edge, as the model's undefined; an edge of hardness 0 is an edge)
         const h = w.adjHard(planeId, label)
-        if (h > 0) {
+        if (h >= 0) {
           if (h >= w.stopAt) {
             out.end = 1
             return

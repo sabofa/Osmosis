@@ -106,7 +106,8 @@ export interface WorldEdgeRun {
 export interface WorldEdges {
   runs: WorldEdgeRun[]
   // The mean hardness of the samples between planes a and b (the runs that are between planes: a crease or border line is not one: the plane
-  // boundary of the same place is); 0 where they do not meet.
+  // boundary of the same place is), 0..1; -1 where they do not meet (no edge: the model's `undefined`, so that an edge of hardness 0 is told from
+  // none by a walk whose stopAt or bleedAt is 0).
   adjHard(a: number, b: number): number
   // The edge field per refined vertex per side ([mark][side index 0 = +1, 1 = -1]; a closed opaque mesh has index 0 only, and a mark
   // that is not an opaque mesh has none).
@@ -1089,7 +1090,7 @@ export function buildWorldEdges(plan: WorldPlan, planes: WorldPlanes, params: Pa
     runs: scored.map((r) => r.run),
     adjHard: (a, b) => {
       const e = adj.get(a < b ? a * nPlanes + b : b * nPlanes + a)
-      return e ? e.sum / e.n : 0
+      return e ? e.sum / e.n : -1
     },
     field: out,
     focal: ctx.focal,

@@ -324,7 +324,7 @@ describe('a scene with nothing to paint on', () => {
     expect(planes.planeOf).toEqual([[null, null], [null, null]])
     expect(edges.runs.length).toBe(0)
     expect(edges.field).toEqual([[], []])
-    expect(edges.adjHard(0, 1)).toBe(0)
+    expect(edges.adjHard(0, 1)).toBe(-1)
     expect(Array.from(edges.focal).every((v) => Number.isNaN(v))).toBe(true)
     expect(edgeClassAlong(edges, plan, 0, 1, [{ tri: 0, b1: 0, b2: 0 }], 1, 0)).toBe(edgeClassOf(0.78, P))
   })
@@ -512,19 +512,19 @@ describe('the adjacency of planes', () => {
     expect(positive).toBeGreaterThan(0.5 * sums.size)
   })
 
-  it('is 0 for planes that never meet: opposite sides of the sphere, a plane and itself, the sphere’s and the table’s, none', () => {
+  it('is -1 (no edge, as the model’s undefined: an edge can be of hardness 0) for planes that never meet: opposite sides of the sphere, a plane and itself, the sphere’s and the table’s, none', () => {
     const sphere = planes.planes.filter((p) => p.mark === 0)
     const a = sphere[0]
     const far = sphere.reduce((best, p) => (p.nx * a.nx + p.ny * a.ny + p.nz * a.nz < best.nx * a.nx + best.ny * a.ny + best.nz * a.nz ? p : best))
     expect(far.nx * a.nx + far.ny * a.ny + far.nz * a.nz).toBeLessThan(-0.5)
-    expect(edges.adjHard(a.id, far.id)).toBe(0)
-    expect(edges.adjHard(far.id, a.id)).toBe(0)
-    expect(edges.adjHard(a.id, a.id)).toBe(0)
+    expect(edges.adjHard(a.id, far.id)).toBe(-1)
+    expect(edges.adjHard(far.id, a.id)).toBe(-1)
+    expect(edges.adjHard(a.id, a.id)).toBe(-1)
     const table = planes.planes.find((p) => p.mark === 1)!
-    expect(edges.adjHard(a.id, table.id)).toBe(0)
-    expect(edges.adjHard(a.id, -1)).toBe(0)
-    expect(edges.adjHard(-1, -1)).toBe(0)
-    expect(edges.adjHard(a.id, 99999)).toBe(0)
+    expect(edges.adjHard(a.id, table.id)).toBe(-1)
+    expect(edges.adjHard(a.id, -1)).toBe(-1)
+    expect(edges.adjHard(-1, -1)).toBe(-1)
+    expect(edges.adjHard(a.id, 99999)).toBe(-1)
   })
 })
 

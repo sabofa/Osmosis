@@ -22,7 +22,7 @@ import { colourStrokes, gatherColours, packStrokeArrays, paintingOrder, StrokeSi
 import { buildWorldEdges, type WorldEdges } from './edges'
 import { buildWorldPlan, type WorldPlan } from './plan'
 import { buildWorldPlanes, type WorldPlanes } from './planes'
-import { buildSurfaceStrokes, strokeCtx, type SurfaceStrokeStats } from './strokes'
+import { buildSurfaceStrokes, lengthFactorsOf, strokeCtx, type SurfaceStrokeStats } from './strokes'
 import { buildSurfaceUnder, withUnderColours, type SurfaceUnder } from './underpaint'
 import type { AuthoredFraming, BakedPainting, BakedSurface, BakePainting, RecolourBake } from './types'
 
@@ -96,9 +96,10 @@ export function bakedParams(params: PaintParams): unknown {
 }
 
 // A key of everything the bake read: the scene (its marks' kinds, counts, geometry and the style fields that change what is baked), the light direction
-// to 1e-6, the authored framing, and the params that are not the frame's or the colours'. Equal keys, equal paintings (for equal particle sets and
+// to 1e-6, the authored framing, the params that are not the frame's or the colours', and the bucketed length factor of every mark (which the
+// frame-only sliders move, a bucket at a time: strokes.ts bakeLengthFactor), so it takes the particle set. Equal keys, equal paintings (for equal particle sets and
 // theme colours, which the lab rebuilds on their own changes).
-export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: PaintParams, authored: AuthoredFraming): string {
+export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: PaintParams, authored: AuthoredFraming, particles: ParticleSet): string {
   const h = new Fnv()
   h.number(scene.marks.length)
   for (const m of scene.marks) {
@@ -127,6 +128,8 @@ export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: 
   for (const v of [...authored.eye, ...authored.viewDir]) h.number(v)
   h.number(authored.ortho ? 1 : 0).number(authored.worldPerPx)
   h.text(JSON.stringify(bakedParams(params)))
+  // the baked paths' lengths: the factor of every mark, bucketed (strokes.ts bakeLengthFactor), which the frame-only sliders move
+  h.text(JSON.stringify(lengthFactorsOf(scene, particles, params, authored.worldPerPx)))
   return h.hex()
 }
 
@@ -220,7 +223,7 @@ export function bakePaintingWithProgress(
     surfaces,
     focal: edges.focal,
     dataColour: new Float32Array(3 * nMarks), // TASK 3b: lines.ts fills it (the line recipe's colour before the mix)
-    key: bakeKey(scene, lightDir, params, authored),
+    key: bakeKey(scene, lightDir, params, authored, particles),
   }
   retained.set(baked, { recipes, perm, unders })
   if (options.keepStats) statsOf.set(baked, { plan, planes, edges, strokes: strokeStats })
