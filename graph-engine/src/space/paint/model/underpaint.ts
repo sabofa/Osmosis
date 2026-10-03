@@ -420,7 +420,7 @@ function readSample(f: UnderpaintField, s: number, r: ReturnType<typeof newRecip
   r.pz = f.pos[3 * s + 2]
 }
 
-const mixerOf = (params: PaintParams): LoadMixer => new LoadMixer({ ...params, mix: { ...params.mix, strength: params.mix.strength * UNDERPAINT_MIX } })
+export const mixerOf = (params: PaintParams): LoadMixer => new LoadMixer({ ...params, mix: { ...params.mix, strength: params.mix.strength * UNDERPAINT_MIX } })
 
 // The colour (linear-light sRGB, 3 per band pixel) of every pixel of the plan's terminator band and of its ring: the recipe of its
 // donor sample made at the pixel's own plan value, then the donor cell's brush-load mix. A pixel of the band is held to no family: it

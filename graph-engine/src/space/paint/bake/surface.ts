@@ -720,7 +720,7 @@ const HIT = { b1: 0, b2: 0, d2: 0 }
 
 // The point of triangle (a, b, c) nearest to p, as barycentric weights of b and c, and its squared distance (Ericson, Real-Time
 // Collision Detection 5.1.5). Written into `out`.
-function closestOnTriangle(
+export function closestOnTriangle(
   px: number, py: number, pz: number,
   ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number,
   out: { b1: number; b2: number; d2: number },

@@ -33,28 +33,30 @@ import { PATH_POINTS, type Oklab, type Role } from '../types'
 import { loadCellOf, sizedBristles, sizedLength, sizedVariance, sizedWidth, reshapeWidths } from './brush'
 import { behaviourOf, strokeEdgeClass, type Behaviour } from './edges'
 import { clamp, scratchU8, vcross, vlen, vnorm, type V3 } from './math'
+import type { PaintParams } from '../params'
 import { stepValue, chamferDist } from './planes'
 import { colourOfDraft, newRecipe, type DraftColour } from './recipe'
+import type { CompiledCurves } from './respond'
 import { holdOf, pathFromWalk, roleIndex, walkStroke, type DirMode, type PaintCtx, type StrokeDraft, type WalkSpec } from './strokes'
 import { ambientShare, bandFollow, effectiveValues, familyBound, holdFamily, newZoneSample, planSample } from './value'
 import { bigMax, drawFade, gIndex, toEye, unproject, zoomGrow } from './view'
 import { Z_CAST } from './zones'
 
 // The rotation of the direction field, radians (σ), per role: the hand is never exact.
-const ROT: Partial<Record<Role, number>> = { block: 0.22, form: 0.34, scumble: 0.5, glaze: 0.22, reflected: 0.22, dab: 0.1 }
+export const ROT: Partial<Record<Role, number>> = { block: 0.22, form: 0.34, scumble: 0.5, glaze: 0.22, reflected: 0.22, dab: 0.1 }
 // Where a stroke of an unclassed role ends: 0 crisp .. 1 dissolved.
-const BASE_END: Record<Role, number> = { block: 0.19, form: 0.31, scumble: 0.875, glaze: 0, reflected: 0.09, dab: 0, edge: 0.09, line: 0 }
+export const BASE_END: Record<Role, number> = { block: 0.19, form: 0.31, scumble: 0.875, glaze: 0, reflected: 0.09, dab: 0, edge: 0.09, line: 0 }
 // The mockup's STYLE.opacity per role: how opaque a loaded stroke is.
-const PLAIN: Record<Role, boolean> = { block: false, form: false, scumble: false, glaze: true, reflected: true, dab: true, edge: false, line: true }
+export const PLAIN: Record<Role, boolean> = { block: false, form: false, scumble: false, glaze: true, reflected: true, dab: true, edge: false, line: true }
 // A veil's glazes are bigger than a core glaze, and nearly clear.
-const VEIL_SCALE = 2
+export const VEIL_SCALE = 2
 // The renderer takes a glaze's alpha as its ABSOLUTE opacity (capped at 0.34) and
 // multiplies every other role's alpha by that role's own base opacity.
-const GLAZE_ALPHA = 0.34
-const VEIL_ALPHA = 0.3
-const VEIL_BORDER_ALPHA = 0.34
+export const GLAZE_ALPHA = 0.34
+export const VEIL_ALPHA = 0.3
+export const VEIL_BORDER_ALPHA = 0.34
 // The end of a veil's stroke is a dry brush lifting, not a cut: 0..1 of the dissolve a class gives an edge.
-const VEIL_END_SOFT = 0.5
+export const VEIL_END_SOFT = 0.5
 // A veil is a film, and it must read as one: tinted and brushy, with the surface behind it still showing.
 // What a film shows is how much of each pixel its strokes cover, 1 - exp(-tau), tau the sum over the strokes
 // over the pixel of -ln(1 - alpha x efficacy). The first calibration had two faults. A veil stroke was thin:
@@ -65,10 +67,10 @@ const VEIL_END_SOFT = 0.5
 // the alpha), and a veil's strokes are 0.1 of the glaze role's screen density: about 5 to 10k px² (of 80 x 160 px
 // close up, 40 x 80 at the lab's framing), 3 on a pixel, a film of about 0.6 face on and 0.45 at a graze, mottled
 // where the strokes' ends and the brush's gaps let the surface through (veil.test.ts holds the numbers).
-const VEIL_LOAD = 3
-const VEIL_DENSITY = 0.1
+export const VEIL_LOAD = 3
+export const VEIL_DENSITY = 0.1
 // The soft clamp of the direction field's degeneracy (n ∥ L).
-const ISO_MIN = 0.12
+export const ISO_MIN = 0.12
 // Scratch for the hot loop of a stroke (one stroke is built at a time).
 const FIXED: V3 = [0, 0, 0]
 const CLS_X = new Float64Array(9)
@@ -280,18 +282,21 @@ function strokeColour(
 // A stroke that stops at the terminator (stopBelow) stops where the plan value falls under the middle of the soft edge
 // between the core and the darkest half-tone: the plan value at N·L = 0. The plan value has the value curve applied, so
 // the stop is the middle of the two plateaus (the model's own, held to the structure) through the same curve.
-const TERMINATOR = -2
-export function terminatorValue(an: PaintCtx): number {
-  const ev = effectiveValues(an.fc.params)
-  return an.plan.curves.value(0.5 * (ev.corePlateau + ev.halfLo))
+export const TERMINATOR = -2
+export function terminatorValueOf(params: PaintParams, curves: CompiledCurves): number {
+  const ev = effectiveValues(params)
+  return curves.value(0.5 * (ev.corePlateau + ev.halfLo))
 }
-interface RoleCfg {
+export function terminatorValue(an: PaintCtx): number {
+  return terminatorValueOf(an.fc.params, an.plan.curves)
+}
+export interface RoleCfg {
   dir: 'block' | 'form'
   classed: 'full' | 'soft' | 'none'
   start: 'hand' | 'light'
   stopBelow: number
 }
-const CFG: Record<'block' | 'form' | 'scumble' | 'glaze' | 'reflected', RoleCfg> = {
+export const CFG: Record<'block' | 'form' | 'scumble' | 'glaze' | 'reflected', RoleCfg> = {
   block: { dir: 'block', classed: 'full', start: 'hand', stopBelow: -1 },
   form: { dir: 'form', classed: 'full', start: 'light', stopBelow: TERMINATOR },
   scumble: { dir: 'block', classed: 'soft', start: 'hand', stopBelow: -1 },
@@ -299,7 +304,7 @@ const CFG: Record<'block' | 'form' | 'scumble' | 'glaze' | 'reflected', RoleCfg>
   reflected: { dir: 'form', classed: 'none', start: 'hand', stopBelow: -1 },
 }
 
-type ParticleRole = keyof typeof CFG
+export type ParticleRole = keyof typeof CFG
 
 function buildParticleStroke(an: PaintCtx, k: number, role: ParticleRole, fade: number, veilPass: 0 | 1 | 2 = 0): boolean {
   const { set, vis, fc } = an
@@ -577,7 +582,7 @@ export function scumbleMask(an: PaintCtx): void {
 
 // ---- highlight dabs ----
 
-const DAB_MIN_VALUE = 0.8
+export const DAB_MIN_VALUE = 0.8
 
 export function dabStrokes(an: PaintCtx): void {
   const { fc, plan, set, vis } = an
