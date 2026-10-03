@@ -7,15 +7,16 @@
 // move as the camera does.
 //
 //   THE KEY of a triangle (per mesh and side):
-//     * figure: the side normal at the centroid, as a latitude-longitude cell of planeCellDeg degrees (the longitude cell
-//       widened toward the poles), WORLD axes with z up, and the triangle's zone: the zone most of its vertices have (on a
-//       three-way tie, the zone of the vertex whose plan value u is the median);
+//     * figure: the side normal at the centroid, as a latitude-longitude cell of planeCellDeg degrees, WORLD axes with z up (each
+//       latitude band a whole number of longitude cells, fewer toward the poles as the model's, and the bands that reach a pole one
+//       cell: lonCell), and the triangle's zone: the zone most of its vertices have (on a three-way tie, the zone of the vertex
+//       whose plan value u is the median);
 //     * ground (bare table): whether the triangle is cast shadow (its zone is the cast zone) and, for a cast shadow, how far
 //       from the thing that casts it, in px at the reference scale (the mean shadow distance of the ray hits, thresholds 26
 //       and 64: the model's bands, now measured from the occluder and not from the figure's silhouette on the screen).
 //   COMPONENTS are the connected sets of equal key over the surface's triangle adjacency (across seams too: bake/surface.ts
 //   keeps the adjacency on canonical vertices).
-//   MERGE as the model's: a piece smaller than planeMinPx CSS px² (at the reference scale) that is not ground joins the
+//   MERGE as the model's: a piece smaller than planeMinPx CSS px² (at the reference scale; and than three triangles of the plan's cells: PLANE_MIN_TRIANGLES) that is not ground joins the
 //   neighbour of the same mesh, side and FAMILY (light and half-tone; core, reflected and cast) it shares the longest border
 //   with (a world length), a neighbour of its own zone counting double; a piece with no such neighbour stays, small. (A
 //   core-shadow sliver merged into a half-tone plane would be painted at the half-tone's value: the value rule holds across
@@ -29,11 +30,18 @@
 import type { Curve } from '../model/curve'
 import { clamp, D2R } from '../model/math'
 import type { PaintParams } from '../params'
+import { UNDERPAINT_CELL_PX } from '../model/underpaint'
 import type { Oklab, ParticleSet, SceneColours } from '../types'
 import { ZONES } from '../types'
 import { zoneFamily, Z_CAST } from '../model/value'
 import type { SidePlan, WorldPlan } from './plan'
 import { locate, normalOf, type RefinedSurface, type SurfacePoint } from './surface'
+
+// A piece of a plane is "tiny" at least where it is a few triangles of the plan's cells: planeMinPx (70 CSS px², the model's, measured
+// on pixels) is under the area of ONE triangle of a 12 px cell (72), so on the surface a piece of one or two triangles, the jag of a cell
+// boundary or of a zone's edge, would never merge. The merge floor is the larger of planeMinPx and this many cells' triangles.
+export const PLANE_MIN_TRIANGLES = 3
+const TRIANGLE_PX2 = (UNDERPAINT_CELL_PX * UNDERPAINT_CELL_PX) / 2
 
 // The model's two thresholds on a cast shadow's distance from what casts it (planes.ts: 26 and 64 CSS px).
 export const GROUND_BAND_PX: readonly [number, number] = [26, 64]
@@ -73,6 +81,16 @@ export interface WorldPlanes {
   // opaque mesh and for the side an opaque closed mesh does not have.
   planeOf: (Int32Array | null)[][]
   planes: WorldPlane[]
+}
+
+// The longitude cell of a normal in latitude band `latI` (of `cell` radians): each band has a WHOLE number of longitude cells, so there is no
+// partial cell at +-pi to make slivers, and the bands that reach a pole are one cell (the pole is not a pinwheel of wedges). The number of
+// cells in a band follows the model's widening toward the poles: 2π·max(0.35, cos of the band's centre) / cell, at least 1.
+export function lonCell(latI: number, lon: number, cell: number): number {
+  const centre = (latI + 0.5) * cell - Math.PI / 2
+  if (Math.abs(Math.abs(centre) - Math.PI / 2) <= cell / 2 + 1e-9) return 0
+  const nLon = Math.max(1, Math.round((2 * Math.PI * Math.max(0.35, Math.cos(centre))) / cell))
+  return Math.min(nLon - 1, Math.floor(((lon + Math.PI) / (2 * Math.PI)) * nLon))
 }
 
 // A triangle's zone: the zone of most of its vertices; of three different ones, the zone of the vertex whose u is the median.
@@ -154,6 +172,7 @@ function planesOfSide(
   const perPx = plan.referenceWorldPerPx
   const e = params.edges
   const cell = Math.max(1, e.planeCellDeg) * D2R // (a cell under a degree would crowd the key's longitude field; the slider stops at 5)
+  const nBands = Math.max(1, Math.ceil(Math.PI / cell - 1e-9))
   const idx = s.indices
 
   // the key of every triangle
@@ -189,10 +208,8 @@ function planesOfSide(
       normalOf(s, at, side, n)
       const lat = Math.asin(clamp(n[2], -1, 1))
       const lon = Math.atan2(n[1], n[0])
-      const latI = Math.floor((lat + Math.PI / 2) / cell)
-      const step = cell / Math.max(0.35, Math.cos(lat))
-      const lonI = Math.floor((lon + Math.PI) / step)
-      key[t] = (latI * 4096 + lonI) * 8 + zone
+      const latI = Math.min(nBands - 1, Math.floor((lat + Math.PI / 2) / cell))
+      key[t] = (latI * 4096 + lonCell(latI, lon, cell)) * 8 + zone
     }
   }
 
@@ -235,7 +252,7 @@ function planesOfSide(
     return a
   }
   if (!ground) {
-    const minArea = e.planeMinPx * perPx * perPx
+    const minArea = Math.max(e.planeMinPx, PLANE_MIN_TRIANGLES * TRIANGLE_PX2) * perPx * perPx
     const small: number[] = []
     for (let c = 0; c < nc; c++) if (compArea[c] < minArea) small.push(c)
     if (small.length > 0) {

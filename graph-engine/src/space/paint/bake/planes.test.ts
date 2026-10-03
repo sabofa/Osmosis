@@ -8,7 +8,8 @@ import { worldLight } from '../model/valueFinalFixture'
 import { zoneFamily, Z_CAST, Z_CORE, Z_HALF, Z_LIGHT, Z_REFLECTED } from '../model/value'
 import type { Oklab, ParticleSet } from '../types'
 import { buildWorldPlan } from './plan'
-import { buildWorldPlanes, stepValueWorld, triangleZone, GROUND_BAND_PX, type WorldPlanes } from './planes'
+import { buildWorldPlanes, lonCell, PLANE_MIN_TRIANGLES, stepValueWorld, triangleZone, GROUND_BAND_PX, type WorldPlanes } from './planes'
+import { parametricMesh } from '../../testing/marks'
 import { locate, type SurfacePoint } from './surface'
 
 // A plan over a refined surface is heavy and the test machine is shared: give every test room.
@@ -30,6 +31,14 @@ const bytes = (a: ArrayBufferView) => Buffer.from(a.buffer, a.byteOffset, a.byte
 
 // The planes of one mark and side.
 const planesOn = (planes: WorldPlanes, mark: number, side: 1 | -1 | 0) => planes.planes.filter((p) => p.mark === mark && p.side === side)
+
+// A torus about the z axis, major radius R, minor r, smooth outward normals.
+const torusMesh = (R: number, r: number, nu: number, nv: number) =>
+  parametricMesh(
+    (u, v) => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)],
+    (u, v) => [Math.cos(v) * Math.cos(u), Math.cos(v) * Math.sin(u), Math.sin(v)],
+    0, 2 * Math.PI, 0, 2 * Math.PI, nu, nv,
+  )
 
 describe('triangleZone', () => {
   const zones = Uint8Array.from([Z_LIGHT, Z_LIGHT, Z_CORE, Z_HALF, Z_CORE, Z_REFLECTED])
@@ -74,7 +83,7 @@ describe('buildWorldPlanes: the sphere under the lab’s light', () => {
     // a latitude-longitude cell of 26 degrees on the whole sphere is about 68 of them; the zone bands (light, half-tone, core, reflected)
     // cut some of them in two. (The per-frame model sees one hemisphere of it.)
     expect(sphere.length).toBeGreaterThan(40)
-    expect(sphere.length).toBeLessThan(220)
+    expect(sphere.length).toBeLessThan(150)
     expect(sphere.length).toBeLessThan(PLAN.surfaces[0]!.indices.length / 3 / 20)
   })
 
@@ -93,7 +102,7 @@ describe('buildWorldPlanes: the sphere under the lab’s light', () => {
   it('merges the small pieces into a neighbour of their own family: a plane under the minimum area that is not ground has no neighbour of its family', () => {
     const s = PLAN.surfaces[0]!
     const ids = PLANES.planeOf[0][0]!
-    const minArea = P.edges.planeMinPx * PX * PX
+    const minArea = Math.max(P.edges.planeMinPx, PLANE_MIN_TRIANGLES * 72) * PX * PX // (planeMinPx, or three triangles of a 12 px cell)
     const small = new Set(sphere.filter((p) => p.area < minArea).map((p) => p.id))
     // (a piece smaller than the minimum is kept only where no neighbour is of its family)
     const neighbours = new Map<number, Set<number>>()
@@ -164,6 +173,94 @@ describe('buildWorldPlanes: the sphere under the lab’s light', () => {
       return best.nx * L[0] + best.ny * L[1] + best.nz * L[2]
     }
     expect(lit(planes2, worldLight(120, 25))).toBeGreaterThan(0.8)
+  })
+})
+
+describe('the longitude cells', () => {
+  // a sweep of longitudes: the cell of each, per latitude band
+  const sweep = (latI: number, cell: number): number[] => Array.from({ length: 7200 }, (_, k) => lonCell(latI, -Math.PI + ((k + 0.5) / 7200) * 2 * Math.PI, cell))
+
+  for (const deg of [26, 10, 45, 30]) {
+    it(`give every latitude band of ${deg} degrees a whole number of equal cells, none partial at ±π, and the bands that reach a pole one cell`, () => {
+      const cell = (deg * Math.PI) / 180
+      const bands = Math.ceil(Math.PI / cell - 1e-9)
+      for (let latI = 0; latI < bands; latI++) {
+        const cells = sweep(latI, cell)
+        const n = Math.max(...cells) + 1
+        const centre = (latI + 0.5) * cell - Math.PI / 2
+        const polar = Math.abs(Math.abs(centre) - Math.PI / 2) <= cell / 2 + 1e-9
+        if (polar) {
+          expect(n, `band ${latI}`).toBe(1)
+          continue
+        }
+        // as many cells as the model's widening toward the poles says, to a whole number
+        expect(n, `band ${latI}`).toBe(Math.max(1, Math.round((2 * Math.PI * Math.max(0.35, Math.cos(centre))) / cell)))
+        // every cell from 0 to n - 1 is there, in order, and as wide as the others (the last is not a remainder)
+        const counts = new Array<number>(n).fill(0)
+        let prev = 0
+        for (const c of cells) {
+          expect(c).toBeGreaterThanOrEqual(prev)
+          prev = c
+          counts[c]++
+        }
+        for (const c of counts) expect(Math.abs(c - 7200 / n), `band ${latI}`).toBeLessThanOrEqual(1)
+      }
+    })
+  }
+})
+
+describe('buildWorldPlanes: the lat/lon binning leaves no seam sliver and no pinwheel at the pole', () => {
+  const trianglesNear = (planes: WorldPlanes, plan: ReturnType<typeof buildWorldPlan>, mark: number, test: (cx: number, cy: number, cz: number, nz: number) => boolean): Set<number> => {
+    const s = plan.surfaces[mark]!
+    const ids = planes.planeOf[mark][0]!
+    const out = new Set<number>()
+    for (let t = 0; t < ids.length; t++) {
+      const a = 3 * s.indices[3 * t]
+      const b = 3 * s.indices[3 * t + 1]
+      const c = 3 * s.indices[3 * t + 2]
+      const nz = (s.normals[a + 2] + s.normals[b + 2] + s.normals[c + 2]) * s.orient / 3
+      if (test((s.positions[a] + s.positions[b] + s.positions[c]) / 3, (s.positions[a + 1] + s.positions[b + 1] + s.positions[c + 1]) / 3, (s.positions[a + 2] + s.positions[b + 2] + s.positions[c + 2]) / 3, nz)) out.add(ids[t])
+    }
+    return out
+  }
+  const torus = (() => {
+    const scene = sceneOf([torusMesh(1, 0.4, 40, 20)])
+    const plan = buildWorldPlan(scene, LIGHT, P, PX)
+    return { plan, planes: buildWorldPlanes(plan, buildParticles(scene, COLOURS, P), COLOURS, CURVE, P) }
+  })()
+
+  for (const [name, get] of [['the sphere', () => ({ plan: PLAN, planes: PLANES })], ['the torus', () => torus]] as const) {
+    it(`has no plane of ${name} under three minimum areas that borders longitude ±π`, () => {
+      const { plan, planes } = get()
+      const nearSeam = trianglesNear(planes, plan, 0, (cx, cy) => Math.abs(Math.atan2(cy, cx)) > Math.PI - 0.15)
+      const minArea = 3 * P.edges.planeMinPx * PX * PX
+      const slivers = [...nearSeam].filter((id) => planes.planes[id].area < minArea)
+      expect(slivers, `planes ${slivers.join(',')}`).toEqual([])
+      // and the seam is there to border: planes do border it
+      expect(nearSeam.size).toBeGreaterThan(3)
+    })
+  }
+
+  it('has at most 2 planes within 10 degrees of the pole of the sphere (it was 7: a pinwheel of wedges), and at most 4 along the crest of the torus (it was 16)', () => {
+    const cap = Math.cos((10 * Math.PI) / 180)
+    expect(trianglesNear(PLANES, PLAN, 0, (_x, _y, _z, nz) => nz > cap).size).toBeLessThanOrEqual(2)
+    expect(trianglesNear(torus.planes, torus.plan, 0, (_x, _y, _z, nz) => nz > cap).size).toBeLessThanOrEqual(4)
+  })
+
+  it('merges the slivers of a cell’s jag into their neighbours: no plane under three triangles of the plan’s cells that has a neighbour of its family', () => {
+    const minArea = PLANE_MIN_TRIANGLES * 72 * PX * PX
+    for (const [plan, planes] of [[PLAN, PLANES], [torus.plan, torus.planes]] as const) {
+      const s = plan.surfaces[0]!
+      const ids = planes.planeOf[0][0]!
+      const small = new Set(planes.planes.filter((p) => p.mark === 0 && p.area < minArea).map((p) => p.id))
+      for (let t = 0; t < ids.length; t++) {
+        for (let e = 0; e < 3; e++) {
+          const u = s.adj[3 * t + e]
+          if (u < 0 || ids[u] === ids[t] || !small.has(ids[t])) continue
+          expect(planes.planes[ids[u]].fam).not.toBe(planes.planes[ids[t]].fam)
+        }
+      }
+    }
   })
 })
 
