@@ -1,0 +1,662 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { SpaceScene } from '../../scene/types'
+import { reshapeWidths, sizedBristles, sizedLength, sizedVariance, sizedWidth } from '../model/brush'
+import { lchToLab } from '../model/colour'
+import { BEHIND_VEIL_LAYER, pressure } from '../model/strokes'
+import { arrowMark, flatColours, graphMesh, lineMark, paintView, pointMark, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
+import { bigMax, drawChanceOf, drawFadeAt, loadCellLevel, pxPerUnit, makeFrameCtx, zoomGrowOf, zoomSizeScaleAt } from '../model/view'
+import { VEIL_ALPHA, VEIL_BORDER_ALPHA, VEIL_DENSITY } from '../model/roles'
+import { smooth } from '../model/math'
+import { reprojectStrokes } from '../reproject'
+import { DEFAULT_PAINT_PARAMS } from '../params'
+import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
+import { P, LIGHT, framing, fixture, sparse, bytes, sphereColours, sphereScene, saddleColours, saddleScene, TERRACOTTA, CANVAS, type Fixture } from './bakeFixture'
+import { DEPTH_BUCKETS, frameFromBake, frameFromBakeWith, FrameScratch } from './frame'
+import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, SIZING_SURFACE, type BakedPainting } from './types'
+
+vi.setConfig({ testTimeout: 180_000 })
+
+const PP = PATH_POINTS
+const FRONT_ORTHO = framing(20, 25, true)
+
+// A view of the origin from (azimuth, elevation), `zoom` times in on the framing the bakes are made for (150 CSS px a world unit), the light the bakes' own.
+function viewAt(azimuth: number, elevation: number, opts: { zoom?: number; perspective?: boolean; width?: number; height?: number } = {}): PaintView {
+  const zoom = opts.zoom ?? 1
+  const v = paintView({
+    width: opts.width ?? 640, height: opts.height ?? 480, azimuth, elevation, zoom: 150 * zoom, magnify: zoom, perspective: opts.perspective,
+  })
+  return { ...v, lightDir: LIGHT }
+}
+
+// ---- fixtures, made once ----
+
+const sphereFx = fixture(sphereScene(), sphereColours(), sparse(700), LIGHT, FRONT_ORTHO)
+const saddleFx = fixture(saddleScene(), saddleColours(), sparse(700), LIGHT, FRONT_ORTHO)
+
+const dataColours = flatColours({ 0: TERRACOTTA, 1: CANVAS, 2: lchToLab(0.4, 0.05, 55), 3: lchToLab(0.4, 0.05, 200), 4: lchToLab(0.45, 0.1, 300), 5: lchToLab(0.35, 0.1, 20) })
+const dataScene = (): SpaceScene =>
+  sceneOf([
+    sphereMesh({ radius: 0.8, index: 0, nu: 32, nv: 20 }),
+    tableMesh({ z: -1, half: 2, index: 1 }),
+    // a line round the back of the sphere (hidden from the front: dashed), one in front of it (none), points, an arrow
+    lineMark([[0, 1.2, 0.2], [0, 0.4, 0.2], [0, -0.4, 0.2], [0, -1.2, 0.2]], { index: 2, hidden: 'dashed', width: 2 }),
+    lineMark([[-1.2, 0.9, -0.9], [-0.4, 0.9, -0.9], [0.4, 0.9, -0.9], [1.2, 0.9, -0.9]], { index: 3, hidden: 'none', width: 2 }),
+    pointMark([[0.5, 0.5, 0.9], [-0.5, 0.2, 0.95]], { index: 4, size: 8 }),
+    arrowMark([0.9, 0.9, 0.2], [0.6, 0, 0.3], { index: 5, hidden: 'dashed', headSize: 12 }),
+  ])
+const dataFx = fixture(dataScene(), dataColours, sparse(500), LIGHT, FRONT_ORTHO)
+
+// A veil over a sphere, with a line below the veil and one above it.
+const veilFx = (() => {
+  const scene = sceneOf([
+    sphereMesh({ radius: 0.5, index: 0, nu: 24, nv: 16 }),
+    quadMesh({ origin: [-1, -1, 0.8], e1: [2, 0, 0], e2: [0, 2, 0], n: 6, opacity: 0.5, index: 1 }),
+    lineMark([[-0.5, 0.3, 0], [0.5, 0.3, 0]], { index: 2, hidden: 'none' }),
+    lineMark([[-0.5, -0.3, 1.3], [0.5, -0.3, 1.3]], { index: 3, hidden: 'none' }),
+  ])
+  return fixture(scene, flatColours({ 0: TERRACOTTA, 1: lchToLab(0.7, 0.1, 250), 2: lchToLab(0.4, 0.05, 55), 3: lchToLab(0.4, 0.05, 55) }), sparse(500), LIGHT, FRONT_ORTHO)
+})()
+
+// A flat sheet facing the camera (tilted off the table's z so that it is a figure, not bare table), seen square on.
+const SHEET_N: [number, number, number] = [0.3, 0, 1]
+const sheetNorm = Math.hypot(...SHEET_N)
+const sheetFx = (() => {
+  const nrm = SHEET_N.map((c) => c / sheetNorm)
+  // e1 x e2 = the normal: e1 = (0,1,0) x ... any two perpendicular unit vectors in the plane
+  const e1: [number, number, number] = [0, 1, 0]
+  const e2: [number, number, number] = [nrm[2], 0, -nrm[0]] // (n_z, 0, -n_x): perpendicular to n and e1; e1 x e2 = (-n_x, 0, -n_z)... flipped below
+  const k = 2.4
+  const scene = sceneOf([quadMesh({ origin: [-0.5 * k * e1[0] - 0.5 * k * e2[0], -0.5 * k * e1[1] - 0.5 * k * e2[1], -0.5 * k * e1[2] - 0.5 * k * e2[2]], e1: [k * e2[0], k * e2[1], k * e2[2]], e2: [k * e1[0], k * e1[1], k * e1[2]], n: 12, index: 0 })])
+  return fixture(scene, flatColours({ 0: TERRACOTTA }), sparse(900), LIGHT, FRONT_ORTHO)
+})()
+// the camera of the sheet: looking along -n (az 0, el = asin(n_z))
+const SHEET_EL = (Math.asin(SHEET_N[2] / sheetNorm) * 180) / Math.PI
+
+const run = (fx: Fixture, view: PaintView, scr = new FrameScratch(), g: GBuffer | null = null): { batch: StrokeBatch; scr: FrameScratch } => ({
+  batch: frameFromBakeWith(scr, fx.baked, fx.scene, view, fx.params, g),
+  scr,
+})
+
+// ---- a reference implementation of the per-stroke selection, from the brief, with the pure forms of the model's functions ----
+
+interface Ref {
+  alpha: number
+  big: number
+}
+
+// The point at arc-length fraction `a` of baked stroke i's path (summing the chords, not taking the points as equally spaced) and its normal there.
+function anchorOf(baked: BakedPainting, i: number): { p: number[]; n: number[] } {
+  const o = 3 * BAKE_PATH_POINTS * i
+  const cum = [0]
+  for (let q = 1; q < BAKE_PATH_POINTS; q++) {
+    cum.push(cum[q - 1] + Math.hypot(baked.worldPath[o + 3 * q] - baked.worldPath[o + 3 * q - 3], baked.worldPath[o + 3 * q + 1] - baked.worldPath[o + 3 * q - 2], baked.worldPath[o + 3 * q + 2] - baked.worldPath[o + 3 * q - 1]))
+  }
+  const s = baked.anchor[i] * cum[BAKE_PATH_POINTS - 1]
+  let q = 1
+  while (q < BAKE_PATH_POINTS - 1 && cum[q] < s) q++
+  const f = cum[q] > cum[q - 1] ? Math.min(1, Math.max(0, (s - cum[q - 1]) / (cum[q] - cum[q - 1]))) : 0
+  const p = [0, 1, 2].map((c) => baked.worldPath[o + 3 * (q - 1) + c] + (baked.worldPath[o + 3 * q + c] - baked.worldPath[o + 3 * (q - 1) + c]) * f)
+  const n = [0, 1, 2].map((c) => baked.worldNormal[o + 3 * (q - 1) + c] + (baked.worldNormal[o + 3 * q + c] - baked.worldNormal[o + 3 * (q - 1) + c]) * f)
+  const l = Math.hypot(n[0], n[1], n[2])
+  return { p, n: l > 0 ? n.map((c) => c / l) : n }
+}
+
+function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
+  const { baked, scene, params } = fx
+  const out = new Map<number, Ref>()
+  const fc = makeFrameCtx(scene, view, { width: 0, height: 0, scale: 2, depth: new Float32Array(0), normal: new Float32Array(0), value: new Float32Array(0), shadow: new Uint8Array(0), mark: new Int32Array(0) }, params)
+  const pp = params.particles
+  const sizeScale = zoomSizeScaleAt(view.zoom, params)
+  for (let i = 0; i < baked.count; i++) {
+    const role = ROLES[baked.role[i]]
+    const mark = scene.marks[baked.mark[i]]
+    const veil = mark.kind === 'mesh' && mark.style.opacity < 1
+    const border = veil && Math.abs(baked.alpha[i] - Math.fround(VEIL_BORDER_ALPHA)) < 1e-6
+    const { p, n } = anchorOf(baked, i)
+    // the unit vector toward the eye
+    let t: number[]
+    if (fc.ortho) t = [-view.viewDir[0], -view.viewDir[1], -view.viewDir[2]]
+    else {
+      const d = [view.eye[0] - p[0], view.eye[1] - p[1], view.eye[2] - p[2]]
+      const l = Math.hypot(d[0], d[1], d[2])
+      t = d.map((c) => c / l)
+    }
+    const dot = n[0] * t[0] + n[1] * t[1] + n[2] * t[2]
+    if (baked.side[i] !== 0 ? dot <= 0 : dot < -0.05) continue
+    if (role === 'edge') {
+      if (baked.rank[i] >= params.roles.edge.density) continue
+      out.set(i, { alpha: baked.alpha[i], big: 1 })
+      continue
+    }
+    if (role === 'line') {
+      out.set(i, { alpha: baked.alpha[i], big: 1 })
+      continue
+    }
+    const ppu = pxPerUnit(fc, p[0], p[1], p[2])
+    if (role === 'dab') {
+      out.set(i, { alpha: baked.alpha[i], big: sizeScale })
+      continue
+    }
+    const facing = Math.abs(dot)
+    const fade = veil ? smooth(pp.fadeLo * 0.25, pp.fadeHi * 0.5, facing) : smooth(pp.fadeLo, pp.fadeHi, facing)
+    if (fade < 0.02) continue
+    const pxArea = baked.areaPerParticle[baked.mark[i]] * ppu * ppu * facing
+    const drawRole = veil ? (border ? 'scumble' : 'glaze') : role
+    const chance = drawChanceOf(params, view.dragging, pxArea, drawRole, veil && !border ? VEIL_DENSITY : 1)
+    const df = drawFadeAt(chance, baked.rank[i])
+    if (!(df > 0.02)) continue
+    const growRole = veil ? 'glaze' : role
+    const big = Math.min(zoomGrowOf(params, view.dragging, pxArea, growRole) * sizeScale, bigMax(params))
+    out.set(i, { alpha: baked.alpha[i] * fade * df, big })
+  }
+  return out
+}
+
+const sourcesOf = (scr: FrameScratch, batch: StrokeBatch): Map<number, number> => {
+  const m = new Map<number, number>()
+  for (let o = 0; o < batch.count; o++) if (scr.source[o] >= 0) m.set(scr.source[o], o)
+  return m
+}
+
+const dist2 = (a: ArrayLike<number>, ai: number, b: ArrayLike<number>, bi: number): number => Math.hypot(a[ai] - b[bi], a[ai + 1] - b[bi + 1], a[ai + 2] - b[bi + 2])
+
+describe('frameFromBake: the baked strokes of a view', () => {
+  it('selects, fades and sizes as the brief says, by the model\'s own pure functions (several views, both projections, zooms)', () => {
+    const views: [string, PaintView][] = [
+      ['front, ortho', viewAt(20, 25)],
+      ['back, ortho', viewAt(200, 25)],
+      ['top, ortho', viewAt(20, 80)],
+      ['front, ortho, zoom 2', viewAt(20, 25, { zoom: 2 })],
+      ['front, ortho, zoom 0.5', viewAt(20, 25, { zoom: 0.5 })],
+      ['front, perspective', viewAt(20, 25, { perspective: true })],
+    ]
+    for (const [name, view] of views) {
+      const ref = reference(sphereFx, view)
+      const { batch, scr } = run(sphereFx, view)
+      const got = sourcesOf(scr, batch)
+      let missing = 0
+      let extra = 0
+      let alphaBad = 0
+      let bigBad = 0
+      for (const [i, r] of ref) {
+        const o = got.get(i)
+        if (o === undefined) {
+          missing++
+          continue
+        }
+        // (the anchor's place along the path is read by chords there and by equal parts here: the fade's ramp is steep, a part in a thousand of facing is
+        // a hundredth of alpha at the worst)
+        if (Math.abs(batch.alpha[o] - r.alpha) > 0.01) alphaBad++
+        if (Math.abs(scr.bigOf[o] - r.big) > 5e-3 * r.big) bigBad++
+      }
+      for (const i of got.keys()) if (!ref.has(i)) extra++
+      // (a stroke whose sub-arc is too short to draw is dropped by the frame and not by this reference; the anchor's place along the path is read by
+      // chords here and by equal parts there: a stroke right at a threshold can fall either side)
+      expect(ref.size, name).toBeGreaterThan(200)
+      expect(missing / ref.size, `${name}: missing`).toBeLessThan(0.01)
+      expect(extra / ref.size, `${name}: extra`).toBeLessThan(0.005)
+      expect(alphaBad / ref.size, `${name}: alpha`).toBeLessThan(0.005)
+      expect(bigBad / ref.size, `${name}: big`).toBeLessThan(0.005)
+    }
+  })
+
+  it('gives the same batch, byte for byte, for the same bake and view, whatever scratch it is given', () => {
+    const view = viewAt(20, 25)
+    const a = run(sphereFx, view).batch
+    const b = run(sphereFx, view).batch
+    const scr = new FrameScratch()
+    frameFromBakeWith(scr, sphereFx.baked, sphereFx.scene, viewAt(100, 10), sphereFx.params, null)
+    const c = frameFromBakeWith(scr, sphereFx.baked, sphereFx.scene, view, sphereFx.params, null)
+    const d = frameFromBake(sphereFx.baked, sphereFx.scene, view, sphereFx.params, null)
+    const e = frameFromBake(sphereFx.baked, sphereFx.scene, view, sphereFx.params, null)
+    for (const other of [b, c, d, e]) {
+      expect(other.count).toBe(a.count)
+      for (const k of Object.keys(a) as (keyof StrokeBatch)[]) {
+        if (k === 'count') continue
+        expect(bytes(other[k] as Float32Array), String(k)).toBe(bytes(a[k] as Float32Array))
+      }
+    }
+    // a reused output is the same numbers
+    const reuse = new FrameScratch()
+    reuse.reuseOutput = true
+    const r1 = frameFromBakeWith(reuse, sphereFx.baked, sphereFx.scene, view, sphereFx.params, null)
+    expect(r1.count).toBe(a.count)
+    for (const k of Object.keys(a) as (keyof StrokeBatch)[]) if (k !== 'count') expect(bytes(r1[k] as Float32Array), String(k)).toBe(bytes(a[k] as Float32Array))
+    frameFromBakeWith(reuse, sphereFx.baked, sphereFx.scene, viewAt(100, 10), sphereFx.params, null)
+    const r2 = frameFromBakeWith(reuse, sphereFx.baked, sphereFx.scene, view, sphereFx.params, null)
+    for (const k of Object.keys(a) as (keyof StrokeBatch)[]) if (k !== 'count') expect(bytes(r2[k] as Float32Array), String(k)).toBe(bytes(a[k] as Float32Array))
+  })
+
+  it('does not boil: two views a degree apart keep the same strokes, in the same colour and role, on the same bit of path', () => {
+    for (const fx of [sphereFx, saddleFx]) {
+      for (const el of [25, 60]) {
+        const v0 = viewAt(20, el)
+        const v1 = viewAt(21, el)
+        const a = run(fx, v0)
+        const b = run(fx, v1)
+        const sa = sourcesOf(a.scr, a.batch)
+        const sb = sourcesOf(b.scr, b.batch)
+        let both = 0
+        let same = 0
+        let equalBig = 0
+        let arcsOk = 0
+        for (const [i, oa] of sa) {
+          const ob = sb.get(i)
+          if (ob === undefined) continue
+          both++
+          if (a.batch.seed[oa] === b.batch.seed[ob] && a.batch.role[oa] === b.batch.role[ob] && a.batch.colour[3 * oa] === b.batch.colour[3 * ob] && a.batch.colour[3 * oa + 1] === b.batch.colour[3 * ob + 1] && a.batch.colour[3 * oa + 2] === b.batch.colour[3 * ob + 2]) same++
+          // the world sub-arc: the same points (in either direction) where the size is the same (the view is orthographic: the px per unit is the same)
+          if (Math.abs(a.scr.bigOf[oa] - b.scr.bigOf[ob]) < 1e-6) {
+            equalBig++
+            const wa = a.batch.worldPath
+            const wb = b.batch.worldPath
+            let fwd = 0
+            let rev = 0
+            for (let q = 0; q < PP; q++) {
+              fwd = Math.max(fwd, dist2(wa, 3 * PP * oa + 3 * q, wb, 3 * PP * ob + 3 * q))
+              rev = Math.max(rev, dist2(wa, 3 * PP * oa + 3 * q, wb, 3 * PP * ob + 3 * (PP - 1 - q)))
+            }
+            if (Math.min(fwd, rev) < 1e-6) arcsOk++
+          }
+        }
+        expect(both, `${el}`).toBeGreaterThan(200)
+        expect(same / both).toBeGreaterThanOrEqual(0.9)
+        // (in fact all of them: every one of these is a baked number)
+        expect(same).toBe(both)
+        expect(equalBig / both).toBeGreaterThan(0.9)
+        expect(arcsOk).toBe(equalBig)
+        // and the views keep the bulk of the strokes
+        expect(both / Math.max(sa.size, sb.size)).toBeGreaterThan(0.9)
+      }
+    }
+  })
+
+  it('sizes a stroke by the zoom: its sub-arc lies on its baked path, its length on screen is the brush\'s (within 2% unless the path ends first), its mix level follows the zoom', () => {
+    for (const zoom of [0.5, 1, 2, 4]) {
+      const view = viewAt(0, SHEET_EL, { zoom })
+      const { batch, scr } = run(sheetFx, view)
+      const b = sheetFx.baked
+      const level = Math.min(loadCellLevel(zoom), BAKE_MIX_LEVELS - 1)
+      let checked = 0
+      let clippedShort = 0
+      let unclipped = 0
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || b.sizing[i] !== SIZING_SURFACE || ROLES[b.role[i]] === 'dab') continue
+        checked++
+        // the sub-arc is on the baked polyline
+        const base = 3 * BAKE_PATH_POINTS * i
+        for (let q = 0; q < PP; q++) {
+          let best = Infinity
+          for (let s = 0; s + 1 < BAKE_PATH_POINTS; s++) {
+            const ax = b.worldPath[base + 3 * s], ay = b.worldPath[base + 3 * s + 1], az = b.worldPath[base + 3 * s + 2]
+            const dx = b.worldPath[base + 3 * s + 3] - ax, dy = b.worldPath[base + 3 * s + 4] - ay, dz = b.worldPath[base + 3 * s + 5] - az
+            const px = batch.worldPath[3 * PP * o + 3 * q] - ax, py = batch.worldPath[3 * PP * o + 3 * q + 1] - ay, pz = batch.worldPath[3 * PP * o + 3 * q + 2] - az
+            const l2 = dx * dx + dy * dy + dz * dz
+            const t = l2 > 0 ? Math.min(1, Math.max(0, (px * dx + py * dy + pz * dz) / l2)) : 0
+            best = Math.min(best, Math.hypot(px - t * dx, py - t * dy, pz - t * dz))
+          }
+          expect(best).toBeLessThan(2e-6)
+        }
+        // the mix level
+        expect(batch.colour[3 * o]).toBe(b.colour[12 * i + 3 * level])
+        expect(batch.colour[3 * o + 1]).toBe(b.colour[12 * i + 3 * level + 1])
+        expect(batch.colour[3 * o + 2]).toBe(b.colour[12 * i + 3 * level + 2])
+        // the length on screen against the brush's
+        let len = 0
+        for (let q = 1; q < PP; q++) len += Math.hypot(batch.path[2 * PP * o + 2 * q] - batch.path[2 * PP * o + 2 * q - 2], batch.path[2 * PP * o + 2 * q + 1] - batch.path[2 * PP * o + 2 * q - 1])
+        const want = sizedLength(b.basePx[2 * i], scr.bigOf[o])
+        const ppu = 150 * zoom
+        const need = want / ppu
+        const a = b.anchor[i]
+        const L = b.pathLength[i]
+        // centred on the anchor and clipped at the path's ends, with no rebalancing: the part of [a - need/2, a + need/2] that lies on the path
+        const lo = Math.max(0, a - need / (2 * L))
+        const hi = Math.min(1, a + need / (2 * L))
+        const clipped = a - need / (2 * L) < 0 || a + need / (2 * L) > 1
+        if (clipped) {
+          clippedShort++
+          // the path ended first: the stroke is all of the path that is there, never longer than the brush's
+          expect(len).toBeLessThanOrEqual(want * 1.02)
+          expect(Math.abs(len / ((hi - lo) * L * ppu) - 1), `zoom ${zoom}`).toBeLessThan(0.03)
+        } else {
+          unclipped++
+          expect(Math.abs(len / want - 1), `zoom ${zoom}`).toBeLessThan(0.02)
+        }
+      }
+      expect(checked, `zoom ${zoom}`).toBeGreaterThan(100)
+      // (at the most zoomed-out view the baked path is exactly as long as the brush asks, and the walks that stop short are clipped)
+      expect(unclipped, `zoom ${zoom}`).toBeGreaterThan(zoom > 0.5 ? 50 : 0)
+      expect(unclipped + clippedShort).toBe(checked)
+    }
+  })
+
+  it('grows the stroke with the brush at the zoom: the widths and the bristles follow sizedWidth, reshapeWidths, sizedBristles and sizedVariance', () => {
+    const view = viewAt(0, SHEET_EL, { zoom: 3 })
+    const { batch, scr } = run(sheetFx, view)
+    const b = sheetFx.baked
+    let seen = 0
+    let big2 = 0
+    for (let o = 0; o < batch.count; o++) {
+      const i = scr.source[o]
+      if (i < 0 || b.sizing[i] !== SIZING_SURFACE) continue
+      const big = scr.bigOf[o]
+      if (big > 1.5) big2++
+      expect(batch.bristles[o]).toBe(sizedBristles(b.bristles[i], big))
+      expect(batch.bristleVar[o]).toBeCloseTo(sizedVariance(b.bristleVar[i], big), 6)
+      // the widths: base × pressure × the lateral's foreshortening (1 on a sheet square to the view), the close-up's shape
+      const w = new Float32Array(PP)
+      for (let q = 0; q < PP; q++) w[q] = Math.max(0.35, sizedWidth(b.basePx[2 * i + 1], big) * pressure(q / (PP - 1)))
+      reshapeWidths(w, big)
+      const reversed = b.handStart[i] === 1 && batch.path[2 * PP * o + 2 * (PP - 1)] < batch.path[2 * PP * o]
+      void reversed
+      for (let q = 0; q < PP; q++) expect(Math.abs(batch.width[PP * o + q] / w[q] - 1)).toBeLessThan(0.03)
+      seen++
+    }
+    expect(seen).toBeGreaterThan(100)
+    expect(big2).toBeGreaterThan(20)
+  })
+
+  it('draws the side that faces the eye: an open saddle seen from below has only side -1 strokes, from above only side +1, a closed sphere only its outside', () => {
+    const b = saddleFx.baked
+    // (the saddle's slopes reach 45 degrees: a camera 40 below the horizon still sees the steepest slopes' upper side, at a graze; 70 and more it does not)
+    for (const [el, want] of [[-70, -1], [70, 1], [-85, -1], [85, 1]] as const) {
+      const { batch, scr } = run(saddleFx, viewAt(30, el))
+      let n = 0
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || b.sizing[i] !== SIZING_SURFACE) continue
+        n++
+        expect(b.side[i], `elevation ${el}`).toBe(want)
+      }
+      expect(n).toBeGreaterThan(200)
+    }
+    for (const el of [-40, 40]) {
+      const view = viewAt(30, el)
+      const { batch, scr } = run(saddleFx, view)
+      let n = 0
+      let own = 0
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || b.sizing[i] !== SIZING_SURFACE) continue
+        n++
+        // the side drawn is the side that faces the eye
+        const dot = batch.worldNormal[3 * o] * -view.viewDir[0] + batch.worldNormal[3 * o + 1] * -view.viewDir[1] + batch.worldNormal[3 * o + 2] * -view.viewDir[2]
+        expect(dot).toBeGreaterThan(0)
+        if (b.side[i] === (el < 0 ? -1 : 1)) own++
+      }
+      expect(own / n).toBeGreaterThan(0.9)
+    }
+    const s = sphereFx.baked
+    for (const az of [20, 110, 200]) {
+      const { batch, scr } = run(sphereFx, viewAt(az, 25))
+      const view = viewAt(az, 25)
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || s.mark[i] !== 0) continue
+        expect(s.side[i]).toBe(0)
+        // facing the eye, or grazing it by under 0.05
+        const nrm = [batch.worldNormal[3 * o], batch.worldNormal[3 * o + 1], batch.worldNormal[3 * o + 2]]
+        expect(nrm[0] * -view.viewDir[0] + nrm[1] * -view.viewDir[1] + nrm[2] * -view.viewDir[2]).toBeGreaterThan(-0.05)
+      }
+    }
+  })
+
+  it('carries the hidden style of a data mark in `hidden`, and HIDDEN_NA on a surface or edge stroke', () => {
+    const { batch, scr } = run(dataFx, viewAt(20, 25))
+    const b = dataFx.baked
+    const seen = { dashed: 0, none: 0, na: 0, edge: 0, ownNone: 0, ownDashed: 0 }
+    for (let o = 0; o < batch.count; o++) {
+      const i = scr.source[o]
+      const role = ROLES[batch.role[o]]
+      if (i >= 0 && role === 'line') {
+        const dashed = (dataFx.scene.marks[b.mark[i]] as { style: { hidden: string } }).style.hidden === 'dashed'
+        expect(batch.hidden![o]).toBe(dashed ? HIDDEN_DASHED : HIDDEN_NONE)
+        if (dashed) seen.dashed++
+        else seen.none++
+      } else if (i >= 0) {
+        expect(batch.hidden![o], role).toBe(HIDDEN_NA)
+        seen.na++
+        if (role === 'edge') seen.edge++
+      } else if (role === 'line') {
+        // a point (none) or an arrowhead of a dashed arrow
+        if (batch.hidden![o] === HIDDEN_DASHED) seen.ownDashed++
+        else seen.ownNone++
+      } else expect(batch.hidden![o]).toBe(HIDDEN_NA) // a silhouette
+    }
+    expect(seen.dashed).toBeGreaterThan(0)
+    expect(seen.none).toBeGreaterThan(0)
+    expect(seen.na).toBeGreaterThan(100)
+    expect(seen.edge).toBeGreaterThan(0)
+    expect(seen.ownDashed).toBe(2)
+    expect(seen.ownNone).toBe(2)
+    // the hidden array is as long as the batch
+    expect(batch.hidden!.length).toBe(batch.count)
+  })
+
+  it('puts a data line seen through a flat veil in the layer before the glaze, and no other', () => {
+    const b = veilFx.baked
+    const behindOf = (el: number): { behind: number; front: number } => {
+      const { batch, scr } = run(veilFx, viewAt(20, el))
+      const out = { behind: 0, front: 0 }
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || ROLES[batch.role[o]] !== 'line') continue
+        const mark = b.mark[i]
+        if (batch.layer[o] === BEHIND_VEIL_LAYER) out.behind++
+        else {
+          expect(batch.layer[o]).toBe(LAYER_ORDER.indexOf('line'))
+          out.front++
+        }
+        void mark
+      }
+      return out
+    }
+    // from above the sheet lies over the line below it, and not over the line above it
+    const above = behindOf(50)
+    expect(above.behind).toBeGreaterThan(0)
+    expect(above.front).toBeGreaterThan(0)
+    // from below the eye is on the side of both lines at the sheet's own, the line at z = 0 in front of the sheet
+    const below = behindOf(-50)
+    expect(below.behind).toBeGreaterThan(0)
+    // a view along the sheet sees none behind it
+    void below
+  })
+
+  it('builds the points and arrowheads on the screen, anchored in the world: a dab of max(3, size) px, two barbs of max(6, headSize) px at 26 degrees', () => {
+    const view = viewAt(20, 25)
+    const { batch, scr } = run(dataFx, view)
+    const marks = dataFx.scene.marks
+    const fc = makeFrameCtx(dataFx.scene, view, { width: 0, height: 0, scale: 2, depth: new Float32Array(0), normal: new Float32Array(0), value: new Float32Array(0), shadow: new Uint8Array(0), mark: new Int32Array(0) }, dataFx.params)
+    const own: number[] = []
+    for (let o = 0; o < batch.count; o++) if (scr.source[o] < 0 && ROLES[batch.role[o]] === 'line') own.push(o)
+    expect(own.length).toBe(4)
+    const project = (p: number[]): [number, number] => {
+      const out = [0, 0, 0]
+      const m = fc.vp
+      const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15]
+      out[0] = ((m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w + 1) / 2 * view.width
+      out[1] = (1 - (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w) / 2 * view.height
+      return [out[0], out[1]]
+    }
+    const points = marks[4] as { positions: Float64Array }
+    const arrow = marks[5] as { tails: Float64Array; vectors: Float64Array }
+    const pts = own.filter((o) => batch.width[PP * o] === 8)
+    expect(pts.length).toBe(2)
+    for (const o of pts) {
+      // the world points are all one point of the mark; the dab is centred on its projection, 4 px long, 8 wide
+      const wp = [batch.worldPath[3 * PP * o], batch.worldPath[3 * PP * o + 1], batch.worldPath[3 * PP * o + 2]]
+      for (let q = 1; q < PP; q++) expect(dist2(batch.worldPath, 3 * PP * o + 3 * q, wp, 0)).toBe(0)
+      const idx = [0, 1].find((k) => Math.hypot(points.positions[3 * k] - wp[0], points.positions[3 * k + 1] - wp[1], points.positions[3 * k + 2] - wp[2]) < 1e-5)
+      expect(idx).toBeDefined()
+      const [sx, sy] = project(wp)
+      expect(batch.path[2 * PP * o]).toBeCloseTo(sx - 2, 3)
+      expect(batch.path[2 * PP * o + 2 * (PP - 1)]).toBeCloseTo(sx + 2, 3)
+      for (let q = 0; q < PP; q++) expect(batch.path[2 * PP * o + 2 * q + 1]).toBeCloseTo(sy, 3)
+      expect(batch.colour[3 * o]).toBeCloseTo(dataFx.baked.dataColour[3 * 4], 6)
+    }
+    const barbs = own.filter((o) => batch.width[PP * o] !== 8)
+    expect(barbs.length).toBe(2)
+    const tip = [arrow.tails[0] + arrow.vectors[0], arrow.tails[1] + arrow.vectors[1], arrow.tails[2] + arrow.vectors[2]]
+    const tail = project([arrow.tails[0], arrow.tails[1], arrow.tails[2]])
+    const tipS = project(tip)
+    const shaft = Math.atan2(tipS[1] - tail[1], tipS[0] - tail[0])
+    const angles: number[] = []
+    for (const o of barbs) {
+      // each barb ends exactly at the tip, is 12 px long, and its world points are the tip
+      expect(batch.path[2 * PP * o + 2 * (PP - 1)]).toBeCloseTo(tipS[0], 3)
+      expect(batch.path[2 * PP * o + 2 * (PP - 1) + 1]).toBeCloseTo(tipS[1], 3)
+      const dx = batch.path[2 * PP * o] - tipS[0]
+      const dy = batch.path[2 * PP * o + 1] - tipS[1]
+      expect(Math.hypot(dx, dy)).toBeCloseTo(12, 3)
+      angles.push(Math.atan2(dy, dx) - shaft)
+      for (let q = 0; q < PP; q++) expect(dist2(batch.worldPath, 3 * PP * o + 3 * q, tip, 0)).toBeLessThan(1e-6)
+      expect(batch.hidden![o]).toBe(HIDDEN_DASHED)
+      expect(batch.colour[3 * o]).toBeCloseTo(dataFx.baked.dataColour[3 * 5], 6)
+    }
+    // the barbs open +-0.46 rad about the way back down the shaft
+    const wrap = (a: number): number => ((a + Math.PI * 3) % (Math.PI * 2)) - Math.PI
+    const back = angles.map((a) => wrap(a - Math.PI))
+    expect(Math.min(...back)).toBeCloseTo(-0.46, 3)
+    expect(Math.max(...back)).toBeCloseTo(0.46, 3)
+  })
+
+  it('orders the batch by layer, then far to near by the anchor\'s view depth (to a bucket), ties in bake order, and fills worldPath and worldNormal for reproject.ts', () => {
+    for (const fx of [sphereFx, dataFx]) {
+      const view = viewAt(20, 25)
+      const { batch, scr } = run(fx, view)
+      let dMin = Infinity
+      let dMax = -Infinity
+      for (let o = 0; o < batch.count; o++) {
+        dMin = Math.min(dMin, batch.depth[o])
+        dMax = Math.max(dMax, batch.depth[o])
+      }
+      const bucket = (d: number): number => Math.floor(((dMax - d) * (DEPTH_BUCKETS - 1)) / (dMax - dMin))
+      for (let o = 1; o < batch.count; o++) {
+        expect(batch.layer[o]).toBeGreaterThanOrEqual(batch.layer[o - 1])
+        if (batch.layer[o] === batch.layer[o - 1]) {
+          // far to near, to a bucket (the buckets are made from the depths before the batch's float32)
+          expect(bucket(batch.depth[o]) + 1).toBeGreaterThanOrEqual(bucket(batch.depth[o - 1]))
+          // a tie keeps the bake's order
+          if (batch.depth[o] === batch.depth[o - 1] && scr.source[o] >= 0 && scr.source[o - 1] >= 0) expect(scr.source[o]).toBeGreaterThan(scr.source[o - 1])
+        }
+      }
+      // every array has the length of the batch, every number is finite
+      const n = batch.count
+      expect(batch.role.length).toBe(n)
+      expect(batch.path.length).toBe(2 * PP * n)
+      expect(batch.width.length).toBe(PP * n)
+      expect(batch.worldPath.length).toBe(3 * PP * n)
+      expect(batch.worldNormal.length).toBe(3 * n)
+      for (const k of ['path', 'width', 'depth', 'colour', 'alpha', 'load', 'impasto', 'bristles', 'bristleVar', 'dry', 'wet', 'endSoft', 'worldPath', 'worldNormal'] as const) {
+        for (let i = 0; i < batch[k].length; i++) if (!Number.isFinite(batch[k][i])) throw new Error(`${k}[${i}] is ${batch[k][i]}`)
+      }
+      // the world path through the view's own viewProj is the path (reproject.ts: the same view gives the same batch), for every stroke that has a world path
+      const again = reprojectStrokes(batch, view, view, fx.params)
+      let off = 0
+      let worst = -1
+      for (let o = 0; o < n; o++) {
+        for (let q = 0; q < 2 * PP; q++) {
+          const d = Math.abs(again.path[2 * PP * o + q] - batch.path[2 * PP * o + q])
+          if (d > off) {
+            off = d
+            worst = o
+          }
+        }
+      }
+      if (off > 2e-3) console.log('worst', worst, ROLES[batch.role[worst]], 'source', scr.source[worst], 'off', off, 'baked sizing', scr.source[worst] >= 0 ? fx.baked.sizing[scr.source[worst]] : -1, Array.from(batch.path.subarray(2 * PP * worst, 2 * PP * worst + 16)).map((v) => v.toFixed(2)).join(' '), '|', Array.from(again.path.subarray(2 * PP * worst, 2 * PP * worst + 16)).map((v) => v.toFixed(2)).join(' '))
+      expect(off).toBeLessThan(2e-3)
+    }
+  })
+
+  it('makes no scratch array after its first frames, and its arrays are fresh for every call (or, asked to, none)', () => {
+    const scr = new FrameScratch()
+    const views = [viewAt(20, 25), viewAt(50, 25), viewAt(90, 30), viewAt(20, 25)]
+    for (const v of views) frameFromBakeWith(scr, sphereFx.baked, sphereFx.scene, v, sphereFx.params, null)
+    const made = scr.arrays
+    const a = frameFromBakeWith(scr, sphereFx.baked, sphereFx.scene, views[1], sphereFx.params, null)
+    const b = frameFromBakeWith(scr, sphereFx.baked, sphereFx.scene, views[1], sphereFx.params, null)
+    expect(scr.arrays).toBe(made)
+    expect(a.path.buffer).not.toBe(b.path.buffer)
+    expect(a.seed.buffer).not.toBe(b.seed.buffer)
+    const reuse = new FrameScratch()
+    reuse.reuseOutput = true
+    for (const v of views) frameFromBakeWith(reuse, sphereFx.baked, sphereFx.scene, v, sphereFx.params, null)
+    const made2 = reuse.arrays
+    const c = frameFromBakeWith(reuse, sphereFx.baked, sphereFx.scene, views[1], sphereFx.params, null)
+    const d = frameFromBakeWith(reuse, sphereFx.baked, sphereFx.scene, views[1], sphereFx.params, null)
+    expect(reuse.arrays).toBe(made2)
+    expect(c.path.buffer).toBe(d.path.buffer)
+  })
+
+  it('never thins a highlight dab or fades it, draws an edge stroke by roles.edge.density, and a data line always', () => {
+    const view = viewAt(20, 25)
+    const b = sphereFx.baked
+    const { scr, batch } = run(sphereFx, view)
+    const drawn = sourcesOf(scr, batch)
+    // a dab facing the eye is drawn whatever the density
+    for (let i = 0; i < b.count; i++) {
+      if (ROLES[b.role[i]] !== 'dab') continue
+      const o = drawn.get(i)
+      if (o !== undefined) expect(batch.alpha[o]).toBe(b.alpha[i])
+    }
+    // the edge density: a stroke is kept when its rank is under the slider
+    const halved = { ...sphereFx.params, roles: { ...sphereFx.params.roles, edge: { ...sphereFx.params.roles.edge, density: 0.5 } } }
+    const half = frameFromBakeWith(new FrameScratch(), b, sphereFx.scene, view, halved, null)
+    let edges = 0
+    let edgesHalf = 0
+    for (let o = 0; o < batch.count; o++) if (ROLES[batch.role[o]] === 'edge' && scr.source[o] >= 0) edges++
+    for (let o = 0; o < half.count; o++) if (ROLES[half.role[o]] === 'edge') edgesHalf++
+    expect(edges).toBeGreaterThan(20)
+    expect(edgesHalf).toBeLessThan(edges)
+    expect(edgesHalf).toBeGreaterThan(0)
+  })
+
+  it('draws a stroke width that follows the surface: a foreshortened lateral direction narrows it, and the four-point reading stays within 5% of reading every point', () => {
+    // the widths against a per-point reading, on a view that is not square to the figure
+    const view = viewAt(20, 25, { zoom: 1.5 })
+    const { batch, scr } = run(sphereFx, view)
+    const b = sphereFx.baked
+    const fc = makeFrameCtx(sphereFx.scene, view, { width: 0, height: 0, scale: 2, depth: new Float32Array(0), normal: new Float32Array(0), value: new Float32Array(0), shadow: new Uint8Array(0), mark: new Int32Array(0) }, sphereFx.params)
+    const errs: number[] = []
+    for (let o = 0; o < batch.count; o++) {
+      const i = scr.source[o]
+      if (i < 0 || b.sizing[i] !== SIZING_SURFACE || ROLES[b.role[i]] === 'dab') continue
+      const big = scr.bigOf[o]
+      const a = anchorOf(b, i)
+      const ppu = pxPerUnit(fc, a.p[0], a.p[1], a.p[2])
+      // the widths with fore read at all eight points of the output's own world path (the lateral: n × t with n the baked normal at the nearest baked point)
+      const w = new Float32Array(PP)
+      const reversed = batch.path[2 * PP * o + 2 * (PP - 1)] < batch.path[2 * PP * o] && b.handStart[i] === 1
+      for (let q = 0; q < PP; q++) {
+        const k = reversed ? PP - 1 - q : q
+        const k0 = Math.max(0, k - 1)
+        const k1 = Math.min(PP - 1, k + 1)
+        const wp = batch.worldPath
+        const t = [0, 1, 2].map((c) => wp[3 * PP * o + 3 * k1 + c] - wp[3 * PP * o + 3 * k0 + c])
+        // the normal there: the anchor's (a sphere's normal turns slowly over a stroke): use the position on the sphere (unit radius) for the sphere's marks
+        const p = [wp[3 * PP * o + 3 * k], wp[3 * PP * o + 3 * k + 1], wp[3 * PP * o + 3 * k + 2]]
+        const n = b.mark[i] === 0 ? p.map((c) => c / Math.hypot(p[0], p[1], p[2])) : [0, 0, 1]
+        const lat = [n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2], n[0] * t[1] - n[1] * t[0]]
+        const ll = Math.hypot(lat[0], lat[1], lat[2])
+        const m = fc.vp
+        const wv = Math.max(1e-9, m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15])
+        const lx = (view.width / 2) * (m[0] * lat[0] + m[4] * lat[1] + m[8] * lat[2]) / ll / wv
+        const ly = (view.height / 2) * (m[1] * lat[0] + m[5] * lat[1] + m[9] * lat[2]) / ll / wv
+        w[q] = Math.max(0.35, sizedWidth(b.basePx[2 * i + 1], big) * pressure(q / (PP - 1)) * (ll > 0 ? Math.hypot(lx, ly) / ppu : 0))
+      }
+      reshapeWidths(w, big)
+      for (let q = 0; q < PP; q++) errs.push(Math.abs(batch.width[PP * o + q] - w[q]) / Math.max(w[q], 0.35))
+    }
+    errs.sort((x, y) => x - y)
+    expect(errs.length).toBeGreaterThan(1000)
+    // (the reading has its own error: the sphere's normal is the radius, the mesh's own is the facet's)
+    expect(errs[Math.floor(0.95 * errs.length)]).toBeLessThan(0.05)
+  })
+})
+
+// the unused imports of a half-built suite are kept out of the build
+void DEFAULT_PAINT_PARAMS
+void VEIL_ALPHA
+void P
+void graphMesh

@@ -145,7 +145,7 @@ function dashed(pl: PL, pattern: readonly number[]): PL[] {
 
 // Is a flat veil between the eye and the world point p? The segment from the point toward the eye
 // (along the view direction for an orthographic camera) crosses the sheet's plane, inside its edges.
-export function behindVeil(fc: PaintCtx['fc'], veils: readonly Veil[], p: readonly number[]): boolean {
+export function behindVeil(fc: Pick<PaintCtx['fc'], 'view' | 'ortho'>, veils: readonly Veil[], p: readonly number[]): boolean {
   const view = fc.view
   for (const v of veils) {
     if (!v.plane) continue

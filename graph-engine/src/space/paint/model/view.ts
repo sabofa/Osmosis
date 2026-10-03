@@ -244,8 +244,8 @@ export function meshArea(mesh: MeshMark): number {
 // The particles that are visible in this view, with what the model needs to
 // know about each. Arrays are scratch: valid until the next call.
 // How much of the surfaces' fade band (particles.fadeLo..fadeHi of |n·v|) a veil fades over.
-const VEIL_FADE_LO = 0.25
-const VEIL_FADE_HI = 0.5
+export const VEIL_FADE_LO = 0.25
+export const VEIL_FADE_HI = 0.5
 
 export interface Visible {
   count: number
@@ -378,8 +378,12 @@ export const roleRank = (rank: number, role: Role): number => (rank + ROLE_SHIFT
 // The chance a visible particle is drawn for a role: the screen-density rule. `scale` thins the role further
 // (a veil's glazes: roles.ts VEIL_DENSITY).
 export function drawChance(fc: FrameCtx, pxArea: number, role: Role, scale = 1): number {
-  const p = fc.params
-  const drag = fc.view.dragging ? p.particles.dragDensity : 1
+  return drawChanceOf(fc.params, fc.view.dragging, pxArea, role, scale)
+}
+
+// drawChance from the params and whether the camera is being dragged (the pure form: the baked painting's frame reads it too).
+export function drawChanceOf(p: PaintParams, dragging: boolean, pxArea: number, role: Role, scale = 1): number {
+  const drag = dragging ? p.particles.dragDensity : 1
   return clamp((p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag * scale, 0, 1)
 }
 
@@ -420,8 +424,13 @@ export function drawn(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, r
 export function drawFade(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, role: Role, scale = 1): number {
   const chance = drawChance(fc, vis.pxArea[k], role, scale)
   const r = roleRank(set.rank[vis.idx[k]], role)
-  if (r >= chance) return 0
-  return chance >= 1 ? 1 : smooth(0, 0.2, 1 - r / chance)
+  return drawFadeAt(chance, r)
+}
+
+// The fade of a drawn particle from its chance and its (role-shifted) rank: 0 when it is not drawn (the pure form: the baked painting's frame reads it too).
+export function drawFadeAt(chance: number, rank: number): number {
+  if (rank >= chance) return 0
+  return chance >= 1 ? 1 : smooth(0, 0.2, 1 - rank / chance)
 }
 
 // A per-role cache-free helper for tests and the lab's readout: the indices of
