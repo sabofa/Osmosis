@@ -98,6 +98,24 @@ describe('the shadow caster', () => {
     }
   })
 
+  it('knows a point inside a closed mesh: the first hit of any ray from it is the back of the mesh, and an open sheet has no inside', () => {
+    const c = makeShadowCaster(SCENE, [0, 0, 1])
+    // (rays a hair off the axes: one exactly along an axis through a pole can slip between the triangles of its fan)
+    expect(c.inside(0.01, 0.02, 1.5, 0.01, 0.013, 1)).toBe(true) // the middle of the sphere
+    expect(c.inside(0.3, 0.2, 1.2, 0.6, 0, 0.8)).toBe(true)
+    expect(c.inside(0.01, 0.02, 3.5, 0.01, 0.013, 1)).toBe(false) // above it
+    expect(c.inside(3, 0.01, 0.5, 0.01, 0.013, 1)).toBe(false) // beside it
+    expect(c.inside(0.01, 0.02, 0.2, 0.01, 0.013, 1)).toBe(false) // under it: the ray meets the sphere's front, its bottom
+    expect(c.inside(0.01, 0.02, 0.2, 0.01, 0.013, -1)).toBe(false) // and the table is open: from above or below, hit as a sheet
+    expect(c.inside(0.01, 0.02, -0.2, 0.01, 0.013, 1)).toBe(false)
+    // a table point lifted into a sphere that rests on it is in its shadow, at distance 0
+    const resting = sceneOf([sphereMesh({ radius: 1, centre: [0, 0, 1], index: 0 }), tableMesh({ z: 0, half: 4, index: 1 })])
+    const r = makeShadowCaster(resting, [0, 0, 1])
+    r.visibility(0, 0, 0, 0, 0, 1, V)
+    expect(V.vis).toBe(0)
+    expect(V.dist).toBeLessThan(0.05)
+  })
+
   it('does not let a veil cast, and does let a table cast', () => {
     const veil = quadMesh({ origin: [-1, -1, 1], e1: [2, 0, 0], e2: [0, 2, 0], n: 2, opacity: 0.4, index: 0 })
     const onlyVeil = makeShadowCaster(sceneOf([veil, tableMesh({ z: 0, half: 3, index: 1 })]), [0, 0, 1])
@@ -130,6 +148,18 @@ describe('world occlusion', () => {
     expect(ao(0, -0.45, 0, 1, 0.3)).toBeGreaterThan(0.2)
     expect(ao(3, 0, 0, 1, 0.3)).toBe(0)
     expect(ao(0, 0, 2, 1, 0.3)).toBe(0)
+  })
+
+  it('is full at the very contact, where the table point is lifted into the sphere that rests on it', () => {
+    expect(ao(0, 0, 0, 1, 0.3)).toBe(1)
+    expect(ao(0.004, 0, 0, 1, 0.3)).toBe(1)
+    // and an open sheet above a point does not count as a solid: it is an occluder at its distance
+    const sheet = sceneOf([quadMesh({ origin: [-2, -2, 0.1], e1: [4, 0, 0], e2: [0, 4, 0], n: 4, index: 0 }), tableMesh({ z: 0, half: 4, index: 1 })])
+    const under = makeShadowCaster(sheet, [0, 0, 1])
+    const rng = randomFor('test/ao', 3)
+    const value = occlusionAt(sheet, under, 0, 0, 0, 0, 0, 1, 0.3, () => rng.next())
+    expect(value).toBeGreaterThan(0.5)
+    expect(value).toBeLessThanOrEqual(1)
   })
 
   it('falls off with the distance from the contact, and is the same for the same seed and different for another', () => {

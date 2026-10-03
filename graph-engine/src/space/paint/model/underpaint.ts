@@ -57,7 +57,7 @@ const BAND_PENALTY = 1e9
 // The ring about the band is, besides the plan's own N·L reach (a band's width more), this many pixels of the image: where the plan climbs a
 // tenth in one pixel (a form's limb with the light at its edge) the ring in N·L is no pixel wide, and the band would meet the lattice, which
 // is tens of hundredths off there, in a seam.
-const RING_PX = 3
+export const RING_PX = 3
 // Distinct (mark, family) pairs sampled in one lattice cell (a cell holds a boundary of a few meshes at most, each
 // with its terminator or shadow edge).
 const MAX_KEYS_PER_CELL = 16

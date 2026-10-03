@@ -570,6 +570,17 @@ function fromSurface(s: RefinedSurface): Work {
   return work
 }
 
+// Whether a mesh has no border (every edge of its triangles, taken between canonical vertices, is shared by two), cached by mesh.
+const CLOSED = new WeakMap<MeshMark, boolean>()
+export function isClosedMesh(mesh: MeshMark): boolean {
+  let known = CLOSED.get(mesh)
+  if (known === undefined) {
+    known = fromMesh(mesh).closed
+    CLOSED.set(mesh, known)
+  }
+  return known
+}
+
 // ---- the two refinements ----
 
 // The surface of a mesh mark with every edge at most `maxEdge` (world units), by longest-edge bisection, unless that would

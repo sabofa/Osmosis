@@ -12,6 +12,9 @@
 // with R the occlusion radius in world units (environment.occlusionRadiusPx × the reference world per px). Like the
 // screen version, it takes the cast shadow to its contact value and the bounce away from the form shadow near a contact
 // (value.ts planSample reads it as `contact`); it never darkens the light family, a crease it reaches is lit.
+//
+// A point INSIDE a closed mesh (a table point at the contact of a sphere that rests on it, lifted into the sphere by a
+// hair) is fully occluded: there is no sky, whatever the rays' short reach; the caster says so (shadow.ts `inside`).
 
 import type { SpaceScene } from '../../scene/types'
 import { smooth, TAU } from '../model/math'
@@ -44,6 +47,11 @@ export function occlusionAt(
   const ox = x + nx * lift
   const oy = y + ny * lift
   const oz = z + nz * lift
+  // (the ray that asks is leaned off the normal by a hair: a ray exactly along an axis through a mesh's pole or a box's face can slip between its triangles)
+  const ix = nx + 0.0131 * t1x + 0.0071 * t2x
+  const iy = ny + 0.0131 * t1y + 0.0071 * t2y
+  const iz = nz + 0.0131 * t1z + 0.0071 * t2z
+  if (caster.inside(ox, oy, oz, ix, iy, iz)) return 1
   const base = rng() * TAU
   let acc = 0
   for (let k = 0; k < AO_RAYS; k++) {
