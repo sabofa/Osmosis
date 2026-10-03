@@ -281,3 +281,35 @@ Ben, orbiting a sphere: the half that turns into view was bare (the warped under
 - **Edges are view-dependent.** An edge stroke fades out as its base ages, over 200 ms from when the camera left the view the base was made for.
 - **Mid-drag frames** are analysed at the model's coarse drag stride (`analysisStride`, about 28k pixels), with the particle density as it is. Measured against the still frame of the same view, the median stroke's colour differs by 0.001 to 0.004 (linear light) and its path by under 0.1 px.
 - **`light.worldFixed`** (default 1): `light.azimuth` and `light.elevation` place the key light in the WORLD (z up, the azimuth about z from +x, the elevation above the xy-plane: (0, 90) is straight down). At 0 the light is relative to the view as before. The lab builds `PaintView.lightDir` from it; the shadow map, the G-buffer and the model follow. The canvas's relief light stays on the screen. The default azimuth and elevation, -35 and 39, are the mockup's light (56 left, 27 up) at a typical authored camera, so a figure at its authored view is lit as it was.
+
+## 14. The baked painting (Ben, 2026-10-02 evening)
+
+Ben: "when I move around it's still very slow to update … since it's all seeded maybe it can precompile the full file or painting, then when I move around it's instant."
+
+With the key light fixed in the world (`light.worldFixed` = 1, the default), a stroke's value, colour, role, brush-load mix and path along the surface are all independent of the camera. So **the whole painting is baked once, in world space**, and orbiting only selects, projects and draws it. The contract is `space/paint/bake/types.ts`.
+
+**Bake** (in the worker, per scene, params and world light):
+- every particle at the maximum density gets its stroke;
+- role and colour come from the value plan (§3.3, §12) and the curve and spatial mix (§3.4–§3.5), all evaluated from the WORLD light and the particle's own normal;
+- the path is walked along the surface tangent in world units, and widths are in world units;
+- the underpainting is baked per mesh vertex.
+
+**What moves into world space** (it was screen space):
+- **Planes:** cells of normal direction × value zone on the MESH, merged within a family by world area.
+- **Edge hardness:** contrast between planes, curvature across the edge, light side, and distance from the occluder for cast shadows. The focal point is the brightest highlight, not "nearest the viewer". Terminator, crease, cast-shadow and plane edges are view-independent and are baked.
+
+**Per frame** (milliseconds):
+- select strokes by rank against the screen density (foreshortening);
+- fade by |n·v|;
+- scale widths by the zoom (`zoomStrokeScale`, `zoomGrowMax`);
+- project;
+- draw with the renderer's depth pre-pass, so hidden strokes vanish;
+- recompute the silhouette outline strokes, the only view-dependent edges, with the same colour logic.
+
+**Slider changes:**
+- colour-only params recolour the bake, which must be bit-identical to a re-bake;
+- any other param re-bakes in the worker, with a progress indicator, while the previous bake stays on screen.
+
+**`light.worldFixed` = 0** (camera-relative light) keeps the per-frame path of §13, because nothing can be baked when the light moves with the view.
+
+**Parity:** at the authored view, the baked painting must match the per-frame model closely (mean colour ΔE and role agreement are measured and reported). Look differences from moving analysis into world space are accepted where they read more like a painter's planes of the form.
