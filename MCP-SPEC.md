@@ -37,7 +37,9 @@ segment, so `buildApp`'s pino `req` serializer rewrites a logged url of
 the allowlist when the scope is `presenter`, so a withheld tool is genuinely
 absent from `tools/list` and answers "tool not found", rather than being
 listed and then refusing. The presenter token is what the **tutor server**
-holds: it runs the live teaching loop and never needs to retire a question,
+holds: it runs the live teaching loop and reads and writes Ben's workspace
+(the seven `ws_*` tools, §3.6: read, create, write, append and place, and none
+of them removes or moves anything), and it never needs to retire a question,
 rewrite a template, change config or touch a theme, so the credential it
 carries cannot do any of those things. `readme()` reports `scope` (`full` |
 `presenter`) and a `node.tools` list scoped to the caller, so a tutor can
@@ -350,14 +352,28 @@ Errors are the usual `{ error, message }` (`not_found`, `name_taken`,
 gets a file node `asset:<asset id>` in the workspace the moment it is created,
 unplaced, tagged `source`. Deleting the upload sends that file to the trash.
 
+**File types.** A file has a `type`, and the server refuses a type nobody has
+registered (`unknown_file_type`). `ws_create` takes any registered type that
+holds text (`markdown` and `graph` today; `asset` is an upload's wrapper and is
+made by uploading), and `ws_write` and `ws_append` obey that type's `validate`
+(`invalid_content`) and `appendable` (`not_appendable`). Item files and other
+special types arrive by registration, not by a new tool:
+`docs/workspace/FILE-TYPES.md`.
+
+**Where to read more.** The design is the Learn spec
+`spec/osmosis/workspace/01-shell.md` (data model §2, content §6, API §12, file
+types §17), with Ben's answers in `ruling-2026-10-03-shell-answers.md` beside
+it.
+
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 
-Native tool-calling has a real, measured cost at scale: all 37 tool schemas
-resend on every turn a connector is enabled for regardless of whether that
+Native tool-calling has a real, measured cost at scale: every tool schema
+resends on every turn a connector is enabled for regardless of whether that
 turn calls a tool, and a native chat session's conversation history — every
 prior batch's full call and response — accumulates and resends as input on
 every later turn. Two live stress tests (`docs/superpowers/specs/2026-08-20-mcp-stress-test-findings.md`,
-`-v2.md`) measured this directly: curl-driven authoring from an isolated
+`-v2.md`) measured this directly, on a 21-tool surface (§3 has today's count,
+so the schema share is larger now): curl-driven authoring from an isolated
 context cost roughly 700 tokens/question (input+output combined); native
 tool-calling in a long-lived session cost roughly 900+ *input* tokens/question
 alone, before output.
