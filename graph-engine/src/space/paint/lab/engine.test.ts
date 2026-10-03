@@ -715,11 +715,13 @@ class SlowHost implements ModelHost {
   frame(request: SessionRequest): Promise<SessionResponse> {
     this.requests.push(request)
     this.maxRunning = Math.max(this.maxRunning, ++this.running)
+    // The answer is made when the request arrives, from what the model holds at that moment (as a worker does: the figure's
+    // colours the lab sets afterwards are not in it), and handed back when the test says the model is done.
+    const response = this.session.frame(request)
+    if (response.ok && response.kind !== 'paper') this.responses.push(response)
     return new Promise((resolve) => {
       this.waiting.push(() => {
-        const response = this.session.frame(request)
         this.running--
-        if (response.ok && response.kind !== 'paper') this.responses.push(response)
         resolve(response)
       })
     })
@@ -846,8 +848,9 @@ describe('the model keeps painting while the camera drags', () => {
     go(sphereView(), P)
     host.finish()
     await done(1)
-    go(sphereView({ azimuth: 40, dragging: true }), P) // the model starts a frame for it ...
-    engine.setScene(SCENE, flatColours({ 0: [0.4, 0.1, -0.1], 1: [0.9, 0.01, 0.02] })) // ... and the theme changes
+    go(sphereView({ azimuth: 40, dragging: true }), P) // the model starts a frame for it, and makes it from the figure's colours ...
+    expect(host.responses.length).toBe(2)
+    engine.setScene(SCENE, flatColours({ 0: [0.4, 0.1, -0.1], 1: [0.9, 0.01, 0.02] })) // ... and the theme changes before it is back
     host.finish()
     await flush()
     expect(frames.some((f) => f.adopted)).toBe(false)
@@ -1007,6 +1010,104 @@ describe('the edges of a base that the camera has left', () => {
       // the rest of the picture is the strokes as they were
       for (let i = 0; i < first.count; i++) if (first.role[i] !== edge) expect(old.alpha[i]).toBe(plain.alpha[i])
     }
+    engine.dispose()
+  })
+})
+
+describe('the edges of a base age when the view turns, not when it zooms or pans', () => {
+  it('stay as they were under a zoom or a pan, however long, and age from the moment the view turns', async () => {
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ now: () => clock.t })
+    const v0 = sphereView()
+    go(v0, P)
+    await done(1)
+    const first = painted[0].frame.strokes
+    const edge = ROLES.indexOf('edge')
+    const zoomed = sphereView({ zoom: 260, dragging: true })
+    const panned = sphereView({ zoom: 260, target: [0.1, 0, 0.05], dragging: true })
+    const turnedView = sphereView({ azimuth: 34, dragging: true })
+    const edges = Array.from({ length: first.count }, (_, i) => i).filter((i) => first.role[i] === edge)
+    const shownAt = (t: number, v: PaintView) => {
+      clock.t = t
+      go(v, P)
+      return painted[painted.length - 1].frame.strokes
+    }
+    for (const v of [zoomed, panned]) {
+      const plain = reprojectStrokes(first, v0, v, P)
+      expect(edges.some((i) => plain.alpha[i] > 0.2)).toBe(true)
+      for (const t of [5000, 5100, 5250, 9000]) {
+        const shown = shownAt(t, v)
+        for (const i of edges) expect(shown.alpha[i], `edge ${i} at ${t}`).toBe(plain.alpha[i])
+      }
+    }
+    // the view turns at t = 10000: from then on they age as they always did
+    const plain = reprojectStrokes(first, v0, turnedView, P)
+    const strong = edges.filter((i) => plain.alpha[i] > 0.2)
+    for (const i of strong) expect(shownAt(10000, turnedView).alpha[i]).toBeCloseTo(plain.alpha[i], 6)
+    for (const i of strong) expect(shownAt(10100, turnedView).alpha[i]).toBeCloseTo(0.5 * plain.alpha[i], 6)
+    for (const i of strong) expect(shownAt(10200, turnedView).alpha[i]).toBe(0)
+    engine.dispose()
+  })
+})
+
+describe('a frame that lands after a zoom or a pan of the camera', () => {
+  it('has its edges whole: the camera never turned from the view it was made for', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    const v0 = sphereView()
+    go(v0, P)
+    host.finish()
+    await done(1)
+    const WIDER = setParam(P, 'roles.block.width', 30)
+    go(v0, WIDER) // a slider: the model's frame for it starts
+    clock.t = 1000
+    const zoomed = sphereView({ zoom: 260, dragging: true })
+    go(zoomed, WIDER) // and the camera is zoomed (it looks the same way)
+    clock.t = 1150
+    host.finish()
+    await flush() // the slider's frame lands
+    const slider = host.responses[1].strokes
+    const plain = reprojectStrokes(slider, host.requests[1].view, zoomed, P, 1)
+    const edge = ROLES.indexOf('edge')
+    const edges = Array.from({ length: slider.count }, (_, i) => i).filter((i) => slider.role[i] === edge && plain.alpha[i] > 0.2)
+    expect(edges.length).toBeGreaterThan(5)
+    // at the landing, and a long while after: nothing aged them
+    for (const t of [1150, 1250, 4000]) {
+      clock.t = t
+      go(zoomed, WIDER)
+      const shown = painted[painted.length - 1].frame.strokes
+      for (const i of edges) expect(shown.alpha[i], `edge ${i} at ${t}`).toBeCloseTo(plain.alpha[i], 6)
+    }
+    engine.dispose()
+  })
+
+  it('ages them from the turn, not from a zoom that came before it', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    const v0 = sphereView()
+    go(v0, P)
+    host.finish()
+    await done(1)
+    const WIDER = setParam(P, 'roles.block.width', 30)
+    go(v0, WIDER) // a slider: the model's frame for it starts
+    clock.t = 1000
+    go(sphereView({ zoom: 260, dragging: true }), WIDER) // the camera zooms at t = 1000 ...
+    clock.t = 1100
+    const turnedView = sphereView({ azimuth: 36, zoom: 260, dragging: true })
+    go(turnedView, WIDER) // ... and turns at t = 1100
+    clock.t = 1250
+    host.finish()
+    await flush() // the frame lands 150 ms after the turn (250 after the zoom)
+    go(turnedView, WIDER)
+    const slider = host.responses[1].strokes
+    const plain = reprojectStrokes(slider, host.requests[1].view, turnedView, P, 1)
+    const edge = ROLES.indexOf('edge')
+    const edges = Array.from({ length: slider.count }, (_, i) => i).filter((i) => slider.role[i] === edge && plain.alpha[i] > 0.2)
+    expect(edges.length).toBeGreaterThan(5)
+    const shown = painted[painted.length - 1].frame.strokes
+    for (const i of edges) expect(shown.alpha[i]).toBeCloseTo(0.25 * plain.alpha[i], 6) // edgeFade(150), not edgeFade(250) = 0
     engine.dispose()
   })
 })
@@ -1330,5 +1431,196 @@ describe('the G-buffer of a request is read without the page waiting', () => {
     expect(painted.length).toBeGreaterThan(13)
     expect(gl.reads.every((r) => r.pack === true)).toBe(true)
     engine.dispose()
+  })
+})
+
+describe('an answer that comes while a fade runs', () => {
+  // each non-edge stroke's alpha, by what it is painted from (the strongest where a particle has more than one)
+  const alphaByKey = (b: StrokeBatch) => {
+    const edge = ROLES.indexOf('edge')
+    const out = new Map<string, number>()
+    for (let i = 0; i < b.count; i++) if (b.role[i] !== edge) out.set(`${b.role[i]}/${b.seed[i]}`, Math.max(out.get(`${b.role[i]}/${b.seed[i]}`) ?? 0, b.alpha[i]))
+    return out
+  }
+  const biggestJump = (a: Map<string, number>, b: Map<string, number>) => {
+    let worst = 0
+    for (const k of new Set([...a.keys(), ...b.keys()])) worst = Math.max(worst, Math.abs((a.get(k) ?? 0) - (b.get(k) ?? 0)))
+    return worst
+  }
+
+  // a fade from the first frame to a model frame for azimuth 40, the camera paused at 52; a second answer comes half way through
+  async function midFade() {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const rig = withPicture({ host, now: () => clock.t, reducedMotion: () => false })
+    rig.go(sphereView(), P)
+    host.finish()
+    await rig.done(1)
+    clock.t = 100
+    rig.go(sphereView({ azimuth: 40, dragging: true }), P) // the model starts a frame for az 40
+    const now = sphereView({ azimuth: 52, dragging: true })
+    clock.t = 116
+    rig.go(now, P)
+    clock.t = 120
+    host.finish() // the first answer: adopted at t = 120, a fade of 120 ms begins
+    await flush()
+    clock.t = 130
+    rig.go(now, P) // painted, and the next request starts (for az 52)
+    expect(rig.frames.filter((f) => f.adopted)).toHaveLength(1)
+    return { host, clock, now, ...rig }
+  }
+
+  it('waits for the fade to end and then takes over: no stroke’s alpha jumps by more than 0.05 between two frames, at the answer or at the take-over', async () => {
+    const { host, clock, now, engine, painted, frames, go } = await midFade()
+    // t = 190, half way through the fade
+    clock.t = 190
+    go(now, P)
+    const before = alphaByKey(painted[painted.length - 1].frame.strokes)
+    host.finish() // the second answer, mid-fade
+    await flush()
+    clock.t = 191
+    go(now, P)
+    const after = alphaByKey(painted[painted.length - 1].frame.strokes)
+    // held: the picture goes on as it was (a millisecond of the fade is all that moved)
+    expect(biggestJump(before, after)).toBeLessThanOrEqual(0.05)
+    expect(frames.filter((f) => f.adopted)).toHaveLength(1)
+    // the fade ends at t = 240: the held answer takes over then, and again nothing jumps
+    clock.t = 239
+    go(now, P)
+    const last = alphaByKey(painted[painted.length - 1].frame.strokes)
+    clock.t = 241
+    go(now, P)
+    const first = alphaByKey(painted[painted.length - 1].frame.strokes)
+    expect(biggestJump(last, first)).toBeLessThanOrEqual(0.05)
+    expect(frames.filter((f) => f.adopted)).toHaveLength(2)
+    // and its own fade runs, to the strokes of the second answer alone
+    clock.t = 241 + 130
+    go(now, P)
+    const finished = painted[painted.length - 1].frame.strokes
+    expect(finished.count).toBe(host.responses[2].strokes.count)
+    engine.dispose()
+  })
+
+  it('drops the answer it holds when the figure is switched, and back: the base stays the first answer’s and no second fade begins', async () => {
+    const { host, clock, now, engine, painted, frames, go } = await midFade()
+    clock.t = 160
+    go(now, P)
+    host.finish() // the second answer, held
+    await flush()
+    engine.setScene(OTHER, COLOURS)
+    engine.setScene(SCENE, COLOURS)
+    clock.t = 241
+    go(now, P)
+    clock.t = 300
+    go(now, P)
+    expect(frames.filter((f) => f.adopted)).toHaveLength(1)
+    expect(painted[painted.length - 1].frame.strokes.count).toBe(host.responses[1].strokes.count)
+    engine.dispose()
+  })
+
+  it('keeps only the newest of the answers that come while it runs, and drops one that is older than the base', async () => {
+    const { host, clock, now, engine, painted, frames, go } = await midFade()
+    clock.t = 160
+    go(now, P)
+    host.finish() // the second answer, held
+    await flush()
+    clock.t = 165
+    go(now, P) // asks for the next request, for the same view
+    host.finish() // and its answer comes too, still mid-fade: it replaces the one held
+    await flush()
+    clock.t = 241
+    go(now, P)
+    clock.t = 241 + 130
+    go(now, P)
+    // the base after both fades is the newest answer's
+    expect(painted[painted.length - 1].frame.strokes.count).toBe(host.responses[3].strokes.count)
+    expect(frames.filter((f) => f.adopted)).toHaveLength(2)
+    engine.dispose()
+  })
+})
+
+describe('a fade that is not the base’s any more', () => {
+  it('does not go on ticking: the user asks for reduced motion mid-fade and the next answer is adopted at once', async () => {
+    vi.useFakeTimers()
+    try {
+      const host = new SlowHost()
+      const clock = { t: 0 }
+      const reduced = { on: false }
+      const { engine, painted, go } = withPicture({ host, now: () => clock.t, reducedMotion: () => reduced.on })
+      go(sphereView(), P)
+      host.finish()
+      await vi.waitFor(() => expect(painted.length).toBeGreaterThanOrEqual(1))
+      clock.t = 100
+      go(sphereView({ azimuth: 40, dragging: true }), P)
+      const now = sphereView({ azimuth: 52, dragging: true })
+      clock.t = 116
+      go(now, P)
+      clock.t = 120
+      host.finish() // adopted: a fade begins
+      await vi.advanceTimersByTimeAsync(0)
+      clock.t = 130
+      go(now, P) // painted, and the next request starts
+      clock.t = 135
+      go(now, P) // (the drag goes on: the next answer is adopted without a picture)
+      reduced.on = true // mid-fade, the user asks for no motion ...
+      clock.t = 140
+      host.finish() // ... and the next answer comes: adopted at once, the fade over the old base is of no base now
+      await vi.advanceTimersByTimeAsync(0)
+      reduced.on = false // (and asks for motion again, before the picture is made: the stale fade must not come back to life)
+      clock.t = 150
+      go(sphereView({ azimuth: 55, dragging: true }), P) // the drag goes on
+      // the picture is the new base's strokes alone: the old fade is not blended in with them
+      expect(painted[painted.length - 1].frame.strokes.count).toBe(host.responses[2].strokes.count)
+      const painting = painted.length
+      // nothing is left to ease: no tick paints again
+      for (let k = 0; k < 12; k++) {
+        clock.t += 16
+        await vi.advanceTimersByTimeAsync(16)
+      }
+      expect(painted.length).toBe(painting)
+      engine.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('is not taken to another figure and back: a figure switch mid-drag ends it, and no tick paints after it', async () => {
+    vi.useFakeTimers()
+    try {
+      const host = new SlowHost()
+      const clock = { t: 0 }
+      const { engine, painted, go } = withPicture({ host, now: () => clock.t, reducedMotion: () => false })
+      go(sphereView(), P)
+      host.finish()
+      await vi.waitFor(() => expect(painted.length).toBeGreaterThanOrEqual(1))
+      clock.t = 100
+      go(sphereView({ azimuth: 40, dragging: true }), P)
+      const now = sphereView({ azimuth: 52, dragging: true })
+      clock.t = 116
+      go(now, P)
+      clock.t = 120
+      host.finish() // adopted: a fade begins
+      await vi.advanceTimersByTimeAsync(0)
+      clock.t = 130
+      go(now, P)
+      const next = host.responses[1].strokes
+      expect(painted[painted.length - 1].frame.strokes.count).toBeGreaterThan(next.count) // (the fade: the old strokes are still there)
+      // the figure is switched, and switched back, in the time the fade had left
+      engine.setScene(OTHER, COLOURS)
+      engine.setScene(SCENE, COLOURS)
+      const painting = painted.length
+      for (let k = 0; k < 10; k++) {
+        clock.t += 16
+        await vi.advanceTimersByTimeAsync(16)
+      }
+      expect(painted.length).toBe(painting) // no tick paints a fade of a figure that was left
+      // the picture of the figure when it is back is its base's strokes alone: the fade is gone
+      clock.t = 140
+      go(now, P)
+      expect(painted[painted.length - 1].frame.strokes.count).toBe(next.count)
+      engine.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
