@@ -43,17 +43,19 @@
 //      mark only when the edge is a SEAM, the author's own condition (a natural sqrt or ln
 //      edge is not marked).
 //    - FILLED OR OPEN. An end is filled when the curve takes its value there. Where the zero
-//      is one comparison's (Zero.cmp) that is the comparison's to say, and the curve's own value
-//      at the spot is not asked: no sample can tell x^2 < 2 from x^2 <= 2 at an irrational seam.
-//      One side of the zero is where the comparison holds. With an inclusive operator (<=, >=)
-//      that side owns the zero; with a strict one (<, >) the comparison is false AT the zero, so
-//      the piecewise falls through to the branch that carries on from the other side, and that
-//      side owns it. A jump fills the owner's end and opens the other; a seam edge is filled
-//      when the defined side is the owner. = and != hold at a point and not on a side: both ends
-//      are open, and the curve's own value at the spot, if it has one, is a filled value mark.
-//      Without a comparison (a seam two generators share, a jump that is natural, a comparison
-//      with no one side that holds) the curve's own value at the spot decides: filled where it
-//      equals the limit on screen.
+//      is some comparisons' (Zero.cmps) that is theirs to say, and the curve's own value at
+//      the spot is not asked: no sample can tell x^2 < 2 from x^2 <= 2 at an irrational seam.
+//      Each comparison holds on one side of the zero. With an inclusive operator (<=, >=) that
+//      side owns the zero; with a strict one (<, >) the comparison is false AT the zero, so the
+//      piecewise falls through to the branch that carries on from the other side, and that side
+//      owns it. When the comparisons all give the same owner (<, >= of one a - b; < of x^2 - 2
+//      with > of 2 - x^2) the zero has it: a jump fills the owner's end and opens the other, and
+//      a seam edge is filled when the defined side is the owner. = and != hold at a point and not
+//      on a side: both ends are open, and the curve's own value at the spot, if it has one, is a
+//      filled value mark. Where the comparisons disagree (< with <=), or a - b is exactly 0 at
+//      the spot (an exact double: the curve's own value is its real one, and may be undefined),
+//      or has no sign off it, or no comparison made the zero, the curve's own value at the spot
+//      decides: filled where it equals the limit on screen.
 // 5. SAMPLING. The pieces go, in order, into ONE ChainSink, which continues a chain only where
 //    one piece ends at exactly the parameter and point the next begins at. It is lifted
 //    between pieces at a pole, jump or edge, never at a hole.
@@ -67,7 +69,7 @@
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { call, mul, variable } from '../../math/expr'
 import { compileInterval, CONTINUOUS, iv, type Verdict } from '../../math/interval'
-import { piecewise } from '../../math/reserved'
+import { type ComparisonOp, piecewise } from '../../math/reserved'
 import type { MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
 import type { Bounds, Break, Chain, SceneObject, Vec2 } from '../../scene/types'
@@ -325,36 +327,55 @@ function settle(w: Walk, limit: Vec2, tc: number, side: -1 | 1): Vec2 {
   return agrees ? p : limit
 }
 
-// Which side of the zero owns it by the author's comparison, or null where the zero is no one
-// comparison's, or its comparison has no one side that holds (a zero that a - b touches without
-// crossing has the same sign either side, and a NaN or a 0 says nothing).
-//  - The comparison holds on the side where a - b has the sign its operator wants, read a locator
-//    tolerance or so off the zero.
+// Which side of the zero owns it by the author's comparisons, or null where they do not say.
+// Each comparison of the zero (Zero.cmps) gives an owner of its own, and the zero is owned only
+// if they all give the same one: {x^2 < 2: 0, x^2 >= 2: 1} is two comparisons of one a - b that
+// agree (a - b > 0 owns it), and so is {x^2 < 2: 0, 1} + {2 - x^2 > 0: 0, 1}, two a - b that
+// agree; < with <=, or < with >, disagree, and the curve's own value at the spot decides.
+//  - A comparison holds on the side where its a - b has the sign its operator wants, read a
+//    locator tolerance or so off the zero.
 //  - An inclusive operator (<=, >=) is true at the zero, so the side it holds on owns it. A strict
 //    one (<, >) is false at the zero, which then belongs to the other side: the piecewise falls
 //    through to the branch that carries on from there.
 //  - = holds at the point alone and != on both sides with the point out: neither side owns it.
+//  - No answer (null, so the value rule): a - b is exactly 0 at the zero (it is an exact double,
+//    the curve's own value there is its real one, and may be undefined: a filled end at a 0/0
+//    would be drawn where there is no point), a - b has no sign off it (NaN or 0, or the same
+//    sign both sides, as an even zero has), or no comparison made the zero.
 function ownerAt(w: Walk, zero: Zero): Ownership | null {
-  const { cmp, cmpExpr } = zero
-  if (cmp === undefined || cmpExpr === undefined) return null
-  if (cmp === '=' || cmp === '!=') return { owner: null }
+  const { cmps } = zero
+  if (!cmps || cmps.length === 0) return null
+  let owner: 'left' | 'right' | 'neither' | null = null
+  for (const { cmp, cmpExpr } of cmps) {
+    const mine = comparisonOwner(w, cmp, cmpExpr, zero.t)
+    if (mine === null) return null
+    if (owner !== null && owner !== mine) return null
+    owner = mine
+  }
+  return { owner: owner === 'neither' ? null : owner }
+}
+
+// One comparison's owner of the zero at tc (see ownerAt), or null for no answer.
+function comparisonOwner(w: Walk, cmp: ComparisonOp, cmpExpr: Expr, tc: number): 'left' | 'right' | 'neither' | null {
+  if (cmp === '=' || cmp === '!=') return 'neither'
   let g = w.differences.get(cmpExpr)
   if (!g) {
     g = compileScalar(cmpExpr, [w.param], w.scope)
     w.differences.set(cmpExpr, g)
   }
-  const h = offsetAt(zero.t)
-  const left = g(zero.t - h)
-  const right = g(zero.t + h)
-  w.counter.points += 2
-  if (Number.isNaN(left) || Number.isNaN(right) || left === 0 || right === 0) return null
+  const h = offsetAt(tc)
+  const left = g(tc - h)
+  const right = g(tc + h)
+  const at = g(tc)
+  w.counter.points += 3
+  if (at === 0 || Number.isNaN(left) || Number.isNaN(right) || left === 0 || right === 0) return null
   const wantsPositive = cmp === '>' || cmp === '>='
   const holdsLeft = left > 0 === wantsPositive
   const holdsRight = right > 0 === wantsPositive
   if (holdsLeft === holdsRight) return null
   const holds = holdsLeft ? 'left' : 'right'
   const inclusive = cmp === '<=' || cmp === '>='
-  return { owner: inclusive ? holds : holds === 'left' ? 'right' : 'left' }
+  return inclusive ? holds : holds === 'left' ? 'right' : 'left'
 }
 
 // The curve's own value at the spot, or null where it is not defined there.

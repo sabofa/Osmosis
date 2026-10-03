@@ -29,8 +29,8 @@
 // (a piecewise or domain condition): the curve is built to change there, so a
 // jump at a seam is the author's, not a defect. A NATURAL spot is the function's
 // own domain, pole or step. When one expression is both, the seam wins. A comparison's
-// generator also says which operator it came from (`cmp`), when it is only that, so a
-// zero that is not an exact double still knows whether the author's condition includes it.
+// generator also lists the operators of the comparisons it is the a - b of (`cmps`), so a
+// zero that is not an exact double still knows whether the author's conditions include it.
 //
 // The walk does not validate the expression: a call with the wrong number of
 // arguments gets no rule, a binder bound the compile refuses is no constant, and the
@@ -52,12 +52,13 @@ export interface Generator {
   expr: Expr
   origin: Origin
   why: string
-  // The operator of the comparison whose a - b this is, when it is exactly that: the operator
-  // says which side of a zero the author's condition holds on and whether the zero itself is
-  // in it (< against <=), which no sample can tell where the seam is not an exact double
-  // (x^2 < 2). Absent for every other generator, and for an expression that a natural spot, or
-  // a comparison with another operator, also produced.
-  cmp?: ComparisonOp
+  // The operators of the comparisons whose a - b this is, each once, in the order found: an
+  // operator says which side of a zero the author's condition holds on and whether the zero
+  // itself is in it (< against <=), which no sample can tell where the seam is not an exact
+  // double (x^2 < 2). {x^2 < 2: 0, x^2 >= 2: 1} is two comparisons of one a - b. A natural spot
+  // that shares the expression adds nothing to the list and takes nothing from it. Absent for a
+  // generator no comparison produced.
+  cmps?: ComparisonOp[]
 }
 
 // How many user functions (or derivatives) deep a walk goes, and how many it
@@ -174,13 +175,14 @@ function reservedRule(name: string, argc: number): Rule | null {
 }
 
 // Two generators of the same expression as one: the seam's origin and reason win (the first
-// seam, if both are), as they always have. The comparison survives only if both are that one
-// comparison: a zero that a natural spot, or a comparison with another operator, also
-// produced is not one comparison's to say who owns.
+// seam, if both are), as they always have, and the comparisons are those of both. Whether
+// they agree on who owns the zero is for the caller to say (curve.ts), from the sign of a - b
+// there: this only keeps them.
 export function joinGenerators(a: Generator, b: Generator): Generator {
   const keep = a.origin === 'seam' || b.origin !== 'seam' ? a : b
   const joined: Generator = { expr: keep.expr, origin: keep.origin, why: keep.why }
-  if (a.cmp !== undefined && a.cmp === b.cmp) joined.cmp = a.cmp
+  const cmps = [...new Set([...(a.cmps ?? []), ...(b.cmps ?? [])])]
+  if (cmps.length > 0) joined.cmps = cmps
   return joined
 }
 
@@ -195,7 +197,7 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
     if (!freeVariablesDeep(generator, scope).has(param)) return
     const key = JSON.stringify(generator)
     const known = found.get(key)
-    const g: Generator = cmp ? { expr: generator, origin, why, cmp } : { expr: generator, origin, why }
+    const g: Generator = cmp ? { expr: generator, origin, why, cmps: [cmp] } : { expr: generator, origin, why }
     found.set(key, known ? joinGenerators(known, g) : g)
   }
 

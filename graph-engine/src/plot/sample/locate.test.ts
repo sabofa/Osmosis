@@ -86,21 +86,25 @@ describe('locateZeros, beyond the table', () => {
     expect(r.zeros[0].origin).toBe('seam')
     expect(r.zeros[0].why.split('+').sort()).toEqual(['condition', 'denominator'])
   })
-  it('keeps the comparison on a zero that is exactly one comparison\'s, and drops it from a shared one', () => {
-    const cmps = (text: string, t0 = -3, t1 = 3) => zerosOf(text, t0, t1).zeros.map((z) => z.cmp)
+  it('lists the comparisons of a zero, each with the a - b it is the zero of, however many generators share it', () => {
+    const ops = (text: string, t0 = -3, t1 = 3) => zerosOf(text, t0, t1).zeros.map((z) => z.cmps?.map((c) => c.cmp))
     // one comparison, one zero; and both zeros of x^2 - 4 are that comparison's
-    expect(cmps('{x < 1: 1, 0}')).toEqual(['<'])
-    expect(cmps('{x^2 < 4: 1, 0}')).toEqual(['<', '<'])
+    expect(ops('{x < 1: 1, 0}')).toEqual([['<']])
+    expect(ops('{x^2 < 4: 1, 0}')).toEqual([['<'], ['<']])
     // the zero comes with the a - b it is the zero of, to read the side that holds from
     const [z] = zerosOf('{x <= 1: 1, 0}', -3, 3).zeros
-    expect(z.cmpExpr).toBeDefined()
-    // 2x - 2 and x - 1 are two generators with one zero: it is neither comparison's alone
-    expect(cmps('{x < 1: 1/(2x - 2), 0}')).toEqual([undefined])
-    expect(zerosOf('{x < 1: 1/(2x - 2), 0}', -3, 3).zeros[0]).not.toHaveProperty('cmpExpr')
+    expect(z.cmps?.[0].cmpExpr).toBeDefined()
+    // two comparisons of one a - b (the textbook two-branch form), and of two a - b with one zero
+    expect(ops('{x^2 < 2: 0, x^2 >= 2: 1}')).toEqual([['<', '>='], ['<', '>=']])
+    const two = zerosOf('{x^2 < 2: 0, 1} + {2 - x^2 > 0: 0, 1}', -3, 3).zeros
+    expect(two.map((z) => z.cmps?.map((c) => c.cmp).sort())).toEqual([['<', '>'], ['<', '>']])
+    expect(two[0].cmps?.[0].cmpExpr).not.toBe(two[0].cmps?.[1].cmpExpr)
+    // 2x - 2 (natural) and x - 1 (seam) are two generators with one zero: the comparison is kept
+    expect(ops('{x < 1: 1/(2x - 2), 0}')).toEqual([['<']])
     // a natural spot is not a comparison
-    expect(cmps('floor(x)', -2.5, 2.5)).toEqual([undefined, undefined, undefined, undefined, undefined])
-    // two comparisons that are one expression with different operators agree on nothing
-    expect(cmps('{x < 1: 1, x <= 1: 2, 0}')).toEqual([undefined])
+    expect(ops('floor(x)', -2.5, 2.5)).toEqual([undefined, undefined, undefined, undefined, undefined])
+    // < and <= of one expression are both listed: that they disagree is for curve.ts to find out
+    expect(ops('{x < 1: 1, x <= 1: 2, 0}')).toEqual([['<', '<=']])
   })
   it('keeps a natural origin when no seam shares the zero', () => {
     const r = zerosOf('1/(x - 1) + ln(x - 2)', 0, 4)

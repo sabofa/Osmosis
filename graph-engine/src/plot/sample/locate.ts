@@ -50,11 +50,13 @@ import type { Generator, Origin } from './structure'
 import { LOCATE } from './tuning'
 import type { EvalCounter } from './types'
 
-// `cmp` and `cmpExpr`, together or neither: the comparison this zero is the boundary of, and its
-// a - b (the generator's expression), so the side where the comparison holds can be read from
-// the sign of a - b either side of t. Present only for a zero that came from exactly ONE
-// comparison generator: a zero two generators share has neither.
-export interface Zero { t: number; origin: Origin; why: string; cmp?: ComparisonOp; cmpExpr?: Expr }
+// `cmps`: the comparisons this zero is the boundary of, each with the a - b it is the zero of
+// (the generator's expression), so the side where each holds can be read from the sign of its
+// a - b either side of t. Every comparison of every generator that has the zero, each once:
+// {x^2 < 2: 0, x^2 >= 2: 1} gives two, and so does {x^2 < 2: 0, 1} + {2 - x^2 > 0: 0, 1}.
+// Absent for a zero no comparison made.
+export interface ZeroComparison { cmp: ComparisonOp; cmpExpr: Expr }
+export interface Zero { t: number; origin: Origin; why: string; cmps?: ZeroComparison[] }
 // `truncated`: the result may be missing zeros, and not by a known amount. A budget
 // or a cap ended the search before it was done; or a cluster was too crowded for its
 // samples to count (cos(1/x) near 0); or there are more zeros than maxZeros and the
@@ -107,7 +109,7 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
     for (const [lo, hi] of found.clusters) {
       const here = resolve(g, confirm, lo, hi, coarse, counter)
       if (here.unresolved) truncated = true
-      for (const t of here.zeros) all.push(gen.cmp ? { t, origin: gen.origin, why: gen.why, cmp: gen.cmp, cmpExpr: gen.expr } : { t, origin: gen.origin, why: gen.why })
+      for (const t of here.zeros) all.push(gen.cmps ? { t, origin: gen.origin, why: gen.why, cmps: gen.cmps.map((cmp) => ({ cmp, cmpExpr: gen.expr })) } : { t, origin: gen.origin, why: gen.why })
     }
   }
   return merge(all, t0, t1, truncated)
@@ -319,11 +321,12 @@ function merge(all: Zero[], t0: number, t1: number, truncated: boolean): LocateR
     if (!(z.t - t0 > tolAt(z.t) && t1 - z.t > tolAt(z.t))) continue
     const last = out[out.length - 1]
     if (last && z.t - last.t <= tolAt(z.t)) {
-      // two generators share the zero: it is no one comparison's (one generator finding it twice,
-      // by a sign change and by a minimum, is still one)
-      if (last.cmpExpr !== z.cmpExpr) {
-        delete last.cmp
-        delete last.cmpExpr
+      // the zero is every comparison's that has it, each once (one generator finding it twice,
+      // by a sign change and by a minimum, adds the same ones again)
+      if (z.cmps) {
+        const joined = last.cmps ? [...last.cmps] : []
+        for (const c of z.cmps) if (!joined.some((j) => j.cmp === c.cmp && j.cmpExpr === c.cmpExpr)) joined.push(c)
+        last.cmps = joined
       }
       if (z.origin === 'seam') last.origin = 'seam'
       if (!last.why.split('+').includes(z.why)) last.why += `+${z.why}`

@@ -286,10 +286,48 @@ describe('sampleCurve — a comparison says who owns its seam', () => {
       expect(marksOf(r.objects).map((m) => [m.role, m.fill, m.at.y]), body).toEqual([['hole', 'open', expect.closeTo(1, 6)], ['value', 'filled', 5]])
     }
   })
-  it('a zero two comparisons share has no comparison to follow, and the value decides, as before', () => {
-    // < and > of the one expression: neither owns the 0, and the curve is not defined there (no value, no filled end)
-    const r = run(explicit('{x < 0: 0, x > 0: 1}'))
-    expect(marksOf(r.objects).map((m) => [m.role, m.fill])).toEqual([['endpoint', 'open'], ['endpoint', 'open']])
+  it('two comparisons of one a - b that agree on the owner give it to that side, the two-branch form included', () => {
+    // x^2 < 2 is false at the seam and x^2 >= 2 true: both give it to the 1 on the right
+    const both = (a: string, b: string, seam: number) => {
+      const r = run(explicit(`{${a}: 0, ${b}: 1}`))
+      return [endAt(r.objects, seam, 0)?.fill, endAt(r.objects, seam, 1)?.fill]
+    }
+    expect(both('x^2 < 2', 'x^2 >= 2', Math.SQRT2)).toEqual(['open', 'filled'])
+    expect(both('x^2 <= 2', 'x^2 > 2', Math.SQRT2)).toEqual(['filled', 'open'])
+    expect(both('x^3 < 5', 'x^3 >= 5', Math.cbrt(5))).toEqual(['open', 'filled'])
+    expect(both('x^3 <= 5', 'x^3 > 5', Math.cbrt(5))).toEqual(['filled', 'open'])
+    // and facing the other way round: here the 0 is on the right, where x^2 >= 2 holds and is true at the seam
+    expect(both('x^2 >= 2', 'x^2 < 2', Math.SQRT2)).toEqual(['filled', 'open'])
+  })
+  it('two comparisons of two a - b that agree on the owner give it to that side', () => {
+    // x^2 - 2 < 0 and 2 - x^2 > 0 both hold left of the root and are false at it: the right owns it
+    const r = run(explicit('{x^2 < 2: 0, 1} + {2 - x^2 > 0: 0, 1}'))
+    expect([endAt(r.objects, Math.SQRT2, 0)?.fill, endAt(r.objects, Math.SQRT2, 2)?.fill]).toEqual(['open', 'filled'])
+    expect(marksOf(r.objects).filter((m) => m.role === 'value')).toEqual([])
+    // the inclusive pair
+    const inclusive = run(explicit('{x^2 <= 2: 0, 1} + {2 - x^2 >= 0: 0, 1}'))
+    expect([endAt(inclusive.objects, Math.SQRT2, 0)?.fill, endAt(inclusive.objects, Math.SQRT2, 2)?.fill]).toEqual(['filled', 'open'])
+  })
+  it('comparisons that disagree on the owner fall back to the value at the spot', () => {
+    // < gives the seam to the right, <= to the left: the curve is 1 + 2 = 3 at x = 1, which is neither limit
+    const r = run(explicit('{x < 1: 0, 1} + {x <= 1: 2, 3}'))
+    expect(marksOf(r.objects).map((m) => [m.role, m.fill, m.at.y])).toEqual([['endpoint', 'open', 2], ['endpoint', 'open', 4], ['value', 'filled', 3]])
+    // < and > of one a - b disagree as well, and the curve has no value at 0: both ends open
+    const none = run(explicit('{x < 0: 0, x > 0: 1}'))
+    expect(marksOf(none.objects).map((m) => [m.role, m.fill])).toEqual([['endpoint', 'open'], ['endpoint', 'open']])
+  })
+  it('an end is not filled where the curve has no value: an owner whose branch is 0/0 at the seam', () => {
+    const f = 'sin(x^2 - 2x + 1)/(x^2 - 2x + 1)'
+    // f(1) is 0/0 and its limit is 1: the seam is the exact double 1, so the value there is the curve's real one
+    for (const [body, domain] of [[`{x <= 1: ${f}, 5}`, null], [f, 'x <= 1']] as const) {
+      const r = run(explicit(body, domain))
+      const end = marksOf(r.objects).find((m) => Math.abs(m.at.x - 1) < 1e-9 && Math.abs(m.at.y - 1) < 1e-6)
+      expect(end?.fill, body).toBe('open')
+    }
+  })
+  it('a = zero shared with a natural spot owns it for neither side: both ends open, the value a mark', () => {
+    const r = run(explicit('{x = 1: 5, sign(x - 1)}'))
+    expect(marksOf(r.objects).map((m) => [m.role, m.fill, m.at.y])).toEqual([['endpoint', 'open', -1], ['endpoint', 'open', 1], ['value', 'filled', 5]])
   })
 })
 
