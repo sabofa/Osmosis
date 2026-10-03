@@ -134,9 +134,9 @@ describe('classify, functions periodic in 1/x', () => {
       const result = classify(pointFnOf(text, 'x', scopeOf()), tc, 0.1, { x: 40, y: 40 }, counter)
       return { kind: result.kind, points: counter.points }
     }
-    // 13 offsets a side, one confirming sample on each converging side, and the point
-    expect(run('sin(x)/x', 0)).toEqual({ kind: 'hole', points: 13 + 13 + 2 + 1 })
-    expect(run('sqrt(x)', 0)).toEqual({ kind: 'edge', points: 13 + 13 + 1 + 1 })
+    // 13 offsets a side, two confirming samples on each converging side, and the point
+    expect(run('sin(x)/x', 0)).toEqual({ kind: 'hole', points: 13 + 13 + 4 + 1 })
+    expect(run('sqrt(x)', 0)).toEqual({ kind: 'edge', points: 13 + 13 + 2 + 1 })
     expect(run('1/x', 0)).toEqual({ kind: 'pole', points: 27 }) // a divergence is not confirmed
   })
 })
@@ -179,13 +179,14 @@ describe('classify, holes whose numerator cancels to higher order', () => {
       }
     })
   }
-  it('counts the retry: x - sin x over x^3 at 40 px takes a confirming sample for each drop it tries', () => {
+  it('counts the retry: x - sin x over x^3 at 40 px takes confirming samples for each drop it tries', () => {
     const counter = { points: 0, intervals: 0 }
     classify(pointFnOf('(x - sin(x))/x^3', 'x', scopeOf()), 0, 0.1, { x: 40, y: 40 }, counter)
-    // 13 a side, the point, and per side the tail dropped 2 (refused) and 3 (taken) each
-    // have one confirming sample
-    expect(counter.points).toBe(13 + 13 + 1 + 2 + 2)
-    expect(counter.points).toBeLessThanOrEqual(2 * (13 + 1 + LIMITS.noiseDrop) + 1)
+    // 13 a side, the point, and per side the tail dropped 2 (the first confirming sample
+    // refuses it: 1) and 3 (taken, both samples agree: 2)
+    expect(counter.points).toBe(13 + 13 + 1 + 3 + 3)
+    // at most: per side 13, and two confirming samples for the whole sequence and for each drop
+    expect(counter.points).toBeLessThanOrEqual(2 * (13 + LIMITS.confirmFactors.length * (1 + LIMITS.noiseDrop)) + 1)
   })
   it('order-5 cancellation, past what the retry reaches, is unknown and never a pole', () => {
     expect(hole('(sin(x) - x + x^3/6)/x^5', 0.1, 40).kind).toBe('unknown')
@@ -195,5 +196,81 @@ describe('classify, holes whose numerator cancels to higher order', () => {
     for (const [text, tc] of [['1/x', 0], ['1/x^2', 0], ['tan(x)', Math.PI / 2]] as const)
       for (const [h0, scale] of [[0.01, 400], [0.001, 4000]] as const)
         expect(classify(pointFnOf(text, 'x', scopeOf()), tc, h0, { x: scale, y: scale }, { points: 0, intervals: 0 }).kind, `${text} at ${scale} px`).toBe('pole')
+  })
+})
+
+describe('classify, noise that is as steady as a pole', () => {
+  // On the lattice h0 4^-k the numerator's rounding error is the same few ulps at every
+  // offset, so the noise is exactly c/x^2: growth ratios 14.6, 16, 16, 16, a spread of
+  // 1.1, and the steady test takes it for a pole. What tells it from one is the tail
+  // before it: a real pole's shorter tails never converge, and these do.
+  const at = (text: string, tc: number, h0: number, scale: number) =>
+    classify(pointFnOf(text, 'x', scopeOf()), tc, h0, { x: scale, y: scale }, { points: 0, intervals: 0 })
+  for (const [text, scale] of [['(x - ln(1 + x))/x^2', 40], ['(x - ln(1 + x))/x^2', 160], ['(x - ln(1 + x))/x^2', 640], ['(1 - cos(x))/x^2', 60]] as const) {
+    it(`${text} at ${scale} px is not a pole`, () => {
+      expect(['hole', 'unknown']).toContain(at(text, 0, 4 / scale, scale).kind)
+    })
+  }
+  it('every real pole stays a pole at the default view', () => {
+    const poles: [string, number][] = [
+      ['1/x', 0], ['1/x^3', 0], ['1/x^30', 0], ['1/(x ln(abs(x)))', 0], ['ln(abs(x))/x', 0],
+      ['1/sqrt(abs(x))', 0], ['abs(x)^(-0.1)', 0], ['tan(x)', Math.PI / 2], ['1/sin(x)', Math.PI],
+    ]
+    for (const [text, tc] of poles) expect(at(text, tc, 0.1, 40).kind, text).toBe('pole')
+  })
+  it('a pole too weak to see in the view is unknown: the accepted cost', () => {
+    // 1e-6/x at 0.4 px per unit is under a twentieth of a pixel until the last offsets, so
+    // a shorter tail converges and confirms, and the rule cannot say pole.
+    expect(at('1e-6/x', 0, 10, 0.4).kind).toBe('unknown')
+  })
+})
+
+describe('classify, aliasing that one off-lattice sample misses', () => {
+  // cos(pi/x) sits at a maximum on the lattice, so a given off-lattice sample agrees with
+  // it one time in sixty; at h0 = 0.2 and on round views the one sample at sqrt 2 times
+  // the last offset did. Two samples (sqrt 2 and the golden ratio) both have to agree.
+  const z = () => ({ points: 0, intervals: 0 })
+  const units = [2, 4, 5, 10, 20, 40, 50, 100]
+  const widths = [400, 500, 600, 640, 720, 800, 960, 1000, 1200, 1280, 1600, 1920]
+  for (const text of ['cos(pi/x)', 'cos(2 pi/x)', 'sin(pi/x)', '1/x - floor(1/x)']) {
+    it(`${text} at 0 is unknown on all ${units.length * widths.length} round views (no hole, jump or edge)`, () => {
+      const p = pointFnOf(text, 'x', scopeOf())
+      const wrong: string[] = []
+      for (const u of units) {
+        for (const w of widths) {
+          const scale = w / u
+          const kind = classify(p, 0, 4 / scale, { x: scale, y: scale }, z()).kind
+          if (kind !== 'unknown') wrong.push(`${u} units at ${w} px: ${kind}`)
+        }
+      }
+      expect(wrong).toEqual([])
+    })
+  }
+  it('cos(pi/x) at h0 = 0.2 is unknown, and so are the jump and the edge built on it', () => {
+    for (const text of ['cos(pi/x)', 'sign(x) cos(pi/x)', '{x > 0: cos(pi/x)}'])
+      expect(classify(pointFnOf(text, 'x', scopeOf()), 0, 0.2, { x: 20, y: 20 }, z()).kind, text).toBe('unknown')
+  })
+})
+
+describe('classify, a jump that is only noise', () => {
+  const at = (text: string, scale: number) =>
+    classify(pointFnOf(text, 'x', scopeOf()), 0, 4 / scale, { x: scale, y: scale }, { points: 0, intervals: 0 })
+  it('(exp(x) - 1 - x)/x^2 at 1600 px is a hole, not a jump: its sides are 0.065 px apart', () => {
+    // The retried tails each carry noise under a twentieth of a pixel, so two of them can
+    // differ by nearly twice that: 0.50000001 and 0.50004066 here, a hole's two sides.
+    const r = at('(exp(x) - 1 - x)/x^2', 1600)
+    expect(r.kind).toBe('hole')
+    if (r.kind === 'hole') expect(Math.abs(r.limit.y - 0.5) * 1600).toBeLessThan(LIMITS.convergePx)
+  })
+  it('a clean step of 0.07 px is still a jump: the wider tolerance is for retried tails only', () => {
+    expect(at('{x < 0: 0, 0.00175}', 40).kind).toBe('jump')
+  })
+  it('the point\'s own value is compared as loosely: (tan(x) - x)/x^3 with its limit as its value is regular at 2500 px', () => {
+    // Its retried limit is 0.068 px off the true 1/3 there, the one of 59 holes over the
+    // five cancellation families at 15 zooms that is over convergePx; the curve with its
+    // own value 1/3 is continuous, and a "hole with a value" there would be noise's.
+    expect(at('{x = 0: 1/3, (tan(x) - x)/x^3}', 2500).kind).toBe('regular')
+    // and a value that really is off (0.001 is 2.5 px at 2500 px per unit) is still a hole with a value
+    expect(at('{x = 0: 1/3 + 0.001, (tan(x) - x)/x^3}', 2500).kind).toBe('hole')
   })
 })

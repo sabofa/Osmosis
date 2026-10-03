@@ -93,18 +93,39 @@ export const LIMITS = {
   // function defined on a scatter of points (sqrt(sin(1/x)) near 0) is NaN at some
   // offsets and finite at others, and a stray NaN at the end is not a domain edge.
   undefinedRun: 3,
-  // The confirming sample of a converging side is taken at this multiple of the last
-  // offset, between it and the one before (1 < factor < shrink). It has to be off the
-  // lattice h0 / shrink^k, and irrational is how: every offset has 1/x = shrink^k / h0,
-  // so a function periodic in 1/x with a period that divides that (sin(pi/x), cos(pi/x),
-  // 1/x - floor(1/x), at h0 = 0.1 and 0.08 from k = 2) reads the same everywhere on the
-  // lattice and looks like a hole. A rational factor can land on it again: at f = 2 the
-  // sample sits at 1/x = shrink^k / (2 h0), which for sin(pi/x) at h0 = 0.1 is
-  // pi * 5 * 4^k, a whole number of periods again, so it reads 0 like the lattice. With
-  // sqrt 2 the step from the lattice, (1/f - 1) shrink^k / h0, is irrational for a
-  // rational h0, so it is never a whole number of periods of any rational period. (A
-  // view whose h0 is itself a multiple of pi is not covered by that argument.)
-  confirmFactor: Math.SQRT2,
+  // The confirming samples of a converging side are taken at these multiples of the
+  // last offset, each between it and the one before (1 < factor < shrink), and BOTH must
+  // agree. They have to be off the lattice h0 / shrink^k, and irrational is how: every
+  // offset has 1/x = shrink^k / h0, so a function periodic in 1/x with a period that
+  // divides that (sin(pi/x), cos(pi/x), 1/x - floor(1/x), at h0 = 0.1 and 0.08 from
+  // k = 2) reads the same everywhere on the lattice and looks like a hole. A rational
+  // factor can land on it again: at f = 2 the sample sits at 1/x = shrink^k / (2 h0),
+  // which for sin(pi/x) at h0 = 0.1 is pi * 5 * 4^k, a whole number of periods again, so
+  // it reads 0 like the lattice. With sqrt 2 the step from the lattice,
+  // (1/f - 1) shrink^k / h0, is irrational for a rational h0, so it is never a whole
+  // number of periods of any rational period. (A view whose h0 is itself a multiple of
+  // pi is not covered by that argument.)
+  // One sample is not enough. A function that sits at a maximum on the lattice
+  // (cos(pi/x), cos(2 pi/x)) agrees with a given off-lattice sample whenever the phase
+  // lands within 0.05 rad of a multiple of 2 pi, about one time in sixty, and with
+  // enough views some do: cos(pi/x) read as a hole at h0 = 0.2 and on 11 of 96 round
+  // views (2 to 100 units wide, 400 to 1920 px), cos(2 pi/x) on 6, cos(3 pi/x) on 5,
+  // and sign(x) cos(pi/x) as a jump. A second sample at the golden ratio is independent
+  // of the first: the factors are not related by a power of 2 (phi / sqrt 2 is not one),
+  // as they would have to be for the second sample to be the first one halved or doubled,
+  // or for it to be a lattice point (4^m times a lattice offset). Both agreeing is about
+  // one in thousands; none of the 96 views gets through (0 of 96 for each of those).
+  confirmFactors: [Math.SQRT2, (1 + Math.sqrt(5)) / 2],
+  // Two limits count as equal when they are within convergePx on screen (and so does a
+  // limit and the point's own value). A limit read from a retried tail (above) carries
+  // noise of about convergePx, so two of them can be nearly twice that apart:
+  // (exp(x) - 1 - x)/x^2 at 1600 px read as a jump between 0.50000001 and 0.50004066,
+  // 0.065 px. This many times convergePx when either limit came from a retried tail: 2,
+  // because each is within about convergePx of the true one. Measured over the five
+  // cancellation families at 15 zooms (75 cases, 59 of them holes), the worst limit is
+  // 0.068 px off ((tan(x) - x)/x^3 at 2500 px) and the next 0.044; so 2 has room. A limit
+  // from the whole sequence keeps convergePx (a clean 0.07 px step is a jump).
+  retriedEqualFactor: 2,
   // A side that is neither converged nor steadily diverged, and has no tight tail,
   // retries the convergence tests (window, geometric, the confirming sample) on its
   // sequence with the last 1, then 2, then up to this many samples dropped, and takes
