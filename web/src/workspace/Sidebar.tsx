@@ -2,17 +2,23 @@ import { useEffect, useState } from 'react'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { makePathResolver, orphansUnder } from './graphWalk'
 import { createUnder } from './create'
-import { Tree, TreeRow, type RowModel, type TreeCtx } from './Tree'
+import { listWebFileTypes } from './fileTypes'
+import { newOptions, type NewKind } from './newMenu'
+import { addableCourses, courseRowModels } from './rows'
+import { Tree, TreeRow, type TreeCtx } from './Tree'
 import type { Root } from './wsState'
 import {
   KIND_TAGS,
   destroyNode,
+  freeNameOf,
   getChildren,
   getCourses,
   getNodeDetail,
   getRoots,
+  placeNode,
   searchByTag,
   type AppearsInRow,
+  type ChildRow,
   type CourseRow,
   type KindTag,
   type NodeSummary,
@@ -23,7 +29,8 @@ import {
 // strip (one chip per kind tag), and the tree. In a course the tree is the
 // course's children. In a track it has two sections: Planning (the track's
 // children that are not courses) and Courses (every course under it, however
-// deep, by the names on the way down). The scratch view lists what is unplaced.
+// deep, by the names on the way down), where a course can be made in the track
+// or an existing one added to it. The scratch view lists what is unplaced.
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -97,11 +104,11 @@ export default function Sidebar({
     requestDestroy: (node, name) => void startDestroy(node, name),
   }
 
-  // New file / New folder straight into the workspace's own container, which
-  // has no row to put a menu on.
-  async function makeIn(kind: 'file' | 'folder') {
+  // New things straight into the workspace's own container, which has no row to
+  // put a menu on.
+  async function makeIn(kind: NewKind, fileType?: string) {
     try {
-      const made = await createUnder(root.id, kind)
+      const made = await createUnder(root.id, kind, fileType)
       if (!made) return
       refresh()
       if (kind === 'file') onOpenFile(made.id, made.title)
@@ -110,16 +117,23 @@ export default function Sidebar({
     }
   }
 
-  const NewButtons = (
-    <span className="ws-section-actions">
-      <button className="ws-link" onClick={() => void makeIn('file')}>
-        + File
-      </button>
-      <button className="ws-link" onClick={() => void makeIn('folder')}>
-        + Folder
-      </button>
-    </span>
-  )
+  // The "+ ..." links of a section head: what the workspace's container may
+  // hold, less what the section shows elsewhere (a track's courses have their
+  // own head).
+  function newLinks(skip: NewKind[] = []) {
+    if (root.kind === 'scratch') return null
+    return (
+      <span className="ws-section-actions">
+        {newOptions(root.kind, listWebFileTypes())
+          .filter((o) => !skip.includes(o.kind))
+          .map((o) => (
+            <button key={o.key} className="ws-link" onClick={() => void makeIn(o.kind, o.fileType)}>
+              + {o.short}
+            </button>
+          ))}
+      </span>
+    )
+  }
 
   return (
     <aside className="ws-side" aria-label="Workspace sidebar">
@@ -163,7 +177,7 @@ export default function Sidebar({
             <section>
               <div className="ws-section-head">
                 <span>Files</span>
-                {NewButtons}
+                {newLinks()}
               </div>
               <Tree containerId={root.id} containerTitle={root.title} ctx={ctx} empty="This course is empty." />
             </section>
@@ -174,16 +188,11 @@ export default function Sidebar({
               <section>
                 <div className="ws-section-head">
                   <span>Planning</span>
-                  {NewButtons}
+                  {newLinks(['course'])}
                 </div>
                 <Tree containerId={root.id} containerTitle={root.title} ctx={ctx} filter={(r) => r.node.kind !== 'course'} empty="Nothing in the plan yet." />
               </section>
-              <section>
-                <div className="ws-section-head">
-                  <span>Courses</span>
-                </div>
-                <CourseList trackId={root.id} ctx={ctx} />
-              </section>
+              <CoursesSection track={root} ctx={ctx} onNewCourse={() => void makeIn('course')} />
             </>
           )}
 
@@ -281,34 +290,125 @@ function Partition({ root, tag, version, onOpenFile }: { root: Root; tag: KindTa
 }
 
 // The courses under a track, each shown by its path of names from the track.
-function CourseList({ trackId, ctx }: { trackId: string; ctx: TreeCtx }) {
-  const [courses, setCourses] = useState<CourseRow[] | null>(null)
+// A course can be made in the track ("+ Course") or an existing one added to it
+// ("+ Existing course…"); a course placed directly in the track can be removed
+// from it from its row menu.
+function CoursesSection({ track, ctx, onNewCourse }: { track: Root; ctx: TreeCtx; onNewCourse(): void }) {
+  const [data, setData] = useState<{ courses: CourseRow[]; children: ChildRow[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
 
   useEffect(() => {
     let live = true
-    getCourses(trackId)
-      .then((c) => {
+    // The children are read as well: they hold the placement of a course that
+    // sits directly in the track, which the courses read does not carry.
+    Promise.all([getCourses(track.id), getChildren(track.id)])
+      .then(([courses, children]) => {
         if (!live) return
-        setCourses(c)
+        setData({ courses, children })
         setError(null)
       })
       .catch((err) => live && setError(messageOf(err)))
     return () => {
       live = false
     }
-  }, [trackId, ctx.version])
+  }, [track.id, ctx.version])
 
-  if (error) return <div className="ws-note ws-error-text">{error}</div>
-  if (!courses) return <div className="ws-note">Loading…</div>
-  if (courses.length === 0) return <div className="ws-note">No courses in this track.</div>
   return (
-    <ul className="ws-tree">
-      {courses.map(({ node, path }) => {
-        const model: RowModel = { key: node.id, node, name: path.at(-1) ?? node.title, label: path.join(' / '), placementId: null, container: null }
-        return <TreeRow key={node.id} model={model} ctx={ctx} depth={0} />
-      })}
-    </ul>
+    <section>
+      <div className="ws-section-head">
+        <span>Courses</span>
+        <span className="ws-section-actions">
+          <button className="ws-link" onClick={onNewCourse}>
+            + Course
+          </button>
+          <button className="ws-link" aria-expanded={adding} onClick={() => setAdding((a) => !a)}>
+            + Existing course…
+          </button>
+        </span>
+      </div>
+      {adding && data && <ExistingCourses track={track} reach={data.courses} ctx={ctx} onClose={() => setAdding(false)} />}
+      {error ? (
+        <div className="ws-note ws-error-text">{error}</div>
+      ) : !data ? (
+        <div className="ws-note">Loading…</div>
+      ) : data.courses.length === 0 ? (
+        <div className="ws-note">No courses in this track.</div>
+      ) : (
+        <ul className="ws-tree">
+          {courseRowModels(data.courses, data.children, track).map((model) => (
+            <TreeRow key={model.key} model={model} ctx={ctx} depth={0} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+// The live courses the track does not reach yet, each with an Add that places
+// it in the track. A course can sit in several places, so adding one does not
+// move it from anywhere. If its name is already taken in the track it goes in
+// under the free name the server suggests, and the notice says so.
+function ExistingCourses({ track, reach, ctx, onClose }: { track: Root; reach: CourseRow[]; ctx: TreeCtx; onClose(): void }) {
+  const [all, setAll] = useState<NodeSummary[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let live = true
+    getRoots()
+      .then((r) => {
+        if (!live) return
+        setAll(r.courses)
+        setError(null)
+      })
+      .catch((err) => live && setError(messageOf(err)))
+    return () => {
+      live = false
+    }
+  }, [ctx.version])
+
+  async function add(course: NodeSummary) {
+    try {
+      let name: string | null = null
+      try {
+        await placeNode(track.id, course.id)
+      } catch (err) {
+        name = freeNameOf(err)
+        if (name === null) throw err
+        await placeNode(track.id, course.id, name)
+      }
+      ctx.changed()
+      if (name !== null) ctx.notify(`"${course.title}" is already taken in "${track.title}", so it was added as "${name}".`, 'info')
+    } catch (err) {
+      ctx.notify(messageOf(err))
+    }
+  }
+
+  const options = all && addableCourses(all, reach)
+  return (
+    <div className="ws-existing">
+      {error ? (
+        <div className="ws-note ws-error-text">{error}</div>
+      ) : !options ? (
+        <div className="ws-note">Loading…</div>
+      ) : options.length === 0 ? (
+        <div className="ws-note">No other courses to add.</div>
+      ) : (
+        <ul>
+          {options.map((c) => (
+            <li key={c.id}>
+              <span className="ws-row-name">{c.title}</span>
+              <button className="ws-btn" onClick={() => void add(c)}>
+                Add
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button className="ws-link" onClick={onClose}>
+        Close
+      </button>
+    </div>
   )
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WsError, createNode, destroyNode, getRoots, isStale, removePlacement, renamePlacement, saveContent, searchByTag } from './wsApi'
+import { WsError, createNode, destroyNode, freeNameOf, getRoots, isStale, placeNode, removePlacement, renamePlacement, saveContent, searchByTag } from './wsApi'
 
 // What the server answers, as a fetch Response would.
 function reply(status: number, body: unknown) {
@@ -41,6 +41,9 @@ describe('wsApi', () => {
     expect(err.code).toBe('name_taken')
     expect(err.message).toContain('a (2)')
     expect((err.detail as { suggestion: string }).suggestion).toBe('a (2)')
+    expect(freeNameOf(err)).toBe('a (2)')
+    expect(freeNameOf(new WsError(400, 'cycle_rejected', 'no'))).toBeNull()
+    expect(freeNameOf(new Error('x'))).toBeNull()
   })
 
   it('the offline answer of a local node reads as an error with its reason as the code', async () => {
@@ -69,6 +72,8 @@ describe('wsApi', () => {
     await destroyNode('n1', true)
     await searchByTag('root 1', 'homework')
     await createNode({ kind: 'file', title: 'T', file: { type: 'markdown', body: '' }, placeIn: 'c1' })
+    await placeNode('track1', 'course1')
+    await placeNode('track1', 'course2', 'Second')
     const calls = fn.mock.calls as unknown as [string, RequestInit][]
     expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
       'DELETE /api/ws/placements/p%2F1',
@@ -76,6 +81,8 @@ describe('wsApi', () => {
       'DELETE /api/ws/nodes/n1?with_orphans=true',
       'GET /api/ws/search?scope=root%201&kind_tag=homework',
       'POST /api/ws/nodes',
+      'POST /api/ws/placements',
+      'POST /api/ws/placements',
     ])
     expect(JSON.parse(calls[4][1].body as string)).toEqual({
       kind: 'file',
@@ -83,5 +90,15 @@ describe('wsApi', () => {
       file: { type: 'markdown', body: '' },
       place_in: { container_id: 'c1' },
     })
+    // Placing an existing node: no name means "under its own title".
+    expect(JSON.parse(calls[5][1].body as string)).toEqual({ container_id: 'track1', child_id: 'course1' })
+    expect(JSON.parse(calls[6][1].body as string)).toEqual({ container_id: 'track1', child_id: 'course2', name: 'Second' })
+  })
+
+  it('creates a course or a track with no file, placed where it was asked', async () => {
+    const fn = stubFetch(reply(201, {}))
+    await createNode({ kind: 'course', title: 'AMC', placeIn: 't1' })
+    const init = (fn.mock.calls as unknown as [string, RequestInit][])[0][1]
+    expect(JSON.parse(init.body as string)).toEqual({ kind: 'course', title: 'AMC', place_in: { container_id: 't1' } })
   })
 })

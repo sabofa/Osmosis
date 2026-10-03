@@ -87,6 +87,13 @@ export class WsError extends Error {
 
 export const isStale = (err: unknown): err is WsError => err instanceof WsError && err.status === 409
 
+// The free name a name_taken carries, when the error is one.
+export function freeNameOf(err: unknown): string | null {
+  if (!(err instanceof WsError) || err.code !== 'name_taken') return null
+  const suggestion = (err.detail as { suggestion?: unknown } | undefined)?.suggestion
+  return typeof suggestion === 'string' ? suggestion : null
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response
   try {
@@ -142,6 +149,15 @@ export const createNode = (input: CreateInput) =>
     title: input.title,
     ...(input.file ? { file: input.file } : {}),
     ...(input.placeIn ? { place_in: { container_id: input.placeIn } } : {}),
+  })
+
+// Place an existing node in a container (the same node can sit in several).
+// With no name it goes in under its own title.
+export const placeNode = (containerId: string, childId: string, name?: string) =>
+  call<{ id: string; container_id: string; child_id: string; name: string }>('POST', '/placements', {
+    container_id: containerId,
+    child_id: childId,
+    ...(name !== undefined ? { name } : {}),
   })
 
 // Rename here: one placement's name, nothing else.

@@ -6,6 +6,7 @@ import Sidebar from './Sidebar'
 import { closeTab, focusTab, openTab, retitleTab, type TabState } from './tabs'
 import { WsError, getNodeDetail } from './wsApi'
 import { SCRATCH, clearLast, readLast, readTabs, writeLast, writeTabs, type Root } from './wsState'
+import './extensions'
 import './workspace.css'
 
 // The workspace page: a full-window frame, entered from the rail's

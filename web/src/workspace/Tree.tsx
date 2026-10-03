@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { BookIcon, ChevronDownIcon, ChevronRightIcon, CompassIcon, FolderIcon, PuzzleIcon } from '../components/icons'
-import { webFileType } from './fileTypes'
 import { createUnder } from './create'
+import { listWebFileTypes, webFileType } from './fileTypes'
+import { newOptions, type NewOption } from './newMenu'
+import type { RowModel } from './rows'
 import { getChildren, getNodeDetail, removePlacement, renamePlacement, type ChildRow, type NodeSummary } from './wsApi'
 
 // The tree of a container's children, loaded a level at a time as folders are
@@ -11,19 +13,6 @@ import { getChildren, getNodeDetail, removePlacement, renamePlacement, type Chil
 // things in two places), and the row menu acts on that placement, which is why
 // "Remove from here" and "Destroy" are different entries: one takes this
 // placement away, the other takes the file out of every place it appears.
-
-// What a row shows and acts on. `placementId` and `container` are null where
-// the row is not reached through a placement of a known container (the
-// Courses list, the scratch view); those rows have no rename-here or remove.
-export interface RowModel {
-  key: string
-  node: NodeSummary
-  name: string
-  // Shown in place of `name` (the Courses list shows the path).
-  label?: string
-  placementId: string | null
-  container: { id: string; title: string } | null
-}
 
 // What the rows need from the sidebar that owns them.
 export interface TreeCtx {
@@ -101,7 +90,9 @@ export function Tree({
 export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; depth: number }) {
   const { node } = model
   const shownName = model.label ?? model.name
-  const isContainer = node.kind !== 'file'
+  // What this row may be given from its menu: nothing for a file, and for a
+  // container only what the containment matrix lets it hold.
+  const options = newOptions(node.kind, listWebFileTypes())
   // A track or a course is a workspace of its own; only a folder opens in place.
   const isWorkspace = node.kind === 'track' || node.kind === 'course'
   const [open, setOpen] = useState(false)
@@ -155,13 +146,15 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
     }
   }
 
-  const make = (kind: 'file' | 'folder') =>
+  const make = (option: NewOption) =>
     act(async () => {
-      const made = await createUnder(node.id, kind)
+      const made = await createUnder(node.id, option.kind, option.fileType)
       if (!made) return
       setOpen(true)
       ctx.changed()
-      if (kind === 'file') ctx.openFile(made.id, made.title)
+      if (option.kind === 'file') ctx.openFile(made.id, made.title)
+      // A track or a course does not open in place, so say where it went.
+      else if (isWorkspace) ctx.notify(`Made "${made.title}" in "${shownName}".`, 'info')
     })
 
   const renameHere = () =>
@@ -204,22 +197,17 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
           </button>
           {menu && (
             <div className="ws-menu" role="menu">
-              {isContainer && (
-                <>
-                  <button role="menuitem" onClick={() => void make('file')}>
-                    New file
-                  </button>
-                  <button role="menuitem" onClick={() => void make('folder')}>
-                    New folder
-                  </button>
-                </>
-              )}
+              {options.map((o) => (
+                <button key={o.key} role="menuitem" onClick={() => void make(o)}>
+                  {o.label}
+                </button>
+              ))}
               {model.placementId && (
                 <button role="menuitem" onClick={() => void renameHere()}>
                   Rename here
                 </button>
               )}
-              {(isContainer || model.placementId) && <div className="ws-menu-sep" role="separator" />}
+              {(options.length > 0 || model.placementId) && <div className="ws-menu-sep" role="separator" />}
               {model.placementId && model.container && (
                 <button role="menuitem" onClick={() => void removeHere()}>
                   Remove from "{model.container.title}"
