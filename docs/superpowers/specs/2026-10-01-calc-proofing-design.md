@@ -232,8 +232,12 @@ errors: they are domain, and the sampler draws them as such.
 ### The interval twin
 
 `math/interval/` (core, arithmetic, one file per twin family, and the compiler)
-compiles the same expression tree, with the same slot scheme and no code
-generation, into closures over intervals. Each evaluation
+compiles the same expression tree, with no code generation, into a tree of
+nodes that share their intervals: each node is a closure that writes the one
+interval it owns, a bound variable is the interval its leaf shares, and an
+inlined user function's parameter is the interval of the argument node it is
+called with (the argument nodes run first). Nothing is allocated per evaluation
+by the compiler's own nodes. Each evaluation
 returns bounds `[lo, hi]` (either may be infinite) and a **verdict**:
 
 | Verdict | Meaning | Sampler treats it as |
@@ -241,18 +245,63 @@ returns bounds `[lo, hi]` (either may be infinite) and a **verdict**:
 | `continuous` | defined and continuous on the whole input box | certified: may connect |
 | `defined` | defined everywhere on the box, may jump (floor, mod, step, piecewise seams) | not certified |
 | `partial` | undefined somewhere inside (ln over [−1, 1], 1/x across 0, gamma near a non-positive integer) | not certified |
-| `unknown` | no cheap enclosure (`integral(…)`) | not certified; jump test |
+| `unknown` | no cheap enclosure (an `integral(…)` that is not constant, a loop whose bounds the box decides, `choose`/`perm`/`gcd`/`lcm` of a variable) | not certified; jump test |
 
 Verdicts combine by taking the weakest. Every bound is widened
 outward — 2 ulps for IEEE arithmetic, 4 for a library function, a relative 1e-13
-for gamma and what is built on it — because JavaScript has no directed
+for gamma and what is built on it, and a relative 8e-15 plus an absolute 8e-15
+for `erf` and `erfc` (measured: erfc's `1 − erf` branch is 3.6e-12 relative just
+under 2.5, and 4 ulps is not enough) — because JavaScript has no directed
 rounding: the twin is robust, not formally rigorous, and the property tests (see
 "Testing") hold it to soundness. Comparisons in conditions are three-valued
 (true, false, both) so piecewise and regions evaluate correctly over boxes; a
 "both" piecewise result is the union of the live branches with verdict at
-most `defined`. `sum` and `prod` enclose term by term; `integral` returns
+most `defined`, and a condition that is decided over the box (`floor(x) < 5`
+over [1.5, 2.5]) caps nothing, while one that may be NaN makes the result
+`partial`. `sum` and `prod` enclose term by term. `integral` returns
 `unknown` with bounds `[-inf, inf]` (sampled bounds are not an enclosure, and
-P3's culling relies on enclosures).
+P3's culling relies on enclosures) except a **constant** integral, one with no
+variable, no `@param` and no loop in a bound, which is its number: computed once,
+by the first evaluation that reaches it, never at compile time (a quadrature in
+a branch no box reaches costs nothing).
+
+The rules a consumer relies on, each held by a test against the scalar compile:
+
+- **Strict infinities.** Where the scalar gives ±Infinity at a point of the box,
+  the answer is not empty and its bound on that side *is* that infinity,
+  whatever the verdict: a later operation may map an infinity back to a finite
+  value (`1 / inf`, `atan2(c, inf)`), so an excused infinity becomes a wrong
+  finite one. A NaN at a point needs a `partial` or `unknown` verdict, and a
+  `continuous` verdict covers no NaN.
+- **Overflow is not undefinedness.** A finite input whose result overflows keeps
+  its verdict and the bound becomes infinite; `partial` means a NaN or a pole. So
+  an infinite bound under `continuous` is overflow, and a consumer must not
+  certify a stretch as flat when a bound or a sample is infinite. (A floating
+  point step where an overflowed or saturated intermediate is absorbed
+  downstream, `log(x, x!)` at x = 170.62, is no jump of the real function and is
+  not reported.)
+- **Empty.** An empty interval (`lo > hi`) always carries `partial` and means
+  NaN at every point of the box: skip it, never bisect it.
+- **Signed zeros.** A box end that is a zero is that signed zero; a zero
+  strictly inside a box may be either. A bound that is exactly a zero claims
+  that signed zero alone (the **zero-bound invariant**: `lo = +0` says no −0
+  occurs at the bottom, `hi = −0` that no +0 occurs at the top, a −0 bottom
+  under a positive top that no +0 does, a +0 top over a negative bottom that no
+  −0 does), because `1/x`, `sqrt` and `atan2` read the sign; an exact zero
+  extreme (`x^2` over a box holding 0) is kept, not widened below zero. A
+  non-negative result can otherwise dip a hair below 0 (about −1.5e-323), so a
+  cell is discarded when `lo > 0 || hi < 0 || lo > hi`, which is valid under
+  `partial` too.
+- **Continuity is held to the scalar.** A box the twin calls `continuous` has no
+  jump in the scalar compile (the property tests search for one), and it is the
+  half of rule 1 that P2 draws on; `defined` is what floor, mod, step, a
+  piecewise seam and atan2's cut across the negative x axis answer. `partial` is
+  not "a pole is here": it also appears at defined points (gamma near its poles
+  and beyond |x| ≈ 333,000, within about 1e-9 of a tan, sec, csc or cot pole,
+  and a root of an expression whose bound dips below 0 only because it repeats
+  a variable), so poles are classified from structure or by bisection.
+
+`graph-engine/src/math/interval/index.ts` states the same for a consumer in full.
 
 ### One rule that keeps the kernel lasting
 
@@ -367,8 +416,12 @@ At a pixel-sized leaf:
   neighbouring cells share it: chains join without cracks and lie on the true
   zero set;
 - **a sign change across a pole is not a root.** `y − tan x = 0` changes sign
-  across tan's poles without being zero; the twin proves no root on such an
-  edge and it is rejected — no false vertical lines;
+  across tan's poles without being zero. The twin does not prove "no root" on
+  an edge that holds a pole (it answers `[-inf, inf]`, `partial`); the pole is
+  told from a root by bisecting the edge: a sign change whose sub-edge stays
+  `partial` with an infinite bound down to machine width is a pole and is
+  rejected, and one whose sub-edge becomes `continuous` is a root — no false
+  vertical lines;
 - **saddles** are paired by the asymptotic decider (the bilinear
   interpolant's value at the cell's saddle point), replacing today's fixed
   pairing;
@@ -555,7 +608,11 @@ checkable assertions:
 
 - **Interval soundness** for every built-in, over seeded random boxes: point
   evaluations inside a box land inside the twin's bounds, and a `continuous`
-  verdict never covers a NaN. This is the test that makes rule 1 real.
+  verdict never covers a NaN or a jump (the scalar is sampled over the boxes
+  the twin certifies, and the widest gap is bisected down to adjacent doubles:
+  a gap that stays wide and flat on both sides is a jump). Random expressions
+  over every construct are held the same way against the scalar compile. This
+  is the test that makes rule 1 real.
 - **The triple** — scalar, twin and derivative registered for each built-in;
   the derivative checked against finite differences at random points.
 - **Seeded random polynomials and rationals** against their analytic roots,

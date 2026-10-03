@@ -75,6 +75,16 @@ describe('the interval compiler validates with the scalar compile', () => {
     expect([surface.UNKNOWN, surface.PARTIAL, surface.DEFINED, surface.CONTINUOUS]).toEqual([0, 1, 2, 3])
     expect(surface.iv()).toEqual({ lo: 0, hi: 0, v: CONTINUOUS })
   })
+
+  it('and isEmpty and setBox, which a consumer reads an answer and builds a box with', () => {
+    const g = surface.compileInterval(p('sqrt(x)'), ['x'], plain)
+    expect(surface.isEmpty(g(surface.iv(), -3, -1))).toBe(true)
+    expect(surface.isEmpty(g(surface.iv(), 1, 4))).toBe(false)
+    expect(surface.isEmpty(g(surface.iv(), -1, 4))).toBe(false)
+    expect(surface.setBox(surface.iv(), 1, 2)).toEqual({ lo: 1, hi: 2, v: CONTINUOUS })
+    expect(surface.isEmpty(surface.setBox(surface.iv(), 2, 1))).toBe(true)
+    expect(surface.isEmpty(surface.setBox(surface.iv(), Number.NaN, 1))).toBe(true)
+  })
 })
 
 describe('names resolve as the scalar compile resolves them', () => {
