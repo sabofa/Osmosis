@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { quadMesh, flatColours } from '../model/testing'
 import { terminatorValueOf } from '../model/roles'
 import { Z_CAST } from '../model/value'
-import { BAKE_PATH_POINTS } from './types'
+import { BAKE_PATH_POINTS, SIZING_SURFACE } from './types'
 import { bakeStats } from './index'
 import { newPlanAt, planAt } from './plan'
 import { refineSurface, locate, normalOf, pointOf, type SurfacePoint } from './surface'
@@ -172,7 +172,8 @@ describe('the baked walk: paths on the surface', () => {
     let otherRole = 0
     let missed = 0
     for (let i = 0; i < baked.count; i++) {
-      if (baked.mark[i] !== 1) continue
+      // (the surface strokes: the cast shadow's edge strokes, which cross it, are edgeStrokes.test.ts's)
+      if (baked.mark[i] !== 1 || baked.sizing[i] !== SIZING_SURFACE) continue
       if (!(baked.role[i] === 0 || baked.role[i] === 3)) otherRole++ // block or glaze
       const q = Math.round(baked.anchor[i] * (BAKE_PATH_POINTS - 1))
       const o = 3 * (BAKE_PATH_POINTS * i + q)
@@ -201,7 +202,7 @@ describe('the baked walk: paths on the surface', () => {
     let strokesWithLit = 0
     for (let i = 0; i < baked.count; i++) {
       // (the top of the table: the lit part of it is the part a stroke must not run onto; the underside is all shadow)
-      if (baked.mark[i] !== 1 || baked.side[i] !== 1) continue
+      if (baked.mark[i] !== 1 || baked.side[i] !== 1 || baked.sizing[i] !== SIZING_SURFACE) continue
       let any = false
       for (let q = 0; q < BAKE_PATH_POINTS; q++) {
         const o = 3 * (BAKE_PATH_POINTS * i + q)
