@@ -8,6 +8,7 @@ import Take from './components/Take'
 import Review from './components/Review'
 import Results from './components/Results'
 import Settings from './components/Settings'
+import Workspace from './workspace/Workspace'
 import { useTheme } from './hooks/useTheme'
 import CommandPalette from './components/CommandPalette'
 import ConfirmDialog from './components/ConfirmDialog'
@@ -150,6 +151,17 @@ function App() {
       }),
   }
 
+  // The workspace fills the window, rail and all, so it brings its own Exit:
+  // back to the page it was opened from, the way the command line's `back`
+  // does (the workspace is not left behind in the history).
+  function exitWorkspace() {
+    const prev = pageHistory.at(-1) ?? 'home'
+    setPageHistory((h) => h.slice(0, -1))
+    navigated.current = true
+    setBootLiveSessionId(null)
+    setPage(prev)
+  }
+
   function closePrompt(value: string | null) {
     promptReq?.resolve(value)
     setPromptReq(null)
@@ -209,13 +221,14 @@ function App() {
   else if (page === 'review' && attempt)
     content = <Review attempt={attempt} setAttempt={setAttempt} onExit={() => setPage('home')} />
   else if (page === 'results') content = <Results initialView={navParams.results ?? null} />
+  else if (page === 'workspace') content = <Workspace onExit={exitWorkspace} />
   else if (page === 'take' || page === 'review') {
     // Reached take/review with no attempt in state (e.g. a hard refresh) —
     // there's nothing to resume, so bounce back to Home rather than crash.
     content = <Home onStart={startQuiz} onStartDaily={startDaily} startError={startError} starting={starting} />
   } else content = <Settings theme={theme} themePresets={themePresets} />
 
-  const showRail = page !== 'take' && page !== 'review' && !(page === 'live' && liveActive)
+  const showRail = page !== 'take' && page !== 'review' && page !== 'workspace' && !(page === 'live' && liveActive)
 
   return (
     <>

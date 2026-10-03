@@ -1,5 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import './ConfirmDialog.css'
+
+// Enter on a focused checkbox is not a confirm: someone who has just ticked an
+// option on a destructive dialog has not yet pressed the button.
+const isCheckbox = (t: EventTarget | null): boolean => t instanceof HTMLInputElement && t.type === 'checkbox'
 
 // One confirm for the whole app: leaving a test, submitting with blanks,
 // clearing data. A native window.confirm would do the job but cannot be
@@ -13,6 +17,7 @@ export default function ConfirmDialog({
   cancelLabel = 'Cancel',
   danger = false,
   typeToConfirm,
+  children,
   onConfirm,
   onCancel,
 }: {
@@ -23,6 +28,9 @@ export default function ConfirmDialog({
   danger?: boolean
   // When set, the confirm button only enables once this exact text is typed.
   typeToConfirm?: string
+  // Extra controls between the body and the buttons (the workspace's destroy
+  // asks whether to take the items under it too).
+  children?: ReactNode
   onConfirm: () => void
   onCancel: () => void
 }) {
@@ -38,7 +46,7 @@ export default function ConfirmDialog({
       if (e.key === 'Escape') {
         e.preventDefault()
         onCancel()
-      } else if (e.key === 'Enter' && !typeToConfirm) {
+      } else if (e.key === 'Enter' && !typeToConfirm && !isCheckbox(e.target)) {
         e.preventDefault()
         onConfirm()
       }
@@ -54,6 +62,7 @@ export default function ConfirmDialog({
           {title}
         </div>
         {body && <div className="confirm-body">{body}</div>}
+        {children}
         {typeToConfirm && (
           <input
             ref={inputRef}

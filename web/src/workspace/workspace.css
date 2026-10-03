@@ -1,0 +1,646 @@
+/* The workspace frame. Plain on purpose: the app's own variables, no
+   decoration beyond what makes the structure readable. */
+
+.ws {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+/* ---- header --------------------------------------------------------------- */
+
+.ws-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 14px;
+  border-bottom: 2px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.ws-title strong {
+  font-family: var(--font-display);
+  font-size: 15px;
+}
+
+.ws-kind {
+  margin-left: 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ws-parents {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ws-head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+/* ---- buttons -------------------------------------------------------------- */
+
+.ws-btn {
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ws-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.ws-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ws-btn.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
+}
+
+.ws-btn.danger {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--bg);
+}
+
+.ws-btn:focus-visible,
+.ws-link:focus-visible,
+.ws-row-main:focus-visible,
+.ws-row-menu-btn:focus-visible,
+.ws-menu button:focus-visible,
+.ws-tab:focus-visible,
+.ws-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ws-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ws-link:hover {
+  text-decoration: underline;
+}
+
+/* ---- body: sidebar and main ------------------------------------------------ */
+
+.ws-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.ws-side {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 2px solid var(--line);
+  background: var(--surface);
+}
+
+.ws-modes {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+
+.ws-modes button {
+  flex: 1;
+  padding: 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ws-modes button.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.ws-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 24px;
+}
+
+.ws-notice {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.ws-notice.error {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* partition strip */
+
+.ws-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+}
+
+.ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ws-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.ws-partition {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ws-partition button {
+  display: block;
+  width: 100%;
+  padding: 4px 10px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-partition button:hover:not(:disabled) {
+  background: var(--accent-wash);
+}
+
+.ws-partition button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.ws-path {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* sections and the tree */
+
+.ws-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 8px 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ws-section-actions {
+  display: flex;
+  gap: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.ws-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 4px;
+}
+
+.ws-row:hover {
+  background: var(--accent-wash);
+}
+
+.ws-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-chev {
+  display: inline-flex;
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.ws-glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.ws-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.ws-dot.tag-source {
+  background: var(--accent);
+}
+.ws-dot.tag-resource {
+  background: var(--good);
+}
+.ws-dot.tag-homework {
+  background: var(--heat-2);
+}
+.ws-dot.tag-test {
+  background: var(--bad);
+}
+.ws-dot.tag-flowchart {
+  background: var(--ink);
+}
+
+.ws-shared {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted);
+  cursor: help;
+}
+
+.ws-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ws-row-menu-btn {
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.ws-row:hover .ws-row-menu-btn,
+.ws-row-menu-btn[aria-expanded='true'],
+.ws-row-menu-btn:focus-visible {
+  opacity: 1;
+}
+
+.ws-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 30;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.ws-menu button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-menu button:hover {
+  background: var(--accent-wash);
+}
+
+.ws-menu button.danger {
+  color: var(--bad);
+}
+
+.ws-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
+
+.ws-note {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ws-error-text {
+  color: var(--bad);
+}
+
+.ws-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* ---- main: tabs and the centre ---------------------------------------------- */
+
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-tabs {
+  display: flex;
+  min-height: 34px;
+  overflow-x: auto;
+  border-bottom: 2px solid var(--line);
+  background: var(--surface);
+}
+
+.ws-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ws-tab:hover {
+  color: var(--ink);
+}
+
+.ws-tab.active {
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.ws-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-directed-mark {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ws-tab-x {
+  display: inline-flex;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ws-tab-x:hover {
+  background: var(--line);
+}
+
+.ws-center {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.ws-empty {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ws-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ws-fallback {
+  padding: 16px 20px;
+}
+
+.ws-raw {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.ws-error {
+  margin: 8px 14px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--bad);
+  border-radius: 8px;
+  color: var(--bad);
+}
+
+/* ---- the markdown file ------------------------------------------------------- */
+
+.ws-markdown {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px;
+}
+
+.ws-md-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ws-md-flag {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.ws-md-rev {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ws-conflict {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--bad);
+  border-radius: 8px;
+}
+
+.ws-markdown .ws-error {
+  margin: 0 0 10px;
+}
+
+.ws-md-text {
+  flex: 1;
+  min-height: 240px;
+  padding: 12px;
+  border: 2px solid var(--line-strong);
+  border-radius: 10px;
+  outline: none;
+  resize: none;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ws-md-text:focus-visible {
+  border-color: var(--accent);
+}
+
+.ws-md-view {
+  flex: 1;
+  min-height: 0;
+  max-width: 780px;
+  overflow: auto;
+}
+
+/* ---- the picker ---------------------------------------------------------------- */
+
+.ws-pick-body {
+  flex: 1;
+  overflow: auto;
+  max-width: 760px;
+  padding: 8px 24px 32px;
+}
+
+.ws-pick-section h2 {
+  margin: 20px 0 6px;
+  font-family: var(--font-display);
+  font-size: 14px;
+}
+
+.ws-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-pick-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ws-pick-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-pick-type {
+  font-size: 11px;
+  color: var(--muted);
+}
