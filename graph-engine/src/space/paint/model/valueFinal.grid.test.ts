@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
-import { GRID_VIEWS, gridMargin, SEEDS, viewSignature } from './valueFinalFixture'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { breathe, emptyGrid, GRID_VIEWS, gridMargin, LOCALS, mergeGrid, SEEDS, viewSignature } from './valueFinalFixture'
 
-// Whole frames of the model are heavy and the test machine is shared: give every test room.
+// Whole frames of the model are heavy and the test machine is shared: give every test room, one seed and colour (six frames) to a test, and let the worker's event loop turn
+// between them.
 vi.setConfig({ testTimeout: 600_000 })
+afterEach(breathe)
 
 // The value rule in the final picture of a sphere on a table (spec §12), at the defaults: the strokes after the planes, the plane
 // steps, the brush-load mix and the gamut fit, the edge and line strokes, and the underpainting. (valueFinal.test.ts holds the parts;
@@ -24,21 +26,29 @@ describe('the final picture of a sphere on a table, at the defaults', () => {
     expect(distinct(old)).toBe(false)
   })
 
-  it('has every shadow-family stroke darker than every half-tone stroke, and every shadow pixel of the underpainting darker than every half-tone pixel, by 0.05 and more (8 seeds x 6 views x 5 local colours)', () => {
-    const r = gridMargin({}, SEEDS)
-    // the five views with a terminator had both families to compare, in some frames of each (the sixth is lit all over: it is there for its outline)
-    expect(r.comparedPerView.slice(0, 5).every((n) => n >= 8), String(r.comparedPerView)).toBe(true)
-    expect(r.fewestShadow).toBeGreaterThanOrEqual(5)
-    expect(r.fewestLight).toBeGreaterThanOrEqual(5)
-    expect(r.fewestUnderShadow).toBeGreaterThanOrEqual(50)
-    expect(r.fewestUnderLight).toBeGreaterThanOrEqual(50)
-    // edge strokes and line strokes are in every frame: the shadow side's edges are held with the rest, and a line is no family at all
-    expect(r.fewestEdgeShadow).toBeGreaterThanOrEqual(1)
-    expect(r.fewestLines).toBeGreaterThan(10)
+  // One test a seed and colour (8 x 5 = 40 of them, the six views each), and a last test for the totals over all of them
+  const total = emptyGrid()
+  const frames = SEEDS.flatMap((seed) => LOCALS.map((pair) => ({ seed, name: pair[0], pair })))
+
+  it.each(frames)('has every shadow-family stroke darker than every half-tone stroke, and every shadow pixel of the underpainting darker than every half-tone pixel, by 0.05 and more: seed $seed, $name', ({ seed, pair }) => {
+    const r = gridMargin({}, [seed], GRID_VIEWS, [pair])
+    mergeGrid(total, r)
     expect(r.strokeMargin, r.strokeAt).toBeGreaterThanOrEqual(0.05)
     expect(r.underMargin, r.underAt).toBeGreaterThanOrEqual(0.05)
     // a bridge to the canvas on the lit side does not run into the shadow: it reaches no lower than a limb pixel's N·L (-0.134 in the view with the
     // light behind the camera, where the whole shadow is a sliver at the limb; -0.07 in the others)
     expect(r.canvasReach).toBeGreaterThanOrEqual(-0.14)
+  })
+
+  it('had both families to compare in every frame it was made to: the totals of the grid above', () => {
+    // the five views with a terminator had both families to compare, in some frames of each (the sixth is lit all over: it is there for its outline)
+    expect(total.comparedPerView.slice(0, 5).every((n) => n >= 8), String(total.comparedPerView)).toBe(true)
+    expect(total.fewestShadow).toBeGreaterThanOrEqual(5)
+    expect(total.fewestLight).toBeGreaterThanOrEqual(5)
+    expect(total.fewestUnderShadow).toBeGreaterThanOrEqual(50)
+    expect(total.fewestUnderLight).toBeGreaterThanOrEqual(50)
+    // edge strokes and line strokes are in every frame: the shadow side's edges are held with the rest, and a line is no family at all
+    expect(total.fewestEdgeShadow).toBeGreaterThanOrEqual(1)
+    expect(total.fewestLines).toBeGreaterThan(10)
   })
 })

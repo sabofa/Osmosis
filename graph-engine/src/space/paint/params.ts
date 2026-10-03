@@ -124,7 +124,9 @@ export interface PaintParams {
     // relative to the local colour (toward its warmer or cooler neighbour, by kWarm or kCool of the arc to warmHue or
     // coolHue) and capped here, so a terracotta's shadow is a dark red and never a purple. The tints, the sky and the
     // bounce, the environment and the reflected-light mix keep the final hue within shiftMax + 3 degrees of the colour's
-    // own (a grey, with no hue to keep, takes them whole).
+    // own (a grey, local chroma under 0.005, has no hue to keep and takes them whole; the hold is full by chroma 0.02).
+    // This bounds the light-to-shadow swing only: the brush-load mix (mix.hueMin to hueMax) and the planes' hue steps vary
+    // hue on top of it, by design (Ben's colour distortion).
     shiftMax: number
     accentHue: number
     accentMax: number
@@ -375,7 +377,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
       ['halfLo', 'Half-tone, darkest (at terminator)', 0, 1, 0.001], ['halfHi', 'Half-tone, lightest', 0, 1, 0.001],
       ['lightLo', 'Light from', 0, 1, 0.001], ['lightHi', 'Light to (highlight)', 0, 1, 0.001],
       ['lightTurn', 'Half-tone turns to light (N·L)', 0, 1, 0.005], ['lightSoftness', 'Light / half-tone softness (N·L)', 0, 1, 0.005],
-      ['terminatorSoftness', 'Terminator softness (N·L)', 0, 0.4, 0.005], ['coreWidth', 'Core shadow width (N·L)', 0, 0.8, 0.005],
+      ['terminatorSoftness', 'Terminator softness (N·L)', 0, 1, 0.005], ['coreWidth', 'Core shadow width (N·L)', 0, 0.8, 0.005],
       ['corePlateau', 'Core shadow value', 0, 1, 0.001], ['reflectedShare', 'Reflected share (core to half-tone)', 0, 0.9, 0.005],
       ['reflectedSoftness', 'Reflected / core softness (N·L)', 0, 1, 0.005], ['castPlateau', 'Cast shadow value', 0, 1, 0.001],
       ['castContact', 'Cast shadow at the contact', 0, 1, 0.001], ['deviation', 'Deviation', 0, 0.1, 0.001],

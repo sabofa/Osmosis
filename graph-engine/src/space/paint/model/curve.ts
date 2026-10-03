@@ -17,8 +17,11 @@
 // 345° in its shadows. A colour now moves toward its own warmer or cooler neighbour by at most curve.shiftMax degrees,
 // and everything additive after the swing (the tints, the sky and the bounce, the environment, the reflected-light
 // mix) is held so that the final hue stays within shiftMax + 3° of where the colour's own hue and its deliberate
-// offsets (accent, plane step, deviation, the hue curve) put it, at every value. A grey (local chroma under 0.02) has no
-// hue to keep and takes the tints whole, as before; the hold fades in to full strength by local chroma 0.06.
+// offsets (accent, plane step, deviation, the hue curve) put it, at every value. A grey (local chroma under 0.005) has no
+// hue to keep and takes the tints whole, as before; the hold fades in from there to full strength by local chroma 0.02 (a muted
+// terracotta of chroma 0.04 or 0.03 has a hue to keep: with the fade at 0.02 to 0.06 its core went to plum, 341°, and to purple,
+// 302°). The cap bounds the light-to-shadow swing; the brush-load mix (mix.hueMin to hueMax, 12 to 25°) and the planes' hue steps
+// (±16°) vary hue on top of it, by design: that is the colour distortion, and a terracotta's lowest painted hue is crimson.
 // Reflected light mixes the bounce colour's hue and chroma in by up to reflectedBounceMix, in OKLab and
 // NEVER touching L (value plan, spec §12): the value of reflected light is the plan's (it is kept below the
 // darkest half-tone there), and a lift here would put the bounce back among the half-tones.
@@ -194,7 +197,7 @@ export function makeCurve(params: PaintParams): Curve {
     // the hold: the tints, the sky, the bounce, the environment and the reflected-light mix may not carry the hue more than
     // 3 degrees past the capped swing (a colormapped colour: a third of that), from where the colour's own hue and its
     // offsets put it. Chroma and lightness are kept: the hue is turned back.
-    const holdFor = smooth(0.02, 0.06, local[1])
+    const holdFor = smooth(0.005, 0.02, local[1])
     if (holdFor > 0) {
       const reach = (Math.max(0, p.shiftMax) + 3) * hs
       const away = hueArc(local[2] + offsets, out[2])
