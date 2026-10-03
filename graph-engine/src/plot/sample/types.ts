@@ -61,7 +61,8 @@ export interface Screen {
 //  - free: an ordinary end, evaluated.
 //  - anchor: the curve is known to reach `at` here, from the limit of a hole or a jump,
 //    where the function itself is undefined or elsewhere. The core uses the point and
-//    does not evaluate at the end.
+//    does not evaluate at the end, and draws the stretch that reaches it even where the
+//    twin cannot vouch for that stretch (next to a hole its enclosure is unbounded).
 //  - singular: a pole or an edge of the domain is here. The core never evaluates at the
 //    end itself, only a floor's width (1/16 px) inside it.
 export type End = { kind: 'free' } | { kind: 'anchor'; at: Vec2 } | { kind: 'singular' }

@@ -138,6 +138,41 @@ describe('sampleRange — ends', () => {
     const ps = chainPoints(sink.chains()[0])
     expect(ps.filter((p) => p.x === 0)).toHaveLength(1)
   })
+  // An interval that ends at an anchor is drawn at the floor, though the twin cannot vouch for
+  // it: next to a removable hole the enclosure of (x^2 - 1)/(x - 1) is unbounded, and at the tip
+  // of an arc it dips under the domain. Without that the chain stops a floor short of its anchor
+  // with a jump break, which is not what an anchor is for.
+  it('two ranges anchored at a hole of an unbounded enclosure share one chain, with no break', () => {
+    const fns = fnsOf('(x^2 - 1)/(x - 1)', scopeOf())
+    const sink = new ChainSink(view.clip)
+    const counter = { points: 0, intervals: 0 }
+    const at = { x: 1, y: 2 }
+    sampleRange(fns, -3, 1, { left: free, right: { kind: 'anchor', at } }, view, FULL, counter, sink)
+    sampleRange(fns, 1, 3, { left: { kind: 'anchor', at }, right: free }, view, FULL, counter, sink)
+    expect(sink.breaks()).toEqual([])
+    expect(sink.chains()).toHaveLength(1)
+    const chain = sink.chains()[0]
+    const ps = chainPoints(chain)
+    expect(ps.filter((p) => p.x === 1 && p.y === 2)).toHaveLength(1)
+    expect(chain.param[ps.findIndex((p) => p.x === 1)]).toBe(1)
+  })
+  it('a chain anchored at the tip of an arc reaches it, with no break', () => {
+    const fns = fnsOf('sqrt(1 - x^2)', scopeOf(), 400)
+    const sink = new ChainSink({ xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 })
+    const screen = { px: { x: 400, y: 400 }, clip: { xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 } }
+    sampleRange(fns, 0, 1, { left: free, right: { kind: 'anchor', at: { x: 1, y: 0 } } }, screen, FULL, { points: 0, intervals: 0 }, sink)
+    expect(sink.breaks()).toEqual([])
+    const ps = chainPoints(sink.chains()[0])
+    expect(ps[ps.length - 1]).toEqual({ x: 1, y: 0 })
+  })
+  it('a jump is still a jump where no anchor says the curve arrives', () => {
+    // the same arc, the same floor interval at its tip, with no anchor: the core lifts and records it
+    const fns = fnsOf('sqrt(1 - x^2)', scopeOf(), 400)
+    const sink = new ChainSink({ xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 })
+    const screen = { px: { x: 400, y: 400 }, clip: { xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 } }
+    sampleRange(fns, 0, 1, { left: free, right: free }, screen, FULL, { points: 0, intervals: 0 }, sink)
+    expect(sink.breaks().length).toBeGreaterThan(0)
+  })
   it('a range with no width draws nothing', () => {
     const fns = fnsOf('x', scopeOf())
     const r = go(fns, 2, 2, free, free)

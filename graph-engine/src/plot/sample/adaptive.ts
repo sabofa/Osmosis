@@ -41,7 +41,8 @@
 //    connect. Otherwise at the floor lift and record a `jump` break; else bisect. The jump
 //    test halves the interval `halvings` times, always keeping the half with the larger gap,
 //    and each gap must be at most halvingShrink times the one before: a continuous seam
-//    halves its gap, a jump keeps it.
+//    halves its gap, a jump keeps it. At the floor, an interval that ends at an `anchor` is
+//    drawn instead (see the comment there): the anchor is a limit the structure walk has read.
 //
 // 3. A sample that is not finite is undefined here: an infinity is never certified flat.
 //
@@ -64,15 +65,31 @@ interface Core {
   box: Box
   pt: Float64Array
   capped: boolean
+  // The parameters at which the range ends in an anchor (NaN: it does not), compared exactly
+  // against an interval's ends: bisecting hands the end's own double down to the interval that
+  // touches it.
+  anchorLo: number
+  anchorHi: number
 }
 
 export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left: End; right: End }, screen: Screen, tuning: Tuning, counter: EvalCounter, sink: ChainSink): { capped: boolean } {
-  const c: Core = { fns, screen, tune: tuning, counter, sink, box: { xLo: 0, xHi: 0, yLo: 0, yHi: 0 }, pt: new Float64Array(2), capped: false }
   // a singular end is a floor's width inside, whatever the end is
   const nudge = tuning.floorPx / fns.pxPerT
   const a = ends.left.kind === 'singular' ? t0 + nudge : t0
   const b = ends.right.kind === 'singular' ? t1 - nudge : t1
   if (!(b > a)) return { capped: false }
+  const c: Core = {
+    fns,
+    screen,
+    tune: tuning,
+    counter,
+    sink,
+    box: { xLo: 0, xHi: 0, yLo: 0, yHi: 0 },
+    pt: new Float64Array(2),
+    capped: false,
+    anchorLo: ends.left.kind === 'anchor' ? a : Number.NaN,
+    anchorHi: ends.right.kind === 'anchor' ? b : Number.NaN,
+  }
 
   counter.intervals++
   fns.enclose(a, b, c.box)
@@ -183,6 +200,15 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     return
   }
   if (atFloor) {
+    // An interval that ends at an anchor is the last stretch to a limit the structure walk has
+    // read (limits.ts: a hole's, a jump's side, a domain edge's), and the anchor is where the
+    // curve is known to arrive. The twin cannot say so (next to a hole its enclosure is
+    // unbounded; at an arc's tip it dips under the domain), and a gap there is not a jump: the
+    // stretch is drawn, or the chain would stop a floor short of the very point it was anchored at.
+    if (ta === c.anchorLo || tb === c.anchorHi) {
+      c.sink.segment(xa, ya, ta, xb, yb, tb)
+      return
+    }
     c.sink.lift()
     c.sink.addBreak(ta + (tb - ta) / 2, 'jump')
     return
