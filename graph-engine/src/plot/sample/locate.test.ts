@@ -125,6 +125,39 @@ describe('locateZeros, hard double zeros', () => {
     near(zerosOf('1/(1 - sin(x))', -10, 10).zeros, [-3 * Math.PI / 2, Math.PI / 2, 5 * Math.PI / 2], 1e-6)
   })
   it('finds the double zero of an expanded square (1/(x^2 - 2x + 1))', () => near(zerosOf('1/(x^2 - 2*x + 1)', -3, 3).zeros, [1], 1e-6))
+  it('does so in a narrow window too, without running out of budget', () => {
+    // The twin's band around the double root grows as the window shrinks (about
+    // 2 sqrt(2/w) boxes of the coarse width w); the coarse width is sub-pixel, not tiny.
+    for (const [t0, t1] of [[0.9, 1.1], [0.5, 1.5]]) {
+      const r = zerosOf('1/(x^2 - 2*x + 1)', t0, t1)
+      near(r.zeros, [1], 1e-6)
+      expect(r.truncated, `${t0}..${t1}`).toBe(false)
+    }
+  })
+  it('does so well inside the budget on a view-sized window', () => {
+    const scope = scopeOf()
+    const counter = { points: 0, intervals: 0 }
+    const r = locateZeros(troubleGenerators(expr('1/(x^2 - 2*x + 1)'), 'x', scope), 'x', scope, -3, 3, counter)
+    near(r.zeros, [1], 1e-6)
+    expect(counter.intervals).toBeLessThan(1500)
+  })
+  it('reports two zeros closer together than a coarse box, through the sign changes between samples', () => {
+    // 1e-4 apart, and the coarse width of [0, 1] is 2.4e-4: one box holds both.
+    const r = zerosOf('1/((x - 0.5)*(x - 0.5001))', 0, 1)
+    near(r.zeros, [0.5, 0.5001])
+    expect(r.truncated).toBe(false)
+  })
+  it('reports a plateau of exact zeros narrower than the coarse width as one zero (1/(1 - cos(x)) on a narrow window)', () => {
+    // cos rounds to 1 within 1e-8 of 0, and on [-0.001, 0.001] the samples fall in that flat
+    // spot: it is one pole, not a stretch with an end at each side of it.
+    const r = zerosOf('1/(1 - cos(x))', -0.001, 0.001)
+    expect(r.zeros).toHaveLength(1)
+    expect(Math.abs(r.zeros[0].t)).toBeLessThan(1e-7)
+  })
+  it('still reports a stretch wider than the coarse width as its two ends', () => {
+    // [3, 4) is a million coarse boxes wide on a range of 2 and still a stretch on 2^12.
+    near(zerosOf('1/(floor(x) - 3)', 2.5, 4.5).zeros, [3, 4])
+  })
   it('finds both families of tan(x) + 1/(1 - cos(x)), the tan poles to full precision', () => {
     const { zeros, truncated } = zerosOf('tan(x) + 1/(1 - cos(x))', -10, 10)
     const half = Math.PI / 2
@@ -143,15 +176,24 @@ describe('locateZeros, hard double zeros', () => {
 
 describe('locateZeros, budgets', () => {
   it('never spends more twin evaluations than intervalsTotal, whatever the generators', () => {
-    const scope = scopeOf()
-    const counter = { points: 0, intervals: 0 }
-    // Five generators with zeros that never settle: each would take its whole share.
-    const text = [0, 0.1, 0.2, 0.3, 0.4].map((s) => `tan(1/(x - ${s}))`).join(' + ')
-    const r = locateZeros(troubleGenerators(expr(text), 'x', scope), 'x', scope, -1, 1, counter)
-    expect(counter.intervals).toBeLessThanOrEqual(LOCATE.intervalsTotal)
-    expect(counter.intervals).toBeGreaterThan(LOCATE.intervalsPerGenerator)
-    expect(r.truncated).toBe(true)
-    expect(r.zeros.length).toBeLessThanOrEqual(LOCATE.maxZeros)
+    // The real budgets are far above what a coarse search needs on any one range, so
+    // this one shrinks them: five generators with zeros that never settle, each of
+    // which would take its whole 60, against a call total of 150.
+    const was = [LOCATE.intervalsPerGenerator, LOCATE.intervalsTotal]
+    LOCATE.intervalsPerGenerator = 60
+    LOCATE.intervalsTotal = 150
+    try {
+      const scope = scopeOf()
+      const counter = { points: 0, intervals: 0 }
+      const text = [0, 0.1, 0.2, 0.3, 0.4].map((s) => `tan(1/(x - ${s}))`).join(' + ')
+      const r = locateZeros(troubleGenerators(expr(text), 'x', scope), 'x', scope, -1, 1, counter)
+      expect(counter.intervals).toBeLessThanOrEqual(150)
+      expect(counter.intervals).toBeGreaterThan(60)
+      expect(r.truncated).toBe(true)
+      expect(r.zeros.length).toBeLessThanOrEqual(LOCATE.maxZeros)
+    } finally {
+      ;[LOCATE.intervalsPerGenerator, LOCATE.intervalsTotal] = was
+    }
   })
   it('keeps the zeros nearest the centre of the range when there are too many (floor(x) over 141 steps)', () => {
     const r = zerosOf('floor(x)', -70.5, 70.5)
@@ -172,6 +214,25 @@ describe('locateZeros, budgets', () => {
     } finally {
       LOCATE.intervalsPerGenerator = was
     }
+  })
+  it('says so, and keeps real zeros, when zeros are crowded closer than a coarse box (tan(2000 x) over a view)', () => {
+    // The poles are 1.6e-3 apart on a range of 10 whose coarse box is 2.4e-3: the
+    // twin cannot separate them and 16 samples cannot count them (and there are far
+    // more than 64; the tan(1/x) test above is the one that has fewer and is flagged
+    // only for being crowded).
+    const r = zerosOf('tan(2000*x)', -5, 5)
+    expect(r.truncated).toBe(true)
+    for (const z of r.zeros) expect(Math.abs(Math.cos(2000 * z.t))).toBeLessThan(1e-6)
+  })
+  it('does not call zeros that are well apart crowded, however many (floor(x) over 1001 steps)', () => {
+    // 1001 steps is cut by the 64-zero cap, which is the cap and not crowding; 41 steps
+    // are not cut at all.
+    const r = zerosOf('floor(x)', -500.5, 500.5)
+    expect(r.zeros).toHaveLength(LOCATE.maxZeros)
+    expect(r.truncated).toBe(true)
+    const small = zerosOf('floor(x)', -20.5, 20.5)
+    expect(small.zeros).toHaveLength(41)
+    expect(small.truncated).toBe(false)
   })
   it('keeps what it found of a generator it ran out of budget on, and flags it', () => {
     // cos(1/x) has no end of zeros; the zeros it did find are real ones.

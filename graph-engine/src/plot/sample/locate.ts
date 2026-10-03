@@ -7,25 +7,32 @@
 // Adjacent surviving boxes form clusters. The twin is only asked to say where zeros
 // are not. Asked to pin down a hard zero it fails: near a zero of 1 - cos(x) the
 // enclosure cannot exclude zero until the box is 1e-8 away (cos rounds to 1 there),
-// and an expanded square like x^2 - 2x + 1 keeps a band of 1e-3 around its double
-// root: bisecting those to the tolerance takes every evaluation there is, and a
-// search that stopped there dropped every zero after it. So when a budget (one
-// generator's, or the call's) or the cap on clusters ends the search, nothing is
-// dropped: every box still waiting becomes a cluster too, and the result says the
-// search was cut.
+// and an expanded square like x^2 - 2x + 1 keeps a band round its double root that
+// is about sqrt(2 w) wide for boxes of width w (the enclosure repeats x): bisecting
+// those to the tolerance takes every evaluation there is, and a search that stopped
+// there dropped every zero after it. So the boxes stop at a sub-pixel width, and when
+// a budget (one generator's, or the call's) or the cap on clusters ends the search
+// anyway, nothing is dropped: every box still waiting becomes a cluster too, and the
+// result says the search was cut.
 //
 // PHASE 2, the scalar. Each cluster is sampled at 16 points, ends included, and
 // the samples say what is in it:
-//  - exact zeros: a RUN of them is a stretch where the generator is zero (floor(x)
-//    on [0, 1)), reported by its two ends, each found by bisecting where g stops
-//    being exactly 0; a single exact zero is one zero, at the middle of the flat
-//    spot it sits in (the plateau of exact zeros 1 - cos(x) has around its zero);
+//  - exact zeros: a flat spot of them wider than the coarse width is a stretch where
+//    the generator is zero (floor(x) on [0, 1)), reported by its two ends, each
+//    found by bisecting where g stops being exactly 0; a narrower one is one zero,
+//    at its middle (the plateau of exact zeros 1 - cos(x) has around its zero, 1e-8
+//    wide, is sub-pixel: one pole, not two);
 //  - sign changes between neighbouring samples: each is bisected on the sign to
 //    adjacent doubles (odd zeros, poles: tan, 1/x);
 //  - neither: an even zero, if any (x^2), found as the minimum of |g| by golden-
-//    section search over the two intervals next to the lowest sample. A double
-//    zero of a flat function is only as exact as the function is: about the square
-//    root of the epsilon for 1 - cos(x), and exact for a pure square.
+//    section search over the two intervals next to the lowest sample, and kept if
+//    the twin, asked again about a box of a few tolerances there, still cannot
+//    exclude zero (a cluster's ragged edge, where the enclosure is only loose, has
+//    no zero: g there is small, not zero). A double zero of a flat function is only
+//    as exact as the function is: about the square root of the epsilon for
+//    1 - cos(x), and exact for a pure square.
+// Phase 2 also says when a cluster is too crowded for 16 samples to count its zeros
+// (several boxes wide, with two sign changes or more), and the result is then cut.
 //
 // A stretch is reached in phase 1 without bisecting it. A box whose enclosure is the
 // point zero holds nothing but zeros (or NaN) if the scalar agrees, so then it stops
@@ -72,8 +79,21 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
     const found = isolate(g, gi, t0, t1, coarse, budget, counter)
     spent += found.spent
     if (found.cut) truncated = true
+    // Whether the twin, asked about a box of a few tolerances round t, still cannot
+    // exclude zero. Out of budget it is not asked, and the candidate stands.
+    const probe = iv()
+    const confirm = (t: number): boolean => {
+      if (spent >= LOCATE.intervalsTotal) return true
+      const h = 4 * LOCATE.tolRel * Math.max(1, Math.abs(t))
+      gi(probe, t - h, t + h)
+      spent++
+      counter.intervals++
+      return !(isEmpty(probe) || probe.lo > 0 || probe.hi < 0)
+    }
     for (const [lo, hi] of found.clusters) {
-      for (const t of resolve(g, lo, hi, counter)) all.push({ t, origin: gen.origin, why: gen.why })
+      const here = resolve(g, confirm, lo, hi, coarse, counter)
+      if (here.unresolved) truncated = true
+      for (const t of here.zeros) all.push({ t, origin: gen.origin, why: gen.why })
     }
   }
   return merge(all, t0, t1, truncated)
@@ -126,8 +146,12 @@ function zeroAt(g: Scalar, ts: readonly number[], counter: EvalCounter): boolean
   })
 }
 
-// Phase 2: the zeros of g inside one cluster [lo, hi].
-function resolve(g: Scalar, lo: number, hi: number, counter: EvalCounter): number[] {
+// Phase 2: the zeros of g inside one cluster [lo, hi], and whether the cluster is
+// too crowded for its samples to count them. `coarse` is phase 1's width (or the
+// tolerance, if that is wider): a flat spot of exact zeros no wider than it is one
+// zero, not a stretch.
+function resolve(g: Scalar, confirm: (t: number) => boolean, lo: number, hi: number, coarse: number, counter: EvalCounter): { zeros: number[]; unresolved: boolean } {
+  const leaf = Math.max(coarse, LOCATE.tolRel * Math.max(1, Math.abs(lo), Math.abs(hi)))
   const n = LOCATE.clusterSamples
   const s: number[] = []
   const v: number[] = []
@@ -147,25 +171,38 @@ function resolve(g: Scalar, lo: number, hi: number, counter: EvalCounter): numbe
     while (j + 1 < n && v[j + 1] === 0) j++
     const left = i === 0 ? s[0] : edge(g, s[i], s[i - 1], counter)
     const right = j === n - 1 ? s[n - 1] : edge(g, s[j], s[j + 1], counter)
-    if (j > i) zeros.push(left, right)
+    if (right - left > leaf) zeros.push(left, right)
     else zeros.push(left + (right - left) / 2)
     i = j
   }
 
   // Sign changes between neighbours (a zero sample next to them belongs to its run).
+  let changes = 0
   for (let i = 0; i + 1 < n; i++) {
-    if (signed(v[i]) && signed(v[i + 1]) && (v[i] < 0) !== (v[i + 1] < 0)) zeros.push(bisectSign(g, s[i], s[i + 1], v[i], counter))
+    if (signed(v[i]) && signed(v[i + 1]) && (v[i] < 0) !== (v[i + 1] < 0)) {
+      zeros.push(bisectSign(g, s[i], s[i + 1], v[i], counter))
+      changes++
+    }
   }
-  if (zeros.length > 0) return zeros
+  // Two sign changes or more in a cluster the twin could not take apart over several
+  // boxes: zeros crowded closer than the samples, as cos(1/x) near 0 has, and the
+  // bisections only count the sign changes the samples happen to see.
+  const unresolved = changes >= 2 && hi - lo > LOCATE.unresolvedLeaves * leaf
+  if (zeros.length > 0) return { zeros, unresolved }
 
   // No exact zero and no sign change: an even zero, or none. The lowest |g| sample
   // is at, or next to, the minimum; |g| is searched over the two intervals around it.
+  // The twin could not exclude zero over the whole box, which holds when g only comes
+  // near zero (the ragged edge of the band round a double root, where the enclosure
+  // of an expanded square is wide): the minimum is a zero if the twin cannot exclude
+  // one round it either, at the tolerance, where it has no such slack.
   let best = -1
   for (let i = 0; i < n; i++) {
     if (Number.isFinite(v[i]) && (best < 0 || Math.abs(v[i]) < Math.abs(v[best]))) best = i
   }
-  if (best < 0) return []
-  return [golden(g, s[Math.max(0, best - 1)], s[Math.min(n - 1, best + 1)], counter)]
+  if (best < 0) return { zeros: [], unresolved }
+  const t = golden(g, s[Math.max(0, best - 1)], s[Math.min(n - 1, best + 1)], counter)
+  return { zeros: confirm(t) ? [t] : [], unresolved }
 }
 
 // A value with a sign to compare: not NaN, not 0.
