@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classify, oneSided } from './limits'
 import { pointFnOf, scopeOf } from './testkit'
+import { LIMITS } from './tuning'
 import type { PointFn } from './types'
 
 const c = (text: string, tc: number, defs = '', angle: 'radians' | 'degrees' = 'radians') =>
@@ -143,5 +144,56 @@ describe('classify, functions periodic in 1/x', () => {
 describe('classify, distances that overflow when squared', () => {
   it('1/x^30 is a pole: 1e247 px squared is not Infinity', () => {
     expect(c('1/x^30', 0).kind).toBe('pole')
+  })
+})
+
+describe('classify, holes whose numerator cancels to higher order', () => {
+  // (x - sin x)/x^3 is the cancellation of two O(x) terms, then divided by x^3: its
+  // noise is eps/h^2, not eps/h, and the minRel floor (first order only) lets it
+  // through. The last offsets read 0.1666, 0.1669, 0.1678, 0.244, 0: a run whose
+  // distance grows every step, and the divergence test took it for a pole.
+  const hole = (text: string, h0: number, scale: number) =>
+    classify(pointFnOf(text, 'x', scopeOf()), 0, h0, { x: scale, y: scale }, { points: 0, intervals: 0 })
+  const cases: [string, number, number, number][] = [
+    ['(x - sin(x))/x^3', 0.1, 40, 1 / 6],
+    ['(exp(x) - 1 - x)/x^2', 0.1, 40, 1 / 2],
+    ['(tan(x) - x)/x^3', 0.1, 40, 1 / 3],
+    ['(1 - cos(x))/x^2', 0.1, 40, 1 / 2],
+    ['(exp(x) - 1 - x)/x^2', 0.01, 400, 1 / 2],
+    ['(1 - cos(x))/x^2', 0.001, 4000, 1 / 2],
+  ]
+  for (const [text, h0, scale, limit] of cases) {
+    it(`${text} at 0 is a hole with limit ${limit.toFixed(4)} (h0 = ${h0}, ${scale} px)`, () => {
+      const r = hole(text, h0, scale)
+      expect(r.kind).toBe('hole')
+      if (r.kind === 'hole') {
+        // The limit is the last sample the retry kept, and that still carries some noise
+        // (and, for exp(x) - 1 - x, the O(h) of the function): no sample of this noisy
+        // sequence is within 1e-6 of the limit (the best of them, exp at 40 px, is off by
+        // 3e-6), and none is needed. It is right to what the rule means by "reached":
+        // within convergePx on screen, so the open mark sits on the right dot.
+        expect(Math.abs(r.limit.y - limit) * scale).toBeLessThan(LIMITS.convergePx)
+        // x likewise: a geometric tail extrapolates x as well as y, along one ratio
+        expect(Math.abs(r.limit.x) * scale).toBeLessThan(LIMITS.convergePx)
+        expect(r.value).toBeNull()
+      }
+    })
+  }
+  it('counts the retry: x - sin x over x^3 at 40 px takes a confirming sample for each drop it tries', () => {
+    const counter = { points: 0, intervals: 0 }
+    classify(pointFnOf('(x - sin(x))/x^3', 'x', scopeOf()), 0, 0.1, { x: 40, y: 40 }, counter)
+    // 13 a side, the point, and per side the tail dropped 2 (refused) and 3 (taken) each
+    // have one confirming sample
+    expect(counter.points).toBe(13 + 13 + 1 + 2 + 2)
+    expect(counter.points).toBeLessThanOrEqual(2 * (13 + 1 + LIMITS.noiseDrop) + 1)
+  })
+  it('order-5 cancellation, past what the retry reaches, is unknown and never a pole', () => {
+    expect(hole('(sin(x) - x + x^3/6)/x^5', 0.1, 40).kind).toBe('unknown')
+    expect(hole('(sin(x) - x + x^3/6)/x^5', 0.001, 4000).kind).toBe('unknown')
+  })
+  it('real poles stay poles at the zooms the noise is tested at', () => {
+    for (const [text, tc] of [['1/x', 0], ['1/x^2', 0], ['tan(x)', Math.PI / 2]] as const)
+      for (const [h0, scale] of [[0.01, 400], [0.001, 4000]] as const)
+        expect(classify(pointFnOf(text, 'x', scopeOf()), tc, h0, { x: scale, y: scale }, { points: 0, intervals: 0 }).kind, `${text} at ${scale} px`).toBe('pole')
   })
 })

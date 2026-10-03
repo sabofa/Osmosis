@@ -27,10 +27,20 @@
 //        within (the distance of the previous finite sample from the limit) + `convergePx`
 //        of the limit. Without it sin(pi/x), periodic in 1/x, reads as a hole at 0: every
 //        offset lands on a whole number of periods;
+//      A tail that converges and is refuted by that sample ends the search: unknown;
 //  - diverge: over the last `divergeRun` steps the screen distance from the first
 //    sample grows monotonically, each step's growth at least `divergeRatio` times the
-//    previous. That catches ln(x) (constant steps) as well as 1/x (growing ones). The
-//    sign is the sign of the last y minus the first;
+//    previous, and STEADILY: the largest ratio of one step's growth to the one before
+//    is at most `divergeSpread` times the smallest. That catches ln(x) (constant steps)
+//    as well as 1/x (growing ones), and not cancellation noise, which grows the run
+//    every step but by jumping ratios. The sign is the sign of the last y minus the
+//    first;
+//  - otherwise the convergence tests are retried on the sequence with its last 1, then
+//    2, … up to `noiseDrop` finite samples dropped, and the first that converges (limit
+//    confirmed as above) wins. Cancellation noise (x - sin x over x^3: eps/h^2, which
+//    the minRel floor does not cover) lives at the smallest offsets, and what converged
+//    before it is a limit. A retried tail that the off-lattice sample refutes moves on
+//    to the next drop;
 //  - unknown: otherwise. A sample that overflows to an infinity is not finite and is
 //    not NaN, so a side that overflows is unknown, never misread.
 //
@@ -48,6 +58,9 @@
 // A hole's limit is the middle of the two sides' limits. Both sides sample the same
 // offsets, so their first-order errors are opposite and cancel in the middle: for
 // y = f(x) the limit's x comes out as tc to rounding, not tc off by the last offset.
+// A limit read from a retried tail is the last sample that tail kept, and carries the
+// noise that is still under convergePx: it is right to about convergePx on screen,
+// not to the digits (the brief's clean cases are, because their samples are).
 import type { Vec2 } from '../../scene/types'
 import { LIMITS } from './tuning'
 import type { EvalCounter, PointFn, PxScale } from './types'
@@ -119,21 +132,34 @@ function geometricLimit(nf: number, px: PxScale): Vec2 | null {
   return { x: wx[e] + (wx[e] - wx[c]) * f, y: wy[e] + (wy[e] - wy[c]) * f }
 }
 
-// The sign of the divergence if the last divergeRun steps grow monotonically, or 0.
+// The sign of the divergence if the last divergeRun steps grow monotonically and
+// steadily, or 0. Steadily: the ratios of one step's growth to the one before stay
+// within a factor of divergeSpread of each other. A pole's are all alike (4 for 1/x,
+// 16 for 1/x^2, 1 for ln); cancellation noise that blows up at the last offsets has
+// ratios that jump (x - sin x, over x^3: 18, 4.4, 80, 1.2).
 function divergence(nf: number, px: PxScale): 1 | -1 | 0 {
   const run = LIMITS.divergeRun
   if (nf < run + 1) return 0
   const first = finite[nf - run - 1]
   let prevDist = 0
   let prevGrowth = 0
+  let lowest = Infinity
+  let highest = 0
   for (let j = nf - run; j < nf; j++) {
     const dist = between(finite[j], first, px)
     const growth = dist - prevDist
     if (!(growth > 0)) return 0
-    if (prevGrowth > 0 && !(growth >= LIMITS.divergeRatio * prevGrowth)) return 0
+    if (prevGrowth > 0) {
+      const ratio = growth / prevGrowth
+      // A ratio that is not finite is not steady (and one of 0 is under divergeRatio).
+      if (!(ratio >= LIMITS.divergeRatio) || !Number.isFinite(ratio)) return 0
+      lowest = Math.min(lowest, ratio)
+      highest = Math.max(highest, ratio)
+    }
     prevDist = dist
     prevGrowth = growth
   }
+  if (!(highest <= LIMITS.divergeSpread * lowest)) return 0
   const last = finite[nf - 1]
   const dy = wy[last] - wy[first]
   // A curve that runs off along x with y fixed has no y to sign it with.
@@ -160,6 +186,16 @@ function confirmed(point: PointFn, tc: number, side: -1 | 1, h0: number, nf: num
   return screenDist(out[0] - limit.x, out[1] - limit.y, px) <= reach
 }
 
+// The convergence of the first `nf` finite samples (window or geometric, then the
+// off-lattice sample): their limit; null if they do not converge; false if they do and
+// the off-lattice sample disagrees. Fewer than 4 samples converge to nothing; either
+// test needs 4, so `confirmed` has a last and a previous one.
+function convergence(point: PointFn, tc: number, side: -1 | 1, h0: number, nf: number, px: PxScale, counter: EvalCounter): Vec2 | null | false {
+  const limit = windowConverges(nf, px) ? { x: wx[finite[nf - 1]], y: wy[finite[nf - 1]] } : geometricLimit(nf, px)
+  if (!limit) return null
+  return confirmed(point, tc, side, h0, nf, limit, px, counter) ? limit : false
+}
+
 // What the curve does on one side of tc, from h0 (the parameter step worth 4 px)
 // inwards. Every evaluation is counted in counter.points.
 export function oneSided(point: PointFn, tc: number, side: -1 | 1, h0: number, px: PxScale, counter: EvalCounter): Side {
@@ -182,11 +218,24 @@ export function oneSided(point: PointFn, tc: number, side: -1 | 1, h0: number, p
     for (let i = n - LIMITS.undefinedRun; i < n; i++) if (!(Number.isNaN(wx[i]) || Number.isNaN(wy[i]))) allNaN = false
     if (allNaN) return { kind: 'undefined' }
   }
-  // Either test needs 4 finite samples, so `confirmed` has a last and a previous one.
-  const limit = windowConverges(nf, px) ? { x: wx[finite[nf - 1]], y: wy[finite[nf - 1]] } : geometricLimit(nf, px)
-  if (limit) return confirmed(point, tc, side, h0, nf, limit, px, counter) ? { kind: 'converge', at: limit } : UNKNOWN
+  // A whole sequence whose tail converges and is then refuted by the off-lattice sample
+  // is aliasing, not noise: a tight tail has nothing in it to drop. It ends the search,
+  // or the retries below would shop for a confirming sample that happens to agree (they
+  // did: cos(pi/x), whose lattice value is a maximum, passes a given off-lattice sample
+  // one time in sixty).
+  const whole = convergence(point, tc, side, h0, nf, px, counter)
+  if (whole) return { kind: 'converge', at: whole }
+  if (whole === false) return UNKNOWN
   const sign = divergence(nf, px)
   if (sign !== 0) return { kind: 'diverge', sign }
+  // Neither on the whole sequence, and no tight tail. Cancellation noise lives at the
+  // smallest offsets, so the convergence may be in the sequence without its last few
+  // samples: look for it there, one more dropped each time, and take the first that
+  // holds. A refusal here is noise in the confirming sample, and moves on.
+  for (let drop = 1; drop <= LIMITS.noiseDrop; drop++) {
+    const kept = convergence(point, tc, side, h0, nf - drop, px, counter)
+    if (kept) return { kind: 'converge', at: kept }
+  }
   return UNKNOWN
 }
 

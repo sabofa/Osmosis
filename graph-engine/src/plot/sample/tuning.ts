@@ -79,6 +79,16 @@ export const LIMITS = {
   // The run of steps (divergeRun + 1 samples) the divergence test looks at: 5 steps of
   // ln(x) are 5 * 55 px, past any noise, and 5 steps of 1/x are 4^5-fold.
   divergeRun: 5,
+  // And the growth of those steps must be steady: the largest ratio of one step's growth
+  // to the one before is at most this many times the smallest. A pole's are alike (1/x:
+  // 4 4 4 4; 1/x^2: 16 16 16 16; ln: 1 1 1 1; 1/x^30, tan, 1/x + 1/x^2, sin(x)/x^2 the
+  // same) and measure a spread of 1.00. Higher-order cancellation noise (x - sin x over
+  // x^3, at the smallest offsets) grows the run's distance every step too, but by ratios
+  // of 18, 4.4, 80, 1.2: a spread of 68. The noise that comes closest to steady is
+  // exp(x) - 1 - x over x^2 at 100 and 400 px (9.2 8.8 24 25, a spread of 2.8): it grows
+  // about 16-fold a step like a pole of order 2, because its numerator is a few ulps. So
+  // 2: well above a pole's 1.00, which leaves room for rounding, and under noise's 2.8.
+  divergeSpread: 2,
   // The last this-many samples all NaN make a side undefined. Fewer is not enough: a
   // function defined on a scatter of points (sqrt(sin(1/x)) near 0) is NaN at some
   // offsets and finite at others, and a stray NaN at the end is not a domain edge.
@@ -91,7 +101,23 @@ export const LIMITS = {
   // lattice and looks like a hole. A rational factor can land on it again: at f = 2 the
   // sample sits at 1/x = shrink^k / (2 h0), which for sin(pi/x) at h0 = 0.1 is
   // pi * 5 * 4^k, a whole number of periods again, so it reads 0 like the lattice. With
-  // sqrt 2 the step from the lattice, (1/f - 1) shrink^k / h0, is irrational, so it is
-  // never a whole number of periods of any rational period.
+  // sqrt 2 the step from the lattice, (1/f - 1) shrink^k / h0, is irrational for a
+  // rational h0, so it is never a whole number of periods of any rational period. (A
+  // view whose h0 is itself a multiple of pi is not covered by that argument.)
   confirmFactor: Math.SQRT2,
+  // A side that is neither converged nor steadily diverged, and has no tight tail,
+  // retries the convergence tests (window, geometric, the confirming sample) on its
+  // sequence with the last 1, then 2, then up to this many samples dropped, and takes
+  // the first that holds. The floor minRel covers noise of order eps/h; a numerator that
+  // cancels to a higher order (x - sin x, exp(x) - 1 - x, 1 - cos x, tan x - x, over x^3
+  // or x^2) has noise of eps/h^2 or worse, which is under a pixel's twentieth for most
+  // of the offsets and then jumps: it is at the last few, and they are what is dropped.
+  // How many is a matter of zoom: the noise is a fixed size in the function and a pixel
+  // is smaller the further in the view is, so more offsets are over it. At 40 px per unit
+  // dropping 3 is enough, at 400 and 4000 px per unit it takes 5. Swept over four such
+  // functions at 14 zooms from 20 to 40000 px per unit: 4 gives 29 holes of 56, 5 gives
+  // 44, 6 gives 46, 7 gives the same 46. The ten left are at 2000 px per unit and over,
+  // where the noise is the function and unknown is honest. 6: the first where more
+  // dropping changes nothing.
+  noiseDrop: 6,
 }
