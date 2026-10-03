@@ -470,7 +470,7 @@ describe('infinities, poles and signed zeros', () => {
     expect(admits(pos, Math.PI) && !admits(pos, -Math.PI)).toBe(true)
     const negz = t(-0, -0, -1, -1)
     expect(admits(negz, -Math.PI) && !admits(negz, Math.PI)).toBe(true)
-    // a box that holds +0 below nothing: on the cut but on one side of it, so continuous
+    // a y end of +0 (or -0) puts the box on the upper (lower) side of the cut: continuous
     const upper = t(0, 1, -2, -1)
     expect(upper.v).toBe(CONTINUOUS)
     expect(within(upper, Math.atan2(1, -1), Math.PI, 1e-12)).toBe(true)
