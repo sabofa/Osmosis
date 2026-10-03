@@ -25,12 +25,10 @@
 import { randomFor } from '../../../style/random'
 import type { MeshMark, SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
-import { clamp } from '../model/math'
 import { compileCurves, type CompiledCurves } from '../model/respond'
 import { RING_PX, UNDERPAINT_CELL_PX } from '../model/underpaint'
-import { canvasValue, effectiveValues, familyBound, FAM_LIGHT, holdFamily, newZoneSample, planSample, type EffectiveValues, type PlanMap } from '../model/value'
+import { canvasValue, effectiveValues, familyBound, holdFamily, newPlanFacts, newZoneSample, planFacts, type EffectiveValues, type PlanMap } from '../model/value'
 import { groundMarks, meshArea } from '../model/view'
-import { Z_LIGHT } from '../model/zones'
 import { occlusionAt } from './occlusion'
 import { makeShadowCaster, type ShadowCaster } from './shadow'
 import { refineSurface, refineWhere, type RefinedSurface, type SurfacePoint } from './surface'
@@ -137,6 +135,7 @@ function grownPlan(old: SidePlan, nv: number, nt: number): SidePlan {
 }
 
 const ZS = newZoneSample()
+const PF = newPlanFacts()
 const VIS = { vis: 1, dist: Infinity }
 
 // The plan at vertices [from, to) of one side.
@@ -170,30 +169,18 @@ function planVertices(
     plan.vis[i] = vis
     plan.shadowDist[i] = dist
     plan.ao[i] = ao
-    plan.key[i] = shadow ? 0 : Math.max(0, nl)
-    if (ground && !shadow) {
-      // bare canvas in the light: the canvas value (a value curve never repaints the ground)
-      plan.value[i] = clamp(curves.value(c.uCanvas), 0, 1)
-      plan.u[i] = c.uCanvas
-      plan.zone[i] = Z_LIGHT
-      plan.trans[i] = 0
-      plan.lift[i] = 0
-      plan.lightW[i] = 1
-      plan.shadowW[i] = 0
-      plan.reflW[i] = 0
-      plan.fam[i] = FAM_LIGHT
-      continue
-    }
-    planSample(params, curves, nl, shadow, nx, ny, nz, ao, ZS)
-    plan.value[i] = ZS.u
-    plan.u[i] = ZS.u
-    plan.zone[i] = ZS.zone
-    plan.trans[i] = ZS.trans
-    plan.lift[i] = ZS.lift
-    plan.lightW[i] = ZS.w[0] + 0.6 * ZS.w[1]
-    plan.shadowW[i] = ZS.w[2] + ZS.w[4]
-    plan.reflW[i] = ZS.w[3]
-    plan.fam[i] = ZS.fam
+    // (the plan's numbers from planSample, as the per-pixel plan makes them: value.ts planFacts, with the ground flag of the cast gate)
+    planFacts(params, curves, c.uCanvas, nl, shadow, nx, ny, nz, ao, ground, ZS, PF)
+    plan.key[i] = PF.key
+    plan.value[i] = PF.value
+    plan.u[i] = PF.u
+    plan.zone[i] = PF.zone
+    plan.trans[i] = PF.trans
+    plan.lift[i] = PF.lift
+    plan.lightW[i] = PF.lightW
+    plan.shadowW[i] = PF.shadowW
+    plan.reflW[i] = PF.reflW
+    plan.fam[i] = PF.fam
   }
 }
 

@@ -4,7 +4,7 @@ import { buildParticles } from '../model/particles'
 import { flatColours, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
 import { RING_PX } from '../model/underpaint'
 import { worldLight } from '../model/valueFinalFixture'
-import { FAM_LIGHT, FAM_SHADOW, familyBound, holdFamily, newZoneSample, planSample, type PlanMap } from '../model/value'
+import { FAM_LIGHT, FAM_SHADOW, familyBound, holdFamily, newPlanFacts, newZoneSample, planFacts, planSample, type PlanMap } from '../model/value'
 import { buildWorldPlan, familyBoundAt, holdFamilyAt, newPlanAt, planAt, triangleGradients, type SidePlan, type WorldPlan } from './plan'
 import { locate, normalOf, refineSurface, type SurfacePoint } from './surface'
 
@@ -68,7 +68,7 @@ describe('buildWorldPlan: what it is made of', () => {
             canvas++
             continue
           }
-          planSample(P, PLAN.curves, sp.nl[i], shadow, side * s!.normals[3 * i], side * s!.normals[3 * i + 1], side * s!.normals[3 * i + 2], sp.ao[i], zs)
+          planSample(P, PLAN.curves, sp.nl[i], shadow, side * s!.normals[3 * i], side * s!.normals[3 * i + 1], side * s!.normals[3 * i + 2], sp.ao[i], zs, PLAN.ground[m] === 1)
           expect(sp.u[i]).toBe(Math.fround(zs.u))
           expect(sp.zone[i]).toBe(zs.zone)
           expect(sp.fam[i]).toBe(zs.fam)
@@ -81,6 +81,30 @@ describe('buildWorldPlan: what it is made of', () => {
     })
     expect(checked).toBeGreaterThan(5000)
     expect(canvas).toBeGreaterThan(1000)
+  })
+
+  it('gives a ground the cast gate of the per-frame model: under a grazing light a flagged ground vertex is a full cast shadow, as value.ts planFacts makes it', () => {
+    // a table with a sphere on it and the light 1.5 degrees over the horizon: N.L on the table is 0.026, under the cast fade
+    const graze = worldLight(30, 1.5)
+    const plan = buildWorldPlan(SCENE, graze, P, PX)
+    const s = plan.surfaces[1]!
+    const sp = plan.front[1]!
+    const zs = newZoneSample()
+    const pf = newPlanFacts()
+    let cast = 0
+    let differs = 0
+    for (let i = 0; i < s.positions.length / 3; i++) {
+      if (sp.shadow[i] !== 1) continue
+      cast++
+      planFacts(P, plan.curves, plan.uCanvas, sp.nl[i], true, s.normals[3 * i], s.normals[3 * i + 1], s.normals[3 * i + 2], sp.ao[i], true, zs, pf)
+      expect(sp.u[i]).toBe(Math.fround(pf.u))
+      expect(sp.zone[i]).toBe(pf.zone)
+      planSample(P, plan.curves, sp.nl[i], true, s.normals[3 * i], s.normals[3 * i + 1], s.normals[3 * i + 2], sp.ao[i], zs, false)
+      if (Math.fround(zs.u) !== sp.u[i]) differs++
+    }
+    expect(cast).toBeGreaterThan(200)
+    // (without the ground flag these vertices would be mostly light-family terminator: the flag matters here)
+    expect(differs).toBeGreaterThan(cast / 2)
   })
 
   it('has the capU and floorU of the plan map: the curve applied to the cap and to the darkest half-tone, the canvas above both', () => {
