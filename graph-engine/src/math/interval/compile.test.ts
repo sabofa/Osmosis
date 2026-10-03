@@ -6,8 +6,9 @@ import { call, num, variable } from '../expr'
 import { MAX_TERMS } from '../reserved'
 import { makeScope, type MathFunction, type MathScope } from '../scope'
 import { box, fmt, must, nextDown, nextUp, pointsOf, show, within, withZeroSigns } from './compose.testkit'
-import { compileInterval } from './compile'
+import { type CompiledInterval, compileInterval } from './compile'
 import { CONTINUOUS, DEFINED, iv, type Iv, PARTIAL, UNKNOWN } from './core'
+import { continuitySweep, continuityViolation, findJump, overclaims, samplerBox, soundnessSweep } from './fuzz.testkit'
 import * as surface from './index'
 import { mulberry32, pointsIn, randomBox, zerosIn } from './testkit'
 
@@ -768,6 +769,143 @@ describe('soundness over composite expressions of two variables', () => {
       g(out, bx[0], bx[1], by[0], by[1], bz[0], bz[1])
       for (const x of few(bx[0], bx[1], rand)) for (const y of few(by[0], by[1], rand)) for (const z of few(bz[0], bz[1], rand)) must(out, f(x, y, z), () => `(${x}, ${y}, ${z}) against ${show(out)}`)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Random expressions against the scalar compile
+// ---------------------------------------------------------------------------
+
+describe('random expressions are sound against the scalar compile', () => {
+  // Trees over every construct the compiler has a rule for (the built-ins, the reserved calls, user
+  // functions, parameters, loops, derivatives), in scopes whose parameters include NaN, infinities and
+  // zeros, over edge boxes with each zero end as both signs and at every point fuzzPoints gives:
+  // strictly (an infinity needs its bound, a NaN needs PARTIAL or UNKNOWN) and with the zero-bound
+  // invariant. A compile error must be the scalar compile's own.
+  it('one variable', () => {
+    const r = soundnessSweep(101, 2000)
+    expect(r.failures).toEqual([])
+    expect(r.compiled).toBeGreaterThan(1900)
+    expect(r.checks).toBeGreaterThan(400_000)
+  })
+
+  it('two variables', () => {
+    const r = soundnessSweep(202, 1500, { two: true })
+    expect(r.failures).toEqual([])
+    expect(r.compiled).toBeGreaterThan(1400)
+    expect(r.checks).toBeGreaterThan(400_000)
+  })
+
+  it('a fixed seed gives the same sweep', () => {
+    expect(soundnessSweep(7, 60)).toEqual(soundnessSweep(7, 60))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A CONTINUOUS verdict never covers a jump
+// ---------------------------------------------------------------------------
+
+// `admits` and `must` read values only, so a twin that said CONTINUOUS across floor's step, a piecewise
+// seam or atan2's cut would pass every sweep above. That verdict is what a sampler connects across, so it
+// is held here, by the scalar: for a box the twin calls CONTINUOUS, sample the scalar over it, bisect the
+// widest gap down to adjacent doubles, and fail on a gap that stays wide and flat on both sides.
+describe('a CONTINUOUS verdict never covers a jump', () => {
+  // Boxes placed on the places these expressions jump: centres at the integers, the multiples of 0.7 and
+  // of a half, and a quarter turn, each at four widths down to a few ulps, from either side and astride
+  // (the astride ones off centre: a sample that lands exactly on sign's zero is a third value between its
+  // two steps, and the search reads that as a spike, not a jump).
+  const CENTRES = [0, 1, -1, 2, 0.7, 1.4, 0.5, 1.5, 2.5, -0.5, Math.PI / 2, 3]
+  const PLACED: [number, number][] = []
+  for (const c of CENTRES) {
+    for (const w of [1e-12, 1e-6, 1e-3, 0.1]) PLACED.push([c - w, c + 0.37 * w], [c - 0.61 * w, c + w], [c - w, c], [c, c + w])
+  }
+  const SAMPLER: [number, number][] = []
+  const rand = mulberry32(31)
+  for (let i = 0; i < 150; i++) SAMPLER.push(samplerBox(rand))
+  const BOXES = [...PLACED, ...SAMPLER]
+
+  const JUMPING = [
+    'floor(x)', 'ceil(x)', 'round(x)', 'sign(x)', 'step(x)', 'mod(x, 1)', 'mod(x, 0.7)', 'floor(x) + x', 'x - floor(x)', 'round(2x)/2',
+    '{x < 1: 0, 1}', '{x < 1: x, x + 1}', '{x <= 0.5: x^2, 2 - x}', '{floor(x) < 1: x, 0}', '{x < 0: -1, x < 2: 1, 3}',
+    'atan2(x, -1)', 'atan2(x - 1, -2)', 'atan2(sin(x), cos(x) - 2)',
+    'min(floor(x), 1) + 0', 'sum(k = 1 to 3, floor(k x))', 'sqrt(x^2 + 1) * floor(x)',
+  ]
+  const SMOOTH = [
+    'sin(x)', 'cos(x)', 'tan(x)', 'sec(x)', 'csc(x)', 'cot(x)', 'asin(x)', 'acos(x)', 'atan(x)', 'sinh(x)', 'cosh(x)', 'tanh(x)', 'asinh(x)',
+    'acosh(x)', 'atanh(x)', 'sqrt(x)', 'abs(x)', 'exp(x)', 'ln(x)', 'log(x)', 'log(x, 2)', 'gamma(x)', 'erf(x)', 'erfc(x)', 'cbrt(x)',
+    'x^(1/3)', 'x^(2/3)', 'x^2', 'x^3 - 2x', '1/x', 'x^x', 'hypot(x, 1)', 'min(x, 1)', 'max(x, 0.5)', 'abs(x - 1)', 'sqrt(x^2)', 'x!',
+    'root(3, x)', 'x/(x^2 + 1)', 'exp(-x^2)', 'sin(x)/x', 'atan2(x, 2)', 'atan2(2, x)', '{x < 1: x, 2 - x}', '{x > 1: ln(x), 0}', 'sum(k = 1 to 4, x^k)',
+    'sin(floor(x)) x',
+  ]
+
+  const run = (src: string, scope: MathScope = plain) => {
+    const e = p(src)
+    return { f: compileScalar(e, ['x'], scope), g: compileInterval(e, ['x'], scope) }
+  }
+
+  it('every expression that jumps is called DEFINED or weaker over a box on the jump', () => {
+    for (const src of JUMPING) {
+      const { f, g } = run(src)
+      expect(continuityViolation(f, g, BOXES), src).toBeNull()
+    }
+  })
+
+  it('the elementary functions and the smooth compositions are searched too, and many of their boxes are CONTINUOUS', () => {
+    for (const src of SMOOTH) {
+      const { f, g } = run(src)
+      expect(continuityViolation(f, g, BOXES), src).toBeNull()
+      const out = iv()
+      let continuous = 0
+      for (const [lo, hi] of BOXES) if (g(out, lo, hi).v === CONTINUOUS && Number.isFinite(f((lo + hi) / 2))) continuous++
+      // a function undefined over most of the boxes (acosh, atanh) still has some: the search is not vacuous
+      expect(continuous, src).toBeGreaterThan(5)
+    }
+  })
+
+  it('the search is not vacuous: a twin that calls those boxes CONTINUOUS is caught on every jumping expression', () => {
+    for (const src of JUMPING) {
+      const { f, g } = run(src)
+      const violation = continuityViolation(f, overclaims(g), BOXES)
+      expect(violation, src).not.toBeNull()
+    }
+    // the case the review named: floor marked CONTINUOUS across an integer
+    const { f, g } = run('floor(x)')
+    const claimed: CompiledInterval = (out, lo, hi) => {
+      g(out, lo, hi)
+      out.v = CONTINUOUS
+      return out
+    }
+    expect(continuityViolation(f, claimed, [[0.5, 1.5]])?.jump).toMatch(/^a jump between 0\.99999999999999\d+ and 1:/)
+    // and a smooth function is not called a jump by it
+    const s = run('x^2 + sin(x)')
+    expect(continuityViolation(s.f, s.g, [[0.5, 1.5], [-3, 3]])).toBeNull()
+  })
+
+  it('findJump tells a jump from a pole, a steep curve and a staircase of roundings', () => {
+    expect(findJump((x) => (x < 1 ? 0 : 1), 0.5, 1.5)).not.toBeNull()
+    expect(findJump((x) => Math.floor(x * 4) / 4, 0.1, 0.6)).not.toBeNull()
+    expect(findJump((x) => Math.tan(x), 1.5, 1.6)).toBeNull()
+    expect(findJump((x) => 1 / x, -1, 1)).toBeNull()
+    expect(findJump((x) => Math.tanh(1e6 * (x - 1)), 0.9, 1.1)).toBeNull()
+    expect(findJump((x) => Math.sin(x), 0, 3)).toBeNull()
+    // a staircase of many small steps, as erf near 1 makes: no step is most of what the curve moves
+    expect(findJump((x) => Math.round(x * 1e6) / 1e6 + x, 0, 1)).toBeNull()
+    // an infinite sample is overflow, which CONTINUOUS does not exclude
+    expect(findJump((x) => (x < 1 ? 0 : Infinity), 0, 2)).toBeNull()
+  })
+
+  it('random expressions over sampler-sized boxes: no CONTINUOUS box holds a jump', () => {
+    const r = continuitySweep(404, 3000)
+    expect(r.failures).toEqual([])
+    expect(r.compiled).toBeGreaterThan(2900)
+    // the boxes the twin called CONTINUOUS and the scalar was searched over
+    expect(r.checks).toBeGreaterThan(15_000)
+  })
+
+  it('and the random sweep is not vacuous either: overclaiming DEFINED as CONTINUOUS is caught', () => {
+    const r = continuitySweep(404, 300, { wrap: overclaims })
+    expect(r.failures.length).toBeGreaterThan(3)
+    expect(r.failures[0]).toContain('is CONTINUOUS but has a jump')
   })
 })
 
