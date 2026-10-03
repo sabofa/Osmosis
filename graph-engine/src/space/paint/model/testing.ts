@@ -13,6 +13,12 @@ import type { GBuffer, Oklab, PaintView, SceneColours } from '../types'
 import { rawLitValue } from './value'
 import { D2R, vnorm, type V3 } from './math'
 
+// The camera-relative key light these views default to: the mockup's (56 degrees to the viewer's left, 27 up), the one
+// the model's tests were written against. (The painter's own default light is fixed in the world now,
+// params.light.worldFixed; a test view is built from the camera.)
+export const CAMERA_LIGHT_AZIMUTH = 56
+export const CAMERA_LIGHT_ELEVATION = 27
+
 export interface ViewOpts {
   width?: number
   height?: number
@@ -64,8 +70,8 @@ export function paintView(opts: ViewOpts = {}): PaintView {
   const view = lookFrom(eye, right, up, back)
   const vp = multiply(proj, view)
   // the light, camera-relative: x right, y up, z toward the viewer
-  const la = (opts.lightAzimuth ?? DEFAULT_PAINT_PARAMS.light.azimuth) * D2R
-  const le = (opts.lightElevation ?? DEFAULT_PAINT_PARAMS.light.elevation) * D2R
+  const la = (opts.lightAzimuth ?? CAMERA_LIGHT_AZIMUTH) * D2R
+  const le = (opts.lightElevation ?? CAMERA_LIGHT_ELEVATION) * D2R
   const lc: V3 = [-Math.sin(la) * Math.cos(le), Math.sin(le), Math.cos(la) * Math.cos(le)]
   const lightDir = vnorm([
     right[0] * lc[0] + up[0] * lc[1] + back[0] * lc[2],

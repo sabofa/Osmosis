@@ -52,7 +52,7 @@ describe('applySlider', () => {
   it('returns a new object and never mutates its input', () => {
     const next = applySlider(DEFAULT_PAINT_PARAMS, 'light.azimuth', -42)
     expect(next).not.toBe(DEFAULT_PAINT_PARAMS)
-    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(56)
+    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(-35)
     expect(next.light.azimuth).toBe(-42)
   })
 })
@@ -64,10 +64,10 @@ describe('decimalsFor', () => {
 })
 
 describe('isToggle', () => {
-  it('is a 0..1 step-1 slider (the shadows switch) and nothing else', () => {
+  it('is a 0..1 step-1 slider (the world-light and shadows switches) and nothing else', () => {
     const shadows = PARAM_SCHEMA.find((s) => s.path === 'light.shadows')!
     expect(isToggle(shadows)).toBe(true)
-    expect(PARAM_SCHEMA.filter(isToggle).map((s) => s.path)).toEqual(['light.shadows'])
+    expect(PARAM_SCHEMA.filter(isToggle).map((s) => s.path)).toEqual(['light.worldFixed', 'light.shadows'])
   })
 })
 
@@ -87,7 +87,7 @@ describe('groupSchema', () => {
   it('joins the runs of one group: Edges is 5 weights x 3 kinds plus 10 more = 25, Brush-load mix 26 + 3 balances = 29', () => {
     expect(groups.find((g) => g.title === 'Edges')!.specs).toHaveLength(25)
     expect(groups.find((g) => g.title === 'Brush-load mix')!.specs).toHaveLength(29)
-    expect(groups.find((g) => g.title === 'Light')!.specs).toHaveLength(7)
+    expect(groups.find((g) => g.title === 'Light')!.specs).toHaveLength(8)
     expect(groups.find((g) => g.title === 'Environment')!.specs).toHaveLength(5)
     expect(groups.find((g) => g.title === 'Stroke detection')!.specs).toHaveLength(9)
     expect(groups.find((g) => g.title === 'Stroke: dab')!.specs).toHaveLength(10)

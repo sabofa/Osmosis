@@ -3,7 +3,7 @@ import { cameraMatrices } from '../../camera/projection'
 import { screenBasis } from '../../camera/turntable'
 import { worldMap } from '../../camera/world'
 import type { Box3, SpaceScene } from '../../scene/types'
-import { buildFigure, buildPaintView, lightDirection, prepareFigure, toWorldScene } from '../../../../../review/src/paintLabCamera'
+import { buildFigure, buildPaintView, keyLightDirection, lightDirection, prepareFigure, toWorldScene, worldLightDirection } from '../../../../../review/src/paintLabCamera'
 import { PAINT_FIGURES } from '../../../../../review/src/paintLabFigures'
 
 // Building a figure (a res-120 surface, a marching level curve) takes a second or two,
@@ -40,6 +40,60 @@ describe('lightDirection', () => {
     // Camera at azimuth 90: the eye is on +y, screen right is -x.
     const turned = screenBasis({ azimuth: 90, elevation: 0, zoom: 1 })
     near(lightDirection(turned, 35, 40), [0.439385, 0.627507, 0.642788], 5)
+  })
+})
+
+describe('worldLightDirection', () => {
+  // z is up; the azimuth is about the z axis from +x toward +y; the elevation is above the xy-plane.
+  it('puts the light where the angles say, in the world and not against the view', () => {
+    near(worldLightDirection(0, 0), [1, 0, 0])
+    near(worldLightDirection(90, 0), [0, 1, 0])
+    near(worldLightDirection(180, 0), [-1, 0, 0])
+    near(worldLightDirection(-90, 0), [0, -1, 0])
+    near(worldLightDirection(0, 90), [0, 0, 1]) // straight down on the figure, whatever the azimuth
+    near(worldLightDirection(137, 90), [0, 0, 1])
+    near(worldLightDirection(0, -90), [0, 0, -1])
+  })
+
+  it('is cos(el) cos(az), cos(el) sin(az), sin(el): the default (-35, 39) is (0.6366, -0.4458, 0.6293), and (30, 60) is (0.4330, 0.25, 0.8660)', () => {
+    near(worldLightDirection(-35, 39), [0.6366007, -0.4457526, 0.6293204], 6)
+    near(worldLightDirection(30, 60), [0.4330127, 0.25, 0.8660254], 6)
+    expect(Math.hypot(...worldLightDirection(-35, 39))).toBeCloseTo(1, 12)
+  })
+})
+
+describe('keyLightDirection', () => {
+  const basis = screenBasis({ azimuth: 40, elevation: 25, zoom: 1 })
+  const light = { azimuth: -35, elevation: 39 }
+
+  it('is the world direction when the light is fixed in the world (1, or half and more), and the view-relative one when it is not (0, or not said)', () => {
+    near(keyLightDirection(basis, { ...light, worldFixed: 1 }), worldLightDirection(-35, 39))
+    near(keyLightDirection(basis, { ...light, worldFixed: 0.5 }), worldLightDirection(-35, 39))
+    near(keyLightDirection(basis, { ...light, worldFixed: 0 }), lightDirection(basis, -35, 39))
+    near(keyLightDirection(basis, light), lightDirection(basis, -35, 39))
+    expect(keyLightDirection(basis, { ...light, worldFixed: 1 })).not.toEqual(keyLightDirection(basis, { ...light, worldFixed: 0 }))
+  })
+})
+
+describe('buildPaintView, the light', () => {
+  const box: Box3 = { x: { min: -1, max: 1 }, y: { min: -1, max: 1 }, z: { min: -1, max: 1 } }
+  const world = worldMap(box, [1, 1, 1])
+  const at = (azimuth: number, elevation: number) =>
+    cameraMatrices({ azimuth, elevation, zoom: 1, target: [0, 0, 0] }, world, { width: 800, height: 600 }, 'orthographic')
+
+  it('fixed in the world (worldFixed 1): orbiting the camera never moves it, and azimuth 0, elevation 90 is straight down', () => {
+    const light = { azimuth: -35, elevation: 39, worldFixed: 1 }
+    for (const [az, el] of [[0, 0], [40, 25], [100, 25], [215, 60], [-70, 10]]) {
+      near(buildPaintView(at(az, el), light, 1, false).lightDir, [0.6366007, -0.4457526, 0.6293204], 6)
+    }
+    near(buildPaintView(at(40, 25), { azimuth: 0, elevation: 90, worldFixed: 1 }, 1, false).lightDir, [0, 0, 1])
+    near(buildPaintView(at(190, 25), { azimuth: 0, elevation: 90, worldFixed: 1 }, 1, false).lightDir, [0, 0, 1])
+  })
+
+  it('relative to the view (worldFixed 0): it turns with the camera, as it did', () => {
+    const light = { azimuth: 35, elevation: 40, worldFixed: 0 }
+    near(buildPaintView(at(0, 0), light, 1, false).lightDir, [0.627507, -0.439385, 0.642788], 5)
+    near(buildPaintView(at(90, 0), light, 1, false).lightDir, [0.439385, 0.627507, 0.642788], 5)
   })
 })
 

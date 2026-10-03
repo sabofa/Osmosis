@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { screenBasis } from '../camera/turntable'
 import tuning from './tuning.json'
 import { DEFAULT_PAINT_PARAMS, getParam, PARAM_SCHEMA, resolvePaintParams, setParam } from './params'
 
@@ -51,7 +52,7 @@ describe('paint params', () => {
 
   it('resolve never mutates the defaults', () => {
     resolvePaintParams({ light: { azimuth: 99 } })
-    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(56)
+    expect(DEFAULT_PAINT_PARAMS.light.azimuth).toBe(-35)
   })
 
   it('setParam returns a new object and addresses tuple entries', () => {
@@ -79,11 +80,18 @@ describe('paint params', () => {
   it('has the defaults that make the lab look like the approved mockup: its key light, its zone steps, its linen at half texture', () => {
     const p = DEFAULT_PAINT_PARAMS
     // the mockup's CAMLIGHT (-0.74, 0.45, 0.50) in screen right, up and toward the viewer: 56 degrees to the left, 27 up
-    expect([p.light.azimuth, p.light.elevation]).toEqual([56, 27])
     const lx = -Math.sin((56 * Math.PI) / 180) * Math.cos((27 * Math.PI) / 180)
     const ly = Math.sin((27 * Math.PI) / 180)
     const lz = Math.cos((56 * Math.PI) / 180) * Math.cos((27 * Math.PI) / 180)
     expect([lx, ly, lz].map((v) => Math.round(v * 100) / 100)).toEqual([-0.74, 0.45, 0.5])
+    // The light is fixed in the world (worldFixed 1), so it is given as a world direction: where that mockup light stands for
+    // a typical authored camera (azimuth 38, elevation 28), z up, the azimuth about z from +x: -34.9 and 39.4 degrees.
+    expect(p.light.worldFixed).toBe(1)
+    expect([p.light.azimuth, p.light.elevation]).toEqual([-35, 39])
+    const { right, up, forward } = screenBasis({ azimuth: 38, elevation: 28, zoom: 1 })
+    const world = [0, 1, 2].map((i) => lx * right[i] + ly * up[i] - lz * forward[i])
+    expect(Math.round((Math.atan2(world[1], world[0]) * 180) / Math.PI)).toBe(-35)
+    expect(Math.round((Math.asin(world[2]) * 180) / Math.PI)).toBe(39)
     // the mockup's plan values: the half-tone ramp 0.52..0.72, the light ramp 0.85..0.94, the core 0.24, the cast shadow 0.32
     expect([p.value.halfLo, p.value.halfHi, p.value.lightLo, p.value.lightHi, p.value.corePlateau, p.value.castPlateau]).toEqual([0.52, 0.72, 0.85, 0.94, 0.24, 0.32])
     // the mockup painted on fine primed linen, and the weave reads at half the generator's default texture
