@@ -3,6 +3,7 @@ import { buildParticles, paintFrame } from './model/index'
 import { arrowMark, flatColours, lineMark, makeGBuffer, paintView, pointMark, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './model/testing'
 import { DEFAULT_PAINT_PARAMS } from './params'
 import { reprojectStrokes } from './reproject'
+import { Scratch } from './scratch'
 import { PATH_POINTS, ROLES, type StrokeBatch } from './types'
 
 // A frame's strokes in another view, without the model: the paint rides the object while the camera moves.
@@ -216,5 +217,55 @@ describe('reprojectStrokes', () => {
     times.sort((a, b) => a - b)
     expect(times[3]).toBeLessThan(40)
   })
-})
 
+  it('leaves an edge stroke only the share of its alpha the caller says is left (its base’s age), and touches nothing else', () => {
+    const { view, batch } = frame()
+    const to = paintView({ width: 640, height: 480, azimuth: 40, elevation: 25, zoom: 120 })
+    const plain = reprojectStrokes(batch, view, to, P)
+    const half = reprojectStrokes(batch, view, to, P, 0.5)
+    const none = reprojectStrokes(batch, view, to, P, 0)
+    const edges = Array.from({ length: batch.count }, (_, i) => i).filter((i) => ROLES[batch.role[i]] === 'edge')
+    expect(edges.length).toBeGreaterThan(10)
+    expect(edges.some((i) => plain.alpha[i] > 0.3)).toBe(true)
+    for (let i = 0; i < batch.count; i++) {
+      if (ROLES[batch.role[i]] === 'edge') {
+        expect(half.alpha[i]).toBeCloseTo(0.5 * plain.alpha[i], 7)
+        expect(none.alpha[i]).toBe(0)
+      } else {
+        // the strokes of the surface, and the lines, are as they were: they are where the surface is, in any view
+        expect(half.alpha[i]).toBe(plain.alpha[i])
+        expect(none.alpha[i]).toBe(plain.alpha[i])
+      }
+    }
+    // the path is the same: only how much of the edge is shown changes
+    expect(Array.from(none.path)).toEqual(Array.from(plain.path))
+    // and no argument is no fade
+    expect(Array.from(reprojectStrokes(batch, view, to, P, 1).alpha)).toEqual(Array.from(plain.alpha))
+  })
+
+  it('given a scratch, makes the same strokes in arrays it keeps, written afresh each call, and never touches the batch’s own', () => {
+    const { view, batch } = frame()
+    const to = paintView({ width: 640, height: 480, azimuth: 40, elevation: 25, zoom: 120 })
+    const to2 = paintView({ width: 640, height: 480, azimuth: 55, elevation: 25, zoom: 120 })
+    const plain = reprojectStrokes(batch, view, to, P, 0.5)
+    const plain2 = reprojectStrokes(batch, view, to2, P, 1)
+    const own = [Array.from(batch.path), Array.from(batch.depth), Array.from(batch.alpha)]
+    const scratch = new Scratch()
+    const a = reprojectStrokes(batch, view, to, P, 0.5, scratch)
+    expect(Array.from(a.path)).toEqual(Array.from(plain.path))
+    expect(Array.from(a.depth)).toEqual(Array.from(plain.depth))
+    expect(Array.from(a.alpha)).toEqual(Array.from(plain.alpha))
+    expect(scratch.allocations).toBe(3)
+    // again, for another view: the same arrays, now holding that view's strokes (every element rewritten)
+    const b = reprojectStrokes(batch, view, to2, P, 1, scratch)
+    expect(b.path).toBe(a.path)
+    expect(b.alpha).toBe(a.alpha)
+    expect(Array.from(b.path)).toEqual(Array.from(plain2.path))
+    expect(Array.from(b.alpha)).toEqual(Array.from(plain2.alpha))
+    expect(scratch.allocations).toBe(3)
+    // what the batch holds is its own
+    expect([Array.from(batch.path), Array.from(batch.depth), Array.from(batch.alpha)]).toEqual(own)
+    expect(b.path).not.toBe(batch.path)
+    expect(b.colour).toBe(batch.colour)
+  })
+})

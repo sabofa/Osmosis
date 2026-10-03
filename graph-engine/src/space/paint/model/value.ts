@@ -18,13 +18,17 @@
 //                 bounce amount (0..1: the bounce, sky and ambient light the normal takes, less the occlusion) can
 //                 only choose a place between the core and reflectedMax: nothing can lift the shadow past the cap
 //                   reflectedMax = corePlateau + reflectedShare·(halfLo - corePlateau),   reflectedShare <= 0.9.
+//                 (A terminator softer than the default's pushes the lift out by the edge's extra half-width, so the
+//                 edge's foot does not run into it: the core is the darkest band of the form shadow at every softness.)
 //   terminator    the two meet in an edge centred on N·L = 0, terminatorSoftness wide: clearly defined, and
 //                 crisper than the turn to light and the lift to reflected light.
 //   cast shadow   castPlateau (never lighter than reflectedMax) away from the contact, castContact at it: the
 //                 occlusion, over its radius in px, takes it down. It takes over from the form where the key
-//                 light is occluded on a surface that faces it, and a pixel that is mostly cast (past the middle
-//                 of the fade) is never lighter than reflectedMax: the fade blends the light end toward the cap,
-//                 not toward the half-tone it lifted a cast shadow into.
+//                 light is occluded on a surface that faces it, from N·L 0 over CAST_FADE, and NEVER softened by
+//                 the terminator's band (a ground has no terminator at all: a flagged ground pixel is cast whole).
+//                 A pixel that is mostly cast (the light weight under a half) is never lighter than
+//                 reflectedMax: the fade blends the light end toward the cap, not toward the half-tone it lifted
+//                 a cast shadow into.
 // The value curve (Ben's) is applied last, to the finished plan value; it keeps the families in order for any
 // curve that does not decrease (a curve that rises and falls can reorder them: that is his own choice).
 //
@@ -156,22 +160,42 @@ export const FAM_SHADOW = 1
 // The family of a zone: light, half-tone (and the highlight, which is the light zone) against core, reflected, cast.
 export const zoneFamily = (zone: number): number => (zone === Z_LIGHT || zone === Z_HALF ? FAM_LIGHT : FAM_SHADOW)
 
-// A cast shadow is told from the terminator by its N·L: past the soft edge, then this much more to take over (the
-// renderer flags N·L <= 0 as shadow, and the shadow map's bias at a graze must not paint a ragged edge).
+// A cast shadow is told from the terminator by its N·L: from N·L 0 up, this much more to take over (the renderer flags N·L <= 0 as
+// shadow, and the shadow map's bias at a graze must not paint a ragged edge). The start is FIXED at 0, whatever the terminator's softness:
+// a cast shadow is never softened by the terminator's band (it is a shadow where the key light is occluded, on a surface that faces the
+// light, and it is as dark at N·L 0.2 under a wide terminator as under a narrow one). Only the N·L <= 0 side is the terminator's.
 export const CAST_FADE = 0.08
 
-// The weight of the light family at a point: the light side of the terminator edge (centred on N·L = 0, ts wide), less
-// the cast shadow, which takes over past the edge (the renderer flags every N·L <= 0 as shadow, so the flag counts for
-// something only past it: then it fades in over CAST_FADE).
-export function lightWeight(ts: number, nl: number, shadow: boolean): number {
-  const wT = smooth(-ts / 2, ts / 2, nl)
-  return (1 - (shadow ? smooth(ts / 2, ts / 2 + CAST_FADE, nl) : 0)) * wT
+// The half-width of the default terminator's edge (terminatorSoftness 0.1): a softer edge than that pushes the reflected light's lift out by the
+// extra (planSample), and the figure's core band starts where the edge ends.
+const DEFAULT_EDGE_HALF = 0.05
+
+// The weight of the cast shadow at a point (the renderer's shadow flag is set for every N·L <= 0 and for the key light's occlusion). A
+// GROUND has no terminator (it is flat: its N·L is the light's own elevation), so a flagged ground pixel is cast at full weight. On a
+// figure the flag counts for something only past N·L 0, where it fades in over CAST_FADE.
+export function castWeight(nl: number, shadow: boolean, ground = false): number {
+  if (!shadow) return 0
+  return ground ? 1 : smooth(0, CAST_FADE, nl)
 }
 
+// The weight of the light family at a point: the light side of the terminator edge (centred on N·L = 0, ts wide), less
+// the cast shadow, which takes over from N·L 0 (castWeight).
+export function lightWeight(ts: number, nl: number, shadow: boolean, ground = false): number {
+  const wT = smooth(-ts / 2, ts / 2, nl)
+  return (1 - castWeight(nl, shadow, ground)) * wT
+}
 // Is the point in the light family: the weight of the light is over a half. (N·L <= 0 is the shadow family, and so is
 // a cast shadow, past the middle of its fade.)
-export const isLightFamily = (params: PaintParams, nl: number, shadow: boolean): boolean =>
-  lightWeight(Math.max(1e-4, params.value.terminatorSoftness), nl, shadow) > 0.5
+export const isLightFamily = (params: PaintParams, nl: number, shadow: boolean, ground = false): boolean =>
+  lightWeight(Math.max(1e-4, params.value.terminatorSoftness), nl, shadow, ground) > 0.5
+
+// The weight of the terminator's band at a point on a surface: 1 where the plan's own soft edge is at its middle, 0 at its edges
+// (|N·L| = ts / 2) and outside it. A surface stroke follows the plan's own value in the band, the plane's step outside it, and blends
+// between them across it (the underpainting's lattice samples do not: its band pixels are made at the plan's own value already). A ground has no terminator, and a cast shadow is never softened by the band.
+export function bandFollow(ts: number, nl: number, shadow = false, ground = false): number {
+  if (ground) return 0
+  return (1 - smooth(0, Math.max(1e-4, ts) / 2, Math.abs(nl))) * (1 - castWeight(nl, shadow))
+}
 
 export interface ZoneSample {
   // Weights of light, half-tone, core, reflected, cast; they sum to 1.
@@ -201,6 +225,7 @@ export const CONTACT_FULL = 0.08
 // the key light's occlusion); n: the world normal; ao: the occlusion 0..1.
 export function planSample(
   params: PaintParams, curves: CompiledCurves, nl: number, shadow: boolean, nx: number, ny: number, nz: number, ao: number, out: ZoneSample,
+  ground = false,
 ): ZoneSample {
   const vp = params.value
   const ev = effectiveValuesInto(params, EV)
@@ -214,14 +239,16 @@ export function planSample(
   const contact = clamp((params.environment.occlusion * ao) / CONTACT_FULL, 0, 1)
 
   // -- the shadow family: the core, then the reflected light --
-  const into = Math.max(0, -nl)
+  // (the core band starts where the terminator's edge ends on the shadow side: a softer terminator than the default's pushes the
+  // reflected light's lift out by the extra half-width, or the lift would reach the edge's own foot and wash the core out)
+  const into = Math.max(0, -nl - Math.max(0, ts / 2 - DEFAULT_EDGE_HALF))
   const reflect = smooth(vp.coreWidth, vp.coreWidth + rs, into)
   const amount = bounceAmount(params, nx, ny, nz) * (1 - contact)
   const lift = amount * reflect
   const uForm = core + (rMax - core) * lift
   // -- the cast shadow, darkest at the contact --
   const uCast = lerp(ev.castPlateau, ev.castContact, contact)
-  const wCast = shadow ? smooth(ts / 2, ts / 2 + CAST_FADE, nl) : 0
+  const wCast = castWeight(nl, shadow, ground)
 
   // -- the light family: the half-tone ramp, the soft turn to light, the light ramp --
   const n = clamp(curves.lightResponse(Math.max(0, nl)) * params.light.intensity, 0, 1)
@@ -236,10 +263,14 @@ export function planSample(
   // -- the terminator: the form shadow gives way to the light family across an edge centred on N·L = 0 --
   const wT = smooth(-ts / 2, ts / 2, nl)
   const uFormed = lerp(uForm, uLight, wT)
-  // -- the cast shadow takes over from the form past the edge. Over its fade the light end of the blend moves to the
+  // -- the cast shadow takes over from the form from N·L 0. Over its fade the light end of the blend moves to the
   // cap (a cast shadow is a shadow-family value: it never rises above reflectedMax, which the half-tone it fades
-  // from would have lifted it to), fully by the middle of the fade, where the cast shadow is the dominant zone --
-  const uFrom = lerp(uFormed, Math.min(uFormed, rMax), Math.min(1, 2 * wCast))
+  // from would have lifted it to), fully by the middle of the fade, where the cast shadow is the dominant zone: where
+  // the terminator's edge is crisp that is a cast weight of a half, and where it is wide (the light weight is the
+  // edge's less the cast's) it is the cast weight that takes the light weight under a half, which is where a pixel
+  // changes family --
+  const toCap = wCast > 0 ? Math.min(1, wCast / Math.max(1e-9, 1 - 0.5 / Math.max(wT, 0.5))) : 0
+  const uFrom = lerp(uFormed, Math.min(uFormed, rMax), toCap)
   out.u = clamp(curves.value(clamp(lerp(uFrom, uCast, wCast), 0, 1)), 0, 1)
 
   const lit = (1 - wCast) * wT
@@ -448,7 +479,7 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
       fam[i] = FAM_LIGHT
       continue
     }
-    planSample(params, curves, ndl, shadow, nx, ny, nz, ao[i], zs)
+    planSample(params, curves, ndl, shadow, nx, ny, nz, ao[i], zs, fc.ground[m] === 1)
     value[i] = zs.u
     u[i] = zs.u
     zone[i] = zs.zone

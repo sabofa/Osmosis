@@ -29,8 +29,7 @@ import type { PaintFigure } from './paintLabFigures'
 // The unit direction TOWARD the key light, in world space, from the light's
 // azimuth (degrees, + = toward the viewer's left) and elevation (+ = above),
 // both measured against the view. 0, 0 is a light at the eye; so the light
-// turns with the camera, as it does for a painter who moves around the model
-// and keeps the lamp where it was.
+// turns with the camera (light.worldFixed 0).
 export function lightDirection(basis: ScreenBasis, azimuth: number, elevation: number): Vec3 {
   const ca = Math.cos(azimuth * DEG)
   const sa = Math.sin(azimuth * DEG)
@@ -45,12 +44,27 @@ export function lightDirection(basis: ScreenBasis, azimuth: number, elevation: n
   ]
 }
 
+// The unit direction TOWARD the key light, in world space, for a light fixed in the world (light.worldFixed 1): the
+// studio setup, a lamp that stays on the motif while the painter walks around it. z is up; the azimuth (degrees) is
+// about the z axis from +x toward +y, and the elevation is above the xy-plane, the turntable's own angles
+// (camera/turntable.ts eyeDirection): (0, 0) is +x, (90, 0) is +y and (0, 90) is (0, 0, 1), straight down on the figure.
+export function worldLightDirection(azimuth: number, elevation: number): Vec3 {
+  const ce = Math.cos(elevation * DEG)
+  return [ce * Math.cos(azimuth * DEG), ce * Math.sin(azimuth * DEG), Math.sin(elevation * DEG)]
+}
+
+// The key light's direction for the lab's light parameters: fixed in the world when `worldFixed` is on (1, half or
+// more), else relative to the view. `worldFixed` left out means relative.
+export function keyLightDirection(basis: ScreenBasis, light: { azimuth: number; elevation: number; worldFixed?: number }): Vec3 {
+  return (light.worldFixed ?? 0) >= 0.5 ? worldLightDirection(light.azimuth, light.elevation) : lightDirection(basis, light.azimuth, light.elevation)
+}
+
 // One frame's view for the engine from the space camera's matrices. `zoom` is how far in the camera is
 // against the figure's authored framing (the camera's zoom over the authored zoom: 1 at the authored view,
 // 3 for a 3x close-up); the painter makes its brush follow it (PaintView.zoom). Left out it means 1.
 export function buildPaintView(
   camera: CameraMatrices,
-  light: { azimuth: number; elevation: number },
+  light: { azimuth: number; elevation: number; worldFixed?: number },
   pixelRatio: number,
   dragging: boolean,
   zoom?: number,
@@ -61,7 +75,7 @@ export function buildPaintView(
     view: Float32Array.from(camera.view),
     eye: [camera.eye[0], camera.eye[1], camera.eye[2]],
     viewDir: [forward[0], forward[1], forward[2]],
-    lightDir: [...lightDirection(camera.basis, light.azimuth, light.elevation)],
+    lightDir: [...keyLightDirection(camera.basis, light)],
     width: camera.viewport.width,
     height: camera.viewport.height,
     pixelRatio,

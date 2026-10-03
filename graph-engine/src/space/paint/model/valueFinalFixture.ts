@@ -17,7 +17,7 @@ import { dabStrokes, particleStrokes, scumbleMask } from './roles'
 import { packStrokes, type PaintCtx } from './strokes'
 import { flatColours, lineMark, makeGBuffer, paintView, pixelRay, sceneOf, sphereGBuffer, sphereMesh, tableMesh, type ViewOpts } from './testing'
 import { buildUnderpaintField, underpaintImage } from './underpaint'
-import { CAST_FADE, rawLitValue } from './value'
+import { CAST_FADE, FAM_SHADOW, rawLitValue } from './value'
 import { gIndex } from './view'
 
 export const CANVAS = lchToLab(0.9, 0.01, 85)
@@ -179,9 +179,17 @@ export interface Spread {
   nCast: number
 }
 
+// From here (N·L) up, a pixel the renderer flags as shadow is the shadow family's at every terminator softness: the middle of a cast shadow's
+// fade (N·L CAST_FADE / 2, where the cast weight is a half). The pixels the fixture leaves out of both families, besides the terminator's own
+// edge (|N·L| under half the softness, unflagged), are the flagged ones under it: the first half of the fade, where the cast weight is under
+// a half and the shadow map's bias at a graze makes the flag ragged. (A cast shadow is never softened by the terminator's band: it was
+// left out under half the softness plus the whole fade, which is every cast shadow a wide terminator reaches.)
+export const CAST_MIDDLE = CAST_FADE / 2
+
 // The darkest light-family stroke against the lightest shadow-family stroke on the sphere (the table's own strokes are of another local colour).
-// The terminator's own soft edge, and the fade a cast shadow takes over in, belong to neither. The shadow family includes the edge strokes that
-// lie wholly in it; the light family is the surface strokes (a found edge is a painter's dark accent on the lit side, darker than its side).
+// The terminator's own soft edge, and the first half of a cast shadow's fade (CAST_MIDDLE), belong to neither. The shadow family includes the
+// edge strokes that lie wholly in it; the light family is the surface strokes (a found edge is a painter's dark accent on the lit side,
+// darker than its side).
 export function spreadOf(m: Made, params: PaintParams, roles: string[] = []): Spread {
   const ts = params.value.terminatorSoftness
   const s: Spread = { maxShadow: -1, minLight: 2, nShadow: 0, nLight: 0, nEdgeShadow: 0, maxShadowEdge: -1, canvasReach: 9, nLine: 0, nCast: 0 }
@@ -223,7 +231,7 @@ export function spreadOf(m: Made, params: PaintParams, roles: string[] = []): Sp
     const nl = m.an.plan.nl[gi]
     const shadow = m.an.fc.g.shadow[gi] === 1
     const L = lightnessOf(m.batch, i)
-    if (nl <= -ts / 2 || (shadow && nl >= ts / 2 + CAST_FADE)) {
+    if (nl <= -ts / 2 || (shadow && nl >= CAST_MIDDLE)) {
       s.nShadow++
       if (nl > 0) s.nCast++
       s.maxShadow = Math.max(s.maxShadow, L)
@@ -236,7 +244,7 @@ export function spreadOf(m: Made, params: PaintParams, roles: string[] = []): Sp
 }
 
 // The same for the underpainting, per pixel of the sphere: the lightest shadow pixel against the darkest half-tone pixel (outside the
-// terminator's own soft band, and the fade a cast shadow takes over in).
+// terminator's own soft band, and the first half of the fade a cast shadow takes over in).
 export function underpaintSpread(m: Made, params: PaintParams): { maxShadow: number; minLight: number; nShadow: number; nLight: number } {
   const ts = params.value.terminatorSoftness
   const under = underpaintImage(buildUnderpaintField(m.an, m.g), params, m.an.env)
@@ -247,7 +255,7 @@ export function underpaintSpread(m: Made, params: PaintParams): { maxShadow: num
     const nl = m.g.normal[3 * i] * L[0] + m.g.normal[3 * i + 1] * L[1] + m.g.normal[3 * i + 2] * L[2]
     const shadow = m.g.shadow[i] === 1
     const lightness = linearToOklab(under[3 * i], under[3 * i + 1], under[3 * i + 2])[0]
-    if (nl <= -ts / 2 || (shadow && nl >= ts / 2 + CAST_FADE)) {
+    if (nl <= -ts / 2 || (shadow && nl >= CAST_MIDDLE)) {
       out.nShadow++
       out.maxShadow = Math.max(out.maxShadow, lightness)
     } else if (!shadow && nl >= ts / 2) {
@@ -272,6 +280,44 @@ export function viewSignature(opts: Opts, size: readonly number[] = [320, 240, 6
     if (g.normal[3 * i] * L[0] + g.normal[3 * i + 1] * L[1] + g.normal[3 * i + 2] * L[2] <= 0) away++
   }
   return [away / sphere, L[2]]
+}
+
+// How far above the terminator (N·L) a shadow flag stops being the terminator's own: the shadow map's bias at a graze is of this size, so a
+// flagged pixel under it cannot be told from the form shadow's edge.
+export const FLAG_GRAZE = 0.02
+
+export interface CastShare {
+  // The shadow-flagged pixels of a figure (mark 0) past FLAG_GRAZE above the terminator, and the flagged pixels of any ground (the table), with
+  // how many of each the plan keeps in the shadow family AND under the cap (plan.capU). `all` is every flagged figure pixel above N·L 0.
+  figure: number
+  figureOk: number
+  ground: number
+  groundOk: number
+  all: number
+  allOk: number
+}
+
+// The share of the shadow-flagged pixels the plan makes a cast shadow of: in the shadow family and no lighter than the cap, at any softness.
+export function castShare(m: Made): CastShare {
+  const { plan, fc } = m.an
+  const out: CastShare = { figure: 0, figureOk: 0, ground: 0, groundOk: 0, all: 0, allOk: 0 }
+  for (let i = 0; i < plan.width * plan.height; i++) {
+    const mark = fc.g.mark[i]
+    if (mark < 0 || fc.g.shadow[i] !== 1) continue
+    const ok = plan.fam[i] === FAM_SHADOW && plan.u[i] <= plan.capU + 1e-6
+    if (fc.ground[mark] === 1) {
+      out.ground++
+      if (ok) out.groundOk++
+    } else if (plan.nl[i] > 0) {
+      out.all++
+      if (ok) out.allOk++
+      if (plan.nl[i] > FLAG_GRAZE) {
+        out.figure++
+        if (ok) out.figureOk++
+      }
+    }
+  }
+  return out
 }
 
 // ---- the grid ----
@@ -318,6 +364,8 @@ export interface GridResult {
   fewestLines: number
   // How many frames of each view had both families in strokes and in pixels to compare (the others are all light or all shadow).
   comparedPerView: number[]
+  // How many frames were made at all: a totals test that sees none (every frame filtered out) passes on empty data otherwise.
+  frames: number
 }
 
 // A result with nothing in it yet, and the sum of two (the least of the margins and counts, the sum of the compared frames): a grid cut into one test
@@ -325,7 +373,7 @@ export interface GridResult {
 export function emptyGrid(): GridResult {
   return {
     strokeMargin: Infinity, strokeAt: '', underMargin: Infinity, underAt: '', fewestShadow: Infinity, fewestLight: Infinity,
-    fewestUnderShadow: Infinity, fewestUnderLight: Infinity, canvasReach: 9, fewestEdgeShadow: Infinity, fewestLines: Infinity, comparedPerView: [],
+    fewestUnderShadow: Infinity, fewestUnderLight: Infinity, canvasReach: 9, fewestEdgeShadow: Infinity, fewestLines: Infinity, comparedPerView: [], frames: 0,
   }
 }
 export function mergeGrid(into: GridResult, r: GridResult): void {
@@ -338,6 +386,7 @@ export function mergeGrid(into: GridResult, r: GridResult): void {
   into.canvasReach = Math.min(into.canvasReach, r.canvasReach)
   into.fewestEdgeShadow = Math.min(into.fewestEdgeShadow, r.fewestEdgeShadow)
   into.fewestLines = Math.min(into.fewestLines, r.fewestLines)
+  into.frames += r.frames
   r.comparedPerView.forEach((n, vi) => { into.comparedPerView[vi] = (into.comparedPerView[vi] ?? 0) + (n ?? 0) })
 }
 
@@ -357,6 +406,7 @@ export function gridMargin(overrides: Partial<PaintParams>, seeds: number[], vie
         const m = made(params, local, v.opts, true)
         const s = spreadOf(m, params)
         const u = underpaintSpread(m, params)
+        r.frames++
         r.fewestLines = Math.min(r.fewestLines, s.nLine)
         r.canvasReach = Math.min(r.canvasReach, s.canvasReach)
         r.comparedPerView[vi] ??= 0

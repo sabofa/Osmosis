@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PAINT_PARAMS, PARAM_SCHEMA, resolvePaintParams, type PaintParams } from '../params'
-import type { Oklab } from '../types'
+import { ROLES, type Oklab } from '../types'
 import { linearToOklab } from './colour'
 import { terminatorEdgeScale } from './edges'
 import { compileCurves } from './respond'
 import { buildUnderpaintField, FAM_BAND, underpaintImage } from './underpaint'
-import { newZoneSample, planSample, Z_CORE, Z_HALF, Z_LIGHT, Z_REFLECTED } from './value'
-import { breathe, LOCALS, made, spreadOf, underpaintSpread, GRID_VIEWS, type GridView } from './valueFinalFixture'
+import { effectiveValues, newZoneSample, planSample, Z_CORE, Z_HALF, Z_LIGHT, Z_REFLECTED } from './value'
+import { gIndex } from './view'
+import { breathe, LOCALS, lightnessOf, made, spreadOf, underpaintSpread, GRID_VIEWS, type GridView } from './valueFinalFixture'
 
 // Whole frames of the model are heavy and the test machine is shared: give every test room, and let the worker's event loop turn between them.
 vi.setConfig({ testTimeout: 600_000 })
@@ -239,4 +240,102 @@ describe('the order of the families outside a soft terminator’s band', () => {
       })
     }
   }
+})
+
+// The strokes' own value across the terminator. A surface stroke is the plane's mean plus 0.45 of its own gradient, and two planes meet at the
+// terminator with a step between their means: the underpainting followed the plan's soft edge, the strokes kept that step. Inside the band the
+// stroke now follows the plan's own value (and the role's own lightening fades with it), the plane's step outside it, blending across.
+describe('the strokes through a soft terminator', () => {
+  const bin = (nl: number) => Math.max(0, Math.min(19, Math.floor((nl + 1) * 10)))
+  // the step from the bin of N·L -0.1..0 to the bin 0..0.1: the plan's value (every pixel), and the surface strokes' value and lightness (the
+  // strokes of the roles that lie on a surface, in the figure's own colour; at least 8 in each bin)
+  const stepAcross = (ts: number, seed: number, v: GridView) => {
+    const m = made(withTs(ts, { seed }), GREY, v.opts, false)
+    const { plan, fc } = m.an
+    const sumU = new Array<number>(20).fill(0)
+    const sumL = new Array<number>(20).fill(0)
+    const nS = new Array<number>(20).fill(0)
+    const sumP = new Array<number>(20).fill(0)
+    const nP = new Array<number>(20).fill(0)
+    for (let i = 0; i < m.batch.count; i++) {
+      const d = m.an.drafts[i]
+      const role = ROLES[d.role]
+      const own = d.colour?.a
+      if (role === 'edge' || role === 'line' || !own || Array.isArray(own) || (own as { ground: boolean }).ground) continue
+      const gi = gIndex(fc, d.mx, d.my)
+      if (gi < 0 || fc.g.mark[gi] !== 0) continue
+      const b = bin(plan.nl[gi])
+      sumU[b] += d.u
+      sumL[b] += lightnessOf(m.batch, i)
+      nS[b]++
+    }
+    for (let i = 0; i < plan.width * plan.height; i++) {
+      if (fc.g.mark[i] !== 0) continue
+      const b = bin(plan.nl[i])
+      sumP[b] += plan.u[i]
+      nP[b]++
+    }
+    expect(Math.min(nS[9], nS[10]), `strokes in the two bins about N·L 0 (softness ${ts}, seed ${seed}, ${v.name})`).toBeGreaterThanOrEqual(8)
+    return {
+      plan: sumP[10] / nP[10] - sumP[9] / nP[9],
+      strokeU: sumU[10] / nS[10] - sumU[9] / nS[9],
+      strokeL: sumL[10] / nS[10] - sumL[9] / nS[9],
+    }
+  }
+
+  for (const ts of [0.6, 1]) {
+    for (const vi of [0, 2, 4]) {
+      it(`steps across N·L 0 as the plan does, within 1.5 times its step, in value and in lightness (softness ${ts}; ${GRID_VIEWS[vi].name})`, () => {
+        for (const seed of [1, 2]) {
+          const r = stepAcross(ts, seed, GRID_VIEWS[vi])
+          expect(r.plan, 'the plan has a step to follow').toBeGreaterThan(0.03)
+          // (without the following the strokes' step is the planes': two times the plan's at 0.6, two and a half at 1.0)
+          expect(r.strokeU, `seed ${seed}: the strokes' value`).toBeLessThanOrEqual(1.5 * r.plan)
+          expect(r.strokeL, `seed ${seed}: the strokes' lightness`).toBeLessThanOrEqual(1.5 * r.plan)
+          expect(r.strokeU, `seed ${seed}: a step, not a ramp reversed`).toBeGreaterThan(0)
+        }
+      })
+    }
+  }
+})
+
+// The core: a soft terminator softens the way into the core shadow, but the core stays the darkest band of the form shadow (the painter's rule).
+// The reflected light's lift started at the core's own width from the terminator's CENTRE, so a wide edge (its foot at -ts/2) ran into the lift
+// and the darkest value of the form shadow was 0.264 at 1.0 against the core's 0.240.
+describe('the core shadow through a soft terminator', () => {
+  for (const ts of [0.1, 0.3, 0.6, 1]) {
+    it(`still reaches the core value in the form shadow (softness ${ts}): the darkest plan value on the shadow side is within 0.01 of it, in three views`, () => {
+      for (const vi of [0, 2, 4]) {
+        const params = withTs(ts)
+        const m = made(params, GREY, GRID_VIEWS[vi].opts, false)
+        const { plan, fc } = m.an
+        const coreU = plan.curves.value(effectiveValues(params).corePlateau)
+        let darkest = Infinity
+        let side = 0
+        for (let i = 0; i < plan.width * plan.height; i++) {
+          if (fc.g.mark[i] !== 0 || plan.nl[i] >= 0) continue
+          side++
+          darkest = Math.min(darkest, plan.u[i])
+        }
+        expect(side, `${GRID_VIEWS[vi].name}: pixels of the form shadow`).toBeGreaterThan(500)
+        expect(darkest, `${GRID_VIEWS[vi].name}: darkest ${darkest.toFixed(3)} against the core ${coreU.toFixed(3)}`).toBeLessThanOrEqual(coreU + 0.01)
+        expect(darkest).toBeGreaterThanOrEqual(coreU - 1e-6)
+      }
+    })
+  }
+
+  it('keeps the core plateau from the edge’s foot out to the core’s width past it, at softness 1 (the lift starts there), and as it was at the default', () => {
+    // the plan alone, along N·L, for an up-facing normal with a bounce amount (the lift is there): the core value from the edge's foot at -0.5
+    // to -0.64 (it started at -0.2 and the edge's foot at -0.5 was past it, so the lift had begun)
+    const at = (ts: number, nl: number) => {
+      const p = withTs(ts)
+      return planSample(p, compileCurves(p), nl, true, 0, 0, 1, 0, newZoneSample()).u
+    }
+    const core = compileCurves(withTs(1)).value(effectiveValues(withTs(1)).corePlateau)
+    for (const nl of [-0.5, -0.55, -0.6, -0.64]) expect(at(1, nl), `N·L ${nl}`).toBeCloseTo(core, 9)
+    expect(at(1, -0.9)).toBeGreaterThan(core + 0.02) // (and the reflected light is there past it)
+    // at the default the lift starts the core's own width from the centre, as it always did
+    expect(at(0.1, -0.2)).toBeCloseTo(core, 9)
+    expect(at(0.1, -0.5)).toBeGreaterThan(core + 0.02)
+  })
 })

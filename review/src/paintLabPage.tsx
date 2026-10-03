@@ -290,7 +290,7 @@ export function PaintLab() {
         </button>
         <div className="pl-spacer" />
         {tab === 'tune' ? (
-          <output className="pl-readout" aria-label="Frame rate and stroke count" title={readout ? `${readout.kind === 'colour' ? 'Colour-only frame' : readout.kind === 'repaint' ? 'Repainted frame (the same strokes)' : readout.kind === 'reproject' ? 'Re-projected frame (the last frame’s strokes through the new view)' : 'Full frame'}: G-buffer ${readout.gbufferMs.toFixed(0)} ms · model ${readout.modelMs.toFixed(0)} ms (in a worker) · particles ${readout.particlesMs.toFixed(0)} ms · paper ${readout.paperMs.toFixed(0)} ms · paint ${readout.paintMs.toFixed(0)} ms. The first number is the whole frame, request to picture.` : undefined}>
+          <output className="pl-readout" aria-label="Frame rate and stroke count" title={readout ? `${readout.kind === 'colour' ? 'Colour-only frame' : readout.kind === 'repaint' ? 'Repainted frame (the same strokes)' : readout.kind === 'reproject' ? 'Re-projected frame (the model’s newest frame’s strokes through the new view; the model keeps running behind a drag)' : 'Full frame'}: G-buffer ${readout.gbufferMs.toFixed(0)} ms · model ${readout.modelMs.toFixed(0)} ms (in a worker) · particles ${readout.particlesMs.toFixed(0)} ms · paper ${readout.paperMs.toFixed(0)} ms · paint ${readout.paintMs.toFixed(0)} ms. The first number is the whole frame, request to picture.` : undefined}>
             {readout ? (
               <>
                 <b>{Math.round(readout.fps)}</b> fps · {readout.ms.toFixed(1)} ms · <b>{readout.strokes.toLocaleString('en-US')}</b> strokes

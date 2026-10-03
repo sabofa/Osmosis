@@ -60,10 +60,17 @@ export interface PaintParams {
     edgeReachPx: number
   }
   light: {
-    // Key light relative to the camera: azimuth (deg, + = to the viewer's
-    // left) and elevation (deg, + = above) of the light direction.
+    // The key light's direction, as an azimuth (deg) and an elevation (deg, + = above).
+    //   worldFixed 1 (the default): placed in the WORLD, the painter's studio setup, a lamp that stays on the motif
+    //     while you walk around it. z is up; the azimuth is about the z axis from +x toward +y, and the elevation is
+    //     above the xy-plane: (0, 90) is (0, 0, 1), straight down on the figure. Orbiting moves the viewer, never the light.
+    //   worldFixed 0: relative to the camera, as it was: the azimuth is + = to the viewer's left and the elevation is
+    //     above the line of sight, so the light turns with the view.
+    // (Only the lab reads it, to make PaintView.lightDir; the shadow map, the G-buffer and the model all take that.
+    // The canvas's relief light, impasto.lightAzimuth, stays on the screen in both: the canvas is the screen.)
     azimuth: number
     elevation: number
+    worldFixed: number
     intensity: number
     ambient: number
     // Sky term on up-facing normals, bounce term on down-facing normals.
@@ -257,10 +264,13 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
     formBandNL: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
     glazeBelow: 0.4, reflectedMin: 0.04, edgeMinContrast: 0.05, edgeReachPx: 20,
   },
-  // The key light is the mockup's, camera-relative: from 56 degrees to the viewer's left and 27 up (its CAMLIGHT
-  // (-0.74, 0.45, 0.50) in screen right, up and toward-the-viewer). A light higher and nearer the view than that
-  // puts most of a form in the light zone, and the picture reads pale.
-  light: { azimuth: 56, elevation: 27, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
+  // The key light is the mockup's: from 56 degrees to the viewer's left and 27 up (its CAMLIGHT (-0.74, 0.45, 0.50) in
+  // screen right, up and toward-the-viewer). A light higher and nearer the view than that puts most of a form in the
+  // light zone, and the picture reads pale. It is fixed in the world now (worldFixed 1), so the same lamp is given as a
+  // world direction: the one the mockup's light has at a typical authored camera (azimuth 38, elevation 28, which puts
+  // it at 35 degrees clockwise of +x seen from above, 39 up), so a figure at its authored view is lit as it was. A
+  // camera-relative light (worldFixed 0) wants its own 56 and 27.
+  light: { azimuth: -35, elevation: 39, worldFixed: 1, intensity: 1, ambient: 0.18, sky: 0.12, bounce: 0.1, shadows: 1 },
   value: {
     halfLo: 0.52, halfHi: 0.72, lightLo: 0.85, lightHi: 0.94, lightTurn: 0.6, lightSoftness: 0.5,
     terminatorSoftness: 0.1, coreWidth: 0.2, corePlateau: 0.24, reflectedShare: 0.4, reflectedSoftness: 0.35,
@@ -337,7 +347,8 @@ const KINDS = ['internal', 'silhouette', 'shadow']
 
 export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'seed', label: 'Seed', group: 'General', min: 1, max: 999, step: 1 },
-  { path: 'light.azimuth', label: 'Azimuth (° vs view)', group: 'Light', min: -180, max: 180, step: 1 },
+  { path: 'light.worldFixed', label: 'Light fixed in the world', group: 'Light', min: 0, max: 1, step: 1 },
+  { path: 'light.azimuth', label: 'Azimuth (°)', group: 'Light', min: -180, max: 180, step: 1 },
   { path: 'light.elevation', label: 'Elevation (°)', group: 'Light', min: -10, max: 90, step: 1 },
   { path: 'light.intensity', label: 'Intensity', group: 'Light', min: 0, max: 2, step: 0.01 },
   { path: 'light.ambient', label: 'Ambient', group: 'Light', min: 0, max: 1, step: 0.01 },

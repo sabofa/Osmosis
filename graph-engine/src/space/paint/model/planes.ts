@@ -307,9 +307,12 @@ export function segmentPlanes(fc: FrameCtx, plan: PlanMap, curve: Curve): PlaneM
 
 // A stroke's value: the plane's mean plus planeGradient of its own gradient
 // (`u` is the plan value where the stroke stands). The caller holds the result inside the pixel's family
-// (value.ts holdFamily): the plane's mean may belong to a neighbour pixel's side of the terminator's edge.
-export function stepValue(map: PlaneMap, planeId: number, u: number, planeGradient: number): number {
+// (value.ts holdFamily): the plane's mean may belong to a neighbour pixel's side of the terminator's edge. `follow` (value.ts
+// bandFollow, 0..1) takes the stroke from the plane's step to the plan's own value: 1 in the middle of the terminator's soft edge,
+// where a plane's step would be a step across it, falling to 0 at the edge's two sides.
+export function stepValue(map: PlaneMap, planeId: number, u: number, planeGradient: number, follow = 0): number {
   if (planeId < 0) return u
   const pu = map.planes[planeId].u
-  return pu + planeGradient * (u - pu)
+  const stepped = pu + planeGradient * (u - pu)
+  return follow > 0 ? stepped + follow * (u - stepped) : stepped
 }
