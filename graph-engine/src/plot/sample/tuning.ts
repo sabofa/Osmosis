@@ -143,6 +143,25 @@ export const LIMITS = {
   noiseDrop: 6,
 }
 
+// Assembling a curve (curve.ts).
+export const CURVE = {
+  // A one-sided limit from limits.ts is the curve's value at the last offset it looked at
+  // (6e-9 from the spot in a 20-unit view): right to far under a pixel and not to the digits
+  // (x + 1 at 0 reads 1.000000006). The ends the sampler marks, and the points it anchors a chain
+  // at, are exact, so a jump's side and a domain edge's limit are read once more this many
+  // locator tolerances (LOCATE.tolRel) from the spot: the located zero is within one tolerance of
+  // the real one, so a sample 4 away is on the side it is meant for, and its error (the curve's
+  // slope times 4e-12) is under any digit a mark is read to. The new reading is taken only if it
+  // agrees with the old one, so a function whose rounding noise is loud that close in keeps the
+  // limit it had.
+  settleTols: 4,
+  // A polar or parametric curve has no view span to lay a start grid along: its parameter range
+  // is the author's. The grid is sized as if the path were this many view widths long (so
+  // 1.5 widths of start-grid intervals, and never fewer than CORE.minStartIntervals): a circle
+  // or a loop winds, so its path is longer than the width it spans.
+  pathPerWidth: 1.5,
+}
+
 // The adaptive core (adaptive.ts): every number of the screen-space subdivision. Two
 // presets share the shape: FULL for a settled view, COARSE for one being dragged (the
 // interaction budget), which draws the same curve a little looser and spends a quarter

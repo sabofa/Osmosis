@@ -6,7 +6,7 @@
 import { compileScalar } from '../../math/compile'
 import { compileInterval, iv } from '../../math/interval'
 import type { MathScope } from '../../math/scope'
-import { parseExprString } from '../../parser/parseExpr'
+import { parseConditionString, parseExprString } from '../../parser/parseExpr'
 import { parseSpec } from '../../parser/parseSpec'
 import type { Expr } from '../../parser/types'
 import { buildPlotScope } from '../scope'
@@ -17,6 +17,12 @@ import type { CurveFns, EvalCounter, PointFn, Screen } from './types'
 
 export function expr(text: string): Expr {
   return parseExprString(text)
+}
+
+// A condition ("0 < x <= 3", "x != 1") as the Expr a domain is: expr() takes only
+// expressions, and a bare comparison is not one.
+export function condition(text: string): Expr {
+  return parseConditionString(text)
 }
 
 // The curve y = f(x) as a PointFn: the parameter is x, the value is y.
