@@ -142,3 +142,63 @@ export const LIMITS = {
   // dropping changes nothing.
   noiseDrop: 6,
 }
+
+// The adaptive core (adaptive.ts): every number of the screen-space subdivision. Two
+// presets share the shape: FULL for a settled view, COARSE for one being dragged (the
+// interaction budget), which draws the same curve a little looser and spends a quarter
+// of the evaluations.
+export interface Tuning {
+  // One start sample per this many screen px of parameter range: the coarse floor every
+  // curve is drawn from, and the spacing a feature narrower than it must be caught by
+  // the twin (the spike test below) instead of by sampling.
+  startPx: number
+  // An interval is flat when its parameter midpoint is within this many px of the chord's
+  // midpoint (so within it of the chord). A quarter of a pixel is under the width of the
+  // stroke, so a polyline of such chords reads as a curve.
+  flatPx: number
+  // No accepted chord is longer than this many px, so a curve's smooth bends are drawn
+  // by enough segments and a slowly varying curve is not one long line.
+  maxSegPx: number
+  // An interval this narrow (in px of parameter range) is not bisected any further. At
+  // 1/16 px a steep curve may take a long chord: steepness never breaks a curve.
+  floorPx: number
+  // Two ends this close on screen, the twin unable to certify the interval, are connected
+  // if the jump test shows the gap closing; a pixel is what the eye can tell apart.
+  gapPx: number
+  // The jump test: this many successive halvings (3 take a 1 px gap to 1/8 px), keeping
+  // the half with the larger gap, and each gap must be at most halvingShrink times the
+  // one before. A continuous seam halves its gap (0.5 to 0.71); a jump keeps it (1.0).
+  halvings: number
+  halvingShrink: number
+  // The spike test: a certified interval is flat only if the twin's enclosure of it is
+  // no taller or wider than spikeFactor times the span the three samples cover, plus
+  // spikeSlackPx. A spike narrower than the sample spacing shows in the enclosure and
+  // nowhere in the samples; the slack is for the twin's looseness over a flat interval.
+  spikeFactor: number
+  spikeSlackPx: number
+  // The clip box is the view widened by this fraction of its size on each side: a curve
+  // leaves the picture, not the sampled region, at the edge you can see.
+  overscan: number
+  // Evaluations the whole statement may spend (counted over locating, classifying and
+  // sampling). Past either, refinement stops: the start grid is still drawn, and an
+  // interval is connected only if the twin certified it.
+  budget: { points: number; intervals: number }
+}
+
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, spikeFactor: 8, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, budget: { points: 15000, intervals: 7500 } }
+
+// The parts of the core that are not a quality knob, so not in Tuning but still numbers
+// that were chosen.
+export const CORE = {
+  // The start grid has at least this many intervals, however short the range is on screen.
+  minStartIntervals: 8,
+  // An interval at most this wide (px) that is still unresolved is a column of a band
+  // (the oscillation hook, adaptive.ts bandColumn).
+  bandColumnPx: 1,
+  // The most halvings of an edge search, between a defined end and an undefined one. The
+  // adjacent doubles are usually reached first; this stops a search towards 0, where
+  // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
+  // far under any screen.
+  edgeSteps: 64,
+}
