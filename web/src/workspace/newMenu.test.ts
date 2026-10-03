@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { newOptions } from './newMenu'
+import { mayHold, newOptions } from './newMenu'
 
 const md = { type: 'markdown', label: 'Markdown', newBody: '' }
 const graph = { type: 'graph', label: 'Graph' } // no newBody: not offered under "New"
@@ -35,5 +35,16 @@ describe('newOptions: one entry per registered file type that says how a new one
   })
   it('offers no file entry at all when no type can be created, but still the containers', () => {
     expect(keys('track', [graph])).toEqual(['folder', 'course', 'track'])
+  })
+})
+
+describe('mayHold: the same matrix, asked of one pair', () => {
+  it('track holds track, course, folder, file; course holds folder, file; folder holds course, folder, file; file holds nothing', () => {
+    const kinds = ['track', 'course', 'folder', 'file'] as const
+    const holds = (c: (typeof kinds)[number]) => kinds.filter((k) => mayHold(c, k))
+    expect(holds('track')).toEqual(['track', 'course', 'folder', 'file'])
+    expect(holds('course')).toEqual(['folder', 'file'])
+    expect(holds('folder')).toEqual(['course', 'folder', 'file'])
+    expect(holds('file')).toEqual([])
   })
 })

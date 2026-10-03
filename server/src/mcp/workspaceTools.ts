@@ -112,8 +112,10 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
         "Create a track, course, folder or file, and with container_id place it there in the same call. What may hold what: a track holds " +
         "tracks, courses, folders and files; a course holds folders and files; a folder holds courses, folders and files; a file holds " +
         "nothing. For a file pass `type` (\"markdown\" for notes and documents, \"graph\" for a graph spec) and optionally `body`. " +
-        "`name` is what the item is called inside that container (default: the title); names are unique among siblings, and a clash " +
-        "says which name is free. The unit's USERNOTES file is a markdown file in the unit's folder: create it once, then ws_append to it.",
+        "`name` is what the item is called inside that container (default: the title); names are unique among siblings. If the name is " +
+        "taken (name_taken), that node probably already exists: ws_list the container and use it. For a unit's USERNOTES, ws_append to " +
+        "the existing file. Never create a numbered copy. The unit's USERNOTES file is a markdown file in the unit's folder: create it " +
+        "once, then ws_append to it.",
       inputSchema: {
         kind: kindShape,
         title: z.string().describe("The item's title, and its default name wherever it is placed. No \"/\"."),

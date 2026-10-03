@@ -4,8 +4,21 @@ import { BookIcon, ChevronDownIcon, ChevronRightIcon, CompassIcon, FolderIcon, P
 import { createUnder } from './create'
 import { listWebFileTypes, webFileType } from './fileTypes'
 import { newOptions, type NewOption } from './newMenu'
+import PlaceIn from './PlaceIn'
+import { placeWithFallback, type PlaceTarget } from './placing'
 import type { RowModel } from './rows'
-import { getChildren, getNodeDetail, removePlacement, renamePlacement, type ChildRow, type NodeSummary } from './wsApi'
+import {
+  KIND_TAGS,
+  getChildren,
+  getNodeDetail,
+  placeNode,
+  removePlacement,
+  renamePlacement,
+  setKindTag,
+  type ChildRow,
+  type KindTag,
+  type NodeSummary,
+} from './wsApi'
 
 // The tree of a container's children, loaded a level at a time as folders are
 // opened. A row is one placement: the name it shows is the name of that
@@ -13,6 +26,12 @@ import { getChildren, getNodeDetail, removePlacement, renamePlacement, type Chil
 // things in two places), and the row menu acts on that placement, which is why
 // "Remove from here" and "Destroy" are different entries: one takes this
 // placement away, the other takes the file out of every place it appears.
+
+// A button in the sidebar's notice line (Undo after Remove from here).
+export interface NoticeAction {
+  label: string
+  run(): void | Promise<void>
+}
 
 // What the rows need from the sidebar that owns them.
 export interface TreeCtx {
@@ -23,11 +42,33 @@ export interface TreeCtx {
   openWorkspace(node: NodeSummary): void
   changed(): void
   renamed(nodeId: string, title: string): void
-  notify(text: string, kind?: 'error' | 'info'): void
+  notify(text: string, kind?: 'error' | 'info', action?: NoticeAction): void
   requestDestroy(node: NodeSummary, name: string): void
+  // The containers this node could be placed in from here (the workspace root
+  // and its folders, or every track and course in the scratch view).
+  placeTargets(node: NodeSummary): Promise<PlaceTarget[]>
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+// Undo for Remove from here: the same node goes back into the same container
+// under the name it had. If that name has been taken since, it goes in under the
+// free name and the notice says so. It lives outside the row because the row is
+// gone from the list by the time Undo is pressed.
+async function undoRemove(ctx: TreeCtx, removed: { container_id: string; child_id: string; name: string }, shownName: string, containerTitle: string) {
+  try {
+    const out = await placeWithFallback(placeNode, removed.container_id, removed.child_id, removed.name)
+    ctx.changed()
+    ctx.notify(
+      out.fellBack
+        ? `"${shownName}" is back in "${containerTitle}", as "${out.name}": the name "${removed.name}" was taken in the meantime.`
+        : `"${shownName}" is back in "${containerTitle}".`,
+      'info'
+    )
+  } catch (err) {
+    ctx.notify(messageOf(err))
+  }
+}
 
 export function Glyph({ node }: { node: NodeSummary }): ReactNode {
   if (node.kind === 'track') return <CompassIcon size={14} />
@@ -97,6 +138,8 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
   const isWorkspace = node.kind === 'track' || node.kind === 'course'
   const [open, setOpen] = useState(false)
   const [menu, setMenu] = useState(false)
+  const [tagMenu, setTagMenu] = useState(false)
+  const [placing, setPlacing] = useState(false)
   const [sharedTitle, setSharedTitle] = useState<string | null>(null)
   const sharedAsked = useRef(false)
   const menuRef = useRef<HTMLSpanElement>(null)
@@ -116,6 +159,11 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
+  }, [menu])
+
+  // The tag list is part of the menu: it is folded again whenever the menu is.
+  useEffect(() => {
+    if (!menu) setTagMenu(false)
   }, [menu])
 
   function click() {
@@ -172,7 +220,38 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
       if (!model.placementId) return
       const out = await removePlacement(model.placementId)
       ctx.changed()
-      if (out.became_unplaced) ctx.notify(`"${shownName}" is not placed anywhere now. It is still in the picker, under Unplaced.`, 'info')
+      const from = model.container?.title ?? 'here'
+      const lonely = out.became_unplaced ? ' It is not placed anywhere now. It is still in the picker, under Unplaced.' : ''
+      ctx.notify(`Removed "${shownName}" from "${from}".${lonely}`, 'info', {
+        label: 'Undo',
+        run: () => undoRemove(ctx, out.removed, shownName, from),
+      })
+    })
+
+  // Put this same node somewhere else too (it can sit in several places). If
+  // the name is taken there it goes in under the free one the server suggests.
+  async function placeHere(target: PlaceTarget) {
+    try {
+      const out = await placeWithFallback(placeNode, target.id, node.id)
+      setPlacing(false)
+      ctx.changed()
+      ctx.notify(
+        out.fellBack
+          ? `"${shownName}" is already taken in "${target.label}", so it was placed there as "${out.name}".`
+          : `Placed "${shownName}" in "${target.label}".`,
+        'info'
+      )
+    } catch (err) {
+      ctx.notify(messageOf(err))
+    }
+  }
+
+  // Tag a file: what it is for. The partition chips in the sidebar then list it.
+  const retag = (tag: KindTag | null) =>
+    act(async () => {
+      if (tag === node.kind_tag) return
+      await setKindTag(node.id, tag)
+      ctx.changed()
     })
 
   return (
@@ -207,7 +286,35 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
                   Rename here
                 </button>
               )}
-              {(options.length > 0 || model.placementId) && <div className="ws-menu-sep" role="separator" />}
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  setPlacing(true)
+                }}
+              >
+                Place in…
+              </button>
+              {node.kind === 'file' && (
+                <>
+                  <button role="menuitem" aria-haspopup="true" aria-expanded={tagMenu} onClick={() => setTagMenu((t) => !t)}>
+                    Tag ▸
+                  </button>
+                  {tagMenu && (
+                    <div className="ws-submenu" role="group" aria-label="Tag">
+                      {[...KIND_TAGS, null].map((tag) => (
+                        <button key={tag ?? 'none'} role="menuitemradio" aria-checked={node.kind_tag === tag} onClick={() => void retag(tag)}>
+                          <span className="ws-tick" aria-hidden="true">
+                            {node.kind_tag === tag ? '✓' : ''}
+                          </span>
+                          {tag ?? 'none'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="ws-menu-sep" role="separator" />
               {model.placementId && model.container && (
                 <button role="menuitem" onClick={() => void removeHere()}>
                   Remove from "{model.container.title}"
@@ -227,6 +334,11 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
           )}
         </span>
       </div>
+      {placing && (
+        <div style={{ paddingLeft: depth * 14 }}>
+          <PlaceIn title={shownName} load={() => ctx.placeTargets(node)} onPlace={(t) => void placeHere(t)} onClose={() => setPlacing(false)} />
+        </div>
+      )}
       {open && node.kind === 'folder' && <Tree containerId={node.id} containerTitle={shownName} ctx={ctx} depth={depth + 1} />}
     </li>
   )

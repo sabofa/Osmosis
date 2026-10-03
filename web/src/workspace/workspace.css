@@ -171,6 +171,14 @@
   color: var(--bad);
 }
 
+/* Undo, and the dismiss cross, sit together at the end of a notice. */
+.ws-notice-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
 /* partition strip */
 
 .ws-chips {
@@ -286,6 +294,18 @@
 
 .ws-existing .ws-note {
   padding: 2px 0 6px;
+}
+
+.ws-existing-head {
+  padding-bottom: 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ws-existing .ws-pick-type {
+  flex-shrink: 0;
 }
 
 .ws-tree {
@@ -428,6 +448,21 @@
 
 .ws-menu button.danger {
   color: var(--bad);
+}
+
+/* The tag choices, folded under "Tag ▸" in a file row's menu. */
+.ws-submenu {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 2px 10px;
+  padding-left: 6px;
+  border-left: 2px solid var(--line);
+}
+
+.ws-tick {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent);
 }
 
 .ws-menu-sep {
@@ -606,6 +641,18 @@
   border-radius: 8px;
 }
 
+/* What was added at the end of the file, shown under the conflict's buttons. */
+.ws-conflict-added {
+  flex-basis: 100%;
+  max-height: 120px;
+  overflow: auto;
+  padding: 4px 8px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .ws-markdown .ws-error {
   margin: 0 0 10px;
 }
@@ -658,11 +705,22 @@
 }
 
 .ws-pick-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ws-pick-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--line);
+}
+
+.ws-pick-list .ws-existing {
+  margin: 6px 0 2px 24px;
+}
+
+.ws-trash-error {
+  margin: 6px 0;
 }
 
 .ws-pick-title {

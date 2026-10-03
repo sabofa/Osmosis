@@ -22,7 +22,7 @@ These come from Ben and from the spec. They are not preferences.
 1. **The viewer is a viewer.** The workspace renders, navigates and selects, and has no knowledge that questions, sessions or attempts exist. Its practical test: it must be complete and pleasant where none of them do. Nothing in the frame reads items, and a type you add must not make the frame start to.
 2. **Evidence comes only from items with outcomes.** Homework, practice and measures produce evidence; reading and writing documents do not. So an item file **points at** items and never stores answers, responses, scores or outcomes. Those belong to attempts. A file is never an answerable document.
 3. **Directed mode guides and never limits.** Ben, on the directed-mode question (whether his own tabs are gated while an item is pending): "no when an item is shown it should direct me to it, i answer the question or look at the graph but it should not limit me, it should only guide me." When the tutor shows an item, the workspace brings Ben to it by focusing its tab, marked `directed` (not built yet, see section 5). Nothing else is collapsed, gated or disabled, and a View renders the same whether its tab was directed or opened by Ben.
-4. **Every type that saves goes through `useFileDraft`.** Ben, the tutor and the planner all write these files. A save names the revision it started from, and a stale one is a conflict Ben chooses about (Reload or Overwrite), never something to retry quietly. A View that calls `saveContent` itself will, sooner or later, overwrite the tutor's note.
+4. **Every type that saves goes through `useFileDraft`.** Ben, the tutor and the planner all write these files. A save names the revision it started from, and a stale one is a conflict Ben chooses about (Reload or Overwrite, and Merge when the tutor only appended), never something to retry quietly. A View that calls `saveContent` itself will, sooner or later, overwrite the tutor's note.
 5. **Writers are `ben`, `tutor` and `planner`, and are never conflated.** See section 4.
 
 ## 1. What a file type is
@@ -221,7 +221,9 @@ export default function UserNotesFile({ nodeId, body, revision, onSaved }: FileV
         <span className="ws-md-rev">revision {f.saved.revision}</span>
       </div>
 
-      {f.conflict && <ConflictBanner busy={f.busy} onReload={() => void f.reload()} onOverwrite={() => void f.overwrite()} />}
+      {f.conflict && (
+        <ConflictBanner busy={f.busy} addition={f.addition} onMerge={() => void f.merge()} onReload={() => void f.reload()} onOverwrite={() => void f.overwrite()} />
+      )}
       {f.error && (
         <div className="ws-error" role="alert">
           {f.error}
@@ -244,9 +246,10 @@ What the hook gives you, so you do not rebuild it:
 
 - `f.saved` is what the server holds as far as this View knows (`body` is `''` for a file whose body is `null`), and `f.draft` is the unsaved text, `null` until editing starts. A body is text, so a type with structure serialises into the draft (section 3 does).
 - `f.save()` writes the draft against the revision it started from. If the file has moved on, `f.conflict` turns true and **nothing is written**; show `ConflictBanner`. `f.reload()` takes the file as it is now and drops the draft; `f.overwrite()` reads where the file is now and saves the draft over it. Both are Ben's choice, never yours.
+- `f.addition` is set with a conflict when the only change to the file is text added at its end (the tutor's `ws_append` to USERNOTES). `f.merge()` then saves Ben's draft plus that text on top of where the file is now, and the draft becomes the merged text; pass both to `ConflictBanner` (`addition`, `onMerge`) and it offers "Merge their additions" beside Reload and Overwrite. The decision is `mergeAppended` in `saveFlow.ts`: the server's text must start with exactly the text the draft started from (the hook keeps it beside the base revision), so a rewrite or an edit in the middle is never merged. A type whose draft is structured text (JSON) is not appendable, so it never gets an `addition` and can leave the props off.
 - A server refusal (your `validate` message, a network failure) lands in `f.error`. Show it.
 - The draft survives a tab switch (it lives in memory, not storage, so a page reload drops it).
-- An append-heavy type conflicts more often than most: the tutor's append moves the revision under Ben's open draft. If that matters to you, show the draft beside the new text before offering Reload. `reload()` drops the draft, so copy it first.
+- An append-heavy type conflicts more often than most: the tutor's append moves the revision under Ben's open draft. For the plain-text case the merge above keeps both sides, so his open draft and the tutor's note survive. For any other change, show the draft beside the new text before offering Reload: `reload()` drops the draft, so copy it first.
 
 Style: the shell's classes (`ws-btn`, `ws-md-bar`, `ws-error`, `ws-note` and the rest) are in `web/src/workspace/workspace.css`. If your View needs styles of its own, give it its own CSS file imported by the View and prefix every class `ws-`.
 
@@ -631,7 +634,7 @@ Do not assume any of these. Each is either Ben's deliberate "frame only" cut or 
 
 - **No folder export or import.** The database is canonical; a container cannot yet be written out as a real folder or read back (spec §13).
 - **No session rooting UI** (spec §7.5, "make this folder the root for this session"). Placing existing courses into a track, and creating courses and tracks inside one, is built.
-- **No drag-and-drop.** Placing and removing go through menus.
+- **No drag-and-drop.** Everything goes through menus. A row's menu has "Place in…" (a plain list of the workspace root and the folders in it; from the picker, every track and course the containment matrix allows) and "Remove from here", whose notice carries an Undo that puts the node back under the name it had. There is no one-step move: it is Place in…, then Remove from here.
 - **No search UI beyond the filtered partition (the kind-tag chips).** `GET /api/ws/search` and `ws_search` take text (`q`), and nothing in the app calls them with it.
 - **No tutor-directed tab opening.** The tab model has a `directed` flag and the tab bar draws it, but nothing sets it: there is no tool for it yet (one comes with live sessions). A directed tab will only focus the file; see ground rule 3.
 - **No exposure recording.** The shell emits no `opened`, `focused`, `dwell` or `selected` events and records nothing (spec §10 lists them as the hook for the item work). The `readable(node_id)` hook is not built either: the shell gates nothing, by Ben's ruling.
@@ -640,8 +643,9 @@ Do not assume any of these. Each is either Ben's deliberate "frame only" cut or 
 - **A file's type cannot change.** Nothing retypes a file, so a USERNOTES file made as `markdown` stays `markdown`.
 - **No revision history in the app or over MCP.** Every save is stored with its author; nothing reads the list back.
 - **No live refresh of an open View.** The tutor's write shows up when Ben reopens the tab or when his save conflicts.
+- **An upload that lives on canonical does not open in the workspace when the app runs through the laptop's local node.** The workspace file for it is listed (`/api/ws` is forwarded), but the viewer (`DocumentPanel`) fetches `/api/assets/:id` from the node it is served by, that route is not forwarded, and assets do not sync. Open the app on the canonical node to read it.
+- **Restoring a container does not restore what was destroyed together with it.** Destroy with "also destroy the items placed nowhere else" (`with_orphans`) trashes the container and those items in one go; Restore brings back only the one you pick. The rest stay in Trash and are restored one by one.
 - **Uploads made on the laptop's local node do not appear in the workspace.** Assets do not sync between nodes, and `/api/ws` is served by the canonical node (a local node forwards it). An upload made on the canonical node (through its web app) or over MCP (`create_asset`) appears at once as an unplaced `asset:<id>` file; one made on the laptop does not.
-- **An existing track cannot be placed under a track from the UI.** A new track can be made inside one, and `ws_place` places an existing one.
 - **No MCP tool lists the file types.** The HTTP route `GET /api/ws/file-types` does, but the web registry does not read it and the agents cannot call it. They learn type names from the tool descriptions (step 6).
 
 ## 6. Checklist for a new type

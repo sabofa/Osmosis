@@ -240,6 +240,44 @@ describe("asset files in depth", () => {
     expect(listRoots(db).unplaced.map((n) => n.id).sort()).toEqual([folder.id, "asset:a2"].sort());
   });
 
+  it("re-links a wrapper whose asset_id was nulled while its asset still exists, instead of trashing it", () => {
+    // A future migration that rebuilds the asset table fires ON DELETE SET NULL
+    // for every wrapper, though every upload is still there.
+    const db = openTestDb();
+    addAsset(db, "a1", "one");
+    addAsset(db, "a2", "two");
+    syncAssetFiles(db);
+    const folder = createNode(db, { kind: "folder", title: "inbox" }).node;
+    placeNode(db, { container_id: folder.id, child_id: "asset:a1" });
+    db.prepare("UPDATE ws_file SET asset_id = NULL WHERE node_id IN ('asset:a1', 'asset:a2')").run();
+    syncAssetFiles(db);
+    expect(db.prepare("SELECT node_id, asset_id FROM ws_file ORDER BY node_id").all()).toEqual([
+      { node_id: "asset:a1", asset_id: "a1" },
+      { node_id: "asset:a2", asset_id: "a2" },
+    ]);
+    expect(nodeRow(db, "asset:a1").trashed_at).toBeNull();
+    expect(nodeRow(db, "asset:a2").trashed_at).toBeNull();
+    expect(listTrash(db)).toEqual([]);
+    expect(count(db, "ws_placement")).toBe(1);
+  });
+
+  it("re-links only a wrapper whose asset exists: one for a deleted asset is still trashed, and a file that is not the wrapper is left alone", () => {
+    const db = openTestDb();
+    addAsset(db, "a1", "one");
+    addAsset(db, "a2", "two");
+    syncAssetFiles(db);
+    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
+    // A hand-made asset file that is not `asset:<id>`: its link is nulled while the asset it pointed at lives.
+    addAsset(db, "a3", "three");
+    const odd = createNode(db, { kind: "file", title: "odd", file: { type: "asset", asset_id: "a3" } }).node;
+    db.prepare("UPDATE ws_file SET asset_id = NULL WHERE node_id = ?").run(odd.id);
+    syncAssetFiles(db);
+    expect(db.prepare("SELECT asset_id FROM ws_file WHERE node_id = ?").get(odd.id)).toEqual({ asset_id: null });
+    expect(nodeRow(db, "asset:a1").trashed_at).not.toBeNull();
+    expect(db.prepare("SELECT asset_id FROM ws_file WHERE node_id = 'asset:a1'").get()).toEqual({ asset_id: null });
+    expect(nodeRow(db, "asset:a2").trashed_at).toBeNull();
+  });
+
   it("keeps a title that is a valid name, and makes a valid one out of one that is not", () => {
     const db = openTestDb();
     addAsset(db, "ok", "Ebbing ch3 — Café");

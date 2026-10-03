@@ -81,9 +81,18 @@ interface SummaryRow {
   has_children: number;
 }
 
+// A special type's kinds() and searchText() read the body, and a body that
+// does not parse throws something that is not a DomainError (and a type that is
+// no longer registered throws one). One such file must cost its own row a class
+// or a search hit, never the listing, so every per-row call to a type that
+// fails lands here: log which node and type, then the caller falls back.
+function skipRow(what: string, id: string, type: string | null, err: unknown): void {
+  console.warn(`workspace: ${what} failed for node ${id} (type ${type ?? "none"}): ${err instanceof Error ? err.message : String(err)}`);
+}
+
 // A file's class: its type's page kinds through classOf; for an uploaded asset,
-// what the upload is. A type that is no longer registered has no class rather
-// than failing the whole listing.
+// what the upload is. A type that is no longer registered, or whose kinds()
+// throws on this body, has no class rather than failing the whole listing.
 function classFor(row: SummaryRow): string | null {
   if (row.kind !== "file" || row.file_type === null) return null;
   try {
@@ -96,8 +105,8 @@ function classFor(row: SummaryRow): string | null {
     }
     return classOf(spec.kinds(row.file_body));
   } catch (err) {
-    if (err instanceof DomainError) return null;
-    throw err;
+    skipRow("class", row.id, row.file_type, err);
+    return null;
   }
 }
 
@@ -324,8 +333,8 @@ export function searchWorkspace(db: DatabaseSync, opts: { q?: string; scope?: st
       const text = getFileType(row.file_type).searchText?.(row.file_body);
       return text !== undefined && fold(text).includes(q);
     } catch (err) {
-      if (err instanceof DomainError) return false;
-      throw err;
+      skipRow("search text", row.id, row.file_type, err);
+      return false;
     }
   };
   return rows

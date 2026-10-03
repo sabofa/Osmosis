@@ -33,16 +33,22 @@ export function listFileTypes(): FileTypeSpec[] {
   return [...registry.values()];
 }
 
-const FAMILY: Record<string, string> = { text: "document", plot: "graph", space: "graph", figure: "graph", flow: "flowchart", sheet: "spreadsheet", code: "code" };
+type Family = "document" | "graph" | "flowchart" | "spreadsheet" | "code";
+type PageClass = Family | "mixed" | "empty";
+
+const FAMILY: Record<string, Family> = { text: "document", plot: "graph", space: "graph", figure: "graph", flow: "flowchart", sheet: "spreadsheet", code: "code" };
 
 // graph-engine spec, Classification: one family is that family's class,
 // more than one is mixed. "empty" is a file whose type holds no pages (an
-// asset, or a special type that declares none).
-export function classOf(kinds: string[]): "document" | "graph" | "flowchart" | "spreadsheet" | "code" | "mixed" | "empty" {
-  const families = new Set(kinds.map((k) => FAMILY[k] ?? "mixed"));
+// asset, or a special type that declares none). A page kind that is not a
+// known family counts as its own, so it makes the file mixed. hasOwn, not a
+// plain lookup: a kind named "constructor" or "toString" must not find
+// something on Object.prototype.
+export function classOf(kinds: string[]): PageClass {
+  const families = new Set<Family | "mixed">(kinds.map((k) => (Object.hasOwn(FAMILY, k) ? FAMILY[k] : "mixed")));
   if (families.size === 0) return "empty";
   if (families.size > 1) return "mixed";
-  return [...families][0] as "document" | "graph" | "flowchart" | "spreadsheet" | "code" | "mixed";
+  return [...families][0];
 }
 
 // Built-ins. A bare one-page document is "the text is the document"

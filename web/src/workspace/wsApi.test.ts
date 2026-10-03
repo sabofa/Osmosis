@@ -1,5 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WsError, createNode, destroyNode, freeNameOf, getRoots, isStale, placeNode, removePlacement, renamePlacement, saveContent, searchByTag } from './wsApi'
+import {
+  WsError,
+  createNode,
+  destroyNode,
+  freeNameOf,
+  getRoots,
+  isStale,
+  listTrash,
+  placeNode,
+  purgeNode,
+  removePlacement,
+  renamePlacement,
+  restoreNode,
+  saveContent,
+  searchByTag,
+  searchUnder,
+  setKindTag,
+} from './wsApi'
 
 // What the server answers, as a fetch Response would.
 function reply(status: number, body: unknown) {
@@ -100,5 +117,45 @@ describe('wsApi', () => {
     await createNode({ kind: 'course', title: 'AMC', placeIn: 't1' })
     const init = (fn.mock.calls as unknown as [string, RequestInit][])[0][1]
     expect(JSON.parse(init.body as string)).toEqual({ kind: 'course', title: 'AMC', place_in: { container_id: 't1' } })
+  })
+})
+
+describe('wsApi: the trash, the tag and the walk under a container', () => {
+  it('lists, restores and purges through the trash routes, with the node id encoded', async () => {
+    const fn = stubFetch(reply(200, {}))
+    await listTrash()
+    await restoreNode('asset:a/1')
+    await purgeNode('n 2')
+    const calls = fn.mock.calls as unknown as [string, RequestInit][]
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'GET /api/ws/trash',
+      'POST /api/ws/trash/asset%3Aa%2F1/restore',
+      'DELETE /api/ws/trash/n%202',
+    ])
+  })
+
+  it('restore returns the names that had to change, and a refused purge keeps the server code', async () => {
+    stubFetch(reply(200, { restored: 'n1', renamed: [{ placement_id: 'p1', name: 'a (2)' }] }))
+    expect(await restoreNode('n1')).toEqual({ restored: 'n1', renamed: [{ placement_id: 'p1', name: 'a (2)' }] })
+    stubFetch(reply(400, { error: 'asset_in_use', message: 'It is an upload that still exists.' }))
+    const err = await purgeNode('asset:a1').catch((e) => e)
+    expect(err).toBeInstanceOf(WsError)
+    expect(err.code).toBe('asset_in_use')
+  })
+
+  it('sets or clears a kind tag with a PATCH to the node, sending null for no tag', async () => {
+    const fn = stubFetch(reply(200, {}))
+    await setKindTag('f1', 'homework')
+    await setKindTag('f1', null)
+    const calls = fn.mock.calls as unknown as [string, RequestInit][]
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual(['PATCH /api/ws/nodes/f1', 'PATCH /api/ws/nodes/f1'])
+    expect(JSON.parse(calls[0][1].body as string)).toEqual({ kind_tag: 'homework' })
+    expect(JSON.parse(calls[1][1].body as string)).toEqual({ kind_tag: null })
+  })
+
+  it('reads everything under a container with a scope-only search', async () => {
+    const fn = stubFetch(reply(200, []))
+    await searchUnder('t 1')
+    expect((fn.mock.calls as unknown as [string, RequestInit][])[0][0]).toBe('/api/ws/search?scope=t%201')
   })
 })

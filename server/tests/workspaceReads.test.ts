@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { openTestDb } from "./helpers.js";
 import { DomainError } from "../src/domain/errors.js";
 import { registerFileType } from "../src/domain/workspace/fileTypes.js";
@@ -355,6 +355,71 @@ describe("trash list", () => {
     expect(listTrash(db)[0]).toMatchObject({ type: "markdown", trashed_at: "2026-10-03 00:00:00" });
     restoreNode(db, b.id);
     expect(listTrash(db).map((r) => r.title)).toEqual(["n", "a"]);
+  });
+});
+
+describe("one bad body does not break a listing", () => {
+  // The registry is module-global, so this type name is unique to this block.
+  // A special type's kinds() and searchText() read the body; a body that does
+  // not parse (JSON.parse's SyntaxError, not a DomainError) must cost its own
+  // row a class or a search hit and nothing else.
+  registerFileType({
+    type: "ws-reads-throwing",
+    storage: "json",
+    appendable: false,
+    kinds: (b) => (JSON.parse(b ?? "{}") as { kinds: string[] }).kinds ?? [],
+    searchText: (b) => (JSON.parse(b ?? "{}") as { q: string }).q ?? "",
+  });
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => undefined); });
+  afterEach(() => { warn.mockRestore(); });
+  const throwing = (db: ReturnType<typeof openTestDb>, title: string, body: string, container_id?: string) =>
+    createNode(db, { kind: "file", title, file: { type: "ws-reads-throwing", body }, place_in: container_id ? { container_id } : undefined }).node;
+
+  it("roots, children and trash list the row with a null class; the good rows keep theirs", () => {
+    const db = openTestDb();
+    const c = createNode(db, { kind: "course", title: "micro" }).node;
+    throwing(db, "broken", "{not json", c.id);
+    throwing(db, "fine", JSON.stringify({ kinds: ["text"] }), c.id);
+    file(db, "plain", c.id);
+    const loose = throwing(db, "loose broken", "{not json");
+    const classes = Object.fromEntries(listChildren(db, c.id).map((r) => [r.name, r.node.class]));
+    expect(classes).toEqual({ broken: null, fine: "document", plain: "document" });
+    expect(listRoots(db).unplaced.find((n) => n.id === loose.id)).toMatchObject({ type: "ws-reads-throwing", class: null });
+    expect(listRoots(db).courses.map((n) => n.title)).toEqual(["micro"]);
+    destroyNode(db, loose.id);
+    expect(listTrash(db).find((n) => n.id === loose.id)).toMatchObject({ class: null });
+  });
+
+  it("search returns the other rows, and the row whose body will not parse is not matched by its text", () => {
+    const db = openTestDb();
+    const c = createNode(db, { kind: "course", title: "micro" }).node;
+    throwing(db, "broken", "{not json supply", c.id);
+    throwing(db, "good", JSON.stringify({ kinds: [], q: "supply curve" }), c.id);
+    file(db, "notes", c.id, "the supply side");
+    expect(searchWorkspace(db, { q: "supply", scope: c.id }).map((r) => r.name).sort()).toEqual(["good", "notes"]);
+    // Without a scope the unplaced pass runs too, and a title still finds the broken row.
+    expect(searchWorkspace(db, { q: "supply" }).map((r) => r.name).sort()).toEqual(["good", "notes"]);
+    expect(searchWorkspace(db, { q: "broken", scope: c.id }).map((r) => r.name)).toEqual(["broken"]);
+  });
+
+  it("a file whose type is no longer registered lists with a null class and search skips its text, with a warning", () => {
+    const db = openTestDb();
+    const c = createNode(db, { kind: "course", title: "micro" }).node;
+    const gone = file(db, "orphaned", c.id, "supply");
+    db.prepare("UPDATE ws_file SET type = 'ws-reads-removed' WHERE node_id = ?").run(gone.id);
+    expect(listChildren(db, c.id)[0].node).toMatchObject({ type: "ws-reads-removed", class: null });
+    expect(searchWorkspace(db, { q: "supply", scope: c.id })).toEqual([]);
+    expect(warn.mock.calls.map((x) => x.join(" ")).join(" | ")).toContain("ws-reads-removed");
+  });
+
+  it("warns about a bad row, naming the node and its type", () => {
+    const db = openTestDb();
+    const bad = throwing(db, "broken", "{not json");
+    listRoots(db);
+    const text = warn.mock.calls.map((c) => c.join(" ")).join(" | ");
+    expect(text).toContain(bad.id);
+    expect(text).toContain("ws-reads-throwing");
   });
 });
 

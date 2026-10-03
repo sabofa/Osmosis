@@ -46,6 +46,12 @@ export interface Roots {
   unplaced: NodeSummary[]
 }
 
+export interface TrashRestore {
+  restored: string
+  // Placements that had to take a new name because the old one was taken here since.
+  renamed: { placement_id: string; name: string }[]
+}
+
 export interface CourseRow {
   node: NodeSummary
   path: string[]
@@ -130,6 +136,9 @@ export const getCourses = (trackId: string) => call<CourseRow[]>('GET', `/nodes/
 export const getContent = (id: string) => call<FileContent>('GET', `/nodes/${enc(id)}/content`)
 export const searchByTag = (scope: string, kindTag: KindTag) =>
   call<SearchRow[]>('GET', `/search?scope=${enc(scope)}&kind_tag=${enc(kindTag)}`)
+// Every live placement under a container, at any depth, one row each.
+export const searchUnder = (scope: string) => call<SearchRow[]>('GET', `/search?scope=${enc(scope)}`)
+export const listTrash = () => call<NodeSummary[]>('GET', '/trash')
 
 // ---- writes ------------------------------------------------------------------
 
@@ -163,12 +172,28 @@ export const placeNode = (containerId: string, childId: string, name?: string) =
 // Rename here: one placement's name, nothing else.
 export const renamePlacement = (placementId: string, name: string) => call<{ id: string; name: string }>('PATCH', `/placements/${enc(placementId)}`, { name })
 
+// What a file is for, or null for nothing. One tag per file.
+export const setKindTag = (id: string, kindTag: KindTag | null) => call<{ id: string }>('PATCH', `/nodes/${enc(id)}`, { kind_tag: kindTag })
+
 // Remove from here: one placement goes, the node lives on (unplaced if it was
 // the last). Deliberately not the same call as destroyNode.
 export const removePlacement = (placementId: string) =>
-  call<{ removed: { id: string }; became_unplaced: boolean }>('DELETE', `/placements/${enc(placementId)}`)
+  call<{ removed: { id: string; container_id: string; child_id: string; name: string }; became_unplaced: boolean }>(
+    'DELETE',
+    `/placements/${enc(placementId)}`
+  )
 
 // Destroy: the node goes to the trash, wherever it is placed. With orphans, so
 // do the items under it that are placed nowhere else.
 export const destroyNode = (id: string, withOrphans: boolean) =>
   call<{ trashed: string[] }>('DELETE', `/nodes/${enc(id)}${withOrphans ? '?with_orphans=true' : ''}`)
+
+// ---- the trash ---------------------------------------------------------------
+
+// Bring a node back. Its placements come back with it; one whose name has been
+// taken here in the meantime is renamed to a free one and reported.
+export const restoreNode = (id: string) => call<TrashRestore>('POST', `/trash/${enc(id)}/restore`)
+
+// Delete a trashed node for good. Refused with asset_in_use for an upload that
+// still exists: the upload is deleted in Settings, not here.
+export const purgeNode = (id: string) => call<{ purged: string }>('DELETE', `/trash/${enc(id)}`)

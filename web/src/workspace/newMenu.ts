@@ -10,6 +10,11 @@ const MAY_HOLD: Record<NodeKind, readonly NodeKind[]> = {
   file: [],
 }
 
+// Whether a container of this kind may hold a node of that kind, by the same
+// matrix: the "Place in…" list offers only the containers that may hold what
+// is being placed.
+export const mayHold = (container: NodeKind, child: NodeKind): boolean => MAY_HOLD[container].includes(child)
+
 export type NewKind = 'file' | 'folder' | 'course' | 'track'
 
 export interface NewOption {

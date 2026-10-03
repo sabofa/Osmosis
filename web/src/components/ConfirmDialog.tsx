@@ -1,15 +1,13 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { confirmKeyAction, keyTargetOf } from './confirmKey'
 import './ConfirmDialog.css'
-
-// Enter on a focused checkbox is not a confirm: someone who has just ticked an
-// option on a destructive dialog has not yet pressed the button.
-const isCheckbox = (t: EventTarget | null): boolean => t instanceof HTMLInputElement && t.type === 'checkbox'
 
 // One confirm for the whole app: leaving a test, submitting with blanks,
 // clearing data. A native window.confirm would do the job but cannot be
 // styled, cannot carry a second line, and blocks the SSE stream's timers in
-// some browsers. Enter confirms, Escape cancels, focus starts on Cancel so a
-// stray Enter never destroys anything.
+// some browsers. Escape cancels. Focus starts on Cancel, and Enter acts on the
+// focused control (so on Cancel it cancels: a stray Enter never destroys
+// anything); it confirms only when focus is on none (confirmKey.ts).
 export default function ConfirmDialog({
   title,
   body,
@@ -43,13 +41,11 @@ export default function ConfirmDialog({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-      } else if (e.key === 'Enter' && !typeToConfirm && !isCheckbox(e.target)) {
-        e.preventDefault()
-        onConfirm()
-      }
+      const action = confirmKeyAction(e.key, keyTargetOf(e.target), !!typeToConfirm)
+      if (action === 'native') return
+      e.preventDefault()
+      if (action === 'cancel') onCancel()
+      else onConfirm()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)

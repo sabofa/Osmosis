@@ -55,6 +55,11 @@ describe("file types", () => {
     expect(classOf(["text", "flow"])).toBe("mixed");
     expect(classOf([])).toBe("empty");
   });
+  it("a page kind that is not a known family is mixed, including names Object.prototype owns", () => {
+    expect(classOf(["nonsense"])).toBe("mixed");
+    for (const k of ["constructor", "toString", "__proto__", "hasOwnProperty"]) expect(classOf([k]), k).toBe("mixed");
+    expect(classOf(["text", "constructor"])).toBe("mixed");
+  });
 });
 
 // ---------------------------------------------------------------------------

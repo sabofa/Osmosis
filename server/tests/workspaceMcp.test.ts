@@ -216,6 +216,16 @@ describe("ws_* MCP tools", () => {
     expect(byName.ws_append.description).toMatch(/USERNOTES/);
     expect(byName.ws_place.inputSchema.required).toEqual(["container_id", "child_id"]);
   });
+
+  it("ws_create tells the tutor a taken name means the node exists: use it, never make a numbered copy", async () => {
+    const tools = (await client.listTools()).tools;
+    const description = tools.find((t) => t.name === "ws_create")?.description ?? "";
+    expect(description).toMatch(/name_taken/);
+    expect(description).toMatch(/ws_list the container/);
+    expect(description).toMatch(/ws_append to the existing file/);
+    expect(description).toMatch(/Never create a numbered copy/);
+    expect(description).not.toMatch(/which name is free/);
+  });
 });
 
 describe("ws_* tools on the presenter surface", () => {

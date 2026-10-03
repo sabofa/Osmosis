@@ -54,7 +54,15 @@ export default function MarkdownFile({ nodeId, body, revision, onSaved }: FileVi
         <span className="ws-md-rev">revision {f.saved.revision}</span>
       </div>
 
-      {f.conflict && <ConflictBanner busy={f.busy} onReload={() => void reload()} onOverwrite={() => void f.overwrite()} />}
+      {f.conflict && (
+        <ConflictBanner
+          busy={f.busy}
+          addition={f.addition}
+          onMerge={() => void f.merge()}
+          onReload={() => void reload()}
+          onOverwrite={() => void f.overwrite()}
+        />
+      )}
       {f.error && (
         <div className="ws-error" role="alert">
           {f.error}

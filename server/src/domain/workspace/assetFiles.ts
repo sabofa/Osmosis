@@ -9,6 +9,7 @@ import { inSavepoint } from "./savepoint.js";
 //
 // Deleting the asset sets the wrapper's asset_id to NULL (ON DELETE SET NULL);
 // the next sync trashes it, so it shows up in the trash instead of dangling.
+// A NULL whose asset still exists is not a deletion (see the re-link below).
 // A wrapper that was trashed and then purged is made again on the next sync:
 // the way to be rid of an upload for good is to delete the asset.
 
@@ -41,6 +42,17 @@ export function syncAssetFiles(db: DatabaseSync): void {
       insertFile.run(nodeId, asset.id);
       insertRevision.run(nodeId);
     }
+    // A wrapper's asset_id is NULL only because ON DELETE SET NULL fired, and
+    // that fires for any DELETE on the asset row, including a migration that
+    // rebuilds the asset table (DROP TABLE) with every upload still in it.
+    // Re-link a canonical wrapper whose upload exists before the trashing below
+    // reads a NULL as "the upload was deleted". Only `asset:<id>` is the
+    // canonical wrapper; a file that merely points at an asset is not relinked.
+    db.prepare(
+      `UPDATE ws_file SET asset_id = substr(node_id, 7)
+        WHERE type = 'asset' AND asset_id IS NULL AND substr(node_id, 1, 6) = 'asset:'
+          AND EXISTS (SELECT 1 FROM asset a WHERE a.id = substr(ws_file.node_id, 7))`
+    ).run();
     db.prepare(
       `UPDATE ws_node SET trashed_at = datetime('now'), updated_at = datetime('now')
         WHERE trashed_at IS NULL AND id IN (SELECT node_id FROM ws_file WHERE type = 'asset' AND asset_id IS NULL)`

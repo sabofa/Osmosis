@@ -4,19 +4,20 @@ import { makePathResolver, orphansUnder } from './graphWalk'
 import { createUnder } from './create'
 import { listWebFileTypes } from './fileTypes'
 import { newOptions, type NewKind } from './newMenu'
+import { placeTargets, placeWithFallback, topTargets, workspaceTargets, type PlaceTarget } from './placing'
 import { addableCourses, courseRowModels } from './rows'
-import { Tree, TreeRow, type TreeCtx } from './Tree'
+import { Tree, TreeRow, type NoticeAction, type TreeCtx } from './Tree'
 import type { Root } from './wsState'
 import {
   KIND_TAGS,
   destroyNode,
-  freeNameOf,
   getChildren,
   getCourses,
   getNodeDetail,
   getRoots,
   placeNode,
   searchByTag,
+  searchUnder,
   type AppearsInRow,
   type ChildRow,
   type CourseRow,
@@ -60,7 +61,7 @@ export default function Sidebar({
   const [mode, setMode] = useState<'files' | 'tools'>('files')
   const [version, setVersion] = useState(0)
   const [chip, setChip] = useState<KindTag | null>(null)
-  const [notice, setNotice] = useState<{ text: string; kind: 'error' | 'info' } | null>(null)
+  const [notice, setNotice] = useState<{ text: string; kind: 'error' | 'info'; action?: NoticeAction } | null>(null)
   const [destroyReq, setDestroyReq] = useState<DestroyReq | null>(null)
 
   // Anything that changes the graph reloads the lists, and a message about an
@@ -88,10 +89,30 @@ export default function Sidebar({
       const out = await destroyNode(req.node.id, req.alsoOrphans)
       onGone(out.trashed)
       refresh()
-      setNotice({ text: `"${req.name}" is in the trash${out.trashed.length > 1 ? ` with ${out.trashed.length - 1} more` : ''}.`, kind: 'info' })
+      setNotice({
+        text: `"${req.name}" is in the trash${out.trashed.length > 1 ? ` with ${out.trashed.length - 1} more` : ''}. Restore it from Trash in the picker (Switch).`,
+        kind: 'info',
+      })
     } catch (err) {
       setNotice({ text: messageOf(err), kind: 'error' })
     }
+  }
+
+  // Where a node could be placed from here, for a row's "Place in…": in a
+  // workspace its root and the folders reachable in it, in the scratch view
+  // (which has no root of its own) every track and course. Never a container the
+  // node is already in, or one inside it.
+  async function targetsFor(node: NodeSummary): Promise<PlaceTarget[]> {
+    const detail = await getNodeDetail(node.id)
+    const alreadyIn = detail.appears_in.map((a) => a.container.id)
+    if (root.kind === 'scratch') {
+      // No root to walk down from: what is inside the node itself is what it
+      // cannot be placed in, and the places are the tracks and courses.
+      const [roots, rows] = await Promise.all([getRoots(), node.kind === 'file' ? Promise.resolve([]) : searchUnder(node.id)])
+      return placeTargets(node, topTargets([...roots.tracks, ...roots.courses]), { alreadyIn, rows })
+    }
+    const rows = await searchUnder(root.id)
+    return placeTargets(node, workspaceTargets({ id: root.id, kind: root.kind, title: root.title }, rows), { alreadyIn, rows })
   }
 
   const ctx: TreeCtx = {
@@ -100,8 +121,9 @@ export default function Sidebar({
     openWorkspace: (node) => onOpenWorkspace({ id: node.id, kind: node.kind === 'track' ? 'track' : 'course', title: node.title }),
     changed: refresh,
     renamed: onRenamed,
-    notify: (text, kind = 'error') => setNotice({ text, kind }),
+    notify: (text, kind = 'error', action) => setNotice({ text, kind, action }),
     requestDestroy: (node, name) => void startDestroy(node, name),
+    placeTargets: targetsFor,
   }
 
   // New things straight into the workspace's own container, which has no row to
@@ -149,9 +171,24 @@ export default function Sidebar({
       {notice && (
         <div className={`ws-notice ${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
           <span>{notice.text}</span>
-          <button className="ws-link" onClick={() => setNotice(null)} aria-label="Dismiss">
-            ×
-          </button>
+          <span className="ws-notice-actions">
+            {notice.action && (
+              <button
+                className="ws-link"
+                onClick={() => {
+                  // One press: the notice goes, so Undo cannot be pressed twice.
+                  const { run } = notice.action!
+                  setNotice(null)
+                  void run()
+                }}
+              >
+                {notice.action.label}
+              </button>
+            )}
+            <button className="ws-link" onClick={() => setNotice(null)} aria-label="Dismiss">
+              ×
+            </button>
+          </span>
         </div>
       )}
 
@@ -369,16 +406,9 @@ function ExistingCourses({ track, reach, ctx, onClose }: { track: Root; reach: C
 
   async function add(course: NodeSummary) {
     try {
-      let name: string | null = null
-      try {
-        await placeNode(track.id, course.id)
-      } catch (err) {
-        name = freeNameOf(err)
-        if (name === null) throw err
-        await placeNode(track.id, course.id, name)
-      }
+      const out = await placeWithFallback(placeNode, track.id, course.id)
       ctx.changed()
-      if (name !== null) ctx.notify(`"${course.title}" is already taken in "${track.title}", so it was added as "${name}".`, 'info')
+      if (out.fellBack) ctx.notify(`"${course.title}" is already taken in "${track.title}", so it was added as "${out.name}".`, 'info')
     } catch (err) {
       ctx.notify(messageOf(err))
     }
