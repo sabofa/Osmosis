@@ -368,9 +368,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   let analysed: Analysed | null = null
   // The base being eased in, while it is (see Fade).
   let fade: Fade | null = null
-  // The model request running for a camera that is being dragged, and when the camera first moved off the view it was
-  // asked for (its answer's strokes are stale from then on).
-  let liveFlight: { job: Job; movedAt: number | null } | null = null
+  // The model request running (a drag's, the release's, a settle's or a slider's: any a view's own), and when the camera
+  // first moved off the view it was asked for: its answer's strokes, and so its edges, are stale from then on.
+  let flight: { job: Job; movedAt: number | null } | null = null
   let tickTimer: ReturnType<typeof setTimeout> | null = null
   // The picture on screen was made by re-projecting a base's strokes (not by painting a frame as the model made it).
   let onScreenReprojected = false
@@ -466,8 +466,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       }
       a.strokesParams = params
     } else {
-      // A camera that is being dragged: the model runs for it behind the picture, and what it makes becomes the base.
-      if (isLive(job)) liveFlight = { job, movedAt: null }
+      // The model runs for this view while the camera may move on (under a drag, or after a release that is grabbed again
+      // before its frame lands): what it makes becomes the base, aged from when the camera left its view.
+      if (!job.target) flight = { job, movedAt: null }
       let movedAt: number | null = null
       let response: SessionResponse
       try {
@@ -476,9 +477,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
           if (!response.ok && 'needFull' in response) response = await full()
         } else response = await full()
       } finally {
-        if (liveFlight?.job === job) {
-          movedAt = liveFlight.movedAt
-          liveFlight = null
+        if (flight?.job === job) {
+          movedAt = flight.movedAt
+          flight = null
         }
       }
       if (gone(response)) return run(job)
@@ -729,7 +730,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       const job: Job = { seq: ++seq, sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target: null, settle: null }
       lastJob = job
       // the model is running for a view the camera has now left: its answer's strokes are stale from here
-      if (liveFlight && liveFlight.movedAt === null && !sameCamera(liveFlight.job.view, view)) liveFlight.movedAt = clock()
+      if (flight && flight.movedAt === null && !sameCamera(flight.job.view, view)) flight.movedAt = clock()
       if (settleTimer !== null) clearTimeout(settleTimer)
       settleTimer = null
       // The pointer's release is the model's frame at once. While the pointer drags, the picture is the newest base's
@@ -767,7 +768,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       if (tickTimer !== null) clearTimeout(tickTimer)
       tickTimer = null
       fade = null
-      liveFlight = null
+      flight = null
       for (const t of tiles.splice(0)) t.settle?.reject(new Error('the engine was disposed'))
       sent.clear()
       sceneNow = null

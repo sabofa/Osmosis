@@ -973,6 +973,68 @@ describe('the edges of a base that the camera has left', () => {
   })
 })
 
+describe('the edges of a frame that lands after the camera has moved on', () => {
+  // The release asks for a full frame; the pointer grabs the camera again and drags it on before the frame lands. Its edges
+  // are the outline of the view the camera left when it was grabbed, not of the moment the frame lands.
+  it('are aged from the move: a release that is grabbed again, its frame landing 180 ms after the camera left its view', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    go(sphereView(), P)
+    host.finish()
+    await done(1)
+    clock.t = 100
+    go(sphereView({ azimuth: 40, dragging: true }), P)
+    host.finish()
+    await flush() // a model frame for azimuth 40, adopted
+    clock.t = 200
+    go(sphereView({ azimuth: 40 }), P) // the pointer is released at azimuth 40: the model's full frame is asked for
+    clock.t = 1000
+    const v52 = sphereView({ azimuth: 52, dragging: true })
+    go(v52, P) // grabbed again and dragged on: the camera leaves azimuth 40 at t = 1000
+    clock.t = 1180
+    host.finish()
+    await flush() // the release's frame lands, 180 ms after the camera left its view
+    go(v52, P)
+    const release = host.responses[2].strokes
+    expect(host.requests[2].view.dragging).toBe(false)
+    const plain = reprojectStrokes(release, host.requests[2].view, v52, P, 1)
+    const shown = painted[painted.length - 1].frame.strokes
+    const edge = ROLES.indexOf('edge')
+    const edges = Array.from({ length: release.count }, (_, i) => i).filter((i) => release.role[i] === edge && plain.alpha[i] > 0.2)
+    expect(edges.length).toBeGreaterThan(5)
+    // edgeFade(180) = 0.1 of its alpha is left; from the landing it would have been all of it
+    for (const i of edges) expect(shown.alpha[i]).toBeCloseTo(0.1 * plain.alpha[i], 6)
+    for (let i = 0; i < release.count; i++) if (release.role[i] !== edge) expect(shown.alpha[i]).toBe(plain.alpha[i])
+    engine.dispose()
+  })
+
+  it('are aged from the move for a slider’s frame too, not only a drag’s', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    go(sphereView(), P)
+    host.finish()
+    await done(1)
+    go(sphereView(), setParam(P, 'roles.block.width', 30)) // a slider: the model's frame for it starts
+    clock.t = 1000
+    const v40 = sphereView({ azimuth: 40, dragging: true })
+    go(v40, setParam(P, 'roles.block.width', 30)) // the camera leaves its view at t = 1000
+    clock.t = 1150
+    host.finish()
+    await flush() // the slider's frame lands 150 ms later
+    go(v40, setParam(P, 'roles.block.width', 30))
+    const slider = host.responses[1].strokes
+    const plain = reprojectStrokes(slider, host.requests[1].view, v40, P, 1)
+    const shown = painted[painted.length - 1].frame.strokes
+    const edge = ROLES.indexOf('edge')
+    const edges = Array.from({ length: slider.count }, (_, i) => i).filter((i) => slider.role[i] === edge && plain.alpha[i] > 0.2)
+    expect(edges.length).toBeGreaterThan(5)
+    for (const i of edges) expect(shown.alpha[i]).toBeCloseTo(0.25 * plain.alpha[i], 6) // edgeFade(150)
+    engine.dispose()
+  })
+})
+
 describe('the crossfade of a camera that has stopped', () => {
   it('goes on by itself to the end: a new base is eased in with no further request for a frame', async () => {
     vi.useFakeTimers()
