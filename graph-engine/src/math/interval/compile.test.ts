@@ -261,6 +261,27 @@ describe('reserved constructs', () => {
     expect(at('{x < 0: -1}', ['x'], plain, 1, 2)).toMatchObject({ lo: Infinity, hi: -Infinity, v: PARTIAL })
   })
 
+  it('a condition that is decided does not cap the verdict at its operands (floor jumps, but not inside a decided condition)', () => {
+    // floor(x) is 1 or 2 over [1.5, 2.5], so floor(x) < 5 holds at every point: the piece is x, and x is continuous
+    expect(at('{floor(x) < 5: x, 0}', ['x'], plain, 1.5, 2.5)).toMatchObject({ v: CONTINUOUS })
+    expect(within(at('{floor(x) < 5: x, 0}', ['x'], plain, 1.5, 2.5), 1.5, 2.5)).toBe(true)
+    // decided false: the walk goes on to the otherwise
+    expect(at('{floor(x) > 5: x, 0}', ['x'], plain, 1.5, 2.5)).toEqual({ lo: 0, hi: 0, v: CONTINUOUS })
+    expect(at('{floor(x) > 5: 7, x < 0: 1, x}', ['x'], plain, 1.5, 2.5)).toMatchObject({ lo: expect.closeTo(1.5, 10), v: CONTINUOUS })
+    // an and, or and not of decided conditions, and a non-comparison condition that is nonzero throughout
+    expect(at('{floor(x) < 5 and ceil(x) > 0: x, 0}', ['x'], plain, 1.5, 2.5).v).toBe(CONTINUOUS)
+    expect(at('{not floor(x) > 5: x, 0}', ['x'], plain, 1.5, 2.5).v).toBe(CONTINUOUS)
+    const x = variable('x')
+    expect(at(call('__piecewise', p('floor(x)'), x, num(7)), ['x'], plain, 1.5, 2.5)).toMatchObject({ v: CONTINUOUS })
+    // a condition that may jump across the box is what the verdict is for: the answer is DEFINED
+    expect(at('{floor(x) < 2: x, 0}', ['x'], plain, 1.5, 2.5).v).toBe(DEFINED)
+    // and a decided condition over an operand that may be NaN still makes the piecewise partial
+    expect(at('{sqrt(x) < 5: 1, 2}', ['x'], plain, -1, 1).v).toBe(PARTIAL)
+    expect(at('{floor(sqrt(x)) < 5: x, 0}', ['x'], plain, -1, 1.5).v).toBe(PARTIAL)
+    // a decided condition whose operand is DEFINED and a piece that may jump: the weaker of the two
+    expect(at('{floor(x) < 5: floor(2x), 0}', ['x'], plain, 1.2, 2.5).v).toBe(DEFINED)
+  })
+
   it('piecewise walks the pieces in order and stops at the first that surely holds', () => {
     const src = '{x < 0: x^2, x <= 2: 2x + 1, 5}'
     expect(within(at(src, ['x'], plain, 0.5, 1), 2, 3)).toBe(true)
@@ -452,6 +473,15 @@ describe('reserved constructs', () => {
     expect(r.v).toBe(CONTINUOUS)
     expect(within(at("f''(x)", ['x'], scope, 1, 2), 6, 12)).toBe(true)
     expect(within(at("f'(2 x)", ['x'], scope, 1, 2), 12, 48)).toBe(true)
+  })
+
+  it('inf^x is not continuous across x = 0, and the number it feeds may not be either', () => {
+    // 0 below, 1 at 0, Infinity above: the infinity is the bound the verdict is read with, but atan2 and 1 / x
+    // map it back to a finite value, so the verdict itself must say it may jump
+    expect(at('inf^x', ['x'], plain, -0.8, 0.15).v).toBe(DEFINED)
+    expect(at('atan2(-2, inf^x)', ['x'], plain, -0.8, 0.15).v).toBe(DEFINED)
+    expect(at('1/(1 + inf^x)', ['x'], plain, -0.8, 0.15).v).toBeLessThanOrEqual(DEFINED)
+    expect(at('atan2(-2, inf^x)', ['x'], plain, 0.1, 0.15).v).toBe(CONTINUOUS)
   })
 
   it('a power by a variable exponent and by a parameter', () => {

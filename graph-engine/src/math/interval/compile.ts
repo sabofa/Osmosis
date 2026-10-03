@@ -361,8 +361,11 @@ function piecewise(out: Iv, conds: readonly INode[], values: readonly INode[], o
       reaches = false
       break
     }
-    // a condition that is NaN somewhere is NaN there, whatever it is elsewhere
-    out.v = worst(out.v, cv.v)
+    // A condition that is NaN somewhere is NaN there, whatever it is elsewhere, so it caps the answer. One that
+    // is defined everywhere caps nothing here: a decided one has a single truth value over the whole box, so a
+    // jump in its operands (floor(x) < 5 over [1.5, 2.5]) is not a jump of the answer, and one that is not
+    // decided makes the answer DEFINED below.
+    if (cv.v < DEFINED) out.v = worst(out.v, cv.v)
     if (surelyTrue(cv)) {
       zeros |= join(out, values[i])
       reaches = false
