@@ -393,7 +393,9 @@ export const bakePainting: BakePainting
 export const recolourBake: RecolourBake
 export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: PaintParams, referenceWorldPerPx: number): string
 export interface BakeProgress { phase: 'plan' | 'planes' | 'edges' | 'strokes' | 'underpaint' | 'pack'; done: number } // done 0..1
-export function bakePaintingWithProgress(scene: SpaceScene, particles: ParticleSet, colours: SceneColours, lightDir: [number, number, number], params: PaintParams, referenceWorldPerPx: number, progress?: (p: BakeProgress) => void): BakedPainting
+export function bakePaintingWithProgress(scene: SpaceScene, particles: ParticleSet, colours: SceneColours, lightDir: [number, number, number], params: PaintParams, authored: AuthoredFraming, progress?: (p: BakeProgress) => void): BakedPainting
+// AuthoredFraming (bake/types.ts, added in Task 2's fix round): { eye, viewDir, ortho, worldPerPx } of the authored view;
+// worldPerPx is the referenceWorldPerPx; eye/viewDir/ortho place the edges' focal points (spec §14).
 // Fill the contract's BakedPainting.focal (from Task 2's WorldEdges.focal) and BakedPainting.dataColour (3 per
 // mark, linear sRGB, the line recipe's colour before the mix; 0 for marks without lines); both fields already exist.
 ```
@@ -672,7 +674,7 @@ This task starts after the controller merges `milestone-a/paint` (live orbit, `l
 - **Colour change.** `classifyChange` gives 'colour': the worker runs `recolourBake` and posts only the colour arrays (strokes' `colour`, and surfaces' under/alpha). The main thread swaps them in and calls `updateBakedColours`. 'render': repaint only.
 - **`light.worldFixed < 0.5`:** the live-orbit path of §13 exactly as today. A test pins that the per-frame path is chosen and the bake is not built.
 - **Debug views.** When one is selected, the lab runs the per-frame model for the settled view (as today). The baked frame shows while dragging.
-- **`referenceWorldPerPx`** = 1 / `pxPerUnit` at the scene's centre under the authored view at zoom 1 (`paintLabCamera.ts`).
+- **`AuthoredFraming`** from the authored view at zoom 1 (`paintLabCamera.ts`): `worldPerPx` = 1 / `pxPerUnit` at the scene's centre, plus the authored `eye`, `viewDir` and `ortho`. A change of the authored view (a new figure) re-bakes; orbiting does not.
 - **The inert slider.** `edges.wDepth`'s slider is labelled "(no effect while the light is fixed in the world)" when `worldFixed` is on.
 - **Context loss.** On restore, re-upload the baked surfaces. The live-orbit agent fixed a blank-on-loss bug, so follow its pattern.
 

@@ -307,7 +307,7 @@ With the key light fixed in the world (`light.worldFixed` = 1, the default), a s
 
 **What moves into world space** (it was screen space):
 - **Planes:** cells of normal direction × value zone on the MESH, merged within a family by world area.
-- **Edge hardness:** contrast between planes, curvature across the edge, light side, and distance from the occluder for cast shadows. The focal point is the brightest highlight, not "nearest the viewer". Terminator, crease, cast-shadow and plane edges are view-independent and are baked.
+- **Edge hardness:** contrast between planes, curvature across the edge, light side, and distance from the occluder for cast shadows. The focal points are the per-frame model's two, taken from the AUTHORED view (the framing the picture is composed for) and then fixed in the world: the terminator point nearest the authored eye, and the brightest. So the terminator is firmest where the authored view looks at it, and stays so as you orbit (ruled 2026-10-03: with the brightest highlight alone the baked terminator had no firm or hard stretch at the default softness, one gradient where Ben asks for many). Terminator, crease, cast-shadow and plane edges are view-independent and are baked.
 
 **Per frame** (milliseconds):
 - select strokes by rank against the screen density (foreshortening);
