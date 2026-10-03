@@ -190,8 +190,8 @@ export const isLightFamily = (params: PaintParams, nl: number, shadow: boolean, 
   lightWeight(Math.max(1e-4, params.value.terminatorSoftness), nl, shadow, ground) > 0.5
 
 // The weight of the terminator's band at a point on a surface: 1 where the plan's own soft edge is at its middle, 0 at its edges
-// (|N·L| = ts / 2) and outside it. A surface stroke (and the underpainting's lattice) follows the plan's own value in the band, the
-// plane's step outside it, and blends between them across it. A ground has no terminator, and a cast shadow is never softened by the band.
+// (|N·L| = ts / 2) and outside it. A surface stroke follows the plan's own value in the band, the plane's step outside it, and blends
+// between them across it (the underpainting's lattice samples do not: its band pixels are made at the plan's own value already). A ground has no terminator, and a cast shadow is never softened by the band.
 export function bandFollow(ts: number, nl: number, shadow = false, ground = false): number {
   if (ground) return 0
   return (1 - smooth(0, Math.max(1e-4, ts) / 2, Math.abs(nl))) * (1 - castWeight(nl, shadow))
