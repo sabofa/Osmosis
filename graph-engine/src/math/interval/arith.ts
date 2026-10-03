@@ -2,7 +2,7 @@
 // operands before writing `out`, so `out` may alias either. Nothing here
 // allocates per call: no closures, no arrays, no scratch objects.
 
-import { down, hull, isEmpty, type Iv, iv, LIB, PARTIAL, set, setEmpty, up, type Verdict, worst } from './core'
+import { DEFINED, down, hull, isEmpty, type Iv, iv, LIB, PARTIAL, set, setEmpty, up, type Verdict, worst } from './core'
 
 function unbounded(a: Iv): boolean {
   return a.lo === -Infinity || a.hi === Infinity
@@ -385,6 +385,10 @@ export function powGeneral(out: Iv, a: Iv, b: Iv): Iv {
   // JavaScript), and no corner shows it when 1 is strictly inside the base.
   // Overflow to 0 or infinity is not undefinedness: the verdict stays.
   if ((a.lo <= 1 && 1 <= a.hi && (b.lo === -Infinity || b.hi === Infinity)) || c1 !== c1 || c2 !== c2 || c3 !== c3 || c4 !== c4) v = worst(v, PARTIAL)
+  // Math.pow(Infinity, y) is 0 below y = 0, 1 at it and Infinity above: a base that reaches Infinity (the
+  // literal inf, or an overflow) under an exponent box holding 0 is defined everywhere but jumps, and the
+  // infinity it gives is the one atan2 and 1 / x map back to a finite value.
+  if (a.hi === Infinity && b.lo <= 0 && 0 <= b.hi) v = worst(v, DEFINED)
   return set(out, down(Math.min(c1, c2, c3, c4), LIB), up(Math.max(c1, c2, c3, c4), LIB), v)
 }
 

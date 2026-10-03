@@ -244,6 +244,24 @@ describe('infinities and zero are flagged', () => {
     expect(sides(iv(), box(1, 800), Math.cosh, 1)).toMatchObject({ hi: Infinity, v: CONTINUOUS })
   })
 
+  it('an infinite base under an exponent box holding 0 jumps: Math.pow(Infinity, y) is 0, 1 and Infinity', () => {
+    // 0 below y = 0, 1 at it, Infinity above: the corners hold all three, and the box is not continuous
+    for (const [lo, hi] of [[-0.8, 0.15], [-1, 0], [0, 1], [-0, 0.5]]) {
+      const r = powGeneral(iv(), box(Infinity, Infinity), box(lo, hi))
+      expect(r.v, `inf^[${lo}, ${hi}]`).toBe(DEFINED)
+      for (const y of [lo, hi, 0, -0]) if (lo <= y && y <= hi) expect(admits(r, Math.pow(Infinity, y)), `inf^${y}`).toBe(true)
+      const wide = powGeneral(iv(), box(2, Infinity), box(lo, hi))
+      expect(wide.v, `[2, inf]^[${lo}, ${hi}]`).toBe(DEFINED)
+    }
+    expect(powGeneral(iv(), box(Infinity, Infinity), box(-0.8, 0.15))).toMatchObject({ hi: Infinity, v: DEFINED })
+    expect(powGeneral(iv(), box(Infinity, Infinity), box(-0.8, 0.15)).lo).toBeLessThanOrEqual(0)
+    // an exponent box on one side of 0 is a monotone step in no variable: continuous
+    expect(powGeneral(iv(), box(Infinity, Infinity), box(0.5, 1)).v).toBe(CONTINUOUS)
+    expect(powGeneral(iv(), box(2, Infinity), box(-1, -0.5)).v).toBe(CONTINUOUS)
+    // and a finite base, however large, is as continuous as ever
+    expect(powGeneral(iv(), box(1e300, 1e308), box(-0.8, 0.15)).v).toBe(CONTINUOUS)
+  })
+
   it('a base of 1 under an infinite exponent is NaN', () => {
     // Math.pow(1, Infinity) is NaN in JavaScript, and no corner of [0.5, 2] x [1, Infinity] shows it
     expect(powGeneral(iv(), box(0.5, 2), box(1, Infinity)).v).toBe(PARTIAL)
