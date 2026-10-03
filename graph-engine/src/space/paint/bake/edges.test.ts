@@ -1,90 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MeshMark } from '../../scene/types'
-import { DEFAULT_PAINT_PARAMS, type PaintParams } from '../params'
+import { type PaintParams } from '../params'
 import { clamp } from '../model/math'
 import { edgeClassOf } from '../model/edges'
-import { makeCurve } from '../model/curve'
-import { buildParticles } from '../model/particles'
-import { flatColours, lineMark, pointMark, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
+import { lineMark, pointMark, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
 import { worldLight } from '../model/valueFinalFixture'
 import { buildWorldEdges, edgeClassAlong, EDGE_STEP_PX, type WorldEdgeRun, type WorldEdges } from './edges'
-import { buildWorldPlan, newPlanAt, planAt, type WorldPlan } from './plan'
-import { buildWorldPlanes, type WorldPlanes } from './planes'
+import { buildWorldPlan } from './plan'
+import { buildWorldPlanes } from './planes'
 import { locate, type SurfacePoint } from './surface'
+import { at, bake, boxMesh, bytes, classes, framing, FRONT, LIGHT, meanH, P, PX, runsOf, SPHERE_SCENE } from './edgesFixture'
 
 // A plan over a refined surface is heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 120_000 })
 
-const P = DEFAULT_PAINT_PARAMS
-const PX = 1 / 150 // world units per CSS px
 const STEP = EDGE_STEP_PX * PX
 const CELL = 12 * PX // a refined cell of the plan, away from the boundaries
-const LIGHT = worldLight(-35, 39) // the lab's key light
-const COLOURS = flatColours({ 0: [0.56, 0.1, 0.08], 1: [0.9, 0.01, 0.02] })
-
-interface Baked {
-  scene: ReturnType<typeof sceneOf>
-  plan: WorldPlan
-  planes: WorldPlanes
-  edges: WorldEdges
-}
-function bake(scene: ReturnType<typeof sceneOf>, light: [number, number, number], params: PaintParams = P): Baked {
-  const plan = buildWorldPlan(scene, light, params, PX)
-  const set = buildParticles(scene, COLOURS, params)
-  const planes = buildWorldPlanes(plan, set, COLOURS, makeCurve(params), params)
-  return { scene, plan, planes, edges: buildWorldEdges(plan, planes, params, scene) }
-}
-
-// A sphere (r 1) on a table at z = -1.
-const SPHERE_SCENE = sceneOf([sphereMesh({ radius: 1, index: 0, nu: 36, nv: 24 }), tableMesh({ z: -1, half: 3, index: 1 })])
 const BASE = bake(SPHERE_SCENE, LIGHT)
-
-const bytes = (a: ArrayBufferView) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString('base64')
-const runsOf = (e: WorldEdges, type: WorldEdgeRun['type']) => e.runs.filter((r) => r.type === type)
-const classes = (runs: WorldEdgeRun[]): number[] => {
-  const h = [0, 0, 0, 0]
-  for (const r of runs) for (const c of r.cls) h[c]++
-  return h
-}
-const meanH = (runs: WorldEdgeRun[]): number => {
-  let s = 0
-  let n = 0
-  for (const r of runs) for (const h of r.h) {
-    s += h
-    n++
-  }
-  return s / n
-}
-const at = (plan: WorldPlan, mark: number, r: WorldEdgeRun, i: number, side: 1 | -1 = 1) => {
-  const p: SurfacePoint = { tri: 0, b1: 0, b2: 0 }
-  expect(locate(plan.surfaces[mark]!, r.pts[3 * i], r.pts[3 * i + 1], r.pts[3 * i + 2], 0, 0, 0, 1e-6, p)).toBe(true)
-  return planAt(plan, mark, side, p, newPlanAt())
-}
-
-// A closed box (flat-shaded: its normals are its faces', so every crease is sharp), lo..hi.
-function boxMesh(lo: number[], hi: number[], index: number): MeshMark {
-  const base = sphereMesh({ index })
-  const pos: number[] = []
-  const nor: number[] = []
-  const idx: number[] = []
-  const [x0, y0, z0] = lo
-  const [x1, y1, z1] = hi
-  const quad = (a: number[], b: number[], c: number[], d: number[], n: number[]) => {
-    const i = pos.length / 3
-    for (const v of [a, b, c, d]) {
-      pos.push(...v)
-      nor.push(...n)
-    }
-    idx.push(i, i + 1, i + 2, i, i + 2, i + 3)
-  }
-  quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], [1, 0, 0])
-  quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0])
-  quad([x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [0, 1, 0])
-  quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -1, 0])
-  quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1])
-  quad([x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0], [0, 0, -1])
-  return { ...base, positions: Float64Array.from(pos), normals: Float64Array.from(nor), indices: Uint32Array.from(idx), uv: null, scalars: null }
-}
 
 describe('the terminator of a sphere under the lab’s light', () => {
   const { plan, planes, edges } = BASE
@@ -310,7 +241,7 @@ describe('the cast shadow on the table', () => {
     expect(far).toBeLessThan(near)
     // the occluder-distance term is part of it: without it (wShadowDist 0) the gap is smaller
     const noX: PaintParams = { ...P, edges: { ...P.edges, wShadowDist: 0 } }
-    const edges0 = buildWorldEdges(box.plan, box.planes, noX, scene)
+    const edges0 = buildWorldEdges(box.plan, box.planes, noX, scene, FRONT)
     const rows0: [number, number][] = []
     for (const r of runsOf(edges0, 'shadow').filter((x) => x.mark === 1)) for (let i = 0; i < r.h.length; i++) rows0.push([at(box.plan, 1, r, i).shadowDist / PX, r.h[i]])
     rows0.sort((a, b) => a[0] - b[0])
@@ -399,20 +330,112 @@ describe('a scene with nothing to paint on', () => {
   })
 })
 
-describe('the focal points', () => {
-  it('are the two brightest vertices of each figure (the table and non-meshes have none), 8 numbers per mark, R = 0.55·√(area/π)', () => {
+describe('the focal points: the AUTHORED view’s, fixed in the world', () => {
+  const sphereOnly = bake(sceneOf([sphereMesh({ radius: 1, index: 0, nu: 36, nv: 24 })]), LIGHT)
+  const keyOf = (f: Float64Array, k: number) => f[4 * k] * LIGHT[0] + f[4 * k + 1] * LIGHT[1] + f[4 * k + 2] * LIGHT[2]
+  const dirOf = (az: number, el: number) => worldLight(az, el)
+
+  it('are the model’s two: the terminator nearest the authored eye (s1) and the brightest (s2), 8 numbers per mark, none for the table', () => {
     const f = BASE.edges.focal
     expect(f.length).toBe(8 * 2)
+    const eye = dirOf(20, 25) // FRONT's eye direction
     for (let k = 0; k < 2; k++) {
-      const x = f[4 * k]
-      const y = f[4 * k + 1]
-      const z = f[4 * k + 2]
-      expect(Math.hypot(x, y, z)).toBeCloseTo(1, 1)
-      // the brightest: facing the light
-      expect(x * LIGHT[0] + y * LIGHT[1] + z * LIGHT[2]).toBeGreaterThan(0.98)
-      expect(f[4 * k + 3]).toBeCloseTo(0.55 * 2, 1) // a unit sphere: area 4π, √(4π/π) = 2
+      expect(Math.hypot(f[4 * k], f[4 * k + 1], f[4 * k + 2])).toBeCloseTo(1, 1)
     }
+    // s1: on the terminator's plateau (N·L of about 0.26 to 0.3 where the model's score peaks: smooth(0.1, 0.26, key)·(1 - smooth(0.3, 0.5, key))), on the
+    // side the authored eye sees, and nearest it
+    expect(keyOf(f, 0)).toBeGreaterThan(0.24)
+    expect(keyOf(f, 0)).toBeLessThan(0.32)
+    expect(f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2]).toBeGreaterThan(0.85)
+    // s2: the brightest, facing the light
+    expect(keyOf(f, 1)).toBeGreaterThan(0.98)
     for (let k = 8; k < 16; k++) expect(Number.isNaN(f[k])).toBe(true)
+  })
+
+  it('moves with the authored eye, along the terminator: another eye, another s1, on the same plateau and facing that eye', () => {
+    const e2 = framing(100, 15)
+    const f1 = BASE.edges.focal
+    const f2 = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, e2).focal
+    const moved = Math.hypot(f1[0] - f2[0], f1[1] - f2[1], f1[2] - f2[2])
+    expect(moved).toBeGreaterThan(0.5)
+    expect(keyOf(f2, 0)).toBeGreaterThan(0.24)
+    expect(keyOf(f2, 0)).toBeLessThan(0.32)
+    const d = dirOf(100, 15)
+    expect(f2[0] * d[0] + f2[1] * d[1] + f2[2] * d[2]).toBeGreaterThan(0.7)
+    // an eye on the other side of the sphere sees the other side of the terminator
+    const f3 = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, framing(-120, 20)).focal
+    expect(f3[0] * f1[0] + f3[1] * f1[1] + f3[2] * f1[2]).toBeLessThan(0.5)
+    // (the highlight is the light's, wherever the eye is)
+    expect(keyOf(f3, 1)).toBeGreaterThan(0.95)
+  })
+
+  it('makes the terminator firmer where the authored eye looks at it: the samples within R of s1 are soft (and nowhere else), the rest lost', () => {
+    const t = runsOf(BASE.edges, 'terminator')[0]
+    const f = BASE.edges.focal
+    const R = f[3]
+    let near = 0
+    let nearSoft = 0
+    let far = 0
+    let farSoft = 0
+    let nearH = 0
+    let farH = 0
+    for (let i = 0; i < t.h.length; i++) {
+      const d = Math.hypot(t.pts[3 * i] - f[0], t.pts[3 * i + 1] - f[1], t.pts[3 * i + 2] - f[2])
+      if (d < R) {
+        near++
+        nearH += t.h[i]
+        if (t.cls[i] >= 1) nearSoft++
+      } else if (d > 2 * R) {
+        far++
+        farH += t.h[i]
+        if (t.cls[i] >= 1) farSoft++
+      }
+    }
+    expect(near).toBeGreaterThan(40)
+    expect(far).toBeGreaterThan(100)
+    expect(nearSoft).toBeGreaterThanOrEqual(0.9 * near)
+    expect(farSoft).toBe(0)
+    expect(nearH / near).toBeGreaterThan(2 * (farH / far))
+    // the histogram at the default softness (the task report's): soft samples where the eye looks, no firm or hard ones
+    const h = classes([t])
+    expect(h[1]).toBeGreaterThan(0.1 * t.h.length)
+    // the depth term of the authored view is the way to firm samples: with it the terminator has some, all of them near s1
+    const deep = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, FRONT, { authoredDepth: true })
+    const td = runsOf(deep, 'terminator')[0]
+    let firm = 0
+    for (let i = 0; i < td.h.length; i++) {
+      if (td.cls[i] < 2) continue
+      firm++
+      expect(Math.hypot(td.pts[3 * i] - f[0], td.pts[3 * i + 1] - f[1], td.pts[3 * i + 2] - f[2])).toBeLessThan(1.5 * R)
+    }
+    expect(firm).toBeGreaterThan(2)
+    expect(meanH([td])).toBeGreaterThan(meanH([t]))
+  })
+
+  it('has R = 0.55·√(A/π) with A the area the authored view sees: 0.55 on a unit sphere (within 5%) for an orthographic eye or a distant one, less for a near perspective eye', () => {
+    const R = (a: ReturnType<typeof framing>) => buildWorldEdges(sphereOnly.plan, sphereOnly.planes, P, sphereOnly.scene, a).focal[3]
+    expect(Math.abs(R(framing(20, 25, 8, true)) / 0.55 - 1)).toBeLessThan(0.05)
+    expect(Math.abs(R(framing(20, 25, 30)) / 0.55 - 1)).toBeLessThan(0.05)
+    expect(Math.abs(R(framing(200, -40, 100)) / 0.55 - 1)).toBeLessThan(0.05)
+    // (a perspective eye sees less of the sphere's cosines: the lab's authored distance is about 3.9 radii)
+    expect(R(framing(20, 25, 3.86))).toBeLessThan(R(framing(20, 25, 30)))
+    expect(R(framing(20, 25, 3.86))).toBeGreaterThan(0.4)
+  })
+
+  it('is the only thing the framing changes: the plan, the planes and every run’s geometry, values and planes are those of any other framing, the hardness is not', () => {
+    const other = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, framing(150, 60))
+    expect(other.runs.length).toBe(BASE.edges.runs.length)
+    let hardnessDiffers = false
+    BASE.edges.runs.forEach((r, k) => {
+      const q = other.runs[k]
+      for (const key of ['pts', 'nrm', 'across', 'keys', 'planeA', 'planeB', 'uA', 'uB'] as const) expect(bytes(q[key]), `run ${k} ${key}`).toBe(bytes(r[key]))
+      if (bytes(q.h) !== bytes(r.h)) hardnessDiffers = true
+    })
+    expect(hardnessDiffers).toBe(true)
+    // no other function takes a view: the plan, the planes and the edge-class reader
+    expect(buildWorldPlan.length).toBe(4) // scene, light, params, reference world per px (options is optional)
+    expect(buildWorldPlanes.length).toBe(5) // plan, particles, colours, curve, params
+    expect(edgeClassAlong.length).toBe(7)
   })
 })
 
@@ -571,7 +594,7 @@ describe('the edge field', () => {
 
 describe('what the edges read', () => {
   it('takes no view, no camera and no G-buffer: the plan, the planes, the params and the scene’s own meshes (for their creases)', () => {
-    expect(buildWorldEdges.length).toBe(4) // plan, planes, params, scene (options is optional)
+    expect(buildWorldEdges.length).toBe(5) // plan, planes, params, scene, authored (options is optional)
     expect(buildWorldPlanes.length).toBe(5) // plan, particles, colours, curve, params
     expect(edgeClassAlong.length).toBe(7)
   })
@@ -599,7 +622,7 @@ describe('what the edges read', () => {
 
 describe('the sides’ values', () => {
   it('reads the planes’ means by default and the probes’ plan values on request: the probes see little of a smooth ramp (the plane boundaries have almost no contrast), the means the step', () => {
-    const probes = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, { sideValues: 'probes' })
+    const probes = buildWorldEdges(BASE.plan, BASE.planes, P, BASE.scene, FRONT, { sideValues: 'probes' })
     const planeRuns = (e: WorldEdges) => runsOf(e, 'plane')
     const meanContrast = (rs: WorldEdgeRun[]) => rs.reduce((s, r) => s + r.contrast * r.h.length, 0) / rs.reduce((s, r) => s + r.h.length, 0)
     expect(meanContrast(planeRuns(probes))).toBeLessThan(0.02)
@@ -608,7 +631,7 @@ describe('the sides’ values', () => {
     // a crease or a border reads its probes either way
     const sheet = quadMesh({ origin: [-1, -1, 0.2], e1: [2, 0, 0], e2: [0, 2, 0.4], n: 6, index: 0 })
     const b = bake(sceneOf([sheet]), [0.3, 0.2, 0.9])
-    const b2 = buildWorldEdges(b.plan, b.planes, P, b.scene, { sideValues: 'probes' })
+    const b2 = buildWorldEdges(b.plan, b.planes, P, b.scene, FRONT, { sideValues: 'probes' })
     expect(bytes(b2.runs[0].h)).toBe(bytes(b.edges.runs[0].h))
   })
 })

@@ -5,11 +5,12 @@
 // each plane's mask on the G-buffer, the meshes' own lines clipped by it. The bake finds them on the refined surfaces
 // (bake/surface.ts), so an edge is where it is on the surface whatever the view:
 //
-//   TERMINATOR AND CAST BOUNDARY ON A FIGURE. The iso line 0.5, per side, of  lw = lightWeight(ts, N·L) × smooth(0.25, 0.75, vis)
-//   (the light family's weight less the shadow's vote: where the surface turns from the light, and where another form's
-//   shadow falls on it), by marching triangles on the refined surface. A stretch of it is the TERMINATOR's where the
-//   turn from the light changes lw more across its triangles than the shadow vote does, else a cast shadow's ('shadow',
-//   kind 0: an internal edge, as in the model).
+//   TERMINATOR AND CAST BOUNDARY ON A FIGURE. The iso line 0.5, per side, of the plan's own light-family weight (familyField:
+//   lw = vis·lightWeight(ts, N·L, false) + (1 - vis)·lightWeight(ts, N·L, true), whose 0.5 is the plan's family boundary wherever
+//   the shadow flag is settled), by marching triangles on the refined surface: where the surface turns from the light, and where
+//   another form's shadow takes the light family's weight under a half, a lit strip between the two included. A stretch of it is
+//   the TERMINATOR's where the turn from the light changes the weight more across its triangles than the shadow's vote does, else
+//   a cast shadow's ('shadow', kind 0: an internal edge, as in the model).
 //   TABLE CAST BOUNDARY. The iso line 0.5 of `vis` on a ground: 'shadow', kind 2.
 //   PLANE BOUNDARIES. The chains of shared triangle edges between two planes of the same mesh and side and of the same
 //   FAMILY (planes.ts): between families the iso lines above are the edge, so a plane chain never doubles one. Smoothed by two
@@ -34,11 +35,16 @@
 // FLAGGED, which keeps it out of the run's contrast. Beyond a BORDER there is no surface at all: that side is the canvas (the
 // model's own reading where nothing lies across an outline). Normals for the curvature term are read at the probes.
 //
-// HARDNESS per sample is the model's: edgeHardness(kind) of the terms c (value contrast), k (curvature), f (focal emphasis:
-// the two brightest vertices of each figure, 0.55·√(area/π) of reach), s (light side) and, for a table's cast edge, x (the
-// distance from the occluder, in px at the reference scale), plus the seeded noise, times the terminator's softness scale,
-// lost where the contrast is under 0.03; then the class and the median of 7. The depth term is 0: a world edge has no view
-// depth, so edges.wDepth does nothing under the bake.
+// HARDNESS per sample is the model's: edgeHardness(kind) of the terms c (value contrast), k (curvature), f (focal emphasis: exp(-(d/R)²)
+// about the two focal points of the figure, below), s (light side) and, for a table's cast edge, x (the distance from the occluder, in px
+// at the reference scale), plus the seeded noise, times the terminator's softness scale, lost where the contrast is under 0.03; for a crease
+// or border, raised to a found edge where the outline of a form in shadow meets light (the model's floor); then the class and the median
+// of 7. The depth term is 0: a world edge has no view depth, so edges.wDepth does nothing under the bake (WorldEdgeOptions.authoredDepth
+// measures it from the authored eye instead, off by default).
+//
+// THE FOCAL POINTS are the per-frame model's two (findFocal), taken from the AUTHORED framing (the view the picture is composed for, the
+// buildWorldEdges `authored` argument) and then fixed in the world: the terminator nearest the authored eye and the brightest highlight,
+// so the terminator is firmest where the authored view looks at it and stays so as the camera orbits (focalPoints).
 //
 // THE EDGE FIELD. For each vertex of each side: the world distance to the nearest edge sample of a run whose contrast reaches
 // detect.edgeMinContrast within detect.edgeReachPx × the reference world per px, and that sample's hardness and class
@@ -48,9 +54,10 @@
 import { staticLines } from '../model/contours'
 import { edgeClassOf, edgeHardness, edgeNoiseSeed, EDGE_NOISE_FREQ, isTerminatorPair, smoothClasses, terminatorEdgeScale, type EdgeType } from '../model/edges'
 import { clamp, hash3, smooth, valueNoise3 } from '../model/math'
-import { lightWeight } from '../model/value'
+import { lightWeight, Z_CAST } from '../model/value'
 import type { SpaceScene, MeshMark } from '../../scene/types'
 import type { PaintParams } from '../params'
+import type { AuthoredFraming } from './types'
 import { newPlanAt, planAt, type SidePlan, type WorldPlan } from './plan'
 import type { WorldPlanes } from './planes'
 import { locate, normalOf, pointOf, type RefinedSurface, type SurfacePoint } from './surface'
@@ -103,8 +110,8 @@ export interface WorldEdges {
   // The edge field per refined vertex per side ([mark][side index 0 = +1, 1 = -1]; a closed opaque mesh has index 0 only, and a mark
   // that is not an opaque mesh has none).
   field: { dist: Float32Array; hard: Float32Array; cls: Uint8Array }[][]
-  // The focal points of each mark, as BakedPainting.focal: 2 per mark (x, y, z, R world each: 8 per mark), NaN where a mark has fewer
-  // (a ground, a veil and a non-mesh have none).
+  // The focal points of each mark, as BakedPainting.focal: 2 per mark (x, y, z, R world each: 8 per mark), the terminator nearest the
+  // authored eye then the brightest, NaN where a mark has fewer (a ground, a veil and a non-mesh have none).
   focal: Float64Array
   // The reach of the field, world units (detect.edgeReachPx × the reference world per px), and the params the bake was made with
   // (the class thresholds and the interior hardness fallback read them).
@@ -121,11 +128,16 @@ export interface WorldEdgeOptions {
   //     boundary inside a family has almost no contrast and the terminator, a 15 px edge at the default softness, a third of its step.
   // A crease or border (kind 1) always reads its probes (the model's contours read the pixels' own values).
   sideValues?: 'planes' | 'probes'
+  // The model's depth term (edges.wDepth: nearer is harder) measured from the AUTHORED eye, fixed in the world: d = 1 - smooth(0, 1, (depth - zN) / zR),
+  // depth along the authored view direction, zN and zR the near end and the span of the depth of what the authored view sees of the figures (and of
+  // the cast shadows on the ground), as the per-frame model's. Off by default (ruling 2026-10-03: a world edge has no view depth term, so
+  // edges.wDepth does nothing under the bake): with it on the terminator is harder where it is nearer the authored eye, as the model's focal point is.
+  authoredDepth?: boolean
 }
 
 const EDGE_RADIX = 67_108_864 // 2^26, as surface.ts: canonical ids pair into a number exactly
 
-interface Chain {
+export interface Chain {
   nodes: number[]
   // segs[j] is the segment between nodes[j] and nodes[j + 1] (and, on a closed chain, the last between the last node and the first).
   segs: number[]
@@ -133,7 +145,7 @@ interface Chain {
 }
 
 // Chain segments (pairs of node ids) into polylines, closed where they close. Deterministic: from the first unused segment, forward then back.
-function chainSegments(nNodes: number, sa: ArrayLike<number>, sb: ArrayLike<number>): Chain[] {
+export function chainSegments(nNodes: number, sa: ArrayLike<number>, sb: ArrayLike<number>): Chain[] {
   const nSeg = sa.length
   const start = new Int32Array(nNodes + 1)
   for (let j = 0; j < nSeg; j++) {
@@ -161,24 +173,30 @@ function chainSegments(nNodes: number, sa: ArrayLike<number>, sb: ArrayLike<numb
   for (let j0 = 0; j0 < nSeg; j0++) {
     if (used[j0]) continue
     used[j0] = 1
-    const nodes = [sa[j0], sb[j0]]
-    const segs = [j0]
+    // forward from the segment's second node, then back from its first (the back half is built in the order met and joined reversed: an
+    // unshift per node would make a long chain quadratic)
+    const fwdNodes = [sa[j0], sb[j0]]
+    const fwdSegs = [j0]
     for (;;) {
-      const end = nodes[nodes.length - 1]
+      const end = fwdNodes[fwdNodes.length - 1]
       const j = nextUnused(end)
       if (j < 0) break
       used[j] = 1
-      nodes.push(sa[j] === end ? sb[j] : sa[j])
-      segs.push(j)
+      fwdNodes.push(sa[j] === end ? sb[j] : sa[j])
+      fwdSegs.push(j)
     }
+    const backNodes: number[] = []
+    const backSegs: number[] = []
     for (;;) {
-      const end = nodes[0]
+      const end = backNodes.length > 0 ? backNodes[backNodes.length - 1] : fwdNodes[0]
       const j = nextUnused(end)
       if (j < 0) break
       used[j] = 1
-      nodes.unshift(sa[j] === end ? sb[j] : sa[j])
-      segs.unshift(j)
+      backNodes.push(sa[j] === end ? sb[j] : sa[j])
+      backSegs.push(j)
     }
+    const nodes = backNodes.length > 0 ? backNodes.reverse().concat(fwdNodes) : fwdNodes
+    const segs = backSegs.length > 0 ? backSegs.reverse().concat(fwdSegs) : fwdSegs
     const closed = nodes.length > 2 && nodes[0] === nodes[nodes.length - 1]
     if (closed) nodes.pop()
     chains.push({ nodes, segs, closed })
@@ -392,44 +410,95 @@ interface Ctx {
   focal: Float64Array
   nMarks: number
   sideValues: 'planes' | 'probes'
+  // The authored view's depth range (options.authoredDepth), else null: the eye, the unit view direction, the nearest depth and the span.
+  depth: { eye: number[]; dir: number[]; zN: number; zR: number } | null
 }
 
 const KIND_TYPE: EdgeType[] = ['internal', 'silhouette', 'shadow']
 
 // ---- focal points ----
 
-function focalPoints(plan: WorldPlan): Float64Array {
+// The two places a painter would make an edge firm, found as the per-frame model finds them (model/edges.ts findFocal) but for the
+// AUTHORED framing (the view the picture is composed for) and fixed in the world: per figure mark, over the vertices of both its sides
+// (an open mesh is seen from either), with the side's normal n and the key light's share at the vertex `key` (0 in shadow):
+//   nz = n·toEye, counted only where it is over 0 (the authored view sees the vertex from this side); toEye is the direction to the eye
+//   (the unit direction -viewDir for an orthographic view)
+//   s1 = nz · smooth(0.1, 0.26, key) · (1 - smooth(0.3, 0.5, key))   the terminator nearest the authored eye
+//   s2 = key + 0.1 · nz                                               the brightest highlight
+// each point the argmax of its score, the first met winning a tie (the model's strict >), and none where the best score is 0 (the model
+// would take the first pixel of the picture there). R = 0.55·√(A/π) with A the mark's area as the authored view sees it:
+// Σ area·(n·toEye) over the triangles of both sides with n·toEye over 0, the model's visible projected area, so a sphere's R is 0.55 r.
+// 8 numbers per mark (BakedPainting.focal): the s1 point (x, y, z, R), the s2 point; NaN where there is none (a ground, a veil, a non-mesh).
+function focalPoints(plan: WorldPlan, authored: AuthoredFraming): Float64Array {
   const nMarks = plan.surfaces.length
   const out = new Float64Array(8 * nMarks).fill(Number.NaN)
+  const vd = authored.viewDir
+  const vl = Math.hypot(vd[0], vd[1], vd[2]) || 1
+  const back = [-vd[0] / vl, -vd[1] / vl, -vd[2] / vl]
+  const toEye = [0, 0, 0]
+  const eyeOf = (x: number, y: number, z: number): void => {
+    if (authored.ortho) {
+      toEye[0] = back[0]
+      toEye[1] = back[1]
+      toEye[2] = back[2]
+      return
+    }
+    const dx = authored.eye[0] - x
+    const dy = authored.eye[1] - y
+    const dz = authored.eye[2] - z
+    const l = Math.hypot(dx, dy, dz) || 1
+    toEye[0] = dx / l
+    toEye[1] = dy / l
+    toEye[2] = dz / l
+  }
   for (let m = 0; m < nMarks; m++) {
     const s = plan.surfaces[m]
     if (!s || plan.veil[m] === 1 || plan.ground[m] === 1) continue
-    const plans = [plan.front[m], plan.back[m]]
-    // the two highest `key` (the key light's share at the vertex: 0 in shadow) over both sides, the first met winning a tie
-    let k1 = 0
-    let k2 = 0
+    const nv = s.positions.length / 3
+    let b1 = 0
+    let b2 = 0
     let v1 = -1
     let v2 = -1
-    for (const sp of plans) {
-      if (!sp) continue
-      for (let v = 0; v < sp.key.length; v++) {
-        const k = sp.key[v]
-        if (k > k1) {
-          k2 = k1
-          v2 = v1
-          k1 = k
+    let area = 0
+    ;[plan.front[m], plan.back[m]].forEach((sp, k) => {
+      if (!sp) return
+      const o = (k === 0 ? 1 : -1) * s.orient
+      const p = s.positions
+      const nor = s.normals
+      for (let v = 0; v < nv; v++) {
+        eyeOf(p[3 * v], p[3 * v + 1], p[3 * v + 2])
+        const nz = o * (nor[3 * v] * toEye[0] + nor[3 * v + 1] * toEye[1] + nor[3 * v + 2] * toEye[2])
+        if (!(nz > 0)) continue
+        const key = sp.key[v]
+        const s1 = nz * smooth(0.1, 0.26, key) * (1 - smooth(0.3, 0.5, key))
+        const s2 = key + 0.1 * nz
+        if (s1 > b1) {
+          b1 = s1
           v1 = v
-        } else if (k > k2) {
-          k2 = k
+        }
+        if (s2 > b2) {
+          b2 = s2
           v2 = v
         }
       }
-    }
-    let area = 0
-    for (let t = 0; t < s.area.length; t++) area += s.area[t]
+      // the area the authored view sees of this side
+      for (let t = 0; t < s.indices.length / 3; t++) {
+        const a = s.indices[3 * t]
+        const b = s.indices[3 * t + 1]
+        const cc = s.indices[3 * t + 2]
+        eyeOf((p[3 * a] + p[3 * b] + p[3 * cc]) / 3, (p[3 * a + 1] + p[3 * b + 1] + p[3 * cc + 1]) / 3, (p[3 * a + 2] + p[3 * b + 2] + p[3 * cc + 2]) / 3)
+        const nx = nor[3 * a] + nor[3 * b] + nor[3 * cc]
+        const ny = nor[3 * a + 1] + nor[3 * b + 1] + nor[3 * cc + 1]
+        const nzz = nor[3 * a + 2] + nor[3 * b + 2] + nor[3 * cc + 2]
+        const l = Math.hypot(nx, ny, nzz)
+        if (!(l > 1e-12)) continue
+        const d = (o * (nx * toEye[0] + ny * toEye[1] + nzz * toEye[2])) / l
+        if (d > 0) area += s.area[t] * d
+      }
+    })
     const R = 0.55 * Math.sqrt(area / Math.PI)
     ;[v1, v2].forEach((v, k) => {
-      if (v < 0) return
+      if (v < 0 || !(R > 0)) return
       out[8 * m + 4 * k] = s.positions[3 * v]
       out[8 * m + 4 * k + 1] = s.positions[3 * v + 1]
       out[8 * m + 4 * k + 2] = s.positions[3 * v + 2]
@@ -437,6 +506,46 @@ function focalPoints(plan: WorldPlan): Float64Array {
     })
   }
   return out
+}
+
+// The depth range the authored view sees (the model's zN, zR over what is painted: the figures, and the cast shadows on a ground), along its direction.
+function authoredDepthRange(plan: WorldPlan, authored: AuthoredFraming): { eye: number[]; dir: number[]; zN: number; zR: number } {
+  const vl = Math.hypot(authored.viewDir[0], authored.viewDir[1], authored.viewDir[2]) || 1
+  const dir = [authored.viewDir[0] / vl, authored.viewDir[1] / vl, authored.viewDir[2] / vl]
+  const eye = [authored.eye[0], authored.eye[1], authored.eye[2]]
+  let zN = Infinity
+  let zF = -Infinity
+  plan.surfaces.forEach((s, m) => {
+    if (!s || plan.veil[m] === 1) return
+    const ground = plan.ground[m] === 1
+    ;[plan.front[m], plan.back[m]].forEach((sp, k) => {
+      if (!sp) return
+      const o = (k === 0 ? 1 : -1) * s.orient
+      for (let v = 0; v < s.positions.length / 3; v++) {
+        if (ground && sp.zone[v] !== Z_CAST) continue
+        const x = s.positions[3 * v]
+        const y = s.positions[3 * v + 1]
+        const z = s.positions[3 * v + 2]
+        let tx = -dir[0]
+        let ty = -dir[1]
+        let tz = -dir[2]
+        if (!authored.ortho) {
+          tx = eye[0] - x
+          ty = eye[1] - y
+          tz = eye[2] - z
+          const l = Math.hypot(tx, ty, tz) || 1
+          tx /= l
+          ty /= l
+          tz /= l
+        }
+        if (!(o * (s.normals[3 * v] * tx + s.normals[3 * v + 1] * ty + s.normals[3 * v + 2] * tz) > 0)) continue
+        const depth = (x - eye[0]) * dir[0] + (y - eye[1]) * dir[1] + (z - eye[2]) * dir[2]
+        if (depth < zN) zN = depth
+        if (depth > zF) zF = depth
+      }
+    })
+  })
+  return { eye, dir, zN: Number.isFinite(zN) ? zN : 0, zR: Math.max(1e-6, Number.isFinite(zF) ? zF - zN : 1) }
 }
 
 // f: max exp(-(d/R)²) over the focal points of the mark (of every figure, for a point on a ground).
@@ -616,10 +725,30 @@ const LOC_S: SurfacePoint = { tri: 0, b1: 0, b2: 0 }
 
 // A probe at (x, y, z) from the sample p: a surface point of the same surface within reach that is not the sample's own neighbourhood
 // (past a border the nearest point is the border itself, next to the sample: no probe).
-function probe(c: Ctx, sc: SideCtx, x: number, y: number, z: number, px: number, py: number, pz: number, out: SurfacePoint, tmp: number[]): boolean {
-  if (!locate(sc.s, x, y, z, 0, 0, 0, 1.05 * c.delta, out)) return false
+function probe(c: Ctx, sc: SideCtx, x: number, y: number, z: number, px: number, py: number, pz: number, out: SurfacePoint, tmp: number[], delta = c.delta): boolean {
+  if (!locate(sc.s, x, y, z, 0, 0, 0, 1.05 * delta, out)) return false
   pointOf(sc.s, out, tmp)
-  return Math.hypot(tmp[0] - px, tmp[1] - py, tmp[2] - pz) >= 0.5 * c.delta
+  return Math.hypot(tmp[0] - px, tmp[1] - py, tmp[2] - pz) >= 0.5 * delta
+}
+
+const PM = newPlanAt()
+const LOC_M: SurfacePoint = { tri: 0, b1: 0, b2: 0 }
+
+// The plan's value `px` CSS px from the sample along (dx, dy, dz) on the same surface, or NaN where there is none (past a border).
+function valueAlong(c: Ctx, sc: SideCtx, x: number, y: number, z: number, dx: number, dy: number, dz: number, px: number, tmp: number[]): number {
+  const d = px * c.perPx
+  if (!probe(c, sc, x + d * dx, y + d * dy, z + d * dz, x, y, z, LOC_M, tmp, d)) return Number.NaN
+  return planAt(c.plan, sc.mark, sc.side, LOC_M, PM).u
+}
+
+// The class of each sample of a run as the median of the 7 samples about it (model/edges.ts smoothClasses, whose ends repeat), the samples of a
+// CLOSED run wrapping round: its first samples are next to its last, so a change of class across its start is smoothed like any other.
+export function smoothRunClasses(raw: Uint8Array, closed: boolean): Uint8Array {
+  const n = raw.length
+  if (!closed || n < 7) return smoothClasses(raw)
+  const ext = new Uint8Array(n + 6)
+  for (let k = 0; k < n + 6; k++) ext[k] = raw[(k - 3 + n) % n]
+  return smoothClasses(ext).slice(3, 3 + n)
 }
 
 function scoreRun(c: Ctx, sc: SideCtx, g: Geom, spec: RunSpec): Scored | null {
@@ -776,19 +905,31 @@ function scoreRun(c: Ctx, sc: SideCtx, g: Geom, spec: RunSpec): Scored | null {
     if (spec.type === 'terminator') tScale = tScaleAll
     else if (spec.type === 'plane' && planeA[i] >= 0 && planeB[i] >= 0 && isTerminatorPair(c.planes.planes[planeA[i]].zone, c.planes.planes[planeB[i]].zone)) tScale = tScaleAll
     const noise = valueNoise3(x * EDGE_NOISE_FREQ, y * EDGE_NOISE_FREQ, z * EDGE_NOISE_FREQ, c.noiseSeed)
-    let hh = (edgeHardness(kindType, { c: cTerm, k: kTerm, f: fTerm, s: sTerm, d: 0, x: xTerm }, params) + ep.noise * noise) * tScale
+    let hh = (edgeHardness(kindType, { c: cTerm, k: kTerm, f: fTerm, s: sTerm, d: c.depth ? 1 - smooth(0, 1, ((x - c.depth.eye[0]) * c.depth.dir[0] + (y - c.depth.eye[1]) * c.depth.dir[1] + (z - c.depth.eye[2]) * c.depth.dir[2] - c.depth.zN) / c.depth.zR) : 0, x: xTerm }, params) + ep.noise * noise) * tScale
     if (con < 0.03) hh = Math.min(hh, ep.lostBelow - 0.01) // no visible transition: lost
+    else if (spec.kind === 1) {
+      // The outline of a form in shadow against light (the canvas, or the lit face of a crease) is where two families meet: a FOUND edge, whatever
+      // the other terms say (the model's: a far limb's depth and focal weights could make it read soft, and a soft one is blended with the canvas).
+      // The shadow side's lowest value is taken over the way in (1 and 2 px: at a limb the normal turns fast, so the pixel inside can be lit where
+      // the outline itself is already in the shadow); a crease's two sides are alike, a border's other side is the canvas.
+      let loA = ua
+      let loB = ub
+      for (const px of [1, 2]) {
+        const va = valueAlong(c, sc, x, y, z, -ax, -ay, -az, px, tmp)
+        if (va < loA) loA = va
+        if (spec.type === 'crease') {
+          const vb = valueAlong(c, sc, x, y, z, ax, ay, az, px, tmp)
+          if (vb < loB) loB = vb
+        }
+      }
+      if (Math.min(loA, loB) <= c.plan.capU && Math.max(ua, ub) >= c.plan.floorU) hh = Math.max(hh, ep.softBelow + 0.01)
+    }
     h[i] = clamp(hh, 0, 1)
     raw[i] = edgeClassOf(h[i], params)
     keys[i] = hash3(Math.round(x * 7), Math.round(y * 7), Math.round(z * 7))
   }
   // the class: the median of the 7 samples about it (a closed run wraps)
-  let cls: Uint8Array
-  if (g.closed && n >= 7) {
-    const ext = new Uint8Array(n + 6)
-    for (let k = 0; k < n + 6; k++) ext[k] = raw[(k - 3 + n) % n]
-    cls = smoothClasses(ext).slice(3, 3 + n)
-  } else cls = smoothClasses(raw)
+  const cls = smoothRunClasses(raw, g.closed)
   const run: WorldEdgeRun = {
     type: spec.type, mark: sc.mark, side: sc.runSide, kind: spec.kind, closed: g.closed,
     pts, nrm, across, keys, planeA, planeB, uA, uB, h, cls, contrast: ccount > 0 ? csum / ccount : 0,
@@ -821,8 +962,12 @@ function canonMean(s: RefinedSurface, f: ArrayLike<number>): Float64Array {
   return out
 }
 
-interface Iso {
+export interface Iso {
   nodePos: Float64Array
+  // The segments (pairs of crossing ids) and how many crossings there are, as chained.
+  sa: number[]
+  sb: number[]
+  nNodes: number
   chains: Chain[]
   // Per segment: how much the turn from the light and the shadow's vote change across its triangle.
   dTurn: Float32Array
@@ -831,7 +976,7 @@ interface Iso {
 
 // Marching triangles on the per-vertex field f at `iso` (a vertex counts as above where f > iso), the crossings keyed by the canonical
 // ids of the edge they are on, so that two triangles that share an edge (across a seam too) share the crossing and chain.
-function marchTriangles(s: RefinedSurface, f: ArrayLike<number>, iso: number, turn: ArrayLike<number> | null, vote: ArrayLike<number> | null): Iso {
+export function marchTriangles(s: RefinedSurface, f: ArrayLike<number>, iso: number, turn: ArrayLike<number> | null, vote: ArrayLike<number> | null): Iso {
   const idx = s.indices
   const p = s.positions
   const nodeIndex = new Map<number, number>()
@@ -876,17 +1021,17 @@ function marchTriangles(s: RefinedSurface, f: ArrayLike<number>, iso: number, tu
     dVote.push(range(vote, i0, i1, i2))
   }
   const chains = chainSegments(nodePos.length / 3, sa, sb)
-  return { nodePos: Float64Array.from(nodePos), chains, dTurn: Float32Array.from(dTurn), dVote: Float32Array.from(dVote) }
+  return { nodePos: Float64Array.from(nodePos), sa, sb, nNodes: nodePos.length / 3, chains, dTurn: Float32Array.from(dTurn), dVote: Float32Array.from(dVote) }
 }
 
 // ---- the whole ----
 
-export function buildWorldEdges(plan: WorldPlan, planes: WorldPlanes, params: PaintParams, scene: SpaceScene, options: WorldEdgeOptions = {}): WorldEdges {
+export function buildWorldEdges(plan: WorldPlan, planes: WorldPlanes, params: PaintParams, scene: SpaceScene, authored: AuthoredFraming, options: WorldEdgeOptions = {}): WorldEdges {
   const perPx = plan.referenceWorldPerPx
   const nMarks = plan.surfaces.length
   const ctx: Ctx = {
     plan, planes, params, perPx, step: EDGE_STEP_PX * perPx, delta: PROBE_PX * perPx, snap: 6 * perPx,
-    noiseSeed: edgeNoiseSeed(params), focal: focalPoints(plan), nMarks, sideValues: options.sideValues ?? 'planes',
+    noiseSeed: edgeNoiseSeed(params), focal: focalPoints(plan, authored), nMarks, sideValues: options.sideValues ?? 'planes', depth: options.authoredDepth ? authoredDepthRange(plan, authored) : null,
   }
   const scored: Scored[] = []
   const sideMarks: SideCtx[] = []
@@ -951,21 +1096,34 @@ export function buildWorldEdges(plan: WorldPlan, planes: WorldPlanes, params: Pa
   }
 }
 
-// Which side of the run's chain a stretch of iso line has A on: the high side of the field.
-function isoEdges(c: Ctx, sc: SideCtx, out: Scored[]): void {
-  const { s, sp } = sc
+// The plan's own family weight at the vertices of one side of a figure surface, as a continuous field whose 0.5 is the family boundary:
+// the light family's weight with the shadow flag clear where the key light reaches the vertex (vis 1) and with it set where it does
+// not (vis 0), blended by vis,  lw = vis·lightWeight(ts, nl, false) + (1 - vis)·lightWeight(ts, nl, true)  (value.ts lightWeight is the
+// plan's own rule: planSample's family is "lw over a half", with the flag nl <= 0 || vis < 0.5). Where the flag is settled lw IS the
+// plan's family weight, so its iso line is the family boundary there: a cast shadow's edge, which takes the weight under a half from
+// N·L 0 over CAST_FADE, and the terminator's, which does it at N·L 0, including where the two meet or a lit strip lies between them.
+// `turn` is the terminator's term alone (the light weight with the flag clear) and `vote` the shadow's (vis): which of them changes more
+// across a triangle says what kind of edge it is. Copies of one canonical vertex are averaged where they agree (canonMean).
+export function familyField(s: RefinedSurface, sp: SidePlan, ts: number): { lw: Float64Array; turn: Float64Array; vote: Float64Array } {
   const nv = s.positions.length / 3
-  const ts = Math.max(1e-4, c.params.value.terminatorSoftness)
+  const lw0 = new Float64Array(nv)
   const turn0 = new Float64Array(nv)
   const vote0 = new Float64Array(nv)
   for (let v = 0; v < nv; v++) {
-    turn0[v] = lightWeight(ts, sp.nl[v], false)
-    vote0[v] = smooth(0.25, 0.75, sp.vis[v])
+    const vis = sp.vis[v]
+    const lit = lightWeight(ts, sp.nl[v], false)
+    turn0[v] = lit
+    vote0[v] = vis
+    lw0[v] = vis * lit + (1 - vis) * lightWeight(ts, sp.nl[v], true)
   }
-  const turn = canonMean(s, turn0)
-  const vote = canonMean(s, vote0)
-  const lw = new Float64Array(nv)
-  for (let v = 0; v < nv; v++) lw[v] = turn[v] * vote[v]
+  return { lw: canonMean(s, lw0), turn: canonMean(s, turn0), vote: canonMean(s, vote0) }
+}
+
+// Which side of the run's chain a stretch of iso line has A on: the high side of the field.
+function isoEdges(c: Ctx, sc: SideCtx, out: Scored[]): void {
+  const { s, sp } = sc
+  const ts = Math.max(1e-4, c.params.value.terminatorSoftness)
+  const { lw, turn, vote } = familyField(s, sp, ts)
   const iso = marchTriangles(s, lw, 0.5, turn, vote)
   for (const chain of iso.chains) {
     const poly = new Float64Array(3 * chain.nodes.length)

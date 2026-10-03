@@ -130,14 +130,14 @@ export interface BakedPainting {
   seed: Uint32Array
   // World units per CSS px at the bake's reference framing (PaintView.zoom 1):
   // what turned the role sizes and px parameters (occlusion radius, plane size,
-  // edge reach) into world units for the bake.
+  // edge reach) into world units for the bake (the AuthoredFraming's worldPerPx).
   referenceWorldPerPx: number
   // World area per particle of each mark (meshArea / particle count), for the
   // per-frame px area of a particle (density and zoom growth); 0 for non-meshes.
   areaPerParticle: Float32Array
   surfaces: (BakedSurface | null)[] // per scene mark; null for non-meshes
-  // The focal points of each mark (the brightest highlights, spec §14): 2 per mark, x, y, z and radius R each
-  // (8 per mark), NaN where a mark has fewer; the silhouette strokes' focal term reads them.
+  // The focal points of each mark (spec §14: the terminator nearest the AUTHORED eye and the brightest highlight, fixed in the world):
+  // 2 per mark, x, y, z and radius R each (8 per mark), NaN where a mark has fewer; the silhouette strokes' focal term reads them.
   focal: Float64Array
   // The colour of each data mark's strokes before the brush-load mix (linear sRGB, 3 per mark, 0 for marks
   // without lines), for the shapes a frame builds on screen (a point's dab, an arrowhead's barbs).
@@ -147,9 +147,16 @@ export interface BakedPainting {
   key: string
 }
 
+// The framing the bake composes for (the lab's authored view at zoom 1): its eye (for an orthographic view, any point
+// on the line toward the eye; the direction is -viewDir), whether it is orthographic, and the world size of a CSS px at
+// the scene's centre (what the bake's px parameters are measured in: BakedPainting.referenceWorldPerPx).
+export interface AuthoredFraming { eye: [number, number, number]; viewDir: [number, number, number]; ortho: boolean; worldPerPx: number }
+
 // Bake once (in the worker) for a scene, its particles, a WORLD light direction
-// and the params. `referenceWorldPerPx` is the world size of a CSS px at the
-// authored framing (the lab computes it from the authored view). Deterministic.
+// and the params. `authored` is the framing the picture is composed for (the lab
+// computes it from the authored view): its worldPerPx is the world size of a CSS px
+// there, and its eye and direction place the edges' focal points (the terminator
+// nearest the authored eye, and the brightest highlight; spec §14). Deterministic.
 // Never throws past the engine: a failure is reported by the caller's catch.
 export type BakePainting = (
   scene: SpaceScene,
@@ -157,7 +164,7 @@ export type BakePainting = (
   colours: SceneColours,
   lightDir: [number, number, number],
   params: PaintParams,
-  referenceWorldPerPx: number,
+  authored: AuthoredFraming,
 ) => BakedPainting
 
 // Colour-only changes (classifyChange 'colour': curve, mix, environment colour,

@@ -17,6 +17,7 @@ import { buildParticles } from '../model/particles'
 import { DEFAULT_PAINT_PARAMS, type PaintParams } from '../params'
 import { buildWorldEdges, type WorldEdgeType, type WorldEdges } from './edges'
 import { buildWorldPlan } from './plan'
+import type { AuthoredFraming } from './types'
 import { buildWorldPlanes } from './planes'
 
 const IDS = ['sphere', 'torus', 'saddle', 'tangent-plane', 'helix-sheet', 'level-curves'] as const
@@ -43,6 +44,8 @@ for (const id of IDS) {
   const perPx = camera.worldPerPixel
   const colours = makeSceneColours(worldScene, 'light', null)
 
+  // the framing the bake composes for: the authored view at zoom 1 (what the lab will pass: Task 6)
+  const authored: AuthoredFraming = { eye: [...camera.eye], viewDir: [...camera.basis.forward], ortho: built.projection === 'orthographic', worldPerPx: perPx }
   const make = (params: PaintParams) => {
     const light = keyLightDirection(camera.basis, params.light)
     const len = Math.hypot(light[0], light[1], light[2])
@@ -53,7 +56,7 @@ for (const id of IDS) {
     const t1 = performance.now()
     const planes = buildWorldPlanes(plan, particles, colours, makeCurve(params), params)
     const t2 = performance.now()
-    const edges = buildWorldEdges(plan, planes, params, worldScene)
+    const edges = buildWorldEdges(plan, planes, params, worldScene, authored)
     const t3 = performance.now()
     return { plan, planes, edges, ms: [t1 - t0, t2 - t1, t3 - t2], particles: particles.count }
   }
@@ -87,7 +90,7 @@ for (const id of IDS) {
   const h0 = terminatorClasses(last.edges)
   const h1 = terminatorClasses(make(soft1).edges)
   // (and the same, reading the sides' values at the probes instead of the planes' means: WorldEdgeOptions.sideValues)
-  const probes = buildWorldEdges(last.plan, last.planes, DEFAULT_PAINT_PARAMS, worldScene, { sideValues: 'probes' })
+  const probes = buildWorldEdges(last.plan, last.planes, DEFAULT_PAINT_PARAMS, worldScene, authored, { sideValues: 'probes' })
   const planeContrast = (e: WorldEdges): string => {
     let s = 0
     let n = 0
@@ -97,7 +100,9 @@ for (const id of IDS) {
     }
     return n > 0 ? (s / n).toFixed(3) : '-'
   }
-  histRows.push([id, h0.join('/'), h1.join('/'), terminatorClasses(probes).join('/'), planeContrast(last.edges), planeContrast(probes)])
+  // (and with the model's depth term measured from the authored eye: WorldEdgeOptions.authoredDepth)
+  const deep = buildWorldEdges(last.plan, last.planes, DEFAULT_PAINT_PARAMS, worldScene, authored, { authoredDepth: true })
+  histRows.push([id, h0.join('/'), h1.join('/'), terminatorClasses(deep).join('/'), terminatorClasses(probes).join('/'), planeContrast(last.edges), planeContrast(probes)])
 }
 
 const print = (head: string[], body: string[][]) => {
@@ -108,5 +113,5 @@ const print = (head: string[], body: string[][]) => {
 }
 print(['scene', 'particles', 'plan tris', 'planes', 'of ground', 'runs/samples: term shadow plane crease border', 'plan ms', 'planes ms', 'edges ms', 'planes+edges ms'], rows)
 console.log('')
-print(['scene', 'terminator lost/soft/firm/hard at ts 0.1', 'at ts 1.0', 'at ts 0.1, probes', 'plane contrast, planes', 'plane contrast, probes'], histRows)
+print(['scene', 'terminator lost/soft/firm/hard at ts 0.1', 'at ts 1.0', 'at ts 0.1, authoredDepth', 'at ts 0.1, probes', 'plane contrast, planes', 'plane contrast, probes'], histRows)
 console.log(`(${RUNS} runs each after a warm-up, medians; the bench's own particles are made outside the timing)`)
