@@ -40,7 +40,9 @@ const COMPARISON_OPS: ReadonlyMap<string, ComparisonOp> = new Map(Object.entries
 
 export const BINDERS: ReadonlySet<string> = new Set(['__sum', '__prod', '__integral'])
 
-const RESERVED: ReadonlySet<string> = new Set([
+// Every reserved name (exported so that a test can hold each compile path to all of them: a construct added
+// here that the interval twin does not support fails its suite until it does).
+export const RESERVED_NAMES: ReadonlySet<string> = new Set([
   ...Object.values(COMPARISON_NAMES),
   '__and',
   '__or',
@@ -73,7 +75,7 @@ export const MAX_TERMS = 100_000
 export const MAX_DERIVATIVE_NODES = 16000
 
 export function isReserved(name: string): boolean {
-  return RESERVED.has(name)
+  return RESERVED_NAMES.has(name)
 }
 
 export function comparisonOp(name: string): ComparisonOp | null {

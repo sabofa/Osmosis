@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { parseConditionString, parseExprString as p } from '../../parser/parseExpr'
 import type { Expr } from '../../parser/types'
 import { CompileError, compileScalar } from '../compile'
-import { call, num, variable } from '../expr'
-import { MAX_TERMS } from '../reserved'
+import { add, call, mul, num, variable } from '../expr'
+import { and, compare, factorialOf, integral, MAX_TERMS, not, or, piecewise, prime, prod, RESERVED_NAMES, sum } from '../reserved'
 import { makeScope, type MathFunction, type MathScope } from '../scope'
 import { box, fmt, must, nextDown, nextUp, pointsOf, show, within, withZeroSigns } from './compose.testkit'
 import { type CompiledInterval, compileInterval, folded } from './compile'
@@ -538,6 +538,64 @@ describe('reserved constructs', () => {
     expect(within(at('2^x', ['x'], plain, 1, 3), 2, 8)).toBe(true)
     expect(within(at('x^y', ['x', 'y'], plain, 2, 3, 1, 2), 2, 9)).toBe(true)
     expect(within(at('x^a', ['x'], makeScope({ params: [['a', 2]] }), -2, 3), 0, 9)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Every reserved name has a twin
+// ---------------------------------------------------------------------------
+
+// One canonical instance of each reserved call (math/reserved.ts RESERVED_NAMES). The scalar compile takes a
+// reserved name only from this list, so a construct added there with no case in the twin's compiler (it would
+// throw "is reserved and not supported here") fails this suite until the twin supports it, and until an
+// instance of it is written here.
+describe('every reserved construct compiles in the interval twin', () => {
+  const x = variable('x')
+  const t = variable('t')
+  const CANONICAL: Record<string, Expr> = {
+    __lt: compare('<', x, num(1)),
+    __le: compare('<=', x, num(1)),
+    __gt: compare('>', x, num(1)),
+    __ge: compare('>=', x, num(1)),
+    __eq: compare('=', x, num(1)),
+    __ne: compare('!=', x, num(1)),
+    __and: and(compare('<', x, num(2)), compare('>', x, num(0))),
+    __or: or(compare('<', x, num(0)), compare('>', x, num(1))),
+    __not: not(compare('<', x, num(1))),
+    __piecewise: piecewise([[compare('<', x, num(0)), call('abs', x)]], mul(num(2), x)),
+    __factorial: factorialOf(x),
+    __prime: prime('f', 1, [x]),
+    __sum: sum('k', num(1), num(3), mul(x, variable('k'))),
+    __prod: prod('k', num(1), num(3), add(x, variable('k'))),
+    __integral: integral('t', num(0), x, mul(t, t)),
+  }
+  const scope = makeScope({ functions: [['f', fn(['u'], 'u^3 + u')]] })
+
+  it("the list is the scalar compile's own", () => {
+    expect(Object.keys(CANONICAL).sort()).toEqual([...RESERVED_NAMES].sort())
+  })
+
+  for (const name of Object.keys(CANONICAL)) {
+    it(`${name}: compiles in both, and the twin holds the scalar over a few boxes`, () => {
+      const expr = CANONICAL[name]
+      const scalar = compileScalar(expr, ['x'], scope)
+      const twin = compileInterval(expr, ['x'], scope)
+      const out = iv()
+      let checks = 0
+      for (const [lo, hi] of [[0.5, 2], [-1, 1], [0.2, 0.3], [1, 1], [-0.5, -0.2], [0, 3], [-0, 0]] as [number, number][]) {
+        twin(out, lo, hi)
+        for (const px of pointsOf(lo, hi, mulberry32(3))) {
+          const y = scalar(px)
+          checks++
+          must(out, y, () => `${name} over [${fmt(lo)}, ${fmt(hi)}] at ${fmt(px)} gives ${fmt(y)}, twin ${show(out)}`)
+        }
+      }
+      expect(checks).toBeGreaterThan(20)
+    })
+  }
+
+  it('a call to a name that is not reserved or known is the scalar compile error', () => {
+    expect(() => compileInterval(call('__bogus', x), ['x'], scope)).toThrow(CompileError)
   })
 })
 
