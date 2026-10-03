@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CONTINUOUS, DEFINED, iv, PARTIAL, setBox, type Iv } from './core'
 import { add, div, mul, neg, powGeneral, powInt, powOddRoot, powReal, sides, sub } from './arith'
 import { realOddPow } from '../rational'
-import { must, withZeroSigns } from './compose.testkit'
+import { must, pointsOf, withZeroSigns } from './compose.testkit'
 import { admits, mulberry32, pointsIn, randomBox, zerosIn } from './testkit'
 
 const box = (lo: number, hi: number): Iv => setBox(iv(), lo, hi)
@@ -426,6 +426,10 @@ describe('an interval exponent over a base that reaches zero or below', () => {
     expect(across.hi).toBeGreaterThanOrEqual(9)
     expect(across.hi).toBeLessThan(9 * (1 + 1e-12))
     expect(across.v).toBe(PARTIAL)
+    // the zero bounds of the two parts do not deny each other's zero: for x^3 the negative part of
+    // [-1e-200, 2] gives -0 (a tiny negative cubed underflows) and the part from zero up gives +0
+    expect(powGeneral(iv(), box(-1e-200, 2), box(2.9, 3.1)).lo).toBeLessThan(0)
+    expect(powGeneral(iv(), box(-2, 1e-300), box(2.9, 3.1)).hi).toBeGreaterThan(0)
     // two whole numbers: the negative part's values at both, no cheap enclosure
     expect(powGeneral(iv(), box(-2, -1), box(1.5, 3.5))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
     expect(powGeneral(iv(), box(-2, -1), box(2, 3))).toMatchObject({ lo: -Infinity, hi: Infinity, v: PARTIAL })
@@ -452,11 +456,14 @@ describe('an interval exponent over a base that reaches zero or below', () => {
   const BASES: [number, number][] = [
     [-2, -1], [-2, 0], [-2, -0], [-0, 0], [-0, 2], [0, 2], [-1, 1], [-1e-300, 1e-300], [-3, 2], [-0.5, 0.5], [-5e-324, 0], [-5e-324, -5e-324], [-1e300, -1e-300],
     [-Infinity, -1], [-Infinity, 0], [-Infinity, Infinity], [-1, Infinity], [0, Infinity], [-0, Infinity], [0.5, 2], [-1e-300, 0], [-4, -0.5], [-2.5, 3.5], [-1, -1], [0, 0], [-5e-324, 5e-324],
+    // a tiny negative end, whose odd powers underflow to -0, under a top that is not tiny: the zero bound of the
+    // negative part (-0) meets the values from zero up
+    [-1e-200, 2], [-1e-300, 1e-100], [-1e-200, 1e-100], [-1e-200, 1e-300], [-5e-324, 1],
   ]
   const EXPONENTS: [number, number][] = [
     [0.2, 0.8], [-0.8, -0.2], [1.1, 1.9], [-1.9, -1.1], [0.5, 0.5000001], [-Infinity, -0.5], [2.5, Infinity], [1e300, 1e301], [1.5, 2.5], [-0.5, 0.5], [1.9, 2.1], [-2.1, -1.9],
     [2, 2.5], [2.5, 3], [-3, -2.5], [0, 0.5], [-0.5, -0], [-0, 0.5], [1, 2], [-1, 1], [2 ** 53, 2 ** 53 + 4], [3, 3], [-2, -2], [0.5, 1.5], [-1.5, -0.5], [1.5, 3.5], [-Infinity, Infinity],
-    [-1e-300, -5e-324], [5e-324, 1e-300], [2.9, 3.1], [-1.1, -0.9], [0.9, 1.1], [-5e-324, 5e-324],
+    [-1e-300, -5e-324], [5e-324, 1e-300], [2.9, 3.1], [-1.1, -0.9], [0.9, 1.1], [-5e-324, 5e-324], [4.9, 5.1], [-3.1, -2.9],
   ]
 
   // the whole numbers of a box (a few), which a random point never is
@@ -547,6 +554,144 @@ describe('an interval exponent over a base that reaches zero or below', () => {
     visit(-5.0001, 4.9999, -5.0002, 4.9998, 0)
     // 65,536 cells at this depth; the whole-line answer kept 80% of them
     expect(kept).toBeLessThan(6500)
+  })
+})
+
+// A bound that is exactly a zero is a claim about the sign of zero (lo === +0: no -0 occurs; hi === -0: no +0
+// occurs; a -0 bottom under a positive top: no +0, and a +0 top over a negative bottom: no -0). It is also
+// the one extreme that widening has nothing to cover: 0 is exact, and a floor of -5e-324 under x^2 takes
+// sqrt(x^2) out of its domain over a box where the scalar is defined at every point.
+describe('an extreme that is exactly zero is kept where the function never gives the other zero', () => {
+  const plus = (x: number): boolean => Object.is(x, 0)
+  const minus = (x: number): boolean => Object.is(x, -0)
+
+  it('an even power, abs and an even odd-root are never negative: the floor is +0', () => {
+    for (const [lo, hi] of [[-1, 1], [0, 2], [-0, 2], [-3, 0], [-3, -0], [-1e-300, 1e-300], [-5e-324, 5e-324], [-3, 3]]) {
+      expect(plus(powInt(iv(), box(lo, hi), 2).lo), `x^2 over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
+      expect(plus(powInt(iv(), box(lo, hi), 4).lo), `x^4 over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
+      expect(plus(sides(iv(), box(lo, hi), Math.abs, 0).lo), `abs over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
+      expect(plus(powOddRoot(iv(), box(lo, hi), 2 / 3, false).lo), `x^(2/3) over [${fmt(lo)}, ${fmt(hi)}]`).toBe(true)
+    }
+    // the floor is the least value, so a box that has no zero is as it was
+    expect(powInt(iv(), box(1, 2), 2).lo).toBeLessThan(1)
+    expect(powInt(iv(), box(1, 2), 2).lo).toBeGreaterThan(1 - 1e-12)
+  })
+
+  it('a box that holds the zero strictly inside has both signs of zero for an odd power, so its bound stays off zero', () => {
+    // x^3 at -0 is -0 and at +0 is +0
+    const r = powInt(iv(), box(-1, 1), 3)
+    expect(r.lo).toBeLessThan(0)
+    expect(r.hi).toBeGreaterThan(0)
+    // a zero end of the sign the box lies on is exact: [+0, 2] has no -0, [-2, -0] has no +0
+    expect(plus(powInt(iv(), box(0, 2), 3).lo)).toBe(true)
+    expect(minus(powInt(iv(), box(-2, -0), 3).hi)).toBe(true)
+    // [-0, 2]: the -0 end, and +0 from the tiny positives that underflow (5e-324^3 is +0): both zeros
+    const dip = powInt(iv(), box(-0, 2), 3)
+    expect(dip.lo).toBeLessThan(0)
+    // [-2, +0]: +0 at the end, -0 from the tiny negatives: both
+    expect(powInt(iv(), box(-2, 0), 3).hi).toBeGreaterThan(0)
+    // a pole's far end: 1/x is +0 at +Infinity, and positive before it
+    expect(plus(powInt(iv(), box(1, Infinity), -1).lo)).toBe(true)
+    expect(minus(powInt(iv(), box(-Infinity, -1), -1).hi)).toBe(true)
+    // the odd root never gives -0 (it maps -0 to +0), so a top at the zero is +0
+    expect(plus(powOddRoot(iv(), box(-8, 0), 1 / 3, true).hi)).toBe(true)
+    expect(plus(powOddRoot(iv(), box(-8, -0), 1 / 3, true).hi)).toBe(true)
+  })
+
+  it('a box of nothing but zeros is the zero it is, or the pair', () => {
+    expect(powInt(iv(), box(0, 0), 2)).toEqual({ lo: 0, hi: 0, v: CONTINUOUS })
+    expect(plus(powInt(iv(), box(-0, -0), 2).lo) && plus(powInt(iv(), box(-0, -0), 2).hi)).toBe(true)
+    const odd = powInt(iv(), box(-0, -0), 3)
+    expect(minus(odd.lo) && minus(odd.hi)).toBe(true)
+    const pair = powInt(iv(), box(-0, 0), 3)
+    expect(minus(pair.lo) && plus(pair.hi)).toBe(true)
+  })
+
+  it('a sum of two exact zero bounds is exact: no rounding, and no dip below zero', () => {
+    // x^2 + y^2 over boxes holding zero
+    const sq = (lo: number, hi: number): Iv => powInt(iv(), box(lo, hi), 2)
+    const r = add(iv(), sq(-1, 1), sq(-2, 2))
+    expect(plus(r.lo)).toBe(true)
+    expect(near(r.hi, 5)).toBe(true)
+    // the table of signs: +0 + +0 = +0, +0 + -0 = +0, -0 + -0 = -0, and the same at the top
+    for (const [x, y, want] of [[0, 0, 0], [0, -0, 0], [-0, 0, 0], [-0, -0, -0]] as const) {
+      const lo = add(iv(), box(x, 1), box(y, 1)).lo
+      expect(Object.is(lo, want), `${fmt(x)} + ${fmt(y)} at the bottom: ${fmt(lo)}`).toBe(true)
+      const hi = add(iv(), box(-1, x), box(-1, y)).hi
+      expect(Object.is(hi, want), `${fmt(x)} + ${fmt(y)} at the top: ${fmt(hi)}`).toBe(true)
+    }
+    // a sum with one zero addend is not a zero bound, and is widened as ever
+    const s = add(iv(), box(0, 1), box(1, 2))
+    expect(s.lo).toBeLessThan(1)
+    expect(s.lo).toBeGreaterThan(1 - 1e-12)
+    // the difference of the same
+    expect(plus(sub(iv(), box(0, 1), neg(iv(), box(0, 1))).lo)).toBe(true)
+    expect(plus(sub(iv(), sq(-1, 1), neg(iv(), sq(-2, 2))).lo)).toBe(true)
+  })
+
+  // The sweeps hold every one of these strictly, the zero-bound invariant included, at the ends, at the signed
+  // zeros the box holds, at the tiny doubles either side of zero, and in between: a bound that is a zero
+  // must be right about the other zero.
+  const ZERO_BOXES: [number, number][] = [
+    [0, 0], [-0, 0], [-0, -0], [0, 1], [-0, 1], [-1, 0], [-1, -0], [-1, 1], [0, Infinity], [-0, Infinity], [-Infinity, 0], [-Infinity, -0], [-Infinity, Infinity],
+    [1, Infinity], [-Infinity, -1], [-5e-324, 5e-324], [-5e-324, 0], [0, 5e-324], [-5e-324, -0], [-0, 5e-324], [-1e-300, 1e-300], [-1e-200, -0], [0, 1e-200], [-3, 2], [0.5, 2], [-2, -0.5],
+    [-1e-200, 1e300], [-1e300, 1e-200], [1e-200, 1e-100], [-1e-100, -1e-200],
+  ]
+
+  it('powInt, powOddRoot and sides', () => {
+    let checks = 0
+    for (const [lo, hi] of ZERO_BOXES) {
+      for (const [l, h] of withZeroSigns(lo, hi)) {
+        const pts = pointsOf(l, h, mulberry32(12))
+        for (const n of [-4, -3, -2, -1, 1, 2, 3, 4, 5]) {
+          const r = powInt(iv(), box(l, h), n)
+          for (const x of pts) {
+            checks++
+            must(r, Math.pow(x, n), () => `x^${n} over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)} gives ${fmt(Math.pow(x, n))}, twin ${show(r)}`)
+          }
+        }
+        for (const [p, q] of [[1, 3], [2, 3], [4, 3], [5, 3], [-1, 3], [-2, 3], [1, 5], [-3, 5]]) {
+          const pOdd = Math.abs(p) % 2 === 1
+          const r = powOddRoot(iv(), box(l, h), p / q, pOdd)
+          for (const x of pts) {
+            checks++
+            must(r, realOddPow(x, p / q, pOdd), () => `x^(${p}/${q}) over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)} gives ${fmt(realOddPow(x, p / q, pOdd))}, twin ${show(r)}`)
+          }
+        }
+        const abs = sides(iv(), box(l, h), Math.abs, 0)
+        const cosh = sides(iv(), box(l, h), Math.cosh, 1)
+        for (const x of pts) {
+          checks += 2
+          must(abs, Math.abs(x), () => `abs over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)}, twin ${show(abs)}`)
+          must(cosh, Math.cosh(x), () => `cosh over [${fmt(l)}, ${fmt(h)}] at ${fmt(x)}, twin ${show(cosh)}`)
+        }
+      }
+    }
+    expect(checks).toBeGreaterThan(20_000)
+  })
+
+  it('add and sub over every pair of boxes, each zero end as both signs', () => {
+    let checks = 0
+    const rand = mulberry32(13)
+    for (const [al, ah] of ZERO_BOXES) {
+      for (const [a0, a1] of withZeroSigns(al, ah)) {
+        const xs = pointsOf(a0, a1, rand)
+        for (const [bl, bh] of ZERO_BOXES) {
+          for (const [b0, b1] of withZeroSigns(bl, bh)) {
+            const s = add(iv(), box(a0, a1), box(b0, b1))
+            const d = sub(iv(), box(a0, a1), box(b0, b1))
+            for (const x of xs) {
+              for (const y of pointsOf(b0, b1, rand)) {
+                checks += 2
+                must(s, x + y, () => `[${fmt(a0)}, ${fmt(a1)}] + [${fmt(b0)}, ${fmt(b1)}] at (${fmt(x)}, ${fmt(y)}) gives ${fmt(x + y)}, twin ${show(s)}`)
+                must(d, x - y, () => `[${fmt(a0)}, ${fmt(a1)}] - [${fmt(b0)}, ${fmt(b1)}] at (${fmt(x)}, ${fmt(y)}) gives ${fmt(x - y)}, twin ${show(d)}`)
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checks).toBeGreaterThan(100_000)
   })
 })
 

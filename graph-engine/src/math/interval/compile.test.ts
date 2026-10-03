@@ -165,6 +165,36 @@ describe('tight verdicts on simple boxes', () => {
     expect(at('x^(2/3)', ['x'], plain, -8, 1).v).toBe(CONTINUOUS)
   })
 
+  it('a root of a square, and of a sum of squares, is defined where the box holds the zero of the square', () => {
+    // the least value of x^2 over a box holding 0 is exactly 0, not 0 less two ulps: sqrt of a floor
+    // below zero would be PARTIAL where the scalar is defined at every point
+    for (const [src, vars, ends, hi] of [
+      ['sqrt(x^2)', ['x'], [-1, 1], 1],
+      ['sqrt(x^2)', ['x'], [0, 2], 2],
+      ['sqrt(x^2)', ['x'], [-3, -0], 3],
+      ['sqrt(x^2 + y^2)', ['x', 'y'], [-1, 1, -1, 1], Math.SQRT2],
+      ['sqrt(x^2 + y^2)', ['x', 'y'], [0, 1, -0, 1], Math.SQRT2],
+      ['sqrt(x^2 + y^2 + z^2)', ['x', 'y', 'z'], [-1, 1, -1, 1, -1, 1], Math.sqrt(3)],
+      ['root(4, x^2)', ['x'], [-1, 1], 1],
+      ['cbrt(x^2)', ['x'], [-1, 1], 1],
+      ['ln(1 + x^2)', ['x'], [-1, 1], Math.log(2)],
+    ] as [string, string[], number[], number][]) {
+      const r = at(src, vars, plain, ...ends)
+      expect(r.v, `${src} over ${ends}: ${show(r)}`).toBe(CONTINUOUS)
+      expect(r.hi, src).toBeGreaterThanOrEqual(hi)
+      expect(r.hi, src).toBeLessThan(hi * (1 + 1e-12))
+      expect(r.lo, src).toBeLessThanOrEqual(0)
+    }
+    // the zero is exact at the bottom: +0, which 1 / the box and sqrt read as "no -0"
+    expect(Object.is(at('x^2', ['x'], plain, -1, 1).lo, 0)).toBe(true)
+    expect(Object.is(at('sqrt(x^2)', ['x'], plain, -1, 1).lo, 0)).toBe(true)
+    // a box that holds a zero of x^3 has both signs of it, so it is not pinned to either
+    expect(at('x^3', ['x'], plain, -1, 1).lo).toBeLessThan(0)
+    // and a root of a square that is not the whole story is still partial where it is NaN
+    expect(at('sqrt(x^2 - 1)', ['x'], plain, -2, 2).v).toBe(PARTIAL)
+    expect(at('sqrt(x^2 - 1)', ['x'], plain, -1, 1).v).toBe(PARTIAL)
+  })
+
   it('degrees, a parameter, a user function and a constant product', () => {
     const r = at('sin(x)', ['x'], makeScope({ angle: 'degrees' }), 0, 90)
     expect(within(r, 0, 1)).toBe(true)

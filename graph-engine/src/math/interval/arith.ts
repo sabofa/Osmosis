@@ -17,20 +17,37 @@ export function neg(out: Iv, a: Iv): Iv {
   return set(out, -a.hi, -a.lo, a.v)
 }
 
+// A box whose two ends are zeros of different sign, [-0, +0] or [+0, -0], holds both zeros; a zero bound
+// beside any other bound claims its own sign alone (see `sides`).
+function bothZeros(a: Iv): boolean {
+  return a.lo === 0 && a.hi === 0 && !Object.is(a.lo, a.hi)
+}
+
+// A bound that is the sum (or difference) of two bounds that are exactly zero is not widened: 0 + 0 has no
+// rounding, and a floor of -5e-324 under x^2 + y^2 would take sqrt of it out of its domain over boxes where the
+// scalar is defined everywhere. The sign of the result is IEEE's (+0 + +0 and +0 + -0 are +0, -0 + -0 is -0),
+// and it is the one the operands' claims leave the sum able to give: an operand bound of +0 says no -0 occurs,
+// one of -0 says no +0 occurs (see `sides`), so the sum cannot be the zero that IEEE's table does not give.
+// Not so for an operand that holds both zeros: [+0, -0] + [-0, +0] gives -0 at (-0, -0), which the sum of the
+// bounds, +0, would deny. Those are widened as before.
 export function add(out: Iv, a: Iv, b: Iv): Iv {
   if (isEmpty(a) || isEmpty(b)) return setEmpty(out)
   // inf + -inf is NaN in the scalar compile: only possible when both sides reach
   // opposite infinities.
   const clash = (a.hi === Infinity && b.lo === -Infinity) || (a.lo === -Infinity && b.hi === Infinity)
   const v: Verdict = clash ? worst(worst(a.v, b.v), PARTIAL) : worst(a.v, b.v)
-  return set(out, down(a.lo + b.lo), up(a.hi + b.hi), v)
+  const lo = a.lo + b.lo
+  const hi = a.hi + b.hi
+  return set(out, a.lo === 0 && b.lo === 0 && !bothZeros(a) && !bothZeros(b) ? lo : down(lo), a.hi === 0 && b.hi === 0 && !bothZeros(a) && !bothZeros(b) ? hi : up(hi), v)
 }
 
 export function sub(out: Iv, a: Iv, b: Iv): Iv {
   if (isEmpty(a) || isEmpty(b)) return setEmpty(out)
   const clash = (a.hi === Infinity && b.hi === Infinity) || (a.lo === -Infinity && b.lo === -Infinity)
   const v: Verdict = clash ? worst(worst(a.v, b.v), PARTIAL) : worst(a.v, b.v)
-  return set(out, down(a.lo - b.hi), up(a.hi - b.lo), v)
+  const lo = a.lo - b.hi
+  const hi = a.hi - b.lo
+  return set(out, a.lo === 0 && b.hi === 0 && !bothZeros(a) && !bothZeros(b) ? lo : down(lo), a.hi === 0 && b.lo === 0 && !bothZeros(a) && !bothZeros(b) ? hi : up(hi), v)
 }
 
 // 0 · inf is 0 for an enclosure of products (the scalar NaN case is flagged
@@ -108,7 +125,53 @@ export function sides(out: Iv, a: Iv, f: (x: number, p: number) => number, at0: 
   }
   const v: Verdict = lo !== lo || hi !== hi ? worst(a.v, PARTIAL) : a.v
   // A NaN end (f undefined there) is no bound; `set` turns it into -inf / +inf.
-  return set(out, down(lo, rel), up(hi, rel), v)
+  return widen(out, a, f, p, lo, hi, v, rel)
+}
+
+// The signed zeros f gives over the box a, as bits (1: +0, 2: -0), from the values at the ends, at the doubles
+// nearest 0 on each side the box reaches, and at +0 and -0 where it holds both. f is monotone on each side, so
+// the values between those points lie between theirs, and the sign of a zero that underflow makes (x^3 for a
+// tiny x has the sign of x) is the sign at the nearest point.
+function zerosOf(a: Iv, f: (x: number, p: number) => number, p: number): number {
+  const lo = a.lo
+  const hi = a.hi
+  let z = zeroSign(f(lo, p)) | zeroSign(f(hi, p))
+  if (lo < 0 && hi >= 0) z |= zeroSign(f(-Number.MIN_VALUE, p))
+  if (hi > 0 && lo <= 0) z |= zeroSign(f(Number.MIN_VALUE, p))
+  if (lo < 0 && hi > 0) z |= zeroSign(f(0, p)) | zeroSign(f(-0, p))
+  return z
+}
+
+function zeroSign(x: number): number {
+  return x !== 0 ? 0 : 1 / x > 0 ? 1 : 2
+}
+
+// [lo, hi], the extremes of f over a, widened outward by `rel` (the library's own non-monotonicity), except
+// that an extreme that is exactly 0 is kept. Widening has nothing to cover there: a zero extreme is a value f
+// gives, not a rounding of one (and f never goes below +0 for an even power, abs or an even root, whose
+// floor is 0). A floor of -5e-324 under x^2 takes sqrt(x^2) out of its domain over a box where the scalar is
+// defined at every point; one is moved off zero only where the zero is not alone.
+//
+// The zero extreme claims its sign (the zero-bound invariant, compose.testkit `must`): a bottom of +0 says no
+// -0 occurs, a top of -0 says no +0 occurs, a bottom of -0 under a positive top says no +0 and a top of +0 over
+// a negative bottom says no -0 (1 / the box, sqrt and atan2 read it). So an extreme that is zero is kept only
+// when f gives one signed zero over the box: that zero, whichever sign of zero the extreme came from. When f
+// gives both (x^3 over [-0, 2]: -0 at the end, +0 for a tiny positive), a bottom or top that is a zero moves to
+// the nearest double past it, which holds both; a box whose two extremes are zeros is the pair -0, +0.
+function widen(out: Iv, a: Iv, f: (x: number, p: number) => number, p: number, lo: number, hi: number, v: Verdict, rel: number): Iv {
+  let l = down(lo, rel)
+  let h = up(hi, rel)
+  if (lo === 0 || hi === 0) {
+    const z = zerosOf(a, f, p)
+    if (z === 1 || z === 2) {
+      if (lo === 0) l = z === 1 ? 0 : -0
+      if (hi === 0) h = z === 1 ? 0 : -0
+    } else if (z === 3 && lo === 0 && hi === 0) {
+      l = -0
+      h = 0
+    }
+  }
+  return set(out, l, h, v)
 }
 
 // `sides` for a pole or hole at 0 that the box reaches (see above): always
@@ -174,7 +237,7 @@ function sidesPole(out: Iv, a: Iv, f: (x: number, p: number) => number, rel: num
     }
   }
   if (lo > hi) return setEmpty(out)
-  return set(out, down(lo, rel), up(hi, rel), v)
+  return widen(out, a, f, p, lo, hi, v, rel)
 }
 
 // x^n for a whole n (the scalar compile's Math.pow).
