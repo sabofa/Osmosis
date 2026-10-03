@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 import { countEligible, resolveDrawFromParams, type EligibilityParams } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
+import { DUE_MODES, type DueMode } from "./retention.js";
 import { addSlice, removeSlice } from "./sync.js";
 import { assertSessionOpen } from "./sessions.js";
 
@@ -27,6 +28,7 @@ export interface TemplateRow {
   difficulty_max: number | null;
   calculator_policy: "allowed" | "forbidden" | "any";
   weighting: "random" | "weak_weighted" | null;
+  due_mode: DueMode;
   frozen: 0 | 1;
   time_limit_sec: number | null;
   session_id: string | null;
@@ -45,6 +47,10 @@ export interface TemplateInput {
   difficulty_max?: number | null;
   calculator_policy?: string;
   weighting?: string | null;
+  // How due-ness shapes the draw: "weight" (default) favours due items,
+  // "gate" draws only due items, most overdue first (an Osmosis-scheduled
+  // homework or review set), "off" ignores due-ness.
+  due_mode?: string;
   frozen?: boolean;
   time_limit_sec?: number | null;
   // Optional: a template with session_id IS NULL is an ordinary bank template
@@ -60,6 +66,7 @@ function validateTemplateFields(input: {
   difficulty_max?: number | null;
   calculator_policy?: string;
   weighting?: string | null;
+  due_mode?: string;
 }): void {
   if (input.question_count !== undefined && (!Number.isInteger(input.question_count) || input.question_count <= 0)) {
     throw new DomainError("invalid_question_count", "question_count must be a positive integer.");
@@ -99,6 +106,9 @@ function validateTemplateFields(input: {
   if (input.weighting !== undefined && input.weighting !== null && !WEIGHTINGS.has(input.weighting)) {
     throw new DomainError("invalid_weighting", `weighting must be one of ${[...WEIGHTINGS].join(", ")}.`);
   }
+  if (input.due_mode !== undefined && !(DUE_MODES as readonly string[]).includes(input.due_mode)) {
+    throw new DomainError("invalid_due_mode", `due_mode must be one of ${DUE_MODES.join(", ")}.`);
+  }
 }
 
 function eligibilityParamsFor(row: {
@@ -131,6 +141,7 @@ export interface TemplateSummary {
   difficulty_max: number | null;
   calculator_policy: string;
   weighting: string | null;
+  due_mode: DueMode;
   frozen: boolean;
   time_limit_sec: number | null;
   session_id: string | null;
@@ -201,6 +212,7 @@ function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
     difficulty_max: row.difficulty_max,
     calculator_policy: row.calculator_policy,
     weighting: row.weighting,
+    due_mode: row.due_mode,
     frozen: row.frozen === 1,
     time_limit_sec: row.time_limit_sec,
     session_id: row.session_id,
@@ -282,6 +294,7 @@ export function getTemplateQuestions(db: DatabaseSync, id: string): TemplateQues
     difficulty_max: row.difficulty_max,
     calculator_policy: row.calculator_policy as EligibilityParams["calculator_policy"],
     weighting: row.weighting as "random" | "weak_weighted" | null,
+    due_mode: row.due_mode,
   });
   if (draw.questions.length === 0) return [];
 
@@ -301,6 +314,7 @@ export function createTemplate(
 
   const calculatorPolicy = input.calculator_policy ?? "any";
   const weighting = input.weighting ?? null;
+  const dueMode = (input.due_mode ?? "weight") as DueMode;
   const eligibleCount = countEligible(
     db,
     eligibilityParamsFor({
@@ -321,10 +335,10 @@ export function createTemplate(
     db.prepare(
       `INSERT INTO template
          (id, name, description, tag_query, question_count, mc_ratio,
-          difficulty_min, difficulty_max, calculator_policy, weighting, frozen, time_limit_sec, session_id)
+          difficulty_min, difficulty_max, calculator_policy, weighting, due_mode, frozen, time_limit_sec, session_id)
        VALUES
          (@id, @name, @description, @tag_query, @question_count, @mc_ratio,
-          @difficulty_min, @difficulty_max, @calculator_policy, @weighting, @frozen, @time_limit_sec, @session_id)`
+          @difficulty_min, @difficulty_max, @calculator_policy, @weighting, @due_mode, @frozen, @time_limit_sec, @session_id)`
     ).run({
       id,
       name: input.name,
@@ -336,6 +350,7 @@ export function createTemplate(
       difficulty_max: input.difficulty_max ?? null,
       calculator_policy: calculatorPolicy,
       weighting,
+      due_mode: dueMode,
       frozen: frozen ? 1 : 0,
       time_limit_sec: input.time_limit_sec ?? null,
       session_id: input.session_id ?? null,
@@ -350,6 +365,7 @@ export function createTemplate(
         difficulty_max: input.difficulty_max ?? null,
         calculator_policy: calculatorPolicy as EligibilityParams["calculator_policy"],
         weighting: weighting as "random" | "weak_weighted" | null,
+        due_mode: dueMode,
       });
     }
 
@@ -373,6 +389,7 @@ function freezeDraw(
     difficulty_max: number | null;
     calculator_policy: EligibilityParams["calculator_policy"];
     weighting: "random" | "weak_weighted" | null;
+    due_mode: DueMode;
   }
 ): void {
   db.prepare("DELETE FROM template_frozen_question WHERE template_id = ?").run(templateId);
@@ -394,6 +411,7 @@ export interface EditTemplateChanges {
   difficulty_max?: number | null;
   calculator_policy?: string;
   weighting?: string | null;
+  due_mode?: string;
   frozen?: boolean;
   time_limit_sec?: number | null;
   confirm_refreeze?: boolean;
@@ -419,6 +437,7 @@ export function editTemplate(
     difficulty_max: changes.difficulty_max !== undefined ? changes.difficulty_max : current.difficulty_max,
     calculator_policy: changes.calculator_policy ?? current.calculator_policy,
     weighting: changes.weighting !== undefined ? changes.weighting : current.weighting,
+    due_mode: changes.due_mode ?? current.due_mode,
     frozen: changes.frozen ?? current.frozen === 1,
     time_limit_sec: changes.time_limit_sec !== undefined ? changes.time_limit_sec : current.time_limit_sec,
   };
@@ -448,7 +467,7 @@ export function editTemplate(
       `UPDATE template
        SET name = @name, description = @description, tag_query = @tag_query, question_count = @question_count,
            mc_ratio = @mc_ratio, difficulty_min = @difficulty_min, difficulty_max = @difficulty_max,
-           calculator_policy = @calculator_policy, weighting = @weighting, frozen = @frozen,
+           calculator_policy = @calculator_policy, weighting = @weighting, due_mode = @due_mode, frozen = @frozen,
            time_limit_sec = @time_limit_sec, updated_at = datetime('now')
        WHERE id = @id`
     ).run({
@@ -462,6 +481,7 @@ export function editTemplate(
       difficulty_max: merged.difficulty_max,
       calculator_policy: merged.calculator_policy,
       weighting: merged.weighting,
+      due_mode: merged.due_mode,
       frozen: merged.frozen ? 1 : 0,
       time_limit_sec: merged.time_limit_sec,
     });
@@ -475,6 +495,7 @@ export function editTemplate(
         difficulty_max: merged.difficulty_max,
         calculator_policy: merged.calculator_policy as EligibilityParams["calculator_policy"],
         weighting: merged.weighting as "random" | "weak_weighted" | null,
+        due_mode: merged.due_mode as DueMode,
       });
     } else if (wasFrozen && !merged.frozen) {
       db.prepare("DELETE FROM template_frozen_question WHERE template_id = ?").run(id);

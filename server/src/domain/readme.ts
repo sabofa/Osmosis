@@ -32,6 +32,7 @@ export interface ReadmeResult {
   calculator_conventions: string;
   tag_conventions: string;
   document_conventions: string;
+  retention_conventions: string;
   duplicate_workflow: string;
   batching_guidance: string;
 }
@@ -121,6 +122,24 @@ export function readme(
       "places one inline clickable marker at a char offset — it must land on an actual token, not whitespace, " +
       "and requires document_id. url-type assets have no extracted_text, so anchors/markers against them are " +
       "rejected outright — anchor only to text/file assets.",
+    retention_conventions:
+      "Osmosis schedules; you supply targets. set_retention_target(identity_key: a node key, needs_last_until) " +
+      "attaches a target to a node, and every item carrying that node key inherits it. Gap 1 is a share of the " +
+      "time left (Cepeda: ~30% for two weeks, ~7.5% for a year). At gap 1 the node's first probe is drawn: its " +
+      "discriminating items — file each with tests_error naming the wrong model it separates from the right one " +
+      "— first k by authoring order (config retention_draw_k, default 3), plus one transfer item, i.e. one whose " +
+      "node_keys span this node and another. The rest of the node is reserve: a passing draw brings it in at the " +
+      "node's gap-2 interval; any miss in the draw brings it forward at once as relearn material. A node with no " +
+      "discriminating items draws k weak-weighted. From an item's first retention review on, SM2 sets its gaps, " +
+      "clamped so none steps past an open target, and runs free once every target has passed. Only an answer key " +
+      "(auto_mc) or your verdict (grade_response, oracle|judge) schedules — a self grade never does; an idk always " +
+      "counts, as a miss. Quality: correct·confident 5, ·somewhat 4, ·unsure 3; incorrect·unsure 2; " +
+      "incorrect·somewhat or idk 1; incorrect·confident 0; a partial score 2; misapplied_method is yours alone. " +
+      "History follows lineage_id, so a reworded version keeps it; retire_question ends an item's schedule and keeps " +
+      "its history. get_due_items lists what is due, most overdue (relative to its gap) first, with a reason: " +
+      "never_demonstrated, relearn (go teach it), lapsed (stale — resurface), decayed. To serve due items: " +
+      "present_item(tag_query, due_mode: 'gate') takes the most overdue; a template with due_mode 'gate' is an " +
+      "Osmosis-scheduled homework or review set; the default 'weight' only favours due items in casual draws.",
     duplicate_workflow:
       "create_questions's possible_duplicates is a report, not a rejection — the new question is still " +
       "created alongside the report. Review it and call retire_question on whichever side loses (usually the " +

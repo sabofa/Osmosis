@@ -2,7 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
 import { emitSessionEvent } from "../lib/events.js";
-import { resolveTemplateDraw, getEligibleQuestions, type DrawResult, type EligibleQuestion } from "./draw.js";
+import { resolveTemplateDraw, getEligibleQuestions, weightedSampleWithoutReplacement, type DrawResult, type EligibleQuestion } from "./draw.js";
+import { dueInfoByLineage, dueWeightFactor, rankByDue, type DueMode } from "./retention.js";
 import type { TagQuery } from "./tagQuery.js";
 import { assertSessionOpen, sessionIsOpen, sessionRevealDefault, type Reveal } from "./sessions.js";
 import { nodeKeyFields } from "./nodeKeys.js";
@@ -346,6 +347,10 @@ export interface PresentItemInput {
   // take — the same object present_show carries, so the app's banner reads
   // the same whichever kind of entry is newest (§5.1).
   context?: ItemContext | null;
+  // How due-ness shapes a tag_query pick: "weight" (default) favours due
+  // items, "gate" takes the most overdue due item or refuses, "off" picks
+  // uniformly as before. Ignored when question_id names the item.
+  due_mode?: DueMode;
 }
 
 export function presentItem(
@@ -361,7 +366,7 @@ export function presentItem(
     if (eligible.length === 0) {
       throw new DomainError("no_eligible_questions", "No question matches the given tag_query.");
     }
-    questionId = eligible[Math.floor(Math.random() * eligible.length)].id;
+    questionId = pickByDue(db, eligible, input.due_mode ?? "weight").id;
   } else {
     throw new DomainError("selection_required", "present_item requires either question_id or tag_query.");
   }
@@ -406,6 +411,20 @@ export function presentItem(
     response_id: response.id,
     question: questionSnapshot(db, questions[0].id, false),
   };
+}
+
+// One item from a tag_query pool, the way a draw of one would take it.
+function pickByDue(db: DatabaseSync, pool: EligibleQuestion[], mode: DueMode): EligibleQuestion {
+  if (mode === "off") return pool[Math.floor(Math.random() * pool.length)];
+  const due = dueInfoByLineage(db);
+  if (mode === "gate") {
+    const ranked = rankByDue(pool, due);
+    if (ranked.length === 0) {
+      throw new DomainError("nothing_due", "No item matching the tag_query is due for review.");
+    }
+    return ranked[0];
+  }
+  return weightedSampleWithoutReplacement(pool, pool.map((q) => dueWeightFactor(due.get(q.lineage_id))), 1)[0];
 }
 
 // ----------------------------------------------------------------------------

@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { buildTagQueryClause, type TagQuery } from "./tagQuery.js";
 import { DomainError } from "./errors.js";
+import { computeWeakWeights, weightedSampleWithoutReplacement } from "./weights.js";
+import { dueInfoByLineage, dueWeightFactor, rankByDue, type DueMode } from "./retention.js";
+
+// Re-exported: these lived here before retention needed them too.
+export { computeWeakWeights, weightedSampleWithoutReplacement };
 
 export type CalculatorFilter = "allowed" | "forbidden" | "any";
 
@@ -66,96 +71,6 @@ export function countEligible(db: DatabaseSync, params: EligibilityParams): numb
 }
 
 // ----------------------------------------------------------------------------
-// weak_weighted: for each lineage, mean of its last three authoritative scores
-// (0.5 if never answered), scaled by a recency factor (0.25 if the most recent
-// answer was within the last 24h, so one bad session doesn't dominate a day).
-// ----------------------------------------------------------------------------
-
-interface LineageStat {
-  mean_score: number;
-  most_recent: string;
-}
-
-function computeLineageStats(db: DatabaseSync, lineageIds: string[]): Map<string, LineageStat> {
-  const stats = new Map<string, LineageStat>();
-  if (lineageIds.length === 0) return stats;
-
-  const unique = [...new Set(lineageIds)];
-  const placeholders = unique.map(() => "?").join(", ");
-
-  const rows = db
-    .prepare(
-      `WITH scored AS (
-         SELECT q.lineage_id AS lineage_id, rs.score AS score, r.answered_at AS answered_at,
-                ROW_NUMBER() OVER (PARTITION BY q.lineage_id ORDER BY r.answered_at DESC) AS rn
-         FROM response_score rs
-         JOIN response r ON r.id = rs.response_id
-         JOIN attempt a ON a.id = r.attempt_id AND a.submitted_at IS NOT NULL AND a.abandoned_at IS NULL
-         JOIN question q ON q.id = rs.question_id
-         WHERE rs.score IS NOT NULL AND q.lineage_id IN (${placeholders})
-       )
-       SELECT lineage_id, AVG(score) AS mean_score, MAX(answered_at) AS most_recent
-       FROM scored
-       WHERE rn <= 3
-       GROUP BY lineage_id`
-    )
-    .all(...unique) as { lineage_id: string; mean_score: number; most_recent: string }[];
-
-  for (const r of rows) stats.set(r.lineage_id, { mean_score: r.mean_score, most_recent: r.most_recent });
-  return stats;
-}
-
-function weightFor(stat: LineageStat | undefined, now: Date): number {
-  const s = stat ? stat.mean_score : 0.5;
-  let r = 1.0;
-  if (stat) {
-    const ageMs = now.getTime() - new Date(`${stat.most_recent}Z`).getTime();
-    if (ageMs <= 24 * 60 * 60 * 1000) r = 0.25;
-  }
-  return (1 + 2 * (1 - s)) * r;
-}
-
-export function computeWeakWeights(db: DatabaseSync, pool: EligibleQuestion[], now: Date = new Date()): number[] {
-  const stats = computeLineageStats(
-    db,
-    pool.map((q) => q.lineage_id)
-  );
-  return pool.map((q) => weightFor(stats.get(q.lineage_id), now));
-}
-
-// ----------------------------------------------------------------------------
-// Weighted sampling without replacement. O(n * k); fine at personal-bank scale.
-// ----------------------------------------------------------------------------
-
-export function weightedSampleWithoutReplacement<T>(
-  items: T[],
-  weights: number[],
-  count: number,
-  rng: () => number = Math.random
-): T[] {
-  const pool = items.map((item, i) => ({ item, weight: weights[i] }));
-  const n = Math.min(count, pool.length);
-  const result: T[] = [];
-
-  for (let k = 0; k < n; k++) {
-    const total = pool.reduce((sum, p) => sum + p.weight, 0);
-    let r = rng() * total;
-    let idx = pool.length - 1;
-    for (let i = 0; i < pool.length; i++) {
-      r -= pool[i].weight;
-      if (r <= 0) {
-        idx = i;
-        break;
-      }
-    }
-    result.push(pool[idx].item);
-    pool.splice(idx, 1);
-  }
-
-  return result;
-}
-
-// ----------------------------------------------------------------------------
 // mc_ratio partition: split question_count into an MC side and a written side,
 // backfilling from whichever side has room when the other comes up short.
 // ----------------------------------------------------------------------------
@@ -206,6 +121,9 @@ export interface DrawParams {
   difficulty_max?: number | null;
   calculator_policy?: CalculatorFilter;
   weighting?: "random" | "weak_weighted" | null;
+  // How due-ness shapes the draw (retention.ts). Absent = "off": a caller
+  // that says nothing gets the draw it always got; templates pass their own.
+  due_mode?: DueMode | null;
 }
 
 export interface DrawResult {
@@ -223,14 +141,6 @@ export function getDefaultWeighting(db: DatabaseSync): "random" | "weak_weighted
   return row ? (JSON.parse(row.value) as "random" | "weak_weighted") : "random";
 }
 
-function weightsFor(
-  db: DatabaseSync,
-  pool: EligibleQuestion[],
-  weighting: "random" | "weak_weighted"
-): number[] {
-  return weighting === "weak_weighted" ? computeWeakWeights(db, pool) : pool.map(() => 1);
-}
-
 export function resolveDrawFromParams(
   db: DatabaseSync,
   params: DrawParams,
@@ -244,24 +154,26 @@ export function resolveDrawFromParams(
     calculator_policy: params.calculator_policy ?? "any",
   };
   const pool = getEligibleQuestions(db, eligParams);
+  const dueMode = params.due_mode ?? "off";
+
+  if (dueMode === "gate") return resolveGatedDraw(db, pool, params, weighting);
+
+  // "weight": a due item counts two to four times as much as it otherwise
+  // would; nothing is excluded, and a pool with nothing scheduled draws
+  // exactly as "off" does.
+  const due = dueMode === "weight" ? dueInfoByLineage(db) : null;
+  const weightsFor = (items: EligibleQuestion[]): number[] => {
+    const base = weighting === "weak_weighted" ? computeWeakWeights(db, items) : items.map(() => 1);
+    return due ? base.map((w, i) => w * dueWeightFactor(due.get(items[i].lineage_id))) : base;
+  };
 
   if (params.mc_ratio !== undefined && params.mc_ratio !== null) {
     const mcPool = pool.filter((q) => q.type === "mc");
     const writtenPool = pool.filter((q) => q.type === "written");
     const split = splitMcRatio(mcPool.length, writtenPool.length, params.question_count, params.mc_ratio);
 
-    const mcDrawn = weightedSampleWithoutReplacement(
-      mcPool,
-      weightsFor(db, mcPool, weighting),
-      split.mcTake,
-      rng
-    );
-    const writtenDrawn = weightedSampleWithoutReplacement(
-      writtenPool,
-      weightsFor(db, writtenPool, weighting),
-      split.writtenTake,
-      rng
-    );
+    const mcDrawn = weightedSampleWithoutReplacement(mcPool, weightsFor(mcPool), split.mcTake, rng);
+    const writtenDrawn = weightedSampleWithoutReplacement(writtenPool, weightsFor(writtenPool), split.writtenTake, rng);
 
     const questions = [...mcDrawn, ...writtenDrawn];
     return {
@@ -273,18 +185,48 @@ export function resolveDrawFromParams(
     };
   }
 
-  const questions = weightedSampleWithoutReplacement(
-    pool,
-    weightsFor(db, pool, weighting),
-    params.question_count,
-    rng
-  );
+  const questions = weightedSampleWithoutReplacement(pool, weightsFor(pool), params.question_count, rng);
 
   return {
     questions,
     short_draw: questions.length < params.question_count,
     requested: params.question_count,
     returned: questions.length,
+  };
+}
+
+// "gate": a homework or review set Osmosis schedules. Only due items are
+// eligible, most overdue first; when the draw is weak_weighted, weakness
+// orders items equally overdue. mc_ratio splits the ranked set the same way
+// it splits a sampled one. Nothing due is an empty draw, not a fallback.
+function resolveGatedDraw(
+  db: DatabaseSync,
+  pool: EligibleQuestion[],
+  params: DrawParams,
+  weighting: "random" | "weak_weighted"
+): DrawResult {
+  const due = dueInfoByLineage(db);
+  const ranked = rankByDue(pool, due, weighting === "weak_weighted" ? computeWeakWeights(db, pool) : undefined);
+
+  let questions: EligibleQuestion[];
+  let mixAdjusted: boolean | undefined;
+  if (params.mc_ratio !== undefined && params.mc_ratio !== null) {
+    const mc = ranked.filter((q) => q.type === "mc");
+    const written = ranked.filter((q) => q.type === "written");
+    const split = splitMcRatio(mc.length, written.length, params.question_count, params.mc_ratio);
+    const chosen = new Set([...mc.slice(0, split.mcTake), ...written.slice(0, split.writtenTake)]);
+    questions = ranked.filter((q) => chosen.has(q));
+    mixAdjusted = split.mixAdjusted;
+  } else {
+    questions = ranked.slice(0, params.question_count);
+  }
+
+  return {
+    questions,
+    short_draw: questions.length < params.question_count,
+    requested: params.question_count,
+    returned: questions.length,
+    ...(mixAdjusted !== undefined ? { mix_adjusted: mixAdjusted } : {}),
   };
 }
 
@@ -309,6 +251,7 @@ interface TemplateDrawRow {
   difficulty_max: number | null;
   calculator_policy: CalculatorFilter;
   weighting: "random" | "weak_weighted" | null;
+  due_mode: DueMode;
   retired_at: string | null;
 }
 
@@ -339,6 +282,7 @@ export function resolveTemplateDraw(
       difficulty_max: template.difficulty_max,
       calculator_policy: template.calculator_policy,
       weighting: template.weighting,
+      due_mode: template.due_mode,
     },
     rng
   );

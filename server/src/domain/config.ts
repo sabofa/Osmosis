@@ -16,6 +16,10 @@ const ALLOWED_KEYS = new Set([
   "duplicate_similarity_threshold",
   "abandon_after_hours",
   "sync_interval_sec",
+  // The retention loop: k discriminating items per first probe, and how close
+  // to a target the clamp stops pulling reviews in.
+  "retention_draw_k",
+  "retention_clamp_floor_hours",
 ]);
 
 export function getConfig(db: DatabaseSync): Record<string, unknown> {

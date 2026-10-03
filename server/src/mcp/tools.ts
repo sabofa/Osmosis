@@ -494,6 +494,11 @@ export function registerTools(
         difficulty_max: z.number().nullable().optional(),
         calculator_policy: z.enum(["allowed", "forbidden", "any"]).optional(),
         weighting: z.enum(["random", "weak_weighted"]).nullable().optional(),
+        due_mode: z.enum(["off", "weight", "gate"]).optional().describe(
+          "How due-ness shapes the draw. 'weight' (default): due items are likelier, nothing excluded. " +
+            "'gate': only due items, most overdue first — an Osmosis-scheduled homework or SM2 review set; " +
+            "nothing due draws nothing. 'off': due-ness ignored."
+        ),
         frozen: z.boolean().optional(),
         time_limit_sec: z.number().nullable().optional(),
         session_id: z.string().optional().describe(
@@ -528,6 +533,7 @@ export function registerTools(
           difficulty_max: z.number().nullable().optional(),
           calculator_policy: z.enum(["allowed", "forbidden", "any"]).optional(),
           weighting: z.enum(["random", "weak_weighted"]).nullable().optional(),
+          due_mode: z.enum(["off", "weight", "gate"]).optional(),
           frozen: z.boolean().optional(),
           time_limit_sec: z.number().nullable().optional(),
           confirm_refreeze: z.boolean().optional(),
@@ -694,7 +700,8 @@ export function registerTools(
     "present_item",
     {
       description:
-        "Create a live item for the learner to answer in the Osmosis app. The returned question snapshot carries node_keys/node_key. Returns immediately with an attempt/response id — the item is NOT rendered in this conversation. Call await_item_outcome afterward to learn what happened once the learner answers in the app. Either pass question_id for a specific item you authored, or tag_query to let Osmosis pick an eligible one.",
+        "Create a live item for the learner to answer in the Osmosis app. The returned question snapshot carries node_keys/node_key. Returns immediately with an attempt/response id — the item is NOT rendered in this conversation. Call await_item_outcome afterward to learn what happened once the learner answers in the app. Either pass question_id for a specific item you authored, or tag_query to let Osmosis pick an eligible one " +
+        "(due_mode decides how due-ness shapes that pick).",
       inputSchema: {
         question_id: z.string().optional(),
         tag_query: tagQueryShape,
@@ -707,11 +714,15 @@ export function registerTools(
             "submit, 'deferred' holds it back until end_session. Defaults to the session's setting, or immediate."
         ),
         context: contextShape,
+        due_mode: z.enum(["off", "weight", "gate"]).optional().describe(
+          "For a tag_query pick only. 'weight' (default): due items are likelier. 'gate': the most overdue " +
+            "due item, or a nothing_due refusal. 'off': uniform, as before."
+        ),
       },
     },
-    async ({ question_id, tag_query, session_id, reveal, context }) => {
+    async ({ question_id, tag_query, session_id, reveal, context, due_mode }) => {
       try {
-        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id, reveal, context }));
+        return ok(presentItem(db, { node_id: nodeId, question_id, tag_query, session_id, reveal, context, due_mode }));
       } catch (err) {
         return fail(err);
       }
@@ -1071,9 +1082,19 @@ export function registerTools(
     "set_retention_target",
     {
       description:
-        "Tell Osmosis how long a piece of content needs to be retained, and let Osmosis compute when to resurface it. You supply the target and reason; Osmosis owns scheduling — never call this expecting to control exact timing.",
+        "Tell Osmosis how long a node needs to be retained, and let Osmosis compute when to resurface it. You supply the target and reason; Osmosis owns scheduling — never call this expecting to control exact timing. " +
+        "The target attaches to the node and every item carrying that node key inherits it. Gap 1 is a share of the time left " +
+        "(Cepeda): at gap 1 Osmosis draws the node's first probe — its discriminating items (those filed with tests_error), " +
+        "first k by authoring order (config retention_draw_k, default 3), plus one transfer item (one whose node_keys span " +
+        "this node and another) — and holds the rest as reserve. A passing draw brings the reserve in at the node's gap-2 " +
+        "interval; any miss brings it forward now as relearn material. From an item's first retention review on, SM2 sets " +
+        "its gaps from oracle/judge/auto_mc grades (self grades never schedule), clamped so no gap steps past an open target. " +
+        "Setting the same label again starts that target over. Returns due_at = gap 1.",
       inputSchema: {
-        identity_key: z.string().describe("A tag slug or node_key — whatever identity this retention target applies to."),
+        identity_key: z.string().describe(
+          "The node key the target attaches to: node:<textbook_slug>:<section>:<node_key> for course material, " +
+            "node:<topic_slug>:<subtopic>:<node_key> for self-directed. A tag slug that is not a node key is refused."
+        ),
         retention_target: z.string().describe("A label for this specific target, e.g. 'chapter-8-test' or 'final-exam'. One identity can have several open targets."),
         target_source: z.enum(["engine", "tutor_direct"]).describe("'engine' if this came from a published assessment date; 'tutor_direct' if you set it yourself for a self-directed topic."),
         needs_last_until: z.string().describe("ISO date/datetime the material needs to be retained until."),
@@ -1167,16 +1188,24 @@ export function registerTools(
     "get_due_items",
     {
       description:
-        "List identities whose retention schedule is due now (or before a given time), most-overdue first. Paginated. Each item carries reason: never_demonstrated (no probe recorded yet), decayed (last probe passed, interval elapsed), or lapsed (last probe failed).",
+        "List the items whose retention schedule is due now (or before a given time), most overdue first — overdue " +
+        "measured against the gap the item was meant to survive (overdue_ratio). Paginated. One row per item (id = its " +
+        "lineage_id; question_id = its live version), with node_key/node_keys, its targets (role draw|reserve and the " +
+        "draw's probe state), SM2 state (easiness, repetitions, interval_days, last_quality) and reason: " +
+        "never_demonstrated (no retention review yet — a draw awaiting its first probe, or reserve a passing draw " +
+        "brought in), relearn (not yet retained: reserve a failed draw brought forward, or never passed — go teach it), " +
+        "lapsed (failed after passing before — resurface sooner), or decayed (last review passed, interval elapsed). " +
+        "node_key filters to a node or anything under it (segment-aware: node:x:2 is not node:x:2.4).",
       inputSchema: {
         before: z.string().optional(),
         limit: z.number().optional(),
         offset: z.number().optional(),
+        node_key: z.string().optional(),
       },
     },
-    async ({ before, limit, offset }) => {
+    async ({ before, limit, offset, node_key }) => {
       try {
-        return ok(getDueItems(db, { before, limit, offset }));
+        return ok(getDueItems(db, { before, limit, offset, node_key }));
       } catch (err) {
         return fail(err);
       }

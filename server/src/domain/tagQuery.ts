@@ -4,16 +4,46 @@ export interface TagQuery {
   none?: string[];
 }
 
-// Hierarchy expands downward lexically: "math" matches "math" and "math:*" —
-// slug format guarantees ":" only ever separates levels, so a prefix match is
-// sufficient and needs no recursive parent_slug walk through the tag table.
-function matchGroupSql(slugs: string[]): { sql: string; params: string[] } {
-  const params: string[] = [];
-  const ors = slugs.map((slug) => {
-    params.push(slug, `${slug}:%`);
-    return "(qt.tag_slug = ? OR qt.tag_slug LIKE ?)";
-  });
-  return { sql: `(${ors.join(" OR ")})`, params };
+// A slug matches itself and everything below it, cutting only at ":" — so
+// "node:ebbing11e:2" never reaches "node:ebbing11e:2.4:…" — and every other
+// character is literal. A LIKE pattern is not: it reads "_" as "any one
+// character", so "a_b:%" also matched "a.b:…", the second spelling of a
+// section the dotted grammar exists to rule out. Every subtree match in the
+// app goes through this pair rather than LIKE.
+export function slugSubtreeSql(column: string): string {
+  return `(${column} = ? OR substr(${column}, 1, ?) = ?)`;
+}
+
+export function slugSubtreeParams(slug: string): [string, number, string] {
+  return [slug, slug.length + 1, `${slug}:`];
+}
+
+function isNodeSlug(slug: string): boolean {
+  return slug === "node" || slug.startsWith("node:");
+}
+
+// Whether question `q` carries `slug` or anything below it. A node: slug is
+// an identity an item can carry three ways — as a tag, in node_keys, or (a
+// row written before question_node_key, or by a sync pull) in the singular
+// column — and all three count. The column test is guarded against NULL:
+// unguarded, a NULL node_key makes the whole OR NULL, and a `none` group
+// would then drop every item without a key instead of keeping it.
+function itemCarriesSql(slug: string): { sql: string; params: unknown[] } {
+  const p = slugSubtreeParams(slug);
+  const asTag = `EXISTS (SELECT 1 FROM question_tag qt WHERE qt.question_id = q.id AND ${slugSubtreeSql("qt.tag_slug")})`;
+  if (!isNodeSlug(slug)) return { sql: asTag, params: p };
+  return {
+    sql:
+      `(${asTag}` +
+      ` OR EXISTS (SELECT 1 FROM question_node_key nk WHERE nk.question_id = q.id AND ${slugSubtreeSql("nk.node_key")})` +
+      ` OR (q.node_key IS NOT NULL AND ${slugSubtreeSql("q.node_key")}))`,
+    params: [...p, ...p, ...p],
+  };
+}
+
+function anyOf(slugs: string[]): { sql: string; params: unknown[] } {
+  const parts = slugs.map(itemCarriesSql);
+  return { sql: `(${parts.map((x) => x.sql).join(" OR ")})`, params: parts.flatMap((x) => x.params) };
 }
 
 // Returns a SQL fragment (starting with "AND ...", or "" if the query is empty)
@@ -23,20 +53,20 @@ export function buildTagQueryClause(query: TagQuery): { sql: string; params: unk
   const params: unknown[] = [];
 
   for (const slug of query.all ?? []) {
-    const group = matchGroupSql([slug]);
-    clauses.push(`EXISTS (SELECT 1 FROM question_tag qt WHERE qt.question_id = q.id AND ${group.sql})`);
-    params.push(...group.params);
+    const one = itemCarriesSql(slug);
+    clauses.push(one.sql);
+    params.push(...one.params);
   }
 
   if (query.any && query.any.length > 0) {
-    const group = matchGroupSql(query.any);
-    clauses.push(`EXISTS (SELECT 1 FROM question_tag qt WHERE qt.question_id = q.id AND ${group.sql})`);
+    const group = anyOf(query.any);
+    clauses.push(group.sql);
     params.push(...group.params);
   }
 
   if (query.none && query.none.length > 0) {
-    const group = matchGroupSql(query.none);
-    clauses.push(`NOT EXISTS (SELECT 1 FROM question_tag qt WHERE qt.question_id = q.id AND ${group.sql})`);
+    const group = anyOf(query.none);
+    clauses.push(`NOT ${group.sql}`);
     params.push(...group.params);
   }
 

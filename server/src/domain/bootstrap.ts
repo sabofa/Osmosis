@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { PROTOCOL_VERSION } from "../protocol.js";
 import { createTag } from "./tags.js";
+import { slugSubtreeSql, slugSubtreeParams } from "./tagQuery.js";
 import { seedForSubject } from "./taxonomies/index.js";
 
 export interface BootstrapResult {
@@ -139,8 +140,8 @@ export function bootstrap(
   const tagClauses = ["retired_at IS NULL"];
   const tagParams: unknown[] = [];
   if (subject) {
-    tagClauses.push("(slug = ? OR slug LIKE ?)");
-    tagParams.push(subject, `${subject}:%`);
+    tagClauses.push(slugSubtreeSql("slug"));
+    tagParams.push(...slugSubtreeParams(subject));
   } else {
     tagClauses.push("parent_slug IS NULL");
   }

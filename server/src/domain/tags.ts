@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "./errors.js";
+import { slugSubtreeSql, slugSubtreeParams } from "./tagQuery.js";
 
 const SLUG_SEGMENT = "[a-z0-9]+([._][a-z0-9]+)*";
 const SLUG_RE = new RegExp(`^${SLUG_SEGMENT}(:${SLUG_SEGMENT})*$`);
@@ -61,8 +62,8 @@ function buildTagWhere(opts: { prefix?: string; kind?: string; includeRetired?: 
 
   if (!opts.includeRetired) clauses.push("t.retired_at IS NULL");
   if (opts.prefix) {
-    clauses.push("(t.slug = ? OR t.slug LIKE ?)");
-    params.push(opts.prefix, `${opts.prefix}:%`);
+    clauses.push(slugSubtreeSql("t.slug"));
+    params.push(...slugSubtreeParams(opts.prefix));
   }
   // prefix and kind compose: both are ANDed, so kind: "tech" with prefix:
   // "chemistry" is an empty listing rather than either filter winning.

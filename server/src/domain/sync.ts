@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveTemplateDraw } from "./draw.js";
+import { slugSubtreeSql, slugSubtreeParams } from "./tagQuery.js";
 import { PROTOCOL_VERSION } from "../protocol.js";
 import { listThemesForSync, getActiveThemeId, applyThemesFromPull, type ThemeRow } from "./themes.js";
 
@@ -84,14 +85,13 @@ export interface ApplyPullResult {
   cursor: string;
 }
 
-// Same prefix-match idiom as tags.ts's listTags(prefix) and tagQuery.ts's
-// matchGroupSql: "math" matches "math" and "math:*" via a plain LIKE, since
-// slug format guarantees ":" only ever separates hierarchy levels.
-function sliceMatchClause(column: string, slices: string[]): { sql: string; params: string[] } {
-  const params: string[] = [];
+// Same subtree match as every other slug filter (tagQuery.ts's
+// slugSubtreeSql): "math" matches "math" and "math:*", cutting only at ":".
+function sliceMatchClause(column: string, slices: string[]): { sql: string; params: (string | number)[] } {
+  const params: (string | number)[] = [];
   const ors = slices.map((slug) => {
-    params.push(slug, `${slug}:%`);
-    return `(${column} = ? OR ${column} LIKE ?)`;
+    params.push(...slugSubtreeParams(slug));
+    return slugSubtreeSql(column);
   });
   return { sql: `(${ors.join(" OR ")})`, params };
 }
@@ -700,14 +700,14 @@ export function applyPullResponse(
     const countQuestions = db.prepare(
       `SELECT COUNT(DISTINCT q.id) AS n FROM question q
        JOIN question_tag qt ON qt.question_id = q.id
-       WHERE (qt.tag_slug = ? OR qt.tag_slug LIKE ?) AND q.retired_at IS NULL`
+       WHERE ${slugSubtreeSql("qt.tag_slug")} AND q.retired_at IS NULL`
     );
     const updateSlice = db.prepare(
       "UPDATE local_slice SET pulled_at = ?, question_count = ? WHERE tag_slug = ?"
     );
     for (const slug of slices) {
       if (!findSlice.get(slug)) continue;
-      const { n } = countQuestions.get(slug, `${slug}:%`) as { n: number };
+      const { n } = countQuestions.get(...slugSubtreeParams(slug)) as { n: number };
       updateSlice.run(response.cursor, n, slug);
     }
 
@@ -991,7 +991,7 @@ export function removeSlice(db: DatabaseSync, tagSlug: string): { pruned_questio
     db.prepare(
       `SELECT DISTINCT q.id FROM question q
        JOIN question_tag qt ON qt.question_id = q.id
-       WHERE (qt.tag_slug = ? OR qt.tag_slug LIKE ?)
+       WHERE ${slugSubtreeSql("qt.tag_slug")}
          AND NOT EXISTS (SELECT 1 FROM response r WHERE r.question_id = q.id)
          -- Both of these FK to question with ON DELETE RESTRICT; excluding
          -- them up front beats letting the delete raise and roll back.
@@ -1002,10 +1002,10 @@ export function removeSlice(db: DatabaseSync, tagSlug: string): { pruned_questio
          AND NOT EXISTS (
            SELECT 1 FROM question_tag qt2
            JOIN local_slice ls ON ls.tag_slug != ?
-             AND (qt2.tag_slug = ls.tag_slug OR qt2.tag_slug LIKE ls.tag_slug || ':%')
+             AND (qt2.tag_slug = ls.tag_slug OR substr(qt2.tag_slug, 1, length(ls.tag_slug) + 1) = ls.tag_slug || ':')
            WHERE qt2.question_id = q.id
          )`
-    ).all(tagSlug, `${tagSlug}:%`, tagSlug) as { id: string }[]
+    ).all(...slugSubtreeParams(tagSlug), tagSlug) as { id: string }[]
   ).map((r) => r.id);
 
   db.exec("BEGIN");

@@ -127,9 +127,9 @@ becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 6), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 8 — the retention loop changed `set_retention_target`, `get_due_items`, `present_item` and the template tools), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes; `retention_conventions` documents the retention loop (§3.5) |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject. Returns `taxonomy: { seeded, seed_available, tag_count }`; `seed: true` creates the subject's shipped taxonomy (`server/src/domain/taxonomies/`, currently `chemistry` — Ebbing 11e ch. 1-12 plus `tech:mhchem`/`tech:calculator` — and `math`), idempotently, so an empty bank gets standard slugs instead of invented near-duplicates |
-| `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
+| `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants, cut only at `:` — `_` and `.` are literal, so `a_b` never reaches `a.b`) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
 | `merge_tags` | Vocabulary cleanup. When **both** slugs are `node:` tags the node keys move too — `question_node_key` rows (collapsing rather than colliding on the `(question_id, node_key)` PK, and promoting the survivor when the merged key was primary) and the singular `question.node_key` — reported as `node_keys_updated`. A merge that isn't `node:`-to-`node:` leaves node keys alone rather than minting an invalid one |
 | `search_questions` | Cheap summaries, omits explanation/rubric/graph_spec. Every row carries `node_keys` (primary first) and `node_key` (the primary). Filters: `node_key` (exact, or prefix when the value ends with `:` — `node:ebbing11e:2.4:` matches everything under that section), `session_id`, and `include_ephemeral` (session-only items are excluded otherwise). Paginated (`limit`/`offset`, default 50); response is `{ total, questions, has_more }` |
@@ -138,7 +138,7 @@ becoming one larger tool.
 | `edit_question` | Versions if attempted, in-place otherwise. Same optional-`misconception` normalisation as `create_questions`; `node_keys` replaces the whole set, a singular `node_key` replaces it with that one primary |
 | `retire_question` | Soft retire |
 | `list_templates` | Live eligible_count. Paginated (`limit`/`offset`, default 50); response is `{ total, templates, has_more }` |
-| `create_template` / `edit_template` / `retire_template` | Draw specs |
+| `create_template` / `edit_template` / `retire_template` | Draw specs. `due_mode` (§3.5): `weight` (default, and every template from before 022) favours due items; `gate` draws only due items, most overdue first — an Osmosis-scheduled homework or SM2 review set, empty when nothing is due; `off` ignores due-ness. Not synced: a downloaded template drawn offline on a local node has no schedule to read |
 | `get_results` | Weak-area signal, truncated `response_text` on wrong written answers; a null `score` (ungraded) is never averaged as zero — tag/question rows carry `graded`, attempt/daily rows carry `ungraded`, so every mean's denominator is visible. Question rows also carry `graded_by` (`self`/`model`/`oracle`/`judge`/`auto_mc` counts); question and attempt rows both carry the full per-response record (`recent_responses` / `responses`). Accepts `offset` (all four scopes) to page through rows, but deliberately does *not* return `total`/`has_more` — offset-only, not the full pagination envelope used by the list/search tools above |
 | `get_config` / `set_config` | Refuses unknown keys and secrets |
 | `create_asset` | `type: text`/`url`/`file` (base64) — the file variant is the fallback path, see §5 |
@@ -151,11 +151,12 @@ becoming one larger tool.
 | `list_ungraded_written` | Written answers waiting for a verdict (prompt, rubric, model answer, the learner's text, any self grade), oldest first; optional `session_id`, `include_self_graded`, `limit`. The read half of grading over MCP — there is no model grader |
 | `end_session` | Ends the session and returns `summary: { presented, answered, abandoned, dont_know, shows, paused_now, retired_ephemeral }` (`shows` counts what `present_show` put up — see §3.4) over its live items, marking anything still unanswered abandoned so the counts are final, and retiring the session's ephemeral questions (`retired_reason = 'ephemeral_session_ended'`). Optional `summary` (markdown) is the tutor's closing recap for the learner: stored on the session, echoed back as `summary_text` (distinct from the counts object), and rendered above that session's attempt history in the app. Whitespace-only is stored as nothing said |
 | `create_session` | Starts a tutoring session. `tag_slug` must already exist. `reveal_default` (`immediate`, the default, or `deferred`) sets what every item presented in it does with its answer key on the learner's screen |
-| `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default and `context` (§3.4); the returned snapshot carries `node_keys`/`node_key` |
+| `present_item` | Creates a live item in the app. Takes `reveal` (`immediate`/`deferred`) overriding the session default and `context` (§3.4); the returned snapshot carries `node_keys`/`node_key`. A `tag_query` pick takes `due_mode` (§3.5): `weight` (default) favours due items, `gate` takes the most overdue due item or refuses `nothing_due`, `off` is the old uniform pick |
 | `present_show` | Puts something non-answerable on the learner's screen — `kind` `text`/`markdown`/`graph` (see §3.4 on what `markdown` actually renders), `payload`, optional `caption` (≤500 chars) and `context`. A `graph` payload is parsed with the same grammar as a question's `graph_spec` and rejected `invalid_graph_spec` with the parser's own message. Returns `{ show_id, presented_at }`. See §3.4 |
 | `update_show` | Replaces a graph show's spec so the app redraws it in the same canvas (set `@bounds` to hold the frame). Graph shows only — anything else is `update_not_supported` — and the session must still be open |
 | `await_show_outcome` | Waits for the learner to work through a show, `timeout_s` default 25 clamped 1..25, polling every second and returning early on `acknowledged`. Returns `{ show_id, status: 'pending'/'seen'/'acknowledged', seen_at, dwell_ms, acknowledged_at }` |
-| `get_due_items` | Due-item queue, most-overdue first; each row carries `reason` (`never_demonstrated`/`decayed`/`lapsed`) |
+| `set_retention_target` | Attaches a target to a **node key** (a non-node identity is refused `invalid_node_key`); every item carrying the key inherits it. Returns `{ id, node_key, identity_key, retention_target, needs_last_until, first_gap_days, due_at, node_items }` — `due_at` is gap 1, when the node's first probe is drawn. The same label again starts that target over (§3.5) |
+| `get_due_items` | One row per due item (`id` = its `lineage_id`, `question_id` = the live version), most overdue first — overdue measured against the gap the item was meant to survive (`overdue_ratio`). Rows carry `node_key`/`node_keys`, `targets[]` (each with `role` `draw`/`reserve` and the draw's `probe` state), SM2 state (`easiness`, `repetitions`, `interval_days`, `retention_reviews`, `last_quality`), and `reason`: `never_demonstrated` (no retention review yet), `relearn` (reserve a failed draw brought forward, or never passed — go teach it), `lapsed` (failed after passing — resurface sooner), `decayed` (passed, interval run). The identity-keyed fields stay: `identity_key` (primary node key), `retention_target`/`target_source` (nearest open target), `last_result`. Filters `before`, `node_key` (segment-aware); paginated |
 
 Plus one plain (non-JSON-RPC) HTTP route on the same route family, `POST
 /mcp/:token/upload`, which accepts either token — see §5.
@@ -252,6 +253,60 @@ same screen as the question being answered.
 
 ---
 
+### 3.5 The retention loop (stage 2a, migration 022)
+
+**Identity.** A node key is tag-shaped: `node:<topic_slug>:<subtopic>:<node_key>`
+(or, for course material, `node:<textbook_slug>:<section>:<node_key>` — identity
+is leaning away from textbooks, so new keys should prefer the topic shape). 022
+rendered the free-form legacy values into that shape and registered every node
+key in use as a `node:` tag, so `merge_tags` can merge two node identities. A
+`node:` slug in a `tag_query` matches items by their `node_keys` as well as by
+their tags.
+
+**Two halves.** A target and its inheritance live on the node
+(`node_retention_target`); scheduling lives on the item, keyed by `lineage_id`
+(`retention_item`). The two-key row `retention_schedule (node_key, lineage_id,
+retention_target, role)` joins them. SM2 state is not stored: it is replayed
+from the item's graded responses on every read, so re-grades, late sync pushes
+and reworded versions never leave it stale.
+
+**Gap 1.** `first_gap_days` = Cepeda's share of the time to `needs_last_until`.
+At gap 1 the node's first probe is drawn: its discriminating items (filed with
+`tests_error`), the first `k` by authoring order (config `retention_draw_k`,
+default 3), plus one transfer item (its `node_keys` span this node and another,
+preferring a node nothing has targeted). A node with no discriminating items
+draws `k` weak-weighted. Everything else on the node is reserve, and an item
+authored onto the node later joins the reserve.
+
+**The draw's result.** Any miss fails it, at once; all probes passing passes it.
+Pass: the reserve's first due is the node's gap-2 interval (the soonest any drawn
+item comes back after its probe), clamped — no synthesized easiness, the item
+stays `never_demonstrated` until a real grade starts SM2. Fail: the reserve is due
+now, reason `relearn`.
+
+**Gap 2 onward: SM2.** From an item's first retention review (its first due or
+later; earlier answers are the learning phase and only refresh it). Quality from
+the outcome: correct·confident 5, ·somewhat 4, ·unsure 3; incorrect·unsure 2;
+incorrect·somewhat or idk 1; incorrect·confident 0; partial 2; a missing
+confidence reads as somewhat. Only `auto_mc`, `oracle` and `judge` grades
+schedule — never `self` — and an idk always counts. Easiness updates on every
+review; the interval is `max(previous, elapsed × easiness)`, so an early review
+does not grow it and gap 2 = gap 1 × easiness. A miss relearns in one day.
+
+**The clamp.** `next_due = min(review + interval, target − ratio × (target −
+review))` over every open target on the item's nodes. Once that latest review
+would be under `retention_clamp_floor_hours` (default 24) away, the target has had
+its last pre-target pass and adds nothing; after every target has passed, SM2
+runs free.
+
+**Selection.** `due_mode` on templates and `present_item`: `gate` for homework
+and SM2 review sets, `weight` for casual draws (the daily question and quiz always
+weight). A due item's weight is ×2–4 by how overdue it is.
+
+**Lifecycle.** A reworded version keeps the history (lineage). `retire_question`
+on the live version ends the schedule (`status: ended`) and keeps the history.
+Ephemeral items never schedule.
+
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 
 Native tool-calling has a real, measured cost at scale: all 37 tool schemas
@@ -308,6 +363,7 @@ many questions actually landed — resolve that with `search_questions` to
 check what's actually in the bank before blindly re-running the same batch.
 
 ---
+
 
 ## 4. `get_question`
 

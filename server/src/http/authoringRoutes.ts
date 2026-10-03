@@ -57,7 +57,11 @@ export function clearData(db: DatabaseSync, scope: ClearScope): Record<string, n
       run("attempts", "DELETE FROM attempt");
     }
     if (scope === "all") {
+      // The two-key rows first (they reference the targets), then the item
+      // and node halves.
       run("retention", "DELETE FROM retention_schedule");
+      run("retention_items", "DELETE FROM retention_item");
+      run("retention_targets", "DELETE FROM node_retention_target");
       run("outbox", "DELETE FROM outbox");
     }
     db.exec("COMMIT");

@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import type { TagQuery } from "./tagQuery.js";
 import { getEligibleQuestions, weightedSampleWithoutReplacement, computeWeakWeights, type EligibilityParams } from "./draw.js";
+import { dueInfoByLineage, dueWeightFactor } from "./retention.js";
 
 function configString(db: DatabaseSync, key: string, fallback: string): string {
   const row = db.prepare("SELECT value FROM config WHERE key = ?").get(key) as { value: string } | undefined;
@@ -58,6 +59,9 @@ function drawWithRelaxation(
     .filter((d) => d >= 0)
     .sort((a, b) => b - a);
 
+  // A daily draw is casual practice: due-ness weights it, never gates it.
+  const due = dueInfoByLineage(db);
+
   for (const days of levels) {
     const excluded = [...recentExcludedLineages(db, drawDate, days), ...extraExcludeLineageIds];
     const params: EligibilityParams = {
@@ -67,7 +71,8 @@ function drawWithRelaxation(
     };
     const pool = getEligibleQuestions(db, params);
     if (pool.length >= count || days === 0) {
-      const weights = weighting === "weak_weighted" ? computeWeakWeights(db, pool) : pool.map(() => 1);
+      const base = weighting === "weak_weighted" ? computeWeakWeights(db, pool) : pool.map(() => 1);
+      const weights = base.map((w, i) => w * dueWeightFactor(due.get(pool[i].lineage_id)));
       const questions = weightedSampleWithoutReplacement(pool, weights, count, rng);
       return { questions, relaxedTo: days, short: questions.length < count };
     }

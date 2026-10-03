@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "./errors.js";
-import { buildTagQueryClause, type TagQuery } from "./tagQuery.js";
+import { buildTagQueryClause, slugSubtreeSql, slugSubtreeParams, type TagQuery } from "./tagQuery.js";
 import { bestGuessCorrect, confidenceNumeric, deriveOutcome, type Confidence } from "./attempts.js";
 import { nodeKeyFields } from "./nodeKeys.js";
 import { notHeldSql, type Viewer } from "./reveal.js";
@@ -93,9 +93,8 @@ function tagScope(db: DatabaseSync, params: GetResultsParams, viewer: Viewer) {
     // tag_performance is one row per tag_slug already, so reuse the same
     // all/any/none matching directly against tag_slug rather than joining
     // through question.
-    const slugMatch = (slugs: string[]) =>
-      slugs.map(() => "(tp.tag_slug = ? OR tp.tag_slug LIKE ?)").join(" OR ");
-    const expand = (slugs: string[]) => slugs.flatMap((s) => [s, `${s}:%`]);
+    const slugMatch = (slugs: string[]) => slugs.map(() => slugSubtreeSql("tp.tag_slug")).join(" OR ");
+    const expand = (slugs: string[]) => slugs.flatMap(slugSubtreeParams);
 
     for (const slug of params.tag_query.all ?? []) {
       clauses.push(`(${slugMatch([slug])})`);
