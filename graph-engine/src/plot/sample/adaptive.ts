@@ -274,9 +274,17 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
 // The stretch itself is certified first. The bisection knows that its two ends are finite and
 // nothing about what lies between, and a step with a closed edge (floor(x - c + 1) for x <= c),
 // or a pole within a floor's width of the edge, would be drawn as a stroke across it. So the twin
-// is asked about the stretch, and it is drawn only when it is CONTINUOUS, or PARTIAL with bounds
-// (the domain ends inside it, as at the tip of a semicircle, but nothing blows up). Otherwise
-// the chain is lifted and the edge is still recorded.
+// is asked about the stretch, and it is drawn whole only when it is CONTINUOUS.
+//
+// PARTIAL with bounds is the verdict at the tip of a semicircle: the domain ends inside the stretch
+// (the rounding at its edge), but nothing blows up. It is also what a sqrt-type edge turns a step
+// into: PARTIAL hides the DEFINED that floor(x - c + 1) + sqrt(c - x) would have said. So that
+// verdict is not trusted whole. The stretch is split a 1024th of the way in from the last defined
+// point: the body, from the defined end to there, is drawn only if the twin says CONTINUOUS of it
+// (a step in it would say DEFINED), and the sliver that is left only if its ends are under a gap
+// apart and the jump test shows them closing, as for any interval the twin cannot certify.
+//
+// Anything else lifts the chain, and the edge is recorded in every case.
 function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb: number, yb: number, aDefined: boolean): void {
   let td = aDefined ? ta : tb
   let xd = aDefined ? xa : xb
@@ -294,22 +302,59 @@ function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb:
       tu = tm
     }
   }
+  const tEnd = aDefined ? ta : tb
   // (a stretch of no extent has nothing between its ends to certify)
-  let certified = true
-  if (td !== (aDefined ? ta : tb)) {
+  let verdict = CONTINUOUS
+  let bounded = true
+  if (td !== tEnd) {
     c.counter.intervals++
-    const verdict = c.fns.enclose(aDefined ? ta : td, aDefined ? td : tb, c.box)
-    certified = verdict === CONTINUOUS || (verdict === PARTIAL && isBounded(c.box))
+    verdict = c.fns.enclose(aDefined ? ta : td, aDefined ? td : tb, c.box)
+    bounded = isBounded(c.box)
   }
-  if (aDefined) {
-    if (certified) c.sink.segment(xa, ya, ta, xd, yd, td)
-    c.sink.lift()
-  } else if (certified) {
-    c.sink.segment(xd, yd, td, xb, yb, tb)
+  if (verdict === CONTINUOUS) {
+    if (aDefined) {
+      c.sink.segment(xa, ya, ta, xd, yd, td)
+      c.sink.lift()
+    } else {
+      c.sink.segment(xd, yd, td, xb, yb, tb)
+    }
+  } else if (verdict === PARTIAL && bounded) {
+    drawEdgeSplit(c, ta, xa, ya, tb, xb, yb, aDefined, td, xd, yd)
   } else {
     c.sink.lift()
   }
   c.sink.addBreak(td, 'edge')
+}
+
+// The stretch of an edge that the twin calls PARTIAL with bounds (see refineEdge): its body, from
+// the defined end to a point 1/1024 of the way in from the last defined point td, if that is
+// CONTINUOUS; then the sliver from there to td, if the jump test closes it. Drawn in parameter
+// order, lifted at the end only when the defined end is the left one, as refineEdge does.
+function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, xb: number, yb: number, aDefined: boolean, td: number, xd: number, yd: number): void {
+  const tEnd = aDefined ? ta : tb
+  const tIn = td + (tEnd - td) / 1024
+  let bodyOk = false
+  let sliverOk = false
+  let xi = 0
+  let yi = 0
+  if (tIn !== td && tIn !== tEnd) {
+    evalAt(c, tIn)
+    xi = c.pt[0]
+    yi = c.pt[1]
+    c.counter.intervals++
+    const inner = c.fns.enclose(aDefined ? ta : tIn, aDefined ? tIn : tb, c.box)
+    bodyOk = inner === CONTINUOUS && isFinite2(xi, yi)
+    sliverOk = bodyOk && pxDistance(c, xi, yi, xd, yd) < c.tune.gapPx && (aDefined ? gapCloses(c, tIn, td, xi, yi, xd, yd) : gapCloses(c, td, tIn, xd, yd, xi, yi))
+  }
+  if (aDefined) {
+    if (bodyOk) c.sink.segment(xa, ya, ta, xi, yi, tIn)
+    if (sliverOk) c.sink.segment(xi, yi, tIn, xd, yd, td)
+    c.sink.lift()
+  } else {
+    c.sink.lift()
+    if (sliverOk) c.sink.segment(xd, yd, td, xi, yi, tIn)
+    if (bodyOk) c.sink.segment(xi, yi, tIn, xb, yb, tb)
+  }
 }
 
 // Task 6's hook: at the two points where an interval at most a pixel wide is still

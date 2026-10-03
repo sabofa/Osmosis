@@ -191,7 +191,9 @@ export interface Tuning {
 }
 
 export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, spikeFactor: 2, spikeSlackPx: 2, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
-export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, budget: { points: 15000, intervals: 7500 } }
+// COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
+// cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
+export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, spikeFactor: 8, budget: { points: 15000, intervals: 7500 } }
 
 // The parts of the core that are not a quality knob, so not in Tuning but still numbers
 // that were chosen.

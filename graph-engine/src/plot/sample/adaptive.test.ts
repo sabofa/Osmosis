@@ -161,6 +161,17 @@ describe('sampleRange — edges and the coarse preset', () => {
     expect(coarse.chains).toHaveLength(1)
     expect(coarse.counter.points).toBeLessThan(full.counter.points)
   })
+  it('the coarse preset is not dearer than the full one on a curve the twin encloses loosely', () => {
+    // a cancelling quotient and a quartic: loose enclosures that a strict spike test keeps refining
+    for (const text of ['(x^3 - 3x^2 + 3x - 1)/(x^2 - 2x + 1)', 'x^4 - 10x^2 + 9']) {
+      const full = run(text)
+      const coarse = run(text, COARSE)
+      expect(coarse.capped, `${text} caps under coarse`).toBe(false)
+      expect(coarse.counter.intervals, text).toBeLessThan(full.counter.intervals)
+      // (at spikeFactor 2 the quotient capped the coarse budget, at 7552 of 7500)
+      expect(coarse.counter.intervals, `${text} spends the coarse budget`).toBeLessThan(COARSE.budget.intervals * 0.75)
+    }
+  })
 })
 
 describe('sampleRange — the budget', () => {
@@ -214,6 +225,17 @@ describe('sampleRange — the stretch to an edge is certified before it is drawn
   it('an open-ended ceiling step has none either', () => {
     for (const c of offsets(20)) {
       const risers = segmentsOf(run(`{x >= ${c}: ceil(x - ${c})}`).chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 4)
+      expect(risers, `riser at ${c}`).toEqual([])
+    }
+  })
+  // A sqrt-type edge makes the twin say PARTIAL over the last stretch, which must not hide a step in it.
+  it.each([
+    ['floor(x - c + 1) + sqrt(c - x)', (c: number) => `floor(x - ${c} + 1) + sqrt(${c} - x)`],
+    ['ceil(x - c) + sqrt(x - c)', (c: number) => `ceil(x - ${c}) + sqrt(x - ${c})`],
+    ['{x <= c: floor(x - c + 1)} + sqrt(c - x) * 0', (c: number) => `{x <= ${c}: floor(x - ${c} + 1)} + sqrt(${c} - x) * 0`],
+  ])('a step that coincides with a sqrt-type edge has no riser: %s', (_name, text) => {
+    for (const c of offsets(30)) {
+      const risers = segmentsOf(run(text(c)).chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 8)
       expect(risers, `riser at ${c}`).toEqual([])
     }
   })
