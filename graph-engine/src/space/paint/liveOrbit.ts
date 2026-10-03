@@ -30,6 +30,7 @@
 //
 // Nothing here reads a clock: the caller says how much time has passed.
 
+import type { Scratch } from './scratch'
 import { PATH_POINTS, ROLES, type StrokeBatch } from './types'
 
 // How long a new base takes to take over from the old one, and how long an edge stroke lasts once the camera has
@@ -252,8 +253,9 @@ const column = (b: StrokeBatch, name: keyof StrokeBatch): Column => b[name] as C
 //   a stroke only the new base has                its opacity times `weight`: it fades in
 //   a stroke only the old base has                its opacity times 1 - `weight`: it fades out
 // At weight 1 that is the new base's strokes and nothing else. (`match` is made by matchStrokes for these two batches
-// and refined by refineMatch.) The arrays are new; nothing the batches hold is changed.
-export function blendStrokes(old: StrokeBatch, neu: StrokeBatch, match: StrokeMatch, weight: number): StrokeBatch {
+// and refined by refineMatch.) The arrays are new (or the `scratch`'s, written afresh: they are the last call's, so a frame
+// that is to outlive the next call is copied); nothing the batches hold is changed.
+export function blendStrokes(old: StrokeBatch, neu: StrokeBatch, match: StrokeMatch, weight: number, scratch?: Scratch): StrokeBatch {
   const w = Math.min(1, Math.max(0, weight))
   const n = neu.count
   const gone = w < 1 ? match.gone : NO_STROKES
@@ -261,7 +263,8 @@ export function blendStrokes(old: StrokeBatch, neu: StrokeBatch, match: StrokeMa
   const out = { count } as unknown as Record<string, unknown>
   for (const { name, per, points } of ALL) {
     const src = column(neu, name)
-    const dst = new (src.constructor as new (length: number) => Column)(count * per * points)
+    const make = src.constructor as new (length: number) => Column
+    const dst = scratch ? scratch.array(name, make, count * per * points) : new make(count * per * points)
     dst.set(src.subarray(0, n * per * points))
     out[name] = dst
   }

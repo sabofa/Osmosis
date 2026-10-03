@@ -5,6 +5,7 @@ import { encodeFloatTexel } from '../gl/gbuffer'
 import { edgeFade, matchStrokes } from '../liveOrbit'
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
 import { reprojectStrokes } from '../reproject'
+import type { Scratch as ScratchClass } from '../scratch'
 import { PaintSession, type FrameResponse, type SceneColourData, type SessionRequest, type SessionResponse } from '../session'
 import { PATH_POINTS, ROLES, type PaintDebugMode, type PaintFrame, type PaintView, type StrokeBatch } from '../types'
 import type { SpaceScene } from '../../scene/types'
@@ -204,11 +205,11 @@ describe('the frames of the engine', () => {
 
 const sphereView = (opts: Parameters<typeof paintView>[0] = {}): PaintView => paintView({ width: 320, height: 240, azimuth: 30, elevation: 25, zoom: 200, ...opts })
 
-function withPicture(extra: EngineOptions = {}) {
+function withPicture(extra: EngineOptions = {}, glLimits: Parameters<typeof createPaintFakeGl>[2] = {}) {
   const painted: { frame: PaintFrame; kind: FrameStats['kind'] }[] = []
   const crossfades: number[] = []
   const snapshot = { canvas: { width: 0, height: 0 }, drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
-  const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+  const gl = createPaintFakeGl({}, { width: 320, height: 240 }, glLimits)
   Object.assign(gl.canvas.canvas, { style: {} })
   const frames: FrameStats[] = []
   const errors: (string | null)[] = []
@@ -407,17 +408,21 @@ describe('the camera moving: the last frame\'s strokes, re-projected', () => {
       await Promise.resolve()
       await Promise.resolve()
       await vi.advanceTimersByTimeAsync(5)
-      // the model's frame (for zoom 230) was made for a view the camera has left: it is not painted as it is, but
-      // becomes the base at once, and the picture is its strokes in the view the camera has now (one more picture, adopted)
+      // the model's frame (for zoom 230) was made for a view the camera has left: it becomes the base at once, but under a drag
+      // it is not painted in the task it came in: nothing is painted, and no request is asked for
+      expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject'])
+      expect(painted.map((p) => p.kind)).toEqual(['full', 'reproject', 'reproject'])
+      // the next animation frame paints it: the picture is its strokes in the view the camera has now (one more picture, adopted)
+      go(sphereView({ azimuth: 66, dragging: true }), P)
       expect(kinds(frames)).toEqual(['full', 'reproject', 'reproject', 'reproject'])
       expect(frames[3].adopted).toBe(true)
-      expect(painted.map((p) => p.kind)).toEqual(['full', 'reproject', 'reproject', 'reproject'])
       // the strokes of the one it replaced were another frame's: these are the adopted frame's
       const adopted = painted[3].frame.strokes
       expect(adopted.colour).not.toBe(painted[0].frame.strokes.colour)
       // and they are the ones the next re-projection starts from
-      go(sphereView({ azimuth: 66, dragging: true }), P)
+      go(sphereView({ azimuth: 72, dragging: true }), P)
       expect(painted[painted.length - 1].frame.strokes.colour).toBe(adopted.colour)
+      expect(frames[4].adopted).toBeUndefined()
       engine.dispose()
     } finally {
       vi.useRealTimers()
@@ -737,27 +742,33 @@ describe('the model keeps painting while the camera drags', () => {
   ])('%i frames, the model finishing every %i-th: %i of its frames are adopted as the base, each made for the newest view, one at a time, and no frame waits for it', async (n, every, adopted) => {
     const host = new SlowHost()
     const clock = { t: 0 }
-    const { engine, frames, crossfades, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
+    const { engine, frames, painted, crossfades, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true })
     go(sphereView(), P)
     host.finish()
     await done(1)
     const turned: number[] = []
-    for (let k = 1; k <= n; k++) {
+    for (let k = 1; k <= n + 1; k++) {
       clock.t += 16
       const before = frames.length
       go(sphereView({ azimuth: 30 + 3 * k, dragging: true }), P)
       // the picture is on screen as the call returns: it does not wait for the model
       expect(frames.length).toBe(before + 1)
       expect(frames[frames.length - 1].kind).toBe('reproject')
-      if (k % every === 0) {
-        turned.push(30 + 3 * k)
+      if (k % every === 0 && k <= n) {
+        // the model answers: the answer is adopted, but in its own task nothing is painted and no request is asked for
+        const paintedThen = painted.length
+        const requestsThen = host.requests.length
         host.finish()
         await flush()
+        expect(painted.length).toBe(paintedThen)
+        expect(host.requests.length).toBe(requestsThen)
+        turned.push(30 + 3 * (k + 1)) // the next animation frame's render() paints from it and asks for the next request
       }
     }
+    // each adoption's picture is the next frame's, reported with it
     expect(frames.filter((f) => f.adopted)).toHaveLength(adopted)
     // the model never ran two frames at once, and never a frame for a view that was not the newest when it started:
-    // the first drag frame's, then each the model took up after finishing one (the newest view that came while it worked)
+    // the first drag frame's, then each the model took up after finishing one (the newest view, at the next frame)
     expect(host.maxRunning).toBe(1)
     const live = host.requests.slice(1)
     const askedFor = [33, ...turned.slice(0, adopted)]
@@ -769,7 +780,7 @@ describe('the model keeps painting while the camera drags', () => {
       // the particles are the ones a still view has: only the analysis is coarser (a view that drags, in the model)
       expect(r.params.particles).toEqual(P.particles)
     })
-    expect(live.length).toBeLessThan(n / 2) // the views in between were skipped for the newest
+    expect(live.length).toBeLessThanOrEqual(n / 2 + 1) // the views in between were skipped for the newest
     expect(crossfades).toEqual([]) // an adopted frame is a re-projected picture, not one that eases from the snapshot
     engine.dispose()
   })
@@ -789,7 +800,9 @@ describe('the model keeps painting while the camera drags', () => {
         await flush()
       }
     }
-    // the model finishes its frame for azimuth 66, the view the pointer is about to be released at: it is the base on screen
+    // the pointer stays at azimuth 66 for another frame, which asks for the model's frame for that view, and the model finishes
+    // it: it is the base on screen (and the picture is made of it at once, for a camera that has paused)
+    a.go(sphereView({ azimuth: 66, dragging: true }), P)
     host.finish()
     await flush()
     const before = host.requests.length
@@ -859,6 +872,7 @@ describe('the model keeps painting while the camera drags', () => {
     clock.t = 1100
     host.finish() // the model's frame for az 40 is adopted at t = 1100
     await flush()
+    go(v70, P) // and the next animation frame paints it
     const next = host.responses[1].strokes
     const askedView = host.requests[1].view
     // the strokes each base shows in this view: the first's has been leaving its view for 100 ms, the second's for 84 (edges only)
@@ -951,6 +965,7 @@ describe('the model keeps painting while the camera drags', () => {
     clock.t = 1100
     host.finish()
     await flush()
+    go(v70, P)
     const next = host.responses[1].strokes
     const s = painted[painted.length - 1].frame.strokes
     const expected = reprojectStrokes(next, host.requests[1].view, v70, P, edgeFade(84))
@@ -1078,7 +1093,11 @@ describe('the crossfade of a camera that has stopped', () => {
       await vi.advanceTimersByTimeAsync(0)
       const next = host.responses[1].strokes
       const seen = () => painted[painted.length - 1].frame.strokes
-      // adopted: easing in, the old strokes still there
+      // adopted, and not painted in its own task: the pointer has stopped, so no render() comes; the tick paints it
+      expect(frames[frames.length - 1].adopted).toBeUndefined()
+      clock.t = 1110
+      await vi.advanceTimersByTimeAsync(16)
+      // easing in, the old strokes still there
       expect(frames[frames.length - 1].adopted).toBe(true)
       expect(seen().count).toBeGreaterThan(next.count)
       const after = painted.length
@@ -1098,5 +1117,218 @@ describe('the crossfade of a camera that has stopped', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ---- who does what, in which task ----
+
+describe('the work of an adopted frame is not stacked on one task', () => {
+  // A drag whose first model request is pending, the camera at azimuth 50 (the request is for 40): `go` takes the clock with it.
+  async function dragging(extra: EngineOptions = {}, glLimits: Parameters<typeof createPaintFakeGl>[2] = {}) {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const rig = withPicture({ host, now: () => clock.t, reducedMotion: () => true, ...extra }, glLimits)
+    rig.go(sphereView(), P)
+    if (glLimits.asyncReadback) await vi.waitFor(() => expect(host.requests.length).toBe(1), { timeout: 5000, interval: 2 })
+    host.finish()
+    await rig.done(1)
+    clock.t = 100
+    rig.go(sphereView({ azimuth: 40, dragging: true }), P)
+    if (glLimits.asyncReadback) await vi.waitFor(() => expect(host.requests.length).toBe(2), { timeout: 5000, interval: 2 })
+    clock.t = 116
+    rig.go(sphereView({ azimuth: 50, dragging: true }), P)
+    return { host, clock, ...rig }
+  }
+
+  it('paints nothing and asks for nothing in the task the answer came in; the next animation frame’s render() paints it and asks for the next request', async () => {
+    const { host, engine, painted, frames, go } = await dragging()
+    const paintedThen = painted.length
+    const requestsThen = host.requests.length
+    host.finish()
+    await flush()
+    // adopted, and not painted, and the model is not asked for the next frame either
+    expect(painted.length).toBe(paintedThen)
+    expect(host.requests.length).toBe(requestsThen)
+    expect(frames.some((f) => f.adopted)).toBe(false)
+    // the next animation frame: its re-projection is made from the adopted base, and it asks for the model's frame for its view
+    go(sphereView({ azimuth: 55, dragging: true }), P)
+    expect(painted.length).toBe(paintedThen + 1)
+    expect(frames[frames.length - 1].adopted).toBe(true)
+    expect(host.requests.length).toBe(requestsThen + 1)
+    expect(Array.from(host.requests[requestsThen].view.viewProj)).toEqual(Array.from(sphereView({ azimuth: 55, dragging: true }).viewProj))
+    engine.dispose()
+  })
+
+  it('paints a pointer that has paused by the tick, and asks for its next request after two frames’ wait: no render() comes for either', async () => {
+    vi.useFakeTimers()
+    try {
+      const { host, clock, engine, painted, frames } = await dragging()
+      const paintedThen = painted.length
+      const requestsThen = host.requests.length
+      clock.t = 120
+      host.finish()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(painted.length).toBe(paintedThen)
+      // a frame has just painted (at 116): the tick leaves the picture to the next animation frame ...
+      clock.t = 124
+      await vi.advanceTimersByTimeAsync(16)
+      expect(painted.length).toBe(paintedThen)
+      // ... and, none having come by the time a frame's worth has passed, paints it itself
+      clock.t = 140
+      await vi.advanceTimersByTimeAsync(16)
+      expect(painted.length).toBe(paintedThen + 1)
+      expect(frames[frames.length - 1].adopted).toBe(true)
+      // the request that waited for a render() starts by itself once two frames have passed since the answer
+      expect(host.requests.length).toBe(requestsThen)
+      clock.t = 170
+      await vi.advanceTimersByTimeAsync(16)
+      expect(host.requests.length).toBe(requestsThen + 1)
+      engine.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not paint an adopted frame twice: the tick leaves a frame that was painted since to the animation frames of the drag', async () => {
+    vi.useFakeTimers()
+    try {
+      const host = new SlowHost()
+      const clock = { t: 0 }
+      const { engine, painted, go } = withPicture({ host, now: () => clock.t, reducedMotion: () => false })
+      go(sphereView(), P)
+      host.finish()
+      await vi.waitFor(() => expect(painted.length).toBeGreaterThanOrEqual(1))
+      clock.t = 100
+      go(sphereView({ azimuth: 40, dragging: true }), P)
+      clock.t = 116
+      go(sphereView({ azimuth: 50, dragging: true }), P)
+      clock.t = 130
+      host.finish() // the answer is adopted and a fade begins
+      await vi.advanceTimersByTimeAsync(0)
+      // the drag's animation frames go on every 16 ms: each paints, and the tick, firing between them, paints none of its own
+      const seen = painted.length
+      for (let k = 1; k <= 5; k++) {
+        clock.t += 16
+        go(sphereView({ azimuth: 50 + 2 * k, dragging: true }), P)
+        await vi.advanceTimersByTimeAsync(15)
+      }
+      expect(painted.length).toBe(seen + 5)
+      engine.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('what a fade allocates', () => {
+  it('nothing, after its first frame: the re-projections and the blend are made in arrays kept from frame to frame', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, painted, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => false })
+    go(sphereView(), P)
+    host.finish()
+    await done(1)
+    clock.t = 100
+    go(sphereView({ azimuth: 40, dragging: true }), P)
+    clock.t = 116
+    const v = (k: number) => sphereView({ azimuth: 50 + k, dragging: true })
+    go(v(0), P)
+    host.finish()
+    await flush() // the model's frame is adopted: a fade begins (the strokes of two bases, 120 ms)
+    // watch every array the engine's re-projections and blends are made in: each Scratch counts the arrays it has had to make
+    // (the class the engine was loaded with: the module registry is reset for each engine, so it is imported now, not at the top)
+    const { Scratch } = await import('../scratch')
+    const kept = new Set<ScratchClass>()
+    const original = Scratch.prototype.array
+    Scratch.prototype.array = function (this: ScratchClass, ...args: Parameters<ScratchClass['array']>) {
+      kept.add(this)
+      return original.apply(this, args)
+    } as ScratchClass['array']
+    const made = () => [...kept].reduce((n, scratch) => n + scratch.allocations, 0)
+    try {
+      clock.t = 120
+      go(v(1), P) // the fade's first frame: the arrays are made
+      const blended = painted[painted.length - 1].frame.strokes.count
+      expect(blended).toBeGreaterThan(host.responses[1].strokes.count) // (the new strokes and the old ones that went: a fade)
+      const first = made()
+      // the old base's re-projection, the new one's and the blend: path, depth, alpha twice and the blend's own arrays
+      expect(kept.size).toBe(3)
+      expect(first).toBeGreaterThan(20)
+      for (let k = 2; k <= 11; k++) {
+        clock.t += 5
+        go(v(k), P) // ten more frames of the fade (still inside its 120 ms)
+        expect(painted[painted.length - 1].frame.strokes.count).toBe(blended)
+      }
+      // not one more array
+      expect(made()).toBe(first)
+    } finally {
+      Scratch.prototype.array = original
+    }
+    engine.dispose()
+  })
+})
+
+describe('the G-buffer of a request is read without the page waiting', () => {
+  it('draws it and goes on: the picture is on screen at once, the request goes out when the fence has passed, and no readPixels fills an array', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, frames, gl, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true }, { asyncReadback: true, fenceDelayPolls: 3 })
+    go(sphereView(), P)
+    // the first frame's G-buffer is drawn, and read back through a fence the GPU has not passed yet: nothing has gone to the model
+    expect(host.requests.length).toBe(0)
+    expect(gl.fences.created).toBeGreaterThan(0)
+    await vi.waitFor(() => expect(host.requests.length).toBe(1), { timeout: 5000, interval: 2 })
+    host.finish()
+    await done(1)
+    // under a drag: the picture is on screen as the call returns, with the G-buffer still waiting on the GPU
+    clock.t = 100
+    const before = frames.length
+    go(sphereView({ azimuth: 40, dragging: true }), P)
+    expect(frames.length).toBe(before + 1)
+    expect(frames[frames.length - 1].kind).toBe('reproject')
+    expect(host.requests.length).toBe(1)
+    await vi.waitFor(() => expect(host.requests.length).toBe(2), { timeout: 5000, interval: 2 })
+    // not one readPixels went to an array, only to the pack buffer; the fences polled and deleted
+    expect(gl.reads.length).toBeGreaterThanOrEqual(2)
+    expect(gl.reads.every((r) => r.pack === true)).toBe(true)
+    expect(gl.fences.pending).toBeGreaterThanOrEqual(3)
+    expect(gl.fences.deleted).toBe(gl.fences.created)
+    engine.dispose()
+  })
+
+  it('sends nothing to the model, and shows no error, when the engine is disposed while the GPU is still working', async () => {
+    const host = new SlowHost()
+    const { engine, errors, gl, go } = withPicture({ host, reducedMotion: () => true }, { asyncReadback: true, fenceDelayPolls: 5 })
+    go(sphereView(), P)
+    expect(gl.fences.created).toBeGreaterThan(0)
+    engine.dispose()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(host.requests.length).toBe(0)
+    expect(errors.filter((m) => m !== null)).toEqual([])
+  })
+
+  it('still runs a drag: the model’s frames are adopted, one at a time, through the fence', async () => {
+    const host = new SlowHost()
+    const clock = { t: 0 }
+    const { engine, frames, painted, gl, go, done } = withPicture({ host, now: () => clock.t, reducedMotion: () => true }, { asyncReadback: true, fenceDelayPolls: 1 })
+    go(sphereView(), P)
+    await vi.waitFor(() => expect(host.requests.length).toBe(1), { timeout: 5000, interval: 2 })
+    host.finish()
+    await done(1)
+    for (let k = 1; k <= 13; k++) {
+      clock.t += 16
+      go(sphereView({ azimuth: 30 + 3 * k, dragging: true }), P)
+      if (k % 4 === 1) {
+        // a request is out (or goes out once its fence has passed): let the model finish it
+        await vi.waitFor(() => expect(host.requests.length).toBe(1 + (k + 3) / 4), { timeout: 5000, interval: 2 })
+        host.finish()
+        await flush()
+      }
+    }
+    expect(host.maxRunning).toBe(1)
+    expect(frames.filter((f) => f.adopted).length).toBeGreaterThanOrEqual(3)
+    expect(painted.length).toBeGreaterThan(13)
+    expect(gl.reads.every((r) => r.pack === true)).toBe(true)
+    engine.dispose()
   })
 })

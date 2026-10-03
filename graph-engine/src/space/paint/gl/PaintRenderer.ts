@@ -46,8 +46,14 @@ import {
   gbufferSize,
   isPerspective,
   ReadbackScratch,
+  beginFloatRead,
+  canReadAsync,
+  finishFloatRead,
+  pollRead,
   readGBuffer,
   type GBufferTarget,
+  type PackBuffer,
+  type PendingRead,
 } from './gbuffer'
 import { uploadScene, type SceneGpu } from './meshes'
 import { Resources, type Gl } from './resources'
@@ -89,7 +95,12 @@ export interface PaintStats {
   // Whether the last paint() drew the depth pass and tested the strokes against it, and warped the underpainting.
   depthTested: boolean
   underpaintWarped: boolean
+  // How the last G-buffer was read back: 'async' through a pack buffer and a fence (the page never waited for the GPU),
+  // 'sync' with readPixels into an array.
+  gbufferRead: 'sync' | 'async' | null
 }
+
+const pause = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 1))
 
 const SHADOW_PROGRAM = { name: 'shadow', vertex: SHADOW_VERTEX, fragment: SHADOW_FRAGMENT }
 const GBUFFER_FLOAT_PROGRAM = { name: 'gbuffer-float', vertex: GBUFFER_VERTEX, fragment: gbufferFragment(true) }
@@ -104,7 +115,7 @@ const IMAGE_PROGRAM = { name: 'image', vertex: FULLSCREEN_VERTEX, fragment: IMAG
 const EDGE_PROGRAM = { name: 'edges', vertex: EDGE_VERTEX, fragment: EDGE_FRAGMENT }
 
 export class PaintRenderer {
-  readonly stats: PaintStats = { gbuffer: null, accumFloat: null, strokes: 0, strokeDraws: 0, depthTested: false, underpaintWarped: false }
+  readonly stats: PaintStats = { gbuffer: null, accumFloat: null, strokes: 0, strokeDraws: 0, depthTested: false, underpaintWarped: false, gbufferRead: null }
 
   private readonly canvas: HTMLCanvasElement
   private readonly options: PaintRendererOptions
@@ -120,6 +131,9 @@ export class PaintRenderer {
   private readonly underpaint: UnderpaintRenderer
   private readonly debugger: DebugRenderer
   private readonly scratch = new ReadbackScratch()
+  // The buffer an asynchronous G-buffer readback goes to, and whether the context can do one (asked once).
+  private pack: PackBuffer = { buffer: null, bytes: 0 }
+  private asyncRead: boolean | null = null
 
   private scene: SpaceScene | null = null
   private sceneGpu: SceneGpu | null = null
@@ -190,92 +204,142 @@ export class PaintRenderer {
     this.uploadPaperNow()
   }
 
-  // The shadow map and the G-buffer, read back at half the CSS resolution.
+  // The shadow map and the G-buffer, read back at half the CSS resolution: the page waits for the GPU to be done with it.
   renderGBuffer(view: PaintView, params: PaintParams): GBuffer {
+    const size = gbufferSize(view.width, view.height)
+    if (!this.usable()) return emptyGBuffer(size.width, size.height)
+    try {
+      const pass = this.gbufferPass(view, params)
+      if (!pass) return emptyGBuffer(size.width, size.height)
+      this.stats.gbufferRead = 'sync'
+      return readGBuffer(this.gl, pass.target, this.scratch, pass.depthRange)
+    } catch (error) {
+      this.fail(error)
+      return emptyGBuffer(size.width, size.height)
+    }
+  }
+
+  // The same G-buffer, read back without the page waiting for the GPU: the passes are drawn now, the readback goes to a
+  // pack buffer behind a fence, and the G-buffer comes as a promise, kept when the fence has passed (polled without
+  // waiting, between the page's other tasks, a paint of a drag among them). A context that cannot do that (no fence, the
+  // rgba8 layout, a test's fake) reads it the plain way at once and gives the G-buffer itself, not a promise: the caller
+  // takes it in the same task, as it always did. Never rejects: a failure is reported through onError and the G-buffer is empty.
+  startGBuffer(view: PaintView, params: PaintParams): GBuffer | Promise<GBuffer> {
     const size = gbufferSize(view.width, view.height)
     const empty = () => emptyGBuffer(size.width, size.height)
     if (!this.usable()) return empty()
     try {
-      const scene = this.sceneGpu
-      if (!scene || scene.meshes.length === 0) return empty()
-      const target = this.ensureGBuffer(size.width, size.height)
-      const shadow = this.ensureShadow()
-      const gbufferProgram = this.program(target?.mode === 'float' ? GBUFFER_FLOAT_PROGRAM : GBUFFER_RGBA8_PROGRAM)
-      const shadowProgram = this.program(SHADOW_PROGRAM)
-      if (!target || !shadow) return empty()
-      const gl = this.gl
-      const radius = scene.radius * SHADOW_FIT
-      const light = lightFrame(view.lightDir, radius)
-
-      gl.disable(gl.BLEND)
-      gl.disable(gl.CULL_FACE)
-      gl.enable(gl.DEPTH_TEST)
-      gl.depthFunc(gl.LESS)
-      gl.depthMask(true)
-
-      // Pass 1: the shadow map, depth only, from the key light.
-      const shadows = params.light.shadows >= 0.5
-      if (shadows) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.fbo)
-        gl.viewport(0, 0, shadow.size, shadow.size)
-        gl.clearDepth(1)
-        gl.clear(gl.DEPTH_BUFFER_BIT)
-        gl.enable(gl.POLYGON_OFFSET_FILL)
-        gl.polygonOffset(1.5, 3)
-        gl.useProgram(shadowProgram.program)
-        gl.uniformMatrix4fv(shadowProgram.uniform('u_lightViewProj'), false, light.matrix)
-        for (const mesh of scene.meshes) {
-          gl.bindVertexArray(mesh.vao)
-          gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
-        }
-        gl.disable(gl.POLYGON_OFFSET_FILL)
+      const pass = this.gbufferPass(view, params)
+      if (!pass) return empty()
+      if (this.asyncRead === null) this.asyncRead = canReadAsync(this.gl)
+      const pending: PendingRead | null = pass.target.mode === 'float' && this.asyncRead ? beginFloatRead(this.gl, this.res, pass.target, this.pack) : null
+      if (!pending) {
+        this.stats.gbufferRead = 'sync'
+        return readGBuffer(this.gl, pass.target, this.scratch, pass.depthRange)
       }
-
-      // Pass 2: the G-buffer.
-      gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo)
-      gl.viewport(0, 0, target.width, target.height)
-      if (target.mode === 'float') {
-        // Empty: no mark in the packed number, depth far away.
-        gl.clearBufferfv(gl.COLOR, 0, new Float32Array([0, 0, 1e30, 0]))
-      } else {
-        for (let i = 0; i < 3; i++) gl.clearBufferfv(gl.COLOR, i, new Float32Array(4))
-      }
-      gl.clearDepth(1)
-      gl.clear(gl.DEPTH_BUFFER_BIT)
-      gl.useProgram(gbufferProgram.program)
-      const o = scene.origin
-      const depthRange = depthRangeFor(view, o, radius)
-      const depthBase = (o[0] - view.eye[0]) * view.viewDir[0] + (o[1] - view.eye[1]) * view.viewDir[1] + (o[2] - view.eye[2]) * view.viewDir[2]
-      gl.uniformMatrix4fv(gbufferProgram.uniform('u_viewProj'), false, gbufferMatrix(view.viewProj, o, view.width, view.height, target.width, target.height))
-      gl.uniformMatrix4fv(gbufferProgram.uniform('u_lightViewProj'), false, light.matrix)
-      gl.uniform3f(gbufferProgram.uniform('u_relEye'), view.eye[0] - o[0], view.eye[1] - o[1], view.eye[2] - o[2])
-      gl.uniform3f(gbufferProgram.uniform('u_viewDir'), view.viewDir[0], view.viewDir[1], view.viewDir[2])
-      gl.uniform1i(gbufferProgram.uniform('u_perspective'), isPerspective(view.viewProj) ? 1 : 0)
-      gl.uniform3f(gbufferProgram.uniform('u_lightDir'), light.toward[0], light.toward[1], light.toward[2])
-      gl.uniform1f(gbufferProgram.uniform('u_intensity'), params.light.intensity)
-      gl.uniform1f(gbufferProgram.uniform('u_ambient'), params.light.ambient)
-      gl.uniform1f(gbufferProgram.uniform('u_sky'), params.light.sky)
-      gl.uniform1f(gbufferProgram.uniform('u_bounce'), params.light.bounce)
-      gl.uniform1i(gbufferProgram.uniform('u_shadows'), shadows ? 1 : 0)
-      gl.uniform1f(gbufferProgram.uniform('u_shadowTexel'), 1 / SHADOW_SIZE)
-      gl.uniform1f(gbufferProgram.uniform('u_depthBase'), depthBase)
-      gl.uniform2f(gbufferProgram.uniform('u_depthRange'), depthRange[0], depthRange[1])
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, shadow.depth)
-      gl.uniform1i(gbufferProgram.uniform('u_shadowMap'), 0)
-      for (const mesh of scene.meshes) {
-        gl.uniform1f(gbufferProgram.uniform('u_mark'), mesh.mark)
-        gl.bindVertexArray(mesh.vao)
-        gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
-      }
-      gl.bindVertexArray(null)
-
-      // Readback: one readPixels per attachment.
-      return readGBuffer(gl, target, this.scratch, depthRange)
+      this.stats.gbufferRead = 'async'
+      return this.finishRead(pending, empty)
     } catch (error) {
       this.fail(error)
       return empty()
     }
+  }
+
+  private async finishRead(pending: PendingRead, empty: () => GBuffer): Promise<GBuffer> {
+    try {
+      for (;;) {
+        const status = pollRead(this.gl, pending)
+        if (status === 'ready') break
+        if (status === 'failed') throw new Error('paint: the G-buffer readback failed')
+        await pause()
+        // the context went (or the renderer was disposed) while the GPU worked: nothing to read
+        if (!this.usable()) return empty()
+      }
+      return finishFloatRead(this.gl, pending, this.pack, this.scratch)
+    } catch (error) {
+      this.fail(error)
+      return empty()
+    }
+  }
+
+  // The shadow map pass and the G-buffer pass; the target holds the G-buffer when it returns (null: no scene, nothing to
+  // read). Throws what GL throws.
+  private gbufferPass(view: PaintView, params: PaintParams): { target: GBufferTarget; depthRange: [number, number] } | null {
+    const scene = this.sceneGpu
+    if (!scene || scene.meshes.length === 0) return null
+    const size = gbufferSize(view.width, view.height)
+    const target = this.ensureGBuffer(size.width, size.height)
+    const shadow = this.ensureShadow()
+    const gbufferProgram = this.program(target?.mode === 'float' ? GBUFFER_FLOAT_PROGRAM : GBUFFER_RGBA8_PROGRAM)
+    const shadowProgram = this.program(SHADOW_PROGRAM)
+    if (!target || !shadow) return null
+    const gl = this.gl
+    const radius = scene.radius * SHADOW_FIT
+    const light = lightFrame(view.lightDir, radius)
+
+    gl.disable(gl.BLEND)
+    gl.disable(gl.CULL_FACE)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthFunc(gl.LESS)
+    gl.depthMask(true)
+
+    // Pass 1: the shadow map, depth only, from the key light.
+    const shadows = params.light.shadows >= 0.5
+    if (shadows) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.fbo)
+      gl.viewport(0, 0, shadow.size, shadow.size)
+      gl.clearDepth(1)
+      gl.clear(gl.DEPTH_BUFFER_BIT)
+      gl.enable(gl.POLYGON_OFFSET_FILL)
+      gl.polygonOffset(1.5, 3)
+      gl.useProgram(shadowProgram.program)
+      gl.uniformMatrix4fv(shadowProgram.uniform('u_lightViewProj'), false, light.matrix)
+      for (const mesh of scene.meshes) {
+        gl.bindVertexArray(mesh.vao)
+        gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
+      }
+      gl.disable(gl.POLYGON_OFFSET_FILL)
+    }
+
+    // Pass 2: the G-buffer.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo)
+    gl.viewport(0, 0, target.width, target.height)
+    if (target.mode === 'float') {
+      // Empty: no mark in the packed number, depth far away.
+      gl.clearBufferfv(gl.COLOR, 0, new Float32Array([0, 0, 1e30, 0]))
+    } else {
+      for (let i = 0; i < 3; i++) gl.clearBufferfv(gl.COLOR, i, new Float32Array(4))
+    }
+    gl.clearDepth(1)
+    gl.clear(gl.DEPTH_BUFFER_BIT)
+    gl.useProgram(gbufferProgram.program)
+    const o = scene.origin
+    const depthRange = depthRangeFor(view, o, radius)
+    const depthBase = (o[0] - view.eye[0]) * view.viewDir[0] + (o[1] - view.eye[1]) * view.viewDir[1] + (o[2] - view.eye[2]) * view.viewDir[2]
+    gl.uniformMatrix4fv(gbufferProgram.uniform('u_viewProj'), false, gbufferMatrix(view.viewProj, o, view.width, view.height, target.width, target.height))
+    gl.uniformMatrix4fv(gbufferProgram.uniform('u_lightViewProj'), false, light.matrix)
+    gl.uniform3f(gbufferProgram.uniform('u_relEye'), view.eye[0] - o[0], view.eye[1] - o[1], view.eye[2] - o[2])
+    gl.uniform3f(gbufferProgram.uniform('u_viewDir'), view.viewDir[0], view.viewDir[1], view.viewDir[2])
+    gl.uniform1i(gbufferProgram.uniform('u_perspective'), isPerspective(view.viewProj) ? 1 : 0)
+    gl.uniform3f(gbufferProgram.uniform('u_lightDir'), light.toward[0], light.toward[1], light.toward[2])
+    gl.uniform1f(gbufferProgram.uniform('u_intensity'), params.light.intensity)
+    gl.uniform1f(gbufferProgram.uniform('u_ambient'), params.light.ambient)
+    gl.uniform1f(gbufferProgram.uniform('u_sky'), params.light.sky)
+    gl.uniform1f(gbufferProgram.uniform('u_bounce'), params.light.bounce)
+    gl.uniform1i(gbufferProgram.uniform('u_shadows'), shadows ? 1 : 0)
+    gl.uniform1f(gbufferProgram.uniform('u_shadowTexel'), 1 / SHADOW_SIZE)
+    gl.uniform1f(gbufferProgram.uniform('u_depthBase'), depthBase)
+    gl.uniform2f(gbufferProgram.uniform('u_depthRange'), depthRange[0], depthRange[1])
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, shadow.depth)
+    gl.uniform1i(gbufferProgram.uniform('u_shadowMap'), 0)
+    for (const mesh of scene.meshes) {
+      gl.uniform1f(gbufferProgram.uniform('u_mark'), mesh.mark)
+      gl.bindVertexArray(mesh.vao)
+      gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
+    }
+    gl.bindVertexArray(null)
+    return { target, depthRange }
   }
 
   // Draw a frame to the canvas. `reproject` is given for a frame whose strokes were made for another view: they are
@@ -429,6 +493,7 @@ export class PaintRenderer {
     this.gbuffer = null
     this.accum = null
     this.sceneDepth = null
+    this.pack = { buffer: null, bytes: 0 }
     this.paperCpu = null
   }
 
@@ -594,6 +659,8 @@ export class PaintRenderer {
     this.accumKey = ''
     this.sceneDepth = null
     this.sceneDepthKey = ''
+    this.pack = { buffer: null, bytes: 0 }
+    this.asyncRead = null
     this.options.onContextLost?.()
   }
 

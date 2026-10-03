@@ -17,6 +17,7 @@ import { buildParticles, paintFrame } from './model/index'
 import { flatColours, graphMesh, meshGBuffer, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './model/testing'
 import { DEFAULT_PAINT_PARAMS } from './params'
 import { reprojectStrokes } from './reproject'
+import { Scratch } from './scratch'
 import { PATH_POINTS, ROLES, type StrokeBatch } from './types'
 
 // The rules of a camera that drags (liveOrbit.ts): hand-computed numbers, on strokes made by hand.
@@ -273,6 +274,24 @@ describe('easing one base into another', () => {
     expect(out.count).toBe(3)
     expect(Array.from(out.alpha)).toEqual([1, 0.5, 1])
     expect(Array.from(out.path)).toEqual(Array.from(neu.path))
+  })
+
+  it('given a scratch, blends the same strokes into arrays it keeps: a second blend of the same count allocates nothing', () => {
+    const scratch = new Scratch()
+    const plain = blendStrokes(old, neu, match, 0.25)
+    const a = blendStrokes(old, neu, match, 0.25, scratch)
+    for (const key of Object.keys(plain) as (keyof StrokeBatch)[]) expect(Array.from(a[key] as ArrayLike<number>), String(key)).toEqual(Array.from(plain[key] as ArrayLike<number>))
+    const made = scratch.allocations
+    expect(made).toBeGreaterThan(15)
+    const b = blendStrokes(old, neu, match, 0.75, scratch)
+    expect(scratch.allocations).toBe(made)
+    expect(b.alpha).toBe(a.alpha)
+    expect(b.path).toBe(a.path)
+    // the second blend's strokes, not the first's
+    expect(b.alpha[0]).toBeCloseTo(0.95, 6) // A eased 0.75 of the way from 0.8 to 1
+    // and neither base is touched
+    expect(old.alpha[0]).toBeCloseTo(0.8, 6)
+    expect(neu.path[0]).toBe(4)
   })
 
   it('changes neither base', () => {

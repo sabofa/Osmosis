@@ -25,9 +25,15 @@
 //     are eased, the ones that appeared fade in and the ones that went fade out, over CROSSFADE_MS (at once under
 //     reduced motion);
 //   - an edge stroke is the outline of the view it was made for, so it fades out as its base ages (EDGE_FADE_MS).
-// The main thread never waits for the model: a frame asks for the next G-buffer and goes on re-projecting. (On this
-// thread, with ?worker=0, the model would be the wait, so it is left for the release as it was.) The model runs
-// once more, at full quality, on the pointer's release (120 ms after the last wheel turn, key or eased step) and
+// The main thread never waits for the model, and no one task does a frame's work twice over. The G-buffer is drawn in
+// the task of the render() that asks for it and read back through a pack buffer and a fence, polled without waiting
+// (gl/gbuffer.ts), so no readPixels stalls the page behind the paints of a drag; its decode, the transfer to the worker and
+// the answer are tasks of their own. An answer that comes while the pointer drags is adopted but not painted, and asks
+// for nothing: the next animation frame's render() paints from the new base (the tick does, if none comes, when the
+// pointer has paused) and asks for the next request, so the paint of an adopted frame and the request that follows are
+// never stacked on the task the answer came in. The arrays a frame's re-projection and blend are made in are kept from
+// frame to frame (scratch.ts), so a fade allocates nothing. (On this thread, with ?worker=0, the model would be the wait,
+// so it is left for the release as it was.) The model runs once more, at full quality, on the pointer's release (120 ms after the last wheel turn, key or eased step) and
 // the picture eases from the re-projected frame to the new one. Nothing runs while nothing changes.
 //
 // A re-projected frame is put through the new view's depth, so it does not show what the strokes' old view
@@ -77,6 +83,7 @@ import { PaintRenderer } from '../../graph-engine/src/space/paint/gl/PaintRender
 import { classifyChange } from '../../graph-engine/src/space/paint/model/index'
 import { blendStrokes, crossfadeWeight, edgeFade, matchStrokes, refineMatch, shouldAdopt, type StrokeMatch } from '../../graph-engine/src/space/paint/liveOrbit'
 import { reprojectStrokes } from '../../graph-engine/src/space/paint/reproject'
+import { Scratch } from '../../graph-engine/src/space/paint/scratch'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
 import {
   colourDataOf,
@@ -289,6 +296,8 @@ interface Analysed {
   // When the camera first left this frame's view (the engine's clock, ms), null while it has not: the frame's edge
   // strokes are stale from then on and fade with their age (edgeFade).
   departedAt: number | null
+  // The arrays its strokes are re-projected into, every frame (scratch.ts).
+  scratch: Scratch
 }
 
 // A new base being eased in: `from` is the base the picture was re-projected from, `to` the one it is now, `match` which
@@ -298,10 +307,14 @@ interface Fade {
   to: Analysed
   startedAt: number
   match: StrokeMatch
+  // The arrays the two are blended into, every frame.
+  scratch: Scratch
 }
 
-// How often the picture is re-made while nothing asks for it (a crossfade goes on in time).
+// How often the picture is re-made while nothing asks for it (a crossfade goes on in time), and how long a model request
+// that no render() has taken up waits before it starts by itself (two animation frames: a pointer that has paused).
 const TICK_MS = 16
+const RESUME_MS = 2 * TICK_MS
 
 const defaultReducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -354,6 +367,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     for (const [id, s] of sent) host.setScene(id, plainScene(s.scene), colourDataOf(s.scene, s.colours))
     analysed = null
     fade = null
+    pendingAdoption = null
     paperHeld = ''
   }
   let disposed = false
@@ -372,6 +386,14 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   // first moved off the view it was asked for: its answer's strokes, and so its edges, are stale from then on.
   let flight: { job: Job; movedAt: number | null } | null = null
   let tickTimer: ReturnType<typeof setTimeout> | null = null
+  let resumeTimer: ReturnType<typeof setTimeout> | null = null
+  let resumeSince = 0
+  // When the picture on screen was last painted (the engine's clock): the tick leaves a picture that a frame has just
+  // painted to that frame.
+  let lastPaintAt = Number.NEGATIVE_INFINITY
+  // What a model frame that has just become the base cost, kept for the picture that is made of it: it is reported with
+  // that picture, which comes with the next animation frame when the pointer drags.
+  let pendingAdoption: Pick<FrameStats, 'ms' | 'gbufferMs' | 'modelMs' | 'particlesMs' | 'paperMs'> | null = null
   // The picture on screen was made by re-projecting a base's strokes (not by painting a frame as the model made it).
   let onScreenReprojected = false
   let paperHeld = ''
@@ -420,9 +442,13 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     let gbufferMs = 0
     // the G-buffer's depth of the full frame being made, kept for the frame it becomes (see Analysed.depth)
     let gbufferDepth = null as Float32Array | null
-    const full = (): Promise<SessionResponse> => {
+    const full = async (): Promise<SessionResponse> => {
       const t0 = performance.now()
-      const g = renderer.renderGBuffer(view, params)
+      // The G-buffer is drawn now, and read back when the GPU has done it, the page free in between (a paint of a drag goes
+      // on). A context that reads it the plain way gives it at once, and the request goes out in this task.
+      const read = renderer.startGBuffer(view, params)
+      const g = read instanceof Promise ? await read : read
+      if (disposed) return { id: -1, ok: false, error: 'the engine was disposed' }
       gbufferDepth = Float32Array.from(g.depth)
       gbufferMs = performance.now() - t0
       return host.frame(request('full', g))
@@ -482,6 +508,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
           flight = null
         }
       }
+      // the engine was disposed while the model (or the GPU) worked: nothing to show, and nothing to say
+      if (disposed) return notShown('full')
       if (gone(response)) return run(job)
       if (!isFrame(response)) return failed(response)
       kind = response.kind
@@ -507,7 +535,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         const departed = lastJob && !sameCamera(view, lastJob.view) ? (movedAt ?? clock()) : null
         replaced = analysed
         // (a tile of the Showcase is no base for a view's frames: it never outranks a request of the lab's own)
-        analysed = { sceneId: id, view, depth: gbufferDepth ?? new Float32Array(0), params, strokesParams: params, debug, frame, seq: job.target ? 0 : job.seq, departedAt: departed }
+        analysed = { sceneId: id, view, depth: gbufferDepth ?? new Float32Array(0), params, strokesParams: params, debug, frame, seq: job.target ? 0 : job.seq, departedAt: departed, scratch: new Scratch() }
       } else if (a) {
         a.frame = frame
         a.strokesParams = params
@@ -521,18 +549,27 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     // next re-projection starts from.
     const newest = lastJob
     if (!job.target && newest && (newest.seq > job.seq || isLive(job)) && analysed && kind === 'full') {
-      const t = performance.now()
-      const shown = showReprojected(newest, { replaced, force: true })
-      if (shown) {
-        const done = performance.now()
-        return { ...shown, ms: done - started, gbufferMs, modelMs, particlesMs, paperMs, paintMs: done - t, adopted: true }
+      beginFade(replaced)
+      pendingAdoption = { ms: performance.now() - started, gbufferMs, modelMs, particlesMs, paperMs }
+      // While the pointer drags, the next animation frame's render() paints from the new base and asks for the next request
+      // (the tick paints, if none comes): this task, the answer's, paints nothing and asks for nothing, so the paint of
+      // the adopted frame and the G-buffer of the next request are not stacked on it. A pointer that has paused (the frame
+      // is for the view the camera is at) or been released gets its picture at once.
+      if (newest.view.dragging && newest.seq > job.seq) {
+        scheduleTick()
+        return notShown(kind)
       }
+      const shown = showReprojected(newest, { force: true })
+      if (shown) return shown
+      pendingAdoption = null
     }
     // A newer request has been painted since this one began: this is not the picture any more.
     if (!job.target && job.seq < shownSeq) return notShown(kind)
     const t1 = performance.now()
     fade = null
+    pendingAdoption = null
     onScreenReprojected = false
+    lastPaintAt = clock()
     renderer.paint(frame, view, params, debug)
     // A renderer that failed says so (it then draws nothing).
     if (failure) throw new Error(failure)
@@ -580,33 +617,36 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   // The strokes on screen for `job`'s view: the base's, re-projected (its edges as faded as its age says), and while a new
   // base is being eased in, the old one's too, blended by how far along that is.
   function strokesFor(job: Job, base: Analysed, at: number): StrokeBatch {
-    const own = reprojectStrokes(base.frame.strokes, base.view, job.view, job.params, edgeFade(ageOf(base, at)))
+    const own = reprojectStrokes(base.frame.strokes, base.view, job.view, job.params, edgeFade(ageOf(base, at)), base.scratch)
     if (!fade || fade.to !== base) return own
     const weight = crossfadeWeight(at - fade.startedAt, reduced())
     if (weight >= 1) {
       fade = null
       return own
     }
-    const before = reprojectStrokes(fade.from.frame.strokes, fade.from.view, job.view, job.params, edgeFade(ageOf(fade.from, at)))
+    const before = reprojectStrokes(fade.from.frame.strokes, fade.from.view, job.view, job.params, edgeFade(ageOf(fade.from, at)), fade.from.scratch)
     // with both bases in one view, which pairs are one stroke, which run the other way (once, at the first frame of the fade)
     if (!fade.match.refined) refineMatch(fade.match, before, own)
-    return blendStrokes(before, own, fade.match, weight)
+    return blendStrokes(before, own, fade.match, weight, fade.scratch)
+  }
+
+  // The base has just changed from `before` (what the picture on screen is made of): the picture eases from one to the
+  // other, unless it is not a re-projection that is on screen, or the user asked for no motion.
+  function beginFade(before: Analysed | null): void {
+    const a = analysed
+    if (!a || !before || before === a || before.sceneId !== a.sceneId || !onScreenReprojected || reduced()) return
+    fade = { from: before, to: a, startedAt: clock(), match: matchStrokes(before.frame.strokes, a.frame.strokes), scratch: new Scratch() }
   }
 
   // Paint the base's strokes in this job's view (the renderer puts them through the view's depth and warps the underpainting
-  // from the base's). `replaced` is the base the picture was made of until now, when this one has just taken over: the
-  // picture eases from one to the other. Null when it cannot be done, nothing painted. Synchronous, a few milliseconds.
-  function showReprojected(job: Job, opts: { replaced?: Analysed | null; force?: boolean } = {}): FrameStats | null {
+  // from the base's). Null when it cannot be done, nothing painted. Synchronous, a few milliseconds.
+  function showReprojected(job: Job, opts: { force?: boolean } = {}): FrameStats | null {
     const a = analysed
     if (!a || !canReproject(job, opts.force === true)) return null
     const started = performance.now()
     const at = clock()
     try {
       if (a.departedAt === null && !sameCamera(a.view, job.view)) a.departedAt = at
-      const before = opts.replaced
-      if (before && before !== a && before.sceneId === a.sceneId && onScreenReprojected && !reduced()) {
-        fade = { from: before, to: a, startedAt: at, match: matchStrokes(before.frame.strokes, a.frame.strokes) }
-      }
       const strokes = strokesFor(job, a, at)
       // The underpaint is an image of the base's view: the renderer warps it onto this one through the scene's depth, and
       // tests the strokes against the same depth (a hidden stroke vanishes, one that has left its surface is clipped),
@@ -617,6 +657,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       if (failure) throw new Error(failure)
       shownSeq = job.seq
       onScreenReprojected = true
+      lastPaintAt = at
       const snap = options.snapshot
       if (snap) {
         if (snap.canvas.width !== canvas.width || snap.canvas.height !== canvas.height) {
@@ -630,6 +671,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       const done = performance.now()
       events.onError(null)
       scheduleTick()
+      // a model frame that has just become the base is reported with its first picture
+      const adoption = pendingAdoption
+      pendingAdoption = null
+      if (adoption) return { strokes: strokes.count, ...adoption, paintMs: done - t1, kind: 'reproject', adopted: true }
       return { strokes: strokes.count, ms: done - started, gbufferMs: 0, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: done - t1, kind: 'reproject' }
     } catch (error) {
       events.onError(error instanceof Error ? error.message : String(error))
@@ -647,22 +692,41 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     return true
   }
 
-  // Does the picture on screen still change by itself? While a new base is being eased in. (A base's edges fade with its
-  // age too, but that is told at each frame the camera's move asks for, and a camera that has stopped gets the
-  // model's own frame for its view.)
+  // Does the picture on screen still change by itself? While a new base is being eased in, and while a model frame that was
+  // adopted under a drag has not been painted yet. (A base's edges fade with its age too, but that is told at each frame
+  // the camera's move asks for, and a camera that has stopped gets the model's own frame for its view.)
   function needsTick(): boolean {
-    return analysed !== null && onScreenReprojected && fade !== null
+    return analysed !== null && onScreenReprojected && (fade !== null || pendingAdoption !== null)
   }
 
-  // The next step of that, painted again from the newest request. (Nothing else asks for a frame when the camera is still.)
+  // The next step of that, painted again from the newest request, unless a frame has painted since (the animation frames
+  // of a drag do, and the tick leaves the picture to them). Nothing else asks for a frame when the camera is still.
   function scheduleTick(): void {
     if (tickTimer !== null || disposed || !needsTick()) return
     tickTimer = setTimeout(() => {
       tickTimer = null
       if (disposed || !lastJob || !needsTick()) return
+      if (clock() - lastPaintAt < TICK_MS) return scheduleTick()
       const shown = showReprojected(lastJob, { force: true })
       if (shown) events.onFrame(shown)
     }, TICK_MS)
+  }
+
+  // The next model request, if the render() that would start it does not come within RESUME_MS (the pointer has paused).
+  function scheduleResume(): void {
+    if (disposed) return
+    resumeSince = clock()
+    if (resumeTimer !== null) return
+    const wait = () => {
+      resumeTimer = setTimeout(() => {
+        resumeTimer = null
+        // a render() has taken it up, or the engine is gone
+        if (disposed || latest === null) return
+        if (clock() - resumeSince < RESUME_MS) return wait()
+        pump()
+      }, TICK_MS)
+    }
+    wait()
   }
 
   // The camera has stopped: the model's frame for the view it stopped at.
@@ -681,6 +745,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     if (!job) return
     if (job === latest) latest = null
     inFlight = true
+    const live = isLive(job)
     run(job).then(
       (stats) => {
         inFlight = false
@@ -691,7 +756,11 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
             events.onFrame(stats)
           }
         } else job.settle?.resolve(stats)
-        pump()
+        // The answer of a drag's request does not start the next one in its own task: the next animation frame's render() does
+        // (render() asks for it after it has painted), or, if the pointer has paused, a timer. Anything else waiting
+        // (the release's frame, a tile, a slider's) goes at once.
+        if (live && latest !== null && latest.view.dragging && tiles.length === 0) scheduleResume()
+        else pump()
       },
       (error: unknown) => {
         inFlight = false
@@ -720,7 +789,13 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         if (analysed?.sceneId === id) {
           analysed = null
           fade = null
+          pendingAdoption = null
         }
+      }
+      if (id !== sceneId) {
+        // another figure: the base's strokes are not its, and no fade or adopted frame belongs to it
+        fade = null
+        pendingAdoption = null
       }
       sceneId = id
       sceneNow = sc
@@ -769,7 +844,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       settleTimer = null
       if (tickTimer !== null) clearTimeout(tickTimer)
       tickTimer = null
+      if (resumeTimer !== null) clearTimeout(resumeTimer)
+      resumeTimer = null
       fade = null
+      pendingAdoption = null
       flight = null
       for (const t of tiles.splice(0)) t.settle?.reject(new Error('the engine was disposed'))
       sent.clear()
