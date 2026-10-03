@@ -30,9 +30,15 @@ const NODE = "node:chemistry:stoichiometry:moles";
 const OTHER = "node:chemistry:stoichiometry:molar_mass";
 
 let counter = 0;
-function item(db: DatabaseSync, extra: Partial<QuestionInput> & { node_keys: string[] }): { id: string; lineage_id: string } {
+// Authored a day before the timeline starts unless said otherwise: gap 1 runs
+// from teaching, and an item cannot have been taught before it was written.
+function item(
+  db: DatabaseSync,
+  extra: Partial<QuestionInput> & { node_keys: string[]; authoredDays?: number }
+): { id: string; lineage_id: string } {
   counter += 1;
-  const isWritten = extra.type === "written";
+  const { authoredDays = -1, ...input } = extra;
+  const isWritten = input.type === "written";
   const result = createQuestions(db, [
     {
       type: isWritten ? "written" : "mc",
@@ -46,10 +52,11 @@ function item(db: DatabaseSync, extra: Partial<QuestionInput> & { node_keys: str
               { body: `wrong ${counter}`, is_correct: false, misconception: "a wrong model" },
             ],
           }),
-      ...extra,
+      ...input,
     },
   ]);
   expect(result.rejected).toEqual([]);
+  db.prepare("UPDATE question SET created_at = ? WHERE lineage_id = ?").run(sqlTime(authoredDays), result.created[0].lineage_id);
   return result.created[0];
 }
 
@@ -565,5 +572,97 @@ describe("the loop over MCP", () => {
     });
     expect(template.isError).toBe(false);
     expect((db.prepare("SELECT due_mode FROM template WHERE id = ?").get(template.body.id) as { due_mode: string }).due_mode).toBe("gate");
+  });
+});
+
+describe("review findings, 2026-10-03", () => {
+  it("a failed draw restarts the clock: relearned reserve earns no credit for surviving since the first teaching", () => {
+    const db = openTestDb();
+    const { d1, r1 } = closedNode(db);
+    due(db, 4.3);
+    answer(db, d1.lineage_id, 4.5, { correct: false, confidence: "somewhat" });
+    due(db, 4.6); // the draw fails at 4.5
+    answer(db, r1.lineage_id, 5.5, { correct: true, confidence: "confident" });
+    const s = due(db, 20).get(r1.lineage_id)!;
+    // One day since the failure × 2.6 — not 5.5 days since teaching × 2.6.
+    expect(daysOf(s.due_at!)).toBeCloseTo(5.5 + 1 * 2.6, 2);
+  });
+
+  it("an item written after the target was set takes its gap 1 from its own authoring; its session check is not the probe", () => {
+    const db = openTestDb();
+    insertTag(db, "chem");
+    setRetentionTarget(db, { identity_key: NODE, retention_target: "final", target_source: "engine", needs_last_until: sqlTime(100) }, at(0));
+    expect(due(db, 25).size).toBe(0); // gap 1 (~24.5) passed with nothing on the node
+
+    const late = item(db, { node_keys: [NODE], tests_error: "x", authoredDays: 30 });
+    answer(db, late.lineage_id, 30.01, { correct: true, confidence: "confident" });
+    expect(due(db, 30.02).size).toBe(0);
+    expect(target(db, "final").probe_result).toBeNull();
+
+    const ownGap = 70 * firstGapRatio(70);
+    const s = due(db, 30 + ownGap + 0.1).get(late.lineage_id)!;
+    expect(daysOf(s.due_at!)).toBeCloseTo(30 + ownGap, 2);
+    expect(s.reason).toBe("never_demonstrated");
+  });
+
+  it("merge_tags carries a node's targets and draw to the surviving node", async () => {
+    const { mergeTags } = await import("../src/domain/tags.js");
+    const db = openTestDb();
+    const { d1, d2, t1, r1 } = closedNode(db);
+    insertTag(db, NODE);
+    insertTag(db, "node:chemistry:stoichiometry:mole_ideas");
+    due(db, 4.3);
+    const merged = mergeTags(db, NODE, "node:chemistry:stoichiometry:mole_ideas");
+    expect(merged.retention_targets_moved).toBe(1);
+
+    const now = due(db, 4.4);
+    expect([...now.keys()].sort()).toEqual([d1.lineage_id, d2.lineage_id, t1.lineage_id].sort());
+    expect(now.get(d1.lineage_id)!.identity_key).toBe("node:chemistry:stoichiometry:mole_ideas");
+    for (const d of [d1, d2, t1]) answer(db, d.lineage_id, 4.5, { correct: true, confidence: "confident" });
+    expect(due(db, 11.3).get(r1.lineage_id)!.reason).toBe("never_demonstrated"); // the reserve was not orphaned
+  });
+
+  it("a draw whose items all go is drawn again from what is left", () => {
+    const db = openTestDb();
+    setConfig(db, "retention_draw_k", 2);
+    const { d1, d2, t1, r1, r2 } = closedNode(db);
+    due(db, 4.3);
+    for (const d of [d1, d2, t1]) retireQuestion(db, liveId(db, d.lineage_id), "withdrawn");
+    expect([...due(db, 4.4).keys()].sort()).toEqual([r1.lineage_id, r2.lineage_id].sort());
+  });
+
+  it("identity_key names the node that owns the nearest target, not just the primary key", () => {
+    const db = openTestDb();
+    insertTag(db, "chem");
+    const spans = item(db, { node_keys: [OTHER, NODE], tests_error: "x" });
+    setRetentionTarget(db, { identity_key: NODE, retention_target: "t", target_source: "engine", needs_last_until: sqlTime(14) }, at(0));
+    const row = due(db, 4.3).get(spans.lineage_id)!;
+    expect(row.node_key).toBe(OTHER);
+    expect(row.identity_key).toBe(NODE);
+  });
+
+  it("a gate template counts only due items and refuses to be frozen", async () => {
+    const { createTemplate, editTemplate } = await import("../src/domain/templates.js");
+    const db = openTestDb();
+    closedNode(db);
+    refreshRetention(db); // real clock: the target was set 40 days ago, the draw (3 items) is due
+    const gate = createTemplate(db, { name: "review", tag_query: { all: ["chem"] }, question_count: 5, due_mode: "gate" });
+    expect(gate).toMatchObject({ eligible_count: 3, short: true });
+    const weight = createTemplate(db, { name: "hw", tag_query: { all: ["chem"] }, question_count: 5 });
+    expect(weight.eligible_count).toBe(5);
+    expect(() => createTemplate(db, { name: "x", tag_query: { all: ["chem"] }, question_count: 2, due_mode: "gate", frozen: true })).toThrow(/frozen/);
+    expect(() => editTemplate(db, gate.id, { frozen: true })).toThrow(/frozen/);
+  });
+
+  it("a pulled question's node key rows mirror its node_key, so a local node never keeps a stale key", async () => {
+    const { upsertBankContent } = await import("../src/domain/sync.js");
+    const db = openTestDb();
+    insertTag(db, "chem");
+    const q = item(db, { node_keys: [NODE] });
+    const row = db.prepare("SELECT * FROM question WHERE lineage_id = ?").get(q.lineage_id) as Record<string, unknown>;
+    const choices = db.prepare("SELECT id, body, is_correct, ordinal, misconception FROM choice WHERE question_id = ?").all(row.id as string);
+    upsertBankContent(db, [], [{ ...row, node_key: OTHER, tags: ["chem"], choices }]);
+    const keys = db.prepare("SELECT node_key, is_primary FROM question_node_key WHERE question_id = ?").all(row.id as string);
+    expect(keys).toEqual([{ node_key: OTHER, is_primary: 1 }]);
   });
 });

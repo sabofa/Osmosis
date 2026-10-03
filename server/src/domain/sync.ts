@@ -516,6 +516,10 @@ export function upsertBankContent(
   const deleteQuestionTags = db.prepare("DELETE FROM question_tag WHERE question_id = ?");
   const insertQuestionTag = db.prepare("INSERT INTO question_tag (question_id, tag_slug) VALUES (?, ?)");
   const deleteChoices = db.prepare("DELETE FROM choice WHERE question_id = ?");
+  const deleteNodeKeys = db.prepare("DELETE FROM question_node_key WHERE question_id = ?");
+  const insertPrimaryNodeKey = db.prepare(
+    "INSERT INTO question_node_key (question_id, node_key, is_primary, ordinal) VALUES (?, ?, 1, 0)"
+  );
   const insertChoice = db.prepare(
     "INSERT INTO choice (id, question_id, body, is_correct, ordinal, misconception) VALUES (?, ?, ?, ?, ?, ?)"
   );
@@ -563,6 +567,14 @@ export function upsertBankContent(
     deleteChoices.run(q.id);
     for (const c of q.choices ?? [])
       insertChoice.run(c.id, q.id, c.body, c.is_correct, c.ordinal, c.misconception ?? null);
+
+    // The pull carries only the primary node key (the singular column), so
+    // that is all a local node can know: its key rows mirror the column.
+    // Left alone, a row backfilled by 022 would go stale the first time
+    // canonical moved the key (an edit, a node merge) and the column moved
+    // without it.
+    deleteNodeKeys.run(q.id);
+    if (fields.node_key) insertPrimaryNodeKey.run(q.id, fields.node_key as string);
 
     questionsApplied += 1;
   }

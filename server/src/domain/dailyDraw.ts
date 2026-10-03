@@ -45,7 +45,8 @@ function drawWithRelaxation(
   tagFilter: TagQuery | null,
   maxExclusionDays: number,
   extraExcludeLineageIds: string[],
-  rng: () => number
+  rng: () => number,
+  now: Date
 ): { questions: ReturnType<typeof getEligibleQuestions>; relaxedTo: number; short: boolean } {
   // Only ever relax DOWNWARD from the configured max — [maxExclusionDays, 1, 0]
   // deduped and sorted descending, but never including a level above the
@@ -60,7 +61,7 @@ function drawWithRelaxation(
     .sort((a, b) => b - a);
 
   // A daily draw is casual practice: due-ness weights it, never gates it.
-  const due = dueInfoByLineage(db);
+  const due = dueInfoByLineage(db, now);
 
   for (const days of levels) {
     const excluded = [...recentExcludedLineages(db, drawDate, days), ...extraExcludeLineageIds];
@@ -159,7 +160,8 @@ export function resolveDailyDraw(
     tagFilter,
     maxExclusionDays,
     extraExclude,
-    rng
+    rng,
+    now
   );
 
   const id = uuidv4();

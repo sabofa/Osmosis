@@ -93,6 +93,23 @@ describe("022 — node keys rendered into tag shape", () => {
     expect(keysOf(db, none)).toEqual({ column: null, rows: [] });
   });
 
+  it("collapses the fallback's separators, and registers as a tag only a key that passes the slug grammar", () => {
+    const db = openPre022Db();
+    const spaced = seed(db, "Section 2 - Gases");
+    const punct = seed(db, "Ch 3 (moles)");
+
+    migrate(db);
+
+    expect(keysOf(db, spaced).column).toBe("node:legacy:section_2_gases");
+    expect(isValidNodeKey("node:legacy:section_2_gases")).toBe(true);
+    const tag = (slug: string) => db.prepare("SELECT slug FROM tag WHERE slug = ?").get(slug);
+    expect(tag("node:legacy:section_2_gases")).toBeTruthy();
+    const kept = keysOf(db, punct).column!;
+    expect(kept.startsWith("node:legacy:")).toBe(true);
+    expect(isValidNodeKey(kept)).toBe(false);
+    expect(tag(kept)).toBeUndefined();
+  });
+
   it("gives a row with a node_key but no key rows its one primary row", () => {
     const db = openPre022Db();
     const id = seed(db, "node:ebbing11e:3.1:formula_weight", [], false);

@@ -153,6 +153,7 @@ export function mergeTags(
   retired_at: string;
   questions_updated: number;
   node_keys_updated: number;
+  retention_targets_moved: number;
 } {
   if (fromSlug === toSlug) {
     throw new DomainError("same_slug", "from_slug and to_slug must differ.");
@@ -194,6 +195,7 @@ export function mergeTags(
     // key onto a non-node slug would mint an invalid node_key, so that case is
     // left alone rather than corrupted.
     let nodeKeysUpdated = 0;
+    let retentionTargetsMoved = 0;
     if (fromSlug.startsWith("node:") && toSlug.startsWith("node:")) {
       // Same reason as the question_tag stamp above: an incremental pull has
       // to re-send anything whose node keys just changed.
@@ -224,6 +226,25 @@ export function mergeTags(
       // rows repointed.
       db.prepare(`UPDATE question SET node_key = ? WHERE node_key = ?`).run(toSlug, fromSlug);
       nodeKeysUpdated = Number(moved.changes);
+
+      // The node's retention targets, and their draws, go where its items
+      // went — left behind they would draw from a node with no items and hold
+      // its reserve forever. A label the surviving node already has is the
+      // surviving node's to keep (its draw is dropped with it). The schedule
+      // rows reference their target by (node_key, retention_target), so the
+      // foreign key is checked at COMMIT, after both have moved.
+      db.exec("PRAGMA defer_foreign_keys = ON");
+      db.prepare(
+        `DELETE FROM node_retention_target
+         WHERE node_key = ?
+           AND retention_target IN (SELECT retention_target FROM node_retention_target WHERE node_key = ?)`
+      ).run(fromSlug, toSlug);
+      db.prepare(`UPDATE retention_schedule SET node_key = ? WHERE node_key = ?`).run(toSlug, fromSlug);
+      retentionTargetsMoved = Number(
+        db
+          .prepare(`UPDATE node_retention_target SET node_key = ?, updated_at = datetime('now') WHERE node_key = ?`)
+          .run(toSlug, fromSlug).changes
+      );
     }
 
     db.prepare(`UPDATE tag SET parent_slug = ? WHERE parent_slug = ?`).run(toSlug, fromSlug);
@@ -242,6 +263,7 @@ export function mergeTags(
       retired_at: updated.retired_at,
       questions_updated: Number(result.changes),
       node_keys_updated: nodeKeysUpdated,
+      retention_targets_moved: retentionTargetsMoved,
     };
   } catch (err) {
     db.exec("ROLLBACK");

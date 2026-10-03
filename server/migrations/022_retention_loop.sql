@@ -48,9 +48,13 @@ INSERT INTO legacy_node_key_map (legacy, rendered) VALUES
     ('writing-balancing-formulas',
      'node:chemistry_ch3_4_bonding_and_equations:ionic_vs_molecular_compounds_formula_writing_charge_balancing_balancing_chemical_equations:writing_balancing_formulas');
 
--- The fallback: lowercased, spaces and hyphens to "_", under node:legacy:.
+-- The fallback: lowercased, spaces and hyphens to "_" (runs collapsed, ends
+-- trimmed), under node:legacy:. A value with other punctuation still fails
+-- the grammar after this; it is kept, but not registered as a tag (below).
 INSERT OR IGNORE INTO legacy_node_key_map (legacy, rendered)
-SELECT DISTINCT key, 'node:legacy:' || lower(replace(replace(trim(key), ' ', '_'), '-', '_'))
+SELECT DISTINCT key, 'node:legacy:' || trim(
+    replace(replace(replace(lower(replace(replace(trim(key), ' ', '_'), '-', '_')), '__', '_'), '__', '_'), '__', '_'),
+    '_')
 FROM (
     SELECT node_key AS key FROM question WHERE node_key IS NOT NULL
     UNION
@@ -107,16 +111,18 @@ DROP TABLE legacy_node_key_map;
 
 -- Label = the last segment with "_" read as a space. rtrim(s, <s's own
 -- non-colon characters>) strips back to the last ":", so replacing that
--- prefix away leaves the leaf. Only keys inside the slug alphabet are
--- registered — a tag row must pass the grammar create_tag enforces.
+-- prefix away leaves the leaf. Only keys that pass the grammar create_tag
+-- enforces are registered: the slug alphabet, and every separator (":", "_",
+-- ".") between two alphanumerics — never doubled, adjacent to another, or at
+-- the end.
 INSERT OR IGNORE INTO tag (slug, label)
 SELECT DISTINCT node_key,
        replace(replace(node_key, rtrim(node_key, replace(node_key, ':', '')), ''), '_', ' ')
 FROM question_node_key
 WHERE node_key LIKE 'node:%'
   AND node_key NOT GLOB '*[^a-z0-9:._]*'
-  AND node_key NOT GLOB '*::*'
-  AND node_key NOT GLOB '*:';
+  AND node_key NOT GLOB '*[:._][:._]*'
+  AND node_key NOT GLOB '*[:._]';
 
 -- ----------------------------------------------------------------------------
 -- 3. The retention schedule: node half, item half, and the two-key row

@@ -125,11 +125,13 @@ export function readme(
     retention_conventions:
       "Osmosis schedules; you supply targets. set_retention_target(identity_key: a node key, needs_last_until) " +
       "attaches a target to a node, and every item carrying that node key inherits it. Gap 1 is a share of the " +
-      "time left (Cepeda: ~30% for two weeks, ~7.5% for a year). At gap 1 the node's first probe is drawn: its " +
+      "time left (Cepeda: ~30% for two weeks, ~7.5% for a year), from the target's setting — or from an item's own " +
+      "authoring if it was written later. At gap 1 the node's first probe is drawn: its " +
       "discriminating items — file each with tests_error naming the wrong model it separates from the right one " +
       "— first k by authoring order (config retention_draw_k, default 3), plus one transfer item, i.e. one whose " +
       "node_keys span this node and another. The rest of the node is reserve: a passing draw brings it in at the " +
-      "node's gap-2 interval; any miss in the draw brings it forward at once as relearn material. A node with no " +
+      "node's gap-2 interval; any miss in the draw brings it forward at once as relearn material (a draw's result is " +
+      "final once recorded). A node with no " +
       "discriminating items draws k weak-weighted. From an item's first retention review on, SM2 sets its gaps, " +
       "clamped so none steps past an open target, and runs free once every target has passed. Only an answer key " +
       "(auto_mc) or your verdict (grade_response, oracle|judge) schedules — a self grade never does; an idk always " +

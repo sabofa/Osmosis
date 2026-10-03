@@ -124,6 +124,8 @@ export interface DrawParams {
   // How due-ness shapes the draw (retention.ts). Absent = "off": a caller
   // that says nothing gets the draw it always got; templates pass their own.
   due_mode?: DueMode | null;
+  // The clock due-ness is read against; defaults to now.
+  now?: Date;
 }
 
 export interface DrawResult {
@@ -161,7 +163,7 @@ export function resolveDrawFromParams(
   // "weight": a due item counts two to four times as much as it otherwise
   // would; nothing is excluded, and a pool with nothing scheduled draws
   // exactly as "off" does.
-  const due = dueMode === "weight" ? dueInfoByLineage(db) : null;
+  const due = dueMode === "weight" ? dueInfoByLineage(db, params.now) : null;
   const weightsFor = (items: EligibleQuestion[]): number[] => {
     const base = weighting === "weak_weighted" ? computeWeakWeights(db, items) : items.map(() => 1);
     return due ? base.map((w, i) => w * dueWeightFactor(due.get(items[i].lineage_id))) : base;
@@ -205,7 +207,7 @@ function resolveGatedDraw(
   params: DrawParams,
   weighting: "random" | "weak_weighted"
 ): DrawResult {
-  const due = dueInfoByLineage(db);
+  const due = dueInfoByLineage(db, params.now);
   const ranked = rankByDue(pool, due, weighting === "weak_weighted" ? computeWeakWeights(db, pool) : undefined);
 
   let questions: EligibleQuestion[];

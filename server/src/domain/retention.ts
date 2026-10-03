@@ -545,9 +545,9 @@ export function refreshRetention(db: DatabaseSync, opts: RefreshOptions = {}): v
   const rng = opts.rng ?? Math.random;
 
   inSavepoint(db, "retention_refresh", () => {
-    const versions = liveVersions(db);
     let targets = allTargets(db);
     if (targets.length === 0) return;
+    const versions = liveVersions(db);
     const targetedNodes = new Set(targets.map((t) => t.node_key));
     const k = drawK(db);
     const floorMs = clampFloorMs(db);
@@ -581,7 +581,7 @@ export function refreshRetention(db: DatabaseSync, opts: RefreshOptions = {}): v
       for (const item of items) {
         const role = draw.has(item.lineage_id) ? "draw" : "reserve";
         insertMember.run(t.node_key, item.lineage_id, t.retention_target, role);
-        enroll(db, item.lineage_id, t.set_at, role === "draw" ? t.gap1_due_at : null, "draw");
+        enroll(db, item.lineage_id, t.set_at, role === "draw" ? toSqliteDatetime(gap1MsFor(t, item)) : null, "draw");
       }
       db.prepare("UPDATE node_retention_target SET drawn_at = ?, draw_k = ? WHERE id = ?").run(
         toSqliteDatetime(nowMs),
@@ -601,7 +601,7 @@ export function refreshRetention(db: DatabaseSync, opts: RefreshOptions = {}): v
         insertMember.run(t.node_key, item.lineage_id, t.retention_target, "reserve");
         enroll(db, item.lineage_id, t.set_at, null, null);
         if (t.probe_result && t.probe_resolved_at) {
-          const due = reserveDue(t, targets, floorMs);
+          const due = Math.max(reserveDue(t, targets, floorMs), gap1MsFor(t, item));
           enroll(db, item.lineage_id, t.set_at, toSqliteDatetime(due), t.probe_result === "pass" ? "reserve_pass" : "reserve_fail");
         }
       }
@@ -634,11 +634,13 @@ export function refreshRetention(db: DatabaseSync, opts: RefreshOptions = {}): v
         probe_resolved_at: toSqliteDatetime(resolution.resolvedMs),
         gap2_days: resolution.gap2Days,
       };
-      const due = toSqliteDatetime(reserveDue(resolved, targets, floorMs));
+      const due = reserveDue(resolved, targets, floorMs);
       const source = resolution.result === "pass" ? "reserve_pass" : "reserve_fail";
       for (const m of allMembers) {
         if (m.node_key !== t.node_key || m.retention_target !== t.retention_target || m.role !== "reserve") continue;
-        enroll(db, m.lineage_id, t.set_at, due, source);
+        const version = versions.get(m.lineage_id);
+        const own = version ? Math.max(due, gap1MsFor(t, version)) : due;
+        enroll(db, m.lineage_id, t.set_at, toSqliteDatetime(own), source);
       }
     }
   });
@@ -666,8 +668,10 @@ function resolveDraw(
   floorMs: number
 ): Resolution | null {
   if (draw.length === 0) return null;
-  const gap1Ms = storedMs(t.gap1_due_at);
-  const probes = draw.map((m) => ({ lineage: m.lineage_id, probe: (reviews.get(m.lineage_id) ?? []).find((r) => r.ms >= gap1Ms) ?? null }));
+  const probes = draw.map((m) => {
+    const gap1Ms = gap1MsFor(t, versions.get(m.lineage_id)!);
+    return { lineage: m.lineage_id, gap1Ms, probe: (reviews.get(m.lineage_id) ?? []).find((r) => r.ms >= gap1Ms) ?? null };
+  });
 
   const misses = probes.filter((p) => p.probe && p.probe.quality < PASSING_QUALITY);
   if (misses.length > 0) {
@@ -677,12 +681,13 @@ function resolveDraw(
 
   // The node's gap-2 interval: the soonest any drawn item comes back after
   // its own probe — SM2's next gap for it, clamped like every gap.
-  const gaps = probes.map(({ lineage, probe }) => {
+  const gaps = probes.map(({ lineage, gap1Ms, probe }) => {
     const item = items.get(lineage);
+    const version = versions.get(lineage)!;
     const firstDueMs = item?.first_due_at ? storedMs(item.first_due_at) : gap1Ms;
-    const anchorMs = item ? storedMs(item.enrolled_at) : storedMs(t.set_at);
+    const anchorMs = item ? anchorMsFor(item, version) : storedMs(t.set_at);
     const r = replay(reviews.get(lineage) ?? [], firstDueMs, anchorMs, probe!.ms);
-    const open = openTargetsFor(versions.get(lineage)!, targets);
+    const open = openTargetsFor(version, targets);
     const due = clampToTargets(probe!.ms, probe!.ms + r.state.interval_days * DAY_MS, open, floorMs);
     return (due - probe!.ms) / DAY_MS;
   });
@@ -692,6 +697,32 @@ function resolveDraw(
 // Every target date that applies to an item: the targets on each of its nodes.
 function openTargetsFor(version: LiveVersion, targets: TargetRow[]): number[] {
   return targets.filter((t) => version.node_keys.includes(t.node_key)).map((t) => storedMs(t.needs_last_until));
+}
+
+// Gap 1 runs from teaching. For an item written before the target was set,
+// that is the target's own set_at. An item written later — a target set
+// before its node had any items, or an item added to the node afterwards —
+// cannot have been taught before it existed, so its gap 1 runs from its
+// authoring, by the same Cepeda ratio over the time it has left. Without
+// this, the session check on a freshly written item would count as its
+// first probe.
+function gap1MsFor(t: TargetRow, version: LiveVersion): number {
+  const createdMs = storedMs(version.lineage_created_at);
+  if (createdMs <= storedMs(t.set_at)) return storedMs(t.gap1_due_at);
+  const span = Math.max(storedMs(t.needs_last_until) - createdMs, 0);
+  return createdMs + firstGapRatio(span / DAY_MS) * span;
+}
+
+// Where an item's first retention gap is measured from: its node's teaching,
+// but never before the item existed, and — for reserve a failed draw brought
+// forward — never before that failure. A failed draw is evidence the node did
+// not survive, so relearning starts the clock again; nothing earns credit for
+// surviving since the original teaching.
+function anchorMsFor(item: ItemRow, version: LiveVersion): number {
+  const anchor = Math.max(storedMs(item.enrolled_at), storedMs(version.lineage_created_at));
+  return item.first_due_source === "reserve_fail" && item.first_due_at
+    ? Math.max(anchor, storedMs(item.first_due_at))
+    : anchor;
 }
 
 // ----------------------------------------------------------------------------
@@ -773,7 +804,7 @@ export function computeSchedules(db: DatabaseSync, now: Date = new Date()): Item
       });
 
     const lineageReviews = reviews.get(item.lineage_id) ?? [];
-    const anchorMs = storedMs(item.enrolled_at);
+    const anchorMs = anchorMsFor(item, version);
     const base: ItemSchedule = {
       lineage_id: item.lineage_id,
       question_id: version.question_id,
@@ -798,7 +829,9 @@ export function computeSchedules(db: DatabaseSync, now: Date = new Date()): Item
       continue;
     }
     if (!item.first_due_at) {
-      out.push(base);
+      // Held only while some draw it belongs to is still to come; an item
+      // whose node keys moved off every target has nothing holding it.
+      if (mine.length > 0) out.push(base);
       continue;
     }
 
@@ -822,7 +855,7 @@ export function computeSchedules(db: DatabaseSync, now: Date = new Date()): Item
     for (const m of mine) {
       const t = byTarget.get(targetKey(m.node_key, m.retention_target))!;
       if (m.role !== "draw" || !t.drawn_at || t.probe_result) continue;
-      const gap1Ms = storedMs(t.gap1_due_at);
+      const gap1Ms = gap1MsFor(t, version);
       if (!lineageReviews.some((x) => x.ms >= gap1Ms)) dueMs = Math.min(dueMs, gap1Ms);
     }
 
@@ -872,6 +905,10 @@ function byOverdue(a: ItemSchedule, b: ItemSchedule): number {
   );
 }
 
+// identity_key is the node the row is due on behalf of — the one owning the
+// nearest open target — so a tutor grouping rows by identity_key re-teaches
+// the right node when an item spans several. Without an open target it is
+// the primary node key. targets[] carries the whole picture.
 function toDueItem(s: ItemSchedule, nowMs: number): DueItem {
   const nearest = s.targets
     .filter((t) => storedMs(t.needs_last_until) > nowMs)
@@ -879,7 +916,7 @@ function toDueItem(s: ItemSchedule, nowMs: number): DueItem {
   return {
     ...s,
     id: s.lineage_id,
-    identity_key: s.node_key,
+    identity_key: nearest?.node_key ?? s.node_key,
     retention_target: nearest?.retention_target ?? null,
     target_source: nearest?.target_source ?? null,
     last_result: s.last_quality === null ? "never_attempted" : s.last_quality >= PASSING_QUALITY ? "pass" : "fail",

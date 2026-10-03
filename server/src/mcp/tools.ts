@@ -284,8 +284,9 @@ export function registerTools(
       description:
         "Maintenance op: repoint every question and child tag from from_slug to to_slug, then retire " +
         "from_slug. When both slugs are \"node:\" tags the node keys move too (question_node_key and the " +
-        "question's primary node_key), reported as node_keys_updated; a merge that isn't node:-to-node: " +
-        "leaves node keys alone.",
+        "question's primary node_key), reported as node_keys_updated, and so do the node's retention targets " +
+        "and their draws (retention_targets_moved; a label to_slug already has stays to_slug's); a merge that " +
+        "isn't node:-to-node: leaves node keys alone.",
       inputSchema: { from_slug: z.string(), to_slug: z.string() },
     },
     async ({ from_slug, to_slug }) => {

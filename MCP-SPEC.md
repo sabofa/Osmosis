@@ -268,9 +268,13 @@ their tags.
 (`retention_item`). The two-key row `retention_schedule (node_key, lineage_id,
 retention_target, role)` joins them. SM2 state is not stored: it is replayed
 from the item's graded responses on every read, so re-grades, late sync pushes
-and reworded versions never leave it stale.
+and reworded versions never leave it stale. A draw's *result* is the one thing
+fixed once recorded: re-grading a probe afterwards does not reopen it.
 
-**Gap 1.** `first_gap_days` = Cepeda's share of the time to `needs_last_until`.
+**Gap 1.** `first_gap_days` = Cepeda's share of the time to `needs_last_until`,
+measured from the target's `set_at` — or, for an item written after the target
+was set, from the item's own authoring, so a freshly written item's session check
+is never its probe.
 At gap 1 the node's first probe is drawn: its discriminating items (filed with
 `tests_error`), the first `k` by authoring order (config `retention_draw_k`,
 default 3), plus one transfer item (its `node_keys` span this node and another,
@@ -282,7 +286,8 @@ authored onto the node later joins the reserve.
 Pass: the reserve's first due is the node's gap-2 interval (the soonest any drawn
 item comes back after its probe), clamped — no synthesized easiness, the item
 stays `never_demonstrated` until a real grade starts SM2. Fail: the reserve is due
-now, reason `relearn`.
+now, reason `relearn`, and its clock restarts at the failure — relearned reserve
+earns no credit for surviving since the original teaching.
 
 **Gap 2 onward: SM2.** From an item's first retention review (its first due or
 later; earlier answers are the learning phase and only refresh it). Quality from
@@ -303,7 +308,8 @@ runs free.
 and SM2 review sets, `weight` for casual draws (the daily question and quiz always
 weight). A due item's weight is ×2–4 by how overdue it is.
 
-**Lifecycle.** A reworded version keeps the history (lineage). `retire_question`
+**Lifecycle.** `merge_tags` on two `node:` slugs moves the node's targets and
+draws with its items (`retention_targets_moved`). A reworded version keeps the history (lineage). `retire_question`
 on the live version ends the schedule (`status: ended`) and keeps the history.
 Ephemeral items never schedule.
 

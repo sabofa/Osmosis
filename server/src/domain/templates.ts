@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "./errors.js";
-import { countEligible, resolveDrawFromParams, type EligibilityParams } from "./draw.js";
+import { countEligible, getEligibleQuestions, resolveDrawFromParams, type EligibilityParams } from "./draw.js";
 import type { TagQuery } from "./tagQuery.js";
-import { DUE_MODES, type DueMode } from "./retention.js";
+import { DUE_MODES, dueInfoByLineage, type DueMode } from "./retention.js";
 import { addSlice, removeSlice } from "./sync.js";
 import { assertSessionOpen } from "./sessions.js";
 
@@ -125,6 +125,27 @@ function eligibilityParamsFor(row: {
   };
 }
 
+// What a draw could take right now. A gate template draws only due items, so
+// its count is the due part of the pool — otherwise it would report short:
+// false and then fail with empty_draw the moment nothing is due.
+function eligibleCountFor(db: DatabaseSync, params: EligibilityParams, dueMode: DueMode): number {
+  if (dueMode !== "gate") return countEligible(db, params);
+  const due = dueInfoByLineage(db);
+  return getEligibleQuestions(db, params).filter((q) => due.get(q.lineage_id)?.due).length;
+}
+
+// A frozen set is fixed once; a gated one is whatever is due at draw time.
+// Together they would freeze one day's due items forever.
+function refuseFrozenGate(frozen: boolean, dueMode: string): void {
+  if (frozen && dueMode === "gate") {
+    throw new DomainError(
+      "frozen_gate",
+      "A frozen template cannot be due-gated: freezing would lock in whatever happens to be due today. " +
+        "Use due_mode 'weight' or 'off' for a frozen set, or leave a gated template unfrozen."
+    );
+  }
+}
+
 // Rough estimate only — nothing in the schema tracks real byte size for a
 // template's slice, and there's no actual pull mechanism computing one.
 // Good enough to show a plausible number on the Library cards.
@@ -174,7 +195,7 @@ export function isTemplateDownloaded(db: DatabaseSync, templateId: string): bool
 
 function toSummary(db: DatabaseSync, row: TemplateRow): TemplateSummary {
   const tagQuery = JSON.parse(row.tag_query) as TagQuery;
-  const eligibleCount = countEligible(db, eligibilityParamsFor({ ...row, tag_query: tagQuery }));
+  const eligibleCount = eligibleCountFor(db, eligibilityParamsFor({ ...row, tag_query: tagQuery }), row.due_mode);
 
   const stats = db
     .prepare(
@@ -315,14 +336,16 @@ export function createTemplate(
   const calculatorPolicy = input.calculator_policy ?? "any";
   const weighting = input.weighting ?? null;
   const dueMode = (input.due_mode ?? "weight") as DueMode;
-  const eligibleCount = countEligible(
+  refuseFrozenGate(input.frozen ?? false, dueMode);
+  const eligibleCount = eligibleCountFor(
     db,
     eligibilityParamsFor({
       tag_query: input.tag_query,
       difficulty_min: input.difficulty_min,
       difficulty_max: input.difficulty_max,
       calculator_policy: calculatorPolicy,
-    })
+    }),
+    dueMode
   );
 
   if (input.session_id) assertSessionOpen(db, input.session_id);
@@ -443,6 +466,7 @@ export function editTemplate(
   };
 
   validateTemplateFields(merged);
+  refuseFrozenGate(merged.frozen, merged.due_mode);
 
   const wasFrozen = current.frozen === 1;
   const setBecomesFrozen = merged.frozen;
@@ -507,14 +531,15 @@ export function editTemplate(
     throw err;
   }
 
-  const eligibleCount = countEligible(
+  const eligibleCount = eligibleCountFor(
     db,
     eligibilityParamsFor({
       tag_query: merged.tag_query,
       difficulty_min: merged.difficulty_min,
       difficulty_max: merged.difficulty_max,
       calculator_policy: merged.calculator_policy,
-    })
+    }),
+    merged.due_mode as DueMode
   );
 
   return { id, eligible_count: eligibleCount, short: eligibleCount < merged.question_count };
