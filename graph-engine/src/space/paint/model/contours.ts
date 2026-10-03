@@ -63,7 +63,7 @@ function canonOf(mesh: MeshMark): Canon {
 const lines = new WeakMap<MeshMark, Float64Array[]>()
 
 // The border of an open mesh and its sharp creases, as polylines (xyz per vertex). Static per mesh.
-function staticLines(mesh: MeshMark): Float64Array[] {
+export function staticLines(mesh: MeshMark): Float64Array[] {
   const have = lines.get(mesh)
   if (have) return have
   const { id } = canonOf(mesh)

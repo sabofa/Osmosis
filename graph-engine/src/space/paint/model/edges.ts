@@ -34,7 +34,9 @@ import { unproject } from './view'
 
 // Noise on the edge's hardness runs this many cycles to a world unit: a long, gentle waver (a period of two thirds of a unit,
 // about 130 px at 200 px a unit), not jitter.
-const EDGE_NOISE_FREQ = 1.5
+export const EDGE_NOISE_FREQ = 1.5
+// The seed of that noise (the bake's edges read it too).
+export const edgeNoiseSeed = (params: PaintParams): number => mix2(params.seed, 0x6ed9eba1)
 
 export type EdgeType = 'internal' | 'silhouette' | 'shadow'
 const EDGE_KIND: Record<EdgeType, number> = { internal: 0, silhouette: 1, shadow: 2 }
@@ -127,7 +129,7 @@ export interface EdgeTerms {
 export function terminatorEdgeScale(terminatorSoftness: number): number {
   return clamp(0.1 / Math.max(terminatorSoftness, 1e-4), 0.2, 1)
 }
-const isTerminatorPair = (a: number, b: number): boolean => {
+export const isTerminatorPair = (a: number, b: number): boolean => {
   const lit = (z: number) => z === Z_LIGHT || z === Z_HALF
   const form = (z: number) => z === Z_CORE || z === Z_REFLECTED
   return (lit(a) && form(b)) || (form(a) && lit(b))
@@ -385,7 +387,7 @@ export function extractEdges(fc: FrameCtx, plan: PlanMap, planes: PlaneMap): Edg
   // The seeded noise on an edge's hardness (params.edges.noise): a smooth function of the SURFACE POINT under the sample,
   // so it is the same whichever way the camera looks at that bit of edge. (It was a noise along the run, keyed on its first
   // sample and its length, which moves with where the contour tracing starts, so an edge flickered as the camera turned.)
-  const noiseSeed = mix2(params.seed, 0x6ed9eba1)
+  const noiseSeed = edgeNoiseSeed(params)
   const surfaceNoise = (x: number, y: number): number => (surfacePoint(x, y, world) ? valueNoise3(world[0] * EDGE_NOISE_FREQ, world[1] * EDGE_NOISE_FREQ, world[2] * EDGE_NOISE_FREQ, noiseSeed) : 0)
 
   const rc: RunCtx = { fc, plan, planes, focal, zN, zR, probeIn, probeOut, posHash, surfaceNoise, adj }
