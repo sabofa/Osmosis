@@ -6,9 +6,12 @@
 // G-buffer. The cell is a latitude-longitude bin of planeCellDeg degrees (26°)
 // on the view-space normal, with the longitude bins widened toward the poles.
 // Pieces smaller than planeMinPx CSS px² merge into the neighbour (of the same
-// mesh) they share the longest border with, preferring the same zone. Bare
-// table is split by shadow and by distance from the figure (a cast shadow is
-// harder and darker near what casts it).
+// mesh AND of the same family: light, half-tone and highlight; or core, reflected
+// and cast shadow) they share the longest border with, preferring the same zone;
+// a piece with no neighbour of its family is kept, small. (A core-shadow sliver
+// merged into a half-tone plane was painted at the half-tone's value: the value
+// rule holds across the planes.) Bare table is split by shadow and by distance
+// from the figure (a cast shadow is harder and darker near what casts it).
 //
 // A stroke's value is the plane's mean plus planeGradient (0.45) of its own
 // gradient: stepValue().
@@ -19,7 +22,7 @@ import { ZONES } from '../types'
 import type { Curve } from './curve'
 import { clamp, D2R } from './math'
 import type { PlanMap } from './value'
-import { Z_CAST } from './value'
+import { zoneFamily, Z_CAST } from './value'
 import type { FrameCtx } from './view'
 
 export interface Plane {
@@ -208,6 +211,8 @@ export function segmentPlanes(fc: FrameCtx, plan: PlanMap, curve: Curve): PlaneM
     for (const [b, cnt] of nb[s]) {
       const rb = find(b)
       if (rb === rs) continue
+      // (only a neighbour of the same family: a piece of the shadow family never joins a plane of the light family)
+      if (zoneFamily(compZone[rb]) !== zoneFamily(compZone[rs])) continue
       const v = cnt * (compZone[rb] === compZone[rs] ? 2 : 1)
       if (v > bs || (v === bs && rb < best)) {
         bs = v
@@ -301,7 +306,8 @@ export function segmentPlanes(fc: FrameCtx, plan: PlanMap, curve: Curve): PlaneM
 }
 
 // A stroke's value: the plane's mean plus planeGradient of its own gradient
-// (`u` is the plan value where the stroke stands).
+// (`u` is the plan value where the stroke stands). The caller holds the result inside the pixel's family
+// (value.ts holdFamily): the plane's mean may belong to a neighbour pixel's side of the terminator's edge.
 export function stepValue(map: PlaneMap, planeId: number, u: number, planeGradient: number): number {
   if (planeId < 0) return u
   const pu = map.planes[planeId].u

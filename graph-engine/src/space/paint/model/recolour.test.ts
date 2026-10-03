@@ -99,7 +99,7 @@ describe('recolouring a frame (colour parameters change, nothing else does)', ()
   })
 
   it('does not class anything that moves a stroke, or the value plan, as colour-only', () => {
-    for (const path of ['light.azimuth', 'light.intensity', 'light.shadows', 'value.halfLo', 'value.deviation', 'roles.block.width', 'roles.form.length', 'roles.dab.wet', 'edges.stopAt', 'detect.formBand', 'particles.maxPerUnit2', 'impasto.strength', 'canvas.tone.0', 'canvas.texture', 'mix.loadCell', 'environment.occlusion', 'seed']) {
+    for (const path of ['light.azimuth', 'light.intensity', 'light.shadows', 'value.halfLo', 'value.deviation', 'roles.block.width', 'roles.form.length', 'roles.dab.wet', 'edges.stopAt', 'detect.formBandNL', 'particles.maxPerUnit2', 'impasto.strength', 'canvas.tone.0', 'canvas.texture', 'mix.loadCell', 'environment.occlusion', 'seed']) {
       expect(isColourOnlyChange(P, moved(path)), path).toBe(false)
     }
     // a parameter the model reads and the lab no longer has a slider for (round 2) is still not a colour one

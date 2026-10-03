@@ -3,13 +3,29 @@ import { DEFAULT_PAINT_PARAMS, resolvePaintParams, type PaintParams } from '../p
 import { makeCurve } from './curve'
 import { chamferDist, segmentPlanes, stepValue } from './planes'
 import { paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './testing'
-import { buildPlanMap } from './value'
+import { buildPlanMap, zoneFamily } from './value'
 import { makeFrameCtx } from './view'
 
 // Whole frames of the model are heavy and the test machine is shared: give every test room.
 vi.setConfig({ testTimeout: 60_000 })
 
 const P = DEFAULT_PAINT_PARAMS
+
+// The planes each plane touches (4-connected), by plane id.
+function adjacentPlanes(w: number, h: number, plane: Int32Array): Set<number>[] {
+  const out: Set<number>[] = []
+  const link = (a: number, b: number) => {
+    if (a < 0 || b < 0 || a === b) return
+    for (const [x, y] of [[a, b], [b, a]]) (out[x] ??= new Set()).add(y)
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x + 1 < w) link(plane[y * w + x], plane[y * w + x + 1])
+      if (y + 1 < h) link(plane[y * w + x], plane[(y + 1) * w + x])
+    }
+  }
+  return out
+}
 
 function planesOf(params: PaintParams = P, withTable = false) {
   const view = paintView({ width: 400, height: 300, azimuth: 30, elevation: 25, zoom: 75 })
@@ -26,9 +42,18 @@ describe('planes', () => {
   it('breaks a sphere into more than 20 planes, none under planeMinPx', () => {
     const { g, map } = planesOf()
     expect(map.planes.length).toBeGreaterThan(20)
-    // planeMinPx is in CSS px²; the G-buffer pixel is scale² of them: 70 / 4 = 17.5 pixels
+    // planeMinPx is in CSS px²; the G-buffer pixel is scale² of them: 70 / 4 = 17.5 pixels. A piece under it merges into a
+    // neighbour of its own value family; one with none (a sliver of core shadow beside nothing but half-tone) is kept
     const min = 70 / (g.scale * g.scale)
-    for (const p of map.planes) expect(p.area).toBeGreaterThanOrEqual(min)
+    // (a piece under `limit` pixels has no neighbour of its own family)
+    const aloneUnder = (planesMap: typeof map, width: number, height: number, limit: number) => {
+      const neighbours = adjacentPlanes(width, height, planesMap.plane)
+      for (const p of planesMap.planes) {
+        if (p.area >= limit) continue
+        for (const q of neighbours[p.id] ?? []) expect(zoneFamily(planesMap.planes[q].zone), `plane ${p.id} (${p.area}px) beside plane ${q}`).not.toBe(zoneFamily(p.zone))
+      }
+    }
+    aloneUnder(map, g.width, g.height, min)
     // without the merge, there are small pieces: that is what planeMinPx removes
     const raw = planesOf(resolvePaintParams({ edges: { planeMinPx: 0 } }))
     expect(raw.map.planes.length).toBeGreaterThan(map.planes.length)
@@ -36,7 +61,7 @@ describe('planes', () => {
     // and a far larger minimum merges far more
     const big = planesOf(resolvePaintParams({ edges: { planeMinPx: 4000 } }))
     expect(big.map.planes.length).toBeLessThan(map.planes.length)
-    for (const p of big.map.planes) expect(p.area).toBeGreaterThanOrEqual(1000)
+    aloneUnder(big.map, big.g.width, big.g.height, 1000)
   })
 
   it('partitions the figure: every filled pixel is in exactly one plane, and the statistics add up', () => {

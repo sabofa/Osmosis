@@ -18,15 +18,15 @@
 
 import type { PaintParams } from '../params'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type Oklab, type ParticleSet, type Role, type StrokeBatch } from '../types'
-import { oklabToLinear } from './colour'
+import { holdLightness, oklabToLinear } from './colour'
 import type { Curve } from './curve'
 import type { EdgeMap } from './edges'
 import { clamp, smooth } from './math'
 import { LoadMixer } from './mix'
 import type { ParticleSide } from './particles'
 import type { PlaneMap } from './planes'
-import type { DraftColour, RecipeEnv } from './recipe'
-import type { PlanMap } from './value'
+import { lightnessAtValue, type DraftColour, type RecipeEnv } from './recipe'
+import { FAM_SHADOW, type PlanMap } from './value'
 import { Z_CAST } from './zones'
 import { pxPerUnit, projectedLength, type FrameCtx, type Visible } from './view'
 
@@ -43,6 +43,14 @@ export interface StrokeDraft {
   // changes (recipe.ts); null for a colour that is not made from the curve.
   colour?: DraftColour | null
   u: number
+  // The value family the stroke is painted in (value.ts FAM_LIGHT, FAM_SHADOW), the bound of its value in plan values
+  // (the cap or the darkest half-tone, or the plan's own value where it is beyond it) and the lightness its colour
+  // has at that value (the same recipe, made at the bound): the brush-load mix cannot take the stroke's lightness over
+  // it, see packStrokes. Left out of a stroke that is in no family (a line, a veil, a hand-made draft): no bound.
+  // (uBound stays so that a colour parameter's change can make lBound again: recolourFrame.)
+  fam?: number
+  uBound?: number
+  lBound?: number
   // The path in world space (3 per path point) and the world normal at the anchor, for re-projecting the stroke in
   // another view without the model (StrokeBatch.worldPath, worldNormal). Left out of a hand-made draft: zeros.
   world?: Float32Array
@@ -564,6 +572,13 @@ export function pathFromWalk(w: Walk, baseWidth: number, reverse: boolean, path:
 
 // ---- packing ----
 
+// The family fields of a draft made from a colour recipe at a pixel of a value family: its family, the bound of its value
+// there (plan values) and the lightness of its colour at that value (undefined where it has no bound: fam undefined).
+export function holdOf(colour: DraftColour, fam: number | undefined, uBound: number | undefined, env: RecipeEnv): Pick<StrokeDraft, 'fam' | 'uBound' | 'lBound'> {
+  if (fam === undefined || uBound === undefined) return {}
+  return { fam, uBound, lBound: lightnessAtValue(colour, uBound, env) }
+}
+
 const ROLE_INDEX: Record<Role, number> = Object.fromEntries(ROLES.map((r, i) => [r, i])) as Record<Role, number>
 export const roleIndex = (r: Role): number => ROLE_INDEX[r]
 const LAYER_OF_ROLE = ROLES.map((r) => LAYER_ORDER.indexOf(r))
@@ -572,6 +587,13 @@ export const BEHIND_VEIL_LAYER = LAYER_ORDER.indexOf('scumble')
 
 // Painting order: layer by layer, back to front by depth (the larger the
 // distance the earlier), then creation order; every load's mix in that order.
+//
+// THE VALUE RULE HOLDS IN THE FINAL COLOUR (spec §12). A stroke that stands in a value family (draft.fam, with its
+// lightness bound draft.lBound) comes out of the brush-load mix with its lightness held on its family's side of the
+// bound: a shadow stroke no lighter than the colour it would be at the cap, a light stroke no darker than the colour it
+// would be at the darkest half-tone (the same recipe made at the bound value: its jitters, plane and gamut fit
+// included; holdOf). So the mix's value step (valueStep, strength) cannot move a stroke into the other family,
+// whatever the sliders say. The clamp comes after the mix and the gamut fit, and a stroke inside its bound is not touched.
 export function packStrokes(drafts: StrokeDraft[], params: PaintParams): { batch: StrokeBatch; loads: number; byRole: Record<Role, number> } {
   const layerOf = (d: StrokeDraft): number => d.layer ?? LAYER_OF_ROLE[d.role]
   drafts.sort((a, b) => layerOf(a) - layerOf(b) || b.depth - a.depth || a.order - b.order)
@@ -604,7 +626,9 @@ export function packStrokes(drafts: StrokeDraft[], params: PaintParams): { batch
     const role = ROLES[d.role]
     byRole[role]++
     const mixed = mixer.mix({ role, cell: d.cell, u: d.u, x: d.mx, y: d.my, lab: d.lab, colormapped: d.colormapped, seed: d.seed, jit0: d.jit0, jit1: d.jit1 })
-    const lin = oklabToLinear(mixed.lab)
+    let lab = mixed.lab
+    if (d.fam !== undefined && d.lBound !== undefined) lab = holdLightness(lab, d.fam === FAM_SHADOW, d.lBound)
+    const lin = oklabToLinear(lab)
     batch.role[i] = d.role
     batch.layer[i] = layerOf(d)
     batch.path.set(d.path, 2 * PATH_POINTS * i)

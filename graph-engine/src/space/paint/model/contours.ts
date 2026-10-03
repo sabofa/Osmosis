@@ -25,7 +25,8 @@ import { PATH_POINTS } from '../types'
 import { behaviourOf, resample, type EdgeRun, type Sample } from './edges'
 import { clamp, vcross, vdot, vlen, type V3 } from './math'
 import { colourOfDraft, newRecipe, type ColourRecipe, type ColourSource, type DraftColour } from './recipe'
-import { polylinePath, roleIndex, type PaintCtx, type StrokeDraft } from './strokes'
+import { holdOf, polylinePath, roleIndex, type PaintCtx, type StrokeDraft } from './strokes'
+import { FAM_SHADOW } from './value'
 import { gIndex, project, pxPerUnit, toEye, unproject } from './view'
 
 // ---- the meshes' own lines ----
@@ -432,6 +433,22 @@ function sideRecipe(an: PaintCtx, plane: number, mark: number, u: number, rng: R
   return r
 }
 
+// The recipe of bare table at plan value u: what lies across an outline where the table is in shadow (the figure's own
+// cast shadow), as the table is painted there.
+function groundRecipe(u: number, rng: ReturnType<typeof randomFor>): ColourRecipe {
+  const r = newRecipe()
+  r.ground = true
+  r.u = clamp(u, 0.05, 0.98)
+  r.nz = 1
+  r.g0 = rng.gauss()
+  r.g1 = rng.gauss()
+  r.g2 = rng.gauss()
+  r.c0 = 0.5
+  r.c1 = 5 / 12
+  r.c2 = 6 / 11
+  return r
+}
+
 // Cut a run of edge samples into the stretches that each become strokes: at
 // every change of class, at `maxSamples` at the latest, and in between at a
 // sample whose surface-position hash (the keys) falls under `p` once the
@@ -535,6 +552,13 @@ function worldOfPath(an: PaintCtx, path: Float32Array): Float32Array {
   return out
 }
 
+// The mean of a[from..to].
+function meanOver(a: ArrayLike<number>, from: number, to: number): number {
+  let s = 0
+  for (let i = from; i <= to; i++) s += a[i]
+  return s / (to - from + 1)
+}
+
 // Paint every run as edge strokes (an 'edge'-role layer: after reflected light, before the lines).
 export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
   const { fc } = an
@@ -549,9 +573,10 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
   for (const e of runs) {
     if (e.contrast < minContrast) continue
     const segs = segmentRun(e.cls, e.keys, maxSamples)
-    for (const [a, b, cl] of segs) {
+    for (const [a, b, cl0] of segs) {
       if (b - a < 6) continue
       const mid = Math.floor((a + b) / 2)
+      let cl = cl0
       const rng = randomFor(`paint/edge/${e.keys[mid]}/${a}`, params.seed)
       // the role's density thins the edge strokes, by a seeded draw
       if (rng.next() >= rp.density) continue
@@ -560,18 +585,33 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
       const my = e.pts[2 * mid + 1] * scale
       const gi = clamp(Math.round(e.pts[2 * mid + 1]), 0, g.height - 1) * g.width + clamp(Math.round(e.pts[2 * mid]), 0, g.width - 1)
       const depth = Number.isFinite(g.depth[gi]) ? g.depth[gi] : 0
-      // the two sides' colours (a silhouette's other side is the bare canvas)
+      // the two sides' colours (a silhouette's other side is the bare canvas), at the values of the stretch this stroke
+      // lies on: an outline runs from the light to the shadow, and one mean over it was painted along all of it
       const planeA = e.a
-      const uLo = Math.min(e.uA, e.uB)
-      const recA = sideRecipe(an, planeA, e.mark, e.uA, rng)
-      const srcB: ColourSource = e.type === 'silhouette' ? [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]] : sideRecipe(an, e.b, e.mark, e.uB, rng)
-      const lighterIsA = e.uA >= e.uB
+      const uA = e.uAs ? meanOver(e.uAs, a, b) : e.uA
+      const uB = e.uBs ? meanOver(e.uBs, a, b) : e.uB
+      // the outline of a form in the SHADOW family against light canvas (the two families meet): a found edge, dark as
+      // its own side, never bridged to the canvas and never lighter than the cap
+      const shadowEdge = e.type === 'silhouette' && e.uAs !== undefined && e.uBs !== undefined && e.uAs[mid] <= an.plan.capU && e.uBs[mid] >= an.plan.floorU
+      if (shadowEdge) cl = Math.max(cl, 2)
+      const uLo = Math.min(uA, uB)
+      const recA = sideRecipe(an, planeA, e.mark, uA, rng)
+      // across a silhouette: the canvas where it is light (the values of the lit side and the canvas can match, and then the
+      // edge is lost, bridged toward it), or the table in the figure's own cast shadow, as dark as the table is there: an
+      // edge's colour comes from the side it is on, never from the canvas where the canvas is not what lies across
+      const srcB: ColourSource =
+        e.type !== 'silhouette'
+          ? sideRecipe(an, e.b, e.mark, uB, rng)
+          : uB >= an.plan.floorU
+            ? [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]]
+            : groundRecipe(uB, rng)
+      const lighterIsA = uA >= uB
       const lighter = lighterIsA ? recA : srcB
       const darker = lighterIsA ? srcB : recA
       const baseDraft = (): Omit<StrokeDraft, 'path' | 'width' | 'world' | 'lab' | 'colour' | 'alpha' | 'order' | 'jit0' | 'jit1'> => ({
         role: roleIndex('edge'),
         depth,
-        u: e.uA,
+        u: uA,
         cell: e.keys[mid],
         mx,
         my,
@@ -587,11 +627,15 @@ export function edgeStrokes(an: PaintCtx, runs: EdgeRun[]): void {
         seed: (e.keys[mid] ^ (a * 0x9e3779b1)) >>> 0,
       })
       const push = (path: Float32Array, width: Float32Array, colour: DraftColour, alpha: number) => {
-        an.drafts.push({ ...baseDraft(), path, width, world: worldOfPath(an, path), lab: colourOfDraft(colour, an.env), colour, alpha, jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++ })
+        an.drafts.push({
+          ...baseDraft(), path, width, world: worldOfPath(an, path), lab: colourOfDraft(colour, an.env), colour, alpha,
+          ...(shadowEdge ? holdOf(colour, FAM_SHADOW, an.plan.capU, an.env) : {}),
+          jit0: rng.gauss(), jit1: rng.gauss(), order: an.nextOrder++,
+        })
       }
       if (cl >= 2) {
         // distinct: a crisp, loaded stroke along the edge, darker than the darker side
-        const uE = clamp(uLo - (cl === 3 ? 0.12 : 0.06), 0.1, 0.8)
+        const uE = Math.min(clamp(uLo - (cl === 3 ? 0.12 : 0.06), 0.1, 0.8), shadowEdge ? an.plan.capU : 1)
         const colour: DraftColour = { a: sideRecipe(an, planeA, e.mark, uE, rng, 0.9), b: null, t: 0 }
         const off = rng.range(-1, 1)
         const xs: number[] = []

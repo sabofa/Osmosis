@@ -121,6 +121,15 @@ export function oklabToLinear(lab: readonly number[]): V3 {
   return [clamp(out[0], 0, 1), clamp(out[1], 0, 1), clamp(out[2], 0, 1)]
 }
 
+// A fitted OKLab colour with its lightness held on one side of a bound: at most `bound` (`atMost`, a shadow-family
+// colour) or at least it. A colour already inside is returned as it is, bit for bit; one outside keeps its hue and chroma
+// and is fitted to the gamut again (a darker colour has less room for chroma, a lighter one more).
+export function holdLightness(lab: readonly number[], atMost: boolean, bound: number): Oklab {
+  if (atMost ? lab[0] <= bound : lab[0] >= bound) return [lab[0], lab[1], lab[2]]
+  const lch = labToLch(lab)
+  return fitLch([bound, lch[1], lch[2]])
+}
+
 // A straight mix of two OKLab colours.
 export function mixLab(a: readonly number[], b: readonly number[], t: number): Oklab {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]

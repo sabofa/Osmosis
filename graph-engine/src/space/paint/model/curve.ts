@@ -53,7 +53,8 @@ export interface CurveInput {
   u: number
   // World normal z (for the sky and bounce tints), when known.
   nz?: number
-  // Reflected-light weight b (0 none .. ~0.85), when known.
+  // The lift b of the form shadow toward reflected light, 0 none .. 1 (value.ts ZoneSample.lift: the share of the
+  // reflected-light range the plan has taken here), when known: it mixes the bounce colour's hue and chroma in, never L.
   bounce?: number
   // The share of the light here that is environment light, 0..1 (value.ts
   // ambientShare), when known: how much of the environment colour it takes in.

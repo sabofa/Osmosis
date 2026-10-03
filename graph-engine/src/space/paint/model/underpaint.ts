@@ -12,45 +12,55 @@
 //
 // A colour per pixel would cost more than the whole of the rest of a frame, and an imprimatura is
 // smooth, so the colours are made on a lattice, one sample per UNDERPAINT_CELL_PX CSS px square (one per
-// mark in it), and the image is filled from them: bilinear among the samples of the pixel's own mark
-// (never across meshes), so a form's edge is exact (it comes from the full G-buffer) and its colour is
-// smooth. What each sample's colour is made of is kept (a field), so a colour parameter changes the image
-// with no analysis, as it does the strokes (recolourFrame).
+// mark and value family in it), and the image is filled from them: bilinear among the samples of the pixel's
+// own mark AND family (never across meshes, and never across the terminator or a cast shadow's edge: the
+// light and the shadow family are blended each within itself, so the bilinear fill cannot lift a shadow
+// pixel into the half-tones, which it did, by up to 0.1 in lightness at N·L -0.05 to -0.1, more on a small
+// figure), so a form's edge is exact (it comes from the full G-buffer) and its colour is smooth. What each
+// sample's colour is made of is kept (a field), so a colour parameter changes the image with no analysis, as
+// it does the strokes (recolourFrame). A sample's lightness is held on its family's side of the cap (shadow)
+// or of the darkest half-tone (light), after the brush-load mix, as the strokes' is (strokes.ts packStrokes).
 
 import type { PaintParams } from '../params'
 import type { GBuffer, Oklab } from '../types'
-import { oklabToLinear } from './colour'
+import { holdLightness, oklabToLinear } from './colour'
 import { LoadMixer } from './mix'
 import { cellId } from './particles'
 import { stepValue } from './planes'
 import { colourOfRecipe, newRecipe, type RecipeEnv } from './recipe'
 import { clamp } from './math'
 import type { PaintCtx } from './strokes'
-import { ambientShare } from './value'
+import { ambientShare, familyBound, FAM_LIGHT, FAM_SHADOW, holdFamily, lightWeight } from './value'
 import { toEye, unproject } from './view'
 
 // The strength of the brush-load mix on the underpainting, against a block-in stroke's (the spec's "reduced").
 export const UNDERPAINT_MIX = 0.5
 // One colour sample per this many CSS px square.
 export const UNDERPAINT_CELL_PX = 12
-// Distinct marks sampled in one lattice cell (a cell holds a boundary of a few meshes at most).
-const MAX_MARKS_PER_CELL = 8
+// Distinct (mark, family) pairs sampled in one lattice cell (a cell holds a boundary of a few meshes at most, each
+// with its terminator or shadow edge).
+const MAX_KEYS_PER_CELL = 16
 
 export interface UnderpaintField {
   // The full G-buffer's size, and its owner: the mark painted at each pixel, -1 where nothing is (the
-  // table in the light is not painted: it is the canvas).
+  // table in the light is not painted: it is the canvas); and its value family (FAM_LIGHT or FAM_SHADOW).
   width: number
   height: number
   owner: Int32Array
+  ownerFam: Uint8Array
   // The lattice: cells over the full G-buffer, `cell` full pixels on a side. The samples of cell c are
   // [cellStart[c], cellStart[c + 1]), each of one mark.
   lw: number
   lh: number
   cell: number
   cellStart: Int32Array
-  // Per sample: its mark, and what its colour is made of (a recipe, in flat arrays).
+  // Per sample: its mark and its value family (a pixel takes the samples of its own mark and family), the bound
+  // of its value in plan values (the cap, the darkest half-tone, or the plan's own where it is beyond them: value.ts
+  // familyBound), and what its colour is made of (a recipe, in flat arrays).
   count: number
   mark: Int32Array
+  fam: Uint8Array
+  bound: Float32Array
   lab: Float32Array // the local colour, 3 per sample
   u: Float32Array // the value it is made at
   nz: Float32Array
@@ -78,11 +88,18 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
   const lw = Math.ceil(aw / step)
   const lh = Math.ceil(ah / step)
 
-  // what is painted: every covered pixel but the table in the light
+  // what is painted: every covered pixel but the table in the light, and the value family of each (the plan's: the
+  // weight of the light over a half, from the pixel's own N·L and shadow flag)
   const owner = new Int32Array(full.width * full.height)
+  const ownerFam = new Uint8Array(full.width * full.height)
+  const ts = Math.max(1e-4, params.value.terminatorSoftness)
+  const lightDir = fc.view.lightDir
   for (let i = 0; i < owner.length; i++) {
     const m = full.mark[i]
     owner[i] = m < 0 || (fc.ground[m] === 1 && full.shadow[i] !== 1) ? -1 : m
+    if (owner[i] < 0) continue
+    const nl = full.normal[3 * i] * lightDir[0] + full.normal[3 * i + 1] * lightDir[1] + full.normal[3 * i + 2] * lightDir[2]
+    ownerFam[i] = lightWeight(ts, nl, full.shadow[i] === 1) > 0.5 ? FAM_LIGHT : FAM_SHADOW
   }
   const paints = (i: number): number => {
     const m = a.mark[i]
@@ -94,12 +111,12 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
   for (let k = 0; k < an.vis.count; k++) if (an.set.colormapped[an.vis.idx[k]] === 1) mapped[an.set.mark[an.vis.idx[k]]] = 1
   const grid = mapped.some((v) => v === 1) ? new MappedGrid(an, mapped) : null
 
-  // pass 1: one sample per mark per cell, at the pixel of that mark nearest the cell's centre
+  // pass 1: one sample per mark and family per cell, at the pixel of that mark and family nearest the cell's centre
   const picked: number[] = []
   const cellStart = new Int32Array(lw * lh + 1)
-  const markIn = new Int32Array(MAX_MARKS_PER_CELL)
-  const pixIn = new Int32Array(MAX_MARKS_PER_CELL)
-  const distIn = new Float64Array(MAX_MARKS_PER_CELL)
+  const markIn = new Int32Array(MAX_KEYS_PER_CELL)
+  const pixIn = new Int32Array(MAX_KEYS_PER_CELL)
+  const distIn = new Float64Array(MAX_KEYS_PER_CELL)
   for (let cy = 0; cy < lh; cy++) {
     for (let cx = 0; cx < lw; cx++) {
       const centreX = cx * step + (step - 1) / 2
@@ -110,13 +127,15 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
           const i = y * aw + x
           const m = paints(i)
           if (m < 0) continue
+          // the key: the mark, and its family here
+          const key = 2 * m + plan.fam[i]
           const d = (x - centreX) ** 2 + (y - centreY) ** 2
           let s = -1
-          for (let q = 0; q < n; q++) if (markIn[q] === m) s = q
+          for (let q = 0; q < n; q++) if (markIn[q] === key) s = q
           if (s < 0) {
-            if (n >= MAX_MARKS_PER_CELL) continue
+            if (n >= MAX_KEYS_PER_CELL) continue
             s = n++
-            markIn[s] = m
+            markIn[s] = key
             pixIn[s] = i
             distIn[s] = d
           } else if (d < distIn[s]) {
@@ -136,12 +155,15 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     width: full.width,
     height: full.height,
     owner,
+    ownerFam,
     lw,
     lh,
     cell: step * stride,
     cellStart,
     count,
     mark: new Int32Array(count),
+    fam: new Uint8Array(count),
+    bound: new Float32Array(count),
     lab: new Float32Array(3 * count),
     u: new Float32Array(count),
     nz: new Float32Array(count),
@@ -181,7 +203,9 @@ export function buildUnderpaintField(an: PaintCtx, full: GBuffer): UnderpaintFie
     const dev = curve.devU(pt[0], pt[1], pt[2])
     const stepped = plane >= 0 ? stepValue(planes, plane, plan.u[i] + dev, params.edges.planeGradient) : plan.u[i] + dev
     f.mark[s] = m
-    f.u[s] = clamp(stepped, 0.02, 0.99)
+    f.fam[s] = plan.fam[i]
+    f.bound[s] = familyBound(plan, i)
+    f.u[s] = clamp(holdFamily(plan, i, stepped), 0.02, 0.99)
     f.nz[s] = nz
     f.bounce[s] = plan.bounce[i]
     f.amb[s] = ambientShare(params, nz, plan.value[i])
@@ -298,7 +322,11 @@ export function underpaintColours(f: UnderpaintField, params: PaintParams, env: 
     const lab = colourOfRecipe(r, env)
     // the mix is keyed to the surface cell, so the underpainting keeps its patches as the camera orbits
     const mixed = mixer.mix({ role: 'block', cell: f.cellOf[s], u: f.u[s], x: 0, y: 0, lab, colormapped: r.colormapped, seed: f.cellOf[s], jitter: 0 })
-    const lin = oklabToLinear(mixed.lab as Oklab)
+    // the sample's lightness held on its family's side of the bound (what the same recipe is at the cap, or at the
+    // darkest half-tone), after the mix and the gamut fit, as a stroke's is
+    r.u = f.bound[s]
+    const bound = colourOfRecipe(r, env)[0]
+    const lin = oklabToLinear(holdLightness(mixed.lab, f.fam[s] === FAM_SHADOW, bound) as Oklab)
     out[3 * s] = lin[0]
     out[3 * s + 1] = lin[1]
     out[3 * s + 2] = lin[2]
@@ -308,14 +336,15 @@ export function underpaintColours(f: UnderpaintField, params: PaintParams, env: 
 
 // ---- the image ----
 
-// The sample of mark `m` in lattice cell c, or -1.
-function sampleOf(f: UnderpaintField, c: number, m: number): number {
-  for (let s = f.cellStart[c]; s < f.cellStart[c + 1]; s++) if (f.mark[s] === m) return s
+// The sample of mark `m` and family `fam` in lattice cell c, or -1; with fam < 0, of mark `m` in either (the fallback).
+function sampleOf(f: UnderpaintField, c: number, m: number, fam: number): number {
+  for (let s = f.cellStart[c]; s < f.cellStart[c + 1]; s++) if (f.mark[s] === m && (fam < 0 || f.fam[s] === fam)) return s
   return -1
 }
 
-// The image: per G-buffer pixel the colour of the samples of its own mark about it (bilinear on the
-// lattice), NaN where nothing is painted.
+// The image: per G-buffer pixel the colour of the samples of its own mark and family about it (bilinear on the
+// lattice: the light family and the shadow family are never blended into one another, as two meshes are not), NaN
+// where nothing is painted.
 export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float32Array {
   const { width: W, height: H, owner, lw, lh, cell } = f
   const out = new Float32Array(3 * W * H).fill(Number.NaN)
@@ -327,6 +356,7 @@ export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float
     for (let x = 0; x < W; x++) {
       const m = owner[y * W + x]
       if (m < 0) continue
+      const fam = f.ownerFam[y * W + x]
       const fx = (x + 0.5) * inv - 0.5
       const x0 = Math.floor(fx)
       const tx = fx - x0
@@ -340,7 +370,7 @@ export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float
         for (let dx = 0; dx < 2; dx++) {
           const cx = x0 + dx
           if (cx < 0 || cx >= lw) continue
-          const s = sampleOf(f, cy * lw + cx, m)
+          const s = sampleOf(f, cy * lw + cx, m, fam)
           if (s < 0) continue
           const w = (dx === 1 ? tx : 1 - tx) * (dy === 1 ? ty : 1 - ty)
           r += colours[3 * s] * w
@@ -356,8 +386,10 @@ export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float
         out[o + 2] = b / ws
         continue
       }
-      // no sample of this mark at the four corners (a sliver of mesh, or the edge of one): the nearest sample of it
-      const s = nearestSample(f, fx, fy, m)
+      // no sample of this mark and family at the four corners (a sliver of mesh, or the edge of one, or of a shadow): the
+      // nearest sample of the same family, and failing that of the same mark, so no pixel of a form is left bare
+      let s = nearestSample(f, fx, fy, m, fam)
+      if (s < 0) s = nearestSample(f, fx, fy, m, -1)
       if (s >= 0) {
         out[o] = colours[3 * s]
         out[o + 1] = colours[3 * s + 1]
@@ -368,15 +400,16 @@ export function fillUnderpaint(f: UnderpaintField, colours: Float32Array): Float
   return out
 }
 
-// The sample of mark m nearest lattice position (fx, fy) (in cells, the centre of cell c at c), within 2 cells; -1 if none.
-function nearestSample(f: UnderpaintField, fx: number, fy: number, m: number): number {
+// The sample of mark m (and family fam, or either with fam < 0) nearest lattice position (fx, fy) (in cells, the centre of
+// cell c at c), within 2 cells; -1 if none.
+function nearestSample(f: UnderpaintField, fx: number, fy: number, m: number, fam: number): number {
   const cx0 = Math.round(fx)
   const cy0 = Math.round(fy)
   let best = -1
   let bd = Number.POSITIVE_INFINITY
   for (let cy = Math.max(0, cy0 - 2); cy <= Math.min(f.lh - 1, cy0 + 2); cy++) {
     for (let cx = Math.max(0, cx0 - 2); cx <= Math.min(f.lw - 1, cx0 + 2); cx++) {
-      const s = sampleOf(f, cy * f.lw + cx, m)
+      const s = sampleOf(f, cy * f.lw + cx, m, fam)
       if (s < 0) continue
       const d = (cx - fx) ** 2 + (cy - fy) ** 2
       if (d < bd) {

@@ -33,7 +33,7 @@ import { makeCurve, type Curve } from './curve'
 import { extractEdges, type EdgeRun } from './edges'
 import { lineStrokes } from './lines'
 import { sideOf } from './particles'
-import { colourOfDraft, type RecipeEnv } from './recipe'
+import { colourOfDraft, lightnessAtValue, type RecipeEnv } from './recipe'
 import { segmentPlanes } from './planes'
 import { dabStrokes, particleStrokes, scumbleMask } from './roles'
 import { packStrokes, type PaintCtx, type StrokeDraft } from './strokes'
@@ -338,7 +338,12 @@ export function recolourFrame(previous: PaintFrame, params: PaintParams): PaintF
   const { drafts, field } = held
   const curve = curveFor(params)
   const env = recipeEnv(params, curve, groundLocal(params))
-  for (const d of drafts) if (d.colour) d.lab = colourOfDraft(d.colour, env)
+  for (const d of drafts) {
+    if (!d.colour) continue
+    d.lab = colourOfDraft(d.colour, env)
+    // the bound of the value rule is a colour too (the recipe at the family's bound value): made again with the colour
+    if (d.fam !== undefined && d.uBound !== undefined) d.lBound = lightnessAtValue(d.colour, d.uBound, env)
+  }
   const { batch, loads, byRole } = packStrokes(drafts, params)
   const frame: PaintFrame = {
     strokes: batch,

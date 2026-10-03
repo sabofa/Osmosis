@@ -40,9 +40,9 @@ export interface PaintParams {
   }
   // How strokes are detected and assigned their role (§3.7).
   detect: {
-    // Form strokes go on particles whose value is within this band (u units)
-    // of the terminator (the half-tone/core boundary).
-    formBand: number
+    // Form strokes go on particles within this band of the terminator, in N·L units (the surface turns from
+    // the key light at N·L = 0). It was `formBand` in u units: a saved preset's old key is ignored.
+    formBandNL: number
     // Scumble goes where |∇u| per CSS px is below this over at least
     // scumbleMinPx (a wide transition).
     scumbleGradient: number
@@ -246,7 +246,7 @@ export const DEFAULT_PAINT_PARAMS: PaintParams = {
   },
   environment: { hue: 250, chroma: 0.02, absorption: 0.3, occlusion: 0.35, occlusionRadiusPx: 14 },
   detect: {
-    formBand: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
+    formBandNL: 0.18, scumbleGradient: 0.004, scumbleMinPx: 6, dabTopFraction: 0.015, dabMinPx: 12,
     glazeBelow: 0.4, reflectedMin: 0.04, edgeMinContrast: 0.05, edgeReachPx: 20,
   },
   // The key light is the mockup's, camera-relative: from 56 degrees to the viewer's left and 27 up (its CAMLIGHT
@@ -343,7 +343,7 @@ export const PARAM_SCHEMA: ParamSpec[] = [
   { path: 'environment.occlusionRadiusPx', label: 'Occlusion radius (px)', group: 'Environment', min: 2, max: 60, step: 1 },
   ...(
     [
-      ['formBand', 'Form band (N·L)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
+      ['formBandNL', 'Form band (N·L)', 0, 0.5, 0.005], ['scumbleGradient', 'Scumble below |∇u| per px', 0, 0.05, 0.0005],
       ['scumbleMinPx', 'Scumble min width (px)', 0, 40, 1], ['dabTopFraction', 'Dab top fraction', 0, 0.2, 0.001],
       ['dabMinPx', 'Dab min spacing (px)', 0, 80, 1], ['glazeBelow', 'Glaze below u', 0, 1, 0.01],
       ['reflectedMin', 'Reflected min bounce', 0, 0.3, 0.005], ['edgeMinContrast', 'Edge min contrast', 0, 0.3, 0.005],
