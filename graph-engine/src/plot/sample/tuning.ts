@@ -39,3 +39,48 @@ export const LOCATE = {
   // coarse box are told apart by the twin, so brackets that wide hold crowds.
   unresolvedLeaves: 4,
 }
+
+// The one-sided limits (limits.ts): what a trouble spot is, read from the curve's
+// values at a geometric run of offsets on each side of it. Distances are screen
+// pixels throughout, so a limit is "reached" when the eye cannot tell the samples
+// from it.
+export const LIMITS = {
+  // The offsets are h0 / shrink^k for k = 0 … steps. From the step worth 4 px, 4^12
+  // takes the last one to about 6e-9 in a 20-unit view: far enough in for any
+  // limit that converges at a pixel-visible rate, and not so far that the offsets
+  // reach the cancellation noise. Each step is a factor of 4, so 12 cover seven decades.
+  steps: 12,
+  shrink: 4,
+  // The offsets stop at minRel * max(1, |tc|): below it cancellation noise, which
+  // grows like machine epsilon / h, is no longer under a pixel's tenth. For
+  // (x^2 - 1)/(x - 1) it is 4e-6 px at 1e-9 and reaches a tenth of a pixel near 4e-14;
+  // a worse-conditioned function, or a more zoomed view, reaches it at a larger offset,
+  // which is the reason for the margin.
+  minRel: 1e-9,
+  // A side converges when its last `window` finite samples lie within convergePx of
+  // each other: a shrinking oscillation (x sin(1/x)) is inside the window when its
+  // amplitude is. Four samples are a factor of 64 apart in offset. sqrt(x) at 0, the
+  // slowest edge that is common, spreads 0.022 px over them in a 20-unit view: under
+  // half of convergePx, and a window of six samples would fail it.
+  window: 4,
+  // A twentieth of a pixel: a limit and a sample this close are drawn on the same dot.
+  // It is also what "equal" means when two limits, or a limit and a value, are compared.
+  convergePx: 0.05,
+  // The geometric test: the last 3 differences must each be at most this much of the
+  // one before. A smooth limit shrinks them 4-fold (0.25); x^0.1 shrinks them 0.87-fold
+  // and is rejected by it (its tail is six pixels), so this is not where slow
+  // convergence is let in. The tail it estimates is d r / (1 - r): bounded by 9 d here.
+  convergeRatio: 0.9,
+  // The divergence test: each step of the distance from the first sample is at least
+  // this much of the one before. ln(x) holds it constant (1.0), 1/x grows it 4-fold,
+  // and x^0.1, whose steps shrink 0.87-fold, is left out. Slower convergence than
+  // about x^0.03 cannot be told from ln(x) by 13 samples; it reads as divergence.
+  divergeRatio: 0.95,
+  // The run of steps (divergeRun + 1 samples) the divergence test looks at: 5 steps of
+  // ln(x) are 5 * 55 px, past any noise, and 5 steps of 1/x are 4^5-fold.
+  divergeRun: 5,
+  // The last this-many samples all NaN make a side undefined. Fewer is not enough: a
+  // function defined on a scatter of points (sqrt(sin(1/x)) near 0) is NaN at some
+  // offsets and finite at others, and a stray NaN at the end is not a domain edge.
+  undefinedRun: 3,
+}
