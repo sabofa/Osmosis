@@ -375,6 +375,7 @@ describe('the silhouette strokes', () => {
         }
       }
       expect(n).toBeGreaterThan(15)
+      if (process.env.FRAME_PRINT) console.log(`silhouette seeds, a turn to az ${az}: ${same} of ${n} strokes keep their seed`)
       return same / n
     }
     expect(kept(20.5)).toBeGreaterThan(0.6)

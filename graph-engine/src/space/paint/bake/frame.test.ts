@@ -800,6 +800,7 @@ describe('frameFromBake: the baked strokes of a view', () => {
       for (let q = 0; q < PP; q++) errs.push(Math.abs(batch.width[PP * o + q] - w[q]) / Math.max(w[q], 0.35))
     }
     errs.sort((x, y) => x - y)
+    if (process.env.FRAME_PRINT) console.log(`width, four foreshortening nodes against every point: ${errs.length} widths, median ${errs[Math.floor(0.5 * errs.length)].toFixed(5)}, 95th percentile ${errs[Math.floor(0.95 * errs.length)].toFixed(5)}, 99th ${errs[Math.floor(0.99 * errs.length)].toFixed(5)}, max ${errs[errs.length - 1].toFixed(4)}`)
     expect(errs.length).toBeGreaterThan(1000)
     // (the reading has its own error: the sphere's normal is the radius, the mesh's own is the facet's)
     expect(errs[Math.floor(0.95 * errs.length)]).toBeLessThan(0.05)
