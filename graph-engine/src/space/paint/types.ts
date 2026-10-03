@@ -43,6 +43,11 @@ export interface ParticleSet {
   rank: Float32Array // seeded, [0, 1)
   cell: Uint32Array // surface cell id for brush loads (§3.5)
   seed: Uint32Array
+  // Where each particle was seeded, for the bake and its diagnostics (bake/types.ts): the source triangle (index into the
+  // mark's `indices / 3`) and its barycentric weights b1 and b2 of the triangle's second and third vertices (the first's is
+  // 1 - b1 - b2, as TriangleHit in space/pick/bvh.ts). Absent on a set made before they existed.
+  tri?: Uint32Array
+  bary?: Float32Array // 2 per particle
 }
 
 // The camera and light for one frame. Matrices are column-major Float32Array(16).
