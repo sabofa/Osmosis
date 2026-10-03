@@ -13,9 +13,10 @@ export interface Bounds {
 }
 
 // The identity of a plotted thing: which statement it came from and what it is
-// within that statement ('curve', 'hole.0', 'asymptote.1', ...). Stable across
-// rebuilds, so a pan keeps a mark's identity and later work (the pen's wobble,
-// a hover readout) can key on it instead of on a list position.
+// within that statement ('curve', 'hole.0', 'asymptote.1', ...). Meant to let
+// later work (the pen's wobble, a hover readout) key on it instead of on a list
+// position. Today a curve's id is stable across rebuilds, but an
+// 'asymptote.<k>' renumbers as poles enter and leave the view.
 export interface MarkId {
   statement: number
   object: string
@@ -45,9 +46,12 @@ export type MarkRole = 'hole' | 'endpoint' | 'value' // P5 adds 'feature'
 export type SceneObject =
   // A plotted curve as chains of Float64 world-coordinate vertices, each with
   // its parameter. `breaks` are where the curve is mathematically interrupted
-  // (a pole, a jump, the edge of its domain) — the chains stop there, and the
-  // list says why, so a gap is never silent. One object per statement; a
-  // circle is the same shape with one closed chain and no breaks.
+  // (a pole, a jump, the edge of its domain). It is not yet complete: the
+  // interim uniform sampler records only the leading edge of a gap, and a
+  // domain edge with no gap in the samples records nothing. One curve per
+  // plotted statement, except that a construction statement can yield several
+  // (one per circle); a circle is one closed chain with no breaks, and a
+  // tangent or a regression line is one two-vertex chain across the view.
   | { kind: 'curve'; id: MarkId; chains: Chain[]; breaks: Break[]; dashed?: boolean; color?: string | null }
   // A typed point on a curve: a hole or an endpoint (or a plain value), open or
   // filled. Open means the curve does not take the value there, so the renderer
@@ -121,7 +125,7 @@ export type SceneObject =
   // from `through`.
   // `role: 'asymptote'` marks a guide rather than a construction: it is drawn
   // dashed, so it reads as "the curve approaches this" and not as part of the
-  // curve. A tangent or a regression line is a plain solid `line` with an id.
+  // curve.
   | { kind: 'line'; id?: MarkId; through: Vec2; direction: Vec2; extent: 'infinite' | 'ray'; role?: 'asymptote'; color?: string | null }
   // Flat triangle list (groups of 3 points) for a filled inequality region.
   | { kind: 'region'; triangles: Vec2[]; color?: string | null }

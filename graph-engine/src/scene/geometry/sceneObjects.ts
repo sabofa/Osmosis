@@ -60,17 +60,19 @@ export function polygonObjects(vertices: { label: string; position: Vec2 }[], co
 
 // One geometry value as scene objects. A segment is already finite so it
 // draws as a plain segment; an infinite line or a ray is emitted UNCLIPPED for
-// the renderer to clip against the live view (see render/clipLine.ts). `id` is
-// the identity a circle's curve carries: the statement it came from and the
-// name it is bound to.
-export function geometryObjectToScene(object: GeometryObject, label: string | null, color: string | null, id: MarkId): SceneObject[] {
+// the renderer to clip against the live view (see render/clipLine.ts). `circleId`
+// is the identity a circle's curve carries, so only a circle needs one: the
+// statement it came from, and the name it is bound to or its place among that
+// statement's circles.
+export function geometryObjectToScene(object: GeometryObject, label: string | null, color: string | null, circleId?: MarkId): SceneObject[] {
   switch (object.kind) {
     case 'point':
       // Analytically resolved, not read off a sampled curve, so hover can
       // report these digit for digit (see `exact` in scene/types.ts).
       return [{ kind: 'point', label, position: object.at, color, exact: true }]
     case 'circle':
-      return [circleCurve(object.center, object.radius, color, id)]
+      if (!circleId) throw new Error('a circle needs an identity')
+      return [circleCurve(object.center, object.radius, color, circleId)]
     case 'line':
       if (object.extent === 'segment') return [{ kind: 'segment', from: object.a, to: object.b, color }]
       return [

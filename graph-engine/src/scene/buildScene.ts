@@ -478,22 +478,27 @@ function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, sc
   return pairs.length > 0 ? [{ kind: 'segments', pairs, color: statement.color }] : []
 }
 
-// Numeric tangent (central difference) to `body` at x = at: an unclipped line
-// through (a, f(a)), which the renderer clips to whatever is in view.
-function buildTangent(statement: Statement & { kind: 'tangent' }, statementIndex: number, scope: MathScope): SceneObject[] {
+// Numeric tangent (central difference) to `body` at x = at, drawn across the
+// visible domain: a curve of one two-vertex chain from the left edge of the
+// view to the right (the parameter is x), so it keeps the thin curve ribbon
+// and stays hoverable like any curve.
+function buildTangent(statement: Statement & { kind: 'tangent' }, statementIndex: number, bounds: Bounds, scope: MathScope): SceneObject[] {
   const a = constant(statement.at, scope)
   const f = compileScalar(statement.body, ['x'], scope)
   const fa = f(a)
   const h = 1e-4
   const slope = (f(a + h) - f(a - h)) / (2 * h)
   const color = statement.color ?? 'orange'
+  const line: Vec2[] = [
+    { x: bounds.xMin, y: fa + slope * (bounds.xMin - a) },
+    { x: bounds.xMax, y: fa + slope * (bounds.xMax - a) },
+  ]
   return [
     {
-      kind: 'line',
+      kind: 'curve',
       id: { statement: statementIndex, object: 'tangent' },
-      through: { x: a, y: fa },
-      direction: { x: 1, y: slope },
-      extent: 'infinite',
+      chains: [chainOf(line, [bounds.xMin, bounds.xMax])],
+      breaks: [],
       color,
     },
     { kind: 'point', label: null, position: { x: a, y: fa }, color },
@@ -554,7 +559,7 @@ function linearRegression(points: Vec2[]) {
   return { slope, intercept, r }
 }
 
-function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex: number, scope: MathScope): { objects: SceneObject[]; regression: Scene['regression'] } {
+function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex: number, bounds: Bounds, scope: MathScope): { objects: SceneObject[]; regression: Scene['regression'] } {
   const points: Vec2[] = statement.points.map(([xExpr, yExpr]) => ({
     x: constant(xExpr, scope),
     y: constant(yExpr, scope),
@@ -562,14 +567,18 @@ function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex
   const objects: SceneObject[] = points.map((p) => ({ kind: 'point', label: null, position: p, color: statement.color }))
   if (points.length < 2) return { objects, regression: null }
 
-  // The fitted line is unclipped, like a tangent: the renderer clips it to the view.
+  // The fitted line across the visible domain, as a tangent is: one two-vertex
+  // chain from the left edge of the view to the right (the parameter is x).
   const regression = linearRegression(points)
+  const line: Vec2[] = [
+    { x: bounds.xMin, y: regression.slope * bounds.xMin + regression.intercept },
+    { x: bounds.xMax, y: regression.slope * bounds.xMax + regression.intercept },
+  ]
   objects.push({
-    kind: 'line',
+    kind: 'curve',
     id: { statement: statementIndex, object: 'regression' },
-    through: { x: 0, y: regression.intercept },
-    direction: { x: 1, y: regression.slope },
-    extent: 'infinite',
+    chains: [chainOf(line, [bounds.xMin, bounds.xMax])],
+    breaks: [],
     color: statement.color,
   })
   return { objects, regression }
@@ -638,9 +647,9 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
       } else if (statement.kind === 'field') {
         objects.push(...buildField(statement, bounds, scope))
       } else if (statement.kind === 'tangent') {
-        objects.push(...buildTangent(statement, statementIndex, scope))
+        objects.push(...buildTangent(statement, statementIndex, bounds, scope))
       } else if (statement.kind === 'scatter') {
-        const built = buildScatter(statement, statementIndex, scope)
+        const built = buildScatter(statement, statementIndex, bounds, scope)
         objects.push(...built.objects)
         if (built.regression) regression = built.regression
       } else if (statement.kind === 'animatedPoint') {

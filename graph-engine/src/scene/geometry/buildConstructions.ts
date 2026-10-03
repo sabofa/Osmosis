@@ -1,7 +1,7 @@
 import type { GraphConfig } from '../../parser/config'
 import { evalExpr, type FunctionTable } from '../../parser/evalExpr'
 import type { Construction, Expr, GeometryRef, PlaneForm, Statement, TriangleSlot } from '../../parser/types'
-import type { SceneError, SceneObject, Vec2 } from '../types'
+import type { MarkId, SceneError, SceneObject, Vec2 } from '../types'
 import { centroid, circumcenter, circumcircle, incenter, incircle, orthocenter } from './centres'
 import { chord, diameter, radiusTo, secantThrough, tangentAt, tangentsFrom } from './circles'
 import { dilate, divide, foot, midpoint, reflect, rotate, translate } from './derive'
@@ -287,18 +287,23 @@ export function buildConstructions(
 
       const objects: SceneObject[] = []
       const values: { name: string | null; object: GeometryObject }[] = []
+      // A circle's curve is identified by this statement and the name the circle
+      // is bound to, or else its place among the statement's circles (circle.0
+      // is the first). Only the scene objects carry it — geometryByStatement,
+      // which the figure renderer reads, is unchanged.
+      let circles = 0
       results.forEach((result, i) => {
         const name = statement.names[i] ?? null
         if (name) {
           scope.bind(name, result)
           if (result.kind === 'point') points.set(name, result.at)
         }
-        // The identity is for a circle's curve: this statement, and the name it
-        // is bound to (or its place among the statement's results). Only the
-        // scene objects carry it — geometryByStatement, which the figure
-        // renderer reads, is unchanged.
-        const id = { statement: index, object: name ?? `circle.${i}` }
-        objects.push(...geometryObjectToScene(result, result.kind === 'point' ? name : null, statement.color, id))
+        let circleId: MarkId | undefined
+        if (result.kind === 'circle') {
+          const k = circles++
+          circleId = { statement: index, object: name ?? `circle.${k}` }
+        }
+        objects.push(...geometryObjectToScene(result, result.kind === 'point' ? name : null, statement.color, circleId))
         values.push({ name, object: result })
       })
       objectsByStatement.set(index, objects)

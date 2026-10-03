@@ -19,6 +19,8 @@ export function toRenderItems(objects: readonly SceneObject[], bounds: Bounds): 
   for (const obj of objects) {
     switch (obj.kind) {
       case 'curve':
+        // A curve's `dashed` is dropped here: nothing sets it yet, and a dashed
+        // curve item arrives with its first producer.
         for (const chain of obj.chains) {
           const points = chainPoints(chain)
           if (points.length < 2) continue

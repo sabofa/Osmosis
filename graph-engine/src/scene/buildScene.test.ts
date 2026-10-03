@@ -890,13 +890,15 @@ describe('the 2D engine on the kernel (calc P1)', () => {
   it('a tangent line through a defined function uses the kernel', () => {
     const scene = sceneOf('f(x) = x^2\ntangent: f(x) at x = 1')
     expect(scene.errors).toEqual([])
-    const line = scene.objects.find((o) => o.kind === 'line')
-    if (line?.kind !== 'line') throw new Error('expected the tangent line')
+    const line = scene.objects.find((o) => o.kind === 'curve')
+    if (line?.kind !== 'curve') throw new Error('expected the tangent line')
     expect(line.id).toEqual({ statement: 1, object: 'tangent' })
+    expect(line.chains).toHaveLength(1)
+    const [first, last] = chainPoints(line.chains[0])
+    expect(line.chains[0].param).toEqual(Float64Array.from([-10, 10]))
     // y = 1 + 2(x - 1) at the window's left and right edges.
-    const at = (x: number) => line.through.y + ((x - line.through.x) * line.direction.y) / line.direction.x
-    expect(at(-10)).toBeCloseTo(1 + 2 * (-10 - 1), 4)
-    expect(at(10)).toBeCloseTo(1 + 2 * (10 - 1), 4)
+    expect(first.y).toBeCloseTo(1 + 2 * (-10 - 1), 4)
+    expect(last.y).toBeCloseTo(1 + 2 * (10 - 1), 4)
   })
 
   it('a statement that does not compile feeds no feature points: its body, its new-shape if clause, or its old-shape one', () => {
@@ -1006,13 +1008,30 @@ describe('the plot contract (calc P2)', () => {
     for (let i = 0; i < chain.param.length; i++) expect(chain.xy[2 * i]).toBe(chain.param[i])
   })
 
-  it('records the parameter of a parametric curve and of a polar one at each vertex', () => {
+  it('records the parameter of a parametric curve at each vertex', () => {
     const parametric = sceneOf('(cos(t), sin(t)) for t in [0, 6]')
     const curve = parametric.objects.find((o) => o.kind === 'curve')
     if (curve?.kind !== 'curve') throw new Error('unreachable')
     expect(curve.chains).toHaveLength(1)
     expect(curve.chains[0].param[0]).toBe(0)
     expect(curve.chains[0].param[curve.chains[0].param.length - 1]).toBeCloseTo(6, 12)
+  })
+
+  // The parameter is theta as the statement writes it, not the radians the
+  // vertex is plotted at: in degrees, a quarter turn is 90, and the vertex there
+  // sits on the y axis.
+  it("records a polar curve's parameter as theta in the statement's own angle unit", () => {
+    const polar = sceneOf('@angle: degrees\nr = 2 for theta in [0, 90]')
+    expect(polar.errors).toEqual([])
+    const curve = polar.objects.find((o) => o.kind === 'curve')
+    if (curve?.kind !== 'curve') throw new Error('unreachable')
+    expect(curve.chains).toHaveLength(1)
+    const { param, xy } = curve.chains[0]
+    const last = param.length - 1
+    expect(param[0]).toBe(0)
+    expect(param[last]).toBeCloseTo(90, 12)
+    expect(xy[2 * last]).toBeCloseTo(0, 9)
+    expect(xy[2 * last + 1]).toBeCloseTo(2, 9)
   })
 
   it('records an out-of-domain split as an edge break at the first sample outside', () => {
@@ -1055,18 +1074,25 @@ describe('the plot contract (calc P2)', () => {
     expect(curve.breaks.map((b) => b.kind)).toEqual(['pole'])
   })
 
-  it("draws a scatter's regression as an unclipped line through its intercept", () => {
+  it("draws a scatter's regression as a two-vertex curve across the view", () => {
     const scene = sceneOf('scatter: (1, 2), (2, 4), (3, 6)')
-    const line = scene.objects.find((o) => o.kind === 'line')
-    if (line?.kind !== 'line') throw new Error('expected the regression line')
+    const curves = scene.objects.filter((o) => o.kind === 'curve')
+    expect(curves).toHaveLength(1)
+    const line = curves[0]
+    if (line.kind !== 'curve') throw new Error('expected the regression line')
     expect(line.id).toEqual({ statement: 0, object: 'regression' })
-    expect(line.through.x).toBe(0)
-    expect(line.through.y).toBeCloseTo(0, 9)
-    expect(line.direction.y / line.direction.x).toBeCloseTo(2, 9)
-    expect(scene.objects.some((o) => o.kind === 'curve')).toBe(false)
+    expect(line.breaks).toEqual([])
+    expect(line.chains).toHaveLength(1)
+    expect(line.chains[0].param).toEqual(Float64Array.from([-10, 10]))
+    // y = 2x, at the window's left and right edges.
+    const [first, last] = chainPoints(line.chains[0])
+    expect(first.y).toBeCloseTo(-20, 9)
+    expect(last.y).toBeCloseTo(20, 9)
+    // The line is a curve, not a guide: nothing is left for the renderer to clip.
+    expect(scene.objects.some((o) => o.kind === 'line')).toBe(false)
   })
 
-  it("names a construction circle's curve by its bound name, else by its place among the results", () => {
+  it("names a construction circle's curve by its bound name, else by its place among the statement's circles", () => {
     const named = sceneOf('A = (0, 0)\nO = circle A, 2')
     const bound = named.objects.find((o) => o.kind === 'curve')
     if (bound?.kind !== 'curve') throw new Error('unreachable')
