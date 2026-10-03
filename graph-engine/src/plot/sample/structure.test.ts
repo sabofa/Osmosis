@@ -220,6 +220,16 @@ describe('binder bodies', () => {
   it('gives nothing for an empty range', () => {
     expect(rows('sum(k = 5 to 1, 1/(x - k))')).toEqual([])
   })
+  it('drops what reads the bound name when a bound is not a safe integer (and ends)', () => {
+    // 1e20 is whole to Number.isInteger, and n++ would never change it.
+    expect(rows('sum(k = 1e20 to 1e20, 1/(x - k))')).toEqual([])
+    expect(rows('sum(k = 1 to 1/0, 1/(x - k))')).toEqual([])
+    expect(rows('sum(k = 9007199254740993 to 9007199254740994, 1/(x - k))')).toEqual([])
+  })
+  it('drops what reads the bound name when a bound cannot be computed, and does not throw', () => {
+    // gamma takes one argument: the curve's own compile reports that.
+    expect(rows('sum(k = 1 to gamma(1, 2), 1/(x - k))')).toEqual([])
+  })
   it('never unrolls an integral: a body generator that reads the variable of integration is dropped', () => {
     expect(rows('integral(t = 0 to x, 1/(t - 2))')).toEqual([])
     expect(rows('integral(t = 0 to 5, 1/(x - t))')).toEqual([])

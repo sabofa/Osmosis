@@ -31,12 +31,14 @@
 // own domain, pole or step. When one expression is both, the seam wins.
 //
 // The walk does not validate the expression: a call with the wrong number of
-// arguments gets no rule, and the compile is left to say so. The one thing it can
-// throw is the compile's own refusal of a derivative (one that is too large, or of
-// a function that is not there), from expanding it; the sampler compiles the curve
-// first and reports that refusal before it walks.
+// arguments gets no rule, a binder bound the compile refuses is no constant, and the
+// compile is left to say so. The one thing it can throw is the compile's own refusal
+// of a derivative (one that is too large, or of a function that is not there), from
+// expanding it; the sampler compiles the curve first and reports that refusal before
+// it walks.
 
 import { builtinArity, compileScalar, freeVariablesDeep } from '../../math/compile'
+import { CompileError } from '../../math/errors'
 import { add, call, div, mul, num, sub, substitute, varNames } from '../../math/expr'
 import { expandPrime } from '../../math/prime'
 import { BINDERS, comparisonOp, isReserved } from '../../math/reserved'
@@ -269,12 +271,20 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope): 
 
   // The values a sum or product's name takes when its bounds are constants and whole
   // and few; null when they are not. Both bounds must read no name (a @param or the
-  // plot variable would): the document's constants and pi are fine.
+  // plot variable would): the document's constants and pi are fine. Whole means a safe
+  // integer, as in the compile's loops: past 2^53 n++ stops changing n. A bound the
+  // compile refuses (a call with the wrong arguments) is no constant here either; the
+  // curve's own compile reports it.
   function unrolledTerms(lo: Expr, hi: Expr): readonly number[] | null {
     const constant = (bound: Expr): number | null => {
       if (freeVariablesDeep(bound, scope).size > 0) return null
-      const value = compileScalar(bound, [], scope)()
-      return Number.isInteger(value) ? value : null
+      try {
+        const value = compileScalar(bound, [], scope)()
+        return Number.isSafeInteger(value) ? value : null
+      } catch (err) {
+        if (err instanceof CompileError) return null
+        throw err
+      }
     }
     const first = constant(lo)
     const last = constant(hi)

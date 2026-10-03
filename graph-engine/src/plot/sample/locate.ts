@@ -49,9 +49,13 @@ import { LOCATE } from './tuning'
 import type { EvalCounter } from './types'
 
 export interface Zero { t: number; origin: Origin; why: string }
-// `truncated`: a budget or a cap ended the search before it was done, or there are
-// more zeros than maxZeros and the ones farthest from the centre of the range are
-// left out. What was found is real; what is missing is not known.
+// `truncated`: the result may be missing zeros, and not by a known amount. A budget
+// or a cap ended the search before it was done; or a cluster was too crowded for its
+// samples to count (cos(1/x) near 0); or there are more zeros than maxZeros and the
+// ones farthest from the centre of the range are left out.
+// What is reported is a place where the scalar is exactly 0 or changes sign (a pole
+// counts), the two ends of a stretch of zeros, or an even zero (a minimum of |g|)
+// at which the twin, asked at the tolerance, cannot exclude zero, or g is 0.
 export interface LocateResult { zeros: Zero[]; truncated: boolean }
 
 type Scalar = (t: number) => number
@@ -76,14 +80,18 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
     const g: Scalar = compileScalar(gen.expr, [param], scope)
     const gi = compileInterval(gen.expr, [param], scope)
     const budget = Math.min(LOCATE.intervalsPerGenerator, LOCATE.intervalsTotal - spent)
-    const found = isolate(g, gi, t0, t1, coarse, budget, counter)
+    const found = isolate(g, gi, t0, t1, budget, counter)
     spent += found.spent
     if (found.cut) truncated = true
     // Whether the twin, asked about a box of a few tolerances round t, still cannot
-    // exclude zero. Out of budget it is not asked, and the candidate stands.
+    // exclude zero. Out of budget it is not asked, and the candidate stands only if
+    // g is exactly 0 there: a minimum of |g| that is not zero must not become one.
     const probe = iv()
     const confirm = (t: number): boolean => {
-      if (spent >= LOCATE.intervalsTotal) return true
+      if (spent >= LOCATE.intervalsTotal) {
+        counter.points++
+        return g(t) === 0
+      }
       const h = 4 * LOCATE.tolRel * Math.max(1, Math.abs(t))
       gi(probe, t - h, t + h)
       spent++
@@ -102,7 +110,7 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
 // Phase 1: the clusters of boxes over [t0, t1] on which the twin cannot exclude a
 // zero of g, in order, and whether the search was cut. `budget` is the most twin
 // evaluations to spend.
-function isolate(g: Scalar, gi: CompiledInterval, t0: number, t1: number, coarse: number, budget: number, counter: EvalCounter) {
+function isolate(g: Scalar, gi: CompiledInterval, t0: number, t1: number, budget: number, counter: EvalCounter) {
   const out = iv()
   const clusters: Cluster[] = []
   const add = (lo: number, hi: number) => {
@@ -110,7 +118,11 @@ function isolate(g: Scalar, gi: CompiledInterval, t0: number, t1: number, coarse
     if (last && lo <= last[1]) last[1] = Math.max(last[1], hi)
     else clusters.push([lo, hi])
   }
-  const stack: Cluster[] = [[t0, t1]]
+  // The coarse width is reached by depth, not by comparing widths: a box halved k times
+  // is range / 2^k only up to rounding, which on a window a few ulps wide could leave
+  // a box at the coarse width one halving short of it and double the work.
+  const depthLimit = Math.ceil(-Math.log2(LOCATE.coarseRel))
+  const stack: [number, number, number][] = [[t0, t1, 0]]
   let spent = 0
   let cut = false
   while (stack.length > 0) {
@@ -118,21 +130,24 @@ function isolate(g: Scalar, gi: CompiledInterval, t0: number, t1: number, coarse
       // What is left was not looked at, and may hold zeros: it is popped left to right
       // (the stack's order), and kept whole.
       cut = true
-      while (stack.length > 0) add(...stack.pop()!)
+      while (stack.length > 0) {
+        const [lo, hi] = stack.pop()!
+        add(lo, hi)
+      }
       break
     }
-    const [lo, hi] = stack.pop()!
+    const [lo, hi, depth] = stack.pop()!
     gi(out, lo, hi)
     spent++
     counter.intervals++
     if (isEmpty(out) || out.lo > 0 || out.hi < 0) continue
     const mid = lo + (hi - lo) / 2
-    const small = hi - lo <= Math.max(coarse, LOCATE.tolRel * Math.max(1, Math.abs(mid))) || mid <= lo || mid >= hi
+    const small = depth >= depthLimit || hi - lo <= LOCATE.tolRel * Math.max(1, Math.abs(mid)) || mid <= lo || mid >= hi
     if (small || (out.lo >= -ZERO_BAND && out.hi <= ZERO_BAND && zeroAt(g, [lo, mid, hi], counter))) {
       add(lo, hi)
       continue
     }
-    stack.push([mid, hi], [lo, mid]) // left first off the stack: clusters come out in order
+    stack.push([mid, hi, depth + 1], [lo, mid, depth + 1]) // left first off the stack: clusters come out in order
   }
   return { clusters, cut, spent }
 }
@@ -177,9 +192,12 @@ function resolve(g: Scalar, confirm: (t: number) => boolean, lo: number, hi: num
   }
 
   // Sign changes between neighbours (a zero sample next to them belongs to its run).
+  // crossing[i] says the pair (i, i + 1) is one.
+  const crossing: boolean[] = []
   let changes = 0
   for (let i = 0; i + 1 < n; i++) {
-    if (signed(v[i]) && signed(v[i + 1]) && (v[i] < 0) !== (v[i + 1] < 0)) {
+    crossing.push(signed(v[i]) && signed(v[i + 1]) && (v[i] < 0) !== (v[i + 1] < 0))
+    if (crossing[i]) {
       zeros.push(bisectSign(g, s[i], s[i + 1], v[i], counter))
       changes++
     }
@@ -188,22 +206,30 @@ function resolve(g: Scalar, confirm: (t: number) => boolean, lo: number, hi: num
   // boxes: zeros crowded closer than the samples, as cos(1/x) near 0 has, and the
   // bisections only count the sign changes the samples happen to see.
   const unresolved = changes >= 2 && hi - lo > LOCATE.unresolvedLeaves * leaf
-  if (zeros.length > 0) return { zeros, unresolved }
 
-  // No exact zero and no sign change: an even zero, or none. The lowest |g| sample
-  // is at, or next to, the minimum; |g| is searched over the two intervals around it.
-  // The twin could not exclude zero over the whole box, which holds when g only comes
-  // near zero (the ragged edge of the band round a double root, where the enclosure
-  // of an expanded square is wide): the minimum is a zero if the twin cannot exclude
-  // one round it either, at the tolerance, where it has no such slack.
-  let best = -1
+  // Even zeros, where g touches 0 and turns back. A cluster can hold any number of
+  // them next to anything else (the twin's band round an expanded double root is wide,
+  // so on a wide range it meets a simple root, or another double one), so every sample
+  // that is a local minimum of |g| gets a search, whatever else was found. |g| is
+  // searched over the two intervals around the sample by golden section. The twin
+  // could not exclude zero over the whole box, which holds when g only comes near
+  // zero (the ragged edge of the band, where the enclosure of an expanded square is
+  // wide), so a minimum is a zero if the twin cannot exclude one round it either, at
+  // the tolerance, where it has no such slack. A minimum next to a sign change is the
+  // change itself, already found.
   for (let i = 0; i < n; i++) {
-    if (Number.isFinite(v[i]) && (best < 0 || Math.abs(v[i]) < Math.abs(v[best]))) best = i
+    const m = magnitude(v[i])
+    if (!Number.isFinite(m) || m === 0) continue
+    if ((i > 0 && !(m < magnitude(v[i - 1]))) || (i < n - 1 && !(m <= magnitude(v[i + 1])))) continue
+    if (crossing[i - 1] || crossing[i]) continue
+    const t = golden(g, s[Math.max(0, i - 1)], s[Math.min(n - 1, i + 1)], counter)
+    if (confirm(t)) zeros.push(t)
   }
-  if (best < 0) return { zeros: [], unresolved }
-  const t = golden(g, s[Math.max(0, best - 1)], s[Math.min(n - 1, best + 1)], counter)
-  return { zeros: confirm(t) ? [t] : [], unresolved }
+  return { zeros, unresolved }
 }
+
+// |y|, with NaN as infinitely large: a sample that is not a number is never a minimum.
+const magnitude = (y: number) => (y === y ? Math.abs(y) : Infinity)
 
 // A value with a sign to compare: not NaN, not 0.
 const signed = (y: number) => y === y && y !== 0

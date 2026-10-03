@@ -128,10 +128,35 @@ describe('locateZeros, hard double zeros', () => {
   it('does so in a narrow window too, without running out of budget', () => {
     // The twin's band around the double root grows as the window shrinks (about
     // 2 sqrt(2/w) boxes of the coarse width w); the coarse width is sub-pixel, not tiny.
-    for (const [t0, t1] of [[0.9, 1.1], [0.5, 1.5]]) {
+    for (const [t0, t1] of [[0.9, 1.1], [0.5, 1.5], [0.995, 1.005], [0.999, 1.001], [0.9999, 1.0001]]) {
       const r = zerosOf('1/(x^2 - 2*x + 1)', t0, t1)
       near(r.zeros, [1], 1e-6)
       expect(r.truncated, `${t0}..${t1}`).toBe(false)
+    }
+  })
+  // An even zero in a cluster with something else in it. The twin's band round an expanded
+  // double root is wide, so on a wide window the root shares a cluster with a simple root
+  // or with another double one, and phase 2 used to look for an even zero only in a
+  // cluster that held nothing else.
+  describe('an even zero that shares its cluster', () => {
+    // [expression, windows, [zero, how exactly] ...]: an even zero of an expanded
+    // polynomial is only as exact as the polynomial (1e-5); a simple one is exact.
+    const EVEN = 1e-5
+    const SIMPLE = 1e-11
+    const cases: [string, [number, number][], [number, number][]][] = [
+      ['1/(x^3 - 4*x^2 + 5*x - 2)', [[-3, 3], [-75, 75], [-300, 300]], [[1, EVEN], [2, SIMPLE]]],
+      ['1/((x^2 - 2*x + 1)*(x - 1.03))', [[-3, 3], [-1, 3]], [[1, EVEN], [1.03, SIMPLE]]],
+      ['1/(x^4 - 6*x^3 + 13*x^2 - 12*x + 4)', [[-3, 4], [-15, 15], [-75, 75]], [[1, EVEN], [2, EVEN]]],
+    ]
+    for (const [text, windows, want] of cases) {
+      for (const [t0, t1] of windows) {
+        it(`finds ${want.map(([w]) => w).join(' and ')} of ${text} on [${t0}, ${t1}]`, () => {
+          const r = zerosOf(text, t0, t1)
+          expect(r.zeros.map((z) => z.t)).toHaveLength(want.length)
+          want.forEach(([w, tol], i) => expect(Math.abs(r.zeros[i].t - w)).toBeLessThan(tol))
+          expect(r.truncated).toBe(false)
+        })
+      }
     }
   })
   it('does so well inside the budget on a view-sized window', () => {
@@ -201,6 +226,19 @@ describe('locateZeros, budgets', () => {
     expect(r.zeros).toHaveLength(LOCATE.maxZeros)
     expect(Math.max(...r.zeros.map((z) => Math.abs(z.t)))).toBeLessThanOrEqual(32)
     near(r.zeros.slice(30, 35), [-2, -1, 0, 1, 2])
+  })
+  it('keeps an unchecked candidate out of budget only if g is exactly 0 there (tan(x) + 1/(x^2 + 1), total of 40)', () => {
+    // x^2 + 1 has no zero. With the total spent the twin cannot be asked about the
+    // minimum of |g| the samples find at 0, and that must not become a zero.
+    const was = LOCATE.intervalsTotal
+    LOCATE.intervalsTotal = 40
+    try {
+      const r = zerosOf('tan(x) + 1/(x^2 + 1)', -5, 5)
+      expect(r.truncated).toBe(true)
+      for (const z of r.zeros) expect(Math.abs(Math.cos(z.t)), `${z.t}`).toBeLessThan(1e-6)
+    } finally {
+      LOCATE.intervalsTotal = was
+    }
   })
   it('does not drop what a cut search had not reached: the boxes still waiting are looked at with the scalar', () => {
     // One twin evaluation, then out of budget. The whole range is left, as one cluster,

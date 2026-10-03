@@ -10,9 +10,14 @@ export const LOCATE = {
   // range are kept, and the result says it was cut. (The same number, times 8, is
   // the most separate brackets one generator may have before its search is cut.)
   maxZeros: 64,
-  // The twin evaluations one generator may spend.
-  intervalsPerGenerator: 6000,
-  // The twin evaluations one call may spend, over all its generators.
+  // The twin evaluations one generator may spend on its search: 2 / coarseRel, which
+  // bisecting the whole range down to the coarse width takes at most (2 * 2^12 - 1),
+  // so a generator's own budget never cuts the search short: the whole of a narrow
+  // window can be one hard zero's band (an expanded double root, zoomed in on). It
+  // stops a search that has not got to the coarse width because the call's total ran out.
+  intervalsPerGenerator: 8192,
+  // The twin evaluations one call may spend, over all its generators and the checks
+  // after them. This is the real limit.
   intervalsTotal: 20000,
   // A zero is located to tolRel * max(1, |t|): the width the bisections and the
   // golden-section search stop at.
