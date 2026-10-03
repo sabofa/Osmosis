@@ -50,9 +50,10 @@
 //     || lo > hi` to discard a cell, which is valid even under PARTIAL.
 //  8. The twin is proven against compileScalar and holds the same names, errors and loop budget. The
 //     budget is module-level (one evaluation at a time). Pass every declared variable's box: a variable
-//     with none is an empty box, so what reads it is empty and PARTIAL, not a quiet point at 0. (A
-//     variable the expression does not read does not matter, and y^0 is [1, 1], PARTIAL, for
-//     Math.pow(NaN, 0) is 1.) Compiling
+//     with none is usually an empty box, so what reads it is empty and PARTIAL, not a quiet point at 0.
+//     (A variable the expression does not read does not matter, and a function that answers a number at
+//     NaN passes that number on, still PARTIAL: y^0 is [1, 1], for Math.pow(NaN, 0) is 1, and
+//     hypot(y, 1/0) is [inf, inf], for Math.hypot(NaN, Infinity) is Infinity.) Compiling
 //     folds constants; a constant that reads no @param is computed by the first evaluation that reaches it
 //     (so a constant integral in a branch no box reaches costs nothing), one that reads a @param is read
 //     at call time, and evaluation makes no object or closure of its own (a few scalar functions box a
