@@ -31,7 +31,10 @@
 //    when Pm is within flatPx of the chord (of the chord's midpoint, which is stricter: see
 //    isFlat), the chord is at most maxSegPx long, and (the spike test) the enclosure is no
 //    taller or wider than spikeFactor times the span the samples cover, plus spikeSlackPx: a
-//    spike narrower than the sample spacing is in the enclosure and not in the samples.
+//    spike narrower than the sample spacing is in the enclosure and not in the samples. The
+//    test is asked only spikeDepth halvings below the start grid (deeper, the enclosure need
+//    only be finite): a loose enclosure never passes it, and without the bound a cancelling
+//    form was refined to the floor, to the cap.
 //    Otherwise, at the floor, accept anyway; else bisect.
 //  - An interval the twin does not certify stops being bisected at tuning.uncertifiedFloorPx (the
 //    floor for FULL, 1/2 px for COARSE: all that cannot be certified is decided by bisecting to
@@ -118,6 +121,9 @@ interface Core {
   // touches it.
   anchorLo: number
   anchorHi: number
+  // The narrowest interval (px) that is still asked the spike test: tuning.spikeDepth halvings below the
+  // start grid's own width, to rounding (set once the grid is laid).
+  spikeMinPx: number
   // What the columns of a band need, or undefined where there are none to be had: a call that was
   // not given a sink, or a curve with no axis to oscillate along (polar, parametric).
   bands: BandState | undefined
@@ -166,6 +172,7 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
     steepInView: false,
     anchorLo: ends.left.kind === 'anchor' ? a : Number.NaN,
     anchorHi: ends.right.kind === 'anchor' ? b : Number.NaN,
+    spikeMinPx: 0,
     bands: bands === undefined || fns.oscillationAxis === null ? undefined : bandState(bands, fns.oscillationAxis, tuning.bandSamples),
   }
 
@@ -177,6 +184,8 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
   if (!(n >= CORE.minStartIntervals)) n = CORE.minStartIntervals
   // The grid is always drawn, so it must not be able to outgrow the budget it is part of.
   n = Math.max(1, Math.min(n, Math.floor(tuning.budget.points)))
+  // (a width is halved from the grid's, so it is the target to rounding only)
+  c.spikeMinPx = (((b - a) * fns.pxPerT) / n) * 2 ** -tuning.spikeDepth * (1 - 1e-9)
   const ts = new Float64Array(n + 1)
   const xs = new Float64Array(n + 1)
   const ys = new Float64Array(n + 1)
@@ -242,7 +251,7 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     evalAt(c, tm)
     const xm = c.pt[0]
     const ym = c.pt[1]
-    if (isFinite2(xm, ym) && isFlat(c, xa, ya, xm, ym, xb, yb, encW, encH)) {
+    if (isFinite2(xm, ym) && isFlat(c, xa, ya, xm, ym, xb, yb, encW, encH, widthPx >= c.spikeMinPx)) {
       c.sink.segment(xa, ya, ta, xb, yb, tb)
       return
     }
@@ -404,8 +413,9 @@ function bisectAtMid(c: Core, ta: number, tm: number, tb: number, xa: number, ya
 }
 
 // Flat: Pm on the chord to within flatPx, the chord short, and the enclosure no wider than
-// the samples say (the spike test).
-function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: number, yb: number, encW: number, encH: number): boolean {
+// the samples say (the spike test). `spike` says whether the interval is shallow enough to be asked
+// that (tuning.spikeDepth): deeper, the enclosure need only be finite, as it always must be.
+function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: number, yb: number, encW: number, encH: number, spike: boolean): boolean {
   const px = c.screen.px
   const ax = xa * px.x
   const ay = ya * px.y
@@ -428,6 +438,7 @@ function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: num
   if (!(Math.sqrt(ex * ex + ey * ey) <= c.tune.flatPx)) return false
   const spanX = Math.max(ax, mx, bx) - Math.min(ax, mx, bx)
   const spanY = Math.max(ay, my, by) - Math.min(ay, my, by)
+  if (!spike) return Number.isFinite(encW) && Number.isFinite(encH)
   return encW <= c.tune.spikeFactor * spanX + c.tune.spikeSlackPx && encH <= c.tune.spikeFactor * spanY + c.tune.spikeSlackPx
 }
 

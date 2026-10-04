@@ -304,6 +304,20 @@ export interface Tuning {
   // (1/16 px) cannot be promised at any factor: only a sample that lands on it shows it.
   spikeFactor: number
   spikeSlackPx: number
+  // The spike test is asked of an interval only this many halvings below the start grid, at most: deeper, a
+  // certified interval is flat when its midpoint is (and its enclosure is finite: an infinite bound is still
+  // never certified). The twin's enclosure of a cancelling form (exp(x^2) - exp(x^2) + x) is as loose as its
+  // terms are large (e^100 at x = 10), so no interval was narrow enough for the test to pass before the floor,
+  // and that form capped the budget at FULL (30133 intervals, 39036 points, "drawn coarsely") where the same
+  // curve written x costs 301 intervals. Bounded at 3 it is 8933 intervals and 25417 points, with no note
+  // (4: 17933 and 34417; 2: 4369 and 20853, the points mostly the band columns tried over the loose
+  // intervals; 1: 2057 and 2357). 3 is the least that keeps the bands (band.test.ts), because a column
+  // is at most a pixel wide, which is 2 halvings below a 4 px start grid and 3 below COARSE's 8 px, and
+  // an oscillation that a column's samples step over is only refused as flat by this test. What it gives up: a spike
+  // narrower than half a pixel (FULL; 1 px at COARSE) is shown by the twin's enclosure no longer, only by a sample
+  // that lands on it, as a peak narrower than the floor always was. (A spike 1 px wide is drawn to within 1 px of its
+  // height at any offset, adaptive.test.ts.)
+  spikeDepth: number
   // The samples taken over a column of a band (BAND.samples, and why COARSE takes fewer).
   bandSamples: number
   // The clip box is the view widened by this fraction of its size on each side: a curve
@@ -316,7 +330,7 @@ export interface Tuning {
   budget: { points: number; intervals: number }
 }
 
-export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, uncertifiedFloorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, steepShrink: 0.55, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, uncertifiedFloorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, steepShrink: 0.55, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, spikeDepth: 3, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
 // COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
 // cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
 export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, uncertifiedFloorPx: 0.5, spikeFactor: 8, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }

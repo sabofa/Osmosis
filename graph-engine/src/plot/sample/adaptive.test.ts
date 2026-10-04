@@ -558,4 +558,21 @@ describe('sampleRange — the spike test', () => {
       expect((1 - m) * 40, `peak at ${c}`).toBeLessThanOrEqual(1)
     }
   })
+
+  // calc P2 task 8: the test is asked only spikeDepth halvings below the start grid. A cancelling form's enclosure
+  // never passes it (e^(x^2) is 1e43 at 10, and it is subtracted from itself), so it was refined to the floor, to the
+  // cap: 39036 points and 30133 intervals, drawn coarsely, where the curve is the line y = x.
+  it('does not refine a loose enclosure to the cap: exp(x^2) - exp(x^2) + x is one chain within its budget', () => {
+    const r = run('exp(x^2) - exp(x^2) + x')
+    expect(r.capped).toBe(false)
+    expect(r.counter.intervals).toBeLessThan(FULL.budget.intervals / 2)
+    expect(r.counter.points).toBeLessThan(FULL.budget.points / 2)
+    expect(r.chains).toHaveLength(1)
+    // the line y = x: every vertex on it
+    for (const p of chainPoints(r.chains[0])) expect(p.y).toBeCloseTo(p.x, 9)
+  })
+  it('is the bound that does it: asked at every level down to the floor (the old behaviour), the same curve caps its budget', () => {
+    const asked = run('exp(x^2) - exp(x^2) + x', { ...FULL, spikeDepth: 10 })
+    expect(asked.capped).toBe(true)
+  })
 })
