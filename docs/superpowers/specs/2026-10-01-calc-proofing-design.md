@@ -535,6 +535,25 @@ Boundaries stay dashed for strict operators and solid otherwise, as now.
 | `abs(x) + abs(y) = 1` (written with bars) | sharp corners |
 | `1 < x^2+y^2 < 4`, `x^2+y^2 < 4 and y > 0`, `y < ln(x)`, `xy > 1` | the annulus (area 3π), the half-disk (2π), no shading where undefined, a dashed strict boundary |
 
+### Decided before P3 (2026-10-04, from what P2 taught)
+
+- **The rules carry over unchanged.** Rule 1 holds at the leaf: a crossing is joined into a chain only through a crossing found by bisection on H, keyed by its edge; nothing joins across a pole or across an undefined cell. P2's notes, budgets and the counted cost (integrals charged by their integrand evaluations) apply as they are.
+- **One condition, three-valued.** The statement's comparison or chain, its `and`/`or` and its `if` clause become one condition `Expr`. The twin evaluates it per cell, and each comparison answers proven-true, proven-false or ambiguous. Anything that might be undefined is ambiguous and is subdivided; at a leaf, undefined counts as outside. An implicit curve's `if` clause clips its chains the same way. This retires v1's rule of keeping a piece by its centroid.
+- **Outlines from cancelled edges.**
+  - Kept pieces emit their directed boundary edges.
+  - Edges shared by two kept pieces cancel.
+  - The rest link into the even-odd rings. A whole cell's edges are split at leaf resolution, so pieces meet vertex to vertex, with no T-junctions.
+  - Each outline edge that lies on a comparison's zero set remembers which comparison produced it. The **boundary curves** are those edges, grouped into chains per comparison and dashed when its operator is strict. So the fill and its boundary are one geometry.
+- **`Chain.param` on an implicit curve** is cumulative arc length in world units:
+  - an open chain starts at its endpoint with the smaller (x, then y);
+  - a closed chain starts at its vertex with the smaller (x, then y) and runs counter-clockwise.
+
+  This start is not stable under pan. That is settled together with the ordinal mark ids before goal 2.
+- **Overscan, and transforming during a gesture.** The quadtree covers the view plus 25 % on each side, as curves do, and the slope field joins them. With every 2D plot object overscanned, a gesture transforms the last picture while the view stays inside the overscan of the last build and its scale within 1.5× either way. Otherwise it rebuilds coarsely. At settle it rebuilds in full, as the interaction budget intended.
+- **Leaves and budget.** Leaves are about 1 px at FULL and 4 px at COARSE. Each statement has a counted budget of cell and point evaluations; at the cap it coarsens with P2's notes and never draws a false crossing. The numbers live in `plot/implicit/tuning.ts`.
+- **Renderer.** Region outlines are triangulated with holes: rings are nested by containment, even depth is an outer ring and odd depth a hole. Dashed `curve` chains draw dashed. The legacy triangle `region` and the `segments` boundaries leave the 2D plot path. Space keeps importing `render/marchingSquares.ts` until it chooses otherwise.
+- **The corpus grows** by every row above, plus a seeded property test of random conics against their analytic shapes (component count, area, and every vertex within ½ px of the zero set).
+
 ## The frame (P4)
 
 ### Aspect and bounds
