@@ -392,7 +392,8 @@ describe('the torture corpus', () => {
         }, TIMEOUT)
       }
 
-      if (want.dense !== false) {
+      const dense = want.dense
+      if (dense !== false) {
         it('has no segment that spans a jump of the true curve (the true curve sampled densely over each segment)', () => {
           run.scenes().forEach((scene, i) => {
             const v = c.views[i]
@@ -403,7 +404,7 @@ describe('the torture corpus', () => {
               const truth = truthOf(statement, run.scope, run.parsed.config.angle)
               if (truth === null) continue
               const skip = anchorSkip(scene.objects, curve.id.statement, statement.kind === 'explicit' ? statement.independent : null, clip)
-              const found = firstBridge(curve.chains, truth, pxPerUnit(v), skip, want.dense?.segments ?? DENSE_SEGMENTS)
+              const found = firstBridge(curve.chains, truth, pxPerUnit(v), skip, dense?.segments ?? DENSE_SEGMENTS)
               expect(found.size, `view ${i}: the segment from ${found.from} to ${found.to} spans a jump of ${found.size} px (of ${found.checked} checked)`).toBe(0)
             }
           })
