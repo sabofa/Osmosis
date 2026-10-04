@@ -9,35 +9,47 @@
 // THE SIDES. A sample's inside is the figure's: its value uA and local colour are the baked ones (BakedSurface.uFront, uBack, local) at the
 // nearest refined vertex, found by walking down the distance over the surface's edges from the last sample's (the first of a piece through a spatial hash;
 // both cached per surface by its own positions array, which a recolour shares), on the
-// side that faces the eye (a closed mesh: side +1, its outside; an open one: the side the mesh is mostly seen from). The lowest value on the way in
+// side of the surface that is seen there (a closed mesh: side +1, its outside; an open sheet: read at each sample, below). The lowest value on the way in
 // (the model's uAmin: at a limb the normal turns fast, so a vertex a few px in can be lit where the outline itself is already in the shadow) is the
 // lowest u among the eye-facing vertices within PROBE_PX of the sample. The outside is the canvas (uB = the canvas value), or, where a G-buffer is
 // given and the pixel PROBE_PX outside the outline holds another mark, that pixel's raw value through the lighting and value curves (the G-buffer
-// may be a frame old: it is only ever read there). The screen's inward normal is against the side's own normal projected on the screen: at a limb a
+// may be a frame old: it is only ever read there). The screen's inward normal is against the seen side's own normal projected on the screen: at a limb a
 // surface normal points out of the figure.
+//
+// AN OPEN SHEET is seen from one side at one place of its outline and the other at another (a fold's outline: the sheet goes away from it on both sides of it,
+// the facing changing across it, and the sheet nearer the eye is the one that is seen; on a saddle the nearer one changes along the outline). So the side is
+// read at each sample, as the model's G-buffer read 3 px in would: what the eye sees PROBE_PX to a side of the outline, found by casting at that point of
+// the screen through the triangles round the sample's nearest vertex (SurfaceCaster), the side that has the sheet being the inside, and the side the surface
+// there shows the eye the side seen. The sides are the majority of 7 along the run, and a stretch is cut where they change.
 //
 // THE SCORE is the model's silhouette hardness (model/edges.ts edgeHardness, kind 1): c the contrast of the two sides, k 0.55, f the focal
 // emphasis about the AUTHORED focal points (BakedPainting.focal), s the light side, d 0, the world-position noise, lost under a contrast of 0.03,
 // and the outline of a form in shadow against light a found edge at least; then the class and the median of 7. The strokes of a stretch and their
-// colours are the bake's (edgeStrokes.ts), the colours made here with the model's own recipe functions and the sequential brush-load mix along the
-// outline, held to the shadow family's ceiling where the stretch is the outline of a form in shadow.
+// colours are the bake's (edgeStrokes.ts), the colours made here with the model's own recipe functions and a brush-load mix (one load for each stretch:
+// below), held to the shadow family's ceiling where the stretch is the outline of a form in shadow.
 //
-// VIEW STABILITY. Every seed comes from the position of a sample (the hash of its world position at 1/7 of a unit), never from its place in a run,
-// so a turn of the view does not reseed what has not moved.
+// VIEW STABILITY (the outline must not boil as the view turns). Nothing a stretch draws comes from its place in a run or in the frame. Each sample is named
+// by the cell of a coarse world lattice (KEY_FREQ) it is in, a name that is the same in every view; the outline is cut where a cell's key is the lowest of
+// its neighbourhood (the sites), and where the kind changes; a stretch follows a site, and its name, its seeds and its brush load are made from that site's
+// cell, the kind and its part; the pulls and bridges of a stretch are every PULL_STEP samples after the site, each seeded by its number there. The jitters
+// of a stretch (the brush's load and widths, the colours' jitter, the turn of a pull) are smooth world-space noise at its place (WorldDraw), and the brush
+// load of a stretch is its name's cell (LoadMixer.mixByCell), not a load that runs on through the strokes before it, so that what a stroke is mixed with
+// does not depend on which others are drawn. So a turn of the view slides a stretch's ends and changes its brush a little, and reseeds it only when the
+// outline crosses into another cell of the lattice.
 //
 // WHAT IS DIFFERENT FROM THE PER-FRAME MODEL'S: the inside is read at the outline, not 3 px in (the baked value at the nearest vertex, and the
 // lowest within PROBE_PX for the family test); the outside is the canvas unless a G-buffer says otherwise (hidden parts are the renderer's depth test's,
 // not clipped here); the colour of the figure's side is the local colour at the vertex (the model's: the mean of the mark's visible particles').
 
-import { randomFor } from '../../../style/random'
+import type { Random } from '../../../style/random'
 import type { MeshMark, SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type Oklab, type PaintView } from '../types'
 import { holdLightness, oklabToLinear } from '../model/colour'
-import { groundRecipe, segmentRun, silhouettePolylines, sideRecipeOf } from '../model/contours'
+import { groundRecipe, silhouettePolylines, sideRecipeOf } from '../model/contours'
 import { behaviourOf, edgeClassOf, edgeHardness, edgeNoiseSeed, EDGE_NOISE_FREQ, type EdgeTerms } from '../model/edges'
 import { curveFor, groundLocal, recipeEnv } from '../model/index'
-import { clamp, hash01, hash3, mix2, smooth } from '../model/math'
+import { clamp, hash01, hash3, mix2, smooth, valueNoise3 } from '../model/math'
 import { LoadMixer } from '../model/mix'
 import { colourOfDraft, colourOfRecipe, lightnessAtValue, type ColourRecipe, type ColourSource, type DraftColour, type RecipeEnv } from '../model/recipe'
 import { compileCurves, type CompiledCurves } from '../model/respond'
@@ -48,6 +60,9 @@ import { StrokeList } from './strokeList'
 import { HIDDEN_NA, type BakedPainting, type BakedSurface } from './types'
 
 const P = PATH_POINTS
+// The lattice (cells per world unit) whose cell names a sample: coarse, so that the outline, which moves a little over the surface as the view turns, is in
+// the same cell for most of a turn.
+export const KEY_FREQ = 1.0
 // Samples every this many CSS px of screen arc length.
 export const SILHOUETTE_STEP_PX = 2
 // A piece with fewer samples than this makes no stroke (16 px).
@@ -162,6 +177,8 @@ export class SurfaceIndex {
   nbr: Int32Array
   // Half the distance from each vertex to its nearest neighbour: a point nearer than this to a vertex has no nearer vertex (the triangle inequality).
   readonly gap: Float32Array
+  // The most neighbours any vertex has.
+  readonly maxDegree: number
 
   constructor(s: BakedSurface) {
     this.grid = new VertexGrid(s.positions, s.indices)
@@ -227,6 +244,9 @@ export class SurfaceIndex {
     start[nv] = w
     this.start = start
     this.nbr = this.nbr.slice(0, w)
+    let deg = 0
+    for (let v = 0; v < nv; v++) deg = Math.max(deg, start[v + 1] - start[v])
+    this.maxDegree = deg
     this.gap = new Float32Array(nv)
     for (let v = 0; v < nv; v++) {
       let least = Infinity
@@ -388,13 +408,16 @@ export interface SilhouetteRun {
   mark: number
   n: number
   // The sample's world point (on the mesh's silhouette polyline) and CSS px position, 3 and 2 per sample, and where it lies along the polyline `poly`
-  // (xyz per vertex): vertex index + the fraction of the next segment, so that a stroke's points are made on the polyline itself.
+  // (xyz per vertex): vertex index + the fraction of the next segment, so that a stroke's points are made on the polyline itself. `keys` names the
+  // sample by the cell of the world lattice it is in (KEY_FREQ): the same in every view.
   world: Float64Array
   screen: Float64Array
   poly: Float64Array
   tpos: Float64Array
-  // The screen's unit normal toward the figure's inside, 2 per sample.
+  // The screen's unit normal toward the figure's inside, 2 per sample, and the side of the surface that is seen there (+1 the side its normals point to, -1
+  // the other: always +1 on a closed figure, and per sample on an open sheet).
   nrm: Float64Array
+  sg: Int8Array
   // The two sides' values (the figure's at the vertex, the canvas or the G-buffer's) and the lowest value on the way in; the local colour (3 per
   // sample); the world-position hash; the view depth.
   uA: Float32Array
@@ -421,9 +444,8 @@ interface MarkCtx {
   mark: number
   surface: BakedSurface
   index: SurfaceIndex
-  // The side the figure is seen from (+1: the side the mesh's normals point to) and its per-vertex values.
-  sigma: 1 | -1
-  uSide: Float32Array
+  // An open sheet is seen from the side its own surface shows at each sample, not one side for the whole mesh.
+  open: boolean
   out: SilhouetteRun[]
 }
 
@@ -442,26 +464,8 @@ export function silhouetteRuns(
     if (scratch.length < mesh.positions.length / 3) scratch = new Float64Array(mesh.positions.length / 3)
     const polylines = silhouettePolylines(mesh, view.eye, fc.ortho, view.viewDir, scratch)
     if (polylines.length === 0) return
-    // the side the figure is seen from: a closed mesh's outside; an open one's, the side its middle faces the eye with
-    let sigma: 1 | -1 = 1
-    if (!surface.closed && surface.uBack) {
-      const nv = surface.positions.length / 3
-      const step = Math.max(1, Math.floor(nv / 64))
-      let cx = 0, cy = 0, cz = 0, cnt = 0
-      for (let v = 0; v < nv; v += step) {
-        cx += surface.positions[3 * v]
-        cy += surface.positions[3 * v + 1]
-        cz += surface.positions[3 * v + 2]
-        cnt++
-      }
-      toEye(fc, cx / cnt, cy / cnt, cz / cnt, EYE)
-      let d = 0
-      for (let v = 0; v < nv; v += step) d += surface.normals[3 * v] * EYE[0] + surface.normals[3 * v + 1] * EYE[1] + surface.normals[3 * v + 2] * EYE[2]
-      sigma = d >= 0 ? 1 : -1
-    }
-    const mc: MarkCtx = {
-      baked, params, gbuffer, fc, senv, noiseSeed, mark: m, surface, index: indexOf(surface), sigma, uSide: sigma === 1 ? surface.uFront : (surface.uBack as Float32Array), out,
-    }
+    // the side the figure is seen from: a closed mesh's outside (its normals' side); an open sheet's, read at each sample
+    const mc: MarkCtx = { baked, params, gbuffer, fc, senv, noiseSeed, mark: m, surface, index: indexOf(surface), open: !surface.closed && !!surface.uBack, out }
     for (const poly of polylines) polylineRuns(mc, poly)
   })
   return out
@@ -545,13 +549,16 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
   if (n < cap && dist2d(px[b] - sx[n - 1], py[b] - sy[n - 1]) > SILHOUETTE_STEP_PX * 0.3) put(b, 1)
   if (n < SILHOUETTE_MIN_SAMPLES) return
 
-  const { fc, surface, index, sigma, uSide, gbuffer, senv } = mc
+  const { fc, surface, index, open, gbuffer, senv } = mc
   const { W, H } = fc
   const vp = fc.vp
   const view = fc.view
+  const keys = new Uint32Array(n)
+  for (let s = 0; s < n; s++) keys[s] = hash3(Math.floor(wxyz[3 * s] * KEY_FREQ), Math.floor(wxyz[3 * s + 1] * KEY_FREQ), Math.floor(wxyz[3 * s + 2] * KEY_FREQ))
   const run: SilhouetteRun = {
-    mark: mc.mark, n, world: new Float64Array(3 * n), screen: new Float64Array(2 * n), poly, tpos: tp.slice(0, n), nrm: new Float64Array(2 * n), uA: new Float32Array(n), uB: new Float32Array(n),
-    uMin: new Float32Array(n), local: new Float32Array(3 * n), keys: new Uint32Array(n), depth: new Float32Array(n), h: new Float32Array(n), cls: new Uint8Array(n), contrast: 0,
+    mark: mc.mark, n, world: new Float64Array(3 * n), screen: new Float64Array(2 * n), poly, tpos: tp.slice(0, n), nrm: new Float64Array(2 * n), sg: new Int8Array(n).fill(1),
+    uA: new Float32Array(n), uB: new Float32Array(n), uMin: new Float32Array(n), local: new Float32Array(3 * n), keys, depth: new Float32Array(n), h: new Float32Array(n),
+    cls: new Uint8Array(n), contrast: 0,
   }
   const lost = new Uint8Array(n)
   // "within PROBE_PX of the sample", in the world, at the piece's middle
@@ -560,7 +567,16 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
   const probe2 = probeWorld * probeWorld
   const pos = surface.positions
   const nor = surface.normals
+  const uFront = surface.uFront
+  const uBack = surface.uBack ?? uFront
+  // the nearest vertex of every sample, found by walking on from the last sample's
+  const near = new Int32Array(n)
   let hint = -1
+  for (let s = 0; s < n; s++) {
+    hint = near[s] = index.nearest(pos, wxyz[3 * s], wxyz[3 * s + 1], wxyz[3 * s + 2], hint)
+  }
+  // an open sheet: the side seen, at each sample
+  if (open) readSides(mc, run, near, sx, sy)
   for (let s = 0; s < n; s++) {
     const x = wxyz[3 * s], y = wxyz[3 * s + 1], z = wxyz[3 * s + 2]
     run.world[3 * s] = x
@@ -569,45 +585,49 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
     run.screen[2 * s] = sx[s]
     run.screen[2 * s + 1] = sy[s]
     run.depth[s] = (x - view.eye[0]) * view.viewDir[0] + (y - view.eye[1]) * view.viewDir[1] + (z - view.eye[2]) * view.viewDir[2]
-    // the nearest vertex (found by walking on from the last sample's), and the lowest value of the eye-facing ones within the probe: it and its neighbours
-    const v = index.nearest(pos, x, y, z, hint)
+    // the lowest value of the eye-facing vertices within the probe: the nearest vertex and its neighbours
+    const v = near[s]
     if (v < 0) {
       lost[s] = 1
-      hint = -1
       continue
     }
-    hint = v
     toEye(fc, x, y, z, EYE)
+    const sig = run.sg[s]
+    const uSide = sig > 0 ? uFront : uBack
     let lowest = uSide[v]
     for (let k = index.start[v] - 1; k < index.start[v + 1]; k++) {
       const w = k < index.start[v] ? v : index.nbr[k]
       const dx = pos[3 * w] - x, dy = pos[3 * w + 1] - y, dz = pos[3 * w + 2] - z
-      if (dx * dx + dy * dy + dz * dz <= probe2 && sigma * (nor[3 * w] * EYE[0] + nor[3 * w + 1] * EYE[1] + nor[3 * w + 2] * EYE[2]) > 0 && uSide[w] < lowest) lowest = uSide[w]
+      if (dx * dx + dy * dy + dz * dz <= probe2 && sig * (nor[3 * w] * EYE[0] + nor[3 * w + 1] * EYE[1] + nor[3 * w + 2] * EYE[2]) > 0 && uSide[w] < lowest) lowest = uSide[w]
     }
     run.uA[s] = uSide[v]
     run.uMin[s] = lowest
     run.local[3 * s] = surface.local[3 * v]
     run.local[3 * s + 1] = surface.local[3 * v + 1]
     run.local[3 * s + 2] = surface.local[3 * v + 2]
-    run.keys[s] = hash3(Math.round(x * 7), Math.round(y * 7), Math.round(z * 7))
-    // the screen's normal: the tangent turned a quarter, to the side the figure's outside normal points away from
-    const a0 = Math.max(0, s - 1), a1 = Math.min(n - 1, s + 1)
-    let tx = sx[a1] - sx[a0]
-    let ty = sy[a1] - sy[a0]
-    const tl = dist2d(tx, ty) || 1
-    tx /= tl
-    ty /= tl
-    let nx = -ty
-    let ny = tx
-    const onx = sigma * nor[3 * v], ony = sigma * nor[3 * v + 1], onz = sigma * nor[3 * v + 2]
-    const oxs = (W / 2) * (vp[0] * onx + vp[4] * ony + vp[8] * onz)
-    const oys = -(H / 2) * (vp[1] * onx + vp[5] * ony + vp[9] * onz)
-    if (nx * oxs + ny * oys > 0) {
-      nx = -nx
-      ny = -ny
+    // the screen's normal: the tangent turned a quarter, to the side the normal of the surface that is seen points away from (at an outline the
+    // eye-facing normal of the surface that is seen points out of the figure, on a fold of a sheet as on a sphere); an open sheet's was read by its cast
+    let nx = run.nrm[2 * s]
+    let ny = run.nrm[2 * s + 1]
+    if (nx === 0 && ny === 0) {
+      const a0 = Math.max(0, s - 1), a1 = Math.min(n - 1, s + 1)
+      let tx = sx[a1] - sx[a0]
+      let ty = sy[a1] - sy[a0]
+      const tl = dist2d(tx, ty) || 1
+      tx /= tl
+      ty /= tl
+      nx = -ty
+      ny = tx
+      const onx = sig * nor[3 * v], ony = sig * nor[3 * v + 1], onz = sig * nor[3 * v + 2]
+      const oxs = (W / 2) * (vp[0] * onx + vp[4] * ony + vp[8] * onz)
+      const oys = -(H / 2) * (vp[1] * onx + vp[5] * ony + vp[9] * onz)
+      if (nx * oxs + ny * oys > 0) {
+        nx = -nx
+        ny = -ny
+      }
+      run.nrm[2 * s] = nx
+      run.nrm[2 * s + 1] = ny
     }
-    run.nrm[2 * s] = nx
-    run.nrm[2 * s + 1] = ny
     // the outside: the canvas, or what the G-buffer holds PROBE_PX beyond the outline
     let uB = senv.uCanvas
     if (gbuffer) {
@@ -639,9 +659,280 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
   mc.out.push(whole)
 }
 
+// The most vertices a cast walks over.
+const MAX_WALK = 400
+
+// What the eye sees at a screen point of a surface: the nearest of the surface's triangles over the point, found without a screen buffer by walking over the
+// vertices that project near the point from a vertex that is near it (the two branches of a sheet's fold both reach the fold's vertex). One per surface:
+// its scratch arrays are the surface's size.
+export class SurfaceCaster {
+  private readonly vtStart: Int32Array
+  private readonly vtTri: Int32Array
+  private readonly seenV: Int32Array
+  private readonly seenT: Int32Array
+  private readonly projected: Int32Array
+  private readonly sx: Float64Array
+  private readonly sy: Float64Array
+  private readonly dep: Float64Array
+  private readonly clipW: Float64Array
+  private readonly face: Float64Array
+  private readonly queue: Int32Array
+  private query = 0
+  private frame = 0
+  // The last hit: its depth along the view direction and the sign-bearing facing (n.toEye, interpolated).
+  hitDepth = 0
+  hitFacing = 0
+  // What the casts have done since the surface's caster was made: how many, and the triangles they tried (a test reads them).
+  casts = 0
+  tried = 0
+
+  private readonly surface: BakedSurface
+  private readonly index: SurfaceIndex
+
+  constructor(surface: BakedSurface, index: SurfaceIndex) {
+    this.surface = surface
+    this.index = index
+    const nv = surface.positions.length / 3
+    const idx = surface.indices
+    const nt = Math.floor(idx.length / 3)
+    const start = new Int32Array(nv + 1)
+    for (let k = 0; k < 3 * nt; k++) start[idx[k] + 1]++
+    for (let v = 0; v < nv; v++) start[v + 1] += start[v]
+    const cursor = start.slice(0, nv)
+    this.vtTri = new Int32Array(3 * nt)
+    for (let t = 0; t < nt; t++) for (let k = 0; k < 3; k++) this.vtTri[cursor[idx[3 * t + k]]++] = t
+    this.vtStart = start
+    this.seenV = new Int32Array(nv)
+    this.seenT = new Int32Array(nt)
+    this.projected = new Int32Array(nv)
+    this.sx = new Float64Array(nv)
+    this.sy = new Float64Array(nv)
+    this.dep = new Float64Array(nv)
+    this.clipW = new Float64Array(nv)
+    this.face = new Float64Array(nv)
+    this.queue = new Int32Array(nv)
+  }
+
+  // Start a frame: the projections of the last are stale.
+  begin(): void {
+    this.frame++
+  }
+
+  private project(fc: FrameCtx, u: number): void {
+    if (this.projected[u] === this.frame) return
+    this.projected[u] = this.frame
+    const p = this.surface.positions
+    const x = p[3 * u], y = p[3 * u + 1], z = p[3 * u + 2]
+    const vp = fc.vp
+    const w = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]
+    this.clipW[u] = w
+    if (w <= 1e-9) return
+    this.sx[u] = (((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) / w + 1) / 2) * fc.W
+    this.sy[u] = ((1 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) / w) / 2) * fc.H
+    const view = fc.view
+    this.dep[u] = (x - view.eye[0]) * view.viewDir[0] + (y - view.eye[1]) * view.viewDir[1] + (z - view.eye[2]) * view.viewDir[2]
+    toEye(fc, x, y, z, EYE)
+    const n = this.surface.normals
+    this.face[u] = n[3 * u] * EYE[0] + n[3 * u + 1] * EYE[1] + n[3 * u + 2] * EYE[2]
+  }
+
+  // The longest screen distance from vertex v to a neighbour of it: the stride of the surface on the screen there (capped at 100 px).
+  ringExtent(fc: FrameCtx, v: number, index: SurfaceIndex): number {
+    this.project(fc, v)
+    if (this.clipW[v] <= 1e-9) return 100
+    let longest = 0
+    for (let k = index.start[v]; k < index.start[v + 1]; k++) {
+      const u = index.nbr[k]
+      this.project(fc, u)
+      if (this.clipW[u] > 1e-9) longest = Math.max(longest, dist2d(this.sx[u] - this.sx[v], this.sy[u] - this.sy[v]))
+    }
+    return Math.min(100, longest)
+  }
+
+  // The distance on the screen from (x, y) to vertex v.
+  distanceTo(fc: FrameCtx, v: number, x: number, y: number): number {
+    this.project(fc, v)
+    return this.clipW[v] <= 1e-9 ? Infinity : dist2d(this.sx[v] - x, this.sy[v] - y)
+  }
+
+  // The nearest surface over the screen point (qx, qy), reached from vertex `from` through the vertices within `reach` px of the point; false where there is
+  // none (hitDepth and hitFacing are then not set).
+  cast(fc: FrameCtx, from: number, qx: number, qy: number, reach: number): boolean {
+    const idx = this.surface.indices
+    const nbr = this.index.nbr
+    const nstart = this.index.start
+    const vtStart = this.vtStart
+    const vtTri = this.vtTri
+    const seenV = this.seenV
+    const seenT = this.seenT
+    const projected = this.projected
+    const frame = this.frame
+    const sx = this.sx, sy = this.sy, clipW = this.clipW, dep = this.dep, face = this.face
+    const q = ++this.query
+    this.casts++
+    const queue = this.queue
+    let head = 0
+    let tail = 0
+    queue[tail++] = from
+    seenV[from] = q
+    let best = Infinity
+    let facing = 0
+    let found = false
+    let tried = 0
+    const reach2 = reach * reach
+    while (head < tail) {
+      const u = queue[head++]
+      if (projected[u] !== frame) this.project(fc, u)
+      // the neighbours first (a triangle's other vertices are among them), walked on to where they project within reach of the point
+      for (let k = nstart[u]; k < nstart[u + 1]; k++) {
+        const w = nbr[k]
+        if (projected[w] !== frame) this.project(fc, w)
+        if (seenV[w] === q) continue
+        seenV[w] = q
+        if (clipW[w] <= 1e-9) continue
+        const dx = sx[w] - qx, dy = sy[w] - qy
+        // (a surface finer than a pixel on the screen has more vertices under a point than a point is worth: the walk stops at the first MAX_WALK)
+        if (dx * dx + dy * dy <= reach2 && tail < MAX_WALK) queue[tail++] = w
+      }
+      for (let k = vtStart[u]; k < vtStart[u + 1]; k++) {
+        const t = vtTri[k]
+        if (seenT[t] === q) continue
+        seenT[t] = q
+        tried++
+        const a = idx[3 * t], b = idx[3 * t + 1], c = idx[3 * t + 2]
+        const ax = sx[a], ay = sy[a], bx = sx[b], by = sy[b], cx = sx[c], cy = sy[c]
+        // (a triangle whose box is not over the point has no hit)
+        if ((qx < ax && qx < bx && qx < cx) || (qx > ax && qx > bx && qx > cx) || (qy < ay && qy < by && qy < cy) || (qy > ay && qy > by && qy > cy)) continue
+        const wa = clipW[a], wb = clipW[b], wc = clipW[c]
+        if (wa <= 1e-9 || wb <= 1e-9 || wc <= 1e-9) continue
+        const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+        if (Math.abs(den) < 1e-9) continue
+        const l0 = ((by - cy) * (qx - cx) + (cx - bx) * (qy - cy)) / den
+        const l1 = ((cy - ay) * (qx - cx) + (ax - cx) * (qy - cy)) / den
+        const l2 = 1 - l0 - l1
+        if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue
+        // (depth along the view direction, perspective-correct: the weights over the clip w)
+        const i0 = l0 / wa, i1 = l1 / wb, i2 = l2 / wc
+        const iw = i0 + i1 + i2
+        const d = (i0 * dep[a] + i1 * dep[b] + i2 * dep[c]) / iw
+        if (d < best) {
+          best = d
+          facing = l0 * face[a] + l1 * face[b] + l2 * face[c]
+          found = true
+        }
+      }
+    }
+    this.tried += tried
+    if (found) {
+      this.hitDepth = best
+      this.hitFacing = facing
+    }
+    return found
+  }
+}
+
+const casters = new WeakMap<Float32Array, SurfaceCaster>()
+export function casterOf(s: BakedSurface, index: SurfaceIndex): SurfaceCaster {
+  let c = casters.get(s.positions)
+  if (!c) {
+    c = new SurfaceCaster(s, index)
+    casters.set(s.positions, c)
+  }
+  return c
+}
+
+// Every this many samples of an open sheet's outline has its side cast (32 px).
+const CAST_STRIDE = 16
+
+// On an open sheet, the side seen at each sample (run.sg) and the screen's normal toward the figure (run.nrm): what the eye sees PROBE_PX to either side of
+// the outline (the surface nearest the eye there; a fold's sheet is on one side of its outline only, and the side the last sample had is tried first), as the
+// model's G-buffer read 3 px in sees it. The side that surface shows the eye is the side seen, and its side of the outline
+// the way in. Both are the majority of 7 along the run, so that a blip of a vertex does not flicker the colours; a stretch is cut where they change.
+function readSides(mc: MarkCtx, run: SilhouetteRun, near: Int32Array, sx: Float64Array, sy: Float64Array): void {
+  const { fc, surface, index } = mc
+  const caster = casterOf(surface, index)
+  caster.begin()
+  const n = run.n
+  const rawSide = new Int8Array(n)
+  const rawWay = new Int8Array(n)
+  const way = new Int8Array(n).fill(1)
+  const nx0 = new Float64Array(n)
+  const ny0 = new Float64Array(n)
+  for (let s = 0; s < n; s++) {
+    const a0 = Math.max(0, s - 1), a1 = Math.min(n - 1, s + 1)
+    let tx = sx[a1] - sx[a0]
+    let ty = sy[a1] - sy[a0]
+    const tl = dist2d(tx, ty) || 1
+    nx0[s] = -ty / tl
+    ny0[s] = tx / tl
+  }
+  let prefer = 1
+  let any = false
+  // one cast at sample s: the side of the outline that has the sheet (rawWay) and what it shows the eye (rawSide); 0 where neither side has any
+  const castAt = (s: number): void => {
+    const v = near[s]
+    if (v < 0) return
+    // how far the walk goes: the probe, and the surface's own stride on the screen (so that a coarse sheet's triangles are reached)
+    const reach = SILHOUETTE_PROBE_PX + 1 * caster.ringExtent(fc, v, index) + 2
+    // the side the last cast had is tried first, and taken when it has the surface (a fold's surface is on one side of its outline)
+    let side = 0
+    let facing = 0
+    for (let t = 0; t < 2 && side === 0; t++) {
+      const d = t === 0 ? prefer : -prefer
+      if (caster.cast(fc, v, sx[s] + d * nx0[s] * SILHOUETTE_PROBE_PX, sy[s] + d * ny0[s] * SILHOUETTE_PROBE_PX, reach)) {
+        side = d
+        facing = caster.hitFacing
+      }
+    }
+    if (side === 0) return
+    any = true
+    prefer = side
+    rawWay[s] = side
+    rawSide[s] = facing > 0 ? 1 : facing < 0 ? -1 : 0
+  }
+  // The sides change slowly along an outline: every CAST_STRIDE samples (and the last) is cast, and between two that agree the samples take their answer; where
+  // they differ the middle sample is cast, and so on down to the sample where it changes.
+  const fill = (a: number, b: number): void => {
+    if (b - a <= 1) return
+    if (rawSide[a] !== 0 && rawSide[a] === rawSide[b] && rawWay[a] !== 0 && rawWay[a] === rawWay[b]) {
+      for (let s = a + 1; s < b; s++) {
+        rawSide[s] = rawSide[a]
+        rawWay[s] = rawWay[a]
+      }
+      return
+    }
+    const m = (a + b) >> 1
+    castAt(m)
+    fill(a, m)
+    fill(m, b)
+  }
+  for (let s = 0; s < n; s += CAST_STRIDE) castAt(s)
+  if ((n - 1) % CAST_STRIDE !== 0) castAt(n - 1)
+  for (let a = 0; a < n - 1; a += CAST_STRIDE) fill(a, Math.min(a + CAST_STRIDE, n - 1))
+  if (!any) return
+  medianSigma(rawSide, run.sg)
+  medianSigma(rawWay, way)
+  for (let s = 0; s < n; s++) {
+    run.nrm[2 * s] = way[s] * nx0[s]
+    run.nrm[2 * s + 1] = way[s] * ny0[s]
+  }
+}
+
+// The side seen at each sample as the majority of the 7 about it (a sample whose side is not known, 0, has no vote; a tie keeps the one before).
+export function medianSigma(raw: Int8Array, out: Int8Array): void {
+  const n = raw.length
+  let prev = 1
+  for (let i = 0; i < n; i++) {
+    let sum = 0
+    for (let k = -3; k <= 3; k++) if (i + k >= 0 && i + k < n) sum += raw[i + k]
+    prev = out[i] = sum > 0 ? 1 : sum < 0 ? -1 : prev
+  }
+}
+
 function sliceRun(r: SilhouetteRun, a: number, n: number): SilhouetteRun {
   return {
     mark: r.mark, n, world: r.world.slice(3 * a, 3 * (a + n)), screen: r.screen.slice(2 * a, 2 * (a + n)), poly: r.poly, tpos: r.tpos.slice(a, a + n), nrm: r.nrm.slice(2 * a, 2 * (a + n)),
+    sg: r.sg.slice(a, a + n),
     uA: r.uA.slice(a, a + n), uB: r.uB.slice(a, a + n), uMin: r.uMin.slice(a, a + n), local: r.local.slice(3 * a, 3 * (a + n)), keys: r.keys.slice(a, a + n),
     depth: r.depth.slice(a, a + n), h: new Float32Array(n), cls: new Uint8Array(n), contrast: 0,
   }
@@ -692,13 +983,138 @@ export function medianClasses(raw: Uint8Array, out: Uint8Array): void {
   }
 }
 
+// ---- the cuts of a run, and the draws of a stretch ----
+
+// A cell's key makes a site of the outline where it is the lowest within this many samples either side (the model's cuts, under a key hash of a position,
+// were counted from the stretch before: a cut moved as the run's start did). The sites of a run are the same in every view, save where the outline crosses
+// into another cell: it is cut at them, and a stretch is named by the site it follows.
+export const CUT_WINDOW = 14
+// The samples between the pulls of a soft stretch and the bridges of a lost one (the model's: one every 34 and 42 px; the same for both, so that a stretch
+// which turns from lost to soft as the view turns keeps the strokes that cross its outline), counted from the site the stretch follows.
+export const PULL_STEP = 19
+// A stretch under this many samples joins the one before it.
+const JOIN_UNDER = 11
+
+// The samples that begin one polyline vertex's key (the samples between two vertices have the key of the first) and whose key is the lowest within `window`
+// samples either side, in order.
+export function lowestKeys(keys: Uint32Array, window: number): Int32Array {
+  const n = keys.length
+  const out: number[] = []
+  for (let i = 0; i < n; i++) {
+    if (i > 0 && keys[i] === keys[i - 1]) continue
+    let lowest = true
+    for (let j = Math.max(0, i - window); j <= Math.min(n - 1, i + window) && lowest; j++) if (keys[j] < keys[i]) lowest = false
+    if (lowest) out.push(i)
+  }
+  return Int32Array.from(out)
+}
+
+// The index in `sites` of the last site at or before sample i; -1 where there is none.
+export function siteBefore(sites: Int32Array, i: number): number {
+  let lo = 0
+  let hi = sites.length
+  while (lo < hi) {
+    const m = (lo + hi) >> 1
+    if (sites[m] <= i) lo = m + 1
+    else hi = m
+  }
+  return lo - 1
+}
+
+// The kind of each sample of a run, what its stretch is of one of: the class, whether the figure's side is in the shadow family there (the lowest value on
+// the way in under the cap), and the side of the surface that is seen (bit 8: the back). The cut falls where any of them changes, so what a stretch is held
+// to, and what it is bridged to, is true of all of it.
+export function stretchKinds(run: SilhouetteRun, capU: number): Uint8Array {
+  return Uint8Array.from(run.cls, (c, i) => c | (run.uMin[i] <= capU ? 4 : 0) | (run.sg[i] < 0 ? 8 : 0))
+}
+
+// The stretches of a run, [first, last, kind, part]: cut where the kind changes (the class, the shadow family, the side seen), at the sites (so that a cut
+// stays on the surface where the camera turns, whatever the run's own start), and a stretch longer than `maxSamples` in equal parts (the part's number).
+// A stretch under JOIN_UNDER samples joins the one before it.
+export function cutRun(kinds: Uint8Array, maxSamples: number, sites: Int32Array): [number, number, number, number][] {
+  const n = kinds.length
+  const segs: [number, number, number, number][] = []
+  let s0 = 0
+  let next = 0
+  for (let i = 1; i <= n; i++) {
+    if (i < n && kinds[i] === kinds[s0]) {
+      while (next < sites.length && sites[next] < i) next++
+      if (next >= sites.length || sites[next] !== i) continue
+    }
+    const len = i - s0
+    const parts = Math.max(1, Math.ceil(len / maxSamples))
+    for (let k = 0; k < parts; k++) segs.push([s0 + Math.round((len * k) / parts), s0 + Math.round((len * (k + 1)) / parts) - 1, kinds[s0], k])
+    s0 = i
+  }
+  for (let k = segs.length - 1; k > 0; k--) {
+    if (segs[k][1] - segs[k][0] < JOIN_UNDER) {
+      segs[k - 1][1] = segs[k][1]
+      segs.splice(k, 1)
+    }
+  }
+  return segs
+}
+
+// The world's lattice of the draws: the cell of model/edges.ts' noise, two thirds of a unit.
+const DRAW_FREQ = EDGE_NOISE_FREQ
+const DRAW_SEEDS = Uint32Array.from({ length: 64 }, (_, k) => mix2(k, 0x7e57ab1e))
+// value noise at a point has the spread of 0.37; scaled to the spread of a uniform draw (0.289) and of a normal one (1)
+const DRAW_UNIFORM = 0.78
+const DRAW_NORMAL = 2.7
+
+// A stretch's draws (its brush's loads and widths, the jitter of its colours, the turn of a pull): the random source the model's recipes ask for, but each
+// value taken from smooth world-space noise at the stretch's place (one noise field for each draw in turn), so that a stretch which moves a little as the
+// view turns changes its brush a little, and does not draw a new one.
+export class WorldDraw implements Random {
+  private x = 0
+  private y = 0
+  private z = 0
+  private k = 0
+  constructor(x: number, y: number, z: number) {
+    this.at(x, y, z)
+  }
+
+  // Draw again, from the noise at another place.
+  at(x: number, y: number, z: number): this {
+    this.x = x * DRAW_FREQ
+    this.y = y * DRAW_FREQ
+    this.z = z * DRAW_FREQ
+    this.k = 0
+    return this
+  }
+
+  private noise(): number {
+    return valueNoise3(this.x, this.y, this.z, DRAW_SEEDS[this.k++ & 63])
+  }
+
+  next(): number {
+    return clamp(0.5 + DRAW_UNIFORM * this.noise(), 0, 0.999999)
+  }
+
+  range(min: number, max: number): number {
+    return min + (max - min) * this.next()
+  }
+
+  int(min: number, max: number): number {
+    return min + Math.floor(this.next() * (max - min + 1))
+  }
+
+  sign(): number {
+    return this.next() < 0.5 ? -1 : 1
+  }
+
+  gauss(): number {
+    return DRAW_NORMAL * this.noise()
+  }
+}
+
 // ---- the strokes ----
 
 // The world points of a stroke along samples a..b of a run: PATH_POINTS of them at equal screen arc length (as polylinePath places its path's), each ON the
-// silhouette polyline itself (the sample's place along it, interpolated), not on the chords between samples.
-function alongWorld(run: SilhouetteRun, a: number, b: number, world: Float32Array): void {
+// silhouette polyline itself (the sample's place along it, interpolated), not on the chords between samples. `cum` is scratch of at least b - a + 1.
+function alongWorld(run: SilhouetteRun, a: number, b: number, world: Float32Array, cum: Float64Array): void {
   const n = b - a + 1
-  const cum = new Float64Array(n)
+  cum[0] = 0
   for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + dist2d(run.screen[2 * (a + i)] - run.screen[2 * (a + i - 1)], run.screen[2 * (a + i) + 1] - run.screen[2 * (a + i - 1) + 1])
   const total = cum[n - 1]
   const poly = run.poly
@@ -736,6 +1152,183 @@ export interface SilhouetteStats {
 
 export const newSilhouetteStats = (): SilhouetteStats => ({ runs: 0, stretches: 0, strokes: 0, byClass: [0, 0, 0, 0], crisp: 0, drags: 0, pulls: 0, bridges: 0 })
 
+// What a call of silhouetteStrokes keeps from stretch to stretch: the settings, the mixer, and the scratch its strokes are made in (no stroke or stretch
+// makes an array or a closure of its own).
+interface Brush {
+  list: StrokeList
+  fc: FrameCtx
+  env: RecipeEnv
+  capU: number
+  floorU: number
+  mixer: LoadMixer
+  rp: PaintParams['roles']['edge']
+  right: number[]
+  up: number[]
+  stats: SilhouetteStats | undefined
+  path: Float32Array
+  width: Float32Array
+  world: Float32Array
+  xs: Float64Array
+  ys: Float64Array
+  cum: Float64Array
+  px2: Float64Array
+  py2: Float64Array
+  lab: Oklab
+  loc: Float64Array
+  // the draws of the stretch, and of the pull or bridge being made
+  draw: WorldDraw
+  pdraw: WorldDraw
+}
+
+// The stretch being made: what its strokes share.
+interface Stretch {
+  run: SilhouetteRun
+  a: number
+  b: number
+  // The class the stretch was cut at (its brush: behaviourOf), and the class it is drawn as (a form in shadow against light is at least firm).
+  cl: number
+  beh: ReturnType<typeof behaviourOf>
+  uA: number
+  // The stretch's name: the cell its strokes are mixed in (they share one brush load).
+  cell: number
+  shadowSide: boolean
+  lighterIsA: boolean
+  // The figure's side's recipe, and the other side's source, and the colours made of them when first wanted (every blended stroke is a mix of the two);
+  // the figure's own side's lightness at the cap, which a stroke held to its own side is held to.
+  recA: ColourRecipe
+  srcB: ColourSource
+  labA: Oklab | null
+  labB: Oklab | null
+  ownBound: number
+  mx: number
+  my: number
+  depth: number
+}
+
+const sourceLab = (env: RecipeEnv, s: ColourSource): Oklab => (Array.isArray(s) ? [s[0], s[1], s[2]] : colourOfRecipe(s as ColourRecipe, env))
+
+// The colour of a stroke that blends the figure's side (t of the way) with the other: [a, b] in the order the stroke names them. (Written to scratch.)
+function blendLab(B: Brush, S: Stretch, aIsOwn: boolean, t: number): Oklab {
+  const la = (S.labA ??= sourceLab(B.env, S.recA))
+  const lb = (S.labB ??= sourceLab(B.env, S.srcB))
+  const x = aIsOwn ? la : lb
+  const y = aIsOwn ? lb : la
+  const out = B.lab
+  out[0] = x[0] + (y[0] - x[0]) * t
+  out[1] = x[1] + (y[1] - x[1]) * t
+  out[2] = x[2] + (y[2] - x[2]) * t
+  return out
+}
+
+// The lightness of the figure's own side at the cap (what a stroke held to its own side's family is held to), once.
+function ownBoundOf(B: Brush, S: Stretch): number {
+  if (Number.isNaN(S.ownBound)) S.ownBound = lightnessAtValue({ a: S.recA, b: null, t: 0 }, B.capU, B.env)
+  return S.ownBound
+}
+
+// One stroke made: its brush and colour (`lab0`, before the mix; `bound` the lightness it is held to when `held`), the path in B.path, B.width and B.world.
+// `cell` names the stroke (the load it may begin, and its seed with `kk`), `draw` gives its brush's jitters.
+function finishStroke(B: Brush, S: Stretch, kk: number, cell: number, draw: WorldDraw, lab0: Oklab, bound: number, alpha: number, held: boolean): void {
+  const { rp, list, path, width, world } = B
+  const beh = S.beh
+  const load = rp.load * beh.loadMul * (0.9 + 0.2 * draw.next())
+  const bristles = Math.max(1, Math.round(rp.bristles * draw.range(0.88, 1.12)))
+  const jit0 = draw.gauss()
+  const jit1 = draw.gauss()
+  const seed = (cell ^ Math.imul(kk, 0x85ebca6b)) >>> 0
+  let lab = B.mixer.mixByCell({ role: 'edge', cell: S.cell, u: S.uA, x: S.mx, y: S.my, lab: lab0, colormapped: false, seed, jit0, jit1 }).lab
+  if (held) lab = holdLightness(lab, true, bound)
+  const lin = oklabToLinear(lab)
+  const e = list.push()
+  list.role[e] = R_EDGE
+  list.layer[e] = EDGE_LAYER
+  for (let q = 0; q < 2 * P; q++) list.path[2 * P * e + q] = path[q]
+  for (let q = 0; q < P; q++) list.width[P * e + q] = width[q]
+  for (let q = 0; q < 3 * P; q++) list.worldPath[3 * P * e + q] = world[q]
+  list.depth[e] = S.depth
+  list.colour[3 * e] = lin[0]
+  list.colour[3 * e + 1] = lin[1]
+  list.colour[3 * e + 2] = lin[2]
+  list.alpha[e] = alpha
+  list.load[e] = load
+  list.impasto[e] = rp.impasto * beh.impastoMul
+  list.bristles[e] = bristles
+  list.bristleVar[e] = clamp(rp.bristleVar * beh.bristleVarMul, 0, 1)
+  list.dry[e] = Math.max(rp.dry * 0.5, beh.dryMin)
+  list.wet[e] = Math.max(rp.wet * beh.wetMul, beh.wetMin)
+  list.endSoft[e] = beh.endSoft
+  list.edge[e] = S.cl
+  list.seed[e] = seed
+  list.worldNormal[3 * e] = 0
+  list.worldNormal[3 * e + 1] = 0
+  list.worldNormal[3 * e + 2] = 0
+  list.hidden[e] = HIDDEN_NA
+  const stats = B.stats
+  if (stats) {
+    stats.strokes++
+    stats.byClass[S.cl]++
+  }
+}
+
+// A stroke ALONG the stretch: its screen polyline resampled to PATH_POINTS at equal arc length, the world points on the 3D polyline.
+function alongStroke(B: Brush, S: Stretch, kk: number, cell: number, draw: WorldDraw, widthPx: number, lab0: Oklab, bound: number, alpha: number): void {
+  const { run, a, b } = S
+  const n = b - a + 1
+  if (B.xs.length < n) {
+    B.xs = new Float64Array(2 * n)
+    B.ys = new Float64Array(2 * n)
+    B.cum = new Float64Array(2 * n)
+  }
+  for (let s = a; s <= b; s++) {
+    B.xs[s - a] = run.screen[2 * s]
+    B.ys[s - a] = run.screen[2 * s + 1]
+  }
+  if (!(polylinePath(B.xs, B.ys, n, widthPx, true, false, B.path, B.width) > 1e-6)) return
+  // the points are on the silhouette polyline, and the path is their projection (so that a world path and a path are one stroke)
+  const { world, path, fc } = B
+  alongWorld(run, a, b, world, B.cum)
+  const vp = fc.vp
+  for (let q = 0; q < P; q++) {
+    const x = world[3 * q], y = world[3 * q + 1], z = world[3 * q + 2]
+    const w = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]
+    if (w <= 1e-9) return
+    path[2 * q] = (((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) / w + 1) / 2) * fc.W
+    path[2 * q + 1] = ((1 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) / w) / 2) * fc.H
+  }
+  finishStroke(B, S, kk, cell, draw, lab0, bound, alpha, S.shadowSide)
+  const stats = B.stats
+  if (stats) {
+    if (S.cl >= 2) stats.crisp++
+    else stats.drags++
+  }
+}
+
+// A stroke ACROSS the outline through sample `ii` along the screen direction (dx, dy), `len` px long (`from` of it behind the sample, `to` ahead): a decal
+// in the plane of the sample's depth.
+function acrossStroke(
+  B: Brush, S: Stretch, kk: number, cell: number, draw: WorldDraw, ii: number, dx: number, dy: number, len: number, widthPx: number, lab0: Oklab, alpha: number, from: number, to: number,
+): void {
+  const { run } = S
+  const { path, world, fc, right, up } = B
+  const cx = run.screen[2 * ii]
+  const cy = run.screen[2 * ii + 1]
+  B.px2[0] = cx - dx * len * from
+  B.px2[1] = cx + dx * len * to
+  B.py2[0] = cy - dy * len * from
+  B.py2[1] = cy + dy * len * to
+  polylinePath(B.px2, B.py2, 2, widthPx, true, false, path, B.width)
+  const wx = run.world[3 * ii], wy = run.world[3 * ii + 1], wz = run.world[3 * ii + 2]
+  const inv = 1 / Math.max(1e-9, pxPerUnit(fc, wx, wy, wz))
+  for (let q = 0; q < P; q++) {
+    const ox = (path[2 * q] - cx) * inv
+    const oy = (path[2 * q + 1] - cy) * inv
+    world[3 * q] = wx + right[0] * ox - up[0] * oy
+    world[3 * q + 1] = wy + right[1] * ox - up[1] * oy
+    world[3 * q + 2] = wz + right[2] * ox - up[2] * oy
+  }
+  finishStroke(B, S, kk, cell, draw, lab0, S.shadowSide ? ownBoundOf(B, S) : 0, alpha, S.shadowSide)
+}
+
 // The strokes of the runs, appended to `list`: the bake's edge strokes (edgeStrokes.ts) of kind 1, built on the screen. Returns the count.
 export function silhouetteStrokes(
   list: StrokeList, runs: SilhouetteRun[], params: PaintParams, view: PaintView, fc: FrameCtx, senv: SilhouetteEnv, stats?: SilhouetteStats,
@@ -743,184 +1336,120 @@ export function silhouetteStrokes(
   const rp = params.roles.edge
   const minContrast = params.detect.edgeMinContrast
   const { env, capU, floorU } = senv
-  const mixer = new LoadMixer(params)
   const canvas: ColourSource = [params.canvas.tone[0], params.canvas.tone[1], params.canvas.tone[2]]
   const maxSamples = Math.max(12, Math.round((3 * rp.length) / SILHOUETTE_STEP_PX))
-  const right = [view.view[0], view.view[4], view.view[8]]
-  const up = [view.view[1], view.view[5], view.view[9]]
   const before = list.count
-  const path = new Float32Array(2 * P)
-  const width = new Float32Array(P)
-  const world = new Float32Array(3 * P)
+  const B: Brush = {
+    list, fc, env, capU, floorU, mixer: new LoadMixer(params), rp, right: [view.view[0], view.view[4], view.view[8]], up: [view.view[1], view.view[5], view.view[9]], stats,
+    path: new Float32Array(2 * P), width: new Float32Array(P), world: new Float32Array(3 * P), xs: new Float64Array(64), ys: new Float64Array(64), cum: new Float64Array(64),
+    px2: new Float64Array(2), py2: new Float64Array(2), lab: [0, 0, 0], loc: new Float64Array(3), draw: new WorldDraw(0, 0, 0), pdraw: new WorldDraw(0, 0, 0),
+  }
+  const S: Stretch = {
+    run: runs[0], a: 0, b: 0, cl: 0, beh: behaviourOf(0), uA: 0, cell: 0, shadowSide: false, lighterIsA: false, recA: null as unknown as ColourRecipe, srcB: canvas, labA: null, labB: null,
+    ownBound: Number.NaN, mx: 0, my: 0, depth: 0,
+  }
   for (const run of runs) {
     if (run.contrast < minContrast) continue
     if (stats) stats.runs++
-    // a stretch is of one family on the figure's side: the cut falls where the outline leaves the shadow family (the lowest value on the way in
-    // under the cap), so what a stretch is held to, and what it is bridged to, is true of all of it
-    const kinds = Uint8Array.from(run.cls, (c, i) => c | (run.uMin[i] <= capU ? 4 : 0))
-    for (const [a, b, cl0k] of segmentRun(kinds, run.keys, maxSamples)) {
+    S.run = run
+    const kinds = stretchKinds(run, capU)
+    const sites = lowestKeys(run.keys, CUT_WINDOW)
+    for (const [a, b, cl0k, part] of cutRun(kinds, maxSamples, sites)) {
       if (b - a < MIN_STRETCH) continue
       const mid = Math.floor((a + b) / 2)
-      let cl = cl0k & 3
-      const cell = run.keys[mid]
-      const rng = randomFor(`paint/sil/${cell}`, params.seed)
-      // the role's density thins the strokes, by a seeded draw
-      if (rng.next() >= rp.density) continue
+      // the stretch follows a site (the run's start where none is before it), whose cell names it: it is on the surface and not in the run, and a stretch
+      // that slides along the outline as the kinds do keeps its site. Its strokes are told apart by the kind and the part, and by their places after the site.
+      const k0 = siteBefore(sites, a)
+      const first = k0 >= 0 ? sites[k0] : 0
+      const cell = run.keys[first]
+      const kkAlong = 0x1000 + cl0k + 16 * part
+      // the role's density thins the strokes, by a draw of the name
+      if (hash01(cell ^ Math.imul(kkAlong, 0x85ebca6b), params.seed, 0x5113c0de) >= rp.density) continue
       if (stats) stats.stretches++
-      const beh = behaviourOf(cl)
-      const uA = meanOver(run.uA, a, b)
+      const rng = B.draw.at(run.world[3 * mid], run.world[3 * mid + 1], run.world[3 * mid + 2])
+      let cl = cl0k & 3
+      S.beh = behaviourOf(cl)
+      S.a = a
+      S.b = b
+      S.cell = cell
+      S.uA = meanOver(run.uA, a, b)
       const uB = meanOver(run.uB, a, b)
-      const shadowSide = run.uMin[mid] <= capU
-      const shadowEdge = shadowSide && run.uB[mid] >= floorU
+      S.shadowSide = run.uMin[mid] <= capU
+      const shadowEdge = S.shadowSide && run.uB[mid] >= floorU
       if (shadowEdge) cl = Math.max(cl, 2)
-      const uLo = Math.min(uA, uB)
+      S.cl = cl
+      const uLo = Math.min(S.uA, uB)
       // the figure's local colour over the stretch
-      const loc = [0, 0, 0]
+      const loc = B.loc
+      loc[0] = loc[1] = loc[2] = 0
       for (let s = a; s <= b; s++) for (let c = 0; c < 3; c++) loc[c] += run.local[3 * s + c]
       for (let c = 0; c < 3; c++) loc[c] /= b - a + 1
-      const recA = sideRecipeOf(null, null, false, loc, uA, rng)
+      S.recA = sideRecipeOf(null, null, false, loc, S.uA, rng)
       // across the outline: the canvas where it is light, or the table in the figure's own cast shadow, as dark as it is there
-      const srcB: ColourSource = uB >= floorU ? canvas : groundRecipe(uB, rng)
-      const lighterIsA = uA >= uB
-      // the colours of the stretch's two sources (every blended stroke of it is a mix of these two), made when first wanted, and the figure's own
-      // side's lightness at the cap, which a stroke that is held to its own side is held to
-      let labA: Oklab | null = null
-      let labB: Oklab | null = null
-      let ownBound = Number.NaN
-      const sourceLab = (s: ColourSource): Oklab => (Array.isArray(s) ? [s[0], s[1], s[2]] : colourOfRecipe(s as ColourRecipe, env))
-      // the colour of a stroke that blends the figure's side (t of the way) with the other: [a, b] in the order the stroke names them
-      const blend = (aIsOwn: boolean, t: number): Oklab => {
-        const la = (labA ??= sourceLab(recA))
-        const lb = (labB ??= sourceLab(srcB))
-        const a = aIsOwn ? la : lb
-        const b = aIsOwn ? lb : la
-        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
-      }
-      const mx = run.screen[2 * mid]
-      const my = run.screen[2 * mid + 1]
-      const depth = run.depth[mid]
-
-      // the lightness of the figure's own side at the cap (what a stroke held to its own side's family is held to), once
-      const ownBoundOf = (): number => (Number.isNaN(ownBound) ? (ownBound = lightnessAtValue({ a: recA, b: null, t: 0 }, capU, env)) : ownBound)
-
-      // one stroke made: its brush and colour (`lab`, before the mix; `bound` the lightness it is held to when `held`), the path in `path`, `width` and `world`
-      const finish = (kk: number, lab0: Oklab, bound: () => number, alpha: number, held: boolean): void => {
-        const load = rp.load * beh.loadMul * (0.9 + 0.2 * rng.next())
-        const bristles = Math.max(1, Math.round(rp.bristles * rng.range(0.88, 1.12)))
-        const jit0 = rng.gauss()
-        const jit1 = rng.gauss()
-        const seed = (cell ^ Math.imul(kk, 0x85ebca6b)) >>> 0
-        let lab = mixer.mix({ role: 'edge', cell, u: uA, x: mx, y: my, lab: lab0, colormapped: false, seed, jit0, jit1 }).lab
-        if (held) lab = holdLightness(lab, true, bound())
-        const lin = oklabToLinear(lab)
-        const e = list.push()
-        list.role[e] = R_EDGE
-        list.layer[e] = EDGE_LAYER
-        for (let q = 0; q < 2 * P; q++) list.path[2 * P * e + q] = path[q]
-        for (let q = 0; q < P; q++) list.width[P * e + q] = width[q]
-        for (let q = 0; q < 3 * P; q++) list.worldPath[3 * P * e + q] = world[q]
-        list.depth[e] = depth
-        list.colour[3 * e] = lin[0]
-        list.colour[3 * e + 1] = lin[1]
-        list.colour[3 * e + 2] = lin[2]
-        list.alpha[e] = alpha
-        list.load[e] = load
-        list.impasto[e] = rp.impasto * beh.impastoMul
-        list.bristles[e] = bristles
-        list.bristleVar[e] = clamp(rp.bristleVar * beh.bristleVarMul, 0, 1)
-        list.dry[e] = Math.max(rp.dry * 0.5, beh.dryMin)
-        list.wet[e] = Math.max(rp.wet * beh.wetMul, beh.wetMin)
-        list.endSoft[e] = beh.endSoft
-        list.edge[e] = cl
-        list.seed[e] = seed
-        list.worldNormal[3 * e] = 0
-        list.worldNormal[3 * e + 1] = 0
-        list.worldNormal[3 * e + 2] = 0
-        list.hidden[e] = HIDDEN_NA
-        if (stats) {
-          stats.strokes++
-          stats.byClass[cl]++
-        }
-      }
-
-      // a stroke ALONG the stretch: its screen polyline resampled to PATH_POINTS at equal arc length, the world points on the 3D polyline
-      const along = (kk: number, widthPx: number, lab0: Oklab, bound: () => number, alpha: number): void => {
-        const xs: number[] = []
-        const ys: number[] = []
-        for (let s = a; s <= b; s++) {
-          xs.push(run.screen[2 * s])
-          ys.push(run.screen[2 * s + 1])
-        }
-        if (!(polylinePath(xs, ys, xs.length, widthPx, true, false, path, width) > 1e-6)) return
-        // the points are on the silhouette polyline, and the path is their projection (so that a world path and a path are one stroke)
-        alongWorld(run, a, b, world)
-        const vp = fc.vp
-        for (let q = 0; q < P; q++) {
-          const x = world[3 * q], y = world[3 * q + 1], z = world[3 * q + 2]
-          const w = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]
-          if (w <= 1e-9) return
-          path[2 * q] = (((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) / w + 1) / 2) * fc.W
-          path[2 * q + 1] = ((1 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) / w) / 2) * fc.H
-        }
-        finish(kk, lab0, bound, alpha, shadowSide)
-        if (stats) {
-          if (cl >= 2) stats.crisp++
-          else stats.drags++
-        }
-      }
-
-      // a stroke ACROSS the outline through sample `ii` along the screen direction (dx, dy), `len` px long (`from` of it behind the sample, `to` ahead):
-      // a decal in the plane of the sample's depth
-      const across = (kk: number, ii: number, dx: number, dy: number, len: number, widthPx: number, lab0: Oklab, alpha: number, from: number, to: number): void => {
-        const cx = run.screen[2 * ii]
-        const cy = run.screen[2 * ii + 1]
-        polylinePath([cx - dx * len * from, cx + dx * len * to], [cy - dy * len * from, cy + dy * len * to], 2, widthPx, true, false, path, width)
-        const wx = run.world[3 * ii], wy = run.world[3 * ii + 1], wz = run.world[3 * ii + 2]
-        const inv = 1 / Math.max(1e-9, pxPerUnit(fc, wx, wy, wz))
-        for (let q = 0; q < P; q++) {
-          const ox = (path[2 * q] - cx) * inv
-          const oy = (path[2 * q + 1] - cy) * inv
-          world[3 * q] = wx + right[0] * ox - up[0] * oy
-          world[3 * q + 1] = wy + right[1] * ox - up[1] * oy
-          world[3 * q + 2] = wz + right[2] * ox - up[2] * oy
-        }
-        finish(kk, lab0, ownBoundOf, alpha, shadowSide)
-      }
+      S.srcB = uB >= floorU ? canvas : groundRecipe(uB, rng)
+      S.lighterIsA = S.uA >= uB
+      S.labA = null
+      S.labB = null
+      S.ownBound = Number.NaN
+      S.mx = run.screen[2 * mid]
+      S.my = run.screen[2 * mid + 1]
+      S.depth = run.depth[mid]
 
       if (cl >= 2) {
         // distinct: a crisp, loaded stroke along the edge, darker than the darker side
         const uE = Math.min(clamp(uLo - (cl === 3 ? 0.12 : 0.06), 0.1, 0.8), shadowEdge ? capU : 1)
         const colour: DraftColour = { a: sideRecipeOf(null, null, false, loc, uE, rng, 0.9), b: null, t: 0 }
-        along(0, rp.width * (cl === 3 ? 0.7 : 0.475) * rng.range(0.88, 1.12), colourOfDraft(colour, env), () => lightnessAtValue(colour, capU, env), cl === 3 ? 1 : 0.85)
+        alongStroke(B, S, kkAlong, cell, rng, rp.width * (cl === 3 ? 0.7 : 0.475) * rng.range(0.88, 1.12), colourOfDraft(colour, env), S.shadowSide ? lightnessAtValue(colour, capU, env) : 0, cl === 3 ? 1 : 0.85)
       } else if (cl === 1) {
-        // blended: a wide dragged stroke along the boundary, and short scumbled pulls from the lighter side into the darker
-        along(0, rp.width * 2.6 * rng.range(0.88, 1.12), blend(true, 0.5), ownBoundOf, 0.8)
-        const nd = Math.max(1, Math.round(((b - a) * SILHOUETTE_STEP_PX) / 34))
-        for (let d = 0; d < nd; d++) {
-          const ii = a + Math.floor(((d + 0.5) / nd) * (b - a))
+        // blended: a wide dragged stroke along the boundary, and short scumbled pulls from the lighter side into the darker, at the sites of the run
+        alongStroke(B, S, kkAlong, cell, rng, rp.width * 2.6 * rng.range(0.88, 1.12), blendLab(B, S, true, 0.5), S.shadowSide ? ownBoundOf(B, S) : 0, 0.8)
+        let made = 0
+        let fallback = false
+        for (let j = 0; ; j++) {
+          // (every PULL_STEP samples after the site, half a step in; the stretch's middle when none falls in it)
+          let ii = first + Math.round((j + 0.5) * PULL_STEP)
+          if (ii > b - 2) {
+            if (made > 0) break
+            ii = mid
+            fallback = true
+          }
+          if (ii < a + 2) continue
           // from the lighter side into the darker: out of the figure when it is the lighter, else into it (the normal points in)
-          const sgn = lighterIsA ? -1 : 1
+          const sgn = S.lighterIsA ? -1 : 1
           const dir0x = sgn * run.nrm[2 * ii]
           const dir0y = sgn * run.nrm[2 * ii + 1]
-          const rot = rng.range(-0.35, 0.35)
+          const pd = B.pdraw.at(run.world[3 * ii], run.world[3 * ii + 1], run.world[3 * ii + 2])
+          const rot = pd.range(-0.35, 0.35)
           const dx = dir0x * Math.cos(rot) - dir0y * Math.sin(rot)
           const dy = dir0x * Math.sin(rot) + dir0y * Math.cos(rot)
-          const len = rp.length * (22 / 30) * rng.range(0.8, 1.2)
+          const len = rp.length * (22 / 30) * pd.range(0.8, 1.2)
           // (the lighter source's share is 0.7)
-          across(1 + d, ii, dx, dy, len, rp.width * 1.9 * rng.range(0.88, 1.12), blend(lighterIsA, 0.3), 0.75, 0.45, 0.55)
+          acrossStroke(B, S, fallback ? 0x2000 + kkAlong : 1 + j, cell, pd, ii, dx, dy, len, rp.width * 1.9 * pd.range(0.88, 1.12), blendLab(B, S, S.lighterIsA, 0.3), 0.75, 0.45, 0.55)
+          made++
           if (stats) stats.pulls++
+          if (fallback) break
         }
       } else {
         // lost: a few strokes that bridge both sides, carrying one colour into the other
-        const nd = Math.max(1, Math.round(((b - a) * SILHOUETTE_STEP_PX) / 42))
-        for (let d = 0; d < nd; d++) {
-          const ii = a + Math.floor(((d + 0.5) / nd) * (b - a))
-          const len = rp.length * (26 / 30) * rng.range(0.85, 1.15)
-          const rot = rng.range(-0.3, 0.3)
+        let made = 0
+        let fallback = false
+        for (let j = 0; ; j++) {
+          let ii = first + Math.round((j + 0.5) * PULL_STEP)
+          if (ii > b - 2) {
+            if (made > 0) break
+            ii = mid
+            fallback = true
+          }
+          if (ii < a + 2) continue
+          const pd = B.pdraw.at(run.world[3 * ii], run.world[3 * ii + 1], run.world[3 * ii + 2])
+          const len = rp.length * (26 / 30) * pd.range(0.85, 1.15)
+          const rot = pd.range(-0.3, 0.3)
           const dx = -run.nrm[2 * ii] * Math.cos(rot) + run.nrm[2 * ii + 1] * Math.sin(rot)
           const dy = -run.nrm[2 * ii] * Math.sin(rot) - run.nrm[2 * ii + 1] * Math.cos(rot)
-          across(1 + d, ii, dx, dy, len, rp.width * 1.8 * rng.range(0.88, 1.12), blend(true, 0.5), 0.6, 0.5, 0.5)
+          acrossStroke(B, S, fallback ? 0x2000 + kkAlong : 1 + j, cell, pd, ii, dx, dy, len, rp.width * 1.8 * pd.range(0.88, 1.12), blendLab(B, S, true, 0.5), 0.6, 0.5, 0.5)
+          made++
           if (stats) stats.bridges++
+          if (fallback) break
         }
       }
     }

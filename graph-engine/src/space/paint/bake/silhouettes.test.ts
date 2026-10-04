@@ -5,16 +5,16 @@ import { colourOfRecipe, newRecipe } from '../model/recipe'
 import { DEFAULT_PAINT_PARAMS, type PaintParams } from '../params'
 import { silhouettePolylines } from '../model/contours'
 import { smoothClasses } from '../model/edges'
-import { valueNoise3 } from '../model/math'
+import { hash01, valueNoise3 } from '../model/math'
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
-import { project, makeFrameCtx } from '../model/view'
+import { project, makeFrameCtx, pxPerUnit } from '../model/view'
 import { PATH_POINTS, ROLES, type GBuffer, type PaintView } from '../types'
-import { LIGHT, TERRACOTTA, CANVAS, framing, fixture, sparse, sphereColours, sphereScene, type Fixture } from './bakeFixture'
+import { LIGHT, TERRACOTTA, CANVAS, framing, fixture, saddleColours, saddleScene, sparse, sphereColours, sphereScene, type Fixture } from './bakeFixture'
 import { frameFromBakeWith, FrameScratch } from './frame'
 import { HIDDEN_NA } from './types'
 import {
-  focalAt, indexOf, medianClasses, newSilhouetteStats, NoiseRun, SILHOUETTE_MIN_SAMPLES, SILHOUETTE_STEP_PX, silhouetteEnv, silhouetteRuns, silhouetteStrokes, VertexGrid,
-  type SilhouetteRun,
+  CUT_WINDOW, cutRun, focalAt, indexOf, lowestKeys, medianClasses, newSilhouetteStats, NoiseRun, SILHOUETTE_MIN_SAMPLES, SILHOUETTE_STEP_PX, silhouetteEnv, silhouetteRuns, silhouetteStrokes,
+  siteBefore, stretchKinds, VertexGrid, WorldDraw, type SilhouetteRun,
 } from './silhouettes'
 import { StrokeList } from './strokeList'
 
@@ -350,39 +350,6 @@ describe('the silhouette strokes', () => {
     }
   })
 
-  it('keep their seeds where the outline has not moved: a turn of a degree reseeds a minority, a turn of five most', () => {
-    const base = make(sphereFx, viewAt(20, 25))
-    const mid = (l: StrokeList, e: number): number[] => [0, 1, 2].map((c) => (l.worldPath[3 * PP * e + 3 * 3 + c] + l.worldPath[3 * PP * e + 3 * 4 + c]) / 2)
-    const kept = (az: number): number => {
-      const other = make(sphereFx, viewAt(az, 25))
-      let same = 0
-      let n = 0
-      for (let e = 0; e < other.list.count; e++) {
-        const m = mid(other.list, e)
-        let best = -1
-        let bd = Infinity
-        for (let f = 0; f < base.list.count; f++) {
-          const q = mid(base.list, f)
-          const d = Math.hypot(m[0] - q[0], m[1] - q[1], m[2] - q[2])
-          if (d < bd) {
-            bd = d
-            best = f
-          }
-        }
-        if (bd < 0.15) {
-          n++
-          if (base.list.seed[best] === other.list.seed[e]) same++
-        }
-      }
-      expect(n).toBeGreaterThan(15)
-      if (process.env.FRAME_PRINT) console.log(`silhouette seeds, a turn to az ${az}: ${same} of ${n} strokes keep their seed`)
-      return same / n
-    }
-    expect(kept(20.5)).toBeGreaterThan(0.6)
-    expect(kept(21)).toBeGreaterThan(0.55)
-    expect(kept(25)).toBeLessThan(0.7)
-  })
-
   it('join the batch of a frame: edge layer, after the baked strokes of the same layer are ordered, with the figure\'s G-buffer or without', () => {
     const view = viewAt(20, 25)
     const g = sphereGBuffer(view.width, view.height, { view, params: sphereFx.params, table: { z: -1, mark: 1 } })
@@ -437,7 +404,7 @@ interface Hand {
 function handRun(h: Hand, view: PaintView, fc: ReturnType<typeof makeFrameCtx>): SilhouetteRun {
   const n = h.n
   const run: SilhouetteRun = {
-    mark: 0, n, world: new Float64Array(3 * n), screen: new Float64Array(2 * n), poly: new Float64Array(3 * n), tpos: new Float64Array(n), nrm: new Float64Array(2 * n),
+    mark: 0, n, world: new Float64Array(3 * n), screen: new Float64Array(2 * n), poly: new Float64Array(3 * n), tpos: new Float64Array(n), nrm: new Float64Array(2 * n), sg: new Int8Array(n).fill(1),
     uA: new Float32Array(n).fill(h.uA), uB: new Float32Array(n).fill(h.uB), uMin: new Float32Array(n).fill(h.uMin ?? h.uA), local: new Float32Array(3 * n),
     keys: new Uint32Array(n).fill(h.key ?? 0xf0000000), depth: new Float32Array(n), h: new Float32Array(n), cls: Uint8Array.from(h.cls), contrast: Math.abs(h.uA - h.uB),
   }
@@ -536,10 +503,11 @@ describe('the strokes of a stretch of the outline, made from runs given by hand'
     expect(eb.length).toBe(ea.length)
     for (let k = 0; k < ea.length; k++) {
       expect(sb.list.seed[eb[k]]).toBe(sa.list.seed[ea[k]])
-      // (the brush's seeded draws: widths, loads, bristles)
-      for (let q = 0; q < PP; q++) expect(sb.list.width[PP * eb[k] + q]).toBe(sa.list.width[PP * ea[k] + q])
-      expect(sb.list.load[eb[k]]).toBe(sa.list.load[ea[k]])
-      expect(sb.list.bristles[eb[k]]).toBe(sa.list.bristles[ea[k]])
+      // (the brush's draws, from the noise at the stretch's place, which is 6 px apart in the two: widths, loads, bristles)
+      for (let q = 0; q < PP; q++) expect(sb.list.width[PP * eb[k] + q] / sa.list.width[PP * ea[k] + q]).toBeCloseTo(1, 1)
+      expect(sb.list.load[eb[k]] / sa.list.load[ea[k]]).toBeGreaterThan(0.97)
+      expect(sb.list.load[eb[k]] / sa.list.load[ea[k]]).toBeLessThan(1.03)
+      expect(Math.abs(sb.list.bristles[eb[k]] - sa.list.bristles[ea[k]])).toBeLessThanOrEqual(1)
     }
   })
 
@@ -768,5 +736,249 @@ describe('the helpers of the silhouettes', () => {
       expect(uniq.size).toBe(want.size)
       for (const c of want) expect(uniq.has(c)).toBe(true)
     }
+  })
+})
+
+// ---- an open sheet's outline: the side that is seen ----
+
+describe('the outline of an open sheet', () => {
+  const saddleFx = fixture(saddleScene(), saddleColours(), sparse(700), LIGHT, ORTHO)
+  const surface = saddleFx.baked.surfaces[0]!
+
+  // The nearest surface along the line through o in direction dir, by every triangle of the refined sheet (what the eye sees: no walk, no screen buffer, so
+  // nothing the silhouettes do): its distance along dir and the facing of the interpolated normal to the eye (-dir).
+  function castLine(o: number[], dir: number[]): { t: number; face: number } | null {
+    const p = surface.positions, idx = surface.indices, nor = surface.normals
+    let best: { t: number; face: number } | null = null
+    for (let k = 0; k + 2 < idx.length; k += 3) {
+      const a = 3 * idx[k], b = 3 * idx[k + 1], c = 3 * idx[k + 2]
+      const e1 = [p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]]
+      const e2 = [p[c] - p[a], p[c + 1] - p[a + 1], p[c + 2] - p[a + 2]]
+      const pv = [dir[1] * e2[2] - dir[2] * e2[1], dir[2] * e2[0] - dir[0] * e2[2], dir[0] * e2[1] - dir[1] * e2[0]]
+      const det = e1[0] * pv[0] + e1[1] * pv[1] + e1[2] * pv[2]
+      if (Math.abs(det) < 1e-14) continue
+      const tv = [o[0] - p[a], o[1] - p[a + 1], o[2] - p[a + 2]]
+      const u = (tv[0] * pv[0] + tv[1] * pv[1] + tv[2] * pv[2]) / det
+      if (u < 0 || u > 1) continue
+      const qv = [tv[1] * e1[2] - tv[2] * e1[1], tv[2] * e1[0] - tv[0] * e1[2], tv[0] * e1[1] - tv[1] * e1[0]]
+      const v = (dir[0] * qv[0] + dir[1] * qv[1] + dir[2] * qv[2]) / det
+      if (v < 0 || u + v > 1) continue
+      const t = (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) / det
+      if (best && t >= best.t) continue
+      const w = 1 - u - v
+      let face = 0
+      for (let j = 0; j < 3; j++) face += (w * nor[a + j] + u * nor[b + j] + v * nor[c + j]) * -dir[j]
+      best = { t, face }
+    }
+    return best
+  }
+
+  // For every other sample of the runs of a view: the side of the outline the sheet is on (3 px either side, by ray casting: the side whose nearest surface is at
+  // the outline's own depth), what that surface shows the eye, and whether the run's side and normal say so.
+  function checkAgainstRays(az: number, el: number): { decided: number; wrongSide: number; wrongWay: number; sides: Set<number> } {
+    const view = viewAt(az, el)
+    const { runs } = make(saddleFx, view)
+    const fc = makeFrameCtx(saddleFx.scene, view, EMPTY_G, saddleFx.params)
+    const right = [view.view[0], view.view[4], view.view[8]]
+    const up = [view.view[1], view.view[5], view.view[9]]
+    let decided = 0, wrongSide = 0, wrongWay = 0
+    const sides = new Set<number>()
+    for (const run of runs) {
+      for (let k = 0; k < run.n; k += 2) {
+        const a0 = Math.max(0, k - 1), a1 = Math.min(run.n - 1, k + 1)
+        let tx = run.screen[2 * a1] - run.screen[2 * a0], ty = run.screen[2 * a1 + 1] - run.screen[2 * a0 + 1]
+        const tl = Math.hypot(tx, ty) || 1
+        tx /= tl
+        ty /= tl
+        const ppu = pxPerUnit(fc, run.world[3 * k], run.world[3 * k + 1], run.world[3 * k + 2])
+        const hits = [3, -3].map((d) => {
+          const ox = (-ty * d) / ppu, oy = (tx * d) / ppu
+          const o = [0, 1, 2].map((j) => run.world[3 * k + j] + right[j] * ox - up[j] * oy - view.viewDir[j] * 50)
+          return castLine(o, view.viewDir as number[])
+        })
+        const gap = hits.map((h) => (h ? Math.abs(h.t - 50) : Infinity))
+        const inside = gap[0] < gap[1] ? 0 : 1
+        // only where the sheet is on one side and at the outline's depth, or clearly nearer one side's
+        if (!(gap[inside] < 1) || (Number.isFinite(gap[1 - inside]) && Math.abs(gap[0] - gap[1]) < 0.05)) continue
+        decided++
+        const seen = (hits[inside] as { face: number }).face >= 0 ? 1 : -1
+        sides.add(seen)
+        if (run.sg[k] !== seen) wrongSide++
+        const ix = inside === 0 ? -ty : ty, iy = inside === 0 ? tx : -tx
+        if (run.nrm[2 * k] * ix + run.nrm[2 * k + 1] * iy < 0) wrongWay++
+      }
+    }
+    return { decided, wrongSide, wrongWay, sides }
+  }
+
+  it("reads the side of the sheet that is seen just inside the outline at every sample, as ray casting the refined sheet 3 px either side sees it, and the way in", () => {
+    for (const [az, el] of [[20, 25], [200, 10], [30, 15]] as const) {
+      const r = checkAgainstRays(az, el)
+      if (process.env.FRAME_PRINT) console.log(`saddle az ${az} el ${el}: ${r.decided} samples decided by rays, the side seen wrong at ${r.wrongSide}, the way in wrong at ${r.wrongWay}`)
+      expect(r.decided).toBeGreaterThan(20)
+      expect(r.wrongSide / r.decided, `az ${az}`).toBeLessThan(0.03)
+      expect(r.wrongWay / r.decided, `az ${az}`).toBeLessThan(0.03)
+    }
+  })
+
+  it("sees both sides of a sheet along one outline where the sheet turns, and cuts a stretch there", () => {
+    const view = viewAt(20, 25)
+    const { runs, list } = make(saddleFx, view)
+    const senv = silhouetteEnv(saddleFx.params)
+    const flipped = runs.filter((r) => new Set(r.sg).size === 2)
+    expect(flipped.length).toBeGreaterThan(0)
+    for (const run of flipped) {
+      for (const [a, b] of cutRun(stretchKinds(run, senv.capU), 45, lowestKeys(run.keys, CUT_WINDOW))) {
+        const seen = new Set(run.sg.slice(a, b + 1))
+        expect(seen.size, `stretch ${a}-${b}`).toBe(1)
+      }
+    }
+    expect(list.count).toBeGreaterThan(4)
+    // and a closed figure is seen from its outside all round
+    for (const run of make(sphereFx, view).runs) expect(new Set(run.sg)).toEqual(new Set([1]))
+  })
+
+  it("tells the sides of the sheet apart in the kinds, so that a stretch is not cut across a change of side", () => {
+    const view = viewAt(20, 25)
+    const { runs } = make(saddleFx, view)
+    const senv = silhouetteEnv(saddleFx.params)
+    const run = runs.find((r) => new Set(r.sg).size === 2) as SilhouetteRun
+    const kinds = stretchKinds(run, senv.capU)
+    const front = run.sg.findIndex((s) => s > 0)
+    const back = run.sg.findIndex((s) => s < 0)
+    expect(kinds[front] & 8).toBe(0)
+    expect(kinds[back] & 8).toBe(8)
+  })
+})
+
+// ---- the cuts, the names and the draws of the strokes of an outline ----
+
+describe('the cuts of an outline and the draws of its strokes', () => {
+  it('cuts at the sites, where the kind changes, and in equal parts when a stretch is long, and joins a short stretch to the one before it', () => {
+    const n = 200
+    const keys = new Uint32Array(n)
+    // cells of 20 samples with the keys 5, 9, 3, 8, 7, 1, 6, 4, 2, 0 (+ 1)
+    const cellKeys = [5, 9, 3, 8, 7, 1, 6, 4, 2, 0]
+    for (let i = 0; i < n; i++) keys[i] = 1000 * (cellKeys[Math.floor(i / 20)] + 1)
+    // a site is where a cell begins and its key is the lowest within 24 samples either side: the cells 0, 2, 5 and 9 (the first has none before it)
+    const sites = lowestKeys(keys, 24)
+    expect(Array.from(sites)).toEqual([0, 40, 100, 180])
+    expect(siteBefore(sites, 0)).toBe(0)
+    expect(siteBefore(sites, 39)).toBe(0)
+    expect(siteBefore(sites, 40)).toBe(1)
+    expect(siteBefore(sites, 199)).toBe(3)
+    expect(siteBefore(Int32Array.from([30]), 10)).toBe(-1)
+    const kinds = new Uint8Array(n)
+    expect(cutRun(kinds, 1000, sites).map(([a, b]) => [a, b])).toEqual([[0, 39], [40, 99], [100, 179], [180, 199]])
+    // a change of kind cuts too; a long stretch is cut in equal parts, numbered; a stretch under 11 samples (the last, of kind 2) joins the one before it
+    kinds.fill(1, 60, 100)
+    kinds.fill(2, 190, 200)
+    expect(cutRun(kinds, 25, sites)).toEqual([
+      [0, 19, 0, 0], [20, 39, 0, 1], [40, 59, 0, 0], [60, 79, 1, 0], [80, 99, 1, 1], [100, 119, 0, 0], [120, 139, 0, 1], [140, 159, 0, 2], [160, 179, 0, 3], [180, 199, 0, 0],
+    ])
+  })
+
+  it('draws from smooth noise at its place: the same at the same place, never far from itself a little way off, and spread as the uniform and the normal draws are', () => {
+    const a = new WorldDraw(0.3, -0.2, 0.9)
+    const b = new WorldDraw(0.3, -0.2, 0.9)
+    for (let k = 0; k < 12; k++) expect(a.next()).toBe(b.next())
+    let worst = 0
+    let worstG = 0
+    let sum = 0
+    let sum2 = 0
+    let gsum2 = 0
+    const N = 4000
+    for (let i = 0; i < N; i++) {
+      const x = 7 * hash01(i, 1, 2) - 3.5, y = 7 * hash01(i, 3, 4) - 3.5, z = 7 * hash01(i, 5, 6) - 3.5
+      const p = new WorldDraw(x, y, z)
+      const q = new WorldDraw(x + 0.01, y - 0.01, z + 0.01)
+      for (let k = 0; k < 4; k++) {
+        const u = p.next()
+        worst = Math.max(worst, Math.abs(u - q.next()))
+        if (k === 0) {
+          sum += u
+          sum2 += u * u
+        }
+      }
+      const g = p.gauss()
+      worstG = Math.max(worstG, Math.abs(g - q.gauss()))
+      gsum2 += g * g
+    }
+    // (a hashed draw is 0.33 apart on average)
+    expect(worst).toBeLessThan(0.08)
+    expect(worstG).toBeLessThan(0.2)
+    const mean = sum / N
+    const sd = Math.sqrt(sum2 / N - mean * mean)
+    expect(mean).toBeGreaterThan(0.47)
+    expect(mean).toBeLessThan(0.53)
+    expect(sd).toBeGreaterThan(0.25)
+    expect(sd).toBeLessThan(0.33)
+    expect(Math.sqrt(gsum2 / N)).toBeGreaterThan(0.85)
+    expect(Math.sqrt(gsum2 / N)).toBeLessThan(1.15)
+  })
+
+  // The strokes of a view, and for each stroke of another view the one of this nearest it (by the middle of its world path, within 0.15 units).
+  function carried(fx: Fixture, az0: number, el: number, az1: number): { n: number; sameSeed: number; sameSeedColour: number; same: number; sameClass: number; sameClassOK: number } {
+    const base = make(fx, viewAt(az0, el))
+    const other = make(fx, viewAt(az1, el))
+    const mid = (l: StrokeList, e: number): number[] => [0, 1, 2].map((c) => (l.worldPath[3 * PP * e + 3 * (PP >> 1) + c] + l.worldPath[3 * PP * e + 3 * ((PP >> 1) - 1) + c]) / 2)
+    const peak = (l: StrokeList, e: number): number => Math.max(...Array.from({ length: PP }, (_, q) => l.width[PP * e + q]))
+    const oklab = (l: StrokeList, e: number): number[] => linearToOklab(l.colour[3 * e], l.colour[3 * e + 1], l.colour[3 * e + 2])
+    let n = 0, sameSeed = 0, sameSeedColour = 0, same = 0, sameClass = 0, sameClassOK = 0
+    for (let e = 0; e < other.list.count; e++) {
+      const m = mid(other.list, e)
+      let best = -1
+      let bd = Infinity
+      for (let f = 0; f < base.list.count; f++) {
+        const q = mid(base.list, f)
+        const d = Math.hypot(m[0] - q[0], m[1] - q[1], m[2] - q[2])
+        if (d < bd) {
+          bd = d
+          best = f
+        }
+      }
+      if (bd >= 0.15) continue
+      n++
+      // the brush's jitters (width, load and colour) within 5% (a colour 5% apart: 0.02 of OKLab distance, 5% of its range)
+      const la = oklab(base.list, best), lb = oklab(other.list, e)
+      const colourClose = Math.hypot(la[0] - lb[0], la[1] - lb[1], la[2] - lb[2]) <= 0.02
+      const close = Math.abs(peak(other.list, e) / peak(base.list, best) - 1) <= 0.05 && Math.abs(other.list.load[e] / base.list.load[best] - 1) <= 0.05 && colourClose
+      const kept = base.list.seed[best] === other.list.seed[e]
+      if (kept) {
+        sameSeed++
+        if (colourClose) sameSeedColour++
+      }
+      if (kept || close) same++
+      if (base.list.edge[best] === other.list.edge[e]) {
+        sameClass++
+        if (kept || close) sameClassOK++
+      }
+    }
+    return { n, sameSeed, sameSeedColour, same, sameClass, sameClassOK }
+  }
+
+  it('keeps what an outline draws where it has not moved: a turn of a degree reseeds a few strokes and changes the brush of none, and five degrees most', () => {
+    let nAll = 0
+    let sameAll = 0
+    for (const [fx, az, el] of [[sphereFx, 20, 25], [sphereFx, 120, 25], [sphereFx, 200, 40]] as const) {
+      const one = carried(fx, az, el, az + 1)
+      const five = carried(fx, az, el, az + 5)
+      if (process.env.FRAME_PRINT) {
+        console.log(`outline, az ${az} to ${az + 1}: ${one.n} strokes matched, ${one.sameSeed} keep their seed, ${one.same} keep it or have width, load and colour within 5%; ${one.sameClass} of them in the same class, ${one.sameClassOK} of those keep it or are within 5%`)
+        console.log(`outline, az ${az} to ${az + 5}: ${five.n} strokes matched, ${five.sameSeed} keep their seed, ${five.same} keep it or are within 5%; ${five.sameClass} in the same class, ${five.sameClassOK} of those`)
+      }
+      expect(one.n).toBeGreaterThan(15)
+      // a stroke that keeps its seed keeps its colour, too: what it is mixed with does not depend on the strokes drawn before it
+      expect(one.sameSeedColour / one.sameSeed, `1 degree from az ${az}, the colour`).toBeGreaterThanOrEqual(0.9)
+      nAll += one.n
+      sameAll += one.same
+      expect(one.same / one.n, `1 degree from az ${az}`).toBeGreaterThanOrEqual(0.9)
+      // (a stroke whose class changes is another kind of stroke: the lost edge turning soft where the outline runs along a terminator moves fast)
+      expect(one.sameClassOK / one.sameClass, `1 degree from az ${az}, the same class`).toBeGreaterThanOrEqual(0.9)
+      // five degrees: a stroke in every two keeps its seed, and well over half keep their brush (the old outline kept 7 in 23)
+      expect(five.sameSeed / five.n, `5 degrees from az ${az}`).toBeGreaterThan(0.3)
+      expect(five.same / five.n, `5 degrees from az ${az}`).toBeGreaterThan(0.55)
+    }
+    expect(sameAll / nAll).toBeGreaterThanOrEqual(0.9)
   })
 })
