@@ -1,5 +1,5 @@
 import { HOVER_TOLERANCE, TOUCH_TOLERANCE } from '../feel'
-import type { PointerKind } from '../input'
+import type { Intent, PointerKind } from '../input'
 
 // The decisions the DOM adapter makes about raw browser events, kept apart
 // from the listeners so a node test can reach them.
@@ -37,4 +37,12 @@ export function toleranceInContent(kind: PointerKind, pxPerUnit: number): number
 
 export function pointerKindOf(pointerType: string): PointerKind {
   return pointerType === 'touch' || pointerType === 'pen' ? pointerType : 'mouse'
+}
+
+// Whether the view takes a key for its own, so the browser must not also act
+// on it. A key that gave no intent is not the view's. Nor is the coordinate
+// toggle when nothing listens for it (the tool is off): `c` then does nothing
+// here and is left to the page.
+export function swallowsKey(intents: readonly Intent[], toggleListened: boolean): boolean {
+  return intents.some((intent) => intent.kind !== 'toggleCoordinates' || toggleListened)
 }

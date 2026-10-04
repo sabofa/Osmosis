@@ -187,7 +187,7 @@ export default function App() {
         )}
       </div>
       <div className="app-viewer">
-        <GraphViewer spec={spec} onErrors={setErrors} />
+        <GraphViewer spec={spec} onErrors={setErrors} coordinates />
       </div>
     </div>
   )

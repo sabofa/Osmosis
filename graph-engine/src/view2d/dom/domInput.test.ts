@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HOVER_TOLERANCE, TOUCH_TOLERANCE } from '../feel'
-import { keyReachesView, pointerKindOf, toleranceInContent } from './domInput'
+import { keyReachesView, pointerKindOf, swallowsKey, toleranceInContent } from './domInput'
 
 const key = (
   key: string,
@@ -70,5 +70,22 @@ describe('pointerKindOf', () => {
     expect(pointerKindOf('touch')).toBe('touch')
     expect(pointerKindOf('')).toBe('mouse')
     expect(pointerKindOf('stylus')).toBe('mouse')
+  })
+})
+
+describe('swallowsKey', () => {
+  it('swallows a key that did something', () => {
+    expect(swallowsKey([{ kind: 'zoom', at: { x: 0, y: 0 }, factor: 1.25, t: 0 }], false)).toBe(true)
+    expect(swallowsKey([{ kind: 'reset', t: 0 }], false)).toBe(true)
+    expect(swallowsKey([{ kind: 'toggleCoordinates' }], true)).toBe(true)
+  })
+
+  it('does not swallow a key that did nothing', () => {
+    expect(swallowsKey([], false)).toBe(false)
+    expect(swallowsKey([], true)).toBe(false)
+  })
+
+  it('leaves c to the browser when nothing listens for the coordinate toggle', () => {
+    expect(swallowsKey([{ kind: 'toggleCoordinates' }], false)).toBe(false)
   })
 })

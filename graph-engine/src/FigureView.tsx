@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { GraphConfig } from './parser/config'
+import { centreText, cursorText, focusLineFor, itemForId } from './figure/focusLine'
 import { figureMapping, type FigureFrame } from './figure/frame'
 import {
   highlightAccent,
@@ -13,9 +14,12 @@ import type { FigureHitItem, FigureTarget } from './figure/hitItems'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
 import { applySvgViewBox } from './view2d/dom/appliers'
+import { CoordinateTool } from './view2d/dom/CoordinateTool'
+import { toleranceInContent } from './view2d/dom/domInput'
 import { startCamera } from './view2d/dom/startView'
 import { useView2d } from './view2d/dom/useView2d'
 import { focusCamera, formatFocus, type FocusSpec } from './view2d/focus'
+import { formatZoom } from './view2d/readout'
 import type { Camera, Rect } from './view2d/types'
 import './FigureView.css'
 
@@ -128,7 +132,7 @@ function resizeFilters(filters: Filters, visible: Rect, pxPerUnit: number): void
   filters.haloDeviation?.setAttribute('stdDeviation', String(sizes.haloDeviation))
 }
 
-export default function FigureView({ svg, theme, frame, items, startFocus, focus, onSelect }: FigureViewProps) {
+export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, onSelect }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   // Stable across renders, and that identity is load-bearing rather than a
@@ -154,6 +158,9 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   const itemsById = useMemo(() => new Map((items ?? []).map((item) => [item.id, item])), [items])
   const [hovered, setHovered] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  // The coordinate tool: whether its readout is open (the toggle itself is
+  // there whenever the `coordinates` prop is on).
+  const [toolOpen, setToolOpen] = useState(false)
 
   // Apply the camera: the window itself, and the compensation that keeps text
   // and dots the size they were drawn at. The last one applied is remembered
@@ -198,9 +205,15 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     onHover: setHovered,
     onSelect: (id) => {
       setSelected(id)
-      const item = id === null ? undefined : itemsById.get(id)
+      // Not itemsById: a label shares its object's id and comes after it, so
+      // the map holds the label, which has no author coordinates.
+      const item = itemForId(items ?? [], id)
       onSelect?.(item ? { id: item.id, targets: item.targets, author: item.author } : null)
     },
+    // C does nothing, and is left to the page, unless the tool is on.
+    onToggleCoordinates: coordinates ? () => setToolOpen((open) => !open) : undefined,
+    // The pointer re-renders this view on every move; only the readout wants it.
+    trackPointer: coordinates === true && toolOpen,
   })
 
   useLayoutEffect(() => {
@@ -271,6 +284,26 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     [attachSurface],
   )
 
+  // The coordinate tool's lines. Worked out only while it is open. The pixel
+  // tolerance for "a vertex is under the centre" is turned into drawing units
+  // with the scale of the frame the camera was last drawn at, which is the one
+  // this render's camera belongs to (the hook publishes it right after).
+  let tool: ReactNode = null
+  if (coordinates && frame) {
+    const open = toolOpen && view.camera !== null
+    const camera = view.camera
+    const lines = { cursor: '', centre: '', zoom: '', copyText: '' }
+    if (open && camera) {
+      const all = items ?? []
+      const tolerance = toleranceInContent('mouse', applied.current?.pxPerUnit ?? 1)
+      lines.cursor = cursorText(frame, view.pointer, itemForId(all, hovered))
+      lines.centre = centreText(frame, camera, all, tolerance)
+      lines.zoom = formatZoom(camera.zoom)
+      lines.copyText = focusLineFor(frame, camera, all, tolerance)
+    }
+    tool = <CoordinateTool open={open} onToggle={() => setToolOpen((o) => !o)} theme={theme} {...lines} />
+  }
+
   // The markup is produced entirely by this package's own emitter, which
   // escapes every label and attribute value it writes (see figure/svg.ts's
   // svgEscape) — spec text never reaches the DOM unescaped.
@@ -282,6 +315,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
           Reset view
         </button>
       )}
+      {tool}
     </div>
   )
 }

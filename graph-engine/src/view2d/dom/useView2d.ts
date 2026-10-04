@@ -5,7 +5,7 @@ import { clampCamera, DEFAULT_LIMITS, type LimitsPolicy } from '../limits'
 import { ViewMotion } from '../motion'
 import { hitTest, PointerSelection, type HitItem } from '../pointing'
 import type { Camera, Rect, Size, Vec } from '../types'
-import { keyReachesView, pointerKindOf, toleranceInContent } from './domInput'
+import { keyReachesView, pointerKindOf, swallowsKey, toleranceInContent } from './domInput'
 import { resetTarget, sameView, viewKey } from './startView'
 import './view2d.css'
 
@@ -204,7 +204,7 @@ class Controller {
     const onKeyDown = (ev: KeyboardEvent) => {
       if (!this.motion || !keyReachesView(ev)) return
       const intents = this.recognizer.key({ key: ev.key, t: performance.now() })
-      if (intents.length === 0) return
+      if (!swallowsKey(intents, this.read().onToggleCoordinates !== undefined)) return
       ev.preventDefault()
       this.dispatch(intents)
     }

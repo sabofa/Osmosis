@@ -613,6 +613,43 @@ different keys; for a repeated key, the last one wins.
 | `@hover` | `all`\|`points`\|`features`\|`none` | `all` | `features` restricts hover snapping to detected feature points only (skipping curves, segments, and plain plotted points); a snapped feature reports its exact analytic value, not an interpolated sample |
 | `@hide` | `<name>[,<name>...]` | — | hide specific named statements/tables (by their `name:` clause) |
 | `@show` | `<name>[,<name>...]` | — | un-hide — a later directive always wins for that specific name, regardless of order |
+| `@focus` | `(x, y)`, `(x, y, z)` or `view (u, v)`, optionally followed by `zoom <k>` | fitted view | where a **figure** opens, in the figure's own coordinates — see "`@focus`: where a figure opens" below. Figures only; a plot or a table ignores it |
+
+### `@focus`: where a figure opens
+
+A figure can be panned, zoomed and reset by the reader. `@focus` says where it
+**opens**, so a figure that is mostly one small detail can open on that detail,
+with the whole figure still one reset away.
+
+```
+@focus: (3, 2) zoom 4
+```
+
+| Form | Meaning |
+|---|---|
+| `@focus: (x, y)` | centre on this point, **in the coordinates the spec was written in** (a flat figure) |
+| `@focus: (x, y, z)` | the same on a **solid** figure: the view centres on where that point is drawn, z up, as in the rest of the spec |
+| `@focus: view (u, v)` | centre on a point of the drawing's own units. A solid's drawing cannot be turned back into space coordinates, so this is the form for "somewhere on the picture"; `u` and `v` are stable for a fixed spec and camera |
+| `… zoom k` | how far in, relative to the fitted view: `zoom 1` (the default) is the whole figure, `zoom 4` is four times closer, `zoom 0.5` is further out. The reader's own limits still apply (about 0.1 to 64) |
+
+The numbers are plain decimals (`-1.5`, `.5`, `2e3`); commas separate them and
+spaces are free. `view` is a word, not a function.
+
+**Refusals.** A spec whose `@focus` is not one of the forms above, or whose
+`zoom` is not greater than 0, is refused with a message naming the form it
+expected, and the figure opens fitted as if there were no `@focus`. A form the
+figure cannot place also opens fitted, without a message: `(x, y, z)` on a flat
+figure, or `(x, y)` on a solid one.
+
+**Reset.** Double-click, double-tap, `0` or the Reset button return to this
+view; at it already, they fit the whole figure, so two in a row always show
+everything.
+
+**Finding the numbers.** Turn on the coordinate tool (the `C` key, or the toggle
+in the figure's top-left corner, where the host shows it), move the figure to
+where it should open, and press **Copy**: it writes the matching `@focus:` line
+to the clipboard. On a solid figure it names the vertex nearest the centre by
+its `(X, Y, Z)` when one is close, and writes `view (u, v)` otherwise.
 
 ## Declare `@mode`. Always. Including `@mode: graph`.
 
