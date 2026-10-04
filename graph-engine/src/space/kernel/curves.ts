@@ -51,12 +51,15 @@ function curveParts(statement: Statement, config: GraphConfig): CurveParts {
     }
     case 'polar': {
       const theta = variable('theta')
+      // The parser's default range (no "for theta in [a, b]", flagged fullTurn) is a full turn in the document's angle
+      // unit: 0 to 360 under @angle: degrees, as the 2D engine does (scene/buildScene.ts); its from and to hold the radian default.
+      const degreesTurn = statement.fullTurn === true && config.angle === 'degrees'
       return {
         ...plain,
         f: [mul(statement.body, call('cos', theta)), mul(statement.body, call('sin', theta)), ZERO],
         param: 'theta',
-        from: statement.from,
-        to: statement.to,
+        from: degreesTurn ? num(0) : statement.from,
+        to: degreesTurn ? num(360) : statement.to,
       }
     }
     case 'space':
