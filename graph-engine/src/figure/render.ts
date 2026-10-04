@@ -75,7 +75,9 @@ import {
 } from './project3d'
 import { buildSolidFigure, isSpaceName, type SolidFigureScope } from './solidScope'
 import { drawnDimensionSegment, solidDimensions, solidOutline, type SolidBody, type SolidSpec } from './solids'
-import { authorToWorld, describeAuthorPlane } from './authorFrame'
+import { authorToWorld, describeAuthorPlane, worldToAuthor } from './authorFrame'
+import type { FigureFrame } from './frame'
+import { figureHitItems, type FigureHitItem } from './hitItems'
 import { liftOffset, NET_LABEL_CLEARANCE, planeRadii, regionCorners, sectionOf, trueShape, type SectionPiece, type TrueShapePiece } from './crossSection'
 import { ellipseFromConjugates, projectCircle, projectVector, type ProjectedCircle } from './silhouette'
 import { angleArc, angleFrame, arcBisector, arcMiddle, dihedralMark, markHidden, projectArc, rightAngleCorners, type SpaceArc } from './spaceMarks'
@@ -140,8 +142,12 @@ interface Identity {
   object: string | null
 }
 
-type FigureItem =
-  | { kind: 'point'; id: Identity; at: Vec2; label: string | null; prefer: Vec2 | null; color: string | null }
+// The items the figure is built from. Exported as a type for hitItems.ts,
+// which turns them into pointable shapes.
+export type FigureItem =
+  // `author3`: a point in space, in the author's own z-up frame (authorFrame.ts),
+  // for the pointing layer. It changes no markup.
+  | { kind: 'point'; id: Identity; at: Vec2; label: string | null; prefer: Vec2 | null; color: string | null; author3?: Vec3 }
   | { kind: 'line'; id: Identity; a: Vec2; b: Vec2; extent: LineExtent; auxiliary: boolean; color: string | null }
   // The reference line a dimension label hangs off when nothing else draws
   // it (fix wave 1): a ROUND solid's radius (rim centre to rim) or height
@@ -174,7 +180,7 @@ type FigureItem =
   // in space, bound by the solid-figure walk (S4) — and never points of the
   // plane: "label: AB" measures the TRUE 3D length, not the projected edge,
   // which is a fact about the camera and not about the solid.
-  | { kind: 'solidVertex'; id: Identity; at: Vec2; label: string; prefer: Vec2 | null; color: string | null }
+  | { kind: 'solidVertex'; id: Identity; at: Vec2; label: string; prefer: Vec2 | null; color: string | null; author3?: Vec3 }
   // A cross-section shaded ON the projected solid. The lifted form is not
   // here at all: it comes back as an ordinary polygon or circle, which is the
   // whole of H5.
@@ -266,6 +272,11 @@ type FigureItem =
 export interface FigureResult {
   svg: string
   errors: SceneError[]
+  // Where the author's coordinates land in the drawing, and what in it can be
+  // pointed at, both in the SVG's view units. Additive: nothing in the markup
+  // says either.
+  frame: FigureFrame
+  items: FigureHitItem[]
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,7 +1183,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
 
   // A point in space, drawn: a dot at its projection, lettered with its name.
   function spacePointItem(index: number, name: string, at: Vec3, color: string | null): FigureItem {
-    return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color }
+    return { kind: 'point', id: { statement: index, object: name || null }, at: camera.project(at), label: name || null, prefer: null, color, author3: worldToAuthor(at) }
   }
 
   for (let index = 0; index < statements.length; index++) {
@@ -1302,6 +1313,7 @@ function buildItems(statements: Statement[], config: GraphConfig): { items: Figu
               label: built.points[v].name,
               prefer: awayFrom(projected[v], centre),
               color: statement.color,
+              author3: worldToAuthor(built.points[v].at),
             })
           }
           break
@@ -2110,9 +2122,9 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   const clean = isClean(style)
   const drawn = clean ? palette : paperPalette(style, palette)
   const pen = choosePen(style, drawn)
-  const { viewBox, errors } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)
+  const { viewBox, errors, frame, items } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)
   pen.paper(viewBox)
-  return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
+  return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors], frame, items }
 }
 
 // The palette a styled figure's colours resolve against: the one that suits
@@ -2153,7 +2165,7 @@ export function drawFigure(
   palette: Palette,
   pen: FigurePen,
   letteringSize = 1
-): { viewBox: Rect; errors: SceneError[] } {
+): { viewBox: Rect; errors: SceneError[]; frame: FigureFrame; items: FigureHitItem[] } {
   const { items, errors } = buildItems(statements, config)
   const theme = figureTheme(palette)
 
@@ -2186,6 +2198,7 @@ export function drawFigure(
         )
       : null
   const viewBox = growRect(table ? unionRects([contentRect, table.box]) : contentRect, FIGURE_PADDING)
+  const labelIdentities: { id: Identity; rect: Rect }[] = []
 
   // Pass 2 — emit. Infinite lines and rays are clipped here, against the
   // *final* viewBox, because how much of a locus to draw is a fact about the
@@ -2197,6 +2210,7 @@ export function drawFigure(
     const source = sources.get(label.id)
     const statement = Number(label.id.slice(label.id.lastIndexOf('#') + 1))
     const id = source?.id ?? { statement, object: label.text }
+    labelIdentities.push({ id, rect: label.rect })
     // **A leader is drawn exactly when the layout displaced the label** —
     // when it could not sit beside the edge it measures, in the direction it
     // asked for. A dimension that got its spot reads as belonging to that
@@ -2278,7 +2292,22 @@ export function drawFigure(
     }
   }
 
-  return { viewBox, errors }
+  // What the figure reports besides its markup: the map from the author's
+  // coordinates to view units, and the shapes a pointer can land on.
+  const space = statements.some((s) => isSolidFigureStatement(s.kind))
+  const frame: FigureFrame = space
+    ? { kind: 'space', scale: projection.scale, centre: projection.centre, view: config.view }
+    : { kind: 'plane', scale: projection.scale, centre: projection.centre }
+  const hitItems = figureHitItems({
+    items,
+    labels: labelIdentities,
+    givens: table ? { statements: [...new Set(sections.flatMap((section) => section.rows.map((row) => row.id.statement)))], box: table.box } : null,
+    toView: projection.toView,
+    scale: projection.scale,
+    viewBox,
+    space,
+  })
+  return { viewBox, errors, frame, items: hitItems }
 }
 
 // The table's sections, in a fixed order and with their rows laid out.
