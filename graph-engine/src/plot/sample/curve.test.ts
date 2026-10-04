@@ -830,10 +830,31 @@ function bridgeOf(body: string, v = view, quality: 'full' | 'coarse' = 'full', d
 // across twelve jumps of 40 px; across floor(N x) false strokes reached 600 px (FULL N >= 5000, COARSE N >= 500). Not one
 // segment of a staircase spans a jump now, whatever the density.
 describe('sampleCurve — a dense staircase is never bridged to the anchor of its jump at 0', () => {
-  it.each([500, 1000, 5000, 20000].flatMap((n) => (['full', 'coarse'] as const).map((q) => [n, q] as const)))('floor(%dx) at %s: no segment spans a jump', (n, q) => {
+  it.each([500, 1000, 5000, 20000, 50000, 100000, 1000000].flatMap((n) => (['full', 'coarse'] as const).map((q) => [n, q] as const)))('floor(%dx) at %s: no segment spans a jump', (n, q) => {
     const { bridge } = bridgeOf(`floor(${n} x)`, view, q)
     expect(bridge.size, `a segment from ${bridge.from} to ${bridge.to} spans a jump of ${bridge.size} px`).toBe(0)
     expect(bridge.checked).toBeGreaterThanOrEqual(0)
+  })
+  // calc P2 final review, residual round R2: past 1/1024 px a leaf at the depth limit holds more than one step. floor(100000x)
+  // has 2.4 in a leaf, so its gap against its parent's (twice the steps) is a ratio of a half, which closes: the anchored
+  // depth-limit leaf passed, and 560 to 600 px strokes were drawn to the anchor of the jump at 0 (floor(50000x) to
+  // floor(1000000x), and next to a seam: {x < 0: floor(100000x), 3}). A leaf the twin calls DEFINED (it may step) does not pass.
+  it.each(['{x < 0: floor(100000x), 3}', '{x < 0: floor(1000000x), 3}', '{x > 0: 3, floor(100000x)}'].flatMap((body) => (['full', 'coarse'] as const).map((q) => [body, q] as const)))('%s at %s: no segment spans a jump, and the constant branch is drawn', (body, q) => {
+    const { bridge, r } = bridgeOf(body, view, q)
+    expect(bridge.size, `a segment from ${bridge.from} to ${bridge.to} spans a jump of ${bridge.size} px`).toBe(0)
+    // (the branch that is 3 is a line across the view: the curve is not blank because the staircase is, and the staircase is not drawn)
+    const points = curveOf(r.objects).chains.flatMap(chainPoints)
+    expect(points.length, body).toBeGreaterThan(0)
+    expect(points.filter((p) => p.x > 1e-9).every((p) => p.y === 3), body).toBe(true)
+    expect(points.filter((p) => p.x < -1e-9), body).toEqual([])
+  })
+  it('and a staircase denser than the leaves draws nothing, at either quality', () => {
+    for (const q of ['full', 'coarse'] as const) {
+      for (const n of [50000, 100000, 1000000]) {
+        const r = sampleCurve(explicit(`floor(${n} x)`), view, scopeOf(), { ...opts, quality: q })
+        expect(curveOf(r.objects).chains, `floor(${n}x) ${q}`).toEqual([])
+      }
+    }
   })
   it('and no stroke of one is longer than a tread, in view or out of it', () => {
     for (const q of ['full', 'coarse'] as const) {

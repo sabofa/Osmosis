@@ -503,6 +503,26 @@ export const CORPUS: readonly CorpusCase[] = [
     expect: { blank: true, notes: [NOTE_BLANK] },
     ceiling: { points: 1650, intervals: 12400 }, // measured 1098 / 8265
   },
+  // Denser than the leaves of the floor test (1/1024 px): a leaf at the depth limit holds more than one step, 2.4 of floor(100000x)'s,
+  // and its gap against its parent's closed by a half, so the exemption for the stretch to an anchor passed it and drew a 600 px
+  // stroke to the anchor of the jump at 0, at both qualities (floor(50000x) to floor(1000000x)). A leaf the twin calls DEFINED, that
+  // may step, does not pass. It says "too steep": at the depth limit the gaps of such a staircase halve like a steep curve's, and the
+  // two cannot be told apart there (both are what 1/1024 px cannot resolve).
+  {
+    name: 'a staircase denser than the leaves, floor(100000x), at FULL',
+    spec: 'y = floor(100000x)',
+    views: [STD],
+    expect: { blank: true, notes: [NOTE_STEEP] },
+    ceiling: { points: 1000, intervals: 12800 }, // measured 665 / 8501
+  },
+  {
+    name: 'a staircase denser than the leaves, floor(100000x), at COARSE',
+    spec: 'y = floor(100000x)',
+    views: [STD],
+    quality: 'coarse',
+    expect: { blank: true, notes: [NOTE_STEEP] },
+    ceiling: { points: 710, intervals: 12600 }, // measured 469 / 8355
+  },
 
   // ---- the narrow spike ----------------------------------------------------------------------------------
   {

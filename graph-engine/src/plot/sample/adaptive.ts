@@ -96,7 +96,7 @@
 //    close (polylineCloses: the jump test, asked of the samples it already has). See bandColumn.
 //  - Every evaluation is charged to the budget: a point is a point, and a point that made inner
 //    evaluations (an integral's integrand) is what they come to in points (CORE.innerPerPoint).
-import { CONTINUOUS, PARTIAL, UNKNOWN } from '../../math/interval'
+import { CONTINUOUS, DEFINED, PARTIAL, UNKNOWN } from '../../math/interval'
 import type { Bounds } from '../../scene/types'
 import { type BandSink, largestStep, oscillates } from './band'
 import type { ChainSink } from './sink'
@@ -410,8 +410,15 @@ function floorTest(c: Core, ta: number, tb: number, xa: number, ya: number, xb: 
   if ((tb - ta) * c.fns.pxPerT <= CORE.subFloorPx * (1 + 1e-9)) {
     // The last stretch to an anchor is a tip, and a tip's leaf is still a pixel high at the depth limit (a fourth root's
     // is: its gaps close by 2^-p a halving, and 1/1024 px of x is 11 px of (4 - x^2)^(1/4) at 40 px a unit): it
-    // passes if its gap is closing at the anchor's rate. A jump keeps its gap, so is never a leaf that passes.
-    if (anchored && gap <= shrink * parentGap) return null
+    // passes if its gap is closing at the anchor's rate. A jump keeps its gap, so is never a leaf that passes. But a leaf
+    // that holds more than one step of a staircase denser than the leaves (floor(100000x) has 2.4 steps in 1/1024 px) has
+    // a gap of the whole run of steps against its parent's of twice that, which is a ratio of a half, closing: the twin is
+    // asked of the leaf (one enclosure, counted), and one that says the curve is defined but may jump (DEFINED: floor, ceil,
+    // round) is a leaf with a step in it, which a tip has none of (a root's leaf is PARTIAL or CONTINUOUS).
+    if (anchored && gap <= shrink * parentGap) {
+      c.counter.intervals++
+      if (c.fns.enclose(ta, tb, c.box) !== DEFINED) return null
+    }
     return { at: tm, steep: gap <= c.tune.steepShrink * parentGap }
   }
   evalMid(c, tm)
