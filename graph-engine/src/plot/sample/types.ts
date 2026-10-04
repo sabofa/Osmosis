@@ -66,10 +66,15 @@ export interface Screen {
 
 // How the core treats one end of its parameter range.
 //  - free: an ordinary end, evaluated.
-//  - anchor: the curve is known to reach `at` here, from the limit of a hole or a jump,
-//    where the function itself is undefined or elsewhere. The core uses the point and
-//    does not evaluate at the end, and draws the stretch that reaches it even where the
-//    twin cannot vouch for that stretch (next to a hole its enclosure is unbounded).
-//  - singular: a pole or an edge of the domain is here. The core never evaluates at the
-//    end itself, only a floor's width (1/16 px) inside it.
+//  - anchor: the curve is known to reach `at` here, from the limit of a hole or a jump or
+//    an edge's converged limit, where the function itself is undefined or elsewhere. The core
+//    uses the point and does not evaluate at the end. The anchor says where the curve ARRIVES,
+//    not that nothing is in the way: the stretch that reaches it is drawn where the twin
+//    cannot vouch for it (next to a hole its enclosure is unbounded) only if what the samples
+//    show certifies it, the ends within flatPx or the gaps closing (the floor test asked of
+//    every half, a looser rate at the leaves: adaptive.ts), and a singularity the walk did not
+//    find in that stretch is lifted with its jump break, not bridged.
+//  - singular: a pole or the undefined side of an edge is here. The core never evaluates at the
+//    end itself: its start grid begins a floor's width (1/16 px) inside it, and the stretch from
+//    there to the end is walked in certified pieces until the curve leaves the clip box.
 export type End = { kind: 'free' } | { kind: 'anchor'; at: Vec2 } | { kind: 'singular' }

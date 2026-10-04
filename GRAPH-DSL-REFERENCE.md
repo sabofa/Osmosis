@@ -214,8 +214,13 @@ when it can show the curve is there between them:
   cannot be certified and is not drawn, and says so (below).
 - **Holes** are open circles. Where the curve has a limit and no value, the
   curve runs through and an open circle marks the spot: `(x^2 - 1)/(x - 1)` at
-  1, `sin(x)/x` at 0. If the curve takes some other value there
-  (`{x != 1: x, 5}`), that point is drawn as a filled dot as well.
+  1, `sin(x)/x` at 0. A hole at a point no number is exactly (`sin(x)/sin(x)`
+  has one at every multiple of pi, `(x^2 - 2)/(x^2 - 2)` at both roots of 2) is
+  drawn as well: a zero of a denominator is undefined whatever the nearest
+  decimal says. If the curve takes some other value there
+  (`{x != 1: x, 5}`), that point is drawn as a filled dot as well. A curve
+  defined only at points (`y = {x = 1: 5}`) is those points, filled dots with no
+  line between.
 - **Jumps and ends** are open or filled as the condition says. At a jump (a
   seam of the braces, the ends of an `if` range, `floor`) each side ends in a
   circle: filled where the curve takes the value there, open where it does not,
@@ -226,14 +231,20 @@ when it can show the curve is there between them:
   domain is run to, and not marked: `ln(x)`, `log(x)` and the log of a quadratic
   (`ln(1 - x^2)`, `ln(x^2 - 4x + 3)`) dive out of the picture (the curve is drawn
   to the edge of what is sampled, past the bottom of the view), and `sqrt(x)`
-  meets its endpoint. Where interval arithmetic cannot vouch for the last
-  stretch before an edge (the vertical tip of `(4 - x^2)^(1/4)`), the curve stops
-  a few pixels short of it; the edge itself is still found and typed.
+  meets its endpoint. The vertical tip of a root (`sqrt(1 - x^2)`,
+  `x sqrt(9 - x^2)`, `(4 - x^2)^(1/4)`) is reached, and the stretch to it is
+  joined only if the samples show it closing on the tip; one too slow to draw to
+  (`(1 - x^2)^0.1`) stops short of it, and the edge itself is still found and
+  typed.
 - **Asymptote guides.** At a pole of `y = f(x)` the curve breaks and, with
   `@asymptotes` on (the default), a dashed vertical line is drawn through it
   (a horizontal one for `x = f(y)`). Polar and parametric poles break the
   curve and draw no guide yet. `r = 1/cos(theta)` is a vertical line with no
-  chord across it.
+  chord across it. The curve runs up to a pole until it leaves the picture
+  (`1/x` across +-1000 and `tan(x)` across +-100 reach the top and the bottom,
+  `ln(abs(x))` the bottom), and the poles of a long range are typed up to 256
+  of them, nearest the middle first (past that the sampler still breaks the
+  curve at the rest, untyped and with no guide).
 - **Bands.** Where a curve turns round more than once inside a pixel
   (`sin(1/x)` near 0, `sin(500x)`), a polyline would be an aliased zig-zag that
   changes with every zoom, so the extent the curve sweeps is drawn instead, as a
@@ -242,12 +253,18 @@ when it can show the curve is there between them:
   the line y = 1, is drawn as that line.
 - **Notes.** A curve is drawn with a fixed budget of evaluations. One that
   needs more says so on its line and is drawn from what the sampler had:
-  `drawn coarsely: ...` when something drew, `not drawn: ...` when nothing
-  could be (the sampler cannot certify an integral, so a capped one has
-  nothing to keep). A smooth stretch too steep to certify says `too steep to
-  draw here: ...`. While the view is being dragged the curves are sampled more
-  coarsely (and the `drawn coarsely` note waits for the settled view), and they
-  settle to full detail when the gesture stops.
+  `drawn coarsely: ...` when something drew in the view, `not drawn: ...` when
+  nothing did (the sampler cannot certify an integral, so a capped one has
+  nothing to keep). What an evaluation costs counts: a point of an integral is
+  charged by the integrand evaluations it made, so a curve of dear integrals
+  (`integral(t = 0 to x, 5000 cos(100t))`) is capped in seconds and says so.
+  A smooth stretch too steep to certify says `too steep to draw here: ...`. A
+  curve that is in the view and is not drawn always says why: where the budget
+  was not spent and it is not steep, it says `not drawn: this curve could not
+  be certified anywhere in view` (`floor(1000x)`, a staircase whose treads are a
+  hundredth of a pixel wide). While the view is being dragged the curves are
+  sampled more coarsely (and the `drawn coarsely` note waits for the settled
+  view), and they settle to full detail when the gesture stops.
 
 ## Statement catalog
 

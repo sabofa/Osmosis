@@ -996,6 +996,35 @@ describe('sampleCurve — a pole is walked to the clip box', () => {
   })
 })
 
+// calc P2 final review, minor 6: the core lifts the curve at every interval it will not connect and records a jump break there, so a
+// stretch it cannot decide (the sign of (x - 1)/sqrt(x^2 - 2x + 1) is a unit step with rounding about it) was a break at every
+// floor interval and then at every bisection below: 1212 of them within +-0.007 of 1. A run of core jump breaks a floor apart or
+// less, with nothing drawn between, is one break.
+describe('sampleCurve — a run of jump breaks the core found is one', () => {
+  const narrow = { bounds: { xMin: 0.99, xMax: 1.01, yMin: -2, yMax: 2 }, widthPx: 800, heightPx: 800 }
+  it('(x - 1)/sqrt(x^2 - 2x + 1) has a handful of jump breaks, all by the jump, and not a thousand', () => {
+    const r = sampleCurve(explicit('(x - 1)/sqrt(x^2 - 2x + 1)'), narrow, scopeOf(), opts)
+    const jumps = curveOf(r.objects).breaks.filter((b) => b.kind === 'jump')
+    expect(jumps.length).toBeGreaterThanOrEqual(1)
+    expect(jumps.length).toBeLessThanOrEqual(3)
+    for (const j of jumps) expect(Math.abs(j.at - 1)).toBeLessThan(0.01)
+    // sorted, and no two within a floor of each other with nothing between
+    const at = jumps.map((j) => j.at)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+  })
+  it('does not merge jumps that have a chain between them: x - floor(x) across +-500 at COARSE, a pixel and less apart, keeps one for every chain', () => {
+    const wide = { bounds: { xMin: -500, xMax: 500, yMin: -500, yMax: 500 }, widthPx: 800, heightPx: 800 }
+    const r = sampleCurve(explicit('x - floor(x)'), wide, scopeOf(), { ...opts, quality: 'coarse' })
+    const c = curveOf(r.objects)
+    expect(c.breaks.filter((b) => b.kind === 'jump').length).toBeGreaterThanOrEqual(c.chains.length)
+  })
+  it('keeps the jumps the walk typed, whatever the core found beside them', () => {
+    const r = sampleCurve(explicit('floor(x)'), view, scopeOf(), opts)
+    const jumps = curveOf(r.objects).breaks.filter((b) => b.kind === 'jump').map((b) => b.at)
+    for (let k = -14; k <= 14; k++) expect(jumps.some((j) => Math.abs(j - k) < 1e-9), `a jump at ${k}`).toBe(true)
+  })
+})
+
 // calc P2 final review, minor 2: the locator reports 256 zeros, not 64, so tan x across +-200 (160 poles in the view and its
 // overscan, +-300: 191) has a typed pole and a guide at every one.
 describe('sampleCurve — every pole of tan x across +-200 is typed', () => {

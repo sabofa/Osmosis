@@ -79,7 +79,8 @@
 //    of zeros the locator reports (LOCATE.maxZeros). `stats` is the total of them all. A curve is never blank
 //    because finding its trouble spots was dear (sqrt(sin(350 x)) was: 105000 points, then nothing drawn).
 // 6. OUTPUT. The curve (the sink's chains, its breaks: the classified ones and the core's own,
-//    sorted by parameter), its bands (`band.<k>`, in parameter order, the curve's colour), its
+//    sorted by parameter; a run of the core's jump breaks a floor apart or less with nothing drawn
+//    between is one: mergeCoreJumps), its bands (`band.<k>`, in parameter order, the curve's colour), its
 //    marks in parameter order, then its asymptote guides. Marks
 //    are exact: they are read from limits, not from samples. A jump's side and an edge's
 //    limit are read once more close in to the spot (CURVE.settleTols), because limits.ts
@@ -198,6 +199,8 @@ interface Walk {
   poles: number[]
   // the parameters of the edges the walk classified (their breaks are made from this, not through the sink)
   edges: number[]
+  // the parameters of the jumps the walk classified (typed, with their marks: mergeCoreJumps leaves them be)
+  jumps: number[]
   pt: Float64Array
   // what reading a comparison's side needs: the curve's parameter and scope, and the compiled
   // a - b of each comparison generator (one compile per generator, not per zero)
@@ -276,6 +279,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     isolated: [],
     poles: [],
     edges: [],
+    jumps: [],
     pt: new Float64Array(2),
     param: co.param,
     scope,
@@ -311,7 +315,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const chains = sink.chains()
   // An edge the core found itself (refineEdge, at a free end) where the walk classified one is that edge: it is
   // recorded once, as the walk placed it.
-  const breaks: Break[] = [...sink.breaks().filter((b) => b.kind !== 'edge' || !walk.edges.some((tc) => Math.abs(b.at - tc) <= offsetAt(tc))), ...walk.edges.map((at): Break => ({ at, kind: 'edge' }))].sort((a, b) => a.at - b.at)
+  const breaks: Break[] = [...mergeCoreJumps(sink.breaks(), walk.jumps, tuning.uncertifiedFloorPx / co.pxPerT, chains).filter((b) => b.kind !== 'edge' || !walk.edges.some((tc) => Math.abs(b.at - tc) <= offsetAt(tc))), ...walk.edges.map((at): Break => ({ at, kind: 'edge' }))].sort((a, b) => a.at - b.at)
   const bands = bandObjects(bandSink, options)
   const objects: SceneObject[] = [curveObject(options, chains, breaks), ...bands, ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
   // Drawn, for `defined`: a chain or band that reaches the visible range (an explicit curve drawn only in the overscan is not defined in view)
@@ -404,6 +408,49 @@ function sharedWithNatural(w: Walk, zero: Zero): boolean {
   return false
 }
 
+// The jump breaks the core found, a run of them a floor or less apart made one. The core lifts the curve at every interval it will
+// not connect and records the middle of it, so a stretch it cannot decide, where a cancelling form is noise (the sign of
+// (x - 1)/sqrt(x^2 - 2x + 1), a unit step with rounding about its jump) is a break at every floor interval and then at every
+// bisection below it: hundreds of breaks within a hair of 1, for one place. They are one break at the middle of the run, if nothing
+// is drawn between them: a core break is only as exact as the floor interval it is the middle of, and two jumps a pixel or so
+// apart (x - floor(x) across +-500) have a chain between them and are two. A jump the walk typed (`typed`: a mark has its
+// parameter) is the run's own, and the core's breaks beside it are dropped. Sorted by parameter, as the sink's are not, and
+// the other kinds as they were.
+function mergeCoreJumps(breaks: readonly Break[], typed: readonly number[], width: number, chains: readonly Chain[]): Break[] {
+  const out: Break[] = []
+  const sorted = [...breaks].sort((a, b) => a.at - b.at)
+  const drawn = Float64Array.from(chains.flatMap((chain) => Array.from(chain.param))).sort()
+  // whether a vertex of the drawn curve lies strictly between two parameters
+  const drawnBetween = (lo: number, hi: number): boolean => {
+    let a = 0
+    let b = drawn.length
+    while (a < b) {
+      const m = (a + b) >> 1
+      if (drawn[m] <= lo) a = m + 1
+      else b = m
+    }
+    return a < drawn.length && drawn[a] < hi
+  }
+  let run: Break[] = []
+  const close = () => {
+    if (run.length === 0) return
+    const own = run.filter((b) => typed.includes(b.at))
+    if (own.length > 0) out.push(...own)
+    else out.push({ at: (run[0].at + run[run.length - 1].at) / 2, kind: 'jump' })
+    run = []
+  }
+  for (const b of sorted) {
+    if (b.kind !== 'jump') {
+      out.push(b)
+      continue
+    }
+    if (run.length > 0 && (!(b.at - run[run.length - 1].at <= width * (1 + 1e-6)) || drawnBetween(run[run.length - 1].at, b.at))) close()
+    run.push(b)
+  }
+  close()
+  return out
+}
+
 // What one classified spot is to the pieces beside it (step 4 of the header), and the typed
 // breaks and marks it leaves. Null for a spot that is not a cut.
 function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
@@ -426,6 +473,7 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
       const left = onAxis(w, settle(w, c.left, tc, -1), tc)
       const right = onAxis(w, settle(w, c.right, tc, 1), tc)
       w.sink.addBreak(tc, 'jump')
+      w.jumps.push(tc)
       const own = ownerAt(w, zero)
       if (own) {
         // the comparison says which end the curve takes, and the value at the spot is not asked
