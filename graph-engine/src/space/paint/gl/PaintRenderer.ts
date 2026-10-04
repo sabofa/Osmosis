@@ -98,6 +98,10 @@ export interface PaintStats {
   // The G-buffer layout in use, and whether the accumulation targets are float.
   gbuffer: 'float' | 'rgba8' | null
   accumFloat: boolean | null
+  // Whether the last paint() drew a frame at all. False when it could not: the context is lost (the picture comes back when it is restored), the renderer
+  // has failed or is disposed, or the frame's accumulation targets could not be made. Every other number here is of the last paint() that DID draw (or is
+  // reset by one): a caller that reads depthTested or strokes after a paint() that painted nothing reads what the paint before it left, so it asks `painted` first.
+  painted: boolean
   // Strokes drawn and instanced draws made by the last paint().
   strokes: number
   strokeDraws: number
@@ -135,6 +139,7 @@ export class PaintRenderer {
   readonly stats: PaintStats = {
     gbuffer: null,
     accumFloat: null,
+    painted: false,
     strokes: 0,
     strokeDraws: 0,
     depthTested: false,
@@ -439,6 +444,8 @@ export class PaintRenderer {
   // put through this view's depth (a stroke that a nearer surface covers is hidden, one that has left its surface is
   // clipped), and the underpainting is warped onto this view, instead of lying on the glass.
   paint(frame: PaintFrameInput, view: PaintView, params: PaintParams, debug: PaintDebugMode, reproject?: PaintReproject): void {
+    // (nothing is drawn until it says so: a paint that returns early, on a lost context, has painted nothing, whatever the last one left in the stats)
+    this.stats.painted = false
     if (!this.usable()) return
     try {
       const gl = this.gl
@@ -468,6 +475,7 @@ export class PaintRenderer {
         if (rgba.length !== size.width * size.height * 4) rgba = new Uint8Array(size.width * size.height * 4)
         this.debugger.drawImage(image, rgba, size.width, size.height, backing, covered)
         if (debug === 'edges') this.debugger.drawEdges(this.program(EDGE_PROGRAM), d, cssSize, backing)
+        this.stats.painted = true
         return
       }
 
@@ -561,6 +569,7 @@ export class PaintRenderer {
         relief: !roles,
         grey: debug === 'grey',
       })
+      this.stats.painted = true
     } catch (error) {
       this.fail(error)
     }

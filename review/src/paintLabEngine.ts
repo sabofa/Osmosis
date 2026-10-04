@@ -108,7 +108,7 @@
 //  - dispose frees everything the engine made.
 
 import { classifyBakeChange, lengthFactorsMoved, lightKeyOf } from '../../graph-engine/src/space/paint/bake/index'
-import { frameFromBake, prepareBake } from '../../graph-engine/src/space/paint/bake/frame'
+import { frameFromBakeWith, FrameScratch, prepareBake } from '../../graph-engine/src/space/paint/bake/frame'
 import type { AuthoredFraming, BakedPainting } from '../../graph-engine/src/space/paint/bake/types'
 import { PaintRenderer } from '../../graph-engine/src/space/paint/gl/PaintRenderer'
 import { classifyChange } from '../../graph-engine/src/space/paint/model/index'
@@ -347,6 +347,10 @@ class WorkerBakeHost implements BakeHost {
     worker.onerror = (event) => {
       if (this.dead) return
       this.dead = true
+      // (a worker that has thrown is not used again, and nothing holds it after the engine lets the host go: it is stopped here, not left running)
+      worker.onmessage = null
+      worker.onerror = null
+      worker.terminate()
       this.settleAll('the bake worker stopped')
       this.failed(event.message || 'the bake worker stopped')
     }
@@ -708,6 +712,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   // The newest G-buffer that has arrived (for the silhouettes), the one the last baked frame used, and whether a readback is under way.
   let latestG: { g: GBuffer; view: PaintView; sceneId: number; light: string } | null = null
   let paintedG: GBuffer | null = null
+  // What a baked frame is built in, kept: the arrays of its selection, its painting order and the strokes themselves (FrameScratch.reuseOutput: the batch is
+  // views of arrays that the next frame writes over).
+  const bakeScratch = new FrameScratch()
+  bakeScratch.reuseOutput = true
   let gFlight = false
   let paperFlight = false
   let paintingNow: number | null = null
@@ -1227,7 +1235,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     const lg = latestG
     const g = !job.view.dragging && lg !== null && lg.sceneId === job.sceneId && sameCamera(lg.view, job.view) && lg.light === JSON.stringify(job.params.light) ? lg.g : null
     const t0 = performance.now()
-    const strokes = frameFromBake(h.baked, job.scene, job.view, job.params, g)
+    // (into the arrays the engine keeps from frame to frame: a frame of 60k strokes is some 15 MB, and nothing holds one past its own paint, which copies it
+    // into the GPU's buffers: `events.onPaint` is told of it as it is painted and must not keep it)
+    const strokes = frameFromBakeWith(bakeScratch, h.baked, job.scene, job.view, job.params, g)
     const buildMs = performance.now() - t0
     paintedG = g
     const byRole = Object.fromEntries(ROLES.map((r) => [r, 0])) as Record<Role, number>
@@ -1237,6 +1247,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     lastPaintAt = clock()
     renderer.paint(frame, job.view, job.params, job.debug)
     if (failure) throw new Error(failure)
+    // A renderer whose context is lost paints nothing, and its stats are those of the paint before (a stale `depthTested: false` is no verdict on the device, and a bake
+    // that lands, or a debug view that is left, while the context is lost must keep the baked path): the bake is held, and the restore asks for this picture again
+    // (onContextRestored).
+    if (!renderer.stats.painted) return null
     shownSeq = job.seq
     const finished = performance.now()
     const stats: FrameStats = { strokes: strokes.count, ms: finished - started, gbufferMs: 0, modelMs: 0, particlesMs: 0, paperMs: 0, paintMs: finished - t1, kind: 'baked', path: 'baked', buildMs }
@@ -1431,7 +1445,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     if (disposed) return
     console.warn(`The bake worker stopped (${reason}); the baked painting is off.`)
     const wasBaked = bakedMode
+    // (a host that stopped its own worker is let go; one that did not is stopped now: the engine's dispose() no longer finds it)
+    const lost = bakeHost
     bakeHost = null
+    if (lost && (lost as unknown) !== host) lost.dispose()
     bakeOffWhy = `the bake worker stopped (${reason}), and a bake on this thread would stop the page (&worker=0 asks for that)`
     whyNot = bakeOffWhy
     bakeFlight = null

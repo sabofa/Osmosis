@@ -1904,9 +1904,20 @@ function bakeSetup(
   const errors: (string | null)[] = []
   const statuses: BakeStatus[] = []
   const painted: { frame: PaintFrame; kind: FrameStats['kind'] }[] = []
+  // The batches of the baked frames as the engine gave them: it builds each in arrays it keeps from frame to frame (the next frame writes over them), so `painted`
+  // holds a copy of each, which a test can read at its leisure.
+  const raw: StrokeBatch[] = []
   const inner = createPaintEngine(
     gl.canvas.canvas,
-    { onFrame: (f) => frames.push(f), onError: (m) => errors.push(m), onBake: (s) => statuses.push(s), onPaint: (frame, kind) => painted.push({ frame, kind }) },
+    {
+      onFrame: (f) => frames.push(f),
+      onError: (m) => errors.push(m),
+      onBake: (s) => statuses.push(s),
+      onPaint: (frame, kind) => {
+        if (kind === 'baked') raw.push(frame.strokes)
+        painted.push({ frame: kind === 'baked' ? { ...frame, strokes: copyOf(frame.strokes) } : frame, kind })
+      },
+    },
     { host: live, bakeHost: bake },
   )
   // (the view's light is the params' light in the world, as the lab builds it)
@@ -1926,7 +1937,12 @@ function bakeSetup(
   const composites = () => timeline(gl).filter((e) => e.kind === 'composite').length
   const gbuffers = () => timeline(gl).filter((e) => e.kind === 'gbuffer').length / 2
   // `host` is the bake's (BakeSide), `live` the model's (LiveHost) unless the test gave its own.
-  return { host: bake as BakeSide, live: live as LiveHost, gl, engine, frames, errors, statuses, painted, baked, ready, composites, gbuffers }
+  return { host: bake as BakeSide, live: live as LiveHost, gl, engine, frames, errors, statuses, painted, raw, baked, ready, composites, gbuffers }
+}
+
+// A batch of strokes copied (every typed array of it).
+function copyOf(b: StrokeBatch): StrokeBatch {
+  return Object.fromEntries(Object.entries(b).map(([k, v]) => [k, ArrayBuffer.isView(v) ? (v as Float32Array).slice() : v])) as unknown as StrokeBatch
 }
 
 describe('the baked painting: which painter draws', () => {
@@ -2053,6 +2069,27 @@ describe('the baked painting: the first bake', () => {
 })
 
 describe('the baked painting: every frame is a frame of the bake, with no model run', () => {
+  it('builds every baked frame in arrays it keeps (final fix wave, L3): the strokes of two frames in a row are views of the same buffers, and the renderer has painted the first before the second writes over it', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    for (const az of [50, 55, 60]) t.engine.render(bview({ azimuth: az }), BP, 'none', FRAMING)
+    const [a, b] = t.raw.slice(-2)
+    expect(b).not.toBe(a)
+    let arrays = 0
+    for (const k of Object.keys(a) as (keyof StrokeBatch)[]) {
+      const x = a[k]
+      const y = b[k]
+      if (!ArrayBuffer.isView(x) || !ArrayBuffer.isView(y)) continue
+      arrays++
+      expect(y.buffer, String(k)).toBe(x.buffer)
+    }
+    expect(arrays).toBeGreaterThanOrEqual(19)
+    // (what a test is shown of each is a copy: the pictures differ from frame to frame, the arrays do not)
+    const last = t.painted.filter((p) => p.kind === 'baked')
+    expect(last[last.length - 1].frame.strokes.path.buffer).not.toBe(last[last.length - 2].frame.strokes.path.buffer)
+    t.engine.dispose()
+  })
+
   it('builds a frame for each render of a drag, synchronously, asks the model for nothing, and does not bake again (frame build and paint times reported)', async () => {
     const t = bakeSetup()
     await t.ready()
@@ -2381,6 +2418,60 @@ describe('the baked painting: the paths back and forth', () => {
 })
 
 describe('the baked painting: failures and the graphics context', () => {
+  it('keeps a bake that lands while the context is lost, and paints it when the context comes back: a paint that painted nothing says nothing of the renderer’s depth test (final fix wave, M1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    // (the per-frame painter's first picture is on screen, from a context that could depth-test: the renderer's stats say so)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    t.gl.canvas.lose()
+    expect(String(t.errors[t.errors.length - 1])).toMatch(/graphics context was lost/)
+    // the bake lands during the loss
+    t.host.release()
+    await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1]).toMatchObject({ path: 'baked' }), { timeout: 60_000, interval: 5 })
+    await sleep(50)
+    // it is kept: the baked path is the one the status line says, with nothing said of a renderer that cannot depth-test, and nothing was painted for it
+    expect(t.statuses.some((s) => s.why !== null)).toBe(false)
+    expect(t.baked().length).toBe(0)
+    t.gl.canvas.restore()
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.errors[t.errors.length - 1]).toBeNull()
+    // and it stays the picture: the next render is the bake's, with no new bake, and the status line never said it was off
+    t.engine.render(bview({ azimuth: 50 }), BP, 'none', FRAMING)
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.statuses.some((s) => s.why !== null)).toBe(false)
+    t.engine.dispose()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the baked path when a debug view is left while the context is lost, and paints the bake again when it comes back (final fix wave, M1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = bakeSetup()
+    await t.ready()
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'value', FRAMING)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ path: 'live' })
+    t.gl.canvas.lose()
+    // back from the debug view, with the context gone
+    const m = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'none', FRAMING)
+    await sleep(50)
+    expect(t.statuses.some((s) => s.why !== null)).toBe(false)
+    expect(t.statuses[t.statuses.length - 1]).toMatchObject({ path: 'baked' })
+    // (nothing could be painted: no frame is reported, none is called baked)
+    expect(t.frames.length).toBe(m)
+    t.gl.canvas.restore()
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(m), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.dispose()
+    vi.restoreAllMocks()
+  })
+
   it('falls back to the per-frame painter, and says why, when a bake fails; the figure still paints', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     class FailingHost extends BakeSide {
@@ -2637,6 +2728,9 @@ describe('the baked painting: the workers', () => {
       expect(last.path).toBe('live')
       expect(last.painting).toBeNull()
       expect(last.why).toMatch(/bake worker stopped.*boom/)
+      // the worker that threw is stopped, not left running: the engine lets go of the host, and its dispose() would not find it
+      expect(FakeWorker.all[1].terminated).toBe(true)
+      expect(FakeWorker.all[0].terminated).toBe(false)
       // from now on no bake is asked for, anywhere: no new worker, and no bake on this thread (the model's worker is the live one)
       const posted = FakeWorker.all.map((w) => w.types().length)
       engine.render(bview(), setParam(BP, 'light.azimuth', 40), 'none', FRAMING)
@@ -2682,6 +2776,39 @@ describe('the baked painting: the workers', () => {
     await vi.waitFor(() => expect(frames.some((f) => f.kind === 'baked')).toBe(true), { timeout: 120_000, interval: 5 })
     expect(FakeWorker.all.length).toBe(0)
     engine.dispose()
+  })
+})
+
+describe('the baked painting: a bake worker that died', () => {
+  it('is terminated when it errors, and again nothing is left running when the engine is disposed after (final fix wave, T6-Low)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    FakeWorker.all = []
+    vi.stubGlobal('Worker', FakeWorker)
+    await load('?')
+    const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+    Object.assign(gl.canvas.canvas, { style: {} })
+    const inner = createPaintEngine(gl.canvas.canvas, { onFrame: () => {}, onError: () => {}, onBake: () => {} })
+    const engine: PaintEngine = { ...inner, render: (v, p, d, a) => inner.render({ ...v, lightDir: worldLightOf(p) }, p, d, a) }
+    engine.setScene(BSCENE, COLOURS)
+    try {
+      engine.render(bview(), BP, 'none', FRAMING)
+      await vi.waitFor(() => expect(FakeWorker.all[1]?.types()).toContain('bake'), { timeout: 10_000, interval: 5 })
+      const [model, bake] = FakeWorker.all
+      expect(bake.terminated).toBe(false)
+      bake.onerror?.({ message: 'it broke' })
+      expect(bake.terminated).toBe(true)
+      // (it does not talk to the engine any more)
+      expect(bake.onmessage).toBeNull()
+      expect(bake.onerror).toBeNull()
+      expect(model.terminated).toBe(false)
+      engine.dispose()
+      expect(model.terminated).toBe(true)
+      expect(bake.terminated).toBe(true)
+      expect(FakeWorker.all.length).toBe(2)
+    } finally {
+      vi.restoreAllMocks()
+      await load('?worker=0')
+    }
   })
 })
 

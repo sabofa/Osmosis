@@ -822,6 +822,31 @@ describe('a re-projected frame (the orbit): the strokes are put through the new 
     return ctx
   }
 
+  it('says whether the last paint drew a frame (stats.painted): a paint on a lost context draws nothing and leaves the numbers of the paint before, so a caller asks it first (final fix wave, M1)', () => {
+    const { paint, renderer } = scene2()
+    expect(renderer.stats.painted).toBe(false)
+    renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none', reproject())
+    expect(renderer.stats.painted).toBe(true)
+    expect(renderer.stats.depthTested).toBe(true)
+    // the context goes: nothing is drawn, whatever the stats still say of the paint before
+    paint.canvas.lose()
+    const before = timeline(paint).length
+    renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none', reproject())
+    expect(renderer.stats.painted).toBe(false)
+    expect(timeline(paint).length).toBe(before)
+    expect(renderer.stats.depthTested).toBe(true)
+    // and it comes back: the paint after it draws, and says so (a debug view's paint too)
+    paint.canvas.restore()
+    renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none', reproject())
+    expect(renderer.stats.painted).toBe(true)
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'value')
+    expect(renderer.stats.painted).toBe(true)
+    // (a renderer that was disposed paints nothing)
+    renderer.dispose()
+    renderer.paint(frame([BLOCK]), view(), PARAMS, 'none')
+    expect(renderer.stats.painted).toBe(false)
+  })
+
   it('draws the depth pass of the opaque meshes first, into a framebuffer of its own, with the depth test on, then the underpainting and the strokes', () => {
     const { paint, renderer } = scene2()
     renderer.paint(withUnder(frame([BLOCK, FORM])), view(), PARAMS, 'none', reproject())
