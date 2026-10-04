@@ -80,6 +80,14 @@ export const LIMITS = {
   // and is rejected by it (its tail is six pixels), so this is not where slow
   // convergence is let in. The tail it estimates is d r / (1 - r): bounded by 9 d here.
   convergeRatio: 0.9,
+  // The same geometric estimate, asked of a side that has not converged and is finite at every offset, where the other
+  // side of the spot is undefined: the tail it estimates may be this many px (limits.ts approaching), and the edge's
+  // limit is the extrapolated one. A steep root's tip is that: (4 - x^2)^(1/4) rises as the fourth root of the distance
+  // and has 0.5 px to go at the last offset at 40 px a unit and 1.7 at 133, 5 sqrt(1 - x^2) at 200 px a unit 0.07 px (just
+  // over convergePx, which is why they were unknown), and x^0.1, which is not a tip anyone can draw to, 7 px at 40 (it is
+  // unknown still: the sampler reaches the edge itself). A stroke's width: the extrapolation of a power law is exact,
+  // and what this bounds is how far a curve that is not one can be from where it is taken to arrive.
+  settlePx: 2,
   // The divergence test: each step of the distance from the first sample is at least
   // this much of the one before. ln(x) holds it constant (1.0), 1/x grows it 4-fold,
   // and x^0.1, whose steps shrink 0.87-fold, is left out. Slower convergence than
@@ -349,6 +357,7 @@ export const CORE = {
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
   // far under any screen.
   edgeSteps: 64,
+  // (The same walk takes a pole's last stretch, from the floor's width inside a singular end to the pole.)
   // The most pieces an edge stretch is walked in when the twin cannot certify it whole (adaptive.ts walkEdge): each covers
   // half of what is left of the stretch between the floor interval's defined end and the last defined point, so n
   // pieces come within 1/16 px / 2^n of the edge. A curve that dives (ln x: a factor of 2 in the distance is ln 2 of

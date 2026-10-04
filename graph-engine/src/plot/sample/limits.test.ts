@@ -44,6 +44,34 @@ describe('classify', () => {
     expect(c('sin(1/x)', 0).kind).toBe('unknown')
     expect(c('x^0.1', 0).kind).toBe('unknown') // converges too slowly to call within the offsets; the sampler reaches the edge itself
   })
+  // calc P2 final review, I3: a steep root's tip is finite at every offset, settles by a geometric tail that is a little too
+  // long for convergePx, and has an undefined side: it is an edge, with the extrapolated limit, and not an unknown with no
+  // anchor (the core stopped 18 px short of x sqrt(9 - x^2)'s tips, 52 at COARSE, and 71 short of 5 sqrt(1 - x^2)'s).
+  describe('an edge whose defined side settles without converging', () => {
+    const at = (text: string, tc: number, scale: number) => classify(pointFnOf(text, 'x', scopeOf()), tc, 4 / scale, { x: scale, y: scale }, { points: 0, intervals: 0 })
+    it.each([
+      ['(4 - x^2)^(1/4)', 2, 40, 'left'],
+      ['(4 - x^2)^(1/4)', -2, 40, 'right'],
+      ['(4 - x^2)^(1/4)', 2, 133, 'left'],
+      ['x sqrt(9 - x^2)', 3, 100, 'left'],
+      ['x sqrt(9 - x^2)', -3, 100, 'right'],
+      ['5 sqrt(1 - x^2)', 1, 200, 'left'],
+    ] as const)('%s at %d, %d px a unit: an edge with its limit at the tip', (text, tc, scale, defined) => {
+      const r = at(text, tc, scale)
+      expect(r).toMatchObject({ kind: 'edge', defined })
+      if (r.kind === 'edge' && r.limit !== null) expect(Math.abs(r.limit.y) * scale, text).toBeLessThan(0.1)
+    })
+    it('is the whole of what the geometric test accepted before, for a side that did converge', () => {
+      expect(at('sqrt(x)', 0, 40)).toMatchObject({ kind: 'edge', defined: 'right', limit: { y: expect.closeTo(0, 3) } })
+    })
+    it('not a root too slow to draw to (x^0.1: seven pixels to go), an oscillation, or a side with holes in it', () => {
+      expect(at('x^0.1', 0, 40).kind).toBe('unknown')
+      // the right side is finite at every offset and does not settle: sin(1/x) is still sin(1/x)
+      expect(at('sin(1/x) + sqrt(x)', 0, 40).kind).toBe('unknown')
+      // sqrt(sin(1/x)) is NaN at a scatter of offsets, so not "finite at every offset"
+      expect(at('sqrt(sin(1/x))', 0, 40).kind).toBe('unknown')
+    })
+  })
 })
 
 const side = (text: string, tc: number, which: -1 | 1, scale = 40, defs = '', angle: 'radians' | 'degrees' = 'radians') =>

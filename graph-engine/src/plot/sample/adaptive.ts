@@ -17,7 +17,9 @@
 //  - Otherwise the start grid has n = max(8, ceil(range px / startPx)) intervals. An
 //    `anchor` end uses its point and is not evaluated; a `singular` end is replaced by the
 //    parameter a floor's width (floorPx / pxPerT) inside it, so the pole or the edge itself
-//    is never evaluated.
+//    is never evaluated. The stretch between that start and the singular parameter is then
+//    walked toward it in certified geometric pieces (walkEdge, as an edge's last stretch is), until
+//    the drawn point has left the clip box: a pole is still climbing a floor from it.
 //  - The start grid, its points and the enclosure of each interval, is ALWAYS evaluated: it
 //    is the coarse floor under every curve. The budget governs refinement only.
 //
@@ -204,7 +206,15 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
       ys[i] = c.pt[1]
     }
   }
+  // The last stretch to a singular end is not the start grid's: it begins where the nudge put the start, a floor's
+  // width from the pole, and the curve is still climbing there (1/x at +-100 is 64 high at 1/16 px from its pole and
+  // 125 at the top of the clip box: 144 px short of the top of the view). Walked in certified pieces as an edge's
+  // last stretch is, toward the singular parameter itself, until the drawn point has left the clip box, a piece is not
+  // certified, or CORE.edgePieces pieces are done. The left stretch is drawn first and the right one last, so the pen
+  // goes in parameter order. At the undefined side of an edge, the start is not a point, and there is nothing to walk.
+  if (ends.left.kind === 'singular' && isFinite2(xs[0], ys[0])) walkEdge(c, a, xs[0], ys[0], t0, false)
   for (let i = 0; i < n; i++) visit(c, ts[i], ts[i + 1], xs[i], ys[i], xs[i + 1], ys[i + 1], false, true)
+  if (ends.right.kind === 'singular' && isFinite2(xs[n], ys[n])) walkEdge(c, b, xs[n], ys[n], t1, true)
   return { capped: c.capped, steepInView: c.steepInView }
 }
 

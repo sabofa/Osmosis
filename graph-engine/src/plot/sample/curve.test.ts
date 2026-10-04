@@ -883,3 +883,86 @@ describe('sampleCurve — a natural spot at an irrational seam opens both ends',
     expect(at('{x^2 < 2: x, 5}').map((m) => m.fill).sort()).toEqual(['filled', 'filled', 'open', 'open'])
   })
 })
+
+// calc P2 final review, I3: the core starts a singular end a floor's width (1/16 px) from its pole, and the curve is still
+// climbing there: 1/x at +-100 stopped at y = 64, 144 px short of the top of the view (397 px at +-1000), tan x at +-100 the
+// same, ln|x| 142 px and log|x| 288 px above the bottom of [-10, 10]. The last stretch is walked in certified pieces, toward
+// the pole, until the drawn point leaves the clip box.
+describe('sampleCurve — a pole is walked to the clip box', () => {
+  const squareView = (half: number) => ({ bounds: { xMin: -half, xMax: half, yMin: -half, yMax: half }, widthPx: 800, heightPx: 800 })
+  // At every pole of the curve in view, the chain vertex nearest it on each side is on the clip box: the curve has left the picture.
+  const reachesBox = (body: string, half: number, quality: 'full' | 'coarse' = 'full') => {
+    const r = sampleCurve(explicit(body), squareView(half), scopeOf(), { ...opts, quality })
+    const c = curveOf(r.objects)
+    const poles = c.breaks.filter((b) => b.kind === 'pole' && Math.abs(b.at) <= half).map((b) => b.at)
+    const vertices = c.chains.flatMap(chainPoints)
+    // (the clip box is the view widened by a quarter of its span on each side)
+    const box = 1.5 * half
+    const short: string[] = []
+    for (const p of poles) {
+      for (const side of [-1, 1]) {
+        const mine = vertices.filter((v) => (v.x - p) * side > 0)
+        const nearest = mine.reduce((a, b) => (Math.abs(b.x - p) < Math.abs(a.x - p) ? b : a))
+        if (Math.abs(nearest.y) !== box) short.push(`${p} ${side > 0 ? 'right' : 'left'}: nearest vertex (${nearest.x}, ${nearest.y})`)
+      }
+    }
+    return { poles, short }
+  }
+  it.each([
+    ['1/x', 10],
+    ['1/x', 100],
+    ['1/x', 1000],
+    ['1/(x - 1)', 100],
+    ['1/x^2', 100],
+    ['tan(x)', 100],
+    ['tan(x)', 30],
+  ])('%s at +-%d reaches the clip box at every pole, at FULL and COARSE', (body, half) => {
+    for (const quality of ['full', 'coarse'] as const) {
+      const { poles, short } = reachesBox(body, half, quality)
+      expect(poles.length, `${body} at ${half}`).toBeGreaterThan(0)
+      // (a pole of 1/x^2 is on one side of the axis only: both sides climb the same way)
+      expect(short, `${body} at +-${half}, ${quality}`).toEqual([])
+    }
+  })
+  it('ln|x|, log|x| and ln(x^2) dive to the bottom of the clip box, at FULL and COARSE', () => {
+    for (const body of ['ln(abs(x))', 'log(abs(x))', 'ln(x^2)']) {
+      for (const quality of ['full', 'coarse'] as const) {
+        const r = sampleCurve(explicit(body), squareView(10), scopeOf(), { ...opts, quality })
+        expect(Math.min(...curveOf(r.objects).chains.flatMap(chainPoints).map((p) => p.y)), `${body}, ${quality}`).toBe(-15)
+      }
+    }
+  })
+  it('a log of a wider view dives as far as the located pole is exact: the walk goes on until the doubles run out, not to a floor', () => {
+    // (the pole of ln|x| is located to 1e-12, and the walk comes to it in halves: ln|x| at +-100 is 30 below where it was
+    // 1/16 px from the pole (-4.2), and the clip box is 150 down)
+    const r = sampleCurve(explicit('ln(abs(x))'), squareView(100), scopeOf(), opts)
+    expect(Math.min(...curveOf(r.objects).chains.flatMap(chainPoints).map((p) => p.y))).toBeLessThan(-30)
+  })
+  it('no stroke is drawn through a second pole the walk does not know of', () => {
+    // 1/x + 1/(x - 0.0011) has a pole at 0.0011, inside the stretch a pole at 0 is walked: the piece that holds it is not certified
+    const r = run(explicit('1/x + 1/(x - 0.0011)'))
+    noChainCrosses(r.objects, 0.0011)
+  })
+})
+
+// calc P2 final review, I3: a steep root's tip that classify cannot call converged (a tail a little too long for convergePx)
+// is anchored at its extrapolated limit, and the stretch to it is certified by the floor test (every half).
+describe('sampleCurve — steep root tips are reached', () => {
+  const tips: [string, { xMin: number; xMax: number; yMin: number; yMax: number; widthPx: number; heightPx: number }, number[]][] = [
+    ['x sqrt(9 - x^2)', { xMin: -4, xMax: 4, yMin: -4, yMax: 4, widthPx: 800, heightPx: 800 }, [3, -3]],
+    ['5 sqrt(1 - x^2)', { xMin: -2, xMax: 2, yMin: -2, yMax: 2, widthPx: 800, heightPx: 800 }, [1, -1]],
+    ['(4 - x^2)^(1/4)', { xMin: -3, xMax: 3, yMin: -3, yMax: 3, widthPx: 800, heightPx: 800 }, [2, -2]],
+    ['(4 - x^2)^(1/4)', { xMin: -3, xMax: 3, yMin: -1, yMax: 2, widthPx: 240, heightPx: 120 }, [2, -2]],
+  ].map(([body, b, at]) => [body as string, b as never, at as number[]])
+  it.each(tips.flatMap(([body, b, at]) => [0, 0.013, 0.037].flatMap((off) => (['full', 'coarse'] as const).map((q) => [body, b.widthPx, b, at, off, q] as const))))('%s at %d px, shifted by %#: within a pixel of both tips, edge breaks only (%s)', (body, _width, b, at, off, quality) => {
+    const v = { bounds: { xMin: b.xMin + off, xMax: b.xMax + off, yMin: b.yMin, yMax: b.yMax }, widthPx: b.widthPx, heightPx: b.heightPx }
+    const r = sampleCurve(explicit(body), v, scopeOf(), { ...opts, quality })
+    const px = b.widthPx / (b.xMax - b.xMin)
+    for (const x of at) expect(nearestPx(r.objects, x, 0, px), `${body} at ${x}, shifted by ${off}, ${quality}`).toBeLessThan(1)
+    expect(curveOf(r.objects).breaks.map((br) => br.kind), body).toEqual(['edge', 'edge'])
+  })
+  it('a root too slow to draw to is not given an anchor it has not earned: (1 - x^2)^0.1 is drawn as it was, short of its tips', () => {
+    const r = sampleCurve(explicit('(1 - x^2)^0.1'), viewOf(2), scopeOf(), opts)
+    expect(nearestPx(r.objects, 1, 0, 200)).toBeGreaterThan(10)
+  })
+})

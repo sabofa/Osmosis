@@ -55,6 +55,9 @@
 //  - both diverge → pole;
 //  - one undefined, the other converges → edge, with that limit;
 //  - one undefined, the other diverges → edge, limit null;
+//  - one undefined, the other unknown but finite at every offset and settling (the geometric test again, with a
+//    tail of up to `settlePx`, and the off-lattice samples agreeing: a steep root's tip) → edge, with the
+//    extrapolated limit;
 //  - both converge, not equal → jump (value: v when defined, else null);
 //  - both converge, equal, v undefined → hole (value null);
 //  - both converge, equal, v defined but not equal → hole, value v;
@@ -120,7 +123,7 @@ function windowConverges(nf: number, px: PxScale): boolean {
 
 // The last 3 differences shrinking geometrically with a tail under convergePx: the
 // limit past the last sample, or null.
-function geometricLimit(nf: number, px: PxScale): Vec2 | null {
+function geometricLimit(nf: number, px: PxScale, tailPx: number = LIMITS.convergePx): Vec2 | null {
   if (nf < 4) return null
   const a = finite[nf - 4]
   const b = finite[nf - 3]
@@ -134,7 +137,7 @@ function geometricLimit(nf: number, px: PxScale): Vec2 | null {
   const r = d2 > 0 ? d3 / d2 : 0
   // The sum of the differences still to come, in units of the last: r + r^2 + … = r / (1 - r).
   const f = r / (1 - r)
-  if (!(d3 * f < LIMITS.convergePx)) return null
+  if (!(d3 * f < tailPx)) return null
   return { x: wx[e] + (wx[e] - wx[c]) * f, y: wy[e] + (wy[e] - wy[c]) * f }
 }
 
@@ -214,8 +217,25 @@ function convergence(point: PointFn, tc: number, side: -1 | 1, h0: number, nf: n
 interface Read {
   side: Side
   retried: boolean
+  // Where an UNKNOWN side is heading, when it is finite at every offset and settling (approaching): not a limit it has
+  // been shown to reach, and good to settlePx. The edge it ends at has this for its limit.
+  approach: Vec2 | null
 }
-const UNREAD: Read = { side: UNKNOWN, retried: false }
+const UNREAD: Read = { side: UNKNOWN, retried: false, approach: null }
+
+// The limit of a side that is finite at every one of its offsets (nf = n) and has not converged by the tests above,
+// when its last differences are shrinking steadily and what is left of the tail, by the same geometric estimate, is
+// under settlePx, and the off-lattice samples agree (confirmed): a steep root's tip, (4 - x^2)^(1/4) at its ends, which
+// rises as the fourth root of the distance and has half a pixel left at the last offset; x sqrt(9 - x^2) at 100 px a
+// unit, a twentieth of a pixel over convergePx. x^0.1, with six pixels to go, is not (7 times its last difference). It
+// is asked of a side that is not undefined and not a limit, and used only where the other side is undefined: the
+// edge's defined side arrives here (the sampler anchors the stretch to it, and the core's floor test, asked of every
+// half, says whether the curve does).
+function approaching(point: PointFn, tc: number, side: -1 | 1, h0: number, n: number, nf: number, px: PxScale, counter: EvalCounter): Vec2 | null {
+  if (nf !== n) return null
+  const limit = geometricLimit(nf, px, LIMITS.settlePx)
+  return limit !== null && confirmed(point, tc, side, h0, nf, limit, px, counter) ? limit : null
+}
 
 // What the curve does on one side of tc, from h0 (the parameter step worth 4 px)
 // inwards. Every evaluation is counted in counter.points.
@@ -241,7 +261,7 @@ function read(point: PointFn, tc: number, side: -1 | 1, h0: number, px: PxScale,
   if (n >= LIMITS.undefinedRun) {
     let allNaN = true
     for (let i = n - LIMITS.undefinedRun; i < n; i++) if (!(Number.isNaN(wx[i]) || Number.isNaN(wy[i]))) allNaN = false
-    if (allNaN) return { side: { kind: 'undefined' }, retried: false }
+    if (allNaN) return { side: { kind: 'undefined' }, retried: false, approach: null }
   }
   // A whole sequence whose tail converges and is then refuted by the off-lattice samples
   // is aliasing, not noise: a tight tail has nothing in it to drop. It ends the search,
@@ -249,7 +269,7 @@ function read(point: PointFn, tc: number, side: -1 | 1, h0: number, px: PxScale,
   // did: cos(pi/x), whose lattice value is a maximum, passes a given off-lattice sample
   // one time in sixty).
   const whole = convergence(point, tc, side, h0, nf, px, counter)
-  if (whole) return { side: { kind: 'converge', at: whole }, retried: false }
+  if (whole) return { side: { kind: 'converge', at: whole }, retried: false, approach: null }
   if (whole === false) return UNREAD
   const sign = divergence(nf, px)
   if (sign !== 0) {
@@ -262,7 +282,7 @@ function read(point: PointFn, tc: number, side: -1 | 1, h0: number, px: PxScale,
     for (let drop = 1; drop <= LIMITS.noiseDrop; drop++) {
       if (convergence(point, tc, side, h0, nf - drop, px, counter)) return UNREAD
     }
-    return { side: { kind: 'diverge', sign }, retried: false }
+    return { side: { kind: 'diverge', sign }, retried: false, approach: null }
   }
   // Neither on the whole sequence, and no tight tail. Cancellation noise lives at the
   // smallest offsets, so the convergence may be in the sequence without its last few
@@ -270,9 +290,9 @@ function read(point: PointFn, tc: number, side: -1 | 1, h0: number, px: PxScale,
   // holds. A refusal here is noise in a confirming sample, and moves on.
   for (let drop = 1; drop <= LIMITS.noiseDrop; drop++) {
     const kept = convergence(point, tc, side, h0, nf - drop, px, counter)
-    if (kept) return { side: { kind: 'converge', at: kept }, retried: true }
+    if (kept) return { side: { kind: 'converge', at: kept }, retried: true, approach: null }
   }
-  return UNREAD
+  return { side: UNKNOWN, retried: false, approach: approaching(point, tc, side, h0, n, nf, px, counter) }
 }
 
 // What the point at tc is, from both sides and its own value.
@@ -299,6 +319,9 @@ export function classify(point: PointFn, tc: number, h0: number, px: PxScale, co
     const other = left.kind === 'undefined' ? right : left
     if (other.kind === 'converge') return { kind: 'edge', defined, limit: other.at }
     if (other.kind === 'diverge') return { kind: 'edge', defined, limit: null }
+    // A side that is finite at every offset and settling (see approaching) arrives at an edge: a steep root's tip.
+    const approach = (left.kind === 'undefined' ? r : l).approach
+    if (approach !== null) return { kind: 'edge', defined, limit: approach }
     return { kind: 'unknown' }
   }
   if (left.kind === 'converge' && right.kind === 'converge') {

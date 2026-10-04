@@ -108,20 +108,47 @@ describe('sampleRange — ends', () => {
     ...sampleRange(fns, t0, t1, { left, right }, view, FULL, counter, sink),
   })
 
-  it('never evaluates at a singular end, and starts a floor (1/16 px) inside it', () => {
+  // (calc P2 final review, I3: the start grid still starts a floor inside a singular end, and the last stretch from there to the
+  // pole is walked in certified pieces, so the curve is no longer stopped a floor short: the first of these tests said the
+  // nearest evaluation was a floor inside, which was the defect)
+  it('never evaluates at a singular end; its start grid starts a floor (1/16 px) inside it, and the curve is walked on to the box', () => {
     const { fns, seen } = spied('1/x')
     const r = go(fns, 0, 5, { kind: 'singular' }, free)
     expect(seen).not.toContain(0)
-    expect(Math.min(...seen)).toBeCloseTo(1 / 16 / 40, 12)
-    // the curve runs from just inside the pole up off the top of the box, as one chain
+    // the first point the start grid takes is a floor inside; the walk comes nearer, and never to the pole
+    expect(seen[0]).toBeCloseTo(1 / 16 / 40, 12)
+    expect(Math.min(...seen)).toBeGreaterThan(0)
+    expect(Math.min(...seen)).toBeLessThan(seen[0])
+    // the curve runs from the clip box (1/x is 15 at 1/15) down the pole's side to the other end, as one chain
     expect(r.sink.chains()).toHaveLength(1)
-    expect(Math.min(...chainPoints(r.sink.chains()[0]).map((p) => p.x))).toBeGreaterThan(0)
+    const p = chainPoints(r.sink.chains()[0])
+    expect(Math.min(...p.map((q) => q.x))).toBeGreaterThan(0)
+    expect(p[0].y).toBe(15)
   })
-  it('never evaluates at a singular right end either', () => {
+  it('never evaluates at a singular right end either, and walks to the box there too', () => {
     const { fns, seen } = spied('1/x')
-    go(fns, -5, 0, free, { kind: 'singular' })
+    const r = go(fns, -5, 0, free, { kind: 'singular' })
     expect(seen).not.toContain(0)
-    expect(Math.max(...seen)).toBeCloseTo(-1 / 16 / 40, 12)
+    expect(Math.max(...seen)).toBeGreaterThan(-1 / 16 / 40)
+    expect(Math.max(...seen)).toBeLessThan(0)
+    const p = chainPoints(r.sink.chains()[0])
+    expect(p[p.length - 1].y).toBe(-15)
+  })
+  it('walks a singular end in pieces the twin certifies: a second pole inside the stretch ends the walk before it, with nothing drawn across', () => {
+    // 1/x + 1/(x - 0.0011): the walk toward the pole at 0 starts at 0.0016 and halves: the piece [0.0008, 0.0016] holds 0.0011
+    const { fns } = spied('1/x + 1/(x - 0.0011)')
+    const r = go(fns, 0, 5, { kind: 'singular' }, free)
+    for (const c of r.sink.chains()) {
+      const xs = chainPoints(c).map((q) => q.x)
+      expect(xs.some((x) => x < 0.0011 - 1e-9) && xs.some((x) => x > 0.0011 + 1e-9), 'a chain crosses the pole at 0.0011').toBe(false)
+    }
+  })
+  it('an end that is singular because the curve is undefined beside it has nothing to walk', () => {
+    // sqrt(x) on [-5, 0], right end singular: the nudged start is not a number
+    const { fns } = spied('sqrt(x)')
+    const r = go(fns, -5, 0, free, { kind: 'singular' })
+    expect(r.sink.chains()).toHaveLength(0)
+    expect(r.counter.points).toBeLessThan(400)
   })
   it('an anchor end is used instead of evaluating there', () => {
     const { fns, seen } = spied('x^2')

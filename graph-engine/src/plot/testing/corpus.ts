@@ -125,6 +125,15 @@ export const CORPUS: readonly CorpusCase[] = [
     ceiling: { points: 4100, intervals: 1200 }, // measured 2719 / 778
   },
   {
+    // zoomed out to +-1000: the core starts a floor (1/16 px, 0.16 here) inside the pole, where 1/x is 6, and it stopped there:
+    // 397 px short of the top of the view. The last stretch is walked in certified pieces and the curve leaves through the box.
+    name: '1/x, zoomed out to +-1000',
+    spec: 'y = 1/x',
+    views: [view(-1000, 1000, -1000, 1000)],
+    expect: { poles: [0], drawn: [{ x: 0.001, y: 1000 }, { x: -0.001, y: -1000 }, { x: 0.002, y: 500 }, { x: -0.04, y: -25 }] },
+    ceiling: { points: 1100, intervals: 600 }, // measured 701 / 373
+  },
+  {
     // the main view has the pole near its right edge, so the pan sequence shows it three times
     name: '1/x^2',
     spec: 'y = 1/x^2',
@@ -351,6 +360,33 @@ export const CORPUS: readonly CorpusCase[] = [
     views: [view(-10, 10, -1, 7)],
     expect: { edges: [], drawn: [{ x: -8, y: 4 }, { x: 0, y: 0 }, { x: 8, y: 4 }] },
     ceiling: { points: 1100, intervals: 540 }, // measured 687 / 356
+  },
+  // Steep root tips, which classify cannot call converged (a tail a little too long for convergePx, limits.ts approaching) and
+  // which the core, with no anchor, stopped a floor interval short of: x sqrt(9 - x^2) has its tips ON the start grid here
+  // (18 px short at FULL, 52 at COARSE; off the grid they were reached), and (4 - x^2)^(1/4), which rises as the fourth root of
+  // the distance, 11 px short at this scale. Each tip is anchored at its extrapolated limit, and the stretch to it certified by
+  // the floor test (every half).
+  {
+    name: '(4 - x^2)^(1/4)',
+    spec: 'y = (4 - x^2)^(1/4)',
+    views: [view(-3, 3, -1, 2, 240, 120)],
+    expect: { edges: [-2, 2], jumps: [], drawn: [{ x: -2, y: 0 }, { x: 2, y: 0 }] },
+    ceiling: { points: 670, intervals: 190 }, // measured 445 / 122 (527 / 194 when it stopped short, a known limit)
+  },
+  {
+    name: 'x sqrt(9 - x^2), its tips on the start grid',
+    spec: 'y = x sqrt(9 - x^2)',
+    views: [view(-4, 4, -4, 4)],
+    expect: { edges: [-3, 3], jumps: [], drawn: [{ x: -3, y: 0 }, { x: 3, y: 0 }] },
+    ceiling: { points: 5400, intervals: 1600 }, // measured 3587 / 1052
+  },
+  {
+    name: 'x sqrt(9 - x^2), its tips on the start grid, at COARSE',
+    spec: 'y = x sqrt(9 - x^2)',
+    views: [view(-4, 4, -4, 4)],
+    quality: 'coarse',
+    expect: { edges: [-3, 3], jumps: [], drawn: [{ x: -3, y: 0 }, { x: 3, y: 0 }] },
+    ceiling: { points: 3100, intervals: 1100 }, // measured 2008 / 707
   },
 
   // ---- oscillation ---------------------------------------------------------------------------------------
@@ -579,16 +615,5 @@ export const CORPUS: readonly CorpusCase[] = [
     quality: 'coarse',
     expect: { bands: false, undrawn: [{ x: (HALF_PI + 8 * Math.PI) / 500, y: (HALF_PI + 8 * Math.PI) / 500 + 0.1 }] },
     ceiling: { points: 910, intervals: 680 }, // measured 601 / 451
-  },
-  {
-    // KNOWN LIMIT. (4 - x^2)^(1/4) meets the axis at +-2 with a vertical tangent: it rises as the fourth root of the
-    // distance from the tip, so the last floor interval before it (1/16 px of x, 0.0016) is 0.28 high, which is 11 px
-    // at this scale (40 px a unit), and the sampler does not draw that stretch: the chain ends there, with a jump break
-    // just short of the tip. The edge break itself is typed at +-2, exactly: the curve stops a few px short of its tips.
-    name: 'known limit: (4 - x^2)^(1/4) stops short of its tips',
-    spec: 'y = (4 - x^2)^(1/4)',
-    views: [view(-3, 3, -1, 2, 240, 120)],
-    expect: { edges: [-2, 2], undrawn: [{ x: -2, y: 0 }, { x: 2, y: 0 }] },
-    ceiling: { points: 800, intervals: 300 }, // measured 527 / 194
   },
 ]
