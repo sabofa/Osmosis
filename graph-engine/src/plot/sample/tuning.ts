@@ -265,8 +265,10 @@ export interface Tuning {
   // An interval the twin does NOT certify is not bisected any further at this width, which is floorPx
   // for FULL and coarser for a drag. What the twin cannot certify is all that can only be decided by
   // bisecting to the floor and testing there (an integral, a cancelling quotient, a seam the walk did
-  // not find), so it is where a drag's cost goes: the sine integral was 244 ms a COARSE frame.
-  // Certified intervals keep floorPx: they are accepted flat long before it.
+  // not find). A coarser floor is fewer intervals to test and a coarser place for a jump break, and it
+  // saves what is spent on a gentle curve; a steep one costs what its vertical travel costs (see
+  // CORE.floorHalvings), wherever bisecting stops. Certified intervals keep floorPx: they are accepted
+  // flat long before it.
   uncertifiedFloorPx: number
   // Two ends this close on screen, the twin unable to certify the interval, are connected
   // if the jump test shows the gap closing; a pixel is what the eye can tell apart. (At the floor
@@ -323,14 +325,20 @@ export const CORE = {
   // far under any screen.
   edgeSteps: 64,
   // The jump test at the floor (adaptive.ts): an interval the twin does not certify, at the width it stops
-  // being bisected at, with both ends finite and its enclosure bounded (or the verdict UNKNOWN), is joined if
-  // it passes the jump test with no precondition on the gap: halved up to this many levels BELOW the floor,
-  // keeping the half with the larger gap, and joined only if each gap is at most halvingShrink times the one
-  // before. A smooth curve's gaps halve however steep it is (a slope of 40 is 2.5 px at 1/16 px, and 0.04 px
-  // after six halvings); a jump keeps its size, and so does a pole's. The old precondition (a gap under
-  // gapPx) refused every interval of a smooth curve steeper than 16:1 on screen, and it was broken at
-  // every floor interval (y = integral(t = 0 to x, 40 cos(t)): 8091 jump breaks, nothing drawn in view).
-  // Six levels take a floor interval to a sixty-fourth of it, 1/1024 px, where a jump of a twentieth of a
-  // pixel is still the whole of the gap; a smaller one is not drawn as a jump because it is not seen.
+  // being bisected at, with both ends finite, its enclosure bounded (or the verdict UNKNOWN) and a gap of a
+  // pixel or more, is bisected BELOW the floor: every sub-interval whose gap is still a pixel or more, up to
+  // this many levels, and then each leaf (a gap under gapPx) must pass the old test, gap under gapPx and
+  // closing (halvings, halvingShrink). If any leaf fails, or a sub-interval is still a pixel at the last
+  // level, the interval is lifted and a jump is recorded at that leaf. So any jump the test bridges is under a
+  // pixel: a jump of a pixel keeps its sub-interval's gap over a pixel at every level, and one set against the
+  // slope makes its own half's gap smaller, which is why every half is looked at (following only the half
+  // with the larger gap bridged a 2 px jump against a slope of 200 at 40 offsets of 40). A smooth curve's
+  // gaps halve however steep it is, so it is joined, down to a slope of 1024:1 at FULL's floor (and 128:1
+  // at COARSE's), past which the last level is still a pixel and the interval is not. The old precondition (a
+  // gap under gapPx) refused every interval of a curve steeper than 16:1, which was broken at every floor
+  // interval (y = integral(t = 0 to x, 40 cos(t)): 8091 jump breaks, nothing drawn in view). The price is
+  // evaluations: the leaves are a gap of under a pixel each, so a curve costs about 6 evaluations for each
+  // pixel it climbs, and a steep integral can cap (40 cos(t) climbs 9000 px in the box at 800 px: 60000
+  // points, drawn as far as that goes, with the note).
   floorHalvings: 6,
 }

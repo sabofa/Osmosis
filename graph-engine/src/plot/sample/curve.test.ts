@@ -531,16 +531,23 @@ describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not b
   }
   const jumpsInView = (objs: SceneObject[], f: (x: number) => number) => curveOf(objs).breaks.filter((b) => b.kind === 'jump' && Math.abs(b.at) <= bounds.xMax && Math.abs(f(b.at)) <= bounds.yMax)
 
-  it('y = integral(t = 0 to x, 40 cos(t)) is drawn everywhere it is in view at FULL, with no jump break in view', () => {
+  // 40 sin(x) climbs about 9000 px in the box over the range, and under rule 1 every leaf of the floor test is a gap of under a
+  // pixel, so what it costs is that travel (about 6 evaluations a pixel of it): 60000 points at FULL, where the budget caps it.
+  // What is drawn is the curve, with no jump break in view, from the left; the scene says "drawn coarsely".
+  it('y = integral(t = 0 to x, 40 cos(t)) draws at FULL and COARSE, on the curve, with no jump break in view (it caps, and says so)', () => {
     const f = (x: number) => 40 * Math.sin(x)
-    const r = run(explicit('integral(t = 0 to x, 40 cos(t))'))
-    const { have, want } = covered(r.objects, f)
-    expect(want).toBeGreaterThan(50)
-    expect(have).toBe(want)
-    expect(jumpsInView(r.objects, f)).toEqual([])
-    expect(r.capped).toBe(false)
-    // and it is the curve: every vertex within half a pixel of it
-    for (const p of curveOf(r.objects).chains.flatMap(chainPoints)) expect(Math.abs(f(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+    for (const quality of ['full', 'coarse'] as const) {
+      const r = sampleCurve(explicit('integral(t = 0 to x, 40 cos(t))'), view, scopeOf(), { ...opts, quality })
+      const { have, want } = covered(r.objects, f)
+      expect(want, quality).toBeGreaterThan(50)
+      expect(curveOf(r.objects).chains.length, quality).toBeGreaterThan(0)
+      expect(have / want, quality).toBeGreaterThan(quality === 'full' ? 0.8 : 0.1)
+      expect(r.capped, quality).toBe(true)
+      expect(r.blankAtCap, quality).toBe(false)
+      expect(jumpsInView(r.objects, f), quality).toEqual([])
+      // and it is the curve: every vertex within half a pixel of it
+      for (const p of curveOf(r.objects).chains.flatMap(chainPoints)) expect(Math.abs(f(p.x) - p.y) * 40, quality).toBeLessThanOrEqual(0.5)
+    }
   })
   it('y = integral(t = 0 to x, 2t) is drawn at COARSE, and at FULL', () => {
     const f = (x: number) => x * x
@@ -560,6 +567,20 @@ describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not b
       expect(want, quality).toBeGreaterThan(10)
       expect(have, quality).toBe(want)
       expect(jumpsInView(r.objects, f), quality).toEqual([])
+    }
+  })
+  // fix round 2 (rule 1): 200(x - 5) rises 12.5 px in a floor interval and floor(50x) drops 2 px at every 0.02; the locator's
+  // 64-zero cap leaves the jumps near 5 unlocated (it keeps the ones nearest 0), so the core meets them. The floor test followed
+  // the larger-gap half only, and a jump against the slope is in the smaller one: 3 of the 5 in view were bridged, with no break.
+  it('y = 200(x - 5) - 0.05 floor(50x) breaks at every one of its 2 px jumps in view, and no chain spans one', () => {
+    const r = run(explicit('200 (x - 5) - 0.05 floor(50 x)'))
+    const jumps = [251, 252, 253, 254, 255].map((k) => k / 50)
+    for (const c of jumps) {
+      expect(curveOf(r.objects).breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) < 0.003), `a jump break at ${c}`).toBe(true)
+      for (const ch of curveOf(r.objects).chains) {
+        const xs = chainPoints(ch).map((p) => p.x)
+        expect(xs.some((x) => x < c - 1e-9) && xs.some((x) => x > c + 1e-9), `a chain spans ${c}`).toBe(false)
+      }
     }
   })
   it('an unlocated jump beside the integral is still a break: integral(t = 0 to x, 0) + {x < 0.1234: 0, 1}', () => {

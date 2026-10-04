@@ -18,8 +18,8 @@ describe('createInteraction', () => {
     const i = createInteraction(c.now)
     expect(i.isDragging()).toBe(false)
     expect(i.isInteracting()).toBe(false)
-    expect(i.wheelSettleIn()).toBeNull()
-    expect(i.takeWheelSettled()).toBe(false)
+    expect(i.settleIn()).toBeNull()
+    expect(i.takeSettled()).toBe(false)
   })
 
   it('a drag is interacting until the pointer goes up, and the end of one that moved asks for a settle rebuild', () => {
@@ -73,21 +73,21 @@ describe('createInteraction', () => {
     const c = clock()
     const i = createInteraction(c.now)
     i.wheel()
-    expect(i.wheelSettleIn()).toBe(WHEEL_SETTLE_MS)
+    expect(i.settleIn()).toBe(WHEEL_SETTLE_MS)
     c.advance(100)
-    expect(i.wheelSettleIn()).toBe(WHEEL_SETTLE_MS - 100)
-    expect(i.takeWheelSettled()).toBe(false)
+    expect(i.settleIn()).toBe(WHEEL_SETTLE_MS - 100)
+    expect(i.takeSettled()).toBe(false)
     i.wheel()
     c.advance(100)
     // 100 ms after the second event, not 200 after the first
-    expect(i.wheelSettleIn()).toBe(WHEEL_SETTLE_MS - 100)
-    expect(i.takeWheelSettled()).toBe(false)
+    expect(i.settleIn()).toBe(WHEEL_SETTLE_MS - 100)
+    expect(i.takeSettled()).toBe(false)
     c.advance(WHEEL_SETTLE_MS - 100)
-    expect(i.wheelSettleIn()).toBe(0)
-    expect(i.takeWheelSettled()).toBe(true)
+    expect(i.settleIn()).toBe(0)
+    expect(i.takeSettled()).toBe(true)
     // taken: nothing is pending, and it does not fire a second time
-    expect(i.wheelSettleIn()).toBeNull()
-    expect(i.takeWheelSettled()).toBe(false)
+    expect(i.settleIn()).toBeNull()
+    expect(i.takeSettled()).toBe(false)
   })
 
   it('a wheel burst during a drag keeps the view interacting after the wheel is quiet, until the pointer is up', () => {
@@ -110,7 +110,7 @@ describe('createInteraction', () => {
     i.pointerDown()
     i.wheel()
     c.advance(WHEEL_SETTLE_MS)
-    expect(i.takeWheelSettled()).toBe(true)
+    expect(i.takeSettled()).toBe(true)
     expect(i.pointerUp()).toBe(true)
     // and a wheel with no press does not leave a move behind for the next press
     i.wheel()
@@ -145,6 +145,66 @@ describe('createInteraction', () => {
       i.pointerDown()
       expect(i.viewportChanged(700, 600)).toBe(true)
       expect(i.isDragging()).toBe(true)
+    })
+
+    // fix round 2: dragging a splitter is a stream of sizes, one a frame, and each asked for a FULL rebuild. A resize is a gesture
+    // like a wheel turn: interacting (coarse) while the sizes keep coming, and one settle when they stop.
+    it('a stream of sizes is one burst: interacting while they come and for WHEEL_SETTLE_MS after the last, then one settle', () => {
+      const c = clock()
+      const i = createInteraction(c.now)
+      i.viewportChanged(800, 600)
+      // the baseline is no gesture
+      expect(i.isInteracting()).toBe(false)
+      expect(i.settleIn()).toBeNull()
+      for (let w = 790; w >= 700; w -= 10) {
+        c.advance(16)
+        expect(i.viewportChanged(w, 600)).toBe(true)
+        expect(i.isInteracting()).toBe(true)
+        // each size moves the settle back to a full WHEEL_SETTLE_MS from now
+        expect(i.settleIn()).toBe(WHEEL_SETTLE_MS)
+        expect(i.takeSettled()).toBe(false)
+      }
+      c.advance(WHEEL_SETTLE_MS - 1)
+      expect(i.isInteracting()).toBe(true)
+      expect(i.takeSettled()).toBe(false)
+      c.advance(1)
+      expect(i.isInteracting()).toBe(false)
+      expect(i.takeSettled()).toBe(true)
+      expect(i.takeSettled()).toBe(false)
+      expect(i.settleIn()).toBeNull()
+    })
+    it('the size reported again unchanged (the observer firing for nothing) is no gesture', () => {
+      const c = clock()
+      const i = createInteraction(c.now)
+      i.viewportChanged(800, 600)
+      c.advance(1000)
+      expect(i.viewportChanged(800, 600)).toBe(false)
+      expect(i.isInteracting()).toBe(false)
+      expect(i.settleIn()).toBeNull()
+    })
+    it('a resize and a wheel turn are one burst: the settle waits for the later of them', () => {
+      const c = clock()
+      const i = createInteraction(c.now)
+      i.viewportChanged(800, 600)
+      i.wheel()
+      c.advance(100)
+      i.viewportChanged(700, 600)
+      c.advance(100)
+      // 200 ms after the wheel, 100 after the resize
+      expect(i.isInteracting()).toBe(true)
+      expect(i.settleIn()).toBe(WHEEL_SETTLE_MS - 100)
+      c.advance(WHEEL_SETTLE_MS - 100)
+      expect(i.takeSettled()).toBe(true)
+    })
+    it('a canvas resized while the button is held moved the view: the pointer up still settles it', () => {
+      const c = clock()
+      const i = createInteraction(c.now)
+      i.viewportChanged(800, 600)
+      i.pointerDown()
+      i.viewportChanged(700, 600)
+      c.advance(WHEEL_SETTLE_MS)
+      expect(i.takeSettled()).toBe(true)
+      expect(i.pointerUp()).toBe(true)
     })
   })
 })

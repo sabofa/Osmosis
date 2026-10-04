@@ -212,7 +212,7 @@ export class SceneRenderer {
   private rafId = 0
   // Whether the view is being dragged or zoomed, for the coarse pass (render/interaction.ts)
   private interaction = createInteraction(() => performance.now())
-  private wheelTimer: ReturnType<typeof setTimeout> | null = null
+  private settleTimer: ReturnType<typeof setTimeout> | null = null
   private lastPointer = { x: 0, y: 0 }
   private options: SceneRendererOptions
   private palette: Palette
@@ -328,6 +328,8 @@ export class SceneRenderer {
   // other. That includes a canvas that was hidden when the scene was built (a table-only spec edited into a
   // graph one is built at 1 x 1 px, and `y = sin(x)` drew 9 vertices, 50 px off) and comes up at its size.
   // A canvas that goes hidden is not rebuilt for: there is nothing to see it at, and its next size is a change.
+  // A resize is a gesture like a wheel turn: dragging a splitter is a stream of sizes, so each is a coarse
+  // rebuild (the interaction is in a burst), and the full one comes when the sizes stop (armSettle).
   private handleResize() {
     const rect = this.canvas.getBoundingClientRect()
     const width = Math.max(rect.width, 1)
@@ -336,7 +338,10 @@ export class SceneRenderer {
     this.camera2d.resize(width, height)
     this.drawGrid()
     const changed = this.interaction.viewportChanged(width, height)
-    if (changed && rect.width >= 1 && rect.height >= 1) this.scheduleViewChange()
+    if (changed && rect.width >= 1 && rect.height >= 1) {
+      this.armSettle()
+      this.scheduleViewChange()
+    }
   }
 
   private handlePointerDown = (e: PointerEvent) => {
@@ -388,8 +393,8 @@ export class SceneRenderer {
     })
   }
 
-  // The view has stopped moving (the pointer came up after a drag, or the wheel has been quiet for
-  // WHEEL_SETTLE_MS): tell the host once more, so it rebuilds at full quality, because what the last
+  // The view has stopped moving (the pointer came up after a drag, or the wheel and the canvas's size have
+  // been quiet for WHEEL_SETTLE_MS): tell the host once more, so it rebuilds at full quality, because what the last
   // frame of the gesture built was coarse. A view change already queued for the next frame will do
   // it, by then with the gesture's flag down, so it is not asked for twice.
   private settle() {
@@ -397,15 +402,16 @@ export class SceneRenderer {
     this.options.onViewChange?.()
   }
 
-  // A wheel burst has no end event: wait until it has been quiet, and settle then. The timer is the
-  // clock's to correct (it can fire a hair before performance.now says the burst is over: wait the rest).
-  private armWheelSettle() {
-    if (this.wheelTimer !== null) clearTimeout(this.wheelTimer)
-    const wait = this.interaction.wheelSettleIn()
+  // A burst (a wheel turned, a canvas resized) has no end event: wait until it has been quiet, and settle
+  // then. The timer is the clock's to correct (it can fire a hair before performance.now says the burst is
+  // over: wait the rest).
+  private armSettle() {
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer)
+    const wait = this.interaction.settleIn()
     if (wait === null) return
-    this.wheelTimer = setTimeout(() => {
-      this.wheelTimer = null
-      if (!this.interaction.takeWheelSettled()) this.armWheelSettle()
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null
+      if (!this.interaction.takeSettled()) this.armSettle()
       // a drag in progress settles itself when the pointer goes up
       else if (!this.interaction.isDragging()) this.settle()
     }, wait)
@@ -450,7 +456,7 @@ export class SceneRenderer {
     this.hoverResolver.refreshGuideLine(this.camera2d)
     this.needsRender = true
     this.interaction.wheel()
-    this.armWheelSettle()
+    this.armSettle()
     this.scheduleViewChange()
   }
 
@@ -943,7 +949,7 @@ export class SceneRenderer {
 
   dispose() {
     cancelAnimationFrame(this.rafId)
-    if (this.wheelTimer !== null) clearTimeout(this.wheelTimer)
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer)
     this.resizeObserver.disconnect()
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     window.removeEventListener('pointermove', this.handlePointerMove)

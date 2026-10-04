@@ -1401,13 +1401,25 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     })
     it('an integral with the real budget is drawn, with no note, at both qualities', () => {
       const view = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
-      for (const spec of ['y = integral(t = 0 to x, 2t)', 'y = integral(t = 0 to x, 40 cos(t))', 'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)']) {
+      for (const spec of ['y = integral(t = 0 to x, 2t)', 'y = integral(t = 0 to x, 20)', 'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)']) {
         for (const quality of ['full', 'coarse'] as const) {
           const scene = sceneWith(spec, { quality, widthPx: 800, heightPx: 800 }, view)
           expect(scene.errors, `${spec} ${quality}`).toEqual([])
           expect(curvesOf(scene).at(-1)!.chains.length, `${spec} ${quality}`).toBeGreaterThan(0)
         }
       }
+    })
+    // 40 cos(t) integrates to a curve that climbs 9000 px in the box; every leaf of the floor test is under a pixel (rule 1), so
+    // it does not fit its budget at FULL: it is drawn from the left as far as the budget goes, and the line says so
+    it('a steep integral that does not fit its budget is drawn as far as it goes, and says "drawn coarsely" at FULL only', () => {
+      const view = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+      const spec = 'y = integral(t = 0 to x, 40 cos(t))'
+      const full = sceneWith(spec, { quality: 'full', widthPx: 800, heightPx: 800 }, view)
+      expect(full.errors).toEqual([{ line: 1, message: NOTE }])
+      expect(curvesOf(full)[0].chains.length).toBeGreaterThan(0)
+      const coarse = sceneWith(spec, { quality: 'coarse', widthPx: 800, heightPx: 800 }, view)
+      expect(coarse.errors).toEqual([])
+      expect(curvesOf(coarse)[0].chains.length).toBeGreaterThan(0)
     })
   })
 

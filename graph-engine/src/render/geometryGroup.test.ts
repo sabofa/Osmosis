@@ -216,10 +216,8 @@ describe('GeometryGroupManager', () => {
   // Regression test for a real, measured bug: dash/gap length used to be a
   // fixed *world*-unit size (0.12/0.09), so a dashed line's chunk count
   // scaled with its length in world units rather than its length on screen.
-  // A false-positive "asymptote" line (see buildScene.ts's jump-detection —
-  // easy to trigger on a steep curve like a parabola at deep zoom-out, where
-  // 400 fixed samples spread thin across a wide x-range) spans the full
-  // camera bounds height, which at deep zoom-out is thousands of world
+  // A dashed line spanning the full camera bounds height (an asymptote guide
+  // at deep zoom-out) is thousands of world
   // units — producing tens of thousands of quads, rebuilt on every pan/zoom
   // frame. This measured 150-330ms per frame in the real app. Two
   // properties must hold: dash count stays bounded by MAX_DASH_CHUNKS no

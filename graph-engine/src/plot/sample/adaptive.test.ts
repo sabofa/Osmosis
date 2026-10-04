@@ -379,6 +379,30 @@ describe('sampleRange — a smooth curve the twin cannot certify is not broken a
       }
     }
   })
+  // fix round 2 (rule 1). The floor test first followed only the half of the interval with the larger gap, halving after
+  // halving. A jump set AGAINST the slope makes the gap of its own half the smaller, so that half was dropped at the first
+  // halving and never looked at, and the interval was bridged: at 40 of 40 offsets of a slope of 200 with a 2 px jump
+  // (FULL), of a slope of 20 with 1 px, and of 2000 with 40 px (COARSE). Now every sub-interval whose gap is still a pixel is
+  // bisected, and each leaf (a gap under a pixel) must pass the old test.
+  it.each([
+    ['FULL, slope 200, a jump of 2 px', FULL, 200, 2],
+    ['COARSE, slope 20, a jump of 1 px', COARSE, 20, 1],
+    ['COARSE, slope 2000, a jump of 40 px', COARSE, 2000, 40],
+    ['FULL, slope 20, a jump of 1 px', FULL, 20, 1],
+  ])('a jump set against the slope is a jump, at 40 offsets: %s', (_name, tuning, slope, px) => {
+    // |y| < 15 is the box: the curve is in it for |x| < 15 / slope
+    const inBox = 15 / slope
+    const floorWidth = tuning.uncertifiedFloorPx / 40
+    for (let k = 0; k < 40; k++) {
+      const c = inBox * (0.05 + (0.8 * k) / 40) + 1e-7 * k
+      const r = go((x) => slope * x - (px / 40) * (x >= c ? 1 : 0), tuning)
+      expect(r.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) <= 2 * floorWidth), `no jump break at ${c}`).toBe(true)
+      for (const ch of r.chains) {
+        const xs = chainPoints(ch).map((p) => p.x)
+        expect(xs.some((x) => x < c) && xs.some((x) => x >= c), `a chain bridges the jump at ${c}`).toBe(false)
+      }
+    }
+  })
   it('a pole inside a floor interval, the twin saying nothing, is not bridged', () => {
     const c = 0.1234
     const r = go((x) => 1 / (x - c))
@@ -419,12 +443,15 @@ describe('sampleRange — a smooth curve the twin cannot certify is not broken a
     const r = run('1/(x - 0.1234)')
     expect(r.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - 0.1234) < 0.01)).toBe(true)
   })
-  it('a drag stops refining what the twin cannot certify at uncertifiedFloorPx: a coarser floor, and cheaper', () => {
+  it('a drag stops refining what the twin cannot certify at uncertifiedFloorPx, a coarser floor, and draws the same curve', () => {
     expect(FULL.uncertifiedFloorPx).toBe(FULL.floorPx)
     expect(COARSE.uncertifiedFloorPx).toBe(0.5)
+    // (not cheaper for a steep curve since fix round 2: the leaves are set by the curve's vertical travel, a gap of under a pixel
+    // each, and not by where the bisecting stops)
     const full = go((x) => 20 * x)
     const coarse = go((x) => 20 * x, COARSE)
-    expect(coarse.counter.points).toBeLessThan(full.counter.points / 2)
+    expect(full.chains).toHaveLength(1)
+    expect(coarse.chains).toHaveLength(1)
   })
 })
 

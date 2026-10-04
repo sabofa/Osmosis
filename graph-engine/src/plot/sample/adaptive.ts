@@ -44,15 +44,15 @@
 //    between the defined end and the undefined one), draw to the last defined point, record
 //    an `edge` break and lift; else bisect.
 //  - Both finite, not certified: if the screen gap is under gapPx and the jump test passes,
-//    connect. Otherwise, at the floor, the jump test is asked again WITHOUT the gap precondition and
-//    over CORE.floorHalvings halvings (below): a smooth curve steeper than 16:1 on screen has a gap
-//    over a pixel at a 1/16 px interval, and was broken there at every one. Failing that, lift and
-//    record a `jump` break; above the floor, bisect. The jump test halves the interval `halvings`
-//    times, always keeping the half with the larger gap, and each gap must be at most halvingShrink
-//    times the one before: a continuous seam halves its gap, a jump keeps it. Both forms need the
-//    verdict UNKNOWN or a bounded enclosure: an infinite bound is where a pole may sit. At the floor,
-//    an interval that ends at an `anchor` is drawn instead (see the comment there): the anchor is a
-//    limit the structure walk has read.
+//    connect. Otherwise, at the floor, an interval with a gap of a pixel or more is bisected BELOW the floor
+//    (floorTest: every sub-interval whose gap is still a pixel, up to CORE.floorHalvings levels, and each leaf
+//    of under a pixel passes the old test): a smooth curve steeper than 16:1 on screen has a gap over a pixel
+//    at a 1/16 px interval, and was broken there at every one. Failing that, lift and record a `jump` break
+//    (at the leaf that failed); above the floor, bisect. The jump test halves the interval `halvings` times,
+//    always keeping the half with the larger gap, and each gap must be at most halvingShrink times the one
+//    before: a continuous seam halves its gap, a jump keeps it. Both forms need the verdict UNKNOWN or a
+//    bounded enclosure: an infinite bound is where a pole may sit. At the floor, an interval that ends at
+//    an `anchor` is drawn instead (see the comment there): the anchor is a limit the structure walk has read.
 //
 // 3. A sample that is not finite is undefined here: an infinity is never certified flat.
 //
@@ -273,20 +273,29 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
   // enclosure with an infinite bound is where a pole may sit, and three samples that happen to
   // shrink are no certificate against that. (UNKNOWN has no bounds at all, by construction.)
   const bounded = verdict === UNKNOWN || isBounded(c.box)
-  if (bounded && pxDistance(c, xa, ya, xb, yb) < c.tune.gapPx && gapCloses(c, ta, tb, xa, ya, xb, yb)) {
+  const gap = pxDistance(c, xa, ya, xb, yb)
+  if (bounded && gap < c.tune.gapPx && gapCloses(c, ta, tb, xa, ya, xb, yb)) {
     c.sink.segment(xa, ya, ta, xb, yb, tb)
     return
   }
   if (atUncertifiedFloor) {
-    // THE FLOOR TEST. Where bisecting stops, the jump test is asked without its precondition on the gap: a
-    // smooth curve steeper than 16:1 on screen has a gap over a pixel at a 1/16 px interval (and the
-    // precondition refused every one, breaking the curve at each), so the gap is only asked to CLOSE, over up
-    // to CORE.floorHalvings halvings below the floor. Each gap must be at most halvingShrink times the one
-    // before: a smooth curve's halves (0.5 to 0.71), a jump or a pole keeps its size (1.0). The bound on
-    // the enclosure is still asked, as above: an enclosure the twin left unbounded is where a pole may sit.
-    if (bounded && gapCloses(c, ta, tb, xa, ya, xb, yb, c.tune.halvingShrink, CORE.floorHalvings)) {
-      c.sink.segment(xa, ya, ta, xb, yb, tb)
-      return
+    // THE FLOOR TEST. Where bisecting stops and the gap is over a pixel (a smooth curve steeper than 16:1 on
+    // screen has one at a 1/16 px interval, and the old precondition refused every such interval, breaking the
+    // curve at each), the interval is bisected further, below the floor: EVERY sub-interval whose gap is still
+    // a pixel or more, up to CORE.floorHalvings levels, and then each leaf (a gap under gapPx) must pass the
+    // old test, gap under gapPx AND closing. A jump of a pixel or more keeps its sub-interval's gap over a
+    // pixel at every level (or, set against the slope, leaves a gap that cancels and then opens when halved),
+    // so it is never a leaf that passes: any jump the test bridges is under a pixel. The bound on the
+    // enclosure is still asked, as above: an enclosure the twin left unbounded is where a pole may sit.
+    // `bad` is where it failed, which is where the jump is.
+    let bad = ta + (tb - ta) / 2
+    if (bounded && gap >= c.tune.gapPx) {
+      const failed = floorTest(c, ta, tb, xa, ya, xb, yb, 0)
+      if (failed === null) {
+        c.sink.segment(xa, ya, ta, xb, yb, tb)
+        return
+      }
+      bad = failed
     }
     // An interval that ends at an anchor is the last stretch to a limit the structure walk has
     // read (limits.ts: a hole's, a jump's side, a domain edge's), and the anchor is where the
@@ -303,10 +312,31 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
       return
     }
     c.sink.lift()
-    c.sink.addBreak(ta + (tb - ta) / 2, 'jump')
+    c.sink.addBreak(bad, 'jump')
     return
   }
   bisectAtMid(c, ta, tm, tb, xa, ya, xb, yb, continuous)
+}
+
+// The floor test below the floor (see visit): `depth` levels down, the interval [ta, tb] with a gap of a pixel or
+// more is halved, and every half is looked at, the one with the smaller gap too (the jump of a curve set against its
+// own slope makes its half's gap the smaller). A half whose gap is under gapPx is a leaf and must pass the old test
+// (closing over `halvings` halvings); a half at the last level whose gap is still a pixel or more fails, and so does
+// a midpoint that is not a point. Returns null when every leaf passed, else the parameter of the middle of the
+// interval that did not: where the jump is. Every evaluation is counted; a floor interval costs at most
+// 2^floorHalvings leaves of `halvings` + 1 evaluations (the budget is checked again at the next interval).
+function floorTest(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, depth: number): number | null {
+  const tm = ta + (tb - ta) / 2
+  if (!(tm > ta && tm < tb)) return tm
+  if (pxDistance(c, xa, ya, xb, yb) < c.tune.gapPx) return gapCloses(c, ta, tb, xa, ya, xb, yb) ? null : tm
+  if (depth >= CORE.floorHalvings) return tm
+  evalAt(c, tm)
+  const xm = c.pt[0]
+  const ym = c.pt[1]
+  if (!isFinite2(xm, ym)) return tm
+  const left = floorTest(c, ta, tm, xa, ya, xm, ym, depth + 1)
+  if (left !== null) return left
+  return floorTest(c, tm, tb, xm, ym, xb, yb, depth + 1)
 }
 
 // Which sides of the clip box a point is beyond, as bits: 1 left, 2 right, 4 below, 8 above (0: inside, or not finite).
@@ -372,7 +402,7 @@ function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: num
 
 // The jump test: do the gaps between samples close as the interval is halved? Each gap must be at
 // most `shrink` times the one before.
-function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, xb0: number, yb0: number, shrink: number = c.tune.halvingShrink, halvings: number = c.tune.halvings): boolean {
+function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, xb0: number, yb0: number, shrink: number = c.tune.halvingShrink): boolean {
   let ta = ta0
   let tb = tb0
   let xa = xa0
@@ -380,7 +410,7 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
   let xb = xb0
   let yb = yb0
   let gap = pxDistance(c, xa, ya, xb, yb)
-  for (let k = 0; k < halvings; k++) {
+  for (let k = 0; k < c.tune.halvings; k++) {
     const tm = ta + (tb - ta) / 2
     if (!(tm > ta && tm < tb)) return false
     evalAt(c, tm)
