@@ -15,6 +15,21 @@ const HEX = /^#[0-9a-f]{6}$/
 const hueDistance = (a: number, b: number) => Math.abs(shortestAngle(a, b))
 const slotHue = (accent: Hex, n: number) => (toOklch(accent).h + n * GOLDEN_ANGLE) % 360
 
+// Distance between two colours in OKLab, and each 0-255 channel of a hex.
+function deltaE(a: Hex, b: Hex): number {
+  const lab = (hex: Hex) => {
+    const { l, c, h } = toOklch(hex)
+    const angle = (h * Math.PI) / 180
+    return [l, c * Math.cos(angle), c * Math.sin(angle)]
+  }
+  const [l1, a1, b1] = lab(a)
+  const [l2, a2, b2] = lab(b)
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2)
+}
+const channelsOf = (hex: Hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+// A vivid accent of a given hue (and chroma), as hex.
+const accentAt = (h: number, c = 0.15): Hex => fromOklch({ l: 0.6, c, h })
+
 // Uniform OKLCH draws, as the ruling asks: L 0.1-0.95, C 0-0.2, h 0-360.
 function randomColour(random: Random): Hex {
   return fromOklch({ l: random.range(0.1, 0.95), c: random.range(0, 0.2), h: random.range(0, 360) })
@@ -109,6 +124,13 @@ describe('fitLightness', () => {
     expect(fitLightness({ l: 0, c: 0, h: 0 }, '#000000', { target: 30 })).toMatch(HEX)
     expect(fitLightness({ l: 1, c: 0, h: 0 }, '#ffffff', { target: 30 })).toMatch(HEX)
   })
+
+  it('refuses a step that is not above 0, which would never end', () => {
+    for (const step of [0, -0.01, NaN]) {
+      expect(() => fitLightness({ l: 0.5, c: 0.1, h: 30 }, '#ffffff', { step, target: 30 }), String(step)).toThrow(RangeError)
+    }
+    expect(fitLightness({ l: 0.9, c: 0.1, h: 30 }, '#ffffff', { step: 0.05 })).toMatch(HEX)
+  })
 })
 
 describe('derivations', () => {
@@ -140,6 +162,36 @@ describe('derivations', () => {
         expect(hueDistance(h, slotHue(accent, n)), `${accent} slot ${n} hue`).toBeLessThan(4)
       })
     }
+  })
+
+  it("starts the series from the default theme's accent hue when the accent has no hue (chroma under 0.02)", () => {
+    for (const [mode, surface, defaultAccent] of [
+      ['light', '#ffffff', DEFAULT_LIGHT_TOKENS['--accent']],
+      ['dark', '#201e15', DEFAULT_DARK_TOKENS['--accent']],
+    ] as const) {
+      const grey = deriveSeries({ accent: '#808080', surface, mode })
+      const black = deriveSeries({ accent: '#000000', surface, mode })
+      const near = deriveSeries({ accent: accentAt(200, 0.015), surface, mode })
+      expect(black, mode).toEqual(grey)
+      expect(near, mode).toEqual(grey)
+      grey.forEach((hex, n) => {
+        expect(hueDistance(toOklch(hex).h, slotHue(defaultAccent, n)), `${mode} slot ${n}`).toBeLessThan(4)
+      })
+      // With chroma, the accent's own hue again.
+      const tinted = deriveSeries({ accent: accentAt(200, 0.05), surface, mode })
+      expect(hueDistance(toOklch(tinted[0]).h, 200), mode).toBeLessThan(4)
+    }
+  })
+
+  it('keeps the slots unique when good and bad are the same colour', () => {
+    const good = '#4c7a4a'
+    const series = deriveSeries({ accent: '#c65d22', surface: '#ffffff', mode: 'light', good, bad: good })
+    expect(new Set(series).size).toBe(SERIES_COUNT)
+    expect(series.filter((hex) => hex === good)).toHaveLength(1)
+    // Through the adapter, too (a theme whose bad is its good).
+    const resolved = resolveTheme({ colours: { good, bad: good } })
+    expect(new Set(resolved.colours.series).size).toBe(SERIES_COUNT)
+    expect(resolved.colours.bad).toBe(good)
   })
 
   it('starts lightness at 0.55 in light and 0.75 in dark when contrast is already enough', () => {
@@ -201,9 +253,9 @@ describe('the bare system', () => {
       good: '#4c7a4a',
       bad: '#a34b3f',
     })
-    // A Palette has no wash: the palette's accent is the app's default accent, so it gets the
-    // default wash; another accent gets one derived (see the wash test below).
-    expect(theme.colours.accentWash).toBe('#faf1e9')
+    // A Palette has no wash. This palette's surface is not the default theme's, so the wash is
+    // derived (the default wash needs the default accent AND the default surface; see below).
+    expect(theme.colours.accentWash).toBe(mixOklab('#c65d22', '#fdf6ea', 0.85))
   })
 
   it('resolves every field for the dark palette', () => {
@@ -259,9 +311,21 @@ describe('the bare system', () => {
     expect(resolveTheme({ mode: 'light', colours: { surface: light.surface, accent: light.accent, good: light.good } })).toEqual(defaultTheme('light'))
   })
 
-  it('gives the default wash to the default accent and a derived one to any other', () => {
+  it('gives the default wash only to the default accent on the default surface, a derived one otherwise', () => {
     const light = defaultTheme('light').colours
+    const dark = defaultTheme('dark').colours
+    expect(light.accentWash).toBe('#faf1e9')
+    // Both default, said out loud or not: the default wash.
+    expect(resolveTheme({ mode: 'light', colours: { accent: light.accent, surface: light.surface } }).colours.accentWash).toBe(light.accentWash)
+    // Another accent, on the default surface.
     expect(resolveTheme({ mode: 'light', colours: { accent: '#3b6ea8' } }).colours.accentWash).toBe(mixOklab('#3b6ea8', light.surface, 0.85))
+    // The default accent on another surface: a dark surface must not keep the light default's pale wash.
+    const onDark = resolveTheme({ mode: 'light', colours: { surface: '#101010' } }).colours
+    expect(onDark.accent).toBe(light.accent)
+    expect(onDark.accentWash).toBe(mixOklab(light.accent, '#101010', 0.85))
+    expect(onDark.accentWash).not.toBe(light.accentWash)
+    expect(resolveTheme({ mode: 'dark', colours: { surface: '#f0f0f0' } }).colours.accentWash).toBe(mixOklab(dark.accent, '#f0f0f0', 0.85))
+    // Another accent on another surface, and an explicit wash.
     expect(resolveTheme({ mode: 'light', colours: { accent: '#3b6ea8', surface: '#f0f0f0' } }).colours.accentWash).toBe(mixOklab('#3b6ea8', '#f0f0f0', 0.85))
     expect(resolveTheme({ mode: 'light', colours: { accent: '#3b6ea8', accentWash: '#eeeeff' } }).colours.accentWash).toBe('#eeeeff')
   })
@@ -290,6 +354,54 @@ describe('boards', () => {
     const a = resolveTheme({ colours: { accent: '#3b6ea8', surface: '#ffffff' } })
     const b = resolveTheme({ colours: { accent: '#3b6ea8', surface: '#101010' } })
     expect(b.boards).toEqual(a.boards)
+  })
+
+  it('are, in the default theme, the same in light and dark to within 2 units a channel', () => {
+    const light = defaultTheme('light').boards
+    const dark = defaultTheme('dark').boards
+    for (const name of BOARD_NAMES) {
+      const a = channelsOf(light[name])
+      const b = channelsOf(dark[name])
+      for (let i = 0; i < 3; i++) expect(Math.abs(a[i] - b[i]), `${name} ${light[name]} vs ${dark[name]}`).toBeLessThanOrEqual(2)
+    }
+  })
+
+  it('do not flip when the accent passes the hue opposite a board (a 2 degree move is a small step)', () => {
+    // The default accents sit about 180 degrees from the blackboard's 230.
+    const a = deriveBoards(accentAt(48))
+    const b = deriveBoards(accentAt(50))
+    for (const name of BOARD_NAMES) expect(deltaE(a[name], b[name]), name).toBeLessThan(0.005)
+    // All the way round in 2 degree steps: no step is a jump (a flip is about 0.017 on the blackboard).
+    let previous = deriveBoards(accentAt(0))
+    for (let h = 2; h <= 360; h += 2) {
+      const current = deriveBoards(accentAt(h % 360))
+      for (const name of BOARD_NAMES) expect(deltaE(previous[name], current[name]), `${name} at accent hue ${h}`).toBeLessThan(0.008)
+      previous = current
+    }
+  })
+
+  it('are untilted for an accent with no chroma, whatever hue float residue gives it', () => {
+    const untilted = { blackboard: '#21282b', greenboard: '#1c3d2c', whiteboard: '#f3f5f8' }
+    expect(deriveBoards('#808080')).toEqual(untilted)
+    expect(deriveBoards('#000000')).toEqual(untilted)
+    expect(deriveBoards('#ffffff')).toEqual(untilted)
+    expect(resolveTheme({ colours: { accent: '#808080' } }).boards).toEqual(untilted)
+    expect(resolveTheme({ colours: { accent: '#000000' } }).boards).toEqual(untilted)
+  })
+
+  it('fade the tilt in smoothly with the accent chroma, 0 under 0.02 and whole by 0.04', () => {
+    const grey = deriveBoards('#808080')
+    // Under 0.02 there is no tilt (only the small chroma boost, which is within rounding).
+    for (const name of BOARD_NAMES) expect(deltaE(deriveBoards(accentAt(100, 0.015))[name], grey[name]), name).toBeLessThan(0.005)
+    // Well above, the board has taken its tilt.
+    expect(deltaE(deriveBoards(accentAt(100, 0.08)).greenboard, grey.greenboard)).toBeGreaterThan(0.01)
+    // No jump anywhere along the way.
+    let previous = deriveBoards(accentAt(100, 0))
+    for (let c = 0.002; c <= 0.08; c += 0.002) {
+      const current = deriveBoards(accentAt(100, c))
+      for (const name of BOARD_NAMES) expect(deltaE(previous[name], current[name]), `${name} at chroma ${c.toFixed(3)}`).toBeLessThan(0.006)
+      previous = current
+    }
   })
 
   it('take an explicit board over the derived one, one board at a time', () => {
@@ -464,7 +576,7 @@ describe('overrides', () => {
 
   // Each field changes what it names and whatever is derived from it, and nothing else.
   const TABLE: [string, ThemeSource, string[]][] = [
-    ['surface', { colours: { surface: '#8a8a8a' } }, ['surface', 'paper', 'series']],
+    ['surface', { colours: { surface: '#8a8a8a' } }, ['surface', 'paper', 'accentWash', 'series']],
     ['paper', { colours: { paper: '#f0e0c0' } }, ['paper']],
     ['ink', { colours: { ink: '#000033' } }, ['ink']],
     ['muted', { colours: { muted: '#555555' } }, ['muted']],
@@ -500,10 +612,33 @@ describe('overrides', () => {
     const theme = resolveTheme({ media: { chalk: { line: '#FFF', label: '#abcdef' }, ink: {} }, lettering: { family: 'Caveat' }, styles })
     expect(theme.media).toEqual({ chalk: { line: '#ffffff', label: '#abcdef' } })
     expect(theme.lettering).toEqual({ family: 'Caveat' })
-    expect(theme.styles).toBe(styles)
+    expect(theme.styles).toEqual(styles)
     expect(resolveTheme({}).styles).toBeUndefined()
     expect(resolveTheme({}).lettering).toEqual({ family: null })
     expect(resolveTheme({}).media).toEqual({})
+  })
+
+  it('copies and freezes the styles, so changing the source afterwards changes neither the theme nor its key', () => {
+    const styles = { all: { seed: 3, tint: ['a', 'b'] }, graph2d: { medium: 'ink' } }
+    const theme = resolveTheme({ styles })
+    const snapshot = JSON.stringify(theme.styles)
+    const key = theme.key
+    styles.all.seed = 99
+    styles.all.tint.push('c')
+    styles.graph2d.medium = 'chalk'
+    expect(JSON.stringify(theme.styles)).toBe(snapshot)
+    expect(theme.key).toBe(key)
+    expect(theme.styles).not.toBe(styles)
+    expect(Object.isFrozen(theme.styles)).toBe(true)
+    expect(Object.isFrozen((theme.styles as typeof styles).all.tint)).toBe(true)
+    // The same source, mutated, is a different theme with a different key.
+    expect(resolveTheme({ styles }).key).not.toBe(key)
+    // Through the preset hook as well.
+    const hooked = fromOsmosisTheme(LIGHT_PALETTE, 'light', { id: 'builtin:x' }, () => styles)
+    const hookedKey = hooked.key
+    styles.all.seed = 7
+    expect(hooked.key).toBe(hookedKey)
+    expect((hooked.styles as typeof styles).all.seed).toBe(99)
   })
 
   it('reads #rgb and upper case, and ignores what is not a colour as if it were missing', () => {

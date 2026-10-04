@@ -8,6 +8,7 @@
 import { fromOklch, toOklch } from '../color'
 import { hashString } from '../random'
 import { MIN_SERIES_CONTRAST, contrastRatio, fitLightness } from './contrast'
+import { DEFAULT_DARK_TOKENS, DEFAULT_LIGHT_TOKENS } from './defaults'
 import { BOARD_NAMES, SERIES_COUNT, type BoardName, type Hex, type ThemeInput } from './types'
 
 // The golden angle, in degrees: hue steps that never repeat and spread evenly.
@@ -18,9 +19,29 @@ export const GOLDEN_ANGLE = 137.508
 export const BOARD_TILT = 0.5
 const BOARD_TILT_LIMIT = 40
 
+// Where the accent sits (nearly) opposite a board's hue, "toward" has no side:
+// a degree either way flips the tilt. So the tilt fades to nothing over the last
+// BOARD_OPPOSITE_FADE degrees before the opposite hue.
+const BOARD_OPPOSITE_FADE = 40
+
+// An accent with next to no chroma has no hue to speak of (a grey reads whatever
+// float residue says). The tilt fades in over this chroma range, smoothly.
+const BOARD_TILT_CHROMA_FROM = 0.02
+const BOARD_TILT_CHROMA_TO = 0.04
+
+// Below this accent chroma the series does not start from the accent's hue
+// either: it starts from the default theme's accent hue.
+const ACCENT_MIN_CHROMA = 0.02
+
 const wrapHue = (hue: number) => ((hue % 360) + 360) % 360
 
 const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value))
+
+// 0 below `from`, 1 above `to`, a smooth S between.
+function smoothstep(from: number, to: number, value: number): number {
+  const t = clamp((value - from) / (to - from), 0, 1)
+  return t * t * (3 - 2 * t)
+}
 
 // The shortest signed angle from `from` to `to`, in degrees, in [-180, 180).
 export function shortestAngle(from: number, to: number): number {
@@ -70,11 +91,14 @@ export function deriveSeries(input: SeriesInput): Hex[] {
   const accent = toOklch(input.accent)
   const l = input.mode === 'dark' ? 0.75 : 0.55
   const c = Math.min(0.16, Math.max(0.08, accent.c))
-  const hues = Array.from({ length: SERIES_COUNT }, (_, n) => wrapHue(accent.h + n * GOLDEN_ANGLE))
+  // A grey accent has no hue: start from the default theme's accent instead.
+  const startHue = accent.c < ACCENT_MIN_CHROMA ? toOklch((input.mode === 'dark' ? DEFAULT_DARK_TOKENS : DEFAULT_LIGHT_TOKENS)['--accent']).h : accent.h
+  const hues = Array.from({ length: SERIES_COUNT }, (_, n) => wrapHue(startHue + n * GOLDEN_ANGLE))
   const series = hues.map((h) => fitLightness({ l, c, h }, input.surface))
 
   const taken = new Set<number>()
-  for (const given of [input.good, input.bad]) {
+  // A bad that is the same colour as good has its slot already: skip it, so the slots stay unique.
+  for (const given of input.bad === input.good ? [input.good] : [input.good, input.bad]) {
     if (given === undefined) continue
     const hue = toOklch(given).h
     let slot = -1
@@ -106,13 +130,22 @@ const BOARD_FULL_ACCENT_CHROMA = 0.15
 // Slate, green and white boards, tilted a little toward the accent's hue (in
 // hue only, chroma staying low). Depends on the accent and nothing else: no
 // mode, no surface. They are the same in light and in dark.
+//
+// The tilt is half the (limited) angle toward the accent, faded out as the
+// accent nears the board's opposite hue (where the side flips) and faded in with
+// the accent's chroma (a grey has no hue). Both fades are continuous, so a
+// small change of accent never makes a visible jump in a board.
 export function deriveBoards(accent: Hex): Record<BoardName, Hex> {
   const { c: accentChroma, h: accentHue } = toOklch(accent)
   const boost = BOARD_CHROMA_BOOST * Math.min(1, accentChroma / BOARD_FULL_ACCENT_CHROMA)
+  const hasHue = smoothstep(BOARD_TILT_CHROMA_FROM, BOARD_TILT_CHROMA_TO, accentChroma)
   const boards = {} as Record<BoardName, Hex>
   for (const name of BOARD_NAMES) {
     const base = BOARD_BASES[name]
-    const tilt = clamp(shortestAngle(base.h, accentHue), -BOARD_TILT_LIMIT, BOARD_TILT_LIMIT) * BOARD_TILT
+    const angle = shortestAngle(base.h, accentHue)
+    const toward = clamp(angle, -BOARD_TILT_LIMIT, BOARD_TILT_LIMIT) * BOARD_TILT
+    const notOpposite = clamp((180 - Math.abs(angle)) / BOARD_OPPOSITE_FADE, 0, 1)
+    const tilt = toward * notOpposite * hasHue
     boards[name] = fromOklch({ l: base.l, c: Math.min(base.maxChroma, base.c + boost), h: wrapHue(base.h + tilt) })
   }
   return boards

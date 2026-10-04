@@ -152,8 +152,10 @@ export function resolveTheme(source: ThemeSource = {}): ThemeInput {
     line: given.line ?? fallback.line,
     lineStrong: given.lineStrong ?? fallback.lineStrong,
     accent,
-    // The default wash goes with the default accent; any other accent gets its own.
-    accentWash: given.accentWash ?? (accent === fallback.accent ? fallback.accentWash : deriveAccentWash(accent, surface)),
+    // The default wash is the default accent laid on the default surface; with either one
+    // changed it no longer is, so it is derived (accent 85% toward the surface) instead.
+    accentWash:
+      given.accentWash ?? (accent === fallback.accent && surface === fallback.surface ? fallback.accentWash : deriveAccentWash(accent, surface)),
     good,
     bad,
     series,
@@ -170,7 +172,9 @@ export function resolveTheme(source: ThemeSource = {}): ThemeInput {
     colours,
     boards,
     media: givenMedia(source.media),
-    styles: source.styles,
+    // The styles are copied and frozen, so changing the source afterwards cannot change the
+    // theme under its own key. They must be plain data (structuredClone).
+    styles: source.styles === undefined ? undefined : deepFreeze(structuredClone(source.styles)),
     lettering: { family: typeof family === 'string' && family !== '' ? family : null },
   }
   return { ...resolved, key: themeKey(resolved) }

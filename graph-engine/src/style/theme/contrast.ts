@@ -46,7 +46,7 @@ export function contrastRatio(a: Hex, b: Hex): number {
 export interface FitOptions {
   // The contrast to reach. Default 3:1.
   target?: number
-  // The lightness step. Default 0.01.
+  // The lightness step. Default 0.01. Must be greater than 0 (a RangeError otherwise).
   step?: number
 }
 
@@ -61,10 +61,12 @@ const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
 // L = 1 without meeting the target, the other direction is tried before giving
 // up (a start just above a light-mid surface cannot get there by going up, but
 // can by going down). If neither direction meets the target, the best contrast
-// seen is returned: it never throws, and always ends (at most about 200 steps).
+// seen is returned: an unreachable target never throws, and the walk always ends
+// (at most about 200 steps at the default step).
 export function fitLightness(colour: Oklch, surface: Hex, options: FitOptions = {}): Hex {
   const target = options.target ?? MIN_SERIES_CONTRAST
   const step = options.step ?? 0.01
+  if (!(step > 0)) throw new RangeError('fitLightness: step must be greater than 0, got ' + String(step))
   const start = clamp01(colour.l)
   const away = start >= toOklch(surface).l ? 1 : -1
   let best = fromOklch({ ...colour, l: start })
