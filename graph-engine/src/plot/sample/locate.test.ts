@@ -262,12 +262,15 @@ describe('locateZeros, budgets', () => {
       ;[LOCATE.intervalsPerGenerator, LOCATE.intervalsTotal] = was
     }
   })
-  it('keeps the zeros nearest the centre of the range when there are too many (floor(x) over 141 steps)', () => {
-    const r = zerosOf('floor(x)', -70.5, 70.5)
+  it('keeps the zeros nearest the centre of the range when there are too many (floor(x) over a little more than twice maxZeros steps)', () => {
+    // (the steps are at whole numbers: [-h, h] with h a half has 2h of them)
+    const h = Math.ceil(1.1 * LOCATE.maxZeros) + 0.5
+    const r = zerosOf('floor(x)', -h, h)
     expect(r.truncated).toBe(true)
     expect(r.zeros).toHaveLength(LOCATE.maxZeros)
-    expect(Math.max(...r.zeros.map((z) => Math.abs(z.t)))).toBeLessThanOrEqual(32)
-    near(r.zeros.slice(30, 35), [-2, -1, 0, 1, 2])
+    expect(Math.max(...r.zeros.map((z) => Math.abs(z.t)))).toBeLessThanOrEqual(LOCATE.maxZeros / 2)
+    const mid = LOCATE.maxZeros / 2
+    near(r.zeros.slice(mid - 2, mid + 3), [-2, -1, 0, 1, 2])
   })
   it('keeps an unchecked candidate out of budget only if g is exactly 0 there (tan(x) + 1/(x^2 + 1), total of 40)', () => {
     // x^2 + 1 has no zero. With the total spent the twin cannot be asked about the

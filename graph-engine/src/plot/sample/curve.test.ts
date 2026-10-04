@@ -996,6 +996,54 @@ describe('sampleCurve — a pole is walked to the clip box', () => {
   })
 })
 
+// calc P2 final review, minor 2: the locator reports 256 zeros, not 64, so tan x across +-200 (160 poles in the view and its
+// overscan, +-300: 191) has a typed pole and a guide at every one.
+describe('sampleCurve — every pole of tan x across +-200 is typed', () => {
+  it('has a pole break and a guide at each pole of the sampled range, and no jump break the core had to find', () => {
+    const v = { bounds: { xMin: -200, xMax: 200, yMin: -200, yMax: 200 }, widthPx: 800, heightPx: 800 }
+    const r = sampleCurve(explicit('tan(x)'), v, scopeOf(), opts)
+    const want: number[] = []
+    for (let k = -200; k <= 200; k++) if (Math.abs((k + 0.5) * Math.PI) < 300 - 1e-6) want.push((k + 0.5) * Math.PI)
+    expect(want.length).toBeGreaterThan(LOCATE.maxZeros / 2)
+    expect(want.length).toBeLessThanOrEqual(LOCATE.maxZeros)
+    const poles = curveOf(r.objects).breaks.filter((b) => b.kind === 'pole').map((b) => b.at)
+    expect(poles).toHaveLength(want.length)
+    want.forEach((p, i) => expect(poles[i]).toBeCloseTo(p, 8))
+    expect(guidesOf(r.objects)).toHaveLength(want.length)
+    expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'jump')).toEqual([])
+    for (const p of want) noChainCrosses(r.objects, p)
+  })
+})
+
+// calc P2 final review, minor 1: COARSE's chords are 16 px, so a start grid of 8 px is accepted where it is flat: it was bisected
+// whole (a chord of at most 8 px across an 8 px interval is level), and a smooth curve cost twice what it needed. spikeFactor went
+// down as the chord went up (4 * 16 is the 8 * 8 it was: the tallest enclosure an interval can have and be flat), because
+// with 8 and 16 px chords a fast oscillation sampled at the grid's spacing passed for flat, and was drawn as aliased chords.
+describe('sampleCurve — COARSE chords are 16 px', () => {
+  const coarse = { ...opts, quality: 'coarse' as const }
+  it('a smooth curve costs about what the start grid does: sin x, x^2 and tan x', () => {
+    expect(sampleCurve(explicit('sin(x)'), view, scopeOf(), coarse).stats.points).toBeLessThanOrEqual(320)
+    expect(sampleCurve(explicit('x^2'), view, scopeOf(), coarse).stats.points).toBeLessThanOrEqual(350)
+    expect(sampleCurve(explicit('tan(x)'), view, scopeOf(), coarse).stats.points).toBeLessThanOrEqual(3100)
+  })
+  it('and a fast oscillation is still one band, not bands with aliased chords between them: sin(wx) for w = 500 to 3000', () => {
+    for (const w of [500, 1000, 1800, 3000]) {
+      const r = sampleCurve(explicit(`sin(${w}x)`), view, scopeOf(), coarse)
+      expect(r.objects.filter((o) => o.kind === 'band'), `w = ${w}`).toHaveLength(1)
+      expect(curveOf(r.objects).chains, `w = ${w}`).toHaveLength(0)
+    }
+  })
+  it('the chords of a smooth curve are up to 16 px, and no more', () => {
+    let longest = 0
+    for (const c of curveOf(sampleCurve(explicit('sin(x)'), view, scopeOf(), coarse).objects).chains) {
+      const p = chainPoints(c)
+      for (let i = 0; i + 1 < p.length; i++) longest = Math.max(longest, Math.hypot((p[i + 1].x - p[i].x) * 40, (p[i + 1].y - p[i].y) * 40))
+    }
+    expect(longest).toBeGreaterThan(8)
+    expect(longest).toBeLessThanOrEqual(16)
+  })
+})
+
 // calc P2 final review, I3: a steep root's tip that classify cannot call converged (a tail a little too long for convergePx)
 // is anchored at its extrapolated limit, and the stretch to it is certified by the floor test (every half).
 describe('sampleCurve — steep root tips are reached', () => {

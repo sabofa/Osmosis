@@ -642,7 +642,7 @@ export const CORPUS: readonly CorpusCase[] = [
   },
   {
     // The jump test finds these. floor(50x) has a zero every 0.02, 1501 of them in the sampled range, and the locator keeps
-    // 64 (typed jumps, with their marks, away from the view); the steps of 0.05 (2 px) that the curve has in view, from 5.00
+    // 256 (typed jumps, with their marks, within 2.6 of the centre); the steps of 0.05 (2 px) that the curve has in view, from 5.00
     // to 5.12 (the view and its overscan: seven of them), are on a slope of 200:1 that the twin cannot certify across them,
     // and are found only because the gap across each does not close as its interval is halved. A break at each, within 1/16
     // px, and no chain across one (checked of every case). With the jump test forced to always connect this case fails: one chain
@@ -651,7 +651,7 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'y = 200(x - 5) - 0.05 floor(50x)',
     views: [STD],
     expect: { jumpsFound: [250, 251, 252, 253, 254, 255, 256].map((k) => k / 50) },
-    ceiling: { points: 35000, intervals: 4400 }, // measured 22753 / 2891
+    ceiling: { points: 43800, intervals: 11600 }, // measured 29116 / 7691 (22753 / 2891 with 64 zeros kept: the locator clusters 2048 brackets before it is cut, not 512)
   },
 
   // ---- known limits --------------------------------------------------------------------------------------
@@ -684,16 +684,17 @@ export const CORPUS: readonly CorpusCase[] = [
   },
   {
     // KNOWN LIMIT. At COARSE (the pass a drag runs: 8 samples to a column, a start sample every 8 px) a curve like
-    // x + 0.1 sin(500x), 4 px high and two periods to a pixel, is sampled at a spacing that aliases it: it draws as a
-    // nearly straight polyline, with no band, and the crest of one wave, (0.0534, 0.1534), which is 4 px above the line
-    // y = x, is not drawn: the amplitude is lost. (Its vertices and chords are still on the curve, which fills the
-    // 4 px about that line: nothing it draws is false, and it draws less than there is.) At FULL it is bands. The
-    // settled pass corrects it.
-    name: 'known limit: x + 0.1 sin(500x) at COARSE draws as a line',
+    // x + 0.1 sin(500x), 4 px high and two periods to a pixel, is sampled at a spacing that aliases it: the 8 px start grid
+    // steps 100 rad of the wave, which is -0.53 rad a sample, so the samples are a slow wave about the line y = x (a period of
+    // about 95 px, 4 px high), and that is what it draws, one chain of the grid's own samples, with no band. The crest of one
+    // wave, (0.0534, 0.1534), which is 4 px above the line, is not drawn: the amplitude is lost. (Its vertices are on the curve and
+    // its chords are inside the 4 px the curve fills about the line: it draws less than there is, and a slow wave that is
+    // not there.) At FULL it is bands. The settled pass corrects it.
+    name: 'known limit: x + 0.1 sin(500x) at COARSE draws as an aliased slow wave',
     spec: 'y = x + 0.1 sin(500 x)',
     views: [STD],
     quality: 'coarse',
     expect: { bands: false, undrawn: [{ x: (HALF_PI + 8 * Math.PI) / 500, y: (HALF_PI + 8 * Math.PI) / 500 + 0.1 }] },
-    ceiling: { points: 910, intervals: 680 }, // measured 601 / 451
+    ceiling: { points: 460, intervals: 230 }, // measured 301 / 151 (601 / 451 when COARSE's chords were 8 px, and every start interval was bisected)
   },
 ]

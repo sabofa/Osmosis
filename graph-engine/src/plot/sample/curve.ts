@@ -258,6 +258,8 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   }
 
   const naturals: Expr[] = []
+  // (`located.truncated`, that zeros were left out, is not said to the author: what is left out is the nearest the edges of the
+  // range, typed no more than what the core finds on its own, and no note is true of it. LOCATE.maxZeros says what is guarded.)
   const located = locateZeros(generatorsOf(co, scope, naturals), co.param, scope, co.from, co.to, counter)
   const h0 = tuning.startPx / co.pxPerT
   const sink = new ChainSink(clip)

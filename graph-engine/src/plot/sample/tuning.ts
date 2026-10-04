@@ -8,8 +8,10 @@
 export const LOCATE = {
   // The most zeros one range reports. Past it the ones nearest the centre of the
   // range are kept, and the result says it was cut. (The same number, times 8, is
-  // the most separate brackets one generator may have before its search is cut.)
-  maxZeros: 64,
+  // the most separate brackets one generator may have before its search is cut.) 256 types every pole
+  // of tan x across a view of +-200 and its overscan (159) with a guide; past it the rest are not
+  // typed, and the core's own detection (a jump break, an enclosure with an infinite bound) guards them.
+  maxZeros: 256,
   // The twin evaluations one generator may spend on its search: 2 / coarseRel, which
   // bisecting the whole range down to the coarse width takes at most (2 * 2^12 - 1),
   // so a generator's own budget never cuts the search short: the whole of a narrow
@@ -257,8 +259,10 @@ export const BAND = {
 
 // The adaptive core (adaptive.ts): every number of the screen-space subdivision. Two
 // presets share the shape: FULL for a settled view, COARSE for one being dragged (the
-// interaction budget), which draws the same curve a little looser and spends a quarter
-// of the evaluations.
+// interaction budget), which draws the same curve a little looser (a start sample per 8 px, flat to
+// half a pixel, chords up to 16 px) and has a quarter of the budget. What it spends is not a quarter of
+// FULL's: about half of it on a smooth curve (sin x 601 points, 301 at COARSE; x^2 543, 333; tan x 4063,
+// 2967), and the same on what the twin cannot certify, which is decided by bisecting to a floor.
 export interface Tuning {
   // One start sample per this many screen px of parameter range: the coarse floor every
   // curve is drawn from, and the spacing a feature narrower than it must be caught by
@@ -343,9 +347,14 @@ export interface Tuning {
 }
 
 export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, uncertifiedFloorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, steepShrink: 0.55, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, spikeDepth: 3, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
-// COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
-// cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
-export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, uncertifiedFloorPx: 0.5, spikeFactor: 8, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }
+// COARSE trades spike fidelity for drag speed: a looser spike test, where FULL's factor is 2. At 2 it cost as much as FULL on
+// curves the twin encloses loosely (a cancelling quotient capped its budget). Its chords are twice as long (16 px): a drag's
+// start grid is every 8 px, and with chords of at most 8 px (a start-grid interval is 8 px wide, so a chord of that length is
+// level and nothing else) every interval of the grid was bisected, and a curve flat to half a pixel cost twice what it needs.
+// The two go together: spikeFactor * maxSegPx is the tallest enclosure (plus the slack) an interval can have and be taken for
+// flat, because the chord's span is at most maxSegPx, and it is held at the 64 px it was (8 * 8; 4 * 16 now). At 8 with 16
+// px chords, sin(500x) was 26 bands and 25 aliased chords at COARSE (sin(3000x) 152 and 153), where it is one band.
+export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, maxSegPx: 16, uncertifiedFloorPx: 0.5, spikeFactor: 4, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }
 
 // The parts of the core that are not a quality knob, so not in Tuning but still numbers
 // that were chosen.

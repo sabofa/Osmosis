@@ -1435,7 +1435,7 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     const build = (spec: string, quality: 'full' | 'coarse' = 'full', bounds = view, budget?: { points: number; intervals: number }) => sceneWith(spec, { quality, widthPx: 800, heightPx: 800, budget }, bounds)
     const marks = (scene: SceneOfResult) => scene.objects.filter((o) => o.kind === 'mark')
     it('a staircase whose treads are a hundredth of a pixel wide says nothing could be certified, at FULL and COARSE', () => {
-      for (const [spec, quality] of [['y = floor(1000x)', 'full'], ['y = floor(1000x)', 'coarse'], ['y = floor(5000x)', 'full'], ['y = floor(100x)', 'coarse']] as const) {
+      for (const [spec, quality] of [['y = floor(1000x)', 'full'], ['y = floor(1000x)', 'coarse'], ['y = floor(5000x)', 'full'], ['y = floor(500x)', 'coarse']] as const) {
         const scene = build(spec, quality)
         expect(scene.errors, `${spec} ${quality}`).toEqual([{ line: 1, message: CERTIFY }])
         expect(curvesOf(scene)[0].chains, `${spec} ${quality}`).toEqual([])
