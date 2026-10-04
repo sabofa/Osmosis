@@ -19,6 +19,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-04-graph-styles-design.md` (approved by Ben 2026-10-04, amended with geometry the same day). Implementers read §§2–7 and §10, and the amendments in the status line.
 
+**Geometry's sign-off:** 2026-10-04, on the plan at 4cf1f66, with 8 fixes. They are folded in here: the precedence sentence, no-theme defaults per medium, generated papers only with a theme, `@style-set` refuses out-of-range values, `renderFigure`'s optional trailing `theme`, the full role list including authors' colours, a 512 tile with browser compression, and `host.ts` kept out of the index. Geometry reviews the branch before merge.
+
 ## Global Constraints
 
 **Byte-identity and pins**
@@ -125,7 +127,7 @@ export interface ThemeSource {
   styles?: ThemeStyles                  // defined in Task 4 (style/layers.ts); typed as unknown here and narrowed there
   lettering?: { family?: string }
 }
-export type RoleKey = 'line' | 'fill' | 'point' | 'label' | 'measure' | 'auxiliary' | 'region'
+export type RoleKey = 'line' | 'hidden' | 'auxiliary' | 'point' | 'label' | 'measure' | 'caption' | 'givens' | 'highlight' | 'focus' | 'fill' | 'region' | 'shading'
 export interface ThemeInput {
   mode: 'light' | 'dark'
   colours: ThemeColours
@@ -210,7 +212,12 @@ export function defaultMediumSettings(name: MediumName): MediumSettings
   - an explicit `role.colour`;
   - else `theme.media[name][role.key]`;
   - else `series[slot]` when `slot` is given;
-  - else, by role: line, label and measure take `ink`; auxiliary takes `muted`; point takes `bad`; fill and region take `accent`.
+  - else, by role:
+    - line, hidden, label, measure, caption and givens take `ink`;
+    - auxiliary takes `muted`;
+    - point takes `bad`;
+    - highlight, focus, fill, region and shading take `accent`.
+  - **An author's own colour** (`color: red`) is a base colour like any other: it goes through the medium's fitting, so red on a blackboard comes out as a pastel chalk red.
 - **Fitting:** each medium fits the base in OKLCH against its `surfaceColour` with these defaults (the per-medium settings in brackets):
 
 | Medium | L | C | Contrast vs surface | Opacity | Overlap | Grain |
@@ -224,7 +231,8 @@ export function defaultMediumSettings(name: MediumName): MediumSettings
 | whiteboard | clamp 0.35–0.55 | max(C, 0.10) | ≥ 4.5:1 vs the board | 0.95 | multiply | streaks 0.35, dryness 0.3 [`dry`] |
 
 - **Board media ignore `theme.mode`.** Chalk and whiteboard colours are byte-equal across light and dark for the same theme colours.
-- **Every role gets a readable colour** (labels, points, measures, auxiliary), so B can retire `paperPalette`.
+- **Every role gets a readable colour**, so B can retire `paperPalette`. That means everything a figure draws: lines, hidden and dashed lines, auxiliary lines, points, labels, measures, angle captions, the givens table, highlights and focus, region fills and shading, and authors' own colours.
+- **No-theme defaults** (geometry, fix 2). Each medium carries the exact colours today's presets hard-code, used when the pen has no `ThemeInput`: ink `#1f2a44` on `#fbf8f0`, graphite `#232327` on `#f6f3ec`, marker `#1b3f8f` on `#fdfdf8`. clean uses the palette as today. New media pick their own defaults. Expose them as `noThemeColours(name): { ink: Hex; paper: Hex } | null`.
 
 **Tests:**
 - For 20 seeded random themes × 2 modes × all roles × 7 media: each output sits in its medium's L and C ranges (±0.005) and meets its contrast floor.
@@ -326,14 +334,14 @@ export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles>           // buil
 
   A layer's `preset` replaces every `style.*` value below it with that preset's look, then the layer's own `set` applies. That keeps today's rule. A preset never touches `paint.*` or `media.*`.
 - **`resolveStyle([base, figure])` keeps its exact results.** It becomes: build a stack with `document = base`, `figure = figure`, resolve for `figure2d`, then `toStyle`. Existing tests pin this.
-- **`@style-set: <path> <value>`.** Validate it against `settingAt`. Unknown paths and bad values are refused with a message naming the nearest valid paths (`checkLayer`'s behaviour), and the figure still draws. Numbers are clamped to the range, with a message.
+- **`@style-set: <path> <value>`.** Validate it against `settingAt`. Unknown paths and bad values are refused with a message naming the nearest valid paths, as `checkLayer` does, and the figure still draws. **An out-of-range number is refused, not clamped,** with the range in the message. That matches `applyStyleDirective` (`resolve.ts:103`), so the two directive forms agree. If clamping is ever wanted, change both together.
 - **`renderFigure`.** Do NOT change its shape in this task unless the stack requires it. If it does, migrate every caller in the same commit (Global Constraints).
 
 **Tests:**
-- One precedence test per adjacent pair of layers, plus Ben's rule: `theme.byType[space]` beats `typeDefaults[space]`, which beats `theme.all`. With all six layers setting `style.line.looseness`, the figure's value wins.
+- One precedence test per adjacent pair of layers, in the order above: `theme.byType[space]` beats `theme.all`, which beats `typeDefaults[space]`. Ben's rule is that a theme's setting beats a graph type's default. With all six layers setting `style.line.looseness`, the figure's value wins over everything.
 - A preset at the document layer resets `style.*` from the layers below and leaves `paint.*` alone.
 - The `resolveStyle` compatibility: every existing `resolve.test.ts` case passes unchanged.
-- `@style-set` round trip. A valid paint path lands in `toPaintParams`. An unknown path gives an error naming a near path. Out-of-range values clamp, with an error.
+- `@style-set` round trip. A valid paint path lands in `toPaintParams`. An unknown path gives an error naming a near path. An out-of-range value is refused, with the range in the error, and the figure still draws without it.
 - `figure/cleanGolden.test.ts` passes untouched.
 
 - [ ] Write the tests (red), implement, then run tests, both tsc commands and the full suite. Confirm the fill and ink pins are unchanged.
@@ -352,7 +360,8 @@ export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles>           // buil
 **Interfaces it produces:**
 - `ColourSettings.medium: MediumName`, default `'clean'`. It is a new token: `style.colour.medium`, a choice of `MEDIUM_NAMES`, with directive `medium`.
 - `PRESET_NAMES` gains `colouredPencil`, `blackboard`, `greenboard` and `whiteboard`.
-- `styledPen(style, palette, theme?: ThemeInput)`: when `theme` is given and `style.colour.medium` is not `'clean'`, every role colour comes from `MEDIA[medium].colour(theme, role, settings)`, and the background comes from `surfaceColour(theme)`.
+- **`renderFigure(statements, config, palette, baseStyle?, theme?: ThemeInput)`.** The new optional trailing parameter is additive, so no caller migrates. Do not route the theme through `baseStyle`.
+- `styledPen(style, palette, theme?: ThemeInput)`: when `theme` is given and `style.colour.medium` is not `'clean'`, every role colour comes from `MEDIA[medium].colour(theme, role, settings)`, and the background comes from `surfaceColour(theme)`. When `theme` is absent, the medium's `noThemeColours` (Task 2) stand in for the theme, so the presets render exactly as today.
 
 **Rules:**
 - **The new presets:**
@@ -374,7 +383,9 @@ export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles>           // buil
 - With no `ThemeInput`, `ink`, `pencil` and `marker` render byte-identically to before (a golden of the three presets × 3 examples, captured before the change in its own commit).
 - With a `ThemeInput`:
   - on a blackboard, every role colour (line, label, point, measure, auxiliary) is light (L ≥ 0.75) and meets ≥ 4.5:1 against the board;
-  - light and dark modes give byte-equal SVG for blackboard, greenboard and whiteboard.
+  - light and dark modes give byte-equal SVG for blackboard, greenboard and whiteboard;
+  - an author's named colour (`color: red`) on a blackboard comes out as a pastel chalk red (L >= 0.80, hue within 25 degrees of red's).
+- Adding `colour.medium` (and Task 6's `paper.tile`) to TOKENS changes `directivesFor`'s output. Expect `presets.test.ts` and lab snapshots to move. Re-pin them in this commit, with the reason in the message.
 - Old names parse. An unknown preset's refusal lists `blackboard`.
 
 - [ ] Commit the pre-change golden first: `test(figure): pin ink/pencil/marker without a theme before media`.
@@ -404,7 +415,7 @@ export function paperBaseColour(type: GeneratedPaperType, theme: ThemeInput): [n
 // host.ts (browser only):
 export function fillPaperTiles(root: ParentNode, theme: ThemeInput): Promise<void>   // generates each distinct key once per page (canvas → blob URL) and sets href
 export function inlinePaperTiles(svg: string, theme: ThemeInput): Promise<string>    // for export: data URLs, each tile once
-export function encodePng(width: number, height: number, rgba: Uint8ClampedArray): Uint8Array  // png.ts: stored deflate, CRC32, Adler-32
+export function encodePng(width: number, height: number, rgba: Uint8ClampedArray, deflate?: (raw: Uint8Array) => Uint8Array): Uint8Array  // png.ts: stored deflate by default; a zlib deflater may be passed in. CRC32 and Adler-32 are in-repo
 ```
 
 **Rules:**
@@ -418,14 +429,17 @@ export function encodePng(width: number, height: number, rgba: Uint8ClampedArray
 - **Board tray dust** is not in the tile. It is a separate gradient in the SVG paper at the bottom of the figure's view box (`generated.ts`), seeded.
 - **Board papers never read `theme.mode`.**
 - **The SVG output is pure:** the same inputs give a byte-identical string. Every keyed tile sits over a flat rect in the paper or board colour, so node output is complete without the host.
-- **Tile size.** It defaults to 128 px, as a setting (`style.paper.tile`, 64–512) added to `TOKENS` and the registry. The pattern scales with the figure, so it zooms with the drawing.
+- **Generated papers apply only when a `ThemeInput` is present** (geometry, fix 3, option a). With no theme, the old names (`paper`, `rough-paper`, `ruled`, ...) keep today's SVG papers exactly, so Task 5's no-theme golden holds, and node output stays stable until the host wiring exists. With a theme, the old names resolve to the generated types. The new names (`kraft`, `blackboard`, ...) with no theme draw their flat rect only.
+- **Tile size.** It defaults to **512** (range 256–1024), as a setting (`style.paper.tile`) added to `TOKENS` and the registry. A figure spans about 640 units, so smaller tiles repeat visibly in their low-frequency features: haze, ghosts, flecks. The pattern scales with the figure, so it zooms with the drawing. Check by eye for visible repeats in a headless shot at real zoom (Task 8).
+- **Encoding.** For an export, `inlinePaperTiles` compresses with `CompressionStream('deflate')` where the browser has it, with `png.ts`'s stored deflate as the fallback. A stored 512 tile is about 1.4 MB.
 
 **Tests:**
 - Each structure: deterministic (the same seed gives byte-equal tiles), tileable (the edge columns and rows continue across the wrap within a tolerance), and an offset mean ≈ 0.
 - Board base colours: light and dark give byte-equal tiles. `paperBaseColour` follows `ThemeInput` (a changed `paper` colour changes paper tiles but not board tiles; a changed accent tilts boards slightly).
 - `generated.ts`: a pure, byte-stable SVG string with the right key. Old paper names resolve to the new types.
 - `png.ts`: `encodePng` output decodes. Verify with a tiny in-test decoder for stored blocks; the CRC and Adler checksums are correct.
-- `host.ts`: run under jsdom if the repo's vitest supports it (check `vitest.config`). Otherwise, unit-test its pure key-collection helper only, and verify by headless shot in Task 8.
+- `host.ts`: run under jsdom if the repo's vitest supports it (check `vitest.config`). Otherwise, unit-test its pure key-collection helper only, and verify by headless shot in Task 8. **`host.ts` is DOM code: keep it out of `style/index.ts`'s exports,** so node imports never pull it in.
+- With no `ThemeInput`, the figure SVG for every old paper name is byte-identical to before (the papers' existing tests, plus Task 5's golden).
 
 - [ ] Write the tests (red), implement, then run tests, both tsc commands, the full suite and the contact sheet.
 - [ ] Commit: `feat(style): backgrounds — paper, kraft, notebook, graph, dotted and the three boards, from the seeded generator, referenced by key`.
