@@ -3,14 +3,15 @@ import type { SpaceScene } from '../../scene/types'
 import { reshapeWidths, sizedBristles, sizedLength, sizedVariance, sizedWidth } from '../model/brush'
 import { lchToLab } from '../model/colour'
 import { BEHIND_VEIL_LAYER, pressure } from '../model/strokes'
-import { arrowMark, flatColours, graphMesh, lineMark, paintView, pointMark, quadMesh, sceneOf, sphereMesh, tableMesh } from '../model/testing'
-import { bigMax, drawChanceOf, drawFadeAt, loadCellLevel, pxPerUnit, makeFrameCtx, zoomGrowOf, zoomSizeScaleAt } from '../model/view'
+import { arrowMark, flatColours, graphMesh, lineMark, paintView, pointMark, quadMesh, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
+import { paintFrame } from '../model/index'
+import { bigMax, drawChanceOf, drawFadeAt, loadCellLevel, project, pxPerUnit, makeFrameCtx, roleRank, zoomGrowOf, zoomSizeScaleAt } from '../model/view'
 import { VEIL_ALPHA, VEIL_BORDER_ALPHA, VEIL_DENSITY } from '../model/roles'
 import { smooth } from '../model/math'
 import { reprojectStrokes } from '../reproject'
 import { DEFAULT_PAINT_PARAMS } from '../params'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
-import { P, LIGHT, framing, fixture, sparse, bytes, sphereColours, sphereScene, saddleColours, saddleScene, TERRACOTTA, CANVAS, type Fixture } from './bakeFixture'
+import { P, LIGHT, framing, fixture, sparse, bytes, sphereColours, sphereScene, saddleColours, saddleScene, veilScene, TERRACOTTA, CANVAS, type Fixture } from './bakeFixture'
 import { DEPTH_BUCKETS, frameFromBake, frameFromBakeWith, FrameScratch } from './frame'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, SIZING_SURFACE, type BakedPainting } from './types'
 
@@ -140,8 +141,17 @@ function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
       continue
     }
     const ppu = pxPerUnit(fc, p[0], p[1], p[2])
+    // off the screen (the anchor's pixel, less what a stroke reaches beyond it: half its length and its width): not drawn, as the model draws the particles the G-buffer shows
+    const offscreen = (big: number): boolean => {
+      const m = fc.vp
+      const w = Math.max(1e-9, m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15])
+      const sx = (((m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w + 1) / 2) * view.width
+      const sy = ((1 - (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w) / 2) * view.height
+      const reach = 0.5 * sizedLength(baked.basePx[2 * i], big) + baked.basePx[2 * i + 1] * big
+      return sx < -reach || sy < -reach || sx > view.width + reach || sy > view.height + reach
+    }
     if (role === 'dab') {
-      out.set(i, { alpha: baked.alpha[i], big: sizeScale })
+      if (!offscreen(sizeScale)) out.set(i, { alpha: baked.alpha[i], big: sizeScale })
       continue
     }
     const facing = Math.abs(dot)
@@ -152,9 +162,14 @@ function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
     const chance = drawChanceOf(params, view.dragging, pxArea, drawRole, veil && !border ? VEIL_DENSITY : 1)
     const df = drawFadeAt(chance, baked.rank[i])
     if (!(df > 0.02)) continue
+    // a veil's border pass is made only for a particle whose own glaze (at VEIL_DENSITY) is drawn (roles.ts particleStrokes), at the glaze's own rank
+    if (border) {
+      const glaze = drawFadeAt(drawChanceOf(params, view.dragging, pxArea, 'glaze', VEIL_DENSITY), roleRank(fx.particles.rank[baked.particle[i]], 'glaze'))
+      if (!(glaze > 0.02)) continue
+    }
     const growRole = veil ? 'glaze' : role
     const big = Math.min(zoomGrowOf(params, view.dragging, pxArea, growRole) * sizeScale, bigMax(params))
-    out.set(i, { alpha: baked.alpha[i] * fade * df, big })
+    if (!offscreen(big)) out.set(i, { alpha: baked.alpha[i] * fade * df, big })
   }
   return out
 }
@@ -486,7 +501,8 @@ describe('frameFromBake: the baked strokes of a view', () => {
         seen.na++
         if (role === 'edge') seen.edge++
       } else if (role === 'line') {
-        // a point (none) or an arrowhead of a dashed arrow
+        // a point (none) or an arrowhead of a dashed arrow: one or the other, and never NA (which is for what is not a data mark)
+        expect([HIDDEN_NONE, HIDDEN_DASHED]).toContain(batch.hidden![o])
         if (batch.hidden![o] === HIDDEN_DASHED) seen.ownDashed++
         else seen.ownNone++
       } else expect(batch.hidden![o]).toBe(HIDDEN_NA) // a silhouette
@@ -499,6 +515,31 @@ describe('frameFromBake: the baked strokes of a view', () => {
     expect(seen.ownNone).toBe(2)
     // the hidden array is as long as the batch
     expect(batch.hidden!.length).toBe(batch.count)
+  })
+
+  it('gives an edge stroke the taper of a pressed brush and a line a width that is the same all along it, from its baked width', () => {
+    const { batch, scr } = run(dataFx, viewAt(20, 25))
+    const b = dataFx.baked
+    const P = PP
+    let edges = 0
+    let lines = 0
+    for (let o = 0; o < batch.count; o++) {
+      const i = scr.source[o]
+      if (i < 0) continue
+      const role = ROLES[batch.role[o]]
+      const baseW = b.basePx[2 * i + 1]
+      if (role === 'edge') {
+        edges++
+        for (let q = 0; q < P; q++) expect(batch.width[P * o + q]).toBeCloseTo(Math.max(0.35, baseW * pressure(q / (P - 1))), 4)
+        // it tapers: the end is the thinner
+        expect(batch.width[P * o + P - 1]).toBeLessThan(batch.width[P * o])
+      } else if (role === 'line') {
+        lines++
+        for (let q = 0; q < P; q++) expect(batch.width[P * o + q]).toBe(Math.fround(baseW))
+      }
+    }
+    expect(edges).toBeGreaterThan(0)
+    expect(lines).toBeGreaterThan(0)
   })
 
   it('puts a data line seen through a flat veil in the layer before the glaze, and no other', () => {
@@ -721,6 +762,49 @@ describe('frameFromBake: the baked strokes of a view', () => {
     // the world path of every stroke projects to its path (the same view)
     const again = reprojectStrokes(batch, view, view, thinFx.params)
     for (let o = 0; o < batch.count; o++) for (let q = 0; q < 2 * PP; q++) expect(Math.abs(again.path[2 * PP * o + q] - batch.path[2 * PP * o + q])).toBeLessThan(2e-3)
+  })
+
+  it("draws a veil's border pass only where the particle's own glaze is drawn, as the per-frame model does", () => {
+    const fx = fixture(veilScene(), flatColours({ 0: TERRACOTTA, 1: lchToLab(0.7, 0.1, 250) }), sparse(500), LIGHT, FRONT_ORTHO)
+    const set = fx.particles
+    const bySeed = new Map<number, number>()
+    for (let i = 0; i < set.count; i++) bySeed.set(set.seed[i], i)
+    for (const zoom of [1, 2, 4]) {
+      const view = viewAt(30, 50, { zoom })
+      // the model's frame: the sphere (mark 0, radius 0.6) is in the G-buffer, the veil is not
+      const g = sphereGBuffer(view.width, view.height, { view, params: fx.params, radius: 0.6, mark: 0 })
+      const model = paintFrame(fx.scene, set, view, g, fx.params).strokes
+      const modelBorder = new Set<number>()
+      let modelGlaze = 0
+      for (let o = 0; o < model.count; o++) {
+        const seedP = bySeed.get(model.seed[o])
+        if (ROLES[model.role[o]] !== 'glaze' || seedP === undefined || fx.scene.marks[set.mark[seedP]].kind !== 'mesh' || set.opacity[seedP] >= 1) continue
+        // (the border pass is the glaze with the dry brush 0.6)
+        if (model.dry[o] === Math.fround(0.6)) modelBorder.add(seedP)
+        else modelGlaze++
+      }
+      const { batch, scr } = run(fx, view)
+      const fcv = makeFrameCtx(fx.scene, view, g, fx.params)
+      const onScreen = (p: number): boolean => {
+        const out = [0, 0, 0]
+        return project(fcv, set.position[3 * p], set.position[3 * p + 1], set.position[3 * p + 2], out) && out[0] >= 0 && out[1] >= 0 && out[0] < view.width && out[1] < view.height
+      }
+      const bakedBorder = new Set<number>()
+      for (let o = 0; o < batch.count; o++) {
+        const i = scr.source[o]
+        if (i < 0 || ROLES[batch.role[o]] !== 'glaze' || fx.baked.particle[i] === 0xffffffff) continue
+        const mk = fx.scene.marks[fx.baked.mark[i]]
+        // (a stroke whose anchor is within its reach of the screen's edge is drawn, and the model's particle is not on the screen: left out of the comparison)
+        if (mk.kind === 'mesh' && mk.style.opacity < 1 && Math.abs(fx.baked.alpha[i] - Math.fround(VEIL_BORDER_ALPHA)) < 1e-6 && onScreen(fx.baked.particle[i])) bakedBorder.add(fx.baked.particle[i])
+      }
+      let both = 0
+      for (const p of bakedBorder) if (modelBorder.has(p)) both++
+      if (process.env.FRAME_PRINT) console.log(`veil border pass, zoom ${zoom}: model ${modelBorder.size} (of ${modelGlaze} glazes), baked frame ${bakedBorder.size}, in both ${both}`)
+      expect(modelBorder.size, `zoom ${zoom}`).toBeGreaterThan(2)
+      // (the baked frame draws what faces the eye, the model what the G-buffer shows: the sphere is under the veil here, nothing hides it)
+      expect(both / modelBorder.size, `zoom ${zoom}: recall`).toBeGreaterThan(0.9)
+      expect(both / bakedBorder.size, `zoom ${zoom}: precision`).toBeGreaterThan(0.9)
+    }
   })
 
   it('never thins a highlight dab or fades it, draws an edge stroke by roles.edge.density, and a data line always', () => {

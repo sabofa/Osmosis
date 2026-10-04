@@ -6,8 +6,11 @@
 //             side that faces the eye), a closed mesh's (side 0) unless it faces away by more than 0.05 (the renderer's depth pre-pass hides the rest);
 //   fade      facing = |n·toEye|, alpha × smooth(fadeLo, fadeHi, facing) (a veil's: view.ts VEIL_FADE_LO/HI), under 0.02 dropped; the strokes of
 //             data marks and edges have none;
+//   screen    a stroke whose anchor is off the screen by more than half its length and its width is not drawn (the model draws the particles the
+//             G-buffer shows); it is tested only when a corner of the box of the anchors is off the screen (a figure wholly in view tests nothing);
 //   density   a particle's stroke is drawn when its (role-shifted) rank is under view.ts drawChance of its screen area (the mark's area per
-//             particle × px per world unit² × facing), with the model's drawFade ramp in alpha; an edge stroke when its rank is under roles.edge.density;
+//             particle × px per world unit² × facing), with the model's drawFade ramp in alpha; an edge stroke when its rank is under roles.edge.density; a
+//             veil's border pass only where the particle's own glaze (the scumble's rank shifted back to the glaze's, the veil's scale of the density) is drawn;
 //   size      big = min(zoomGrow × zoomSizeScale, bigMax) (view.ts, the pure forms); the sub-arc of the baked path the zoom needs, sizedLength(basePx[0],
 //             big) / ppu long about the anchor (clipped at the path's ends, never extrapolated), resampled to PATH_POINTS by linear interpolation
 //             ALONG THE BAKED POLYLINE and projected; widths as pathFromWalk and reshapeWidths make them (pressure × the lateral direction's
@@ -34,13 +37,13 @@
 
 import type { SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
-import { MAX_BRISTLES, PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
+import { MAX_BRISTLES, PATH_POINTS, ROLES, type GBuffer, type PaintView, type Role, type StrokeBatch } from '../types'
 import { CLOSE_UP_FROM, reshapeWidths, sizedBristles, sizedLength, sizedVariance } from '../model/brush'
 import { behindVeil } from '../model/lines'
 import { clamp, hash3, smooth } from '../model/math'
 import { veilOf, VEIL_BORDER_ALPHA, VEIL_DENSITY, type Veil } from '../model/roles'
 import { BEHIND_VEIL_LAYER, pressure } from '../model/strokes'
-import { bigMax, drawFadeAt, loadCellLevel, makeFrameCtx, VEIL_FADE_HI, VEIL_FADE_LO, zoomSizeScaleAt, type FrameCtx } from '../model/view'
+import { bigMax, drawChanceOf, drawFadeAt, loadCellLevel, makeFrameCtx, project, roleRank, VEIL_FADE_HI, VEIL_FADE_LO, zoomGrowOf, zoomSizeScaleAt, type FrameCtx } from '../model/view'
 import { fnvInts } from './draft'
 import { addSilhouettes, indexOf } from './silhouettes'
 import { StrokeList } from './strokeList'
@@ -79,6 +82,8 @@ interface Prep {
   // The anchor of every stroke (3 each), and the unit normal there (zeros for a data line), interpolated along the baked path.
   anchorPos: Float32Array
   anchorNrm: Float32Array
+  // The box that holds every anchor: its least corner and its greatest.
+  bound: Float64Array
 }
 
 const preps = new WeakMap<Float32Array, Prep>()
@@ -119,7 +124,17 @@ function prepOf(baked: BakedPainting, scene: SpaceScene): Prep {
     const l = Math.hypot(anchorNrm[3 * i], anchorNrm[3 * i + 1], anchorNrm[3 * i + 2])
     if (l > 1e-12) for (let c = 0; c < 3; c++) anchorNrm[3 * i + c] /= l
   }
-  const made: Prep = { veilMask: veilMark, kind, anchorPos, anchorNrm }
+  const bound = new Float64Array(6)
+  if (n > 0) {
+    bound.set([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
+    for (let i = 0; i < n; i++) {
+      for (let c = 0; c < 3; c++) {
+        bound[c] = Math.min(bound[c], anchorPos[3 * i + c])
+        bound[3 + c] = Math.max(bound[3 + c], anchorPos[3 * i + c])
+      }
+    }
+  }
+  const made: Prep = { veilMask: veilMark, kind, anchorPos, anchorNrm, bound }
   preps.set(baked.worldPath, made)
   return made
 }
@@ -243,9 +258,12 @@ const FNODE_B = Int32Array.of(0, 1, 1, 2, 2, 2, 3, 3)
 const FNODE_T = Float64Array.of(0, 0.5, 0, 1 / 3, 2 / 3, 0, 0.5, 0)
 const TK = Float64Array.from({ length: P }, (_, k) => k / (P - 1))
 const PRESSURE = Float64Array.from({ length: P }, (_, k) => pressure(k / (P - 1)))
-const KDENS = new Float64Array(KINDS)
-const KSCALE = new Float64Array(KINDS)
-const KGROW = new Float64Array(KINDS)
+// What a kind is drawn and grown as: the role the density reads, the share of it (a veil's glazes are thinned), and the role the growth reads (a veil's
+// border pass is drawn at the scumble's density, and grown as a glaze).
+const DRAW_ROLE: Role[] = [...ROLES.slice(0, 5), 'dab', 'edge', 'line', 'glaze', 'scumble']
+const SHIFT_SCUMBLE = roleRank(0, 'scumble')
+const DRAW_SCALE = Float64Array.from({ length: KINDS }, (_, k) => (k === K_VEIL ? VEIL_DENSITY : 1))
+const GROW_ROLE: Role[] = [...ROLES.slice(0, 5), 'dab', 'edge', 'line', 'glaze', 'glaze']
 
 // What the view fixes for a whole frame: viewProj's numbers and the like, read in the loops through locals.
 class Consts {
@@ -340,25 +358,10 @@ export function frameFromBakeWith(
   const fadeLo = pp.fadeLo, fadeHi = pp.fadeHi
   const vLo = fadeLo * VEIL_FADE_LO, vHi = fadeHi * VEIL_FADE_HI
   const dragging = view.dragging === true
-  const drag = dragging ? pp.dragDensity : 1
-  const target = pp.targetPer10kPx / 10000
-  const growMax = Math.max(1, pp.zoomGrowMax)
   const sizeScale = zoomSizeScaleAt(view.zoom, params)
   const bigCap = bigMax(params)
   const level = Math.min(loadCellLevel(view.zoom), BAKE_MIX_LEVELS - 1)
-  const roles = params.roles
-  for (let k = 0; k < 5; k++) {
-    KDENS[k] = roles[ROLES[k]].density
-    KSCALE[k] = 1
-    KGROW[k] = roles[ROLES[k]].density
-  }
-  KDENS[K_VEIL] = roles.glaze.density
-  KSCALE[K_VEIL] = VEIL_DENSITY
-  KGROW[K_VEIL] = roles.glaze.density
-  KDENS[K_VEIL_BORDER] = roles.scumble.density
-  KSCALE[K_VEIL_BORDER] = 1
-  KGROW[K_VEIL_BORDER] = roles.glaze.density
-  const edgeDensity = roles.edge.density
+  const edgeDensity = params.roles.edge.density
 
   const fc: FrameCtx = makeFrameCtx(scene, view, gbuffer ?? EMPTY_G, params)
   const veils = veilsOf(scene)
@@ -376,9 +379,11 @@ export function frameFromBakeWith(
   // ---- pass A: select ----
   const sel = scr.sel, selAlpha = scr.selAlpha, selBig = scr.selBig, selPpu = scr.selPpu, selDepth = scr.selDepth, selLayer = scr.selLayer
   const kindA = prep.kind, anchorPos = prep.anchorPos, anchorNrm = prep.anchorNrm
+  const cull = anchorsMayBeOffscreen(fc, prep.bound)
   const sideA = baked.side, markA = baked.mark, rankA = baked.rank, alphaA = baked.alpha, layerA = baked.layer, area = baked.areaPerParticle
   const wp = baked.worldPath
   const wnA = baked.worldNormal
+  const basePxA = baked.basePx
   let k = 0
   let dMin = Infinity
   let dMax = -Infinity
@@ -414,7 +419,8 @@ export function frameFromBakeWith(
       }
     } else {
       // a stroke of a surface: sized for the view
-      ppu = ortho ? ppuOrtho : ppuK / Math.max(1e-9, m3 * ax + m7 * ay + m11 * az + m15)
+      const wA = ortho ? m15 : m3 * ax + m7 * ay + m11 * az + m15
+      ppu = ortho ? ppuOrtho : ppuK / Math.max(1e-9, wA)
       if (kind === K_DAB) big = sizeScale
       else {
         const facing = ortho ? Math.abs(dot) : Math.abs(dot) / Math.sqrt(lenSq)
@@ -423,14 +429,28 @@ export function frameFromBakeWith(
         if (fade < 0.02) continue
         // 3. the density
         const pxArea = area[markA[i]] * ppu * ppu * facing
-        const chance = clamp(target * pxArea * KDENS[kind] * drag * KSCALE[kind], 0, 1)
-        const df = drawFadeAt(chance, rankA[i])
+        const df = drawFadeAt(drawChanceOf(params, dragging, pxArea, DRAW_ROLE[kind], DRAW_SCALE[kind]), rankA[i])
         if (!(df > 0.02)) continue
+        if (kind === K_VEIL_BORDER) {
+          // a veil's border pass is made only for a particle whose own glaze (at VEIL_DENSITY) is drawn (roles.ts particleStrokes): the glaze's rank is the
+          // particle's, which the border's (shifted by the scumble's) gives back
+          let rp = rankA[i] - SHIFT_SCUMBLE
+          if (rp < 0) rp += 1
+          const glaze = drawFadeAt(drawChanceOf(params, dragging, pxArea, 'glaze', VEIL_DENSITY), roleRank(rp, 'glaze'))
+          if (!(glaze > 0.02)) continue
+        }
         // 4. the growth and the brush
-        const need = target * pxArea * KGROW[kind] * drag
-        big = Math.min(clamp(Math.sqrt(Math.max(1, need)), 1, growMax) * sizeScale, bigCap)
+        big = Math.min(zoomGrowOf(params, dragging, pxArea, GROW_ROLE[kind]) * sizeScale, bigCap)
         alpha *= fade * df
       }
+    }
+    if (cull && ppu > 0) {
+      // off the screen: the model draws the particles the G-buffer shows (the anchor's pixel), and a stroke reaches half its length and its width beyond it
+      const iw = 1 / Math.max(1e-9, ortho ? m15 : m3 * ax + m7 * ay + m11 * az + m15)
+      const sx = (((m0 * ax + m4 * ay + m8 * az + m12) * iw + 1) * 0.5) * W
+      const sy = ((1 - (m1 * ax + m5 * ay + m9 * az + m13) * iw) * 0.5) * H
+      const reach = 0.5 * (big <= CLOSE_UP_FROM ? basePxA[2 * i] * big : sizedLength(basePxA[2 * i], big)) + basePxA[2 * i + 1] * big
+      if (sx < -reach || sy < -reach || sx > W + reach || sy > H + reach) continue
     }
     const depth = (ax - ex) * vx + (ay - ey) * vy + (az - ez) * vz
     sel[k] = i
@@ -753,6 +773,17 @@ function makeOutput(total: number): Output {
   }
 }
 
+// Can an anchor of the baked painting lie off the screen in this view? The box that holds them all, its eight corners projected, is not wholly in the viewport
+// (a corner behind the eye counts): a figure that is wholly in view (the usual one) needs no stroke tested.
+const CORNER = [0, 0, 0]
+function anchorsMayBeOffscreen(fc: FrameCtx, b: Float64Array): boolean {
+  for (let k = 0; k < 8; k++) {
+    if (!project(fc, b[k & 1 ? 3 : 0], b[k & 2 ? 4 : 1], b[k & 4 ? 5 : 2], CORNER)) return true
+    if (CORNER[0] < 0 || CORNER[1] < 0 || CORNER[0] > fc.W || CORNER[1] > fc.H) return true
+  }
+  return false
+}
+
 export const frameFromBake: FrameFromBake = (baked, scene, view, params, gbuffer) => {
   let scr = scratches.get(baked.worldPath)
   if (!scr) {
@@ -790,6 +821,38 @@ export function scratchOf(baked: BakedPainting): FrameScratch {
 // every world point: the stroke moves with it and does not turn); their colour is the mark's own, before the brush-load mix (BakedPainting.dataColour).
 const HEAD_ANGLE = 0.46
 
+// The seeds of a data mark's strokes, made once for the mark and kept: a point's dab, and an arrow's two barbs (the -1 side first), each from the mark's number,
+// the cell of the point it is anchored at (its place at 1/7 of a unit, so a mark that has not moved has the seeds it had) and its tag (`p<i>`, `h<i>.<side>`).
+// A frame reads them and hashes no strings.
+const dataSeeds = new WeakMap<object, { m: number; seeds: Uint32Array }>()
+
+function seedOf(m: number, x: number, y: number, z: number, tag: string): number {
+  const cell = hash3(Math.round(x * 7), Math.round(y * 7), Math.round(z * 7))
+  return hash3(m, cell, fnvInts(...Array.from(tag, (ch) => ch.charCodeAt(0)))) >>> 0
+}
+
+function seedsOf(m: number, mark: SpaceScene['marks'][number]): Uint32Array {
+  const have = dataSeeds.get(mark)
+  if (have && have.m === m) return have.seeds
+  let seeds: Uint32Array
+  if (mark.kind === 'points') {
+    const n = mark.positions.length / 3
+    seeds = new Uint32Array(n)
+    for (let i = 0; i < n; i++) seeds[i] = seedOf(m, mark.positions[3 * i], mark.positions[3 * i + 1], mark.positions[3 * i + 2], `p${i}`)
+  } else if (mark.kind === 'arrows') {
+    const n = mark.tails.length / 3
+    seeds = new Uint32Array(2 * n)
+    for (let i = 0; i < n; i++) {
+      // (the tip: where both barbs meet and are anchored)
+      const x = mark.tails[3 * i] + mark.vectors[3 * i], y = mark.tails[3 * i + 1] + mark.vectors[3 * i + 1], z = mark.tails[3 * i + 2] + mark.vectors[3 * i + 2]
+      seeds[2 * i] = seedOf(m, x, y, z, `h${i}.-1`)
+      seeds[2 * i + 1] = seedOf(m, x, y, z, `h${i}.1`)
+    }
+  } else seeds = new Uint32Array(0)
+  dataSeeds.set(mark, { m, seeds })
+  return seeds
+}
+
 function addDataMarks(list: StrokeList, baked: BakedPainting, scene: SpaceScene, view: PaintView, params: PaintParams, fc: FrameCtx, veils: readonly Veil[]): void {
   const rp = params.roles.line
   const vp = fc.vp
@@ -801,9 +864,8 @@ function addDataMarks(list: StrokeList, baked: BakedPainting, scene: SpaceScene,
   const widthFor = (style: number): number => rp.width * clamp(style / 2, 0.5, 3)
 
   // one stroke along the screen segment (x0, y0) to (x1, y1), its world points all `p`
-  const emit = (m: number, tag: string, p: readonly number[], x0: number, y0: number, x1: number, y1: number, widthPx: number, depth: number, hiddenStyle: number): void => {
+  const emit = (m: number, seed: number, p: readonly number[], x0: number, y0: number, x1: number, y1: number, widthPx: number, depth: number, hiddenStyle: number): void => {
     const e = list.push()
-    const cell = hash3(Math.round(p[0] * 7), Math.round(p[1] * 7), Math.round(p[2] * 7))
     list.role[e] = R_LINE
     list.layer[e] = haveVeils && behindVeil(fc, veils, p) ? BEHIND_VEIL_LAYER : LAYER_LINE
     for (let q = 0; q < P; q++) {
@@ -827,7 +889,7 @@ function addDataMarks(list: StrokeList, baked: BakedPainting, scene: SpaceScene,
     list.wet[e] = rp.wet
     list.endSoft[e] = 0
     list.edge[e] = 255
-    list.seed[e] = hash3(m, cell, fnvInts(...Array.from(tag, (ch) => ch.charCodeAt(0)))) >>> 0
+    list.seed[e] = seed
     list.worldNormal[3 * e] = 0
     list.worldNormal[3 * e + 1] = 0
     list.worldNormal[3 * e + 2] = 0
@@ -845,6 +907,7 @@ function addDataMarks(list: StrokeList, baked: BakedPainting, scene: SpaceScene,
   const p = [0, 0, 0]
   scene.marks.forEach((mark, m) => {
     if (mark.kind === 'points') {
+      const seeds = seedsOf(m, mark)
       const size = Math.max(3, mark.style.size)
       const len = size * 0.5
       const reach = size + len
@@ -855,9 +918,10 @@ function addDataMarks(list: StrokeList, baked: BakedPainting, scene: SpaceScene,
         if (!proj(p[0], p[1], p[2])) continue
         const sx = at[0], sy = at[1]
         if (sx < -reach || sy < -reach || sx > W + reach || sy > H + reach) continue
-        emit(m, `p${i}`, p, sx - len / 2, sy, sx + len / 2, sy, size, at[2], HIDDEN_NONE)
+        emit(m, seeds[i], p, sx - len / 2, sy, sx + len / 2, sy, size, at[2], HIDDEN_NONE)
       }
     } else if (mark.kind === 'arrows') {
+      const seeds = seedsOf(m, mark)
       const width = widthFor(mark.style.shaftWidth)
       const head = Math.max(6, mark.style.headSize)
       const hiddenStyle = mark.style.hidden === 'dashed' ? HIDDEN_DASHED : HIDDEN_NONE
@@ -879,12 +943,13 @@ function addDataMarks(list: StrokeList, baked: BakedPainting, scene: SpaceScene,
         const l = Math.hypot(dx, dy)
         if (l < 1e-6) continue
         const ux = dx / l, uy = dy / l
-        for (const sgn of [-1, 1]) {
+        for (let side = 0; side < 2; side++) {
+          const sgn = 2 * side - 1
           const ang = sgn * HEAD_ANGLE
           const c = Math.cos(ang), s = Math.sin(ang)
           const hx = -(ux * c - uy * s) * head
           const hy = -(ux * s + uy * c) * head
-          emit(m, `h${i}.${sgn}`, p, px + hx, py + hy, px, py, width, pd, hiddenStyle)
+          emit(m, seeds[2 * i + side], p, px + hx, py + hy, px, py, width, pd, hiddenStyle)
         }
       }
     }
