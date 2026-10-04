@@ -11,6 +11,7 @@ export type { Statement, Condition, ParseError, ParseResult } from './parser/typ
 export { defaultConfig } from './parser/config'
 export type { GraphConfig, GraphBounds, HoverMode, FeaturePointKind } from './parser/config'
 export { buildScene } from './scene/buildScene'
+export type { SceneOptions } from './scene/buildScene'
 export type { Scene, SceneObject, Regression } from './scene/types'
 // Space (track 3): the renderer GraphViewer mounts for 3D specs, and the
 // kernel that turns parsed statements into its scene.

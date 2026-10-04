@@ -690,6 +690,10 @@ function chainXs(scene: SceneOfResult) {
   return scene.objects.flatMap((o) => (o.kind === 'curve' ? o.chains.map((chain) => chainPoints(chain).map((pt) => pt.x)) : []))
 }
 
+function marksOf(scene: SceneOfResult) {
+  return scene.objects.filter((o): o is Extract<SceneObject, { kind: 'mark' }> => o.kind === 'mark')
+}
+
 function regionTriangles(scene: SceneOfResult) {
   return scene.objects.flatMap((o) => (o.kind === 'region' ? o.triangles : []))
 }
@@ -737,9 +741,16 @@ describe('the 2D engine on the kernel (calc P1)', () => {
 
   it('a piecewise function takes the right branch at each x', () => {
     const points = curvePoints(sceneOf('f(x) = {x < 0: x^2, x <= 2: 2x + 1, 5}\ny = f(x)'))
-    const at = (x: number) => points.find((pt) => Math.abs(pt.x - x) < 1e-9)?.y
-    expect(at(-4)).toBeCloseTo(16, 9)
-    expect(at(1)).toBeCloseTo(3, 9)
+    // v1 sampled on a fixed grid, so its vertices sat exactly on -4, 1 and 4 (and it kept y = 16 at -4, off the screen). The
+    // adaptive sampler puts vertices where the curve needs them and drops what is off screen, so the curve is read between
+    // the two vertices that hold x (a flat chord is within a quarter of a pixel), at x = -2 where x^2 is still in view.
+    const at = (x: number) => {
+      const after = points.findIndex((pt) => pt.x >= x)
+      const [a, b] = [points[after - 1], points[after]]
+      return a.y + ((b.y - a.y) * (x - a.x)) / (b.x - a.x)
+    }
+    expect(at(-2)).toBeCloseTo(4, 1)
+    expect(at(1)).toBeCloseTo(3, 1)
     expect(at(4)).toBe(5)
   })
 
@@ -753,6 +764,11 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     // Each chain stays on its own side of the gap.
     expect(Math.max(...pieces[0])).toBeLessThan(0)
     expect(Math.min(...pieces[1])).toBeGreaterThan(0)
+    // and the gap is marked: each piece ends in an open mark at its edge, -1 and 1, where the strict < and > leave them out
+    expect(marksOf(scene).map((m) => [Math.round(m.at.x), m.fill])).toEqual([
+      [-1, 'open'],
+      [1, 'open'],
+    ])
   })
 
   it('an if clause takes not, !=, and, or and chains on the independent variable', () => {
@@ -760,28 +776,40 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     const pieces = chainXs(negated)
     expect(pieces).toHaveLength(2)
     expect(Math.max(...pieces[0])).toBeLessThanOrEqual(2)
-    expect(Math.min(...pieces[1])).toBeGreaterThan(5)
+    // P2 runs a piece to its edge, which is at 5 itself (an open end there says the curve does not take it); v1 stopped a sample short of it
+    expect(Math.min(...pieces[1])).toBeGreaterThanOrEqual(5)
+    expect(Math.min(...pieces[1])).toBeLessThan(5.1)
+    expect(marksOf(negated).filter((m) => Math.abs(m.at.x - 5) < 1e-9).map((m) => m.fill)).toEqual(['open'])
 
+    // v1 split `x != 0` into two chains with no vertex at 0 (a break at the first sample outside). P2 finds a point
+    // missing from an otherwise continuous curve to be a hole: one chain through (0, 0), an open mark on it, and no break.
     const apart = sceneOf('y = x if x != 0')
-    expect(chainXs(apart)).toHaveLength(2)
-    expect(curvePoints(apart).some((pt) => pt.x === 0)).toBe(false)
+    expect(chainXs(apart)).toHaveLength(1)
+    expect(marksOf(apart)).toEqual([expect.objectContaining({ role: 'hole', fill: 'open', at: { x: expect.closeTo(0, 12), y: expect.closeTo(0, 12) } })])
 
     const chained = sceneOf('y = x if -3 <= x < 3 and x != 0')
     expect(chained.errors).toEqual([])
     const points = curvePoints(chained)
     expect(points.length).toBeGreaterThan(10)
+    // the curve runs to its edges, -3 (filled) and 3 (open), and nothing lies outside them
     for (const pt of points) {
       expect(pt.x).toBeGreaterThanOrEqual(-3)
-      expect(pt.x).toBeLessThan(3)
-      expect(pt.x).not.toBe(0)
+      expect(pt.x).toBeLessThanOrEqual(3)
     }
+    expect(marksOf(chained).map((m) => [Math.round(m.at.x), m.role, m.fill]).sort()).toEqual([
+      [-3, 'endpoint', 'filled'],
+      [0, 'hole', 'open'],
+      [3, 'endpoint', 'open'],
+    ])
   })
 
   it('an old-shape if clause draws as it always did', () => {
     const left = curvePoints(sceneOf('y = x^2 if x <= 1'))
     expect(Math.max(...left.map((pt) => pt.x))).toBeLessThanOrEqual(1)
     const mid = curvePoints(sceneOf('y = x^2 if -2 < x <= 2'))
-    expect(Math.min(...mid.map((pt) => pt.x))).toBeGreaterThan(-2)
+    // P2 draws a piece to its edge, which is -2 itself (and says it is open there, as the < does, with a mark); v1 stopped a sample short
+    expect(Math.min(...mid.map((pt) => pt.x))).toBeGreaterThanOrEqual(-2)
+    expect(Math.min(...mid.map((pt) => pt.x))).toBeLessThan(-1.9)
     expect(Math.max(...mid.map((pt) => pt.x))).toBeLessThanOrEqual(2)
   })
 
@@ -790,7 +818,9 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     expect(scene.errors).toEqual([])
     const points = curvePoints(scene)
     expect(points.length).toBeGreaterThan(10)
-    for (const pt of points) expect(pt.y).toBeGreaterThan(0)
+    // the curve runs to y = 0 itself, open there (> excludes it), where v1 stopped a sample short of it
+    for (const pt of points) expect(pt.y).toBeGreaterThanOrEqual(0)
+    expect(marksOf(scene).map((m) => [m.at.y, m.fill])).toEqual([[expect.closeTo(0, 12), 'open']])
   })
 
   it('an if clause on the dependent variable is a compile error on its line', () => {
@@ -805,7 +835,9 @@ describe('the 2D engine on the kernel (calc P1)', () => {
       const scene = sceneOf(`@param c = 1 range [0, 5]\nlimit(u) = c + u\ny = x if ${clause}`)
       expect(scene.errors, clause).toEqual([])
       const pieces = chainXs(scene)
-      expect(Math.max(...pieces[0]), clause).toBeLessThan(2)
+      // the first piece runs to its edge at limit(1) = 2 (open there: `<`), where v1 stopped a sample short of it
+      expect(Math.max(...pieces[0]), clause).toBeLessThanOrEqual(2)
+      expect(Math.max(...pieces[0]), clause).toBeGreaterThan(1.9)
     }
   })
 
@@ -1034,17 +1066,22 @@ describe('the plot contract (calc P2)', () => {
     expect(xy[2 * last + 1]).toBeCloseTo(2, 9)
   })
 
-  it('records an out-of-domain split as an edge break at the first sample outside', () => {
-    const scene = sceneOf('y = x if x != 0')
+  // v1 recorded an out-of-domain split as an edge break at the first sample outside the domain (and split `x != 0` in two that
+  // way). P2 types each interruption it finds at the parameter it located, to the edge itself: a domain edge is an edge break
+  // with an end mark, and a point cut out of a continuous curve is a hole (see "an if clause takes not, !=, ...").
+  it('records an out-of-domain split as an edge break at the edge itself, with its end mark', () => {
+    const scene = sceneOf('y = x if x > 1')
     const curve = scene.objects.find((o) => o.kind === 'curve')
     if (curve?.kind !== 'curve') throw new Error('unreachable')
-    expect(curve.chains).toHaveLength(2)
-    expect(curve.breaks).toEqual([{ at: 0, kind: 'edge' }])
+    expect(curve.chains).toHaveLength(1)
+    expect(curve.breaks).toEqual([{ at: expect.closeTo(1, 12), kind: 'edge' }])
+    // (an exact mark's y is the limit read a few locator tolerances from the edge: right to 1e-11)
+    expect(marksOf(scene)).toEqual([expect.objectContaining({ role: 'endpoint', fill: 'open', at: { x: expect.closeTo(1, 12), y: expect.closeTo(1, 9) } })])
   })
 
   it('records a blow-up split as a pole break, and draws an unclipped asymptote guide at it', () => {
-    // A pole at 0.025 sits between two samples (the spacing is 0.05), so the
-    // jump rule fires there.
+    // v1 broke the chain by a window-relative jump rule, at the midpoint of the two samples a blow-up fell between (a pole at
+    // 0.025 between samples 0.05 apart); P2 breaks at the certified pole itself (spec "What is wrong today").
     const scene = sceneOf('y = 1 / (x - 0.025)')
     expect(scene.errors).toEqual([])
     const curve = scene.objects.find((o) => o.kind === 'curve')
@@ -1101,5 +1138,164 @@ describe('the plot contract (calc P2)', () => {
     const unbound = anonymous.objects.find((o) => o.kind === 'curve')
     if (unbound?.kind !== 'curve') throw new Error('unreachable')
     expect(unbound.id).toEqual({ statement: 1, object: 'circle.0' })
+  })
+})
+
+// calc P2 task 7: the 2D plot path goes through the adaptive sampler (plot/sample/curve.ts), pixel-aware.
+describe('the adaptive sampler in the scene (calc P2)', () => {
+  type CurveObject = Extract<SceneObject, { kind: 'curve' }>
+  const curvesOf = (scene: SceneOfResult) => scene.objects.filter((o): o is CurveObject => o.kind === 'curve')
+  const guidesOf = (scene: SceneOfResult) => scene.objects.filter((o) => o.kind === 'line' && o.role === 'asymptote')
+  const view = { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }
+  const sceneWith = (spec: string, options?: Parameters<typeof buildScene>[5], b = view) => {
+    const parsed = parseSpec(spec)
+    return buildScene(parsed.statements, b, parsed.config, 140, parsed.statementLines, options)
+  }
+
+  it('y = tan(x) is one curve with a typed break and a guide line at each pole', () => {
+    const scene = sceneOf('y = tan(x)')
+    expect(scene.errors).toEqual([])
+    const curves = curvesOf(scene)
+    expect(curves).toHaveLength(1)
+    const poles = curves[0].breaks.filter((b) => b.kind === 'pole').map((b) => b.at)
+    // ±π/2 … ±7π/2 are in [-10, 10]; the sampled range carries the overscan, which holds a pair more
+    for (const k of [-7, -5, -3, -1, 1, 3, 5, 7]) expect(poles).toContainEqual(expect.closeTo((k * Math.PI) / 2, 9))
+    const guides = guidesOf(scene)
+    expect(guides).toHaveLength(poles.length)
+    for (const g of guides) if (g.kind === 'line') expect(g.direction).toEqual({ x: 0, y: 1 })
+  })
+
+  it('y = (x^2 - 1)/(x - 1) has an open hole mark at (1, 2), and no break in its chain', () => {
+    const scene = sceneOf('y = (x^2 - 1)/(x - 1)')
+    expect(scene.errors).toEqual([])
+    const holes = marksOf(scene).filter((m) => m.role === 'hole')
+    expect(holes).toEqual([expect.objectContaining({ fill: 'open', at: { x: expect.closeTo(1, 12), y: expect.closeTo(2, 6) } })])
+    expect(curvesOf(scene)[0].chains).toHaveLength(1)
+    expect(curvesOf(scene)[0].breaks).toEqual([])
+  })
+
+  it('y = 2 if 0 < x <= 3 has an open end at 0 and a filled one at 3', () => {
+    const scene = sceneOf('y = 2 if 0 < x <= 3')
+    expect(scene.errors).toEqual([])
+    expect(marksOf(scene).map((m) => [Math.round(m.at.x), m.role, m.fill])).toEqual([
+      [0, 'endpoint', 'open'],
+      [3, 'endpoint', 'filled'],
+    ])
+  })
+
+  it('the same clause in the old shape (a range with its own operators) ends the same way', () => {
+    // the parser gives `0 < x <= 3` the old Condition (a range), and buildScene hands the sampler a condition Expr
+    const parsed = parseSpec('y = 2 if 0 < x <= 3')
+    const first = parsed.statements[0]
+    if (first.kind !== 'explicit') throw new Error('unreachable')
+    expect(first.condition?.kind).toBe('range')
+    const lessThan = marksOf(sceneOf('y = x^2 if x < 1'))
+    expect(lessThan.map((m) => [m.at.x, m.fill])).toEqual([[expect.closeTo(1, 12), 'open']])
+    const atLeast = marksOf(sceneOf('y = x^2 if x >= 1'))
+    expect(atLeast.map((m) => [m.at.x, m.fill])).toEqual([[expect.closeTo(1, 12), 'filled']])
+  })
+
+  it('reports what the sampler evaluated, summed over the curves', () => {
+    const one = sceneOf('y = x^2')
+    expect(one.stats?.points).toBeGreaterThan(0)
+    expect(one.stats?.intervals).toBeGreaterThan(0)
+    const two = sceneOf('y = x^2\ny = tan(x)')
+    const tan = sceneOf('y = tan(x)')
+    expect(two.stats).toEqual({ points: one.stats!.points + tan.stats!.points, intervals: one.stats!.intervals + tan.stats!.intervals })
+    // no curve, no work
+    expect(sceneOf('A = (1, 2)').stats).toEqual({ points: 0, intervals: 0 })
+  })
+
+  it("quality 'coarse' uses fewer evaluations than 'full' on y = sin(1/x)", () => {
+    const full = sceneWith('y = sin(1/x)', { quality: 'full' })
+    const coarse = sceneWith('y = sin(1/x)', { quality: 'coarse' })
+    expect(full.errors).toEqual([])
+    expect(coarse.errors).toEqual([])
+    expect(coarse.stats!.points).toBeLessThan(full.stats!.points)
+  })
+
+  it('gives the sampler the viewport in pixels: 4 px a sample, so a wider canvas takes more samples', () => {
+    const narrow = sceneWith('y = x^2', { widthPx: 400, heightPx: 240 })
+    const wide = sceneWith('y = x^2', { widthPx: 1600, heightPx: 960 })
+    expect(wide.stats!.points).toBeGreaterThan(narrow.stats!.points * 2)
+    // the default is 800 px wide, with the height the bounds' aspect gives
+    const byDefault = sceneWith('y = x^2')
+    const explicit = sceneWith('y = x^2', { widthPx: 800, heightPx: 480 })
+    expect(byDefault.stats).toEqual(explicit.stats)
+    expect(vertices(curvesOf(byDefault)[0])).toEqual(vertices(curvesOf(explicit)[0]))
+  })
+
+  describe('polar', () => {
+    it("closes on itself under @angle: degrees — the default range is a full turn in the current unit", () => {
+      const scene = sceneOf('@angle: degrees\nr = 1 + cos(theta)')
+      expect(scene.errors).toEqual([])
+      const curve = curvesOf(scene)[0]
+      expect(curve.chains).toHaveLength(1)
+      const chain = curve.chains[0]
+      const pts = chainPoints(chain)
+      const first = pts[0]
+      const last = pts[pts.length - 1]
+      // 40 px per unit in sceneOf's view (800 px over 20 units): half a pixel is 0.0125
+      expect(Math.hypot(last.x - first.x, last.y - first.y) * 40).toBeLessThanOrEqual(0.5)
+      expect(chain.param[0]).toBe(0)
+      expect(chain.param[chain.param.length - 1]).toBeCloseTo(360, 9)
+      // a cardioid: r runs from 2 at theta = 0 to 0 at 180 degrees
+      expect(Math.min(...pts.map((p) => Math.hypot(p.x, p.y)))).toBeLessThan(0.05)
+      expect(Math.max(...pts.map((p) => Math.hypot(p.x, p.y)))).toBeCloseTo(2, 2)
+    })
+    it('and in radians the full turn is 2 pi, as it was', () => {
+      const chain = curvesOf(sceneOf('r = 1 + cos(theta)'))[0].chains[0]
+      expect(chain.param[0]).toBe(0)
+      expect(chain.param[chain.param.length - 1]).toBeCloseTo(2 * Math.PI, 12)
+    })
+    it('a range the author wrote is theirs, in the unit they work in', () => {
+      const chain = curvesOf(sceneOf('@angle: degrees\nr = 2 for theta in [0, 180]'))[0].chains[0]
+      expect(chain.param[chain.param.length - 1]).toBeCloseTo(180, 9)
+      const radians = curvesOf(sceneOf('r = 2 for theta in [0, 2*pi]'))[0].chains[0]
+      expect(radians.param[radians.param.length - 1]).toBeCloseTo(2 * Math.PI, 12)
+    })
+    it('a reversed range draws the same curve as the forward one', () => {
+      const forward = chainPoints(curvesOf(sceneOf('r = 2 for theta in [0, 3]'))[0].chains[0])
+      const reversed = chainPoints(curvesOf(sceneOf('r = 2 for theta in [3, 0]'))[0].chains[0])
+      expect(reversed).toEqual(forward)
+    })
+    it('a range with nothing in it is an error on its line, not a quiet blank or a false "undefined"', () => {
+      const scene = sceneOf('y = x\nr = 2 for theta in [1, 1]')
+      expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('range') })])
+      expect(scene.errors[0].message).not.toMatch(/undefined everywhere/)
+    })
+  })
+
+  describe('the budget note', () => {
+    const NOTE = 'drawn coarsely: this curve needs more detail than its drawing budget allows'
+    // a budget of 700 holds y = x (601 points, 301 intervals) and not y = sin(3x) (1201 and 901)
+    const TINY = { points: 700, intervals: 700 }
+    it('a curve that hits its cap still draws, and the scene says so on the curve\'s line', () => {
+      const scene = sceneWith('y = x\ny = sin(3x)', { budget: TINY })
+      expect(scene.errors).toEqual([{ line: 2, message: NOTE }])
+      expect(curvesOf(scene)[1].chains.length).toBeGreaterThan(0)
+    })
+    it('names the line of each capped curve, and only those', () => {
+      const scene = sceneWith('y = 2\ny = sin(3x)\ny = x\ny = sin(3x) + 1', { budget: TINY })
+      expect(scene.errors.map((e) => e.line)).toEqual([2, 4])
+    })
+    it('a curve that fits says nothing', () => {
+      expect(sceneOf('y = sin(3x)\ny = tan(x)').errors).toEqual([])
+    })
+    it('is not raised for a coarse pass: the settled pass is the one that says whether the curve fits', () => {
+      const scene = sceneWith('y = sin(3x)', { budget: TINY, quality: 'coarse' })
+      expect(scene.errors).toEqual([])
+      expect(curvesOf(scene)[0].chains.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('a curve never blanks silently (rule 2)', () => {
+    it('y = sqrt(sin(350x)) draws, where it used to burn its budget finding zeros and draw nothing', () => {
+      const scene = sceneOf('y = sqrt(sin(350x))')
+      const drawn = curvesOf(scene).flatMap((c) => c.chains).length + scene.objects.filter((o) => o.kind === 'band').length
+      expect(drawn).toBeGreaterThan(0)
+      // a fit that did not hold would say so, in a message and not in a blank
+      expect(scene.errors.every((e) => e.message === 'drawn coarsely: this curve needs more detail than its drawing budget allows')).toBe(true)
+    })
   })
 })

@@ -412,6 +412,26 @@ describe('bands from sampleCurve', () => {
     }
   })
 
+  // calc P2 task 7: the polyline of a certified column that did not turn is checked by one more sample off its lattice,
+  // and that sample was held to gapPx (1 px) of the polyline. At COARSE, whose 8 samples are 1/7 px apart, sin(w x) for w
+  // near 104 to 146 (a period of 1 to 2 px) is off its own polyline by more than that at an ordinary point, so the check
+  // refused true polylines, the core refined them to the cap, and the cap drew false 8 px chords. The check has a
+  // constant of its own, BAND.probePx (4 px), which still catches an alias (tens of px) and not the polyline's own error.
+  it('COARSE sin(120x) is not capped, and no segment is more than 2 px off the curve', () => {
+    const r = sample(explicit('sin(120x)'), wide, 'coarse')
+    expect(r.capped).toBe(false)
+    expect(worstSegment('sin(120x)', r.objects)).toBeLessThanOrEqual(2)
+  })
+
+  it('COARSE sin(w x) for w = 104 to 146 is not capped and draws no false chord', () => {
+    for (let w = 104; w <= 146; w += 6) {
+      const text = `sin(${w}x)`
+      const r = sample(explicit(text), wide, 'coarse')
+      expect(r.capped, text).toBe(false)
+      expect(worstSegment(text, r.objects), text).toBeLessThanOrEqual(2)
+    }
+  })
+
   it('COARSE: a band across the view fits the budget, on 8 samples a column', () => {
     const r = sample(explicit('sin(500x)'), wide, 'coarse')
     const bands = bandsOf(r.objects)

@@ -1,8 +1,11 @@
 import { compileScalar } from '../math/compile'
+import { variable } from '../math/expr'
+import { and, compare } from '../math/reserved'
 import type { MathScope } from '../math/scope'
 import type { GraphConfig } from '../parser/config'
 import type { FunctionTable } from '../parser/evalExpr'
-import type { Condition, Expr, Statement } from '../parser/types'
+import type { Expr, Statement } from '../parser/types'
+import { type CurveSpec, sampleCurve, type View } from '../plot/sample/curve'
 import { buildPlotScope } from '../plot/scope'
 import { traceImplicitCurve, traceImplicitRegion } from '../render/marchingSquares'
 import { chainOf } from './chains'
@@ -10,19 +13,22 @@ import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './fea
 import { buildConstructions } from './geometry/buildConstructions'
 import { circleCurve, polygonObjects } from './geometry/sceneObjects'
 import { formatCoord } from './format'
-import type { Bounds, Break, Chain, Scene, SceneObject, Vec2 } from './types'
+import type { Bounds, Scene, SceneObject, Vec2 } from './types'
 
-const SAMPLES = 400
 // Full-quality marching-squares resolution for a settled view; buildScene's
 // caller passes a lower value while the user is actively dragging (see
 // GraphViewer.tsx) so the expensive region/implicit-curve sampling backs off
 // during interaction and sharpens back up once it stops.
 const IMPLICIT_RESOLUTION = 140
 const FIELD_DIVISIONS = 18
-// A jump between consecutive samples bigger than this multiple of the
-// visible height is treated as a blow-up (an asymptote), not a steep-but-
-// continuous stretch of the function.
-const ASYMPTOTE_JUMP_FACTOR = 3
+// The viewport's width, in px, for a caller that does not give one (a test, a tool): the curve sampler
+// works in screen space (a sample per 4 px, a flatness of a quarter of a pixel), so it is told how big the
+// view is. The height then follows the bounds' aspect.
+const DEFAULT_WIDTH_PX = 800
+// What the scene says of a curve whose drawing budget ran out: it is drawn, from what the sampler had, and
+// the author is told it is not the whole picture (spec: "At the cap the curve coarsens and a note says so;
+// it never blanks").
+const BUDGET_NOTE = 'drawn coarsely: this curve needs more detail than its drawing budget allows'
 
 // One pass over the statements to collect every "k(x) = ..." / "a = 5"
 // definition into a lookup table, before anything else gets built — a
@@ -81,210 +87,85 @@ function collectNamedPoints(statements: Statement[], scope: MathScope): Map<stri
   return points
 }
 
-// Compiles a condition's bound expression(s) to plain numbers once, up front
-// — they're constants with respect to the sampling loop's variable, so
-// re-evaluating them on every one of ~400 samples (as a naive per-sample
-// evalExpr call would) is pure waste.
-type CompiledCondition =
-  | { kind: 'compare'; op: '<' | '<=' | '>' | '>='; value: number }
-  | { kind: 'range'; lowOp: '<' | '<='; low: number; highOp: '<' | '<='; high: number }
-
-function compileCondition(condition: Condition | null, scope: MathScope): CompiledCondition | null {
-  if (!condition) return null
-  if (condition.kind === 'compare') {
-    return { kind: 'compare', op: condition.op, value: constant(condition.value, scope) }
-  }
-  return {
-    kind: 'range',
-    lowOp: condition.lowOp,
-    low: constant(condition.low, scope),
-    highOp: condition.highOp,
-    high: constant(condition.high, scope),
-  }
+// The statement's own domain as a condition Expr, for the sampler: its calc P1 "where" as it
+// is, else its old-shape clause (parser/types.ts Condition) written in the same language — a
+// comparison of the independent variable with the bound, or the two comparisons of a range
+// joined with `and`. The sampler compiles it over the independent variable alone, so a test on
+// the dependent one ("y = x if y > 0") is a compile error on its line, not a silent filter.
+function domainOf(statement: Statement & { kind: 'explicit' }): Expr | null {
+  if (statement.where) return statement.where
+  const clause = statement.condition
+  if (!clause) return null
+  const t = variable(statement.independent)
+  if (clause.kind === 'compare') return compare(clause.op, t, clause.value)
+  // low <(=) t <(=) high
+  return and(compare(clause.lowOp, clause.low, t), compare(clause.highOp, t, clause.high))
 }
 
-function satisfiesCondition(condition: CompiledCondition | null, t: number): boolean {
-  if (!condition) return true
-  if (condition.kind === 'compare') {
-    switch (condition.op) {
-      case '<':
-        return t < condition.value
-      case '<=':
-        return t <= condition.value
-      case '>':
-        return t > condition.value
-      case '>=':
-        return t >= condition.value
-    }
-  }
-  const lowOk = condition.lowOp === '<=' ? t >= condition.low : t > condition.low
-  const highOk = condition.highOp === '<=' ? t <= condition.high : t < condition.high
-  return lowOk && highOk
+// The range of a polar or parametric statement as two numbers, low to high. A range written the
+// wrong way round ("for t in [5, 2]") is the same curve traced backwards, and the sampler (which
+// takes low to high) draws what v1 did. A range that is not a number, or has nothing in it, says
+// so on its own line, which "undefined everywhere in view" would not.
+function rangeOf(from: Expr, to: Expr, scope: MathScope, param: string): [number, number] {
+  const a = constant(from, scope)
+  const b = constant(to, scope)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) throw new Error(`the range of ${param} is not a number`)
+  if (a === b) throw new Error(`the range of ${param} is empty`)
+  return a < b ? [a, b] : [b, a]
 }
 
-// Features are no longer derived from a curve's sampled points (see
-// featurePoints.ts for why), so this is now just "wrap the samples": one curve
-// per statement, its chains and the breaks between them.
-function curveObject(statementIndex: number, chains: Chain[], breaks: Break[], color: string | null): SceneObject {
-  return { kind: 'curve', id: { statement: statementIndex, object: 'curve' }, chains, breaks, color }
+// What the sampler needs besides the statement: the viewport, how fine to be, and where to put
+// what it says (the work it did, and the notes on the statement's line).
+interface CurveContext {
+  view: View
+  scope: MathScope
+  config: GraphConfig
+  quality: 'full' | 'coarse'
+  budget: { points: number; intervals: number } | undefined
+  stats: { points: number; intervals: number }
+  errors: Scene['errors']
 }
 
-// Whether t is inside the statement's own domain: its calc P1 "where"
-// condition when it has one, else its old-shape condition. The "where" is
-// compiled over the independent variable alone, so a test on the dependent
-// one ("y = x if y > 0") is a compile error on its line, not a silent filter.
-function domainTest(statement: Statement & { kind: 'explicit' }, scope: MathScope): (t: number) => boolean {
-  if (statement.where) {
-    const where = compileScalar(statement.where, [statement.independent], scope)
-    return (t) => where(t) === 1
-  }
-  const condition = compileCondition(statement.condition, scope)
-  return (t) => satisfiesCondition(condition, t)
+// One curve statement through the adaptive sampler (plot/sample/curve.ts), and what the scene says of
+// the result, in the sampler's own terms:
+//  - tested but defined nowhere in the range: "undefined everywhere in view" (the statement's error). A
+//    curve that was never tested (its domain misses the view) says nothing; a curve that is defined but
+//    wholly off screen is not this either.
+//  - capped: the curve is drawn from what the sampler had, and the line carries a note. Not for a coarse
+//    pass, which is coarse on purpose (the settled pass says whether the curve fits its budget), and
+//    whose message would flash on every drag frame.
+// The objects are the sampler's: the curve, its bands, its marks, its asymptote guides.
+function sampleStatement(spec: CurveSpec, statementIndex: number, color: string | null, line: number, ctx: CurveContext): SceneObject[] {
+  const sampled = sampleCurve(spec, ctx.view, ctx.scope, {
+    statement: statementIndex,
+    color,
+    asymptotes: ctx.config.asymptotes,
+    quality: ctx.quality,
+    budget: ctx.budget,
+  })
+  ctx.stats.points += sampled.stats.points
+  ctx.stats.intervals += sampled.stats.intervals
+  if (sampled.tested && !sampled.defined) throw new Error('this curve is undefined everywhere in view')
+  if (sampled.capped && ctx.quality === 'full') ctx.errors.push({ line, message: BUDGET_NOTE })
+  return sampled.objects
 }
 
-function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, bounds: Bounds, config: GraphConfig, scope: MathScope): SceneObject[] {
-  const [lo, hi] = statement.independent === 'x' ? [bounds.xMin, bounds.xMax] : [bounds.yMin, bounds.yMax]
-  const viewSpan = statement.independent === 'x' ? bounds.yMax - bounds.yMin : bounds.xMax - bounds.xMin
-  const body = compileScalar(statement.body, [statement.independent], scope)
-  const inDomain = domainTest(statement, scope)
-
-  // Chains split apart wherever the function is undefined, leaves its
-  // domain, OR jumps by a blow-up-sized amount between adjacent samples —
-  // without this, a vertical asymptote (1/x, tan(x), ...) draws a fake
-  // near-vertical line connecting +infinity to -infinity across the gap
-  // instead of an open break. (The window-relative jump rule is what P2
-  // replaces with certified continuity.) Each split is also recorded in
-  // `breaks`, in the curve's own parameter: a jump as a 'pole' at the midpoint
-  // of the two samples, an undefined or out-of-domain sample as an 'edge' at
-  // that sample. A run of undefined samples is one break, and a run that has
-  // not started yet is none.
-  const chains: Chain[] = []
-  const breaks: Break[] = []
-  let points: Vec2[] = []
-  let params: number[] = []
-  const asymptoteXs: number[] = []
-  let lastOther: number | null = null
-  let lastT: number | null = null
-  let tested = 0
-  let finite = 0
-  const finishRun = () => {
-    if (points.length >= 2) chains.push(chainOf(points, params))
-    points = []
-    params = []
-  }
-  const breakHere = (at: number) => {
-    if (points.length > 0) {
-      breaks.push({ at, kind: 'edge' })
-      finishRun()
-    }
-    lastOther = null
-    lastT = null
-  }
-
-  for (let i = 0; i <= SAMPLES; i++) {
-    const t = lo + ((hi - lo) * i) / SAMPLES
-    // Outside the statement's own domain is a break, never a bridge: an
-    // "x < -1 or x > 1" domain must not join its two pieces.
-    if (!inDomain(t)) {
-      breakHere(t)
-      continue
-    }
-    tested++
-    const other = body(t)
-    if (!Number.isFinite(other)) {
-      breakHere(t)
-      continue
-    }
-    finite++
-
-    if (lastOther !== null && lastT !== null && Math.abs(other - lastOther) > viewSpan * ASYMPTOTE_JUMP_FACTOR) {
-      const mid = (lastT + t) / 2
-      breaks.push({ at: mid, kind: 'pole' })
-      finishRun()
-      if (statement.independent === 'x') asymptoteXs.push(mid)
-    }
-
-    points.push(statement.independent === 'x' ? { x: t, y: other } : { x: other, y: t })
-    params.push(t)
-    lastOther = other
-    lastT = t
-  }
-  finishRun()
-  if (tested > 0 && finite === 0) throw new Error('this curve is undefined everywhere in view')
-
-  // A statement with nothing to draw in view (its domain excludes the window,
-  // or every run is a single sample) has no curve, as it never had.
-  const objects: SceneObject[] = []
-  if (chains.length > 0) objects.push(curveObject(statementIndex, chains, breaks, statement.color))
-  if (config.asymptotes) {
-    // A pole's approach can itself jump by more than the threshold across
-    // 2-3 adjacent samples (value swings from very-negative to very-positive
-    // in a handful of steps), which without merging shows up as several
-    // near-identical dashed lines stacked right on top of each other instead
-    // of one.
-    const dt = (hi - lo) / SAMPLES
-    const merged: number[] = []
-    for (const x of asymptoteXs) {
-      const last = merged[merged.length - 1]
-      if (last !== undefined && Math.abs(x - last) < dt * 3) merged[merged.length - 1] = (last + x) / 2
-      else merged.push(x)
-    }
-    // One unclipped vertical guide per pole; the renderer clips it to the live
-    // view and draws it dashed (see render/renderItems.ts).
-    merged.forEach((x, k) => {
-      objects.push({
-        kind: 'line',
-        id: { statement: statementIndex, object: `asymptote.${k}` },
-        through: { x, y: 0 },
-        direction: { x: 0, y: 1 },
-        extent: 'infinite',
-        role: 'asymptote',
-        color: statement.color ?? 'gray',
-      })
-    })
-  }
-  return objects
+function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  return sampleStatement({ kind: 'explicit', independent: statement.independent, body: statement.body, domain: domainOf(statement) }, statementIndex, statement.color, line, ctx)
 }
 
-// One chain, parametrised by theta in the statement's own angle unit (the
-// variable the body is written in, not the radians it is plotted at).
-function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: number, config: GraphConfig, scope: MathScope): SceneObject[] {
-  const from = constant(statement.from, scope)
-  const to = constant(statement.to, scope)
-  const body = compileScalar(statement.body, ['theta'], scope)
-  const points: Vec2[] = []
-  const params: number[] = []
-  for (let i = 0; i <= SAMPLES; i++) {
-    const theta = from + ((to - from) * i) / SAMPLES
-    const thetaRad = config.angle === 'degrees' ? (theta * Math.PI) / 180 : theta
-    const r = body(theta)
-    const point = { x: r * Math.cos(thetaRad), y: r * Math.sin(thetaRad) }
-    if (Number.isFinite(point.x) && Number.isFinite(point.y)) {
-      points.push(point)
-      params.push(theta)
-    }
-  }
-  if (points.length === 0) throw new Error('this curve is undefined everywhere in view')
-  return [curveObject(statementIndex, [chainOf(points, params)], [], statement.color)]
+// The parameter is theta in the statement's own angle unit (the variable the body is written in, not
+// the radians it is plotted at; the sampler reads the unit off the scope). A range the author did not
+// write is a full turn in that unit: 360 under @angle: degrees, 2 pi otherwise (the parser's default,
+// flagged `fullTurn`, is in radians).
+function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  const [from, to] = statement.fullTurn && ctx.config.angle === 'degrees' ? [0, 360] : rangeOf(statement.from, statement.to, ctx.scope, 'theta')
+  return sampleStatement({ kind: 'polar', body: statement.body, from, to }, statementIndex, statement.color, line, ctx)
 }
 
-function sampleParametric(statement: Statement & { kind: 'parametric' }, statementIndex: number, scope: MathScope): SceneObject[] {
-  const from = constant(statement.from, scope)
-  const to = constant(statement.to, scope)
-  const fx = compileScalar(statement.fx, [statement.param], scope)
-  const fy = compileScalar(statement.fy, [statement.param], scope)
-  const points: Vec2[] = []
-  const params: number[] = []
-  for (let i = 0; i <= SAMPLES; i++) {
-    const t = from + ((to - from) * i) / SAMPLES
-    const point = { x: fx(t), y: fy(t) }
-    if (Number.isFinite(point.x) && Number.isFinite(point.y)) {
-      points.push(point)
-      params.push(t)
-    }
-  }
-  if (points.length === 0) throw new Error('this curve is undefined everywhere in view')
-  return [curveObject(statementIndex, [chainOf(points, params)], [], statement.color)]
+function sampleParametric(statement: Statement & { kind: 'parametric' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  const [from, to] = rangeOf(statement.from, statement.to, ctx.scope, statement.param)
+  return sampleStatement({ kind: 'parametric', param: statement.param, fx: statement.fx, fy: statement.fy, from, to }, statementIndex, statement.color, line, ctx)
 }
 
 function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
@@ -314,9 +195,11 @@ function buildFeaturePoints(
     try {
       f = compileScalar(statement.body, ['x'], scope)
       // A statement whose if clause does not compile draws nothing, so it
-      // marks nothing either: domainTest compiles whichever shape of clause the
-      // statement has, the old condition (x < k) or the new where.
-      domainTest(statement, scope)
+      // marks nothing either: domainOf gives whichever shape of clause the
+      // statement has, the old condition (x < k) or the new where, as the
+      // one condition the sampler compiles.
+      const domain = domainOf(statement)
+      if (domain) compileScalar(domain, ['x'], scope)
     } catch {
       // reported by the statement itself
       continue
@@ -591,9 +474,44 @@ function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex
 // implicit curves/regions — the caller (GraphViewer.tsx) passes a reduced
 // value while the view is actively being dragged, and the full
 // IMPLICIT_RESOLUTION once it settles.
-export function buildScene(statements: Statement[], bounds: Bounds, config: GraphConfig, resolution: number = IMPLICIT_RESOLUTION, lines?: readonly number[]): Scene {
+//
+// Curves (y = f(x), x = f(y), polar, parametric) go through the adaptive sampler
+// (plot/sample/curve.ts), which works in screen space, so `options` says how big the
+// viewport is and how fine the sampling should be:
+//   widthPx, heightPx  the viewport in CSS px (defaults: 800 wide, and the height the
+//                      bounds' aspect gives);
+//   quality            'full' for a settled view (the default), 'coarse' while a
+//                      gesture runs: a looser curve for about a quarter of the work;
+//   budget             for tests: the sampler's budget of evaluations, to force a curve
+//                      to its cap.
+// `Scene.stats` is the work every sampled curve did, summed.
+export interface SceneOptions {
+  widthPx?: number
+  heightPx?: number
+  quality?: 'full' | 'coarse'
+  budget?: { points: number; intervals: number }
+}
+
+// The viewport the sampler is given: the width, and the height that keeps the bounds' aspect unless
+// the caller says. At least a pixel high: a view of no height says "undefined" to nobody.
+function viewOf(bounds: Bounds, options: SceneOptions | undefined): View {
+  const widthPx = options?.widthPx ?? DEFAULT_WIDTH_PX
+  const natural = Math.round((widthPx * (bounds.yMax - bounds.yMin)) / (bounds.xMax - bounds.xMin))
+  const heightPx = options?.heightPx ?? (Number.isFinite(natural) ? Math.max(1, natural) : widthPx)
+  return { bounds, widthPx, heightPx }
+}
+
+export function buildScene(
+  statements: Statement[],
+  bounds: Bounds,
+  config: GraphConfig,
+  resolution: number = IMPLICIT_RESOLUTION,
+  lines?: readonly number[],
+  options?: SceneOptions
+): Scene {
   const objects: SceneObject[] = []
   const errors: Scene['errors'] = []
+  const stats = { points: 0, intervals: 0 }
   let regression: Scene['regression'] = null
   const lineOf = (index: number) => lines?.[index] ?? 0
   const functions = collectFunctions(statements)
@@ -601,6 +519,7 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
   const scope = plotScope.scope
   errors.push(...plotScope.errors)
   const namedPoints = collectNamedPoints(statements, scope)
+  const curves: CurveContext = { view: viewOf(bounds, options), scope, config, quality: options?.quality ?? 'full', budget: options?.budget, stats, errors }
 
   // Geometry constructions resolve in one pass up front, in source order (see
   // geometry/buildConstructions.ts for why definition-before-use rather than
@@ -633,11 +552,11 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
     if (statement.statementName && config.hidden.has(statement.statementName)) continue
     try {
       if (statement.kind === 'explicit') {
-        objects.push(...sampleExplicit(statement, statementIndex, bounds, config, scope))
+        objects.push(...sampleExplicit(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'polar') {
-        objects.push(...samplePolar(statement, statementIndex, config, scope))
+        objects.push(...samplePolar(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'parametric') {
-        objects.push(...sampleParametric(statement, statementIndex, scope))
+        objects.push(...sampleParametric(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'implicit') {
         objects.push(...traceImplicit(statement, bounds, resolution, scope))
       } else if (statement.kind === 'region') {
@@ -754,5 +673,5 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
 
   objects.push(...buildFeaturePoints(statements, bounds, config, scope))
 
-  return { objects, errors, regression }
+  return { objects, errors, regression, stats }
 }

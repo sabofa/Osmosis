@@ -297,7 +297,7 @@ export type TriangleSlot = 'a' | 'b' | 'c'
 //   y = <expr(x)> [if <condition>]              -> explicit function of x (2D); condition makes it piecewise
 //   x = <expr(y)> [if <condition>]              -> explicit function of y (2D)
 //   z = <expr(x,y)>                             -> explicit surface (3D)
-//   r = <expr(theta)> [for theta in [a, b]]      -> polar curve (2D); theta defaults to [0, 2*pi]
+//   r = <expr(theta)> [for theta in [a, b]]      -> polar curve (2D); theta defaults to a full turn, [0, 2*pi] (or [0, 360] under @angle: degrees)
 //   <expr(x,y)> = <expr(x,y)>                   -> implicit curve (conics, circles, etc.; 2D)
 //   <expr(x,y)> <|<=|>|>= <expr(x,y)>            -> shaded inequality region (2D)
 //   <expr> <|<= <expr(x,y)> <|<= <expr>          -> chained inequality region (2D); the shaded region is
@@ -930,7 +930,10 @@ export type StatementShape =
   // where: an "if" condition in the calc P1 language (reserved calls, math/reserved.ts) — set only when the clause is new syntax; an old-shape clause sets condition alone.
   | { kind: 'explicit'; independent: 'x' | 'y'; body: Expr; condition: Condition | null; where?: Expr }
   | { kind: 'surface'; body: Expr }
-  | { kind: 'polar'; body: Expr; from: Expr; to: Expr }
+  // fullTurn: true only when the parser supplied the default range (the statement had no "for theta in [a, b]"). The
+  // default is a full turn in the document's angle unit (360 under @angle: degrees, 2 pi in radians), which only the
+  // consumer knows, so `from` and `to` then hold the radian default and the consumer replaces them (buildScene.ts).
+  | { kind: 'polar'; body: Expr; from: Expr; to: Expr; fullTurn?: boolean }
   | { kind: 'implicit'; left: Expr; right: Expr; where?: Expr }
   | { kind: 'region'; left: Expr; op: '<' | '<=' | '>' | '>='; right: Expr; where?: Expr }
   | { kind: 'regionChain'; low: Expr; lowOp: '<' | '<='; mid: Expr; highOp: '<' | '<='; high: Expr; where?: Expr }

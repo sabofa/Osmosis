@@ -19,6 +19,15 @@ export const LOCATE = {
   // The twin evaluations one call may spend, over all its generators and the checks
   // after them. This is the real limit.
   intervalsTotal: 20000,
+  // The scalar evaluations one call may spend (phase 1's checks of a stretch of zeros, then phase 2's samples, bisections
+  // and golden-section searches), counted from the call's start and checked between clusters: once it is spent the
+  // clusters not yet resolved are left, the result says it was cut, and a cluster in the middle of its own search is
+  // finished (under 2500 points: 16 samples, 16 bisections of 64 steps, 16 searches of about 75). The clusters
+  // nearest the centre of the range are resolved first, which is what is on screen. Without a limit
+  // sqrt(sin(350 x)), whose 3000 zeros make 512 clusters, spent 105000 points here (64000 to 169000 for 311 to 410),
+  // and those points were counted against the core's budget, which was then found spent: the curve drew nothing, and
+  // said nothing. The zeros that are left unresolved are the twin's and the core's: they break at what they find.
+  pointsTotal: 20000,
   // A zero is located to tolRel * max(1, |t|): the width the bisections and the
   // golden-section search stop at.
   tolRel: 1e-12,
@@ -181,7 +190,7 @@ export const BAND = {
   // are inside the curve, so a band is never taller than the curve is, and it is held inside the
   // twin's enclosure as well. This is FULL's count; COARSE's is coarseSamples.
   samples: 16,
-  // But not evenly: the inner samples sit off their even places by a quarter of a spacing at most,
+  // But not evenly: the inner samples sit off their even places by jitterSpread / 2 of a spacing at most,
   // sample i at (i + J) / (n - 1) of the column with J = (frac(i * jitter) - 1/2) * jitterSpread, the
   // two ends where they are. Equally spaced samples are resonant with every oscillation whose period
   // divides their spacing (16 a pixel: sin(w x) near w = 3770 and 7540 at 40 px per unit, 8 at COARSE:
@@ -190,8 +199,11 @@ export const BAND = {
   // sin(w x) for w = 1800 to 8000 at FULL, 20 of 239 were capped and 21 had false segments in the view
   // (up to 80 px off); at COARSE 92 of 539 capped, 83 false. The golden ratio's fractional parts are
   // the spread that no lattice can be resonant with (LIMITS.confirmFactors, the same idea).
+  // The spread is 0.35 (an inner sample is off its even place by 0.175 of a spacing at most), where it was 0.5. The
+  // narrower one loses nothing to resonance (539 of 539 frequencies clean at COARSE, as at 0.5) and cuts the shortfall of
+  // a spike a pixel wide at FULL from 3.79 px to 3.35, because the samples stay nearer where an even spacing put them.
   jitter: 0.618034,
-  jitterSpread: 0.5,
+  jitterSpread: 0.35,
   // COARSE takes these: a band across a 1200 px range is 1200 columns, and 14 evaluations each is
   // more than COARSE's whole 15000-point budget with the rest of the curve, where 6 are not (sin(500x)
   // at COARSE: 7200 points for the columns, and the 8 samples still show the turns of a column of two
@@ -222,6 +234,13 @@ export const BAND = {
   // certified column that did not turn: (3 - sqrt 5) / 2, irrational so that no lattice of equally
   // spaced samples, whatever its spacing, is resonant with it (LIMITS.confirmFactors, the same idea).
   probeAt: (3 - Math.sqrt(5)) / 2,
+  // How far (px) that probe sample may be from the polyline there for the polyline to be the curve. It was the core's
+  // gapPx (1 px), a number about two ends of an interval being the same point, and not about a polyline's error
+  // between samples a seventh of a pixel apart: at COARSE sin(w x) for w of about 104 to 146 (a period of one to two
+  // pixels) is further than that from its own polyline, so true polylines were refused, the core refined them to the
+  // cap, and the cap drew false chords 8 px long. An alias, which this check is for, is tens of pixels off (a slow wave
+  // where there is a fast one), so 4 px keeps it out and lets the polyline in.
+  probePx: 4,
 }
 
 // The adaptive core (adaptive.ts): every number of the screen-space subdivision. Two
@@ -274,9 +293,10 @@ export interface Tuning {
   // The clip box is the view widened by this fraction of its size on each side: a curve
   // leaves the picture, not the sampled region, at the edge you can see.
   overscan: number
-  // Evaluations the whole statement may spend (counted over locating, classifying and
-  // sampling). Past either, refinement stops: the start grid is still drawn, and an
-  // interval is connected only if the twin certified it.
+  // Evaluations the core may spend on one statement (curve.ts counts it apart from locating and
+  // classifying, which have limits of their own: LOCATE.pointsTotal, LOCATE.intervalsTotal and
+  // LOCATE.maxZeros classified spots; the stats report all three). Past either, refinement stops:
+  // the start grid is still drawn, and an interval is connected only if the twin certified it.
   budget: { points: number; intervals: number }
 }
 

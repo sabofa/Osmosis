@@ -63,6 +63,20 @@ describe('parseStatement', () => {
     expect(s2.to).toEqual({ kind: 'num', value: 3.14 })
   })
 
+  // calc P2: the default range is a full turn in the document's angle unit, and only the
+  // consumer knows the unit, so the parser says it supplied the default and does not guess
+  it("flags a polar curve's default range as a full turn, and no range the author wrote", () => {
+    const defaulted = parseStatement('r = 1 + cos(theta)')
+    if (defaulted.kind !== 'polar') throw new Error('unreachable')
+    expect(defaulted.fullTurn).toBe(true)
+    // an author's own range, even one that happens to be [0, 2 pi], is theirs and not flagged
+    for (const text of ['r = theta for theta in [0, 3.14]', 'r = 1 + cos(theta) for theta in [0, 2*pi]']) {
+      const written = parseStatement(text)
+      if (written.kind !== 'polar') throw new Error('unreachable')
+      expect(written.fullTurn, text).toBeUndefined()
+    }
+  })
+
   it('parses points, segments, rays, and vectors', () => {
     expect(parseStatement('(1, 2)').kind).toBe('point')
     expect(parseStatement('A = (1, 2)').kind).toBe('point')

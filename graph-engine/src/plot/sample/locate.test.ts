@@ -46,6 +46,28 @@ describe('locateZeros', () => {
     expect(r.truncated).toBe(true)
     expect(r.zeros.length).toBeLessThanOrEqual(64)
   })
+  // calc P2 task 7 (rule 2): sqrt(sin(350 x)) has 3000 zeros in [-15, 15] and every box is a cluster; resolving them all
+  // took 105k point evaluations, which the core's budget was then checked against, and the curve drew nothing. The points
+  // are a budget of the locator's own (LOCATE.pointsTotal).
+  it('stops resolving clusters when its points are spent, says so, and has kept the middle of the range', () => {
+    const scope = scopeOf()
+    const counter = { points: 0, intervals: 0 }
+    const r = locateZeros(troubleGenerators(expr('sqrt(sin(350x))'), 'x', scope), 'x', scope, -15, 15, counter)
+    expect(r.truncated).toBe(true)
+    // the limit is checked between clusters, and one cluster's own search is under 2500 points (16 samples, 16 bisections
+    // of 64 steps, 16 golden-section searches of about 75)
+    expect(counter.points).toBeLessThanOrEqual(LOCATE.pointsTotal + 2500)
+    expect(counter.intervals).toBeLessThanOrEqual(LOCATE.intervalsTotal + 1)
+    // what was resolved is the middle's: the clusters nearest the centre of the range go first
+    expect(r.zeros.length).toBeGreaterThan(8)
+    expect(Math.max(...r.zeros.map((z) => Math.abs(z.t)))).toBeLessThan(7.5)
+  })
+  it('an ordinary range does not come near the points limit', () => {
+    const scope = scopeOf()
+    const counter = { points: 0, intervals: 0 }
+    locateZeros(troubleGenerators(expr('tan(x) + 1/(x - 1) + floor(x)'), 'x', scope), 'x', scope, -15, 15, counter)
+    expect(counter.points).toBeLessThan(LOCATE.pointsTotal / 2)
+  })
   it('counts its evaluations and is deterministic', () => {
     const scope = scopeOf()
     const a = { points: 0, intervals: 0 }

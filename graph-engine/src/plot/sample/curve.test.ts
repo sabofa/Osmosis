@@ -3,6 +3,7 @@ import { chainPoints } from '../../scene/chains'
 import type { SceneObject } from '../../scene/types'
 import { sampleCurve, type CurveSpec } from './curve'
 import { condition, expr, scopeOf } from './testkit'
+import { COARSE, FULL, LOCATE } from './tuning'
 
 const view = { bounds: { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }, widthPx: 800, heightPx: 800 }
 const opts = { statement: 0, color: null, asymptotes: true, quality: 'full' as const }
@@ -460,5 +461,45 @@ describe('sampleCurve — steep, polar, parametric', () => {
     const a = run(explicit('tan(x) + floor(x) + sin(x)/x'))
     const b = run(explicit('tan(x) + floor(x) + sin(x)/x'))
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+})
+
+// calc P2 task 7, rule 2: a curve never blanks silently. The locator's and the classifier's point evaluations used to
+// share the counter the core's budget was checked against, so y = sqrt(sin(w x)) for w = 311 to 410 spent 64k to 169k
+// points finding its zeros, the core found its budget gone, and the curve drew nothing, with no message. The locator
+// has a budget of its own (LOCATE.pointsTotal), the core is checked against what it spends itself, and the stats are
+// the total.
+describe('sampleCurve — a curve never blanks because the locator spent the budget', () => {
+  // what finding and classifying the trouble spots may cost on top of the core's budget: the locator stops between
+  // clusters (one cluster's search is under 2500 points), and at most maxZeros spots are classified at under 100
+  // points each
+  const SPOTS = LOCATE.pointsTotal + 2500 + LOCATE.maxZeros * 100
+  const drawn = (objs: SceneObject[]) => curveOf(objs).chains.length + objs.filter((o) => o.kind === 'band').length
+
+  it.each([311, 350, 380, 410])('sqrt(sin(%dx)) draws chains or bands, and its stats stay within the sum of the budgets', (w) => {
+    const r = run(explicit(`sqrt(sin(${w}x))`))
+    expect(drawn(r.objects), `w = ${w}`).toBeGreaterThan(0)
+    expect(r.stats.points, `w = ${w}`).toBeLessThanOrEqual(SPOTS + FULL.budget.points + 1000)
+    expect(r.stats.intervals, `w = ${w}`).toBeLessThanOrEqual(LOCATE.intervalsTotal + FULL.budget.intervals + 1000)
+  })
+  it('the same at the coarse preset, whose core has a quarter of the budget', () => {
+    for (const w of [311, 350, 410]) {
+      const r = sampleCurve(explicit(`sqrt(sin(${w}x))`), view, scopeOf(), { ...opts, quality: 'coarse' })
+      expect(drawn(r.objects), `w = ${w}`).toBeGreaterThan(0)
+      expect(r.stats.points, `w = ${w}`).toBeLessThanOrEqual(SPOTS + COARSE.budget.points + 1000)
+    }
+  })
+  it('a core that spends nothing is not reported as capped because the locator did', () => {
+    // the budget is the core's: a curve with thousands of zeros and a core that fits is not "drawn coarsely"
+    const r = run(explicit('tan(x)'))
+    expect(r.capped).toBe(false)
+  })
+  it('the stats are the total of locating, classifying and sampling, not the core alone', () => {
+    // a core budget of 50 is spent at once; locating the ten poles of tan and reading their limits costs far more, and it
+    // is in the total
+    const r = sampleCurve(explicit('tan(x)'), view, scopeOf(), { ...opts, budget: { points: 50, intervals: 50 } })
+    expect(r.stats.points).toBeGreaterThan(500)
+    expect(r.stats.intervals).toBeGreaterThan(50)
+    expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'pole')).toHaveLength(10)
   })
 })

@@ -7,6 +7,7 @@ import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSeg
 import { GridRenderer } from './grid'
 import { markerShape, type MarkerShape } from './featureMarker'
 import { HoverResolver, type HoverInfo } from './hover'
+import { createInteraction } from './interaction'
 import { clampedLabelPlacement } from './labelLayout'
 import { makeLabelSprite } from './labelSprite'
 import type { Bounds } from './marchingSquares'
@@ -209,7 +210,9 @@ export class SceneRenderer {
   private canvas: HTMLCanvasElement
   private resizeObserver: ResizeObserver
   private rafId = 0
-  private dragging = false
+  // Whether the view is being dragged or zoomed, for the coarse pass (render/interaction.ts)
+  private interaction = createInteraction(() => performance.now())
+  private wheelTimer: ReturnType<typeof setTimeout> | null = null
   private lastPointer = { x: 0, y: 0 }
   private options: SceneRendererOptions
   private palette: Palette
@@ -265,10 +268,25 @@ export class SceneRenderer {
     return this.camera2d.getBounds()
   }
 
-  // Exposed so GraphViewer.tsx can pass a reduced marching-squares
-  // resolution to buildScene while the user is actively panning.
+  // Whether the pointer is down on the canvas.
   isDragging(): boolean {
-    return this.dragging
+    return this.interaction.isDragging()
+  }
+
+  // Exposed so GraphViewer.tsx can ask buildScene for a coarse pass (a reduced
+  // marching-squares resolution, the sampler's coarse preset) while the user is
+  // dragging or zooming: dragging, or within WHEEL_SETTLE_MS of the last wheel
+  // event. The rebuild that follows when it stops is full quality (see settle).
+  isInteracting(): boolean {
+    return this.interaction.isInteracting()
+  }
+
+  // The canvas in CSS px, at least a pixel each way (a canvas that is not displayed
+  // reports 0, as handleResize knows): the curve sampler's screen-space tolerances are
+  // measured in these.
+  getViewportPx(): { width: number; height: number } {
+    const rect = this.canvas.getBoundingClientRect()
+    return { width: Math.max(rect.width, 1), height: Math.max(rect.height, 1) }
   }
 
   // Converts a target on-screen pixel size into the current world-unit size
@@ -309,7 +327,7 @@ export class SceneRenderer {
   }
 
   private handlePointerDown = (e: PointerEvent) => {
-    this.dragging = true
+    this.interaction.pointerDown()
     this.lastPointer = { x: e.clientX, y: e.clientY }
     try {
       this.canvas.setPointerCapture(e.pointerId)
@@ -357,13 +375,37 @@ export class SceneRenderer {
     })
   }
 
+  // The view has stopped moving (the pointer came up after a drag, or the wheel has been quiet for
+  // WHEEL_SETTLE_MS): tell the host once more, so it rebuilds at full quality, because what the last
+  // frame of the gesture built was coarse. A view change already queued for the next frame will do
+  // it, by then with the gesture's flag down, so it is not asked for twice.
+  private settle() {
+    if (this.viewChangeScheduled) return
+    this.options.onViewChange?.()
+  }
+
+  // A wheel burst has no end event: wait until it has been quiet, and settle then. The timer is the
+  // clock's to correct (it can fire a hair before performance.now says the burst is over: wait the rest).
+  private armWheelSettle() {
+    if (this.wheelTimer !== null) clearTimeout(this.wheelTimer)
+    const wait = this.interaction.wheelSettleIn()
+    if (wait === null) return
+    this.wheelTimer = setTimeout(() => {
+      this.wheelTimer = null
+      if (!this.interaction.takeWheelSettled()) this.armWheelSettle()
+      // a drag in progress settles itself when the pointer goes up
+      else if (!this.interaction.isDragging()) this.settle()
+    }, wait)
+  }
+
   private handlePointerMove = (e: PointerEvent) => {
-    if (!this.dragging) return
+    if (!this.interaction.isDragging()) return
     const dx = e.clientX - this.lastPointer.x
     const dy = e.clientY - this.lastPointer.y
     this.lastPointer = { x: e.clientX, y: e.clientY }
     const rect = this.canvas.getBoundingClientRect()
     this.camera2d.panByPixels(dx, dy, rect.height)
+    this.interaction.pointerMove()
     // Cheap, every frame — keeps the guide line's far end reaching the true
     // bottom of the view throughout the drag instead of freezing at
     // whatever bounds were current when hover was last fully resolved (see
@@ -376,7 +418,8 @@ export class SceneRenderer {
   }
 
   private handlePointerUp = () => {
-    this.dragging = false
+    const moved = this.interaction.pointerUp()
+    if (moved) this.settle()
     // Belt-and-suspenders alongside scheduleViewChange's own re-resolve: that
     // one only fires once its queued rAF callback runs, which could in
     // principle land before or after this synchronous pointerup depending on
@@ -393,6 +436,8 @@ export class SceneRenderer {
     this.camera2d.zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
     this.hoverResolver.refreshGuideLine(this.camera2d)
     this.needsRender = true
+    this.interaction.wheel()
+    this.armWheelSettle()
     this.scheduleViewChange()
   }
 
@@ -425,7 +470,7 @@ export class SceneRenderer {
   }
 
   private resolveHover(e: PointerEvent) {
-    if (this.dragging) return
+    if (this.interaction.isDragging()) return
     const mode = this.options.config.hover
     if (mode === 'none' || !this.lastScene) {
       this.hoverResolver.clear()
@@ -885,6 +930,7 @@ export class SceneRenderer {
 
   dispose() {
     cancelAnimationFrame(this.rafId)
+    if (this.wheelTimer !== null) clearTimeout(this.wheelTimer)
     this.resizeObserver.disconnect()
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     window.removeEventListener('pointermove', this.handlePointerMove)

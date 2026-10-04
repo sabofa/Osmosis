@@ -62,6 +62,11 @@
 //    kind with an axis to oscillate along) they also share ONE BandSink, which collects the
 //    pixel columns where the curve oscillates faster than a pixel (band.ts, adaptive.ts): a band
 //    runs on across the seam between two pieces as a chain does, and is no break.
+//    BUDGETS. Locating and classifying are counted on one counter and the core's sampling on another, so that
+//    one cannot spend the other's budget: the core is checked against what it spends itself (tuning.budget), the
+//    locator against LOCATE.pointsTotal and LOCATE.intervalsTotal, and the classifier is bounded by the number
+//    of zeros the locator reports (LOCATE.maxZeros). `stats` is the total of them all. A curve is never blank
+//    because finding its trouble spots was dear (sqrt(sin(350 x)) was: 105000 points, then nothing drawn).
 // 6. OUTPUT. The curve (the sink's chains, its breaks: the classified ones and the core's own,
 //    sorted by parameter), its bands (`band.<k>`, in parameter order, the curve's colour), its
 //    marks in parameter order, then its asymptote guides. Marks
@@ -192,7 +197,12 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     yMax: bounds.yMax + tuning.overscan * spanY,
   }
   const screen: Screen = { px, clip }
+  // Two counters, because there are two budgets. `counter` is what locating the trouble spots and reading them cost
+  // (locate.ts and limits.ts, each with a limit of its own) and `spent` is the core's, which the core's budget
+  // (tuning.budget) is checked against. When they were one, a locator that burned the budget left the core with none
+  // and a curve that drew nothing (sqrt(sin(350 x)): 105000 points before the core began).
   const counter: EvalCounter = { points: 0, intervals: 0 }
+  const spent: EvalCounter = { points: 0, intervals: 0 }
   const co = coordinatesOf(spec, view, px, tuning)
   const fns = compileCurve(co, scope)
 
@@ -223,7 +233,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   let capped = false
   const piece = (ta: number, tb: number, left: End, right: End) => {
     if (!(tb > ta)) return
-    if (sampleRange(fns, ta, tb, { left, right }, screen, tuning, counter, sink, bandSink).capped) capped = true
+    if (sampleRange(fns, ta, tb, { left, right }, screen, tuning, spent, sink, bandSink).capped) capped = true
   }
 
   let from = co.from
@@ -243,7 +253,8 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const bands = bandObjects(bandSink, options)
   const objects: SceneObject[] = [curveObject(options, chains, breaks), ...bands, ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
   const grid = startGrid(spec.kind === 'explicit' ? spec.domain : null, co, fns, scope, tuning, counter, chains.length > 0 || bands.length > 0)
-  return { objects, capped, stats: { points: counter.points, intervals: counter.intervals }, tested: grid.tested, defined: grid.defined }
+  // the stats are the total of what the call evaluated: locating, classifying and sampling
+  return { objects, capped, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
 }
 
 // What one classified spot is to the pieces beside it (step 4 of the header), and the typed

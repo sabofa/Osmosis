@@ -39,7 +39,8 @@ type Renderer = SceneRenderer | SpaceRenderer
 // itself and aren't affected by this.
 const REBUILD_DEBOUNCE_MS = 80
 // Reduced marching-squares resolution used for regions/implicit curves while
-// actively dragging — see buildScene's `resolution` param. Region fill
+// the view is being dragged or zoomed (SceneRenderer.isInteracting) — see
+// buildScene's `resolution` param. Region fill
 // triangle count scales with the square of this, so it's kept noticeably
 // lower than the settled resolution rather than just halved.
 const DRAG_RESOLUTION = 45
@@ -224,8 +225,17 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
         }
       } else {
         const renderer2d = renderer as SceneRenderer
-        const resolution = renderer2d.isDragging() ? DRAG_RESOLUTION : undefined
-        const scene = buildScene(parsed.statements, renderer2d.getBounds(), parsed.config, resolution, parsed.statementLines)
+        // While a gesture runs (a drag, or a wheel burst) the scene is a coarse one: a reduced marching-
+        // squares resolution and the curve sampler's coarse preset. The renderer calls this again when the
+        // gesture settles, with nothing interacting, so the settled view is full quality.
+        const interacting = renderer2d.isInteracting()
+        const resolution = interacting ? DRAG_RESOLUTION : undefined
+        const { width, height } = renderer2d.getViewportPx()
+        const scene = buildScene(parsed.statements, renderer2d.getBounds(), parsed.config, resolution, parsed.statementLines, {
+          widthPx: width,
+          heightPx: height,
+          quality: interacting ? 'coarse' : 'full',
+        })
         renderer2d.setGraphScene(scene)
         const errors = [...parsed.errors, ...scene.errors]
         if (reportState) {

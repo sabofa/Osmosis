@@ -1506,21 +1506,24 @@ function parseStatementCore(rawLine: string): StatementShape {
     return { kind: 'functionDef', name, param, body: parseExprString(body) }
   }
 
-  // Polar curve: "r = 1 + cos(theta)" (theta defaults to [0, 2*pi]) or
-  // "r = f(theta) for theta in [a, b]"
+  // Polar curve: "r = 1 + cos(theta)" (theta defaults to a full turn) or
+  // "r = f(theta) for theta in [a, b]". The default range is 0 to 2*pi here, flagged `fullTurn`: a full
+  // turn is 360 under @angle: degrees, which the parser does not know, so the consumer reads the flag.
   if (/^r\s*=/.test(line)) {
     const eqIdx = line.indexOf('=')
     let rest = line.slice(eqIdx + 1).trim()
     let from: Expr = { kind: 'num', value: 0 }
     let to: Expr = { kind: 'binary', op: '*', left: { kind: 'num', value: 2 }, right: { kind: 'var', name: 'pi' } }
+    let fullTurn = true
     const forIdx = rest.indexOf(' for ')
     if (forIdx !== -1) {
       const range = parseForRange(rest.slice(forIdx + ' for '.length).trim())
       from = range.from
       to = range.to
       rest = rest.slice(0, forIdx).trim()
+      fullTurn = false
     }
-    return { kind: 'polar', body: parseExprString(rest), from, to }
+    return fullTurn ? { kind: 'polar', body: parseExprString(rest), from, to, fullTurn } : { kind: 'polar', body: parseExprString(rest), from, to }
   }
 
   // Parametric curve/surface: "(...) for t in [a, b]" or "(...) for u in [a,b], v in [c,d]"

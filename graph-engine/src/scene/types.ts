@@ -46,10 +46,9 @@ export type MarkRole = 'hole' | 'endpoint' | 'value' // P5 adds 'feature'
 export type SceneObject =
   // A plotted curve as chains of Float64 world-coordinate vertices, each with
   // its parameter. `breaks` are where the curve is mathematically interrupted
-  // (a pole, a jump, the edge of its domain). It is not yet complete: the
-  // interim uniform sampler records only the leading edge of a gap, and a
-  // domain edge with no gap in the samples records nothing. One curve per
-  // plotted statement, except that a construction statement can yield several
+  // (a pole, a jump, the edge of its domain): the adaptive sampler
+  // (plot/sample/) types every one it finds, at the parameter it located. One
+  // curve per plotted statement, except that a construction statement can yield several
   // (one per circle); a circle is one closed chain with no breaks, and a
   // tangent or a regression line is one two-vertex chain across the view.
   | { kind: 'curve'; id: MarkId; chains: Chain[]; breaks: Break[]; dashed?: boolean; color?: string | null }
@@ -168,7 +167,8 @@ export interface Scene {
   objects: SceneObject[]
   errors: SceneError[]
   regression: Regression | null
-  // How much work the curve sampler did, for a status line or a test; absent
-  // until a sampler reports it.
+  // How much work the curve sampler did, summed over every sampled curve (locating,
+  // classifying and sampling), for a status line or a test; absent when the scene
+  // did not come from buildScene.
   stats?: { points: number; intervals: number }
 }

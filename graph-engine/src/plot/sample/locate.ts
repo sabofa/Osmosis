@@ -33,6 +33,13 @@
 //    1 - cos(x), and exact for a pure square.
 // Phase 2 also says when a cluster is too crowded for 16 samples to count its zeros
 // (several boxes wide, with two sign changes or more), and the result is then cut.
+// Phase 2 has a budget of scalar evaluations (LOCATE.pointsTotal, counted from the call's
+// start and checked between clusters), which the clusters are resolved against nearest the
+// centre of the range first. A function with thousands of zeros (sqrt(sin(350 x))) is
+// hundreds of clusters, and every one costs its 16 samples and its bisections: without the
+// limit that was 105000 points, and the caller's own budget was found spent by it. When the
+// points run out the clusters left are not resolved and the result says it was cut; what
+// they hold is the twin's and the core's to find (a pole is a break whether or not it was located).
 //
 // A stretch is reached in phase 1 without bisecting it. A box whose enclosure is the
 // point zero holds nothing but zeros (or NaN) if the scalar agrees, so then it stops
@@ -84,7 +91,16 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
   let truncated = false
   let spent = 0
   const coarse = (t1 - t0) * LOCATE.coarseRel
+  const centre = t0 + (t1 - t0) / 2
+  // The scalar evaluations this call has spent (LOCATE.pointsTotal): the counter is the caller's, and has its own history.
+  const startPoints = counter.points
+  const pointsLeft = () => LOCATE.pointsTotal - (counter.points - startPoints)
   for (const gen of gens) {
+    // Out of points, a generator's clusters could not be resolved, so it is not isolated (which costs twin evaluations).
+    if (pointsLeft() <= 0) {
+      truncated = true
+      break
+    }
     const g: Scalar = compileScalar(gen.expr, [param], scope)
     const gi = compileInterval(gen.expr, [param], scope)
     const budget = Math.min(LOCATE.intervalsPerGenerator, LOCATE.intervalsTotal - spent)
@@ -106,13 +122,27 @@ export function locateZeros(gens: readonly Generator[], param: string, scope: Ma
       counter.intervals++
       return !(isEmpty(probe) || probe.lo > 0 || probe.hi < 0)
     }
-    for (const [lo, hi] of found.clusters) {
+    // The clusters nearest the centre of the range first, the order the scalar budget is spent in: the ends of a range are what
+    // a pan brings in next, and the middle is what is on screen. (The order of the zeros found does not matter: merge() sorts them.)
+    for (const [lo, hi] of nearestFirst(found.clusters, centre)) {
+      if (pointsLeft() <= 0) {
+        truncated = true
+        break
+      }
       const here = resolve(g, confirm, lo, hi, coarse, counter)
       if (here.unresolved) truncated = true
       for (const t of here.zeros) all.push(gen.cmps ? { t, origin: gen.origin, why: gen.why, cmps: gen.cmps.map((cmp) => ({ cmp, cmpExpr: gen.expr })) } : { t, origin: gen.origin, why: gen.why })
     }
   }
   return merge(all, t0, t1, truncated)
+}
+
+// The clusters, those whose middle is nearest `centre` first (a tie goes to the left one), as copies.
+function nearestFirst(clusters: readonly Cluster[], centre: number): Cluster[] {
+  return clusters
+    .map((cluster, i) => ({ cluster, i, distance: Math.abs((cluster[0] + cluster[1]) / 2 - centre) }))
+    .sort((a, b) => a.distance - b.distance || a.i - b.i)
+    .map((entry) => entry.cluster)
 }
 
 // Phase 1: the clusters of boxes over [t0, t1] on which the twin cannot exclude a

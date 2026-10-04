@@ -639,7 +639,7 @@ function chordHolds(c: Core, bands: BandState, a: number, b: number): boolean {
 //    samples cover plus spikeSlackPx (isFlat's spike test: an oscillation that the samples step over is
 //    in the enclosure and not in them);
 //  - one more sample, at BAND.probeAt of the way along (an irrational fraction, so that it is off any
-//    lattice the samples could be resonant with), is within gapPx of the polyline there. Samples that
+//    lattice the samples could be resonant with), is within BAND.probePx of the polyline there. Samples that
 //    step over an oscillation by a whole number of periods read as a slow wave with an enclosure to
 //    match, and the polyline is that wave: with the samples evenly spaced and without this sin(w x)
 //    near w = 3770 at 40 px per unit (the 16 samples 1/15 px apart), and 1759 at COARSE (8 samples),
@@ -659,7 +659,7 @@ function isDrawable(c: Core, bands: BandState, enclosureLo: number, enclosureHi:
   while (i < n - 2 && ts[i + 1] < at) i++
   const u = ts[i + 1] > ts[i] ? (at - ts[i]) / (ts[i + 1] - ts[i]) : 0
   evalAt(c, at)
-  return pxDistance(c, c.pt[0], c.pt[1], xs[i] + u * (xs[i + 1] - xs[i]), ys[i] + u * (ys[i + 1] - ys[i])) <= c.tune.gapPx
+  return pxDistance(c, c.pt[0], c.pt[1], xs[i] + u * (xs[i + 1] - xs[i]), ys[i] + u * (ys[i + 1] - ys[i])) <= BAND.probePx
 }
 
 function evalAt(c: Core, t: number): void {
