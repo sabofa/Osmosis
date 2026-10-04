@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { chainPoints } from '../../scene/chains'
 import type { SceneObject } from '../../scene/types'
+import { anchorSkip, firstBridge } from '../testing/dense'
 import { sampleCurve, type CurveSpec } from './curve'
-import { condition, expr, scopeOf } from './testkit'
+import { condition, expr, scopeOf, trueY } from './testkit'
 import { COARSE, FULL, LOCATE } from './tuning'
 
 const view = { bounds: { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }, widthPx: 800, heightPx: 800 }
@@ -755,5 +756,43 @@ describe('sampleCurve — a curve never blanks because the locator spent the bud
     expect(r.stats.points).toBeGreaterThan(500)
     expect(r.stats.intervals).toBeGreaterThan(50)
     expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'pole')).toHaveLength(10)
+  })
+})
+
+// The dense-sample check (testing/dense.ts) over a curve built by sampleCurve: the first segment that spans a jump of the true
+// curve, if any. y = f(x) only.
+function bridgeOf(body: string, v = view, quality: 'full' | 'coarse' = 'full', defs = '') {
+  const scope = scopeOf(defs)
+  const r = sampleCurve(explicit(body), v, scope, { ...opts, quality })
+  const f = trueY(body, scope)
+  const { bounds } = v
+  const sx = bounds.xMax - bounds.xMin
+  const sy = bounds.yMax - bounds.yMin
+  const clip = { xMin: bounds.xMin - FULL.overscan * sx, xMax: bounds.xMax + FULL.overscan * sx, yMin: bounds.yMin - FULL.overscan * sy, yMax: bounds.yMax + FULL.overscan * sy }
+  const bridge = firstBridge(curveOf(r.objects).chains, (t) => ({ x: t, y: f(t) }), { x: v.widthPx / sx, y: v.heightPx / sy }, anchorSkip(r.objects, 0, 'x', clip))
+  return { r, bridge }
+}
+
+// calc P2 final review, C1 (rule 1): the exemption for the last stretch to an anchor ran the jump test that follows only
+// the larger-gap half of an interval, at anchorShrink, and overrode the floor test that had already found a leaf that does
+// not close. On y = floor(1000 x) at COARSE it drew a 480 px chord from (-0.0122, -13) to the anchor of the jump at 0,
+// across twelve jumps of 40 px; across floor(N x) false strokes reached 600 px (FULL N >= 5000, COARSE N >= 500). Not one
+// segment of a staircase spans a jump now, whatever the density.
+describe('sampleCurve — a dense staircase is never bridged to the anchor of its jump at 0', () => {
+  it.each([500, 1000, 5000, 20000].flatMap((n) => (['full', 'coarse'] as const).map((q) => [n, q] as const)))('floor(%dx) at %s: no segment spans a jump', (n, q) => {
+    const { bridge } = bridgeOf(`floor(${n} x)`, view, q)
+    expect(bridge.size, `a segment from ${bridge.from} to ${bridge.to} spans a jump of ${bridge.size} px`).toBe(0)
+    expect(bridge.checked).toBeGreaterThanOrEqual(0)
+  })
+  it('and no stroke of one is longer than a tread, in view or out of it', () => {
+    for (const q of ['full', 'coarse'] as const) {
+      const r = sampleCurve(explicit('floor(1000 x)'), view, scopeOf(), { ...opts, quality: q })
+      let longest = 0
+      for (const c of curveOf(r.objects).chains) {
+        const p = chainPoints(c)
+        for (let i = 0; i + 1 < p.length; i++) longest = Math.max(longest, Math.hypot((p[i + 1].x - p[i].x) * 40, (p[i + 1].y - p[i].y) * 40))
+      }
+      expect(longest, q).toBeLessThan(1)
+    }
   })
 })

@@ -334,13 +334,17 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     // read (limits.ts: a hole's, a jump's side, a domain edge's), and the anchor is where the
     // curve is known to arrive. The twin cannot say so (next to a hole its enclosure is
     // unbounded; at an arc's tip it dips under the domain), so the stretch is certified the way
-    // any uncertified one is, by what the samples show, minus the two preconditions the jump test
-    // has for a stretch about which nothing is known (a gap under gapPx, a bounded enclosure): the
-    // ends are within flatPx, or the gaps close (anchorShrink, looser: it is a tip). A singularity
+    // any uncertified one is, by what the samples show, with the looser rate of a tip (anchorShrink):
+    // the ends are within flatPx, or the gaps close. Where the stretch is bounded and a pixel or more
+    // high it is asked every half, as the floor test above asks it (floorTest, anchored): following
+    // only the larger-gap half, as the jump test does, bridged a dense staircase, floor(1000 x), to the
+    // anchor of its jump at 0 in a 480 px chord across twelve jumps, and overrode a floor test that had
+    // found the leaf that does not close. Where the enclosure is unbounded (next to a hole the twin's
+    // is) or the gap is under a pixel, the jump test, at the same rate. A singularity
     // the walk never located (a built-in with no rule, a sum whose bound is a @param, a zero the
     // classifier called unknown) between the sample and the anchor opens the gap instead, and
     // then the stretch is lifted with its jump break like any other.
-    if ((ta === c.anchorLo || tb === c.anchorHi) && (pxDistance(c, xa, ya, xb, yb) <= c.tune.flatPx || gapCloses(c, ta, tb, xa, ya, xb, yb, c.tune.anchorShrink))) {
+    if ((ta === c.anchorLo || tb === c.anchorHi) && (pxDistance(c, xa, ya, xb, yb) <= c.tune.flatPx || (bounded && gap >= c.tune.gapPx ? floorTest(c, ta, tb, xa, ya, xb, yb, Number.POSITIVE_INFINITY, true) === null : gapCloses(c, ta, tb, xa, ya, xb, yb, c.tune.anchorShrink)))) {
       c.sink.segment(xa, ya, ta, xb, yb, tb)
       return
     }
@@ -373,20 +377,27 @@ interface FloorFailure {
 // (J + a) / (J + 2a) of its parent's for a jump of J px on a slope that climbs a px in the leaf: 0.55 is where a jump
 // of J > a / 4.5 stops being called steepness. A leaf that fails the closing test, or a midpoint that is not a
 // point, is never steepness.
-function floorTest(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, parentGap: number): FloorFailure | null {
+function floorTest(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, parentGap: number, anchored = false): FloorFailure | null {
   const tm = ta + (tb - ta) / 2
   if (!(tm > ta && tm < tb)) return { at: tm, steep: false }
   const gap = pxDistance(c, xa, ya, xb, yb)
-  if (gap < c.tune.gapPx) return gapCloses(c, ta, tb, xa, ya, xb, yb) ? null : { at: tm, steep: false }
+  const shrink = anchored ? c.tune.anchorShrink : c.tune.halvingShrink
+  if (gap < c.tune.gapPx) return gapCloses(c, ta, tb, xa, ya, xb, yb, shrink) ? null : { at: tm, steep: false }
   // (the widths are halved from the floor's, so a width is its target to rounding only)
-  if ((tb - ta) * c.fns.pxPerT <= CORE.subFloorPx * (1 + 1e-9)) return { at: tm, steep: gap <= c.tune.steepShrink * parentGap }
+  if ((tb - ta) * c.fns.pxPerT <= CORE.subFloorPx * (1 + 1e-9)) {
+    // The last stretch to an anchor is a tip, and a tip's leaf is still a pixel high at the depth limit (a fourth root's
+    // is: its gaps close by 2^-p a halving, and 1/1024 px of x is 11 px of (4 - x^2)^(1/4) at 40 px a unit): it
+    // passes if its gap is closing at the anchor's rate. A jump keeps its gap, so is never a leaf that passes.
+    if (anchored && gap <= shrink * parentGap) return null
+    return { at: tm, steep: gap <= c.tune.steepShrink * parentGap }
+  }
   evalAt(c, tm)
   const xm = c.pt[0]
   const ym = c.pt[1]
   if (!isFinite2(xm, ym)) return { at: tm, steep: false }
-  const left = floorTest(c, ta, tm, xa, ya, xm, ym, gap)
+  const left = floorTest(c, ta, tm, xa, ya, xm, ym, gap, anchored)
   if (left !== null) return left
-  return floorTest(c, tm, tb, xm, ym, xb, yb, gap)
+  return floorTest(c, tm, tb, xm, ym, xb, yb, gap, anchored)
 }
 
 // Which sides of the clip box a point is beyond, as bits: 1 left, 2 right, 4 below, 8 above (0: inside, or not finite).
