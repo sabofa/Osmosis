@@ -21,11 +21,13 @@
 
 **Geometry's sign-off:** 2026-10-04, on the plan at 4cf1f66, with 8 fixes. They are folded in here: the precedence sentence, no-theme defaults per medium, generated papers only with a theme, `@style-set` refuses out-of-range values, `renderFigure`'s optional trailing `theme`, the full role list including authors' colours, a 512 tile with browser compression, and `host.ts` kept out of the index. Geometry reviews the branch before merge.
 
+**Ben's corrections** (2026-10-04, relayed by geometry): there is no "no theme", so a missing theme is `defaultTheme(mode)`; `noThemeColours` is dropped and generated papers apply always; pins may move to improve realism, re-pinned with reasons and listed for geometry; clean stays byte-identical; the ink line takes no grain; chalk takes every role, authors' colours included.
+
 ## Global Constraints
 
 **Byte-identity and pins**
 - **Clean stays byte-identical:** `graph-engine/src/figure/cleanGolden.test.ts` passes untouched.
-- **The fill pins** at roughness 0 in `style/fills/fills.test.ts` and **the ink pins** in `style/lines/lines.test.ts` stay. Any task that would move a pin stops and reports to the controller, who asks geometry first.
+- **Pins may move to improve realism** (Ben, 2026-10-04: "if the agent wants to make your current code better or more realistic or change textures then allow it"). The fill pins in `style/fills/fills.test.ts`, the ink pins in `style/lines/lines.test.ts` and the preset goldens may be re-pinned in the same commit as an improvement, with the reason in the message. The report must list every moved pin, so geometry can see them at branch review. Two of Ben's own rulings still stand: **clean stays byte-identical**, and the ink line takes no grain.
 - **The ink line has no grain:** no speckle, pinholes or dry-brush (Ben, 2026-09-30). `lines/ink.ts` `texture()` stays null.
 
 **Compatibility**
@@ -36,6 +38,7 @@
 
 **Theme**
 - **Only `style/theme/adapter.ts` reads Osmosis's theme** (CSS colours via `Palette`). Nothing else reads theme tokens.
+- **There is no "no theme"** (Ben, 2026-10-04: "the fallback theme is the default theme, there is no such thing as no theme"). A caller that passes no theme (node tests, contact sheets, old callers) gets the **default Osmosis theme** for its mode: `defaultTheme(mode)` (Task 1). The default theme is a constant, so node output stays deterministic.
 - **Board colours (blackboard, greenboard, whiteboard) are identical in light and dark** for the same theme colours.
 
 **Engineering rules**
@@ -141,7 +144,10 @@ export interface ThemeInput {
 export function resolveTheme(source: ThemeSource): ThemeInput
 export function fromColours(source: ThemeSource): ThemeInput            // = resolveTheme; the labs' and tests' door
 export function fromOsmosisTheme(palette: Palette, mode: 'light' | 'dark', preset?: { id: string } | null): ThemeInput
+export function defaultTheme(mode: 'light' | 'dark'): ThemeInput   // the default Osmosis theme: the app's default light/dark tokens
 ```
+
+- **`defaultTheme`** reads `style/theme/defaults.ts`. It holds the app's default tokens (`DEFAULT_LIGHT_TOKENS` and `DEFAULT_DARK_TOKENS` in `web/src/lib/themeTokens.ts`) as constants, because the graph engine never imports from `web/`. A test reads `web/src/lib/themeTokens.ts` as text and checks the constants match, so the two can't drift. It is cached per mode.
 
 **Rules:**
 - **`fromOsmosisTheme` maps the palette.** `surface` = `palette.background`, `ink` = `axis`, `muted` = `muted`, `line` = `grid`, `lineStrong` = `gridStrong`, `accent` = `curve`, `good` = `segment`, `bad` = `point`. Hex numbers become `#rrggbb`. The style set for `preset.id` comes from `builtinStyles` (Task 4; until Task 4 lands, pass none).
@@ -232,7 +238,7 @@ export function defaultMediumSettings(name: MediumName): MediumSettings
 
 - **Board media ignore `theme.mode`.** Chalk and whiteboard colours are byte-equal across light and dark for the same theme colours.
 - **Every role gets a readable colour**, so B can retire `paperPalette`. That means everything a figure draws: lines, hidden and dashed lines, auxiliary lines, points, labels, measures, angle captions, the givens table, highlights and focus, region fills and shading, and authors' own colours.
-- **No-theme defaults** (geometry, fix 2). Each medium carries the exact colours today's presets hard-code, used when the pen has no `ThemeInput`: ink `#1f2a44` on `#fbf8f0`, graphite `#232327` on `#f6f3ec`, marker `#1b3f8f` on `#fdfdf8`. clean uses the palette as today. New media pick their own defaults. Expose them as `noThemeColours(name): { ink: Hex; paper: Hex } | null`.
+- **No `noThemeColours`** (Ben: there is no "no theme"). A medium is always given a `ThemeInput`, the default theme when the caller has none.
 
 **Tests:**
 - For 20 seeded random themes × 2 modes × all roles × 7 media: each output sits in its medium's L and C ranges (±0.005) and meets its contrast floor.
@@ -361,7 +367,7 @@ export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles>           // buil
 - `ColourSettings.medium: MediumName`, default `'clean'`. It is a new token: `style.colour.medium`, a choice of `MEDIUM_NAMES`, with directive `medium`.
 - `PRESET_NAMES` gains `colouredPencil`, `blackboard`, `greenboard` and `whiteboard`.
 - **`renderFigure(statements, config, palette, baseStyle?, theme?: ThemeInput)`.** The new optional trailing parameter is additive, so no caller migrates. Do not route the theme through `baseStyle`.
-- `styledPen(style, palette, theme?: ThemeInput)`: when `theme` is given and `style.colour.medium` is not `'clean'`, every role colour comes from `MEDIA[medium].colour(theme, role, settings)`, and the background comes from `surfaceColour(theme)`. When `theme` is absent, the medium's `noThemeColours` (Task 2) stand in for the theme, so the presets render exactly as today.
+- `styledPen(style, palette, theme?: ThemeInput)`: when `style.colour.medium` is not `'clean'`, every role colour comes from `MEDIA[medium].colour(theme, role, settings)`, and the background comes from `surfaceColour(theme)`. When `theme` is absent, use `defaultTheme(mode)`, where `mode` is dark when the palette's background is dark. clean keeps today's exact path.
 
 **Rules:**
 - **The new presets:**
@@ -374,13 +380,13 @@ export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles>           // buil
 | whiteboard | marker (the chisel outline arrives in B) | scribble (the fill-in arrives in B) | whiteboard | whiteboard | hand |
 
   The `ink`, `pencil` and `marker` presets keep every line, fill and lettering value. Their `colour.ink` and `paper.tint` become `'theme'`, and their medium is set (`ink`, `graphite`, `marker`), so the colours now follow the theme through the medium.
-- **When the pen has no `ThemeInput`** (node tests, old callers), it uses today's behaviour exactly. Without a theme, the existing presets' rendering is byte-identical to before.
-- **`paperPalette`'s light/dark fallback** is replaced by the medium's role colours only when a `ThemeInput` is present.
+- **With no theme passed**, the pen uses the default theme (Ben). The ink, pencil and marker presets therefore follow the default theme's colours in node output too. That moves their goldens: re-pin them in this commit as an intended change, and list them in the report.
+- **`paperPalette`'s light/dark fallback** is replaced by the medium's role colours, always, through the default theme when none is passed. clean is untouched.
 - **Aliases.** Old paper and preset names keep parsing. `directivesFor` and the refusal messages list the new names.
 
 **Tests:**
 - `cleanGolden` untouched and green. The fill and ink pins unchanged.
-- With no `ThemeInput`, `ink`, `pencil` and `marker` render byte-identically to before (a golden of the three presets × 3 examples, captured before the change in its own commit).
+- The ink, pencil and marker presets × 3 examples: capture a before-golden in its own commit. After the change, re-pin it as intended, and the report shows before/after colours for each. clean's `cleanGolden` stays untouched.
 - With a `ThemeInput`:
   - on a blackboard, every role colour (line, label, point, measure, auxiliary) is light (L ≥ 0.75) and meets ≥ 4.5:1 against the board;
   - light and dark modes give byte-equal SVG for blackboard, greenboard and whiteboard;
@@ -388,7 +394,7 @@ export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles>           // buil
 - Adding `colour.medium` (and Task 6's `paper.tile`) to TOKENS changes `directivesFor`'s output. Expect `presets.test.ts` and lab snapshots to move. Re-pin them in this commit, with the reason in the message.
 - Old names parse. An unknown preset's refusal lists `blackboard`.
 
-- [ ] Commit the pre-change golden first: `test(figure): pin ink/pencil/marker without a theme before media`.
+- [ ] Commit the pre-change golden first: `test(figure): pin ink/pencil/marker before media (to be re-pinned on purpose)`.
 - [ ] Then the tests (red), the implementation, tests, both tsc commands, the full suite and the contact sheet (`scripts/contact-sheet.ts`), which must run. Commit: `feat(style): coloured pencil, blackboard, greenboard and whiteboard presets; every role coloured by its medium`.
 
 ---
@@ -429,7 +435,7 @@ export function encodePng(width: number, height: number, rgba: Uint8ClampedArray
 - **Board tray dust** is not in the tile. It is a separate gradient in the SVG paper at the bottom of the figure's view box (`generated.ts`), seeded.
 - **Board papers never read `theme.mode`.**
 - **The SVG output is pure:** the same inputs give a byte-identical string. Every keyed tile sits over a flat rect in the paper or board colour, so node output is complete without the host.
-- **Generated papers apply only when a `ThemeInput` is present** (geometry, fix 3, option a). With no theme, the old names (`paper`, `rough-paper`, `ruled`, ...) keep today's SVG papers exactly, so Task 5's no-theme golden holds, and node output stays stable until the host wiring exists. With a theme, the old names resolve to the generated types. The new names (`kraft`, `blackboard`, ...) with no theme draw their flat rect only.
+- **Generated papers apply always** (Ben: there is no "no theme"; this reverses geometry's option a). Old names (`paper`, `rough-paper`, `ruled`, ...) resolve to the generated types, coloured by the passed theme or the default theme. In node output they are keyed patterns over the flat rect, so the output stays deterministic. The affected goldens are re-pinned in this commit as an intended change, and listed in the report.
 - **Tile size.** It defaults to **512** (range 256–1024), as a setting (`style.paper.tile`) added to `TOKENS` and the registry. A figure spans about 640 units, so smaller tiles repeat visibly in their low-frequency features: haze, ghosts, flecks. The pattern scales with the figure, so it zooms with the drawing. Check by eye for visible repeats in a headless shot at real zoom (Task 8).
 - **Encoding.** For an export, `inlinePaperTiles` compresses with `CompressionStream('deflate')` where the browser has it, with `png.ts`'s stored deflate as the fallback. A stored 512 tile is about 1.4 MB.
 
@@ -439,7 +445,7 @@ export function encodePng(width: number, height: number, rgba: Uint8ClampedArray
 - `generated.ts`: a pure, byte-stable SVG string with the right key. Old paper names resolve to the new types.
 - `png.ts`: `encodePng` output decodes. Verify with a tiny in-test decoder for stored blocks; the CRC and Adler checksums are correct.
 - `host.ts`: run under jsdom if the repo's vitest supports it (check `vitest.config`). Otherwise, unit-test its pure key-collection helper only, and verify by headless shot in Task 8. **`host.ts` is DOM code: keep it out of `style/index.ts`'s exports,** so node imports never pull it in.
-- With no `ThemeInput`, the figure SVG for every old paper name is byte-identical to before (the papers' existing tests, plus Task 5's golden).
+- Every old paper name resolves to its generated type, and parses as before. Old-name SVG changes are re-pinned on purpose and listed in the report. clean's paper stays byte-identical.
 
 - [ ] Write the tests (red), implement, then run tests, both tsc commands, the full suite and the contact sheet.
 - [ ] Commit: `feat(style): backgrounds — paper, kraft, notebook, graph, dotted and the three boards, from the seeded generator, referenced by key`.
