@@ -6,7 +6,7 @@ import { clampCamera, DEFAULT_LIMITS, type LimitsPolicy } from '../limits'
 import { ViewMotion } from '../motion'
 import { hitTest, PointerSelection, type HitItem } from '../pointing'
 import type { Camera, Rect, Size, Vec } from '../types'
-import { keyReachesView, pointerKindOf, swallowsKey, toleranceInContent } from './domInput'
+import { keyReachesView, pointerKindOf, publishOnTrack, swallowsKey, toleranceInContent, type Tracking } from './domInput'
 import { resetTarget, sameView, viewKey } from './startView'
 import './view2d.css'
 
@@ -71,7 +71,13 @@ class Controller {
   private raf = 0
   private lastDrawn: Camera | null = null
   private lastAtStart = true
+  // The pointer as last published, to publish only a change.
   private lastPointer: Vec | null = null
+  // The pointer as last seen, kept whether or not anything is listening, so a
+  // readout that comes on has it at once.
+  private seenPointer: Vec | null = null
+  // The readouts being listened to, as of the last render.
+  private tracked: Tracking = { camera: false, pointer: false }
   private teardown: (() => void) | null = null
   private readonly read: () => View2dOptions
   private readonly publish: Publish
@@ -121,11 +127,18 @@ class Controller {
     this.setPointer(null)
   }
 
-  // Hand the readout the camera as it is now: called when it starts listening,
-  // since nothing was published while it was not.
-  publishCamera(): void {
-    const m = this.motion
-    if (m && this.lastDrawn) this.publish.camera(m.current)
+  // A readout started or stopped listening. Nothing was published while it was
+  // not, so one that has just started is handed what the view holds now: the
+  // camera as last drawn and the pointer as last seen, with no frame or move
+  // to wait for. Stored in plain fields, so untracked frames cost nothing.
+  trackingChanged(now: Tracking): void {
+    const publication = publishOnTrack(this.tracked, now, { camera: this.lastDrawn, pointer: this.seenPointer })
+    this.tracked = now
+    if (publication.camera) this.publish.camera(publication.camera)
+    if (publication.pointer !== undefined) {
+      this.lastPointer = publication.pointer
+      this.publish.pointer(publication.pointer)
+    }
   }
 
   reset(): void {
@@ -235,15 +248,17 @@ class Controller {
     el.addEventListener('selectstart', onBlock)
     el.addEventListener('dragstart', onBlock)
 
-    const measure = (size: Size) => {
+    // `inFrame`: called from the observer, not from a ref callback, so the
+    // readout may be rendered at once (see draw).
+    const measure = (size: Size, inFrame = false) => {
       this.screen = size
       this.motion?.setScreen(size)
-      this.draw()
+      this.draw(inFrame)
     }
     measure({ width: el.clientWidth, height: el.clientHeight })
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((entries) => {
       const entry = entries[entries.length - 1]
-      if (entry) measure({ width: entry.contentRect.width, height: entry.contentRect.height })
+      if (entry) measure({ width: entry.contentRect.width, height: entry.contentRect.height }, true)
     })
     observer?.observe(el)
 
@@ -356,6 +371,7 @@ class Controller {
   }
 
   private setPointer(point: Vec | null): void {
+    this.seenPointer = point
     if (!this.read().trackPointer && point !== null) return
     const last = this.lastPointer
     if (last === point || (last && point && last.x === point.x && last.y === point.y)) return
@@ -383,7 +399,7 @@ class Controller {
     const m = this.motion
     if (!m) return
     const moving = m.step(performance.now())
-    this.draw()
+    this.draw(true)
     if (moving) this.kick()
   }
 
@@ -406,7 +422,7 @@ class Controller {
     const ppu = pxPerUnit(frame, camera, this.screen)
     onApply(camera, visibleRect(frame, camera, this.screen), ppu)
     if (this.read().trackCamera) {
-      // From a frame, the readout is rendered now, in the frame that drew the
+      // From a frame (or the size observer), the readout is rendered now, in the frame that drew the
       // camera: a state update from a rAF callback is otherwise left to
       // React's scheduler, which can run after the paint (and, under a
       // headless screenshot, never before it), so the readout would show the
@@ -443,9 +459,11 @@ export function useView2d(options: View2dOptions): View2dHandle {
   useLayoutEffect(() => controller.clearPointing(), [controller, options.items])
 
   const trackCamera = options.trackCamera === true
-  useLayoutEffect(() => {
-    if (trackCamera) controller.publishCamera()
-  }, [controller, trackCamera])
+  const trackPointer = options.trackPointer === true
+  useLayoutEffect(
+    () => controller.trackingChanged({ camera: trackCamera, pointer: trackPointer }),
+    [controller, trackCamera, trackPointer],
+  )
 
   const surfaceRef = useCallback((el: HTMLElement | null) => controller.attach(el), [controller])
   const reset = useCallback(() => controller.reset(), [controller])

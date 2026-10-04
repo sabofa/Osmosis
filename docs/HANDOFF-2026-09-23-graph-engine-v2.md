@@ -16,7 +16,7 @@ agents" below). Working tree clean. **1864 tests passing**,
 *2026-09-30: the visual pass, part 1 (figure styles and the style lab) landed
 on this branch — see "Figure styles: `style/` and the pen" below; 2261 tests.*
 
-*2026-10-04: 2D handling (`view2d/`) landed on this branch — figures pan, zoom, point and focus; see "2D handling (view2d)" below; 2676 tests.*
+*2026-10-04: 2D handling (`view2d/`) landed on this branch — figures pan, zoom, point and focus; see "2D handling (view2d)" below; 2681 tests.*
 
 *Last updated 2026-09-27, after geometry phase 12 (shading and shaded
 regions — "find the area of the shaded region"). Phase 11 completed the
@@ -1102,6 +1102,9 @@ FigureView.tsx       the adapter: renderFigure's frame + items + useView2d + the
   that drew it: a state update from a rAF callback is left to React's
   scheduler, which can run after the paint (under a headless screenshot, never
   before it), leaving the readout one camera behind the drawing.
+  The view keeps the latest camera and pointer in plain fields even while
+  untracked, and `publishOnTrack` hands them over the moment the tool opens, so
+  a tool opened after the view settled is right at once, not after the next move.
 - **The coordinate tool sits bottom-left** (panel opening upward), top-right
   when `@givens` is `bottom-left` or `left` (`toolCorner`); the top-left is
   the givens table's default corner and the bottom-right is the reset button's.
@@ -1287,7 +1290,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2676 tests (after 2D handling), node-only, no DOM
+npm run test --workspace=graph-engine          # 2681 tests (after 2D handling), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)

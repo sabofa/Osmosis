@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HOVER_TOLERANCE, TOUCH_TOLERANCE } from '../feel'
-import { keyReachesView, pointerKindOf, swallowsKey, toleranceInContent } from './domInput'
+import { keyReachesView, pointerKindOf, publishOnTrack, swallowsKey, toleranceInContent } from './domInput'
 
 const key = (
   key: string,
@@ -87,5 +87,37 @@ describe('swallowsKey', () => {
 
   it('leaves c to the browser when nothing listens for the coordinate toggle', () => {
     expect(swallowsKey([{ kind: 'toggleCoordinates' }], false)).toBe(false)
+  })
+})
+
+describe('publishOnTrack', () => {
+  const OFF = { camera: false, pointer: false }
+  const ON = { camera: true, pointer: true }
+  const settled = { cx: 30, cy: -22, zoom: 2.46 }
+  const seen = { x: 5, y: 6 }
+
+  it('hands a readout that has just come on the camera and pointer the view holds, with no frame to wait for', () => {
+    expect(publishOnTrack(OFF, ON, { camera: settled, pointer: seen })).toEqual({ camera: settled, pointer: seen })
+  })
+
+  it('publishes a pointer that is not known as null, so a stale position is cleared', () => {
+    expect(publishOnTrack(OFF, ON, { camera: settled, pointer: null })).toEqual({ camera: settled, pointer: null })
+  })
+
+  it('does not invent a camera before the first draw', () => {
+    expect(publishOnTrack(OFF, ON, { camera: null, pointer: seen })).toEqual({ pointer: seen })
+  })
+
+  it('handles each readout on its own', () => {
+    expect(publishOnTrack(OFF, { camera: true, pointer: false }, { camera: settled, pointer: seen })).toEqual({ camera: settled })
+    expect(publishOnTrack(OFF, { camera: false, pointer: true }, { camera: settled, pointer: seen })).toEqual({ pointer: seen })
+    expect(publishOnTrack({ camera: true, pointer: false }, ON, { camera: settled, pointer: seen })).toEqual({ pointer: seen })
+  })
+
+  it('publishes nothing when a readout stays on, stays off or goes off', () => {
+    const latest = { camera: settled, pointer: seen }
+    expect(publishOnTrack(ON, ON, latest)).toEqual({})
+    expect(publishOnTrack(OFF, OFF, latest)).toEqual({})
+    expect(publishOnTrack(ON, OFF, latest)).toEqual({})
   })
 })
