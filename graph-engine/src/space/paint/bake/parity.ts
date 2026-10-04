@@ -15,14 +15,17 @@
 //   underpaint      the mean OKLab distance between the model's underpainting and the baked surfaces' colours rasterised into the same G-buffer's pixels,
 //                   over the pixels both cover with the same mark.
 
+import type { SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
 import { resolvePaintParams } from '../params'
 import { linearToOklab, lchToLab } from '../model/colour'
 import { buildUnderpaintField, underpaintImage } from '../model/underpaint'
+import { paintFrame } from '../model/index'
+import { buildParticles } from '../model/particles'
 import { flatColours } from '../model/testing'
 import { CANVAS, made, SCENE } from '../model/valueFinalFixture'
 import { gIndex, makeFrameCtx, project, pxPerUnit } from '../model/view'
-import { ROLES, type GBuffer, type Oklab, type PaintView, type Role, type StrokeBatch } from '../types'
+import { ROLES, type GBuffer, type Oklab, type PaintView, type ParticleSet, type Role, type SceneColours, type StrokeBatch } from '../types'
 import { bakePainting } from './index'
 import { frameFromBakeWith, FrameScratch } from './frame'
 import { NO_PARTICLE } from './draft'
@@ -175,6 +178,53 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
   const baked = bakePainting(SCENE, set, colours, view.lightDir, params, authored)
   const scr = new FrameScratch()
   const frame = frameFromBakeWith(scr, baked, SCENE, view, params, g)
+  // the model's underpainting
+  const under = underpaintImage(buildUnderpaintField(an, g), params, an.env)
+  return compareFrames({ scene: SCENE, set, baked, frame, scr, model, modelSeed: (i) => an.drafts[i].seed, view, g, params, under })
+}
+
+// What the two frames of a scene are compared from.
+interface Compared {
+  scene: SpaceScene
+  set: ParticleSet
+  baked: BakedPainting
+  frame: StrokeBatch
+  scr: FrameScratch
+  model: StrokeBatch
+  // The seed of the particle that made the model's stroke i.
+  modelSeed: (i: number) => number
+  view: PaintView
+  g: GBuffer
+  params: PaintParams
+  // The model's underpainting.
+  under: Float32Array
+}
+
+// The parity of any scene: its particles, the model's frame (paintFrame, whole: the veils and the open sheets too) and the baked painting's, from the
+// same view and G-buffer. `zoom` is the CSS px a world unit is across at the authored view.
+export interface SceneParityOptions {
+  scene: SpaceScene
+  colours: SceneColours
+  view: PaintView
+  gbuffer: GBuffer
+  zoom: number
+  params?: PaintParams
+}
+
+export function parityOfScene(o: SceneParityOptions): ParityResult {
+  const params = o.params ?? resolvePaintParams({ seed: 1 })
+  const view = o.view
+  const set = buildParticles(o.scene, o.colours, params)
+  const authored: AuthoredFraming = { eye: [...view.eye], viewDir: [...view.viewDir], ortho: view.viewProj[3] === 0 && view.viewProj[7] === 0 && view.viewProj[11] === 0, worldPerPx: 1 / o.zoom }
+  const baked = bakePainting(o.scene, set, o.colours, view.lightDir, params, authored)
+  const scr = new FrameScratch()
+  const frame = frameFromBakeWith(scr, baked, o.scene, view, params, o.gbuffer)
+  const pf = paintFrame(o.scene, set, view, o.gbuffer, params)
+  return compareFrames({ scene: o.scene, set, baked, frame, scr, model: pf.strokes, modelSeed: (i) => pf.strokes.seed[i], view, g: o.gbuffer, params, under: pf.underpaint })
+}
+
+function compareFrames(c: Compared): ParityResult {
+  const { scene, set, baked, frame, scr, model, view, g, params, under } = c
 
   // ---- the strokes ----
   const bySeed = new Map<number, number>()
@@ -188,8 +238,9 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
   for (let i = 0; i < model.count; i++) {
     const role = ROLES[model.role[i]]
     if (!SURFACE_ROLES.includes(role)) continue
-    const p = bySeed.get(an.drafts[i].seed)
-    if (p === undefined || dup.has(an.drafts[i].seed)) continue
+    const seed = c.modelSeed(i)
+    const p = bySeed.get(seed)
+    if (p === undefined || dup.has(seed)) continue
     modelPairs.set(key(p, model.role[i]), i)
   }
   const bakedPairs = new Map<number, number>()
@@ -249,7 +300,7 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
   // the baked surface strokes the G-buffer shows: its mark at the stroke's place, within the model's depth tolerance (view.ts visibleParticles)
   let visible = 0
   {
-    const fc = makeFrameCtx(SCENE, view, g, params)
+    const fc = makeFrameCtx(scene, view, g, params)
     const out = [0, 0, 0]
     for (let o = 0; o < frame.count; o++) {
       const i = scr.source[o]
@@ -272,7 +323,6 @@ export function parityAtAuthored(opts: ParityOptions = {}): ParityResult {
   }
 
   // ---- the underpainting ----
-  const under = underpaintImage(buildUnderpaintField(an, g), params, an.env)
   const raster = rasteriseUnder(baked, view, g.width, g.height, g.scale)
   let px = 0
   let usum = 0
