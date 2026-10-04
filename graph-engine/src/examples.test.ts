@@ -177,6 +177,54 @@ describe('the phase 9 sphere examples', () => {
   })
 })
 
+// The adaptive-sampler examples (calc P2) each exist to show one thing, so each is checked to show it, in the view
+// it asks for: a button whose picture has lost its hole, its open end or its band is a defect nobody would see.
+describe('the adaptive sampler examples', () => {
+  const sceneOf = (label: string) => {
+    const parsed = parseSpec(EXAMPLES.find((e) => e.label === label)!.spec)
+    return buildScene(parsed.statements, parsed.config.bounds ?? BOUNDS, parsed.config, undefined, parsed.statementLines)
+  }
+  const marksOf = (scene: ReturnType<typeof sceneOf>) => scene.objects.flatMap((o) => (o.kind === 'mark' ? [o] : []))
+
+  it('"Holes, jumps and poles" has the open hole at (1, 2), the steps of floor with open and filled ends, and a guide at each pole', () => {
+    const scene = sceneOf('Holes, jumps and poles')
+    expect(scene.errors).toEqual([])
+    const marks = marksOf(scene)
+    expect(marks.some((m) => m.role === 'hole' && m.fill === 'open' && Math.abs(m.at.x - 1) < 1e-9 && Math.abs(m.at.y - 2) < 1e-6)).toBe(true)
+    expect(marks.some((m) => m.role === 'endpoint' && m.fill === 'open')).toBe(true)
+    expect(marks.some((m) => m.role === 'endpoint' && m.fill === 'filled')).toBe(true)
+    // tan x has poles at pi/2 and 3 pi/2 on each side of 0 in the view (and more in the overscan)
+    const guides = scene.objects.filter((o) => o.kind === 'line' && o.role === 'asymptote')
+    expect(guides.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('"Piecewise ends" leaves the braces open at (0, 0) and filled at (0, 1), and 2 if 0 < x <= 3 open at 0 and filled at 3', () => {
+    const scene = sceneOf('Piecewise ends')
+    expect(scene.errors).toEqual([])
+    const ends = marksOf(scene)
+      .filter((m) => m.role === 'endpoint')
+      .map((m) => `${Math.round(m.at.x)},${Math.round(m.at.y)} ${m.fill}`)
+      .sort()
+    expect(ends).toEqual(['0,0 open', '0,1 filled', '0,2 open', '3,2 filled'])
+  })
+
+  it('"Faster than a pixel" draws sin(1/x) near 0 as a band', () => {
+    const scene = sceneOf('Faster than a pixel')
+    expect(scene.errors).toEqual([])
+    expect(scene.objects.some((o) => o.kind === 'band')).toBe(true)
+  })
+
+  it('"A polar pole" breaks r = 1/cos(theta) at pi/2 and 3 pi/2, and draws the line x = 1 between', () => {
+    const scene = sceneOf('A polar pole')
+    expect(scene.errors).toEqual([])
+    const curve = scene.objects.find((o) => o.kind === 'curve')
+    if (curve?.kind !== 'curve') throw new Error('no curve')
+    expect(curve.breaks.filter((b) => b.kind === 'pole').map((b) => b.at)).toEqual([expect.closeTo(Math.PI / 2, 9), expect.closeTo((3 * Math.PI) / 2, 9)])
+    // x = r cos(theta) = 1 on every vertex: a vertical line, with no chord from one pole's side to the other
+    for (const chain of curve.chains) for (let i = 0; i < chain.param.length; i++) expect(chain.xy[2 * i]).toBeCloseTo(1, 9)
+  })
+})
+
 // The Styles group exists to show the looks; an example there that drew
 // clean would be a button that shows nothing it promises.
 describe('the Styles examples', () => {

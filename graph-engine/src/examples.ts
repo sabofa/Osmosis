@@ -1383,4 +1383,33 @@ y = |x - 1| - 2 color: gray`,
 y = g(x, 2)
 y = g(x, 0.5) color: blue`,
   },
+  // Calculus (track 4, calc P2): the adaptive curve sampler. Each of these is a case in
+  // plot/testing/corpus.ts, which pins what it draws.
+  {
+    label: 'Holes, jumps and poles',
+    group: 'Calculus',
+    spec: `@bounds: -5, 5, -5, 5
+y = (x^2-1)/(x-1)
+y = floor(x) color: blue
+y = tan(x) color: red`,
+  },
+  {
+    label: 'Piecewise ends',
+    group: 'Calculus',
+    spec: `@bounds: -3, 5, -2, 6
+y = {x < 0: x^2, x + 1}
+y = 2 if 0 < x <= 3 color: green`,
+  },
+  {
+    label: 'Faster than a pixel',
+    group: 'Calculus',
+    spec: `@bounds: -1, 1, -1.5, 1.5
+y = sin(1/x)`,
+  },
+  {
+    label: 'A polar pole',
+    group: 'Calculus',
+    spec: `@bounds: -3, 5, -4, 4
+r = 1/cos(theta)`,
+  },
 ]

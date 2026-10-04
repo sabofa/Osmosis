@@ -197,6 +197,49 @@ forms above are stored as calls to them (`__piecewise`, `__lt`, `__and`,
 `__factorial`, `__prime`, `__sum`, `__prod`, `__integral` and the like) so that
 no new expression node was needed; do not define or call one yourself.
 
+## How curves are drawn (calc P2)
+
+Explicit (`y = f(x)`, `x = f(y)`), polar and parametric curves are drawn by an
+adaptive sampler that works in screen pixels, and it connects two points only
+when it can show the curve is there between them:
+
+- **Certified joins.** A stretch is joined when interval arithmetic proves the
+  curve defined and continuous across it, or, where it cannot, when the gap
+  between the samples is under a pixel and closes as the stretch is halved.
+  Anything else is a break, never a chord: `tan(x)` and `1/(x - 1)` do not cross
+  their poles, and `floor(x)` has a break at every integer. Steepness is not a
+  reason to break (`y = 1000x` draws); a smooth curve steeper than about 1000:1
+  on screen cannot be certified and is not drawn, and says so (below).
+- **Holes** are open circles. Where the curve has a limit and no value, the
+  curve runs through and an open circle marks the spot: `(x^2 - 1)/(x - 1)` at
+  1, `sin(x)/x` at 0. If the curve takes some other value there
+  (`{x != 1: x, 5}`), that point is drawn as a filled dot as well.
+- **Jumps and ends** are open or filled as the condition says. At a jump (a
+  seam of the braces, the ends of an `if` range, `floor`) each side ends in a
+  circle: filled where the curve takes the value there, open where it does not,
+  decided by the operator (`<` and `>` leave the boundary out, `<=` and `>=`
+  include it), even where the boundary is irrational (`{x^2 < 2: 0, 1}`).
+  `{x < 0: x^2, x + 1}` is open at (0, 0) and filled at (0, 1);
+  `y = 2 if 0 < x <= 3` is open at 0 and filled at 3. A natural edge of a
+  domain (`ln(x)`, `sqrt(x)`) is run to, and not marked.
+- **Asymptote guides.** At a pole of `y = f(x)` the curve breaks and, with
+  `@asymptotes` on (the default), a dashed vertical line is drawn through it
+  (a horizontal one for `x = f(y)`). Polar and parametric poles break the
+  curve and draw no guide yet. `r = 1/cos(theta)` is a vertical line with no
+  chord across it.
+- **Bands.** Where a curve turns round more than once inside a pixel
+  (`sin(1/x)` near 0, `sin(500x)`), a polyline would be an aliased zig-zag that
+  changes with every zoom, so the extent the curve sweeps is drawn instead, as a
+  pale filled band.
+- **Notes.** A curve is drawn with a fixed budget of evaluations. One that
+  needs more says so on its line and is drawn from what the sampler had:
+  `drawn coarsely: ...` when something drew, `not drawn: ...` when nothing
+  could be (the sampler cannot certify an integral, so a capped one has
+  nothing to keep). A smooth stretch too steep to certify says `too steep to
+  draw here: ...`. While the view is being dragged the curves are sampled more
+  coarsely (and the `drawn coarsely` note waits for the settled view), and they
+  settle to full detail when the gesture stops.
+
 ## Statement catalog
 
 Every entry is a full line (or, for parametric forms, the shape before the
@@ -237,7 +280,9 @@ x = y^2 if y > 0
 ```
 r = <expr(theta)> [for theta in [a, b]]
 ```
-Polar curve. `theta` defaults to `[0, 2*pi]` when the `for` clause is omitted.
+Polar curve. When the `for` clause is omitted, `theta` runs over a full turn in
+the current angle unit: `[0, 2*pi]`, or `[0, 360]` under `@angle: degrees` (where
+`theta` is in degrees, as it is inside `sin` and `cos`).
 ```
 r = 1 + cos(theta)
 r = theta for theta in [0, 4*pi]
@@ -776,7 +821,7 @@ different keys; for a repeated key, the last one wins.
 | `@labels` | `all`\|`coarse`\|`none` | `all` | tick-label density, independent of `@axes` — `coarse` labels only the major (every-5th) gridline, `none` gives a numberless graph with the axes and grid still drawn |
 | `@label-every` | positive integer | `1` | label every nth gridline; overrides `@labels: coarse`'s implicit every-5th when set |
 | `@step-mode` | `nice`\|`geometric`\|`fixed` | `nice` | how a fixed `@xstep`/`@ystep` rescales when the view is zoomed outside its 3-14 division comfort band — see mistake 5 below |
-| `@asymptotes` | `on`\|`off` | `on` | dashed guide at a detected vertical asymptote (curve-splitting there always happens; this only toggles the guide line itself) |
+| `@asymptotes` | `on`\|`off` | `on` | dashed guide at a detected pole of `y = f(x)` (vertical) or `x = f(y)` (horizontal) — curve-splitting there always happens; this only toggles the guide line itself (see "How curves are drawn") |
 | `@formulas` | `on`\|`off` | `off` | show a `table:` generator's formula alongside its table |
 | `@givens` | `top-left`\|`top-right`\|`bottom-left`\|`bottom-right`\|`left`\|`right` | `top-left` | which corner or side of the figure the givens table sits on — always outside the drawing |
 | `@givens-title` | text | none | a heading above the givens table's sections, e.g. `Problem 14` |

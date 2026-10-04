@@ -75,6 +75,10 @@ out of `buildConstructions` with line 0; `buildScene` maps it to its statement's
 line by order (the failed constructions are the ones with no
 `objectsByStatement` entry), and keeps line 0 if the counts ever disagree.
 
+## What P2 shipped (the adaptive curve sampler)
+
+P2 replaced the 400-uniform-sample curve path with an adaptive sampler in `graph-engine/src/plot/sample/`, wired into `scene/buildScene.ts` (`buildScene(statements, bounds, config, resolution?, lines?, { widthPx, heightPx, quality, budget? })`): it works in screen pixels, `quality` is `'coarse'` while a gesture runs and `'full'` at settle, and `Scene.stats` counts the evaluations. Nothing is connected unless certified, by the interval twin or the pixel-scale jump test; the structure walk (`structure.ts`, `locate.ts`, `limits.ts`) finds and types poles, jumps, holes and edges; `band.ts` draws oscillation faster than a pixel as the extent it sweeps; the scene contract (`scene/types.ts`) carries chains with their parameters, typed breaks, `mark`s (hole, endpoint, value; open or filled by the condition's operator, irrational seams included), `band`s and asymptote `line`s, and `render/renderItems.ts` draws them. Settled rulings: a capped curve says `drawn coarsely:` (something drew) or `not drawn:` (nothing did), a depth-limited steep stretch says `too steep to draw here:`, and polar's default range is a full turn in the current angle unit. The acceptance test is the torture corpus (`plot/testing/corpus.ts`: 40 cases with pinned evaluation ceilings, run by `corpus.test.ts` in about 6 s; every later phase adds its cases there), and it is seen headlessly with `npx vite-node graph-engine/scripts/calc-contact-sheet.ts <out dir>` (SVG pages from `plot/testing/svgScene.ts`, screenshotted with headless Edge as that script's header says, never in the browser pane). Four known limits are pinned as cases whose expectations encode today's behaviour, each with its reason in the case: an uncertified (UNKNOWN-twin) curve's dip into the view about a pixel wide can be culled off screen (`farOff`); `gamma` left of about -11 reads its weak poles as holes; `x + 0.1 sin(500x)` at COARSE draws as a line; `(4 - x^2)^(1/4)` stops a few px short of its tips. The corpus also made one tuning change: the spike test is now asked only `spikeDepth` (3) halvings below the start grid (`tuning.ts`, `adaptive.ts`), because a form the twin cannot enclose tightly (`exp(x^2) - exp(x^2) + x`) was refined to the floor and capped the FULL budget (39036 points, 30133 intervals, "drawn coarsely"), and is now 25417 and 8933 with no note. **Found and not fixed:** a cancelling form such as `(x + 1)^2 - x^2 - 2x` has its rounding noise (about 1e-14) read as an oscillation, so about 92 % of the line y = 1 is drawn as bands 1e-12 px tall, which the viewer fills at 0.18 and so shows as nothing; a band shorter than the flat tolerance (a quarter of a pixel) is noise and should be drawn as its samples. The suite is 6754 tests, green, with both typechecks, lint and the space sweep (`identical 49; differ 0`) clean.
+
 ## Coordination state
 
 **With space** (the session that owns `graph-engine/src/space/`, "Calculus 3D
@@ -164,7 +168,7 @@ pass part 2 are pending; this track uses them rather than inventing its own.
    consumed only from P2 on.
 2. **P2 — the adaptive curve sampler,** structural singularities, bands and the
    new curve marks, with the renderer adapted; it replaces the window-relative
-   jump rule in `sampleExplicit`.
+   jump rule in `sampleExplicit`. (Built: see "What P2 shipped".)
 3. Then P3 (implicit and region quadtree), P4 (frame), P5 (features, hover and
    `@param` in 2D, which today reads as a constant with no slider), and the
    vocabulary V1–V6.
