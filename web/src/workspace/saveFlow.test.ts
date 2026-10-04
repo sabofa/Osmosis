@@ -3,29 +3,29 @@ import { draftFor, keepDraft, mergeAppended, tryMerge, tryOverwrite, tryReload, 
 import { WsError } from './wsApi'
 
 // An API double that records what it was asked, in order.
-function fakeApi(opts: { current?: number; currentBody?: string; onSave?: (base: number) => { revision: number } | Error; readFails?: boolean } = {}) {
+function fakeApi(opts: { current?: number; currentBody?: string; onSave?: (base: number) => { version: number } | Error; readFails?: boolean } = {}) {
   const calls: string[] = []
   const api: SaveApi = {
     async save(nodeId, body, base) {
       calls.push(`save ${nodeId} ${JSON.stringify(body)} base=${base}`)
-      const out = opts.onSave ? opts.onSave(base) : { revision: base + 1 }
+      const out = opts.onSave ? opts.onSave(base) : { version: base + 1 }
       if (out instanceof Error) throw out
       return out
     },
     async read(nodeId) {
       calls.push(`read ${nodeId}`)
       if (opts.readFails) throw new Error('offline')
-      return { body: opts.currentBody ?? 'theirs', revision: opts.current ?? 9 }
+      return { body: opts.currentBody ?? 'theirs', version: opts.current ?? 9 }
     },
   }
   return { api, calls }
 }
-const stale = () => new WsError(409, 'stale_revision', 'moved on', { current_revision: 9 })
+const stale = () => new WsError(409, 'stale_version', 'moved on', { current_version: 9 })
 
-describe('trySave: a save always names the revision it started from', () => {
-  it('saves against the given base and reports the new revision', async () => {
+describe('trySave: a save always names the version it started from', () => {
+  it('saves against the given base and reports the new version', async () => {
     const { api, calls } = fakeApi()
-    expect(await trySave(api, 'n1', 'mine', 3)).toEqual({ kind: 'saved', revision: 4 })
+    expect(await trySave(api, 'n1', 'mine', 3)).toEqual({ kind: 'saved', version: 4 })
     expect(calls).toEqual(['save n1 "mine" base=3'])
   })
   it('a 409 is a conflict, not a failure, and nothing is retried', async () => {
@@ -34,15 +34,15 @@ describe('trySave: a save always names the revision it started from', () => {
     expect(calls).toHaveLength(1)
   })
   it('any other error is a failure carrying its message', async () => {
-    const { api } = fakeApi({ onSave: () => new WsError(400, 'trashed', 'It is in the trash.') })
-    expect(await trySave(api, 'n1', 'mine', 3)).toEqual({ kind: 'failed', message: 'It is in the trash.' })
+    const { api } = fakeApi({ onSave: () => new WsError(400, 'archived', 'It is archived.') })
+    expect(await trySave(api, 'n1', 'mine', 3)).toEqual({ kind: 'failed', message: 'It is archived.' })
   })
 })
 
 describe('tryOverwrite: read where the file is now, then save on top of that', () => {
-  it('saves with the revision it just read, never the stale one, and in that order', async () => {
+  it('saves with the version it just read, never the stale one, and in that order', async () => {
     const { api, calls } = fakeApi({ current: 9 })
-    expect(await tryOverwrite(api, 'n1', 'mine')).toEqual({ kind: 'saved', revision: 10 })
+    expect(await tryOverwrite(api, 'n1', 'mine')).toEqual({ kind: 'saved', version: 10 })
     expect(calls).toEqual(['read n1', 'save n1 "mine" base=9'])
   })
   it('a second 409 (someone wrote in between) is a conflict again, not a blind retry', async () => {
@@ -58,11 +58,11 @@ describe('tryOverwrite: read where the file is now, then save on top of that', (
 })
 
 describe('tryReload: take the file as it is now', () => {
-  it('returns its body and revision, an empty body as text', async () => {
+  it('returns its body and version, an empty body as text', async () => {
     const { api } = fakeApi({ current: 5 })
-    expect(await tryReload(api, 'n1')).toEqual({ kind: 'loaded', body: 'theirs', revision: 5 })
-    const nullBody: SaveApi = { ...api, read: async () => ({ body: null, revision: 2 }) }
-    expect(await tryReload(nullBody, 'n1')).toEqual({ kind: 'loaded', body: '', revision: 2 })
+    expect(await tryReload(api, 'n1')).toEqual({ kind: 'loaded', body: 'theirs', version: 5 })
+    const nullBody: SaveApi = { ...api, read: async () => ({ body: null, version: 2 }) }
+    expect(await tryReload(nullBody, 'n1')).toEqual({ kind: 'loaded', body: '', version: 2 })
   })
   it('a failed read is a failure and changes nothing', async () => {
     const { api } = fakeApi({ readFails: true })
@@ -81,7 +81,7 @@ describe('the drafts that wait for a file to be opened again', () => {
     expect(draftFor('d2')).toEqual({ text: 'other', base: 7, baseBody: 'two' })
     keepDraft('d2', null)
   })
-  it('keeps the body the draft started from beside its revision, which is what a merge needs', () => {
+  it('keeps the body the draft started from beside its version, which is what a merge needs', () => {
     keepDraft('d3', { text: 'edited', base: 4, baseBody: 'as opened' })
     expect(draftFor('d3')?.baseBody).toBe('as opened')
     keepDraft('d3', null)
@@ -142,9 +142,9 @@ describe('a 409 with the base body known offers the merge only when it is safe',
 })
 
 describe('tryMerge: draft plus their additions, saved against where the file is now', () => {
-  it('saves the merged text on the revision it just read, and says what the new body is', async () => {
+  it('saves the merged text on the version it just read, and says what the new body is', async () => {
     const { api, calls } = fakeApi({ current: 9, currentBody: 'base\n\ntutor line' })
-    expect(await tryMerge(api, 'n1', 'base, mine', 'base')).toEqual({ kind: 'saved', revision: 10, body: 'base, mine\n\ntutor line' })
+    expect(await tryMerge(api, 'n1', 'base, mine', 'base')).toEqual({ kind: 'saved', version: 10, body: 'base, mine\n\ntutor line' })
     expect(calls).toEqual(['read n1', 'save n1 "base, mine\\n\\ntutor line" base=9'])
   })
   it('does not save when the file changed some other way since the offer', async () => {
@@ -161,7 +161,7 @@ describe('tryMerge: draft plus their additions, saved against where the file is 
     const down = fakeApi({ readFails: true })
     expect(await tryMerge(down.api, 'n1', 'mine', 'base')).toEqual({ kind: 'failed', message: 'offline' })
     expect(down.calls).toEqual(['read n1'])
-    const refused = fakeApi({ currentBody: 'base more', onSave: () => new WsError(400, 'trashed', 'It is in the trash.') })
-    expect(await tryMerge(refused.api, 'n1', 'mine', 'base')).toEqual({ kind: 'failed', message: 'It is in the trash.' })
+    const refused = fakeApi({ currentBody: 'base more', onSave: () => new WsError(400, 'archived', 'It is archived.') })
+    expect(await tryMerge(refused.api, 'n1', 'mine', 'base')).toEqual({ kind: 'failed', message: 'It is archived.' })
   })
 })

@@ -14,10 +14,11 @@ export interface StoreLike {
   removeItem(key: string): void
 }
 
-// A workspace: a track or a course, or the scratch view of unplaced files.
+// A workspace: a trajectory, a track or a course, or the scratch view of
+// unplaced files.
 export interface Root {
   id: string
-  kind: 'track' | 'course' | 'scratch'
+  kind: 'trajectory' | 'track' | 'course' | 'scratch'
   title: string
 }
 
@@ -40,7 +41,7 @@ export function readLast(store: StoreLike | null = browserStore()): Root | null 
     if (!raw) return null
     const v = JSON.parse(raw) as Partial<Root> | null
     if (!v || typeof v.id !== 'string' || typeof v.title !== 'string') return null
-    if (v.kind !== 'track' && v.kind !== 'course' && v.kind !== 'scratch') return null
+    if (v.kind !== 'trajectory' && v.kind !== 'track' && v.kind !== 'course' && v.kind !== 'scratch') return null
     return { id: v.id, kind: v.kind, title: v.title }
   } catch {
     return null

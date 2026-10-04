@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clearLast, readLast, readTabs, tabsKey, writeLast, writeTabs, type StoreLike } from './wsState'
+import { SCRATCH, clearLast, readLast, readTabs, tabsKey, writeLast, writeTabs, type StoreLike } from './wsState'
 
 function memory(initial: Record<string, string> = {}): StoreLike & { data: Record<string, string> } {
   const data = { ...initial }
@@ -29,6 +29,19 @@ describe('workspace state in localStorage', () => {
     expect(readLast(s)).toBeNull()
   })
 
+  it('remembers a trajectory as the workspace too, along with a track, a course and the scratch view', () => {
+    const s = memory()
+    for (const root of [
+      { id: 'tr1', kind: 'trajectory' as const, title: 'quant' },
+      { id: 'k1', kind: 'track' as const, title: 'Year 1' },
+      { id: 'c1', kind: 'course' as const, title: 'Calc' },
+      SCRATCH,
+    ]) {
+      writeLast(root, s)
+      expect(readLast(s)).toEqual(root)
+    }
+  })
+
   it('keeps each workspace its own tabs under its own key', () => {
     const s = memory()
     writeTabs('t1', { tabs: [{ nodeId: 'a', title: 'A', directed: false }], active: 'a' }, s)
@@ -42,6 +55,7 @@ describe('workspace state in localStorage', () => {
     expect(readLast(memory({ 'osmosis:ws:last': '{not json' }))).toBeNull()
     expect(readLast(memory({ 'osmosis:ws:last': JSON.stringify({ id: 1, kind: 'track', title: 'x' }) }))).toBeNull()
     expect(readLast(memory({ 'osmosis:ws:last': JSON.stringify({ id: 'x', kind: 'folder', title: 'x' }) }))).toBeNull()
+    expect(readLast(memory({ 'osmosis:ws:last': JSON.stringify({ id: 'x', kind: 'file', title: 'x' }) }))).toBeNull()
     expect(readTabs('t1', memory({ 'osmosis:ws:tabs:t1': 'garbage' }))).toEqual({ tabs: [], active: null })
   })
 

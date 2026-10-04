@@ -1,40 +1,9 @@
-import type { AppearsInRow, ChildRow, NodeSummary } from './wsApi'
+import type { AppearsInRow } from './wsApi'
 
-// Two walks over the file graph that the frame does in the client, written
-// against injected fetchers so they are tested without a server. The server
-// has no route for either: its answers are per node (children, appears-in).
-
-// What "also destroy the items placed nowhere else" would take with a
-// container: the same set the server computes. A descendant goes when every
-// live placement it has is inside the set already, so an item placed under two
-// folders that both go goes too. Only a container that goes is looked inside:
-// a folder that stays holds nothing that is affected by this destroy.
-//
-// `placement_count` counts a node's placements in live containers; `edges`
-// counts how many of those we have seen coming from containers in the set.
-export async function orphansUnder(rootId: string, childrenOf: (id: string) => Promise<ChildRow[]>): Promise<NodeSummary[]> {
-  const inSet = new Set<string>([rootId])
-  const edges = new Map<string, number>()
-  const found: NodeSummary[] = []
-  let level = [rootId]
-  while (level.length > 0) {
-    const lists = await Promise.all(level.map((id) => childrenOf(id)))
-    const next: string[] = []
-    for (const rows of lists) {
-      for (const { node } of rows) {
-        if (inSet.has(node.id)) continue
-        const seen = (edges.get(node.id) ?? 0) + 1
-        edges.set(node.id, seen)
-        if (seen < node.placement_count) continue
-        inSet.add(node.id)
-        found.push(node)
-        if (node.has_children) next.push(node.id)
-      }
-    }
-    level = next
-  }
-  return found
-}
+// The one walk over the graph that the frame does in the client, written
+// against an injected fetcher so it is tested without a server. (The other it
+// used to do, the items a delete would also take, is the server's now:
+// GET /nodes/:id/delete-preview.)
 
 // The names from a workspace root down to a container, for a search result's
 // "name — path". Walks up through the container's placements until it reaches

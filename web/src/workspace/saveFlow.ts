@@ -4,7 +4,7 @@ import { getContent, isStale, saveContent } from './wsApi'
 // the rules are tested without a server or a DOM and every file type that
 // Ben and the tutor both write goes through the same ones (useFileDraft is the
 // React side). The rules:
-//   - A save names the revision the edit started from (`base`). The server
+//   - A save names the version the edit started from (`base`). The server
 //     refuses it with a 409 if the file has moved on, and that is a conflict
 //     to show, never something to retry.
 //   - Overwrite is the one way to put Ben's text over someone else's: it reads
@@ -18,8 +18,8 @@ import { getContent, isStale, saveContent } from './wsApi'
 //     middle, a rewrite) is never merged: only Reload and Overwrite.
 
 export interface SaveApi {
-  save(nodeId: string, body: string, base: number): Promise<{ revision: number }>
-  read(nodeId: string): Promise<{ body: string | null; revision: number }>
+  save(nodeId: string, body: string, base: number): Promise<{ version: number }>
+  read(nodeId: string): Promise<{ body: string | null; version: number }>
 }
 
 export const wsSaveApi: SaveApi = { save: saveContent, read: getContent }
@@ -29,10 +29,10 @@ export const wsSaveApi: SaveApi = { save: saveContent, read: getContent }
 // the text the server gained at the end since the draft started, present only
 // when that is all that happened, so a merge is safe to offer.
 export type SaveResult =
-  | { kind: 'saved'; revision: number; body?: string }
+  | { kind: 'saved'; version: number; body?: string }
   | { kind: 'conflict'; addition?: string }
   | { kind: 'failed'; message: string }
-export type ReloadResult = { kind: 'loaded'; body: string; revision: number } | { kind: 'failed'; message: string }
+export type ReloadResult = { kind: 'loaded'; body: string; version: number } | { kind: 'failed'; message: string }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -68,20 +68,20 @@ async function conflictFor(api: SaveApi, nodeId: string, draft: string, baseBody
 export async function trySave(api: SaveApi, nodeId: string, body: string, base: number, baseBody?: string): Promise<SaveResult> {
   try {
     const out = await api.save(nodeId, body, base)
-    return { kind: 'saved', revision: out.revision }
+    return { kind: 'saved', version: out.version }
   } catch (err) {
     return isStale(err) ? conflictFor(api, nodeId, body, baseBody) : { kind: 'failed', message: messageOf(err) }
   }
 }
 
 export async function tryOverwrite(api: SaveApi, nodeId: string, body: string, baseBody?: string): Promise<SaveResult> {
-  let now: { revision: number }
+  let now: { version: number }
   try {
     now = await api.read(nodeId)
   } catch (err) {
     return { kind: 'failed', message: messageOf(err) }
   }
-  return trySave(api, nodeId, body, now.revision, baseBody)
+  return trySave(api, nodeId, body, now.version, baseBody)
 }
 
 // Draft plus their additions, saved on top of where the file is now. The file
@@ -89,7 +89,7 @@ export async function tryOverwrite(api: SaveApi, nodeId: string, body: string, b
 // no longer a pure append nothing is saved, and if it moved between the read and
 // the save the 409 is a conflict again, with the offer worked out afresh.
 export async function tryMerge(api: SaveApi, nodeId: string, draft: string, baseBody: string): Promise<SaveResult> {
-  let now: { body: string | null; revision: number }
+  let now: { body: string | null; version: number }
   try {
     now = await api.read(nodeId)
   } catch (err) {
@@ -97,15 +97,15 @@ export async function tryMerge(api: SaveApi, nodeId: string, draft: string, base
   }
   const merge = mergeAppended(baseBody, draft, now.body ?? '')
   if (!merge) return { kind: 'conflict' }
-  const out = await trySave(api, nodeId, merge.merged, now.revision)
-  if (out.kind === 'saved') return { kind: 'saved', revision: out.revision, body: merge.merged }
+  const out = await trySave(api, nodeId, merge.merged, now.version)
+  if (out.kind === 'saved') return { kind: 'saved', version: out.version, body: merge.merged }
   return out.kind === 'conflict' ? conflictFor(api, nodeId, draft, baseBody) : out
 }
 
 export async function tryReload(api: SaveApi, nodeId: string): Promise<ReloadResult> {
   try {
     const now = await api.read(nodeId)
-    return { kind: 'loaded', body: now.body ?? '', revision: now.revision }
+    return { kind: 'loaded', body: now.body ?? '', version: now.version }
   } catch (err) {
     return { kind: 'failed', message: messageOf(err) }
   }
@@ -118,9 +118,9 @@ export async function tryReload(api: SaveApi, nodeId: string): Promise<ReloadRes
 // a page reload; this is memory, not storage.)
 export interface StoredDraft {
   text: string
-  // The revision the draft started from: what its save names as the base.
+  // The version the draft started from: what its save names as the base.
   base: number
-  // The text of that revision, so a conflict can tell whether the file only
+  // The text of that version, so a conflict can tell whether the file only
   // grew since (the tutor's appended notes) and a merge can be offered.
   baseBody: string
 }

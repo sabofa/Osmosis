@@ -5,12 +5,13 @@ import type { FileViewProps } from './fileTypes'
 import { useFileDraft } from './useFileDraft'
 
 // The interim editor for a markdown file: read it rendered, or edit it as text
-// in a textarea. The saving (the revision an edit started from, the conflict
-// choice, the draft that survives a tab switch) is useFileDraft's, the same for
-// every file type that Ben and the tutor can both write; this is only the
-// markdown view over it.
-export default function MarkdownFile({ nodeId, body, revision, onSaved }: FileViewProps) {
-  const f = useFileDraft({ nodeId, body, revision, onSaved })
+// in a textarea. It is a placeholder: the document engine's views and edit mode
+// take its place when they register the "markdown" format. The saving (the
+// version an edit started from, the conflict choice, the draft that survives a
+// tab switch) is useFileDraft's, the same for every format that Ben and the
+// tutor can both write; this is only the markdown view over it.
+export default function MarkdownFile({ nodeId, body, version, onSaved }: FileViewProps) {
+  const f = useFileDraft({ nodeId, body, version, onSaved })
   // A file left half-edited comes back in the editor.
   const [editing, setEditing] = useState(f.restored)
 
@@ -51,7 +52,7 @@ export default function MarkdownFile({ nodeId, body, revision, onSaved }: FileVi
           </button>
         )}
         {f.dirty && <span className="ws-md-flag">Unsaved changes</span>}
-        <span className="ws-md-rev">revision {f.saved.revision}</span>
+        <span className="ws-md-rev">version {f.saved.version}</span>
       </div>
 
       {f.conflict && (

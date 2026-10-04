@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { placeTargets, placeWithFallback, topTargets, workspaceTargets, type PlaceFn } from './placing'
-import { WsError, type NodeKind, type NodeSummary, type SearchRow } from './wsApi'
+import { WsError, type NodeKind, type NodeSummary, type PlacedRow } from './wsApi'
 
 function node(id: string, kind: NodeKind): NodeSummary {
-  return { id, kind, title: id, kind_tag: null, type: null, class: null, placement_count: 1, has_children: false, trashed_at: null }
+  return { id, kind, title: id, kind_tag: null, format: kind === 'file' ? 'markdown' : null, placement_count: 1, has_children: false, archived_at: null, top_level: false }
 }
 // A placement of `child` in `container` under `name`, the way a scope-only search lists it.
-const row = (container: string, name: string, child: NodeSummary): SearchRow => ({ placement_id: `${container}>${child.id}`, name, node: child, container_id: container })
+const row = (container: string, name: string, child: NodeSummary): PlacedRow => ({ placement_id: `${container}>${child.id}`, name, node: child, container_id: container })
 
 describe('placeWithFallback: place, and if the name is taken, once more under the free name', () => {
   function fake(script: (Error | undefined)[]) {
@@ -56,7 +56,7 @@ describe('workspaceTargets: the workspace root and the folders reachable in it',
   const unit = node('f2', 'folder')
   const rows = [
     row('t', 'Year 1', year),
-    row('f1', 'Calc', calc),
+    row('t', 'Calc', calc),
     row('c1', 'Unit 1', unit),
     row('f2', 'notes', node('n1', 'file')),
     row('t', 'Archive', year), // the same folder under a second name: one target
@@ -66,7 +66,7 @@ describe('workspaceTargets: the workspace root and the folders reachable in it',
     expect(workspaceTargets(root, rows)).toEqual([
       { id: 't', kind: 'track', label: 'quant' },
       { id: 'f1', kind: 'folder', label: 'quant / Archive' },
-      { id: 'f2', kind: 'folder', label: 'quant / Archive / Calc / Unit 1' },
+      { id: 'f2', kind: 'folder', label: 'quant / Calc / Unit 1' },
     ])
   })
   it('takes the shortest route to a folder, and the first by name among equals', () => {
@@ -90,28 +90,56 @@ describe('workspaceTargets: the workspace root and the folders reachable in it',
   })
 })
 
+describe('workspaceTargets: in a trajectory, its tracks are places too (they hold courses)', () => {
+  const root = { id: 'tr', kind: 'trajectory' as const, title: 'quant' }
+  const rows = [
+    row('tr', 'Research', node('f0', 'folder')),
+    row('tr', 'Year 1', node('k1', 'track')),
+    row('tr', 'Applied', node('k2', 'track')),
+    row('k1', 'Calc', node('c1', 'course')),
+    row('c1', 'Unit 1', node('f1', 'folder')),
+    row('tr', 'Syllabus', node('n1', 'file')),
+  ]
+  it('lists the root, then its folders and tracks, and the folders inside tracks and courses, by label', () => {
+    expect(workspaceTargets(root, rows)).toEqual([
+      { id: 'tr', kind: 'trajectory', label: 'quant' },
+      { id: 'k2', kind: 'track', label: 'quant / Applied' },
+      { id: 'f0', kind: 'folder', label: 'quant / Research' },
+      { id: 'k1', kind: 'track', label: 'quant / Year 1' },
+      { id: 'f1', kind: 'folder', label: 'quant / Year 1 / Calc / Unit 1' },
+    ])
+  })
+  it('still offers no course and no file', () => {
+    expect(workspaceTargets(root, rows).some((t) => t.kind === 'course' || t.kind === 'file')).toBe(false)
+  })
+})
+
 describe('placeTargets: only what the containment matrix lets hold it', () => {
-  const track = { id: 't', kind: 'track' as const, label: 'quant' }
+  const trajectory = { id: 'tr', kind: 'trajectory' as const, label: 'quant' }
+  const track = { id: 't', kind: 'track' as const, label: 'quant / Year 1' }
   const course = { id: 'c', kind: 'course' as const, label: 'micro' }
-  const folder = { id: 'f', kind: 'folder' as const, label: 'quant / Year 1' }
-  const all = [track, course, folder]
+  const folder = { id: 'f', kind: 'folder' as const, label: 'quant / Year 1 / Notes' }
+  const all = [trajectory, track, course, folder]
   const ids = (n: { id: string; kind: NodeKind }, opts = {}) => placeTargets(n, all, opts).map((t) => t.id)
 
-  it('a file goes in a track, a course or a folder', () => {
-    expect(ids({ id: 'n', kind: 'file' })).toEqual(['t', 'c', 'f'])
+  it('a file goes in a trajectory, a track, a course or a folder', () => {
+    expect(ids({ id: 'n', kind: 'file' })).toEqual(['tr', 't', 'c', 'f'])
   })
-  it('a folder goes in a track, a course or a folder', () => {
-    expect(ids({ id: 'x', kind: 'folder' })).toEqual(['t', 'c', 'f'])
+  it('a folder goes in a trajectory, a track, a course or a folder', () => {
+    expect(ids({ id: 'x', kind: 'folder' })).toEqual(['tr', 't', 'c', 'f'])
   })
-  it('a course goes in a track or a folder, never in a course', () => {
-    expect(ids({ id: 'x', kind: 'course' })).toEqual(['t', 'f'])
+  it('a course goes in a trajectory or a track, never in a course or a folder', () => {
+    expect(ids({ id: 'x', kind: 'course' })).toEqual(['tr', 't'])
   })
-  it('a track goes only in a track', () => {
-    expect(ids({ id: 'x', kind: 'track' })).toEqual(['t'])
+  it('a track goes only in a trajectory, no longer in a track', () => {
+    expect(ids({ id: 'x', kind: 'track' })).toEqual(['tr'])
+  })
+  it('a trajectory goes nowhere', () => {
+    expect(ids({ id: 'x', kind: 'trajectory' })).toEqual([])
   })
   it('never offers the node itself, nor a container it is already in', () => {
-    expect(ids({ id: 'f', kind: 'folder' })).toEqual(['t', 'c'])
-    expect(ids({ id: 'n', kind: 'file' }, { alreadyIn: ['c', 'f'] })).toEqual(['t'])
+    expect(ids({ id: 'f', kind: 'folder' })).toEqual(['tr', 't', 'c'])
+    expect(ids({ id: 'n', kind: 'file' }, { alreadyIn: ['c', 'f'] })).toEqual(['tr', 't'])
   })
   it('never offers a container inside the node itself, which would close a loop', () => {
     const rows = [row('t', 'a', node('a', 'folder')), row('a', 'b', node('b', 'folder')), row('b', 'c', node('c', 'folder'))]
@@ -125,9 +153,10 @@ describe('placeTargets: only what the containment matrix lets hold it', () => {
   })
 })
 
-describe('topTargets: tracks and courses by their titles', () => {
+describe('topTargets: trajectories, tracks and courses by their titles', () => {
   it('keeps the order and the kind', () => {
-    expect(topTargets([node('t', 'track'), node('c', 'course')])).toEqual([
+    expect(topTargets([node('tr', 'trajectory'), node('t', 'track'), node('c', 'course')])).toEqual([
+      { id: 'tr', kind: 'trajectory', label: 'tr' },
       { id: 't', kind: 'track', label: 't' },
       { id: 'c', kind: 'course', label: 'c' },
     ])

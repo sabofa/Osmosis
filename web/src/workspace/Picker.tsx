@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react'
+import ArchiveSection from './ArchiveSection'
 import PlaceIn from './PlaceIn'
 import { placeTargets, placeWithFallback, topTargets, type PlaceTarget } from './placing'
-import TrashSection from './TrashSection'
+import { isWorkspaceKind } from './rows'
 import { Glyph } from './Tree'
-import { createNode, getNodeDetail, getRoots, placeNode, searchUnder, type NodeSummary, type Roots } from './wsApi'
+import { createNode, getNodeDetail, getRoots, getUnplaced, placeNode, searchUnder, type NodeSummary, type Roots } from './wsApi'
 import type { Root } from './wsState'
 
-// What shows while no workspace is open: every track, every course, the files
-// and folders that are placed nowhere, and the trash. A track or a course opens
-// as a workspace. An unplaced file opens in the scratch view, which has no
-// container of its own, only tabs. Any of them can be placed in a track or a
-// course from here ("Place in…"), and what was destroyed can be restored or
-// purged.
+// What shows while no workspace is open: every trajectory, track and course
+// (the ones with no place yet are marked "top level", which is a normal state
+// for them), the files and folders that are placed nowhere, and the Archive. A
+// trajectory, a track or a course opens as a workspace. An unplaced file opens
+// in the scratch view, which has no container of its own, only tabs. Any of
+// them can be placed in a container from here ("Place in…"), and what was
+// deleted can be restored or purged.
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -26,6 +28,7 @@ export default function Picker({
   onExit(): void
 }) {
   const [roots, setRoots] = useState<Roots | null>(null)
+  const [unplaced, setUnplaced] = useState<NodeSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   // The node whose "Place in…" list is open.
@@ -34,10 +37,11 @@ export default function Picker({
 
   useEffect(() => {
     let live = true
-    getRoots()
-      .then((r) => {
+    Promise.all([getRoots(), getUnplaced()])
+      .then(([r, u]) => {
         if (!live) return
         setRoots(r)
+        setUnplaced(u)
         setError(null)
       })
       .catch((err) => live && setError(messageOf(err)))
@@ -46,9 +50,8 @@ export default function Picker({
     }
   }, [version])
 
-  const asRoot = (n: NodeSummary): Root => ({ id: n.id, kind: n.kind === 'track' ? 'track' : 'course', title: n.title })
-
-  async function create(kind: 'track' | 'course') {
+  // Made at the top level (no container), then opened.
+  async function create(kind: 'trajectory' | 'track' | 'course') {
     const title = window.prompt(`Name for the new ${kind}`)
     if (title === null || title.trim() === '') return
     try {
@@ -59,12 +62,13 @@ export default function Picker({
     }
   }
 
-  // The tracks and courses a node could go in, less where it already is and
-  // anything inside it. (An unplaced file is in none and has nothing inside, so
-  // for it that is every track and course the containment matrix allows.)
+  // The trajectories, tracks and courses a node could go in, less where it
+  // already is and anything inside it. (An unplaced file is in none and has
+  // nothing inside, so for it that is every container the containment matrix
+  // allows.)
   async function topsFor(node: NodeSummary): Promise<PlaceTarget[]> {
     const [detail, rows] = await Promise.all([getNodeDetail(node.id), node.kind === 'file' ? Promise.resolve([]) : searchUnder(node.id)])
-    const tops = topTargets([...(roots?.tracks ?? []), ...(roots?.courses ?? [])])
+    const tops = topTargets([...(roots?.trajectories ?? []), ...(roots?.tracks ?? []), ...(roots?.courses ?? [])])
     return placeTargets(node, tops, { alreadyIn: detail.appears_in.map((a) => a.container.id), rows })
   }
 
@@ -98,11 +102,15 @@ export default function Picker({
                     <Glyph node={n} />
                   </span>
                   <span className="ws-pick-title">{n.title}</span>
-                  {n.type && <span className="ws-pick-type">{n.type}</span>}
+                  {n.top_level && <span className="ws-pick-type">top level</span>}
+                  {n.format && <span className="ws-pick-type">{n.format}</span>}
                   {n.kind === 'folder' && <span className="ws-pick-type">folder</span>}
-                  <button className="ws-btn" aria-expanded={placing === n.id} onClick={() => setPlacing(placing === n.id ? null : n.id)}>
-                    Place in…
-                  </button>
+                  {/* Nothing holds a trajectory, so there is nowhere to place one. */}
+                  {n.kind !== 'trajectory' && (
+                    <button className="ws-btn" aria-expanded={placing === n.id} onClick={() => setPlacing(placing === n.id ? null : n.id)}>
+                      Place in…
+                    </button>
+                  )}
                   <button className="ws-btn" onClick={() => open(n)}>
                     Open
                   </button>
@@ -116,6 +124,10 @@ export default function Picker({
     )
   }
 
+  const openWorkspace = (n: NodeSummary) => {
+    if (isWorkspaceKind(n.kind)) onOpen({ id: n.id, kind: n.kind, title: n.title })
+  }
+
   return (
     <div className="ws ws-picker">
       <header className="ws-head">
@@ -123,6 +135,9 @@ export default function Picker({
           <strong>Workspace</strong>
         </div>
         <div className="ws-head-actions">
+          <button className="ws-btn" onClick={() => void create('trajectory')}>
+            New trajectory
+          </button>
           <button className="ws-btn" onClick={() => void create('track')}>
             New track
           </button>
@@ -149,14 +164,15 @@ export default function Picker({
           </div>
         )}
         {!roots && !error && <div className="ws-note">Loading…</div>}
-        {roots && (
+        {roots && unplaced && (
           <>
-            {list('Tracks', roots.tracks, (n) => onOpen(asRoot(n)), 'No tracks yet.')}
-            {list('Courses', roots.courses, (n) => onOpen(asRoot(n)), 'No courses yet.')}
-            {list('Unplaced', roots.unplaced, (n) => onOpenScratch(n.kind === 'file' ? { nodeId: n.id, title: n.title } : null), 'Nothing is unplaced.')}
+            {list('Trajectories', roots.trajectories, openWorkspace, 'No trajectories yet.')}
+            {list('Tracks', roots.tracks, openWorkspace, 'No tracks yet.')}
+            {list('Courses', roots.courses, openWorkspace, 'No courses yet.')}
+            {list('Unplaced', unplaced, (n) => onOpenScratch(n.kind === 'file' ? { nodeId: n.id, title: n.title } : null), 'Nothing is unplaced.')}
           </>
         )}
-        <TrashSection onRestored={() => setVersion((v) => v + 1)} />
+        <ArchiveSection onRestored={() => setVersion((v) => v + 1)} />
       </div>
     </div>
   )

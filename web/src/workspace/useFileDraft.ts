@@ -10,7 +10,7 @@ import { draftFor, keepDraft, tryMerge, tryOverwrite, tryReload, trySave, wsSave
 //   - `draft` is the unsaved text (a file's body is text; a type with
 //     structure serialises it into the draft). It is null until editing starts
 //     and survives the view being unmounted by a tab switch.
-//   - `save()` writes it against the revision the draft started from. If the
+//   - `save()` writes it against the version the draft started from. If the
 //     file has moved on, `conflict` turns true and nothing is written; show a
 //     ConflictBanner and let Ben choose.
 //   - `reload()` takes the file as it is now and drops the draft; `overwrite()`
@@ -21,10 +21,10 @@ import { draftFor, keepDraft, tryMerge, tryOverwrite, tryReload, trySave, wsSave
 //     the file is now, so neither side is lost; the draft becomes the merged
 //     text. The hook keeps the text the draft started from for this.
 //   - `saved` is what the server holds as far as this view knows. After mount
-//     the view owns its state, so it does not follow `body` and `revision`
+//     the view owns its state, so it does not follow `body` and `version`
 //     props (see FileViewProps).
 export interface FileDraft {
-  saved: { body: string; revision: number }
+  saved: { body: string; version: number }
   draft: string | null
   // Whether the draft differs from what is saved.
   dirty: boolean
@@ -51,18 +51,18 @@ export interface FileDraft {
 export function useFileDraft({
   nodeId,
   body,
-  revision,
+  version,
   onSaved,
 }: {
   nodeId: string
   body: string | null
-  revision: number
-  onSaved(revision: number): void
+  version: number
+  onSaved(version: number): void
 }): FileDraft {
-  const [saved, setSaved] = useState({ body: body ?? '', revision })
+  const [saved, setSaved] = useState({ body: body ?? '', version })
   const [draft, setDraftText] = useState<string | null>(() => draftFor(nodeId)?.text ?? null)
-  // The revision the draft started from, and the text of that revision.
-  const [base, setBase] = useState(() => draftFor(nodeId)?.base ?? revision)
+  // The version the draft started from, and the text of that version.
+  const [base, setBase] = useState(() => draftFor(nodeId)?.base ?? version)
   const [baseBody, setBaseBody] = useState(() => draftFor(nodeId)?.baseBody ?? body ?? '')
   const [restored] = useState(() => draftFor(nodeId) !== null)
   const [busy, setBusy] = useState(false)
@@ -78,7 +78,7 @@ export function useFileDraft({
 
   // The draft starts from what is saved now.
   function startFromSaved() {
-    setBase(saved.revision)
+    setBase(saved.version)
     setBaseBody(saved.body)
   }
 
@@ -108,12 +108,12 @@ export function useFileDraft({
     if (result.kind === 'saved') {
       // A merge saves more than the draft: the draft is what the file holds now.
       const now = result.body ?? text
-      setSaved({ body: now, revision: result.revision })
-      setBase(result.revision)
+      setSaved({ body: now, version: result.version })
+      setBase(result.version)
       setBaseBody(now)
       if (result.body !== undefined) setDraftText(now)
       clearConflict()
-      onSaved(result.revision)
+      onSaved(result.version)
     } else if (result.kind === 'conflict') {
       setConflict(true)
       setAddition(result.addition ?? null)
@@ -143,12 +143,12 @@ export function useFileDraft({
       setError(result.message)
       return false
     }
-    setSaved({ body: result.body, revision: result.revision })
-    setBase(result.revision)
+    setSaved({ body: result.body, version: result.version })
+    setBase(result.version)
     setBaseBody(result.body)
     setDraftText(null)
     clearConflict()
-    onSaved(result.revision)
+    onSaved(result.version)
     return true
   }
 

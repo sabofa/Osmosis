@@ -4,10 +4,11 @@ import { webFileType } from './fileTypes'
 import type { Tab } from './tabs'
 import { getContent, WsError, type FileContent } from './wsApi'
 
-// The centre of the shell: the active tab's file. It reads the file's content,
-// looks its type up in the web registry and renders that type's View. A type
-// the registry does not have is not an error (the server may know types this
-// build has not learned): the body is shown as plain text under a note.
+// The centre of the shell: the active tab's file. It reads the file's latest
+// version, looks its format up in the web registry and renders that format's
+// View. A format the registry does not have is not an error (the server may
+// hold formats this build has not learned): the body is shown as plain text
+// under a note.
 
 type Loaded = { status: 'loading' } | { status: 'error'; error: unknown } | { status: 'ok'; content: FileContent }
 
@@ -54,11 +55,11 @@ function FileFrame({ tab, onCloseTab }: { tab: Tab; onCloseTab(nodeId: string): 
   }
 
   const { content } = state
-  const fileType = webFileType(content.type)
+  const fileType = webFileType(content.format)
   if (!fileType) {
     return (
       <div className="ws-center ws-fallback">
-        <p>{`Can't show files of type "${content.type}" yet.`}</p>
+        <p>{`Can't show files of format "${content.format}" yet.`}</p>
         <pre className="ws-raw">{content.body ?? ''}</pre>
       </div>
     )
@@ -69,11 +70,11 @@ function FileFrame({ tab, onCloseTab }: { tab: Tab; onCloseTab(nodeId: string): 
       <ViewBoundary>
         <View
           nodeId={tab.nodeId}
-          type={content.type}
+          format={content.format}
           body={content.body}
           assetId={content.asset_id}
-          revision={content.revision}
-          onSaved={(revision) => setState((s) => (s.status === 'ok' ? { status: 'ok', content: { ...s.content, revision } } : s))}
+          version={content.version}
+          onSaved={(version) => setState((s) => (s.status === 'ok' ? { status: 'ok', content: { ...s.content, version } } : s))}
         />
       </ViewBoundary>
     </div>

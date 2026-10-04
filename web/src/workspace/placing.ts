@@ -1,9 +1,9 @@
 import { mayHold } from './newMenu'
-import { freeNameOf, type NodeKind, type NodeSummary, type SearchRow } from './wsApi'
+import { freeNameOf, type NodeKind, type NodeSummary, type PlacedRow } from './wsApi'
 
 // Putting an existing node somewhere, as plain functions so the rules are tested
-// without a server or a DOM. Three entries share them: "+ Existing course…",
-// "Place in…" on a row, and Undo after "Remove from here". Names live on
+// without a server or a DOM. Three entries share them: "+ Existing …",
+// "Place in…" on a row, and Undo after "Remove from …". Names live on
 // placements and are unique among a container's live children, so a place can
 // meet a name that is taken; the server answers with a free one.
 
@@ -39,23 +39,25 @@ export interface PlaceTarget {
   label: string
 }
 
-// Tracks and courses as places to put something, by their titles: where an
-// unplaced node can go from the picker or the scratch view, which have no
-// workspace root to walk down from.
+// Trajectories, tracks and courses as places to put something, by their titles:
+// where an unplaced node can go from the picker or the scratch view, which have
+// no workspace root to walk down from.
 export const topTargets = (nodes: NodeSummary[]): PlaceTarget[] => nodes.map((n) => ({ id: n.id, kind: n.kind, label: n.title }))
 
 const collator = new Intl.Collator('en', { numeric: true })
 const natural = (a: string, b: string): number => collator.compare(a, b)
 
-// The workspace root and every folder reachable in it, each labelled by the
-// names on the way down from the root. `rows` is everything under the root, one
-// row per live placement (the scope-only search). A folder placed in several
-// ways is one target, labelled by its shortest route (by name among equal
-// routes). The walk goes through courses and folders alike, so a folder inside
-// a course inside a track is found; courses themselves are not offered, since
-// putting something into a course is what opening that course is for.
-export function workspaceTargets(root: { id: string; kind: NodeKind; title: string }, rows: SearchRow[]): PlaceTarget[] {
-  const byContainer = new Map<string, SearchRow[]>()
+// The workspace root and every folder and track reachable in it, each labelled
+// by the names on the way down from the root. `rows` is everything under the
+// root, one row per live placement (the scope-only search). A folder or track
+// placed in several ways is one target, labelled by its shortest route (by name
+// among equal routes). The walk goes through tracks, courses and folders alike,
+// so a folder inside a course inside a track is found. A track is a place
+// because a trajectory's courses can be put into it from here; a course itself
+// is not offered, since putting something into a course is what opening that
+// course is for.
+export function workspaceTargets(root: { id: string; kind: NodeKind; title: string }, rows: PlacedRow[]): PlaceTarget[] {
+  const byContainer = new Map<string, PlacedRow[]>()
   for (const r of rows) {
     if (r.container_id === null) continue
     const list = byContainer.get(r.container_id)
@@ -63,7 +65,7 @@ export function workspaceTargets(root: { id: string; kind: NodeKind; title: stri
     else byContainer.set(r.container_id, [r])
   }
   const seen = new Set<string>([root.id])
-  const folders: PlaceTarget[] = []
+  const places: PlaceTarget[] = []
   // Breadth first, so the first route found to a node is a shortest one. The
   // seen set is also what stops a loop, though the graph has none.
   let level: { id: string; path: string[] }[] = [{ id: root.id, path: [root.title] }]
@@ -75,18 +77,18 @@ export function workspaceTargets(root: { id: string; kind: NodeKind; title: stri
         if (seen.has(child.node.id)) continue
         seen.add(child.node.id)
         const path = [...at.path, child.name]
-        if (child.node.kind === 'folder') folders.push({ id: child.node.id, kind: 'folder', label: path.join(' / ') })
+        if (child.node.kind === 'folder' || child.node.kind === 'track') places.push({ id: child.node.id, kind: child.node.kind, label: path.join(' / ') })
         if (child.node.kind !== 'file') next.push({ id: child.node.id, path })
       }
     }
     level = next
   }
-  folders.sort((a, b) => natural(a.label, b.label))
-  return [{ id: root.id, kind: root.kind, label: root.title }, ...folders]
+  places.sort((a, b) => natural(a.label, b.label))
+  return [{ id: root.id, kind: root.kind, label: root.title }, ...places]
 }
 
 // Everything inside a container, at any depth, from the rows of a search.
-function insideOf(nodeId: string, rows: SearchRow[]): Set<string> {
+function insideOf(nodeId: string, rows: PlacedRow[]): Set<string> {
   const inside = new Set<string>()
   const queue = [nodeId]
   while (queue.length > 0) {
@@ -111,7 +113,7 @@ function insideOf(nodeId: string, rows: SearchRow[]): Set<string> {
 export function placeTargets(
   node: { id: string; kind: NodeKind },
   candidates: PlaceTarget[],
-  opts: { alreadyIn?: string[]; rows?: SearchRow[] } = {}
+  opts: { alreadyIn?: string[]; rows?: PlacedRow[] } = {}
 ): PlaceTarget[] {
   const already = new Set(opts.alreadyIn ?? [])
   const inside = node.kind === 'file' || !opts.rows ? new Set<string>() : insideOf(node.id, opts.rows)

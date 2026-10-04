@@ -1,33 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { BookIcon, ChevronDownIcon, ChevronRightIcon, CompassIcon, FolderIcon, PuzzleIcon } from '../components/icons'
+import { BookIcon, ChevronDownIcon, ChevronRightIcon, CompassIcon, FlagIcon, FolderIcon, PuzzleIcon } from '../components/icons'
+import { removeNotice } from './archive'
 import { createUnder } from './create'
 import { listWebFileTypes, webFileType } from './fileTypes'
+import { parseTagInput, tagChoices } from './kindTags'
 import { newOptions, type NewOption } from './newMenu'
 import PlaceIn from './PlaceIn'
 import { placeWithFallback, type PlaceTarget } from './placing'
-import type { RowModel } from './rows'
-import {
-  KIND_TAGS,
-  getChildren,
-  getNodeDetail,
-  placeNode,
-  removePlacement,
-  renamePlacement,
-  setKindTag,
-  type ChildRow,
-  type KindTag,
-  type NodeSummary,
-} from './wsApi'
+import { isWorkspaceKind, type RowModel } from './rows'
+import { getChildren, getNodeDetail, placeNode, renamePlacement, setKindTag, trashPlacement, type ChildRow, type NodeSummary } from './wsApi'
 
 // The tree of a container's children, loaded a level at a time as folders are
 // opened. A row is one placement: the name it shows is the name of that
 // placement (names live on placements, so the same file can be called two
 // things in two places), and the row menu acts on that placement, which is why
-// "Remove from here" and "Destroy" are different entries: one takes this
-// placement away, the other takes the file out of every place it appears.
+// "Remove from …" and "Delete…" are different entries: one takes this
+// placement away (trash), the other archives the node out of every place it
+// appears (delete).
 
-// A button in the sidebar's notice line (Undo after Remove from here).
+// A button in the sidebar's notice line (Undo after Remove from …).
 export interface NoticeAction {
   label: string
   run(): void | Promise<void>
@@ -38,20 +30,21 @@ export interface TreeCtx {
   // Bumped whenever the graph changed, so every open list reloads itself.
   version: number
   openFile(nodeId: string, title: string): void
-  // A track or a course: the workspace becomes it.
+  // A trajectory, a track or a course: the workspace becomes it.
   openWorkspace(node: NodeSummary): void
   changed(): void
   renamed(nodeId: string, title: string): void
   notify(text: string, kind?: 'error' | 'info', action?: NoticeAction): void
-  requestDestroy(node: NodeSummary, name: string): void
-  // The containers this node could be placed in from here (the workspace root
-  // and its folders, or every track and course in the scratch view).
+  requestDelete(node: NodeSummary, name: string): void
+  // The containers this node could be placed in from here (the workspace root,
+  // and its folders and tracks, or every trajectory, track and course in the
+  // scratch view).
   placeTargets(node: NodeSummary): Promise<PlaceTarget[]>
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-// Undo for Remove from here: the same node goes back into the same container
+// Undo for Remove from …: the same node goes back into the same container
 // under the name it had. If that name has been taken since, it goes in under the
 // free name and the notice says so. It lives outside the row because the row is
 // gone from the list by the time Undo is pressed.
@@ -71,10 +64,11 @@ async function undoRemove(ctx: TreeCtx, removed: { container_id: string; child_i
 }
 
 export function Glyph({ node }: { node: NodeSummary }): ReactNode {
+  if (node.kind === 'trajectory') return <FlagIcon size={14} />
   if (node.kind === 'track') return <CompassIcon size={14} />
   if (node.kind === 'course') return <BookIcon size={14} />
   if (node.kind === 'folder') return <FolderIcon size={14} />
-  return (node.type && webFileType(node.type)?.icon) || <PuzzleIcon size={14} />
+  return (node.format && webFileType(node.format)?.icon) || <PuzzleIcon size={14} />
 }
 
 export function Tree({
@@ -130,12 +124,13 @@ export function Tree({
 
 export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; depth: number }) {
   const { node } = model
-  const shownName = model.label ?? model.name
+  const shownName = model.name
   // What this row may be given from its menu: nothing for a file, and for a
   // container only what the containment matrix lets it hold.
   const options = newOptions(node.kind, listWebFileTypes())
-  // A track or a course is a workspace of its own; only a folder opens in place.
-  const isWorkspace = node.kind === 'track' || node.kind === 'course'
+  // A trajectory, a track or a course is a workspace of its own; only a folder
+  // opens in place.
+  const isWorkspace = isWorkspaceKind(node.kind)
   const [open, setOpen] = useState(false)
   const [menu, setMenu] = useState(false)
   const [tagMenu, setTagMenu] = useState(false)
@@ -196,7 +191,7 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
 
   const make = (option: NewOption) =>
     act(async () => {
-      const made = await createUnder(node.id, option.kind, option.fileType)
+      const made = await createUnder(node.id, option.kind, option.format)
       if (!made) return
       setOpen(true)
       ctx.changed()
@@ -215,14 +210,15 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
       ctx.changed()
     })
 
+  // Remove from this container: this one placement goes (trash) and the node
+  // lives on, wherever else it is placed.
   const removeHere = () =>
     act(async () => {
       if (!model.placementId) return
-      const out = await removePlacement(model.placementId)
+      const out = await trashPlacement(model.placementId)
       ctx.changed()
       const from = model.container?.title ?? 'here'
-      const lonely = out.became_unplaced ? ' It is not placed anywhere now. It is still in the picker, under Unplaced.' : ''
-      ctx.notify(`Removed "${shownName}" from "${from}".${lonely}`, 'info', {
+      ctx.notify(removeNotice(shownName, from, node.kind, out.became_unplaced), 'info', {
         label: 'Undo',
         run: () => undoRemove(ctx, out.removed, shownName, from),
       })
@@ -247,11 +243,25 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
   }
 
   // Tag a file: what it is for. The partition chips in the sidebar then list it.
-  const retag = (tag: KindTag | null) =>
+  async function applyTag(tag: string | null) {
+    if (tag === node.kind_tag) return
+    await setKindTag(node.id, tag)
+    ctx.changed()
+  }
+  const retag = (tag: string | null) => act(() => applyTag(tag))
+
+  // A tag of Ben's own: asked for, and checked here against the tag rule so a
+  // typo is refused before it goes to the server.
+  const otherTag = () =>
     act(async () => {
-      if (tag === node.kind_tag) return
-      await setKindTag(node.id, tag)
-      ctx.changed()
+      const raw = window.prompt('Tag (lowercase letters, digits, "_" and "-"; starts with a letter)')
+      if (raw === null || raw.trim() === '') return
+      const parsed = parseTagInput(raw)
+      if (parsed.kind === 'refused') {
+        ctx.notify(parsed.message)
+        return
+      }
+      await applyTag(parsed.tag)
     })
 
   return (
@@ -302,7 +312,7 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
                   </button>
                   {tagMenu && (
                     <div className="ws-submenu" role="group" aria-label="Tag">
-                      {[...KIND_TAGS, null].map((tag) => (
+                      {tagChoices(node.kind_tag).map((tag) => (
                         <button key={tag ?? 'none'} role="menuitemradio" aria-checked={node.kind_tag === tag} onClick={() => void retag(tag)}>
                           <span className="ws-tick" aria-hidden="true">
                             {node.kind_tag === tag ? '✓' : ''}
@@ -310,6 +320,10 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
                           {tag ?? 'none'}
                         </button>
                       ))}
+                      <button role="menuitem" onClick={() => void otherTag()}>
+                        <span className="ws-tick" aria-hidden="true" />
+                        Other…
+                      </button>
                     </div>
                   )}
                 </>
@@ -325,10 +339,10 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
                 className="danger"
                 onClick={() => {
                   setMenu(false)
-                  ctx.requestDestroy(node, shownName)
+                  ctx.requestDelete(node, shownName)
                 }}
               >
-                Destroy…
+                Delete…
               </button>
             </div>
           )}

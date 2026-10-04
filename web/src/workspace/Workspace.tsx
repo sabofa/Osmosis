@@ -4,6 +4,7 @@ import CenterPane from './CenterPane'
 import Picker from './Picker'
 import Sidebar from './Sidebar'
 import { closeTab, focusTab, openTab, retitleTab, type TabState } from './tabs'
+import { isWorkspaceKind, parentWorkspaces, type WorkspaceKind } from './rows'
 import { WsError, getNodeDetail } from './wsApi'
 import { SCRATCH, clearLast, readLast, readTabs, writeLast, writeTabs, type Root } from './wsState'
 import './extensions'
@@ -13,8 +14,9 @@ import './workspace.css'
 // "Workspace" and left by its own Exit. With no workspace open it is the
 // picker; with one open it is the shell (header, sidebar, tabs, centre).
 //
-// The stack is how Up works: opening a course (or another track) from inside a
-// workspace replaces it and remembers where it came from, and Up goes back.
+// The stack is how Up works: opening a course, a track or a trajectory from
+// inside a workspace replaces it and remembers where it came from, and Up goes
+// back.
 // Switch goes to the picker and forgets the stack.
 
 const STACK_LIMIT = 20
@@ -27,7 +29,7 @@ export default function Workspace({ onExit }: { onExit: () => void }) {
   const [restoring, setRestoring] = useState(true)
 
   // Pick up where Ben left off: the workspace that was open last, if it is
-  // still there and not in the trash.
+  // still there and not in the Archive.
   useEffect(() => {
     const last = readLast()
     if (!last) {
@@ -42,7 +44,7 @@ export default function Workspace({ onExit }: { onExit: () => void }) {
     let live = true
     getNodeDetail(last.id)
       .then((d) => {
-        if (live && !d.node.trashed_at && (d.node.kind === 'track' || d.node.kind === 'course')) {
+        if (live && !d.node.archived_at && isWorkspaceKind(d.node.kind)) {
           setRoot({ id: d.node.id, kind: d.node.kind, title: d.node.title })
         }
       })
@@ -109,7 +111,7 @@ export default function Workspace({ onExit }: { onExit: () => void }) {
   )
 }
 
-const gone = (title: string): string => `"${title}" is not there any more (it is in the trash or was removed). Use Switch to pick another workspace.`
+const gone = (title: string): string => `"${title}" is not there any more (it is in the Archive or was removed). Use Switch to pick another workspace.`
 
 function Shell({
   root,
@@ -133,7 +135,7 @@ function Shell({
     return firstFile ? openTab(saved, { nodeId: firstFile.nodeId, title: firstFile.title }) : saved
   })
   const [sidebar, setSidebar] = useState(true)
-  const [parents, setParents] = useState<{ id: string; title: string }[]>([])
+  const [parents, setParents] = useState<{ id: string; kind: WorkspaceKind; title: string }[]>([])
   // Why the workspace cannot be shown, if it cannot: it is gone, or the server
   // could not be asked.
   const [problem, setProblem] = useState<string | null>(null)
@@ -152,16 +154,17 @@ function Shell({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // The header's "in: …" (a course's parent tracks), and whether this
-  // workspace is still there. The scratch view is neither a node nor in a track.
+  // The header's "in: …" (the trajectories and tracks a track or a course
+  // appears in), and whether this workspace is still there. The scratch view is
+  // neither a node nor in anything.
   useEffect(() => {
     if (root.kind === 'scratch') return
     let live = true
     getNodeDetail(root.id)
       .then((d) => {
         if (!live) return
-        setProblem(d.node.trashed_at ? gone(root.title) : null)
-        setParents(root.kind === 'course' ? d.parent_tracks : [])
+        setProblem(d.node.archived_at ? gone(root.title) : null)
+        setParents(parentWorkspaces(d.appears_in))
       })
       .catch((err) => live && setProblem(err instanceof WsError && err.status === 404 ? gone(root.title) : err instanceof Error ? err.message : String(err)))
     return () => {
@@ -185,7 +188,7 @@ function Shell({
             {parents.map((p, i) => (
               <span key={p.id}>
                 {i > 0 && ' · '}
-                <button className="ws-link" onClick={() => onOpenWorkspace({ id: p.id, kind: 'track', title: p.title })}>
+                <button className="ws-link" onClick={() => onOpenWorkspace({ id: p.id, kind: p.kind, title: p.title })}>
                   {p.title}
                 </button>
               </span>
