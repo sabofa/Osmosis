@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { v4 as uuidv4 } from "uuid";
 import { DomainError } from "../errors.js";
-import { checkContent, isFormatName } from "./formats.js";
+import { checkContent, isFormatName, searchSourceFor } from "./formats.js";
 import { normalizeKindTag, normalizeName, sameName } from "./names.js";
 import { appearsIn, summarize } from "./reads.js";
 import type { AppearsInRow, NodeSummary } from "./reads.js";
@@ -272,7 +272,8 @@ interface PreparedContent {
 // Version 1 of a new file's content. The layer reads `format` only to check its
 // grammar and to know an upload from a text format: an upload holds an existing
 // asset and no text, a text format holds no asset, and what search sees for an
-// upload is the asset's extracted text. Everything else is the format's hooks.
+// upload is the asset's extracted text (searchSourceFor, shared with
+// saveContent and the uploads sync). Everything else is the format's hooks.
 function prepareContent(db: DatabaseSync, input: CreateNodeInput): PreparedContent {
   if (input.format == null) throw new DomainError("invalid_input", "A file needs a format.");
   if (!isFormatName(input.format)) {
@@ -282,17 +283,14 @@ function prepareContent(db: DatabaseSync, input: CreateNodeInput): PreparedConte
   const format = input.format;
   const body = input.body ?? null;
   const assetId = input.asset_id ?? null;
-  let searchSource = body;
   if (format === "upload") {
     if (body !== null) throw new DomainError("invalid_input", 'An "upload" file holds an uploaded asset, not text.');
     if (assetId === null) throw new DomainError("invalid_input", 'An "upload" file needs an asset_id.');
-    const asset = db.prepare("SELECT extracted_text FROM asset WHERE id = ?").get(assetId) as { extracted_text: string | null } | undefined;
-    if (!asset) throw new DomainError("not_found", `No asset ${String(assetId)}.`);
-    searchSource = asset.extracted_text;
+    if (!db.prepare("SELECT 1 FROM asset WHERE id = ?").get(assetId)) throw new DomainError("not_found", `No asset ${String(assetId)}.`);
   } else if (assetId !== null) {
     throw new DomainError("invalid_input", `A "${format}" file holds text, not an asset.`);
   }
-  return { format, body, assetId, searchText: checkContent(format, body, searchSource).search_text };
+  return { format, body, assetId, searchText: checkContent(format, body, searchSourceFor(db, format, body, assetId)).search_text };
 }
 
 export function createNode(db: DatabaseSync, input: CreateNodeInput): { node: NodeRow; placement: PlacementRow | null } {

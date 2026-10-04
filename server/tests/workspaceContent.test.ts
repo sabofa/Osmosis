@@ -1,383 +1,646 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
+import type { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { openTestDb } from "./helpers.js";
-import { createAsset, deleteAsset } from "../src/domain/assets.js";
+import { join } from "node:path";
 import { DomainError } from "../src/domain/errors.js";
-import { registerFileType } from "../src/domain/workspace/fileTypes.js";
-import { createNode, destroyNode, placeNode, purgeNode, restoreNode } from "../src/domain/workspace/graph.js";
-import { readContent, saveContent, appendContent, listRevisions } from "../src/domain/workspace/content.js";
-import { syncAssetFiles } from "../src/domain/workspace/assetFiles.js";
-import { listRoots, listTrash, getNodeDetail } from "../src/domain/workspace/reads.js";
-
-describe("workspace content", () => {
-  it("saves optimistically: a stale base revision is refused with the current one", () => {
-    const db = openTestDb();
-    const n = createNode(db, { kind: "file", title: "f", file: { type: "markdown", body: "one" } }).node;
-    expect(saveContent(db, n.id, { body: "two", base_revision: 1, author: "ben" }).revision).toBe(2);
-    expect(() => saveContent(db, n.id, { body: "three", base_revision: 1, author: "ben" })).toThrow(/stale_revision|current revision is 2/);
-    expect(readContent(db, n.id)).toMatchObject({ body: "two", revision: 2, saved_by: "ben" });
-  });
-
-  it("appends without a base revision, records who wrote each revision, and refuses non-appendable types", () => {
-    const db = openTestDb();
-    const notes = createNode(db, { kind: "file", title: "USERNOTES", file: { type: "markdown", body: "" } }).node;
-    appendContent(db, notes.id, { text: "- confuses moles with mass (2026-10-03, Q on 3.2 g of C)", author: "tutor" });
-    appendContent(db, notes.id, { text: "- second note", author: "tutor" });
-    expect(readContent(db, notes.id).body).toBe("- confuses moles with mass (2026-10-03, Q on 3.2 g of C)\n\n- second note");
-    expect(listRevisions(db, notes.id).map((r) => r.saved_by)).toEqual(["ben", "tutor", "tutor"]);
-    const g = createNode(db, { kind: "file", title: "g", file: { type: "graph", body: "y = x" } }).node;
-    expect(() => appendContent(db, g.id, { text: "y = 2x", author: "planner" })).toThrow(/not_appendable/);
-  });
-
-  it("gives every upload one unplaced asset file, idempotently", () => {
-    const db = openTestDb();
-    db.prepare("INSERT INTO asset (id, title, type, content) VALUES ('a1', 'Ebbing ch3', 'text', 'x')").run();
-    syncAssetFiles(db); syncAssetFiles(db);
-    const unplaced = listRoots(db).unplaced;
-    expect(unplaced.map((n) => n.id)).toEqual(["asset:a1"]);
-    expect(unplaced[0]).toMatchObject({ type: "asset", kind_tag: "source", class: "document" });
-  });
-});
+import { createAsset, deleteAsset } from "../src/domain/assets.js";
+import { registerFormat, searchSourceFor } from "../src/domain/workspace/formats.js";
+import { createNode, deleteNode, getNode, place, purge, restore } from "../src/domain/workspace/graph.js";
+import { appendContent, listVersions, readContent, saveContent } from "../src/domain/workspace/content.js";
+import { syncUploads } from "../src/domain/workspace/uploads.js";
+import { unplaced } from "../src/domain/workspace/reads.js";
+import type { Author } from "../src/domain/workspace/types.js";
+import { openTestDb } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
-// The brief's tests are above. Below: what its rules imply.
+// File content and uploads, against the approved spec
+// (Learn spec/osmosis/workspace/02-data-layer.md §5.7, §7, §8, §9). Every
+// refusal asserts its exact snake_case error code, never a message pattern.
 // ---------------------------------------------------------------------------
 
-type Db = ReturnType<typeof openTestDb>;
-function failure(fn: () => unknown): DomainError {
+type Db = DatabaseSync;
+
+const uploadsDir = mkdtempSync(join(tmpdir(), "osmosis-ws-content-"));
+afterAll(() => rmSync(uploadsDir, { recursive: true, force: true }));
+
+function errorOf(fn: () => unknown): DomainError {
   try {
     fn();
   } catch (err) {
     if (err instanceof DomainError) return err;
     throw err;
   }
-  throw new Error("expected a DomainError, nothing was thrown");
+  throw new Error("expected the call to throw a DomainError");
 }
-const md = (db: Db, body: string | null = "one", title = "f") => createNode(db, { kind: "file", title, file: { type: "markdown", body } }).node;
-const nodeRow = (db: Db, id: string) => db.prepare("SELECT * FROM ws_node WHERE id = ?").get(id) as { updated_at: string; trashed_at: string | null };
-const OLD = "2000-01-01 00:00:00";
 
-describe("save in depth", () => {
-  it("a stale save changes nothing and carries the current revision as a code, in the message and in the detail", () => {
+const codeOf = (fn: () => unknown): string => errorOf(fn).code;
+
+// Formats used by the tests below. The registry is process-wide and refuses a
+// duplicate, so each has its own name.
+registerFormat({ format: "t-shout", searchText: (b) => (b ?? "").toUpperCase() });
+registerFormat({ format: "t-bare" });
+registerFormat({ format: "t-picky", validate: (b) => (b?.includes("bad") ? "no bad words here" : null) });
+registerFormat({
+  format: "t-throws-search",
+  searchText: (b) => {
+    if (b?.includes("boom")) throw new Error("search exploded");
+    return b ?? "";
+  },
+});
+const appendCalls: { body: string | null; text: string }[] = [];
+registerFormat({
+  format: "t-spy-append",
+  searchText: (b) => `seen: ${b ?? ""}`,
+  append: (body, text) => {
+    appendCalls.push({ body, text });
+    return `${body ?? ""}+${text}`;
+  },
+});
+registerFormat({
+  format: "t-append-throws",
+  append: () => {
+    throw new Error("append exploded");
+  },
+});
+registerFormat({ format: "t-append-wrong-type", append: () => 42 as unknown as string });
+registerFormat({
+  format: "t-append-picky",
+  validate: (b) => (b?.includes("bad") ? "no bad words here" : null),
+  append: (body, text) => `${body ?? ""} ${text}`,
+});
+
+function file(db: Db, title: string, format = "markdown", body: string | null = "one", author?: Author) {
+  return createNode(db, { kind: "file", title, format, body, author }).node;
+}
+
+interface VersionDump {
+  node_id: string;
+  version: number;
+  format: string;
+  body: string | null;
+  asset_id: string | null;
+  search_text: string | null;
+  author: string;
+  saved_at: string;
+}
+const versionRows = (db: Db, id: string) => db.prepare("SELECT * FROM ws_content WHERE node_id = ? ORDER BY version").all(id) as unknown as VersionDump[];
+const updatedAt = (db: Db, id: string) => (db.prepare("SELECT updated_at FROM ws_node WHERE id = ?").get(id) as { updated_at: string }).updated_at;
+const backdate = (db: Db) => db.exec("UPDATE ws_node SET updated_at = '2000-01-01 00:00:00'");
+const contentDump = (db: Db) => db.prepare("SELECT * FROM ws_content ORDER BY node_id, version").all();
+
+// ---------------------------------------------------------------------------
+// readContent
+// ---------------------------------------------------------------------------
+
+describe("readContent", () => {
+  it("returns the latest version as a whole row", () => {
     const db = openTestDb();
-    const n = md(db);
-    saveContent(db, n.id, { body: "two", base_revision: 1, author: "ben" });
-    saveContent(db, n.id, { body: "three", base_revision: 2, author: "tutor" });
-    const err = failure(() => saveContent(db, n.id, { body: "stale", base_revision: 1, author: "ben" }));
-    expect(err.code).toBe("stale_revision");
-    expect(err.message).toContain("current revision is 3");
-    expect(err.detail).toEqual({ current_revision: 3 });
-    expect(failure(() => saveContent(db, n.id, { body: "ahead", base_revision: 4, author: "ben" })).code).toBe("stale_revision");
-    expect(readContent(db, n.id)).toMatchObject({ body: "three", revision: 3, saved_by: "tutor" });
-    expect(listRevisions(db, n.id)).toHaveLength(3);
+    const f = file(db, "notes", "markdown", "one", "tutor");
+    saveContent(db, f.id, { body: "two", base_version: 1, author: "planner" });
+    expect(readContent(db, f.id)).toEqual({
+      node_id: f.id,
+      version: 2,
+      format: "markdown",
+      body: "two",
+      asset_id: null,
+      search_text: "two",
+      author: "planner",
+      saved_at: expect.any(String),
+    });
   });
 
-  it("each save writes a revision row with its body and author, bumps the file, and stamps the node", () => {
-    const db = openTestDb();
-    const n = md(db);
-    db.prepare("UPDATE ws_node SET updated_at = ? WHERE id = ?").run(OLD, n.id);
-    const saved = saveContent(db, n.id, { body: "two", base_revision: 1, author: "planner" });
-    expect(saved).toEqual({ revision: 2, saved_at: expect.any(String) });
-    expect(nodeRow(db, n.id).updated_at).not.toBe(OLD);
-    const rows = db.prepare("SELECT revision, body, type, saved_by FROM ws_file_revision WHERE node_id = ? ORDER BY revision").all(n.id);
-    expect(rows).toEqual([
-      { revision: 1, body: "one", type: "markdown", saved_by: "ben" },
-      { revision: 2, body: "two", type: "markdown", saved_by: "planner" },
-    ]);
-    expect(listRevisions(db, n.id)[1]).toEqual({ revision: 2, saved_at: saved.saved_at, saved_by: "planner" });
-  });
-
-  it("a body may be cleared to null, and an empty file saves like any other", () => {
-    const db = openTestDb();
-    const n = md(db, null);
-    expect(readContent(db, n.id)).toMatchObject({ body: null, revision: 1 });
-    saveContent(db, n.id, { body: "x", base_revision: 1, author: "ben" });
-    saveContent(db, n.id, { body: null, base_revision: 2, author: "ben" });
-    expect(readContent(db, n.id).body).toBeNull();
-  });
-
-  it("runs the type's validate, and a rejected save leaves the file and its history alone", () => {
-    const db = openTestDb();
-    registerFileType({ type: "ws-content-strict", storage: "text", appendable: true, kinds: () => [], validate: (b) => (b === null || !b.includes("BAD") ? null : "no BAD allowed") });
-    const n = createNode(db, { kind: "file", title: "s", file: { type: "ws-content-strict", body: "fine" } }).node;
-    const err = failure(() => saveContent(db, n.id, { body: "BAD", base_revision: 1, author: "ben" }));
-    expect([err.code, err.message]).toEqual(["invalid_content", "no BAD allowed"]);
-    expect(failure(() => appendContent(db, n.id, { text: "BAD", author: "tutor" })).code).toBe("invalid_content");
-    expect(readContent(db, n.id)).toMatchObject({ body: "fine", revision: 1 });
-    expect(listRevisions(db, n.id)).toHaveLength(1);
-    expect(saveContent(db, n.id, { body: "fine too", base_revision: 1, author: "ben" }).revision).toBe(2);
-  });
-
-  it("refuses an unknown author, a non-text body, a non-integer base revision and an uploaded asset's content", () => {
-    const db = openTestDb();
-    const n = md(db);
-    expect(failure(() => saveContent(db, n.id, { body: "x", base_revision: 1, author: "robot" as never })).code).toBe("invalid_input");
-    expect(failure(() => saveContent(db, n.id, { body: 5 as never, base_revision: 1, author: "ben" })).code).toBe("invalid_input");
-    expect(failure(() => saveContent(db, n.id, { body: "x", base_revision: "1" as never, author: "ben" })).code).toBe("invalid_input");
-    expect(failure(() => saveContent(db, n.id, { body: "x", base_revision: undefined as never, author: "ben" })).code).toBe("invalid_input");
-    db.prepare("INSERT INTO asset (id, title, type) VALUES ('a1', 'scan', 'file')").run();
-    syncAssetFiles(db);
-    expect(failure(() => saveContent(db, "asset:a1", { body: "x", base_revision: 1, author: "ben" })).code).toBe("invalid_input");
-    expect(readContent(db, n.id).revision).toBe(1);
-  });
-
-  it("only a file has content; an unknown node is not_found; a trashed file can't be changed but can be read", () => {
+  it("is not_found for an unknown node, and invalid_input for a node that holds no content", () => {
     const db = openTestDb();
     const folder = createNode(db, { kind: "folder", title: "f" }).node;
-    for (const call of [
-      () => readContent(db, folder.id),
-      () => saveContent(db, folder.id, { body: "x", base_revision: 1, author: "ben" }),
-      () => appendContent(db, folder.id, { text: "x", author: "ben" }),
-      () => listRevisions(db, folder.id),
-    ]) {
-      expect(failure(call).code).toBe("invalid_input");
+    expect(codeOf(() => readContent(db, "nope"))).toBe("not_found");
+    expect(codeOf(() => readContent(db, folder.id))).toBe("invalid_input");
+  });
+
+  it("reads an archived file: the archive can be looked at", () => {
+    const db = openTestDb();
+    const f = file(db, "notes");
+    deleteNode(db, f.id);
+    expect(readContent(db, f.id)).toMatchObject({ version: 1, body: "one" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// saveContent
+// ---------------------------------------------------------------------------
+
+describe("saveContent", () => {
+  it("is optimistic: a stale base gives stale_version with the current version in detail", () => {
+    const db = openTestDb();
+    const f = file(db, "notes");
+    saveContent(db, f.id, { body: "two", base_version: 1, author: "ben" });
+    const err = errorOf(() => saveContent(db, f.id, { body: "three", base_version: 1, author: "ben" }));
+    expect(err.code).toBe("stale_version");
+    expect(err.detail).toEqual({ current_version: 2 });
+    expect(err.message).toContain("2");
+    // Refused means untouched: still two versions, latest still "two".
+    expect(versionRows(db, f.id).map((r) => r.body)).toEqual(["one", "two"]);
+    expect(readContent(db, f.id).body).toBe("two");
+  });
+
+  it("refuses a base from the future as well as one from the past", () => {
+    const db = openTestDb();
+    const f = file(db, "notes");
+    expect(errorOf(() => saveContent(db, f.id, { body: "x", base_version: 5, author: "ben" })).detail).toEqual({ current_version: 1 });
+    expect(codeOf(() => saveContent(db, f.id, { body: "x", base_version: 0, author: "ben" }))).toBe("stale_version");
+  });
+
+  it("increments the version by one per save and returns the new version and its time", () => {
+    const db = openTestDb();
+    const f = file(db, "notes");
+    const first = saveContent(db, f.id, { body: "two", base_version: 1, author: "ben" });
+    const second = saveContent(db, f.id, { body: "three", base_version: 2, author: "ben" });
+    expect(first).toEqual({ version: 2, saved_at: expect.any(String) });
+    expect(second.version).toBe(3);
+    expect(versionRows(db, f.id).map((r) => r.version)).toEqual([1, 2, 3]);
+    expect(first.saved_at).toBe(versionRows(db, f.id)[1].saved_at);
+  });
+
+  it("keeps every earlier version exactly as it was, and carries the format forward", () => {
+    const db = openTestDb();
+    const f = file(db, "notes", "t-shout", "one");
+    const v1 = versionRows(db, f.id)[0];
+    saveContent(db, f.id, { body: "two", base_version: 1, author: "tutor" });
+    saveContent(db, f.id, { body: "three", base_version: 2, author: "planner" });
+    const rows = versionRows(db, f.id);
+    expect(rows[0]).toEqual(v1);
+    expect(rows.map((r) => r.format)).toEqual(["t-shout", "t-shout", "t-shout"]);
+  });
+
+  it("takes search_text from the format's hook", () => {
+    const db = openTestDb();
+    const shout = file(db, "shout", "t-shout", "quiet");
+    saveContent(db, shout.id, { body: "hello there", base_version: 1, author: "ben" });
+    expect(readContent(db, shout.id).search_text).toBe("HELLO THERE");
+    // Markdown's text is its body; a format with no hook has none to store.
+    const md = file(db, "md");
+    saveContent(db, md.id, { body: "# Moles", base_version: 1, author: "ben" });
+    expect(readContent(db, md.id).search_text).toBe("# Moles");
+    const bare = file(db, "bare", "t-bare", "raw");
+    saveContent(db, bare.id, { body: "still raw", base_version: 1, author: "ben" });
+    expect(readContent(db, bare.id)).toMatchObject({ body: "still raw", search_text: null });
+  });
+
+  it("records the author of every version, never conflating them", () => {
+    const db = openTestDb();
+    const f = file(db, "notes", "markdown", "one", "tutor");
+    saveContent(db, f.id, { body: "two", base_version: 1, author: "planner" });
+    saveContent(db, f.id, { body: "three", base_version: 2, author: "ben" });
+    expect(versionRows(db, f.id).map((r) => r.author)).toEqual(["tutor", "planner", "ben"]);
+    expect(readContent(db, f.id).author).toBe("ben");
+  });
+
+  it("accepts a null body, and stamps the node's updated_at", () => {
+    const db = openTestDb();
+    const f = file(db, "notes");
+    backdate(db);
+    saveContent(db, f.id, { body: null, base_version: 1, author: "ben" });
+    expect(readContent(db, f.id)).toMatchObject({ body: null, search_text: "" });
+    expect(updatedAt(db, f.id)).not.toBe("2000-01-01 00:00:00");
+  });
+
+  it("refuses bad input before changing anything", () => {
+    const db = openTestDb();
+    const f = file(db, "notes");
+    const before = contentDump(db);
+    for (const base of [1.5, "1", Number.NaN, null, undefined]) {
+      expect(codeOf(() => saveContent(db, f.id, { body: "x", base_version: base as number, author: "ben" })), String(base)).toBe("invalid_input");
     }
-    expect(failure(() => readContent(db, "ghost")).code).toBe("not_found");
-    expect(failure(() => saveContent(db, "ghost", { body: "x", base_revision: 1, author: "ben" })).code).toBe("not_found");
-    const n = md(db);
-    destroyNode(db, n.id);
-    expect(failure(() => saveContent(db, n.id, { body: "x", base_revision: 1, author: "ben" })).code).toBe("trashed");
-    expect(failure(() => appendContent(db, n.id, { text: "x", author: "tutor" })).code).toBe("trashed");
-    expect(readContent(db, n.id)).toMatchObject({ body: "one", revision: 1 });
+    expect(codeOf(() => saveContent(db, f.id, { body: 42 as unknown as string, base_version: 1, author: "ben" }))).toBe("invalid_input");
+    expect(codeOf(() => saveContent(db, f.id, { body: "x", base_version: 1, author: "robot" as Author }))).toBe("invalid_input");
+    expect(codeOf(() => saveContent(db, f.id, { body: "x", base_version: 1, author: undefined as unknown as Author }))).toBe("invalid_input");
+    expect(contentDump(db)).toEqual(before);
   });
 
-  it("reads the asset id of an asset file and no body", () => {
+  it("is not_found for an unknown node and invalid_input for a node that holds no content", () => {
     const db = openTestDb();
-    db.prepare("INSERT INTO asset (id, title, type, content) VALUES ('a1', 'paper', 'text', 'x')").run();
-    syncAssetFiles(db);
-    expect(readContent(db, "asset:a1")).toMatchObject({ type: "asset", body: null, asset_id: "a1", revision: 1, saved_by: "ben" });
-    expect(getNodeDetail(db, "asset:a1").file).toMatchObject({ type: "asset", asset_id: "a1" });
-  });
-});
-
-describe("append in depth", () => {
-  it("starts an empty or null body with the text alone, keeps the text exactly, and refuses nothing-to-add", () => {
-    const db = openTestDb();
-    const empty = md(db, "");
-    const none = md(db, null, "g");
-    appendContent(db, empty.id, { text: "  - first\n", author: "tutor" });
-    appendContent(db, none.id, { text: "only", author: "tutor" });
-    expect(readContent(db, empty.id).body).toBe("  - first\n");
-    expect(readContent(db, none.id).body).toBe("only");
-    expect(failure(() => appendContent(db, none.id, { text: "   ", author: "tutor" })).code).toBe("invalid_input");
-    expect(failure(() => appendContent(db, none.id, { text: undefined as never, author: "tutor" })).code).toBe("invalid_input");
-    expect(failure(() => appendContent(db, none.id, { text: "x", author: "robot" as never })).code).toBe("invalid_input");
-    expect(readContent(db, none.id).revision).toBe(2);
+    const course = createNode(db, { kind: "course", title: "c" }).node;
+    expect(codeOf(() => saveContent(db, "nope", { body: "x", base_version: 1, author: "ben" }))).toBe("not_found");
+    expect(codeOf(() => saveContent(db, course.id, { body: "x", base_version: 1, author: "ben" }))).toBe("invalid_input");
   });
 
-  it("is not blocked by Ben's edits: it appends to whatever is there now", () => {
+  it("refuses an archived file: the archive is frozen until restore", () => {
     const db = openTestDb();
-    const notes = md(db, "ben wrote this", "USERNOTES");
-    saveContent(db, notes.id, { body: "ben rewrote it", base_revision: 1, author: "ben" });
-    const appended = appendContent(db, notes.id, { text: "tutor note", author: "tutor" });
-    expect(appended.revision).toBe(3);
-    expect(readContent(db, notes.id)).toMatchObject({ body: "ben rewrote it\n\ntutor note", saved_by: "tutor" });
+    const f = file(db, "notes");
+    deleteNode(db, f.id);
+    expect(codeOf(() => saveContent(db, f.id, { body: "x", base_version: 1, author: "ben" }))).toBe("archived");
+    expect(versionRows(db, f.id)).toHaveLength(1);
+    restore(db, f.id, []);
+    expect(saveContent(db, f.id, { body: "x", base_version: 1, author: "ben" }).version).toBe(2);
   });
 
-  it("names the code when a type refuses appending, and an asset file refuses it too", () => {
+  it("fails with invalid_content, and writes nothing, when a hook refuses or throws", () => {
     const db = openTestDb();
-    const g = createNode(db, { kind: "file", title: "g", file: { type: "graph", body: "y = x" } }).node;
-    const err = failure(() => appendContent(db, g.id, { text: "y = 2x", author: "planner" }));
-    expect(err.code).toBe("not_appendable");
-    expect(err.message).toContain("not_appendable");
-    expect(readContent(db, g.id).revision).toBe(1);
-    db.prepare("INSERT INTO asset (id, title, type) VALUES ('a1', 'scan', 'file')").run();
-    syncAssetFiles(db);
-    expect(failure(() => appendContent(db, "asset:a1", { text: "x", author: "ben" })).code).toBe("not_appendable");
+    const picky = file(db, "picky", "t-picky", "fine");
+    const fragile = file(db, "fragile", "t-throws-search", "fine");
+    const before = contentDump(db);
+    expect(codeOf(() => saveContent(db, picky.id, { body: "so bad", base_version: 1, author: "ben" }))).toBe("invalid_content");
+    expect(codeOf(() => saveContent(db, fragile.id, { body: "boom", base_version: 1, author: "ben" }))).toBe("invalid_content");
+    expect(contentDump(db)).toEqual(before);
+    // A good body still saves, so the refusals were about the content.
+    expect(saveContent(db, picky.id, { body: "fine too", base_version: 1, author: "ben" }).version).toBe(2);
+  });
+
+  it("checks the base before running any hook", () => {
+    const db = openTestDb();
+    const f = file(db, "picky", "t-picky", "fine");
+    saveContent(db, f.id, { body: "fine too", base_version: 1, author: "ben" });
+    // Stale and bad: the caller needs to know the file moved on first.
+    expect(codeOf(() => saveContent(db, f.id, { body: "so bad", base_version: 1, author: "ben" }))).toBe("stale_version");
   });
 });
 
-describe("asset files in depth", () => {
-  const addAsset = (db: Db, id: string, title: string, type = "text") => db.prepare("INSERT INTO asset (id, title, type) VALUES (?, ?, ?)").run(id, title, type);
-  const count = (db: Db, table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+// ---------------------------------------------------------------------------
+// appendContent
+// ---------------------------------------------------------------------------
 
-  it("makes the wrapper a real file: revision 1 with its revision row, by ben, tagged source", () => {
+describe("appendContent", () => {
+  it("joins markdown with a blank line, and starts a body that is empty with the text alone", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "Ebbing ch3");
-    syncAssetFiles(db);
-    expect(db.prepare("SELECT kind, title, kind_tag, trashed_at FROM ws_node WHERE id = 'asset:a1'").get()).toEqual({ kind: "file", title: "Ebbing ch3", kind_tag: "source", trashed_at: null });
-    expect(db.prepare("SELECT type, body, asset_id, revision, saved_by FROM ws_file WHERE node_id = 'asset:a1'").get()).toEqual({ type: "asset", body: null, asset_id: "a1", revision: 1, saved_by: "ben" });
-    expect(listRevisions(db, "asset:a1")).toEqual([{ revision: 1, saved_at: expect.any(String), saved_by: "ben" }]);
-    expect(count(db, "ws_placement")).toBe(0);
+    const notes = file(db, "USERNOTES", "markdown", "");
+    appendContent(db, notes.id, { text: "- confuses moles with mass", author: "tutor" });
+    expect(readContent(db, notes.id).body).toBe("- confuses moles with mass");
+    appendContent(db, notes.id, { text: "- second note", author: "tutor" });
+    expect(readContent(db, notes.id).body).toBe("- confuses moles with mass\n\n- second note");
+    const nullBody = file(db, "null body", "markdown", null);
+    appendContent(db, nullBody.id, { text: "first", author: "planner" });
+    expect(readContent(db, nullBody.id).body).toBe("first");
   });
 
-  it("is idempotent, adds only what is new, and leaves a placed or trashed wrapper where it is", () => {
+  it("is refused with not_appendable for a format that has no append hook, and writes nothing", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "one");
-    addAsset(db, "a2", "two");
-    syncAssetFiles(db);
-    const folder = createNode(db, { kind: "folder", title: "inbox" }).node;
-    placeNode(db, { container_id: folder.id, child_id: "asset:a1" });
-    destroyNode(db, "asset:a2");
-    addAsset(db, "a3", "three");
-    syncAssetFiles(db);
-    syncAssetFiles(db);
-    expect(count(db, "ws_node")).toBe(4); // folder + three wrappers
-    expect(count(db, "ws_file")).toBe(3);
-    expect(count(db, "ws_file_revision")).toBe(3);
-    expect(count(db, "ws_placement")).toBe(1);
-    expect(listTrash(db).map((n) => n.id)).toEqual(["asset:a2"]);
-    expect(listRoots(db).unplaced.map((n) => n.id).sort()).toEqual([folder.id, "asset:a3"].sort());
+    const graph = file(db, "g", "graph", "y = x");
+    const bare = file(db, "b", "t-bare", "raw");
+    const before = contentDump(db);
+    expect(codeOf(() => appendContent(db, graph.id, { text: "y = 2x", author: "planner" }))).toBe("not_appendable");
+    expect(codeOf(() => appendContent(db, bare.id, { text: "more", author: "tutor" }))).toBe("not_appendable");
+    expect(contentDump(db)).toEqual(before);
   });
 
-  it("trashes a wrapper whose asset was deleted, once, and keeps its placements", () => {
+  it("needs no base version, and adds to whatever is there, a save in between included", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "one");
-    addAsset(db, "a2", "two");
-    syncAssetFiles(db);
-    const folder = createNode(db, { kind: "folder", title: "inbox" }).node;
-    placeNode(db, { container_id: folder.id, child_id: "asset:a1" });
-    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
-    expect(db.prepare("SELECT asset_id FROM ws_file WHERE node_id = 'asset:a1'").get()).toEqual({ asset_id: null });
-    syncAssetFiles(db);
-    const trashedAt = nodeRow(db, "asset:a1").trashed_at;
-    expect(trashedAt).not.toBeNull();
-    expect(nodeRow(db, "asset:a2").trashed_at).toBeNull();
-    db.prepare("UPDATE ws_node SET trashed_at = '2026-01-01 00:00:00' WHERE id = 'asset:a1'").run();
-    syncAssetFiles(db);
-    expect(nodeRow(db, "asset:a1").trashed_at).toBe("2026-01-01 00:00:00"); // trashed once, not re-stamped
-    expect(count(db, "ws_placement")).toBe(1);
-    expect(listRoots(db).unplaced.map((n) => n.id).sort()).toEqual([folder.id, "asset:a2"].sort());
+    const notes = file(db, "USERNOTES", "markdown", "ben's line");
+    appendContent(db, notes.id, { text: "tutor one", author: "tutor" });
+    // Ben saves against the version he opened; the tutor's append never made him stale
+    // for the version he is on, only for the one he opened.
+    expect(codeOf(() => saveContent(db, notes.id, { body: "ben, stale", base_version: 1, author: "ben" }))).toBe("stale_version");
+    saveContent(db, notes.id, { body: "ben's line\n\ntutor one\n\nben again", base_version: 2, author: "ben" });
+    appendContent(db, notes.id, { text: "tutor two", author: "tutor" });
+    expect(readContent(db, notes.id).body).toBe("ben's line\n\ntutor one\n\nben again\n\ntutor two");
   });
 
-  it("re-links a wrapper whose asset_id was nulled while its asset still exists, instead of trashing it", () => {
-    // A future migration that rebuilds the asset table fires ON DELETE SET NULL
-    // for every wrapper, though every upload is still there.
+  it("returns the new version, records the author, and refreshes search_text", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "one");
-    addAsset(db, "a2", "two");
-    syncAssetFiles(db);
-    const folder = createNode(db, { kind: "folder", title: "inbox" }).node;
-    placeNode(db, { container_id: folder.id, child_id: "asset:a1" });
-    db.prepare("UPDATE ws_file SET asset_id = NULL WHERE node_id IN ('asset:a1', 'asset:a2')").run();
-    syncAssetFiles(db);
-    expect(db.prepare("SELECT node_id, asset_id FROM ws_file ORDER BY node_id").all()).toEqual([
-      { node_id: "asset:a1", asset_id: "a1" },
-      { node_id: "asset:a2", asset_id: "a2" },
+    const notes = file(db, "USERNOTES", "markdown", "a");
+    expect(appendContent(db, notes.id, { text: "b", author: "tutor" })).toEqual({ version: 2 });
+    expect(appendContent(db, notes.id, { text: "c", author: "planner" })).toEqual({ version: 3 });
+    expect(versionRows(db, notes.id).map((r) => [r.version, r.author, r.search_text])).toEqual([
+      [1, "ben", "a"],
+      [2, "tutor", "a\n\nb"],
+      [3, "planner", "a\n\nb\n\nc"],
     ]);
-    expect(nodeRow(db, "asset:a1").trashed_at).toBeNull();
-    expect(nodeRow(db, "asset:a2").trashed_at).toBeNull();
-    expect(listTrash(db)).toEqual([]);
-    expect(count(db, "ws_placement")).toBe(1);
   });
 
-  it("re-links only a wrapper whose asset exists: one for a deleted asset is still trashed, and a file that is not the wrapper is left alone", () => {
+  it("hands the hook the latest body and the text, and validates the result like any write", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "one");
-    addAsset(db, "a2", "two");
-    syncAssetFiles(db);
-    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
-    // A hand-made asset file that is not `asset:<id>`: its link is nulled while the asset it pointed at lives.
-    addAsset(db, "a3", "three");
-    const odd = createNode(db, { kind: "file", title: "odd", file: { type: "asset", asset_id: "a3" } }).node;
-    db.prepare("UPDATE ws_file SET asset_id = NULL WHERE node_id = ?").run(odd.id);
-    syncAssetFiles(db);
-    expect(db.prepare("SELECT asset_id FROM ws_file WHERE node_id = ?").get(odd.id)).toEqual({ asset_id: null });
-    expect(nodeRow(db, "asset:a1").trashed_at).not.toBeNull();
-    expect(db.prepare("SELECT asset_id FROM ws_file WHERE node_id = 'asset:a1'").get()).toEqual({ asset_id: null });
-    expect(nodeRow(db, "asset:a2").trashed_at).toBeNull();
+    const spy = file(db, "spy", "t-spy-append", "base");
+    appendContent(db, spy.id, { text: "added", author: "tutor" });
+    expect(appendCalls.at(-1)).toEqual({ body: "base", text: "added" });
+    expect(readContent(db, spy.id)).toMatchObject({ body: "base+added", search_text: "seen: base+added" });
+    const picky = file(db, "picky", "t-append-picky", "fine");
+    const before = versionRows(db, picky.id);
+    expect(codeOf(() => appendContent(db, picky.id, { text: "so bad", author: "tutor" }))).toBe("invalid_content");
+    expect(versionRows(db, picky.id)).toEqual(before);
+    expect(appendContent(db, picky.id, { text: "good", author: "tutor" }).version).toBe(2);
   });
 
-  it("keeps a title that is a valid name, and makes a valid one out of one that is not", () => {
+  it("fails with invalid_content when the append hook throws or returns something that is not text", () => {
     const db = openTestDb();
-    addAsset(db, "ok", "Ebbing ch3 — Café");
-    addAsset(db, "url", "https://example.com/paper.pdf");
-    addAsset(db, "ctl", "tab\there\u0007bell");
-    addAsset(db, "blank", "   ");
-    addAsset(db, "long", "x".repeat(300));
-    syncAssetFiles(db);
-    const titles = Object.fromEntries(listRoots(db).unplaced.map((n) => [n.id, n.title]));
-    expect(titles["asset:ok"]).toBe("Ebbing ch3 — Café");
-    expect(titles["asset:url"]).toBe("https:--example.com-paper.pdf");
-    expect(titles["asset:ctl"]).toBe("tab here bell");
-    expect(titles["asset:blank"]).toBe("Untitled upload");
-    expect([...titles["asset:long"]]).toHaveLength(200);
-    // each title works as the default placement name
-    const folder = createNode(db, { kind: "folder", title: "inbox" }).node;
-    for (const id of Object.keys(titles)) placeNode(db, { container_id: folder.id, child_id: id });
+    const throws = file(db, "t", "t-append-throws", "x");
+    const wrong = file(db, "w", "t-append-wrong-type", "x");
+    expect(codeOf(() => appendContent(db, throws.id, { text: "y", author: "tutor" }))).toBe("invalid_content");
+    expect(codeOf(() => appendContent(db, wrong.id, { text: "y", author: "tutor" }))).toBe("invalid_content");
+    expect(versionRows(db, throws.id)).toHaveLength(1);
+    expect(versionRows(db, wrong.id)).toHaveLength(1);
   });
 
-  it("refuses to purge the wrapper of an upload that still exists, and the upload stays listed", () => {
+  it("refuses empty text and bad authors, and an archived file", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "Ebbing ch3");
-    syncAssetFiles(db);
-    destroyNode(db, "asset:a1");
-    const err = failure(() => purgeNode(db, "asset:a1"));
-    expect(err.code).toBe("asset_in_use");
-    expect(err.message).toMatch(/delete the upload/i);
-    expect(count(db, "ws_node")).toBe(1);
-    expect(count(db, "ws_file")).toBe(1);
-    expect(listTrash(db).map((n) => n.id)).toEqual(["asset:a1"]);
-    expect(restoreNode(db, "asset:a1").restored).toBe("asset:a1");
-    expect(listRoots(db).unplaced.map((n) => n.id)).toEqual(["asset:a1"]);
+    const notes = file(db, "USERNOTES");
+    for (const text of ["", "   \n", undefined, 7]) {
+      expect(codeOf(() => appendContent(db, notes.id, { text: text as string, author: "tutor" })), String(text)).toBe("invalid_input");
+    }
+    expect(codeOf(() => appendContent(db, notes.id, { text: "x", author: "robot" as Author }))).toBe("invalid_input");
+    expect(versionRows(db, notes.id)).toHaveLength(1);
+    deleteNode(db, notes.id);
+    expect(codeOf(() => appendContent(db, notes.id, { text: "x", author: "tutor" }))).toBe("archived");
   });
 
-  it("purges an upload's wrapper once the upload is deleted, and a later sync does not bring it back", () => {
+  it("is not_found for an unknown node and invalid_input for a node that holds no content", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "one");
-    addAsset(db, "a2", "two");
-    syncAssetFiles(db);
-    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
-    syncAssetFiles(db);
-    expect(nodeRow(db, "asset:a1").trashed_at).not.toBeNull();
-    expect(purgeNode(db, "asset:a1")).toEqual({ purged: "asset:a1" });
-    expect(db.prepare("SELECT 1 FROM ws_node WHERE id = 'asset:a1'").get()).toBeUndefined();
-    expect(listRoots(db).unplaced.map((n) => n.id)).toEqual(["asset:a2"]);
-    syncAssetFiles(db);
-    expect(count(db, "ws_node")).toBe(1);
-    expect(listTrash(db)).toEqual([]);
+    const folder = createNode(db, { kind: "folder", title: "f" }).node;
+    expect(codeOf(() => appendContent(db, "nope", { text: "x", author: "tutor" }))).toBe("not_found");
+    expect(codeOf(() => appendContent(db, folder.id, { text: "x", author: "tutor" }))).toBe("invalid_input");
   });
 
-  it("only the canonical wrapper is protected: a file that merely points at a live asset can be purged", () => {
+  it("is refused on an upload: it has no append hook", () => {
     const db = openTestDb();
-    addAsset(db, "a1", "one");
-    const n = createNode(db, { kind: "file", title: "scan", file: { type: "asset", asset_id: "a1" } }).node;
-    destroyNode(db, n.id);
-    expect(purgeNode(db, n.id)).toEqual({ purged: n.id });
-    expect(db.prepare("SELECT 1 FROM asset WHERE id = 'a1'").get()).toBeDefined();
-  });
-
-  it("runs inside a caller's transaction and rolls back with it", () => {
-    const db = openTestDb();
-    addAsset(db, "a1", "one");
-    db.exec("BEGIN");
-    syncAssetFiles(db);
-    expect(count(db, "ws_node")).toBe(1);
-    db.exec("ROLLBACK");
-    expect(count(db, "ws_node")).toBe(0);
-    syncAssetFiles(db);
-    expect(count(db, "ws_node")).toBe(1);
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    expect(codeOf(() => appendContent(db, "asset:a1", { text: "more", author: "tutor" }))).toBe("not_appendable");
   });
 });
 
-describe("asset files follow the asset table without anyone asking", () => {
-  const wrapper = (db: Db, id: string) => db.prepare("SELECT kind, kind_tag, trashed_at FROM ws_node WHERE id = ?").get(`asset:${id}`) as { kind: string; kind_tag: string | null; trashed_at: string | null } | undefined;
+// ---------------------------------------------------------------------------
+// listVersions
+// ---------------------------------------------------------------------------
 
-  it("createAsset makes the wrapper in the same call: unplaced and live before any read has run", async () => {
+describe("listVersions", () => {
+  it("returns {version, author, saved_at} for each version, oldest first", () => {
     const db = openTestDb();
-    const asset = await createAsset(db, tmpdir(), { title: "Ebbing ch3", type: "text", content: "moles" }, "human");
-    // Straight from the tables: no listRoots, no search, no explicit sync.
-    expect(wrapper(db, asset.id)).toEqual({ kind: "file", kind_tag: "source", trashed_at: null });
-    expect(db.prepare("SELECT COUNT(*) AS n FROM ws_placement").get()).toEqual({ n: 0 });
-    expect(listRoots(db).unplaced.map((n) => n.id)).toEqual([`asset:${asset.id}`]);
+    const f = file(db, "notes", "markdown", "one", "ben");
+    saveContent(db, f.id, { body: "two", base_version: 1, author: "planner" });
+    appendContent(db, f.id, { text: "three", author: "tutor" });
+    const versions = listVersions(db, f.id);
+    expect(versions).toEqual([
+      { version: 1, author: "ben", saved_at: expect.any(String) },
+      { version: 2, author: "planner", saved_at: expect.any(String) },
+      { version: 3, author: "tutor", saved_at: expect.any(String) },
+    ]);
+    expect(Object.keys(versions[0]).sort()).toEqual(["author", "saved_at", "version"]);
+    expect(versions[2].saved_at).toBe(versionRows(db, f.id)[2].saved_at);
   });
 
-  it("deleteAsset trashes the wrapper in the same call, so deleting the upload and then purging works at once", async () => {
+  it("is not_found for an unknown node and invalid_input for a node that holds no content", () => {
     const db = openTestDb();
-    const asset = await createAsset(db, tmpdir(), { title: "scan", type: "text", content: "x" }, "claude");
-    expect(failure(() => purgeNode(db, `asset:${asset.id}`)).code).toBe("not_trashed");
-    deleteAsset(db, tmpdir(), asset.id);
-    expect(wrapper(db, asset.id)?.trashed_at).not.toBeNull();
-    expect(purgeNode(db, `asset:${asset.id}`)).toEqual({ purged: `asset:${asset.id}` });
-    expect(wrapper(db, asset.id)).toBeUndefined();
+    const track = createNode(db, { kind: "track", title: "t" }).node;
+    expect(codeOf(() => listVersions(db, "nope"))).toBe("not_found");
+    expect(codeOf(() => listVersions(db, track.id))).toBe("invalid_input");
   });
 
-  it("a deleted upload's wrapper is in the trash even if the delete bypassed the domain", () => {
+  it("lists the history of an archived file too", () => {
     const db = openTestDb();
-    db.prepare("INSERT INTO asset (id, title, type) VALUES ('a1', 'one', 'text')").run();
-    syncAssetFiles(db);
+    const f = file(db, "notes");
+    saveContent(db, f.id, { body: "two", base_version: 1, author: "ben" });
+    deleteNode(db, f.id);
+    expect(listVersions(db, f.id).map((v) => v.version)).toEqual([1, 2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The text a format's searchText hook is given
+// ---------------------------------------------------------------------------
+
+describe("searchSourceFor", () => {
+  it("is the body for every format but upload", () => {
+    const db = openTestDb();
+    expect(searchSourceFor(db, "markdown", "# Moles", null)).toBe("# Moles");
+    expect(searchSourceFor(db, "graph", null, null)).toBeNull();
+    expect(searchSourceFor(db, "t-bare", "raw", null)).toBe("raw");
+  });
+
+  it("is the asset's extracted text for an upload, and null when there is no such asset", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'raw', 'extracted words')").run();
+    db.prepare("INSERT INTO asset (id, title, type, content) VALUES ('a2', 'Link', 'url', 'https://x.test')").run();
+    expect(searchSourceFor(db, "upload", null, "a1")).toBe("extracted words");
+    expect(searchSourceFor(db, "upload", null, "a2")).toBeNull();
+    expect(searchSourceFor(db, "upload", null, null)).toBeNull();
+    expect(searchSourceFor(db, "upload", null, "no-such-asset")).toBeNull();
+  });
+
+  it("gives an upload the same search_text whichever write made it: create, save and sync", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'raw', 'extracted words')").run();
+    syncUploads(db);
+    expect(readContent(db, "asset:a1").search_text).toBe("extracted words");
+    // A second file over the same asset, made by createNode.
+    const viaCreate = createNode(db, { kind: "file", title: "again", format: "upload", asset_id: "a1" }).node;
+    expect(readContent(db, viaCreate.id).search_text).toBe("extracted words");
+    // And a save of the wrapper, which re-reads the asset.
+    db.prepare("UPDATE ws_content SET search_text = 'stale' WHERE node_id = 'asset:a1'").run();
+    expect(saveContent(db, "asset:a1", { body: null, base_version: 1, author: "ben" }).version).toBe(2);
+    expect(readContent(db, "asset:a1")).toMatchObject({ search_text: "extracted words", asset_id: "a1", body: null });
+  });
+
+  it("an upload's text is never given to another format's hook, and a body never to an upload's", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'raw', 'extracted words')").run();
+    syncUploads(db);
+    expect(codeOf(() => saveContent(db, "asset:a1", { body: "typed text", base_version: 1, author: "ben" }))).toBe("invalid_input");
+    expect(versionRows(db, "asset:a1")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Uploads (spec §8)
+// ---------------------------------------------------------------------------
+
+describe("uploads", () => {
+  const nodeOf = (db: Db, id: string) => db.prepare("SELECT * FROM ws_node WHERE id = ?").get(id) as unknown as
+    | { id: string; kind: string; title: string; kind_tag: string | null; archived_at: string | null; archive_batch: string | null }
+    | undefined;
+  const placementsOf = (db: Db, id: string) =>
+    db.prepare("SELECT id, container_id, name, archived_at FROM ws_placement WHERE child_id = ?").all(id) as unknown as {
+      id: string;
+      container_id: string;
+      name: string;
+      archived_at: string | null;
+    }[];
+
+  it("creating an asset creates asset:<id> unplaced, as a file of format upload tagged source, written by ben", async () => {
+    const db = openTestDb();
+    const asset = await createAsset(db, uploadsDir, { title: "Ebbing ch3", type: "text", content: "moles and mass" }, "human");
+    const wrapper = nodeOf(db, `asset:${asset.id}`);
+    expect(wrapper).toMatchObject({ kind: "file", title: "Ebbing ch3", kind_tag: "source", archived_at: null });
+    expect(versionRows(db, `asset:${asset.id}`)).toEqual([
+      expect.objectContaining({ version: 1, format: "upload", body: null, asset_id: asset.id, search_text: "moles and mass", author: "ben" }),
+    ]);
+    expect(placementsOf(db, `asset:${asset.id}`)).toEqual([]);
+    expect(unplaced(db).map((n) => n.id)).toEqual([`asset:${asset.id}`]);
+  });
+
+  it("is idempotent: syncing again changes nothing and makes no duplicate", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    const once = { nodes: db.prepare("SELECT * FROM ws_node").all(), content: contentDump(db) };
+    syncUploads(db);
+    syncUploads(db);
+    expect({ nodes: db.prepare("SELECT * FROM ws_node").all(), content: contentDump(db) }).toEqual(once);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM ws_node").get()).toEqual({ n: 1 });
+  });
+
+  it("gives an asset with no extracted text an empty search_text, and keeps a title that is already a valid name", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content) VALUES ('a1', 'Paper on elasticity', 'url', 'https://example.test/paper')").run();
+    syncUploads(db);
+    expect(nodeOf(db, "asset:a1")?.title).toBe("Paper on elasticity");
+    expect(readContent(db, "asset:a1").search_text).toBe("");
+  });
+
+  it("turns a title that is not a valid name into one: no slash, no control characters, capped, never empty", () => {
+    const db = openTestDb();
+    const insert = db.prepare("INSERT INTO asset (id, title, type, content) VALUES (?, ?, 'text', 'x')");
+    insert.run("t1", "a/b\nc");
+    insert.run("t2", "x".repeat(300));
+    insert.run("t3", "   ");
+    insert.run("t4", "Résumé");
+    syncUploads(db);
+    expect(nodeOf(db, "asset:t1")?.title).toBe("a-b c");
+    expect([...(nodeOf(db, "asset:t2")?.title ?? "")]).toHaveLength(200);
+    expect(nodeOf(db, "asset:t3")?.title).toBe("Untitled upload");
+    expect(nodeOf(db, "asset:t4")?.title).toBe("Résumé");
+  });
+
+  it("deleting the asset archives the wrapper and marks its placements, as delete does", async () => {
+    const db = openTestDb();
+    const folder = createNode(db, { kind: "folder", title: "sources" }).node;
+    const asset = await createAsset(db, uploadsDir, { title: "Paper", type: "text", content: "words" }, "human");
+    const wrapperId = `asset:${asset.id}`;
+    const placed = place(db, { container_id: folder.id, child_id: wrapperId });
+    backdate(db);
+    deleteAsset(db, uploadsDir, asset.id);
+    const wrapper = nodeOf(db, wrapperId);
+    expect(wrapper?.archived_at).not.toBeNull();
+    expect(wrapper?.archive_batch).not.toBeNull();
+    expect(placementsOf(db, wrapperId)).toEqual([expect.objectContaining({ id: placed.id, archived_at: expect.any(String) })]);
+    expect(readContent(db, wrapperId).asset_id).toBeNull();
+    // The folder it sat in lost a child, so it is stamped.
+    expect(updatedAt(db, folder.id)).not.toBe("2000-01-01 00:00:00");
+    // A later sync finds nothing left to do: the archived wrapper is left as it is,
+    // not archived a second time.
+    const archivedRow = nodeOf(db, wrapperId);
+    syncUploads(db);
+    expect(nodeOf(db, wrapperId)).toEqual(archivedRow);
+  });
+
+  it("archives only the wrappers whose asset is gone, and leaves the live ones alone", async () => {
+    const db = openTestDb();
+    const keep = await createAsset(db, uploadsDir, { title: "keep", type: "text", content: "k" }, "human");
+    const drop = await createAsset(db, uploadsDir, { title: "drop", type: "text", content: "d" }, "human");
+    deleteAsset(db, uploadsDir, drop.id);
+    expect(nodeOf(db, `asset:${keep.id}`)?.archived_at).toBeNull();
+    expect(nodeOf(db, `asset:${drop.id}`)?.archived_at).not.toBeNull();
+  });
+
+  it("re-links a wrapper whose asset_id was nulled while its asset still exists, and does not archive it", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    db.prepare("UPDATE ws_content SET asset_id = NULL WHERE node_id = 'asset:a1'").run();
+    syncUploads(db);
+    expect(readContent(db, "asset:a1").asset_id).toBe("a1");
+    expect(nodeOf(db, "asset:a1")?.archived_at).toBeNull();
+    expect(nodeOf(db, "asset:a1")?.archive_batch).toBeNull();
+  });
+
+  it("survives a rebuilt asset table: ON DELETE SET NULL fires, the same assets come back, nothing is archived", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
     db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
-    // listTrash is what the trash view reads; it brings the wrappers up to date first.
-    expect(listTrash(db).map((n) => n.id)).toEqual(["asset:a1"]);
+    expect(readContent(db, "asset:a1").asset_id).toBeNull();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    expect(readContent(db, "asset:a1").asset_id).toBe("a1");
+    expect(nodeOf(db, "asset:a1")?.archived_at).toBeNull();
+  });
+
+  it("re-links every version of the wrapper, not just the latest", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    saveContent(db, "asset:a1", { body: null, base_version: 1, author: "ben" });
+    db.prepare("UPDATE ws_content SET asset_id = NULL WHERE node_id = 'asset:a1'").run();
+    syncUploads(db);
+    expect(versionRows(db, "asset:a1").map((r) => r.asset_id)).toEqual(["a1", "a1"]);
+  });
+
+  it("archives a file that merely points at an asset when the asset goes, and never re-links it", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    const pointer = createNode(db, { kind: "file", title: "mine", format: "upload", asset_id: "a1" }).node;
+    db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    expect(nodeOf(db, pointer.id)?.archived_at).not.toBeNull();
+    expect(readContent(db, pointer.id).asset_id).toBeNull();
+  });
+
+  it("re-links by the wrapper's id alone: a file whose id merely ends in an asset's id is left as it is", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content) VALUES ('a1', 'Paper', 'text', 'x')").run();
+    db.prepare("INSERT INTO ws_node (id, kind, title) VALUES ('xxxxxxa1', 'file', 'lookalike')").run();
+    db.prepare("INSERT INTO ws_content (node_id, version, format, body, asset_id, author) VALUES ('xxxxxxa1', 1, 'upload', NULL, NULL, 'ben')").run();
+    syncUploads(db);
+    expect(readContent(db, "xxxxxxa1").asset_id).toBeNull();
+    expect(nodeOf(db, "xxxxxxa1")?.archived_at).not.toBeNull();
+  });
+
+  it("does not bring back a wrapper Ben archived himself, and does not archive it again", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    deleteNode(db, "asset:a1");
+    const archived = nodeOf(db, "asset:a1");
+    syncUploads(db);
+    expect(nodeOf(db, "asset:a1")).toEqual(archived);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM ws_node").get()).toEqual({ n: 1 });
+  });
+
+  it("refuses to purge the wrapper of a live asset (asset_in_use), and the wrapper stays", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'x', 'words')").run();
+    syncUploads(db);
+    deleteNode(db, "asset:a1");
+    expect(codeOf(() => purge(db, "asset:a1"))).toBe("asset_in_use");
+    expect(getNode(db, "asset:a1").archived_at).not.toBeNull();
+  });
+
+  it("purges once the asset is deleted, and the wrapper does not come back", async () => {
+    const db = openTestDb();
+    const asset = await createAsset(db, uploadsDir, { title: "Paper", type: "text", content: "words" }, "human");
+    const wrapperId = `asset:${asset.id}`;
+    deleteAsset(db, uploadsDir, asset.id);
+    expect(purge(db, wrapperId)).toEqual({ purged: wrapperId });
+    syncUploads(db);
+    syncUploads(db);
+    expect(nodeOf(db, wrapperId)).toBeUndefined();
+    expect(versionRows(db, wrapperId)).toEqual([]);
+  });
+
+  it("is all-or-nothing inside a caller's transaction", () => {
+    const db = openTestDb();
+    db.prepare("INSERT INTO asset (id, title, type, content) VALUES ('a1', 'Paper', 'text', 'x')").run();
+    db.exec("BEGIN");
+    syncUploads(db);
+    expect(nodeOf(db, "asset:a1")).toBeDefined();
+    db.exec("ROLLBACK");
+    expect(nodeOf(db, "asset:a1")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The domain index
+// ---------------------------------------------------------------------------
+
+describe("the domain index", () => {
+  it("re-exports the writes, the reads, content, uploads, formats, names and types", async () => {
+    const ws = (await import("../src/domain/workspace/index.js")) as Record<string, unknown>;
+    for (const name of [
+      "createNode", "place", "move", "trash", "deleteNode", "restore", "purge", "rename", "retitle", "setKindTag",
+      "getNodeDetail", "children", "appearsIn", "unplaced", "roots", "subtree", "byKindTag", "search", "archived", "context",
+      "readContent", "saveContent", "appendContent", "listVersions", "syncUploads",
+      "registerFormat", "formatHooks", "listFormats", "searchSourceFor", "normalizeName", "normalizeKindTag", "MAY_HOLD", "NODE_KINDS",
+    ]) {
+      expect(typeof ws[name], name).not.toBe("undefined");
+    }
+    expect(ws.syncAssetFiles).toBeUndefined();
   });
 });

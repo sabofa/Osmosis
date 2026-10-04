@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../errors.js";
 
 // Format hooks (Learn spec/osmosis/workspace/02-data-layer.md §7), which
@@ -56,12 +57,26 @@ export function listFormats(): { format: string; searchable: boolean; appendable
   }));
 }
 
+// The text a format's searchText hook is given. For every format but one it is
+// the body. An upload has no body (its content is an asset the layer never
+// copies), so the hook is handed the asset's extracted text instead, which is
+// what makes an upload findable by what is in it. A missing asset, or one that
+// had nothing to extract, is null. This is the one place that rule lives:
+// createNode, saveContent and the uploads sync all ask here, so an upload's
+// search_text can't come out empty on one path and full on another. It is a
+// read of the asset row, not a hook call, and only writes use it.
+export function searchSourceFor(db: DatabaseSync, format: string, body: string | null, assetId: string | null): string | null {
+  if (format !== "upload") return body;
+  if (assetId === null) return null;
+  const asset = db.prepare("SELECT extracted_text FROM asset WHERE id = ?").get(assetId) as { extracted_text: string | null } | undefined;
+  return asset?.extracted_text ?? null;
+}
+
 // What a write does with a format's hooks: refuse the content, or work out the
 // search_text to store alongside it. Every hook is someone else's code, so one
 // that refuses, throws, or returns the wrong kind of value fails this one
-// write with invalid_content. `searchSource` is what searchText is given: the
-// body, except for an upload, which has no body of its own and hands over the
-// asset's extracted text instead (graph.ts, createNode).
+// write with invalid_content. `searchSource` is what searchText is given, from
+// searchSourceFor above.
 export function checkContent(format: string, body: string | null, searchSource: string | null = body): { search_text: string | null } {
   const hooks = formatHooks(format);
   if (!hooks) return { search_text: null };
@@ -85,6 +100,23 @@ export function checkContent(format: string, body: string | null, searchSource: 
   return { search_text: text };
 }
 
+// The new body for an append: the format's own joining of what is there and
+// what is new. Only a format with an append hook has one (not_appendable
+// otherwise). Like every hook it is someone else's code, so one that throws or
+// returns something that is not text fails this one write with invalid_content.
+export function appendBody(format: string, body: string | null, text: string): string {
+  const hooks = formatHooks(format);
+  if (!hooks?.append) throw new DomainError("not_appendable", `A "${format}" file can't be appended to.`);
+  let joined: unknown;
+  try {
+    joined = hooks.append(body, text);
+  } catch (err) {
+    throw new DomainError("invalid_content", `The "${format}" format could not append to this content: ${errorText(err)}`);
+  }
+  if (typeof joined !== "string") throw new DomainError("invalid_content", `The "${format}" format's append did not return text.`);
+  return joined;
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -94,7 +126,7 @@ function errorText(err: unknown): string {
 // joining is the format's, because joining is interpretation). graph is the
 // graph engine's text DSL, searchable the same way. upload wraps an asset
 // without copying it; its search text is the asset's extracted text, so the
-// hook is the identity and createNode hands it that text.
+// hook is the identity and searchSourceFor hands it that text.
 registerFormat({
   format: "markdown",
   searchText: (body) => body ?? "",

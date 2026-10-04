@@ -4,7 +4,7 @@ import { writeFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { DomainError } from "./errors.js";
 import { extractText } from "../lib/extract/index.js";
-import { syncAssetFiles } from "./workspace/assetFiles.js";
+import { syncUploads } from "./workspace/uploads.js";
 
 export type AssetType = "url" | "text" | "file";
 
@@ -95,10 +95,10 @@ export async function createAsset(
     created_by: createdBy,
   });
 
-  // Every upload has a file in the workspace (workspace/assetFiles.ts). Making
+  // Every upload has a file in the workspace (workspace/uploads.ts). Making
   // it here, in the one function every upload goes through, means it exists
   // the moment the upload does, whichever door it came in by.
-  syncAssetFiles(db);
+  syncUploads(db);
   return getAsset(db, id);
 }
 
@@ -226,9 +226,9 @@ export function deleteAsset(db: DatabaseSync, uploadsDir: string, id: string): {
     const filePath = join(uploadsDir, asset.storage_path);
     if (existsSync(filePath)) unlinkSync(filePath);
   }
-  // The upload's workspace file goes to the trash with it, so it can be purged
+  // The upload's workspace file is archived with it, so it can be purged
   // straight away (a wrapper can't be while its upload exists). Last, so a
   // failure here can't leave the file on disk.
-  syncAssetFiles(db);
+  syncUploads(db);
   return { id };
 }
