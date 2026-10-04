@@ -69,7 +69,9 @@
 //  - tuning.bandSamples (BAND.samples, fewer at COARSE) values of the oscillation coordinate are taken
 //    over the interval, the ends included (they are already known, so they cost nothing) and the
 //    others spread evenly but for a jitter (BAND.jitter: equal spacing is resonant with some
-//    oscillations and sees no turn in them). If they turn at least BAND.minTurns times (BAND.joinTurns
+//    oscillations and sees no turn in them). If they span at least flatPx on the oscillation axis (under
+//    that the curve is flat there, and what turns in its samples is rounding noise: (x + 1)^2 - x^2 - 2x was
+//    bands 1e-14 px tall) and they turn at least BAND.minTurns times (BAND.joinTurns
 //    beside a band), the interval is a column: its extent is the least and greatest finite sample,
 //    clamped into the twin's enclosure of the interval (a band never says more than the enclosure
 //    does), and the chain is lifted. The column stops the refinement: it is the picture. No break is
@@ -642,7 +644,13 @@ function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb:
   // (and if the enclosure does not hold the samples at all, the twin and the scalar disagree about
   // this interval, and neither is trusted with a band or a polyline)
   if (lo <= hi) {
-    if (oscillates(v, n, beside ? BAND.joinTurns : BAND.minTurns, !certified)) {
+    // A column whose samples span less than flatPx on the oscillation axis is not an oscillation: it is a curve that
+    // is flat there, and what turns in its samples is rounding noise (the line y = 1 written (x + 1)^2 - x^2 - 2x
+    // has noise of 1e-14, which turns round every few samples). A band that thin is invisible, so a curve of this
+    // kind was drawn in a few short chains with bands of 1e-14 px between them, over 92 % of its width, with no
+    // message. It goes on as a column that did not turn: its samples joined, if the twin certifies it.
+    const extentPx = (spanHi - spanLo) * (alongY ? c.screen.px.y : c.screen.px.x)
+    if (!(extentPx < c.tune.flatPx) && oscillates(v, n, beside ? BAND.joinTurns : BAND.minTurns, !certified)) {
       if (certified || !splitAtJump(c, bands, v, enclosureLo, enclosureHi)) bands.sink.column(ta, tb, lo, hi)
       bands.lastEnd = tb
       c.sink.lift()

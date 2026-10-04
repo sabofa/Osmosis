@@ -37,8 +37,13 @@
 //      interval is uncertified). The core draws the stretch that ends at an anchor, if what
 //      the samples show certifies it (adaptive.ts), which is what lets the chain run through.
 //    - edge: the defined side's end is anchored at the limit when it converged (sqrt, an
-//      arc's tip: the core alone stops a floor short of it), else singular (a limit that
-//      diverges, or one that did not converge, is never reached for); the undefined side's
+//      arc's tip: the core alone stops a floor short of it), else FREE (a limit that
+//      diverges, ln x at 0, or one that did not converge): the core samples to the edge itself,
+//      refines it on definedness to the last finite point and the sink cuts the curve at the clip
+//      box, so ln x dives out of the picture and not a floor's width from the edge, and a sample
+//      cannot extend the curve past where it is defined as an anchor could. The core records an
+//      edge break where it finds one, which is the same edge as the classified one (within the
+//      locator's tolerance), so the classified one is kept and that one dropped. The undefined side's
 //      end is singular, so it culls itself or draws nothing. An edge break; and an endpoint
 //      mark only when the edge is a SEAM, the author's own condition (a natural sqrt or ln
 //      edge is not marked).
@@ -173,6 +178,8 @@ interface Walk {
   independent: 'x' | 'y' | null
   marks: PendingMark[]
   poles: number[]
+  // the parameters of the edges the walk classified (their breaks are made from this, not through the sink)
+  edges: number[]
   pt: Float64Array
   // what reading a comparison's side needs: the curve's parameter and scope, and the compiled
   // a - b of each comparison generator (one compile per generator, not per zero)
@@ -237,6 +244,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     independent: spec.kind === 'explicit' ? spec.independent : null,
     marks: [],
     poles: [],
+    edges: [],
     pt: new Float64Array(2),
     param: co.param,
     scope,
@@ -265,7 +273,9 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   piece(from, co.to, leftEnd, FREE)
 
   const chains = sink.chains()
-  const breaks: Break[] = sink.breaks().sort((a, b) => a.at - b.at)
+  // An edge the core found itself (refineEdge, at a free end) where the walk classified one is that edge: it is
+  // recorded once, as the walk placed it.
+  const breaks: Break[] = [...sink.breaks().filter((b) => b.kind !== 'edge' || !walk.edges.some((tc) => Math.abs(b.at - tc) <= offsetAt(tc))), ...walk.edges.map((at): Break => ({ at, kind: 'edge' }))].sort((a, b) => a.at - b.at)
   const bands = bandObjects(bandSink, options)
   const objects: SceneObject[] = [curveObject(options, chains, breaks), ...bands, ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
   // Drawn, for `defined`: a chain or band that reaches the visible range (an explicit curve drawn only in the overscan is not defined in view)
@@ -313,10 +323,12 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
       return { before: through, after: through, lift: false }
     }
     case 'edge': {
-      // a limit that diverges is never reached for: that end is singular, with nothing marked
+      // a limit that diverges (or did not converge) is not an anchor: that end is free, and what the core samples
+      // there is the curve, to the last point it is defined at, with nothing marked
       const limit = c.limit === null ? null : onAxis(w, settle(w, c.limit, tc, c.defined === 'left' ? -1 : 1), tc)
-      const reach: End = limit === null ? SINGULAR : { kind: 'anchor', at: limit }
-      w.sink.addBreak(tc, 'edge')
+      const reach: End = limit === null ? FREE : { kind: 'anchor', at: limit }
+      // (recorded with the others after the sampling, once the core's own edge breaks that repeat it are dropped)
+      w.edges.push(tc)
       // only an edge the author wrote is marked, and only with a limit to mark
       if (limit !== null && zero.origin === 'seam') {
         const own = ownerAt(w, zero)

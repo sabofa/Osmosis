@@ -82,6 +82,26 @@ describe('sampleCurve — jumps and ends', () => {
     const s = chainPoints(curveOf(run(explicit('sqrt(x)')).objects).chains[0])
     expect(s[0]).toEqual({ x: expect.closeTo(0, 12), y: expect.closeTo(0, 3) })
   })
+  // calc P2 task 8, fix round 1: a diverging edge was a singular end, which the core starts a floor's width inside, so
+  // ln x stopped at -6.46 (142 px short of the bottom of a view of [-10, 10]) and log x at -2.81. The end is free now: the
+  // core samples to the edge and the sink cuts the curve at the clip box.
+  it('ln x and log x dive to the bottom of the clip box, which is below the view, and have one edge break', () => {
+    for (const body of ['ln(x)', 'log(x)']) {
+      const r = run(explicit(body))
+      const c = curveOf(r.objects)
+      const ys = c.chains.flatMap(chainPoints).map((p) => p.y)
+      expect(Math.min(...ys), body).toBe(-15)
+      // the edge is recorded once, where the walk placed it, and not again where the core refined it
+      expect(c.breaks.filter((b) => b.kind === 'edge'), body).toEqual([{ at: expect.closeTo(0, 12), kind: 'edge' }])
+      expect(c.chains, body).toHaveLength(1)
+    }
+  })
+  it('a diverging edge on the other side, ln(-x), dives the same way', () => {
+    const r = run(explicit('ln(-x)'))
+    const c = curveOf(r.objects)
+    expect(Math.min(...c.chains.flatMap(chainPoints).map((p) => p.y))).toBe(-15)
+    expect(c.breaks.filter((b) => b.kind === 'edge')).toEqual([{ at: expect.closeTo(0, 12), kind: 'edge' }])
+  })
   it('both halves of the real roots', () => {
     for (const body of ['x^(1/3)', 'x^(2/3)']) {
       const xs = curveOf(run(explicit(body)).objects).chains.flatMap(chainPoints).map((p) => p.x)

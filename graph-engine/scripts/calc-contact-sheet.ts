@@ -12,8 +12,9 @@
 //     -ArgumentList @('--headless=new','--disable-gpu','--hide-scrollbars','--user-data-dir=<fresh dir>',
 //                     '--window-size=1440,1800','--virtual-time-budget=4000','--screenshot=<out.png>','file:///<page.html>')
 //
-// Exits 1 if any case has an error it did not expect (parse errors included), or a NaN or an Infinity in its
-// SVG. A case's own notes ("drawn coarsely: ...", expected by the case) are shown on its cell, not counted.
+// Exits 1 if any case has an error it did not expect (parse errors included), a note it expects and does not
+// have, or a NaN or an Infinity in its SVG. A case's own notes ("drawn coarsely: ...", expected by the case) are
+// shown on its cell, not counted.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { CORPUS, type CorpusCase } from '../src/plot/testing/corpus'
 import { sceneToSvg } from '../src/plot/testing/svgScene'
@@ -41,9 +42,10 @@ function cellOf(c: CorpusCase): Cell {
   const svg = sceneToSvg(scene, v, { markRadius: 9 })
   const expected = c.expect.notes ?? []
   const messages = scene.errors.map((e) => e.message)
-  // a message is expected when the case names it, in order, by its prefix
+  // a message is expected when the case names it, in order, by its prefix; and a note the case names that is not there is a problem too
   const unexpected = messages.filter((m, i) => !(i < expected.length && m.startsWith(expected[i])))
-  const problems = [...parsed.errors.map((e) => `line ${e.line}: ${e.message}`), ...unexpected]
+  const missing = expected.filter((prefix, i) => !(i < messages.length && messages[i].startsWith(prefix)))
+  const problems = [...parsed.errors.map((e) => `line ${e.line}: ${e.message}`), ...unexpected, ...missing.map((prefix) => `the note "${prefix}..." is expected and is missing`)]
   if (/NaN|Infinity/.test(svg)) problems.push('the SVG holds a NaN or an Infinity')
   const { xMin, xMax, yMin, yMax } = v.bounds
   const stats = scene.stats ?? { points: 0, intervals: 0 }

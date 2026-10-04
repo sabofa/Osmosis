@@ -7,6 +7,7 @@ import type { Statement } from '../../parser/types'
 import { buildScene } from '../../scene/buildScene'
 import { chainPoints } from '../../scene/chains'
 import type { Break, BreakKind, Chain, Scene, SceneObject, Vec2 } from '../../scene/types'
+import { FULL } from '../sample/tuning'
 import { buildPlotScope } from '../scope'
 import { CORPUS, type CorpusCase, type CorpusView } from './corpus'
 
@@ -106,11 +107,16 @@ function anchorsOf(curve: CurveObject, scene: Scene, statement: Statement): numb
 const isAnchor = (anchors: readonly number[], t: number) => anchors.some((a) => Math.abs(a - t) <= 1e-9 * Math.max(1, Math.abs(t)))
 
 // How far, in pixels, the worst vertex of the chains is from the true curve (at its own parameter), and the worst
-// chord. Vertices at an anchor, and the chords that end at one, are not asked.
+// chord. Vertices at an anchor, and the chords that end at one, are not asked; nor are vertices on the clip box,
+// where the sink cut the curve: their parameter is interpolated along the segment it cut, and is not meant to be on
+// the curve (ln x, dived out of the picture, has the cut at the bottom of the box, with a parameter that is nowhere).
 function deviation(curve: CurveObject, scene: Scene, truth: (t: number) => Vec2, statement: Statement, v: CorpusView): { vertex: number; chord: number } {
   const px = pxPerUnit(v)
   const anchors = anchorsOf(curve, scene, statement)
   const toPx = (p: Vec2): Vec2 => ({ x: p.x * px.x, y: p.y * px.y })
+  const s = span(v)
+  const box = { xMin: v.bounds.xMin - FULL.overscan * s.x, xMax: v.bounds.xMax + FULL.overscan * s.x, yMin: v.bounds.yMin - FULL.overscan * s.y, yMax: v.bounds.yMax + FULL.overscan * s.y }
+  const onBox = (p: Vec2) => [p.x - box.xMin, p.x - box.xMax].some((d) => Math.abs(d) <= 1e-9 * s.x) || [p.y - box.yMin, p.y - box.yMax].some((d) => Math.abs(d) <= 1e-9 * s.y)
   // a curve that is not a number where the sampler drew a vertex is as far off as can be
   const far = (d: number) => (Number.isNaN(d) ? Number.POSITIVE_INFINITY : d)
   let vertex = 0
@@ -120,14 +126,14 @@ function deviation(curve: CurveObject, scene: Scene, truth: (t: number) => Vec2,
     for (let i = 0; i < n; i++) {
       const t = chain.param[i]
       const here = { x: chain.xy[2 * i], y: chain.xy[2 * i + 1] }
-      if (!isAnchor(anchors, t)) {
+      if (!isAnchor(anchors, t) && !onBox(here)) {
         const on = toPx(truth(t))
-        vertex = Math.max(vertex, far(Math.hypot((here.x * px.x) - on.x, (here.y * px.y) - on.y)))
+        vertex = Math.max(vertex, far(Math.hypot(here.x * px.x - on.x, here.y * px.y - on.y)))
       }
       if (i + 1 >= n) continue
       const tb = chain.param[i + 1]
-      if (isAnchor(anchors, t) || isAnchor(anchors, tb)) continue
       const next = { x: chain.xy[2 * i + 2], y: chain.xy[2 * i + 3] }
+      if (isAnchor(anchors, t) || isAnchor(anchors, tb) || onBox(here) || onBox(next)) continue
       const along = toPx({ x: here.x + CHORD_AT * (next.x - here.x), y: here.y + CHORD_AT * (next.y - here.y) })
       let nearest = Number.POSITIVE_INFINITY
       let prev = toPx(truth(t))
@@ -216,8 +222,8 @@ function markIn(v: CorpusView, m: MarkObject): boolean {
 
 const byPosition = (tol: Vec2) => (a: Vec2, b: Vec2) => (Math.abs(a.x - b.x) > tol.x ? a.x - b.x : a.y - b.y)
 
-function expectPositions(label: string, got: readonly number[], want: readonly number[], v: CorpusView) {
-  const tol = TOL_X * Math.max(span(v).x, span(v).y)
+function expectPositions(label: string, got: readonly number[], want: readonly number[], v: CorpusView, tolerance?: number) {
+  const tol = tolerance ?? TOL_X * Math.max(span(v).x, span(v).y)
   expect(got, `${label}: ${got.join(', ')}`).toHaveLength(want.length)
   want.forEach((w, i) => expect(Math.abs(got[i] - w), `${label} ${i}: ${got[i]} for ${w}`).toBeLessThanOrEqual(tol))
 }
@@ -364,6 +370,8 @@ describe('the torture corpus', () => {
         const v = c.views[0]
         if (want.poles) expectPositions('poles', breaksOf(scene, run.parsed, v, 'pole'), want.poles, v)
         if (want.jumps) expectPositions('jumps', breaksOf(scene, run.parsed, v, 'jump'), want.jumps, v)
+        // (the jump test records the middle of the floor interval it lifted at: 1/16 px of the independent axis, here x)
+        if (want.jumpsFound) expectPositions('jumps found by the jump test', breaksOf(scene, run.parsed, v, 'jump'), want.jumpsFound, v, FULL.floorPx / pxPerUnit(v).x)
         if (want.edges) expectPositions('edges', breaksOf(scene, run.parsed, v, 'edge'), want.edges, v)
         if (want.holes) expectPoints('holes', marksOf(scene, 'hole').filter((m) => markIn(v, m)).map((m) => m.at), want.holes, v)
         if (want.values) expectPoints('values', marksOf(scene, 'value').filter((m) => markIn(v, m)).map((m) => m.at), want.values, v)

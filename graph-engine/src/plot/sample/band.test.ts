@@ -282,6 +282,27 @@ describe('bands from sampleCurve', () => {
     expect(r.capped).toBe(false)
   })
 
+  // calc P2 task 8, fix round 1: a flat curve whose scalar value is a constant plus rounding noise (the twin cannot see
+  // the cancellation, so its enclosure is loose and the column is tried) turns round in its samples, and was a band of
+  // 1e-14 px: invisible, over 92 % of the width, with no message.
+  it.each(['(x + 1)^2 - x^2 - 2x', '(x^2 - 1)/(x - 1) - x', 'cosh(x)^2 - sinh(x)^2'])('%s, which is the line y = 1, is one chain across the view and no band', (body) => {
+    const r = sample(explicit(body), wide)
+    expect(bandsOf(r.objects)).toEqual([])
+    const chains = curveOf(r.objects).chains
+    expect(chains).toHaveLength(1)
+    const xs = chainPoints(chains[0]).map((p) => p.x)
+    expect(Math.min(...xs)).toBeLessThanOrEqual(-10)
+    expect(Math.max(...xs)).toBeGreaterThanOrEqual(10)
+    for (const p of chainPoints(chains[0])) expect(Math.abs(p.y - 1) * 40, `${body} at ${p.x}`).toBeLessThan(0.25)
+    expect(r.capped).toBe(false)
+  })
+  it('a wave under a quarter of a pixel from crest to trough is not a band, and one of 8 px is', () => {
+    // 0.25 px is flatPx: a column whose samples span under it is flat, however often they turn (at 40 px a unit, 0.002 is
+    // 0.16 px from crest to trough). The cancelling term loosens the enclosure, so the columns are tried at all.
+    expect(bandsOf(sample(explicit('exp(x^2) - exp(x^2) + 0.002 sin(500x)'), wide).objects)).toEqual([])
+    expect(bandsOf(sample(explicit('exp(x^2) - exp(x^2) + 0.1 sin(500x)'), wide).objects).length).toBeGreaterThan(0)
+  })
+
   it('a band across a view is not cut by columns whose ends happen to sit at its extremes', () => {
     // 363 x is about 9.1 rad over a pixel, near 3 pi: the two ends of a column are close to mirror
     // images, and for some columns both are at the extremes, where the twin's enclosure is no taller

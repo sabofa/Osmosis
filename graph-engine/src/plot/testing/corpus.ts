@@ -40,6 +40,10 @@ export interface CorpusCase {
     // jump breaks (found by the walk, or at a seam) and edge breaks (a domain's end), the same
     jumps?: number[]
     edges?: number[]
+    // jump breaks that only the core's jump test found, where the walk placed none: it records the middle of the
+    // floor interval it lifted at, so they are asked to within 1/16 px of the independent axis and not to 1e-9 (the
+    // jumps of `jumps` are located, and are)
+    jumpsFound?: number[]
     // open hole marks
     holes?: Vec2[]
     // endpoint marks, open or filled
@@ -52,7 +56,9 @@ export interface CorpusCase {
     // know). Marks and guides are not the curve.
     blank?: boolean
     // default true: every chain vertex is within a half pixel of the true curve (vertices at a classified
-    // trouble spot are anchors, and are skipped), and no chord strays more than a pixel from it
+    // trouble spot are anchors, and vertices on the clip box where the sink cut the curve have a parameter
+    // interpolated along the segment: both are skipped, with the chords that end at them), and no chord strays
+    // more than a pixel from it
     onCurve?: boolean
     // pole positions and guide counts are equal in every pair of views, over the part of the independent
     // axis they both show
@@ -266,13 +272,22 @@ export const CORPUS: readonly CorpusCase[] = [
 
   // ---- edges ---------------------------------------------------------------------------------------------
   {
-    // ln dives off the picture at its edge: the chain runs to within a floor's width of 0 (it is never evaluated
-    // at the edge itself, where it diverges), and nothing is marked
+    // ln dives off the picture at its edge: the chain is sampled to the last x it is defined at (ln of 0 is minus
+    // infinity, so the core refines the edge on definedness) and the sink cuts it at the clip box, below the bottom of
+    // the view. So it reaches the view's edge, (e^-8, -8), and nothing is marked. One edge break, at 0.
     name: 'ln x',
     spec: 'y = ln(x)',
     views: [view(-2, 10, -8, 4)],
-    expect: { edges: [0], holes: [], ends: [], drawn: [{ x: 0.002, y: Math.log(0.002) }] },
-    ceiling: { points: 1100, intervals: 430 }, // measured 700 / 282
+    expect: { edges: [0], holes: [], ends: [], drawn: [{ x: 0.002, y: Math.log(0.002) }, { x: Math.exp(-8), y: -8 }] },
+    ceiling: { points: 1200, intervals: 470 }, // measured 792 / 313 (700 / 282 when the chain stopped a floor's width short)
+  },
+  {
+    // the same at a view where the dive is longer: log is base 10, and reaches the bottom of [-10, 10] at 1e-10
+    name: 'log x',
+    spec: 'y = log(x)',
+    views: [STD],
+    expect: { edges: [0], holes: [], ends: [], drawn: [{ x: 1e-10, y: -10 }] },
+    ceiling: { points: 730, intervals: 350 }, // measured 484 / 232
   },
   {
     name: 'sqrt(x)',
@@ -384,18 +399,32 @@ export const CORPUS: readonly CorpusCase[] = [
     ceiling: { points: 7800, intervals: 2900 }, // measured 5191 / 1917 (was 7893 / 4669 before the spike test was bounded by depth)
   },
   {
-    // The same as y = 1: the twin does not see the cancellation, so its enclosure is loose all the way down. It is
-    // here for the cost (about 20000 points, nearly all of them the 14 samples of each pixel column the core tries
-    // as a band), which is pinned. NOT PINNED, and a defect of the band stage that this case found: the scalar value
-    // is 1 plus rounding noise of about 1e-14, the noise turns round more than twice in a column, and the column
-    // is taken for an oscillation: six bands, each 1e-12 px tall (which the viewer fills at 0.18, so invisible),
-    // over 92 % of the width. The line y = 1 is drawn in pieces, and mostly not at all. A band under the flat
-    // tolerance (a quarter of a pixel) is noise, and should be drawn as the samples are.
+    // The same as y = 1: the twin does not see the cancellation, so its enclosure is loose all the way down. The scalar
+    // value is 1 plus rounding noise of about 1e-14, and the noise turns round more than twice in a pixel column:
+    // taken for an oscillation, it was drawn as bands 1e-14 px tall (which the viewer fills at 0.18, so invisible) over
+    // 92 % of the width, in a few short chains, with no message. A column whose samples span under flatPx is flat, not
+    // a band (bandColumn in adaptive.ts): one chain, the whole line, no band. (Before: 19561 points, 2461 intervals.)
     name: '(x + 1)^2 - x^2 - 2x',
     spec: 'y = (x + 1)^2 - x^2 - 2x',
     views: [STD],
-    expect: {},
-    ceiling: { points: 30000, intervals: 3700 }, // measured 19561 / 2461
+    expect: { bands: false, drawn: [{ x: -9, y: 1 }, { x: 0, y: 1 }, { x: 9, y: 1 }] },
+    ceiling: { points: 40000, intervals: 14000 }, // measured 26401 / 9301
+  },
+  {
+    // the same line, from a quotient with a hole at 1 (its value there is 1), minus x: the noise is 1e-14 over x
+    name: '(x^2 - 1)/(x - 1) - x',
+    spec: 'y = (x^2 - 1)/(x - 1) - x',
+    views: [STD],
+    expect: { bands: false, holes: [{ x: 1, y: 1 }], drawn: [{ x: -9, y: 1 }, { x: 0, y: 1 }, { x: 9, y: 1 }] },
+    ceiling: { points: 37000, intervals: 11000 }, // measured 24084 / 6883
+  },
+  {
+    // and from a hyperbolic identity: cosh^2 - sinh^2 is 1 with noise that grows with e^(2|x|) (1e-4 at 15, a hundredth of a pixel)
+    name: 'cosh(x)^2 - sinh(x)^2',
+    spec: 'y = cosh(x)^2 - sinh(x)^2',
+    views: [STD],
+    expect: { bands: false, drawn: [{ x: -9, y: 1 }, { x: 0, y: 1 }, { x: 9, y: 1 }] },
+    ceiling: { points: 39000, intervals: 14000 }, // measured 25569 / 8973
   },
   {
     // The same as y = x, and a looser enclosure still (e^(x^2) is 1e43 at 10): before the spike test was bounded by
@@ -437,6 +466,19 @@ export const CORPUS: readonly CorpusCase[] = [
     views: [STD],
     expect: { notes: [NOTE_STEEP], blank: true },
     ceiling: { points: 1100, intervals: 510 }, // measured 716 / 337
+  },
+
+  // ---- a break only the jump test finds ------------------------------------------------------------------
+  {
+    // gamma's poles at -12 and -11 are weak (residues 1/12! and 1/11!), and the classifier does not call them poles
+    // (see the known limit below). Nothing structural places a break there; the core's jump test lifts the curve at
+    // the floor interval where the gap does not close, and records the middle of it: at -11.99997 and -10.99997,
+    // within 1/16 px (2e-4 here) of the poles, which is as exactly as that test can say. The curve is not bridged.
+    name: 'gamma between its poles: breaks found by the jump test',
+    spec: 'y = gamma(x)',
+    views: [view(-12.9, -10.5, -4, 4, 800, 800)],
+    expect: { jumpsFound: [-12, -11], poles: [] },
+    ceiling: { points: 1600, intervals: 660 }, // measured 1007 / 439
   },
 
   // ---- known limits --------------------------------------------------------------------------------------

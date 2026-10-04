@@ -208,8 +208,10 @@ when it can show the curve is there between them:
   between the samples is under a pixel and closes as the stretch is halved.
   Anything else is a break, never a chord: `tan(x)` and `1/(x - 1)` do not cross
   their poles, and `floor(x)` has a break at every integer. Steepness is not a
-  reason to break (`y = 1000x` draws); a smooth curve steeper than about 1000:1
-  on screen cannot be certified and is not drawn, and says so (below).
+  reason to break (`y = 1000x` and `y = 1e6 (x - 3)` draw). The one limit is a
+  smooth curve that interval arithmetic cannot vouch for, such as an integral
+  (`integral(t = 0 to x, 2000)`): steeper than about 1000:1 on screen, it
+  cannot be certified and is not drawn, and says so (below).
 - **Holes** are open circles. Where the curve has a limit and no value, the
   curve runs through and an open circle marks the spot: `(x^2 - 1)/(x - 1)` at
   1, `sin(x)/x` at 0. If the curve takes some other value there
@@ -221,7 +223,9 @@ when it can show the curve is there between them:
   include it), even where the boundary is irrational (`{x^2 < 2: 0, 1}`).
   `{x < 0: x^2, x + 1}` is open at (0, 0) and filled at (0, 1);
   `y = 2 if 0 < x <= 3` is open at 0 and filled at 3. A natural edge of a
-  domain (`ln(x)`, `sqrt(x)`) is run to, and not marked.
+  domain is run to, and not marked: `ln(x)` and `log(x)` dive out of the
+  picture (the curve is drawn to the edge of what is sampled, past the bottom of
+  the view), and `sqrt(x)` meets its endpoint.
 - **Asymptote guides.** At a pole of `y = f(x)` the curve breaks and, with
   `@asymptotes` on (the default), a dashed vertical line is drawn through it
   (a horizontal one for `x = f(y)`). Polar and parametric poles break the
@@ -230,7 +234,9 @@ when it can show the curve is there between them:
 - **Bands.** Where a curve turns round more than once inside a pixel
   (`sin(1/x)` near 0, `sin(500x)`), a polyline would be an aliased zig-zag that
   changes with every zoom, so the extent the curve sweeps is drawn instead, as a
-  pale filled band.
+  pale filled band. A curve that is flat to within a quarter of a pixel is never
+  a band, however its rounding noise turns: `(x + 1)^2 - x^2 - 2x`, which is
+  the line y = 1, is drawn as that line.
 - **Notes.** A curve is drawn with a fixed budget of evaluations. One that
   needs more says so on its line and is drawn from what the sampler had:
   `drawn coarsely: ...` when something drew, `not drawn: ...` when nothing
