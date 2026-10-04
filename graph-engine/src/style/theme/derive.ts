@@ -117,7 +117,8 @@ export function deriveSeries(input: SeriesInput): Hex[] {
 }
 
 // Fixed board bases, in OKLCH, with the most chroma the accent may add to each.
-const BOARD_BASES: Record<BoardName, { l: number; c: number; h: number; maxChroma: number }> = {
+// (Exported for the settings registry, which reads each board's `maxChroma` as `board.<name>.chromaCap`.)
+export const BOARD_BASES: Record<BoardName, { l: number; c: number; h: number; maxChroma: number }> = {
   blackboard: { l: 0.27, c: 0.012, h: 230, maxChroma: 0.03 },
   greenboard: { l: 0.33, c: 0.05, h: 160, maxChroma: 0.07 },
   whiteboard: { l: 0.97, c: 0.004, h: 250, maxChroma: 0.012 },
