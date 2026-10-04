@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defaultConfig } from './config'
 import { parseConfigLine } from './parseConfig'
+import { parseSpec } from './parseSpec'
 
 function parse(line: string) {
   const config = defaultConfig()
@@ -149,5 +150,26 @@ describe('@view', () => {
   it('rejects an unknown viewpoint, naming the ones that exist', () => {
     const config = defaultConfig()
     expect(() => parseConfigLine('@view: orbit', config)).toThrow(/standard, isometric, front, top, side/)
+  })
+})
+
+describe('@focus', () => {
+  it('defaults to none', () => {
+    expect(defaultConfig().focus).toBeNull()
+  })
+
+  it('reads a point and a zoom', () => {
+    expect(parse('@focus: (3, 2) zoom 4').focus).toEqual({ target: { kind: 'plane', x: 3, y: 2 }, zoom: 4 })
+    expect(parse('@focus: view (5, 6)').focus).toEqual({ target: { kind: 'view', u: 5, v: 6 }, zoom: 1 })
+  })
+
+  it('reports a bad value on its line while the rest of the spec parses', () => {
+    const result = parseSpec(['y = x', '@focus: nowhere', '@theme: dark'].join('\n'))
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].line).toBe(2)
+    expect(result.errors[0].message).toMatch(/@focus must be/)
+    expect(result.config.focus).toBeNull()
+    expect(result.config.theme).toBe('dark')
+    expect(result.statements).toHaveLength(1)
   })
 })

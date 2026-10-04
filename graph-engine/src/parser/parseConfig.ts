@@ -1,4 +1,5 @@
 import { applyStyleDirective } from '../style/resolve'
+import { parseFocus } from '../view2d/focus'
 import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
 
 export function isConfigLine(rawLine: string): boolean {
@@ -195,6 +196,10 @@ export function parseConfigLine(rawLine: string, config: GraphConfig): void {
         throw new Error(`@point-labels must be "off" or "coords", got "${value}"`)
       }
       config.pointLabels = value
+      return
+    }
+    case 'focus': {
+      config.focus = parseFocus(value)
       return
     }
     default:

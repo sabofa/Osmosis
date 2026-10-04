@@ -1,4 +1,5 @@
 import type { StyleLayer } from '../style/resolve'
+import type { FocusSpec } from '../view2d/focus'
 
 // Per-spec configuration, set via "@key: value" directive lines anywhere in
 // the spec text (order doesn't matter; last value for a repeated key wins).
@@ -129,6 +130,9 @@ export interface GraphConfig {
   // look), and that base is not known here. Empty when the spec says nothing,
   // which draws clean — today's figure, byte for byte.
   style: StyleLayer
+  // Where a 2D view opens, from "@focus: (x, y) zoom k" (see view2d/focus.ts).
+  // Null when the spec says nothing: the view opens fitted, as it always did.
+  focus: FocusSpec | null
 }
 
 export function defaultConfig(): GraphConfig {
@@ -156,5 +160,6 @@ export function defaultConfig(): GraphConfig {
     view: 'standard',
     tableFormulas: false,
     style: {},
+    focus: null,
   }
 }
