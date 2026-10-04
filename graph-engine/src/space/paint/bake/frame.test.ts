@@ -13,7 +13,7 @@ import { DEFAULT_PAINT_PARAMS } from '../params'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
 import { P, LIGHT, framing, fixture, sparse, bytes, sphereColours, sphereScene, saddleColours, saddleScene, veilScene, TERRACOTTA, CANVAS, type Fixture } from './bakeFixture'
 import { DEPTH_BUCKETS, frameFromBake, frameFromBakeWith, FrameScratch } from './frame'
-import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, SIZING_SURFACE, type BakedPainting } from './types'
+import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, isEdgeSizing, SIZING_ACROSS, SIZING_SURFACE, type BakedPainting } from './types'
 
 vi.setConfig({ testTimeout: 180_000 })
 
@@ -109,6 +109,25 @@ function anchorOf(baked: BakedPainting, i: number): { p: number[]; n: number[] }
   return { p, n: l > 0 ? n.map((c) => c / l) : n }
 }
 
+// The foreshortening of the direction an edge stroke is spaced in at its anchor, by finite differences of the projection (the frame reads the projection's
+// derivative): the length on the screen of a small step along the direction (the path's own for a stroke along its stretch, the normal × the path's for one across
+// it) over the scale's, in 0.15..1.
+function alongRef(fc: ReturnType<typeof makeFrameCtx>, baked: BakedPainting, i: number, p: number[], n: number[]): number {
+  const o = 3 * BAKE_PATH_POINTS * i
+  const q = Math.min(BAKE_PATH_POINTS - 2, Math.floor(baked.anchor[i] * (BAKE_PATH_POINTS - 1)))
+  let d = [0, 1, 2].map((c) => baked.worldPath[o + 3 * (q + 1) + c] - baked.worldPath[o + 3 * q + c])
+  if (baked.sizing[i] === SIZING_ACROSS) d = [n[1] * d[2] - n[2] * d[1], n[2] * d[0] - n[0] * d[2], n[0] * d[1] - n[1] * d[0]]
+  const l = Math.hypot(d[0], d[1], d[2])
+  if (!(l > 1e-12)) return 1
+  const h = 1e-4
+  const a = [0, 0, 0]
+  const b = [0, 0, 0]
+  project(fc, p[0], p[1], p[2], a)
+  project(fc, p[0] + (h * d[0]) / l, p[1] + (h * d[1]) / l, p[2] + (h * d[2]) / l, b)
+  const r = Math.hypot(b[0] - a[0], b[1] - a[1]) / (h * pxPerUnit(fc, p[0], p[1], p[2]))
+  return Math.min(1, Math.max(0.15, r))
+}
+
 function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
   const { baked, scene, params } = fx
   const out = new Map<number, Ref>()
@@ -131,10 +150,14 @@ function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
     }
     const dot = n[0] * t[0] + n[1] * t[1] + n[2] * t[2]
     if (baked.side[i] !== 0 ? dot <= 0 : dot < -0.05) continue
+    // (an edge stroke: the stretch's density draw, then its spacing rank against the zoom over the refinement, the zoom being the scale at its anchor over the
+    // reference's, with the tilt of the stretch from the view; past the refinement it is lengthened by the zoom over it)
+    let edgeBig = 1
     if (role === 'edge') {
       if (baked.rank[i] >= params.roles.edge.density) continue
-      out.set(i, { alpha: baked.alpha[i], big: 1 })
-      continue
+      const z = pxPerUnit(fc, p[0], p[1], p[2]) * baked.referenceWorldPerPx * alongRef(fc, baked, i, p, n)
+      if (baked.spacing[i] * BAKE_EDGE_REFINE >= z) continue
+      if (z > BAKE_EDGE_REFINE) edgeBig = z / BAKE_EDGE_REFINE
     }
     if (role === 'line') {
       out.set(i, { alpha: baked.alpha[i], big: 1 })
@@ -147,8 +170,13 @@ function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
       const w = Math.max(1e-9, m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15])
       const sx = (((m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w + 1) / 2) * view.width
       const sy = ((1 - (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w) / 2) * view.height
-      const reach = 0.5 * sizedLength(baked.basePx[2 * i], big) + baked.basePx[2 * i + 1] * big
+      // (an edge stroke is its own px long, and as wide whatever the zoom)
+      const reach = role === 'edge' ? 0.5 * baked.basePx[2 * i] * big + baked.basePx[2 * i + 1] : 0.5 * sizedLength(baked.basePx[2 * i], big) + baked.basePx[2 * i + 1] * big
       return sx < -reach || sy < -reach || sx > view.width + reach || sy > view.height + reach
+    }
+    if (role === 'edge') {
+      if (!offscreen(edgeBig)) out.set(i, { alpha: baked.alpha[i], big: edgeBig })
+      continue
     }
     if (role === 'dab') {
       if (!offscreen(sizeScale)) out.set(i, { alpha: baked.alpha[i], big: sizeScale })
@@ -278,8 +306,11 @@ describe('frameFromBake: the baked strokes of a view', () => {
           if (ob === undefined) continue
           both++
           if (a.batch.seed[oa] === b.batch.seed[ob] && a.batch.role[oa] === b.batch.role[ob] && a.batch.colour[3 * oa] === b.batch.colour[3 * ob] && a.batch.colour[3 * oa + 1] === b.batch.colour[3 * ob + 1] && a.batch.colour[3 * oa + 2] === b.batch.colour[3 * ob + 2]) same++
-          // the world sub-arc: the same points (in either direction) where the size is the same (the view is orthographic: the px per unit is the same)
+          // the world sub-arc: the same points (in either direction) where the size is the same (the view is orthographic: the px per unit is the same); an edge
+          // stroke's arc is the px the model has, and the tilt of its surface from the view moves with the camera, so its sub-arc is the same only to the tilt's
+          // change over a degree (about a part in thirty of its length)
           if (Math.abs(a.scr.bigOf[oa] - b.scr.bigOf[ob]) < 1e-6) {
+            const edgeArc = isEdgeSizing(fx.baked.sizing[i])
             equalBig++
             const wa = a.batch.worldPath
             const wb = b.batch.worldPath
@@ -289,7 +320,11 @@ describe('frameFromBake: the baked strokes of a view', () => {
               fwd = Math.max(fwd, dist2(wa, 3 * PP * oa + 3 * q, wb, 3 * PP * ob + 3 * q))
               rev = Math.max(rev, dist2(wa, 3 * PP * oa + 3 * q, wb, 3 * PP * ob + 3 * (PP - 1 - q)))
             }
-            if (Math.min(fwd, rev) < 1e-6) arcsOk++
+            if (edgeArc) {
+              // (an edge stroke's arc: the same piece of the path to a quarter of its length)
+              const span = dist2(wa, 3 * PP * oa, wa, 3 * PP * oa + 3 * (PP - 1))
+              if (fwd <= 0.25 * span + 1e-9) arcsOk++
+            } else if (Math.min(fwd, rev) < 1e-6) arcsOk++
           }
         }
         if (process.env.FRAME_PRINT) console.log(`no boiling, ${fx === sphereFx ? 'sphere' : 'saddle'}, el ${el}, 1 degree: drawn ${sa.size} / ${sb.size}, in both ${both} (${(both / Math.max(sa.size, sb.size)).toFixed(4)} of the larger), same seed+colour+role ${same}/${both}, equal size ${equalBig}, sub-arcs within 1e-6 ${arcsOk}/${equalBig}`)

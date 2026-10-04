@@ -271,3 +271,62 @@ describe('brush-load mix', () => {
     for (let i = 0; i < 30; i++) expect(Math.abs(hue(jittered[i].lab) - hue(clean[i].lab))).toBeLessThan(10)
   })
 })
+
+describe('brush-load mix: a stroke that rides a load (mixFollow)', () => {
+  const input = (i: number, lab: Oklab = TERRACOTTA) => ({ role: 'edge' as const, cell: i, u: 0.6, x: 10 * i, y: 0, lab, colormapped: false, seed: 1000 + i, jit0: 0.3, jit1: -0.2 })
+
+  it('takes the offset of the load of the stroke before it, at the place in it that stroke has: the same colour as that stroke for the same input', () => {
+    const mixer = new LoadMixer(SEQUENTIAL)
+    for (let i = 0; i < 30; i++) {
+      const member = mixer.mix(input(i))
+      const rider = mixer.mixFollow(input(i))
+      expect(rider.lab).toEqual(member.lab)
+      expect(rider.load).toBe(member.load)
+      expect(rider.index).toBe(member.index)
+    }
+  })
+
+  it('takes no place of its own in the load: the strokes of the chain are mixed as if the riders were not there', () => {
+    const plain = new LoadMixer(SEQUENTIAL)
+    const withRiders = new LoadMixer(SEQUENTIAL)
+    for (let i = 0; i < 60; i++) {
+      const a = plain.mix(input(i))
+      const b = withRiders.mix(input(i))
+      // (riders of other colours, a good many of them, between the members)
+      for (let k = 0; k < 1 + (i % 4); k++) withRiders.mixFollow({ ...input(1000 + 7 * i + k, lchToLab(0.7, 0.05, 200)), x: 5000 })
+      expect(b.lab).toEqual(a.lab)
+      expect(b.load).toBe(a.load)
+      expect(b.index).toBe(a.index)
+    }
+    expect(withRiders.loads).toBe(plain.loads)
+  })
+
+  it('rides the offset on its own colour: a rider of another colour is that colour moved by a hue, not the member’s colour', () => {
+    const mixer = new LoadMixer(SEQUENTIAL)
+    mixer.mix(input(0))
+    const other = lchToLab(0.7, 0.1, 250)
+    const rider = mixer.mixFollow(input(0, other))
+    expect(rider.lab[0]).toBeCloseTo(other[0], 1)
+    const [, c0, h0] = labToLch(other)
+    const [, c1, h1] = labToLch(rider.lab)
+    expect(Math.abs(h1 - h0)).toBeGreaterThan(0.1)
+    expect(Math.abs(h1 - h0)).toBeLessThan(40)
+    expect(c1).toBeGreaterThan(0.5 * c0)
+  })
+
+  it('mixes as `mix` does where there is no load to ride: the first stroke of a role, and a role that is mixed by cell', () => {
+    const a = new LoadMixer(SEQUENTIAL).mixFollow(input(3))
+    const b = new LoadMixer(SEQUENTIAL).mix(input(3))
+    expect(a.lab).toEqual(b.lab)
+    expect(a.index).toBe(0)
+    const block = { ...input(3), role: 'block' as const }
+    expect(new LoadMixer(SEQUENTIAL).mixFollow(block).lab).toEqual(new LoadMixer(SEQUENTIAL).mix(block).lab)
+  })
+
+  it('is no mix at a strength of zero, like a stroke of the chain', () => {
+    const none = resolvePaintParams({ mix: { strength: 0 } })
+    const mixer = new LoadMixer(none)
+    mixer.mix(input(0))
+    expect(mixer.mixFollow(input(0)).lab).toEqual(TERRACOTTA)
+  })
+})

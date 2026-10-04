@@ -284,6 +284,23 @@ export class LoadMixer {
     return this.apply(input, s, off, kd, st.load, index, st.size)
   }
 
+  // Mix a SEQUENTIAL stroke that rides the load of the stroke before it in its role's chain (the baked painting's finer edge strokes, bake/draft.ts
+  // ColourRecipes.follow): it takes that load's offset at the place in the load that stroke has (its drift), and no place of its own, so the
+  // load's size, its break and the strokes after it are as if it were not there. A role that has no load yet (or a spatial role, which has none) mixes
+  // as `mix` does.
+  mixFollow(input: MixInput): MixResult {
+    const params = this.params
+    const m = params.mix
+    const st = SPATIAL[input.role] ? null : this.stateOf(input.role)
+    if (!st || !st.off) return this.mix(input)
+    const s = m.strength * roleScale(params, input.role) * this.amount(input.u)
+    const lab = input.lab
+    if (s <= 0) return { lab: [lab[0], lab[1], lab[2]], load: -1, index: 0, size: 0, kd: 0, hueOffset: 0, chromaOffset: 0, step: 0 }
+    const index = Math.max(0, st.idx - 1)
+    const kd = 1 - (1 - m.drift) * (st.size > 1 ? index / (st.size - 1) : 0)
+    return this.apply(input, s, st.off, kd, st.load, index, st.size)
+  }
+
   // The stroke's colour: the curve colour moved by an offset, scaled by the drift.
   private apply(input: MixInput, s: number, off: Offset, kd: number, load: number, index: number, size: number): MixResult {
     const params = this.params

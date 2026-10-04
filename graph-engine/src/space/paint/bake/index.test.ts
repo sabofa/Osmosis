@@ -9,7 +9,7 @@ import { FAM_SHADOW } from '../model/value'
 import { PARAM_SCHEMA, setParam, type PaintParams } from '../params'
 import { LAYER_ORDER, ROLES } from '../types'
 import { bakeKey, bakePainting, bakePaintingWithProgress, bakedRecipes, bakeStats, recolourBake, type BakeProgress } from './index'
-import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_FIXED, SIZING_SURFACE, type BakedPainting, type BakedSurface } from './types'
+import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, isEdgeSizing, SIZING_SURFACE, type BakedPainting, type BakedSurface } from './types'
 import { framing, fixture, LIGHT, P, saddleColours, saddleScene, sparse, sphereColours, sphereScene, TERRACOTTA, type Fixture } from './bakeFixture'
 import { boxMesh } from './edgesFixture'
 import { arrowMark, flatColours, lineMark, pointMark, sceneOf, sphereMesh } from '../model/testing'
@@ -319,9 +319,17 @@ describe('the assembly', () => {
       const count = particles.mark.reduce((c, mk) => c + (mk === i ? 1 : 0), 0)
       expect(baked.areaPerParticle[i]).toBeCloseTo(meshArea(m as MeshMark) / count, 5)
     })
-    // surface strokes: not data marks, surface-sized, with the particle they grew from (a dab: none); edge strokes: fixed-sized, no particle
+    // surface strokes: not data marks, surface-sized, with the particle they grew from (a dab: none); edge strokes: sized in px (along or across a stretch),
+    // no particle, a spacing rank in [0, 1) (and none elsewhere)
+    expect(baked.spacing.length).toBe(n)
     for (let i = 0; i < n; i++) {
-      expect(baked.sizing[i]).toBe(ROLES[baked.role[i]] === 'edge' ? SIZING_FIXED : SIZING_SURFACE)
+      if (ROLES[baked.role[i]] === 'edge') {
+        expect(isEdgeSizing(baked.sizing[i])).toBe(true)
+        expect(baked.spacing[i]).toBeLessThan(1)
+      } else {
+        expect(baked.sizing[i]).toBe(SIZING_SURFACE)
+        expect(baked.spacing[i]).toBe(0)
+      }
       expect(baked.hidden[i]).toBe(HIDDEN_NA)
       if (baked.particle[i] !== 0xffffffff) expect(particles.mark[baked.particle[i]]).toBe(baked.mark[i])
       else expect(['dab', 'edge']).toContain(ROLES[baked.role[i]])
@@ -350,9 +358,15 @@ describe('the assembly', () => {
   })
 
   it('gives every stroke a finite, displayable colour at every level, and the levels the brush-load cells give: the model’s loadCellOf at that level, mixed from the recipe', () => {
-    expect(baked.colour.every((v) => Number.isFinite(v))).toBe(true)
-    expect(Math.min(...baked.colour)).toBeGreaterThanOrEqual(-1e-6)
-    expect(Math.max(...baked.colour)).toBeLessThanOrEqual(1 + 1e-6)
+    let lo = Infinity
+    let hi = -Infinity
+    for (const v of baked.colour) {
+      expect(Number.isFinite(v)).toBe(true)
+      lo = Math.min(lo, v)
+      hi = Math.max(hi, v)
+    }
+    expect(lo).toBeGreaterThanOrEqual(-1e-6)
+    expect(hi).toBeLessThanOrEqual(1 + 1e-6)
     const held = bakedRecipes(baked)!
     const env = recipeEnv(params, curveFor(params), groundLocal(params))
     const mixer = new LoadMixer(params)

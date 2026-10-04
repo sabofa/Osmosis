@@ -42,7 +42,23 @@ export const BAKE_MIX_LEVELS = 4
 
 // How a stroke's size follows the view.
 export const SIZING_SURFACE = 0 // role sizes × zoom growth and close-up shape (view.ts zoomGrow, brush.ts)
-export const SIZING_FIXED = 1 // CSS px whatever the zoom (edge strokes, data-mark lines)
+// A data-mark line: CSS px whatever the zoom, in WIDTH and in LENGTH (the whole baked path is drawn, its pieces are cut at the px the model cuts a line at).
+export const SIZING_FIXED = 1
+// An edge stroke (the painter's brushwork along and across a world edge): constant CSS px WIDTH, as the model's, and a length of CSS px too (`basePx[0]`,
+// the model's own: a crisp stroke or a drag as long as the model's stretch, a pull or a bridge as the model's), drawn as a sub-arc of the baked path
+// about the stroke's anchor (a frame takes the arc of the px it needs, as a surface stroke's). Where the model has ONE stroke the bake has
+// BAKE_EDGE_REFINE cells' worth of them, each with a `spacing` rank, and a frame keeps those whose rank passes the thinning that gives the model's
+// spacing on the screen at that zoom (frame.ts): more of them are drawn as the view zooms in, at the same on-screen length, width and spacing.
+// A stroke ALONG its stretch (a crisp stroke, a drag: the path is the stretch) and one ACROSS it (a pull, a bridge: the path is walked across the run) are
+// spaced along the stretch, so the foreshortening that thins them reads the direction along the stretch: the path's own for the first, at right angles to it
+// (in the surface) for the second.
+export const SIZING_ALONG = 2
+export const SIZING_ACROSS = 3
+export const isEdgeSizing = (sizing: number): boolean => sizing >= SIZING_ALONG
+// The refinement of an edge stroke's place along its stretch: the baked strokes lie at 1/BAKE_EDGE_REFINE of the model's spacing (a pull every 34/8 px
+// at the reference scale), so a view zoomed in up to BAKE_EDGE_REFINE times still finds the model's spacing among them (beyond it the strokes lengthen
+// with the zoom, so that a crisp edge stays one line). A power of two (the spacing ranks are a bit-reversal order, bake/edgeStrokes.ts spacingRank).
+export const BAKE_EDGE_REFINE = 8
 
 // A data-mark stroke's hidden style (scene LineStyle hidden): what the
 // renderer does where a surface is nearer than the stroke.
@@ -95,9 +111,18 @@ export interface BakedPainting {
   layer: Uint8Array
   mark: Uint32Array
   // The particle the stroke grew from (its rank decides the per-frame
-  // density); 0xffffffff for an edge or data-mark stroke (always drawn).
+  // density); 0xffffffff for an edge or data-mark stroke (it has none).
   particle: Uint32Array
+  // The stroke's draw in [0, 1) for the per-frame density: a particle's stroke is drawn when its (role-shifted) rank is under the screen density
+  // (frame.ts); an edge stroke when its rank, the one draw of its whole stretch, is under `roles.edge.density` (so the slider thins whole
+  // stretches, as the model's does); a data-mark line has 0 and is always drawn.
   rank: Float32Array
+  // An edge stroke's place in the refinement of its stretch (SIZING_ARC): a draw in [0, 1) that encodes the spacing level of the stroke, a
+  // bit-reversal order along the stretch (the stroke at the stretch's middle has the least, then the ones 8 cells off, then 4, 2, 1: any threshold
+  // t keeps strokes about 1/t cells apart). A frame draws the stroke when its spacing is under (px per reference px) / BAKE_EDGE_REFINE, which gives
+  // the model's spacing of pulls and bridges (and the model's stretches' length of a crisp stroke and a drag) on the screen at any zoom, deterministically,
+  // so a stroke that stays in view stays drawn as the camera orbits. 0 for every stroke that is not an edge stroke.
+  spacing: Float32Array
   side: Int8Array // +1, -1, or 0 (closed mesh, edge on a closed mesh, data mark)
   sizing: Uint8Array // SIZING_*
   hidden: Uint8Array // HIDDEN_*
@@ -113,7 +138,9 @@ export interface BakedPainting {
   anchor: Float32Array // arc-length fraction 0..1 of the particle along the path
   // The stroke's size at zoom 1, CSS px: [length, width] (role size × the
   // light/shadow factor, before zoom growth); a SIZING_FIXED stroke's path is
-  // its whole baked path and `width` its constant width.
+  // its whole baked path and `width` its constant width; a SIZING_ARC stroke's
+  // `length` is the model's on-screen length (the sub-arc it is drawn as, at
+  // any zoom) and `width` its constant width.
   basePx: Float32Array
   // Final colour (curve, hold, mix) per brush-load level: 3·BAKE_MIX_LEVELS per
   // stroke, linear-light sRGB; level l at offset 3·(BAKE_MIX_LEVELS·i + l).
@@ -142,8 +169,10 @@ export interface BakedPainting {
   // The colour of each data mark's strokes before the brush-load mix (linear sRGB, 3 per mark, 0 for marks
   // without lines), for the shapes a frame builds on screen (a point's dab, an arrowhead's barbs).
   dataColour: Float32Array
-  // A key of everything the bake read (scene identity, params except view-only
-  // and colour-only ones, light direction, seed): equal keys, equal paintings.
+  // A key of everything the bake read: the scene (its geometry and the style fields that change what is baked), the light direction, the AUTHORED
+  // framing (eye, direction, projection, world size of a px), the params that are not the frame's or the colours', the bucketed length factor of every
+  // mark (which the frame-only sliders move a bucket at a time, so it takes the particle set), and the scene's colours (the theme: each mark's colour and
+  // each colour scale as it is sampled): equal keys, equal paintings.
   key: string
 }
 
@@ -174,7 +203,8 @@ export type BakePainting = (
 // null when `baked` was not made there.
 export type RecolourBake = (baked: BakedPainting, params: PaintParams) => BakedPainting | null
 
-// Per frame (main thread, ≤ 5 ms at 50k strokes): select the baked strokes
+// Per frame (main thread; a budget of about 3-7 ms at zoom 1 and 7-19 ms at zoom 2-4 on a 60k-stroke painting, which is what the bench measures: the
+// brush's sizing grows the strokes' sub-arcs, and the edge strokes add their thinning): select the baked strokes
 // this view shows, take each one's sub-arc and project it, size it by the
 // zoom, fade by |n·v|, choose the side, order by view depth within a layer,
 // and append this view's silhouette outline strokes and data-mark shapes. The

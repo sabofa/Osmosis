@@ -9,16 +9,30 @@
 //   screen    a stroke whose anchor is off the screen by more than half its length and its width is not drawn (the model draws the particles the
 //             G-buffer shows); it is tested only when a corner of the box of the anchors is off the screen (a figure wholly in view tests nothing);
 //   density   a particle's stroke is drawn when its (role-shifted) rank is under view.ts drawChance of its screen area (the mark's area per
-//             particle × px per world unit² × facing), with the model's drawFade ramp in alpha; an edge stroke when its rank is under roles.edge.density; a
+//             particle × px per world unit² × facing), with the model's drawFade ramp in alpha; an edge stroke when its rank is under roles.edge.density
+//             and its spacing rank is under the thinning that gives the model's spacing at this zoom (see EDGE STROKES); a
 //             veil's border pass only where the particle's own glaze (the scumble's rank shifted back to the glaze's, the veil's scale of the density) is drawn;
 //   size      big = min(zoomGrow × zoomSizeScale, bigMax) (view.ts, the pure forms); the sub-arc of the baked path the zoom needs, sizedLength(basePx[0],
 //             big) / ppu long about the anchor (clipped at the path's ends, never extrapolated), resampled to PATH_POINTS by linear interpolation
 //             ALONG THE BAKED POLYLINE and projected; widths as pathFromWalk and reshapeWidths make them (pressure × the lateral direction's
 //             foreshortening, read at four points of the path and interpolated between them); the loaded end of a 'hand' stroke by screen x;
+//             an edge stroke's by its own rule (EDGE STROKES);
 //   colour    the baked colour at the view's brush-load level (loadCellLevel, capped at BAKE_MIX_LEVELS - 1);
 //   order     layer by layer, far to near by the anchor's view depth (a stable counting sort over DEPTH_BUCKETS buckets, ties in bake order).
 // then adds this view's own strokes: the silhouettes (silhouettes.ts), the points and the arrowheads of the data marks (here), which are
 // built on the screen. The result is an ordinary StrokeBatch, `worldPath` and `worldNormal` filled so that reproject.ts works on it, `hidden` filled.
+//
+// EDGE STROKES (SIZING_ALONG, SIZING_ACROSS). The model draws an edge stroke at a fixed size in px, and a fixed spacing in px, at any zoom: a crisp stroke or a drag
+// as long as its stretch, a pull or a bridge of about 22 or 26 px every ~34 or ~42 px, all of a constant width. The bake has BAKE_EDGE_REFINE times as many
+// strokes on the lattice of a stretch, each with a spacing rank (bake/edgeStrokes.ts), so the frame keeps what makes the model's spacing on the screen:
+// z = px per world unit at the stroke's anchor × the reference world per px (the zoom, and the depth of a perspective view) × the foreshortening of the
+// direction along the stretch there (r: the surface tilted from the view packs its px, and the model spaces its strokes by px on the screen), and a stroke is kept
+// when its spacing rank is under z / BAKE_EDGE_REFINE (more of them as the view zooms in, fewer as it zooms out, the model's spacing at the authored zoom and
+// every zoom above it up to BAKE_EDGE_REFINE: beyond it the cells cannot be finer, and the strokes lengthen by z / BAKE_EDGE_REFINE, which keeps a crisp edge
+// one line). It is drawn as the sub-arc of basePx[0] px (the model's length) about its anchor, where the world length of a px is what the view's scale is there;
+// a surface tilted from the view foreshortens the arc, and a stroke the tilt shortens by a tenth or more is taken a longer arc of the baked path (up to
+// ARC_TILT_MAX times), so that the length on the screen is the model's. The width is constant, as the model's, with the pressure's taper along the arc. The
+// decision reads the stroke's own baked numbers and the scale at its anchor, so a stroke that stays in view stays drawn, and the same, as the camera orbits.
 //
 // THE PATHS. The baked path's BAKE_PATH_POINTS points are at equal world arc length (bake/walk.ts resampleWalk, to the snap's sagitta), so a fraction
 // t of its length is taken at the point t × (BAKE_PATH_POINTS - 1) of them: no arc lengths are summed per frame. (A test holds the deviation.)
@@ -47,7 +61,7 @@ import { bigMax, drawChanceFor, drawChanceOf, drawFadeAt, loadCellLevel, makeFra
 import { fnvInts } from './draft'
 import { addSilhouettes, casterOf, indexOf } from './silhouettes'
 import { StrokeList } from './strokeList'
-import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, SIZING_SURFACE, type BakedPainting, type FrameFromBake } from './types'
+import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, isEdgeSizing, SIZING_ACROSS, SIZING_SURFACE, type BakedPainting, type FrameFromBake } from './types'
 
 const P = PATH_POINTS
 const BP = BAKE_PATH_POINTS
@@ -62,6 +76,11 @@ const R_EDGE = ROLES.indexOf('edge')
 const R_LINE = ROLES.indexOf('line')
 const R_GLAZE = ROLES.indexOf('glaze')
 const LAYER_LINE = 6
+// The most an edge stroke's arc is lengthened for the tilt of its surface from the view (see EDGE STROKES): the baked paths of the pulls and bridges are
+// walked for it (bake/edgeStrokes.ts ARC_REACH).
+const ARC_TILT_MAX = 2.5
+// The least foreshortening that thins an edge stroke's spacing (below it the surface is seen edge on: the strokes are not thinned further).
+const TILT_FLOOR = 0.15
 
 // The kinds of a baked stroke (the density and the sizing read the kind): the particle roles 0..4 (block, form, scumble, glaze, reflected), then
 // the dab, the edge and the data line (the roles' own indices), and the two passes of a veil's glaze.
@@ -286,6 +305,48 @@ const C = new Consts()
 
 // ---- the frame ----
 
+// The foreshortening of the direction an edge stroke is spaced in, at its anchor (a, with the unit normal n there and clip w `cw`): the length on the screen of a
+// step along that direction over what a step of the same length in the screen's plane would be (1: square to the view), kept between TILT_FLOOR and 1.
+// The direction is the baked path's own at the anchor for a stroke along its stretch, and at right angles to it in the surface (the normal × the path's
+// direction) for one across it.
+function alongScale(
+  wp: Float32Array, anchor: number, i: number, across: boolean, ax: number, ay: number, az: number, nx: number, ny: number, nz: number,
+  cw: number, ortho: boolean, ppu: number,
+): number {
+  const u = anchor * LAST
+  const q = BP3 * i + 3 * Math.min(LAST - 1, Math.floor(u))
+  let tx = wp[q + 3] - wp[q]
+  let ty = wp[q + 4] - wp[q + 1]
+  let tz = wp[q + 5] - wp[q + 2]
+  if (across) {
+    const cx = ny * tz - nz * ty
+    const cy = nz * tx - nx * tz
+    const cz = nx * ty - ny * tx
+    tx = cx
+    ty = cy
+    tz = cz
+  }
+  const tl = Math.hypot(tx, ty, tz)
+  if (!(tl > 1e-12)) return 1
+  const { m0, m1, m3, m4, m5, m7, m8, m9, m11, m12, m13, W, H } = C
+  const dcx = m0 * tx + m4 * ty + m8 * tz
+  const dcy = m1 * tx + m5 * ty + m9 * tz
+  let sx: number
+  let sy: number
+  if (ortho) {
+    sx = (0.5 * W * dcx) / cw
+    sy = (0.5 * H * dcy) / cw
+  } else {
+    const dcw = m3 * tx + m7 * ty + m11 * tz
+    const cx = m0 * ax + m4 * ay + m8 * az + m12
+    const cy = m1 * ax + m5 * ay + m9 * az + m13
+    sx = (0.5 * W * (dcx * cw - cx * dcw)) / (cw * cw)
+    sy = (0.5 * H * (dcy * cw - cy * dcw)) / (cw * cw)
+  }
+  const r = Math.hypot(sx, sy) / (tl * ppu)
+  return r > 1 ? 1 : r < TILT_FLOOR ? TILT_FLOOR : r
+}
+
 // The sub-arc of a baked stroke [lo, hi] (fractions of its length) as PATH_POINTS world points on the baked polyline, written to `world` from `wo` and,
 // projected, to `path` from `po`; and, for the widths, each point's clip w (SW) and where it lies on the baked path (I0, F0). False when a point is behind
 // the eye.
@@ -400,6 +461,8 @@ export function frameFromBakeWith(
   const cull = anchorsMayBeOffscreen(fc, prep.bound)
   let offscreen = 0
   const sideA = baked.side, markA = baked.mark, rankA = baked.rank, alphaA = baked.alpha, layerA = baked.layer, area = baked.areaPerParticle
+  const spacingA = baked.spacing, sizingA = baked.sizing, anchorA = baked.anchor
+  const refPerPx = baked.referenceWorldPerPx
   const wp = baked.worldPath
   const wnA = baked.worldNormal
   const basePxA = baked.basePx
@@ -428,6 +491,13 @@ export function frameFromBakeWith(
     let layer = layerA[i]
     if (kind === K_EDGE) {
       if (rankA[i] >= edgeDensity) continue
+      // the spacing: the stroke is kept when its rank is under the zoom over the refinement (the model's spacing on the screen), and lengthened past it
+      const cw = ortho ? m15 : m3 * ax + m7 * ay + m11 * az + m15
+      ppu = ortho ? ppuOrtho : ppuK / Math.max(1e-9, cw)
+      // (the zoom here, over the tilt of the stretch from the view: the direction the strokes are spaced in, projected, over what the scale would make of it)
+      const z = ppu * refPerPx * alongScale(wp, anchorA[i], i, sizingA[i] === SIZING_ACROSS, ax, ay, az, nx, ny, nz, cw, ortho, ppu)
+      if (spacingA[i] * BAKE_EDGE_REFINE >= z) continue
+      if (z > BAKE_EDGE_REFINE) big = z / BAKE_EDGE_REFINE
     } else if (kind === K_LINE) {
       if (haveVeils) {
         const q = BP3 * i + 3 * (BP / 2 - 1)
@@ -468,7 +538,8 @@ export function frameFromBakeWith(
       const iw = 1 / Math.max(1e-9, ortho ? m15 : m3 * ax + m7 * ay + m11 * az + m15)
       const sx = (((m0 * ax + m4 * ay + m8 * az + m12) * iw + 1) * 0.5) * W
       const sy = ((1 - (m1 * ax + m5 * ay + m9 * az + m13) * iw) * 0.5) * H
-      const reach = 0.5 * (big <= CLOSE_UP_FROM ? basePxA[2 * i] * big : sizedLength(basePxA[2 * i], big)) + basePxA[2 * i + 1] * big
+      const arc = kind === K_EDGE
+      const reach = 0.5 * (arc || big <= CLOSE_UP_FROM ? basePxA[2 * i] * big : sizedLength(basePxA[2 * i], big)) + basePxA[2 * i + 1] * (arc ? 1 : big)
       if (sx < -reach || sy < -reach || sx > W + reach || sy > H + reach) {
         offscreen++
         continue
@@ -571,24 +642,42 @@ export function frameFromBakeWith(
     }
     const big = selBig[j]
     const fixed = sizing[i] !== SIZING_SURFACE
+    const arc = isEdgeSizing(sizing[i])
     const rl = baked.role[i]
     let lo = 0
     let hi = 1
-    if (!fixed) {
+    let anchor = 0
+    let half = 0
+    if (!fixed || arc) {
       const L = pathLength[i]
       if (!(L > 1e-12)) continue
-      const a = anchorF[i]
-      // (up to CLOSE_UP_FROM the brush is the role's own size times `big`: sizedLength without its close-up lengthening)
-      const half = (0.5 * (big <= CLOSE_UP_FROM ? basePx[2 * i] * big : sizedLength(basePx[2 * i], big))) / selPpu[j] / L
-      lo = a - half
+      anchor = anchorF[i]
+      // (up to CLOSE_UP_FROM the brush is the role's own size times `big`: sizedLength without its close-up lengthening; an edge stroke's length is its
+      // own px, lengthened by `big` where the zoom is past the refinement)
+      half = (0.5 * (arc || big <= CLOSE_UP_FROM ? basePx[2 * i] * big : sizedLength(basePx[2 * i], big))) / selPpu[j] / L
+      lo = anchor - half
       if (lo < 0) lo = 0
-      hi = a + half
+      hi = anchor + half
       if (hi > 1) hi = 1
       if (!(hi - lo > 1e-9)) continue
     }
     const po = 2 * P * o
     const wo = 3 * P * o
     if (!samplePath(baked, i, lo, hi, path, po, worldPath, wo)) continue
+    if (arc && (lo > 0 || hi < 1)) {
+      // an edge stroke is as long on the screen as the model's (basePx[0] × big), less what the path's end takes of it: a surface tilted from the view
+      // foreshortens the arc, so the arc of the baked path that gives the length is longer (once is near enough: the tilt hardly changes along an arc of a
+      // few px); the part of the arc that the path's end clips is no tilt's, and a stroke at the end of its stretch stays half the length
+      const want = (basePx[2 * i] * big * (hi - lo)) / (2 * half)
+      let have = 0
+      for (let q = 1; q < P; q++) have += Math.hypot(path[po + 2 * q] - path[po + 2 * q - 2], path[po + 2 * q + 1] - path[po + 2 * q - 1])
+      if (have < 0.9 * want && have > 1e-6) {
+        const grow = Math.min(want / have, ARC_TILT_MAX)
+        lo = Math.max(0, anchor - half * grow)
+        hi = Math.min(1, anchor + half * grow)
+        if (!samplePath(baked, i, lo, hi, path, po, worldPath, wo)) continue
+      }
+    }
     let reverse = false
     if (!fixed) {
       // the foreshortening of the width: the lateral direction (the normal × the path's tangent), projected, over the px per world unit at the anchor

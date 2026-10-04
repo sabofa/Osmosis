@@ -117,6 +117,11 @@ export interface ColourRecipes {
   sequential: Uint8Array
   cells: Uint32Array // BAKE_MIX_LEVELS per stroke
   mx: Float64Array
+  // 1: a sequential stroke that RIDES the load of the stroke before it in its role's chain (LoadMixer.mixFollow): it has the same offset, at the place in the
+  // load that stroke has, takes no place in it of its own, and is no step of the chain (its `mx` is not added up). The edge strokes that the model has not
+  // at the authored zoom (the finer cells of an edge stroke's refinement, bake/edgeStrokes.ts) ride, so the loads along an edge are the model's however fine
+  // the cells are, and the strokes a zoomed-in view adds to an edge take the colour of the load they lie in.
+  follow: Uint8Array
 }
 
 // What a producer gives for the colour of one stroke: a plain recipe, or a DraftColour (and for it, optionally, the colour its bound is made from).
@@ -138,6 +143,8 @@ export interface RecipeInput {
   // `mx`, its distance in px from the stroke before it in its chain (LoadChain.next).
   cell?: number
   mx?: number
+  // The stroke rides the load of the one before it (ColourRecipes.follow): it is no step of the chain, so it has no `mx`.
+  follow?: boolean
 }
 
 // What a producer gives for the geometry and the brush of one stroke (the fields a stroke has that are not its colour recipe or its path).
@@ -155,6 +162,8 @@ export interface StrokeFields {
   anchor: number
   basePx0: number
   basePx1: number
+  // An edge stroke's spacing rank (BakedPainting.spacing); 0 when not given.
+  spacing?: number
   alpha: number
   load: number
   impasto: number
@@ -184,6 +193,7 @@ export class StrokeSink {
   mark: Uint32Array
   particle: Uint32Array
   rank: Float32Array
+  spacing: Float32Array
   side: Int8Array
   sizing: Uint8Array
   hidden: Uint8Array
@@ -214,6 +224,7 @@ export class StrokeSink {
     this.mark = new Uint32Array(n)
     this.particle = new Uint32Array(n)
     this.rank = new Float32Array(n)
+    this.spacing = new Float32Array(n)
     this.side = new Int8Array(n)
     this.sizing = new Uint8Array(n)
     this.hidden = new Uint8Array(n)
@@ -238,7 +249,7 @@ export class StrokeSink {
       count: 0, draft: [], hold: [], rec: new Float32Array(REC_STRIDE * n), flags: new Uint8Array(n),
       mixRole: new Uint8Array(n), u: new Float64Array(n), colormapped: new Uint8Array(n), seed: new Uint32Array(n),
       jit0: new Float64Array(n), jit1: new Float64Array(n), fam: new Int8Array(n), uBound: new Float64Array(n),
-      sequential: new Uint8Array(n), cells: new Uint32Array(BAKE_MIX_LEVELS * n), mx: new Float64Array(n),
+      sequential: new Uint8Array(n), cells: new Uint32Array(BAKE_MIX_LEVELS * n), mx: new Float64Array(n), follow: new Uint8Array(n),
     }
   }
 
@@ -261,6 +272,7 @@ export class StrokeSink {
     this.mark = growArray(this.mark, cap)
     this.particle = growArray(this.particle, cap)
     this.rank = growArray(this.rank, cap)
+    this.spacing = growArray(this.spacing, cap)
     this.side = growArray(this.side, cap)
     this.sizing = growArray(this.sizing, cap)
     this.hidden = growArray(this.hidden, cap)
@@ -295,6 +307,7 @@ export class StrokeSink {
     r.sequential = growArray(r.sequential, cap)
     r.cells = growArray(r.cells, BAKE_MIX_LEVELS * cap)
     r.mx = growArray(r.mx, cap)
+    r.follow = growArray(r.follow, cap)
   }
 
   set(i: number, f: StrokeFields): void {
@@ -303,6 +316,7 @@ export class StrokeSink {
     this.mark[i] = f.mark
     this.particle[i] = f.particle
     this.rank[i] = f.rank
+    this.spacing[i] = f.spacing ?? 0
     this.side[i] = f.side
     this.sizing[i] = f.sizing
     this.hidden[i] = f.hidden
@@ -336,7 +350,7 @@ export class StrokeSink {
       count: n, draft: c.draft, hold: c.hold, rec: c.rec.slice(0, REC_STRIDE * n), flags: c.flags.slice(0, n),
       mixRole: c.mixRole.slice(0, n), u: c.u.slice(0, n), colormapped: c.colormapped.slice(0, n), seed: c.seed.slice(0, n),
       jit0: c.jit0.slice(0, n), jit1: c.jit1.slice(0, n), fam: c.fam.slice(0, n), uBound: c.uBound.slice(0, n),
-      sequential: c.sequential.slice(0, n), cells: c.cells.slice(0, BAKE_MIX_LEVELS * n), mx: c.mx.slice(0, n),
+      sequential: c.sequential.slice(0, n), cells: c.cells.slice(0, BAKE_MIX_LEVELS * n), mx: c.mx.slice(0, n), follow: c.follow.slice(0, n),
     }
   }
 
@@ -367,6 +381,7 @@ export class StrokeSink {
       for (let l = 0; l < BAKE_MIX_LEVELS; l++) c.cells[BAKE_MIX_LEVELS * i + l] = r.cells[l]
     }
     c.mx[i] = r.mx ?? 0
+    c.follow[i] = r.follow ? 1 : 0
   }
 }
 
@@ -468,15 +483,18 @@ export function colourStrokes(r: ColourRecipes, params: PaintParams, env: Recipe
     const levels = r.sequential[i] === 1 ? 1 : BAKE_MIX_LEVELS
     let lin: number[] = [0, 0, 0]
     let x = r.mx[i]
-    if (r.sequential[i] === 1) {
+    // (a stroke that rides a load is no step of its chain)
+    const rides = r.sequential[i] === 1 && r.follow[i] === 1
+    if (r.sequential[i] === 1 && !rides) {
       axis[r.mixRole[i]] += r.mx[i]
       x = axis[r.mixRole[i]]
     }
     for (let l = 0; l < levels; l++) {
-      const mixed = mixer.mix({
+      const input = {
         role, cell: r.cells[BAKE_MIX_LEVELS * i + l], u: r.u[i], x, y: 0, lab, colormapped: r.colormapped[i] === 1,
         seed: r.seed[i], jit0: r.jit0[i], jit1: r.jit1[i],
-      })
+      }
+      const mixed = rides ? mixer.mixFollow(input) : mixer.mix(input)
       let m: Oklab = mixed.lab
       if (held) m = holdLightness(m, fam === FAM_SHADOW, lBound)
       lin = oklabToLinear(m)
@@ -518,7 +536,7 @@ function gather<T extends Float32Array | Uint8Array | Int8Array | Uint32Array>(s
 // creation order, then gathered).
 export type StrokeArrays = Pick<
   BakedPainting,
-  'count' | 'role' | 'layer' | 'mark' | 'particle' | 'rank' | 'side' | 'sizing' | 'hidden' | 'handStart' | 'worldPath' | 'worldNormal' | 'pathLength' | 'anchor' | 'basePx' | 'colour' | 'alpha' | 'load' | 'impasto' | 'bristles' | 'bristleVar' | 'dry' | 'wet' | 'endSoft' | 'edge' | 'seed'
+  'count' | 'role' | 'layer' | 'mark' | 'particle' | 'rank' | 'spacing' | 'side' | 'sizing' | 'hidden' | 'handStart' | 'worldPath' | 'worldNormal' | 'pathLength' | 'anchor' | 'basePx' | 'colour' | 'alpha' | 'load' | 'impasto' | 'bristles' | 'bristleVar' | 'dry' | 'wet' | 'endSoft' | 'edge' | 'seed'
 >
 
 export function packStrokeArrays(sink: StrokeSink, perm: Uint32Array, colour: Float32Array): StrokeArrays {
@@ -529,6 +547,7 @@ export function packStrokeArrays(sink: StrokeSink, perm: Uint32Array, colour: Fl
     mark: gather(sink.mark, perm, 1),
     particle: gather(sink.particle, perm, 1),
     rank: gather(sink.rank, perm, 1),
+    spacing: gather(sink.spacing, perm, 1),
     side: gather(sink.side, perm, 1),
     sizing: gather(sink.sizing, perm, 1),
     hidden: gather(sink.hidden, perm, 1),

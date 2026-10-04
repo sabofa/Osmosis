@@ -10,10 +10,10 @@ import { FAM_SHADOW } from '../model/value'
 import { resolvePaintParams, setParam, type PaintParams } from '../params'
 import { LAYER_ORDER, ROLES } from '../types'
 import { CHAIN_BREAK, NO_PARTICLE, boundLightness, preMixLab } from './draft'
-import { markMeans } from './edgeStrokes'
+import { isModelCell, markMeans, spacingRank } from './edgeStrokes'
 import { bakedRecipes, bakePainting, bakeStats, recolourBake } from './index'
 import { newPlanAt, planAt } from './plan'
-import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, SIZING_FIXED } from './types'
+import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_NA, isEdgeSizing, SIZING_ACROSS, SIZING_ALONG } from './types'
 import type { WorldEdgeRun } from './edges'
 import { locate, type SurfacePoint } from './surface'
 import { boxMesh } from './edgesFixture'
@@ -73,7 +73,7 @@ const distanceToRuns = (runs: WorldEdgeRun[], mark: number, side: number, x: num
 
 describe('the edge strokes: what they are', () => {
   for (const [name, f] of [['a sphere on a table', SPHERE], ['an open saddle', SADDLE], ['a box on a table', BOX]] as const) {
-    it(`are made along the runs of ${name}: fixed-sized, with no particle, in the edge role and layer, hidden is not applicable, with finite paths and normals of the side`, () => {
+    it(`are made along the runs of ${name}: sized in px, with no particle, in the edge role and layer, hidden is not applicable, with finite paths and normals of the side`, () => {
       const { baked } = f
       const stats = bakeStats(baked)!
       const strokes = edgeStrokes(f)
@@ -82,15 +82,24 @@ describe('the edge strokes: what they are', () => {
       for (const i of strokes) {
         expect(baked.layer[i]).toBe(LAYER_ORDER.indexOf('edge'))
         expect(baked.particle[i]).toBe(NO_PARTICLE)
-        expect(baked.sizing[i]).toBe(SIZING_FIXED)
+        expect(isEdgeSizing(baked.sizing[i])).toBe(true)
         expect(baked.hidden[i]).toBe(HIDDEN_NA)
         expect(baked.handStart[i]).toBe(0)
         expect(baked.edge[i]).toBeLessThan(4)
         expect(baked.rank[i]).toBeGreaterThanOrEqual(0)
         expect(baked.rank[i]).toBeLessThan(1)
         expect(baked.pathLength[i]).toBeGreaterThan(0)
-        expect(baked.basePx[2 * i] * PX).toBeCloseTo(baked.pathLength[i], 4)
+        // the model's length in px: an along stroke's path is its stretch (the run's samples, chorded), a pull or a bridge is walked ARC_REACH (3) times as long
+        if (baked.sizing[i] === SIZING_ALONG) {
+          expect(baked.basePx[2 * i] * PX / baked.pathLength[i]).toBeGreaterThan(0.9)
+          expect(baked.basePx[2 * i] * PX / baked.pathLength[i]).toBeLessThan(1.15)
+        } else expect(baked.pathLength[i]).toBeLessThanOrEqual(3 * baked.basePx[2 * i] * PX * 1.001)
         expect(baked.basePx[2 * i + 1]).toBeGreaterThan(0)
+        // the spacing rank and the anchor of the cell
+        expect(baked.spacing[i]).toBeGreaterThanOrEqual(0)
+        expect(baked.spacing[i]).toBeLessThan(1)
+        expect(baked.anchor[i]).toBeGreaterThanOrEqual(0)
+        expect(baked.anchor[i]).toBeLessThanOrEqual(1)
         for (let q = 0; q < BAKE_PATH_POINTS; q++) {
           const o = 3 * (BAKE_PATH_POINTS * i + q)
           expect(Number.isFinite(baked.worldPath[o] + baked.worldPath[o + 1] + baked.worldPath[o + 2])).toBe(true)
@@ -149,13 +158,17 @@ describe('the edge strokes: what they are', () => {
         } else if (k === 'pull') {
           expect(w).toBeGreaterThanOrEqual(rp.width * 1.9 * 0.88 - 1e-4)
           expect(w).toBeLessThanOrEqual(rp.width * 1.9 * 1.12 + 1e-4)
-          // (a pull is at most the role's length × 22/30 × 1.2: the walk may stop short)
-          expect(baked.pathLength[i] / PX).toBeLessThanOrEqual(rp.length * (22 / 30) * 1.2 * 1.001)
+          // (the model's length of a pull: the role's length × 22/30 × the seeded ±20%; the path is walked 3 times as long, and the walk may stop short)
+          expect(baked.basePx[2 * i]).toBeGreaterThanOrEqual(rp.length * (22 / 30) * 0.8 - 1e-4)
+          expect(baked.basePx[2 * i]).toBeLessThanOrEqual(rp.length * (22 / 30) * 1.2 + 1e-4)
+          expect(baked.pathLength[i] / PX).toBeLessThanOrEqual(3 * baked.basePx[2 * i] * 1.001)
         } else {
           expect(cls).toBeLessThanOrEqual(1)
           expect(w).toBeGreaterThanOrEqual(rp.width * 1.8 * 0.88 - 1e-4)
           expect(w).toBeLessThanOrEqual(rp.width * 1.8 * 1.12 + 1e-4)
-          expect(baked.pathLength[i] / PX).toBeLessThanOrEqual(rp.length * (26 / 30) * 1.15 * 1.001)
+          expect(baked.basePx[2 * i]).toBeGreaterThanOrEqual(rp.length * (26 / 30) * 0.85 - 1e-4)
+          expect(baked.basePx[2 * i]).toBeLessThanOrEqual(rp.length * (26 / 30) * 1.15 + 1e-4)
+          expect(baked.pathLength[i] / PX).toBeLessThanOrEqual(3 * baked.basePx[2 * i] * 1.001)
         }
       }
       // (every kind occurs somewhere in the three scenes, below)
@@ -419,11 +432,16 @@ describe('the edge strokes: their colours', () => {
       for (let c = 0; c < r.count; c++) if (r.sequential[c] === 1 && r.mixRole[c] === EDGE) inOrder.push(c)
       expect(inOrder.length).toBe(edgeStrokes(f).length)
       let starts = 0
+      let rides = 0
       for (const c of inOrder) {
-        axis += r.mx[c]
+        // (a stroke that rides a load is no step of the chain, and takes the place in the load the stroke before it has)
+        const rider = r.follow[c] === 1
+        if (!rider) axis += r.mx[c]
         const lab = preMixLab(r, c, e)
-        const out = mixer.mix({ role: 'edge', cell: r.cells[BAKE_MIX_LEVELS * c], u: r.u[c], x: axis, y: 0, lab, colormapped: false, seed: r.seed[c], jit0: r.jit0[c], jit1: r.jit1[c] })
-        if (out.index === 0) starts++
+        const input = { role: 'edge' as const, cell: r.cells[BAKE_MIX_LEVELS * c], u: r.u[c], x: axis, y: 0, lab, colormapped: false, seed: r.seed[c], jit0: r.jit0[c], jit1: r.jit1[c] }
+        const out = rider ? mixer.mixFollow(input) : mixer.mix(input)
+        if (rider) rides++
+        else if (out.index === 0) starts++
         let m = out.lab
         if (r.fam[c] >= 0) m = holdLightness(m, r.fam[c] === FAM_SHADOW, boundLightness(r, c, e))
         const lin = Array.from(Float32Array.from(oklabToLinear(m)))
@@ -432,9 +450,11 @@ describe('the edge strokes: their colours', () => {
         // a stroke that starts its chain (another run) starts a load
         if (r.mx[c] >= CHAIN_BREAK) expect(out.index).toBe(0)
       }
-      // loads are runs of loadMin..loadMax consecutive strokes: a good many strokes share one, and every chain start begins another
-      expect(starts).toBeLessThan(inOrder.length)
+      // loads are runs of loadMin..loadMax consecutive strokes of the chain (the strokes that are not riders): a good many strokes share one, and every chain start
+      // begins another; and the riders are most of the strokes (BAKE_EDGE_REFINE times as many cells as the model has)
+      expect(starts).toBeLessThan(inOrder.length - rides)
       expect(starts).toBeGreaterThanOrEqual(inOrder.filter((c) => r.mx[c] >= CHAIN_BREAK).length)
+      expect(rides).toBeGreaterThan(inOrder.length / 2)
     }
   })
 
@@ -464,7 +484,7 @@ describe('the edge strokes: their colours', () => {
       let chainStarts = 0
       let broke = 0
       for (let c = 0; c < r.count; c++) {
-        if (r.sequential[c] !== 1 || r.mixRole[c] !== EDGE) continue
+        if (r.sequential[c] !== 1 || r.mixRole[c] !== EDGE || r.follow[c] === 1) continue
         axis += r.mx[c]
         const out = mixer.mix({ role: 'edge', cell: r.cells[BAKE_MIX_LEVELS * c], u: r.u[c], x: axis, y: 0, lab: preMixLab(r, c, e), colormapped: false, seed: r.seed[c], jit0: r.jit0[c], jit1: r.jit1[c] })
         if (out.index === 0) loads++
@@ -495,7 +515,8 @@ describe('the edge strokes: their colours', () => {
     const painted = new Map<number, number>()
     rec.perm.forEach((c, k) => painted.set(c, k))
     for (let c = 0; c < r.count; c++) {
-      if (r.sequential[c] !== 1 || r.mixRole[c] !== EDGE) continue
+      // (a stroke that rides a load is no step of the chain)
+      if (r.sequential[c] !== 1 || r.mixRole[c] !== EDGE || r.follow[c] === 1) continue
       const k = painted.get(c)!
       const m = mid(f, k)
       if (last && r.mx[c] < CHAIN_BREAK) {
@@ -531,11 +552,12 @@ describe('the edge strokes: the density, the contrast floor and the ranks', () =
     expect(new Set(ranks).size).toBeGreaterThan(20)
     expect(Math.min(...ranks)).toBeLessThan(0.2)
     expect(Math.max(...ranks)).toBeGreaterThan(0.8)
-    // the strokes of one stretch share it: a drag and its pulls (a stretch has one rank, and a stroke has at most a few neighbours of it)
+    // the strokes of one stretch share it: its cells (a stretch has one rank, and BAKE_EDGE_REFINE strokes or more of it: a stroke along it for each of its
+    // cells, and a pull or a bridge for each of its lattice's)
     const counts = new Map<number, number>()
     for (const r of ranks) counts.set(r, (counts.get(r) ?? 0) + 1)
-    expect(Math.max(...counts.values())).toBeGreaterThan(1)
-    expect(Math.max(...counts.values())).toBeLessThanOrEqual(8)
+    expect(Math.max(...counts.values())).toBeGreaterThan(BAKE_EDGE_REFINE)
+    expect(Math.max(...counts.values())).toBeLessThanOrEqual(120)
   })
 
   it('make fewer strokes where the contrast floor is raised (an edge under detect.edgeMinContrast makes none), and more where it is lowered', () => {
@@ -591,8 +613,9 @@ describe('the edge strokes: a crisp stroke’s value, the fold’s direction, an
       }
       for (const i of edgeStrokes(f)) {
         if (f.baked.mark[i] !== 0 || kindOf(f, i) !== 'pull') continue
-        const u0 = (uAt(i, 0) + uAt(i, 1)) / 2
-        const u1 = (uAt(i, BAKE_PATH_POINTS - 2) + uAt(i, BAKE_PATH_POINTS - 1)) / 2
+        // (the path is walked 3 times the model's length: the middle third of it, points 5 and 10, is what a frame draws)
+        const u0 = (uAt(i, 5) + uAt(i, 6)) / 2
+        const u1 = (uAt(i, 9) + uAt(i, 10)) / 2
         if (!(Math.abs(u0 - u1) > 0.01)) continue
         n++
         if (u0 > u1) right++
@@ -634,5 +657,149 @@ describe('the edge strokes: a crisp stroke’s value, the fold’s direction, an
     // a mark with particles: their mean; one without: its own colour
     expect(Array.from(means.slice(0, 3))).toEqual([expect.closeTo(0.5, 6), expect.closeTo(0.05, 6), expect.closeTo(0.075, 6)])
     expect(Array.from(means.slice(3, 6))).toEqual([own[0], own[1], own[2]])
+  })
+})
+
+describe('the edge strokes: the cells of a stretch and their spacing ranks (final fix wave, M2)', () => {
+  it('rank the cells of a stretch in a bit-reversal order: the cells BAKE_EDGE_REFINE apart come first, then those halfway between, and so on, whatever the seeded draw', () => {
+    const F = BAKE_EDGE_REFINE
+    for (const u of [0, 0.37, 0.9999999]) {
+      for (let i = -64; i <= 64; i++) {
+        const r = spacingRank(i, u)
+        expect(r).toBeGreaterThanOrEqual(0)
+        expect(r).toBeLessThan(1)
+        // a model cell (a member of the load chain) is one under 1 / F
+        expect(isModelCell(i), `cell ${i}`).toBe(r < 1 / F)
+      }
+      // the cells kept at a threshold of 2^m / F are those a multiple of F / 2^m apart, from the middle: a frame's lattice is even where its zoom is such a power
+      for (let m = 0; 2 ** m <= F; m++) {
+        const step = F / 2 ** m
+        for (let i = -64; i <= 64; i++) expect(spacingRank(i, u) < 2 ** m / F, `m ${m} cell ${i}`).toBe(i % step === 0)
+      }
+    }
+    // every run of F cells has each band of ranks once (the ranks of a stretch are uniform however short it is), and the draw moves a rank inside its band only
+    for (let s0 = -20; s0 <= 20; s0++) {
+      const bands = new Set<number>()
+      for (let i = s0; i < s0 + F; i++) bands.add(Math.floor(spacingRank(i, 0.5) * F))
+      expect(bands.size).toBe(F)
+    }
+    expect(spacingRank(5, 0.2)).toBeLessThan(spacingRank(5, 0.8))
+    expect(Math.floor(spacingRank(5, 0.2) * F)).toBe(Math.floor(spacingRank(5, 0.8) * F))
+  })
+
+  it('make each stretch a lattice: one stroke along it is the model’s (a member), the others BAKE_EDGE_REFINE cells’ worth of the same path, anchored at the cells’ places', () => {
+    const f = SPHERE
+    const stretches = new Map<number, number[]>()
+    for (const i of edgeStrokes(f)) {
+      if (f.baked.sizing[i] !== SIZING_ALONG) continue
+      const g = stretches.get(f.baked.rank[i])
+      if (g) g.push(i)
+      else stretches.set(f.baked.rank[i], [i])
+    }
+    expect(stretches.size).toBeGreaterThan(30)
+    for (const g of stretches.values()) {
+      // the cells of the stretch: from its start to its end, BAKE_EDGE_REFINE + 1 of them
+      expect(g.length).toBe(BAKE_EDGE_REFINE + 1)
+      const anchors = g.map((i) => f.baked.anchor[i] * BAKE_EDGE_REFINE).sort((a, b) => a - b)
+      anchors.forEach((a, k) => expect(a).toBeCloseTo(k, 5))
+      // exactly one is a model cell (under 1 / F), and it is the middle's; all share the path of the stretch, its length and the model's px
+      const members = g.filter((i) => f.baked.spacing[i] < 1 / BAKE_EDGE_REFINE)
+      expect(members.length).toBe(1)
+      expect(f.baked.anchor[members[0]]).toBeCloseTo(0.5, 6)
+      for (const i of g) {
+        expect(f.baked.pathLength[i]).toBe(f.baked.pathLength[g[0]])
+        expect(f.baked.basePx[2 * i]).toBe(f.baked.basePx[2 * g[0]])
+        for (let q = 0; q < 3 * BAKE_PATH_POINTS; q++) expect(f.baked.worldPath[3 * BAKE_PATH_POINTS * i + q]).toBe(f.baked.worldPath[3 * BAKE_PATH_POINTS * g[0] + q])
+      }
+    }
+  })
+
+  it('make about the model’s number of strokes at the authored zoom: the cells that are the model’s, per soft stretch, are its drag and as many pulls as the model’s rule (a pull every ~34 px)', () => {
+    const f = SPHERE
+    const stats = bakeStats(f.baked)!.edgeStrokes
+    // (the members of the load chain are the model's strokes)
+    let members = 0
+    for (const i of edgeStrokes(f)) if (f.baked.spacing[i] < 1 / BAKE_EDGE_REFINE) members++
+    expect(members).toBe(stats.members)
+    expect(stats.strokes).toBeGreaterThan(5 * stats.members)
+    // the pulls of a soft stretch, the model's rule: max(1, round(px / 34))
+    const drags = new Map<number, number>()
+    const pulls = new Map<number, number>()
+    for (const i of edgeStrokes(f)) {
+      const r = f.baked.rank[i]
+      if (f.baked.sizing[i] === SIZING_ALONG && f.baked.edge[i] === 1) drags.set(r, f.baked.basePx[2 * i])
+      else if (f.baked.sizing[i] === SIZING_ACROSS && f.baked.edge[i] === 1 && f.baked.spacing[i] < 1 / BAKE_EDGE_REFINE) pulls.set(r, (pulls.get(r) ?? 0) + 1)
+    }
+    let want = 0
+    let got = 0
+    for (const [r, px] of drags) {
+      want += Math.max(1, Math.round(px / 34))
+      got += pulls.get(r) ?? 0
+    }
+    expect(drags.size).toBeGreaterThan(20)
+    // (a lattice centred on the stretch has its own rounding: the same count over the stretches to within a fifth)
+    expect(got / want).toBeGreaterThan(0.8)
+    expect(got / want).toBeLessThan(1.2)
+  })
+
+  it('make a member of the load chain of exactly the cells that are the model’s, and let the rest ride: follow is set for a stroke whose spacing is not under 1 / BAKE_EDGE_REFINE, and a rider has no step of the chain', () => {
+    for (const f of [SPHERE, SADDLE, BOX]) {
+      const rec = bakedRecipes(f.baked)!
+      let riders = 0
+      for (const i of edgeStrokes(f)) {
+        const c = rec.perm[i]
+        const rides = !(f.baked.spacing[i] < 1 / BAKE_EDGE_REFINE)
+        expect(rec.recipes.follow[c] === 1, `stroke ${i}`).toBe(rides)
+        if (rides) {
+          riders++
+          expect(rec.recipes.mx[c]).toBe(0)
+        }
+      }
+      expect(riders).toBeGreaterThan(edgeStrokes(f).length / 2)
+    }
+  })
+
+  it('lay the pulls and bridges of a stretch on a lattice of cells 1 / BAKE_EDGE_REFINE of the model’s spacing apart in the world: neighbouring cells are a cell of 34 / 8 (or 42 / 8) px away along the stretch', () => {
+    const f = SPHERE
+    const groups = new Map<number, number[]>()
+    for (const i of edgeStrokes(f)) {
+      if (f.baked.sizing[i] !== SIZING_ACROSS) continue
+      const key = f.baked.rank[i]
+      const g = groups.get(key)
+      if (g) g.push(i)
+      else groups.set(key, [i])
+    }
+    let gaps = 0
+    let sum = 0
+    for (const g of groups.values()) {
+      if (g.length < 6) continue
+      // the middles' places along the stretch (the farthest pair's axis), sorted
+      const mids = g.map((i) => mid(f, i))
+      let far = 0
+      let fa = 0
+      let fb = 0
+      for (let a = 0; a < mids.length; a++) {
+        for (let b = a + 1; b < mids.length; b++) {
+          const d = Math.hypot(mids[a][0] - mids[b][0], mids[a][1] - mids[b][1], mids[a][2] - mids[b][2])
+          if (d > far) {
+            far = d
+            fa = a
+            fb = b
+          }
+        }
+      }
+      const axis = [0, 1, 2].map((c) => (mids[fb][c] - mids[fa][c]) / far)
+      const order = mids.map((m, k) => [k, [0, 1, 2].reduce((s, c) => s + (m[c] - mids[fa][c]) * axis[c], 0)] as const).sort((a, b) => a[1] - b[1])
+      for (let k = 1; k < order.length; k++) {
+        const p = mids[order[k - 1][0]]
+        const q = mids[order[k][0]]
+        sum += Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) / PX
+        gaps++
+      }
+    }
+    expect(gaps).toBeGreaterThan(100)
+    // (a pull is 34 / 8 = 4.25 px apart, a bridge 5.25: the stretches are of one kind or the other)
+    expect(sum / gaps).toBeGreaterThan(3.5)
+    expect(sum / gaps).toBeLessThan(6)
   })
 })
