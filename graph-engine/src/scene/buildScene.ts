@@ -32,6 +32,9 @@ const BUDGET_NOTE = 'drawn coarsely: this curve needs more detail than its drawi
 // And of one the budget left with nothing at all to draw (a curve the twin cannot certify has nothing
 // the cap can keep): the same cause, said as what it is. "drawn coarsely" over a blank would be false.
 const NOT_DRAWN_NOTE = 'not drawn: this curve needs more detail than its drawing budget allows'
+// A curve that is smooth and rises faster than the sampler can certify (past about 1024:1 on screen, where the twin
+// has nothing to say about it): it is broken wherever that is so, and nothing else says why.
+const TOO_STEEP_NOTE = 'too steep to draw here: the curve rises faster than the sampler can certify'
 
 // One pass over the statements to collect every "k(x) = ..." / "a = 5"
 // definition into a lookup table, before anything else gets built — a
@@ -150,6 +153,9 @@ interface CurveContext {
 //    "not drawn", at ANY quality. What the cap leaves of a curve the twin cannot certify (an integral)
 //    is nothing, and a blank must say why; the same note over a curve that is not in view would be
 //    false, which is why the sampler says whether there was anything to draw.
+//  - tooSteep (smooth, and steeper than the sampler can certify, somewhere in view): "too steep to draw
+//    here", at FULL always and at COARSE only if nothing drew, as the budget notes. A jump the walk did
+//    not find is not this; nor is a steep stretch that is only in the overscan.
 //  - capped, and something drawn: the curve is drawn from what the sampler had, and the line says
 //    "drawn coarsely", at FULL only. A coarse pass is coarse on purpose (the settled pass says whether
 //    the curve fits its budget), and the message would flash on every drag frame.
@@ -165,6 +171,8 @@ function sampleStatement(spec: CurveSpec, statementIndex: number, color: string 
   ctx.stats.points += sampled.stats.points
   ctx.stats.intervals += sampled.stats.intervals
   if (sampled.tested && !sampled.defined) throw new Error('this curve is undefined everywhere in view')
+  // too steep to certify, somewhere in view: at FULL always, at COARSE only if nothing drew (as the budget notes)
+  if (sampled.tooSteep && (ctx.quality === 'full' || !drewSomething(sampled.objects))) ctx.errors.push({ line, message: TOO_STEEP_NOTE })
   if (sampled.blankAtCap) ctx.errors.push({ line, message: NOT_DRAWN_NOTE })
   else if (sampled.capped && ctx.quality === 'full' && drewSomething(sampled.objects)) ctx.errors.push({ line, message: BUDGET_NOTE })
   return sampled.objects

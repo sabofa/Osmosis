@@ -1423,6 +1423,54 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     })
   })
 
+  // fix round 3 (rule 2): a smooth curve steeper than 1024:1 on screen is lifted at every floor interval (its leaves of 1/1024 px are
+  // still a pixel), and drew nothing, with no message
+  describe('the steepness note', () => {
+    const STEEP = 'too steep to draw here: the curve rises faster than the sampler can certify'
+    const view = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+    const build = (spec: string, quality: 'full' | 'coarse') => sceneWith(spec, { quality, widthPx: 800, heightPx: 800 }, view)
+    it('y = integral(t = 0 to x, 2000) says it is too steep, at FULL and at COARSE (where nothing drew)', () => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = build('y = integral(t = 0 to x, 2000)', quality)
+        expect(scene.errors, quality).toEqual([{ line: 1, message: STEEP }])
+        expect(curvesOf(scene)[0].chains, quality).toEqual([])
+      }
+    })
+    it('names its own line, and nothing else gets it', () => {
+      const scene = build('y = x\ny = integral(t = 0 to x, 2000)\ny = sin(x)', 'full')
+      expect(scene.errors).toEqual([{ line: 2, message: STEEP }])
+    })
+    it('a curve that is steep in places and drawn elsewhere has it at FULL, and not at COARSE, where something drew', () => {
+      // 2000x on the left, x on the right
+      const spec = 'y = {x < 0: integral(t = 0 to x, 2000), x}'
+      const full = build(spec, 'full')
+      expect(full.errors).toEqual([{ line: 1, message: STEEP }])
+      expect(curvesOf(full)[0].chains.length).toBeGreaterThan(0)
+      const coarse = build(spec, 'coarse')
+      expect(coarse.errors).toEqual([])
+      expect(curvesOf(coarse)[0].chains.length).toBeGreaterThan(0)
+    })
+    it('a steep integral that draws (a slope of 200 or 1000) has no note, at either quality', () => {
+      for (const slope of [200, 1000]) {
+        for (const quality of ['full', 'coarse'] as const) {
+          const scene = build(`y = integral(t = 0 to x, ${slope})`, quality)
+          expect(scene.errors, `${slope} ${quality}`).toEqual([])
+          expect(curvesOf(scene)[0].chains.length, `${slope} ${quality}`).toBeGreaterThan(0)
+        }
+      }
+    })
+    it('a real jump the walk did not find is a break and not "too steep"', () => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = build('y = 200 (x - 5) - 0.05 floor(50 x)', quality)
+        expect(scene.errors.map((e) => e.message), quality).not.toContain(STEEP)
+        expect(curvesOf(scene)[0].breaks.some((b) => b.kind === 'jump'), quality).toBe(true)
+      }
+    })
+    it('a steep stretch that is not in view is not announced', () => {
+      for (const quality of ['full', 'coarse'] as const) expect(build('y = integral(t = 0 to x, 2000) - 24000', quality).errors, quality).toEqual([])
+    })
+  })
+
   describe('a curve never blanks silently (rule 2)', () => {
     it('y = sqrt(sin(350x)) draws, where it used to burn its budget finding zeros and draw nothing', () => {
       const scene = sceneOf('y = sqrt(sin(350x))')

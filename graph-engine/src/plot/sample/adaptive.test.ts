@@ -331,8 +331,9 @@ describe('sampleRange — the jump test respects what the twin reported', () => 
 // calc P2 task 7, fix round 1 (S1). A twin that says nothing (UNKNOWN: an integral's) certifies no interval, so every one is
 // bisected to the floor and decided there by the jump test. That test asked for a gap under a pixel, which a smooth curve
 // steeper than 16:1 on screen never has at a 1/16 px interval: it broke at every floor interval, however smooth it was.
-// At the floor the test no longer asks for the gap to be small, only to close: halved up to CORE.floorHalvings levels below
-// the floor, each gap at most halvingShrink times the one before. A real jump does not shrink; a smooth curve's gaps halve.
+// At the floor the test no longer asks for the gap to be small, only to close: bisected below the floor, down to
+// CORE.subFloorPx wherever the floor is, until each leaf's gap is under a pixel and closing. A real jump does not shrink; a
+// smooth curve's gaps halve.
 describe('sampleRange — a smooth curve the twin cannot certify is not broken at every floor interval', () => {
   // a twin that says nothing at all: no bounds, the verdict UNKNOWN
   const unknown = (f: (x: number) => number): CurveFns => ({
@@ -354,9 +355,44 @@ describe('sampleRange — a smooth curve the twin cannot certify is not broken a
   const go = (f: (x: number) => number, tuning = FULL) => {
     const sink = new ChainSink(view.clip)
     const counter: EvalCounter = { points: 0, intervals: 0 }
-    const { capped } = sampleRange(unknown(f), -1.5, 1.5, { left: { kind: 'free' }, right: { kind: 'free' } }, view, tuning, counter, sink)
-    return { chains: sink.chains(), breaks: sink.breaks(), capped, counter }
+    const { capped, steepAt } = sampleRange(unknown(f), -1.5, 1.5, { left: { kind: 'free' }, right: { kind: 'free' } }, view, tuning, counter, sink)
+    return { chains: sink.chains(), breaks: sink.breaks(), capped, steepAt, counter }
   }
+
+  // fix round 3. The depth below the floor was a COUNT of halvings (6), and COARSE's floor is 0.5 px against FULL's 1/16, so
+  // its deepest leaf was 1/128 px against 1/1024: a smooth curve steeper than 128:1 was broken at every floor interval at COARSE,
+  // silently (y = integral(t = 0 to x, 200): 0 chains, 14 jump breaks; integral(1000): none). The depth is a TARGET WIDTH,
+  // FULL's floorPx / 64 (1/1024 px), at both qualities, so COARSE bisects about 9 levels, to the same leaves.
+  it.each([['200x', (x: number) => 200 * x], ['1000x', (x: number) => 1000 * x]])('%s is one chain with no jump break, at COARSE as at FULL', (_name, f) => {
+    for (const tuning of [FULL, COARSE]) {
+      const r = go(f, tuning)
+      expect(r.capped).toBe(false)
+      expect(r.breaks.filter((b) => b.kind === 'jump')).toEqual([])
+      expect(r.chains).toHaveLength(1)
+      expect(r.steepAt).toEqual([])
+      for (const p of chainPoints(r.chains[0])) expect(Math.abs(f(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+    }
+  })
+  // past 1024:1 a leaf of 1/1024 px is still over a pixel: the interval is lifted, and the core says that it was the steepness (its
+  // gaps were still halving at the last level) and where, as it does not for a jump, whose gap does not shrink
+  it('a smooth curve steeper than the leaves can resolve is lifted, and steepAt says so; a jump is not steepness', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const steep = go((x) => 2000 * x, tuning)
+      expect(steep.chains, 'a chain of 2000x').toEqual([])
+      expect(steep.breaks.some((b) => b.kind === 'jump')).toBe(true)
+      expect(steep.steepAt.length).toBeGreaterThan(0)
+      // where: in the box (|y| < 15, so |x| < 0.0075)
+      for (const t of steep.steepAt) expect(Math.abs(t)).toBeLessThan(0.0075 + 0.0125)
+      // a jump of a pixel and more, on a gentle slope and on a steep one: a break, and no steepAt. (On a slope of 2000 the curve
+      // is steep on both sides of the jump and says so there, so only the break is asked for.)
+      for (const [slope, px] of [[20, 1], [200, 2], [2000, 40]]) {
+        const c = 15 / slope / 2
+        const jump = go((x) => slope * x - (px / 40) * (x >= c ? 1 : 0), tuning)
+        expect(jump.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) <= 2 * (tuning.uncertifiedFloorPx / 40)), `a jump of ${px} px on ${slope}`).toBe(true)
+        if (slope < 1024) expect(jump.steepAt, `a jump of ${px} px on ${slope}`).toEqual([])
+      }
+    }
+  })
 
   it.each([['20x', (x: number) => 20 * x], ['40 sin(x)', (x: number) => 40 * Math.sin(x)], ['100x', (x: number) => 100 * x]])('%s (slope past 16:1) is one chain with no jump break, at FULL and COARSE', (_name, f) => {
     for (const tuning of [FULL, COARSE]) {

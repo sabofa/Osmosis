@@ -267,12 +267,12 @@ export interface Tuning {
   // bisecting to the floor and testing there (an integral, a cancelling quotient, a seam the walk did
   // not find). A coarser floor is fewer intervals to test and a coarser place for a jump break, and it
   // saves what is spent on a gentle curve; a steep one costs what its vertical travel costs (see
-  // CORE.floorHalvings), wherever bisecting stops. Certified intervals keep floorPx: they are accepted
+  // CORE.subFloorPx), wherever bisecting stops. Certified intervals keep floorPx: they are accepted
   // flat long before it.
   uncertifiedFloorPx: number
   // Two ends this close on screen, the twin unable to certify the interval, are connected
   // if the jump test shows the gap closing; a pixel is what the eye can tell apart. (At the floor
-  // the gap need not be small, only to close: CORE.floorHalvings.)
+  // the gap need not be small, only to close: CORE.subFloorPx.)
   gapPx: number
   // The jump test: this many successive halvings (3 take a 1 px gap to 1/8 px), keeping
   // the half with the larger gap, and each gap must be at most halvingShrink times the
@@ -326,19 +326,26 @@ export const CORE = {
   edgeSteps: 64,
   // The jump test at the floor (adaptive.ts): an interval the twin does not certify, at the width it stops
   // being bisected at, with both ends finite, its enclosure bounded (or the verdict UNKNOWN) and a gap of a
-  // pixel or more, is bisected BELOW the floor: every sub-interval whose gap is still a pixel or more, up to
-  // this many levels, and then each leaf (a gap under gapPx) must pass the old test, gap under gapPx and
+  // pixel or more, is bisected BELOW the floor: every sub-interval whose gap is still a pixel or more, down to
+  // subFloorPx, and then each leaf (a gap under gapPx) must pass the old test, gap under gapPx and
   // closing (halvings, halvingShrink). If any leaf fails, or a sub-interval is still a pixel at the last
   // level, the interval is lifted and a jump is recorded at that leaf. So any jump the test bridges is under a
   // pixel: a jump of a pixel keeps its sub-interval's gap over a pixel at every level, and one set against the
   // slope makes its own half's gap smaller, which is why every half is looked at (following only the half
   // with the larger gap bridged a 2 px jump against a slope of 200 at 40 offsets of 40). A smooth curve's
-  // gaps halve however steep it is, so it is joined, down to a slope of 1024:1 at FULL's floor (and 128:1
-  // at COARSE's), past which the last level is still a pixel and the interval is not. The old precondition (a
+  // gaps halve however steep it is, so it is joined, down to a slope of 1024:1 (a leaf of 1/1024 px is under
+  // a pixel there), past which the last level is still a pixel and the interval is not: it is lifted, and
+  // the curve says it was the steepness that did it (the gaps were still halving at the last level, where a
+  // jump's are not), which is a note to the author. The old precondition (a
   // gap under gapPx) refused every interval of a curve steeper than 16:1, which was broken at every floor
   // interval (y = integral(t = 0 to x, 40 cos(t)): 8091 jump breaks, nothing drawn in view). The price is
   // evaluations: the leaves are a gap of under a pixel each, so a curve costs about 6 evaluations for each
   // pixel it climbs, and a steep integral can cap (40 cos(t) climbs 9000 px in the box at 800 px: 60000
   // points, drawn as far as that goes, with the note).
-  floorHalvings: 6,
+  // A WIDTH and not a count of halvings: the floor is 1/16 px at FULL and 1/2 px at COARSE, and six halvings
+  // from each stops at 1/1024 px and 1/128 px, so a smooth curve steeper than 128:1 was broken at every floor
+  // interval at COARSE (y = integral(t = 0 to x, 200): nothing drawn, no cap, no message), where FULL drew it.
+  // The leaves are the same at both, 1/1024 px (FULL's floorPx / 64), and COARSE bisects 9 levels to them: the
+  // number of leaves follows the curve's climb on screen, so the cost does not change.
+  subFloorPx: 1 / 1024,
 }

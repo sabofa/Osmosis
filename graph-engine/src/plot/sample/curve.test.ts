@@ -569,6 +569,46 @@ describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not b
       expect(jumpsInView(r.objects, f), quality).toEqual([])
     }
   })
+  // fix round 3: the depth below the floor is a width (1/1024 px) and not a count of halvings, so COARSE (floor 0.5 px) reaches the
+  // leaves FULL does. By count it stopped at 1/128 px, and a slope of 200 or more was broken at every floor interval at COARSE:
+  // integral(200) drew 0 of 19 positions in view, integral(1000) 0 of 5, with no budget cap and no message.
+  it.each([['200', 19], ['1000', 5]])('y = integral(t = 0 to x, %s) is drawn everywhere it is in view, at COARSE and at FULL', (slope, _wantAtLeast) => {
+    const f = (x: number) => Number(slope) * x
+    // 41 positions across the stretch of x where the curve is in view (a slope of 1000 is in view for 0.02 of x: 0.8 px)
+    const xs = Array.from({ length: 41 }, (_, i) => ((i / 20 - 1) * 10) / Number(slope))
+    for (const quality of ['coarse', 'full'] as const) {
+      const r = sampleCurve(explicit(`integral(t = 0 to x, ${slope})`), view, scopeOf(), { ...opts, quality })
+      const segs = curveOf(r.objects).chains.flatMap((ch) => {
+        const p = chainPoints(ch)
+        return p.slice(1).map((q, i) => [Math.min(p[i].x, q.x), Math.max(p[i].x, q.x)] as const)
+      })
+      expect(xs.filter((x) => !segs.some(([a, b]) => a <= x && x <= b)), quality).toEqual([])
+      expect(jumpsInView(r.objects, f), quality).toEqual([])
+      expect(r.capped, quality).toBe(false)
+      expect(r.tooSteep, quality).toBe(false)
+    }
+  })
+  // past 1024:1 the leaves (1/1024 px) are still a pixel and more; the curve is lifted there, and the sampled curve says so
+  it('y = integral(t = 0 to x, 2000) is too steep to certify: broken at the depth limit, and tooSteep says so, at both qualities', () => {
+    for (const quality of ['coarse', 'full'] as const) {
+      const r = sampleCurve(explicit('integral(t = 0 to x, 2000)'), view, scopeOf(), { ...opts, quality })
+      expect(curveOf(r.objects).chains, quality).toEqual([])
+      expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'jump').length, quality).toBeGreaterThan(0)
+      expect(r.tooSteep, quality).toBe(true)
+    }
+  })
+  it('a steep part outside the view is not "too steep to draw here": the curve is in the overscan only', () => {
+    // 2000 (x - 12) is steep, and in the box (+-15) for x within 0.0075 of 12, which is the overscan of a view of +-10
+    const r = run(explicit('integral(t = 0 to x, 2000) - 24000'))
+    expect(r.tooSteep).toBe(false)
+  })
+  // and a real jump is not steepness: its gap does not shrink at the last level, a steep curve's does
+  it('a jump the walk did not find is not "too steep": 200(x - 5) - 0.05 floor(50x) breaks, and tooSteep is false', () => {
+    const r = run(explicit('200 (x - 5) - 0.05 floor(50 x)'))
+    expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'jump').length).toBeGreaterThan(0)
+    expect(r.tooSteep).toBe(false)
+  })
+
   // fix round 2 (rule 1): 200(x - 5) rises 12.5 px in a floor interval and floor(50x) drops 2 px at every 0.02; the locator's
   // 64-zero cap leaves the jumps near 5 unlocated (it keeps the ones nearest 0), so the core meets them. The floor test followed
   // the larger-gap half only, and a jump against the slope is in the smaller one: 3 of the 5 in view were bridged, with no break.

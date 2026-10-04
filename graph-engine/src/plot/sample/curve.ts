@@ -121,6 +121,11 @@ export interface SampledCurve {
   // inside the view: the curve is missing because of the budget, not because it is not there. A capped curve
   // that is wholly off screen (an integral's twin cannot say so, so it is refined as if it were not) is not this.
   blankAtCap: boolean
+  // Somewhere IN VIEW the curve is smooth and too steep for the sampler to certify (a floor interval was lifted because
+  // its sub-intervals of 1/1024 px were still a pixel high and their gaps were still halving: past about 1024:1 on
+  // screen), so it is broken there and not drawn, though nothing else is wrong with it. A jump the walk did not find
+  // is not this (its gap does not shrink), nor is a steep stretch that is only in the overscan.
+  tooSteep: boolean
   stats: { points: number; intervals: number }
   // some start-grid sample lay inside the domain
   tested: boolean
@@ -214,7 +219,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
 
   // A range or a scale that is not a number draws nothing (a view of no extent, say).
   if (!(co.to > co.from) || !Number.isFinite(co.from) || !Number.isFinite(co.to) || !(co.pxPerT > 0) || !Number.isFinite(co.pxPerT) || !(px.x > 0) || !(px.y > 0)) {
-    return { objects: [curveObject(options, [], [])], capped: false, blankAtCap: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
+    return { objects: [curveObject(options, [], [])], capped: false, blankAtCap: false, tooSteep: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
   }
 
   const located = locateZeros(generatorsOf(co, scope), co.param, scope, co.from, co.to, counter)
@@ -237,9 +242,13 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     differences: new Map(),
   }
   let capped = false
+  // where the core lifted a smooth curve for being too steep for its leaves to resolve (adaptive.ts steepAt)
+  const steepAt: number[] = []
   const piece = (ta: number, tb: number, left: End, right: End) => {
     if (!(tb > ta)) return
-    if (sampleRange(fns, ta, tb, { left, right }, screen, tuning, spent, sink, bandSink).capped) capped = true
+    const done = sampleRange(fns, ta, tb, { left, right }, screen, tuning, spent, sink, bandSink)
+    if (done.capped) capped = true
+    steepAt.push(...done.steepAt)
   }
 
   let from = co.from
@@ -263,8 +272,9 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const drawn = spec.kind === 'explicit' ? reaches(chains, visibleFrom, visibleTo) || bands.some((b) => b.kind === 'band' && reaches(b.outline, visibleFrom, visibleTo)) : chains.length > 0 || bands.length > 0
   const blank = chains.length === 0 && bands.length === 0
   const grid = startGrid(spec, co, fns, scope, tuning, bounds, counter, drawn, capped && blank)
+  const tooSteep = steepAt.some((t) => inView(fns, t, bounds, counter))
   // the stats are the total of what the call evaluated: locating, classifying and sampling
-  return { objects, capped, blankAtCap: capped && blank && grid.seen, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
+  return { objects, capped, blankAtCap: capped && blank && grid.seen, tooSteep, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
 }
 
 // What one classified spot is to the pieces beside it (step 4 of the header), and the typed
@@ -549,6 +559,14 @@ function generatorsOf(co: Coordinates, scope: MathScope): Generator[] {
     }
   }
   return [...found.values()]
+}
+
+// Whether the curve's point at parameter t is inside the view (one evaluation, counted).
+function inView(fns: CurveFns, t: number, view: Bounds, counter: EvalCounter): boolean {
+  const pt = new Float64Array(2)
+  fns.point(t, pt)
+  counter.points++
+  return pt[0] >= view.xMin && pt[0] <= view.xMax && pt[1] >= view.yMin && pt[1] <= view.yMax
 }
 
 // Whether any vertex of the chains has a parameter in [lo, hi].
