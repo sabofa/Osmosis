@@ -189,12 +189,18 @@ export function joinGenerators(a: Generator, b: Generator): Generator {
 // The generators of `expr` over `param`, in the order the walk finds them. A
 // generator that does not read `param` (through user functions and constants) is
 // no trouble spot of this curve and is dropped; duplicates are one.
-export function troubleGenerators(expr: Expr, param: string, scope: MathScope): Generator[] {
+//
+// `naturals`, when given, is pushed the expression of every NATURAL spot the walk meets, as it meets it and before
+// duplicates are joined: a natural spot that has the expression of a seam is joined into it (the seam wins, and the
+// generator no longer says the function has a spot there too), and the caller that wants to know whether a seam's zero
+// is also a denominator's or a step's needs the spots as they were (curve.ts, sharedWithNatural).
+export function troubleGenerators(expr: Expr, param: string, scope: MathScope, naturals?: Expr[]): Generator[] {
   const k = scope.angle === 'degrees' ? 180 : Math.PI
   const found = new Map<string, Generator>()
 
   const emit: Emit = (generator, origin, why, cmp) => {
     if (!freeVariablesDeep(generator, scope).has(param)) return
+    if (origin === 'natural') naturals?.push(generator)
     const key = JSON.stringify(generator)
     const known = found.get(key)
     const g: Generator = cmp ? { expr: generator, origin, why, cmps: [cmp] } : { expr: generator, origin, why }

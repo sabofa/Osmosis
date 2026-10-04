@@ -796,3 +796,90 @@ describe('sampleCurve — a dense staircase is never bridged to the anchor of it
     }
   })
 })
+
+// calc P2 final review, C2: at a zero that is not an exact double the scalar is not the curve. At the double nearest k pi,
+// sin(x) is 1.2e-16, so sin(x)/sin(x) is "defined" there and equal to its limit: the hole was classified regular, with
+// no ring and an untyped jump a sixteenth of a pixel wide for the core to find, at every k pi but 0. A denominator is 0
+// at the real zero, so there the twin is asked about the curve over a few tolerances round it, and the point is
+// undefined unless it says continuous and bounded (curve.ts pointAt).
+describe('sampleCurve — a hole at a zero that is not an exact double is a hole, and not a value', () => {
+  const inView = (m: { at: { x: number } }) => Math.abs(m.at.x) <= 10
+  const holes = (objs: SceneObject[]) => marksOf(objs).filter((m) => m.role === 'hole' && inView(m))
+  const PI = Math.PI
+  const times = (ks: number[], f: (t: number) => number, scale = PI) => ks.map((k) => [k * scale, f(k * scale)] as const)
+  it.each([
+    ['sin(x)/sin(x)', times([-3, -2, -1, 0, 1, 2, 3], () => 1)],
+    ['sin(2x)/sin(x)', times([-3, -2, -1, 0, 1, 2, 3], (t) => 2 * Math.cos(t))],
+    ['cos(x)/cos(x)', times([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], () => 1)],
+    ['(x^2 - 2)/(x^2 - 2)', [[-Math.SQRT2, 1], [Math.SQRT2, 1]] as const],
+    ['(x^2 - 2)/(x^2 - 2) + x', [[-Math.SQRT2, 1 - Math.SQRT2], [Math.SQRT2, 1 + Math.SQRT2]] as const],
+  ])('%s: every hole comes back, open, at its limit; one unbroken chain; no value mark', (body, want) => {
+    const r = run(explicit(body))
+    const found = holes(r.objects).sort((a, b) => a.at.x - b.at.x)
+    expect(found.map((m) => m.fill)).toEqual(want.map(() => 'open'))
+    want.forEach(([x, y], i) => {
+      expect(found[i].at.x, body).toBeCloseTo(x, 9)
+      expect(found[i].at.y, body).toBeCloseTo(y, 5)
+    })
+    expect(marksOf(r.objects).filter((m) => m.role !== 'hole'), body).toEqual([])
+    expect(curveOf(r.objects).chains, body).toHaveLength(1)
+    expect(curveOf(r.objects).breaks, body).toEqual([])
+  })
+  it('(x - pi)/sin(x): a hole at pi and no filled value dot at (pi, 0); poles where it is a pole', () => {
+    const r = run(explicit('(x - pi)/sin(x)'))
+    expect(holes(r.objects).map((m) => [m.at.x, m.at.y])).toEqual([[expect.closeTo(PI, 9), expect.closeTo(-1, 5)]])
+    expect(marksOf(r.objects).filter((m) => m.role === 'value')).toEqual([])
+    // (the sampled range is the view and its overscan: +-15 holds +-4 pi)
+    expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'pole').map((b) => b.at)).toEqual([-4, -3, -2, -1, 0, 2, 3, 4].map((k) => expect.closeTo(k * PI, 9)))
+  })
+  it('sin(x)/abs(sin(x)): a jump at every k pi with both ends open, none filled, and no value mark', () => {
+    const r = run(explicit('sin(x)/abs(sin(x))'))
+    const ends = marksOf(r.objects).filter((m) => m.role === 'endpoint' && inView(m))
+    expect(ends).toHaveLength(14)
+    expect(ends.every((m) => m.fill === 'open')).toBe(true)
+    expect(marksOf(r.objects).filter((m) => m.role === 'value')).toEqual([])
+  })
+  it('tan(x) cos(x): a hole at each pole of the tangent (it is undefined there, whatever sin(x) is)', () => {
+    const r = run(explicit('tan(x) cos(x)'))
+    expect(holes(r.objects).map((m) => [Math.round((m.at.x / PI) * 2), Math.round(m.at.y)])).toEqual([[-5, -1], [-3, 1], [-1, -1], [1, 1], [3, -1], [5, 1]])
+    expect(curveOf(r.objects).chains).toHaveLength(1)
+  })
+  it('a seam can keep the zero out: {x != pi: sin(x - pi)/sin(x), -1} is -1 AT pi, so there is no hole there', () => {
+    const r = run(explicit('{x != pi: sin(x - pi)/sin(x), -1}'))
+    expect(holes(r.objects).map((m) => Math.round(m.at.x / PI))).toEqual([-3, -2, -1, 0, 2, 3])
+    expect(marksOf(r.objects).filter((m) => Math.abs(m.at.x - PI) < 1e-6)).toEqual([])
+    expect(marksOf(r.objects).filter((m) => m.role === 'value')).toEqual([])
+  })
+  it('1/(1/x) is undefined at 0: a hole at the origin, on one chain', () => {
+    const r = run(explicit('1/(1/x)'))
+    expect(holes(r.objects)).toHaveLength(1)
+    expect(curveOf(r.objects).chains).toHaveLength(1)
+  })
+  it('leaves the rest as it was: a pole, a hole at an exact zero, a seam, a floor, gamma, a filled value of its own', () => {
+    const ends = (body: string) => marksOf(run(explicit(body)).objects).filter(inView).map((m) => [m.role, m.fill, Math.round(m.at.x * 1e6) / 1e6, Math.round(m.at.y * 1e6) / 1e6])
+    expect(ends('{x < 1: 1/(x - 2), 5}')).toEqual([['endpoint', 'open', 1, -1], ['endpoint', 'filled', 1, 5]])
+    expect(ends('{x != 1: x, 5}')).toEqual([['hole', 'open', 1, 1], ['value', 'filled', 1, 5]])
+    expect(ends('x/x')).toEqual([['hole', 'open', 0, 1]])
+    expect(ends('1/x')).toEqual([])
+    expect(ends('tan(x)')).toEqual([])
+    expect(ends('gamma(x)')).toEqual([])
+    const floor = marksOf(run(explicit('floor(x)')).objects).filter((m) => Math.abs(m.at.x - 1) < 1e-9)
+    expect(floor.map((m) => [m.fill, m.at.y])).toEqual([['open', 0], ['filled', 1]])
+  })
+})
+
+// calc P2 final review, C2's deferred family (task 5): a seam at an irrational zero that a natural spot has too. The comparison
+// says which side owns the zero, but the owner is undefined there ({x^2 <= 2: sin(x^2 - 2)/(x^2 - 2), 5} at the root of 2:
+// 0/0) or steps ({x^2 <= 2: floor(x^2), 5}: 2 there, not the 1 of its left limit), and the filled end was where the curve
+// is not. Both ends are open, and no value is marked (the scalar's value at the double is rounding).
+describe('sampleCurve — a natural spot at an irrational seam opens both ends', () => {
+  const at = (body: string) => marksOf(run(explicit(body)).objects).filter((m) => Math.abs(Math.abs(m.at.x) - Math.SQRT2) < 1e-9)
+  it.each(['{x^2 <= 2: sin(x^2 - 2)/(x^2 - 2), 5}', '{x^2 <= 2: floor(x^2), 5}'])('%s: four open ends at the two roots, no filled one, no value', (body) => {
+    const marks = at(body)
+    expect(marks.map((m) => [m.role, m.fill])).toEqual([['endpoint', 'open'], ['endpoint', 'open'], ['endpoint', 'open'], ['endpoint', 'open']])
+  })
+  it('and where nothing natural shares the seam the owner still fills its end', () => {
+    expect(at('{x^2 <= 2: x, 5}').map((m) => m.fill).sort()).toEqual(['filled', 'filled', 'open', 'open'])
+    expect(at('{x^2 < 2: x, 5}').map((m) => m.fill).sort()).toEqual(['filled', 'filled', 'open', 'open'])
+  })
+})

@@ -172,6 +172,10 @@ export const CURVE = {
   // px per unit moved 0.085 px and its end read open). 0.005 corrects what it should (the 6e-9
   // that limits.ts stops at is a millionth of a pixel) and no more.
   settleAgreePx: 0.005,
+  // The natural spots (a denominator, a step, a root's edge) a seam's zero is asked about, over all the seams of one curve
+  // (curve.ts sharedWithNatural): one twin evaluation each. A curve has a few; a sum unrolled over 64 terms has
+  // hundreds, and each of 64 seams would ask them all. Past it a seam's zero is not asked and its owner stands.
+  naturalChecks: 512,
   // A polar or parametric curve has no view span to lay a start grid along: its parameter range
   // is the author's. The grid is sized as if the path were this many view widths long (so
   // 1.5 widths of start-grid intervals, and never fewer than CORE.minStartIntervals): a circle

@@ -286,4 +286,16 @@ describe('deduplication', () => {
     const reversed = troubleGenerators(expr('1/(x - 1) + {x < 1: 1, 0}'), 'x', scopeOf())
     expect(reversed).toEqual([{ expr: sub(x, num(1)), origin: 'seam', why: 'condition', cmps: ['<'] }])
   })
+  it('hands a caller the natural spots as it met them, a seam of the same expression having taken one', () => {
+    // (curve.ts asks whether a seam's zero is a natural spot's too, which the joined generator no longer says)
+    const naturals: Expr[] = []
+    const gens = troubleGenerators(expr('{x < 1: 1/(x - 1), floor(x)}'), 'x', scopeOf(), naturals)
+    expect(gens.map((g) => g.origin)).toEqual(expect.arrayContaining(['seam', 'natural']))
+    expect(naturals).toEqual([sub(x, num(1)), call('sin', mul(num(Math.PI), x))])
+    // none from a condition, and none from a spot that does not read the variable
+    const none: Expr[] = []
+    troubleGenerators(expr('{x < 1: 1, 2}'), 'x', scopeOf(), none)
+    troubleGenerators(expr('x / a'), 'x', scopeOf('@param a = 2 range [0, 5]'), none)
+    expect(none).toEqual([])
+  })
 })
