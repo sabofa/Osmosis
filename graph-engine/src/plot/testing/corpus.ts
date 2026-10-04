@@ -40,9 +40,10 @@ export interface CorpusCase {
     // jump breaks (found by the walk, or at a seam) and edge breaks (a domain's end), the same
     jumps?: number[]
     edges?: number[]
-    // jump breaks that only the core's jump test found, where the walk placed none: it records the middle of the
-    // floor interval it lifted at, so they are asked to within 1/16 px of the independent axis and not to 1e-9 (the
-    // jumps of `jumps` are located, and are)
+    // jump breaks that the core found where the walk placed none, as an exact set of those in view that have none of the
+    // marks a walk-typed jump has at its parameter: the core lifts the curve at an interval it will not connect (the jump
+    // test, or an enclosure with an unbounded end) and records the middle of what it lifted, so they are asked to within
+    // 1/16 px of the independent axis and not to 1e-9 (the jumps of `jumps` are located, and are)
     jumpsFound?: number[]
     // open hole marks
     holes?: Vec2[]
@@ -94,6 +95,8 @@ export function panSequence(main: CorpusView, count = 5, fraction = 0.37): Corpu
 // 40 px to a unit, [-10, 10] both ways
 const STD = view(-10, 10, -10, 10)
 const HALF_PI = Math.PI / 2
+// the height the logs of the corpus are asked at: ln(u) = -10 where u = e^-10
+const E10 = Math.exp(-10)
 const NOTE_COARSE = 'drawn coarsely: '
 const NOTE_BLANK = 'not drawn: '
 const NOTE_STEEP = 'too steep to draw here: '
@@ -119,7 +122,7 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: '@angle: degrees\ny = tan(x)',
     views: [view(-300, 300, -10, 10, 800, 400)],
     expect: { poles: [-270, -90, 90, 270] },
-    ceiling: { points: 4100, intervals: 1200 }, // measured 2707 / 754
+    ceiling: { points: 4100, intervals: 1200 }, // measured 2719 / 778
   },
   {
     // the main view has the pole near its right edge, so the pan sequence shows it three times
@@ -174,21 +177,21 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'y = (x^2 - 1)/(x - 1)',
     views: [view(-4, 4, -2, 6)],
     expect: { holes: [{ x: 1, y: 2 }], poles: [] },
-    ceiling: { points: 15000, intervals: 4300 }, // measured 9586 / 2813
+    ceiling: { points: 15000, intervals: 4300 }, // measured 9610 / 2837
   },
   {
     name: 'sin(x)/x',
     spec: 'y = sin(x)/x',
     views: [view(-15, 15, -1, 2)],
     expect: { holes: [{ x: 0, y: 1 }], poles: [] },
-    ceiling: { points: 2100, intervals: 900 }, // measured 1398 / 597
+    ceiling: { points: 2200, intervals: 940 }, // measured 1422 / 621
   },
   {
     name: 'sin(x - pi)/(x - pi)',
     spec: 'y = sin(x - pi)/(x - pi)',
     views: [view(-4, 10, -1, 2)],
     expect: { holes: [{ x: Math.PI, y: 1 }], poles: [] },
-    ceiling: { points: 3600, intervals: 1400 }, // measured 2346 / 868
+    ceiling: { points: 3600, intervals: 1400 }, // measured 2370 / 892
   },
 
   // ---- jumps and ends ------------------------------------------------------------------------------------
@@ -289,6 +292,44 @@ export const CORPUS: readonly CorpusCase[] = [
     expect: { edges: [0], holes: [], ends: [], drawn: [{ x: 1e-10, y: -10 }] },
     ceiling: { points: 730, intervals: 350 }, // measured 484 / 232
   },
+  // ln of a quadratic: the edges are zeros of 1 - x^2, 4 - x^2, x^2 - 1 and x^2 - 4x + 3, and the twin's enclosure of each is
+  // loose next to its zero (x^2 - 4x + 3 mentions x twice: its lower bound over a stretch from 3 + a to 3 + b is
+  // 6a + a^2 - 4b, so it is not positive, and ln of it is minus infinity, for a stretch that halves the distance to the
+  // edge at any scale). The stretch the twin would not certify whole was lifted a floor's width from the edge, and the
+  // curve stopped 142 px (ln(1 - x^2)) to 197 px (ln(4 - x^2)) above the bottom of the view; it is walked in certified
+  // pieces now, and reaches the clip box. Each case checks the curve at y = -10, which e^-10 below the edge's zero is at:
+  // 1 - x^2 = e^-10 and so on.
+  {
+    name: 'ln(1 - x^2)',
+    spec: 'y = ln(1 - x^2)',
+    views: [STD],
+    expect: { edges: [-1, 1], jumps: [], drawn: [{ x: -Math.sqrt(1 - E10), y: -10 }, { x: Math.sqrt(1 - E10), y: -10 }] },
+    ceiling: { points: 990, intervals: 310 }, // measured 655 / 202
+  },
+  {
+    name: 'ln(4 - x^2)',
+    spec: 'y = ln(4 - x^2)',
+    views: [STD],
+    expect: { edges: [-2, 2], jumps: [], drawn: [{ x: -Math.sqrt(4 - E10), y: -10 }, { x: Math.sqrt(4 - E10), y: -10 }] },
+    ceiling: { points: 1100, intervals: 330 }, // measured 687 / 218
+  },
+  {
+    name: 'ln(x^2 - 1)',
+    spec: 'y = ln(x^2 - 1)',
+    views: [STD],
+    expect: { edges: [-1, 1], jumps: [], drawn: [{ x: -Math.sqrt(1 + E10), y: -10 }, { x: Math.sqrt(1 + E10), y: -10 }] },
+    ceiling: { points: 1800, intervals: 710 }, // measured 1182 / 468
+  },
+  {
+    // the edge at 3 had a jump break a floor interval and a half from it besides its edge (3.0023): the interval next to the
+    // one the walk draws, which the twin left unbounded, was lifted whole. Bisected below the floor it is certified, and the
+    // curve is one stroke from the clip box at each edge: no jump break, two edge breaks.
+    name: 'ln(x^2 - 4x + 3)',
+    spec: 'y = ln(x^2 - 4x + 3)',
+    views: [STD],
+    expect: { edges: [1, 3], jumps: [], drawn: [{ x: 2 - Math.sqrt(1 + E10), y: -10 }, { x: 2 + Math.sqrt(1 + E10), y: -10 }] },
+    ceiling: { points: 2800, intervals: 1400 }, // measured 1840 / 871
+  },
   {
     name: 'sqrt(x)',
     spec: 'y = sqrt(x)',
@@ -387,7 +428,7 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)\ny = sin(x)/x color: gray',
     views: [STD],
     expect: { holes: [{ x: 0, y: 1 }] },
-    ceiling: { points: 43000, intervals: 7900 }, // measured 28211 / 5230
+    ceiling: { points: 43000, intervals: 7900 }, // measured 28235 / 5254
   },
 
   // ---- cost: forms the twin encloses loosely --------------------------------------------------------------
@@ -416,7 +457,7 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'y = (x^2 - 1)/(x - 1) - x',
     views: [STD],
     expect: { bands: false, holes: [{ x: 1, y: 1 }], drawn: [{ x: -9, y: 1 }, { x: 0, y: 1 }, { x: 9, y: 1 }] },
-    ceiling: { points: 37000, intervals: 11000 }, // measured 24084 / 6883
+    ceiling: { points: 37000, intervals: 11000 }, // measured 24106 / 6905
   },
   {
     // and from a hyperbolic identity: cosh^2 - sinh^2 is 1 with noise that grows with e^(2|x|) (1e-4 at 15, a hundredth of a pixel)
@@ -468,17 +509,33 @@ export const CORPUS: readonly CorpusCase[] = [
     ceiling: { points: 1100, intervals: 510 }, // measured 716 / 337
   },
 
-  // ---- a break only the jump test finds ------------------------------------------------------------------
+  // ---- breaks the core finds on its own ------------------------------------------------------------------
   {
-    // gamma's poles at -12 and -11 are weak (residues 1/12! and 1/11!), and the classifier does not call them poles
-    // (see the known limit below). Nothing structural places a break there; the core's jump test lifts the curve at
-    // the floor interval where the gap does not close, and records the middle of it: at -11.99997 and -10.99997,
-    // within 1/16 px (2e-4 here) of the poles, which is as exactly as that test can say. The curve is not bridged.
-    name: 'gamma between its poles: breaks found by the jump test',
+    // The jump test (the pixel-scale test that connects two ends whose gap closes as the interval is halved, and breaks where
+    // it does not) is asked of an interval with ends it can reach and a bounded enclosure: for one the twin leaves unbounded,
+    // "where a pole may sit", it is not asked at all, and the interval is never connected. gamma's poles at -12 and -11 are weak
+    // (residues 1/12! and 1/11!): the classifier does not call them poles (see the known limit below), the twin's enclosure
+    // of the interval over each is unbounded, and that rule is what breaks the curve there, at the middle of what it lifted
+    // (within 1/16 px of the pole). Forcing the jump test to always connect leaves this case as it is. No end mark: a break
+    // the walk typed at -12 would have two.
+    name: 'gamma between its poles: an unbounded enclosure is never connected across',
     spec: 'y = gamma(x)',
     views: [view(-12.9, -10.5, -4, 4, 800, 800)],
-    expect: { jumpsFound: [-12, -11], poles: [] },
-    ceiling: { points: 1600, intervals: 660 }, // measured 1007 / 439
+    expect: { jumpsFound: [-12, -11], poles: [], ends: [] },
+    ceiling: { points: 1600, intervals: 740 }, // measured 1055 / 487
+  },
+  {
+    // The jump test finds these. floor(50x) has a zero every 0.02, 1501 of them in the sampled range, and the locator keeps
+    // 64 (typed jumps, with their marks, away from the view); the steps of 0.05 (2 px) that the curve has in view, from 5.00
+    // to 5.12 (the view and its overscan: seven of them), are on a slope of 200:1 that the twin cannot certify across them,
+    // and are found only because the gap across each does not close as its interval is halved. A break at each, within 1/16
+    // px, and no chain across one (checked of every case). With the jump test forced to always connect this case fails: one chain
+    // runs up the stairs.
+    name: 'a staircase the jump test alone finds',
+    spec: 'y = 200(x - 5) - 0.05 floor(50x)',
+    views: [STD],
+    expect: { jumpsFound: [250, 251, 252, 253, 254, 255, 256].map((k) => k / 50) },
+    ceiling: { points: 35000, intervals: 4400 }, // measured 22753 / 2891
   },
 
   // ---- known limits --------------------------------------------------------------------------------------
@@ -507,7 +564,7 @@ export const CORPUS: readonly CorpusCase[] = [
       poles: [],
       holes: [{ x: -16, y: 0 }, { x: -15, y: 0 }, { x: -14, y: 0 }],
     },
-    ceiling: { points: 1900, intervals: 810 }, // measured 1210 / 538
+    ceiling: { points: 2000, intervals: 970 }, // measured 1318 / 646
   },
   {
     // KNOWN LIMIT. At COARSE (the pass a drag runs: 8 samples to a column, a start sample every 8 px) a curve like

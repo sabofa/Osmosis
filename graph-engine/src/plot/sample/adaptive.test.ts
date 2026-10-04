@@ -258,10 +258,24 @@ function segmentsOf(chains: ReturnType<typeof run>['chains'], px = 40) {
 }
 
 describe('sampleRange — the stretch to an edge is certified before it is drawn', () => {
-  it('tan(1/x) draws no long stroke down the accumulation point', () => {
+  // The poles of tan(1/x) are at 1/x = pi/2 + k pi, a million of them in a view; a stroke down one of them from the
+  // stretch to the edge, certified whole by an enclosure that does not see them, was the defect. A long stroke is not: since
+  // calc P2 task 8 (fix round 2) an interval the twin leaves unbounded is bisected below the floor and what it certifies is
+  // drawn, and between two poles the curve is a steep run of the whole of tan, 50 to 500 px of it in a hundredth of a px of x.
+  // So no stroke is asked to be short, and none is allowed to cross a pole.
+  it('tan(1/x) draws no stroke across a pole near the accumulation point', () => {
     const r = run('tan(1/x)')
     const near = segmentsOf(r.chains).filter((s) => Math.abs(s.a.x) < 0.01 && Math.abs(s.b.x) < 0.01)
-    expect(near.filter((s) => s.len > 8)).toEqual([])
+    expect(near.length).toBeGreaterThan(100)
+    const across = near.filter((s) => {
+      const u = [1 / s.a.x, 1 / s.b.x]
+      const lo = Math.min(...u)
+      const hi = Math.max(...u)
+      // a pole at pi/2 + k pi strictly inside (lo, hi): the first one above lo
+      const first = Math.PI / 2 + Math.floor((lo - Math.PI / 2) / Math.PI + 1) * Math.PI
+      return first > lo && first < hi
+    })
+    expect(across).toEqual([])
   })
   it('a closed floor step has no riser at its edge, at any offset', () => {
     for (const c of offsets(20)) {
@@ -294,6 +308,32 @@ describe('sampleRange — the stretch to an edge is certified before it is drawn
       const across = segmentsOf(run(`sqrt(x - ${e})/(x - ${p})`).chains).filter((s) => Math.min(s.a.x, s.b.x) <= p && Math.max(s.a.x, s.b.x) >= p && s.len > 4)
       expect(across, `pole at ${p}`).toEqual([])
     }
+  })
+  // calc P2 task 8, fix round 2: the twin's enclosure of the argument of a log is loose next to its zero, so the stretch from
+  // the floor interval to the edge was refused whole and the curve stopped a floor's width short of it, 142 px (ln(1 - x^2))
+  // to 197 px (ln(4 - x^2)) above the bottom of [-10, 10]. It is walked in certified pieces now (walkEdge), to the clip box,
+  // and an interval the twin leaves unbounded is bisected below the floor, so x^2 - 4x + 3 (which mentions x twice, and whose
+  // enclosure is unbounded for every stretch that halves the distance to its zero) has no break a floor from its edge at 3.
+  // Under the core alone, with free ends, as the structure walk gives a diverging edge.
+  it.each([
+    ['ln(1 - x^2)', (x: number) => Math.abs(x) < 1],
+    ['ln(4 - x^2)', (x: number) => Math.abs(x) < 2],
+    ['ln(x^2 - 1)', (x: number) => Math.abs(x) > 1],
+    ['ln(x^2 - 4x + 3)', (x: number) => x < 1 || x > 3],
+  ])('%s dives to the bottom of the clip box at each edge, and draws nothing where it is undefined', (text, defined) => {
+    const r = run(text)
+    const pts = r.chains.flatMap(chainPoints)
+    expect(pts.every((p) => defined(p.x)), 'a vertex where the curve is undefined').toBe(true)
+    // each of the two edges is the end of a chain, cut at the bottom of the clip box (y = -15)
+    const diveEnds = r.chains.flatMap((ch) => {
+      const p = chainPoints(ch)
+      return [p[0], p[p.length - 1]].filter((q) => q.y === -15)
+    })
+    expect(diveEnds, text).toHaveLength(2)
+    expect(r.breaks.filter((b) => b.kind === 'jump'), text).toEqual([])
+    expect(r.capped).toBe(false)
+    // and what the walk costs is counted with the rest, a few dozen evaluations an edge
+    expect(r.counter.intervals, text).toBeLessThan(2000)
   })
   it('still reaches a closed semicircle tip, and ln, sqrt remain one chain', () => {
     const r = 2.3456

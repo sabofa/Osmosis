@@ -297,7 +297,15 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     c.sink.segment(xa, ya, ta, xb, yb, tb)
     return
   }
-  if (atUncertifiedFloor) {
+  // An interval the twin leaves with an unbounded enclosure is not given up at the floor: its halves are asked, down to
+  // CORE.subFloorPx, and the ones the twin certifies are drawn. The enclosure of an expression that mentions its variable
+  // twice (x^2 - 4x + 3, next to its zero at 3) is loose by the width of the interval, and so its lower bound reaches
+  // 0 and ln of it is minus infinity, however small the interval is, until the interval is narrower than the distance
+  // from the zero (a floor interval, 1/16 px, from the edge: the ones nearer were lifted whole, and the curve was
+  // broken with a jump break a floor from its edge where it dives, 28 px short of where the walk of the edge itself
+  // had drawn it from). An interval that is still unbounded at the bottom is where a pole may sit, and is lifted with
+  // its jump, as before.
+  if (atUncertifiedFloor && (bounded || !midpointHolds || widthPx <= CORE.subFloorPx * (1 + 1e-9))) {
     // THE FLOOR TEST. Where bisecting stops and the gap is over a pixel (a smooth curve steeper than 16:1 on
     // screen has one at a 1/16 px interval, and the old precondition refused every such interval, breaking the
     // curve at each), the interval is bisected further, below the floor: EVERY sub-interval whose gap is still
@@ -536,10 +544,95 @@ function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb:
     }
   } else if (verdict === PARTIAL && bounded) {
     drawEdgeSplit(c, ta, xa, ya, tb, xb, yb, aDefined, td, xd, yd)
+  } else if (aDefined) {
+    walkEdge(c, ta, xa, ya, td, true)
   } else {
-    c.sink.lift()
+    walkEdge(c, tb, xb, yb, td, false)
   }
   c.sink.addBreak(td, 'edge')
+}
+
+// The stretch of an edge that the twin cannot certify as a whole (refineEdge): the edge of ln(1 - x^2) is a zero of
+// a quadratic, the twin's enclosure of 1 - x^2 is loose next to its zero (its lower bound reaches 0 before the
+// interval does), and so the stretch from the floor interval's defined end to the last defined point was lifted whole,
+// and the curve stopped a floor's width short of its edge, at -6.46 where it dives (142 px short of the bottom of
+// [-10, 10]). So the stretch is walked in pieces, geometrically, each covering half of what is left to the last
+// defined point td: the twin is asked about each (counted), and a piece it calls CONTINUOUS is drawn as a chord, which
+// is certified like any other (and a pole or a step inside the stretch is in a piece that fails). The walk ends at
+// the first piece that is not, after CORE.edgePieces pieces, or when the drawn point has left the clip box, which
+// is where the sink cuts the curve: nothing further in is seen.
+//
+// A piece the twin refuses is halved, up to CORE.edgeSplits times, and its halves asked in turn (certifyPiece), because
+// the looseness depends on the form: for x^2 - 4x + 3 over a piece from 3 + a to 3 + b the lower bound is 6a + a^2 - 4b,
+// which is positive only if b is under 1.5 a, so a piece that halves the distance to the edge (b = 2a) is refused at
+// every scale and a piece of three quarters of it is not. A piece the twin calls PARTIAL with bounds, at the last
+// halving, is drawn as refineEdge draws a stretch like that (body and sliver, drawEdgeSplit) and ends the walk too.
+//
+// `t0` is the defined end of the stretch (a floor's width from the edge) and td the last defined point. The pieces
+// are drawn in parameter order, and as refineEdge does: lifted after only when the defined end is the left one.
+interface EdgeWalk {
+  aDefined: boolean
+  // the ends of the pieces certified so far, from the defined end outward
+  ts: number[]
+  xs: number[]
+  ys: number[]
+  // the piece the twin called PARTIAL with bounds at the last halving, as the stretch from the defined end (the last of
+  // the points above) to `next`
+  split: { next: number; xn: number; yn: number } | null
+}
+
+function walkEdge(c: Core, t0: number, x0: number, y0: number, td: number, aDefined: boolean): void {
+  const w: EdgeWalk = { aDefined, ts: [t0], xs: [x0], ys: [y0], split: null }
+  let t = t0
+  for (let k = 0; k < CORE.edgePieces; k++) {
+    const next = t + (td - t) / 2
+    // (the doubles have no midpoint left)
+    if (next === t || next === td) break
+    evalAt(c, next)
+    const xn = c.pt[0]
+    const yn = c.pt[1]
+    if (!isFinite2(xn, yn)) break
+    if (!certifyPiece(c, w, t, next, xn, yn, CORE.edgeSplits)) break
+    t = next
+    if (beyondOf(c, xn, yn) !== 0) break
+  }
+  const { ts, xs, ys, split } = w
+  const n = ts.length - 1
+  const last = n
+  if (aDefined) {
+    for (let i = 0; i < n; i++) c.sink.segment(xs[i], ys[i], ts[i], xs[i + 1], ys[i + 1], ts[i + 1])
+    if (split !== null) drawEdgeSplit(c, ts[last], xs[last], ys[last], split.next, split.xn, split.yn, true, split.next, split.xn, split.yn)
+    else c.sink.lift()
+  } else {
+    if (split !== null) drawEdgeSplit(c, split.next, split.xn, split.yn, ts[last], xs[last], ys[last], false, split.next, split.xn, split.yn)
+    for (let i = n; i > 0; i--) c.sink.segment(xs[i], ys[i], ts[i], xs[i - 1], ys[i - 1], ts[i - 1])
+  }
+}
+
+// One piece of an edge walk, from the walk's last point (at t, certified) to (next, xn, yn), which is not yet: true, with the
+// points it passes through added to the walk, if the twin certifies it whole or in halves (`splits` more halvings);
+// false at the first piece it will not, with the points before it kept. The twin is asked about every piece, and counted.
+function certifyPiece(c: Core, w: EdgeWalk, t: number, next: number, xn: number, yn: number, splits: number): boolean {
+  c.counter.intervals++
+  const verdict = w.aDefined ? c.fns.enclose(t, next, c.box) : c.fns.enclose(next, t, c.box)
+  if (verdict === CONTINUOUS) {
+    w.ts.push(next)
+    w.xs.push(xn)
+    w.ys.push(yn)
+    return true
+  }
+  if (splits > 0) {
+    const m = t + (next - t) / 2
+    if (m !== t && m !== next) {
+      evalAt(c, m)
+      const xm = c.pt[0]
+      const ym = c.pt[1]
+      if (!isFinite2(xm, ym)) return false
+      return certifyPiece(c, w, t, m, xm, ym, splits - 1) && certifyPiece(c, w, m, next, xn, yn, splits - 1)
+    }
+  }
+  if (verdict === PARTIAL && isBounded(c.box)) w.split = { next, xn, yn }
+  return false
 }
 
 // The stretch of an edge that the twin calls PARTIAL with bounds (see refineEdge): its body, from

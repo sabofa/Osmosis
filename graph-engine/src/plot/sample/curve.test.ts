@@ -96,6 +96,22 @@ describe('sampleCurve — jumps and ends', () => {
       expect(c.chains, body).toHaveLength(1)
     }
   })
+  // fix round 2: the same of a log of a quadratic, whose edges are its zeros and whose enclosure is loose there
+  it.each([
+    ['ln(1 - x^2)', [-1, 1]],
+    ['ln(4 - x^2)', [-2, 2]],
+    ['ln(x^2 - 1)', [-1, 1]],
+    ['ln(x^2 - 4x + 3)', [1, 3]],
+  ] as const)('%s reaches the bottom of the clip box at each edge, with one edge break at each and no jump', (body, edges) => {
+    const c = curveOf(run(explicit(body)).objects)
+    const ends = c.chains.flatMap((ch) => {
+      const p = chainPoints(ch)
+      return [p[0], p[p.length - 1]].filter((q) => q.y === -15)
+    })
+    expect(ends, body).toHaveLength(2)
+    expect(c.breaks.filter((b) => b.kind === 'edge').map((b) => b.at), body).toEqual(edges.map((e) => expect.closeTo(e, 12)))
+    expect(c.breaks.filter((b) => b.kind === 'jump'), body).toEqual([])
+  })
   it('a diverging edge on the other side, ln(-x), dives the same way', () => {
     const r = run(explicit('ln(-x)'))
     const c = curveOf(r.objects)

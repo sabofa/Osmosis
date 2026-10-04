@@ -345,6 +345,18 @@ export const CORE = {
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
   // far under any screen.
   edgeSteps: 64,
+  // The most pieces an edge stretch is walked in when the twin cannot certify it whole (adaptive.ts walkEdge): each covers
+  // half of what is left of the stretch between the floor interval's defined end and the last defined point, so n
+  // pieces come within 1/16 px / 2^n of the edge. A curve that dives (ln x: a factor of 2 in the distance is ln 2 of
+  // height, 28 px at 40 px a unit) leaves the clip box, 15 units down, in about 14; 60 is where the doubles of
+  // a view at any zoom have run out of halving, and a stretch that is still drawn after that is as near its edge as
+  // anything can be shown.
+  edgePieces: 60,
+  // A piece of that walk the twin refuses is halved and its halves asked, this many times at most (adaptive.ts certifyPiece):
+  // the enclosure's looseness depends on the form of the expression, and x^2 - 4x + 3 near 3 is refused for a piece
+  // that halves the distance to the edge at every scale and certified for one whose far end is under 1.5 times its near
+  // end's distance, which a single halving reaches (1.33, then 1.25 of the half).
+  edgeSplits: 3,
   // The jump test at the floor (adaptive.ts): an interval the twin does not certify, at the width it stops
   // being bisected at, with both ends finite, its enclosure bounded (or the verdict UNKNOWN) and a gap of a
   // pixel or more, is bisected BELOW the floor: every sub-interval whose gap is still a pixel or more, down to

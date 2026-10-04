@@ -223,9 +223,12 @@ when it can show the curve is there between them:
   include it), even where the boundary is irrational (`{x^2 < 2: 0, 1}`).
   `{x < 0: x^2, x + 1}` is open at (0, 0) and filled at (0, 1);
   `y = 2 if 0 < x <= 3` is open at 0 and filled at 3. A natural edge of a
-  domain is run to, and not marked: `ln(x)` and `log(x)` dive out of the
-  picture (the curve is drawn to the edge of what is sampled, past the bottom of
-  the view), and `sqrt(x)` meets its endpoint.
+  domain is run to, and not marked: `ln(x)`, `log(x)` and the log of a quadratic
+  (`ln(1 - x^2)`, `ln(x^2 - 4x + 3)`) dive out of the picture (the curve is drawn
+  to the edge of what is sampled, past the bottom of the view), and `sqrt(x)`
+  meets its endpoint. Where interval arithmetic cannot vouch for the last
+  stretch before an edge (the vertical tip of `(4 - x^2)^(1/4)`), the curve stops
+  a few pixels short of it; the edge itself is still found and typed.
 - **Asymptote guides.** At a pole of `y = f(x)` the curve breaks and, with
   `@asymptotes` on (the default), a dashed vertical line is drawn through it
   (a horizontal one for `x = f(y)`). Polar and parametric poles break the

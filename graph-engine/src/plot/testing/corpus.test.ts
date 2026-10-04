@@ -240,16 +240,37 @@ function expectPoints(label: string, got: readonly Vec2[], want: readonly Vec2[]
   })
 }
 
-// No chain has vertices on both sides of a pole: the pole's parameter is not inside the range of a chain's.
-function expectNoChordAcrossPoles(scene: Scene, label: string) {
+// No chain has vertices on both sides of a pole or a jump: the break's parameter is not inside the range of a chain's.
+// (A jump the walk placed is anchored: the chains end and begin at its parameter exactly. One only the jump test found is
+// the middle of a floor interval that was lifted whole, and the chains end and begin outside it.)
+function expectNoChordAcrossBreaks(scene: Scene, label: string) {
   for (const curve of curvesOf(scene)) {
-    const poles = curve.breaks.filter((b: Break) => b.kind === 'pole').map((b) => b.at)
+    const breaks = curve.breaks.filter((b: Break) => b.kind === 'pole' || b.kind === 'jump')
     for (const chain of curve.chains) {
       const lo = Math.min(...chain.param)
       const hi = Math.max(...chain.param)
-      for (const p of poles) expect(lo < p - 1e-9 && hi > p + 1e-9, `${label}: a chain from ${lo} to ${hi} crosses the pole at ${p}`).toBe(false)
+      for (const b of breaks) expect(lo < b.at - 1e-9 && hi > b.at + 1e-9, `${label}: a chain from ${lo} to ${hi} crosses the ${b.kind} at ${b.at}`).toBe(false)
     }
   }
+}
+
+// No chain has vertices on both sides of a jump the case says is there, whether or not the engine recorded a break for it:
+// a sampler that connected across a jump it had not found would have no break to be found crossing.
+function expectNoChainAcrossJumps(scene: Scene, at: readonly number[], label: string) {
+  for (const curve of curvesOf(scene)) {
+    for (const chain of curve.chains) {
+      const lo = Math.min(...chain.param)
+      const hi = Math.max(...chain.param)
+      for (const x of at) expect(lo < x - 1e-9 && hi > x + 1e-9, `${label}: a chain from ${lo} to ${hi} spans the jump at ${x}`).toBe(false)
+    }
+  }
+}
+
+// The jump breaks in view that the walk did not place: a jump the walk typed has the marks of its ends at its parameter, and
+// one that only the core's jump test found has none (explicit y = f(x) here: the mark's x is the parameter).
+function foundJumps(scene: Scene, parsed: ReturnType<typeof parseSpec>, v: CorpusView): number[] {
+  const marks = scene.objects.flatMap((o) => (o.kind === 'mark' ? [o] : []))
+  return breaksOf(scene, parsed, v, 'jump').filter((at) => !marks.some((m) => Math.abs(m.at.x - at) <= TOL_X * span(v).x))
 }
 
 // ---- the pan sequence ---------------------------------------------------------------------------------------
@@ -371,7 +392,11 @@ describe('the torture corpus', () => {
         if (want.poles) expectPositions('poles', breaksOf(scene, run.parsed, v, 'pole'), want.poles, v)
         if (want.jumps) expectPositions('jumps', breaksOf(scene, run.parsed, v, 'jump'), want.jumps, v)
         // (the jump test records the middle of the floor interval it lifted at: 1/16 px of the independent axis, here x)
-        if (want.jumpsFound) expectPositions('jumps found by the jump test', breaksOf(scene, run.parsed, v, 'jump'), want.jumpsFound, v, FULL.floorPx / pxPerUnit(v).x)
+        if (want.jumpsFound) {
+          expectNoChainAcrossJumps(scene, want.jumpsFound, 'a jump the case names')
+          expectPositions('jumps found by the jump test', foundJumps(scene, run.parsed, v), want.jumpsFound, v, FULL.floorPx / pxPerUnit(v).x)
+        }
+        if (want.jumps) expectNoChainAcrossJumps(scene, want.jumps, 'a jump the case names')
         if (want.edges) expectPositions('edges', breaksOf(scene, run.parsed, v, 'edge'), want.edges, v)
         if (want.holes) expectPoints('holes', marksOf(scene, 'hole').filter((m) => markIn(v, m)).map((m) => m.at), want.holes, v)
         if (want.values) expectPoints('values', marksOf(scene, 'value').filter((m) => markIn(v, m)).map((m) => m.at), want.values, v)
@@ -398,9 +423,9 @@ describe('the torture corpus', () => {
         }, TIMEOUT)
       }
 
-      it('has no chain that crosses a pole, and a guide through each pole of an explicit curve', () => {
+      it('has no chain that crosses a pole or a jump, and a guide through each pole of an explicit curve', () => {
         run.scenes().forEach((scene, i) => {
-          expectNoChordAcrossPoles(scene, `view ${i}`)
+          expectNoChordAcrossBreaks(scene, `view ${i}`)
           expectGuides(scene, run.parsed, `view ${i}`)
         })
       }, TIMEOUT)
