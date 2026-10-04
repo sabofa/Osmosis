@@ -1,6 +1,6 @@
 # Graph styles: media, themes, layers and the settings guide
 
-*2026-10-04. Written by the space and paint session from Ben's brainstorm the same night. Status: draft for Ben's review. It builds on the figure styles design (`2026-09-30-figure-styles-design.md`), the painted figures design (`2026-10-02-painted-figures-design.md`) and graph engine v2 (`2026-09-21-graph-engine-v2-design.md`).*
+*2026-10-04. Written by the space and paint session from Ben's brainstorm the same night. Status: **approved by Ben, 2026-10-04** ("sure continue on"). It builds on the figure styles design (`2026-09-30-figure-styles-design.md`), the painted figures design (`2026-10-02-painted-figures-design.md`) and graph engine v2 (`2026-09-21-graph-engine-v2-design.md`).*
 
 ## 0. What Ben asked for
 
