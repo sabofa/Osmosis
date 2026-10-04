@@ -20,8 +20,8 @@ export const SMOOTH_TAU = 70
 // and decays with COAST_TAU; it stops below COAST_STOP px/s. A release after
 // holding still for COAST_HOLD ms or more does not coast.
 export const COAST_WINDOW = 80
-export const COAST_TAU = 300
-export const COAST_STOP = 5
+export const COAST_TAU = 150
+export const COAST_STOP = 20
 export const COAST_HOLD = 80
 // Reset and focus: an ease-out cubic over this long (the 3D engine's reset).
 export const EASE_DURATION = 280
