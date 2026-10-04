@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MeshMark } from '../../scene/types'
 import { lchToLab, linearToOklab } from '../model/colour'
+import { LoadMixer } from '../model/mix'
 import { colourOfRecipe, newRecipe } from '../model/recipe'
 import { DEFAULT_PAINT_PARAMS, type PaintParams } from '../params'
 import { silhouettePolylines } from '../model/contours'
@@ -13,7 +14,7 @@ import { LIGHT, TERRACOTTA, CANVAS, framing, fixture, saddleColours, saddleScene
 import { frameFromBakeWith, FrameScratch } from './frame'
 import { HIDDEN_NA } from './types'
 import {
-  CUT_WINDOW, cutRun, focalAt, indexOf, lowestKeys, medianClasses, newSilhouetteStats, NoiseRun, SILHOUETTE_MIN_SAMPLES, SILHOUETTE_STEP_PX, silhouetteEnv, silhouetteRuns, silhouetteStrokes,
+  casterOf, CUT_WINDOW, cutRun, focalAt, indexOf, lowestKeys, medianClasses, newSilhouetteStats, NoiseRun, SILHOUETTE_MIN_SAMPLES, SILHOUETTE_STEP_PX, silhouetteEnv, silhouetteRuns, silhouetteStrokes,
   siteBefore, stretchKinds, VertexGrid, WorldDraw, type SilhouetteRun,
 } from './silhouettes'
 import { StrokeList } from './strokeList'
@@ -775,8 +776,8 @@ describe('the outline of an open sheet', () => {
 
   // For every other sample of the runs of a view: the side of the outline the sheet is on (3 px either side, by ray casting: the side whose nearest surface is at
   // the outline's own depth), what that surface shows the eye, and whether the run's side and normal say so.
-  function checkAgainstRays(az: number, el: number): { decided: number; wrongSide: number; wrongWay: number; sides: Set<number> } {
-    const view = viewAt(az, el)
+  function checkAgainstRays(az: number, el: number, perspective = false): { decided: number; wrongSide: number; wrongWay: number; sides: Set<number> } {
+    const view = viewAt(az, el, { perspective })
     const { runs } = make(saddleFx, view)
     const fc = makeFrameCtx(saddleFx.scene, view, EMPTY_G, saddleFx.params)
     const right = [view.view[0], view.view[4], view.view[8]]
@@ -791,12 +792,29 @@ describe('the outline of an open sheet', () => {
         tx /= tl
         ty /= tl
         const ppu = pxPerUnit(fc, run.world[3 * k], run.world[3 * k + 1], run.world[3 * k + 2])
+        const P = [run.world[3 * k], run.world[3 * k + 1], run.world[3 * k + 2]]
+        const depthP = (P[0] - view.eye[0]) * view.viewDir[0] + (P[1] - view.eye[1]) * view.viewDir[1] + (P[2] - view.eye[2]) * view.viewDir[2]
+        // the sheet's nearest surface over the point 3 px to a side of the outline, along the eye's ray through it: its facing and its depth
         const hits = [3, -3].map((d) => {
           const ox = (-ty * d) / ppu, oy = (tx * d) / ppu
-          const o = [0, 1, 2].map((j) => run.world[3 * k + j] + right[j] * ox - up[j] * oy - view.viewDir[j] * 50)
-          return castLine(o, view.viewDir as number[])
+          const Q = [0, 1, 2].map((j) => P[j] + right[j] * ox - up[j] * oy)
+          let o: number[]
+          let dir: number[]
+          if (fc.ortho) {
+            o = Q.map((q, j) => q - view.viewDir[j] * 50)
+            dir = [...view.viewDir]
+          } else {
+            o = [...view.eye]
+            const dv = Q.map((q, j) => q - view.eye[j])
+            const l = Math.hypot(dv[0], dv[1], dv[2])
+            dir = dv.map((x) => x / l)
+          }
+          const h = castLine(o, dir)
+          if (!h) return null
+          const at = o.map((x, j) => x + dir[j] * h.t)
+          return { face: h.face, depth: (at[0] - view.eye[0]) * view.viewDir[0] + (at[1] - view.eye[1]) * view.viewDir[1] + (at[2] - view.eye[2]) * view.viewDir[2] }
         })
-        const gap = hits.map((h) => (h ? Math.abs(h.t - 50) : Infinity))
+        const gap = hits.map((h) => (h ? Math.abs(h.depth - depthP) : Infinity))
         const inside = gap[0] < gap[1] ? 0 : 1
         // only where the sheet is on one side and at the outline's depth, or clearly nearer one side's
         if (!(gap[inside] < 1) || (Number.isFinite(gap[1 - inside]) && Math.abs(gap[0] - gap[1]) < 0.05)) continue
@@ -819,6 +837,31 @@ describe('the outline of an open sheet', () => {
       expect(r.wrongSide / r.decided, `az ${az}`).toBeLessThan(0.03)
       expect(r.wrongWay / r.decided, `az ${az}`).toBeLessThan(0.03)
     }
+  })
+
+  it("reads the side seen in a perspective view too, as the eye's rays through the points 3 px to a side see it", () => {
+    for (const [az, el] of [[20, 25], [200, 10]] as const) {
+      const r = checkAgainstRays(az, el, true)
+      if (process.env.FRAME_PRINT) console.log(`saddle in perspective, az ${az} el ${el}: ${r.decided} samples decided by rays, the side seen wrong at ${r.wrongSide}, the way in wrong at ${r.wrongWay}`)
+      expect(r.decided).toBeGreaterThan(20)
+      expect(r.wrongSide / r.decided, `az ${az}`).toBeLessThan(0.03)
+      expect(r.wrongWay / r.decided, `az ${az}`).toBeLessThan(0.03)
+    }
+  })
+
+  it("casts the side at a small share of the samples: every 32nd, the end, and where two casts differ", () => {
+    const view = viewAt(20, 25)
+    const mesh = saddleFx.scene.marks[0] as MeshMark
+    const caster = casterOf(mesh).caster
+    make(saddleFx, view)
+    const before = caster.casts
+    const { runs } = make(saddleFx, view)
+    const casts = caster.casts - before
+    const samples = runs.reduce((s, r) => s + r.n, 0)
+    if (process.env.FRAME_PRINT) console.log(`saddle az 20 el 25: ${casts} casts for ${samples} samples`)
+    expect(samples).toBeGreaterThan(100)
+    expect(casts).toBeGreaterThan(2)
+    expect(casts).toBeLessThan(samples / 8)
   })
 
   it("sees both sides of a sheet along one outline where the sheet turns, and cuts a stretch there", () => {
@@ -909,12 +952,51 @@ describe('the cuts of an outline and the draws of its strokes', () => {
     expect(worstG).toBeLessThan(0.2)
     const mean = sum / N
     const sd = Math.sqrt(sum2 / N - mean * mean)
-    expect(mean).toBeGreaterThan(0.47)
-    expect(mean).toBeLessThan(0.53)
+    // (the 4000 points share about 1500 lattice corners: the mean of the corners' values is that of 1500 draws)
+    expect(mean).toBeGreaterThan(0.42)
+    expect(mean).toBeLessThan(0.58)
     expect(sd).toBeGreaterThan(0.25)
     expect(sd).toBeLessThan(0.33)
     expect(Math.sqrt(gsum2 / N)).toBeGreaterThan(0.85)
     expect(Math.sqrt(gsum2 / N)).toBeLessThan(1.15)
+  })
+
+  it('mixes each stretch of an outline as a load of its own: a few strokes to a load, and a different hue from one stroke to the next (a fresh mix, not one hue along a site)', () => {
+    const spy = vi.spyOn(LoadMixer.prototype, 'mixByCell')
+    try {
+      for (const zoom of [1, 4]) {
+        const perLoad: number[] = []
+        const dHue: number[] = []
+        for (const [az, el] of [[20, 25], [120, 25], [200, 40], [300, 15]] as const) {
+          // zoomed in, the top of the outline is in the middle of the screen
+          const A = (az * Math.PI) / 180, E = (el * Math.PI) / 180
+          const up = [-Math.sin(E) * Math.cos(A), -Math.sin(E) * Math.sin(A), Math.cos(E)]
+          const target = zoom > 1 ? ([up[0], up[1], up[2]] as [number, number, number]) : ([0, 0, 0] as [number, number, number])
+          const view = { ...paintView({ width: 640, height: 480, azimuth: az, elevation: el, zoom: 150 * zoom, magnify: zoom, target }), lightDir: LIGHT }
+          spy.mockClear()
+          const { list } = make(sphereFx, view)
+          const results = spy.mock.results.map((r) => r.value as { load: number; hueOffset: number; kd: number })
+          expect(results.length).toBe(list.count)
+          // the strokes on the screen (by the middle of the path), in outline order
+          const on: number[] = []
+          for (let e = 0; e < list.count; e++) {
+            const x = list.path[2 * PP * e + PP], y = list.path[2 * PP * e + PP + 1]
+            if (x >= 0 && y >= 0 && x <= view.width && y <= view.height) on.push(e)
+          }
+          const loads = new Map<number, number>()
+          for (const e of on) loads.set(results[e].load, (loads.get(results[e].load) ?? 0) + 1)
+          for (const n of loads.values()) perLoad.push(n)
+          for (let k = 1; k < on.length; k++) dHue.push(Math.abs(results[on[k]].hueOffset * results[on[k]].kd - results[on[k - 1]].hueOffset * results[on[k - 1]].kd))
+        }
+        const mean = (a: number[]): number => a.reduce((s, v) => s + v, 0) / a.length
+        if (process.env.FRAME_PRINT) console.log(`outline brush loads, sphere at zoom ${zoom}: ${mean(perLoad).toFixed(2)} strokes to a load, mean hue change to the next stroke ${mean(dHue).toFixed(2)} degrees (${dHue.length} strokes)`)
+        expect(dHue.length, `zoom ${zoom}`).toBeGreaterThan(30)
+        expect(mean(perLoad), `zoom ${zoom}: strokes to a load`).toBeLessThanOrEqual(3)
+        expect(mean(dHue), `zoom ${zoom}: hue change to the next stroke`).toBeGreaterThanOrEqual(3)
+      }
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   // The strokes of a view, and for each stroke of another view the one of this nearest it (by the middle of its world path, within 0.15 units).
