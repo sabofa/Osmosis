@@ -1,6 +1,6 @@
 # Graph styles: media, themes, layers and the settings guide
 
-*2026-10-04. Written by the space and paint session from Ben's brainstorm the same night. Status: **approved by Ben, 2026-10-04** ("sure continue on"). It builds on the figure styles design (`2026-09-30-figure-styles-design.md`), the painted figures design (`2026-10-02-painted-figures-design.md`) and graph engine v2 (`2026-09-21-graph-engine-v2-design.md`).*
+*2026-10-04. Written by the space and paint session from Ben's brainstorm the same night. Status: **approved by Ben, 2026-10-04** ("sure continue on"). Amended the same day with the geometry session (owner of `style/` and `figure/`): ink line without grain; every role coloured per medium; old names kept as aliases; `renderFigure` stays pure, with host-painted slots; paper tiles referenced by key; brush fills on 3D figures only where a figure fills. It builds on the figure styles design (`2026-09-30-figure-styles-design.md`), the painted figures design (`2026-10-02-painted-figures-design.md`) and graph engine v2 (`2026-09-21-graph-engine-v2-design.md`).*
 
 ## 0. What Ben asked for
 
@@ -99,6 +99,8 @@ This closes today's gap: `renderFigure` currently gets no base style from the ap
 
 ### 4.1 The contract
 
+Every medium colours **every role**, not only lines and fills: labels, points, measures and the givens table too. On a board, everything that must be read takes the medium's light colours. This is "readable in every style" (figure styles rule 5), and it replaces today's `paperPalette` fallback.
+
 ```ts
 interface Medium {
   name: MediumName
@@ -115,7 +117,7 @@ interface Medium {
 | Medium | Colour range | Overlap | Grain and texture | Its line | Its fill |
 |---|---|---|---|---|---|
 | **clean** | Exact theme colours | normal | none | technical | flat |
-| **ink** | Deep and dense, high contrast with the paper | multiply | slight feathering into rough paper | ink (wobble, taper, pressure) | hatch or crosshatch; brush fill (§8) |
+| **ink** | Deep and dense, high contrast with the paper | multiply | **none on the line** (Ben, 2026-09-30: no speckle, pinholes or dry-brush on ink; `ink.texture()` stays null); at most a soft edge where it meets rough paper | ink (wobble, taper, pressure) | hatch or crosshatch; brush fill (§8) |
 | **graphite pencil** | Greys with a hint of the role's hue. Never saturated. | build (layers darken toward a graphite maximum) | strong tooth skips | pencil | hatch with grain |
 | **coloured pencil** | The theme colour slightly desaturated and waxy, held a little light | build (layers deepen chroma first, then value) | tooth skips, with paper showing through | pencil, coloured | grainy layered hatch |
 | **marker** | Saturated, mid lightness | multiply (overlaps darken) | streaks along the stroke, and ends that pool darker | marker | streaky flat tone |
@@ -235,7 +237,11 @@ All backgrounds come from the one seeded generator (`style/papers/generate/`). I
 | **greenboard** | as blackboard, on green | board colour |
 | **whiteboard** | gloss sheen, seeded ghosts of erased marks | board colour |
 
-**Board backgrounds ignore light/dark.** In the 2D engines a background zooms with the drawing. In 3D it stays fixed on screen (decided 2026-10-01). The SVG figures carry the background as a tiled pattern image; the space engine draws it as a texture.
+**Board backgrounds ignore light/dark.** In the 2D engines a background zooms with the drawing. In 3D it stays fixed on screen (decided 2026-10-01). The space engine draws the background as a texture.
+
+**In the SVG figures**, the background is a `<pattern>` that **references its tile by key** (type, seed and `ThemeInput` key). The pattern sits over a flat rect in the paper colour, so the SVG string stays deterministic and complete in node. The host (the figure viewer) generates each tile once per page as a blob URL and fills in the reference. Exporters inline each tile once.
+
+**Old names stay as aliases** (`paper`, `rough-paper`, `canvas`, `graph`, `rough-graph`, `dotted`, `ruled`, and the old preset names), so existing `@style-paper:` lines still parse. Refusal messages list the new names.
 
 ## 8. Geometry figures: brush fills by the stroke engine
 
@@ -254,18 +260,26 @@ A new fill type, **`brush`**, plus the whiteboard **fill-in**. The strokes are p
 - its opacity is capped (`fill.brush.opacity`, default 0.7);
 - its chroma is capped relative to the outline's (`fill.brush.chromaCap`, default 0.8×).
 
-On 3D figures each face keeps the lit and shaded relationship the figure already has, applied softly.
+On 3D figures a brush fill applies to what the figure actually fills: sections, `fill:` regions, and faces a `fill:` names. Solid figures don't shade their faces today, and this adds no lighting (geometry, 2026-10-04).
 
 **Layout.** Strokes in a region (or face) run in one direction: the shape's main axis, or the face's own edge direction. Their spacing is set for even coverage, from the region's area and the stroke width. The whiteboard fill-in lays back-and-forth chisel strokes along the same direction.
 
-### 8.3 How it gets into the SVG
+### 8.3 How it gets into the figure (amended with geometry, 2026-10-04)
 
-- The figure's pen collects brush-fill regions and their strokes in figure coordinates (3D figures arrive already projected) instead of writing SVG for them.
-- After drawing, the stroke engine paints each layer's brush fills offscreen into a **transparent image**. The paint renderer gains a stroke-only, transparent-output mode: no G-buffer, no underpainting, no canvas.
-- That image goes into the SVG at its layer's place, clipped by the region's `clipPath`. A figure stays one self-contained SVG string that embeds and exports as now.
-- **Resolution.** The image is painted at the displayed size × the device pixel ratio. When a zoom settles (debounced), it is re-painted at the new scale. Images are cached by figure hash, scale and `ThemeInput` key.
-- **Fallback.** With no WebGL2 (server export, old devices), a brush fill falls back to today's `wash` or `hatch` fill in the medium's colours. A figure always draws.
-- **Determinism.** The same figure, seed and theme give the same strokes. Only small GPU pixel differences remain.
+**`renderFigure` stays pure:** deterministic, GPU-free, node-safe. For each brush-fill layer it writes two things, both under the region's `clipPath`:
+- the **fallback fill** (`wash` or `hatch` in the medium's colours) in a group with a stable key;
+- an **empty `<image>` slot** with the same key.
+
+The SVG is therefore complete and byte-stable with no GPU, and figures without brush fills are byte-identical to today.
+
+**The host** (the figure viewer) does the painting:
+- It collects the slots and paints each one with the stroke engine, into a transparent image at displayed size × device pixel ratio. The paint renderer gains a stroke-only, transparent-output mode: no G-buffer, no underpainting, no canvas.
+- It sets the slot's href to a blob URL, then hides the fallback group.
+- It re-paints when a zoom settles.
+- The cache is keyed by slot key, scale and `ThemeInput` key.
+- Exporters inline the current images.
+
+With no WebGL2 (server export, old devices), the fallback simply stays. The same figure, seed and theme give the same strokes; only small GPU pixel differences remain, and they live only in the host overlay.
 
 ## 9. The 3D looks (space)
 
