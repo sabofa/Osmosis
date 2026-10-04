@@ -24,6 +24,10 @@ These come from Ben and from the spec. They are not preferences.
 3. **Directed mode guides and never limits.** Ben, on the directed-mode question (whether his own tabs are gated while an item is pending): "no when an item is shown it should direct me to it, i answer the question or look at the graph but it should not limit me, it should only guide me." When the tutor shows an item, the workspace brings Ben to it by focusing its tab, marked `directed` (not built yet, see section 5). Nothing else is collapsed, gated or disabled, and a View renders the same whether its tab was directed or opened by Ben.
 4. **Every type that saves goes through `useFileDraft`.** Ben, the tutor and the planner all write these files. A save names the revision it started from, and a stale one is a conflict Ben chooses about (Reload or Overwrite, and Merge when the tutor only appended), never something to retry quietly. A View that calls `saveContent` itself will, sooner or later, overwrite the tutor's note.
 5. **Writers are `ben`, `tutor` and `planner`, and are never conflated.** See section 4.
+6. **The markdown viewer and editor are placeholders.** Ben, after seeing the frame: "the actual document files and editing and graphing engine port will be handled later, document files are ran by the document engine and editing will be a new mode in the document engine."
+   - Document files will render in the **document engine**, and editing will be **a mode of the document engine**. The graph engine is ported into the centre pane later.
+   - So a type whose content is prose should keep its View thin and replaceable. Don't build features on `MarkdownFile`'s textarea.
+   - The registry, `FileViewProps` and `useFileDraft` are the parts meant to last.
 
 ## 1. What a file type is
 
