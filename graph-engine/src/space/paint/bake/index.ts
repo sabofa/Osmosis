@@ -24,7 +24,7 @@ import { buildWorldEdges, type WorldEdges } from './edges'
 import { buildDataStrokes, dataColours, dataLocals, type DataStrokeStats } from './lines'
 import { buildWorldPlan, type WorldPlan } from './plan'
 import { buildWorldPlanes, type WorldPlanes } from './planes'
-import { buildSurfaceStrokes, lengthFactorsOf, strokeCtx, type SurfaceStrokeStats } from './strokes'
+import { bakeLengthFactor, buildSurfaceStrokes, lengthFactorsOf, strokeCtx, type SurfaceStrokeStats } from './strokes'
 import { buildSurfaceUnder, withUnderColours, type SurfaceUnder } from './underpaint'
 import type { AuthoredFraming, BakedPainting, BakedSurface, BakePainting, RecolourBake } from './types'
 
@@ -134,6 +134,36 @@ export function bakeKey(scene: SpaceScene, lightDir: readonly number[], params: 
   h.text(JSON.stringify(lengthFactorsOf(scene, particles, params, authored.worldPerPx)))
   coloursFingerprint(h, scene, colours)
   return h.hex()
+}
+
+// What a change of parameters asks of a baked painting that is on screen (the lab's rule, tested against the key in index.test.ts):
+//   same    nothing of the bake: the params a frame reads (the view-only ones, bake/frame.ts) and the renderer's own move no stroke and no colour;
+//   colour  only colour parameters moved: `recolourBake` makes the colours again, no analysis;
+//   bake    anything the bake reads moved (it is `bakedParams` that differ): a new bake.
+// A view-only slider can also move the baked paths' bucketed length (`lengthFactorsMoved`), which is a re-bake of its own.
+export type BakeChange = 'same' | 'colour' | 'bake'
+
+const at = (params: unknown, path: string): unknown => path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], params)
+
+export function classifyBakeChange(prev: PaintParams, next: PaintParams): BakeChange {
+  if (prev === next) return 'same'
+  if (JSON.stringify(bakedParams(prev)) !== JSON.stringify(bakedParams(next))) return 'bake'
+  // (`mix.loadCell` is colour-only's `mix` and the bake's too: it moved the key above)
+  return JSON.stringify(COLOUR_ONLY.map((p) => at(prev, p))) !== JSON.stringify(COLOUR_ONLY.map((p) => at(next, p))) ? 'colour' : 'same'
+}
+
+// Has the bucketed length factor of any mark moved from `prev` to `next` (the sliders that grow strokes with the zoom or the shortage of
+// particles cross a bucket now and then)? `areaPerParticle` and `perPx` are the painting's own (BakedPainting.areaPerParticle and
+// .referenceWorldPerPx): what `lengthFactorsOf` reads of the scene and the particles. Part of the key.
+export function lengthFactorsMoved(areaPerParticle: ArrayLike<number>, perPx: number, prev: PaintParams, next: PaintParams): boolean {
+  for (let m = 0; m < areaPerParticle.length; m++) if (bakeLengthFactor(prev, areaPerParticle[m], perPx) !== bakeLengthFactor(next, areaPerParticle[m], perPx)) return true
+  return false
+}
+
+// The light direction as the key holds it (unit, to 1e-6): two lights of one string are one light to the bake.
+export function lightKeyOf(lightDir: readonly number[]): string {
+  const len = Math.hypot(lightDir[0], lightDir[1], lightDir[2]) || 1
+  return [0, 1, 2].map((k) => Math.round((lightDir[k] / len) * 1e6) + 0).join(',')
 }
 
 // The positions on a colour scale (0 to 1, evenly) the key samples it at.
