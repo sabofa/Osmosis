@@ -398,6 +398,67 @@ negative r plots through the origin, as now.
 | `r = 1/cos(theta)` | a vertical line, no chord |
 | `y = 2` with `if 0 < x <= 3` | endpoint marks open at 0, filled at 3 |
 
+### As built (P2, 2026-10-04)
+
+P2 shipped on `milestone-a/calc`. Its plan and ledger record every ruling; this is what differs from the text above or settles what it left open.
+
+**Numbers.** Every tuned number lives in `plot/sample/tuning.ts`, and the corpus (`plot/testing/corpus.ts`) pins the costs.
+- FULL keeps the initial values: a start sample per 4 px, 25 % overscan, flat to ¼ px, chords up to 8 px, a 1/16 px floor, 16 samples per band column.
+- COARSE, used during a gesture, draws looser on a quarter of the budget: 8 px starts, ½ px flatness, 16 px chords, 8 band samples.
+
+**Flatness and spikes.**
+- Flatness is measured against the chord's midpoint, not perpendicular to the chord. The perpendicular reading allows a vertical error of √(1 + s²) times the tolerance on steep stretches.
+- A spike test catches features narrower than the start spacing: the twin's enclosure must stay within twice the samples' span. It applies only down to 3 levels below the start grid, so the twin's looseness on cancelling forms does not drive refinement.
+
+**Connecting what the twin cannot certify.**
+- **The jump test.** An uncertified interval is bisected until its gap is under 1 px.
+  - Below the floor, every sub-interval with a gap of 1 px or more keeps halving, down to 1/1024 px. Every leaf must close.
+  - It never connects across an enclosure with an infinite bound unless the twin says UNKNOWN.
+  - A leaf that cannot close at the depth limit while its gaps still halve is a climb too steep to certify. It is lifted, and noted when in view.
+- **Anchors.** A stretch that ends at an anchor (a classified one-sided limit) is joined only by the same every-half test or within ¼ px. A depth-limit leaf there must not have a DEFINED verdict.
+
+**Singularities.**
+- One-sided limits use a geometric lattice, plus two confirming samples off it (×√2 and ×φ), so periodic functions in 1/x cannot fake a limit.
+  - A divergence must grow steadily.
+  - Cancellation noise at the smallest offsets is dropped before judging.
+- Holes keep one chain through the limit. At a zero from a divisor, the point counts as undefined unless the twin certifies it, so holes at irrational points (`sin(x)/sin(x)` at kπ) are found.
+- A singular end walks certified pieces toward the pole until the curve leaves the clip box. A diverging edge (`ln x`) is sampled to the true edge.
+- A curve defined only at an isolated point draws a filled dot.
+
+**Ends follow the operator, not the double nearest the seam.**
+- At a seam whose comparisons all agree on who owns the boundary, the owner's end is filled and the other end is open. The side where the comparison holds owns the boundary for `<=` and `>=`; the other side owns it for `<` and `>`.
+- `=` and `!=` give open ends plus a value mark.
+- Without a comparison, the value at the seam decides.
+
+**Bands.**
+- A column ≤ 1 px wide bands when its jittered samples turn twice (golden-ratio offsets, spread 0.35), or once beside a band.
+- A single largest step is a discontinuity, not an oscillation.
+- A column whose samples span under ¼ px is not a band.
+- A calm certified column draws as the thinned polyline through its samples.
+
+**Notes** (rule 2):
+- "drawn coarsely" (capped, with something drawn in view);
+- "not drawn: … drawing budget";
+- "too steep to draw here";
+- "not drawn: this curve could not be certified anywhere in view";
+- "undefined everywhere in view", which counts only the visible range of the independent variable.
+
+**Cost.** The budget counts evaluations. An integral is charged by its integrand evaluations, one point per 100, through an additive counter in `math/binders.ts`.
+
+**The interaction budget.** P2 rebuilds coarsely during a gesture (pan, wheel, resize) and fully when it settles: at pointer up, or 150 ms after the last wheel or resize event. It does not transform the last picture, because regions and implicit curves sample the bare view until P3, which revisits this.
+
+**The scene contract.**
+- `MarkRole` gains `'value'`: a defined point whose value differs from its limits.
+- `line.id` is optional until P3 migrates the remaining kinds.
+- Ordinal mark ids (`hole.k`, `band.k`, `asymptote.k`) renumber under pan. That is to be settled before goal 2 keys wobble on them.
+
+**Known limits, pinned in the corpus:**
+- an UNKNOWN-twin curve's dip into view about 1 px wide can be culled;
+- `gamma` left of about −11 reads holes at its poles;
+- at COARSE, `x + 0.1 sin(500x)` aliases into a slow wave;
+- slow roots at zoomed views and steep tips at a seam can stop a few px short;
+- a natural trouble spot exactly on an irrational seam keeps the ownership fill.
+
 ## Implicit curves and regions (P3)
 
 ### Implicit curves: an interval quadtree
