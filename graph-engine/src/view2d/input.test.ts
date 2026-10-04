@@ -101,6 +101,28 @@ describe('click or drag', () => {
   })
 })
 
+describe('lost releases', () => {
+  it('a lost release of an ignored (right-button) press does not corrupt the next left press or hover', () => {
+    const g = make()
+    expect(g.pointerDown(ptr(1, 100, 100, 0, 'mouse', 2))).toEqual([])
+    // The right button's release never arrives; the same id presses with the left button.
+    expect(g.pointerDown(ptr(1, 120, 100, 10))).toEqual([])
+    expect(g.pointerUp(ptr(1, 120, 100, 20))).toEqual([{ kind: 'click', at: { x: 120, y: 100 }, pointer: 'mouse', t: 20 }])
+    // A buttonless move is a hover, not a drag, and hover works again.
+    expect(g.pointerMove(ptr(1, 160, 100, 40))).toEqual([{ kind: 'hover', at: { x: 160, y: 100 }, pointer: 'mouse' }])
+  })
+
+  it('a pointerDown for an id already down (its release was lost) ends the old drag and starts afresh', () => {
+    const g = make()
+    g.pointerDown(ptr(1, 100, 100, 0))
+    expect(kinds(g.pointerMove(ptr(1, 130, 100, 5)))).toEqual(['dragStart', 'drag'])
+    // The release never arrived; the next press for the same id closes the drag first.
+    expect(g.pointerDown(ptr(1, 200, 100, 50))).toEqual([{ kind: 'dragEnd', t: 50 }])
+    // The new press is clean: released in place it is a click, with no drag.
+    expect(g.pointerUp(ptr(1, 200, 100, 60))).toEqual([{ kind: 'click', at: { x: 200, y: 100 }, pointer: 'mouse', t: 60 }])
+  })
+})
+
 describe('double-click', () => {
   const click = (g: GestureRecognizer, x: number, y: number, t: number, id = 1) => [
     ...g.pointerDown(ptr(id, x, y, t)),

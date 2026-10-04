@@ -106,7 +106,10 @@ export class GestureRecognizer {
 
   pointerDown(s: PointerSample): Intent[] {
     const out: Intent[] = []
-    // A press whose release we never saw: close it before starting over.
+    // A new press for an id ends whatever that id was doing. Its release may
+    // never have arrived (a context menu can swallow the mouseup), whether it
+    // was a tracked press or an ignored one (a secondary button).
+    this.ignored.delete(s.id)
     if (this.down.has(s.id)) out.push(...this.pointerCancel(s))
     if (s.kind === 'mouse' && s.button !== 0) {
       this.ignored.add(s.id)
