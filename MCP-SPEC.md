@@ -159,8 +159,8 @@ becoming one larger tool.
 | `await_show_outcome` | Waits for the learner to work through a show, `timeout_s` default 25 clamped 1..25, polling every second and returning early on `acknowledged`. Returns `{ show_id, status: 'pending'/'seen'/'acknowledged', seen_at, dwell_ms, acknowledged_at }` |
 | `set_retention_target` | Attaches a target to a **node key** (a non-node identity is refused `invalid_node_key`); every item carrying the key inherits it. Returns `{ id, node_key, identity_key, retention_target, needs_last_until, first_gap_days, due_at, node_items }` — `due_at` is gap 1, when the node's first probe is drawn. The same label again starts that target over (§3.5) |
 | `get_due_items` | One row per due item (`id` = its `lineage_id`, `question_id` = the live version), most overdue first — overdue measured against the gap the item was meant to survive (`overdue_ratio`). Rows carry `node_key`/`node_keys`, `targets[]` (each with `role` `draw`/`reserve` and the draw's `probe` state), SM2 state (`easiness`, `repetitions`, `interval_days`, `retention_reviews`, `last_quality`), and `reason`: `never_demonstrated` (no retention review yet), `relearn` (reserve a failed draw brought forward, or never passed — go teach it), `lapsed` (failed after passing — resurface sooner), `decayed` (passed, interval run). The identity-keyed fields stay: `identity_key` (primary node key), `retention_target`/`target_source` (nearest open target), `last_result`. Filters `before`, `node_key` (segment-aware); paginated |
-| `ws_list` / `ws_read` / `ws_search` | Read Ben's workspace (§3.6). `ws_list` is the roots with no `container_id`, else that container's live children under their local names; `ws_read` is a node's summary, `appears_in`, parent tracks and, for a file, its `content` (`type`, `body`, `revision`, `saved_at`, `saved_by`); `ws_search` is text (names, titles, file content) with optional `scope` and `kind_tag`, one row per placement |
-| `ws_create` / `ws_write` / `ws_append` / `ws_place` | Write to it (§3.6). Each content write takes `as: tutor` or `planner`, no default, and that is recorded on the revision. `ws_create` makes a track, course, folder or file (a file needs `type`) and places it with `container_id`; `ws_write` replaces a file against the `base_revision` you read (`stale_revision` means Ben edited it since); `ws_append` adds to an appendable file with no revision; `ws_place` puts an existing node in one more container |
+| `ws_list` / `ws_read` / `ws_search` | Read Ben's workspace (§3.6). `ws_list` with no `container_id` is the roots (every trajectory, track and course, each flagged `top_level` when it is placed nowhere) plus `unplaced` (the files and folders placed nowhere); with one it is that container's live children, containers first, under their local names. `ws_read` is a node's summary, `appears_in` and, for a file, its `content` (`format`, `body`, `version`, `saved_at`, `author`, `asset_id`); the `version` it shows is the one to hand back to `ws_write`. `ws_search` is text (placement names, titles, and a file's search text) with optional `scope` and `kind_tag`, one row per placement, and never lists an unplaced node |
+| `ws_create` / `ws_write` / `ws_append` / `ws_place` | Write to it (§3.6). Each content write takes `as: tutor` or `planner`, no default, and that is recorded as the version's `author`. `ws_create` makes a trajectory, track, course, folder or file (a file needs `format`) and places it with `container_id`; `ws_write` replaces a file against the `version` you read (`stale_version` means Ben or the other agent saved it since); `ws_append` adds to a file whose format has an append hook (`markdown` does), with no version; `ws_place` puts an existing node in one more container. When `ws_create` or `ws_place` meets a taken name it answers `name_taken` with a message that points at the node already there (`ws_list` the container; for USERNOTES, `ws_append` to it) and never offers a numbered copy |
 
 Plus one plain (non-JSON-RPC) HTTP route on the same route family, `POST
 /mcp/:token/upload`, which accepts either token — see §5.
@@ -319,51 +319,84 @@ Ephemeral items never schedule.
 
 ### 3.6 The workspace (tools_version 9)
 
-Ben's workspace is a graph: tracks, courses, folders and files are nodes, and a
-*placement* says "this node appears in this container under this name", so one
-file can sit in two courses under a name of its own in each. The tutor and the
-planner share it with Ben through seven tools: `ws_list`, `ws_read`,
-`ws_search` (read), `ws_create`, `ws_write`, `ws_append` (write) and `ws_place`
-(file an existing node somewhere else). All seven are on the presenter surface,
-because the tutor server writes its notes there.
+Ben's workspace is a graph: trajectories, tracks, courses, folders and files are
+nodes, and a *placement* says "this node appears in this container under this
+name", so one file can sit in two courses under a name of its own in each. What
+a container may hold: a trajectory holds tracks, courses, folders and files; a
+track holds courses, folders and files; a course holds folders and files; a
+folder holds folders and files; a file holds nothing. A folder has no built-in
+meaning: a unit, research, attachments and notes are all just folders. The tutor
+and the planner share the workspace with Ben through seven tools: `ws_list`,
+`ws_read`, `ws_search` (read), `ws_create`, `ws_write`, `ws_append` (write) and
+`ws_place` (file an existing node somewhere else). All seven are on the
+presenter surface, because the tutor server writes its notes there.
+`format`, `version` and `author` replaced the first design's `type`, `revision`
+and `saved_by` before this surface was deployed, so `tools_version` stayed 9.
+
+**Reading.** `ws_list` with no `container_id` returns the roots (every
+trajectory, track and course) and `unplaced`. A trajectory, track or course that
+is placed nowhere is `top_level`, which is a normal state for a container; a
+file or folder placed nowhere is `unplaced`. `ws_search` never returns an
+unplaced node: `ws_list` is where those are found. `ws_read` returns the node,
+`appears_in` (the containers it is placed in) and, for a file, its `content`.
 
 **Who wrote it.** Every content write (`ws_create`, `ws_write`, `ws_append`)
 takes `as`: `tutor` or `planner`. There is no default and `ben` is not an
 option; Ben's own edits arrive over HTTP (`/api/ws`) and are always signed as
-him. The author is stored on the revision and `ws_read` returns it as
-`saved_by`.
+him. The author is stored on the version and `ws_read` returns it as
+`content.author`.
 
-**Writing without clobbering.** `ws_write` replaces a file and must carry the
-`base_revision` that `ws_read` showed; if the file has been saved since, it is
-refused as `stale_revision` (the message names the current revision) and the
-caller reads again and merges. `ws_append` needs no revision: it adds to the end
-of an appendable file (markdown), after a blank line. That is how the tutor's
-notes about Ben go into a unit's `USERNOTES` file, with specific examples,
-without overwriting anything Ben changed. A file type that is not appendable
-(`graph`, an uploaded document) answers `not_appendable`.
+**Writing without clobbering.** Every save is a new *version* (1, 2, 3, ...) and
+the latest is the file's content. `ws_write` replaces a file and must carry the
+`version` that `ws_read` showed; if the file has been saved since, it is refused
+as `stale_version` (the message names the current version) and the caller reads
+again and merges. `ws_append` needs no version: it hands the new text to the
+format's append hook, and `markdown`'s joins it after a blank line. That is how
+the tutor's notes about Ben go into a unit's `USERNOTES` file, with specific
+examples, without overwriting anything Ben changed. A format with no append hook
+(`graph`, an uploaded document, any format nobody registered) answers
+`not_appendable`.
 
-**What is not here.** No remove, move, destroy, rename or purge: rearranging
-the tree is Ben's. An agent can add to it and fill it in, not tidy it away.
-Errors are the usual `{ error, message }` (`not_found`, `name_taken`,
-`containment_not_allowed`, `cycle_rejected`, `already_placed`, `invalid_input`,
-`unknown_file_type`, `not_appendable`, `stale_revision`, ...).
+**A taken name.** Names are unique among a container's live placements, compared
+case-insensitively. A taken name means the node `ws_create` was about to make is
+very likely there already, so `ws_create` and `ws_place` answer `name_taken` with
+a message that says to `ws_list` the container and use the node that is there
+(for USERNOTES, `ws_append` to it), and never to make a numbered copy. The
+message does not offer a numbered name. The app's own HTTP API answers the same
+code with the free name in `detail.suggestion`; an MCP result carries no detail.
+
+**What is not here.** No remove (trash), delete, restore, purge, move, rename or
+retitle: removing things and rearranging the tree are Ben's. An agent can add to
+the workspace and fill it in, not tidy it away. Errors are the usual
+`{ error, message }` (`not_found`, `name_taken`, `invalid_name`,
+`containment_not_allowed`, `cycle_rejected`, `already_placed`, `archived`,
+`invalid_input`, `invalid_content`, `not_appendable`, `stale_version`, ...).
+`archived` means the node, or the container it is going into, is in Ben's
+Archive and is read-only until he restores it.
 
 **Uploads.** Every upload (an asset made by `create_asset`, the app, or the CLI)
-gets a file node `asset:<asset id>` in the workspace the moment it is created,
-unplaced, tagged `source`. Deleting the upload sends that file to the trash.
+gets a file node `asset:<asset id>` in the workspace the moment it is created:
+`format` `upload`, tagged `source`, placed nowhere until Ben files it. Deleting
+the upload archives that file, so it shows up in Ben's Archive.
 
-**File types.** A file has a `type`, and the server refuses a type nobody has
-registered (`unknown_file_type`). `ws_create` takes any registered type that
-holds text (`markdown` and `graph` today; `asset` is an upload's wrapper and is
-made by uploading), and `ws_write` and `ws_append` obey that type's `validate`
-(`invalid_content`) and `appendable` (`not_appendable`). Item files and other
-special types arrive by registration, not by a new tool:
-`docs/workspace/FILE-TYPES.md`.
+**Formats.** A file has a `format`: an opaque name (lowercase letters, digits
+and `-`, at most 40 characters) that the data layer never interprets, and a
+`body` of text (an `upload` file has an `asset_id` and no body). `markdown`,
+`graph` and `upload` are built in. `ws_create` accepts any valid format name,
+registered or not: a format nobody registered is stored verbatim, so it is not
+searchable by its content and not appendable. A format's owner registers hooks
+on the server (`searchText`, `validate`, `append`), and they run on `ws_create`,
+`ws_write` and `ws_append`: a body that `validate` refuses answers
+`invalid_content` with its message. A file keeps the format it was made with.
+Item files and other special formats arrive by registering hooks, not by a new
+tool: `docs/workspace/FILE-TYPES.md`. The versions of a file (number, author,
+time) are listed by `GET /api/ws/nodes/:id/versions` over HTTP; there is no MCP
+tool for them, and no way to read an old version's body.
 
 **Where to read more.** The design is the Learn spec
-`spec/osmosis/workspace/01-shell.md` (data model §2, content §6, API §12, file
-types §17), with Ben's answers in `ruling-2026-10-03-shell-answers.md` beside
-it.
+`spec/osmosis/workspace/02-data-layer.md` (operations §5, queries §6, format
+hooks §7, uploads §8) and `01-shell.md` for the shell around it, with Ben's
+answers in `ruling-2026-10-03-shell-answers.md` beside them.
 
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 
