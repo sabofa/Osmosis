@@ -919,19 +919,45 @@ describe('sampleCurve — a hole at a zero that is not an exact double is a hole
   })
 })
 
-// calc P2 final review, C2's deferred family (task 5): a seam at an irrational zero that a natural spot has too. The comparison
-// says which side owns the zero, but the owner is undefined there ({x^2 <= 2: sin(x^2 - 2)/(x^2 - 2), 5} at the root of 2:
-// 0/0) or steps ({x^2 <= 2: floor(x^2), 5}: 2 there, not the 1 of its left limit), and the filled end was where the curve
-// is not. Both ends are open, and no value is marked (the scalar's value at the double is rounding).
-describe('sampleCurve — a natural spot at an irrational seam opens both ends', () => {
-  const at = (body: string) => marksOf(run(explicit(body)).objects).filter((m) => Math.abs(Math.abs(m.at.x) - Math.SQRT2) < 1e-9)
-  it.each(['{x^2 <= 2: sin(x^2 - 2)/(x^2 - 2), 5}', '{x^2 <= 2: floor(x^2), 5}'])('%s: four open ends at the two roots, no filled one, no value', (body) => {
+// calc P2 final review, residual round R1: the owner of an irrational seam is the comparison's, a natural spot sharing the seam or not.
+// A guard that opened both ends where a natural spot (a denominator, a step, a root's edge) shares the seam (the deferred T5 guard)
+// was wrong for every form below, whose owner end is a point of the curve: a root is defined where its argument is 0
+// (sqrt(2 - x^2) is 0 at the root of 2), and a natural spot in the branch the owner is not is none of its business. It is removed.
+describe('sampleCurve — an irrational seam is owned by its comparison, whatever natural spots share it', () => {
+  const at = (body: string) => marksOf(run(explicit(body)).objects).filter((m) => m.role === 'endpoint' && Math.abs(Math.abs(m.at.x) - Math.SQRT2) < 1e-9)
+  // [the spec, the y of the owner's end at each of +-sqrt 2 (filled), the y of the other end (open)]
+  it.each([
+    ['{x^2 <= 2: sqrt(2 - x^2) + 1, 0}', 1, 0],
+    ['{x^2 <= 2: sqrt(2 - x^2), 1}', 0, 1],
+    ['{x^2 < 2: sin(x^2 - 2)/(x^2 - 2), 5}', 5, 1],
+    ['{x^2 < 2: floor(x^2), 5}', 5, 1],
+    ['{x^2 <= 2: 2, sqrt(x^2 - 2)}', 2, 0],
+    ['{x^2 < 2: sqrt(2 - x^2) + 1, 0}', 0, 1],
+    ['{x^2 < 2: 2, sqrt(x^2 - 2)}', 0, 2],
+  ])('%s: filled at (+-sqrt 2, %d), open at (+-sqrt 2, %d)', (body, filled, open) => {
     const marks = at(body)
-    expect(marks.map((m) => [m.role, m.fill])).toEqual([['endpoint', 'open'], ['endpoint', 'open'], ['endpoint', 'open'], ['endpoint', 'open']])
+    expect(marks).toHaveLength(4)
+    for (const side of [-1, 1]) {
+      const mine = marks.filter((m) => Math.sign(m.at.x) === side)
+      expect(mine).toHaveLength(2)
+      // (a root's limit is read a few tolerances in from its edge, where sqrt is 1.3e-4: to three digits)
+      expect(mine.filter((m) => m.fill === 'filled').map((m) => m.at.y), `${body} at ${side} sqrt 2`).toEqual([expect.closeTo(filled, 3)])
+      expect(mine.filter((m) => m.fill === 'open').map((m) => m.at.y), `${body} at ${side} sqrt 2`).toEqual([expect.closeTo(open, 3)])
+    }
   })
-  it('and where nothing natural shares the seam the owner still fills its end', () => {
+  it('and a plain comparison fills its owner as it always did', () => {
     expect(at('{x^2 <= 2: x, 5}').map((m) => m.fill).sort()).toEqual(['filled', 'filled', 'open', 'open'])
     expect(at('{x^2 < 2: x, 5}').map((m) => m.fill).sort()).toEqual(['filled', 'filled', 'open', 'open'])
+  })
+  // KNOWN LIMIT (the deferred T5 guard, task 5): where the owner's own branch is undefined or steps exactly at an irrational seam, its
+  // end is filled all the same, and the curve is not there: {x^2 <= 2: sin(x^2 - 2)/(x^2 - 2), 5} is 0/0 AT the root of 2 (the
+  // sampled limit is 1), and {x^2 <= 2: floor(x^2), 5} is 2 there, not the 1 of its left limit. A guard that opens both ends where a
+  // natural spot shares the seam is wrong more often than not (the seven forms above), and none that tells the owner's own
+  // branch's spot from the others has been found; the comparison's word stands.
+  it.each(['{x^2 <= 2: sin(x^2 - 2)/(x^2 - 2), 5}', '{x^2 <= 2: floor(x^2), 5}'])('known limit: %s fills its owner end at the root, where its own branch is not', (body) => {
+    const filled = at(body).filter((m) => m.fill === 'filled')
+    expect(filled).toHaveLength(2)
+    for (const m of filled) expect(m.at.y).toBeCloseTo(1, 6)
   })
 })
 

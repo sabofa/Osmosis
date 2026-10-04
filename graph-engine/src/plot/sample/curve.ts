@@ -60,9 +60,8 @@
 //      filled value mark. Where the comparisons disagree (< with <=), or a - b is exactly 0 at
 //      the spot (an exact double: the curve's own value is its real one, and may be undefined),
 //      or has no sign off it, or no comparison made the zero, the curve's own value at the spot
-//      decides: filled where it equals the limit on screen. A zero that a natural spot has too, and is
-//      not exactly at the located double (a denominator's, a floor's step: sharedWithNatural), is not the
-//      comparison's to give: the curve is undefined or steps there, so both ends are open and no value is marked.
+//      decides: filled where it equals the limit on screen. (A zero that a natural spot has too, at an
+//      irrational seam, is the comparison's all the same: see the known limit in curve.test.ts.)
 //    - THE VALUE AT A ZERO that is not an exact double is not the scalar's: a denominator or a built-in's pole
 //      vanishes at the real zero, and the double beside it only rounds (pointAt). The twin is asked about the
 //      curve there, and unless it says continuous and bounded the classifier is told the point is undefined:
@@ -95,7 +94,7 @@
 import { integrandEvaluations } from '../../math/binders'
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { call, mul, variable } from '../../math/expr'
-import { type CompiledInterval, compileInterval, CONTINUOUS, isEmpty, iv, type Iv, type Verdict } from '../../math/interval'
+import { compileInterval, CONTINUOUS, iv, type Verdict } from '../../math/interval'
 import { type ComparisonOp, piecewise } from '../../math/reserved'
 import type { MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
@@ -207,21 +206,14 @@ interface Walk {
   param: string
   scope: MathScope
   differences: Map<Expr, CompiledFn>
-  // the natural spots of the curve as the structure walk met them (each once), what reading a zero's neighbours
-  // needs of one (its scalar and its twin, compiled when first asked), and what the twin's answers are written into
-  naturals: Expr[]
-  natural: Map<Expr, { scalar: CompiledFn; twin: CompiledInterval }>
-  naturalChecks: number
+  // what the twin's enclosure of the curve at a zero is written into (pointAt)
   box: Box
-  probe: Iv
 }
 
 // Which side of a zero owns it, by the author's comparison: the side whose end is filled. null
-// for = and !=, which hold at a point and not on a side: neither side's end is. `valueless`: the curve's own
-// value at the zero is not read at all (sharedWithNatural).
+// for = and !=, which hold at a point and not on a side: neither side's end is.
 interface Ownership {
   owner: 'left' | 'right' | null
-  valueless: boolean
 }
 
 // What the pieces on either side of a spot meet there: the piece before it ends in `before`,
@@ -260,10 +252,9 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     return { objects: [curveObject(options, [], [])], capped: false, drawnInView: false, blankInView: false, tooSteep: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
   }
 
-  const naturals: Expr[] = []
   // (`located.truncated`, that zeros were left out, is not said to the author: what is left out is the nearest the edges of the
   // range, typed no more than what the core finds on its own, and no note is true of it. LOCATE.maxZeros says what is guarded.)
-  const located = locateZeros(generatorsOf(co, scope, naturals), co.param, scope, co.from, co.to, counter)
+  const located = locateZeros(generatorsOf(co, scope), co.param, scope, co.from, co.to, counter)
   const h0 = tuning.startPx / co.pxPerT
   const sink = new ChainSink(clip)
   // one sink for every piece: the pieces are walked in parameter order, and a band goes on across the
@@ -284,11 +275,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     param: co.param,
     scope,
     differences: new Map(),
-    naturals,
-    natural: new Map(),
-    naturalChecks: 0,
     box: { xLo: 0, xHi: 0, yLo: 0, yHi: 0 },
-    probe: iv(),
   }
   let capped = false
   // whether the core lifted a smooth curve IN VIEW for being too steep for its leaves to resolve (adaptive.ts steepInView)
@@ -379,35 +366,6 @@ function pointAt(w: Walk, zero: Zero): PointFn {
 // Whether some generator that has this zero is one the curve divides by (a zero's reasons are joined with "+").
 const divides = (zero: Zero): boolean => zero.why.split('+').some((why) => why === 'denominator' || why.endsWith(' pole'))
 
-// Whether the zero of a seam is also a zero of a NATURAL spot of the curve (a denominator, a floor's step, a root's
-// edge: Walk.naturals, as the structure walk met them) that the located double is not exactly at: the zero is not an
-// exact double, so the curve's own value there is not what the scalar says (a denominator is 0 there and the curve is
-// undefined; a floor steps), and the comparison's owner would fill an end where the curve is not. {x^2 <= 2: sin(x^2 - 2)/
-// (x^2 - 2), 5} is undefined AT the root of 2, and {x^2 <= 2: floor(x^2), 5} is 2 there, not the 1 its left limit is;
-// both ends are open. A spot whose generator is exactly 0 at the located double is the scalar's to read, and is not
-// asked. Each spot is asked of the twin over a few locator tolerances round the zero, as the locator confirms a zero
-// (locate.ts), and at most CURVE.naturalChecks of them in all, so a curve of hundreds of spots and a seam in each
-// has a bounded cost: past it the owner stands.
-function sharedWithNatural(w: Walk, zero: Zero): boolean {
-  if (zero.origin !== 'seam') return false
-  const d = offsetAt(zero.t)
-  for (const g of w.naturals) {
-    if (w.naturalChecks >= CURVE.naturalChecks) return false
-    w.naturalChecks++
-    let c = w.natural.get(g)
-    if (!c) {
-      c = { scalar: compileScalar(g, [w.param], w.scope), twin: compileInterval(g, [w.param], w.scope) }
-      w.natural.set(g, c)
-    }
-    w.counter.points++
-    if (c.scalar(zero.t) === 0) continue
-    w.counter.intervals++
-    c.twin(w.probe, zero.t - d, zero.t + d)
-    if (!(isEmpty(w.probe) || w.probe.lo > 0 || w.probe.hi < 0)) return true
-  }
-  return false
-}
-
 // The jump breaks the core found, a run of them a floor or less apart made one. The core lifts the curve at every interval it will
 // not connect and records the middle of it, so a stretch it cannot decide, where a cancelling form is noise (the sign of
 // (x - 1)/sqrt(x^2 - 2x + 1), a unit step with rounding about its jump) is a break at every floor interval and then at every
@@ -478,7 +436,7 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
       if (own) {
         // the comparison says which end the curve takes, and the value at the spot is not asked
         w.marks.push({ at: left, role: 'endpoint', fill: own.owner === 'left' ? 'filled' : 'open' }, { at: right, role: 'endpoint', fill: own.owner === 'right' ? 'filled' : 'open' })
-        if (own.owner === null && !own.valueless && c.value !== null) w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
+        if (own.owner === null && c.value !== null) w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
       } else {
         w.marks.push({ at: left, role: 'endpoint', fill: fillOf(w, left, c.value) }, { at: right, role: 'endpoint', fill: fillOf(w, right, c.value) })
         // a value that is neither limit is a point of its own
@@ -505,7 +463,7 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
         const own = ownerAt(w, zero)
         // filled when the defined side owns the edge, if the comparison says; else by the value
         w.marks.push({ at: limit, role: 'endpoint', fill: own ? (own.owner === c.defined ? 'filled' : 'open') : fillOf(w, limit, valueAt(w, tc)) })
-        if (own && own.owner === null && !own.valueless) {
+        if (own && own.owner === null) {
           const value = valueAt(w, tc)
           if (value !== null) w.marks.push({ at: value, role: 'value', fill: 'filled' })
         }
@@ -568,9 +526,6 @@ function settle(w: Walk, limit: Vec2, tc: number, side: -1 | 1): Vec2 {
 function ownerAt(w: Walk, zero: Zero): Ownership | null {
   const { cmps } = zero
   if (!cmps || cmps.length === 0) return null
-  // a natural spot at the same irrational zero: the owner may not be defined (or may step) there, so neither end is
-  // filled, and what the scalar says of the curve at the zero is not a value to mark
-  if (sharedWithNatural(w, zero)) return { owner: null, valueless: true }
   let owner: 'left' | 'right' | 'neither' | null = null
   for (const { cmp, cmpExpr } of cmps) {
     const mine = comparisonOwner(w, cmp, cmpExpr, zero.t)
@@ -578,7 +533,7 @@ function ownerAt(w: Walk, zero: Zero): Ownership | null {
     if (owner !== null && owner !== mine) return null
     owner = mine
   }
-  return { owner: owner === 'neither' ? null : owner, valueless: false }
+  return { owner: owner === 'neither' ? null : owner }
 }
 
 // One comparison's owner of the zero at tc (see ownerAt), or null for no answer.
@@ -735,23 +690,14 @@ function compileCurve(co: Coordinates, scope: MathScope): CurveFns {
 // The generators of every varying expression, one of each: fx and fy often share a
 // denominator, and a repeated generator is only repeated work. Joined as the walk joins them
 // (a seam wins over a natural spot of the same expression; the comparison survives only if
-// both are the one comparison). `naturals` is given the natural spots, each expression once, as the walk met them
-// (the seam that has one's expression has joined it, and no longer says so: sharedWithNatural).
-function generatorsOf(co: Coordinates, scope: MathScope, naturals: Expr[]): Generator[] {
+// both are the one comparison).
+function generatorsOf(co: Coordinates, scope: MathScope): Generator[] {
   const found = new Map<string, Generator>()
-  const seen = new Set<string>()
   for (const e of co.varying) {
-    const mine: Expr[] = []
-    for (const g of troubleGenerators(e, co.param, scope, mine)) {
+    for (const g of troubleGenerators(e, co.param, scope)) {
       const key = JSON.stringify(g.expr)
       const known = found.get(key)
       found.set(key, known ? joinGenerators(known, g) : g)
-    }
-    for (const g of mine) {
-      const key = JSON.stringify(g)
-      if (seen.has(key)) continue
-      seen.add(key)
-      naturals.push(g)
     }
   }
   return [...found.values()]
