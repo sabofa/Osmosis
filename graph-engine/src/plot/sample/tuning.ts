@@ -354,8 +354,10 @@ export const CORE = {
   edgePieces: 60,
   // A piece of that walk the twin refuses is halved and its halves asked, this many times at most (adaptive.ts certifyPiece):
   // the enclosure's looseness depends on the form of the expression, and x^2 - 4x + 3 near 3 is refused for a piece
-  // that halves the distance to the edge at every scale and certified for one whose far end is under 1.5 times its near
-  // end's distance, which a single halving reaches (1.33, then 1.25 of the half).
+  // that halves the distance to the edge at every scale (the far end is twice the near end's distance from it) and is
+  // certified for one whose far end is under 1.5 times it, which a single halving reaches (the two halves are 1.5 and
+  // 1.33). Three halvings, pieces whose far end is 1.125 times the near end's distance, are the margin for a form that
+  // depends on its variable more strongly.
   edgeSplits: 3,
   // The jump test at the floor (adaptive.ts): an interval the twin does not certify, at the width it stops
   // being bisected at, with both ends finite, its enclosure bounded (or the verdict UNKNOWN) and a gap of a
