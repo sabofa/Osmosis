@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { GraphConfig } from './parser/config'
 import { figureMapping, type FigureFrame } from './figure/frame'
-import { highlightOf } from './figure/highlight'
+import {
+  highlightAccent,
+  highlightDefs,
+  highlightFilterRegion,
+  highlightFilterSizes,
+  highlightFilterValue,
+  highlightOf,
+} from './figure/highlight'
 import type { FigureHitItem, FigureTarget } from './figure/hitItems'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
@@ -83,6 +90,44 @@ function compensate(root: SVGSVGElement, zoom: number, previous: Compensation | 
   return { root, entries }
 }
 
+// The hover and selection filters, injected into the live <svg> (see
+// figure/highlight.ts for why they are filters and not CSS shadows). The two
+// lengths and the region are rewritten each frame to stay constant on screen.
+interface Filters {
+  root: SVGSVGElement
+  elements: Element[]
+  hoverRadius: Element | null
+  haloDeviation: Element | null
+}
+
+function injectFilters(root: SVGSVGElement, ids: { hoverId: string; selectId: string }, visible: Rect, pxPerUnit: number): Filters {
+  const accent = highlightAccent(getComputedStyle(root).getPropertyValue('--accent'))
+  root.insertAdjacentHTML(
+    'afterbegin',
+    highlightDefs({ ...ids, accent, region: highlightFilterRegion(visible), sizes: highlightFilterSizes(pxPerUnit) }),
+  )
+  const elements = [ids.hoverId, ids.selectId].map((id) => root.querySelector(`[id="${id}"]`)).filter((e): e is Element => e !== null)
+  return {
+    root,
+    elements,
+    hoverRadius: root.querySelector('[data-size="hover"]'),
+    haloDeviation: root.querySelector('[data-size="halo"]'),
+  }
+}
+
+function resizeFilters(filters: Filters, visible: Rect, pxPerUnit: number): void {
+  const region = highlightFilterRegion(visible)
+  for (const element of filters.elements) {
+    element.setAttribute('x', String(region.x))
+    element.setAttribute('y', String(region.y))
+    element.setAttribute('width', String(region.width))
+    element.setAttribute('height', String(region.height))
+  }
+  const sizes = highlightFilterSizes(pxPerUnit)
+  filters.hoverRadius?.setAttribute('radius', String(sizes.hoverRadius))
+  filters.haloDeviation?.setAttribute('stdDeviation', String(sizes.haloDeviation))
+}
+
 export default function FigureView({ svg, theme, frame, items, startFocus, focus, onSelect }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -114,22 +159,41 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // and dots the size they were drawn at. The last one applied is remembered
   // so that a new <svg> with the same view (a rebuilt spec) can be put back
   // where the reader was.
-  const applied = useRef<{ zoom: number; visible: Rect } | null>(null)
+  const applied = useRef<{ zoom: number; visible: Rect; pxPerUnit: number } | null>(null)
   const compensation = useRef<Compensation | null>(null)
-  const paint = useCallback((visible: Rect, zoom: number) => {
-    const root = containerRef.current?.querySelector('svg')
-    if (!root) return
-    applySvgViewBox(root, visible)
-    compensation.current = compensate(root, zoom, compensation.current)
-  }, [])
+  const filters = useRef<Filters | null>(null)
+  // Ids unique to this figure instance, so two figures on a page never share
+  // (or clobber) each other's filters.
+  const instance = useId().replace(/[^a-zA-Z0-9_-]/g, '')
+  const filterIds = useMemo(() => ({ hoverId: `figure-hover-${instance}`, selectId: `figure-select-${instance}` }), [instance])
+
+  // The filters of the current <svg>, injected the first time it is painted.
+  const ensureFilters = useCallback(
+    (root: SVGSVGElement, visible: Rect, pxPerUnit: number): Filters => {
+      if (!filters.current || filters.current.root !== root) filters.current = injectFilters(root, filterIds, visible, pxPerUnit)
+      return filters.current
+    },
+    [filterIds],
+  )
+
+  const paint = useCallback(
+    (visible: Rect, zoom: number, pxPerUnit: number) => {
+      const root = containerRef.current?.querySelector('svg')
+      if (!root) return
+      applySvgViewBox(root, visible)
+      compensation.current = compensate(root, zoom, compensation.current)
+      resizeFilters(ensureFilters(root, visible, pxPerUnit), visible, pxPerUnit)
+    },
+    [ensureFilters],
+  )
 
   const view = useView2d({
     frame: content,
     start,
     items,
-    onApply: (camera, visible) => {
-      applied.current = { zoom: camera.zoom, visible }
-      paint(visible, camera.zoom)
+    onApply: (camera, visible, pxPerUnit) => {
+      applied.current = { zoom: camera.zoom, visible, pxPerUnit }
+      paint(visible, camera.zoom, pxPerUnit)
     },
     onHover: setHovered,
     onSelect: (id) => {
@@ -141,28 +205,46 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
 
   useLayoutEffect(() => {
     const last = applied.current
-    if (last) paint(last.visible, last.zoom)
+    if (last) paint(last.visible, last.zoom, last.pxPerUnit)
   }, [markup, paint])
 
-  // Hover and selection are classes on the elements that already carry the
-  // identity; the markup itself is never rewritten.
+  // Hover and selection: a class on each element that carries the identity
+  // (the markup itself is never rewritten), and the filter that draws the
+  // look, set inline because its id is this instance's own. The givens panel
+  // has no statement, so it is matched by the item id.
   useLayoutEffect(() => {
     const root = containerRef.current?.querySelector('svg')
     if (!root) return
-    const hot = hovered === null ? [] : (itemsById.get(hovered)?.targets ?? [])
-    const picked = selected === null ? [] : (itemsById.get(selected)?.targets ?? [])
-    if (hot.length === 0 && picked.length === 0) {
+    if (hovered === null && selected === null) {
       root.querySelectorAll('.figure-hovered, .figure-selected').forEach((element) => {
         element.classList.remove('figure-hovered', 'figure-selected')
+        ;(element as SVGElement).style.filter = ''
       })
       return
     }
-    root.querySelectorAll('[data-statement]').forEach((element) => {
-      const lit = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked)
+    const visible = applied.current?.visible ?? content
+    if (!visible) return
+    ensureFilters(root, visible, applied.current?.pxPerUnit ?? 1)
+    const hot = hovered === null ? [] : (itemsById.get(hovered)?.targets ?? [])
+    const picked = selected === null ? [] : (itemsById.get(selected)?.targets ?? [])
+    root.querySelectorAll('[data-statement], [data-object="givens"]').forEach((element) => {
+      const lit = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked, {
+        hovered,
+        selected,
+      })
       element.classList.toggle('figure-hovered', lit.hovered)
       element.classList.toggle('figure-selected', lit.selected)
+      const style = (element as SVGElement).style
+      const value = highlightFilterValue(lit, filterIds)
+      if (value === '') {
+        style.filter = ''
+        return
+      }
+      // An element that already carries its own filter (a texture) keeps it.
+      const own = element.getAttribute('filter')
+      style.filter = own ? `${own} ${value}` : value
     })
-  }, [hovered, selected, itemsById, markup])
+  }, [hovered, selected, itemsById, markup, content, ensureFilters, filterIds])
 
   // The runtime focus: a change of the spec moves the view there, animated.
   // Compared by value, so a parent that rebuilds an identical spec each render

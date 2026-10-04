@@ -86,12 +86,18 @@
 
 /* Hover and selection, as classes on the elements that already carry the
    figure's identity (data-statement, data-object), so they work under every
-   style: a halo behind the ink, never a change to the markup or its colours.
-   Hover is a faint halo; selection is a firmer one. */
-.figure-hovered {
-  filter: drop-shadow(0 0 1.25px var(--accent, #3b6fd8));
+   style. What they look like is drawn by two SVG filters that FigureView
+   injects into the live <svg> (a thin dilation for hover, a soft accent halo
+   for selection), sized in screen pixels at any zoom; the filter itself is set
+   inline, because its id is unique to each figure on the page. A CSS
+   drop-shadow would not do: its lengths are in drawing units and would swell
+   with the zoom. Here, only what a filter cannot do: a hovered or selected
+   label comes to full strength, and a selected one is set a little heavier. */
+text.figure-hovered,
+text.figure-selected {
+  opacity: 1;
 }
 
-.figure-selected {
-  filter: drop-shadow(0 0 2.5px var(--accent, #3b6fd8)) drop-shadow(0 0 1px var(--accent, #3b6fd8));
+text.figure-selected {
+  font-weight: 600;
 }
