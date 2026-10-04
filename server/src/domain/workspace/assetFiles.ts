@@ -8,10 +8,14 @@ import { inSavepoint } from "./savepoint.js";
 // duplicating anything. It starts unplaced; Ben files it where he wants.
 //
 // Deleting the asset sets the wrapper's asset_id to NULL (ON DELETE SET NULL);
-// the next sync trashes it, so it shows up in the trash instead of dangling.
+// the next sync archives it, so it shows up in the archive instead of dangling.
 // A NULL whose asset still exists is not a deletion (see the re-link below).
-// A wrapper that was trashed and then purged is made again on the next sync:
+// A wrapper that was archived and then purged is made again on the next sync:
 // the way to be rid of an upload for good is to delete the asset.
+//
+// A minimal port of the first design's sync onto ws_content (format "upload"),
+// to keep uploads working while the rest of the data layer is reworked; the
+// uploads task replaces this file with uploads.ts.
 
 const NAME_LIMIT = 200;
 
@@ -28,34 +32,37 @@ function wrapperTitle(raw: string | null): string {
 export function syncAssetFiles(db: DatabaseSync): void {
   inSavepoint(db, "ws_sync_asset_files", () => {
     const missing = db
-      .prepare("SELECT a.id AS id, a.title AS title FROM asset a WHERE NOT EXISTS (SELECT 1 FROM ws_node n WHERE n.id = 'asset:' || a.id)")
-      .all() as { id: string; title: string }[];
+      .prepare(
+        "SELECT a.id AS id, a.title AS title, a.extracted_text AS extracted_text FROM asset a WHERE NOT EXISTS (SELECT 1 FROM ws_node n WHERE n.id = 'asset:' || a.id)"
+      )
+      .all() as { id: string; title: string; extracted_text: string | null }[];
     const insertNode = db.prepare("INSERT INTO ws_node (id, kind, title, kind_tag) VALUES (?, 'file', ?, 'source')");
-    const insertFile = db.prepare("INSERT INTO ws_file (node_id, type, body, asset_id, revision, saved_by) VALUES (?, 'asset', NULL, ?, 1, 'ben')");
-    const insertRevision = db.prepare(
-      `INSERT INTO ws_file_revision (node_id, revision, type, body, asset_id, saved_at, saved_by)
-       SELECT node_id, revision, type, body, asset_id, saved_at, saved_by FROM ws_file WHERE node_id = ?`
+    const insertContent = db.prepare(
+      "INSERT INTO ws_content (node_id, version, format, body, asset_id, search_text, author) VALUES (?, 1, 'upload', NULL, ?, ?, 'ben')"
     );
     for (const asset of missing) {
       const nodeId = `asset:${asset.id}`;
       insertNode.run(nodeId, wrapperTitle(asset.title));
-      insertFile.run(nodeId, asset.id);
-      insertRevision.run(nodeId);
+      insertContent.run(nodeId, asset.id, asset.extracted_text ?? "");
     }
     // A wrapper's asset_id is NULL only because ON DELETE SET NULL fired, and
     // that fires for any DELETE on the asset row, including a migration that
     // rebuilds the asset table (DROP TABLE) with every upload still in it.
-    // Re-link a canonical wrapper whose upload exists before the trashing below
+    // Re-link a canonical wrapper whose upload exists before the archiving below
     // reads a NULL as "the upload was deleted". Only `asset:<id>` is the
     // canonical wrapper; a file that merely points at an asset is not relinked.
     db.prepare(
-      `UPDATE ws_file SET asset_id = substr(node_id, 7)
-        WHERE type = 'asset' AND asset_id IS NULL AND substr(node_id, 1, 6) = 'asset:'
-          AND EXISTS (SELECT 1 FROM asset a WHERE a.id = substr(ws_file.node_id, 7))`
+      `UPDATE ws_content SET asset_id = substr(node_id, 7)
+        WHERE format = 'upload' AND asset_id IS NULL AND substr(node_id, 1, 6) = 'asset:'
+          AND EXISTS (SELECT 1 FROM asset a WHERE a.id = substr(ws_content.node_id, 7))`
     ).run();
+    // Archiving marks every placement of the wrapper too (spec §5.3), so a later
+    // restore can offer them back.
+    const dangling = `SELECT node_id FROM ws_content WHERE format = 'upload' AND asset_id IS NULL`;
     db.prepare(
-      `UPDATE ws_node SET trashed_at = datetime('now'), updated_at = datetime('now')
-        WHERE trashed_at IS NULL AND id IN (SELECT node_id FROM ws_file WHERE type = 'asset' AND asset_id IS NULL)`
+      `UPDATE ws_placement SET archived_at = datetime('now')
+        WHERE archived_at IS NULL AND child_id IN (SELECT id FROM ws_node WHERE archived_at IS NULL AND id IN (${dangling}))`
     ).run();
+    db.prepare(`UPDATE ws_node SET archived_at = datetime('now'), updated_at = datetime('now') WHERE archived_at IS NULL AND id IN (${dangling})`).run();
   });
 }

@@ -18,3 +18,20 @@ export function normalizeName(raw: string): string {
 export function sameName(a: string, b: string): boolean {
   return a.normalize("NFC").trim().toLocaleLowerCase("en") === b.normalize("NFC").trim().toLocaleLowerCase("en");
 }
+
+// The kind tag says what a file is for. The vocabulary is open, so a new tag
+// needs no migration, but it has a grammar: lowercase, starting with a letter,
+// at most 32 characters (spec §4.3). It is checked as given, with no trimming
+// or case-folding on the way in, so what a caller sends is what is stored and
+// a typo is refused rather than quietly turned into a different tag. Null
+// clears a tag. Whether a node may carry one at all (files only) is the
+// graph's rule, because it depends on the node.
+const KIND_TAG = /^[a-z][a-z0-9_-]{0,31}$/;
+
+export function normalizeKindTag(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "string" || !KIND_TAG.test(raw)) {
+    throw new DomainError("invalid_input", "A kind tag is lowercase letters, digits, \"_\" and \"-\", starting with a letter, at most 32 characters.");
+  }
+  return raw;
+}

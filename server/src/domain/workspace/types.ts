@@ -1,38 +1,44 @@
 // The workspace graph's row shapes and its containment matrix (Learn spec/
-// osmosis/workspace/01-shell.md §2 and §4). The matrix lives here, in code,
-// because "may a course hold a track" is a rule about kinds, not a database
-// constraint; domain/workspace/graph.ts enforces it on every placement.
+// osmosis/workspace/02-data-layer.md §2 and §3). The matrix lives here, in
+// code, because "may a course hold a track" is a rule about kinds, not a
+// database constraint; domain/workspace/graph.ts enforces it on every
+// placement.
 
-export type NodeKind = "track" | "course" | "folder" | "file";
-export type KindTag = "source" | "resource" | "homework" | "test" | "flowchart";
-// Who wrote a revision: Ben, the tutor, or the planner.
+export type NodeKind = "trajectory" | "track" | "course" | "folder" | "file";
+// Who wrote a version: Ben, the tutor, or the planner.
 export type Author = "ben" | "tutor" | "planner";
 
-export const NODE_KINDS: readonly NodeKind[] = ["track", "course", "folder", "file"];
-export const KIND_TAGS: readonly KindTag[] = ["source", "resource", "homework", "test", "flowchart"];
+export const NODE_KINDS: readonly NodeKind[] = ["trajectory", "track", "course", "folder", "file"];
 export const AUTHORS: readonly Author[] = ["ben", "tutor", "planner"];
 
 // The kinds that can hold children. A file never does.
-export const CONTAINER_KINDS: readonly NodeKind[] = ["track", "course", "folder"];
+export const CONTAINER_KINDS: readonly NodeKind[] = ["trajectory", "track", "course", "folder"];
 
-// What each kind may hold directly. A course holds no course or track (it is
-// a leaf of the curriculum tree); a folder may hold a course so a track can
-// group courses under a folder.
+// What each kind may hold directly. The kinds run in one direction, so tracks
+// don't nest (that is the trajectory's job) and a folder holds no course. A
+// folder has no built-in meaning: it can be a unit, research, attachments,
+// whatever Ben makes it, and nothing in the layer treats it as anything else.
 export const MAY_HOLD: Record<NodeKind, readonly NodeKind[]> = {
-  track: ["track", "course", "folder", "file"],
+  trajectory: ["track", "course", "folder", "file"],
+  track: ["course", "folder", "file"],
   course: ["folder", "file"],
-  folder: ["course", "folder", "file"],
+  folder: ["folder", "file"],
   file: [],
 };
+
+// The kind tag is an open vocabulary (names.ts, normalizeKindTag); these are
+// only what the UI suggests.
+export const SUGGESTED_KIND_TAGS = ["source", "resource", "homework", "test", "flowchart"] as const;
 
 export interface NodeRow {
   id: string;
   kind: NodeKind;
   title: string;
-  kind_tag: KindTag | null;
+  kind_tag: string | null;
   created_at: string;
   updated_at: string;
-  trashed_at: string | null;
+  archived_at: string | null;
+  archive_batch: string | null;
 }
 
 export interface PlacementRow {
@@ -41,14 +47,16 @@ export interface PlacementRow {
   child_id: string;
   name: string;
   created_at: string;
+  archived_at: string | null;
 }
 
-export interface FileRow {
+export interface ContentRow {
   node_id: string;
-  type: string;
+  version: number;
+  format: string;
   body: string | null;
   asset_id: string | null;
-  revision: number;
+  search_text: string | null;
+  author: Author;
   saved_at: string;
-  saved_by: Author;
 }
