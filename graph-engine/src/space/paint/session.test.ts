@@ -6,9 +6,19 @@ import { buildParticles, paintFrame } from './model/index'
 import { lchToLab } from './model/colour'
 import { arrowMark, flatColours, graphMesh, lineMark, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from './model/testing'
 import { DEFAULT_PAINT_PARAMS, setParam, type PaintParams } from './params'
+import { bakePainting } from './bake/index'
+import type { AuthoredFraming, BakedPainting } from './bake/types'
+import { worldLight } from './model/valueFinalFixture'
 import {
+  bakePercent,
+  bakeTransferList,
   coloursFromData,
   colourDataOf,
+  recolourTransferList,
+  type BakeAnswer,
+  type BakeRequest,
+  type RecolourRequest,
+  withColours,
   type FrameResponse,
   paperKey,
   PaintSession,
@@ -316,5 +326,203 @@ describe('the paint session', () => {
     const s2 = new PaintSession()
     s2.setScene(5, plainScene(marks), colourDataOf(marks, SPHERE))
     expect(ok(s2.frame(request({ sceneId: 5, gbuffer: gbuffer() }))).stats.byRole.line).toBeGreaterThan(1)
+  })
+})
+
+// ---- the baked painting ----
+
+describe('the baked painting in the session', () => {
+  // a small sphere alone: a bake is heavy and the machine shared
+  const bakeScene = sceneOf([sphereMesh({ radius: 1, nu: 20, nv: 14 })])
+  const SP = { ...P, particles: { ...P.particles, maxPerUnit2: 250 } }
+  const LIGHT = worldLight(-35, 39)
+  const AUTHORED: AuthoredFraming = { eye: [6, -2, 3], viewDir: [-0.9, 0.3, -0.45], ortho: false, worldPerPx: 1 / 150 }
+  const bakeReq = (over: Partial<BakeRequest> = {}): BakeRequest => ({ id: ++ids, sceneId: 1, params: SP, lightDir: LIGHT, authored: AUTHORED, ...over })
+  const recolourReq = (key: string, params: PaintParams, over: Partial<RecolourRequest> = {}): RecolourRequest => ({ id: ++ids, sceneId: 1, key, params, ...over })
+  const made = (a: BakeAnswer): BakedPainting => {
+    if (!a.ok) throw new Error(JSON.stringify(a))
+    return a.baked
+  }
+  // The bake a session makes, made directly (no session, the colours as the session gets them: through the colour tables).
+  const direct = (params: PaintParams): BakedPainting => {
+    const hit = DIRECT.get(params)
+    if (hit) return hit
+    const colours = coloursFromData(colourDataOf(bakeScene, SPHERE))
+    const baked = bakePainting(bakeScene, buildParticles(bakeScene, colours, params), colours, LIGHT, params, AUTHORED)
+    DIRECT.set(params, baked)
+    return baked
+  }
+  const DIRECT = new Map<PaintParams, BakedPainting>()
+  const bytesEqual = (a: ArrayBufferView, b: ArrayBufferView): boolean => Buffer.compare(Buffer.from(a.buffer, a.byteOffset, a.byteLength), Buffer.from(b.buffer, b.byteOffset, b.byteLength)) === 0
+  const arraysOf = (b: BakedPainting): Map<string, ArrayBufferView> => {
+    const out = new Map<string, ArrayBufferView>()
+    for (const [k, v] of Object.entries(b)) if (ArrayBuffer.isView(v)) out.set(k, v)
+    b.surfaces.forEach((s, m) => {
+      if (s) for (const [k, v] of Object.entries(s)) if (ArrayBuffer.isView(v)) out.set(`surfaces[${m}].${k}`, v)
+    })
+    return out
+  }
+  const session = (): PaintSession => {
+    const s = new PaintSession()
+    s.setScene(1, plainScene(bakeScene), colourDataOf(bakeScene, SPHERE))
+    return s
+  }
+  const COLOUR_CHANGE = setParam(SP, 'curve.warmHue', 20)
+
+  it('makes the painting the bake makes (bit for bit, key included), and reports its progress as whole percents, each once, from 0 to 100', () => {
+    const s = session()
+    const percents: number[] = []
+    const a = s.bake(bakeReq(), (p) => percents.push(p))
+    const baked = made(a)
+    expect(a.ok && a.bakeMs).toBeGreaterThan(0)
+    expect(a.ok && a.particlesMs).toBeGreaterThan(0)
+    expect(baked.count).toBeGreaterThan(100)
+    const want = direct(SP)
+    expect(baked.key).toBe(want.key)
+    const got = arraysOf(baked)
+    for (const [k, v] of arraysOf(want)) expect(bytesEqual(got.get(k)!, v), k).toBe(true)
+    expect(percents[0]).toBe(0)
+    expect(percents[percents.length - 1]).toBe(100)
+    for (let i = 1; i < percents.length; i++) expect(percents[i]).toBeGreaterThan(percents[i - 1])
+    expect(percents.every((p) => Number.isInteger(p))).toBe(true)
+    // the particles it built are held: the next bake of the scene builds none
+    const b = s.bake(bakeReq({ params: setParam(SP, 'light.intensity', 0.8) }))
+    expect(b.ok && b.particlesMs).toBe(0)
+  })
+
+  it('maps the phases to a percent that only grows (a phase’s end is its successor’s start)', () => {
+    const phases = ['plan', 'planes', 'edges', 'strokes', 'underpaint', 'pack'] as const
+    let last = -1
+    for (const phase of phases) {
+      for (const done of [0, 0.25, 0.5, 1]) {
+        const p = bakePercent({ phase, done })
+        expect(p).toBeGreaterThanOrEqual(last)
+        last = p
+      }
+    }
+    expect(bakePercent({ phase: 'plan', done: 0 })).toBe(0)
+    expect(bakePercent({ phase: 'pack', done: 1 })).toBe(100)
+    expect(bakePercent({ phase: 'plan', done: 1 })).toBe(bakePercent({ phase: 'planes', done: 0 }))
+    expect(bakePercent({ phase: 'strokes', done: -1 })).toBe(bakePercent({ phase: 'strokes', done: 0 }))
+  })
+
+  it('recolours the bake it holds under colour-only params: only the colour arrays, equal to a fresh bake’s, bit for bit', () => {
+    const s = session()
+    const baked = made(s.bake(bakeReq()))
+    const r = s.recolour(recolourReq(baked.key, COLOUR_CHANGE))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const fresh = direct(COLOUR_CHANGE)
+    expect(bytesEqual(r.colours.colour, fresh.colour)).toBe(true)
+    expect(bytesEqual(r.colours.dataColour, fresh.dataColour)).toBe(true)
+    r.colours.surfaces.forEach((u, m) => {
+      const f = fresh.surfaces[m]
+      if (!f) return expect(u).toBeNull()
+      expect(bytesEqual(u!.underFront, f.underFront)).toBe(true)
+      expect(f.underBack === null ? u!.underBack === null : bytesEqual(u!.underBack!, f.underBack)).toBe(true)
+    })
+    // and it really changed the colours
+    expect(bytesEqual(r.colours.colour, baked.colour)).toBe(false)
+    // the page's copy with the colours swapped in is the fresh bake in every array
+    const page = withColours(structuredClone(baked), r.colours)
+    const want = arraysOf(fresh)
+    for (const [k, v] of arraysOf(page)) expect(bytesEqual(v, want.get(k)!), k).toBe(true)
+    // a recolour of the recolour, back to the first colours, is the first bake's colours
+    const back = s.recolour(recolourReq(baked.key, SP))
+    expect(back.ok && bytesEqual(back.colours.colour, direct(SP).colour)).toBe(true)
+  })
+
+  it('shares by identity every array of the page’s bake that is not a colour (withColours), so what is keyed to them stays', () => {
+    const s = session()
+    const baked = made(s.bake(bakeReq()))
+    const r = s.recolour(recolourReq(baked.key, COLOUR_CHANGE))
+    if (!r.ok) throw new Error('no recolour')
+    const next = withColours(baked, r.colours)
+    expect(next).not.toBe(baked)
+    expect(next.worldPath).toBe(baked.worldPath)
+    expect(next.areaPerParticle).toBe(baked.areaPerParticle)
+    expect(next.key).toBe(baked.key)
+    expect(next.colour).toBe(r.colours.colour)
+    baked.surfaces.forEach((surface, m) => {
+      if (!surface) return
+      const n = next.surfaces[m]!
+      expect(n.positions).toBe(surface.positions)
+      expect(n.alphaFront).toBe(surface.alphaFront)
+      expect(n.underFront).toBe(r.colours.surfaces[m]!.underFront)
+    })
+  })
+
+  it('answers needBake for a bake it does not hold: none yet, another key, another scene, params that are more than colour, a scene or colours set again', () => {
+    const s = session()
+    expect(s.recolour(recolourReq('nothing', COLOUR_CHANGE))).toMatchObject({ ok: false, needBake: true })
+    const baked = made(s.bake(bakeReq()))
+    expect(s.recolour(recolourReq('another key', COLOUR_CHANGE))).toMatchObject({ ok: false, needBake: true })
+    expect(s.recolour(recolourReq(baked.key, COLOUR_CHANGE, { sceneId: 2 }))).toMatchObject({ ok: false, needBake: true })
+    // the light's intensity is something the bake reads
+    expect(s.recolour(recolourReq(baked.key, setParam(SP, 'light.intensity', 0.7)))).toMatchObject({ ok: false, needBake: true })
+    // (a change a frame reads is not more than colour)
+    expect(s.recolour(recolourReq(baked.key, setParam(SP, 'particles.dragDensity', 0.5))).ok).toBe(true)
+    // a colour change of the scene: the bake is of the colours it was given
+    s.setColours(1, colourDataOf(bakeScene, flatColours({ 0: lchToLab(0.5, 0.1, 100), 1: lchToLab(0.9, 0.01, 85) })))
+    expect(s.recolour(recolourReq(baked.key, COLOUR_CHANGE))).toMatchObject({ ok: false, needBake: true })
+    const again = made(s.bake(bakeReq()))
+    s.setScene(1, plainScene(bakeScene), colourDataOf(bakeScene, SPHERE))
+    expect(s.recolour(recolourReq(again.key, COLOUR_CHANGE))).toMatchObject({ ok: false, needBake: true })
+    made(s.bake(bakeReq()))
+    s.forget(1)
+    expect(s.recolour(recolourReq(baked.key, COLOUR_CHANGE))).toMatchObject({ ok: false, needBake: true })
+  })
+
+  it('holds one bake: a bake of another scene replaces it', () => {
+    const s = session()
+    s.setScene(2, plainScene(bakeScene), colourDataOf(bakeScene, SPHERE))
+    const first = made(s.bake(bakeReq()))
+    made(s.bake(bakeReq({ sceneId: 2 })))
+    expect(s.recolour(recolourReq(first.key, COLOUR_CHANGE))).toMatchObject({ ok: false, needBake: true })
+  })
+
+  it('reports an unset scene as an error, never throws', () => {
+    const s = session()
+    expect(s.bake(bakeReq({ sceneId: 9 }))).toMatchObject({ ok: false, error: expect.stringContaining('scene 9') })
+    expect(s.recolour(recolourReq('x', SP, { sceneId: 9 }))).toMatchObject({ ok: false, needBake: true })
+  })
+
+  it('still recolours after the bake has been handed over to the page (the transferred arrays are gone from the session; the ones its recipes read are copied)', () => {
+    const s = session()
+    const answer = s.bake(bakeReq())
+    if (!answer.ok) throw new Error('no bake')
+    const list = bakeTransferList(answer.baked)
+    expect(new Set(list).size).toBe(list.length)
+    // the arrays the session's recipes read are not handed over
+    for (const surface of answer.baked.surfaces) {
+      if (!surface) continue
+      for (const key of ['positions', 'local', 'uFront', 'alphaFront', 'famFront'] as const) expect(list, key).not.toContain(surface[key].buffer)
+    }
+    expect(list).toContain(answer.baked.worldPath.buffer)
+    expect(list).toContain(answer.baked.colour.buffer)
+    // the page's side of the post: transferred buffers move, the rest are copied
+    const page = structuredClone(answer, { transfer: list })
+    if (!page.ok) throw new Error('no clone')
+    expect(answer.baked.worldPath.byteLength).toBe(0) // gone from the session's own painting
+    const fresh = direct(SP)
+    const got = arraysOf(page.baked)
+    for (const [k, v] of arraysOf(fresh)) expect(bytesEqual(got.get(k)!, v), k).toBe(true)
+    // and the session recolours its (now partly empty) painting as if nothing had happened
+    const r = s.recolour(recolourReq(answer.baked.key, COLOUR_CHANGE))
+    if (!r.ok) throw new Error('no recolour')
+    const want = direct(COLOUR_CHANGE)
+    expect(bytesEqual(r.colours.colour, want.colour)).toBe(true)
+    r.colours.surfaces.forEach((u, m) => u && expect(bytesEqual(u.underFront, want.surfaces[m]!.underFront)).toBe(true))
+    // the colour arrays go back handed over too, and a second recolour after that works as well
+    const list2 = recolourTransferList(r.colours)
+    expect(list2).toContain(r.colours.colour.buffer)
+    expect(new Set(list2).size).toBe(list2.length)
+    const sent = structuredClone(r, { transfer: list2 })
+    expect(r.colours.colour.byteLength).toBe(0)
+    const swapped = withColours(page.baked, sent.colours)
+    expect(bytesEqual(swapped.colour, want.colour)).toBe(true)
+    expect(bytesEqual(swapped.surfaces[0]!.underFront, want.surfaces[0]!.underFront)).toBe(true)
+    const r2 = s.recolour(recolourReq(answer.baked.key, setParam(SP, 'curve.warmHue', 35)))
+    expect(r2.ok && bytesEqual(r2.colours.colour, direct(setParam(SP, 'curve.warmHue', 35)).colour)).toBe(true)
   })
 })

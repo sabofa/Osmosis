@@ -19,6 +19,13 @@
 //   paper   only the paper, for a frame the caller paints again itself (a change of
 //           the relief or the canvas's texture or weave moves no stroke).
 //
+// With the key light fixed in the world the session also makes the BAKED painting (bake/index.ts), once for a scene and its params, and keeps
+// it (with the recipes it was made from, which stay here: the page gets the arrays and never the recipes):
+//   bake      the particles (built when needed), then bakePaintingWithProgress, with its progress reported as a percentage;
+//   recolour  the bake's colours again under colour-only params (recolourBake): only the colour arrays go back, the page swaps them in.
+// It holds ONE bake (the newest, whichever scene), and a request for a bake it does not hold (another key, another scene, or params that
+// are more than colour) is answered `needBake`.
+//
 // Scenes are handed over as plain data (`plainScene`: the pick and drag closures
 // of a scene cannot cross to a worker and the painter never uses them), and the
 // scene's colours as the table of every mark's colour plus a 256-entry table for
@@ -27,6 +34,8 @@
 import { normalise, TABLE_SIZE } from '../colormaps'
 import type { Mark, Range, SpaceScene } from '../scene/types'
 import { colourisePaper, generatePaper } from '../../style/papers/generate/index'
+import { bakePaintingWithProgress, classifyBakeChange, recolourBake, type BakeProgress } from './bake/index'
+import type { AuthoredFraming, BakedPainting, BakedSurface } from './bake/types'
 import { buildParticles, classifyChange, paintFrame, recolourFrame } from './model/index'
 import { paperTileSize, resampleTile } from './paperScale'
 import type { PaintParams } from './params'
@@ -187,6 +196,134 @@ export type SessionResponse =
   | { id: number; ok: false; needFull: true }
   | { id: number; ok: false; error: string }
 
+// ---- the baked painting ----
+
+export interface BakeRequest {
+  id: number
+  sceneId: number
+  params: PaintParams
+  // The key light's direction in the world (a light fixed in the world: view.lightDir), and the framing the picture is composed for.
+  lightDir: [number, number, number]
+  authored: AuthoredFraming
+}
+
+// The bake, as it crosses to the page. `bakeMs` is the bake alone, `particlesMs` the particles it had to build first (0 when the session
+// held them).
+export interface BakeResponse {
+  id: number
+  ok: true
+  kind: 'bake'
+  baked: BakedPainting
+  bakeMs: number
+  particlesMs: number
+}
+
+export interface RecolourRequest {
+  id: number
+  sceneId: number
+  // The key of the bake the page holds (BakedPainting.key): the colours are made again only of that one.
+  key: string
+  params: PaintParams
+}
+
+// What a recolour changes of a baked painting: its stroke colours at every brush-load level, the colour of each data mark's strokes, and
+// each surface's underpainting (both sides). Every other array of the painting is the one the page holds already (recolourBake shares
+// them by identity), and so are the alphas (they are not colours).
+export interface BakedColours {
+  colour: Float32Array
+  dataColour: Float32Array
+  surfaces: ({ underFront: Float32Array; underBack: Float32Array | null } | null)[]
+}
+
+export interface RecolourResponse {
+  id: number
+  ok: true
+  kind: 'recolour'
+  colours: BakedColours
+  ms: number
+}
+
+export type BakeAnswer = BakeResponse | { id: number; ok: false; needBake: true } | { id: number; ok: false; error: string }
+export type RecolourAnswer = RecolourResponse | { id: number; ok: false; needBake: true } | { id: number; ok: false; error: string }
+
+// The share of a bake's time each phase takes (measured on the lab's figures, task-3b-report.md: the plan 37%, the planes 10%, the edges 8%, the
+// strokes 32%, the underpainting 6%, the packing and colours 6% to 7%), for the percentage of its progress.
+const PHASE_SHARE: Record<BakeProgress['phase'], [from: number, share: number]> = {
+  plan: [0, 0.38],
+  planes: [0.38, 0.1],
+  edges: [0.48, 0.08],
+  strokes: [0.56, 0.32],
+  underpaint: [0.88, 0.06],
+  pack: [0.94, 0.06],
+}
+
+// A bake's progress as a whole percent, 0 to 100.
+export const bakePercent = (p: BakeProgress): number => {
+  const [from, share] = PHASE_SHARE[p.phase]
+  return Math.max(0, Math.min(100, Math.floor(100 * (from + share * Math.max(0, Math.min(1, p.done))))))
+}
+
+// The arrays of a surface that the session keeps using after the bake went (they are the recipes' own: bake/underpaint.ts SurfaceUnder shares
+// them with the baked surface): cloned when a bake is handed over, not transferred.
+const KEPT_BY_SESSION: ReadonlySet<string> = new Set(['positions', 'local', 'uFront', 'uBack', 'famFront', 'famBack', 'alphaFront', 'alphaBack'])
+
+// The ArrayBuffers of a bake that may be handed over rather than copied: every typed array of the painting and of its surfaces but the ones the
+// session's recipes share with it (the session recolours the bake later, and a transferred array is gone from this side).
+export function bakeTransferList(baked: BakedPainting): ArrayBuffer[] {
+  const out: ArrayBuffer[] = []
+  const seen = new Set<ArrayBuffer>()
+  const add = (v: unknown): void => {
+    if (ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer && !seen.has(v.buffer)) {
+      seen.add(v.buffer)
+      out.push(v.buffer)
+    }
+  }
+  const kept = new Set<ArrayBuffer>()
+  for (const s of baked.surfaces) {
+    if (!s) continue
+    for (const [k, v] of Object.entries(s)) if (KEPT_BY_SESSION.has(k) && ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer) kept.add(v.buffer)
+  }
+  for (const v of Object.values(baked)) add(v)
+  for (const s of baked.surfaces) {
+    if (!s) continue
+    for (const [k, v] of Object.entries(s)) if (!KEPT_BY_SESSION.has(k)) add(v)
+  }
+  return out.filter((b) => !kept.has(b))
+}
+
+export function recolourTransferList(c: BakedColours): ArrayBuffer[] {
+  const out: ArrayBuffer[] = []
+  const add = (a: ArrayBufferView | null) => {
+    if (a && a.buffer instanceof ArrayBuffer && !out.includes(a.buffer)) out.push(a.buffer)
+  }
+  add(c.colour)
+  add(c.dataColour)
+  for (const s of c.surfaces) {
+    if (!s) continue
+    add(s.underFront)
+    add(s.underBack)
+  }
+  return out
+}
+
+// The colour arrays of a recoloured painting, to send back.
+export function coloursOfBake(b: BakedPainting): BakedColours {
+  return {
+    colour: b.colour,
+    dataColour: b.dataColour,
+    surfaces: b.surfaces.map((s) => (s ? { underFront: s.underFront, underBack: s.underBack } : null)),
+  }
+}
+
+// The painting the page holds with new colours swapped in (a new object; every other array is the one it had, so everything keyed to them stays).
+export function withColours(baked: BakedPainting, c: BakedColours): BakedPainting {
+  const surfaces = baked.surfaces.map((s, m): BakedSurface | null => {
+    const u = c.surfaces[m]
+    return s && u ? { ...s, underFront: u.underFront, underBack: u.underBack } : s
+  })
+  return { ...baked, colour: c.colour, dataColour: c.dataColour, surfaces }
+}
+
 // The ArrayBuffers of a response that may be handed over rather than copied. (The
 // paper's height is the generator's cached tile: it is copied.)
 export function transferList(res: SessionResponse): ArrayBuffer[] {
@@ -227,11 +364,14 @@ export class PaintSession {
   private readonly scenes = new Map<number, SceneEntry>()
   // The last full frame: what a colour request recolours.
   private analysis: { sceneId: number; params: PaintParams; frame: PaintFrame; debug: PaintDebugMode } | null = null
+  // The newest baked painting (one: it is tens of MB with its recipes), and the params its colours were last made for.
+  private baked: { sceneId: number; baked: BakedPainting; params: PaintParams } | null = null
   // A scene (plain, see plainScene) and its colours. The same id again replaces both.
   setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData): void {
     const have = this.scenes.get(sceneId)
     this.scenes.set(sceneId, { scene, colours: coloursFromData(colours), colourVersion: (have?.colourVersion ?? 0) + 1, particles: null })
     if (this.analysis?.sceneId === sceneId) this.analysis = null
+    if (this.baked?.sceneId === sceneId) this.baked = null
   }
 
   // New colours for a scene it holds (a theme, a local colour): the particles are built again, the scene is not sent again.
@@ -241,11 +381,14 @@ export class PaintSession {
     entry.colours = coloursFromData(colours)
     entry.colourVersion++
     if (this.analysis?.sceneId === sceneId) this.analysis = null
+    // (a bake is made of the colours it was given: another set is another bake)
+    if (this.baked?.sceneId === sceneId) this.baked = null
   }
 
   forget(sceneId: number): void {
     this.scenes.delete(sceneId)
     if (this.analysis?.sceneId === sceneId) this.analysis = null
+    if (this.baked?.sceneId === sceneId) this.baked = null
   }
 
   hasScene(sceneId: number): boolean {
@@ -286,20 +429,64 @@ export class PaintSession {
       }
 
       if (!req.gbuffer) return { id: req.id, ok: false, error: 'paint session: a full frame needs the G-buffer' }
-      let particlesMs = 0
-      const key = particleKey(req.params)
-      let held = entry.particles
-      if (!held || held.key !== key || held.colourVersion !== entry.colourVersion) {
-        const t0 = performance.now()
-        held = { set: buildParticles(entry.scene, entry.colours, req.params), key, colourVersion: entry.colourVersion }
-        entry.particles = held
-        particlesMs = performance.now() - t0
-      }
+      const { set, ms: particlesMs } = this.particlesFor(entry, req.params)
       const t1 = performance.now()
-      const frame = paintFrame(entry.scene, held.set, req.view, req.gbuffer, req.params)
+      const frame = paintFrame(entry.scene, set, req.view, req.gbuffer, req.params)
       const modelMs = performance.now() - t1
       this.analysis = { sceneId: req.sceneId, params: req.params, frame, debug: req.debug }
       return { id: req.id, ok: true, kind: 'full', strokes: frame.strokes, underpaint: frame.underpaint, debug: wireDebug(frame, req.debug), stats: frame.stats, paper, timing: { modelMs, particlesMs, paperMs } }
+    } catch (error) {
+      return { id: req.id, ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  // The particles of a scene for these params, built when it has none or they are not these params' (the seed, the packing, the load cell) or
+  // the colours changed; `ms` is what building them took (0 when held).
+  private particlesFor(entry: SceneEntry, params: PaintParams): { set: ParticleSet; ms: number } {
+    const key = particleKey(params)
+    const held = entry.particles
+    if (held && held.key === key && held.colourVersion === entry.colourVersion) return { set: held.set, ms: 0 }
+    const t0 = performance.now()
+    const made = { set: buildParticles(entry.scene, entry.colours, params), key, colourVersion: entry.colourVersion }
+    entry.particles = made
+    return { set: made.set, ms: performance.now() - t0 }
+  }
+
+  // The baked painting for a scene, the light fixed in the world, and the params (bake/index.ts). `progress` is told the whole percent as it
+  // grows (0 to 100, each value once). Never throws: a failure is answered as an error. The painting is kept here, with its recipes, for `recolour`.
+  bake(req: BakeRequest, progress?: (percent: number) => void): BakeAnswer {
+    try {
+      const entry = this.scenes.get(req.sceneId)
+      if (!entry) return { id: req.id, ok: false, error: `paint session: scene ${req.sceneId} was never set` }
+      const { set, ms: particlesMs } = this.particlesFor(entry, req.params)
+      let told = -1
+      const report = (p: BakeProgress): void => {
+        const percent = bakePercent(p)
+        if (percent !== told) progress?.((told = percent))
+      }
+      // (a bake the session holds is let go first: two are tens of MB twice)
+      this.baked = null
+      const t0 = performance.now()
+      const baked = bakePaintingWithProgress(entry.scene, set, entry.colours, req.lightDir, req.params, req.authored, report)
+      const bakeMs = performance.now() - t0
+      this.baked = { sceneId: req.sceneId, baked, params: req.params }
+      return { id: req.id, ok: true, kind: 'bake', baked, bakeMs, particlesMs }
+    } catch (error) {
+      return { id: req.id, ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  // The colours of the bake the session holds, made again under colour-only params. `needBake` when it holds another bake (another key or scene)
+  // or the params moved more than colour.
+  recolour(req: RecolourRequest): RecolourAnswer {
+    try {
+      const held = this.baked
+      if (!held || held.sceneId !== req.sceneId || held.baked.key !== req.key || classifyBakeChange(held.params, req.params) === 'bake') return { id: req.id, ok: false, needBake: true }
+      const t0 = performance.now()
+      const next = recolourBake(held.baked, req.params)
+      if (!next) return { id: req.id, ok: false, needBake: true }
+      this.baked = { sceneId: req.sceneId, baked: next, params: req.params }
+      return { id: req.id, ok: true, kind: 'recolour', colours: coloursOfBake(next), ms: performance.now() - t0 }
     } catch (error) {
       return { id: req.id, ok: false, error: error instanceof Error ? error.message : String(error) }
     }
