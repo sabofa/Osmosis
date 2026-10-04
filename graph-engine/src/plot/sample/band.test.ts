@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { compileInterval, iv } from '../../math/interval'
+import { compileInterval, CONTINUOUS, iv, PARTIAL } from '../../math/interval'
 import { chainPoints } from '../../scene/chains'
 import type { Bounds, Chain, SceneObject } from '../../scene/types'
 import { sampleRange } from './adaptive'
-import { BandSink, oscillates } from './band'
+import { BandSink, largestStep, oscillates } from './band'
 import { sampleCurve, type CurveSpec } from './curve'
 import { ChainSink } from './sink'
 import { expr, fnsOf, scopeOf, trueY, view as wideScreen } from './testkit'
-import { COARSE, FULL, type Tuning } from './tuning'
+import { BAND, COARSE, FULL, type Tuning } from './tuning'
 import type { EvalCounter } from './types'
 
 type BandObject = Extract<SceneObject, { kind: 'band' }>
@@ -111,6 +111,26 @@ describe('oscillates, the largest step read as a stall', () => {
   it('skips values that are not finite when it looks for the step, and a flat run has no step to skip', () => {
     expect(o([0, Number.NaN, 5, 0, 5, 0, 5])).toBe(true)
     expect(o([2, 2, 2, 2])).toBe(false)
+  })
+})
+
+describe('largestStep', () => {
+  const at = (values: number[], count = values.length) => largestStep(Float64Array.from(values), count)
+  it('is the index of the value the biggest step between neighbours ends at', () => {
+    expect(at([0, 1, 2, -5, -4])).toBe(3)
+    expect(at([0, 1, 9, 0], 3)).toBe(2)
+  })
+  it('is the first of two as big', () => {
+    expect(at([0, 1, 0])).toBe(1)
+  })
+  it('steps over values that are not finite, from the last that was to the next', () => {
+    expect(at([0, Number.NaN, 5, 5.5])).toBe(2)
+  })
+  it('is -1 where there is no step', () => {
+    expect(at([3, 3, 3])).toBe(-1)
+    expect(at([1])).toBe(-1)
+    expect(at([])).toBe(-1)
+    expect(at([Number.NaN, 2, Number.NaN])).toBe(-1)
   })
 })
 
@@ -330,22 +350,65 @@ describe('bands from sampleCurve', () => {
     }
   })
 
-  it('samples that alias an oscillation are not drawn as a curve: an alias is capped, never a line', () => {
-    // sin(w x) with w near a multiple of 2 pi times the samples a pixel takes (16 a px at FULL: 3770 at 40 px per unit,
-    // 8 at COARSE: 1759) steps over whole periods, and its samples read as a slow wave that the twin's enclosure fits
-    for (const [w, quality] of [[3672, 'full'], [3867, 'full'], [1650, 'coarse'], [1676, 'coarse']] as const) {
+  it('a jump the walk did not find, inside an oscillation, is a break between two bands and not a bar over it', () => {
+    // sin(500x) is 2 high and the jump is 10: the samples either side of it have no value in common, so the column
+    // that holds it is two, and the jump is a break (the same one the core would have left it, had the column not
+    // been a band). It drew a column [-5.9, 6.0] across the jump and no break.
+    const spots = [1.0123, 2.0123, 3.0123]
+    const r = sampleCurve(explicit('sin(500x) + sum(k = 1 to n, 5 sign(x - k - 0.0123))'), wide, scopeOf('@param n = 3 range [1, 10]'), { statement: 0, color: null, asymptotes: true, quality: 'full' })
+    const cols = bandsOf(r.objects).flatMap((b) => columnsOf(b))
+    for (const t of spots) {
+      expect(curveOf(r.objects).breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - t) < 0.03), `a jump break at ${t}`).toBe(true)
+      expect(cols.some((c) => c.t0 < t && c.t1 > t), `a column over ${t}`).toBe(false)
+    }
+    expect(Math.max(...cols.map((c) => c.hi - c.lo))).toBeLessThan(3)
+    expect(r.capped).toBe(false)
+  })
+
+  // the worst a drawn chain's segment middle is off the curve, in px, over the view [-10, 10]: a false line is tens
+  const worstSegment = (text: string, objs: SceneObject[]) => {
+    const f = trueY(text, scopeOf())
+    let worst = 0
+    for (const c of curveOf(objs).chains) {
+      const p = chainPoints(c)
+      for (let i = 1; i < p.length; i++) {
+        const mx = (p[i - 1].x + p[i].x) / 2
+        if (Math.abs(mx) <= 10) worst = Math.max(worst, Math.abs(f(mx) - (p[i - 1].y + p[i].y) / 2) * 40)
+      }
+    }
+    return worst
+  }
+
+  it('an oscillation at a lattice resonance is a band like any other: sin(w x) near w = 3770 and 7540, 1759 at COARSE', () => {
+    // equally spaced samples (16 a pixel at FULL, which is 1/15 px; 8 at COARSE, 1/7 px) step over whole periods of
+    // sin(w x) for w near a multiple of 2 pi times 600 (40 px per unit; 2 pi times 280 at COARSE) and see no turn: no
+    // band, an aliased curve, and the core, sampling at the same spacing, capped (20 of 239 frequencies at FULL, 92 of
+    // 539 at COARSE) with false segments up to 80 px off. The inner samples are jittered, so they have no lattice.
+    const cases = [[3770, 'full'], [7540, 'full'], [7676, 'full'], [3672, 'full'], [3867, 'full'], [1759, 'coarse'], [3518, 'coarse'], [7036, 'coarse'], [1650, 'coarse'], [1676, 'coarse']] as const
+    for (const [w, quality] of cases) {
       const text = `sin(${w}x)`
       const r = sample(explicit(text), wide, quality)
-      const f = trueY(text, scopeOf())
-      let worst = 0
-      for (const c of curveOf(r.objects).chains) {
-        const p = chainPoints(c)
-        for (let i = 1; i < p.length; i++) {
-          const mx = (p[i - 1].x + p[i].x) / 2
-          if (Math.abs(mx) <= 10) worst = Math.max(worst, Math.abs(f(mx) - (p[i - 1].y + p[i].y) / 2) * 40)
-        }
+      expect(bandsOf(r.objects), `${text} ${quality}`).toHaveLength(1)
+      expect(r.capped, `${text} ${quality}`).toBe(false)
+      expect(curveOf(r.objects).chains, `${text} ${quality}`).toEqual([])
+    }
+  })
+
+  it('with the samples evenly spaced those frequencies are not a band, and the polyline guard still keeps an alias from being a line', () => {
+    // the jitter off, as it was: the same resonance. The columns do not turn, the twin certifies them, and the polyline
+    // of their samples is a slow wave that the enclosure fits; the extra sample off the lattice (BAND.probeAt) refuses
+    // it, and the core refines the column as it always did, to the cap.
+    const spread = BAND.jitterSpread
+    BAND.jitterSpread = 0
+    try {
+      for (const [w, quality] of [[3672, 'full'], [3867, 'full'], [1650, 'coarse'], [1676, 'coarse']] as const) {
+        const text = `sin(${w}x)`
+        const r = sample(explicit(text), wide, quality)
+        const worst = worstSegment(text, r.objects)
+        expect(r.capped || worst <= 2, `${text} ${quality}: a line ${worst.toFixed(1)} px off the curve, and not capped`).toBe(true)
       }
-      expect(r.capped || worst <= 2, `${text} ${quality}: a line ${worst.toFixed(1)} px off the curve, and not capped`).toBe(true)
+    } finally {
+      BAND.jitterSpread = spread
     }
   })
 
@@ -517,8 +580,25 @@ describe('sampleRange with a band sink', () => {
     expect(r.capped).toBe(false)
     const e = errorsOf('sin(50x)', r.chains)
     expect(e.vertex).toBeLessThan(1e-9)
-    // (the segments are a fifteenth of a pixel across)
-    expect(e.middle).toBeLessThan(0.1)
+    // (a chord holds the samples it covers to flatPx, a quarter of a pixel, and the sag between them adds a little)
+    expect(e.middle).toBeLessThan(0.35)
+  })
+
+  it('the polyline is thinned to chords the core would accept: no more vertices than before, none longer than maxSegPx', () => {
+    // every sample was a vertex: 10x was 241 vertices and 1801, sin(50x) 9601 and 18001. A sample goes where a chord
+    // from the one before to the one after is within flatPx of it and no longer than maxSegPx.
+    const vertices = (chains: Chain[]) => chains.reduce((s, c) => s + c.param.length, 0)
+    for (const text of ['10x', 'sin(50x)', 'x^3 - 2x + 1', 'sin(20x) + x']) {
+      const r = range(text)
+      const before = without(text)
+      expect(vertices(r.chains), text).toBeLessThanOrEqual(vertices(before.chains))
+      let longest = 0
+      for (const c of r.chains) {
+        const p = chainPoints(c)
+        for (let i = 1; i < p.length; i++) longest = Math.max(longest, Math.hypot((p[i].x - p[i - 1].x) * 40, (p[i].y - p[i - 1].y) * 40))
+      }
+      expect(longest, text).toBeLessThanOrEqual(FULL.maxSegPx + 1e-9)
+    }
   })
 
   it('it costs what leaving a stretch to the core did, and far fewer enclosures: sin(50x)', () => {
@@ -599,6 +679,58 @@ describe('sampleRange with a band sink', () => {
     // a start grid of 8 px: 151 points; 2250 certified intervals take a midpoint each; 1200 columns take 6 more
     expect(calls).toBe(151 + 2250 + 6 * 1200)
     expect(bands.seen).toHaveLength(1200)
+  })
+
+  it('a step in an oscillation is a jump only where the twin does not certify the stretch between its two samples', () => {
+    // sin(500x) with a steep rise of 5 at 0.0625, narrower than the spacing of the samples (a column is 0.025 across),
+    // and a twin that calls the interval PARTIAL (it may: PARTIAL does not mean a pole) wherever it holds the spot
+    // `doubt`. The column [0.05, 0.075] is uncertified either way and its largest step is the rise, with no value in
+    // common between the sides. If the doubt is elsewhere in the column, the stretch between the two samples either
+    // side of the rise is CONTINUOUS: a steep curve, one band column over it and no break. If the doubt is the rise
+    // itself, nothing certifies it and it is a jump: two columns and a break.
+    const rise = 0.0625
+    const ramp = (t: number) => 2.5 + 2.5 * Math.tanh((t - rise) / 1e-4)
+    // `gap`: the curve is undefined this far either side of the rise (a stretch of samples that are NaN)
+    const run = (doubt: number, gap = 0) => {
+      const fns = {
+        point: (t: number, out: Float64Array) => {
+          out[0] = t
+          out[1] = Math.abs(t - rise) < gap ? Number.NaN : Math.sin(500 * t) + ramp(t)
+        },
+        enclose: (tLo: number, tHi: number, out: { xLo: number; xHi: number; yLo: number; yHi: number }) => {
+          out.xLo = tLo
+          out.xHi = tHi
+          out.yLo = -1 + ramp(tLo)
+          out.yHi = 1 + ramp(tHi)
+          // (a NaN needs a verdict below CONTINUOUS: any interval that touches the undefined stretch has one)
+          const undefinedHere = gap > 0 && tHi > rise - gap && tLo < rise + gap
+          return (tLo <= doubt && doubt <= tHi) || undefinedHere ? PARTIAL : CONTINUOUS
+        },
+        pxPerT: 40,
+        oscillationAxis: 'y' as const,
+      }
+      const bands = new Recorder('y', wideScreen.clip)
+      const sink = new ChainSink(wideScreen.clip)
+      sampleRange(fns, 0, 0.2, ends, wideScreen, FULL, { points: 0, intervals: 0 }, sink, bands)
+      return { seen: bands.seen.filter((c) => c.t1 > 0.05 && c.t0 < 0.075), breaks: sink.breaks() }
+    }
+    const away = run(0.051)
+    expect(away.breaks).toEqual([])
+    expect(away.seen).toHaveLength(1)
+    expect(away.seen[0].hi - away.seen[0].lo).toBeGreaterThan(5)
+    const at = run(rise)
+    expect(at.breaks).toHaveLength(1)
+    expect(at.breaks[0].kind).toBe('jump')
+    expect(Math.abs(at.breaks[0].at - rise)).toBeLessThan(0.002)
+    expect(at.seen).toHaveLength(2)
+    for (const c of at.seen) expect(c.hi - c.lo).toBeLessThan(2.1)
+    expect(at.seen[0].t1).toBeLessThanOrEqual(rise)
+    expect(at.seen[1].t0).toBeGreaterThanOrEqual(rise)
+    // and a step across an undefined stretch is not a step of the curve at all: the two samples either side of a gap
+    // of NaN are an edge and its mate, not a jump, and the column stays one
+    const gapped = run(rise, 0.002)
+    expect(gapped.breaks).toEqual([])
+    expect(gapped.seen).toHaveLength(1)
   })
 
   it('a pole is not a band: tan(x) with a sink keeps every break it has without one', () => {

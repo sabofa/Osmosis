@@ -181,6 +181,17 @@ export const BAND = {
   // are inside the curve, so a band is never taller than the curve is, and it is held inside the
   // twin's enclosure as well. This is FULL's count; COARSE's is coarseSamples.
   samples: 16,
+  // But not evenly: the inner samples sit off their even places by a quarter of a spacing at most,
+  // sample i at (i + J) / (n - 1) of the column with J = (frac(i * jitter) - 1/2) * jitterSpread, the
+  // two ends where they are. Equally spaced samples are resonant with every oscillation whose period
+  // divides their spacing (16 a pixel: sin(w x) near w = 3770 and 7540 at 40 px per unit, 8 at COARSE:
+  // near 1759 and multiples), step over whole periods, and see no turn at all: no band, an aliased
+  // curve, and the core, which samples at the same spacing, refines it to the cap. Without jitter, of
+  // sin(w x) for w = 1800 to 8000 at FULL, 20 of 239 were capped and 21 had false segments in the view
+  // (up to 80 px off); at COARSE 92 of 539 capped, 83 false. The golden ratio's fractional parts are
+  // the spread that no lattice can be resonant with (LIMITS.confirmFactors, the same idea).
+  jitter: 0.618034,
+  jitterSpread: 0.5,
   // COARSE takes these: a band across a 1200 px range is 1200 columns, and 14 evaluations each is
   // more than COARSE's whole 15000-point budget with the rest of the curve, where 6 are not (sin(500x)
   // at COARSE: 7200 points for the columns, and the 8 samples still show the turns of a column of two

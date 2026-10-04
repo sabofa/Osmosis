@@ -26,37 +26,17 @@ import type { Bounds, Chain } from '../../scene/types'
 // is one step, so without it the column turns once at most; an oscillation is many steps and keeps
 // its turns.
 export function oscillates(values: Float64Array, count: number, minTurns: number, largestStepIsAStall = false): boolean {
-  // which step (counting the steps between finite values) is read as a stall; -1: none
-  let skip = -1
-  if (largestStepIsAStall) {
-    let last = Number.NaN
-    let step = 0
-    let largest = 0
-    for (let i = 0; i < count; i++) {
-      const v = values[i]
-      if (!Number.isFinite(v)) continue
-      if (last === last) {
-        const size = Math.abs(v - last)
-        if (size > largest) {
-          largest = size
-          skip = step
-        }
-        step++
-      }
-      last = v
-    }
-  }
+  // the step read as a stall is the one that ends at this sample; -1: none
+  const skip = largestStepIsAStall ? largestStep(values, count) : -1
   let turns = 0
   let prev = Number.NaN
   // the last direction that was not a stall: 1 up, -1 down, 0 none yet
   let dir = 0
-  let step = 0
   for (let i = 0; i < count; i++) {
     const v = values[i]
     if (!Number.isFinite(v)) continue
     if (prev === prev) {
-      const way = step === skip ? 0 : v > prev ? 1 : v < prev ? -1 : 0
-      step++
+      const way = i === skip ? 0 : v > prev ? 1 : v < prev ? -1 : 0
       if (way !== 0) {
         if (dir !== 0 && way !== dir) turns++
         dir = way
@@ -65,6 +45,24 @@ export function oscillates(values: Float64Array, count: number, minTurns: number
     prev = v
   }
   return turns >= minTurns
+}
+
+// The largest step between neighbouring finite values (the first, on a tie), as the index of the value
+// it ends at; -1 where there is no step, or the values are all the same.
+export function largestStep(values: Float64Array, count: number): number {
+  let last = Number.NaN
+  let largest = 0
+  let at = -1
+  for (let i = 0; i < count; i++) {
+    const v = values[i]
+    if (!Number.isFinite(v)) continue
+    if (last === last && Math.abs(v - last) > largest) {
+      largest = Math.abs(v - last)
+      at = i
+    }
+    last = v
+  }
+  return at
 }
 
 // The columns of one band, in order: each is [t0, t1] of the parameter and the extent [lo, hi] on the
