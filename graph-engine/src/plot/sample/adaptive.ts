@@ -35,8 +35,8 @@
 //    taller or wider than spikeFactor times the span the samples cover, plus spikeSlackPx: a
 //    spike narrower than the sample spacing is in the enclosure and not in the samples. The
 //    test is asked only spikeDepth halvings below the start grid (deeper, the enclosure need
-//    only be finite): a loose enclosure never passes it, and without the bound a cancelling
-//    form was refined to the floor, to the cap.
+//    only be finite): the enclosure of a cancelling form is loose however narrow the interval,
+//    and without the bound it never passes, and the form is refined to the floor and the cap.
 //    Otherwise, at the floor, accept anyway; else bisect.
 //  - An interval the twin does not certify stops being bisected at tuning.uncertifiedFloorPx (the
 //    floor for FULL, 1/2 px for COARSE: all that cannot be certified is decided by bisecting to
@@ -107,7 +107,7 @@ import type { Box, CurveFns, End, EvalCounter, Screen } from './types'
 // rounding. The start grid's intervals are halved, so a 4 px one comes to a pixel with an error of 1e-14
 // or so, and a view 800 px wide with its overscan (1200) is a whole number of them: a column a pixel
 // and a hair wide would be bisected to half a pixel, where there is a period to show and not two, and
-// the samples often miss the second turn (sin(500x) came to 24 bands and the budget, not to one band).
+// the samples often miss the second turn: a band is cut into many, and spends the budget.
 const COLUMN_PX = BAND.columnPx * (1 + BAND.columnSlack)
 
 // One call's working state. The scratch box and point are shared by every interval of the
@@ -221,11 +221,11 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
     }
   }
   // The last stretch to a singular end is not the start grid's: it begins where the nudge put the start, a floor's
-  // width from the pole, and the curve is still climbing there (1/x at +-100 is 64 high at 1/16 px from its pole and
-  // 125 at the top of the clip box: 144 px short of the top of the view). Walked in certified pieces as an edge's
-  // last stretch is, toward the singular parameter itself, until the drawn point has left the clip box, a piece is not
-  // certified, or CORE.edgePieces pieces are done. The left stretch is drawn first and the right one last, so the pen
-  // goes in parameter order. At the undefined side of an edge, the start is not a point, and there is nothing to walk.
+  // width from the pole, and the curve is still climbing there (1/x at +-100 is 64 high at 1/16 px from its pole, and the
+  // top of the clip box is 125). Walked in certified pieces as an edge's last stretch is, toward the singular parameter
+  // itself, until the drawn point has left the clip box, a piece is not certified, or CORE.edgePieces pieces are done.
+  // The left stretch is drawn first and the right one last, so the pen goes in parameter order. At the undefined side
+  // of an edge, the start is not a point, and there is nothing to walk.
   if (ends.left.kind === 'singular' && isFinite2(xs[0], ys[0])) walkEdge(c, a, xs[0], ys[0], t0, false)
   for (let i = 0; i < n; i++) visit(c, ts[i], ts[i + 1], xs[i], ys[i], xs[i + 1], ys[i + 1], false, true)
   if (ends.right.kind === 'singular' && isFinite2(xs[n], ys[n])) walkEdge(c, b, xs[n], ys[n], t1, true)
@@ -268,7 +268,7 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
   const continuous = verdict === CONTINUOUS
 
   if (certified) {
-    if (!(tm > ta && tm < tb)) {
+    if (!midpointHolds) {
       c.sink.segment(xa, ya, ta, xb, yb, tb)
       return
     }
@@ -325,10 +325,9 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
   // CORE.subFloorPx, and the ones the twin certifies are drawn. The enclosure of an expression that mentions its variable
   // twice (x^2 - 4x + 3, next to its zero at 3) is loose by the width of the interval, and so its lower bound reaches
   // 0 and ln of it is minus infinity, however small the interval is, until the interval is narrower than the distance
-  // from the zero (a floor interval, 1/16 px, from the edge: the ones nearer were lifted whole, and the curve was
-  // broken with a jump break a floor from its edge where it dives, 28 px short of where the walk of the edge itself
-  // had drawn it from). An interval that is still unbounded at the bottom is where a pole may sit, and is lifted with
-  // its jump, as before.
+  // from the zero (a floor interval from the edge: the ones nearer were lifted whole, and the curve was broken with a
+  // jump break a floor from its edge where it dives, short of where the walk of the edge itself had drawn it from). An
+  // interval that is still unbounded at the bottom is where a pole may sit, and is lifted with its jump.
   if (atUncertifiedFloor && (bounded || !midpointHolds || widthPx <= CORE.subFloorPx * (1 + 1e-9))) {
     // THE FLOOR TEST. Where bisecting stops and the gap is over a pixel (a smooth curve steeper than 16:1 on
     // screen has one at a 1/16 px interval, and the old precondition refused every such interval, breaking the
@@ -484,7 +483,14 @@ function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: num
   const spanX = Math.max(ax, mx, bx) - Math.min(ax, mx, bx)
   const spanY = Math.max(ay, my, by) - Math.min(ay, my, by)
   if (!spike) return Number.isFinite(encW) && Number.isFinite(encH)
-  return encW <= c.tune.spikeFactor * spanX + c.tune.spikeSlackPx && encH <= c.tune.spikeFactor * spanY + c.tune.spikeSlackPx
+  return withinSpike(c, encW, spanX) && withinSpike(c, encH, spanY)
+}
+
+// The spike test, on one axis (px): the twin's enclosure is no taller than spikeFactor times the span the samples cover, plus
+// spikeSlackPx. A spike narrower than the sample spacing is in the enclosure and not in the samples. (Written so that a NaN or an
+// infinite enclosure fails it.)
+function withinSpike(c: Core, enclosurePx: number, spanPx: number): boolean {
+  return enclosurePx <= c.tune.spikeFactor * spanPx + c.tune.spikeSlackPx
 }
 
 // The jump test: do the gaps between samples close as the interval is halved? Each gap must be at
@@ -545,9 +551,13 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
 //
 // Anything else lifts the chain, and the edge is recorded in every case.
 function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb: number, yb: number, aDefined: boolean): void {
-  let td = aDefined ? ta : tb
-  let xd = aDefined ? xa : xb
-  let yd = aDefined ? ya : yb
+  // the defined end of the floor interval, which the stretch is drawn from, to the last defined point (td, found below)
+  const te = aDefined ? ta : tb
+  const xe = aDefined ? xa : xb
+  const ye = aDefined ? ya : yb
+  let td = te
+  let xd = xe
+  let yd = ye
   let tu = aDefined ? tb : ta
   for (let i = 0; i < CORE.edgeSteps; i++) {
     const tm = td + (tu - td) / 2
@@ -561,28 +571,25 @@ function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb:
       tu = tm
     }
   }
-  const tEnd = aDefined ? ta : tb
   // (a stretch of no extent has nothing between its ends to certify)
   let verdict = CONTINUOUS
   let bounded = true
-  if (td !== tEnd) {
+  if (td !== te) {
     c.counter.intervals++
-    verdict = c.fns.enclose(aDefined ? ta : td, aDefined ? td : tb, c.box)
+    verdict = c.fns.enclose(aDefined ? te : td, aDefined ? td : te, c.box)
     bounded = isBounded(c.box)
   }
   if (verdict === CONTINUOUS) {
     if (aDefined) {
-      c.sink.segment(xa, ya, ta, xd, yd, td)
+      c.sink.segment(xe, ye, te, xd, yd, td)
       c.sink.lift()
     } else {
-      c.sink.segment(xd, yd, td, xb, yb, tb)
+      c.sink.segment(xd, yd, td, xe, ye, te)
     }
   } else if (verdict === PARTIAL && bounded) {
-    drawEdgeSplit(c, ta, xa, ya, tb, xb, yb, aDefined, td, xd, yd)
-  } else if (aDefined) {
-    walkEdge(c, ta, xa, ya, td, true)
+    drawEdgeSplit(c, aDefined, te, xe, ye, td, xd, yd)
   } else {
-    walkEdge(c, tb, xb, yb, td, false)
+    walkEdge(c, te, xe, ye, td, aDefined)
   }
   c.sink.addBreak(td, 'edge')
 }
@@ -590,8 +597,8 @@ function refineEdge(c: Core, ta: number, xa: number, ya: number, tb: number, xb:
 // The stretch of an edge that the twin cannot certify as a whole (refineEdge): the edge of ln(1 - x^2) is a zero of
 // a quadratic, the twin's enclosure of 1 - x^2 is loose next to its zero (its lower bound reaches 0 before the
 // interval does), and so the stretch from the floor interval's defined end to the last defined point was lifted whole,
-// and the curve stopped a floor's width short of its edge, at -6.46 where it dives (142 px short of the bottom of
-// [-10, 10]). So the stretch is walked in pieces, geometrically, each covering half of what is left to the last
+// and the curve stopped a floor's width short of its edge where it dives, well above the bottom of the view. So the
+// stretch is walked in pieces, geometrically, each covering half of what is left to the last
 // defined point td: the twin is asked about each (counted), and a piece it calls CONTINUOUS is drawn as a chord, which
 // is certified like any other (and a pole or a step inside the stretch is in a piece that fails). The walk ends at
 // the first piece that is not, after CORE.edgePieces pieces, or when the drawn point has left the clip box, which
@@ -633,13 +640,12 @@ function walkEdge(c: Core, t0: number, x0: number, y0: number, td: number, aDefi
   }
   const { ts, xs, ys, split } = w
   const n = ts.length - 1
-  const last = n
   if (aDefined) {
     for (let i = 0; i < n; i++) c.sink.segment(xs[i], ys[i], ts[i], xs[i + 1], ys[i + 1], ts[i + 1])
-    if (split !== null) drawEdgeSplit(c, ts[last], xs[last], ys[last], split.next, split.xn, split.yn, true, split.next, split.xn, split.yn)
+    if (split !== null) drawEdgeSplit(c, true, ts[n], xs[n], ys[n], split.next, split.xn, split.yn)
     else c.sink.lift()
   } else {
-    if (split !== null) drawEdgeSplit(c, split.next, split.xn, split.yn, ts[last], xs[last], ys[last], false, split.next, split.xn, split.yn)
+    if (split !== null) drawEdgeSplit(c, false, ts[n], xs[n], ys[n], split.next, split.xn, split.yn)
     for (let i = n; i > 0; i--) c.sink.segment(xs[i], ys[i], ts[i], xs[i - 1], ys[i - 1], ts[i - 1])
   }
 }
@@ -670,34 +676,33 @@ function certifyPiece(c: Core, w: EdgeWalk, t: number, next: number, xn: number,
   return false
 }
 
-// The stretch of an edge that the twin calls PARTIAL with bounds (see refineEdge): its body, from
-// the defined end to a point 1/1024 of the way in from the last defined point td, if that is
-// CONTINUOUS; then the sliver from there to td, if the jump test closes it. Drawn in parameter
-// order, lifted at the end only when the defined end is the left one, as refineEdge does.
-function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, xb: number, yb: number, aDefined: boolean, td: number, xd: number, yd: number): void {
-  const tEnd = aDefined ? ta : tb
-  const tIn = td + (tEnd - td) / CORE.edgeSplit
+// The stretch of an edge that the twin calls PARTIAL with bounds (see refineEdge), from its defined end (te, xe, ye) to the last
+// defined point (td, xd, yd): its body, from the defined end to a point 1/CORE.edgeSplit of the way in from td, if that is
+// CONTINUOUS; then the sliver from there to td, if the jump test closes it. Drawn in parameter order, lifted at the end only
+// when the defined end is the left one (`aDefined`), as refineEdge does.
+function drawEdgeSplit(c: Core, aDefined: boolean, te: number, xe: number, ye: number, td: number, xd: number, yd: number): void {
+  const tIn = td + (te - td) / CORE.edgeSplit
   let bodyOk = false
   let sliverOk = false
   let xi = 0
   let yi = 0
-  if (tIn !== td && tIn !== tEnd) {
+  if (tIn !== td && tIn !== te) {
     evalAt(c, tIn)
     xi = c.pt[0]
     yi = c.pt[1]
     c.counter.intervals++
-    const inner = c.fns.enclose(aDefined ? ta : tIn, aDefined ? tIn : tb, c.box)
+    const inner = c.fns.enclose(aDefined ? te : tIn, aDefined ? tIn : te, c.box)
     bodyOk = inner === CONTINUOUS && isFinite2(xi, yi)
     sliverOk = bodyOk && pxDistance(c, xi, yi, xd, yd) < c.tune.gapPx && (aDefined ? gapCloses(c, tIn, td, xi, yi, xd, yd) : gapCloses(c, td, tIn, xd, yd, xi, yi))
   }
   if (aDefined) {
-    if (bodyOk) c.sink.segment(xa, ya, ta, xi, yi, tIn)
+    if (bodyOk) c.sink.segment(xe, ye, te, xi, yi, tIn)
     if (sliverOk) c.sink.segment(xi, yi, tIn, xd, yd, td)
     c.sink.lift()
   } else {
     c.sink.lift()
     if (sliverOk) c.sink.segment(xd, yd, td, xi, yi, tIn)
-    if (bodyOk) c.sink.segment(xi, yi, tIn, xb, yb, tb)
+    if (bodyOk) c.sink.segment(xi, yi, tIn, xe, ye, te)
   }
 }
 
@@ -717,9 +722,8 @@ function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, 
 //  - A certified column whose samples do not turn is drawn as the samples, joined (drawSamples). The
 //    twin says the curve is continuous across it and the samples are about a fifteenth of a pixel apart
 //    (a seventh at COARSE), so what the core would do for it (refine to the floor, a sixteenth of a
-//    pixel) is done, for the same evaluations and no twin enclosures: sin(50x) was 18901 enclosures and
-//    is 2101. Only if the samples are not an alias of an oscillation (isDrawable). It is not done at an
-//    uncertified column, which the twin has not shown to be continuous, and the jump test (the core's)
+//    pixel) is done, for the same evaluations and no twin enclosures. Only if the samples are not an alias
+//    of an oscillation (isDrawable). It is not done at an uncertified column, which the twin has not shown to be continuous, and the jump test (the core's)
 //    decides.
 //  - Otherwise the core goes on as it would have, and the interval is not tried again at the halves it
 //    is bisected into, which follow it at once: the question was asked there.
@@ -727,11 +731,11 @@ function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, 
 // axis is no taller than the span of its two ends (and BAND.strokeSlackPx), so nothing lies between them
 // for a band to show, and it is a steep stretch or a step that the core refines as it always has. That
 // is where the test earns its keep: a certified one is drawn from its samples at the same cost, and a
-// step is what a staircase is made of (round(5 sin(20x)) is capped at FULL without it, 57526 points
-// with it). The ends of a column of an oscillation can sit at its extremes, and then it is taken for a
-// stroke and left out of a band; beside a band that once cut sin(363x) into 115 bands, when the test
-// applied to certified columns too, and an exemption there was needed. For uncertified ones, sqrt(sin(wx))
-// and floor(3 sin(wx)) over w = 300 to 1100, it changes nothing, so there is none.
+// step is what a staircase is made of (round(5 sin(20x)) is capped at FULL without it). The ends of a
+// column of an oscillation can sit at its extremes, and then it is taken for a stroke and left out of a
+// band; beside a band that cut sin(363x) into a hundred bands, when the test applied to certified
+// columns too, and an exemption there was needed. For uncertified ones, sqrt(sin(wx)) and
+// floor(3 sin(wx)) over w = 300 to 1100, it changes nothing, so there is none.
 function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, certified: boolean, unknown: boolean): boolean {
   const bands = c.bands
   if (bands === undefined) return false
@@ -909,9 +913,8 @@ function splitAtJump(c: Core, bands: BandState, v: Float64Array, enclosureLo: nu
 // sample between is within flatPx of it (at its own parameter, as isFlat measures: the error along the
 // chord counts) and the chord is no longer than maxSegPx, the core's two tests of a segment. A segment
 // is not shorter than the spacing of the samples, and needs not be: a line, which the core draws in
-// chords of maxSegPx, is drawn in them (10x is 241 vertices without bands, was 1801 with every sample,
-// and is 241), and a curve in about the segments the core made of it (sin(50x) 9601, 18001, 8250).
-// No evaluations.
+// chords of maxSegPx, is drawn in them (with every sample it was eight times the vertices), and a curve
+// in about the segments the core made of it. No evaluations.
 function drawSamples(c: Core, bands: BandState): void {
   const { xs, ys, ts } = bands
   const n = ts.length
@@ -965,7 +968,7 @@ function isDrawable(c: Core, bands: BandState, enclosureLo: number, enclosureHi:
   for (let i = 0; i < n; i++) if (!isFinite2(xs[i], ys[i])) return false
   const px = alongY ? c.screen.px.y : c.screen.px.x
   // (written so that a NaN or an infinity fails it)
-  if (!((enclosureHi - enclosureLo) * px <= c.tune.spikeFactor * (spanHi - spanLo) * px + c.tune.spikeSlackPx)) return false
+  if (!withinSpike(c, (enclosureHi - enclosureLo) * px, (spanHi - spanLo) * px)) return false
   const at = ta + (tb - ta) * BAND.probeAt
   let i = 0
   while (i < n - 2 && ts[i + 1] < at) i++
