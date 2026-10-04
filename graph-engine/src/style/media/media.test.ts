@@ -11,6 +11,8 @@ import type { Role } from './types'
 const HEX = /^#[0-9a-f]{6}$/
 const BOARD_MEDIA: MediumName[] = ['chalk', 'whiteboard']
 const PAPER_MEDIA: MediumName[] = ['clean', 'ink', 'graphite', 'colouredPencil', 'marker']
+// The media that take their own neutrals for the roles that come from ink and muted.
+const NEUTRAL_MEDIA: MediumName[] = ['marker', 'chalk', 'whiteboard']
 const FITTED: MediumName[] = ['ink', 'graphite', 'colouredPencil', 'marker', 'chalk', 'whiteboard']
 
 // ---------------------------------------------------------------------------
@@ -29,8 +31,31 @@ const TOLERANCE = 0.005
 const surfaceOf = (theme: ThemeInput, name: MediumName): Hex =>
   name === 'chalk' ? theme.boards.blackboard : name === 'whiteboard' ? theme.boards.whiteboard : theme.colours.paper
 
-// The most contrast anything can have with a surface: black or white.
-const bestContrast = (surface: Hex) => Math.max(contrastRatio('#000000', surface), contrastRatio('#ffffff', surface))
+// One stroke of a colour at an opacity, laid over its surface (each 8-bit sRGB channel blended and
+// rounded): what is on the screen. Written out here, independently of the engines.
+function blend(hex: Hex, surface: Hex, opacity: number): Hex {
+  const channel = (colour: Hex, i: number) => parseInt(colour.slice(i, i + 2), 16)
+  return '#' + [1, 3, 5].map((i) => Math.round(opacity * channel(hex, i) + (1 - opacity) * channel(surface, i)).toString(16).padStart(2, '0')).join('')
+}
+
+// The contrast of a stroke as drawn: the blended colour against the surface.
+const drawn = (colour: { hex: Hex; opacity: number }, surface: Hex) => contrastRatio(blend(colour.hex, surface, colour.opacity), surface)
+
+// The most contrast a stroke at an opacity can have with a surface: black or white, drawn.
+const bestDrawn = (surface: Hex, opacity: number) =>
+  Math.max(drawn({ hex: '#000000', opacity }, surface), drawn({ hex: '#ffffff', opacity }, surface))
+
+// Distance between two colours in OKLab.
+function deltaE(a: Hex, b: Hex): number {
+  const lab = (hex: Hex) => {
+    const { l, c, h } = toOklch(hex)
+    const angle = (h * Math.PI) / 180
+    return [l, c * Math.cos(angle), c * Math.sin(angle)]
+  }
+  const [l1, a1, b1] = lab(a)
+  const [l2, a2, b2] = lab(b)
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2)
+}
 
 // The most chroma the sRGB gamut holds at a lightness and hue, as measured on the real hex.
 const gamutMax = (l: number, h: number) => toOklch(fromOklch({ l, c: 0.4, h })).c
@@ -62,16 +87,16 @@ function aimedChroma(name: MediumName, baseC: number): number {
 }
 
 // The base colour of a role, as the brief says it: an author's own, a theme override, a
-// series slot, then the role's own source. A board medium takes the board's own neutral
-// for the roles that default to ink or muted (the page's ink flips with the mode), which is
-// a base with no chroma: reported as c = 0 here.
+// series slot, then the role's own source. A board medium, and the marker, take their own
+// neutral for the roles that default to ink or muted (the page's ink flips with the mode, and
+// is far from a marker's range), which is a base with no chroma: reported as c = 0 here.
 function baseChroma(theme: ThemeInput, name: MediumName, role: Role): number {
   // A board medium reads the theme's light-mode colours, a paper medium its own.
   const colours = BOARD_MEDIA.includes(name) ? theme.boardColours : theme.colours
   const given = role.colour ?? theme.media[name]?.[role.key] ?? (role.slot !== undefined ? colours.series[role.slot % SERIES_COUNT] : undefined)
   if (given !== undefined) return toOklch(given).c
   if (['line', 'hidden', 'label', 'measure', 'caption', 'givens', 'auxiliary'].includes(role.key)) {
-    return BOARD_MEDIA.includes(name) ? 0 : toOklch(role.key === 'auxiliary' ? colours.muted : colours.ink).c
+    return NEUTRAL_MEDIA.includes(name) ? 0 : toOklch(role.key === 'auxiliary' ? colours.muted : colours.ink).c
   }
   return toOklch(role.key === 'point' ? colours.bad : colours.accent).c
 }
@@ -249,8 +274,8 @@ describe('the base colour of a role', () => {
   const theme = resolveTheme({ mode: 'light', ...SOURCES[3] })
   const colours = theme.colours
 
-  it('is the theme ink for lines, hidden lines, labels, measures, captions and givens', () => {
-    for (const name of PAPER_MEDIA) {
+  it('is the theme ink for lines, hidden lines, labels, measures, captions and givens (the marker has its own ink)', () => {
+    for (const name of PAPER_MEDIA.filter((n) => n !== 'marker')) {
       const expected = MEDIA[name].colour(theme, { key: 'line', colour: colours.ink }, defaultMediumSettings(name))
       for (const key of ['line', 'hidden', 'label', 'measure', 'caption', 'givens'] as const) {
         expect(MEDIA[name].colour(theme, { key }, defaultMediumSettings(name)), `${name} ${key}`).toEqual(expected)
@@ -258,11 +283,11 @@ describe('the base colour of a role', () => {
     }
   })
 
-  it('is the theme muted for auxiliary lines, bad for points, and the accent for highlight, focus, fill, region and shading', () => {
+  it('is the theme muted for auxiliary lines, bad for points, and the accent for highlight, focus, fill, region and shading (the marker has its own muted)', () => {
     for (const name of PAPER_MEDIA) {
       const settings = defaultMediumSettings(name)
       const of = (colour: Hex) => MEDIA[name].colour(theme, { key: 'line', colour }, settings)
-      expect(MEDIA[name].colour(theme, { key: 'auxiliary' }, settings), name).toEqual(of(colours.muted))
+      if (name !== 'marker') expect(MEDIA[name].colour(theme, { key: 'auxiliary' }, settings), name).toEqual(of(colours.muted))
       expect(MEDIA[name].colour(theme, { key: 'point' }, settings), name).toEqual(of(colours.bad))
       for (const key of ['highlight', 'focus', 'fill', 'region', 'shading'] as const) {
         expect(MEDIA[name].colour(theme, { key }, settings), `${name} ${key}`).toEqual(of(colours.accent))
@@ -369,9 +394,10 @@ describe('every fitted medium, on 20 seeded random themes in both modes, for eve
             expect(out.opacity, tag).toBeLessThanOrEqual(1)
             const oklch = toOklch(out.hex)
 
-            // The contrast floor: met, or the best there is where nothing can meet it.
-            const ratio = contrastRatio(out.hex, surface)
-            expect(ratio >= floor || ratio >= bestContrast(surface) - 1e-6, `${tag}: ${ratio.toFixed(2)}:1 on ${surface}`).toBe(true)
+            // The contrast floor, for the stroke as drawn (at the medium's opacity, over its surface): met,
+            // or the best there is where nothing can meet it.
+            const ratio = drawn(out, surface)
+            expect(ratio >= floor || ratio >= bestDrawn(surface, out.opacity) - 1e-6, `${tag}: ${ratio.toFixed(2)}:1 drawn on ${surface}`).toBe(true)
 
             // The chroma range: never more than the medium aims for (the gamut may take some away).
             const baseC = baseChroma(theme, name, role)
@@ -391,7 +417,7 @@ describe('every fitted medium, on 20 seeded random themes in both modes, for eve
                 outOfRange++
                 // Re-run the search the slow way, at the hue and chroma the engine fitted: no lightness inside the range meets the floor.
                 const feasible = Array.from({ length: Math.round((hi - lo) / 0.0025) + 1 }, (_, k) => lo + k * 0.0025).some(
-                  (l) => contrastRatio(fromOklch({ l, c: oklch.c, h: oklch.h }), surface) >= floor,
+                  (l) => drawn({ hex: fromOklch({ l, c: oklch.c, h: oklch.h }), opacity: out.opacity }, surface) >= floor,
                 )
                 expect(feasible, `${tag}: L ${oklch.l.toFixed(3)} left [${lo}, ${hi}] though ${floor}:1 was reachable inside`).toBe(false)
               }
@@ -415,7 +441,7 @@ describe('every fitted medium, on 20 seeded random themes in both modes, for eve
           if (own === undefined) continue
           const base = toOklch(own)
           const aimed = fromOklch({ l: base.l, c: aimedChroma(name, base.c), h: base.h })
-          if (contrastRatio(aimed, surface) >= FLOOR[name]!) expect(toOklch(out.hex).l, `${name} ${n} ${own}`).toBeCloseTo(base.l, 2)
+          if (drawn({ hex: aimed, opacity: out.opacity }, surface) >= FLOOR[name]!) expect(toOklch(out.hex).l, `${name} ${n} ${own}`).toBeCloseTo(base.l, 2)
         }
       }
     }
@@ -423,11 +449,16 @@ describe('every fitted medium, on 20 seeded random themes in both modes, for eve
 
   it('coloured pencil holds the colour a little light: L moves 0.05 toward the paper unless the floor needs it back', () => {
     const theme = defaultTheme('light')
-    const base = toOklch(theme.colours.accent)
-    const out = toOklch(MEDIA.colouredPencil.colour(theme, { key: 'highlight' }, defaultMediumSettings('colouredPencil')).hex)
-    expect(contrastRatio(fromOklch({ ...base, l: base.l + 0.05 }), theme.colours.paper)).toBeGreaterThan(3)
+    // A colour with room to spare for the 3:1 floor of a stroke at 0.8 (the ink): it moves the whole 0.05.
+    const base = toOklch(theme.colours.ink)
+    const out = toOklch(MEDIA.colouredPencil.colour(theme, { key: 'line' }, defaultMediumSettings('colouredPencil')).hex)
+    expect(drawn({ hex: fromOklch({ ...base, l: base.l + 0.05 }), opacity: 0.8 }, theme.colours.paper)).toBeGreaterThan(3)
     expect(out.l).toBeCloseTo(base.l + 0.05, 2)
-    expect(out.c).toBeLessThan(base.c)
+    // One with less room (the accent) is moved back by the floor: as drawn, it keeps 3:1.
+    const accent = MEDIA.colouredPencil.colour(theme, { key: 'highlight' }, defaultMediumSettings('colouredPencil'))
+    expect(toOklch(accent.hex).l).toBeLessThan(toOklch(theme.colours.accent).l + 0.05 - 0.005)
+    expect(drawn(accent, theme.colours.paper)).toBeGreaterThanOrEqual(3)
+    expect(toOklch(accent.hex).c).toBeLessThan(toOklch(theme.colours.accent).c)
     // On a dark paper the colour is held toward the paper too: a little darker, never past the paper itself.
     const dark = defaultTheme('dark')
     const lightInk = toOklch(dark.colours.ink)
@@ -440,8 +471,7 @@ describe("when a medium's range and its contrast floor conflict, the floor wins"
   it('a marker on a mid-grey paper leaves its lightness range to keep 3:1', () => {
     const theme = resolveTheme({ colours: { surface: '#8a8a8a' } })
     for (const key of ['line', 'auxiliary', 'highlight', 'point'] as const) {
-      const hex = MEDIA.marker.colour(theme, { key }, {}).hex
-      expect(contrastRatio(hex, '#8a8a8a'), key).toBeGreaterThanOrEqual(3)
+      expect(drawn(MEDIA.marker.colour(theme, { key }, {}), '#8a8a8a'), key).toBeGreaterThanOrEqual(3)
     }
     const line = toOklch(MEDIA.marker.colour(theme, { key: 'line' }, {}).hex)
     expect(line.l).toBeLessThan(0.45 - TOLERANCE)
@@ -453,15 +483,14 @@ describe("when a medium's range and its contrast floor conflict, the floor wins"
       const hex = MEDIA.ink.colour(theme, { key }, {}).hex
       const ratio = contrastRatio(hex, '#8a8a8a')
       expect(ratio, key).toBeLessThan(7)
-      expect(ratio, key).toBeCloseTo(bestContrast('#8a8a8a'), 5)
+      expect(ratio, key).toBeCloseTo(bestDrawn('#8a8a8a', 1), 5)
     }
   })
 
   it('chalk on a light board a theme gave (an explicit board colour) still reads: 4.5:1, off the chalk range', () => {
     const theme = resolveTheme({ boards: { blackboard: '#808080' } })
     for (const key of ['line', 'auxiliary', 'highlight'] as const) {
-      const hex = MEDIA.chalk.colour(theme, { key }, {}).hex
-      expect(contrastRatio(hex, '#808080'), key).toBeGreaterThanOrEqual(4.5)
+      expect(drawn(MEDIA.chalk.colour(theme, { key }, {}), '#808080'), key).toBeGreaterThanOrEqual(4.5)
     }
   })
 
@@ -523,8 +552,7 @@ describe('board media look the same in light and dark', () => {
     for (let n = 0; n < SOURCES.length; n++) {
       const theme = themeOf(n, 'dark')
       for (const role of ROLES) {
-        const { hex } = MEDIA.chalk.colour(theme, role, {})
-        expect(contrastRatio(hex, theme.boards.greenboard), `${n} ${JSON.stringify(role)}`).toBeGreaterThanOrEqual(4.5)
+        expect(drawn(MEDIA.chalk.colour(theme, role, {}), theme.boards.greenboard), `${n} ${JSON.stringify(role)}`).toBeGreaterThanOrEqual(4.5)
       }
     }
   })
@@ -674,8 +702,8 @@ describe("an author's own colour goes through the medium", () => {
       for (const name of FITTED) {
         const surface = surfaceOf(theme, name)
         for (const colour of ['#ffffff', '#000000', '#808080', '#fefefe', '#010101']) {
-          const out = MEDIA[name].colour(theme, { key: 'label', colour }, defaultMediumSettings(name)).hex
-          expect(contrastRatio(out, surface), `${name} ${mode} ${colour}`).toBeGreaterThanOrEqual(FLOOR[name]!)
+          const out = MEDIA[name].colour(theme, { key: 'label', colour }, defaultMediumSettings(name))
+          expect(drawn(out, surface), `${name} ${mode} ${colour}`).toBeGreaterThanOrEqual(FLOOR[name]!)
         }
       }
     }
@@ -697,6 +725,86 @@ describe('colours a marker or whiteboard ink would not make up', () => {
     const light = defaultTheme('light')
     expect(toOklch(MEDIA.marker.colour(light, { key: 'highlight' }, {}).hex).c).toBeGreaterThanOrEqual(0.12 - TOLERANCE)
     expect(toOklch(MEDIA.whiteboard.colour(light, { key: 'point' }, {}).hex).c).toBeGreaterThanOrEqual(0.1 - TOLERANCE)
+  })
+})
+
+// The default theme and the four built-ins, in both modes, as a host gives them.
+function probeThemes(): [string, ThemeInput][] {
+  const themes: [string, ThemeInput][] = [
+    ['default light', defaultTheme('light')],
+    ['default dark', defaultTheme('dark')],
+  ]
+  for (const [name, b] of Object.entries(BUILTINS)) {
+    for (const mode of ['light', 'dark'] as const) {
+      const t = b[mode]
+      themes.push([`${name} ${mode}`, fromOsmosisTheme(paletteOf(t[0], t[1], t[2], t[3], t[4], t[5], b.good, b.bad), mode, { id: 'builtin:' + name })])
+    }
+  }
+  return themes
+}
+
+describe('what is seen, on the default theme and the four built-ins in both modes', () => {
+  it('one stroke of every role, in every medium, as drawn (at its opacity over its surface), keeps the floor', () => {
+    const cannot: string[] = []
+    for (const [themeName, theme] of probeThemes()) {
+      for (const name of FITTED) {
+        const surface = surfaceOf(theme, name)
+        for (const role of ROLES) {
+          const out = MEDIA[name].colour(theme, role, defaultMediumSettings(name))
+          const ratio = drawn(out, surface)
+          const tag = `${themeName} ${name} ${JSON.stringify(role)} ${out.hex}@${out.opacity} on ${surface}: ${ratio.toFixed(2)}:1`
+          if (ratio < FLOOR[name]!) {
+            // Where nothing in gamut can, the best there is.
+            cannot.push(tag)
+            expect(ratio, tag).toBeGreaterThanOrEqual(bestDrawn(surface, out.opacity) - 1e-6)
+          }
+        }
+      }
+    }
+    // None of these papers and boards is one no colour could read on.
+    expect(cannot).toEqual([])
+  })
+
+  it('the solid colour is not what is measured: a stroke at 0.85 is paler than its hex, and the floor still holds', () => {
+    // Graphite's #5d5d51 (the default light theme's auxiliary) is 6.6:1 solid but its drawn stroke has less.
+    const theme = defaultTheme('light')
+    const aux = MEDIA.graphite.colour(theme, { key: 'auxiliary' }, {})
+    expect(contrastRatio(aux.hex, theme.colours.paper)).toBeGreaterThan(drawn(aux, theme.colours.paper))
+    expect(drawn(aux, theme.colours.paper)).toBeGreaterThanOrEqual(4.5)
+    // The undrawn colour of the theme's own muted (#6b6b5f) is only 5.2:1 solid: as drawn it is below 4.5, so the fit moved it.
+    expect(drawn({ hex: theme.colours.muted, opacity: 0.85 }, theme.colours.paper)).toBeLessThan(4.5)
+  })
+
+  it('line and auxiliary differ by at least 0.05 (OKLab) in every medium', () => {
+    for (const [themeName, theme] of probeThemes()) {
+      for (const name of MEDIUM_NAMES) {
+        const settings = defaultMediumSettings(name)
+        const line = MEDIA[name].colour(theme, { key: 'line' }, settings).hex
+        const auxiliary = MEDIA[name].colour(theme, { key: 'auxiliary' }, settings).hex
+        expect(deltaE(line, auxiliary), `${themeName} ${name}: ${line} against ${auxiliary}`).toBeGreaterThanOrEqual(0.05)
+      }
+    }
+  })
+
+  it("the marker's ink is the end of its range farthest from the paper and its muted 0.10 nearer, neutral greys", () => {
+    const light = defaultTheme('light')
+    const dark = defaultTheme('dark')
+    const l = (theme: ThemeInput, key: 'line' | 'auxiliary') => toOklch(MEDIA.marker.colour(theme, { key }, {}).hex)
+    expect(l(light, 'line').l).toBeCloseTo(0.45, 2)
+    expect(l(light, 'auxiliary').l).toBeCloseTo(0.55, 2)
+    expect(l(dark, 'line').l).toBeCloseTo(0.65, 2)
+    // On the default dark paper the muted marker keeps its floor, a little above 0.55 at most.
+    expect(l(dark, 'auxiliary').l).toBeGreaterThanOrEqual(0.55 - TOLERANCE)
+    expect(l(dark, 'auxiliary').l).toBeLessThan(0.65 - 0.05)
+    for (const theme of [light, dark]) {
+      for (const key of ['line', 'auxiliary'] as const) expect(l(theme, key).c, key).toBeLessThan(0.01)
+    }
+    // The theme's own ink and muted do not matter to it, and the paper does.
+    const recoloured = resolveTheme({ mode: 'light', colours: { ink: '#aa2222', muted: '#22aa22' } })
+    expect(MEDIA.marker.colour(recoloured, { key: 'line' }, {})).toEqual(MEDIA.marker.colour(light, { key: 'line' }, {}))
+    expect(MEDIA.marker.colour(recoloured, { key: 'auxiliary' }, {})).toEqual(MEDIA.marker.colour(light, { key: 'auxiliary' }, {}))
+    const darkPaper = resolveTheme({ mode: 'light', colours: { surface: '#101010' } })
+    expect(toOklch(MEDIA.marker.colour(darkPaper, { key: 'line' }, {}).hex).l).toBeCloseTo(0.65, 2)
   })
 })
 
@@ -729,25 +837,30 @@ describe('on the default theme', () => {
   })
 })
 
-// Read by eye from the first green run: the default theme, per medium, for line, auxiliary, point, highlight and series 0.
+// Read by eye: the default theme, per medium, for line, auxiliary, point, highlight and series 0.
+// Moved in fix round 1, when the contrast floor came to be measured on a stroke as drawn (blended at
+// the medium's opacity over its surface) and the marker got its own neutrals: graphite's auxiliary,
+// point, highlight and series 0 (darker, to keep 4.5:1 at 0.85); coloured pencil's point and highlight
+// (3:1 at 0.8); the whiteboard's auxiliary, highlight and series 0 (4.5:1 at 0.95); the marker's line
+// and auxiliary (its own neutral greys, 0.45 and 0.55 on a light paper, 0.65 and 0.55 on a dark one).
 const PIN: Record<'light' | 'dark', Record<MediumName, string[]>> = {
   light: {
     clean: ['#17170f', '#6b6b5f', '#a34b3f', '#c65d22', '#b54e0a'],
     ink: ['#171710', '#57574d', '#8e4136', '#933c00', '#933c00'],
-    graphite: ['#17170f', '#6b6b5f', '#756663', '#7f716a', '#7c6e68'],
-    colouredPencil: ['#22231c', '#797970', '#a96156', '#ca754c', '#ba673d'],
-    marker: ['#56564c', '#6b6b5f', '#a34b3f', '#c65d22', '#b54e0a'],
+    graphite: ['#17170f', '#5d5d51', '#695a58', '#675a54', '#685a54'],
+    colouredPencil: ['#22231c', '#797970', '#a96156', '#ba663d', '#ba673d'],
+    marker: ['#555555', '#717171', '#a34b3f', '#c65d22', '#b54e0a'],
     chalk: ['#eeeeee', '#bebebe', '#e8ada3', '#efac8c', '#efac8d'],
-    whiteboard: ['#3a3a3a', '#6e6e6e', '#a34b3f', '#b54e0a', '#b54e0a'],
+    whiteboard: ['#3a3a3a', '#686868', '#a34b3f', '#b24b03', '#b24b03'],
   },
   dark: {
     clean: ['#f2efe2', '#a19d8c', '#c76a5c', '#e2803f', '#f59151'],
     ink: ['#f2efe3', '#ada99a', '#ea9384', '#ed935c', '#ef955d'],
-    graphite: ['#f2efe2', '#a09d8f', '#948482', '#a89a92', '#b9aba3'],
-    colouredPencil: ['#e1ded4', '#918e80', '#ac6357', '#c57848', '#d78958'],
-    marker: ['#928f83', '#938f7f', '#c76a5c', '#d2722f', '#d2722f'],
+    graphite: ['#f2efe2', '#a09d8f', '#a79694', '#a89a92', '#b9aba3'],
+    colouredPencil: ['#e1ded4', '#918e80', '#b2695d', '#c57848', '#d78958'],
+    marker: ['#8f8f8f', '#717171', '#c76a5c', '#d2722f', '#d2722f'],
     // The board media are the light default's: a board and what is drawn on it do not change with the mode.
     chalk: ['#eeeeee', '#bebebe', '#e8ada3', '#efac8c', '#efac8d'],
-    whiteboard: ['#3a3a3a', '#6e6e6e', '#a34b3f', '#b54e0a', '#b54e0a'],
+    whiteboard: ['#3a3a3a', '#686868', '#a34b3f', '#b24b03', '#b24b03'],
   },
 }

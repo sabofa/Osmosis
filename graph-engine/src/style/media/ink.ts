@@ -2,7 +2,8 @@
 //
 // Fitting, in OKLCH: the chroma is the base's x `chroma` (0.9), and the
 // lightness is moved away from the paper until the colour keeps `contrast` (7:1,
-// the WCAG AAA bar) with it. A colour that already does is left where it is.
+// the WCAG AAA bar) with it, measured on a stroke as drawn (at the medium's opacity, over the
+// paper; for ink that is the colour itself). A colour that already does is left where it is.
 // Strokes multiply (two overlapping strokes of ink are darker where they cross).
 //
 // The ink LINE has no grain (Ben, 2026-09-30: no speckle, pinholes or dry-brush on
@@ -13,6 +14,9 @@ import { toOklch } from '../color'
 import { fitLightness } from '../theme/contrast'
 import { baseColour, noGrain, pageNeutrals, settingOf } from './fit'
 import type { Medium, MediumSettingSpec } from './types'
+
+// The opacity of one stroke. The contrast floor is measured on a stroke at it, over the paper.
+const OPACITY = 1
 
 const SETTINGS: readonly MediumSettingSpec[] = [
   { key: 'chroma', label: 'Chroma', min: 0, max: 1.5, step: 0.05, default: 0.9 },
@@ -28,7 +32,7 @@ export const ink: Medium = {
     const base = toOklch(baseColour(theme, 'ink', role, pageNeutrals(theme), theme.colours))
     const chroma = settingOf(SETTINGS, settings, 'chroma')
     const contrast = settingOf(SETTINGS, settings, 'contrast')
-    return { hex: fitLightness({ ...base, c: base.c * chroma }, theme.colours.paper, { target: contrast }), opacity: 1 }
+    return { hex: fitLightness({ ...base, c: base.c * chroma }, theme.colours.paper, { target: contrast, opacity: OPACITY }), opacity: OPACITY }
   },
   surfaceColour: (theme) => theme.colours.paper,
   overlap: 'multiply',

@@ -43,11 +43,33 @@ export function contrastRatio(a: Hex, b: Hex): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
 }
 
+// A colour laid over a surface at an opacity, as ONE stroke of it is drawn: each 8-bit sRGB
+// channel is opacity x colour + (1 - opacity) x surface, rounded (the way a canvas or SVG
+// composites a translucent stroke). Opacity 1 (or more) is the colour itself; 0 (or less) the surface.
+export function blendOver(hex: Hex, surface: Hex, opacity = 1): Hex {
+  const colour = channels(hex)
+  const behind = channels(surface)
+  const t = Math.min(1, Math.max(0, opacity))
+  const mixed = colour.map((channel, i) => Math.round(t * channel + (1 - t) * behind[i]))
+  return '#' + mixed.map((channel) => channel.toString(16).padStart(2, '0')).join('')
+}
+
+// The contrast of a stroke of `hex` at `opacity` against its surface, as drawn: the blended
+// colour against the surface (a WCAG ratio on what is actually on the screen).
+export function drawnContrast(hex: Hex, surface: Hex, opacity = 1): number {
+  return contrastRatio(blendOver(hex, surface, opacity), surface)
+}
+
 export interface FitOptions {
   // The contrast to reach. Default 3:1.
   target?: number
   // The lightness step. Default 0.01. Must be greater than 0 (a RangeError otherwise).
   step?: number
+  // The opacity one stroke of the colour is drawn at, above 0 and up to 1 (default 1; a RangeError
+  // otherwise). The contrast is then that of the colour blended over the surface at it (see
+  // `drawnContrast`), so the floor holds for what is seen, not for the solid colour. What
+  // comes back is the colour itself, not the blend.
+  opacity?: number
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
@@ -66,7 +88,9 @@ const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
 export function fitLightness(colour: Oklch, surface: Hex, options: FitOptions = {}): Hex {
   const target = options.target ?? MIN_SERIES_CONTRAST
   const step = options.step ?? 0.01
+  const opacity = options.opacity ?? 1
   if (!(step > 0)) throw new RangeError('fitLightness: step must be greater than 0, got ' + String(step))
+  if (!(opacity > 0 && opacity <= 1)) throw new RangeError('fitLightness: opacity must be above 0 and at most 1, got ' + String(opacity))
   const start = clamp01(colour.l)
   const away = start >= toOklch(surface).l ? 1 : -1
   let best = fromOklch({ ...colour, l: start })
@@ -78,7 +102,7 @@ export function fitLightness(colour: Oklch, surface: Hex, options: FitOptions = 
     const steps = Math.ceil(room / step - 1e-9)
     for (let k = 0; k <= steps; k++) {
       const hex = fromOklch({ ...colour, l: clamp01(start + direction * k * step) })
-      const ratio = contrastRatio(hex, surface)
+      const ratio = drawnContrast(hex, surface, opacity)
       if (ratio >= target) return hex
       if (ratio > bestRatio) {
         best = hex

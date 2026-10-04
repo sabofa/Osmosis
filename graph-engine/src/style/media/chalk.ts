@@ -3,9 +3,9 @@
 // Fitting, in OKLCH: the lightness is clamped to 0.80-0.95 and the chroma is the
 // base's x `chroma` (0.6, 0.5-0.7), so every colour comes out as a light, dusty
 // version of itself: `color: red` is a pastel chalk red (light, dusty, still red),
-// whoever wrote it. Then the lightness is moved only as far as it takes to keep
-// 4.5:1 with the board. Strokes lighten (overlaps brighten, never darken). The
-// chalk skips on the tooth and speckles.
+// whoever wrote it. Then the lightness is moved only as far as it takes for a stroke of it,
+// drawn at the chalk's opacity (0.9) over the board, to keep 4.5:1 with the board.
+// Strokes lighten (overlaps brighten, never darken). The chalk skips on the tooth and speckles.
 //
 // A board looks the same in light and in dark (Ben), and so does what is drawn on
 // it, coloured chalk included: nothing here reads `theme.mode` or `theme.colours`.
@@ -29,6 +29,9 @@ const SETTINGS: readonly MediumSettingSpec[] = [{ key: 'chroma', label: 'Chroma'
 const LIGHTEST = 0.95
 const DIMMEST = 0.8
 
+// The opacity of one stroke. The contrast floor is measured on a stroke at it, over the board.
+const OPACITY = 0.9
+
 const NEUTRALS = {
   ink: fromOklch({ l: LIGHTEST, c: 0, h: 0 }),
   muted: fromOklch({ l: DIMMEST, c: 0, h: 0 }),
@@ -41,7 +44,7 @@ export const chalk: Medium = {
   colour(theme, role, settings) {
     const base = toOklch(baseColour(theme, 'chalk', role, NEUTRALS, theme.boardColours))
     const chroma = settingOf(SETTINGS, settings, 'chroma')
-    return { hex: fitWithin({ ...base, c: base.c * chroma }, theme.boards.blackboard, 4.5, DIMMEST, LIGHTEST), opacity: 0.9 }
+    return { hex: fitWithin({ ...base, c: base.c * chroma }, theme.boards.blackboard, 4.5, DIMMEST, LIGHTEST, OPACITY), opacity: OPACITY }
   },
   surfaceColour: (theme) => theme.boards.blackboard,
   overlap: 'lighten',

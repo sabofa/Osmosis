@@ -179,11 +179,13 @@ function saysSomething(colours: Partial<ThemeColours> | undefined | null): colou
 }
 
 // Whether `colours` are the default theme's in dark mode: each colour the app's default dark
-// tokens carry (surface, ink, muted, line, lineStrong, accent, accentWash) is the token itself.
-// good, bad and the series are not compared: the host reads good and bad from CSS.
+// tokens carry (surface, ink, muted, line, lineStrong, accent, accentWash) is the token itself,
+// and so are good and bad (the dark defaults, which is what the app's CSS sets). The series is
+// not compared: a theme may give its own, which the default branch then keeps (see
+// `resolveBoardColours`).
 function isDefaultDark(colours: ThemeColours): boolean {
-  const tokens = coloursOfTokens(DEFAULT_DARK_TOKENS)
-  return (Object.keys(tokens) as (keyof typeof tokens)[]).every((name) => colours[name] === tokens[name])
+  const defaults = defaultColours('dark')
+  return (['surface', 'ink', 'muted', 'line', 'lineStrong', 'accent', 'accentWash', 'good', 'bad'] as const).every((name) => colours[name] === defaults[name])
 }
 
 // The light mode of a built-in theme, as a colour set: its light tokens and its good and bad.
@@ -202,7 +204,8 @@ function builtinLightColours(presetId: string): Partial<ThemeColours> | undefine
 //   dark mode   1. the source's `lightColours`, resolved as a light theme (what they leave out
 //                  comes from the default light theme, or is derived);
 //               2. else, if the theme is the default theme (its colours are the default dark
-//                  tokens), the default theme's light colours;
+//                  tokens, good and bad included), the default theme's light colours, with the
+//                  series the source gave, if it gave one;
 //               3. else `colours` itself: a custom theme with no light colours given. That is
 //                  INTERIM, until the theming overhaul supplies both modes: such a theme's boards
 //                  and board media follow its dark colours.
@@ -210,7 +213,7 @@ function builtinLightColours(presetId: string): Partial<ThemeColours> | undefine
 function resolveBoardColours(source: ThemeSource, mode: Mode, colours: ThemeColours): ThemeColours {
   if (mode === 'light') return copyColours(colours)
   if (saysSomething(source.lightColours)) return resolveColours(source.lightColours, 'light')
-  if (isDefaultDark(colours)) return resolveColours(undefined, 'light')
+  if (isDefaultDark(colours)) return resolveColours({ series: source.colours?.series }, 'light')
   return copyColours(colours)
 }
 

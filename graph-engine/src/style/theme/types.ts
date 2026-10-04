@@ -97,10 +97,11 @@ export interface ThemeInput {
   // The colour set board media (chalk, whiteboard) fit every role from, and the boards derive
   // from: always the theme's LIGHT mode, so a board and what is drawn on it do not change with
   // the mode. In light mode it is `colours`. In dark mode it is, in this order: the source's
-  // `lightColours`; else the default theme's light colours, when `colours` is the default
-  // theme's (its tokens); else the light tokens of a built-in theme (`fromOsmosisTheme`, by
-  // preset id); else `colours` itself (a custom theme with no light colours given: interim,
-  // until the theming overhaul supplies both modes).
+  // `lightColours`; else the default theme's light colours (with the source's own series, if it
+  // gave one), when `colours` is the default theme's (its tokens, good and bad); else the light
+  // tokens of a built-in theme (`fromOsmosisTheme`, by preset id, which fills `lightColours`);
+  // else `colours` itself (a custom theme with no light colours given: interim, until the
+  // theming overhaul supplies both modes).
   boardColours: ThemeColours
   boards: Record<BoardName, Hex>
   media: Partial<Record<MediumName, MediumColours>>

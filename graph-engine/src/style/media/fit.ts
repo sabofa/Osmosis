@@ -13,7 +13,7 @@
 // light-mode colours in either mode.
 
 import { fromOklch, toOklch, type Oklch } from '../color'
-import { contrastRatio, fitLightness, normaliseHex } from '../theme/contrast'
+import { drawnContrast, fitLightness, normaliseHex } from '../theme/contrast'
 import type { Hex, MediumName, RoleKey, ThemeColours, ThemeInput } from '../theme/types'
 import type { GrainSpec, MediumSettings, MediumSettingSpec, Role } from './types'
 
@@ -125,7 +125,8 @@ export function liftChroma(chroma: number, floor: number): number {
 const STEP = 0.01
 
 // `colour` with its lightness held to [lo, hi] and its contrast with `surface` at
-// `target` or better.
+// `target` or better, for ONE stroke of it drawn at `opacity` (the contrast is that of
+// the colour blended over the surface, as seen, not of the solid colour).
 //
 // The lightness starts at the colour's own, clamped to the range. Inside the
 // range, the nearest lightness (in steps of 0.01, away from the surface first,
@@ -135,12 +136,12 @@ const STEP = 0.01
 // is where nothing can). Hue and chroma are held throughout, the chroma reduced
 // only where the sRGB gamut forces it (through `fromOklch`), and contrast is
 // measured on the real 8-bit hex that comes out.
-export function fitWithin(colour: Oklch, surface: Hex, target: number, lo: number, hi: number): Hex {
+export function fitWithin(colour: Oklch, surface: Hex, target: number, lo: number, hi: number, opacity: number): Hex {
   const start = clamp(colour.l, lo, hi)
   const away = start >= toOklch(surface).l ? 1 : -1
   const at = (l: number): Hex | null => {
     const hex = fromOklch({ l, c: colour.c, h: colour.h })
-    return contrastRatio(hex, surface) >= target ? hex : null
+    return drawnContrast(hex, surface, opacity) >= target ? hex : null
   }
   const steps = Math.ceil((hi - lo) / STEP - 1e-9)
   for (let k = 0; k <= steps; k++) {
@@ -156,5 +157,5 @@ export function fitWithin(colour: Oklch, surface: Hex, target: number, lo: numbe
     const hex = at(l)
     if (hex !== null) return hex
   }
-  return fitLightness({ ...colour, l: start }, surface, { target })
+  return fitLightness({ ...colour, l: start }, surface, { target, opacity })
 }

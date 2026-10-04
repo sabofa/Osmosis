@@ -97,17 +97,57 @@ describe('boardColours: the colour set board media fit from, always the theme\'s
       expect(Object.isFrozen(defaultTheme('dark').boardColours.series)).toBe(true)
     })
 
-    it('is the default theme\'s light colours for the host\'s default theme, whatever good and bad it reads from CSS', () => {
-      for (const goodBad of [DEFAULT_DARK_GOOD_BAD, { good: '#2e9e5b', bad: '#d94a3a' }]) {
-        const theme = fromOsmosisTheme(paletteOf(DEFAULT_DARK_TOKENS, goodBad.good, goodBad.bad), 'dark')
-        expect(theme.boardColours).toEqual(defaultTheme('light').colours)
-        expect(theme.colours.good).toBe(goodBad.good)
+    it('is the default theme\'s light colours for the host\'s default theme (the default tokens, and the good and bad the app\'s CSS sets in dark)', () => {
+      const theme = fromOsmosisTheme(paletteOf(DEFAULT_DARK_TOKENS, DEFAULT_DARK_GOOD_BAD.good, DEFAULT_DARK_GOOD_BAD.bad), 'dark')
+      expect(theme.boardColours).toEqual(defaultTheme('light').colours)
+      expect(theme.colours.good).toBe(DEFAULT_DARK_GOOD_BAD.good)
+    })
+
+    it('is not the default theme\'s when its good or its bad is its own: the boards and what is drawn on them follow its own colours', () => {
+      const dark = tokensAsColours(DEFAULT_DARK_TOKENS)
+      for (const own of [{ bad: '#00ffff' }, { good: '#ff00ff' }, { good: '#2e9e5b', bad: '#d94a3a' }]) {
+        const theme = fromColours({ mode: 'dark', colours: { ...dark, ...own } })
+        expect(theme.boardColours, JSON.stringify(own)).toEqual(theme.colours)
+        expect(theme.boardColours, JSON.stringify(own)).not.toEqual(defaultTheme('light').colours)
+        expect(theme.boards, JSON.stringify(own)).toEqual(deriveBoards(theme.colours.accent))
+        // Through the host's door, too.
+        const palette = paletteOf(DEFAULT_DARK_TOKENS, own.good ?? DEFAULT_DARK_GOOD_BAD.good, own.bad ?? DEFAULT_DARK_GOOD_BAD.bad)
+        expect(fromOsmosisTheme(palette, 'dark').boardColours, `${JSON.stringify(own)} fromOsmosisTheme`).toEqual(fromOsmosisTheme(palette, 'dark').colours)
       }
+      // The dark default itself still is the default.
+      expect(fromColours({ mode: 'dark', colours: { ...dark, ...DEFAULT_DARK_GOOD_BAD } }).boardColours).toEqual(defaultTheme('light').colours)
+    })
+
+    it('keeps the series a default-tokens theme gives, in the default theme\'s light colours (the rest of them the default\'s)', () => {
+      const dark = tokensAsColours(DEFAULT_DARK_TOKENS)
+      const series = ['#ff0000', '#00aa00', '#0000ff', '#aa00aa', '#00aaaa', '#aaaa00', '#555555', '#ff8800']
+      const theme = fromColours({ mode: 'dark', colours: { ...dark, series } })
+      const plain = defaultTheme('light').colours
+      expect(theme.boardColours.series).toEqual(series)
+      expect(theme.boardColours).toEqual({ ...plain, series })
+      expect(theme.boardColours).not.toEqual(plain)
+      expect(theme.colours.series).toEqual(series)
+      // The boards follow the light accent, as the default's do.
+      expect(theme.boards).toEqual(defaultTheme('light').boards)
+      // A series that names only some slots: those slots, the rest as the light default derives them.
+      const some = fromColours({ mode: 'dark', colours: { ...dark, series: ['#ff0000', '#00aa00', '#0000ff'] } }).boardColours.series
+      expect(some.slice(0, 3)).toEqual(['#ff0000', '#00aa00', '#0000ff'])
+      expect(some.slice(3)).toEqual(plain.series.slice(3))
+      // An empty or invalid series changes nothing, and the same series in light mode gives the same colours.
+      expect(fromColours({ mode: 'dark', colours: { ...dark, series: [] } }).boardColours).toEqual(plain)
+      expect(fromColours({ mode: 'dark', colours: { ...dark, series: ['red', 12 as never] } }).boardColours).toEqual(plain)
+      expect(fromColours({ mode: 'dark', colours: { ...dark, series } }).boardColours.series).toEqual(fromColours({ mode: 'light', colours: { series } }).colours.series)
+    })
+
+    it('does not carry a series into a theme that is not the default: its own colours are its board colours', () => {
+      const series = ['#ff0000', '#00aa00', '#0000ff', '#aa00aa', '#00aaaa', '#aaaa00', '#555555', '#ff8800']
+      const theme = fromColours({ mode: 'dark', colours: { ...tokensAsColours(DEFAULT_DARK_TOKENS), bad: '#00ffff', series } })
+      expect(theme.boardColours).toEqual(theme.colours)
     })
 
     it('is not the default theme\'s the moment one token differs', () => {
       const dark = tokensAsColours(DEFAULT_DARK_TOKENS)
-      for (const name of ['surface', 'ink', 'muted', 'line', 'lineStrong', 'accent', 'accentWash'] as const) {
+      for (const name of ['surface', 'ink', 'muted', 'line', 'lineStrong', 'accent', 'accentWash', 'good', 'bad'] as const) {
         const changed = { ...dark, [name]: name === 'surface' ? '#202020' : '#abcdef' }
         const theme = fromColours({ mode: 'dark', colours: changed })
         expect(theme.boardColours, name).toEqual(theme.colours)
