@@ -74,7 +74,9 @@
 //    limit are read once more close in to the spot (CURVE.settleTols), because limits.ts
 //    stops at 6e-9, and for an explicit curve the independent coordinate of a limit is the
 //    located parameter itself, not the sample the limit was read at. `tested` and `defined`
-//    are read off the whole range's start grid (startGrid), drawn or not.
+//    are read off a start grid (startGrid), drawn or not: over the VISIBLE range of an explicit curve's
+//    independent axis (not the overscan), over the given range of a polar or parametric one. `blankAtCap`
+//    says the budget ran out with nothing drawn of a curve that is in view.
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { call, mul, variable } from '../../math/expr'
 import { compileInterval, CONTINUOUS, iv, type Verdict } from '../../math/interval'
@@ -115,6 +117,10 @@ export interface SampledCurve {
   // the curve first, then its marks in parameter order, then its asymptote lines
   objects: SceneObject[]
   capped: boolean
+  // The budget ran out (`capped`), no chain and no band was drawn, and the start grid has a point of the curve
+  // inside the view: the curve is missing because of the budget, not because it is not there. A capped curve
+  // that is wholly off screen (an integral's twin cannot say so, so it is refined as if it were not) is not this.
+  blankAtCap: boolean
   stats: { points: number; intervals: number }
   // some start-grid sample lay inside the domain
   tested: boolean
@@ -208,7 +214,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
 
   // A range or a scale that is not a number draws nothing (a view of no extent, say).
   if (!(co.to > co.from) || !Number.isFinite(co.from) || !Number.isFinite(co.to) || !(co.pxPerT > 0) || !Number.isFinite(co.pxPerT) || !(px.x > 0) || !(px.y > 0)) {
-    return { objects: [curveObject(options, [], [])], capped: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
+    return { objects: [curveObject(options, [], [])], capped: false, blankAtCap: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
   }
 
   const located = locateZeros(generatorsOf(co, scope), co.param, scope, co.from, co.to, counter)
@@ -252,9 +258,13 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const breaks: Break[] = sink.breaks().sort((a, b) => a.at - b.at)
   const bands = bandObjects(bandSink, options)
   const objects: SceneObject[] = [curveObject(options, chains, breaks), ...bands, ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
-  const grid = startGrid(spec.kind === 'explicit' ? spec.domain : null, co, fns, scope, tuning, counter, chains.length > 0 || bands.length > 0)
+  // Drawn, for `defined`: a chain or band that reaches the visible range (an explicit curve drawn only in the overscan is not defined in view)
+  const [visibleFrom, visibleTo] = visibleRange(spec, co, bounds)
+  const drawn = spec.kind === 'explicit' ? reaches(chains, visibleFrom, visibleTo) || bands.some((b) => b.kind === 'band' && reaches(b.outline, visibleFrom, visibleTo)) : chains.length > 0 || bands.length > 0
+  const blank = chains.length === 0 && bands.length === 0
+  const grid = startGrid(spec, co, fns, scope, tuning, bounds, counter, drawn, capped && blank)
   // the stats are the total of what the call evaluated: locating, classifying and sampling
-  return { objects, capped, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
+  return { objects, capped, blankAtCap: capped && blank && grid.seen, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
 }
 
 // What one classified spot is to the pieces beside it (step 4 of the header), and the typed
@@ -541,36 +551,74 @@ function generatorsOf(co: Coordinates, scope: MathScope): Generator[] {
   return [...found.values()]
 }
 
-// What the start grid says of the curve as a whole, for the caller's two messages.
+// Whether any vertex of the chains has a parameter in [lo, hi].
+function reaches(chains: readonly Chain[], lo: number, hi: number): boolean {
+  for (const chain of chains) {
+    for (let i = 0; i < chain.param.length; i++) if (chain.param[i] >= lo && chain.param[i] <= hi) return true
+  }
+  return false
+}
+
+// What the start grid says of the curve as a whole, for the caller's messages.
 //  - tested: some parameter of the grid satisfies the domain (a condition holds where it is
 //    neither 0 nor NaN), so the curve was tested against something. True with no domain.
 //  - defined: some parameter of the grid gave a finite point, drawn or not. A curve that was
 //    drawn is defined, and costs nothing to say so; one that was not may be wholly off screen
 //    (culled by one enclosure, with no sample taken), so the grid is read for it. Outside a
 //    domain the piecewise is NaN, so a finite point is one inside it.
-// (The grid is the whole range's, as the core would lay it: the pieces the structure walk cuts
+//  - seen (only when asked for): some finite point of the grid lies inside the view.
+// An explicit curve's grid is the VISIBLE range of its independent axis, not the sampled one:
+// the overscan is where the sampler looks, not where the picture is, and y = sqrt(x - 12) has a
+// stretch in the overscan of a view of +-10 and none in view, which is "undefined everywhere in
+// view" (and a chain drawn only out there is not a curve defined in view: `drawn` is whether
+// a chain or band reaches the visible range). Polar and parametric have no axis, so theirs is
+// the range they were given.
+// (The grid is laid as the core would lay it over that range: the pieces the structure walk cuts
 // have grids of their own, and a domain narrower than the whole grid's spacing is "tested" by
 // nothing, which says nothing: that is the safe way for the message to go.)
-function startGrid(domain: Expr | null, co: Coordinates, fns: CurveFns, scope: MathScope, tuning: Tuning, counter: EvalCounter, drawn: boolean): { tested: boolean; defined: boolean } {
+function startGrid(
+  spec: CurveSpec,
+  co: Coordinates,
+  fns: CurveFns,
+  scope: MathScope,
+  tuning: Tuning,
+  view: Bounds,
+  counter: EvalCounter,
+  drawn: boolean,
+  wantSeen: boolean
+): { tested: boolean; defined: boolean; seen: boolean } {
+  const domain = spec.kind === 'explicit' ? spec.domain : null
   const holds = domain ? compileScalar(domain, [co.param], scope) : null
   let tested = holds === null
   let defined = drawn
-  if (tested && defined) return { tested, defined }
-  let n = Math.max(CORE.minStartIntervals, Math.ceil(((co.to - co.from) * co.pxPerT) / tuning.startPx))
+  let seen = false
+  if (tested && defined && !wantSeen) return { tested, defined, seen }
+  const [from, to] = visibleRange(spec, co, view)
+  let n = Math.max(CORE.minStartIntervals, Math.ceil(((to - from) * co.pxPerT) / tuning.startPx))
   n = Math.max(1, Math.min(n, Math.floor(tuning.budget.points)))
   const pt = new Float64Array(2)
-  for (let i = 0; i <= n && !(tested && defined); i++) {
-    const t = i === 0 ? co.from : i === n ? co.to : co.from + ((co.to - co.from) * i) / n
+  for (let i = 0; i <= n && !(tested && defined && (seen || !wantSeen)); i++) {
+    const t = i === 0 ? from : i === n ? to : from + ((to - from) * i) / n
     if (holds && !tested) {
       const v = holds(t)
       counter.points++
       if (v === v && v !== 0) tested = true
     }
-    if (!defined) {
+    if (!defined || (wantSeen && !seen)) {
       fns.point(t, pt)
       counter.points++
-      defined = Number.isFinite(pt[0]) && Number.isFinite(pt[1])
+      if (Number.isFinite(pt[0]) && Number.isFinite(pt[1])) {
+        defined = true
+        if (pt[0] >= view.xMin && pt[0] <= view.xMax && pt[1] >= view.yMin && pt[1] <= view.yMax) seen = true
+      }
     }
   }
-  return { tested, defined }
+  return { tested, defined, seen }
+}
+
+// The range the start grid is laid over: an explicit curve's independent axis across the view (no
+// overscan), the parameter range of the others.
+function visibleRange(spec: CurveSpec, co: Coordinates, view: Bounds): [number, number] {
+  if (spec.kind !== 'explicit') return [co.from, co.to]
+  return spec.independent === 'x' ? [view.xMin, view.xMax] : [view.yMin, view.yMax]
 }

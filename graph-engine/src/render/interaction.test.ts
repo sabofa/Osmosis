@@ -101,4 +101,50 @@ describe('createInteraction', () => {
     expect(i.pointerUp()).toBe(true)
     expect(i.isInteracting()).toBe(false)
   })
+
+  // fix round 1: a wheel turned with the button held moved the view, though the pointer did not; its settle was lost when the
+  // wheel burst's own timer found a drag in progress and left the settling to the pointer up, which then saw no move
+  it('a wheel turned during a press moved the view: the pointer up still asks for the settle', () => {
+    const c = clock()
+    const i = createInteraction(c.now)
+    i.pointerDown()
+    i.wheel()
+    c.advance(WHEEL_SETTLE_MS)
+    expect(i.takeWheelSettled()).toBe(true)
+    expect(i.pointerUp()).toBe(true)
+    // and a wheel with no press does not leave a move behind for the next press
+    i.wheel()
+    i.pointerDown()
+    expect(i.pointerUp()).toBe(false)
+  })
+
+  // fix round 1 (I2): the viewport's pixels drive the sampling, so a resize is a view change. The first size is the baseline
+  // (the observer reports once when it starts), and only a different size asks for a rebuild.
+  describe('viewportChanged', () => {
+    it('is false for the size the renderer started with, and for the same size again', () => {
+      const i = createInteraction(clock().now)
+      expect(i.viewportChanged(800, 600)).toBe(false)
+      expect(i.viewportChanged(800, 600)).toBe(false)
+    })
+    it('is true when either side changes, once for each change', () => {
+      const i = createInteraction(clock().now)
+      i.viewportChanged(800, 600)
+      expect(i.viewportChanged(801, 600)).toBe(true)
+      expect(i.viewportChanged(801, 600)).toBe(false)
+      expect(i.viewportChanged(801, 400)).toBe(true)
+      expect(i.viewportChanged(800, 600)).toBe(true)
+    })
+    it('a canvas that was not displayed (1 x 1) and comes up at its size is a change', () => {
+      const i = createInteraction(clock().now)
+      i.viewportChanged(1, 1)
+      expect(i.viewportChanged(640, 480)).toBe(true)
+    })
+    it('is independent of a gesture: a resize during a drag is still a change, and does not end the drag', () => {
+      const i = createInteraction(clock().now)
+      i.viewportChanged(800, 600)
+      i.pointerDown()
+      expect(i.viewportChanged(700, 600)).toBe(true)
+      expect(i.isDragging()).toBe(true)
+    })
+  })
 })

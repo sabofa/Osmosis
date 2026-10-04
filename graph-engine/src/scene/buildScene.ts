@@ -1,4 +1,4 @@
-import { compileScalar } from '../math/compile'
+import { compileScalar, freeVariablesDeep } from '../math/compile'
 import { variable } from '../math/expr'
 import { and, compare } from '../math/reserved'
 import type { MathScope } from '../math/scope'
@@ -29,6 +29,9 @@ const DEFAULT_WIDTH_PX = 800
 // the author is told it is not the whole picture (spec: "At the cap the curve coarsens and a note says so;
 // it never blanks").
 const BUDGET_NOTE = 'drawn coarsely: this curve needs more detail than its drawing budget allows'
+// And of one the budget left with nothing at all to draw (a curve the twin cannot certify has nothing
+// the cap can keep): the same cause, said as what it is. "drawn coarsely" over a blank would be false.
+const NOT_DRAWN_NOTE = 'not drawn: this curve needs more detail than its drawing budget allows'
 
 // One pass over the statements to collect every "k(x) = ..." / "a = 5"
 // definition into a lookup table, before anything else gets built — a
@@ -105,13 +108,25 @@ function domainOf(statement: Statement & { kind: 'explicit' }): Expr | null {
 // The range of a polar or parametric statement as two numbers, low to high. A range written the
 // wrong way round ("for t in [5, 2]") is the same curve traced backwards, and the sampler (which
 // takes low to high) draws what v1 did. A range that is not a number, or has nothing in it, says
-// so on its own line, which "undefined everywhere in view" would not.
-function rangeOf(from: Expr, to: Expr, scope: MathScope, param: string): [number, number] {
+// so on its own line, which "undefined everywhere in view" would not. The exception is an empty
+// range that a @param made (`for t in [0, a]` with the slider at 0): a slider's position is not a
+// mistake in the text, so there is nothing to draw and nothing to say (null). A range written as
+// empty, or made so by a constant, is still the author's to fix.
+function rangeOf(from: Expr, to: Expr, scope: MathScope, param: string): [number, number] | null {
   const a = constant(from, scope)
   const b = constant(to, scope)
   if (!Number.isFinite(a) || !Number.isFinite(b)) throw new Error(`the range of ${param} is not a number`)
-  if (a === b) throw new Error(`the range of ${param} is empty`)
+  if (a === b) {
+    if (readsParam(from, scope) || readsParam(to, scope)) return null
+    throw new Error(`the range of ${param} is empty`)
+  }
   return a < b ? [a, b] : [b, a]
+}
+
+// Whether an expression reads a @param, directly or through the functions and constants it uses.
+function readsParam(expr: Expr, scope: MathScope): boolean {
+  for (const name of freeVariablesDeep(expr, scope)) if (scope.params.index.has(name)) return true
+  return false
 }
 
 // What the sampler needs besides the statement: the viewport, how fine to be, and where to put
@@ -131,9 +146,13 @@ interface CurveContext {
 //  - tested but defined nowhere in the range: "undefined everywhere in view" (the statement's error). A
 //    curve that was never tested (its domain misses the view) says nothing; a curve that is defined but
 //    wholly off screen is not this either.
-//  - capped: the curve is drawn from what the sampler had, and the line carries a note. Not for a coarse
-//    pass, which is coarse on purpose (the settled pass says whether the curve fits its budget), and
-//    whose message would flash on every drag frame.
+//  - capped, and nothing drawn (no chain, no band) of a curve that has points in view (`blankAtCap`):
+//    "not drawn", at ANY quality. What the cap leaves of a curve the twin cannot certify (an integral)
+//    is nothing, and a blank must say why; the same note over a curve that is not in view would be
+//    false, which is why the sampler says whether there was anything to draw.
+//  - capped, and something drawn: the curve is drawn from what the sampler had, and the line says
+//    "drawn coarsely", at FULL only. A coarse pass is coarse on purpose (the settled pass says whether
+//    the curve fits its budget), and the message would flash on every drag frame.
 // The objects are the sampler's: the curve, its bands, its marks, its asymptote guides.
 function sampleStatement(spec: CurveSpec, statementIndex: number, color: string | null, line: number, ctx: CurveContext): SceneObject[] {
   const sampled = sampleCurve(spec, ctx.view, ctx.scope, {
@@ -146,8 +165,14 @@ function sampleStatement(spec: CurveSpec, statementIndex: number, color: string 
   ctx.stats.points += sampled.stats.points
   ctx.stats.intervals += sampled.stats.intervals
   if (sampled.tested && !sampled.defined) throw new Error('this curve is undefined everywhere in view')
-  if (sampled.capped && ctx.quality === 'full') ctx.errors.push({ line, message: BUDGET_NOTE })
+  if (sampled.blankAtCap) ctx.errors.push({ line, message: NOT_DRAWN_NOTE })
+  else if (sampled.capped && ctx.quality === 'full' && drewSomething(sampled.objects)) ctx.errors.push({ line, message: BUDGET_NOTE })
   return sampled.objects
+}
+
+// Whether the sampler's objects have a drawn curve in them: a chain or a band (marks and guides are not the curve).
+function drewSomething(objects: readonly SceneObject[]): boolean {
+  return objects.some((o) => (o.kind === 'curve' && o.chains.length > 0) || o.kind === 'band')
 }
 
 function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
@@ -159,13 +184,15 @@ function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIn
 // write is a full turn in that unit: 360 under @angle: degrees, 2 pi otherwise (the parser's default,
 // flagged `fullTurn`, is in radians).
 function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
-  const [from, to] = statement.fullTurn && ctx.config.angle === 'degrees' ? [0, 360] : rangeOf(statement.from, statement.to, ctx.scope, 'theta')
-  return sampleStatement({ kind: 'polar', body: statement.body, from, to }, statementIndex, statement.color, line, ctx)
+  const range = statement.fullTurn && ctx.config.angle === 'degrees' ? ([0, 360] as [number, number]) : rangeOf(statement.from, statement.to, ctx.scope, 'theta')
+  if (range === null) return []
+  return sampleStatement({ kind: 'polar', body: statement.body, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
 }
 
 function sampleParametric(statement: Statement & { kind: 'parametric' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
-  const [from, to] = rangeOf(statement.from, statement.to, ctx.scope, statement.param)
-  return sampleStatement({ kind: 'parametric', param: statement.param, fx: statement.fx, fy: statement.fy, from, to }, statementIndex, statement.color, line, ctx)
+  const range = rangeOf(statement.from, statement.to, ctx.scope, statement.param)
+  if (range === null) return []
+  return sampleStatement({ kind: 'parametric', param: statement.param, fx: statement.fx, fy: statement.fy, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
 }
 
 function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
@@ -493,11 +520,15 @@ export interface SceneOptions {
 }
 
 // The viewport the sampler is given: the width, and the height that keeps the bounds' aspect unless
-// the caller says. At least a pixel high: a view of no height says "undefined" to nobody.
+// the caller says. Each is a finite number of pixels, at least one: a canvas that is not displayed
+// reports 0, and the sampler answers a scale of no pixels with "undefined everywhere in view", which
+// would be a false message about a curve that is only unseen. A size that is not a number at all
+// (NaN, an infinity) is the default.
 function viewOf(bounds: Bounds, options: SceneOptions | undefined): View {
-  const widthPx = options?.widthPx ?? DEFAULT_WIDTH_PX
+  const px = (given: number | undefined, otherwise: number) => (given !== undefined && Number.isFinite(given) ? Math.max(1, given) : otherwise)
+  const widthPx = px(options?.widthPx, DEFAULT_WIDTH_PX)
   const natural = Math.round((widthPx * (bounds.yMax - bounds.yMin)) / (bounds.xMax - bounds.xMin))
-  const heightPx = options?.heightPx ?? (Number.isFinite(natural) ? Math.max(1, natural) : widthPx)
+  const heightPx = px(options?.heightPx, Number.isFinite(natural) ? Math.max(1, natural) : widthPx)
   return { bounds, widthPx, heightPx }
 }
 

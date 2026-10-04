@@ -350,6 +350,49 @@ describe('sampleCurve — defined is the curve, not what is visible', () => {
     expect(curveOf(r.objects).chains).toHaveLength(0)
     expect(r.defined).toBe(true)
   })
+  // fix round 1: the 25 % overscan is where the sampler looks, not where the picture is. y = sqrt(x - 12) has a stretch in
+  // the overscan of a view of +-10 (x from 12 to 12.5) and none in the view, so it is undefined everywhere in view.
+  it('counts the visible range only, for an explicit curve: y = sqrt(x - 12) is undefined in a view of +-10, y = sqrt(x - 9) is not', () => {
+    expect(run(explicit('sqrt(x - 12)'))).toMatchObject({ defined: false, tested: true })
+    expect(run(explicit('sqrt(x - 9)'))).toMatchObject({ defined: true, tested: true })
+    expect(run({ kind: 'explicit', independent: 'y', body: expr('sqrt(y - 12)'), domain: null })).toMatchObject({ defined: false, tested: true })
+    // a curve that is defined in view and off screen stays defined (and so silent), and so does one drawn in view
+    expect(run(explicit('x + 100'))).toMatchObject({ defined: true, tested: true })
+    expect(run(explicit('x'))).toMatchObject({ defined: true, tested: true })
+    // a domain that holds only in the overscan tests nothing in view
+    expect(run(explicit('x', 'x > 11'))).toMatchObject({ defined: false, tested: false })
+  })
+  it('polar and parametric keep their whole range', () => {
+    // the curve exists only from t = 12, which is off screen (x = t): the whole range is its own, so it is defined
+    const r = run({ kind: 'parametric', param: 't', fx: expr('t'), fy: expr('sqrt(t - 12)'), from: 0, to: 20 })
+    expect(r.defined).toBe(true)
+  })
+})
+
+// calc P2 task 7, fix round 1 (I1): a capped curve that drew nothing says so, but only if there was something to draw.
+describe('sampleCurve — blankAtCap', () => {
+  const tiny = { points: 50, intervals: 50 }
+  const go = (body: string, budget = tiny) => sampleCurve(explicit(body), view, scopeOf(), { ...opts, budget })
+  it('is true when the budget ran out, nothing was drawn, and the start grid has the curve in view', () => {
+    // an integral certifies nothing, so what the cap leaves is nothing
+    const r = go('integral(t = 0 to x, 2t)')
+    expect(r.capped).toBe(true)
+    expect(curveOf(r.objects).chains).toHaveLength(0)
+    expect(r.blankAtCap).toBe(true)
+  })
+  it('is false for a curve that is not in view at all: the cap hid nothing', () => {
+    const r = go('integral(t = 0 to x, 2t) + 1000')
+    expect(r.capped).toBe(true)
+    expect(curveOf(r.objects).chains).toHaveLength(0)
+    expect(r.blankAtCap).toBe(false)
+  })
+  it('is false when something was drawn, and when the budget held', () => {
+    const drawn = go('sin(3x)')
+    expect(drawn.capped).toBe(true)
+    expect(curveOf(drawn.objects).chains.length).toBeGreaterThan(0)
+    expect(drawn.blankAtCap).toBe(false)
+    expect(run(explicit('x^2')).blankAtCap).toBe(false)
+  })
 })
 
 describe('sampleCurve — assembly', () => {
@@ -461,6 +504,71 @@ describe('sampleCurve — steep, polar, parametric', () => {
     const a = run(explicit('tan(x) + floor(x) + sin(x)/x'))
     const b = run(explicit('tan(x) + floor(x) + sin(x)/x'))
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+})
+
+// calc P2 task 7, fix round 1 (S1): the twin of an integral says nothing (UNKNOWN), so nothing about it is certified and every
+// interval is decided by the jump test at the floor. y = integral(t = 0 to x, 40 cos(t)) is 40 sin(x), which is steeper than 16:1
+// over most of the view: it was broken at every floor interval, 8091 jump breaks and nothing drawn in view.
+describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not broken at every floor interval', () => {
+  const bounds = view.bounds
+  // the share of 401 x positions across the view where the true curve is in view that a drawn chain segment covers
+  const covered = (objs: SceneObject[], f: (x: number) => number) => {
+    const segs: [number, number][] = []
+    for (const c of curveOf(objs).chains) {
+      const p = chainPoints(c)
+      for (let i = 0; i + 1 < p.length; i++) segs.push([Math.min(p[i].x, p[i + 1].x), Math.max(p[i].x, p[i + 1].x)])
+    }
+    let want = 0
+    let have = 0
+    for (let i = 0; i <= 400; i++) {
+      const x = bounds.xMin + ((bounds.xMax - bounds.xMin) * i) / 400
+      if (!(Math.abs(f(x)) <= bounds.yMax)) continue
+      want++
+      if (segs.some(([a, b]) => a <= x && x <= b)) have++
+    }
+    return { have, want }
+  }
+  const jumpsInView = (objs: SceneObject[], f: (x: number) => number) => curveOf(objs).breaks.filter((b) => b.kind === 'jump' && Math.abs(b.at) <= bounds.xMax && Math.abs(f(b.at)) <= bounds.yMax)
+
+  it('y = integral(t = 0 to x, 40 cos(t)) is drawn everywhere it is in view at FULL, with no jump break in view', () => {
+    const f = (x: number) => 40 * Math.sin(x)
+    const r = run(explicit('integral(t = 0 to x, 40 cos(t))'))
+    const { have, want } = covered(r.objects, f)
+    expect(want).toBeGreaterThan(50)
+    expect(have).toBe(want)
+    expect(jumpsInView(r.objects, f)).toEqual([])
+    expect(r.capped).toBe(false)
+    // and it is the curve: every vertex within half a pixel of it
+    for (const p of curveOf(r.objects).chains.flatMap(chainPoints)) expect(Math.abs(f(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+  })
+  it('y = integral(t = 0 to x, 2t) is drawn at COARSE, and at FULL', () => {
+    const f = (x: number) => x * x
+    for (const quality of ['coarse', 'full'] as const) {
+      const r = sampleCurve(explicit('integral(t = 0 to x, 2t)'), view, scopeOf(), { ...opts, quality })
+      const { have, want } = covered(r.objects, f)
+      expect(want, quality).toBeGreaterThan(50)
+      expect(have, quality).toBe(want)
+      expect(jumpsInView(r.objects, f), quality).toEqual([])
+    }
+  })
+  it('y = integral(t = 0 to x, 20), a straight line of slope 20, is drawn at FULL and COARSE', () => {
+    const f = (x: number) => 20 * x
+    for (const quality of ['coarse', 'full'] as const) {
+      const r = sampleCurve(explicit('integral(t = 0 to x, 20)'), view, scopeOf(), { ...opts, quality })
+      const { have, want } = covered(r.objects, f)
+      expect(want, quality).toBeGreaterThan(10)
+      expect(have, quality).toBe(want)
+      expect(jumpsInView(r.objects, f), quality).toEqual([])
+    }
+  })
+  it('an unlocated jump beside the integral is still a break: integral(t = 0 to x, 0) + {x < 0.1234: 0, 1}', () => {
+    // (a piecewise seam is found by the walk; the jump test is for what it does not find)
+    const r = run(explicit('integral(t = 0 to x, 0) + {x < 0.1234: 0, 1}'))
+    for (const c of curveOf(r.objects).chains) {
+      const xs = chainPoints(c).map((p) => p.x)
+      expect(xs.some((x) => x < 0.1234 - 1e-9) && xs.some((x) => x > 0.1234 + 1e-9)).toBe(false)
+    }
   })
 })
 

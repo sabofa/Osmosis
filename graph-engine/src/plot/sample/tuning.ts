@@ -262,8 +262,15 @@ export interface Tuning {
   // An interval this narrow (in px of parameter range) is not bisected any further. At
   // 1/16 px a steep curve may take a long chord: steepness never breaks a curve.
   floorPx: number
+  // An interval the twin does NOT certify is not bisected any further at this width, which is floorPx
+  // for FULL and coarser for a drag. What the twin cannot certify is all that can only be decided by
+  // bisecting to the floor and testing there (an integral, a cancelling quotient, a seam the walk did
+  // not find), so it is where a drag's cost goes: the sine integral was 244 ms a COARSE frame.
+  // Certified intervals keep floorPx: they are accepted flat long before it.
+  uncertifiedFloorPx: number
   // Two ends this close on screen, the twin unable to certify the interval, are connected
-  // if the jump test shows the gap closing; a pixel is what the eye can tell apart.
+  // if the jump test shows the gap closing; a pixel is what the eye can tell apart. (At the floor
+  // the gap need not be small, only to close: CORE.floorHalvings.)
   gapPx: number
   // The jump test: this many successive halvings (3 take a 1 px gap to 1/8 px), keeping
   // the half with the larger gap, and each gap must be at most halvingShrink times the
@@ -300,10 +307,10 @@ export interface Tuning {
   budget: { points: number; intervals: number }
 }
 
-export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, uncertifiedFloorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
 // COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
 // cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
-export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, spikeFactor: 8, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }
+export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, uncertifiedFloorPx: 0.5, spikeFactor: 8, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }
 
 // The parts of the core that are not a quality knob, so not in Tuning but still numbers
 // that were chosen.
@@ -315,4 +322,15 @@ export const CORE = {
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
   // far under any screen.
   edgeSteps: 64,
+  // The jump test at the floor (adaptive.ts): an interval the twin does not certify, at the width it stops
+  // being bisected at, with both ends finite and its enclosure bounded (or the verdict UNKNOWN), is joined if
+  // it passes the jump test with no precondition on the gap: halved up to this many levels BELOW the floor,
+  // keeping the half with the larger gap, and joined only if each gap is at most halvingShrink times the one
+  // before. A smooth curve's gaps halve however steep it is (a slope of 40 is 2.5 px at 1/16 px, and 0.04 px
+  // after six halvings); a jump keeps its size, and so does a pole's. The old precondition (a gap under
+  // gapPx) refused every interval of a smooth curve steeper than 16:1 on screen, and it was broken at
+  // every floor interval (y = integral(t = 0 to x, 40 cos(t)): 8091 jump breaks, nothing drawn in view).
+  // Six levels take a floor interval to a sixty-fourth of it, 1/1024 px, where a jump of a twentieth of a
+  // pixel is still the whole of the gap; a smaller one is not drawn as a jump because it is not seen.
+  floorHalvings: 6,
 }

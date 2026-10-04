@@ -53,8 +53,7 @@ function finishIndexedUpdate(geometry: THREE.BufferGeometry, indexCount: number)
 
 // Curve ribbon tuning — matches the "Ink-Framed Ruled Grid" reference's
 // defaults (lineWeightIntensity 0.85, baseLineWidth 3, weightStyle
-// "curvature"). Not exposed as a DSL/config knob, same as e.g. buildScene's
-// SAMPLES constant.
+// "curvature"). Not exposed as a DSL/config knob.
 const CURVE_WEIGHT_INTENSITY = 0.85
 const CURVE_BASE_WIDTH_PX = 3
 
@@ -72,8 +71,7 @@ const LINE_WIDTH_PX = 2.5
 // at deep zoom-out (thousands of world units tall), that's tens of
 // thousands of tiny quads for a single dashed line, all rebuilt on every
 // pan/zoom frame. This was the actual cause of a real, measured 150-330ms-
-// per-frame freeze when zoomed out far on a steep curve (a false-positive
-// asymptote line — see buildScene.ts's jump-detection — spanning the full
+// per-frame freeze when zoomed out far (an asymptote guide spanning the full
 // view height). Pixel-fixed dash/gap size bounds chunk count by screen
 // resolution instead of world-unit length, the same way every other
 // "constant visual size" thing in this file already does.
@@ -86,14 +84,14 @@ const GAP_SIZE_PX = 5
 // jitter between neighboring points, divided by the arc length spanned by
 // that same window — true curvature is angle change *per unit length*
 // (dθ/ds), not angle change alone. Skipping that division was a real bug:
-// buildScene always samples a curve at a fixed *count* (400 points) across
-// whatever x-range is currently visible, so zooming out spreads those same
-// 400 points over more world space. For a curve whose slope varies (e.g. a
-// parabola away from its vertex), that coarser spacing alone produces a
-// bigger raw angle between stride-separated points — indistinguishable from
-// genuine sharp turning if you don't normalize by how far apart those points
-// actually are — so the ribbon kept getting wider as you zoomed out, on
-// stretches that aren't actually curving any more sharply than before.
+// the spacing of a curve's vertices is not constant (it follows the zoom, and
+// the adaptive sampler spaces vertices by how flat the curve is, so a gentle
+// stretch is a few long segments and a bend many short ones). For a curve whose
+// slope varies (e.g. a parabola away from its vertex), a wider spacing alone
+// produces a bigger raw angle between stride-separated points — indistinguishable
+// from genuine sharp turning if you don't normalize by how far apart those
+// points actually are — so the ribbon got wider where the points were sparser,
+// on stretches that aren't actually curving any more sharply than before.
 // Dividing by arc length makes this a property of the curve's actual shape
 // again, independent of sampling density or zoom.
 //

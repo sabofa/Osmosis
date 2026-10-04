@@ -1264,6 +1264,87 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
       expect(scene.errors).toEqual([expect.objectContaining({ line: 2, message: expect.stringContaining('range') })])
       expect(scene.errors[0].message).not.toMatch(/undefined everywhere/)
     })
+    // fix round 1: a slider that brings the range to nothing is a position of the slider, not a mistake in the text
+    it('an empty range that comes from a @param draws nothing and says nothing, and draws again off zero', () => {
+      // (the last reads a only through a function)
+      for (const spec of ['r = 2 for theta in [0, a]', '(t, t) for t in [0, a]', '(t, t) for t in [0, 2 * a]', 'k(u) = u + a\n(t, t) for t in [0, k(0)]']) {
+        const empty = sceneOf(`@param a = 0 range [0, 6]\n${spec}`)
+        expect(empty.errors, spec).toEqual([])
+        expect(curvesOf(empty).flatMap((c) => c.chains), spec).toEqual([])
+        const drawn = sceneOf(`@param a = 3 range [0, 6]\n${spec}`)
+        expect(curvesOf(drawn).flatMap((c) => c.chains).length, spec).toBeGreaterThan(0)
+      }
+    })
+    it('a literal empty range stays an error, and so does one from a constant that is not a @param', () => {
+      for (const spec of ['(t, t) for t in [2, 2]', 'a = 0\n(t, t) for t in [0, a]']) {
+        expect(sceneOf(spec).errors, spec).toEqual([expect.objectContaining({ message: expect.stringContaining('empty') })])
+      }
+    })
+    it('a range that is not a number from a @param is still an error (a slider cannot make a number of it)', () => {
+      expect(sceneOf('@param a = 0 range [0, 6]\n(t, t) for t in [0, 1/a]').errors).toEqual([expect.objectContaining({ message: expect.stringContaining('not a number') })])
+    })
+  })
+
+  // fix round 1: "in view" is the picture's range, not the overscan the sampler also looks at
+  it('says "undefined everywhere in view" of a curve that exists only in the overscan, and nothing of one that is defined and off screen', () => {
+    // sceneOf's view is x from -10 to 10: sqrt(x - 12) starts at 12, in the 25 % overscan (to 12.5) and not in view
+    const outside = sceneOf('y = sqrt(x - 12)')
+    expect(outside.errors).toEqual([expect.objectContaining({ line: 1, message: expect.stringContaining('undefined everywhere in view') })])
+    expect(sceneOf('y = sqrt(x - 9)').errors).toEqual([])
+    expect(sceneOf('y = x + 100').errors).toEqual([])
+    // and the same on the other axis (y from -6 to 6, overscan to 7.5)
+    expect(sceneOf('x = sqrt(y - 6.5)').errors).toEqual([expect.objectContaining({ message: expect.stringContaining('undefined everywhere in view') })])
+    expect(sceneOf('x = sqrt(y - 5)').errors).toEqual([])
+  })
+
+  // fix round 1: a viewport that is not a number of pixels is not "undefined everywhere in view"
+  describe('the viewport', () => {
+    it('is clamped to finite numbers of at least a pixel: a canvas that is not displayed reports 0', () => {
+      for (const [widthPx, heightPx] of [[0, 0], [-5, -5], [Number.NaN, Number.NaN], [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY], [0.2, 0.2]]) {
+        const scene = sceneWith('y = x^2\ny = sin(x)', { widthPx, heightPx })
+        expect(scene.errors, `${widthPx} x ${heightPx}`).toEqual([])
+        expect(curvesOf(scene).map((c) => c.chains.length), `${widthPx} x ${heightPx}`).toEqual([1, 1])
+        expect(Number.isFinite(scene.stats!.points)).toBe(true)
+      }
+    })
+    it('a width that is not a number is the default one, and so is a height', () => {
+      const byDefault = sceneWith('y = x^2')
+      expect(sceneWith('y = x^2', { widthPx: Number.NaN }).stats).toEqual(byDefault.stats)
+      expect(sceneWith('y = x^2', { widthPx: 800, heightPx: Number.NaN }).stats).toEqual(byDefault.stats)
+    })
+    it('a bounds of no height still gives the sampler a pixel to work in', () => {
+      const scene = sceneWith('y = 1', undefined, { xMin: -10, xMax: 10, yMin: 5, yMax: 5.00001 })
+      expect(scene.errors).toEqual([])
+    })
+  })
+
+  // fix round 1 (S1): the Taylor example's sum has a slope past 16:1 where it leaves the view, and the twin cannot certify it
+  // there; it was broken into 25 chains by jump breaks, at every floor interval of its steep stretches.
+  describe("the Taylor example's sum curve", () => {
+    const spec = '@param n = 3 range [0, 12] step 1 integer\ny = sin(x)\ny = sum(k = 0 to n, (-1)^k x^(2k+1)/(2k+1)!) color: red'
+    const redOf = (scene: SceneOfResult) => curvesOf(scene).find((c) => c.color === 'red')!
+    it('is not broken where its slope passes 16', () => {
+      // x - x^3/6 + x^5/120 - x^7/5040 falls from -5.3 at x = 5 to -20.7 at x = 6: a slope of 15 to 30 across the bottom of
+      // this view, which does not hold the origin
+      const scene = sceneWith(spec, undefined, { xMin: 3, xMax: 8, yMin: -30, yMax: 5 })
+      expect(scene.errors).toEqual([])
+      const red = redOf(scene)
+      expect(red.chains).toHaveLength(1)
+      expect(red.breaks.filter((b) => b.kind === 'jump')).toEqual([])
+      const ys = chainPoints(red.chains[0]).map((p) => p.y)
+      expect(Math.min(...ys)).toBeLessThan(-29)
+    })
+    it('in the default view has no break where it is steep, and at most the one at the origin', () => {
+      // The twin's enclosure of a box that starts at 0 is unbounded for this sum (x to the power 2k + 1 with k bound), so the
+      // floor interval right of the origin is not joined, whatever its gaps: one jump break of 0.09 px there, which the twin
+      // keeps (an enclosure with an infinite bound is where a pole may sit). Nowhere else.
+      const scene = sceneWith(spec, undefined, { xMin: -10, xMax: 10, yMin: -10, yMax: 10 })
+      const red = redOf(scene)
+      const jumps = red.breaks.filter((b) => b.kind === 'jump')
+      expect(jumps.length).toBeLessThanOrEqual(1)
+      for (const b of jumps) expect(Math.abs(b.at)).toBeLessThan(0.01)
+      expect(red.chains.length).toBeLessThanOrEqual(2)
+    })
   })
 
   describe('the budget note', () => {
@@ -1286,6 +1367,47 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
       const scene = sceneWith('y = sin(3x)', { budget: TINY, quality: 'coarse' })
       expect(scene.errors).toEqual([])
       expect(curvesOf(scene)[0].chains.length).toBeGreaterThan(0)
+    })
+
+    // fix round 1 (I1): an integral's twin certifies nothing, so at the cap nothing is connected and nothing is drawn. A note that
+    // said "drawn coarsely" over a blank would be a false one, and none at all a silent blank.
+    const NOT_DRAWN = 'not drawn: this curve needs more detail than its drawing budget allows'
+    it('a capped curve that drew no chain and no band says "not drawn", at any quality, where nothing could be certified', () => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = sceneWith('y = integral(t = 0 to x, 2t)', { budget: { points: 50, intervals: 50 }, quality })
+        expect(scene.errors, quality).toEqual([{ line: 1, message: NOT_DRAWN }])
+        expect(curvesOf(scene)[0].chains, quality).toEqual([])
+      }
+    })
+    it('and says it on the right line, and for that curve only', () => {
+      // a budget of 50 caps every curve: the two the twin can certify are drawn from their start grid (coarsely), the integral has nothing
+      const scene = sceneWith('y = x\ny = integral(t = 0 to x, 2t)\ny = 2', { budget: { points: 50, intervals: 50 } })
+      expect(scene.errors).toEqual([
+        { line: 1, message: NOTE },
+        { line: 2, message: NOT_DRAWN },
+        { line: 3, message: NOTE },
+      ])
+    })
+    it('says nothing of a capped curve that is not in view: the cap hid nothing', () => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = sceneWith('y = integral(t = 0 to x, 2t) + 1000', { budget: { points: 50, intervals: 50 }, quality })
+        expect(scene.errors, quality).toEqual([])
+      }
+    })
+    it('"drawn coarsely" is for a curve that drew something, and only at full quality', () => {
+      const full = sceneWith('y = sin(3x)', { budget: TINY })
+      expect(full.errors).toEqual([{ line: 1, message: NOTE }])
+      expect(sceneWith('y = sin(3x)', { budget: TINY, quality: 'coarse' }).errors).toEqual([])
+    })
+    it('an integral with the real budget is drawn, with no note, at both qualities', () => {
+      const view = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+      for (const spec of ['y = integral(t = 0 to x, 2t)', 'y = integral(t = 0 to x, 40 cos(t))', 'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)']) {
+        for (const quality of ['full', 'coarse'] as const) {
+          const scene = sceneWith(spec, { quality, widthPx: 800, heightPx: 800 }, view)
+          expect(scene.errors, `${spec} ${quality}`).toEqual([])
+          expect(curvesOf(scene).at(-1)!.chains.length, `${spec} ${quality}`).toBeGreaterThan(0)
+        }
+      }
     })
   })
 

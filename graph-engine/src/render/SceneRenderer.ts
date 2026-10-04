@@ -246,6 +246,8 @@ export class SceneRenderer {
     this.camera2d = new Camera2D(width, height, options.config.bounds ?? undefined)
     this.renderer.setSize(width, height, false)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    // the size the first scene is built at: the observer reports it once as it starts, which is no change
+    this.interaction.viewportChanged(width, height)
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize())
     this.resizeObserver.observe(canvas)
@@ -253,6 +255,10 @@ export class SceneRenderer {
     canvas.addEventListener('pointerdown', this.handlePointerDown)
     window.addEventListener('pointermove', this.handlePointerMove)
     window.addEventListener('pointerup', this.handlePointerUp)
+    // A drag the browser takes away (a touch becoming a scroll, a dialog) never gets a pointerup, and neither
+    // does one whose capture is lost: both end it, and settle it, as the pointerup would have.
+    canvas.addEventListener('pointercancel', this.handlePointerUp)
+    canvas.addEventListener('lostpointercapture', this.handlePointerUp)
     canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     canvas.addEventListener('pointermove', this.handleHoverMove)
     canvas.addEventListener('pointerleave', this.handlePointerLeave)
@@ -317,6 +323,11 @@ export class SceneRenderer {
     this.drawGrid()
   }
 
+  // The canvas's size is part of what the curve sampler draws from (it works in screen pixels, a sample
+  // per 4 px), so a new size is a view change: the scene is rebuilt, coalesced into the next frame like any
+  // other. That includes a canvas that was hidden when the scene was built (a table-only spec edited into a
+  // graph one is built at 1 x 1 px, and `y = sin(x)` drew 9 vertices, 50 px off) and comes up at its size.
+  // A canvas that goes hidden is not rebuilt for: there is nothing to see it at, and its next size is a change.
   private handleResize() {
     const rect = this.canvas.getBoundingClientRect()
     const width = Math.max(rect.width, 1)
@@ -324,6 +335,8 @@ export class SceneRenderer {
     this.renderer.setSize(width, height, false)
     this.camera2d.resize(width, height)
     this.drawGrid()
+    const changed = this.interaction.viewportChanged(width, height)
+    if (changed && rect.width >= 1 && rect.height >= 1) this.scheduleViewChange()
   }
 
   private handlePointerDown = (e: PointerEvent) => {
@@ -935,6 +948,8 @@ export class SceneRenderer {
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     window.removeEventListener('pointermove', this.handlePointerMove)
     window.removeEventListener('pointerup', this.handlePointerUp)
+    this.canvas.removeEventListener('pointercancel', this.handlePointerUp)
+    this.canvas.removeEventListener('lostpointercapture', this.handlePointerUp)
     this.canvas.removeEventListener('wheel', this.handleWheel)
     this.canvas.removeEventListener('pointermove', this.handleHoverMove)
     this.canvas.removeEventListener('pointerleave', this.handlePointerLeave)

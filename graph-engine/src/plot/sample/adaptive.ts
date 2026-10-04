@@ -33,16 +33,26 @@
 //    taller or wider than spikeFactor times the span the samples cover, plus spikeSlackPx: a
 //    spike narrower than the sample spacing is in the enclosure and not in the samples.
 //    Otherwise, at the floor, accept anyway; else bisect.
+//  - An interval the twin does not certify stops being bisected at tuning.uncertifiedFloorPx (the
+//    floor for FULL, 1/2 px for COARSE: all that cannot be certified is decided by bisecting to
+//    the floor and testing there, which is where a drag's cost goes). Below, "the floor" means that.
+//  - An interval the twin said NOTHING about (verdict UNKNOWN: no bounds, so the enclosure culls
+//    nothing) whose ends and midpoint are all beyond the same side of the clip box is culled: lifted,
+//    not refined (farOff). Most of an integral is off screen, and steep.
 //  - Both ends undefined: at the floor lift; else bisect, which finds defined stretches inside.
 //  - One end undefined: at the floor, refine the edge (bisect on whether the point is finite,
 //    between the defined end and the undefined one), draw to the last defined point, record
 //    an `edge` break and lift; else bisect.
 //  - Both finite, not certified: if the screen gap is under gapPx and the jump test passes,
-//    connect. Otherwise at the floor lift and record a `jump` break; else bisect. The jump
-//    test halves the interval `halvings` times, always keeping the half with the larger gap,
-//    and each gap must be at most halvingShrink times the one before: a continuous seam
-//    halves its gap, a jump keeps it. At the floor, an interval that ends at an `anchor` is
-//    drawn instead (see the comment there): the anchor is a limit the structure walk has read.
+//    connect. Otherwise, at the floor, the jump test is asked again WITHOUT the gap precondition and
+//    over CORE.floorHalvings halvings (below): a smooth curve steeper than 16:1 on screen has a gap
+//    over a pixel at a 1/16 px interval, and was broken there at every one. Failing that, lift and
+//    record a `jump` break; above the floor, bisect. The jump test halves the interval `halvings`
+//    times, always keeping the half with the larger gap, and each gap must be at most halvingShrink
+//    times the one before: a continuous seam halves its gap, a jump keeps it. Both forms need the
+//    verdict UNKNOWN or a bounded enclosure: an infinite bound is where a pole may sit. At the floor,
+//    an interval that ends at an `anchor` is drawn instead (see the comment there): the anchor is a
+//    limit the structure walk has read.
 //
 // 3. A sample that is not finite is undefined here: an infinity is never certified flat.
 //
@@ -207,8 +217,11 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
 
   const widthPx = (tb - ta) * c.fns.pxPerT
   const tm = ta + (tb - ta) / 2
+  const midpointHolds = tm > ta && tm < tb
   // At the floor, or too narrow for the doubles to hold a midpoint: bisecting is over.
-  const atFloor = widthPx <= c.tune.floorPx || !(tm > ta && tm < tb)
+  const atFloor = widthPx <= c.tune.floorPx || !midpointHolds
+  // An interval the twin does not certify stops at uncertifiedFloorPx, which a drag makes coarser than the floor.
+  const atUncertifiedFloor = widthPx <= c.tune.uncertifiedFloorPx || !midpointHolds
   const continuous = verdict === CONTINUOUS
 
   if (certified) {
@@ -235,17 +248,22 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     return
   }
 
+  if (verdict === UNKNOWN && midpointHolds && farOff(c, tm, xa, ya, xb, yb)) {
+    c.sink.lift()
+    return
+  }
+
   if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, false)) return
   const aFinite = isFinite2(xa, ya)
   const bFinite = isFinite2(xb, yb)
 
   if (!aFinite && !bFinite) {
-    if (atFloor) c.sink.lift()
+    if (atUncertifiedFloor) c.sink.lift()
     else bisectAtMid(c, ta, tm, tb, xa, ya, xb, yb, continuous)
     return
   }
   if (aFinite !== bFinite) {
-    if (atFloor) refineEdge(c, ta, xa, ya, tb, xb, yb, aFinite)
+    if (atUncertifiedFloor) refineEdge(c, ta, xa, ya, tb, xb, yb, aFinite)
     else bisectAtMid(c, ta, tm, tb, xa, ya, xb, yb, continuous)
     return
   }
@@ -259,7 +277,17 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     c.sink.segment(xa, ya, ta, xb, yb, tb)
     return
   }
-  if (atFloor) {
+  if (atUncertifiedFloor) {
+    // THE FLOOR TEST. Where bisecting stops, the jump test is asked without its precondition on the gap: a
+    // smooth curve steeper than 16:1 on screen has a gap over a pixel at a 1/16 px interval (and the
+    // precondition refused every one, breaking the curve at each), so the gap is only asked to CLOSE, over up
+    // to CORE.floorHalvings halvings below the floor. Each gap must be at most halvingShrink times the one
+    // before: a smooth curve's halves (0.5 to 0.71), a jump or a pole keeps its size (1.0). The bound on
+    // the enclosure is still asked, as above: an enclosure the twin left unbounded is where a pole may sit.
+    if (bounded && gapCloses(c, ta, tb, xa, ya, xb, yb, c.tune.halvingShrink, CORE.floorHalvings)) {
+      c.sink.segment(xa, ya, ta, xb, yb, tb)
+      return
+    }
     // An interval that ends at an anchor is the last stretch to a limit the structure walk has
     // read (limits.ts: a hole's, a jump's side, a domain edge's), and the anchor is where the
     // curve is known to arrive. The twin cannot say so (next to a hole its enclosure is
@@ -279,6 +307,28 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     return
   }
   bisectAtMid(c, ta, tm, tb, xa, ya, xb, yb, continuous)
+}
+
+// Which sides of the clip box a point is beyond, as bits: 1 left, 2 right, 4 below, 8 above (0: inside, or not finite).
+function beyondOf(c: Core, x: number, y: number): number {
+  if (!isFinite2(x, y)) return 0
+  const { xMin, xMax, yMin, yMax } = c.screen.clip
+  return (x < xMin ? 1 : 0) | (x > xMax ? 2 : 0) | (y < yMin ? 4 : 0) | (y > yMax ? 8 : 0)
+}
+
+// Whether an interval the twin said NOTHING about (UNKNOWN: no bounds, so nothing culls it) is far off screen: both ends
+// and the midpoint beyond the same side of the clip box. Where the twin has an enclosure it culls what is off screen
+// (offScreen); where it has none the samples are all there is, and an interval whose three are on the same side out
+// is not refined to the floor and tested there: that costs a hundred evaluations a start interval, and the part of an
+// integral that is off screen is most of it (40 sin(x) is in a view of +-10 for a sixth of its range, and steep over most
+// of the rest). It is a cull and never a connection, and it is no more than the start grid already is, which cannot see a
+// feature narrower than its spacing either. The midpoint costs one evaluation, and is not reused (it is taken only
+// where the ends already agree).
+function farOff(c: Core, tm: number, xa: number, ya: number, xb: number, yb: number): boolean {
+  const ends = beyondOf(c, xa, ya) & beyondOf(c, xb, yb)
+  if (ends === 0) return false
+  evalAt(c, tm)
+  return (ends & beyondOf(c, c.pt[0], c.pt[1])) !== 0
 }
 
 function bisect(c: Core, ta: number, tm: number, tb: number, xa: number, ya: number, xm: number, ym: number, xb: number, yb: number, continuous: boolean): void {
@@ -322,7 +372,7 @@ function isFlat(c: Core, xa: number, ya: number, xm: number, ym: number, xb: num
 
 // The jump test: do the gaps between samples close as the interval is halved? Each gap must be at
 // most `shrink` times the one before.
-function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, xb0: number, yb0: number, shrink: number = c.tune.halvingShrink): boolean {
+function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, xb0: number, yb0: number, shrink: number = c.tune.halvingShrink, halvings: number = c.tune.halvings): boolean {
   let ta = ta0
   let tb = tb0
   let xa = xa0
@@ -330,7 +380,7 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
   let xb = xb0
   let yb = yb0
   let gap = pxDistance(c, xa, ya, xb, yb)
-  for (let k = 0; k < c.tune.halvings; k++) {
+  for (let k = 0; k < halvings; k++) {
     const tm = ta + (tb - ta) / 2
     if (!(tm > ta && tm < tb)) return false
     evalAt(c, tm)
