@@ -15,6 +15,7 @@ import { applySlider, changedCurves, changedPaths, getCurve, paramsFromData, par
 import { deletePreset, readPresets, savePreset } from './paintLabPresets'
 import { Showcase } from './paintLabShowcaseView'
 import { DEBUG_MODES, GROUPS, readPrefs, URL_STATE, writePrefs, writeUrl, type Tab } from './paintLabState'
+import type { BakeStatus } from './paintLabEngine'
 import { Stage, type Readout } from './paintLabStage'
 
 // The Paint Lab: orbit real space figures painted by the painter, and tune
@@ -63,6 +64,17 @@ function download(name: string, text: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+// The readout's tooltip: what kind of frame it was and where its time went.
+function readoutTitle(readout: Readout | null, bake: BakeStatus | null): string | undefined {
+  if (!readout) return undefined
+  const why = bake?.why ? ` The light is fixed in the world, but the baked painting is off: ${bake.why}.` : ''
+  if (readout.path === 'baked') {
+    return `Baked frame (the painting was made once, in the world; each frame selects, projects and orders its strokes and paints them, with no model run): build ${readout.buildMs.toFixed(1)} ms · paint ${readout.paintMs.toFixed(1)} ms. The first number is the whole frame.`
+  }
+  const kind = readout.kind === 'colour' ? 'Colour-only frame' : readout.kind === 'repaint' ? 'Repainted frame (the same strokes)' : readout.kind === 'reproject' ? 'Re-projected frame (the model’s newest frame’s strokes through the new view; the model keeps running behind a drag)' : 'Full frame'
+  return `${kind}: G-buffer ${readout.gbufferMs.toFixed(0)} ms · model ${readout.modelMs.toFixed(0)} ms (in a worker) · particles ${readout.particlesMs.toFixed(0)} ms · paper ${readout.paperMs.toFixed(0)} ms · paint ${readout.paintMs.toFixed(0)} ms. The first number is the whole frame, request to picture.${why}`
+}
+
 export function PaintLab() {
   const [start] = useState(startingParams)
   const [tab, setTab] = useState<Tab>(URL_STATE.tab)
@@ -87,6 +99,7 @@ export function PaintLab() {
   const [undo, setUndo] = useState<PaintParams | null>(null)
   const [saving, setSaving] = useState(false)
   const [readout, setReadout] = useState<Readout | null>(null)
+  const [bake, setBake] = useState<BakeStatus | null>(null)
   const [paintProgress, setPaintProgress] = useState<{ done: number; total: number } | null>(null)
   const tones = useRef(start.tones)
 
@@ -290,10 +303,16 @@ export function PaintLab() {
         </button>
         <div className="pl-spacer" />
         {tab === 'tune' ? (
-          <output className="pl-readout" aria-label="Frame rate and stroke count" title={readout ? `${readout.kind === 'colour' ? 'Colour-only frame' : readout.kind === 'repaint' ? 'Repainted frame (the same strokes)' : readout.kind === 'reproject' ? 'Re-projected frame (the model’s newest frame’s strokes through the new view; the model keeps running behind a drag)' : 'Full frame'}: G-buffer ${readout.gbufferMs.toFixed(0)} ms · model ${readout.modelMs.toFixed(0)} ms (in a worker) · particles ${readout.particlesMs.toFixed(0)} ms · paper ${readout.paperMs.toFixed(0)} ms · paint ${readout.paintMs.toFixed(0)} ms. The first number is the whole frame, request to picture.` : undefined}>
+          <output className="pl-readout" aria-label="Frame rate, stroke count and which painter drew the frame" title={readoutTitle(readout, bake)}>
+            {bake && bake.painting !== null ? (
+              <span className="pl-painting">
+                Painting… <b>{bake.painting}%</b> ·{' '}
+              </span>
+            ) : null}
             {readout ? (
               <>
-                <b>{Math.round(readout.fps)}</b> fps · {readout.ms.toFixed(1)} ms · <b>{readout.strokes.toLocaleString('en-US')}</b> strokes
+                <b className={`pl-path is-${readout.path}`}>{readout.path === 'live' && bake?.why ? 'live (no bake here)' : readout.path}</b> · <b>{Math.round(readout.fps)}</b> fps · {readout.ms.toFixed(1)} ms
+                {readout.path === 'baked' ? ` (build ${readout.buildMs.toFixed(1)}, paint ${readout.paintMs.toFixed(1)})` : ''} · <b>{readout.strokes.toLocaleString('en-US')}</b> strokes
               </>
             ) : (
               '— fps'
@@ -323,6 +342,7 @@ export function PaintLab() {
             banner={compare ? 'Showing the saved defaults (B). Press A/B to go back to your tune.' : null}
             injected={URL_STATE.injected}
             onReadout={setReadout}
+            onBake={setBake}
           />
           {readout && (
             <div className="pl-view" aria-hidden="true">

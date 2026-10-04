@@ -14,7 +14,7 @@
 
 import { parseSpec } from '../../graph-engine/src/parser/parseSpec'
 import { sanitizeView } from '../../graph-engine/src/space/camera/controls'
-import type { CameraMatrices } from '../../graph-engine/src/space/camera/projection'
+import { cameraMatrices, type CameraMatrices, type Viewport } from '../../graph-engine/src/space/camera/projection'
 import { DEG, type ScreenBasis } from '../../graph-engine/src/space/camera/turntable'
 import { worldMap, worldNormal, type WorldMap } from '../../graph-engine/src/space/camera/world'
 import type { Projection, SpaceView } from '../../graph-engine/src/space/config'
@@ -22,6 +22,7 @@ import { boxHalfExtents } from '../../graph-engine/src/space/frame/aspect'
 import { flatAxes, resolveBox } from '../../graph-engine/src/space/frame/bounds'
 import type { CreateSpaceKernel } from '../../graph-engine/src/space/kernel/api'
 import { createSpaceKernel } from '../../graph-engine/src/space/kernel/index'
+import type { AuthoredFraming } from '../../graph-engine/src/space/paint/bake/types'
 import type { PaintView } from '../../graph-engine/src/space/paint/types'
 import type { Box3, Mark, SpaceScene, Vec3 } from '../../graph-engine/src/space/scene/types'
 import type { PaintFigure } from './paintLabFigures'
@@ -82,6 +83,17 @@ export function buildPaintView(
     dragging,
     ...(zoom !== undefined && Number.isFinite(zoom) ? { zoom } : {}),
   }
+}
+
+// The framing the baked painting is composed for (graph-engine/src/space/paint/bake/types.ts): the figure's authored camera at zoom 1 in a
+// viewport of this size, as the Tune view builds it. `worldPerPx` is the world size of a CSS px at the figure's centre (the camera's
+// worldPerPixel: the plane through the target, facing the camera), the eye and view direction are the authored camera's, and an orthographic
+// figure says so. It does not depend on where the camera is NOW: orbiting the figure does not change it, a new figure or another size of
+// the stage does.
+export function authoredFraming(built: Pick<BuiltFigure, 'authored' | 'world' | 'projection'>, viewport: Viewport): AuthoredFraming {
+  const camera = cameraMatrices(built.authored, built.world, viewport, built.projection)
+  const f = camera.basis.forward
+  return { eye: [camera.eye[0], camera.eye[1], camera.eye[2]], viewDir: [f[0], f[1], f[2]], ortho: built.projection === 'orthographic', worldPerPx: camera.worldPerPixel }
 }
 
 function mapPoints(src: Float64Array, world: WorldMap): Float64Array {

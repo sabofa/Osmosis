@@ -70,13 +70,16 @@ export interface UrlState {
   set: [string, number][]
   // &worker=0 runs the model on the page's own thread (the default is a worker, so the controls never wait for a frame).
   worker: boolean
+  // &bake=0 keeps the baked painting off (with the light fixed in the world the lab paints it from a bake, once, in the worker; this is the per-frame
+  // painter instead, to put the two side by side).
+  bake: boolean
   // &perf=1 keeps every frame's timings in window.__paintFrames and gives the page window.__paintLab (a handle to move sliders from a script), for measuring.
   perf: boolean
   injected: InjectedState
 }
 
 // The page's state lives in the URL (?tab=showcase, &figure=, &debug=,
-// &theme=, &seed=, &set=, &worker=, &az=, &el=, &zoom=), so a link or a headless shot lands on exactly what was
+// &theme=, &seed=, &set=, &worker=, &bake=, &az=, &el=, &zoom=), so a link or a headless shot lands on exactly what was
 // being looked at. &panel=0 starts with the panel folded; &open=Light,Edges
 // starts with those groups open.
 function readUrl(): UrlState {
@@ -103,6 +106,7 @@ function readUrl(): UrlState {
       })
       .filter(([path, value]) => path !== '' && Number.isFinite(value)),
     worker: q.get('worker') !== '0',
+    bake: q.get('bake') !== '0',
     perf: q.get('perf') === '1',
     injected: state === 'no-webgl2' || state === 'engine-error' ? state : null,
   }
