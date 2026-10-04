@@ -609,6 +609,55 @@ describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not b
     expect(r.tooSteep).toBe(false)
   })
 
+  // fix round 4 (rule 2). The core used to keep the first 64 places where the depth limit was reached with the gaps halving, and
+  // the caller then looked for one IN VIEW: the left overscan (x from -15 to -10, a quarter of the box) filled the 64 before x
+  // reached the view, and a curve of slope 3000 that was broken at 5466 places in view had no note. The core decides, as each place
+  // is recorded, whether it is in the visible view, and carries one boolean.
+  describe('the steepness is decided in view, whatever is steep out of it', () => {
+    // 60 sin(50x) has slope 3000, and its crossings of the box (every 0.06 of x) are six floor intervals each: the 64 places the core kept
+    // were the first ten crossings, in the left overscan, and the first crossing in view (x = -9.95) came after them
+    it('y = integral(t = 0 to x, 0) + 60 sin(50 x) is tooSteep at FULL, the overscan first', () => {
+      const r = sampleCurve(explicit('integral(t = 0 to x, 0) + 60 sin(50 x)'), view, scopeOf(), { ...opts, quality: 'full' })
+      expect(r.tooSteep).toBe(true)
+      expect(curveOf(r.objects).chains).toEqual([])
+      expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'jump').length).toBeGreaterThan(64)
+    })
+    // The natural form of the same curve. It is run in a view of +-1 (800 px): an integral of cos(50 t) over [0, x] costs about 6 ms a
+    // point at x = 15 (quadrature of 120 periods, cross-checked), and the view of +-10 takes five minutes at FULL.
+    it('the natural form, y = integral(t = 0 to x, 3000 cos(50 t)), is tooSteep at FULL', () => {
+      const small = { bounds: { xMin: -1, xMax: 1, yMin: -1, yMax: 1 }, widthPx: 800, heightPx: 800 }
+      const r = sampleCurve(explicit('integral(t = 0 to x, 3000 cos(50 t))'), small, scopeOf(), { ...opts, quality: 'full' })
+      expect(r.tooSteep).toBe(true)
+      expect(curveOf(r.objects).chains).toEqual([])
+      expect(curveOf(r.objects).breaks.filter((b) => b.kind === 'jump').length).toBeGreaterThan(0)
+    }, 60000)
+    it('a steep stretch only in the overscan stays silent, and one that reaches the view does not: 2000 - 24000 and 2000', () => {
+      expect(run(explicit('integral(t = 0 to x, 2000) - 24000')).tooSteep).toBe(false)
+      expect(run(explicit('integral(t = 0 to x, 2000)')).tooSteep).toBe(true)
+    })
+  })
+
+  // fix round 4 (rule 2, a false note). A jump riding a slope halves its gap in the 1/1024 px leaf too, if less, to (J + a)/(J + 2a) of its
+  // parent's: 0.75 or under for J up to 2a, which the old steepness test (halvingShrink) took for a smooth curve. The test is steepShrink.
+  describe('a jump riding a certifiable slope is a jump, not "too steep"', () => {
+    it('y = 800 (x - 5) + 0.03 floor(50 x) breaks at its 1.2 px jumps in view and has no steepness note', () => {
+      const r = run(explicit('800 (x - 5) + 0.03 floor(50 x)'))
+      const f = (x: number) => 800 * (x - 5) + 0.03 * Math.floor(50 * x)
+      const inView = curveOf(r.objects).breaks.filter((b) => b.kind === 'jump' && Math.abs(f(b.at)) <= 10)
+      expect(inView.length).toBeGreaterThan(0)
+      expect(r.tooSteep).toBe(false)
+    })
+    it.each([[600, 0.0275], [600, 0.03], [800, 0.0275], [800, 0.0375], [1000, 0.03], [1000, 0.0375]])('slope %s with a jump of %s units (1.1 to 1.5 px) is not tooSteep, at both qualities, and breaks', (slope, jump) => {
+      const f = (x: number) => slope * (x - 5) + jump * Math.floor(50 * x)
+      for (const quality of ['full', 'coarse'] as const) {
+        const r = sampleCurve(explicit(`${slope} (x - 5) + ${jump} floor(50 x)`), view, scopeOf(), { ...opts, quality })
+        const inView = curveOf(r.objects).breaks.filter((b) => b.kind === 'jump' && Math.abs(f(b.at)) <= 10)
+        expect(inView.length, `${slope} ${jump} ${quality}`).toBeGreaterThan(0)
+        expect(r.tooSteep, `${slope} ${jump} ${quality}`).toBe(false)
+      }
+    })
+  })
+
   // fix round 2 (rule 1): 200(x - 5) rises 12.5 px in a floor interval and floor(50x) drops 2 px at every 0.02; the locator's
   // 64-zero cap leaves the jumps near 5 unlocated (it keeps the ones nearest 0), so the core meets them. The floor test followed
   // the larger-gap half only, and a jump against the slope is in the smaller one: 3 of the 5 in view were bridged, with no break.

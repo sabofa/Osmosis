@@ -279,6 +279,13 @@ export interface Tuning {
   // one before. A continuous seam halves its gap (0.5 to 0.71); a jump keeps it (1.0).
   halvings: number
   halvingShrink: number
+  // The floor test's note that a failure was steepness, not a jump (adaptive.ts floorTest): a leaf at the
+  // depth limit (CORE.subFloorPx) whose gap is at most this times its parent's. Tighter than halvingShrink,
+  // because a jump that rides a slope halves its gap as well, if less: J px on a slope that climbs a px in
+  // the leaf leaves (J + a) / (J + 2a) of the parent's gap, 0.75 or under for any J up to 2a (1 to 2 px
+  // jumps on a slope of 512 to 1024 were called steep), where a smooth curve's gap halves to within
+  // rounding at a leaf of 1/1024 px. 0.55 takes only a jump under a / 4.5 for steepness.
+  steepShrink: number
   // The same test, as it is asked of the floor interval that ends at an anchor (a limit the
   // structure walk read: curve.ts). There the curve is known to arrive, and what is asked is only
   // that nothing in the stretch is hiding: the ends within flatPx of each other, or gaps that close.
@@ -309,7 +316,7 @@ export interface Tuning {
   budget: { points: number; intervals: number }
 }
 
-export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, uncertifiedFloorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
+export const FULL: Tuning = { startPx: 4, flatPx: 0.25, maxSegPx: 8, floorPx: 1 / 16, uncertifiedFloorPx: 1 / 16, gapPx: 1, halvings: 3, halvingShrink: 0.75, steepShrink: 0.55, anchorShrink: 0.9, spikeFactor: 2, spikeSlackPx: 2, bandSamples: BAND.samples, overscan: 0.25, budget: { points: 60000, intervals: 30000 } }
 // COARSE trades spike fidelity for drag speed: spikeFactor 8, the loose test, where FULL has 2. At 2 it
 // cost as much as FULL on curves the twin encloses loosely (a cancelling quotient capped its budget).
 export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, uncertifiedFloorPx: 0.5, spikeFactor: 8, bandSamples: BAND.coarseSamples, budget: { points: 15000, intervals: 7500 } }
@@ -335,8 +342,9 @@ export const CORE = {
   // with the larger gap bridged a 2 px jump against a slope of 200 at 40 offsets of 40). A smooth curve's
   // gaps halve however steep it is, so it is joined, down to a slope of 1024:1 (a leaf of 1/1024 px is under
   // a pixel there), past which the last level is still a pixel and the interval is not: it is lifted, and
-  // the curve says it was the steepness that did it (the gaps were still halving at the last level, where a
-  // jump's are not), which is a note to the author. The old precondition (a
+  // the curve says it was the steepness that did it (the gaps were still halving at the last level, by
+  // steepShrink, where a jump's are not, or not by as much), which is a note to the author when it is in the
+  // visible view. The old precondition (a
   // gap under gapPx) refused every interval of a curve steeper than 16:1, which was broken at every floor
   // interval (y = integral(t = 0 to x, 40 cos(t)): 8091 jump breaks, nothing drawn in view). The price is
   // evaluations: the leaves are a gap of under a pixel each, so a curve costs about 6 evaluations for each

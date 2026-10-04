@@ -48,8 +48,9 @@
 //    (floorTest: every sub-interval whose gap is still a pixel, down to CORE.subFloorPx, and each leaf
 //    of under a pixel passes the old test): a smooth curve steeper than 16:1 on screen has a gap over a pixel
 //    at a 1/16 px interval, and was broken there at every one. Failing that, lift and record a `jump` break
-//    (at the leaf that failed; one that failed only at the last level, its gaps still halving, is a smooth
-//    curve too steep for the leaves, and is reported to the caller: steepAt); above the floor, bisect. The jump test halves the interval `halvings` times,
+//    (at the leaf that failed; one that failed only at the last level, its gaps still halving by steepShrink,
+//    is a smooth curve too steep for the leaves, and is reported to the caller if it is in the visible
+//    view: steepInView); above the floor, bisect. The jump test halves the interval `halvings` times,
 //    always keeping the half with the larger gap, and each gap must be at most halvingShrink times the one
 //    before: a continuous seam halves its gap, a jump keeps it. Both forms need the verdict UNKNOWN or a
 //    bounded enclosure: an infinite bound is where a pole may sit. At the floor, an interval that ends at
@@ -107,10 +108,11 @@ interface Core {
   box: Box
   pt: Float64Array
   capped: boolean
-  // Where a floor interval was lifted only because the depth limit was reached while its gaps were still halving: the
-  // curve is smooth there and too steep for the leaves to resolve (a jump's gap does not shrink). The parameters, at
-  // most STEEP_AT_MAX of them.
-  steepAt: number[]
+  // Whether a floor interval IN THE VISIBLE VIEW was lifted only because the depth limit was reached while its gaps were
+  // still halving: the curve is smooth there and too steep for the leaves to resolve (a jump's gap does not shrink).
+  // Decided where the failure is recorded, against screen.view, so a steep stretch in the overscan (which fills any list
+  // of places before the curve reaches the view) is never in the way and never announced.
+  steepInView: boolean
   // The parameters at which the range ends in an anchor (NaN: it does not), compared exactly
   // against an interval's ends: bisecting hands the end's own double down to the interval that
   // touches it.
@@ -146,17 +148,12 @@ function bandState(sink: BandSink, axis: 'y' | 'x', samples: number): BandState 
   return { sink, axis, xs: new Float64Array(samples), ys: new Float64Array(samples), ts: new Float64Array(samples), at, notLo: Number.NaN, notHi: Number.NaN, lastEnd: Number.NaN }
 }
 
-// How many places the core remembers of a curve too steep to certify: enough to say where it is, and for the caller to find one in
-// view (the box is the view and its overscan, and a steep crossing of it is a few floor intervals: 8 for a slope of 2000 on 40 px a
-// unit, the first of them in the overscan).
-const STEEP_AT_MAX = 64
-
-export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left: End; right: End }, screen: Screen, tuning: Tuning, counter: EvalCounter, sink: ChainSink, bands?: BandSink): { capped: boolean; steepAt: number[] } {
+export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left: End; right: End }, screen: Screen, tuning: Tuning, counter: EvalCounter, sink: ChainSink, bands?: BandSink): { capped: boolean; steepInView: boolean } {
   // a singular end is a floor's width inside, whatever the end is
   const nudge = tuning.floorPx / fns.pxPerT
   const a = ends.left.kind === 'singular' ? t0 + nudge : t0
   const b = ends.right.kind === 'singular' ? t1 - nudge : t1
-  if (!(b > a)) return { capped: false, steepAt: [] }
+  if (!(b > a)) return { capped: false, steepInView: false }
   const c: Core = {
     fns,
     screen,
@@ -166,7 +163,7 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
     box: { xLo: 0, xHi: 0, yLo: 0, yHi: 0 },
     pt: new Float64Array(2),
     capped: false,
-    steepAt: [],
+    steepInView: false,
     anchorLo: ends.left.kind === 'anchor' ? a : Number.NaN,
     anchorHi: ends.right.kind === 'anchor' ? b : Number.NaN,
     bands: bands === undefined || fns.oscillationAxis === null ? undefined : bandState(bands, fns.oscillationAxis, tuning.bandSamples),
@@ -174,7 +171,7 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
 
   counter.intervals++
   fns.enclose(a, b, c.box)
-  if (offScreen(c.box, screen.clip)) return { capped: false, steepAt: [] }
+  if (offScreen(c.box, screen.clip)) return { capped: false, steepInView: false }
 
   let n = Math.ceil(((b - a) * fns.pxPerT) / tuning.startPx)
   if (!(n >= CORE.minStartIntervals)) n = CORE.minStartIntervals
@@ -197,7 +194,7 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
     }
   }
   for (let i = 0; i < n; i++) visit(c, ts[i], ts[i + 1], xs[i], ys[i], xs[i + 1], ys[i + 1], false, true)
-  return { capped: c.capped, steepAt: c.steepAt }
+  return { capped: c.capped, steepInView: c.steepInView }
 }
 
 // One interval. `inherited`: its parent was enclosed and came out CONTINUOUS. `grid`: it is
@@ -299,8 +296,10 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     // cancels and then opens when halved), so it is never a leaf that passes: any jump the test bridges is
     // under a pixel. The bound on the enclosure is still asked, as above: an enclosure the twin left
     // unbounded is where a pole may sit. `bad` is where it failed, which is where the jump is; `steep` is
-    // whether it failed only at the last level, with the gaps still halving: a smooth curve too steep for
-    // the leaves, which the caller is told (steepAt) because nothing else will say why it is not drawn.
+    // whether it failed only at the last level, with the gaps still halving (by steepShrink: a jump
+    // that rides a slope halves its gap too, if less): a smooth curve too steep for the leaves, which the
+    // caller is told (steepInView, when the interval is in the visible view) because nothing else will say
+    // why it is not drawn.
     let bad = ta + (tb - ta) / 2
     let steep = false
     if (bounded && gap >= c.tune.gapPx) {
@@ -328,7 +327,8 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     }
     c.sink.lift()
     c.sink.addBreak(bad, 'jump')
-    if (steep && c.steepAt.length < STEEP_AT_MAX) c.steepAt.push(bad)
+    // Visible NOW, where the failure is recorded: the chord of the floor interval against the visible view.
+    if (steep && !c.steepInView && chordMeets(c.screen.view, xa, ya, xb, yb)) c.steepInView = true
     return
   }
   bisectAtMid(c, ta, tm, tb, xa, ya, xb, yb, continuous)
@@ -348,16 +348,19 @@ interface FloorFailure {
 // interval that did not: where the jump is. Every evaluation is counted; the leaves are under a pixel of the curve's
 // climb each, so a floor interval costs what the climb across it costs (the budget is checked again at the next one).
 //
-// `steep`: the failure was the depth limit with the gaps still halving, a leaf whose gap is at most halvingShrink times
-// its parent's (`parentGap`). A smooth curve is that, however steep, and a jump is not: its gap keeps its size. A leaf
-// that fails the closing test, or a midpoint that is not a point, is never steepness.
+// `steep`: the failure was the depth limit with the gaps still halving, a leaf whose gap is at most steepShrink times
+// its parent's (`parentGap`). A smooth curve is that, however steep (at a leaf of 1/1024 px its gap halves to within
+// rounding), and a jump is not: its gap keeps its size. A jump that rides a slope halves its gap too, but less, to
+// (J + a) / (J + 2a) of its parent's for a jump of J px on a slope that climbs a px in the leaf: 0.55 is where a jump
+// of J > a / 4.5 stops being called steepness. A leaf that fails the closing test, or a midpoint that is not a
+// point, is never steepness.
 function floorTest(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, parentGap: number): FloorFailure | null {
   const tm = ta + (tb - ta) / 2
   if (!(tm > ta && tm < tb)) return { at: tm, steep: false }
   const gap = pxDistance(c, xa, ya, xb, yb)
   if (gap < c.tune.gapPx) return gapCloses(c, ta, tb, xa, ya, xb, yb) ? null : { at: tm, steep: false }
   // (the widths are halved from the floor's, so a width is its target to rounding only)
-  if ((tb - ta) * c.fns.pxPerT <= CORE.subFloorPx * (1 + 1e-9)) return { at: tm, steep: gap <= c.tune.halvingShrink * parentGap }
+  if ((tb - ta) * c.fns.pxPerT <= CORE.subFloorPx * (1 + 1e-9)) return { at: tm, steep: gap <= c.tune.steepShrink * parentGap }
   evalAt(c, tm)
   const xm = c.pt[0]
   const ym = c.pt[1]
@@ -788,6 +791,21 @@ function pxDistance(c: Core, xa: number, ya: number, xb: number, yb: number): nu
   const dx = (xb - xa) * c.screen.px.x
   const dy = (yb - ya) * c.screen.px.y
   return Math.sqrt(dx * dx + dy * dy)
+}
+
+// Whether the chord between two finite points meets a box (slab test; written so that a NaN fails it, which says nothing).
+function chordMeets(box: Bounds, xa: number, ya: number, xb: number, yb: number): boolean {
+  let lo = 0
+  let hi = 1
+  const slab = (p: number, d: number, min: number, max: number): boolean => {
+    if (d === 0) return p >= min && p <= max
+    const t1 = (min - p) / d
+    const t2 = (max - p) / d
+    lo = Math.max(lo, Math.min(t1, t2))
+    hi = Math.min(hi, Math.max(t1, t2))
+    return lo <= hi
+  }
+  return slab(xa, xb - xa, box.xMin, box.xMax) && slab(ya, yb - ya, box.yMin, box.yMax)
 }
 
 // Empty, or not meeting the clip box. (A NaN bound fails every comparison, so it culls nothing.)

@@ -74,7 +74,7 @@ export function fnsOf(text: string, scope: MathScope, pxPerT = 40): CurveFns {
 }
 
 // The view [-10, 10]^2 at 800 px, with the 25 % overscan the clip box carries.
-export const view: Screen = { px: { x: 40, y: 40 }, clip: { xMin: -15, xMax: 15, yMin: -15, yMax: 15 } }
+export const view: Screen = { px: { x: 40, y: 40 }, view: { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }, clip: { xMin: -15, xMax: 15, yMin: -15, yMax: 15 } }
 
 // Samples y = f(x) over [-15, 15], free ends, a fresh sink and counter.
 export function run(text: string, tuning: Tuning = FULL) {
@@ -88,7 +88,7 @@ export function run(text: string, tuning: Tuning = FULL) {
 // needs the curve far from the 40 px per unit of `view`. Returns the screen as well.
 export function runView(text: string, half: number, tuning: Tuning = FULL) {
   const px = 800 / (2 * half)
-  const screen: Screen = { px: { x: px, y: px }, clip: { xMin: -1.25 * half, xMax: 1.25 * half, yMin: -1.25 * half, yMax: 1.25 * half } }
+  const screen: Screen = { px: { x: px, y: px }, view: { xMin: -half, xMax: half, yMin: -half, yMax: half }, clip: { xMin: -1.25 * half, xMax: 1.25 * half, yMin: -1.25 * half, yMax: 1.25 * half } }
   const sink = new ChainSink(screen.clip)
   const counter: EvalCounter = { points: 0, intervals: 0 }
   const { capped } = sampleRange(fnsOf(text, scopeOf(), px), screen.clip.xMin, screen.clip.xMax, { left: { kind: 'free' }, right: { kind: 'free' } }, screen, tuning, counter, sink)

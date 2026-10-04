@@ -1469,6 +1469,46 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     it('a steep stretch that is not in view is not announced', () => {
       for (const quality of ['full', 'coarse'] as const) expect(build('y = integral(t = 0 to x, 2000) - 24000', quality).errors, quality).toEqual([])
     })
+
+    // fix round 4. The sampler kept the first 64 places it lifted a steep curve at, and looked for one in view afterwards: the left
+    // overscan (x from -15 to -10) held all 64 before x reached the view, and a curve of slope 3000 that is broken at 5466 places in view
+    // had no note. It is decided in view as each place is recorded.
+    it('y = integral(t = 0 to x, 0) + 60 sin(50 x), slope 3000, says it is too steep at FULL: the overscan fills no list before the view', () => {
+      const scene = build('y = integral(t = 0 to x, 0) + 60 sin(50 x)', 'full')
+      expect(scene.errors).toContainEqual({ line: 1, message: STEEP })
+      expect(curvesOf(scene)[0].chains).toEqual([])
+      expect(curvesOf(scene)[0].breaks.filter((b) => b.kind === 'jump').length).toBeGreaterThan(64)
+    })
+    // the natural form of that curve, in a view of +-1: in the view of +-10 an integral of cos(50 t) costs about 6 ms a point and the
+    // curve five minutes at FULL (the same note, measured once: 5466 jump breaks, no chain, tooSteep)
+    it('y = integral(t = 0 to x, 3000 cos(50 t)) says it is too steep at FULL', () => {
+      const small = { xMin: -1, xMax: 1, yMin: -1, yMax: 1 }
+      const scene = sceneWith('y = integral(t = 0 to x, 3000 cos(50 t))', { quality: 'full', widthPx: 800, heightPx: 800 }, small)
+      expect(scene.errors).toContainEqual({ line: 1, message: STEEP })
+      expect(curvesOf(scene)[0].chains).toEqual([])
+    }, 60000)
+    it('a steep stretch in the overscan stays silent while the same slope in view is announced: 2000 - 24000, and 2000', () => {
+      expect(build('y = integral(t = 0 to x, 2000) - 24000', 'full').errors).toEqual([])
+      expect(build('y = integral(t = 0 to x, 2000)', 'full').errors).toEqual([{ line: 1, message: STEEP }])
+    })
+
+    // fix round 4 (rule 2, a false note): a real jump on a slope the sampler can certify is a break and not "too steep". A jump of J px
+    // riding a slope that climbs a px in a leaf halves its gap to (J + a)/(J + 2a), which is 0.75 or under for 1 to 2 px jumps on slopes
+    // of 512 to 1024, where the old test (0.75) called it steepness. It is steepShrink now.
+    it('y = 800 (x - 5) + 0.03 floor(50 x), 1.2 px jumps on a slope of 800, breaks and says nothing about steepness', () => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = build('y = 800 (x - 5) + 0.03 floor(50 x)', quality)
+        expect(scene.errors.map((e) => e.message), quality).not.toContain(STEEP)
+        const f = (x: number) => 800 * (x - 5) + 0.03 * Math.floor(50 * x)
+        expect(curvesOf(scene)[0].breaks.filter((b) => b.kind === 'jump' && Math.abs(f(b.at)) <= 10).length, quality).toBeGreaterThan(0)
+      }
+    })
+    it.each([[600, 0.0275], [800, 0.0375], [1000, 0.03], [1000, 0.0375]])('a jump of %s-slope curve by %s units (1.1 to 1.5 px) is not too steep', (slope, jump) => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = build(`y = ${slope} (x - 5) + ${jump} floor(50 x)`, quality)
+        expect(scene.errors.map((e) => e.message), `${slope} ${jump} ${quality}`).not.toContain(STEEP)
+      }
+    })
   })
 
   describe('a curve never blanks silently (rule 2)', () => {

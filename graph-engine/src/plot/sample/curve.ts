@@ -122,9 +122,10 @@ export interface SampledCurve {
   // that is wholly off screen (an integral's twin cannot say so, so it is refined as if it were not) is not this.
   blankAtCap: boolean
   // Somewhere IN VIEW the curve is smooth and too steep for the sampler to certify (a floor interval was lifted because
-  // its sub-intervals of 1/1024 px were still a pixel high and their gaps were still halving: past about 1024:1 on
-  // screen), so it is broken there and not drawn, though nothing else is wrong with it. A jump the walk did not find
-  // is not this (its gap does not shrink), nor is a steep stretch that is only in the overscan.
+  // its sub-intervals of 1/1024 px were still a pixel high and their gaps were still halving, by steepShrink: past about
+  // 1024:1 on screen), so it is broken there and not drawn, though nothing else is wrong with it. A jump the walk did
+  // not find is not this (its gap does not shrink, or not by as much), nor is a steep stretch that is only in the
+  // overscan. Decided in the core when the place is recorded (adaptive.ts steepInView), not from a list afterwards.
   tooSteep: boolean
   stats: { points: number; intervals: number }
   // some start-grid sample lay inside the domain
@@ -207,7 +208,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     yMin: bounds.yMin - tuning.overscan * spanY,
     yMax: bounds.yMax + tuning.overscan * spanY,
   }
-  const screen: Screen = { px, clip }
+  const screen: Screen = { px, view: bounds, clip }
   // Two counters, because there are two budgets. `counter` is what locating the trouble spots and reading them cost
   // (locate.ts and limits.ts, each with a limit of its own) and `spent` is the core's, which the core's budget
   // (tuning.budget) is checked against. When they were one, a locator that burned the budget left the core with none
@@ -242,13 +243,13 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     differences: new Map(),
   }
   let capped = false
-  // where the core lifted a smooth curve for being too steep for its leaves to resolve (adaptive.ts steepAt)
-  const steepAt: number[] = []
+  // whether the core lifted a smooth curve IN VIEW for being too steep for its leaves to resolve (adaptive.ts steepInView)
+  let tooSteep = false
   const piece = (ta: number, tb: number, left: End, right: End) => {
     if (!(tb > ta)) return
     const done = sampleRange(fns, ta, tb, { left, right }, screen, tuning, spent, sink, bandSink)
     if (done.capped) capped = true
-    steepAt.push(...done.steepAt)
+    if (done.steepInView) tooSteep = true
   }
 
   let from = co.from
@@ -272,7 +273,6 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const drawn = spec.kind === 'explicit' ? reaches(chains, visibleFrom, visibleTo) || bands.some((b) => b.kind === 'band' && reaches(b.outline, visibleFrom, visibleTo)) : chains.length > 0 || bands.length > 0
   const blank = chains.length === 0 && bands.length === 0
   const grid = startGrid(spec, co, fns, scope, tuning, bounds, counter, drawn, capped && blank)
-  const tooSteep = steepAt.some((t) => inView(fns, t, bounds, counter))
   // the stats are the total of what the call evaluated: locating, classifying and sampling
   return { objects, capped, blankAtCap: capped && blank && grid.seen, tooSteep, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
 }
@@ -559,14 +559,6 @@ function generatorsOf(co: Coordinates, scope: MathScope): Generator[] {
     }
   }
   return [...found.values()]
-}
-
-// Whether the curve's point at parameter t is inside the view (one evaluation, counted).
-function inView(fns: CurveFns, t: number, view: Bounds, counter: EvalCounter): boolean {
-  const pt = new Float64Array(2)
-  fns.point(t, pt)
-  counter.points++
-  return pt[0] >= view.xMin && pt[0] <= view.xMax && pt[1] >= view.yMin && pt[1] <= view.yMax
 }
 
 // Whether any vertex of the chains has a parameter in [lo, hi].

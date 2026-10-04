@@ -49,11 +49,13 @@ export interface CurveFns {
   oscillationAxis: 'y' | 'x' | null
 }
 
-// The screen a range is sampled for: pixels per world unit on each axis, and the
-// clip box, the view widened by the overscan (25 % each side). The sink clips to it
-// and the core culls against it.
+// The screen a range is sampled for: pixels per world unit on each axis, the
+// visible view, and the clip box, the view widened by the overscan (25 % each side). The sink clips to the clip
+// box and the core culls against it; the view is where the core decides that something it has to say is
+// visible (adaptive.ts steepInView).
 export interface Screen {
   px: PxScale
+  view: Bounds
   clip: Bounds
 }
 
