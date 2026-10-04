@@ -19,7 +19,7 @@
 // AN OPEN SHEET is seen from one side at one place of its outline and the other at another (a fold's outline: the sheet goes away from it on both sides of it,
 // the facing changing across it, and the sheet nearer the eye is the one that is seen; on a saddle the nearer one changes along the outline). So the side is
 // read at each sample, as the model's G-buffer read 3 px in would: what the eye sees PROBE_PX to a side of the outline, found by casting at that point of
-// the screen through the triangles round the sample's nearest vertex (SurfaceCaster), the side that has the sheet being the inside, and the side the surface
+// the screen through the sheet's own triangles (MeshCaster: the pick's BVH, exact), the side that has the sheet being the inside, and the side the surface
 // there shows the eye the side seen. The sides are the majority of 7 along the run, and a stretch is cut where they change.
 //
 // THE SCORE is the model's silhouette hardness (model/edges.ts edgeHardness, kind 1): c the contrast of the two sides, k 0.55, f the focal
@@ -43,6 +43,7 @@
 // not clipped here); the colour of the figure's side is the local colour at the vertex (the model's: the mean of the mark's visible particles').
 
 import type { Random } from '../../../style/random'
+import { bvhOf, type Bvh } from '../../pick/bvh'
 import type { MeshMark, SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type Oklab, type PaintView } from '../types'
@@ -178,8 +179,6 @@ export class SurfaceIndex {
   nbr: Int32Array
   // Half the distance from each vertex to its nearest neighbour: a point nearer than this to a vertex has no nearer vertex (the triangle inequality).
   readonly gap: Float32Array
-  // The most neighbours any vertex has.
-  readonly maxDegree: number
 
   constructor(s: Pick<BakedSurface, 'positions' | 'indices'>) {
     this.grid = new VertexGrid(s.positions, s.indices)
@@ -245,9 +244,6 @@ export class SurfaceIndex {
     start[nv] = w
     this.start = start
     this.nbr = this.nbr.slice(0, w)
-    let deg = 0
-    for (let v = 0; v < nv; v++) deg = Math.max(deg, start[v + 1] - start[v])
-    this.maxDegree = deg
     this.gap = new Float32Array(nv)
     for (let v = 0; v < nv; v++) {
       let least = Infinity
@@ -671,229 +667,157 @@ function pieceRun(mc: MarkCtx, poly: Float64Array, px: Float64Array, py: Float64
   mc.out.push(whole)
 }
 
-// The most vertices a cast walks over.
-const MAX_WALK = 400
+// What the eye sees at a point of a mesh: the nearest of its triangles on the eye's ray through the point, exactly. The pick's BVH over the mesh (built once
+// for the mark and shared with its picks) and Moller-Trumbore on the mesh's own triangles (the refined surface lies exactly on them: surface.ts): no screen
+// buffer, no projection of the mesh, and no bound on how far a triangle may reach on the screen. One per mark.
+// The slack of a ray's barycentrics (a point on the border of a sheet, or on an edge two triangles share, is on the sheet).
+const CAST_EDGE = 1e-9
 
-// The source mesh of a mark as a cast sees it: the refined surface lies exactly on the mesh's own triangles (surface.ts), so what is seen is the same with the
-// mesh's few triangles as with the refined surface's many; in single precision, as the refined surface's arrays are.
-export interface CastMesh {
-  positions: Float32Array
-  indices: Uint32Array
-  normals: Float32Array
-}
-
-// What the eye sees at a screen point of a surface: the nearest of the surface's triangles over the point, found without a screen buffer by walking over the
-// vertices that project near the point from a vertex that is near it (the two branches of a sheet's fold both reach the fold's vertex). One per surface:
-// its scratch arrays are the surface's size.
-export class SurfaceCaster {
-  private readonly vtStart: Int32Array
-  private readonly vtTri: Int32Array
-  private readonly seenV: Int32Array
-  private readonly seenT: Int32Array
-  private readonly projected: Int32Array
-  private readonly shaded: Int32Array
-  // Per vertex, the screen x, the screen y and the clip w (a vertex's three are together: a triangle reads nine numbers of three of them)
-  private readonly scr: Float64Array
-  private readonly dep: Float64Array
-  private readonly face: Float64Array
-  private readonly queue: Int32Array
-  private query = 0
-  private frame = 0
-  private ctx: FrameCtx | null = null
-  // The last hit: its depth along the view direction and the sign-bearing facing (n.toEye, interpolated).
+export class MeshCaster {
+  private readonly mesh: MeshMark
+  private readonly bvh: Bvh
+  // The traversal's stack (a tree of 2^30 triangles is not deeper than this).
+  private readonly stack = new Int32Array(64)
+  // The last hit: its depth along the view direction and its facing (n.toEye, the normal interpolated over the triangle).
   hitDepth = 0
   hitFacing = 0
-  // What the casts have done since the surface's caster was made: how many, and the triangles they tried (a test reads them).
+  // How many casts there have been (a test reads it).
   casts = 0
-  tried = 0
 
-  private readonly src: CastMesh
-  private readonly index: SurfaceIndex
-
-  constructor(src: CastMesh, index: SurfaceIndex) {
-    this.src = src
-    this.index = index
-    const nv = src.positions.length / 3
-    const idx = src.indices
-    const nt = Math.floor(idx.length / 3)
-    const start = new Int32Array(nv + 1)
-    for (let k = 0; k < 3 * nt; k++) start[idx[k] + 1]++
-    for (let v = 0; v < nv; v++) start[v + 1] += start[v]
-    const cursor = start.slice(0, nv)
-    this.vtTri = new Int32Array(3 * nt)
-    for (let t = 0; t < nt; t++) for (let k = 0; k < 3; k++) this.vtTri[cursor[idx[3 * t + k]]++] = t
-    this.vtStart = start
-    this.seenV = new Int32Array(nv)
-    this.seenT = new Int32Array(nt)
-    this.projected = new Int32Array(nv)
-    this.shaded = new Int32Array(nv)
-    this.scr = new Float64Array(3 * nv)
-    this.dep = new Float64Array(nv)
-    this.face = new Float64Array(nv)
-    this.queue = new Int32Array(nv)
+  constructor(mesh: MeshMark) {
+    this.mesh = mesh
+    this.bvh = bvhOf(mesh)
   }
 
-  // Start a frame: the projections of the last are stale. (Every run of a frame is cast through the one frame's context: a vertex is projected once for the frame.)
-  begin(fc: FrameCtx): void {
-    if (this.ctx === fc) return
-    this.ctx = fc
-    this.frame++
-  }
-
-  private project(fc: FrameCtx, u: number): void {
-    this.projected[u] = this.frame
-    const p = this.src.positions
-    const x = p[3 * u], y = p[3 * u + 1], z = p[3 * u + 2]
-    const vp = fc.vp
-    const w = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]
-    this.scr[3 * u + 2] = w
-    if (w <= 1e-9) return
-    const iw = 0.5 / w
-    this.scr[3 * u] = ((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) * iw + 0.5) * fc.W
-    this.scr[3 * u + 1] = (0.5 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) * iw) * fc.H
-  }
-
-  // The depth along the view direction and the facing of vertex u, made when a triangle over the point wants them (few of the vertices projected do).
-  private shade(fc: FrameCtx, u: number): void {
-    this.shaded[u] = this.frame
-    const p = this.src.positions
-    const x = p[3 * u], y = p[3 * u + 1], z = p[3 * u + 2]
-    const view = fc.view
-    this.dep[u] = (x - view.eye[0]) * view.viewDir[0] + (y - view.eye[1]) * view.viewDir[1] + (z - view.eye[2]) * view.viewDir[2]
-    toEye(fc, x, y, z, EYE)
-    const n = this.src.normals
-    this.face[u] = n[3 * u] * EYE[0] + n[3 * u + 1] * EYE[1] + n[3 * u + 2] * EYE[2]
-  }
-
-  // The longest screen distance from vertex v to a neighbour of it: the stride of the surface on the screen there (capped at 100 px).
-  ringExtent(fc: FrameCtx, v: number, index: SurfaceIndex): number {
-    if (this.projected[v] !== this.frame) this.project(fc, v)
-    if (this.scr[3 * v + 2] <= 1e-9) return 100
-    let longest = 0
-    for (let k = index.start[v]; k < index.start[v + 1]; k++) {
-      const u = index.nbr[k]
-      if (this.projected[u] !== this.frame) this.project(fc, u)
-      if (this.scr[3 * u + 2] > 1e-9) longest = Math.max(longest, dist2d(this.scr[3 * u] - this.scr[3 * v], this.scr[3 * u + 1] - this.scr[3 * v + 1]))
-    }
-    return Math.min(100, longest)
-  }
-
-  // The nearest surface over the screen point (qx, qy), reached from vertex `from` through the vertices within `reach` px of the point; false where there is
-  // none (hitDepth and hitFacing are then not set).
-  cast(fc: FrameCtx, from: number, qx: number, qy: number, reach: number, cover: number): boolean {
-    const idx = this.src.indices
-    const nbr = this.index.nbr
-    const nstart = this.index.start
-    const vtStart = this.vtStart
-    const vtTri = this.vtTri
-    const seenV = this.seenV
-    const seenT = this.seenT
-    const projected = this.projected
-    const shaded = this.shaded
-    const frame = this.frame
-    const scr = this.scr, dep = this.dep, face = this.face
-    const q = ++this.query
+  // The nearest surface on the eye's ray through the world point (x, y, z): the line along the view direction under an orthographic view, the ray from the
+  // eye under a perspective one. False where there is none.
+  cast(fc: FrameCtx, x: number, y: number, z: number): boolean {
     this.casts++
-    const queue = this.queue
-    let head = 0
-    let tail = 0
-    queue[tail++] = from
-    seenV[from] = q
-    let best = Infinity
-    let facing = 0
-    let found = false
-    let tried = 0
-    const reach2 = reach * reach
-    const cover2 = cover * cover
-    while (head < tail) {
-      const u = queue[head++]
-      if (projected[u] !== frame) this.project(fc, u)
-      // the neighbours first (a triangle's other vertices are among them), walked on to where they project within reach of the point
-      for (let k = nstart[u]; k < nstart[u + 1]; k++) {
-        const w = nbr[k]
-        if (projected[w] !== frame) this.project(fc, w)
-        if (seenV[w] === q) continue
-        seenV[w] = q
-        if (scr[3 * w + 2] <= 1e-9) continue
-        const dx = scr[3 * w] - qx, dy = scr[3 * w + 1] - qy
-        // (a surface finer than a pixel on the screen has more vertices under a point than a point is worth: the walk stops at the first MAX_WALK)
-        if (dx * dx + dy * dy <= reach2 && tail < MAX_WALK) queue[tail++] = w
-      }
-      // (a triangle over the point has its vertices within a stride of it: the fan of a vertex farther off is not looked at)
-      const du = scr[3 * u] - qx, dv = scr[3 * u + 1] - qy
-      if (du * du + dv * dv > cover2) continue
-      for (let k = vtStart[u]; k < vtStart[u + 1]; k++) {
-        const t = vtTri[k]
-        if (seenT[t] === q) continue
-        seenT[t] = q
-        tried++
-        const a = idx[3 * t], b = idx[3 * t + 1], c = idx[3 * t + 2]
-        const ax = scr[3 * a], ay = scr[3 * a + 1], bx = scr[3 * b], by = scr[3 * b + 1], cx = scr[3 * c], cy = scr[3 * c + 1]
-        // (a triangle whose box is not over the point has no hit)
-        if ((qx < ax && qx < bx && qx < cx) || (qx > ax && qx > bx && qx > cx) || (qy < ay && qy < by && qy < cy) || (qy > ay && qy > by && qy > cy)) continue
-        const wa = scr[3 * a + 2], wb = scr[3 * b + 2], wc = scr[3 * c + 2]
-        if (wa <= 1e-9 || wb <= 1e-9 || wc <= 1e-9) continue
-        const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
-        if (Math.abs(den) < 1e-9) continue
-        const l0 = ((by - cy) * (qx - cx) + (cx - bx) * (qy - cy)) / den
-        const l1 = ((cy - ay) * (qx - cx) + (ax - cx) * (qy - cy)) / den
-        const l2 = 1 - l0 - l1
-        if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue
-        // (depth along the view direction, perspective-correct: the weights over the clip w)
-        if (shaded[a] !== frame) this.shade(fc, a)
-        if (shaded[b] !== frame) this.shade(fc, b)
-        if (shaded[c] !== frame) this.shade(fc, c)
-        const i0 = l0 / wa, i1 = l1 / wb, i2 = l2 / wc
-        const iw = i0 + i1 + i2
-        const d = (i0 * dep[a] + i1 * dep[b] + i2 * dep[c]) / iw
-        if (d < best) {
-          best = d
-          facing = l0 * face[a] + l1 * face[b] + l2 * face[c]
-          found = true
+    const view = fc.view
+    const ex = view.eye[0], ey = view.eye[1], ez = view.eye[2]
+    let ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, sMin: number
+    if (fc.ortho) {
+      ox = x
+      oy = y
+      oz = z
+      dx = view.viewDir[0]
+      dy = view.viewDir[1]
+      dz = view.viewDir[2]
+      sMin = -1e12
+    } else {
+      ox = ex
+      oy = ey
+      oz = ez
+      dx = x - ex
+      dy = y - ey
+      dz = z - ez
+      const l = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1
+      dx /= l
+      dy /= l
+      dz /= l
+      sMin = 0
+    }
+    // the nearest triangle: the BVH's boxes by the slab test, the leaves' triangles by Moller-Trumbore, two-sided
+    const bvh = this.bvh
+    if (bvh.left.length === 0) return false
+    const bounds = bvh.bounds, left = bvh.left, right = bvh.right, start = bvh.start, count = bvh.count, order = bvh.order
+    const pos = this.mesh.positions, idx = this.mesh.indices
+    const ix = 1 / dx, iy = 1 / dy, iz = 1 / dz
+    const stack = this.stack
+    let sp = 0
+    stack[sp++] = 0
+    let best = 1e12
+    let bt = -1, bb1 = 0, bb2 = 0
+    while (sp > 0) {
+      const node = stack[--sp]
+      const nb = 6 * node
+      let lo = sMin
+      let hi = best
+      // (an axis the ray does not move along is a slab it is in or out of for good, and on a face of the box is in)
+      if (dx !== 0) {
+        const t1 = (bounds[nb] - ox) * ix, t2 = (bounds[nb + 3] - ox) * ix
+        lo = Math.max(lo, Math.min(t1, t2))
+        hi = Math.min(hi, Math.max(t1, t2))
+      } else if (ox < bounds[nb] || ox > bounds[nb + 3]) continue
+      if (dy !== 0) {
+        const t1 = (bounds[nb + 1] - oy) * iy, t2 = (bounds[nb + 4] - oy) * iy
+        lo = Math.max(lo, Math.min(t1, t2))
+        hi = Math.min(hi, Math.max(t1, t2))
+      } else if (oy < bounds[nb + 1] || oy > bounds[nb + 4]) continue
+      if (dz !== 0) {
+        const t1 = (bounds[nb + 2] - oz) * iz, t2 = (bounds[nb + 5] - oz) * iz
+        lo = Math.max(lo, Math.min(t1, t2))
+        hi = Math.min(hi, Math.max(t1, t2))
+      } else if (oz < bounds[nb + 2] || oz > bounds[nb + 5]) continue
+      // (a hair of slack, so a ray grazing a box face still enters it)
+      if (lo > hi + 1e-12 * Math.max(1, Math.abs(hi))) continue
+      if (left[node] < 0) {
+        const to = start[node] + count[node]
+        for (let i = start[node]; i < to; i++) {
+          const tri = order[i]
+          const a = 3 * idx[3 * tri], b = 3 * idx[3 * tri + 1], c = 3 * idx[3 * tri + 2]
+          const e1x = pos[b] - pos[a], e1y = pos[b + 1] - pos[a + 1], e1z = pos[b + 2] - pos[a + 2]
+          const e2x = pos[c] - pos[a], e2y = pos[c + 1] - pos[a + 1], e2z = pos[c + 2] - pos[a + 2]
+          const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x
+          const det = e1x * px + e1y * py + e1z * pz
+          if (det === 0 || !Number.isFinite(det)) continue
+          const inv = 1 / det
+          const tx = ox - pos[a], ty = oy - pos[a + 1], tz = oz - pos[a + 2]
+          const b1 = (tx * px + ty * py + tz * pz) * inv
+          if (b1 < -CAST_EDGE || b1 > 1 + CAST_EDGE) continue
+          const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x
+          const b2 = (dx * qx + dy * qy + dz * qz) * inv
+          if (b2 < -CAST_EDGE || b1 + b2 > 1 + CAST_EDGE) continue
+          const s = (e2x * qx + e2y * qy + e2z * qz) * inv
+          if (s < sMin || s > best || !Number.isFinite(s)) continue
+          if (s < best || tri < bt) {
+            best = s
+            bt = tri
+            bb1 = b1
+            bb2 = b2
+          }
         }
+      } else {
+        stack[sp++] = right[node]
+        stack[sp++] = left[node]
       }
     }
-    this.tried += tried
-    if (found) {
-      this.hitDepth = best
-      this.hitFacing = facing
-    }
-    return found
+    if (bt < 0) return false
+    const a = 3 * idx[3 * bt], b = 3 * idx[3 * bt + 1], c = 3 * idx[3 * bt + 2]
+    const w0 = 1 - bb1 - bb2
+    const nor = this.mesh.normals
+    const nx = w0 * nor[a] + bb1 * nor[b] + bb2 * nor[c]
+    const ny = w0 * nor[a + 1] + bb1 * nor[b + 1] + bb2 * nor[c + 1]
+    const nz = w0 * nor[a + 2] + bb1 * nor[b + 2] + bb2 * nor[c + 2]
+    this.hitFacing = -(nx * dx + ny * dy + nz * dz)
+    this.hitDepth = (ox + dx * best - ex) * view.viewDir[0] + (oy + dy * best - ey) * view.viewDir[1] + (oz + dz * best - ez) * view.viewDir[2]
+    return true
   }
 }
 
-const casters = new WeakMap<MeshMark, { src: CastMesh; index: SurfaceIndex; caster: SurfaceCaster }>()
-export function casterOf(mesh: MeshMark): { src: CastMesh; index: SurfaceIndex; caster: SurfaceCaster } {
+const casters = new WeakMap<MeshMark, MeshCaster>()
+export function casterOf(mesh: MeshMark): MeshCaster {
   let c = casters.get(mesh)
   if (!c) {
-    const src: CastMesh = { positions: Float32Array.from(mesh.positions), indices: mesh.indices, normals: Float32Array.from(mesh.normals) }
-    const index = new SurfaceIndex(src)
-    c = { src, index, caster: new SurfaceCaster(src, index) }
+    c = new MeshCaster(mesh)
     casters.set(mesh, c)
   }
   return c
 }
 
-// Every this many samples of an open sheet's outline has its side cast (64 px), and a piece of at most SHORT_PIECE samples (48 px, one stroke at most) once.
-const CAST_STRIDE = 32
-const SHORT_PIECE = 24
-// How far from the point a cast walks, in px: the probe, this share of the surface's own stride on the screen, and this much more (the triangle that covers a
-// point has its vertices within a stride of it; wider changes nothing on the saddle against the rays, and narrower begins to miss).
-const REACH_RING = 0.8
-const REACH_PAD = 1.5
-// A vertex's triangles are looked at only within this of the point (a stride of the surface, and a little: the triangles over a point have their vertices
-// within a stride of it).
-const COVER_RING = 1.3
-const COVER_PAD = 1
+// Every this many samples of an open sheet's outline has its side cast (32 px), and the last; where two casts differ the middle is cast, and so on.
+const CAST_STRIDE = 16
 
 // On an open sheet, the side seen at each sample (run.sg) and the screen's normal toward the figure (run.nrm): what the eye sees PROBE_PX to either side of
-// the outline (the surface nearest the eye there; a fold's sheet is on one side of its outline only, and the side the last sample had is tried first), as the
-// model's G-buffer read 3 px in sees it. The side that surface shows the eye is the side seen, and its side of the outline
-// the way in. Both are the majority of 7 along the run, so that a blip of a vertex does not flicker the colours; a stretch is cut where they change.
+// the outline (the surface nearest the eye there: a fold's sheet is on one side of its outline only, and where both sides have a surface the one at the
+// outline's own depth is the sheet's), as the model's G-buffer read 3 px in sees it. The side that surface shows the eye is the side seen, and its side of the
+// outline the way in. Both are the majority of 7 along the run, so that a blip does not flicker the colours; a stretch is cut where they change.
 function readSides(mc: MarkCtx, run: SilhouetteRun, near: Int32Array, sx: Float64Array, sy: Float64Array, wxyz: Float64Array): void {
   const { fc, mesh } = mc
-  const { src, index, caster } = casterOf(mesh)
-  caster.begin(fc)
+  const caster = casterOf(mesh)
+  const view = fc.view
+  const rx = view.view[0], ry = view.view[4], rz = view.view[8]
+  const ux = view.view[1], uy = view.view[5], uz = view.view[9]
   const n = run.n
   const rawSide = new Int8Array(n)
   const rawWay = new Int8Array(n)
@@ -911,26 +835,33 @@ function readSides(mc: MarkCtx, run: SilhouetteRun, near: Int32Array, sx: Float6
   let prefer = 1
   let any = false
   // one cast at sample s: the side of the outline that has the sheet (rawWay) and what it shows the eye (rawSide); 0 where neither side has any
-  let hint = -1
   const castAt = (s: number): void => {
     if (near[s] < 0) return
-    // the mesh's vertex nearest the sample (a walk from the last cast's)
-    const v = index.nearest(src.positions, wxyz[3 * s], wxyz[3 * s + 1], wxyz[3 * s + 2], hint)
-    if (v < 0) return
-    hint = v
-    // how far the walk goes: the probe, and the surface's own stride on the screen (so that a coarse sheet's triangles are reached)
-    const ring = caster.ringExtent(fc, v, index)
-    const reach = SILHOUETTE_PROBE_PX + REACH_RING * ring + REACH_PAD
-    const cover = COVER_RING * ring + COVER_PAD
-    // the side the last cast had is tried first, and taken when it has the surface (a fold's surface is on one side of its outline)
-    let side = 0
-    let facing = 0
-    for (let t = 0; t < 2 && side === 0; t++) {
+    const px = wxyz[3 * s], py = wxyz[3 * s + 1], pz = wxyz[3 * s + 2]
+    const inv = SILHOUETTE_PROBE_PX / Math.max(1e-9, pxPerUnit(fc, px, py, pz))
+    const depthP = (px - view.eye[0]) * view.viewDir[0] + (py - view.eye[1]) * view.viewDir[1] + (pz - view.eye[2]) * view.viewDir[2]
+    // the point PROBE_PX to a side of the sample on the screen (the plane of the sample's depth), and what is there
+    let sideA = 0, faceA = 0, gapA = Infinity
+    let sideB = 0, faceB = 0, gapB = Infinity
+    for (let t = 0; t < 2; t++) {
       const d = t === 0 ? prefer : -prefer
-      if (caster.cast(fc, v, sx[s] + d * nx0[s] * SILHOUETTE_PROBE_PX, sy[s] + d * ny0[s] * SILHOUETTE_PROBE_PX, reach, cover)) {
-        side = d
-        facing = caster.hitFacing
+      const ox = d * nx0[s] * inv, oy = d * ny0[s] * inv
+      if (!caster.cast(fc, px + rx * ox - ux * oy, py + ry * ox - uy * oy, pz + rz * ox - uz * oy)) continue
+      if (t === 0) {
+        sideA = d
+        faceA = caster.hitFacing
+        gapA = Math.abs(caster.hitDepth - depthP)
+      } else {
+        sideB = d
+        faceB = caster.hitFacing
+        gapB = Math.abs(caster.hitDepth - depthP)
       }
+    }
+    let side = sideA
+    let facing = faceA
+    if (sideA === 0 || (sideB !== 0 && gapB < gapA)) {
+      side = sideB
+      facing = faceB
     }
     if (side === 0) return
     any = true
@@ -954,35 +885,9 @@ function readSides(mc: MarkCtx, run: SilhouetteRun, near: Int32Array, sx: Float6
     fill(a, m)
     fill(m, b)
   }
-  if (n <= SHORT_PIECE) {
-    // a short piece (under 50 px) is one stroke at most: its middle's answer is its answer
-    const mid = n >> 1
-    castAt(mid)
-    if (!any) castAt(0)
-    if (!any) castAt(n - 1)
-    if (any) {
-      const at = rawWay[mid] !== 0 ? mid : rawWay[0] !== 0 ? 0 : n - 1
-      rawSide.fill(rawSide[at])
-      rawWay.fill(rawWay[at])
-    }
-  } else {
-    let last = 0
-    for (let s = 0; s < n; s += CAST_STRIDE) {
-      castAt(s)
-      last = s
-    }
-    // (the end is cast when it is far enough from the last cast to hold a change of side of its own: more than a stroke's least length, MIN_STRETCH)
-    if (n - 1 - last > MIN_STRETCH) {
-      castAt(n - 1)
-      last = n - 1
-    }
-    for (let a = 0; a < last; a += CAST_STRIDE) fill(a, Math.min(a + CAST_STRIDE, last))
-    // what is after the last cast takes its answer
-    for (let s = last + 1; s < n; s++) {
-      rawSide[s] = rawSide[last]
-      rawWay[s] = rawWay[last]
-    }
-  }
+  for (let s = 0; s < n; s += CAST_STRIDE) castAt(s)
+  if ((n - 1) % CAST_STRIDE !== 0) castAt(n - 1)
+  for (let a = 0; a < n - 1; a += CAST_STRIDE) fill(a, Math.min(a + CAST_STRIDE, n - 1))
   if (!any) return
   medianSigma(rawSide, run.sg)
   medianSigma(rawWay, way)
@@ -992,13 +897,14 @@ function readSides(mc: MarkCtx, run: SilhouetteRun, near: Int32Array, sx: Float6
   }
 }
 
-// The side seen at each sample as the majority of the 7 about it (a sample whose side is not known, 0, has no vote; a tie keeps the one before).
+// The side seen at each sample as the majority of the 7 about it, the ends repeating (a sample whose side is not known, 0, has no vote; a tie keeps the one before).
 export function medianSigma(raw: Int8Array, out: Int8Array): void {
   const n = raw.length
   let prev = 1
   for (let i = 0; i < n; i++) {
     let sum = 0
-    for (let k = -3; k <= 3; k++) if (i + k >= 0 && i + k < n) sum += raw[i + k]
+    // (the ends repeat, as the median of the classes does: a change of side near the end of the run does not move)
+    for (let k = -3; k <= 3; k++) sum += raw[i + k < 0 ? 0 : i + k > n - 1 ? n - 1 : i + k]
     prev = out[i] = sum > 0 ? 1 : sum < 0 ? -1 : prev
   }
 }

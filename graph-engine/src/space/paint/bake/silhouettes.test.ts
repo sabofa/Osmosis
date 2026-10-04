@@ -7,7 +7,7 @@ import { DEFAULT_PAINT_PARAMS, type PaintParams } from '../params'
 import { silhouettePolylines } from '../model/contours'
 import { smoothClasses } from '../model/edges'
 import { hash01, valueNoise3 } from '../model/math'
-import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
+import { flatColours, graphMesh, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
 import { project, makeFrameCtx, pxPerUnit } from '../model/view'
 import { PATH_POINTS, ROLES, type GBuffer, type PaintView } from '../types'
 import { LIGHT, TERRACOTTA, CANVAS, framing, fixture, saddleColours, saddleScene, sparse, sphereColours, sphereScene, type Fixture } from './bakeFixture'
@@ -32,8 +32,8 @@ const twoFx = (() => {
   return fixture(scene, flatColours({ 0: TERRACOTTA, 1: lchToLab(0.45, 0.1, 250), 2: CANVAS }), sparse(500), LIGHT, ORTHO)
 })()
 
-const viewAt = (az: number, el: number, opts: { perspective?: boolean; zoom?: number } = {}): PaintView => ({
-  ...paintView({ width: 640, height: 480, azimuth: az, elevation: el, zoom: 150 * (opts.zoom ?? 1), magnify: opts.zoom ?? 1, perspective: opts.perspective }), lightDir: LIGHT,
+const viewAt = (az: number, el: number, opts: { perspective?: boolean; zoom?: number; target?: [number, number, number] } = {}): PaintView => ({
+  ...paintView({ width: 640, height: 480, azimuth: az, elevation: el, zoom: 150 * (opts.zoom ?? 1), magnify: opts.zoom ?? 1, perspective: opts.perspective, target: opts.target }), lightDir: LIGHT,
 })
 
 interface Made {
@@ -744,11 +744,13 @@ describe('the helpers of the silhouettes', () => {
 
 describe('the outline of an open sheet', () => {
   const saddleFx = fixture(saddleScene(), saddleColours(), sparse(700), LIGHT, ORTHO)
-  const surface = saddleFx.baked.surfaces[0]!
+  // a coarse sheet (8 cells across: its triangles are larger than the screen's stride when the view is zoomed in)
+  const coarseFx = fixture(sceneOf([graphMesh((x, y) => 0.5 * (x * x - y * y), { half: 1, n: 8, scaled: true, index: 0 })]), saddleColours(), sparse(700), LIGHT, ORTHO)
 
   // The nearest surface along the line through o in direction dir, by every triangle of the refined sheet (what the eye sees: no walk, no screen buffer, so
   // nothing the silhouettes do): its distance along dir and the facing of the interpolated normal to the eye (-dir).
-  function castLine(o: number[], dir: number[]): { t: number; face: number } | null {
+  function castLine(fx: Fixture, o: number[], dir: number[]): { t: number; face: number } | null {
+    const surface = fx.baked.surfaces[0]!
     const p = surface.positions, idx = surface.indices, nor = surface.normals
     let best: { t: number; face: number } | null = null
     for (let k = 0; k + 2 < idx.length; k += 3) {
@@ -776,16 +778,17 @@ describe('the outline of an open sheet', () => {
 
   // For every other sample of the runs of a view: the side of the outline the sheet is on (3 px either side, by ray casting: the side whose nearest surface is at
   // the outline's own depth), what that surface shows the eye, and whether the run's side and normal say so.
-  function checkAgainstRays(az: number, el: number, perspective = false): { decided: number; wrongSide: number; wrongWay: number; sides: Set<number> } {
-    const view = viewAt(az, el, { perspective })
-    const { runs } = make(saddleFx, view)
-    const fc = makeFrameCtx(saddleFx.scene, view, EMPTY_G, saddleFx.params)
+  function checkView(fx: Fixture, view: PaintView): { decided: number; wrongSide: number; wrongWay: number; sides: Set<number> } {
+    const { runs } = make(fx, view)
+    const fc = makeFrameCtx(fx.scene, view, EMPTY_G, fx.params)
     const right = [view.view[0], view.view[4], view.view[8]]
     const up = [view.view[1], view.view[5], view.view[9]]
     let decided = 0, wrongSide = 0, wrongWay = 0
     const sides = new Set<number>()
     for (const run of runs) {
       for (let k = 0; k < run.n; k += 2) {
+        // (the samples on the screen, and a margin)
+        if (run.screen[2 * k] < -20 || run.screen[2 * k + 1] < -20 || run.screen[2 * k] > view.width + 20 || run.screen[2 * k + 1] > view.height + 20) continue
         const a0 = Math.max(0, k - 1), a1 = Math.min(run.n - 1, k + 1)
         let tx = run.screen[2 * a1] - run.screen[2 * a0], ty = run.screen[2 * a1 + 1] - run.screen[2 * a0 + 1]
         const tl = Math.hypot(tx, ty) || 1
@@ -809,7 +812,7 @@ describe('the outline of an open sheet', () => {
             const l = Math.hypot(dv[0], dv[1], dv[2])
             dir = dv.map((x) => x / l)
           }
-          const h = castLine(o, dir)
+          const h = castLine(fx, o, dir)
           if (!h) return null
           const at = o.map((x, j) => x + dir[j] * h.t)
           return { face: h.face, depth: (at[0] - view.eye[0]) * view.viewDir[0] + (at[1] - view.eye[1]) * view.viewDir[1] + (at[2] - view.eye[2]) * view.viewDir[2] }
@@ -827,6 +830,16 @@ describe('the outline of an open sheet', () => {
       }
     }
     return { decided, wrongSide, wrongWay, sides }
+  }
+
+  const checkAgainstRays = (az: number, el: number, perspective = false): ReturnType<typeof checkView> => checkView(saddleFx, viewAt(az, el, { perspective }))
+
+  // A view zoomed in on a point of the outline of the same view at zoom 1 (the outline in the middle of the screen).
+  function zoomedOn(fx: Fixture, az: number, el: number, zoom: number, perspective: boolean): PaintView {
+    const { runs } = make(fx, viewAt(az, el, { perspective }))
+    const run = runs[0]
+    const k = Math.floor(run.n / 3)
+    return viewAt(az, el, { perspective, zoom, target: [run.world[3 * k], run.world[3 * k + 1], run.world[3 * k + 2]] })
   }
 
   it("reads the side of the sheet that is seen just inside the outline at every sample, as ray casting the refined sheet 3 px either side sees it, and the way in", () => {
@@ -849,19 +862,53 @@ describe('the outline of an open sheet', () => {
     }
   })
 
-  it("casts the side at a small share of the samples: every 32nd, the end, and where two casts differ", () => {
+  it("reads the side seen on a short piece of the outline, in perspective, as the rays do (a piece is not one side because its middle is)", () => {
+    for (const [az, el] of [[30, 40], [225, -21]] as const) {
+      const view = viewAt(az, el, { perspective: true })
+      const { runs } = make(saddleFx, view)
+      // (a short piece: 24 samples or fewer, under 50 px)
+      expect(runs.some((r) => r.n <= 24), `az ${az} el ${el}: has a short piece`).toBe(true)
+      const r = checkView(saddleFx, view)
+      if (process.env.FRAME_PRINT) console.log(`saddle in perspective with a short piece, az ${az} el ${el}: ${r.decided} samples decided by rays, the side seen wrong at ${r.wrongSide}`)
+      expect(r.decided, `az ${az} el ${el}`).toBeGreaterThan(5)
+      expect(r.wrongSide, `az ${az} el ${el}`).toBeLessThanOrEqual(1)
+    }
+  })
+
+  // Zoomed in on a point of the outline: the shares of the decided samples that may be wrong (the rays' truth: round 1 had under 0.5% on the saddle at zoom 8, and
+  // 1.4% and 8.4% on the coarse sheet at zoom 3 and 8; a cast that looks only so far round a vertex has 5%, 4.7% and 22%).
+  const zoomedCases = (cases: [Fixture, number, number, number, boolean, number][], name: string): void => {
+    for (const [fx, az, el, zoom, perspective, allowed] of cases) {
+      const r = checkView(fx, zoomedOn(fx, az, el, zoom, perspective))
+      const label = `${name} az ${az} el ${el} zoom ${zoom}${perspective ? ' perspective' : ''}`
+      if (process.env.FRAME_PRINT) console.log(`${label}: ${r.decided} samples decided by rays, the side seen wrong at ${r.wrongSide}`)
+      expect(r.decided, label).toBeGreaterThan(100)
+      expect(r.wrongSide / r.decided, label).toBeLessThan(allowed)
+    }
+  }
+
+  it("reads the side seen on a fine sheet zoomed in to 8, where a triangle is larger than the screen's stride at the outline: both projections", () => {
+    zoomedCases([[saddleFx, 30, 15, 8, false, 0.005], [saddleFx, 30, 15, 8, true, 0.005]], 'saddle')
+  })
+
+  it("reads the side seen on a coarse sheet zoomed in to 3 and 8 (a triangle is hundreds of pixels across): both projections", () => {
+    zoomedCases([[coarseFx, 30, 15, 3, false, 0.03], [coarseFx, 30, 15, 8, false, 0.05], [coarseFx, 20, 25, 8, true, 0.06]], 'coarse sheet')
+  })
+
+  it("casts the side at a small share of the samples: every 16th, the end, and where two casts differ", () => {
     const view = viewAt(20, 25)
     const mesh = saddleFx.scene.marks[0] as MeshMark
-    const caster = casterOf(mesh).caster
+    const caster = casterOf(mesh)
     make(saddleFx, view)
     const before = caster.casts
     const { runs } = make(saddleFx, view)
-    const casts = caster.casts - before
+    // (a cast is a ray to each side of the sample)
+    const rays = caster.casts - before
     const samples = runs.reduce((s, r) => s + r.n, 0)
-    if (process.env.FRAME_PRINT) console.log(`saddle az 20 el 25: ${casts} casts for ${samples} samples`)
+    if (process.env.FRAME_PRINT) console.log(`saddle az 20 el 25: ${rays} rays for ${samples} samples`)
     expect(samples).toBeGreaterThan(100)
-    expect(casts).toBeGreaterThan(2)
-    expect(casts).toBeLessThan(samples / 8)
+    expect(rays).toBeGreaterThan(4)
+    expect(rays).toBeLessThan(samples / 3)
   })
 
   it("sees both sides of a sheet along one outline where the sheet turns, and cuts a stretch there", () => {

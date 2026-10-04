@@ -32,8 +32,8 @@
 // sort, the frame's own strokes) are kept in a FrameScratch and grown by doubling. `frameFromBake` keeps one per bake in a WeakMap (keyed by the baked
 // worldPath array, so a recolour of a bake shares it); `frameFromBakeWith` takes the caller's. The OUTPUT arrays are made afresh in every call, for the
 // renderer may keep a batch; the scratch's own are never handed out, unless the caller asks (FrameScratch.reuseOutput: views of arrays kept in the scratch,
-// good until the next call, for a caller that does not keep the batch). The first frame of a bake also makes, once, the per-stroke anchors and each
-// surface's vertex index (prepareBake does it ahead of the first frame).
+// good until the next call, for a caller that does not keep the batch). The first frame of a bake also makes, once, the per-stroke anchors, each
+// surface's vertex index and each open sheet's BVH (prepareBake does it ahead of the first frame).
 
 import type { SpaceScene } from '../../scene/types'
 import type { PaintParams } from '../params'
@@ -45,7 +45,7 @@ import { veilOf, VEIL_BORDER_ALPHA, VEIL_DENSITY, type Veil } from '../model/rol
 import { BEHIND_VEIL_LAYER, pressure } from '../model/strokes'
 import { bigMax, drawChanceFor, drawChanceOf, drawFadeAt, loadCellLevel, makeFrameCtx, project, pxPerUnit, roleRank, VEIL_FADE_HI, VEIL_FADE_LO, zoomGrowFor, zoomSizeScaleAt, type FrameCtx } from '../model/view'
 import { fnvInts } from './draft'
-import { addSilhouettes, indexOf } from './silhouettes'
+import { addSilhouettes, casterOf, indexOf } from './silhouettes'
 import { StrokeList } from './strokeList'
 import { BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, SIZING_SURFACE, type BakedPainting, type FrameFromBake } from './types'
 
@@ -834,7 +834,11 @@ export function prepareBake(baked: BakedPainting, scene: SpaceScene): void {
   prepOf(baked, scene)
   scene.marks.forEach((mark, m) => {
     const s = baked.surfaces[m]
-    if (s && mark.kind === 'mesh' && mark.style.opacity >= 1) indexOf(s)
+    if (s && mark.kind === 'mesh' && mark.style.opacity >= 1) {
+      indexOf(s)
+      // (an open sheet's outline is cast against its mesh's BVH, which the first cast would build)
+      if (!s.closed && s.uBack) casterOf(mark)
+    }
   })
 }
 
