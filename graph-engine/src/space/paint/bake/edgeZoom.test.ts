@@ -137,7 +137,27 @@ describe('the baked edge strokes keep the model’s length, width and spacing at
         }
       }
     }
-    if (process.env.EDGE_PRINT) console.log(`EDGE ZOOM TABLE\n${rows.join('\n')}`)
+    if (process.env.EDGE_PRINT) {
+      // (the strokes along an edge, for the report, not asserted: the model's own length follows the length of its runs on the screen, up to its cut at 45 samples)
+      for (const zoom of ZOOMS) {
+        const views = AZIMUTHS.map((az) => viewAt(zoom, az))
+        const m = pool(
+          views.map((v) => {
+            const b = modelFrame(SPHERE, v)
+            return measure(b, ['crisp', 'drag'], (o) => b.seed[o])
+          }),
+        )
+        const a = pool(
+          views.map((v) => {
+            const scr = new FrameScratch()
+            const b = frameFromBakeWith(scr, SPHERE.baked, SPHERE.scene, v, SPHERE.params, null)
+            return measure(b, ['crisp', 'drag'], (o) => SPHERE.baked.rank[scr.source[o]], bakedArcs(scr, SPHERE))
+          }),
+        )
+        rows.push(`zoom ${zoom} crisp+drag (along): model ${m.n} strokes, length ${m.length.toFixed(1)} px | baked ${a.n}, length ${a.length.toFixed(1)} (${((a.length / m.length - 1) * 100).toFixed(0)}%)`)
+      }
+      console.log(`EDGE ZOOM TABLE\n${rows.join('\n')}`)
+    }
     expect(spacingChecked).toBeGreaterThanOrEqual(5)
   })
 
