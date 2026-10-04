@@ -3,31 +3,18 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../domain/errors.js";
-import {
-  KIND_TAGS,
-  NODE_KINDS,
-  appendContent,
-  createNode,
-  getNodeDetail,
-  listChildren,
-  listRoots,
-  placeNode,
-  readContent,
-  saveContent,
-  searchWorkspace,
-} from "../domain/workspace/index.js";
-import type { KindTag, NodeKind } from "../domain/workspace/index.js";
+import * as ws from "../domain/workspace/index.js";
 
 // ----------------------------------------------------------------------------
 // The workspace over MCP: how the tutor and the planner read and write the
 // files in Ben's workspace. Seven tools: read (ws_list, ws_read, ws_search),
 // create (ws_create), write (ws_write, ws_append) and place (ws_place).
 //
-// There is no remove, move or destroy. Rearranging the tree is Ben's: an agent
-// can add to it and fill it in, never tidy it away. Every write names who is
-// writing (`as`), and that lands on the revision, so Ben can see which of his
-// files the tutor or the planner touched, and each of them can see what the
-// other wrote.
+// There is no trash, delete, restore, purge, move or rename. Removing things and
+// rearranging the tree are Ben's: an agent can add to it and fill it in, never
+// tidy it away. Every write names who is writing (`as`), and that lands on the
+// version, so Ben can see which of his files the tutor or the planner touched,
+// and each of them can see what the other wrote.
 //
 // Called from registerTools with its registerTool wrapper, so the presenter
 // allowlist and readme()'s tool list apply to these like any other tool.
@@ -42,11 +29,10 @@ const writerShape = z
   .enum(["tutor", "planner"])
   .describe(
     "Who is writing. The tutor teaches Ben and writes its notes about him into the unit's USERNOTES file with specific examples; " +
-      "the planner writes the plan. Recorded on the revision."
+      "the planner writes the plan. Recorded on the version."
   );
 
-const kindShape = z.enum(NODE_KINDS as unknown as [NodeKind, ...NodeKind[]]);
-const kindTagShape = z.enum(KIND_TAGS as unknown as [KindTag, ...KindTag[]]);
+const kindShape = z.enum(ws.NODE_KINDS as unknown as [ws.NodeKind, ...ws.NodeKind[]]);
 
 export function registerWorkspaceTools(registerTool: McpServer["registerTool"], db: DatabaseSync, { ok, fail }: ToolResultHelpers): void {
   const attempt = (fn: () => unknown): CallToolResult => {
@@ -61,15 +47,16 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
     "ws_list",
     {
       description:
-        "List Ben's workspace. With no container_id: the roots, meaning every track and course plus any files and folders not placed anywhere (unplaced). " +
-        "With a container_id (a track, course or folder): its live children, each under the name it has in that container. " +
-        "A node can sit in several containers (a file in two courses), so a child's placement_count says how many.",
-      inputSchema: { container_id: z.string().optional().describe("A track, course or folder id. Omit it for the roots.") },
+        "List Ben's workspace. With no container_id: the roots, meaning every trajectory, track and course (top_level is true for one that is " +
+        "placed nowhere, which is normal for a container), plus `unplaced`, the files and folders that are not placed anywhere. " +
+        "With a container_id (a trajectory, track, course or folder): its live children, containers first, each under the name it has in " +
+        "that container. A node can sit in several containers (a file in two courses), so a child's placement_count says how many.",
+      inputSchema: { container_id: z.string().optional().describe("A trajectory, track, course or folder id. Omit it for the roots.") },
     },
     async ({ container_id }) =>
       attempt(() => {
-        if (container_id === undefined) return listRoots(db);
-        return { container: getNodeDetail(db, container_id).node, children: listChildren(db, container_id) };
+        if (container_id === undefined) return { ...ws.roots(db), unplaced: ws.unplaced(db) };
+        return { container: ws.getNodeDetail(db, container_id).node, children: ws.children(db, container_id) };
       })
   );
 
@@ -77,15 +64,19 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
     "ws_read",
     {
       description:
-        "Read one node: its summary, every container it appears in (appears_in), the tracks above it, and for a file its content " +
-        "(type, body, revision, saved_at, saved_by). Pass the revision you read here back to ws_write. An uploaded document " +
-        "(type asset) has no body here.",
+        "Read one node: its summary, every container it appears in (appears_in), and for a file its content " +
+        "(format, body, version, saved_at, author). Pass the version you read here back to ws_write. An uploaded document " +
+        "(format upload) has no body here; its asset_id names the upload.",
       inputSchema: { node_id: z.string() },
     },
     async ({ node_id }) =>
       attempt(() => {
-        const detail = getNodeDetail(db, node_id);
-        return { ...detail, content: detail.node.kind === "file" ? readContent(db, node_id) : null };
+        const detail = ws.getNodeDetail(db, node_id);
+        if (detail.node.kind !== "file") return detail;
+        // The header getNodeDetail carries, plus the body. search_text is the layer's
+        // own derived copy of the body, so it is left out.
+        const { format, version, body, author, saved_at, asset_id } = ws.readContent(db, node_id);
+        return { ...detail, content: { format, version, body, author, saved_at, asset_id } };
       })
   );
 
@@ -94,57 +85,52 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
     {
       description:
         "Find nodes by text: a placement's name, a node's title, and for files their content. `scope` limits it to everything below one " +
-        "container; `kind_tag` to source, resource, homework, test or flowchart files. One row per placement, so a file in two courses " +
-        "is listed under each name it has. With no arguments it lists everything.",
+        "container; `kind_tag` to files carrying that tag (the usual ones are source, resource, homework, test and flowchart). One row per " +
+        "placement, so a file in two courses is listed under each name it has. A node placed nowhere is never listed: ws_list shows those. " +
+        "With no arguments it lists everything placed.",
       inputSchema: {
         q: z.string().optional().describe("Text to look for, case-insensitive. Omit it to filter by scope and tag alone."),
         scope: z.string().optional().describe("A container id: search only what is inside it, at any depth."),
-        kind_tag: kindTagShape.optional(),
+        kind_tag: z.string().optional().describe("Only files with this kind tag, such as homework. Lowercase letters, digits, - and _."),
       },
     },
-    async ({ q, scope, kind_tag }) => attempt(() => ({ results: searchWorkspace(db, { q, scope, kind_tag }) }))
+    async ({ q, scope, kind_tag }) => attempt(() => ({ results: ws.search(db, { q, scope, kind_tag }) }))
   );
 
   registerTool(
     "ws_create",
     {
       description:
-        "Create a track, course, folder or file, and with container_id place it there in the same call. What may hold what: a track holds " +
-        "tracks, courses, folders and files; a course holds folders and files; a folder holds courses, folders and files; a file holds " +
-        "nothing. For a file pass `type` (\"markdown\" for notes and documents, \"graph\" for a graph spec) and optionally `body`. " +
-        "`name` is what the item is called inside that container (default: the title); names are unique among siblings. If the name is " +
-        "taken (name_taken), that node probably already exists: ws_list the container and use it. For a unit's USERNOTES, ws_append to " +
-        "the existing file. Never create a numbered copy. The unit's USERNOTES file is a markdown file in the unit's folder: create it " +
-        "once, then ws_append to it.",
+        "Create a trajectory, track, course, folder or file, and with container_id place it there in the same call. What may hold what: a " +
+        "trajectory holds tracks, courses, folders and files; a track holds courses, folders and files; a course holds folders and files; " +
+        "a folder holds folders and files; a file holds nothing. A folder has no built-in meaning: a unit, research, attachments or notes " +
+        "are all just folders. For a file pass `format` (\"markdown\" for notes and documents, \"graph\" for a graph spec) and optionally " +
+        "`body`. `name` is what the item is called inside that container (default: the title); names are unique among siblings. " +
+        "If the name is taken (name_taken), call ws_list on the container and use the existing node. For USERNOTES that means ws_append " +
+        "to it. Never create a numbered copy. The unit's USERNOTES file is a markdown file in the unit's folder: create it once, then " +
+        "ws_append to it.",
       inputSchema: {
         kind: kindShape,
         title: z.string().describe("The item's title, and its default name wherever it is placed. No \"/\"."),
-        container_id: z.string().optional().describe("Place the new node in this track, course or folder."),
+        container_id: z.string().optional().describe("Place the new node in this trajectory, track, course or folder."),
         name: z.string().optional().describe("Its name in that container, if not the title. Needs container_id."),
-        type: z.string().optional().describe("File type. Required when kind is \"file\"; not for anything else."),
+        format: z.string().optional().describe('The file\'s format: "markdown" or "graph". Required when kind is "file"; not for anything else.'),
         body: z.string().optional().describe("A file's starting content. Files only."),
-        kind_tag: kindTagShape.optional().describe("What a file is for: source, resource, homework, test or flowchart."),
+        kind_tag: z
+          .string()
+          .optional()
+          .describe("What a file is for, such as source, resource, homework, test or flowchart. Lowercase letters, digits, - and _. Files only."),
         as: writerShape,
       },
     },
-    async ({ kind, title, container_id, name, type, body, kind_tag, as }) =>
+    async ({ kind, title, container_id, name, format, body, kind_tag, as }) =>
       attempt(() => {
-        if (name !== undefined && container_id === undefined) {
-          throw new DomainError("invalid_input", "name is what the item is called inside a container, so it needs container_id.");
+        if (kind === "file" && format === undefined) {
+          throw new DomainError("invalid_input", 'A file needs a format: pass format ("markdown" for notes and documents, "graph" for a graph spec).');
         }
-        if (kind === "file" && type === undefined) {
-          throw new DomainError("invalid_input", 'A file needs a type: pass type ("markdown" for notes and documents, "graph" for a graph spec).');
-        }
-        // A type or body on anything but a file reaches createNode, which refuses it by name.
-        const file = type !== undefined || body !== undefined ? { type: type ?? "", body } : undefined;
-        return createNode(db, {
-          kind,
-          title,
-          kind_tag,
-          file,
-          place_in: container_id !== undefined ? { container_id, name } : undefined,
-          author: as,
-        });
+        // A format or body on anything but a file, a name with no container, a tag on a
+        // folder: createNode refuses each by name rather than dropping it.
+        return ws.createNode(db, { kind, title, kind_tag, format, body, container_id, name, author: as });
       })
   );
 
@@ -152,25 +138,25 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
     "ws_write",
     {
       description:
-        "Replace a file's whole content. Read it first with ws_read and pass the revision you read as base_revision. If the file has been " +
-        "saved since — Ben edits these files too — the write is refused as stale_revision: that means Ben (or the other agent) changed " +
+        "Replace a file's whole content. Read it first with ws_read and pass the version you read as `version`. If the file has been " +
+        "saved since — Ben edits these files too — the write is refused as stale_version: that means Ben (or the other agent) changed " +
         "it, so read it again, fold your change into what is there now, and write again. To add to a file without replacing it, use ws_append.",
       inputSchema: {
         node_id: z.string(),
         body: z.string().describe("The file's complete new content."),
-        base_revision: z.number().int().describe("The revision ws_read showed you. Not the one you expect it to be now."),
+        version: z.number().int().describe("The version ws_read showed you. Not the one you expect it to be now."),
         as: writerShape,
       },
     },
-    async ({ node_id, body, base_revision, as }) => attempt(() => saveContent(db, node_id, { body, base_revision, author: as }))
+    async ({ node_id, body, version, as }) => attempt(() => ws.saveContent(db, node_id, { body, base_version: version, author: as }))
   );
 
   registerTool(
     "ws_append",
     {
       description:
-        "Add text to the end of a file that accepts it (markdown), after a blank line. It needs no revision: it lands on whatever is in the " +
-        "file now. This is how notes go into USERNOTES without clobbering Ben's edits: append the new note, never rewrite the file. " +
+        "Add text to the end of a file whose format accepts it (markdown), after a blank line. It needs no version: it lands on whatever is " +
+        "in the file now. This is how notes go into USERNOTES without clobbering Ben's edits: append the new note, never rewrite the file. " +
         "Files that can't be appended to (graph, uploads) answer not_appendable.",
       inputSchema: {
         node_id: z.string(),
@@ -178,7 +164,7 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
         as: writerShape,
       },
     },
-    async ({ node_id, text, as }) => attempt(() => appendContent(db, node_id, { text, author: as }))
+    async ({ node_id, text, as }) => attempt(() => ws.appendContent(db, node_id, { text, author: as }))
   );
 
   registerTool(
@@ -189,11 +175,11 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
         "it is the same node under a name of its own there (default: its title). Refused if it is already there, if the name is taken, if " +
         "the container may not hold that kind, or if it would make a cycle.",
       inputSchema: {
-        container_id: z.string().describe("The track, course or folder to place it in."),
+        container_id: z.string().describe("The trajectory, track, course or folder to place it in."),
         child_id: z.string().describe("The node to place."),
         name: z.string().optional().describe("Its name in that container, if not its title."),
       },
     },
-    async ({ container_id, child_id, name }) => attempt(() => ({ placement: placeNode(db, { container_id, child_id, name }) }))
+    async ({ container_id, child_id, name }) => attempt(() => ({ placement: ws.place(db, { container_id, child_id, name }) }))
   );
 }
