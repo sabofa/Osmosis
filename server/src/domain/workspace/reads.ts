@@ -325,7 +325,9 @@ export function search(db: DatabaseSync, input: { q?: string; scope?: string | n
   const q = fold((input.q ?? "").trim());
   const matches = (hit: PlacementHit): boolean =>
     q === "" || fold(hit.placement_name).includes(q) || fold(hit.title).includes(q) || (hit.search_text !== null && fold(hit.search_text).includes(q));
-  return livePlacements(db, input.scope, tag, true).filter(matches).map(toPlaced).sort(byName);
+  // The text of every placed file is only worth pulling out of SQLite when there is a
+  // query to match it against: with none, every placement is a hit and its text unused.
+  return livePlacements(db, input.scope, tag, q !== "").filter(matches).map(toPlaced).sort(byName);
 }
 
 // What is archived, most recently archived first: the Archive view. Nodes only;

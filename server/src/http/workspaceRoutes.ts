@@ -77,9 +77,10 @@ function optionalNullableString(obj: Record<string, unknown>, key: string): stri
   return v;
 }
 
-// A PATCH may change only the fields it names. Anything else is refused: a typo
-// (`titel`) would otherwise be a silent no-op, and a field that belongs to another
-// route (`name` on a node, `author` anywhere) would look as if it had worked.
+// A request may carry only the fields it names. Anything else is refused: a typo
+// (`titel`, `container`) would otherwise be a silent no-op, and a field that belongs
+// to another route (`name` on a node patch, `author` anywhere) would look as if it
+// had worked. The PATCH routes and POST /nodes use it.
 function onlyFields(obj: Record<string, unknown>, allowed: readonly string[], what: string): void {
   const unknown = Object.keys(obj).filter((k) => !allowed.includes(k));
   if (unknown.length > 0) throw invalid(`${what} has no field ${unknown.map((k) => `"${k}"`).join(", ")}; it takes ${allowed.join(", ")}.`);
@@ -167,6 +168,10 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     "/api/ws/nodes",
     guarded((request, reply) => {
       const input = bodyOf(request);
+      // A misspelled `container` would otherwise be a 201 and an unplaced node, and an
+      // `author` would look as if it had been obeyed. The author is the route's, so a
+      // body that names one is refused.
+      onlyFields(input, ["kind", "title", "kind_tag", "format", "body", "asset_id", "container_id", "name"], "A new node");
       const create: ws.CreateNodeInput = {
         kind: requiredString(input, "kind") as ws.NodeKind,
         title: requiredString(input, "title"),

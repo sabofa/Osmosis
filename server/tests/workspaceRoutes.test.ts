@@ -225,20 +225,20 @@ describe("/api/ws routes", () => {
   });
 
   describe("authors", () => {
-    it("signs every write Ben's, whatever the body claims", async () => {
+    it("signs every write Ben's: a body that names another author is refused or ignored, never obeyed", async () => {
       const t = await make("track", "quant");
-      const created = await call("POST", "/api/ws/nodes", {
-        kind: "file",
-        title: "plan",
-        author: "planner",
-        format: "markdown",
-        body: "x",
-        container_id: t.id,
-      });
+      // Creating: an `author` is not a field of a node, so it is a 400 and nothing is written.
+      const spoof = await call("POST", "/api/ws/nodes", { kind: "file", title: "plan", author: "planner", format: "markdown", body: "x", container_id: t.id });
+      expect(spoof.status).toBe(400);
+      expect(spoof.body.error).toBe("invalid_input");
+      expect(await kids(t.id)).toEqual([]);
+
+      const created = await call("POST", "/api/ws/nodes", { kind: "file", title: "plan", format: "markdown", body: "x", container_id: t.id });
       expect(created.status).toBe(201);
       const id = created.body.node.id;
       expect((await call("GET", `/api/ws/nodes/${id}/content`)).body.author).toBe("ben");
 
+      // Saving: the field is not read, so the version is Ben's all the same.
       const saved = await call("PUT", `/api/ws/nodes/${id}/content`, { body: "y", base_version: 1, author: "tutor" });
       expect(saved.status).toBe(200);
       expect(saved.body.version).toBe(2);
@@ -370,6 +370,30 @@ describe("/api/ws routes", () => {
       expect((await call("POST", "/api/ws/nodes", [1, 2])).status).toBe(400);
       expect((await call("POST", "/api/ws/nodes")).status).toBe(400);
       expect(db.prepare("SELECT COUNT(*) AS n FROM ws_node").get()).toEqual({ n: 0 });
+    });
+
+    it("an unknown field is a 400, so a misspelled container_id does not quietly leave an unplaced node", async () => {
+      const t = await make("track", "quant");
+      for (const extra of [{ container: t.id }, { containerId: t.id }, { parent_id: t.id }, { type: "markdown" }, { author: "tutor" }, { place_in: { container_id: t.id } }]) {
+        const res = await call("POST", "/api/ws/nodes", { kind: "folder", title: "f", ...extra });
+        expect(res.status, JSON.stringify(extra)).toBe(400);
+        expect(res.body.error).toBe("invalid_input");
+        expect(res.body.message).toContain(`"${Object.keys(extra)[0]}"`);
+      }
+      expect(await kids(t.id)).toEqual([]);
+      expect((await call("GET", "/api/ws/unplaced")).body).toEqual([]);
+      // Every field the route does take is still accepted, together.
+      const all = await call("POST", "/api/ws/nodes", {
+        kind: "file",
+        title: "t",
+        kind_tag: "source",
+        format: "markdown",
+        body: "b",
+        asset_id: null,
+        container_id: t.id,
+        name: "n",
+      });
+      expect(all.status).toBe(201);
     });
 
     it("the domain's refusals come through as 400s with their codes", async () => {

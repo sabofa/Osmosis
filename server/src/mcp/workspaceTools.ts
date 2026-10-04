@@ -34,6 +34,28 @@ const writerShape = z
 
 const kindShape = z.enum(ws.NODE_KINDS as unknown as [ws.NodeKind, ...ws.NodeKind[]]);
 
+// The domain's name_taken says `try "USERNOTES (2)"`: right for the app, which
+// carries the free name as detail.suggestion, and wrong for an agent. A taken name
+// means the node it was about to make is very likely already there, and the
+// suggestion invites exactly the numbered copy that must never exist. So an agent
+// is told where the node is instead, and the numbered name is not offered at all
+// (not in the message, and not as a detail, which the MCP result would drop anyway).
+// The code stays name_taken; the domain's message is untouched for every other caller.
+function withoutNumberedSuggestion<T>(name: () => string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof DomainError && err.code === "name_taken") {
+      throw new DomainError(
+        "name_taken",
+        `"${name()}" already exists in that container — call ws_list on it and use the existing node ` +
+          "(for a unit's USERNOTES, ws_append to it); never create a numbered copy."
+      );
+    }
+    throw err;
+  }
+}
+
 export function registerWorkspaceTools(registerTool: McpServer["registerTool"], db: DatabaseSync, { ok, fail }: ToolResultHelpers): void {
   const attempt = (fn: () => unknown): CallToolResult => {
     try {
@@ -130,7 +152,10 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
         }
         // A format or body on anything but a file, a name with no container, a tag on a
         // folder: createNode refuses each by name rather than dropping it.
-        return ws.createNode(db, { kind, title, kind_tag, format, body, container_id, name, author: as });
+        return withoutNumberedSuggestion(
+          () => ws.normalizeName(name ?? title),
+          () => ws.createNode(db, { kind, title, kind_tag, format, body, container_id, name, author: as })
+        );
       })
   );
 
@@ -180,6 +205,12 @@ export function registerWorkspaceTools(registerTool: McpServer["registerTool"], 
         name: z.string().optional().describe("Its name in that container, if not its title."),
       },
     },
-    async ({ container_id, child_id, name }) => attempt(() => ({ placement: ws.place(db, { container_id, child_id, name }) }))
+    async ({ container_id, child_id, name }) =>
+      attempt(() => ({
+        placement: withoutNumberedSuggestion(
+          () => ws.normalizeName(name ?? ws.getNode(db, child_id).title),
+          () => ws.place(db, { container_id, child_id, name })
+        ),
+      }))
   );
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError } from "../src/domain/errors.js";
 import { registerFormat } from "../src/domain/workspace/formats.js";
@@ -660,6 +660,34 @@ describe("search", () => {
     // An absent filter may arrive as null (JSON has no undefined).
     expect(names(search(db, { q: "", scope: null, kind_tag: null }))).toEqual(["a", "b", "unit"]);
     expect(codeOf(() => search(db, { q: 7 as unknown as string }))).toBe("invalid_input");
+  });
+
+  it("does not read any file's search_text unless there is a query to match it against", () => {
+    const db = openTestDb();
+    const c = make(db, "course", "c");
+    const folder = make(db, "folder", "unit", c);
+    make(db, "file", "b", folder, undefined, "a body that is needed");
+    tagged(db, "a", "source", c);
+    const prepared = vi.spyOn(db, "prepare");
+    // The column being read (`c.search_text`), not the alias a query without text still
+    // gives its empty column (`NULL AS search_text`).
+    const readsText = (fn: () => unknown): boolean => {
+      prepared.mockClear();
+      fn();
+      return prepared.mock.calls.some(([sql]) => /\.search_text\b/.test(String(sql)));
+    };
+    expect(readsText(() => search(db, {}))).toBe(false);
+    expect(readsText(() => search(db, { q: "" }))).toBe(false);
+    expect(readsText(() => search(db, { q: "   " }))).toBe(false);
+    expect(readsText(() => search(db, { scope: folder.id }))).toBe(false);
+    expect(readsText(() => search(db, { kind_tag: "source" }))).toBe(false);
+    // With a query it does read them: that is what content search is.
+    expect(readsText(() => search(db, { q: "needed" }))).toBe(true);
+    expect(readsText(() => search(db, { q: "needed", scope: c.id, kind_tag: null }))).toBe(true);
+    prepared.mockRestore();
+    // What comes back is the same as ever.
+    expect(names(search(db, {}))).toEqual(["a", "b", "unit"]);
+    expect(names(search(db, { q: "needed" }))).toEqual(["b"]);
   });
 
   it("finds a node by name or title when its format has no search hook, but not by content", () => {

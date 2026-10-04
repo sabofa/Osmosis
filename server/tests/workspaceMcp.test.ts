@@ -147,6 +147,44 @@ describe("ws_* MCP tools", () => {
       expect(again.body.error).toBe("name_taken");
       expect(count("ws_node")).toBe(before);
     });
+
+    it("name_taken never offers a numbered name: it sends the tutor to the node that is already there", async () => {
+      const { course, unit, notes } = await setUpUnit();
+      const again = await call("ws_create", { kind: "file", title: "USERNOTES", format: "markdown", container_id: unit.id, as: "tutor" });
+      expect(again.body.error).toBe("name_taken");
+      expect(again.body.message).toMatch(/"USERNOTES"/);
+      expect(again.body.message).toMatch(/ws_list/);
+      expect(again.body.message).toMatch(/ws_append/);
+      expect(again.body.message).toMatch(/never create a numbered copy/i);
+      // No "(2)": that is the numbered copy the message must not hand over, and the
+      // suggestion is not tucked away anywhere else in the result either.
+      expect(again.text).not.toMatch(/\(\d+\)/);
+      expect(again.text).not.toMatch(/suggestion/);
+      // The name that clashed is the one asked for, not the title, when they differ.
+      const named = await call("ws_create", { kind: "file", title: "other", name: "usernotes", format: "markdown", container_id: unit.id, as: "tutor" });
+      expect(named.body.error).toBe("name_taken");
+      expect(named.body.message).toMatch(/"usernotes"/);
+      expect(named.text).not.toMatch(/\(\d+\)/);
+
+      // ws_place says the same when the name it would give the node is taken.
+      const sibling = (await call("ws_create", { kind: "file", title: "USERNOTES", format: "markdown", container_id: course.id, as: "tutor" })).body.node;
+      const clash = await call("ws_place", { container_id: unit.id, child_id: sibling.id });
+      expect(clash.isError).toBe(true);
+      expect(clash.body.error).toBe("name_taken");
+      expect(clash.body.message).toMatch(/"USERNOTES"/);
+      expect(clash.body.message).toMatch(/ws_list/);
+      expect(clash.body.message).toMatch(/never create a numbered copy/i);
+      expect(clash.text).not.toMatch(/\(\d+\)/);
+      expect(clash.text).not.toMatch(/suggestion/);
+      // A placement under an explicit name that is taken says it too.
+      const named2 = await call("ws_place", { container_id: unit.id, child_id: sibling.id, name: "UserNotes" });
+      expect(named2.body.error).toBe("name_taken");
+      expect(named2.body.message).toMatch(/"UserNotes"/);
+
+      // Other refusals are untouched, and the existing node is where the message says it is.
+      expect((await call("ws_place", { container_id: unit.id, child_id: notes.id })).body.error).toBe("already_placed");
+      expect((await call("ws_list", { container_id: unit.id })).body.children.map((r: { node: { id: string } }) => r.node.id)).toEqual([notes.id]);
+    });
   });
 
   describe("authors", () => {
