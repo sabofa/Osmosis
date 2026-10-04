@@ -1,17 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { GraphConfig } from './parser/config'
-import {
-  clientToView,
-  panView,
-  parseViewBox,
-  pixelsPerViewUnit,
-  viewBoxAttribute,
-  viewScale,
-  wheelZoomFactor,
-  zoomAbout,
-  type ViewBox,
-} from './figure/viewport'
+import { figureMapping, type FigureFrame } from './figure/frame'
+import { highlightOf } from './figure/highlight'
+import type { FigureHitItem, FigureTarget } from './figure/hitItems'
+import { compensatedSize, parseViewBox } from './figure/viewport'
+import { fittedCamera } from './view2d/camera'
+import { applySvgViewBox } from './view2d/dom/appliers'
+import { startCamera } from './view2d/dom/startView'
+import { useView2d } from './view2d/dom/useView2d'
+import { focusCamera, formatFocus, type FocusSpec } from './view2d/focus'
+import type { Camera, Rect } from './view2d/types'
 import './FigureView.css'
+
+// What a click on the figure reports: the item picked, and what it names.
+export interface FigureSelection {
+  id: string
+  targets: FigureTarget[]
+  author?: FigureHitItem['author']
+}
 
 export interface FigureViewProps {
   // A complete <svg> document, as produced by figure/render.ts's
@@ -22,6 +28,19 @@ export interface FigureViewProps {
   // renderer and the screen.
   svg: string
   theme: GraphConfig['theme']
+  // What renderFigure reports beside the markup: where the author's
+  // coordinates land (for @focus), and what can be pointed at. Optional, so a
+  // caller that only has markup still gets a figure that moves.
+  frame?: FigureFrame
+  items?: FigureHitItem[]
+  // The view the figure opens at, from the spec's @focus (config.focus).
+  // Absent or unplaceable: the fitted view.
+  startFocus?: FocusSpec | null
+  // Runtime: animate to it whenever it changes.
+  focus?: FocusSpec | null
+  // The coordinate readout and its Copy button (the coordinate tool).
+  coordinates?: boolean
+  onSelect?(selection: FigureSelection | null): void
 }
 
 // Which attribute carries a size that must not grow with the view, and what
@@ -37,8 +56,35 @@ const SCALED_ATTRIBUTES: [selector: string, attribute: string][] = [
   ['[data-layer="points"] circle', 'r'],
 ]
 
-export default function FigureView({ svg, theme }: FigureViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
+// The elements whose size is compensated, with the size each was *written*
+// with. Remembered here rather than read back from the element so that the
+// scale is always computed from the renderer's own number and never from the
+// last scaled value, which would compound. A fresh <svg> (a new spec) is a
+// new root, so the list is simply collected again.
+interface Compensation {
+  root: SVGSVGElement
+  entries: { element: Element; attribute: string; written: number }[]
+}
+
+function collect(root: SVGSVGElement): Compensation['entries'] {
+  const entries: Compensation['entries'] = []
+  for (const [selector, attribute] of SCALED_ATTRIBUTES) {
+    root.querySelectorAll(selector).forEach((element) => {
+      const written = element.getAttribute(attribute)
+      if (written !== null && Number.isFinite(Number(written))) entries.push({ element, attribute, written: Number(written) })
+    })
+  }
+  return entries
+}
+
+function compensate(root: SVGSVGElement, zoom: number, previous: Compensation | null): Compensation {
+  const entries = previous && previous.root === root ? previous.entries : collect(root)
+  for (const { element, attribute, written } of entries) element.setAttribute(attribute, String(compensatedSize(written, zoom)))
+  return { root, entries }
+}
+
+export default function FigureView({ svg, theme, frame, items, startFocus, focus, onSelect }: FigureViewProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
 
   // Stable across renders, and that identity is load-bearing rather than a
   // micro-optimisation: React compares the dangerouslySetInnerHTML *object*,
@@ -48,104 +94,109 @@ export default function FigureView({ svg, theme }: FigureViewProps) {
   // is holding — on every single frame of a pan.
   const markup = useMemo(() => ({ __html: svg }), [svg])
 
-  // The view the renderer fitted. Everything else is relative to it: the
-  // zoom limits, the label scale, and what "reset" means.
-  const fitted = useMemo(() => parseViewBox(svg), [svg])
-  const [view, setView] = useState<ViewBox | null>(fitted)
+  // The content frame: the view the renderer fitted, in drawing coordinates.
+  // Everything else is relative to it: the zoom, the limits, and what "reset"
+  // means.
+  const content = useMemo(() => parseViewBox(svg), [svg])
 
-  // A new figure is a new drawing, not a new angle on the same one, so it
-  // starts at its own fitted view rather than inheriting the last one's.
-  useEffect(() => setView(fitted), [fitted])
+  // Where the figure opens: the spec's @focus when it places, else fitted.
+  const start = useMemo<Camera | null>(() => {
+    if (!content) return null
+    const fitted = fittedCamera(content)
+    return frame ? startCamera(startFocus, figureMapping(frame), fitted) : fitted
+  }, [content, frame, startFocus])
 
-  const rect = useCallback(() => {
-    const node = containerRef.current
-    if (!node) return null
-    const box = node.getBoundingClientRect()
-    return { left: box.left, top: box.top, width: box.width, height: box.height }
+  const itemsById = useMemo(() => new Map((items ?? []).map((item) => [item.id, item])), [items])
+  const [hovered, setHovered] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+
+  // Apply the camera: the window itself, and the compensation that keeps text
+  // and dots the size they were drawn at. The last one applied is remembered
+  // so that a new <svg> with the same view (a rebuilt spec) can be put back
+  // where the reader was.
+  const applied = useRef<{ zoom: number; visible: Rect } | null>(null)
+  const compensation = useRef<Compensation | null>(null)
+  const paint = useCallback((visible: Rect, zoom: number) => {
+    const root = containerRef.current?.querySelector('svg')
+    if (!root) return
+    applySvgViewBox(root, visible)
+    compensation.current = compensate(root, zoom, compensation.current)
   }, [])
 
-  // Apply the view: the window itself, and the compensation that keeps text
-  // and dots the size they were drawn at.
-  //
-  // The size each element was *written* with is remembered on the element
-  // itself rather than in a ref, so that the scale is computed from the
-  // renderer's own number every time instead of from the last scaled value —
-  // which would compound — and so that a fresh <svg> (a new spec, or a
-  // remount) simply re-reads its own attributes rather than leaving this
-  // component holding detached nodes.
-  useEffect(() => {
+  const view = useView2d({
+    frame: content,
+    start,
+    items,
+    onApply: (camera, visible) => {
+      applied.current = { zoom: camera.zoom, visible }
+      paint(visible, camera.zoom)
+    },
+    onHover: setHovered,
+    onSelect: (id) => {
+      setSelected(id)
+      const item = id === null ? undefined : itemsById.get(id)
+      onSelect?.(item ? { id: item.id, targets: item.targets, author: item.author } : null)
+    },
+  })
+
+  useLayoutEffect(() => {
+    const last = applied.current
+    if (last) paint(last.visible, last.zoom)
+  }, [markup, paint])
+
+  // Hover and selection are classes on the elements that already carry the
+  // identity; the markup itself is never rewritten.
+  useLayoutEffect(() => {
     const root = containerRef.current?.querySelector('svg')
-    if (!root || !view || !fitted) return
-    root.setAttribute('viewBox', viewBoxAttribute(view))
-    const scale = viewScale(fitted, view)
-    for (const [selector, attribute] of SCALED_ATTRIBUTES) {
-      root.querySelectorAll(selector).forEach((element) => {
-        const remembered = element.getAttribute(`data-written-${attribute}`)
-        const written = remembered ?? element.getAttribute(attribute)
-        if (written === null || !Number.isFinite(Number(written))) return
-        if (remembered === null) element.setAttribute(`data-written-${attribute}`, written)
-        element.setAttribute(attribute, String(Number(written) * scale))
+    if (!root) return
+    const hot = hovered === null ? [] : (itemsById.get(hovered)?.targets ?? [])
+    const picked = selected === null ? [] : (itemsById.get(selected)?.targets ?? [])
+    if (hot.length === 0 && picked.length === 0) {
+      root.querySelectorAll('.figure-hovered, .figure-selected').forEach((element) => {
+        element.classList.remove('figure-hovered', 'figure-selected')
       })
+      return
     }
-  }, [view, fitted, svg])
+    root.querySelectorAll('[data-statement]').forEach((element) => {
+      const lit = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked)
+      element.classList.toggle('figure-hovered', lit.hovered)
+      element.classList.toggle('figure-selected', lit.selected)
+    })
+  }, [hovered, selected, itemsById, markup])
 
-  const dragging = useRef<{ pointer: number; x: number; y: number } | null>(null)
+  // The runtime focus: a change of the spec moves the view there, animated.
+  // Compared by value, so a parent that rebuilds an identical spec each render
+  // does not keep restarting the move.
+  const focusKey = focus ? formatFocus(focus) : null
+  const wanted = useRef({ focus, frame })
+  wanted.current = { focus, frame }
+  const moveTo = view.focus
+  useEffect(() => {
+    const { focus: spec, frame: placed } = wanted.current
+    if (!spec || !placed) return
+    const camera = focusCamera(spec, figureMapping(placed))
+    if (camera) moveTo(camera, true)
+  }, [focusKey, moveTo])
 
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !view) return
-    dragging.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY }
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragging.current
-    const box = rect()
-    if (!drag || drag.pointer !== event.pointerId || !view || !box) return
-    // A drag moves the drawing with the cursor, which means moving the
-    // *window* the other way — and by pixels converted into view units, so
-    // that a drag tracks the cursor exactly at any magnification.
-    const perUnit = pixelsPerViewUnit(box, view)
-    setView(panView(view, -(event.clientX - drag.x) / perUnit, -(event.clientY - drag.y) / perUnit))
-    dragging.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY }
-  }
-
-  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (dragging.current?.pointer !== event.pointerId) return
-    dragging.current = null
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-  }
-
-  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    const box = rect()
-    if (!view || !fitted || !box) return
-    event.preventDefault()
-    // About the cursor, not about the centre: magnifying about the middle
-    // moves whatever the reader is looking at off the screen.
-    const at = clientToView({ x: event.clientX, y: event.clientY }, box, view)
-    setView(zoomAbout(view, at, wheelZoomFactor(event.deltaY), fitted))
-  }
-
-  const fittedNow = view !== null && fitted !== null && view.width === fitted.width && view.x === fitted.x && view.y === fitted.y
+  // The surface is the one element the gestures land on, so the hook gets it
+  // as well as this component.
+  const attachSurface = view.surfaceRef
+  const setSurface = useCallback(
+    (element: HTMLDivElement | null) => {
+      containerRef.current = element
+      attachSurface(element)
+    },
+    [attachSurface],
+  )
 
   // The markup is produced entirely by this package's own emitter, which
   // escapes every label and attribute value it writes (see figure/svg.ts's
   // svgEscape) — spec text never reaches the DOM unescaped.
   return (
     <div className={`figure-view figure-view-${theme}`}>
-      <div
-        ref={containerRef}
-        className="figure-view-surface"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onWheel={onWheel}
-        dangerouslySetInnerHTML={markup}
-      />
-      {!fittedNow && (
-        <button type="button" className="figure-view-reset" onClick={() => setView(fitted)}>
+      <div ref={setSurface} className="figure-view-surface" dangerouslySetInnerHTML={markup} />
+      {!view.atStart && (
+        <button type="button" className="figure-view-reset" onClick={() => view.reset()}>
           Reset view
         </button>
       )}

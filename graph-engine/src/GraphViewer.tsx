@@ -13,7 +13,10 @@ import { resolvePalette } from './render/palette'
 import type { Regression } from './scene/types'
 import type { ParseError, ParseResult } from './parser/types'
 import TableView from './TableView'
-import FigureView from './FigureView'
+import FigureView, { type FigureViewProps } from './FigureView'
+import type { FigureFrame } from './figure/frame'
+import type { FigureHitItem } from './figure/hitItems'
+import type { FocusSpec } from './view2d/focus'
 import './GraphViewer.css'
 
 export interface GraphViewerProps {
@@ -24,6 +27,14 @@ export interface GraphViewerProps {
   // state without having to rewrite the spec string. Falls back to the
   // spec-parsed theme when omitted, so existing callers are unaffected.
   theme?: 'light' | 'dark'
+  // Figures only. Moves the view to these coordinates, animated, whenever it
+  // changes — how the app or the tutor directs attention to part of a figure
+  // that is already on screen. The spec's own "@focus:" sets where it opens.
+  focus?: FocusSpec | null
+  // Figures only: show the coordinate readout.
+  coordinates?: boolean
+  // Figures only: the reader clicked an item (or cleared the selection).
+  onSelect?: FigureViewProps['onSelect']
 }
 
 type Mode = '2d' | '3d'
@@ -46,7 +57,7 @@ const DRAG_RESOLUTION = 45
 // pan/zoom view, a 3D orbit view (see scene/mode.ts), and a plain HTML table
 // (via "@mode: table") based on what the spec contains, swapping the
 // underlying renderer as needed.
-export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps) {
+export default function GraphViewer({ spec, onErrors, theme, focus, coordinates, onSelect }: GraphViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<Renderer | null>(null)
@@ -78,6 +89,10 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
   // Mirrors `tables` above exactly: a mode that owns the view holds its own
   // built content, and the three.js renderer is disposed while it does.
   const [figure, setFigure] = useState<string | null>(null)
+  // What the figure reports beside its markup (see renderFigure): where the
+  // author's coordinates land, and what can be pointed at. Set and cleared
+  // with `figure`.
+  const [figureHandling, setFigureHandling] = useState<{ frame: FigureFrame; items: FigureHitItem[] } | null>(null)
   const [regression, setRegression] = useState<Regression | null>(null)
   const [hover, setHover] = useState<HoverInfo | HoverInfo3D | null>(null)
   const [contextLost, setContextLost] = useState(false)
@@ -118,6 +133,7 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
           modeRef.current = null
           setHover(null)
           setFigure(null)
+          setFigureHandling(null)
           onErrorsRef.current?.(parsed.errors)
         }
         return
@@ -136,12 +152,16 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
           const palette = resolvePalette(parsed.config.theme, containerRef.current)
           const built = renderFigure(parsed.statements, parsed.config, palette)
           setFigure(built.svg)
+          setFigureHandling({ frame: built.frame, items: built.items })
           onErrorsRef.current?.([...parsed.errors, ...built.errors])
         }
         return
       }
 
-      if (reportState) setFigure(null)
+      if (reportState) {
+        setFigure(null)
+        setFigureHandling(null)
+      }
 
       const canvas = canvasRef.current
       if (!canvas) return
@@ -283,7 +303,18 @@ export default function GraphViewer({ spec, onErrors, theme }: GraphViewerProps)
             browser, then reopen this question.
           </div>
         )}
-        {figure !== null && <FigureView svg={figure} theme={config.theme} />}
+        {figure !== null && (
+          <FigureView
+            svg={figure}
+            theme={config.theme}
+            frame={figureHandling?.frame}
+            items={figureHandling?.items}
+            startFocus={config.focus}
+            focus={focus}
+            coordinates={coordinates}
+            onSelect={onSelect}
+          />
+        )}
         {figure === null && regression && (
           <div className="graph-viewer-stats">
             <div>y = {formatCoord(regression.slope)}x + {formatCoord(regression.intercept)}</div>

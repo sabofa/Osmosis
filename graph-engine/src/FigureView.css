@@ -83,3 +83,15 @@
   border-color: var(--border, rgb(255 255 255 / 0.25));
   background: var(--surface, #201e15);
 }
+
+/* Hover and selection, as classes on the elements that already carry the
+   figure's identity (data-statement, data-object), so they work under every
+   style: a halo behind the ink, never a change to the markup or its colours.
+   Hover is a faint halo; selection is a firmer one. */
+.figure-hovered {
+  filter: drop-shadow(0 0 1.25px var(--accent, #3b6fd8));
+}
+
+.figure-selected {
+  filter: drop-shadow(0 0 2.5px var(--accent, #3b6fd8)) drop-shadow(0 0 1px var(--accent, #3b6fd8));
+}
