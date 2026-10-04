@@ -159,7 +159,7 @@ interface CurveContext {
 //    same note over a curve that is not in view would be false, which is why the sampler says whether
 //    there was anything to draw.
 //  - tooSteep (smooth, and steeper than the sampler can certify, somewhere in view): "too steep to draw
-//    here", at FULL always and at COARSE only if nothing drew, as the budget notes. A jump the walk did
+//    here", at FULL always and at COARSE only if nothing drew in view, as the budget notes. A jump the walk did
 //    not find is not this; nor is a steep stretch that is only in the overscan.
 //  - capped, and something drawn in view: the curve is drawn from what the sampler had, and the line says
 //    "drawn coarsely", at FULL only. A coarse pass is coarse on purpose (the settled pass says whether
@@ -177,8 +177,9 @@ function sampleStatement(spec: CurveSpec, statementIndex: number, color: string 
   ctx.stats.points += sampled.stats.points
   ctx.stats.intervals += sampled.stats.intervals
   if (sampled.tested && !sampled.defined) throw new Error('this curve is undefined everywhere in view')
-  // too steep to certify, somewhere in view: at FULL always, at COARSE only if nothing drew (as the budget notes)
-  const steep = sampled.tooSteep && (ctx.quality === 'full' || !drewSomething(sampled.objects))
+  // too steep to certify, somewhere in view: at FULL always, at COARSE only if nothing drew in view (as the budget notes: a chain
+  // only in the overscan is not drawing)
+  const steep = sampled.tooSteep && (ctx.quality === 'full' || !sampled.drawnInView)
   if (steep) ctx.errors.push({ line, message: TOO_STEEP_NOTE })
   if (sampled.blankInView) {
     // by cause: the budget, else steepness (said already), else that nothing could be certified
@@ -186,11 +187,6 @@ function sampleStatement(spec: CurveSpec, statementIndex: number, color: string 
     else if (!steep) ctx.errors.push({ line, message: NOT_CERTIFIED_NOTE })
   } else if (sampled.capped && ctx.quality === 'full' && sampled.drawnInView) ctx.errors.push({ line, message: BUDGET_NOTE })
   return sampled.objects
-}
-
-// Whether the sampler's objects have a drawn curve in them: a chain or a band (marks and guides are not the curve).
-function drewSomething(objects: readonly SceneObject[]): boolean {
-  return objects.some((o) => (o.kind === 'curve' && o.chains.length > 0) || o.kind === 'band')
 }
 
 function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {

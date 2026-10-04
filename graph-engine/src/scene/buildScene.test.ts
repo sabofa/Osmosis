@@ -1531,6 +1531,15 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
       expect(coarse.errors).toEqual([])
       expect(curvesOf(coarse)[0].chains.length).toBeGreaterThan(0)
     })
+    // residual round R3: "something drew" is something in the picture. A chain only in the overscan (the line y = x from 10.5, where
+    // the view ends at 10) is not drawing, and the steepness it hides was not announced at COARSE.
+    it('a steep stretch in view with a chain only in the overscan says "too steep" at COARSE too', () => {
+      for (const quality of ['full', 'coarse'] as const) {
+        const scene = build('y = {x < 10.5: integral(t = 0 to x, 2000), x}', quality)
+        expect(scene.errors, quality).toEqual([{ line: 1, message: STEEP }])
+        expect(curvesOf(scene)[0].chains.length, quality).toBeGreaterThan(0)
+      }
+    })
     it('a steep integral that draws (a slope of 200 or 1000) has no note, at either quality', () => {
       for (const slope of [200, 1000]) {
         for (const quality of ['full', 'coarse'] as const) {
