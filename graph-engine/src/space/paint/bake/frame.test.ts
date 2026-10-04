@@ -764,6 +764,21 @@ describe('frameFromBake: the baked strokes of a view', () => {
     for (let o = 0; o < batch.count; o++) for (let q = 0; q < 2 * PP; q++) expect(Math.abs(again.path[2 * PP * o + q] - batch.path[2 * PP * o + q])).toBeLessThan(2e-3)
   })
 
+  it('tests the baked strokes against the screen only when an anchor may be off it, and leaves out those that are', () => {
+    // (a sphere alone: the table of the other fixtures reaches past the screen)
+    const ball = fixture(sceneOf([sphereMesh({ radius: 0.8, index: 0, nu: 32, nv: 20 })]), flatColours({ 0: TERRACOTTA }), sparse(400), LIGHT, FRONT_ORTHO)
+    for (const perspective of [false, true]) {
+      // a figure wholly in view: nothing is tested, nothing is left out
+      const inView = run(ball, viewAt(20, 25, { perspective })).scr.stats
+      expect(inView.screenTested, `perspective ${perspective}`).toBe(false)
+      expect(inView.offscreen).toBe(0)
+      // zoomed in to a part of it: the strokes off the screen are not drawn
+      const zoomed = run(ball, viewAt(20, 25, { zoom: 4, perspective })).scr.stats
+      expect(zoomed.screenTested, `perspective ${perspective}, zoom 4`).toBe(true)
+      expect(zoomed.offscreen).toBeGreaterThan(20)
+    }
+  })
+
   it("draws a veil's border pass only where the particle's own glaze is drawn, as the per-frame model does", () => {
     const fx = fixture(veilScene(), flatColours({ 0: TERRACOTTA, 1: lchToLab(0.7, 0.1, 250) }), sparse(500), LIGHT, FRONT_ORTHO)
     const set = fx.particles

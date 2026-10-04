@@ -381,10 +381,16 @@ export function drawChance(fc: FrameCtx, pxArea: number, role: Role, scale = 1):
   return drawChanceOf(fc.params, fc.view.dragging, pxArea, role, scale)
 }
 
+// drawChance from its factors (the target per px, the screen area, the role's density, the drag's share, the scale): the arithmetic of drawChanceOf, for a caller
+// that reads the factors once and asks of many strokes (the baked painting's frame).
+export function drawChanceFor(perPx: number, pxArea: number, density: number, drag: number, scale: number): number {
+  return clamp(perPx * pxArea * density * drag * scale, 0, 1)
+}
+
 // drawChance from the params and whether the camera is being dragged (the pure form: the baked painting's frame reads it too).
 export function drawChanceOf(p: PaintParams, dragging: boolean, pxArea: number, role: Role, scale = 1): number {
   const drag = dragging ? p.particles.dragDensity : 1
-  return clamp((p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag * scale, 0, 1)
+  return drawChanceFor(p.particles.targetPer10kPx / 10000, pxArea, p.roles[role].density, drag, scale)
 }
 
 // A load of paint is a patch of the surface (mix.loadCell world units across), and a painter mixes a new
@@ -409,8 +415,13 @@ export function zoomGrow(fc: FrameCtx, pxArea: number, role: Role): number {
 // zoomGrow from the params and whether the camera is being dragged (the pure form: the baked painting's length scan reads it too).
 export function zoomGrowOf(p: PaintParams, dragging: boolean, pxArea: number, role: Role): number {
   const drag = dragging ? p.particles.dragDensity : 1
-  const need = (p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag
-  return clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, p.particles.zoomGrowMax))
+  return zoomGrowFor(p.particles.targetPer10kPx / 10000, pxArea, p.roles[role].density, drag, p.particles.zoomGrowMax)
+}
+
+// zoomGrowOf from its factors (as drawChanceFor is of drawChanceOf).
+export function zoomGrowFor(perPx: number, pxArea: number, density: number, drag: number, growMax: number): number {
+  const need = perPx * pxArea * density * drag
+  return clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, growMax))
 }
 
 // Is visible entry k drawn for `role`?

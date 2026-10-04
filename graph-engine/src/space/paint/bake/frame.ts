@@ -43,7 +43,7 @@ import { behindVeil } from '../model/lines'
 import { clamp, hash3, smooth } from '../model/math'
 import { veilOf, VEIL_BORDER_ALPHA, VEIL_DENSITY, type Veil } from '../model/roles'
 import { BEHIND_VEIL_LAYER, pressure } from '../model/strokes'
-import { bigMax, drawChanceOf, drawFadeAt, loadCellLevel, makeFrameCtx, project, roleRank, VEIL_FADE_HI, VEIL_FADE_LO, zoomGrowOf, zoomSizeScaleAt, type FrameCtx } from '../model/view'
+import { bigMax, drawChanceFor, drawChanceOf, drawFadeAt, loadCellLevel, makeFrameCtx, project, pxPerUnit, roleRank, VEIL_FADE_HI, VEIL_FADE_LO, zoomGrowFor, zoomSizeScaleAt, type FrameCtx } from '../model/view'
 import { fnvInts } from './draft'
 import { addSilhouettes, indexOf } from './silhouettes'
 import { StrokeList } from './strokeList'
@@ -82,7 +82,7 @@ interface Prep {
   // The anchor of every stroke (3 each), and the unit normal there (zeros for a data line), interpolated along the baked path.
   anchorPos: Float32Array
   anchorNrm: Float32Array
-  // The box that holds every anchor: its least corner and its greatest.
+  // What holds every anchor: the box (its least corner and its greatest) and the sphere about the box's centre (centre, radius).
   bound: Float64Array
 }
 
@@ -124,7 +124,7 @@ function prepOf(baked: BakedPainting, scene: SpaceScene): Prep {
     const l = Math.hypot(anchorNrm[3 * i], anchorNrm[3 * i + 1], anchorNrm[3 * i + 2])
     if (l > 1e-12) for (let c = 0; c < 3; c++) anchorNrm[3 * i + c] /= l
   }
-  const bound = new Float64Array(6)
+  const bound = new Float64Array(10)
   if (n > 0) {
     bound.set([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
     for (let i = 0; i < n; i++) {
@@ -133,6 +133,10 @@ function prepOf(baked: BakedPainting, scene: SpaceScene): Prep {
         bound[3 + c] = Math.max(bound[3 + c], anchorPos[3 * i + c])
       }
     }
+    for (let c = 0; c < 3; c++) bound[6 + c] = (bound[c] + bound[3 + c]) / 2
+    let r2 = 0
+    for (let i = 0; i < n; i++) r2 = Math.max(r2, (anchorPos[3 * i] - bound[6]) ** 2 + (anchorPos[3 * i + 1] - bound[7]) ** 2 + (anchorPos[3 * i + 2] - bound[8]) ** 2)
+    bound[9] = Math.sqrt(r2) * (1 + 1e-6) + 1e-9
   }
   const made: Prep = { veilMask: veilMark, kind, anchorPos, anchorNrm, bound }
   preps.set(baked.worldPath, made)
@@ -160,6 +164,9 @@ export interface FrameStats {
   written: number
   own: number
   silhouettes: number
+  // Whether the baked strokes were tested against the screen (only when an anchor may be off it), and how many that test left out.
+  screenTested: boolean
+  offscreen: number
   // Where the time of the last frame went, ms: the frame's own strokes (silhouettes, points, arrowheads), the selection of the baked strokes, the
   // painting order, and the packing (a diagnostic: the bench reads it; it is not part of any result).
   msOwn: number
@@ -195,7 +202,7 @@ export class FrameScratch {
   reuseOutput = false
   private output: Output | null = null
   private outputCap = 0
-  readonly stats: FrameStats = { considered: 0, selected: 0, written: 0, own: 0, silhouettes: 0, msOwn: 0, msSelect: 0, msSort: 0, msPack: 0 }
+  readonly stats: FrameStats = { considered: 0, selected: 0, written: 0, own: 0, silhouettes: 0, screenTested: false, offscreen: 0, msOwn: 0, msSelect: 0, msSort: 0, msPack: 0 }
 
   // Room for `cap` selected strokes (the first `keep` of the selection are kept).
   ensure(cap: number, keep: number): void {
@@ -263,6 +270,9 @@ const PRESSURE = Float64Array.from({ length: P }, (_, k) => pressure(k / (P - 1)
 const DRAW_ROLE: Role[] = [...ROLES.slice(0, 5), 'dab', 'edge', 'line', 'glaze', 'scumble']
 const SHIFT_SCUMBLE = roleRank(0, 'scumble')
 const DRAW_SCALE = Float64Array.from({ length: KINDS }, (_, k) => (k === K_VEIL ? VEIL_DENSITY : 1))
+// (the roles' densities for drawing and for growing, each kind's, read at the start of a frame)
+const KIND_DENSITY = new Float64Array(KINDS)
+const KIND_GROW_DENSITY = new Float64Array(KINDS)
 const GROW_ROLE: Role[] = [...ROLES.slice(0, 5), 'dab', 'edge', 'line', 'glaze', 'glaze']
 
 // What the view fixes for a whole frame: viewProj's numbers and the like, read in the loops through locals.
@@ -360,6 +370,14 @@ export function frameFromBakeWith(
   const dragging = view.dragging === true
   const sizeScale = zoomSizeScaleAt(view.zoom, params)
   const bigCap = bigMax(params)
+  // what drawChanceOf and zoomGrowOf read of the params, read once: the target per px, the share of a drag, each kind's density for drawing and for growing
+  const perPx = params.particles.targetPer10kPx / 10000
+  const drag = dragging ? params.particles.dragDensity : 1
+  const growMax = params.particles.zoomGrowMax
+  for (let kd = 0; kd < KINDS; kd++) {
+    KIND_DENSITY[kd] = params.roles[DRAW_ROLE[kd]].density
+    KIND_GROW_DENSITY[kd] = params.roles[GROW_ROLE[kd]].density
+  }
   const level = Math.min(loadCellLevel(view.zoom), BAKE_MIX_LEVELS - 1)
   const edgeDensity = params.roles.edge.density
 
@@ -380,6 +398,7 @@ export function frameFromBakeWith(
   const sel = scr.sel, selAlpha = scr.selAlpha, selBig = scr.selBig, selPpu = scr.selPpu, selDepth = scr.selDepth, selLayer = scr.selLayer
   const kindA = prep.kind, anchorPos = prep.anchorPos, anchorNrm = prep.anchorNrm
   const cull = anchorsMayBeOffscreen(fc, prep.bound)
+  let offscreen = 0
   const sideA = baked.side, markA = baked.mark, rankA = baked.rank, alphaA = baked.alpha, layerA = baked.layer, area = baked.areaPerParticle
   const wp = baked.worldPath
   const wnA = baked.worldNormal
@@ -429,7 +448,7 @@ export function frameFromBakeWith(
         if (fade < 0.02) continue
         // 3. the density
         const pxArea = area[markA[i]] * ppu * ppu * facing
-        const df = drawFadeAt(drawChanceOf(params, dragging, pxArea, DRAW_ROLE[kind], DRAW_SCALE[kind]), rankA[i])
+        const df = drawFadeAt(drawChanceFor(perPx, pxArea, KIND_DENSITY[kind], drag, DRAW_SCALE[kind]), rankA[i])
         if (!(df > 0.02)) continue
         if (kind === K_VEIL_BORDER) {
           // a veil's border pass is made only for a particle whose own glaze (at VEIL_DENSITY) is drawn (roles.ts particleStrokes): the glaze's rank is the
@@ -440,7 +459,7 @@ export function frameFromBakeWith(
           if (!(glaze > 0.02)) continue
         }
         // 4. the growth and the brush
-        big = Math.min(zoomGrowOf(params, dragging, pxArea, GROW_ROLE[kind]) * sizeScale, bigCap)
+        big = Math.min(zoomGrowFor(perPx, pxArea, KIND_GROW_DENSITY[kind], drag, growMax) * sizeScale, bigCap)
         alpha *= fade * df
       }
     }
@@ -450,7 +469,10 @@ export function frameFromBakeWith(
       const sx = (((m0 * ax + m4 * ay + m8 * az + m12) * iw + 1) * 0.5) * W
       const sy = ((1 - (m1 * ax + m5 * ay + m9 * az + m13) * iw) * 0.5) * H
       const reach = 0.5 * (big <= CLOSE_UP_FROM ? basePxA[2 * i] * big : sizedLength(basePxA[2 * i], big)) + basePxA[2 * i + 1] * big
-      if (sx < -reach || sy < -reach || sx > W + reach || sy > H + reach) continue
+      if (sx < -reach || sy < -reach || sx > W + reach || sy > H + reach) {
+        offscreen++
+        continue
+      }
     }
     const depth = (ax - ex) * vx + (ay - ey) * vy + (az - ez) * vz
     sel[k] = i
@@ -709,6 +731,8 @@ export function frameFromBakeWith(
   s.written = o
   s.own = own.count
   s.silhouettes = nSil
+  s.screenTested = cull
+  s.offscreen = offscreen
   s.msOwn = t1 - t0
   s.msSelect = t2 - t1
   s.msSort = t3 - t2
@@ -773,15 +797,25 @@ function makeOutput(total: number): Output {
   }
 }
 
-// Can an anchor of the baked painting lie off the screen in this view? The box that holds them all, its eight corners projected, is not wholly in the viewport
-// (a corner behind the eye counts): a figure that is wholly in view (the usual one) needs no stroke tested.
+// Can an anchor of the baked painting lie off the screen in this view? Not when the box that holds them all (its eight corners projected) is wholly in the
+// viewport, nor when the sphere that holds them all is (its circle, from the scale at its centre and, under a perspective, the sphere's apparent size): a
+// figure that is wholly in view (the usual one) needs no stroke tested. A corner behind the eye counts as off. (The box is tight on a flat sheet and the
+// sphere on a ball; either is enough.)
 const CORNER = [0, 0, 0]
 function anchorsMayBeOffscreen(fc: FrameCtx, b: Float64Array): boolean {
-  for (let k = 0; k < 8; k++) {
-    if (!project(fc, b[k & 1 ? 3 : 0], b[k & 2 ? 4 : 1], b[k & 4 ? 5 : 2], CORNER)) return true
-    if (CORNER[0] < 0 || CORNER[1] < 0 || CORNER[0] > fc.W || CORNER[1] > fc.H) return true
+  let boxIn = true
+  for (let k = 0; k < 8 && boxIn; k++) {
+    if (!project(fc, b[k & 1 ? 3 : 0], b[k & 2 ? 4 : 1], b[k & 4 ? 5 : 2], CORNER) || CORNER[0] < 0 || CORNER[1] < 0 || CORNER[0] > fc.W || CORNER[1] > fc.H) boxIn = false
   }
-  return false
+  if (boxIn) return false
+  if (!project(fc, b[6], b[7], b[8], CORNER)) return true
+  let r = b[9] * pxPerUnit(fc, b[6], b[7], b[8])
+  if (!fc.ortho) {
+    const d = CORNER[2]
+    if (!(d > 2 * b[9])) return true
+    r *= d / (d - b[9])
+  }
+  return CORNER[0] - r < 0 || CORNER[1] - r < 0 || CORNER[0] + r > fc.W || CORNER[1] + r > fc.H
 }
 
 export const frameFromBake: FrameFromBake = (baked, scene, view, params, gbuffer) => {
