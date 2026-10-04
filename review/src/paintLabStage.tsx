@@ -5,8 +5,7 @@ import type { SpaceView } from '../../graph-engine/src/space/config'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
 import type { PaintDebugMode, SceneColours } from '../../graph-engine/src/space/paint/types'
 import type { SpaceScene } from '../../graph-engine/src/space/scene/types'
-import type { AuthoredFraming } from '../../graph-engine/src/space/paint/bake/types'
-import { authoredFraming, buildPaintView, type BuiltFigure } from './paintLabCamera'
+import { buildPaintView, heldFraming, type BuiltFigure, type HeldFraming } from './paintLabCamera'
 import { oklabToHex } from './paintLabColours'
 import { createPaintEngine, type BakeStatus, type FrameStats, type PaintEngine } from './paintLabEngine'
 import { FpsMeter } from './paintLabMeter'
@@ -65,8 +64,9 @@ export function Stage(props: StageProps) {
   const readoutTimer = useRef(0)
   const pendingReadout = useRef<Readout | null>(null)
   const builtRef = useRef<BuiltFigure | null>(null)
-  // The framing the baked painting is made for: the figure's authored camera at zoom 1 in a viewport of this size (one object while neither changes).
-  const framingRef = useRef<{ built: BuiltFigure; width: number; height: number; framing: AuthoredFraming } | null>(null)
+  // The framing the baked painting is made for: the figure's authored camera at zoom 1, made at the stage's first size and kept (one object) while the
+  // stage's size leaves the figure within a factor of two of that: a resize is no reason to bake again (paintLabCamera.ts heldFraming).
+  const framingRef = useRef<{ built: BuiltFigure; width: number; height: number; held: HeldFraming } | null>(null)
   const [message, setMessage] = useState<{ title: string; text: string } | null>(null)
   // Everything a frame reads, kept current so the frame loop never goes stale.
   const live = useRef(props)
@@ -126,13 +126,13 @@ export function Stage(props: StageProps) {
     const view = buildPaintView(camera, p.params.light, dpr, draggingRef.current, viewRef.current.zoom / p.built.authored.zoom)
     let framing = framingRef.current
     if (!framing || framing.built !== p.built || framing.width !== width || framing.height !== height) {
-      framing = { built: p.built, width, height, framing: authoredFraming(p.built, { width, height }) }
+      framing = { built: p.built, width, height, held: heldFraming(framing && framing.built === p.built ? framing.held : null, p.built, { width, height }) }
       framingRef.current = framing
     }
     try {
       if (p.injected === 'engine-error') throw new Error('Injected engine failure (?state=engine-error).')
       // The frame's result arrives through the engine's events (onFrame, onError).
-      engine.render(view, p.params, p.debug, framing.framing)
+      engine.render(view, p.params, p.debug, framing.held.framing)
     } catch (error) {
       setMessage({ title: 'The painter hit an error', text: error instanceof Error ? error.message : String(error) })
     }

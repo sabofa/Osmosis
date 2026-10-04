@@ -96,6 +96,29 @@ export function authoredFraming(built: Pick<BuiltFigure, 'authored' | 'world' | 
   return { eye: [camera.eye[0], camera.eye[1], camera.eye[2]], viewDir: [f[0], f[1], f[2]], ortho: built.projection === 'orthographic', worldPerPx: camera.worldPerPixel }
 }
 
+// The stage may be resized without the figure's bake being made again: the baked paths are long enough for the frame to take a sub-arc of them, so a
+// stage that makes the figure up to twice as large in px (or half as large) is absorbed like a zoom by the frame (frameFromBake sizes strokes in
+// CSS px and takes the arc they need). Past that band the framing is made again, and the bake with it.
+export const FRAMING_BAND = { min: 0.5, max: 2 } as const
+
+// The framing the lab holds for a figure: made at the first size of the stage, and kept (the same object) while the stage leaves the figure's size in
+// px within FRAMING_BAND of what it was made for (the ratio of the world size of a px: the stage's height, for a landscape stage). Another figure, or a
+// size past the band, makes a new one.
+export interface HeldFraming {
+  built: Pick<BuiltFigure, 'authored' | 'world' | 'projection'>
+  framing: AuthoredFraming
+}
+
+export function heldFraming(held: HeldFraming | null, built: HeldFraming['built'], viewport: Viewport): HeldFraming {
+  const fresh = authoredFraming(built, viewport)
+  if (held && held.built === built) {
+    const ratio = held.framing.worldPerPx / fresh.worldPerPx
+    // (a ratio of exactly 2 or 1/2 is in the band, whatever the last bit of the division says)
+    if (ratio >= FRAMING_BAND.min - 1e-9 && ratio <= FRAMING_BAND.max + 1e-9) return held
+  }
+  return { built, framing: fresh }
+}
+
 function mapPoints(src: Float64Array, world: WorldMap): Float64Array {
   const out = new Float64Array(src.length)
   for (let i = 0; i + 2 < src.length; i += 3) {

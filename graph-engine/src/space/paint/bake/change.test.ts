@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyChange } from '../model/index'
-import { PARAM_SCHEMA, setParam, type PaintParams } from '../params'
+import { CURVE_SCHEMA, PARAM_SCHEMA, setParam, type PaintParams } from '../params'
+import { getCurve, setCurve } from '../../../../../review/src/paintLabParams'
 import { bakeKey, classifyBakeChange, lengthFactorsMoved, lightKeyOf, VIEW_ONLY } from './index'
 import { fixture, LIGHT, P, sparse, sphereColours, sphereScene, type Fixture } from './bakeFixture'
 
@@ -45,18 +46,37 @@ describe('classifyBakeChange', () => {
     expect(counts.bake).toBeGreaterThan(20)
   })
 
-  it('moves with the key: a change the key does not see is "colour" or "same", one it sees is "bake" (sampled across the kinds of slider)', () => {
+  it('moves with the key for EVERY slider and EVERY curve (not a sample): a bake is needed exactly when the key moves, and a colour change is the key\'s own colour-only set', () => {
     const f = small()
     const keyOf = (params: PaintParams): string => bakeKey(f.scene, f.light, params, f.authored, f.particles, f.colours)
     const base = f.params
-    for (const path of ['curve.warmHue', 'mix.strength', 'environment.absorption', 'impasto.strength', 'canvas.texture', 'particles.dragDensity', 'roles.block.density', 'light.intensity', 'light.azimuth', 'roles.block.width', 'edges.wDepth']) {
-      const spec = PARAM_SCHEMA.find((s) => s.path === path)
-      if (!spec) continue
-      const next = setParam(base, path, (path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], base) as number) === spec.max ? spec.min : spec.max)
-      // (what the lab asks of the bake: a change of what it reads, or of a baked length's bucket, which a frame-only slider can move: roles.*.density grows strokes)
-      const needs = classifyBakeChange(base, next) === 'bake' || lengthFactorsMoved(f.baked.areaPerParticle, f.baked.referenceWorldPerPx, base, next)
-      expect(needs, path).toBe(keyOf(next) !== keyOf(base))
+    const k0 = keyOf(base)
+    const changes: [string, PaintParams][] = PARAM_SCHEMA.map((spec) => {
+      const current = spec.path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], base) as number
+      return [spec.path, setParam(base, spec.path, current === spec.max ? spec.min : spec.max)]
+    })
+    for (const c of CURVE_SCHEMA) {
+      // a bend in the middle of the curve's range, whatever its range
+      const points = getCurve(base, c.path)
+      const mid = (c.yMin + c.yMax) / 2 + (c.yMax - c.yMin) * 0.3
+      changes.push([c.path, setCurve(base, c.path, [points[0], [0.5, mid], points[points.length - 1]])])
     }
+    const mismatches: string[] = []
+    let colours = 0
+    let bakes = 0
+    for (const [path, next] of changes) {
+      const class_ = classifyBakeChange(base, next)
+      // (what the lab asks of the bake: a change of what it reads, or of a baked length's bucket, which a frame-only slider can move: roles.*.density grows strokes)
+      const needs = class_ === 'bake' || lengthFactorsMoved(f.baked.areaPerParticle, f.baked.referenceWorldPerPx, base, next)
+      if (class_ === 'colour') colours++
+      if (needs) bakes++
+      if (needs !== (keyOf(next) !== k0)) mismatches.push(`${path}: lab ${needs ? 'bakes' : 'does not'} (${class_}), key ${keyOf(next) !== k0 ? 'moves' : 'stays'}`)
+    }
+    expect(mismatches).toEqual([])
+    // (every slider and every curve was looked at, and the schema has all kinds)
+    expect(changes.length).toBe(PARAM_SCHEMA.length + CURVE_SCHEMA.length)
+    expect(colours).toBeGreaterThan(5)
+    expect(bakes).toBeGreaterThan(20)
   })
 
   it('is "bake" for a particle or load-cell parameter (the particles and their cells are what the bake is made of), though "mix" is a colour group', () => {

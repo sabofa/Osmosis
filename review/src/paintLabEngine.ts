@@ -56,27 +56,32 @@
 //           what the colour sliders and the curve editors do.
 //
 // THE BAKED PAINTING. With the key light fixed in the world (light.worldFixed 1, the default) a stroke's colour, role and path on the surface do
-// not depend on the camera, so the lab paints the figure from a BAKE (graph-engine/src/space/paint/bake/): made once, in the worker (or here with
-// ?worker=0), with its progress shown as "Painting... NN%", and then every frame, at rest and under a drag, is
+// not depend on the camera, so the lab paints the figure from a BAKE (graph-engine/src/space/paint/bake/): made once, in a worker of its own (the
+// model's worker never queues behind a bake of 4 to 16 s; the page stops for it only with ?worker=0), with its progress shown as "Painting... NN%", and
+// then every frame, at rest and under a drag, is
 //
 //   frameFromBake(bake, scene, view, params, latest G-buffer or null)   the strokes this view shows, on this thread, a few ms
 //   renderer.paint(frame, view, params)                                the underpainting drawn from the baked surfaces, the strokes tested
 //                                                                      against the view's depth, the brush, the canvas
 //
-// with no model request at all: orbiting a figure is instant. The G-buffer is still read back (asynchronously, never waited for), only for the
-// silhouette strokes' tint beyond the outline, and the newest one that has arrived is what a frame is given (it may be a frame old; null before the
-// first). What the lab does when something changes (tested in lab/engine.test.ts):
+// with no model request at all: orbiting a figure is instant. The G-buffer is read back (asynchronously, never waited for) only AT REST, for the
+// silhouette strokes' tint beyond the outline: a frame is given the one that was read for its own view and light, and null (the canvas) otherwise, so
+// under a drag no read starts and the silhouettes read the canvas. What the lab does when something changes (tested in lab/engine.test.ts):
 //   the view moved       nothing (a new frame from the bake);
 //   a renderer parameter or one only a frame reads (density, fade, zoom growth)    nothing but the frame (a view-only slider that moves a stroke's baked
 //                        length across a bucket is a re-bake: bake/index.ts lengthFactorsMoved);
 //   a colour parameter   the worker makes the colours again from the bake's recipes (recolourBake), and only the colour arrays come back;
 //   anything else the bake reads (the light, the seed, a role's size, the figure's framing, the colours of a theme)
 //                        a new bake, 150 ms after the last change, one at a time, the newest request: the old bake stays on screen
-//                        until the new one lands, and a bake that lands for inputs that are no longer the newest is dropped.
+//                        until the new one lands, and a bake that lands for inputs that are no longer the newest is dropped. A bake
+//                        in flight that a change or another figure makes useless is CANCELLED for real: its worker is terminated and
+//                        made again (a bake does not yield, so nothing less stops it).
 // Used only when all three hold: the light is fixed in the world, the renderer can depth-test strokes (float render targets: baked strokes
 // are hidden by the view's depth and would paint through the surfaces without it), and no debug view is chosen. Otherwise the picture is the
 // per-frame painter's, as described above, unchanged. While the first bake of a figure is made, the per-frame painter's frames are the
-// picture; the Showcase's tiles (renderTo) are always the per-frame painter's.
+// picture, and so they are on returning to the baked path (from a debug view, say) until a bake that is for the params of the moment is held:
+// the baked path is entered only with a bake that is not stale. The Showcase's tiles (renderTo) are always the per-frame painter's. If the bake's
+// worker dies, the bake is off (the status line says so) and does not move to this thread, unless ?worker=0 asked for that.
 //
 // The contract the lab keeps:
 //  - setScene receives the scene in WORLD coordinates (paintLabCamera.ts):
@@ -186,6 +191,9 @@ export interface EngineOptions {
   snapshot?: CanvasRenderingContext2D | null
   // Where the model runs. Left out, the lab's worker (or this thread, with ?worker=0 or when no worker can start).
   host?: ModelHost
+  // Where the bake is made. Left out: the lab's own worker for it (made when the first bake is wanted), or the model's host on this thread with
+  // ?worker=0; with a `host` of your own and no bake host, no bake is made. null: none.
+  bakeHost?: BakeHost | null
   // The clock the crossfade and the edges' age are told by, in ms (default performance.now), and whether the user
   // asked for no motion (default prefers-reduced-motion: reduce).
   now?: () => number
@@ -214,15 +222,26 @@ export interface ModelHost {
   setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData): void
   setColours(sceneId: number, colours: SceneColourData): void
   frame(request: SessionRequest): Promise<SessionResponse>
-  // The baked painting (session.ts): made once for a scene and its params, and its colours made again under colour-only params. A host without
-  // them makes the lab paint per frame. `progress` is told the whole percent as the bake grows. An answer with id -1 says the host went away.
-  bake?(request: BakeRequest, progress: (percent: number) => void): Promise<BakeAnswer>
-  recolour?(request: RecolourRequest): Promise<RecolourAnswer>
   dispose(): void
 }
 
-// On this thread: the session itself.
-class ThreadHost implements ModelHost {
+// Where the baked painting is made (session.ts): once for a scene and its params, and its colours made again under colour-only params. It is
+// NOT the model's host: a bake takes 4 to 16 s, and a worker that makes it would hold the model's frames (a new figure's first picture) behind it. It
+// is given every scene the model's host is. `progress` is told the whole percent as the bake grows. An answer with id -1 says the host went away.
+export interface BakeHost {
+  readonly background: boolean
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData): void
+  setColours(sceneId: number, colours: SceneColourData): void
+  bake(request: BakeRequest, progress: (percent: number) => void): Promise<BakeAnswer>
+  recolour(request: RecolourRequest): Promise<RecolourAnswer>
+  // Abandon what is in flight, for real: a bake does not yield, so a worker is terminated and made again with the scenes it held (and none of its
+  // bake); every answer still waited for settles with id -1. A host that runs on this thread cannot interrupt a bake and does nothing.
+  cancel(): void
+  dispose(): void
+}
+
+// On this thread: the session itself (the model's, and with ?worker=0 the bake's too: the bake then stops the page for as long as it takes).
+class ThreadHost implements ModelHost, BakeHost {
   readonly background = false
   private readonly session = new PaintSession()
   setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
@@ -243,6 +262,7 @@ class ThreadHost implements ModelHost {
   recolour(request: RecolourRequest) {
     return Promise.resolve(this.session.recolour(request))
   }
+  cancel() {}
   dispose() {}
 }
 
@@ -251,20 +271,15 @@ class WorkerHost implements ModelHost {
   readonly background = true
   private readonly worker: Worker
   private readonly waiting = new Map<number, (r: never) => void>()
-  private readonly progress = new Map<number, (percent: number) => void>()
   private dead = false
 
   constructor(failed: (reason: string) => void) {
     this.worker = new Worker(new URL('./paintLabWorker.ts', import.meta.url), { type: 'module' })
     this.worker.onmessage = (event: MessageEvent<WorkerOut>) => {
       const m = event.data
-      if (m.type === 'progress') {
-        this.progress.get(m.id)?.(m.percent)
-        return
-      }
+      if (m.type !== 'frame') return
       const done = this.waiting.get(m.response.id)
       this.waiting.delete(m.response.id)
-      this.progress.delete(m.response.id)
       done?.(m.response as never)
     }
     this.worker.onerror = (event) => {
@@ -290,6 +305,72 @@ class WorkerHost implements ModelHost {
       this.send({ type: 'frame', request }, g ? ([g.depth.buffer, g.normal.buffer, g.value.buffer, g.shadow.buffer, g.mark.buffer] as ArrayBuffer[]) : [])
     })
   }
+  dispose() {
+    this.dead = true
+    this.worker.terminate()
+    for (const done of this.waiting.values()) done({ id: -1, ok: false, error: 'the engine was disposed' } as never)
+    this.waiting.clear()
+  }
+}
+
+// In a Web Worker of its own, with its own session (and so its own particles): only bakes and recolours go to it, and only frames to the model's.
+// `failed` is called once if the worker dies; a worker that is cancelled (cancel()) is made again and is not a failure.
+class WorkerBakeHost implements BakeHost {
+  readonly background = true
+  private worker: Worker
+  private readonly waiting = new Map<number, (r: never) => void>()
+  private readonly progress = new Map<number, (percent: number) => void>()
+  // What the worker was given, to give a new one the same.
+  private readonly scenes = new Map<number, { scene: SpaceScene; colours: SceneColourData }>()
+  private readonly failed: (reason: string) => void
+  private dead = false
+
+  constructor(failed: (reason: string) => void) {
+    this.failed = failed
+    this.worker = this.spawn()
+  }
+
+  private spawn(): Worker {
+    const worker = new Worker(new URL('./paintLabWorker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (event: MessageEvent<WorkerOut>) => {
+      const m = event.data
+      if (m.type === 'progress') {
+        this.progress.get(m.id)?.(m.percent)
+        return
+      }
+      if (m.type === 'frame') return
+      const done = this.waiting.get(m.response.id)
+      this.waiting.delete(m.response.id)
+      this.progress.delete(m.response.id)
+      done?.(m.response as never)
+    }
+    worker.onerror = (event) => {
+      if (this.dead) return
+      this.dead = true
+      this.settleAll('the bake worker stopped')
+      this.failed(event.message || 'the bake worker stopped')
+    }
+    return worker
+  }
+
+  private settleAll(error: string) {
+    for (const done of this.waiting.values()) done({ id: -1, ok: false, error } as never)
+    this.waiting.clear()
+    this.progress.clear()
+  }
+
+  private send(message: WorkerIn) {
+    this.worker.postMessage(message, [])
+  }
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
+    this.scenes.set(sceneId, { scene, colours })
+    this.send({ type: 'scene', sceneId, scene, colours })
+  }
+  setColours(sceneId: number, colours: SceneColourData) {
+    const have = this.scenes.get(sceneId)
+    if (have) have.colours = colours
+    this.send({ type: 'colours', sceneId, colours })
+  }
   bake(request: BakeRequest, progress: (percent: number) => void) {
     return new Promise<BakeAnswer>((resolve) => {
       this.waiting.set(request.id, resolve)
@@ -303,12 +384,23 @@ class WorkerHost implements ModelHost {
       this.send({ type: 'recolour', request })
     })
   }
+  cancel() {
+    if (this.dead) return
+    const old = this.worker
+    old.onmessage = null
+    old.onerror = null
+    old.terminate()
+    this.settleAll('the bake was cancelled')
+    this.worker = this.spawn()
+    for (const [sceneId, s] of this.scenes) this.send({ type: 'scene', sceneId, scene: s.scene, colours: s.colours })
+  }
   dispose() {
     this.dead = true
+    this.worker.onmessage = null
+    this.worker.onerror = null
     this.worker.terminate()
-    for (const done of this.waiting.values()) done({ id: -1, ok: false, error: 'the engine was disposed' } as never)
-    this.waiting.clear()
-    this.progress.clear()
+    this.settleAll('the engine was disposed')
+    this.scenes.clear()
   }
 }
 
@@ -451,10 +543,17 @@ function needOf(held: HeldBake | null, want: BakeWant, fresh: boolean): Need {
   return classifyBakeChange(held.colourParams, want.params) === 'colour' ? 'colour' : 'none'
 }
 
-// Is a bake made for `made` no longer what `now` asks for (so it is dropped when it lands)?
-function staleFor(made: BakeWant, now: BakeWant, baked: BakedPainting): boolean {
+// Is what a bake in the making is for no longer what `now` asks for, whatever it turns out to be (the figure, the colours, the light, the framing, or
+// params the bake reads): it is cancelled.
+function uselessFor(made: BakeWant, now: BakeWant): boolean {
   if (made.sceneId !== now.sceneId || made.colours !== now.colours || made.lightKey !== now.lightKey || !sameAuthored(made.authored, now.authored)) return true
-  return classifyBakeChange(made.params, now.params) === 'bake' || lengthFactorsMoved(baked.areaPerParticle, baked.referenceWorldPerPx, made.params, now.params)
+  return classifyBakeChange(made.params, now.params) === 'bake'
+}
+
+// Is a bake made for `made` no longer what `now` asks for (so it is dropped when it lands)? The same, and the bucketed length of its paths, which is
+// the bake's own (its areas per particle).
+function staleFor(made: BakeWant, now: BakeWant, baked: BakedPainting): boolean {
+  return uselessFor(made, now) || lengthFactorsMoved(baked.areaPerParticle, baked.referenceWorldPerPx, made.params, now.params)
 }
 
 const defaultReducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -524,6 +623,29 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   } catch {
     host = new ThreadHost()
   }
+  // Where the bake is made (see BakeHost), found when the first bake is wanted: a Showcase's engine, which never bakes, makes none. `bakeOffWhy` says
+  // why there is none when the light is fixed in the world and a bake was wanted.
+  let bakeHost: BakeHost | null = null
+  let bakeHostFound = false
+  let bakeOffWhy: string | null = null
+  function findBakeHost(): BakeHost | null {
+    if (bakeHostFound) return bakeHost
+    bakeHostFound = true
+    if (options.bakeHost !== undefined) bakeHost = options.bakeHost
+    else if (options.host) bakeHost = null
+    else if (!URL_STATE.worker) bakeHost = host instanceof ThreadHost ? host : null
+    else if (typeof Worker === 'undefined') bakeOffWhy = 'there are no workers here, and a bake on this thread would stop the page (&worker=0 asks for that)'
+    else {
+      try {
+        bakeHost = new WorkerBakeHost(bakeWorkerLost)
+      } catch (error) {
+        bakeOffWhy = `the bake worker could not start (${error instanceof Error ? error.message : String(error)}), and a bake on this thread would stop the page (&worker=0 asks for that)`
+      }
+    }
+    // (the scenes the lab has set so far: the model's host was given them as they came)
+    if (bakeHost && (bakeHost as unknown) !== host) for (const [id, s] of sent) bakeHost.setScene(id, plainScene(s.scene), colourDataOf(s.scene, s.colours))
+    return bakeHost
+  }
   const clock = options.now ?? (() => performance.now())
   const reduced = options.reducedMotion ?? defaultReducedMotion
 
@@ -569,7 +691,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   let heldBake: HeldBake | null = null
   let bakeWant: BakeWant | null = null
   let lastWant: BakeWant | null = null
-  let bakeFlight: { id: number; kind: 'bake' | 'recolour' } | null = null
+  // The inputs of the last baked-path render, kept when the baked path is left (a debug view): a bake that lands then and is still right for them is held.
+  let lastSeenWant: BakeWant | null = null
+  let bakeFlight: { id: number; kind: 'bake' | 'recolour'; want: BakeWant } | null = null
   let bakeDueAt = Number.NEGATIVE_INFINITY
   let bakeTimer: ReturnType<typeof setTimeout> | null = null
   // The worker did not hold the bake a recolour was for: the next step is a bake whatever the params say.
@@ -980,6 +1104,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
   // in RG32F targets), and without it they would paint through the surfaces; and a bake that failed, or a depth test that did, stays off.
   function bakeUnavailable(): string | null {
     if (bakeBroken) return bakeBroken
+    if (bakeOffWhy) return bakeOffWhy
     if (!renderer.capabilities.colorBufferFloat) return 'this graphics context cannot render to float targets, which the baked strokes\u2019 depth test needs'
     return null
   }
@@ -1063,10 +1188,11 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     })
   }
 
-  // The newest G-buffer for the silhouettes: read back without waiting, for the view painted, when the one held is not for this view and these light
-  // parameters. A frame uses whatever has arrived; one that lands for the view the camera is at (it has stopped) paints the picture again.
+  // The G-buffer for the silhouettes: read back without waiting, for the view painted, AT REST (not under a drag: nothing is read, and the silhouettes
+  // read the canvas), when the one held is not for this view and these light parameters. A frame is given the one that was read for its own view; one
+  // that lands for the view the camera is at paints the picture again.
   function wantGBuffer(job: Job): void {
-    if (gFlight || disposed || job.target) return
+    if (gFlight || disposed || job.target || job.view.dragging) return
     const light = JSON.stringify(job.params.light)
     const g = latestG
     if (g && g.sceneId === job.sceneId && g.light === light && sameCamera(g.view, job.view)) return
@@ -1097,8 +1223,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       renderer.setBakedSurfaces(h.baked.surfaces)
       surfacesSet = h.baked.surfaces
     }
-    // (the G-buffer of another figure, or of another size of stage, is not read: its pixels are not this view's)
-    const g = latestG !== null && latestG.sceneId === job.sceneId && latestG.view.width === job.view.width && latestG.view.height === job.view.height ? latestG.g : null
+    // (only the G-buffer that was read for this very view and light: the pixels of another view's are not this view's, and under a drag there is none)
+    const lg = latestG
+    const g = !job.view.dragging && lg !== null && lg.sceneId === job.sceneId && sameCamera(lg.view, job.view) && lg.light === JSON.stringify(job.params.light) ? lg.g : null
     const t0 = performance.now()
     const strokes = frameFromBake(h.baked, job.scene, job.view, job.params, g)
     const buildMs = performance.now() - t0
@@ -1178,26 +1305,39 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     }
   }
 
+  // The bake in flight is abandoned for real (BakeHost.cancel: its worker is terminated and made again), and what it was making is not waited for.
+  function cancelBake(): void {
+    const flight = bakeFlight
+    if (!flight) return
+    bakeFlight = null
+    bakeHost?.cancel()
+    setPainting(null)
+  }
+
   function startBake(want: BakeWant): void {
-    if (!host.bake) return
+    const target = bakeHost
+    if (!target) return
     const id = nextRequest++
-    bakeFlight = { id, kind: 'bake' }
+    const flight = { id, kind: 'bake' as const, want }
+    bakeFlight = flight
     setPainting(0)
     const request: BakeRequest = { id, sceneId: want.sceneId, params: want.params, lightDir: want.lightDir, authored: want.authored }
-    void host.bake(request, (percent) => {
-      if (bakeFlight?.id === id) setPainting(percent)
+    void target.bake(request, (percent) => {
+      if (bakeFlight === flight) setPainting(percent)
     }).then(
-      (answer) => arriveBake(want, answer),
-      (error: unknown) => arriveBake(want, { id, ok: false, error: error instanceof Error ? error.message : String(error) }),
+      (answer) => arriveBake(flight, answer),
+      (error: unknown) => arriveBake(flight, { id, ok: false, error: error instanceof Error ? error.message : String(error) }),
     )
   }
 
-  function arriveBake(made: BakeWant, answer: BakeAnswer): void {
+  function arriveBake(flight: NonNullable<typeof bakeFlight>, answer: BakeAnswer): void {
+    // (cancelled, or the host was lost: what was waited for is not wanted any more)
+    if (bakeFlight !== flight) return
     bakeFlight = null
+    const made = flight.want
     if (disposed) return
     if (!answer.ok) {
       setPainting(null)
-      // the host went away under the bake (the worker died and the model moved to this thread): ask again there
       if (answer.id === -1) return maintainBake()
       if ('error' in answer) {
         breakBaked(`the bake failed: ${answer.error}`)
@@ -1205,7 +1345,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       }
       return maintainBake()
     }
-    const now = bakeWant
+    // (the inputs of the newest render, or of the last one before the baked path was left: a bake that is still right for them is kept, though it is
+    // not shown until the baked path is wanted again)
+    const now = bakeWant ?? lastSeenWant
     // Inputs that are no longer the newest: the bake is dropped (the one on screen stays), and the newest are baked.
     if (!now || staleFor(made, now, answer.baked)) {
       setPainting(null)
@@ -1219,9 +1361,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       authored: made.authored, lightKey: made.lightKey,
     }
     setPainting(null)
-    // The picture is the new bake's from now on: at once, from the view the camera is at.
+    // The picture is the new bake's from now on: at once, from the view the camera is at (when the baked path is the one wanted).
     const job = lastJob
-    if (job && job.sceneId === made.sceneId && job.colours === made.colours && !job.target) {
+    if (bakeWant && job && job.sceneId === made.sceneId && job.colours === made.colours && !job.target) {
       enterBaked()
       lastJob = { ...job, seq: ++seq }
       reportBaked(lastJob)
@@ -1231,16 +1373,19 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
 
   function startRecolour(want: BakeWant): void {
     const h = heldBake
-    if (!h || !host.recolour) return
+    const target = bakeHost
+    if (!h || !target) return
     const id = nextRequest++
-    bakeFlight = { id, kind: 'recolour' }
-    void host.recolour({ id, sceneId: h.sceneId, key: h.baked.key, params: want.params }).then(
-      (answer) => arriveRecolour(h, want, answer),
-      (error: unknown) => arriveRecolour(h, want, { id, ok: false, error: error instanceof Error ? error.message : String(error) }),
+    const flight = { id, kind: 'recolour' as const, want }
+    bakeFlight = flight
+    void target.recolour({ id, sceneId: h.sceneId, key: h.baked.key, params: want.params }).then(
+      (answer) => arriveRecolour(flight, h, want, answer),
+      (error: unknown) => arriveRecolour(flight, h, want, { id, ok: false, error: error instanceof Error ? error.message : String(error) }),
     )
   }
 
-  function arriveRecolour(h: HeldBake, want: BakeWant, answer: RecolourAnswer): void {
+  function arriveRecolour(flight: NonNullable<typeof bakeFlight>, h: HeldBake, want: BakeWant, answer: RecolourAnswer): void {
+    if (bakeFlight !== flight) return
     bakeFlight = null
     if (disposed) return
     if (!answer.ok) {
@@ -1273,8 +1418,32 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
     if (before && before.sceneId === want.sceneId && before.params === want.params && before.colours === want.colours && before.lightKey === want.lightKey && sameAuthored(before.authored, want.authored)) return
     bakeWant = want
     lastWant = want
+    lastSeenWant = want
+    // (a bake in the making that these inputs make useless is stopped now, not waited for: the debounce is for the next one)
+    if (bakeFlight?.kind === 'bake' && uselessFor(bakeFlight.want, want)) cancelBake()
     if (needOf(heldBake, want, needFresh) === 'bake') bakeDueAt = clock() + BAKE_DEBOUNCE_MS
     maintainBake()
+  }
+
+  // The bake's worker died: no bake is made from now on (the lab does not move it to this thread unless &worker=0 asked for that), the status line
+  // says so, and the per-frame painter draws.
+  function bakeWorkerLost(reason: string): void {
+    if (disposed) return
+    console.warn(`The bake worker stopped (${reason}); the baked painting is off.`)
+    const wasBaked = bakedMode
+    bakeHost = null
+    bakeOffWhy = `the bake worker stopped (${reason}), and a bake on this thread would stop the page (&worker=0 asks for that)`
+    whyNot = bakeOffWhy
+    bakeFlight = null
+    if (bakeTimer !== null) clearTimeout(bakeTimer)
+    bakeTimer = null
+    paintingNow = null
+    leaveBaked()
+    const job = lastJob
+    if (wasBaked && job) {
+      lastJob = latest = { ...job, seq: ++seq }
+      pump()
+    }
   }
 
   // One frame at a time: a Showcase tile in order, else the newest request.
@@ -1321,10 +1490,17 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       }
       if (!known) {
         sent.set(id, { scene: sc, colours: co })
-        host.setScene(id, plainScene(sc), colourDataOf(sc, co))
+        const plain = plainScene(sc)
+        const data = colourDataOf(sc, co)
+        host.setScene(id, plain, data)
+        if (bakeHost && (bakeHost as unknown) !== host) bakeHost.setScene(id, plain, data)
       } else if (known.colours !== co) {
         known.colours = co
-        host.setColours(id, colourDataOf(sc, co))
+        const data = colourDataOf(sc, co)
+        host.setColours(id, data)
+        if (bakeHost && (bakeHost as unknown) !== host) bakeHost.setColours(id, data)
+        // (a bake in the making is of the old colours)
+        cancelBake()
         if (analysed?.sceneId === id) {
           analysed = null
           fade = null
@@ -1338,6 +1514,9 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         held = null
         pendingAdoption = null
         latestG = null
+        // and a bake in the making is of the old one: it is stopped, so the new figure's first frames (the model's worker, which a bake never
+        // shared) and then its own bake are not made after it
+        cancelBake()
       }
       sceneId = id
       sceneNow = sc
@@ -1350,13 +1529,17 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       lastJob = job
       // The baked painting is the picture when the light is fixed in the world, the renderer can depth-test strokes and no debug view is chosen (and
       // the page said what framing to bake for). While the first bake of a figure is made, the per-frame painter's frames are the picture.
-      if (authored && URL_STATE.bake && host.bake && params.light.worldFixed >= 0.5 && debug === 'none') {
+      if (authored && URL_STATE.bake && params.light.worldFixed >= 0.5 && debug === 'none' && (findBakeHost() !== null || bakeOffWhy !== null)) {
         whyNot = bakeUnavailable()
         if (whyNot === null) {
           const [lx, ly, lz] = view.lightDir
-          considerBake({ sceneId, scene: sceneNow, colours: coloursNow, params, lightDir: [lx, ly, lz], lightKey: lightKeyOf(view.lightDir), authored })
+          const want: BakeWant = { sceneId, scene: sceneNow, colours: coloursNow, params, lightDir: [lx, ly, lz], lightKey: lightKeyOf(view.lightDir), authored }
+          considerBake(want)
+          // The baked path is entered with a bake that is not stale for these params (or kept when it already is the picture: the old bake stays on
+          // screen while the new one is made); coming back from the per-frame painter (a debug view, a camera-relative light) the live picture holds until
+          // a bake for the params of the moment lands, and arriveBake takes over.
           const h = heldBake
-          if (h && h.sceneId === sceneId && h.colours === coloursNow) {
+          if (h && h.sceneId === sceneId && h.colours === coloursNow && (bakedMode || needOf(h, want, needFresh) !== 'bake')) {
             enterBaked()
             lastDragging = view.dragging
             reportBaked(job)
@@ -1420,6 +1603,7 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       bakeWant = null
       lastWant = null
       bakeFlight = null
+      lastSeenWant = null
       latestG = null
       for (const t of tiles.splice(0)) t.settle?.reject(new Error('the engine was disposed'))
       sent.clear()
@@ -1427,6 +1611,8 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       coloursNow = null
       analysed = null
       host.dispose()
+      if (bakeHost && (bakeHost as unknown) !== host) bakeHost.dispose()
+      bakeHost = null
       renderer.dispose()
     },
   }
