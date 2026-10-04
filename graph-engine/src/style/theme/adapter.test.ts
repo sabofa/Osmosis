@@ -6,7 +6,7 @@ import { fromOklch, toOklch } from '../color'
 import { randomFor, type Random } from '../random'
 import { defaultTheme, fromColours, fromOsmosisTheme, resolveTheme } from './adapter'
 import { contrastRatio, fitLightness, relativeLuminance } from './contrast'
-import { BUILTIN_DARK_PALETTE, BUILTIN_LIGHT_PALETTE, DEFAULT_DARK_TOKENS, DEFAULT_LIGHT_TOKENS, DEFAULT_TOKEN_NAMES } from './defaults'
+import { DEFAULT_DARK_GOOD_BAD, DEFAULT_DARK_TOKENS, DEFAULT_LIGHT_GOOD_BAD, DEFAULT_LIGHT_TOKENS, DEFAULT_TOKEN_NAMES } from './defaults'
 import { GOLDEN_ANGLE, deriveBoards, deriveSeries, mixOklab, shortestAngle } from './derive'
 import { BOARD_NAMES, COLOUR_KEYS, SERIES_COUNT, type Hex, type ThemeColours, type ThemeInput, type ThemeSource } from './types'
 
@@ -201,7 +201,9 @@ describe('the bare system', () => {
       good: '#4c7a4a',
       bad: '#a34b3f',
     })
-    expect(theme.colours.accentWash).toBe(mixOklab('#c65d22', '#fdf6ea', 0.85))
+    // A Palette has no wash: the palette's accent is the app's default accent, so it gets the
+    // default wash; another accent gets one derived (see the wash test below).
+    expect(theme.colours.accentWash).toBe('#faf1e9')
   })
 
   it('resolves every field for the dark palette', () => {
@@ -226,18 +228,42 @@ describe('the bare system', () => {
     expect(theme.colours.series).toContain('#a34b3f')
   })
 
-  it('resolves a source with only a mode, using that mode\'s built-in palette', () => {
-    const light = resolveTheme({ mode: 'light' })
-    const dark = resolveTheme({ mode: 'dark' })
-    expectComplete(light)
-    expectComplete(dark)
-    expect(light.colours).toMatchObject({ surface: '#fdf6ea', ink: '#17170f', accent: '#c65d22', good: '#4c7a4a', bad: '#a34b3f' })
-    expect(dark.colours).toMatchObject({ surface: '#201e15', ink: '#f2efe2', accent: '#e2803f', good: '#6fa06c', bad: '#c76a5c' })
+  it('resolves a source with only a mode to the default theme for that mode, field by field', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      const resolved = resolveTheme({ mode })
+      const fallback = defaultTheme(mode)
+      expectComplete(resolved)
+      expect(resolved.mode).toBe(fallback.mode)
+      for (const name of COLOUR_KEYS) expect(resolved.colours[name], `${mode} ${name}`).toBe(fallback.colours[name])
+      expect(resolved.colours.series, `${mode} series`).toEqual(fallback.colours.series)
+      expect(resolved.boards, `${mode} boards`).toEqual(fallback.boards)
+      expect(resolved.media).toEqual(fallback.media)
+      expect(resolved.lettering).toEqual(fallback.lettering)
+      expect(resolved.styles).toBe(fallback.styles)
+      expect(resolved.key, `${mode} key`).toBe(fallback.key)
+      expect(resolved).toEqual(fallback)
+    }
     expect(resolveTheme({}).mode).toBe('light')
-    expect(resolveTheme({}).colours).toEqual(light.colours)
-    // Nothing the theme did not say is invented: with no good or bad given,
-    // the series is the pure derivation.
-    expect(light.colours.series).toEqual(deriveSeries({ accent: '#c65d22', surface: '#fdf6ea', mode: 'light' }))
+    expect(resolveTheme({})).toEqual(defaultTheme('light'))
+    // The app's tokens, not the graph engine's own palette.
+    expect(resolveTheme({ mode: 'light' }).colours).toMatchObject({ surface: '#ffffff', muted: '#6b6b5f', accentWash: '#faf1e9', good: '#4c7a4a', bad: '#a34b3f' })
+    expect(resolveTheme({ mode: 'dark' }).colours).toMatchObject({ surface: '#201e15', muted: '#a19d8c', accentWash: '#2c2113', good: '#6fa06c', bad: '#c76a5c' })
+  })
+
+  it('fills a partial source from the default theme, one missing field at a time', () => {
+    const light = defaultTheme('light').colours
+    const set = resolveTheme({ mode: 'light', colours: { ink: '#000033' } }).colours
+    expect(set.ink).toBe('#000033')
+    for (const name of COLOUR_KEYS) if (name !== 'ink') expect(set[name], name).toBe(light[name])
+    // Saying the default out loud changes nothing.
+    expect(resolveTheme({ mode: 'light', colours: { surface: light.surface, accent: light.accent, good: light.good } })).toEqual(defaultTheme('light'))
+  })
+
+  it('gives the default wash to the default accent and a derived one to any other', () => {
+    const light = defaultTheme('light').colours
+    expect(resolveTheme({ mode: 'light', colours: { accent: '#3b6ea8' } }).colours.accentWash).toBe(mixOklab('#3b6ea8', light.surface, 0.85))
+    expect(resolveTheme({ mode: 'light', colours: { accent: '#3b6ea8', surface: '#f0f0f0' } }).colours.accentWash).toBe(mixOklab('#3b6ea8', '#f0f0f0', 0.85))
+    expect(resolveTheme({ mode: 'light', colours: { accent: '#3b6ea8', accentWash: '#eeeeff' } }).colours.accentWash).toBe('#eeeeff')
   })
 
   it('has fromColours as the same door as resolveTheme', () => {
@@ -304,7 +330,7 @@ describe('series', () => {
     const base = deriveSeries({ accent, surface: '#fdf6ea', mode: 'light' })
     const good = fromOklch({ l: 0.5, c: 0.12, h: slotHue(accent, 3) + 12 })
     const bad = fromOklch({ l: 0.5, c: 0.12, h: slotHue(accent, 6) - 9 })
-    const theme = resolveTheme({ colours: { accent, good, bad } })
+    const theme = resolveTheme({ colours: { surface: '#fdf6ea', accent, good, bad } })
     const series = theme.colours.series
     expect(series[3]).toBe(good)
     expect(series[6]).toBe(bad)
@@ -325,7 +351,7 @@ describe('series', () => {
       .sort((a, b) => hueDistance(badHue, slotHue(accent, a)) - hueDistance(badHue, slotHue(accent, b)))
     expect(ranked[0]).toBe(2)
     const next = ranked[1]
-    const series = resolveTheme({ colours: { accent, good, bad } }).colours.series
+    const series = resolveTheme({ colours: { surface: '#fdf6ea', accent, good, bad } }).colours.series
     expect(series[2]).toBe(good)
     expect(series[next]).toBe(bad)
     expect(new Set(series).size).toBe(SERIES_COUNT)
@@ -340,6 +366,64 @@ describe('series', () => {
     const series = resolveTheme({ colours: { accent, good } }).colours.series
     expect(series.indexOf(good)).toBe(1)
     expect(series.filter((hex) => hex === good)).toHaveLength(1)
+  })
+
+  it('fit a good or bad that falls short of 3:1 in lightness only, and leave one that passes alone', () => {
+    const surface = '#1b161f'
+    const bad = '#a8404f' // 2.97:1 on this surface
+    const good = '#6fbf8a' // plenty
+    expect(contrastRatio(bad, surface)).toBeLessThan(3)
+    expect(contrastRatio(good, surface)).toBeGreaterThanOrEqual(3)
+    const series = deriveSeries({ accent: '#c48ad6', surface, mode: 'dark', good, bad })
+    expect(series).toContain(good)
+    expect(series).not.toContain(bad)
+    const fitted = series.filter((hex) => hueDistance(toOklch(hex).h, toOklch(bad).h) < 5 && hex !== good)
+    expect(fitted.length).toBeGreaterThan(0)
+    const slot = fitted.find((hex) => contrastRatio(hex, surface) >= 3)
+    expect(slot, 'a slot of the bad hue that meets 3:1').toBeDefined()
+    expect(toOklch(slot!).l).toBeGreaterThan(toOklch(bad).l)
+    expect(toOklch(slot!).c).toBeGreaterThan(toOklch(bad).c * 0.8)
+    for (const hex of series) expect(contrastRatio(hex, surface)).toBeGreaterThanOrEqual(3)
+  })
+
+  // The four built-in themes' tokens for each mode (web/src/lib/builtinThemes.ts), in the
+  // order surface, accent, ink, muted, line, lineStrong, with the --good and --bad their
+  // custom CSS sets (the same in both modes).
+  const BUILTIN_THEMES: Record<string, { good: Hex; bad: Hex; light: Hex[]; dark: Hex[] }> = {
+    Slate: { good: '#3f7d5a', bad: '#b0473f', light: ['#ffffff', '#3b6ea8', '#161a21', '#5f6672', '#dfe3e9', '#c3c9d3'], dark: ['#1a1e24', '#7fa8dc', '#e7ebf1', '#98a1ad', '#2a3038', '#3c444f'] },
+    Forest: { good: '#2f7a4f', bad: '#a6553c', light: ['#fbfcf8', '#2f7a4f', '#141a13', '#5d6b5c', '#d8e0d2', '#b8c6b0'], dark: ['#161f18', '#6fbf8a', '#e6efe6', '#92a394', '#25332a', '#36473c'] },
+    Ember: { good: '#6e7f3c', bad: '#b3411f', light: ['#fffaf3', '#b3411f', '#1c1410', '#75655a', '#e6d9c8', '#cdb9a2'], dark: ['#16110d', '#ff8a3d', '#f6ece0', '#a89583', '#2b2119', '#443426'] },
+    Plum: { good: '#4c7a6a', bad: '#a8404f', light: ['#ffffff', '#7a3e8f', '#1a1420', '#6a6072', '#e2dbe8', '#c8bcd2'], dark: ['#1b161f', '#c48ad6', '#efe8f3', '#a396ac', '#2e2535', '#443749'] },
+  }
+  const num = (hex: Hex) => parseInt(hex.slice(1), 16)
+
+  it('keep 3:1 for the built-in themes in both modes, the Plum dark and Slate dark ones included', () => {
+    for (const [name, theme] of Object.entries(BUILTIN_THEMES)) {
+      for (const mode of ['light', 'dark'] as const) {
+        const [surface, accent, ink, muted, line, lineStrong] = theme[mode]
+        const resolved = fromOsmosisTheme(
+          { background: num(surface), curve: num(accent), segment: num(theme.good), point: num(theme.bad), axis: num(ink), grid: num(line), gridStrong: num(lineStrong), muted: num(muted) },
+          mode,
+          { id: 'builtin:' + name.toLowerCase() },
+        )
+        for (const [slot, hex] of resolved.colours.series.entries()) {
+          expect(contrastRatio(hex, surface), `${name} ${mode} slot ${slot} ${hex} on ${surface}`).toBeGreaterThanOrEqual(3)
+        }
+        // The theme's own good and bad stay exactly as it gave them; only the series slot is fitted.
+        expect(resolved.colours.good, `${name} ${mode} good`).toBe(theme.good)
+        expect(resolved.colours.bad, `${name} ${mode} bad`).toBe(theme.bad)
+      }
+    }
+    // Plum dark (2.97:1 before) and Slate dark (3.04:1), by name.
+    const plum = fromOsmosisTheme({ background: num('#1b161f'), curve: num('#c48ad6'), segment: num('#4c7a6a'), point: num('#a8404f'), axis: num('#efe8f3'), grid: num('#2e2535'), gridStrong: num('#443749'), muted: num('#a396ac') }, 'dark')
+    const slate = fromOsmosisTheme({ background: num('#1a1e24'), curve: num('#7fa8dc'), segment: num('#3f7d5a'), point: num('#b0473f'), axis: num('#e7ebf1'), grid: num('#2a3038'), gridStrong: num('#3c444f'), muted: num('#98a1ad') }, 'dark')
+    for (const hex of plum.colours.series) expect(contrastRatio(hex, '#1b161f')).toBeGreaterThanOrEqual(3)
+    for (const hex of slate.colours.series) expect(contrastRatio(hex, '#1a1e24')).toBeGreaterThanOrEqual(3)
+    expect(plum.colours.series).not.toContain('#a8404f')
+    // Slate dark's bad was 3.04:1 already, so it keeps its slot as given; Plum dark's was fitted.
+    expect(slate.colours.series).toContain('#b0473f')
+    expect(plum.colours.bad).toBe('#a8404f')
+    expect(slate.colours.bad).toBe('#b0473f')
   })
 
   it('take an explicit series over the derived one, filling the rest and cutting to 8', () => {
@@ -380,7 +464,7 @@ describe('overrides', () => {
 
   // Each field changes what it names and whatever is derived from it, and nothing else.
   const TABLE: [string, ThemeSource, string[]][] = [
-    ['surface', { colours: { surface: '#8a8a8a' } }, ['surface', 'paper', 'accentWash', 'series']],
+    ['surface', { colours: { surface: '#8a8a8a' } }, ['surface', 'paper', 'series']],
     ['paper', { colours: { paper: '#f0e0c0' } }, ['paper']],
     ['ink', { colours: { ink: '#000033' } }, ['ink']],
     ['muted', { colours: { muted: '#555555' } }, ['muted']],
@@ -608,19 +692,11 @@ describe('the default theme', () => {
     expect(Object.isFrozen(own)).toBe(false)
   })
 
-  it('keeps its copies of the built-in palettes equal to render/palette.ts', () => {
-    const slots = (palette: Palette) => ({
-      background: palette.background,
-      curve: palette.curve,
-      segment: palette.segment,
-      point: palette.point,
-      axis: palette.axis,
-      grid: palette.grid,
-      gridStrong: palette.gridStrong,
-      muted: palette.muted,
-    })
-    expect(BUILTIN_LIGHT_PALETTE).toEqual(slots(LIGHT_PALETTE))
-    expect(BUILTIN_DARK_PALETTE).toEqual(slots(DARK_PALETTE))
+  it('keeps its good and bad equal to those of the built-in palettes of render/palette.ts', () => {
+    const hexOf = (value: number) => '#' + value.toString(16).padStart(6, '0')
+    const goodBad = (palette: Palette) => ({ good: hexOf(palette.segment), bad: hexOf(palette.point) })
+    expect({ ...DEFAULT_LIGHT_GOOD_BAD }).toEqual(goodBad(LIGHT_PALETTE))
+    expect({ ...DEFAULT_DARK_GOOD_BAD }).toEqual(goodBad(DARK_PALETTE))
   })
 
   it('matches web/src/lib/themeTokens.ts, so the copy cannot drift', () => {

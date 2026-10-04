@@ -11,10 +11,17 @@
 //
 // After the theming overhaul a new reader fills the same ThemeSource and
 // nothing downstream changes. Every field of a ThemeSource is optional: what a
-// theme leaves out comes from the built-in palette for the mode (the colours)
-// or is derived from the colours it did give (derive.ts).
+// theme leaves out comes from the default theme for the mode (defaults.ts), or
+// is derived from the colours it did give (derive.ts). There is no "no theme":
+// resolveTheme({ mode }) IS defaultTheme(mode).
 
-import { BUILTIN_DARK_PALETTE, BUILTIN_LIGHT_PALETTE, DEFAULT_DARK_TOKENS, DEFAULT_LIGHT_TOKENS, type DefaultTokens } from './defaults'
+import {
+  DEFAULT_DARK_GOOD_BAD,
+  DEFAULT_DARK_TOKENS,
+  DEFAULT_LIGHT_GOOD_BAD,
+  DEFAULT_LIGHT_TOKENS,
+  type DefaultTokens,
+} from './defaults'
 import { normaliseHex } from './contrast'
 import { deriveAccentWash, deriveBoards, deriveSeries, themeKey } from './derive'
 import {
@@ -97,45 +104,58 @@ function givenMedia(media: ThemeSource['media']): ThemeInput['media'] {
 }
 
 // The colours the app's default tokens carry (the --surface, --ink, ... a theme
-// preset would override), as a ThemeSource's colours. The tokens have no good
-// or bad: those come from the palette, as everywhere else.
+// preset would override), as a ThemeSource's colours.
 function coloursOfTokens(tokens: DefaultTokens): Pick<ThemeColours, 'surface' | 'ink' | 'muted' | 'line' | 'lineStrong' | 'accent' | 'accentWash'> {
+  const hex = (name: keyof DefaultTokens): Hex => normaliseHex(tokens[name]) ?? tokens[name]
   return {
-    surface: tokens['--surface'],
-    ink: tokens['--ink'],
-    muted: tokens['--muted'],
-    line: tokens['--line'],
-    lineStrong: tokens['--line-strong'],
-    accent: tokens['--accent'],
-    accentWash: tokens['--accent-wash'],
+    surface: hex('--surface'),
+    ink: hex('--ink'),
+    muted: hex('--muted'),
+    line: hex('--line'),
+    lineStrong: hex('--line-strong'),
+    accent: hex('--accent'),
+    accentWash: hex('--accent-wash'),
   }
+}
+
+// The default theme's colours for a mode, which fill whatever a source leaves
+// out: the app's default tokens, with good and bad from the built-in palette
+// (the tokens have none).
+function defaultColours(mode: Mode): Omit<ThemeColours, 'paper' | 'series'> {
+  const tokens = mode === 'dark' ? DEFAULT_DARK_TOKENS : DEFAULT_LIGHT_TOKENS
+  const goodBad = mode === 'dark' ? DEFAULT_DARK_GOOD_BAD : DEFAULT_LIGHT_GOOD_BAD
+  return { ...coloursOfTokens(tokens), good: goodBad.good, bad: goodBad.bad }
 }
 
 export function resolveTheme(source: ThemeSource = {}): ThemeInput {
   const mode: Mode = source.mode === 'dark' ? 'dark' : 'light'
-  const bare = coloursOfPalette(mode === 'dark' ? BUILTIN_DARK_PALETTE : BUILTIN_LIGHT_PALETTE)
+  const fallback = defaultColours(mode)
   const given = givenColours(source.colours)
 
-  const surface = given.surface ?? bare.surface
-  const accent = given.accent ?? bare.accent
+  const surface = given.surface ?? fallback.surface
+  const accent = given.accent ?? fallback.accent
+  const good = given.good ?? fallback.good
+  const bad = given.bad ?? fallback.bad
 
-  // The series derives from the accent and the surface; good and bad enter it
-  // only when the theme itself set them. An explicit series then wins slot by slot.
-  const derived = deriveSeries({ accent, surface, mode, good: given.good, bad: given.bad })
+  // The series derives from the accent and the surface, with good and bad in
+  // their nearest slots (fitted to 3:1 there; the theme's good and bad
+  // themselves stay as given). An explicit series then wins slot by slot.
+  const derived = deriveSeries({ accent, surface, mode, good, bad })
   const explicit = givenSeries(source.colours?.series)
   const series = derived.map((hex, n) => explicit[n] ?? hex)
 
   const colours: ThemeColours = {
     surface,
     paper: given.paper ?? surface,
-    ink: given.ink ?? bare.ink,
-    muted: given.muted ?? bare.muted,
-    line: given.line ?? bare.line,
-    lineStrong: given.lineStrong ?? bare.lineStrong,
+    ink: given.ink ?? fallback.ink,
+    muted: given.muted ?? fallback.muted,
+    line: given.line ?? fallback.line,
+    lineStrong: given.lineStrong ?? fallback.lineStrong,
     accent,
-    accentWash: given.accentWash ?? deriveAccentWash(accent, surface),
-    good: given.good ?? bare.good,
-    bad: given.bad ?? bare.bad,
+    // The default wash goes with the default accent; any other accent gets its own.
+    accentWash: given.accentWash ?? (accent === fallback.accent ? fallback.accentWash : deriveAccentWash(accent, surface)),
+    good,
+    bad,
     series,
   }
 
@@ -187,10 +207,11 @@ function deepFreeze<T>(value: T): T {
 
 const DEFAULT_THEMES: Partial<Record<Mode, ThemeInput>> = {}
 
-// The default Osmosis theme for a mode: the app's default light or dark tokens
-// (defaults.ts), with good and bad from the built-in palette. There is no "no
+// The default Osmosis theme for a mode: the app's default light or dark tokens,
+// with good and bad from the built-in palette (defaults.ts). There is no "no
 // theme": a caller that has none (a node test, a contact sheet, an old caller)
-// gets this. It is a constant, so what it draws is deterministic.
+// gets this, and so does a source that says nothing (`resolveTheme({ mode })`
+// is this, field for field). It is a constant, so what it draws is deterministic.
 //
 // Built once per mode and shared, so it is frozen: a caller that wants a
 // variation resolves its own theme (resolveTheme / fromColours).
@@ -198,9 +219,7 @@ export function defaultTheme(mode: Mode): ThemeInput {
   const which: Mode = mode === 'dark' ? 'dark' : 'light'
   const cached = DEFAULT_THEMES[which]
   if (cached !== undefined) return cached
-  const palette = coloursOfPalette(which === 'dark' ? BUILTIN_DARK_PALETTE : BUILTIN_LIGHT_PALETTE)
-  const tokens = coloursOfTokens(which === 'dark' ? DEFAULT_DARK_TOKENS : DEFAULT_LIGHT_TOKENS)
-  const theme = deepFreeze(resolveTheme({ mode: which, colours: { ...tokens, good: palette.good, bad: palette.bad } }))
+  const theme = deepFreeze(resolveTheme({ mode: which }))
   DEFAULT_THEMES[which] = theme
   return theme
 }

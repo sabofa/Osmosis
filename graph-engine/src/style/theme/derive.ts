@@ -7,7 +7,7 @@
 
 import { fromOklch, toOklch } from '../color'
 import { hashString } from '../random'
-import { fitLightness } from './contrast'
+import { MIN_SERIES_CONTRAST, contrastRatio, fitLightness } from './contrast'
 import { BOARD_NAMES, SERIES_COUNT, type BoardName, type Hex, type ThemeInput } from './types'
 
 // The golden angle, in degrees: hue steps that never repeat and spread evenly.
@@ -53,9 +53,11 @@ export interface SeriesInput {
   accent: Hex
   surface: Hex
   mode: 'light' | 'dark'
-  // The theme's own good and bad, when it sets them. Each takes the slot whose
-  // hue is nearest (bad the next nearest when good has it). They replace the
-  // slot as given: the theme chose them, so they are not contrast-fitted.
+  // The theme's good and bad. Each takes the slot whose hue is nearest (bad the
+  // next nearest when good has it). A colour that already keeps 3:1 with the
+  // surface takes the slot as given; one that does not has its lightness fitted
+  // like every other slot (hue and chroma kept). The theme's own good and bad
+  // stay as they are in its colours: only the series slot is fitted.
   good?: Hex
   bad?: Hex
 }
@@ -84,7 +86,7 @@ export function deriveSeries(input: SeriesInput): Hex[] {
         nearest = distance
       }
     })
-    series[slot] = given
+    series[slot] = contrastRatio(given, input.surface) >= MIN_SERIES_CONTRAST ? given : fitLightness(toOklch(given), input.surface)
     taken.add(slot)
   }
   return series

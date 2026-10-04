@@ -69,6 +69,7 @@ export function fitLightness(colour: Oklch, surface: Hex, options: FitOptions = 
   const away = start >= toOklch(surface).l ? 1 : -1
   let best = fromOklch({ ...colour, l: start })
   let bestRatio = -Infinity
+  // Both directions: a start just above a light-mid surface can only reach the target by going darker.
   for (const direction of [away, -away]) {
     // Steps to the edge of the lightness range, the last one landing on it.
     const room = direction > 0 ? 1 - start : start
