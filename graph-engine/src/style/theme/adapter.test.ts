@@ -57,6 +57,8 @@ function expectComplete(theme: ThemeInput) {
   for (const name of COLOUR_KEYS) expect(theme.colours[name], name).toMatch(HEX)
   expect(theme.colours.series).toHaveLength(SERIES_COUNT)
   for (const hex of theme.colours.series) expect(hex).toMatch(HEX)
+  for (const name of COLOUR_KEYS) expect(theme.boardColours[name], `boardColours.${name}`).toMatch(HEX)
+  expect(theme.boardColours.series).toHaveLength(SERIES_COUNT)
   for (const name of BOARD_NAMES) expect(theme.boards[name], name).toMatch(HEX)
   expect(theme.media).toBeTypeOf('object')
   expect(theme.lettering).toHaveProperty('family')

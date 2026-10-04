@@ -78,6 +78,11 @@ export type MediumColours = Partial<Record<RoleKey, Hex>>
 export interface ThemeSource {
   mode?: 'light' | 'dark'
   colours?: Partial<ThemeColours>
+  // The theme's light-mode colours, which a host passes when it knows them (the app's theme
+  // presets store both modes). Board media (chalk, whiteboard) fit from the light set in
+  // either mode, so a board looks the same in light and in dark. In light mode, and when a
+  // theme has none, it is not needed (see `boardColours` below).
+  lightColours?: Partial<ThemeColours>
   boards?: Partial<Record<BoardName, Hex>>
   media?: Partial<Record<MediumName, MediumColours>>
   // The theme's style settings (all graphs, and per graph type). Task 4 types
@@ -89,6 +94,14 @@ export interface ThemeSource {
 export interface ThemeInput {
   mode: 'light' | 'dark'
   colours: ThemeColours
+  // The colour set board media (chalk, whiteboard) fit every role from, and the boards derive
+  // from: always the theme's LIGHT mode, so a board and what is drawn on it do not change with
+  // the mode. In light mode it is `colours`. In dark mode it is, in this order: the source's
+  // `lightColours`; else the default theme's light colours, when `colours` is the default
+  // theme's (its tokens); else the light tokens of a built-in theme (`fromOsmosisTheme`, by
+  // preset id); else `colours` itself (a custom theme with no light colours given: interim,
+  // until the theming overhaul supplies both modes).
+  boardColours: ThemeColours
   boards: Record<BoardName, Hex>
   media: Partial<Record<MediumName, MediumColours>>
   // Passed through untouched (undefined when the theme has none); Task 4 narrows it.

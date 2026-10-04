@@ -14,12 +14,19 @@
 // theme leaves out comes from the default theme for the mode (defaults.ts), or
 // is derived from the colours it did give (derive.ts). There is no "no theme":
 // resolveTheme({ mode }) IS defaultTheme(mode).
+//
+// Board media (chalk, whiteboard) must look the same in light and in dark, coloured
+// roles included, so a theme also carries `boardColours`: its colours in LIGHT mode,
+// which the boards derive from and the board media fit every role from. See
+// `resolveBoardColours` for where they come from in dark mode.
 
 import {
+  BUILTIN_LIGHT,
   DEFAULT_DARK_GOOD_BAD,
   DEFAULT_DARK_TOKENS,
   DEFAULT_LIGHT_GOOD_BAD,
   DEFAULT_LIGHT_TOKENS,
+  type BuiltinThemeId,
   type DefaultTokens,
 } from './defaults'
 import { normaliseHex } from './contrast'
@@ -127,10 +134,11 @@ function defaultColours(mode: Mode): Omit<ThemeColours, 'paper' | 'series'> {
   return { ...coloursOfTokens(tokens), good: goodBad.good, bad: goodBad.bad }
 }
 
-export function resolveTheme(source: ThemeSource = {}): ThemeInput {
-  const mode: Mode = source.mode === 'dark' ? 'dark' : 'light'
+// The colours of one mode, resolved: whatever `source` gives, the rest from the default theme
+// for the mode or derived from what was given.
+function resolveColours(source: Partial<ThemeColours> | undefined, mode: Mode): ThemeColours {
   const fallback = defaultColours(mode)
-  const given = givenColours(source.colours)
+  const given = givenColours(source)
 
   const surface = given.surface ?? fallback.surface
   const accent = given.accent ?? fallback.accent
@@ -141,10 +149,10 @@ export function resolveTheme(source: ThemeSource = {}): ThemeInput {
   // their nearest slots (fitted to 3:1 there; the theme's good and bad
   // themselves stay as given). An explicit series then wins slot by slot.
   const derived = deriveSeries({ accent, surface, mode, good, bad })
-  const explicit = givenSeries(source.colours?.series)
+  const explicit = givenSeries(source?.series)
   const series = derived.map((hex, n) => explicit[n] ?? hex)
 
-  const colours: ThemeColours = {
+  return {
     surface,
     paper: given.paper ?? surface,
     ink: given.ink ?? fallback.ink,
@@ -160,9 +168,60 @@ export function resolveTheme(source: ThemeSource = {}): ThemeInput {
     bad,
     series,
   }
+}
 
-  // Boards depend on the accent alone; an explicit board wins, board by board.
-  const derivedBoards = deriveBoards(accent)
+const copyColours = (colours: ThemeColours): ThemeColours => ({ ...colours, series: [...colours.series] })
+
+// A colour set says something when it names at least one colour (an empty one is "none given").
+function saysSomething(colours: Partial<ThemeColours> | undefined | null): colours is Partial<ThemeColours> {
+  if (colours === undefined || colours === null || typeof colours !== 'object') return false
+  return Object.keys(givenColours(colours)).length > 0 || givenSeries(colours.series).length > 0
+}
+
+// Whether `colours` are the default theme's in dark mode: each colour the app's default dark
+// tokens carry (surface, ink, muted, line, lineStrong, accent, accentWash) is the token itself.
+// good, bad and the series are not compared: the host reads good and bad from CSS.
+function isDefaultDark(colours: ThemeColours): boolean {
+  const tokens = coloursOfTokens(DEFAULT_DARK_TOKENS)
+  return (Object.keys(tokens) as (keyof typeof tokens)[]).every((name) => colours[name] === tokens[name])
+}
+
+// The light mode of a built-in theme, as a colour set: its light tokens and its good and bad.
+// The accent wash is left out, so it is derived exactly as `fromOsmosisTheme` derives it for the
+// theme's light mode (a Palette carries no wash): the set is then the very one the theme resolves
+// to in light mode.
+function builtinLightColours(presetId: string): Partial<ThemeColours> | undefined {
+  if (!Object.prototype.hasOwnProperty.call(BUILTIN_LIGHT, presetId)) return undefined
+  const { tokens, good, bad } = BUILTIN_LIGHT[presetId as BuiltinThemeId]
+  const { accentWash: _wash, ...rest } = coloursOfTokens(tokens)
+  return { ...rest, good: normaliseHex(good) ?? good, bad: normaliseHex(bad) ?? bad }
+}
+
+// The colours board media fit from: the theme's light mode, in either mode.
+//   light mode  the theme's own colours.
+//   dark mode   1. the source's `lightColours`, resolved as a light theme (what they leave out
+//                  comes from the default light theme, or is derived);
+//               2. else, if the theme is the default theme (its colours are the default dark
+//                  tokens), the default theme's light colours;
+//               3. else `colours` itself: a custom theme with no light colours given. That is
+//                  INTERIM, until the theming overhaul supplies both modes: such a theme's boards
+//                  and board media follow its dark colours.
+// (`fromOsmosisTheme` turns a built-in theme's preset id into `lightColours`, which is 1.)
+function resolveBoardColours(source: ThemeSource, mode: Mode, colours: ThemeColours): ThemeColours {
+  if (mode === 'light') return copyColours(colours)
+  if (saysSomething(source.lightColours)) return resolveColours(source.lightColours, 'light')
+  if (isDefaultDark(colours)) return resolveColours(undefined, 'light')
+  return copyColours(colours)
+}
+
+export function resolveTheme(source: ThemeSource = {}): ThemeInput {
+  const mode: Mode = source.mode === 'dark' ? 'dark' : 'light'
+  const colours = resolveColours(source.colours, mode)
+  const boardColours = resolveBoardColours(source, mode, colours)
+
+  // Boards depend on the board colours' accent alone (the light mode's: they do not change with
+  // the mode); an explicit board wins, board by board.
+  const derivedBoards = deriveBoards(boardColours.accent)
   const boards = {} as Record<BoardName, Hex>
   for (const name of BOARD_NAMES) boards[name] = normaliseHex(source.boards?.[name]) ?? derivedBoards[name]
 
@@ -170,6 +229,7 @@ export function resolveTheme(source: ThemeSource = {}): ThemeInput {
   const resolved: Omit<ThemeInput, 'key'> = {
     mode,
     colours,
+    boardColours,
     boards,
     media: givenMedia(source.media),
     // The styles are copied and frozen, so changing the source afterwards cannot change the
@@ -188,6 +248,8 @@ export function fromColours(source: ThemeSource): ThemeInput {
 // Today's bare system: the app's eight colours for the mode, as the host
 // resolves them into a Palette, plus the built-in style set of a theme preset.
 // good and bad are passed on as the theme's own, so they sit in the series.
+// A built-in preset (builtin:slate, forest, ember, plum) also brings its light
+// colours (`lightColours`); the default theme needs none (see resolveBoardColours).
 export function fromOsmosisTheme(
   palette: PaletteLike,
   mode: Mode,
@@ -197,6 +259,8 @@ export function fromOsmosisTheme(
   return resolveTheme({
     mode,
     colours: coloursOfPalette(palette),
+    // A built-in theme's light mode is known, so its boards and board media do not change with the mode.
+    lightColours: preset ? builtinLightColours(preset.id) : undefined,
     styles: preset ? stylesFor(preset.id) : undefined,
   })
 }

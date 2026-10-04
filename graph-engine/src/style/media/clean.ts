@@ -12,7 +12,7 @@ export const clean: Medium = {
   name: 'clean',
   surface: 'paper',
   settings: [],
-  colour: (theme, role) => ({ hex: baseColour(theme, 'clean', role, pageNeutrals(theme)), opacity: 1 }),
+  colour: (theme, role) => ({ hex: baseColour(theme, 'clean', role, pageNeutrals(theme), theme.colours), opacity: 1 }),
   surfaceColour: (theme) => theme.colours.paper,
   overlap: 'normal',
   grain: noGrain,

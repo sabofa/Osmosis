@@ -7,12 +7,14 @@
 // 4.5:1 with the board. Strokes lighten (overlaps brighten, never darken). The
 // chalk skips on the tooth and speckles.
 //
-// A board looks the same in light and in dark (Ben): nothing here reads
-// `theme.mode`, and the roles that come from the page's ink and muted (which flip
-// with the mode) take the board's own neutrals instead: the whitest chalk for
-// lines, labels and the rest of the structure, a step dimmer for auxiliary lines.
-// To use the page's own ink and muted instead, replace `NEUTRALS` with
-// `pageNeutrals(theme)` in `colour`.
+// A board looks the same in light and in dark (Ben), and so does what is drawn on
+// it, coloured chalk included: nothing here reads `theme.mode` or `theme.colours`.
+// Every role is fitted from `theme.boardColours`, the theme's light-mode colours
+// (the adapter fills them in both modes). The roles that come from ink and muted
+// (dark on a light page) take the board's own neutrals instead: the whitest chalk
+// for lines, labels and the rest of the structure, a step dimmer for auxiliary
+// lines. To use the light mode's own ink and muted instead, replace `NEUTRALS` with
+// `{ ink: theme.boardColours.ink, muted: theme.boardColours.muted }` in `colour`.
 //
 // The board is the blackboard. The greenboard is another surface for the same chalk
 // (a later task picks it); the chalk keeps 4.5:1 against it too, since it is
@@ -37,7 +39,7 @@ export const chalk: Medium = {
   surface: 'blackboard',
   settings: SETTINGS,
   colour(theme, role, settings) {
-    const base = toOklch(baseColour(theme, 'chalk', role, NEUTRALS))
+    const base = toOklch(baseColour(theme, 'chalk', role, NEUTRALS, theme.boardColours))
     const chroma = settingOf(SETTINGS, settings, 'chroma')
     return { hex: fitWithin({ ...base, c: base.c * chroma }, theme.boards.blackboard, 4.5, DIMMEST, LIGHTEST), opacity: 0.9 }
   },

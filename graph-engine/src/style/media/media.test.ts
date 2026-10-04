@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { fromOklch, toOklch } from '../color'
 import { randomFor, type Random } from '../random'
-import { defaultTheme, resolveTheme } from '../theme/adapter'
+import { defaultTheme, fromOsmosisTheme, resolveTheme } from '../theme/adapter'
 import { contrastRatio } from '../theme/contrast'
+import { DEFAULT_DARK_GOOD_BAD, DEFAULT_DARK_TOKENS, DEFAULT_LIGHT_GOOD_BAD, DEFAULT_LIGHT_TOKENS } from '../theme/defaults'
 import { MEDIUM_NAMES, ROLE_KEYS, SERIES_COUNT, type Hex, type MediumName, type ThemeInput, type ThemeSource } from '../theme/types'
 import { MEDIA, defaultMediumSettings, mediumOf } from './index'
 import type { Role } from './types'
@@ -65,12 +66,14 @@ function aimedChroma(name: MediumName, baseC: number): number {
 // for the roles that default to ink or muted (the page's ink flips with the mode), which is
 // a base with no chroma: reported as c = 0 here.
 function baseChroma(theme: ThemeInput, name: MediumName, role: Role): number {
-  const given = role.colour ?? theme.media[name]?.[role.key] ?? (role.slot !== undefined ? theme.colours.series[role.slot % SERIES_COUNT] : undefined)
+  // A board medium reads the theme's light-mode colours, a paper medium its own.
+  const colours = BOARD_MEDIA.includes(name) ? theme.boardColours : theme.colours
+  const given = role.colour ?? theme.media[name]?.[role.key] ?? (role.slot !== undefined ? colours.series[role.slot % SERIES_COUNT] : undefined)
   if (given !== undefined) return toOklch(given).c
   if (['line', 'hidden', 'label', 'measure', 'caption', 'givens', 'auxiliary'].includes(role.key)) {
-    return BOARD_MEDIA.includes(name) ? 0 : toOklch(role.key === 'auxiliary' ? theme.colours.muted : theme.colours.ink).c
+    return BOARD_MEDIA.includes(name) ? 0 : toOklch(role.key === 'auxiliary' ? colours.muted : colours.ink).c
   }
-  return toOklch(role.key === 'point' ? theme.colours.bad : theme.colours.accent).c
+  return toOklch(role.key === 'point' ? colours.bad : colours.accent).c
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +530,107 @@ describe('board media look the same in light and dark', () => {
   })
 })
 
+// A palette of the eight colours a host reads for a theme, as `fromOsmosisTheme` takes them.
+const numOf = (hex: Hex) => parseInt(hex.slice(1), 16)
+function paletteOf(surface: Hex, accent: Hex, ink: Hex, muted: Hex, line: Hex, lineStrong: Hex, good: Hex, bad: Hex) {
+  return { background: numOf(surface), curve: numOf(accent), segment: numOf(good), point: numOf(bad), axis: numOf(ink), grid: numOf(line), gridStrong: numOf(lineStrong), muted: numOf(muted) }
+}
+
+// The four built-in themes, in the order surface, accent, ink, muted, line, lineStrong, with the --good and
+// --bad their custom CSS sets (web/src/lib/builtinThemes.ts; the same table as the adapter's tests).
+const BUILTINS: Record<string, { good: Hex; bad: Hex; light: Hex[]; dark: Hex[] }> = {
+  slate: { good: '#3f7d5a', bad: '#b0473f', light: ['#ffffff', '#3b6ea8', '#161a21', '#5f6672', '#dfe3e9', '#c3c9d3'], dark: ['#1a1e24', '#7fa8dc', '#e7ebf1', '#98a1ad', '#2a3038', '#3c444f'] },
+  forest: { good: '#2f7a4f', bad: '#a6553c', light: ['#fbfcf8', '#2f7a4f', '#141a13', '#5d6b5c', '#d8e0d2', '#b8c6b0'], dark: ['#161f18', '#6fbf8a', '#e6efe6', '#92a394', '#25332a', '#36473c'] },
+  ember: { good: '#6e7f3c', bad: '#b3411f', light: ['#fffaf3', '#b3411f', '#1c1410', '#75655a', '#e6d9c8', '#cdb9a2'], dark: ['#16110d', '#ff8a3d', '#f6ece0', '#a89583', '#2b2119', '#443426'] },
+  plum: { good: '#4c7a6a', bad: '#a8404f', light: ['#ffffff', '#7a3e8f', '#1a1420', '#6a6072', '#e2dbe8', '#c8bcd2'], dark: ['#1b161f', '#c48ad6', '#efe8f3', '#a396ac', '#2e2535', '#443749'] },
+}
+const DEFAULT_TOKEN_PALETTE = (mode: 'light' | 'dark') => {
+  const tokens = mode === 'dark' ? DEFAULT_DARK_TOKENS : DEFAULT_LIGHT_TOKENS
+  const goodBad = mode === 'dark' ? DEFAULT_DARK_GOOD_BAD : DEFAULT_LIGHT_GOOD_BAD
+  return paletteOf(tokens['--surface'], tokens['--accent'], tokens['--ink'], tokens['--muted'], tokens['--line'], tokens['--line-strong'], goodBad.good, goodBad.bad)
+}
+
+// What a board medium draws, for every role, as one comparable thing.
+function boardOutput(theme: ThemeInput, name: MediumName) {
+  const settings = defaultMediumSettings(name)
+  return { surface: MEDIA[name].surfaceColour(theme), roles: ROLES.map((role) => MEDIA[name].colour(theme, role, settings)) }
+}
+
+describe("board media draw the same in light and in dark, from the theme's light colours", () => {
+  it('the default theme: chalk and whiteboard, every role, are byte-equal in light and dark', () => {
+    for (const name of BOARD_MEDIA) {
+      const light = boardOutput(defaultTheme('light'), name)
+      expect(boardOutput(defaultTheme('dark'), name), name).toEqual(light)
+      // Through the host's door, with the default tokens as a Palette: the same.
+      expect(boardOutput(fromOsmosisTheme(DEFAULT_TOKEN_PALETTE('dark'), 'dark'), name), `${name} fromOsmosisTheme dark`).toEqual(boardOutput(fromOsmosisTheme(DEFAULT_TOKEN_PALETTE('light'), 'light'), name))
+      expect(boardOutput(fromOsmosisTheme(DEFAULT_TOKEN_PALETTE('dark'), 'dark'), name), `${name} fromOsmosisTheme`).toEqual(light)
+    }
+    // The coloured roles in particular, which the page's own colours (accent, bad, series) used to move.
+    for (const role of ROLES.filter((r) => r.slot !== undefined || r.key === 'point' || r.key === 'highlight')) {
+      for (const name of BOARD_MEDIA) {
+        expect(MEDIA[name].colour(defaultTheme('dark'), role, {}), `${name} ${JSON.stringify(role)}`).toEqual(MEDIA[name].colour(defaultTheme('light'), role, {}))
+      }
+    }
+  })
+
+  it('each built-in theme, through fromOsmosisTheme with its preset id: byte-equal in light and dark', () => {
+    for (const [name, theme] of Object.entries(BUILTINS)) {
+      const preset = { id: 'builtin:' + name }
+      const light = fromOsmosisTheme(paletteOf(theme.light[0], theme.light[1], theme.light[2], theme.light[3], theme.light[4], theme.light[5], theme.good, theme.bad), 'light', preset)
+      const dark = fromOsmosisTheme(paletteOf(theme.dark[0], theme.dark[1], theme.dark[2], theme.dark[3], theme.dark[4], theme.dark[5], theme.good, theme.bad), 'dark', preset)
+      for (const medium of BOARD_MEDIA) expect(boardOutput(dark, medium), `${name} ${medium}`).toEqual(boardOutput(light, medium))
+      // The paper media do change with the mode: the page is dark, the paper is its own.
+      expect(MEDIA.ink.surfaceColour(dark)).not.toBe(MEDIA.ink.surfaceColour(light))
+    }
+  })
+
+  it('a custom theme with lightColours given: byte-equal in light and dark (20 random themes)', () => {
+    for (let n = 0; n < SOURCES.length; n++) {
+      const dark = resolveTheme({ mode: 'dark', colours: SOURCES[n].colours, lightColours: randomSource(100 + n).colours })
+      const light = resolveTheme({ mode: 'light', colours: randomSource(100 + n).colours })
+      for (const name of BOARD_MEDIA) expect(boardOutput(dark, name), `${name} ${n}`).toEqual(boardOutput(light, name))
+    }
+  })
+
+  it('a custom theme without lightColours falls back to its own colours (interim: until the theming overhaul supplies both modes)', () => {
+    const colours = SOURCES[1].colours
+    const dark = resolveTheme({ mode: 'dark', colours })
+    // Fitted from its own colours...
+    for (const name of BOARD_MEDIA) expect(boardOutput(dark, name), name).toEqual(boardOutput(resolveTheme({ mode: 'light', colours }), name))
+    // ...so it does follow them: a theme whose light colours differ draws differently.
+    const other = resolveTheme({ mode: 'light', colours: randomSource(101).colours })
+    expect(MEDIA.chalk.colour(dark, { key: 'highlight' }, {})).not.toEqual(MEDIA.chalk.colour(other, { key: 'highlight' }, {}))
+  })
+
+  it('fit every role from boardColours, never colours; the paper media from colours, never boardColours', () => {
+    const A = SOURCES[1].colours
+    const B = randomSource(101).colours
+    const C = randomSource(102).colours
+    const base = resolveTheme({ mode: 'dark', colours: A, lightColours: B })
+    const darkChanged = resolveTheme({ mode: 'dark', colours: C, lightColours: B })
+    const lightChanged = resolveTheme({ mode: 'dark', colours: A, lightColours: C })
+    for (const name of BOARD_MEDIA) {
+      expect(boardOutput(darkChanged, name), `${name}: the dark colours do not matter`).toEqual(boardOutput(base, name))
+      expect(boardOutput(lightChanged, name), `${name}: the light colours do`).not.toEqual(boardOutput(base, name))
+    }
+    const paperOutput = (theme: ThemeInput, name: MediumName) => ROLES.map((role) => MEDIA[name].colour(theme, role, defaultMediumSettings(name)))
+    for (const name of PAPER_MEDIA) {
+      expect(paperOutput(lightChanged, name), `${name}: the light colours do not matter`).toEqual(paperOutput(base, name))
+      expect(paperOutput(darkChanged, name), `${name}: the dark colours do`).not.toEqual(paperOutput(base, name))
+    }
+  })
+
+  it('a theme-media override and an own colour still win over the board colours', () => {
+    const lightColours = randomSource(102).colours
+    const theme = resolveTheme({ mode: 'dark', colours: SOURCES[2].colours, lightColours, media: { chalk: { line: '#00ff00' } } })
+    const light = resolveTheme({ mode: 'light', colours: lightColours })
+    const settings = defaultMediumSettings('chalk')
+    expect(MEDIA.chalk.colour(theme, { key: 'line' }, settings)).toEqual(MEDIA.chalk.colour(theme, { key: 'label', colour: '#00ff00' }, settings))
+    expect(MEDIA.chalk.colour(theme, { key: 'line', colour: '#ff0000' }, settings)).toEqual(MEDIA.chalk.colour(light, { key: 'line', colour: '#ff0000' }, settings))
+    expect(MEDIA.chalk.colour(theme, { key: 'line', colour: '#ff0000' }, settings)).not.toEqual(MEDIA.chalk.colour(theme, { key: 'line' }, settings))
+  })
+})
+
 describe("an author's own colour goes through the medium", () => {
   const light = defaultTheme('light')
 
@@ -642,7 +746,8 @@ const PIN: Record<'light' | 'dark', Record<MediumName, string[]>> = {
     graphite: ['#f2efe2', '#a09d8f', '#948482', '#a89a92', '#b9aba3'],
     colouredPencil: ['#e1ded4', '#918e80', '#ac6357', '#c57848', '#d78958'],
     marker: ['#928f83', '#938f7f', '#c76a5c', '#d2722f', '#d2722f'],
-    chalk: ['#eeeeee', '#bebebe', '#e9ada2', '#ebae8a', '#ebae8a'],
-    whiteboard: ['#3a3a3a', '#6e6e6e', '#ad5346', '#b05400', '#b05400'],
+    // The board media are the light default's: a board and what is drawn on it do not change with the mode.
+    chalk: ['#eeeeee', '#bebebe', '#e8ada3', '#efac8c', '#efac8d'],
+    whiteboard: ['#3a3a3a', '#6e6e6e', '#a34b3f', '#b54e0a', '#b54e0a'],
   },
 }

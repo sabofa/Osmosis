@@ -8,11 +8,13 @@
 //   3. fit the lightness to the medium's contrast floor against its surface.
 // The media differ only in the numbers of steps 2 and 3, which sit in their own
 // files. Nothing here reads `theme.mode`: a medium's colours follow the theme's
-// colours, never the app's light or dark switch.
+// colours, never the app's light or dark switch. A paper medium fits from
+// `theme.colours`; a board medium from `theme.boardColours`, which are the theme's
+// light-mode colours in either mode.
 
 import { fromOklch, toOklch, type Oklch } from '../color'
 import { contrastRatio, fitLightness, normaliseHex } from '../theme/contrast'
-import type { Hex, MediumName, RoleKey, ThemeInput } from '../theme/types'
+import type { Hex, MediumName, RoleKey, ThemeColours, ThemeInput } from '../theme/types'
 import type { GrainSpec, MediumSettings, MediumSettingSpec, Role } from './types'
 
 export const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value))
@@ -78,12 +80,14 @@ export function pageNeutrals(theme: ThemeInput): Neutrals {
 //   4. else the role's own source: line, hidden, label, measure, caption and givens
 //      take the ink; auxiliary takes muted; point takes bad; highlight, focus,
 //      fill, region and shading take the accent.
-export function baseColour(theme: ThemeInput, medium: MediumName, role: Role, neutrals: Neutrals): Hex {
+// `colours` is the colour set the series, bad and accent are read from: the theme's own
+// (`theme.colours`) for a paper medium, its light-mode `theme.boardColours` for a board medium.
+export function baseColour(theme: ThemeInput, medium: MediumName, role: Role, neutrals: Neutrals, colours: ThemeColours): Hex {
   const own = normaliseHex(role.colour)
   if (own !== null) return own
   const override = normaliseHex(theme.media[medium]?.[role.key])
   if (override !== null) return override
-  const series = theme.colours.series
+  const series = colours.series
   if (role.slot !== undefined && Number.isFinite(role.slot) && series.length > 0) {
     const index = ((Math.floor(role.slot) % series.length) + series.length) % series.length
     const slot = normaliseHex(series[index])
@@ -93,9 +97,9 @@ export function baseColour(theme: ThemeInput, medium: MediumName, role: Role, ne
     case 'muted':
       return neutrals.muted
     case 'bad':
-      return theme.colours.bad
+      return colours.bad
     case 'accent':
-      return theme.colours.accent
+      return colours.accent
     default:
       return neutrals.ink
   }

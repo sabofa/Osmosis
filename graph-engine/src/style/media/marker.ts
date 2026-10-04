@@ -21,7 +21,7 @@ export const marker: Medium = {
   surface: 'paper',
   settings: SETTINGS,
   colour(theme, role) {
-    const base = toOklch(baseColour(theme, 'marker', role, pageNeutrals(theme)))
+    const base = toOklch(baseColour(theme, 'marker', role, pageNeutrals(theme), theme.colours))
     return { hex: fitWithin({ ...base, c: liftChroma(base.c, 0.12) }, theme.colours.paper, 3, 0.45, 0.65), opacity: 0.9 }
   },
   surfaceColour: (theme) => theme.colours.paper,

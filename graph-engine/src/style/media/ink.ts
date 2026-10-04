@@ -25,7 +25,7 @@ export const ink: Medium = {
   surface: 'paper',
   settings: SETTINGS,
   colour(theme, role, settings) {
-    const base = toOklch(baseColour(theme, 'ink', role, pageNeutrals(theme)))
+    const base = toOklch(baseColour(theme, 'ink', role, pageNeutrals(theme), theme.colours))
     const chroma = settingOf(SETTINGS, settings, 'chroma')
     const contrast = settingOf(SETTINGS, settings, 'contrast')
     return { hex: fitLightness({ ...base, c: base.c * chroma }, theme.colours.paper, { target: contrast }), opacity: 1 }

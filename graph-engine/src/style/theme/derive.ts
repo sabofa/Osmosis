@@ -171,6 +171,6 @@ export function canonicalJson(value: unknown): string {
 // The theme's identity: 32-bit FNV-1a (the engine's own hashString) over the
 // canonical JSON of every resolved field, the mode and the styles included.
 export function themeKey(theme: Omit<ThemeInput, 'key'>): string {
-  const { mode, colours, boards, media, styles, lettering } = theme
-  return hashString(canonicalJson({ mode, colours, boards, media, styles, lettering })).toString(16).padStart(8, '0')
+  const { mode, colours, boardColours, boards, media, styles, lettering } = theme
+  return hashString(canonicalJson({ mode, colours, boardColours, boards, media, styles, lettering })).toString(16).padStart(8, '0')
 }

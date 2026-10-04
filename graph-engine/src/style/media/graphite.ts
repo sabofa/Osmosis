@@ -20,7 +20,7 @@ export const graphite: Medium = {
   surface: 'paper',
   settings: SETTINGS,
   colour(theme, role, settings) {
-    const base = toOklch(baseColour(theme, 'graphite', role, pageNeutrals(theme)))
+    const base = toOklch(baseColour(theme, 'graphite', role, pageNeutrals(theme), theme.colours))
     const hint = settingOf(SETTINGS, settings, 'hint')
     return { hex: fitLightness({ ...base, c: Math.min(base.c, hint) }, theme.colours.paper, { target: 4.5 }), opacity: 0.85 }
   },

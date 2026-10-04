@@ -7,11 +7,13 @@
 // Strokes multiply, lighter than a marker's. The ink streaks, and runs dry:
 // `dry` (0.3) is its `skips`, the board showing through where the marker has run out.
 //
-// A board looks the same in light and in dark (Ben): nothing here reads
-// `theme.mode`, and the roles that come from the page's ink and muted (which flip
-// with the mode) take the board's own neutrals instead: a black marker for the
-// structure, a grey one for auxiliary lines. To use the page's own ink and muted
-// instead, replace `NEUTRALS` with `pageNeutrals(theme)` in `colour`.
+// A board looks the same in light and in dark (Ben), and so does what is drawn on
+// it: nothing here reads `theme.mode` or `theme.colours`. Every role is fitted from
+// `theme.boardColours`, the theme's light-mode colours (the adapter fills them in
+// both modes). The roles that come from ink and muted take the board's own neutrals
+// instead: a black marker for the structure, a grey one for auxiliary lines. To use
+// the light mode's own ink and muted instead, replace `NEUTRALS` with
+// `{ ink: theme.boardColours.ink, muted: theme.boardColours.muted }` in `colour`.
 
 import { fromOklch, toOklch } from '../color'
 import { baseColour, fitWithin, liftChroma, settingOf } from './fit'
@@ -32,7 +34,7 @@ export const whiteboard: Medium = {
   surface: 'whiteboard',
   settings: SETTINGS,
   colour(theme, role) {
-    const base = toOklch(baseColour(theme, 'whiteboard', role, NEUTRALS))
+    const base = toOklch(baseColour(theme, 'whiteboard', role, NEUTRALS, theme.boardColours))
     return { hex: fitWithin({ ...base, c: liftChroma(base.c, 0.1) }, theme.boards.whiteboard, 4.5, DARKEST, LIGHTEST), opacity: 0.95 }
   },
   surfaceColour: (theme) => theme.boards.whiteboard,

@@ -22,7 +22,7 @@ export const colouredPencil: Medium = {
   surface: 'paper',
   settings: SETTINGS,
   colour(theme, role, settings) {
-    const base = toOklch(baseColour(theme, 'colouredPencil', role, pageNeutrals(theme)))
+    const base = toOklch(baseColour(theme, 'colouredPencil', role, pageNeutrals(theme), theme.colours))
     const chroma = settingOf(SETTINGS, settings, 'chroma')
     const gap = toOklch(theme.colours.paper).l - base.l
     const l = base.l + Math.sign(gap) * Math.min(HELD, Math.abs(gap))
