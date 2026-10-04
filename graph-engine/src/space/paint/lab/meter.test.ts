@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FpsMeter } from '../../../../../review/src/paintLabMeter'
+import { FpsMeter, pathLabel } from '../../../../../review/src/paintLabMeter'
 
 // The readout counts frames only while the view is actually being redrawn: an
 // idle lab (nothing changing) neither shows a stale rate nor a made-up one.
@@ -37,5 +37,23 @@ describe('FpsMeter', () => {
     expect(fps).toBeCloseTo(20, 9)
     for (let i = 0; i < 100; i++) fps = meter.tick(5000 + i * 25, 5) // then 40 fps
     expect(fps).toBeCloseTo(40, 9)
+  })
+})
+
+// The readout's name for the painter: what the status line says, with the Bake switch off said plainly.
+describe('pathLabel', () => {
+  it('says "live (bake off)" for a live frame while the Bake switch is off, whatever else is true', () => {
+    expect(pathLabel('live', false, null)).toBe('live (bake off)')
+    expect(pathLabel('live', false, 'this graphics context cannot render to float targets')).toBe('live (bake off)')
+  })
+
+  it('says "live (no bake here)" when the switch is on and the bake is ruled out, and plain "live" when it is on and nothing rules it out', () => {
+    expect(pathLabel('live', true, 'the bake failed: boom')).toBe('live (no bake here)')
+    expect(pathLabel('live', true, null)).toBe('live')
+  })
+
+  it('says "baked" for a baked frame (the frame that was drawn is what the line names, until the live one replaces it)', () => {
+    expect(pathLabel('baked', true, null)).toBe('baked')
+    expect(pathLabel('baked', false, null)).toBe('baked')
   })
 })

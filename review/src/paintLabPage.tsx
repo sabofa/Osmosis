@@ -8,9 +8,10 @@ import type { CurvePoints } from '../../graph-engine/src/space/paint/curves'
 import type { PaintDebugMode } from '../../graph-engine/src/space/paint/types'
 import { prepareFigure } from './paintLabCamera'
 import { hexToOklab, makeSceneColours, oklabToHex, paramsForSave, subjectColour, switchTheme, themeBaseTone, type Theme, type Tones } from './paintLabColours'
-import { CurveChart, GroupView } from './paintLabControls'
+import { CurveChart, GroupView, SwitchRow } from './paintLabControls'
 import { labToLch } from './paintLabCurve'
 import { figureById, PAINT_FIGURES } from './paintLabFigures'
+import { pathLabel } from './paintLabMeter'
 import { applySlider, changedCurves, changedPaths, getCurve, paramsFromData, parseParams, sameParams, serialiseParams, setCurve } from './paintLabParams'
 import { deletePreset, readPresets, savePreset } from './paintLabPresets'
 import { Showcase } from './paintLabShowcaseView'
@@ -65,9 +66,13 @@ function download(name: string, text: string): void {
 }
 
 // The readout's tooltip: what kind of frame it was and where its time went.
-function readoutTitle(readout: Readout | null, bake: BakeStatus | null): string | undefined {
+function readoutTitle(readout: Readout | null, bake: BakeStatus | null, bakeOn: boolean): string | undefined {
   if (!readout) return undefined
-  const why = bake?.why ? ` The light is fixed in the world, but the baked painting is off: ${bake.why}.` : ''
+  const why = !bakeOn
+    ? ' The Bake switch (in the panel, under View) is off: every slider repaints the live picture at once.'
+    : bake?.why
+      ? ` The light is fixed in the world, but the baked painting is off: ${bake.why}.`
+      : ''
   if (readout.path === 'baked') {
     return `Baked frame (the painting was made once, in the world; each frame selects, projects and orders its strokes and paints them, with no model run): build ${readout.buildMs.toFixed(1)} ms · paint ${readout.paintMs.toFixed(1)} ms. The first number is the whole frame.`
   }
@@ -82,6 +87,9 @@ export function PaintLab() {
   const [showcaseOpened, setShowcaseOpened] = useState(URL_STATE.tab === 'showcase')
   const [figureId, setFigureId] = useState(URL_STATE.figure)
   const [debug, setDebug] = useState<PaintDebugMode>(URL_STATE.debug)
+  // The Bake switch: a view setting of the lab (like the theme), not a painter parameter, so it is not in the params, a preset or the saved defaults.
+  // It starts on, or off with &bake=0, and is kept in the URL as the theme is.
+  const [bakeOn, setBakeOn] = useState(URL_STATE.bake)
   const [theme, setThemeState] = useState<Theme>(URL_STATE.theme)
   const [params, setParams] = useState<PaintParams>(start.params)
   const [saved, setSaved] = useState<PaintParams>(start.saved)
@@ -121,7 +129,7 @@ export function PaintLab() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
-  useEffect(() => writeUrl(tab, figureId, debug, theme), [tab, figureId, debug, theme])
+  useEffect(() => writeUrl(tab, figureId, debug, theme, bakeOn), [tab, figureId, debug, theme, bakeOn])
   useEffect(() => writePrefs({ panel: panelOpen, open: openGroups }), [panelOpen, openGroups])
   useEffect(() => {
     document.title = `${figure.label} · Paint lab`
@@ -303,7 +311,7 @@ export function PaintLab() {
         </button>
         <div className="pl-spacer" />
         {tab === 'tune' ? (
-          <output className="pl-readout" aria-label="Frame rate, stroke count and which painter drew the frame" title={readoutTitle(readout, bake)}>
+          <output className="pl-readout" aria-label="Frame rate, stroke count and which painter drew the frame" title={readoutTitle(readout, bake, bakeOn)}>
             {bake && bake.painting !== null ? (
               <span className="pl-painting">
                 Painting… <b>{bake.painting}%</b> ·{' '}
@@ -311,7 +319,7 @@ export function PaintLab() {
             ) : null}
             {readout ? (
               <>
-                <b className={`pl-path is-${readout.path}`}>{readout.path === 'live' && bake?.why ? 'live (no bake here)' : readout.path}</b> · <b>{Math.round(readout.fps)}</b> fps · {readout.ms.toFixed(1)} ms
+                <b className={`pl-path is-${readout.path}`}>{pathLabel(readout.path, bakeOn, bake?.why ?? null)}</b> · <b>{Math.round(readout.fps)}</b> fps · {readout.ms.toFixed(1)} ms
                 {readout.path === 'baked' ? ` (build ${readout.buildMs.toFixed(1)}, paint ${readout.paintMs.toFixed(1)})` : ''} · <b>{readout.strokes.toLocaleString('en-US')}</b> strokes
               </>
             ) : (
@@ -338,6 +346,7 @@ export function PaintLab() {
             colours={colours}
             params={shown}
             debug={debug}
+            bake={bakeOn}
             caption={{ label: figure.label, text: figure.caption }}
             banner={compare ? 'Showing the saved defaults (B). Press A/B to go back to your tune.' : null}
             injected={URL_STATE.injected}
@@ -425,6 +434,16 @@ export function PaintLab() {
           </div>
 
           <div className="pl-scroll" inert={compare}>
+            <section className="pl-group pl-bake">
+              <h2 className="pl-colour-title">View</h2>
+              <SwitchRow label="Bake (instant orbit)" checked={bakeOn} def={true} onChange={setBakeOn} />
+              <p className="pl-hint">
+                {bakeOn
+                  ? 'Paints the picture once, so orbiting is instant (it needs the light fixed in the world). Changing the light, the seed or a stroke size bakes again, which takes seconds.'
+                  : 'Off: every slider repaints the live picture at once. Orbiting is slower, as the model runs for each view.'}
+              </p>
+            </section>
+
             <section className="pl-group pl-colour">
               <h2 className="pl-colour-title">Colour</h2>
               <div className="pl-colour-row">

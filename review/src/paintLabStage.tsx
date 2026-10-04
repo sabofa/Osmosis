@@ -40,6 +40,8 @@ export interface StageProps {
   colours: SceneColours
   params: PaintParams
   debug: PaintDebugMode
+  // The lab's Bake switch (a view setting, not a painter parameter): off is the per-frame painter whatever the light, and a bake in the making is stopped.
+  bake: boolean
   caption: { label: string; text: string }
   banner: string | null
   injected: InjectedState
@@ -132,7 +134,7 @@ export function Stage(props: StageProps) {
     try {
       if (p.injected === 'engine-error') throw new Error('Injected engine failure (?state=engine-error).')
       // The frame's result arrives through the engine's events (onFrame, onError).
-      engine.render(view, p.params, p.debug, framing.held.framing)
+      engine.render(view, p.params, p.debug, framing.held.framing, p.bake)
     } catch (error) {
       setMessage({ title: 'The painter hit an error', text: error instanceof Error ? error.message : String(error) })
     }
@@ -339,8 +341,8 @@ export function Stage(props: StageProps) {
     request()
   }, [props.built, request])
 
-  // Any parameter or mode change draws on the next animation frame.
-  useEffect(() => request(), [props.params, props.debug, request])
+  // Any parameter or mode change draws on the next animation frame (the Bake switch too: turned off, the live picture is asked for at once).
+  useEffect(() => request(), [props.params, props.debug, props.bake, request])
 
   return (
     <div className="pl-stage" ref={hostRef} style={{ background: oklabToHex(props.params.canvas.tone) }} tabIndex={0} aria-label="Painted figure: drag to orbit, right-drag to pan, wheel to zoom, double-click to reset">

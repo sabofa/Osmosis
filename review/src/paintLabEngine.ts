@@ -76,9 +76,13 @@
 //                        until the new one lands, and a bake that lands for inputs that are no longer the newest is dropped. A bake
 //                        in flight that a change or another figure makes useless is CANCELLED for real: its worker is terminated and
 //                        made again (a bake does not yield, so nothing less stops it).
-// Used only when all three hold: the light is fixed in the world, the renderer can depth-test strokes (float render targets: baked strokes
-// are hidden by the view's depth and would paint through the surfaces without it), and no debug view is chosen. Otherwise the picture is the
-// per-frame painter's, as described above, unchanged. While the first bake of a figure is made, the per-frame painter's frames are the
+// Used only when all four hold: the lab's Bake switch is on (a view setting of the page, given to render(): a bake of 4 to 16 s makes tuning feel
+// frozen, so the painter can turn it off and have every slider repaint the live picture at once), the light is fixed in the world, the renderer can
+// depth-test strokes (float render targets: baked strokes are hidden by the view's depth and would paint through the surfaces without it), and no
+// debug view is chosen. Otherwise the picture is the per-frame painter's, as described above, unchanged. Switching the bake OFF while one is being made
+// abandons it for real (the same cancel as a figure change: its worker is terminated and made again, so none is left running); switching it ON asks for
+// a bake of the moment, and the live picture holds until a bake that is not stale lands (the bake held from before is entered at once when it is still
+// right for the params of the moment, as on the way back from a debug view). While the first bake of a figure is made, the per-frame painter's frames are the
 // picture, and so they are on returning to the baked path (from a debug view, say) until a bake that is for the params of the moment is held:
 // the baked path is entered only with a bake that is not stale. The Showcase's tiles (renderTo) are always the per-frame painter's. If the bake's
 // worker dies, the bake is off (the status line says so) and does not move to this thread, unless ?worker=0 asked for that.
@@ -207,8 +211,9 @@ export const SETTLE_MS = 120
 export interface PaintEngine {
   setScene(scene: SpaceScene, colours: SceneColours): void
   // `authored` is the framing the picture is composed for (paintLabCamera.ts authoredFraming): what the baked painting is made for. Left out, the
-  // picture is the per-frame painter's.
-  render(view: PaintView, params: PaintParams, debug: PaintDebugMode, authored?: AuthoredFraming): void
+  // picture is the per-frame painter's. `bake` is the lab's Bake switch (a view setting, not a paint parameter): false is the per-frame painter's
+  // whatever the light, and a bake in the making is cancelled; true (the default) leaves the choice to the light, the renderer and the debug view.
+  render(view: PaintView, params: PaintParams, debug: PaintDebugMode, authored?: AuthoredFraming, bake?: boolean): void
   renderTo(target: CanvasRenderingContext2D, view: PaintView, params: PaintParams, debug: PaintDebugMode): Promise<FrameStats>
   dispose(): void
 }
@@ -1540,13 +1545,14 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
       coloursNow = co
     },
 
-    render(view, params, debug, authored) {
+    render(view, params, debug, authored, bake = true) {
       if (!sceneNow || !coloursNow) return
       const job: Job = { seq: ++seq, sceneId, scene: sceneNow, colours: coloursNow, view, params, debug, target: null, settle: null }
       lastJob = job
-      // The baked painting is the picture when the light is fixed in the world, the renderer can depth-test strokes and no debug view is chosen (and
-      // the page said what framing to bake for). While the first bake of a figure is made, the per-frame painter's frames are the picture.
-      if (authored && URL_STATE.bake && params.light.worldFixed >= 0.5 && debug === 'none' && (findBakeHost() !== null || bakeOffWhy !== null)) {
+      // The baked painting is the picture when the lab's Bake switch is on, the light is fixed in the world, the renderer can depth-test strokes and no
+      // debug view is chosen (and the page said what framing to bake for). While the first bake of a figure is made, the per-frame painter's frames are
+      // the picture. (With the switch off nothing is asked of the bake host: a bake worker is not even made for it.)
+      if (authored && bake && params.light.worldFixed >= 0.5 && debug === 'none' && (findBakeHost() !== null || bakeOffWhy !== null)) {
         whyNot = bakeUnavailable()
         if (whyNot === null) {
           const [lx, ly, lz] = view.lightDir
@@ -1566,6 +1572,10 @@ export function createPaintEngine(canvas: HTMLCanvasElement, events: EngineEvent
         } else leaveBaked()
       } else {
         whyNot = null
+        // The Bake switch was turned off: a bake in the making is abandoned now, for real (its worker is terminated and made again), and not left to land
+        // as a debug view leaves it: the switch is the painter asking for the live picture to answer every slider, and a bake that holds the worker for
+        // seconds is the very thing it is turned off for. (A recolour in flight is quick and lands harmlessly in the bake held.)
+        if (!bake && bakeFlight?.kind === 'bake') cancelBake()
         leaveBaked()
       }
       // the model is running for a view the camera has now left: its answer's strokes are stale from here

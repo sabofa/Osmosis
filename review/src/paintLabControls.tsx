@@ -83,6 +83,32 @@ const ParamRow = memo(function ParamRow({ spec, value, def, onChange, onReset }:
   )
 })
 
+export interface SwitchRowProps {
+  label: string
+  checked: boolean
+  // The value the switch starts at: the dot and the reset appear once it differs, as on a parameter's row.
+  def: boolean
+  onChange: (on: boolean) => void
+}
+
+// A lab setting that is a switch but not a painter parameter (so it has no ParamSpec, and is never in a preset or the saved defaults): the markup and
+// look of a parameter's own switch row (ParamRow's toggle), with its changed dot and its reset.
+export const SwitchRow = memo(function SwitchRow({ label, checked, def, onChange }: SwitchRowProps) {
+  const id = useId()
+  const changed = checked !== def
+  return (
+    <div className={`pl-row is-toggle${changed ? ' is-changed' : ''}`}>
+      <label className="pl-row-label" htmlFor={id}>
+        {label}
+      </label>
+      <input id={id} type="checkbox" role="switch" className="pl-switch" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <button type="button" className="pl-reset" aria-label={`Reset ${label} to ${def ? 'on' : 'off'}`} title={`Reset to ${def ? 'on' : 'off'}`} tabIndex={changed ? 0 : -1} onClick={() => onChange(def)}>
+        ↺
+      </button>
+    </div>
+  )
+})
+
 // ---------------------------------------------------------------------------
 // A curve editor (spec §11)
 // ---------------------------------------------------------------------------

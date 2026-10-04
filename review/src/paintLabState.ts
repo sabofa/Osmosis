@@ -70,8 +70,10 @@ export interface UrlState {
   set: [string, number][]
   // &worker=0 runs the model on the page's own thread (the default is a worker, so the controls never wait for a frame).
   worker: boolean
-  // &bake=0 keeps the baked painting off (with the light fixed in the world the lab paints it from a bake, once, in the worker; this is the per-frame
-  // painter instead, to put the two side by side).
+  // &bake=0 starts with the Bake switch (the panel's, "Bake (instant orbit)") off: with the light fixed in the world the lab paints from a bake, once,
+  // in the worker, and every slider that the bake reads then waits for a new one; off is the per-frame painter, which answers every slider at once (and
+  // puts the two side by side). The switch is a view setting like the theme, so it is kept in the URL the same way: writeUrl puts &bake=0 back when
+  // it is off and takes it away when it is on, and a reload lands on the same.
   bake: boolean
   // &perf=1 keeps every frame's timings in window.__paintFrames and gives the page window.__paintLab (a handle to move sliders from a script), for measuring.
   perf: boolean
@@ -112,7 +114,7 @@ function readUrl(): UrlState {
   }
 }
 
-export function writeUrl(tab: Tab, figure: string, debug: PaintDebugMode, theme: Theme): void {
+export function writeUrl(tab: Tab, figure: string, debug: PaintDebugMode, theme: Theme, bake = true): void {
   const url = new URL(location.href)
   if (tab === 'tune') url.searchParams.delete('tab')
   else url.searchParams.set('tab', tab)
@@ -121,6 +123,8 @@ export function writeUrl(tab: Tab, figure: string, debug: PaintDebugMode, theme:
   else url.searchParams.set('debug', debug)
   if (theme === 'light') url.searchParams.delete('theme')
   else url.searchParams.set('theme', theme)
+  if (bake) url.searchParams.delete('bake')
+  else url.searchParams.set('bake', '0')
   history.replaceState(null, '', url)
 }
 
