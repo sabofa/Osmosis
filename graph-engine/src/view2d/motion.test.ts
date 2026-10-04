@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { contentToScreen, fittedCamera, screenToContent } from './camera'
 import { EASE_DURATION } from './feel'
 import { ViewMotion } from './motion'
+import type { Camera } from './types'
 
 const frame = { x: -320, y: -240, width: 640, height: 480 }
 const screen = { width: 800, height: 400 }
@@ -369,5 +370,49 @@ describe('housekeeping', () => {
     const m = make()
     expect(m.step(T0)).toBe(false)
     expect(m.current).toEqual(fittedCamera(frame))
+  })
+})
+
+// The readout holds the camera it was handed (React state keeps it by
+// reference and bails out of a re-render when the next one is the same
+// object), so every frame of a move must hand over a fresh camera, and one
+// already handed over must never change afterwards.
+describe('published cameras', () => {
+  function frames(m: ViewMotion, from: number, until: number) {
+    const held: { camera: Camera; zoom: number; cx: number }[] = []
+    run(m, from, until, () => held.push({ camera: m.current, zoom: m.current.zoom, cx: m.current.cx }))
+    return held
+  }
+
+  it('consecutive frames of a smoothed zoom are distinct cameras whose zoom changes', () => {
+    const m = make()
+    m.zoomAt(at, 2.5, T0)
+    const held = frames(m, T0, T0 + 400)
+    expect(held.length).toBeGreaterThan(10)
+    for (let i = 1; i < 10; i++) {
+      expect(held[i].camera).not.toBe(held[i - 1].camera)
+      expect(held[i].zoom).toBeGreaterThan(held[i - 1].zoom)
+    }
+  })
+
+  it('a camera handed over is never mutated by the frames after it', () => {
+    const m = make()
+    m.zoomAt(at, 2.5, T0)
+    const held = frames(m, T0, T0 + 1500)
+    for (const h of held) {
+      expect(h.camera.zoom).toBe(h.zoom)
+      expect(h.camera.cx).toBe(h.cx)
+    }
+  })
+
+  it('an eased move and a smoothed pan are fresh cameras every frame too', () => {
+    const eased = make(false, { cx: 0, cy: 0, zoom: 2 })
+    eased.animateTo({ cx: 50, cy: 20, zoom: 4 }, T0)
+    const e = frames(eased, T0, T0 + 200)
+    for (let i = 1; i < e.length; i++) expect(e[i].camera).not.toBe(e[i - 1].camera)
+    const panned = make(false, { cx: 0, cy: 0, zoom: 2 })
+    panned.panBy(100, 0, T0)
+    const p = frames(panned, T0, T0 + 200)
+    for (let i = 1; i < 8; i++) expect(p[i].camera).not.toBe(p[i - 1].camera)
   })
 })

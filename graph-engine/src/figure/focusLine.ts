@@ -2,6 +2,7 @@ import { formatFocus, type FocusTarget } from '../view2d/focus'
 import { formatPoint } from '../view2d/readout'
 import { distanceToShape } from '../view2d/pointing'
 import type { Camera, Vec } from '../view2d/types'
+import type { GivensPosition } from '../parser/config'
 import { viewToAuthorPlane, type FigureFrame } from './frame'
 import type { FigureHitItem } from './hitItems'
 
@@ -37,6 +38,17 @@ export function itemForId(items: readonly FigureHitItem[], id: string | null): F
     first ??= item
   }
   return first
+}
+
+// Where the coordinate tool sits in the figure's frame. Bottom-left, its panel
+// opening upward, unless the figure's givens table is there: `@givens`
+// defaults to the top-left, so the tool must stay out of that corner's way
+// too, and the reset button owns the bottom-right. A givens table at the
+// bottom-left, or down the left side, sends the tool to the top-right.
+export type ToolCorner = 'bottom-left' | 'top-right'
+
+export function toolCorner(givens: GivensPosition): ToolCorner {
+  return givens === 'bottom-left' || givens === 'left' ? 'top-right' : 'bottom-left'
 }
 
 // Where the cursor is. `pointer` is in drawing units; null: it is off the view.

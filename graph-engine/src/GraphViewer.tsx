@@ -312,6 +312,7 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
             startFocus={config.focus}
             focus={focus}
             coordinates={coordinates}
+            givens={config.givens}
             onSelect={onSelect}
           />
         )}

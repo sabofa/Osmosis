@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { fittedCamera, pxPerUnit, screenToContent, visibleRect } from '../camera'
 import { GestureRecognizer, type Intent, type PointerKind, type PointerSample } from '../input'
 import { clampCamera, DEFAULT_LIMITS, type LimitsPolicy } from '../limits'
@@ -33,12 +34,17 @@ export interface View2dOptions {
   // Keep `pointer` up to date. Off by default: it re-renders on every mouse
   // move, which only the coordinate readout wants.
   trackPointer?: boolean
+  // Keep `camera` up to date. Off by default, for the same reason: publishing
+  // it re-renders the engine's view on every frame of a move, which only the
+  // readout wants (the drawing itself goes through `onApply`).
+  trackCamera?: boolean
 }
 
 export interface View2dHandle {
   // Attach to the element that receives input.
   surfaceRef: React.RefCallback<HTMLElement>
   camera: Camera | null
+  // Where the view is looking, for the readout. Null until `trackCamera` is on.
   // The pointer in content units, for the readout.
   pointer: Vec | null
   // To the start view; already there: to the fitted view.
@@ -113,6 +119,13 @@ class Controller {
     if (this.selection.hover(null)) o.onHover?.(null)
     if (this.selection.clear()) o.onSelect?.(null)
     this.setPointer(null)
+  }
+
+  // Hand the readout the camera as it is now: called when it starts listening,
+  // since nothing was published while it was not.
+  publishCamera(): void {
+    const m = this.motion
+    if (m && this.lastDrawn) this.publish.camera(m.current)
   }
 
   reset(): void {
@@ -381,7 +394,7 @@ class Controller {
     return start ? clampCamera(start, frame, this.screen, limits ?? DEFAULT_LIMITS) : fittedCamera(frame)
   }
 
-  private draw(): void {
+  private draw(inFrame = false): void {
     const { frame, onApply } = this.read()
     const m = this.motion
     // An unmeasured view has no window to draw; the engine's own markup shows
@@ -392,7 +405,16 @@ class Controller {
     this.lastDrawn = camera
     const ppu = pxPerUnit(frame, camera, this.screen)
     onApply(camera, visibleRect(frame, camera, this.screen), ppu)
-    this.publish.camera(camera)
+    if (this.read().trackCamera) {
+      // From a frame, the readout is rendered now, in the frame that drew the
+      // camera: a state update from a rAF callback is otherwise left to
+      // React's scheduler, which can run after the paint (and, under a
+      // headless screenshot, never before it), so the readout would show the
+      // previous camera against a drawing that had already moved. Never from
+      // a layout effect, where React refuses (and warns about) a flushSync.
+      if (inFrame) flushSync(() => this.publish.camera(camera))
+      else this.publish.camera(camera)
+    }
     const atStart = sameView(camera, this.startNow(frame), ppu)
     if (atStart !== this.lastAtStart) {
       this.lastAtStart = atStart
@@ -419,6 +441,11 @@ export function useView2d(options: View2dOptions): View2dHandle {
   const key = viewKey(options.frame, options.start)
   useLayoutEffect(() => controller.sync(), [controller, key])
   useLayoutEffect(() => controller.clearPointing(), [controller, options.items])
+
+  const trackCamera = options.trackCamera === true
+  useLayoutEffect(() => {
+    if (trackCamera) controller.publishCamera()
+  }, [controller, trackCamera])
 
   const surfaceRef = useCallback((el: HTMLElement | null) => controller.attach(el), [controller])
   const reset = useCallback(() => controller.reset(), [controller])

@@ -16,7 +16,7 @@ agents" below). Working tree clean. **1864 tests passing**,
 *2026-09-30: the visual pass, part 1 (figure styles and the style lab) landed
 on this branch — see "Figure styles: `style/` and the pen" below; 2261 tests.*
 
-*2026-10-04: 2D handling (`view2d/`) landed on this branch — figures pan, zoom, point and focus; see "2D handling (view2d)" below; 2665 tests.*
+*2026-10-04: 2D handling (`view2d/`) landed on this branch — figures pan, zoom, point and focus; see "2D handling (view2d)" below; 2676 tests.*
 
 *Last updated 2026-09-27, after geometry phase 12 (shading and shaded
 regions — "find the area of the shaded region"). Phase 11 completed the
@@ -1096,8 +1096,15 @@ FigureView.tsx       the adapter: renderFigure's frame + items + useView2d + the
 - **A label shares its object's id** and comes after it in `items`, so an
   id -> item map holds the label, which has no author coordinates. Use
   `itemForId` (it prefers the item that has them).
-- **The pointer is published only while the tool is open** (`trackPointer`);
-  every mouse move would otherwise re-render the figure.
+- **The pointer and the camera are published only while the tool is open**
+  (`trackPointer`, `trackCamera`); every mouse move or frame would otherwise
+  re-render the figure. The camera is rendered with `flushSync` from the frame
+  that drew it: a state update from a rAF callback is left to React's
+  scheduler, which can run after the paint (under a headless screenshot, never
+  before it), leaving the readout one camera behind the drawing.
+- **The coordinate tool sits bottom-left** (panel opening upward), top-right
+  when `@givens` is `bottom-left` or `left` (`toolCorner`); the top-left is
+  the givens table's default corner and the bottom-right is the reset button's.
 
 **How tables and flowcharts adopt it.** Give the engine four things and call
 `useView2d`: a content frame (the table's pixel box, the flowchart's layout
@@ -1280,7 +1287,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 2665 tests (after 2D handling), node-only, no DOM
+npm run test --workspace=graph-engine          # 2676 tests (after 2D handling), node-only, no DOM
 npx tsc -b graph-engine/tsconfig.json --noEmit
 npm run lint --workspace=graph-engine
 npm run review -- --port 5181 --host 100.90.203.2   # from the geometry worktree (space uses 5182)

@@ -20,9 +20,11 @@ export interface CoordinateToolProps {
   // What Copy puts on the clipboard.
   copyText: string
   theme?: 'light' | 'dark'
+  // Which corner of the view it sits in; the panel opens away from that corner.
+  corner?: 'bottom-left' | 'top-right'
 }
 
-export function CoordinateTool({ open, onToggle, cursor, centre, zoom, copyText, theme = 'light' }: CoordinateToolProps) {
+export function CoordinateTool({ open, onToggle, cursor, centre, zoom, copyText, theme = 'light', corner = 'bottom-left' }: CoordinateToolProps) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
@@ -49,7 +51,7 @@ export function CoordinateTool({ open, onToggle, cursor, centre, zoom, copyText,
   }, [copyText])
 
   return (
-    <div className={`coordinate-tool coordinate-tool-${theme}`}>
+    <div className={`coordinate-tool coordinate-tool-${theme} coordinate-tool-${corner}`}>
       <button
         type="button"
         className="coordinate-tool-toggle"

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { GIVENS_POSITIONS } from '../parser/config'
 import { parseSpec } from '../parser/parseSpec'
 import { LIGHT_PALETTE } from '../render/palette'
 import { parseFocus } from '../view2d/focus'
 import { authorToView, type FigureFrame } from './frame'
-import { centreText, cursorText, focusLineFor, itemForId } from './focusLine'
+import { centreText, cursorText, focusLineFor, itemForId, toolCorner } from './focusLine'
 import type { FigureHitItem } from './hitItems'
 import { renderFigure } from './render'
 
@@ -173,6 +174,29 @@ describe('itemForId', () => {
   it('is null for no id and for an unknown id', () => {
     expect(itemForId([dot], null)).toBeNull()
     expect(itemForId([dot], 'nope')).toBeNull()
+  })
+})
+
+describe('toolCorner', () => {
+  const expected = {
+    'top-left': 'bottom-left',
+    'top-right': 'bottom-left',
+    'bottom-left': 'top-right',
+    'bottom-right': 'bottom-left',
+    left: 'top-right',
+    right: 'bottom-left',
+  } as const
+
+  it('has an expectation for every @givens position, so a new one cannot slip by', () => {
+    expect(Object.keys(expected).sort()).toEqual([...GIVENS_POSITIONS].sort())
+  })
+
+  it.each(GIVENS_POSITIONS)('keeps out of the givens table at %s', (position) => {
+    expect(toolCorner(position)).toBe(expected[position])
+  })
+
+  it('never sits in the top-left (the default givens corner) or the bottom-right (the reset button)', () => {
+    for (const position of GIVENS_POSITIONS) expect(['bottom-left', 'top-right']).toContain(toolCorner(position))
   })
 })
 

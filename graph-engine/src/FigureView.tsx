@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { GraphConfig } from './parser/config'
-import { centreText, cursorText, focusLineFor, itemForId } from './figure/focusLine'
+import type { GivensPosition, GraphConfig } from './parser/config'
+import { centreText, cursorText, focusLineFor, itemForId, toolCorner } from './figure/focusLine'
 import { figureMapping, type FigureFrame } from './figure/frame'
 import {
   highlightAccent,
@@ -51,6 +51,9 @@ export interface FigureViewProps {
   focus?: FocusSpec | null
   // The coordinate readout and its Copy button (the coordinate tool).
   coordinates?: boolean
+  // Where the figure's givens table sits (config.givens), so the coordinate
+  // tool can keep out of its way. Default: the directive's default.
+  givens?: GivensPosition
   onSelect?(selection: FigureSelection | null): void
 }
 
@@ -132,7 +135,7 @@ function resizeFilters(filters: Filters, visible: Rect, pxPerUnit: number): void
   filters.haloDeviation?.setAttribute('stdDeviation', String(sizes.haloDeviation))
 }
 
-export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, onSelect }: FigureViewProps) {
+export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   // Stable across renders, and that identity is load-bearing rather than a
@@ -214,6 +217,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     onToggleCoordinates: coordinates ? () => setToolOpen((open) => !open) : undefined,
     // The pointer re-renders this view on every move; only the readout wants it.
     trackPointer: coordinates === true && toolOpen,
+    trackCamera: coordinates === true && toolOpen,
   })
 
   useLayoutEffect(() => {
@@ -301,7 +305,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
       lines.zoom = formatZoom(camera.zoom)
       lines.copyText = focusLineFor(frame, camera, all, tolerance)
     }
-    tool = <CoordinateTool open={open} onToggle={() => setToolOpen((o) => !o)} theme={theme} {...lines} />
+    tool = <CoordinateTool open={open} onToggle={() => setToolOpen((o) => !o)} theme={theme} corner={toolCorner(givens)} {...lines} />
   }
 
   // The markup is produced entirely by this package's own emitter, which
