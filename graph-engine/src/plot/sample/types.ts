@@ -41,6 +41,11 @@ export interface CurveFns {
   // The twin of both coordinates over [tLo, tHi], written into `out`, and the worse of
   // the two verdicts. Counted by the caller, not here.
   enclose(tLo: number, tHi: number, out: Box): Verdict
+  // The inner evaluations the point function has made so far, ever (a count that only goes up; absent where a point costs
+  // no more than a point): an integral's integrand, which is evaluated as often as the quadrature asks, thousands of times
+  // for one point of 5000 cos(100 t). The core reads it before and after each evaluation and charges the budget for what
+  // it cost (CORE.innerPerPoint), so a curve of dear points is capped and not left to run.
+  work?: () => number
   // Screen pixels per parameter unit: sets the density of the start grid and the
   // width, in pixels, of an interval at the sub-pixel floor.
   pxPerT: number

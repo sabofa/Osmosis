@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { UNKNOWN } from '../../math/interval'
 import { chainPoints } from '../../scene/chains'
 import { sampleRange } from './adaptive'
+import { BandSink } from './band'
 import { ChainSink } from './sink'
 import { fnsOf, run, runView, scopeOf, trueY, view } from './testkit'
-import { COARSE, FULL } from './tuning'
+import { COARSE, CORE, FULL, type Tuning } from './tuning'
 import type { CurveFns, End, EvalCounter } from './types'
 
 // every vertex within ½ px of the true curve, and every segment's midpoint within 1 px (no aliasing)
@@ -614,6 +615,102 @@ describe('sampleRange — a smooth curve the twin cannot certify is not broken a
     const coarse = go((x) => 20 * x, COARSE)
     expect(full.chains).toHaveLength(1)
     expect(coarse.chains).toHaveLength(1)
+  })
+
+  // calc P2 final review, I5. What an integral costs is its integrand's evaluations, which the budget did not count: one point of
+  // y = integral(t = 0 to x, 5000 cos(100t)) is a quadrature of 23000, and the settled view took 533 s. A point that made inner
+  // evaluations (CurveFns.work) is charged what they come to in points (CORE.innerPerPoint), and the columns of a twin that says
+  // nothing are not all tried as bands: 14 of the 22 evaluations a pixel of integral(sin) were those.
+  describe('what an integral costs', () => {
+    const free: End = { kind: 'free' }
+    const goWith = (fns: CurveFns, tuning: Tuning = FULL, from = -1.5, to = 1.5, bands?: BandSink) => {
+      const sink = new ChainSink(view.clip)
+      const counter: EvalCounter = { points: 0, intervals: 0 }
+      const { capped } = sampleRange(fns, from, to, { left: free, right: free }, view, tuning, counter, sink, bands)
+      return { chains: sink.chains(), counter, capped }
+    }
+    // the same fns, each point of which also makes `perPoint` inner evaluations, and counts its evaluations
+    const costly = (fns: CurveFns, perPoint: number): CurveFns & { calls: () => number } => {
+      let inner = 0
+      let calls = 0
+      return {
+        ...fns,
+        point(t, out) {
+          inner += perPoint
+          calls++
+          fns.point(t, out)
+        },
+        work: () => inner,
+        calls: () => calls,
+      }
+    }
+
+    it('charges a point for the inner evaluations it made: perPoint / innerPerPoint of them, rounded, and never less than one', () => {
+      const cheap = goWith(unknown(Math.sin))
+      expect(cheap.capped).toBe(false)
+      for (const [perPoint, charge] of [[0, 1], [40, 1], [140, 1], [250, 3], [1000, 10]] as const) {
+        const dear = goWith(costly(unknown(Math.sin), perPoint))
+        // (the same curve is drawn, the budget being far off, and every evaluation of it is charged the same)
+        expect(dear.capped, `${perPoint}`).toBe(false)
+        expect(dear.counter.points, `${perPoint} inner evaluations a point`).toBe(cheap.counter.points * charge)
+        expect(dear.chains, `${perPoint}`).toHaveLength(cheap.chains.length)
+      }
+      expect(CORE.innerPerPoint).toBe(100)
+    })
+    it('a curve of dear points is capped by what it costs: the evaluations stop where the inner evaluations reach the budget', () => {
+      const dear = costly(unknown(Math.sin), 10_000)
+      const r = goWith(dear)
+      expect(r.capped).toBe(true)
+      // 60000 points at 100 inner evaluations a point: 6 million inner evaluations, which is 600 evaluations at 10000 each (and the
+      // start grid, which is drawn whatever the budget, is 30 of them)
+      expect(dear.calls() * 10_000).toBeLessThanOrEqual(FULL.budget.points * CORE.innerPerPoint * 1.05)
+      expect(dear.calls()).toBeGreaterThan(300)
+    })
+    it('a curve with no inner evaluations is not charged for any, whatever the twin says', () => {
+      const plain = goWith(unknown(Math.sin))
+      const withWork = goWith({ ...unknown(Math.sin), work: () => 0 })
+      expect(withWork.counter.points).toBe(plain.counter.points)
+    })
+
+    const bandsOf = (f: (x: number) => number, tuning: Tuning = FULL, from = -1.5, to = 1.5) => {
+      const bandSink = new BandSink('y', view.clip)
+      const r = goWith(unknown(f), tuning, from, to, bandSink)
+      return { ...r, bands: bandSink.bands() }
+    }
+    it('a smooth curve is not tried as a band on faith: sin(x) over 120 px costs under 11 evaluations a pixel (it was 22), one chain, on the curve', () => {
+      for (const tuning of [FULL, COARSE]) {
+        const r = bandsOf(Math.sin, tuning)
+        expect(r.bands).toHaveLength(0)
+        expect(r.chains).toHaveLength(1)
+        expect(r.counter.points / 120).toBeLessThan(11)
+        for (const p of chainPoints(r.chains[0])) expect(Math.abs(Math.sin(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+      }
+    })
+    it('a band is still one band: an oscillation of two periods a pixel, of a curve the twin says nothing of, is not cut where a column\'s midpoint is in order', () => {
+      // (the screen alone cut integral(0) + sin(500 x) into 185 bands at twice the cost; a column that starts where a band ended is tried)
+      const r = bandsOf((x) => Math.sin(500 * x))
+      expect(r.bands).toHaveLength(1)
+      expect(r.chains).toHaveLength(0)
+      expect(r.counter.points).toBeLessThan(3000)
+      expect(bandsOf((x) => Math.sin(500 * x), COARSE).bands.length).toBeLessThanOrEqual(3)
+    })
+    it('and a jump the samples straddle is not drawn across, however the column was found: a step of a half pixel, flat or on a slope', () => {
+      const steps: [(x: number) => number, number][] = [
+        [(x) => (x < 0.1234 ? 0 : 0.5 / 40), 0.1234],
+        [(x) => 3 * x + (x < 0.1234 ? 0 : 0.4 / 40), 0.1234],
+        [(x) => 0.3 * Math.sin(x) + (x < -0.5678 ? 0 : 0.6 / 40), -0.5678],
+      ]
+      for (const [f, at] of steps) {
+        for (const tuning of [FULL, COARSE]) {
+          const r = bandsOf(f, tuning)
+          expect(r.chains.length, `${at}`).toBeGreaterThan(1)
+          for (const c of r.chains) {
+            const xs = chainPoints(c).map((p) => p.x)
+            expect(xs.some((x) => x < at - 1e-9) && xs.some((x) => x > at + 1e-9), `a chain crosses the step at ${at}`).toBe(false)
+          }
+        }
+      }
+    })
   })
 })
 

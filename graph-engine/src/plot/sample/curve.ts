@@ -91,6 +91,7 @@
 //    says why: the budget, steepness, or that nothing could be certified), and `drawnInView` that something
 //    is. A curve that is defined only at isolated points (`{x = 1: 5}`: undefined either side of a point
 //    that is defined) is those points, each a filled value mark, and is defined and drawn.
+import { integrandEvaluations } from '../../math/binders'
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { call, mul, variable } from '../../math/expr'
 import { type CompiledInterval, compileInterval, CONTINUOUS, isEmpty, iv, type Iv, type Verdict } from '../../math/interval'
@@ -675,6 +676,7 @@ function compileCurve(co: Coordinates, scope: MathScope): CurveFns {
       }
       return verdict
     },
+    work: integrandEvaluations,
     pxPerT: co.pxPerT,
     oscillationAxis: co.oscillationAxis,
   }

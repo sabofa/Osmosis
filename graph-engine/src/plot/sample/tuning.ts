@@ -352,6 +352,15 @@ export const COARSE: Tuning = { ...FULL, startPx: 8, flatPx: 0.5, uncertifiedFlo
 export const CORE = {
   // The start grid has at least this many intervals, however short the range is on screen.
   minStartIntervals: 8,
+  // What a point of the curve costs the budget when its evaluation made inner evaluations (an integral's integrand: types.ts
+  // CurveFns.work): max(1, inner / innerPerPoint) points, rounded. The budget counted evaluations of the curve, and one of
+  // y = integral(t = 0 to x, 5000 cos(100t)) is a quadrature of about 23000 integrand evaluations: the settled view took
+  // 533 s with the budget unspent. Measured over the integral cases of the corpus, a point is 17 (integral(2t)) to 66
+  // (integral(sin t)) inner evaluations, 120 at worst on average (40 cos(t) at COARSE), so 100 charges them the one point they
+  // were pinned against (50 charged integral(sin t) 1.6 points on average and 40 cos(t) at COARSE, which drew a stretch in view,
+  // spent its budget before it got there); 3000 cos(50t), at 8200 a point, is 82 points each and is capped at about 700
+  // of them. A budget of 60000 points is then at most 6 million inner evaluations (two or three seconds).
+  innerPerPoint: 100,
   // The most halvings of an edge search, between a defined end and an undefined one. The
   // adjacent doubles are usually reached first; this stops a search towards 0, where
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is

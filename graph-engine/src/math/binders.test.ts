@@ -4,7 +4,7 @@ import type { Expr } from '../parser/types'
 import { CompileError, compileMany, compileScalar, freeVariablesDeep } from './compile'
 import { diff } from './diff'
 import { call, num, substitute, varNames, variable } from './expr'
-import { integrateValue } from './binders'
+import { integrandEvaluations, integrateValue } from './binders'
 import { integral, prime, prod, sum } from './reserved'
 import { makeScope, type MathScope } from './scope'
 import { simplify } from './simplify'
@@ -128,6 +128,43 @@ describe('__integral', () => {
     const scope = makeScope({ params: [['a', 3]] })
     const d = compileScalar(simplify(diff(integral('t', num(0), num(1), p('a t')), 'a', scope)), [], scope)
     expect(d()).toBeCloseTo(0.5, 12)
+  })
+})
+
+// calc P2 final review, I5: the work an integral has done is readable, for a caller that spends a budget on evaluations.
+describe('integrandEvaluations', () => {
+  it('counts the integrand evaluations of every integral, and only goes up', () => {
+    const before = integrandEvaluations()
+    let calls = 0
+    const g = (t: number) => {
+      calls++
+      return Math.sin(t)
+    }
+    expect(integrateValue(g, 0, 3)).toBeCloseTo(1 - Math.cos(3), 12)
+    expect(calls).toBeGreaterThan(0)
+    expect(integrandEvaluations() - before).toBe(calls)
+    // a reversed range is the same integral, counted once
+    const mid = integrandEvaluations()
+    const calls0 = calls
+    integrateValue(g, 3, 0)
+    expect(integrandEvaluations() - mid).toBe(calls - calls0)
+  })
+  it('counts an integral that gave up (a divergent one spends its budget), and an integral that is not asked (a === b, or NaN) not at all', () => {
+    const before = integrandEvaluations()
+    let calls = 0
+    expect(integrateValue((t) => (calls++, 1 / t), 0, 1)).toBeNaN()
+    expect(integrandEvaluations() - before).toBeGreaterThanOrEqual(calls)
+    const mid = integrandEvaluations()
+    integrateValue((t) => t, 2, 2)
+    integrateValue((t) => t, Number.NaN, 2)
+    expect(integrandEvaluations()).toBe(mid)
+  })
+  it('reads the whole nest: an integral inside an integrand adds its own evaluations to the total', () => {
+    const f = compileScalar(p('integral(t = 0 to x, integral(s = 0 to t, 1))'), ['x'], makeScope())
+    const before = integrandEvaluations()
+    expect(f(2)).toBeCloseTo(2, 9)
+    // the outer integrand is evaluated at least once, and each of those evaluations is an integral of its own
+    expect(integrandEvaluations() - before).toBeGreaterThan(30)
   })
 })
 

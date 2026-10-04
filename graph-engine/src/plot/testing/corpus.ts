@@ -523,7 +523,9 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'y = integral(t = 0 to x, sin(t))',
     views: [STD],
     expect: { drawn: [{ x: 0, y: 0 }, { x: Math.PI, y: 2 }] },
-    ceiling: { points: 40000, intervals: 6800 }, // measured 26401 / 4501
+    // measured 9649 / 4489. It was 26401 / 4501 (22 evaluations a pixel, 14 of them a band tried on each column): the columns of
+    // a twin that says nothing are tried only where their midpoint is out of order, and a tried one that closes is drawn from its samples
+    ceiling: { points: 14500, intervals: 6800 },
   },
   {
     // the example "Accumulation: the sine integral": the integral, and the curve it integrates, with its hole
@@ -531,7 +533,18 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)\ny = sin(x)/x color: gray',
     views: [STD],
     expect: { holes: [{ x: 0, y: 1 }] },
-    ceiling: { points: 43000, intervals: 7900 }, // measured 28235 / 5254
+    ceiling: { points: 17300, intervals: 7900 }, // measured 11484 / 5242 (28235 / 5254 before the columns of an integral were screened)
+  },
+  {
+    // One point of this is a quadrature of about 23000 integrand evaluations (50 sin(100x) is 160 periods across the range), and the
+    // settled view took 533 s with the budget unspent. The budget is charged what a point costs (CORE.innerPerPoint integrand
+    // evaluations a point): the start grid alone is over it, so nothing is certified, nothing is refined, nothing is drawn, and the
+    // note says why. 2.4 s. The ceiling is the budget (60000 points) and the grid's few more.
+    name: 'an integral that costs thousands of evaluations a point',
+    spec: 'y = integral(t = 0 to x, 5000 cos(100t))',
+    views: [STD],
+    expect: { blank: true, notes: [NOTE_BLANK] },
+    ceiling: { points: 63000, intervals: 520 }, // measured 61150 / 345
   },
 
   // ---- cost: forms the twin encloses loosely --------------------------------------------------------------

@@ -13,12 +13,22 @@ export const INTEGRAL_BUDGET = 100_000
 // quadrature never settled.
 const UNSETTLED = 1e-6
 
+// The integrand evaluations every integral has made, ever (a count that only goes up). An integral costs as much as its
+// integrand is evaluated, and a caller that spends a budget on evaluations of an expression (the curve sampler,
+// plot/sample) reads this before and after one to learn what it cost: y = integral(t = 0 to x, 5000 cos(100t)) is
+// thousands of integrand evaluations a point, and a budget that counts points alone does not see it. Reading it does
+// not change anything, and neither does the counting: it is the quadrature's own budget, taken after the fact.
+let integrandCount = 0
+export function integrandEvaluations(): number {
+  return integrandCount
+}
+
 export function integrateValue(g: (t: number) => number, a: number, b: number): number {
   if (Number.isNaN(a) || Number.isNaN(b)) return Number.NaN
   if (a === b) return 0
   if (a > b) return -integrateValue(g, b, a)
+  const budget = quadBudget(INTEGRAL_BUDGET)
   try {
-    const budget = quadBudget(INTEGRAL_BUDGET)
     let result: QuadResult
     if (a === -Infinity && b === Infinity) {
       // t = s / (1 - s²), dt = (1 + s²) / (1 - s²)² ds, s in (-1, 1)
@@ -68,5 +78,8 @@ export function integrateValue(g: (t: number) => number, a: number, b: number): 
   } catch (err) {
     if (err instanceof QuadratureError) return Number.NaN
     throw err
+  } finally {
+    // (a budget that ran out is one past empty)
+    integrandCount += Math.min(INTEGRAL_BUDGET, INTEGRAL_BUDGET - budget.left)
   }
 }

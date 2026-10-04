@@ -618,6 +618,25 @@ describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not b
       for (const p of curveOf(r.objects).chains.flatMap(chainPoints)) expect(Math.abs(f(p.x) - p.y) * 40, quality).toBeLessThanOrEqual(0.5)
     }
   })
+  // calc P2 final review, I5: the columns of an integral were all tried as bands (14 of the 22 evaluations a pixel), and now the
+  // ones whose ends and midpoint are in order are not. A band is still a band, whole: the screen alone cut this one in 185.
+  it('y = integral(t = 0 to x, 0) + sin(500x): one band at FULL, and no more than a few at COARSE, as before the screen', () => {
+    const full = sampleCurve(explicit('integral(t = 0 to x, 0) + sin(500 x)'), view, scopeOf(), opts)
+    expect(full.objects.filter((o) => o.kind === 'band')).toHaveLength(1)
+    expect(curveOf(full.objects).chains).toHaveLength(0)
+    expect(full.stats.points).toBeLessThan(20000)
+    const coarse = sampleCurve(explicit('integral(t = 0 to x, 0) + sin(500 x)'), view, scopeOf(), { ...opts, quality: 'coarse' })
+    expect(coarse.objects.filter((o) => o.kind === 'band').length).toBeLessThanOrEqual(3)
+    expect(coarse.stats.points).toBeLessThan(9000)
+  })
+  it('the sine integral costs less than it did, and is the same curve: under 12000 points at FULL (it was 26401)', () => {
+    const r = sampleCurve(explicit('integral(t = 0 to x, sin(t))'), view, scopeOf(), opts)
+    expect(r.capped).toBe(false)
+    expect(r.stats.points).toBeLessThan(12000)
+    expect(curveOf(r.objects).chains).toHaveLength(1)
+    const f = (x: number) => 1 - Math.cos(x)
+    for (const p of chainPoints(curveOf(r.objects).chains[0])) expect(Math.abs(f(p.x) - p.y) * 40, `at ${p.x}`).toBeLessThanOrEqual(0.5)
+  })
   it('y = integral(t = 0 to x, 2t) is drawn at COARSE, and at FULL', () => {
     const f = (x: number) => x * x
     for (const quality of ['coarse', 'full'] as const) {

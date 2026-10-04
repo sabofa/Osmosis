@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { integrandEvaluations } from '../math/binders'
 import { parseSpec } from '../parser/parseSpec'
+import { COARSE, CORE, FULL } from '../plot/sample/tuning'
 import { buildScene } from './buildScene'
 import { chainPoints } from './chains'
 import type { SceneObject, Vec2 } from './types'
@@ -1465,6 +1467,39 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     it('an ordinary curve has no note: smooth, a pole, a hole, a jump, an edge, an oscillation, an integral', () => {
       for (const spec of ['y = x^2', 'y = sin(x)', 'y = tan(x)', 'y = 1/x', 'y = (x^2 - 1)/(x - 1)', 'y = floor(x)', 'y = ln(x)', 'y = sqrt(x)', 'y = sin(500x)', 'y = integral(t = 0 to x, sin(t))', 'r = 1 + cos(theta)', '(cos(t), sin(2t)) for t in [0, 6.3]', 'y = x + 100', 'y = {x = 1: 5} + x - x']) {
         for (const quality of ['full', 'coarse'] as const) expect(build(spec, quality).errors, `${spec} ${quality}`).toEqual([])
+      }
+    })
+  })
+
+  // calc P2 final review, I5: the budget counts what an evaluation costs. One point of y = integral(t = 0 to x, 5000 cos(100t)) is a
+  // quadrature of about 23000 integrand evaluations, and the settled view took 533 s with the budget unspent. The integrand
+  // evaluations are counted (math/binders.ts integrandEvaluations), the sampler charges them to its budget, and the curve caps.
+  describe('what an integral costs', () => {
+    const view = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+    const NOT_DRAWN_BUDGET = 'not drawn: this curve needs more detail than its drawing budget allows'
+    it.each(['full', 'coarse'] as const)('y = integral(t = 0 to x, 5000 cos(100t)) at %s stays within its budget, in integrand evaluations, and says so', (quality) => {
+      const parsed = parseSpec('y = integral(t = 0 to x, 5000 cos(100t))')
+      const before = integrandEvaluations()
+      const scene = buildScene(parsed.statements, view, parsed.config, undefined, parsed.statementLines, { widthPx: 800, heightPx: 800, quality })
+      const inner = integrandEvaluations() - before
+      const budget = quality === 'full' ? FULL.budget.points : COARSE.budget.points
+      // the budget is points, a point is innerPerPoint inner evaluations, and the start grid (drawn whatever the budget says) and
+      // the one evaluation that finds the budget spent are over it by a few percent
+      expect(inner, `${quality}: ${inner} integrand evaluations`).toBeLessThanOrEqual(budget * CORE.innerPerPoint * 1.25)
+      expect(scene.stats!.points).toBeLessThanOrEqual(budget * 1.25)
+      expect(scene.errors).toEqual([{ line: 1, message: NOT_DRAWN_BUDGET }])
+    }, 60_000)
+    it('and one that drew something before the cap says "drawn coarsely": 40 cos(t) at FULL, in a budget it exhausts', () => {
+      const scene = sceneWith('y = integral(t = 0 to x, 40 cos(t))', { quality: 'full', widthPx: 800, heightPx: 800 }, view)
+      expect(scene.errors).toEqual([{ line: 1, message: 'drawn coarsely: this curve needs more detail than its drawing budget allows' }])
+    })
+    it('the integrals the corpus draws are charged what they were: a point of each is under 100 integrand evaluations on average', () => {
+      for (const spec of ['y = integral(t = 0 to x, sin(t))', 'F(x) = integral(t = 0 to x, sin(t)/t)\ny = F(x)', 'y = integral(t = 0 to x, 2t)']) {
+        const parsed = parseSpec(spec)
+        const before = integrandEvaluations()
+        const scene = buildScene(parsed.statements, view, parsed.config, undefined, parsed.statementLines, { widthPx: 800, heightPx: 800, quality: 'full' })
+        expect((integrandEvaluations() - before) / scene.stats!.points, spec).toBeLessThan(CORE.innerPerPoint)
+        expect(scene.errors, spec).toEqual([])
       }
     })
   })

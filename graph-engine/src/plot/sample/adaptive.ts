@@ -89,7 +89,13 @@
 //    connected.
 //  - Trying a column costs bandSamples - 2 evaluations, so bandColumn spares itself where it can tell:
 //    an uncertified interval the twin shows to be a stroke is not tried, and one that is tried and
-//    refined is not tried again at the halves it is bisected into. See bandColumn.
+//    refined is not tried again at the halves it is bisected into. For an interval the twin says
+//    NOTHING about (UNKNOWN: an integral's, with no enclosure to show a stroke by) one evaluation, the
+//    midpoint, says whether to try: ends and midpoint in order is a stroke, not tried unless the column
+//    starts where a band ended; and a tried column that is not a band is drawn from its samples if they
+//    close (polylineCloses: the jump test, asked of the samples it already has). See bandColumn.
+//  - Every evaluation is charged to the budget: a point is a point, and a point that made inner
+//    evaluations (an integral's integrand) is what they come to in points (CORE.innerPerPoint).
 import { CONTINUOUS, PARTIAL, UNKNOWN } from '../../math/interval'
 import type { Bounds } from '../../scene/types'
 import { type BandSink, largestStep, oscillates } from './band'
@@ -131,6 +137,11 @@ interface Core {
   // What the columns of a band need, or undefined where there are none to be had: a call that was
   // not given a sink, or a curve with no axis to oscillate along (polar, parametric).
   bands: BandState | undefined
+  // A point already evaluated that the next decision of the interval it is the midpoint of will ask for (NaN: none), and
+  // its value: evalMid.
+  knownT: number
+  knownX: number
+  knownY: number
 }
 
 interface BandState {
@@ -178,6 +189,9 @@ export function sampleRange(fns: CurveFns, t0: number, t1: number, ends: { left:
     anchorHi: ends.right.kind === 'anchor' ? b : Number.NaN,
     spikeMinPx: 0,
     bands: bands === undefined || fns.oscillationAxis === null ? undefined : bandState(bands, fns.oscillationAxis, tuning.bandSamples),
+    knownT: Number.NaN,
+    knownX: Number.NaN,
+    knownY: Number.NaN,
   }
 
   counter.intervals++
@@ -267,7 +281,7 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
       c.sink.segment(xa, ya, ta, xb, yb, tb)
       return
     }
-    if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, true)) return
+    if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, true, false)) return
     if (atFloor) {
       // steepness never breaks a curve
       c.sink.segment(xa, ya, ta, xb, yb, tb)
@@ -282,7 +296,7 @@ function visit(c: Core, ta: number, tb: number, xa: number, ya: number, xb: numb
     return
   }
 
-  if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, false)) return
+  if (widthPx <= COLUMN_PX && bandColumn(c, ta, tb, xa, ya, xb, yb, false, verdict === UNKNOWN)) return
   const aFinite = isFinite2(xa, ya)
   const bFinite = isFinite2(xb, yb)
 
@@ -401,7 +415,7 @@ function floorTest(c: Core, ta: number, tb: number, xa: number, ya: number, xb: 
     if (anchored && gap <= shrink * parentGap) return null
     return { at: tm, steep: gap <= c.tune.steepShrink * parentGap }
   }
-  evalAt(c, tm)
+  evalMid(c, tm)
   const xm = c.pt[0]
   const ym = c.pt[1]
   if (!isFinite2(xm, ym)) return { at: tm, steep: false }
@@ -439,7 +453,7 @@ function bisect(c: Core, ta: number, tm: number, tb: number, xa: number, ya: num
 
 // Bisecting when the midpoint has not been sampled yet.
 function bisectAtMid(c: Core, ta: number, tm: number, tb: number, xa: number, ya: number, xb: number, yb: number, continuous: boolean): void {
-  evalAt(c, tm)
+  evalMid(c, tm)
   bisect(c, ta, tm, tb, xa, ya, c.pt[0], c.pt[1], xb, yb, continuous)
 }
 
@@ -486,7 +500,7 @@ function gapCloses(c: Core, ta0: number, tb0: number, xa0: number, ya0: number, 
   for (let k = 0; k < c.tune.halvings; k++) {
     const tm = ta + (tb - ta) / 2
     if (!(tm > ta && tm < tb)) return false
-    evalAt(c, tm)
+    evalMid(c, tm)
     const xm = c.pt[0]
     const ym = c.pt[1]
     if (!isFinite2(xm, ym)) return false
@@ -718,7 +732,7 @@ function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, 
 // stroke and left out of a band; beside a band that once cut sin(363x) into 115 bands, when the test
 // applied to certified columns too, and an exemption there was needed. For uncertified ones, sqrt(sin(wx))
 // and floor(3 sin(wx)) over w = 300 to 1100, it changes nothing, so there is none.
-function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, certified: boolean): boolean {
+function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb: number, yb: number, certified: boolean, unknown: boolean): boolean {
   const bands = c.bands
   if (bands === undefined) return false
   if (ta >= bands.notLo && tb <= bands.notHi) return false
@@ -727,6 +741,32 @@ function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb:
   const enclosureHi = alongY ? c.box.yHi : c.box.xHi
   const beside = ta === bands.lastEnd
   if (!certified && isStroke(c, enclosureLo, enclosureHi, alongY ? ya : xa, alongY ? yb : xb, alongY)) return false
+  // THE UNKNOWN COLUMN IS NOT TRIED ON FAITH. The twin says nothing of an interval of an integral (it has no enclosure to show
+  // a stroke by), so every column was tried at the price of bandSamples - 2 evaluations, and 14 of the 22 evaluations a pixel
+  // of y = integral(t = 0 to x, sin(t)) cost were those: nearly all of its columns are a stroke. One evaluation says which
+  // are not: the ends and the midpoint of a stroke are in order along the axis, and a column that turns (a band, or a peak) has
+  // its midpoint beyond one end. An ordered column is left to the core, which bisects it if it has to and tries the halves
+  // (the interval is not marked as tried: a half that does turn is a column). An oscillation faster than the column can have
+  // an ordered midpoint (2.5 periods in a pixel, half the time), and that cut the one band of integral(t = 0 to x, 0) +
+  // sin(500 x) into 185 and doubled its cost: so a column that starts where a band ended is always tried (as it is allowed
+  // fewer turns), and only the column that starts a run can be passed over, to be tried at its halves.
+  if (unknown && !beside && isFinite2(xa, ya) && isFinite2(xb, yb)) {
+    const tm = ta + (tb - ta) / 2
+    if (tm > ta && tm < tb) {
+      evalAt(c, tm)
+      // (the core asks for this point next, to bisect at or to halve: evalMid)
+      c.knownT = tm
+      c.knownX = c.pt[0]
+      c.knownY = c.pt[1]
+      if (isFinite2(c.pt[0], c.pt[1])) {
+        const a = alongY ? ya : xa
+        const b = alongY ? yb : xb
+        const m = alongY ? c.pt[1] : c.pt[0]
+        // (written so that a NaN fails it, and the column is tried)
+        if ((m - a) * (b - m) >= 0) return false
+      }
+    }
+  }
 
   const { xs, ys, ts } = bands
   const n = ts.length
@@ -774,10 +814,38 @@ function bandColumn(c: Core, ta: number, tb: number, xa: number, ya: number, xb:
       drawSamples(c, bands)
       return true
     }
+    // An UNKNOWN column that did not turn has paid for its samples, and they are the curve if they close (polylineCloses):
+    // joined, instead of asked again by the jump test and bisected (which is what the core would do, at the cost of more).
+    if (unknown && polylineCloses(c, bands)) {
+      drawSamples(c, bands)
+      return true
+    }
   }
   bands.notLo = ta
   bands.notHi = tb
   return false
+}
+
+// Whether the samples of a column of a curve the twin says nothing of (UNKNOWN), joined, are the curve there: the jump test,
+// asked of the samples the column has already taken instead of new ones (no evaluations). Connecting is certified, for such a
+// curve, by the gaps closing as an interval is halved, and the samples are the halving: at their spacing, a sixteenth of a
+// column, the gap between neighbours must be a pixel at most (the jump test is asked only of a gap under gapPx), and over
+// every three in a row the larger of the two gaps must be at most halvingShrink times the gap of the three (the jump test's
+// own ratio): a continuous curve halves its gap, a jump keeps it, so a jump between two samples is a gap that three samples
+// do not shrink. An undefined sample, a gap of a pixel, or a triple that does not close (a peak, a corner, a jump: the
+// first two close once the column is bisected) leaves the column to the core as it was. Written so that a NaN fails.
+function polylineCloses(c: Core, bands: BandState): boolean {
+  const { xs, ys } = bands
+  const n = xs.length
+  for (let i = 0; i < n; i++) if (!isFinite2(xs[i], ys[i])) return false
+  for (let i = 0; i + 1 < n; i++) if (!(pxDistance(c, xs[i], ys[i], xs[i + 1], ys[i + 1]) < c.tune.gapPx)) return false
+  for (let i = 0; i + 2 < n; i++) {
+    const left = pxDistance(c, xs[i], ys[i], xs[i + 1], ys[i + 1])
+    const right = pxDistance(c, xs[i + 1], ys[i + 1], xs[i + 2], ys[i + 2])
+    const whole = pxDistance(c, xs[i], ys[i], xs[i + 2], ys[i + 2])
+    if (!((left >= right ? left : right) <= c.tune.halvingShrink * whole)) return false
+  }
+  return true
 }
 
 // Whether the enclosure [lo, hi] of an interval on the oscillation axis is within the span of the
@@ -906,9 +974,31 @@ function isDrawable(c: Core, bands: BandState, enclosureLo: number, enclosureHi:
   return pxDistance(c, c.pt[0], c.pt[1], xs[i] + u * (xs[i + 1] - xs[i]), ys[i] + u * (ys[i + 1] - ys[i])) <= BAND.probePx
 }
 
+// One point of the curve, charged to the budget: a point is a point, and a point that made inner evaluations (an integral's
+// integrand, CurveFns.work) is what they come to in points, as CORE.innerPerPoint says (never less than one).
+// The midpoint of the interval being decided, which bandColumn may have sampled already (the UNKNOWN column's screen): taken from
+// there, once, and not evaluated again. The core halves it, bisects at it or bisects it, next.
+function evalMid(c: Core, t: number): void {
+  if (t === c.knownT) {
+    c.pt[0] = c.knownX
+    c.pt[1] = c.knownY
+    c.knownT = Number.NaN
+    return
+  }
+  evalAt(c, t)
+}
+
 function evalAt(c: Core, t: number): void {
   c.counter.points++
+  const { work } = c.fns
+  if (work === undefined) {
+    c.fns.point(t, c.pt)
+    return
+  }
+  const before = work()
   c.fns.point(t, c.pt)
+  const charge = Math.round((work() - before) / CORE.innerPerPoint)
+  if (charge > 1) c.counter.points += charge - 1
 }
 
 function isFinite2(x: number, y: number): boolean {
