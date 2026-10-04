@@ -33,6 +33,15 @@ export const LOCATE = {
   // A zero is located to tolRel * max(1, |t|): the width the bisections and the
   // golden-section search stop at.
   tolRel: 1e-12,
+  // How close to 0 an enclosure's bounds are to be the point zero. The twin widens
+  // every bound outward, an exact 0 by the smallest double (floor(x) - 3 over
+  // [3.2, 3.4] is [-5e-324, 5e-324], and each operation after adds its own), so an
+  // exact test misses it.
+  zeroBand: 1e-300,
+  // The most steps of a bisection (adjacent doubles are reached in fewer) and of a
+  // golden-section search (a range of 1e6 to 1e-12 takes about 70).
+  maxBisections: 64,
+  maxGoldenSteps: 200,
   // The twin stops bisecting a box that may hold a zero at this fraction of the
   // range: a bracket narrow enough that the scalar samples inside it, not more
   // twin evaluations, decide what it holds. Sub-pixel is enough (about 0.2 px
@@ -49,6 +58,22 @@ export const LOCATE = {
   // tan(1000 x) over a view): the result says it was cut. Zeros further apart than a
   // coarse box are told apart by the twin, so brackets that wide hold crowds.
   unresolvedLeaves: 4,
+}
+
+// The structure walk (structure.ts): how far it goes into an expression.
+export const STRUCTURE = {
+  // How many user functions (or derivatives) deep a walk goes, and how many it
+  // expands in all. The depth cap alone bounds a chain, not the work: a function
+  // that calls itself twice (fib(n) = fib(n - 1) + fib(n - 2)) is two branches at
+  // every level of it. The compile refuses a function that calls itself, but a
+  // caller is free to walk before it compiles, and a walk must not hang on a
+  // definition the author is still typing. Past either cap the call is walked by its
+  // arguments alone, so the walk ends and the compile's own error stays the report.
+  // An unrolled term of a binder counts as an expansion too (nested sums multiply).
+  inlineDepth: 32,
+  expansions: 4096,
+  // The most terms of a sum or product that are unrolled, one generator each.
+  unrolledTerms: 64,
 }
 
 // The one-sided limits (limits.ts): what a trouble spot is, read from the curve's
@@ -375,6 +400,11 @@ export const CORE = {
   // adjacent doubles are 1e-324 apart, at about 1e-22 of the floor interval, which is
   // far under any screen.
   edgeSteps: 64,
+  // The stretch of an edge that the twin calls PARTIAL with bounds (the tip of a semicircle, a sqrt-type edge) is split this
+  // fraction of the way in from the last defined point (adaptive.ts drawEdgeSplit): its body, from the defined end to there,
+  // is drawn only if the twin says CONTINUOUS of it (a step in it would say DEFINED), and the sliver that is left only if its
+  // ends are a gap apart at most and the jump test shows them closing.
+  edgeSplit: 1024,
   // (The same walk takes a pole's last stretch, from the floor's width inside a singular end to the pole.)
   // The most pieces an edge stretch is walked in when the twin cannot certify it whole (adaptive.ts walkEdge): each covers
   // half of what is left of the stretch between the floor interval's defined end and the last defined point, so n

@@ -76,16 +76,6 @@ export interface LocateResult { zeros: Zero[]; truncated: boolean }
 type Scalar = (t: number) => number
 type Cluster = [number, number]
 
-// How close to 0 an enclosure's bounds are to be the point zero. The twin widens
-// every bound outward, an exact 0 by the smallest double (floor(x) - 3 over
-// [3.2, 3.4] is [-5e-324, 5e-324], and each operation after adds its own), so an
-// exact test misses it.
-const ZERO_BAND = 1e-300
-// The most steps of a bisection (adjacent doubles are reached in fewer) and of a
-// golden-section search (a range of 1e6 to 1e-12 takes about 70).
-const MAX_BISECTIONS = 64
-const MAX_GOLDEN_STEPS = 200
-
 export function locateZeros(gens: readonly Generator[], param: string, scope: MathScope, t0: number, t1: number, counter: EvalCounter): LocateResult {
   const all: Zero[] = []
   let truncated = false
@@ -181,7 +171,7 @@ function isolate(g: Scalar, gi: CompiledInterval, t0: number, t1: number, budget
     if (isEmpty(out) || out.lo > 0 || out.hi < 0) continue
     const mid = lo + (hi - lo) / 2
     const small = depth >= depthLimit || hi - lo <= LOCATE.tolRel * Math.max(1, Math.abs(mid)) || mid <= lo || mid >= hi
-    if (small || (out.lo >= -ZERO_BAND && out.hi <= ZERO_BAND && zeroAt(g, [lo, mid, hi], counter))) {
+    if (small || (out.lo >= -LOCATE.zeroBand && out.hi <= LOCATE.zeroBand && zeroAt(g, [lo, mid, hi], counter))) {
       add(lo, hi)
       continue
     }
@@ -276,7 +266,7 @@ const signed = (y: number) => y === y && y !== 0
 // opposite signs: bisected to adjacent doubles, or 64 steps. A zero the scalar hits
 // exactly is returned as found.
 function bisectSign(g: Scalar, lo: number, hi: number, glo: number, counter: EvalCounter): number {
-  for (let step = 0; step < MAX_BISECTIONS; step++) {
+  for (let step = 0; step < LOCATE.maxBisections; step++) {
     const mid = lo + (hi - lo) / 2
     if (mid <= lo || mid >= hi) break
     const gm = g(mid)
@@ -296,7 +286,7 @@ function bisectSign(g: Scalar, lo: number, hi: number, glo: number, counter: Eva
 function edge(g: Scalar, inside: number, outside: number, counter: EvalCounter): number {
   let a = inside
   let b = outside
-  for (let step = 0; step < MAX_BISECTIONS; step++) {
+  for (let step = 0; step < LOCATE.maxBisections; step++) {
     const mid = a + (b - a) / 2
     if (mid === a || mid === b) break
     counter.points++
@@ -321,7 +311,7 @@ function golden(g: Scalar, a: number, b: number, counter: EvalCounter): number {
   let d = a + GOLDEN * (b - a)
   let fc = f(c)
   let fd = f(d)
-  for (let step = 0; step < MAX_GOLDEN_STEPS && b - a > LOCATE.tolRel * Math.max(1, Math.abs(a), Math.abs(b)); step++) {
+  for (let step = 0; step < LOCATE.maxGoldenSteps && b - a > LOCATE.tolRel * Math.max(1, Math.abs(a), Math.abs(b)); step++) {
     if (fc <= fd) {
       b = d
       d = c

@@ -676,7 +676,7 @@ function certifyPiece(c: Core, w: EdgeWalk, t: number, next: number, xn: number,
 // order, lifted at the end only when the defined end is the left one, as refineEdge does.
 function drawEdgeSplit(c: Core, ta: number, xa: number, ya: number, tb: number, xb: number, yb: number, aDefined: boolean, td: number, xd: number, yd: number): void {
   const tEnd = aDefined ? ta : tb
-  const tIn = td + (tEnd - td) / 1024
+  const tIn = td + (tEnd - td) / CORE.edgeSplit
   let bodyOk = false
   let sliverOk = false
   let xi = 0

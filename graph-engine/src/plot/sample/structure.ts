@@ -46,6 +46,7 @@ import { expandPrime } from '../../math/prime'
 import { BINDERS, type ComparisonOp, comparisonOp, isReserved } from '../../math/reserved'
 import { isVectorBody, type MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
+import { STRUCTURE } from './tuning'
 
 export type Origin = 'seam' | 'natural'
 export interface Generator {
@@ -61,18 +62,8 @@ export interface Generator {
   cmps?: ComparisonOp[]
 }
 
-// How many user functions (or derivatives) deep a walk goes, and how many it
-// expands in all. The depth cap alone bounds a chain, not the work: a function
-// that calls itself twice (fib(n) = fib(n - 1) + fib(n - 2)) is two branches at
-// every level of it. The compile refuses a function that calls itself, but a
-// caller is free to walk before it compiles, and a walk must not hang on a
-// definition the author is still typing. Past either cap the call is walked by its
-// arguments alone, so the walk ends and the compile's own error stays the report.
-// An unrolled term of a binder counts as an expansion too (nested sums multiply).
-const MAX_INLINE_DEPTH = 32
-const MAX_EXPANSIONS = 4096
-// The most terms of a sum or product that are unrolled, one generator each.
-const MAX_UNROLLED_TERMS = 64
+// (The walk's caps, STRUCTURE in tuning.ts: how deep it goes into user functions and derivatives, how many expansions it makes in
+// all, and how many terms of a sum or product it unrolls.)
 
 type Emit = (expr: Expr, origin: Origin, why: string, cmp?: ComparisonOp) => void
 // A built-in's rule: its own generators from its arguments (already checked to be
@@ -208,7 +199,7 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope, n
   }
 
   let expansions = 0
-  const mayExpand = (depth: number) => depth < MAX_INLINE_DEPTH && ++expansions <= MAX_EXPANSIONS
+  const mayExpand = (depth: number) => depth < STRUCTURE.inlineDepth && ++expansions <= STRUCTURE.expansions
 
   // `depth` is how many user functions and derivatives the walk is inside; `out`
   // is where the generators found go (`emit`, or a binder's filter in front of it).
@@ -291,7 +282,7 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope, n
       if (terms === undefined) terms = unrolledTerms(lo, hi)
       if (terms === null) return
       for (const n of terms) {
-        if (++expansions > MAX_EXPANSIONS) return
+        if (++expansions > STRUCTURE.expansions) return
         out(substitute(generator, new Map([[bound, num(n)]])), origin, why, cmp)
       }
     })
@@ -316,7 +307,7 @@ export function troubleGenerators(expr: Expr, param: string, scope: MathScope, n
     }
     const first = constant(lo)
     const last = constant(hi)
-    if (first === null || last === null || last - first + 1 > MAX_UNROLLED_TERMS) return null
+    if (first === null || last === null || last - first + 1 > STRUCTURE.unrolledTerms) return null
     const terms: number[] = []
     for (let n = first; n <= last; n++) terms.push(n)
     return terms
