@@ -407,7 +407,7 @@ describe('sampleCurve — defined is the curve, not what is visible', () => {
 })
 
 // calc P2 task 7, fix round 1 (I1): a capped curve that drew nothing says so, but only if there was something to draw.
-describe('sampleCurve — blankAtCap', () => {
+describe('sampleCurve — blankInView', () => {
   const tiny = { points: 50, intervals: 50 }
   const go = (body: string, budget = tiny) => sampleCurve(explicit(body), view, scopeOf(), { ...opts, budget })
   it('is true when the budget ran out, nothing was drawn, and the start grid has the curve in view', () => {
@@ -415,20 +415,52 @@ describe('sampleCurve — blankAtCap', () => {
     const r = go('integral(t = 0 to x, 2t)')
     expect(r.capped).toBe(true)
     expect(curveOf(r.objects).chains).toHaveLength(0)
-    expect(r.blankAtCap).toBe(true)
+    expect(r.blankInView).toBe(true)
   })
   it('is false for a curve that is not in view at all: the cap hid nothing', () => {
     const r = go('integral(t = 0 to x, 2t) + 1000')
     expect(r.capped).toBe(true)
     expect(curveOf(r.objects).chains).toHaveLength(0)
-    expect(r.blankAtCap).toBe(false)
+    expect(r.blankInView).toBe(false)
   })
   it('is false when something was drawn, and when the budget held', () => {
     const drawn = go('sin(3x)')
     expect(drawn.capped).toBe(true)
     expect(curveOf(drawn.objects).chains.length).toBeGreaterThan(0)
-    expect(drawn.blankAtCap).toBe(false)
-    expect(run(explicit('x^2')).blankAtCap).toBe(false)
+    expect(drawn.blankInView).toBe(false)
+    expect(run(explicit('x^2')).blankInView).toBe(false)
+  })
+  // calc P2 final review, I4: it is not the cap's alone. Nothing drawn in view of a curve that has a point in view is a blank, whatever
+  // the cause, and what is drawn only in the overscan is not drawing.
+  it('is true of a curve the sampler could not certify (not capped), and false once it draws', () => {
+    const stairs = run(explicit('floor(1000x)'))
+    expect(stairs.capped).toBe(false)
+    expect(stairs.drawnInView).toBe(false)
+    expect(stairs.blankInView).toBe(true)
+    expect(run(explicit('floor(10x)')).drawnInView).toBe(true)
+  })
+  it('counts only what is in the picture: a chain that is only in the overscan is not drawn in view', () => {
+    // y = sqrt(x - 12) exists from x = 12, in the overscan of [-10, 10]; and the grid has no point in view, so it is not a blank either
+    const r = run(explicit('sqrt(x - 12)'))
+    expect(curveOf(r.objects).chains.length).toBeGreaterThan(0)
+    expect(r.drawnInView).toBe(false)
+    expect(r.blankInView).toBe(false)
+  })
+  it('a curve that is a point is defined, drawn (a filled value mark), and has no break and no chain', () => {
+    for (const body of ['{x = 1: 5}', '{x = 1.05: 5}']) {
+      const r = run(explicit(body))
+      expect(r.defined, body).toBe(true)
+      expect(r.drawnInView, body).toBe(true)
+      expect(r.blankInView, body).toBe(false)
+      expect(curveOf(r.objects).chains, body).toEqual([])
+      expect(curveOf(r.objects).breaks, body).toEqual([])
+      expect(marksOf(r.objects), body).toEqual([expect.objectContaining({ role: 'value', fill: 'filled', exact: true, at: { x: Number(body.match(/= ([\d.]+):/)![1]), y: 5 } })])
+    }
+  })
+  it('and so is a point of a parametric curve: (t, {t = 1: 5}) over [-5, 5]', () => {
+    const r = run({ kind: 'parametric', param: 't', fx: expr('t'), fy: expr('{t = 1: 5}'), from: -5, to: 5 })
+    expect(r.defined).toBe(true)
+    expect(marksOf(r.objects).map((m) => [m.role, m.at.x, m.at.y])).toEqual([['value', 1, 5]])
   })
 })
 
@@ -580,7 +612,7 @@ describe('sampleCurve — a smooth curve the twin cannot certify is drawn, not b
       expect(curveOf(r.objects).chains.length, quality).toBeGreaterThan(0)
       expect(have / want, quality).toBeGreaterThan(quality === 'full' ? 0.8 : 0.1)
       expect(r.capped, quality).toBe(true)
-      expect(r.blankAtCap, quality).toBe(false)
+      expect(r.blankInView, quality).toBe(false)
       expect(jumpsInView(r.objects, f), quality).toEqual([])
       // and it is the curve: every vertex within half a pixel of it
       for (const p of curveOf(r.objects).chains.flatMap(chainPoints)) expect(Math.abs(f(p.x) - p.y) * 40, quality).toBeLessThanOrEqual(0.5)

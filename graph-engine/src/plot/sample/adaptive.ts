@@ -927,7 +927,7 @@ function pxDistance(c: Core, xa: number, ya: number, xb: number, yb: number): nu
 }
 
 // Whether the chord between two finite points meets a box (slab test; written so that a NaN fails it, which says nothing).
-function chordMeets(box: Bounds, xa: number, ya: number, xb: number, yb: number): boolean {
+export function chordMeets(box: Bounds, xa: number, ya: number, xb: number, yb: number): boolean {
   let lo = 0
   let hi = 1
   const slab = (p: number, d: number, min: number, max: number): boolean => {

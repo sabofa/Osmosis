@@ -1423,6 +1423,52 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     })
   })
 
+  // calc P2 final review, I4 (rule 2): a curve that is in view and not drawn says why, whatever the cause. The budget and steepness
+  // notes covered the cap path; y = floor(1000 x) at FULL drew nothing and said nothing, y = {x = 1: 5} was silent, and
+  // y = {x = 1.05: 5} said "undefined everywhere in view" when the start grid missed the point and nothing when it hit it.
+  describe('a blank says why', () => {
+    const CERTIFY = 'not drawn: this curve could not be certified anywhere in view'
+    const NOT_DRAWN_BUDGET = 'not drawn: this curve needs more detail than its drawing budget allows'
+    const view = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+    const build = (spec: string, quality: 'full' | 'coarse' = 'full', bounds = view, budget?: { points: number; intervals: number }) => sceneWith(spec, { quality, widthPx: 800, heightPx: 800, budget }, bounds)
+    const marks = (scene: SceneOfResult) => scene.objects.filter((o) => o.kind === 'mark')
+    it('a staircase whose treads are a hundredth of a pixel wide says nothing could be certified, at FULL and COARSE', () => {
+      for (const [spec, quality] of [['y = floor(1000x)', 'full'], ['y = floor(1000x)', 'coarse'], ['y = floor(5000x)', 'full'], ['y = floor(100x)', 'coarse']] as const) {
+        const scene = build(spec, quality)
+        expect(scene.errors, `${spec} ${quality}`).toEqual([{ line: 1, message: CERTIFY }])
+        expect(curvesOf(scene)[0].chains, `${spec} ${quality}`).toEqual([])
+      }
+    })
+    it('a curve defined at one point is that point: a filled value mark, defined, no note, wherever the grid falls', () => {
+      for (const spec of ['y = {x = 1: 5}', 'y = {x = 1.05: 5}']) {
+        for (const off of [0, 0.013, 0.037, 0.25, 0.37, 1.11]) {
+          const scene = build(spec, 'full', { ...view, xMin: view.xMin + off, xMax: view.xMax + off })
+          const point = Number(spec.match(/= ([\d.]+):/)![1])
+          expect(scene.errors, `${spec}, panned ${off}`).toEqual([])
+          expect(marks(scene), `${spec}, panned ${off}`).toEqual([expect.objectContaining({ role: 'value', fill: 'filled', at: { x: point, y: 5 } })])
+        }
+      }
+    })
+    it('and the point off screen is a defined curve out of view, with no note', () => {
+      const scene = build('y = {x = 1.05: 5}', 'full', { xMin: 3, xMax: 13, yMin: -10, yMax: 10 })
+      expect(scene.errors).toEqual([])
+    })
+    it('a curve that is not there at all still says it is undefined everywhere in view', () => {
+      expect(build('y = sqrt(-1 - x^2)').errors).toEqual([expect.objectContaining({ message: expect.stringContaining('undefined everywhere in view') })])
+    })
+    it('a capped curve whose chain is only in the overscan is "not drawn", not "drawn coarsely": only drawing in view counts', () => {
+      // 40 cos(t) integrates to 40 sin(x): the budget is spent before the chain, which starts at the left of the overscan, reaches the view
+      const scene = build('y = integral(t = 0 to x, 40 cos(t))', 'full', view, { points: 4000, intervals: 4000 })
+      expect(curvesOf(scene)[0].chains.length).toBeGreaterThan(0)
+      expect(scene.errors).toEqual([{ line: 1, message: NOT_DRAWN_BUDGET }])
+    })
+    it('an ordinary curve has no note: smooth, a pole, a hole, a jump, an edge, an oscillation, an integral', () => {
+      for (const spec of ['y = x^2', 'y = sin(x)', 'y = tan(x)', 'y = 1/x', 'y = (x^2 - 1)/(x - 1)', 'y = floor(x)', 'y = ln(x)', 'y = sqrt(x)', 'y = sin(500x)', 'y = integral(t = 0 to x, sin(t))', 'r = 1 + cos(theta)', '(cos(t), sin(2t)) for t in [0, 6.3]', 'y = x + 100', 'y = {x = 1: 5} + x - x']) {
+        for (const quality of ['full', 'coarse'] as const) expect(build(spec, quality).errors, `${spec} ${quality}`).toEqual([])
+      }
+    })
+  })
+
   // fix round 3 (rule 2): a smooth curve steeper than 1024:1 on screen is lifted at every floor interval (its leaves of 1/1024 px are
   // still a pixel), and drew nothing, with no message
   describe('the steepness note', () => {

@@ -53,6 +53,7 @@
 // the point's value) are equal within `retriedEqualFactor` times that: each such limit
 // carries noise of about convergePx.
 //  - both diverge → pole;
+//  - both undefined, v defined → isolated (the curve is that one point); both undefined and v not → unknown;
 //  - one undefined, the other converges → edge, with that limit;
 //  - one undefined, the other diverges → edge, limit null;
 //  - one undefined, the other unknown but finite at every offset and settling (the geometric test again, with a
@@ -86,6 +87,7 @@ export type Classification =
   | { kind: 'jump'; left: Vec2; right: Vec2; value: Vec2 | null }
   | { kind: 'hole'; limit: Vec2; value: Vec2 | null } // value: the point's own value when defined and different
   | { kind: 'edge'; defined: 'left' | 'right'; limit: Vec2 | null } // limit null when the defined side diverges
+  | { kind: 'isolated'; value: Vec2 } // undefined on both sides, defined at the point itself
   | { kind: 'unknown' }
 
 const UNKNOWN: Side = { kind: 'unknown' }
@@ -312,6 +314,8 @@ export function classify(point: PointFn, tc: number, h0: number, px: PxScale, co
   const same = (a: Vec2, b: Vec2) => screenDist(a.x - b.x, a.y - b.y, px) <= equalPx
 
   if (left.kind === 'diverge' && right.kind === 'diverge') return { kind: 'pole' }
+  // A point of the curve with nothing either side of it: {x = 1: 5}, sqrt(-x^2) at 0.
+  if (left.kind === 'undefined' && right.kind === 'undefined') return value !== null ? { kind: 'isolated', value } : { kind: 'unknown' }
   if (left.kind === 'undefined' || right.kind === 'undefined') {
     // The side that is there; when neither is (both undefined, or the other unknown)
     // there is nothing to end a curve at.

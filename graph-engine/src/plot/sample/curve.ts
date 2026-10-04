@@ -86,8 +86,11 @@
 //    stops at 6e-9, and for an explicit curve the independent coordinate of a limit is the
 //    located parameter itself, not the sample the limit was read at. `tested` and `defined`
 //    are read off a start grid (startGrid), drawn or not: over the VISIBLE range of an explicit curve's
-//    independent axis (not the overscan), over the given range of a polar or parametric one. `blankAtCap`
-//    says the budget ran out with nothing drawn of a curve that is in view.
+//    independent axis (not the overscan), over the given range of a polar or parametric one. `blankInView`
+//    says nothing of the curve is drawn in the picture though the grid has a point of it there (the caller
+//    says why: the budget, steepness, or that nothing could be certified), and `drawnInView` that something
+//    is. A curve that is defined only at isolated points (`{x = 1: 5}`: undefined either side of a point
+//    that is defined) is those points, each a filled value mark, and is defined and drawn.
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { call, mul, variable } from '../../math/expr'
 import { type CompiledInterval, compileInterval, CONTINUOUS, isEmpty, iv, type Iv, type Verdict } from '../../math/interval'
@@ -95,7 +98,7 @@ import { type ComparisonOp, piecewise } from '../../math/reserved'
 import type { MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
 import type { Bounds, Break, Chain, SceneObject, Vec2 } from '../../scene/types'
-import { sampleRange } from './adaptive'
+import { chordMeets, sampleRange } from './adaptive'
 import { BandSink } from './band'
 import { classify, type Classification } from './limits'
 import { locateZeros, type Zero } from './locate'
@@ -128,10 +131,16 @@ export interface SampledCurve {
   // the curve first, then its marks in parameter order, then its asymptote lines
   objects: SceneObject[]
   capped: boolean
-  // The budget ran out (`capped`), no chain and no band was drawn, and the start grid has a point of the curve
-  // inside the view: the curve is missing because of the budget, not because it is not there. A capped curve
-  // that is wholly off screen (an integral's twin cannot say so, so it is refined as if it were not) is not this.
-  blankAtCap: boolean
+  // A chain or a band of the curve, or one of its isolated points, is in the view (the picture, not the overscan: some
+  // vertex of it inside the view, or a segment across it).
+  drawnInView: boolean
+  // Nothing of the curve is drawn in view (`drawnInView` is false), and the start grid has a finite point of it inside the
+  // view: the curve is missing, and it is not because it is not there. The cause is the caller's to say: `capped` (the
+  // budget ran out), `tooSteep`, or else that nothing the sampler could certify is there (a staircase of a thousand
+  // steps a unit, whose treads are a hundredth of a pixel wide). A curve that is wholly off screen (a capped integral's
+  // twin cannot say so, so it is refined as if it were not), or drawn only in the overscan with no grid point in view,
+  // is not this.
+  blankInView: boolean
   // Somewhere IN VIEW the curve is smooth and too steep for the sampler to certify (a floor interval was lifted because
   // its sub-intervals of 1/1024 px were still a pixel high and their gaps were still halving, by steepShrink: past about
   // 1024:1 on screen), so it is broken there and not drawn, though nothing else is wrong with it. A jump the walk did
@@ -183,6 +192,8 @@ interface Walk {
   // an explicit curve's independent axis: the coordinate of a limit that is the parameter
   independent: 'x' | 'y' | null
   marks: PendingMark[]
+  // the points the curve is defined at and nowhere near (each has a filled value mark)
+  isolated: Vec2[]
   poles: number[]
   // the parameters of the edges the walk classified (their breaks are made from this, not through the sink)
   edges: number[]
@@ -242,7 +253,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
 
   // A range or a scale that is not a number draws nothing (a view of no extent, say).
   if (!(co.to > co.from) || !Number.isFinite(co.from) || !Number.isFinite(co.to) || !(co.pxPerT > 0) || !Number.isFinite(co.pxPerT) || !(px.x > 0) || !(px.y > 0)) {
-    return { objects: [curveObject(options, [], [])], capped: false, blankAtCap: false, tooSteep: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
+    return { objects: [curveObject(options, [], [])], capped: false, drawnInView: false, blankInView: false, tooSteep: false, stats: { points: 0, intervals: 0 }, tested: true, defined: false }
   }
 
   const naturals: Expr[] = []
@@ -259,6 +270,7 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
     sink,
     independent: spec.kind === 'explicit' ? spec.independent : null,
     marks: [],
+    isolated: [],
     poles: [],
     edges: [],
     pt: new Float64Array(2),
@@ -301,11 +313,26 @@ export function sampleCurve(spec: CurveSpec, view: View, scope: MathScope, optio
   const objects: SceneObject[] = [curveObject(options, chains, breaks), ...bands, ...marksOf(walk.marks, options), ...(spec.kind === 'explicit' && options.asymptotes ? guidesOf(walk.poles, spec.independent, options) : [])]
   // Drawn, for `defined`: a chain or band that reaches the visible range (an explicit curve drawn only in the overscan is not defined in view)
   const [visibleFrom, visibleTo] = visibleRange(spec, co, bounds)
-  const drawn = spec.kind === 'explicit' ? reaches(chains, visibleFrom, visibleTo) || bands.some((b) => b.kind === 'band' && reaches(b.outline, visibleFrom, visibleTo)) : chains.length > 0 || bands.length > 0
-  const blank = chains.length === 0 && bands.length === 0
-  const grid = startGrid(spec, co, fns, scope, tuning, bounds, counter, drawn, capped && blank)
+  // (a curve that is a point, or points, is defined)
+  const drawn = (spec.kind === 'explicit' ? reaches(chains, visibleFrom, visibleTo) || bands.some((b) => b.kind === 'band' && reaches(b.outline, visibleFrom, visibleTo)) : chains.length > 0 || bands.length > 0) || walk.isolated.length > 0
+  // In the picture: the view, not the range the sampler looked over. The curve's own points count, and a jump's ends and a hole's
+  // ring do not (they say what the curve does at a spot, and floor(1000 x) has them in view and is not drawn).
+  const drawnInView = walk.isolated.some((p) => p.x >= bounds.xMin && p.x <= bounds.xMax && p.y >= bounds.yMin && p.y <= bounds.yMax) || meetsView(chains, bounds) || bands.some((b) => b.kind === 'band' && meetsView(b.outline, bounds))
+  const grid = startGrid(spec, co, fns, scope, tuning, bounds, counter, drawn, !drawnInView)
   // the stats are the total of what the call evaluated: locating, classifying and sampling
-  return { objects, capped, blankAtCap: capped && blank && grid.seen, tooSteep, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
+  return { objects, capped, drawnInView, blankInView: !drawnInView && grid.seen, tooSteep, stats: { points: counter.points + spent.points, intervals: counter.intervals + spent.intervals }, tested: grid.tested, defined: grid.defined }
+}
+
+// Whether any of the chains has a vertex inside the box, or a segment across it.
+function meetsView(chains: readonly Chain[], box: Bounds): boolean {
+  for (const chain of chains) {
+    const { xy } = chain
+    for (let i = 0; 2 * i < xy.length; i++) {
+      if (xy[2 * i] >= box.xMin && xy[2 * i] <= box.xMax && xy[2 * i + 1] >= box.yMin && xy[2 * i + 1] <= box.yMax) return true
+      if (i > 0 && chordMeets(box, xy[2 * i - 2], xy[2 * i - 1], xy[2 * i], xy[2 * i + 1])) return true
+    }
+  }
+  return false
 }
 
 // What the curve is AT a zero, as the classifier reads it (limits.ts classify takes the point's own value from this).
@@ -382,6 +409,12 @@ function meet(w: Walk, c: Classification, zero: Zero): Meeting | null {
     case 'regular':
     case 'unknown':
       return null
+    case 'isolated':
+      // the curve is this point: nothing either side of it to draw, and no end or break to say (a point has no edge). Its mark
+      // is a filled value, and the pieces beside it are singular (they are undefined, and cull themselves).
+      w.marks.push({ at: c.value, role: 'value', fill: 'filled' })
+      w.isolated.push(c.value)
+      return { before: SINGULAR, after: SINGULAR, lift: true }
     case 'pole':
       w.sink.addBreak(tc, 'pole')
       w.poles.push(tc)

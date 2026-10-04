@@ -61,6 +61,12 @@ export interface CorpusCase {
     // interpolated along the segment: both are skipped, with the chords that end at them), and no chord strays
     // more than a pixel from it
     onCurve?: boolean
+    // default: checked. No segment of a chain spans a jump of the true curve: the true curve is sampled densely over each
+    // segment's parameter span, and a gap between neighbours that bisecting does not close is a discontinuity (dense.ts, which
+    // catches a bridge that the polyline-distance check of onCurve passes). `false` where a case's segments are not meant to
+    // be the curve (an alias, a known limit): the comment says why. `{ segments }`: at most this many segments a view (by a
+    // stride, and every long one), for a case whose points are dear (an integral costs a quadrature).
+    dense?: false | { segments: number }
     // pole positions and guide counts are equal in every pair of views, over the part of the independent
     // axis they both show
     panStable?: boolean
@@ -202,6 +208,31 @@ export const CORPUS: readonly CorpusCase[] = [
     expect: { holes: [{ x: Math.PI, y: 1 }], poles: [] },
     ceiling: { points: 3600, intervals: 1400 }, // measured 2370 / 892
   },
+  // Holes at zeros that are not exact doubles. At the double nearest k pi, sin(x) is 1.2e-16, so the scalar was "defined" there and equal
+  // to the limit, and the hole was classified regular: no ring, and an untyped jump a sixteenth of a pixel wide (sin(x)/sin(x) kept only
+  // the one at 0); (x - pi)/sin(x) had a filled value dot at (pi, 0). A zero of a denominator is asked of the twin (curve.ts pointAt).
+  {
+    name: 'sin(x)/sin(x)',
+    spec: 'y = sin(x)/sin(x)',
+    views: [view(-10, 10, -2, 3)],
+    expect: { holes: [-3, -2, -1, 0, 1, 2, 3].map((k) => ({ x: k * Math.PI, y: 1 })), values: [], poles: [], jumps: [], bands: false },
+    ceiling: { points: 20200, intervals: 6750 }, // measured 13453 / 4495
+  },
+  {
+    name: '(x^2 - 2)/(x^2 - 2)',
+    spec: 'y = (x^2 - 2)/(x^2 - 2)',
+    views: [view(-4, 4, -1, 3)],
+    expect: { holes: [{ x: -Math.SQRT2, y: 1 }, { x: Math.SQRT2, y: 1 }], values: [], poles: [], jumps: [] },
+    ceiling: { points: 14200, intervals: 5100 }, // measured 9411 / 3393 (a cancelling form: the twin's enclosure of it is loose all the way down)
+  },
+  {
+    // a pole at every k pi but pi, where the numerator vanishes too: a hole at (pi, -1), and no value dot at (pi, 0)
+    name: '(x - pi)/sin(x)',
+    spec: 'y = (x - pi)/sin(x)',
+    views: [view(-10, 10, -4, 4)],
+    expect: { holes: [{ x: Math.PI, y: -1 }], values: [], poles: [-3, -2, -1, 0, 2, 3].map((k) => k * Math.PI) },
+    ceiling: { points: 3900, intervals: 1400 }, // measured 2578 / 931
+  },
 
   // ---- jumps and ends ------------------------------------------------------------------------------------
   {
@@ -280,6 +311,23 @@ export const CORPUS: readonly CorpusCase[] = [
     views: [view(-3, 4, -2, 6)],
     expect: { holes: [{ x: 1, y: 1 }], values: [{ x: 1, y: 5 }], poles: [] },
     ceiling: { points: 1100, intervals: 510 }, // measured 711 / 340
+  },
+  {
+    // A curve that is a point: undefined either side of x = 1, and 5 there. It is the point (a filled value mark), is defined, and
+    // draws no chain: it was silent (the grid hit it) or "undefined everywhere in view" (when the grid missed: y = {x = 1.05: 5})
+    // depending on the pan. No note.
+    name: 'y = {x = 1: 5}',
+    spec: 'y = {x = 1: 5}',
+    views: [view(-3, 4, -2, 6)],
+    expect: { values: [{ x: 1, y: 5 }], holes: [], blank: true },
+    ceiling: { points: 130, intervals: 45 }, // measured 82 / 27
+  },
+  {
+    name: 'y = {x = 1.05: 5}',
+    spec: 'y = {x = 1.05: 5}',
+    views: [view(-3, 4, -2, 6), view(-2.9, 4.1, -2, 6), view(-2.77, 4.23, -2, 6)],
+    expect: { values: [{ x: 1.05, y: 5 }], holes: [], blank: true },
+    ceiling: { points: 130, intervals: 45 }, // measured 82 / 27 (the worst of 3 views)
   },
 
   // ---- edges ---------------------------------------------------------------------------------------------
@@ -436,6 +484,25 @@ export const CORPUS: readonly CorpusCase[] = [
     expect: { drawn: [{ x: 3.000005, y: 5 }] },
     ceiling: { points: 510, intervals: 470 }, // measured 337 / 309
   },
+  // A staircase of a thousand steps a unit: the treads are 0.04 px wide and the risers 40 px, so nothing of it can be drawn and be true.
+  // At COARSE the exemption for the last stretch to an anchor drew a 480 px chord from (-0.0122, -13) to the anchor of the jump at 0,
+  // across twelve jumps, and the dense check of the corpus (testing/dense.ts) sees it; at FULL it drew nothing and said nothing.
+  // Now it draws nothing at either and says why.
+  {
+    name: 'a dense staircase, floor(1000x), at FULL',
+    spec: 'y = floor(1000x)',
+    views: [STD],
+    expect: { blank: true, notes: [NOTE_BLANK] },
+    ceiling: { points: 2200, intervals: 12600 }, // measured 1450 / 8347
+  },
+  {
+    name: 'a dense staircase, floor(1000x), at COARSE',
+    spec: 'y = floor(1000x)',
+    views: [STD],
+    quality: 'coarse',
+    expect: { blank: true, notes: [NOTE_BLANK] },
+    ceiling: { points: 1650, intervals: 12400 }, // measured 1098 / 8265
+  },
 
   // ---- the narrow spike ----------------------------------------------------------------------------------
   {
@@ -542,7 +609,7 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'y = integral(t = 0 to x, 2000)',
     views: [STD],
     expect: { notes: [NOTE_STEEP], blank: true },
-    ceiling: { points: 1100, intervals: 510 }, // measured 716 / 337
+    ceiling: { points: 1230, intervals: 510 }, // measured 816 / 337 (716 before the start grid was scanned for a point in view: 100 points)
   },
 
   // ---- breaks the core finds on its own ------------------------------------------------------------------
@@ -586,7 +653,7 @@ export const CORPUS: readonly CorpusCase[] = [
     spec: 'y = integral(t = 0 to x, 0) + 17 - 22/(1 + 20000 (x - 3.025)^2)',
     views: [STD],
     expect: { blank: true, undrawn: [{ x: 3.025, y: -5 }] },
-    ceiling: { points: 910, intervals: 460 }, // measured 602 / 302
+    ceiling: { points: 1210, intervals: 460 }, // measured 802 / 302 (602 before the start grid was scanned for a point in view, which this curve has none of: 200 points)
   },
   {
     // KNOWN LIMIT. gamma has a pole at every negative integer, but its residue there is 1/n!, so left of about -11 the

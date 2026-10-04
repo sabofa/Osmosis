@@ -10,6 +10,7 @@ import type { Break, BreakKind, Chain, Scene, SceneObject, Vec2 } from '../../sc
 import { FULL } from '../sample/tuning'
 import { buildPlotScope } from '../scope'
 import { CORPUS, type CorpusCase, type CorpusView } from './corpus'
+import { anchorSkip, firstBridge } from './dense'
 
 // The torture corpus, run (see corpus.ts). For every case: the scene it builds says what the case says and no
 // more, the curve is on the curve, the breaks and marks are where the mathematics puts them, a pan sequence
@@ -323,6 +324,8 @@ const json = (scene: Scene) => JSON.stringify(scene, (_key, value) => (ArrayBuff
 
 // the budgets of the heaviest cases (an integral costs a quadrature a point) are generous, so a loaded machine does not fail them
 const TIMEOUT = 60_000
+// the segments of a view the dense check looks at, at most, unless a case says otherwise (a stride of the segments, and all long ones)
+const DENSE_SEGMENTS = 2000
 
 describe('the torture corpus', () => {
   it('has a unique name for every case, a main view, and a ceiling', () => {
@@ -347,11 +350,14 @@ describe('the torture corpus', () => {
         expect(run.parsed.errors).toEqual([])
       })
 
-      it('says what the case expects and no more', () => {
-        const notes = run.scenes()[0].errors.map((e) => e.message)
-        const expected = want.notes ?? []
-        expect(notes, notes.join(' | ')).toHaveLength(expected.length)
-        expected.forEach((prefix, i) => expect(notes[i].startsWith(prefix), `${notes[i]} should start with ${prefix}`).toBe(true))
+      // (in every view: a note that depends on where the pan put the start grid is a flicker)
+      it('says what the case expects and no more, in every view', () => {
+        run.scenes().forEach((scene, v) => {
+          const notes = scene.errors.map((e) => e.message)
+          const expected = want.notes ?? []
+          expect(notes, `view ${v}: ${notes.join(' | ')}`).toHaveLength(expected.length)
+          expected.forEach((prefix, i) => expect(notes[i].startsWith(prefix), `view ${v}: ${notes[i]} should start with ${prefix}`).toBe(true))
+        })
       }, TIMEOUT)
 
       it('stays within its evaluation ceiling in every view', () => {
@@ -381,6 +387,24 @@ describe('the torture corpus', () => {
               const d = deviation(curve, scene, truth, statement, c.views[i])
               expect(d.vertex, `view ${i}: the worst vertex is ${d.vertex} px off`).toBeLessThanOrEqual(VERTEX_PX)
               expect(d.chord, `view ${i}: the worst chord is ${d.chord} px off`).toBeLessThanOrEqual(CHORD_PX)
+            }
+          })
+        }, TIMEOUT)
+      }
+
+      if (want.dense !== false) {
+        it('has no segment that spans a jump of the true curve (the true curve sampled densely over each segment)', () => {
+          run.scenes().forEach((scene, i) => {
+            const v = c.views[i]
+            const s = span(v)
+            const clip = { xMin: v.bounds.xMin - FULL.overscan * s.x, xMax: v.bounds.xMax + FULL.overscan * s.x, yMin: v.bounds.yMin - FULL.overscan * s.y, yMax: v.bounds.yMax + FULL.overscan * s.y }
+            for (const curve of curvesOf(scene)) {
+              const statement = run.parsed.statements[curve.id.statement]
+              const truth = truthOf(statement, run.scope, run.parsed.config.angle)
+              if (truth === null) continue
+              const skip = anchorSkip(scene.objects, curve.id.statement, statement.kind === 'explicit' ? statement.independent : null, clip)
+              const found = firstBridge(curve.chains, truth, pxPerUnit(v), skip, want.dense?.segments ?? DENSE_SEGMENTS)
+              expect(found.size, `view ${i}: the segment from ${found.from} to ${found.to} spans a jump of ${found.size} px (of ${found.checked} checked)`).toBe(0)
             }
           })
         }, TIMEOUT)

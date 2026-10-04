@@ -39,6 +39,11 @@ describe('classify', () => {
     expect(c('{0 < x <= 3: 2}', 0)).toMatchObject({ kind: 'edge', defined: 'right', limit: { y: expect.closeTo(2, 9) } })
     expect(c('{0 < x <= 3: 2}', 3)).toMatchObject({ kind: 'edge', defined: 'left', limit: { y: expect.closeTo(2, 9) } })
   })
+  it('a point with nothing either side of it is isolated (the curve is that point), and a point with no value too is unknown', () => {
+    expect(c('{x = 1: 5}', 1)).toEqual({ kind: 'isolated', value: { x: 1, y: 5 } })
+    expect(c('{x = 1.05: 5}', 1.05)).toEqual({ kind: 'isolated', value: { x: 1.05, y: 5 } })
+    expect(c('{x = 1: 5}', 2).kind).toBe('unknown')
+  })
   it('regular points and the honest unknowns', () => {
     expect(c('{x < 1: x, x}', 1).kind).toBe('regular')
     expect(c('sin(1/x)', 0).kind).toBe('unknown')
