@@ -214,6 +214,11 @@ export const placeNode = (containerId: string, childId: string, name?: string) =
 // Rename here: one placement's name, nothing else. There is no rename-everywhere.
 export const renamePlacement = (placementId: string, name: string) => call<PlacementRow>('PATCH', `/placements/${enc(placementId)}`, { name })
 
+// Retitle a node: its fallback name (what a placement is called when it is made
+// without a name, and what a trajectory, track or course is called at the top
+// level). A name in one container is renamePlacement, not this.
+export const retitleNode = (id: string, title: string) => call<{ id: string; title: string }>('PATCH', `/nodes/${enc(id)}`, { title })
+
 // What a file is for, or null for nothing. One tag per file, any valid tag.
 export const setKindTag = (id: string, kindTag: string | null) => call<{ id: string }>('PATCH', `/nodes/${enc(id)}`, { kind_tag: kindTag })
 

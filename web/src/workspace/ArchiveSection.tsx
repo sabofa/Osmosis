@@ -22,7 +22,8 @@ import { getArchive, getArchivedPlacements, purgeNode, restoreNode, type NodeSum
 // was deleted together with the node (its orphans) is offered back in one go.
 // Purge deletes for good, so it asks first; the server refuses to purge the file
 // of an upload that still exists, and that refusal says where the upload is
-// deleted.
+// deleted. It refuses the other way round too: the file of an upload that was
+// deleted cannot be restored, only purged, and says so.
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -37,8 +38,11 @@ export default function ArchiveSection({
   // Something came back, so the picker's own lists (trajectories, tracks,
   // courses, unplaced) may have changed.
   onRestored,
+  // Changes when something was deleted from the picker above, so the list is read again.
+  reloadKey = 0,
 }: {
   onRestored(): void
+  reloadKey?: number
 }) {
   const [items, setItems] = useState<NodeSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -62,7 +66,7 @@ export default function ArchiveSection({
     return () => {
       live = false
     }
-  }, [version])
+  }, [version, reloadKey])
 
   // Runs one action with the buttons held and the old messages cleared.
   async function run(fn: () => Promise<void>) {
@@ -91,14 +95,16 @@ export default function ArchiveSection({
       setChoosing({ node, choices, chosen: chosenByDefault(choices) })
     })
 
-  // Step two: restore with exactly the ticked places.
+  // Step two: restore with exactly the ticked places. The checklist stays open
+  // until that worked, so a refusal (the server's words are shown above) does not
+  // cost Ben his choice.
   const restore = () =>
     run(async () => {
       const c = choosing
       if (!c) return
-      setChoosing(null)
       const out = await restoreNode(c.node.id, c.chosen)
-      setNotice(restoreNotice(c.node, out))
+      setChoosing(null)
+      setNotice(restoreNotice(c.node, out, c.choices))
       setMates(out.batch_mates.length > 0 ? out.batch_mates : null)
       refresh()
     })

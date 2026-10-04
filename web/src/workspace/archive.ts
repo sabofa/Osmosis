@@ -61,14 +61,20 @@ const waits = (n: number): string => `${plural(n, 'place')} ${n === 1 ? 'waits' 
 // ---- after restoring ---------------------------------------------------------
 
 // Restore: say so, and when a name had been taken in the meantime, what it is
-// called now (the server gives the new names, not where they are); which
+// called now and in which container (the server gives the new names, and the
+// checklist the pressed Restore came from knows the containers); which
 // placements are waiting for a container that is still archived; and where to
 // find the node when it came back with no place at all.
-export function restoreNotice(node: { title: string; kind: NodeKind }, out: RestoreOutcome): string {
-  const renamed = out.placements.filter((p) => p.renamed).map((p) => `"${p.name}"`)
+export function restoreNotice(node: { title: string; kind: NodeKind }, out: RestoreOutcome, choices: RestoreChoice[] = []): string {
+  // `"Week 1 (2)" in "Calc"`; the container is only unknown if the checklist lacks the placement.
+  const called = (p: { placement_id: string; name: string }): string => {
+    const title = choices.find((c) => c.placementId === p.placement_id)?.container.title
+    return title === undefined ? `"${p.name}" there` : `"${p.name}" in "${title}"`
+  }
+  const renamed = out.placements.filter((p) => p.renamed)
   let text = `Restored "${node.title}".`
-  if (renamed.length === 1) text += ` A name was already taken in 1 place, so it is called ${renamed[0]} there.`
-  else if (renamed.length > 1) text += ` A name was already taken in ${renamed.length} places, so its names there are ${renamed.join(', ')}.`
+  if (renamed.length === 1) text += ` A name was already taken in 1 place, so it is called ${called(renamed[0])}.`
+  else if (renamed.length > 1) text += ` A name was already taken in ${renamed.length} places, so its names are ${renamed.map(called).join(', ')}.`
   if (out.skipped.length > 0) text += ` ${waits(out.skipped.length)}`
   if (out.placements.length === 0) {
     text += isLoose(node.kind) ? ' It is unplaced: find it in the picker, under Unplaced.' : ' It is at the top level: find it in the picker.'
@@ -101,7 +107,7 @@ export function matesNotice(done: { title: string; out: RestoreOutcome }[], fail
 // (asset_in_use); that one gets the way out. The rest are the server's words.
 export function purgeProblem(err: unknown, title: string): string {
   if (err instanceof WsError && err.code === 'asset_in_use') {
-    return `"${title}" is an upload that still exists, so it cannot be purged here. Delete the upload in Settings → Documents, then purge it.`
+    return `"${title}" is an upload that still exists, so it cannot be purged here. Delete the upload in Settings → Documents (on the server's Osmosis; a laptop node doesn't list the server's uploads), then purge it.`
   }
   return err instanceof Error ? err.message : String(err)
 }
@@ -143,7 +149,10 @@ export function deleteBody(kind: NodeKind, appearsIn: AppearsInRow[], orphans: n
 
 export const orphanLabel = (n: number): string => `Also delete ${plural(n, 'item')} placed nowhere else`
 
-export function deleteNotice(name: string, archivedCount: number): string {
+// Where Restore is depends on where Delete… was pressed: in a workspace the
+// Archive is in the picker (Switch goes there), and in the picker it is below.
+export function deleteNotice(name: string, archivedCount: number, inPicker = false): string {
   const more = archivedCount > 1 ? ` with ${archivedCount - 1} more` : ''
-  return `"${name}" is in the Archive${more}. Restore it from Archive in the picker (Switch).`
+  const where = inPicker ? 'from the Archive below' : 'from Archive in the picker (Switch)'
+  return `"${name}" is in the Archive${more}. Restore it ${where}.`
 }

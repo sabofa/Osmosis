@@ -4,7 +4,7 @@ import { BookIcon, ChevronDownIcon, ChevronRightIcon, CompassIcon, FlagIcon, Fol
 import { removeNotice } from './archive'
 import { createUnder } from './create'
 import { listWebFileTypes, webFileType } from './fileTypes'
-import { parseTagInput, tagChoices } from './kindTags'
+import { parseTagInput, tagChoices, tagKey, tagLabel } from './kindTags'
 import { newOptions, type NewOption } from './newMenu'
 import PlaceIn from './PlaceIn'
 import { placeWithFallback, type PlaceTarget } from './placing'
@@ -313,11 +313,11 @@ export function TreeRow({ model, ctx, depth }: { model: RowModel; ctx: TreeCtx; 
                   {tagMenu && (
                     <div className="ws-submenu" role="group" aria-label="Tag">
                       {tagChoices(node.kind_tag).map((tag) => (
-                        <button key={tag ?? 'none'} role="menuitemradio" aria-checked={node.kind_tag === tag} onClick={() => void retag(tag)}>
+                        <button key={tagKey(tag)} role="menuitemradio" aria-checked={node.kind_tag === tag} onClick={() => void retag(tag)}>
                           <span className="ws-tick" aria-hidden="true">
                             {node.kind_tag === tag ? '✓' : ''}
                           </span>
-                          {tag ?? 'none'}
+                          {tagLabel(tag)}
                         </button>
                       ))}
                       <button role="menuitem" onClick={() => void otherTag()}>

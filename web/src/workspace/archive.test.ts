@@ -96,10 +96,17 @@ describe('restoreNotice: what Restore says happened', () => {
   it('is plain when nothing had to change', () => {
     expect(restoreNotice({ title: 'Week 1', kind: 'file' }, outcome())).toBe('Restored "Week 1".')
   })
-  it('names each name that was taken in the meantime, so Ben knows where it is now', () => {
+  // The checklist the notice reads the containers from (restoreChoices of the archived placements).
+  const choices = restoreChoices([
+    placement('p1', 'Week 1', { id: 'c1', title: 'Calc', archived: false }),
+    placement('p2', 'Notes', { id: 'c2', title: 'Physics', archived: false }),
+    placement('p3', 'Fine', { id: 'c3', title: 'Chem', archived: false }),
+  ])
+
+  it('names each name that was taken in the meantime and the container it is in, so Ben knows where it is now', () => {
     expect(
-      restoreNotice({ title: 'Week 1', kind: 'file' }, outcome({ placements: [{ placement_id: 'p1', name: 'Week 1 (2)', renamed: true }] }))
-    ).toBe('Restored "Week 1". A name was already taken in 1 place, so it is called "Week 1 (2)" there.')
+      restoreNotice({ title: 'Week 1', kind: 'file' }, outcome({ placements: [{ placement_id: 'p1', name: 'Week 1 (2)', renamed: true }] }), choices)
+    ).toBe('Restored "Week 1". A name was already taken in 1 place, so it is called "Week 1 (2)" in "Calc".')
     expect(
       restoreNotice(
         { title: 'Week 1', kind: 'file' },
@@ -109,9 +116,15 @@ describe('restoreNotice: what Restore says happened', () => {
             { placement_id: 'p2', name: 'Notes (3)', renamed: true },
             { placement_id: 'p3', name: 'Fine', renamed: false },
           ],
-        })
+        }),
+        choices
       )
-    ).toBe('Restored "Week 1". A name was already taken in 2 places, so its names there are "Week 1 (2)", "Notes (3)".')
+    ).toBe('Restored "Week 1". A name was already taken in 2 places, so its names are "Week 1 (2)" in "Calc", "Notes (3)" in "Physics".')
+  })
+  it('a renamed placement whose container is not in the checklist is still named, without a container', () => {
+    expect(
+      restoreNotice({ title: 'Week 1', kind: 'file' }, outcome({ placements: [{ placement_id: 'zz', name: 'Week 1 (2)', renamed: true }] }), [])
+    ).toBe('Restored "Week 1". A name was already taken in 1 place, so it is called "Week 1 (2)" there.')
   })
   it('reports the placements that wait for their container', () => {
     expect(restoreNotice({ title: 'Week 1', kind: 'file' }, outcome({ skipped: [{ placement_id: 'p9', reason: 'container_archived' }] }))).toBe(
@@ -188,7 +201,7 @@ describe('purgeProblem: why a purge was refused', () => {
   it('an upload that still exists says where to delete it', () => {
     const err = new WsError(400, 'asset_in_use', 'server words')
     expect(purgeProblem(err, 'Ebbing ch3')).toBe(
-      '"Ebbing ch3" is an upload that still exists, so it cannot be purged here. Delete the upload in Settings → Documents, then purge it.'
+      `"Ebbing ch3" is an upload that still exists, so it cannot be purged here. Delete the upload in Settings → Documents (on the server's Osmosis; a laptop node doesn't list the server's uploads), then purge it.`
     )
   })
   it('anything else is the server\'s own message', () => {
@@ -251,5 +264,9 @@ describe('the Delete… dialog: delete archives everywhere, remove-from takes on
   it('says it is in the Archive afterwards, and with how many more', () => {
     expect(deleteNotice('Week 1', 1)).toBe('"Week 1" is in the Archive. Restore it from Archive in the picker (Switch).')
     expect(deleteNotice('Calc', 4)).toBe('"Calc" is in the Archive with 3 more. Restore it from Archive in the picker (Switch).')
+  })
+  it('in the picker itself it points at the Archive below', () => {
+    expect(deleteNotice('quant', 1, true)).toBe('"quant" is in the Archive. Restore it from the Archive below.')
+    expect(deleteNotice('quant', 3, true)).toBe('"quant" is in the Archive with 2 more. Restore it from the Archive below.')
   })
 })

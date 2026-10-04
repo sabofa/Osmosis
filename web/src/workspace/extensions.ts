@@ -1,4 +1,4 @@
-// The special file types, imported once. Each one registers itself, in a module
+// The special formats, imported once. Each one registers itself, in a module
 // of its own, with registerWebFileType (see fileTypes.tsx):
 //
 //   import './itemFiles'

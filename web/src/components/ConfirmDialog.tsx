@@ -26,7 +26,7 @@ export default function ConfirmDialog({
   danger?: boolean
   // When set, the confirm button only enables once this exact text is typed.
   typeToConfirm?: string
-  // Extra controls between the body and the buttons (the workspace's destroy
+  // Extra controls between the body and the buttons (the workspace's delete
   // asks whether to take the items under it too).
   children?: ReactNode
   onConfirm: () => void

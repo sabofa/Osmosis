@@ -800,6 +800,73 @@ describe("restore (spec §5.4)", () => {
     expect(dump(db)).toEqual(before);
     expect(restore(db, file.id, [pa.id, pa.id]).placements).toHaveLength(1);
   });
+
+  describe("an upload whose asset is gone", () => {
+    // The wrapper sync makes for an upload: `asset:<id>`, format upload, the asset linked.
+    function wrapper(db: Db) {
+      db.prepare("INSERT INTO asset (id, title, type, content, extracted_text) VALUES ('a1', 'Paper', 'text', 'body', 'words')").run();
+      db.prepare("INSERT INTO ws_node (id, kind, title, kind_tag) VALUES ('asset:a1', 'file', 'Paper', 'source')").run();
+      db.prepare("INSERT INTO ws_content (node_id, version, format, asset_id, author) VALUES ('asset:a1', 1, 'upload', 'a1', 'ben')").run();
+    }
+
+    it("is refused with upload_gone, and nothing changes (the wrapper stays archived, its places stay marked)", () => {
+      const db = openTestDb();
+      wrapper(db);
+      const course = make(db, "course", "c");
+      const placed = place(db, { container_id: course.id, child_id: "asset:a1" });
+      deleteNode(db, "asset:a1");
+      db.prepare("DELETE FROM asset WHERE id = 'a1'").run(); // ON DELETE SET NULL clears the wrapper's asset_id
+      const before = dump(db);
+      const err = errorOf(() => restore(db, "asset:a1", [placed.id]));
+      expect(err.code).toBe("upload_gone");
+      expect(err.message).toBe("The upload was deleted; purge it instead.");
+      expect(dump(db)).toEqual(before);
+      // Purging is the way out, and it works once the asset is gone.
+      expect(purge(db, "asset:a1")).toEqual({ purged: "asset:a1" });
+    });
+
+    it("is refused whatever the choice (none chosen too)", () => {
+      const db = openTestDb();
+      wrapper(db);
+      deleteNode(db, "asset:a1");
+      db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
+      expect(codeOf(() => restore(db, "asset:a1", []))).toBe("upload_gone");
+    });
+
+    it("an upload that still exists restores as any file does", () => {
+      const db = openTestDb();
+      wrapper(db);
+      deleteNode(db, "asset:a1");
+      expect(restore(db, "asset:a1", []).restored).toBe("asset:a1");
+      expect(getNode(db, "asset:a1").archived_at).toBeNull();
+    });
+
+    it("an upload is not gone when only a migration cleared the link: its asset exists, so the next sync re-links it", () => {
+      const db = openTestDb();
+      wrapper(db);
+      deleteNode(db, "asset:a1");
+      db.prepare("UPDATE ws_content SET asset_id = NULL WHERE node_id = 'asset:a1'").run();
+      expect(restore(db, "asset:a1", []).restored).toBe("asset:a1");
+    });
+
+    it("a file that merely points at a deleted asset is gone too", () => {
+      const db = openTestDb();
+      wrapper(db);
+      const pointer = createNode(db, { kind: "file", title: "Pointer", format: "upload", asset_id: "a1" }).node;
+      deleteNode(db, pointer.id);
+      db.prepare("DELETE FROM asset WHERE id = 'a1'").run();
+      expect(codeOf(() => restore(db, pointer.id, []))).toBe("upload_gone");
+    });
+
+    it("only the latest content counts: a file that moved on to another format restores", () => {
+      const db = openTestDb();
+      const file = make(db, "file", "x");
+      db.prepare("INSERT INTO ws_content (node_id, version, format, asset_id, author) VALUES (?, 2, 'upload', NULL, 'ben')").run(file.id);
+      db.prepare("INSERT INTO ws_content (node_id, version, format, body, author) VALUES (?, 3, 'markdown', 'back', 'ben')").run(file.id);
+      deleteNode(db, file.id);
+      expect(restore(db, file.id, []).restored).toBe(file.id);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

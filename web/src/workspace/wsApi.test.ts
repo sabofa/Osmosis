@@ -16,6 +16,7 @@ import {
   purgeNode,
   renamePlacement,
   restoreNode,
+  retitleNode,
   saveContent,
   searchUnder,
   setKindTag,
@@ -145,6 +146,22 @@ describe('wsApi: the routes the server has', () => {
     expect(bodyOf(fn, 1)).toEqual({ kind_tag: 'homework' })
     expect(bodyOf(fn, 2)).toEqual({ kind_tag: 'past-paper' })
     expect(bodyOf(fn, 3)).toEqual({ kind_tag: null })
+  })
+
+  it('retitles a node with a PATCH that carries the title and nothing else', async () => {
+    const fn = stubFetch(reply(200, { id: 'n1', title: 'Quant' }))
+    expect(await retitleNode('n/1', 'Quant')).toEqual({ id: 'n1', title: 'Quant' })
+    expect(lines(fn)).toEqual(['PATCH /api/ws/nodes/n%2F1'])
+    expect(bodyOf(fn, 0)).toEqual({ title: 'Quant' })
+  })
+
+  it("a refused restore of an upload that is gone reads as a WsError with the server's own message", async () => {
+    stubFetch(reply(400, { error: 'upload_gone', message: 'The upload was deleted; purge it instead.' }))
+    const err = await restoreNode('asset:a1', []).catch((e) => e)
+    expect(err).toBeInstanceOf(WsError)
+    expect(err.status).toBe(400)
+    expect(err.code).toBe('upload_gone')
+    expect(err.message).toBe('The upload was deleted; purge it instead.')
   })
 })
 

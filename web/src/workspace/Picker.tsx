@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import ArchiveSection from './ArchiveSection'
+import { deleteNotice } from './archive'
+import DeleteDialog from './DeleteDialog'
 import PlaceIn from './PlaceIn'
 import { placeTargets, placeWithFallback, topTargets, type PlaceTarget } from './placing'
 import { isWorkspaceKind } from './rows'
 import { Glyph } from './Tree'
-import { createNode, getNodeDetail, getRoots, getUnplaced, placeNode, searchUnder, type NodeSummary, type Roots } from './wsApi'
+import { createNode, getNodeDetail, getRoots, getUnplaced, placeNode, retitleNode, searchUnder, type NodeSummary, type Roots } from './wsApi'
 import type { Root } from './wsState'
 
 // What shows while no workspace is open: every trajectory, track and course
@@ -12,8 +14,11 @@ import type { Root } from './wsState'
 // for them), the files and folders that are placed nowhere, and the Archive. A
 // trajectory, a track or a course opens as a workspace. An unplaced file opens
 // in the scratch view, which has no container of its own, only tabs. Any of
-// them can be placed in a container from here ("Place in…"), and what was
-// deleted can be restored or purged.
+// them can be placed in a container from here ("Place in…"), renamed
+// ("Rename…", which retitles) and deleted ("Delete…", which archives it), and
+// what was deleted can be restored or purged. A trajectory has nothing to hold
+// it, so for it and for any track or course at the top level this is the only
+// place to rename or delete it.
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -33,6 +38,8 @@ export default function Picker({
   const [notice, setNotice] = useState<string | null>(null)
   // The node whose "Place in…" list is open.
   const [placing, setPlacing] = useState<string | null>(null)
+  // The node Delete… was pressed on.
+  const [deleting, setDeleting] = useState<NodeSummary | null>(null)
   const [version, setVersion] = useState(0)
 
   useEffect(() => {
@@ -87,6 +94,22 @@ export default function Picker({
     }
   }
 
+  // Rename…: the node's title, which is the name a container gives it when it
+  // is placed without one and the name it has at the top level. A name in one
+  // container is changed from that container's own row ("Rename here").
+  async function rename(node: NodeSummary) {
+    const title = window.prompt(`New title for "${node.title}"`, node.title)
+    if (title === null || title.trim() === '' || title === node.title) return
+    try {
+      const out = await retitleNode(node.id, title)
+      setError(null)
+      setVersion((v) => v + 1)
+      setNotice(`Renamed "${node.title}" to "${out.title}".`)
+    } catch (err) {
+      setError(messageOf(err))
+    }
+  }
+
   function list(heading: string, items: NodeSummary[], open: (n: NodeSummary) => void, none: string) {
     return (
       <section className="ws-pick-section">
@@ -111,6 +134,12 @@ export default function Picker({
                       Place in…
                     </button>
                   )}
+                  <button className="ws-btn" onClick={() => void rename(n)}>
+                    Rename…
+                  </button>
+                  <button className="ws-btn" onClick={() => setDeleting(n)}>
+                    Delete…
+                  </button>
                   <button className="ws-btn" onClick={() => open(n)}>
                     Open
                   </button>
@@ -172,8 +201,27 @@ export default function Picker({
             {list('Unplaced', unplaced, (n) => onOpenScratch(n.kind === 'file' ? { nodeId: n.id, title: n.title } : null), 'Nothing is unplaced.')}
           </>
         )}
-        <ArchiveSection onRestored={() => setVersion((v) => v + 1)} />
+        <ArchiveSection onRestored={() => setVersion((v) => v + 1)} reloadKey={version} />
       </div>
+      {deleting && (
+        <DeleteDialog
+          node={deleting}
+          name={deleting.title}
+          onDone={(archived) => {
+            const { title } = deleting
+            setDeleting(null)
+            setPlacing(null)
+            setError(null)
+            setVersion((v) => v + 1)
+            setNotice(deleteNotice(title, archived.length, true))
+          }}
+          onError={(message) => {
+            setDeleting(null)
+            setError(message)
+          }}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </div>
   )
 }

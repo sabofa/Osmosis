@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SUGGESTED_KIND_TAGS, chipTags, isKindTag, parseTagInput, tagChoices } from './kindTags'
+import { SUGGESTED_KIND_TAGS, chipTags, isKindTag, parseTagInput, tagChoices, tagKey, tagLabel } from './kindTags'
 
 describe('SUGGESTED_KIND_TAGS: what the Tag menu offers before "Other…"', () => {
   it('is the five the spec suggests, in the order the menu shows them', () => {
@@ -49,6 +49,25 @@ describe('tagChoices: the entries of the Tag menu for one file', () => {
   })
   it('lists a tag of its own between the suggestions and None, so the menu shows what it has', () => {
     expect(tagChoices('past-paper')).toEqual(['source', 'resource', 'homework', 'test', 'flowchart', 'past-paper', null])
+  })
+})
+
+describe('tagLabel and tagKey: the no-tag entry is not a tag called "none"', () => {
+  it('the entry for no tag reads "(none)", and a tag is shown as it is', () => {
+    expect(tagLabel(null)).toBe('(none)')
+    expect(tagLabel('homework')).toBe('homework')
+    expect(tagLabel('none')).toBe('none')
+  })
+  it('a custom tag called none has its own key and its own label, apart from the no-tag entry', () => {
+    const entries = tagChoices('none')
+    expect(entries).toContain('none')
+    expect(entries).toContain(null)
+    expect(new Set(entries.map(tagKey)).size).toBe(entries.length)
+    expect(new Set(entries.map(tagLabel)).size).toBe(entries.length)
+  })
+  it('no tag can be written like the no-tag entry (its label and key are not valid tags), so the two never meet', () => {
+    expect(isKindTag(tagLabel(null))).toBe(false)
+    expect(isKindTag(tagKey(null))).toBe(false)
   })
 })
 

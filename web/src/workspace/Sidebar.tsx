@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import ConfirmDialog from '../components/ConfirmDialog'
-import { deleteBody, deleteNotice, orphanLabel } from './archive'
+import { deleteNotice } from './archive'
+import DeleteDialog from './DeleteDialog'
 import { makePathResolver } from './graphWalk'
 import { createUnder } from './create'
 import { listWebFileTypes } from './fileTypes'
@@ -10,20 +10,7 @@ import { placeTargets, placeWithFallback, topTargets, workspaceTargets, type Pla
 import { addableNodes, isWorkspaceKind, showsRow, sidebarSections, type Section, type WorkspaceKind } from './rows'
 import { Tree, TreeRow, type NoticeAction, type TreeCtx } from './Tree'
 import type { Root } from './wsState'
-import {
-  deleteNode,
-  getByKindTag,
-  getChildren,
-  getDeletePreview,
-  getNodeDetail,
-  getRoots,
-  getUnplaced,
-  placeNode,
-  searchUnder,
-  type AppearsInRow,
-  type NodeSummary,
-  type PlacedRow,
-} from './wsApi'
+import { getByKindTag, getChildren, getNodeDetail, getRoots, getUnplaced, placeNode, searchUnder, type NodeSummary, type PlacedRow } from './wsApi'
 
 // The left side of the shell: a mode switcher (Files | Tools), the partition
 // strip (one chip per kind tag), and the tree. A workspace's container is shown
@@ -35,13 +22,10 @@ import {
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+// The row Delete… was pressed on: the node, and what the row calls it.
 interface DeleteReq {
   node: NodeSummary
   name: string
-  appearsIn: AppearsInRow[]
-  // How many items under it are placed nowhere else.
-  orphans: number
-  alsoOrphans: boolean
 }
 
 export default function Sidebar({
@@ -91,29 +75,6 @@ export default function Sidebar({
   // retagged) is no longer pressed.
   const activeChip = chip !== null && tags.includes(chip) ? chip : null
 
-  async function startDelete(node: NodeSummary, name: string) {
-    try {
-      const preview = await getDeletePreview(node.id)
-      setDeleteReq({ node, name, appearsIn: preview.appears_in, orphans: preview.orphans.length, alsoOrphans: false })
-    } catch (err) {
-      setNotice({ text: messageOf(err), kind: 'error' })
-    }
-  }
-
-  async function confirmDelete() {
-    const req = deleteReq
-    setDeleteReq(null)
-    if (!req) return
-    try {
-      const out = await deleteNode(req.node.id, req.alsoOrphans)
-      onGone(out.archived)
-      refresh()
-      setNotice({ text: deleteNotice(req.name, out.archived.length), kind: 'info' })
-    } catch (err) {
-      setNotice({ text: messageOf(err), kind: 'error' })
-    }
-  }
-
   // Where a node could be placed from here, for a row's "Place in…": in a
   // workspace its root, and the folders and tracks reachable in it; in the
   // scratch view (which has no root of its own) every trajectory, track and
@@ -140,7 +101,7 @@ export default function Sidebar({
     changed: refresh,
     renamed: onRenamed,
     notify: (text, kind = 'error', action) => setNotice({ text, kind, action }),
-    requestDelete: (node, name) => void startDelete(node, name),
+    requestDelete: (node, name) => setDeleteReq({ node, name }),
     placeTargets: targetsFor,
   }
 
@@ -225,25 +186,22 @@ export default function Sidebar({
       )}
 
       {deleteReq && (
-        <ConfirmDialog
-          title={`Delete "${deleteReq.name}"?`}
-          body={deleteBody(deleteReq.node.kind, deleteReq.appearsIn, deleteReq.orphans)}
-          confirmLabel="Delete"
-          danger
+        <DeleteDialog
+          node={deleteReq.node}
+          name={deleteReq.name}
+          onDone={(archived) => {
+            const { name } = deleteReq
+            setDeleteReq(null)
+            onGone(archived)
+            refresh()
+            setNotice({ text: deleteNotice(name, archived.length), kind: 'info' })
+          }}
+          onError={(text) => {
+            setDeleteReq(null)
+            setNotice({ text, kind: 'error' })
+          }}
           onCancel={() => setDeleteReq(null)}
-          onConfirm={() => void confirmDelete()}
-        >
-          {deleteReq.orphans > 0 && (
-            <label className="ws-check">
-              <input
-                type="checkbox"
-                checked={deleteReq.alsoOrphans}
-                onChange={(e) => setDeleteReq((r) => (r ? { ...r, alsoOrphans: e.target.checked } : r))}
-              />
-              <span>{orphanLabel(deleteReq.orphans)}</span>
-            </label>
-          )}
-        </ConfirmDialog>
+        />
       )}
     </aside>
   )

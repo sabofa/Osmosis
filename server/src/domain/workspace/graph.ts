@@ -448,6 +448,21 @@ function revivePlacement(db: DatabaseSync, placement: PlacementRow): { name: str
   return { name, renamed: name !== placement.name };
 }
 
+// An upload's file whose upload was deleted (its latest content is format
+// `upload` with no asset: ON DELETE SET NULL cleared the link) has nothing left to
+// show, and the next sync would archive it again, marking its placements anew. So
+// it is not restored: purging is the way out. A canonical wrapper whose asset
+// still exists is not gone (only a migration cleared the link, and the next sync
+// re-links it), so that one restores.
+function assertUploadExists(db: DatabaseSync, node: NodeRow): void {
+  const latest = db.prepare("SELECT format, asset_id FROM ws_content WHERE node_id = ? ORDER BY version DESC LIMIT 1").get(node.id) as unknown as
+    | { format: string; asset_id: string | null }
+    | undefined;
+  if (!latest || latest.format !== "upload" || latest.asset_id !== null) return;
+  if (db.prepare("SELECT 1 FROM asset a WHERE 'asset:' || a.id = ?").get(node.id)) return;
+  throw new DomainError("upload_gone", "The upload was deleted; purge it instead.");
+}
+
 // Brings a node back with exactly the placements the caller chose:
 //   - A chosen placement whose container is live is un-marked. If its name
 //     collides now, it is renamed to the free `name (n)` and reported.
@@ -483,6 +498,7 @@ export function restore(
       }
       return placement;
     });
+    assertUploadExists(db, node);
 
     db.prepare("UPDATE ws_node SET archived_at = NULL, archive_batch = NULL, updated_at = datetime('now') WHERE id = ?").run(node.id);
 

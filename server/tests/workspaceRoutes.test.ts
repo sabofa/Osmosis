@@ -822,6 +822,26 @@ describe("/api/ws routes", () => {
       expect(purged.status).toBe(200);
       expect(purged.body.purged).toBe(wrapper);
     });
+
+    it("restoring an upload whose asset was deleted is a 400 upload_gone that says to purge it", async () => {
+      const asset = await createAsset(db, uploadsDir, { title: "old paper", type: "text", content: "week 1" }, "human");
+      const wrapper = `asset:${asset.id}`;
+      const course = await make("course", "micro");
+      await call("POST", "/api/ws/placements", { container_id: course.id, child_id: wrapper });
+      const marked = await placementOf(course.id, wrapper);
+
+      // Deleting the upload archives its wrapper (the sync that runs after an asset is deleted).
+      deleteAsset(db, uploadsDir, asset.id);
+      expect(ids((await call("GET", "/api/ws/archive")).body)).toContain(wrapper);
+
+      const res = await call("POST", `/api/ws/nodes/${encodeURIComponent(wrapper)}/restore`, { placements: [marked] });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("upload_gone");
+      expect(res.body.message).toBe("The upload was deleted; purge it instead.");
+      // Still archived, and purge is the way out.
+      expect(ids((await call("GET", "/api/ws/archive")).body)).toContain(wrapper);
+      expect((await call("DELETE", `/api/ws/archive/${encodeURIComponent(wrapper)}`)).status).toBe(200);
+    });
   });
 
   describe("search and by-kind-tag", () => {

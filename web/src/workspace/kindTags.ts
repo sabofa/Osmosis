@@ -29,6 +29,13 @@ export function tagChoices(current: string | null): (string | null)[] {
   return [...SUGGESTED_KIND_TAGS, ...own, null]
 }
 
+// How an entry of that menu reads, and the key it is listed under. No tag is
+// "(none)" and no tag can be written that way (a tag is lowercase letters, digits,
+// "_" and "-"), so a tag of Ben's own that is called `none` is a different entry
+// with its own key and its own label.
+export const tagLabel = (tag: string | null): string => tag ?? '(none)'
+export const tagKey = (tag: string | null): string => tag ?? '(none)'
+
 // The partition chips of a workspace: the five suggestions always, then every
 // other tag in use there, once each, alphabetically.
 export function chipTags(inUse: Iterable<string | null>): string[] {
