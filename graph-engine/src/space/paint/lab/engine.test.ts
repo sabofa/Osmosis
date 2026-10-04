@@ -2823,6 +2823,41 @@ describe('the baked painting: the G-buffer at rest only', () => {
     t.engine.dispose()
   })
 
+  it('gives a frame under a drag no G-buffer, even when one was read for its very view: the silhouettes read the canvas there (the frame is the one made before any readback landed, not the one made with it)', async () => {
+    const t = bakeSetup()
+    const v = bview()
+    // the sphere and its table as the G-buffer: beyond the outline the silhouettes have another mark to read (the table)
+    const g = sphereGBuffer(v.width, v.height, { view: v, params: BP, centre: [0, 0, 0], radius: 0.6, mark: 0, table: { z: -0.6, mark: 1 } })
+    t.gl.setReadback((_a, _w, _h, dst) => {
+      const out = dst as Float32Array
+      for (let i = 0; i < g.width * g.height; i++) {
+        const texel =
+          g.mark[i] < 0
+            ? [0, 0, 1e30, 0]
+            : encodeFloatTexel({ normal: [g.normal[3 * i], g.normal[3 * i + 1], g.normal[3 * i + 2]], depth: g.depth[i], value: g.value[i], shadow: g.shadow[i] === 1, mark: g.mark[i] })
+        out.set(texel, 4 * i)
+      }
+    })
+    const params = setParam(BP, 'particles.dragDensity', 1)
+    t.engine.render(v, params, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(2), { timeout: 120_000, interval: 5 })
+    const bakedFrames = t.painted.filter((p) => p.kind === 'baked')
+    // the first baked frame had no G-buffer (none had been read), the last has the one read for this view
+    const without = bakedFrames[0].frame.strokes
+    const withG = bakedFrames[bakedFrames.length - 1].frame.strokes
+    expect(withG.count).toBe(without.count)
+    expect(sumOf(withG.colour), 'the G-buffer reaches the silhouettes: the picture it makes differs').not.toBeCloseTo(sumOf(without.colour), 4)
+    // the same view, dragging: the G-buffer for it is held, and is not used
+    t.engine.render(v, params, 'none', FRAMING)
+    expect(sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)).toBeCloseTo(sumOf(withG.colour), 4)
+    t.engine.render(bview({ dragging: true }), params, 'none', FRAMING)
+    const dragged = t.painted[t.painted.length - 1].frame.strokes
+    expect(dragged.count).toBe(without.count)
+    expect(sumOf(dragged.colour)).toBeCloseTo(sumOf(without.colour), 4)
+    expect(sumOf(dragged.colour)).not.toBeCloseTo(sumOf(withG.colour), 4)
+    t.engine.dispose()
+  })
+
   it('does not start a readback when a read that was begun at rest lands during a drag', async () => {
     const t = bakeSetup({ limits: { asyncReadback: true, fenceDelayPolls: 6 } })
     await t.ready()
