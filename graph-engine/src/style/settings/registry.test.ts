@@ -489,7 +489,7 @@ describe('whole-number settings are marked by what they count, not by their step
   it('flags exactly the figure styles’ whole-number tokens and the thirteen painter settings', () => {
     const flagged = REGISTRY.filter((spec) => spec.integer === true).map((spec) => spec.path)
     const tokens = TOKENS.filter((token) => token.kind === 'number' && token.integer === true).map(tokenPath)
-    expect(tokens).toEqual(['style.line.passes', 'style.seed'])
+    expect(tokens).toEqual(['style.line.passes', 'style.paper.tile', 'style.seed'])
     expect(PAINT_WHOLE).toHaveLength(13)
     expect([...flagged].sort()).toEqual([...tokens, ...PAINT_WHOLE].sort())
   })

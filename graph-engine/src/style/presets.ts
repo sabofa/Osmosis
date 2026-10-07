@@ -41,7 +41,7 @@ export const PRESETS: Record<PresetName, Look> = {
   clean: {
     line: { type: 'technical', looseness: 0, wobble: 0, passes: 1, width: 1, variation: 0, taper: 0, grain: 0, opacity: 1 },
     fill: { type: 'flat', angle: 45, spacing: 9, opacity: 0.44, roughness: 0 },
-    paper: { type: 'clean', tint: 'theme', texture: 0, grid: 24 },
+    paper: { type: 'clean', tint: 'theme', texture: 0, grid: 24, tile: 512 },
     lettering: { face: 'textbook', size: 1, tilt: 0 },
     colour: { ink: 'theme', saturation: 1, medium: 'clean' },
   },
@@ -54,7 +54,7 @@ export const PRESETS: Record<PresetName, Look> = {
   ink: {
     line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 1, width: 1.7, variation: 0.75, taper: 0.8, grain: 0, opacity: 1 },
     fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65, roughness: 0.45 },
-    paper: { type: 'paper', tint: 'theme', texture: 0.45, grid: 24 },
+    paper: { type: 'paper', tint: 'theme', texture: 0.45, grid: 24, tile: 512 },
     lettering: { face: 'math', size: 1.05, tilt: 0 },
     colour: { ink: 'theme', saturation: 0.9, medium: 'ink' },
   },
@@ -66,7 +66,7 @@ export const PRESETS: Record<PresetName, Look> = {
   pencil: {
     line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 1 },
     fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.5 },
-    paper: { type: 'rough-paper', tint: 'theme', texture: 0.6, grid: 24 },
+    paper: { type: 'rough-paper', tint: 'theme', texture: 0.6, grid: 24, tile: 512 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
     colour: { ink: 'theme', saturation: 0.4, medium: 'graphite' },
   },
@@ -76,7 +76,7 @@ export const PRESETS: Record<PresetName, Look> = {
   marker: {
     line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 1 },
     fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
-    paper: { type: 'ruled', tint: 'theme', texture: 0.2, grid: 26 },
+    paper: { type: 'ruled', tint: 'theme', texture: 0.2, grid: 26, tile: 512 },
     lettering: { face: 'hand', size: 1.25, tilt: 0.4 },
     colour: { ink: 'theme', saturation: 1.1, medium: 'marker' },
   },
@@ -88,7 +88,7 @@ export const PRESETS: Record<PresetName, Look> = {
   colouredPencil: {
     line: { type: 'pencil', looseness: 0.3, wobble: 0.3, passes: 2, width: 1.2, variation: 0.3, taper: 0.4, grain: 0.45, opacity: 1 },
     fill: { type: 'hatch', angle: 50, spacing: 5.5, opacity: 0.9, roughness: 0.5 },
-    paper: { type: 'paper', tint: 'theme', texture: 0.5, grid: 24 },
+    paper: { type: 'paper', tint: 'theme', texture: 0.5, grid: 24, tile: 512 },
     lettering: { face: 'hand', size: 1.15, tilt: 0.5 },
     colour: { ink: 'theme', saturation: 1, medium: 'colouredPencil' },
   },
@@ -100,7 +100,7 @@ export const PRESETS: Record<PresetName, Look> = {
   blackboard: {
     line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 1 },
     fill: { type: 'scribble', angle: 40, spacing: 9, opacity: 0.5, roughness: 0.6 },
-    paper: { type: 'blackboard', tint: 'theme', texture: 0.5, grid: 24 },
+    paper: { type: 'blackboard', tint: 'theme', texture: 1, grid: 24, tile: 512 },
     lettering: { face: 'hand', size: 1.3, tilt: 0.4 },
     colour: { ink: 'theme', saturation: 1, medium: 'chalk' },
   },
@@ -110,7 +110,7 @@ export const PRESETS: Record<PresetName, Look> = {
   greenboard: {
     line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 1 },
     fill: { type: 'scribble', angle: 40, spacing: 9, opacity: 0.5, roughness: 0.6 },
-    paper: { type: 'greenboard', tint: 'theme', texture: 0.5, grid: 24 },
+    paper: { type: 'greenboard', tint: 'theme', texture: 1, grid: 24, tile: 512 },
     lettering: { face: 'hand', size: 1.3, tilt: 0.4 },
     colour: { ink: 'theme', saturation: 1, medium: 'chalk' },
   },
@@ -121,7 +121,7 @@ export const PRESETS: Record<PresetName, Look> = {
   whiteboard: {
     line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.25, taper: 0, grain: 0.1, opacity: 1 },
     fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
-    paper: { type: 'whiteboard', tint: 'theme', texture: 0.3, grid: 24 },
+    paper: { type: 'whiteboard', tint: 'theme', texture: 0.9, grid: 24, tile: 512 },
     lettering: { face: 'hand', size: 1.25, tilt: 0.4 },
     colour: { ink: 'theme', saturation: 1, medium: 'whiteboard' },
   },

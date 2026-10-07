@@ -34,9 +34,9 @@ export type LineType = (typeof LINE_TYPES)[number]
 export const FILL_TYPES = ['flat', 'hatch', 'crosshatch', 'stipple', 'scribble', 'wash', 'none'] as const
 export type FillType = (typeof FILL_TYPES)[number]
 
-// The three boards are papers too: the surface a chalk or whiteboard look is drawn on. Until the
-// generated backgrounds arrive they are a flat sheet of the board's colour (papers/index.ts).
-export const PAPER_TYPES = ['none', 'clean', 'paper', 'rough-paper', 'canvas', 'graph', 'rough-graph', 'dotted', 'ruled', 'blackboard', 'greenboard', 'whiteboard'] as const
+// The three boards are papers too: the surface a chalk or whiteboard look is drawn on (generated: slate grain,
+// erased haze, tray dust). kraft and linen are generated papers of their own.
+export const PAPER_TYPES = ['none', 'clean', 'paper', 'rough-paper', 'canvas', 'graph', 'rough-graph', 'dotted', 'ruled', 'kraft', 'linen', 'blackboard', 'greenboard', 'whiteboard'] as const
 export type PaperType = (typeof PAPER_TYPES)[number]
 
 export const LETTERING_FACES = ['math', 'textbook', 'hand'] as const
@@ -94,6 +94,8 @@ export interface PaperSettings {
   texture: number
   // Grid, dot or ruling spacing, in drawing units.
   grid: number
+  // The side of the generated pattern tile, in drawing units: whole numbers.
+  tile: number
 }
 
 export interface LetteringSettings {
@@ -215,6 +217,7 @@ export const TOKENS: readonly Token[] = [
   colour('paper', 'tint', 'tint', 'Tint'),
   number('paper', 'texture', 'texture', 0, 1, 0.01, 'Texture'),
   number('paper', 'grid', 'grid', 6, 80, 1, 'Grid'),
+  number('paper', 'tile', 'tile', 256, 1024, 1, 'Tile', [], true),
 
   choice('lettering', 'face', 'lettering', LETTERING_FACES, 'Lettering'),
   number('lettering', 'size', 'lettering-size', 0.6, 1.6, 0.05, 'Size', ['size']),

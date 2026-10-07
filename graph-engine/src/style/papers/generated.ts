@@ -6,7 +6,7 @@ import type { ThemeInput } from '../theme/types'
 import type { GeneratedPaperType } from './generate/types'
 import { GENERATED_PAPER_TYPES } from './generate'
 import { cover, sheet } from './common'
-import { rulingsOf, type Rulings } from './rulings'
+import { rulingsOf, type Rulings, type Waver } from './rulings'
 import type { PaperInput, PaperOutput } from './types'
 
 // The generated papers as SVG (spec 2026-10-02-painted-figures-design.md §5): a flat sheet of the base colour,
@@ -15,7 +15,6 @@ import type { PaperInput, PaperOutput } from './types'
 // Nothing here makes the bitmap: the `<image>` is left empty, its `data-paper-key` says which tile belongs.
 
 const KEY_VERSION = 'paper-v1'
-const DEFAULT_TILE = 512
 const BOARDS: readonly GeneratedPaperType[] = ['blackboard', 'greenboard', 'whiteboard']
 const DUSTY: readonly GeneratedPaperType[] = ['blackboard', 'greenboard']
 const RULINGS: Partial<Record<GeneratedPaperType, Rulings>> = { notebook: 'notebook', graphPaper: 'graph', dotted: 'dotted' }
@@ -75,10 +74,12 @@ function trayDust(type: GeneratedPaperType, input: PaperInput, base: string): Pa
   return { defs, background: [tag('g', { 'data-paper': 'tray' }, [band, ...blotches])] }
 }
 
-export function generatedPaper(type: GeneratedPaperType, input: PaperInput): PaperOutput {
-  const size = (input.settings as { tile?: number }).tile ?? DEFAULT_TILE
+export function generatedPaper(type: GeneratedPaperType, input: PaperInput, waver: Waver = 'slight'): PaperOutput {
+  const size = input.settings.tile
   const texture = input.settings.texture
-  const base = paperBaseColour(type, input.theme, input.tint)
+  // A board is the theme's board, unless the author named a tint of their own: that wins (as paperColour has it).
+  const own = BOARDS.includes(type) && input.settings.tint !== 'theme'
+  const base = own ? input.tint.toLowerCase() : paperBaseColour(type, input.theme, input.tint)
   const key = paperKey(type, input.seed, size, texture, base)
   const pattern = input.id('tile')
   const defs = [
@@ -91,7 +92,7 @@ export function generatedPaper(type: GeneratedPaperType, input: PaperInput): Pap
   const rulings = RULINGS[type]
   if (rulings) {
     // Its own seeded hand, so the same paper rules the same way whoever draws it first.
-    const laid = rulingsOf(rulings, 'slight', { ...input, tint: base, random: randomFor(`paper-rules:${type}`, input.seed) })
+    const laid = rulingsOf(rulings, waver, { ...input, tint: base, random: randomFor(`paper-rules:${type}`, input.seed) })
     defs.push(...laid.defs)
     background.push(...laid.background)
   }

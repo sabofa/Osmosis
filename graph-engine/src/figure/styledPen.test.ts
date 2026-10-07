@@ -329,7 +329,8 @@ describe('a styled page', () => {
     const paper = svg.indexOf('data-layer="paper"')
     expect(paper).toBeGreaterThan(0)
     expect(paper).toBeLessThan(svg.indexOf('data-layer="regions"'))
-    expect(svg).toMatch(/<pattern id="[^"]+graph"/)
+    expect(svg).toMatch(/<pattern id="[^"]+paper-rules"/)
+    expect(svg).toMatch(/data-paper-key="paper-v1:graphPaper:/)
   })
 
   it('lays no paper at all for none', () => {

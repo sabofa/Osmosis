@@ -12,7 +12,7 @@ const BOARDS: GeneratedPaperType[] = ['blackboard', 'greenboard', 'whiteboard']
 const OTHERS: GeneratedPaperType[] = ['canvas', 'linen', 'paperFine', 'paperRough', 'kraft', 'notebook', 'graphPaper', 'dotted']
 
 const input = (theme: ThemeInput, seed = 3, tint = theme.colours.paper): PaperInput => ({
-  settings: { type: 'paper', tint, texture: 0.6, grid: 24 } as PaperSettings,
+  settings: { type: 'paper', tint: 'theme', texture: 0.6, grid: 24, tile: 512 } satisfies PaperSettings,
   tint,
   view: VIEW,
   id: (name) => `P-${name}`,
