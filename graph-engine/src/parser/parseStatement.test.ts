@@ -1742,24 +1742,6 @@ describe('calc P1 statements', () => {
   })
 })
 
-describe('T7.7: a built-in on the left is an equation, not a definition', () => {
-  it('sin(x) = cos(y) is the implicit curve', () => {
-    expect(parseStatement('sin(x) = cos(y)').kind).toBe('implicit')
-  })
-  it('an equation in x alone reads like x^2 = 4: cos(x) = 0.5 is implicit', () => {
-    expect(parseStatement('x^2 = 4').kind).toBe('implicit')
-    expect(parseStatement('cos(x) = 0.5').kind).toBe('implicit')
-    expect(parseStatement('sin(x) = x^2').kind).toBe('implicit')
-  })
-  it('a user-named function is still a definition', () => {
-    expect(parseStatement('f(x) = x^2').kind).toBe('functionDef')
-    expect(parseStatement('f(x) = cos(y)').kind).toBe('functionDef')
-  })
-  it("one of calc's shadowable names is still a definition", () => {
-    expect(parseStatement('gamma(x) = x + y').kind).toBe('functionDef')
-  })
-})
-
 describe('T7.7: a parenthesised left side is not a bare point', () => {
   it('(x^2+y^2)^2 = 4(x^2-y^2) is an implicit curve', () => {
     expect(parseStatement('(x^2+y^2)^2 = 4(x^2-y^2)').kind).toBe('implicit')

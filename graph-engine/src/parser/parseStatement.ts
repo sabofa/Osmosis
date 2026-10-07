@@ -1,8 +1,6 @@
 import { isValidColor, normaliseColor } from './colors'
 import { parseForRange, parseTuple, splitTopLevelComma } from './grammarUtil'
-import { freeVariables } from './evalExpr'
 import { parseConditionString, parseExprString } from './parseExpr'
-import { isClassicBuiltin } from '../space/grammar/shadowable'
 import { parseSpaceKeyword } from '../space/grammar/keyword'
 import { parseSpaceUnkeyed } from '../space/grammar/unkeyed'
 import type {
@@ -1503,7 +1501,7 @@ function parseStatementCore(rawLine: string): StatementShape {
   // with anything else in the grammar (parametric tuples start with "(",
   // not an identifier).
   const functionDefMatch = /^([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\s*=(.*)$/.exec(line)
-  if (functionDefMatch && !readsAsEquation(functionDefMatch[1], functionDefMatch[2], functionDefMatch[3])) {
+  if (functionDefMatch) {
     const [, name, param, body] = functionDefMatch
     return { kind: 'functionDef', name, param, body: parseExprString(body) }
   }
@@ -2175,22 +2173,6 @@ function openingParenClosesAtEnd(line: string): boolean {
     }
   }
   return false
-}
-
-// "name(param) = body" with a classic built-in as the name is an equation, not
-// a definition (T7.7): "sin(x) = cos(y)" draws sin(x) - cos(y) = 0. It reads as
-// one when the parameter is a plot variable (x, y: "cos(x) = 0.5", like
-// "x^2 = 4") or the body names another variable. "sin(z) = z^2" keeps its
-// definition reading, which the kernel refuses by name. calc's shadowable
-// names (gamma, root, ...) and every user name stay definitions.
-function readsAsEquation(name: string, param: string, body: string): boolean {
-  if (!isClassicBuiltin(name)) return false
-  if (param === 'x' || param === 'y') return true
-  try {
-    return freeVariables(parseExprString(body), new Set([param])).size > 0
-  } catch {
-    return false
-  }
 }
 
 // Parses one non-empty, comment-stripped line into a Statement. Splices off
