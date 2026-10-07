@@ -188,12 +188,12 @@ function curvature(role: RoleName): Meaning {
 function load(role: RoleName): Meaning {
   return {
     meaning:
-      'How much paint ' + TAG[role] + ' carry on the brush. More lays a fuller, more opaque stroke with a heavier loaded start; less is thinner and more broken, with the underpainting and canvas showing through.' +
+      'How much paint ' + TAG[role] + ' carry on the brush. More lays a fuller, more opaque stroke' + (role === 'line' ? '' : ' with a heavier loaded start') + '; less is thinner and more broken, with the underpainting and canvas showing through.' +
       (isIn(LIT, role) ? ' They carry about 8% more in the light and 10% less in shadow.' : '') +
       byClass(role, { hard: 'they carry 12% more', firm: 'the same', soft: '5% less', lost: '15% less' }) +
       (role === 'glaze' ? ' A glaze is a thin film that never gets more than about a third opaque, so a low load makes it fainter and more broken, and a high load only fills it out up to that limit.' : '') +
       (role === 'dab' ? ' A dab is the loaded last touch of paint.' : '') +
-      (role === 'line' ? ' Keep it near 1 so the lines stay solid and readable.' : ''),
+      (role === 'line' ? ' A line mark has no loaded start: it is laid evenly from end to end, so keep this near 1 and the lines stay solid and readable.' : ''),
     interactions: [roleAt(role, 'dry')],
   }
 }
@@ -281,9 +281,9 @@ export const ROLE_MEANINGS: Meanings = Object.fromEntries(
 
 // The three kinds of transition, in the order of the weights' tuple.
 const KINDS = [
-  { name: 'internal edges, the boundaries between two planes inside one form', short: 'internal' },
-  { name: 'silhouette edges, the outline of the form against what lies behind it', short: 'silhouette' },
-  { name: 'cast-shadow edges, the edge of the figure\'s shadow on the table', short: 'shadow' },
+  { name: 'internal edges, the boundaries between two planes inside one form', also: 'The terminator, and the edge of a shadow cast on the form itself, are internal edges too.', short: 'internal' },
+  { name: 'silhouette edges, the outline of the form against what lies behind it', also: 'The creases where two faces meet sharply, and the border of an open sheet, are silhouette edges too.', short: 'silhouette' },
+  { name: 'cast-shadow edges, the edge of the figure\'s shadow on the table', also: '', short: 'shadow' },
 ]
 
 // What each term of an edge's hardness is for each kind of edge, and what raising its weight does. The same five terms are
@@ -313,7 +313,7 @@ const TERMS: Record<string, { name: string; says: Term }> = {
   wFocal: {
     name: 'focal emphasis',
     says: () =>
-      'Raising it makes these edges harder near the two places a painter makes sharp: where the terminator comes nearest the viewer (taken from the view the picture is composed for) and the brightest highlight. An edge there is firm, one far from them soft.',
+      'Raising it makes these edges harder near the two places a painter makes sharp: where the terminator comes nearest the viewer and the brightest highlight. An edge there is firm, one far from them soft. In the baked painting the two places are taken from the view the picture is composed for and fixed in the world, so they stay put as you orbit; on the live path they follow the current view.',
   },
   wLight: {
     name: 'light side',
@@ -322,7 +322,9 @@ const TERMS: Record<string, { name: string; says: Term }> = {
   },
   wDepth: {
     name: 'depth',
-    says: () => 'Raising it makes these edges harder the nearer they are to the viewer (near edges are harder, far ones softer), measured against the depth of what the picture shows.',
+    says: (kind) =>
+      'Raising it makes these edges harder the nearer they are to the viewer (near edges are harder, far ones softer), measured against the depth of what the picture shows. In the baked painting the depth is measured from the view the picture is composed for and fixed in the world; on the live path it is the current view.' +
+      (kind === 1 ? ' In the baked painting the view\'s own outline, which is built per frame, is scored with no depth term at all, so here this weight reaches only the creases and borders; live, it reaches the outline too.' : ''),
   },
 }
 
@@ -331,7 +333,7 @@ export const EDGE_WEIGHT_MEANINGS: Meanings = Object.fromEntries(
     KINDS.map((kind, i) => {
       const meaning: Meaning = {
         meaning:
-          'How much ' + term.name + ' counts toward the hardness of ' + kind.name + '. An edge\'s hardness is a weighted sum of several such terms, and this is the weight of one. ' + term.says(i) +
+          'How much ' + term.name + ' counts toward the hardness of ' + kind.name + '. ' + (kind.also === '' ? '' : kind.also + ' ') + 'An edge\'s hardness is a weighted sum of several such terms, and this is the weight of one. ' + term.says(i) +
           ' The hardness then sorts the edge into lost, soft, firm or hard, which decides whether the strokes there blend into each other or stay distinct.' +
           (i === 0 ? ' The edges at the terminator are also softened by ' + at('paint.value.terminatorSoftness') + '.' : '') +
           (i === 1 ? ' An outline whose own side is in shadow against a lighter side is never softer than firm, whatever the weights say.' : ''),

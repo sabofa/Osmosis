@@ -9,6 +9,12 @@
 // space/paint/gl/ (the brush, the underpainting and the composite). The stroke roles
 // and the edge weights, which come in families, are in paintTemplates.ts.
 //
+// THE TWO PATHS. The Paint Lab paints in two ways: the BAKED painting (the default: the light fixed in the world, made once on the
+// surface and only selected and projected per frame) and the LIVE per-frame model (baking off, or the light fixed to the camera, and
+// the debug views). Every meaning here holds for both, or says plainly where they differ. They differ most in the edges: the view's
+// own outline is built per frame (bake/silhouettes.ts), the edge runs and the planes are baked in the world (bake/edges.ts,
+// bake/planes.ts), and the focal points and the depth are taken from the authored view.
+//
 // The vocabulary is a painter's. N·L is how squarely a surface faces the lamp: 0 at
 // the terminator (where the light turns off the form), 1 facing the lamp. A value is a
 // lightness from black to white. The light family is the highlight, the light and the
@@ -70,7 +76,7 @@ const LITERAL: Meanings = {
   },
   'paint.light.shadows': {
     meaning:
-      'Whether the figure casts a shadow, onto the table and onto itself. On casts shadows from the key light; off turns cast shadows off, so the table and the lit parts carry no shadow of the figure, while the form shadow and the terminator stay.',
+      'Whether the figure casts a shadow, onto the table and onto itself, on the live path. On casts shadows from the key light; off turns cast shadows off, so the table and the lit parts carry no shadow of the figure, while the form shadow and the terminator stay. The baked painting (the default) always casts its shadows, so there this setting has no effect.',
     interactions: ['paint.value.castPlateau', 'paint.value.castContact', 'paint.light.elevation'],
   },
 
@@ -145,11 +151,11 @@ const LITERAL: Meanings = {
   'paint.detect.edgeMinContrast': {
     meaning:
       'The least difference of value between the two sides of a boundary for it to count as an edge. Below it no edge strokes are laid along the boundary and the strokes beside it take no behaviour from it. A block-in or form stroke can still stop or bleed at such a faint boundary, because the planes record every boundary whatever its contrast. Raise it to drop the faint edges, a quieter, less drawn picture; lower it to find even the faintest.',
-    interactions: ['paint.edges.stopAt', 'paint.edges.bleedAt', 'paint.detect.edgeReachPx'],
+    interactions: ['paint.detect.edgeReachPx'],
   },
   'paint.detect.edgeReachPx': {
     meaning:
-      'How near an edge a stroke must be, in screen pixels, to take its behaviour from it: distinct at a hard edge, blended at a soft one, dissolving at a lost one. Larger lets edges shape the brushwork farther from them, so more of the picture responds to its edges; smaller confines the effect to strokes right on an edge.',
+      'How near an edge a stroke must be, in screen pixels, to take its behaviour from it: distinct at a hard edge, blended at a soft one, dissolving at a lost one. Larger lets edges shape the brushwork farther from them, so more of the picture responds to its edges; smaller confines the effect to strokes right on an edge. Live, the figure\'s own outline is an edge like any other; in the baked painting the outline is drawn per frame and is not part of the edge field the strokes read, though the creases, borders, terminator and plane boundaries are.',
     unit: 'px',
     interactions: ['paint.detect.edgeMinContrast'],
   },
@@ -311,11 +317,6 @@ const LITERAL: Meanings = {
       'paint.curve.bounceTint',
       'paint.curve.reflectedBounceMix',
       'paint.environment.absorption',
-      'paint.mix.hueMin',
-      'paint.mix.hueMax',
-      'paint.curve.planeStepA',
-      'paint.curve.planeStepB',
-      'paint.curves.hAdjust',
     ],
   },
   'paint.curve.accentHue': {
@@ -334,13 +335,13 @@ const LITERAL: Meanings = {
     meaning:
       'The main hue step between planes, in degrees: every plane of the form gets a hue offset that depends on which way it faces. It runs up to this many either way, so neighbouring planes differ in hue and read as separate touches of paint. It adds on top of the warm and cool swing and is not capped by it; with both steps at 0 every plane has the same hue.',
     unit: '°',
-    interactions: ['paint.curve.planeStepB', 'paint.curve.shiftMax'],
+    interactions: ['paint.curve.planeStepB'],
   },
   'paint.curve.planeStepB': {
     meaning:
       'A second, finer hue step between planes, in degrees, added to the first: together they make neighbouring planes differ by roughly 8 to 20 degrees at the defaults. 0 leaves only the main step.',
     unit: '°',
-    interactions: ['paint.curve.planeStepA', 'paint.curve.shiftMax'],
+    interactions: ['paint.curve.planeStepA'],
   },
   'paint.curve.tintWarm': {
     meaning:
@@ -379,17 +380,17 @@ const LITERAL: Meanings = {
   },
   'paint.curve.devL': {
     meaning:
-      'A smooth wander in lightness along the value axis and across the surface, so the colour does not follow the formula exactly: not perfect, as a hand is not. It is about this much either way in lightness, up to about twice it where its waves line up. 0 is a machine-perfect colour; larger gives a patchier, more broken surface.',
+      'A smooth wander in lightness, so the colour does not follow the formula exactly: not perfect, as a hand is not. It comes in three parts: a wave along the value axis (about this much either way, up to about twice it), a second smooth field across the surface that the strokes of the surface add (up to about twice again), and a small jitter of each stroke, so the strongest drift is roughly four times this before the jitter. 0 is a machine-perfect colour; larger gives a patchier, more broken surface.',
     interactions: [],
   },
   'paint.curve.devC': {
     meaning:
-      'A smooth wander in colour strength along the value axis and across the surface, so the saturation of a stroke varies a little as a mix does. It is a fraction of the colour (0.1 would be roughly ten percent, a little more where its waves line up). 0 removes it; larger gives patches of duller and more vivid colour.',
+      'A smooth wander in colour strength, so the saturation of a stroke varies a little as a mix does. It is a fraction of the colour, and it comes in three parts: a wave along the value axis (about this much either way, up to about twice it), a second smooth field across the surface that the strokes of the surface add (up to about twice again), and a small jitter of each stroke, so the strongest drift is roughly four times this before the jitter. 0 removes it; larger gives patches of duller and more vivid colour.',
     interactions: [],
   },
   'paint.curve.devH': {
     meaning:
-      'A smooth wander in hue along the value axis and across the surface, so a colour drifts a little warmer or cooler from place to place. It is about this many degrees either way, up to about twice that where its waves line up. 0 removes it. It is small by design; the brush-load mix is what varies hue strongly.',
+      'A smooth wander in hue, so a colour drifts a little warmer or cooler from place to place. It comes in three parts: a wave along the value axis (about this many degrees either way, up to about twice that), a second smooth field across the surface that the strokes of the surface add (up to about twice again), and a small jitter of each stroke, so the strongest drift is roughly four times this before the jitter. 0 removes it. It is small by design; the brush-load mix is what varies hue strongly.',
     unit: '°',
     interactions: [],
   },
@@ -409,13 +410,13 @@ const LITERAL: Meanings = {
     meaning:
       'The smallest hue turn a paint load gets, in degrees. Each load is turned by an amount between this and the largest, one way or the other, and neighbouring loads tend to go opposite ways, so patches of the same colour differ gently. It adds on top of the capped warm and cool swing.',
     unit: '°',
-    interactions: ['paint.mix.hueMax', 'paint.curve.shiftMax', 'paint.mix.strength'],
+    interactions: ['paint.mix.hueMax', 'paint.mix.strength'],
   },
   'paint.mix.hueMax': {
     meaning:
       'The largest hue turn a paint load gets, in degrees. Larger gives a more obviously broken, varied colour, like loosely juxtaposed hues in a painting; with the smallest and this both at 0, only the small per-stroke jitter of about two degrees is left. Scaled by the strength and the role.',
     unit: '°',
-    interactions: ['paint.mix.hueMin', 'paint.curve.shiftMax', 'paint.mix.strength'],
+    interactions: ['paint.mix.hueMin', 'paint.mix.strength'],
   },
   'paint.mix.chromaMin': {
     meaning:
@@ -461,12 +462,12 @@ const LITERAL: Meanings = {
   },
   'paint.mix.flipHue': {
     meaning:
-      'The chance that the next load turns hue the opposite way from the last, so that neighbours contrast gently instead of averaging out: near 1 is usually opposite, 0.5 a coin toss, 0 always the same way. It acts on line marks and on edge strokes along plane boundaries, which are mixed in loads; the strokes of the surface, and the outline strokes, take their mix from a patch of surface, where neighbouring patches alternate, and ignore it.',
+      'The chance that the next load turns hue the opposite way from the last, so that neighbours contrast gently instead of averaging out: near 1 is usually opposite, 0.5 a coin toss, 0 always the same way. It acts on line marks and on edge strokes, which are mixed in loads, with one exception: in the baked painting the view\'s own outline ignores it (its strokes take their mix by patch of surface), while on the live path the outline takes it like any other edge stroke. The strokes of the surface take their mix from a patch of surface, where neighbouring patches alternate, and ignore it.',
     interactions: ['paint.mix.hueBias'],
   },
   'paint.mix.flipChroma': {
     meaning:
-      'The chance that the next load swings colour strength the opposite way from the last: near 1 a dull load is usually followed by a vivid one. It acts on line marks and on edge strokes along plane boundaries, which are mixed in loads; the strokes of the surface, and the outline strokes, alternate patch by patch and ignore it.',
+      'The chance that the next load swings colour strength the opposite way from the last: near 1 a dull load is usually followed by a vivid one. It acts on line marks and on edge strokes, which are mixed in loads, with one exception: in the baked painting the view\'s own outline ignores it (its strokes take their mix by patch of surface), while on the live path the outline takes it like any other edge stroke. The strokes of the surface alternate patch by patch and ignore it.',
     interactions: ['paint.mix.chromaBias'],
   },
   'paint.mix.drift': {
@@ -476,17 +477,17 @@ const LITERAL: Meanings = {
   },
   'paint.mix.loadMin': {
     meaning:
-      'The fewest strokes in one load of paint, for line marks and edge strokes along plane boundaries: each run of this many consecutive strokes of one role shares one mix. Larger loads mean longer stretches of a line or edge in one colour variation. Strokes on a surface take their mix from a patch of surface instead and ignore it.',
+      'The fewest strokes in one load of paint, for line marks and edge strokes: each run of this many consecutive strokes of one role shares one mix. Larger loads mean longer stretches of a line or edge in one colour variation. Live this reaches every edge stroke, outlines included; in the baked painting it reaches the terminator, cast-shadow, crease, border and plane-boundary strokes, and the view\'s own outline ignores it. Strokes on a surface take their mix from a patch of surface instead and ignore it.',
     interactions: ['paint.mix.loadMax', 'paint.mix.loadBreakPx', 'paint.mix.drift'],
   },
   'paint.mix.loadMax': {
     meaning:
-      'The most strokes in one load of paint, for line marks and edge strokes along plane boundaries. Larger gives longer unbroken stretches in one colour variation; set equal to the smallest for loads of one size. Strokes on a surface take their mix from a patch of surface instead and ignore it.',
+      'The most strokes in one load of paint, for line marks and edge strokes. Larger gives longer unbroken stretches in one colour variation; set equal to the smallest for loads of one size. Live this reaches every edge stroke, outlines included; in the baked painting it reaches the terminator, cast-shadow, crease, border and plane-boundary strokes, and the view\'s own outline ignores it. Strokes on a surface take their mix from a patch of surface instead and ignore it.',
     interactions: ['paint.mix.loadMin', 'paint.mix.loadBreakPx', 'paint.mix.drift'],
   },
   'paint.mix.loadBreakPx': {
     meaning:
-      'How far apart, in screen pixels, two consecutive strokes may be and still share a load: a painter reloads the brush when they move across the canvas. Larger lets one load run across a longer line or edge before it is remixed; smaller remixes after a short move. It acts on line marks and edge strokes along plane boundaries.',
+      'How far apart, in screen pixels, two consecutive strokes may be and still share a load: a painter reloads the brush when they move across the canvas. Larger lets one load run across a longer line or edge before it is remixed; smaller remixes after a short move. It acts on line marks and edge strokes (live, every edge stroke; in the baked painting, all but the view\'s own outline), measured on the screen live and in the world, at the reference scale, when baked.',
     unit: 'px',
     interactions: ['paint.mix.loadMin', 'paint.mix.loadMax'],
   },
@@ -555,7 +556,7 @@ const LITERAL: Meanings = {
   // ---- edges ----
   'paint.edges.wShadowDist': {
     meaning:
-      'How much nearness to what casts the shadow counts toward the hardness of cast-shadow edges (these edges only). A cast shadow is hard and dark where it meets the thing that casts it and softens away from it, over roughly 8 to 110 screen pixels. Raise it for a shadow edge that is crisp at the contact and lost farther out; 0 makes the edge the same all along.',
+      'How much nearness to what casts the shadow counts toward the hardness of cast-shadow edges (these edges only). A cast shadow is hard and dark where it meets the thing that casts it and softens away from it, over roughly 8 to 110 screen pixels (measured from the shape that casts it, in the baked painting; from the figure\'s outline on the screen, live). Raise it for a shadow edge that is crisp at the contact and lost farther out; 0 makes the edge the same all along.',
     interactions: ['paint.edges.wContrast.2', 'paint.edges.wDepth.2'],
   },
   'paint.edges.noise': {
@@ -581,22 +582,22 @@ const LITERAL: Meanings = {
   'paint.edges.stopAt': {
     meaning:
       "A brushstroke is stopped by the boundary between two planes when that boundary's hardness is at least this. Raise it to let strokes run across more boundaries, a more blended look; lower it to stop strokes at softer boundaries, a more faceted look. Between the bleed limit and this, a stroke crosses and goes on for part of its length.",
-    interactions: ['paint.edges.bleedAt', 'paint.value.terminatorSoftness', 'paint.detect.edgeMinContrast'],
+    interactions: ['paint.edges.bleedAt', 'paint.value.terminatorSoftness'],
   },
   'paint.edges.bleedAt': {
     meaning:
       'A stroke that meets a boundary between planes harder than this, but not hard enough to stop it, bleeds across: it carries on for 60% of the length it had left. Below this it runs on freely. Lower it and more strokes shorten at their boundaries; raise it and most run straight across.',
-    interactions: ['paint.edges.stopAt', 'paint.detect.edgeMinContrast'],
+    interactions: ['paint.edges.stopAt'],
   },
   'paint.edges.planeCellDeg': {
     meaning:
-      'How coarsely the form is divided into planes: the direction the surface faces is sorted into cells this many degrees across. Small cells give many small facets, more edges and more separate gradients (many gradients, not one); big cells give a few large planes and a blockier figure.',
+      'How coarsely the form is divided into planes: the direction the surface faces is sorted into cells this many degrees across. Small cells give many small facets, more edges and more separate gradients (many gradients, not one); big cells give a few large planes and a blockier figure. In the baked painting the cells are in world directions, so the planes stay put as you orbit; on the live path they are the directions the surface faces in the view, and shift as it turns.',
     unit: '°',
     interactions: ['paint.edges.planeMinPx', 'paint.edges.planeGradient'],
   },
   'paint.edges.planeMinPx': {
     meaning:
-      'Planes smaller than this area, in screen pixels squared, are merged into the neighbouring plane of the same value family that they share most border with, so no tiny slivers of paint are left. Larger merges more, giving fewer, larger planes. With the light fixed in the world a floor of 216 pixels squared (three triangles of the underpainting lattice) applies whatever is set, so values under that change nothing.',
+      'Planes smaller than this area, in screen pixels squared, are merged into the neighbouring plane of the same value family that they share most border with, so no tiny slivers of paint are left. Larger merges more, giving fewer, larger planes. In the baked painting (the default) a floor of 216 pixels squared (three triangles of the underpainting lattice) applies whatever is set, so values under that change nothing there; on the live path (baking off, or the light fixed to the camera) the setting is honoured as given, down to a single pixel.',
     unit: 'px²',
     interactions: ['paint.edges.planeCellDeg'],
   },
@@ -684,7 +685,7 @@ const LITERAL: Meanings = {
   },
   'paint.canvas.texture': {
     meaning:
-      "How strong the canvas weave is: the cloth's own relief, and how much of its tooth a dry brush catches, so a dry stroke skips over the peaks of the weave. 0 is a smooth primed board; larger is a coarser, stronger weave. It also lets a little of the weave through the thin underpainting.",
+      "How strong the canvas weave is: the relief of its threads and the cloth's own tone, and how much of its tooth a dry brush catches, so a dry stroke skips over the peaks of the weave. 0 is a smooth primed board; larger is a stronger relief of the same threads, whose size is the weave's (see `paint.canvas.weave`). It also lets a little of the weave through the thin underpainting.",
     interactions: ['paint.underpaint.opacity', 'paint.canvas.weave'],
   },
   'paint.canvas.weave': {
@@ -732,7 +733,7 @@ const LITERAL: Meanings = {
   'paint.curves.hAdjust': {
     meaning:
       "Over value, a turn of the hue in degrees (the vertical axis is the turn). Positive turns hues the way red goes to orange, yellow, green, blue and violet; negative the other way. It adds on top of the capped warm and cool swing, so the cap on the swing does not limit it.",
-    interactions: ['paint.curve.shiftMax'],
+    interactions: [],
   },
   'paint.curves.mixAmount': {
     meaning:

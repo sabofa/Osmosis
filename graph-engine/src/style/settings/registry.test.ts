@@ -247,6 +247,38 @@ describe('every entry says what it means', () => {
     expect(settingAt('paint.curve.skyTint')!.interactions).not.toContain('paint.light.sky')
   })
 
+  it('has no interaction between settings that only add, or that never touch', () => {
+    // a faint boundary can still stop a stroke: the contrast floor and the stop level are independent
+    expect(settingAt('paint.detect.edgeMinContrast')!.interactions).not.toContain('paint.edges.stopAt')
+    expect(settingAt('paint.detect.edgeMinContrast')!.interactions).not.toContain('paint.edges.bleedAt')
+    // the mix's hue turns and the planes' hue steps add on top of the capped swing: they do not cap each other
+    for (const path of ['paint.mix.hueMin', 'paint.mix.hueMax', 'paint.curve.planeStepA', 'paint.curve.planeStepB', 'paint.curves.hAdjust']) {
+      expect(settingAt('paint.curve.shiftMax')!.interactions, path).not.toContain(path)
+      expect(settingAt(path)!.interactions, path).not.toContain('paint.curve.shiftMax')
+    }
+  })
+
+  it('says where the baked painting and the live path differ, in the settings where they do', () => {
+    const both = (path: string, ...words: RegExp[]) => {
+      const text = settingAt(path)!.meaning
+      for (const word of words) expect(text, `${path}: ${word}`).toMatch(word)
+    }
+    // (the baked painting is the default; the live path is baking off, or the light fixed to the camera)
+    for (const path of ['paint.mix.flipHue', 'paint.mix.flipChroma']) both(path, /baked painting/, /live path/, /outline/)
+    for (const path of ['paint.mix.loadMin', 'paint.mix.loadMax', 'paint.mix.loadBreakPx']) both(path, /baked painting/, /[Ll]ive/, /outline/)
+    for (const weight of ['wFocal', 'wDepth']) for (const kind of [0, 1, 2]) both(`paint.edges.${weight}.${kind}`, /baked painting/, /live path/)
+    both('paint.edges.wDepth.1', /no depth term/)
+    both('paint.edges.wShadowDist', /baked painting/, /live/)
+    both('paint.edges.planeMinPx', /baked painting/, /live path/, /216/)
+    both('paint.edges.planeCellDeg', /baked painting/, /live path/)
+    both('paint.detect.edgeReachPx', /[Ll]ive/, /baked painting/, /outline/)
+    both('paint.light.shadows', /live path/, /baked painting/, /no effect/)
+    both('paint.canvas.texture', /canvas\.weave/)
+    for (const path of ['paint.curve.devL', 'paint.curve.devC', 'paint.curve.devH']) both(path, /four times/, /jitter/)
+    expect(settingAt('paint.roles.line.load')!.meaning).not.toMatch(/heavier loaded start/)
+    expect(settingAt('paint.roles.block.load')!.meaning).toMatch(/heavier loaded start/)
+  })
+
   it('names the interactions the review found missing', () => {
     const shift = settingAt('paint.curve.shiftMax')!.interactions
     for (const path of ['kWarm', 'kCool', 'warmHue', 'coolHue', 'tintWarm', 'tintCool', 'skyTint', 'bounceTint']) expect(shift, path).toContain(`paint.curve.${path}`)
