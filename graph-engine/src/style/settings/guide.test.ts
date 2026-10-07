@@ -7,6 +7,7 @@ import { buildGuideDocs, GUIDE_PAGES } from './guideDocs'
 import type { SweepFile } from './sweepTypes'
 import { REGISTRY, settingAt } from './registry'
 import { UNITS } from './units'
+import { applyStyleSet, checkThemeStyles } from '../resolve'
 
 // ---------------------------------------------------------------------------
 // The guide is the table plus the prose
@@ -135,4 +136,50 @@ describe('the committed guide has not drifted from the registry', () => {
     const overview = existsSync(join(dir, 'overview.md')) ? read(join(dir, 'overview.md')) : ''
     for (const [name, text] of Object.entries(buildGuideDocs(sweep, recipes, overview))) expect(read(join(dir, name)), name).toBe(text)
   })
+})
+
+// ---------------------------------------------------------------------------
+// The recipes only use settings and values that exist
+// ---------------------------------------------------------------------------
+
+describe('the recipes', () => {
+  const docs = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'docs', 'styles')
+  const recipesDir = join(docs, 'recipes')
+  const names = existsSync(recipesDir) ? readdirSync(recipesDir).filter((file) => file.endsWith('.md')) : []
+  const sweepPath = join(docs, 'sweep.json')
+  const sweep = existsSync(sweepPath) ? (JSON.parse(lf(readFileSync(sweepPath, 'utf8'))) as SweepFile) : null
+
+  it.skipIf(names.length === 0)('has the five recipes', () => {
+    expect(names.sort()).toEqual(['calmer-brush-fill.md', 'chalkier-board.md', 'more-colour-distortion.md', 'rougher-pencil.md', 'softer-terminator.md'])
+  })
+
+  for (const name of names) {
+    const text = lf(readFileSync(join(recipesDir, name), 'utf8'))
+
+    it(`${name}: every @style-set line parses, with a real path and a value in range`, () => {
+      const lines = text.split('\n').filter((line) => line.startsWith('@style-set:'))
+      expect(lines.length, name).toBeGreaterThan(0)
+      for (const line of lines) {
+        const body = line.slice('@style-set:'.length).trim()
+        expect(settingAt(body.split(/\s+/)[0]), line).toBeDefined()
+        expect(() => applyStyleSet({}, body), line).not.toThrow()
+      }
+    })
+
+    it(`${name}: every settings path it mentions is in the registry, and every JSON snippet is a valid theme style set`, () => {
+      for (const [token] of text.matchAll(/\b(?:paint|style|media|board)\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*/g)) expect(settingAt(token), token).toBeDefined()
+      for (const [, json] of text.matchAll(/```json\n([\s\S]*?)```/g)) expect(checkThemeStyles(JSON.parse(json)).errors, name).toEqual([])
+    })
+
+    it(`${name}: a quoted rating is the rating sweep.json gives that path`, () => {
+      const quoted = text.split('\n').filter((line) => line.includes('sweep: "'))
+      expect(quoted.length, name).toBeGreaterThan(0)
+      for (const line of quoted) {
+        const path = /`((?:paint|style|media|board)\.[A-Za-z0-9_.]+)`/.exec(line)?.[1]
+        expect(path, line).toBeDefined()
+        const rating = /sweep: "([a-z-]+)"/.exec(line)![1]
+        expect(sweep?.entries.find((entry) => entry.path === path)?.rating, line).toBe(rating)
+      }
+    })
+  }
 })

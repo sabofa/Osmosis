@@ -1,7 +1,9 @@
 // The settings sweep: how much each registry setting moves the picture, for the figures, media,
 // backgrounds (T7.1-T7.2) and paint (T7.3) groups.
 //
-//   npx vite-node tools/settings-sweep.mts [--only <path prefix>]       (from graph-engine/)
+//   npx vite-node tools/settings-sweep.mts [--only <path prefix>] [--relabel]       (from graph-engine/)
+//
+// --relabel re-applies the ratings (incl. render-only) to the existing file from its stored numbers; nothing is measured.
 //
 // writes ../docs/styles/sweep.json (SweepFile, src/style/settings/sweepTypes.ts). With --only, just the paths
 // that start with the prefix are re-measured and MERGED into the file already there (their entries replaced, the
@@ -31,8 +33,9 @@ import { paperBaseColour, paperKey } from '../src/style/papers/generated'
 import type { GeneratedPaperType } from '../src/style/papers/generate/types'
 import { tilePixels } from '../src/style/papers/host'
 import { GUIDE } from '../src/style/settings/guide'
+import { isRenderOnly } from './sweepRenderOnly'
 import { activeRange, EDGES, rate, safeRange, saturates } from '../src/style/settings/sweepRate'
-import type { SweepEngine, SweepEntry, SweepFile, SweepMeasure } from '../src/style/settings/sweepTypes'
+import type { SweepEngine, SweepEntry, SweepFile, SweepMeasure, SweepRating } from '../src/style/settings/sweepTypes'
 import type { GuideEntry } from '../src/style/settings/types'
 import { blendOver, normaliseHex } from '../src/style/theme/contrast'
 import { BUILTIN_LIGHT, BUILTIN_THEME_IDS } from '../src/style/theme/defaults'
@@ -1008,6 +1011,13 @@ function engineOf(path: string): SweepEngine | null {
   throw new Error(`no engine for ${path}`)
 }
 
+// The one place a rating is decided: not-drawn-yet, then render-only (the shader reads it; the model's numbers stay), else measured.
+function ratingOf(path: string, notDrawn: boolean, measure: SweepMeasure, change: number[]): SweepRating {
+  if (notDrawn) return 'not-drawn-yet'
+  if (isRenderOnly(path)) return 'render-only'
+  return rate(measure, Math.max(0, ...change))
+}
+
 function entryOf(spec: GuideEntry): SweepEntry {
   const engine = engineOf(spec.path)!
   const lightness = spec.path === 'style.paper.tint' ? Math.min(0.93, toOklch(defaultTheme('light').colours.paper).l) : toOklch(defaultTheme('light').colours.ink).l
@@ -1022,7 +1032,7 @@ function entryOf(spec: GuideEntry): SweepEntry {
     measure: measured.measure,
     values,
     change,
-    rating: notDrawn ? 'not-drawn-yet' : rate(measured.measure, Math.max(0, ...change)),
+    rating: ratingOf(spec.path, notDrawn, measured.measure, change),
     activeRange: active,
     saturates: saturates(change),
     detail: Object.fromEntries(Object.entries(measured.detail).map(([k, list]) => [k, list.map((x) => round(x, 6))])),
@@ -1061,9 +1071,25 @@ function noteOf(only: string | undefined, existing: SweepFile | null): string {
   return (at < 0 ? old : old.slice(0, at)) + PAINT_NOTE
 }
 
+// --relabel: re-apply the ratings to the existing sweep.json from its stored numbers, through ratingOf, without measuring.
+function relabel(): void {
+  if (!existsSync(OUT)) throw new Error(`${OUT} is missing; nothing to relabel`)
+  const file = JSON.parse(readFileSync(OUT, 'utf8')) as SweepFile
+  const notDrawn = new Map(GUIDE.map((spec) => [spec.path, spec.meaning.startsWith('Not drawn yet:')]))
+  let changed = 0
+  for (const entry of file.entries) {
+    const rating = ratingOf(entry.path, notDrawn.get(entry.path) ?? entry.rating === 'not-drawn-yet', entry.measure, entry.change)
+    if (rating !== entry.rating) changed++
+    entry.rating = rating
+  }
+  writeFileSync(OUT, JSON.stringify(file, null, 2) + '\n')
+  console.log(`relabelled ${OUT}: ${changed} of ${file.entries.length} ratings changed`)
+}
+
 function main(): void {
   const started = Date.now()
   const args = process.argv.slice(2)
+  if (args.includes('--relabel')) return relabel()
   const onlyAt = args.indexOf('--only')
   const only = onlyAt >= 0 ? args[onlyAt + 1] : undefined
   if (onlyAt >= 0 && (only === undefined || only.startsWith('--'))) throw new Error('--only needs a path prefix')

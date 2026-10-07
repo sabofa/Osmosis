@@ -9,8 +9,9 @@ export type SweepEngine = 'paint' | 'figures' | 'media' | 'backgrounds'
 // paint entry's measure is the one of its dimensions that rates strongest (the others are in `detail`).
 export type SweepMeasure = 'colour' | 'geometry' | 'structure'
 
-// 'not-drawn-yet' for a setting whose meaning says "Not drawn yet:" (registered, wired to nothing).
-export type SweepRating = 'none' | 'subtle' | 'moderate' | 'strong' | 'not-drawn-yet'
+// 'render-only' for a setting only the renderer's shader reads: its measured numbers stay, but the sweep's per-frame
+// model cannot rate it. 'not-drawn-yet' for a setting whose meaning says "Not drawn yet:" (registered, wired to nothing).
+export type SweepRating = 'none' | 'subtle' | 'moderate' | 'strong' | 'not-drawn-yet' | 'render-only'
 
 export interface SweepEntry {
   path: string
