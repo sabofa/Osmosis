@@ -1,0 +1,2511 @@
+{
+  "header": {
+    "fixtures": {
+      "figures": [
+        "Measured + notation",
+        "Square minus its circle",
+        "Cube and its net"
+      ],
+      "media": [
+        "line",
+        "hidden",
+        "auxiliary",
+        "point",
+        "label",
+        "measure",
+        "caption",
+        "givens",
+        "highlight",
+        "focus",
+        "fill",
+        "region",
+        "shading"
+      ],
+      "backgrounds": [
+        "a 256 px tile, seed 0",
+        "Measured + notation on a graph paper (grid)"
+      ]
+    },
+    "themes": [
+      "default-light",
+      "default-dark",
+      "builtin:slate",
+      "builtin:forest",
+      "builtin:ember",
+      "builtin:plum"
+    ],
+    "steps": 9,
+    "note": "Measured by tools/settings-sweep.mts (figures, media, backgrounds); each setting is swept over 9 evenly spaced values (all the values of an integer or a choice when there are fewer, 9 hues at the default's lightness for a colour), and its change is measured against the setting at its registry default. Figures: three examples drawn through renderFigure under four looks (ink, pencil, marker, blackboard), the setting written with @style-set; the change is the largest over the looks of the mean over the examples. Measure: geometry when the setting moves path points by 0.1 px or more at any value (mean px distance from each sampled point to the nearest point of the default drawing, both ways, each capped at 40 px; the paper layer is left out; labels are measured apart, as points along the baseline with the glyph width estimated from the face, and the larger of the two counts), otherwise colour (OKLab dE of the drawn fill and stroke colours over a white page, at their opacities, a grain filter taken as the share of a stroke its speckle leaves, the noise assumed uniform). detail.markupChanged marks the values at which the markup differs from the default at all. Media: mean OKLab dE of each role colour (13 roles, over its own surface) across the 6 themes. Backgrounds: the 256 px tile as the figure bakes it (tilePixels), averaged over the 6 themes; the headline is the larger of the mean colour shift (dE) and the change in the tile's L standard deviation (grain moves the spread before the mean); style.paper.grid is the displacement of the rulings (geometry) on a graph paper; board.* are the board colours derived from each theme's accent. Not-drawn-yet settings are measured like the rest and rated not-drawn-yet."
+  },
+  "entries": [
+    {
+      "path": "board.blackboard.chromaCap",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        0,
+        0.015,
+        0.03,
+        0.045,
+        0.06,
+        0.075,
+        0.09,
+        0.105,
+        0.12
+      ],
+      "change": [
+        0.022643,
+        0.007614,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        0.03
+      ],
+      "saturates": true,
+      "detail": {
+        "meanDeltaE": [
+          0.022643,
+          0.007614,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "lSdChange": [
+          0.00003,
+          0.000032,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "path": "board.greenboard.chromaCap",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        0,
+        0.015,
+        0.03,
+        0.045,
+        0.06,
+        0.075,
+        0.09,
+        0.105,
+        0.12
+      ],
+      "change": [
+        0.060833,
+        0.045823,
+        0.031009,
+        0.016233,
+        0.001197,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rating": "strong",
+      "activeRange": [
+        0,
+        0.06
+      ],
+      "saturates": true,
+      "detail": {
+        "meanDeltaE": [
+          0.060833,
+          0.045823,
+          0.031009,
+          0.016233,
+          0.001197,
+          0,
+          0,
+          0,
+          0
+        ],
+        "lSdChange": [
+          0.000056,
+          0.000069,
+          0.000079,
+          0.000065,
+          0.000021,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "path": "board.tilt",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0.006789,
+        0.005239,
+        0.003415,
+        0.001892,
+        0,
+        0.001624,
+        0.003806,
+        0.005608,
+        0.007061
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "meanDeltaE": [
+          0.006789,
+          0.005239,
+          0.003415,
+          0.001892,
+          0,
+          0.001624,
+          0.003806,
+          0.005608,
+          0.007061
+        ],
+        "lSdChange": [
+          0.000056,
+          0.000054,
+          0.000052,
+          0.000039,
+          0,
+          0.000018,
+          0.000038,
+          0.000038,
+          0.000032
+        ]
+      }
+    },
+    {
+      "path": "board.whiteboard.chromaCap",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        0,
+        0.015,
+        0.03,
+        0.045,
+        0.06,
+        0.075,
+        0.09,
+        0.105,
+        0.12
+      ],
+      "change": [
+        0.011948,
+        0.001001,
+        0.001001,
+        0.001001,
+        0.001001,
+        0.001001,
+        0.001001,
+        0.001001,
+        0.001001
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.015
+      ],
+      "saturates": true,
+      "detail": {
+        "meanDeltaE": [
+          0.011948,
+          0.001001,
+          0.001001,
+          0.001001,
+          0.001001,
+          0.001001,
+          0.001001,
+          0.001001,
+          0.001001
+        ],
+        "lSdChange": [
+          0.000223,
+          0.00009,
+          0.00009,
+          0.00009,
+          0.00009,
+          0.00009,
+          0.00009,
+          0.00009,
+          0.00009
+        ]
+      }
+    },
+    {
+      "path": "media.chalk.chroma",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0.5,
+        0.525,
+        0.55,
+        0.575,
+        0.6,
+        0.625,
+        0.65,
+        0.675,
+        0.7
+      ],
+      "change": [
+        0.005595,
+        0.004285,
+        0.002849,
+        0.001587,
+        0,
+        0.001576,
+        0.00301,
+        0.004471,
+        0.006111
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0.5,
+        0.675
+      ],
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0.014418,
+          0.011243,
+          0.007877,
+          0.004564,
+          0,
+          0.003938,
+          0.00821,
+          0.011756,
+          0.016369
+        ]
+      }
+    },
+    {
+      "path": "media.colouredPencil.chroma",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.15,
+        0.3,
+        0.45,
+        0.6,
+        0.75,
+        0.9,
+        1.05,
+        1.2
+      ],
+      "change": [
+        0.044671,
+        0.036423,
+        0.028399,
+        0.019839,
+        0.011674,
+        0.003263,
+        0.005857,
+        0.015274,
+        0.024195
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        1.05
+      ],
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0.096544,
+          0.078556,
+          0.06166,
+          0.043665,
+          0.026159,
+          0.006929,
+          0.013901,
+          0.034568,
+          0.058828
+        ]
+      }
+    },
+    {
+      "path": "media.graphite.grain",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rating": "not-drawn-yet",
+      "activeRange": null,
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "path": "media.graphite.hint",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.0063,
+        0.0125,
+        0.0188,
+        0.025,
+        0.0313,
+        0.0375,
+        0.0438,
+        0.05
+      ],
+      "change": [
+        0.015273,
+        0.00978,
+        0.005296,
+        0.000998,
+        0.002498,
+        0.004877,
+        0.007329,
+        0.009873,
+        0.012092
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.0375
+      ],
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0.019874,
+          0.013331,
+          0.009409,
+          0.003188,
+          0.005439,
+          0.010099,
+          0.016433,
+          0.021755,
+          0.025751
+        ]
+      }
+    },
+    {
+      "path": "media.ink.chroma",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.1875,
+        0.375,
+        0.5625,
+        0.75,
+        0.9375,
+        1.125,
+        1.3125,
+        1.5
+      ],
+      "change": [
+        0.064048,
+        0.050809,
+        0.037441,
+        0.023934,
+        0.01063,
+        0.00272,
+        0.012515,
+        0.019379,
+        0.023503
+      ],
+      "rating": "strong",
+      "activeRange": [
+        0,
+        1.125
+      ],
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0.141555,
+          0.113162,
+          0.081766,
+          0.053945,
+          0.024854,
+          0.006004,
+          0.03226,
+          0.057754,
+          0.082815
+        ]
+      }
+    },
+    {
+      "path": "media.ink.contrast",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        4.5,
+        5.8125,
+        7.125,
+        8.4375,
+        9.75,
+        11.0625,
+        12.375,
+        13.6875,
+        15
+      ],
+      "change": [
+        0.033112,
+        0.020589,
+        0.002833,
+        0.023865,
+        0.044234,
+        0.062307,
+        0.079007,
+        0.095079,
+        0.111966
+      ],
+      "rating": "strong",
+      "activeRange": [
+        4.5,
+        13.6875
+      ],
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0.110795,
+          0.050937,
+          0.011104,
+          0.050855,
+          0.093839,
+          0.14191,
+          0.176089,
+          0.212729,
+          0.247379
+        ]
+      }
+    },
+    {
+      "path": "media.ink.edge",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.0625,
+        0.125,
+        0.1875,
+        0.25,
+        0.3125,
+        0.375,
+        0.4375,
+        0.5
+      ],
+      "change": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rating": "not-drawn-yet",
+      "activeRange": null,
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "path": "media.marker.streaks",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rating": "not-drawn-yet",
+      "activeRange": null,
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "path": "media.whiteboard.dry",
+      "engine": "media",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "rating": "not-drawn-yet",
+      "activeRange": null,
+      "saturates": false,
+      "detail": {
+        "p95DeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "path": "style.colour.ink",
+      "engine": "figures",
+      "measure": "colour",
+      "values": [
+        "#310015",
+        "#2d0900",
+        "#201400",
+        "#141900",
+        "#001d0f",
+        "#001b1d",
+        "#001929",
+        "#120842",
+        "#280031"
+      ],
+      "change": [
+        0.092898,
+        0.088749,
+        0.093379,
+        0.105117,
+        0.107566,
+        0.10201,
+        0.106716,
+        0.111491,
+        0.10366
+      ],
+      "rating": "strong",
+      "activeRange": [
+        "#201400",
+        "#280031"
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "colourDeltaE": [
+          0.092898,
+          0.088749,
+          0.093379,
+          0.105117,
+          0.107566,
+          0.10201,
+          0.106716,
+          0.111491,
+          0.10366
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.colour.medium",
+      "engine": "figures",
+      "measure": "colour",
+      "values": [
+        "clean",
+        "ink",
+        "graphite",
+        "colouredPencil",
+        "marker",
+        "chalk",
+        "whiteboard"
+      ],
+      "change": [
+        0,
+        0.036889,
+        0.11609,
+        0.151971,
+        0.106147,
+        0.359809,
+        0.124116
+      ],
+      "rating": "strong",
+      "activeRange": [
+        "graphite",
+        "whiteboard"
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "colourDeltaE": [
+          0,
+          0.036889,
+          0.11609,
+          0.151971,
+          0.106147,
+          0.359809,
+          0.124116
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.colour.saturation",
+      "engine": "figures",
+      "measure": "colour",
+      "values": [
+        0,
+        0.1875,
+        0.375,
+        0.5625,
+        0.75,
+        0.9375,
+        1.125,
+        1.3125,
+        1.5
+      ],
+      "change": [
+        0.044408,
+        0.036288,
+        0.029351,
+        0.021631,
+        0.013944,
+        0.003913,
+        0.002918,
+        0.00529,
+        0.009152
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        0.9375
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "colourDeltaE": [
+          0.044408,
+          0.036288,
+          0.029351,
+          0.021631,
+          0.013944,
+          0.003913,
+          0.002918,
+          0.00529,
+          0.009152
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.fill.angle",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        -180,
+        -135,
+        -90,
+        -45,
+        0,
+        45,
+        90,
+        135,
+        180
+      ],
+      "change": [
+        1.013379,
+        1.044392,
+        1.001017,
+        0.907576,
+        0.766445,
+        0,
+        0.736763,
+        0.865626,
+        1.013379
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        -90,
+        90
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          1.013379,
+          1.044392,
+          1.001017,
+          0.907576,
+          0.766445,
+          0,
+          0.736763,
+          0.865626,
+          1.013379
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          0,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          0.970687,
+          1.002828,
+          0.983607,
+          1,
+          0.957475,
+          1,
+          0.978902,
+          0.992126,
+          0.970687
+        ]
+      }
+    },
+    {
+      "path": "style.fill.opacity",
+      "engine": "figures",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0.035068,
+        0.035278,
+        0.030628,
+        0.010407,
+        0.009328,
+        0.030023,
+        0.04416,
+        0.044756,
+        0.040439
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0.25,
+        0.75
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "colourDeltaE": [
+          0.035068,
+          0.035278,
+          0.030628,
+          0.010407,
+          0.009328,
+          0.030023,
+          0.04416,
+          0.044756,
+          0.040439
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.fill.roughness",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.48801,
+        0.546928,
+        0.616938,
+        0.748366,
+        0.848847,
+        1.028708,
+        1.151632,
+        1.186554
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        0.75
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.48801,
+          0.546928,
+          0.616938,
+          0.748366,
+          0.848847,
+          1.028708,
+          1.151632,
+          1.186554
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          0.994479,
+          0.994776,
+          1.010792,
+          1.021549,
+          1.026129,
+          1.007685,
+          1.013032,
+          1.019515
+        ]
+      }
+    },
+    {
+      "path": "style.fill.spacing",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        3,
+        7.625,
+        12.25,
+        16.875,
+        21.5,
+        26.125,
+        30.75,
+        35.375,
+        40
+      ],
+      "change": [
+        0.619457,
+        0.636865,
+        0.723368,
+        0.853972,
+        0.933421,
+        0.950231,
+        0.970993,
+        1.105149,
+        1.12604
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        7.625,
+        35.375
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0.619457,
+          0.636865,
+          0.723368,
+          0.853972,
+          0.933421,
+          0.950231,
+          0.970993,
+          1.105149,
+          1.12604
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1.350348,
+          1.023723,
+          0.935697,
+          0.89751,
+          0.878013,
+          0.852305,
+          0.840168,
+          0.831601,
+          0.825207
+        ]
+      }
+    },
+    {
+      "path": "style.fill.type",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        "flat",
+        "hatch",
+        "crosshatch",
+        "stipple",
+        "scribble",
+        "wash",
+        "none"
+      ],
+      "change": [
+        0,
+        1.93575,
+        2.191385,
+        1.632478,
+        2.211361,
+        0,
+        0.437331
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        "flat",
+        "wash"
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          1.93575,
+          2.191385,
+          1.632478,
+          2.211361,
+          0,
+          0.437331
+        ],
+        "colourDeltaE": [
+          0,
+          0.02747,
+          0.029107,
+          0.002272,
+          0.008364,
+          0.000275,
+          0.001123
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          3.31381,
+          5.441334,
+          1,
+          1.229915,
+          1.008862,
+          0.991138
+        ]
+      }
+    },
+    {
+      "path": "style.lettering.face",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        "math",
+        "textbook",
+        "hand"
+      ],
+      "change": [
+        0,
+        0,
+        0.270667
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        "textbook",
+        "hand"
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0,
+          0.270667
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          1,
+          0,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.lettering.size",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0.6,
+        0.725,
+        0.85,
+        0.975,
+        1.1,
+        1.225,
+        1.35,
+        1.475,
+        1.6
+      ],
+      "change": [
+        7.339573,
+        4.762218,
+        2.449509,
+        0.445578,
+        1.594664,
+        3.725241,
+        6.016563,
+        8.428314,
+        10.856687
+      ],
+      "rating": "strong",
+      "activeRange": [
+        0.6,
+        1.475
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          7.339573,
+          4.762218,
+          2.449509,
+          0.445578,
+          1.594664,
+          3.725241,
+          6.016563,
+          8.428314,
+          10.856687
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.lettering.tilt",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.01283,
+        0.025664,
+        0.038488,
+        0.051343,
+        0.064156,
+        0.077006,
+        0.089817,
+        0.102669
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.01283,
+          0.025664,
+          0.038488,
+          0.051343,
+          0.064156,
+          0.077006,
+          0.089817,
+          0.102669
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.line.grain",
+      "engine": "figures",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.041858,
+        0.041181,
+        0.04009,
+        0.039438,
+        0.038759,
+        0.038191,
+        0.037944,
+        0.040013
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        0.125
+      ],
+      "saturates": true,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.009786,
+          0.019413,
+          0.027714,
+          0.036163,
+          0.044058,
+          0.051637,
+          0.058661,
+          0.066129
+        ],
+        "colourDeltaE": [
+          0,
+          0.041858,
+          0.041181,
+          0.04009,
+          0.039438,
+          0.038759,
+          0.038191,
+          0.037944,
+          0.040013
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.line.looseness",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.641354,
+        1.007925,
+        1.46582,
+        1.985156,
+        2.446955,
+        2.901401,
+        3.370687,
+        3.969458
+      ],
+      "rating": "strong",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.641354,
+          1.007925,
+          1.46582,
+          1.985156,
+          2.446955,
+          2.901401,
+          3.370687,
+          3.969458
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1.000326,
+          1.000651,
+          1.000651,
+          1.001302,
+          1.001302,
+          1.001302,
+          1.002604,
+          1.002604
+        ]
+      }
+    },
+    {
+      "path": "style.line.opacity",
+      "engine": "figures",
+      "measure": "colour",
+      "values": [
+        0.05,
+        0.1688,
+        0.2875,
+        0.4062,
+        0.525,
+        0.6438,
+        0.7625,
+        0.8812,
+        1
+      ],
+      "change": [
+        0.132859,
+        0.123783,
+        0.113751,
+        0.097298,
+        0.081965,
+        0.064826,
+        0.04489,
+        0.033529,
+        0
+      ],
+      "rating": "strong",
+      "activeRange": [
+        0.2875,
+        1
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "colourDeltaE": [
+          0.132859,
+          0.123783,
+          0.113751,
+          0.097298,
+          0.081965,
+          0.064826,
+          0.04489,
+          0.033529,
+          0
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          0
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.line.passes",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        1,
+        2,
+        3
+      ],
+      "change": [
+        0,
+        0.259801,
+        0.387664
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        1,
+        3
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.259801,
+          0.387664
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1.084906,
+          1.169812
+        ]
+      }
+    },
+    {
+      "path": "style.line.taper",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.040107,
+        0.078487,
+        0.114021,
+        0.146987,
+        0.178453,
+        0.209154,
+        0.239085,
+        0.267056
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.040107,
+          0.078487,
+          0.114021,
+          0.146987,
+          0.178453,
+          0.209154,
+          0.239085,
+          0.267056
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.line.type",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        "technical",
+        "ink",
+        "brush",
+        "pencil",
+        "marker",
+        "chalk"
+      ],
+      "change": [
+        0,
+        2.38462,
+        2.864554,
+        2.103118,
+        1.935483,
+        1.958772
+      ],
+      "rating": "strong",
+      "activeRange": [
+        "technical",
+        "pencil"
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          2.38462,
+          2.864554,
+          2.103118,
+          1.935483,
+          1.958772
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0.038069,
+          0.04148,
+          0.064055
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1.165094,
+          1.165094,
+          1.292612,
+          1.844228,
+          3.678071
+        ]
+      }
+    },
+    {
+      "path": "style.line.variation",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.060578,
+        0.120429,
+        0.180398,
+        0.240315,
+        0.300011,
+        0.359707,
+        0.4192,
+        0.478501
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.060578,
+          0.120429,
+          0.180398,
+          0.240315,
+          0.300011,
+          0.359707,
+          0.4192,
+          0.478501
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.line.width",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0.25,
+        0.7188,
+        1.1875,
+        1.6563,
+        2.125,
+        2.5938,
+        3.0625,
+        3.5313,
+        4
+      ],
+      "change": [
+        0.643261,
+        0.300238,
+        0.352737,
+        0.756508,
+        1.091719,
+        1.457196,
+        1.831199,
+        2.150739,
+        2.465611
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        1.1875,
+        4
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0.643261,
+          0.300238,
+          0.352737,
+          0.756508,
+          1.091719,
+          1.457196,
+          1.831199,
+          2.150739,
+          2.465611
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1.000639,
+          1.000639,
+          0.974047,
+          0.935579,
+          0.906648,
+          0.888566,
+          0.881334,
+          0.863252,
+          0.861267
+        ]
+      }
+    },
+    {
+      "path": "style.line.wobble",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.097839,
+        0.194583,
+        0.290357,
+        0.383875,
+        0.473631,
+        0.557079,
+        0.634086,
+        0.703404
+      ],
+      "rating": "subtle",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          0.097839,
+          0.194583,
+          0.290357,
+          0.383875,
+          0.473631,
+          0.557079,
+          0.634086,
+          0.703404
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "path": "style.paper.grid",
+      "engine": "backgrounds",
+      "measure": "geometry",
+      "values": [
+        6,
+        15.25,
+        24.5,
+        33.75,
+        43,
+        52.25,
+        61.5,
+        70.75,
+        80
+      ],
+      "change": [
+        2.18038,
+        3.329847,
+        3.628826,
+        4.681109,
+        5.424059,
+        6.410961,
+        6.902546,
+        7.513121,
+        8.455875
+      ],
+      "rating": "strong",
+      "activeRange": [
+        6,
+        70.75
+      ],
+      "saturates": false,
+      "detail": {
+        "rulingCount": [
+          46176,
+          17430,
+          10416,
+          7968,
+          6318,
+          4860,
+          3904,
+          3374,
+          3001
+        ]
+      }
+    },
+    {
+      "path": "style.paper.texture",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.625,
+        0.75,
+        0.875,
+        1
+      ],
+      "change": [
+        0,
+        0.003274,
+        0.006965,
+        0.010538,
+        0.01408,
+        0.017608,
+        0.021136,
+        0.024663,
+        0.028193
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        0.875
+      ],
+      "saturates": false,
+      "detail": {
+        "meanDeltaE": [
+          0,
+          0.001517,
+          0.003444,
+          0.005545,
+          0.007739,
+          0.00998,
+          0.012257,
+          0.014554,
+          0.016868
+        ],
+        "lSdChange": [
+          0,
+          0.003274,
+          0.006965,
+          0.010538,
+          0.01408,
+          0.017608,
+          0.021136,
+          0.024663,
+          0.028193
+        ]
+      }
+    },
+    {
+      "path": "style.paper.tile",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        256,
+        352,
+        448,
+        544,
+        640,
+        736,
+        832,
+        928,
+        1024
+      ],
+      "change": [
+        0.000019,
+        0.000031,
+        0.000016,
+        0.00008,
+        0.000009,
+        0.000007,
+        0.000032,
+        0.000036,
+        0.000022
+      ],
+      "rating": "none",
+      "activeRange": [
+        352,
+        832
+      ],
+      "saturates": false,
+      "detail": {
+        "meanDeltaE": [
+          0.000009,
+          0.000031,
+          0.000016,
+          0.000052,
+          0.000009,
+          0.000007,
+          0.000019,
+          0.000015,
+          0.000004
+        ],
+        "lSdChange": [
+          0.000019,
+          0.000012,
+          0.000012,
+          0.00008,
+          0.000006,
+          0.000005,
+          0.000032,
+          0.000036,
+          0.000022
+        ]
+      }
+    },
+    {
+      "path": "style.paper.tint",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        "#ffdee7",
+        "#ffe0d6",
+        "#fae5c3",
+        "#e3edc8",
+        "#ccf3dd",
+        "#c2f3f5",
+        "#d2ecff",
+        "#e3e6ff",
+        "#f7defd"
+      ],
+      "change": [
+        0.171163,
+        0.170377,
+        0.176401,
+        0.176738,
+        0.176935,
+        0.177942,
+        0.170898,
+        0.168396,
+        0.176545
+      ],
+      "rating": "strong",
+      "activeRange": [
+        "#ffe0d6",
+        "#f7defd"
+      ],
+      "saturates": false,
+      "detail": {
+        "meanDeltaE": [
+          0.171163,
+          0.170377,
+          0.176401,
+          0.176738,
+          0.176935,
+          0.177942,
+          0.170898,
+          0.168396,
+          0.176545
+        ],
+        "lSdChange": [
+          0.007008,
+          0.006987,
+          0.008578,
+          0.010646,
+          0.009116,
+          0.008749,
+          0.009274,
+          0.009582,
+          0.008167
+        ]
+      }
+    },
+    {
+      "path": "style.paper.type",
+      "engine": "backgrounds",
+      "measure": "colour",
+      "values": [
+        "none",
+        "clean",
+        "paper",
+        "rough-paper",
+        "canvas",
+        "graph",
+        "rough-graph",
+        "dotted",
+        "ruled",
+        "kraft",
+        "linen",
+        "blackboard",
+        "greenboard",
+        "whiteboard"
+      ],
+      "change": [
+        0,
+        0,
+        0.018076,
+        0.032291,
+        0.024526,
+        0.014065,
+        0.014065,
+        0.012227,
+        0.012197,
+        0.266245,
+        0.020518,
+        0.61361,
+        0.575091,
+        0.147765
+      ],
+      "rating": "strong",
+      "activeRange": [
+        "kraft",
+        "whiteboard"
+      ],
+      "saturates": false,
+      "detail": {
+        "meanDeltaE": [
+          0,
+          0,
+          0.00969,
+          0.01876,
+          0.014596,
+          0.007195,
+          0.007195,
+          0.006027,
+          0.005996,
+          0.266245,
+          0.012561,
+          0.61361,
+          0.575091,
+          0.147765
+        ],
+        "lSdChange": [
+          0,
+          0,
+          0.018076,
+          0.032291,
+          0.024526,
+          0.014065,
+          0.014065,
+          0.012227,
+          0.012197,
+          0.02157,
+          0.020518,
+          0.011549,
+          0.012882,
+          0.004621
+        ]
+      }
+    },
+    {
+      "path": "style.seed",
+      "engine": "figures",
+      "measure": "geometry",
+      "values": [
+        0,
+        1250,
+        2500,
+        3750,
+        5000,
+        6249,
+        7499,
+        8749,
+        9999
+      ],
+      "change": [
+        0,
+        2.035362,
+        2.454919,
+        2.172489,
+        1.857613,
+        1.689895,
+        2.403852,
+        1.966344,
+        1.855323
+      ],
+      "rating": "moderate",
+      "activeRange": [
+        0,
+        7499
+      ],
+      "saturates": false,
+      "detail": {
+        "displacementPx": [
+          0,
+          2.035362,
+          2.454919,
+          2.172489,
+          1.857613,
+          1.689895,
+          2.403852,
+          1.966344,
+          1.855323
+        ],
+        "colourDeltaE": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "markupChanged": [
+          0,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "elementRatio": [
+          1,
+          0.967398,
+          0.989069,
+          0.990699,
+          0.970837,
+          0.975124,
+          0.9944,
+          0.977455,
+          0.996424
+        ]
+      }
+    }
+  ]
+}
