@@ -190,6 +190,30 @@ describe('GeometryGroupManager', () => {
     }
   })
 
+  it('reallocates the quad index buffer only when capacity grows, and always draws exactly the current quads', () => {
+    const mgr = new GeometryGroupManager()
+    const batch = (n: number): GeometryItem => ({
+      kind: 'segments',
+      pairs: Array.from({ length: n }, (_, i) => [{ x: i, y: 0 }, { x: i + 0.5, y: 1 }] as [Vec2, Vec2]),
+      dashed: false,
+      color: null,
+    })
+    const seen = new Set<unknown>()
+    for (const n of [10, 12, 9, 30, 31, 8, 64]) {
+      mgr.update([batch(n)], palette, pixelToWorld)
+      const mesh = mgr.group.children[0] as THREE.Mesh
+      seen.add(mesh.geometry.index)
+      expect(mesh.geometry.drawRange.count).toBe(n * 6)
+      expect(mesh.geometry.index!.count).toBeGreaterThanOrEqual(n * 6)
+      // The drawn prefix is still the right quad topology.
+      const idx = mesh.geometry.index!.array
+      const last = n - 1
+      expect(Array.from(idx.slice(last * 6, last * 6 + 6))).toEqual([last * 4, last * 4 + 1, last * 4 + 2, last * 4 + 1, last * 4 + 3, last * 4 + 2])
+    }
+    // Capacity doubles: 10 -> 20 -> 40 -> 80 (or exact fit when a jump exceeds 2x); never one per change.
+    expect(seen.size).toBeLessThanOrEqual(4)
+  })
+
   it('gives a dashed segment real gaps instead of one solid weighted line', () => {
     const mgr = new GeometryGroupManager()
     // Long enough (5 world units, vs. a 0.12+0.09 dash+gap period) to produce

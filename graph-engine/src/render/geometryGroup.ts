@@ -306,8 +306,14 @@ function writeQuadChunks(geometry: THREE.BufferGeometry, chunks: readonly (reado
   const pos = growAttribute(geometry, 'position', chunks.length * 4, 3)
   chunks.forEach(([from, to], i) => fillStraightQuad(pos, i * 4, from, to, halfWidth))
   const expectedIndexCount = chunks.length * 6
-  if (geometry.index?.count !== expectedIndexCount) {
-    geometry.setIndex(buildQuadIndices(chunks.length))
+  // The index buffer is a capacity, not an exact fit: quad i always uses
+  // vertices 4i..4i+3, so any prefix of a larger buffer is a valid index for
+  // fewer quads. Reallocate (doubling) only when it is too small; the draw
+  // range below picks out the prefix actually needed.
+  const capacityQuads = geometry.index ? geometry.index.count / 6 : 0
+  if (capacityQuads < chunks.length) {
+    const grown = Math.max(chunks.length, capacityQuads * 2)
+    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(buildQuadIndices(grown)), 1))
   }
   finishIndexedUpdate(geometry, expectedIndexCount)
 }
