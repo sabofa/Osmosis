@@ -7,7 +7,7 @@ import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSeg
 import { GridRenderer } from './grid'
 import { markerShape, type MarkerShape } from './featureMarker'
 import { HoverResolver, type HoverInfo } from './hover'
-import { createInteraction } from './interaction'
+import { createInteraction, overscanBox, viewChangeAction } from './interaction'
 import { clampedLabelPlacement } from './labelLayout'
 import { makeLabelSprite } from './labelSprite'
 import type { Bounds } from './marchingSquares'
@@ -218,6 +218,10 @@ export class SceneRenderer {
   private palette: Palette
   private lastScene: GraphScene | null = null
   private viewChangeScheduled = false
+  // The camera bounds the last scene was built for, and whether the canvas was resized since: what
+  // viewChangeAction needs to decide if a gesture frame can just transform the last picture.
+  private builtBounds: Bounds | null = null
+  private resizedSinceBuild = false
   private animated: AnimatedEntry[] = []
   private startTime = performance.now()
   private needsRender = true
@@ -339,6 +343,7 @@ export class SceneRenderer {
     this.drawGrid()
     const changed = this.interaction.viewportChanged(width, height)
     if (changed && rect.width >= 1 && rect.height >= 1) {
+      this.resizedSinceBuild = true
       this.armSettle()
       this.scheduleViewChange()
     }
@@ -378,7 +383,16 @@ export class SceneRenderer {
     requestAnimationFrame(() => {
       this.viewChangeScheduled = false
       this.drawGrid()
-      this.options.onViewChange?.()
+      // During a gesture the last build is only rebuilt when the view has left its overscan or changed scale
+      // too far; otherwise the camera transforms the last picture. At rest this is always 'full': a frame
+      // queued across the end of a gesture is itself the settle rebuild.
+      const action = viewChangeAction({
+        built: this.builtBounds,
+        current: this.camera2d.getBounds(),
+        interacting: this.interaction.isInteracting(),
+        resized: this.resizedSinceBuild,
+      })
+      if (action !== 'skip') this.options.onViewChange?.()
       // The hover guide line's own length is drawn out to the *current*
       // camera bounds (see hover.ts's resolve) — but resolveHover only
       // otherwise runs from a pointermove handler, and a wheel zoom (the
@@ -395,8 +409,9 @@ export class SceneRenderer {
 
   // The view has stopped moving (the pointer came up after a drag, or the wheel and the canvas's size have
   // been quiet for WHEEL_SETTLE_MS): tell the host once more, so it rebuilds at full quality, because what the last
-  // frame of the gesture built was coarse. A view change already queued for the next frame will do
-  // it, by then with the gesture's flag down, so it is not asked for twice.
+  // frame of the gesture built was coarse, or nothing was built at all (every frame skipped). A view change
+  // already queued for the next frame will do it, by then with the gesture's flag down (so viewChangeAction
+  // says 'full', never 'skip'), so it is not asked for twice; otherwise it is asked for here, directly.
   private settle() {
     if (this.viewChangeScheduled) return
     this.options.onViewChange?.()
@@ -530,7 +545,12 @@ export class SceneRenderer {
   // `misc` is point-like or annotation and is built by updateMiscGroup.
   setGraphScene(scene: GraphScene) {
     this.lastScene = scene
-    const { geometry, misc } = toRenderItems(scene.objects, this.camera2d.getBounds())
+    // Remember the view this build is for. Unclipped lines are clipped to the build's overscan box, not the
+    // bare view, so a picture the camera then pans or zooms still has its overscan to show.
+    const view = this.camera2d.getBounds()
+    this.builtBounds = view
+    this.resizedSinceBuild = false
+    const { geometry, misc } = toRenderItems(scene.objects, overscanBox(view))
     this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px))
     this.updateMiscGroup(misc)
     this.needsRender = true
