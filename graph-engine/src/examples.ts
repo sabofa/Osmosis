@@ -1435,7 +1435,7 @@ sin(x) - cos(y) = 0`,
   {
     label: 'Curves and regions: below ln x',
     group: 'Calculus',
-    spec: `@bounds: -2, 6, -4, 4
+    spec: `@bounds: -2, 6, -3, 3
 y < ln(x)`,
   },
   {

@@ -836,6 +836,37 @@ export const CORPUS: readonly CorpusCase[] = [
     ceiling: { points: 210, intervals: 176 }, // measured 140 / 117
   },
   {
+    // The same lemniscate at FULL (the settled pass): the curve is drawn (4 vertices, within a pixel of the zero set).
+    name: 'P3: a tiny lemniscate at FULL is drawn',
+    spec: '(x^2+y^2)^2 - 0.0004*(x^2-y^2) = 0',
+    views: [STD],
+    expect: { blank: false, curvesOn: '(x^2+y^2)^2 - 0.0004*(x^2-y^2)', drawn: [{ x: 0.02, y: 0 }, { x: -0.02, y: 0 }] },
+    ceiling: { points: 310, intervals: 224 }, // measured 206 / 149
+  },
+  {
+    // Two circles that touch at (1, 0): the product is zero on both and the sign does not change through the touch.
+    // Both are drawn and the curve passes through the touch point (0 px off).
+    name: 'P3: tangent circles, (x^2+y^2-1)((x-2)^2+y^2-1) = 0',
+    spec: '(x^2+y^2-1)*((x-2)^2+y^2-1) = 0',
+    views: [view(-3, 5, -3, 3, 800, 600)],
+    expect: { curvesOn: '(x^2+y^2-1)*((x-2)^2+y^2-1)', drawn: [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 3, y: 0 }, { x: 0, y: 1 }, { x: 2, y: -1 }] },
+    ceiling: { points: 44100, intervals: 9500 }, // measured 29400 / 6293
+  },
+  {
+    // KNOWN LIMIT. The window of the shipped example's first form (-2..6 by -4..4, 100 px a unit) at 800 x 800: the
+    // region y < ln(x) is drawn, with the note "drawn coarsely: this region needs more detail than its drawing budget
+    // allows" (1275 vertices; the -10..10 case above has none). The example now uses -2..6 by -3..3, which has no note
+    // at 800 x 800, 600 x 400, 400 x 300 or 800 x 400. A real engine cost issue: it spends 26833 points / 7249
+    // intervals and gives up, while -1..6 by -3..3 (22500 / 7488) does not at this size, and it comes and goes with the window and the
+    // size (that one fails only at 400 x 300). The scene's stats count points and intervals only, so they do not say
+    // whether the cap or the pieces left out drive it.
+    name: 'KNOWN LIMIT: P3: y < ln(x) over -2..6 by -4..4 is drawn coarsely',
+    spec: 'y < ln(x)',
+    views: [view(-2, 6, -4, 4)],
+    expect: { notes: [NOTE_COARSE], unfilled: [{ xMin: -1.9, xMax: -0.05, yMin: -3.9, yMax: 3.9 }], dashed: true },
+    ceiling: { points: 40300, intervals: 10900 }, // measured 26833 / 7249
+  },
+  {
     // KNOWN LIMIT. (x - y)^2 = 0 written expanded is a double root: the expression touches 0 along y = x with no sign
     // change. The engine spends its whole budget (about 213000 points), draws one chain of 1019 vertices and says "drawn
     // coarsely". Pinned: that note, and that the origin and (5, 5) are drawn.

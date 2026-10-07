@@ -495,6 +495,8 @@ describe('the torture corpus', () => {
         it('fills the regions it should: area, empty boxes, and the boundaries drawn dashed or solid', () => {
           const scene = run.scenes()[0]
           const v = c.views[0]
+          // (a box is unfilled only means something when a region is there to leave it empty)
+          if (want.unfilled) expect(regionsOf(scene).length, 'a region object').toBeGreaterThan(0)
           if (want.area) {
             const got = regionArea(scene, v.bounds)
             expect(Math.abs(got - want.area.value) / want.area.value, `area ${got} for ${want.area.value}`).toBeLessThanOrEqual(want.area.rel)
@@ -523,17 +525,20 @@ describe('the torture corpus', () => {
         it('joins nothing across a pole: no near-vertical segment spans half the view', () => {
           run.scenes().forEach((scene, i) => {
             const px = pxPerUnit(c.views[i])
+            let checked = 0
             for (const o of scene.objects) {
               if (o.kind !== 'curve') continue
               for (const chain of o.chains) {
                 const pts = chainPoints(chain)
                 for (let k = 0; k + 1 < pts.length; k++) {
+                  checked++
                   const dy = Math.abs(pts[k + 1].y - pts[k].y) * px.y
                   const dx = Math.abs(pts[k + 1].x - pts[k].x) * px.x
                   expect(dy > c.views[i].heightPx / 2 && dx <= 1, `view ${i}: a segment at x ${pts[k].x} spans ${dy} px up with ${dx} px across`).toBe(false)
                 }
               }
             }
+            expect(checked, `view ${i}: segments checked (nothing drawn passes vacuously)`).toBeGreaterThan(0)
           })
         }, TIMEOUT)
       }
@@ -545,9 +550,11 @@ describe('the torture corpus', () => {
           const h = compileScalar(parseExprString(want.curvesOn!), ['x', 'y'], run.scope)
           const step = 1e-6
           let worst = 0
+          let checked = 0
           for (const o of scene.objects) {
             if (o.kind !== 'curve') continue
             for (const p of o.chains.flatMap(chainPoints)) {
+              checked++
               const gx = (h(p.x + step, p.y) - h(p.x - step, p.y)) / (2 * step)
               const gy = (h(p.x, p.y + step) - h(p.x, p.y - step)) / (2 * step)
               // (a vertex on the zero set at a singular point, where the gradient is zero too, is on it: 0/0 is not off)
@@ -556,6 +563,7 @@ describe('the torture corpus', () => {
               worst = Math.max(worst, Number.isNaN(d) ? Number.POSITIVE_INFINITY : d)
             }
           }
+          expect(checked, 'vertices checked (nothing drawn passes vacuously)').toBeGreaterThan(0)
           expect(worst, `the worst vertex is ${worst} px off`).toBeLessThanOrEqual(CHORD_PX)
         }, TIMEOUT)
       }
