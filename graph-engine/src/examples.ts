@@ -1412,4 +1412,39 @@ y = sin(1/x)`,
     spec: `@bounds: -3, 5, -4, 4
 r = 1/cos(theta)`,
   },
+  // Calculus (track 4, calc P3): curves and regions given by a relation. There is no subgroup
+  // concept, so these share a title prefix.
+  {
+    label: 'Curves and regions: lemniscate',
+    group: 'Calculus',
+    spec: `@bounds: -3, 3, -2, 2
+(x^2+y^2)^2 - 4(x^2-y^2) = 0`,
+  },
+  {
+    label: 'Curves and regions: sin x = cos y',
+    group: 'Calculus',
+    spec: `@bounds: -7, 7, -7, 7
+sin(x) - cos(y) = 0`,
+  },
+  {
+    label: 'Curves and regions: annulus',
+    group: 'Calculus',
+    spec: `@bounds: -3, 3, -3, 3
+1 < x^2+y^2 < 4`,
+  },
+  {
+    label: 'Curves and regions: below ln x',
+    group: 'Calculus',
+    spec: `@bounds: -2, 6, -4, 4
+y < ln(x)`,
+  },
+  {
+    label: 'Curves and regions: feasible region',
+    group: 'Calculus',
+    spec: `@bounds: -1, 6, -1, 6
+x + y <= 4
+x >= 0
+y >= 0
+y <= 2x + 1`,
+  },
 ]
