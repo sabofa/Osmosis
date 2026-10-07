@@ -1,14 +1,15 @@
-import { COLOR_NAMES } from './colorNames'
+import { layerFromStyleLayer, resolveLayers, toStyle, type SettingsLayer, type ThemeStyles } from './layers'
 import { isPresetName, PRESET_NAMES, PRESETS, type PresetName } from './presets'
+import type { SettingSpec, SettingValue } from './settings/types'
+import { findSetting, noSuchSetting, parseTokenValue, readSettingValue, tokenAt } from './settings/values'
+import { GRAPH_TYPES } from './theme/types'
 import {
-  parseColourSetting,
   readToken,
   TOKENS,
   type ColourSettings,
   type FillSettings,
   type LetteringSettings,
   type LineSettings,
-  type Look,
   type PaperSettings,
   type Style,
   type Token,
@@ -16,17 +17,23 @@ import {
 
 // Where a style comes from, and how the layers combine.
 //
-// Settings layer from least to most specific, each layer overriding only what
-// it sets:
-//   1. built in: clean;
-//   2. the app theme — the viewer's default, passed to the renderer;
-//   3. the document — a document's pinned look (today the same parameter);
-//   4. the figure's own "@style…" directives.
+// Every setting resolves through the six-layer stack in layers.ts: the registry's
+// defaults, the graph type's, the theme's, the theme's for this graph type, the
+// document's, the figure's — each overriding only what it sets. The figure styles
+// are the stack's style.* settings, and this module is where they are written and
+// checked:
+//   - a figure's own "@style…" directives write a StyleLayer (applyStyleDirective);
+//   - "@style-set: <registry path> <value>" sets any single setting, from the
+//     figure styles to the Paint Lab's painter (applyStyleSet);
+//   - a host's base style, which is the document layer, is checked into a
+//     StyleLayer (checkLayer), and a theme's style set into a ThemeStyles
+//     (checkThemeStyles).
 //
 // A LAYER may start from a preset ("@style: pencil"). A preset replaces every
-// setting below it — that is what "start from pencil" means — and then the
-// layer's own settings apply on top, whatever order they were written in.
-// The seed is not part of any preset, so choosing a preset never rerolls.
+// style.* setting below it — that is what "start from pencil" means — and then the
+// layer's own settings apply on top, whatever order they were written in. A preset
+// never touches paint.* or media.*, and the seed is not part of any preset, so
+// choosing a preset never rerolls.
 
 export interface StyleLayer {
   preset?: PresetName
@@ -36,30 +43,21 @@ export interface StyleLayer {
   lettering?: Partial<LetteringSettings>
   colour?: Partial<ColourSettings>
   seed?: number
+  // Every other setting a "@style-set" wrote, by registry path (paint.*, media.*,
+  // board.*). A style.* setting written by "@style-set" goes into the groups above,
+  // where "@style-looseness" writes it, so the last one written wins. Absent when
+  // there is none, so a figure that says nothing has an empty layer.
+  set?: Record<string, SettingValue>
 }
 
 const GROUPS = ['line', 'fill', 'paper', 'lettering', 'colour'] as const
 
-function cloneLook(look: Look): Look {
-  return {
-    line: { ...look.line },
-    fill: { ...look.fill },
-    paper: { ...look.paper },
-    lettering: { ...look.lettering },
-    colour: { ...look.colour },
-  }
-}
-
+// The figure styles of the layers, base first: the stack's style.* settings for a
+// figure (graph type figure2d). With the two layers of a rendered figure, [the host's
+// base style, the figure's own], that is the stack with the base as the document and
+// the figure as the figure; resolveStyle also folds any other number of layers.
 export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[]): Style {
-  let look = cloneLook(PRESETS.clean)
-  let seed = 0
-  for (const layer of layers) {
-    if (!layer) continue
-    if (layer.preset) look = cloneLook(PRESETS[layer.preset])
-    for (const group of GROUPS) Object.assign(look[group], layer[group] ?? {})
-    if (layer.seed !== undefined) seed = layer.seed
-  }
-  return { ...look, seed }
+  return toStyle(resolveLayers(layers.map((layer) => (layer ? layerFromStyleLayer(layer) : undefined))))
 }
 
 // Whether a resolved style is clean — the look the renderer draws through its
@@ -79,33 +77,6 @@ for (const token of TOKENS) {
   for (const alias of token.aliases) BY_NAME.set(alias, token)
 }
 
-// A token's value from text, or a refusal naming what would have been valid.
-function parseValue(token: Token, text: string, name: string): string | number {
-  const value = text.trim()
-  switch (token.kind) {
-    case 'choice':
-      if (!token.choices.includes(value)) throw new Error(`${name} must be one of ${token.choices.join(', ')}, got "${value}"`)
-      return value
-    case 'colour': {
-      const colour = parseColourSetting(value)
-      if (colour === null) {
-        throw new Error(
-          `${name} must be a colour: a name (${Object.keys(COLOR_NAMES).join(', ')}), six hex digits without the "#" (which starts a comment in a spec) like fdf6e3, or "theme"; got "${value}"`
-        )
-      }
-      return colour
-    }
-    case 'number': {
-      const n = Number(value)
-      const range = `from ${token.min} to ${token.max}`
-      if (value === '' || !Number.isFinite(n)) throw new Error(`${name} must be a number ${range}, got "${value}"`)
-      if (token.integer && !Number.isInteger(n)) throw new Error(`${name} must be a whole number ${range}, got "${value}"`)
-      if (n < token.min || n > token.max) throw new Error(`${name} must be a number ${range}, got "${value}"`)
-      return n
-    }
-  }
-}
-
 function writeValue(layer: StyleLayer, token: Token, value: string | number): void {
   if (token.group === 'seed') {
     layer.seed = value as number
@@ -120,6 +91,10 @@ function writeValue(layer: StyleLayer, token: Token, value: string | number): vo
 // naming the valid presets, settings or values, on anything it does not
 // know; the caller (parseSpec) reports it and the layer is left untouched.
 export function applyStyleDirective(layer: StyleLayer, name: string, value: string): void {
+  if (name === 'style-set') {
+    applyStyleSet(layer, value)
+    return
+  }
   if (name === 'style') {
     const preset = value.trim()
     if (!isPresetName(preset)) throw new Error(`@style must be one of ${PRESET_NAMES.join(', ')}, got "${preset}"`)
@@ -131,7 +106,34 @@ export function applyStyleDirective(layer: StyleLayer, name: string, value: stri
   if (!token) {
     throw new Error(`Unknown style setting "@${name}" — the style settings are ${TOKENS.map((t) => t.directive).join(', ')}`)
   }
-  writeValue(layer, token, parseValue(token, value, `@style-${token.directive}`))
+  writeValue(layer, token, parseTokenValue(token, value, `@style-${token.directive}`))
+}
+
+// A setting written to a layer: a style.* setting where "@style-<setting>" writes it, any
+// other into `set` by its registry path (curves copied).
+function writeSetting(layer: StyleLayer, spec: SettingSpec, value: SettingValue): void {
+  const token = tokenAt(spec.path)
+  if (token !== undefined) {
+    writeValue(layer, token, value as string | number)
+    return
+  }
+  const set = (layer.set ??= {})
+  set[spec.path] = Array.isArray(value) ? value.map(([x, y]) => [x, y]) : value
+}
+
+// Applies one "@style-set: <registry path> <value>" directive to a figure's layer. The
+// path is a registry path (style.line.looseness, paint.value.terminatorSoftness,
+// media.chalk.chroma), and a figure style may leave "style." off (line.looseness). A
+// path that is not a setting is refused with the nearest ones named, and a value that
+// is not valid is refused with what is valid, a number's range included: out of range
+// is refused, never clamped, as "@style-<setting>" refuses it. A refused directive
+// throws before it touches the layer, so the figure draws without it.
+export function applyStyleSet(layer: StyleLayer, text: string): void {
+  const split = /^(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim())
+  if (!split) throw new Error('@style-set needs a setting and a value, like "@style-set: style.line.looseness 0.4"')
+  const spec = findSetting(split[1])
+  if (!spec) throw new Error(noSuchSetting('@style-set', split[1]))
+  writeSetting(layer, spec, readSettingValue(spec, split[2] ?? '', `@style-set ${spec.path}`))
 }
 
 // A style written back as the directives that reproduce it: the nearest
@@ -193,14 +195,33 @@ export function checkLayer(input: StyleLayer): { layer: StyleLayer; errors: stri
     }
     if (key === 'seed') {
       try {
-        writeValue(layer, BY_NAME.get('seed')!, parseValue(BY_NAME.get('seed')!, String(value), 'The base style\'s seed'))
+        writeValue(layer, BY_NAME.get('seed')!, parseTokenValue(BY_NAME.get('seed')!, String(value), 'The base style\'s seed'))
       } catch (err) {
         errors.push((err as Error).message)
       }
       continue
     }
+    if (key === 'set') {
+      if (!isPlainObject(value)) {
+        errors.push(`The base style's set must be an object of registry paths and values, got ${JSON.stringify(value)}`)
+        continue
+      }
+      for (const [path, raw] of Object.entries(value)) {
+        const spec = findSetting(path)
+        if (!spec) {
+          errors.push(noSuchSetting("The base style's set", path))
+          continue
+        }
+        try {
+          writeSetting(layer, spec, readSettingValue(spec, raw, `The base style's set ${spec.path}`))
+        } catch (err) {
+          errors.push((err as Error).message)
+        }
+      }
+      continue
+    }
     if (!(GROUPS as readonly string[]).includes(key) || typeof value !== 'object' || value === null) {
-      errors.push(`The base style has no group "${key}" — its groups are ${GROUPS.join(', ')}, preset and seed`)
+      errors.push(`The base style has no group "${key}" — its groups are ${GROUPS.join(', ')}, preset, seed and set`)
       continue
     }
     for (const [setting, raw] of Object.entries(value as Record<string, unknown>)) {
@@ -210,11 +231,107 @@ export function checkLayer(input: StyleLayer): { layer: StyleLayer; errors: stri
         continue
       }
       try {
-        writeValue(layer, token, parseValue(token, String(raw), `The base style's ${key} ${setting}`))
+        writeValue(layer, token, parseTokenValue(token, String(raw), `The base style's ${key} ${setting}`))
       } catch (err) {
         errors.push((err as Error).message)
       }
     }
   }
   return { layer, errors }
+}
+
+// ---------------------------------------------------------------------------
+// A theme's style set
+// ---------------------------------------------------------------------------
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+// One settings layer of a theme's style set, from a host or a stored theme. What is valid
+// is kept (a path that is a setting, with a valid value, by its registry path) and each
+// thing that is not is named, as checkLayer does for a base style.
+export function checkSettingsLayer(input: unknown, label: string): { layer: SettingsLayer; errors: string[] } {
+  const layer: SettingsLayer = {}
+  const errors: string[] = []
+  if (!isPlainObject(input)) {
+    errors.push(`${label} must be an object such as { preset: 'ink', set: { 'style.line.looseness': 0.3 } }, got ${JSON.stringify(input) ?? String(input)}`)
+    return { layer, errors }
+  }
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined) continue
+    if (key === 'preset') {
+      if (typeof value === 'string' && isPresetName(value)) layer.preset = value
+      else errors.push(`${label}'s preset must be one of ${PRESET_NAMES.join(', ')}, got ${JSON.stringify(value)}`)
+    } else if (key === 'set') {
+      if (!isPlainObject(value)) {
+        errors.push(`${label}'s set must be an object of registry paths and values, got ${JSON.stringify(value)}`)
+        continue
+      }
+      const set: Record<string, SettingValue> = {}
+      for (const [path, raw] of Object.entries(value)) {
+        const spec = findSetting(path)
+        if (!spec) {
+          errors.push(noSuchSetting(`${label}'s set`, path))
+          continue
+        }
+        try {
+          set[spec.path] = readSettingValue(spec, raw, `${label}'s set ${spec.path}`)
+        } catch (err) {
+          errors.push((err as Error).message)
+        }
+      }
+      layer.set = set
+    } else {
+      errors.push(`${label} has no "${key}" — a settings layer has preset and set`)
+    }
+  }
+  return { layer, errors }
+}
+
+// A theme's style set (ThemeInput.styles, from a stored theme or the built-in table) checked
+// into a ThemeStyles: what is valid is kept and what is not is named. Nothing, null and
+// undefined are an empty set, with no error.
+export function checkThemeStyles(input: unknown): { styles: ThemeStyles; errors: string[] } {
+  const styles: ThemeStyles = {}
+  const errors: string[] = []
+  if (input === undefined || input === null) return { styles, errors }
+  if (!isPlainObject(input)) {
+    errors.push(`The theme's styles must be an object such as { all: {...}, byType: { space: {...} } }, got ${JSON.stringify(input) ?? String(input)}`)
+    return { styles, errors }
+  }
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined) continue
+    if (key === 'all') {
+      const checked = checkSettingsLayer(value, "The theme's styles.all")
+      styles.all = checked.layer
+      errors.push(...checked.errors)
+    } else if (key === 'byType') {
+      if (!isPlainObject(value)) {
+        errors.push(`The theme's styles.byType must be an object keyed by graph type (${GRAPH_TYPES.join(', ')}), got ${JSON.stringify(value)}`)
+        continue
+      }
+      const byType: NonNullable<ThemeStyles['byType']> = {}
+      for (const [type, layer] of Object.entries(value)) {
+        if (layer === undefined) continue
+        if (!(GRAPH_TYPES as readonly string[]).includes(type)) {
+          errors.push(`The theme's styles.byType has no graph type "${type}" — the graph types are ${GRAPH_TYPES.join(', ')}`)
+          continue
+        }
+        const checked = checkSettingsLayer(layer, `The theme's styles.byType.${type}`)
+        byType[type as (typeof GRAPH_TYPES)[number]] = checked.layer
+        errors.push(...checked.errors)
+      }
+      styles.byType = byType
+    } else {
+      errors.push(`The theme's styles has no "${key}" — it has all and byType`)
+    }
+  }
+  return { styles, errors }
+}
+
+// The style set of a resolved theme, as the stack takes it: undefined when the theme has
+// none. What a theme carries is untrusted data (the adapter copies and freezes it), so
+// this reads it through checkThemeStyles and keeps only what is valid.
+export function themeStylesOf(theme: { styles?: unknown }): ThemeStyles | undefined {
+  return theme.styles === undefined || theme.styles === null ? undefined : checkThemeStyles(theme.styles).styles
 }

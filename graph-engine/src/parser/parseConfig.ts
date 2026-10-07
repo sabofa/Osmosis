@@ -1,4 +1,4 @@
-import { applyStyleDirective } from '../style/resolve'
+import { applyStyleDirective, applyStyleSet } from '../style/resolve'
 import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
 import { parseSpaceDirective } from '../space/grammar/directives'
 
@@ -31,6 +31,14 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
 
   const key = body.slice(0, colonIdx).trim()
   const value = body.slice(colonIdx + 1).trim()
+
+  // "@style-set: <registry path> <value>" sets any single setting (style.*, paint.*,
+  // media.*, board.*) in the figure's layer of the six-layer stack (style/layers.ts).
+  // A bad path or an out-of-range value throws before it touches the layer, as below.
+  if (key === 'style-set') {
+    applyStyleSet(config.style, value)
+    return
+  }
 
   // Figure styles — "@style: <preset>" and "@style-<setting>: <value>", in a
   // block of their own (the figure-styles design, D2). Validation and the

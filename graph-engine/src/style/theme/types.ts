@@ -85,8 +85,9 @@ export interface ThemeSource {
   lightColours?: Partial<ThemeColours>
   boards?: Partial<Record<BoardName, Hex>>
   media?: Partial<Record<MediumName, MediumColours>>
-  // The theme's style settings (all graphs, and per graph type). Task 4 types
-  // this as `ThemeStyles` (style/layers.ts); the adapter only passes it through.
+  // The theme's style settings (all graphs, and per graph type): a `ThemeStyles`
+  // (style/layers.ts). A source is untrusted, so the adapter only copies and freezes it;
+  // `themeStylesOf` (style/resolve.ts) reads it as a ThemeStyles, dropping what is not one.
   styles?: unknown
   lettering?: { family?: string }
 }
@@ -105,7 +106,9 @@ export interface ThemeInput {
   boardColours: ThemeColours
   boards: Record<BoardName, Hex>
   media: Partial<Record<MediumName, MediumColours>>
-  // Passed through untouched (undefined when the theme has none); Task 4 narrows it.
+  // Passed through untouched (undefined when the theme has none): a `ThemeStyles`
+  // (style/layers.ts) when it is valid. Read it with `themeStylesOf` (style/resolve.ts),
+  // which checks it and returns only what is.
   styles: unknown
   lettering: { family: string | null }
   // FNV-1a hex of every resolved value above. Caches (papers, baked fills)

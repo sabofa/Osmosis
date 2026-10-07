@@ -29,6 +29,7 @@ import {
   type BuiltinThemeId,
   type DefaultTokens,
 } from './defaults'
+import { BUILTIN_THEME_STYLES } from './builtinStyles'
 import { normaliseHex } from './contrast'
 import { deriveAccentWash, deriveBoards, deriveSeries, themeKey } from './derive'
 import {
@@ -71,11 +72,15 @@ function coloursOfPalette(palette: PaletteLike): PaletteColours {
   }
 }
 
-// The style set of a built-in theme preset, by preset id. Task 4 fills this
-// from BUILTIN_THEME_STYLES (style/theme/builtinStyles.ts); until then a preset
-// brings no styles.
+// The style set of a built-in theme preset, by preset id: BUILTIN_THEME_STYLES
+// (builtinStyles.ts). An empty set, and a preset that is not a built-in, bring no styles
+// (undefined), so a theme with nothing to say keeps the key it has always had.
 export type StylesFor = (presetId: string) => unknown
-export const stylesForPreset: StylesFor = () => undefined
+export const stylesForPreset: StylesFor = (presetId) => {
+  if (!Object.prototype.hasOwnProperty.call(BUILTIN_THEME_STYLES, presetId)) return undefined
+  const styles = BUILTIN_THEME_STYLES[presetId]
+  return Object.keys(styles).length === 0 ? undefined : styles
+}
 
 // The single colours a source gives, as '#rrggbb', leaving out anything that
 // is not a colour (it is treated as missing, so a bad value never breaks a graph).
