@@ -3,7 +3,7 @@
 // Themes come only through the adapter.
 
 import type { SettingSpec, SettingValue } from '../../../graph-engine/src/style/settings/types'
-import { defaultTheme, fromColours, fromOsmosisTheme } from '../../../graph-engine/src/style/theme/adapter'
+import { defaultTheme, fromColours, fromOsmosisTheme, resolveTheme } from '../../../graph-engine/src/style/theme/adapter'
 import { BUILTIN_LIGHT, BUILTIN_THEME_IDS, type BuiltinThemeId } from '../../../graph-engine/src/style/theme/defaults'
 import { BOARD_NAMES, type BoardName, type GraphType, type Hex, type PaletteLike, type ThemeColours, type ThemeInput } from '../../../graph-engine/src/style/theme/types'
 
@@ -124,11 +124,13 @@ function builtinPalette(id: BuiltinThemeId): PaletteLike {
 
 export const isBuiltinId = (id: string): id is BuiltinThemeId => (BUILTIN_THEME_IDS as readonly string[]).includes(id)
 
-// A choice resolved to the theme the engines read, only through the adapter.
-export function themeInputOf(choice: ThemeChoice): ThemeInput {
-  if (choice.id === 'light' || choice.id === 'dark') return defaultTheme(choice.id)
-  if (choice.id === 'custom') return fromColours({ mode: choice.custom.mode, colours: choice.custom.colours, boards: choice.custom.boards })
-  return fromOsmosisTheme(builtinPalette(choice.id), 'light', { id: choice.id })
+// A choice resolved to the theme the engines read, only through the adapter. `styles` is the theme's
+// style set (a ThemeStyles) when the page has one to give it; left out, the theme says nothing about style
+// (a built-in theme then brings its own file's set).
+export function themeInputOf(choice: ThemeChoice, styles?: unknown): ThemeInput {
+  if (choice.id === 'light' || choice.id === 'dark') return styles === undefined ? defaultTheme(choice.id) : resolveTheme({ mode: choice.id, styles })
+  if (choice.id === 'custom') return fromColours({ mode: choice.custom.mode, colours: choice.custom.colours, boards: choice.custom.boards, styles })
+  return fromOsmosisTheme(builtinPalette(choice.id), 'light', { id: choice.id }, styles === undefined ? undefined : () => styles)
 }
 
 export const themeLabel = (id: ThemeChoiceId): string => (isBuiltinId(id) ? id.slice('builtin:'.length) : id)

@@ -111,6 +111,7 @@
         <button role="tab" data-panel="document" aria-selected="false">Document engine</button>
         <button role="tab" data-panel="space" aria-selected="false">Space</button>
         <button role="tab" data-panel="style-lab" aria-selected="false">Style lab</button>
+        <button role="tab" data-panel="styles" aria-selected="false">Styles</button>
       </nav>
       <div class="spacer"></div>
       <div class="hint">live from source — edits in <code>graph-engine/src</code> / <code>document-engine/src</code> reload here</div>
@@ -124,7 +125,7 @@
       // `data-theme` on their own <html>. An iframe per engine keeps those
       // fully isolated — and keeps a WebGL context teardown or a pdf.js
       // worker crash in one engine from taking the other down with it.
-      const PANELS = ['graph', 'document', 'space', 'style-lab']
+      const PANELS = ['graph', 'document', 'space', 'style-lab', 'styles']
       const main = document.getElementById('panels')
       const tabs = [...document.querySelectorAll('nav button')]
       const frames = new Map()
