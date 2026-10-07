@@ -1286,20 +1286,98 @@ describe('Crossings: gaps, cuts and arms', () => {
     expect(Math.abs(low.roots[0].x - Math.exp(-14)) / Math.exp(-14)).toBeLessThan(1e-3)
   })
 
-  it('does not look into a PARTIAL edge whose enclosure excludes zero: one twin evaluation, no root, and the leaf is told it holds a gap', () => {
-    // ln x - y on [0, h] at y = 0.5: the twin has [-inf, ln h - 0.5], below zero
+  it('does not look into a PARTIAL edge whose enclosure excludes zero: a twin evaluation of the edge (and one of what is left of it past a pole at its end), no root, and the leaf is told it holds a gap', () => {
+    // ln x - y on [0, h] at y = 0.5: the twin has [-inf, ln h - 0.5], below zero. (The second evaluation is the region stage's: the pole at
+    // x = 0 is an end of the edge, and the twin over what is left of it says there is no undefined stretch inside.)
     const h = 30 / 1024
     const { cr, counter } = crossingsOf('ln(x) - y')
     const info = cr.edge(cr.corner(0, 0.5), cr.corner(h, 0.5), false)
     expect(info.roots).toEqual([])
     expect(info.gap).toBe(true)
-    expect(counter.intervals).toBe(1)
+    expect(counter.intervals).toBe(2)
     // an edge that is infinite at both ends lies on a pole line: no twin at all
     const { cr: pole, counter: pc } = crossingsOf('1/x - y')
     const line = pole.edge(pole.corner(0, 1), pole.corner(0, 2), false)
     expect(line.roots).toEqual([])
     expect(line.gap).toBe(true)
     expect(pc.intervals).toBe(0)
+  })
+
+  it('is not fooled by signed zero: an edge +infinity at both ends between two poles still has its root (1/x + 1/(x - h) - y)', () => {
+    // x - h is +0 at x = h, so 1/(x - h) is +infinity AT the pole of the right-hand side though it is -infinity just left of it: a horizontal edge from
+    // the pole at x = 0 to the pole at x = h is +inf at both ends and changes sign between them (the branch of (2x - h)/(x (x - h)) = y).
+    const h = 30 / 1024
+    const { cr } = crossingsOf(`1/x + 1/(x - ${h.toFixed(14)}) - y`)
+    const hh = Number(h.toFixed(14))
+    const a = cr.corner(0, 3)
+    const b = cr.corner(hh, 3)
+    expect(a.v).toBe(Infinity)
+    expect(b.v).toBe(Infinity)
+    const info = cr.edge(a, b, false)
+    expect(info.roots.length).toBe(1)
+    // 3 x^2 - (3 h + 2) x + h = 0, the root below h / 2
+    const root = (3 * hh + 2 - Math.sqrt((3 * hh + 2) ** 2 - 12 * hh)) / 6
+    // (bisected to 2^-12 px, 6e-6 units at 40 px a unit)
+    expect(Math.abs(info.roots[0].x - root)).toBeLessThan(1e-5)
+    expect(info.roots[0].y).toBe(3)
+    // and the vertical edge ON a pole line, infinite at its middle as well, is still skipped without a twin evaluation
+    const { cr: pole, counter } = crossingsOf('1/x + 1/(x - 0.0293) - y')
+    const line = pole.edge(pole.corner(0, 1), pole.corner(0, 2), false)
+    expect(line.roots).toEqual([])
+    expect(line.gap).toBe(true)
+    expect(counter.intervals).toBe(0)
+  })
+
+  it('says where an edge is cut: the domain edge, a pole the bisection settled on, a gap the twin found; and when it knows only that there is one', () => {
+    // (the region stage fills up to these: the edge of the fill is the line through the stops of a leaf)
+    const { cr } = crossingsOf('sqrt(x) - y')
+    const cut = cr.edge(cr.corner(-0.5, 0.3), cr.corner(0.5, 0.3), false)
+    expect(cut.stops.length).toBe(1)
+    expect(Math.abs(cut.stops[0])).toBeLessThan(1e-12)
+    expect(cut.lost).toBe(false)
+    const { cr: pole } = crossingsOf('1/x')
+    const settled = pole.edge(pole.corner(-0.07, 0), pole.corner(0.07, 0), false)
+    expect(settled.stops.length).toBe(1)
+    expect(Math.abs(settled.stops[0])).toBeLessThan(1e-5)
+    const { cr: beside } = crossingsOf('1/x - y')
+    const gap = beside.edge(beside.corner(-0.22, 20), beside.corner(0.07, 20), false)
+    expect(gap.stops.length).toBe(1)
+    expect(Math.abs(gap.stops[0])).toBeLessThan(1e-5)
+    // a jump is a stop too: H is defined on both sides and the fill breaks there
+    const { cr: step } = crossingsOf('floor(x) - y')
+    const jump = step.edge(step.corner(0.5, 0.5), step.corner(1.5, 0.5), false)
+    expect(jump.stops.length).toBe(1)
+    expect(Math.abs(jump.stops[0] - 1)).toBeLessThan(1e-5)
+    // stops come in order along the edge, from the smaller (x, y) end, like the roots
+    const { cr: two } = crossingsOf('tan(x) - y')
+    const both = two.edge(two.corner(1, 100), two.corner(6, 100), false)
+    expect(both.stops.length).toBe(2)
+    expect(both.stops[0]).toBeLessThan(both.stops[1])
+    // an edge the twin says holds something undefined but whose enclosure excludes zero is not looked into: it is lost, not located (an
+    // undefined stretch strictly inside it: sqrt(x^2 - 0.0009) is undefined for |x| < 0.03, and defined at both ends of [-0.07, 0.07])
+    const { cr: lost } = crossingsOf('sqrt(x^2 - 0.0009) - y')
+    const info = lost.edge(lost.corner(-0.07, -5), lost.corner(0.07, -5), false)
+    expect(info.stops).toEqual([])
+    expect(info.lost).toBe(true)
+    expect(info.gap).toBe(true)
+    // but a pole at an END of the edge is not an undefined stretch inside it: H is infinite there and the twin is PARTIAL only for
+    // having the pole in its box (ln x - y on [0, h] at y = 0.5: -infinity at x = 0 and defined, continuous, over what is left of it)
+    const h = 30 / 1024
+    const { cr: end } = crossingsOf('ln(x) - y')
+    const atPole = end.edge(end.corner(0, 0.5), end.corner(h, 0.5), false)
+    expect(atPole.lost).toBe(false)
+    expect(atPole.gap).toBe(true)
+    expect(atPole.stops).toEqual([])
+    const { cr: inv } = crossingsOf('1/x - y')
+    expect(inv.edge(inv.corner(0, 100), inv.corner(h, 100), false).lost).toBe(false)
+    // and an edge on a pole line is neither: it is the pole
+    const { cr: line } = crossingsOf('1/x - y')
+    const on = line.edge(line.corner(0, 1), line.corner(0, 2), false)
+    expect(on.stops).toEqual([])
+    expect(on.lost).toBe(false)
+    // an edge with nothing wrong has no stops
+    const { cr: plain } = crossingsOf('x - y')
+    expect(plain.edge(plain.corner(0, 1), plain.corner(1, 1), false)).toMatchObject({ stops: [], lost: false })
   })
 
   it('spends a few twin evaluations a leaf on y = ln x and y = 1/x, not dozens: the discard rule stops at a stretch with no zero', () => {

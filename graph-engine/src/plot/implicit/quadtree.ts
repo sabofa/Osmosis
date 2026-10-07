@@ -36,6 +36,13 @@
 // every cell of a level survives (a crowd of curves, a loose enclosure) it costs four times, and the run may stop
 // at a quarter (sin(10x) = cos(10y): 42 % of FULL's). A budget under 1 pays for no classification: the root is
 // the one leaf, UNKNOWN.
+//
+// THE CELLS A LEVEL MAY HOLD. What is built on the leaves (contouring, clipping) costs about so much a leaf, so a caller that
+// has a budget for that gives the walk a second limit, `cells`: a level is built only if its cells (the children the walk would
+// make) are at most that many, whatever the twin budget says. The leaves a walk ends with are the cells of its last level that
+// survived, so they are at most `cells` too, and a statement that cannot afford the leaves of the finest level is drawn at a
+// coarser size, the same everywhere, and not cut short in the stage after. The limit is an upper bound on a count the walk
+// knows before it builds the level, as the twin budget is a spend.
 import { type CompiledInterval, type Iv, iv, UNKNOWN } from '../../math/interval'
 import type { Bounds } from '../../scene/types'
 import type { EvalCounter, PxScale } from '../sample/types'
@@ -112,7 +119,7 @@ export function subdivide(
   leafPx: { x: number; y: number },
   pxPerUnit: PxScale,
   counter: EvalCounter,
-  budget: { intervals: number },
+  budget: { intervals: number; cells?: number },
 ): Subdivision {
   if (!(Number.isFinite(root.x0) && Number.isFinite(root.x1) && Number.isFinite(root.y0) && Number.isFinite(root.y1) && root.x0 < root.x1 && root.y0 < root.y1)) {
     throw new RangeError(`subdivide: the root must be a finite box of positive size, got x ${root.x0}..${root.x1}, y ${root.y0}..${root.y1}`)
@@ -120,6 +127,8 @@ export function subdivide(
   if (!(positive(leafPx.x) && positive(leafPx.y))) throw new RangeError(`subdivide: the leaf size must be positive and finite, got ${leafPx.x} by ${leafPx.y} px`)
   if (!(positive(pxPerUnit.x) && positive(pxPerUnit.y))) throw new RangeError(`subdivide: the scale must be positive and finite, got ${pxPerUnit.x} by ${pxPerUnit.y} px a unit`)
   if (!(budget.intervals >= 0)) throw new RangeError(`subdivide: the budget must be a number of evaluations, 0 or more, got ${budget.intervals}`)
+  const maxCells = budget.cells ?? Infinity
+  if (!(maxCells >= 0)) throw new RangeError(`subdivide: the cells a level may hold must be a number, 0 or more, got ${budget.cells}`)
   // a finite root at a finite scale can still be an infinite number of px, which no number of halvings gets down to a leaf
   const widthPx = (root.x1 - root.x0) * pxPerUnit.x
   const heightPx = (root.y1 - root.y0) * pxPerUnit.y
@@ -131,8 +140,8 @@ export function subdivide(
   const leaves: Leaf[] = []
   const whole: Box[] = []
   const first: WalkCell = { x0: root.x0, x1: root.x1, y0: root.y0, y1: root.y1, verdict: UNKNOWN, lx: 0, ly: 0 }
-  // the root is classified only if the budget pays for one evaluation
-  if (counter.intervals + 1 > limit) return { leaves: [leafOf(first, 'budget')], whole, capped: true }
+  // the root is classified only if the budget pays for one evaluation (and may hold one cell)
+  if (counter.intervals + 1 > limit || maxCells < 1) return { leaves: [leafOf(first, 'budget')], whole, capped: true }
 
   let level: WalkCell[] = [first]
   let capped = false
@@ -158,9 +167,9 @@ export function subdivide(
       children += (splitX ? 2 : 1) * (splitY ? 2 : 1)
     }
     if (pending.length === 0) break
-    // the next level costs one evaluation for each child; if the budget will not pay for it, the cells that were to be
-    // halved are as small as the walk gets
-    if (counter.intervals + children > limit) {
+    // the next level costs one evaluation for each child; if the budget will not pay for it, or the level would hold more cells than
+    // may be, the cells that were to be halved are as small as the walk gets
+    if (counter.intervals + children > limit || children > maxCells) {
       capped = true
       for (const c of pending) leaves.push(leafOf(c, 'budget'))
       break

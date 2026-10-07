@@ -439,6 +439,31 @@ describe('subdivide: the budget', () => {
     }
   })
 
+  it('stops before a level that would hold more cells than `cells`, whatever the twin budget: the leaves are the level before, at most that many', () => {
+    // always-split on a lattice: levels of 1, 4, 16, 64, 256 cells. cells = 100 allows the level of 64 and not the one of 256, with
+    // intervals to spare (85 spent of 1e6)
+    const counter: EvalCounter = { points: 0, intervals: 0 }
+    const r = subdivide(() => 'split', rootBox(VIEW, 0.25), { x: 100, y: 100 }, PX, counter, { intervals: 1e6, cells: 100 })
+    expect(r.capped).toBe(true)
+    expect(counter.intervals).toBe(85)
+    expect(r.leaves).toHaveLength(64)
+    expect(r.leaves.every((l) => l.stop === 'budget')).toBe(true)
+    // the cells a walk is allowed is the leaves it can end with, so a level that fits is walked to the end uncapped
+    const fit = subdivide(() => 'split', rootBox(VIEW, 0.25), { x: 100, y: 100 }, PX, { points: 0, intervals: 0 }, { intervals: 1e6, cells: 256 })
+    expect(fit.capped).toBe(false)
+    expect(fit.leaves).toHaveLength(256)
+    // the budget of intervals still binds where it is the smaller
+    const c2: EvalCounter = { points: 0, intervals: 0 }
+    subdivide(() => 'split', rootBox(VIEW, 0.25), { x: 100, y: 100 }, PX, c2, { intervals: 20, cells: 1e6 })
+    expect(c2.intervals).toBe(5)
+    // no cell allowed at all: the root is the one leaf, unclassified, as with no evaluation allowed
+    const none = subdivide(() => 'split', rootBox(VIEW, 0.25), { x: 100, y: 100 }, PX, { points: 0, intervals: 0 }, { intervals: 1e6, cells: 0 })
+    expect(none.capped).toBe(true)
+    expect(none.leaves).toHaveLength(1)
+    expect(none.leaves[0].verdict).toBe(UNKNOWN)
+    expect(() => subdivide(() => 'split', rootBox(VIEW, 0.25), { x: 100, y: 100 }, PX, { points: 0, intervals: 0 }, { intervals: 10, cells: NaN })).toThrow(RangeError)
+  })
+
   it('leaves a capped run only budget leaves of one size, every one classified, and still covering the zero set', () => {
     const capped = run('x^2 + y^2 - 25', FULL, { intervals: 700 })
     expect(capped.capped).toBe(true)

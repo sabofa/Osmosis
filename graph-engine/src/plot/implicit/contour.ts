@@ -29,7 +29,14 @@
 //    subdivided by the twin down to CONTOUR.gapPx, which finds its poles and undefined points as gaps, and each stretch between
 //    gaps is tested as an ordinary edge (a curve beside a pole in the same leaf: y = 1/x far from the origin, tan x at COARSE).
 //    The twin's discard rule ends the subdivision where it can hold no zero (an enclosure above zero, below it or empty is a stretch with no
-//    root, proved or not), and an edge that is infinite at both ends (it lies on a pole line, x = 0 for 1/x) is not looked into at all.
+//    root, proved or not), and an edge that is infinite at both ends AND at its middle (it lies on a pole line, x = 0 for 1/x) is not looked
+//    into at all (infinite at the ends alone is not a pole line: signed zero makes 1/(x - h) +infinity at x = h, so 1/x + 1/(x - h) - y has
+//    a branch between two poles on adjacent grid lines whose edge is +inf at both ends).
+//
+//  - Where an edge is cut is kept for the region stage (EdgeInfo.stops): the last defined point of an edge with an undefined end, the
+//    middle of the bracket of a pole or jump the bisection settled on, the middle of a gap the twin narrowed to a point. An edge the twin
+//    calls PARTIAL whose enclosure excludes zero is not looked into, and says it holds something it did not locate (`lost`) unless the
+//    only reason is a pole at an end of it (H is infinite there and the twin proves the rest defined: ln x - y along x = 0).
 //
 // PIECES. Two roots make one piece. In the classic configuration (every corner defined, a root on each edge whose ends differ)
 // the sign pattern says which: the piece cuts off the + run's corners. An edge whose two ends are exact zeros and whose
@@ -95,7 +102,7 @@
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { gradient } from '../../math/diff'
 import { CompileError } from '../../math/errors'
-import { CONTINUOUS, type CompiledInterval, compileInterval, type Iv, iv, PARTIAL, UNKNOWN, type Verdict } from '../../math/interval'
+import { CONTINUOUS, type CompiledInterval, compileInterval, DEFINED, type Iv, iv, PARTIAL, UNKNOWN, type Verdict } from '../../math/interval'
 import type { MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
 import type { Vec2 } from '../../scene/types'
@@ -198,14 +205,21 @@ type Root = Extract<CrossingResult, { ok: true }>
 type Rejected = Extract<CrossingResult, { ok: false }>
 
 // The roots of one edge, in order from the end with the smaller (x, y) to the other; `fail` says a sign change that was not a root;
-// `gap` that the edge holds a pole or an undefined stretch.
+// `gap` that the edge holds a pole or an undefined stretch. `stops` are the places along the edge (its varying coordinate, in the
+// same order as the roots) where H is cut: the domain edge (the last defined point of an edge with an undefined end), a pole the
+// bisection settled on, a jump, a gap the twin narrowed to CONTOUR.gapPx: the region stage fills up to them. `lost` says the edge
+// holds something undefined or unbounded that was NOT located (the twin said PARTIAL with an enclosure excluding zero, so the
+// edge was not looked into, or a gap the subdivision gave up on was wider than a point): what is on the edge is not known to the
+// leaf. (An edge ON a pole line, infinite all along, is neither: it is the pole.)
 export interface EdgeInfo {
   roots: Root[]
   fail: Rejected | null
   gap: boolean
+  stops: number[]
+  lost: boolean
 }
 
-const NO_EDGE: EdgeInfo = { roots: [], fail: null, gap: false }
+const NO_EDGE: EdgeInfo = { roots: [], fail: null, gap: false, stops: [], lost: false }
 
 // The twin's discard rule (math/interval's contract): an enclosure above zero, below it, or empty holds no zero, whatever the verdict.
 function excludesZero(z: Iv): boolean {
@@ -285,7 +299,7 @@ export class Crossings {
   register(a: Corner, b: Corner, roots: Root[]): boolean {
     const { key, swapped } = this.ends(a, b)
     if (this.edges.has(key)) return false
-    this.edges.set(key, { roots: swapped ? [...roots].reverse() : roots, fail: null, gap: false })
+    this.edges.set(key, { roots: swapped ? [...roots].reverse() : roots, fail: null, gap: false, stops: [], lost: false })
     this.registered.add(a.key)
     this.registered.add(b.key)
     for (const r of roots) this.arms.add(r)
@@ -317,6 +331,8 @@ export class Crossings {
     const known = this.edges.get(key)
     if (known) return known
     const made = this.analyse(p, q, continuous)
+    // the stops of an edge are found as the walk finds them (a domain edge, then the roots' rejections): in order along the edge, as the roots are
+    if (made.stops.length > 1) made.stops.sort((s, t) => s - t)
     this.edges.set(key, made)
     return made
   }
@@ -343,17 +359,22 @@ export class Crossings {
     return horizontal ? this.fns.H(t, fixed) : this.fns.H(fixed, t)
   }
 
+  // A sign change that was not a root is a stop at the middle of the bracket the bisection ended with (locate says where).
+  private stopAt: number | null = null
+
   private take(info: EdgeInfo, r: CrossingResult): void {
     if (r.ok) info.roots.push(r)
     else {
       info.fail = r
       info.gap = true
+      if (this.stopAt !== null) info.stops.push(this.stopAt)
     }
+    this.stopAt = null
   }
 
   // p is the end with the smaller (x, y).
   private analyse(p: Corner, q: Corner, continuous: boolean): EdgeInfo {
-    const info: EdgeInfo = { roots: [], fail: null, gap: false }
+    const info: EdgeInfo = { roots: [], fail: null, gap: false, stops: [], lost: false }
     const horizontal = p.y === q.y
     const fixed = horizontal ? p.y : p.x
     const lo = horizontal ? p.x : p.y
@@ -369,9 +390,11 @@ export class Crossings {
         return info
       }
       if (continuous) return info
-      // An edge infinite at both ends lies on a pole line (x = 0 for 1/x - y): there is nothing on it, and the twin, which takes a point box
-      // at a pole for [-inf, inf], would be asked down to the gap width at every level to say so.
-      if (Math.abs(p.v) === Infinity && Math.abs(q.v) === Infinity) {
+      // An edge infinite at both ends and at its middle lies on a pole line (x = 0 for 1/x - y): there is nothing on it, and the twin, which
+      // takes a point box at a pole for [-inf, inf], would be asked down to the gap width at every level to say so. Infinite at its two ends is
+      // not enough: signed zero makes 1/(x - h) +infinity AT x = h though it is -infinity just left of it, so an edge between two poles on
+      // adjacent grid lines (1/x + 1/(x - h) - y) is +inf at both ends and changes sign between them. The middle is one counted scalar point.
+      if (Math.abs(p.v) === Infinity && Math.abs(q.v) === Infinity && Math.abs(this.at(horizontal, fixed, (lo + hi) / 2)) === Infinity) {
         info.gap = true
         return info
       }
@@ -380,21 +403,42 @@ export class Crossings {
       const whole = this.enclose(horizontal, fixed, lo, hi)
       if (whole.v !== PARTIAL) return info
       // (a PARTIAL edge whose enclosure excludes zero has no root, and is not looked into: but it holds a pole or an undefined stretch,
-      // which the leaf is told of)
+      // which the leaf is told of, and told it was not located: `lost`)
       info.gap = true
-      if (excludesZero(whole)) return info
+      if (excludesZero(whole)) {
+        info.lost = !this.poleAtEnds(horizontal, fixed, lo, hi, p.v, q.v)
+        return info
+      }
       this.spans(info, horizontal, fixed, lo, hi, p.v, q.v)
       return info
     }
     if (pn && qn) {
       const whole = this.enclose(horizontal, fixed, lo, hi)
       info.gap = true
-      if (excludesZero(whole)) return info
+      if (excludesZero(whole)) {
+        info.lost = true
+        return info
+      }
       this.spans(info, horizontal, fixed, lo, hi, p.v, q.v)
       return info
     }
     this.cut(info, horizontal, fixed, lo, hi, p.v, q.v)
     return info
+  }
+
+  // Whether the only thing that makes the twin say PARTIAL of an edge is a pole AT an end of it: H is infinite at that end (ln x - y at x = 0,
+  // 1/x - y: an infinity is a value, not an undefined point) and the twin proves what is left of the edge defined. Then there is no undefined
+  // stretch inside the edge to locate, and an edge whose enclosure excludes zero is not `lost`: the corner at the pole is a leaf's own and
+  // says nothing of a side (the pole on a grid line, x = 0 in the default view, is a corner of every leaf along it). The box is shrunk by
+  // a relative epsilon at each infinite end, which takes the end out of it.
+  private poleAtEnds(horizontal: boolean, fixed: number, lo: number, hi: number, vlo: number, vhi: number): boolean {
+    const inLo = Math.abs(vlo) === Infinity
+    const inHi = Math.abs(vhi) === Infinity
+    if (!inLo && !inHi) return false
+    const a = inLo ? lo + (lo === 0 ? Number.MIN_VALUE : Math.abs(lo) * Number.EPSILON) : lo
+    const b = inHi ? hi - (hi === 0 ? Number.MIN_VALUE : Math.abs(hi) * Number.EPSILON) : hi
+    if (!(a < b)) return false
+    return this.enclose(horizontal, fixed, a, b).v >= DEFINED
   }
 
   // An edge with one undefined end: cut at the domain edge, found by bisecting on whether H is defined (to machine width: a curve
@@ -419,6 +463,8 @@ export class Crossings {
     const b = loDefined ? d : hi
     const va = loDefined ? vlo : vd
     const vb = loDefined ? vd : vhi
+    // the stop is the last defined point: the fill of a region ends on the defined side
+    info.stops.push(d)
     if (a < b && va >= 0 !== vb >= 0) this.take(info, this.locate(horizontal, fixed, a, b, va, vb, false))
   }
 
@@ -433,7 +479,11 @@ export class Crossings {
     const gaps: [number, number][] = []
     let evals = 0
     const visit = (a: number, b: number, v: Verdict, excluded: boolean): void => {
-      if (excluded) return
+      if (excluded) {
+        // a stretch with no zero is not looked into, but one that is PARTIAL holds something undefined or unbounded that is not located
+        if (v === PARTIAL) info.lost = true
+        return
+      }
       if (v !== PARTIAL) {
         const last = runs[runs.length - 1]
         if (last && last.b === a) {
@@ -447,7 +497,10 @@ export class Crossings {
         return
       }
       const m = (a + b) / 2
-      if (!(m > a && m < b)) return
+      if (!(m > a && m < b)) {
+        info.lost = true
+        return
+      }
       for (const [s, e] of [
         [a, m],
         [m, b],
@@ -476,6 +529,7 @@ export class Crossings {
       if (right === PARTIAL) continue
       if (!leftOut) runs.push({ a: lo, b: ga, v: left })
       if (!rightOut) runs.push({ a: gb, b: hi, v: right })
+      gaps.push([ga, gb])
       known = true
       break
     }
@@ -485,6 +539,12 @@ export class Crossings {
         if (hints.length >= 64) hints.shift()
         hints.push(gaps[0])
       }
+    }
+    // The gaps are where the edge is cut. A gap of a point's width is a stop at its middle; one the subdivision gave up on (its budget
+    // of evaluations ran out) is wider than a point, and where in it the edge is cut is not known.
+    for (const [ga, gb] of gaps) {
+      if (gb - ga <= 4 * minWidth) info.stops.push((ga + gb) / 2)
+      else info.lost = true
     }
     for (const run of runs) {
       const va = run.a === lo ? vlo : this.at(horizontal, fixed, run.a)
@@ -534,6 +594,8 @@ export class Crossings {
       if (why === 'pole') this.stats.poles++
       else if (why === 'jump') this.stats.jumps++
       else this.stats.undefinedEdges++
+      // where the edge is cut: the middle of the bracket the bisection ended with (take records it)
+      this.stopAt = (lo + hi) / 2
       return { ok: false, why }
     }
 
@@ -645,9 +707,11 @@ interface Ctx {
 
 // The pieces of the zero set in `leaves`, and the touch points. The leaves are those of subdivide: one size, meeting
 // edge to edge on equal coordinates.
-export function contourLeaves(leaves: readonly Leaf[], fns: ContourFns, view: ContourView, counter: EvalCounter, budget?: ContourBudget): ContourResult {
-  const stats = newStats()
-  const cr = new Crossings(fns, view.px, counter, stats)
+export function contourLeaves(leaves: readonly Leaf[], fns: ContourFns, view: ContourView, counter: EvalCounter, budget?: ContourBudget, crossings?: Crossings): ContourResult {
+  // A caller that wants the edges' roots for itself (the region stage reads them to cut a leaf) hands in the cache; its own stats then
+  // count this contouring, and `ContourResult.stats` is that object.
+  const cr = crossings ?? new Crossings(fns, view.px, counter, newStats())
+  const stats = cr.stats
   const segments: Segment[] = []
   const seen = new Set<string>()
   const startPoints = counter.points
