@@ -19,7 +19,7 @@ import { lchToLab, linearToOklab } from '../src/space/paint/model/colour'
 import { buildParticles, paintFrame } from '../src/space/paint/model/index'
 import { flatColours, sphereGBuffer } from '../src/space/paint/model/testing'
 import { CANVAS, SCENE, viewOf } from '../src/space/paint/model/valueFinalFixture'
-import { EDGE_CLASSES, ROLES, type GBuffer, type ParticleSet, type PaintFrame, type PaintView } from '../src/space/paint/types'
+import { EDGE_CLASSES, PATH_POINTS, ROLES, type GBuffer, type ParticleSet, type PaintFrame, type PaintView } from '../src/space/paint/types'
 import type { PaintParams } from '../src/space/paint/params'
 import { toPaintParams } from '../src/style/settings/paintParams'
 import { renderFigure } from '../src/figure/render'
@@ -31,7 +31,7 @@ import { paperBaseColour, paperKey } from '../src/style/papers/generated'
 import type { GeneratedPaperType } from '../src/style/papers/generate/types'
 import { tilePixels } from '../src/style/papers/host'
 import { GUIDE } from '../src/style/settings/guide'
-import { activeRange, rate, safeRange, saturates } from '../src/style/settings/sweepRate'
+import { activeRange, EDGES, rate, safeRange, saturates } from '../src/style/settings/sweepRate'
 import type { SweepEngine, SweepEntry, SweepFile, SweepMeasure } from '../src/style/settings/sweepTypes'
 import type { GuideEntry } from '../src/style/settings/types'
 import { blendOver, normaliseHex } from '../src/style/theme/contrast'
@@ -734,25 +734,39 @@ const CURVE_SHAPES = ['identity', 'raised', 'lowered'] as const
 // How far 'raised' and 'lowered' bend the default curve: each point's y moved by this share of the editor's y range.
 const CURVE_BEND = 0.15
 
-// The three views of the sphere-on-table fixture (space/paint/model/valueFinalFixture.ts): the default light on the
-// default camera; a low world-fixed light and a grazing camera (a long cast shadow, a lit and a shadow side); a nearer
-// camera from above (the strokes larger on screen). A frame is PAINT_W x PAINT_H css px (the fixture's own is 640x480;
-// the smaller frame keeps the sweep inside its time budget).
+// The three views of the sphere-on-table fixture (space/paint/model/valueFinalFixture.ts): a camera at 30/25; a grazing
+// camera at 200/2 (a long cast shadow, a lit and a shadow side); a nearer camera from above at 120/40 (the strokes larger
+// on screen). Each is lit as the painter's own light parameters say (light.azimuth, elevation and worldFixed, as the
+// lab's keyLightDirection turns them into the view's lightDir), so the light settings move the picture. A frame is
+// PAINT_W x PAINT_H css px (the fixture's own is 640x480; the smaller frame keeps the sweep inside its time budget).
 const PAINT_W = 400
 const PAINT_H = 300
 const PAINT_VIEWS: { name: string; opts: Parameters<typeof viewOf>[0]; zoom: number }[] = [
-  { name: 'sphere-on-table, camera 30/25, default light', opts: { azimuth: 30, elevation: 25 }, zoom: 75 },
-  { name: 'sphere-on-table, camera 200/2, world light 30/5', opts: { azimuth: 200, elevation: 2, light: [30, 5] }, zoom: 75 },
-  { name: 'sphere-on-table, closer camera 120/40, default light', opts: { azimuth: 120, elevation: 40 }, zoom: 130 },
+  { name: 'sphere-on-table, camera 30/25', opts: { azimuth: 30, elevation: 25 }, zoom: 75 },
+  { name: 'sphere-on-table, grazing camera 200/2', opts: { azimuth: 200, elevation: 2 }, zoom: 75 },
+  { name: 'sphere-on-table, closer camera 120/40', opts: { azimuth: 120, elevation: 40 }, zoom: 130 },
 ]
 const PAINT_COLOURS = flatColours({ 0: lchToLab(0.56, 0.14, 38), 1: CANVAS, 2: lchToLab(0.4, 0.05, 55) })
 
-const paintViews: PaintView[] = PAINT_VIEWS.map((v) => viewOf(v.opts, [PAINT_W, PAINT_H, v.zoom]))
+const paintViewCache = new Map<string, PaintView>()
+// The view lit by the parameters' light: a world-fixed light (worldFixed 0.5 or more) is the direction at its azimuth and
+// elevation about z; a camera-relative one is the camera's own (azimuth + = to the viewer's left).
+function paintViewOf(params: PaintParams, vi: number): PaintView {
+  const key = JSON.stringify([vi, params.light])
+  let view = paintViewCache.get(key)
+  if (!view) {
+    const v = PAINT_VIEWS[vi]
+    const { azimuth, elevation, worldFixed } = params.light
+    view = viewOf(worldFixed >= 0.5 ? { ...v.opts, light: [azimuth, elevation] } : { ...v.opts, lightAzimuth: azimuth, lightElevation: elevation }, [PAINT_W, PAINT_H, v.zoom])
+    paintViewCache.set(key, view)
+  }
+  return view
+}
 const paintSets = new Map<string, ParticleSet>()
 const paintGBuffers = new Map<string, GBuffer>()
 
 function paintFrameOf(params: PaintParams, vi: number): PaintFrame {
-  const view = paintViews[vi]
+  const view = paintViewOf(params, vi)
   const gkey = JSON.stringify([vi, params.light])
   let g = paintGBuffers.get(gkey)
   if (!g) {
@@ -769,13 +783,18 @@ function paintFrameOf(params: PaintParams, vi: number): PaintFrame {
   return paintFrame(SCENE, set, view, g, params)
 }
 
-// A frame as the metrics read it: each stroke's role, colour (OKLab) and a key naming its particle (role, the stroke's
-// seed and where its path starts in the world), and the edge-class shares of the frame's edge segments.
+// A frame as the metrics read it: each stroke's role, colour (OKLab), geometry (mean width, path length, path points) and a
+// key naming its particle (role, the stroke's seed and where its path starts in the world), the stroke count of each role,
+// and the edge-class shares of the frame's edge segments.
 interface Reading {
   keys: string[]
   role: Uint8Array
   lab: Float64Array
+  width: Float64Array // mean width of each stroke, css px
+  length: Float64Array // path length of each stroke, css px
+  path: Float32Array // PATH_POINTS points per stroke, css px
   count: number
+  byRole: number[]
   edgeShare: number[]
 }
 
@@ -783,48 +802,120 @@ function reading(frame: PaintFrame): Reading {
   const b = frame.strokes
   const keys: string[] = new Array(b.count)
   const lab = new Float64Array(3 * b.count)
+  const width = new Float64Array(b.count)
+  const length = new Float64Array(b.count)
   const seen = new Map<string, number>()
   const stride = b.worldPath.length / Math.max(1, b.count) // 3 * PATH_POINTS
+  const byRole = new Array<number>(ROLES.length).fill(0)
   for (let i = 0; i < b.count; i++) {
     const o = stride * i
     const base = `${b.role[i]}|${b.seed[i]}|${Math.round(b.worldPath[o] * 200)}|${Math.round(b.worldPath[o + 1] * 200)}|${Math.round(b.worldPath[o + 2] * 200)}`
     const n = seen.get(base) ?? 0
     seen.set(base, n + 1)
     keys[i] = `${base}#${n}`
+    byRole[b.role[i]]++
     const [l, a, bb] = linearToOklab(b.colour[3 * i], b.colour[3 * i + 1], b.colour[3 * i + 2])
     lab[3 * i] = l
     lab[3 * i + 1] = a
     lab[3 * i + 2] = bb
+    let w = 0
+    let len = 0
+    for (let k = 0; k < PATH_POINTS; k++) {
+      w += b.width[PATH_POINTS * i + k]
+      if (k > 0) len += Math.hypot(b.path[2 * (PATH_POINTS * i + k)] - b.path[2 * (PATH_POINTS * i + k - 1)], b.path[2 * (PATH_POINTS * i + k) + 1] - b.path[2 * (PATH_POINTS * i + k - 1) + 1])
+    }
+    width[i] = w / PATH_POINTS
+    length[i] = len
   }
   const hist = new Array<number>(EDGE_CLASSES.length).fill(0)
   const ec = frame.debug.edgeClass
   for (let i = 0; i < ec.length; i++) if (ec[i] < hist.length) hist[ec[i]]++
   const total = hist.reduce((x, y) => x + y, 0)
-  return { keys, role: b.role, lab, count: b.count, edgeShare: hist.map((h) => (total > 0 ? h / total : 0)) }
+  return { keys, role: b.role, lab, width, length, path: b.path, count: b.count, byRole, edgeShare: hist.map((h) => (total > 0 ? h / total : 0)) }
 }
 
 const dE = (a: Float64Array, i: number, b: Float64Array, j: number): number => Math.hypot(a[3 * i] - b[3 * j], a[3 * i + 1] - b[3 * j + 1], a[3 * i + 2] - b[3 * j + 2])
 
-// The colour change of each stroke of `r` against the default's stroke of the same particle and role. When the particles
-// themselves moved (a seed, a cell size: under half the strokes find their partner) the strokes are paired by role and
-// by rank of lightness instead, which compares the two frames' colour distributions role by role.
-function colourDeltas(r: Reading, d: Reading): number[] {
+// What one view of a changed frame differs by, against the default frame.
+interface ViewChange {
+  colour: number // the largest over roles of the role's mean dE
+  geometry: number // the largest over roles of the role's larger of mean width, length and path-point change, px
+  structure: number // the largest over roles of |stroke count / default's - 1|
+  edges: number // L1 distance between the edge-class shares
+  p95: number // 95th percentile of the dE over all strokes
+  lShift: number // signed change of the mean L of all strokes
+  ratio: number // stroke count over the default's
+}
+
+function compareFrames(r: Reading, d: Reading): ViewChange {
+  // Pair each stroke with the default's of the same particle and role. When the particles themselves moved (a seed, a cell
+  // size: under half the strokes find a partner) the pairs are made by role and by rank of lightness instead, which
+  // compares the colour distributions role by role; strokes so paired are not the same stroke, so their geometry is
+  // compared as role means (width and length only).
   const index = new Map<string, number>()
   d.keys.forEach((k, i) => index.set(k, i))
-  const out: number[] = []
+  let pairs: [number, number][] = []
   for (let i = 0; i < r.count; i++) {
     const j = index.get(r.keys[i])
-    if (j !== undefined) out.push(dE(r.lab, i, d.lab, j))
+    if (j !== undefined) pairs.push([i, j])
   }
-  if (out.length >= 0.5 * Math.min(r.count, d.count)) return out
-  const paired: number[] = []
+  const matched = pairs.length >= 0.5 * Math.min(r.count, d.count)
+  if (!matched) {
+    pairs = []
+    for (let role = 0; role < ROLES.length; role++) {
+      const a = [...Array(r.count).keys()].filter((i) => r.role[i] === role).sort((x, y) => r.lab[3 * x] - r.lab[3 * y] || x - y)
+      const b = [...Array(d.count).keys()].filter((i) => d.role[i] === role).sort((x, y) => d.lab[3 * x] - d.lab[3 * y] || x - y)
+      const n = Math.min(a.length, b.length)
+      for (let k = 0; k < n; k++) pairs.push([a[Math.floor((k * a.length) / n)], b[Math.floor((k * b.length) / n)]])
+    }
+  }
+  const dEs: number[] = []
+  const colourSum = new Array<number>(ROLES.length).fill(0)
+  const widthSum = new Array<number>(ROLES.length).fill(0)
+  const lengthSum = new Array<number>(ROLES.length).fill(0)
+  const moveSum = new Array<number>(ROLES.length).fill(0)
+  const pairN = new Array<number>(ROLES.length).fill(0)
+  for (const [i, j] of pairs) {
+    const role = r.role[i]
+    const e = dE(r.lab, i, d.lab, j)
+    dEs.push(e)
+    colourSum[role] += e
+    pairN[role]++
+    if (matched) {
+      widthSum[role] += Math.abs(r.width[i] - d.width[j])
+      lengthSum[role] += Math.abs(r.length[i] - d.length[j])
+      let move = 0
+      for (let k = 0; k < PATH_POINTS; k++) move += Math.hypot(r.path[2 * (PATH_POINTS * i + k)] - d.path[2 * (PATH_POINTS * j + k)], r.path[2 * (PATH_POINTS * i + k) + 1] - d.path[2 * (PATH_POINTS * j + k) + 1])
+      moveSum[role] += move / PATH_POINTS
+    }
+  }
+  let colour = 0
+  let geometry = 0
+  let structure = 0
   for (let role = 0; role < ROLES.length; role++) {
-    const a = [...Array(r.count).keys()].filter((i) => r.role[i] === role).sort((x, y) => r.lab[3 * x] - r.lab[3 * y] || x - y)
-    const b = [...Array(d.count).keys()].filter((i) => d.role[i] === role).sort((x, y) => d.lab[3 * x] - d.lab[3 * y] || x - y)
-    const n = Math.min(a.length, b.length)
-    for (let k = 0; k < n; k++) paired.push(dE(r.lab, a[Math.floor((k * a.length) / n)], d.lab, b[Math.floor((k * b.length) / n)]))
+    if (pairN[role] > 0) {
+      colour = Math.max(colour, colourSum[role] / pairN[role])
+      if (matched) geometry = Math.max(geometry, widthSum[role] / pairN[role], lengthSum[role] / pairN[role], moveSum[role] / pairN[role])
+    }
+    // (a role with no strokes in the default frame: each stroke it gains counts as a whole stroke)
+    structure = Math.max(structure, Math.abs(r.byRole[role] - d.byRole[role]) / Math.max(1, d.byRole[role]))
   }
-  return paired
+  if (!matched) {
+    for (let role = 0; role < ROLES.length; role++) {
+      const a = [...Array(r.count).keys()].filter((i) => r.role[i] === role)
+      const b = [...Array(d.count).keys()].filter((i) => d.role[i] === role)
+      if (a.length > 0 && b.length > 0) geometry = Math.max(geometry, Math.abs(meanOf(a.map((i) => r.width[i])) - meanOf(b.map((i) => d.width[i]))), Math.abs(meanOf(a.map((i) => r.length[i])) - meanOf(b.map((i) => d.length[i]))))
+    }
+  }
+  return {
+    colour,
+    geometry,
+    structure,
+    edges: r.edgeShare.reduce((s, x, k) => s + Math.abs(x - d.edgeShare[k]), 0),
+    p95: percentile(dEs, 0.95),
+    lShift: meanL(r) - meanL(d),
+    ratio: d.count === 0 ? 1 : r.count / d.count,
+  }
 }
 
 const meanOf = (xs: readonly number[]): number => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length)
@@ -855,30 +946,54 @@ function curveShape(spec: GuideEntry, shape: string): number[][] {
   return points.map(([x, y]) => [x, clamp(y + sign * CURVE_BEND * (hi - lo))])
 }
 
+const RANK = { none: 0, subtle: 1, moderate: 2, strong: 3 } as const
+
+// The four dimensions of a paint entry, each as its measure and the headline numbers per value. The entry takes the one
+// whose largest change over the values rates strongest (a tie goes to the larger change as a share of the moderate edge,
+// then to the order below); `measure` names it and all four go in `detail`.
 function sweepPaintSetting(spec: GuideEntry, values: (number | string)[]): Measured {
-  const change: number[] = []
-  const detail = { p95DeltaE: [] as number[], meanLShift: [] as number[], strokeRatio: [] as number[], edgeClassL1: [] as number[] }
-  const base = paintViews.map((_, vi) => reading(paintFrameOf(toPaintParams(new Map()), vi)))
+  const dims = {
+    colour: { measure: 'colour' as SweepMeasure, change: [] as number[] },
+    geometry: { measure: 'geometry' as SweepMeasure, change: [] as number[] },
+    structure: { measure: 'structure' as SweepMeasure, change: [] as number[] },
+    edges: { measure: 'structure' as SweepMeasure, change: [] as number[] },
+  }
+  const other = { p95DeltaE: [] as number[], meanLShift: [] as number[], strokeRatio: [] as number[] }
+  const base = PAINT_VIEWS.map((_, vi) => reading(paintFrameOf(toPaintParams(new Map()), vi)))
   for (const value of values) {
     const set = new Map<string, number | string | number[][]>([[spec.path, spec.type === 'curve' ? curveShape(spec, value as string) : value]])
     const params = toPaintParams(set)
-    const acc = { mean: [] as number[], p95: [] as number[], l: [] as number[], ratio: [] as number[], edge: [] as number[] }
-    paintViews.forEach((_, vi) => {
-      const r = reading(paintFrameOf(params, vi))
-      const deltas = colourDeltas(r, base[vi])
-      acc.mean.push(meanOf(deltas))
-      acc.p95.push(percentile(deltas, 0.95))
-      acc.l.push(meanL(r) - meanL(base[vi]))
-      acc.ratio.push(base[vi].count === 0 ? 1 : r.count / base[vi].count)
-      acc.edge.push(r.edgeShare.reduce((s, x, k) => s + Math.abs(x - base[vi].edgeShare[k]), 0))
-    })
-    change.push(meanOf(acc.mean))
-    detail.p95DeltaE.push(meanOf(acc.p95))
-    detail.meanLShift.push(meanOf(acc.l))
-    detail.strokeRatio.push(meanOf(acc.ratio))
-    detail.edgeClassL1.push(meanOf(acc.edge))
+    const views = PAINT_VIEWS.map((_, vi) => compareFrames(reading(paintFrameOf(params, vi)), base[vi]))
+    dims.colour.change.push(meanOf(views.map((v) => v.colour)))
+    dims.geometry.change.push(meanOf(views.map((v) => v.geometry)))
+    dims.structure.change.push(meanOf(views.map((v) => v.structure)))
+    dims.edges.change.push(meanOf(views.map((v) => v.edges)))
+    other.p95DeltaE.push(meanOf(views.map((v) => v.p95)))
+    other.meanLShift.push(meanOf(views.map((v) => v.lShift)))
+    other.strokeRatio.push(meanOf(views.map((v) => v.ratio)))
   }
-  return { change, detail, measure: 'colour' }
+  let winner: keyof typeof dims = 'colour'
+  let best = -1
+  for (const name of ['colour', 'geometry', 'structure', 'edges'] as const) {
+    const d = dims[name]
+    const top = Math.max(0, ...d.change)
+    const score = RANK[rate(d.measure, top)] * 1000 + Math.min(999, top / EDGES[d.measure][2])
+    if (score > best) {
+      best = score
+      winner = name
+    }
+  }
+  return {
+    change: dims[winner].change,
+    measure: dims[winner].measure,
+    detail: {
+      colourRoleDeltaE: dims.colour.change,
+      geometryPx: dims.geometry.change,
+      structureShare: dims.structure.change,
+      edgeClassL1: dims.edges.change,
+      ...other,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -926,8 +1041,13 @@ const PAINT_MARK = ' Paint: '
 const PAINT_NOTE =
   PAINT_MARK +
   `the per-frame painter only (paintFrame, never the bake), on the sphere-on-table fixture (valueFinalFixture.ts) in ${PAINT_VIEWS.length} views at ${PAINT_W}x${PAINT_H} css px (smaller than the fixture's 640x480, to keep the run inside its time budget); each setting is applied with toPaintParams to a stack with that one setting changed and the frame is compared with the default frame, averaged over the views. ` +
-  'The headline (measure colour) is the mean OKLab dE of the stroke colours, each stroke matched to the stroke of the same particle in the default frame and role (role, stroke seed and where its path starts in the world); when under half the strokes find a partner (the particles themselves moved: seed, cell size) strokes are paired by role and by rank of lightness instead. ' +
-  'detail: p95DeltaE (the 95th percentile of the same dE), meanLShift (signed change of the mean OKLab L of all strokes), strokeRatio (stroke count over that of the default frame), edgeClassL1 (L1 distance between the shares of the edge segments in the four edge classes). ' +
+  'A paint entry is rated on the STRONGEST of four dimensions, each the largest over the stroke roles (so a change to one role is not diluted by the rest), and `measure` names the one that won (a tie goes to the larger change as a share of the moderate edge). ' +
+  'colour: the role\'s mean OKLab dE of the stroke colours, each stroke matched to the stroke of the same particle and role in the default frame (role, stroke seed and where its path starts in the world; thresholds as colour). ' +
+  'geometry: for the matched strokes, the role\'s mean change in px of stroke width, of path length and of path-point displacement, the largest of the three (geometry thresholds). ' +
+  'structure: the role\'s |stroke count over the default\'s - 1| (none under 0.02, subtle under 0.1, moderate under 0.3). ' +
+  'edges: the L1 distance between the shares of the edge segments in the four edge classes (the structure thresholds, measure structure). ' +
+  'When under half the strokes find a partner (the particles themselves moved: seed, cell size) the strokes are paired by role and by rank of lightness for colour, and geometry is the change of the role means of width and length. ' +
+  'detail holds all four (colourRoleDeltaE, geometryPx, structureShare, edgeClassL1) and p95DeltaE (95th percentile of the dE over all strokes), meanLShift (signed change of the mean OKLab L of all strokes), strokeRatio (stroke count over the default\'s, all roles). ' +
   'A curve is swept over 3 shapes: identity (the straight line between the end points of the default curve), raised and lowered (every point of the default curve moved up or down by ' +
   `${CURVE_BEND * 100}% of the editor's y range, clamped to it).`
 

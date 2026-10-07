@@ -4,9 +4,10 @@
 import type { SweepMeasure, SweepRating } from './sweepTypes'
 
 // Upper edges of none, subtle and moderate; at or above the last is strong.
-const EDGES: Record<SweepMeasure, readonly [number, number, number]> = {
+export const EDGES: Record<SweepMeasure, readonly [number, number, number]> = {
   colour: [0.005, 0.02, 0.06], // OKLab ΔE
   geometry: [0.1, 0.75, 2.5], // px
+  structure: [0.02, 0.1, 0.3], // a share of the strokes (or of the edge segments)
 }
 
 const NEGLIGIBLE = 1e-9

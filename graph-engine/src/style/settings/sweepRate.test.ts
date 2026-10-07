@@ -22,6 +22,16 @@ describe('rate', () => {
     expect(rate('geometry', 2.5)).toBe('strong')
     expect(rate('geometry', 40)).toBe('strong')
   })
+  it('structure thresholds, at each edge', () => {
+    expect(rate('structure', 0)).toBe('none')
+    expect(rate('structure', 0.0199)).toBe('none')
+    expect(rate('structure', 0.02)).toBe('subtle')
+    expect(rate('structure', 0.0999)).toBe('subtle')
+    expect(rate('structure', 0.1)).toBe('moderate')
+    expect(rate('structure', 0.2999)).toBe('moderate')
+    expect(rate('structure', 0.3)).toBe('strong')
+    expect(rate('structure', 1.87)).toBe('strong')
+  })
 })
 
 describe('activeRange', () => {

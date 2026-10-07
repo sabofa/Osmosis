@@ -4,8 +4,10 @@
 
 export type SweepEngine = 'paint' | 'figures' | 'media' | 'backgrounds'
 
-// What the change is measured in: colour (OKLab ΔE) or geometry (px of path-point displacement).
-export type SweepMeasure = 'colour' | 'geometry'
+// What the change is measured in: colour (OKLab ΔE), geometry (px of path-point displacement, stroke width or
+// length) or structure (a share: the change in how many strokes there are, or in the edge classes' shares). A
+// paint entry's measure is the one of its dimensions that rates strongest (the others are in `detail`).
+export type SweepMeasure = 'colour' | 'geometry' | 'structure'
 
 // 'not-drawn-yet' for a setting whose meaning says "Not drawn yet:" (registered, wired to nothing).
 export type SweepRating = 'none' | 'subtle' | 'moderate' | 'strong' | 'not-drawn-yet'
