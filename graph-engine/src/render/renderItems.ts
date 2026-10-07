@@ -12,7 +12,7 @@ export type GeometryItem =
   | { kind: 'segment'; from: Vec2; to: Vec2; dashed?: boolean; color?: string | null }
   | { kind: 'segments'; pairs: [Vec2, Vec2][]; dashed?: boolean; color?: string | null }
   // A filled area as a flat triangle list (groups of 3 points): what a region
-  // outline, a band and the legacy 'triangles' scene kind all become.
+  // outline and a band both become.
   | { kind: 'region'; triangles: Vec2[]; color?: string | null }
 
 // A ring of an outline, with what the nesting needs of it: its box and its area.
@@ -230,10 +230,6 @@ export function toRenderItems(objects: readonly SceneObject[], bounds: Bounds): 
         if (triangles.length > 0) geometry.push({ kind: 'region', triangles, color: obj.color })
         break
       }
-      // The old marching-squares region arrives as triangles already.
-      case 'triangles':
-        geometry.push({ kind: 'region', triangles: obj.triangles, color: obj.color })
-        break
       // A constructed or guide line is stored unclipped (see scene/types.ts); how
       // much of it to draw is a fact about the current view, so it is clipped
       // here, at draw time, against the camera's live bounds. One that misses the

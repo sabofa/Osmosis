@@ -371,14 +371,4 @@ describe('toRenderItems', () => {
       expect(signed).toBeCloseTo(8, 12)
     })
   })
-
-  describe('the legacy triangle region', () => {
-    it('is still drawn as its triangles, with its colour', () => {
-      const triangles = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]
-      const legacy: SceneObject = { kind: 'triangles', triangles, color: 'green' }
-      const { geometry, misc } = toRenderItems([legacy], bounds)
-      expect(misc).toEqual([])
-      expect(geometry).toEqual([{ kind: 'region', triangles, color: 'green' }])
-    })
-  })
 })

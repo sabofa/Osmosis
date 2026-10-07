@@ -64,11 +64,7 @@ export function sceneToSvg(scene: Scene, view: CorpusView, options: SvgOptions =
 
   // regions, bands and guides under, curves over, marks on top
   for (const o of scene.objects) {
-    if (o.kind === 'triangles') {
-      let d = ''
-      for (let i = 0; i + 2 < o.triangles.length; i += 3) d += `M${point(o.triangles[i])}L${point(o.triangles[i + 1])}L${point(o.triangles[i + 2])}Z`
-      parts.push(`<path d="${d}" fill="${colorOf(o.color, palette.region)}" fill-opacity="0.18" stroke="none"/>`)
-    } else if (o.kind === 'band') {
+    if (o.kind === 'band') {
       for (const chain of o.outline) {
         const d = Array.from({ length: chain.param.length }, (_, i) => `${i === 0 ? 'M' : 'L'}${point({ x: chain.xy[2 * i], y: chain.xy[2 * i + 1] })}`).join('')
         parts.push(`<path class="band" d="${d}Z" fill="${colorOf(o.color, palette.curve)}" fill-opacity="0.18" stroke="none"/>`)

@@ -72,12 +72,11 @@ describe('sceneToSvg', () => {
     expect(out).toMatch(/<polyline points="0\.00,0\.00 800\.00,0\.00 400\.00,800\.00 0\.00,0\.00"/)
   })
 
-  it('draws points, segments and regions as their plain shapes', () => {
+  it('draws points and segments as their plain shapes', () => {
     const plain: Scene = {
       objects: [
         { kind: 'point', label: null, position: { x: 1, y: 1 } },
         { kind: 'segment', from: { x: 0, y: 0 }, to: { x: 3, y: 4 }, dashed: true },
-        { kind: 'triangles', triangles: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },
       ],
       errors: [],
       regression: null,
@@ -85,8 +84,6 @@ describe('sceneToSvg', () => {
     const out = sceneToSvg(plain, STD)
     expect(count(out, /<circle [^>]*data-kind="point"/g)).toBe(1)
     expect(out).toMatch(/<line [^>]*stroke-dasharray="6 5"\/>/)
-    // 40 px to a unit: (0, 0), (1, 0) and (0, 1) are the centre, 40 right of it and 40 above it
-    expect(out).toMatch(/<path d="M400\.00,400\.00L440\.00,400\.00L400\.00,360\.00Z" fill="#[0-9a-f]{6}" fill-opacity="0\.18"/)
   })
 
   it('takes a dark theme', () => {

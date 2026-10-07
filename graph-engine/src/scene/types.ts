@@ -135,11 +135,6 @@ export type SceneObject =
   // boundary are one geometry. The renderer triangulates the outline itself
   // (render/renderItems.ts); nothing here is a triangle.
   | { kind: 'region'; id: MarkId; outline: Chain[]; boundary: MarkId[]; color?: string | null }
-  // Flat triangle list (groups of 3 points) for a filled inequality region: what
-  // the old marching-squares path emits (buildScene.ts's buildRegion and
-  // buildRegionChain), until the implicit/region quadtree replaces it with 'region'
-  // above and this kind goes.
-  | { kind: 'triangles'; triangles: Vec2[]; color?: string | null }
   // Not pre-evaluated like everything else here — fx/fy are the path's two
   // coordinates compiled through the shared kernel (math/compile.ts) over the
   // parameter, so the renderer can call them every frame to animate the point
