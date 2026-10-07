@@ -550,7 +550,9 @@ describe('the torture corpus', () => {
             for (const p of o.chains.flatMap(chainPoints)) {
               const gx = (h(p.x + step, p.y) - h(p.x - step, p.y)) / (2 * step)
               const gy = (h(p.x, p.y + step) - h(p.x, p.y - step)) / (2 * step)
-              const d = (Math.abs(h(p.x, p.y)) / Math.hypot(gx, gy)) * Math.min(px.x, px.y)
+              // (a vertex on the zero set at a singular point, where the gradient is zero too, is on it: 0/0 is not off)
+              const value = Math.abs(h(p.x, p.y))
+              const d = value <= 1e-12 ? 0 : (value / Math.hypot(gx, gy)) * Math.min(px.x, px.y)
               worst = Math.max(worst, Number.isNaN(d) ? Number.POSITIVE_INFINITY : d)
             }
           }
