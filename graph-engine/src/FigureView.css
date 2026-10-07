@@ -10,6 +10,10 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
+  /* The drawing is laid out larger than the screen (view2d's overscan), so
+     there is something to reveal while it moves. `clip`, where there is one,
+     also forbids scrolling it by script (focus, find-in-page). */
+  overflow: clip;
   background: var(--surface, #fdf6ea);
 }
 
@@ -92,12 +96,18 @@
    inline, because its id is unique to each figure on the page. A CSS
    drop-shadow would not do: its lengths are in drawing units and would swell
    with the zoom. Here, only what a filter cannot do: a hovered or selected
-   label comes to full strength, and a selected one is set a little heavier. */
+   label comes to full strength, and a selected one is set a little heavier.
+   Only the outermost element of an item carries the class (see the highlight
+   effect in FigureView.tsx), so the text is reached either as that element or
+   inside it. */
 text.figure-hovered,
-text.figure-selected {
+text.figure-selected,
+.figure-hovered text,
+.figure-selected text {
   opacity: 1;
 }
 
-text.figure-selected {
+text.figure-selected,
+.figure-selected text {
   font-weight: 600;
 }

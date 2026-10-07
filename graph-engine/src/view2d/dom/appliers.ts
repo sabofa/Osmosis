@@ -49,3 +49,29 @@ export function applyCssTransform(element: HTMLElement, frame: Rect, camera: Cam
   element.style.transformOrigin = '0 0'
   element.style.transform = value
 }
+
+// How an element that is drawn `overscan` (a fraction of the screen) larger
+// than the screen on every side sits on the screen: its size and its offset
+// (both as CSS percentages of the screen), and the transform origin that puts
+// a transform at the screen's own top-left corner, as liveTransform assumes.
+export function overscanLayout(overscan: number): { size: string; offset: string; origin: string } {
+  const o = Number.isFinite(overscan) && overscan > 0 ? overscan : 0
+  const pct = (n: number): string => `${Number(n.toPrecision(10))}%`
+  return { size: pct(100 * (1 + 2 * o)), offset: pct(-100 * o), origin: pct((100 * o) / (1 + 2 * o)) }
+}
+
+// An svg drawn `overscan` larger than its surface on every side: laid out over
+// the surface (which must be positioned), grown, with its transform origin on
+// the surface's corner.
+export function applyOverscan(svg: SVGSVGElement, overscan: number): void {
+  const { size, offset, origin } = overscanLayout(overscan)
+  const style = svg.style
+  style.position = 'absolute'
+  style.left = offset
+  style.top = offset
+  style.width = size
+  style.height = size
+  style.maxWidth = 'none'
+  style.maxHeight = 'none'
+  style.transformOrigin = `${origin} ${origin}`
+}

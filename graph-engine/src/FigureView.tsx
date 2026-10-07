@@ -9,16 +9,20 @@ import {
   highlightFilterSizes,
   highlightFilterValue,
   highlightOf,
+  outermostMatches,
+  selectedItems,
 } from './figure/highlight'
 import type { FigureHitItem, FigureTarget } from './figure/hitItems'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
-import { applySvgViewBox } from './view2d/dom/appliers'
+import { applyOverscan, applySvgViewBox } from './view2d/dom/appliers'
 import { CoordinateTool } from './view2d/dom/CoordinateTool'
 import { toleranceInContent } from './view2d/dom/domInput'
 import { startCamera } from './view2d/dom/startView'
 import { useView2d } from './view2d/dom/useView2d'
 import { focusCamera, formatFocus, type FocusSpec } from './view2d/focus'
+import { OVERSCAN } from './view2d/feel'
+import { growRect, liveTransformValue, type LiveTransform } from './view2d/liveTransform'
 import { formatZoom } from './view2d/readout'
 import type { Camera, Rect } from './view2d/types'
 import './FigureView.css'
@@ -54,7 +58,9 @@ export interface FigureViewProps {
   // Where the figure's givens table sits (config.givens), so the coordinate
   // tool can keep out of its way. Default: the directive's default.
   givens?: GivensPosition
-  onSelect?(selection: FigureSelection | null): void
+  // Every selected item, in the order they were selected (a click selects one,
+  // shift + click adds or removes); empty when nothing is selected.
+  onSelect?(selection: FigureSelection[]): void
 }
 
 // Which attribute carries a size that must not grow with the view, and what
@@ -99,7 +105,8 @@ function compensate(root: SVGSVGElement, zoom: number, previous: Compensation | 
 
 // The hover and selection filters, injected into the live <svg> (see
 // figure/highlight.ts for why they are filters and not CSS shadows). The two
-// lengths and the region are rewritten each frame to stay constant on screen.
+// lengths and the region are rewritten at each commit of the drawing (not on
+// every frame of a move) to stay constant on screen.
 interface Filters {
   root: SVGSVGElement
   elements: Element[]
@@ -107,11 +114,11 @@ interface Filters {
   haloDeviation: Element | null
 }
 
-function injectFilters(root: SVGSVGElement, ids: { hoverId: string; selectId: string }, visible: Rect, pxPerUnit: number): Filters {
+function injectFilters(root: SVGSVGElement, ids: { hoverId: string; selectId: string }, window: Rect, pxPerUnit: number): Filters {
   const accent = highlightAccent(getComputedStyle(root).getPropertyValue('--accent'))
   root.insertAdjacentHTML(
     'afterbegin',
-    highlightDefs({ ...ids, accent, region: highlightFilterRegion(visible), sizes: highlightFilterSizes(pxPerUnit) }),
+    highlightDefs({ ...ids, accent, region: highlightFilterRegion(window, pxPerUnit), sizes: highlightFilterSizes(pxPerUnit) }),
   )
   const elements = [ids.hoverId, ids.selectId].map((id) => root.querySelector(`[id="${id}"]`)).filter((e): e is Element => e !== null)
   return {
@@ -122,8 +129,10 @@ function injectFilters(root: SVGSVGElement, ids: { hoverId: string; selectId: st
   }
 }
 
-function resizeFilters(filters: Filters, visible: Rect, pxPerUnit: number): void {
-  const region = highlightFilterRegion(visible)
+// `window` is the region the svg is drawn over (the visible window and its
+// overscan).
+function resizeFilters(filters: Filters, window: Rect, pxPerUnit: number): void {
+  const region = highlightFilterRegion(window, pxPerUnit)
   for (const element of filters.elements) {
     element.setAttribute('x', String(region.x))
     element.setAttribute('y', String(region.y))
@@ -134,6 +143,8 @@ function resizeFilters(filters: Filters, visible: Rect, pxPerUnit: number): void
   filters.hoverRadius?.setAttribute('radius', String(sizes.hoverRadius))
   filters.haloDeviation?.setAttribute('stdDeviation', String(sizes.haloDeviation))
 }
+
+const NONE: readonly string[] = []
 
 export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -160,7 +171,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
 
   const itemsById = useMemo(() => new Map((items ?? []).map((item) => [item.id, item])), [items])
   const [hovered, setHovered] = useState<string | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<readonly string[]>(NONE)
   // The coordinate tool: whether its readout is open (the toggle itself is
   // there whenever the `coordinates` prop is on).
   const [toolOpen, setToolOpen] = useState(false)
@@ -169,7 +180,13 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // and dots the size they were drawn at. The last one applied is remembered
   // so that a new <svg> with the same view (a rebuilt spec) can be put back
   // where the reader was.
-  const applied = useRef<{ zoom: number; visible: Rect; pxPerUnit: number } | null>(null)
+  // `window`: what the svg was committed over, the visible window and its overscan.
+  const applied = useRef<{ zoom: number; visible: Rect; window: Rect; pxPerUnit: number } | null>(null)
+  // How far the live view is scaled from the committed drawing (1 at a commit),
+  // for what is measured against the live camera, not the drawing.
+  const liveScale = useRef(1)
+  // The elements the look is on now, so a change touches only those.
+  const lit = useRef<Element[]>([])
   const compensation = useRef<Compensation | null>(null)
   const filters = useRef<Filters | null>(null)
   // Ids unique to this figure instance, so two figures on a page never share
@@ -179,39 +196,56 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
 
   // The filters of the current <svg>, injected the first time it is painted.
   const ensureFilters = useCallback(
-    (root: SVGSVGElement, visible: Rect, pxPerUnit: number): Filters => {
-      if (!filters.current || filters.current.root !== root) filters.current = injectFilters(root, filterIds, visible, pxPerUnit)
+    (root: SVGSVGElement, window: Rect, pxPerUnit: number): Filters => {
+      if (!filters.current || filters.current.root !== root) filters.current = injectFilters(root, filterIds, window, pxPerUnit)
       return filters.current
     },
     [filterIds],
   )
 
+  // A commit: the svg is (re)drawn over `visible` and its overscan, clearing
+  // the live transform; the label sizes and the filter sizes follow. The only
+  // place any of it is rewritten, so a move costs one of these every so often
+  // (see view2d/liveTransform.ts's commitDue) and not one a frame.
   const paint = useCallback(
     (visible: Rect, zoom: number, pxPerUnit: number) => {
       const root = containerRef.current?.querySelector('svg')
       if (!root) return
-      applySvgViewBox(root, visible)
+      const window = growRect(visible, OVERSCAN)
+      applyOverscan(root, OVERSCAN)
+      applySvgViewBox(root, window)
+      root.style.transform = ''
+      root.style.willChange = ''
+      liveScale.current = 1
       compensation.current = compensate(root, zoom, compensation.current)
-      resizeFilters(ensureFilters(root, visible, pxPerUnit), visible, pxPerUnit)
+      resizeFilters(ensureFilters(root, window, pxPerUnit), window, pxPerUnit)
     },
     [ensureFilters],
   )
+
+  // Between commits: the committed drawing is moved on the compositor.
+  const paintLive = useCallback((transform: LiveTransform) => {
+    const root = containerRef.current?.querySelector('svg')
+    if (!root) return
+    root.style.willChange = 'transform'
+    root.style.transform = liveTransformValue(transform)
+    liveScale.current = transform.scale
+  }, [])
 
   const view = useView2d({
     frame: content,
     start,
     items,
     onApply: (camera, visible, pxPerUnit) => {
-      applied.current = { zoom: camera.zoom, visible, pxPerUnit }
+      applied.current = { zoom: camera.zoom, visible, window: growRect(visible, OVERSCAN), pxPerUnit }
       paint(visible, camera.zoom, pxPerUnit)
     },
+    onLive: paintLive,
+    overscan: OVERSCAN,
     onHover: setHovered,
-    onSelect: (id) => {
-      setSelected(id)
-      // Not itemsById: a label shares its object's id and comes after it, so
-      // the map holds the label, which has no author coordinates.
-      const item = itemForId(items ?? [], id)
-      onSelect?.(item ? { id: item.id, targets: item.targets, author: item.author } : null)
+    onSelect: (ids) => {
+      setSelected(ids)
+      onSelect?.(selectedItems(items ?? [], ids))
     },
     // C does nothing, and is left to the page, unless the tool is on.
     onToggleCoordinates: coordinates ? () => setToolOpen((open) => !open) : undefined,
@@ -225,42 +259,64 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     if (last) paint(last.visible, last.zoom, last.pxPerUnit)
   }, [markup, paint])
 
-  // Hover and selection: a class on each element that carries the identity
-  // (the markup itself is never rewritten), and the filter that draws the
-  // look, set inline because its id is this instance's own. The givens panel
-  // has no statement, so it is matched by the item id.
+  // Hover and selection: a class on each outermost element that carries the
+  // identity (the markup itself is never rewritten), and the filter that draws
+  // the look, set inline because its id is this instance's own. The givens
+  // panel has no statement, so it is matched by the item id.
+  //
+  // Outermost only: a styled figure puts the identity on a group and on every
+  // path inside it, and a filter on each would run hundreds of times over (see
+  // figure/highlight.ts's outermostMatches). Every selected item shows the
+  // selection look.
   useLayoutEffect(() => {
     const root = containerRef.current?.querySelector('svg')
     if (!root) return
-    if (hovered === null && selected === null) {
-      root.querySelectorAll('.figure-hovered, .figure-selected').forEach((element) => {
-        element.classList.remove('figure-hovered', 'figure-selected')
-        ;(element as SVGElement).style.filter = ''
-      })
+    const clear = (element: Element) => {
+      element.classList.remove('figure-hovered', 'figure-selected')
+      ;(element as SVGElement).style.filter = ''
+    }
+    if (hovered === null && selected.length === 0) {
+      lit.current.forEach(clear)
+      lit.current = []
       return
     }
-    const visible = applied.current?.visible ?? content
-    if (!visible) return
-    ensureFilters(root, visible, applied.current?.pxPerUnit ?? 1)
+    const window = applied.current?.window ?? content
+    if (!window) return
+    ensureFilters(root, window, applied.current?.pxPerUnit ?? 1)
     const hot = hovered === null ? [] : (itemsById.get(hovered)?.targets ?? [])
-    const picked = selected === null ? [] : (itemsById.get(selected)?.targets ?? [])
+    const picked = selected.flatMap((id) => itemsById.get(id)?.targets ?? [])
+    const hoveredMatches: Element[] = []
+    const selectedMatches: Element[] = []
     root.querySelectorAll('[data-statement], [data-object="givens"]').forEach((element) => {
-      const lit = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked, {
+      const match = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked, {
         hovered,
         selected,
       })
-      element.classList.toggle('figure-hovered', lit.hovered)
-      element.classList.toggle('figure-selected', lit.selected)
-      const style = (element as SVGElement).style
-      const value = highlightFilterValue(lit, filterIds)
-      if (value === '') {
-        style.filter = ''
-        return
-      }
+      if (match.hovered) hoveredMatches.push(element)
+      if (match.selected) selectedMatches.push(element)
+    })
+    const parent = (element: Element): Element | null => {
+      const up = element.parentElement
+      return up === (root as Element) ? null : up
+    }
+    const looks = new Map<Element, { hovered: boolean; selected: boolean }>()
+    for (const element of outermostMatches(hoveredMatches, parent)) looks.set(element, { hovered: true, selected: false })
+    for (const element of outermostMatches(selectedMatches, parent)) {
+      const look = looks.get(element)
+      if (look) look.selected = true
+      else looks.set(element, { hovered: false, selected: true })
+    }
+    // What was lit and is not now.
+    for (const element of lit.current) if (!looks.has(element)) clear(element)
+    for (const [element, look] of looks) {
+      element.classList.toggle('figure-hovered', look.hovered)
+      element.classList.toggle('figure-selected', look.selected)
       // An element that already carries its own filter (a texture) keeps it.
       const own = element.getAttribute('filter')
-      style.filter = own ? `${own} ${value}` : value
-    })
+      const value = highlightFilterValue(look, filterIds)
+      ;(element as SVGElement).style.filter = own ? `${own} ${value}` : value
+    }
+    lit.current = [...looks.keys()]
   }, [hovered, selected, itemsById, markup, content, ensureFilters, filterIds])
 
   // The runtime focus: a change of the spec moves the view there, animated.
@@ -291,7 +347,8 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // The coordinate tool's lines. Worked out only while it is open. The pixel
   // tolerance for "a vertex is under the centre" is turned into drawing units
   // with the scale of the frame the camera was last drawn at, which is the one
-  // this render's camera belongs to (the hook publishes it right after).
+  // this render's camera belongs to (the hook publishes it right after), and
+  // the live scale on top of that while the drawing is moved, not redrawn.
   let tool: ReactNode = null
   if (coordinates && frame) {
     const open = toolOpen && view.camera !== null
@@ -299,7 +356,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     const lines = { cursor: '', centre: '', zoom: '', copyText: '' }
     if (open && camera) {
       const all = items ?? []
-      const tolerance = toleranceInContent('mouse', applied.current?.pxPerUnit ?? 1)
+      const tolerance = toleranceInContent('mouse', (applied.current?.pxPerUnit ?? 1) * liveScale.current)
       lines.cursor = cursorText(frame, view.pointer, itemForId(all, hovered))
       lines.centre = centreText(frame, camera, all, tolerance)
       lines.zoom = formatZoom(camera.zoom)

@@ -40,3 +40,22 @@ export const TOUCH_TOLERANCE = 16 // px, touch
 // Below these the smoothed view counts as arrived and snaps.
 export const ARRIVE_PX = 0.05
 export const ARRIVE_LOG_ZOOM = 1e-4
+
+// Moving a heavy drawing. While a gesture or animation runs, the drawing is not
+// redrawn: it is moved on the screen (a CSS transform on the compositor) and
+// its viewBox is committed only now and then. These say when.
+//
+// The drawing is committed into a window this much larger than the screen on
+// every side (a fraction of the screen), so a pan has drawing to reveal
+// instead of blank paper. Costs raster area at each commit: (1 + 2x)^2.
+export const OVERSCAN = 0.3
+// A view that has been still for this long is committed (the drawing is made
+// crisp and the highlight filters resized). Covers a drag held still and the
+// end of a pinch, which gives no signal of its own.
+export const SETTLE_MS = 100
+// During a long gesture the drawing is committed again when the live view has
+// drifted beyond this factor from the committed one (zoomed in past ×2, or out
+// past ÷2: it would be blurry or too small), or has left the overscanned
+// window, but never more often than this.
+export const COMMIT_DRIFT = 2
+export const COMMIT_THROTTLE_MS = 250

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { contentToScreen } from '../camera'
 import type { Camera, Rect, Size } from '../types'
-import { cssTransformValue, viewBoxValue } from './appliers'
+import { cssTransformValue, overscanLayout, viewBoxValue } from './appliers'
 
 describe('viewBoxValue', () => {
   it('writes the window as the four numbers of a viewBox', () => {
@@ -54,5 +54,30 @@ describe('cssTransformValue', () => {
 
   it('is null when the arithmetic is not finite', () => {
     expect(cssTransformValue(frame, { cx: Number.NaN, cy: 0, zoom: 1 }, screen)).toBeNull()
+  })
+})
+
+describe('overscanLayout', () => {
+  it('is the screen itself for no overscan', () => {
+    expect(overscanLayout(0)).toEqual({ size: '100%', offset: '0%', origin: '0%' })
+  })
+
+  it('is the screen plus the overscan on every side, placed so the screen is in the middle', () => {
+    const l = overscanLayout(0.25)
+    expect(l).toEqual({ size: '150%', offset: '-25%', origin: '16.66666667%' })
+  })
+
+  it('puts the transform origin at the screen corner: offset and origin agree', () => {
+    for (const o of [0.1, 0.3, 0.5, 1]) {
+      const l = overscanLayout(o)
+      const size = parseFloat(l.size)
+      // The corner of the screen, as a fraction of the element, is -offset / size.
+      expect(parseFloat(l.origin)).toBeCloseTo((-parseFloat(l.offset) / size) * 100, 8)
+    }
+  })
+
+  it('treats a bad overscan as none', () => {
+    expect(overscanLayout(-1)).toEqual(overscanLayout(0))
+    expect(overscanLayout(Number.NaN)).toEqual(overscanLayout(0))
   })
 })

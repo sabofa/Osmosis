@@ -1,5 +1,6 @@
 import type { Rect } from '../view2d/types'
-import type { FigureTarget } from './hitItems'
+import { itemForId } from './focusLine'
+import type { FigureHitItem, FigureTarget } from './hitItems'
 
 // Which elements of a rendered figure light up for a hovered or a selected
 // item. The markup is never changed to say so: the view adds a class to the
@@ -22,20 +23,52 @@ function matchesAny(statement: string | null, object: string | null, targets: re
 const GIVENS = 'givens'
 
 // `statement` and `object` are the element's attribute text, null when absent.
-// `ids` are the hovered and selected item ids, for the one element that has no
-// statement to match by: the givens panel.
+// `ids` are the hovered item id and the selected item ids, for the one element
+// that has no statement to match by: the givens panel.
 export function highlightOf(
   statement: string | null,
   object: string | null,
   hovered: readonly FigureTarget[],
   selected: readonly FigureTarget[],
-  ids?: { hovered: string | null; selected: string | null },
+  ids?: { hovered: string | null; selected: readonly string[] },
 ): { hovered: boolean; selected: boolean } {
   const panel = object === GIVENS
   return {
     hovered: matchesAny(statement, object, hovered) || (panel && ids?.hovered === GIVENS),
-    selected: matchesAny(statement, object, selected) || (panel && ids?.selected === GIVENS),
+    selected: matchesAny(statement, object, selected) || (panel && ids?.selected.includes(GIVENS) === true),
   }
+}
+
+// What a selection reports for the ids selected: each id's item, in the order
+// given. An id that names no item is left out. (Not a map by id: a label
+// shares its object's id and comes after it, so a map would hold the label,
+// which has no author coordinates; itemForId prefers the one that has.)
+export function selectedItems(
+  items: readonly FigureHitItem[],
+  ids: readonly string[],
+): { id: string; targets: FigureTarget[]; author?: FigureHitItem['author'] }[] {
+  const out: { id: string; targets: FigureTarget[]; author?: FigureHitItem['author'] }[] = []
+  for (const id of ids) {
+    const item = itemForId(items, id)
+    if (item) out.push({ id: item.id, targets: item.targets, author: item.author })
+  }
+  return out
+}
+
+// Of the elements that match, those that must carry the look: the outermost.
+//
+// A styled figure puts the identity on a group *and* on every path inside it (a
+// scribble or a chalk fill has hundreds). A filter on each of them would run
+// once per path, nested in the group's own, which is what made a selection
+// lag. The group's filter already draws everything inside it, so a match with
+// a matched ancestor is skipped. `parent` gives a node's parent (null at the
+// top). Order is kept. Cost is the number of matches times the depth.
+export function outermostMatches<N>(matches: readonly N[], parent: (node: N) => N | null): N[] {
+  const matched = new Set<N>(matches)
+  return matches.filter((node) => {
+    for (let up = parent(node); up !== null; up = parent(up)) if (matched.has(up)) return false
+    return true
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -47,8 +80,9 @@ export function highlightOf(
 // <svg> at run time (never the renderer's markup), because a CSS
 // `drop-shadow(...)` on an SVG child is measured in drawing units and so grows
 // with the zoom: about 30 px at 12x. A filter's own lengths are in drawing
-// units too, so they are rewritten every frame as (target px) / (px per unit),
-// which holds them at the same size on screen at any zoom.
+// units too, so they are rewritten, whenever the drawing is committed, as
+// (target px) / (px per unit), which holds them at the same size on screen at
+// any zoom.
 
 const HOVER_RADIUS_PX = 0.75 // how far hover grows the stroke or ring
 const HALO_DEVIATION_PX = 1.5 // the halo's blur: a halo about 3 px wide
@@ -70,12 +104,25 @@ export function highlightFilterSizes(pxPerUnit: number): HighlightFilterSizes {
   return { hoverRadius: HOVER_RADIUS_PX / ppu, haloDeviation: HALO_DEVIATION_PX / ppu }
 }
 
-// The region the filters work in: the window grown by its own size on every
-// side. Given in drawing units (userSpaceOnUse), not as a fraction of each
-// element's box: a horizontal line has a zero-height box, and a filter
-// region of zero height draws nothing at all.
-export function highlightFilterRegion(visible: Rect): Rect {
-  return { x: visible.x - visible.width, y: visible.y - visible.height, width: visible.width * 3, height: visible.height * 3 }
+// How far the look reaches beyond the shape it is drawn on, in px: the halo is
+// blurred out to three deviations, and a hovered item is thickened first and
+// then haloed.
+export const HIGHLIGHT_REACH_PX = 3 * HALO_DEVIATION_PX + HOVER_RADIUS_PX
+// What the region is grown by, in px: the reach and a little over.
+const REGION_MARGIN_PX = HIGHLIGHT_REACH_PX + 2.75
+
+// The region the filters work in: the window grown by a small margin (the
+// reach of the look, in drawing units at this scale) on every side. The
+// margin is what keeps the look of an item at the edge of the window whole;
+// a bigger region only costs: the filters' work grows with its area, and a
+// texture under them has to be redone. Given in drawing units
+// (userSpaceOnUse), not as a fraction of each element's box: a horizontal
+// line has a zero-height box, and a filter region of zero height draws
+// nothing at all.
+export function highlightFilterRegion(visible: Rect, pxPerUnit: number): Rect {
+  const ppu = Number.isFinite(pxPerUnit) && pxPerUnit > 0 ? pxPerUnit : 1
+  const margin = REGION_MARGIN_PX / ppu
+  return { x: visible.x - margin, y: visible.y - margin, width: visible.width + 2 * margin, height: visible.height + 2 * margin }
 }
 
 const num = (n: number): string => String(Number(n.toPrecision(10)))
@@ -89,7 +136,7 @@ export interface HighlightDefsInput {
 }
 
 // The two filters, as markup for an SVG `<defs>`. The two lengths are marked
-// (`data-size`) so the view can find and rewrite them every frame.
+// (`data-size`) so the view can find and rewrite them at each commit.
 export function highlightDefs({ hoverId, selectId, accent, region, sizes }: HighlightDefsInput): string {
   const frame = `filterUnits="userSpaceOnUse" x="${num(region.x)}" y="${num(region.y)}" width="${num(region.width)}" height="${num(region.height)}" color-interpolation-filters="sRGB"`
   return (
