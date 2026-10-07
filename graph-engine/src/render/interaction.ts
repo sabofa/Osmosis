@@ -16,6 +16,9 @@
 //   (or comes up at its size after being built hidden, at 1 x 1) wants a rebuild. `viewportChanged` says
 //   whether the size is a new one (the first size it is given is the baseline), and a new one is a resize
 //   event of the burst: a splitter dragged across the page is a stream of them, coarse until it is quiet.
+import { FULL } from '../plot/sample/tuning'
+import type { Bounds } from './marchingSquares'
+
 export const WHEEL_SETTLE_MS = 150
 
 export interface Interaction {
@@ -81,4 +84,35 @@ export function createInteraction(now: () => number): Interaction {
       return true
     },
   }
+}
+
+// The rule for what a view change costs (calc P6): while a gesture moves the view and it still lies inside the
+// overscan of the last build, at a scale within REBUILD_SCALE_RATIO of it, the camera just transforms the last
+// picture ('skip'). Otherwise the picture would run out or be stretched too far, so it is rebuilt coarsely.
+// At rest it is rebuilt at full quality.
+export const REBUILD_SCALE_RATIO = 1.5
+
+export function viewChangeAction(a: { built: Bounds | null; current: Bounds; interacting: boolean; resized: boolean }): 'skip' | 'coarse' | 'full' {
+  if (!a.interacting) return 'full'
+  const { built, current } = a
+  if (!built || a.resized) return 'coarse'
+  const builtW = built.xMax - built.xMin
+  const builtH = built.yMax - built.yMin
+  const padX = builtW * FULL.overscan
+  const padY = builtH * FULL.overscan
+  const inside =
+    current.xMin >= built.xMin - padX && current.xMax <= built.xMax + padX && current.yMin >= built.yMin - padY && current.yMax <= built.yMax + padY
+  if (!inside) return 'coarse'
+  const rx = (current.xMax - current.xMin) / builtW
+  const ry = (current.yMax - current.yMin) / builtH
+  const lo = 1 / REBUILD_SCALE_RATIO
+  if (!(rx >= lo && rx <= REBUILD_SCALE_RATIO && ry >= lo && ry <= REBUILD_SCALE_RATIO)) return 'coarse'
+  return 'skip'
+}
+
+// The box a build covers: the view widened by the overscan on each side.
+export function overscanBox(b: Bounds): Bounds {
+  const padX = (b.xMax - b.xMin) * FULL.overscan
+  const padY = (b.yMax - b.yMin) * FULL.overscan
+  return { xMin: b.xMin - padX, xMax: b.xMax + padX, yMin: b.yMin - padY, yMax: b.yMax + padY }
 }

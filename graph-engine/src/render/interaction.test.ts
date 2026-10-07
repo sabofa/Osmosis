@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createInteraction, WHEEL_SETTLE_MS } from './interaction'
+import { createInteraction, viewChangeAction, WHEEL_SETTLE_MS } from './interaction'
 
 // A clock the test moves by hand.
 function clock() {
@@ -206,5 +206,58 @@ describe('createInteraction', () => {
       expect(i.takeSettled()).toBe(true)
       expect(i.pointerUp()).toBe(true)
     })
+  })
+})
+
+describe('viewChangeAction', () => {
+  const built = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+  const shifted = (dx: number, scale = 1) => {
+    const cx = dx
+    const h = 10 * scale
+    return { xMin: cx - h, xMax: cx + h, yMin: -h, yMax: h }
+  }
+  const act = (current: typeof built, over: Partial<{ built: typeof built | null; interacting: boolean; resized: boolean }> = {}) =>
+    viewChangeAction({ built, current, interacting: true, resized: false, ...over })
+
+  it('skips a small pan', () => expect(act(shifted(2))).toBe('skip'))
+  it('rebuilds coarsely once a pan passes the overscan (25% of the span: 5 units)', () => {
+    expect(act(shifted(5))).toBe('skip')
+    expect(act(shifted(5.1))).toBe('coarse')
+  })
+  it('rebuilds coarsely at a 2x zoom in or out', () => {
+    expect(act(shifted(0, 0.5))).toBe('coarse')
+    expect(act(shifted(0, 2))).toBe('coarse')
+  })
+  it('skips a 1.4x zoom that stays inside the overscan', () => {
+    expect(act(shifted(0, 1 / 1.4))).toBe('skip')
+    expect(act(shifted(0, 1.2))).toBe('skip')
+  })
+  it('is full when not interacting, even for an unchanged view', () => expect(act(built, { interacting: false })).toBe('full'))
+  it('is coarse after a resize, or with nothing built', () => {
+    expect(act(built, { resized: true })).toBe('coarse')
+    expect(act(built, { built: null })).toBe('coarse')
+  })
+
+  it('a scripted pan (60 steps of 5 px at 800 px over 20 units) rebuilds far less than every frame', () => {
+    let t = 0
+    const i = createInteraction(() => t)
+    i.pointerDown()
+    let b = built
+    let rebuilds = 0
+    let before = 0
+    for (let step = 1; step <= 60; step++) {
+      t += 16
+      i.pointerMove()
+      const dx = -(step * 5 * 20) / 800
+      const current = shifted(dx)
+      before++
+      if (viewChangeAction({ built: b, current, interacting: i.isInteracting(), resized: false }) !== 'skip') {
+        rebuilds++
+        b = current
+      }
+    }
+    // old behaviour: one rebuild per frame (60); now: one, when the pan passes the overscan
+    expect(before).toBe(60)
+    expect(rebuilds).toBe(1)
   })
 })
